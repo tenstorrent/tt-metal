@@ -27,16 +27,13 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_metal2.hpp"
 
 void kernel_main() {
     // READER
 #ifdef FUSE_OP_REDUCE_SCATTER
     uint32_t rt_args_idx = 0;
 #endif
-    // in1 mcast args
-    const uint32_t in1_mcast_sender_noc_x = get_arg(args::in1_mcast_sender_noc_x);
-    const uint32_t in1_mcast_sender_noc_y = get_arg(args::in1_mcast_sender_noc_y);
-
     // WRITER
     // out tensor args
     uint32_t out_tensor_start_tile_id = get_arg(args::out_tensor_start_tile_id);
@@ -102,8 +99,8 @@ void kernel_main() {
     // by the compute kernel's packer and drained here.
     DataflowBuffer dfb_in1(dfb::in1);
     DataflowBuffer dfb_out(dfb::out);
-    Semaphore sender_sem(sem::in1_mcast_sender);
-    Semaphore receiver_sem(sem::in1_mcast_receiver);
+    constexpr auto in1_mcast_args = MCAST_ARGS(in1);
+    auto weights_bias_pipe = in1_mcast_args.receiver(noc);
 #ifdef FUSE_BIAS
     // bias is filled here from the sender's multicast and consumed by the compute kernel's bias add.
     DataflowBuffer dfb_in3(dfb::bias);
@@ -127,16 +124,7 @@ void kernel_main() {
                 for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
                     // Operand 1
                     dfb_in1.reserve_back(in1_block_num_tiles);
-
-                    // Set in1 semaphore value to INVALID
-                    receiver_sem.set(INVALID);
-
-                    // Atomic increment source core counter
-                    sender_sem.up(noc, in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, 1);
-
-                    // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    receiver_sem.wait(VALID);
-
+                    weights_bias_pipe.receive();
                     dfb_in1.push_back(in1_block_num_tiles);
                 }
 
@@ -145,16 +133,7 @@ void kernel_main() {
                 if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
                     // Operand 2
                     dfb_in3.reserve_back(in3_block_w);
-
-                    // Set in1 semaphore value to INVALID
-                    receiver_sem.set(INVALID);
-
-                    // Atomic increment source core counter
-                    sender_sem.up(noc, in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, 1);
-
-                    // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    receiver_sem.wait(VALID);
-
+                    weights_bias_pipe.receive();
                     dfb_in3.push_back(in3_block_w);
                 }
 #endif

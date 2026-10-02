@@ -65,10 +65,12 @@ void append_sender_coords(
 }
 
 // Corners of one logical worker rectangle, already mapped to virtual NoC coordinates.
-dataflow_kernel_lib::NocBounds noc_ordered_bounds(tt::tt_metal::NOC noc, const tt::tt_metal::CoreRange& rectangle) {
+// Quasar is single-NoC and non-torus, so its multicast rectangle must stay ascending.
+dataflow_kernel_lib::NocBounds noc_ordered_bounds(
+    tt::ARCH arch, tt::tt_metal::NOC noc, const tt::tt_metal::CoreRange& rectangle) {
     const auto& lo = rectangle.start_coord;
     const auto& hi = rectangle.end_coord;
-    if (noc == tt::tt_metal::NOC::NOC_1) {
+    if (noc == tt::tt_metal::NOC::NOC_1 && arch != tt::ARCH::QUASAR) {
         return {uint32_t(hi.x), uint32_t(hi.y), uint32_t(lo.x), uint32_t(lo.y)};
     }
     return {uint32_t(lo.x), uint32_t(lo.y), uint32_t(hi.x), uint32_t(hi.y)};
@@ -211,7 +213,7 @@ void McastImpl::Group::prepare_(
             "supported");
         state.transport = prepare_chain_(device, state);
     } else {
-        state.transport = prepare_multicast_(cfg, state, handshake_cores);
+        state.transport = prepare_multicast_(device, cfg, state, handshake_cores);
         // Sender-coordinate encoding is independent of receiver membership.
         // Exact reconstruction and size checks select ranges or explicit pairs.
         if (rotating()) {
@@ -223,7 +225,10 @@ void McastImpl::Group::prepare_(
 }
 
 McastImpl::Group::PreparedMulticast McastImpl::Group::prepare_multicast_(
-    const McastConfig& cfg, PreparedState& state, const CoreRangeSet* handshake_cores) const {
+    const tt::tt_metal::IDevice& device,
+    const McastConfig& cfg,
+    PreparedState& state,
+    const CoreRangeSet* handshake_cores) const {
     PreparedMulticast multicast;
     const uint32_t handshake_count = handshake_cores ? receivers_.intersection(*handshake_cores).num_cores() : 0;
     std::optional<SenderMcastMode> first_sender_mcast_mode;
@@ -250,7 +255,7 @@ McastImpl::Group::PreparedMulticast McastImpl::Group::prepare_multicast_(
             } else {
                 uniform_sender_mcast_mode = uniform_sender_mcast_mode && *first_sender_mcast_mode == sender_mcast_mode;
             }
-            const auto bounds = detail::noc_ordered_bounds(cfg.noc, rectangle.noc);
+            const auto bounds = detail::noc_ordered_bounds(device.arch(), cfg.noc, rectangle.noc);
             const auto base = rectangle_index * wire::RECT_WORDS;
             rectangle_args[base + wire::SX] = bounds.sx;
             rectangle_args[base + wire::SY] = bounds.sy;

@@ -116,7 +116,10 @@ private:
             dataflow_kernel_lib::TransferMode transfer_mode,
             const tt::tt_metal::CoreRangeSet* handshake_cores) const;
         PreparedMulticast prepare_multicast_(
-            const McastConfig& cfg, PreparedState& state, const tt::tt_metal::CoreRangeSet* handshake_cores) const;
+            const tt::tt_metal::IDevice& device,
+            const McastConfig& cfg,
+            PreparedState& state,
+            const tt::tt_metal::CoreRangeSet* handshake_cores) const;
         PreparedChain prepare_chain_(const tt::tt_metal::IDevice& device, PreparedState& state) const;
         const PreparedState& prepared_state_() const;
         uint32_t sender_phase_(const tt::tt_metal::CoreCoord& core) const;

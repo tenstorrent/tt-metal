@@ -33,6 +33,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_graph_query_op_runtime.cpp
     test_launch_operation.cpp
     test_matmul.cpp
+    test_matmul_mcast_spec.cpp
     test_mcast_descriptor.cpp
     test_mcast_host_api.cpp
     test_mcast_program.cpp

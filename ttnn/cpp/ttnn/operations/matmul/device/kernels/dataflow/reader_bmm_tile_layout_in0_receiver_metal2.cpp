@@ -25,12 +25,9 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_metal2.hpp"
 
 void kernel_main() {
-    // in0 mcast args
-    const uint32_t in0_mcast_sender_noc_x = get_arg(args::in0_mcast_sender_noc_x);
-    const uint32_t in0_mcast_sender_noc_y = get_arg(args::in0_mcast_sender_noc_y);
-
     // in0 block args
     constexpr auto in0_block_num_tiles = get_arg(args::in0_block_num_tiles);
     // in0/in1 common args
@@ -46,23 +43,15 @@ void kernel_main() {
     const Noc noc;
     // in0 is filled here from the multicast and drained by the compute kernel.
     DataflowBuffer dfb_in0(dfb::in0);
-    Semaphore sender_sem(sem::in0_mcast_sender);
-    Semaphore receiver_sem(sem::in0_mcast_receiver);
+    constexpr auto in0_mcast_args = MCAST_ARGS(in0);
+    auto in0_pipe = in0_mcast_args.receiver(noc);
 
     for (uint32_t b = 0; b < batch; ++b) {
         if constexpr (get_batch_from_reader) {
             // This means we have unstructured sparsity.
             // The compute kernel needs to be made aware whether this batch is valid or not.
             // We do this by passing the value to the compute kernel via mailbox.
-            // But first, lets wait for the sparsity data to be multicast to us.
-            // Set in0 semaphore value to INVALID
-            receiver_sem.set(INVALID);
-            // Atomic increment source core counter
-            sender_sem.up(noc, in0_mcast_sender_noc_x, in0_mcast_sender_noc_y, 1);
-            // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
-            receiver_sem.wait_min(VALID);
-
-            const auto is_batch_valid = receiver_sem.value() == VALID;
+            const auto is_batch_valid = in0_pipe.receive_signal() == VALID;
 
             // We need to pass the value to compute cores regardless of the value of is_batch_valid
 #ifndef ARCH_QUASAR
@@ -84,14 +73,7 @@ void kernel_main() {
                     // Operand 0
                     dfb_in0.reserve_back(in0_block_num_tiles);
 
-                    // Set in0 semaphore value to INVALID
-                    receiver_sem.set(INVALID);
-
-                    // Atomic increment source core counter
-                    sender_sem.up(noc, in0_mcast_sender_noc_x, in0_mcast_sender_noc_y, 1);
-
-                    // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    receiver_sem.wait(VALID);
+                    in0_pipe.receive();
 
                     dfb_in0.push_back(in0_block_num_tiles);
                 }
@@ -99,7 +81,7 @@ void kernel_main() {
         }
     }
 
-    // Drain the mcast-ready atomics (sender_sem.up) before returning, so no non-posted atomic is
+    // Drain the pipe's mcast-ready atomics before returning, so no non-posted atomic is
     // in flight at kernel exit. Matches the dram_sharded / ring_all_gather receivers.
     noc.async_atomic_barrier();
 }

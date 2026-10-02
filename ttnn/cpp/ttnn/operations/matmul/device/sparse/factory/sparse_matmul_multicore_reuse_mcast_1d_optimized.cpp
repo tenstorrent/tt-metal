@@ -7,6 +7,7 @@
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
+#include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 
 #include <tt-metalium/program_descriptors.hpp>
 #include "tt-metalium/work_split.hpp"
@@ -26,7 +27,6 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
     using tt::tt_metal::DataMovementConfigDescriptor;
     using tt::tt_metal::KernelDescriptor;
     using tt::tt_metal::ProgramDescriptor;
-    using tt::tt_metal::SemaphoreDescriptor;
     using tt::tt_metal::TileDescriptor;
     using namespace tt;
     using namespace operations::matmul::utilities;
@@ -286,18 +286,15 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
             num_cores_to_corerangeset_in_subcoregrids(receiver_start_core, num_cores - 1, matmul_core_rect, row_major);
     }
 
-    // Mcast args
-    // The descriptor path takes semaphore ids as given, so these are hand-assigned. 0 and 1 are
-    // exactly what CreateSemaphore returned on a fresh program, which keeps the ids baked into the
-    // sender/receiver compile-time args below -- and hence the kernel ELFs -- unchanged. The
-    // descriptors themselves are pushed alongside the CBs further down.
-    constexpr std::uint32_t in0_mcast_sender_semaphore_id = 0;
-    constexpr std::uint32_t in0_mcast_receiver_semaphore_id = 1;
-
-    CoreCoord top_left_core = in0_mcast_receiver_cores_bounding_box.start_coord;
-    CoreCoord bottom_right_core = in0_mcast_receiver_cores_bounding_box.end_coord;
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    const auto in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    const auto in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    const auto in0_mcast_grid = CoreRangeSet(in0_mcast_receiver_cores_bounding_box);
+    const ttnn::kernel_lib::host::Mcast in0_mcast(
+        *device,
+        ttnn::kernel_lib::host::McastConfig{.noc = in0_noc},
+        in0_mcast_grid,
+        /*receiver_group_size=*/in0_mcast_grid.num_cores(),
+        ttnn::kernel_lib::host::McastExplicitSenderConfig{{{start_core}}});
 
     uint32_t num_batch_compute = use_indices ? num_active : nnz.value_or(sparsity.logical_volume());
     // Compact output packs only the `nnz` active batch pairs in scan order. Detect it exactly as the
@@ -350,11 +347,6 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
         (std::uint32_t)num_blocks,        // num_blocks
         (std::uint32_t)out_num_blocks_x,  // num_blocks_x
         (std::uint32_t)out_num_blocks_y,  // num_blocks_y
-        // in0 mcast args
-        (std::uint32_t)in0_mcast_sender_semaphore_id,
-        (std::uint32_t)in0_mcast_receiver_semaphore_id,
-        (std::uint32_t)num_cores - 1,                     // in0_mcast_num_dests
-        (std::uint32_t)in0_mcast_receiver_num_cores - 1,  // in0_mcast_num_cores
         // batch args
         (std::uint32_t)Mt * Kt,  // MtKt
         (std::uint32_t)batchA,   // batchA
@@ -390,11 +382,6 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
         (std::uint32_t)num_blocks,        // num_blocks
         (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
         (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
-        // in1 mcast args
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-        (std::uint32_t)0,  // in1_mcast_num_dests
-        (std::uint32_t)0,  // in1_mcast_num_cores
         // batch args
         (std::uint32_t)Kt * Nt,  // KtNt
         (std::uint32_t)batchA,   // batchA
@@ -439,9 +426,6 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
         (std::uint32_t)num_blocks,        // num_blocks
         (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
         (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
-        // in0 mcast args
-        (std::uint32_t)in0_mcast_sender_semaphore_id,
-        (std::uint32_t)in0_mcast_receiver_semaphore_id,
         // batch args
         (std::uint32_t)num_batch_compute,      // batch
         (std::uint32_t)get_batch_from_reader,  // get_batch_from_reader
@@ -466,16 +450,6 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
         num_cores,
         mm_kernel_defines,
         ttnn::get_throttle_level(operation_attributes.compute_kernel_config));
-
-    if (in0_mcast_receiver_num_cores == 1) {
-        mm_kernel_in0_sender_writer_defines["SKIP_MCAST"] = "1";
-    }
-
-    mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
-
-    // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
     // Helper to convert std::map defines to KernelDescriptor::Defines (vector of pairs). The map
     // iterates in sorted key order, so the resulting vector -- and the descriptor hash over it -- is
@@ -735,11 +709,6 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
         out_CB_size / output_single_tile_size,
         out_CB_size);
 
-    desc.semaphores.push_back(
-        SemaphoreDescriptor{.id = in0_mcast_sender_semaphore_id, .core_ranges = all_cores, .initial_value = INVALID});
-    desc.semaphores.push_back(
-        SemaphoreDescriptor{.id = in0_mcast_receiver_semaphore_id, .core_ranges = all_cores, .initial_value = INVALID});
-
     // Parameters for last row, col, or block, no need to re-calc h-dim since there's no split on height
     uint32_t last_per_core_N = Nt % per_core_N == 0 ? per_core_N : Nt % per_core_N;
     uint32_t last_out_block_w = last_per_core_N % out_block_w == 0 ? out_block_w : last_per_core_N % out_block_w;
@@ -751,12 +720,6 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
         output_single_tile_size * (out_subblock_w - last_subblock_of_last_block_w);
     uint32_t last_block_padded_block_tiles_w_skip =
         (out_subblock_w * out_subblock_h) * (out_block_w / out_subblock_w - last_block_num_nonzero_subblocks_w);
-
-    CoreCoord start_core_noc = top_left_core_physical;
-    CoreCoord end_core_noc = bottom_right_core_physical;
-    if (in0_noc == tt::tt_metal::NOC::NOC_1) {
-        std::swap(start_core_noc, end_core_noc);
-    }
 
     const auto& cores = corerange_to_cores(all_cores, std::nullopt, row_major);
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -770,12 +733,6 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
                 // in0 tensor args
                 (std::uint32_t)in0_buffer->address(),
                 (std::uint32_t)Kt * per_core_M * output_idx_y,  // in0_tensor_start_tile_id
-                // in0 mcast args
-                (std::uint32_t)start_core_noc.x,  // in0_mcast_dest_noc_start_x
-                (std::uint32_t)start_core_noc.y,  // in0_mcast_dest_noc_start_y
-                (std::uint32_t)end_core_noc.x,    // in0_mcast_dest_noc_end_x
-                (std::uint32_t)end_core_noc.y,    // in0_mcast_dest_noc_end_y
-
                 // padding args
                 (std::uint32_t)out_block_h,  // last_block_h
                 // sparsity args
@@ -788,19 +745,12 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
             std::vector<std::variant<std::uint32_t, tt::tt_metal::Buffer*>> in0_args(
                 mm_in0_sender_args.begin(), mm_in0_sender_args.end());
             in0_args[0] = in0_buffer;
-            in0_args[7] = sparsity_buffer;
+            in0_args[3] = sparsity_buffer;
             in0_sender_kernel_desc.emplace_runtime_args(core, in0_args);
         }
         // in0 receiver and in 1 sender
         else {
-            std::vector<uint32_t> mm_in0_receiver_args = {
-                // in0 mcast args
-                (std::uint32_t)top_left_core_physical.x,  // in0_mcast_sender_noc_x
-                (std::uint32_t)top_left_core_physical.y   // in0_mcast_sender_noc_y
-            };
-            // The receiver's args are both NoC coordinates, fixed for a given core grid, so these
-            // go in as plain values.
-            in0_receiver_kernel_desc.runtime_args.emplace_back(core, mm_in0_receiver_args);
+            in0_receiver_kernel_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{});
         }
         if (i < num_cores_with_work) {
             std::vector<uint32_t> mm_in1_sender_writer_args = {
@@ -808,12 +758,6 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
                 // in1 tensor args
                 (std::uint32_t)in1_buffer->address(),
                 (std::uint32_t)per_core_N * output_idx_x,  // in1_tensor_start_tile_id
-                // in1 mcast args
-                (std::uint32_t)0,  // in1_mcast_dest_noc_start_x
-                (std::uint32_t)0,  // in1_mcast_dest_noc_start_y
-                (std::uint32_t)0,  // in1_mcast_dest_noc_end_x
-                (std::uint32_t)0,  // in1_mcast_dest_noc_end_y
-
                 // sparsity args (the active-group id list in indexed/gather mode)
                 (std::uint32_t)in1_sparsity_buffer->address(),  // sparsity_addr
 
@@ -870,11 +814,18 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
             std::vector<std::variant<std::uint32_t, tt::tt_metal::Buffer*>> in1_args(
                 mm_in1_sender_writer_args.begin(), mm_in1_sender_writer_args.end());
             in1_args[0] = in1_buffer;
-            in1_args[6] = in1_sparsity_buffer;
-            in1_args[7] = out_buffer;
+            in1_args[2] = in1_sparsity_buffer;
+            in1_args[3] = out_buffer;
             in1_sender_writer_kernel_desc.emplace_runtime_args(core, in1_args);
         }
     }
+
+    std::vector<std::reference_wrapper<KernelDescriptor>> in0_kernels{in0_sender_kernel_desc};
+    if (in0_mcast_receivers.num_cores() > 0) {
+        in0_kernels.push_back(in0_receiver_kernel_desc);
+    }
+    in0_mcast.attach(desc, "in0_mcast", in0_kernels, static_cast<uint32_t>(desc.semaphores.size()));
+    ttnn::kernel_lib::host::attach_absent_mcast(in1_sender_writer_kernel_desc, "in1_mcast");
 
     // Kernel push order defines each kernel's handle (its index in desc.kernels). The in0 receiver
     // is conditional, so indices after it shift on the single-core geometry -- fine here because

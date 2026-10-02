@@ -45,6 +45,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_metal2.hpp"
 
 void kernel_main() {
 #ifdef FUSE_OP
@@ -52,11 +53,6 @@ void kernel_main() {
 #endif
     // in0 tensor args
     uint32_t in0_tensor_start_tile_id = get_arg(args::in0_tensor_start_tile_id);
-    // in0 mcast args
-    const uint32_t in0_mcast_dest_noc_start_x = get_arg(args::in0_mcast_dest_noc_start_x);
-    const uint32_t in0_mcast_dest_noc_start_y = get_arg(args::in0_mcast_dest_noc_start_y);
-    const uint32_t in0_mcast_dest_noc_end_x = get_arg(args::in0_mcast_dest_noc_end_x);
-    const uint32_t in0_mcast_dest_noc_end_y = get_arg(args::in0_mcast_dest_noc_end_y);
 
     // padding args
     const uint32_t last_block_h = get_arg(args::last_block_h);
@@ -82,9 +78,6 @@ void kernel_main() {
     constexpr auto num_blocks_inner_dim = get_arg(args::num_blocks_inner_dim);
     constexpr auto num_blocks_w_dim = get_arg(args::num_blocks_w_dim);
     constexpr auto num_blocks_h_dim = get_arg(args::num_blocks_h_dim);
-    // in0 mcast args
-    constexpr auto in0_mcast_num_dests = get_arg(args::in0_mcast_num_dests);
-    constexpr auto in0_mcast_num_cores = get_arg(args::in0_mcast_num_cores);
     // batch args
     constexpr auto MtKt = get_arg(args::MtKt);  // if 0
     constexpr auto in0_B = get_arg(args::in0_B);
@@ -160,8 +153,6 @@ void kernel_main() {
 
     const Noc noc;
     DataflowBuffer dfb_in0(dfb_id_in0);
-    Semaphore sender_sem(sem::in0_mcast_sender);
-    Semaphore receiver_sem(sem::in0_mcast_receiver);
 
 #ifdef IN0_SHARDED
     // In case we need to send multiple blocks per shard, the resident shard is the in0_sharded buffer and
@@ -191,16 +182,12 @@ void kernel_main() {
     const auto s_sparsity = TensorAccessor(tensor::sparsity);
 #endif
 
-#ifndef SKIP_MCAST
-    // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
-    receiver_sem.set(VALID);
-    // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
-    // to receive the mcast
+    constexpr auto in0_mcast_args = MCAST_ARGS(in0);
+    auto in0_pipe = in0_mcast_args.optional_sender(noc);
 
 #ifdef IN0_SHARDED
     uint32_t in0_start_address = dfb_in0.get_write_ptr();
 #endif  // IN0_SHARDED
-#endif  // SKIP_MCAST
 
 #ifdef SPARSITY
     uint32_t l1_write_addr_sparsity = 0;
@@ -229,22 +216,10 @@ void kernel_main() {
                     ((reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity))[bB]) != 0;
 
                 if constexpr (get_batch_from_reader) {
-#ifndef SKIP_MCAST
                     // First broadcast this to other cores
-                    sender_sem.wait(in0_mcast_num_dests);
-                    sender_sem.set(0);
-                    receiver_sem.set(is_batch_valid ? VALID : IGNORE_BATCH);
-                    receiver_sem.set_multicast(
-                        noc,
-                        in0_mcast_dest_noc_start_x,
-                        in0_mcast_dest_noc_start_y,
-                        in0_mcast_dest_noc_end_x,
-                        in0_mcast_dest_noc_end_y,
-                        in0_mcast_num_cores);
-                    noc.async_writes_flushed();
-                    // Reset the semaphore value to VALID
-                    receiver_sem.set(VALID);
-#endif  // SKIP_MCAST
+                    if constexpr (in0_mcast_args.active) {
+                        in0_pipe->send_signal(is_batch_valid ? VALID : IGNORE_BATCH);
+                    }
 
                     // We need to pass the value to compute cores regardless of the value of is_batch_valid
 #ifndef ARCH_QUASAR
@@ -299,10 +274,8 @@ void kernel_main() {
 
                         uint32_t in0_write_offset = 0;
 
-#ifndef SKIP_MCAST
                         uint32_t in0_start_address =
                             dfb_in0.get_write_ptr();  // copy start address of block, to be used for mcasting
-#endif                                                // SKIP_MCAST
 
                         // Copy in0 block into the in0 buffer, as the default kernel
                         uint32_t in0_tensor_row_start_tile_id = in0_tensor_current_inner_dim_block_start_tile_id;
@@ -350,10 +323,8 @@ void kernel_main() {
                         {
                             uint32_t l1_write_addr_in0 = dfb_in0.get_write_ptr();
 
-#ifndef SKIP_MCAST
                             in0_start_address =
                                 l1_write_addr_in0;  // copy start address of block, to be used for mcasting
-#endif  // SKIP_MCAST
 
                             const UnicastEndpoint self_ep;
                             uint32_t noc_shard_read_l1_addr = in0_tensor_current_inner_dim_block_start_addr;
@@ -399,48 +370,9 @@ void kernel_main() {
                         }
 #endif  // IN0_SHARDED
 
-#ifndef SKIP_MCAST
-                        // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr
-                        // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
-                        // zero for the next block
-                        sender_sem.wait(in0_mcast_num_dests);
-                        sender_sem.set(0);
-
-                        // Now we have the block in the buffer's address, we can mcast to dests!
-                        const MulticastEndpoint mcast_dst;
-                        // num_dests must not include source, since we are NOT really doing a local copy!
-                        noc.async_write_multicast(
-                            CoreLocalMem<uint32_t>(in0_start_address),
-                            mcast_dst,
-                            in0_block_size_bytes,
-                            in0_mcast_num_cores,
-                            {},
-                            {.noc_x_start = in0_mcast_dest_noc_start_x,
-                             .noc_y_start = in0_mcast_dest_noc_start_y,
-                             .noc_x_end = in0_mcast_dest_noc_end_x,
-                             .noc_y_end = in0_mcast_dest_noc_end_y,
-                             .addr = in0_start_address},
-                            true);
-
-                        // Note: no need for write barrier, since these two multicasts are done on the same noc id, same
-                        // vc, same cmd_buf Also, this only works because we are setting VCs statically (using
-                        // NOC_CMD_STATIC_VC).
-#ifdef ARCH_BLACKHOLE
-                        // On Blackhole the flush is needed because NoC latency is higher than L1 <-> RISCV
-                        // latency which means data could be changed before write is issued.
-                        noc.async_writes_flushed();
-#endif  // ARCH_BLACKHOLE
-
-                        // We should also multicast the flag to destinations
-                        // num_dests must not include source, since we are NOT really doing a local copy!
-                        receiver_sem.set_multicast(
-                            noc,
-                            in0_mcast_dest_noc_start_x,
-                            in0_mcast_dest_noc_start_y,
-                            in0_mcast_dest_noc_end_x,
-                            in0_mcast_dest_noc_end_y,
-                            in0_mcast_num_cores);
-#endif  // SKIP_MCAST
+                        if constexpr (in0_mcast_args.active) {
+                            in0_pipe->send(in0_start_address, in0_start_address, in0_block_size_bytes);
+                        }
 
                         // Common for sharded and interleaved paths
                         dfb_in0.push_back(in0_block_num_tiles);
