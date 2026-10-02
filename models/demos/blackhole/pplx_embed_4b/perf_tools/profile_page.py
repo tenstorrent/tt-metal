@@ -54,6 +54,60 @@ ACH_FPU_CYC_PER_TOKEN = {  # per layer, by op group: tiles per token x cycles pe
     "SDPA": 32 * ISL / 1024 * (RMAX + BCOL + ONES_MM) + 4096 / 1024 * BCOL,  # scores: max, - max, sum; O x 1/sum
 }
 ACH_SFPU_CYC_PER_TOKEN = {"SDPA": 32 * ISL / 1024 * 64, "FF1 + FF3": 9728 / 1024 * 383}
+
+# Gap to achievable by category (the "breakdown" fields): device kernel µs per call of each op group's main call, from
+# ablation ladders run standalone at the model's placement under the device profiler (2026-10-02, device_kernel_us.py;
+# bs32 QKV / heads: the quarter-batch chunk). Matmuls: bench_mm_gap_ladder.py (MM_BLOCKS 4,40,8,1,8 for FF1+FF3, the
+# preset blocks otherwise, 8,8,8,1,8 for the bs32 QKV chunk). SDPA: sdpa_kernel_variants.py trees base / conly /
+# conly+noexp / hsonly (compute stubbed to the CB protocol, no NoC traffic) through bench_sdpa_floors.py, K / V in L1.
+# Heads: bench_heads_placement_ablate.py 16 16 / 8 32. add+RMSNorm: bench_add_norm_ablate.py 16 32 (a in DRAM).
+GAP_LADDER = {
+    16: {
+        "FF1 + FF3": {"full": 1640.0, "no add": 1572.3, "no add, no SFPU": 1538.6, "compute only": 1434.1},
+        "QKV": {"full": 529.3, "compute only": 494.0, "no copy": 493.6},
+        "FF2": {"full": 718.6, "compute only": 708.5, "no copy": 708.4},
+        "WO": {"full": 320.2, "compute only": 310.6, "no copy": 310.5},
+        "SDPA": {"full": 266.3, "compute only": 248.8, "compute only, no exp": 227.6, "handshakes only": 11.0},
+        "heads + QK-norm + RoPE": {"full": 205.0, "compute only": 199.0, "handshakes only": 56.4},
+        "add + RMSNorm": {"full": 121.0, "no reads, no writes": 91.0, "compute + handshakes": 82.3,
+                          "handshakes only": 45.1},  # fmt: skip
+    },
+    32: {
+        "FF1 + FF3": {"full": 3120.4, "no add": 2980.9, "no add, no SFPU": 2902.4, "compute only": 2822.4},
+        "QKV": {"full": 256.4, "compute only": 239.3, "no copy": 239.2},
+        "FF2": {"full": 1472.0, "compute only": 1375.7, "no copy": 1375.5},
+        "WO": {"full": 632.4, "compute only": 598.0, "no copy": 597.7},
+        "SDPA": {"full": 505.3, "compute only": 481.2, "compute only, no exp": 440.1, "handshakes only": 20.2},
+        "heads + QK-norm + RoPE": {"full": 114.2, "compute only": 108.2, "handshakes only": 32.2},
+        "add + RMSNorm": {"full": 267.6, "no reads, no writes": 149.7, "compute + handshakes": 140.9,
+                          "handshakes only": 73.9},  # fmt: skip
+    },
+}
+GAP_CATS = ("sfpu", "dm", "exchange", "structure", "extra", "compute", "residual")
+
+
+def gap_split(g, x, ach):
+    """Per-call µs by category for op group g from its ladder x, ach = the call's achievable FPU µs. Matmul math runs
+    at the LLK rate that defines achievable, so compute-only above it is the kernel's structure (block inits,
+    handshakes, DST acquire / release, partial packs); the other ops' structure is their handshakes-only variant (copy
+    compute, nothing moved: an upper bound) and the rest of compute-only above achievable is their compute."""
+    if g == "FF1 + FF3":
+        return {"extra": x["full"] - x["no add"], "sfpu": x["no add"] - x["no add, no SFPU"],
+                "dm": x["no add, no SFPU"] - x["compute only"], "structure": x["compute only"] - ach}  # fmt: skip
+    if "no copy" in x:
+        return {"dm": x["full"] - x["compute only"], "extra": x["compute only"] - x["no copy"],
+                "structure": x["no copy"] - ach}  # fmt: skip
+    if g == "SDPA":
+        return {"dm": x["full"] - x["compute only"], "sfpu": x["compute only"] - x["compute only, no exp"],
+                "structure": x["handshakes only"],
+                "compute": x["compute only, no exp"] - x["handshakes only"] - ach}  # fmt: skip
+    if g == "add + RMSNorm":
+        return {"dm": x["full"] - x["no reads, no writes"], "exchange": x["no reads, no writes"] - x["compute + handshakes"],
+                "structure": x["handshakes only"], "compute": x["compute + handshakes"] - x["handshakes only"] - ach}  # fmt: skip
+    return {"dm": x["full"] - x["compute only"], "structure": x["handshakes only"],
+            "compute": x["compute only"] - x["handshakes only"] - ach}  # fmt: skip
+
+
 GROUPS = (("QKV", "QKV"), ("WO", "WO"), ("FF1 + FF3", "FF1"), ("FF2", "FF2"), ("SDPA", "SDPA"),
           ("heads + QK-norm + RoPE", "heads"), ("add + RMSNorm", "add + RMSNorm"))  # fmt: skip
 
@@ -423,6 +477,21 @@ def add_roofs(b, measured):
     a["sfpu_ms"] = round(sum(a["sfpu_parts_ms"].values()), 3)
     a["model_ms"] = max(a["fpu_ms"], a["sfpu_ms"], a["dram_ms"])
     a["serial_ms"] = round(max(a["fpu_ms"] + a["sfpu_ms"], a["dram_ms"]), 3)
+    ladder = GAP_LADDER.get(b["bs"])
+    if ladder:  # per group: the main call's (most calls) categories applied to every call by its share of the work;
+        # what the in-model calls take beyond the standalone ladder is the residual
+        for g, ag in ag.items():
+            gs = [s for s in sigs if group_of(s) == g]
+            work = sum(s["calls"] * s.get("work_frac", 1) for s in gs) or 1
+            cat = dict.fromkeys(GAP_CATS, 0.0)
+            if g in ladder:
+                m = max(gs, key=lambda s: s["calls"])
+                ach_call = ag["fpu_ms"] * 1e3 * m.get("work_frac", 1) / work
+                main_calls = work / m.get("work_frac", 1)  # every call in units of the main call
+                for k, v in gap_split(g, ladder[g], ach_call).items():
+                    cat[k] = v * main_calls / 1e3
+            cat["residual"] = ag["measured_ms"] - ag["fpu_ms"] - sum(cat.values())
+            ag["breakdown_ms"] = {k: round(v, 3) for k, v in cat.items()}
     b["achievable"] = a
     return miss
 
