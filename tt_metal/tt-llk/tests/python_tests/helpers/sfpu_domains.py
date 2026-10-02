@@ -2236,6 +2236,14 @@ BINARY_SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
         MathOperation.SfpuElwGt,  # as SfpuElwLt, operands swapped
         MathOperation.SfpuElwLe,  # weak_ordered pre-stores 1, then 0 if either operand is NaN
         MathOperation.SfpuElwGe,  # as SfpuElwLe, operands swapped
+        # Predicate with an explicit non-finite fix-up: the kernel classifies a_abs_bits /
+        # b_abs_bits against the +inf pattern and answers 0 for any NaN (1 for two NaNs with
+        # EQUAL_NAN), 1 for two equal infinities and 0 for an infinity against anything else,
+        # which is torch.isclose. Both EQUAL_NAN instantiations pass the (special, special)
+        # grid on Blackhole now that the harness runs isclose_init (the divergence recorded
+        # earlier was observed with vConstIntPrgm0 unprogrammed).
+        MathOperation.SfpuIsclose,
+        MathOperation.SfpuIscloseEqualNan,
     }
 )
 
@@ -2259,9 +2267,9 @@ _BINARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset(
         # SFPSETCC, which is unspecified for a negative zero or a NaN. The same thing that
         # holds Sign and Heaviside out of the unary gate.
         MathOperation.SfpuMask,
-        # Kernel and golden both claim torch.isclose semantics and disagree at a non-finite
-        # operand; needs a per-cell read-back to say which is wrong before either is touched.
-        MathOperation.SfpuIsclose,
+        # mask_posinf is the same zero test on the mask operand (_sfpu_is_fp16_zero_), so it
+        # waits on the same thing as SfpuMask.
+        MathOperation.SfpuMaskPosinf,
         # Effectively unary: the kernel reads operand B only on its x > 4 branch and the golden
         # ignores it, so a cat-B probe in B asserts nothing.
         MathOperation.SfpuLogsigmoid,

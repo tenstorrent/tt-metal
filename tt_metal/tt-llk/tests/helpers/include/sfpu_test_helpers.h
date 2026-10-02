@@ -42,12 +42,21 @@ inline void calculate_expm1_cw()
     }
 }
 
-// Adapts calculate_mask to the 2-tile binary SFPU harness signature. The indices
-// are unused: calculate_mask hard-codes its operands (data at dst_reg[0], mask at
+// Adapts calculate_mask / calculate_mask_posinf to the 2-tile binary SFPU harness signature.
+// The indices are unused: both hard-code their operands (data at dst_reg[0], mask at
 // dst_reg[32], result in place), so only the default in0=0/in1=1/out=0 placement works.
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+// POSINF selects calculate_mask_posinf, where the data becomes +inf where the mask is zero,
+// over calculate_mask, where it becomes 0.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool POSINF = false>
 inline void calculate_mask_binary(const std::uint32_t /*dst_index_in0*/, const std::uint32_t /*dst_index_in1*/, const std::uint32_t /*dst_index_out*/)
 {
-    calculate_mask<APPROXIMATION_MODE, ITERATIONS>();
+    if constexpr (POSINF)
+    {
+        calculate_mask_posinf<APPROXIMATION_MODE, ITERATIONS>();
+    }
+    else
+    {
+        calculate_mask<APPROXIMATION_MODE, ITERATIONS>();
+    }
 }
 } // namespace ckernel::sfpu

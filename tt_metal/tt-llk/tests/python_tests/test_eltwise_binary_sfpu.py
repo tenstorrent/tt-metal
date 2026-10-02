@@ -246,9 +246,11 @@ _UNREGISTERED_BINARY_OPS = frozenset(
         MathOperation.SfpuFmodInt32,
         MathOperation.SfpuGcd,
         MathOperation.SfpuIsclose,
+        MathOperation.SfpuIscloseEqualNan,
         MathOperation.SfpuLcm,
         MathOperation.SfpuLogsigmoid,
         MathOperation.SfpuMask,
+        MathOperation.SfpuMaskPosinf,
         MathOperation.SfpuMaxInt32,
         MathOperation.SfpuMaxUint32,
         MathOperation.SfpuMinInt32,
@@ -364,8 +366,9 @@ def _classify_stimuli_source(mathop):
 
 
 def _mask_stimuli_specs():
-    # mask zeroes data (in0) where mask (in1) is 0. Data and mask are separate tiles: keep
-    # data strictly non-zero (1..8) and zero ~1/3 of the mask, so a passthrough kernel fails.
+    # mask forces data (in0) to the op's fill value (0 for MASK, +inf for MASK_POSINF) where
+    # mask (in1) is 0. Data and mask are separate tiles: keep data strictly non-zero (1..8) and
+    # zero ~1/3 of the mask, so a passthrough kernel fails.
     def data_face(size, dtype, generator):
         _, ramp = _positions_and_ramp(size)
         return ramp.to(dtype)  # 1..8, always non-zero
@@ -388,6 +391,77 @@ def _isclose_stimuli_specs():
     def b_face(size, dtype, generator):
         j, ramp = _positions_and_ramp(size)
         return (ramp + torch.where(j % 2 == 0, 0.0, 2.0)).to(dtype)
+
+    return _face_spec(a_face), _face_spec(b_face)
+
+
+def _isclose_nan_stimuli_specs():
+    # The NaN arm of isclose, which _isclose_stimuli_specs (finite ramps only) never reaches.
+    # Eight lanes per period, so every pairing the EQUAL_NAN template flag changes -- and every
+    # one it must not -- appears in every face:
+    #   p%8: 0 (+NaN,+NaN) 1 (+NaN,x) 2 (x,+NaN) 3 (-NaN,+NaN) 4 (-NaN,-NaN)
+    #        5 (x,x) 6 (x,x+2) 7 (+NaN,-NaN)
+    # equal_nan=False answers 0 on lanes 0-4 and 7, equal_nan=True answers 1 on 0, 3, 4 and 7
+    # (both NaN, whatever the signs) and 0 on the one-sided lanes 1 and 2; 5 and 6 are the
+    # finite 1/0 controls. The goldens are torch.isclose(equal_nan=False/True). The NaNs are
+    # built from explicit fp32 bit patterns (0x7FC00000 / 0xFFC00000); torch's bfloat16 cast
+    # turns every NaN into one pattern, so the mixed-sign lanes are distinct at Float32 only.
+    nan = torch.tensor([0x7FC00000], dtype=torch.int32).view(torch.float32)
+    neg_nan = torch.tensor([0xFFC00000 - (1 << 32)], dtype=torch.int32).view(
+        torch.float32
+    )
+
+    def a_face(size, dtype, generator):
+        j, ramp = _positions_and_ramp(size)
+        k = j % 8
+        a = ramp.clone()
+        a = torch.where((k == 0) | (k == 1) | (k == 7), nan, a)
+        a = torch.where((k == 3) | (k == 4), neg_nan, a)
+        return a.to(dtype)
+
+    def b_face(size, dtype, generator):
+        j, ramp = _positions_and_ramp(size)
+        k = j % 8
+        b = ramp + torch.where(k == 6, 2.0, 0.0)
+        b = torch.where((k == 0) | (k == 2) | (k == 3), nan, b)
+        b = torch.where((k == 4) | (k == 7), neg_nan, b)
+        return b.to(dtype)
+
+    return _face_spec(a_face), _face_spec(b_face)
+
+
+def _xlogy_denormal_stimuli_specs():
+    # The log operand (in1) on the biased-exponent-0 lane, which the kernel maps to ln = -inf:
+    # +0, the smallest and the largest positive denormal, then FLT_MIN and 1.0 as finite
+    # controls, then the smallest and the largest negative denormal. in0 is the positive ramp,
+    # so the golden is -inf on lanes 0-2, in0 * ln(FLT_MIN) on lane 3, 0 on lane 4 and NaN on
+    # lanes 5-6. Lanes 1-2 pin the exexp(Biased) == 0 test of _calculate_log_body_on_reg_: an
+    # `in1 == 0.0F` test would return a finite in0 * ~-88 there (see its docstring), and
+    # _xlogy's golden flushes a positive denormal in1 to match the kernel. Lanes 5-6 pin the
+    # NaN guard: `in1 < 0.0f` reads the sign bit of the unflushed register, so a negative
+    # denormal is NaN, as log of a negative is, and the golden does not flush it. Only a
+    # 32-bit input into a 32-bit Dest carries a denormal to the SFPU; on the datacopy path a
+    # bf16 denormal is flushed before SFPLOAD.
+    lanes = torch.tensor(
+        [
+            0x00000000,
+            0x00000001,
+            0x007FFFFF,
+            0x00800000,
+            0x3F800000,
+            -0x7FFFFFFF,  # 0x80000001
+            -0x7F800001,  # 0x807FFFFF
+        ],
+        dtype=torch.int32,
+    ).view(torch.float32)
+
+    def a_face(size, dtype, generator):
+        _, ramp = _positions_and_ramp(size)
+        return ramp.to(dtype)
+
+    def b_face(size, dtype, generator):
+        j, _ = _positions_and_ramp(size)
+        return lanes[(j % len(lanes)).long()].to(dtype)
 
     return _face_spec(a_face), _face_spec(b_face)
 
@@ -789,11 +863,12 @@ def test_eltwise_binary_sfpu_float_extended(formats, dest_acc, mathop):
 
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
-    mathop=[MathOperation.SfpuMask],
+    mathop=[MathOperation.SfpuMask, MathOperation.SfpuMaskPosinf],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
 def test_eltwise_binary_sfpu_mask(formats, dest_acc, mathop):
-    # float mask: data at tile0, mask at tile1. Output is data where mask != 0, else 0.
+    # float mask: data at tile0, mask at tile1. Output is data where mask != 0, else 0
+    # (MASK) or +inf (MASK_POSINF).
     # Crafted stimuli so the mask carries real zeros.
     _skip_fp32_no_dest_acc(formats, dest_acc)
 
@@ -873,7 +948,7 @@ def test_eltwise_binary_sfpu_float_comparison(formats, dest_acc, mathop):
 
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
-    mathop=[MathOperation.SfpuIsclose],
+    mathop=[MathOperation.SfpuIsclose, MathOperation.SfpuIscloseEqualNan],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
 def test_eltwise_binary_sfpu_isclose(formats, dest_acc, mathop):
@@ -882,6 +957,40 @@ def test_eltwise_binary_sfpu_isclose(formats, dest_acc, mathop):
     _skip_fp32_no_dest_acc(formats, dest_acc)
 
     spec_A, spec_B = _isclose_stimuli_specs()
+    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    mathop=[MathOperation.SfpuIsclose, MathOperation.SfpuIscloseEqualNan],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_isclose_nan(formats, dest_acc, mathop):
+    # Both-NaN, one-sided-NaN and mixed-sign-NaN pairs, which is where EQUAL_NAN changes the
+    # answer; see _isclose_nan_stimuli_specs for the lane table. Only on pipelines that deliver
+    # a NaN operand to the SFPU intact.
+    _skip_fp32_no_dest_acc(formats, dest_acc)
+    if not specials_safe(formats.input_format, formats.output_format, dest_acc):
+        pytest.skip("this pipeline does not deliver a NaN operand to the SFPU intact")
+
+    spec_A, spec_B = _isclose_nan_stimuli_specs()
+    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
+
+
+# dest_acc stays an axis: a single-axis `parametrize` hands pytest 1-tuples, which `--op` cannot
+# read, so this is the same shape as test_eltwise_binary_sfpu_int_uniform.
+@parametrize(mathop=[MathOperation.SfpuXlogy], dest_acc=[DestAccumulation.Yes])
+def test_eltwise_binary_sfpu_xlogy_denormal(mathop, dest_acc):
+    # xlogy(x, denormal) = x * ln(denormal) = -inf, because the kernel flushes its log operand
+    # (see _xlogy_denormal_stimuli_specs). Float32 into a 32-bit Dest is the only pipeline in
+    # this harness that delivers a denormal to the SFPU, and the flush is measured on Blackhole.
+    if TestConfig.CHIP_ARCH != ChipArchitecture.BLACKHOLE:
+        pytest.skip(
+            "the denormal flush of the xlogy log operand is measured on Blackhole only"
+        )
+
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    spec_A, spec_B = _xlogy_denormal_stimuli_specs()
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
 
 

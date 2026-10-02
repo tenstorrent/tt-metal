@@ -1710,6 +1710,13 @@ void call_binary_sfpu_operation_init()
     {
         SFPU_BINARY_INIT_FN(add1, div_floor_init, (APPROXIMATION_MODE));
     }
+    else if constexpr (BINOP == BinaryOp::ISCLOSE || BINOP == BinaryOp::ISCLOSE_EQNAN)
+    {
+        // isclose_init programs vConstIntPrgm0 = 0x7FFFFFFF, the sign-clear mask the kernel reads
+        // for both the Inf/NaN classification and |b| in the tolerance. Mirrors
+        // isclose_binary_tile_init.
+        SFPU_BINARY_INIT_FN_NO_ARGS(isclose, isclose_init);
+    }
     else if constexpr (BINOP == BinaryOp::GCD)
     {
         // gcd_init records the per-iteration REPLAY buffer used by the binary-GCD loop.
@@ -1780,7 +1787,7 @@ void call_binary_sfpu_operation_init()
     else
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
-        // BITWISE_AND/OR/XOR, RSUB_INT32, MASK, ISCLOSE and LOGSIGMOID land here: those
+        // BITWISE_AND/OR/XOR, RSUB_INT32, MASK(_POSINF) and LOGSIGMOID land here: those
         // kernels need no per-op init beyond the standard binary addrmod configuration
         // (logsigmoid_init is a no-op).
         SFPU_BINARY_INIT(add1);
@@ -1815,6 +1822,11 @@ constexpr SfpuType get_binary_comp_sfpu_type()
         return SfpuType::ne;
     }
 }
+
+// torch.isclose defaults, as the fp32 bit patterns the ISCLOSE / ISCLOSE_EQNAN dispatch below
+// forwards as runtime args (the goldens use the same two values).
+constexpr std::uint32_t ISCLOSE_RTOL_BITS = 0x3727c5acu; // 1e-5f
+constexpr std::uint32_t ISCLOSE_ATOL_BITS = 0x322bcc77u; // 1e-8f
 
 /**
  * Calls only the calculate portion of a binary SFPU operation.
@@ -2126,16 +2138,18 @@ void call_binary_sfpu_operation(
             dst_index_out,
             vector_mode);
     }
-    else if constexpr (BINOP == BinaryOp::MASK)
+    else if constexpr (BINOP == BinaryOp::MASK || BINOP == BinaryOp::MASK_POSINF)
     {
-        // float mask: out = (mask != 0) ? data : 0, with data at in0 and mask at in1.
-        // Driven through the test-only adapter since calculate_mask uses fixed dst
-        // offsets rather than the forwarded indices.
+        // float mask: out = (mask != 0) ? data : fill, with data at in0 and mask at in1; the
+        // fill is 0 for MASK and +inf for MASK_POSINF. Driven through the test-only adapter
+        // since calculate_mask / calculate_mask_posinf use fixed dst offsets rather than the
+        // forwarded indices.
+        constexpr bool POSINF = (BINOP == BinaryOp::MASK_POSINF);
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_mask_binary,
-            (APPROXIMATION_MODE, PER_FACE_ITERATIONS),
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, POSINF),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,
@@ -2166,25 +2180,26 @@ void call_binary_sfpu_operation(
         SFPU_BINARY_CALL(
             DST_SYNC_MODE, DST_ACCUM_MODE, mul_int32, (APPROXIMATION_MODE, PER_FACE_ITERATIONS), dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     }
-    else if constexpr (BINOP == BinaryOp::ISCLOSE)
+    else if constexpr (BINOP == BinaryOp::ISCLOSE || BINOP == BinaryOp::ISCLOSE_EQNAN)
     {
         // isclose: out = (|a - b| <= atol + rtol * |b|) ? 1 : 0, with a=in0, b=in1.
         // rtol/atol are passed as fp32 bit patterns via the params wrapper's runtime-arg
-        // forwarding. Fixed to torch's defaults rtol=1e-5 (0x3727c5ac), atol=1e-8
-        // (0x322bcc77); EQUAL_NAN=false, so any NaN operand yields 0. The test uses
-        // large-margin stimuli so the exact tolerance (and fp32-vs-bf16 rounding of the
-        // tol term) never flips the pass/fail decision.
+        // forwarding, fixed to torch's defaults. EQUAL_NAN selects torch.isclose(...,
+        // equal_nan=True): a NaN in both operands yields 1; without it any NaN operand yields
+        // 0. The finite-ramp test uses large-margin stimuli so the exact tolerance (and
+        // fp32-vs-bf16 rounding of the tol term) never flips the pass/fail decision.
+        constexpr bool EQUAL_NAN = (BINOP == BinaryOp::ISCLOSE_EQNAN);
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_sfpu_isclose,
-            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, /*EQUAL_NAN=*/false),
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, EQUAL_NAN),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,
             vector_mode,
-            /*rtol_bits=*/0x3727c5acu,
-            /*atol_bits=*/0x322bcc77u);
+            ISCLOSE_RTOL_BITS,
+            ISCLOSE_ATOL_BITS);
     }
     else if constexpr (BINOP == BinaryOp::LOGSIGMOID)
     {

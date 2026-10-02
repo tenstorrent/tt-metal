@@ -27,6 +27,12 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_WITHIN_FACE,
 )
 
+# The single-option axes shared by every sweep in this module: the loop factor that amortises
+# the profiler overhead, the SFPU iterations per call and the input size (tile_cnt: 8).
+PERF_LOOP_FACTOR = 16
+PERF_ITERATIONS = 32
+PERF_INPUT_DIMENSIONS = [128, 64]
+
 
 def get_dest_accum_modes(formats):
     if formats.input_format.is_32_bit() and formats.input_format.is_integer():
@@ -62,15 +68,9 @@ def get_dest_accum_modes(formats):
         MathOperation.SfpuXlogy,
     ],
     dest_acc=lambda formats: get_dest_accum_modes(formats),
-    loop_factor=[
-        16,
-    ],  # Number of iterations to run the test in order to minimize profiler overhead in measurement
-    iterations=[
-        32,
-    ],
-    input_dimensions=[
-        [128, 64],  # tile_cnt: 8
-    ],  # Specifying different input sizes to cover different tile counts
+    loop_factor=[PERF_LOOP_FACTOR],
+    iterations=[PERF_ITERATIONS],
+    input_dimensions=[PERF_INPUT_DIMENSIONS],
 )
 def test_perf_eltwise_binary_sfpu_float(
     perf_report,
@@ -124,6 +124,40 @@ def test_perf_eltwise_binary_sfpu_float(
     configuration.run(perf_report)
 
 
+# Float ops whose cost does not depend on the format pair beyond the Dest width, so they are
+# measured on one 16-bit and one 32-bit pair rather than the full matrix above. mask and
+# mask_posinf hard-code their operands (data at dst tile 0, mask at tile 1), so every placement
+# re-runs the first pair; the SFPU work per call is the same.
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats(
+        [
+            DataFormat.Float32,
+            DataFormat.Float16_b,
+        ],
+        same=True,
+    ),
+    mathop=[
+        MathOperation.SfpuMask,
+        MathOperation.SfpuMaskPosinf,
+        MathOperation.SfpuIsclose,
+        MathOperation.SfpuIscloseEqualNan,
+    ],
+    dest_acc=lambda formats: get_dest_accum_modes(formats),
+)
+def test_perf_eltwise_binary_sfpu_float_misc(perf_report, formats, mathop, dest_acc):
+    test_perf_eltwise_binary_sfpu_float(
+        perf_report,
+        formats,
+        mathop,
+        ApproximationMode.No,
+        dest_acc,
+        PERF_LOOP_FACTOR,
+        PERF_ITERATIONS,
+        PERF_INPUT_DIMENSIONS,
+    )
+
+
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats(
@@ -143,15 +177,9 @@ def test_perf_eltwise_binary_sfpu_float(
         MathOperation.SfpuElwsub,
     ],
     dest_acc=lambda formats: get_dest_accum_modes(formats),
-    loop_factor=[
-        16,
-    ],
-    iterations=[
-        32,
-    ],
-    input_dimensions=[
-        [128, 64],  # tile_cnt: 8
-    ],
+    loop_factor=[PERF_LOOP_FACTOR],
+    iterations=[PERF_ITERATIONS],
+    input_dimensions=[PERF_INPUT_DIMENSIONS],
 )
 def test_perf_eltwise_binary_sfpu_int(
     perf_report,
@@ -223,15 +251,9 @@ def test_perf_eltwise_binary_sfpu_int(
         MathOperation.SfpuAddTopRow,
     ],
     dest_acc=lambda formats: get_dest_accum_modes(formats),
-    loop_factor=[
-        16,
-    ],
-    iterations=[
-        32,
-    ],
-    input_dimensions=[
-        [128, 64],  # tile_cnt: 8
-    ],
+    loop_factor=[PERF_LOOP_FACTOR],
+    iterations=[PERF_ITERATIONS],
+    input_dimensions=[PERF_INPUT_DIMENSIONS],
 )
 def test_perf_eltwise_binary_sfpu_add_top_row(
     perf_report,
