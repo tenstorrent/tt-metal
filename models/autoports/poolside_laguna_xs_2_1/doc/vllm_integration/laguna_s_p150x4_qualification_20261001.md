@@ -137,9 +137,55 @@ sequences, monolithic prefill at the time of measurement) decodes at 66-69 ms
 8. Decode MoE intermediates are kept in L1 only up to the largest qualified footprint.
 9. A served config that disagrees with `TT_LAGUNA_MODEL` now fails at startup with the fix named.
 
+## Addendum 2026-10-02: context, prefix caching, speculative decoding, concurrency
+
+Everything above was measured on 2026-10-01 with the 131,072-token default and a 1.5e9 trace region.
+Changes since then, each measured on this p150x4 machine:
+
+**Trace region and context** (275d9b2c16b). `trace_region_size` is reserved in every DRAM bank
+(`tt_metal/impl/allocator/allocator.cpp:39`), so 1.5e9 held 12 GB of each chip's 32 GB. S's decode trace
+measures 27,238,400 B (TT_FATAL with a 10 MB region). S now uses 300 MB per bank: usable DRAM 21,151 ->
+30,307 MiB per chip. The hybrid-KV default context is S's declared 1,048,576: pool 16,796 blocks, 16.42%
+free after the decode trace. Passkey retrieval through that server: 251,553 tokens correct (1,010 s),
+503,073 tokens correct (4,106 s). Uniform KV now fits 131,072 (29.95% free; was capped at 32,768).
+
+**Prefix caching on p150x4** (16f2c4c17db; uniform KV, one sequence, experimental acknowledgement).
+`tests/prefix_cache_qualification.py` off/on on fresh 131,072-token servers: PASS on every verdict
+(exact tokens for cold / full-hit / partial-hit cases up to 129,984 tokens, canonical 8,192-token cached
+counts, metrics, health). Full-hit TTFT: 32K 52.4 -> 15.0 s (3.5x), 65K 125.4 -> 20.1 s (6.2x); TPOT
+unchanged.
+
+**N-gram speculative decoding** (`TT_LAGUNA_SPEC_DECODE=1`, uniform KV, greedy). Fixed a duplicated
+token per answer (3e63196d03a). Outputs are deterministic; 2/5 test prompts equal normal decode, 3/5
+diverge after 365-643 characters at near-ties (batched verify numerics). Time vs normal decode:
+-27% .. +4%. Sampled requests on a spec server do not deadlock.
+
+**DFlash with poolside/Laguna-S-2.1-DFlash** (445f2d11e43, ece43b4859a; uniform KV, one sequence,
+greedy). Hardware gates on chips 0-3: one draft layer PCC 0.99999785 / 0.99994230; full six-layer
+round all PCC bars met, one bf16 near-tie row (b81445f439c); full 48-layer target + draft + verify:
+verify logits PCC 1.0, argmax equal. Serving: fixed an engine-killing position check (ece43b4859a);
+outputs deterministic, 3/5 equal normal decode, 2/5 diverge at near-ties. Warm ms/token vs normal:
+60.4/54.6, 57.6/57.5, 103.2/54.5, 57.2/54.3, 41.1/54.4. Functional, but a net loss except on highly
+predictable text because verify runs eagerly (~277 ms per 16-row round).
+
+**Concurrency.** Uniform KV, 8 sequences, 131,072 context: 8 concurrent greedy chat requests give
+outputs identical to the same requests sent one at a time; 642 tokens in 9.9 s (64.6 tok/s aggregate)
+vs 43.2 s sequentially.
+
+**Re-checks after these changes.** vllm-tt-plugin `tests/tt` (uniform KV, 8 sequences, thinking off):
+69 passed, 3 failed, 1 skipped; two failures are the vocabulary artifacts above, the third
+(`test_topk[15]`, all 8 sampled first tokens "\n") passed in 3/3 reruns. Laguna-XS-2.1 on p150x2 with
+the same code: prefill top-1/5/100 0.95/1.00/1.00, teacher-forced 0.94/1.00/1.00 (established 0.95).
+The TTNN warning "Allocating device buffers is unsafe due to the existence of an active trace" printed
+once at the first request of every server is expected: eager prefill allocates temporaries after
+trace capture and frees them within the call; it was present in the 2026-10-01 servers too.
+
 ## Not covered
 
-- More than one concurrent sequence with hybrid KV (the hybrid allocator is qualified at one).
-- Context beyond 131,072 (S declares 1,048,576; see the memory note above).
-- Prefix caching on p150x4, DFlash and speculative decode for S.
-- Penalized requests take a host round trip per token (correct but slower than device sampling).
+- More than one concurrent sequence with hybrid KV (the hybrid allocator is qualified at one; use
+  uniform KV for concurrency, up to 131,072 tokens).
+- Passkey retrieval beyond 503,073 tokens (the 1,048,576 configuration boots with 16.4% free).
+- Prefix caching together with hybrid KV; DFlash or n-gram speculation together with hybrid KV.
+- DFlash speed: verify is not traced, so DFlash is slower than plain decode on most text.
+- Penalized requests take a host round trip per token (correct but slower than device sampling), and the
+  first token of a penalized request (sampled in prefill) is not penalized.
