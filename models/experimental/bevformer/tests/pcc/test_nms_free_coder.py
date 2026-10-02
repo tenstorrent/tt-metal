@@ -19,23 +19,27 @@ from models.experimental.bevformer.tt.tt_nms_free_coder import TtNMSFreeCoder
 # Logits spread evenly over [-LOGIT_RANGE, LOGIT_RANGE]: adjacent sigmoid scores differ by
 # 1e-5 or more, well above the device sigmoid's error, so the top-k must match exactly.
 LOGIT_RANGE = 4.0
+NUM_SCORES = NUM_QUERY * NUM_CLASSES
+LOGITS = torch.linspace(-LOGIT_RANGE, LOGIT_RANGE, NUM_SCORES)
+# Half the smallest gap between adjacent scores: a score error below it keeps the ranking.
+SCORE_TOLERANCE = LOGITS.sigmoid().diff().min().item() / 2
 
 
 def _head_outputs(batch_size, generator):
-    """Head-like ``(L, bs, num_query, *)`` class logits, all distinct, and box predictions whose
-    centres spread past ``POST_CENTER_RANGE`` on every axis, so the range filter drops some
-    of the top-k boxes."""
+    """Head-like ``(L, bs, num_query, *)`` class logits, all distinct and shuffled apart per
+    layer and sample, so decoding the wrong layer shows, and box predictions whose centers
+    spread past ``POST_CENTER_RANGE`` on every axis, so the range filter drops some of the
+    top-k boxes."""
     shape = (NUM_LAYERS, batch_size, NUM_QUERY)
-    num_scores = NUM_QUERY * NUM_CLASSES
-    logits = torch.linspace(-LOGIT_RANGE, LOGIT_RANGE, num_scores)
-    cls_scores = torch.stack([logits[torch.randperm(num_scores, generator=generator)] for _ in range(batch_size)])
-    cls_scores = cls_scores.view(1, batch_size, NUM_QUERY, NUM_CLASSES).expand(NUM_LAYERS, -1, -1, -1).contiguous()
+    cls_scores = torch.stack(
+        [LOGITS[torch.randperm(NUM_SCORES, generator=generator)] for _ in range(NUM_LAYERS * batch_size)]
+    ).view(*shape, NUM_CLASSES)
 
     bbox_preds = torch.randn(*shape, CODE_SIZE, generator=generator)
-    centre_limit = torch.tensor(POST_CENTER_RANGE[3:]) * 1.2
-    centres = (torch.rand(*shape, 3, generator=generator) * 2 - 1) * centre_limit
-    bbox_preds[..., CODE_XY] = centres[..., 0:2]
-    bbox_preds[..., CODE_Z] = centres[..., 2:3]
+    center_limit = torch.tensor(POST_CENTER_RANGE[3:]) * 1.2
+    centers = (torch.rand(*shape, 3, generator=generator) * 2 - 1) * center_limit
+    bbox_preds[..., CODE_XY] = centers[..., 0:2]
+    bbox_preds[..., CODE_Z] = centers[..., 2:3]
     return cls_scores, bbox_preds
 
 
@@ -51,17 +55,23 @@ def test_nms_free_coder(device, reset_seeds, batch_size):
     tt_scores, tt_labels, tt_query_index, tt_boxes = (
         ttnn.to_torch(t) for t in tt_coder.topk(tt_cls_scores[-1], tt_bbox_preds[-1])
     )
+    num_programs = device.num_program_cache_entries()
     for i in range(batch_size):
         scores, labels, query_index, boxes = reference.topk(cls_scores[-1, i], bbox_preds[-1, i])
         assert torch.equal(tt_labels[i].long(), labels), f"sample {i}: top-k labels differ"
         assert torch.equal(tt_query_index[i, :, 0].long(), query_index), f"sample {i}: top-k queries differ"
+        # PCC alone would pass a constant offset or scale; the absolute error must also keep the ranking.
         assert_pcc(scores, tt_scores[i].float(), 0.99)
+        assert (scores - tt_scores[i].float()).abs().max() < SCORE_TOLERANCE, f"sample {i}: top-k scores differ"
         assert_boxes_close(boxes, tt_boxes[i].float())
 
     expected = reference.decode(cls_scores, bbox_preds)
     actual = tt_coder.decode(tt_cls_scores, tt_bbox_preds)
+    # decode runs topk again on the same shapes, so it must only hit the program cache.
+    assert device.num_program_cache_entries() == num_programs
     for i, (e, a) in enumerate(zip(expected, actual, strict=True)):
         assert 0 < len(e["bboxes"]) < reference.max_num, "the range filter must drop some boxes and keep some"
         assert torch.equal(a["labels"], e["labels"]), f"sample {i}: kept labels differ"
         assert_pcc(e["scores"], a["scores"], 0.99)
+        assert (e["scores"] - a["scores"]).abs().max() < SCORE_TOLERANCE, f"sample {i}: kept scores differ"
         assert_boxes_close(e["bboxes"], a["bboxes"])

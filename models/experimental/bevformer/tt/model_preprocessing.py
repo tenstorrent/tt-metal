@@ -5,11 +5,12 @@
 BEVFormer model parameter preprocessing utilities for TTNN.
 """
 
-import torch
 from types import SimpleNamespace
+from typing import Optional
+
+import torch
 
 import ttnn
-from typing import Optional
 
 # Get default layout and dtype
 DEFAULT_LAYOUT = ttnn.TILE_LAYOUT

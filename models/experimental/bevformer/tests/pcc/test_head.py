@@ -11,7 +11,7 @@ from models.experimental.bevformer.config.head_config import NUM_CLASSES
 from models.experimental.bevformer.reference.nms_free_coder import NMSFreeCoder, denormalize_bbox
 from models.experimental.bevformer.tests.backbone_common import assert_pcc
 from models.experimental.bevformer.tests.decoder_common import BEV_SHAPES, assert_channels_close, random_bev_features
-from models.experimental.bevformer.tests.head_common import assert_boxes_close, build_reference_head, centre_channels
+from models.experimental.bevformer.tests.head_common import assert_boxes_close, build_reference_head, center_channels
 from models.experimental.bevformer.tt.model_preprocessing_head import create_head_parameters
 from models.experimental.bevformer.tt.tt_head import TtBEVFormerHead
 from models.experimental.bevformer.tt.tt_nms_free_coder import TtNMSFreeCoder
@@ -27,8 +27,9 @@ CASES = [
         False,
         id="base",
         marks=pytest.mark.xfail(
-            reason="decoder accuracy on the 200x200 grid: its last layer's output reaches PCC 0.98, "
-            "and some box channels computed from it fall below 0.99 (the centres do not)",
+            reason="on the 200x200 grid, with the head's queries and reference points, the decoder's "
+            "layer outputs carry enough error that some box channels computed from them fall below "
+            "PCC 0.99; the centers, the decoder's float32 refined points, do not",
             raises=AssertionError,
             strict=True,
         ),
@@ -49,7 +50,7 @@ def _bev_embed(bev_shape, batch_size, seed):
 
 def _models(bev_shape, device):
     torch_model = build_reference_head(bev_shape)
-    return torch_model, TtBEVFormerHead(create_head_parameters(torch_model, device), device, bev_shape)
+    return torch_model, TtBEVFormerHead(create_head_parameters(torch_model, device), device)
 
 
 def _to_device(tensor, device):
@@ -61,13 +62,15 @@ def _check(torch_outputs, tt_outputs):
     # comp_pcc zeroes NaN and Inf before correlating, so they must be ruled out here.
     for name, tensor in zip(("class logits", "box predictions"), tt_outputs):
         assert torch.isfinite(tensor).all(), f"non-finite values in the head {name}"
-    centres = centre_channels()
-    centre_error = (torch_outputs[1][..., centres] - tt_outputs[1][..., centres]).abs()
-    logger.info(f"box centre error: mean {centre_error.mean():.4f} m, max {centre_error.max():.4f} m")
-    assert_pcc(torch_outputs[0], tt_outputs[0], 0.99)
-    # Channel by channel: a joint PCC would be the centres' alone, as x and y span 102.4 m
-    # against z's 8 m and the other channels' O(1).
-    assert_channels_close(torch_outputs[1], tt_outputs[1])
+    centers = center_channels()
+    center_error = (torch_outputs[1][..., centers] - tt_outputs[1][..., centers]).abs()
+    logger.info(f"box center error: mean {center_error.mean():.4f} m, max {center_error.max():.4f} m")
+    # Over all layers, then the last alone, which the coder reads and where the error is largest.
+    for layers in (slice(None), -1):
+        assert_pcc(torch_outputs[0][layers], tt_outputs[0][layers], 0.99)
+        # Channel by channel: a joint PCC would be the centers' alone, as x and y span 102.4 m
+        # against z's 8 m and the other channels' O(1).
+        assert_channels_close(torch_outputs[1][layers], tt_outputs[1][layers])
 
 
 @torch.no_grad()
@@ -107,9 +110,9 @@ def test_head(device, reset_seeds, name, bev_shape, batch_size, traced):
 @torch.no_grad()
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_head_detections(device, reset_seeds):
-    """The coder on the head's own outputs: it must select a top-k of the reference head's
-    scores, and the scores and boxes it returns must be the reference head's at the same
-    (query, class) pairs.
+    """The coder on the head's own outputs: the pairs it selects must lie within twice the
+    score error of the reference head's top-k, and the scores and boxes it returns must be the
+    reference head's at the same (query, class) pairs.
 
     The head's logits differ from the reference's slightly, so near-equal scores may rank in
     a different order and the two top-k sets differ at their tail; the overlap is logged.
@@ -124,17 +127,20 @@ def test_head_detections(device, reset_seeds):
     tt_scores, tt_labels, tt_query_index, tt_boxes = (
         ttnn.to_torch(t) for t in TtNMSFreeCoder().topk(tt_cls_scores[-1], tt_bbox_preds[-1])
     )
-    # The largest score error over all num_query * num_classes pairs, not only the selected.
-    score_error = (cls_scores[-1].sigmoid() - ttnn.to_torch(tt_cls_scores[-1]).float().sigmoid()).abs().amax((1, 2))
+    # The largest error over all num_query * num_classes pairs of the scores topk ranks, the
+    # device sigmoid of the head's logits.
+    tt_all_scores = ttnn.to_torch(ttnn.sigmoid(tt_cls_scores[-1])).float()
+    score_error = (cls_scores[-1].sigmoid() - tt_all_scores).abs().amax((1, 2))
     for i in range(batch_size):
         labels, query_index = tt_labels[i].long(), tt_query_index[i, :, 0].long()
         ref_scores, ref_labels, ref_query_index, _ = reference.topk(cls_scores[-1, i], bbox_preds[-1, i])
         assert (tt_scores[i][1:] <= tt_scores[i][:-1]).all(), f"sample {i}: top-k scores are not sorted"
-        # A pair the device ranks above a reference top-k pair is off by at most twice the
-        # score error, so every selected pair scores at least the reference k-th minus that.
+        # With e the score error and s_k the reference's k-th score: every reference top-k pair
+        # scores at least s_k - e on device, so the device's k-th score does too, and every pair
+        # the device selects scores at least s_k - 2e in the reference.
         selected = cls_scores[-1, i, query_index, labels].sigmoid()
-        kth = ref_scores[-1] - 2 * score_error[i]
-        assert (selected >= kth).all(), f"sample {i}: a selected pair scores below the top-k bound {kth:.5f}"
+        bound = ref_scores[-1] - 2 * score_error[i]
+        assert (selected >= bound).all(), f"sample {i}: a selected pair scores below the top-k bound {bound:.5f}"
         pairs = set((query_index * NUM_CLASSES + labels).tolist())
         ref_pairs = set((ref_query_index * NUM_CLASSES + ref_labels).tolist())
         logger.info(f"sample {i}: top-{reference.max_num} overlap {len(pairs & ref_pairs) / len(ref_pairs):.3f}")

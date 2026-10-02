@@ -61,11 +61,12 @@ def inverse_sigmoid(x, eps=1e-5):
     return torch.log(x1 / x2)
 
 
-def reg_branch(embed_dims, code_size, num_reg_fcs=2):
-    """A layer's box regression branch, ``(Linear-ReLU) x num_reg_fcs`` then ``Linear(code_size)``,
-    as BEVFormerHead builds it; the decoder refines its reference points with it."""
+def reg_branch(embed_dims, code_size, num_fcs=2):
+    """A layer's box regression branch, ``(Linear-ReLU) x num_fcs`` then ``Linear(code_size)``, as
+    BEVFormerHead builds it (``num_fcs`` is upstream's ``num_reg_fcs``); the decoder refines its
+    reference points with it, and its TT port runs the default two hidden Linears only."""
     layers = []
-    for _ in range(num_reg_fcs):
+    for _ in range(num_fcs):
         layers += [nn.Linear(embed_dims, embed_dims), nn.ReLU()]
     return nn.Sequential(*layers, nn.Linear(embed_dims, code_size))
 

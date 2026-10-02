@@ -38,6 +38,7 @@ def _cls_branch_parameters(branch, device, dtype):
 @torch.no_grad()
 def create_head_parameters(torch_model, device, dtype=DEFAULT_DTYPE):
     """Parameters for a single ``TtBEVFormerHead``; single use, as ``create_decoder_parameters`` is.
+    They carry the reference head's BEV shape and ``pc_range``.
 
     The object queries, their positional embeddings and the initial reference points depend
     on the weights only, so they are computed here, the points in float32 as the decoder
@@ -50,6 +51,8 @@ def create_head_parameters(torch_model, device, dtype=DEFAULT_DTYPE):
         return ttnn.from_torch(tensor.unsqueeze(0), dtype=tensor_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     return SimpleNamespace(
+        bev_shape=(torch_model.bev_h, torch_model.bev_w),
+        pc_range=tuple(torch_model.pc_range),
         query=upload(query),
         query_pos=upload(query_pos),
         reference_points=upload(init_reference, GRID_DTYPE),
