@@ -1233,6 +1233,52 @@ def test_init_run_diff_mode_reaches_changed_files_inside_a_submodule(tmp_path):
     assert files == {"top.c", "sub/s.c"}, files
 
 
+def test_init_run_diff_mode_reaches_a_change_inside_a_nested_submodule(tmp_path):
+    import subprocess as sp
+
+    allow = ["-c", "protocol.file.allow=always"]
+
+    def repo(path, files):
+        path.mkdir()
+        for f, body in files.items():
+            (path / f).write_text(body)
+        sp.run(["git", "init", "-q"], cwd=path, check=True)
+        _commit_all(path, "init")
+
+    repo(tmp_path / "inner", {"a.c": "int a;\n", "b.c": "int b;\n"})
+    repo(tmp_path / "mid", {"m.c": "int m;\n"})
+    sp.run(
+        ["git", *allow, "submodule", "add", "-q", str(tmp_path / "inner"), "inner"],
+        cwd=tmp_path / "mid",
+        check=True,
+        capture_output=True,
+    )
+    _commit_all(tmp_path / "mid", "add inner")
+    tree = _git_tree(tmp_path, ["top.c"])
+    sp.run(
+        ["git", *allow, "submodule", "add", "-q", str(tmp_path / "mid"), "mid"],
+        cwd=tree,
+        check=True,
+        capture_output=True,
+    )
+    sp.run(
+        ["git", *allow, "submodule", "update", "-q", "--init", "--recursive"],
+        cwd=tree,
+        check=True,
+        capture_output=True,
+    )
+    base = _commit_all(tree, "add mid")
+    (tree / "mid" / "inner" / "a.c").write_text(
+        "int a2;\n"
+    )  # the only change, two levels down
+    _commit_all(tree / "mid" / "inner", "change a")
+    _commit_all(tree / "mid", "bump inner")
+    _commit_all(tree, "bump mid")
+    code, out, files = _init(tmp_path, tree, "--since", base, "--recurse-submodules")
+    assert code == 0, out
+    assert files == {"mid/inner/a.c"}, files
+
+
 def test_init_run_diff_mode_takes_a_whole_submodule_whose_old_pin_is_gone(tmp_path):
     import subprocess as sp
 

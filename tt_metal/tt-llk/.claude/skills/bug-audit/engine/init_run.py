@@ -194,33 +194,52 @@ if a.since:
         if p
     }
     if a.recurse_submodules:
-        # the superproject diff names a changed submodule only by its path: diff inside it between the two pins
-        base = git("merge-base", a.since, commit).strip()
+        # a diff names a changed submodule only by its path: diff inside it between its two pins, and recurse
 
-        def pin(rev, s):
-            """The commit a submodule is pinned to at rev, or None if it is not there."""
-            entry = git("ls-tree", "-z", rev, "--", s).split("\0")[0].split()
+        def pin(repo, rev, s):
+            """The commit submodule s (a path inside repo) is pinned to at rev, or None if it is not there."""
+            entry = (
+                git("-C", repo, "ls-tree", "-z", rev, "--", s).split("\0")[0].split()
+            )
             return entry[2] if entry else None
 
-        for s in submodules:
-            if s not in changed:
-                continue
-            old, new = pin(base, s), pin(commit, s)
+        def gitlinks(repo, rev):
+            out_ = git("-C", repo, "ls-tree", "-r", "-z", rev)
+            return {
+                e.split("\t", 1)[1] for e in out_.split("\0") if e.startswith("160000 ")
+            }
+
+        def changed_in(path, old, new):
+            """Changed files inside the submodule at path (from the root) between pins old and new."""
             try:
-                inner = (
-                    git("-C", s, "diff", "--name-only", "-z", old, new)
+                names = (
+                    git("-C", path, "diff", "--name-only", "-z", old, new)
                     if old
-                    else git("-C", s, "ls-files", "-z")
+                    else git("-C", path, "ls-files", "-z")
                 )
-                changed |= {f"{s}/{p}" for p in inner.split("\0") if p}
+                nested = gitlinks(path, new) if new else set()
             except subprocess.CalledProcessError:
-                # the old pin is not in the submodule's clone: every file in it counts as changed
-                changed |= {f for f in files if f.startswith(s + "/")}
+                # a pin is not in the submodule's clone: every file in it counts as changed
                 print(
-                    f"WARNING: {s}: cannot diff {(old or 'none')[:11]}..{(new or 'none')[:11]} (not fetched); "
+                    f"WARNING: {path}: cannot diff {(old or 'none')[:11]}..{(new or 'none')[:11]} (not fetched); "
                     "all its files are in scope",
                     file=sys.stderr,
                 )
+                return {f for f in files if f.startswith(path + "/")}
+            got = set()
+            for p in filter(None, names.split("\0")):
+                if p in nested:
+                    got |= changed_in(
+                        f"{path}/{p}", old and pin(path, old, p), pin(path, new, p)
+                    )
+                else:
+                    got.add(f"{path}/{p}")
+            return got
+
+        base = git("merge-base", a.since, commit).strip()
+        for s in submodules:
+            if s in changed:
+                changed |= changed_in(s, pin(".", base, s), pin(".", commit, s))
     files = [f for f in files if f in changed]
 # comma lists, like --prio: a whole list taken as one glob matches nothing, silently
 include = [g.strip() for x in a.include for g in x.split(",") if g.strip()]
