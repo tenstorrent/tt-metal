@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <bit>
-#include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <cstddef>
@@ -1555,6 +1554,9 @@ inline bool typecast_compare(tt::DataFormat out_fmt, const std::vector<float>& g
 
 namespace unit_tests::compute::sfpu {
 
+// Stimulus seed, fixed so every run (and every Merge Gate failure) sees the same inputs.
+constexpr int sfpu_test_seed = 42;
+
 struct SfpuConfig {
     size_t num_tiles = 0;
     size_t tile_byte_size = 0;
@@ -1799,7 +1801,7 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
     TT_FATAL(!is_fp32 || is_relu_family, "Float32 SFPU path supports relu / relu_min / relu_max only in v1");
     const size_t element_size = is_fp32 ? sizeof(float) : sizeof(bfloat16);
     const size_t numel = byte_size / element_size;
-    const auto seed = std::chrono::system_clock::now().time_since_epoch().count();
+    const int seed = sfpu_test_seed;
     const bool relu_threshold_op = test_config.sfpu_op == "relu_min" || test_config.sfpu_op == "relu_max";
     std::vector<uint32_t> packed_input =
         is_fp32 ? generate_packed_uniform_random_vector<uint32_t, float>(
@@ -1863,7 +1865,7 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
 /// Int32 unary SFPU ops: Int8 L1 (non-negative) -> 32-bit Dest -> Int32 L1, compared exactly.
 bool run_sfpu_int32_unary(distributed::MeshDevice& mesh_device, const SfpuConfig& test_config) {
     const size_t numel = test_config.num_tiles * 1024;
-    const auto seed = std::chrono::system_clock::now().time_since_epoch().count();
+    const int seed = sfpu_test_seed;
     const auto packed_input =
         sfpu_util::generate_non_negative_int8_binary_inputs(numel, test_config.sfpu_op, seed).first;
 
@@ -1987,7 +1989,7 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
     const bool is_int8_op = sfpu_util::is_int8_binary_sfpu_op(test_config.sfpu_op);
     const size_t element_size = is_int8_op ? sizeof(int8_t) : sizeof(bfloat16);
     const uint32_t numel = per_buffer_byte_size_input / element_size;
-    const int seed = std::chrono::system_clock::now().time_since_epoch().count();
+    const int seed = sfpu_test_seed;
     auto [packed_lhs, packed_rhs] = sfpu_util::generate_packed_sfpu_binary_inputs(numel, test_config.sfpu_op, seed);
 
     std::vector<uint32_t> packed_golden;
@@ -2157,7 +2159,7 @@ bool run_sfpu_ternary_three_input_buffer(distributed::MeshDevice& mesh_device, c
         &mesh_device);
 
     const size_t numel = per_buffer_byte_size / sizeof(bfloat16);
-    const int seed = std::chrono::system_clock::now().time_since_epoch().count();
+    const int seed = sfpu_test_seed;
     auto [packed_in0, packed_in1, packed_in2] =
         sfpu_util::generate_packed_sfpu_ternary_inputs(numel, test_config.sfpu_op, seed);
 
@@ -2391,7 +2393,7 @@ bool run_sfpu_ternary_three_input_buffer(distributed::MeshDevice& mesh_device, c
 bool run_sfpu_typecast(
     distributed::MeshDevice& mesh_device, tt::DataFormat in_fmt, tt::DataFormat out_fmt, size_t num_tiles) {
     const size_t numel = num_tiles * tt::constants::TILE_HW;
-    const int seed = std::chrono::system_clock::now().time_since_epoch().count();
+    const int seed = sfpu_test_seed;
     auto vals = sfpu_util::generate_typecast_input(numel, seed, in_fmt, out_fmt);
     auto packed_in = sfpu_util::typecast_pack(in_fmt, vals);
     auto golden = sfpu_util::typecast_golden(in_fmt, out_fmt, packed_in);
