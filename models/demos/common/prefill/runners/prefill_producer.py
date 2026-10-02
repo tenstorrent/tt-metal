@@ -33,7 +33,6 @@ from models.demos.common.prefill.runners.runner_utils import (
     num_mtp_tokens,
     resolve_trace_dir,
 )
-from tt_host_layout import decode_chunk
 
 
 def _apply_manifest_env(manifest_path: str) -> dict:
@@ -324,16 +323,20 @@ def _drain_layer_acks(ack_channel, expected: int, timeout_s: float = 600.0) -> i
     return drained
 
 
-def _as_torch(decoded: np.ndarray) -> torch.Tensor:
-    return torch.from_numpy(np.ascontiguousarray(decoded))
+# L1 alignment on Wormhole, Blackhole and Quasar. Passing it keeps unpack_bfp8 from opening the device.
+_BFP_L1_ALIGNMENT = 16
 
 
 def _decode_bfp8_chunk(raw: bytes, head_dim: int) -> torch.Tensor:
-    return _as_torch(decode_chunk(raw, dtype="bfp8", width=head_dim, storage="tile"))
+    if len(raw) != head_dim // 32 * _BFP8_TILE_BYTES:
+        raise ValueError(f"bfp8 KV chunk has {len(raw)} bytes, expected {head_dim // 32 * _BFP8_TILE_BYTES}")
+    values = ttnn._ttnn.bfp_utils.unpack_bfp8(np.frombuffer(raw, dtype="<u4"), l1_alignment=_BFP_L1_ALIGNMENT)
+    return torch.from_numpy(ttnn._ttnn.bfp_utils.untilize(values, _KV_CHUNK_TOKENS, head_dim))
 
 
 def _decode_bf16_chunk(raw: bytes, head_dim: int) -> torch.Tensor:
-    return _as_torch(decode_chunk(raw, dtype="bf16", width=head_dim, storage="tile"))
+    bits = ttnn._ttnn.bfp_utils.untilize(np.frombuffer(raw, dtype="<u2"), _KV_CHUNK_TOKENS, head_dim)
+    return torch.from_numpy((bits.astype(np.uint32) << 16).view(np.float32))
 
 
 def _decode_row_major_chunk(raw: bytes, head_dim: int, dtype: torch.dtype) -> torch.Tensor:

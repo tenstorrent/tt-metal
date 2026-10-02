@@ -64,9 +64,23 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
     bool row_major_output,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile) {
-    TTZoneScopedD(DATA_FORMAT);
+    return unpack_bfp8_tiles_into_float_vec(
+        bfp8_tiles,
+        row_major_output,
+        is_exp_a,
+        tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1),
+        tile);
+}
 
-    uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
+std::vector<float> unpack_bfp8_tiles_into_float_vec(
+    ttsl::Span<const uint32_t> bfp8_tiles,
+    bool row_major_output,
+    bool is_exp_a,
+    uint32_t l1_alignment,
+    const std::optional<tt::tt_metal::Tile>& tile) {
+    TTZoneScopedD(DATA_FORMAT);
+    TT_FATAL(
+        l1_alignment > 0 && l1_alignment % 4 == 0, "l1_alignment {} must be a positive multiple of 4", l1_alignment);
 
     auto tile_H = tile.has_value() ? tile->get_tile_shape()[0] : tt::constants::TILE_HEIGHT;
     auto tile_W = tile.has_value() ? tile->get_tile_shape()[1] : tt::constants::TILE_WIDTH;
@@ -97,8 +111,7 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
     // 64-bit: counts/indices below overflow uint32 for tensors > 4 GB.
     uint64_t size_bytes =
         static_cast<uint64_t>(bfp8_tiles.size()) * num_elements_in_dword;  // each uint32_t contains 4 BFP8 values
-    uint32_t single_bfp8_tile_size =
-        tile.has_value() ? tile->get_tile_size(tt::DataFormat::Bfp8_b) : tile_size(tt::DataFormat::Bfp8_b);
+    uint32_t single_bfp8_tile_size = num_bfp8_in_tile * 4;
     TT_ASSERT(size_bytes % single_bfp8_tile_size == 0);
     uint64_t num_tiles = size_bytes / single_bfp8_tile_size;
 
