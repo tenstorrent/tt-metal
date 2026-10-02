@@ -153,10 +153,12 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/generic_moe_gate.h
     inc/api/compute/experimental/hadamard.h
     inc/api/compute/experimental/indexer_mul_custom.h
+    inc/api/compute/experimental/layernorm.h
     inc/api/compute/experimental/matmul_custom.h
     inc/api/compute/experimental/mul_reduce_scalar.h
     inc/api/compute/experimental/pack_block.h
     inc/api/compute/experimental/pack_rows_to_addr.h
+    inc/api/compute/experimental/reg_api.h
     inc/api/compute/experimental/rmsnorm.h
     inc/api/compute/experimental/rope_sfpu.h
     inc/api/compute/experimental/sdpa.h
@@ -230,7 +232,6 @@ set(HW_JIT_API_HEADERS
     inc/hostdev/dev_msgs.h
     inc/hostdev/device_print_common.h
     inc/hostdev/device_print_structures.h
-    inc/hostdev/fabric_telemetry_msgs.h
     inc/hostdev/profiler_common.h
     inc/hostdev/profiler_zone_id.h
     inc/hostdev/realtime_profiler_msgs.h
@@ -333,6 +334,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/quasar/noc_nonblocking_api_v1.h
     inc/internal/tt-2xx/quasar/noc_nonblocking_api_v2.h
     inc/internal/tt-2xx/quasar/noc_nonblocking_api_v3.h
+    inc/internal/tt-2xx/quasar/semaphore_cached_pool.h
     inc/internal/tt-2xx/tt-2.0.0/meta/fds_registers/tt_fds_dispatch_reg.h
     inc/internal/tt-2xx/tt-2.0.0/meta/fds_registers/tt_fds_tensixneo_reg.h
     inc/internal/tt-2xx/tt-2.0.0/meta/registers/overlay_reg.h
