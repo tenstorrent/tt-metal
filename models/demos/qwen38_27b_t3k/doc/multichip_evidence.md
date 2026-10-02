@@ -504,6 +504,54 @@ was met: the strictest tier wants 16.89 t/s/u and the functional tier 1.68, so o
 functional tier passes on throughput while every `complete` and `target` tier check fails.
 TTFT passes all three tiers at every length.
 
+## Served performance after the flags, the padding and decode-only tracing
+
+Benchmark run 37001043718, tt-metal `8ca73539dd7` and tt-inference-server `ab5d20e9`, against
+run 36719378594 on `a2675e8ea96` / `9074368a`:
+
+| concurrency | ISL | TPOT before | TPOT after | t/s/u before | t/s/u after |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 128 | 96.1 ms | **48.1 ms** | 10.4 | **20.8** |
+| 1 | 4096 | 96.9 ms | 48.9 ms | 10.3 | 20.4 |
+| 1 | 16384 | 98.3 ms | 49.4 ms | 10.2 | 20.2 |
+| 1 | 32768 | 159.3 ms | **50.2 ms** | 6.3 | **19.9** |
+| 1 | 131072 | 167.1 ms | 55.9 ms | 6.0 | 17.9 |
+| 8 | 128 | 87.5 ms | **70.4 ms** | 11.4 | **14.2** |
+| 8 | 32768 | 97.2 ms | 78.1 ms | 10.3 | 12.8 |
+
+Acceptance reports 4 of 26 benchmark targets passed, the first run in which any passed. The
+strictest `target` tier now passes at concurrency 1 for ISL 128, 1024, 4096 and 32768, exceeding
+its 16.89 t/s/u bar by roughly 23% where the same ratio was 0.35 before. One check still fails:
+`complete`-tier output throughput at ISL 32768, ratio 0.87.
+
+**The step between 16384 and 32768 is gone.** It was 98.3 to 159.3 ms and is now 49.4 to 50.2 ms.
+That step was not a context cost at all: without decode buckets every step ran the full batch-8
+shape however few requests were active, so a single request at 32768 paid eight requests' worth
+of attention and cache work. `QWEN_DECODE_BUCKETS=1` makes a lone request take a batch-1 step.
+The sampler padding cannot explain it, since the sampler's cost is fixed in context.
+
+**Three changes landed together, so the attribution below is a reconciliation and not a proof.**
+The earlier run predates the optimization flags: its tt-inference-server commit `9074368a` is the
+step-timing commit, and `6e0e16ea` added the flags afterwards. So this run carries the nine
+`run_ci.sh` flags, the sampler top-k padding, and decode-only tracing at a 128 MiB region.
+
+Against the local measurements the parts add up. At concurrency 8 the decode bucket contributes
+nothing, because eight active slots select the batch-8 bucket, leaving the compact-decode flags
+at about 12% of an 89 ms step, near 10.7 ms, plus 7.27 ms of sampler device time, near 18 ms
+against the 17.1 ms observed. At concurrency 1 the bucket adds the difference between a batch-8
+and a batch-1 step, 89.1 against 58.3 ms locally, which brings the expected total near the 48 ms
+observed.
+
+**Prefill is noisier and partly worse.** Concurrency-1 TTFT improves at short input, 344.4 to
+141.6 ms at ISL 128, and is flat at long input. At concurrency 8 it is unreliable between runs
+rather than simply better or worse: ISL 128 with OSL 128 rose 48% while ISL 128 with OSL 1024
+fell 44%, and TTFT does not depend on output length, so those two disagree about the same
+quantity. Scheduling, not a property of the configuration.
+
+`trace_mode: decode_only` with a 128 MiB region replaced a 1 GiB region with prefill tracing,
+which left too little DRAM for the batch-8 startup prefill warmup that `QWEN_PREFILL_STARTUP_WARMUP`
+requests. Decode remains traced, which is why TPOT is the clean signal here and TTFT is not.
+
 ## Sequence-length branches
 
 Every length-dependent gate in the shipping policy was exercised at its value and on both
