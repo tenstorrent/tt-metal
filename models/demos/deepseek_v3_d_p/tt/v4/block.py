@@ -296,6 +296,7 @@ class TtV4PrefillBlock(LightweightModule):
         A = TraceIsland(self.mesh_device, island_a, S_in, name=f"layer{self.layer_idx}.A")
         post, comb, h = A.capture()
         self._attn_islands = {}
+        self._a2_buckets = {}  # slot -> [(scorer width, A2 bucket island)], ascending (DS4F-0300 capacity buckets)
         if getattr(self.attn, "traceable", lambda: False)():
             # PATH A3 (DS4F-0246, galaxy: CSA issue 104 ms vs 20 ms device; HCA 26 vs 13.5): the attention itself as two
             # islands per slot -- A1 = stems + compressor(s) (+ SP gather), A2 = the attention core + o-proj + export prep
@@ -315,10 +316,22 @@ class TtV4PrefillBlock(LightweightModule):
                 warm = self.attn.forward_pre(h, state, chunk_tokens)
                 self.attn.glue_chunk(state, warm, chunk_tokens, None)
                 a2_warm = self.attn.forward_attn(h, warm, state, chunk_tokens)
+                # DS4F-0300 capacity buckets (CSA): scorer widths of the extra A2 islands, ascending; compile each variant
+                # and the copy into the full island's outputs (same shapes) now, before any attention island is captured
+                buckets = getattr(self.attn, "capacity_buckets", lambda *_: [])(state, S_l)
+                for kv_b in buckets:
+                    for dst, t in zip(a2_warm, self.attn.forward_attn(h, warm, state, chunk_tokens, kv_bucket=kv_b)):
+                        if t is not None:
+                            copy_into(dst, t)
+                            ttnn.deallocate(t)
+                c0_bucket = buckets[0] if buckets else None  # chunk 0's live columns fit the smallest bucket
                 chunk0_island = _TRACED_CHUNK0 and getattr(self.attn, "supports_chunk0_island", False)
                 if chunk0_island:
                     # compile the chunk-0 variant too (DS4F-0300) before any attention island is captured
-                    a2_warm = list(a2_warm) + list(self.attn.forward_attn(h, warm, state, chunk_tokens, chunk0=True))
+                    c0_kw = {} if c0_bucket is None else {"kv_bucket": c0_bucket}
+                    a2_warm = list(a2_warm) + list(
+                        self.attn.forward_attn(h, warm, state, chunk_tokens, chunk0=True, **c0_kw)
+                    )
                 for t in list(a2_warm) + list(warm):
                     if t is not None:  # the SWA phases carry None for entries / mask
                         ttnn.deallocate(t)
@@ -361,12 +374,40 @@ class TtV4PrefillBlock(LightweightModule):
                     [],
                     name=f"layer{self.layer_idx}.A2.slot{slot}",
                 )
-                A2.capture()
+                a2_out = A2.capture()
+                bucket_islands = []
+                for kv_b in buckets:
+                    # the bucket island writes the FULL island's persistent outputs (one set of output buffers per layer and
+                    # slot, whichever island ran): its own results are capture intermediates, copied then freed
+
+                    def _bucket_fn(_o=outs, _st=state, _b=kv_b, _dst=a2_out):
+                        res = self.attn.forward_attn(h, _o, _st, chunk_tokens, kv_bucket=_b)
+                        for dst, t in zip(_dst, res):
+                            if t is not None:
+                                copy_into(dst, t)
+                                ttnn.deallocate(t)
+                        return _dst
+
+                    isl = TraceIsland(
+                        self.mesh_device, _bucket_fn, [], name=f"layer{self.layer_idx}.A2b{kv_b}.slot{slot}"
+                    )
+                    isl.capture()
+                    bucket_islands.append((kv_b, isl))
+                self._a2_buckets[slot] = bucket_islands
+                if buckets:
+                    from loguru import logger
+
+                    logger.info(
+                        f"[v4 buckets] layer {self.layer_idx} slot {slot}: A2 scorer widths {buckets} + full "
+                        f"{(int(state.index_k.shape[2]) // 64) * 64}; chunk 0 on {c0_bucket}"
+                    )
                 A2c0 = None
                 if chunk0_island:
                     A2c0 = TraceIsland(
                         self.mesh_device,
-                        lambda _o=outs, _st=state: self.attn.forward_attn(h, _o, _st, chunk_tokens, chunk0=True),
+                        lambda _o=outs, _st=state, _kw=c0_kw: self.attn.forward_attn(
+                            h, _o, _st, chunk_tokens, chunk0=True, **_kw
+                        ),
                         [],
                         name=f"layer{self.layer_idx}.A2c0.slot{slot}",
                     )
@@ -422,6 +463,10 @@ class TtV4PrefillBlock(LightweightModule):
                 if i is not None:
                     i.release()
         self._attn_islands = {}
+        for bucket_islands in (getattr(self, "_a2_buckets", None) or {}).values():
+            for _, i in bucket_islands:
+                i.release()
+        self._a2_buckets = {}
         if self._islands is not None:
             for i in self._islands[:2]:
                 if i is not None:
@@ -459,8 +504,16 @@ class TtV4PrefillBlock(LightweightModule):
         state.fresh = False
         attn_islands = self._attn_islands.get(slot) if getattr(self, "_attn_islands", None) else None
         traced_attn = attn_islands is not None and self.attn.trace_ready(state)
+        a2_label = "A2"
         if traced_attn:
             A1, A2 = attn_islands[0], attn_islands[1]
+            need = None
+            for kv_b, isl in (getattr(self, "_a2_buckets", None) or {}).get(slot, ()):
+                # DS4F-0300: the smallest capacity bucket whose scorer width holds this chunk's live columns
+                need = self.attn.bucket_need(state, self._chunk_tokens) if need is None else need
+                if need <= kv_b:
+                    A2, a2_label = isl, "A2b"
+                    break
         elif (
             attn_islands is not None
             and len(attn_islands) > 2
@@ -471,6 +524,7 @@ class TtV4PrefillBlock(LightweightModule):
             # chunk 0 on its own A2 island (DS4F-0300); a ragged chunk 0 under 256 tokens keeps the eager attention (the
             # traced ragged path's alignment floor, DS4F-0268)
             A1, A2 = attn_islands[0], attn_islands[2]
+            a2_label = "A2c0"
             traced_attn = True
         if traced_attn:
             export = self._export_target(caches, slot)
@@ -483,7 +537,7 @@ class TtV4PrefillBlock(LightweightModule):
                 t0 = self._tick("glue", t0)
             a2 = A2.replay()
             if _ISLAND_TIMING:
-                t0 = self._tick("A2c0" if A2 is not attn_islands[1] else "A2", t0)
+                t0 = self._tick(a2_label, t0)
             y = a2[0]
             if getattr(on_layer_hidden, "detail", False):  # DS4F-0272 probe: island outputs before the epilogue writes
                 on_layer_hidden(f"{self.layer_idx}:A1.outs", list(outs))

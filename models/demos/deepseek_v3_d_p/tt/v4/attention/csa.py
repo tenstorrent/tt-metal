@@ -29,6 +29,11 @@ _RAGGED_FULL_CUT = (
 _TRACED_CHUNK0 = (
     os.environ.get("PREFILL_TRACED_CHUNK0", "1") == "1"
 )  # DS4F-0300: chunk 0 on a captured A2 island (default on)
+# DS4F-0300 capacity buckets: extra A2 islands per CSA layer whose static scorer + top-k cover only the first kv_b key-cache
+# columns (kv_b on a ladder below the full capacity); a chunk replays the smallest bucket that holds its live entries + the
+# scorer's sp*S_l phantom columns. Exact: the columns past kv_b are -inf in the score mask for that chunk.
+_CAP_BUCKETS = os.environ.get("PREFILL_CSA_CAP_BUCKETS", "1") == "1"
+_BUCKET_STEP = int(os.environ.get("PREFILL_CSA_BUCKET_STEP", "32768"))  # ladder step, key-cache columns (= CSA entries)
 from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import (
     SharedScalar,
     TtHCA,
@@ -502,11 +507,15 @@ class TtCSAIndexer(_TtHCABase):
             )
         return ttnn.experimental.topk_large_indices(logits, k=self.topk, valid_length=E)
 
-    def select_indices_static(self, q_latent, hidden_states, cos, sin, index_k, score_mask):
+    def select_indices_static(self, q_latent, hidden_states, cos, sin, index_k, score_mask, kv_bucket=None):
         """Trace-safe variant of ``select_indices_fused``: every argument is chunk-invariant. The fused scorer runs over
         the WHOLE key cache (kv_len = the capacity's k-chunk multiple; the op's own token mask only touches the top sp*Sq
         headroom rows, never a live entry), the caller-maintained additive ``score_mask`` [1,1,S_l,cap] (TILE; 0 on the
         visible entries incl. this chunk's rate-4 cut, -inf beyond) is added, and the large top-k ranks the full width.
+        ``kv_bucket`` (DS4F-0300 capacity buckets): score only the first kv_bucket columns -- the key-cache prefix and the
+        mask prefix are sliced (the op's output width is its k length), the phantom columns move to [kv_bucket - sp*S_l,
+        kv_bucket). Valid while the chunk's live columns (entries before it + its rate-4 cut) end at or before
+        kv_bucket - sp*S_l; the caller picks the bucket.
         """
         S_l = q_latent.shape[2]
         if self._wq_b_all is None:
@@ -527,16 +536,26 @@ class TtCSAIndexer(_TtHCABase):
         cap = int(index_k.shape[2])
         sp = self.sp_factor
         kv_len = (cap // 64) * 64
+        keys, mask = index_k, score_mask
+        if kv_bucket is not None and int(kv_bucket) < kv_len:
+            kv_len = int(kv_bucket)
+            assert kv_len % 64 == 0 and kv_len >= sp * S_l + self.topk, (kv_len, sp, S_l)
+            keys = ttnn.slice(index_k, [0, 0, 0, 0], [1, 1, kv_len, int(index_k.shape[3])])
+            mask = ttnn.slice(score_mask, [0, 0, 0, 0], [1, 1, S_l, kv_len])
         logits = ttnn.experimental.indexer_score_dsa(
             q,
-            index_k,
+            keys,
             w,
             chunk_start_idx=kv_len - sp * S_l,
             kv_len=kv_len,
             program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=64, head_group_size=0),
             seq_shard_axes=[self.sp_axis] if self.is_mesh and sp > 1 else [],
-        )  # [1, 1, S_l, cap] bf16 ROW_MAJOR
-        mask_rm = ttnn.to_layout(score_mask, ttnn.ROW_MAJOR_LAYOUT)
+        )  # [1, 1, S_l, k length] bf16 ROW_MAJOR
+        if keys is not index_k:
+            ttnn.deallocate(keys)
+        mask_rm = ttnn.to_layout(mask, ttnn.ROW_MAJOR_LAYOUT)
+        if mask is not score_mask:
+            ttnn.deallocate(mask)
         logits = ttnn.add(logits, mask_rm)
         return ttnn.experimental.topk_large_indices(logits, k=self.topk, valid_length=kv_len)
 
@@ -1161,14 +1180,39 @@ class TtCSA(TtHCA):
         ttnn.deallocate(cat)
         return out
 
-    def forward_attn(self, hidden_states, outs, state, real_len: int, chunk0: bool = False, _t=None):
-        """Island A2 (chunk-invariant): the static fused scorer + top-k over the whole key cache, the sparse gather
-        over the persistent slab, the TP head<->seq transposes, V's un-RoPE and the output projection -> y; plus the
-        static halves of the export (H128-rotated index keys, the window ring rows, the pending-state block), so the
-        eager epilogue is only writes. -> (y, k_rot, ring, pending_block)."""
+    def capacity_buckets(self, state, seq_local: int) -> list:
+        """DS4F-0300: the scorer widths (key-cache columns) of this slot's extra A2 islands, ascending, all below the full
+        capacity: 16384 and the multiples of PREFILL_CSA_BUCKET_STEP, keeping those a traced chunk can use (>= the first
+        traced chunk's need: topk entries + one chunk's entries + the sp*S_l phantom columns). Empty when disabled."""
+        if not _CAP_BUCKETS:
+            return []
+        full = (int(state.index_k.shape[2]) // 64) * 64
+        chunk = int(seq_local) * self.sp_factor
+        lo = self.indexer.topk + chunk // self.compressor.compress_rate + chunk
+        step = max(64, (_BUCKET_STEP // 64) * 64)
+        cands = {16384} | set(range(step, full, step))
+        return sorted(b for b in cands if lo <= b < full and b % 64 == 0)
+
+    def bucket_need(self, state, chunk: int) -> int:
+        """Scorer width a chunk of ``chunk`` (padded) tokens needs: every column the score mask may hold finite (the
+        entries before the chunk + the chunk's full-width rate-4 cut) plus the scorer's sp*S_l = chunk phantom columns.
+        """
+        chunk = int(chunk)
+        return int(state.entry_count) + chunk // self.compressor.compress_rate + chunk
+
+    def forward_attn(
+        self, hidden_states, outs, state, real_len: int, chunk0: bool = False, _t=None, kv_bucket: int | None = None
+    ):
+        """Island A2 (chunk-invariant): the static fused scorer + top-k over the whole key cache (or its first
+        ``kv_bucket`` columns, DS4F-0300 capacity buckets), the sparse gather over the persistent slab, the TP head<->seq
+        transposes, V's un-RoPE and the output projection -> y; plus the static halves of the export (H128-rotated index
+        keys, the window ring rows, the pending-state block), so the eager epilogue is only writes.
+        -> (y, k_rot, ring, pending_block)."""
         q, q_latent, sliding_kv_g, _nc, entries, keys, cos, sin = outs[:8]
         _t = _t or (lambda name: None)
-        idx = self.indexer.select_indices_static(q_latent, hidden_states, cos, sin, state.index_k, state.score_mask)
+        idx = self.indexer.select_indices_static(
+            q_latent, hidden_states, cos, sin, state.index_k, state.score_mask, kv_bucket=kv_bucket
+        )
         _t("scorer_topk")
         attn = self._sparse_core(q, idx, cos, sin, state.slab_rm, seq_len=sliding_kv_g.shape[2], chunk0=chunk0)
         _t("sparse_core")
