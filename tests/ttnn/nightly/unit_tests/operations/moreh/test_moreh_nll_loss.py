@@ -328,6 +328,57 @@ def test_moreh_nll_loss_backward_compute_kernel_options(
     )
 
 
+def test_moreh_nll_loss_2d_invalid_targets_use_logical_class_extent(device):
+    input_shape = [32, 33]
+    num_valid_targets = 16
+    expected_loss = torch.tensor([2.0])
+    expected_grad = torch.zeros(input_shape)
+    expected_grad[:num_valid_targets, 0] = -1.0 / num_valid_targets
+
+    torch_input = torch.full(input_shape, -2.0)
+    tt_input = to_ttnn(torch_input, dtype=ttnn.bfloat16, device=device)
+    tt_output_grad = to_ttnn(torch.ones([1]), dtype=ttnn.bfloat16, device=device)
+
+    device.clear_program_cache()
+    cache_entry_counts = []
+    for invalid_target in [33, 63, 64, -100]:
+        torch_target = torch.tensor(
+            [0] * num_valid_targets + [invalid_target] * num_valid_targets,
+            dtype=torch.int32,
+        )
+        tt_target = to_ttnn(torch_target, dtype=ttnn.int32, device=device)
+        tt_divisor = to_ttnn(torch.zeros([1]), dtype=ttnn.bfloat16, device=device)
+        tt_output = to_ttnn(torch.zeros([1]), dtype=ttnn.bfloat16, device=device)
+
+        tt_loss = ttnn.operations.moreh.nll_loss(
+            tt_input,
+            tt_target,
+            "mean",
+            divisor_tensor=tt_divisor,
+            output_tensor=tt_output,
+            ignore_index=-100,
+        )
+        torch_loss = to_torch(tt_loss, shape=[1])
+        assert torch.allclose(torch_loss, expected_loss, rtol=0.05, atol=0.05)
+
+        tt_input_grad = to_ttnn(torch.zeros(input_shape), dtype=ttnn.bfloat16, device=device)
+        tt_input_grad = ttnn.operations.moreh.nll_loss_backward(
+            target_tensor=tt_target,
+            output_grad_tensor=tt_output_grad,
+            reduction_mean=True,
+            input_grad_tensor=tt_input_grad,
+            divisor_tensor=tt_divisor,
+            ignore_index=-100,
+        )
+        torch_input_grad = to_torch(tt_input_grad, shape=input_shape)
+        assert torch.allclose(torch_input_grad, expected_grad, rtol=0.05, atol=0.01)
+
+        cache_entry_counts.append(device.num_program_cache_entries())
+
+    assert cache_entry_counts[0] > 0
+    assert len(set(cache_entry_counts)) == 1
+
+
 # ---------------------------------------------------------------------------
 # Regression tests for the step2 reader fixes (items 6 and 7 of #51278). The
 # helpers above never generate a target that is actually equal to ignore_index

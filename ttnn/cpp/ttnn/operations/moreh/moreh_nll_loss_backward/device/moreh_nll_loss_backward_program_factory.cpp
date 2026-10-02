@@ -82,8 +82,9 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_2d(
     // split work
 
     // input_grad: (N, C)
-    auto input_grad_shape = input_grad.padded_shape();
-    uint32_t channel_size = input_grad_shape[1];
+    const auto input_grad_shape = input_grad.padded_shape();
+    const uint32_t channel_size = input_grad_shape[1];
+    const uint32_t logical_channel_size = input_grad.logical_shape()[1];
 
     const bool weight_has_value = weight.has_value();
     const bool divisor_has_value = divisor.has_value();
@@ -258,7 +259,8 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_2d(
         .dfb_bindings = std::move(reader_dfb_bindings),
         .tensor_bindings = std::move(reader_tensor_bindings),
         .runtime_arg_schema =
-            {.runtime_arg_names = {"ignore_index", "num_tiles_per_core", "start_id", "C", "weight_num_tile"}},
+            {.runtime_arg_names =
+                 {"ignore_index", "num_tiles_per_core", "start_id", "C", "logical_C", "weight_num_tile"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
@@ -399,6 +401,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_2d(
                 {"num_tiles_per_core", units_per_core},
                 {"start_id", tile_offset},
                 {"C", channel_size},
+                {"logical_C", logical_channel_size},
                 {"weight_num_tile", weight_num_tile},
             });
 

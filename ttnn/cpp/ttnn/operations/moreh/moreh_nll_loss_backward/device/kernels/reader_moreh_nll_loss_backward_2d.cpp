@@ -14,6 +14,7 @@ void kernel_main() {
     auto num_tiles_per_core = get_arg(args::num_tiles_per_core);
     auto start_id = get_arg(args::start_id);
     auto C = get_arg(args::C);
+    auto logical_C = get_arg(args::logical_C);
     auto weight_num_tile = get_arg(args::weight_num_tile);
 
     const auto addrg_target = TensorAccessor(tensor::target);
@@ -69,7 +70,8 @@ void kernel_main() {
 
                 uint32_t tmp_weight_tilized_idx = get_tilized_idx(h, w);
 
-                if (target_val != ignore_index && target_val == static_cast<int32_t>(c)) {
+                if (target_val != ignore_index && target_val >= 0 && target_val < static_cast<int32_t>(logical_C) &&
+                    target_val == static_cast<int32_t>(c)) {
 #if defined(WEIGHT)
                     tmp_weight_l1_ptr[tmp_weight_tilized_idx] = fp32_dest_acc_cast(weight_l1_ptr[target_val]);
 #else
