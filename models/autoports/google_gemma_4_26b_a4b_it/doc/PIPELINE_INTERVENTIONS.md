@@ -510,6 +510,15 @@ not speedup claims. Sixteen host helper tests pass. Combined retry is monitored
 on `120-qb2-p03t02`, still starting; local devices remain idle. Resumed active
 time about 181 minutes, cumulative **7h54m**.
 
+08:39 UTC: combined retry is healthy and generating on the unchanged baseline.
+The offline audit identifies retained reasoning as a larger context-cost
+candidate than repeated tool output. A separate local 900-second Sympy control
+keeps the latest one assistant reasoning block, preserving all visible/task/
+tool information and original sampling. This is explicitly a quality-sensitive
+agent-context intervention, default off; TTI **d1816c8f**, 68 host tests pass.
+Same image/old BFP8 policy, no source overlay or rebuild. It is not promoted to
+the combined CI. Resumed active time about 188 minutes, cumulative **8h01m**.
+
 - TTFT: `doc/ttft_optimization/`.
 - Remote benchmarks/evals:
   `readiness_vllm/ttft_optimization_remote/README.md`.
