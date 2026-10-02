@@ -227,7 +227,7 @@ constexpr float kTailUs = 9.0f;              // last scan step -> kernel end (he
 constexpr float kPaceMarginUs = 0.4f;        // depth-2 jitter exposure with the supply within 10 % of the step
 constexpr float kRowMajorPenalty = 1.7f;     // row-major placement, link-bound chain (BH=16: 1.66x and 1.72x)
 constexpr float kPoolJitter = 1.10f;         // pooled pace: ordering jitter of the balanced item map (BH >= 8)
-constexpr float kPoolJitterDynamic = kPoolJitter;  // pooled pace with the dynamic hand-off (fitted separately)
+constexpr float kPoolJitterDynamic = 1.14f;  // pooled pace with the dynamic hand-off: 1.01 (BH=16) .. 1.28 (BH=24), 2026-10-02
 constexpr uint32_t kHandoffTiles = 19;       // fp32 tiles per hand-off slot (C=32, K=V=128)
 constexpr uint32_t kProducerPrepTiles = 48;  // the producer's prep CBs, in fp32-tile units
 constexpr uint32_t kTileBytes = 4096;
