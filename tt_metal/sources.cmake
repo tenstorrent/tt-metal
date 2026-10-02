@@ -140,6 +140,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/hal_types.hpp
     api/tt-metalium/host_api.hpp
     api/tt-metalium/host_buffer.hpp
+    api/internal/bfloat8.hpp
     api/internal/blitz_decode_pipeline.hpp
     api/internal/cluster.hpp
     api/internal/cluster_noc_helpers.hpp

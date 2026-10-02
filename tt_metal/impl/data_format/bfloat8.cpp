@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/bfloat8.hpp>
+#include <internal/bfloat8.hpp>
 #include <tt_stl/span.hpp>
 #include <array>
 #include <functional>
@@ -64,7 +65,7 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
     bool row_major_output,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile) {
-    return unpack_bfp8_tiles_into_float_vec(
+    return tt::tt_metal::internal::unpack_bfp8_tiles_into_float_vec(
         bfp8_tiles,
         row_major_output,
         is_exp_a,
@@ -72,7 +73,7 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
         tile);
 }
 
-std::vector<float> unpack_bfp8_tiles_into_float_vec(
+std::vector<float> tt::tt_metal::internal::unpack_bfp8_tiles_into_float_vec(
     ttsl::Span<const uint32_t> bfp8_tiles,
     bool row_major_output,
     bool is_exp_a,

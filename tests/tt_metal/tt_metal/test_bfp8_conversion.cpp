@@ -10,6 +10,7 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include <internal/bfloat8.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -86,7 +87,8 @@ TEST(HostOnlyTest, Bfp8UnpackWithExplicitAlignment) {
     std::vector<uint32_t> ones_tile(1088 / 4, 0x40404040);
     std::fill_n(ones_tile.begin(), 64 / 4, 0x7f7f7f7f);
     EXPECT_EQ(
-        unpack_bfp8_tiles_into_float_vec(ones_tile, /*row_major_output=*/true, /*is_exp_a=*/false, /*l1_alignment=*/16),
+        tt_metal::internal::unpack_bfp8_tiles_into_float_vec(
+            ones_tile, /*row_major_output=*/true, /*is_exp_a=*/false, /*l1_alignment=*/16),
         std::vector<float>(1024, 1.0f));
 
     std::vector<float> fp32_vec(2 * 1024);
@@ -96,7 +98,8 @@ TEST(HostOnlyTest, Bfp8UnpackWithExplicitAlignment) {
     auto packed = pack_as_bfp8_tiles(ttsl::make_const_span(fp32_vec), /*row_major_input=*/true, /*is_exp_a=*/false);
     for (bool row_major_output : {false, true}) {
         EXPECT_EQ(
-            unpack_bfp8_tiles_into_float_vec(packed, row_major_output, /*is_exp_a=*/false, /*l1_alignment=*/16),
+            tt_metal::internal::unpack_bfp8_tiles_into_float_vec(
+                packed, row_major_output, /*is_exp_a=*/false, /*l1_alignment=*/16),
             unpack_bfp8_tiles_into_float_vec(packed, row_major_output, /*is_exp_a=*/false));
     }
 }

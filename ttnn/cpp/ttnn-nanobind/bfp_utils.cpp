@@ -16,6 +16,7 @@
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tilize_utils.hpp>
+#include <internal/bfloat8.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
 
@@ -123,10 +124,12 @@ void py_module(nb::module_& mod) {
            bool row_major_output,
            bool is_exp_a,
            std::optional<uint32_t> l1_alignment) {
-            auto unpack = [l1_alignment](ttsl::Span<const uint32_t> data, bool row_major, bool exp_a, std::nullopt_t) {
-                return l1_alignment.has_value()
-                           ? unpack_bfp8_tiles_into_float_vec(data, row_major, exp_a, *l1_alignment)
-                           : unpack_bfp8_tiles_into_float_vec(data, row_major, exp_a);
+            if (!l1_alignment.has_value()) {
+                return unpack_impl(unpack_bfp8_tiles_into_float_vec, input, row_major_output, is_exp_a);
+            }
+            auto unpack = [alignment = *l1_alignment](
+                              ttsl::Span<const uint32_t> data, bool row_major, bool exp_a, std::nullopt_t) {
+                return tt::tt_metal::internal::unpack_bfp8_tiles_into_float_vec(data, row_major, exp_a, alignment);
             };
             return unpack_impl(unpack, input, row_major_output, is_exp_a);
         },

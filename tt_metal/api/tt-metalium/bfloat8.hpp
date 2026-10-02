@@ -23,12 +23,3 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
     bool row_major_output,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);
-
-// Same as above, with the exponent section padded to `l1_alignment` bytes instead of the HAL's L1
-// alignment, so it does not create a MetalContext.
-std::vector<float> unpack_bfp8_tiles_into_float_vec(
-    ttsl::Span<const uint32_t> bfp8_tiles,
-    bool row_major_output,
-    bool is_exp_a,
-    uint32_t l1_alignment,
-    const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);
