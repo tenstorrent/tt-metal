@@ -944,9 +944,20 @@ class OptimizedDecoder(LightweightModule):
             sel = ttnn.add(scores, self.w["e_bias_f32"])
             _, idx_coarse = ttnn.topk(ttnn.typecast(sel, ttnn.bfloat16), k=K + 1, dim=-1, sorted=True)
             rows = [idx_coarse.shape[i] for i in range(len(idx_coarse.shape) - 1)]
-            # ONE gather of the K-th and (K+1)-th selection scores (gather is a ~32 us 1-core op).
-            pair = ttnn.gather(sel, dim=3, index=ttnn.slice(idx_coarse, [0] * len(rows) + [K - 1], rows + [K + 1]))
-            cutoff = ttnn.multiply(ttnn.sum(pair, dim=3, keepdim=True), 0.5)
+            pair_idx = ttnn.slice(idx_coarse, [0] * len(rows) + [K - 1], rows + [K + 1])
+            if "expert_iota_f32" in self.w:
+                # one-hot (iota == idx) mask of the K-th and (K+1)-th experts + masked fp32 sum: full-grid
+                # eltwise ops instead of the ~32 us 1-core gather and its 1-core fill-pads.
+                pair_f = ttnn.typecast(pair_idx, ttnn.float32)
+                iota = self.w["expert_iota_f32"]
+                ik = ttnn.slice(pair_f, [0] * len(rows) + [0], rows + [1])
+                ik1 = ttnn.slice(pair_f, [0] * len(rows) + [1], rows + [2])
+                onehot = ttnn.add(ttnn.eq(iota, ik), ttnn.eq(iota, ik1))
+                cutoff = ttnn.multiply(ttnn.sum(ttnn.mul(sel, onehot), dim=3, keepdim=True), 0.5)
+            else:
+                # ONE gather of the K-th and (K+1)-th selection scores (gather is a ~32 us 1-core op).
+                pair = ttnn.gather(sel, dim=3, index=pair_idx)
+                cutoff = ttnn.multiply(ttnn.sum(pair, dim=3, keepdim=True), 0.5)
             if want_dense:
                 # The fp32 cut-off already separates the top-K: (sel > cutoff) IS the selection mask, so the
                 # dense routing matrix is scores*mask -- no second top-k, final gather or scatter (each ~1 core).

@@ -470,6 +470,10 @@ class MultichipDecoder(OptimizedDecoder):
             w["e_bias_f32"] = rep_tt(
                 "e_bias", lambda: g("mlp.experts.e_score_correction_bias").reshape(1, 1, 1, E), ttnn.float32
             )
+            # expert ids 0..E-1 (fp32, exact): one-hot compare replaces the 1-core router cut-off gather
+            w["expert_iota_f32"] = rep_tt(
+                "expert_iota", lambda: torch.arange(E, dtype=torch.float32).reshape(1, 1, 1, E), ttnn.float32
+            )
             # For D>1, a mesh-sharded identity selects device d's contiguous local expert scores.
             # D=1 already owns every score, so avoid the large identity weight and selector matmul.
             if D > 1:
