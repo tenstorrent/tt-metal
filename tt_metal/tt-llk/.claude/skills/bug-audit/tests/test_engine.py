@@ -1197,6 +1197,51 @@ def test_severity_rerating_round_trip_overrides_the_hunters_rating(rundir, tmp_p
     ), "rated findings are skipped unless --all"
 
 
+def test_severity_rater_sees_every_merged_site_and_the_worst_one_it_must_cover(
+    rundir, tmp_path
+):
+    wh, bh = "a/wormhole/k.h", "a/blackhole/k.h"
+    write(
+        str(rundir / "verdicts" / "B-0000.json"),
+        {
+            "findings": [
+                finding(wh, 10, "medium", summary="WH copy reads a stale bank"),
+                finding(bh, 12, "high", summary="BH copy hangs every matmul"),
+            ]
+        },
+    )
+    write(
+        str(rundir / "dedup.json"),
+        {
+            "auto": {},
+            "clusters": [
+                {
+                    "canonical": f"{wh}:10",
+                    "duplicates": [f"{bh}:12"],
+                    "relation": "arch-copy",
+                }
+            ],
+        },
+    )
+    assert run(os.path.join(ENGINE, "consolidate.py"), "--run", rundir)[0] == 0
+    code, out, err = run(
+        os.path.join(ENGINE, "severity.py"),
+        "--run",
+        rundir,
+        "prepare",
+        "--to-dir",
+        tmp_path / "sev",
+    )
+    assert code == 0, out + err
+    (item,) = json.load(open(tmp_path / "sev" / "b0000.json"))["items"]
+    # one rating replaces the merged entry's severity, so the rater must see the HIGH copy's own claim, not only
+    # its location
+    sites = {s["site"]: s for s in item["other_sites"]}
+    assert sites[f"{bh}:12"]["claim"] == "BH copy hangs every matmul", item
+    assert sites[f"{bh}:12"]["severity"] == "high", item
+    assert item["hunters_worst"] == "high", item
+
+
 def test_every_spawn_user_imports_it_before_first_use():
     import ast
     import glob

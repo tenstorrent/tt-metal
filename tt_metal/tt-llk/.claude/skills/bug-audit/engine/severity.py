@@ -31,6 +31,34 @@ def opt(flag, default=None):
     return argv[argv.index(flag) + 1] if flag in argv else default
 
 
+def other_sites(f):
+    """The merged copies of this defect, and any other confirmed defect on its line: each one can raise the entry's
+    severity in consolidate.py, so the rater sees its own claim and failure scenario, not only its location.
+    """
+    sites = [
+        {
+            "site": m["site"],
+            "relation": m.get("relation", ""),
+            "severity": m["severity"],
+            "claim": m["summary"],
+            "failure_scenario": m["failure_scenario"],
+        }
+        for m in f.get("merged_sites", [])
+    ]
+    sites += [
+        {
+            "site": key_of(f),
+            "relation": "another confirmed defect on the same line",
+            "severity": m["severity"],
+            "claim": m["summary"],
+            "failure_scenario": m.get("failure_scenario", ""),
+        }
+        for m in f.get("same_line", [])
+        if m.get("status") == "confirmed"
+    ]
+    return sites
+
+
 if argv[0] == "prepare":
     to_dir = opt("--to-dir")
     if not to_dir:
@@ -63,6 +91,9 @@ if argv[0] == "prepare":
                 "failure_scenario": f["failure_scenario"],
                 "evidence": f.get("evidence", ""),
                 "reasons": (f.get("reasons") or [])[:2],
+                # the rating replaces the whole entry's severity, so the rater sees each site it covers
+                "other_sites": other_sites(f),
+                "hunters_worst": f.get("severity_audit") or f["severity"],
             }
             for f in todo[i : i + size]
         ]
