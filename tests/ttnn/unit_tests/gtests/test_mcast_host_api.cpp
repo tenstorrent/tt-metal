@@ -6,8 +6,8 @@
 #include <algorithm>
 #include <array>
 #include <set>
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_compile_time_args.hpp"
+#include "ttnn/kernel_lib/mcast/host/mcast_host.hpp"
+#include "ttnn/kernel_lib/mcast/mcast_compile_time_args.hpp"
 #include "ttnn_test_fixtures.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>

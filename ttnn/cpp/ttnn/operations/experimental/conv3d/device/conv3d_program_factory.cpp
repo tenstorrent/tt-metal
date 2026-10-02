@@ -6,7 +6,7 @@
 #include "conv3d_program_factory.hpp"
 #include "conv3d_device_operation_types.hpp"
 #include "kernels/conv3d_gather_tuning.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
+#include "ttnn/kernel_lib/mcast/host/mcast_host.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/constants.hpp>

@@ -33,7 +33,7 @@
 #include <tt-metalium/workload_descriptor.hpp>
 #include <tt-metalium/math.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
+#include "ttnn/kernel_lib/mcast/host/mcast_host.hpp"
 
 namespace ttnn::prim {
 

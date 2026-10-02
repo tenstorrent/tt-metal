@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
+#include "ttnn/kernel_lib/mcast/host/mcast_host.hpp"
 
 #include <array>
 #include <tt-metalium/program.hpp>
