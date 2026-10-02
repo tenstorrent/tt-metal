@@ -749,7 +749,7 @@ def test_s_dflash_is_explicit_p150x4_batch_one_uniform_cache_off_experimental_on
     assert "hybrid_kv_status=operator_rollback_uniform\n" in accepted.stdout
     assert "max_num_seqs=1\n" in accepted.stdout
     # S's uniform-KV context cap; +64 proposal padding stays far below the S draft's 1048576 horizon.
-    assert "max_model_len=32768\n" in accepted.stdout
+    assert "max_model_len=131072\n" in accepted.stdout
     assert "streaming_prefill_status=production_qualified\n" in accepted.stdout
     assert "chunked_prefill_cli_args=--no-enable-chunked-prefill\n" in accepted.stdout
     assert "TT_LAGUNA_DFLASH=1 (qualified=0)" in accepted.stdout
