@@ -211,15 +211,14 @@ std::vector<FdL1Conflict> find_fd_l1_conflicts(
             }
         }
         // MeshDevice::allocator_impl() is the default sub-device manager's allocator, so buffers under any
-        // other manager would be invisible below. Managers load only under fast dispatch, so a live one
-        // was left loaded through an earlier session's terminate.
+        // other manager would be invisible below. Sub-device managers aren't supported with manual fast
+        // dispatch, so refuse rather than walk an incomplete ledger.
         for (distributed::MeshDevice* view : views_over_device) {
             if (view->get_active_sub_device_manager_id() != view->get_default_sub_device_manager_id()) {
                 TT_THROW(
                     "Fast-dispatch L1 preflight does not support a live non-default sub-device manager on mesh {}: "
-                    "its buffers are not visible to the preflight. Clear it with clear_loaded_sub_device_manager() "
-                    "before terminating the Fast Dispatch session that loaded it; it cannot be cleared under Slow "
-                    "Dispatch.",
+                    "its buffers are not visible to the preflight. Sub-device managers are not supported with "
+                    "manual Fast Dispatch.",
                     view->id());
             }
         }

@@ -500,8 +500,7 @@ void device_module(nb::module_& m_device) {
               its pages are spread over every L1 bank.
             - A non-default sub-device manager still loaded on any view over an active chip is refused,
               even with allow_destructive: the check sees only the default manager's allocations.
-              Sub-device managers load only under Fast Dispatch, so clear it before terminating the
-              session that loaded it.
+              Sub-device managers aren't supported with manual Fast Dispatch.
             - Every active device must be MMIO-attached; otherwise this raises before Fast Dispatch is
               enabled.
 

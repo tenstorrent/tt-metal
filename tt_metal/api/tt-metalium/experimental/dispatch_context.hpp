@@ -55,8 +55,8 @@ public:
     //  - any interleaved L1 buffer resident at session time, whatever its size (its pages span every
     //    L1 bank);
     //  - a non-default sub-device manager loaded on any view over an active chip, even with
-    //    allow_destructive: the preflight sees only the default manager's allocator. Managers load
-    //    only under Fast Dispatch, so clear one before terminate_fast_dispatch.
+    //    allow_destructive: the preflight sees only the default manager's allocator. Sub-device
+    //    managers aren't supported with manual Fast Dispatch.
     // Every active device must be MMIO-attached; otherwise this throws before Fast Dispatch is enabled.
     void initialize_fast_dispatch(distributed::MeshDevice* mesh_device);
     void initialize_fast_dispatch(distributed::MeshDevice* mesh_device, const FastDispatchSetupOptions& options);
