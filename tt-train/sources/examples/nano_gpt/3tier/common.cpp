@@ -127,19 +127,17 @@ std::pair<uint32_t, uint32_t> get_effective_max_steps_and_vocab_size(const Train
 
     auto [dataset, vocab_size] = create_dataset(text_or_tokens, sequence_length, config.tokenizer_type, config);
     fmt::print("Dataset size: {}\n", dataset.get_size());
-    if (dataset.get_size() == 0) {
-        throw std::runtime_error(fmt::format(
-            "Dataset is empty: {} holds fewer than sequence_length + 1 = {} tokens",
-            config.data_path,
-            sequence_length + 1));
-    }
+    const TrainingSteps steps = compute_training_steps(
+        dataset,
+        config.data_path,
+        sequence_length,
+        config.batch_size,
+        config.gradient_accumulation_steps,
+        config.num_mh_workers,
+        config.max_steps,
+        config.num_epochs);
 
-    const double steps_per_epoch = ttml::utils::steps_per_epoch(
-        dataset.get_num_tokens(), config.batch_size * config.gradient_accumulation_steps, sequence_length);
-    const uint32_t effective_max_steps =
-        ttml::utils::resolve_effective_max_steps(config.max_steps, config.num_epochs, steps_per_epoch);
-
-    return {effective_max_steps, vocab_size};
+    return {steps.effective_max_steps, vocab_size};
 }
 
 std::string read_file_to_str(const std::string &file_path) {

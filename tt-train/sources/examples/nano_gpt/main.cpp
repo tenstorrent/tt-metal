@@ -534,19 +534,18 @@ int main(int argc, char **argv) {
     auto dataset = create_dataset(text_or_tokens, sequence_length, model_config);
 
     fmt::print("Dataset size: {}\n", dataset.get_size());
-    if (dataset.get_size() == 0) {
-        throw std::runtime_error(fmt::format(
-            "Dataset is empty: {} holds fewer than sequence_length + 1 = {} tokens",
-            training_config.data_path,
-            sequence_length + 1));
-    }
-
-    const double steps_per_epoch = ttml::utils::steps_per_epoch(
-        dataset.get_num_tokens(),
-        training_config.batch_size * training_config.gradient_accumulation_steps,
-        sequence_length);
-    const uint32_t effective_max_steps = ttml::utils::resolve_effective_max_steps(
-        training_config.max_steps, training_config.num_epochs, steps_per_epoch);
+    // In 3-tier training every worker iterates the full dataset with its own seed and the optimizer
+    // averages their gradients, so one optimizer step consumes num_mh_workers batches.
+    const uint32_t num_data_workers = is_three_tier_training(multihost_config) ? multihost_config.num_mh_workers : 1U;
+    const auto [steps_per_epoch, effective_max_steps] = compute_training_steps(
+        dataset,
+        training_config.data_path,
+        sequence_length,
+        training_config.batch_size,
+        training_config.gradient_accumulation_steps,
+        num_data_workers,
+        training_config.max_steps,
+        training_config.num_epochs);
     fmt::print("Steps per epoch {:.2f}\n", steps_per_epoch);
     fmt::print(
         "Effective max steps {} (max_steps {}, num_epochs {})\n",

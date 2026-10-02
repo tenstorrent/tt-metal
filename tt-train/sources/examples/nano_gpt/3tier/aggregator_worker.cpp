@@ -96,6 +96,12 @@ int main(int argc, char **argv) {
     auto &socket_manager = ttml::autograd::ctx().get_socket_manager();
 
     auto [effective_max_steps, vocab_size] = three_tier_arch::get_effective_max_steps_and_vocab_size(config);
+    fmt::println(
+        "[aggregator] Rank {}: Effective max steps {} (max_steps {}, num_epochs {})",
+        distributed_ctx->rank(),
+        effective_max_steps,
+        config.max_steps,
+        config.num_epochs);
     auto *device = &ttml::autograd::ctx().get_device();
 
     auto num_devices = static_cast<uint32_t>(device->num_devices());
