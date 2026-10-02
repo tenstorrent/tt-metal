@@ -714,6 +714,37 @@ class OVERLAP_FIRST_HALF(TemplateParameter):
 
 
 @dataclass
+class ZEROSRC_COLLISION(TemplateParameter):
+    """Knobs for ``srcb_zerosrc_write_mode_collision_test.cpp``.
+
+    ``clear_mode``    SrcB clear the unpacker issues after publishing: ``"none"``,
+                      ``"default"`` (waits on the Matrix Unit's bank) or ``"own_bank"``
+                      (waits only on the unpacker's own bank).
+    ``unpack_clears`` how many SrcB clears the unpacker issues.
+    ``math_zerosrc``  how many ZEROSRC(SrcA) math issues while it holds the
+                      published SrcB bank.
+    ``math_write_mode`` write_mode bit of those ZEROSRCs (1 is the reduce-row MAX form).
+    """
+
+    clear_mode: str = "own_bank"
+    unpack_clears: int = 4096
+    math_zerosrc: int = 4096
+    math_write_mode: int = 1
+
+    def convert_to_cpp(self) -> str:
+        modes = {"none": "None", "default": "DefaultWait", "own_bank": "OwnBankWait"}
+        return "\n".join(
+            [
+                "enum class UnpackClearMode { None, DefaultWait, OwnBankWait };",
+                f"constexpr UnpackClearMode UNPACK_CLEAR_MODE = UnpackClearMode::{modes[self.clear_mode]};",
+                f"constexpr int NUM_UNPACK_CLEARS = {self.unpack_clears};",
+                f"constexpr int NUM_MATH_ZEROSRC = {self.math_zerosrc};",
+                f"constexpr std::uint32_t MATH_WRITE_MODE = {self.math_write_mode};",
+            ]
+        )
+
+
+@dataclass
 class ITERATIONS(TemplateParameter):
     iterations: int = 8
 
