@@ -101,6 +101,19 @@ def test_turbo_end_to_end(mesh_device, reset_seeds, duration_s):
         audio_shift=AUDIO_SHIFT,
     )
 
+    # Construction warms the 5 s rung only, and the 4x8 preset does not bucket or trace, so a longer
+    # clip would otherwise pay its kernel compiles inside the measured call.
+    with pipeline.quiet():
+        pipeline(
+            PROMPT,
+            image=keyframe,
+            num_frames=num_frames,
+            height=HEIGHT,
+            width=WIDTH,
+            num_inference_steps=NUM_INFERENCE_STEPS,
+            seed=SEED,
+        )
+
     benchmark_profiler = BenchmarkProfiler()
     output = run_warm_generation(
         pipeline,
