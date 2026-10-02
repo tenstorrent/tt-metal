@@ -26,9 +26,11 @@ extern "C" __attribute__((noinline, used)) void write_shuffled_runtime_group(std
 }
 
 // Word 64 is emitted once with both runtime fields, before the later constant word.
+// Only InDataFormat is masked; Uncompressed is the top field and the RMWCIB byte
+// lane clips it.
 // CHECK-LABEL: <write_shuffled_runtime_group>:
 // CHECK-DAG: andi a0,a0,15
-// CHECK-DAG: andi {{a[0-7]}},{{a[0-7]}},16
+// CHECK-NOT: andi {{a[0-7]}},{{a[0-7]}},16
 // CHECK-DAG: lui [[OP:a[0-7]]],0xb31f0
 // CHECK-DAG: addi [[OP]],[[OP]],64
 // CHECK: R_RISCV_HI20 __instrn_buffer
@@ -69,10 +71,14 @@ extern "C" __attribute__((noinline, used)) void write_thread_and_state_same_addr
 
 // Thread word 5 and state word 5 are separate: one SETC16 for both thread fields
 // even across the GPR transfer, and one RMWCIB for the state field.
+// SetOvrdWithAddr is the top field, so only the SETC16 group mask clips it.
 // CHECK-LABEL: <write_thread_and_state_same_address>:
-// CHECK-DAG: andi a0,a0,3
-// CHECK-DAG: andi {{a[0-7]}},{{a[0-7]}},4
-// CHECK-DAG: lui {{a[0-7]}},0xb2050
+// CHECK-NOT: andi {{a[0-7]}},{{a[0-7]}},4
+// CHECK: andi a0,a0,3
+// CHECK-NOT: andi {{a[0-7]}},{{a[0-7]}},4
+// CHECK: lui {{a[0-7]}},0xb2050
+// CHECK-NOT: andi {{a[0-7]}},{{a[0-7]}},4
+// CHECK: andi {{a[0-7]}},{{a[0-7]}},7
 // CHECK: R_RISCV_HI20 __instrn_buffer
 // CHECK: sw {{a[0-7]}},0({{a[0-7]}})
 // CHECK-NEXT: ttrmwcib0 1,1,5
@@ -123,4 +129,22 @@ extern "C" __attribute__((noinline, used)) void write_word_after_gpr_transfer()
 // CHECK-NEXT: ttrmwcib1 255,0,80
 // CHECK-NEXT: ttrmwcib2 255,0,80
 // CHECK-NEXT: ttrmwcib3 255,0,80
+// CHECK-NEXT: ret
+
+extern "C" __attribute__((noinline, used)) void write_runtime_fields_stacked(std::uint32_t mode, std::uint32_t threshold)
+{
+    cfg::write<cfg::Access::TensixCfgUnit>(
+        cfg::set<cfg::StaccRelu::ApplyRelu, cfg::Sec::S0>(mode), cfg::set<cfg::StaccRelu::ReluThreshold, cfg::Sec::S0>(threshold));
+}
+
+// A runtime field is masked only when another field of its group lies above it:
+// ApplyRelu (bits 5:2) keeps its mask, while ReluThreshold (bits 21:6) relies on
+// the byte-lane masks and needs no 0x3fffc0 mask, which would be built with lui 0x400.
+// CHECK-LABEL: <write_runtime_fields_stacked>:
+// CHECK-NOT: lui {{a[0-7]}},0x400
+// CHECK: andi {{a[0-7]}},{{a[0-7]}},60
+// CHECK-NOT: lui {{a[0-7]}},0x400
+// CHECK: sw {{a[0-7]}},0({{a[0-7]}})
+// CHECK: sw {{a[0-7]}},0({{a[0-7]}})
+// CHECK: sw {{a[0-7]}},0({{a[0-7]}})
 // CHECK-NEXT: ret
