@@ -124,9 +124,12 @@ Engine scripts take `--run DIR` (or `BUG_AUDIT_RUN`); paths below are relative t
    --in-scope`. The in-scope leads enter the run as uncertain `history-sibling` findings, so step 5 verifies them with
    the rest. Their severity is a placeholder: re-rate the confirmed ones with `engine/severity-wave.js` in step 6.
 5. **Close the verification gaps:** run `engine/recheck.py --run <run> queue`, then `engine/recheck-wave.js`, then
-   `recheck.py persist`, then `recheck.py report`. This rechecks every uncertain or needs-recheck candidate, and a
-   10% seeded sample of the refuted ones. If the sample's reversal rate is material (more than about 1 in 10),
-   recheck the whole refuted pile.
+   `recheck.py persist`, then `recheck.py report`, then `engine/consolidate.py --run <run>`. This rechecks every
+   uncertain or needs-recheck candidate, and a 10% seeded sample of the refuted ones. If the sample's reversal rate is
+   material (more than about 1 in 10), recheck the whole refuted pile. A candidate whose recheck verifiers died stays
+   queued: run the loop again until `recheck.py report` shows none still queued. The consolidate is what applies the
+   recheck outcomes: every later step reads `CONFIRMED.json`, and without it they miss each finding the recheck
+   confirmed, including every sibling-sweep lead.
 6. **Dedup, so each bug is filed exactly once.** Two separate steps:
    - **Within the run:** `engine/dedup.py --run <run> inputs`, then `engine/dedup-wave.js`, then
      `dedup.py persist <output>`, then `consolidate.py`. The same defect reported at several lines becomes one entry. Groups are directories, plus cross-directory sets of findings that name at least two of the same identifiers (a defect reported at a call site and at its definition), so the judge compares those too.
