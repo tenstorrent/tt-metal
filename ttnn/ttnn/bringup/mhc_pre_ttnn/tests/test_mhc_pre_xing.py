@@ -33,10 +33,15 @@ NG = 24
 
 @pytest.fixture(scope="module")
 def mesh():
+    # The captured case mesh when the box has that many chips; otherwise the whole box (the inputs are per device and
+    # the per-chip math does not depend on the mesh shape), as in test_mhc_pre_ttnn.py.
     c = CASES[0]
     p = c["device_params"]
     ttnn.set_fabric_config(getattr(ttnn.FabricConfig, p["fabric_config"]))
-    m = ttnn.open_mesh_device(ttnn.MeshShape(*c["mesh"]), l1_small_size=p["l1_small_size"])
+    if c["mesh"][0] * c["mesh"][1] == ttnn.get_num_devices():
+        m = ttnn.open_mesh_device(ttnn.MeshShape(*c["mesh"]), l1_small_size=p["l1_small_size"])
+    else:
+        m = ttnn.open_mesh_device(l1_small_size=p["l1_small_size"])
     yield m
     ttnn.close_mesh_device(m)
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
