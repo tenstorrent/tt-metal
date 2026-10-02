@@ -323,7 +323,7 @@ class TtLMHead(LightweightModule):
         logger.debug(f"Created sharded LM head weight: {tt_weight.shape}")
         return tt_weight
 
-    def forward(self, x: ttnn.Tensor, global_token_id: int) -> tuple[ttnn.Tensor, tuple[int, int]]:
+    def forward(self, x: ttnn.Tensor, global_token_id: Optional[int]) -> tuple[ttnn.Tensor, tuple[int, int]]:
         """
         Forward pass: project hidden states to vocabulary logits.
 
@@ -331,7 +331,8 @@ class TtLMHead(LightweightModule):
             x: Input tensor [dispatch_group_size, seq_len, emb_dim]
             global_token_id: Which token's logits we need, indexed the way
                 ``global_to_local_token_id`` reads it: ``seq_len`` here is ``x``'s own extent, so in
-                chunked prefill this is a chip-major ROW of ``x``, not a global position.
+                chunked prefill this is a chip-major ROW of ``x``, not a global position. None when ``x``
+                is already the one tile to project (a trace selects it on device); the location is then None.
 
         Returns:
             tuple[ttnn.Tensor, tuple[int, int]]:
@@ -347,21 +348,27 @@ class TtLMHead(LightweightModule):
         # ========================================
         # Extract the tile containing the target token
         # ========================================
-        # Use negative indexing: seq_len is at dim -2, emb_dim at dim -1
-        seq_len_per_device = x.shape[-2]
-        seq_len = seq_len_per_device * self.sp_factor
+        if global_token_id is None:
+            assert x.shape[-2] == ttnn.TILE_SIZE, f"a preselected tile must be {ttnn.TILE_SIZE} rows, got {x.shape[-2]}"
+            device_id = token_offset = None
+        else:
+            # Use negative indexing: seq_len is at dim -2, emb_dim at dim -1
+            seq_len_per_device = x.shape[-2]
+            seq_len = seq_len_per_device * self.sp_factor
 
-        # Convert global token ID to local token ID on this device.
-        device_id, local_token_id = global_to_local_token_id(
-            global_token_id, self.sp_factor, seq_len, is_balanced=self.is_balanced
-        )
+            # Convert global token ID to local token ID on this device.
+            device_id, local_token_id = global_to_local_token_id(
+                global_token_id, self.sp_factor, seq_len, is_balanced=self.is_balanced
+            )
 
-        # We only need logits for a single token, but matmul operates on tiles.
-        # Find the tile-aligned start position that contains local_token_id.
-        tile_start = (local_token_id // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-        token_offset = local_token_id % ttnn.TILE_SIZE
-        x = ttnn.narrow(x, dim=-2, start=tile_start, length=ttnn.TILE_SIZE)
-        logger.debug(f"[TtLMHead.forward] After narrow ({local_token_id=} {tile_start=}): {x.shape=} {token_offset=}")
+            # We only need logits for a single token, but matmul operates on tiles.
+            # Find the tile-aligned start position that contains local_token_id.
+            tile_start = (local_token_id // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+            token_offset = local_token_id % ttnn.TILE_SIZE
+            x = ttnn.narrow(x, dim=-2, start=tile_start, length=ttnn.TILE_SIZE)
+            logger.debug(
+                f"[TtLMHead.forward] After narrow ({local_token_id=} {tile_start=}): {x.shape=} {token_offset=}"
+            )
 
         if self.is_column_parallel:
             # ========================================

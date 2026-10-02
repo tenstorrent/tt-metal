@@ -158,6 +158,70 @@ def mtp_generation_union_rows(
     return rows
 
 
+def mtp_generation_keep_rows(
+    sp_factor: int,
+    chunk_size: int,
+    *,
+    num_mtp_tokens: int,
+    num_levels: int,
+    chunk_start: int,
+    actual_end: int,
+    levels,
+) -> torch.Tensor:
+    """Host ``[sp, 1, U, 1]`` of ones, zero on every row generation will write for ``levels``."""
+    isl_per_chip = chunk_size // sp_factor
+    union_len = isl_per_chip + num_mtp_tokens
+    keep = torch.ones(sp_factor, 1, union_len, 1, dtype=torch.float32)
+    for level in levels:
+        for c, u in enumerate(
+            mtp_generation_union_rows(
+                sp_factor,
+                chunk_size,
+                num_mtp_tokens=num_mtp_tokens,
+                num_levels=num_levels,
+                chunk_start=chunk_start,
+                actual_end=actual_end,
+                level=level,
+            )
+        ):
+            if u is not None:
+                keep[c, 0, u, 0] = 0.0
+    return keep
+
+
+def mtp_generation_select_rows(
+    sp_factor: int,
+    chunk_size: int,
+    *,
+    num_mtp_tokens: int,
+    num_levels: int,
+    chunk_start: int,
+    actual_end: int,
+    level: int,
+    source_row: int,
+) -> torch.Tensor:
+    """Host ``[sp, 1, U, 32*sp]`` one-hot selector of level ``level``; see :func:`build_mtp_generation_select`."""
+    isl_per_chip = chunk_size // sp_factor
+    union_len = isl_per_chip + num_mtp_tokens
+    width = ttnn.TILE_SIZE * sp_factor
+    assert 0 <= source_row < width, f"source_row {source_row} out of range [0, {width})"
+    select = torch.zeros(sp_factor, 1, union_len, width, dtype=torch.float32)
+    for c, u in enumerate(
+        mtp_generation_union_rows(
+            sp_factor,
+            chunk_size,
+            num_mtp_tokens=num_mtp_tokens,
+            num_levels=num_levels,
+            chunk_start=chunk_start,
+            actual_end=actual_end,
+            level=level,
+        )
+    ):
+        if u is not None:
+            select[c, 0, u, source_row] = 1.0
+    return select
+
+
 def build_mtp_generation_keep_mask(
     mesh_device: ttnn.MeshDevice,
     sp_factor: int,
@@ -178,26 +242,18 @@ def build_mtp_generation_keep_mask(
     Applied once before the first generated level, so each level's patch is an add onto a cleared row.
     ``levels`` is the GENERATED range: clearing a provided level's row would lose a real embedding.
     """
-    isl_per_chip = chunk_size // sp_factor
-    union_len = isl_per_chip + num_mtp_tokens
-    keep = torch.ones(sp_factor, 1, union_len, 1, dtype=torch.float32)
     levels = list(levels)
     assert levels, "keep mask asked for an empty generated range; build no generation at all instead"
-    for level in levels:
-        for c, u in enumerate(
-            mtp_generation_union_rows(
-                sp_factor,
-                chunk_size,
-                num_mtp_tokens=num_mtp_tokens,
-                num_levels=num_levels,
-                chunk_start=chunk_start,
-                actual_end=actual_end,
-                level=level,
-            )
-        ):
-            if u is not None:
-                keep[c, 0, u, 0] = 0.0
-    mask = keep.expand(sp_factor, 1, union_len, int(emb_dim_per_chip)).contiguous()
+    keep = mtp_generation_keep_rows(
+        sp_factor,
+        chunk_size,
+        num_mtp_tokens=num_mtp_tokens,
+        num_levels=num_levels,
+        chunk_start=chunk_start,
+        actual_end=actual_end,
+        levels=levels,
+    )
+    mask = keep.expand(-1, -1, -1, int(emb_dim_per_chip)).contiguous()
     return _upload_sp_sharded(mask, mesh_device, mesh_shape, sp_axis, dtype)
 
 
@@ -219,24 +275,16 @@ def build_mtp_generation_select(
     """``[sp, 1, U, 32*sp]`` one-hot selector: ``select @ gathered`` broadcasts the generated embedding
     onto exactly the union rows holding global position ``actual_end + level``.
     """
-    isl_per_chip = chunk_size // sp_factor
-    union_len = isl_per_chip + num_mtp_tokens
-    width = ttnn.TILE_SIZE * sp_factor
-    assert 0 <= source_row < width, f"source_row {source_row} out of range [0, {width})"
-    select = torch.zeros(sp_factor, 1, union_len, width, dtype=torch.float32)
-    for c, u in enumerate(
-        mtp_generation_union_rows(
-            sp_factor,
-            chunk_size,
-            num_mtp_tokens=num_mtp_tokens,
-            num_levels=num_levels,
-            chunk_start=chunk_start,
-            actual_end=actual_end,
-            level=level,
-        )
-    ):
-        if u is not None:
-            select[c, 0, u, source_row] = 1.0
+    select = mtp_generation_select_rows(
+        sp_factor,
+        chunk_size,
+        num_mtp_tokens=num_mtp_tokens,
+        num_levels=num_levels,
+        chunk_start=chunk_start,
+        actual_end=actual_end,
+        level=level,
+        source_row=source_row,
+    )
     return _upload_sp_sharded(select, mesh_device, mesh_shape, sp_axis, dtype)
 
 

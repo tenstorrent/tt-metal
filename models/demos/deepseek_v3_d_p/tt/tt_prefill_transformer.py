@@ -37,6 +37,7 @@ from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import (
     MTPDeviceGeneration,
     MTPSplitChipLookahead,
 )
+from models.demos.deepseek_v3_d_p.tt.mtp_prefill.trace_geometry import MTPTraceEmbedSource, select_rows
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import (
     build_mtp_generation_keep_mask,
     build_mtp_generation_select,
@@ -411,7 +412,7 @@ class TtPrefillTransformer(LightweightModule):
         (ring_indexer_score_dsa, topk_large_indices) read their per-chunk scalars on-device from the
         metadata tensors, so a replay derives each chunk's causal window instead of reusing the
         captured one."""
-        for layer in self.layers:
+        for layer in self._trace_blocks():
             layer.set_trace_controller(controller)
 
     def release_sub_device_managers(self):
@@ -419,8 +420,15 @@ class TtPrefillTransformer(LightweightModule):
         Ensures none is loaded first (clear is idempotent). Leaving managers registered at mesh close
         has been observed to segfault the teardown. Safe/idempotent — call once at end of a run."""
         self.mesh_device.clear_loaded_sub_device_manager()
-        for layer in self.layers:
+        for layer in self._trace_blocks():
             layer.release_sub_device_managers()
+
+    def _trace_blocks(self) -> list:
+        """Every block a captured forward runs, the shared MTP block included."""
+        blocks = list(self.layers)
+        if self.mtp_predictor is not None:
+            blocks.append(self.mtp_predictor.module.layer)
+        return blocks
 
     def _to_host(self, tt_tensor):
         """Bring SP+TP sharded tensor to host as [1, seq, emb] bfloat16."""
@@ -452,6 +460,7 @@ class TtPrefillTransformer(LightweightModule):
         on_mtp_complete: Optional[Callable] = None,
         input_is_embedded: bool = False,
         provided_levels: int = 0,
+        mtp_geometry=None,
     ):
         """
         Forward pass: [embed] -> [block x N]. The populated KV cache is the output.
@@ -494,6 +503,9 @@ class TtPrefillTransformer(LightweightModule):
                         return arity is the same whether or not MTP ran.
             input_is_embedded: the first rank's `token_ids` is ALREADY the embedding, so skip the
                         gather. Set by the device MTP path, which embeds the trunk rows itself.
+            mtp_geometry: an `MTPTraceGeometry` the caller refreshed for this chunk. The MTP levels then
+                        take every per-chunk decision from device tensors, so the forward can be captured;
+                        `provided_levels` is ignored (the geometry carries it).
 
         Returns:
             On a non-last rank: the hidden-state activation tensor to hand to the next rank.
@@ -624,10 +636,30 @@ class TtPrefillTransformer(LightweightModule):
                     logger.debug(f"Reordering intermediate {key} with shape {tensor.shape}")
                     intermediates[key] = reverse_reorder_tensor_chunks(tensor, self.chunk_order, seq_dim=-2)
 
-        if mtp_union is not None:
+        if mtp_union is not None and mtp_geometry is not None:
+            self.run_mtp_traced(
+                h,
+                kvpe_cache,
+                rope_tensors,
+                actual_isl,
+                union=mtp_union,
+                geometry=mtp_geometry,
+                on_mtp_complete=on_mtp_complete,
+                cache_user_id=cache_user_id,
+                actual_start=actual_start,
+                actual_end=actual_end,
+                padding_side=self.padding_side,
+                index_kv_cache=index_kv_cache,
+                metadata=metadata,
+                d2h_service=d2h_service,
+                metadata_msg=metadata_msg,
+                on_layer_complete=on_layer_complete,
+                layer_ack_base=self.first_layer_idx + self.mtp_predictor.first_cache_slot,
+            )
+        elif mtp_union is not None:
             assert actual_start is not None, (
                 "MTP needs actual_start on the host to place the rows it generates; the on-device "
-                "metadata path keeps actual_start on device and cannot answer that here"
+                "metadata path keeps actual_start on device and cannot answer that here; pass mtp_geometry"
             )
             mtp_out, mtp_generated = self.run_mtp(
                 h,
@@ -661,6 +693,9 @@ class TtPrefillTransformer(LightweightModule):
         SP-broadcast so every chip can read it. ``last_row`` is the chip-major flat row carrying the
         chunk's last real position, which is ``actual_isl - 1`` only when the chunk starts on a chunk boundary.
         """
+        return self._mtp_embed_greedy(h_normed, last_row)
+
+    def _mtp_embed_greedy(self, h_normed: ttnn.Tensor, last_row: Optional[int]) -> ttnn.Tensor:
         assert self.lm_head is not None, "MTP generation needs the LM head (last rank, build_tail)"
         logits, _ = self.lm_head(h_normed, last_row)
         if self.lm_head.is_column_parallel and self.tp_factor > 1:
@@ -682,6 +717,14 @@ class TtPrefillTransformer(LightweightModule):
         gathered = self._mtp_all_gather_sp(emb)
         ttnn.deallocate(emb)
         return gathered
+
+    def mtp_generate_embedding_selected(self, h_normed: ttnn.Tensor, lm_rows: ttnn.Tensor) -> ttnn.Tensor:
+        """:meth:`mtp_generate_embedding` with the LM head's tile picked on device by the one-hot ``lm_rows``."""
+        tile = select_rows(lm_rows, h_normed)
+        try:
+            return self._mtp_embed_greedy(tile, None)
+        finally:
+            ttnn.deallocate(tile)
 
     def _mtp_all_gather_sp(self, rows: ttnn.Tensor) -> ttnn.Tensor:
         """``[1, 1, 32, H/tp]`` per chip -> ``[1, 1, 32*sp, H/tp]`` on every chip, in SP order."""
@@ -785,3 +828,34 @@ class TtPrefillTransformer(LightweightModule):
                 union.set_split_chip_lookahead(None)
                 split_lookahead.deallocate()
         return out, source.generated_tokens
+
+    def run_mtp_traced(
+        self,
+        h_normed: ttnn.Tensor,
+        kvpe_cache: MlaKvCache,
+        rope_tensors: dict,
+        actual_isl: int,
+        *,
+        union,
+        geometry,
+        on_mtp_complete: Optional[Callable] = None,
+        **fwd_kwargs,
+    ) -> None:
+        """:meth:`run_mtp` as one program for every chunk: each level generates, and ``geometry`` masks
+        what eager would have skipped. The level outputs are freed here, so a capture holds none past its end.
+        """
+        assert self.mtp_predictor is not None, "run_mtp_traced called on a transformer built without an mtp_predictor"
+        assert not self.is_balanced, "MTP device generation is block-cyclic only"
+        source = MTPTraceEmbedSource(
+            union,
+            geometry,
+            embed_fn=lambda h: self.mtp_generate_embedding_selected(h, geometry.lm_rows),
+            all_gather_sp=self._mtp_all_gather_sp if self.sp_factor > 1 else None,
+        )
+        fwd_kwargs["actual_isl"] = actual_isl
+        out = self.mtp_predictor.forward(source, h_normed, rope_tensors, kvpe_cache, **fwd_kwargs)
+        if on_mtp_complete is not None:
+            on_mtp_complete(out, source.generated_tokens)
+        for t in {id(t): t for t in (*out.x, *out.out, *out.out_head_normed) if t is not None}.values():
+            if t.is_allocated():
+                ttnn.deallocate(t)
