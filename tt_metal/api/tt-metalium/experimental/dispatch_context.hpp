@@ -33,7 +33,7 @@ struct FastDispatchSetupOptions {
 };
 
 // This class provides APIs to dynamically enable and teardown Fast Dispatch during runtime.
-// Functionality is currently limited to Galaxy clusters.
+// Functionality is currently limited to Galaxy and Blackhole clusters whose devices are all MMIO-attached.
 // Note: The functionality in this class is extremely application specific, and will likely be
 // removed once we implement a proper weight loading solution for Low Latency Decode.
 // As such its exposed as experimental.
@@ -57,6 +57,7 @@ public:
     //  - a non-default sub-device manager loaded on any view over an active chip, even with
     //    allow_destructive: the preflight sees only the default manager's allocator. Managers load
     //    only under Fast Dispatch, so clear one before terminate_fast_dispatch.
+    // Every active device must be MMIO-attached; otherwise this throws before Fast Dispatch is enabled.
     void initialize_fast_dispatch(distributed::MeshDevice* mesh_device);
     void initialize_fast_dispatch(distributed::MeshDevice* mesh_device, const FastDispatchSetupOptions& options);
     void terminate_fast_dispatch(distributed::MeshDevice* mesh_device);

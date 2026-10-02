@@ -198,6 +198,8 @@ def setup_fast_dispatch(device, *, allow_destructive=False):
           only the default manager's allocations. Sub-device managers load only
           under Fast Dispatch, so clear it before leaving the block that
           loaded it.
+        - Every active device must be MMIO-attached; otherwise entering raises
+          before Fast Dispatch is enabled.
 
     Args:
         device: The device to enable Fast Dispatch on.

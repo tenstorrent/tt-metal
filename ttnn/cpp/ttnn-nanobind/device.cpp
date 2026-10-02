@@ -502,6 +502,8 @@ void device_module(nb::module_& m_device) {
               even with allow_destructive: the check sees only the default manager's allocations.
               Sub-device managers load only under Fast Dispatch, so clear it before terminating the
               session that loaded it.
+            - Every active device must be MMIO-attached; otherwise this raises before Fast Dispatch is
+              enabled.
 
         Args:
             device (ttnn.Device): The mesh device to enable Fast Dispatch on.

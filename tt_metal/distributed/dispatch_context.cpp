@@ -228,7 +228,8 @@ std::vector<FdL1Conflict> find_fd_l1_conflicts(
         // rather than by named roles. Assignment is lazy, so this is what init_command_queue_host() has
         // assigned by now, before any firmware is written. When every active device is MMIO-attached,
         // that is every core dispatch uses. Otherwise the tunneled split-dispatch roles (prefetcher_d,
-        // fabric_mux) are assigned later, inside initialize_dispatch_firmware(), and are not covered here.
+        // fabric_mux) are assigned later, inside initialize_dispatch_firmware(), and are not covered here;
+        // initialize_fast_dispatch refuses any device that isn't MMIO-attached before this runs.
         for (const CoreCoord& core : dispatch_core_manager.get_assigned_dispatch_cores(device->id())) {
             // Per-core buffers are recorded in the chip's allocator; lockstep buffers in the allocator
             // of the mesh view that created them (the HYBRID mirror marks ranges but registers no
@@ -310,6 +311,17 @@ void DispatchContext::initialize_fast_dispatch(
 
     const auto& device_manager = metal_context.device_manager();
     const auto& active_devices = device_manager->get_all_active_devices_impl();
+
+    // Every active device must be MMIO-attached. Dispatch then uses the single-chip topology, whose roles
+    // are all assigned by init_command_queue_host(), before the L1 preflight below. A remote chip's
+    // split-dispatch roles (prefetcher_d, fabric_mux) are assigned only while the firmware is built, after
+    // the preflight, so it could not see them. Checked before Fast Dispatch is enabled: nothing to unwind.
+    for (const auto& dev : active_devices) {
+        TT_FATAL(
+            dev->is_mmio_capable(),
+            "Manual Fast Dispatch supports only MMIO-attached devices; device {} is reached through another chip.",
+            dev->id());
+    }
 
     uint8_t num_hw_cqs = active_devices[0]->num_hw_cqs();
 
