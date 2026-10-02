@@ -49,7 +49,7 @@ dispatch_s            BRISC reader          NCRISC pusher          host
 ## Record Ring Protocol
 
 dispatch_s hands records to the BRISC reader through a single-producer,
-single-consumer ring of `REALTIME_PROFILER_RECORD_SLOTS` (4) record slots in its
+single-consumer ring of `REALTIME_PROFILER_RECORD_SLOTS` (16) record slots in its
 own L1 (`records[]` in `realtime_profiler_msgs.h`). Two free-running indices
 drive it, and each has exactly one writer:
 

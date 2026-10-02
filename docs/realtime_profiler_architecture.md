@@ -9,8 +9,8 @@ This document describes how the **dispatch core** (dispatch_s), **real-time prof
 ```
 +--------------------------------------------------------------+
 | dispatch_s  (dispatch core)                                  |
-| Stamps each program's start and end time into a 4-slot ring. |
-| If all 4 slots are still unread, it waits.                   |
+| Stamps each program's start and end time into a 16-slot ring.|
+| If all 16 slots are still unread, it waits.                  |
 +--------------------------------------------------------------+
             |  record ready                       ^  slot free
             v                                     |
@@ -84,7 +84,7 @@ writer, and a full queue makes its producer wait, so a slow host slows dispatch 
 
 | Queue | Lives in | Size | Producer advances | Consumer advances | When full |
 |-------|----------|------|-------------------|-------------------|-----------|
-| Record ring | dispatch core L1 | 4 slots of 32 B | `record_wr_idx` (dispatch_s, NoC write to the profiler core) | `record_rd_idx` (BRISC, NoC write back) | dispatch_s waits |
+| Record ring | dispatch core L1 | 16 slots of 32 B | `record_wr_idx` (dispatch_s, NoC write to the profiler core) | `record_rd_idx` (BRISC, NoC write back) | dispatch_s waits |
 | BRISC→NCRISC ring | profiler core L1 | 16,384 entries of 64 B | `write_index` (BRISC) | `read_index` (NCRISC) | BRISC waits |
 | D2H socket FIFO | pinned host memory | 32,768 pages of 64 B (2 MiB) | `bytes_sent` (NCRISC, PCIe write) | `bytes_acked` (host, write into profiler core L1) | NCRISC waits |
 
@@ -156,8 +156,8 @@ timestamps, clock frequency, kernel source paths): 48 bytes on a 64-bit host.
 
 | Where | What | Size |
 |-------|------|------|
-| Dispatch core L1 | `realtime_profiler_msg_t`: 4 record slots (128 B), program-id FIFO of 32 ids (128 B), indices and control words (44 B) | 300 B |
-| Prefetch and profiler core L1 | The same struct at the same address, because the dispatch memory map lays it out on every core it covers. Only the config and sync words are used on the profiler core | 300 B each |
+| Dispatch core L1 | `realtime_profiler_msg_t`: 16 record slots (512 B), program-id FIFO of 32 ids (128 B), indices and control words (44 B) | 684 B |
+| Prefetch and profiler core L1 | The same struct at the same address, because the dispatch memory map lays it out on every core it covers. Only the config and sync words are used on the profiler core | 684 B each |
 | Profiler core L1 | BRISC-to-NCRISC ring: 64 B header plus 16,384 entries of 64 B | 1,048,640 B |
 | Profiler core L1 | D2H socket config | 128 B |
 | Profiler core L1, total | `RealtimeProfilerCoreL1` (ring plus socket config) | 1,048,768 B (~1 MiB) |
@@ -170,20 +170,20 @@ address range is ordinary allocatable L1.
 
 ### 4.4 Mailbox fields by core
 
-The dispatch memory map gives every core it lays out the same 300-byte `realtime_profiler_msg_t` at the same L1
+The dispatch memory map gives every core it lays out the same 684-byte `realtime_profiler_msg_t` at the same L1
 address, but each core uses different fields:
 
 | Core | Mailbox size | Used | Unused |
 |------|--------------|------|--------|
-| Dispatch core | 300 B | 288 B | 12 B: `config_buffer_addr`, `sync_request`, `sync_host_timestamp` |
-| Profiler core | 300 B | 16 B | 284 B: the record slots, the program-id FIFO and the dispatch-side indices |
-| Prefetch core | 300 B | 0 B | 300 B: reserved only because the layout is shared |
+| Dispatch core | 684 B | 672 B | 12 B: `config_buffer_addr`, `sync_request`, `sync_host_timestamp` |
+| Profiler core | 684 B | 16 B | 668 B: the record slots, the program-id FIFO and the dispatch-side indices |
+| Prefetch core | 684 B | 0 B | 684 B: reserved only because the layout is shared |
 
 Each line below gives the field, what it is for, and who writes it.
 
 **Dispatch core**
 
-- `records[4]`: the record ring's slots (dispatch_s writes; the BRISC reads them over NoC)
+- `records[16]`: the record ring's slots (dispatch_s writes; the BRISC reads them over NoC)
 - `record_wr_idx`: the slot dispatch_s is filling (dispatch_s)
 - `record_rd_idx`: how many records the BRISC has read (BRISC, NoC write)
 - `record_full_wait_count`: how many times dispatch_s waited for a free slot (dispatch_s)
