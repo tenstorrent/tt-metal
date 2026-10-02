@@ -21,6 +21,7 @@ from ....utils.mochi import get_rot_transformation_mat
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 from .agmm_config import agmm_block_size
+from .quant_config import math_fidelity_from_env
 
 
 def rope_channel_permutation(head_dim: int, rotary_dim: int) -> torch.Tensor:
@@ -203,8 +204,8 @@ class MiniMaxH3Attention(Module):
         self._exp_sdpa_program_configs: dict[int, ttnn.SDPAProgramConfig | None] = {}
 
         sdpa_fidelity = ttnn.MathFidelity.HiFi2
-        if self.use_ring and os.environ.get("MINIMAX_H3_SDPA_FIDELITY"):
-            sdpa_fidelity = getattr(ttnn.MathFidelity, os.environ["MINIMAX_H3_SDPA_FIDELITY"])
+        if self.use_ring:
+            sdpa_fidelity = math_fidelity_from_env("MINIMAX_H3_SDPA_FIDELITY") or sdpa_fidelity
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=sdpa_fidelity,
@@ -314,8 +315,9 @@ class MiniMaxH3Attention(Module):
                     ("qk_math_fidelity", "MINIMAX_H3_SDPA_QK_FIDELITY"),
                     ("pv_math_fidelity", "MINIMAX_H3_SDPA_PV_FIDELITY"),
                 ):
-                    if os.environ.get(var):
-                        phase_fidelity[field] = getattr(ttnn.MathFidelity, os.environ[var])
+                    fidelity = math_fidelity_from_env(var)
+                    if fidelity is not None:
+                        phase_fidelity[field] = fidelity
             self._sdpa_program_configs[key] = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=grid,
                 q_chunk_size=q_chunk,

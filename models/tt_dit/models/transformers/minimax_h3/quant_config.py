@@ -29,6 +29,19 @@ def apply_fast_recipe_env() -> None:
 
 apply_fast_recipe_env()
 
+LINEARS = ("qkv", "out", "ff1", "ff2")
+
+
+def math_fidelity_from_env(var: str) -> ttnn.MathFidelity | None:
+    """The MathFidelity named by an environment variable; None when it is unset."""
+    name = os.environ.get(var)
+    if not name:
+        return None
+    valid = [key for key in ttnn.MathFidelity.__members__ if key != "Invalid"]
+    if name not in valid:
+        raise ValueError(f"{var}={name!r}: expected one of {valid}")
+    return ttnn.MathFidelity.__members__[name]
+
 
 def _typecast_parameter(param, dtype) -> None:
     # The declared dtype stays as cached so a reload after eviction passes the parameter's dtype check; the live
@@ -42,11 +55,11 @@ def apply_env_quant_config(model) -> None:
     bf8 = [name for name in os.environ.get("MINIMAX_H3_BF8_WEIGHTS", "").split(",") if name]
     if not bf8:
         return
+    unknown = sorted(set(bf8) - set(LINEARS))
+    if unknown:
+        raise ValueError(f"MINIMAX_H3_BF8_WEIGHTS: unknown {unknown}, expected a subset of {list(LINEARS)}")
     logger.info(f"minimax-h3 block weights typecast to bfloat8_b: {bf8}")
     for block in getattr(model, "transformer_blocks", [model]):
         linears = {"qkv": block.attn.to_qkv, "out": block.attn.to_out, "ff1": block.ff.ff1, "ff2": block.ff.ff2}
         for name in bf8:
-            linear = linears[name]
-            _typecast_parameter(linear.weight, ttnn.bfloat8_b)
-            if getattr(linear, "bias", None) is not None:
-                _typecast_parameter(linear.bias, ttnn.bfloat8_b)
+            _typecast_parameter(linears[name].weight, ttnn.bfloat8_b)
