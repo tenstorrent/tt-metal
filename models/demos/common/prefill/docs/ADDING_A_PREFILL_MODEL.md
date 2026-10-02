@@ -143,7 +143,8 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
     def capture_trace(self, kv_cache) -> None:
         """OPTIONAL — implement only if your model supports segmented trace capture/replay. The
         engine calls this via `getattr(runtime, "capture_trace", None)`, once, after `compile()`
-        and only when `config.use_trace` is set; a model that never traces can omit it entirely.
+        and only when `config.use_trace` is set; a model that never traces can omit it entirely, and
+        the runner then refuses PREFILL_USE_TRACE=1 instead of running eagerly.
         Must be idempotent (no-op if already captured) since the engine does not track capture
         state itself."""
 
@@ -169,7 +170,9 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
 
     def set_layer_completion_sink(self, sink) -> None:
         """Register the per-layer completion sink. Required at any rank count, unless the runner runs
-        with PREFILL_LAYER_ACK_D2H=1 and takes completions off the device instead.
+        with PREFILL_LAYER_ACK_D2H=1 and takes completions off the device instead. That mode needs
+        `set_d2h_ack_service(service)` on the runtime; without it the runner refuses
+        PREFILL_LAYER_ACK_D2H=1 right after building the runtime.
 
         Call `sink(layer_idx, request_id)` once per layer, where `request_id` is the one
         `prefill_chunk` was given -- bind it per call rather than reading mutable state, since the
