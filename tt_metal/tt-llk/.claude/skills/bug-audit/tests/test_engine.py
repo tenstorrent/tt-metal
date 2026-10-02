@@ -1574,7 +1574,7 @@ def test_a_line_keyed_recheck_from_an_older_run_still_applies_to_its_own_finding
     ], conf
 
 
-def test_a_recheck_whose_verifiers_died_stays_queued_and_settles_nothing(
+def test_a_queued_recheck_outcome_keeps_the_wave_verdict_and_is_queued_again(
     rundir, tmp_path
 ):
     ref = finding("r.cpp", 2, "high", status="refuted", summary="refuted claim")
@@ -1590,7 +1590,8 @@ def test_a_recheck_whose_verifiers_died_stays_queued_and_settles_nothing(
     )
     assert code == 0, out + err
     (it,) = json.loads(out.splitlines()[0])["items"]
-    # what recheck-wave.js returns when its verifiers die: the item stays queued
+    # the persist/consolidate side of a recheck whose verifiers died (recheck-wave.js returning "queued" is tested
+    # under quickjs below)
     died = {"confirmed": 0, "refuted": 0, "uncertain": 0, "died": 3}
     write(
         str(tmp_path / "o.json"),

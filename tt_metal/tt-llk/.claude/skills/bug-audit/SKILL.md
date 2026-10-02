@@ -61,12 +61,13 @@ benchmark and a sibling sweep.
 
 Full, area and bench runs fan out through the **Workflow** tool. That needs the user's explicit opt-in to
 multi-agent orchestration. Get it, and state the cost first, from the batch count `init_run.py` prints for the chosen
-scope. Measured at the 300-line default: 25 batches of ttnn op code took 6.0M tokens and 74 agents, plus 29 candidates
-deferred at the agent limit (about 3 verifier agents each), so about 0.5M tokens and 6.4 agents per batch in all. A
-full tt-metal run (18,500 files and 4.4M lines with the default extensions) is about 11,200 batches, or 250 waves of
-45: roughly 6B tokens and 70,000 agents. Code dense with real bugs costs more: a wave of 1-3 file benchmark batches,
-each known to hold a bug, took 37M tokens and 881 agents for 50 batches (17.7 agents per batch), which would put the
-same run near 8B tokens and 200,000 agents. Verification is most of the agent count.
+scope. Measured at the 300-line default: 25 batches of ttnn op code took 6.0M tokens (the Workflow tool's total) and
+74 agents. That pilot capped itself at 75 agents, so 29 candidates were left for the recheck; at about 3 verifiers
+each and the pilot's average of about 80k tokens per agent, they add about 7M tokens and 87 agents, so about 0.5M
+tokens and 6.4 agents per batch in all. A full tt-metal run (18,500 files and 4.4M lines with the default extensions)
+is about 11,200 batches, or 250 waves of 45: roughly 6B tokens and 70,000 agents. Code dense with real bugs costs
+more: a wave of 1-3 file benchmark batches, each known to hold a bug, took 37M tokens and 881 agents for 50 batches,
+which would put the same run near 8B tokens and 200,000 agents. Verification is most of the agent count.
 
 ## Start of every audit: ask the user
 Before `init_run.py`, ask questions 1-3 in one AskUserQuestion call, then question 4 in a second call: its cost
@@ -127,9 +128,10 @@ Engine scripts take `--run DIR` (or `BUG_AUDIT_RUN`); paths below are relative t
    `recheck.py persist`, then `recheck.py report`, then `engine/consolidate.py --run <run>`. This rechecks every
    uncertain or needs-recheck candidate, and a 10% seeded sample of the refuted ones. If the sample's reversal rate is
    material (more than about 1 in 10), recheck the whole refuted pile. A candidate whose recheck verifiers died stays
-   queued: run the loop again until `recheck.py report` shows none still queued. The consolidate is what applies the
-   recheck outcomes: every later step reads `CONFIRMED.json`, and without it they miss each finding the recheck
-   confirmed, including every sibling-sweep lead.
+   queued, so run the loop once more for those; one still queued after that keeps its wave verdict, and so its place
+   in the reports, and `recheck.py report` counts it as still queued. The consolidate is what applies the recheck
+   outcomes: every later step reads `CONFIRMED.json`, and without it they miss each finding the recheck confirmed,
+   including every sibling-sweep lead.
 6. **Dedup, so each bug is filed exactly once.** Two separate steps:
    - **Within the run:** `engine/dedup.py --run <run> inputs`, then `engine/dedup-wave.js`, then
      `dedup.py persist <output>`, then `consolidate.py`. The same defect reported at several lines becomes one entry. Groups are directories, plus cross-directory sets of findings that name at least two of the same identifiers (a defect reported at a call site and at its definition), so the judge compares those too.
@@ -188,9 +190,10 @@ Engine scripts take `--run DIR` (or `BUG_AUDIT_RUN`); paths below are relative t
 - **Little code per hunter.** Batches default to 300 lines (`--max-lines`; `--batch-lines` sets a budget per
   priority). Depth follows lines per agent: on the same full-size code, hunters found 4 of 4 verified bugs at 300
   lines, 1 at 800 and 0 at the old 1,500-3,500 (*references/measurement-history.md*). The same code costs more: on
-  those files the hunters cost about 5x what they did at the old size (6.3M against 1.28M price-weighted tokens),
-  and the trace audits, which scale with the number of batches, added another 3.3M. The post-fix miss analysis found
-  the same cause: hunters read 27 of 29 missed bugs but skimmed them.
+  those files the hunters cost about 5x what they did at the old size, and the trace audits, which scale with the
+  number of batches, added about half as much again (6.3M and 3.3M against 1.28M, in price-weighted tokens: cache
+  reads count 0.1, output 5, so these are not comparable with the Workflow totals above). The post-fix miss analysis
+  found the same cause: hunters read 27 of 29 missed bugs but skimmed them.
 - **Coverage is proven, not claimed.** Each hunter reports every file's line count and last non-blank line.
   `persist_wave.py` checks both against the tree, and a mismatch sends the batch back. `ledger.tsv` has one row per
   in-scope file (pending, reread or audited, plus its confirmed-finding count) and is updated on every persist. The run is not done while
