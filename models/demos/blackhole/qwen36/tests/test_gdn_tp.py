@@ -413,14 +413,12 @@ def test_gdn_tp_batched_prefill_chunked(mesh_device, B, reset_seeds, ensure_gc, 
     # ---- reference: single-shot batched prefill over the full T (ground truth) ----
     gref = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
     gref.reset_state()
-    gref._stable_state = True
     gref.forward_prefill_batched(shard_to_device(mesh_device, x.unsqueeze(0), dim=-1), chunk_size=C)
     out_ref = ttnn.to_torch(gref.forward_decode(replicate_to_device(mesh_device, xd)), mesh_composer=comp)
 
     # ---- test: two CARRIED chunks ----
     g = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
     g.reset_state()
-    g._stable_state = True
     g.reset_state_inplace()  # zero state + clear the batched conv carry at sequence start
     g.forward_prefill_batched(shard_to_device(mesh_device, x[:, :C].unsqueeze(0), dim=-1), chunk_size=C, carry=True)
     g.forward_prefill_batched(shard_to_device(mesh_device, x[:, C:].unsqueeze(0), dim=-1), chunk_size=C, carry=True)

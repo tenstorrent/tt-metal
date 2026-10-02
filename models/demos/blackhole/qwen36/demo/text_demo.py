@@ -174,7 +174,7 @@ def _warmup_prefill(model, device, token_ids):
     logger.info(f"Warmup complete: {compile_time:.1f}s (programs now cached)")
 
     # Reset state before timed inference
-    model.reset_state(batch_size=token_ids.shape[0])
+    model.reset_state()
 
 
 BLOCK_SIZE = 64

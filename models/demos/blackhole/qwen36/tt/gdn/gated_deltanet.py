@@ -8,7 +8,6 @@ kernel into a module that manages weight tensors, recurrent state, and conv stat
 import ttnn
 from models.demos.blackhole.qwen36.tt.gdn.config import GDNConfig
 from models.demos.blackhole.qwen36.tt.gdn.decode import recurrent_forward
-from models.demos.blackhole.qwen36.tt.gdn.state import init_recurrent_state, restore_split_conv_from_fused
 from models.demos.blackhole.qwen36.tt.gdn.weights import load_gdn_weights
 
 
@@ -48,56 +47,27 @@ class Qwen36GatedDeltaNet:
 
         self.weights = load_gdn_weights(mesh_device, config, state_dict, tensor_cache_path)
 
-        # ---- Runtime state (plain instance attributes, exact same names as before;
-        # poked directly by the trace machinery in model.py / qwen36_vllm.py) ----
-        self.recurrent_state = None
-        # Conv states: ttnn tensors on device [B, kernel_size-1, D]
-        self.conv_state_q = None
-        self.conv_state_k = None
-        self.conv_state_v = None
-        # Fused conv state [B, kernel_size-1, D_total] where D_total = q_dim + k_dim + v_dim
-        self.fused_conv_state = None
-        self.split_conv_state = None
-        # Trace capture support
-        self.use_inplace_state = False
-        # When True (set by Qwen36Model.allocate_kv_caches once the state is bound to the persistent
-        # external buffers), the chunk (prefill) path writes recurrent + conv state into those buffers
-        # IN PLACE (ttnn.copy) instead of reassigning a fresh tensor, so trace-baked addresses stay valid.
-        self._chunk_inplace_state = False
+        # Persistent B=1 state, updated in place so trace-baked addresses stay valid.
+        def zeros(shape):
+            return ttnn.zeros(
+                shape,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        rec_shape = [1, self.num_v_heads, self.head_k_dim, self.head_v_dim]
+        conv_shape = [1, self.conv_kernel_size - 1, config.q_dim + config.k_dim + config.v_dim]
+        self.recurrent_state = zeros(rec_shape)
+        self.fused_conv_state = zeros(conv_shape)
+        self._zero_recurrent = zeros(rec_shape)
+        self._zero_conv = zeros(conv_shape)
 
     def forward(self, x, mode="recurrent", chunk_size=None, valid_len=None):
         return recurrent_forward(self, x, mode=mode, chunk_size=chunk_size, valid_len=valid_len)
 
-    def set_external_state(self, recurrent_state, conv_state):
-        """Point layer at externally-allocated state buffers.
-        Sets use_inplace_state=True so all forward passes write state inplace (preserving buffer addresses).
-        Does NOT create split_conv_state — that happens after prefill when there is real data to split.
-        """
-        expected_rec = [1, self.num_v_heads, self.head_k_dim, self.head_v_dim]
-        assert (
-            list(recurrent_state.shape) == expected_rec
-        ), f"recurrent_state shape mismatch: {list(recurrent_state.shape)} != {expected_rec}"
-        assert (
-            conv_state.shape[1] == self.conv_kernel_size - 1
-        ), f"conv_state dim 1 mismatch: {conv_state.shape[1]} != {self.conv_kernel_size - 1}"
-        self.recurrent_state = recurrent_state
-        self.fused_conv_state = conv_state
-        self.use_inplace_state = True
-
-    def _restore_split_conv_from_fused(self):
-        """Copy fused_conv_state slices into existing split_conv_state buffers.
-        Preserves device addresses (critical for trace replay).
-        Kept as a method because model.py calls it on the instance.
-        """
-        restore_split_conv_from_fused(self)
-
-    def reset_state(self, batch_size=None):
-        if batch_size is not None:
-            init_recurrent_state(self, batch_size)
-        else:
-            self.recurrent_state = None
-        self.conv_state_q = None
-        self.conv_state_k = None
-        self.conv_state_v = None
-        self.fused_conv_state = None
-        self.split_conv_state = None
+    def reset_state_inplace(self):
+        """Zero the state in place for a new sequence."""
+        ttnn.copy(self._zero_recurrent, self.recurrent_state)
+        ttnn.copy(self._zero_conv, self.fused_conv_state)

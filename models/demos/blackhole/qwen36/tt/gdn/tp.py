@@ -238,8 +238,6 @@ class TPGatedDeltaNet:
         self._fused_const_tiles = build_fused_const_tiles(mesh, _FUSED_CHUNK_SIZE)
         self.conv_states = None
         self.rec_state = None
-        # In-place state updates for decode/prefill traces (set by model allocate_kv_caches)
-        self._stable_state = False
         self.conv_carry = None  # cross-chunk prefill conv carry [1, K-1, qkv_dim_tp]
         # Native ttnn.conv1d depthwise prefill; L1_FULL slice keeps it trace-safe.
         # Only used when valid_len is None (masked buckets keep the MAC FIR).
@@ -532,13 +530,12 @@ class TPGatedDeltaNet:
         # Masked buckets still pass a real valid_len (< T) so their exact masking is unchanged, and
         # for a full chunk the None slice and the valid_len==T one-hot select the identical rows.
 
-        # Cross-chunk carry (chunk-outer prefill): when _stable_state, the recurrent + conv
-        # state continue from the persistent buffers (zeroed at sequence start by
-        # reset_state_inplace, so a from-scratch single pass reads zeros == None). The demo
-        # path (_stable_state False) is unchanged: no carry, reassign state.
+        # Cross-chunk carry (chunk-outer prefill): the recurrent + conv state continue from the
+        # persistent buffers (zeroed at sequence start by reset_state_inplace, so a from-scratch
+        # single pass reads zeros == None).
         # Per-user prefill (return_state) is always from scratch: must not carry the shared
         # batched buffer (other users' state) as its initial recurrent/conv state.
-        carry = self._stable_state and not return_state
+        carry = not return_state
         if carry and self.conv_carry is None:
             self.reset_state()
 
@@ -622,14 +619,11 @@ class TPGatedDeltaNet:
             captured = (final_state, conv_new_state)
         else:
             # ---- Carry recurrent + conv state for the NEXT chunk (chunk-outer prefill). ----
-            # In place (ttnn.copy) when _stable_state so the addresses the prefill/decode traces
+            # In place (ttnn.copy) so the addresses the prefill/decode traces
             # baked in stay valid across execute_trace replays and across sequences.
-            if carry:
-                ttnn.copy(final_state, self.rec_state)
-                ttnn.deallocate(final_state)
-                ttnn.copy(conv_new_state, self.conv_carry)  # [1, K-1, D] last-K-1 conv inputs
-            else:
-                self.rec_state = final_state
+            ttnn.copy(final_state, self.rec_state)
+            ttnn.deallocate(final_state)
+            ttnn.copy(conv_new_state, self.conv_carry)  # [1, K-1, D] last-K-1 conv inputs
             # ---- Finalize the decode conv window (last chunk / short prompt). ----
             # conv_states[1..K-1] = the last K-1 real conv inputs; [0] is the (shifted-out) zero.
             # Harmless to refresh every chunk — the last chunk's values are the ones decode reads.
@@ -748,9 +742,10 @@ class TPGatedDeltaNet:
         conv_states[0] is zeroed (shifted-out tap). ttnn has no in-place row write, so buffers are
         built by concat along the batch dim (rec: dim 0; conv: dim 1).
 
-        Under _stable_state (decode-trace path) the result is copied into the fixed-address
-        buffers; otherwise (demo/standalone) it is assigned.
+        The result is copied into the fixed-address buffers.
         """
+        if self.rec_state is None:
+            self.reset_state()
         assert len(rec_list) == self.B and len(conv_new_list) == self.B, "need one state per batch row"
         D = self.qkv_dim_tp
         rec_batched = ttnn.concat(rec_list, dim=0)  # [B, Nv, Dk, Dv]
@@ -772,22 +767,18 @@ class TPGatedDeltaNet:
                 ttnn.deallocate(r)
             conv_states.append(cs)
 
-        if self._stable_state and self.rec_state is not None:
-            rec_src = (
-                rec_batched
-                if rec_batched.dtype == self.rec_state.dtype
-                else ttnn.typecast(rec_batched, self.rec_state.dtype)
-            )
-            ttnn.copy(rec_src, self.rec_state)
-            if rec_src is not rec_batched:
-                ttnn.deallocate(rec_src)
-            ttnn.deallocate(rec_batched)
-            for m in range(self.K):
-                ttnn.copy(conv_states[m], self.conv_states[m])
-                ttnn.deallocate(conv_states[m])
-        else:
-            self.rec_state = rec_batched
-            self.conv_states = conv_states
+        rec_src = (
+            rec_batched
+            if rec_batched.dtype == self.rec_state.dtype
+            else ttnn.typecast(rec_batched, self.rec_state.dtype)
+        )
+        ttnn.copy(rec_src, self.rec_state)
+        if rec_src is not rec_batched:
+            ttnn.deallocate(rec_src)
+        ttnn.deallocate(rec_batched)
+        for m in range(self.K):
+            ttnn.copy(conv_states[m], self.conv_states[m])
+            ttnn.deallocate(conv_states[m])
         for t in rec_list:
             ttnn.deallocate(t)
         for t in conv_new_list:
@@ -944,14 +935,15 @@ class TPGatedDeltaNet:
                     from the previous chunk and write the updated ones back, so a long prompt can be
                     prefilled chunk-by-chunk over the batch. Mirrors the B=1 forward_prefill carry;
                     the caller zeroes rec_state (reset_state_inplace) + _batched_conv_carry at
-                    sequence start, so the first chunk reads zeros (== from scratch). Requires
-                    _stable_state (the batched decode buffers).
+                    sequence start, so the first chunk reads zeros (== from scratch).
 
         KERNEL CAP: gated_delta_attn_seq maps one BH = B*Nv_tp row per core and is L1-bound, so BH
         must stay <= ~32 (at TP=4, Nv_tp=8 => B <= 4). Larger B trips an L1 clash (B=8) or the
         kernel's `BH <= compute_grid` assert (B=32); B>4 would need grouped launches (groups <=4).
         The model currently prefills per-user instead (see prefill_paged_peruser).
         """
+        if self.rec_state is None:
+            self.reset_state()
         tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
         if len(x.shape) == 4:
             x = ttnn.reshape(x, (x.shape[-3], x.shape[-2], x.shape[-1]))  # [.,B,T,dim] -> [B,T,dim]
@@ -1040,18 +1032,15 @@ class TPGatedDeltaNet:
         )
 
         # ---- write the batched decode state directly (row u == user u) ----
-        if self._stable_state and self.rec_state is not None:
-            rec_src = (
-                final_state
-                if final_state.dtype == self.rec_state.dtype
-                else ttnn.typecast(final_state, self.rec_state.dtype)
-            )
-            ttnn.copy(rec_src, self.rec_state)
-            if rec_src is not final_state:
-                ttnn.deallocate(rec_src)
-            ttnn.deallocate(final_state)
-        else:
-            self.rec_state = final_state  # [B, Nv, Dk, Dv]
+        rec_src = (
+            final_state
+            if final_state.dtype == self.rec_state.dtype
+            else ttnn.typecast(final_state, self.rec_state.dtype)
+        )
+        ttnn.copy(rec_src, self.rec_state)
+        if rec_src is not final_state:
+            ttnn.deallocate(rec_src)
+        ttnn.deallocate(final_state)
         # conv_states[0] = shifted-out zero; conv_states[m] row u = conv_new_state[u, m-1].
         zero0 = ttnn.from_torch(
             torch.zeros(1, B, D, dtype=torch.bfloat16),
@@ -1072,12 +1061,9 @@ class TPGatedDeltaNet:
             self._batched_conv_carry = conv_new_state  # [B, K-1, D]
         else:
             ttnn.deallocate(conv_new_state)
-        if self._stable_state and self.conv_states is not None:
-            for m in range(self.K):
-                ttnn.copy(new_conv[m], self.conv_states[m])
-                ttnn.deallocate(new_conv[m])
-        else:
-            self.conv_states = new_conv
+        for m in range(self.K):
+            ttnn.copy(new_conv[m], self.conv_states[m])
+            ttnn.deallocate(new_conv[m])
 
         # ---- output (gated RMSNorm + SiLU(z) gate + row-parallel out proj + all-reduce) ----
         out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6)
@@ -1176,15 +1162,12 @@ class TPGatedDeltaNet:
         )
         if init_state is not self.rec_state:
             ttnn.deallocate(init_state)
-        if self._stable_state:
-            # In-place update preserves rec_state address for decode trace replay
-            if B == Bmax:
-                ttnn.copy(new_rec, self.rec_state)
-                ttnn.deallocate(new_rec)
-            else:
-                self._write_recurrent_state_prefix(new_rec, B)
+        # In-place update preserves rec_state address for decode trace replay
+        if B == Bmax:
+            ttnn.copy(new_rec, self.rec_state)
+            ttnn.deallocate(new_rec)
         else:
-            self.rec_state = new_rec
+            self._write_recurrent_state_prefix(new_rec, B)
 
         out_r = ttnn.reshape(o, (B, Nv, Dv))
         out_n = ttnn.rms_norm(out_r, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)  # gated norm (no +1)

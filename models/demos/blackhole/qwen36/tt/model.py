@@ -154,10 +154,6 @@ class Qwen36Model:
         self._paged_kv_caches = None
         # Positions in self.layers of full-attn layers (not checkpoint indices); drives KV cache bind.
         self._attention_layer_indices = [pos for pos, layer in enumerate(self.layers) if layer.is_full_attention]
-        self._deltanet_external_states = None  # (recurrent, conv) tuples; set by allocate_kv_caches
-        # Shared zero buffers for in-place DN reset between traced replays.
-        self._dn_zero_recurrent = None
-        self._dn_zero_conv = None
         # Chunk-outer trace: one all-layer chunk captured, replayed per chunk via DMA inputs.
         # Persistent buffers below; addresses baked into trace.
         self._chunked_trace_id = None
@@ -795,7 +791,7 @@ class Qwen36Model:
             return self.prefill_layer_chunked(token_ids, chunk_size=2048, vision_tokens=vision_tokens)
 
         # Short sequences (<=1024)
-        self.reset_state(batch_size=B)
+        self.reset_state()
 
         token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
         x = self.embd(token_ids_ttnn)
@@ -819,7 +815,7 @@ class Qwen36Model:
         DeltaNet uses larger chunk_size (256 vs 64) to limit Neumann-series error
         (4096 tokens -> 16 sub-chunks, PCC >0.98). page_table enables paged prefill."""
         B, T = token_ids.shape
-        self.reset_state(batch_size=B)
+        self.reset_state()
 
         token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
         x = self.embd(token_ids_ttnn)
@@ -1068,7 +1064,7 @@ class Qwen36Model:
             ttnn.release_trace(device, self._chunked_trace_id)
             self._chunked_trace_id = None
         tp = self.num_devices > 1
-        (self._reset_gdn_state_for_new_sequence if tp else self._reset_dn_state_inplace)()
+        self._reset_gdn_state_for_new_sequence()
         forward = self._forward_prefill_chunk_tp if tp else self._forward_prefill_chunk
         # The trace output is read right after each replay, before any other trace can run.
         with trace_allocation_tracker.corruptible_allocation_scope(device):
@@ -1085,7 +1081,7 @@ class Qwen36Model:
         logger.info(f"Chunked prefill trace{' (TP)' if tp else ''} captured successfully!")
 
     def _prepare_prefill_trace_chunked_single(self, device, page_table, chunk_size, warmup_masked_buckets):
-        assert self._deltanet_external_states is not None, "Call allocate_kv_caches first"
+        assert self._paged_kv_caches is not None, "Call allocate_kv_caches first"
         assert chunk_size % 128 == 0, f"chunk_size {chunk_size} must be a multiple of 128"
         B = 1
         block_size = get_block_size(self._paged_kv_caches)
@@ -1129,7 +1125,7 @@ class Qwen36Model:
         )
 
         # Warmup outside trace: compile per-chunk programs.
-        self._reset_dn_state_inplace()
+        self._reset_gdn_state_for_new_sequence()
         warmup_out = self._forward_prefill_chunk(
             self._chunk_token_buf,
             self._chunk_cos_buf,
@@ -1145,14 +1141,14 @@ class Qwen36Model:
         # Dummy prefills dirty state/KV; reset below before capture.
         if warmup_masked_buckets:
             self.warmup_prefill_masked_buckets(page_table)
-        self._reset_dn_state_inplace()
+        self._reset_gdn_state_for_new_sequence()
 
     def _prepare_prefill_trace_chunked_tp(self, device, page_table, chunk_size, warmup_masked_buckets):
         """TP fork of _prepare_prefill_trace_chunked_single.
 
-        Replicated persistent buffers; rope_tp cos/sin; GDN uses _stable_state (not external buffers).
+        Replicated persistent buffers; rope_tp cos/sin; GDN uses its module-owned state.
         Trace replays _forward_prefill_chunk_tp."""
-        assert self._deltanet_external_states is not None, "Call allocate_kv_caches first"
+        assert self._paged_kv_caches is not None, "Call allocate_kv_caches first"
         assert chunk_size % 128 == 0, f"chunk_size {chunk_size} must be a multiple of 128"
         block_size = get_block_size(self._paged_kv_caches)
         blocks_per_chunk = chunk_size // block_size
@@ -1244,19 +1240,17 @@ class Qwen36Model:
                     dn.conv_states,
                     dn.conv_carry,
                     dn._zero_conv0,
-                    dn._stable_state,
                 )
             )
             # reset_state allocates against self.B, so set B=1 first.
             dn.B = 1
             dn.reset_state()  # builds rec_state [1,Nv,Dk,Dv], conv_states[*] [1,1,D], conv_carry, _zero_conv0
-            dn._stable_state = True  # in-place carry so the trace's baked addresses survive replays
         return prev
 
     def _restore_gdn_batched(self, prev):
         """Restore the batched [B,...] GDN bindings saved by _alloc_gdn_scratch_b1 and free
         the B=1 scratch, so decode reads the assembled batched state."""
-        for dn, B_b, rec_b, conv_b, carry_b, zero0_b, stable_b in prev:
+        for dn, B_b, rec_b, conv_b, carry_b, zero0_b in prev:
             # Free the B=1 scratch allocated for the prefill trace.
             if dn.rec_state is not None:
                 ttnn.deallocate(dn.rec_state)
@@ -1272,7 +1266,6 @@ class Qwen36Model:
             dn.conv_states = conv_b
             dn.conv_carry = carry_b
             dn._zero_conv0 = zero0_b
-            dn._stable_state = stable_b
 
     def _ensure_gdn_prefill_scratch(self):
         """Allocate the PERSISTENT B=1 GDN prefill scratch once (idempotent).
@@ -1291,11 +1284,11 @@ class Qwen36Model:
             dn = layer.attention
             # reset_state allocates fresh B=1 buffers and assigns them WITHOUT freeing the current
             # (batched) ones, so save+restore the batched bindings and keep the scratch handles alive.
-            saved = (dn.B, dn.rec_state, dn.conv_states, dn.conv_carry, dn._zero_conv0, dn._stable_state)
+            saved = (dn.B, dn.rec_state, dn.conv_states, dn.conv_carry, dn._zero_conv0)
             dn.B = 1
             dn.reset_state()  # builds rec_state [1,Nv,Dk,Dv], conv_states[*] [1,1,D], conv_carry, _zero_conv0
             scratch.append((dn, dn.rec_state, dn.conv_states, dn.conv_carry, dn._zero_conv0))
-            dn.B, dn.rec_state, dn.conv_states, dn.conv_carry, dn._zero_conv0, dn._stable_state = saved
+            dn.B, dn.rec_state, dn.conv_states, dn.conv_carry, dn._zero_conv0 = saved
         self._gdn_prefill_scratch = scratch
 
     def _bind_gdn_prefill_scratch(self):
@@ -1306,25 +1299,23 @@ class Qwen36Model:
         self._ensure_gdn_prefill_scratch()
         prev = []
         for dn, rec, conv, carry, zero0 in self._gdn_prefill_scratch:
-            prev.append((dn, dn.B, dn.rec_state, dn.conv_states, dn.conv_carry, dn._zero_conv0, dn._stable_state))
+            prev.append((dn, dn.B, dn.rec_state, dn.conv_states, dn.conv_carry, dn._zero_conv0))
             dn.B = 1
             dn.rec_state = rec
             dn.conv_states = conv
             dn.conv_carry = carry
             dn._zero_conv0 = zero0
-            dn._stable_state = True  # in-place carry so the trace's baked addresses survive replays
         return prev
 
     def _unbind_gdn_prefill_scratch(self, prev):
         """Rebind the batched [B,...] decode buffers saved by _bind_gdn_prefill_scratch, WITHOUT freeing
         the persistent scratch (unlike _restore_gdn_batched, whose scratch is throwaway)."""
-        for dn, B_b, rec_b, conv_b, carry_b, zero0_b, stable_b in prev:
+        for dn, B_b, rec_b, conv_b, carry_b, zero0_b in prev:
             dn.B = B_b
             dn.rec_state = rec_b
             dn.conv_states = conv_b
             dn.conv_carry = carry_b
             dn._zero_conv0 = zero0_b
-            dn._stable_state = stable_b
 
     def _snapshot_gdn_scratch(self):
         """Snapshot the B=1 GDN scratch (host torch) to restore around the throwaway capture run."""
@@ -1632,7 +1623,7 @@ class Qwen36Model:
                 self._restore_gdn_batched(self._gdn_batched_prev)
                 self._gdn_batched_prev = None
 
-        # Assemble the per-user states into row u in place (_stable_state path).
+        # Assemble the per-user states into row u in place.
         self._assemble_per_user_gdn(per_user_rec, per_user_conv)
 
         # Re-upload the per-user logits as stable device tensors after all allocations.
@@ -1641,7 +1632,7 @@ class Qwen36Model:
     def _assemble_per_user_gdn(self, per_user_rec, per_user_conv):
         """Stitch B per-user B=1 GDN states (host torch) into row u of the batched [B,...] decode
         buffers via assemble_batched_state. The batched GDN bindings MUST already be rebound (writes
-        in place under _stable_state). Shared by prefill_traced_bucket_batched/prefill_chunked_peruser.
+        in place). Shared by prefill_traced_bucket_batched/prefill_chunked_peruser.
 
         per_user_rec[u][li]:  host rec_state snapshot for user u, GDN layer li (mesh dim 0 = devices).
         per_user_conv[u][li]: list of K host conv_states snapshots for user u, GDN layer li.
@@ -2610,75 +2601,22 @@ class Qwen36Model:
             )
         return self._masked_bucket_logits_tp(self._chunked_trace_output, chunk_size, chunk_size)
 
-    def reset_state(self, batch_size=None):
-        """Reset layer state for a new sequence; GDN bound to the external buffers is zeroed in place."""
-        inplace = False
+    def reset_state(self):
+        """Reset layer state for a new sequence."""
         for layer in self.layers:
             if layer.is_full_attention:
                 layer.attention.reset_cache()
-            elif getattr(layer.attention, "_chunk_inplace_state", False):
-                inplace = True
             else:
-                layer.attention.reset_state(batch_size)
-        if inplace:
-            self._reset_dn_state_inplace()
+                layer.attention.reset_state_inplace()
 
     def _reset_gdn_state_for_new_sequence(self):
         """Zero GDN recurrent+conv at sequence start.
 
         Trace capture runs forward twice; GDN state is non-idempotent. Must re-zero before each
-        real sequence. In-place buffers (_chunk_inplace_state) use _reset_dn_state_inplace."""
-        if self.num_devices > 1:
-            # TP: reset_state_inplace preserves decode-trace baked addresses.
-            for layer in self.layers:
-                if not layer.is_full_attention:
-                    layer.attention.reset_state_inplace()
-            return
-        inplace = any(
-            (not l.is_full_attention) and getattr(l.attention, "_chunk_inplace_state", False) for l in self.layers
-        )
-        if inplace:
-            self._reset_dn_state_inplace()
-        else:
-            self.reset_state(batch_size=1)
-
-    def _reset_dn_state_inplace(self):
-        """Zero DN state in place via pre-allocated zero buffers (trace addresses fixed)."""
-        assert self._dn_zero_recurrent is not None, "Call _init_dn_zero_buffers first"
+        real sequence."""
         for layer in self.layers:
-            if layer.is_full_attention:
-                continue
-            dn = layer.attention
-            ttnn.copy(self._dn_zero_recurrent, dn.recurrent_state)
-            ttnn.copy(self._dn_zero_conv, dn.fused_conv_state)
-            # split_conv_state rebuilt lazily on first decode.
-            if dn.split_conv_state is not None:
-                for buf in dn.split_conv_state:
-                    ttnn.deallocate(buf)
-                dn.split_conv_state = None
-
-    def _init_dn_zero_buffers(self):
-        """Allocate shared zero buffers for DN recurrent and conv shapes."""
-        if self._dn_zero_recurrent is not None:
-            return
-        # First DN layer defines shared zero-buffer shapes.
-        first_dn = next(layer.attention for layer in self.layers if not layer.is_full_attention)
-        rec_shape = list(first_dn.recurrent_state.shape)
-        conv_shape = list(first_dn.fused_conv_state.shape)
-        self._dn_zero_recurrent = ttnn.zeros(
-            rec_shape,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        self._dn_zero_conv = ttnn.zeros(
-            conv_shape,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+            if not layer.is_full_attention:
+                layer.attention.reset_state_inplace()
 
     def set_paged_kv_caches(self, kv_caches):
         """Attach paged KV caches to the 8 attention layers."""
@@ -2689,7 +2627,7 @@ class Qwen36Model:
 
     def allocate_kv_caches(self, kv_cache_shape, dtype, batch_size=1):
         """Allocate caches for all 32 layers. Returns only the attention KV caches (for vLLM)."""
-        assert self._deltanet_external_states is None, "allocate_kv_caches already called; deallocate first"
+        assert self._paged_kv_caches is None, "allocate_kv_caches already called; deallocate first"
         # QWEN_SDPA_BF8: bf8 paged KV for SDPA; halves KV memory (gated — validate PCC at long ctx).
         if os.environ.get("QWEN_SDPA_BF8", "0") == "1":
             dtype = ttnn.bfloat8_b
@@ -2702,50 +2640,16 @@ class Qwen36Model:
             v_cache = ttnn.zeros(kv_cache_shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
             kv_caches.append([k_cache, v_cache])
         self.set_paged_kv_caches(kv_caches)
-
-        self._deltanet_external_states = []
-        for layer in self.layers:
-            if not layer.is_full_attention:
-                dn = layer.attention
-                rec = ttnn.from_torch(
-                    torch.zeros(batch_size, dn.num_v_heads, dn.head_k_dim, dn.head_v_dim, dtype=torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                )
-                conv = ttnn.from_torch(
-                    torch.zeros(
-                        batch_size,
-                        dn.conv_kernel_size - 1,
-                        dn.cfg.q_dim + dn.cfg.k_dim + dn.cfg.v_dim,
-                        dtype=torch.bfloat16,
-                    ),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                )
-                dn.set_external_state(rec, conv)
-                dn._chunk_inplace_state = True
-                self._deltanet_external_states.append((rec, conv))
-
-        self._init_dn_zero_buffers()
         return kv_caches
 
     def free_kv_caches(self):
-        """Release KV caches + GDN state for a fresh generation run."""
-        if self._deltanet_external_states is None:
+        """Release KV caches for a fresh generation run."""
+        if self._paged_kv_caches is None:
             return
         if getattr(self, "_chunked_trace_id", None) is not None:
             ttnn.release_trace(self.device, self._chunked_trace_id)
             self._chunked_trace_id = None
         self._chunked_prepared_key = None
-        for layer, (rec, conv) in zip(
-            (l for l in self.layers if not l.is_full_attention), self._deltanet_external_states
-        ):
-            layer.attention._chunk_inplace_state = False
-            ttnn.deallocate(rec)
-            ttnn.deallocate(conv)
-        self._deltanet_external_states = None
         if getattr(self, "_paged_kv_caches", None) is not None:
             for k_cache, v_cache in self._paged_kv_caches:
                 ttnn.deallocate(k_cache)
@@ -2771,10 +2675,6 @@ class Qwen36Model:
             if not layer.is_full_attention:
                 layer.attention.B = batch_size
                 layer.attention.reset_state()
-                # Fixed-address GDN state for decode trace compatibility.
-                layer.attention._stable_state = True
-        # Marker for re-entry assert; TP GDN state lives in module, not external buffers.
-        self._deltanet_external_states = []
         return kv_caches
 
     def _prefill_paged_tp(self, token_ids, page_table, valid_len=None, vision_tokens=None, gdn_collect=False):
@@ -2871,10 +2771,9 @@ class Qwen36Model:
             if layer.is_full_attention:
                 continue
             dn = layer.attention
-            prev.append((dn, dn.B, dn.rec_state, dn.conv_states, dn.conv_carry, dn._zero_conv0, dn._stable_state))
+            prev.append((dn, dn.B, dn.rec_state, dn.conv_states, dn.conv_carry, dn._zero_conv0))
             dn.B = bg
             dn.reset_state()  # builds rec_state [bg,Nv,Dk,Dv], conv_states[*] [1,bg,D], carry, zero0
-            dn._stable_state = True  # forward_prefill_batched writes state in place under this flag
         return prev
 
     def _assemble_groups_gdn_dev(self, group_rec_dev, group_conv_dev):
@@ -2882,7 +2781,7 @@ class Qwen36Model:
         forward_prefill_batched) into the full [B,...] batched decode buffers via device-side
         concat — no host round-trip. rec: concat groups along dim 0 -> [B,Nv,Dk,Dv]; conv_states[m]:
         concat groups along dim 1 -> [1,B,D]. The batched GDN bindings MUST already be rebound
-        (writes in place under _stable_state). Row u == user u because groups are contiguous
+        (writes in place). Row u == user u because groups are contiguous
         (group g = users [g*group_size : ...])."""
         dn_layers = [layer.attention for layer in self.layers if not layer.is_full_attention]
         ng = len(group_rec_dev)
@@ -3103,7 +3002,7 @@ class Qwen36Model:
         self._build_request_rope(token_ids[:, :valid_len] if valid_len else token_ids, vision_tokens)
         # Keep page_table as torch.Tensor for CPU slicing in prefill_layer_chunked.
         page_table_torch = page_table if isinstance(page_table, torch.Tensor) else ttnn.to_torch(page_table)
-        self.reset_state(batch_size=B)
+        self.reset_state()
 
         # Concat-based prefill for SDPA.
         if T > 1024:
@@ -3131,14 +3030,6 @@ class Qwen36Model:
             page_table_torch, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
         )
         self._fill_paged_cache_from_prefill(page_table_device)
-
-        # Fuse DeltaNet conv states for decode.
-        for layer in self.layers:
-            if not layer.is_full_attention:
-                dn = layer.attention
-                if dn.fused_conv_state is None and dn.conv_state_q is not None:
-                    dn.fused_conv_state = ttnn.concat([dn.conv_state_q, dn.conv_state_k, dn.conv_state_v], dim=2)
-                    dn.fused_conv_state = ttnn.to_layout(dn.fused_conv_state, ttnn.TILE_LAYOUT)
 
         return logits
 
@@ -3293,7 +3184,7 @@ class Qwen36Model:
                 saved.append(
                     {
                         "recurrent": ttnn.to_torch(dn.recurrent_state),
-                        "conv": ttnn.to_torch(dn.fused_conv_state) if dn.fused_conv_state is not None else None,
+                        "conv": ttnn.to_torch(dn.fused_conv_state),
                     }
                 )
         return saved
@@ -3310,11 +3201,9 @@ class Qwen36Model:
                 )
                 ttnn.copy(restored, dn.recurrent_state)
                 ttnn.deallocate(restored)
-                if saved["conv"] is not None:
-                    restored_conv = ttnn.from_torch(
-                        saved["conv"], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-                    )
-                    ttnn.copy(restored_conv, dn.fused_conv_state)
-                    ttnn.deallocate(restored_conv)
-                    dn._restore_split_conv_from_fused()
+                restored_conv = ttnn.from_torch(
+                    saved["conv"], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+                )
+                ttnn.copy(restored_conv, dn.fused_conv_state)
+                ttnn.deallocate(restored_conv)
                 idx += 1
