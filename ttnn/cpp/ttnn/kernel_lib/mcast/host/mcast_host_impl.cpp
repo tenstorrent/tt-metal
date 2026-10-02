@@ -460,6 +460,9 @@ void McastImpl::prepare_arguments_() const {
             "Mcast: chain forwarding requires all receivers in handshake_cores");
     }
     const bool rotating = groups_.front().rotating();
+    TT_FATAL(
+        cfg_.handshake || !rotating || cfg_.data_ready != dataflow_kernel_lib::DataReadySignal::Flag,
+        "Mcast: rotating senders with Flag signaling require handshaking");
     layout_.rotating_span = rotating ? groups_.front().num_senders() : 0;
     layout_.flags = detail::mcast_flags(cfg_);
     std::optional<uint32_t> first_ack, first_remote;
