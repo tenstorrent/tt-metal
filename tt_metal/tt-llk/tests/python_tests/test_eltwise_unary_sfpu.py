@@ -966,7 +966,13 @@ def _relu_max_probe_spec(threshold, formats, dest_acc):
         -3.0,
     ]
     if specials_safe(formats.input_format, formats.output_format, dest_acc):
-        values += [float("inf"), float("-inf"), float("nan"), _NEGATIVE_NAN]
+        values += [float("inf"), float("-inf"), float("nan")]
+        if formats.input_format.is_32_bit():
+            # A negative NaN only reaches the device from a 32-bit stimulus. The custom
+            # strategy materialises a 16-bit tensor through torch's bfloat16 cast, which
+            # canonicalises every NaN to 0x7fc0 (sign clear), so on Float16_b this lane
+            # was the +NaN lane twice and the -NaN fold was never driven there.
+            values.append(_NEGATIVE_NAN)
     if negative_zero_delivered(formats.input_format, dest_acc):
         values.append(-0.0)
     if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes:

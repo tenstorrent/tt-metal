@@ -43,6 +43,19 @@ _SCALAR_VALUE = 2.0
 _SCALAR_VALUE_BITS = struct.unpack("<I", struct.pack("<f", _SCALAR_VALUE))[0]
 
 
+def _where_condition(size, dtype, generator):
+    """Exactly 0 or exactly 1 per lane, half and half, in any format."""
+    return (torch.rand(size, generator=generator) < 0.5).to(dtype)
+
+
+# The where tests' condition and value operands. The condition is a fair coin so the
+# "mixed" case selects from both value operands (see test_ttnn_where); the values span
+# both signs and are exact in every format the test drives, bfloat16 included (integers
+# up to 256 are exact there, which the Int32 compare relies on).
+_WHERE_CONDITION_SPEC = StimuliSpec(distribution=_where_condition, seed=0)
+_WHERE_VALUE_SPEC = StimuliSpec.uniform(low=-100.0, high=100.0, seed=1)
+
+
 # Helper check function
 def torch_equal_nan(a, b):
     return torch.all((a == b) | (torch.isnan(a) & torch.isnan(b)))
@@ -147,11 +160,11 @@ def _run_sfpu_ternary(
     )
 
     res_from_L1 = configuration.run().result
-    res_from_L1 = res_from_L1[: len(golden)]
-
-    assert len(res_from_L1) == len(
+    # Checked before the slice, which would otherwise hide an over-long result.
+    assert len(res_from_L1) >= len(
         golden
-    ), "Result tensor and golden tensor are not of the same length"
+    ), "Result tensor is shorter than the golden tensor"
+    res_from_L1 = res_from_L1[: len(golden)]
 
     torch_format = format_dict[formats.output_format]
     golden_tensor = torch.tensor(golden, dtype=torch_format).flatten()
@@ -326,14 +339,18 @@ def test_ttnn_where(
 
     # 64x64 = 2x2 tiles: exercises the multi-tile block loop in sfpu_ternary_test.cpp.
     input_dimensions = [64, 64]
-    sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
+    # The "mixed" condition has to be false on a real share of lanes. A uniform(0, 1)
+    # draw is zero on none of 4096 Float32 lanes and 20 of 4096 bfloat16 ones, so that
+    # case was all_ones in disguise and src_C was never selected on the float formats.
+    # Half the lanes are exactly 0 and half exactly 1 on every format; the integer formats
+    # read the same {0, 1}.
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        spec_A=sfpu_false_spec,
-        spec_B=sfpu_false_spec,
+        spec_A=_WHERE_CONDITION_SPEC,
+        spec_B=_WHERE_VALUE_SPEC,
     )
 
     src_C, tile_cnt_C, _, _ = generate_stimuli(
@@ -341,8 +358,8 @@ def test_ttnn_where(
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        spec_A=sfpu_false_spec,
-        spec_B=sfpu_false_spec,
+        spec_A=_WHERE_VALUE_SPEC,
+        spec_B=_WHERE_VALUE_SPEC,
     )
 
     # Modify the condition tensor based on test case
@@ -384,11 +401,11 @@ def test_ttnn_where(
     )
 
     res_from_L1 = configuration.run().result
-    res_from_L1 = res_from_L1[: len(golden)]
-
-    assert len(res_from_L1) == len(
+    # Checked before the slice, which would otherwise hide an over-long result.
+    assert len(res_from_L1) >= len(
         golden
-    ), "Result tensor and golden tensor are not of the same length"
+    ), "Result tensor is shorter than the golden tensor"
+    res_from_L1 = res_from_L1[: len(golden)]
 
     golden_tensor = torch.tensor(
         golden,

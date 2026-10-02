@@ -261,6 +261,74 @@ def _reciprocal_spec(fmt: DataFormat) -> OperandSpecs:
     return OperandSpecs(spec_A=spec)
 
 
+def _block_float_ratio_limited(
+    fmt: DataFormat,
+    wide: StimuliSpec,
+    bfp8: StimuliSpec,
+    bfp4: StimuliSpec,
+) -> OperandSpecs:
+    """*wide* for a per-element format, a ratio-limited range for a block float.
+
+    The same reasoning as _reciprocal_spec, for ops whose pole or domain edge sits where
+    a wide range collapses: inside a 16-element block the shared exponent follows the
+    largest element, and everything more than ~10:1 (Bfp8_b) or ~4:1 (Bfp4_b, which
+    truncates the Bfp8 mantissa to 3 bits) below it quantizes to zero or to the nearest
+    coarse step. Measured on the previous Log domain (1e-4..1e3, Bfp8_b input): 61% of
+    the lanes arrived as exactly 0 and the cell tested log(0), not log.
+    """
+    if fmt in (DataFormat.Bfp4_b, DataFormat.Bfp2_b):
+        return OperandSpecs(spec_A=bfp4)
+    if fmt in _BLOCK_FLOAT_FORMATS:
+        return OperandSpecs(spec_A=bfp8)
+    return OperandSpecs(spec_A=wide)
+
+
+def _log_spec(fmt: DataFormat) -> OperandSpecs:
+    """x > 0 over several decades, or a block-safe ratio around 1 for a block float."""
+    return _block_float_ratio_limited(
+        fmt,
+        wide=StimuliSpec(distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=1e3),
+        bfp8=StimuliSpec.uniform(low=0.5, high=5.0),
+        bfp4=StimuliSpec.uniform(low=0.5, high=2.0),
+    )
+
+
+def _rsqrt_spec(fmt: DataFormat) -> OperandSpecs:
+    """x > 0; the block-float ranges keep every element off the x = 0 pole."""
+    return _block_float_ratio_limited(
+        fmt,
+        wide=StimuliSpec(
+            distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=100.0
+        ),
+        bfp8=StimuliSpec.uniform(low=0.5, high=5.0),
+        bfp4=StimuliSpec.uniform(low=0.5, high=2.0),
+    )
+
+
+def _log1p_spec(fmt: DataFormat) -> OperandSpecs:
+    """x > -1. A block float's negative bound is kept where no element can round to -1:
+    -0.99 in a Bfp8_b block whose maximum is 10 sits on a 0.125 step and read -1.0, i.e.
+    log1p(-1) = -inf, on 18 lanes of the old domain."""
+    return _block_float_ratio_limited(
+        fmt,
+        wide=StimuliSpec.uniform(low=-0.99, high=10.0),
+        bfp8=StimuliSpec.uniform(low=-0.5, high=4.0),
+        bfp4=StimuliSpec.uniform(low=-0.25, high=1.0),
+    )
+
+
+def _acosh_spec(fmt: DataFormat) -> OperandSpecs:
+    """x >= 1. Bfp8_b keeps the wide range (1.0 is on the step of a block topping at
+    10); Bfp4_b's 3-bit truncation drops 1.0 to 0 once the block maximum reaches 8, so
+    its range stays under 4:1."""
+    return _block_float_ratio_limited(
+        fmt,
+        wide=StimuliSpec.uniform(low=1.0, high=10.0),
+        bfp8=StimuliSpec.uniform(low=1.0, high=10.0),
+        bfp4=StimuliSpec.uniform(low=1.0, high=2.0),
+    )
+
+
 def _square_spec(fmt: DataFormat) -> OperandSpecs:
     """Safe input range for square(x) = x^2 per format to avoid overflow."""
     if fmt in _E4M3_FORMATS:
@@ -298,10 +366,8 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Abs: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
-    # acosh: domain x >= 1
-    MathOperation.Acosh: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=1.0, high=10.0)
-    ),
+    # acosh: domain x >= 1, block-float aware (see _acosh_spec)
+    MathOperation.Acosh: _acosh_spec,
     # asinh: all reals
     MathOperation.Asinh: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
@@ -348,25 +414,15 @@ _OP_DOMAIN_REGISTRY: Dict[
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=1.0)
     ),
     # gelu: gaussian-sampled (mean=0, std=3) — most inputs near 0, but still some large ones.
+    # No low/high: the gaussian strategy ignores them (std=3 reaches |x| ~ 14), and a
+    # bound the sampler does not apply would only mislead _in_spec_domain.
     MathOperation.Gelu: OperandSpecs(
-        spec_A=StimuliSpec(
-            distribution=DistributionKind.GAUSSIAN,
-            mean=0.0,
-            std=3.0,
-            low=-5.0,
-            high=5.0,
-        )
+        spec_A=StimuliSpec(distribution=DistributionKind.GAUSSIAN, mean=0.0, std=3.0)
     ),
     # gelu_appx: LUT approximation of gelu — same Gaussian spread as gelu so both
     # the near-0 transition and the saturating tails exercise the piecewise LUT.
     MathOperation.GeluAppx: OperandSpecs(
-        spec_A=StimuliSpec(
-            distribution=DistributionKind.GAUSSIAN,
-            mean=0.0,
-            std=3.0,
-            low=-5.0,
-            high=5.0,
-        )
+        spec_A=StimuliSpec(distribution=DistributionKind.GAUSSIAN, mean=0.0, std=3.0)
     ),
     # gelu_tanh: tanh approximation of gelu — same Gaussian spread exercises both
     # tails (saturation) and values near 0 (the +-0 sign path).
@@ -376,34 +432,18 @@ _OP_DOMAIN_REGISTRY: Dict[
     # gelu_derivative: d/dx gelu; Gaussian spread hits both saturating tails
     # (->0 and ->1) and the transition region around 0.
     MathOperation.GeluDerivative: OperandSpecs(
-        spec_A=StimuliSpec(
-            distribution=DistributionKind.GAUSSIAN,
-            mean=0.0,
-            std=3.0,
-            low=-5.0,
-            high=5.0,
-        )
+        spec_A=StimuliSpec(distribution=DistributionKind.GAUSSIAN, mean=0.0, std=3.0)
     ),
     # hardsigmoid: linear region between -3 and 3, clipped outside
     MathOperation.Hardsigmoid: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-4.0, high=4.0)
     ),
-    # log: domain x > 0; log-uniform spans several decades
-    MathOperation.Log: OperandSpecs(
-        spec_A=StimuliSpec(
-            distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=1e3
-        )
-    ),
+    # log: domain x > 0; log-uniform spans several decades, block-float aware (_log_spec)
+    MathOperation.Log: _log_spec,
     # log_with_base (log2): same positive domain as natural log.
-    MathOperation.LogWithBase: OperandSpecs(
-        spec_A=StimuliSpec(
-            distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=1e3
-        )
-    ),
-    # log1p: domain x > -1; log1p(x) = log(1 + x)
-    MathOperation.Log1p: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-0.99, high=10.0)
-    ),
+    MathOperation.LogWithBase: _log_spec,
+    # log1p: domain x > -1; log1p(x) = log(1 + x), block-float aware (_log1p_spec)
+    MathOperation.Log1p: _log1p_spec,
     # neg: all reals
     MathOperation.Neg: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
@@ -442,12 +482,8 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Threshold: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
-    # rsqrt: domain x > 0; log-uniform covers a wide positive range
-    MathOperation.Rsqrt: OperandSpecs(
-        spec_A=StimuliSpec(
-            distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=100.0
-        )
-    ),
+    # rsqrt: domain x > 0; log-uniform covers a wide positive range, block-float aware
+    MathOperation.Rsqrt: _rsqrt_spec,
     # expm1_cw (component-wise expm1): same safe range as the standalone expm1.
     MathOperation.Expm1Cw: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
