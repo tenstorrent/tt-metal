@@ -275,6 +275,7 @@ def run_positional_mcast_case(
     rounds=None,
     suppress_round_output=False,
     stress_flag_source_lifetime=False,
+    delay_receiver_construction=False,
 ):
     """Use unified host assembly with the same payload checks as a mcast."""
 
@@ -308,6 +309,7 @@ def run_positional_mcast_case(
         with_barrier=False,
         suppress_round_output=suppress_round_output,
         stress_flag_source_lifetime=stress_flag_source_lifetime,
+        delay_receiver_construction=delay_receiver_construction,
     )
 
 
@@ -333,6 +335,7 @@ def _run_channel(
     with_barrier=True,
     suppress_round_output=False,
     stress_flag_source_lifetime=False,
+    delay_receiver_construction=False,
 ):
     # The config getter uses the runtime NOC enum, while ttnn.NOC is the descriptor enum.
     noc = config.noc.value
@@ -389,6 +392,8 @@ def _run_channel(
         defines.append(("MCAST_TEST_SUPPRESS_ROUND_OUTPUT", "1"))
     if stress_flag_source_lifetime:
         defines.append(("MCAST_TEST_STRESS_FLAG_SOURCE_LIFETIME", "1"))
+    if delay_receiver_construction:
+        defines.append(("MCAST_TEST_DELAY_RECEIVER_CONSTRUCTION", "1"))
     kernels = []
     face_rt = ttnn.RuntimeArgs()
     for x, y in dispatch:
