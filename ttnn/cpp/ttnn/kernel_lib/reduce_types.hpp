@@ -27,8 +27,6 @@ enum class ReduceFp32Mode : std::uint8_t { Fast = 0, Accurate = 1 };
 
 namespace ttnn::kernel_lib {
 
-enum class ReducePath : std::uint8_t { Tiled = 0 };
-
 // The accumulation behavior of one independently serialized reduce call.
 // This is planned on the host; a consuming kernel must not infer it from the
 // call's position in a list.

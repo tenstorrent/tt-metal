@@ -1463,10 +1463,6 @@ namespace detail {
 
 template <typename Call, typename PostReduceOp>
 ALWI void reduce_planned_variant(PostReduceOp post_reduce_op) {
-    static_assert(
-        Call::path == ttnn::kernel_lib::ReducePath::Tiled,
-        "The planned reduce<Call>() overload currently supports tiled calls only");
-
     auto shape = ReduceInputBlockShape::of(Call::rows, Call::columns, Call::batches);
     auto layout = Call::row_stride == 0 ? ReduceInputMemoryLayout::contiguous()
                                         : ReduceInputMemoryLayout::with_row_stride(Call::row_stride);

@@ -154,8 +154,6 @@ private:
     static constexpr std::uint32_t chunk_and_auxiliary = word<reduce_plan_args::CallWord::ChunkAndAuxiliary>();
 
 public:
-    static constexpr ReducePath path = static_cast<ReducePath>(reduce_plan_args::extract(
-        configuration, reduce_plan_args::config::path_shift, reduce_plan_args::config::path_mask));
     static constexpr ckernel::PoolType reduce_type = static_cast<ckernel::PoolType>(reduce_plan_args::extract(
         configuration, reduce_plan_args::config::math_shift, reduce_plan_args::config::math_mask));
     static constexpr ckernel::ReduceDim reduce_dim = static_cast<ckernel::ReduceDim>(reduce_plan_args::extract(
