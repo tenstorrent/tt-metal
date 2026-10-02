@@ -119,9 +119,13 @@ ALWI void compute_kernel_hw_startup(std::uint32_t icb0, std::uint32_t ocb) {
  * for 32-bit destination reads.
  * Safe to call mid-kernel without re-running compute_kernel_hw_startup.
  *
+ * All three TRISC threads must reach the call together, between ops: every
+ * dest section committed before it must already be packed and released, and
+ * every unpack-to-dest tile must already be consumed. Work issued after the
+ * call on any thread sees the new configuration.
+ *
  * Must be paired with disable_fp32_dest_acc() when switching back to
  * BF16 accumulation mode within the same kernel.
-
  *
  * Return value: None
  */
@@ -143,6 +147,11 @@ ALWI void enable_fp32_dest_acc() {
  * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data)
  * to disable 32-bit destination reads.
  * Safe to call mid-kernel without re-running compute_kernel_hw_startup.
+ *
+ * All three TRISC threads must reach the call together, between ops: every
+ * dest section committed before it must already be packed and released, and
+ * every unpack-to-dest tile must already be consumed. Work issued after the
+ * call on any thread sees the new configuration.
  *
  * Return value: None
  */
