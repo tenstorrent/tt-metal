@@ -104,6 +104,8 @@ get_padded_slice_runtime_args_rm_sharded_output(
     [[maybe_unused]] uint32_t num_cores_channels =
         ttnn::operations::experimental::detail::get_num_cores_channels_from_sharded_tensor(output_tensor);
     int input_page_size = input_shape[-1] * input_tensor.element_size();
+    // Sliced last-dim width. The reader base already includes the slice's start offset.
+    const int slice_row_size_bytes = static_cast<int>(actual_output_shape[-1] * input_tensor.element_size());
     [[maybe_unused]] uint32_t input_row_size_bytes =
         tt::div_up(input_shape[-1], num_cores_channels) * input_tensor.element_size();
 
@@ -317,7 +319,7 @@ ProgramDescriptor PaddedSliceRMProgramFactory::create_descriptor(
 
     desc.cbs.push_back(make_slice_cb_descriptor(
         output_cb_index, total_cores, output_cb_page_size, num_output_sticks_per_core, cb_data_format, dst_buffer));
-    if (output_row_size_bytes > input_row_size_bytes) {
+    if (output_row_size_bytes > slice_row_size_bytes) {
         pad_output_row = true;
         desc.cbs.push_back(
             make_slice_cb_descriptor(temp_pad_cb_index, total_cores, output_row_size_bytes, 1, cb_data_format));
