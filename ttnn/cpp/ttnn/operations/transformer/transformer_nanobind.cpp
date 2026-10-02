@@ -33,6 +33,9 @@ void py_module(nb::module_& mod) {
                 std::size_t,
                 std::optional<bool>,
                 uint32_t,
+                uint32_t,
+                std::optional<tt::tt_metal::MathFidelity>,
+                bool,
                 std::optional<tt::tt_metal::MathFidelity>,
                 std::optional<tt::tt_metal::MathFidelity>>(),
             nb::kw_only(),
@@ -42,6 +45,9 @@ void py_module(nb::module_& mod) {
             nb::arg("k_chunk_size").noconvert(),
             nb::arg("exp_approx_mode") = nb::none(),
             nb::arg("max_cores_per_head_batch") = 16,
+            nb::arg("max_k_splits") = 1,
+            nb::arg("matmul_math_fidelity") = nb::none(),
+            nb::arg("segmented_accumulation") = false,
             nb::arg("qk_math_fidelity") = nb::none(),
             nb::arg("pv_math_fidelity") = nb::none())
         .def_rw("compute_with_storage_grid_size", &SDPAProgramConfig::compute_with_storage_grid_size)
@@ -50,19 +56,25 @@ void py_module(nb::module_& mod) {
         .def_rw("k_chunk_size", &SDPAProgramConfig::k_chunk_size)
         .def_rw("exp_approx_mode", &SDPAProgramConfig::exp_approx_mode)
         .def_rw("max_cores_per_head_batch", &SDPAProgramConfig::max_cores_per_head_batch)
+        .def_rw("max_k_splits", &SDPAProgramConfig::max_k_splits)
+        .def_rw("matmul_math_fidelity", &SDPAProgramConfig::matmul_math_fidelity)
+        .def_rw("segmented_accumulation", &SDPAProgramConfig::segmented_accumulation)
         .def_rw("qk_math_fidelity", &SDPAProgramConfig::qk_math_fidelity)
         .def_rw("pv_math_fidelity", &SDPAProgramConfig::pv_math_fidelity)
         .def("__repr__", [](const SDPAProgramConfig& config) {
             return fmt::format(
                 "SDPAProgramConfig(compute_with_storage_grid_size={}, sub_core_grids={}, q_chunk_size={}, "
-                "k_chunk_size={}, exp_approx_mode={}, max_cores_per_head_batch={}, qk_math_fidelity={}, "
-                "pv_math_fidelity={})",
+                "k_chunk_size={}, exp_approx_mode={}, max_cores_per_head_batch={}, max_k_splits={}, "
+                "matmul_math_fidelity={}, segmented_accumulation={}, qk_math_fidelity={}, pv_math_fidelity={})",
                 config.compute_with_storage_grid_size,
                 config.sub_core_grids,
                 config.q_chunk_size,
                 config.k_chunk_size,
                 config.exp_approx_mode,
                 config.max_cores_per_head_batch,
+                config.max_k_splits,
+                config.matmul_math_fidelity,
+                config.segmented_accumulation,
                 config.qk_math_fidelity,
                 config.pv_math_fidelity);
         });

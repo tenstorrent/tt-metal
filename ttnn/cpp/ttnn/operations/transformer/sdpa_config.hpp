@@ -19,7 +19,18 @@ struct SDPAProgramConfig {
     std::size_t k_chunk_size;
     std::optional<bool> exp_approx_mode;
     uint32_t max_cores_per_head_batch = 16;
-    // Streaming kernels' QK^T and PV matmul fidelity; nullopt falls back to the compute kernel config.
+    // Ring joint chunked prefill only: up to this many cores may share one (head, Q chunk) unit along K when the
+    // units leave the grid idle. 1 disables the split.
+    uint32_t max_k_splits = 1;
+    // Ring joint streaming compute only: fidelity of the QK^T and softmax @ V matmuls; the rest of the kernel keeps
+    // the compute kernel config's.
+    std::optional<tt::tt_metal::MathFidelity> matmul_math_fidelity;
+    // Ring joint chunked prefill only: each core accumulates each ring iteration separately and merges, so no bf16
+    // running sum spans the whole prefix. Ignored where K is split; the op refuses it when a core would hold several
+    // Q chunks (raise q_chunk_size).
+    bool segmented_accumulation = false;
+    // Streaming compute (SDPA and ring joint): the QK^T matmul's and the softmax @ V matmul's own fidelity; each
+    // takes precedence over matmul_math_fidelity for its phase.
     std::optional<tt::tt_metal::MathFidelity> qk_math_fidelity;
     std::optional<tt::tt_metal::MathFidelity> pv_math_fidelity;
 };

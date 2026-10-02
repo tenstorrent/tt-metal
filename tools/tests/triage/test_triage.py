@@ -11,6 +11,7 @@ from datetime import timedelta
 import os
 import sys
 import pytest
+import struct
 import subprocess
 import time
 
@@ -401,6 +402,26 @@ class TestTriage:
         assert (
             len(non_state_failures) == 0
         ), f"Check NOC status check failed with {len(non_state_failures)} failures: {non_state_failures}"
+
+    def test_dump_circular_buffers(self):
+        result = self.run_triage_script("dump_circular_buffers.py")
+        assert result is not None, "Expected CB rows for the hung core"
+
+        # The compute kernel waited on c_0 and c_1, then hit ebreak before popping them or pushing c_16.
+        location = OnChipCoordinate.create("0,0", result[0].device_description.device)
+        counts = {row.result.cb: (row.result.pushed, row.result.popped) for row in result if row.location == location}
+        assert counts == {0: (1, 0), 1: (1, 0), 16: (0, 0)}, f"Unexpected CB state on (0,0): {counts}"
+
+    def test_dump_circular_buffers_content(self):
+        result = self.run_triage_script("dump_circular_buffers.py", argv=["--dump-cb-content"])
+        location = OnChipCoordinate.create("0,0", result[0].device_description.device)
+        rows = {row.result.cb: row.result for row in result if row.location == location}
+        # The hang app fills its two input tiles with random bf16 values in [0, 14] and [0, 8].
+        for cb, limit in ((0, 14.0), (1, 8.0)):
+            data = bytes.fromhex(rows[cb].content)
+            assert len(data) == rows[cb].size
+            values = [struct.unpack("<f", struct.pack("<I", u << 16))[0] for (u,) in struct.iter_unpack("<H", data)]
+            assert all(0.0 <= v <= limit for v in values), f"CB{cb} does not hold the input tile"
 
     def test_dump_fast_dispatch(self):
         self.run_triage_script("dump_fast_dispatch.py")

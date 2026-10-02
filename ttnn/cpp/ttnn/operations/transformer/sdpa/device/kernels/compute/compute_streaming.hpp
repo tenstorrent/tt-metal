@@ -23,14 +23,6 @@
 #include "api/dataflow/circular_buffer.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
-// Per-phase matmul fidelity (integer MathFidelity from the host); -1 falls back to MATH_FIDELITY.
-#ifndef QK_MATH_FIDELITY
-#define QK_MATH_FIDELITY -1
-#endif
-#ifndef PV_MATH_FIDELITY
-#define PV_MATH_FIDELITY -1
-#endif
-
 // reduce_trigger uses a packer->unpacker semaphore handshake to start the reduce early and skip the
 // input CB wait. Quasar has no such handshake, so it stays disabled there and the normal CB
 // synchronization is kept (see can_reduce_trigger below).
@@ -39,6 +31,76 @@ constexpr bool reduce_trigger_supported = false;
 #else
 constexpr bool reduce_trigger_supported = true;
 #endif
+
+// QK_MATH_FIDELITY and PV_MATH_FIDELITY (the host's integer MathFidelity; -1 keeps the compute config's) set the
+// fidelity of the QK^T and softmax @ V matmuls. A LoFi replay image is specific to the matmul's shape, so each PV
+// setup re-records it instead of reusing the last one whenever a LoFi image can be live: a LoFi phase, or a LoFi
+// compute config, whose normalize_row records a LoFi image between two PV setups. HiFi levels all record the same
+// image, so HiFi over HiFi can reuse it.
+#ifndef QK_MATH_FIDELITY
+#define QK_MATH_FIDELITY -1
+#endif
+#ifndef PV_MATH_FIDELITY
+#define PV_MATH_FIDELITY -1
+#endif
+// The compute config's fidelity as seen by every TRISC (MATH_FIDELITY exists only on math and pack).
+#ifdef SDPA_COMPUTE_LOFI
+constexpr bool sdpa_compute_lofi = true;
+#else
+constexpr bool sdpa_compute_lofi = false;
+#endif
+constexpr bool sdpa_lofi_image_possible = QK_MATH_FIDELITY == static_cast<int>(MathFidelity::LoFi) ||
+                                          PV_MATH_FIDELITY == static_cast<int>(MathFidelity::LoFi) || sdpa_compute_lofi;
+
+template <int fidelity>
+ALWI void sdpa_mm_init(
+    uint32_t in0_cb, uint32_t in1_cb, bool transpose, uint32_t ct_dim, uint32_t rt_dim, uint32_t kt_dim) {
+    if constexpr (fidelity >= 0) {
+        mm_no_mop_init_short_fidelity<static_cast<MathFidelity>(fidelity)>(
+            in0_cb, in1_cb, transpose, ct_dim, rt_dim, kt_dim);
+    } else {
+        mm_no_mop_init_short(in0_cb, in1_cb, transpose, ct_dim, rt_dim, kt_dim);
+    }
+}
+
+template <int fidelity>
+ALWI void sdpa_mm_reinit(
+    uint32_t in0_cb, uint32_t in1_cb, bool transpose, uint32_t ct_dim, uint32_t rt_dim, uint32_t kt_dim) {
+    if constexpr (fidelity >= 0) {
+        mm_no_mop_reinit_short_fidelity<static_cast<MathFidelity>(fidelity)>(
+            in0_cb, in1_cb, transpose, ct_dim, rt_dim, kt_dim);
+    } else {
+        mm_no_mop_reinit_short(in0_cb, in1_cb, transpose, ct_dim, rt_dim, kt_dim);
+    }
+}
+
+ALWI void sdpa_pv_mm_setup(
+    uint32_t in0_cb, uint32_t in1_cb, bool transpose, uint32_t ct_dim, uint32_t rt_dim, uint32_t kt_dim) {
+    if constexpr (sdpa_lofi_image_possible) {
+        sdpa_mm_init<PV_MATH_FIDELITY>(in0_cb, in1_cb, transpose, ct_dim, rt_dim, kt_dim);
+    } else {
+        sdpa_mm_reinit<PV_MATH_FIDELITY>(in0_cb, in1_cb, transpose, ct_dim, rt_dim, kt_dim);
+    }
+}
+
+template <int fidelity>
+ALWI void sdpa_matmul_block_no_mop(
+    uint32_t in0_cb,
+    uint32_t in1_cb,
+    uint32_t in0_index,
+    uint32_t in1_index,
+    uint32_t idst,
+    bool transpose,
+    uint32_t ct_dim,
+    uint32_t rt_dim,
+    uint32_t kt_dim) {
+    if constexpr (fidelity >= 0) {
+        matmul_block_no_mop_fidelity<static_cast<MathFidelity>(fidelity)>(
+            in0_cb, in1_cb, in0_index, in1_index, idst, transpose, ct_dim, rt_dim, kt_dim);
+    } else {
+        matmul_block_no_mop(in0_cb, in1_cb, in0_index, in1_index, idst, transpose, ct_dim, rt_dim, kt_dim);
+    }
+}
 
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
 // When ENABLED=true: RAII profileScope writes timestamps (same as DeviceZoneScopedN)
@@ -120,6 +182,8 @@ struct AccumulatorHalf {
 // When each core processes exactly 1 Q chunk, this state carries across ring iterations.
 struct RingAccumulatorState {
     AccumulatorHalf prev, cur;
+    // K chunks the last single-Q-chunk sdpa_ring_v2 call accumulated (0: it left no state in prev).
+    uint32_t last_call_k_chunks = 0;
 };
 
 // Ring-streaming lightweight-mask context. Field NAMES match LightweightMaskContext so sdpa_ring_v2's
@@ -351,7 +415,7 @@ void blocked_matmul_and_pack(
     uint32_t in0_index = in0_index_start;
     uint32_t in1_index = in1_index_start;
     for (uint32_t inner = 0; inner < inner_dim; ++inner) {
-        matmul_block_no_mop<fidelity>(
+        sdpa_matmul_block_no_mop<fidelity>(
             in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, matmul_stride);
         in0_index++;
         in1_index += in1_stride;
@@ -399,7 +463,7 @@ void inplace_v_matmul_pack_batched(
             uint32_t in0_index = in0_index_start;
             uint32_t in1_index = (vs0 + c) * KT_stride;
             for (uint32_t inner = 0; inner < inner_dim; ++inner) {
-                matmul_block_no_mop<fidelity>(
+                sdpa_matmul_block_no_mop<fidelity>(
                     in0_cb, in1_cb, in0_index, in1_index, c * subblock_h, false, 1, subblock_h, KT_stride);
                 in0_index++;
                 in1_index++;
@@ -410,17 +474,6 @@ void inplace_v_matmul_pack_batched(
         configure_row_pack_width(out_cb, cols);
         pack_contiguous_rows_nocfg(out_cb, 0, subblock_h, vDHt, vs0, cols);
         tile_regs_release();
-    }
-}
-
-// PV-phase matmul re-entry. The replay image recorded by the QK^T init serves PV only at the same, non-LoFi
-// fidelity (a LoFi image bakes the init's ct/rt); otherwise record a fresh one.
-ALWI void pv_mm_no_mop_reinit_short(
-    uint32_t in0_cb, uint32_t in1_cb, uint32_t ct_dim, uint32_t rt_dim, uint32_t kt_dim) {
-    if constexpr (PV_MATH_FIDELITY != QK_MATH_FIDELITY || PV_MATH_FIDELITY == 0) {
-        mm_no_mop_init_short<PV_MATH_FIDELITY>(in0_cb, in1_cb, false, ct_dim, rt_dim, kt_dim);
-    } else {
-        mm_no_mop_reinit_short<PV_MATH_FIDELITY>(in0_cb, in1_cb, false, ct_dim, rt_dim, kt_dim);
     }
 }
 
@@ -1361,7 +1414,7 @@ static void sdpa_inner_loop_step(
 
         sdpa_maybe_pack_reconfig_data_format<cb_normalized_out, cb_qkt_im>();
         sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_identity_scale_in, cb_q_in>();
-        mm_no_mop_init_short<QK_MATH_FIDELITY>(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
+        sdpa_mm_init<QK_MATH_FIDELITY>(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
         // Configure pack once before the kt loop for cb_qkt_im. Both sub_exp
         // and blocked_matmul_and_pack skip their internal configure (same cb+width).
         // sub_exp's configure_single_tile_pack(reduce_cb) clobbers the global to 1,
@@ -1417,8 +1470,7 @@ static void sdpa_inner_loop_step(
                     /*skip_pack_configure=*/true);
                 sdpa_maybe_pack_reconfig_data_format<cb_recip_scratch, cb_qkt_im>();
                 sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in>();
-                mm_no_mop_reinit_short<QK_MATH_FIDELITY>(
-                    cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
+                sdpa_mm_reinit<QK_MATH_FIDELITY>(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
             }
             {
                 MaybeDeviceZoneScopedN(profiling_enabled, "Q@KT MM+Pack");
@@ -1643,7 +1695,7 @@ static void sdpa_inner_loop_step(
                         // cb_qkt_im rows are laid out at KT_stride even when this kt_sub only consumes a
                         // narrower logical width. Keep unpack init on the physical stride; inner_dim below
                         // still limits how many V rows are multiplied.
-                        pv_mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, qktv_subblock_w, qktv_h, KT_stride);
+                        sdpa_pv_mm_setup(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
                         configure_row_pack_width(out_cb, qktv_subblock_w);
                         if constexpr (qktv_first_group_reads_inplace_row) {
                             // UNPACK half of the rendezvous posted above.
@@ -1700,7 +1752,7 @@ static void sdpa_inner_loop_step(
                     MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
                     sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
                         out_cb, out_cb);
-                    pv_mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, qktv_subblock_w, qktv_h, KT_stride);
+                    sdpa_pv_mm_setup(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
                     inplace_v_matmul_pack_batched<vDHt, dst_size, qktv_h, PV_MATH_FIDELITY>(
                         cb_qkt_im,
                         cb_v_in,
@@ -1812,7 +1864,7 @@ static void sdpa_inner_loop_step(
                     out_cb, out_cb);
                 // See the q_subblock-0 V matmul above: active_Sk can be narrower than the physical
                 // cb_qkt_im row stride, but the unpacker is configured for the physical layout.
-                pv_mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, qktv_subblock_w, cur_h, KT_stride);
+                sdpa_pv_mm_setup(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, KT_stride);
                 // Configure once before v_subblock loop; skip inside.
                 configure_row_pack_width(out_cb, qktv_subblock_w);
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
@@ -2367,6 +2419,8 @@ template <
     // Rotated Q split: map q-loop positions through the fixed base range and moving remainder.
     // Off by default (position is the flat id).
     bool rotated_q_split_enabled = false,
+    // Dense chunked prefill: skip K chunks past this device's last Q row (the reader mirrors it).
+    bool causal_k_skip = false,
     typename MaskCtx = LightweightMaskContext>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
@@ -2396,7 +2450,10 @@ void sdpa_ring_v2(
     // Tile offset of this call's Q chunk within cb_q_in (head-serial passes; 0 otherwise).
     const uint32_t q_base_tiles = 0,
     // Rotated Q split only: fixed base range plus this iteration's remainder unit.
-    [[maybe_unused]] const RotatedQSlots& rotated_slots = {}) {
+    [[maybe_unused]] const RotatedQSlots& rotated_slots = {},
+    // K split only: the local K chunks this core attends to (the reader skips the same).
+    const uint32_t k_split_begin = 0,
+    const uint32_t k_split_end = 0xFFFFFFFFu) {
     init_sdpa_streaming_semaphores();
 
     constexpr bool has_sliding_window = sliding_window_size > 0;
@@ -2491,6 +2548,17 @@ void sdpa_ring_v2(
 
     // ---- K-loop helpers ---------------------------------------------------
 
+    [[maybe_unused]] const uint32_t causal_end_nt =
+        !causal_k_skip ? 0
+                       : chunked_q_global_end_tile<kv_pad_rotation_enabled, q_local_padded_Nt>(
+                             logical_nt,
+                             chunked.ring_index,
+                             ring_size,
+                             chunked.kv_pad_rotation.q_pre_wrap_start_tile,
+                             chunked.kv_pad_rotation.q_pre_wrap_tile_count,
+                             chunked.kv_pad_rotation.q_post_wrap_start_tile,
+                             chunked.kv_pad_rotation.q_valid_tile_count);
+
     // Skip KV chunks beyond the logical sequence length (padding tiles).
     auto try_skip_oob_kv = [&](uint32_t source_ring_id, uint32_t k_chunk, bool kv_chunk_is_joint) -> bool {
         if (kv_chunk_is_joint) {
@@ -2501,6 +2569,17 @@ void sdpa_ring_v2(
                 return joint_global_start_tile >= logical_lt;
             }
             return false;
+        }
+        if (k_chunk < k_split_begin || k_chunk >= k_split_end) {
+            return true;
+        }
+        if constexpr (chunked_enabled && !has_sliding_window && causal_k_skip) {
+            return !chunked_kv_chunk_is_live<
+                kv_pad_rotation_enabled,
+                chunked_enabled,
+                local_padded_Nt,
+                chunk_size_t,
+                q_local_padded_Nt>(source_ring_id, k_chunk, Sk_chunk_t, logical_nt, causal_end_nt);
         }
         return !kv_chunk_starts_before_logical_end<
             kv_pad_rotation_enabled,
@@ -2958,6 +3037,7 @@ void sdpa_ring_v2(
             // Single Q-chunk: persist in L1 (no DRAM round-trip)
             acc_state.prev = q_prev;
             acc_state.cur = q_cur;
+            acc_state.last_call_k_chunks = KV_chunks_processed;
         } else if (!is_last_ring_iter) {
             // Multi Q-chunk: save raw accumulators to DRAM via writer CBs.
             // Out tiles already saved row-by-row via cb_out during last K-chunk SALAD.
