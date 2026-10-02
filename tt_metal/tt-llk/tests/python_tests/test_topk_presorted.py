@@ -8,7 +8,7 @@ the skipping build sort the same slab and are compared bit for bit, the full one
 from dataclasses import dataclass
 
 import torch
-from conftest import skip_for_quasar
+from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import UntilizeGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, TopKSortDirection, format_dict
@@ -28,7 +28,7 @@ from test_topk import (
     transform_result_tensor_to_right_form,
 )
 
-pytestmark = [skip_for_quasar]
+pytestmark = [skip_for_quasar, skip_for_wormhole]
 
 INPUT_DIMENSIONS_SLAB = [32, 128]  # 2 value tiles and 2 index tiles per tile row
 W_VALUES = 64

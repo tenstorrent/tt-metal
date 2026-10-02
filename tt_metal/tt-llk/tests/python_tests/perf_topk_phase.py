@@ -6,7 +6,7 @@ phase per build: per call = (cycles per row of the phase build - the skeleton) /
 """
 
 import pytest
-from conftest import skip_for_quasar
+from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation, PerfRunType, TopKSortDirection
 from helpers.perf.core import PerfConfig
@@ -20,7 +20,7 @@ from helpers.test_variant_parameters import (
     TOPK_PERF,
 )
 
-pytestmark = [skip_for_quasar]
+pytestmark = [skip_for_quasar, skip_for_wormhole]
 
 DESC = TopKSortDirection.Descending
 RING_TILES = 16

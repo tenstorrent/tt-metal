@@ -6,7 +6,7 @@ TILE_LOOP is cycles per value tile of the row; the per-phase split of the same k
 """
 
 import pytest
-from conftest import skip_for_quasar
+from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation, PerfRunType, TopKSortDirection
 from helpers.perf.core import PerfConfig
@@ -20,7 +20,7 @@ from helpers.test_variant_parameters import (
     TOPK_PERF,
 )
 
-pytestmark = [skip_for_quasar]
+pytestmark = [skip_for_quasar, skip_for_wormhole]
 
 DESC, ASC = TopKSortDirection.Descending, TopKSortDirection.Ascending
 RING_TILES = 16
