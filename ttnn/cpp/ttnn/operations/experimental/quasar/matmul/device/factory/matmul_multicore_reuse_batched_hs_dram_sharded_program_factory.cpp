@@ -47,7 +47,7 @@ using dram_sharded_helpers::get_optimal_dram_bank_to_reader_assignment;
 // ProgramDescriptor variant: translates the same logic as create_program_batch_sharded
 // into a lightweight ProgramDescriptor (no Program object created).
 static ProgramDescriptor create_program_batch_sharded_descriptor(
-    tt::tt_metal::distributed::MeshDevice& device,
+    const tt::tt_metal::distributed::MeshDevice& device,
     const CoreRangeSet& input_all_storage_cores,
     const CoreRangeSet& output_all_storage_cores,
     MathFidelity math_fidelity,
@@ -632,7 +632,7 @@ ProgramDescriptor MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    tt::tt_metal::distributed::MeshDevice& device = a.mutable_device();
+    const tt::tt_metal::distributed::MeshDevice& device = a.device();
 
     TT_FATAL(
         a.shard_spec().has_value() && output.shard_spec().has_value(), "Both input A and output must have shard specs");

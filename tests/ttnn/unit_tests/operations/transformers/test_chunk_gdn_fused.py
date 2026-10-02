@@ -18,6 +18,8 @@ fused and phased are bit-exact by design, every path proof here rests on program
 deltas (a new prim or a new config compiles a new program; a cache hit does not).
 """
 
+import os
+
 import pytest
 import torch
 import torch.nn.functional as F
@@ -33,6 +35,11 @@ CHUNK = 32  # Ct=1: the production chunk size
 KDIM = 128
 VDIM = 128
 T_SMALL = 256  # NC=8 — enough chunks to exercise the recurrence, small enough to keep runtime down
+
+# The simulator runs much slower than silicon so the test repeats run on hardware only, as well as the large input cases.
+_SIM = bool(os.environ.get("TT_METAL_SIMULATOR"))
+_hw_only = pytest.mark.skipif(_SIM, reason="hardware test only")
+REPEATS = 0 if _SIM else 8  # extra fused runs against the first result, to give a timing race a chance to show
 
 
 def _phased(**kwargs):
@@ -269,16 +276,20 @@ def _cost_model_path(device, bh, nc):
     return "fused" if (nv >= 1 and pays) else "phased"
 
 
-@pytest.mark.parametrize("nc", [8, 64], ids=["NC8", "NC64"])
 @pytest.mark.parametrize(
-    "num_k_heads, num_v_heads",
+    "num_k_heads, num_v_heads, nc",
     [
-        (16, 48),  # BH=48: the single-device shape
-        (4, 12),  # BH=12: the 27B TP-4 shape
-        (1, 4),  # BH=4: chain-bound
-        (16, 64),  # BH=64: no fused geometry on a 110-core grid (needs >= 128 cores) -> phased
+        pytest.param(16, 48, 8, id="bh48-NC8"),  # BH=48: the single-device shape
+        pytest.param(16, 48, 64, id="bh48-NC64", marks=_hw_only),
+        pytest.param(4, 12, 8, id="bh12-NC8"),  # BH=12: the 27B TP-4 shape
+        pytest.param(4, 12, 64, id="bh12-NC64"),  # the production chunk count; the one NC=64 case the simulator runs
+        pytest.param(1, 4, 8, id="bh4-NC8"),  # BH=4: chain-bound
+        pytest.param(1, 4, 64, id="bh4-NC64", marks=_hw_only),
+        pytest.param(
+            16, 64, 8, id="bh64-NC8"
+        ),  # BH=64: no fused geometry on a 110-core grid (needs >= 128 cores) -> phased
+        pytest.param(16, 64, 64, id="bh64-NC64", marks=_hw_only),
     ],
-    ids=["bh48", "bh12", "bh4", "bh64"],
 )
 def test_fused_default_dispatch(device, num_k_heads, num_v_heads, nc):
     """With NO program config, the dispatcher must pick what the calibrated cost model says: fused
@@ -364,9 +375,10 @@ def test_fused_np_bit_exact_vs_phased(device, np_producers, nc):
     const_tiles = _const_tiles(device)
 
     o_ph, fs_ph = _run_op(device, tensors, const_tiles, s0, _phased())
-    o_ph2, fs_ph2 = _run_op(device, tensors, const_tiles, s0, _phased())
+    if not _SIM:  # determinism of the phased reference: pinned by test_fused_bit_exact_vs_phased, re-checked on silicon
+        o_ph2, fs_ph2 = _run_op(device, tensors, const_tiles, s0, _phased())
+        assert torch.equal(o_ph, o_ph2) and torch.equal(fs_ph, fs_ph2), "phased path is not deterministic"
     n_phased = device.num_program_cache_entries()
-    assert torch.equal(o_ph, o_ph2) and torch.equal(fs_ph, fs_ph2), "phased path is not deterministic"
 
     o_fu, fs_fu = _run_op(device, tensors, const_tiles, s0, _fused(np_producers=np_producers))
     n_fused = device.num_program_cache_entries()
@@ -507,9 +519,10 @@ def _fused_vs_phased(device, hk, hv, nc, nv, np_producers, seed, **fused_kwargs)
     const_tiles = _const_tiles(device)
 
     o_ph, fs_ph = _run_op(device, tensors, const_tiles, s0, _phased())
-    o_ph2, fs_ph2 = _run_op(device, tensors, const_tiles, s0, _phased())
+    if not _SIM:  # determinism of the phased reference: pinned by test_fused_bit_exact_vs_phased, re-checked on silicon
+        o_ph2, fs_ph2 = _run_op(device, tensors, const_tiles, s0, _phased())
+        assert torch.equal(o_ph, o_ph2) and torch.equal(fs_ph, fs_ph2), "phased path is not deterministic"
     n_phased = device.num_program_cache_entries()
-    assert torch.equal(o_ph, o_ph2) and torch.equal(fs_ph, fs_ph2), "phased path is not deterministic"
 
     o_fu, fs_fu = _run_op(device, tensors, const_tiles, s0, _fused(nv, np_producers, **fused_kwargs))
     delta = device.num_program_cache_entries() - n_phased
@@ -525,7 +538,7 @@ def _fused_vs_phased(device, hk, hv, nc, nv, np_producers, seed, **fused_kwargs)
         (4, 2, 3),  # NC == NP+1 at NV=4: first slot wraparound with four v_beta slices
         (4, 3, 1),  # NC=1: producers 2,3 clamp away (host clamps NP<=NC); single-chunk handshake
         (4, 5, 8),  # the QB2 production geometry (12*(4+5)=108 cores), short
-        (4, 5, 64),  # the QB2 production geometry at the production chunk count (T=2048)
+        pytest.param(4, 5, 64, marks=_hw_only),  # the QB2 production geometry at the production chunk count (T=2048)
         (2, 7, 16),  # the NV=2 production candidate (12*(2+7)=108 cores)
     ],
     ids=lambda v: str(v),
@@ -550,8 +563,12 @@ def test_fused_nv_bit_exact_vs_phased(device, nv, np_producers, nc):
 @pytest.mark.parametrize(
     "nv, np_producers, nc, nbuf",
     [
-        (2, 7, 64, 3),  # BH=12 NV=2 operating point (24 receivers + 84 producers), default ring
-        (4, 5, 64, 2),  # BH=12 NV=4 gate geometry (48 + 60) at the shallowest pipelined ring (D = 1)
+        pytest.param(
+            2, 7, 64, 3, marks=_hw_only
+        ),  # BH=12 NV=2 operating point (24 receivers + 84 producers), default ring
+        pytest.param(
+            4, 5, 64, 2, marks=_hw_only
+        ),  # BH=12 NV=4 gate geometry (48 + 60) at the shallowest pipelined ring (D = 1)
         (4, 5, 8, 4),  # short chain + deeper ring: every slot index is exercised on both sides
         (2, 3, 9, 3),  # NC not a multiple of NP or nbuf
         (2, 1, 7, 3),  # single producer per head: the same word is credited for chunks c and c+nbuf
@@ -581,7 +598,7 @@ def test_fused_nv_transport_bit_exact(device, nv, np_producers, nc, nbuf, unicas
 @pytest.mark.parametrize(
     "nv, np_producers, nc",
     [
-        (2, 7, 64),  # one head per row (9 cores) + 2 heads as 2x5 blocks in columns 9-10 (1x2 receivers)
+        pytest.param(2, 7, 64, marks=_hw_only),  # one head per row (9 cores) + 2 heads as 2x5 blocks in columns 9-10
         (4, 5, 16),  # same, the leftover heads' receivers as 2x2 rectangles
         (2, 3, 9),  # L=5: leftover heads as 1x2 receivers over 6 columns, 2 rows each
         (1, 9, 8),  # NV=1: L=10, leftover width 1
@@ -628,7 +645,7 @@ def test_fused_nv_row_local_shapes_bit_exact(device, hk, hv, nv, np_producers, n
 @pytest.mark.parametrize(
     "nv, np_producers, nc, nbuf",
     [
-        (2, 7, 64, 2),  # NV=2 operating point, the default ring depth
+        pytest.param(2, 7, 64, 2, marks=_hw_only),  # NV=2 operating point, the default ring depth
         (4, 5, 8, 3),  # NV=4, short chain, D=2 in flight
         (2, 1, 7, 3),  # single producer per head
     ],
@@ -695,6 +712,7 @@ def test_fused_nv_cache_identity(device):
     assert torch.equal(fs1, fs2) and torch.equal(fs1, fs4), "final_state differs across NV values"
 
 
+@_hw_only
 def test_fused_nv_repeats(device):
     """NV-way handshake race is non-deterministic, so one comparison has little power. Re-run
     the production geometry (BH=12, NV=4, NP=5, T=2048) REPEATS times against the first result."""
@@ -706,7 +724,7 @@ def test_fused_nv_repeats(device):
     )
     assert delta == 1 and torch.equal(o_fu, o_ph) and torch.equal(fs_fu, fs_ph), "first fused run is not bit-exact"
     cfg = _fused(nv, np_producers)
-    for rep in range(8):
+    for rep in range(REPEATS):
         o_rep, fs_rep = _run_op(device, tensors, const_tiles, s0, cfg)
         assert torch.equal(o_rep, o_fu), f"fused NV=4 NP=5 o not reproducible on repeat {rep + 1}: race"
         assert torch.equal(fs_rep, fs_fu), f"fused NV=4 NP=5 final_state not reproducible on repeat {rep + 1}: race"
@@ -753,7 +771,7 @@ def test_fused_knob_cache_identity(device, field, a, b):
     [
         (4, 12, 2, 3, 8),  # BH=12: 1x2 rectangles, 5 heads per row
         (4, 12, 4, 5, 16),  # BH=12 at NV=4: 2 heads per row, 3 stranded columns per receiver row
-        (4, 12, 2, 7, 64),  # BH=12 at the model's NV/NP, production chunk count
+        pytest.param(4, 12, 2, 7, 64, marks=_hw_only),  # BH=12 at the model's NV/NP, production chunk count
         (4, 16, 4, 2, 8),  # BH=16 (397B TP-4): 8 receiver rows
         (2, 8, 4, 8, 8),  # BH=8, producer-rich
     ],
@@ -774,6 +792,7 @@ def test_fused_nv_row_major_placement_bit_exact(device, hk, hv, nv, np_producers
     assert torch.equal(o_fu, o_ph) and torch.equal(fs_fu, fs_ph), "row-major fused differs from phased"
 
 
+@_hw_only
 @pytest.mark.parametrize(
     "hk, hv",
     [(4, 12), (4, 16), (1, 4)],
@@ -802,7 +821,7 @@ def test_fused_default_geometry_repeats(device, hk, hv):
     bad = _vblock_mismatches(o_ph, o_fu, hv, nv)
     assert not bad, f"fused {geom}: o differs from phased in (head, vblock) slices {bad}"
     assert torch.equal(o_fu, o_ph) and torch.equal(fs_fu, fs_ph), f"fused {geom} differs from phased"
-    for rep in range(8):
+    for rep in range(REPEATS):
         o_rep, fs_rep = _run_op(device, tensors, const_tiles, s0, _fused())
         assert torch.equal(o_rep, o_fu), f"fused {geom}: o not reproducible on repeat {rep + 1}: race"
         assert torch.equal(fs_rep, fs_fu), f"fused {geom}: final_state not reproducible on repeat {rep + 1}: race"

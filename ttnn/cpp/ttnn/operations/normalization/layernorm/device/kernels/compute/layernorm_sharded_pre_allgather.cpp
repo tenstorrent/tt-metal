@@ -123,7 +123,8 @@ void kernel_main() {
     dfb_in.wait_front(num_tiles_per_block);
     pack_reconfig_data_format(dfb_in_id, dfb_x2_id);
 #else
-    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup
+    // full-init behaviour) should become a targeted DST re-arm.
     compute_kernel_hw_startup(dfb_in_id, dfb_in_id, dfb_x2_id);
 #endif
 
@@ -152,6 +153,12 @@ void kernel_main() {
     // waited on above and read by tile index.
     reconfig_data_format(dfb_in_id, dfb_col_mask_packed_id);
     mul_init(dfb_in_id, dfb_col_mask_packed_id);
+    // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+    // destination (BFD) is set by pack_init. Retarget it before every pack-target switch, else pack_tile
+    // keeps writing into the previously programmed buffer and the new one is never written (all-zero output).
+#ifdef ARCH_QUASAR
+    pack_init(dfb_x2_id);
+#endif
     dfb_x2.reserve_back(num_tiles_per_block);
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_h; i++) {
@@ -168,6 +175,9 @@ void kernel_main() {
     dfb_x2.push_back(num_tiles_per_block);
     dfb_x2.wait_front(num_tiles_per_block);
     // E[x] over the masked input.
+#ifdef ARCH_QUASAR
+    pack_init(dfb_ex_partial2_id);
+#endif
     compute_kernel_lib::reduce<
         PoolType::AVG,
         ReduceDim::REDUCE_ROW,
@@ -182,6 +192,9 @@ void kernel_main() {
     reconfig_data_format(dfb_in_id, dfb_in_id);
 #else
     // E[x],
+#ifdef ARCH_QUASAR
+    pack_init(dfb_ex_partial2_id);
+#endif
     compute_kernel_lib::reduce<
         PoolType::AVG,
         ReduceDim::REDUCE_ROW,
@@ -203,6 +216,9 @@ void kernel_main() {
     // X^2
     mul_init(dfb_in0, dfb_in0);
     index_h_offset = 0;
+#ifdef ARCH_QUASAR
+    pack_init(dfb_x2_id);
+#endif
     dfb_x2.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
@@ -249,6 +265,9 @@ void kernel_main() {
 #endif  // RMSNORM
 
     // RMS E(x2) #Layernorm //E(x) and E(x^2)
+#ifdef ARCH_QUASAR
+    pack_init(dfb_ex_partial2_id);
+#endif
     compute_kernel_lib::reduce<
         PoolType::AVG,
         ReduceDim::REDUCE_ROW,
@@ -272,6 +291,9 @@ void kernel_main() {
         reconfig_data_format(dfb_scaler_global_id, dfb_ex_external2_id);
         pack_reconfig_data_format(dfb_reduction_out);
         reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(dfb_ex_external2_id, dfb_scaler_global_id, dfb_reduction_out);
+#ifdef ARCH_QUASAR
+        pack_init(dfb_reduction_out);
+#endif
         DataflowBuffer(static_cast<uint16_t>(dfb_reduction_out))
             .reserve_back(static_cast<uint16_t>(num_tiles_per_partial_result * num_tiles_per_allgather_worker));
 

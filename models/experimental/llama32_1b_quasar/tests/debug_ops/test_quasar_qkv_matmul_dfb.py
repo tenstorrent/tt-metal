@@ -9,18 +9,22 @@ The llama decode QKV matmul (forced interleaved on Quasar) is a 1D mcast_in0 mat
     program_config: MatmulMultiCoreReuseMultiCast1DProgramConfig(grid 8x4, in0_block_w=2,
         per_core_M=1, per_core_N=3, out_subblock_h=1, out_subblock_w=3, mcast_in0=1) -> WIDTH_SHARDED L1
 
-It runs to completion (after the mcast-rectangle fix) but then aborts:
+RESOLVED — NOT an op bug (2026-10-01). With the legacy tile-counter truncation-aliasing ON, the run
+aborted:
     ERROR: UndefinedBehavior: qsr_tile_counter_check_error:
         tile counter occupancy=65535 exceeds capacity=4 (posted=64 acked=65)
-occupancy = posted - acked = 64 - 65 = -1: the in0 DFB (cap 4 = 2 blocks x in0_block_num_tiles=2) is popped
-ONE more than pushed (64 K-tiles pushed by the mcast receiver, 65 acked). This isolates just that matmul so
-it can be run under TTSIM_QSR_DFB_TRACE=1 to name the counter and the extra-ack event.
+This looked like the in0 DFB being popped one more than pushed, but the compute pops are BALANCED — it pops
+in0_block_num_tiles(=2) x 32 blocks = 64, matching the 64 pushes. The spurious 65th ack is the SIMULATOR's
+legacy tile-counter truncation-alias artifact (two counters alias to one 8-bit slot, so an unrelated ack
+decrements this one), i.e. a FALSE underflow. Setting ``TTSIM_QSR_TC_LEGACY_TRUNCATION_ALIAS=0`` addresses
+the counter addressing and the abort disappears — the matmul then completes with finite output (this test
+passes). This is the same sim artifact documented for SDPA decode; it is NOT a metal/op defect.
 
 Inputs are built bf16 via row-major upload + quasar.tilize (not from_torch(TILE), which hangs on the sim).
 
-Run (Quasar sim, DFB trace to a file):
-    TTSIM_QSR_DFB_TRACE=1 MESH_DEVICE=<qsr> TT_METAL_SIMULATOR=~/sim/libttsim.so \
-        pytest tests/ttnn/unit_tests/operations/test_quasar_qkv_matmul_dfb.py 2> qkv_matmul_dfb_trace.txt
+Run (Quasar sim, with the truncation-alias fix; add DFB trace only when debugging):
+    TTSIM_QSR_TC_LEGACY_TRUNCATION_ALIAS=0 MESH_DEVICE=<qsr> TT_METAL_SIMULATOR=~/sim/libttsim.so \
+        pytest models/experimental/llama32_1b_quasar/tests/debug_ops/test_quasar_qkv_matmul_dfb.py
 """
 
 import pytest

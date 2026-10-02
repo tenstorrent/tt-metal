@@ -959,12 +959,11 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTestHostRankWithManualPinning) {
 }
 
 TEST_F(TopologyMapperTest, T3kMeshGraphTestFromPhysicalSystemDescriptor) {
-    // Test that TopologyMapper::generate_mesh_graph_from_physical_system_descriptor uses map_mesh_to_physical
-    // to find a valid mesh shape that can be mapped to the physical topology
+    // Test that TopologyMapper::generate_mesh_graph_from_physical_system_descriptor finds a valid
+    // mesh shape that can be mapped to the physical topology
     FabricConfig fabric_config = FabricConfig::FABRIC_2D;
 
     // Generate mesh graph from physical system descriptor
-    // This should internally use map_mesh_to_physical to find a valid mapping
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     MeshGraph mesh_graph = TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
         cluster, *physical_system_descriptor_, fabric_config, FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
