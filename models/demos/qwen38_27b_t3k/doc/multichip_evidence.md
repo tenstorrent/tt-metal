@@ -359,6 +359,42 @@ sampling parameters leave device sampling on.
 Eager timings carry per-op host dispatch and so bound the traced cost from above. They are used
 here to locate the dominant term, which they do unambiguously, not to state its traced value.
 
+### The sampler's top-k ran on one core, and no longer does
+
+`248320 / 8` is 31040, which is not a power of two, and the multi-core bitonic top-k network
+requires one (`topk_multicore_structurally_eligible` in `topk_utils.cpp`). The large-indices
+route that would otherwise carry this width returns false off Blackhole (`topk.cpp:362`), which
+is why the identical configuration costs little on QB2. So the top-k fell to the single-core
+factory across the whole row, at roughly 137 ns per element (`topk.cpp:248`), or about 4.25 ms
+of the 8.8 ms.
+
+`pad_logits_to_power_of_2=True` pads the row to 32768 for one `ttnn.pad` and restores
+multi-core eligibility:
+
+| `_sampling_step` | p50 | p10 | p90 |
+| --- | ---: | ---: | ---: |
+| unpadded | 8.809 ms | 8.759 | 8.828 |
+| padded to 32768 | **3.968 ms** | 3.003 | 5.112 |
+
+That is 4.84 ms, about 6.7% of a batch-1 decode step. The sampler's cost is fixed in batch --
+tile padding makes one row and 32 rows the same 970 tiles -- so the same absolute saving is
+spread across however many users are being served.
+
+This was a misconfiguration rather than a discovery.
+`should_pad_sampling_logits_to_power_of_2` in `models/tt_transformers/tt/model_config.py:202`
+already returns true exactly when per-device vocab is not a power of two, for issue 40399,
+"models that regress to single-core TopK". The Blackhole sibling sets it; this tree did not.
+
+Padding is safe because the pad fills with `-float_max`, which cannot win a top-k against any
+finite logit, and the per-device index offset still uses `padded_vocab_size // 8`. Verified
+rather than argued: greedy sampling returns token 103695 against a host argmax over all 248320
+columns, both before and after.
+
+Two things this does not settle. The spread widens from 0.07 ms to 2.1 ms, so 3.968 ms is a
+median and not a dependable per-step cost. And about 4.5 ms remains in the step -- two
+all-gathers and the tie-break programs -- which padding does not touch and which no per-op
+profile has yet separated.
+
 ## Served performance, which is not the traced-decode performance
 
 Benchmark run 36682118819 on tt-metal `5936475725f`, through vLLM in the release harness, over
