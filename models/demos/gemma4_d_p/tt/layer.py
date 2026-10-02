@@ -129,8 +129,16 @@ class Gemma4DecoderLayer:
         )
 
         act_mc = prefill_short_lived_memcfg()
-        attn_output = self.post_attention_layernorm.forward(attn_output, memory_config=act_mc)
-        hidden_states = ttnn.add(residual, attn_output, memory_config=act_mc)
+        # The residual stream stays in the norms' block-sharded layout from here to the next layer's input norm, so
+        # the norms and adds skip their reshards.
+        shard_mc = self.post_attention_layernorm.shard_memory_config(attn_output)
+        out_mc = shard_mc or act_mc
+        attn_output = self.post_attention_layernorm.forward(attn_output, memory_config=out_mc)
+        if shard_mc is not None and residual.memory_config() != shard_mc:
+            sharded_residual = ttnn.to_memory_config(residual, shard_mc)
+            residual.deallocate(True)
+            residual = sharded_residual
+        hidden_states = ttnn.add(residual, attn_output, memory_config=out_mc)
         residual.deallocate(True)
         attn_output.deallocate(True)
 
@@ -142,12 +150,12 @@ class Gemma4DecoderLayer:
 
         hidden_states = mlp_output
 
-        normed = self.post_feedforward_layernorm.forward(hidden_states, memory_config=act_mc)
+        normed = self.post_feedforward_layernorm.forward(hidden_states, memory_config=out_mc)
         hidden_states = ttnn.add(
             residual,
             normed,
             activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, self.layer_scalar)],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=shard_mc or ttnn.DRAM_MEMORY_CONFIG,
         )
         residual.deallocate(True)
         normed.deallocate(True)
