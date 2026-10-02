@@ -7,6 +7,8 @@
 #include "api/compute/mul_int_sfpu.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/isinf_isnan.h"
+#include "api/compute/eltwise_unary/where.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
@@ -130,6 +132,29 @@ void kernel_main() {
             add_binary_tile(DST_ACC, DST_IN, DST_T);      // t = acc + y
             sub_binary_tile(DST_T, DST_ACC, DST_COMP);    // (t - acc)
             sub_binary_tile(DST_COMP, DST_IN, DST_COMP);  // c = (t - acc) - y
+
+            // Non-finite guard (#58986). Once t is +-inf or NaN, c no longer means "the low-order part
+            // lost by the add": on the step t becomes inf, c = (t - acc) - y = inf - inf = NaN (acc is
+            // still finite there); on finite overflow, c = inf - y = +-inf. Either way the next
+            // y = in - c turns every later output into NaN instead of the +-inf torch keeps. There is
+            // nothing to compensate once t is non-finite, so c is reset to +0 in those lanes; finite
+            // lanes keep the exact Kahan term. t itself is untouched, so +inf followed by -inf still
+            // yields NaN and NaN inputs still propagate, as in torch.
+            //
+            // Dest has only four tiles here; DST_ACC (old total) and DST_IN (y) are dead at this point.
+            //   mask = isfinite(t - t)       t - t is +0 for finite t and NaN otherwise, which leaves t
+            //                                intact in DST_T without a separate Dest-to-Dest copy.
+            //   c    = where(mask, c, mask)  the mask is +0 exactly in the lanes that need c = +0, so it
+            //                                doubles as the zero operand (no fill), and writing the
+            //                                result over the condition tile selects where's 3-cycle
+            //                                SFPLOADMACRO schedule. c is therefore packed from DST_ACC.
+            sub_binary_tile(DST_T, DST_T, DST_ACC);
+            isfinite_tile_init();
+            isfinite_tile(DST_ACC);
+            where_tile_init();
+            where_tile<DataFormat::Float32>(DST_ACC, DST_COMP, DST_ACC, DST_ACC);
+            BINARY_OP_INIT();  // isfinite/where inits reprogram the SFPU; restore it for the next tile
+            constexpr uint32_t DST_COMP_OUT = DST_ACC;
             constexpr uint32_t DST_RESULT = DST_T;
             dfb_comp_obj.pop_front(ONE_TILE);
 #else
@@ -156,7 +181,7 @@ void kernel_main() {
 #ifdef COMPENSATED_SUM
             dfb_comp_obj.reserve_back(ONE_TILE);
             pack_reconfig_data_format(dfb::acc, dfb::comp);
-            pack_tile(DST_COMP, dfb::comp);
+            pack_tile(DST_COMP_OUT, dfb::comp);
 #endif
 
             tile_regs_release();

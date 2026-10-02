@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 import pytest
 
@@ -363,3 +365,148 @@ def test_cumsum_disable_compensated_sum(device):
         "disable_compensated_sum=True did not change the result: the plain path stayed within the "
         "compensated bound, so the flag is not reaching the accumulation kernel"
     )
+
+
+# --------------------------------------------------------------------------------------------------
+# #58986: non-finite running totals on the compensated fp32 path.
+#
+# The Kahan term c = (t - acc) - y becomes NaN (inf - inf) on the step the running total turns
+# infinite, or +-inf on finite overflow; fed back through y = in - c it used to turn every later
+# element into NaN. These tests pin torch's IEEE behaviour for every special-value pattern, on both
+# the default compensated path and the deprecated plain path.
+# --------------------------------------------------------------------------------------------------
+
+NON_FINITE_KINDS = [
+    "pos_inf",  # [1, inf, 1, ...]      -> [1, inf, inf, ...]
+    "neg_inf",  # [1, -inf, 1, ...]     -> [1, -inf, -inf, ...]
+    "pos_overflow",  # [3e38, 3e38, 1, ...] -> [3e38, inf, inf, ...]
+    "neg_overflow",  # [-3e38, -3e38, 1, ...] -> [-3e38, -inf, -inf, ...]
+    "nan_input",  # [1, nan, 1, ...]     -> NaN from index 1 on (unchanged behaviour)
+    "inf_last",  # [1, ..., 1, inf]     -> inf only at the end (unchanged behaviour)
+    "pos_then_neg_inf",  # [1, inf, -inf, 1, ...] -> NaN from index 2 on (unchanged behaviour)
+]
+
+
+def _non_finite_sequence(kind, n, dtype):
+    seq = torch.ones(n, dtype=dtype)
+    if kind == "pos_inf":
+        seq[1] = float("inf")
+    elif kind == "neg_inf":
+        seq[1] = float("-inf")
+    elif kind == "pos_overflow":
+        seq[0] = seq[1] = 3.0e38
+    elif kind == "neg_overflow":
+        seq[0] = seq[1] = -3.0e38
+    elif kind == "nan_input":
+        seq[1] = float("nan")
+    elif kind == "inf_last":
+        seq[-1] = float("inf")
+    elif kind == "pos_then_neg_inf":
+        seq[1] = float("inf")
+        seq[2] = float("-inf")
+    else:
+        raise ValueError(kind)
+    return seq
+
+
+def _interleaved_scan_input(seq, size, dim, base):
+    """Every even lane along `dim` carries `seq`; odd lanes keep the finite `base` values.
+
+    Special and finite lanes share tiles, so a guard that leaked across lanes (e.g. zeroing the
+    compensation of a finite neighbour) would show up as an accuracy failure in the finite lanes.
+    """
+    x = base.movedim(dim, -1).contiguous()
+    x.view(-1, x.shape[-1])[0::2] = seq
+    return x.movedim(-1, dim).contiguous()
+
+
+def _assert_matches_torch_with_special_values(expected, actual):
+    assert torch.equal(torch.isnan(actual), torch.isnan(expected)), "NaN positions differ from torch"
+    expected_inf = torch.isinf(expected)
+    assert torch.equal(torch.isinf(actual), expected_inf), "inf positions differ from torch"
+    assert torch.equal(actual[expected_inf], expected[expected_inf]), "inf signs differ from torch"
+    finite = torch.isfinite(expected)
+    assert_cumsum_quality(expected[finite], actual[finite])
+
+
+def _scan_size(n, dim):
+    # dim 0 scans across tiles; -2 scans rows inside tiles; -1 scans columns. On a 3-D tensor 0 and
+    # -2 are distinct (on 2-D they would alias). n = 33 crosses a tile boundary along the scan.
+    return {0: [n, 32, 32], -2: [2, n, 32], -1: [2, 32, n]}[dim]
+
+
+@pytest.mark.parametrize("disable_compensated_sum", [False, True])
+@pytest.mark.parametrize("kind", NON_FINITE_KINDS)
+@pytest.mark.parametrize("dim", [0, -2, -1])
+@pytest.mark.parametrize("n", [4, 8, 33])
+def test_cumsum_fp32_non_finite_matches_torch(n, dim, kind, disable_compensated_sum, device):
+    """#58986: once the running total is +-inf, fp32 cumsum must stay +-inf (not NaN) like torch.
+
+    Covers +-inf inputs and +-finite overflow, plus the cases whose behaviour must not change (NaN
+    input, inf at the last element, +inf then -inf), on the default compensated path and on
+    disable_compensated_sum=True.
+    """
+    torch.manual_seed(58986)
+    size = _scan_size(n, dim)
+    seq = _non_finite_sequence(kind, n, torch.float32)
+    torch_input = _interleaved_scan_input(seq, size, dim, torch.randn(size, dtype=torch.float32))
+
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+    output = ttnn.to_torch(ttnn.cumsum(input_tensor, dim=dim, disable_compensated_sum=disable_compensated_sum))
+
+    expected = torch.cumsum(torch_input, dim=dim)
+    _assert_matches_torch_with_special_values(expected, output)
+
+
+@pytest.mark.parametrize("kind", ["pos_inf", "neg_inf", "nan_input", "pos_then_neg_inf"])
+@pytest.mark.parametrize("dim", [0, -2])
+def test_cumsum_bf16_non_finite_unchanged(kind, dim, device):
+    """bf16 never takes the compensated path; its special-value behaviour must be unaffected."""
+    torch.manual_seed(58986)
+    n = 33
+    size = _scan_size(n, dim)
+    seq = _non_finite_sequence(kind, n, torch.bfloat16)
+    # Integer-valued finite lanes keep bf16 partial sums exact, as in test_cumsum above.
+    base = torch.randint(-2, 3, size=size, dtype=torch.bfloat16)
+    torch_input = _interleaved_scan_input(seq, size, dim, base)
+
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    output = ttnn.to_torch(ttnn.cumsum(input_tensor, dim=dim), dtype=torch.bfloat16)
+
+    expected = torch.cumsum(torch_input, dim=dim, dtype=torch.bfloat16)
+    _assert_matches_torch_with_special_values(expected, output)
+
+
+@pytest.mark.skipif(
+    os.environ.get("CUMSUM_PERF_SWEEP") != "1",
+    reason="perf characterization for #58986; run under the device profiler with CUMSUM_PERF_SWEEP=1",
+)
+@pytest.mark.parametrize("disable_compensated_sum", [False, True])
+@pytest.mark.parametrize(
+    "size, dim",
+    [
+        ([1, 32, 32], -2),  # one tile along the scan
+        ([1, 1024, 32], -2),  # 32 tiles
+        ([1, 32768, 32], -2),  # 1024 tiles
+        ([32, 32, 32], 0),
+        ([1024, 32, 32], 0),
+        ([1, 32, 32768], -1),
+    ],
+)
+def test_cumsum_fp32_compensated_perf_sweep(size, dim, disable_compensated_sum, device):
+    """Device kernel time of fp32 cumsum, for #58986's performance characterization.
+
+    Not a correctness test. Run with:
+        CUMSUM_PERF_SWEEP=1 python -m tracy -r -m pytest \
+            tests/ttnn/unit_tests/operations/reduce/test_cumsum.py -k compensated_perf_sweep
+    on this branch and on its base commit, then compare DEVICE KERNEL DURATION in the ops report.
+    disable_compensated_sum=True is the uncompensated baseline.
+    """
+    torch.manual_seed(58986)
+    torch_input = torch.randn(size, dtype=torch.float32)
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    for _ in range(3):  # first run includes kernel compile; later runs are the steady state
+        output = ttnn.cumsum(input_tensor, dim=dim, disable_compensated_sum=disable_compensated_sum)
+    ttnn.synchronize_device(device)
+    assert output.shape == input_tensor.shape
