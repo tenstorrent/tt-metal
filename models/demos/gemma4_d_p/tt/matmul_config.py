@@ -5,6 +5,9 @@
 
 import ttnn
 
+# Weight columns per core in the 1D config: with 2-row output subblocks, 2 x 2 tiles fill the fp32 dest.
+_PER_CORE_N_1D = 2
+
 # Tallest per-core output block measured to fit in L1 (chunk 8192 at CP8). Chunk 16384 gives 7 tiles
 # per core, whose circular buffers need 1,660,032 B against 1,572,864 B of L1, so larger shapes keep
 # ttnn's default config.
@@ -34,7 +37,7 @@ def prefill_matmul_program_config(
     max_subblock_tiles = 4 if fp32_dest_acc else 8
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(grid_x, grid_y),
-        in0_block_w=max(d for d in range(1, min(k_tiles, 16) + 1) if k_tiles % d == 0),
+        in0_block_w=_in0_block_w(k_tiles),
         out_subblock_h=next(h for h in (4, 3, 2, 1) if per_core_m % h == 0 and h * subblock_w <= max_subblock_tiles),
         out_subblock_w=subblock_w,
         per_core_M=per_core_m,
@@ -42,3 +45,33 @@ def prefill_matmul_program_config(
         transpose_mcast=False,
         fused_activation=fused_activation,
     )
+
+
+def prefill_1d_matmul_program_config(hidden_states, weight, grid, fused_activation=None):
+    """1D in0-multicast config for short-M prefill projections, or None when it does not apply.
+
+    With at most 8 tile rows of M, the 2D config uses only 8 of the grid's rows and reads each weight column
+    block through one core. Here every core reads its own two weight columns from DRAM while the activations
+    are multicast, which keeps more DRAM readers busy.
+    """
+    tile = ttnn.TILE_SIZE
+    m_tiles = hidden_states.padded_shape[-2] // tile
+    k_tiles = hidden_states.padded_shape[-1] // tile
+    n_tiles = weight.padded_shape[-1] // tile
+    if m_tiles > 8 or n_tiles % _PER_CORE_N_1D or n_tiles // _PER_CORE_N_1D > grid.x * grid.y:
+        return None
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(grid.x, grid.y),
+        in0_block_w=_in0_block_w(k_tiles),
+        out_subblock_h=2 if m_tiles % 2 == 0 else 1,
+        out_subblock_w=_PER_CORE_N_1D,
+        per_core_M=m_tiles,
+        per_core_N=_PER_CORE_N_1D,
+        fuse_batch=True,
+        fused_activation=fused_activation,
+        mcast_in0=True,
+    )
+
+
+def _in0_block_w(k_tiles):
+    return max(d for d in range(1, min(k_tiles, 16) + 1) if k_tiles % d == 0)
