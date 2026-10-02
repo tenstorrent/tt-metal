@@ -93,10 +93,10 @@ def prepare_prefill_mtp_tokens(
     """Upload the MTP lookahead ids, laid out as the inference server sends them.
 
     ``token_ids`` is the chunk followed by the ``num_mtp_tokens`` ids after it; its real ids end at
-    ``chunk_end`` (default: the whole chunk). Chip ``c``'s leading slots take the ids its MTP levels
-    read past its trunk shard (``mtp_lookahead_positions``): on a chunk starting off a per-chip
-    boundary the seam chip's also take the next chip's first ids, which ``MTPSeamSplice`` splices in
-    on device. Every later slot is ``MTP_PAD_TOKEN_ID``. Block-cyclic only.
+    ``chunk_end`` (default: the whole chunk). Chip ``c``'s first ``num_levels`` slots take the ids
+    ``mtp_lookahead_positions`` assigns it: on a chunk starting off a per-chip boundary, the seam chip's
+    take the next chip's first ids while its second run lies past ``chunk_end``. Every later slot is
+    ``MTP_PAD_TOKEN_ID``. Block-cyclic only.
     """
     assert num_mtp_tokens > 0, f"num_mtp_tokens must be positive, got {num_mtp_tokens}"
     isl_per_chip = (len(token_ids) - num_mtp_tokens) // sp_factor

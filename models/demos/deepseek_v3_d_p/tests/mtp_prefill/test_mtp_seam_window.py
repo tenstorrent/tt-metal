@@ -24,6 +24,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_p
 from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPSeamSplice, MTPUnionEmbedding
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import build_sp_rank_tensor
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
 SP_AXIS = 0
 CHUNK = 5 * 1024
@@ -94,19 +95,27 @@ _MESH_PARAMS = [
             fabric_payload_size=GLM52Config.FABRIC_PAYLOAD_SIZE,
             worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
         ),
+        2,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="torus-xy-8x4",
     ),
 ]
 
 
-@pytest.mark.parametrize("mesh_device, device_params", _MESH_PARAMS, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links", _MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
 @pytest.mark.skipif(not is_blackhole(), reason="deepseek_v3_d_p prefill is Blackhole-only")
 @pytest.mark.timeout(1200)
-def test_mtp_seam_windows(mesh_device, device_params):
+def test_mtp_seam_windows(mesh_device, device_params, num_links):
     sp, tp = tuple(mesh_device.shape)
     window_len = CHUNK // sp
     union_len = window_len + LOOKAHEAD
+    sp_topology = per_axis_topology(device_params["fabric_config"])[0]
+
+    def all_gather_sp(rows):
+        return ttnn.all_gather(rows, dim=-2, cluster_axis=SP_AXIS, num_links=num_links, topology=sp_topology)
+
     sp_rank = build_sp_rank_tensor(mesh_device, sp, (sp, tp), SP_AXIS)
     order = _per_device_scalars(sp_rank)
     assert order == [float(i // tp) for i in range(sp * tp)], f"device tensors are not SP-row-major: {order}"
@@ -132,14 +141,14 @@ def test_mtp_seam_windows(mesh_device, device_params):
             last_plain_end = start + window_len - offset - NUM_LEVELS
             for chunk_end, wants_splice in ((last_plain_end, False), (last_plain_end + 1, True)):
                 splice = MTPSeamSplice.for_chunk_start(
-                    start, window_len, sp, sp_rank, chunk_end=chunk_end, num_levels=NUM_LEVELS
+                    start, window_len, sp, sp_rank, all_gather_sp, chunk_end=chunk_end, num_levels=NUM_LEVELS
                 )
                 assert (splice is not None) == wants_splice, f"start={start} chunk_end={chunk_end}: {splice}"
                 if splice is not None:
                     splice.deallocate()
 
-        # Ending one past the next chip's first position, the seam chip carries that chip's first ids in place
-        # of its own (from slot 0); a full chunk carries them after its own (from slot K).
+        # Ending one past the next chip's first position, the seam chip's slots carry that chip's first ids; on a
+        # full chunk the seam chip holds the end, its slots carry the next chunk's, and the splice all-gathers.
         chunk_ends = (start + CHUNK, start + window_len - offset + 1) if offset else (start + CHUNK,)
         for chunk_end in chunk_ends:
             positions = _union_positions(start, sp, window_len, chunk_end)
@@ -172,14 +181,14 @@ def test_mtp_seam_windows(mesh_device, device_params):
                     parts = [_upload(union_host, mesh_device, (0, -1))]
                 union = MTPUnionEmbedding(parts, num_levels=NUM_LEVELS, window_len=window_len)
                 seam_splice = MTPSeamSplice.for_chunk_start(
-                    start, window_len, sp, sp_rank, chunk_end=chunk_end, num_levels=NUM_LEVELS
+                    start, window_len, sp, sp_rank, all_gather_sp, chunk_end=chunk_end, num_levels=NUM_LEVELS
                 )
                 assert (seam_splice is None) == (offset == 0), f"{label}: seam splice {seam_splice}"
                 if seam_splice is not None:
-                    want_slot = NUM_LEVELS if chunk_end == start + CHUNK else 0
+                    want_next = next_chip if chunk_end == start + CHUNK else None
                     assert (
-                        seam_splice.slot_offset == want_slot
-                    ), f"{label}: next chip's ids from slot {seam_splice.slot_offset}, expected {want_slot}"
+                        seam_splice.next_chip == want_next
+                    ), f"{label}: splice reads chip {seam_splice.next_chip}'s rows, expected {want_next} (None: slots)"
                 union.set_seam_splice(seam_splice)
 
                 t0 = time.perf_counter()

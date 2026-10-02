@@ -179,9 +179,9 @@ def mtp_lookahead_positions(
     The inference server's layout. Chip c's slots ``[0, num_levels)`` carry the ``num_levels`` positions after
     the last one it holds: the next chip's first, or the next chunk's first on the chip holding the chunk's
     end. A chunk starting off a ``chunk_local`` boundary leaves the seam chip's first run ending where the next
-    chip's begins, so the seam chip also carries that chip's first ``num_levels`` positions: in place of its
-    own while its second run lies past ``actual_end``, else after them. A position at or past the turn end is
-    pad on the wire too. Keyed off ``rotated_chip_positions`` so it cannot drift from the writer kernel.
+    chip's begins; while its second run lies past ``actual_end``, its slots carry that chip's first
+    ``num_levels`` positions instead. A position at or past the turn end is pad on the wire too. Keyed off
+    ``rotated_chip_positions`` so it cannot drift from the writer kernel.
     """
     positions = rotated_chip_positions(kv_actual_isl, sp, chunk_local)
     slots = [[row[-1] + 1 + k for k in range(num_levels)] for row in positions]
@@ -189,8 +189,8 @@ def mtp_lookahead_positions(
     if sp > 1 and seam_row < chunk_local:
         seam_chip = (kv_actual_isl // chunk_local) % sp
         seam = positions[seam_chip]
-        next_chip = [seam[seam_row - 1] + 1 + k for k in range(num_levels)]
-        slots[seam_chip] = slots[seam_chip] + next_chip if seam[seam_row] < actual_end else next_chip
+        if seam[seam_row] >= actual_end:
+            slots[seam_chip] = [seam[seam_row - 1] + 1 + k for k in range(num_levels)]
     return slots
 
 

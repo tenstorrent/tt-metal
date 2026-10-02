@@ -154,27 +154,25 @@ def _h2d_rows(tokens, actual_start: int = 0):
 
 def _mtp_rows(pool, actual_start: int, actual_isl=None, actual_end=None):
     """Each chip's MTP lookahead slots as the inference server sends them: the ``MTP_LEVELS`` ids after its
-    last position, and on the seam chip of a chunk starting off a per-chip boundary also the next chip's first
-    ``MTP_LEVELS`` -- in place of its own while its second run lies past ``actual_end``, else after them.
-    deepseek_v3_d_p's ``mtp_lookahead_positions``, inlined."""
+    last position, then pad. On a chunk starting off a per-chip boundary, the seam chip's carry the next chip's
+    first ``MTP_LEVELS`` instead while its second run lies past ``actual_end``. deepseek_v3_d_p's
+    ``mtp_lookahead_positions``, inlined."""
     n_mtp = num_mtp_tokens(MTP_LEVELS)
     if not n_mtp:
         return None
     sp = GLOBAL_MESH_SHAPE[0]
     stride = h2d_row_len(CHUNK_SIZE, sp)
     positions = rotated_chunk_positions(actual_start, sp, stride)
-    starts = [[row[-1] + 1] for row in positions]
+    starts = [row[-1] + 1 for row in positions]
     seam_row = stride - actual_start % stride
     if sp > 1 and seam_row < stride:
         seam_chip = (actual_start // stride) % sp
         seam = positions[seam_chip]
         actual_end = actual_start + CHUNK_SIZE if actual_end is None else actual_end
-        next_chip = seam[seam_row - 1] + 1
-        starts[seam_chip] = starts[seam_chip] + [next_chip] if seam[seam_row] < actual_end else [next_chip]
-    rows = []
-    for chip_starts in starts:
-        ids = [i for start in chip_starts for i in _pool_slice(pool, start, MTP_LEVELS, actual_isl)]
-        rows.append(ids + [MTP_PAD_TOKEN_ID] * (n_mtp - len(ids)))
+        if seam[seam_row] >= actual_end:
+            starts[seam_chip] = seam[seam_row - 1] + 1
+    align_pad = [MTP_PAD_TOKEN_ID] * (n_mtp - MTP_LEVELS)
+    rows = [_pool_slice(pool, start, MTP_LEVELS, actual_isl) + align_pad for start in starts]
     return _to_host_array(torch.tensor(rows, dtype=torch.int64).unsqueeze(1))
 
 
