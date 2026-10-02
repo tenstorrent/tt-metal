@@ -294,8 +294,8 @@ def test_bucket_trace_teardown_releases_all_stores(monkeypatch):
     generator.model_args = [SimpleNamespace(mesh_device="mesh")]
     generator.mesh_device = "mesh"
     generator.data_parallel = 1
-    width1 = ({True: {0: 11}}, {}, {})
-    width8 = ({True: {0: 88}}, {}, {})
+    width1 = ({True: {0: 11}}, {}, {}, {})
+    width8 = ({True: {0: 88}}, {}, {}, {})
     generator._bucket_trace_store = {1: width1, 8: width8}
     generator.trace_ids_decode = width8[0]
 
@@ -308,6 +308,168 @@ def test_bucket_trace_teardown_releases_all_stores(monkeypatch):
     generator.trace_ids_decode = {}
     generator.model = []
     del generator
+
+
+def _decode_warmup_harness(monkeypatch):
+    """Qwen adapter + real Generator staging/capture code, with device work stubbed out."""
+    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
+    from models.tt_transformers.tt.generator import Generator
+
+    monkeypatch.setenv("TT_DECODE_BUCKETING", "1")
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda *_: None)
+    events = []
+    gen = object.__new__(Qwen36ForCausalLM)
+    gen.model = [
+        SimpleNamespace(
+            num_devices=4,
+            args=SimpleNamespace(max_batch_size=8),
+            sampling=SimpleNamespace(set_trace_bucket=lambda _: None),
+        )
+    ]
+    gen.mesh_device = object()
+    gen.data_parallel = 1
+    gen.live_traces = 0
+
+    def prepare(tokens, current_pos, page_table=None, kv_cache=None, on_device_sampling=False, **kwargs):
+        events.append(("prepare", tokens.shape[0], on_device_sampling, gen.live_traces))
+        prepared = {"width": tokens.shape[0], "num_blocks": page_table.shape[1], "sampling": on_device_sampling}
+        if kwargs.get("return_compile_output"):
+            prepared["compile_output"] = None
+        return prepared
+
+    def record(prepared):
+        assert prepared["width"] == gen.capture_width, "capture consumed another width's staged inputs"
+        events.append(("record", prepared["width"], prepared["sampling"], gen.live_traces))
+        gen.live_traces += 1
+        return {0: gen.live_traces}, "out", "in"
+
+    gen._uses_prefetcher = lambda: False
+    gen._decode_forward_no_trace_text = lambda *args, **kwargs: None
+    gen._prepare_decode_trace_text = prepare
+    gen._record_decode_trace_text = record
+
+    def dispatch(
+        self,
+        tokens=None,
+        start_pos=None,
+        page_table=None,
+        kv_cache=None,
+        enable_trace=True,
+        sampling_params=None,
+        prepare_trace=False,
+        skip_trace_precompile=False,
+        **_,
+    ):
+        # Mirrors Generator.decode_forward / _decode_forward_trace_text capture-vs-stage dispatch.
+        kw = dict(page_table=page_table, kv_cache=kv_cache, on_device_sampling=sampling_params is not None)
+        if enable_trace:
+            if not self.trace_ids_decode[kw["on_device_sampling"]]:
+                self.capture_width = tokens.shape[0]
+                ids, out, *inputs = self._capture_decode_trace_text(
+                    tokens, start_pos, skip_precompile=skip_trace_precompile, **kw
+                )
+                self.trace_ids_decode[kw["on_device_sampling"]] = ids
+                self.trace_inputs_decode[kw["on_device_sampling"]] = inputs
+                self.trace_output_decode[kw["on_device_sampling"]] = out
+        elif prepare_trace:
+            self._prepare_decode_trace_variant(tokens, start_pos, **kw)
+
+    monkeypatch.setattr(Generator, "decode_forward", dispatch)
+    return gen, events
+
+
+def _release_harness(gen):
+    gen._bucket_trace_store = {}
+    gen.trace_ids_decode = {}
+    gen.model = []
+
+
+def test_decode_warmup_stages_every_width_before_capture(monkeypatch):
+    """#56474: eager warmup stages every width x sampling variant; trace warmup only records them."""
+    gen, events = _decode_warmup_harness(monkeypatch)
+    warmup = dict(kv_cache=None, max_batch_size=8, num_blocks=4, can_sample_on_device=True)
+    try:
+        gen.warmup_model_decode(enable_trace=False, **warmup)
+        gen.live_traces += 1  # the plugin records the prefill trace between the two phases
+        gen.warmup_model_decode(enable_trace=True, **warmup)
+    finally:
+        _release_harness(gen)
+
+    expected = {(width, sampling) for width in (1, 2, 4, 8) for sampling in (False, True)}
+    prepares = [event for event in events if event[0] == "prepare"]
+    assert sorted((w, s) for _, w, s, _ in prepares) == sorted(expected)
+    assert all(live == 0 for *_, live in prepares), f"staged behind a live trace: {prepares}"
+    assert sorted((w, s) for kind, w, s, _ in events if kind == "record") == sorted(expected)
+
+
+def test_decode_warmup_restages_when_num_blocks_changes(monkeypatch):
+    """A repeated eager warmup with a new page-table width replaces the staged inputs of every width."""
+    gen, events = _decode_warmup_harness(monkeypatch)
+    try:
+        gen.warmup_model_decode(
+            enable_trace=False, kv_cache=None, max_batch_size=8, num_blocks=4, can_sample_on_device=False
+        )
+        gen.warmup_model_decode(
+            enable_trace=False, kv_cache=None, max_batch_size=8, num_blocks=8, can_sample_on_device=False
+        )
+        staged = {width: entry[3][False]["num_blocks"] for width, entry in gen._bucket_trace_store.items()}
+    finally:
+        _release_harness(gen)
+
+    assert len([event for event in events if event[0] == "prepare"]) == 8
+    assert staged == {1: 8, 2: 8, 4: 8, 8: 8}
+
+
+def test_prefill_warmup_prepares_eagerly_and_only_records_when_traced():
+    """#56474: the eager call allocates/compiles prefill; the traced call records on the same buffers."""
+    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
+
+    calls = []
+    model = SimpleNamespace(num_devices=4, args=SimpleNamespace(max_batch_size=8), _chunked_trace_id=None)
+
+    def record(device):
+        calls.append("record")
+        model._chunked_trace_id = 7
+
+    model._bind_gdn_prefill_scratch = lambda: calls.append("bind") or "batched"
+    model._unbind_gdn_prefill_scratch = lambda prev: calls.append(("unbind", prev))
+    model.prepare_prefill_trace_chunked = lambda device, page_table, chunk_size: calls.append(
+        ("prepare", tuple(page_table.shape))
+    )
+    model.record_prefill_trace_chunked = record
+    model.warmup_gdn_slot_ops = lambda: calls.append("slot_ops")
+    wrapper = SimpleNamespace(model=[model], mesh_device="mesh")
+    kv_cache = [(SimpleNamespace(shape=(100, 1, 64, 128)), None)]
+
+    Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, False)
+    Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, True)
+    Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, True)
+
+    prepare, unbind = ("prepare", (1, 128)), ("unbind", "batched")
+    assert calls == ["bind", prepare, unbind, "slot_ops", "bind", prepare, "record", unbind, "slot_ops"]
+
+
+def test_prefill_prepare_is_idempotent_and_record_requires_it(monkeypatch, expect_error):
+    """prepare_prefill_trace_chunked re-runs only for new args; record needs a prior prepare."""
+    released, prepared = [], []
+    monkeypatch.setattr(ttnn, "release_trace", lambda device, trace_id: released.append(trace_id))
+    model = SimpleNamespace(num_devices=4, _chunked_prepared_key=None, _chunked_trace_id=None)
+
+    model._prepare_prefill_trace_chunked_tp = lambda device, page_table, chunk_size, warmup: prepared.append(
+        tuple(page_table.shape)
+    )
+    page_table = torch.zeros(1, 64, dtype=torch.int32)
+
+    with expect_error(AssertionError, "prepare_prefill_trace_chunked first"):
+        Qwen36Model.record_prefill_trace_chunked(model, "mesh")
+    Qwen36Model.prepare_prefill_trace_chunked(model, "mesh", page_table)
+    Qwen36Model.prepare_prefill_trace_chunked(model, "mesh", page_table)
+    model._chunked_trace_id = 5
+    Qwen36Model.prepare_prefill_trace_chunked(model, "mesh", page_table)
+    assert prepared == [(1, 64)] and model._chunked_trace_id == 5 and released == []
+
+    Qwen36Model.prepare_prefill_trace_chunked(model, "mesh", torch.zeros(1, 128, dtype=torch.int32))
+    assert prepared == [(1, 64), (1, 128)] and released == [5] and model._chunked_trace_id is None
 
 
 @pytest.mark.parametrize("width", [1, 2, 4, 8])
@@ -1051,3 +1213,70 @@ def test_all_buckets_fit_trace_region(mesh_device, reset_seeds, ensure_gc):
         model.sampling.reset_trace()
     for tid in tids.values():
         ttnn.release_trace(mesh_device, tid)
+
+
+@pytest.mark.timeout(3600)
+@torch.no_grad()
+@_parametrize_traced()
+@pytest.mark.parametrize("prefill_first", [True, False], ids=["prefill_first", "decode_first"])
+@pytest.mark.parametrize("sampling", [False, True], ids=["host_sampling", "device_sampling"])
+def test_vllm_warmup_leaves_no_late_allocations(mesh_device, prefill_first, sampling, reset_seeds, ensure_gc):
+    """#56474: after the two-phase vLLM warmup (either order, host or device sampling) every trace replays clean."""
+    if not trace_allocation_tracker.TRACE_ALLOC_TRACKING:
+        pytest.skip("needs TT_METAL_TRACE_ALLOC_TRACKING=1")
+    from models.common.sampling.sampling_params import SamplingParams
+    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
+
+    bmax = 8
+    model, page_table = _build(mesh_device, bmax)
+    if sampling and model.sampling is None:
+        pytest.skip("on-device sampling unsupported on this mesh")
+    gen = Qwen36ForCausalLM([model], [model.args], mesh_device)
+    gen._tt_allow_decode_trace_buffer_reuse = False  # let the tracker see the decode trace inputs too
+    kv_cache = model._paged_kv_caches
+    prefill_kw = dict(kv_cache=kv_cache, can_sample_on_device=False)
+    decode_kw = dict(kv_cache=kv_cache, max_batch_size=bmax, num_blocks=BPU, can_sample_on_device=sampling)
+    gen.warmup_model_prefill(enable_trace=False, **prefill_kw)
+    gen.warmup_model_decode(enable_trace=False, **decode_kw)
+    record = [
+        lambda: gen.warmup_model_prefill(enable_trace=True, **prefill_kw),
+        lambda: gen.warmup_model_decode(enable_trace=True, **decode_kw),
+    ]
+    for step in record if prefill_first else record[::-1]:
+        step()
+
+    T = 2048 + 100  # one traced chunk plus a masked tail
+    prompt = torch.randint(1, 1000, (1, T), dtype=torch.int64)
+    greedy = SamplingParams(temperature=[0.0] * bmax, top_k=[1] * bmax, top_p=[1.0] * bmax)
+    sampled = SamplingParams(temperature=[1.0] * bmax, top_k=[10] * bmax, top_p=[0.9] * bmax)
+    params = [greedy, sampled] if sampling else [None]
+
+    def decode(width, sampling_params, **kwargs):
+        start_pos = torch.full((bmax,), -1, dtype=torch.int32)
+        start_pos[:width] = T
+        flags = dict(
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=sampling_params is not None,
+            reset_sampling_state=False,
+        )
+        flags.update(kwargs)
+        gen.decode_forward(
+            torch.zeros(bmax, 1, dtype=torch.int32),
+            start_pos,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            enable_trace=True,
+            read_from_device=True,
+            sampling_params=sampling_params,
+            **flags,
+        )
+
+    for _ in range(2):  # every trace replays after every other one
+        gen.prefill_forward(prompt, page_table[:1], kv_cache, [T], empty_slots=[0])
+        for sampling_params in params:
+            for width in (1, 2, 4, 8):
+                decode(width, sampling_params)
+        # A batch condense that moves every slot; device sampling state must be reloaded with it.
+        remap = torch.tensor([*range(1, bmax), 0], dtype=torch.int32)
+        decode(bmax, params[-1], slot_remap=remap, reset_sampling_state=sampling)

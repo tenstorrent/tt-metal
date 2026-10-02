@@ -32,6 +32,9 @@ def warmup_decode_buckets(generator, warmup, *args, **kwargs):
     )
     trace_enabled = kwargs.get("enable_trace", False)
     if getattr(generator, "_decode_bucket_compile_key", None) != compile_key:
+        # Drop inputs staged for an older warmup shape; uncaptured widths re-stage below.
+        for entry in getattr(generator, "_bucket_trace_store", {}).values():
+            entry[3].clear()
         for width in widths:
             bucket_kwargs = dict(kwargs, max_batch_size=width, enable_trace=False)
             logger.info(f"Qwen decode compile warmup: bucket width={width}")

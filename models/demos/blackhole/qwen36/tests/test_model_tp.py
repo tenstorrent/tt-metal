@@ -321,8 +321,8 @@ def test_model_tp_prefill_paged_slots(mesh_device, B, reset_seeds, ensure_gc):
     """vLLM continuous-batching prefill contract (TP): per-slot prefill acceptance test.
 
     Mirrors test_model_tp_decode_batched but drives the online-serving path the vLLM wrapper uses:
-    the batched prefill warmup (capture_prefill_trace_chunked(capture_chunk_trace=False): masked
-    buckets warmed against a B=1 GDN scratch, no chunk trace parked), then prefill_paged_slots
+    the batched prefill warmup (prepare_prefill_trace_chunked: masked buckets warmed against the
+    persistent B=1 GDN scratch, no chunk trace parked), then prefill_paged_slots
     (each user prefilled B=1 into its empty_slots[u] via write_slot, preserving the other rows).
     Batched decode at diverging positions must match B independent B=1 bespoke runs, per user.
     """
@@ -362,14 +362,13 @@ def test_model_tp_prefill_paged_slots(mesh_device, B, reset_seeds, ensure_gc):
     kv_shape = (num_blocks, args.n_local_kv_heads, block_size, args.head_dim)
     model.allocate_kv_caches(kv_shape, ttnn.bfloat16, batch_size=B)
 
-    # Batched prefill warmup exactly as qwen36_vllm.warmup_model_prefill: bind a B=1 scratch, warm
-    # the masked buckets (no chunk trace), restore the batched decode buffers.
+    # Batched prefill warmup as qwen36_vllm.warmup_model_prefill's eager phase: prepare only, no chunk trace.
     warmup_pt = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
-    prev = model._alloc_gdn_scratch_b1()
+    prev = model._bind_gdn_prefill_scratch()
     try:
-        model.capture_prefill_trace_chunked(mesh_device, warmup_pt, chunk_size=2048, capture_chunk_trace=False)
+        model.prepare_prefill_trace_chunked(mesh_device, warmup_pt, chunk_size=2048)
     finally:
-        model._restore_gdn_batched(prev)
+        model._unbind_gdn_prefill_scratch(prev)
 
     comp0 = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
     token_list = [torch.tensor([prompts[u]], dtype=torch.long) for u in range(B)]
@@ -415,9 +414,10 @@ def test_model_tp_prefill_paged_slots_long(mesh_device, T, traced, reset_seeds, 
     requests. Before the assert-removal + traced-chunk-in-batched work, prefill_paged_slots refused
     prompts >= chunk_size. Now long prompts are chunked at chunk_size granularity, per user, into the
     B=1 GDN prefill scratch, snapshotted into each request's decode slot:
-      * eager  (capture_chunk_trace=False): the eager chunk-outer path (assert removal / A1).
-      * traced (capture_chunk_trace=True):  the chunk trace parked against the PERSISTENT B=1 scratch,
-        replayed per user (A3) — the fast path, matching single-sequence long-prefill speed.
+      * eager  (prepare_prefill_trace_chunked): the eager chunk-outer path (assert removal / A1).
+      * traced (prepare_ + record_prefill_trace_chunked): the chunk trace parked against the
+        PERSISTENT B=1 scratch, replayed per user (A3) — the fast path, matching single-sequence
+        long-prefill speed.
     Both must match the proven B=1 eager chunk-outer reference (prefill_traced_chunked, validated vs
     the bespoke oracle by test_model_tp_long_prefill), per user: prefill logits, post-prefill GDN
     recurrent state, and a few batched-decode steps. T=4096 (2 full chunks, no tail) and T=4352
@@ -487,21 +487,15 @@ def test_model_tp_prefill_paged_slots_long(mesh_device, T, traced, reset_seeds, 
     # ---- online path: batched warmup (eager|traced) + prefill_paged_slots + batched decode ----
     bmodel, args, bpt, num_blocks = _build(B)
     warmup_pt = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
-    # Mirror qwen36_vllm.warmup_model_prefill exactly for each variant.
-    if traced:
-        prev = bmodel._bind_gdn_prefill_scratch()
-        try:
-            bmodel.capture_prefill_trace_chunked(mesh_device, warmup_pt, chunk_size=2048, capture_chunk_trace=True)
-        finally:
-            bmodel._unbind_gdn_prefill_scratch(prev)
-        assert bmodel._chunked_trace_id is not None, "traced warmup must park the chunk trace"
-    else:
-        prev = bmodel._alloc_gdn_scratch_b1()
-        try:
-            bmodel.capture_prefill_trace_chunked(mesh_device, warmup_pt, chunk_size=2048, capture_chunk_trace=False)
-        finally:
-            bmodel._restore_gdn_batched(prev)
-        assert bmodel._chunked_trace_id is None, "eager warmup must NOT park the chunk trace"
+    # Mirror qwen36_vllm.warmup_model_prefill: the eager phase prepares; the traced phase also records.
+    prev = bmodel._bind_gdn_prefill_scratch()
+    try:
+        bmodel.prepare_prefill_trace_chunked(mesh_device, warmup_pt, chunk_size=2048)
+        if traced:
+            bmodel.record_prefill_trace_chunked(mesh_device)
+    finally:
+        bmodel._unbind_gdn_prefill_scratch(prev)
+    assert (bmodel._chunked_trace_id is not None) == traced, "only the traced warmup parks the chunk trace"
 
     token_list = [torch.tensor([prompts[u]], dtype=torch.long) for u in range(B)]
     # prefill_paged_slots returns host torch logits [1,1,vocab] per user (in call order).

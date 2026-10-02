@@ -181,6 +181,8 @@ class Qwen36Model:
         # Chunk-outer trace: one all-layer chunk captured, replayed per chunk via DMA inputs.
         # Persistent buffers below; addresses baked into trace.
         self._chunked_trace_id = None
+        self._chunked_prepared_key = None
+        self._gdn_slot_ops_warmed = False
         self._chunked_trace_output = None
         self._chunked_chunk_size = None
         self._chunk_token_buf = None
@@ -2171,35 +2173,57 @@ class Qwen36Model:
             x = x_new
         return x
 
-    def capture_prefill_trace_chunked(
-        self, device, page_table, chunk_size=2048, warmup_masked_buckets=True, capture_chunk_trace=True
-    ):
+    def capture_prefill_trace_chunked(self, device, page_table, chunk_size=2048, warmup_masked_buckets=True):
         """Capture one chunk's all-layer prefill as a trace; replayed per chunk.
 
         Chunk-outer prefill stays under the 4 GiB trace limit at long context.
-        Flexible SDPA (runtime chunk_start) makes one trace serve all chunk positions.
+        Flexible SDPA (runtime chunk_start) makes one trace serve all chunk positions."""
+        self.prepare_prefill_trace_chunked(device, page_table, chunk_size, warmup_masked_buckets)
+        self.record_prefill_trace_chunked(device)
 
-        capture_chunk_trace=False warms the masked-bucket programs but skips parking the chunk trace.
-        The batched (B>1) vLLM path passes capture_chunk_trace=True with the PERSISTENT B=1 prefill
-        scratch bound (_bind_gdn_prefill_scratch), so the trace bakes that scratch's addresses and
-        long prompts replay the traced chunk path per user (prefill_paged_slots rebinds the scratch)."""
+    def prepare_prefill_trace_chunked(self, device, page_table, chunk_size=2048, warmup_masked_buckets=True):
+        """Allocate + compile everything the chunk trace needs. No-op if already prepared for these args."""
+        key = (chunk_size, tuple(page_table.shape), bool(warmup_masked_buckets))
+        if self._chunked_prepared_key == key:
+            return
+        if self._chunked_trace_id is not None:
+            ttnn.release_trace(device, self._chunked_trace_id)
+            self._chunked_trace_id = None
         if self.num_devices > 1:
-            return self._capture_prefill_trace_chunked_tp(
-                device,
-                page_table,
-                chunk_size=chunk_size,
-                warmup_masked_buckets=warmup_masked_buckets,
-                capture_chunk_trace=capture_chunk_trace,
+            self._prepare_prefill_trace_chunked_tp(device, page_table, chunk_size, warmup_masked_buckets)
+        else:
+            self._prepare_prefill_trace_chunked_single(device, page_table, chunk_size, warmup_masked_buckets)
+        self._chunked_prepared_key = key
+
+    def record_prefill_trace_chunked(self, device):
+        """Capture the chunk trace on prepare_prefill_trace_chunked's buffers; allocates nothing outside capture."""
+        assert self._chunked_prepared_key is not None, "Call prepare_prefill_trace_chunked first"
+        if self._chunked_trace_id is not None:
+            ttnn.release_trace(device, self._chunked_trace_id)
+            self._chunked_trace_id = None
+        tp = self.num_devices > 1
+        (self._reset_gdn_state_for_new_sequence if tp else self._reset_dn_state_inplace)()
+        forward = self._forward_prefill_chunk_tp if tp else self._forward_prefill_chunk
+        # The trace output is read right after each replay, before any other trace can run.
+        with trace_allocation_tracker.corruptible_allocation_scope(device):
+            self._chunked_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+            self._chunked_trace_output = forward(
+                self._chunk_token_buf,
+                self._chunk_cos_buf,
+                self._chunk_sin_buf,
+                self._chunk_start_idx_tensor,
+                self._chunk_full_page_table_buf,
+                self._chunk_page_table_buf,
             )
+            ttnn.end_trace_capture(device, self._chunked_trace_id, cq_id=0)
+        logger.info(f"Chunked prefill trace{' (TP)' if tp else ''} captured successfully!")
+
+    def _prepare_prefill_trace_chunked_single(self, device, page_table, chunk_size, warmup_masked_buckets):
         assert self._deltanet_external_states is not None, "Call allocate_kv_caches first"
         assert chunk_size % 128 == 0, f"chunk_size {chunk_size} must be a multiple of 128"
         B = 1
         block_size = get_block_size(self._paged_kv_caches)
         blocks_per_chunk = chunk_size // block_size
-
-        if self._chunked_trace_id is not None:
-            ttnn.release_trace(device, self._chunked_trace_id)
-            self._chunked_trace_id = None
 
         self._chunked_chunk_size = chunk_size
 
@@ -2272,25 +2296,10 @@ class Qwen36Model:
         # Dummy prefills dirty state/KV; reset below before capture.
         if warmup_masked_buckets:
             self.warmup_prefill_masked_buckets(page_table)
-
-        # Capture trace.
         self._reset_dn_state_inplace()
-        self._chunked_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-        self._chunked_trace_output = self._forward_prefill_chunk(
-            self._chunk_token_buf,
-            self._chunk_cos_buf,
-            self._chunk_sin_buf,
-            self._chunk_start_idx_tensor,
-            self._chunk_full_page_table_buf,
-            self._chunk_page_table_buf,
-        )
-        ttnn.end_trace_capture(device, self._chunked_trace_id, cq_id=0)
-        logger.info("Chunked prefill trace captured successfully!")
 
-    def _capture_prefill_trace_chunked_tp(
-        self, device, page_table, chunk_size=2048, warmup_masked_buckets=True, capture_chunk_trace=True
-    ):
-        """TP fork of capture_prefill_trace_chunked.
+    def _prepare_prefill_trace_chunked_tp(self, device, page_table, chunk_size, warmup_masked_buckets):
+        """TP fork of _prepare_prefill_trace_chunked_single.
 
         Replicated persistent buffers; rope_tp cos/sin; GDN uses _stable_state (not external buffers).
         Trace replays _forward_prefill_chunk_tp."""
@@ -2299,9 +2308,6 @@ class Qwen36Model:
         block_size = get_block_size(self._paged_kv_caches)
         blocks_per_chunk = chunk_size // block_size
 
-        if self._chunked_trace_id is not None:
-            ttnn.release_trace(device, self._chunked_trace_id)
-            self._chunked_trace_id = None
         self._chunked_chunk_size = chunk_size
 
         # Allocate the hidden-sharded vision-splice buffers BEFORE warmup so the fixed-shape
@@ -2360,29 +2366,7 @@ class Qwen36Model:
         # Warmup masked-bucket/tail programs outside trace (same GDN mode; avoids trace clobber).
         if warmup_masked_buckets:
             self.warmup_prefill_masked_buckets(page_table)
-
-        if not capture_chunk_trace:
-            # Batched (B>1) vLLM path: masked-bucket programs are warmed above; skip parking the
-            # chunk trace (it would bake the B=1 prefill scratch that is freed after warmup, and
-            # batched serving handles short prompts only). num_full==0 prompts never need it.
-            self._chunked_trace_id = None
-            self._reset_gdn_state_for_new_sequence()
-            logger.info("Masked-bucket prefill programs (TP) warmed; chunk trace skipped (batched path).")
-            return
-
-        # Capture trace.
         self._reset_gdn_state_for_new_sequence()
-        self._chunked_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-        self._chunked_trace_output = self._forward_prefill_chunk_tp(
-            self._chunk_token_buf,
-            self._chunk_cos_buf,
-            self._chunk_sin_buf,
-            self._chunk_start_idx_tensor,
-            self._chunk_full_page_table_buf,
-            self._chunk_page_table_buf,
-        )
-        ttnn.end_trace_capture(device, self._chunked_trace_id, cq_id=0)
-        logger.info("Chunked prefill trace (TP) captured successfully!")
 
     # ----------------------------------------------------------------------- #
     # Traced batched SHORT-prompt prefill (B=32 / ISL<=128)
@@ -2945,6 +2929,25 @@ class Qwen36Model:
                 for m in range(dn.K)
             ]
             dn.write_slot(slot, rec, convs)
+
+    def warmup_gdn_slot_ops(self):
+        """Compile the per-slot GDN state edits (write_slot per slot, remap_slots) before any trace is live."""
+        if self._gdn_slot_ops_warmed:
+            return
+        comp = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+        dn_states = [layer.attention for layer in self.layers if not layer.is_full_attention]
+        prev = self._bind_gdn_prefill_scratch()
+        try:
+            rec = [ttnn.to_torch(dn.rec_state, mesh_composer=comp) for dn in dn_states]
+            conv = [[ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states] for dn in dn_states]
+        finally:
+            self._unbind_gdn_prefill_scratch(prev)
+        for slot in range(self.args.max_batch_size):
+            self._write_gdn_slot(slot, rec, conv)
+        # A full permutation touches every row, so one remap compiles every gather program.
+        self._remap_gdn_slots(list(range(self.args.max_batch_size))[::-1])
+        ttnn.synchronize_device(self.mesh_device)
+        self._gdn_slot_ops_warmed = True
 
     def _remap_gdn_slots(self, remap):
         """Apply a vLLM batch-condense slot_remap to every GDN layer's batched decode state
@@ -3938,6 +3941,7 @@ class Qwen36Model:
         if getattr(self, "_chunked_trace_id", None) is not None:
             ttnn.release_trace(self.device, self._chunked_trace_id)
             self._chunked_trace_id = None
+        self._chunked_prepared_key = None
         for rec, conv in self._deltanet_external_states:
             ttnn.deallocate(rec)
             ttnn.deallocate(conv)
