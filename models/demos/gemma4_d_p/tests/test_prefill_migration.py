@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
@@ -80,6 +81,9 @@ def migration_environment(request, tmp_path):
     print(f"Migration test results: {output_dir}", flush=True)
     env = {key: value for key, value in os.environ.items() if not key.startswith("PREFILL_")}
     env.setdefault("OMP_NUM_THREADS", "16")
+    # The KV check streams ~450 GB through fresh host tensors; huge pages make allocating and freeing
+    # them cheap. Only page size changes, never a reported number.
+    env.setdefault("THP_MEM_ALLOC_ENABLE", "1")
     env.update(
         {
             key: os.environ[key]
@@ -226,9 +230,18 @@ def run_migration_case(gate, context_len, output_dir):
     original_loop = prefill_runner.run_request_loop
     failures = []
 
+    def load_table_and_open_umd():
+        # The runner wrote both files before its request loop. The first read_dram_umd constructs this
+        # process's UMD cluster (~10 s), so do it while the prefill runs rather than before validation.
+        table = ttnn.experimental.disaggregation.import_from_protobuf_file(env["PREFILL_MIGRATION_TABLE_PATH"])
+        device_map = prefill_producer._read_device_map(timeout_s=10)
+        ttnn.experimental.disaggregation.read_dram_umd(next(iter(device_map.values())), 0, 32)
+        return table, device_map
+
     def checked_loop(runtime, kv_cache, *args, **kwargs):
-        with (output_dir / "producer.log").open("w") as log:
+        with (output_dir / "producer.log").open("w") as log, ThreadPoolExecutor(1) as setup:
             producer = subprocess.Popen(command, env=client_env, stdout=log, stderr=subprocess.STDOUT)
+            table_and_map = setup.submit(load_table_and_open_umd)
             try:
                 original_loop(runtime, kv_cache, *args, **kwargs)
                 producer_returncode = producer.wait(timeout=120)
@@ -237,14 +250,14 @@ def run_migration_case(gate, context_len, output_dir):
                         f"Producer exited with code {producer_returncode}. See {output_dir / 'producer.log'}."
                     )
                 assert runtime.slot_ends == [context_len] + [0] * (Gemma4ServiceConfig.MAX_USER_SLOTS - 1)
-                table = ttnn.experimental.disaggregation.import_from_protobuf_file(env["PREFILL_MIGRATION_TABLE_PATH"])
-                device_map = prefill_producer._read_device_map(timeout_s=10)
+                table, device_map = table_and_map.result()
+                staging = {}
 
                 def read_heads(layer):
                     cache = kv_cache.layers[layer]
                     tensors = ((0, cache.kv),) if hasattr(cache, "kv") else ((4, cache.k), (20, cache.v))
                     for config_start, tensor in tensors:
-                        heads = read_cache_tensor(tensor, 0, context_len)
+                        heads = read_cache_tensor(tensor, 0, context_len, staging)
                         for head, actual in enumerate(heads):
                             config_id = config_start + head
                             check_table_samples(table, device_map, layer, 0, config_id, actual)
