@@ -2638,7 +2638,20 @@ class Gemma4Model:
             torch_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
         else:
             torch_out = ttnn.to_torch(tt_out)
-        return torch_out[:, :, :B, : self.vocab_size].view(B, S, -1)
+        return _decode_logits_rows(torch_out[:, :, :B, : self.vocab_size], B, S)
+
+
+def _decode_logits_rows(logits, B, S=1):
+    """``[1, 1, rows, vocab]`` host logits as ``[B, S, vocab]``.
+
+    Nearest-bucket decode runs fewer rows than the max batch the caller
+    indexes by, so pad the missing rows instead of viewing: ``view(B, S, -1)``
+    on a narrower tensor folds the vocab axis into the row axis, and row 0
+    then holds only the first ``vocab * rows / B`` logits of user 0."""
+    rows = int(logits.shape[-2])
+    if rows < B:
+        logits = torch.nn.functional.pad(logits, (0, 0, 0, B - rows))
+    return logits.reshape(B, S, -1)
 
 
 def _apply_gemma4_single_untilize_override(tt_sampling) -> None:
