@@ -78,17 +78,27 @@ device -> practical 27.8 ms of kernels above their bounds (FF1+FF3 14.7, QKV 4.8
 per op 13.5 ms, all of it the SDPA / heads / add+RMSNorm floors (softmax, norms, RoPE); ideal per op -> whole model
 7.4 ms of activations crossing DRAM.
 
-**Achievable whole-model bound (2026-10-02, artifact version 27).** Cold, implementation-independent: every activation
-on chip; FLOPs at 89% of the 120-core LoFi peak (590.6 TFLOP/s: the matmul LLK's own ceiling, see below), weights at 450
-GB/s, vector work (softmax exp, SwiGLU, norms / RoPE) at measured per-tile rates, overlapped with the FPU
-(`profile_page.py` `achievable`). FPU-bound at every batch:
+**Achievable whole-model range (2026-10-02, artifact version 28).** Cold, implementation-independent, every activation
+on chip, weights read once at 450 GB/s: [max(FPU, SFPU, DRAM), FPU + SFPU] (`profile_page.py` `achievable`). FPU =
+matmul / SDPA FLOPs at 89% of the LoFi peak (590.6 TFLOP/s) + the norms' / RoPE's / softmax's eltwise passes in
+sequence; SFPU = exp + SwiGLU, hidden (low end) or serialized (high end). Rates are tt-llk perf-suite cycles per bfp8 tile
+measured on this board (add / mul 31.1, column-broadcast 28.6, matmul 18.0 per tile product at long K) or the best rate a
+kernel here demonstrates (row max ~7 / tile, exp 64, SwiGLU 383). Formulation (user's choice): gamma folded into the
+next matmul / RoPE tables, rotate-half as a tile swap, row sums as ones-vector matmuls, softmax max kept.
 
-| batch | cold | achievable (vector overlapped) | vector serialized | cold ÷ achievable |
-|---|---|---|---|---|
-| 1 | 14.1 | 6.56 | 7.28 | 2.15× |
-| 8 | 76.7 | 52.5 | 58.2 | 1.46× |
-| 16 | 143.3 | 105.0 | 116.5 | 1.36× |
-| 32 | 291.7 | 210.0 | 233.0 | 1.39× |
+| batch | cold | achievable (SFPU hidden – serialized) | cold ÷ achievable |
+|---|---|---|---|
+| 1 | 14.1 | 6.83 – 7.36 | 1.92 – 2.06× |
+| 8 | 76.7 | 54.7 – 58.9 | 1.30 – 1.40× |
+| 16 | 143.3 | 109.3 – 117.8 | 1.22 – 1.31× |
+| 32 | 291.7 | 218.6 – 235.6 | 1.24 – 1.33× |
+
+bs16 per op group, measured vs achievable FPU (+ SFPU), ms: FF1+FF3 58.95 vs 49.75 (+6.62), FF2 25.87 vs 24.87, QKV
+18.81 vs 15.71, WO 11.57 vs 10.47, SDPA 9.55 vs 5.97 (+1.86), add+RMSNorm 9.45 vs 0.99 (9.5×), heads 7.38 vs 1.56
+(4.7×). The two custom ops are the largest relative gaps; their ablations (§67) put them on data movement / per-wave
+latency, not math. tt-llk perf harness: `tt_metal/tt-llk/tests/.venv` (requirements.txt via uv) with `tests/sfpi`
+symlinked to `runtime/sfpi` (same 7.80.0 build), run by node id with `TT_VISIBLE_DEVICES=<chip>`; results land in
+`tt_metal/tt-llk/perf_data/runs/local-*/*.parquet` (per tile = TILE_LOOP / (loop_factor × tile_cnt)).
 
 Why 89%: `bench_ff13_fused_ablate.py` / `bench_mm_ablate.py` at today's configs (blocks from `capture_qkv_call.py`:
 FF13 4,40,8 1×8 at bs16 and bs32, QKV / FF2 / WO 8,8,8 1×8, bs32 QKV as 4 chunks of M=4096) put every batched matmul's

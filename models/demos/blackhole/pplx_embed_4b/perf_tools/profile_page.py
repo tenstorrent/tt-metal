@@ -31,22 +31,29 @@ PEAK_SPEC = CLK * SPEC_CORES * FLOP_CYC
 # pplx-embed-4B per layer: QKV [2560, 6144], WO [4096, 2560], FF1 + FF3 [2560, 2 x 9728], FF2 [9728, 2560], bfp4
 N_LAYERS, WEIGHT_PARAMS_PER_LAYER = 36, 2560 * 6144 + 4096 * 2560 + 2560 * 2 * 9728 + 9728 * 2560
 # Achievable whole model (the "achievable" fields), cold at 1.35 GHz and independent of today's dataflow: every activation
-# on chip, so the bound is max(FPU, DRAM, vector) with the three overlapped (serialized FPU + vector is the upper band).
-#   FPU: every matmul / SDPA FLOP at 89% of the 120-core LoFi peak, what the matmul LLK reaches with no data movement
-#        (FF2 bs32 compute only 589 TFLOP/s, 2026-10-02) and the best Blackhole GEMM in tech_reports/GEMM_FLOPS (89.5%)
-#   DRAM: the weights and the embedding rows once, at the attainable 450 GB/s
-#   vector, per layer at measured per-tile rates on 120 cores: one exp per attention score (max-subtract folded into
-#        the exp's bias, row sums as a ones column of P·V, normalise on O) at the SFPLOADMACRO exp's ~64 cycles a tile
-#        (NEGATIVE_RESULTS §65); silu(gate)·up per FF1 output at the landed pass's ~383 cycles an output tile (§62, 184
-#        µs at bs16); the eltwise rest (2 RMSNorms × square / scale / gamma + residual add on 2560, QK-norm + RoPE on
-#        Q / K's 5120, O's 1/sum on 4096) at ~32 cycles a tile (unpack-bound, an estimate)
+# on chip, weights read once. The FPU runs the matmuls and every eltwise pass in sequence; the SFPU work (exp, SwiGLU)
+# runs from the pack thread, so the range is [max(FPU, SFPU, DRAM), FPU + SFPU] (overlapped .. serialized).
+#   matmul / SDPA FLOPs at 89% of the 120-core LoFi peak (590.6 TFLOP/s): the LLK's 18.0 cycles per tile product at
+#   long K (tt-llk perf_matmul, L1 to L1), the model's matmuls with no data movement (FF2 bs32 589 TFLOP/s) and
+#   tech_reports/GEMM_FLOPS's best Blackhole GEMM (89.5%)
+#   eltwise passes at the tt-llk perf suite's L1-to-L1 cycles per bfp8 tile on Blackhole (2026-10-02, chip 1):
+#   eltwise add / mul 31.1, column-broadcast mul / sub 28.6 (8 tiles wide); row sums as
+#   matmuls against a ones vector (18.0 a tile). Formulation: RMSNorm's gamma folds into the next matmul's weights,
+#   QK-norm's gamma into the RoPE cos / sin tables, RoPE's rotate-half is a whole-tile swap (64 = 2 tiles, the sign in
+#   the sin table); the softmax keeps its row max and subtract and normalises the output. The row max takes the best
+#   demonstrated rate, as exp and SwiGLU do: SDPA's 469 cycles per 64-tile unit (NEGATIVE_RESULTS §65; tt-llk's row
+#   reduce-max is 116.8 a tile)
+#   SFPU: one exp per score at SDPA's SFPLOADMACRO path (~64 cycles a tile; tt-llk approximate exp 94), silu(gate)·up
+#   at the fused SwiGLU pass (~383 cycles an output tile; tt-llk sigmoid 221 + 2 SFPU mul 198); rsqrt is per row
+#   (one tile per tile row of a norm) and not counted
 ACH_FPU_FRAC, ACH_BW = 0.89, BW
-VEC_CYC = {"exp": 64, "swiglu": 383, "eltwise": 32}
-VEC_TILES_PER_TOKEN = {  # per layer
-    "exp": 32 * ISL / 1024,
-    "swiglu": 9728 / 1024,
-    "eltwise": (2560 * (2 * 3 + 1) + 5120 * (2 + 4) + 4096) / 1024,
+ELT, BCOL, RMAX, ONES_MM = 31.1, 28.6, 469 / 64, 18.0
+ACH_FPU_CYC_PER_TOKEN = {  # per layer, by op group: tiles per token x cycles per tile
+    "add + RMSNorm": 2 * 2560 / 1024 * (ELT + ELT + ONES_MM + BCOL),  # x2: add, square, row sum, x rstd
+    "heads + QK-norm + RoPE": 5120 / 1024 * (ELT + ONES_MM + BCOL + 3 * ELT),  # Q / K: square, sum, x rstd, RoPE
+    "SDPA": 32 * ISL / 1024 * (RMAX + BCOL + ONES_MM) + 4096 / 1024 * BCOL,  # scores: max, - max, sum; O x 1/sum
 }
+ACH_SFPU_CYC_PER_TOKEN = {"SDPA": 32 * ISL / 1024 * 64, "FF1 + FF3": 9728 / 1024 * 383}
 GROUPS = (("QKV", "QKV"), ("WO", "WO"), ("FF1 + FF3", "FF1"), ("FF2", "FF2"), ("SDPA", "SDPA"),
           ("heads + QK-norm + RoPE", "heads"), ("add + RMSNorm", "add + RMSNorm"))  # fmt: skip
 
@@ -392,18 +399,30 @@ def add_roofs(b, measured):
     }
     b["ideal"]["model_ms"] = max(b["ideal"]["model_fpu_ms"], b["ideal"]["model_dram_ms"])
     tokens = b["bs"] * ISL
-    vec = {k: N_LAYERS * tokens * n * VEC_CYC[k] / (CLK * CORES) * 1e3 for k, n in VEC_TILES_PER_TOKEN.items()}
+    cyc_ms = lambda c: N_LAYERS * tokens * c / (CLK * CORES) * 1e3
+    gflops = defaultdict(float)
+    for s in sigs:
+        gflops[group_of(s)] += s["flops"]
+    ach_peak = PEAK * ACH_FPU_FRAC
+    ag = {}
+    for g, v in groups.items():
+        fpu = gflops[g] / ach_peak * 1e3 + cyc_ms(ACH_FPU_CYC_PER_TOKEN.get(g, 0.0))
+        sfpu = cyc_ms(ACH_SFPU_CYC_PER_TOKEN.get(g, 0.0))
+        ag[g] = {"fpu_ms": round(fpu, 3), "sfpu_ms": round(sfpu, 3), "measured_ms": round(v["measured_ms"], 3)}
     a = {
         "fpu_frac": ACH_FPU_FRAC,
-        "tflops": round(PEAK * ACH_FPU_FRAC / 1e12, 1),
+        "tflops": round(ach_peak / 1e12, 1),
         "dram_gbs": ACH_BW / 1e9,
-        "fpu_ms": round(flops / (PEAK * ACH_FPU_FRAC) * 1e3, 3),
+        "mm_ms": round(flops / ach_peak * 1e3, 3),
+        "eltwise_ms": {g: round(cyc_ms(c), 3) for g, c in ACH_FPU_CYC_PER_TOKEN.items()},
+        "sfpu_parts_ms": {g: round(cyc_ms(c), 3) for g, c in ACH_SFPU_CYC_PER_TOKEN.items()},
         "dram_ms": round(must_bytes / ACH_BW * 1e3, 3),
-        "vector_ms": {k: round(v, 3) for k, v in vec.items()},
+        "groups": ag,
     }
-    a["vector_total_ms"] = round(sum(vec.values()), 3)
-    a["model_ms"] = max(a["fpu_ms"], a["dram_ms"], a["vector_total_ms"])
-    a["serial_ms"] = round(max(a["fpu_ms"] + a["vector_total_ms"], a["dram_ms"]), 3)
+    a["fpu_ms"] = round(a["mm_ms"] + sum(a["eltwise_ms"].values()), 3)
+    a["sfpu_ms"] = round(sum(a["sfpu_parts_ms"].values()), 3)
+    a["model_ms"] = max(a["fpu_ms"], a["sfpu_ms"], a["dram_ms"])
+    a["serial_ms"] = round(max(a["fpu_ms"] + a["sfpu_ms"], a["dram_ms"]), 3)
     b["achievable"] = a
     return miss
 
