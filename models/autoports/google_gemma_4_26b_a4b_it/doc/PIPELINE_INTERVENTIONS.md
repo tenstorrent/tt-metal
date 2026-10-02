@@ -469,6 +469,19 @@ specific solution or hidden-test hints. A fresh same-cap control starts at
 saved-response versus censored-window counter reporting. Active resumed time
 is about 133 minutes, cumulative about 7h06m. Still no all-five combined result.
 
+08:00 UTC: the revised advisory also fails Sympy (900.118-second timeout, reward
+0), so neither advisory nor the new prefill control is promoted to the suite.
+To satisfy the user's actual aggregate-measurement request, the original five
+tasks are restored with 7,200-second caps, one persistent C1 server, original
+prompt and the configurable-BFP8 candidate with three prior clean solves.
+Pre-dispatch forecast is 65m / 3h06m40s / 5h20m best/expected/conservative wall
+time, with 10h summed agent hard budget; this does not forecast five correct
+solves. All deviations and unresolved task-specific quality risks are recorded
+in `eval_speed/suite_20261002.md`. Reused-image source-overlay support is prepared
+and host-tested but is not enabled in this baseline. A saved-HF long numerical
+control is prepared to investigate quality separately without another expensive
+CPU generation. Active resumed time is about 149 minutes, cumulative 7h22m.
+
 - TTFT: `doc/ttft_optimization/`.
 - Remote benchmarks/evals:
   `readiness_vllm/ttft_optimization_remote/README.md`.
