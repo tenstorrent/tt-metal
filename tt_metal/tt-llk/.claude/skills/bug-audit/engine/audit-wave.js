@@ -101,15 +101,18 @@ const VERDICT_SCHEMA = {
   },
 }
 
+// a repo pack (packs/<repo>.md) is handed out only when the run names it in --knowledge
+const PACKS = KNOWLEDGE.filter((k) => /\/packs\/[^/]+\.md$/.test(k))
 const knowledgeBlock = KNOWLEDGE.length
   ? `KNOWLEDGE — read these files BEFORE the code, in order:
 ${KNOWLEDGE.map((k) => `  - ${k}`).join('\n')}
-They hold a bug-class list weighted by this codebase's real bug history, plus per-area hot spots and "fix seeds"
-(past defects whose pattern may recur in sibling code). Use them to PRIORITISE: check the high-weight classes
-first, and grep the pack AND its "-detail-*.md" companions (same directory) for your batch's directory and file names,
-to pick up the seeds, incomplete-fix lessons and candidate sites that apply here. A candidate site is a lead to
-verify, never a finding by itself.
-They are a FLOOR, never a ceiling — hunt every defect you can ground, whether or not a listed class names it.`
+The class lists name the kinds of bug to hunt for. Use them to PRIORITISE what you look for.
+${PACKS.length ? `The repo pack adds class weights from this codebase's real bug history, per-area hot spots and "fix seeds"
+(past defects whose pattern may recur in sibling code): check its high-weight classes first, and grep the pack AND its
+"-detail-*.md" companions (same directory) for your batch's directory and file names, to pick up the seeds,
+incomplete-fix lessons and candidate sites that apply here. A candidate site is a lead to verify, never a finding by
+itself.
+` : ''}They are a FLOOR, never a ceiling — hunt every defect you can ground, whether or not a listed class names it.`
   : ''
 
 const knownBlock = (batch) => A.known_dir
