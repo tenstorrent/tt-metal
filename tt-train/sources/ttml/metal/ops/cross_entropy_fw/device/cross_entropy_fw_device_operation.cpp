@@ -51,6 +51,9 @@ void CrossEntropyForwardDeviceOperation::validate_on_program_cache_miss(
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
     check_tensor(input_tensor, "Input", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
     check_tensor(target_tensor, "Target", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT32);
+    TT_FATAL(
+        target_tensor.device() == input_tensor.device(),
+        "CrossEntropyForward: target must be on the same MeshDevice as input");
 
     // The reader walks one row-major target page per batch-channel slice of the input
     // (page = tile_row / Ht over NC * Ht rows) and sizes each page read from the target's

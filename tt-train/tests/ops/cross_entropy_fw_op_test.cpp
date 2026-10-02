@@ -9,11 +9,14 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/ops/cross_entropy_fw/device/cross_entropy_fw_device_operation.hpp"
 #include "test_utils/random_data.hpp"
 
 class CrossEntropyForwardTest : public ::testing::Test {
@@ -74,6 +77,31 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Small_Forward) {
     auto result_xtensor = core::to_xtensor(result);
     assert((result_xtensor.shape() == expected_result.shape()));
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
+}
+
+TEST_F(CrossEntropyForwardTest, RejectsTargetOnDifferentMeshDeviceBeforeDispatch) {
+    using Operation = ttml::metal::ops::cross_entropy_fw::device::CrossEntropyForwardDeviceOperation;
+
+    if (tt::tt_metal::GetNumAvailableDevices() < 2U) {
+        GTEST_SKIP() << "requires two devices to construct tensors with different MeshDevice owners";
+    }
+
+    auto* input_device = &ttml::autograd::ctx().get_device();
+    auto foreign_device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(1);
+    auto input = ttml::core::from_xtensor(xt::zeros<float>({1U, 1U, 32U, 32U}), input_device);
+    auto local_target = ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
+        xt::zeros<uint32_t>({1U, 32U}), input_device, ttnn::Layout::ROW_MAJOR);
+    auto foreign_target = ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
+        xt::zeros<uint32_t>({1U, 32U}), foreign_device.get(), ttnn::Layout::ROW_MAJOR);
+
+    const Operation::operation_attributes_t attributes{};
+    const Operation::tensor_args_t local_args{
+        .input = input, .target = local_target, .preallocated_output = std::nullopt};
+    const Operation::tensor_args_t foreign_args{
+        .input = input, .target = foreign_target, .preallocated_output = std::nullopt};
+
+    EXPECT_NO_THROW(Operation::validate_on_program_cache_miss(attributes, local_args));
+    EXPECT_THROW(Operation::validate_on_program_cache_miss(attributes, foreign_args), std::exception);
 }
 
 TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Negetive_Values) {
