@@ -41,28 +41,25 @@ This document describes how the **dispatch core** (dispatch_s), **real-time prof
 ## 2. Data Flow: Program Timestamp to Host
 
 ```
-  DISPATCH_S                 REAL-TIME PROFILER CORE       HOST
-  (dispatch_s)               (cq_realtime_profiler)        (receiver thread)
+  dispatch_s              BRISC                   NCRISC                  Host
+  (dispatch core)         (profiler core)         (profiler core)         (receiver thread)
 
-    |                          |                             |
-    | 1. Record start ts and   |                             |
-    |    program_id into the   |                             |
-    |    open record slot      |                             |
-    | 2. Process command       |                             |
-    | 3. Record end ts         |                             |
-    | 4. Wait for a free slot, |                             |
-    |    advance record_wr_idx |                             |
-    | 5. NOC write wr_idx ---->|                             |
-    |                          | 6. See rd_idx != wr_idx     |
-    | <------------------------| 7. BRISC NOC-reads slots    |
-    |                          |    from dispatch_s L1, then |
-    | <---- record_rd_idx -----|    ack rd_idx (frees slots) |
-    |                          | 8. NCRISC pushes ring       |
-    |                          |    entries to D2H (PCIe)    |
-    |                          | --------------------------->| 9. wait_for_pages, get_read_ptr
-    |                          |                             | 10. Parse start/end ts, program_id
-    |                          |                             | 11. InvokeProgramRealtimeCallbacks()
-    |                          | <---------------------------| pop_pages, notify_sender
+   |                       |                       |                       |
+   | 1. Stamp start time   |                       |                       |
+   | 2. Launch program     |                       |                       |
+   | 3. Stamp end time     |                       |                       |
+   | --- record ready ---->|                       |                       |
+   |                       | 4. Copy the record    |                       |
+   |                       |    into its ring      |                       |
+   | <----- slot free -----|                       |                       |
+   |                       | ------ records ------>|                       |
+   |                       |                       | 5. Send records       |
+   |                       |                       |    over PCIe          |
+   |                       |                       | ------ records ------>|
+   |                       |                       |                       | 6. Read records
+   |                       |                       |                       | 7. Call callbacks
+   |                       |                       |                       |    (e.g. Tracy)
+   |                       |                       | <--- records read ----|
 ```
 
 ---
@@ -72,25 +69,22 @@ This document describes how the **dispatch core** (dispatch_s), **real-time prof
 Host and device timestamps are aligned so that Tracy (or other consumers) can relate device cycles to host time.
 
 ```
-  HOST                                  REAL-TIME PROFILER CORE
+  Host                                        BRISC  (profiler core)
 
-    |                                     |
-    | Write sync_request = 1 (L1)         |
-    | ----------------------------------->| Poll sync_request
-    | Write sync_host_timestamp = T       |
-    | ----------------------------------->| See host_ts > 0
-    |                                     | Capture device wall clock (D)
-    |                                     | Push page: (D_hi, D_lo, T,
-    |                                     |   REALTIME_PROFILER_SYNC_MARKER_ID)
-    |                                     | Clear sync_host_timestamp
-    | wait_for_pages(1)                   |
-    | <-----------------------------------| (D2H page arrives)
-    | Parse device_time D, host_time T    |
-    | Repeat for N samples                |
-    | Write sync_request = 0 (L1)         |
-    | ----------------------------------->| Exit sync loop
-    | Linear regression -> frequency      |
-    | and first_timestamp for this device |
+   |                                           |
+   | 1. Start sync                             |
+   | ---------------- sync on ---------------->|
+   | 2. Send host time T                       |
+   | ------------------- T ------------------->|
+   |                                           | 3. Stamp device time D
+   | <-------- D and T, via the NCRISC --------|
+   | 4. Repeat 2-3 N times                     |
+   | 5. Stop sync                              |
+   | --------------- sync off ---------------->|
+   | 6. Fit a line through                     |
+   |    the (T, D) pairs:                      |
+   |    device clock rate                      |
+   |    and offset                             |
 ```
 
 ---
