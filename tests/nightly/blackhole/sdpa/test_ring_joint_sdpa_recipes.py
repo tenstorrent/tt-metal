@@ -17,7 +17,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from tests.ttnn.unit_tests.operations.sdpa.test_sdpa_recipes import L2_PCT_BOUND, VARIANTS, l2_pct, reference
 
-RING = 2
+RING = int(os.environ.get("SDPA_RING_SIZE", "2"))  # bench override (not for merge)
 
 pytestmark = pytest.mark.skipif(
     not is_blackhole() or os.environ.get("TT_METAL_SIMULATOR") is not None,
