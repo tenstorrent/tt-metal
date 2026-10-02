@@ -6,6 +6,7 @@ Each script runs in-process as __main__ (runpy), exactly as it runs from the com
 """
 
 import contextlib
+import glob
 import io
 import json
 import os
@@ -797,6 +798,27 @@ def test_a_refresh_holdout_never_shares_a_fix_with_an_old_deep_read(tmp_path):
     assert (
         open(tmp_path / "h.jsonl").read() == ""
     ), "I200 shares P100's fix, which is in the pack"
+
+
+def test_one_deep_cases_flag_takes_every_case_file_a_glob_names(tmp_path):
+    _refresh_twin(tmp_path)
+    # a second refresh: the deep store was built from both case files, and P100 is only in the dated one
+    os.rename(tmp_path / "old_cases.jsonl", tmp_path / "old_cases-2026-10-01.jsonl")
+    write(
+        str(tmp_path / "old_cases.jsonl"),
+        [{"id": "P050", "title": "t", "fix": [], "later": {}}],
+    )
+    case_files = sorted(
+        glob.glob(str(tmp_path / "old_cases*.jsonl"))
+    )  # what the shell hands one flag
+    assert len(case_files) == 2
+    code, out, err = _select(
+        tmp_path, "holdout", "--out", tmp_path / "h.jsonl", "--deep-cases", *case_files
+    )
+    assert code == 0, out + err
+    assert (
+        open(tmp_path / "h.jsonl").read() == ""
+    ), "the dated file's P100 was looked up"
 
 
 def test_a_refresh_deep_selection_skips_a_case_already_read_under_another_id(tmp_path):

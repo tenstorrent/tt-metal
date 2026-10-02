@@ -43,7 +43,8 @@ p.add_argument("--out")
 p.add_argument("--out-dir")
 p.add_argument(
     "--exclude",
-    action="append",
+    action="extend",
+    nargs="+",
     default=[],
     help="jsonl files of cases to exclude: old holdouts, the deep-read store. By id, and by fix commit: a case sharing "
     "a holdout's fix is always excluded; one sharing a deep-read fix is excluded from a holdout, and from deep reads "
@@ -76,17 +77,19 @@ p.add_argument(
 )
 p.add_argument(
     "--deep",
-    action="append",
+    action="extend",
+    nargs="+",
     default=[],
     help="deep-read stores: their cases are not read again, cases a deep read judged not real are excluded, and fixes "
     "they read count as read (see --exclude)",
 )
 p.add_argument(
     "--deep-cases",
-    action="append",
+    action="extend",
+    nargs="+",
     default=[],
     help="case files used only to look up the fix commits of excluded or deep-read ids that --cases does not hold "
-    "(a refresh: pass the case file the deep store was built from)",
+    "(a refresh: pass every case file the deep store was built from; one flag takes several, so a glob works)",
 )
 p.add_argument(
     "--reject",
