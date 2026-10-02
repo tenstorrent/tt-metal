@@ -6,6 +6,7 @@
 
 #include <bit>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 #include <algorithm>
 
@@ -33,6 +34,11 @@ GroupNormPadCorrection make_group_norm_pad_correction(
     // padded_hw is logical_hw rounded up to a tile, so active implies a non-zero remainder.
     pad.rows_in_last_tile = pad.active ? (logical_hw % tile_height) : 0;
     return pad;
+}
+
+bool groupnorm_fp32_stats_for_bf16() {
+    static const bool enabled = std::getenv("TT_GN_FP32_STATS") != nullptr;
+    return enabled;
 }
 
 bool groupnorm_needs_fp32_reconfig(std::initializer_list<tt::DataFormat> reconfig_formats) {

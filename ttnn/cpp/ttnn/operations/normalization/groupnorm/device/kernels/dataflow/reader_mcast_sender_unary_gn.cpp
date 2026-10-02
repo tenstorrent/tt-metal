@@ -78,15 +78,18 @@ void kernel_main() {
     const uint32_t per_core_N_bytes = get_named_compile_time_arg_val("per_core_N_bytes");
     const uint32_t per_core_N_bytes_with_stride = get_named_compile_time_arg_val("per_core_N_bytes_with_stride");
     constexpr uint32_t datum_size_bytes = get_named_compile_time_arg_val("datum_size_bytes");
+    // Element size of the statistics CBs (4 when they are kept in fp32 for bf16 input): the width of
+    // every gathered partial and multicast global. datum_size_bytes stays the input's for the RM path.
+    constexpr uint32_t stats_datum_size_bytes = get_named_compile_time_arg_val("stats_datum_size_bytes");
     // Per-core slots in dfb_ex_external are hardcoded to a dfb_ex_external_slot_pitch_bytes
     // pitch (see the `l1_write_addr_external += dfb_ex_external_slot_pitch_bytes`
     // increments below). Each NOC read writes datum_size_bytes into its slot, so
     // datum_size_bytes > dfb_ex_external_slot_pitch_bytes would overflow into the next
     // core's slot and silently corrupt the reduction. Zero-fill does not fix this; the
     // slot pitch itself would need to grow.
-    static_assert(datum_size_bytes <= dfb_ex_external_slot_pitch_bytes,
+    static_assert(stats_datum_size_bytes <= dfb_ex_external_slot_pitch_bytes,
                   "cb_ex_external slot pitch is hardcoded; "
-                  "datum_size_bytes must be <= dfb_ex_external_slot_pitch_bytes or per-slot writes will overflow");
+                  "stats_datum_size_bytes must be <= dfb_ex_external_slot_pitch_bytes or per-slot writes will overflow");
     constexpr uint32_t per_core_M = get_named_compile_time_arg_val("per_core_M");
     constexpr uint32_t tile_height = get_named_compile_time_arg_val("TILE_HEIGHT");
 
@@ -235,7 +238,7 @@ void kernel_main() {
 #endif
 
     constexpr uint32_t single_tile_size_bytes = get_tile_size(dfb_ex_partial_id);
-    const uint32_t num_bytes_read = datum_size_bytes;
+    const uint32_t num_bytes_read = stats_datum_size_bytes;
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
     uint32_t in0_l1_read_addr = dfb_in0.get_read_ptr();
@@ -307,7 +310,7 @@ void kernel_main() {
     // single_tile_size_bytes, slot writes straddle tile boundaries and the
     // 2nd-and-later tiles never get a full-tile overwrite to clear their gap
     // bytes.
-    constexpr bool needs_dfb_ex_external_zero_fill = (datum_size_bytes < dfb_ex_external_slot_pitch_bytes) ||
+    constexpr bool needs_dfb_ex_external_zero_fill = (stats_datum_size_bytes < dfb_ex_external_slot_pitch_bytes) ||
                                                     (dfb_ex_external_data_bytes <
                                                      dfb_ex_external_tiles_required * single_tile_size_bytes);
     if constexpr (needs_dfb_ex_external_zero_fill) {
@@ -333,6 +336,7 @@ void kernel_main() {
                         corrected_stats ? 2 * dfb_ex_external_tiles_required : dfb_ex_external_tiles_required;
                     dfb_ex_external.reserve_back(ex_external_tiles_per_pass);
                     uint32_t l1_write_addr_external = dfb_ex_external.get_write_ptr();
+                    const uint32_t l1_ex_external_base = l1_write_addr_external;
                     uint32_t l1_write_addr_external_d =
                         l1_write_addr_external + dfb_ex_external_tiles_required * single_tile_size_bytes;
 
@@ -524,6 +528,20 @@ void kernel_main() {
                         out_block_start_id_offset += out_block_h_actual * num_channels_tiles;
                     }
                     if (cur_read_iteration== 0 || cur_read_iteration == 1) {
+                        if constexpr (stats_datum_size_bytes == 4) {
+                            // fp32 statistics in a bf16 gather tile: split each gathered partial into
+                            // a hi/lo bf16 pair (elements 0 and 1 of its slot). The FPU REDUCE_SCALAR
+                            // truncates fp32 inputs, but sums these bf16 pairs exactly in fp32 DEST,
+                            // and hi + lo carries ~16 significant bits of the partial.
+                            for (uint32_t k = 0; k < num_out_blocks_padded * num_mcast_cores; ++k) {
+                                volatile tt_l1_ptr uint32_t* slot = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                    l1_ex_external_base + k * dfb_ex_external_slot_pitch_bytes);
+                                const uint32_t bits = slot[0];
+                                const uint32_t hi_bits = bits & 0xFFFF0000u;
+                                const float lo = __builtin_bit_cast(float, bits) - __builtin_bit_cast(float, hi_bits);
+                                slot[0] = (hi_bits >> 16) | (__builtin_bit_cast(uint32_t, lo) & 0xFFFF0000u);
+                            }
+                        }
                         dfb_ex_external.push_back(ex_external_tiles_per_pass);
 
                         if constexpr (num_mcast_cores > 1) {

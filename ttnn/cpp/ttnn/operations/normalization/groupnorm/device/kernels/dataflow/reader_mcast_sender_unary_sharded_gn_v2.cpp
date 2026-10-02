@@ -25,6 +25,9 @@ void kernel_main() {
     const uint32_t per_core_N_bytes = get_compile_time_arg_val(5);
     const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(6);
     constexpr uint32_t datum_size_bytes = get_compile_time_arg_val(7);
+    // Element size of the statistics CBs (4 when they are kept in fp32 for bf16 input): the width of
+    // every gathered partial and multicast global.
+    constexpr uint32_t stats_datum_size_bytes = get_named_compile_time_arg_val("stats_datum_size_bytes");
     // Per-core slots in dfb_ex_external are hardcoded to a dfb_ex_external_slot_pitch_bytes
     // pitch (see the `l1_write_addr_external += dfb_ex_external_slot_pitch_bytes`
     // increments below). Each NOC read writes datum_size_bytes into its slot, so
@@ -32,9 +35,9 @@ void kernel_main() {
     // next core's slot and silently corrupt the reduction. The slot pitch itself
     // would need to grow to support larger datums.
     static_assert(
-        datum_size_bytes <= dfb_ex_external_slot_pitch_bytes,
+        stats_datum_size_bytes <= dfb_ex_external_slot_pitch_bytes,
         "dfb_ex_external slot pitch is hardcoded; "
-        "datum_size_bytes must be <= dfb_ex_external_slot_pitch_bytes or per-slot writes will overflow");
+        "stats_datum_size_bytes must be <= dfb_ex_external_slot_pitch_bytes or per-slot writes will overflow");
     constexpr uint32_t per_core_M = get_compile_time_arg_val(8);
     constexpr uint32_t tile_height = get_compile_time_arg_val(9);
 
@@ -138,7 +141,7 @@ void kernel_main() {
     const DataflowBuffer dfb_out0(dfb_out0_id);
 
     const uint32_t single_tile_size_bytes = dfb_ex_partial.get_tile_size();
-    const uint32_t num_bytes_read = datum_size_bytes;
+    const uint32_t num_bytes_read = stats_datum_size_bytes;
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
     uint32_t in0_l1_read_addr = dfb_in0.get_read_ptr();
@@ -164,7 +167,7 @@ void kernel_main() {
 
     // fp32 breaks the full-tile self-read's REDUCE_SCALAR packer-zero contract, so zero dfb_ex_external up front and
     // read each scalar at datum width; bf16 keeps the cheaper full-tile trick.
-    constexpr bool stats_fp32_zero_fill = (datum_size_bytes >= 4);
+    constexpr bool stats_fp32_zero_fill = (stats_datum_size_bytes >= 4);
     if constexpr (stats_fp32_zero_fill) {
         zero_whole_cb(dfb_ex_external_id, noc);
     }
@@ -177,6 +180,7 @@ void kernel_main() {
                 const uint32_t l1_read_addr_ex_par = dfb_ex_partial.get_read_ptr();
                 dfb_ex_external.reserve_back(1);
                 uint32_t l1_write_addr_external = dfb_ex_external.get_write_ptr();
+                const uint32_t l1_ex_external_base = l1_write_addr_external;
 
                 // Self read uses single_tile_size_bytes (not num_bytes_read) on
                 // purpose: it doubles as a free zero-init of every byte in the
@@ -223,6 +227,19 @@ void kernel_main() {
                         {});
                     l1_write_addr_external += dfb_ex_external_slot_pitch_bytes;
                     noc.async_read_barrier();
+                }
+                if constexpr (stats_datum_size_bytes == 4) {
+                    // fp32 statistics in a bf16 gather tile: split each gathered partial into a hi/lo
+                    // bf16 pair (elements 0 and 1 of its slot). The FPU REDUCE_SCALAR truncates fp32
+                    // inputs, but sums these bf16 pairs exactly in fp32 DEST.
+                    for (uint32_t k = 0; k < num_mcast_cores; ++k) {
+                        volatile tt_l1_ptr uint32_t* slot = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                            l1_ex_external_base + k * dfb_ex_external_slot_pitch_bytes);
+                        const uint32_t bits = slot[0];
+                        const uint32_t hi_bits = bits & 0xFFFF0000u;
+                        const float lo = __builtin_bit_cast(float, bits) - __builtin_bit_cast(float, hi_bits);
+                        slot[0] = (hi_bits >> 16) | (__builtin_bit_cast(uint32_t, lo) & 0xFFFF0000u);
+                    }
                 }
                 dfb_ex_external.push_back(1);
 

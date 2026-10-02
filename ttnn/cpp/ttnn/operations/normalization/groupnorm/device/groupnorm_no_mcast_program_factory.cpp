@@ -328,8 +328,21 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     const bool welford_fp32_alias = welford_unpack_fp32_active && !tilize_in;
 
     // cb_reciprocals is excluded: it's fp32 here but the reconfigs never touch it.
+    // PROTOTYPE (remove before merge): fp32 statistics CBs for bf16 input on the plain two-pass; see
+    // groupnorm_fp32_stats_for_bf16(). Exclusive with corrected_stats so the two can be compared.
+    const bool stats_fp32 = !use_welford && !corrected_stats && cb_data_format == tt::DataFormat::Float16_b &&
+                            groupnorm_fp32_stats_for_bf16();
+    const tt::DataFormat stats_data_format = stats_fp32 ? tt::DataFormat::Float32 : cb_data_format;
+    const uint32_t stats_single_tile_size = tt::tile_size(stats_data_format);
+    const uint32_t stats_datum_size_bytes = stats_fp32 ? 4 : datum_size_bytes;
+
     const bool enable_fp32_reconfig = groupnorm_needs_fp32_reconfig(
-        {in_data_format, out_data_format, cb_data_format, gamma_beta_cb_data_format, in_mask_cb_data_format});
+        {in_data_format,
+         out_data_format,
+         cb_data_format,
+         gamma_beta_cb_data_format,
+         in_mask_cb_data_format,
+         stats_data_format});
 
     const uint32_t cb_in0_welford_index =
         welford_fp32_alias ? static_cast<uint32_t>(tt::CBIndex::c_19) : static_cast<uint32_t>(tt::CBIndex::c_0);
@@ -448,15 +461,15 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     uint32_t x_CB_size_group_2 = 0;
     uint32_t xmm_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
     uint32_t xmm_CB_size_group_2 = 0;
-    uint32_t ex_partial_CB_size = single_tile_size * (use_welford ? 2 : 1);
-    uint32_t ex2_partial_CB_size = single_tile_size;
+    uint32_t ex_partial_CB_size = stats_single_tile_size * (use_welford ? 2 : 1);
+    uint32_t ex2_partial_CB_size = stats_single_tile_size;
     uint32_t ex_global_CB_size = ex_partial_CB_size * (use_welford ? num_groups_per_core : 1);
     uint32_t ex2_global_CB_size = ex2_partial_CB_size;
     uint32_t xmm2_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
     uint32_t xmm2_CB_size_group_2 = 0;
     uint32_t xmm3_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
     uint32_t xmm3_CB_size_group_2 = 0;
-    uint32_t ex2pe_CB_size = use_welford ? single_tile_size * num_groups_per_core : ex_partial_CB_size;
+    uint32_t ex2pe_CB_size = use_welford ? stats_single_tile_size * num_groups_per_core : ex_partial_CB_size;
     uint32_t reciprocal_CB_size = reciprocals.has_value() ? reciprocals.value().buffer()->aligned_size_per_bank() : 0;
     uint32_t out_CB_size_group_1 = in0_block_tiles_group_1 * out_single_tile_size;
     uint32_t out_CB_size_group_2 = 0;
@@ -678,6 +691,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     reader_mcast_sender_desc_g1.compile_time_args = reader_mcast_sender_compile_time_args_group_1;
     reader_mcast_sender_named_compile_time_args_group_1["corrected_stats"] = static_cast<uint32_t>(corrected_stats);
     reader_mcast_sender_named_compile_time_args_group_2["corrected_stats"] = static_cast<uint32_t>(corrected_stats);
+    reader_mcast_sender_named_compile_time_args_group_1["stats_datum_size_bytes"] = stats_datum_size_bytes;
+    reader_mcast_sender_named_compile_time_args_group_2["stats_datum_size_bytes"] = stats_datum_size_bytes;
     reader_mcast_sender_desc_g1.named_compile_time_args =
         to_named_args_no_mcast(reader_mcast_sender_named_compile_time_args_group_1);
     reader_mcast_sender_desc_g1.defines =
@@ -1002,6 +1017,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         std::bit_cast<uint32_t>(1.0f / static_cast<float>(reduce_factor_c_group_2));
     mcast_sender_compute_named_compile_time_args_group_1["corrected_stats"] = static_cast<uint32_t>(corrected_stats);
     mcast_sender_compute_named_compile_time_args_group_2["corrected_stats"] = static_cast<uint32_t>(corrected_stats);
+    mcast_sender_compute_named_compile_time_args_group_1["stats_fp32"] = static_cast<uint32_t>(stats_fp32);
+    mcast_sender_compute_named_compile_time_args_group_2["stats_fp32"] = static_cast<uint32_t>(stats_fp32);
 
     KernelDescriptor compute_desc_g1;
     compute_desc_g1.kernel_source = compute_kernel_path;
@@ -1360,8 +1377,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(ex_cb_partial_index),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
+            .data_format = stats_data_format,
+            .page_size = stats_single_tile_size,
         }}},
     });
 
@@ -1372,8 +1389,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(ex2_cb_partial_index),
-                .data_format = cb_data_format,
-                .page_size = single_tile_size,
+                .data_format = stats_data_format,
+                .page_size = stats_single_tile_size,
             }}},
         });
     }
@@ -1394,6 +1411,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             single_tile_size;
         // corrected_stats: the reader lays the pass-2 D slots out in a second region of the same
         // size and reserves both regions on every pass, so the ring needs twice the tiles.
+        // stats_fp32: this gather CB stays bf16 on purpose. The FPU REDUCE_SCALAR truncates fp32
+        // inputs, so the reader writes each fp32 partial as a hi/lo bf16 pair into its slot and the
+        // reduce sums the pair exactly in fp32 DEST.
         desc.cbs.push_back(CBDescriptor{
             .total_size = cb_ex_external_tiles * single_tile_size * (corrected_stats ? 2 : 1),
             .core_ranges = all_cores,
@@ -1413,13 +1433,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         .format_descriptors =
             {{CBFormatDescriptor{
                   .buffer_index = static_cast<uint8_t>(ex_global_cb_index),
-                  .data_format = cb_data_format,
-                  .page_size = single_tile_size,
+                  .data_format = stats_data_format,
+                  .page_size = stats_single_tile_size,
               },
               CBFormatDescriptor{
                   .buffer_index = static_cast<uint8_t>(ex_cb_index),
-                  .data_format = cb_data_format,
-                  .page_size = single_tile_size,
+                  .data_format = stats_data_format,
+                  .page_size = stats_single_tile_size,
               }}},
     });
 
@@ -1432,13 +1452,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             .format_descriptors =
                 {{CBFormatDescriptor{
                       .buffer_index = static_cast<uint8_t>(ex2_global_cb_index),
-                      .data_format = cb_data_format,
-                      .page_size = single_tile_size,
+                      .data_format = stats_data_format,
+                      .page_size = stats_single_tile_size,
                   },
                   CBFormatDescriptor{
                       .buffer_index = static_cast<uint8_t>(ex2_cb_index),
-                      .data_format = cb_data_format,
-                      .page_size = single_tile_size,
+                      .data_format = stats_data_format,
+                      .page_size = stats_single_tile_size,
                   }}},
         });
     }
@@ -1480,8 +1500,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(cb_ex2pe_index),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
+            .data_format = stats_data_format,
+            .page_size = stats_single_tile_size,
         }}},
     });
 

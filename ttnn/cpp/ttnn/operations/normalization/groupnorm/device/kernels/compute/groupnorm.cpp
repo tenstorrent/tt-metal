@@ -120,6 +120,11 @@ void kernel_main() {
     // D = mean(x - s), and then mean = s + D, var = Q - D^2 and y = ((x - s) - D) * rstd, all of
     // which only ever accumulate values of magnitude ~std. Host enables this for bf16 statistics.
     constexpr bool corrected_stats = get_named_compile_time_arg_val("corrected_stats") == 1;
+    // fp32 statistics CBs with bf16 x / xmm / output: the pack format has to switch at every
+    // statistics pack and back, and srcA has to be reconfigured for the gathered-partials reduce.
+    // The src reconfigs before the sub / variance / normalize steps are the existing
+    // enable_fp32_reconfig ones (the host sets it when any of these formats is fp32).
+    constexpr bool stats_fp32 = get_named_compile_time_arg_val("stats_fp32") == 1;
 
     constexpr std::uint32_t block_h = get_named_compile_time_arg_val("block_h");
     constexpr std::uint32_t block_w = get_named_compile_time_arg_val("block_w");
@@ -437,6 +442,11 @@ void kernel_main() {
                 // out-block can be empty when num_out_blocks does not divide block_h.
                 const std::uint32_t row_tile_base = out_block_index * out_block_h_normal;
                 reconfig_data_format_srcb(dfb_in0_id, dfb_input_mask_id);
+                if constexpr (stats_fp32) {
+                    // The two-argument reconfig above compares the two CBs' formats (both bf16) and
+                    // skips, but the previous group's last op left srcB on the fp32 rstd tile. Force it.
+                    reconfig_data_format_srcb(dfb_input_mask_id);
+                }
                 // mask input
                 // The row-masked set varies down the rows of a tile, so it can only be consumed by
                 // a full-tile multiply. Row-0-only synthesis and the row broadcast are therefore
@@ -490,6 +500,9 @@ void kernel_main() {
 
                 // Partial/E[x]
                 dfb_x.wait_front(static_cast<uint16_t>(out_block_hw_normal));
+                if constexpr (stats_fp32) {
+                    pack_reconfig_data_format(dfb_ex_partial_id);
+                }
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
@@ -509,6 +522,9 @@ void kernel_main() {
             // End Local Redcue
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
+                if constexpr (stats_fp32) {
+                    reconfig_data_format_srca(dfb_ex_external_id);
+                }
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
@@ -558,6 +574,9 @@ void kernel_main() {
                 if constexpr (enable_fp32_reconfig) {
                     reconfig_data_format_srca(dfb_input_id);
                     reconfig_data_format_srcb(dfb_ex_global_id);
+                }
+                if constexpr (stats_fp32) {
+                    pack_reconfig_data_format(dfb_xmm_id);
                 }
 #ifdef TILIZE_IN
                 ckl::eltwise_chain(
@@ -705,6 +724,9 @@ void kernel_main() {
 
                 // Partial-Var(x)
                 dfb_xmm.wait_front(static_cast<uint16_t>(out_block_hw_normal));
+                if constexpr (stats_fp32) {
+                    pack_reconfig_data_format(dfb_ex2_partial_id);
+                }
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
@@ -722,6 +744,9 @@ void kernel_main() {
             // End Local Reduce
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
+                if constexpr (stats_fp32) {
+                    reconfig_data_format_srca(dfb_ex_external_id);
+                }
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
@@ -878,6 +903,9 @@ void kernel_main() {
                 if constexpr (enable_fp32_reconfig) {
                     reconfig_data_format_srca(dfb_input_id);
                     reconfig_data_format_srcb(dfb_ex_global_id);
+                }
+                if constexpr (stats_fp32) {
+                    pack_reconfig_data_format(dfb_xmm_id);
                 }
                 // corrected_stats: (x - s) - D, the D-filled tile subtracted in DEST right after the
                 // broadcast s subtract, so no quantity of magnitude |mean| is ever rounded to bf16.
@@ -1040,6 +1068,12 @@ void kernel_main() {
 
                 dfb_reread_out.wait_front(static_cast<uint16_t>(out_block_hw_normal));
                 dfb_reread_write_out.reserve_back(static_cast<uint16_t>(out_block_hw_normal));
+                if constexpr (stats_fp32) {
+                    // srcB is still on the fp32 rstd tile from the normalize step; the accumulate below
+                    // reads bf16 xmm through it (its chain has reconfig disabled).
+                    reconfig_data_format_srca(dfb_reread_out_id);
+                    reconfig_data_format_srcb(dfb_xmm_id);
+                }
                 for (std::uint32_t w = 0; w < block_w_curr; ++w) {
                     const ckl::StridedTileRange input_range{w, block_w};
                     const ckl::StridedTileRange output_range{w, block_w_curr};

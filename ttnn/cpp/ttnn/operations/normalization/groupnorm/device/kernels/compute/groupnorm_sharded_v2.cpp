@@ -44,6 +44,11 @@ void kernel_main() {
     // Corrected two-pass statistics (see the pass-2 comment below). Host enables it for bf16
     // statistics without pad correction.
     constexpr bool corrected_stats = get_named_compile_time_arg_val("corrected_stats") == 1;
+    // fp32 statistics CBs with bf16 x / output: the pack format has to switch at every statistics
+    // pack and back, and srcA has to be reconfigured for the accumulated-tile reduces. The src
+    // reconfigs before the sub / variance / normalize steps are the existing enable_fp32_reconfig
+    // ones (the host sets it when any of these formats is fp32).
+    constexpr bool stats_fp32 = get_named_compile_time_arg_val("stats_fp32") == 1;
 
     constexpr uint32_t batch = get_compile_time_arg_val(4);
     constexpr uint32_t group = get_compile_time_arg_val(5);
@@ -133,6 +138,7 @@ void kernel_main() {
     constexpr uint32_t dfb_tfill_id = tt::CBIndex::c_24;
     constexpr uint32_t dfb_ecol_id = tt::CBIndex::c_25;
     constexpr uint32_t dfb_dacc_id = tt::CBIndex::c_27;  // accumulated sum(r) tile, reduced into c_20
+    constexpr uint32_t dfb_rowsum_id = tt::CBIndex::c_28;  // stats_fp32: REDUCE_ROW scratch before REDUCE_COL
     static_assert(!(corrected_stats && has_row_mask), "corrected_stats is host-gated off under pad correction");
     // Composed-mask CBs, created only under pad correction (has_row_mask); aliased to
     // always-present CBs otherwise.
@@ -325,6 +331,11 @@ void kernel_main() {
             // mask input
             index_h_offset = index_b_offset + index_g_offset;
             reconfig_data_format_srcb(dfb_in0_id, dfb_input_mask_id);
+            if constexpr (stats_fp32) {
+                // The two-argument reconfig above compares the two CBs' formats (both bf16) and
+                // skips, but the previous group's last op left srcB on the fp32 rstd tile. Force it.
+                reconfig_data_format_srcb(dfb_input_mask_id);
+            }
             dfb_input_mask.wait_front(mask_tiles_per_group);
             // Compose the final row-tile's mask: rowvalid[r] * colsel[c] -> dfb_mask_last. The
             // column selector's row 0 is broadcast down the rowvalid tile, so the product
@@ -411,26 +422,34 @@ void kernel_main() {
             }
             dfb_x.push_back(block_hw);
             reconfig_data_format_srcb(has_row_mask ? dfb_mask_last_id : dfb_input_mask_id, dfb_ones_id);
+            if constexpr (stats_fp32) {
+                pack_reconfig_data_format(dfb_ex2pe_id);
+            }
             // Partial-E[x]
             dfb_x.wait_front(block_hw);
             // Accumulate into dest directly by using mul_tiles (tile * 1 is accumulated into dest)
             // Alternative is to use reduce_tile multiple times, but this showed to be more precise and faster.
-            ckl::eltwise_chain(
-                valid_group_shape,
-                ckl::BinaryFpu<
-                    ckl::BinaryFpuOp::Mul,
-                    x_strided_block_input,
-                    ckl::input(
-                        dfb_ones_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
-                    ckl::Dst::D0,
-                    ckl::DestAccumulation::WholeShape>{ckl::StridedTileRange{0, block_w}},
-                ckl::PackTile<ckl::output(
-                    dfb_ex2pe_id,
-                    ckl::ReservePolicy::OneUpfront,
-                    ckl::PushPolicy::OneAtEnd,
-                    ckl::DataFormatReconfig::Disabled,
-                    ckl::TileAddressing::Direct,
-                    ckl::DestAccumulation::WholeShape)>{});
+            if constexpr (!stats_fp32) {
+                ckl::eltwise_chain(
+                    valid_group_shape,
+                    ckl::BinaryFpu<
+                        ckl::BinaryFpuOp::Mul,
+                        x_strided_block_input,
+                        ckl::input(
+                            dfb_ones_id,
+                            ckl::WaitPolicy::Upfront,
+                            ckl::PopPolicy::None,
+                            ckl::DataFormatReconfig::Disabled),
+                        ckl::Dst::D0,
+                        ckl::DestAccumulation::WholeShape>{ckl::StridedTileRange{0, block_w}},
+                    ckl::PackTile<ckl::output(
+                        dfb_ex2pe_id,
+                        ckl::ReservePolicy::OneUpfront,
+                        ckl::PushPolicy::OneAtEnd,
+                        ckl::DataFormatReconfig::Disabled,
+                        ckl::TileAddressing::Direct,
+                        ckl::DestAccumulation::WholeShape)>{});
+            }
 
             // reduce only one final tile
             //
@@ -445,14 +464,38 @@ void kernel_main() {
             // (e.g. use `zero_whole_cb` from groupnorm_zero_fill.hpp, mirroring the
             // mcast reader). Same applies to the second REDUCE_SCALAR pack into
             // dfb_ex_partial later in this kernel (variance).
-            compute_kernel_lib::
-                reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, dfb_ex2pe_id, dfb_scaler_id, dfb_ex_partial_id>(
-                    compute_kernel_lib::ReduceInputBlockShape::single(),
+            if constexpr (stats_fp32) {
+                // The FPU REDUCE_SCALAR truncates fp32 inputs, so with fp32 statistics the mean is a
+                // direct block reduce over the bf16 x*m tiles (summed exactly in fp32 DEST) instead of
+                // the accumulate-then-reduce above. Columns past the group are mask-zeroed.
+                reconfig_data_format_srcb(dfb_ones_id, dfb_scaler_id);
+                pack_reconfig_data_format(dfb_ex_partial_id);
+                compute_kernel_lib::reduce<
+                    PoolType::SUM,
+                    ReduceDim::REDUCE_SCALAR,
+                    dfb_x_id,
+                    dfb_scaler_id,
+                    dfb_ex_partial_id,
+                    compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                    compute_kernel_lib::ReduceInputBlockShape::of(block_h, block_w),
                     compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                     compute_kernel_lib::NoAccumulation{},
                     scale_by_mean_recip);
+            } else {
+                compute_kernel_lib::
+                    reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, dfb_ex2pe_id, dfb_scaler_id, dfb_ex_partial_id>(
+                        compute_kernel_lib::ReduceInputBlockShape::single(),
+                        compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                        compute_kernel_lib::NoAccumulation{},
+                        scale_by_mean_recip);
+            }
 
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
+                if constexpr (stats_fp32) {
+                    // The gather CB is bf16 (hi/lo pairs) while srcA may still be on an fp32 tile.
+                    reconfig_data_format_srca(dfb_ex_external_id);
+                }
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
@@ -476,6 +519,9 @@ void kernel_main() {
             if constexpr (enable_fp32_reconfig) {
                 reconfig_data_format_srca(dfb_x_id);
                 reconfig_data_format_srcb(dfb_ex_global_id);
+            }
+            if constexpr (stats_fp32) {
+                pack_reconfig_data_format(dfb_x_id);
             }
             ckl::sub<
                 ckl::input(
@@ -592,6 +638,9 @@ void kernel_main() {
                 dfb_dacc.push_back(1);
                 tile_regs_release();
             } else {
+                if constexpr (stats_fp32) {
+                    pack_reconfig_data_format(dfb_ex2pe_id);
+                }
                 // (x - E[x])^2
                 ckl::eltwise_chain(
                     valid_group_shape,
@@ -616,12 +665,42 @@ void kernel_main() {
             // The sharded reader's "single-tile-overwrite trick" depends on
             // this pack also clearing every non-result datum of dfb_ex_partial
             // to exact zero (documented packer behavior for REDUCE_SCALAR).
-            compute_kernel_lib::
-                reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, dfb_ex2pe_id, dfb_scaler_id, dfb_ex_partial_id>(
+            if constexpr (stats_fp32) {
+                // The FPU REDUCE_SCALAR truncates its fp32 input, so collapse the accumulated fp32
+                // tile with the SFPU (Accurate) path: REDUCE_ROW into a scratch tile, then REDUCE_COL,
+                // which leaves the total at [0,0].
+                reconfig_data_format_srca(dfb_ex2pe_id);
+                compute_kernel_lib::reduce<
+                    PoolType::SUM,
+                    ReduceDim::REDUCE_ROW,
+                    dfb_ex2pe_id,
+                    dfb_scaler_id,
+                    dfb_rowsum_id,
+                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE,
+                    ReduceFp32Mode::Accurate>(compute_kernel_lib::ReduceInputBlockShape::single());
+                reconfig_data_format_srca(dfb_rowsum_id);
+                compute_kernel_lib::reduce<
+                    PoolType::SUM,
+                    ReduceDim::REDUCE_COL,
+                    dfb_rowsum_id,
+                    dfb_scaler_id,
+                    dfb_ex_partial_id,
+                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE,
+                    ReduceFp32Mode::Accurate>(
                     compute_kernel_lib::ReduceInputBlockShape::single(),
                     compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                     compute_kernel_lib::NoAccumulation{},
                     scale_by_mean_recip);
+            } else {
+                compute_kernel_lib::
+                    reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, dfb_ex2pe_id, dfb_scaler_id, dfb_ex_partial_id>(
+                        compute_kernel_lib::ReduceInputBlockShape::single(),
+                        compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                        compute_kernel_lib::NoAccumulation{},
+                        scale_by_mean_recip);
+            }
             if constexpr (corrected_stats) {
                 // Partial-D from the fused accumulation; same REDUCE_SCALAR pack, so the reader's
                 // single-tile-overwrite trick holds for c_20 as well.
@@ -638,6 +717,10 @@ void kernel_main() {
                 dfb_exd_partial.wait_front(1);
             }
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
+                if constexpr (stats_fp32) {
+                    // The gather CB is bf16 (hi/lo pairs) while srcA may still be on an fp32 tile.
+                    reconfig_data_format_srca(dfb_ex_external_id);
+                }
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
@@ -824,6 +907,9 @@ void kernel_main() {
                 reconfig_data_format_srca(dfb_x_id);
                 reconfig_data_format_srcb(dfb_ex2pe_id);
             }
+            if constexpr (stats_fp32) {
+                pack_reconfig_data_format(dfb_x_id);
+            }
             if constexpr (corrected_stats) {
                 // y = r*rstd - E_w (see the E_w build above).
                 ckl::eltwise_chain(
@@ -878,6 +964,11 @@ void kernel_main() {
                         ckl::DataFormatReconfig::Disabled)>(valid_group_shape);
             }
             dfb_x.wait_front(block_hw);
+            if constexpr (stats_fp32) {
+                // srcB is still on the fp32 rstd tile from the normalize step; the accumulate below
+                // reads bf16 x through it (its chains have reconfig disabled).
+                reconfig_data_format_srcb(dfb_x_id);
+            }
             //  add or copy with previous output results
             const uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
 
