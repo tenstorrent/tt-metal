@@ -146,7 +146,6 @@ void max_block(uint32_t in0, uint32_t in1, uint32_t out_dfb, uint32_t num_tiles)
     DataflowBuffer dfb_in1(in1);
     DataflowBuffer dfb_out(out_dfb);
     // inputs come in full, outputs go out full
-    copy_init(in0);
     binary_max_tile_init();
 
     constexpr uint32_t dst_reg_0 = 0;
@@ -156,7 +155,13 @@ void max_block(uint32_t in0, uint32_t in1, uint32_t out_dfb, uint32_t num_tiles)
     dfb_out.reserve_back(num_tiles);
     for (uint32_t i = 0; i < num_tiles; ++i) {
         tile_regs_acquire();
+        // copy_init programs the unpacker for one DFB; Quasar asserts if copy_tile then reads another
+        // (LLK reinit guard), so re-init per operand.
+        reconfig_data_format_srca(in0);
+        copy_init(in0);
         copy_tile(in0, i, dst_reg_0);
+        reconfig_data_format_srca(in1);
+        copy_init(in1);
         copy_tile(in1, i, dst_reg_1);
         binary_max_tile(dst_reg_0, dst_reg_1, dst_reg_0, vector_mode);
         tile_regs_commit();
