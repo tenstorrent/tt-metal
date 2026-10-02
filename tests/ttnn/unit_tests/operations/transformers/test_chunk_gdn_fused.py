@@ -39,6 +39,12 @@ T_SMALL = 256  # NC=8 — enough chunks to exercise the recurrence, small enough
 # The simulator runs much slower than silicon so the test repeats run on hardware only, as well as the large input cases.
 _SIM = bool(os.environ.get("TT_METAL_SIMULATOR"))
 _hw_only = pytest.mark.skipif(_SIM, reason="hardware test only")
+# The chunk-64 phased prep program (Ct=2) exceeds the kernel-config buffer when the watcher is compiled in: its three
+# compute binaries alone are 62 KB of the 69 KB there. The production chunk size is 32.
+_no_watcher = pytest.mark.skipif(
+    bool(os.environ.get("TT_METAL_WATCHER")),
+    reason="chunk-64 prep binaries exceed the kernel-config buffer under the watcher",
+)
 REPEATS = 0 if _SIM else 8  # extra fused runs against the first result, to give a timing race a chance to show
 
 
@@ -965,6 +971,7 @@ def test_fused_tinv_cache_identity(device):
         assert device.num_program_cache_entries() == n2, f"{cfg}: revisiting the methods compiled new programs"
 
 
+@_no_watcher
 def test_fused_tinv_chunk64(device, expect_error):
     """The SFPU solve is a single-tile (chunk_size == 32) routine. At chunk_size 64 AUTO falls back to Horner
     (the default is the solve wherever it is supported, and that program is the pinned-Horner one), but an

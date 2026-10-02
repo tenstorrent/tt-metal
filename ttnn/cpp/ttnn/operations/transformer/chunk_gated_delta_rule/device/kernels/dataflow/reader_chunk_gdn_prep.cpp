@@ -1,12 +1,13 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Phase A (prep) reader: constants (eye, tril, ones, masks) once, then per-chunk q,k,v,g,beta. g and beta are
-// token-major [B, T, HV] (chunk_gdn_gate_read.hpp); q/k/v are head-major per chunk or flat (V_FLAT/QK_FLAT).
+// Phase A (prep) reader: the constants (eye, tril, ones, masks) built in L1 once, then per-chunk q,k,v,g,beta. g and
+// beta are token-major [B, T, HV] (chunk_gdn_gate_read.hpp); q/k/v are head-major per chunk or flat (V_FLAT/QK_FLAT).
 // No initial state — the prep phase is state-independent. Device 2.0 API.
-// The reads of one item, and at kickoff the constants as well, are issued as one flight behind a single
-// read barrier: the compute cannot start an item before q and k have landed, and at kickoff every
-// producer of the fused program reads at once, so each extra barrier is a contended round trip.
+// The reads of one item are issued as one flight behind a single read barrier: the compute cannot start an
+// item before q and k have landed, and at kickoff every producer of the fused program reads at once, so each
+// extra barrier is a contended round trip. The constants are not read from DRAM: every producer would fetch
+// the same few pages from one bank at kickoff.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -23,6 +24,21 @@ constexpr uint32_t cb_eye = 5, cb_tril = 6, cb_ones = 7;
 // Three 32x32 WY-inverse quadrant masks (Qtl|Qbr|Q10) packed into one [1,1,32,96] tensor.
 // Loaded once into the cb_u slot (17), which the stable-form prep no longer uses.
 constexpr uint32_t cb_mask = 17;
+
+// The constants are built in L1 from one face of ones (kernel_main): these two NoC helpers sit out of line because
+// the prep program's binaries run close to the kernel-config budget in watcher builds.
+constexpr uint32_t kFaceWords = 256, kFaceBytes = kFaceWords * 4;
+__attribute__((noinline)) static void zero_cb(const Noc& noc, const CircularBuffer& cb, uint32_t bytes) {
+    noc.async_write_zeros(cb, bytes);
+}
+// Loopback copy of the face at src_addr (this core's L1) to byte offset `offset` of cb's write slot.
+__attribute__((noinline)) static void copy_face(
+    const Noc& noc, uint32_t src_addr, const CircularBuffer& cb, uint32_t offset) {
+    UnicastEndpoint self;
+    const auto src = noc_traits_t<UnicastEndpoint>::src_args_type{
+        .noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = src_addr};
+    noc.async_read(self, cb, kFaceBytes, src, {.offset_bytes = offset});
+}
 static_assert(cb_mask == gdn_handoff::kCbU, "mask CB index drifted from chunk_gdn_handoff.hpp");
 
 void kernel_main() {
@@ -57,10 +73,7 @@ void kernel_main() {
     const uint32_t v_addr = get_arg_val<uint32_t>(4);
     const uint32_t g_addr = get_arg_val<uint32_t>(5);
     const uint32_t b_addr = get_arg_val<uint32_t>(6);
-    const uint32_t eye_addr = get_arg_val<uint32_t>(7);
-    const uint32_t tril_addr = get_arg_val<uint32_t>(8);
-    const uint32_t ones_addr = get_arg_val<uint32_t>(9);
-    const uint32_t mask_addr = get_arg_val<uint32_t>(10);
+    // Args 7..10: the DRAM copies of eye, tril, ones, masks; the constants are built in L1 instead.
     // Flat metadata (used by V_FLAT/QK_FLAT): NC = chunks/head, HV = value-head count, Hk = key-head count.
     const uint32_t NC = get_arg_val<uint32_t>(11);
     const uint32_t HV = get_arg_val<uint32_t>(12);
@@ -101,10 +114,6 @@ void kernel_main() {
     const auto b_acc = TensorAccessor(b_a, b_addr, b_tile_bytes);
     const gdn_gate::Source g_src = gdn_gate::source(T, HV, g_tile_bytes);
     const gdn_gate::Source b_src = gdn_gate::source(T, HV, b_tile_bytes);
-    const auto eye_acc = TensorAccessor(eye_a, eye_addr, tb_f);
-    const auto tril_acc = TensorAccessor(tril_a, tril_addr, tb_f);
-    const auto ones_acc = TensorAccessor(ones_a, ones_addr, tb_f);
-    const auto mask_acc = TensorAccessor(mask_a, mask_addr, tb_f);
 
     constexpr uint32_t cc = Ct * Ct;
     constexpr uint32_t ck = Ct * Kt;
@@ -168,7 +177,9 @@ void kernel_main() {
 
     // One item's inputs, q and k first (the norm consumes them first), as one flight. The gates come from the
     // token-major [B, T, HV] tensors: the tile holding the head's column, settled into column 0 after the barrier.
-    auto issue_item = [&](uint32_t hc) {
+    // The three per-item lambdas run at the kickoff and in the loop: out of line, one copy each (the prep program's
+    // binaries sit close to the kernel-config budget in watcher builds).
+    auto issue_item = [&](uint32_t hc) __attribute__((noinline)) {
         if constexpr (QK_FLAT) {
             issue_qk_flat(q_acc, cb_q, hc);
             issue_qk_flat(k_acc, cb_k, hc);
@@ -184,11 +195,11 @@ void kernel_main() {
         gdn_gate::issue(noc, g_acc, cb_g, hc / NC, hc % NC, Ct, g_src, tb_f);
         gdn_gate::issue(noc, b_acc, cb_beta, hc / NC, hc % NC, Ct, b_src, tb_f);
     };
-    auto settle_item = [&](uint32_t hc) {
+    auto settle_item = [&](uint32_t hc) __attribute__((noinline)) {
         gdn_gate::settle(cb_g, hc / NC, hc % NC, Ct, g_src, tb_f);
         gdn_gate::settle(cb_beta, hc / NC, hc % NC, Ct, b_src, tb_f);
     };
-    auto publish_item = [&]() {
+    auto publish_item = [&]() __attribute__((noinline)) {
         publish(cb_q, ck);
         publish(cb_k, ck);
         publish(cb_v, cv);
@@ -196,32 +207,99 @@ void kernel_main() {
         publish(cb_beta, Ct);
     };
 
-    // Kickoff: the first item's inputs and the constants in one flight.
+    // Constants in L1: eye and tril (diagonal included) [Ct x Ct tiles], ones [Ct x Ct tiles], the quadrant masks
+    // Qtl, Qbr, Q10 (tiles 0, 1, 2). An fp32 tile is four 16x16 faces: (0) rows 0-15 cols 0-15, (1) rows 0-15
+    // cols 16-31, (2) rows 16-31 cols 0-15, (3) rows 16-31 cols 16-31. zero_constants: reserve and zero fill (own
+    // barrier). fill_constants: one face of ones by RISC stores, NoC loopback copies of that face, the diagonal
+    // patterns by RISC stores; the caller ends the copies with a read barrier and pushes the four CBs.
+    constexpr uint32_t kOne = 0x3F800000u;
+    CircularBuffer eye(cb_eye), tril(cb_tril), ones(cb_ones), mask(cb_mask);
+    auto zero_constants = [&]() {
+        eye.reserve_back(cc);
+        tril.reserve_back(cc);
+        ones.reserve_back(cc);
+        mask.reserve_back(3);
+        zero_cb(noc, eye, cc * tb_f);
+        zero_cb(noc, tril, cc * tb_f);
+        zero_cb(noc, mask, 3 * tb_f);
+        noc.write_zeros_l1_barrier();
+    };
+    auto fill_constants = [&]() {
+        const uint32_t ones_face = ones.get_write_ptr();
+        volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ones_face);
+        for (uint32_t i = 0; i < kFaceWords; i++) {
+            w[i] = kOne;
+        }
+        for (uint32_t t = 0; t < Ct; t++) {
+            volatile tt_l1_ptr uint32_t* e =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(eye.get_write_ptr() + (t * Ct + t) * tb_f);
+            volatile tt_l1_ptr uint32_t* l =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tril.get_write_ptr() + (t * Ct + t) * tb_f);
+            for (uint32_t f = 0; f < 4 * kFaceWords; f += 3 * kFaceWords) {  // faces 0 and 3
+                for (uint32_t r = 0; r < 16; r++) {
+                    e[f + r * 17] = kOne;
+                    for (uint32_t q = 0; q <= r; q++) {
+                        l[f + r * 16 + q] = kOne;
+                    }
+                }
+            }
+        }
+        asm volatile("fence");
+        auto copy = [&](const CircularBuffer& cb, uint32_t tile, uint32_t face) {
+            copy_face(noc, ones_face, cb, tile * tb_f + face * kFaceBytes);
+        };
+        for (uint32_t t = 0; t < cc; t++) {
+            for (uint32_t f = (t == 0) ? 1u : 0u; f < 4; f++) {
+                copy(ones, t, f);
+            }
+        }
+        for (uint32_t rt = 0; rt < Ct; rt++) {
+            for (uint32_t ct = 0; ct < rt; ct++) {
+                for (uint32_t f = 0; f < 4; f++) {
+                    copy(tril, rt * Ct + ct, f);
+                }
+            }
+            copy(tril, rt * Ct + rt, 2);
+        }
+        constexpr uint32_t kMaskFaces[3] = {0, 3, 2};  // Qtl, Qbr, Q10: the all-ones quadrant of each mask tile
+        for (uint32_t t = 0; t < 3; t++) {
+            copy(mask, t, kMaskFaces[t]);
+        }
+    };
+    auto publish_constants = [&]() {
+        eye.push_back(cc);
+        tril.push_back(cc);
+        ones.push_back(cc);
+        mask.push_back(3);
+    };
+
+    // Kickoff: the first item's reads in flight while the constants are filled; one barrier for both.
+    zero_constants();
     if (kickoff_wait_cycles != 0) {
         riscv_wait(kickoff_wait_cycles);
     }
     const uint32_t hc0 = wi_count > 0 ? item_wi(0) : 0;
-    if (wi_count > 0) {
-        issue_item(hc0);
+    {
+        DeviceZoneScopedN("rd_kick");
+        if (wi_count > 0) {
+            issue_item(hc0);
+        }
+        fill_constants();
+        noc.async_read_barrier();
     }
-    issue(eye_acc, cb_eye, 0, cc, tb_f);
-    issue(tril_acc, cb_tril, 0, cc, tb_f);
-    issue(ones_acc, cb_ones, 0, cc, tb_f);
-    issue(mask_acc, cb_mask, 0, gdn_handoff::kMaskTiles, tb_f);  // Qtl, Qbr, Q10 (tiles 0,1,2)
-    noc.async_read_barrier();
     if (wi_count > 0) {
         settle_item(hc0);
         publish_item();
     }
-    publish(cb_eye, cc);
-    publish(cb_tril, cc);
-    publish(cb_ones, cc);
-    publish(cb_mask, gdn_handoff::kMaskTiles);
+    publish_constants();
 
     for (uint32_t i = 1; i < wi_count; i++) {
         const uint32_t hc = item_wi(i);
-        issue_item(hc);
-        noc.async_read_barrier();
+        {
+            DeviceZoneScopedN("rd_item");
+            issue_item(hc);
+            noc.async_read_barrier();
+        }
         settle_item(hc);
         publish_item();
     }

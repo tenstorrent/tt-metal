@@ -13,22 +13,22 @@ needs the ranking right where it matters, and its constants need to follow the k
 ## The model
 
 ```
-T      = fill(BH, P) + max(C, H + start, X) * (1 + pen) + tail
+T      = fill(BH, P) + max(C, H, X) * (1 + pen) + tail
 
-fill   = kFillAUs + min(BH, 24) * (kFillBUs + kFillCUs * P)          first scan step done; P = producers in total
+fill   = kFillAUs + kFillBUs * BH + kFillCUs * P                      first scan step done; P = producers in total
 C      = (NC - 1) * pace + kSkewAUs + kSkewBUs * BH [+ kPoolSkewUs]   the chain after the fill, plus the head skew
-pace   = t_step_us(Vtl) + kChainSlopeUs * BH [+ kPoolCreditD2Us * BH: pool, depth 2, Vtl <= 2]
+pace   = t_step_us(Vtl) + kChainSlopeUs * BH
+         depth 2 at Vtl 1, or at Vtl 2 without extras: pace = max(pace, kDepth2RoundTrip*)  the credit -> VALID round trip
          row-major and not production-bound: pace = max(pace, kRowMajorPaceUs)
 H      = (n_home - 1) * kWpUs     n_home = items of the busiest home producer (the shared item map)
 X      = (n_extra - 1) * kWpUs    n_extra = items of the busiest extra
 pen    = max(bump(C, H), g * bump(H, X))   at Vtl <= 2; the bumps of kBalance* / kPoolBalance*
-start  = kPoolStartUs * min(1, share / kPoolStartShare)   pool, Vtl <= 2
 tail   = kTailUs
 ```
 
 Three regimes: chain-bound (H, X well below C: the op is the fill plus NC - 1 steps, producers wait for credits),
 production-bound (H or X well above C: the op is the busiest producer's items, receivers wait for input), balanced
-(two bounds within 25 % of each other at Vtl <= 2: each side's jitter is exposed to the other).
+(two bounds within 15 % of each other at Vtl <= 2: each side's jitter is exposed to the other).
 
 ## What is measured
 
@@ -58,15 +58,15 @@ both sides, the regime, and for pools the items, period, waits and first VALID p
 | `kWpUs` | the VALID period on production-bound rows (`per`); `prep_item` as the cross-check | pools at BH 32 / 48, per-head NV 2 NP 3 at BH 16 |
 | `t_step_us(Vtl)` | chain pace on chain-bound per-head rows at depth 3, `scan_step` as the floor | one NV per Vtl, three BH values each |
 | `kChainSlopeUs` | slope of pace vs BH at one Vtl | the same rows |
-| `kFill*` | median first `scan_step` end, least squares on (1, min(BH,24), min(BH,24) * P) | all rows |
+| `kFill*` | median first `scan_step` end, least squares on (1, BH, P) | all rows |
 | `kSkew*`, `kTailUs` | skew = max - median chain end; tail = op - median chain end | chain-bound rows |
 | `kRowMajorPaceUs` | chain pace with `row_local=False` | BH 16 |
-| `kBalance*`, `kPoolBalance*`, `kPoolStartUs`, `kPoolCreditD2Us` | fitted on the residual of the rows that exercise them, never read off a zone | per-head NP 5 / 6 at BH 8 / 12; the BH 16 share sweep; depth 2 / 3 pairs at BH <= 12 |
+| `kBalance*`, `kPoolBalance*`, `kDepth2RoundTrip*` | fitted on the residual of the rows that exercise them, never read off a zone | per-head NP 5 / 6 at BH 8 / 12; the BH 16 share sweep; depth 2 / 3 pairs at BH <= 12 |
 | `kPhasedUs[]` | prep + scan op medians of `--phased` captures | BH 4, 8, 12, 16, 32, 48 |
 
 Which change touches what: prep compute -> `kWpUs` (and the share choice, NP 6 vs 7 at BH 12, depth at BH <= 12);
 scan compute -> `t_step_us`, `kChainSlopeUs` (and NV 1 vs 2 at BH 16 / 24); the hand-off dataflow -> the depth
-terms and the pool Vtl 1 step; the prep reader or kickoff -> `kFill*`, `kPoolStartUs`; placement or routing ->
+terms and the pool Vtl 1 step; the prep reader or kickoff -> `kFill*`; placement or routing ->
 `kRowMajorPaceUs`, `kSkew*`; the phased prims -> `kPhasedUs[]`.
 
 ## The scripts
@@ -101,8 +101,8 @@ geometry is the tree's own.
 5. `python calib_model.py c1.json --check` must print a zero maximum difference; otherwise the constants in
    `calib_model.py` are behind the tree and must be updated first. Then `--terms` gives the item period, the step
    per Vtl, the fill fit and the skew directly: set those by hand (`python calib_model.py c1.json W=16.9 step2=2.72`).
-6. Fit the residual terms only (the bumps, the start term, the depth-2 credit term), one or two at a time on the
-   rows that exercise them: `--fit peak,widthD2 --bh 8,12`, `--fit pool_peak,pool_start --only bh16_pool`. Read
+6. Fit the residual terms only (the bumps, the depth-2 round-trip floors), one or two at a time on the
+   rows that exercise them: `--fit peak,width --bh 8,12`, `--fit pool_peak,pool_width --only bh16_pool`. Read
    the per-row errors, not only the mean. `--emit` prints the constant blocks.
 7. Paste the constants into `device/chunk_gdn_device_operation.cpp` and the oracle at the top of
    `test_chunk_gdn_fused_geometry.py`; replace the measurement anchors there (`_FUSED_MEASUREMENTS`,

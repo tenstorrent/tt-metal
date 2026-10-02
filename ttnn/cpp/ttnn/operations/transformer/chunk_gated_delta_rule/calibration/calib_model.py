@@ -22,26 +22,24 @@ import sys
 K = dict(
     W=15.98,  # kWpUs: producer item period, flat over BH and the producer count
     step1=3.17,
-    step2=2.69,
-    step4=4.45,  # t_step_us(Vtl): receiver step per V-slice width
+    step2=2.63,
+    step4=4.50,  # t_step_us(Vtl): receiver step per V-slice width
     pool_step1=4.25,  # t_step_us(1, pooled): a pool's extras lengthen the Vtl=1 round trip
-    slope=0.012,  # kChainSlopeUs: chunk period growth per head
-    skewA=4.0,
-    skewB=0.5,  # kSkewAUs/BUs: slowest chain behind the median
+    slope=0.003,  # kChainSlopeUs: chunk period growth per head
+    skewA=6.0,
+    skewB=0.25,  # kSkewAUs/BUs: slowest chain behind the median
     tail=4.0,  # kTailUs
-    fillA=19.5,
-    fillB=0.72,
-    fillC=1.0 / 144.0,  # fill = A + min(BH,24) * (B + C * producers)
+    fillA=21.4,
+    fillB=0.34,
+    fillC=0.042,  # fill = A + B * BH + C * producers
     rowmajor=8.4,  # kRowMajorPaceUs
     peak=0.08,
-    widthD2=0.25,
-    widthD3=0.15,  # kBalancePeak / kBalanceWidthD2 / D3 (chain vs producers, Vtl <= 2)
-    pool_peak=0.25,
-    pool_width=0.25,  # kPoolBalancePeak / Width (home vs extra producers)
-    pool_start=20.0,
-    pool_start_share=0.25,  # kPoolStartUs * min(1, share / kPoolStartShare)
+    width=0.15,  # kBalancePeak / kBalanceWidth (chain vs producers, Vtl <= 2)
+    pool_peak=0.16,
+    pool_width=0.40,  # kPoolBalancePeak / Width (home vs extra producers)
     pool_skew=4.0,  # kPoolSkewUs
-    pool_credit_d2=0.025,  # kPoolCreditD2Us per head per step (pool, depth 2, Vtl <= 2)
+    rt1=4.1,
+    rt2=2.9,  # kDepth2RoundTripVtl1Us / Vtl2Us: the depth-2 credit -> VALID round trip floor on the step
 )
 PHASED = [(4, 359.8), (8, 461.5), (12, 603.0), (16, 769.4), (32, 1278.8), (48, 1907.9)]
 CPP_NAMES = {
@@ -55,14 +53,12 @@ CPP_NAMES = {
     "fillC": "kFillCUs",
     "rowmajor": "kRowMajorPaceUs",
     "peak": "kBalancePeak",
-    "widthD2": "kBalanceWidthD2",
-    "widthD3": "kBalanceWidthD3",
+    "width": "kBalanceWidth",
     "pool_peak": "kPoolBalancePeak",
     "pool_width": "kPoolBalanceWidth",
-    "pool_start": "kPoolStartUs",
-    "pool_start_share": "kPoolStartShare",
     "pool_skew": "kPoolSkewUs",
-    "pool_credit_d2": "kPoolCreditD2Us",
+    "rt1": "kDepth2RoundTripVtl1Us",
+    "rt2": "kDepth2RoundTripVtl2Us",
 }
 PY_NAMES = {
     "W": "_W_P_US",
@@ -70,7 +66,6 @@ PY_NAMES = {
     "tail": "_TAIL_US",
     "rowmajor": "_ROW_MAJOR_PACE_US",
     "pool_skew": "_POOL_SKEW_US",
-    "pool_credit_d2": "_POOL_CREDIT_D2_US",
     "pool_step1": "_T_STEP_POOL_VTL1_US",
 }
 
@@ -102,28 +97,26 @@ def t_fused(r, K=K):
     nph, nx, num, den = r["nph"], r["nx"], r["num"], r["den"]
     producers = r["np"] if pl == 2 else bh * r["np"]
     pooled = nx > 0
-    share = num / den if pooled else 0.0
     n_home, n_extra = pool_load(bh, nc, nph, nx, num, den)
     step = K["pool_step1"] if (pooled and vtl == 1) else K[f"step{vtl}"]
     pace = step + K["slope"] * bh
-    if pooled and vtl <= 2 and depth <= 2:
-        pace += K["pool_credit_d2"] * bh
+    if depth <= 2 and (vtl == 1 or (vtl == 2 and n_extra == 0)):
+        pace = max(pace, K[f"rt{vtl}"])
     H = (n_home - 1) * K["W"] if n_home else 0.0
     X = (n_extra - 1) * K["W"] if n_extra else 0.0
     if pl == 0 and max(H, X) < 2.0 * (nc - 1) * pace:
         pace = max(pace, K["rowmajor"])
     C = (nc - 1) * pace + K["skewA"] + K["skewB"] * bh + (K["pool_skew"] if pooled else 0.0)
-    pen = start = 0.0
+    pen = 0.0
     if vtl <= 2:
-        pen = balance(C, H, K["widthD2"] if depth <= 2 else K["widthD3"], K["peak"])
+        pen = balance(C, H, K["width"], K["peak"])
         if pooled:
             m = max(C, H, X)
             g = max(0.0, 1.0 - (m - max(H, X)) / (K["pool_width"] * m))
             pen = max(pen, g * balance(H, X, K["pool_width"], K["pool_peak"]))
-            start = K["pool_start"] * min(1.0, share / K["pool_start_share"])
-    fill = K["fillA"] + min(bh, 24) * (K["fillB"] + K["fillC"] * producers)
-    T = fill + max(C, H + start, X) * (1.0 + pen) + K["tail"]
-    bound = "C" if C >= max(H + start, X) else ("H" if H + start >= X else "X")
+    fill = K["fillA"] + K["fillB"] * bh + K["fillC"] * producers
+    T = fill + max(C, H, X) * (1.0 + pen) + K["tail"]
+    bound = "C" if C >= max(H, X) else ("H" if H >= X else "X")
     return T, dict(
         n_home=n_home,
         n_extra=n_extra,
@@ -131,7 +124,6 @@ def t_fused(r, K=K):
         C=round(C, 1),
         H=round(H, 1),
         X=round(X, 1),
-        start=round(start, 1),
         pen=round(pen, 3),
         bound=bound,
     )
@@ -312,11 +304,9 @@ def main():
         print(
             f"_FILL_A_US, _FILL_B_US, _FILL_C_US = {K['fillA']}, {K['fillB']}, {K['fillC']}\n_ROW_MAJOR_PACE_US = {K['rowmajor']}"
         )
-        print(f"_BALANCE_PEAK, _BALANCE_WIDTH_D2, _BALANCE_WIDTH_D3 = {K['peak']}, {K['widthD2']}, {K['widthD3']}")
-        print(
-            f"_POOL_BALANCE_PEAK, _POOL_BALANCE_WIDTH = {K['pool_peak']}, {K['pool_width']}\n_POOL_START_US, _POOL_START_SHARE = {K['pool_start']}, {K['pool_start_share']}"
-        )
-        print(f"_POOL_SKEW_US = {K['pool_skew']}\n_POOL_CREDIT_D2_US = {K['pool_credit_d2']}")
+        print(f"_BALANCE_PEAK, _BALANCE_WIDTH = {K['peak']}, {K['width']}")
+        print(f"_POOL_BALANCE_PEAK, _POOL_BALANCE_WIDTH = {K['pool_peak']}, {K['pool_width']}")
+        print(f"_POOL_SKEW_US = {K['pool_skew']}\n_DEPTH2_ROUND_TRIP_US = {{1: {K['rt1']}, 2: {K['rt2']}}}")
         if not fused:
             return
 
