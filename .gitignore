@@ -159,6 +159,17 @@ models/experimental/petr/resources/*.pth
 .claude
 .cursor/.DS_store
 
+# Local-only behavioral guidelines (intentionally not committed)
+CLAUDE.md
+CLAUDE_DOCUMENTATION_GUIDE.md
+CLAUDE_PRESENTATION_GUIDE.md
+
+# Local-only generated presentations
+presentations/
+
+# Local-only Claude session reports (see CLAUDE_DOCUMENTATION_GUIDE.md)
+docs/claude_sessions/
+
 # Generated rank binding files (machine-specific, regenerated at runtime via generate_rank_bindings.py)
 2x4_multi_mesh_cyclic_rank_binding.yaml
 2x8_2x4_3_mesh_rank_binding.yaml

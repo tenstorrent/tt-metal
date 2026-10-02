@@ -11,6 +11,9 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
+#include <cstdlib>
+#include <string>
+
 namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
@@ -47,11 +50,21 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_pr
     uint32_t in0_c = per_tensor_tiles / in0_w_tiles;  // num_heads
     uint32_t in0_HtWt = in0_h_tiles * in0_w_tiles;
     uint32_t in0_CHtWt = in0_c * in0_HtWt;
+    // QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT=1 (interleaved only): one work unit per (batch, h_tile, head group)
+    // instead of per sequence tile, so the concat spreads over head_groups x more cores.
+    const char* head_split_env = std::getenv("QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT");
+    const uint32_t head_groups = 8;
+    const bool head_split_enabled = head_split_env != nullptr && std::string(head_split_env) == "1" && !in_sharded &&
+                                    !out_sharded && in0_c % head_groups == 0 && in0_w_tiles > 0;
+    const uint32_t heads_per_group = head_split_enabled ? in0_c / head_groups : 0;
 
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     // Block is a unit of work; ie. num of per_tensor_tiles per core
     uint32_t num_blocks = ashape[0] * ashape[2] / TILE_HEIGHT;
+    if (head_split_enabled) {
+        num_blocks *= head_groups;
+    }
     uint32_t num_cores = 0, num_blocks_per_core_group_1 = 0, num_blocks_per_core_group_2 = 0;
     CoreRangeSet all_cores = CoreRangeSet(), core_group_1 = CoreRangeSet(), core_group_2 = CoreRangeSet();
     bool row_major = false;
@@ -146,6 +159,57 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_pr
             .compile_time_args = std::move(compile_time_args),
             .runtime_arg_schema =
                 {.runtime_arg_names = {"nheads", "start_read_offset_bytes", "start_write_offset_bytes"}},
+            .hw_config = create_writer_datamovement_config(),
+        };
+    } else if (head_split_enabled) {
+        reader_spec = KernelSpec{
+            .unique_id = READER,
+            .source =
+                "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/device/kernels/dataflow/"
+                "reader_tm_tile_layout_nlp_concat_heads_head_split.cpp",
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = IN0_DFB,
+                .accessor_name = "in0",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            }},
+            .tensor_bindings = {TensorBinding{
+                .tensor_parameter_name = INPUT,
+                .accessor_name = "src",
+            }},
+            .compile_time_args =
+                {
+                    {"in0_h_tiles", in0_h_tiles},
+                    {"in0_w_tiles", in0_w_tiles},
+                    {"in0_c", in0_c},
+                    {"in0_HtWt", in0_HtWt},
+                    {"head_groups", head_groups},
+                    {"heads_per_group", heads_per_group},
+                },
+            .runtime_arg_schema = {.runtime_arg_names = {"num_work_units", "work_unit_start"}},
+            .hw_config = create_reader_datamovement_config(),
+        };
+        writer_spec = KernelSpec{
+            .unique_id = WRITER,
+            .source =
+                "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/device/kernels/dataflow/"
+                "writer_tm_tile_layout_nlp_concat_heads_head_split.cpp",
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = IN0_DFB,
+                .accessor_name = "in0",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            }},
+            .tensor_bindings = {TensorBinding{
+                .tensor_parameter_name = OUTPUT,
+                .accessor_name = "dst",
+            }},
+            .compile_time_args =
+                {
+                    {"head_groups", head_groups},
+                    {"heads_per_group", heads_per_group},
+                    {"in0_w_tiles", in0_w_tiles},
+                    {"per_tensor_tiles", per_tensor_tiles},
+                },
+            .runtime_arg_schema = {.runtime_arg_names = {"num_work_units", "work_unit_start"}},
             .hw_config = create_writer_datamovement_config(),
         };
     } else {
@@ -251,6 +315,20 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_pr
         for (uint32_t i = 0, num_blocks_written = 0; i < cores.size(); ++i) {
             const CoreCoord& core = cores[i];
             uint32_t num_blocks_per_core = i < g1_numcores ? num_blocks_per_core_group_1 : num_blocks_per_core_group_2;
+
+            if (head_split_enabled) {
+                for (auto* run_args : {&reader_run_args, &writer_run_args}) {
+                    AddRuntimeArgsForNode(
+                        run_args->runtime_arg_values,
+                        core,
+                        {
+                            {"num_work_units", num_blocks_per_core},
+                            {"work_unit_start", num_blocks_written},
+                        });
+                }
+                num_blocks_written += num_blocks_per_core;
+                continue;
+            }
 
             uint32_t in0_h_dim = num_blocks_written % in0_h_tiles;
             uint32_t in0_tensor_tile_id = (num_blocks_written / in0_h_tiles * in0_CHtWt) + (in0_h_dim * in0_w_tiles);

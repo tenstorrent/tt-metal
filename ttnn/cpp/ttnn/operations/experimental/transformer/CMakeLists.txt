@@ -55,7 +55,14 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_experimental_transformer PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(ttnn_op_experimental_transformer PUBLIC TTNN::Core PRIVATE TT::Metalium)
+target_link_libraries(
+    ttnn_op_experimental_transformer
+    PUBLIC
+        TTNN::Core
+    PRIVATE
+        TT::Metalium
+        TTNN::Ops::MatmulDecode
+)
 
 install(
     TARGETS

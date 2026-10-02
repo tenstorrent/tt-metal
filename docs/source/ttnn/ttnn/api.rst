@@ -144,6 +144,8 @@ Matrix Multiplication
    ttnn.linear
    ttnn.addmm
    ttnn.sparse_matmul
+   ttnn.matmul_decode
+   ttnn.gate_up_matmul_decode
 
 .. autosummary::
    :toctree: api
@@ -538,6 +540,7 @@ Transformer
    ttnn.transformer.sparse_sdpa
    ttnn.transformer.sparse_sdpa_msa
    ttnn.transformer.split_query_key_value_and_split_heads
+   ttnn.kv_sdpa
    ttnn.experimental.indexer_score_dsa
    ttnn.experimental.indexer_score_msa
 

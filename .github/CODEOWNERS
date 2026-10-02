@@ -648,6 +648,7 @@ models/**/requirements*.txt @tenstorrent/metalium-developers-infra
 models/experimental/gated_attention_gated_deltanet @sdawle-TT @dvartaniansTT @tenstorrent/cse-developer-ttnn
 models/experimental/ops @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-mmfusedreduce
 models/experimental/pi0 @sdawle-TT @dvartaniansTT @tenstorrent/cse-developer-ttnn
+models/experimental/pi0_5 @sdawle-TT @dvartaniansTT @atupe-tt @ssinghalTT @aperezvicente-TT @tenstorrent/cse-developer-ttnn
 models/vllm_test_utils/ @viktorpusTT @tchedaTT @uaydonat
 
 # tracy

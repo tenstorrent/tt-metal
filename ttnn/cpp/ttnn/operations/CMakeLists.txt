@@ -26,6 +26,7 @@ add_subdirectory(embedding_backward)
 
 # metalium-developers-mmfusedreduce
 add_subdirectory(matmul)
+add_subdirectory(matmul_decode)
 add_subdirectory(normalization)
 add_subdirectory(reduction)
 
@@ -40,6 +41,7 @@ add_subdirectory(full)
 add_subdirectory(full_like)
 add_subdirectory(index_fill)
 add_subdirectory(kv_cache)
+add_subdirectory(kv_sdpa)
 add_subdirectory(loss)
 add_subdirectory(prefetcher)
 add_subdirectory(rand)
@@ -69,8 +71,10 @@ target_link_libraries(
         TTNN::Ops::FullLike
         TTNN::Ops::IndexFill
         TTNN::Ops::KvCache
+        TTNN::Ops::KvSdpa
         TTNN::Ops::Loss
         TTNN::Ops::Matmul
+        TTNN::Ops::MatmulDecode
         TTNN::Ops::Normalization
         TTNN::Ops::PointToPoint
         TTNN::Ops::Pool
@@ -110,8 +114,10 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::FullLike>
         $<TARGET_OBJECTS:TTNN::Ops::IndexFill>
         $<TARGET_OBJECTS:TTNN::Ops::KvCache>
+        $<TARGET_OBJECTS:TTNN::Ops::KvSdpa>
         $<TARGET_OBJECTS:TTNN::Ops::Loss>
         $<TARGET_OBJECTS:TTNN::Ops::Matmul>
+        $<TARGET_OBJECTS:TTNN::Ops::MatmulDecode>
         $<TARGET_OBJECTS:TTNN::Ops::Normalization>
         $<TARGET_OBJECTS:TTNN::Ops::PointToPoint>
         $<TARGET_OBJECTS:TTNN::Ops::Pool>

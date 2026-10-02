@@ -83,6 +83,14 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_SRCS
     rotary_embedding_hf/device/rotary_embedding_hf_multi_core_program_factory.cpp
     rotary_embedding_hf/device/rotary_embedding_hf_sharded_program_factory.cpp
     rotary_embedding_hf/rotary_embedding_hf.cpp
+    rotary_embedding_fused_qk/device/rotary_embedding_fused_qk_device_operation.cpp
+    rotary_embedding_fused_qk/device/rotary_embedding_fused_qk_program_factory.cpp
+    rotary_embedding_fused_qk/rotary_embedding_fused_qk.cpp
+    nlp_create_qkv_heads_rope/device/nlp_create_qkv_heads_rope_device_operation.cpp
+    nlp_create_qkv_heads_rope/device/nlp_create_qkv_heads_rope_program_factory.cpp
+    nlp_create_qkv_heads_rope/nlp_create_qkv_heads_rope.cpp
+    concat_heads_matmul/concat_heads_matmul.cpp
+    concat_heads_matmul_decode/concat_heads_matmul_decode.cpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_API_HEADERS
@@ -125,4 +133,8 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_NANOBIND_SRCS
     rotate_half/rotate_half_nanobind.cpp
     split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.cpp
     all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.cpp
+    rotary_embedding_fused_qk/rotary_embedding_fused_qk_nanobind.cpp
+    nlp_create_qkv_heads_rope/nlp_create_qkv_heads_rope_nanobind.cpp
+    concat_heads_matmul/concat_heads_matmul_nanobind.cpp
+    concat_heads_matmul_decode/concat_heads_matmul_decode_nanobind.cpp
 )

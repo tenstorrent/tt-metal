@@ -12,6 +12,9 @@
 #include "nlp_create_qkv_heads_device_operation.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
+#include <cstdlib>
+#include <string>
+
 namespace ttnn::operations::experimental::transformer {
 
 using namespace tt::constants;
@@ -35,8 +38,11 @@ struct InterleavedWorkSplit {
     bool head_parallel = false;
 };
 
+// head_split_factor > 1 multiplies the work units for the QWEN_NLP_CREATE_HEADS_HEAD_SPLIT / PI0_MQA_HEAD_SPLIT paths.
 InterleavedWorkSplit build_interleaved_work_split(
-    const NlpCreateHeadsDeviceOperation::operation_attributes_t& operation_attributes, const Tensor& input_tensor) {
+    const NlpCreateHeadsDeviceOperation::operation_attributes_t& operation_attributes,
+    const Tensor& input_tensor,
+    uint32_t head_split_factor = 1) {
     const auto& input_shape = input_tensor.padded_shape();
     const CoreCoord grid = input_tensor.device()->compute_with_storage_grid_size();
     const uint32_t num_cores_y = grid.y;
@@ -44,7 +50,8 @@ InterleavedWorkSplit build_interleaved_work_split(
     // Split heads only when the Q-only sequence split would leave cores idle.
     const bool head_parallel = operation_attributes.num_kv_heads == 0 && operation_attributes.num_q_heads > 1 &&
                                !operation_attributes.transpose_k_heads && sequence_blocks < grid.x * grid.y;
-    const uint32_t num_blocks = sequence_blocks * (head_parallel ? operation_attributes.num_q_heads : 1);
+    const uint32_t num_blocks =
+        sequence_blocks * (head_parallel ? operation_attributes.num_q_heads : 1) * head_split_factor;
     auto [num_cores, all_cores, core_group_1, core_group_2, blocks_group_1, blocks_group_2] =
         tt::tt_metal::split_work_to_cores(grid, num_blocks);
 
@@ -160,7 +167,20 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
     uint32_t q_num_tiles = num_q_heads * q_out_w_tiles;
     uint32_t kv_num_tiles = num_kv_heads * q_out_w_tiles;
 
-    const auto split = build_interleaved_work_split(operation_attributes, input_tensor);
+    // QWEN_NLP_CREATE_HEADS_HEAD_SPLIT=1 (fused-QKV input only): split each sequence block into its KV groups
+    // (num_kv_heads x the work units). PI0_MQA_HEAD_SPLIT=1 additionally splits MQA/GQA across Q heads
+    // (num_q_heads x); the first Q head of each KV group also moves that group's shared K and V.
+    const char* head_split_env = std::getenv("QWEN_NLP_CREATE_HEADS_HEAD_SPLIT");
+    const bool head_split_enabled = head_split_env != nullptr && std::string(head_split_env) == "1" &&
+                                    !transpose_k_heads && !read_from_input_tensor_kv && !operation_attributes.kv_tied &&
+                                    !operation_attributes.q_head_split.has_value() && num_kv_heads > 0 &&
+                                    num_q_heads % num_kv_heads == 0 && q_out_w_tiles > 0;
+    const char* mqa_split_env = std::getenv("PI0_MQA_HEAD_SPLIT");
+    const bool mqa_split_enabled = head_split_enabled && mqa_split_env != nullptr &&
+                                   std::string(mqa_split_env) == "1" && num_kv_heads < num_q_heads;
+    const uint32_t head_split_factor = mqa_split_enabled ? num_q_heads : (head_split_enabled ? num_kv_heads : 1);
+
+    const auto split = build_interleaved_work_split(operation_attributes, input_tensor, head_split_factor);
     const auto& core_group_1 = split.core_group_1;
     const auto& core_group_2 = split.core_group_2;
     const uint32_t num_blocks_per_core_group_1 = split.num_blocks_per_core_group_1;
@@ -287,6 +307,32 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
                  {"num_blocks", "q_out_h_dim", "q_out_tensor_tile_id", "k_out_tensor_tile_id", "v_out_tensor_tile_id"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
+    if (head_split_enabled) {
+        // Same bindings (qv buffer; input_q / q / k / v tensors), split-specific kernels and args.
+        const std::string split_kind = mqa_split_enabled ? "mqa_split" : "head_split";
+        const std::string kernel_dir =
+            "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/";
+        reader.source =
+            std::filesystem::path(kernel_dir + "reader_tm_tile_layout_nlp_create_qkv_heads_" + split_kind + ".cpp");
+        writer.source =
+            std::filesystem::path(kernel_dir + "writer_tm_tile_layout_nlp_create_qkv_heads_" + split_kind + ".cpp");
+        reader.compile_time_args = {
+            {"q_heads_per_kv", num_q_heads / num_kv_heads},
+            {"num_kv_heads", num_kv_heads},
+            {"head_tiles", q_out_w_tiles},
+            {"in0_w_tiles", in0_w_tiles},
+        };
+        writer.compile_time_args = {
+            {"q_out_h_tiles", q_out_h_tiles},
+            {"q_out_w_tiles", q_out_w_tiles},
+            {"q_out_HtWt", q_out_HtWt},
+            {"num_q_heads", num_q_heads},
+            {"num_kv_heads", num_kv_heads},
+            {"q_heads_per_kv", num_q_heads / num_kv_heads},
+        };
+        reader.runtime_arg_schema = {.runtime_arg_names = {"num_work_units", "work_unit_start"}};
+        writer.runtime_arg_schema = {.runtime_arg_names = {"num_work_units", "work_unit_start"}};
+    }
     if (read_from_input_tensor_kv) {
         reader.tensor_bindings.push_back(TensorBinding{
             .tensor_parameter_name = INPUT_KV,
@@ -401,6 +447,20 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
             num_blocks_per_core = num_blocks_per_core_group_2;
         } else {
             TT_ASSERT(false, "Core not in specified core ranges");
+        }
+
+        if (head_split_enabled) {
+            for (auto* run_args : {&reader_run_args, &writer_run_args}) {
+                AddRuntimeArgsForNode(
+                    run_args->runtime_arg_values,
+                    core,
+                    {
+                        {"num_work_units", num_blocks_per_core},
+                        {"work_unit_start", num_blocks_written},
+                    });
+            }
+            num_blocks_written += num_blocks_per_core;
+            continue;
         }
 
         uint32_t q_out_h_dim = num_blocks_written % q_out_h_tiles;
