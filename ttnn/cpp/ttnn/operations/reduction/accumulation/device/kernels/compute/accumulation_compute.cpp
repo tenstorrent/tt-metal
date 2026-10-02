@@ -130,6 +130,18 @@ void kernel_main() {
             add_binary_tile(DST_ACC, DST_IN, DST_T);      // t = acc + y
             sub_binary_tile(DST_T, DST_ACC, DST_COMP);    // (t - acc)
             sub_binary_tile(DST_COMP, DST_IN, DST_COMP);  // c = (t - acc) - y
+            // Once the running total is non-finite, c is NaN (inf - inf) or +-inf (after an overflow),
+            // and y = in - c would turn every later element into NaN. Clamp c to [-2^102, 2^102]: any c
+            // the compensation holds while |t| < 2^126 is smaller and passes through unchanged, and
+            // y = in - c can no longer overflow, so the running total keeps the IEEE result.
+            // The clamp works on c's bit pattern. As an int32, every negative float is below 2^102's
+            // pattern and +inf/+NaN are above it, so the signed min caps the positive side; as a uint32,
+            // every positive float is below -2^102's pattern and -inf/-NaN are above it, so the unsigned
+            // min caps the negative side.
+            unary_min_int32_tile_init();
+            unary_min_int32_tile(DST_COMP, 0x72800000u);  // 2^102
+            unary_min_uint32_tile_init();
+            unary_min_uint32_tile(DST_COMP, 0xf2800000u);  // -2^102
             constexpr uint32_t DST_RESULT = DST_T;
             dfb_comp_obj.pop_front(ONE_TILE);
 #else
