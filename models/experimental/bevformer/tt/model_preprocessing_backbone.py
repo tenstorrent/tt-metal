@@ -17,6 +17,17 @@ from models.experimental.bevformer.reference.resnet import ResNet, ModulatedDefo
 from models.experimental.bevformer.tt.tt_modulated_deform_conv import grid_offset_order
 
 
+def _fold_batch_norm(weight, bias, bn):
+    """``(weight, bias)`` of a conv with the eval-mode BatchNorm ``bn`` after it folded in."""
+    scale = bn.running_var.add(bn.eps).rsqrt()
+    shift = -bn.running_mean * scale
+    if bn.affine:
+        scale = scale * bn.weight
+        shift = shift * bn.weight + bn.bias
+    bias = torch.zeros_like(shift) if bias is None else bias.detach()
+    return weight * scale.view(-1, 1, 1, 1), bias * scale + shift
+
+
 def custom_preprocessor(model, name):
     parameters = {}
 
@@ -39,11 +50,12 @@ def custom_preprocessor(model, name):
                 for conv_name in ["conv1", "conv2", "conv3"]:
                     conv = getattr(block, conv_name)
                     if isinstance(conv, ModulatedDeformConv2dPack):
-                        # The DCN conv consumes torch weights, and its BatchNorm runs as a
-                        # separate op after it, so neither is folded here.
+                        # The DCN conv consumes torch weights, with its BatchNorm folded in.
+                        bn = getattr(block, f"bn{conv_name[-1]}")
+                        weight, bias = _fold_batch_norm(conv.weight.detach(), conv.bias, bn)
                         parameters["res_model"][prefix][block_idx][conv_name] = {}
-                        parameters["res_model"][prefix][block_idx][conv_name]["weight"] = conv.weight
-                        parameters["res_model"][prefix][block_idx][conv_name]["bias"] = conv.bias
+                        parameters["res_model"][prefix][block_idx][conv_name]["weight"] = weight
+                        parameters["res_model"][prefix][block_idx][conv_name]["bias"] = bias
                         # The offset rows are reordered to the (x, y) order the device DCN takes;
                         # moving whole rows is exact.
                         order = grid_offset_order(conv.kernel_size[0] * conv.kernel_size[1])
@@ -55,36 +67,6 @@ def custom_preprocessor(model, name):
                             "weight": ttnn.from_torch(offset_weight, dtype=ttnn.float32),
                             "bias": ttnn.from_torch(offset_bias.reshape((1, 1, 1, -1)), dtype=ttnn.float32),
                         }
-
-                        bn = getattr(block, f"bn{conv_name[-1]}")
-                        channel_size = bn.num_features
-
-                        weight_torch = bn.weight if bn.affine else None
-                        bias_torch = bn.bias if bn.affine else None
-                        batch_mean_torch = bn.running_mean.view(1, channel_size, 1, 1)
-                        batch_var_torch = bn.running_var.view(1, channel_size, 1, 1)
-                        weight_torch = weight_torch.view(1, channel_size, 1, 1) if weight_torch is not None else None
-                        bias_torch = bias_torch.view(1, channel_size, 1, 1) if bias_torch is not None else None
-
-                        bn_params = {}
-                        bn_params["weight"] = (
-                            ttnn.from_torch(weight_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-                            if weight_torch is not None
-                            else None
-                        )
-                        bn_params["bias"] = (
-                            ttnn.from_torch(bias_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-                            if bias_torch is not None
-                            else None
-                        )
-                        bn_params["running_mean"] = ttnn.from_torch(
-                            batch_mean_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-                        )
-                        bn_params["running_var"] = ttnn.from_torch(
-                            batch_var_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-                        )
-                        bn_params["eps"] = bn.eps
-                        parameters["res_model"][prefix][block_idx][f"bn{conv_name[-1]}"] = bn_params
                     else:
                         bn = getattr(block, f"bn{conv_name[-1]}")
                         w, b = fold_batch_norm2d_into_conv2d(conv, bn)

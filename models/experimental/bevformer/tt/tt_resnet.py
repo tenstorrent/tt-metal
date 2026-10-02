@@ -2,8 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
+from types import SimpleNamespace
 
+import torch
+
+import ttnn
 from models.experimental.bevformer.tt.tt_common import TtnnConv2D
 from models.experimental.bevformer.tt.tt_modulated_deform_conv import TtModulatedDeformConv2dDevice
 
@@ -15,7 +18,7 @@ class TtModulatedDeformConv2dPack:
     which shares it with the deformable conv.
     """
 
-    def __init__(self, conv_args, conv_pth, device, input_dtype=ttnn.bfloat16):
+    def __init__(self, conv_args, conv_pth, device, input_dtype=ttnn.bfloat16, relu=False):
         offset_args = conv_args.conv_offset
         # __call__ reshapes the input to the output's (B, H, W), which holds only at stride 1.
         # BEVFormer's caffe-style ResNet puts every stride on conv1 or the downsample shortcut.
@@ -34,23 +37,41 @@ class TtModulatedDeformConv2dPack:
             deform_groups=offset_args.out_channels // (3 * kernel_positions),
             device=device,
             input_shape=(offset_args.batch_size, offset_args.input_height, offset_args.input_width),
+            relu=relu,
         )
 
-        # conv_offset emits the pixel offsets, already in the device DCN's (x, y) order (see
-        # create_resnet_parameters), then the mask logits. Its output is bfloat16 whatever the
-        # input dtype, since the offsets set the sampling positions. Trained offsets reach tens
-        # of pixels, and accumulating in a bfloat16 destination register errs by up to a few of
-        # them, so the register is fp32. The partial sums conv2d writes back between reduction
-        # blocks stay bfloat16 (packer_l1_acc is off); keeping those in fp32 too measured no
-        # better.
+        # conv_offset emits the offsets in grid units, in the device DCN's (x, y) order (see
+        # create_resnet_parameters and _grid_scaled_offsets), then the mask logits. Its output
+        # is bfloat16 whatever the input dtype, since the offsets set the sampling positions.
+        # Trained offsets reach tens of pixels, and accumulating in a bfloat16 destination
+        # register errs by up to a few of them, so the register is fp32. The partial sums conv2d
+        # writes back between reduction blocks stay bfloat16 (packer_l1_acc is off); keeping
+        # those in fp32 too measured no better.
         self.num_offset_channels = 2 * kernel_positions
         self.conv_offset = TtnnConv2D(
             offset_args,
-            conv_pth.conv_offset,
+            self._grid_scaled_offsets(conv_pth.conv_offset, offset_args),
             device=device,
             fp32_dest_acc_en=True,
             input_dtype=input_dtype,
             output_dtype=ttnn.bfloat16,
+        )
+
+    def _grid_scaled_offsets(self, conv_offset, offset_args):
+        """conv_offset's parameters with the offset rows pre-scaled by ``2 / [W, H]``.
+
+        grid_sample takes offsets in grid units, a pixel offset times ``2 / [W, H]``; scaling
+        the conv's (x, y) rows is exact and drops that multiply from every forward. Copies,
+        so parameters shared by several modules are scaled only here.
+        """
+        scale = torch.ones(conv_offset.weight.shape[0])
+        scale[: self.num_offset_channels : 2] = 2.0 / offset_args.input_width
+        scale[1 : self.num_offset_channels : 2] = 2.0 / offset_args.input_height
+        weight = ttnn.to_torch(conv_offset.weight) * scale.view(-1, 1, 1, 1)
+        bias = ttnn.to_torch(conv_offset.bias) * scale.view(1, 1, 1, -1)
+        return SimpleNamespace(
+            weight=ttnn.from_torch(weight, dtype=conv_offset.weight.dtype),
+            bias=ttnn.from_torch(bias, dtype=conv_offset.bias.dtype),
         )
 
     def __call__(self, x):
@@ -58,14 +79,14 @@ class TtModulatedDeformConv2dPack:
         (B, H_out, W_out, C_out) NHWC output and its height and width."""
         out, out_h, out_w = self.conv_offset(x)
         out = ttnn.reshape(out, (self.batch_size, out_h, out_w, out.shape[-1]))
-        offset_xy = out[:, :, :, : self.num_offset_channels]
+        grid_offset = out[:, :, :, : self.num_offset_channels]
         mask = ttnn.sigmoid(out[:, :, :, self.num_offset_channels :])
         ttnn.deallocate(out)
 
         # At stride 1 the input has the output's height and width.
         x_nhwc = ttnn.reshape(x, (self.batch_size, out_h, out_w, x.shape[-1]))
-        out_nhwc = self.device_dcn(x_nhwc, offset_xy, mask)
-        ttnn.deallocate(offset_xy)
+        out_nhwc = self.device_dcn(x_nhwc, grid_offset, mask)
+        ttnn.deallocate(grid_offset)
         ttnn.deallocate(mask)
         return out_nhwc, out_h, out_w
 
@@ -175,15 +196,11 @@ class TtBottleneck:
                 input_dtype=conv2_dtype,
             )
         else:
-            self.conv2 = TtModulatedDeformConv2dPack(conv_args.conv2, conv_pth.conv2, device, input_dtype=conv2_dtype)
-            # The DCN branch runs its BatchNorm as a separate op. Its parameters go to the
-            # device once here, so a forward writes nothing from the host.
-            bn = conv_pth.bn2
-            self.bn_running_mean = ttnn.to_device(bn.running_mean, device=device)
-            self.bn_running_var = ttnn.to_device(bn.running_var, device=device)
-            self.bn_weight = None if bn.weight is None else ttnn.to_device(bn.weight, device=device)
-            self.bn_bias = None if bn.bias is None else ttnn.to_device(bn.bias, device=device)
-            self.bn_eps = bn.eps
+            # The BatchNorm is folded into the DCN weights (create_resnet_parameters); the ReLU
+            # runs in the DCN's bias add.
+            self.conv2 = TtModulatedDeformConv2dPack(
+                conv_args.conv2, conv_pth.conv2, device, input_dtype=conv2_dtype, relu=True
+            )
 
         self.conv3 = TtnnConv2D(
             conv_args.conv3,
@@ -213,21 +230,7 @@ class TtBottleneck:
         x, _, _ = self.conv1(x_identity)
 
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        if self.with_dcn:
-            x, _, _ = self.conv2(x)
-            x = ttnn.permute(x, (0, 3, 1, 2))
-            x = ttnn.batch_norm(
-                x,
-                running_mean=self.bn_running_mean,
-                running_var=self.bn_running_var,
-                eps=self.bn_eps,
-                weight=self.bn_weight,
-                bias=self.bn_bias,
-            )
-            x = ttnn.relu(x)
-            x = ttnn.permute(x, (0, 2, 3, 1))
-        else:
-            x, _, _ = self.conv2(x)
+        x, _, _ = self.conv2(x)
         x, _, _ = self.conv3(x)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
 

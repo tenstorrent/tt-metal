@@ -78,10 +78,11 @@ class TtModulatedDeformConv2dDevice:
         deform_groups,
         device,
         input_shape,
+        relu=False,
     ):
         """``input_shape`` is the (batch, height, width) of the NHWC input every call will see.
         It fixes the sampling base grid, which is built and uploaded here so a forward does
-        no host work."""
+        no host work. ``relu`` applies a ReLU to the output, inside its last add."""
         assert groups == 1, f"device DCN supports groups=1 only, got {groups}"
         assert deform_groups == 1, f"device DCN supports deform_groups=1 only, got {deform_groups}"
 
@@ -140,13 +141,7 @@ class TtModulatedDeformConv2dDevice:
         H_out = (H_in + 2 * self.padding[0] - self.dilation[0] * (self.K - 1) - 1) // self.stride[0] + 1
         W_out = (W_in + 2 * self.padding[1] - self.dilation[1] * (self.K - 1) - 1) // self.stride[1] + 1
         self.io_shape = (batch, H_in, W_in, H_out, W_out)
-        # Pixel offsets in (x, y) order times these give grid offsets.
-        self.grid_scale = ttnn.from_torch(
-            torch.tensor([2.0 / W_in, 2.0 / H_in] * (self.K * self.K)).reshape(1, 1, 1, -1),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-        )
+        self.output_activations = [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)] if relu else None
         self.base_grid = ttnn.from_torch(
             self._build_base_grid(H_in, W_in, H_out, W_out, batch),
             dtype=ttnn.bfloat16,
@@ -186,14 +181,15 @@ class TtModulatedDeformConv2dDevice:
         grid = torch.stack(channels, dim=-1)  # (H_out, W_out, 2*K*K)
         return grid.unsqueeze(0).expand(batch, H_out, W_out, 2 * self.K * self.K).contiguous()
 
-    def __call__(self, x_nhwc, offset_xy_nhwc, mask_nhwc):
+    def __call__(self, x_nhwc, grid_offset_nhwc, mask_nhwc):
         """Forward.
 
         Args:
           x_nhwc: (B, H_in, W_in, C_in) NHWC TILE on device, bfloat16 or bfloat8_b;
               it is sampled as bfloat16 ROW_MAJOR.
-          offset_xy_nhwc: (B, H_out, W_out, 2*K*K) bfloat16 NHWC TILE pixel offsets in
-              (x, y) order per kernel position, see `grid_offset_order`.
+          grid_offset_nhwc: (B, H_out, W_out, 2*K*K) bfloat16 NHWC TILE offsets in grid
+              units (pixel offsets times ``2 / [W_in, H_in]``), in (x, y) order per kernel
+              position, see `grid_offset_order`.
           mask_nhwc: (B, H_out, W_out, K*K) bfloat16 NHWC — modulation masks
               after sigmoid.
 
@@ -210,7 +206,7 @@ class TtModulatedDeformConv2dDevice:
         )
         # grid_sample's reader expects ROW_MAJOR for both input and grid.
         x_rm = ttnn.to_layout(x_nhwc, ttnn.ROW_MAJOR_LAYOUT)
-        grid_offset = ttnn.to_layout(ttnn.multiply(offset_xy_nhwc, self.grid_scale), ttnn.ROW_MAJOR_LAYOUT)
+        grid_offset = ttnn.to_layout(grid_offset_nhwc, ttnn.ROW_MAJOR_LAYOUT)
         if mask_nhwc.layout != ttnn.ROW_MAJOR_LAYOUT:
             mask_nhwc = ttnn.to_layout(mask_nhwc, ttnn.ROW_MAJOR_LAYOUT)
 
@@ -262,6 +258,8 @@ class TtModulatedDeformConv2dDevice:
             output_acc = partial if output_acc is None else ttnn.add(output_acc, partial)
 
         if self.bias is not None:
-            output_acc = ttnn.add(output_acc, self.bias)
+            output_acc = ttnn.add(output_acc, self.bias, activations=self.output_activations)
+        elif self.output_activations:
+            output_acc = ttnn.relu(output_acc)
 
         return output_acc
