@@ -1202,36 +1202,32 @@ def test_init_run_batches_hold_at_most_300_lines_and_every_file_once(tmp_path):
     assert [b["files"] for b in man if "c/f1200.c" in b["files"]] == [["c/f1200.c"]]
 
 
-def _commit_all(tree, msg):
-    import subprocess as sp
+def _git(cwd, *args):
+    """git in a test repo, through the skill's one process helper."""
+    sys.path.insert(0, ENGINE)
+    import spawn
 
-    sp.run(["git", "add", "-A"], cwd=tree, check=True)
-    sp.run(
-        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", msg],
-        cwd=tree,
-        check=True,
-    )
-    return sp.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=tree,
+    return spawn.run(
+        "git",
+        [str(a) for a in args],
+        cwd=cwd,
         check=True,
         capture_output=True,
         text=True,
-    ).stdout.strip()
+    )
+
+
+def _commit_all(tree, msg):
+    _git(tree, "add", "-A")
+    _git(tree, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", msg)
+    return _git(tree, "rev-parse", "HEAD").stdout.strip()
 
 
 def test_init_run_diff_mode_keeps_changed_files_with_non_ascii_names(tmp_path):
     odd = "c/ünï cödé.c"
     tree = _git_tree(tmp_path, ["b/g1.c", "b/same.c", odd])
-    import subprocess as sp
 
-    base = sp.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=tree,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
+    base = _git(tree, "rev-parse", "HEAD").stdout.strip()
     (tree / "b/g1.c").write_text("int y;\n")
     (tree / odd).write_text("int y;\n")
     _commit_all(tree, "change")
@@ -1241,29 +1237,22 @@ def test_init_run_diff_mode_keeps_changed_files_with_non_ascii_names(tmp_path):
 
 
 def test_init_run_diff_mode_reaches_changed_files_inside_a_submodule(tmp_path):
-    import subprocess as sp
-
     sub = tmp_path / "subrepo"
     sub.mkdir()
     (sub / "s.c").write_text("int s;\n")
     (sub / "t.c").write_text("int t;\n")
-    sp.run(["git", "init", "-q"], cwd=sub, check=True)
+    _git(sub, "init", "-q")
     _commit_all(sub, "sub base")
     tree = _git_tree(tmp_path, ["top.c", "other.c"])
-    sp.run(
-        [
-            "git",
-            "-c",
-            "protocol.file.allow=always",
-            "submodule",
-            "add",
-            "-q",
-            str(sub),
-            "sub",
-        ],
-        cwd=tree,
-        check=True,
-        capture_output=True,
+    _git(
+        tree,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        "-q",
+        str(sub),
+        "sub",
     )
     base = _commit_all(tree, "add sub")
     (tree / "sub" / "s.c").write_text(
@@ -1278,39 +1267,30 @@ def test_init_run_diff_mode_reaches_changed_files_inside_a_submodule(tmp_path):
 
 
 def test_init_run_diff_mode_reaches_a_change_inside_a_nested_submodule(tmp_path):
-    import subprocess as sp
-
     allow = ["-c", "protocol.file.allow=always"]
 
     def repo(path, files):
         path.mkdir()
         for f, body in files.items():
             (path / f).write_text(body)
-        sp.run(["git", "init", "-q"], cwd=path, check=True)
+        _git(path, "init", "-q")
         _commit_all(path, "init")
 
     repo(tmp_path / "inner", {"a.c": "int a;\n", "b.c": "int b;\n"})
     repo(tmp_path / "mid", {"m.c": "int m;\n"})
-    sp.run(
-        ["git", *allow, "submodule", "add", "-q", str(tmp_path / "inner"), "inner"],
-        cwd=tmp_path / "mid",
-        check=True,
-        capture_output=True,
+    _git(
+        tmp_path / "mid",
+        *allow,
+        "submodule",
+        "add",
+        "-q",
+        str(tmp_path / "inner"),
+        "inner",
     )
     _commit_all(tmp_path / "mid", "add inner")
     tree = _git_tree(tmp_path, ["top.c"])
-    sp.run(
-        ["git", *allow, "submodule", "add", "-q", str(tmp_path / "mid"), "mid"],
-        cwd=tree,
-        check=True,
-        capture_output=True,
-    )
-    sp.run(
-        ["git", *allow, "submodule", "update", "-q", "--init", "--recursive"],
-        cwd=tree,
-        check=True,
-        capture_output=True,
-    )
+    _git(tree, *allow, "submodule", "add", "-q", str(tmp_path / "mid"), "mid")
+    _git(tree, *allow, "submodule", "update", "-q", "--init", "--recursive")
     base = _commit_all(tree, "add mid")
     (tree / "mid" / "inner" / "a.c").write_text(
         "int a2;\n"
@@ -1324,43 +1304,36 @@ def test_init_run_diff_mode_reaches_a_change_inside_a_nested_submodule(tmp_path)
 
 
 def test_init_run_diff_mode_takes_a_whole_submodule_whose_old_pin_is_gone(tmp_path):
-    import subprocess as sp
-
     sub = tmp_path / "subrepo"
     sub.mkdir()
     (sub / "s.c").write_text("int s;\n")
     (sub / "t.c").write_text("int t;\n")
-    sp.run(["git", "init", "-q"], cwd=sub, check=True)
+    _git(sub, "init", "-q")
     _commit_all(sub, "sub base")
     tree = _git_tree(tmp_path, ["top.c"])
-    sp.run(
-        [
-            "git",
-            "-c",
-            "protocol.file.allow=always",
-            "submodule",
-            "add",
-            "-q",
-            str(sub),
-            "sub",
-        ],
-        cwd=tree,
-        check=True,
-        capture_output=True,
+    _git(
+        tree,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        "-q",
+        str(sub),
+        "sub",
     )
     inner = tree / "sub"
     (inner / "s.c").write_text("int pinned;\n")
     _commit_all(inner, "the old pin, about to vanish")
     base = _commit_all(tree, "pin it")
     # rewrite the submodule's history so the old pin is unreachable, then drop it from the clone
-    sp.run(["git", "reset", "-q", "--hard", "HEAD~1"], cwd=inner, check=True)
+    _git(inner, "reset", "-q", "--hard", "HEAD~1")
     (inner / "t.c").write_text("int t2;\n")
     _commit_all(inner, "new history")
     for cmd in (
         ["reflog", "expire", "--expire=now", "--all"],
         ["gc", "-q", "--prune=now"],
     ):
-        sp.run(["git", *cmd], cwd=inner, check=True)
+        _git(inner, *cmd)
     _commit_all(tree, "bump sub")
     code, out, files = _init(tmp_path, tree, "--since", base, "--recurse-submodules")
     assert code == 0, out
