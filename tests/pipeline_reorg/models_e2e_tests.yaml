@@ -1658,19 +1658,18 @@
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
     # Stop at the first failed command: the devices are not reset between commands (#57706).
     run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc "$1" || exit $?; }
-# Host-side diagnostics only (no model tests): the Wan VAE section doubled on every sc1 host on 2026-09-15
-# with no tt-metal change involved, so collect the facts the normal logs do not show.
-run 'set -x; hostname; uname -a; nproc; cat /sys/fs/cgroup/cpu.max 2>/dev/null; cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us /sys/fs/cgroup/cpu/cpu.cfs_period_us 2>/dev/null; cat /sys/fs/cgroup/memory.max 2>/dev/null; cat /sys/fs/cgroup/cpuset.cpus.effective 2>/dev/null; lscpu | grep -E "Model name|^CPU\(s\)|MHz|NUMA node|Thread|Socket"; grep -i -E "huge|MemTotal|MemAvailable" /proc/meminfo; cat /sys/kernel/mm/transparent_hugepage/enabled; cat /proc/sys/kernel/numa_balancing; cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null; cat /sys/module/iommu/parameters/* 2>/dev/null | head; dmesg 2>/dev/null | grep -i -E "iommu|dmar|tenstorrent" | tail -5; which tt-smi && tt-smi -s 2>/dev/null | head -80; python3 - <<EOF
-import time, torch
-print("torch", torch.__version__, "threads", torch.get_num_threads(), "interop", torch.get_num_interop_threads())
-x = torch.randn(81, 480, 832, 3)
-t = time.time(); y = (x.clamp(-1, 1) * 127.5 + 127.5).to(torch.uint8); print("uint8 convert 388MB s", round(time.time() - t, 3))
-t = time.time(); z = x.clone(); print("clone 388MB s", round(time.time() - t, 3))
-t = time.time(); w = torch.cat([x[:, :, :416], x[:, :, 416:]], dim=2); print("concat s", round(time.time() - t, 3))
-t = time.time(); p = x.permute(0, 3, 1, 2).contiguous(); print("permute+contig s", round(time.time() - t, 3))
-import numpy as np
-a = np.random.rand(50_000_000).astype(np.float32); t = time.time(); b = a.copy(); print("numpy copy 200MB s", round(time.time() - t, 3))
-EOF'
+    # Host-side diagnostics only (no model tests): see tests/scripts/experiments/sc1_host_diag.sh.
+    run 'bash tests/scripts/experiments/sc1_host_diag.sh'
+  model: wan-2.2-t2v
+  model_family: Wan
+  skus:
+    bh_sc1:
+      timeout: 45
+      tier: 1
+      release_ready: true
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+  budget_type: e2e
 
 - name: TT-DiT Wan2.2-I2V-A14B single galaxy e2e tests
   cmd: |
