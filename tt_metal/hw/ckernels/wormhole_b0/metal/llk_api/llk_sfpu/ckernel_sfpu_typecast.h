@@ -453,55 +453,57 @@ inline void calculate_typecast_uint32_to_fp16b() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_uint32_to_fp32() {
+    // Split x = high * 2^23 + low. Both high - 1 and 2^23 + low are exact FP32
+    // values, so (high - 1) * 2^23 + (2^23 + low) rounds only once.
+    // L12 = -23; L13 = 2^23. SFPSETMAN constructs 2^23 + low directly.
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
-        TTI_SFPSETSGN(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);
-        TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG2, 0);
-        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
-        TTI_SFPADDI(0x4f00, p_sfpu::LREG2, 0);  // 2^31
-        TTI_SFPENCC(0, 0, 0, 0);
-        TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP32, ADDR_MOD_2, 0);
+        TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG0, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
+        TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
+        TTI_SFPADDI(0xbf80, p_sfpu::LREG0, 0);  // -1.0
+        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
+        TTI_SFPSETMAN(0, p_sfpu::LREG13, p_sfpu::LREG1, 0);
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG1, p_sfpu::LREG1, 0);
+        TTI_SFPNOP;
+        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_2, 0);
     }
 #else
-    // This uses SFPLOADMACRO to achieve a throughput of 3 cycles per input row.
+    // Three issued instructions per row. Alternate register pairs so the next
+    // row can start before the previous row's MAD and store finish.
     //
-    // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
-    //
-    // Note: L0=0.0 and L1=2**31.  The sign bit is stored in L7 and used to pick L0 or L1
-    // for SFPMAD's VA:
-    //
-    // - if sign bit is 0, then compute L0*1.0 + v = v
-    // - if sign bit is 1, then compute L1*1.0 + v = 2**31 + v
-    //
-    // t | Load | Simple             | MAD                     | Round       | Store    |
-    // - | ---- | ------------------ | ----------------------- | ----------- | -------- |
-    // 0 | [a]  |                    |                         |             |          |
-    // 1 | [b]  | [a] = setsgn(a, 0) |                         |             |          |
-    // 2 | [L7] | [b] = cast(a)      |                         |             |          |
-    // 0 | ...  |                    |                         | [L7] >>= 31 |          |
-    // 1 | ...  |                    | [b] L16 = L[L7]*1.0 + b |             |          |
-    // 2 | ...  |                    |                         |             |          |
-    // 0 | ...  |                    |                         |             | [L7] L16 |
-
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0);
-    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0x4f00);  // 2**31
-
-    constexpr int a = p_sfpu::LREG2;
-    constexpr int b = p_sfpu::LREG3;
-    constexpr int L7 = p_sfpu::LREG7;
-
+    // t | Load | Simple             | MAD                | Round    | Store |
+    // 0 | h    |                    |                    |          |       |
+    // 1 | l    |                    |                    | h >>= 23 |       |
+    // 2 |      | h = cast(h)        |                    |          |       |
+    // 3 | next | l = setman(L13, l) | h += -1.0          |          |       |
+    // 5 |      |                    | l = h * L13 + l    |          |       |
+    // 7 |      |                    |                    |          | l     |
+    // The final MAD is issued explicitly; the remaining operations are macros.
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::INT32, ADDR_MOD_3, a >> 2);
-        TTI_SFPLOADMACRO((1 << 2) | (b & 3), InstrModLoadStore::INT32, ADDR_MOD_3, b >> 2);
-        TTI_SFPLOADMACRO((2 << 2) | (L7 & 3), InstrModLoadStore::INT32, ADDR_MOD_2, L7 >> 2);
+        const int h = d & 1;
+        const int l = 2 + (d & 1);
+        TT_SFPLOADMACRO((0 << 2) | (h & 3), InstrModLoadStore::INT32, ADDR_MOD_3, h >> 2);
+        TT_SFPLOADMACRO((1 << 2) | (l & 3), InstrModLoadStore::INT32, ADDR_MOD_2, l >> 2);
+        if (d == 0) {
+            TTI_SFPNOP;
+        } else {
+            const int prev_h = (d - 1) & 1;
+            const int prev_l = 2 + ((d - 1) & 1);
+            TT_SFPMAD(prev_h, p_sfpu::LREG13, prev_l, prev_l, 0);
+        }
     }
-    TTI_SFPNOP;
-    TTI_SFPNOP;
-    TTI_SFPNOP;
-    TTI_SFPNOP;
+    if constexpr (ITERATIONS > 0) {
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+        constexpr int h = (ITERATIONS - 1) & 1;
+        constexpr int l = 2 + ((ITERATIONS - 1) & 1);
+        TTI_SFPMAD(h, p_sfpu::LREG13, l, l, 0);
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+    }
 #endif
 }
 
@@ -661,63 +663,49 @@ inline void init_typecast_uint16_to_uint32() {
 
 // SFPCAST interprets its input as sign-magnitude, so bit 31 of the source flags the case
 // that needs a post-cast fixup. vConstIntPrgm0 (LREG12) is preloaded with -31 -- the shift
-// amount the int/uint -> float macro inits (init_typecast_{uint32,int32}_to_fp32 / _to_fp16b)
-// use to extract that bit.
+// amount used by init_typecast_int32_to_fp32 and init_typecast_{uint32,int32}_to_fp16b
+// to extract that bit.
 inline void preload_sign_magnitude_cast_fixup() { sfpi::vConstIntPrgm0 = -31; }
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint32_to_fp32() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
+    sfpi::vConstIntPrgm0 = -23;
+    sfpi::vConstFloatPrgm1 = 8388608.0f;  // 2^23
 #ifndef DISABLE_SFPLOADMACRO
-    preload_sign_magnitude_cast_fixup();
+    // Instruction templates: shift, cast, subtract 1.0, construct 2^23 + low.
+    TTI_SFPSHFT2(0, p_sfpu::LREG12, 12, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
+    TTI_SFPCAST(0, 13, 0);
+    TTI_SFPADDI(0xbf80, 14, 0);
+    TTI_SFPSETMAN(0, p_sfpu::LREG13, 15, 0);
 
-    constexpr int a = p_sfpu::LREG2;
-
-    // InstructionTemplate[0]
-    TTI_SFPSETSGN(0, 0, 12, 1);  // SFPSETSGN_MOD1_ARG_IMM
-
-    // InstructionTemplate[1]
-    TTI_SFPCAST(a, 13, 0);
-
-    // InstructionTemplate[2]
-    TTI_SFPSHFT2(0, p_sfpu::LREG12, 14, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
-
-    // InstructionTemplate[3]
-    TTI_SFPMAD(0, p_sfpu::LCONST_1, 0, 15, 4);  // SFPMAD_MOD1_INDIRECT_VA
-
-    // Macro 0: [a]
+    // A disabled unit must also use delay 7, otherwise it can cancel a pending
+    // instruction from an earlier load macro at the same delay.
+    constexpr std::uint32_t disabled = 7 << 3;
+    // Macro 0: high = fp32(x >> 23) - 1.0.
     {
-        constexpr std::uint32_t simple_bits = 0x00 | 0x00 | (0 << 3) | (4 + 0);
-        constexpr std::uint32_t mad_bits = 0;
-
-        TTI_SFPCONFIG((mad_bits << 8) | simple_bits, 4 + 0, 1);
-    }
-    // Macro 1: [b]
-    {
-        constexpr std::uint32_t simple_bits = 0x80 | 0x00 | (0 << 3) | (4 + 1);
-        constexpr std::uint32_t mad_bits = 0x00 | 0x40 | (2 << 3) | (4 + 3);
-
-        TTI_SFPCONFIG((mad_bits << 8) | simple_bits, 4 + 1, 1);
-    }
-    // Macro 2: [L7]
-    {
-        constexpr std::uint32_t simple_bits = 0;
-        constexpr std::uint32_t mad_bits = 0;
-        constexpr std::uint32_t round_bits = 0x80 | 0x00 | (0 << 3) | (4 + 2);
-        constexpr std::uint32_t store_bits = 0x00 | 0x40 | (3 << 3) | 3;
-
+        constexpr std::uint32_t simple_bits = (1 << 3) | (4 + 1);
+        constexpr std::uint32_t mad_bits = (2 << 3) | (4 + 2);
+        constexpr std::uint32_t round_bits = 0x80 | (0 << 3) | (4 + 0);
+        constexpr std::uint32_t store_bits = disabled;
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-        TTI_SFPCONFIG(0, 4 + 2, 0);
+        TTI_SFPCONFIG(0, 4 + 0, 0);
     }
-
-    // Misc: {
-    //   StoreMod0: FP32,
-    //   UsesLoadMod0ForStore: {0,0,0},
-    //   UnitDelayKind: {1,1,1}, (WaitForElapsedInstructions=1)
-    // }
-    TTI_SFPCONFIG(0x700 | InstrModLoadStore::FP32, 8, 1);
+    // Macro 1: low = 2^23 + (x & 0x7fffff); store after the explicit MAD.
+    {
+        constexpr std::uint32_t simple_bits = 0x80 | (1 << 3) | (4 + 3);
+        constexpr std::uint32_t mad_bits = disabled;
+        constexpr std::uint32_t round_bits = disabled;
+        constexpr std::uint32_t store_bits = (5 << 3) | 3;
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
+        TTI_SFPCONFIG(0, 4 + 1, 0);
+    }
+    // FP32 stores; all units wait for issued SFPU instructions, so a stalled
+    // instruction stream cannot let the store overtake the explicit MAD.
+    TTI_SFPCONFIG(0xf00 | InstrModLoadStore::FP32, 8, 1);
 #endif
 }
 

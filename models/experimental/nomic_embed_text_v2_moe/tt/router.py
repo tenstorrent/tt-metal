@@ -15,6 +15,8 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.nomic_embed_text_v2_moe.tt.common import to_device, transpose_linear_weight
+from models.experimental.nomic_embed_text_v2_moe.tt.matmul_config import router_program_config
+from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 
 
 class TtNomicRouter(LightweightModule):
@@ -45,7 +47,31 @@ class TtNomicRouter(LightweightModule):
         self.weight = to_device(
             transpose_linear_weight(state_dict[f"{state_dict_prefix}layer.weight"]),
             device,
-            dtype=tt_config.router_dtype,
+            dtype=tt_config.matmul_weight_dtype(OpGroup.ROUTER),
+        )
+
+    def logits(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """(1, 1, T, H) -> (1, 1, T, E) float32 expert scores.
+
+        The bfloat16 activation meets the fp32 weight inside the matmul. Casting it to fp32 first
+        measured the same error to 16 digits, at twice the read plus the cast.
+        """
+        compute_kernel_config = self.tt_config.compute_kernel_config(OpGroup.ROUTER)
+        return ttnn.linear(
+            x,
+            self.weight,
+            dtype=self.tt_config.router_dtype,
+            program_config=router_program_config(
+                x.shape[-2],
+                x.shape[-1] // ttnn.TILE_SIZE,
+                x.dtype,
+                self.weight.dtype,
+                self.tt_config.router_dtype,
+                self.tt_config.core_grid,
+                self.tt_config.l1_cb_bytes,
+                compute_kernel_config,
+            ),
+            compute_kernel_config=compute_kernel_config,
         )
 
     def select(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
@@ -61,12 +87,10 @@ class TtNomicRouter(LightweightModule):
             tuple: probabilities (1, 1, T, E) fp32, values (1, 1, T, K) fp32 unrenormalized, and
             indices (1, 1, T, K) uint32.
         """
-        logits = ttnn.linear(
-            ttnn.typecast(x, self.tt_config.router_dtype),
-            self.weight,
-            compute_kernel_config=self.tt_config.compute_kernel_config,
+        logits = self.logits(x)
+        probabilities = ttnn.softmax(
+            logits, dim=-1, compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.SOFTMAX)
         )
-        probabilities = ttnn.softmax(logits, dim=-1, compute_kernel_config=self.tt_config.compute_kernel_config)
         ttnn.deallocate(logits)
 
         values, indices = ttnn.topk(probabilities, k=self.top_k, dim=-1)

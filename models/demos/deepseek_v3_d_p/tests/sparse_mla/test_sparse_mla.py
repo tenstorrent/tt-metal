@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sparse MLA / DSA tests for the GLM-5.1 / GLM-5.2 variants.
+"""Sparse MLA / DSA tests for the GLM-5.2 variant.
 
 GLM-5.2, not GLM-5.3: these tests compare against a CPU reference cached under ``variant.mla_ref_cache_env``,
 and only GLM-5.2 has a populated one. The two checkpoints are architecturally identical and these runs use
@@ -47,10 +47,10 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 SPARSE_OUTPUT_PCC = 0.98
 SPARSE_KVPE_PCC = 0.99
 # Indexer key cache is stored bf8 on device vs the bf16 CPU reference, so it carries block-float
-# quantization noise. Measured ~0.99991 on 2x4 BH (both variants, chunked + rotated), tracking the
+# quantization noise. Measured ~0.99991 on 2x4 BH (chunked + rotated), tracking the
 # bf16 KVPE cache; 0.999 keeps ample bf8 headroom while still catching a real write regression.
 SPARSE_INDEX_PCC = 0.999
-SPARSE_VARIANTS = ["glm_5_1", "glm_5_2"]
+SPARSE_VARIANTS = ["glm_5_2"]
 
 
 def _collect_kvpe_cache(cache, mesh_device):
@@ -69,12 +69,12 @@ def _collect_kvpe_cache(cache, mesh_device):
 # ---------------------------------------------------------------------------
 # Box-adaptive candidate meshes (sp, tp), keyed by physical device count. Each box lists ONLY shapes
 # that fit it, so off-box shapes are never generated (no "needs N devices" skips). Shapes must be
-# TP>=2 (the dense 128-head epilogue overflows L1 at TP=1). BOTH variants run every listed mesh: GLM's
+# TP>=2 (the dense 128-head epilogue overflows L1 at TP=1). Every variant runs every listed mesh: GLM's
 # thin per-chip head shard at tp=4 (64/4=16 < 32) is handled by the head→sequence reshard in
 # ttMLA._sparse_mla (#48727) + the head-replicated seq-sharded indexer, so GLM is no longer TP-capped.
 # Coverage rationale:
 #   QuietBox (4):  (1,4) TorusX and (2,2) Fabric2D.
-#   LoudBox  (8):  (2,4) TP=4 and (4,2) TP=2 — both variants at both TP.
+#   LoudBox  (8):  (2,4) TP=4 and (4,2) TP=2 — every variant at both TP.
 #   Galaxy   (32): (8,4) production TP=4 + the existing (8,2) TP=2 diagnostic plane.
 # Mesh shape is NOT correctness-invariant, so accuracy sweeps the whole box set; determinism and
 # chunked pin to each variant's anchor (highest supported TP) — see _sparse_cases(anchor_only=True).
@@ -197,7 +197,7 @@ def _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, slot
     Layer-slot count mirrors the serving adapter (glm_5_3.py allocate_kv_cache): the indexer strides the
     folded user-major cache by num_full_indexer_layers (only ``full`` layers own an index slot), so the
     cache must carry that many layer slots for update_padded_kv_cache's cache_batch % num_layers check to
-    hold. Falls back to 1 when the config has no ``indexer_types`` (glm_5_1: every layer full,
+    hold. Falls back to 1 when the config has no ``indexer_types`` (every layer full,
     single-layer standalone MLA -> stride 1)."""
     return init_kvpe_cache(
         kvpe_cache_head_dim=getattr(config, "index_head_dim", 128),
@@ -715,8 +715,10 @@ def run_sparse_mla_pad_overflow_case(
     logger.info(f"[{variant.name}] sparse MLA pad-overflow complete")
 
 
-def run_sparse_mla_kv_only_case(variant, config, mesh_device, seq_len, chunk, ds_layer, ds_checkpoint, ds_repo):
-    """Last-layer chunked fast path must populate packed KVPE and tiled index caches without an output."""
+def run_sparse_mla_kv_only_case(
+    variant, config, mesh_device, seq_len, chunk, cache_format, ds_layer, ds_checkpoint, ds_repo
+):
+    """Last-layer chunked fast path must populate KVPE and tiled index caches without an output."""
     seed = 42
     weights, src_tag = build_weights(
         variant, config, seed=seed, layer=ds_layer, checkpoint_path=ds_checkpoint, repo=ds_repo
@@ -724,7 +726,6 @@ def run_sparse_mla_kv_only_case(variant, config, mesh_device, seq_len, chunk, ds
     config.max_seq_len = seq_len
     mesh_shape = list(mesh_device.shape)
     sp_axis, tp_axis = 0, 1
-    cache_format = MlaKvCacheFormat.SCALED_FP8
     tt_kvpe_cache = init_mla_kv_cache(
         cache_format=cache_format,
         hf_config=config,
@@ -942,10 +943,13 @@ def run_sparse_mla_rotated_case(
     SPARSE_ANCHOR_CASES,
     indirect=["variant", "mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("iters_isl", [[2560, 2592, 5120]], ids=["maxedge"])
+@pytest.mark.parametrize("iters_isl", [[2560, 1600, 5120]], ids=["maxedge"])
 # KV dedup under ROTATION is the interesting case (test_sparse_mla_cache.py only starts slab-aligned):
 # the writer rotates at sp*tp stripes while indexer_score's causal geometry rotates at sp, and the two
-# only coincide for an aligned start. maxedge gives starts 0 / 2560 / 5152 -- aligned, mid-slab, straddle.
+# only coincide for an aligned start. maxedge gives starts 0 / 2560 / 4160 -- aligned, mid-slab on an SP
+# boundary, and a full chunk starting mid SP slab (4160 % 640 = 320) that straddles into the next slab.
+# The last one is where query ownership (SP rotation + TP window) and a per-device stripe rotation
+# disagree on a fused full-mesh ring (#58339).
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_sparse_mla_rotated_chunked(
@@ -1005,7 +1009,7 @@ def test_sparse_mla_accuracy_chunked(
     )
 
 
-# GLM-5.2 indexer reuse: anchor cases for the reuse-capable variant only (others have no shared layers).
+# GLM-5.2 indexer reuse: anchor cases for the reuse-capable variant.
 SPARSE_REUSE_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_2" in c.id]
 
 
@@ -1122,7 +1126,7 @@ def test_sparse_mla_chunked(
 
 
 # glm_5_2 only: the clamp is model-agnostic, so the variant axis buys nothing here and glm_5_2 is the
-# production-closest of the two (it also exercises DSA cross-layer indexer reuse). Cache format IS kept --
+# production-closest variant (it also exercises DSA cross-layer indexer reuse). Cache format IS kept --
 # it changes the page layout the clamp addresses.
 SPARSE_PAD_OVERFLOW_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_2" in c.id]
 
@@ -1159,7 +1163,7 @@ def test_sparse_mla_pad_overflow_chunked(
     )
 
 
-SPARSE_KV_ONLY_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_1" in c.id]
+SPARSE_KV_ONLY_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_2" in c.id]
 
 
 @pytest.mark.parametrize(
@@ -1168,9 +1172,16 @@ SPARSE_KV_ONLY_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_1" in c.id]
     indirect=["variant", "mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("chunk", [1024], ids=["c1k"])
+@pytest.mark.parametrize(
+    "cache_format",
+    [MlaKvCacheFormat.BF16_RM, MlaKvCacheFormat.SCALED_FP8],
+    ids=["kv_bf16", "kv_scaled_fp8"],
+)
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_sparse_mla_kv_only_chunked(
-    mesh_device, seq_len, chunk, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
+    mesh_device, seq_len, chunk, cache_format, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
 ):
-    run_sparse_mla_kv_only_case(variant, config_only, mesh_device, seq_len, chunk, ds_layer, ds_checkpoint, ds_repo)
+    run_sparse_mla_kv_only_case(
+        variant, config_only, mesh_device, seq_len, chunk, cache_format, ds_layer, ds_checkpoint, ds_repo
+    )

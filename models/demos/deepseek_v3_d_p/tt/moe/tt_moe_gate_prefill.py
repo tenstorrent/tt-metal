@@ -17,7 +17,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
-from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
@@ -184,7 +184,7 @@ class TtMoEGateConfig:
                     mcast_in0=False,
                 )
             ),
-            (GATE_PRODUCTION_SP_DIM, GLM51Config.EMB_SIZE // 4, GLM51Config.NUM_ROUTED_EXPERTS): (
+            (GATE_PRODUCTION_SP_DIM, GLM53Config.EMB_SIZE // 4, GLM53Config.NUM_ROUTED_EXPERTS): (
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
                     in0_block_w=12,
@@ -312,7 +312,7 @@ class TtMoEGateConfig:
                     fuse_batch=True,
                 )
             ),
-            (GATE_PRODUCTION_SP_DIM, GLM51Config.EMB_SIZE // 4, GLM51Config.NUM_ROUTED_EXPERTS): (
+            (GATE_PRODUCTION_SP_DIM, GLM53Config.EMB_SIZE // 4, GLM53Config.NUM_ROUTED_EXPERTS): (
                 ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(8, 10),
                     in0_block_w=8,

@@ -453,6 +453,24 @@ bool BinaryNgDeviceOperation::skip_launch(
     return tensor_return_value.logical_shape().volume() == 0;
 }
 
+namespace {
+// CMAKE_UNIQUE_NAMESPACE keeps this helper's name from colliding with a sibling's in the unity build.
+namespace CMAKE_UNIQUE_NAMESPACE {
+// A sharded operand is admitted only as an L1-sharded tiled layout (height/block/width) that carries a
+// shard spec: the factories need the spec to borrow or place, and a sharded DRAM tensor or a non-tiled
+// sharded layout is not handled. An interleaved operand always passes (the NoC-read path).
+bool sharded_operand_ok(const tt::tt_metal::MemoryConfig& mc) {
+    if (!mc.is_sharded()) {
+        return true;
+    }
+    const bool tiled_layout = mc.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+                              mc.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+                              mc.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+    return mc.buffer_type() == BufferType::L1 && tiled_layout && mc.shard_spec().has_value();
+}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
 bool BinaryNgDeviceOperation::matches_metal_v2_slice(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // The Metal 2.0 / DataflowBuffer factory (binary_ng_metal_v2_factory.cpp) is a generic port of the
@@ -461,10 +479,10 @@ bool BinaryNgDeviceOperation::matches_metal_v2_slice(
     // activations. Each of input_a / input_b / output may INDEPENDENTLY be interleaved (DRAM or L1,
     // read/written over the NoC) OR L1-sharded (height/block/width). The DFB kernels are per-operand
     // capable (reader: SRC_SHARDED / SRC_SHARDED_B; writer: DST_SHARDED). The factory borrows
-    // all-or-nothing: only when all three operands are L1-sharded on one matching grid are their resident
-    // L1 shards borrowed to back the DFBs (no NoC work); otherwise — any interleaved operand, mixed
-    // strategies, or a divergent grid — NONE are borrowed and every operand is read/written over the NoC
-    // via a sharding-aware TensorAccessor.
+    // all-or-nothing: only when all three operands are L1-sharded with one memory config are their resident
+    // L1 shards borrowed to back the DFBs (no NoC work); otherwise — any interleaved operand or a
+    // different shard spec — NONE are borrowed and every operand is read/written over the NoC via a
+    // sharding-aware TensorAccessor.
     // Everything else falls through to the descriptor path; this predicate is the correctness boundary.
     // Deferred to the descriptor (not handled by the factory): tensor-scalar, where-op, quantization,
     // row-major (non-TILE), and mixed lhs/rhs dtype.
@@ -595,37 +613,16 @@ bool BinaryNgDeviceOperation::matches_metal_v2_slice(
     // Per-operand layout: each of a, b, and the output may INDEPENDENTLY be interleaved OR L1-sharded.
     // The decisive per-operand property the factory acts on is BORROWED (resident L1 shard backs the
     // DFB) vs NoC-READ (sharding-aware TensorAccessor) — not "sharded" — so mixed combinations are
-    // admitted. The only restriction on a sharded operand is that it be L1-sharded with a tiled layout
-    // (height/block/width); a sharded DRAM tensor or a non-tiled sharded layout is not handled here.
-    auto is_l1_sharded_tiled = [](const tt::tt_metal::MemoryConfig& mc) {
-        return mc.is_sharded() && mc.buffer_type() == BufferType::L1 &&
-               (mc.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
-                mc.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
-                mc.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED);
-    };
-    // A sharded operand must be valid L1-sharded-tiled AND actually carry a shard spec (a sharded
-    // memory_config without a shard spec is rejected; the factory needs the spec to borrow / place).
-    auto sharded_operand_ok = [&](const tt::tt_metal::MemoryConfig& mc, bool has_shard_spec) {
-        if (!mc.is_sharded()) {
-            return true;  // interleaved is always fine (NoC-read path)
-        }
-        return is_l1_sharded_tiled(mc) && has_shard_spec;
-    };
-    if (!sharded_operand_ok(a.memory_config(), a.shard_spec().has_value()) ||
-        !sharded_operand_ok(b.memory_config(), b.shard_spec().has_value()) ||
-        !sharded_operand_ok(attributes.memory_config, attributes.memory_config.shard_spec().has_value())) {
+    // admitted. The only restriction on a sharded operand is sharded_operand_ok above.
+    if (!CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(a.memory_config()) ||
+        !CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(b.memory_config()) ||
+        !CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(attributes.memory_config)) {
         return false;
     }
     // When a pre-allocated output tensor is supplied, validate its memory_config the same per-operand
     // way (its shard spec, if any, must be L1-sharded-tiled and present).
-    if (tensor_args.output_tensor.has_value()) {
-        const auto& out_mc = tensor_args.output_tensor->memory_config();
-        if (!sharded_operand_ok(out_mc, tensor_args.output_tensor->shard_spec().has_value())) {
-            return false;
-        }
-    }
-
-    return true;
+    return !tensor_args.output_tensor.has_value() ||
+           CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(tensor_args.output_tensor->memory_config());
 }
 
 bool BinaryNgDeviceOperation::matches_quasar_native_slice(
@@ -690,18 +687,33 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     if (out_spec.data_type() != DataType::BFLOAT16) {
         return false;
     }
+    // get_shard_volumes counts every operand's shard in the output's tiles, so those must be 32x32 too.
+    if (out_spec.tile().get_height() != tt::constants::TILE_HEIGHT ||
+        out_spec.tile().get_width() != tt::constants::TILE_WIDTH) {
+        return false;
+    }
 
     // NONE covers H/W only, so a leading-dim broadcast also reads as NONE. Require full-rank equality.
     if (a.padded_shape() != b.padded_shape() || a.padded_shape() != out_spec.padded_shape()) {
         return false;
     }
-    // Load-bearing: a borrowed shard raises num_tiles_per_cycle above 1, which the strided multi-thread
-    // ring cannot express and the compute kernel's chunk loop assumes never happens.
+    // Sharded operands are admitted only when all three are L1 shards the factory borrows, so each DFB
+    // is the resident shard itself. Any shard tile count is admitted: the factory keeps the compute count
+    // and moves the tiles that do not divide by it through small owned rings. Anything mixed -- an
+    // interleaved operand beside a sharded one, a divergent grid or shard spec -- stays on the fallback.
+    // out_spec is the supplied output tensor's own spec when one is given, so it covers that case too.
     if (a.memory_config().is_sharded() || b.memory_config().is_sharded() || out_spec.memory_config().is_sharded()) {
-        return false;
-    }
-    if (tensor_args.output_tensor.has_value() && tensor_args.output_tensor->memory_config().is_sharded()) {
-        return false;
+        if (!CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(a.memory_config()) ||
+            !CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(b.memory_config()) ||
+            !CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(out_spec.memory_config())) {
+            return false;
+        }
+        // Reports all three volumes only for one memory config (is_native_L1_sharding).
+        const auto shard_volumes = get_shard_volumes(a.tensor_spec(), b.tensor_spec(), out_spec);
+        if (!shard_volumes.has_value() || !shard_volumes->a_shard_volume.has_value() ||
+            !shard_volumes->b_shard_volume.has_value() || !shard_volumes->c_shard_volume.has_value()) {
+            return false;
+        }
     }
 
     // A zero-volume output has no work to place, and an empty worker grid has nowhere to place it.
