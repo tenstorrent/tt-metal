@@ -390,6 +390,16 @@ late responses and total dispatch-to-finish time explicit. Current progress and
 forecast gates are in `eval_speed/suite_20261002.md`. No full-suite result or
 ten-task expansion is claimed yet.
 
+By 06:13 UTC, the Astropy extension fails: a passing intermediate patch is
+over-edited into a syntax error before its 1,200-second deadline (reward 0).
+A 600-second thinking-disabled control also times out with reward 0; it moves
+reasoning into shell comments rather than removing the semantic loop. Neither
+is retained as a speedup. A fresh 900-second task-independent focused-completion
+prompt tests clean termination without feeding the task solution or verifier.
+The Sympy/sklearn pair remains monitored; the full suite stays gated.
+This resumed window has used approximately 42 minutes of active agent wall time
+so far (cumulative approximately 5h35m, excluding the prior user stop interval).
+
 - TTFT: `doc/ttft_optimization/`.
 - Remote benchmarks/evals:
   `readiness_vllm/ttft_optimization_remote/README.md`.
