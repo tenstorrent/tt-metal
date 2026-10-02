@@ -64,6 +64,8 @@ class TtCSACompressor(TtHCACompressor):
     """Two-series compressor at width W (= ``head_dim`` argument): ``kv_proj``/``gate_proj`` are ``[2W, hidden]``,
     ``position_bias`` ``[rate, 2W]``. ``forward`` returns entries for the WHOLE chunk on every chip."""
 
+    _SHARED_POOL_CONSTS: dict = {}  # (device, chunk, rate) -> the read-only pooling matrices (all but BIAS), DS4F-0300
+
     def __init__(self, device, *, position_bias, **kwargs):
         # the base class reshapes position_bias to [rate, head_dim]; ours is [rate, 2*head_dim] -- upload it below
         rate, two_w = position_bias.shape
@@ -116,27 +118,38 @@ class TtCSACompressor(TtHCACompressor):
         def tiled(mat, batch):  # one [32, 32] 0/1 matrix per tile, batched for ttnn.matmul over [1, batch, 32, W]
             return self._f32(mat.expand(batch, C.TILE, C.TILE).contiguous().view(1, batch, C.TILE, C.TILE))
 
-        self._pool_consts = {
-            "G": self._f32(C.group_sum_matrix(S, rate).view(1, 1, n, S)),
-            "Sh": self._f32(C.shift_matrix(n).view(1, 1, n, n)),
-            "Sel": self._f32(C.prior_select_matrix(rate).view(1, 1, C.TILE, C.TILE)),
-            "P0": self._f32(C.first_window_matrix(n).view(1, 1, n, C.TILE)),
-            "BIAS": self._f32(C.bias_rows(self._bias_host, S).view(1, 1, S, 2 * W)),
-            "rows": S,
-            "T": T,
-            # per-group softmax max (DS4F-0272): within-tile shifts / selectors, batched per tile and for the 1-tile prior
-            "P1": tiled(C.tile_shift_matrix(1), T),
-            "P2": tiled(C.tile_shift_matrix(2), T),
-            "Q": tiled(C.group_first_matrix(rate), T),
-            "P1p": tiled(C.tile_shift_matrix(1), 1),
-            "P2p": tiled(C.tile_shift_matrix(2), 1),
-            "Qp": tiled(C.group_first_matrix(rate), 1),
-            "P4": tiled(C.tile_shift_matrix(rate), T),  # rows r >= rate take row r - rate ... via the transpose below
-            "P4T": tiled(C.tile_shift_matrix(rate).t(), T),
-            "Rprev": tiled(C.prev_tile_matrix(rate), T),
-            "Rnext": tiled(C.next_tile_matrix(rate), T),
-            "B0": tiled(C.row0_broadcast_matrix(), 1),
-        }
+        # DS4F-0300: every matrix here except BIAS is a pure function of (chunk, rate) and read-only (matmul operands), so ONE
+        # copy per (device, chunk, rate) serves all 42 compressors (21 CSA layers x main + indexer); per layer they were
+        # ~90 MB at an 8192 chunk (G alone [S/4, S] fp32 = 64 MB) = ~3.8 GB per chip -- the 1M runner's OOM at alloc_states.
+        # BIAS is the layer's learned position bias, so it stays per instance. Built in alloc_states, before any capture.
+        key = (id(self.device), S, rate)
+        shared = TtCSACompressor._SHARED_POOL_CONSTS.get(key)
+        if shared is None:
+            shared = {
+                "G": self._f32(C.group_sum_matrix(S, rate).view(1, 1, n, S)),
+                "Sh": self._f32(C.shift_matrix(n).view(1, 1, n, n)),
+                "Sel": self._f32(C.prior_select_matrix(rate).view(1, 1, C.TILE, C.TILE)),
+                "P0": self._f32(C.first_window_matrix(n).view(1, 1, n, C.TILE)),
+                "rows": S,
+                "T": T,
+                # per-group softmax max (DS4F-0272): within-tile shifts / selectors, batched per tile and for the 1-tile prior
+                "P1": tiled(C.tile_shift_matrix(1), T),
+                "P2": tiled(C.tile_shift_matrix(2), T),
+                "Q": tiled(C.group_first_matrix(rate), T),
+                "P1p": tiled(C.tile_shift_matrix(1), 1),
+                "P2p": tiled(C.tile_shift_matrix(2), 1),
+                "Qp": tiled(C.group_first_matrix(rate), 1),
+                "P4": tiled(
+                    C.tile_shift_matrix(rate), T
+                ),  # rows r >= rate take row r - rate ... via the transpose below
+                "P4T": tiled(C.tile_shift_matrix(rate).t(), T),
+                "Rprev": tiled(C.prev_tile_matrix(rate), T),
+                "Rnext": tiled(C.next_tile_matrix(rate), T),
+                "B0": tiled(C.row0_broadcast_matrix(), 1),
+            }
+            TtCSACompressor._SHARED_POOL_CONSTS[key] = shared
+        self._pool_consts = dict(shared)
+        self._pool_consts["BIAS"] = self._f32(C.bias_rows(self._bias_host, S).view(1, 1, S, 2 * W))
         self._prior_index = {}
 
     def empty_prior(self, batch: int = 1):
@@ -263,7 +276,13 @@ class TtCSACompressor(TtHCACompressor):
         return E_a, E_b, E_p
 
     def forward(
-        self, hidden_states, seq_len_actual: int, first_window_position: int, prior: tuple, need_mask: bool = True
+        self,
+        hidden_states,
+        seq_len_actual: int,
+        first_window_position: int,
+        prior: tuple,
+        need_mask: bool = True,
+        mask_width: int | None = None,
     ):
         """-> (entries bf16 [1, 1, S/rate, W] replicated on every chip, mask_block [1, 1, S_l, mask_width],
         new_prior). ``seq_len_actual`` is the chunk's real length (a multiple of 32 unless it is the final chunk,
@@ -304,7 +323,9 @@ class TtCSACompressor(TtHCACompressor):
         # TtCSA.forward on the next call); a ragged FINAL chunk keeps the old prior, which nobody reads.
         aligned = seq_len_actual % C.TILE == 0 and seq_len_actual >= C.TILE
         new_prior = (self._last32(kv_a, seq_len_actual), self._last32(g_a, seq_len_actual)) if aligned else prior
-        mask_block = self._mask_block(S_l, first_window_position, seq_len_actual) if need_mask else None
+        mask_block = (
+            self._mask_block(S_l, first_window_position, seq_len_actual, width=mask_width) if need_mask else None
+        )
         return entries, mask_block, new_prior
 
 
@@ -672,8 +693,24 @@ class TtCSA(TtHCA):
         self._slab_cap = int(capacity)
         self._slab_rope = self._build_rope_table(_rope_table_tokens(max_seq_len, chunk), 1)
         self._slab_index = self._rope_index_base(chunk // self.sp_factor)
+        # DS4F-0295 (PREFILL_CSA_COMPACT_DENSE=1): only the dense path B reads compressed_kv, and it runs only while the context
+        # is under max(window, topk * rate) tokens = chunk 0 at chunk >= 2048; every later chunk takes path A (the slab + the
+        # fused scorer over index_k). So hold chunk 0's live width -- its entries rounded up to the live quantum, which path B
+        # slices every cache to -- plus one 128-row block, so that width stays STRICTLY below the cache (the slicing branch).
+        dense_cap = capacity
+        if self.sparse_path and os.environ.get("PREFILL_CSA_COMPACT_DENSE", "0") == "1":
+            assert chunk >= max(self.sliding_window, self.indexer.topk * rate), (
+                chunk,
+                self.sliding_window,
+                self.indexer.topk,
+            )
+            assert self.live_extent, "a compact dense cache needs live-extent slicing (DS4F-0252)"
+            q = self.live_quantum if self.live_quantum > 0 else ttnn.TILE_SIZE
+            live0 = -(-(-(-(chunk // rate) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE) // q) * q
+            dense_cap = min(capacity, live0 + 128)
+        self._dense_cap = int(dense_cap)
         state = TtCSAState(
-            compressed_kv=self._from_torch(torch.zeros(batch, 1, capacity, self.head_dim)),
+            compressed_kv=self._from_torch(torch.zeros(batch, 1, dense_cap, self.head_dim)),
             index_k=self._from_torch(torch.zeros(batch, 1, capacity, self.indexer.head_dim)),
             sliding_carry=self._from_torch(torch.zeros(batch, 1, self.sliding_window, self.head_dim)),
             prior_c=self.compressor.empty_prior(batch),
@@ -711,14 +748,31 @@ class TtCSA(TtHCA):
         q, q_latent = self._q_stem(hidden_states, cos, sin, return_latent=True)
         sliding_kv = self._kv_stem(hidden_states, cos, sin)
 
-        entries, mask_block, new_prior_c = self.compressor(hidden_states, real_len, fwp, state.prior_c)
-        keys, _, new_prior_i = self.indexer.compressor(hidden_states, real_len, fwp, state.prior_i)
+        # DS4F-0300: the compressed-column mask block is read only by the materialised scorer / dense path (not by the fused
+        # path A), and only up to the live extent -- so build it only when read, only that wide (a full-capacity block was
+        # 1.1 GB per chip per call at 1M x chunk 8192); the indexer compressor's mask is never read
+        use_sparse_pre = self.sparse_path and state.kv_actual >= max(self.sliding_window, self.indexer.topk * rate)
+        want_mask = not (use_sparse_pre and self.fused_indexer)
+        mask_w = None
+        if want_mask and self.live_extent:
+            mask_w = -(-(state.entry_count + n_new) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+            if self.live_quantum > 0:
+                mask_w = -(-mask_w // self.live_quantum) * self.live_quantum
+            mask_w = min(int(state.compressed_kv.shape[2]), mask_w)
+        entries, mask_block, new_prior_c = self.compressor(
+            hidden_states, real_len, fwp, state.prior_c, need_mask=want_mask, mask_width=mask_w
+        )
+        keys, _, new_prior_i = self.indexer.compressor(hidden_states, real_len, fwp, state.prior_i, need_mask=False)
         for persistent, new in zip(state.prior_c + state.prior_i, new_prior_c + new_prior_i):
             self._update_in_place(persistent, new)
         # the whole padded width is written (pad-derived entries are -inf-masked); tile-aligned, no tail tile
         assert state.entry_count % ttnn.TILE_SIZE == 0 and entries.shape[2] % ttnn.TILE_SIZE == 0
-        assert state.entry_count + entries.shape[2] <= state.compressed_kv.shape[2], "compressed cache full"
-        ttnn.kv_cache.fill_cache_for_user_(state.compressed_kv, entries, 0, update_idx=state.entry_count)
+        if state.entry_count + entries.shape[2] <= state.compressed_kv.shape[2]:
+            ttnn.kv_cache.fill_cache_for_user_(state.compressed_kv, entries, 0, update_idx=state.entry_count)
+        else:  # DS4F-0295 compact dense cache: past chunk 0 path B never runs, so nothing reads these rows
+            assert self._dense_cap < self._slab_cap and state.kv_actual >= max(
+                self.sliding_window, self.indexer.topk * rate
+            ), "compressed cache full"
         ttnn.kv_cache.fill_cache_for_user_(state.index_k, keys, 0, update_idx=state.entry_count)
         if self.sparse_path:
             # path A v2: the persistent row-major slab [carry 128 | chunk S | entries] the sparse gather reads. Its
@@ -743,7 +797,11 @@ class TtCSA(TtHCA):
                 cap_live = cap
             if cap_live < cap:
                 keys_live = ttnn.slice(state.index_k, [0, 0, 0, 0], [1, 1, cap_live, self.indexer.head_dim])
-                block_live = ttnn.slice(mask_block, [0, 0, 0, 0], [1, 1, mask_block.shape[2], cap_live])
+                block_live = (
+                    mask_block
+                    if int(mask_block.shape[3]) == cap_live
+                    else ttnn.slice(mask_block, [0, 0, 0, 0], [1, 1, mask_block.shape[2], cap_live])
+                )
                 comp_live = ttnn.slice(state.compressed_kv, [0, 0, 0, 0], [1, 1, cap_live, self.head_dim])
             else:
                 keys_live, block_live, comp_live = state.index_k, mask_block, state.compressed_kv
@@ -977,7 +1035,10 @@ class TtCSA(TtHCA):
         n_new = real_len // rate
         seq_pad_global = sliding_kv_g.shape[2]
         S_l = q.shape[2]
-        ttnn.kv_cache.fill_cache_for_user_(state.compressed_kv, entries, 0, update_idx=state.entry_count)
+        if (
+            state.entry_count + entries.shape[2] <= state.compressed_kv.shape[2]
+        ):  # DS4F-0295: compact dense cache ends here
+            ttnn.kv_cache.fill_cache_for_user_(state.compressed_kv, entries, 0, update_idx=state.entry_count)
         ttnn.kv_cache.fill_cache_for_user_(state.index_k, keys, 0, update_idx=state.entry_count)
         self._slab_write_rm(state, entries_rm, seq_pad_global + state.entry_count)
         self._slab_write_rm(state, kv_rm, 0)
@@ -1277,7 +1338,9 @@ class TtCSA(TtHCA):
         # write at S + entry_count (both multiples of 1280), the carry at S + CAP; rows a multiple of S so the whole-chunk
         # write is legal (update_padded_kv_cache: cache rows % input rows == 0)
         S = self._slab_chunk_tokens
-        rows = S + int(state.compressed_kv.shape[2]) + self.sliding_window
+        rows = (
+            S + int(self._slab_cap) + self.sliding_window
+        )  # the full capacity (compressed_kv may be compact, DS4F-0295)
         rows = -(-rows // S) * S
         mesh_shape = tuple(self.device.shape) if self.is_mesh else (1, 1)
         state.slab_rm = kvc.alloc_rm_nd_cache(

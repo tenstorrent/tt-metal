@@ -50,6 +50,9 @@ class _TtHCABase(LightweightModule):
         {}
     )  # (device, chunk, cap, window, head_dim, dtype) -> (mask, mask_col, kv_pad, carry_cols)
     _SHARED_ROPE_TABLES: dict = {}  # (device, rope kind, count, stride, dtype, fingerprint) -> (cos, sin), DS4F-0295
+    _SHARED_INDEX_ROWS: dict = (
+        {}
+    )  # (device, width) -> the compressors' fp32 column-index row w = arange(width), DS4F-0295
 
     """Helpers shared by the compressor and the block. Subclasses must set ``device`` / ``dtype`` /
     ``weights_dtype`` / ``memory_config`` / ``rotary_emb`` and the mesh attributes before calling these."""
@@ -327,6 +330,13 @@ class TtHCACompressor(_TtHCABase):
         above 256 -- measured, it misses 640 of 328K mask elements at 300 entries."""
         sp_mapper = self._mesh_mapper(sp_dim=2)
         rate = self.compress_rate
+        # DS4F-0295: ``w`` depends only on the width and is read-only -> one copy per (device, width) for every compressor
+        # (42 x [32-row padded, width] fp32 was ~1.4 GB per chip at a 1M context)
+        wkey = (id(self.device), int(width))
+        w = _TtHCABase._SHARED_INDEX_ROWS.get(wkey)
+        if w is None:
+            w = self._from_torch(torch.arange(width).float().view(1, 1, 1, width), dtype=ttnn.float32)
+            _TtHCABase._SHARED_INDEX_ROWS[wkey] = w
         return {
             "seq": seq_global,
             "thr": self._from_torch(
@@ -337,12 +347,12 @@ class TtHCACompressor(_TtHCABase):
             "ic": self._from_torch(
                 torch.arange(seq_global).float().view(1, 1, seq_global, 1), sp_mapper, dtype=ttnn.float32
             ),
-            "w": self._from_torch(torch.arange(width).float().view(1, 1, 1, width), dtype=ttnn.float32),
+            "w": w,
             "ec": self._scalar_buffer(ttnn.float32),
             "rl": self._scalar_buffer(ttnn.float32),
         }
 
-    def _mask_block(self, seq: int, first_window_position: int, seq_len_actual: int):
+    def _mask_block(self, seq: int, first_window_position: int, seq_len_actual: int, width: int | None = None):
         """The mask's compressed columns, built on device: 0 where a query may attend an entry, -inf else.
 
         Query row j may attend entry w while ``w < ec + thr[j]`` (both from ``_build_mask_consts``), so the
@@ -361,7 +371,15 @@ class TtHCACompressor(_TtHCABase):
             f"mask constants cover {None if c is None else c['seq']} query rows but this call has "
             f"{seq_global}; alloc_tables has to be given the slab forward is called with"
         )
-        within = ttnn.lt(c["w"], ttnn.add(c["thr"], self._push_scalar(c["ec"], first_window_position // rate)))
+        # DS4F-0300: ``width`` < the full capacity builds only the first ``width`` columns (the live extent): every intermediate
+        # here is [rows, width] fp32 -- at a 1M capacity and an 8192 chunk the full-width block was 1.1 GB per chip per call
+        w = c["w"]
+        sliced = width is not None and int(width) < int(w.shape[-1])
+        if sliced:
+            w = ttnn.slice(w, [0, 0, 0, 0], [1, 1, 1, int(width)])
+        within = ttnn.lt(w, ttnn.add(c["thr"], self._push_scalar(c["ec"], first_window_position // rate)))
+        if sliced:
+            ttnn.deallocate(w)
         live = ttnn.lt(c["ic"], self._push_scalar(c["rl"], seq_len_actual))  # pad query rows attend nothing
         return ttnn.typecast(ttnn.log(ttnn.multiply(within, live)), self.dtype)
 
