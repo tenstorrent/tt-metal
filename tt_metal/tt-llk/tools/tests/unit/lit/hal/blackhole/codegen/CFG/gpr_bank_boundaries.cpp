@@ -24,7 +24,6 @@ extern "C" __attribute__((noinline, used)) void write_gpr_last_word()
 
 // CHECK-LABEL: <write_gpr_last_word>:
 // CHECK-NEXT: ttwrcfg 4,0,223
-// CHECK-NEXT: ttnop
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_grouped_gpr_last_word()
@@ -34,7 +33,6 @@ extern "C" __attribute__((noinline, used)) void write_grouped_gpr_last_word()
 
 // CHECK-LABEL: <write_grouped_gpr_last_word>:
 // CHECK-NEXT: ttwrcfg 4,0,223
-// CHECK-NEXT: ttnop
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_gpr_last_block()
@@ -44,7 +42,6 @@ extern "C" __attribute__((noinline, used)) void write_gpr_last_block()
 
 // CHECK-LABEL: <write_gpr_last_block>:
 // CHECK-NEXT: ttwrcfg 4,1,220
-// CHECK-NEXT: ttnop
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_grouped_gpr_last_block()
@@ -54,7 +51,6 @@ extern "C" __attribute__((noinline, used)) void write_grouped_gpr_last_block()
 
 // CHECK-LABEL: <write_grouped_gpr_last_block>:
 // CHECK-NEXT: ttwrcfg 4,1,220
-// CHECK-NEXT: ttnop
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_runtime_gpr_last_block(std::uint32_t index)
