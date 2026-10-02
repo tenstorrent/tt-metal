@@ -173,6 +173,45 @@ def test_moreh_nll_loss_unreduced(shape, ignore_index, none_weight, compute_kern
     )
 
 
+def test_moreh_nll_loss_unreduced_rank3_initializes_ignored_weight_lanes(device):
+    grid = device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+
+    # W=1 gives one work unit per N. With exactly two units per core, the valid
+    # even row primes the reused weight tile with +inf before the ignored row.
+    num_rows = 2 * num_cores
+    torch_input = torch.ones((num_rows, 2, 1), dtype=torch.bfloat16)
+    torch_target = (torch.arange(num_rows, dtype=torch.long) % 2).reshape(num_rows, 1)
+    torch_weight = torch.tensor([float("inf"), 1.0], dtype=torch.bfloat16)
+    torch_output = torch.empty_like(torch_target, dtype=torch.bfloat16)
+
+    tt_input, tt_target, tt_weight, tt_output = get_tt_tensors(
+        torch_input, torch_target, torch_weight, torch_output, device, ttnn.bfloat16
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+    tt_loss = ttnn.operations.moreh.nll_loss(
+        tt_input,
+        tt_target,
+        "none",
+        weight_tensor=tt_weight,
+        divisor_tensor=None,
+        output_tensor=tt_output,
+        ignore_index=1,
+        compute_kernel_config=compute_kernel_config,
+    )
+
+    ignored_loss = to_torch(tt_loss, shape=torch_target.shape)[1::2]
+    assert torch.isfinite(ignored_loss).all()
+    torch.testing.assert_close(ignored_loss, torch.zeros_like(ignored_loss), rtol=0, atol=0)
+
+
 @pytest.mark.parametrize(
     "shape",
     [
