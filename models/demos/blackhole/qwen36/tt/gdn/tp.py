@@ -314,7 +314,7 @@ class TPGatedDeltaNet:
         )
         # Which of the two mirrors is authoritative. The traced batched verify advances ONLY the
         # window buffers (refilling the K conv_states taps inside the trace cost ~10 ms/iteration
-        # over 48 layers and nothing in the spec loop reads them), so after materialize_spec_state
+        # over 48 layers and nothing in the spec loop reads them), so after a spec loop
         # the taps are BEHIND: _conv_taps_stale. Conversely everything that writes the taps from
         # outside (prefill capture_state, reset, slot edits, decode's own shift register) leaves the
         # window behind: _conv_win_stale. Exactly one can be set at a time — each setter clears the
@@ -1497,46 +1497,6 @@ class TPGatedDeltaNet:
         # Both mirrors now hold the same (live) shift register.
         self._conv_taps_stale, self._conv_win_stale = False, False
 
-    def materialize_spec_state(self, mi):
-        """Pull the accepted state out of the spec buffers back into the durable decode state.
-
-        The spec loop never commits on device; this is what ends it (or hands a plain decode step
-        the right state). For user u: rec_state row u <- ring block (mi[u]*B + u)*Nv, and
-        _conv_win_buf row u <- E_prev rows [mi[u], mi[u]+K) — exactly the shift register T
-        sequential decode steps would have left after accepting through row mi[u].
-
-        Leaves the K conv_states taps BEHIND the window (``_conv_taps_stale``); the next tap
-        consumer rebuilds them via sync_conv_taps.
-        """
-        assert self._spec_ring is not None, "materialize_spec_state before prepare_spec_verify"
-        B, Nv, Dk, Dv, K, C = self.B, self.Nv, self.Dk, self.Dv, self.K, self.qkv_dim_tp
-        T = self._spec_shape[1]
-        assert len(mi) == B, f"need one mi per user: got {len(mi)} for {B} users"
-        assert all(0 <= int(m) < T for m in mi), f"mi {list(mi)} out of range [0,{T})"
-        # --- recurrent state: one slice per user, ONE concat, ONE in-place copy ---
-        rows = []
-        for u in range(B):
-            blk = (int(mi[u]) * B + u) * Nv
-            rows.append(ttnn.reshape(ttnn.slice(self._spec_ring, (blk, 0, 0), (blk + Nv, Dk, Dv)), (1, Nv, Dk, Dv)))
-        new_rec = ttnn.concat(rows, dim=0) if B > 1 else rows[0]
-        src = new_rec if new_rec.dtype == self.rec_state.dtype else ttnn.typecast(new_rec, self.rec_state.dtype)
-        ttnn.copy(src, self.rec_state)
-        if src is not new_rec:
-            ttnn.deallocate(src)
-        if B > 1:
-            for r in rows:
-                ttnn.deallocate(r)
-        ttnn.deallocate(new_rec)
-        # --- conv window: user u's K rows starting at its own mi[u] ---
-        wins = [ttnn.slice(self._verify_win_buf, (u, int(mi[u]), 0), (u + 1, int(mi[u]) + K, C)) for u in range(B)]
-        new_win = ttnn.concat(wins, dim=0) if B > 1 else wins[0]
-        ttnn.copy(new_win, self._conv_win_buf)
-        if B > 1:
-            for w in wins:
-                ttnn.deallocate(w)
-        ttnn.deallocate(new_win)
-        self._conv_taps_stale, self._conv_win_stale = True, False
-
     def forward_verify_recurrent(self, x, valid_len, pre_gathered=False, n_users=1, state_blk_idx=None, conv_sel=None):
         """Batched hybrid spec-decode verify for GDN: advance B users x T candidate rows at once.
 
@@ -1556,7 +1516,7 @@ class TPGatedDeltaNet:
 
         Side effects: the ring is updated IN PLACE (every candidate's state, for every user) and
         _verify_win_buf becomes the new E_prev. Neither rec_state nor conv_states moves — the host
-        commits later, by index (materialize_spec_state), not by copying state here.
+        commits later, by index, not by copying state here.
         """
         assert valid_len <= tpc.TILE_SIZE, f"verify bucket {valid_len} exceeds one tile"
         assert n_users == self.B, f"spec verify runs the whole decode batch: n_users={n_users}, B={self.B}"
@@ -1589,7 +1549,7 @@ class TPGatedDeltaNet:
     def _verify_project(self, x, valid_len, pre_gathered):
         """Gather the real rows to full dim and run ONE decode qkvzab projection over them.
 
-        The front half of every spec-decode GDN pass, shared by the batched verify and the T=1 seed
+        The front half of every spec-decode GDN pass, shared by the batched verify
         so the two can never drift apart: same slice, same all-gather (or none), same
         ``_project_qkvzab`` at S = valid_len <= TILE_SIZE, which routes through matmul_1d_decode —
         the exact projection a plain decode step runs. Returns (qkv, z, a, b, bucket).
@@ -1632,133 +1592,6 @@ class TPGatedDeltaNet:
         if _x_owned:
             ttnn.deallocate(x)
         return qkv_all, z_all, a_all, b_all, bucket
-
-    def forward_seed_recurrent(self, x, valid_len, pre_gathered=False, n_users=1):
-        """The spec loop's SEED: advance GDN by ONE row per user, with the VERIFY's arithmetic.
-
-        Same shape as a plain decode step (B users x T = 1 token) but built out of the verify's
-        pieces, not the decode path's: the native depthwise ``ttnn.conv1d`` over a [B, K, C] window
-        instead of the K-tap shift-register MAC. Those two are NOT bit-equal, and the state the seed
-        leaves behind is what every later verify replay resumes from, so seeding with the decode
-        formulation plants a low-bit mismatch between the seed state and the formulation the whole
-        loop then uses — enough to fork the greedy trajectory at a near tie.
-
-        NON-RING, unlike ``forward_verify_recurrent``: the spec ring and E_prev do not exist yet
-        (``prepare_spec_verify`` runs later, inside ``capture_verify_trace``). This advances the
-        DURABLE state — ``rec_state`` in place and ``_conv_win_buf`` (plus the K taps) to the new
-        window — which is exactly what ``seed_spec_state`` copies into the ring and E_prev after the
-        capture.
-
-        x : [1, 1, B, dim] (full-dim when ``pre_gathered``). Returns [1, 1, B, dim/tp].
-        """
-        assert n_users == self.B, f"the seed runs the whole decode batch: n_users={n_users}, B={self.B}"
-        assert valid_len == n_users, f"the seed is one row per user: valid_len={valid_len}, n_users={n_users}"
-        assert n_users <= tpc.TILE_SIZE, f"{n_users} users exceeds the {tpc.TILE_SIZE}-row decode tile"
-        qkv_all, z_all, a_all, b_all, bucket = self._verify_project(x, valid_len, pre_gathered)
-        return self._seed_fullbatch(qkv_all, z_all, a_all, b_all, n_users, bucket)
-
-    def _seed_fullbatch(self, qkv_all, z_all, a_all, b_all, n_users, bucket):
-        """``_verify_fullbatch`` at T = 1 against the DURABLE state instead of the ring.
-
-        Op for op the pre-ring verify body: window slice -> concat -> conv1d -> q/k/v slices ->
-        sigmoid/softplus gating -> ONE fused recurrent dispatch -> state writeback -> gated norm,
-        SiLU gate, out-proj, all-reduce. At B = 1 every shape here is the shape that body had at
-        T = 1, so the arithmetic is the same arithmetic.
-        """
-        tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
-        _L1, mc, rm = ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.ROW_MAJOR_LAYOUT
-        kd, C, rf, K = self.key_dim_tp, self.qkv_dim_tp, Nv // Nk, self.K
-        B = R = n_users
-
-        # 1) Conv window. The carry is the shift register's previous K-1 inputs, i.e. taps [1, K) of
-        #    the [B, K, C] mirror; E = [carry(K-1) ; this row(1)] is BOTH the conv input and the new
-        #    shift register, so it is built once. _ensure_conv_win() makes the mirror current from
-        #    the live taps first (prefill/reset/a plain decode step all move the taps under it).
-        self._ensure_conv_win()
-        qkv_new = self._rows_to_users(qkv_all, B, 1, C)  # [B, 1, C]
-        carry = ttnn.slice(self._conv_win_buf, (0, 1, 0), (B, K, C))  # [B, K-1, C]
-        E = ttnn.concat([carry, qkv_new], dim=1, memory_config=mc)  # [B, K, C]
-        ttnn.deallocate(carry)
-        ttnn.deallocate(qkv_new)
-        conv_all = self._conv1d_verify(E, 1)  # [B, 1, C], SiLU applied
-
-        # 2) q/k/v: FEATURE-dim slices (contiguous columns) + one repeat_interleave each.
-        q_all = ttnn.reshape(ttnn.slice(conv_all, (0, 0, 0), (B, 1, kd)), (B, 1, Nk, Dk))
-        k_all = ttnn.reshape(ttnn.slice(conv_all, (0, 0, kd), (B, 1, 2 * kd)), (B, 1, Nk, Dk))
-        v_all = ttnn.reshape(ttnn.slice(conv_all, (0, 0, 2 * kd), (B, 1, C)), (B, 1, Nv, Dv))
-        ttnn.deallocate(conv_all)
-        if rf != 1:
-            q_all = ttnn.repeat_interleave(q_all, rf, dim=2)
-            k_all = ttnn.repeat_interleave(k_all, rf, dim=2)
-
-        # 3) Gating for every user at once.
-        a_new = self._rows_to_users(a_all, B, 1, Nv)
-        b_new = self._rows_to_users(b_all, B, 1, Nv)
-        beta_all = ttnn.sigmoid(b_new, memory_config=_L1)
-        ttnn.deallocate(b_new)
-        g_all = ttnn.multiply(tw["neg_exp_A"], _softplus_add(a_new, tw["dt_bias"]), memory_config=_L1)
-        ttnn.deallocate(a_new)
-
-        # 4) ONE recurrence dispatch, PLAIN mode: initial state is the durable rec_state and the op
-        #    returns the final state only (there is no per-token ring yet, and at T = 1 the two are
-        #    the same state anyway). Identical call — and identical [B,1,Nv,*] shapes — to the fused
-        #    recurrent decode step, so it adds no program the decode path does not already have.
-        o_all, states = fused_recurrent_gated_delta_rule_ttnn(
-            q_all,
-            k_all,
-            v_all,
-            beta_all,
-            g_all,
-            scale=self.scale,
-            initial_state=self.rec_state,
-            device=self.mesh,
-            output_per_token_state=False,
-            high_precision=(os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"),
-        )
-        for t in (q_all, k_all, v_all, beta_all, g_all):
-            ttnn.deallocate(t)
-
-        # 5) State writeback, to the DURABLE buffers. rec_state in place (its address is baked into
-        #    the decode traces); the shift register is E itself, which already has exactly K rows.
-        if self._stable_state:
-            ttnn.copy(states, self.rec_state)
-            ttnn.deallocate(states)
-        else:
-            self.rec_state = states
-        ttnn.copy(E, self._conv_win_buf)
-        ttnn.deallocate(E)
-        # Push the window straight back out to the K taps rather than leaving them stale. Two
-        # reasons, both about WHEN programs compile: sync_conv_win() branches on _conv_taps_stale,
-        # and the throwaway seed_spec_state() inside capture_verify_trace exists only to compile the
-        # branch the REAL post-capture seed_spec_state() will take — so both calls must see the same
-        # flags. And a stale-tap window would make the next plain decode step (sync_conv_taps) pay
-        # its K slice+copy per layer with the verify trace parked. Costs K copies per layer, once.
-        self._conv_taps_stale, self._conv_win_stale = True, False
-        self.sync_conv_taps()  # clears _conv_taps_stale; both mirrors now hold the seeded window
-
-        # 6) Output tail over the B rows.
-        out_n = ttnn.rms_norm(ttnn.reshape(o_all, (R, Nv, Dv)), weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)
-        ttnn.deallocate(o_all)
-        out_f_b = ttnn.reshape(out_n, (1, R, self.value_dim_tp))
-        ttnn.deallocate(out_n)
-        gated = _silu_mul(out_f_b, z_all, mc)
-        ttnn.deallocate(out_f_b)
-        ttnn.deallocate(z_all)
-        partial = self._row_proj(gated, tw["out"])
-        ttnn.deallocate(gated)
-        partial = ttnn.reshape(partial, (1, 1, R, partial.shape[-1]))
-        o_red = tt_all_reduce(
-            partial, self.mesh, self.tt_ccl, cluster_axis=0, dim=3, topology=self.args.ccl_topology(), memory_config=mc
-        )
-        if R < bucket:
-            o_rm = ttnn.to_layout(o_red, rm)
-            ttnn.deallocate(o_red)
-            pad = self._verify_pad_buf(bucket - R, o_rm.shape[-1], o_rm.dtype, rm, mc)
-            o_full = ttnn.concat([o_rm, pad], dim=2, memory_config=mc)
-            ttnn.deallocate(o_rm)
-            o_red = ttnn.to_memory_config(ttnn.to_layout(o_full, ttnn.TILE_LAYOUT), mc)
-            ttnn.deallocate(o_full)
-        return o_red
 
     def _rows_to_users(self, t, B, T, width):
         """[1, B*T, width] -> [B, T, width]. Rows are user-major, so this is a pure regroup.
@@ -1804,9 +1637,7 @@ class TPGatedDeltaNet:
         # the host's mi (which rows of it each user accepted). BOTH mirrors — the K conv_states taps
         # AND _conv_win_buf — are behind it, and marking one stale would claim the OTHER is current,
         # which neither is. So no in-loop consumer may read the taps or _conv_win_buf; the loop's
-        # own carry is this buffer and conv_sel. materialize_spec_state restores the two-mirror
-        # invariant when the loop ends: it rebuilds _conv_win_buf from the accepted rows and sets
-        # _conv_taps_stale=True so the next tap consumer (forward_decode, a slot edit) resyncs.
+        # own carry is this buffer and conv_sel.
         ttnn.copy(E_new, self._verify_win_buf)
         conv_all = self._conv1d_verify(E_new, T)  # [B, T, C], SiLU applied
         ttnn.deallocate(E_new)

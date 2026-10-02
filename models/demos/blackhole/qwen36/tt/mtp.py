@@ -224,7 +224,17 @@ class Qwen36MTP:
         ttnn.deallocate(normed)
         return logits, next_hidden
 
-    def forward_prefill(self, hidden_states, token_ids, cos, sin, page_table, chunk_page_table=None, chunk_start_idx=0):
+    def forward_prefill(
+        self,
+        hidden_states,
+        token_ids,
+        cos,
+        sin,
+        page_table,
+        chunk_page_table=None,
+        chunk_start_idx=0,
+        chunk_start_idx_tensor=None,
+    ):
         """Warm the MTP paged KV cache over the prompt (one forward, all positions).
 
         hidden_states : [1,1,S,dim/tp] fractured — the base's per-position drafter feed
@@ -248,6 +258,7 @@ class Qwen36MTP:
             page_table=page_table,
             chunk_page_table=chunk_page_table if chunk_page_table is not None else page_table,
             chunk_start_idx=chunk_start_idx,
+            chunk_start_idx_tensor=chunk_start_idx_tensor,
         )
         ttnn.deallocate(fused)
         return out

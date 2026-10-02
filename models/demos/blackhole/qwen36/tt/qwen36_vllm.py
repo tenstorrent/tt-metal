@@ -409,3 +409,246 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         kwargs.pop("non_greedy_decoding_on_device", None)
         self._validate_device_sampling_request(kwargs.get("can_sample_on_device", False))
         return warmup_decode_buckets(self, super().warmup_model_decode, *args, **kwargs)
+
+
+_MESH_TP = {"N150": 1, "N300": 2, "P150x4": 4, "N150x4": 4, "T3K": 8}
+
+
+def _mesh_tp(default=4):
+    """Tensor-parallel degree from MESH_DEVICE ("P150x4" -> 4, "(1, 4)" -> 4)."""
+    s = os.environ.get("MESH_DEVICE")
+    if not s:
+        return default
+    if s in _MESH_TP:
+        return _MESH_TP[s]
+    try:
+        dims = [int(x) for x in s.strip("() ").replace("x", ",").split(",") if x.strip()]
+        return math.prod(dims) if dims else default
+    except ValueError:
+        return default
+
+
+class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
+    """Plugin spec-decode contract adapter (B=1) over the MTP engine in tt/spec_engine.py."""
+
+    _SPEC_K = int(os.environ.get("QWEN36_SPEC_K", "3"))  # vLLM warmup does not carry K
+    _SUPPORTED_K = (3, 7, 11)
+
+    # verify returns ids; the first token after prefill is host-sampled from the returned logits
+    model_capabilities = {
+        **Qwen36ForCausalLM.model_capabilities,
+        "supports_spec_decode": True,
+        "spec_requirements": ("device_propose", "hidden_feed"),
+        "spec_hidden_handoff": ("on_device",),
+        "supports_async_decode": False,
+        "supports_async_spec_decode": False,
+        "output_tokens_per_step": 1,
+        "supports_sample_on_device": False,
+    }
+
+    @classmethod
+    def spec_plan(cls, vllm_config, max_num_seqs, requested_k):
+        """Config-time plan; never raises and never touches devices."""
+        from vllm_tt_plugin.spec_decode import SpecPlan, SpecReject
+
+        k = cls._SPEC_K
+        if k not in cls._SUPPORTED_K:
+            return SpecReject(reason=f"QWEN36_SPEC_K={k} unsupported; need one of {cls._SUPPORTED_K}", supported_k=())
+        if max_num_seqs != 1:
+            return SpecReject(reason="B=1 only for now", supported_k=())
+        if requested_k < k:
+            return SpecReject(reason=f"requested_k={requested_k} < engine K={k}", supported_k=(k,))
+        try:
+            from models.demos.blackhole.qwen36.tt.spec_engine import spec_memory_costs
+
+            mc = vllm_config.model_config
+            tc = mc.hf_config
+            tc = tc.get_text_config() if hasattr(tc, "get_text_config") else tc
+            if int(getattr(tc, "mtp_num_hidden_layers", 0) or 0) < 1:
+                return SpecReject(reason="checkpoint has no MTP weights (mtp_num_hidden_layers < 1)", supported_k=())
+            costs = spec_memory_costs(tc, _mesh_tp(), 1, k, max_seq_len=mc.max_model_len)
+            per_seq = int(costs["per_seq"]["total"] + costs["fixed"]["total"])
+            per_token = int(costs["per_token"]["total"])
+            mib = 1 << 20
+            logger.info(
+                f"[spec] cost/seq {per_seq / mib:.1f} MiB (per_seq {costs['per_seq']['total'] / mib:.1f}: "
+                f"gdn_ring {costs['per_seq']['gdn_ring'] / mib:.1f}, conv {costs['per_seq']['gdn_conv_windows'] / mib:.1f}; "
+                f"fixed {costs['fixed']['total'] / mib:.1f}), per_token {per_token} B"
+            )
+        except Exception as e:
+            return SpecReject(reason=f"cost estimate failed: {e}", supported_k=())
+        return SpecPlan(
+            effective_k=k,
+            lanes_per_request=1,
+            extra_bytes_per_seq=per_seq,
+            extra_bytes_per_token=per_token,
+            accept_modes=("argmax_ids",),
+            drafter_state="internal",
+            supports_narrow_decode=True,
+        )
+
+    @classmethod
+    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, max_seq_len, *args, **kwargs):
+        assert max_batch_size == 1, "Qwen36 MTP contract adapter is B=1 only"
+        self = super().initialize_vllm_model(hf_config, mesh_device, max_batch_size, max_seq_len, *args, **kwargs)
+        model = self.model[0]
+        assert model.mtp is not None, "MTP head not built (checkpoint has no MTP weights?)"
+        model.set_gdn_fused_decode(True)
+        return self
+
+    def _engine(self):
+        from models.demos.blackhole.qwen36.tt.spec_engine import get_spec_engine
+
+        return get_spec_engine(self.model[0], 1, self._SPEC_K)
+
+    def _table_width(self):
+        from models.demos.blackhole.qwen36.tt.spec_engine import spec_table_width
+
+        return spec_table_width(self.model[0].args.max_seq_len, self._SPEC_K, _BLOCK_SIZE)
+
+    def _table(self, pt):
+        """Zero-pad (or trim) a vLLM page table [rows, w] to the engine width; block 0 is vLLM's null block."""
+        pt = pt if isinstance(pt, torch.Tensor) else ttnn.to_torch(pt)
+        w = self._table_width()
+        if pt.shape[1] >= w:
+            return pt[:, :w].to(torch.int32)
+        out = torch.zeros(pt.shape[0], w, dtype=torch.int32)
+        out[:, : pt.shape[1]] = pt
+        return out
+
+    def warmup_model_prefill(self, kv_cache, enable_trace, *args, **kwargs):
+        eng = self._engine()
+        if enable_trace:
+            if not eng.prefill_recorded:
+                eng.record_prefill()
+            return
+        if eng.prefill_prepared:
+            return
+        w = self._table_width()
+        pool = int(kv_cache[0][0].shape[0]) if kv_cache else w
+        assert w <= pool, (
+            f"vLLM KV pool too small: {pool} blocks < table width {w} (max_model_len + K + 1 = "
+            f"{self.model[0].args.max_seq_len} + {self._SPEC_K} + 1 tokens)"
+        )
+        # stay below the pool size: the last block is the MTP scratch block
+        scratch = (torch.arange(w) % max(1, pool - 1)).to(torch.int32).reshape(1, w)
+        eng.prepare_prefill(scratch)
+
+    def warmup_model_decode(self, kv_cache=None, enable_trace=False, *args, **kwargs):
+        # Plain decode traces are never used: every step is a verify (narrow steps run as 1-column verifies).
+        eng = self._engine()
+        if enable_trace:
+            if not eng.captured:
+                eng.capture_decode()
+        elif not eng.prepared:
+            eng.prepare_decode()
+
+    def _ensure_ready(self, kv_cache=None):
+        eng = self._engine()
+        if eng.prefill_recorded and eng.captured:
+            return eng
+        logger.warning("Qwen36 MTP engine not warmed up (enable_model_warmup=False?); warming lazily")
+        if not eng.prefill_prepared:
+            self.warmup_model_prefill(kv_cache, False)
+        if not eng.prefill_recorded:
+            eng.record_prefill()
+        if not eng.prepared:
+            eng.prepare_decode()
+        if not eng.captured:
+            eng.capture_decode()
+        return eng
+
+    def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
+        assert tokens.shape[0] == 1, "Qwen36 MTP contract adapter is B=1 only"
+        start_pos = kwargs.get("start_pos")
+        assert start_pos is None or all(int(s) == 0 for s in start_pos), "no chunked prefill / prefix caching"
+        eng = self._ensure_ready(kv_cache)
+        slot = int((kwargs.get("empty_slots") or [0])[0])
+        L = int(prompt_lens[0]) if prompt_lens is not None else tokens.shape[1]
+        logits = eng.prefill(slot, tokens[0, :L], self._table(page_table[:1]))
+        return logits.float().reshape(1, 1, -1), torch.zeros(1, dtype=torch.long)
+
+    def decode_forward(self, *args, **kwargs):
+        from vllm_tt_plugin.spec_decode import VerifyOutput
+
+        def _read(name, pos):
+            return kwargs[name] if name in kwargs else (args[pos] if pos < len(args) else None)
+
+        tokens, start_pos, page_table = _read("tokens", 0), _read("start_pos", 1), _read("page_table", 2)
+        narrow = "spec_mode" not in kwargs
+        if narrow:
+            return self._decode_narrow(tokens, start_pos, page_table, kwargs)
+        num_valid_drafts = kwargs.pop("num_valid_drafts")
+        accepted_counts = kwargs.pop("accepted_counts")
+        spec_mode = kwargs.pop("spec_mode")
+        remap = _read("slot_remap", 9)
+        if remap is not None:
+            assert [int(x) for x in remap] == list(range(len(remap))), "slot_remap must be identity (B=1)"
+        assert kwargs.get("page_tables_per_layer") is None, "per-layer page tables unsupported"
+        eng = self._ensure_ready()
+        res = eng.decode_forward(
+            tokens,
+            start_pos,
+            num_valid_drafts=num_valid_drafts,
+            accepted_counts=accepted_counts,
+            page_table=self._table(page_table),
+            spec_mode=spec_mode,
+        )
+        logits = res.logits if spec_mode == "logits" else None
+        return VerifyOutput(spec_mode=res.spec_mode, argmax_ids=res.argmax_ids, hidden=None, logits=logits)
+
+    def _decode_narrow(self, tokens, start_pos, page_table, kwargs):
+        """Ordinary [B, 1] decode step (no drafts, no multi-token commit) run as a 1-column verify.
+        Returns host float logits [B, 1, V]: the runner host-samples ``tt_out[rows, -1, :]``
+        (model_runner.py:3276; async_decode.py:103 accepts a torch tensor as host output)."""
+        nv, ac = kwargs.get("num_valid_drafts"), kwargs.get("accepted_counts")
+        B = int(tokens.shape[0])
+        if nv is not None and bool(torch.as_tensor(nv).any()):
+            raise ValueError("narrow decode step carries drafts")
+        if ac is not None and bool((torch.as_tensor(ac) != 1).any()):
+            raise ValueError("narrow decode step with accepted_counts != 1")
+        remap = kwargs.get("slot_remap")
+        if remap is not None:
+            assert [int(x) for x in remap] == list(range(len(remap))), "slot_remap must be identity (B=1)"
+        assert kwargs.get("page_tables_per_layer") is None, "per-layer page tables unsupported"
+        K = self._SPEC_K
+        tok = torch.full((B, K + 1), -1, dtype=torch.int32)
+        tok[:, 0] = torch.as_tensor(tokens).reshape(B).to(torch.int32)
+        pos = torch.full((B, K + 1), -1, dtype=torch.int32)
+        pos[:, 0] = torch.as_tensor(start_pos).reshape(B).to(torch.int32)
+        eng = self._ensure_ready()
+        res = eng.decode_forward(
+            tok,
+            pos,
+            num_valid_drafts=torch.zeros(B, dtype=torch.int32),
+            accepted_counts=torch.ones(B, dtype=torch.int32),
+            page_table=self._table(page_table),
+            spec_mode="logits",
+        )
+        return res.logits[:, :1].float()
+
+    def propose_draft_tokens(self, num_drafts, committed_tokens, committed_positions, accepted_counts, hidden=None):
+        from vllm_tt_plugin.spec_decode import DraftOutput
+
+        res = self._engine().propose_draft_tokens(
+            num_drafts, committed_tokens, committed_positions, accepted_counts, hidden=hidden
+        )
+        return DraftOutput(draft_token_ids=res.draft_token_ids, num_valid=res.num_valid)
+
+    def release_request(self, slot):
+        self._engine().release(int(slot))
+
+    def note_state_slots_moved(self, moves):
+        items = moves.items() if hasattr(moves, "items") else moves
+        if any(int(a) != int(b) for a, b in items):
+            raise NotImplementedError("slot moves unsupported (B=1)")
+
+    def release_persistent_capture(self):
+        logger.info("[spec] release_persistent_capture: start")
+        eng = getattr(self.model[0], "_spec_engine", None)
+        if eng is not None:
+            eng.shutdown()
+        parent = getattr(super(), "release_persistent_capture", None)
+        if parent is not None:
+            parent()
+        logger.info("[spec] release_persistent_capture: done")
