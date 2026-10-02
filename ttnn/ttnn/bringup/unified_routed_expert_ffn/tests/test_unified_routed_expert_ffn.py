@@ -14,6 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.common.bringup.testing import determinism
 
 _HERE = Path(__file__).resolve().parent
 
@@ -99,22 +100,9 @@ def test_unified_routed_expert_moe(mesh_device, device_params, case):
     assert E == epc * n_dev
     g = torch.Generator().manual_seed(c["seed"])
 
-    # Counts / regions from random top-k ids by the dispatch rules: counts over the device's dispatch group (the
-    # experts of its mesh column; the chip itself on a 1-row mesh), regions per chip (_experts_of).
     chip_experts = [_experts_of(d, rows, cols, epc)[0] for d in range(n_dev)]
-    counts, regions = [], []
-    for d in range(n_dev):
-        table_row = torch.full((E + 1,), -1, dtype=torch.int32)
-        table_row[_experts_of(d, rows, cols, epc)[1]] = 0
-        _, cnt, reg = ref.offsets_counts_regions(ref.random_topk(S, E, K, g), table_row, epc)
-        assert int(cnt.max()) <= c["max_dispatched_tokens_per_expert"] and int((reg + cnt).max()) <= N
-        counts.append(cnt)
-        regions.append(reg)
+    counts, regions, x = _routed_inputs(c, rows, cols, g)
     gidx = torch.cat(chip_experts).to(torch.int32)  # device d, local slot le -> global expert chip_experts[d][le]
-
-    # Random dispatched buffer, random everywhere (padding rows too). x_scale (default 1) widens it so a clamped
-    # activation's limit is reached (the projections are ~N(0, x_scale^2)).
-    x = (torch.randn(n_dev * N, H, generator=g) * c.get("x_scale", 1.0)).to(torch.bfloat16)
 
     # Weights ~ N(0, 1/fan_in) (gate / up times gate_up_scale when set), rounded to bfp8 on the host; the reference
     # uses the rounded values.
@@ -141,13 +129,77 @@ def test_unified_routed_expert_moe(mesh_device, device_params, case):
                     xe, host["gate"][d], host["up"][d], host["down"][d], c["activation"]
                 )
 
+    dev = _device_inputs(mesh_device, c, counts, regions, x, gidx)
+    out = _call(c, dev, tt_w)
+    masks = []
+    for d, dt in enumerate(ttnn.get_device_tensors(out)):
+        got = ttnn.to_torch(dt).float().reshape(N, H)
+        routed = torch.zeros(N, dtype=torch.bool)
+        for le in range(epc):
+            e = int(chip_experts[d][le])
+            r, n = int(regions[d][e]), int(counts[d][e])
+            routed[r : r + n] = True
+        masks.append(routed)
+        a, b = got[routed], want[d][routed]
+        pcc = _pcc(a, b)
+        rel = float((a - b).norm() / b.norm())
+        logger.info(f"dev {d}: {int(routed.sum())} routed rows, pcc {pcc:.6f}, rel {rel:.5f}")
+        assert (
+            pcc >= c["pcc"] and rel <= c["rel"]
+        ), f"dev {d}: pcc {pcc:.6f} (min {c['pcc']}), rel {rel:.5f} (max {c['rel']})"
+
+    # B: other routing and buffer (seed + 1), the same weights (they are the op's parameters, and the costly part).
+    counts_b, regions_b, x_b = _routed_inputs(c, rows, cols, torch.Generator().manual_seed(c["seed"] + 1))
+    dev_b = _device_inputs(mesh_device, c, counts_b, regions_b, x_b, gidx)
+    # Compared: A's routed rows (the rows outside them are don't-care, left as the allocator hands them over).
+    determinism.assert_deterministic(
+        lambda: _routed_rows(c, _call(c, dev, tt_w), masks),
+        lambda: _call(c, dev_b, tt_w),
+        first=_routed_rows(c, out, masks),
+        label=c["id"],
+    )
+
+
+def _routed_rows(c, out, masks):
+    N, H = c["buffer_rows"], c["emb_dim"]
+    return [ttnn.to_torch(t).reshape(N, H)[m] for t, m in zip(ttnn.get_device_tensors(out), masks)]
+
+
+def _routed_inputs(c, rows, cols, g):
+    """Per-device counts and regions from random top-k ids by the dispatch rules, and the random dispatched buffer."""
+    n_dev = rows * cols
+    N, H = c["buffer_rows"], c["emb_dim"]
+    E, epc, S, K = c["num_routed_experts"], c["experts_per_chip"], c["seq_len_per_chip"], c["num_experts_per_tok"]
+    # Counts / regions from random top-k ids by the dispatch rules: counts over the device's dispatch group (the
+    # experts of its mesh column; the chip itself on a 1-row mesh), regions per chip (_experts_of).
+    counts, regions = [], []
+    for d in range(n_dev):
+        table_row = torch.full((E + 1,), -1, dtype=torch.int32)
+        table_row[_experts_of(d, rows, cols, epc)[1]] = 0
+        _, cnt, reg = ref.offsets_counts_regions(ref.random_topk(S, E, K, g), table_row, epc)
+        assert int(cnt.max()) <= c["max_dispatched_tokens_per_expert"] and int((reg + cnt).max()) <= N
+        counts.append(cnt)
+        regions.append(reg)
+    # Random dispatched buffer, random everywhere (padding rows too). x_scale (default 1) widens it so a clamped
+    # activation's limit is reached (the projections are ~N(0, x_scale^2)).
+    x = (torch.randn(n_dev * N, H, generator=g) * c.get("x_scale", 1.0)).to(torch.bfloat16)
+    return counts, regions, x
+
+
+def _device_inputs(mesh_device, c, counts, regions, x, gidx):
+    E, epc = c["num_routed_experts"], c["experts_per_chip"]
+    N, H = c["buffer_rows"], c["emb_dim"]
     tt_x = _to_mesh(mesh_device, x, c["buffer"])
     tt_reg = _to_mesh(mesh_device, torch.stack(regions).to(torch.int32), {"dtype": "UINT32", "layout": "ROW_MAJOR"})
     tt_cnt = _to_mesh(mesh_device, torch.stack(counts).to(torch.int32), {"dtype": "UINT32", "layout": "ROW_MAJOR"})
     tt_gidx = _to_mesh(mesh_device, gidx, {"dtype": "UINT32", "layout": "ROW_MAJOR"})
     assert list(tt_reg.shape) == [1, E] and list(tt_gidx.shape) == [epc] and list(tt_x.shape) == [N, H]
+    return tt_x, tt_reg, tt_cnt, tt_gidx
 
-    out = ttnn.bringup.unified_routed_expert_moe(
+
+def _call(c, dev, tt_w):
+    tt_x, tt_reg, tt_cnt, tt_gidx = dev
+    return ttnn.bringup.unified_routed_expert_moe(
         tt_x,
         tt_reg,
         tt_cnt,
@@ -160,17 +212,3 @@ def test_unified_routed_expert_moe(mesh_device, device_params, case):
         activation=getattr(ttnn.bringup.RoutedExpertActivation, c["activation"]),
         high_precision=c["high_precision"],
     )
-    for d, dt in enumerate(ttnn.get_device_tensors(out)):
-        got = ttnn.to_torch(dt).float().reshape(N, H)
-        routed = torch.zeros(N, dtype=torch.bool)
-        for le in range(epc):
-            e = int(chip_experts[d][le])
-            r, n = int(regions[d][e]), int(counts[d][e])
-            routed[r : r + n] = True
-        a, b = got[routed], want[d][routed]
-        pcc = _pcc(a, b)
-        rel = float((a - b).norm() / b.norm())
-        logger.info(f"dev {d}: {int(routed.sum())} routed rows, pcc {pcc:.6f}, rel {rel:.5f}")
-        assert (
-            pcc >= c["pcc"] and rel <= c["rel"]
-        ), f"dev {d}: pcc {pcc:.6f} (min {c['pcc']}), rel {rel:.5f} (max {c['rel']})"

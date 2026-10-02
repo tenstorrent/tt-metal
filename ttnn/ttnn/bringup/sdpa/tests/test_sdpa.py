@@ -14,6 +14,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.common.bringup.testing import determinism
 
 _HERE = Path(__file__).resolve().parent
 
@@ -69,7 +70,34 @@ def _sparse_sdpa(mesh_device, c):
     (head, row) output norm ratio."""
     rows, cols = c["mesh"]
     n_dev = rows * cols
-    g = torch.Generator().manual_seed(c["seed"])
+    _, nh, sq, kd = c["q"]
+    (q, kv, idx), dev = _sparse_inputs(mesh_device, c, c["seed"])
+    out = _sparse_call(c, dev)
+    outs = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(out)]
+    assert len(outs) == n_dev
+    for d in range(n_dev):
+        got = outs[d]
+        assert list(got.shape) == [1, nh, sq, c["v_dim"]], f"dev {d}: output shape {list(got.shape)}"
+        want = ref.sparse_sdpa(q[d : d + 1], kv[d : d + 1], idx[d : d + 1], scale=c["scale"], v_dim=c["v_dim"])
+        pcc = _pcc(got, want)
+        rel = float((got - want).norm() / want.norm())
+        ratio = got.norm(dim=-1) / want.norm(dim=-1)
+        lo, hi = float(ratio.min()), float(ratio.max())
+        print(f"dev {d}: pcc {pcc:.7f} rel L2 err {rel:.5f} per-row norm ratio [{lo:.4f}, {hi:.4f}]")
+        assert pcc >= c["pcc"], f"dev {d}: pcc {pcc} < {c['pcc']}"
+        assert rel <= c["rel"], f"dev {d}: rel L2 err {rel} > {c['rel']}"
+        assert c["ratio"][0] <= lo and hi <= c["ratio"][1], f"dev {d}: norm ratio [{lo}, {hi}] outside {c['ratio']}"
+    dev_b = _sparse_inputs(mesh_device, c, c["seed"] + 1)[1]
+    determinism.assert_deterministic(
+        lambda: _sparse_call(c, dev), lambda: _sparse_call(c, dev_b), first=out, label=c["id"]
+    )
+
+
+def _sparse_inputs(mesh_device, c, seed):
+    """Host (q, kv, idx) for `seed` and the device (q, kv, idx, compute kernel config)."""
+    rows, cols = c["mesh"]
+    n_dev = rows * cols
+    g = torch.Generator().manual_seed(seed)
     _, nh, sq, kd = c["q"]
     t_kv = c["kv"][2]
     w = c["indices"][-1]
@@ -100,7 +128,12 @@ def _sparse_sdpa(mesh_device, c):
     tq, tkv = _shard(mesh_device, q, layout=rm), _shard(mesh_device, kv, layout=rm)
     ti = _shard(mesh_device, idx.to(torch.int32), dtype=ttnn.uint32, layout=rm)
     assert list(tq.shape) == c["q"] and list(tkv.shape) == c["kv"] and list(ti.shape) == c["indices"]
-    out = ttnn.bringup.sparse_sdpa(
+    return (q, kv, idx), (tq, tkv, ti, ckc)
+
+
+def _sparse_call(c, dev):
+    tq, tkv, ti, ckc = dev
+    return ttnn.bringup.sparse_sdpa(
         tq,
         tkv,
         ti,
@@ -111,20 +144,6 @@ def _sparse_sdpa(mesh_device, c):
         compute_kernel_config=ckc,
         high_precision=c["high_precision"],
     )
-    outs = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(out)]
-    assert len(outs) == n_dev
-    for d in range(n_dev):
-        got = outs[d]
-        assert list(got.shape) == [1, nh, sq, c["v_dim"]], f"dev {d}: output shape {list(got.shape)}"
-        want = ref.sparse_sdpa(q[d : d + 1], kv[d : d + 1], idx[d : d + 1], scale=c["scale"], v_dim=c["v_dim"])
-        pcc = _pcc(got, want)
-        rel = float((got - want).norm() / want.norm())
-        ratio = got.norm(dim=-1) / want.norm(dim=-1)
-        lo, hi = float(ratio.min()), float(ratio.max())
-        print(f"dev {d}: pcc {pcc:.7f} rel L2 err {rel:.5f} per-row norm ratio [{lo:.4f}, {hi:.4f}]")
-        assert pcc >= c["pcc"], f"dev {d}: pcc {pcc} < {c['pcc']}"
-        assert rel <= c["rel"], f"dev {d}: rel L2 err {rel} > {c['rel']}"
-        assert c["ratio"][0] <= lo and hi <= c["ratio"][1], f"dev {d}: norm ratio [{lo}, {hi}] outside {c['ratio']}"
 
 
 def _ring_mla(mesh_device, c):
@@ -141,7 +160,51 @@ def _ring_mla(mesh_device, c):
     local = c["kv"][2]
     max_seq = local * rows
     assert sq * rows == chunk and n == isl + chunk and c["persistent_output_buffer_kv"][2] == max_seq
-    g = torch.Generator().manual_seed(c["seed"])
+    gr = mesh_device.compute_with_storage_grid_size()
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gr.x - 1, gr.y - 1))})
+    sems = [ttnn.create_global_semaphore(mesh_device, cores, 0) for _ in range(2)]
+    (q, kv), dev = _mla_inputs(mesh_device, c, c["seed"])
+    out, stats, buf = _mla_call(mesh_device, c, dev, sems)
+    devs = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(out)]
+    assert len(devs) == rows * cols
+    for d in devs:
+        assert list(d.shape) == [1, nh, sq, dv], d.shape
+    keys = kv[:n].float()
+    causal = torch.arange(n)[None, :] > torch.arange(isl, n)[:, None]  # [chunk, n]
+    for col in range(cols):
+        got = torch.cat([devs[r * cols + col] for r in range(rows)], dim=2)[0]  # [nh, chunk, dv]
+        want = torch.empty_like(got)
+        for h in range(nh):
+            s_ = (q[0, col * nh + h].float() @ keys.T) * c["scale"]
+            want[h] = s_.masked_fill_(causal, float("-inf")).softmax(-1) @ keys[:, :dv]
+        pcc = _pcc(got, want)
+        rel = float((got - want).norm() / want.norm())
+        row = float(((got - want).norm(dim=-1) / want.norm(dim=-1)).max())
+        print(f"column {col}: pcc {pcc:.7f} rel L2 err {rel:.5f} worst row {row:.5f}")
+        assert pcc >= c["pcc"], f"column {col}: pcc {pcc} < {c['pcc']}"
+        assert rel <= c["rel"], f"column {col}: rel L2 err {rel} > {c['rel']}"
+        assert row <= c["row"], f"column {col}: worst row rel err {row} > {c['row']}"
+    # The op gathers the ring's KV into persistent_output_buffer_kv (an input): each call gets a fresh zeroed buffer
+    # (_mla_call), and the gathered buffer is compared too.
+    dev_b = _mla_inputs(mesh_device, c, c["seed"] + 1)[1]
+    determinism.assert_deterministic(
+        lambda: _mla_call(mesh_device, c, dev, sems),
+        lambda: _mla_call(mesh_device, c, dev_b, sems),
+        first=(out, stats, buf),
+        label=c["id"],
+    )
+    for t in (*dev, buf, out, stats):
+        ttnn.deallocate(t)
+
+
+def _mla_inputs(mesh_device, c, seed):
+    """Host (q, natural-order kv) for `seed` and the device (q, block-cyclic ND-sharded latent cache)."""
+    rows, cols = c["mesh"]
+    _, nh, sq, kd = c["q"]
+    chunk, n = c["chunk"], c["logical_n"]
+    local = c["kv"][2]
+    max_seq = local * rows
+    g = torch.Generator().manual_seed(seed)
     q = (torch.randn(1, nh * cols, chunk, kd, generator=g) * c["q_scale"]).to(torch.bfloat16)
     kv = torch.zeros(max_seq, kd)
     kv[:n] = torch.randn(n, kd, generator=g)
@@ -184,6 +247,14 @@ def _ring_mla(mesh_device, c):
         memory_config=nd,
         mesh_mapper=shard((2, None)),
     )
+    assert list(tq.shape) == c["q"] and list(tkv.shape) == c["kv"], (tq.shape, tkv.shape)
+    assert "ND_SHARDED" in str(tkv.memory_config().memory_layout), tkv.memory_config()
+    return (q, kv), (tq, tkv)
+
+
+def _mla_call(mesh_device, c, dev, sems):
+    """One call on a fresh zeroed persistent KV buffer; returns (out, stats, the gathered buffer)."""
+    tq, tkv = dev
     buf = ttnn.from_torch(
         torch.zeros(c["persistent_output_buffer_kv"]),
         dtype=ttnn.bfloat16,
@@ -192,18 +263,13 @@ def _ring_mla(mesh_device, c):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
-    assert list(tq.shape) == c["q"] and list(tkv.shape) == c["kv"], (tq.shape, tkv.shape)
-    assert "ND_SHARDED" in str(tkv.memory_config().memory_layout), tkv.memory_config()
-    gr = mesh_device.compute_with_storage_grid_size()
-    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gr.x - 1, gr.y - 1))})
-    sems = [ttnn.create_global_semaphore(mesh_device, cores, 0) for _ in range(2)]
     ck, pc = c["compute_kernel_config"], c["program_config"]
     out, stats = ttnn.bringup.ring_mla(
         tq,
         tkv,
         persistent_output_buffer_kv=buf,
-        head_dim_v=dv,
-        logical_n=n,
+        head_dim_v=c["head_dim_v"],
+        logical_n=c["logical_n"],
         program_config=ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(*pc["grid"]),
             q_chunk_size=pc["q_chunk_size"],
@@ -229,29 +295,9 @@ def _ring_mla(mesh_device, c):
         use_column_major_ccl=c["use_column_major_ccl"],
         is_balanced=c["is_balanced"],
         kv_cache_batch_idx=c["kv_cache_batch_idx"],
-        kv_actual_isl=isl,
+        kv_actual_isl=c["kv_actual_isl"],
     )
-    devs = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(out)]
-    assert len(devs) == rows * cols
-    for d in devs:
-        assert list(d.shape) == [1, nh, sq, dv], d.shape
-    keys = kv[:n].float()
-    causal = torch.arange(n)[None, :] > torch.arange(isl, n)[:, None]  # [chunk, n]
-    for col in range(cols):
-        got = torch.cat([devs[r * cols + col] for r in range(rows)], dim=2)[0]  # [nh, chunk, dv]
-        want = torch.empty_like(got)
-        for h in range(nh):
-            s_ = (q[0, col * nh + h].float() @ keys.T) * c["scale"]
-            want[h] = s_.masked_fill_(causal, float("-inf")).softmax(-1) @ keys[:, :dv]
-        pcc = _pcc(got, want)
-        rel = float((got - want).norm() / want.norm())
-        row = float(((got - want).norm(dim=-1) / want.norm(dim=-1)).max())
-        print(f"column {col}: pcc {pcc:.7f} rel L2 err {rel:.5f} worst row {row:.5f}")
-        assert pcc >= c["pcc"], f"column {col}: pcc {pcc} < {c['pcc']}"
-        assert rel <= c["rel"], f"column {col}: rel L2 err {rel} > {c['rel']}"
-        assert row <= c["row"], f"column {col}: worst row rel err {row} > {c['row']}"
-    for t in (tq, tkv, buf, out, stats):
-        ttnn.deallocate(t)
+    return out, stats, buf
 
 
 @pytest.mark.timeout(1200)
@@ -269,81 +315,11 @@ def test_sdpa(mesh_device, device_params, case):
         return _ring_mla(mesh_device, c)
     rows, cols = c["mesh"]
     n_dev = rows * cols
-    g = torch.Generator().manual_seed(c["seed"])
-    q, k, v = _randn(g, n_dev, c["q"]), _randn(g, n_dev, c["k"]), _randn(g, n_dev, c["v"])
-
-    ck = c["compute_kernel_config"]
-    ckc = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=getattr(ttnn.MathFidelity, ck["math_fidelity"]),
-        math_approx_mode=ck["math_approx_mode"],
-        fp32_dest_acc_en=ck["fp32_dest_acc_en"],
-        packer_l1_acc=ck["packer_l1_acc"],
-        dst_full_sync_en=ck["dst_full_sync_en"],
-    )
-    pc = c["program_config"]
-    prog = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(*pc["grid"]),
-        q_chunk_size=pc["q_chunk_size"],
-        k_chunk_size=pc["k_chunk_size"],
-        exp_approx_mode=pc["exp_approx_mode"],
-        max_cores_per_head_batch=16,
-    )
-    tq, tk, tv = _shard(mesh_device, q), _shard(mesh_device, k), _shard(mesh_device, v)
-    pts, sink = None, None
-
+    (q, k, v, pts, sink), dev = _inputs(mesh_device, c, c["seed"])
+    fork, source = _ops(c)
     # The source op (ttnn.transformer) takes V only as wide as K: it runs on V zero-padded to K's width, and the fork's
     # output must equal its first V columns bit for bit (same QK / softmax / PV arithmetic; tests/unit does the same).
-    pad = c["k"][-1] - c["v"][-1]
-    tv_pad = _shard(mesh_device, torch.nn.functional.pad(v, (0, pad))) if pad else None
-
-    if c["op"] == "chunked_scaled_dot_product_attention":
-        nb = c["page_table"][1]
-        pts = torch.stack([torch.randperm(nb, generator=g) for _ in range(n_dev)]).to(torch.int32)  # [n_dev, nb]
-        tpt = _shard(mesh_device, pts, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
-        outs_ = []
-        for op, vv in (
-            (ttnn.bringup.chunked_scaled_dot_product_attention, tv),
-            (ttnn.transformer.chunked_scaled_dot_product_attention, tv_pad),
-        ):
-            if vv is None:
-                continue
-            outs_.append(
-                op(
-                    input_tensor_q=tq,
-                    input_tensor_k=tk,
-                    input_tensor_v=vv,
-                    page_table_tensor=tpt,
-                    chunk_start_idx=c["chunk_start_idx"],
-                    scale=c["scale"],
-                    program_config=prog,
-                    compute_kernel_config=ckc,
-                )
-            )
-    else:
-        extra = {}
-        if c["attention_sink"] is not None:
-            logit = torch.rand([n_dev, *c["attention_sink"][1:]], generator=g) * 3.0
-            sink = (logit / c["scale"]).to(torch.bfloat16)  # stored pre-divided, like the model's
-            extra["attention_sink"] = _shard(mesh_device, sink)
-        if c["sliding_window_size"]:
-            extra["sliding_window_size"] = c["sliding_window_size"]
-        outs_ = [
-            op(
-                tq,
-                tk,
-                vv,
-                is_causal=c["is_causal"],
-                scale=c["scale"],
-                program_config=prog,
-                compute_kernel_config=ckc,
-                **extra,
-            )
-            for op, vv in (
-                (ttnn.bringup.scaled_dot_product_attention, tv),
-                (ttnn.transformer.scaled_dot_product_attention, tv_pad),
-            )
-            if vv is not None
-        ]
+    outs_ = [_call(c, dev, fork)] + ([_call(c, dev, source, dev["v_pad"])] if dev["v_pad"] is not None else [])
     out = outs_[0]
     src = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(outs_[1])] if len(outs_) > 1 else None
 
@@ -377,3 +353,82 @@ def test_sdpa(mesh_device, device_params, case):
         assert pcc >= c["pcc"], f"dev {d}: pcc {pcc} < {c['pcc']}"
         if c["rel"] is not None:
             assert rel <= c["rel"], f"dev {d}: rel L2 err {rel} > {c['rel']}"
+    dev_b = _inputs(mesh_device, c, c["seed"] + 1)[1]
+    determinism.assert_deterministic(
+        lambda: _call(c, dev, fork), lambda: _call(c, dev_b, fork), first=out, label=c["id"]
+    )
+
+
+def _ops(c):
+    """(the fork's op, the source op) of a scaled_dot_product_attention / chunked_... case."""
+    return getattr(ttnn.bringup, c["op"]), getattr(ttnn.transformer, c["op"])
+
+
+def _inputs(mesh_device, c, seed):
+    """Host (q, k, v, page tables, sink) for `seed` and the device inputs (with V zero-padded to K's width for the
+    source op, None when V is as wide as K) and configs."""
+    rows, cols = c["mesh"]
+    n_dev = rows * cols
+    g = torch.Generator().manual_seed(seed)
+    q, k, v = _randn(g, n_dev, c["q"]), _randn(g, n_dev, c["k"]), _randn(g, n_dev, c["v"])
+
+    ck = c["compute_kernel_config"]
+    ckc = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=getattr(ttnn.MathFidelity, ck["math_fidelity"]),
+        math_approx_mode=ck["math_approx_mode"],
+        fp32_dest_acc_en=ck["fp32_dest_acc_en"],
+        packer_l1_acc=ck["packer_l1_acc"],
+        dst_full_sync_en=ck["dst_full_sync_en"],
+    )
+    pc = c["program_config"]
+    prog = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(*pc["grid"]),
+        q_chunk_size=pc["q_chunk_size"],
+        k_chunk_size=pc["k_chunk_size"],
+        exp_approx_mode=pc["exp_approx_mode"],
+        max_cores_per_head_batch=16,
+    )
+    dev = {"q": _shard(mesh_device, q), "k": _shard(mesh_device, k), "v": _shard(mesh_device, v)}
+    dev.update(prog=prog, ckc=ckc, page_table=None, extra={})
+    pts, sink = None, None
+    pad = c["k"][-1] - c["v"][-1]
+    dev["v_pad"] = _shard(mesh_device, torch.nn.functional.pad(v, (0, pad))) if pad else None
+
+    if c["op"] == "chunked_scaled_dot_product_attention":
+        nb = c["page_table"][1]
+        pts = torch.stack([torch.randperm(nb, generator=g) for _ in range(n_dev)]).to(torch.int32)  # [n_dev, nb]
+        dev["page_table"] = _shard(mesh_device, pts, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    else:
+        if c["attention_sink"] is not None:
+            logit = torch.rand([n_dev, *c["attention_sink"][1:]], generator=g) * 3.0
+            sink = (logit / c["scale"]).to(torch.bfloat16)  # stored pre-divided, like the model's
+            dev["extra"]["attention_sink"] = _shard(mesh_device, sink)
+        if c["sliding_window_size"]:
+            dev["extra"]["sliding_window_size"] = c["sliding_window_size"]
+    return (q, k, v, pts, sink), dev
+
+
+def _call(c, dev, op, v=None):
+    """op on the case's device inputs; v replaces V (the padded V of the source op)."""
+    v = dev["v"] if v is None else v
+    if c["op"] == "chunked_scaled_dot_product_attention":
+        return op(
+            input_tensor_q=dev["q"],
+            input_tensor_k=dev["k"],
+            input_tensor_v=v,
+            page_table_tensor=dev["page_table"],
+            chunk_start_idx=c["chunk_start_idx"],
+            scale=c["scale"],
+            program_config=dev["prog"],
+            compute_kernel_config=dev["ckc"],
+        )
+    return op(
+        dev["q"],
+        dev["k"],
+        v,
+        is_causal=c["is_causal"],
+        scale=c["scale"],
+        program_config=dev["prog"],
+        compute_kernel_config=dev["ckc"],
+        **dev["extra"],
+    )
