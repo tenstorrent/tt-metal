@@ -78,6 +78,26 @@ device -> practical 27.8 ms of kernels above their bounds (FF1+FF3 14.7, QKV 4.8
 per op 13.5 ms, all of it the SDPA / heads / add+RMSNorm floors (softmax, norms, RoPE); ideal per op -> whole model
 7.4 ms of activations crossing DRAM.
 
+**Achievable whole-model bound (2026-10-02, artifact version 27).** Cold, implementation-independent: every activation
+on chip; FLOPs at 89% of the 120-core LoFi peak (590.6 TFLOP/s: the matmul LLK's own ceiling, see below), weights at 450
+GB/s, vector work (softmax exp, SwiGLU, norms / RoPE) at measured per-tile rates, overlapped with the FPU
+(`profile_page.py` `achievable`). FPU-bound at every batch:
+
+| batch | cold | achievable (vector overlapped) | vector serialized | cold ÷ achievable |
+|---|---|---|---|---|
+| 1 | 14.1 | 6.56 | 7.28 | 2.15× |
+| 8 | 76.7 | 52.5 | 58.2 | 1.46× |
+| 16 | 143.3 | 105.0 | 116.5 | 1.36× |
+| 32 | 291.7 | 210.0 | 233.0 | 1.39× |
+
+Why 89%: `bench_ff13_fused_ablate.py` / `bench_mm_ablate.py` at today's configs (blocks from `capture_qkv_call.py`:
+FF13 4,40,8 1×8 at bs16 and bs32, QKV / FF2 / WO 8,8,8 1×8, bs32 QKV as 4 chunks of M=4096) put every batched matmul's
+compute-only floor at 78-89% of 663.6 TFLOP/s (FF2 bs32 589, FF13 no SFPU / no add 566 / 576, WO 545 / 570, QKV 517 /
+528), matching GEMM_FLOPS's best Blackhole GEMM (89.5%). Above the compute-only floors, per layer at bs16 / bs32: FF13
+partial-sum add 67 / 142 µs, FF13 DM 88 / 69, FF13 SwiGLU 34 / 79, FF2 weight re-reads at bs32 98, QKV in0 read at bs16 35.
+QKV runs ~2 cycles per tile·K worse than the others (20.5 vs 18.6-18.8); untested guess: the plain path's end-of-block
+`copy_and_pack_block`, amortized over 10 K blocks in QKV against 38 in FF2.
+
 **Next, in the order I would take them:**
 1. Batched matmuls above their bounds (~25 ms at bs16, ~41 ms at bs32; `minimal_matmul` FF1+FF3 at 1.27-1.33x its
    bound). Start with compute-only / DM-only floors at today's configs (`bench_mm_ablate.py`, `bench_ff13_fused_ablate.py`)
