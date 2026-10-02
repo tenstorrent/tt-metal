@@ -11,6 +11,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/windowed_mode.hpp"
 
 void kernel_main() {
     constexpr uint32_t Skt = get_compile_time_arg_val(0);
@@ -45,7 +46,9 @@ void kernel_main() {
     // Zigzag remap flag drives the external remap_q_index call on the flat B*NQH*q_num_chunks range.
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(27) == 1;
     // Windowed K-range narrowing: per-Q-chunk [k_lo, k_hi) arrives from the reader over a ctrl CB.
-    constexpr bool use_windowed_narrowing = get_compile_time_arg_val(28) == 1;
+    // Compute is mode-agnostic: windowed causal lives entirely in that range and the generated mask.
+    constexpr auto windowed_mode = static_cast<WindowedMode>(get_compile_time_arg_val(28));
+    constexpr bool use_windowed_narrowing = windowed_mode != WindowedMode::None;
 
     const uint32_t num_phases = get_arg_val<uint32_t>(0);
     const uint32_t use_chunk_start_idx_tensor = get_arg_val<uint32_t>(1);

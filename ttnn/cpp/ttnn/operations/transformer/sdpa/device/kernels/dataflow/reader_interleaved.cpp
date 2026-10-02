@@ -97,7 +97,8 @@ void kernel_main() {
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(32) == 1;
     // Windowed K-range narrowing: the reader computes each Q chunk's [k_lo, k_hi) from
     // cu_window_seqlens, streams only that range, and feeds it to compute over a ctrl CB.
-    constexpr bool use_windowed_narrowing = get_compile_time_arg_val(33) == 1;
+    constexpr auto windowed_mode = static_cast<WindowedMode>(get_compile_time_arg_val(33));
+    constexpr bool use_windowed_narrowing = windowed_mode != WindowedMode::None;
 
     constexpr auto q_args = TensorAccessorArgs<34>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
@@ -390,7 +391,7 @@ void kernel_main() {
             uint32_t windowed_k_lo = 0;
             uint32_t windowed_k_hi = k_num_chunks;
             if constexpr (use_windowed_narrowing) {
-                const auto range = windowed_k_chunk_range(
+                const auto range = windowed_k_chunk_range<windowed_mode>(
                     q_chunk,
                     Sq_chunk_t,
                     valid_Sqt,
