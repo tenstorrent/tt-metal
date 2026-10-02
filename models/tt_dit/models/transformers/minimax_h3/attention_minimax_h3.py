@@ -310,6 +310,13 @@ class MiniMaxH3Attention(Module):
             )
             if self.sdpa_precision is not None and not windowed:
                 self._sdpa_program_configs[key] = sdpa_recipe.recipe_config(grid)
+                # Bench only (not for merge): H3_RING_QK="q,k" forces explicit ring chunks.
+                forced = os.environ.get("H3_RING_QK") if ring else None
+                if forced:
+                    q_chunk, k_chunk = (int(x) for x in forced.split(","))
+                    self._sdpa_program_configs[key] = ttnn.SDPAProgramConfig(
+                        compute_with_storage_grid_size=grid, q_chunk_size=q_chunk, k_chunk_size=k_chunk
+                    )
             else:
                 tile = ttnn.TILE_SIZE
                 measured = self.measured_sdpa_chunk_sizes.get(seq_local)
