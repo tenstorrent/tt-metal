@@ -114,7 +114,7 @@ def _run_sfpu_binary_llk_golden(
     dst_rounding_mode=DstRoundingMode.Default,
     format_variant=None,
 ):
-    """Shared driver for the unpack-to-dest, LLK-golden binary SFPU ops.
+    """Shared driver for the LLK-golden binary SFPU ops.
 
     ``prepare_stimuli(formats, input_dimensions, src0_idx, src1_idx, mathop)``
     returns ``(src_A, tile_cnt_A, src_B)``; both operands live in ``src_A`` at

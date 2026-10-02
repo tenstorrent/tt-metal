@@ -5,7 +5,7 @@
 import torch
 from helpers.chip_architecture import ChipArchitecture
 from helpers.golden_generators import EltwiseBinaryGolden, get_golden_generator
-from helpers.llk_params import AccToDest, EltwiseBinaryReuseDestType, MathOperation
+from helpers.llk_params import AccToDest, EltwiseBinaryReuseDestType
 
 from ..state import tile_dimensions
 
@@ -24,7 +24,6 @@ def _eltwise(call, state, node, operation, config, force_accumulate):
         if reuse_dest:
             accumulate = (
                 config.architecture == ChipArchitecture.QUASAR
-                and node.fpu.operation != MathOperation.Elwmul
                 and node.acc_to_dest == AccToDest.Yes
             )
         if tensor_a is None:
