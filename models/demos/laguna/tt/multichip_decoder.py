@@ -262,6 +262,7 @@ class MultichipDecoder(OptimizedDecoder):
         self._token_dispatch_state = None
         self._ag_reduce = _parse_binary_env("TT_LAGUNA_AG_REDUCE", True)  # decode all-reduce as all_gather+sum
         self._route_dense_mask = _parse_binary_env("TT_LAGUNA_ROUTE_DENSE_MASK", True)  # mask router, no topk#2
+        self._route_rank = _parse_binary_env("TT_LAGUNA_ROUTE_RANK", True)  # 1-token router: rank<K, no topk
         self._token_dispatch_fallback_reason = "feature flag is disabled"
         # On a 1×1 MeshDevice, TTNN's explicit parallel decode-SDPA program is inaccurate once
         # the cache crosses long/non-aligned boundaries (observed PCC ~= 0 at positions 513/2048).

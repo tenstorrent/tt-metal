@@ -942,6 +942,14 @@ class OptimizedDecoder(LightweightModule):
             logits = ttnn.typecast(logits32, ttnn.bfloat16)
             scores = ttnn.sigmoid(logits32)
             sel = ttnn.add(scores, self.w["e_bias_f32"])
+            if want_dense and self._route_rank and sel.shape[-2] == 1:
+                # decode (one token): exact fp32 top-K with no top-k op (ttnn.topk is single-core below
+                # 8192 wide, ~45 us here). rank_e = #experts with a strictly larger selection score, from one
+                # [E, E] broadcast compare + row sum on the full grid; the routing mask is rank < K.
+                sel_col = ttnn.transpose(sel, -2, -1)  # [1, 1, E, 1]
+                rank = ttnn.sum(ttnn.gt(sel, sel_col), dim=3, keepdim=True)  # [1, 1, E, 1]
+                mask = ttnn.transpose(ttnn.lt(rank, K), -2, -1)  # [1, 1, 1, E]
+                return logits, None, self._dense_routing(cfg, ttnn.mul(scores, mask))
             _, idx_coarse = ttnn.topk(ttnn.typecast(sel, ttnn.bfloat16), k=K + 1, dim=-1, sorted=True)
             rows = [idx_coarse.shape[i] for i in range(len(idx_coarse.shape) - 1)]
             pair_idx = ttnn.slice(idx_coarse, [0] * len(rows) + [K - 1], rows + [K + 1])
@@ -961,12 +969,7 @@ class OptimizedDecoder(LightweightModule):
             if want_dense:
                 # The fp32 cut-off already separates the top-K: (sel > cutoff) IS the selection mask, so the
                 # dense routing matrix is scores*mask -- no second top-k, final gather or scatter (each ~1 core).
-                dense = ttnn.mul(scores, ttnn.gt(sel, cutoff))
-                if cfg.norm_topk_prob:
-                    dense = ttnn.div(dense, ttnn.sum(dense, dim=3, keepdim=True))
-                if cfg.routed_scaling != 1.0:
-                    dense = ttnn.multiply(dense, cfg.routed_scaling)
-                return logits, None, ttnn.typecast(dense, ttnn.bfloat16)
+                return logits, None, self._dense_routing(cfg, ttnn.mul(scores, ttnn.gt(sel, cutoff)))
             shifted = ttnn.typecast(ttnn.subtract(sel, cutoff), ttnn.bfloat16)
             _, idx = ttnn.topk(shifted, k=K, dim=-1, sorted=True)
             wsel = ttnn.gather(scores, dim=3, index=idx)
@@ -977,6 +980,15 @@ class OptimizedDecoder(LightweightModule):
         if wsel.dtype != ttnn.bfloat16:
             wsel = ttnn.typecast(wsel, ttnn.bfloat16)
         return logits, idx, wsel
+
+    @staticmethod
+    def _dense_routing(cfg, dense):
+        """Masked router scores [1,1,T,E] (fp32) -> normalized, scaled bf16 dense routing matrix."""
+        if cfg.norm_topk_prob:
+            dense = ttnn.div(dense, ttnn.sum(dense, dim=3, keepdim=True))
+        if cfg.routed_scaling != 1.0:
+            dense = ttnn.multiply(dense, cfg.routed_scaling)
+        return ttnn.typecast(dense, ttnn.bfloat16)
 
     # ---- MoE --------------------------------------------------------------- #
     def _moe(self, ln_flat, m, sharded):
