@@ -1431,12 +1431,14 @@ class OptimizedDecoder(LightweightModule):
         mlp_out = self._mlp(ln2, B, sharded=True)
         return ttnn.add(h, mlp_out)
 
-    def _shard_kv(self, kv, B):
+    def _shard_kv(self, kv, B, y0=0):
+        """Height-shard one user per core from core row ``y0`` (an offset keeps K and V on disjoint cores
+        for paged_fused_update_cache)."""
         nkv = self.cfg.num_kv_heads
         nkv32 = ((nkv + TILE - 1) // TILE) * TILE
         row = 8
         core_grid = ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord((B - 1) % row, (B - 1) // row))}
+            {ttnn.CoreRange(ttnn.CoreCoord(0, y0), ttnn.CoreCoord((B - 1) % row, y0 + (B - 1) // row))}
         )
         mem = ttnn.create_sharded_memory_config(
             shape=(nkv32, self.cfg.head_dim),

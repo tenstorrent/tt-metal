@@ -264,6 +264,7 @@ class MultichipDecoder(OptimizedDecoder):
         self._ag_reduce = _parse_binary_env("TT_LAGUNA_AG_REDUCE", True)  # decode all-reduce as all_gather+sum
         self._route_dense_mask = _parse_binary_env("TT_LAGUNA_ROUTE_DENSE_MASK", True)  # mask router, no topk#2
         self._route_rank = _parse_binary_env("TT_LAGUNA_ROUTE_RANK", True)  # 1-token router: rank<K, no topk
+        self._fused_kv_update = _parse_binary_env("TT_LAGUNA_FUSED_KV_UPDATE", True)  # K+V cache in one op
         self._token_dispatch_fallback_reason = "feature flag is disabled"
         # On a 1×1 MeshDevice, TTNN's explicit parallel decode-SDPA program is inaccurate once
         # the cache crosses long/non-aligned boundaries (observed PCC ~= 0 at positions 513/2048).
@@ -1336,9 +1337,14 @@ class MultichipDecoder(OptimizedDecoder):
         else:
             q = self._apply_rope(q, cos, sin)
             k = self._apply_rope(k, cos, sin)
+        fused_kv = self._fused_kv_update and not (sequential_kv_write and B > 1) and B <= 4 * 8
         k_sh = self._shard_kv(k, B)
-        v_sh = self._shard_kv(v, B)
-        if sequential_kv_write and B > 1:
+        v_sh = self._shard_kv(v, B, y0=4 if fused_kv else 0)  # B <= 32 -> K on rows 0-3, V on rows 4-7
+        if fused_kv:  # one op writes K and V (instead of two paged_update_cache)
+            ttnn.experimental.paged_fused_update_cache(
+                kv_cache["k"], k_sh, kv_cache["v"], v_sh, update_idxs_tensor=cur_pos, page_table=page_table
+            )
+        elif sequential_kv_write and B > 1:
             # Spec-decode VERIFY: the B candidate rows share ONE user's blocks; with BLOCK_SIZE==TILE==32
             # consecutive positions land in the same tile, so a batched paged_update_cache RMW-races and
             # corrupts KV. Serialize the tiny per-row writes (matmuls + SDPA above/below still run batched,
