@@ -112,7 +112,7 @@ Wraps `module` in place and returns it. After the call:
 | Parameter | Default | Description |
 |---|---|---|
 | `module` | required | An `AbstractModuleBase` instance (block, root model, etc.). |
-| `shard_dim` | `"auto"` | Tensor dim to shard along, or `"auto"`. Auto picks `rank-2` (the typical "first matmul weight dim" for `[1, 1, O, I]` weights), falls back to `rank-1` if `rank-2` is already taken by another mesh axis (e.g. TP) or has size 1. Parameters whose chosen dim is not divisible by the FSDP axis size are skipped with a warning. |
+| `shard_dim` | `"auto"` | Tensor dim to shard along, or `"auto"`. Auto picks `rank-2` (`O` in `[1, 1, O, I]` weights) or `rank-1`, preferring whole-tile shards and skipping dims of size 1 or already taken by another mesh axis (e.g. TP). Parameters whose chosen dim is not divisible by the FSDP axis size are skipped with a warning. |
 | `mesh_axis` | `"fsdp"` | Name of the mesh axis to shard across. Must exist on the mesh and have size > 1. Kept distinct from `"dp"` so a 2D mesh `("fsdp", "dp")` cleanly supports hybrid sharded data parallel later. |
 | `reshard_after_forward` | `True` | If `True`, weights are resharded between forward and backward to keep peak memory low; the backward-pre callback re-gathers just in time. If `False`, weights stay gathered between forward and backward — cheaper in CCL but uses more memory. |
 | `replicate` | `()` | Regex patterns of parameters to keep replicated instead of sharding, searched for (`re.search`) in each parameter's dotted name relative to `module`. See [Keeping parameters replicated](#keeping-parameters-replicated). |
@@ -381,11 +381,8 @@ In this layout:
 - **`clip_grad_norm`** raises under FSDP for the same reason it raises
   under TP: the per-rank L2 norm isn't the global norm. A
   sharding-aware clip is on the TODO list.
-- **Parameters on the chosen shard dim with size 1** (e.g. RMSNorm
-  `gamma` shaped `[1, 1, 1, F]` with `shard_dim` 2) are skipped
-  with a warning rather than sharded. They stay replicated. For the
-  small norm-style parameters this is the right behavior. If `shard_dim`
-  is set to `auto`, it will try to shard on dim 2, and then dim 3 before skipping.
+- **Parameters with no usable or divisible shard dim** (e.g. a `[1, 1, 1, 1]`
+  scalar) stay replicated, with a warning.
 
 ---
 
