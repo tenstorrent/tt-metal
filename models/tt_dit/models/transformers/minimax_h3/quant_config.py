@@ -31,10 +31,10 @@ apply_fast_recipe_env()
 
 
 def _typecast_parameter(param, dtype) -> None:
-    if param._data is None or param.dtype == dtype:
-        return
-    param._data = ttnn.typecast(param._data, dtype)
-    param.dtype = dtype
+    # The declared dtype stays as cached so a reload after eviction passes the parameter's dtype check; the live
+    # tensor is what gets cast, and the pipeline applies this again after every load.
+    if param._data is not None and param._data.dtype != dtype:
+        param._data = ttnn.typecast(param._data, dtype)
 
 
 def apply_env_quant_config(model) -> None:

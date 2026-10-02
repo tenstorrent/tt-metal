@@ -36,13 +36,13 @@ def program_config(device, **fidelity):
 
 
 def run_sdpa(device, tensors, pc):
-    """HiFi2 compute config on the streaming path; returns the fp32 host copy of the bf16 output."""
+    """HiFi2 compute config on the streaming path, non-causal like the torch reference; fp32 host copy of the output."""
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False
     )
     tq, tk, tv = tensors
     out = ttnn.transformer.scaled_dot_product_attention(
-        tq, tk, tv, program_config=pc, compute_kernel_config=compute_kernel_config
+        tq, tk, tv, is_causal=False, program_config=pc, compute_kernel_config=compute_kernel_config
     )
     return ttnn.to_torch(out).float()
 

@@ -616,7 +616,10 @@ SDPAOperation::create_op_performance_model(
     CoreCoord compute_grid_dims = args.program_config.has_value()
                                       ? args.program_config->compute_with_storage_grid_size
                                       : output_tensor.device()->compute_with_storage_grid_size();
-    tt::tt_metal::MathFidelity math_fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
+    const tt::tt_metal::MathFidelity math_fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
+    const auto& pc = args.program_config;
+    const auto qk_math_fidelity = pc.has_value() ? pc->qk_math_fidelity.value_or(math_fidelity) : math_fidelity;
+    const auto pv_math_fidelity = pc.has_value() ? pc->pv_math_fidelity.value_or(math_fidelity) : math_fidelity;
 
     int ideal_dev_clock_cycles = operations::transformer::sdpa::compute_sdpa_ideal_cycles(
         batch_size,
@@ -626,7 +629,8 @@ SDPAOperation::create_op_performance_model(
         DH,
         DV,
         args.is_causal,
-        math_fidelity,
+        qk_math_fidelity,
+        pv_math_fidelity,
         compute_grid_dims.x * compute_grid_dims.y);
 
     // TODO: somehow account for overhead of fused masking and softmax?
