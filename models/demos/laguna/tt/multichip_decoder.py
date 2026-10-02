@@ -260,6 +260,7 @@ class MultichipDecoder(OptimizedDecoder):
         self.moe_decode_in_l1 = self.moe_decode_l1_bytes <= MOE_DECODE_L1_MAX_BYTES
         self._token_dispatch_requested = _parse_binary_env(TOKEN_DISPATCH_ENV)
         self._token_dispatch_state = None
+        self._ag_reduce = _parse_binary_env("TT_LAGUNA_AG_REDUCE", True)  # decode all-reduce as all_gather+sum
         self._token_dispatch_fallback_reason = "feature flag is disabled"
         # On a 1×1 MeshDevice, TTNN's explicit parallel decode-SDPA program is inaccurate once
         # the cache crosses long/non-aligned boundaries (observed PCC ~= 0 at positions 513/2048).
@@ -302,6 +303,15 @@ class MultichipDecoder(OptimizedDecoder):
         if self.D == 1:
             return x
         ccl = getattr(self.policy, "ccl", ttnn.bfloat16)
+        if self._ag_reduce and len(x.shape) == 4 and x.shape[0] * x.shape[1] == 1 and x.shape[-2] <= TILE:
+            # Decode-sized partial (<= 1 tile row): ONE all_gather of the D partials + a local sum beats the
+            # composite all_reduce's two dependent collectives (reduce_scatter -> all_gather).
+            xin = ttnn.typecast(x, ccl) if x.dtype != ccl else x
+            gathered = ttnn.all_gather(
+                xin, dim=1, cluster_axis=self.tp_axis, topology=self.ccl_topology, num_links=self.num_links
+            )  # [1, D, rows, H]
+            out = ttnn.sum(gathered, dim=1, keepdim=True)
+            return ttnn.typecast(out, ttnn.bfloat16) if out.dtype != ttnn.bfloat16 else out
         if ccl == ttnn.bfloat16:
             return ttnn.all_reduce(x, cluster_axis=self.tp_axis, topology=self.ccl_topology, num_links=self.num_links)
         xin = ttnn.typecast(x, ccl) if x.dtype != ccl else x
