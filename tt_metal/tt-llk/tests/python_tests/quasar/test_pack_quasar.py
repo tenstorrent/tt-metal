@@ -274,8 +274,7 @@ def test_pack_quasar(
         # pack_src instead and apply the single output MX quantization ourselves
         # after relu. Signed integer -> UInt8 outputs also route through pack_src and
         # apply the UInt8 conversion after relu, which runs before the packer format
-        # conversion. Other outputs
-        # keep the existing path (saturate_integer etc.).
+        # conversion.
 
         generate_golden = get_golden_generator(DataCopyGolden)
         signed_integer_to_uint8 = (
@@ -317,9 +316,7 @@ def test_pack_quasar(
         )
 
         if signed_integer_to_uint8:
-            golden_tensor = saturate_integer(
-                golden_tensor, DataFormat.UInt8, format_dict[DataFormat.UInt8]
-            )
+            golden_tensor = saturate_integer(golden_tensor, formats.output_format)
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
