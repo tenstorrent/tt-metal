@@ -1869,7 +1869,7 @@ class ModelArgs:
                     untilize_out=True,
                 )
             else:
-                return self.dram_matmul_config(
+                _qkv_cfg = self.dram_matmul_config(
                     m=self.tile_padded_batch_rows,
                     k=self.dim,
                     n=self.qkv_size // self.num_devices,
@@ -1886,6 +1886,14 @@ class ModelArgs:
                             TensorGroup.WQKV, self.qkv_size // self.num_devices
                         )
                     ),
+                )
+                # QKV decode: in0_block_w 8 measured slower than 4 (more trisc time); try the smaller K block 2.
+                return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                    in0_block_w=2,
+                    per_core_M=_qkv_cfg.per_core_M,
+                    per_core_N=_qkv_cfg.per_core_N,
+                    fused_activation=_qkv_cfg.fused_activation,
+                    num_workers_per_dram_bank=_qkv_cfg.num_workers_per_dram_bank,
                 )
         elif mode == Mode.PREFILL:
             self.MAX_QKV_MM_SEQ_LEN = 2048
