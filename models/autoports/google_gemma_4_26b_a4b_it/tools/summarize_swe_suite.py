@@ -112,6 +112,9 @@ def summarize(root):
             reasoning_history_interventions=sum(
                 event["event"] == "reasoning_history_limited" for event in trial_events
             ),
+            submission_review_checkpoints=sum(
+                event["event"] == "submission_review_requested" for event in trial_events
+            ),
         )
         verifier = path.parent.parent / "verifier/report.json"
         if verifier.exists():

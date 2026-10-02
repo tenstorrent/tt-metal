@@ -5,6 +5,7 @@
 
 import argparse
 import copy
+import hashlib
 import json
 import logging
 import sys
@@ -26,6 +27,9 @@ def main():
     parser.add_argument("--disable-thinking", action="store_true", help="Separate, explicit agent-policy experiment")
     parser.add_argument("--agent-system-template", type=Path, help="Explicit task-independent agent-policy control")
     parser.add_argument("--repeated-tool-feedback", action="store_true", help="Audited exact-repeat advisory control")
+    parser.add_argument(
+        "--submission-review-once", action="store_true", help="Explicit one-time read-only submission review gate"
+    )
     parser.add_argument(
         "--reasoning-history-limit",
         type=int,
@@ -77,8 +81,34 @@ def main():
         normalize_submission_marker=args.normalize_submission_marker,
         repeated_tool_feedback=args.repeated_tool_feedback,
         reasoning_history_limit=args.reasoning_history_limit,
+        submission_review_once=args.submission_review_once,
         agent_env={"OPENAI_API_KEY": "local-diagnostic"},
         venv_python=args.harbor_python,
+    )
+    args.output.mkdir(parents=True, exist_ok=True)
+    (args.output / "probe_policy.json").write_text(
+        json.dumps(
+            {
+                "scope": "local capped diagnostic; not a release topology measurement",
+                "task": args.task,
+                "agent_timeout_sec": args.seconds,
+                "request_seed_override": args.request_seed,
+                "disable_thinking": args.disable_thinking,
+                "normalize_submission_marker": args.normalize_submission_marker,
+                "repeated_tool_feedback": args.repeated_tool_feedback,
+                "reasoning_history_limit": args.reasoning_history_limit,
+                "submission_review_once": args.submission_review_once,
+                "repetition_detection_override": args.repetition_detection,
+                "source_config_sha256": hashlib.sha256(args.source_config.read_bytes()).hexdigest(),
+                "system_template_override_sha256": (
+                    hashlib.sha256(args.agent_system_template.read_bytes()).hexdigest()
+                    if args.agent_system_template
+                    else None
+                ),
+            },
+            indent=2,
+        )
+        + "\n"
     )
     for attempt in range(120):
         try:
