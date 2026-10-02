@@ -11,7 +11,7 @@
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 
 #include <internal/disaggregation/kv_chunk_address_table.hpp>
-#include <internal/disaggregation/kv_layout_spec.hpp>
+#include <internal/disaggregation/cache_tensor_layout_spec.hpp>
 
 namespace tt::tt_metal::internal::disaggregation {
 
