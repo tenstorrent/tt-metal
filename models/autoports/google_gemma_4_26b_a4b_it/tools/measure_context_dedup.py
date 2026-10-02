@@ -14,7 +14,7 @@ import json
 import sys
 from pathlib import Path
 
-from probe_context_dedup import compact
+from probe_context_dedup import compact, compact_warning_blocks
 from probe_native_eval_action import request_messages
 from replay_eval_requests import TOOLS
 
@@ -43,6 +43,7 @@ def common_prefix_blocks(previous, current, block=32):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--mode", choices=("full_output", "warnings"), default="full_output")
     args = parser.parse_args()
     from transformers import AutoTokenizer
 
@@ -63,6 +64,7 @@ def main():
     report = {
         "scope": "offline token opportunity, not latency or reward improvement",
         "revision": revision,
+        "compaction_mode": args.mode,
         "trials": [],
     }
     for item in json.load(sys.stdin):
@@ -75,7 +77,7 @@ def main():
             if message["role"] != "assistant" or not usage:
                 continue
             original = messages[:index]
-            candidate, changes = compact(original)
+            candidate, changes = (compact if args.mode == "full_output" else compact_warning_blocks)(original)
             tokens = encode(original)
             before = len(tokens)
             after = len(encode(candidate)) if changes else before

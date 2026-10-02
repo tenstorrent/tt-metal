@@ -64,6 +64,10 @@ review never triggers, so no policy benefit is established. A separately
 declared temperature-zero control is prepared to test long stochastic detours;
 the actual serial five-task CI remains unchanged and monitored. See the suite
 log for provenance and limitations.
+The greedy control also fails (900.030-second timeout, reward0). It repeats
+searches for deleted source and emits a source-edit command after the deadline;
+Harbor cancellation cleanup is now under investigation as a verifier-race risk.
+No rejected local policy is promoted to the running combined baseline.
 The [precision audit](AUTODEBUG.md) confirms fresh BFP8 weight provenance but
 identifies unchanged prefill BFP4 and untested long-context numerical quality;
 it does not establish a cache/position bug.

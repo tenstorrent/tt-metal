@@ -546,6 +546,15 @@ version differences between local/CI environments, so same-seed cross-machine
 trajectories are not treated as paired controls. The local greedy Sympy probe
 is bounded and ongoing. Resumed active time~238min, cumulative~8h51m.
 
+09:42 UTC: greedy Sympy fails (900.030s timeout/reported reward0), so it is not
+promoted. A source-edit response9.649s after deadline overlaps verification:
+outcome evidence is flagged potentially race-contaminated. Harbor's Docker
+client cancellation does not guarantee stopping the in-container agent; owned
+process cleanup is under investigation, not yet changed. Warning-block dedup
+saves only1.027–2.966% input and stays offline;21 host helper tests pass.
+Combined CI remains unchanged, active and monitored. Resumed active time~251min,
+cumulative~9h04m; no image build, device reset or new user intervention.
+
 - TTFT: `doc/ttft_optimization/`.
 - Remote benchmarks/evals:
   `readiness_vllm/ttft_optimization_remote/README.md`.
