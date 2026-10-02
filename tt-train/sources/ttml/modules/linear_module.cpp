@@ -5,6 +5,7 @@
 #include "linear_module.hpp"
 
 #include <cmath>
+#include <stdexcept>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
@@ -16,6 +17,39 @@
 namespace ttml::modules {
 
 namespace {
+void validate_weight_shape(const ttnn::Shape& weight_shape) {
+    if (weight_shape.rank() < 2U || weight_shape.rank() > 4U) {
+        throw std::runtime_error("LinearLayer expects weight rank 2 through 4 with singleton leading dimensions.");
+    }
+    for (uint32_t dim = 0; dim < weight_shape.rank() - 2U; ++dim) {
+        if (weight_shape[dim] != 1U) {
+            throw std::runtime_error("LinearLayer expects weight to have singleton leading dimensions.");
+        }
+    }
+}
+
+void validate_parameter_shapes(const autograd::TensorPtr& weight, const autograd::TensorPtr& bias = nullptr) {
+    const auto& weight_shape = weight->get_value().logical_shape();
+    validate_weight_shape(weight_shape);
+
+    if (bias == nullptr) {
+        return;
+    }
+
+    const auto& bias_shape = bias->get_value().logical_shape();
+    if (bias_shape.rank() < 1U || bias_shape.rank() > 4U) {
+        throw std::runtime_error("LinearLayer expects bias rank 1 through 4 with singleton leading dimensions.");
+    }
+    for (uint32_t dim = 0; dim < bias_shape.rank() - 1U; ++dim) {
+        if (bias_shape[dim] != 1U) {
+            throw std::runtime_error("LinearLayer expects bias to have singleton leading dimensions.");
+        }
+    }
+    if (bias_shape[-1] != weight_shape[-2]) {
+        throw std::runtime_error("LinearLayer expects bias[-1] to match weight[-2].");
+    }
+}
+
 ttml::autograd::TensorPtr create_weight(uint32_t in_features, uint32_t out_features) {
     auto weight_shape = ttnn::Shape({1, 1, out_features, in_features});
     auto weight = ttml::autograd::create_tensor();
@@ -49,10 +83,11 @@ LinearLayer::LinearLayer(uint32_t in_features, uint32_t out_features, bool has_b
 }
 
 LinearLayer::LinearLayer(const autograd::TensorPtr& weight, bool has_bias) : m_weight(weight) {
+    validate_parameter_shapes(m_weight);
     if (has_bias) {
-        auto weight_shape = m_weight->get_value().logical_shape();
-        uint32_t in_features = weight_shape[3];
-        uint32_t out_features = weight_shape[2];
+        const auto& weight_shape = m_weight->get_value().logical_shape();
+        uint32_t in_features = weight_shape[-1];
+        uint32_t out_features = weight_shape[-2];
         m_bias = create_bias(in_features, out_features);
     }
     register_tensors();
@@ -60,6 +95,7 @@ LinearLayer::LinearLayer(const autograd::TensorPtr& weight, bool has_bias) : m_w
 
 LinearLayer::LinearLayer(const autograd::TensorPtr& weight, const autograd::TensorPtr& bias) :
     m_weight(weight), m_bias(bias) {
+    validate_parameter_shapes(m_weight, m_bias);
     register_tensors();
 }
 

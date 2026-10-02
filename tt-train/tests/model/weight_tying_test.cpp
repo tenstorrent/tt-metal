@@ -5,6 +5,9 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <stdexcept>
+#include <string>
+#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "core/system_utils.hpp"
@@ -15,6 +18,7 @@
 #include "ops/losses.hpp"
 #include "ops/unary_ops.hpp"
 #include "optimizers/adamw.hpp"
+#include "tt-metalium/bfloat16.hpp"
 
 class ModelFC : public ttml::modules::ModuleBase {
     std::shared_ptr<ttml::modules::LinearLayer> m_fc1;
@@ -73,6 +77,75 @@ protected:
         ttml::autograd::ctx().close_device();
     }
 };
+
+namespace {
+
+ttml::autograd::TensorPtr make_host_tensor(const ttnn::Shape& shape) {
+    const auto spec = tt::tt_metal::TensorSpec(
+        shape,
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::MemoryConfig{}));
+    return ttml::autograd::create_tensor(
+        ttnn::Tensor::from_vector(std::vector<bfloat16>(shape.volume(), bfloat16{0.0F}), spec));
+}
+
+void expect_constructor_error(
+    const ttnn::Shape& weight_shape, const ttml::autograd::TensorPtr& bias, const std::string& expected_message) {
+    auto weight = make_host_tensor(weight_shape);
+    try {
+        if (bias == nullptr) {
+            (void)ttml::modules::LinearLayer(weight, /* has_bias */ false);
+        } else {
+            (void)ttml::modules::LinearLayer(weight, bias);
+        }
+        FAIL() << "LinearLayer accepted unsupported parameter shapes";
+    } catch (const std::runtime_error& error) {
+        EXPECT_NE(std::string(error.what()).find(expected_message), std::string::npos) << error.what();
+    }
+}
+
+}  // namespace
+
+TEST(LinearLayerConstructorTest, RejectsMalformedInjectedParametersBeforeDeviceInitialization) {
+    expect_constructor_error(ttnn::Shape({32}), nullptr, "weight rank 2 through 4");
+    expect_constructor_error(ttnn::Shape({1, 1, 1, 64, 32}), nullptr, "weight rank 2 through 4");
+    expect_constructor_error(ttnn::Shape({2, 64, 32}), nullptr, "weight to have singleton leading dimensions");
+    expect_constructor_error(ttnn::Shape({1, 2, 64, 32}), nullptr, "weight to have singleton leading dimensions");
+
+    expect_constructor_error(
+        ttnn::Shape({64, 32}), make_host_tensor(ttnn::Shape({2, 64})), "bias to have singleton leading dimensions");
+    expect_constructor_error(
+        ttnn::Shape({64, 32}), make_host_tensor(ttnn::Shape({32})), "bias[-1] to match weight[-2]");
+}
+
+TEST_F(WeightTyingTest, InfersBiasFromTrailingDimensionsOfCompactInjectedWeights) {
+    constexpr uint32_t in_features = 32U;
+    constexpr uint32_t out_features = 64U;
+    const std::vector<ttnn::Shape> weight_shapes = {
+        ttnn::Shape({out_features, in_features}),
+        ttnn::Shape({1, out_features, in_features}),
+        ttnn::Shape({1, 1, out_features, in_features})};
+
+    for (const auto& weight_shape : weight_shapes) {
+        auto weight = ttml::autograd::create_tensor();
+        ttml::init::uniform_init(weight, weight_shape, ttml::init::UniformRange{-0.1F, 0.1F});
+        auto layer = ttml::modules::LinearLayer(weight, /* has_bias */ true);
+
+        ttml::autograd::TensorPtr bias;
+        for (const auto& named_parameter : layer.parameters()) {
+            if (named_parameter.second != weight) {
+                bias = named_parameter.second;
+            }
+        }
+        ASSERT_NE(bias, nullptr);
+        EXPECT_EQ(bias->get_value().logical_shape(), ttnn::Shape({1, 1, 1, out_features}));
+
+        auto input = ttml::autograd::create_tensor();
+        ttml::init::uniform_init(input, ttnn::Shape({2, 1, 32, in_features}), ttml::init::UniformRange{-0.1F, 0.1F});
+        auto output = layer(input);
+        EXPECT_EQ(output->get_value().logical_shape(), ttnn::Shape({2, 1, 32, out_features}));
+    }
+}
 
 TEST_F(WeightTyingTest, ModelFC) {
     auto model = ModelFC();
