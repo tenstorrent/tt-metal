@@ -197,15 +197,68 @@ ALL_TEST_PARAMS = list(
 )
 
 
+# Experiment (bistability repro, not for merge): tiny configs only.
+def _repro_tiny(_p):
+    _f, _c, _thr, _nb = _p
+    _td, _fl = _c.tile_dimensions, _c.face_layout_config
+    return (
+        _td.rt_dim == 1 and _td.ct_dim == 1 and _td.kt_dim == 1 and _nb == 1
+        and _thr == 0 and _fl.num_faces == 4 and not _fl.partial_face_math
+        and not _fl.partial_face_in0 and _td.in0_tile_r_dim == 32
+        and not _fl.unpack_transpose_faces.value
+    )
+
+
+ALL_TEST_PARAMS = [_p for _p in ALL_TEST_PARAMS if _repro_tiny(_p) and (str(_p[0]).endswith('LoFi') and _p[1].dest_acc == DestAccumulation.No and _p[1].stochastic_rnd == StochasticRounding.No and (_p[1].formats.input_format.name, _p[1].formats.output_format.name) in (('Float16', 'Float16'), ('Bfp8_b', 'Bfp8_b')))]
+
+
+from dataclasses import dataclass as _dataclass
+
+from helpers.test_variant_parameters import TemplateParameter as _TemplateParameter
+
+
+@_dataclass
+class REPRO_KNOB(_TemplateParameter):
+    repro_pad: int = 0
+    repro_delay: int = 0
+    repro_tail: int = 0
+    repro_tail_u: int = 0
+    repro_tail_m: int = 0
+    repro_tail_ma: int = 0
+    repro_inj: int = 0
+    repro_inj_at: int = 0
+    repro_reset: int = 0
+    repro_unp_at: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr int REPRO_PAD = {self.repro_pad};\n"
+            f"constexpr int REPRO_DELAY = {self.repro_delay};\n"
+            f"constexpr int REPRO_TAIL = {self.repro_tail};\n"
+            f"constexpr int REPRO_TAIL_U = {self.repro_tail_u};\n"
+            f"constexpr int REPRO_TAIL_M = {self.repro_tail_m};\n"
+            f"constexpr int REPRO_TAIL_MA = {self.repro_tail_ma};\n"
+            f"constexpr int REPRO_INJ = {self.repro_inj};\n"
+            f"constexpr int REPRO_INJ_AT = {self.repro_inj_at};\n"
+            f"constexpr int REPRO_RESET = {self.repro_reset};\n"
+            f"constexpr int REPRO_UNP_AT = {self.repro_unp_at};"
+        )
+
+
+REPRO_KNOBS = [(2, 0, 0, 20000, 20000, 0, 0, 0, 0, 0), (2, 0, 0, 20000, 20000, 0, 0, 0, 1, 0), (2, 0, 0, 20000, 20000, 0, 0, 0, 2, 0), (2, 0, 0, 20000, 0, 0, 12, 100, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 100, 1, 0), (2, 0, 0, 20000, 0, 0, 12, 100, 2, 0), (2, 0, 0, 0, 0, 0, 0, 0, 0, 0), (2, 0, 0, 0, 0, 0, 0, 0, 1, 0), (2, 0, 0, 0, 0, 0, 0, 0, 2, 0), (0, 0, 0, 20000, 20000, 0, 0, 0, 0, 0), (0, 0, 0, 20000, 20000, 0, 0, 0, 1, 0), (0, 0, 0, 20000, 20000, 0, 0, 0, 2, 0), (2, 0, 0, 20000, 20000, 0, 0, 0, 0, 50), (2, 0, 0, 20000, 20000, 0, 0, 0, 0, 100), (2, 0, 0, 20000, 20000, 0, 0, 0, 0, 200), (2, 0, 0, 20000, 20000, 0, 0, 0, 0, 400), (0, 0, 0, 20000, 20000, 0, 0, 0, 0, 0), (1, 0, 0, 20000, 20000, 0, 0, 0, 0, 0), (3, 0, 0, 20000, 20000, 0, 0, 0, 0, 0), (4, 0, 0, 20000, 20000, 0, 0, 0, 0, 0), (5, 0, 0, 20000, 20000, 0, 0, 0, 0, 0), (6, 0, 0, 20000, 20000, 0, 0, 0, 0, 0), (7, 0, 0, 20000, 20000, 0, 0, 0, 0, 0), (8, 0, 0, 20000, 20000, 0, 0, 0, 0, 0), (9, 0, 0, 20000, 20000, 0, 0, 0, 0, 0), (10, 0, 0, 20000, 20000, 0, 0, 0, 0, 0), (11, 0, 0, 20000, 20000, 0, 0, 0, 0, 0), (12, 0, 0, 20000, 20000, 0, 0, 0, 0, 0), (13, 0, 0, 20000, 20000, 0, 0, 0, 0, 0), (14, 0, 0, 20000, 20000, 0, 0, 0, 0, 0), (15, 0, 0, 20000, 20000, 0, 0, 0, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 125, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 150, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 175, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 200, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 225, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 250, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 275, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 300, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 325, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 350, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 375, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 400, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 425, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 450, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 475, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 500, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 525, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 550, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 575, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 600, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 625, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 650, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 675, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 700, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 725, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 750, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 775, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 800, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 825, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 850, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 875, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 900, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 925, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 950, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 975, 0, 0), (2, 0, 0, 20000, 0, 0, 12, 1000, 0, 0)]
+
+
 @pytest.mark.perf
 @pytest.mark.parametrize(
     "math_fidelity,matmul_config,throttle,num_blocks", ALL_TEST_PARAMS
 )
+@pytest.mark.parametrize("repro_knob", REPRO_KNOBS)
 def test_perf_math_matmul(
     math_fidelity,
     matmul_config,
     throttle,
     num_blocks,
+    repro_knob,
     perf_report,
 ):
     """
@@ -256,6 +309,7 @@ def test_perf_math_matmul(
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(matmul_config.dest_sync),
             THROTTLE_LEVEL(throttle),
+            REPRO_KNOB(*repro_knob),
         ],
         runtimes=[
             DEST_INDEX(matmul_config.dst_index),
