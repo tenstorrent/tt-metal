@@ -22,7 +22,7 @@ except ModuleNotFoundError:  # pragma: no cover - handled in load_config
     yaml = None
 
 
-SIGNATURE_VERSION = "runner-failure-signatures-2026-08-17-v1"
+SIGNATURE_VERSION = "runner-failure-signatures-2026-09-21-v1"
 UNKNOWN_RUNNER = "(unknown runner)"
 
 OSC_SEQUENCE_RE = re.compile(r"\x1b\].*?\x1b\\")
@@ -152,6 +152,12 @@ ERROR_SIGNATURES = (
         key="PHYSICAL_CHIP_NOT_FOUND",
         label="Physical chip not found",
         pattern=r"Physical\s+chip\s+id\s+\d+\s+(?:is\s+)?not\s+found\s+in\s+(?:the\s+)?control\s+plane\s+chip\s+mapping",
+        case_sensitive=False,
+    ),
+    ErrorSignature(
+        key="ETH_HEARTBEAT_TIMEOUT_FOUND",
+        label="ETH heartbeat timeout",
+        pattern=r"Timed\s+out\s+waiting\s+for\s+(?:an?\s+)?ETH(?:\s+core)?\s+heartbeat",
         case_sensitive=False,
     ),
     ErrorSignature(
@@ -539,7 +545,8 @@ def extract_fabric_missing_links(log_text: str) -> str:
 
 
 def matching_signature_labels(log_text: str) -> list[str]:
-    return [signature.label for signature in ERROR_SIGNATURES if signature_found(log_text, signature)]
+    plain_log_text = strip_terminal_sequences(log_text)
+    return [signature.label for signature in ERROR_SIGNATURES if signature_found(plain_log_text, signature)]
 
 
 def setup_runner_step_failed(job: RecentJob) -> bool:
@@ -561,8 +568,10 @@ def combine_signature_labels(*label_groups: list[str]) -> list[str]:
 def fetch_github_job_log(job: RecentJob, timeout: int) -> LogLookupResult:
     endpoint = f"repos/{job.owner_repo}/actions/jobs/{job.job_id}/logs"
     try:
+        # Logs stay in captured memory for signature matching and are never printed
+        # verbatim, so embedded terminal formatting cannot control this process's terminal.
         result = subprocess.run(
-            ["gh", "api", endpoint],
+            ["gh", "api", "--allow-escape-sequences", endpoint],
             capture_output=True,
             text=True,
             encoding="utf-8",

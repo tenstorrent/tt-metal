@@ -10,7 +10,7 @@
 namespace ttnn::experimental::prim {
 
 struct SendAsyncD2HSharedVariables {
-    tt::tt_metal::CoreCoord sender_core_coord{};
+    tt::tt_metal::CoreCoord sender_core_coord;
     tt::tt_metal::KernelHandle reader_kernel_id{};
 };
 

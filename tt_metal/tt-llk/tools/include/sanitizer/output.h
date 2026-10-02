@@ -24,7 +24,7 @@ namespace detail
  *
  * @param trigger
  */
-inline string trigger_name(const Trigger trigger)
+SAN_FUNC inline string trigger_name(const Trigger trigger)
 {
     switch (trigger)
     {
@@ -51,7 +51,7 @@ inline string trigger_name(const Trigger trigger)
  *
  * @param api
  */
-inline string api_class_name(const ApiClass api)
+SAN_FUNC inline string api_class_name(const ApiClass api)
 {
     switch (api)
     {
@@ -78,7 +78,7 @@ inline string api_class_name(const ApiClass api)
  *
  * @param status
  */
-inline string operation_status_name(const OperationStatus status)
+SAN_FUNC inline string operation_status_name(const OperationStatus status)
 {
     switch (status)
     {
@@ -99,7 +99,7 @@ inline string operation_status_name(const OperationStatus status)
  *
  * FULL_KERNEL_NAME comes from the build; where the build does not supply it, it reads <unknown>.
  */
-inline void print_full_kernel()
+SAN_FUNC inline void print_full_kernel()
 {
     SAN_PRINT(
         "│\r"
@@ -113,7 +113,7 @@ inline void print_full_kernel()
  *
  * @param context UnwindContext to unwind from.
  */
-inline void print_compute_info(const UnwindContext context)
+SAN_FUNC inline void print_compute_info(const UnwindContext context)
 {
     // Expected stack layout
     // [0] detail::unwind_context_read
@@ -130,7 +130,7 @@ inline void print_compute_info(const UnwindContext context)
  * @tparam F The field being named.
  */
 template <typename F>
-inline void print_field()
+SAN_FUNC inline void print_field()
 {
     SAN_PRINT(
         "│\r"
@@ -145,7 +145,7 @@ inline void print_field()
  * @tparam F The field.
  */
 template <typename F>
-inline string field_mismatch_text()
+SAN_FUNC inline string field_mismatch_text()
 {
     if constexpr (is_operation_v<field_group_t<F>>)
     {
@@ -170,7 +170,7 @@ inline string field_mismatch_text()
  * @param current Where the hook was called from.
  */
 template <Trigger L, ApiClass A, typename S, typename F>
-inline void field_assert(const S& expected, const StateVal<F>& provided, const UnwindContext update, const UnwindContext current)
+SAN_FUNC inline void field_assert(const S& expected, const StateVal<F>& provided, const UnwindContext update, const UnwindContext current)
 {
     if (!enabled_trigger(L) || expected.equal(provided))
     {
@@ -230,7 +230,7 @@ inline void field_assert(const S& expected, const StateVal<F>& provided, const U
  * @return Whether the Operation is seated
  */
 template <Trigger L, ApiClass A, Exu E, typename R>
-inline bool operation_seated_assert(const ExuState<E>& exu, const R* record)
+SAN_FUNC inline bool operation_seated_assert(const ExuState<E>& exu, const R* record)
 {
     const bool seated = record != nullptr;
 
@@ -281,7 +281,7 @@ inline bool operation_seated_assert(const ExuState<E>& exu, const R* record)
  * @param current Where the hook found the change.
  */
 template <Trigger L, ApiClass A>
-inline void snapshot_assert(const bool subset, const UnwindContext update, const UnwindContext current)
+SAN_FUNC inline void snapshot_assert(const bool subset, const UnwindContext update, const UnwindContext current)
 {
     if (!enabled_trigger(L) || subset)
     {
@@ -323,7 +323,7 @@ inline void snapshot_assert(const bool subset, const UnwindContext update, const
  * @param message What the sanitizer expected of itself.
  * @param current Where it broke.
  */
-inline void fault_assert(const bool holds, const string message, const UnwindContext current)
+SAN_FUNC inline void fault_assert(const bool holds, const string message, const UnwindContext current)
 {
     if (!enabled_trigger(Trigger::FAULT) || holds)
     {

@@ -151,9 +151,7 @@ inline void calculate_lgamma_adjusted(
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         } else {
-            sfpi::vInt exp = sfpi::exexp(in);
-            sfpi::vInt man = sfpi::exman(in);
-            v_if(exp == 128 && man == 0) { result = std::numeric_limits<float>::infinity(); }
+            v_if(sfpi::is_inf(in)) { result = std::numeric_limits<float>::infinity(); }
             v_endif;
         }
 
@@ -165,7 +163,7 @@ inline void calculate_lgamma_adjusted(
 template <bool APPROXIMATION_MODE>
 void lgamma_stirling_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    recip_init<APPROXIMATION_MODE, false, false>();
+    recip_init<APPROXIMATION_MODE, false>();
 }
 
 }  // namespace ckernel::sfpu

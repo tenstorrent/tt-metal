@@ -29,16 +29,13 @@ TP axis and its only caller uses it for per-head attention sinks, which Llama do
 from loguru import logger
 
 import ttnn
-
-# The single configuration targeted on hardware (Blackhole Galaxy): (4,8), TP=8 -> SP=4.
-_VALIDATED_MESH_SHAPE = (4, 8)
-_VALIDATED_TP = 8
+from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PREFILL_LAYOUT as layout
 
 
 class MeshConfig:
     """Prefill mesh parallelization. TP is the only knob; SP follows from the mesh shape."""
 
-    def __init__(self, mesh_shape, tp, tp_axis: int = 1):
+    def __init__(self, mesh_shape, tp, tp_axis: int = layout.tp_axis):
         """
         Args:
             mesh_shape: (rows, cols) - any mesh size
@@ -73,10 +70,10 @@ class MeshConfig:
                 f"TP({self.tp}) must equal mesh_{self.tp_axis}_size({tp_dim_size}); "
                 f"sub-axis TP is unsupported (shard_mapper shards the full axis)."
             )
-        if (self.mesh_shape, self.tp) != (_VALIDATED_MESH_SHAPE, _VALIDATED_TP):
+        if (self.mesh_shape, self.tp) != (layout.mesh_shape, layout.tp):
             logger.warning(
                 f"MeshConfig(mesh_shape={self.mesh_shape}, tp={self.tp}) is untested; only "
-                f"mesh_shape={_VALIDATED_MESH_SHAPE}, tp={_VALIDATED_TP} (SP=4) is the Llama-3.1-8B target."
+                f"mesh_shape={layout.mesh_shape}, tp={layout.tp} (SP=4) is the Llama-3.1-8B target."
             )
 
     @property

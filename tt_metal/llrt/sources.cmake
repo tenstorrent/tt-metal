@@ -4,10 +4,10 @@ set(LLRT_SRC
     dispatch_engine_cores.cpp
     firmware_capability.cpp
     rtoptions.cpp
-    tlb_config.cpp
     tt_cluster.cpp
     tt_elffile.cpp
     tt_memory.cpp
+    zone_meta.cpp
     hal.cpp
     tunnels_from_mmio_device.cpp
     metal_soc_descriptor.cpp

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <cstddef>
 #include <vector>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -87,7 +88,8 @@ FabricMuxConfig::FabricMuxConfig(
     uint8_t num_buffers_header_only_channel,
     size_t buffer_size_bytes_full_size_channel,
     size_t base_l1_address,
-    CoreType core_type) :
+    CoreType core_type,
+    size_t usable_l1_end_address) :
     core_type_(core_type),
     num_full_size_channels_(num_full_size_channels),
     num_header_only_channels_(num_header_only_channels),
@@ -177,15 +179,22 @@ FabricMuxConfig::FabricMuxConfig(
     }
 
     core_type_index_ = hal.get_programmable_core_type_index(hal_core_type);
-    auto l1_end_address = hal.get_dev_addr(hal_core_type, tt_metal::HalL1MemAddrType::BASE) +
-                          hal.get_dev_size(hal_core_type, tt_metal::HalL1MemAddrType::BASE);
+    const auto physical_l1_end_address = hal.get_dev_addr(hal_core_type, tt_metal::HalL1MemAddrType::BASE) +
+                                         hal.get_dev_size(hal_core_type, tt_metal::HalL1MemAddrType::BASE);
+
+    // A caller-supplied ceiling only ever tightens the bound; it can never license the map to run past
+    // the physical end of L1.
+    const auto l1_end_address = usable_l1_end_address == 0
+                                    ? physical_l1_end_address
+                                    : std::min<size_t>(usable_l1_end_address, physical_l1_end_address);
 
     // The memory map ends at the end of the last region (header-only channels)
     TT_FATAL(
         memory_map_end_address_ <= l1_end_address,
-        "Memory map end address: {} is greater than L1 end address: {}",
+        "Memory map end address: {} is greater than L1 end address: {} (physical L1 end: {})",
         memory_map_end_address_,
-        l1_end_address);
+        l1_end_address,
+        physical_l1_end_address);
 }
 
 std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_main_args(

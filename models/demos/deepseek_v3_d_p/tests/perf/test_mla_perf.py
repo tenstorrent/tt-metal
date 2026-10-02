@@ -13,7 +13,7 @@ from models.demos.deepseek_v3_d_p.utils.perf_utils import (
 )
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 
-# Kimi K2.6 chunked prefill: 50k cache + one 5k chunk. The 50k prefix is preloaded before the
+# Kimi K2.7 chunked prefill: 50k cache + one 5k chunk. The 50k prefix is preloaded before the
 # MLA_START signpost, so only the single forward is timed.
 _CHUNKED_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill"
 _CMD_CHUNKED_8X4 = (
@@ -54,7 +54,7 @@ _CMD_K3_CHUNKED_8X4 = (
 @_REQUIRE_HIGH_POWER
 @pytest.mark.timeout(0)
 def test_kimi_mla_chunked_perf_galaxy():
-    """Kimi K2.6 chunked-prefill MLA perf on the 8x4 Galaxy: 50k KV-cache prefix + one fresh 5k chunk
+    """Kimi K2.7 chunked-prefill MLA perf on the 8x4 Galaxy: 50k KV-cache prefix + one fresh 5k chunk
     (640 tokens/chip). Functional (no reference), so the single timed forward exercises the chunked
     640 matmul/SDPA configs end to end. Ground-truth 8x4 measurement (no 2x4 approximation)."""
     if not _is_galaxy_env():

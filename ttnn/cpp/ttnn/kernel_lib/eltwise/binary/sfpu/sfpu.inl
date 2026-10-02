@@ -28,6 +28,7 @@
 #include "api/compute/lcm.h"
 #include "api/compute/xlogy.h"
 #include "api/compute/atan2.h"
+#include "api/compute/nextafter.h"
 #endif
 
 namespace compute_kernel_lib {
@@ -321,6 +322,24 @@ struct Atan2Binary : BinaryOp<Atan2Binary<In0, In1, Out>, In0, In1, Out> {
     static ALWI void init() { atan2_binary_tile_init(); }
     static ALWI void exec_impl(uint32_t slot_offset) {
         atan2_binary_tile(to_u32(In0) + slot_offset, to_u32(In1) + slot_offset, to_u32(Out) + slot_offset);
+    }
+};
+
+template <Dst In0, Dst In1, Dst Out>
+struct NextafterBinary : BinaryOp<NextafterBinary<In0, In1, Out>, In0, In1, Out> {
+    static ALWI void init() { nextafter_binary_tile_init(); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        nextafter_binary_tile(to_u32(In0) + slot_offset, to_u32(In1) + slot_offset, to_u32(Out) + slot_offset);
+    }
+};
+
+// One ULP of bfloat16 is a wider step in the fp32 dest register than one ULP of float32, so the two
+// destinations cannot share an entry point.
+template <Dst In0, Dst In1, Dst Out>
+struct NextafterBf16Binary : BinaryOp<NextafterBf16Binary<In0, In1, Out>, In0, In1, Out> {
+    static ALWI void init() { nextafter_bf16_binary_tile_init(); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        nextafter_bf16_binary_tile(to_u32(In0) + slot_offset, to_u32(In1) + slot_offset, to_u32(Out) + slot_offset);
     }
 };
 

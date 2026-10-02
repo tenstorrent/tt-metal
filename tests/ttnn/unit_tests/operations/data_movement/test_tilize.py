@@ -12,7 +12,7 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
 from tests.ttnn.utils_for_testing import assert_equal, assert_allclose, assert_with_pcc, assert_with_ulp
-from models.common.utility_functions import skip_for_slow_dispatch, run_for_blackhole, skip_for_wormhole_b0
+from models.common.utility_functions import skip_for_slow_dispatch, run_for_blackhole
 
 shapes = [[[1, 1, 32, 32]], [[3, 1, 320, 384]], [[1, 1, 128, 7328]]]
 
@@ -1057,7 +1057,6 @@ def test_tilize_row_major_to_tiny_tile(device, tensor_shape, shard_layout, tile_
     assert_equal(torch_input, ttnn.to_torch(tt_output))
 
 
-@skip_for_wormhole_b0("LLK for tiny tiles not fully supported on Wormhole B0")
 @pytest.mark.parametrize(
     "tensor_shape, shard_layout",
     [
@@ -1066,6 +1065,7 @@ def test_tilize_row_major_to_tiny_tile(device, tensor_shape, shard_layout, tile_
         ([1, 1, 64, 256], None),
         ([1, 1, 64, 128], None),
         ([1, 1, 16, 128], None),
+        ([1, 1, 8, 128], None),
         # Sharded input/output (invokes the sharded retile factory).
         ([1, 1, 32, 1024], ttnn.TensorMemoryLayout.WIDTH_SHARDED),
         ([1, 1, 1024, 32], ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
@@ -1155,7 +1155,6 @@ def test_tilize_retile_sub_core_grids(device, tensor_shape, grid_ranges):
 # The packer destination format must be reconfigured to match the output CB before
 # the tilize phase; without it the dtype conversion is silently skipped and the
 # output tensor carries data in the wrong format.
-@skip_for_wormhole_b0("LLK for tiny tiles not fully supported on Wormhole B0")
 @pytest.mark.parametrize(
     "in_dtype, out_dtype, min_pcc",
     [
@@ -1263,9 +1262,10 @@ def test_tilize_block_two_pair_program_cache_addr_change(device, tensor_shape):
 
 # Blackhole sends non-sharded uint8 tilize to the block factory, the only way a 1-tile-wide tensor
 # reaches it. These get a single reader/writer pair: 2048/4096 rows build only full_set, 5120 rows
-# only cliffrow_set. Checks that lone pair is still re-pointed on a cache hit.
+# only cliffrow_set. Checks that lone pair is still re-pointed on a cache hit. 4160 rows makes the
+# row narrower than one block (full_cores_per_row == 0), which puts core 0 in the cliff-row set.
 @run_for_blackhole()
-@pytest.mark.parametrize("shape", [(1, 1, 2048, 32), (1, 1, 4096, 32), (1, 1, 5120, 32)])
+@pytest.mark.parametrize("shape", [(1, 1, 2048, 32), (1, 1, 4096, 32), (1, 1, 4160, 32), (1, 1, 5120, 32)])
 def test_tilize_uint8_tall_narrow_program_cache_addr_change(device, shape):
     torch.manual_seed(0)
     device.enable_program_cache()

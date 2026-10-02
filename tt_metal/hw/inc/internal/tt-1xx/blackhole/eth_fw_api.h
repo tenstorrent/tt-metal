@@ -21,6 +21,8 @@
 #define MEM_SYSENG_ETH_HEARTBEAT 0x7CC70
 #define MEM_SYSENG_ETH_API_TABLE 0x7CF00
 #define MEM_SYSENG_BOOT_RESULTS_BASE 0x7CC00
+#define MEM_SYSENG_ETH_DEBUG_BUF_ADDR 0x7C400
+#define MEM_SYSENG_ETH_DEBUG_BUF_SIZE 2048
 #define NUM_SERDES_LANES 8
 
 #define ETH_RISC_CTRL_A_INTERRUPT_MODE_0__REG_ADDR 0xFFB14020
@@ -51,6 +53,12 @@ enum port_status_e : uint32_t {
     PORT_UP,
     PORT_DOWN,
     PORT_UNUSED,
+};
+
+enum serdes_sync_status_e : uint32_t {
+    SERDES_SYNC_TRAINING,
+    SERDES_SYNC_TRAINED,
+    SERDES_SYNC_FAILED,
 };
 
 struct fw_version_t {
@@ -200,6 +208,90 @@ struct eth_live_status_t {
     uint32_t spare2[64 - 52];  // 52-63
 };
 
+// SysEng base firmware debug buffer
+struct debug_buf_t {
+    uint32_t serdes_init_lead_message_expected;
+    uint32_t serdes_init_follow_message_expected;
+
+    uint32_t txq0_resend_cnt_last;
+    uint32_t txq1_resend_cnt_last;
+    uint32_t txq2_resend_cnt_last;
+    uint32_t rxq0_pkt_drop_last;
+    uint32_t rxq1_pkt_drop_last;
+    uint32_t rxq2_pkt_drop_last;
+
+    eth_live_status_t link_stability_last_live_status;
+
+    uint32_t serdes_tx_eq_afe_val[NUM_SERDES_LANES];
+
+    uint32_t serdes_ctrl_lock_counter;
+
+    serdes_sync_status_e lead_eth_serdes_status;
+    serdes_sync_status_e follow_eth_serdes_status;
+
+    uint16_t serdes_partner_eth_id;
+    uint8_t serdes_partner_eth_x;
+    uint8_t serdes_partner_eth_y;
+
+    uint32_t eth_ctrl_intp_stat_raw;
+    uint32_t eth_ctrl_intp_stat;
+    uint32_t mac_rx_int;
+    uint32_t mac_tx_int;
+    uint32_t pcs_tx_int;
+    uint32_t pcs_rx_int;
+    uint32_t pma_int;
+
+    uint32_t user_command;
+    uint32_t link_down_cnt;
+    uint32_t link_recovery_cnt;
+    uint32_t link_recovery_retry_cnt;
+    uint32_t link_recovery_give_up_cnt;
+
+    uint32_t runtime_serdes_retrain_cnt;
+    uint32_t runtime_serdes_reinit_cnt;
+    uint32_t runtime_macpcs_reinit_cnt;
+    uint32_t runtime_macpcs_only_reinit_cnt;
+
+    uint32_t spare[400 - 100];
+
+    uint32_t eth_api_metrics[64];
+
+    uint64_t eth_link_recovery_backoff_timestamp;
+    uint64_t eth_link_status_check_timestamp;
+    uint64_t eth_dynamic_state_check_timestamp;
+    uint32_t timestamp_spare[496 - 470];
+
+    uint32_t scratchpad[16];
+};
+
+static_assert(sizeof(debug_buf_t) == MEM_SYSENG_ETH_DEBUG_BUF_SIZE, "debug_buf_t size is not 2048 bytes");
+static_assert(
+    MEM_SYSENG_ETH_DEBUG_BUF_ADDR + MEM_SYSENG_ETH_DEBUG_BUF_SIZE == MEM_SYSENG_BOOT_RESULTS_BASE,
+    "debug_buf_t must end where the boot results begin");
+
+#define MEM_AERISC_PTP_TRACE_ADDR (MEM_SYSENG_ETH_DEBUG_BUF_ADDR + offsetof(debug_buf_t, scratchpad))
+
+#define AERISC_PTP_TRACE_MAGIC 0x1234ABCD
+
+// Runtime FW tenure stamps, in 20 ns PTP ticks. Base FW zeroes the debug buffer once at load, so
+// an all-zero record means runtime FW has not run since. Reader contract:
+//   magic != AERISC_PTP_TRACE_MAGIC -> entry in flight or never stamped; sample again
+//   fw_exit_valid == 0              -> runtime FW took the core at fw_entry_ptp and still owns it
+//   fw_exit_valid != 0              -> runtime FW owned the core from fw_entry_ptp to fw_exit_ptp
+struct aerisc_ptp_trace_t {
+    uint32_t magic;
+    uint32_t run_count;  // +1 per entry; counts runtime FW entries since base FW load
+    uint32_t fw_entry_ptp_lo;
+    uint32_t fw_entry_ptp_hi;
+    uint32_t fw_exit_ptp_lo;
+    uint32_t fw_exit_ptp_hi;
+    uint32_t fw_exit_valid;
+};
+
+static_assert(
+    sizeof(aerisc_ptp_trace_t) <= sizeof(debug_buf_t::scratchpad),
+    "aerisc_ptp_trace_t must fit in the scratchpad words metal owns");
+
 struct eth_api_table_t {
     uint32_t* send_eth_msg_ptr;           // Pointer to the send eth msg function
     uint32_t* service_eth_msg_ptr;        // Pointer to the service eth msg function
@@ -253,6 +345,15 @@ struct boot_results_t {
 #include "internal/ethernet/tt_eth_api.h"
 #include "hostdev/dev_msgs.h"
 
+// AERISC_PTP_TRACE_SUPPORTED means base FW is new enough to have debug_buf_t::scratchpad.
+// Under watcher, erisc_exit()'s longjmp bypasses the exit stamp in main(), leaving no exit to record.
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0) && defined(AERISC_PTP_TRACE_SUPPORTED) && \
+    !(defined(WATCHER_ENABLED) && !defined(FORCE_WATCHER_OFF))
+#define AERISC_PTP_TRACE_ENABLED 1
+#else
+#define AERISC_PTP_TRACE_ENABLED 0
+#endif
+
 uint64_t get_next_link_status_check_timestamp() {
     return *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(GET_MAILBOX_ADDRESS_DEV(link_status_check_timestamp));
 }
@@ -261,6 +362,37 @@ void update_next_link_status_check_timestamp() {
 #if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
     uint64_t timestamp = eth_read_wall_clock() + (ETH_CLOCK_CYCLE_1MS * ETH_UPDATE_LINK_STATUS_INTERVAL_MS);
     *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(GET_MAILBOX_ADDRESS_DEV(link_status_check_timestamp)) = timestamp;
+#endif
+}
+
+FORCE_INLINE uint64_t eth_read_ptp_clock() {
+    // Reading TIMER_LO latches TIMER_HI, so order is important
+    uint32_t ptp_timer_lo = eth_reg_read(ETH_CORE_A_ETH_CTRL_A_PTP_TIMER_A_CFR_TIMER_LO_REG_ADDR);
+    uint32_t ptp_timer_hi = eth_reg_read(ETH_CORE_A_ETH_CTRL_A_PTP_TIMER_A_CFR_TIMER_HI_REG_ADDR);
+    return (static_cast<uint64_t>(ptp_timer_hi) << 32) | ptp_timer_lo;
+}
+
+static __attribute__((unused)) void aerisc_ptp_trace_entry() {
+#if AERISC_PTP_TRACE_ENABLED
+    auto* trace = reinterpret_cast<volatile tt_l1_ptr aerisc_ptp_trace_t*>(MEM_AERISC_PTP_TRACE_ADDR);
+
+    trace->magic = 0;
+    trace->run_count = trace->run_count + 1;
+    trace->fw_exit_valid = 0;
+    uint64_t entry_ptp = eth_read_ptp_clock();
+    trace->fw_entry_ptp_hi = static_cast<uint32_t>(entry_ptp >> 32);
+    trace->fw_entry_ptp_lo = static_cast<uint32_t>(entry_ptp);
+    trace->magic = AERISC_PTP_TRACE_MAGIC;
+#endif
+}
+
+static __attribute__((unused)) void aerisc_ptp_trace_exit() {
+#if AERISC_PTP_TRACE_ENABLED
+    auto* trace = reinterpret_cast<volatile tt_l1_ptr aerisc_ptp_trace_t*>(MEM_AERISC_PTP_TRACE_ADDR);
+    uint64_t exit_ptp = eth_read_ptp_clock();
+    trace->fw_exit_ptp_hi = static_cast<uint32_t>(exit_ptp >> 32);
+    trace->fw_exit_ptp_lo = static_cast<uint32_t>(exit_ptp);
+    trace->fw_exit_valid = 1;  // single-word commit, so it must follow both halves
 #endif
 }
 
