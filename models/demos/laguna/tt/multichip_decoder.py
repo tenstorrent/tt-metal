@@ -311,8 +311,14 @@ class MultichipDecoder(OptimizedDecoder):
             # Decode-sized partial (<= 1 tile row): ONE all_gather of the D partials + a local sum beats the
             # composite all_reduce's two dependent collectives (reduce_scatter -> all_gather).
             xin = ttnn.typecast(x, ccl) if x.dtype != ccl else x
+            # a width-sharded matmul output is gathered directly into L1-interleaved (no separate s2i)
             gathered = ttnn.all_gather(
-                xin, dim=1, cluster_axis=self.tp_axis, topology=self.ccl_topology, num_links=self.num_links
+                xin,
+                dim=1,
+                cluster_axis=self.tp_axis,
+                topology=self.ccl_topology,
+                num_links=self.num_links,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )  # [1, D, rows, H]
             out = ttnn.sum(gathered, dim=1, keepdim=True)
             return ttnn.typecast(out, ttnn.bfloat16) if out.dtype != ttnn.bfloat16 else out
@@ -1395,7 +1401,7 @@ class MultichipDecoder(OptimizedDecoder):
         attn = ttnn.reshape(ttnn.mul(attn, g), (1, 1, B, cfg.num_heads * cfg.head_dim))
         q_w = self.meta["q_w"]
         o = self._dram_mm(attn, self.w["wo"], self.w["wo_ds"], q_w, cfg.hidden, self._ck_o)
-        if self.use_dram_sharded:
+        if self.use_dram_sharded and not self._ag_reduce:  # the decode all_gather reads the sharded output
             o = ttnn.sharded_to_interleaved(o, ttnn.L1_MEMORY_CONFIG)
         o = self._reduce(o)  # row-parallel partial -> replicated
         h = ttnn.add(residual, o)
