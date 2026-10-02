@@ -4,11 +4,21 @@
 
 #include <internal/disaggregation/cache_tensor_layout_spec.hpp>
 
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt_stl/assert.hpp>
+#include <umd/device/soc_arch_descriptor.hpp>
 
 namespace tt::tt_metal::internal::disaggregation {
 
+using tt::constants::BFLOAT8_B_TILE_HW;
+using tt::constants::TILE_WIDTH;
+
 namespace {
+
+// NOC-local DRAM bank order: a flash-op / migration locality CHOICE (blaze's OPTIMAL_DRAM_BANK_ORDER),
+// NOT an arch fact the SoC descriptor exposes — so it is defined here (the one place), keyed by arch.
+inline constexpr std::array<uint32_t, 8> kBlackholeOptimalDramBankOrder = {1, 3, 2, 0, 5, 7, 6, 4};
 
 // The NdShardSpec shard_shape, aligned to the tensor's logical rank. The addresser reads the
 // intra-device layout (seq granule, feature width) off this instead of bespoke spec fields.
@@ -27,11 +37,11 @@ std::optional<uint32_t> KvLayoutSpec::sequence_axis() const {
     const auto& shape = tensor.logical_shape();
     const Shape& shard = shard_shape_of(tensor);
     const uint32_t rank = static_cast<uint32_t>(shape.rank());
-    // The sequence axis is the one the allocation tiles at the DRAM token block (kTile) while its full
+    // The sequence axis is the one the allocation tiles at the DRAM token block (TILE_WIDTH) while its full
     // extent is larger — i.e. chopped into many blocks. Feature axes are full-width; batch/head are 1.
     for (uint32_t i = 0; i < rank; ++i) {
         const uint32_t g = static_cast<uint32_t>(shard[i]);
-        if (g == kTile && static_cast<uint32_t>(shape[i]) > kTile) {
+        if (g == TILE_WIDTH && static_cast<uint32_t>(shape[i]) > TILE_WIDTH) {
             return i;
         }
     }
@@ -56,26 +66,21 @@ uint64_t feature_width(const TensorSpec& tensor) {
 uint32_t chunk_size_bytes(const TensorSpec& tensor, uint32_t tokens_per_chunk) {
     const uint64_t f = feature_width(tensor);
     if (tensor.data_type() == DataType::BFLOAT8_B) {
-        return static_cast<uint32_t>((tokens_per_chunk / kTile) * (f / kTile) * kBfp8TileBytes);
+        return static_cast<uint32_t>((tokens_per_chunk / TILE_WIDTH) * (f / TILE_WIDTH) * BFLOAT8_B_TILE_HW);
     }
-    return static_cast<uint32_t>(tokens_per_chunk * f * kBf16Bytes);
+    return static_cast<uint32_t>(tokens_per_chunk * f * tt::datum_size(tt::DataFormat::Float16_b));
 }
 
 uint32_t num_dram_banks(tt::ARCH arch) {
-    // Mirrors the DRAM channel count in the SoC arch descriptor (umd .../soc_descs/*.yaml): the `dram:`
-    // block lists 8 channels for Blackhole and 6 for Wormhole B0. (SocDescriptor::get_num_dram_channels()
-    // is the live equivalent, but it needs a SocArchDescriptor loaded from yaml — not host-constructible
-    // from a bare ARCH without pulling driver/cluster deps into the addresser, so we key off the arch.)
-    switch (arch) {
-        case tt::ARCH::BLACKHOLE: return 8;
-        case tt::ARCH::WORMHOLE_B0: return 6;
-        default: TT_THROW("num_dram_banks: no DRAM bank count encoded for arch {}", static_cast<int>(arch));
-    }
+    // The DRAM channel count IS an arch fact — read it from the SoC arch descriptor (the `dram:` block of
+    // umd .../soc_descs/<arch>.yaml). SocArchDescriptor is host-constructible from a bare ARCH; no
+    // device/cluster needed. get_dram_cores() is channel-major, so its outer size is the bank count.
+    return static_cast<uint32_t>(tt::umd::SocArchDescriptor(arch).get_dram_cores().size());
 }
 
 std::span<const uint32_t> optimal_bank_order(tt::ARCH arch) {
     switch (arch) {
-        case tt::ARCH::BLACKHOLE: return kOptimalDramBankOrder;
+        case tt::ARCH::BLACKHOLE: return kBlackholeOptimalDramBankOrder;
         default: TT_THROW("optimal_bank_order: no NOC-local bank order encoded for arch {}", static_cast<int>(arch));
     }
 }

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <vector>
 
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 
@@ -22,7 +23,7 @@ struct MapGeometry {
     uint32_t num_layers = 0;
     uint32_t num_slots = 0;
     uint32_t max_seq_len = 0;         // in tokens
-    uint32_t position_step = kTile;   // token stride between enumerated positions
+    uint32_t position_step = tt::constants::TILE_WIDTH;  // token stride between enumerated positions
 };
 
 // One co-resident cache to address: the residence-agnostic spec, the mesh distribution the tensor was

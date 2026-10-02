@@ -13,11 +13,16 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt_stl/assert.hpp>
 
 #include <internal/disaggregation/noc_addr.hpp>
 
 namespace tt::tt_metal::internal::disaggregation {
+
+using tt::constants::BFLOAT8_B_TILE_HW;
+using tt::constants::TILE_WIDTH;
 
 namespace {
 
@@ -30,13 +35,13 @@ using tt::tt_metal::distributed::MeshMapperConfig;
 struct Derived {
     uint32_t seq_axis = 0;
     uint64_t f = 1;                    // per-token feature width
-    uint32_t tpc = kTile;             // migration granule == the shard's seq-block size
+    uint32_t tpc = TILE_WIDTH;         // migration granule == the shard's seq-block size
     uint32_t sp_dim = 1;              // extent of the seq-shard (CP) mesh axis
     uint32_t mesh_cols = 1;          // mesh_size / sp_dim (TP / replica fan-out)
     uint32_t mesh_rows = 1;
     std::optional<uint32_t> head_axis;  // tensor axis a non-seq mesh axis shards (GQA head)
     uint32_t n_heads = 1;
-    uint32_t num_banks = kNumDramBanks;
+    uint32_t num_banks = 0;             // set from num_dram_banks(arch) in derive()
     std::vector<uint32_t> banks;        // resolved bank permutation (arch + bank_order), size num_banks
 };
 
@@ -71,7 +76,7 @@ Derived derive(const CacheConfig& config) {
     d.f = feature_width(spec.tensor);
     if (seq.has_value()) {
         const auto& nd = spec.tensor.memory_config().nd_shard_spec();
-        d.tpc = nd.has_value() ? static_cast<uint32_t>(nd->shard_shape[static_cast<int>(*seq)]) : kTile;
+        d.tpc = nd.has_value() ? static_cast<uint32_t>(nd->shard_shape[static_cast<int>(*seq)]) : TILE_WIDTH;
     }
 
     const auto& ms = config.topology.distribution_shape();
@@ -156,8 +161,8 @@ Located locate_one(
         const uint32_t chunks_per_slot = per_dev_seq / kcs;
         const uint32_t local_chunk = local_pos / kcs;
         const uint32_t in_chunk = local_pos % kcs;
-        const uint32_t shard_id =
-            spec.addressing == AddressingMode::Slot ? (slot * chunks_per_slot + local_chunk) : local_chunk;
+        // Slot folds into the physical shard index (paging, if any, is a separate block-table contract).
+        const uint32_t shard_id = slot * chunks_per_slot + local_chunk;
         const uint32_t shard_size_b = (kcs / tpc) * csb;
         const uint32_t bank_id = banks[shard_id % d.num_banks];
         const uint64_t off =
@@ -173,10 +178,11 @@ Located locate_one(
     if (scheme == BankScheme::BlockCyclic) {
         const uint32_t idx_cp = policy.idx_cp.get();
         const uint32_t block = kcs;
-        const uint32_t idx_row_bytes = static_cast<uint32_t>((f / kTile) * kBfp8TileBytes);
+        const uint32_t idx_row_bytes = static_cast<uint32_t>((f / TILE_WIDTH) * BFLOAT8_B_TILE_HW);
         const uint32_t n_blocks = per_dev_seq / block;
         const uint32_t n_blocks_dev = (n_blocks + idx_cp - 1) / idx_cp;
-        const uint32_t num_banks = std::min(policy.banks_per_head.get(), n_blocks_dev);
+        const uint32_t bph = policy.banks_per_head.get() ? policy.banks_per_head.get() : d.num_banks;
+        const uint32_t num_banks = std::min(bph, n_blocks_dev);
         const uint32_t blocks_per_bank = n_blocks_dev / num_banks;
         const uint32_t gb = position / block;
         const uint32_t dev = gb % idx_cp;
@@ -184,7 +190,7 @@ Located locate_one(
         const uint32_t global_block = slot * blocks_per_bank * num_banks + local_position / block;
         const uint32_t bank_id = banks[global_block % num_banks];
         const uint32_t local_block = global_block / num_banks;
-        const uint32_t tile_row = (local_block * block + (local_position % block)) / kTile;
+        const uint32_t tile_row = (local_block * block + (local_position % block)) / TILE_WIDTH;
         const uint64_t off = base + static_cast<uint64_t>(tile_row) * idx_row_bytes;
         std::vector<std::pair<uint32_t, uint32_t>> coords;
         for (uint32_t r = 0; r < d.mesh_rows; ++r) {
@@ -199,13 +205,13 @@ Located locate_one(
 
     // ---- BLOCK with GQA group: minimax K/V height-sharded, group -> mesh row block ----
     if (scheme == BankScheme::Block && policy.group.has_value()) {
-        const uint32_t bph = policy.banks_per_head.get();
-        const uint32_t row_bytes = static_cast<uint32_t>((f / kTile) * kBfp8TileBytes);
-        const uint32_t st_pb = (per_dev_seq / kTile) / bph;
+        const uint32_t bph = policy.banks_per_head.get() ? policy.banks_per_head.get() : d.num_banks;
+        const uint32_t row_bytes = static_cast<uint32_t>((f / TILE_WIDTH) * BFLOAT8_B_TILE_HW);
+        const uint32_t st_pb = (per_dev_seq / TILE_WIDTH) / bph;
         const uint32_t chunk = position / kcs;
         const uint32_t off_in_chunk = position % kcs;
         const uint32_t bank_slice = chunk % bph;
-        const uint32_t within = (chunk / bph) * (kcs / kTile) + off_in_chunk / kTile;
+        const uint32_t within = (chunk / bph) * (kcs / TILE_WIDTH) + off_in_chunk / TILE_WIDTH;
         const uint32_t bank_id = banks[bank_slice];
         const uint64_t off =
             base + static_cast<uint64_t>(slot) * st_pb * row_bytes + static_cast<uint64_t>(within) * row_bytes;
@@ -221,15 +227,15 @@ Located locate_one(
         TT_FATAL(head.has_value(), "per-head scheme requires an enumerated head");
         const uint32_t n_heads = d.n_heads;
         const uint32_t n_heads_per_dev = std::max(1u, n_heads / (mesh_cols * std::max(1u, sp_dim)));
-        const uint32_t bph = policy.banks_per_head.get();
-        const uint64_t dht = f / kTile;
-        const uint32_t row_bytes = static_cast<uint32_t>(dht * kBfp8TileBytes);
+        const uint32_t bph = policy.banks_per_head.get() ? policy.banks_per_head.get() : d.num_banks;
+        const uint64_t dht = f / TILE_WIDTH;
+        const uint32_t row_bytes = static_cast<uint32_t>(dht * BFLOAT8_B_TILE_HW);
         const uint32_t chip = *head / n_heads_per_dev;
         const uint32_t local_head = *head % n_heads_per_dev;
         const uint32_t seq_extent = shape[static_cast<int>(d.seq_axis)];
-        const uint32_t st_pb = (seq_extent / kTile) / bph;
-        const uint32_t sk_chunk_t = kcs / kTile;
-        const uint32_t tile_row = position / kTile;
+        const uint32_t st_pb = (seq_extent / TILE_WIDTH) / bph;
+        const uint32_t sk_chunk_t = kcs / TILE_WIDTH;
+        const uint32_t tile_row = position / TILE_WIDTH;
         uint32_t bank_slice = 0;
         uint32_t within = 0;
         if (scheme == BankScheme::Cyclic) {
@@ -262,7 +268,7 @@ Located locate_one(
     }
     // OPTIMAL indexer: fixed permutation over num_blocks; per-bank slot stacking (ND-shard). `banks` is
     // the OPTIMAL perm here (this branch is the bank_order == Optimal case).
-    const uint32_t nblk = policy.num_blocks;
+    const uint32_t nblk = policy.num_blocks ? policy.num_blocks : d.num_banks;
     const uint32_t chunk_idx = local_pos / tpc_page;
     const uint32_t bank_id = banks[chunk_idx % nblk];
     const uint32_t within_bank = chunk_idx / nblk;

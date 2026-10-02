@@ -32,11 +32,12 @@ namespace tt::tt_metal::internal::disaggregation {
 //   * mesh placement + device coords        -> TensorTopology (per-axis Shard/Replicate, MeshShape,
 //                                              get_device_coord() -> replica / device groups)
 // So this spec adds ONLY what the tensor cannot carry:
-//   (1) how the sequence coordinate is interpreted  -> TemporalPolicy (which ALSO says whether a
-//                                                      sequence axis exists: Rolling/None have none)
-//   (2) slot-direct vs paged addressing             -> AddressingMode
+//   how the sequence coordinate is interpreted  -> TemporalPolicy (which ALSO says whether a
+//                                                   sequence axis exists: Rolling/None have none)
 // WHICH axis is the sequence is NOT stored: the allocation enforces that the sequence axis is the
 // token-block-tiled NdShardSpec axis, so it is derived from the tensor (see sequence_axis()).
+// Slot-vs-paged addressing is NOT here either: paging is a block-table indirection (a separate
+// model<->engine contract), not a spatial-layout fact — the chunk map is identical either way.
 //
 // Everything mesh/bank/shard-flavoured is READ OFF the tensor, never re-declared here. The earlier
 // skeleton's Distribution part duplicated TensorTopology::placements(); its SpDim/MeshCols/MeshRows
@@ -104,16 +105,7 @@ using TemporalPolicy = std::variant<
     temporal::None>;
 
 // ---------------------------------------------------------------------------------------------
-// (2) AddressingMode — how a logical position resolves to a physical slot.
-// ---------------------------------------------------------------------------------------------
-
-enum class AddressingMode : uint8_t {
-    Slot = 0,   // direct: physical = f(slot, coord), no runtime indirection
-    Paged = 1,  // a block table maps logical position -> physical block (enables sharing / packing)
-};
-
-// ---------------------------------------------------------------------------------------------
-// The composed spec — the tensor plus the three things the tensor cannot carry.
+// The composed spec — the tensor plus what the tensor cannot carry.
 // ---------------------------------------------------------------------------------------------
 
 struct KvLayoutSpec {
@@ -122,12 +114,9 @@ struct KvLayoutSpec {
     // device coords). Distribution, mesh geometry, and bank layout are read from HERE, not re-declared.
     TensorSpec tensor;
 
-    // How the sequence coordinate is interpreted (part 1). ALSO encodes whether a sequence axis exists
+    // How the sequence coordinate is interpreted. ALSO encodes whether a sequence axis exists
     // at all: Rolling/None are fixed-size recurrent/conv summaries with no per-token axis.
     TemporalPolicy temporal;
-
-    // Slot-direct vs paged (block-table) indirection (part 2).
-    AddressingMode addressing = AddressingMode::Slot;
 
     // Target architecture. The arch-specific layout constants — the DRAM bank count and the OPTIMAL
     // NOC-local bank-order permutation — derive from this (see num_dram_banks / optimal_bank_order);
@@ -177,12 +166,9 @@ using IdxCp = ttsl::StrongType<uint32_t, struct IdxCpTag>;
 // GQA group index -> mesh ROW block (BLOCK K/V per-group placement).
 using GqaGroup = ttsl::StrongType<uint32_t, struct GqaGroupTag>;
 
-// DRAM / tile constants (device + dtype facts the addresser needs; not stored on the spec).
-inline constexpr std::array<uint32_t, 8> kOptimalDramBankOrder = {1, 3, 2, 0, 5, 7, 6, 4};
-inline constexpr uint32_t kNumDramBanks = 8;
-inline constexpr uint32_t kTile = 32;
-inline constexpr uint32_t kBfp8TileBytes = 1088;  // 32x32 bfloat8_b tile
-inline constexpr uint32_t kBf16Bytes = 2;
+// Tile / dtype facts (tt::constants::TILE_WIDTH / BFLOAT8_B_TILE_HW, tt::datum_size) and the DRAM bank
+// count / NOC-optimal order (the SoC arch descriptor) are NOT re-declared here — the implementation
+// pulls them from the metal headers / num_dram_banks(arch) / optimal_bank_order(arch) at the use sites.
 
 // Bank ordering permutation: the OPTIMAL NOC-local order, or the portable identity round-robin. A
 // generation-policy selector (which permutation the flash op / migration used), not a tensor property.
@@ -211,8 +197,8 @@ struct GenerationPolicy {
     // Seq-shard (CP) stride; default k_chunk_size * num_banks. For the prefill write layout this is the
     // per-device window (compute-chunk period / seq-shard mesh extent) — same field, no prefill variant.
     std::optional<DeviceChunkSize> device_chunk_size;
-    BanksPerHead banks_per_head{kNumDramBanks};  // BLOCK/CYCLIC per-head fan-out
-    uint32_t num_blocks = kNumDramBanks;         // OPTIMAL indexer permutation block count
+    BanksPerHead banks_per_head{0};              // BLOCK/CYCLIC per-head fan-out; 0 => num_dram_banks(arch)
+    uint32_t num_blocks = 0;                     // OPTIMAL indexer permutation block count; 0 => num_dram_banks(arch)
     SpOrigin sp_origin{0};                       // CP device origin on the seq-shard mesh axis
     IdxCp idx_cp{1};                             // index_k column-split (BLOCK_CYCLIC)
     std::optional<GqaGroup> group;               // GQA group -> mesh ROW block (BLOCK K/V)
