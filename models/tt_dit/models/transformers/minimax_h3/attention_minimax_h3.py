@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 
@@ -220,7 +221,8 @@ class MiniMaxH3Attention(Module):
             self.use_ring
             and self.sdpa_precision is not None
             and tp_factor == 4
-            and parallel_config.sequence_parallel.factor == 32
+            # Bench only (not for merge): H3_FORCE_EXP_RING=1 also takes the exp ring op at SP != 32.
+            and (parallel_config.sequence_parallel.factor == 32 or os.environ.get("H3_FORCE_EXP_RING") == "1")
             and self.exp_ring_num_passes <= self.exp_ring_max_passes
         )
         self._exp_sdpa_program_configs: dict[int, ttnn.SDPAProgramConfig | None] = {}
