@@ -2,16 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <core/ttnn_all_includes.hpp>
 #include <iostream>
+#include <optional>
+#include <stdexcept>
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/ops/k_split_gram_matmul/device/k_split_gram_matmul_device_operation.hpp"
 #include "metal/operations.hpp"
 #include "test_utils/random_data.hpp"
+#include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "ttnn/mesh_device_operation_adapter.hpp"
 
 class KSplitGramMatmulTest : public ::testing::Test {
 protected:
@@ -29,6 +35,25 @@ protected:
 };
 
 namespace {
+
+using ::testing::HasSubstr;
+using ::testing::ThrowsMessage;
+using tt::tt_metal::distributed::MeshCoordinate;
+using tt::tt_metal::distributed::MeshShape;
+
+class KSplitGramMatmulDeviceValidationTest : public tt::tt_metal::MeshDeviceFixtureBase {
+protected:
+    KSplitGramMatmulDeviceValidationTest() :
+        MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{1, 2}, .arch = tt::ARCH::BLACKHOLE}) {}
+};
+
+ttnn::Tensor make_empty_tensor(const ttnn::Shape& shape, tt::tt_metal::distributed::MeshDevice* device) {
+    return ttnn::create_device_tensor(
+        tt::tt_metal::TensorSpec(
+            shape,
+            tt::tt_metal::TensorLayout(ttnn::DataType::BFLOAT16, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG)),
+        device);
+}
 
 constexpr float kRtol = 1e-2f;
 // Diagonal G[i,i] = Σ X[i,k]^2 grows ~linearly with K (e.g. ~1365 for K=4096),
@@ -119,6 +144,36 @@ void check_full_gram(
 }
 
 }  // namespace
+
+TEST_F(KSplitGramMatmulDeviceValidationTest, RejectsForeignPreallocatedOutputOnCacheMissAndHit) {
+    using Operation = ttml::metal::ops::k_split_gram_matmul::device::KSplitGramMatmulDeviceOperation;
+    using Adapter = ttnn::device_operation::MeshDeviceOperationAdapter<Operation>;
+
+    const auto local_mesh = mesh_device_->create_submesh(MeshShape{1, 1}, MeshCoordinate{0, 0});
+    const auto foreign_mesh = mesh_device_->create_submesh(MeshShape{1, 1}, MeshCoordinate{0, 1});
+    const auto shape = ttnn::Shape({1, 1, 320, 320});
+    const auto input = make_empty_tensor(shape, local_mesh.get());
+    const auto local_output = make_empty_tensor(shape, local_mesh.get());
+    const auto foreign_output = make_empty_tensor(shape, foreign_mesh.get());
+
+    const Operation::operation_attributes_t attributes{
+        .output_mode = ttml::metal::OutputMode::UpperTriangle, .math_fidelity = tt::tt_metal::MathFidelity::HiFi4};
+    const Operation::tensor_args_t automatic_args{.input_tensor = input, .preallocated_output = std::nullopt};
+    const Operation::tensor_args_t local_args{.input_tensor = input, .preallocated_output = local_output};
+    const Operation::tensor_args_t foreign_args{.input_tensor = input, .preallocated_output = foreign_output};
+
+    EXPECT_NO_THROW(Operation::validate_on_program_cache_miss(attributes, automatic_args));
+    EXPECT_NO_THROW(Operation::validate_on_program_cache_miss(attributes, local_args));
+    EXPECT_THAT(
+        [&] { Operation::validate_on_program_cache_miss(attributes, foreign_args); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("same MeshDevice as input")));
+
+    EXPECT_NO_THROW(Adapter::validate_on_program_cache_hit(attributes, automatic_args));
+    EXPECT_NO_THROW(Adapter::validate_on_program_cache_hit(attributes, local_args));
+    EXPECT_THAT(
+        [&] { Adapter::validate_on_program_cache_hit(attributes, foreign_args); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("same MeshDevice as input")));
+}
 
 struct VerifyCase {
     uint32_t M;

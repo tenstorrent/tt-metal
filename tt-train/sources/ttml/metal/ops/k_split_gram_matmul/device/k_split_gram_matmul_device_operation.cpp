@@ -53,6 +53,7 @@ void KSplitGramMatmulDeviceOperation::validate_on_program_cache_miss(
         const uint32_t M = input.logical_shape()[-2];
         TT_FATAL(output.storage_type() == ttnn::StorageType::DEVICE, "Preallocated output must be on device");
         TT_FATAL(output.buffer() != nullptr, "Preallocated output must be allocated on device");
+        TT_FATAL(output.device() == input.device(), "Preallocated output must be on the same MeshDevice as input");
         TT_FATAL(
             output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "Preallocated output must be in DRAM");
         TT_FATAL(output.layout() == tt::tt_metal::Layout::TILE, "Preallocated output must have TILE layout");
