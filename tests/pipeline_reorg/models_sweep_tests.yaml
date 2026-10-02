@@ -122,77 +122,89 @@
   team: models
   budget_type: sweep
 
-- name: TT-Transformers MLP module sweep
-  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest --tb=short models/common/tests/modules/mlp
-  model: tt-transformers-common
-  model_family: TTTv2
-  skus:
-    wh_llmbox:
-      timeout: 24
-      tier: 1
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-  budget_type: sweep
+# TODO(#57807): models/common/tests/modules/mlp/ left tt-metal with TTTv2 and this leg has no other
+# command. Parked, not deleted — the tests now live in tt-transformers tests/modules/mlp/.
+# - name: TT-Transformers MLP module sweep
+#   cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest --tb=short models/common/tests/modules/mlp
+#   model: tt-transformers-common
+#   model_family: TTTv2
+#   skus:
+#     wh_llmbox:
+#       timeout: 24
+#       tier: 1
+#   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+#   team: models
+#   budget_type: sweep
 
-- name: TT-Transformers RoPE module sweep
-  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest --tb=short models/common/tests/modules/rope
-  model: tt-transformers-common
-  model_family: TTTv2
-  skus:
-    wh_llmbox:
-      timeout: 4
-      tier: 1
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-  budget_type: sweep
+# TODO(#57807): models/common/tests/modules/rope/ left tt-metal with TTTv2 and this leg has no other
+# command. Parked, not deleted — the tests now live in tt-transformers tests/modules/rope/.
+# - name: TT-Transformers RoPE module sweep
+#   cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest --tb=short models/common/tests/modules/rope
+#   model: tt-transformers-common
+#   model_family: TTTv2
+#   skus:
+#     wh_llmbox:
+#       timeout: 4
+#       tier: 1
+#   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+#   team: models
+#   budget_type: sweep
 
-- name: TT-Transformers RMSNorm module sweep
-  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest --tb=short models/common/tests/modules/rmsnorm
-  model: tt-transformers-common
-  model_family: TTTv2
-  skus:
-    wh_llmbox:
-      timeout: 10
-      tier: 1
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-  budget_type: sweep
+# TODO(#57807): models/common/tests/modules/rmsnorm/ left tt-metal with TTTv2 and this leg has no other
+# command. Parked, not deleted — the tests now live in tt-transformers tests/modules/rmsnorm/.
+# - name: TT-Transformers RMSNorm module sweep
+#   cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest --tb=short models/common/tests/modules/rmsnorm
+#   model: tt-transformers-common
+#   model_family: TTTv2
+#   skus:
+#     wh_llmbox:
+#       timeout: 10
+#       tier: 1
+#   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+#   team: models
+#   budget_type: sweep
 
-- name: TT-Transformers attention module sweep
-  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/attention_1d pytest --tb=short models/common/tests/modules/attention
-  model: tt-transformers-common
-  model_family: TTTv2
-  skus:
-    wh_llmbox:
-      timeout: 65
-      tier: 1
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-  budget_type: sweep
+# TODO(#57807): models/common/tests/modules/attention/ left tt-metal with TTTv2 and this leg has no other
+# command. Parked, not deleted — the tests now live in tt-transformers tests/modules/attention/.
+# - name: TT-Transformers attention module sweep
+#   cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/attention_1d pytest --tb=short models/common/tests/modules/attention
+#   model: tt-transformers-common
+#   model_family: TTTv2
+#   skus:
+#     wh_llmbox:
+#       timeout: 65
+#       tier: 1
+#   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+#   team: models
+#   budget_type: sweep
 
-- name: TT-Transformers embedding module sweep
-  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/embedding_1d pytest --tb=short models/common/tests/modules/embedding
-  model: tt-transformers-common
-  model_family: TTTv2
-  skus:
-    wh_llmbox:
-      timeout: 18
-      tier: 1
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-  budget_type: sweep
+# TODO(#57807): models/common/tests/modules/embedding/ left tt-metal with TTTv2 and this leg has no other
+# command. Parked, not deleted — the tests now live in tt-transformers tests/modules/embedding/.
+# - name: TT-Transformers embedding module sweep
+#   cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/embedding_1d pytest --tb=short models/common/tests/modules/embedding
+#   model: tt-transformers-common
+#   model_family: TTTv2
+#   skus:
+#     wh_llmbox:
+#       timeout: 18
+#       tier: 1
+#   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+#   team: models
+#   budget_type: sweep
 
-- name: TT-Transformers LM head module sweep
-  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/lm_head_1d pytest --tb=short models/common/tests/modules/lm_head
-  model: tt-transformers-common
-  model_family: TTTv2
-  skus:
-    wh_llmbox:
-      timeout: 10
-      tier: 1
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-  budget_type: sweep
+# TODO(#57807): models/common/tests/modules/lm_head/ left tt-metal with TTTv2 and this leg has no other
+# command. Parked, not deleted — the tests now live in tt-transformers tests/modules/lm_head/.
+# - name: TT-Transformers LM head module sweep
+#   cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/lm_head_1d pytest --tb=short models/common/tests/modules/lm_head
+#   model: tt-transformers-common
+#   model_family: TTTv2
+#   skus:
+#     wh_llmbox:
+#       timeout: 10
+#       tier: 1
+#   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+#   team: models
+#   budget_type: sweep
 
 - name: DeepSeek-V3 long-sequence module sweep (Galaxy)
   cmd: |
