@@ -37,28 +37,35 @@ class GoldenCheck:
         l1_golden = l1_golden.flatten()
         master_golden = master_golden.flatten()
 
-        logger.info(f"L1 golden check for {output.name}:")
+        l1_atol = output.atol if output.atol is not None else 0.1
+        l1_rtol = output.rtol if output.rtol is not None else 0.1
+        master_atol = output.atol if output.atol is not None else output.acc_atol
+        master_rtol = output.rtol if output.rtol is not None else output.acc_rtol
+
+        logger.info(
+            f"L1 golden check for {output.name} (atol {l1_atol:g}, rtol {l1_rtol:g}):"
+        )
         l1_passed = passed_test(
             l1_golden,
             res_tensor,
             output.data_format,
             print_pcc=True,
-            custom_atol=0.1,
-            custom_rtol=0.1,
+            custom_atol=l1_atol,
+            custom_rtol=l1_rtol,
             tile_shape=output.tile_shape,
         )
 
         logger.info(
             f"Master golden check for {output.name} (format {output.data_format.name},"
-            f"atol {output.acc_atol:.2f}, rtol {output.acc_rtol:.2f}, pcc {output.acc_pcc:.2f}):"
+            f" atol {master_atol:g}, rtol {master_rtol:g}, pcc {output.acc_pcc:.2f}):"
         )
         master_passed = passed_test(
             master_golden,
             res_tensor,
             output.data_format,
             print_pcc=True,
-            custom_atol=output.acc_atol,
-            custom_rtol=output.acc_rtol,
+            custom_atol=master_atol,
+            custom_rtol=master_rtol,
             custom_pcc_threshold=output.acc_pcc,
             tile_shape=output.tile_shape,
         )

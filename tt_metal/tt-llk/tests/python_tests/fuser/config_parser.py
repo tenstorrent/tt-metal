@@ -145,6 +145,8 @@ class OperandDefinition(BaseModel):
     dims: Annotated[Tuple[int, int], Field(min_length=2, max_length=2)]
     format: DataFormat
     stimuli: Optional[StimuliDefinition] = None
+    atol: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
+    rtol: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
     # Optional per-operand tile geometry (rows, cols). Defaults to a full 32x32 tile
     # (4 faces). Use (16, 32) for a 16x32 tiny tile (num_faces=2, one face-row).
     tile_dims: Optional[
@@ -311,6 +313,8 @@ class FuserConfigSchema(BaseModel):
                     op_def.stimuli.resolved() if op_def.stimuli is not None else None
                 ),
                 tile_dims=op_def.tile_dims,
+                atol=op_def.atol,
+                rtol=op_def.rtol,
             )
 
         pipeline = []
