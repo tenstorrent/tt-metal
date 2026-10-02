@@ -938,8 +938,9 @@ class OptimizedDecoder(LightweightModule):
                 logits32 = ttnn.linear(
                     ln_flat, self.w["gate_w"], compute_kernel_config=self._ck_router_precise, dtype=ttnn.float32
                 )
-            # Callers use ``logits`` only as the bf16 [1,1,T,E] template of the dense routing matrix.
-            logits = ttnn.typecast(logits32, ttnn.bfloat16)
+            # Callers use ``logits`` only as the bf16 [1,1,T,E] template of the dense routing matrix, which
+            # the want_dense paths never build -- skip that typecast there.
+            logits = None if want_dense else ttnn.typecast(logits32, ttnn.bfloat16)
             scores = ttnn.sigmoid(logits32)
             sel = ttnn.add(scores, self.w["e_bias_f32"])
             if want_dense and self._route_rank and sel.shape[-2] == 1:

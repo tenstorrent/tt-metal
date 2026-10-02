@@ -934,7 +934,8 @@ class MultichipDecoder(OptimizedDecoder):
         )
         # Preserve the established full-T union for the down projection.  The
         # optional grouped union applies only to gate/up below.
-        full_union = ttnn.sum(dense_local, dim=2, keepdim=True)
+        # one token: the union over T rows IS the single routing row (skip the fill-pad + reduce)
+        full_union = dense_local if T == 1 else ttnn.sum(dense_local, dim=2, keepdim=True)
         group = self.MOE_PREFILL_TILE_GROUP
         tile_sparse = self.MOE_PREFILL_TILE_SPARSE and not sharded and T >= group and T % group == 0
         if tile_sparse:
@@ -978,9 +979,12 @@ class MultichipDecoder(OptimizedDecoder):
             gu = ttnn.reshape(gu, (1, LE, T, 2 * I))
         gate_o = ttnn.slice(gu, [0, 0, 0, 0], [1, LE, T, I])
         up_o = ttnn.slice(gu, [0, 0, 0, I], [1, LE, T, 2 * I])
-        wv = ttnn.reshape(dense_local, (1, T, LE))
-        wv = ttnn.permute(wv, (0, 2, 1))
-        wv = ttnn.reshape(wv, (1, LE, T, 1))
+        if T == 1:  # [1,1,1,LE] -> [1,LE,1,1] is the same element order: one reshape, no permute
+            wv = ttnn.reshape(dense_local, (1, LE, 1, 1))
+        else:
+            wv = ttnn.reshape(dense_local, (1, T, LE))
+            wv = ttnn.permute(wv, (0, 2, 1))
+            wv = ttnn.reshape(wv, (1, LE, T, 1))
         # silu fused into the gate*up mul, and the per-(expert, token) routing weight applied BEFORE the
         # linear down projection on the I-wide glu (I < H): w*(glu@Wd) == (w*glu)@Wd, and sparse_matmul
         # zero-fills skipped experts, so the H-wide post-down weighting mul is gone.
@@ -1059,9 +1063,12 @@ class MultichipDecoder(OptimizedDecoder):
             memory_config=moe_mem,
             output_tile=otile,
         )  # [1,LE,T,H]
-        wv = ttnn.reshape(dense_local, (1, T, LE))
-        wv = ttnn.permute(wv, (0, 2, 1))
-        wv = ttnn.reshape(wv, (1, LE, T, 1))
+        if T == 1:  # [1,1,1,LE] -> [1,LE,1,1] is the same element order: one reshape, no permute
+            wv = ttnn.reshape(dense_local, (1, LE, 1, 1))
+        else:
+            wv = ttnn.reshape(dense_local, (1, T, LE))
+            wv = ttnn.permute(wv, (0, 2, 1))
+            wv = ttnn.reshape(wv, (1, LE, T, 1))
         weighted = ttnn.mul(down_o, wv)
         routed_local = ttnn.reshape(ttnn.sum(weighted, dim=1), (1, 1, T, H))  # partial (local experts)
         shared_partial = self._glu_mlp(ln_flat, "sh", cfg.hidden, cfg.shared_intermediate, self._ck_shared, sharded)
@@ -1080,7 +1087,7 @@ class MultichipDecoder(OptimizedDecoder):
             shp = list(gu.shape)
             g = ttnn.slice(gu, [0] * len(shp), shp[:-1] + [I])
             u = ttnn.slice(gu, [0] * (len(shp) - 1) + [I], shp[:-1] + [2 * I])
-            gg = ttnn.mul(ttnn.silu(g), u)
+            gg = ttnn.mul(g, u, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])  # silu fused: one op
             out = self._dram_mm(gg, w[dk], w[dk + "_ds"], I, H, ck)
             return ttnn.sharded_to_interleaved(out, ttnn.L1_MEMORY_CONFIG)
         # prefill: interleaved packed gate+up linear, split, SwiGLU, down
