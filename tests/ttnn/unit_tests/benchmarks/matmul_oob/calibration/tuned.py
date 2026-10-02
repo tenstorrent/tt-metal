@@ -33,7 +33,16 @@ REGISTRY = [
     Tuned("HeuristicBlocking", "max_in0_block_w", note="set on the OOB suite (8 against 16); pending a sweep"),
     Tuned("HeuristicBlocking", "large_block_tiles", note="set on the 2D K-depth sweeps of suite cases; pending"),
     Tuned("HeuristicBlocking", "large_block_in0_block_w", note="set with large_block_tiles; pending"),
-    Tuned("HeuristicBlocking", "max_self_read_tiles_per_k_step", note="set on the OOB suite (8 against 4); pending"),
+    Tuned(
+        "HeuristicBlocking",
+        "max_self_read_tiles_per_k_step",
+        note="8 on Wormhole (OOB suite, 8 against 4); 12 on Blackhole (BH probe of t_matmul_53dd/4e7d); pending",
+    ),
+    Tuned(
+        "HeuristicBlocking",
+        "k_depth_over_block_size",
+        note="per arch: off on Wormhole (i29716_dit), on for Blackhole (BH probe of g_4096); pending a 2D K-depth sweep",
+    ),
     Tuned("HeuristicFamily", "one_d_core_advantage", note="set on the OOB suite (1.25 to 2 alike); pending"),
 ]
 
@@ -47,5 +56,8 @@ def source_fields(path=POLICIES):
         if not tuned:
             continue
         for m in re.finditer(r"^\s*(?:double|float|u?int\d+_t|bool) (\w+) = ([^;]+);", tuned.group(1), re.M):
-            fields[(cls.group(1), m.group(1))] = float(ast.literal_eval(m.group(2).strip()))
+            value = m.group(2).strip()
+            fields[(cls.group(1), m.group(1))] = (
+                {"true": 1.0, "false": 0.0}.get(value) if value in ("true", "false") else float(ast.literal_eval(value))
+            )
     return fields

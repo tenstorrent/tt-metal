@@ -107,16 +107,22 @@ public:
         uint32_t large_block_tiles = 64;
         uint32_t large_block_in0_block_w = 16;
         // K block depth is further limited so that the operand a core reads by itself (not by multicast) moves at
-        // most this many tiles per K step: B's slice in 1D in0-mcast, A's in 1D in1-mcast, both in Reuse, none in
-        // 2D. Small per-step reads keep the
-        // double-buffered DRAM stream ahead of math; wide per-core blocks get shallower K blocks, but never below
-        // Limits::min_in0_block_w. Basis: 8 against 4 on the Wormhole OOB suite; range not measured.
+        // most this many tiles per K block: B's slice in 1D in0-mcast, A's in 1D in1-mcast, both in Reuse, none in
+        // 2D. Small per-step reads keep the double-buffered DRAM stream ahead of math; wide per-core blocks get
+        // shallower K blocks, but never below Limits::min_in0_block_w. Basis: 8 on Wormhole (8 against 4 on the OOB
+        // suite); 12 on Blackhole, the smallest value giving t_matmul_53dd and 4e7d (3 tiles per K step) K 4 in a BH
+        // probe, while 1D layouts reading 5 or more tiles per step keep K 2.
         uint32_t max_self_read_tiles_per_k_step = 8;
+        // 2D blocks that fit with in0_block_w at least Limits::min_in0_block_w win over larger blocks that only
+        // fit below it (see block_2d): every K block ends with a pack of the whole output block, which on an
+        // architecture that moves data fast relative to compute doesn't hide behind the reads. Basis: off on
+        // Wormhole (i29716_dit wants large 2D blocks at K 1), on for Blackhole (BH probe of g_4096).
+        bool k_depth_over_block_size = false;
     };
     struct Params {
         Limits limits;
         Tuned tuned;
-        // The values for an architecture (the same for every architecture today)
+        // The values for an architecture
         static Params for_arch(tt::ARCH arch);
     };
 

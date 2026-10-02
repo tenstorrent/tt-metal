@@ -52,7 +52,8 @@ differs, the value in that policy's `Params::for_arch`.
 | `HeuristicBlocking::Tuned::max_in0_block_w` | K depth cap | pending (2D K depth sweep) | 8, set on the OOB suite |
 | 2D K floor (`deepen_to_legacy_k_depth`) | Deeper K for interleaved 2D in some cases | pending (2D K depth sweep) | borrowed from the legacy selection; to be re-derived or removed |
 | `HeuristicBlocking::Tuned::large_block_tiles`, `large_block_in0_block_w` | Deeper K for large 2D blocks | pending (2D K depth sweep) | 64 and 16, set on 2D sweeps of suite cases |
-| `HeuristicBlocking::Tuned::max_self_read_tiles_per_k_step` | K depth of the layouts that read an operand themselves | pending (self-read sweep) | 8, set on the OOB suite |
+| `HeuristicBlocking::Tuned::max_self_read_tiles_per_k_step` | K depth of the layouts that read an operand themselves | pending (1D K depth sweep) | 8 on Wormhole, set on the OOB suite; 12 on Blackhole, from a BH probe of t_matmul_53dd and 4e7d |
+| `HeuristicBlocking::Tuned::k_depth_over_block_size` | 2D blocks reach `Limits::min_in0_block_w` before size | pending (2D K depth sweep) | off on Wormhole (i29716_dit); on for Blackhole (BH probe of g_4096) |
 | `HeuristicFamily::Tuned::one_d_core_advantage` | 1D over 2D, mcast over Reuse | pending (family sweep) | 1.5, set on the OOB suite (1.25 to 2 alike) |
 
 The pending values predate this folder: they were set on runs of the OOB suite whose data is not tracked.

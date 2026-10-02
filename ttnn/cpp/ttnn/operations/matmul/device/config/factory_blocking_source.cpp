@@ -82,8 +82,10 @@ void deepen_to_legacy_k_depth(const MatmulDesc& p, const HardwareDesc& hw, bool 
 }
 
 // 2D mcast (issue #57884 heuristic 1): largest in0_block_w * out_block_h * out_block_w that fits L1 (among
-// blocks at the layout's preferred in0_block_w, if any fit); ties go to the larger output block, then the
-// squarer one (each loaded A and B tile is reused across the block's width and height, so a square block
+// blocks at the layout's preferred in0_block_w, if any fit, then among blocks that fit with in0_block_w at least
+// Limits::min_in0_block_w when Tuned::k_depth_over_block_size is on: every K block ends with a pack of the whole
+// output block, which on some architectures doesn't hide behind data movement); ties go to the larger output block,
+// then the squarer one (each loaded A and B tile is reused across the block's width and height, so a square block
 // reuses the most for its area).
 std::optional<Blocking> block_2d(
     const HeuristicBlocking::Params& params,
@@ -97,13 +99,15 @@ std::optional<Blocking> block_2d(
     std::optional<Blocking> best;
     uint64_t best_product = 0;
     uint64_t best_area = 0;
+    const uint32_t min_k = params.tuned.k_depth_over_block_size ? std::min(params.limits.min_in0_block_w, p.Kt) : 1;
+    auto deep_enough = [&](uint32_t k) { return rules.k_fixed != 0 || k >= min_k; };
     for (uint32_t h : divisors_desc(per_core_M)) {
         for (uint32_t w : divisors_desc(per_core_N)) {
             const uint64_t area = static_cast<uint64_t>(h) * w;
             // K depth limit of this block size (larger blocks may go deeper); it only shrinks as w does
             const uint32_t k_max =
                 rules.k_fixed != 0 ? rules.k_fixed : max_in0_block_w(params, p.Kt, Family::Mcast2D, h, w);
-            if (best && !rules.prefers_other(best->in0_block_w) &&
+            if (best && !rules.prefers_other(best->in0_block_w) && deep_enough(best->in0_block_w) &&
                 area * std::max(k_max, rules.k_preferred) < best_product) {
                 break;  // narrower blocks for this h can't win
             }
@@ -125,9 +129,11 @@ std::optional<Blocking> block_2d(
                                                                   : best->out_block_w - best->out_block_h)
                          : 0;
                 const bool preference = best && rules.prefers(k) != rules.prefers(best->in0_block_w);
+                const bool depth = best && deep_enough(k) != deep_enough(best->in0_block_w);
                 if (preference ? rules.prefers(k)
+                    : depth    ? deep_enough(k)
                                : (product > best_product || (product == best_product && area > best_area) ||
-                                  (product == best_product && area == best_area && skew < best_skew))) {
+                               (product == best_product && area == best_area && skew < best_skew))) {
                     best = b;
                     best_product = product;
                     best_area = area;
@@ -277,7 +283,14 @@ std::optional<Blocking> block_reuse(
 
 }  // namespace
 
-HeuristicBlocking::Params HeuristicBlocking::Params::for_arch(tt::ARCH /*arch*/) { return {}; }
+HeuristicBlocking::Params HeuristicBlocking::Params::for_arch(tt::ARCH arch) {
+    Params params;
+    if (arch == tt::ARCH::BLACKHOLE) {
+        params.tuned.max_self_read_tiles_per_k_step = 12;
+        params.tuned.k_depth_over_block_size = true;
+    }
+    return params;
+}
 
 std::optional<Blocking> HeuristicBlocking::block(
     const MatmulDesc& p, const HardwareDesc& hw, Family family, const Split& split, const BlockRules& rules) const {
