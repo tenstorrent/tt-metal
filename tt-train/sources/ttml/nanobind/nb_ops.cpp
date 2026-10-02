@@ -177,7 +177,7 @@ void py_module(nb::module_& m) {
             &ttml::ops::dropout,
             nb::arg("tensor"),
             nb::arg("probability"),
-            nb::arg("use_per_device_seed") = false);
+            nb::arg("use_per_device_seed") = true);
     }
 
     {

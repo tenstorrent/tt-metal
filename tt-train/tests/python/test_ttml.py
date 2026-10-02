@@ -23,6 +23,13 @@ def test_ttml_module_imported():
     assert hasattr(ttml, "_ttml")
 
 
+def test_dropout_uses_per_device_seed_by_default():
+    """The Python operation must preserve the C++ per-device seed default."""
+    doc = ttml.ops.dropout.dropout.__doc__
+    assert doc is not None
+    assert "use_per_device_seed: bool = True" in doc
+
+
 def test_explicit_import_top_level():
     """Test that top-level symbols from _ttml are re-exported into ttml."""
     # Dynamically discover submodules from _ttml

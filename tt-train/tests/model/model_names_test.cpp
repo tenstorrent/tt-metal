@@ -4,8 +4,11 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <autograd/auto_context.hpp>
+#include <limits>
 #include <memory>
+#include <stdexcept>
 
 #include "modules/dropout_module.hpp"
 #include "modules/layer_norm_module.hpp"
@@ -65,6 +68,24 @@ protected:
         ttml::autograd::ctx().close_device();
     }
 };
+
+TEST(DropoutLayerTest, RejectsInvalidProbabilityAtConstruction) {
+    const std::array<float, 6> invalid_probabilities = {
+        -0.1F,
+        1.0F,
+        1.1F,
+        -std::numeric_limits<float>::infinity(),
+        std::numeric_limits<float>::infinity(),
+        std::numeric_limits<float>::quiet_NaN(),
+    };
+
+    for (const float probability : invalid_probabilities) {
+        EXPECT_THROW(std::make_shared<ttml::modules::DropoutLayer>(probability), std::invalid_argument);
+    }
+
+    EXPECT_NO_THROW(std::make_shared<ttml::modules::DropoutLayer>(0.0F));
+    EXPECT_NO_THROW(std::make_shared<ttml::modules::DropoutLayer>(0.5F));
+}
 
 TEST_F(ModelNamesFullTest, SameModel) {
     MNISTModel model1;
