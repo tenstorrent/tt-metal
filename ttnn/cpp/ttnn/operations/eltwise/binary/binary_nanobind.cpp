@@ -2068,8 +2068,14 @@ void bind_power(nb::module_& mod, const std::string& note = "") {
                  - Layouts
                * - BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32
                  - TILE, ROW_MAJOR
+               * - INT32, UINT32, UINT16 (non-negative integer scalar exponent)
+                 - TILE
 
-            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
+            If a floating-point input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
+            Integer input tensors must already be in TILE layout and take a scalar exponent with an integral value;
+            tensor exponents, non-integral exponents, and non-default tile shapes are rejected for them.
+            Integer power is not supported on Quasar.
+            Integer results wrap modulo 2^32 (2^16 for UINT16) on overflow.
 
             {2}
         )doc",
