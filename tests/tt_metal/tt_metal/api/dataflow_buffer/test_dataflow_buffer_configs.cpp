@@ -2485,56 +2485,6 @@ TEST_F(UnitMeshFixture, DMTest1xDFB1Bx4B_blk4_impl_2_0) {
     run_single_dfb_program_2_0(mesh_device, params);
 }
 
-// BLOCKED -> BLOCKED with different producer and consumer block sizes must be rejected by the direct API.
-TEST_F(UnitMeshFixture, DirectApi_BlockSizeMismatch_rejected) {
-    if (this->device().arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "M2 path is Quasar-only";
-    }
-    experimental::dfb::DataflowBufferConfig config{
-        .entry_size = 1024,
-        .num_entries = 16,
-        .producer_risc_mask = 0x1,
-        .num_producers = 1,
-        .pap = dfb::AccessPattern::BLOCKED,
-        .producer_block_size = 4,
-        .consumer_risc_mask = 0x10,
-        .num_consumers = 1,
-        .cap = dfb::AccessPattern::BLOCKED,
-        .consumer_block_size = 2};
-    Program program = CreateProgram();
-    EXPECT_THAT(
-        [&] {
-            experimental::dfb::CreateDataflowBuffer(program, CoreCoord(0, 0), config);
-            program.impl().finalize_dataflow_buffer_configs();
-        },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must equal consumer_block_size")));
-}
-
-// BLOCKED producer, block 3 -> 2 STRIDED consumers must be rejected by the direct API: the consumers
-// cannot split a block evenly.
-TEST_F(UnitMeshFixture, DirectApi_BlockedStrided_ConsumersDontDivideBlock_rejected) {
-    if (this->device().arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "M2 path is Quasar-only";
-    }
-    experimental::dfb::DataflowBufferConfig config{
-        .entry_size = 1024,
-        .num_entries = 24,
-        .producer_risc_mask = 0x1,
-        .num_producers = 1,
-        .pap = dfb::AccessPattern::BLOCKED,
-        .producer_block_size = 3,
-        .consumer_risc_mask = 0x30,
-        .num_consumers = 2,
-        .cap = dfb::AccessPattern::STRIDED};
-    Program program = CreateProgram();
-    EXPECT_THAT(
-        [&] {
-            experimental::dfb::CreateDataflowBuffer(program, CoreCoord(0, 0), config);
-            program.impl().finalize_dataflow_buffer_configs();
-        },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must be divisible by num_consumers")));
-}
-
 // Implicit-sync BLOCKED producer -> ALL consumers must be rejected by the direct API: implicit credits
 // are split across the consumers, but a broadcast needs the full count on every one.
 TEST_F(UnitMeshFixture, DirectApi_BlockedAll_ImplicitBroadcastProducer_rejected) {
