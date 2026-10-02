@@ -241,6 +241,9 @@ inline __attribute__((always_inline)) void write()
  * when all its assignments are compile-time constants; otherwise it uses TT instructions.
  * Use separate calls when hardware programming order matters.
  *
+ * @note Combining assignments saves instructions only when they share a register
+ *       word; assignments to different words gain nothing from sharing one call.
+ *
  * @code
  * write<Access::TensixCfgUnit>(
  *     set<AluFormatSpecReg0::SrcA, Sec::S0>(src_a),
