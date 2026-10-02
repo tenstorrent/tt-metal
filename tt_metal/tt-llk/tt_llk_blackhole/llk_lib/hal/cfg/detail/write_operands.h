@@ -126,11 +126,19 @@ inline constexpr bool is_gpr_write_v<GprWrite<F, S, GprIndex, Size, Completion>>
 template <typename T>
 inline constexpr bool is_write_operation_v = is_field_assignment_v<T> || is_gpr_write_v<T>;
 
-// Position the value in its field and clear bits outside the field mask.
-template <typename Assignment>
+// Position the value in its field. A left-shifted value can only overflow
+// upward, and emission clips to GroupMask, so bits above the field are cleared
+// only when another field of the same group occupies them.
+template <std::uint32_t GroupMask, typename Assignment>
 inline constexpr std::uint32_t encode(const Assignment& assignment)
 {
-    return (assignment.value << Assignment::shift) & Assignment::mask;
+    constexpr std::uint32_t through_field = Assignment::mask | (Assignment::mask - 1u);
+    const std::uint32_t shifted           = assignment.value << Assignment::shift;
+    if constexpr ((GroupMask & ~through_field) != 0u)
+    {
+        return shifted & Assignment::mask;
+    }
+    return shifted;
 }
 
 } // namespace hal::cfg::detail

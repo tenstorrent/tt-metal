@@ -41,7 +41,7 @@ inline constexpr WriteOperandMeta write_operand_meta()
 
         if constexpr (is_constant_field_assignment_v<Operation>)
         {
-            return {Operation::scope, Operation::addr, Operation::mask, 1u, false, true, encode(Operation {})};
+            return {Operation::scope, Operation::addr, Operation::mask, 1u, false, true, encode<Operation::mask>(Operation {})};
         }
         else
         {
