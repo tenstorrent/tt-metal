@@ -2,14 +2,46 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""PyTorch reference of BEVFormer's detection decoder.
+"""
+Detection transformer decoder in PyTorch.
 
-Based on https://github.com/fundamentalvision/BEVFormer/blob/master/projects/mmdet3d_plugin/bevformer/modules/decoder.py
+This module implements the decoder of BEVFormer's detection head, which refines the 900
+object queries against the encoder's BEV features (50x50 for BEVFormer-tiny, 200x200 for
+BEVFormer-base, same decoder otherwise) and returns every layer's queries and 3D reference
+points for the classification and regression branches. It is the reference the TTNN
+decoder in ``tt/tt_decoder.py`` is checked against. Parameter names follow mmcv's modules,
+so the ``pts_bbox_head.transformer.decoder`` weights of a BEVFormer checkpoint load into
+it with that prefix stripped.
 
-Each layer runs ``self_attn -> norm -> cross_attn -> norm -> ffn -> norm`` in the
-sequence-first ``(num_query, bs, embed_dims)`` layout. The cross-attention
-(``CustomMSDeformableAttention`` upstream) is ``MSDeformableAttention`` with one level
-and one reference point per query, over the BEV feature map.
+Each of the six layers performs, in the sequence-first ``(num_query, bs, embed_dims)``
+layout:
+1. Self-attention over the queries, ``query_pos`` added to Q and K, then a residual add
+2. LayerNorm
+3. Deformable cross-attention, every query sampling the BEV map around its reference point,
+   with a residual add
+4. LayerNorm
+5. FFN (Linear-ReLU-Linear) with a residual add
+6. LayerNorm
+
+After each layer the regression branch refines the reference points in logit space:
+``sigmoid(delta + inverse_sigmoid(points))``, with ``delta`` the (x, y, z) entries of the
+predicted box code.
+
+Only inference is kept: dropout, attention and key padding masks are dropped, and every
+layer's output is returned (upstream ``return_intermediate=True``). The cross-attention,
+``CustomMSDeformableAttention`` upstream, is ``reference/ms_deformable_attention.py``'s
+``MSDeformableAttention`` with one level and one reference point per query.
+
+Adapted from the UniAD port in ``models/experimental/uniad/reference/decoder.py``, which
+is based on the BEVFormer decoder and the mmdetection and mmcv versions BEVFormer is built
+on:
+https://github.com/fundamentalvision/BEVFormer/blob/master/projects/mmdet3d_plugin/bevformer/modules/decoder.py
+https://github.com/open-mmlab/mmdetection/blob/v2.14.0/mmdet/models/utils/transformer.py
+https://github.com/open-mmlab/mmcv/blob/v1.4.0/mmcv/cnn/bricks/transformer.py
+
+BEVFormer decoder configurations:
+https://github.com/fundamentalvision/BEVFormer/blob/master/projects/configs/bevformer/bevformer_base.py
+https://github.com/fundamentalvision/BEVFormer/blob/master/projects/configs/bevformer/bevformer_tiny.py
 """
 
 import torch
@@ -21,6 +53,8 @@ from models.experimental.bevformer.reference.ms_deformable_attention import MSDe
 
 
 def inverse_sigmoid(x, eps=1e-5):
+    """mmdetection's ``inverse_sigmoid``: ``log(x / (1 - x))`` with ``x`` and ``1 - x`` clamped
+    to at least ``eps``, so points on the [0, 1] border give finite logits."""
     x = x.clamp(min=0, max=1)
     x1 = x.clamp(min=eps)
     x2 = (1 - x).clamp(min=eps)
@@ -28,6 +62,14 @@ def inverse_sigmoid(x, eps=1e-5):
 
 
 class MultiheadAttention(nn.Module):
+    """
+    mmcv's ``MultiheadAttention`` reduced to the decoder's self-attention.
+
+    ``query_pos`` is added to the query and key but not to the value, and the input is added
+    back as the residual. The ``nn.MultiheadAttention`` is named ``attn``, as in mmcv, so
+    checkpoint keys match.
+    """
+
     def __init__(self, embed_dims, num_heads):
         super().__init__()
         self.embed_dims = embed_dims
@@ -43,6 +85,9 @@ class MultiheadAttention(nn.Module):
 
 
 class FFN(nn.Module):
+    """mmcv's ``FFN`` with two fully connected layers and no dropout: ``x + Linear(ReLU(Linear(x)))``.
+    ``layers`` keeps mmcv's nesting, so checkpoint keys match."""
+
     def __init__(self, embed_dims=256, feedforward_channels=512):
         super().__init__()
         self.layers = nn.Sequential(
@@ -55,6 +100,20 @@ class FFN(nn.Module):
 
 
 class DetrTransformerDecoderLayer(nn.Module):
+    """
+    One decoder layer with mmdetection's ``DetrTransformerDecoderLayer`` operation order,
+    ``("self_attn", "norm", "cross_attn", "norm", "ffn", "norm")``.
+
+    Args:
+        embed_dims (int): Channels of the queries and of the BEV features.
+        num_heads (int): Heads of both attentions.
+        feedforward_channels (int): Hidden channels of the FFN.
+        num_points (int): Sampling points per head of the cross-attention.
+
+    ``attentions``, ``ffns`` and ``norms`` are named and ordered as in mmcv's
+    ``BaseTransformerLayer``, so checkpoint keys match.
+    """
+
     def __init__(self, embed_dims, num_heads, feedforward_channels, num_points):
         super().__init__()
         cross_attn_config = DeformableAttentionConfig(
@@ -77,6 +136,14 @@ class DetrTransformerDecoderLayer(nn.Module):
 
 
 class DetectionTransformerDecoder(nn.Module):
+    """
+    BEVFormer's ``DetectionTransformerDecoder``: ``num_layers`` decoder layers, each followed
+    by a reference-point refinement through that layer's regression branch.
+
+    The defaults are BEVFormer's: six layers of 256 channels, 8 heads, 512 FFN channels and
+    4 sampling points.
+    """
+
     def __init__(self, num_layers=6, embed_dims=256, num_heads=8, feedforward_channels=512, num_points=4):
         super().__init__()
         self.layers = nn.ModuleList(

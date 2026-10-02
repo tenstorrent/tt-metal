@@ -73,7 +73,15 @@ class TtFFN:
 
 
 class TtDetrTransformerDecoderLayer:
+    """One decoder layer, ``self_attn -> norm -> cross_attn -> norm -> ffn -> norm``.
+
+    The self-attention and FFN residuals are added inside the LayerNorm that follows them;
+    the cross-attention adds its own.
+    """
+
     def __init__(self, params, device, bev_shape, grid_sample_compute_config):
+        """``params`` is one entry of ``create_decoder_parameters(...).layers``. The cross-attention
+        samples a ``bev_shape`` ``(bev_h, bev_w)`` map with ``grid_sample_compute_config``."""
         self.params = params
         self.self_attn = TtMultiheadAttention(params.self_attn)
         self.cross_attn = TTMSDeformableAttention(
@@ -105,6 +113,8 @@ class TtDetectionTransformerDecoder:
     """
 
     def __init__(self, params, device, bev_shape, batch_first=False):
+        """``params`` comes from ``create_decoder_parameters``; ``batch_first`` selects the
+        layout of ``query``, ``query_pos``, ``value`` and the stacked outputs (see ``__call__``)."""
         self.batch_first = batch_first
         grid_sample_compute_config = fp32_grid_sample_config(device)
         self.layers = [
