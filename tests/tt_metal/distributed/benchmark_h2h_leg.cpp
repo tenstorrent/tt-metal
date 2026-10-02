@@ -4,6 +4,7 @@
 // The host-to-host leg alone, under google-benchmark: RdmaWindow directly, no device and no
 // H2HSocket, so what is measured is the transport rather than the scheduler in front of it.
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -28,6 +29,15 @@ namespace {
 // with a slot. Slots follow, then the origin buffers, which only this rank reads.
 constexpr uint64_t kCreditOff = 0;
 constexpr uint64_t kSlotsOff = 4096;
+
+// The window is peer-written, so volatile stays in the signatures; atomic_ref cannot bind it,
+// and confining the cast here is why these exist. Mirrors host_h2h_socket.cpp.
+uint64_t load_acquire(const volatile uint64_t* p) {
+    return std::atomic_ref<uint64_t>(const_cast<uint64_t&>(*p)).load(std::memory_order_acquire);
+}
+void store_release(volatile uint64_t* p, uint64_t v) {
+    std::atomic_ref<uint64_t>(const_cast<uint64_t&>(*p)).store(v, std::memory_order_release);
+}
 
 // A stalled rank must fail rather than spin: the closing agree() is collective, so one side
 // hanging strands the other in it.
@@ -137,8 +147,8 @@ uint32_t pattern_word(uint32_t rank) {
 bool take_frame(RdmaWindow& win, volatile uint64_t* guard, uint32_t peer) {
     const auto deadline = std::chrono::steady_clock::now() + kStall;
     for (uint32_t idle = 0;; ++idle) {
-        if (tt_uva_frame_armed(__atomic_load_n(guard, __ATOMIC_ACQUIRE))) {
-            __atomic_store_n(guard, uint64_t{0}, __ATOMIC_RELEASE);
+        if (tt_uva_frame_armed(load_acquire(guard))) {
+            store_release(guard, uint64_t{0});
             return true;
         }
         if (idle >= 1024) {
@@ -401,7 +411,7 @@ BENCHMARK_DEFINE_F(H2HLegFixture, Bandwidth)(benchmark::State& state) {
                     }
                 }
 
-                const uint64_t seen = __atomic_load_n(credit, __ATOMIC_ACQUIRE);
+                const uint64_t seen = load_acquire(credit);
                 while (credited < seen && credited < total) {
                     const uint32_t s = credited % window_;
                     if (credited == warmup) {
@@ -432,13 +442,13 @@ BENCHMARK_DEFINE_F(H2HLegFixture, Bandwidth)(benchmark::State& state) {
                 uint8_t* const slot = base_ + kSlotsOff + static_cast<uint64_t>(s) * page_;
                 volatile uint64_t* const guard = reinterpret_cast<volatile uint64_t*>(slot + payload_bytes_);
 
-                if (tt_uva_frame_armed(__atomic_load_n(guard, __ATOMIC_ACQUIRE))) {
+                if (tt_uva_frame_armed(load_acquire(guard))) {
                     if (!frame_is_good(slot, consumed)) {
                         ++bad;
                     }
                     // Zeroed before the credit, never after: the credit lets the peer re-arm
                     // this slot, and a late zero would erase a fresh frame.
-                    __atomic_store_n(guard, uint64_t{0}, __ATOMIC_RELEASE);
+                    store_release(guard, uint64_t{0});
                     ++consumed;
                     if (const std::string e = win_->put_word(consumed, peer_, kCreditOff); !e.empty()) {
                         err = "rank 1: " + e;
