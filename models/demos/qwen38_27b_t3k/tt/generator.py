@@ -65,7 +65,11 @@ class Qwen38Generator:
             cluster_shape=tuple(model.mesh.shape),
             max_batch_size=32,
             max_top_k=32,
-            pad_logits_to_power_of_2=False,
+            # 248320 / 8 devices is 31040, not a power of two, and the multi-core bitonic
+            # top-k network requires one; the large-indices route that would otherwise cover
+            # it is Blackhole-only. Without this the sampler's top-k runs on a single Tensix
+            # core across the whole 31040-wide row.
+            pad_logits_to_power_of_2=True,
         )
         if sampling_strategy not in ("split", "argmax"):
             raise ValueError("Unknown common sampling strategy")
