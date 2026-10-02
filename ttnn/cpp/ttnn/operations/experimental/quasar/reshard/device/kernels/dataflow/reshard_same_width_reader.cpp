@@ -29,6 +29,7 @@ void kernel_main() {
     constexpr bool read_from_dram = get_arg(args::interface_with_dram);
     constexpr uint32_t unit_size = get_arg(args::unit_size);
 #ifdef UNALIGNED
+    constexpr uint32_t local_unit_size_padded = get_arg(args::local_unit_size_padded);
     constexpr uint32_t remote_unit_size_padded = get_arg(args::remote_unit_size_padded);
 #endif
     constexpr AllocatorBankType bank_type = read_from_dram ? AllocatorBankType::DRAM : AllocatorBankType::L1;
@@ -48,9 +49,13 @@ void kernel_main() {
     uint32_t l1_write_addr = shard_cb.get_write_ptr() + write_offset;
     uint32_t vararg_idx = 0;
 #ifdef UNALIGNED
+    constexpr uint32_t remote_units_per_shard = get_arg(args::remote_units_per_shard);
+    constexpr uint32_t is_reader = get_arg(args::is_reader);
+    // Second RISC uses the upper half so both do not write the same scratch bytes.
+    constexpr uint32_t scratch_base_offset = is_reader ? 0 : remote_units_per_shard * remote_unit_size_padded;
     DataflowBuffer cb_scratch(dfb::scratch_cb);
-    uint32_t l1_scratch_write_addr = cb_scratch.get_write_ptr();
-    uint32_t l1_scratch_read_addr = cb_scratch.get_read_ptr();
+    uint32_t l1_scratch_write_addr = cb_scratch.get_write_ptr() + scratch_base_offset;
+    uint32_t l1_scratch_read_addr = cb_scratch.get_read_ptr() + scratch_base_offset;
     for (uint32_t i = 0; i < num_reads; ++i) {
         uint32_t bank_id = get_vararg(vararg_idx++);
         uint32_t src_offset = get_vararg(vararg_idx++);
@@ -72,7 +77,7 @@ void kernel_main() {
                  .noc_y = (uint32_t)my_y[noc.get_noc_id()],
                  .addr = pad_align_addr},
                 {.offset_bytes = 0});
-            l1_write_addr += unit_size;
+            l1_write_addr += local_unit_size_padded;
             pad_align_addr += remote_unit_size_padded;
         }
         noc.async_read_barrier();

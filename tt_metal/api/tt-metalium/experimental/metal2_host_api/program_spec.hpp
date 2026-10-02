@@ -15,6 +15,7 @@
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/scratchpad_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
 
@@ -33,6 +34,7 @@ namespace tt::tt_metal::experimental {
 //      o scratchpads
 //  - user-managed resources (parameters)
 //      o tensor parameters
+//      o prefetcher pipe parameters (advanced option)
 //
 // It also specifies the device nodes (physical location) where kernels will run,
 // and where device resources will be allocated.
@@ -96,6 +98,10 @@ struct ProgramSpec {
     // A valid ProgramSpec has at least one WorkUnitSpec.
     // Each kernel must be referenced by at least one WorkUnitSpec.
     Group<WorkUnitSpec> work_units;
+
+    // Advanced options (see advanced_options.hpp)
+    // Experimental PrefetcherPipe parameter declarations live here.
+    ProgramAdvancedOptions advanced_options;
 };
 
 }  // namespace tt::tt_metal::experimental

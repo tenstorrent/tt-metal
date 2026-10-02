@@ -145,3 +145,18 @@ inline void _llk_unpack_set_srcB_dummy_valid_()
 {
     TTI_UNPACR_NOP(p_unpacr::UNP_B, 1 /*Set_Dvalid*/, 0, 0, 0, p_unpacr::UNP_NOP);
 }
+
+/**
+ * @brief Returns the NOP Tensix instruction for unused unpacker engine
+ *
+ * Zeros the opposite Src register and sets its dvalid (used when ELWADD needs both SrcA and SrcB).
+ *
+ * @tparam UNP_SEL: unpacker engine in use
+ */
+template <std::uint32_t UNP_SEL>
+constexpr std::uint32_t nop_insn_for_unused_unpacker_engine()
+{
+    static_assert((UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B), "UNP_SEL must be UNP_A or UNP_B");
+    constexpr auto unpacr_engine = UNP_SEL == p_unpacr::UNP_A ? p_unpacr::UNP_B : p_unpacr::UNP_A;
+    return TT_OP_UNPACR_NOP(unpacr_engine, 1 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, 0 /*Src_ClrVal_Ctrl*/, 0 /*Nop_type*/);
+}

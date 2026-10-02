@@ -311,7 +311,6 @@ jobs:
       cpu-docker-image: ${{ needs.build-tsan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
       enabled-skus: ALL_SKUS_IN_TESTS
-      per-test-timeout: 15 # max minutes for any SKU timeout in the smoke tests yaml
       product: tt-metalium
       enable-kernel-ccache: true
 
@@ -352,7 +351,6 @@ jobs:
       docker-image: ${{ needs.resolve-docker-pull-refs-asan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
       enabled-skus: ALL_SKUS_IN_TESTS
-      per-test-timeout: 15 # max minutes for any SKU timeout in the basic tests yaml
       product: tt-metalium
 
   # ===========================================================================
@@ -371,7 +369,6 @@ jobs:
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       enabled-skus: ALL_SKUS_IN_TESTS
-      per-test-timeout: 15
 
   # ===========================================================================
   # Team: ttnn
@@ -416,7 +413,6 @@ jobs:
       docker-image: ${{ needs.resolve-docker-pull-refs-tsan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
       enabled-skus: ALL_SKUS_IN_TESTS
-      per-test-timeout: 15 # max minutes for any SKU timeout in the smoke tests yaml
       product: tt-nn
       enable-kernel-ccache: true
 
@@ -457,7 +453,6 @@ jobs:
       docker-image: ${{ needs.resolve-docker-pull-refs-asan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
       enabled-skus: ALL_SKUS_IN_TESTS
-      per-test-timeout: 15 # max minutes for any SKU timeout in the basic tests yaml
       product: tt-nn
 
   ttnn-merge-gate-tests:
@@ -473,7 +468,6 @@ jobs:
     with:
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
-      per-test-timeout: 15
 
   # ===========================================================================
   # Team: models
@@ -496,7 +490,6 @@ jobs:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
-      per-test-timeout: 15
 
   # ===========================================================================
   # Team: train
@@ -519,7 +512,6 @@ jobs:
       enabled-skus: ALL_SKUS_IN_TESTS
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
-      per-test-timeout: 15
 
   # ===========================================================================
   # Team: scaleout (fabric)
@@ -538,11 +530,9 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
     with:
-      test-category: merge_gate
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
-      per-test-timeout: 15
 
   # Fabric CPU-only tests removed from merge gate — https://github.com/tenstorrent/tt-metal/pull/47987
   # Scaffolding kept for a future smoke subset (fabric_cpu_only_smoke_merge_gate_tests.yaml).
@@ -555,12 +545,10 @@ jobs:
     uses: ./.github/workflows/fabric-cpu-only-tests-impl.yaml
     with:
       tests-yaml-path: ./tests/pipeline_reorg/fabric_cpu_only_smoke_merge_gate_tests.yaml
-      test-category: smoke
       runs-on-sku: cpu_medium
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
-      per-test-timeout: 15
 
   # ===========================================================================
   # Team: llk
@@ -617,7 +605,6 @@ jobs:
       test-category: merge_gate
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
-      per-test-timeout: 15
       enabled-skus: ALL_SKUS_IN_TESTS
       # "*" = no allowlist filter; empty = skip all; else CSV of logical SKUs.
       sku-allowlist: ${{
@@ -632,6 +619,86 @@ jobs:
           || (needs.find-changes.outputs.llk-wormhole-changed == 'true' && 'wh_n150_civ2')
           || (needs.find-changes.outputs.llk-blackhole-changed == 'true' && 'bh_p150b_civ2_viommu')
           || '' }}
+
+  # LLK perf merge gate (tests/pipeline_reorg/llk_perf_merge_gate_tests.yaml): measure
+  # the queue head, non speed-of-light, L1_TO_L1, and compare it with the merge
+  # baseline at the queue's base. The base is the head of the entry in front, and
+  # that entry's gate uploaded its head as merge_baseline, so the next entry finds it.
+  llk-perf-merge-gate-changes:
+    name: LLK perf merge gate (changes)
+    if: ${{
+        github.event.action != 'destroyed' &&
+        (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch')
+      }}
+    runs-on: ubuntu-slim
+    outputs:
+      changed: ${{ steps.classify.outputs.changed }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 0
+          filter: tree:0
+          sparse-checkout: .github
+      - name: Classify this entry's own changes
+        id: classify
+        env:
+          # In the queue, base..head holds only this entry; the entries in front are in the base.
+          BASE: ${{ github.event.merge_group.base_sha }}
+        run: |
+          BASE=${BASE:-$(git merge-base origin/main HEAD)}
+          CHANGED=$(git diff --name-only --diff-filter=ACMRT "$BASE" HEAD | .github/scripts/llk-perf-inputs-changed.sh)
+          echo "LLK perf inputs changed in ${BASE}..$(git rev-parse HEAD): ${CHANGED}"
+          echo "changed=${CHANGED}" >> "$GITHUB_OUTPUT"
+
+  llk-perf-merge-gate-measure:
+    name: LLK perf merge gate (measure)
+    needs: [llk-perf-merge-gate-changes]
+    if: needs.llk-perf-merge-gate-changes.outputs.changed == 'true'
+    uses: ./.github/workflows/llk-perf-impl.yaml
+    with:
+      architecture: all
+      tests-yaml: ./tests/pipeline_reorg/llk_perf_merge_gate_tests.yaml
+      compile-quasar: false
+      speed-of-light: false
+      perf-run-types: L1_TO_L1
+      pipeline: merge_baseline
+      upload-to-warehouse: true
+    secrets: inherit
+
+  llk-perf-merge-gate:
+    name: LLK perf merge gate (${{ matrix.arch }})
+    needs: [llk-perf-merge-gate-changes, llk-perf-merge-gate-measure]
+    if: always() && !cancelled() && needs.llk-perf-merge-gate-changes.outputs.changed == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: blackhole
+            threshold: "0.02"
+            module_thresholds: ""
+          - arch: wormhole
+            threshold: "0.10"
+            module_thresholds: perf_matmul=0.25,perf_math_matmul=0.25
+    uses: ./.github/workflows/llk-perf-gate-impl.yaml
+    with:
+      arch: ${{ matrix.arch }}
+      gate_name: LLK perf merge gate
+      baseline_pipeline: merge_baseline
+      baseline_match_ref: ${{ github.event.merge_group.base_sha || github.sha }}
+      # No wait, so the queue never waits for the warehouse: a missing baseline
+      # falls back to the newest older one in the base's history, marked stale.
+      baseline_wait_minutes: "0"
+      speed_of_light: "false"
+      run_types: L1_TO_L1
+      threshold: ${{ matrix.threshold }}
+      module_thresholds: ${{ matrix.module_thresholds }}
+      min_cycles: "30"
+      measure_result: ${{ needs.llk-perf-merge-gate-measure.result }}
+      # Report-only for the first week. To block, set this to true and add both
+      # llk-perf-merge-gate jobs to optional-jobs in Merge Gate Status.
+      fail_on_regression: false
+    secrets: inherit
 
   # ===========================================================================
   # Team: ttsim
@@ -689,7 +756,9 @@ jobs:
         contains(join(needs.*.result, ','), 'failure')
       }}
 
-    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, ttsim-quasar-merge-gate-tests]
+    # The LLK perf merge gate is in needs, so the queue waits for its verdict, but not
+    # in optional-jobs while it is report-only, so its failure does not block a merge.
+    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, ttsim-quasar-merge-gate-tests, llk-perf-merge-gate-measure, llk-perf-merge-gate]
     runs-on: ubuntu-slim
     steps:
       - name: Check if all jobs passed

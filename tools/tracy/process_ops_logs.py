@@ -644,23 +644,35 @@ def _convert_device_op_entry(device_op_time: Dict[str, Any], freq: int) -> OpDic
     return device_op
 
 
+def _host_replayed_trace(trace_replays: Optional[TraceReplayDict], device_id: int, trace_id: int) -> bool:
+    """True if the host log holds a TT_METAL_TRACE_REPLAY marker for this trace on this device."""
+    if not trace_replays:
+        return False
+    return trace_id in trace_replays.get(device_id, {})
+
+
 def _enrich_ops_from_perf_csv(
     host_ops_by_device: DeviceOpsDict,
     device_perf_by_device: Dict[int, Dict[Tuple[int, Optional[int], Optional[int]], Dict[str, Any]]],
     trace_replays: Optional[TraceReplayDict],
 ) -> DeviceOpsDict:
     for device_id in host_ops_by_device:
-        assert (
-            device_id in device_perf_by_device
-        ), f"Device {device_id} present in host logs but missing from {PROFILER_CPP_DEVICE_PERF_REPORT}"
+        # A device absent from the report is not an error by itself: if all of its host ops belong to traces
+        # that were captured but never replayed, the device ran nothing and the loader created no entry for it.
+        # Treat it as having no rows and let the per-op checks below decide.
+        device_rows = device_perf_by_device.get(device_id, {})
 
         # Build a lookup that matches the C++ ProgramExecutionUID structure:
         # (GLOBAL CALL COUNT, METAL TRACE ID) -> list of perf rows (one per replay session, or one for non-trace)
         perf_rows_by_key: Dict[Tuple[int, Optional[int]], List[Dict[str, Any]]] = {}
-        for (op_id, trace_id, session_id), row in device_perf_by_device[device_id].items():
+        replayed_trace_ids: Set[int] = set()
+        for (op_id, trace_id, session_id), row in device_rows.items():
             perf_rows_by_key.setdefault((op_id, trace_id), []).append(row)
+            if trace_id is not None:
+                replayed_trace_ids.add(int(trace_id))
 
         enriched_ops = []
+        dropped_ops_by_trace: Dict[int, int] = {}
         for host_op in host_ops_by_device[device_id]:
             op_id = int(host_op["global_call_count"])
             host_trace_id = host_op.get("metal_trace_id")
@@ -680,9 +692,29 @@ def _enrich_ops_from_perf_csv(
                     if cand_op_id == op_id:
                         candidates.extend(rows)
 
+            if (
+                not candidates
+                and host_trace_id is not None
+                and host_trace_id not in replayed_trace_ids
+                and not _host_replayed_trace(trace_replays, device_id, host_trace_id)
+            ):
+                # The host captured this trace but never replayed it (e.g. a prefill-only demo
+                # that records the decode trace up front), so the device produced no data for
+                # any of its ops. Both sources agree: no REPLAY marker from the host and no rows
+                # from the device. Leave these ops without device data instead of failing the
+                # whole report. A trace that the host did replay keeps the assert below, so a
+                # device report that lost every row of a replayed trace is still an error.
+                dropped_ops_by_trace[host_trace_id] = dropped_ops_by_trace.get(host_trace_id, 0) + 1
+                continue
+
+            missing_hint = ""
+            if host_trace_id is not None and host_trace_id not in replayed_trace_ids:
+                missing_hint += "; the host replayed this trace, so the device report should have rows for it"
+            if not device_rows:
+                missing_hint += "; the report has no rows at all for this device"
             assert candidates, (
                 f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
-                f"for device {device_id} (trace_id={host_trace_id})"
+                f"for device {device_id} (trace_id={host_trace_id}){missing_hint}"
             )
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
@@ -707,6 +739,13 @@ def _enrich_ops_from_perf_csv(
 
                 enriched_op["_device_perf_row"] = perf_row
                 enriched_ops.append(enriched_op)
+
+        for dropped_trace_id, dropped_count in sorted(dropped_ops_by_trace.items()):
+            logger.warning(
+                f"Device {device_id}: trace {dropped_trace_id} was captured but never replayed (no REPLAY marker "
+                f"from the host, no rows in {PROFILER_CPP_DEVICE_PERF_REPORT}); its {dropped_count} host ops get no "
+                f"device data and appear in the report as host-only rows"
+            )
 
         host_ops_by_device[device_id] = enriched_ops
     return host_ops_by_device
@@ -1005,11 +1044,6 @@ def _enrich_ops_from_device_logs(
                 )
                 assign_metric("Math Scoreboard Stall Rate", per_op_stats.get("Math Scoreboard Stall Rate", {}))
 
-                # Fidelity metrics
-                assign_metric("Fidelity Stall Rate", per_op_stats.get("Fidelity Stall Rate", {}))
-                assign_metric("HiFi Fraction", per_op_stats.get("HiFi Fraction", {}))
-                assign_metric("Avg HF Cycles Per Instrn", per_op_stats.get("Avg HF Cycles Per Instrn", {}), suffix="")
-
                 # Instruction issue rates
                 assign_metric("T0 Instrn Issue Rate", per_op_stats.get("T0 Instrn Issue Rate", {}), suffix="")
                 assign_metric("T1 Instrn Issue Rate", per_op_stats.get("T1 Instrn Issue Rate", {}), suffix="")
@@ -1304,9 +1338,7 @@ def get_device_data_generate_report(
                     metrics = device_efficiency_metrics[device]
 
                     for base_name, m in metrics.items():
-                        is_raw = (
-                            "IPC" in base_name or "Issue Rate" in base_name or base_name == "Avg HF Cycles Per Instrn"
-                        )
+                        is_raw = "IPC" in base_name or "Issue Rate" in base_name
                         suffix = "" if is_raw else " (%)"
                         # Legacy "Avg on full grid" column names.
                         if base_name == "SFPU Util":

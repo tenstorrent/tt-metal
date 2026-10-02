@@ -40,6 +40,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -1055,6 +1056,16 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         act_block_h_ntiles);
     uint32_t num_blocks_act_h_per_core = per_core_out_matrix_height_ntiles / act_block_h_ntiles;
 
+    // 1D depthwise multi-height-block accumulation needs a DEDICATED read-back scratch. out_cb (the
+    // persistent borrowed sharded output) cannot double as the dest-reuse scratch when there is more
+    // than one height block: earlier blocks' finished tiles are never popped, so block N's read-back
+    // would consume block N-1's output. Mirrors the shared cb_info's depthwise_dest_reuse_scratch
+    // gate (conv2d_op_program_factory_common.cpp) and upstream conv2d_op_sharded_program_factory.cpp,
+    // and matches the compute kernel's use_partials_scratch CTA (issue #51270, items 4/5). Single
+    // height block keeps the in-place accumulate on out_cb.
+    const bool depthwise_uses_partials_scratch =
+        is_conv_1d_depthwise_conv && !coalesce_1d_depthwise_kw_reads && num_blocks_act_h_per_core > 1;
+
     // OPTION B — PROGRAM A (tilize-only, standalone). When TT_METAL_QSR_CONV_SPLIT_PROGRAM is set, this conv
     // op runs ONLY the gather+tilize half in a fresh tilize-oriented Metal program (conv_tilize_only_metal2.cpp)
     // and OUTPUTS the tilized activations — no matmul, no weights reader, no output writer. This isolates the
@@ -1515,7 +1526,8 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                 .entry_size = tilized_info.page_size,
                 .num_entries = 1,
                 .data_format_metadata = tilized_info.data_format,
-                .unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 1, .num_faces = 4},
+                // Four single-row faces: a 2x2 grid of 1x16 faces.
+                .tile_format_metadata = tt::tt_metal::Tile::from_face_grid(2, 2, {1, tt::constants::FACE_WIDTH}),
             });
         } else if (split_program_tilize_only) {
             // OPTION B / Program A: the tilize writes STRAIGHT INTO the borrowed OUT (sized to M*K below,
@@ -1528,10 +1540,14 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     }
 
     // MATMUL_PARTIALS: self-loop accumulator (resolution #2).  Borrowed-from OUTPUT when
-    // partials_cb_uses_output.  1D depthwise allocates no partials CB (dest-reuse), so skip it there.
-    if (!is_conv_1d_depthwise_conv && !split_program_tilize_only) {
+    // partials_cb_uses_output.  1D depthwise normally accumulates in-place on out_cb (dest-reuse) and
+    // allocates no partials CB — EXCEPT the multi-height-block non-coalesced path, which needs a
+    // DEDICATED (never borrowed) scratch so block N doesn't read back block N-1's already-written
+    // output (#51270 item 4). The shared cb_info sizes MATMUL_PARTIALS to act_block_num_tiles for that
+    // case.
+    if ((!is_conv_1d_depthwise_conv && !split_program_tilize_only) || depthwise_uses_partials_scratch) {
         auto dfb = make_dfb(DFB_MATMUL_PARTIALS, Conv2dCb::MATMUL_PARTIALS);
-        if (partials_cb_uses_output) {
+        if (partials_cb_uses_output) {  // never true for depthwise -> depthwise scratch stays dedicated
             dfb.borrowed_from = TP_OUTPUT;
         }
         spec.dataflow_buffers.push_back(std::move(dfb));
@@ -1700,10 +1716,20 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         // QSR: this conv activation reader fills the ACT/ACT_ROW_MAJOR DFB via per-window "stick" sub-tile NOC
         // reads (read_sticks()); that pattern stalls the DFB implicit-sync credit accounting (reader pinned at
         // NRBW). Opt out so explicit reserve/push credits stay authoritative (mirrors tilize/transpose HC-sharded).
-        reader_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        reader_hw = m2::DataMovementHardwareConfig{
+            .config_2xx =
+                m2::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     } else {
-        reader_hw =
-            m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = reader_noc};
+        reader_hw = m2::DataMovementHardwareConfig{
+            .config_1xx =
+                m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = reader_noc,
+                },
+        };
     }
     m2::KernelSpec reader_kernel_spec{
         .unique_id = KERNEL_READER,
@@ -1847,7 +1873,12 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             // 2D writer CTA set (writer_tiled_out_2d_..._metal2).
             ctas.insert({"num_blocks_weight_h", num_blocks_act_w});
             ctas.insert({"weight_block_num_tiles", weight_block_num_tiles});
-            ctas.insert({"weight_block_height_num_outer", out_conv_c_blocks});
+            // Loop count = INPUT channel-block count (conv_act_c_blocks): the writer pushes one weights
+            // block per input channel-block that compute consumes (in0_num_blocks_w = conv_act_c_blocks *
+            // num_blocks_act_w). Using out_conv_c_blocks here under/over-pushes when the input and output
+            // shard grids differ in the channel dim -> compute's cb_in1.wait_front hangs (#51270 item 2).
+            // The tile-id stride keeps out_conv_c_blocks via weight_block_height_num_outer_in below.
+            ctas.insert({"weight_block_height_num_outer", conv_act_c_blocks});
             if (is_sender) {
                 ctas.insert({"weight_block_height_ntiles", weight_block_h_ntiles});
                 ctas.insert({"weight_block_width_ntiles", weight_block_w_ntiles});
@@ -1878,7 +1909,9 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             ctas.insert({"num_blocks_weight_h", num_blocks_act_w});
             ctas.insert({"weight_block_num_tiles", weight_block_num_tiles});
             if (is_sender) {
-                ctas.insert({"weight_block_height_num_outer", out_conv_c_blocks});
+                // Loop count = input channel-block count (see the 2D branch above). Inert for non-block-
+                // sharded convs (both quantities are 1), fixed for consistency (#51270 item 2).
+                ctas.insert({"weight_block_height_num_outer", conv_act_c_blocks});
                 ctas.insert({"weight_block_height_ntiles", weight_block_h_ntiles});
                 ctas.insert({"weight_block_width_ntiles", weight_block_w_ntiles});
                 ctas.insert({"weight_stride_h", weight_matrix_width_ntiles});
@@ -1944,10 +1977,20 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         // compute. On Quasar the implicit-sync ISR would ALSO bump those tile counters -> double-count ->
         // 16-bit counter overflow -> TILE_COUNTERS fault on the compute unpack that consumes WEIGHTS. Opt out
         // so explicit credits stay authoritative (mirrors the reader + matmul mcast fix).
-        writer_sender_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        writer_sender_hw = m2::DataMovementHardwareConfig{
+            .config_2xx =
+                m2::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     } else {
-        writer_sender_hw = m2::DataMovementGen1Config{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc};
+        writer_sender_hw = m2::DataMovementHardwareConfig{
+            .config_1xx =
+                m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = writer_mcast_noc,
+                },
+        };
     }
     m2::KernelSpec writer_sender_spec{
         .unique_id = KERNEL_WRITER_SENDER,
@@ -2003,10 +2046,20 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         // Same as the sender: the receiver does explicit reserve_back/push_back on WEIGHTS/BIAS/ACT_SECOND;
         // opt out of implicit sync so those tile counters aren't double-bumped (else TILE_COUNTERS overflow
         // on the compute unpack consuming WEIGHTS).
-        writer_receiver_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        writer_receiver_hw = m2::DataMovementHardwareConfig{
+            .config_2xx =
+                m2::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     } else {
-        writer_receiver_hw = m2::DataMovementGen1Config{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc};
+        writer_receiver_hw = m2::DataMovementHardwareConfig{
+            .config_1xx =
+                m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = writer_mcast_noc,
+                },
+        };
     }
     m2::KernelSpec writer_receiver_spec{
         .unique_id = KERNEL_WRITER_RECEIVER,
@@ -2122,10 +2175,26 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                 .endpoint_type = m2::DFBEndpointType::CONSUMER},
             m2::DFBBinding{
                 .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER},
-            // OUT is also self-consumed (dest-reuse accumulate reads prior partial back from out_cb).
+            // OUT is also self-consumed: for a single height block the dest-reuse accumulate reads the
+            // prior partial back from out_cb (in-place). For the multi-height-block scratch path below,
+            // out_cb is only produced (last tap) and this consumer is degenerate (never popped) — the
+            // same shape the coalesced path uses.
             m2::DFBBinding{
                 .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER},
         };
+        if (depthwise_uses_partials_scratch) {
+            // Dedicated read-back scratch for multi-height-block accumulation (producer + consumer
+            // self-loop). Earlier taps pack the partial here and read it back; only the last tap writes
+            // out_cb (#51270 item 4).
+            compute_dfb_bindings.push_back(m2::DFBBinding{
+                .dfb_spec_name = DFB_MATMUL_PARTIALS,
+                .accessor_name = "matmul_partials",
+                .endpoint_type = m2::DFBEndpointType::PRODUCER});
+            compute_dfb_bindings.push_back(m2::DFBBinding{
+                .dfb_spec_name = DFB_MATMUL_PARTIALS,
+                .accessor_name = "matmul_partials",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER});
+        }
     } else {
         compute_dfb_bindings = {
             m2::DFBBinding{
@@ -2179,7 +2248,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         .source = std::filesystem::path(compute_kernel),
         .compiler_options = {.defines = m2::KernelSpec::CompilerOptions::Defines(compute_defines)},
         .dfb_bindings = std::move(compute_dfb_bindings),
-        .hw_config = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config),
+        .hw_config = ttnn::to_compute_hardware_config(compute_kernel_config),
     };
 
     if (is_conv_1d_depthwise_conv) {
@@ -2191,6 +2260,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             {"in0_num_blocks_w", in0_num_blocks_w},
             {"kernel_width", filter_w},
             {"coalesce_kw_reads", (uint32_t)coalesce_1d_depthwise_kw_reads},
+            {"use_partials_scratch", (uint32_t)depthwise_uses_partials_scratch},
         };
     } else {
         compute_kernel_spec.compile_time_args = {
@@ -2299,9 +2369,19 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
               act_subblock_h_ntiles * act_num_subblocks * (full_k_ntiles / act_block_w_ntiles)}},
         .hw_config =
             (device->arch() == tt::ARCH::QUASAR)
-                ? m2::DataMovementHardwareConfig{m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true}}
-                : m2::DataMovementHardwareConfig{m2::DataMovementGen1Config{
-                      .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc}},
+                ? m2::DataMovementHardwareConfig{
+                      .config_2xx =
+                          m2::DataMovementHardwareConfig::DataMovement2XXConfig{
+                              .disable_dfb_implicit_sync_for_all = true,
+                          },
+                  }
+                : m2::DataMovementHardwareConfig{
+                      .config_1xx =
+                          m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                              .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                              .noc = writer_mcast_noc,
+                          },
+                  },
     };
 
     // ---- Register kernels ----

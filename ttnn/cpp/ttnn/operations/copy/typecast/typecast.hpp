@@ -11,6 +11,8 @@
 
 namespace ttnn {
 
+constexpr bool is_8_bit_int(DataType dtype) { return dtype == DataType::UINT8 or dtype == DataType::INT8; }
+
 Tensor typecast(
     const Tensor& input,
     const DataType& output_dtype,

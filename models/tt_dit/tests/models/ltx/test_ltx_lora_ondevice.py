@@ -41,15 +41,9 @@ def _default_checkpoint() -> str:
 
 
 def _default_lora() -> str:
-    explicit = os.environ.get("LORA_PATH")
-    if explicit:
-        return explicit
-    local = os.path.expanduser("~/.cache/ltx-checkpoints/ltx-2.3-22b-distilled-lora-384-1.1.safetensors")
-    if os.path.exists(local):
-        return local
-    from huggingface_hub import hf_hub_download
+    from models.tt_dit.utils.ltx_lora_asset import resolve_lora
 
-    return hf_hub_download(repo_id="Lightricks/LTX-2.3", filename="ltx-2.3-22b-distilled-lora-384-1.1.safetensors")
+    return resolve_lora()
 
 
 def _read_weight(param) -> torch.Tensor:

@@ -1165,22 +1165,21 @@ class Attention(LightweightModule):
             fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
 
         if batch_size > 1:
-            # For batched prefill, loop over VALID users only and fill each user's cache separately
+            # For batched prefill, fill every slot of the padded batch separately.
             # k_fill/v_fill have shape [padded_batch, n_kv_heads, seq_len_per_user, head_dim]
             # The paged_fill_cache kernel reads batch_idx_ptr[0] for all positions,
-            # so we must call it once per user with their specific K/V slice
+            # so we must call it once per slot with that slot's K/V slice.
             #
-            # IMPORTANT: user_id is a list of valid slot indices for batched prefill.
-            # Empty slots have page_table entries of -1, so we must skip them to avoid
-            # writing to invalid memory blocks.
+            # IMPORTANT: this loop is captured into the prefill trace, whose identity is the
+            # padded batch width, not the set of active slots. Looping over the active slots
+            # (user_id) would freeze that slot set into the trace, and a later replay for a
+            # different slot set would never write K/V for the new slots. Empty slots have
+            # page_table rows of -1, which the kernel treats as "skip" without any write, so
+            # filling all padded_batch rows is both safe and slot-agnostic.
             seq_len_per_user = k_fill.shape[2]
             page_len = fill_page_table.shape[1] * block_size
 
-            # user_id is a list of valid slot indices (e.g., [0, 1, 2, ..., N-1] for N users)
-            # Each slot index tells us which row in k_fill and page_table to use
-            valid_slots = user_id if isinstance(user_id, (list, tuple)) else list(range(batch_size))
-
-            for slot_idx in valid_slots:
+            for slot_idx in range(batch_size):
                 # Extract this slot's K/V slice: [1, n_kv_heads, seq_len_per_user, head_dim]
                 k_user = k_fill[slot_idx : slot_idx + 1, :, :, :]
                 v_user = v_fill[slot_idx : slot_idx + 1, :, :, :]
