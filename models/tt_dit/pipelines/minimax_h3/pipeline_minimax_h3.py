@@ -70,6 +70,7 @@ from ...encoders.qwen3vl.loader_minimax_h3 import (
 from ...encoders.qwen3vl.model_qwen3vl import create_rope_tensors, mrope_position_ids, vision_token_runs
 from ...encoders.qwen3vl.vision_qwen3vl import pad_patches_for_sp, vision_cu_seqlens
 from ...experimental.lora.h3_adapter_loader import load_h3_adapter_into
+from ...experimental.lora.promote import lora_modules
 from ...layers.audio_ops import weights_variant
 from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
@@ -132,7 +133,7 @@ from .policy import (
 )
 from .references import encode_references, prepare_references, reference_condition_shapes, split_condition_blocks
 from .scheduler import MiniMaxH3Scheduler
-from .weights_minimax_h3 import resolve_weights_dir
+from .weights_minimax_h3 import resolve_adapter_settings, resolve_weights_dir
 
 # ImageNet statistics; the video VAE emits normalized RGB and the pipeline reverts it. Imported from
 # `conditioning` rather than restated: the keyframe path normalizes *into* the VAE with these and the
@@ -665,7 +666,7 @@ class MiniMaxH3Pipeline:
         topology: ttnn.Topology | None = None,
         task: str = "t2va",
         lora_path: str | os.PathLike | None = None,
-        lora_strength: float = 1.0,
+        lora_strength: float | None = None,
         video_shift: float | None = None,
         audio_shift: float | None = None,
         audio_split_mode: str | None = None,
@@ -688,6 +689,11 @@ class MiniMaxH3Pipeline:
 
         `trace_denoise` defaults to the mesh preset; `bucket_ladder`, `arena_caps` and `adaln_slot_roles`
         default to the task's envelope.
+
+        `lora_path`, `lora_strength`, `video_shift` and `audio_shift` fall back to `MINIMAX_H3_LORA_PATH`,
+        `MINIMAX_H3_LORA_STRENGTH`, `MINIMAX_H3_VIDEO_SHIFT` and `MINIMAX_H3_AUDIO_SHIFT`, so a deployment
+        that builds the pipeline with only a mesh and a weights directory can still serve an adapter.
+        `lora_strength` multiplies the adapter's own published scale; 1.0 runs it as trained.
         """
         transformer_subfolder = "transformer_ref" if task == "ref2va" else "transformer"
         weights_dir = resolve_weights_dir(
@@ -697,6 +703,14 @@ class MiniMaxH3Pipeline:
             "audio_vae",
             weights_dir=weights_dir,
         )
+        adapter = resolve_adapter_settings(
+            lora_path=lora_path,
+            lora_strength=lora_strength,
+            video_shift=video_shift,
+            audio_shift=audio_shift,
+            default_video_shift=VIDEO_SHIFT,
+            default_audio_shift=AUDIO_SHIFT,
+        )
         return cls(
             mesh_device=mesh_device,
             weights_dir=weights_dir,
@@ -705,10 +719,10 @@ class MiniMaxH3Pipeline:
             num_links=num_links,
             topology=topology,
             task=task,
-            lora_path=lora_path,
-            lora_strength=lora_strength,
-            video_shift=video_shift,
-            audio_shift=audio_shift,
+            lora_path=adapter.lora_path,
+            lora_strength=adapter.lora_strength,
+            video_shift=adapter.video_shift,
+            audio_shift=adapter.audio_shift,
             audio_split_mode=audio_split_mode,
             audio_trace=audio_trace,
             audio_t_factor=audio_t_factor,
@@ -1268,13 +1282,20 @@ class MiniMaxH3Pipeline:
             mesh_device=self.mesh_device,
             get_torch_state_dict=lambda: self._read_safetensors(self.transformer_subfolder),
         )
-        if self.lora_path is not None and self._lora_handle is None:
-            self._lora_handle = load_h3_adapter_into(
-                self._transformer,
-                str(self.lora_path),
-                scale=self.lora_strength,
-                name=self.lora_path.name,
-            )
+        if self.lora_path is not None:
+            if self._lora_handle is None:
+                self._lora_handle = load_h3_adapter_into(
+                    self._transformer,
+                    str(self.lora_path),
+                    scale=self.lora_strength,
+                    name=self.lora_path.name,
+                )
+            else:
+                # `coresident=False` evicts the transformer between stages and `cache.load_model`
+                # brings back the cached *base* weights, so the fused delta has to be merged again.
+                # A no-op while the weights stayed resident.
+                for module in lora_modules(self._transformer):
+                    module.reapply_after_load()
         return self._transformer
 
     @property
