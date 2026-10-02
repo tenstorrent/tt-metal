@@ -194,6 +194,18 @@ double ported_trigamma(double x) {
     return result + inv + 0.5 * inv2 + inv * inv2 * (1.0 / 6 - inv2 * (1.0 / 30 - inv2 * (1.0 / 42 - inv2 / 30)));
 }
 
+// Modified Bessel I_n(x) for n = 0, 1 by its power series; libc++ has no std::cyl_bessel_i.
+double ported_bessel_i(int order, double x) {
+    const double q = 0.25 * x * x;
+    double term = order == 0 ? 1.0 : 0.5 * x;
+    double sum = term;
+    for (int k = 1; k < 200 && std::fabs(term) > 1e-17 * std::fabs(sum); ++k) {
+        term *= q / (k * (k + order));
+        sum += term;
+    }
+    return sum;
+}
+
 // Golden for the ported unary ops; std::nullopt for any other op.
 std::optional<float> ported_sfpu_function(const std::string& op_name, float x) {
     const double d = x;
@@ -240,10 +252,10 @@ std::optional<float> ported_sfpu_function(const std::string& op_name, float x) {
         return std::cbrt(x);
     }
     if (op_name == "i0") {
-        return static_cast<float>(std::cyl_bessel_i(0.0, std::fabs(d)));
+        return static_cast<float>(ported_bessel_i(0, std::fabs(d)));
     }
     if (op_name == "i1") {
-        return static_cast<float>(std::copysign(std::cyl_bessel_i(1.0, std::fabs(d)), d));
+        return static_cast<float>(ported_bessel_i(1, d));
     }
     if (op_name == "identity") {
         return x;
