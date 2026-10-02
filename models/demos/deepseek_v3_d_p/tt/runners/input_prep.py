@@ -90,9 +90,9 @@ def prepare_prefill_mtp_tokens(
     chunk_start: int = 0,
     chunk_end: Optional[int] = None,
 ) -> ttnn.Tensor:
-    """Upload the MTP lookahead ids as the inference server lays them out (``mtp_lookahead_positions``).
-    ``token_ids`` is the chunk, then the ids after it, real up to ``chunk_end`` (default: the whole chunk).
-    Every other slot is ``MTP_PAD_TOKEN_ID``. Block-cyclic only."""
+    """Upload the MTP lookahead ids: the ``num_mtp_tokens`` ids that follow each chip's trunk shard
+    (``mtp_lookahead_positions``). ``token_ids`` is the chunk, then the ids after it, real up to ``chunk_end``
+    (default: the whole chunk). Every other slot is ``MTP_PAD_TOKEN_ID``. Block-cyclic only."""
     assert num_mtp_tokens > 0, f"num_mtp_tokens must be positive, got {num_mtp_tokens}"
     isl_per_chip = (len(token_ids) - num_mtp_tokens) // sp_factor
     assert len(token_ids) == sp_factor * isl_per_chip + num_mtp_tokens, (

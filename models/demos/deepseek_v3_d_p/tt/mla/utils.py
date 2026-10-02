@@ -174,7 +174,7 @@ def rotated_row_of_position(kv_actual_isl: int, sp: int, chunk_local: int, globa
 def mtp_lookahead_positions(
     kv_actual_isl: int, sp: int, chunk_local: int, actual_end: int, num_levels: int
 ) -> list[list[int]]:
-    """Per chip, the global positions its MTP lookahead slots carry, as the inference server lays them out:
+    """Per chip, the global positions carried by its MTP lookahead slots, which follow its trunk rows:
     the ``num_levels`` positions after its last one, every later slot pad. A split chip whose second run lies at
     or past ``actual_end`` carries the next chip's first ``num_levels`` positions instead."""
     positions = rotated_chip_positions(kv_actual_isl, sp, chunk_local)
