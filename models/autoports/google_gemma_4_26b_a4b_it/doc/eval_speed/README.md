@@ -51,6 +51,13 @@ TTI **f245f6ac** fixes this with success/failure environment regression checks;
 is dispatched at **08:20:06 UTC** and monitored. No SWE result exists from the
 failed startup. Both long-context policies score **122/128 HF top-1** on the
 saved 14,467-token control; this does not support promoting prefill BFP8.
+The retry is healthy and generating by **08:34 UTC**; results remain pending.
+An exact 172-request offline audit rejects tool-output dedup (only0.077–0.590%
+aggregate input savings) and measures92.68–95.22% matching input-prefix blocks,
+without claiming implemented APC. A separate default-off local policy control
+keeps only the latest assistant reasoning block while preserving all visible
+answers/task/tool evidence; it starts at08:42:51 under a900-second cap. The
+combined suite is unchanged. See the suite log for provenance and limitations.
 The [precision audit](AUTODEBUG.md) confirms fresh BFP8 weight provenance but
 identifies unchanged prefill BFP4 and untested long-context numerical quality;
 it does not establish a cache/position bug.
