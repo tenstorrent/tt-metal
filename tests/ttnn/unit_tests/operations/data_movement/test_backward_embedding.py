@@ -75,6 +75,34 @@ def test_embedding_bw(input_dtype, output_dtype, batch_size, seq_len, embedding_
 SENTINEL = 999.0
 
 
+def test_embedding_bw_rejects_logically_short_gradient(device, expect_error):
+    """Physical tile padding cannot stand in for a missing logical gradient row."""
+    embedding_dim, num_embeddings, seq_len = 64, 2, 32
+
+    input_index = torch.zeros((1, seq_len), dtype=torch.int32)
+    input_index[0, -1] = 1
+    input_tensor = ttnn.from_torch(input_index, dtype=ttnn.uint32, device=device)
+
+    weights_ttnn = ttnn.from_torch(
+        torch.zeros(num_embeddings, embedding_dim),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    grad_tensor = ttnn.from_torch(
+        torch.zeros(1, 1, seq_len - 1, embedding_dim),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        pad_value=7.0,
+    )
+
+    assert list(grad_tensor.shape) == [1, 1, 31, embedding_dim]
+    assert list(grad_tensor.padded_shape) == [1, 1, 32, embedding_dim]
+    with expect_error(RuntimeError, "Number of logical rows in gradient tensor"):
+        ttnn.embedding_bw(input_tensor, weights_ttnn, grad_tensor, dtype=ttnn.bfloat16)
+
+
 @pytest.mark.parametrize("num_embeddings", [9, 32, 33, 64, 96, 100, 320])
 def test_embedding_bw_unindexed_rows_are_zero(num_embeddings, device):
     """Rows no index points at must come back exactly zero.

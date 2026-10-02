@@ -18,6 +18,8 @@ void EmbeddingBackwardDeviceOperation::validate_on_program_cache_miss(
     const auto& grad_tensor = tensor_args.grad_tensor;
     const auto& index_tensor_shape = index_tensor.padded_shape();
     const auto& grad_tensor_shape = grad_tensor.padded_shape();
+    const auto& index_tensor_logical_shape = index_tensor.logical_shape();
+    const auto& grad_tensor_logical_shape = grad_tensor.logical_shape();
 
     TT_FATAL(
         index_tensor.layout() == Layout::ROW_MAJOR,
@@ -63,8 +65,8 @@ void EmbeddingBackwardDeviceOperation::validate_on_program_cache_miss(
         "Number of columns in the gradient tensor must be divisible by tile width");
 
     TT_FATAL(
-        grad_tensor_shape[2] == index_tensor_shape[0] * index_tensor_shape[-1],
-        "Number of rows in gradient tensor must be equal to number of indices in index tensor");
+        grad_tensor_logical_shape[2] == index_tensor_logical_shape[0] * index_tensor_logical_shape[-1],
+        "Number of logical rows in gradient tensor must be equal to logical number of indices in index tensor");
 }
 
 EmbeddingBackwardDeviceOperation::spec_return_value_t EmbeddingBackwardDeviceOperation::compute_output_specs(
