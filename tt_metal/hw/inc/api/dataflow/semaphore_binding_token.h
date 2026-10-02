@@ -59,16 +59,3 @@ struct SemaphoreBindingToken {
     std::uint32_t id;
     SemScope scope;
 };
-
-namespace sem_internal {
-
-/**
- * @brief One entry in the generated header's list of cached semaphores: which semaphore, and
- *        how many harts on this core use it.
- */
-struct CachedSemaphore {
-    std::uint32_t id;
-    std::uint32_t binder_harts;
-};
-
-}  // namespace sem_internal

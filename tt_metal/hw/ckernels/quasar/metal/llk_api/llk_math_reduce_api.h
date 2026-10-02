@@ -38,8 +38,10 @@ inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32
     // Column reduce is a GAPOOL (op-mmul family) and consumes MxFp4 SrcA as the 2x-packed
     // src-register format, exactly like matmul. Derive the effective SrcA format from the L1/src
     // format; the matching unpacker OUT_DATA_FORMAT override lives in llk_unpack_AB_reduce_init.
-    // Only REDUCE_COL supports 2x (row/scalar reduce post-pool ELWADDDI does not).
-    const bool srcA_2x = (reduce_dim == ReduceDim::REDUCE_COL) &&
+    // Only REDUCE_COL supports 2x (row/scalar reduce post-pool ELWADDDI does not), and only GAPOOL
+    // (SUM/AVG) accepts a 2x SrcA - GMPOOL (MAX) does not.
+    const bool srcA_2x = (pool_type == PoolType::SUM || pool_type == PoolType::AVG) &&
+                         (reduce_dim == ReduceDim::REDUCE_COL) &&
                          (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4);
     const DataFormat srcA_format =
         srcA_2x ? DataFormat::MxFp4_2x_B : static_cast<DataFormat>(unpack_dst_format[operandA_id]);
