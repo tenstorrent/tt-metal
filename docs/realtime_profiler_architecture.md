@@ -38,29 +38,62 @@ This document describes how the **dispatch core** (dispatch_s), **real-time prof
 
 ---
 
-## 2. Data Flow: Program Timestamp to Host
+## 2. Data Flow: The Three Queues
+
+A record leaves the device through three single-producer, single-consumer queues. Each index has exactly one
+writer, and a full queue makes its producer wait, so a slow host slows dispatch down instead of losing records.
 
 ```
   dispatch_s              BRISC                   NCRISC                  Host
   (dispatch core)         (profiler core)         (profiler core)         (receiver thread)
 
    |                       |                       |                       |
-   | 1. Stamp start time   |                       |                       |
-   | 2. Launch program     |                       |                       |
-   | 3. Stamp end time     |                       |                       |
-   | --- record ready ---->|                       |                       |
-   |                       | 4. Copy the record    |                       |
-   |                       |    into its ring      |                       |
-   | <----- slot free -----|                       |                       |
-   |                       | ------ records ------>|                       |
-   |                       |                       | 5. Send records       |
-   |                       |                       |    over PCIe          |
+   | 1. Write the record   |                       |                       |
+   |    into the open slot |                       |                       |
+   |    (own L1)           |                       |                       |
+   | 2. If no slot is      |                       |                       |
+   |    free: WAIT         |                       |                       |
+   | 3. Advance wr_idx,    |                       |                       |
+   |    NoC-write it to    |                       |                       |
+   |    the profiler core  |                       |                       |
+   | ------ wr_idx ------->|                       |                       |
+   |                       | 4. See wr_idx move    |                       |
+   |                       | 5. If the ring is     |                       |
+   |                       |    full: WAIT         |                       |
+   |                       | 6. NoC-read the slot  |                       |
+   |                       |    into the ring,     |                       |
+   |                       |    bump write_index   |                       |
+   | --- record (32 B) --->|                       |                       |
+   |                       | ---- write_index ---->|                       |
+   |                       | 7. NoC-write rd_idx   |                       |
+   |                       |    back: slot free    |                       |
+   | <------ rd_idx -------|                       |                       |
+   |                       |                       | 8. See write_index    |
+   |                       |                       |    move               |
+   |                       |                       | 9. If the host FIFO   |
+   |                       |                       |    is full: WAIT      |
+   |                       |                       | 10. NoC-write the     |
+   |                       |                       |     entries to the    |
+   |                       |                       |     host FIFO (PCIe)  |
    |                       |                       | ------ records ------>|
-   |                       |                       |                       | 6. Read records
-   |                       |                       |                       | 7. Call callbacks
-   |                       |                       |                       |    (e.g. Tracy)
-   |                       |                       | <--- records read ----|
+   |                       |                       | 11. Write bytes_sent  |
+   |                       |                       |     to the host, bump |
+   |                       |                       |     read_index        |
+   |                       |                       | ---- bytes_sent ----->|
+   |                       | <---- read_index -----|                       |
+   |                       |                       |                       | 12. See bytes_sent;
+   |                       |                       |                       |     read the pages,
+   |                       |                       |                       |     run the callbacks
+   |                       |                       |                       | 13. Write bytes_acked
+   |                       |                       |                       |     into profiler L1
+   |                       |                       | <---- bytes_acked ----|
 ```
+
+| Queue | Lives in | Size | Producer advances | Consumer advances | When full |
+|-------|----------|------|-------------------|-------------------|-----------|
+| Record ring | dispatch core L1 | 4 slots of 32 B | `record_wr_idx` (dispatch_s, NoC write to the profiler core) | `record_rd_idx` (BRISC, NoC write back) | dispatch_s waits |
+| BRISC→NCRISC ring | profiler core L1 | 16,384 entries of 64 B | `write_index` (BRISC) | `read_index` (NCRISC) | BRISC waits |
+| D2H socket FIFO | pinned host memory | 32,768 pages of 64 B (2 MiB) | `bytes_sent` (NCRISC, PCIe write) | `bytes_acked` (host, write into profiler core L1) | NCRISC waits |
 
 ---
 
