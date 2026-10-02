@@ -21,6 +21,7 @@ from ...layers.normalization import RMSNorm
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import tensor
+from ...utils.padding import torch_pad
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -518,7 +519,7 @@ class Qwen3VlAttention(Module):
             v = v.unflatten(0, [self._group_count, 1, self._head_dim])
 
             # pad group size
-            q = _pad(q, self._group_size_padding, dim=1)
+            q = torch_pad(q, self._group_size_padding, dim=1)
 
             # split groups
             s = self._split_factor
@@ -527,9 +528,9 @@ class Qwen3VlAttention(Module):
             v = v.repeat_interleave(s, dim=0)
 
             # pad group count
-            q = _pad(q, self._group_count_padding, dim=0)
-            k = _pad(k, self._group_count_padding, dim=0)
-            v = _pad(v, self._group_count_padding, dim=0)
+            q = torch_pad(q, self._group_count_padding, dim=0)
+            k = torch_pad(k, self._group_count_padding, dim=0)
+            v = torch_pad(v, self._group_count_padding, dim=0)
 
             # fuse
             q = q.flatten(0, 1).unflatten(0, [self._tp_factor, self._num_local_heads])
@@ -554,13 +555,13 @@ class Qwen3VlAttention(Module):
             o = o.unflatten(1, [self._group_count, self._group_size, self._head_dim])
 
             # pad group size
-            o = _pad(o, self._group_size_padding, dim=2)
+            o = torch_pad(o, self._group_size_padding, dim=2)
 
             # split groups
             o = o.flatten(1, 2).unflatten(1, [self._group_count * self._split_factor, -1])
 
             # pad group count
-            o = _pad(o, self._group_count_padding, dim=1)
+            o = torch_pad(o, self._group_count_padding, dim=1)
 
             state["o_proj.weight"] = o.flatten(1, 3)
 
@@ -804,13 +805,6 @@ def optimal_groups(group_count: int, group_size: int, device_count: int) -> tupl
     return best_group_count, best_group_size, best_split_factor
 
 
-def _pad(t: torch.Tensor, amount: int, *, dim: int) -> torch.Tensor:
-    """Pad tensor with `amount` zeros on the end of dimension `dim`."""
-    padding = [0] * (2 * t.ndim)
-    padding[-(dim * 2 + 1)] = amount
-    return torch.nn.functional.pad(t, padding)
-
-
 def prepare_attention_bias(attention_mask: ttnn.Tensor) -> ttnn.Tensor:
     batch_size, seq_len = attention_mask.shape
 
@@ -821,7 +815,7 @@ def prepare_attention_bias(attention_mask: ttnn.Tensor) -> ttnn.Tensor:
 
     attention_mask = (attention_mask - 1.0) * math.inf
 
-    return ttnn.clone(attention_mask, dtype=ttnn.bfloat4_b)
+    return ttnn.typecast(attention_mask, ttnn.bfloat4_b)
 
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L491
