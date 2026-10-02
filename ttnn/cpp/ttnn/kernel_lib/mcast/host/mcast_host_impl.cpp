@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host_impl.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_compile_time_args.hpp"
+#include "ttnn/kernel_lib/mcast/host/mcast_host_impl.hpp"
+#include "ttnn/kernel_lib/mcast/mcast_compile_time_args.hpp"
 
 #include <algorithm>
 #include <cstddef>

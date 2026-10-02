@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_common.hpp"
+#include "mcast_common.hpp"
 
 namespace dataflow_kernel_lib::mcast_wire {
 

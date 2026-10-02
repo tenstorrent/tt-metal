@@ -4,7 +4,7 @@
 // Attaches multicast semaphores and kernel arguments to ProgramDescriptor/KernelDescriptor objects.
 // Also appends arguments for Program-bound channels and marks absent descriptor channels.
 
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host_impl.hpp"
+#include "ttnn/kernel_lib/mcast/host/mcast_host_impl.hpp"
 
 #include <algorithm>
 #include <iterator>
