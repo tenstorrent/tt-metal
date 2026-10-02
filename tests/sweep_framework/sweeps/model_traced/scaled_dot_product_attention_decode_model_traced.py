@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import torch
 
 import ttnn
@@ -11,6 +10,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     get_mesh_composer,
     get_model_traced_mesh_shape,
+    is_wormhole_t3k_1x8,
     mesh_tensor_to_torch,
 )
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, parse_dict_value
@@ -87,9 +87,7 @@ def run(
     **kwargs,
 ) -> list:
     # Skip on Wormhole T3K (mesh1x8) due to device hang/timeout, refs #52913
-    _arch = os.environ.get("ARCH_NAME", "").lower()
-    _mesh_shape = os.environ.get("MESH_DEVICE_SHAPE", "").strip().lower()
-    if "wormhole" in _arch and _mesh_shape in ("1x8", "8x1"):
+    if is_wormhole_t3k_1x8():
         return [(True, "SKIPPED: device hang on Wormhole T3K mesh1x8, refs #52913"), 0]
 
     torch.manual_seed(1234)  # Match unit test seed
