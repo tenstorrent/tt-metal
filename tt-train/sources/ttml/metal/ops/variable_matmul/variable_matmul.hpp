@@ -29,7 +29,9 @@ using VariableMatmulConfig = ttml::metal::ops::variable_matmul::device::Variable
 // address the read/write/K windows at tile granularity (offset / 32), so a non-multiple-of-32
 // offset cannot be represented — it would silently start on the wrong tile and overlap a
 // neighbouring slice. Callers (e.g. moe_ffn) must pad each expert's row range to a tile
-// boundary. Debug builds assert this in the dataflow kernels.
+// boundary. InputAndOutputRow pairs must also be ordered and contained within the physical
+// input/output parent M extent. Debug builds assert these requirements; ordinary builds
+// defensively turn an invalid row pair into empty work to prevent out-of-bounds device access.
 //
 // On-device offsets are what makes the op viable under EP-sharded MoE — when the per-expert
 // dispatch counts live on the device, a host scalar would require an all-gather of offsets

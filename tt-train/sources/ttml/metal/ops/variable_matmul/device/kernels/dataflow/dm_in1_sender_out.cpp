@@ -65,12 +65,15 @@ void kernel_main() {
     // Row and K offsets are initialized to 0 here and overwritten below from offsets[start..start+2].
     uint32_t out_row_offset_tiles = 0U;
     uint32_t in1_k_offset_tiles = 0U;
+#ifdef OFFSET_ROW_MODE
+    const uint32_t parent_M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 4);
+#endif
     uint32_t parent_K_tiles_stride_in1 = 0U;
     if constexpr (use_offset_in1) {
-        parent_K_tiles_stride_in1 = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 4);
+        parent_K_tiles_stride_in1 = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 5);
     }
     // OFFSET_K_MODE overrides K_tiles from on-device offsets[start..start+2].
-    uint32_t K_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 5);
+    uint32_t K_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 6);
 
     Noc noc;
 
@@ -81,8 +84,8 @@ void kernel_main() {
     //   OFFSET_K_MODE   (InputAndWeightK):    sets in1_k_offset_tiles + K_tiles locally (dm_in0
     //                    owns the K offset's cb_ctrl publish).
     {
-        const uint32_t offsets_addr = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 6);
-        const uint32_t offsets_start_index = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 7);
+        const uint32_t offsets_addr = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 7);
+        const uint32_t offsets_start_index = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 8);
         constexpr auto offsets_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
         const auto offsets_acc = TensorAccessor(offsets_args, offsets_addr);
 
@@ -107,8 +110,11 @@ void kernel_main() {
         ASSERT(row_start % 32U == 0U && row_end % 32U == 0U);
 #ifdef OFFSET_ROW_MODE
         {
-            const uint32_t in0_idx = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 8);
-            const uint32_t actual_eff_M = (row_end - row_start) / 32U;
+            const uint32_t in0_idx = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 9);
+            const bool row_range_valid =
+                row_start % 32U == 0U && row_end % 32U == 0U && row_start <= row_end && row_end / 32U <= parent_M_tiles;
+            ASSERT(row_range_valid);
+            const uint32_t actual_eff_M = row_range_valid ? (row_end - row_start) / 32U : 0U;
             // Empty-expert (actual=0) → M_blocks_per_core=0 (loop skipped). Still clamp
             // M_tiles to >=1 for shape construction (TensorShape2D asserts d0>0).
             M_tiles = actual_eff_M > 0U ? actual_eff_M : 1U;
@@ -116,7 +122,7 @@ void kernel_main() {
             // dm_in0_sender publishes M values to cb_ctrl; we re-derive them locally here
             // (both kernels read the same offsets).
             if constexpr (is_output_writer) {
-                out_row_offset_tiles = row_start / 32U;
+                out_row_offset_tiles = row_range_valid ? row_start / 32U : 0U;
             }
             constexpr uint32_t kAxisCores = IN0_AXIS_CORES;
             const uint32_t per_core = (actual_eff_M + kAxisCores - 1U) / kAxisCores;

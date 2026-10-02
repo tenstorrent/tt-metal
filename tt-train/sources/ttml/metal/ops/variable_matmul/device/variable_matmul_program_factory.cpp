@@ -595,8 +595,9 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         // 12: logical_M_tiles
         // 13: padded_M_tiles
         // 14: M_blocks_per_core
-        // 15: parent_K_tiles_in1    (parent K tile count; row stride for transpose_b)
-        // 16: K_tiles               (variable-K: matmul-K extent in tiles)
+        // 15: parent_M_tiles        (parent M tile count; bounds row-mode offsets)
+        // 16: parent_K_tiles_in1    (parent K tile count; row stride for transpose_b)
+        // 17: K_tiles               (variable-K: matmul-K extent in tiles)
         std::vector<uint32_t> in1_args = {
             in1_addr,
             static_cast<uint32_t>(is_in1_sink),
@@ -613,6 +614,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
             logical_M_tiles,
             padded_M_tiles,
             M_blocks_per_core,
+            parent_M_tiles,
             parent_K_tiles_in1,
             K_tiles,
         };
@@ -725,8 +727,9 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
     constexpr uint32_t IN1_LOGICAL_M_TILES_IDX = 12;
     constexpr uint32_t IN1_PADDED_M_TILES_IDX = 13;
     constexpr uint32_t IN1_M_BLOCKS_IDX = 14;
-    constexpr uint32_t IN1_PARENT_K_TILES_STRIDE_IDX = 15;
-    constexpr uint32_t IN1_K_TILES_IDX = 16;
+    constexpr uint32_t IN1_PARENT_M_TILES_IDX = 15;
+    constexpr uint32_t IN1_PARENT_K_TILES_STRIDE_IDX = 16;
+    constexpr uint32_t IN1_K_TILES_IDX = 17;
 
     // Compute runtime arg indices
     constexpr uint32_t COMPUTE_M_START_IDX = 0;
@@ -755,8 +758,8 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
     const uint32_t offsets_addr = tensor_args.offsets_tensor.buffer()->address();
     constexpr uint32_t IN0_OFFSETS_ADDR_IDX = 18;  // appended after K_tiles (idx 17).
     constexpr uint32_t IN0_OFFSETS_START_IDX_IDX = 19;
-    constexpr uint32_t IN1_OFFSETS_ADDR_IDX = 17;
-    constexpr uint32_t IN1_OFFSETS_START_IDX_IDX = 18;
+    constexpr uint32_t IN1_OFFSETS_ADDR_IDX = 18;
+    constexpr uint32_t IN1_OFFSETS_START_IDX_IDX = 19;
 
     // Sender and receiver kernels share the same RT-arg layout. Only the sender actually
     // reads in0_addr / in1_addr (the receiver gets data via NOC handshake from the sender),
@@ -786,6 +789,7 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
         args[IN1_LOGICAL_M_TILES_IDX] = logical_M_tiles;
         args[IN1_PADDED_M_TILES_IDX] = padded_M_tiles;
         args[IN1_M_BLOCKS_IDX] = M_blocks_per_core;
+        args[IN1_PARENT_M_TILES_IDX] = parent_M_tiles;
         args[IN1_PARENT_K_TILES_STRIDE_IDX] = parent_K_tiles_in1;
         args[IN1_K_TILES_IDX] = K_tiles_rt;
         args[IN1_DEFER_WRITE_K_BLOCK_IDX] = defer_write_k_block;

@@ -6,6 +6,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "test_utils/random_data.hpp"
@@ -365,6 +366,60 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndOutputRow_TransposeB) {
         }
     }
     EXPECT_EQ(untouched_err, 0.0F) << "variable(InputAndOutputRow, transpose_b) corrupted untouched rows";
+}
+
+TEST_F(VariableMatmulTest, InvalidInputAndOutputRowOffsetsAreSafeEmptyWork) {
+    SKIP_FOR_WATCHER();
+
+    constexpr uint32_t M = 32U;
+    constexpr uint32_t K = 2048U;
+    constexpr uint32_t N = 2048U;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input = create_random_device_tensor(M, K, device, /*seed=*/149U);
+    auto weight = create_random_device_tensor(K, N, device, /*seed=*/150U);
+    auto output = ttml::core::zeros(ttnn::Shape({1U, 1U, M, N}), device);
+    const auto original_output = ttml::core::to_vector<float>(output);
+
+    // The first pair is a safe pre-fix discriminator: 0x80000000 / 32 multiplied by the
+    // 64-tile input/output row stride wraps the old 32-bit page arithmetic to page zero.
+    // ASSERT_EQ stops before the underflow case if this guard ever regresses.
+    const std::array<std::array<uint32_t, 2>, 3> invalid_ranges = {
+        std::array<uint32_t, 2>{0x80000000U, 0x80000020U},
+        std::array<uint32_t, 2>{1U, 33U},
+        std::array<uint32_t, 2>{32U, 0U},
+    };
+    for (const auto& range : invalid_ranges) {
+        auto offsets = make_offsets({range[0], range[1]}, device);
+        ttml::metal::variable_matmul_into_rows(
+            input,
+            weight,
+            kConfig,
+            offsets,
+            output,
+            /*offsets_start_index=*/0U,
+            /*expected_M_tiles=*/0U,
+            /*transpose_a=*/false,
+            /*transpose_b=*/false);
+        ASSERT_EQ(ttml::core::to_vector<float>(output), original_output)
+            << "invalid row range [" << range[0] << ", " << range[1] << ") performed device work";
+    }
+
+    // A valid call after all invalid descriptors proves they did not poison the queue or the
+    // data-mover/compute synchronization protocol.
+    auto valid_offsets = make_offsets({0U, M}, device);
+    ttml::metal::variable_matmul_into_rows(
+        input,
+        weight,
+        kConfig,
+        valid_offsets,
+        output,
+        /*offsets_start_index=*/0U,
+        /*expected_M_tiles=*/0U,
+        /*transpose_a=*/false,
+        /*transpose_b=*/false);
+    auto reference = minimal_matmul_hifi4(input, weight, kConfig);
+    EXPECT_EQ(max_abs_error(output, reference), 0.0F);
 }
 
 // ---- Empty-expert probe: K-axis offset where count_e = 0 must produce all-zero output. ----

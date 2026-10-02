@@ -112,16 +112,20 @@ void kernel_main() {
         ASSERT(row_start % 32U == 0U && row_end % 32U == 0U);
 #ifdef OFFSET_ROW_MODE
         const uint32_t in0_idx = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 9);
-        const uint32_t actual_eff_M = (row_end - row_start) / 32U;
+        const bool row_range_valid = row_start % 32U == 0U && row_end % 32U == 0U && row_start <= row_end &&
+                                     row_end / 32U <= parent_M_tiles_stride;
+        ASSERT(row_range_valid);
+        const uint32_t safe_row_start = row_range_valid ? row_start : 0U;
+        const uint32_t actual_eff_M = row_range_valid ? (row_end - row_start) / 32U : 0U;
         // Empty-expert (actual=0) → M_blocks_per_core=0 (loop skipped). Still clamp M_tiles
         // to >=1 for in0_shape construction (TensorShape2D asserts d0>0); the shape isn't
         // read once the M-loop is skipped.
         M_tiles = actual_eff_M > 0U ? actual_eff_M : 1U;
-        in0_row_offset_tiles = row_start / 32U;
+        in0_row_offset_tiles = safe_row_start / 32U;
         // On the writer kernel (non-transpose_core_grid) also override the output write row.
         // is_output_writer is a CTA constant for this kernel.
         if constexpr (is_output_writer) {
-            out_row_offset_tiles = row_start / 32U;
+            out_row_offset_tiles = safe_row_start / 32U;
         }
         // Per-core M split — mirrors host M_tiles_per_core formula. M_blocks_per_core
         // is UNIFORM across cores (avoids breaking the sender/receiver semaphore chain when
