@@ -417,6 +417,47 @@ TEST_F(VariableMatmulTest, EmptyExpertProbe_InputAndWeightK_TransposeA) {
     EXPECT_EQ(max_abs, 0.0F) << "empty-expert output non-zero; max_abs=" << max_abs;
 }
 
+TEST_F(VariableMatmulTest, RejectsZeroTrailingDimensionsBeforeLeadingVolume) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto offsets = make_offsets({0U, 32U}, device);
+
+    // Keep the currently checked M and weight K dimensions positive so these cases also catch a
+    // partial fix that only moves the existing derived-dimension check ahead of leading_dims_volume.
+    auto zero_activation_k = ttml::core::empty(ttnn::Shape({1, 1, 32, 0}), device, {});
+    auto weight_with_positive_k = ttml::core::empty(ttnn::Shape({1, 1, 64, 32}), device, {});
+    auto output = ttml::core::empty(ttnn::Shape({1, 1, 32, 32}), device, {});
+    ASSERT_TRUE(zero_activation_k.is_allocated());
+    EXPECT_THROW(
+        ttml::metal::variable_matmul_into_rows(
+            zero_activation_k,
+            weight_with_positive_k,
+            kConfig,
+            offsets,
+            output,
+            /*offsets_start_index=*/0,
+            /*expected_M_tiles=*/0,
+            /*transpose_a=*/false,
+            /*transpose_b=*/false),
+        std::runtime_error);
+
+    auto activation = ttml::core::empty(ttnn::Shape({1, 1, 32, 64}), device, {});
+    auto zero_weight_n = ttml::core::empty(ttnn::Shape({1, 1, 64, 0}), device, {});
+    auto zero_width_output = ttml::core::empty(ttnn::Shape({1, 1, 32, 0}), device, {});
+    ASSERT_TRUE(zero_weight_n.is_allocated());
+    EXPECT_THROW(
+        ttml::metal::variable_matmul_into_rows(
+            activation,
+            zero_weight_n,
+            kConfig,
+            offsets,
+            zero_width_output,
+            /*offsets_start_index=*/0,
+            /*expected_M_tiles=*/0,
+            /*transpose_a=*/false,
+            /*transpose_b=*/false),
+        std::runtime_error);
+}
+
 // ---------------------------------------------------------------------------
 // Program-cache reuse — the op's headline contract: one cached program serves any
 // (M, K, offsets_start_index) within a transpose/role/grid variant, re-driven via

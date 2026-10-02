@@ -48,6 +48,9 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
     const auto& a_logical = act_tensor.logical_shape();
     const auto& w_logical = weight_tensor.logical_shape();
     TT_FATAL(a_logical.rank() >= 2 && w_logical.rank() >= 2, "variable_matmul expects rank >= 2 tensors");
+    TT_FATAL(
+        a_logical[-2] > 0 && a_logical[-1] > 0 && w_logical[-2] > 0 && w_logical[-1] > 0,
+        "variable_matmul input and weight matrix dimensions must be positive");
 
     // Batched input not supported
     auto leading_dims_volume = [](const ttnn::Shape& s) { return s.volume() / (static_cast<uint64_t>(s[-2]) * s[-1]); };
