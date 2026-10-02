@@ -294,6 +294,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
             input_tensor_k.logical_shape()[3] == input_tensor_q.logical_shape()[3] &&
                 input_tensor_v.logical_shape()[3] == input_tensor_q.logical_shape()[3],
             "Named ring recipes require matching Q/K/V head dims");
+        // Paired recipes (STANDARD, LOW_PRECISION) process Q tile rows in pairs: an odd Q chunk rounds up to the
+        // next even one, so the compute kernel never builds the single-row group (outputs are per row, so the
+        // chunking does not change them beyond accumulation order).
+        program_config.q_chunk_size =
+            operations::transformer::sdpa::detail::recipe_compute_q_tiles(policy, program_config.q_chunk_size / 32) * 32;
         operations::transformer::sdpa::detail::validate_recipe_geometry(
             operations::transformer::sdpa::detail::RecipeOp::Ring,
             policy,
@@ -486,6 +491,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
             input_tensor_k.logical_shape()[3] == input_tensor_q.logical_shape()[3] &&
                 input_tensor_v.logical_shape()[3] == input_tensor_q.logical_shape()[3],
             "Named exp ring recipes require matching Q/K/V head dims");
+        // Paired recipes (STANDARD, LOW_PRECISION) process Q tile rows in pairs: an odd Q chunk rounds up to the
+        // next even one, so the compute kernel never builds the single-row group (outputs are per row, so the
+        // chunking does not change them beyond accumulation order).
+        program_config.q_chunk_size =
+            operations::transformer::sdpa::detail::recipe_compute_q_tiles(policy, program_config.q_chunk_size / 32) * 32;
         operations::transformer::sdpa::detail::validate_recipe_geometry(
             operations::transformer::sdpa::detail::RecipeOp::ExpRing,
             policy,
