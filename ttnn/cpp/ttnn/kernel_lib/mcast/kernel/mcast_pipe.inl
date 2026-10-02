@@ -88,13 +88,15 @@ FORCE_INLINE void SenderPipeImpl<
             }
         }
     }
+    // Atomic multicasts exclude their source. Count this completed sending round through the NoC too,
+    // so it serializes with the next rotating sender's increment to this same word.
+    if constexpr (ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Counter) {
+        data_ready_.up(noc_, my_x[NOC_ID], my_y[NOC_ID], 1);
+    }
     // Equal addresses skip the local copy, so only remote source-lifetime
     // guards apply. Wait for ACKED completion only when we wrote a local destination.
+    // The Counter atomic barrier also covers the self-targeted increment above.
     fence_<SOURCE_GUARD>(loopback_ && src_l1 != dst_l1);
-    // Atomic multicasts exclude their source. Count this completed sending round locally too.
-    if constexpr (ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Counter) {
-        data_ready_.up(1);
-    }
     if constexpr (ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Flag) {
         data_ready_.set(INVALID);
     }
@@ -193,11 +195,13 @@ FORCE_INLINE void SenderPipeImpl<
             }
         }
     }
-    fence_<SOURCE_GUARD>(false);
-    // Count this completed sending round locally once, including local-only groups.
+    // Count this completed sending round once, including local-only groups. Use the NoC so the update
+    // serializes with the next rotating sender's increment to this same word.
     if constexpr (ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Counter) {
-        data_ready_.up(1);
+        data_ready_.up(noc_, my_x[NOC_ID], my_y[NOC_ID], 1);
     }
+    // The Counter atomic barrier also covers the self-targeted increment above.
+    fence_<SOURCE_GUARD>(false);
     if constexpr (ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Flag) {
         data_ready_.set(INVALID);
     }
