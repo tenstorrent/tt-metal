@@ -1091,7 +1091,12 @@ void generate_noncausal_padded_mask(Noc noc, uint32_t Sq_chunk_t, uint32_t Sk_ch
                 }
             } else {
                 if (vertical_tile_idx == -1) {
-                    fill_vertical_tile_bfp4<tile_bytes>(noc, dfb_mask_in, in_mask_tile_id, unpad_col_in_tile);
+                    // The mask is bf16 on Quasar and for streaming compute, Bfp4_b otherwise.
+                    if constexpr (tile_bytes == tt::constants::TILE_HW * sizeof(uint16_t)) {
+                        fill_vertical_tile_bf16<tile_bytes>(noc, dfb_mask_in, in_mask_tile_id, unpad_col_in_tile);
+                    } else {
+                        fill_vertical_tile_bfp4<tile_bytes>(noc, dfb_mask_in, in_mask_tile_id, unpad_col_in_tile);
+                    }
                     vertical_tile_idx = in_mask_tile_id;
                 } else {
                     copy_tile<tile_bytes>(noc, write_ptr_base, write_ptr_base, vertical_tile_idx, in_mask_tile_id);
