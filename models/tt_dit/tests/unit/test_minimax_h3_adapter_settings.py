@@ -64,6 +64,6 @@ def test_empty_path_variable_means_no_adapter(clean_env):
 
 
 @pytest.mark.parametrize("field", ["lora_strength", "video_shift", "audio_shift"])
-def test_non_positive_values_are_rejected(clean_env, field):
-    with pytest.raises(ValueError, match=field):
+def test_non_positive_values_are_rejected(clean_env, field, expect_error):
+    with expect_error(ValueError, field):
         weights.resolve_adapter_settings(**{field: 0.0}, **DEFAULTS)
