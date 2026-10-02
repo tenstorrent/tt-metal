@@ -10,20 +10,34 @@ image.** The device executes `lui`/`addi` of a constant, exactly as it would for
 is decided by the linker (dense within an image) and then by the loader (dense across images).
 
 ```mermaid
-flowchart LR
-  subgraph build["JIT build -- once per kernel, cached on disk"]
-    A["zone site<br/>DeviceZoneScopedN(X)"] -->|asm directives| B["1-byte handle in .tt_zone_ids<br/>record in .tt_zone_meta<br/>strings in .tt_zone_str"]
-    B -->|"ld places .tt_zone_ids at 0x6800000"| C["kernel.elf<br/>id = 0x6800000 + k<br/>baked into lui/addi"]
+flowchart TB
+  classDef build fill:#DBEAFE,stroke:#1D4ED8,stroke-width:2px,color:#0F172A
+  classDef load  fill:#FFEDD5,stroke:#C2410C,stroke-width:2px,color:#0F172A
+  classDef run   fill:#DCFCE7,stroke:#15803D,stroke-width:2px,color:#0F172A
+  classDef file  fill:#F8FAFC,stroke:#64748B,stroke-width:2px,color:#0F172A
+
+  subgraph B[" 1 · JIT build — once per kernel, cached "]
+    S["zone site in kernel source<br/>DeviceZoneScopedN(&quot;X&quot;)"]:::build
+    L["link: .tt_zone_ids placed at 0x6800000<br/>site k gets id 0x6800000 + k"]:::build
+    S --> L
   end
-  subgraph load["Load -- host, once per ELF per process"]
-    C --> D["reserve the next block<br/>[base, base + n)"]
-    D --> E["RebaseZoneIds<br/>patch HI20/LO12 immediates<br/>and record word0"]
-    E --> F["register names<br/>sites[id] = {name, file, line}"]
+  E[("kernel.elf in the JIT cache<br/>ids baked into lui / addi")]:::file
+  subgraph LD[" 2 · Load — host, once per ELF per process "]
+    R["reserve the next block [base, base + n)<br/>rewrite the lui / addi immediates to base + k"]:::load
+    N["register the names<br/>sites[base + k] = X @ file:line"]:::load
+    R --> N
   end
-  subgraph run["Launch -- every program run"]
-    F --> G["image written to L1<br/>marker word0 = type | id"]
-    G --> H["host decoder<br/>site_of(id): one load"]
+  subgraph RN[" 3 · Launch — every program run "]
+    D["image written to L1<br/>each marker carries its id"]:::run
+    H["host decoder: site_of(id) → X"]:::run
+    D --> H
   end
+  L --> E --> R
+  N --> D
+
+  style B  fill:#EFF6FF,stroke:#93C5FD,color:#1E3A8A
+  style LD fill:#FFF7ED,stroke:#FDBA74,color:#7C2D12
+  style RN fill:#F0FDF4,stroke:#86EFAC,color:#14532D
 ```
 
 Three sections carry the metadata. None is `SHF_ALLOC`, so none is in a `PT_LOAD` segment and none costs a
@@ -36,6 +50,29 @@ byte of L1:
 | `.tt_zone_str` | `0x6600000` | `MS` | the zone names and `__FILE__` strings, deduplicated by the linker | the loader, via the record pointers |
 
 ## 1. The device side: what a zone site emits
+
+One zone site puts something in four places. Three are never loaded; only the two instructions in `.text`
+reach the device.
+
+```mermaid
+flowchart LR
+  classDef code fill:#F1F5F9,stroke:#475569,stroke-width:2px,color:#0F172A
+  classDef sec  fill:#FEF3C7,stroke:#B45309,stroke-width:2px,color:#0F172A
+
+  Z["DeviceZoneScopedN(&quot;X&quot;)"]:::code
+  I["<b>.tt_zone_ids</b> — never loaded<br/>one zero byte; its address is the id"]:::sec
+  M["<b>.tt_zone_meta</b> — never loaded<br/>{ id, name_ptr, file_ptr, line }"]:::sec
+  T["<b>.tt_zone_str</b> — never loaded<br/>&quot;X&quot;, &quot;kernel.cpp&quot;"]:::sec
+  C["<b>.text</b> — the device<br/>lui / addi of the id, then the marker"]:::code
+
+  Z --> I
+  Z --> M
+  Z --> T
+  Z --> C
+  M -. id, name, file .-> I
+  M -.-> T
+  C -. relocation .-> I
+```
 
 `DeviceZoneScopedN("MY-ZONE")` expands (simplified; the real macro is `TT_ZONE_DEFINE_ID` in
 `hw/inc/hostdev/profiler_zone_id.h`) to:
@@ -70,6 +107,13 @@ What matters in that expansion:
 - **The id is a link-time address, not a compile-time number.** The compiler emits `lui`/`addi` with
   relocations against the handle's label; the linker fills in the immediates. Two instructions, no memory
   access -- the same cost as loading any 32-bit constant.
+- **Why two instructions and not one.** RV32 has no instruction with a 32-bit (or 16-bit) immediate: `addi`
+  carries 12 signed bits (-2048 … 2047) and `lui` carries the upper 20, so any constant outside ±2 KiB is
+  `lui` + `addi`. At link time the id is `0x6800000 + k`, which needs the `lui`; after the loader rebases it
+  to `base + k`, ids of 2048 and above still need both. The loader can only rewrite immediates in place --
+  deleting an instruction would move every branch target after it -- so the pair stays even where the `lui`
+  ends up loading 0. Placing the section below 4 KiB would let the *linker* collapse the pair to one `addi`,
+  but then the loader could patch only 12 bits and the whole process would have 2047 ids.
 - **`.ifndef` makes it one handle per site.** A site inside an inline function or a template is expanded
   wherever the function is; the guard assembles the handle and the record only the first time the label is
   seen in this assembly, so an inlined site has one id however many copies of its code exist.
