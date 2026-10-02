@@ -323,7 +323,7 @@ void kernel_main() {
             // Start Average Calc
             // Start Local Reduce
             dfb_input_mask.wait_front(mask_tiles_per_group);
-            auto average_block = [&](auto runtime_offset, uint32_t out_block_index) {
+            auto average_block = [&](auto runtime_offset, uint32_t out_block_index) __attribute__((always_inline)) {
                 uint32_t out_block_h_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     out_block_h_actual = out_block_h_last;
@@ -412,10 +412,17 @@ void kernel_main() {
             };
             // Each call site supplies its runtime-record offset as a template
             // argument. reduce<Call>() alone interprets the record's shape.
-            for (uint32_t out_block_index = 0; out_block_index + 1 < num_out_blocks_padded; ++out_block_index) {
-                average_block(std::integral_constant<uint32_t, 0>{}, out_block_index);
+            if constexpr (block_h % num_out_blocks == 0) {
+                // Equal reduction shapes share one call site; row padding remains masked above.
+                for (uint32_t out_block_index = 0; out_block_index < num_out_blocks; ++out_block_index) {
+                    average_block(std::integral_constant<uint32_t, 0>{}, out_block_index);
+                }
+            } else {
+                for (uint32_t out_block_index = 0; out_block_index + 1 < num_out_blocks_padded; ++out_block_index) {
+                    average_block(std::integral_constant<uint32_t, 0>{}, out_block_index);
+                }
+                average_block(std::integral_constant<uint32_t, 1>{}, num_out_blocks_padded - 1);
             }
-            average_block(std::integral_constant<uint32_t, 1>{}, num_out_blocks_padded - 1);
             // End Local Redcue
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
@@ -430,7 +437,7 @@ void kernel_main() {
 
             // Start Variance Calc
             // Start Local Reduce
-            auto variance_block = [&](auto runtime_offset, uint32_t out_block_index) {
+            auto variance_block = [&](auto runtime_offset, uint32_t out_block_index) __attribute__((always_inline)) {
                 uint32_t out_block_h_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     out_block_h_actual = out_block_h_last;
@@ -562,10 +569,17 @@ void kernel_main() {
                 reduce_local_group<dfb_xmm_id, dfb_ex2_partial_id, decltype(runtime_offset)::value>(out_block_h_actual);
                 dfb_xmm.pop_front(static_cast<uint16_t>(out_block_hw_normal));
             };
-            for (uint32_t out_block_index = 0; out_block_index + 1 < num_out_blocks_padded; ++out_block_index) {
-                variance_block(std::integral_constant<uint32_t, 0>{}, out_block_index);
+            if constexpr (block_h % num_out_blocks == 0) {
+                // Equal reduction shapes share one call site; row padding remains masked above.
+                for (uint32_t out_block_index = 0; out_block_index < num_out_blocks; ++out_block_index) {
+                    variance_block(std::integral_constant<uint32_t, 0>{}, out_block_index);
+                }
+            } else {
+                for (uint32_t out_block_index = 0; out_block_index + 1 < num_out_blocks_padded; ++out_block_index) {
+                    variance_block(std::integral_constant<uint32_t, 0>{}, out_block_index);
+                }
+                variance_block(std::integral_constant<uint32_t, 1>{}, num_out_blocks_padded - 1);
             }
-            variance_block(std::integral_constant<uint32_t, 1>{}, num_out_blocks_padded - 1);
             // End Local Reduce
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
