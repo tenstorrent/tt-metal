@@ -25,6 +25,7 @@ def main():
     parser.add_argument("--repetition-detection", type=json.loads)
     parser.add_argument("--disable-thinking", action="store_true", help="Separate, explicit agent-policy experiment")
     parser.add_argument("--agent-system-template", type=Path, help="Explicit task-independent agent-policy control")
+    parser.add_argument("--repeated-tool-feedback", action="store_true", help="Audited exact-repeat advisory control")
     parser.add_argument(
         "--normalize-submission-marker", action="store_true", help="Opt-in audited harness policy change"
     )
@@ -69,6 +70,7 @@ def main():
         llm_timeout_sec=1800,
         request_telemetry=True,
         normalize_submission_marker=args.normalize_submission_marker,
+        repeated_tool_feedback=args.repeated_tool_feedback,
         agent_env={"OPENAI_API_KEY": "local-diagnostic"},
         venv_python=args.harbor_python,
     )

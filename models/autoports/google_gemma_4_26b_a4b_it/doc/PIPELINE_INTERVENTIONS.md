@@ -443,6 +443,15 @@ are unmeasured and no image is rebuilt. The prefill-precision Sympy trial is
 still bounded and monitored. Active resumed time is about 114 minutes,
 cumulative about 6h47m. No combined-suite result is claimed.
 
+07:32 UTC: prefill-BFP8 Sympy fails at 900.115 seconds (reward 0), despite its
+improved short numerical gate. Most time is model requests; tools take 3.544
+seconds. Exact repeated successful commands motivate a separately audited,
+default-off advisory, not another broad prompt rewrite. Ninety-nine host checks
+pass; a fresh 900-second same-server Sympy control starts at 07:31:46. Sampling
+and task information are preserved, but prompt-policy and warmer-cache effects
+are declared separately. Active resumed time is about 121 minutes, cumulative
+about 6h54m. The original five still lack a combined measurement.
+
 - TTFT: `doc/ttft_optimization/`.
 - Remote benchmarks/evals:
   `readiness_vllm/ttft_optimization_remote/README.md`.
