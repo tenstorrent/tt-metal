@@ -70,6 +70,7 @@ from ...encoders.qwen3vl.loader_minimax_h3 import (
 from ...encoders.qwen3vl.model_qwen3vl import create_rope_tensors, mrope_position_ids, vision_token_runs
 from ...encoders.qwen3vl.vision_qwen3vl import pad_patches_for_sp, vision_cu_seqlens
 from ...layers.audio_ops import weights_variant
+from ...layers.module import Module
 from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
@@ -1531,7 +1532,7 @@ class MiniMaxH3Pipeline:
             t_factor = tuple(self.mesh_device.shape)[1] if self.audio_t_shard else 1
             audio_parallel = ParallelFactor(factor=t_factor, mesh_axis=1) if t_factor > 1 else None
             self._host_log(f"building the audio encoder (ref2va reference soundtracks, t_factor={t_factor})")
-            encoder = MiniMaxH3AudioEncoder(
+            self._audio_encoder = MiniMaxH3AudioEncoder(
                 encoder_dim=config["encoder_dim"],
                 encoder_rates=tuple(config["encoder_rates"]),
                 latent_dim=config["latent_dim"],
@@ -1543,29 +1544,45 @@ class MiniMaxH3Pipeline:
                 ccl_manager=self.audio_ccl_manager if audio_parallel is not None else None,
                 split_mode="weight",
             )
+            self._register_audio_module_residency(self._audio_encoder)
+        encoder = self._audio_encoder
 
-            def read_state() -> dict[str, torch.Tensor]:
-                converted = convert_minimax_h3_audio_state_dict(self._read_safetensors("audio_vae"))
-                return {
-                    k: v
-                    for k, v in converted.items()
-                    if k.startswith(("encoder.", "pre_block.", "mean_proj.", "logs_proj."))
-                }
+        def read_state() -> dict[str, torch.Tensor]:
+            converted = convert_minimax_h3_audio_state_dict(self._read_safetensors("audio_vae"))
+            return {
+                k: v
+                for k, v in converted.items()
+                if k.startswith(("encoder.", "pre_block.", "mean_proj.", "logs_proj."))
+            }
 
-            cache.load_model(
-                encoder,
-                model_name=MODEL_NAME,
-                # The audio precision levers change the module's parameter set, so they are part of
-                # the cache key -- read off the module so the key cannot drift from what was built.
-                subfolder="audio_encoder" + weights_variant(encoder.split_mode, encoder.max_c_in_block),
-                parallel_config=self.vae_parallel_config,
-                mesh_shape=tuple(self.mesh_device.shape),
-                mesh_device=self.mesh_device,
-                dtype="fp32",
-                get_torch_state_dict=read_state,
-            )
-            self._audio_encoder = encoder
-        return self._audio_encoder
+        # No-op while resident; reloads from the device-weight cache after the DiT or the video VAE
+        # decoder evicted it (non-coresident presets).
+        cache.load_model(
+            encoder,
+            model_name=MODEL_NAME,
+            # The audio precision levers change the module's parameter set, so they are part of
+            # the cache key -- read off the module so the key cannot drift from what was built.
+            subfolder="audio_encoder" + weights_variant(encoder.split_mode, encoder.max_c_in_block),
+            parallel_config=self.vae_parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
+            dtype="fp32",
+            get_torch_state_dict=read_state,
+        )
+        return encoder
+
+    def _register_audio_module_residency(self, module: Module) -> None:
+        """Non-coresident presets: the audio VAE halves yield to the DiT and the video VAE decoder.
+
+        Both are only needed outside the denoise and the video decode (the encoder before, the
+        decoder after), and on a 12 GB chip the ~1.1 GB they hold is what the bucketed DiT's top
+        rung is missing. They never evict anything themselves: whatever is resident when they
+        reload (text encoder, video VAE decoder) has room for them.
+        """
+        if self.coresident:
+            return
+        self._transformer.register_coresident_exclusions(module)
+        self._vae.decoder.register_coresident_exclusions(module)
 
     def _encode_keyframes(self, vae: MiniMaxH3Vae, keyframes: Sequence[Image.Image]) -> torch.Tensor:
         """Prepared keyframes to packed conditioning rows, via the device VAE encoder.
@@ -1647,7 +1664,8 @@ class MiniMaxH3Pipeline:
                     batch_shard_axis = other
                 else:
                     logger.warning(f"audio batch shard skipped: mesh axis {other} has one device")
-            decoder = MiniMaxH3AudioDecoder(
+
+            self._audio_decoder = MiniMaxH3AudioDecoder(
                 latent_channels=config["latent_channels"],
                 latent_dim=config["latent_dim"],
                 decoder_dim=config["decoder_dim"],
@@ -1663,40 +1681,43 @@ class MiniMaxH3Pipeline:
                 act_mode="fused",
                 batch_shard_axis=batch_shard_axis,
             )
+            self._register_audio_module_residency(self._audio_decoder)
+        decoder = self._audio_decoder
 
-            def read_state() -> dict[str, torch.Tensor]:
-                """Only the decoder's half of the converted checkpoint.
+        def read_state() -> dict[str, torch.Tensor]:
+            """Only the decoder's half of the converted checkpoint.
 
-                `convert_minimax_h3_audio_state_dict` returns both halves (`encoder.*`,
-                `pre_block.*`, `mean_proj.*`, `logs_proj.*` belong to the encoder), which is why the
-                existing tests load it with `strict=False`. Filtering to the two prefixes this module
-                owns keeps the load *strict* -- so a renamed key still fails -- and lets this go
-                through the same `cache.load_model` path as everything else.
-                """
-                converted = convert_minimax_h3_audio_state_dict(self._read_safetensors("audio_vae"))
-                return {k: v for k, v in converted.items() if k.startswith(("dec_in_proj.", "decoder."))}
+            `convert_minimax_h3_audio_state_dict` returns both halves (`encoder.*`,
+            `pre_block.*`, `mean_proj.*`, `logs_proj.*` belong to the encoder), which is why the
+            existing tests load it with `strict=False`. Filtering to the two prefixes this module
+            owns keeps the load *strict* -- so a renamed key still fails -- and lets this go
+            through the same `cache.load_model` path as everything else.
+            """
+            converted = convert_minimax_h3_audio_state_dict(self._read_safetensors("audio_vae"))
+            return {k: v for k, v in converted.items() if k.startswith(("dec_in_proj.", "decoder."))}
 
-            cache.load_model(
-                decoder,
-                model_name=MODEL_NAME,
-                # The audio precision levers change the module's parameter set, so they are part of
-                # the cache key -- read off the module so the key cannot drift from what was built.
-                subfolder="audio_decoder"
-                + weights_variant(
-                    decoder.split_mode,
-                    decoder.max_c_in_block,
-                    decoder.pack_bands,
-                    act_mode=decoder.act_mode,
-                    polyphase=decoder.polyphase_ups,
-                ),
-                parallel_config=self.vae_parallel_config,
-                mesh_shape=tuple(self.mesh_device.shape),
-                mesh_device=self.mesh_device,
-                dtype="fp32",
-                get_torch_state_dict=read_state,
-            )
-            self._audio_decoder = decoder
-        return self._audio_decoder
+        # No-op while resident; reloads after the DiT / video VAE decoder evicted it (see
+        # `_register_audio_module_residency`).
+        cache.load_model(
+            decoder,
+            model_name=MODEL_NAME,
+            # The audio precision levers change the module's parameter set, so they are part of
+            # the cache key -- read off the module so the key cannot drift from what was built.
+            subfolder="audio_decoder"
+            + weights_variant(
+                decoder.split_mode,
+                decoder.max_c_in_block,
+                decoder.pack_bands,
+                act_mode=decoder.act_mode,
+                polyphase=decoder.polyphase_ups,
+            ),
+            parallel_config=self.vae_parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
+            dtype="fp32",
+            get_torch_state_dict=read_state,
+        )
+        return decoder
 
     @property
     def audio_sampling_rate(self) -> int:
@@ -2079,7 +2100,7 @@ class MiniMaxH3Pipeline:
 
         with self._track_cache_misses(on_event, "audio"):
             audio = self._decode_audio(
-                self._audio_decoder, audio_rows, num_audio_latents, layout.num_condition_audio_rows
+                self._prepare_audio_decoder(), audio_rows, num_audio_latents, layout.num_condition_audio_rows
             )
 
         self._log(f"program cache misses: {self.last_program_cache_misses}")
