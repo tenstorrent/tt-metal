@@ -82,7 +82,7 @@ def _run(quant_op: str, scale_form: str, src_A: torch.Tensor) -> torch.Tensor:
                 quant_op=quant_op,
                 scale_form=scale_form,
                 zero_point=_ZERO_POINT,
-                scale=_SCALE,
+                quant_scale=_SCALE,
             ),
         ],
         runtimes=[TILE_COUNT(1)],

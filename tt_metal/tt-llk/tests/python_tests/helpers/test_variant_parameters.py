@@ -1900,7 +1900,7 @@ class QUANT_SCALAR_CFG(TemplateParameter):
     quant_op: str = "quant"
     scale_form: str = "tile"
     zero_point: float = 3.0
-    scale: float = 0.5
+    quant_scale: float = 0.5
 
     _OPS = {"quant": 0, "requant": 1, "dequant": 2}
     _FORMS = {"tile": 0, "scalar": 1}
@@ -1915,7 +1915,7 @@ class QUANT_SCALAR_CFG(TemplateParameter):
             f"#define QUANT_OP {self._OPS[self.quant_op]}",
             f"#define QUANT_SCALE_FORM {self._FORMS[self.scale_form]}",
             f"#define QUANT_ZP_BITS 0x{bits(self.zero_point):08x}u",
-            f"#define QUANT_SCALE_BITS 0x{bits(self.scale):08x}u",
+            f"#define QUANT_SCALE_BITS 0x{bits(self.quant_scale):08x}u",
         ]
         return "\n".join(lines)
 

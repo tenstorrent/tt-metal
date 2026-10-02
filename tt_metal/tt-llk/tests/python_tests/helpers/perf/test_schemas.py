@@ -178,7 +178,7 @@ PERF_TEST_SCHEMAS = {
             "num_faces_A",
             "num_faces_B",
             "quant_op",
-            "scale",
+            "quant_scale",
             "scale_form",
             "tile_cnt",
             "unpack_to_dest",
