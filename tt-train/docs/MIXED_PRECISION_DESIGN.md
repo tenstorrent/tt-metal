@@ -1,14 +1,15 @@
 # Mixed Precision Design
 
-This note records the design decisions behind tt-train's mixed-precision policy, tracked in
+This note records the design behind tt-train's mixed-precision policy, tracked in
 [#56513](https://github.com/tenstorrent/tt-metal/issues/56513). The target policy is:
 
 - parameters and compute in bf16,
 - gradient reduction in fp32,
 - master weights and optimizer state in fp32.
 
-Each decision below lists the options that were considered and its status. When a PR resolves a decision, it
-fills in the rationale here, so reviewers can check a PR against the reasoning.
+Each section describes a design choice: what it is, why, and which alternatives were dropped and why. Questions
+that are still open are listed at the end; the PR that settles one moves it into its own section with the
+reasoning, so reviewers can check a PR against it.
 
 ## Background: two views of one parameter
 
@@ -24,17 +25,10 @@ updates only the bf16 copy, and the fp32 tensor never changes. The bf16-native c
 [#41385](https://github.com/tenstorrent/tt-metal/pull/41385), which made the second copy lazy to save memory
 for fp32 tensors. Before it, a bf16 tensor was stored once and returned for both `HALF` and `FULL`.
 
-## 1. How the two views stay coherent
+## How the two views stay coherent
 
-**Status: decided, option C. Planned for PR 2; none of it exists in the code yet.**
-
-Options:
-
-- **A. Explicit mutating accessor.** `get_value_for_update(precision)` returns the slot and drops the other
-  one. Optimizers call it; everyone else calls the read-only `get_value()`.
-- **B. No derived cache.** Store one tensor and typecast on every read of the other precision.
-- **C. Version stamp.** Keep both slots. The native slot carries a version counter that the mutating accessor
-  bumps; the derived slot remembers the version it was cast from and is re-derived on read when it is behind.
+This is built in PR 2 ([#58452](https://github.com/tenstorrent/tt-metal/issues/58452)); until it lands, none
+of it exists in the code.
 
 In PR 2 the native slot will be the only one that can be written. `get_value_for_update(precision)` will
 return a `MutableTensorView` over it. Only `AutocastTensor` will be able to construct that type, and it will
@@ -52,16 +46,17 @@ its state. Three of them go through tt-train's fused kernels: the fused `AdamW` 
 wrappers will take the view in their signatures, so passing a plain `get_value()` result will not compile. The
 other two write through functions tt-train does not own: `MorehAdamW` passes the parameter and its moments as
 output tensors to `ttnn::moreh_adamw`, and `RemoteOptimizer` receives weights straight into the parameter's
-buffer. For those two the view is a convention, backed by tests. `AdamWComposite`, `SGDComposite` and
+buffer. For those two the view is a convention. `MorehAdamW`'s is backed by a test; `RemoteOptimizer`'s step
+needs a second host, so its write is covered only by review. `AdamWComposite`, `SGDComposite` and
 `MuonComposite` build new tensors and install them with `set_value`, so they do not change.
 
 Two optimizer contracts have to move with it. `AdamW` creates its moments from the `HALF` view
 (`optimizers/adamw.cpp`), while its device op requires the moments to have the parameter's dtype
 (`adamw_device_operation.cpp`), so for an fp32-native parameter PR 2 will create the moments from `NATIVE`;
 the kernel already accepts fp32 moments. The fused `SGD` kernel accepts only bf16 parameters and momentum
-(`sgd_device_operation.cpp`), so an fp32-native parameter under fused `SGD` is not supported today. Whether
-PR 2 adds an fp32 path to that kernel or fails with a clear error until PR 5 is still open. Until that is
-decided, the claim below holds for every parameter and optimizer combination the fused kernels accept.
+(`sgd_device_operation.cpp`). Rather than add an fp32 path to it now, PR 2 makes every optimizer that updates
+parameters, except fused `AdamW`, reject an fp32 parameter at construction, with an error that names the parameter, until the precision
+config lands. Before, they silently trained a bf16 copy or turned the parameter into bf16 through `set_value`.
 
 One rule covers both storage classes: a bf16-native parameter with an fp32 view, and an fp32-native master
 weight with a bf16 compute copy. A cast happens only when a stale derived view is read, which is at most once
@@ -70,60 +65,55 @@ allocation, which keeps the door open for trace capture. Peak memory is the same
 also keeps the bf16 copy alive for backward. The design is PyTorch's (one source of truth plus a version
 counter, `c10::TensorImpl::bump_version`), with the bump moved from the dispatcher into the accessor.
 
-Option A reallocates the compute copy on every step under the fp32-master policy and ends up needing C's
-bookkeeping anyway. Option B casts and allocates on every read and cannot return a `const&`. Letting both
-slots be written was also rejected, because rounding fp32 to bf16 would erase the master's sub-ulp progress.
-The limit of C is that it cannot see writes that bypass the accessor. That is mitigated by migrating every
-known in-place writer (the five above), the private constructor of `MutableTensorView` that the fused kernel
-wrappers require, the `TT_FATAL`, a behavioural test per in-place optimizer and storage class, and a line in the
-review instructions. The counter is hidden behind one private query, so a future buffer-level version in ttnn
-can replace it. That would also cover writers outside tt-train's own wrappers.
+Alternatives we dropped:
 
-## 2. What a checkpoint contains, and what happens to old ones
+- **Drop the other copy on every write.** The accessor would return the slot and discard the other one. It is
+  the smallest change, but under the fp32-master policy it reallocates the compute copy on every step, and
+  keeping that copy alive ends up needing the same bookkeeping as the version counter.
+- **No cached copy at all.** Store one tensor and typecast on every read of the other precision. It can never
+  be stale, but an fp32 weight is read by several ops per step, so it would be cast and allocated several times
+  per step, and `get_value()` could no longer return a `const&`.
+- **Let both copies be written.** Rounding the fp32 master to bf16 and writing it back would erase the master's
+  sub-ulp progress, which is the reason to keep an fp32 master in the first place.
 
-**Status: undecided.**
+The limit of the version counter is that it cannot see writes that bypass the accessor. That is mitigated by
+migrating every known in-place writer (the five above), the private constructor of `MutableTensorView` that the
+fused kernel wrappers require, the `TT_FATAL`, behavioural tests for the in-place optimizers that run on one
+device, and a line in the review instructions. The counter is hidden behind one private query, so a future
+buffer-level version in ttnn can replace it. That would also cover writers outside tt-train's own wrappers.
+
+## Open questions
+
+Each is settled by the PR named in its heading, which then moves it into its own section with the reasoning.
+
+### What a checkpoint contains, and what happens to old ones (PR 2)
 
 The C++ writer stored `get_value(FULL)`. Since #41385 that is an fp32 copy for bf16 parameters, so C++
 checkpoints written since then hold fp32 tensors, and loading one makes those parameters fp32-native.
 [#57863](https://github.com/tenstorrent/tt-metal/pull/57863) (in review) switches the writer to `NATIVE`. The
-open part is old checkpoints.
+open part is loading: keep the stored dtype and document the memory cost, or cast each loaded value to the
+dtype the parameter currently has, so a checkpoint never changes a parameter's storage class. A format version
+field would additionally let a reader tell the older fp32 checkpoints from native ones.
 
-- **A. Write `NATIVE`, read as-is.** Loading an old checkpoint gives fp32-native parameters; document the
-  memory cost.
-- **B. Write `NATIVE`, and cast on read** to the dtype the parameter currently has, so a checkpoint never
-  changes a parameter's storage class.
-- **C. B, plus a format version field** so a reader can tell old fp32-upcast checkpoints from new native ones.
+### Where the master weight lives (PR 5)
 
-## 3. Where the master weight lives
+Either in the optimizer, as `AdamWFullPrecision` does today, with a private map of fp32 tensors and the model
+parameter staying bf16-native; or in the parameter itself, which is then fp32-native, with the bf16 view as the
+compute copy and every in-place optimizer updating the native slot.
 
-**Status: undecided.**
+### The future of `AdamWFullPrecision` (PR 5)
 
-- **A. In the optimizer**, as `AdamWFullPrecision` does today: a private map of fp32 tensors, with the model
-  parameter staying bf16-native.
-- **B. In the parameter**: the parameter is fp32-native, the bf16 view is the compute copy, and any in-place
-  optimizer updates the native slot.
+Keep it as a separate class; reduce it to a thin wrapper that stores its parameters in fp32 and delegates to
+`AdamW`, which only works if the master weight lives in the parameter; or deprecate it with a warning for one
+release and then remove it.
 
-## 4. Fate of `AdamWFullPrecision`
+### Gradient dtype after the fp32 reduction (PR 4)
 
-**Status: undecided.**
+Cast back to bf16 after the fp32 all-reduce and scaling, so the fused optimizers keep their bf16-gradient
+requirement; or keep gradients in fp32 end to end, with fp32 seeding and accumulation in `add_grad` and an
+fp32-gradient path in the `AdamW` kernel.
 
-- **A. Keep it** as a separate class.
-- **B. Make it an alias**: it sets `param_dtype: float32` on its parameters and delegates to `AdamW`. Requires
-  decision 3 = B.
-- **C. Deprecate** with a warning for one release, then remove it.
+### What goes over the wire during the reduction (PR 4)
 
-## 5. Gradient dtype after the fp32 reduction
-
-**Status: undecided.**
-
-- **A. Cast back to bf16** after the fp32 all-reduce and scaling. The fused optimizers keep their bf16-gradient
-  requirement.
-- **B. fp32 gradients end to end**: fp32 seeding and accumulation in `add_grad`, and an fp32-gradient path in
-  the `AdamW` kernel.
-
-## 6. What goes over the wire during the reduction
-
-**Status: undecided.**
-
-- **A. Cast, then reduce**: fp32 on the wire, twice the bytes.
-- **B. bf16 on the wire, fp32 accumulation inside the collective**, if the CCL kernels support it.
+Cast, then reduce, with fp32 on the wire and twice the bytes; or bf16 on the wire with fp32 accumulation
+inside the collective, if the CCL kernels support it.
