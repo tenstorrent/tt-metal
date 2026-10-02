@@ -1135,9 +1135,9 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         control_plane.get_fabric_context().get_builder_context().get_stream_assignment(local_fabric_node_id.mesh_id);
     const CreditTransportPlan& credit_plan = stream_assignment.plan();
 
-    named_args["VC0_USES_COUNTER_CREDITS"] = credit_plan.vc0_uses_counters ? 1 : 0;
-    named_args["VC1_USES_COUNTER_CREDITS"] = credit_plan.vc1_uses_counters ? 1 : 0;
-    named_args["VC2_USES_COUNTER_CREDITS"] = credit_plan.vc2_uses_counters ? 1 : 0;
+    named_args["VC0_USES_COUNTER_CREDITS"] = credit_plan.vc_uses_counters(0) ? 1 : 0;
+    named_args["VC1_USES_COUNTER_CREDITS"] = credit_plan.vc_uses_counters(1) ? 1 : 0;
+    named_args["VC2_USES_COUNTER_CREDITS"] = credit_plan.vc_uses_counters(2) ? 1 : 0;
 
     // Flat bases for the shared free-slots table, so a VC's boundary is the same on every router.
     named_args["VC1_FABRIC_POSITION_START"] = stream_assignment.sender_flat_base(1);
