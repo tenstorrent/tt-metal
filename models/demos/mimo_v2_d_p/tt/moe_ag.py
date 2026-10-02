@@ -207,6 +207,7 @@ class MoeAgBlock:
     def __init__(self, mesh_device, *, chunk_size_per_chip, hidden, k, n_global, gids, buf_rows, options=None):
         self.dev = mesh_device
         self.options = options = options or MiMoRuntimeOptions()
+        self._fag_sems = None
         rows, cols = tuple(mesh_device.shape)
         self.rows, self.cols = rows, cols
         S, H = chunk_size_per_chip, hidden
@@ -276,12 +277,23 @@ class MoeAgBlock:
         return sum_blocks_tiled(g_tp, n_rows=self.S, n_blocks=self.cols)
 
     def _ag(self, x, out, axis):
-        op = (
-            ttnn.experimental.fabric_all_gather
-            if self.options.moe_ag_gather_op == "fabric"
-            else ttnn.experimental.high_bw_all_gather
+        if self.options.moe_ag_gather_op != "fabric":
+            return ttnn.experimental.high_bw_all_gather(
+                x, dim=2, output_tensor=out, cluster_axis=axis, num_links=self.links
+            )
+        if self._fag_sems is None:  # caller-owned (zero, left zero): the op then allocates and synchronizes nothing
+            g = self.dev.compute_with_storage_grid_size()
+            crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(g.x - 1, g.y - 1))})
+            self._fag_sems = [ttnn.create_global_semaphore(self.dev, crs, 0) for _ in range(2)]
+        return ttnn.experimental.fabric_all_gather(
+            x,
+            dim=2,
+            output_tensor=out,
+            cluster_axis=axis,
+            num_links=self.links,
+            ready_semaphore=self._fag_sems[0],
+            data_valid_semaphore=self._fag_sems[1],
         )
-        return op(x, dim=2, output_tensor=out, cluster_axis=axis, num_links=self.links)
 
     def to_rm(self, x):
         """x [1, 1, S, H] bf16 TILE -> the row-major layout the gather takes ([1, 1, S xppr, H / xppr])."""
