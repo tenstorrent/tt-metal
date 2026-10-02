@@ -306,29 +306,27 @@
   team: models
   budget_type: vllm
 
-# 31B on the 4-chip QuietBox 2 (P150x4), same APC serving config as the tp=8
-# leg. The KV pool is set conservatively: TP=4 keeps twice the KV bytes per
-# chip of TP=8, so the 1,523,712-token tp=8 pool halves to ~760K; 524,288 (two
-# full-256K sessions) leaves headroom until a measured ceiling replaces it.
-# Capacity point: 32 users x 15,360 tokens = 492K resident (94% of that pool).
+# 31B on the 4-chip QuietBox 2 (P150x4) keeps the bounded serving config.
+# The APC config of record (hybrid kv-cache groups) does not boot here yet:
+# at TP=4 the sliding group pages 4 heads x 256 and the full group 1 head x
+# 512, so vLLM doubles the full group's block size to unify page sizes and the
+# uniform-block prefill warmup trips paged_fill_cache ("Input seq_len (128)
+# must fit in max_num_blocks_per_seq (1) * block_size (64)", run 37060413530).
+# At TP=8 both groups page 512 elements per token and the geometry is uniform.
+# Re-enable APC here once the mixed-block-size path lands.
 - name: "Gemma4-31B (P150x4)"
   model: google/gemma-4-31B-it
   coherence-test: true
-  prefix-caching-test: true
   server-timeout: 20
-  benchmark-timeout: 25
+  benchmark-timeout: 5
   mesh-device: P150x4
   arch: arch-blackhole
-  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 960000000, "l1_small_size": 24576}'
-  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 16384 --long_prefill_token_threshold 4096 --async-scheduling"
-  additional-benchmark-args: "--random-input-len 15360 --random-output-len 128 --num-prompts 32 --max-concurrency 32"
-  extra-env: "GEMMA4_HYBRID_KV_CACHE_GROUPS=1 GEMMA4_PREFIX_CACHING=1 GEMMA4_KV_BFP8=1 GEMMA4_BOUNDED_SLIDING_KV_CACHE=0 GEMMA4_CHUNKED_PREFILL_TRACE=0 GEMMA4_MAX_TOKENS_ALL_USERS=524288 GEMMA4_DECODE_WARMUP_BATCHES=1,4,8,32 GEMMA4_CCL_TOPOLOGY=linear GEMMA4_PAGE_BLOCK_SIZE=64"
-  chunked-prefill-budget: 16384
-  chunked-prefill-test-timeout: 20
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048 --async-scheduling"
   multimodal: false
   skus:
     bh_quietbox_2:
-      timeout: 65
+      timeout: 35
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
