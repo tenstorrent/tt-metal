@@ -14,7 +14,9 @@
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/ops/cross_entropy_fw/device/cross_entropy_fw_device_operation.hpp"
 #include "test_utils/random_data.hpp"
+#include "ttnn/mesh_device_operation_adapter.hpp"
 
 class CrossEntropyForwardTest : public ::testing::Test {
 public:
@@ -51,6 +53,85 @@ xt::xarray<float> calculate_cross_entropy_loss(const xt::xarray<float>& input, c
     xt::xarray<float> log_exp_sum_test = xt::log(xt::sum(xt::exp(shifted_input), -1, xt::keep_dims));
     xt::xarray<float> result = -target_inputs + max_input + log_exp_sum_test;
     return result;
+}
+
+TEST_F(CrossEntropyForwardTest, ValidatesPreallocatedOutputContractOnCacheMissAndHit) {
+    using Operation = ttml::metal::ops::cross_entropy_fw::device::CrossEntropyForwardDeviceOperation;
+    using Adapter = ttnn::device_operation::MeshDeviceOperationAdapter<Operation>;
+
+    constexpr uint32_t N = 2U;
+    constexpr uint32_t H = 33U;
+    constexpr uint32_t W = 65U;
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto input = ttml::core::from_xtensor(xt::zeros<float>({N, 1U, H, W}), device);
+    auto target = ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
+        xt::zeros<uint32_t>({N, H}), device, ttnn::Layout::ROW_MAJOR);
+
+    const Operation::operation_attributes_t attributes{};
+    const auto expected_spec = Operation::compute_output_specs(
+        attributes, Operation::tensor_args_t{.input = input, .target = target, .preallocated_output = std::nullopt});
+    auto expected_output = ttnn::create_device_tensor(expected_spec, input.device());
+
+    const auto undersized_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape({1U, 1U, 32U, 1U}),
+        tt::tt_metal::TensorLayout(ttnn::DataType::BFLOAT16, ttnn::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG));
+    const auto wrong_shape_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape({1U, 1U, 128U, 1U}),
+        tt::tt_metal::TensorLayout(ttnn::DataType::BFLOAT16, ttnn::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG));
+    const auto overpadded_spec = tt::tt_metal::TensorSpec(
+        expected_spec.logical_shape(),
+        tt::tt_metal::TensorLayout(
+            ttnn::DataType::BFLOAT16,
+            ttnn::Layout::TILE,
+            ttnn::DRAM_MEMORY_CONFIG,
+            tt::tt_metal::Alignment({64U, 64U})));
+    const auto l1_output_spec = tt::tt_metal::TensorSpec(
+        expected_spec.logical_shape(),
+        tt::tt_metal::TensorLayout(ttnn::DataType::BFLOAT16, ttnn::Layout::TILE, ttnn::L1_MEMORY_CONFIG));
+
+    auto undersized = ttnn::create_device_tensor(undersized_spec, input.device());
+    auto wrong_shape = ttnn::create_device_tensor(wrong_shape_spec, input.device());
+    auto overpadded = ttnn::create_device_tensor(overpadded_spec, input.device());
+    auto l1_output = ttnn::create_device_tensor(l1_output_spec, input.device());
+
+    const auto expect_rejected_on_miss_and_hit = [&](const Operation::tensor_args_t& args) {
+        EXPECT_ANY_THROW(Adapter::validate_on_program_cache_miss(attributes, args));
+        EXPECT_ANY_THROW(Adapter::validate_on_program_cache_hit(attributes, args));
+    };
+    for (const auto& output : {undersized, wrong_shape, overpadded, l1_output}) {
+        expect_rejected_on_miss_and_hit(
+            Operation::tensor_args_t{.input = input, .target = target, .preallocated_output = output});
+    }
+
+    const auto l1_input_spec = tt::tt_metal::TensorSpec(
+        input.logical_shape(),
+        tt::tt_metal::TensorLayout(ttnn::DataType::BFLOAT16, ttnn::Layout::TILE, ttnn::L1_MEMORY_CONFIG));
+    const auto l1_target_spec = tt::tt_metal::TensorSpec(
+        target.logical_shape(),
+        tt::tt_metal::TensorLayout(ttnn::DataType::UINT32, ttnn::Layout::ROW_MAJOR, ttnn::L1_MEMORY_CONFIG));
+    const auto overpadded_input_spec = tt::tt_metal::TensorSpec(
+        input.logical_shape(),
+        tt::tt_metal::TensorLayout(
+            ttnn::DataType::BFLOAT16,
+            ttnn::Layout::TILE,
+            ttnn::DRAM_MEMORY_CONFIG,
+            tt::tt_metal::Alignment({64U, 64U})));
+    auto l1_input = ttnn::create_device_tensor(l1_input_spec, input.device());
+    auto l1_target = ttnn::create_device_tensor(l1_target_spec, input.device());
+    auto overpadded_input = ttnn::create_device_tensor(overpadded_input_spec, input.device());
+    expect_rejected_on_miss_and_hit(
+        Operation::tensor_args_t{.input = l1_input, .target = target, .preallocated_output = std::nullopt});
+    expect_rejected_on_miss_and_hit(
+        Operation::tensor_args_t{.input = input, .target = l1_target, .preallocated_output = std::nullopt});
+    expect_rejected_on_miss_and_hit(
+        Operation::tensor_args_t{.input = overpadded_input, .target = target, .preallocated_output = std::nullopt});
+
+    const Operation::tensor_args_t valid_args{.input = input, .target = target, .preallocated_output = expected_output};
+    EXPECT_NO_THROW(Adapter::validate_on_program_cache_miss(attributes, valid_args));
+    EXPECT_NO_THROW(Adapter::validate_on_program_cache_hit(attributes, valid_args));
+
+    auto result = ttnn::prim::ttml_cross_entropy_fw(input, target, expected_output);
+    EXPECT_EQ(result.buffer()->address(), expected_output.buffer()->address());
 }
 
 TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Small_Forward) {

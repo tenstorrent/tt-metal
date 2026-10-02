@@ -11,46 +11,80 @@
 
 namespace ttml::metal::ops::cross_entropy_fw::device {
 
+namespace {
+
+tt::tt_metal::TensorSpec expected_output_spec(const ttnn::Tensor& input) {
+    auto output_shape = input.logical_shape();
+    output_shape[-1] = 1U;
+    return tt::tt_metal::TensorSpec(
+        output_shape, tt::tt_metal::TensorLayout(input.dtype(), tt::tt_metal::Layout::TILE, input.memory_config()));
+}
+
+void validate_tensor(
+    const ttnn::Tensor& tensor,
+    const std::string& name,
+    tt::tt_metal::Layout required_layout,
+    tt::tt_metal::DataType required_dtype,
+    bool require_canonical_spec) {
+    TT_FATAL(
+        tensor.storage_type() == ttnn::StorageType::DEVICE,
+        "CrossEntropyForward operation requires '{}' to be on DEVICE. Got storage type: '{}'",
+        name,
+        enchantum::to_string(tensor.storage_type()));
+    TT_FATAL(tensor.buffer() != nullptr, "Tensor '{}' must be allocated on device (buffer is null).", name);
+    TT_FATAL(
+        tensor.layout() == required_layout,
+        "Tensor '{}' must have layout '{}', but got '{}'",
+        name,
+        enchantum::to_string(required_layout),
+        enchantum::to_string(tensor.layout()));
+    TT_FATAL(
+        tensor.dtype() == required_dtype,
+        "Tensor '{}' must have data type '{}', but got '{}'",
+        name,
+        enchantum::to_string(required_dtype),
+        enchantum::to_string(tensor.dtype()));
+    TT_FATAL(
+        tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+        "Tensor '{}' must use INTERLEAVED memory layout, but got '{}'",
+        name,
+        enchantum::to_string(tensor.memory_config().memory_layout()));
+    TT_FATAL(
+        tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+        "Tensor '{}' must be in DRAM, but got '{}'",
+        name,
+        enchantum::to_string(tensor.buffer()->buffer_type()));
+
+    if (require_canonical_spec) {
+        const auto canonical_spec = tt::tt_metal::TensorSpec(
+            tensor.logical_shape(),
+            tt::tt_metal::TensorLayout(required_dtype, required_layout, tensor.memory_config()));
+        TT_FATAL(
+            tensor.tensor_spec() == canonical_spec,
+            "Tensor '{}' must use canonical physical shape and page geometry for its logical shape",
+            name);
+    }
+}
+
+}  // namespace
+
 void CrossEntropyForwardDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto check_tensor = [](const ttnn::Tensor& tensor,
-                           const std::string& name,
-                           const tt::tt_metal::Layout required_layout,
-                           const tt::tt_metal::DataType required_dtype) {
-        TT_FATAL(
-            tensor.storage_type() == ttnn::StorageType::DEVICE,
-            "CrossEntropyForward operation requires '{}' to be on DEVICE. Got storage type: '{}'",
-            name,
-            enchantum::to_string(tensor.storage_type()));
-
-        TT_FATAL(tensor.buffer() != nullptr, "Tensor '{}' must be allocated on device (buffer is null).", name);
-
-        TT_FATAL(
-            tensor.layout() == required_layout,
-            "Tensor '{}' must have layout '{}', but got '{}'",
-            name,
-            enchantum::to_string(required_layout),
-            enchantum::to_string(tensor.layout()));
-
-        TT_FATAL(
-            tensor.dtype() == required_dtype,
-            "Tensor '{}' must have data type '{}', but got '{}'",
-            name,
-            enchantum::to_string(required_dtype),
-            enchantum::to_string(tensor.dtype()));
-
-        TT_FATAL(
-            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-            "Tensor '{}' must use INTERLEAVED memory layout, but got '{}'",
-            name,
-            enchantum::to_string(tensor.memory_config().memory_layout()));
-    };
-
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& target_tensor = tensor_args.target;
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
-    check_tensor(input_tensor, "Input", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
-    check_tensor(target_tensor, "Target", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT32);
+    validate_tensor(input_tensor, "Input", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16, true);
+    validate_tensor(target_tensor, "Target", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT32, false);
+
+    auto* device = input_tensor.device();
+    TT_FATAL(device != nullptr, "CrossEntropyForward: input must be on a (mesh) device");
+    TT_FATAL(target_tensor.device() == device, "CrossEntropyForward: target must be on the same device as input");
+    TT_FATAL(
+        input_tensor.logical_shape().rank() == 4U,
+        "CrossEntropyForward: input must be rank 4, got rank {}",
+        input_tensor.logical_shape().rank());
+    TT_FATAL(
+        target_tensor.logical_shape().rank() >= 1U, "CrossEntropyForward: target must have at least one dimension");
 
     // The reader walks one row-major target page per batch-channel slice of the input
     // (page = tile_row / Ht over NC * Ht rows) and sizes each page read from the target's
@@ -76,25 +110,19 @@ void CrossEntropyForwardDeviceOperation::validate_on_program_cache_miss(
         input_nc_pages);
 
     if (preallocated_output_tensor.has_value()) {
-        check_tensor(
-            preallocated_output_tensor.value(),
-            "Preallocated Output",
-            tt::tt_metal::Layout::TILE,
-            tt::tt_metal::DataType::BFLOAT16);
+        const auto& output = preallocated_output_tensor.value();
+        validate_tensor(
+            output, "Preallocated Output", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16, true);
+        TT_FATAL(output.device() == device, "CrossEntropyForward: output must be on the same device as input");
+        TT_FATAL(
+            output.tensor_spec() == expected_output_spec(input_tensor),
+            "CrossEntropyForward: preallocated output TensorSpec must exactly match the derived output TensorSpec");
     }
 }
 
 CrossEntropyForwardDeviceOperation::spec_return_value_t CrossEntropyForwardDeviceOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    if (tensor_args.preallocated_output.has_value()) {
-        return tensor_args.preallocated_output->tensor_spec();
-    }
-    auto input_logical_shape = tensor_args.input.logical_shape();
-    input_logical_shape[-1] = 1U;
-    return tt::tt_metal::TensorSpec(
-        ttnn::Shape(input_logical_shape),
-        tt::tt_metal::TensorLayout(
-            tensor_args.input.dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
+    return expected_output_spec(tensor_args.input);
 }
 
 CrossEntropyForwardDeviceOperation::tensor_return_value_t CrossEntropyForwardDeviceOperation::create_output_tensors(
