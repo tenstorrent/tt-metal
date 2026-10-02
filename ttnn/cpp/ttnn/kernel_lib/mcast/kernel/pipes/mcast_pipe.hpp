@@ -79,6 +79,9 @@ class SenderPipeImpl {
         !PRE_HANDSHAKE || detail::mcast_semaphore_id(ConsumerReadyBinding{}) != UNUSED_SEM_ID,
         "PRE_HANDSHAKE=true requires a real ConsumerReadyBinding (the receiver->sender readiness ack). "
         "Pass it, or set PRE_HANDSHAKE=false for a fire-and-forget broadcast.");
+    static_assert(
+        PRE_HANDSHAKE || !ROTATING_SENDER || DATA_READY_SIGNAL != DataReadySignal::Flag,
+        "Rotating senders with Flag signaling require PRE_HANDSHAKE");
 
 public:
     // Capture prepared values once. Argument storage may be changed or destroyed after construction.
