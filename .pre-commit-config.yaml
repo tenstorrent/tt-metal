@@ -185,6 +185,9 @@ repos:
       name: "llk: Tensix mutex acquire/release balance"
       entry: python3 tt_metal/tt-llk/infra/check_mutex_balance.py
       language: system
+      # HAL mutex acquire/release wrappers hold one half each by design. Check the HAL calls
+      # instead of the raw instructions: https://github.com/tenstorrent/tt-metal/issues/59502
+      exclude: ^tt_metal/tt-llk/tt_llk_[^/]+/llk_lib/hal/
       # All three architectures: the check is lexical and needs no per-arch tables.
       files: ^tt_metal/tt-llk/tt_llk_.*\.(h|hpp)$
     - id: llk-instr-encoding-args
