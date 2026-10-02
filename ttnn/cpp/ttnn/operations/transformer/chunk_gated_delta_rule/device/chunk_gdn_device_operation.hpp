@@ -141,11 +141,12 @@ struct ChunkGdnDeviceOperation {
 
 // ---------------------------------------------------------------------------------------------------
 // Fused geometry: the row-local cost model, calibrated on QB2:
-//   T_fused(NV, NP, depth) = fill(BH) + NC * pace + tail,  pace = max(supply, t_step(Vt / NV, depth))
-//   plus the depth-2 jitter margin, with supply = w_p / NP for NP producers per head, over (NV | Vt, NP,
-//   depth in {2, 3}) with a feasible layout (the row-major fallback carries a link-sharing penalty); for a
-//   pool of P serving every head (placement 2) pace = max(BH * w_p / P, t_step) * kPoolJitter at depth 2.
-//   Ties -> fewer cores, then smaller NV, then the shallower ring. T_phased(BH) from the measured table.
+//   T_fused = fill(BH, producers) + max(chain, home, extra) * (1 + balance) + tail, with chain = (NC-1) steps
+//   plus the head skew, home / extra = the remaining items of the busiest home / extra producer, and balance
+//   the bump two near-equal bounds cost each other (Vtl <= 2); over (NV | Vt, NP, depth in {2, 3}) with a
+//   feasible layout (the row-major fallback is link-bound), and for a pool of P serving every head
+//   (placement 2) at the balanced share NX / P. Ties -> fewer cores, then smaller NV, then the shallower
+//   ring. T_phased(BH) from the measured table.
 // The op host uses it for whichever of num_receivers / num_producers / row_local / handoff_depth the
 // fused program config leaves free, and to decide fused vs phased when no program config is given;
 // test_chunk_gdn_fused_geometry.py checks it against a Python oracle on several grids.
