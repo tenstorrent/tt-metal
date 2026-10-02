@@ -891,7 +891,7 @@ class OptimizedDecoder(LightweightModule):
         return ttnn.linear(ttnn.mul(gate, up), w[dk], compute_kernel_config=ck)
 
     # ---- router ------------------------------------------------------------ #
-    def _route(self, ln_flat):
+    def _route(self, ln_flat, want_dense=False):
         """Laguna router: sigmoid scores, bias-for-selection top-k, unbiased normalized weights.
 
         Returns ``(logits, idx, wsel)``: the bf16 router logits ``[1,1,T,E]`` (shape template for the
@@ -947,6 +947,15 @@ class OptimizedDecoder(LightweightModule):
             # ONE gather of the K-th and (K+1)-th selection scores (gather is a ~32 us 1-core op).
             pair = ttnn.gather(sel, dim=3, index=ttnn.slice(idx_coarse, [0] * len(rows) + [K - 1], rows + [K + 1]))
             cutoff = ttnn.multiply(ttnn.sum(pair, dim=3, keepdim=True), 0.5)
+            if want_dense:
+                # The fp32 cut-off already separates the top-K: (sel > cutoff) IS the selection mask, so the
+                # dense routing matrix is scores*mask -- no second top-k, final gather or scatter (each ~1 core).
+                dense = ttnn.mul(scores, ttnn.gt(sel, cutoff))
+                if cfg.norm_topk_prob:
+                    dense = ttnn.div(dense, ttnn.sum(dense, dim=3, keepdim=True))
+                if cfg.routed_scaling != 1.0:
+                    dense = ttnn.multiply(dense, cfg.routed_scaling)
+                return logits, None, ttnn.typecast(dense, ttnn.bfloat16)
             shifted = ttnn.typecast(ttnn.subtract(sel, cutoff), ttnn.bfloat16)
             _, idx = ttnn.topk(shifted, k=K, dim=-1, sorted=True)
             wsel = ttnn.gather(scores, dim=3, index=idx)

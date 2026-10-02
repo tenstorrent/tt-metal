@@ -261,6 +261,7 @@ class MultichipDecoder(OptimizedDecoder):
         self._token_dispatch_requested = _parse_binary_env(TOKEN_DISPATCH_ENV)
         self._token_dispatch_state = None
         self._ag_reduce = _parse_binary_env("TT_LAGUNA_AG_REDUCE", True)  # decode all-reduce as all_gather+sum
+        self._route_dense_mask = _parse_binary_env("TT_LAGUNA_ROUTE_DENSE_MASK", True)  # mask router, no topk#2
         self._token_dispatch_fallback_reason = "feature flag is disabled"
         # On a 1×1 MeshDevice, TTNN's explicit parallel decode-SDPA program is inaccurate once
         # the cache crosses long/non-aligned boundaries (observed PCC ~= 0 at positions 513/2048).
@@ -920,8 +921,9 @@ class MultichipDecoder(OptimizedDecoder):
         LE = self.local_experts
         H, I, K = cfg.hidden, cfg.moe_intermediate, cfg.top_k
         T = ln_flat.shape[2]
-        logits, idx, wsel = self._route(ln_flat)
-        dense = ttnn.scatter(ttnn.zeros_like(logits), dim=3, index=idx, src=wsel)
+        logits, idx, wsel = self._route(ln_flat, want_dense=self._route_dense_mask)
+        # idx is None when the router returned the dense [1,1,T,E] routing matrix directly
+        dense = wsel if idx is None else ttnn.scatter(ttnn.zeros_like(logits), dim=3, index=idx, src=wsel)
         dense_local = (
             dense if self.D == 1 else ttnn.matmul(dense, self.w["ep_sel"], compute_kernel_config=self._ck_router)
         )
