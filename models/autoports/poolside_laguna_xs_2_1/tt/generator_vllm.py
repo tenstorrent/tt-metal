@@ -2048,6 +2048,7 @@ class LagunaForCausalLM:
         page_tables_per_layer,
         sampling_params,
         read_from_device,
+        reset_batch=True,
     ):
         """Return one buffered exact-greedy DFlash commit to vLLM."""
 
@@ -2066,6 +2067,15 @@ class LagunaForCausalLM:
         if block_sizes != {64}:
             raise RuntimeError(f"DFlash served decoding requires uniform 64-token KV blocks, got {block_sizes}")
         position = int(pos.reshape(-1)[0])
+        known_bonus = int(tokens.reshape(-1)[0])
+        # With async scheduling the plugin overlaps steady decode steps (vllm_tt_plugin async_decode
+        # steady_decode_*), so a steady step's host position/token can lag by one. The controller knows the
+        # exact next input; a steady step (no batch reset) follows it. A reset keeps the strict check.
+        expected_position, expected_token = self._dflash_controller.expected_input()
+        if not reset_batch and self._dflash_controller.active and expected_position is not None:
+            position = int(expected_position)
+            if expected_token is not None:
+                known_bonus = int(expected_token)
         pending = bool(self._dflash_controller.pending_tokens)
         proposal_rows = int(self._dflash_core.config.block_size)
         # A full round can commit the target bonus at position P+16.  An exact
@@ -2075,7 +2085,6 @@ class LagunaForCausalLM:
             raise RuntimeError(
                 f"DFlash full-round verify at position {position} would exceed " f"max_model_len {self.max_model_len}"
             )
-        known_bonus = int(tokens.reshape(-1)[0])
         verify_kwargs = {
             "page_table": page_table,
             "kv_cache": kv_cache,
@@ -2684,6 +2693,7 @@ class LagunaForCausalLM:
                 page_tables_per_layer,
                 sampling_params,
                 read_from_device,
+                reset_batch=reset_batch,
             )
 
         if self._spec_mode and not self._spec_probed:

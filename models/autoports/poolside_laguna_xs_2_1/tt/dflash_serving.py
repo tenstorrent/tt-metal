@@ -165,6 +165,11 @@ class DFlashServedController:
                 break
         return accepted, drafts[:accepted] + [target[accepted]]
 
+    def expected_input(self) -> tuple[int | None, int | None]:
+        """Position and token the next served decode step must carry (token None right after prefill)."""
+
+        return self._expected_input_position, self._expected_input_token
+
     def _validate_input(self, known_bonus: int, position: int) -> None:
         if not self.active:
             raise RuntimeError("DFlash served controller has no active prefilled request")
