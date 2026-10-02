@@ -276,13 +276,13 @@ class TestTP:
         ``ttnn/core/device_operation_detail.cpp`` folds in only the sharded inputs of maximum rank), so the
         parameter would take the gradient's ``[1, 2] / (Replicate, Shard(3))`` label outright -- a rank change plus
         a wrong ``Shard``, not a fallback to a default. Two steps, re-setting the mislabelled gradient each time, so
-        the SGD momentum "first update" branch and the Muon step-0 buffer aliasing are followed by a regular step.
+        the SGD momentum "first update" branch and the Muon step-0 buffer seeding are followed by a regular step.
+        The step must not relabel the caller's gradient either.
 
-        Negative control (by the union rule above; the pin cannot be switched off from a test): without it,
-        ``MorehAdamW``, ``AdamWComposite`` (all variants), ``SGDComposite`` and ``MuonComposite`` hand back the
-        parameter (and the moments, which are computed from the gradient) labelled
-        ``[1, 2] / (Replicate, Shard(3))`` after the first step in both cases; the fused kernels pass either way
-        through their device op's ``compute_output_topologies``."""
+        Negative control: without the composites restoring the parameter's topology, ``MorehAdamW``,
+        ``AdamWComposite`` (all variants), ``SGDComposite`` and ``MuonComposite`` hand back the parameter (and the
+        state, which is computed from the gradient) labelled ``[1, 2] / (Replicate, Shard(3))`` after the first step
+        in both cases; the fused kernels pass either way through their device op's ``compute_output_topologies``."""
         tp_axis = tp_mesh.axis_index("tp")
         device = ttml.autograd.AutoContext.get_instance().get_device()
         if param_label == "nd":
@@ -315,6 +315,7 @@ class TestTP:
 
         mislabel = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 3, tp_axis)
         for step in range(2):
+            grads = {}
             for name, t in params.items():
                 local_shape = list(t.get_value(NATIVE).shape)
                 wide = local_shape[:-1] + [local_shape[-1] * tp_mesh.axis_size("tp")]  # sharded on dim 3 -> local
@@ -329,8 +330,13 @@ class TestTP:
                 assert grad_layout[0][tp_axis] == ("shard", 3), f"precondition: Shard(3) gradient, got {grad_layout}"
                 assert grad_layout != before[name], "precondition: gradient label must differ from the parameter's"
                 t.set_grad(grad.get_value(NATIVE))
+                grads[name] = (grad, grad_layout)
 
             opt.step()
+
+            # ``grad`` shares its tensor attributes with the parameter's gradient, so a relabel shows up here.
+            for name, (grad, grad_layout) in grads.items():
+                assert _layout(grad) == grad_layout, f"step {step} relabelled the gradient of {name}"
 
             after = {name: _layout(t) for name, t in params.items()}
             assert after == before, f"step {step} relabelled parameters:\n  before {before}\n  after  {after}"
