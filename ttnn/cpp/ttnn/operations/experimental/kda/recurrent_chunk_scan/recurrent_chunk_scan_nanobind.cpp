@@ -26,6 +26,12 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         supplies the correct tail seed through ``group_entry_states``, as produced
         by ``affine_exclusive_scan`` in the grouped recurrence pipeline.
 
+        Optional ``actual_end`` is a replicated UINT32 row-major scalar, with
+        the same lifetime as ``actual_start``. It defines a nonempty 32-aligned
+        interval within physical capacity; omission uses the full capacity.
+        Bounds may change during trace replay. Padded group outputs are unspecified.
+        Bounds are caller preconditions and are not read back on the host.
+
         Args:
             v_beta (ttnn.Tensor): Prepared values ``[B*H*G, N, 32, V]``.
             kd (ttnn.Tensor): Prepared decayed keys ``[B*H*G, N, 32, K]``.
@@ -63,6 +69,9 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor]: New tensors containing BFLOAT16 token
                 outputs ``Y[B*H*G,N,32,V]`` and FLOAT32 final state ``S[B*H*G,K,V]``.
+                Each valid group's state remains at its group index. For a nonempty
+                padded rank, the last valid group's state is also copied to group
+                ``G-1`` for fixed-slot carry selection. Other padded slots are unspecified.
 
         Note:
             ``v_beta``, ``kd``, ``q_decay``, ``k_dec_t``, and ``final_decay`` may be
@@ -88,7 +97,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
 
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("sequence_parallel_axis") = 0);
+        nb::arg("sequence_parallel_axis") = 0,
+        nb::arg("actual_end") = nb::none());
 
     ttnn::bind_function<"summarize_chunk_recurrence", "ttnn.experimental.kda.">(
         mod,
@@ -115,6 +125,12 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
 
             B = F(0)
             A = F(I) - B
+
+        Optional ``actual_end`` is a replicated UINT32 row-major scalar, with
+        the same lifetime as ``actual_start``. It defines a nonempty 32-aligned
+        interval within physical capacity; omission uses the full capacity.
+        Bounds may change during trace replay. Padded group outputs are unspecified.
+        Bounds are caller preconditions and are not read back on the host.
 
         Args:
             v_beta (ttnn.Tensor): Prepared values ``[B*H*G, N, 32, V]``.
@@ -173,7 +189,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
 
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("sequence_parallel_axis") = 0);
+        nb::arg("sequence_parallel_axis") = 0,
+        nb::arg("actual_end") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::kda::recurrent_chunk_scan::detail

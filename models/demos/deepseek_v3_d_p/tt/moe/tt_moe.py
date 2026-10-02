@@ -20,7 +20,6 @@ from typing import Optional, Union
 
 import torch
 from loguru import logger
-from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -210,6 +209,7 @@ class TtMoe(LightweightModule):
         routed_expert_weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         routed_expert_activation=ttnn.RoutedExpertActivation.Silu,
         routed_expert_hybrid_token_threshold=None,
+        routed_expert_weights_dram_nd_sharded: Optional[bool] = None,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         shared_expert_activation: str = ACTIVATION_SILU,
@@ -308,6 +308,11 @@ class TtMoe(LightweightModule):
                 host sync. The crossover is per model and per shape, not a constant -- measure
                 before choosing T: the two ops' per-shape device times are gated by
                 test_moe_fused_swiglu_perf.py and test_single_routed_expert_perf.py.
+            routed_expert_weights_dram_nd_sharded: DRAM placement of the routed-expert weights.
+                None (default) takes TtRoutedExpert's arch default -- ND-sharded on Blackhole, where
+                both routed-expert ops read a per-core weight slice as one NoC transaction per
+                K-row; interleaved elsewhere. Passed straight through; the cache is placement-
+                agnostic, so this never invalidates one.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -529,6 +534,7 @@ class TtMoe(LightweightModule):
             cache_name_prefix=f"layer_{layer_idx}.routed_expert",
             activation=routed_expert_activation,
             hybrid_token_threshold=routed_expert_hybrid_token_threshold,
+            weights_dram_nd_sharded=routed_expert_weights_dram_nd_sharded,
         )
 
         # Initialize shared expert (col axis: axis 1)
@@ -725,7 +731,8 @@ class TtMoe(LightweightModule):
             - final_output: MoE output with same sharding as input
             - intermediates: TtMoEIntermediates if return_intermediates=True, else None
         """
-        signpost(header="MoE_START")
+        # Preserve profiler region labels without duplicating them through Python logging.
+        ttnn.tracy_message("`TT_SIGNPOST: MoE_START`")
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] INPUT SHAPES:")
             logger.debug(f"  x.shape={x.shape}")
@@ -795,7 +802,7 @@ class TtMoe(LightweightModule):
 
         self._dump_routing(indices, scores, actual_start or 0, cache_user_id, metadata is not None)
 
-        tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = self.routing_setup(
+        tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _, _ = self.routing_setup(
             ttnn_top_k_experts_indices=indices,
             num_routed_experts=self.num_routed_experts,
             num_experts_per_tok=self.num_experts_per_tok,
@@ -861,7 +868,7 @@ class TtMoe(LightweightModule):
         if self.use_latent_moe and DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] routed_x (latent) shape: {routed_x.shape}")
 
-        signpost("dispatch_and_shared_expert_start")
+        ttnn.tracy_message("`TT_SIGNPOST: dispatch_and_shared_expert_start`")
         if self.overlap_shared_expert_with_dispatch:
             if self._trace_controller is not None:
                 self._trace_controller.sub_device_load(self.sd_manager_id)
@@ -928,7 +935,7 @@ class TtMoe(LightweightModule):
         scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
 
-        signpost("dispatch_and_shared_expert_end")
+        ttnn.tracy_message("`TT_SIGNPOST: dispatch_and_shared_expert_end`")
 
         # ========================================
         # Step 3: Routed experts (enabled)
@@ -1085,5 +1092,5 @@ class TtMoe(LightweightModule):
                 expert_token_counts=tt_expert_token_counts,
             )
 
-        signpost(header="MoE_END")
+        ttnn.tracy_message("`TT_SIGNPOST: MoE_END`")
         return final_output, intermediates

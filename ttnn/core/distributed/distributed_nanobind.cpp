@@ -38,7 +38,7 @@
 #include <tt-metalium/maybe_remote.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt_stl/assert.hpp>
-#include <ttnn/api/ttnn/types.hpp>
+#include "ttnn/types.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -559,6 +559,27 @@ void py_module(nb::module_& mod) {
 
                 Returns:
                     CoreCoord: The virtual coordinate of that DRAM bank.
+            )doc")
+        .def(
+            "logical_core_from_worker_core",
+            &MeshDevice::logical_core_from_worker_core,
+            nb::arg("virtual_core"),
+            R"doc(
+                Convert a virtual/translated worker coordinate to a logical coordinate.
+
+                The inverse of worker_core_from_logical_core.
+
+                Args:
+                    virtual_core (CoreCoord): The virtual/translated coordinate to convert.
+
+                Returns:
+                    CoreCoord: The logical coordinate of the worker core.
+
+                Example:
+                    >>> device = ttnn.open_device(device_id=0)
+                    >>> virtual_core = ttnn.CoreCoord(1, 1)
+                    >>> logical_core = device.logical_core_from_worker_core(virtual_core)
+                    >>> print(f"Logical core: x={logical_core.x}, y={logical_core.y}")
             )doc");
 
     // Per-device optimal DRAM-bank-to-logical-worker assignment. Bound as an overload of the same
@@ -632,7 +653,19 @@ void py_module(nb::module_& mod) {
     auto py_mesh_device_view = static_cast<nb::class_<MeshDeviceView>>(mod.attr("MeshDeviceView"));
     py_mesh_device_view.def("shape", &MeshDeviceView::shape, nb::rv_policy::reference_internal)
         .def("num_devices", &MeshDeviceView::num_devices)
-        .def("is_local", &MeshDeviceView::is_local, nb::arg("coord"));
+        .def("is_local", &MeshDeviceView::is_local, nb::arg("coord"))
+        .def(
+            "get_local_mesh_coord_range",
+            &MeshDeviceView::get_local_mesh_coord_range,
+            R"doc(
+            Returns the bounding box of the coordinates of the devices that this process owns.
+
+            The range is the smallest box that holds every local coordinate. If the local
+            devices do not form a box, the range also holds coordinates of remote devices.
+
+            Raises:
+                RuntimeError: If no device in the view is local.
+            )doc");
 
     auto py_tensor_to_mesh = static_cast<nb::class_<TensorToMesh>>(mod.attr("CppTensorToMesh"));
     py_tensor_to_mesh.def(
@@ -943,6 +976,23 @@ void py_module(nb::module_& mod) {
            TensorToMesh: A mapper providing the desired sharding.
    )doc");
     mod.def(
+        "create_mesh_mapper",
+        [](const MeshShape& mesh_shape, const MeshMapperConfig& config) -> nbh::unique_ptr<TensorToMesh> {
+            return nbh::steal_rewrap_unique<TensorToMesh>(create_mesh_mapper(mesh_shape, config));
+        },
+        nb::arg("mesh_shape"),
+        nb::arg("config"),
+        R"doc(
+       Returns an ND mapper that constructs every host shard without a device.
+
+       Args:
+           mesh_shape (MeshShape): The full logical mesh shape.
+           config (MeshMapperConfig): The placements, distribution shape, and mesh offset.
+
+       Returns:
+           TensorToMesh: A mapper providing the desired sharding.
+   )doc");
+    mod.def(
         "compute_distribution_to_mesh_mapping",
         [](const tt::tt_metal::distributed::MeshShape& distribution_shape,
            const tt::tt_metal::distributed::MeshShape& mesh_shape)
@@ -1158,6 +1208,7 @@ void py_module(nb::module_& mod) {
             if (!DistributedContext::is_initialized()) {
                 throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
             }
+            nb::gil_scoped_release release;
             DistributedContext::get_current_world()->barrier();
         },
         R"doc(
@@ -1212,7 +1263,11 @@ void py_module(nb::module_& mod) {
             const auto& ctx = DistributedContext::get_current_world();
             // MPI send does not modify the buffer; const_cast is safe here.
             auto* ptr = const_cast<std::byte*>(reinterpret_cast<const std::byte*>(data.c_str()));
-            ctx->send(ttsl::Span<std::byte>(ptr, data.size()), Rank(dest), Tag(tag));
+            const auto size = data.size();
+            {
+                nb::gil_scoped_release release;
+                ctx->send(ttsl::Span<std::byte>(ptr, size), Rank(dest), Tag(tag));
+            }
         },
         nb::arg("data"),
         nb::arg("dest"),
@@ -1238,8 +1293,13 @@ void py_module(nb::module_& mod) {
             }
             std::vector<char> buf(size);
             const auto& ctx = DistributedContext::get_current_world();
-            ctx->recv(
-                ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(buf.data()), buf.size()), Rank(source), Tag(tag));
+            {
+                nb::gil_scoped_release release;
+                ctx->recv(
+                    ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(buf.data()), buf.size()),
+                    Rank(source),
+                    Tag(tag));
+            }
             return nb::bytes(buf.data(), buf.size());
         },
         nb::arg("size"),

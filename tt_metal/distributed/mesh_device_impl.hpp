@@ -284,11 +284,12 @@ public:
     std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord>& logical_cores) const override;
     std::vector<CoreCoord> ethernet_cores_from_logical_cores(
         const std::vector<CoreCoord>& logical_cores) const override;
-    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) override;
+    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) const override;
     std::unordered_map<uint32_t, CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(
-        NOC noc, const MeshCoordinate& coord);
+        NOC noc, const MeshCoordinate& coord) const;
     CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
     CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;
+    CoreCoord logical_core_from_worker_core(const CoreCoord& virtual_coord) const override;
     CoreCoord ethernet_core_from_logical_core(const CoreCoord& logical_core) const override;
     CoreCoord logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const override;
     std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores = false) const override;
@@ -351,7 +352,7 @@ public:
     // DRISC L1 arena. Consumed by the DRAM-sender GlobalCircularBuffer ctor for
     // pages_sent allocations. Constructed eagerly in initialize_impl() when the
     // HAL exposes programmable DRAM cores; TT_FATAL otherwise.
-    ::tt::tt_metal::DriscL1Arena& drisc_l1_arena();
+    ::tt::tt_metal::DriscL1Arena& drisc_l1_arena() const;
 
     // Lazily-constructed Tensor prefetcher (DRISC) subsystem. The first call materializes
     // the manager bound to this mesh device; subsequent calls return the same instance.

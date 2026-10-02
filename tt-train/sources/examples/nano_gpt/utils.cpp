@@ -87,10 +87,20 @@ std::unique_ptr<ttml::schedulers::LRSchedulerBase> create_warmup_with_linear_sch
     const size_t linear_decay_steps = total_steps - warmup_steps;
 
     std::vector<std::unique_ptr<ttml::schedulers::LRSchedulerBase>> schedulers;
-    schedulers.push_back(std::make_unique<ttml::schedulers::LinearScheduler>(optimizer, 0.0F, 1.0F, warmup_steps));
+    std::vector<size_t> steps;
+    // Warmup rounds down to zero steps for short runs (total_steps < 10); skip
+    // the phase entirely to avoid a divide-by-zero start_factor and a
+    // zero-length child scheduler.
+    if (warmup_steps > 0) {
+        // start_factor == 0 is rejected (matches PyTorch's LinearLR); ramp from
+        // base_lr / warmup_steps so the first optimizer step is small but nonzero.
+        schedulers.push_back(std::make_unique<ttml::schedulers::LinearScheduler>(
+            optimizer, 1.0F / static_cast<float>(warmup_steps), 1.0F, warmup_steps));
+        steps.push_back(warmup_steps);
+    }
     schedulers.push_back(
         std::make_unique<ttml::schedulers::LinearScheduler>(optimizer, 1.0F, 0.01F, linear_decay_steps));
-    std::vector<size_t> steps = {warmup_steps, linear_decay_steps};
+    steps.push_back(linear_decay_steps);
     return std::make_unique<ttml::schedulers::SequentialScheduler>(optimizer, std::move(schedulers), std::move(steps));
 }
 

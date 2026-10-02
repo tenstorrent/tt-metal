@@ -12,6 +12,12 @@
  * LLK UNPACK AB MATMUL
  *************************************************************************/
 
+// Column-strided in1 streaming is not implemented on Quasar; stride 1 is the default contiguous step.
+inline void llk_unpack_AB_matmul_set_in1_column_stride(
+    [[maybe_unused]] const std::uint32_t in1_cb_id, [[maybe_unused]] const std::uint32_t stride_tiles) {
+    LLK_ASSERT(stride_tiles == 1, "Matmul in1 column stride is not supported on Quasar");
+}
+
 /**
 * @brief Initialize unpacker for matrix multiply
 

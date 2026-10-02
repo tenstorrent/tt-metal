@@ -6,7 +6,7 @@ add_library(
     ALIAS ttnn_op_experimental_deepseek_prefill_pack_scaled_fp8_kv_cache
 )
 
-target_precompile_headers(ttnn_op_experimental_deepseek_prefill_pack_scaled_fp8_kv_cache REUSE_FROM TTNN::PCHFull)
+tt_reuse_precompile_headers(ttnn_op_experimental_deepseek_prefill_pack_scaled_fp8_kv_cache TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_prefill_pack_scaled_fp8_kv_cache)
 
 set_target_properties(

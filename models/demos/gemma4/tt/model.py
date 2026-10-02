@@ -228,6 +228,9 @@ class Gemma4Model:
     # the previous token ("TheThe user user...").
     # Overridden in ``__init__`` from ``hidden_size_per_layer_input``.
     _tt_vllm_always_refresh_decode_trace_inputs = True
+    # PLI is the safe class-level default. ``__init__`` enables feedback only
+    # for variants whose token input has the rank-4 sampling output layout.
+    _tt_supports_decode_token_feedback = False
     # Sampling writes a tile-aligned [1,1,1,32] token vector; decode embeds only
     # the active batch. Non-PLI prepare_decode pads tokens to this width so the
     # sampled ids can be written straight back into the trace input buffer.
@@ -296,6 +299,7 @@ class Gemma4Model:
             "yes",
         )
         self._tt_vllm_always_refresh_decode_trace_inputs = bool(self.hidden_size_per_layer_input) or force_refresh
+        self._tt_supports_decode_token_feedback = not self._tt_vllm_always_refresh_decode_trace_inputs
         n_layers = num_layers or hf_config.num_hidden_layers
 
         # Per-module dtype resolution. ``precision`` (Gemma4Precision) holds
@@ -1272,7 +1276,7 @@ class Gemma4Model:
             signpost(header=LM_HEAD_SIGNPOST)
 
         if self.mesh_config is not None and self.mesh_config.tp > 1 and self.lm_head_weight is not None:
-            if keep_sharded_for_sampling:
+            if keep_sharded_for_sampling or (not is_decode and getattr(self, "_prefill_keep_logits_sharded", False)):
                 pass  # On-device sampling module consumes TP-sharded logits.
             else:
                 from models.demos.gemma4.tt.ccl import ccl_allgather
@@ -1333,11 +1337,19 @@ class Gemma4Model:
         layer, shape == the forward's hidden). When given, taps are ttnn.copy'd
         into them (allocation-free — safe inside a metal trace); otherwise taps
         are cloned (untraced paths only).
+
+        ``keep_last``: retain the clones of at most this many forwards; a
+        chunked prefill fires the hook once per chunk, and the drafter needs
+        only the chunks that cover its context window. Older groups are freed
+        as newer ones arrive.
         """
         self._dflash_tap_layers = set(layer_ids) if layer_ids is not None else None
         self._dflash_taps = []
         self._dflash_tap_idx = 0
         self._dflash_tap_buffers = buffers
+        self._dflash_tap_keep = (
+            int(keep_last) * len(self._dflash_tap_layers) if keep_last and self._dflash_tap_layers else None
+        )
 
     def pop_dflash_taps(self):
         """Drain captured taps: list of [1,1,rows,H] device tensors, tap order."""

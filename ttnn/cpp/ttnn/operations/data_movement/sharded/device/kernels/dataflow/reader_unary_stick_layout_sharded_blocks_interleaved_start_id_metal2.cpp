@@ -5,22 +5,22 @@
 // Metal 2.0 fork of reader_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp. Gathers a
 // row-major shard stick-by-stick out of an interleaved input tensor, staging through a local scratch
 // buffer when the source columns are not alignment-friendly. Only the plumbing changes: the two
-// buffer-index compile-time args become dfb::in and dfb::scratch, the accessor-args / base-address pair
-// becomes the tensor::src binding, the positional runtime args become named ones, and the scratch page
-// size is read off the DataflowBuffer object instead of the raw CB interface. The TRID-tagged transfer
-// pipeline and its slot state machine are untouched.
+// buffer-index compile-time args become dfb::in and scratch::scratch, the accessor-args / base-address
+// pair becomes the tensor::src binding, the positional runtime args become named ones, and the scratch
+// page size is reconstructed from the scratchpad's total size (size_in_bytes / num_trids). The
+// TRID-tagged transfer pipeline and its slot state machine are untouched.
 // Forked rather than converted in place because the legacy file is still bound by factories on the
 // legacy positional-arg API.
 //
-// The binding names below (dfb::in, dfb::scratch, tensor::src) and the named argument set are this
+// The binding names below (dfb::in, scratch::scratch, tensor::src) and the named argument set are this
 // fork's interface: every later consumer inherits them, so they are taken from the kernel's own
-// vocabulary rather than any one op's locals, and are not renamed once a consumer exists. dfb::scratch
-// is a self-loop endpoint — the binding kernel is both its producer and its consumer — so a factory
-// binding this source must declare both roles for it.
+// vocabulary rather than any one op's locals, and are not renamed once a consumer exists. scratch::scratch
+// is a private Scratchpad -- the binding kernel fills and drains it itself.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
@@ -40,9 +40,9 @@ void kernel_main() {
 
     Noc noc;
     // dfb::in — this core's row-major shard.
-    // dfb::scratch — the alignment staging area.
+    // scratch::scratch — the alignment staging area.
     DataflowBuffer dfb_in(dfb::in);
-    DataflowBuffer dfb_scratch(dfb::scratch);
+    Scratchpad<uint8_t> scratch_pad(scratch::scratch);
 
     const auto s0 = TensorAccessor(tensor::src);
     uint32_t stick_id = start_id;
@@ -65,8 +65,8 @@ void kernel_main() {
 
         constexpr uint32_t trid_base = 1;
 
-        dfb_scratch.reserve_back(num_trids);
-        uint32_t scratch_page_size = dfb_scratch.get_entry_size();
+        // Per-slot stride: the region holds num_trids equal-size pages, so each is total / num_trids.
+        uint32_t scratch_page_size = scratch_pad.size_in_bytes() / num_trids;
         SlotState slot_states[num_trids];
         uint32_t dest_offsets[num_trids];
         uint32_t scratch_offsets[num_trids];
@@ -82,7 +82,7 @@ void kernel_main() {
         const uint32_t my_noc_x = my_x[noc.get_noc_id()];
         const uint32_t my_noc_y = my_y[noc.get_noc_id()];
         // Base L1 address of the scratch buffer
-        const uint32_t scratch_l1_base = dfb_scratch.get_write_ptr();
+        const uint32_t scratch_l1_base = scratch_pad.get_base_address();
 
         uint32_t dest_off = 0;        // running offset into dfb_in
         uint32_t rows_issued = 0;     // Number of src->scratch transfers started
@@ -96,7 +96,7 @@ void kernel_main() {
                     // Start new src->scratch transfer (TRID-tagged).
                     noc.async_read<NocOptions::TXN_ID>(
                         s0,
-                        dfb_scratch,
+                        scratch_pad,
                         aligned_block_width_bytes,
                         {.page_id = stick_id, .offset_bytes = aligned_input_width_offset_bytes},
                         {.offset_bytes = scratch_offsets[slot]},
@@ -137,10 +137,6 @@ void kernel_main() {
                 }
             }
         }
-
-        // dfb_scratch is reserved once as an alignment scratchpad (no downstream consumer);
-        // commit the reservation so the buffer is left balanced.
-        dfb_scratch.push_back(num_trids);
     }
     // Reset the sticky NOC_PACKET_TAG register for downstream untagged reads
     UnicastEndpoint self_ep;

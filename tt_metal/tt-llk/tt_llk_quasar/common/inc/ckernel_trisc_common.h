@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <ckernel_proj_params.h>
+
 #include <cstdint>
 
 #include "cfg_defines.h"
@@ -10,7 +12,6 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_buf_desc.h"
 #include "ckernel_instr_params.h"
-#include "ckernel_proj_params.h"
 #include "ckernel_template.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
@@ -61,7 +62,7 @@ static constexpr std::uint32_t DEST_REGISTER_HALF_SIZE = DEST_REGISTER_FULL_SIZE
 constexpr std::uint32_t DATA_FORMAT_BIT_COUNT = 5;
 // Mask to extract data format bits
 constexpr std::uint32_t DATA_FORMAT_CONFIG_MASK = (1 << DATA_FORMAT_BIT_COUNT) - 1;
-constexpr std::uint32_t NUM_WORDS_TILE_CNT = 8;
+constexpr std::uint32_t NUM_WORDS_TILE_CNT      = 8;
 
 typedef struct
 {
@@ -283,7 +284,8 @@ struct semaphore
 template <std::uint32_t WaitRes0 = p_stall::NOTHING, std::uint32_t WaitRes1 = p_stall::NOTHING, std::uint32_t WaitRes2 = p_stall::NOTHING>
 inline void t6_semaphore_post(const std::uint8_t index)
 {
-    if constexpr (WaitRes0 != p_stall::NOTHING)
+    // Each slot is independently optional: emit the stall whenever any resource is named.
+    if constexpr (WaitRes0 != p_stall::NOTHING || WaitRes1 != p_stall::NOTHING || WaitRes2 != p_stall::NOTHING)
     {
         TTI_STALLWAIT(p_stall::STALL_SYNC, WaitRes2, WaitRes1, WaitRes0);
     }
@@ -296,7 +298,8 @@ inline void t6_semaphore_post(const std::uint8_t index)
 template <std::uint32_t WaitRes0 = p_stall::NOTHING, std::uint32_t WaitRes1 = p_stall::NOTHING, std::uint32_t WaitRes2 = p_stall::NOTHING>
 inline void t6_semaphore_get(const std::uint8_t index)
 {
-    if constexpr (WaitRes0 != p_stall::NOTHING)
+    // Each slot is independently optional: emit the stall whenever any resource is named.
+    if constexpr (WaitRes0 != p_stall::NOTHING || WaitRes1 != p_stall::NOTHING || WaitRes2 != p_stall::NOTHING)
     {
         TTI_STALLWAIT(p_stall::STALL_SYNC, WaitRes2, WaitRes1, WaitRes0);
     }
@@ -356,7 +359,7 @@ struct srcs_dims
 // Unpack-to-SrcS cannot convert fp16 to TF32, so Tf32 is not a legal unpack_S_dst here.
 inline constexpr bool _is_srcs_32bit_mode_(const DataFormat unpack_S_dst_format)
 {
-    return unpack_S_dst_format == DataFormat::Float32 || unpack_S_dst_format == DataFormat::Int32;
+    return unpack_S_dst_format == DataFormat::Float32 || unpack_S_dst_format == DataFormat::Int32 || unpack_S_dst_format == DataFormat::Tf32;
 }
 
 /**

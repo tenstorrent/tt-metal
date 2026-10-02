@@ -301,8 +301,6 @@ public:
 #endif // DFB_DESCRIPTORS_DEFINED
 
 #ifdef COMPILE_FOR_TRISC
-// This can be enabled on Quasar once GH issue #49608 is resolved.
-#ifndef ARCH_QUASAR
     uint32_t get_tile_address(uint32_t tile_index);
 
     // Reads one scalar element from a tile at specified tile_index. element_offset is an index into the tile as a T[]
@@ -311,7 +309,6 @@ public:
     // Values are mailbox-broadcast to all TRISC threads as a zero-extended uint32_t; MATH/PACK cast back to T.
     template <typename T = uint32_t>
     T read_tile_value(uint32_t tile_index, uint32_t element_offset);
-#endif
 #endif
 
     void finish() { finish_impl(); }
@@ -329,6 +326,36 @@ public:
     // cache strategy.
     uint32_t get_write_ptr() const { return get_write_ptr_impl() + L1_UNCACHED_OFFSET; }
     uint32_t get_read_ptr() const { return get_read_ptr_impl() + L1_UNCACHED_OFFSET; }
+
+#ifdef COMPILE_FOR_TRISC
+    // Returns the LLKOperand pointing to the front (reading address) of the DFB
+    // Functionalities meant to be used with LLKOperand for LLK 2.0
+    //
+    // Parameters:
+    // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<dfb::token>)
+    template <typename Operand>
+    [[nodiscard]] Operand front() const {
+#ifdef UCK_CHLKC_MATH
+        return Operand{0};
+#else
+        return Operand{(get_read_ptr_impl() >> (4 - cb_addr_shift)) - 1};
+#endif
+    }
+
+    // Returns the LLKOperand pointing to the back (writing address) of the DFB
+    // Functionalities meant to be used with LLKOperand for LLK 2.0
+    //
+    // Parameters:
+    // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<dfb::token>)
+    template <typename Operand>
+    [[nodiscard]] Operand back() const {
+#ifdef UCK_CHLKC_MATH
+        return Operand{0};
+#else
+        return Operand{(get_write_ptr_impl() >> (4 - cb_addr_shift)) - 1};
+#endif
+    }
+#endif
 
 #ifndef ARCH_QUASAR
     // WH/BH only — mutate FIFO cursor state (rewind / jump / hold-wr style surgery).
@@ -395,7 +422,7 @@ private:
 
 #ifdef ARCH_QUASAR
     template <bool is_producer>
-    void handle_final_credits(uint16_t transactions_issued, uint8_t txn_id_index);
+    void handle_final_credits(uint32_t transactions_issued, uint8_t txn_id_index);
 
 #ifndef COMPILE_FOR_TRISC
     friend class Noc;  // grants Noc::async_read/write access to prepare_*/commit_*
@@ -432,11 +459,11 @@ private:
     // Metadata for implicit sync
     uint16_t ptxn_id_loop_cnt_ = 0;
     uint8_t ptxn_id_index_ = 0;
-    uint16_t ptiles_read_ = 0;  // not the same as tile counter: HW has no way to track pending posts
+    uint32_t ptiles_read_ = 0;  // not the same as tile counter: HW has no way to track pending posts
 
     uint16_t ctxn_id_loop_cnt_ = 0;
     uint8_t ctxn_id_index_ = 0;
-    uint16_t ctiles_written_ = 0;  // not the same as tile counter: HW has no way to track pending acks
+    uint32_t ctiles_written_ = 0;  // not the same as tile counter: HW has no way to track pending acks
 #endif
 };
 

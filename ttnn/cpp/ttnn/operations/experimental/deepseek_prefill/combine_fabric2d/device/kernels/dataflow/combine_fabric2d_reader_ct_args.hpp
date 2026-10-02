@@ -37,7 +37,7 @@ struct ReaderCtArgs {
     uint32_t freed_addr;
     uint32_t fwd_pages_per_stream;
     uint32_t my_stream;
-    uint32_t num_forwarding_chunks;
+    uint32_t num_forwarding_chunks = 0;  // Host construction derives this from the descriptor block.
     uint32_t fwd_sem_addr;
     uint32_t nbr_chip_id;
     uint32_t num_assignments;
@@ -87,7 +87,6 @@ struct ReaderCtArgs {
         // and READS region q of its own — the same q, because every chip runs the same code. Doubles as
         // this stream's share of the same-chip run, which it copies after the fabric work.
         my_stream(plan.stream),
-        num_forwarding_chunks(0),  // set from the descriptor block below, so the two cannot disagree
         fwd_sem_addr(plan.fwd_arrived_addr),
         nbr_chip_id(static_cast<uint32_t>(self.downstream_node.chip_id)),
         num_assignments(count_own_assignments(work)),

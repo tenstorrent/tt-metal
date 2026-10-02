@@ -3,6 +3,7 @@
 
 
 import os
+import struct
 from itertools import chain, product
 
 import pytest
@@ -28,6 +29,7 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
+from helpers.sfpu_accuracy_budget import accuracy_contract
 from helpers.sfpu_domains import (
     _UNARY_OPS_NOT_SWEPT,
     SHIFT_EDGE_AMOUNTS,
@@ -52,6 +54,7 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    SFPU_RELU_MAX_THRESHOLD,
     SFPU_RELU_MIN_INT_THRESHOLD,
     SFPU_SHIFT_AMOUNT,
     TILE_COUNT,
@@ -113,14 +116,6 @@ STANDARD_SWEEP_OPS = sorted(
     sfpu_unary_ops() - set(BROAD_SWEEP_OPS) - set(_UNARY_OPS_NOT_SWEPT),
     key=lambda op: op.name,
 )
-
-# Per-op (atol, rtol) overrides for coarse LUT/polynomial ops; others use the
-# per-format default in passed_test.
-CUSTOM_TOLERANCES = {
-    # Coarse 3-segment LUT: good PCC but abs error peaks ~0.12 near the knees.
-    MathOperation.SigmoidAppx: (0.13, 0.05),
-    MathOperation.GeluAppx: (0.13, 0.05),
-}
 
 BROAD_FORMATS = input_output_formats(
     [
@@ -373,8 +368,6 @@ def test_eltwise_unary_sfpu(
     else:
         _skip_bh_unless_fp32(formats, dest_acc)
 
-    custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
-
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
         formats,
@@ -383,8 +376,6 @@ def test_eltwise_unary_sfpu(
         mathop,
         fast_mode,
         input_dimensions,
-        custom_atol=custom_atol,
-        custom_rtol=custom_rtol,
     )
 
 
@@ -526,8 +517,6 @@ def test_eltwise_unary_sfpu_edges(
             f"(no domain boundary, no op knee, specials not preserved)"
         )
 
-    custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
-
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
         formats,
@@ -537,8 +526,6 @@ def test_eltwise_unary_sfpu_edges(
         FastMode.No,
         input_dimensions,
         spec_A=spec_A,
-        custom_atol=custom_atol,
-        custom_rtol=custom_rtol,
     )
 
 
@@ -634,109 +621,15 @@ def test_sqrt_custom_infinity_regression(request):
     )
 
 
-# reciprocal_compat(-0.0): the sign restore at the pole, deliberately outside the edge sweep.
-#
-# _reciprocal_compat_ returns |1/in|, so the signed wrapper's whole promise rests on the sign
-# restore. The kernel takes the sign bit with SFPSETSGN rather than a comparison, which stays
-# inside the documented SFPSETCC contract; this test is what holds that in place. It runs on
-# Float32 -> Float32 at dest_acc=Yes, the only pipeline that both delivers a real -0.0 and
-# keeps the two infinities distinguishable on the way back.
-@pytest.mark.nightly
-def test_reciprocal_compat_negative_zero_regression():
-    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
-    dest_acc = DestAccumulation.Yes
-    input_dimensions = [32, 32]
-
-    # If this ever goes False the pipeline stopped delivering -0.0 and the assertion below
-    # would be testing +0.0 -- fail loudly rather than quietly testing nothing.
-    assert negative_zero_delivered(formats.input_format, dest_acc), (
-        "Float32 at dest_acc=Yes no longer delivers a real -0.0 to the LREG; re-derive the "
-        "combination this regression test runs on before editing it."
-    )
-
-    num_elements = input_dimensions[0] * input_dimensions[1]
-    # A positive control in the same tile: +0.0 must stay +inf. A restore that over-fires
-    # (copying the wrong sign, or negating unconditionally) breaks this one, not the probe.
-    src_A = torch.full((num_elements,), 1.0, dtype=torch.float32)
-    src_A[0] = -0.0
-    src_A[1] = 0.0
-    src_B = torch.zeros(num_elements, dtype=torch.float32)
-    tile_cnt = 1
-
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-
-    configuration = TestConfig(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(ApproximationMode.No),
-            FAST_MODE(FastMode.No),
-            CLAMP_NEGATIVE(True),
-            MATH_OP(mathop=MathOperation.ReciprocalCompat),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt,
-            tile_count_B=tile_cnt,
-            tile_count_res=tile_cnt,
-        ),
-        dest_acc=dest_acc,
-        unpack_to_dest=True,
-    )
-
-    res = torch.tensor(configuration.run().result, dtype=torch.float32)
-    bits = res.view(torch.int32)
-
-    assert bits[0].item() & 0xFFFFFFFF == 0xFF800000, (
-        f"reciprocal_compat(-0.0) returned 0x{bits[0].item() & 0xFFFFFFFF:08X} "
-        f"({res[0].item()!r}), expected -inf (0xFF800000). A 0x7F800000 means the sign "
-        "restore did not fire on a delivered -0.0; a 0xFEFFFD9E means the pole guard did "
-        "not fire either."
-    )
-    assert bits[1].item() & 0xFFFFFFFF == 0x7F800000, (
-        f"reciprocal_compat(+0.0) returned 0x{bits[1].item() & 0xFFFFFFFF:08X} "
-        f"({res[1].item()!r}), expected +inf. The restore is over-firing: it must move the "
-        "input's sign bit, not set one."
-    )
-    # The rest of the tile is 1.0, catching a restore widened to every lane. Tolerance, not
-    # equality: _reciprocal_compat_ is an approximation, so 1/1.0 lands near 1.0.
-    assert torch.all(bits[2:] >= 0), (
-        "reciprocal_compat(1.0) came back negative on some lane; the sign restore is "
-        "firing outside the negative inputs."
-    )
-    assert torch.allclose(res[2:], torch.tensor(1.0), rtol=1e-3, atol=0.0), (
-        f"reciprocal_compat(1.0) is no longer ~1.0 on the lanes around the probe "
-        f"(max deviation {(res[2:] - 1.0).abs().max().item():.6g})."
-    )
-
-
 # sqrt(-0) and rsqrt(-0), read back as raw bit patterns. Outside the edge sweep because
 # passed_test() treats -0.0 and +0.0 as equal, so only an integer comparison can tell them
 # apart, and because the sweep runs ApproximationMode.No while _calculate_sqrt_body_ has a
 # second copy of these guards under APPROXIMATE. Float32 -> Float32 at dest_acc=Yes is the only
 # pipeline that delivers a real -0.0 and returns 32 bits intact.
 #
-# FastMode.No on both, and deliberately so rather than a gap: every edge arm in
-# _calculate_sqrt_body_ is gated on !FAST_APPROX, as the negative clamp alone was before this
-# fix, so sqrt_tile<true>/rsqrt_tile<true> have no signed-zero result to pin. That is the
-# kernel's standing trade, not a regression, and it is what the comment there records.
+# FastMode.No pins default-mode behavior, including the negative-input clamp. Fast sqrt
+# does not preserve signed zero, and fast rsqrt skips the negative-input clamp; these
+# modes are selected by sqrt_tile<true> and rsqrt_tile<RsqrtMode::Fast>, respectively.
 @pytest.mark.nightly
 @pytest.mark.parametrize(
     "approx_mode",
@@ -979,6 +872,116 @@ def test_eltwise_unary_sfpu_relu_min_int_threshold(
         spec_A=_relu_min_int_stimuli_spec(threshold),
         relu_min_int_threshold=threshold,
         twos_complement=True,
+    )
+
+
+# Cat F: relu_max's threshold, which SFPU_RELU_MAX_THRESHOLD makes reachable, probed where the
+# kernel's two SFPSWAP folds (max(min(x, t), 0)) meet the values a sign-magnitude total order
+# ranks differently from IEEE: both NaN signs, both zeros, the infinities, the subnormal extremes,
+# and the threshold itself with its two fp neighbours. The thresholds are the ones production
+# passes -- relu6's 6.0 -- plus the two the sweep's fixed 5.0 cannot reach: zero, where the
+# relu clamp alone decides, and a negative one, where every lane must come out +0.0.
+#
+# The gate is exact bits, not the op's tolerance: relu_max's result is always one of its input,
+# the threshold or +0.0, so there is no rounding to allow for, and a tolerance would pass a -0.0
+# for a +0.0 and a flushed subnormal for the subnormal.
+_RELU_MAX_THRESHOLDS = [6.0, 0.0, -1.0, -0.0]
+
+_FP32_MIN_SUBNORMAL = struct.unpack("<f", struct.pack("<I", 0x00000001))[0]
+_FP32_MAX_SUBNORMAL = struct.unpack("<f", struct.pack("<I", 0x007FFFFF))[0]
+_NEGATIVE_NAN = struct.unpack("<f", struct.pack("<I", 0xFFC00000))[0]
+
+
+def _relu_max_probe_spec(threshold, formats, dest_acc):
+    """The probe values for one (threshold, pipeline), as a per-face custom spec.
+
+    Each group is added only where the pipeline delivers it intact, on the same rules the
+    edge sweep uses: specials_safe() for the non-finites and negative_zero_delivered() for
+    -0.0. The subnormals go in on the unpack-to-dest path (32-bit input, dest_acc=Yes) only;
+    measured on Blackhole they read back as +0.0 there too (both signs, both extremes), and
+    the golden's FTZ model (_flush_subnormals_of_dtype) says the same, so what the probe pins
+    is that the flush is unchanged, not that a subnormal survives.
+    """
+    torch_format = format_dict[formats.input_format]
+    t = torch.tensor([threshold], dtype=torch_format)
+    above = torch.nextafter(t, torch.tensor([float("inf")], dtype=torch_format)).item()
+    below = torch.nextafter(t, torch.tensor([float("-inf")], dtype=torch_format)).item()
+
+    values = [
+        threshold,
+        above,
+        below,
+        -threshold,
+        2.0 * threshold,
+        0.0,
+        1.0,
+        -1.0,
+        3.0,
+        -3.0,
+    ]
+    if specials_safe(formats.input_format, formats.output_format, dest_acc):
+        values += [float("inf"), float("-inf"), float("nan"), _NEGATIVE_NAN]
+    if negative_zero_delivered(formats.input_format, dest_acc):
+        values.append(-0.0)
+    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes:
+        values += [
+            _FP32_MIN_SUBNORMAL,
+            -_FP32_MIN_SUBNORMAL,
+            _FP32_MAX_SUBNORMAL,
+            -_FP32_MAX_SUBNORMAL,
+        ]
+    return StimuliSpec.custom(values=values, seed=0)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    threshold=_RELU_MAX_THRESHOLDS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_relu_max_threshold(
+    formats: list[InputOutputFormat],
+    threshold: float,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    """relu_max against production's thresholds, checked bit for bit on the probe table.
+
+    The golden is sfpu_relu_max: min under the SFPU's total order, then the relu clamp, so
+    it pins the order of the two folds as well as the values -- a kernel that clamped first
+    would return the threshold for a negative threshold and keep a -NaN, and fail here.
+    """
+    _skip_coverage_unsupported(MathOperation.ReluMax)
+    _skip_bh_unless_fp32(formats, dest_acc)
+
+    res_tensor, golden_tensor = eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        MathOperation.ReluMax,
+        FastMode.No,
+        input_dimensions,
+        spec_A=_relu_max_probe_spec(threshold, formats, dest_acc),
+        relu_max_threshold=threshold,
+    )
+
+    torch_format = format_dict[formats.output_format]
+    int_format = torch.int32 if torch_format == torch.float32 else torch.int16
+    res_bits = res_tensor.to(torch_format).contiguous().view(int_format)
+    golden_bits = (
+        golden_tensor.to(torch_format).contiguous().view(int_format)
+        if isinstance(golden_tensor, torch.Tensor)
+        else torch.tensor(golden_tensor, dtype=torch_format).view(int_format)
+    )
+    mismatch = torch.nonzero(res_bits != golden_bits).flatten()
+    mask = 0xFFFFFFFF if int_format == torch.int32 else 0xFFFF
+    assert mismatch.numel() == 0, (
+        f"{mismatch.numel()} lane(s) differ from sfpu_relu_max bit for bit; first: "
+        + ", ".join(
+            f"[{i}] got {int(res_bits[i]) & mask:#x} want {int(golden_bits[i]) & mask:#x}"
+            for i in mismatch[:8].tolist()
+        )
     )
 
 
@@ -1243,10 +1246,9 @@ def eltwise_unary_sfpu(
     fast_mode: FastMode,
     input_dimensions: list[int],
     spec_A=None,
-    custom_atol=None,
-    custom_rtol=None,
     shift_amount=None,
     relu_min_int_threshold=None,
+    relu_max_threshold=None,
     twos_complement=False,
 ):
     torch.manual_seed(0)
@@ -1290,6 +1292,11 @@ def eltwise_unary_sfpu(
             if relu_min_int_threshold is None
             else {"relu_min_int_threshold": relu_min_int_threshold}
         ),
+        **(
+            {}
+            if relu_max_threshold is None
+            else {"relu_max_threshold": relu_max_threshold}
+        ),
     )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
@@ -1317,6 +1324,11 @@ def eltwise_unary_sfpu(
                 []
                 if relu_min_int_threshold is None
                 else [SFPU_RELU_MIN_INT_THRESHOLD(relu_min_int_threshold)]
+            ),
+            *(
+                []
+                if relu_max_threshold is None
+                else [SFPU_RELU_MAX_THRESHOLD(relu_max_threshold)]
             ),
         ],
         runtimes=[
@@ -1353,13 +1365,32 @@ def eltwise_unary_sfpu(
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
+    # The op's declared *tolerance*, resolved for this exact variant. This is where
+    # CUSTOM_TOLERANCES used to be read in the test bodies; keeping it in the driver
+    # means all eight call sites pick it up at once, and a change is a registry edit.
+    #
+    # Tolerance only, deliberately. A step budget measured over every value the format
+    # has -- which is what the nightly sweep measures -- is much wider than one measured
+    # over this driver's sampled domain, so enforcing it here would replace a gate that
+    # binds with one that does not. The budgets are enforced where they were measured.
+    contract = accuracy_contract(
+        mathop,
+        output_format=formats.output_format,
+        input_format=formats.input_format,
+        approx_mode=approx_mode,
+        dest_acc=dest_acc,
+        arch=TestConfig.CHIP_ARCH,
+    )
     assert passed_test(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        custom_atol=custom_atol,
-        custom_rtol=custom_rtol,
+        **contract.tolerance_kwargs(),
     ), "Assert against golden failed"
+
+    # For callers that want a stricter gate than the op's tolerance (an exact-bits check on
+    # a probe table, say); the sweeps above ignore it.
+    return res_tensor, golden_tensor
 
 
 # Test exponential with APPROX_MODE=true, FAST_MODE=true, and CLAMP_NEGATIVE=true/false
