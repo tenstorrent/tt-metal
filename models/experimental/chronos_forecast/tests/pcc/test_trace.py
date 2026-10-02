@@ -48,7 +48,12 @@ def test_tt_forward_trace_pcc(mesh_device):
 )
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_tt_forward_trace_two_cq_pcc(mesh_device):
-    pytest.importorskip("ttnn")
+    """Back-to-back pipelined replays on batches that differ from the captured one.
+
+    The first replay's output is copied on CQ0 before the next call, so it is only
+    correct if CQ1 waits for that replay to finish before overwriting its inputs.
+    """
+    ttnn = pytest.importorskip("ttnn")
     from tests.ttnn.utils_for_testing import assert_with_pcc
 
     from models.experimental.chronos_forecast.reference.chronos2.model import Chronos2Model as RefModel
@@ -59,19 +64,35 @@ def test_tt_forward_trace_two_cq_pcc(mesh_device):
     reference = RefModel.from_pretrained(DUMMY_MODEL_PATH).eval()
     model = TtChronos.from_torch_model(mesh_device, reference)
     torch.manual_seed(7)
-    context = torch.randn(2, 32)
+    contexts = [torch.randn(2, 32) for _ in range(3)]
     with torch.no_grad():
-        expected = reference(context=context, num_output_patches=1).quantile_preds
+        expected = [reference(context=c, num_output_patches=1).quantile_preds for c in contexts]
 
-    prepared = model.prepare_inputs(context=context, num_output_patches=1)
-    runner = TtChronosTraceRunner(model, prepared)
+    prepared = [model.prepare_inputs(context=c, num_output_patches=1) for c in contexts]
+    runner = TtChronosTraceRunner(model, prepared[0])
+    first_copy = None
     try:
+        # Allocated before capture: a tensor allocated afterwards can share addresses with
+        # the trace's intermediates and be overwritten by the next replay.
+        first_copy = model.forward_device(runner.inputs)
         runner.capture()
-        got = runner.execute_pipelined(prepared).quantile_preds
+        ttnn.copy(runner.execute_pipelined(prepared[1], readback=False), first_copy)
+        second = runner.execute_pipelined(prepared[2]).quantile_preds
+        first = model.postprocess_output(
+            first_copy,
+            prepared[1].loc_scale,
+            num_output_patches=prepared[1].num_output_patches,
+            output_rows=prepared[1].output_rows,
+        )
     finally:
+        if first_copy is not None:
+            ttnn.deallocate(first_copy)
         runner.release()
 
-    assert_with_pcc(expected.float(), got, pcc=0.99)
+    assert_with_pcc(expected[1].float(), first, pcc=0.99)
+    assert_with_pcc(expected[2].float(), second, pcc=0.99)
+    # Different batches must give different forecasts, or the refresh is not being tested.
+    assert not torch.allclose(first, second)
 
 
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 20_000_000}], indirect=True)

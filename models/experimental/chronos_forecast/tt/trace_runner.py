@@ -132,12 +132,20 @@ class TtChronosTraceRunner:
             raise RuntimeError("capture() must be called before execute()")
         if prepared is not None:
             self.update_inputs(prepared)
-        ttnn.execute_trace(self.device, self._trace_id, cq_id=self.cq_id, blocking=blocking)
+        self._replay(blocking=blocking)
         if synchronize:
             ttnn.synchronize_device(self.device)
         if not readback:
             return self._trace_output
         return self.read_output()
+
+    def _replay(self, *, blocking: bool = False) -> None:
+        import ttnn
+
+        ttnn.execute_trace(self.device, self._trace_id, cq_id=self.cq_id, blocking=blocking)
+        # Recorded behind the replay on the same queue, so it fires only after the trace has
+        # finished reading the persistent inputs. execute_pipelined() makes CQ1 wait on it.
+        self._op_event = ttnn.record_event(self.device, self.cq_id)
 
     def read_output(self) -> TraceExecutionResult:
         """Download and unscale the last replay's output for the current inputs."""
@@ -154,10 +162,12 @@ class TtChronosTraceRunner:
         )
 
     def execute_pipelined(self, prepared: TtChronosPreparedInputs, *, readback: bool = True):
-        """Overlap CQ1 input refresh with CQ0 trace dispatch using events.
+        """Refresh the inputs on CQ1 and replay on CQ0, ordered with events.
 
-        The device must be opened with two command queues. This follows the
-        established BGE-M3 fixed-input trace protocol.
+        The device must be opened with two command queues. CQ1 waits for the
+        previous replay to finish before overwriting the persistent inputs, and
+        CQ0 waits for the write before replaying. Host-side preparation of the
+        next batch still overlaps the replay.
         """
         import ttnn
 
@@ -167,8 +177,7 @@ class TtChronosTraceRunner:
         self.update_inputs(prepared, cq_id=1)
         self._write_event = ttnn.record_event(self.device, 1)
         ttnn.wait_for_event(self.cq_id, self._write_event)
-        self._op_event = ttnn.record_event(self.device, self.cq_id)
-        ttnn.execute_trace(self.device, self._trace_id, cq_id=self.cq_id, blocking=False)
+        self._replay()
         if not readback:
             return self._trace_output
         ttnn.synchronize_device(self.device)
@@ -191,14 +200,14 @@ class TtChronosTraceRunner:
         except StopIteration:
             return
         self.update_inputs(prepare(first))
-        ttnn.execute_trace(self.device, self._trace_id, cq_id=self.cq_id, blocking=False)
+        self._replay()
         for item in items:
             prepared = prepare(item)
             # The next replay overwrites the output, so read this one back first.
             ttnn.synchronize_device(self.device)
             yield self.read_output()
             self.update_inputs(prepared)
-            ttnn.execute_trace(self.device, self._trace_id, cq_id=self.cq_id, blocking=False)
+            self._replay()
         ttnn.synchronize_device(self.device)
         yield self.read_output()
 
