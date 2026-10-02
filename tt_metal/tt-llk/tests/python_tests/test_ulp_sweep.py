@@ -709,12 +709,12 @@ def test_the_sweep_cells_are_the_ones_testconfig_builds_as_asked(arch):
     asks for is the Dest it gets. The promoted exponent-B -> Float16 `No` cells are the
     ones left out, and their `Yes` twins stay."""
     from helpers.data_format_inference import effective_dest_acc
-    from helpers.ulp_sweep import SWEEP_FORMATS, sweep_cells
+    from helpers.ulp_sweep import SWEEP_FORMATS, SWEEP_INPUT_FORMATS, sweep_cells
 
     cells = sweep_cells(arch)
     assert cells == [
         (i, o, a, d)
-        for i in SWEEP_FORMATS
+        for i in SWEEP_INPUT_FORMATS
         for o in SWEEP_FORMATS
         for a in ApproximationMode
         for d in DestAccumulation
@@ -723,9 +723,11 @@ def test_the_sweep_cells_are_the_ones_testconfig_builds_as_asked(arch):
     promoted = {(i, o) for i, o, _, d in cells if d == DestAccumulation.No} ^ {
         (i, o) for i, o, _, d in cells if d == DestAccumulation.Yes
     }
+    # Every exponent-B input but Float32, which unpacks to Dest and is not an outlier.
     assert promoted == {
         (DataFormat.Float16_b, DataFormat.Float16),
         (DataFormat.Bfp8_b, DataFormat.Float16),
+        (DataFormat.Bfp4_b, DataFormat.Float16),
     }
     assert (
         effective_dest_acc(
