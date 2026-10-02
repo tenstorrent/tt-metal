@@ -24,7 +24,12 @@ namespace {
 // Precision is the compute config's call: with packer L1 accumulation off (or when the factory doesn't use it),
 // partial sums go through the output format between K blocks, and the blocking doesn't try to avoid that.
 uint32_t max_in0_block_w(
-    const HeuristicBlocking::Params& params, uint32_t Kt, Family family, uint32_t out_block_h, uint32_t out_block_w) {
+    const HeuristicBlocking::Params& params,
+    const MatmulDesc& p,
+    Family family,
+    uint32_t out_block_h,
+    uint32_t out_block_w) {
+    const uint32_t Kt = p.Kt;
     const uint32_t two_blocks = (family != Family::Reuse && Kt >= 2) ? Kt / 2 : Kt;
     // Tiles per K step of the operand(s) each core reads itself rather than receiving by multicast
     uint32_t self_read = 0;
@@ -34,8 +39,20 @@ uint32_t max_in0_block_w(
         case Family::Mcast1DIn1: self_read = out_block_h; break;
         case Family::Reuse: self_read = out_block_h + out_block_w; break;
     }
-    const bool large_2d_block = family == Family::Mcast2D && out_block_h * out_block_w > params.tuned.large_block_tiles;
-    const uint32_t depth = large_2d_block ? params.tuned.large_block_in0_block_w : params.tuned.max_in0_block_w;
+    uint32_t depth = params.tuned.max_in0_block_w;
+    // Interleaved 2D where K blocks are costly. Every K block ends with a fixed cost: a handshake, and a pack of the
+    // whole output block's partials, which without packer L1 accumulation the next block reloads. It dominates
+    // with a block-float input (a K block moves few input bytes for it) or, for a block at least 2 tiles on each
+    // side, with L1 accumulation off (the pack and reload grow with the block; a one-tile-tall or -wide block pays
+    // little and deeper K would only lengthen its fill). Then K may be split into as few as Tuned::max_costly_k_blocks
+    // blocks, and the block search trades output block size against that depth. With accumulation on and 16-bit
+    // inputs the cost hides, and the depth cap stays max_in0_block_w.
+    const bool block_float = is_block_float(p.in0_format) || is_block_float(p.in1_format);
+    const bool reloads_partials = !p.packer_l1_acc && std::min(out_block_h, out_block_w) >= 2;
+    if (family == Family::Mcast2D && (block_float || reloads_partials) && !sharded_layout(p) &&
+        params.tuned.max_costly_k_blocks != 0) {
+        depth = std::max(depth, div_up(Kt, params.tuned.max_costly_k_blocks));
+    }
     const uint32_t self_read_limit =
         self_read == 0
             ? depth
@@ -51,34 +68,6 @@ bool k_allowed(const BlockRules& rules, uint32_t k) {
 // writes a sharded output wrongly (#58046), so a sharded output's blocks always span per_core_N.
 bool block_allowed(const BlockRules& rules, uint32_t per_core_N, uint32_t out_block_w) {
     return !rules.sharded_out || out_block_w == per_core_N;
-}
-
-// Raises a 2D blocking's K depth to at least the legacy selection's, keeping its output blocks: legacy splits K
-// into as many blocks as the grid is wide (in0_block_w = Kt / grid width when that divides K), shrinking it
-// to a divisor until L1 fits. Where v2's are already deeper, this leaves them.
-// Each K block ends by packing the partial sums of the whole output block, and without packer L1 accumulation
-// reloads them too; deeper blocks pay that less often but make the first block's inputs, which nothing
-// overlaps, larger. Deeper wins where the per-block cost is large next to a block's inputs: accumulation off
-// (pack and reload), or block-float inputs (fewer bytes per K tile). With accumulation on and 16-bit inputs,
-// the shallower depth was as fast or faster on every 2D case measured, so the depth is left as is.
-void deepen_to_legacy_k_depth(const MatmulDesc& p, const HardwareDesc& hw, bool fuse_batch, Blocking& b) {
-    if (p.Kt % hw.grid.x != 0) {
-        return;
-    }
-    if (p.packer_l1_acc && !is_block_float(p.in0_format) && !is_block_float(p.in1_format)) {
-        return;
-    }
-    for (uint32_t k : divisors_desc(p.Kt / hw.grid.x)) {
-        if (k <= b.in0_block_w) {
-            return;
-        }
-        Blocking deeper = b;
-        deeper.in0_block_w = k;
-        if (circular_buffer_bytes(p, hw, Family::Mcast2D, deeper, fuse_batch) <= hw.l1_cb_budget) {
-            b = deeper;
-            return;
-        }
-    }
 }
 
 // 2D mcast (issue #57884 heuristic 1): largest in0_block_w * out_block_h * out_block_w that fits L1 (among
@@ -106,7 +95,7 @@ std::optional<Blocking> block_2d(
             const uint64_t area = static_cast<uint64_t>(h) * w;
             // K depth limit of this block size (larger blocks may go deeper); it only shrinks as w does
             const uint32_t k_max =
-                rules.k_fixed != 0 ? rules.k_fixed : max_in0_block_w(params, p.Kt, Family::Mcast2D, h, w);
+                rules.k_fixed != 0 ? rules.k_fixed : max_in0_block_w(params, p, Family::Mcast2D, h, w);
             if (best && !rules.prefers_other(best->in0_block_w) && deep_enough(best->in0_block_w) &&
                 area * std::max(k_max, rules.k_preferred) < best_product) {
                 break;  // narrower blocks for this h can't win
@@ -190,7 +179,7 @@ std::optional<Blocking> block_1d(
             return std::nullopt;
         }
         const uint32_t k_limit =
-            rules.k_fixed != 0 ? rules.k_fixed : max_in0_block_w(params, p.Kt, family, out_block_h, out_block_w);
+            rules.k_fixed != 0 ? rules.k_fixed : max_in0_block_w(params, p, family, out_block_h, out_block_w);
         for (uint32_t k : divisors_desc(p.Kt)) {
             if ((k > k_limit && !rules.prefers(k)) || !k_allowed(rules, k)) {
                 continue;
@@ -268,7 +257,7 @@ std::optional<Blocking> block_reuse(
     const BlockRules& rules) {
     const uint32_t k_limit = rules.k_fixed != 0
                                  ? rules.k_fixed
-                                 : max_in0_block_w(params, p.Kt, Family::Reuse, split.per_core_M, split.per_core_N);
+                                 : max_in0_block_w(params, p, Family::Reuse, split.per_core_M, split.per_core_N);
     for (uint32_t k : divisors_desc(p.Kt)) {
         if ((k > k_limit && !rules.prefers(k)) || !k_allowed(rules, k)) {
             continue;
@@ -298,9 +287,6 @@ std::optional<Blocking> HeuristicBlocking::block(
     switch (family) {
         case Family::Mcast2D: {
             auto b = block_2d(params, p, hw, split.per_core_M, split.per_core_N, split.fuse_batch, rules);
-            if (b && !sharded_layout(p)) {
-                deepen_to_legacy_k_depth(p, hw, split.fuse_batch, *b);
-            }
             return b;
         }
         case Family::Mcast1DIn0:

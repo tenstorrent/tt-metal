@@ -76,8 +76,8 @@ public:
 
 // Issue #57884's block-size heuristics with one K block depth rule:
 //  - 2D: the largest in0_block_w * out_block_h * out_block_w that fits L1; ties go to the larger output block,
-//    then the squarer one. Interleaved 2D then goes no shallower than the legacy selection's K depth where that
-//    was measured to pay (see deepen_to_legacy_k_depth);
+//    then the squarer one. Where K blocks are costly (packer L1 accumulation off or a block-float input),
+//    interleaved 2D may use K blocks up to Kt / max_costly_k_blocks deep;
 //  - 1D: the full per-core extent along the multicast dimension, the other one shrunk only if needed, unless
 //    that forces single-tile K steps; 1D in0-mcast splits a wide output block into subblock-wide blocks;
 //  - Reuse: the deepest in0_block_w within the K depth rule that fits.
@@ -98,14 +98,12 @@ public:
         // of data reuse) for K depth. The mcast families also keep at least two K blocks, since with a single
         // block they single-buffer the inputs. Basis: 8 against 16 on the Wormhole OOB suite; range not measured.
         uint32_t max_in0_block_w = 8;
-        // 2D output blocks of more than large_block_tiles tiles may use K blocks up to large_block_in0_block_w
-        // deep. Every K block ends with a pack of the whole output block (L1 accumulation of the partials), which
-        // sits on the compute path; a large block is compute bound, so deeper K blocks amortize that pack. Smaller
-        // blocks wait on data, where the pack is hidden and a deeper K block only lengthens the pipeline fill.
-        // Basis: the Wormhole 2D sweeps with the output block fixed, where depth 16 beat 8 on 6 of 10 larger
-        // blocks and lost on none, while on smaller blocks 8 won 51 to 19; the threshold is where they turn.
-        uint32_t large_block_tiles = 64;
-        uint32_t large_block_in0_block_w = 16;
+        // With packer L1 accumulation off or a block-float input, each 2D K block's fixed cost (packing, and
+        // without accumulation reloading, the whole output block's partials) dominates, and K is split into at most
+        // this many blocks (see max_in0_block_w): the block search may go that deep. Basis: 8 reproduces, on Wormhole's
+        // 8-wide grid, the K depth a 67-case 2D probe found pays under those conditions; without it 13 gist and suite
+        // cases (70B qkv_proj fwd T=1024, 1B down_proj fwd T=1024, ...) fall to 0.83-0.95 of legacy.
+        uint32_t max_costly_k_blocks = 8;
         // K block depth is further limited so that the operand a core reads by itself (not by multicast) moves at
         // most this many tiles per K block: B's slice in 1D in0-mcast, A's in 1D in1-mcast, both in Reuse, none in
         // 2D. Small per-step reads keep the double-buffered DRAM stream ahead of math; wide per-core blocks get

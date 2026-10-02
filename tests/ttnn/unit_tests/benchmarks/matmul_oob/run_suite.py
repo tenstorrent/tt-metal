@@ -294,8 +294,14 @@ class CaseRun:
             )
         try:
             torch.manual_seed(0)
-            a_t = torch.randn(case.a_shape, dtype=torch.bfloat16)
-            b_t = torch.randn(case.b_shape, dtype=torch.bfloat16) / math.sqrt(K)
+            # --configs-only needs shapes only: meta tensors, no host data
+            rand = (
+                (lambda shape, dtype: torch.empty(shape, dtype=dtype, device="meta"))
+                if getattr(args, "configs_only", False)
+                else torch.randn
+            )
+            a_t = rand(case.a_shape, dtype=torch.bfloat16)
+            b_t = rand(case.b_shape, dtype=torch.bfloat16) / math.sqrt(K)
             self.a = self._to_device(
                 a_t, case.a_dtype, input_memory_config(case.a_mem, case.a_shape, self.grid, case.a_shard)
             )
@@ -304,7 +310,7 @@ class CaseRun:
             )
             self.bias = None
             if case.bias:
-                bias_t = torch.randn((1, N), dtype=torch.bfloat16)
+                bias_t = rand((1, N), dtype=torch.bfloat16)
                 self.bias = self._to_device(bias_t, case.b_dtype, ttnn.DRAM_MEMORY_CONFIG)
         except Exception as e:
             self.close()
@@ -328,6 +334,17 @@ class CaseRun:
             self.kwargs["core_grid"] = ttnn.CoreGrid(x=case.core_grid[0], y=case.core_grid[1])
 
     def _to_device(self, t, dtype, memory_config):
+        if getattr(self.args, "configs_only", False):
+            # Only the shapes, dtypes and placements matter: allocate on the device without host data
+            tensor = ttnn.empty(
+                ttnn.Shape(list(t.shape)),
+                dtype=DTYPES[dtype],
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=memory_config,
+            )
+            self.tensors.append(tensor)
+            return tensor
         tensor = ttnn.from_torch(
             t, dtype=DTYPES[dtype], layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=memory_config
         )
@@ -378,6 +395,11 @@ class CaseRun:
                 row["fallback"] = int(fell_back)
                 row["config"] = config or ""
                 row["config_type"] = config.split("(", 1)[0] if config else ""
+                if getattr(
+                    args, "configs_only", False
+                ):  # the chosen config is all that's needed: no timing, profiler read or PCC
+                    ttnn.deallocate(out)
+                    return row
                 for _ in range(args.warmup):
                     ttnn.deallocate(out)  # each call sees the same L1 state (one output at a time)
                     out = self._call(program_config)
@@ -551,6 +573,11 @@ def main():
     parser.add_argument("--filter", default=None, help="regex on case name")
     parser.add_argument("--exclude-tags", nargs="*", default=[], help="skip cases with any of these tags")
     parser.add_argument("--modes", nargs="+", choices=list(MODES), default=["oob"])
+    parser.add_argument(
+        "--configs-only",
+        action="store_true",
+        help="record each case's selected config only (one call per case: no timing, profiler read or PCC)",
+    )
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--iters", type=int, default=5)
     parser.add_argument("--pcc-threshold", type=float, default=0.99)

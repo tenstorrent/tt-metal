@@ -391,19 +391,16 @@ TEST(MatmulAutoConfig, OneDOutputBlockSplit) {
 }
 
 // Large 2D output blocks may use K blocks up to 16 deep; small ones stay at 8
-TEST(MatmulAutoConfig, LargeBlockKDepth) {
-    // Llama-70B TP8 w1 prefill (bf16 x bfp4, LoFi), with the L1 budget the device reported
+TEST(MatmulAutoConfig, CostlyKBlocksExamples) {
+    // Llama-70B TP8 w1 prefill (bf16 x bfp4, LoFi), with the L1 budget the device reported: block-float B, so 2D
+    // K blocks are costly and K is split into at most max_costly_k_blocks blocks where L1 allows
     auto p = make_matmul(1, 1, 2048, 8192, 3584, tt::DataFormat::Bfp4_b);
     p.math_fidelity = MathFidelity::LoFi;
     auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), 1377056);
     auto chosen = choose(p, hw);
     ASSERT_TRUE(chosen.has_value());
     EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast2D));
-    EXPECT_GT(
-        chosen->blocking.out_block_h * chosen->blocking.out_block_w,
-        HeuristicBlocking::Params{}.tuned.large_block_tiles);
-    EXPECT_EQ(chosen->blocking.in0_block_w, 16u);
-    // 1x4 blocks: max_in0_block_w would give 8, but 2D goes no shallower than legacy's Kt / grid width = 16
+    // 256 x 4096 x 1024 bfp8: 1x4 blocks, where max_in0_block_w alone would give 8; Kt = 128 in at most 8 blocks
     p = make_matmul(1, 1, 256, 4096, 1024, tt::DataFormat::Bfp8_b);
     hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
     chosen = choose(p, hw);
@@ -412,9 +409,11 @@ TEST(MatmulAutoConfig, LargeBlockKDepth) {
     EXPECT_EQ(chosen->blocking.in0_block_w, 16u);
 }
 
-// Interleaved 2D goes no shallower than the legacy selection's K depth (Kt / grid width), with the same
-// output blocks, where L1 allows, unless packer L1 accumulation is on and both inputs are 16-bit
-TEST(MatmulAutoConfig, TwoDKDepthAtLeastLegacy) {
+// K depth goes beyond max_in0_block_w only for interleaved 2D whose K blocks are costly (a block-float input, or
+// packer L1 accumulation off with a block at least 2 tiles on each side), and then no deeper than Kt split into
+// max_costly_k_blocks blocks
+TEST(MatmulAutoConfig, TwoDCostlyKBlocks) {
+    const auto tuned = HeuristicBlocking::Params{}.tuned;
     for (const auto& arch : kArchs) {
         const auto hw = HardwareDesc::for_arch(arch.arch, arch.grid, kL1Budget);
         for (const auto& s : shapes()) {
@@ -422,28 +421,16 @@ TEST(MatmulAutoConfig, TwoDKDepthAtLeastLegacy) {
                 for (bool l1_acc : {false, true}) {
                     auto p = make_matmul(s.batch_a, s.batch_b, s.M, s.K, s.N, in1);
                     p.packer_l1_acc = l1_acc;
-                    if (l1_acc && in1 == tt::DataFormat::Float16_b) {
-                        continue;
-                    }
                     for (const auto& c : candidates(p, hw)) {
-                        if (c.family != Family::Mcast2D || p.Kt % hw.grid.x != 0) {
-                            continue;
-                        }
-                        const uint32_t legacy = p.Kt / hw.grid.x;
-                        if (c.blocking.in0_block_w >= legacy) {
-                            continue;
-                        }
-                        // Shallower only when legacy's depth (or any deeper divisor of it) doesn't fit L1
-                        for (uint32_t k = c.blocking.in0_block_w + 1; k <= legacy; ++k) {
-                            if (legacy % k != 0) {
-                                continue;
-                            }
-                            auto deeper = c.blocking;
-                            deeper.in0_block_w = k;
-                            EXPECT_GT(
-                                circular_buffer_bytes(p, hw, Family::Mcast2D, deeper, c.fuse_batch), hw.l1_cb_budget)
-                                << arch.name << " M=" << s.M << " K=" << s.K << " N=" << s.N << " k=" << k;
-                        }
+                        const auto& b = c.blocking;
+                        const bool costly =
+                            c.family == Family::Mcast2D &&
+                            (in1 == tt::DataFormat::Bfp8_b || (!l1_acc && std::min(b.out_block_h, b.out_block_w) >= 2));
+                        const uint32_t cap =
+                            costly ? std::max(tuned.max_in0_block_w, div_up(p.Kt, tuned.max_costly_k_blocks))
+                                   : tuned.max_in0_block_w;
+                        EXPECT_LE(b.in0_block_w, cap) << arch.name << " M=" << s.M << " K=" << s.K << " N=" << s.N
+                                                      << " in1=" << static_cast<int>(in1) << " l1_acc=" << l1_acc;
                     }
                 }
             }
