@@ -1113,6 +1113,26 @@ def test_untilize_with_unpadding_zero_volume(shape, device):
     assert result.numel() == 0
 
 
+# The empty output is allocated, not filled: going through a host tensor would upload to the
+# device, and writes are rejected outright during trace capture
+# (fd_mesh_command_queue.cpp: "Writes are not supported during trace capture").
+def test_untilize_with_unpadding_zero_volume_in_trace_capture(device):
+    torch_input = torch.rand((2, 3, 0), dtype=torch.bfloat16)
+    tilized = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Compile outside the capture first, as any traced op requires.
+    ttnn.to_layout(tilized, ttnn.ROW_MAJOR_LAYOUT)
+
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    ttnn.to_layout(tilized, ttnn.ROW_MAJOR_LAYOUT)
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+
+    # Replaying it is the real model scenario; releasing stops the trace leaking into later tests
+    # that share the device fixture.
+    ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+    ttnn.release_trace(device, trace_id)
+
+
 # An empty input carries no element to unpad into a non-empty output. to_layout never asks for one
 # (it passes the wrapped sentinel for an empty dim), but a direct caller can, and the empty path
 # skips the device operation's validation - so the op has to reject it rather than invent zeros.
@@ -1123,3 +1143,85 @@ def test_untilize_with_unpadding_zero_volume_rejects_nonempty_output(device, exp
     # output_end is inclusive, so [0, 31] asks for a [1, 32] output out of an empty input.
     with expect_error(RuntimeError, "zero-volume input requires a zero-volume output"):
         ttnn.untilize_with_unpadding(tilized, ttnn.Shape([0, 31]))
+
+
+# A sharded empty input is the case that routes to ttnn::untilize rather than
+# untilize_with_unpadding, because its padded shape already equals its logical one. The early
+# return feeds memory_config.value_or(input.memory_config()) into TensorLayout, so this is also the
+# check that a shard spec can be carried on a zero-volume shape at all.
+# Note the tensor has to be built by handing the sharded config to from_torch: routing an existing
+# empty tensor through ttnn.to_memory_config segfaults, which is a separate zero-volume defect in
+# that op.
+@pytest.mark.parametrize("shape", [(0, 64), (0, 32)])
+def test_untilize_with_unpadding_zero_volume_sharded(shape, device):
+    # The shard width has to match the tensor's own width, or from_torch rejects the pairing
+    # before the op is ever reached.
+    sharded_config = ttnn.create_sharded_memory_config(
+        shape=[32, shape[-1]],
+        core_grid=ttnn.CoreGrid(y=1, x=1),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+    tilized = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sharded_config,
+    )
+    assert tilized.memory_config().is_sharded()
+
+    untilized = ttnn.to_layout(tilized, ttnn.ROW_MAJOR_LAYOUT)
+
+    result = ttnn.to_torch(untilized)
+    assert result.shape == torch_input.shape
+    assert result.numel() == 0
+
+
+# The empty output is allocated with the input's tensor topology. Filling it through a host tensor
+# instead uploads a single shard, which the mesh then replicates - silently turning a sharded input
+# into a replicated output. Verified against that: with the host-upload version these cases come
+# back as PlacementReplicate() while the input is PlacementShard(0).
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 2), id="1x2_mesh")], indirect=True)
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (2, 0),  # empty, shardable along dim 0
+        (2, 3, 0),  # empty last dim, shardable along dim 0
+    ],
+)
+def test_untilize_with_unpadding_zero_volume_preserves_mesh_topology(mesh_device, shape):
+    if mesh_device.get_num_devices() < 2:
+        pytest.skip("needs at least 2 devices to tell a sharded topology from a replicated one")
+
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+    tilized = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+    topology_in = str(tilized.tensor_topology())
+
+    untilized = ttnn.to_layout(tilized, ttnn.ROW_MAJOR_LAYOUT)
+
+    assert str(untilized.tensor_topology()) == topology_in
+
+
+# Rank 0 is a scalar, not an empty tensor: with no dimensions its volume is the empty product, 1,
+# so it never reaches the zero-volume guard. A rank-0 *empty* tensor cannot be built for the same
+# reason. Kept as a sanity check because nothing else in the ttnn tests builds a rank-0 tensor.
+def test_untilize_with_unpadding_rank_0(device):
+    torch_input = torch.rand((), dtype=torch.bfloat16)
+    assert torch_input.numel() == 1
+
+    tilized = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    assert tilized.logical_volume() == 1
+
+    untilized = ttnn.to_layout(tilized, ttnn.ROW_MAJOR_LAYOUT)
+
+    result = ttnn.to_torch(untilized)
+    assert result.shape == torch_input.shape
+    assert_equal(result, torch_input)
