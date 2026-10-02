@@ -333,7 +333,7 @@ ALWI void reduce_accumulate_via_add(
     }
 
     // The auxiliary CB is never popped here. The layout is [mask, zero] for a
-    // partial axis and [zero] otherwise; an optional output mask follows them.
+    // partial axis and [zero] otherwise.
     const uint32_t zero_idx = auxiliary_tile_offset + (has_partial ? 1u : 0u);
     const uint32_t required_aux_tiles = zero_idx + 1u;
     if constexpr (has_accum) {
@@ -1456,6 +1456,98 @@ ALWI void reduce(
         // Quasar uses the input metadata to restore its MXFP4 source-format
         // override. The actual input need not occupy the default buffer 0.
         reduce_uninit(input_dfb_id);
+    }
+}
+
+namespace detail {
+
+template <typename Call, typename PostReduceOp>
+ALWI void reduce_planned_variant(PostReduceOp post_reduce_op) {
+    auto shape = ReduceInputBlockShape::of(Call::rows, Call::columns, Call::batches);
+    auto layout = Call::row_stride == 0 ? ReduceInputMemoryLayout::contiguous()
+                                        : ReduceInputMemoryLayout::with_row_stride(Call::row_stride);
+    if constexpr (Call::is_tail) {
+        static_assert(
+            Call::reduce_dim != ReduceDim::REDUCE_SCALAR ||
+                (!should_pop(Call::input_policy) && Call::batches == 1 && Call::logical_h % 32 == 0 &&
+                 Call::logical_w == Call::columns * 32),
+            "HW tails require resident whole tile rows at the full width, in a single batch");
+        shape = ReduceInputBlockShape::of((Call::logical_h + 31) / 32, (Call::logical_w + 31) / 32, Call::batches);
+        if constexpr (!should_pop(Call::input_policy)) {
+            // A resident tail keeps the pitches of the full block it lives in.
+            constexpr uint32_t row_pitch = Call::row_stride == 0 ? Call::columns : Call::row_stride;
+            layout = ReduceInputMemoryLayout::with_strides(row_pitch, Call::rows * row_pitch);
+        }
+    }
+    auto post_scale = [&](uint32_t dst_index) {
+        if constexpr (Call::post_scale_bits != ttnn::kernel_lib::reduce_plan_args::float_one_bits) {
+            constexpr DataFormat input_format = static_cast<DataFormat>(unpack_src_format[Call::input_cb_id]);
+            reduce_post_mul_tile<input_format>(dst_index, Call::post_scale_bits);
+        }
+        post_reduce_op(dst_index);
+    };
+
+    auto issue = [&](auto accumulate, auto post_op) {
+        reduce<
+            Call::reduce_type,
+            Call::reduce_dim,
+            Call::input_cb_id,
+            Call::auxiliary_cb_id,
+            Call::output_cb_id,
+            Call::input_policy,
+            Call::reconfig_mode,
+            Call::fp32_mode,
+            Call::algorithm,
+            Call::within_tile,
+            Call::reduce_factor>(
+            shape,
+            layout,
+            accumulate,
+            post_op,
+            Call::partial_mode,
+            Call::output_chunk_tiles,
+            Call::auxiliary_tile_offset);
+    };
+
+    // A NoOp post operation lets AccumulateViaAdd keep its SFPU reduction state across outputs.
+    constexpr bool trivial_post_op = Call::post_scale_bits == ttnn::kernel_lib::reduce_plan_args::float_one_bits &&
+                                     std::is_same_v<PostReduceOp, NoOp>;
+    auto final_post_op = [&]() {
+        if constexpr (trivial_post_op) {
+            return NoOp{};
+        } else {
+            return post_scale;
+        }
+    };
+
+    if constexpr (Call::accumulation_mode == ttnn::kernel_lib::ReduceAccumulationMode::None) {
+        issue(NoAccumulation{}, final_post_op());
+    } else if constexpr (Call::accumulation_mode == ttnn::kernel_lib::ReduceAccumulationMode::Final) {
+        issue(
+            Accumulate::at_last(Call::accumulator_cb_id, Call::accumulation_index).with_reload(Call::reload_mode),
+            final_post_op());
+    } else {
+        static_assert(
+            Call::accumulation_mode == ttnn::kernel_lib::ReduceAccumulationMode::Intermediate,
+            "Unknown planned reduction accumulation mode");
+        issue(Accumulate::at(Call::accumulator_cb_id, Call::accumulation_index).with_reload(Call::reload_mode), NoOp{});
+    }
+}
+
+}  // namespace detail
+
+template <typename Call, typename PostReduceOp>
+ALWI void reduce(PostReduceOp post_reduce_op) {
+    if constexpr (Call::has_tail_variant) {
+        // One compiled call serves the whole grid; the runtime override selects the tail's traversal,
+        // masks, auxiliary slice and normalization together.
+        if (Call::use_tail()) {
+            detail::reduce_planned_variant<typename Call::Tail>(post_reduce_op);
+        } else {
+            detail::reduce_planned_variant<Call>(post_reduce_op);
+        }
+    } else {
+        detail::reduce_planned_variant<Call>(post_reduce_op);
     }
 }
 

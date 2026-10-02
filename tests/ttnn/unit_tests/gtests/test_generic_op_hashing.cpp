@@ -119,3 +119,33 @@ TEST(GenericOpNamedArgsHash, ValueOnlyDifferenceKeepsHash) {
     EXPECT_EQ(program_hash(a), program_hash(b))
         << "Named-arg values (and per-core core count) must not change the generic-op program hash";
 }
+
+TEST(GenericOpRuntimeArgsHash, PerCoreLayoutDeterminesCacheKey) {
+    using namespace genop_named_args_hash_test;
+    for (bool use_metal_hash : {false, true}) {
+        SCOPED_TRACE(use_metal_hash ? "Metal descriptor hash" : "Generic-op descriptor hash");
+        auto hash = [use_metal_hash](const ProgramDescriptor& descriptor) {
+            return use_metal_hash ? std::hash<ProgramDescriptor>{}(descriptor)
+                                  : ttnn::operations::generic::compute_program_descriptor_hash(descriptor);
+        };
+        ProgramDescriptor full_and_tail{
+            .kernels = {KernelDescriptor{
+                .kernel_source = "reduce.cpp",
+                .core_ranges = CoreRangeSet(CoreRange(kCore0, kCore1)),
+                .runtime_args = {{kCore0, {0}}, {kCore1, {32, 17, 1}}},
+                .config = ComputeConfigDescriptor{},
+            }}};
+        auto different_values = full_and_tail;
+        different_values.kernels[0].runtime_args[1].second = {16, 9, 2};
+        EXPECT_EQ(hash(full_and_tail), hash(different_values));
+
+        // Moving the tail preserves the maximum length but changes each core's bounds.
+        auto moved_tail = full_and_tail;
+        moved_tail.kernels[0].runtime_args = {{kCore0, {32, 17, 1}}, {kCore1, {0}}};
+        EXPECT_NE(hash(full_and_tail), hash(moved_tail));
+
+        auto longer_record = full_and_tail;
+        longer_record.kernels[0].runtime_args[1].second.push_back(7);
+        EXPECT_NE(hash(full_and_tail), hash(longer_record));
+    }
+}

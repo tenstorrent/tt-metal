@@ -10,6 +10,7 @@
 #include "api/compute/reduce.h"
 #include "ttnn/cpp/ttnn/kernel_lib/common_types.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_types.hpp"
 /**
  * @file reduce_helpers_compute.hpp
@@ -64,6 +65,55 @@
  * - Post-reduce operations (e.g., recip_tile for softmax)
  * - Accumulation for block-wise reduction
  * - The AccumulateViaAdd algorithm and partial (non-tile-aligned) reductions
+ *
+ * Host-planned Usage:
+ *   New integrations should let the host planner (kernel_lib/host/reduce_host.hpp) choose every
+ *   parameter and issue reduce<Call>(), where Call is one independently decoded
+ *   ttnn::kernel_lib::ReduceCallArgs. The host appends this flat suffix after the compute kernel's
+ *   own compile-time arguments:
+ *
+ *   [call_count][call_0][call_1]...[call_(call_count - 1)]
+ *
+ *   Include reduce_plan_args.hpp alongside this header for the device views:
+ *
+ *   constexpr uint32_t reduce_args_offset = KERNEL_OWNED_CTA_COUNT;
+ *   constexpr uint32_t call_count = get_compile_time_arg_val(reduce_args_offset);
+ *   constexpr uint32_t first_call_offset =
+ *       reduce_args_offset + ttnn::kernel_lib::reduce_plan_args::call_count_word_count;
+ *
+ *   template <uint32_t I>
+ *   using CallAt = ttnn::kernel_lib::ReduceCallAtT<first_call_offset, I>;
+ *
+ *   template <uint32_t I = 0>
+ *   ALWI void issue_calls() {
+ *       if constexpr (I < call_count) {
+ *           // Caller-controlled input preparation or fused work may run here.
+ *           compute_kernel_lib::reduce<CallAt<I>>();
+ *           issue_calls<I + 1>();
+ *       }
+ *   }
+ *
+ *   void kernel_main() {
+ *       using First = CallAt<0>;
+ *       compute_kernel_hw_startup(First::input_cb_id, First::output_cb_id);
+ *       issue_calls();
+ *   }
+ *
+ *   A tail-capable Call carries the full and planned tail alternatives and the runtime override
+ *   offset. reduce<Call>() selects between them internally: [0] chooses full work; the planned
+ *   [height, width, batches] chooses tail work, including its auxiliary slice and AVG
+ *   normalization. The same call type and compiled kernel run on every core of the grid.
+ *   Output lanes beyond the valid non-reduced extent are unspecified; a consumer that needs them
+ *   to be zero masks its own output.
+ *
+ *   call_count only bounds the walk. Never infer accumulation, final-call, or partial-tile behavior
+ *   from I: Call carries all of it explicitly. Calls may repeat an input CB ID; the kernel may refill
+ *   or reuse that CB between calls.
+ *
+ *   The matching dataflow kernel (by convention the writer) must materialize the planning unit's one
+ *   aggregate auxiliary recipe with dataflow_kernel_lib::prepare_reduce_auxiliary_tiles(). The compute
+ *   kernel never decodes that recipe; Call::partial_mode and Call::auxiliary_tile_offset are already
+ *   selected by the planner.
  */
 
 namespace compute_kernel_lib {
@@ -605,6 +655,24 @@ ALWI void reduce(
     // REDUCE_COL only: independent output columns held in DEST together. 0 selects the DEST limit.
     std::uint32_t output_group = 0,
     std::uint32_t auxiliary_tile_offset = 0);
+
+/**
+ * @brief Issue one host-planned tiled reduce call.
+ *
+ * Lowers every planner-selected field of `Call` into the explicit reduce() above, including
+ * accumulation, post-scaling, partial handling, the output group and the shared auxiliary-CB slice.
+ *
+ * It does not perform compute-kernel startup or any surrounding CB preparation. The kernel owns when
+ * this call runs and may perform arbitrary work, including refilling a reused input CB, between
+ * planned calls.
+ *
+ * An optional caller post operation runs on each completed output tile after the plan's
+ * post-scaling. Intermediate accumulation calls do not run it.
+ *
+ * @tparam Call A constexpr call descriptor such as ttnn::kernel_lib::ReduceCallArgs<CTA_OFFSET>.
+ */
+template <typename Call, typename PostReduceOp = NoOp>
+ALWI void reduce(PostReduceOp post_reduce_op = PostReduceOp{});
 
 }  // namespace compute_kernel_lib
 
