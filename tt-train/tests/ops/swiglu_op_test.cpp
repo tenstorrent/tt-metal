@@ -11,7 +11,9 @@
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/ops/swiglu_elemwise_bw/device/swiglu_elemwise_bw_device_operation.hpp"
 #include "metal/ops/swiglu_elemwise_bw/swiglu_elemwise_bw.hpp"
+#include "ttnn/mesh_device_operation_adapter.hpp"
 
 class SwiGLUForwardTest : public ::testing::Test {
 protected:
@@ -467,6 +469,63 @@ TEST_F(SwiGLUBackwardTest, BackwardAccuracy_2x1x32x128) {
 TEST_F(SwiGLUBackwardTest, BackwardAccuracy_4x1x64x256) {
     CompareSwiGLUBackwardAgainstReference({4, 1, 64, 256}, 256);
 }
+
+TEST_F(SwiGLUBackwardTest, Validation_RejectsTensorsOnDifferentMeshDevicesBeforeDispatch) {
+    using Operation = ttml::metal::ops::swiglu_elemwise_bw::device::SwigluElemwiseBwDeviceOperation;
+    using Adapter = ttnn::device_operation::MeshDeviceOperationAdapter<Operation>;
+
+    if (tt::tt_metal::GetNumAvailableDevices() < 2U) {
+        GTEST_SKIP() << "requires two devices to construct tensors with different MeshDevice owners";
+    }
+
+    auto* local_device = &ttml::autograd::ctx().get_device();
+    auto foreign_device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(1);
+    const auto host_tensor = xt::zeros<float>({1U, 1U, 32U, 32U});
+    const auto local = ttml::core::from_xtensor(host_tensor, local_device);
+    const auto foreign = ttml::core::from_xtensor(host_tensor, foreign_device.get());
+
+    const Operation::operation_attributes_t attributes{};
+    const Operation::tensor_args_t local_args{
+        .linear1 = local,
+        .gate = local,
+        .dL_dprod = local,
+        .preallocated_dL_dlinear1 = local,
+        .preallocated_dL_dgate = local};
+
+    const auto expect_valid = [&](const Operation::tensor_args_t& args) {
+        EXPECT_NO_THROW(Operation::validate_on_program_cache_miss(attributes, args));
+        EXPECT_NO_THROW(Adapter::validate_on_program_cache_hit(attributes, args));
+    };
+    const auto expect_invalid = [&](const Operation::tensor_args_t& args) {
+        EXPECT_THROW(Operation::validate_on_program_cache_miss(attributes, args), std::exception);
+        EXPECT_THROW(Adapter::validate_on_program_cache_hit(attributes, args), std::exception);
+    };
+
+    expect_valid(local_args);
+
+    auto foreign_gate_args = local_args;
+    foreign_gate_args.gate = foreign;
+    expect_invalid(foreign_gate_args);
+
+    auto foreign_upstream_args = local_args;
+    foreign_upstream_args.dL_dprod = foreign;
+    expect_invalid(foreign_upstream_args);
+
+    auto foreign_dlinear1_args = local_args;
+    foreign_dlinear1_args.preallocated_dL_dlinear1 = foreign;
+    expect_invalid(foreign_dlinear1_args);
+
+    auto foreign_dgate_args = local_args;
+    foreign_dgate_args.preallocated_dL_dgate = foreign;
+    expect_invalid(foreign_dgate_args);
+
+    // The production backward intentionally aliases the first output with linear1.
+    auto alias_args = local_args;
+    alias_args.preallocated_dL_dlinear1 = alias_args.linear1;
+    alias_args.preallocated_dL_dgate = std::nullopt;
+    expect_valid(alias_args);
+}
+
 TEST_F(SwiGLUBackwardTest, NIGHTLY_BackwardAccuracy_2x1x128x512) {
     CompareSwiGLUBackwardAgainstReference({2, 1, 128, 512}, 512);
 }

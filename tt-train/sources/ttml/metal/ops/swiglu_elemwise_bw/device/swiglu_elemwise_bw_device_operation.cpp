@@ -13,13 +13,18 @@ namespace ttml::metal::ops::swiglu_elemwise_bw::device {
 
 void SwigluElemwiseBwDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
+    const auto& linear1 = tensor_args.linear1;
+    auto check_tensor = [&linear1](const ttnn::Tensor& tensor, const std::string& name) {
         TT_FATAL(
             tensor.storage_type() == ttnn::StorageType::DEVICE,
             "SwigluElemwiseBw requires {} on Device. Storage type: {}",
             name,
             enchantum::to_string(tensor.storage_type()));
         TT_FATAL(tensor.buffer() != nullptr, "SwigluElemwiseBw: {} buffer is null", name);
+        TT_FATAL(
+            tensor.device() == linear1.device(),
+            "SwigluElemwiseBw requires {} to be on the same MeshDevice as linear1",
+            name);
         TT_FATAL(
             tensor.layout() == tt::tt_metal::Layout::TILE,
             "SwigluElemwiseBw requires TILE layout. {} layout: {}",
