@@ -3542,6 +3542,33 @@ def _reset_devices(devices: str) -> str:
     return "device reset (%s)" % last
 
 
+def _agent_module(name: str, standalone_name: str):
+    """agent/<name>.py, imported the way THIS process can see it, as a package module wherever possible.
+
+    Three routes, in order: `agent.<name>` (the engine's own directory is on sys.path), then the same
+    module under the package this file was imported from (`<pkg>.agent.<name>`, derived from
+    __package__ -- the supervisor in commands/optimize.py imports run.py by its full dotted name with
+    only the repo root on sys.path), then by file path. The last route gives the module no package,
+    so its own relative imports fail: that is how the supervisor's reclaim printed "reclaim fell
+    back to reset (attempted relative import with no known parent package)" and fell back to a bare
+    tt-smi -r instead of the reap-and-verify reset (Qwen-Image-Edit, 2026-09-30)."""
+    import importlib
+
+    _pkg = (__package__ or "").rpartition(".")[0]
+    for _dotted in ["agent." + name] + (["%s.agent.%s" % (_pkg, name)] if _pkg else []):
+        try:
+            return importlib.import_module(_dotted)
+        except Exception:  # noqa: BLE001 -- not importable this way; try the next
+            continue
+    import importlib.util as _ilu
+
+    _p = Path(__file__).resolve().parents[1] / "agent" / ("%s.py" % name)
+    _spec = _ilu.spec_from_file_location(standalone_name, str(_p))
+    _m = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_m)
+    return _m
+
+
 def _dr():
     """The shared device-recovery primitive (agent/device_recovery.py), imported lazily and by path
     because run.py is itself loaded by path from perf_mcp/optimize with a bare sys.path."""
@@ -3550,15 +3577,7 @@ def _dr():
         return _DR_MOD
     except NameError:
         pass
-    try:
-        from agent import device_recovery as _m
-    except Exception:  # noqa: BLE001
-        import importlib.util as _ilu
-
-        _p = Path(__file__).resolve().parents[1] / "agent" / "device_recovery.py"
-        _spec = _ilu.spec_from_file_location("tt_device_recovery", str(_p))
-        _m = _ilu.module_from_spec(_spec)
-        _spec.loader.exec_module(_m)
+    _m = _agent_module("device_recovery", "tt_device_recovery")
     globals()["_DR_MOD"] = _m
     return _m
 
@@ -3571,15 +3590,7 @@ def _ap():
         return _AP_MOD
     except NameError:
         pass
-    try:
-        from agent import agent_provider as _m
-    except Exception:  # noqa: BLE001
-        import importlib.util as _ilu
-
-        _p = Path(__file__).resolve().parents[1] / "agent" / "agent_provider.py"
-        _spec = _ilu.spec_from_file_location("tt_agent_provider", str(_p))
-        _m = _ilu.module_from_spec(_spec)
-        _spec.loader.exec_module(_m)
+    _m = _agent_module("agent_provider", "tt_agent_provider")
     globals()["_AP_MOD"] = _m
     return _m
 
