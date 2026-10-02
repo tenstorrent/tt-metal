@@ -4,6 +4,7 @@
 """Host-only invariants for experimental context compaction."""
 
 import copy
+import importlib.util
 import json
 import subprocess
 import sys
@@ -19,6 +20,49 @@ from probe_loop_recovery import wall_deadline
 from probe_native_eval_action import request_messages
 from replay_eval_requests import post
 from summarize_swe_suite import counter_delta
+
+
+class PrefillPrecisionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parents[1]
+        spec = importlib.util.spec_from_file_location("gemma_precision_test", root / "tt/precision_policy.py")
+        cls.policy = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.policy)
+
+    def test_schema_one_retains_fixed_prefill_contract(self):
+        baseline = self.policy.baseline_precision_config()
+        self.assertEqual(self.policy.resolve_precision_config(baseline), baseline)
+        baseline["layer_types"]["full_attention"]["fixed"]["prefill_expert_down_dtype"] = "bfloat8_b"
+        with self.assertRaisesRegex(ValueError, "Unsupported fixed"):
+            self.policy.resolve_precision_config(baseline)
+
+    def test_schema_two_changes_only_explicit_prefill_weight_groups(self):
+        original = self.policy.baseline_precision_config()
+        upgraded = self.policy.baseline_precision_config(2)
+        for kind in upgraded["layer_types"]:
+            layer = upgraded["layer_types"][kind]
+            for key in self.policy.PREFILL_WEIGHT_FIELDS:
+                self.assertEqual(layer.pop(key), original["layer_types"][kind]["fixed"][key])
+                layer["fixed"][key] = original["layer_types"][kind]["fixed"][key]
+        upgraded["schema_version"] = 1
+        self.assertEqual(upgraded, original)
+        candidate = self.policy.resolve_precision_config(
+            {"schema_version": 2, "layer_overrides": {"5": {"prefill_expert_down_dtype": "bfloat8_b"}}}
+        )
+        layer = self.policy.layer_precision_config(candidate, 5, "full_attention")
+        self.assertEqual(layer["prefill_expert_down_dtype"], "bfloat8_b")
+        self.assertEqual(layer["fixed"]["prefill_expert_fidelity"], "LoFi")
+        self.assertEqual(layer["kv_cache_dtype"], "bfloat8_b")
+
+    def test_schema_two_rejects_unimplemented_changes(self):
+        for override in (
+            {"prefill_expert_down_dtype": "float32"},
+            {"fixed": {"prefill_expert_fidelity": "HiFi4"}},
+            {"prefill_expert_unknown": "bfloat8_b"},
+        ):
+            with self.assertRaisesRegex(ValueError, "Unknown|Unsupported"):
+                self.policy.resolve_precision_config({"schema_version": 2, "layer_types": {"full_attention": override}})
 
 
 class SuiteCounterTests(unittest.TestCase):
@@ -87,6 +131,37 @@ class CompactionTests(unittest.TestCase):
 
 
 class WeightControlTests(unittest.TestCase):
+    def test_prefill_control_is_explicit_and_preserves_source(self):
+        root = Path(__file__).resolve().parents[1]
+        source = root / "doc/datatype_sweep/selected_precision_config.json"
+        original = source.read_bytes()
+        with tempfile.TemporaryDirectory(prefix="gemma4-prefill-control-test-") as directory:
+            output = Path(directory) / "policy.json"
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(root / "tools/prepare_eval_weight_control.py"),
+                    "--source",
+                    str(source),
+                    "--output",
+                    str(output),
+                    "--prefill-bfp8",
+                ],
+                check=True,
+                capture_output=True,
+            )
+            candidate = json.loads(output.read_text())
+            manifest = json.loads(output.with_suffix(".manifest.json").read_text())
+        self.assertEqual(source.read_bytes(), original)
+        self.assertEqual(candidate["schema_version"], 2)
+        self.assertEqual(len(manifest["changes"]), 96)
+        self.assertEqual(len(manifest["schema_migrations"]), 4)
+        for layer in candidate["layer_types"].values():
+            for key in ("prefill_expert_gate_dtype", "prefill_expert_down_dtype"):
+                self.assertEqual(layer[key], "bfloat8_b")
+                self.assertNotIn(key, layer["fixed"])
+            self.assertEqual(layer["fixed"]["prefill_expert_fidelity"], "LoFi")
+
     def test_only_configurable_weights_change(self):
         root = Path(__file__).resolve().parents[1]
         source = root / "doc/datatype_sweep/selected_precision_config.json"

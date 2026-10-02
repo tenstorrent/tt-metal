@@ -531,12 +531,13 @@ class _DramSharedMLP(_SharedMLP):
 class _ExpertParallelExperts(OptimizedExperts):
     """Own 32 complete experts per rank and scan only their routing mask."""
 
-    def __init__(self, state_dict, config, mesh_device, sliding):
+    def __init__(self, state_dict, config, mesh_device, sliding, gate_dtype=None, down_dtype=ttnn.bfloat4_b):
         import torch
 
         if config.num_experts != 128 or config.moe_intermediate_size != 704:
             raise ValueError("EP4 requires 128 experts with intermediate width 704")
         width = config.moe_intermediate_size
+        gate_dtype = gate_dtype if gate_dtype is not None else (ttnn.bfloat8_b if sliding else ttnn.bfloat4_b)
         mapper = ttnn.ShardTensorToMesh(mesh_device, dim=1)
 
         def weight(value):
@@ -563,8 +564,8 @@ class _ExpertParallelExperts(OptimizedExperts):
         packed = PackedExperts(source, fused_gelu=True, prefill_batch_tokens=32, matmul_mix=True, mix_fp32=sliding)
         super().__init__(
             packed,
-            gate_dtype=ttnn.bfloat8_b if sliding else ttnn.bfloat4_b,
-            down_dtype=ttnn.bfloat4_b,
+            gate_dtype=gate_dtype,
+            down_dtype=down_dtype,
             block_w=22,
             gate_block_w=44,
             fidelity=ttnn.MathFidelity.LoFi,
@@ -573,8 +574,8 @@ class _ExpertParallelExperts(OptimizedExperts):
             down_grid=(11, 8),
             active_prefill=True,
             prefill_tokens=32,
-            prefill_dtype=ttnn.bfloat8_b if sliding else ttnn.bfloat4_b,
-            prefill_down_dtype=ttnn.bfloat4_b,
+            prefill_dtype=gate_dtype,
+            prefill_down_dtype=down_dtype,
             prefill_fidelity=ttnn.MathFidelity.LoFi,
             expert_fused_gelu=True,
             activation_dtype=None if sliding else ttnn.bfloat8_b,
@@ -1068,14 +1069,24 @@ class MultichipDecoder(OptimizedDecoder):
         )
         experts.mix_memory = ttnn.L1_MEMORY_CONFIG
         experts.enable_indexed_decode(self.layer.moe.router)
+        prefill_weight_kwargs = (
+            {
+                "gate_dtype": policy_dtype(precision_config["prefill_expert_gate_dtype"]),
+                "down_dtype": policy_dtype(precision_config["prefill_expert_down_dtype"]),
+            }
+            if precision_config is not None and "prefill_expert_gate_dtype" in precision_config
+            else {}
+        )
         self.layer.moe.experts = (
-            _ExpertParallelExperts(state_dict, config, mesh_device, sliding) if expert_parallel else experts
+            _ExpertParallelExperts(state_dict, config, mesh_device, sliding, **prefill_weight_kwargs)
+            if expert_parallel
+            else experts
         )
         if hybrid_experts:
             if expert_parallel:
                 raise ValueError("Select EP-only or hybrid experts, not both")
             self.layer.moe.experts = _HybridExperts(
-                _ExpertParallelExperts(state_dict, config, mesh_device, sliding), experts
+                _ExpertParallelExperts(state_dict, config, mesh_device, sliding, **prefill_weight_kwargs), experts
             )
         self.hybrid_experts = hybrid_experts
         self.expert_parallel = expert_parallel
@@ -1173,6 +1184,9 @@ class MultichipDecoder(OptimizedDecoder):
             "kv_cache_dtype": dtype_name(self.kv_cache_dtype),
             "fixed": fixed,
         }
+        if "prefill_expert_gate_dtype" in self.selected_precision:
+            for key in ("prefill_expert_gate_dtype", "prefill_expert_down_dtype"):
+                summary[key] = fixed.pop(key)
         assert_precision_matches(summary, self.selected_precision, f"layer.{self.layer_idx}")
         return summary
 

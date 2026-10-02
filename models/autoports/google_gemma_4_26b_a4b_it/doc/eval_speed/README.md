@@ -21,6 +21,10 @@ also fails. A task-independent focused-completion prompt is being tested.
 That prompt produces **clean native Astropy submission in 655.569 seconds**,
 reward 1, all 427 tests passing. Four original tasks now have clean passing
 evidence across declared policies, not one validated all-five configuration.
+The focused policy **fails its Django regression** (900-second timeout, reward
+0), so it is rejected as a suite-wide default. A fresh prefill BFP8 weight
+control passes the short accuracy gate (prefill top1 .99; traced decode .98),
+but its SWE quality and long-context accuracy are not yet established.
 The [precision audit](AUTODEBUG.md) confirms fresh BFP8 weight provenance but
 identifies unchanged prefill BFP4 and untested long-context numerical quality;
 it does not establish a cache/position bug.
