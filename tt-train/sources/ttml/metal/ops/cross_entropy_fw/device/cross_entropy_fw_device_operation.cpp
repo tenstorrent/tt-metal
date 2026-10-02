@@ -52,6 +52,14 @@ void CrossEntropyForwardDeviceOperation::validate_on_program_cache_miss(
     check_tensor(input_tensor, "Input", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
     check_tensor(target_tensor, "Target", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT32);
 
+    const auto& input_tile = input_tensor.tensor_spec().tile();
+    const tt::tt_metal::Tile default_tile{};
+    TT_FATAL(
+        input_tile == default_tile && !input_tile.get_transpose_within_face() && !input_tile.get_transpose_of_faces(),
+        "CrossEntropyForward: input must use the default non-transposed {}x{} tile",
+        tt::constants::TILE_HEIGHT,
+        tt::constants::TILE_WIDTH);
+
     // The reader walks one row-major target page per batch-channel slice of the input
     // (page = tile_row / Ht over NC * Ht rows) and sizes each page read from the target's
     // inner dim, while the program cache is keyed on the input shape alone. Pinning both the

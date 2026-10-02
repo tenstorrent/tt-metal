@@ -15,6 +15,7 @@
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/ops/cross_entropy_bw/device/cross_entropy_bw_device_operation.hpp"
 #include "ops/losses.hpp"
 #include "ops/unary_ops.hpp"
 #include "test_utils/random_data.hpp"
@@ -87,6 +88,25 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Small_Backward) {
     auto result_xtensor = core::to_xtensor(result);
     assert((result_xtensor.shape() == expected_result.shape()));
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
+}
+
+TEST_F(CrossEntropyBackwardTest, RejectsNonDefaultInputTileBeforeDispatch) {
+    using namespace ttml::metal::ops::cross_entropy_bw::device;
+
+    auto* device = &ttml::autograd::ctx().get_device();
+    const auto input = ttnn::create_device_tensor(
+        tt::tt_metal::TensorSpec(
+            ttnn::Shape({1U, 1U, 32U, 32U}),
+            tt::tt_metal::TensorLayout(
+                ttnn::DataType::BFLOAT16,
+                tt::tt_metal::PageConfig(ttnn::Layout::TILE, tt::tt_metal::Tile({16U, 32U})),
+                ttnn::DRAM_MEMORY_CONFIG)),
+        device);
+    const auto target = ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
+        xt::zeros<uint32_t>({1U, 32U}), device, ttnn::Layout::ROW_MAJOR);
+
+    EXPECT_ANY_THROW(CrossEntropyBackwardDeviceOperation::validate_on_program_cache_miss(
+        CrossEntropyBackwardParams{}, CrossEntropyBackwardInputs{input, target, std::nullopt}));
 }
 
 TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Batch) {
