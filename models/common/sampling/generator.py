@@ -346,7 +346,7 @@ class SamplingGenerator:
         )
         if self._penalties_active and not getattr(self.tt_sampling, "_allow_penalties_sampling", True):
             # Rails that skip compiling the penalties program (precompile loop
-            # above) must also never EXECUTE it: requests with penalties would
+            # below) must also never EXECUTE it: requests with penalties would
             # otherwise crash in apply_penalties. Ignore them, loudly once.
             if not getattr(self, "_penalties_suppressed_logged", False):
                 self._penalties_suppressed_logged = True

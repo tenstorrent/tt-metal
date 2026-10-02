@@ -23,6 +23,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
+from models.demos.gemma4.config import gemma4_kv_bfp8_enabled
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
@@ -556,7 +557,7 @@ class Gemma4Model:
                     # pool DRAM (the serving 32K-rung rim OOM) and decode's
                     # KV-read bytes (roofline L1: ~43 -> ~20 ms/step at full
                     # ladder occupancy). Default off until needle-gated.
-                    cache_dtype=(ttnn.bfloat8_b if os.environ.get("GEMMA4_KV_BFP8", "0") == "1" else ttnn.bfloat16),
+                    cache_dtype=(ttnn.bfloat8_b if gemma4_kv_bfp8_enabled() else ttnn.bfloat16),
                     max_num_blocks_override=max_num_blocks_override,
                 )
                 layer.self_attn.kv_cache = kv_cache
@@ -601,13 +602,12 @@ class Gemma4Model:
         # meshes where each row samples users independently (e.g. Galaxy 4x8).
         #
         # tt_transformers' Generator reads this attribute via _get_sampling_contract.
-        _fracture_env = os.environ.get("GEMMA4_GALAXY_FRACTURE", "0").lower() in ("1", "true", "yes")
-        _is_2d = is_mesh and mesh_device.shape[0] > 1 and mesh_device.shape[1] > 1
+        _fractured = bool(mesh_config is not None and getattr(mesh_config, "weight_fracture", False))
         # One-instance fracture: rows are the vocab/TP axis, not sampling groups
         # — EXCEPT under lanes, where each lane column samples its own 32 rows
         # independently (the row-sharded sampling_dp contract, lane-major).
         _lanes_on = bool(mesh_config is not None and getattr(mesh_config, "lane_sharded", False))
-        if _fracture_env and _is_2d:
+        if _fractured:
             self.sampling_dp = mesh_config.lanes if _lanes_on else 1
         else:
             self.sampling_dp = mesh_device.shape[0] if is_mesh else 1
@@ -623,7 +623,7 @@ class Gemma4Model:
         if is_mesh and tp > 1:
             per_device_padded = _compute_per_device_vocab(hf_config.vocab_size, tp)
             if per_device_padded <= 64 * 1024:
-                sampling_args = self._make_sampling_args(hf_config, mesh_device, tp)
+                sampling_args = self._make_sampling_args(hf_config, mesh_device, tp, mesh_config)
                 # Match sampling all-gather topology to Gemma4 CCLManager (Ring on
                 # BH≥8, Linear elsewhere / GEMMA4_CCL_TOPOLOGY). Without this,
                 # TTSampling defaults to Linear while model collectives use Ring.
@@ -651,26 +651,13 @@ class Gemma4Model:
                 )
                 _apply_gemma4_single_untilize_override(self.sampling.tt_sampling)
                 if bool(self.mesh_config is not None and getattr(self.mesh_config, "weight_fracture", False)):
-                    # Penalty buffers are not fracture-aware (per-chip vocab
-                    # sharding over axis 0 breaks their eltwise shapes); skip
-                    # the penalties program on the one-instance mesh. Greedy /
-                    # penalty-free sampling is unaffected; a request that sets
-                    # penalties would fail loudly in apply_penalties.
+                    # Penalty and top-k programs are not fracture-aware (per-chip
+                    # vocab sharding over the tp axis breaks their eltwise
+                    # shapes): the sampler skips compiling them and drops penalty
+                    # parameters with a one-time warning, so the one-instance mesh
+                    # samples greedy / penalty-free only.
                     self.sampling.tt_sampling._allow_penalties_sampling = False
-                    # The force-argmax all-gather must run along the vocab
-                    # (TP) axis; the sampler default of axis 1 fits (1,N)
-                    # meshes but on the (8,4) one-instance grid vocab shards
-                    # over axis 0.
-                    self.sampling.tt_sampling.sampling_all_gather_axis = self.mesh_config.tp_axis
-                    # Top-k/top-p program on the fractured mesh: the crash we
-                    # saw predated the sampling_dp/axis fixes and the shard
-                    # helpers are axis-aware, so this may already work under
-                    # the final orientation. Default keeps it OFF
-                    # (greedy-only on-device); GEMMA4_FRACTURE_TOPK=1 enables
-                    # compiling it for the A/B.
-                    self.sampling.tt_sampling._allow_topk_sampling = os.environ.get(
-                        "GEMMA4_FRACTURE_TOPK", "0"
-                    ).lower() in ("1", "true", "yes")
+                    self.sampling.tt_sampling._allow_topk_sampling = False
                 topo = getattr(self.sampling.tt_sampling, "ag_topology", None)
                 topo_name = "Ring" if topo == ttnn.Topology.Ring else "Linear"
                 logger.info(
@@ -730,8 +717,23 @@ class Gemma4Model:
         )
         ttnn.copy_host_to_device_tensor(host, self.prefill_valid_len_dev)
 
+    @property
+    def _lane_sharded(self):
+        return bool(self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False))
+
+    @property
+    def _lane_slots(self):
+        return int(getattr(self, "lane_slots", 0) or 32)
+
+    def lane_device_indices(self):
+        """Row-major device index of each lane's first chip (lanes run along ``sp_axis``)."""
+        rows, cols = (int(x) for x in self.mesh_config.mesh_shape)
+        if self.mesh_config.sp_axis == 1:
+            return list(range(cols))
+        return [r * cols for r in range(rows)]
+
     @staticmethod
-    def _make_sampling_args(hf_config, mesh_device, tp):
+    def _make_sampling_args(hf_config, mesh_device, tp, mesh_config=None):
         """Create minimal args object for SamplingGenerator/TTSampling."""
 
         class _Args:
@@ -742,22 +744,11 @@ class Gemma4Model:
         per_device_vocab = _compute_per_device_vocab(args.vocab_size, tp)
         args.padded_vocab_size = per_device_vocab * tp
         args.cluster_shape = tuple(mesh_device.shape)
-        _shape = tuple(mesh_device.shape)
-        _fracture = (
-            os.environ.get("GEMMA4_GALAXY_FRACTURE", "0").lower() in ("1", "true", "yes")
-            and _shape[0] > 1
-            and _shape[1] > 1
-        )
-        if _fracture:
-            # One-instance fracture: vocab/TP on the size-8 axis, one pooled
-            # sampler (no row sampling-DP), no llama-TG row-sharded behaviors.
-            _tp_axis = 0 if _shape[0] == 8 else 1
-            args.sampling_all_gather_axis = _tp_axis
-            _lanes_env = os.environ.get("GEMMA4_GALAXY_LANES", "0").lower() in ("1", "true", "yes")
-            # Under lanes each lane column is an independent sampling group of
-            # 32 rows; otherwise one pooled sampler (no row sampling-DP).
-            args.sampling_dp = _shape[1 - _tp_axis] if _lanes_env else 1
-            args.is_galaxy = False
+        if mesh_config is not None and getattr(mesh_config, "weight_fracture", False):
+            # One-instance fracture: vocab/TP on the tp axis; one pooled sampler
+            # unless lanes make each lane column its own sampling group.
+            args.sampling_all_gather_axis = mesh_config.tp_axis
+            args.sampling_dp = mesh_config.lanes if getattr(mesh_config, "lane_sharded", False) else 1
         else:
             args.sampling_all_gather_axis = 1  # gather across TP (column) axis
             args.sampling_dp = mesh_device.shape[0]
@@ -1622,7 +1613,7 @@ class Gemma4Model:
         single-row prefill table goes to its OWNER lane
         (``_g4_active_owner_lane``, set by the prefill wrapper from
         global_user_id) with scratch (block 0) rows elsewhere, mirroring the
-        legacy prefill lane stack so non-owner columns write sliding KV into
+        prefill lane stack so non-owner columns write sliding KV into
         the lane scratch block.
         """
         pt = page_table_torch if page_table_torch.dim() > 1 else page_table_torch.unsqueeze(0)
@@ -1632,11 +1623,11 @@ class Gemma4Model:
             out = torch.zeros((int(pt.shape[0]), w), dtype=torch.int32)
             out[:, : min(w, int(pt.shape[-1]))] = pt[:, : min(w, int(pt.shape[-1]))]
             pt = out
-        lane_sharded = bool(self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False))
+        lane_sharded = self._lane_sharded
         if not lane_sharded:
             return pt, self._replicate_to_mesh_mapper()
         lanes = self.mesh_config.lanes
-        slots = int(getattr(self, "lane_slots", 0) or 32)
+        slots = self._lane_slots
         full = lanes * slots
         rows = int(pt.shape[0])
         if rows == 1:
@@ -1728,7 +1719,7 @@ class Gemma4Model:
                     # Device shapes are PER COLUMN under lanes: an owner-stacked
                     # single-row table shards to 1 row per column, anything
                     # else pads to the frame and shards to lane_slots rows.
-                    host_b = 1 if host_b == 1 else int(getattr(self, "lane_slots", 0) or 32)
+                    host_b = 1 if host_b == 1 else self._lane_slots
                 if host_b > dev_b or host_w > dev_w:
                     needs_grow = True
                     break
@@ -1877,7 +1868,7 @@ class Gemma4Model:
 
         tokens_torch = tokens.to(torch.long)
         if lane_parallel:
-            # Lane-parallel prefill (slice 4): row i of ``tokens`` is lane i's
+            # Lane-parallel prefill: row i of ``tokens`` is lane i's
             # user; sharding rows over the lane axis lets each column embed and
             # prefill its OWN user with batch_size=1 semantics. Attention is
             # already per-column (own KV, tp-axis-only o_proj reduce) and the
@@ -1887,8 +1878,6 @@ class Gemma4Model:
             assert getattr(self.mesh_config, "lane_sharded", False), "lane_parallel requires GEMMA4_GALAXY_LANES"
             assert batch_size == 1, "lane_parallel runs single-user semantics per column"
             assert not trace_enabled, "lane_parallel prefill is eager-only"
-            # Multi-chunk lane prefill passes a pre-stacked chunk table
-            # ([lanes, rows, chunk_blocks], flattened below like page_table).
             if self.hidden_size_per_layer_input:
                 raise NotImplementedError("lane_parallel prefill does not support PLI models")
             lanes = self.mesh_config.lanes
@@ -1916,14 +1905,14 @@ class Gemma4Model:
             mesh_mapper=tok_mapper,
         )
 
-        # Lane-sharded prefill (galaxy one-instance slice 3b): every column
+        # Lane-sharded prefill (galaxy one-instance): every column
         # computes the same prefill, but only the OWNER lane's column may write
         # real KV. Callers keep passing the per-user [rows, blocks] table plus
         # ``user_id`` (lane-major global id); this stacks it [lanes, rows,
         # blocks] with the owner lane's real rows and SCRATCH rows (block 0,
         # reserved by the lane page-table convention) everywhere else, then
         # shards dim 0 over the lane axis so each column sees only its view.
-        lane_sharded = bool(self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False))
+        lane_sharded = self._lane_sharded
 
         def _lane_stack(table):
             lanes = self.mesh_config.lanes
@@ -1931,7 +1920,7 @@ class Gemma4Model:
             # Block convention, matching the decode reshape [global] ->
             # [lanes, local]: global slot s lives on lane s // lane_slots at
             # per-lane row s % lane_slots (row = slot identity for callers).
-            slots = int(getattr(self, "lane_slots", 0) or 32)
+            slots = self._lane_slots
             owner = 0 if gid is None else (int(gid) // slots) % lanes
             stacked = torch.zeros((lanes,) + tuple(table.shape), dtype=table.dtype)
             stacked[owner] = table
@@ -1941,14 +1930,16 @@ class Gemma4Model:
             # holds for prompts within a single effective block.
             return stacked.reshape(-1, stacked.shape[-1])
 
+        def _lane_table(table):
+            # Lane-parallel callers pass pre-stacked [lanes, rows, blocks] tables;
+            # flatten them the same way _lane_stack flattens an owner-stacked one.
+            if lane_parallel:
+                return table.reshape(-1, table.shape[-1])
+            return _lane_stack(table)
+
         pt_mapper = mesh_mapper
         if lane_sharded and page_table is not None:
-            if lane_parallel:
-                # Pre-stacked [lanes, rows, blocks]: flatten for the same
-                # 2-D-per-column reason as _lane_stack.
-                page_table = page_table.reshape(-1, page_table.shape[-1])
-            else:
-                page_table = _lane_stack(page_table)
+            page_table = _lane_table(page_table)
             pt_mapper = self.mesh_config.lane_shard_mapper(self.mesh_device, 0)
 
         tt_page_table = None
@@ -1965,12 +1956,7 @@ class Gemma4Model:
         if chunk_page_table is not None:
             cpt_mapper = mesh_mapper
             if lane_sharded:
-                if lane_parallel:
-                    # Pre-stacked per-lane chunk tables: flatten for the same
-                    # 2-D-per-column reason as page_table.
-                    chunk_page_table = chunk_page_table.reshape(-1, chunk_page_table.shape[-1])
-                else:
-                    chunk_page_table = _lane_stack(chunk_page_table)
+                chunk_page_table = _lane_table(chunk_page_table)
                 cpt_mapper = self.mesh_config.lane_shard_mapper(self.mesh_device, 0)
             tt_chunk_page_table = ttnn.from_torch(
                 chunk_page_table,
@@ -2339,15 +2325,15 @@ class Gemma4Model:
         pos_flat = current_pos.reshape(-1)
         batch = tok_flat.shape[0]
 
-        # Lane-sharded decode (galaxy one-instance slice 3b): callers pass the
+        # Lane-sharded decode (galaxy one-instance): callers pass the
         # GLOBAL batch — lanes x 32, lane-major, with vLLM-style pad rows
         # (pos -1). Each control tensor shards its batch dim over the lane
         # axis, so every chip receives its own lane's slice at exactly the
         # per-chip shapes the ops already expect; nothing downstream changes.
-        lane_sharded = bool(self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False))
+        lane_sharded = self._lane_sharded
         if lane_sharded:
             lanes = self.mesh_config.lanes
-            lane_slots = int(getattr(self, "lane_slots", 0) or 32)
+            lane_slots = self._lane_slots
             full = lanes * lane_slots
             if batch > full:
                 raise ValueError(f"lane-sharded decode batch {batch} exceeds the slot space {full}")
@@ -2605,25 +2591,20 @@ class Gemma4Model:
         inside the model forward, so a single device tensor contains the
         full vocab.
         """
-        lane_sharded = bool(self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False))
-        # Under lanes the generator-visible batch IS the global slot space
-        # (from_pretrained patches model_args to lanes x per-column), so the B
-        # callers pass already covers every lane's rows; the per-column shards
-        # are reassembled below in lane order.
+        lane_sharded = self._lane_sharded
 
         def _lane_shards():
-            # Row-major device order over (rows, cols): row 0 holds one device
-            # per column, i.e. one shard per lane, in lane order.
+            # Under lanes ``B`` is the global slot space; each lane's first chip
+            # holds that lane's rows and they are reassembled in lane order.
             shards = ttnn.get_device_tensors(tt_out)
-            cols = self.mesh_config.mesh_shape[self.mesh_config.sp_axis]
-            return [ttnn.to_torch(shards[c]) for c in range(cols)]
+            return [ttnn.to_torch(shards[d]) for d in self.lane_device_indices()]
 
         if is_tokens or is_log_probs:
             if lane_sharded:
                 # Each column's sample row is padded to the feedback width;
                 # keep only its lane_slots real entries or the concat's global
                 # truncation hands later lanes the first lane's padding.
-                _ls = int(getattr(self, "lane_slots", 0) or 32)
+                _ls = self._lane_slots
                 torch_out = torch.cat([t.reshape(-1)[:_ls] for t in _lane_shards()], dim=0)
             elif self.mesh_config is not None and self.mesh_config.tp > 1:
                 torch_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).reshape(-1)
@@ -2632,7 +2613,7 @@ class Gemma4Model:
             return torch_out[:B]
 
         if lane_sharded:
-            _ls = int(getattr(self, "lane_slots", 0) or 32)
+            _ls = self._lane_slots
             torch_out = torch.cat([t[:, :, :_ls, :] for t in _lane_shards()], dim=2)
         elif self.mesh_config is not None and self.mesh_config.tp > 1:
             torch_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])

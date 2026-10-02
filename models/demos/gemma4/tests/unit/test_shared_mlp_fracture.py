@@ -4,7 +4,7 @@
 """SharedMLP under 2D weight fracture (galaxy one-instance) vs HF GeGLU.
 
 The (8,4) mesh holds ONE weight copy: gate_up/down shard their inter dim over
-rows*cols=32 chips (fractured_mapper), the residual stays replicated, and the
+rows*cols=32 chips (shard_mapper over both mesh axes), the residual stays replicated, and the
 down partials are completed by one all-reduce per mesh axis.
 
     pytest models/demos/gemma4/tests/unit/test_shared_mlp_fracture.py -k 8x4

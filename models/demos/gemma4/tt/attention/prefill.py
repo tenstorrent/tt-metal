@@ -17,6 +17,7 @@ from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_ma
 
 from .operations import (
     PREFILL_SDPA_MAX_SEQ,
+    _paged_fill_cache,
     apply_allreduce,
     apply_output_projection,
     apply_per_head_norm,
@@ -33,25 +34,6 @@ from .operations import (
 from .weights import AttentionWeights
 
 TILE_HEIGHT = 32
-
-
-def _paged_fill_cache(cache, x, *args, **kwargs):
-    """paged_fill_cache requires input dtype == cache dtype; cast when they differ.
-
-    Unlike paged_update_cache, the fill op does not repack (bfp8_b KV under
-    GEMMA4_KV_BFP8 hits its dtype TT_FATAL). The cast copy is freed after the
-    fill so callers' own deallocation of ``x`` stays balanced.
-    """
-    if x.dtype == cache.dtype:
-        return ttnn.experimental.paged_fill_cache(cache, x, *args, **kwargs)
-    xc = ttnn.typecast(x, cache.dtype)
-    try:
-        return ttnn.experimental.paged_fill_cache(cache, xc, *args, **kwargs)
-    finally:
-        try:
-            xc.deallocate(True)
-        except Exception:
-            pass
 
 
 def _resolve_valid_seq_len_tensor(config, valid_seq_len, padded_seq_len, mesh_device, force_inline=False):
@@ -257,27 +239,8 @@ def _clone_sliding_prefill_tail(tt_k, tt_v, hist, head_dim, valid_seq_len=None, 
     return (k_owned, v_owned)
 
 
-def _reinterpret_block_view(part, kv_local, head_dim):
-    """Check that a paged block already has this layer's view.
-
-    Shared HMA buffers take the first layer's (sliding) view, which is the
-    layout the sliding tail reconstruction reads, so a mismatch here means a
-    full-attention-view allocation that the paged kernels do not reinterpret
-    correctly for sliding layers either (measured 2026-10-02). Re-viewing the
-    tile stream host-side is not attempted: the kernels' tile order for a
-    reinterpreted block is not a documented contract. Fail loudly instead.
-    """
-    _, cache_kv, _cache_rows, cache_hd = (int(x) for x in part.shape)
-    if cache_kv == kv_local and cache_hd == head_dim:
-        return part
-    raise ValueError(
-        f"sliding tail reconstruction needs the layer's own KV view ({kv_local}x{head_dim}); "
-        f"the shared buffer is allocated as {tuple(part.shape)}"
-    )
-
-
 def _read_sliding_tail_from_paged_cache(
-    k_cache, v_cache, page_table, user_id, chunk_offset, sliding_window, head_dim, out_dtype, kv_local=None
+    k_cache, v_cache, page_table, user_id, chunk_offset, sliding_window, head_dim, out_dtype, kv_local
 ):
     """Reconstruct the prior-window K/V tail from the paged cache.
 
@@ -296,21 +259,18 @@ def _read_sliding_tail_from_paged_cache(
     """
     if page_table is None or chunk_offset is None or chunk_offset <= 0:
         return None
-    if os.environ.get("GEMMA4_SLIDING_TAIL_FROM_CACHE", "1") == "0":
-        return None
+    cache_kv, block_size, cache_hd = (int(k_cache.padded_shape[i]) for i in (1, 2, 3))
+    if cache_kv != int(kv_local) or cache_hd != int(head_dim):
+        # Shared HMA buffers take the first layer's (sliding) view, which is
+        # the layout read here; any other allocation view is a bug upstream.
+        raise ValueError(
+            f"sliding tail reconstruction needs the layer's own KV view ({kv_local}x{head_dim}); "
+            f"the shared buffer is allocated as {tuple(k_cache.padded_shape)}"
+        )
     try:
-        cache_kv = int(k_cache.padded_shape[1])
-        cache_rows = int(k_cache.padded_shape[2])
-        cache_hd = int(k_cache.padded_shape[-1])
-        kv_local = int(kv_local or cache_kv)
-        # Tokens per block in THIS layer's view: the buffer may be allocated at
-        # a wider (shared) view, so invert the per-block byte invariant rather
-        # than trusting shape[2] (operations.effective_block_size).
-        block_size = (cache_kv * cache_rows * cache_hd) // (kv_local * head_dim)
-        num_kv = cache_kv
         take = min(int(sliding_window), int(chunk_offset))
         start = chunk_offset - take
-        if block_size <= 0 or chunk_offset % block_size or start % block_size:
+        if chunk_offset % block_size or start % block_size:
             return None
         row = page_table
         if isinstance(row, ttnn.Tensor):
@@ -319,31 +279,10 @@ def _read_sliding_tail_from_paged_cache(
             row = row[user_id]
         lb0, lb1 = start // block_size, chunk_offset // block_size
         blocks = [int(b) for b in row[lb0:lb1]]
-        if os.environ.get("GEMMA4_DEBUG_PAGED_TAIL", "0") != "0":
-            logger.info(
-                "paged-tail: offset={} user={} take={} pt_shape={} blocks[{}:{}]={}",
-                chunk_offset,
-                user_id,
-                take,
-                tuple(page_table.shape) if hasattr(page_table, "shape") else None,
-                lb0,
-                lb1,
-                blocks,
-            )
         if not blocks or any(b < 0 or b >= int(k_cache.padded_shape[0]) for b in blocks):
             return None
-        k_parts = [
-            _reinterpret_block_view(
-                ttnn.slice(k_cache, [b, 0, 0, 0], [b + 1, num_kv, cache_rows, cache_hd]), kv_local, head_dim
-            )
-            for b in blocks
-        ]
-        v_parts = [
-            _reinterpret_block_view(
-                ttnn.slice(v_cache, [b, 0, 0, 0], [b + 1, num_kv, cache_rows, cache_hd]), kv_local, head_dim
-            )
-            for b in blocks
-        ]
+        k_parts = [ttnn.slice(k_cache, [b, 0, 0, 0], [b + 1, cache_kv, block_size, cache_hd]) for b in blocks]
+        v_parts = [ttnn.slice(v_cache, [b, 0, 0, 0], [b + 1, cache_kv, block_size, cache_hd]) for b in blocks]
         k_tail = ttnn.concat(k_parts, dim=2) if len(k_parts) > 1 else k_parts[0]
         v_tail = ttnn.concat(v_parts, dim=2) if len(v_parts) > 1 else v_parts[0]
         # Block slices are always partial (one block of a many-block pool), so
@@ -595,15 +534,6 @@ def _prefill_forward_single(
     # including the first). Handled via the in-memory window tail below rather
     # than the full-prefix paged read used for full-attention layers.
     sliding_chunked = is_chunked and config.is_sliding and config.sliding_window is not None
-    if os.environ.get("GEMMA4_DEBUG_PAGED_TAIL", "0") != "0" and chunk_offset is not None and chunk_offset > 4096:
-        logger.info(
-            "prefill-branch: layer_sliding={} offset={} is_chunked={} tail_in={} seq={}",
-            bool(config.is_sliding),
-            chunk_offset,
-            is_chunked,
-            sliding_tail_in is not None,
-            int(hidden_states.shape[-2]) if hasattr(hidden_states, "shape") else -1,
-        )
     # KV-shared + generator multi-chunk: current-chunk K/V still arrive via
     # ``shared_kv`` (source layer's keep_kv). Cross-chunk full-attention then
     # reads the source's already-filled paged cache (``need_cross_chunk`` path);
@@ -640,8 +570,9 @@ def _prefill_forward_single(
         and fill_page_table is chunk_page_table
     ):
         _bs = (
-            (int(kv_cache[0].padded_shape[1]) * int(kv_cache[0].padded_shape[2]) * int(kv_cache[0].padded_shape[-1]))
-            // ((1 if weights.kv_replicated else max(1, config.num_key_value_heads // tp)) * int(config.head_dim))
+            effective_block_size(
+                kv_cache[0], config.head_dim, 1 if weights.kv_replicated else max(1, config.num_key_value_heads // tp)
+            )
             if kv_cache is not None
             else 0
         )

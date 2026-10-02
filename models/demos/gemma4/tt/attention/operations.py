@@ -400,16 +400,13 @@ def chunked_prefill_sdpa(
     # output rows are gathered back. Remnant chunks whose length does not
     # split into lane-aligned q_chunks fall back to the replicated path.
     cp = bool(mesh_config is not None and getattr(mesh_config, "cp_prefill", False))
-    cp_lanes = mesh_config.mesh_shape[mesh_config.sp_axis] if cp else 1
+    cp_lanes = mesh_config.lanes if cp else 1
     if cp and (seq_len % (cp_lanes * q_chunk_size) != 0):
-        logger.info(f"CP prefill fallback: seq_len={seq_len} % (lanes {cp_lanes} * q_chunk {q_chunk_size}) != 0")
+        logger.debug(f"CP prefill fallback: seq_len={seq_len} % (lanes {cp_lanes} * q_chunk {q_chunk_size}) != 0")
         cp = False
     elif cp and not getattr(chunked_prefill_sdpa, "_cp_logged", False):
         chunked_prefill_sdpa._cp_logged = True
         logger.info(f"CP prefill ACTIVE: lanes={cp_lanes} seq_len={seq_len} sp_axis={mesh_config.sp_axis}")
-    elif mesh_config is None and not getattr(chunked_prefill_sdpa, "_nomc_logged", False):
-        chunked_prefill_sdpa._nomc_logged = True
-        logger.info("CP prefill: mesh_config is None at chunked_prefill_sdpa")
     cp_col_off = None
     if cp:
         seq_local = seq_len // cp_lanes
@@ -568,13 +565,8 @@ def chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, head_dim, sca
         packer_l1_acc=False,
     )
 
-    # NOTE: no CP branch here. This stride-sliced sliding path indexes Q and
-    # K/V with the same GLOBAL positions; partitioning Q across the lane axis
-    # would need per-column offsets in every slice plus an output gather, none
-    # of which exists. An earlier copy of the CP preamble referenced names
-    # outside this function's scope and would NameError on entry (the function
-    # is only reached by a single forward whose seq exceeds the non-chunked
-    # SDPA cliff, which the 24576-chunk configs never hit).
+    # No CP here: this stride-sliced sliding path indexes Q and K/V with the
+    # same global positions.
     outs = []
     start = 0
     while start < seq_len:
@@ -704,6 +696,25 @@ def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
     completes the fractured-mesh o_proj (columns hold identical partial sums).
     """
     return ccl_allreduce(tensor, mesh_config, ccl_manager)
+
+
+def _paged_fill_cache(cache, x, *args, **kwargs):
+    """paged_fill_cache requires input dtype == cache dtype; cast when they differ.
+
+    Unlike paged_update_cache, the fill op does not repack (bfp8_b KV under
+    GEMMA4_KV_BFP8 hits its dtype TT_FATAL). The cast copy is freed after the
+    fill so callers' own deallocation of ``x`` stays balanced.
+    """
+    if x.dtype == cache.dtype:
+        return ttnn.experimental.paged_fill_cache(cache, x, *args, **kwargs)
+    xc = ttnn.typecast(x, cache.dtype)
+    try:
+        return ttnn.experimental.paged_fill_cache(cache, xc, *args, **kwargs)
+    finally:
+        try:
+            xc.deallocate(True)
+        except Exception:
+            pass
 
 
 def effective_block_size(k_cache, head_dim: int, num_kv_heads: int) -> int:

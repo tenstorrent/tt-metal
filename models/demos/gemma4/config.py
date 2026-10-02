@@ -6,6 +6,7 @@ This module defines the MeshConfig class which manages parallelization strategie
 across a mesh of devices for the Gemma4 MoE model.
 """
 
+import os
 from dataclasses import dataclass
 from enum import Enum
 
@@ -58,8 +59,8 @@ class MeshConfig:
         self.weight_fracture = weight_fracture
         self.fracture_ways = self.total_devices if weight_fracture else decode.tp
 
-        # Lane-sharded activations (galaxy one-instance slice 3): the batch is
-        # split into ``lanes`` groups along the non-tp mesh axis (one lane per
+        # Lane-sharded activations (galaxy one-instance): the batch is split
+        # into ``lanes`` groups along the non-tp mesh axis (one lane per
         # column), each with its own KV pool contents / page tables /
         # positions. Weight-fractured matmuls then need the llama70b staged
         # choreography: all-gather rows across lanes before a fractured matmul
@@ -68,9 +69,9 @@ class MeshConfig:
         # replicated-residual regime keeps working unchanged.
         self.lane_sharded = False
         self.lanes = self.mesh_shape[self.sp_axis]
-        # CP prefill (slice 3c v1): split each prefill chunk's Q rows across
-        # the sp axis; per-column chunk_start offsets keep causality against
-        # the (replicated or striped) paged cache. Set by the model gate.
+        # CP prefill: split each prefill chunk's Q rows across the sp axis;
+        # per-column chunk_start offsets keep causality against the replicated
+        # paged cache. Set by ``create_tt_model``.
         self.cp_prefill = False
 
         self.decode = decode
@@ -114,17 +115,6 @@ class MeshConfig:
         """
         dims = (None, tensor_dim) if self.tp_axis == 0 else (tensor_dim, None)
         return ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=dims)
-
-    def fractured_mapper(self, mesh_device, axis0_dim, axis1_dim):
-        """Shard two DIFFERENT tensor dims over the two mesh axes.
-
-        The mesh mapper requires unique dims (TT_FATAL otherwise), so a weight
-        whose logical split is rows*cols chunks of ONE dim is first reshaped on
-        host to expose the row factor as its own dim (chunk k -> device
-        (k // cols, k % cols)); two weights prepared this way pair their chunks
-        chip-for-chip (gate_up N-chunk i with down K-chunk i).
-        """
-        return ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(axis0_dim, axis1_dim))
 
     def column_parallel(self, mesh_device):
         return self.shard_mapper(mesh_device, tensor_dim=-1)
@@ -199,3 +189,8 @@ class MeshConfig:
         decode_str = f"decode[TP={self.decode.tp}, EP={self.decode.ep}, SP={self.decode.sp}, DP={decode_dp}]"
         prefill_str = f"prefill[TP={self.prefill.tp}, EP={self.prefill.ep}, SP={self.prefill.sp}, DP={prefill_dp}]"
         return f"MeshConfig({self.mesh_shape}, {decode_str}, {prefill_str})"
+
+
+def gemma4_kv_bfp8_enabled():
+    """bfloat8_b paged KV (GEMMA4_KV_BFP8=1) — read by the demo and the serving allocators."""
+    return os.environ.get("GEMMA4_KV_BFP8", "0") == "1"

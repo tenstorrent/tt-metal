@@ -321,13 +321,12 @@ def ccl_allreduce_fractured(tensor, mesh_config, ccl_manager, memory_config=None
 
     With ``mesh_config.weight_fracture`` the down/output projections split
     their K dim over BOTH mesh axes, so every chip holds a partial of the full
-    output. Summing along each mesh axis in turn completes it. Uses the sync
-    ``ttnn.all_reduce`` per axis — the correctness path; ring/async CCLs land
-    with the perf pass. Falls back to the ordinary TP all-reduce when
-    fracture is off.
+    output. Summing along each mesh axis in turn completes it: sync
+    ``ttnn.all_reduce`` per axis, or the async RS+AG composite per axis when
+    ``GEMMA4_CCL_ASYNC=1`` and a ``ccl_manager`` is given.
     """
     if mesh_config is None or not getattr(mesh_config, "weight_fracture", False):
-        return ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config)
+        raise ValueError("ccl_allreduce_fractured needs mesh_config.weight_fracture; use ccl_allreduce")
 
     memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
     out = tensor

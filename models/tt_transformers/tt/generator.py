@@ -1446,14 +1446,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     broadcast_sampling_params(sampling_params, idx, slot_len=total_batch), total_batch
                 )
                 assert per_request_params is not None, "Sampling was executed but missing per-request sampling params"
-                # empty_slots is keyed by the SEED MANAGER's width (its per-row
-                # slots), not total_batch: when sampling_dp > 1 the params are
-                # already broadcast across all rows by broadcast_sampling_params.
-                # For per-submesh DP the seed width equals max_batch_size_per_model,
-                # but under an in-process lane fold the model advertises the
-                # GLOBAL batch while the seed manager stays one lane wide — the
-                # modulo must use the manager's own width or slots >= one lane
-                # index past its tables.
+                # Index seed slots by the seed manager's own width, which the
+                # model's advertised batch need not match (in-process lane fold).
                 seed_width = self.model[model_id].sampling.seed_manager.max_batch_size
                 self.model[model_id].sampling.apply_prefill_state(
                     sampling_params=per_request_params,

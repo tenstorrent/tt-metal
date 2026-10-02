@@ -33,7 +33,6 @@ SLOTS_PER_LANE = 32
 def test_lanes_e2e(mesh_device, reset_seeds, request):
     os.environ["GEMMA4_GALAXY_FRACTURE"] = "1"
     os.environ["GEMMA4_GALAXY_LANES"] = "1"
-    os.environ.setdefault("GEMMA4_CP_PREFILL", "1")
 
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.tt_transformers.tt.common import PagedAttentionConfig

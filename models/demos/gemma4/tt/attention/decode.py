@@ -13,6 +13,7 @@ import ttnn
 from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
 
 from .operations import (
+    _paged_fill_cache,
     apply_allreduce,
     apply_output_projection,
     apply_per_head_norm,
@@ -34,25 +35,6 @@ from .weights import AttentionWeights
 # Populated on the first (un-traced compile) call; inside trace capture the
 # probe is skipped entirely.
 _Q_SHARDED_MEM_CACHE: dict = {}
-
-
-def _paged_fill_cache(cache, x, *args, **kwargs):
-    """paged_fill_cache requires input dtype == cache dtype; cast when they differ.
-
-    Unlike paged_update_cache, the fill op does not repack (bfp8_b KV under
-    GEMMA4_KV_BFP8 hits its dtype TT_FATAL). The cast copy is freed after the
-    fill so callers' own deallocation of ``x`` stays balanced.
-    """
-    if x.dtype == cache.dtype:
-        return ttnn.experimental.paged_fill_cache(cache, x, *args, **kwargs)
-    xc = ttnn.typecast(x, cache.dtype)
-    try:
-        return ttnn.experimental.paged_fill_cache(cache, xc, *args, **kwargs)
-    finally:
-        try:
-            xc.deallocate(True)
-        except Exception:
-            pass
 
 
 def _q_sharded_mem_key(B, qkv_dim, config, weights, tp):

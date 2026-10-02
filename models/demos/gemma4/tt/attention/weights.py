@@ -41,10 +41,6 @@ class AttentionWeights:
     k_norm_weight: ttnn.Tensor  # Replicated across devices
     is_global: bool  # Controls K=V tying and partial RoPE
     kv_replicated: bool = False  # True when KV heads are replicated (not split) across TP devices
-    # 2D weight fracture (galaxy one-instance): mesh axis whose all-reduce
-    # completes the QKV partials (weights also split K over that axis).
-    # None = ordinary TP weights.
-    fracture_reduce_axis: int = None
 
 
 def load_attention_weights(
@@ -65,8 +61,7 @@ def load_attention_weights(
     kv_size = config.num_key_value_heads * config.head_dim
     tp = mesh_config.tp
     fractured = bool(getattr(mesh_config, "weight_fracture", False))
-    f_rows, f_cols = mesh_config.mesh_shape if fractured else (tp, 1)
-    if fractured and tp != f_rows:
+    if fractured and tp != mesh_config.mesh_shape[0]:
         raise NotImplementedError("weight_fracture expects tp == mesh rows (heads over axis 0)")
 
     # When KV heads < TP, each device gets the KV head(s) its Q heads map to via GQA.
@@ -143,8 +138,6 @@ def load_attention_weights(
     # stays heads-over-tp_axis and REPLICATES across the other axis: the
     # tp_axis-aware column/row mappers express that directly, per-chip
     # mechanics match plain TP, and no extra completion CCLs are needed.
-    # (Full attention-weight fracture needs a width-sharded residual — the
-    # llama70b layout — and lands with the perf pass.)
     if tp > 1 or fractured:
         col_mapper = mesh_config.column_parallel(mesh_device)
         row_mapper = mesh_config.row_parallel(mesh_device)
@@ -237,5 +230,4 @@ def load_attention_weights(
         k_norm_weight=k_norm_weight,
         is_global=is_global,
         kv_replicated=kv_replicated,
-        fracture_reduce_axis=None,
     )

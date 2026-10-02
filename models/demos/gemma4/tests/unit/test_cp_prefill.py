@@ -6,7 +6,7 @@
 CP splits each prefill chunk's Q rows across the lane (sp) axis while every
 column attends the full replicated prefix via a per-column offset. This test
 proves three things on hardware: (1) the CP branch actually ENGAGES for an
-aligned long prompt (module flag, not log scraping); (2) the answer to a
+aligned long prompt (the op's log-once flag); (2) the answer to a
 question buried behind ~8K tokens of filler survives chunked CP prefill and
 greedy decode — any offset/gather bug destroys it; (3) a short prompt whose
 padded chunk cannot split lane-aligned takes the fallback and still answers.
@@ -119,6 +119,5 @@ def test_cp_prefill(mesh_device, reset_seeds, request):
         attn_ops.chunked_prefill_sdpa, "_cp_logged", False
     ), "CP branch never engaged on the aligned long prompt"
 
-    # (3): short prompt pads to a 128..512 chunk; 512 % 1024 != 0 forces the
-    # per-chunk fallback, which must still answer correctly.
+    # (3): a short prompt stays single-chunk and must still answer correctly.
     ask("What is the opposite of hot? Answer in one word.", "cold")

@@ -16,7 +16,7 @@ NATIVE = 262_144
 
 
 def _args(native=NATIVE):
-    return SimpleNamespace(max_context_len=native)
+    return SimpleNamespace(_hf_text_config=SimpleNamespace(max_position_embeddings=native))
 
 
 def test_at_native_passes(monkeypatch):

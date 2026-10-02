@@ -104,7 +104,7 @@ def allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model: List[Transformer
         # share a buffer.
         unique_buffers: dict[int, list] = {}
         kv_tt = []
-        for layer_num, (kv_cache_shape, dtype, tensor_idx) in enumerate(
+        for layer_num, (_, dtype, tensor_idx) in enumerate(
             tqdm(per_layer_specs, desc=f"Allocating TT kv caches for each layer (submesh {mesh_idx+1})")
         ):
             existing = unique_buffers.get(tensor_idx)

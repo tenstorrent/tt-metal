@@ -10,8 +10,14 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.gemma4.config import gemma4_kv_bfp8_enabled
 from models.demos.gemma4.tt.attention import _RING_HEADROOM_BLOCK, SPEC_RING_HEADROOM_ENV
-from models.demos.gemma4.tt.common import create_tt_model
+from models.demos.gemma4.tt.common import (
+    GEMMA4_CP_PREFILL_CHUNK,
+    create_tt_model,
+    gemma4_cp_prefill_engaged,
+    gemma4_env_flag,
+)
 from models.demos.gemma4.tt.dflash_constants import VERIFY_WIDTH_MARGIN
 from models.demos.gemma4.tt.generator import (
     SDPA_CHUNK_ALIGN,
@@ -77,13 +83,10 @@ class _Gemma4VllmOptimizations:
     @staticmethod
     def get_tensor_dtype(decoder_id, tensor, prefetcher=False):
         del decoder_id, prefetcher
-        # GEMMA4_KV_BFP8: the SERVING pools allocate through
-        # allocate_vllm_kv_cache(_per_layer), which reads this override -- the
-        # env gate in Gemma4Model.__init__ only covers the metal/demo path, so
-        # without this branch every serving boot silently stayed bf16 while
-        # the metal needle gate ran bfp8 (caught by a DP=4 pool OOM whose
-        # failing buffer decoded to ~1024 B/token, 2026-09-30).
-        if os.environ.get("GEMMA4_KV_BFP8", "0") == "1":
+        # Serving pools allocate through allocate_vllm_kv_cache(_per_layer),
+        # which reads this override; Gemma4Model.__init__'s env gate only
+        # covers the demo path.
+        if gemma4_kv_bfp8_enabled():
             from models.tt_transformers.tt.model_config import TensorGroup
 
             if tensor == TensorGroup.KV_CACHE:
@@ -147,8 +150,10 @@ def _gemma4_prefill_trace_unsafe(model, bounded_sliding_kv_cache) -> bool:
 
 def _resolve_vllm_bounded_sliding(max_seq_len, mesh_device, model_path, *, hybrid_groups_enabled: bool) -> bool:
     """Mirror demo: auto policy + ``GEMMA4_BOUNDED_SLIDING_KV_CACHE`` / legacy env."""
-    # Hybrid-groups mode historically defaulted bounded ON; keep that unless env overrides.
-    _bounded_default = "1" if hybrid_groups_enabled else None
+    # Hybrid groups default bounded ON, except under prefix caching, whose
+    # hybrid substrate is vLLM-managed window blocks (rings OFF).
+    _prefix_caching = os.environ.get("GEMMA4_PREFIX_CACHING", "0") != "0"
+    _bounded_default = "1" if hybrid_groups_enabled and not _prefix_caching else None
     _bs_env = os.environ.get("GEMMA4_BOUNDED_SLIDING_KV_CACHE")
     if _bs_env is None and _bounded_default is not None:
         _bs_env = _bounded_default
@@ -174,7 +179,8 @@ def _assert_within_native_context(max_seq_len: int, model_args) -> None:
     at the one choke point every gemma4 vLLM class passes through.
     ``GEMMA4_ALLOW_BEYOND_NATIVE=1`` opts back in, explicitly and per-launch.
     """
-    native = int(getattr(model_args, "max_context_len", 0) or 0)
+    text_config = getattr(model_args, "_hf_text_config", None)
+    native = int(getattr(text_config, "max_position_embeddings", 0) or 0)
     if not native or max_seq_len <= native:
         return
     if os.environ.get("GEMMA4_ALLOW_BEYOND_NATIVE", "0").lower() in ("1", "true", "yes"):
@@ -220,13 +226,8 @@ def _patch_model_args(
     # the configured max_context. Override with GEMMA4_GEN_PREFILL_CHUNK, or
     # force full-ISL single-chunk via GEMMA4_VLLM_SINGLE_CHUNK=1.
     chunk_override = int(os.environ.get("GEMMA4_GEN_PREFILL_CHUNK", "0"))
-    from models.demos.gemma4.tt.common import gemma4_cp_prefill_engaged
-
     if chunk_override <= 0 and gemma4_cp_prefill_engaged(mesh_device):
-        # CP prefill pairs with a large generator chunk (measured 254K ladder:
-        # optimum 24576; CP alone and big-chunks alone are both <=0). Same
-        # default as the standalone generator path.
-        chunk_override = 24576
+        chunk_override = GEMMA4_CP_PREFILL_CHUNK
     if chunk_override > 0:
         model_args.max_prefill_chunk_size = chunk_override
         logger.info(
@@ -285,10 +286,6 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
     _SPEC_DECLINES_AT_RING_WRAP = False
 
     decode_input_update_contract = 1
-
-    #: Speculating subclasses that stop proposing before a verify would wrap the
-    #: bounded ring set this; they are advised rather than refused at startup.
-    _SPEC_DECLINES_AT_RING_WRAP = False
 
     # Async decode closes the ~15–20% metal↔server B=1 gap (#51186): with
     # ``async_scheduling`` the plugin overlaps CPU scheduling with the previous
@@ -351,16 +348,9 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             return None
 
     model_capabilities = {
-        # Env-gated (default OFF): vLLM automatic prefix caching, for agentic
-        # multi-turn serving (resent system prompt + growing conversation skip
-        # re-prefill). Only valid on the full-length sliding KV path (hybrid
-        # groups OFF, bounded sliding OFF): there every layer's spec is
-        # FullAttentionSpec and the paged pool genuinely retains all positions,
-        # so vLLM block reuse plus the resumed-prefill path (nonzero start_pos
-        # floored to resumed_prefill_token_alignment) serve cache hits
-        # correctly. ``__init__`` raises on the incompatible substrates; spec
-        # rails pin this back to False (``_spec_pt_identity`` keys sessions on
-        # a request's first block id, which shared prefixes would collide).
+        # vLLM automatic prefix caching (default OFF). Needs sliding KV that
+        # vLLM accounts for -- see the hybrid-groups comment above and the
+        # bounded-ring refusal in __init__; spec rails pin this back to False.
         "supports_prefix_caching": os.environ.get("GEMMA4_PREFIX_CACHING", "0") != "0",
         "supports_async_decode": os.environ.get("GEMMA4_SUPPORTS_ASYNC_DECODE", "1").lower() in ("1", "true", "yes"),
         # Gemma4ModelArgs exposes no get_attn_sdpa_program_config, so Generator
@@ -404,19 +394,16 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
     #
     # ON (``GEMMA4_HYBRID_KV_CACHE_GROUPS=1``): sliding layers emit
     # ``SlidingWindowSpec`` and form their own kv_cache_groups, so the 40 sliding
-    # layers only allocate the 1024-token window (``cache_position_modulo`` bounded
-    # ring on device) — far less KV DRAM, higher concurrency/throughput. Tradeoffs:
-    # vLLM splits the block pool across groups, so a single request is capped at
-    # ~``num_blocks // num_groups`` tokens (long-context admission regresses), and
-    # bounded sliding's known >~34k degradation applies. Bounded sliding is tied to
-    # this flag (below). This is the pre-#48283 path, restored behind the env gate.
-    #
-    # The historical ISL >= 8192 crash (full-attn chunked SDPA TT_FATAL on
-    # ``k_shape[3] == DH`` against a shared buffer allocated at the sliding
-    # head_dim view) is addressed in ``allocate_vllm_kv_cache_per_layer``:
-    # a shared buffer is now allocated at the WIDEST head_dim view among its
-    # layers, and the sliding ops reconcile through ``effective_block_size``
-    # (see attention/operations.py) exactly as before.
+    # layers hold only the 1024-token window — as vLLM-managed window blocks,
+    # or as ``cache_position_modulo`` device rings when bounded sliding is on
+    # (the default under this flag unless prefix caching is declared). vLLM
+    # splits the block pool across groups, so a single request is capped at
+    # ~``num_blocks // num_groups`` tokens. vLLM shares one DRAM buffer between
+    # a full-attention layer and its sliding layers; the buffer takes the first
+    # layer's (sliding) view and the full-attention ops reconcile through
+    # ``effective_block_size`` / ``PagedCacheGeometryOverride`` (attention/
+    # operations.py, prefill.py, decode.py). Allocating at the wider full view
+    # instead corrupts the sliding layers' KV.
     #
     # Prefix caching (GEMMA4_PREFIX_CACHING) composes with hybrid groups ONLY
     # in the vLLM-managed sliding-blocks mode (bounded rings OFF): vLLM then
@@ -437,18 +424,10 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             self._bounded_sliding_kv_cache = bool(model0.bounded_sliding_kv_cache)
         else:
             _prefix_caching_on = self.model_capabilities.get("supports_prefix_caching", False)
-            # Hybrid defaults bounded ON (the ring design), except under
-            # prefix caching, whose hybrid mode is the vLLM-managed
-            # sliding-blocks substrate (rings OFF; see the class comment).
             _bounded_default = "1" if (self._HYBRID_KV_CACHE_GROUPS_ENABLED and not _prefix_caching_on) else "0"
             self._bounded_sliding_kv_cache = os.environ.get("GEMMA4_BOUNDED_SLIDING_KV_CACHE", _bounded_default) != "0"
-        # Prefix caching needs sliding KV that vLLM can account for: either
-        # full-length sliding KV (hybrid OFF, bounded OFF) or vLLM-managed
-        # window blocks (hybrid ON, bounded OFF). Bounded rings are
-        # per-request device state invisible to the cache manager — a cache
-        # hit would resume against an empty ring — and ring identity keys on
-        # a request's FIRST page-table block id, which shared prefixes
-        # collide. Fail the boot instead of serving wrong KV.
+        # Bounded rings are per-request device state outside vLLM's accounting
+        # (see the class comment); refuse the combination at boot.
         if self.model_capabilities.get("supports_prefix_caching") and self._bounded_sliding_kv_cache:
             raise ValueError(
                 "GEMMA4_PREFIX_CACHING=1 is incompatible with bounded sliding "
@@ -1018,7 +997,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         True only under the galaxy one-instance lanes gate; the DP=4 rail keeps
         standard multi-process DP (one submesh per rank).
         """
-        return os.environ.get("GEMMA4_GALAXY_LANES", "0").lower() in ("1", "true", "yes")
+        return gemma4_env_flag("GEMMA4_GALAXY_LANES")
 
     @classmethod
     def _tt_lane_prefill_group(cls):
@@ -1030,11 +1009,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         in ONE multi-pipe chunk walk (a mixed group+serial mega-call returns
         every first token at call END and dilutes the TTFT win).
         """
-        return cls._tt_folds_dp_into_lanes() and os.environ.get("GEMMA4_LANE_PREFILL_ROUTER", "0").lower() in (
-            "1",
-            "true",
-            "yes",
-        )
+        return cls._tt_folds_dp_into_lanes() and gemma4_env_flag("GEMMA4_LANE_PREFILL_ROUTER")
 
     @classmethod
     def initialize_vllm_model(
@@ -1059,8 +1034,8 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             )
 
         model_path = hf_config._name_or_path
-        lanes_fold = os.environ.get("GEMMA4_GALAXY_LANES", "0").lower() in ("1", "true", "yes")
-        if lanes_fold and tt_data_parallel > 1:
+        lanes_fold = cls._tt_folds_dp_into_lanes() and tt_data_parallel > 1
+        if lanes_fold:
             # One-instance lane fold: ONE model on the FULL mesh; the plugin's
             # lane coordinator schedules tt_data_parallel lanes that map onto
             # mesh columns (owner-lane KV), not submeshes. Global slots are
@@ -1118,7 +1093,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                     model_path,
                     prefill_trace_enabled,
                 )
-            if lanes_fold and tt_data_parallel > 1:
+            if lanes_fold:
                 # Generator-visible batch is the GLOBAL slot space; the model
                 # and KV stay sized per column (create above used the per-lane
                 # split). lane_slots lets prefill derive a slot's owner lane.
@@ -1130,15 +1105,13 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             _patch_model_args(
                 model_args_i,
                 submesh,
-                max_batch_size=(
-                    max_batch_size if (lanes_fold and tt_data_parallel > 1) else max_batch_size // tt_data_parallel
-                ),
+                max_batch_size=(max_batch_size if lanes_fold else max_batch_size // tt_data_parallel),
                 max_seq_len=max_seq_len,
                 model_path=model_path,
                 prefill_trace_enabled=prefill_trace_enabled,
                 bounded_sliding=bounded_sliding_kv_cache,
             )
-            if lanes_fold and tt_data_parallel > 1:
+            if lanes_fold:
                 # The batched-prefill flatten path is not lane-aware (it would
                 # hand _lane_stack the slot LIST); prefills stay per-user, and
                 # same-tile bursts get lane-parallel routing separately.
@@ -1340,7 +1313,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         return merged_output
 
     def _g4_router_reject(self, reason):
-        logger.info("Gemma4 vLLM: lane router ineligible -- {}", reason)
+        logger.debug("Gemma4 vLLM: lane router ineligible -- {}", reason)
         return None
 
     def _try_lane_parallel_prefill(self, kwargs, full_page_tables, raw_page_tables_per_layer=None, enable_trace=True):
@@ -1350,8 +1323,8 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         can carry any batch size. Requests bucket by owner lane (slot //
         lane_slots, FIFO in call order); round r takes each lane's r-th
         request, and every round that covers ALL lanes with one shared last
-        32-token tile prefills in ONE chunk walk via prefill_forward_lanes
-        (metal-measured 3.4-3.9x). Leftover requests recurse through
+        32-token tile prefills in ONE chunk walk via prefill_forward_lanes.
+        Leftover requests recurse through
         prefill_forward with subset kwargs and run serially. Partial groups
         cannot run lane-parallel: the tail slice offset is device-replicated,
         and scratch rows would write KV through ring block 0 of an absent
@@ -1362,7 +1335,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         warmup, device sampling, cached prefixes, or multimodal kwargs).
         Opt-in via GEMMA4_LANE_PREFILL_ROUTER=1.
         """
-        if os.environ.get("GEMMA4_LANE_PREFILL_ROUTER", "0").lower() not in ("1", "true", "yes"):
+        if not self._tt_lane_prefill_group():
             return None
         model = self.model[0]
         mesh_cfg = getattr(model, "mesh_config", None)
@@ -1439,7 +1412,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         gpt = full_page_tables[g_idxs[0]]
         gpt = gpt if gpt.dim() > 1 else gpt.unsqueeze(0)
         out = torch.zeros(B, 1, model.vocab_size)
-        logger.info(
+        logger.debug(
             "Gemma4 vLLM: lane-parallel prefill router -- {} requests, {} full group(s), {} serial, seq {}",
             B,
             len(groups),
@@ -1453,8 +1426,8 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             for ln, q in enumerate(group):
                 toks4[ln, :S] = tokens[q]
                 plens4[ln] = plens[q]
-                # Plugin per-layer tables arrive in LOCAL prefill order (row
-                # i = request i), not slot-indexed (the debt #1 lesson).
+                # Plugin per-layer tables arrive in local prefill order (row
+                # i = request i), not slot-indexed.
                 tables4[ln, 0] = gpt[q].to(torch.int32)
             per_layer = []
             for pt in full_page_tables:
@@ -1490,7 +1463,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                         sub_pts.append(pt[remainder])
                     else:
                         sub_pts.append(pt)
-            logger.info(
+            logger.debug(
                 "Gemma4 vLLM: lane router serial remainder -- {} request(s) on lanes {}",
                 len(remainder),
                 sorted({lane_of[q] for q in remainder}),
@@ -1935,12 +1908,9 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         ring = bounded_ring_modulo(int(sliding_window))
         if ring is None or int(ring) % block_size != 0:
             return None
-        # Under the lane fold model_args carries the GLOBAL slot space while
-        # every KV tensor (sliding rings included) is PER COLUMN: size the pool
-        # from the per-lane batch or the ring quadruples and DRAM OOMs at
-        # allocation (941 MB short at layer 53/60 on the first lanes boot).
-        max_batch = int(getattr(self.model[0], "lane_slots", 0) or self.model_args[0].max_batch_size)
-        return (int(ring) // block_size) * max_batch
+        # Under the lane fold model_args carries the global slot space while
+        # every KV tensor is per column: size the pool from the per-lane batch.
+        return (int(ring) // block_size) * self._sliding_pool_batch()
 
     def _release_decode_traces_for_fresh_wave(self) -> None:
         """Release captured decode traces (see fresh-wave comment at call site)."""
@@ -2055,7 +2025,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 shrunk,
                 len(sliding_idxs),
                 new_blocks,
-                int(getattr(self.model[0], "lane_slots", 0) or self.model_args[0].max_batch_size),
+                self._sliding_pool_batch(),
             )
         return out
 
@@ -2197,6 +2167,10 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             out.append(padded)
         return out
 
+    def _sliding_pool_batch(self):
+        """Rows the sliding pool is sized for: per lane under the lane fold, else max batch."""
+        return int(getattr(self.model[0], "lane_slots", 0) or self.model_args[0].max_batch_size)
+
     def _pad_sliding_page_tables_for_bounded(
         self, page_tables_per_layer, kv_cache, authoritative=False, row_slots=None
     ):
@@ -2265,7 +2239,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         # request a different physical ring between steps and it reads another
         # user's KV (nondeterministic garbage from concurrency 2 upward). Key on
         # vLLM's own global block ID instead: stable for the request's lifetime,
-        # and unique while prefix caching is off (Gemma4 declares it off).
+        # and unique while prefix caching is off (__init__ refuses it with bounded rings).
         max_slots = int(getattr(self.model_args[0], "max_batch_size", 0) or 0)
 
         # Derive the identity from a full-attention row when one is available.
@@ -2340,8 +2314,8 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
     def _bounded_row_key(row):
         """Stable per-request identity for one page-table row.
 
-        vLLM's global block IDs live as long as the request (Gemma4 runs with
-        prefix caching off, so blocks are not shared between requests), which
+        vLLM's global block IDs live as long as the request (bounded rings
+        refuse prefix caching, so blocks are not shared between requests), which
         makes the first block ID an identity that survives the row index
         moving. An all-zero row is a padded decode gap, not a request.
         """
@@ -2384,15 +2358,12 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             return slots
         if lane_slots:
             missing = [k for k in keys if k is not None and k not in slot_map]
-            if missing and not getattr(self, "_g4_ring_lookup_miss_warned", False):
-                self._g4_ring_lookup_miss_warned = True
-                logger.warning(
-                    "Gemma4 bounded: {} ring key(s) unseen by any prefill on the lanes rail; "
-                    "falling back to dense assignment for them",
-                    len(missing),
+            if missing:
+                # Dense fallback ids would address past the per-column pool.
+                raise ValueError(
+                    f"Gemma4 bounded: {len(missing)} ring key(s) were never bound by a prefill on the lanes rail"
                 )
-            if not missing:
-                return [None if k is None else slot_map[k] for k in keys]
+            return [None if k is None else slot_map[k] for k in keys]
         # Do NOT release a slot merely because its key is missing from this
         # batch. vLLM does not necessarily schedule every running request in
         # every decode step, so an absent key is not proof the request ended;
@@ -2898,8 +2869,8 @@ class Gemma4DFlashBase(Gemma4ForCausalLM):
     ``DFlashFusedDecoder``. This class owns that decoder's life: the drafter
     load, the width-set preparation and capture in warmup, the session
     bootstrap from prefill taps, the release, and the plan arithmetic the
-    plugin admits a launch with. Prefill, decode and request identity differ
-    per rail and live in the subclasses.
+    plugin admits a launch with, plus the prefill and request-identity helpers
+    both rails share; decode differs per rail and lives in the subclasses.
 
     Subclasses set ``_SPEC_V`` (drafts verified per iteration) and ``_SPEC_N``
     (``_SPEC_V + 1``, the packed-verify rows), and may set ``_SPEC_CONTRACT_K``
@@ -3651,6 +3622,8 @@ class Gemma4DFlashForCausalLM(Gemma4DFlashBase):
 
     model_capabilities = {
         **Gemma4ForCausalLM.model_capabilities,
+        # Pinned off: _spec_pt_identity keys sessions on a request's first block id.
+        "supports_prefix_caching": False,
         # Async overlaps host scheduling with the device decode for the ADAPTIVE
         # BATCHED baseline fallback (conc>1), which returns raw device output the
         # runner reads on the deferred pipeline -- baseline-entry parity (sync
@@ -4099,9 +4072,6 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
     # on as plain decode (``_dflash_ring_advice``), so an exact ring costs it
     # speed, not correctness. The inherited startup guard must not refuse it.
     _SPEC_DECLINES_AT_RING_WRAP = True
-    # The inherited prefill and warmup paths read ``_SPEC_BLOCK > 1`` as
-    # "speculation is on". The value never reaches the wire here.
-    _SPEC_BLOCK = max(2, int(os.environ.get("GEMMA4_DFLASH_SERVE_BLOCK", "64")))
     _DFLASH_ASYNC = _dflash_env_flag("GEMMA4_CONTRACT_ASYNC", "0")
 
     model_capabilities = {

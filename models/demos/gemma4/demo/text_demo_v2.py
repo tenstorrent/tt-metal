@@ -388,7 +388,7 @@ def _device_params():
             False,
             True,
         ),
-        (  # long-context-256k-b2 — TWO users, each with a FULL 256k context
+        (  # long-context-2x256k — TWO users, each with a FULL 256k context
             "models/tt_transformers/demo/sample_prompts/input_data_long_256k.json",
             True,
             256 * 1024,
@@ -424,7 +424,7 @@ def _device_params():
         "long-context-64k",
         "long-context-128k",
         "long-context-256k",
-        "long-context-256k-b2",
+        "long-context-2x256k",
         "ci-1",
     ],
 )

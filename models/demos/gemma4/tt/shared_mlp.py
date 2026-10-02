@@ -104,8 +104,8 @@ class SharedMLP:
             # so the two mesh axes shard different dims (mapper requires it):
             # gate_up [1, rows, K, cols*2n] dims=(1,3); down [1, rows, cols*k, H]
             # dims=(1,2). Per-chip shapes match the plain-TP layout exactly.
-            col_mapper = mesh_config.fractured_mapper(mesh_device, 1, 3)
-            row_mapper = mesh_config.fractured_mapper(mesh_device, 1, 2)
+            col_mapper = mesh_config.shard_mapper(mesh_device, mesh_dims=(1, 3))
+            row_mapper = mesh_config.shard_mapper(mesh_device, mesh_dims=(1, 2))
         elif tp > 1:
             col_mapper = mesh_config.column_parallel(mesh_device)
             row_mapper = mesh_config.row_parallel(mesh_device)

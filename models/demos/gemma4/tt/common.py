@@ -47,24 +47,34 @@ def _gemma4_is_host_weight(key):
     return any(key.endswith(s) for s in _GEMMA4_HOST_WEIGHT_SUFFIXES)
 
 
+def gemma4_env_flag(name, default="0"):
+    return os.environ.get(name, default).lower() in ("1", "true", "yes")
+
+
+# Generator prefill chunk that pairs with CP prefill: 6144 rows per column
+# fill the SDPA grid (U-shaped sweep, 16K and 32K both slower).
+GEMMA4_CP_PREFILL_CHUNK = 24576
+
+
 def gemma4_cp_prefill_engaged(mesh_device):
     """True only when create_tt_model will actually set mesh_config.cp_prefill.
 
     Mirrors the fracture gate: CP env AND fracture env AND a true 2D mesh, and
     not lanes (which forces cp_prefill off). The prefill-chunk default sites
     use this so a stray GEMMA4_CP_PREFILL=1 on a non-fracture run cannot select
-    the large chunk that regresses without CP (24576 alone measured -1.8%).
+    the large chunk that regresses without CP.
     """
-    env = os.environ.get
-    cp = env("GEMMA4_CP_PREFILL", "0").lower() in ("1", "true", "yes")
-    fr = env("GEMMA4_GALAXY_FRACTURE", "0").lower() in ("1", "true", "yes")
-    lanes = env("GEMMA4_GALAXY_LANES", "0").lower() in ("1", "true", "yes")
     shape = getattr(mesh_device, "shape", None)
     try:
         is2d = shape is not None and shape[0] > 1 and shape[1] > 1
     except (TypeError, IndexError):
         is2d = False
-    return cp and fr and is2d and not lanes
+    return (
+        gemma4_env_flag("GEMMA4_CP_PREFILL")
+        and gemma4_env_flag("GEMMA4_GALAXY_FRACTURE")
+        and is2d
+        and not gemma4_env_flag("GEMMA4_GALAXY_LANES")
+    )
 
 
 def create_tt_model(
@@ -105,9 +115,9 @@ def create_tt_model(
     if mesh_config is None:
         is_mesh = hasattr(mesh_device, "shape")
         num_devices = mesh_device.get_num_devices() if is_mesh else 1
-        _fracture = os.environ.get("GEMMA4_GALAXY_FRACTURE", "0").lower() in ("1", "true", "yes")
-        _lanes = os.environ.get("GEMMA4_GALAXY_LANES", "0").lower() in ("1", "true", "yes")
-        if is_mesh and num_devices > 1 and _fracture and mesh_device.shape[0] > 1:
+        _fracture = gemma4_env_flag("GEMMA4_GALAXY_FRACTURE")
+        _lanes = gemma4_env_flag("GEMMA4_GALAXY_LANES")
+        if is_mesh and num_devices > 1 and _fracture and mesh_device.shape[0] > 1 and mesh_device.shape[1] > 1:
             # Galaxy one-instance: heads/TP over axis 0, weights 2D-fractured
             # (SharedMLP over rows*cols; attention replicated across columns).
             # GEMMA4_GALAXY_LANES=1 additionally lane-shards the batch: one
@@ -126,7 +136,7 @@ def create_tt_model(
                 weight_fracture=True,
             )
             mesh_config.lane_sharded = _lanes
-            mesh_config.cp_prefill = os.environ.get("GEMMA4_CP_PREFILL", "0").lower() in ("1", "true", "yes")
+            mesh_config.cp_prefill = gemma4_env_flag("GEMMA4_CP_PREFILL")
             if mesh_config.lane_sharded and mesh_config.cp_prefill:
                 # Incompatible: lane prefill hands the real page table only to
                 # the owner column, while CP partitions Q across EVERY column —

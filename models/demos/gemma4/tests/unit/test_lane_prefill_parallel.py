@@ -13,7 +13,6 @@ largest single-chunk ISL, reported (not asserted).
 """
 
 import os
-import time
 
 import torch
 
@@ -121,34 +120,3 @@ def test_lane_prefill_parallel(mesh_device, reset_seeds, request):
         print(f"[lane {i}] serial argmax={s_arg} lane argmax={l_arg} pcc={pcc:.5f}")
         assert pcc > 0.99, f"lane {i} logits diverge from serial prefill: pcc={pcc}"
         assert s_arg == l_arg, f"lane {i} next-token mismatch: serial {s_arg} vs lane {l_arg}"
-
-    # ── Phase B: timing at the largest single-chunk ISL ───────────────────
-    max_chunk = int(generator.model_args[0].max_prefill_chunk_size)
-    s_time = min(2048, max_chunk)
-    base = prompts_tok[0]
-    reps = (s_time + base.shape[-1] - 1) // base.shape[-1]
-    long_tok = base.repeat(reps)[:s_time]
-    toks_list = [long_tok.clone() for _ in range(lanes)]
-    plens_t = [s_time] * lanes
-
-    serial_prefill(toks_list, plens_t, s_time)  # warm/compile
-    lane_prefill(toks_list, plens_t, s_time)
-
-    t = []
-    for _ in range(3):
-        t0 = time.perf_counter()
-        serial_prefill(toks_list, plens_t, s_time)
-        t.append(time.perf_counter() - t0)
-    serial_ms = sorted(t)[1] * 1e3
-
-    t = []
-    for _ in range(3):
-        t0 = time.perf_counter()
-        lane_prefill(toks_list, plens_t, s_time)
-        t.append(time.perf_counter() - t0)
-    lanes_ms = sorted(t)[1] * 1e3
-
-    print(
-        f"[lane-prefill] isl={s_time} serial4={serial_ms:.1f}ms lanes={lanes_ms:.1f}ms "
-        f"speedup={serial_ms / lanes_ms:.2f}x (4 users)"
-    )

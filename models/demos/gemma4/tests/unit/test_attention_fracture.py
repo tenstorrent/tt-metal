@@ -5,7 +5,7 @@
 
 (8,4) mesh, one weight copy for the MLP; attention itself is NOT 2D-fractured:
 wqkv and o_proj shard head-groups over the tp axis (axis 0) and are REPLICATED
-across the lane axis (axis 1) — see attention/weights.py fracture mappers.
+across the lane axis (axis 1) via the tp_axis-aware column/row mappers.
 There is no axis-1 reduction anywhere in attention: o_proj partials complete
 via the ordinary tp-axis-only all-reduce (apply_allreduce), which is exactly
 what lets lane columns later carry different users. This test validates that
@@ -68,14 +68,14 @@ def _setup_fractured_attention(mesh_device, layer_idx, max_seq_len=128):
 @pytest.mark.parametrize("layer_type", ["sliding_attention", "full_attention"], ids=["sliding", "global"])
 @pytest.mark.parametrize("seq_len", [128, 1024], ids=["seq128", "seq1024"])
 def test_attention_fracture_prefill(layer_type, seq_len, mesh_device, reset_seeds, request):
-    """Prefill PCC vs HF with one attention weight copy across 32 chips."""
+    """Prefill PCC vs HF: heads over the tp axis, replicated across the lane axis."""
     hf_text_config = TestFactory.create_hf_text_config()
     try:
         layer_idx = find_layer_idx(hf_text_config, layer_type)
     except ValueError:
         pytest.skip(f"No {layer_type} layer in this model")
 
-    hf_text_config, hf_attn, config, tt_attn, mesh_config = _setup_fractured_attention(
+    hf_text_config, hf_attn, config, tt_attn, _ = _setup_fractured_attention(
         mesh_device, layer_idx, max_seq_len=max(seq_len, 128)
     )
 

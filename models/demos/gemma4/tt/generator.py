@@ -11,7 +11,8 @@ from transformers import AutoTokenizer
 
 import ttnn
 from models.common.sampling import SamplingParams, slice_sampling_params
-from models.demos.gemma4.tt.common import create_tt_model
+from models.demos.gemma4.tt.attention.operations import effective_block_size
+from models.demos.gemma4.tt.common import GEMMA4_CP_PREFILL_CHUNK, create_tt_model, gemma4_cp_prefill_engaged
 from models.demos.gemma4.tt.generator_trace import (
     apply_gemma4_prefill_trace_policy,
     chunked_prefill_trace_enabled,
@@ -172,15 +173,8 @@ def _patch_model_args(
     # Overrides: GEMMA4_GEN_PREFILL_CHUNK=<n>, GEMMA4_DEMO_SINGLE_CHUNK=1 (legacy
     # full-ISL single chunk for A/B / correctness — avoid on long ISL).
     _chunk_override = int(os.environ.get("GEMMA4_GEN_PREFILL_CHUNK", "0"))
-    from models.demos.gemma4.tt.common import gemma4_cp_prefill_engaged
-
     if _chunk_override <= 0 and gemma4_cp_prefill_engaged(mesh_device):
-        # CP prefill pairs with a large generator chunk: each lane's quarter
-        # then fills the SDPA grid (measured 254K ladder 2026-09-29: 2048 base
-        # 190.5 s; 16K x CP 115.3; 24K x CP 99.2; 32K x CP 134.3 — U-shaped,
-        # optimum 24576 = 6144 rows/column = 48 q-blocks). Explicit
-        # GEMMA4_GEN_PREFILL_CHUNK still wins.
-        _chunk_override = 24576
+        _chunk_override = GEMMA4_CP_PREFILL_CHUNK
     _force_single = os.environ.get("GEMMA4_DEMO_SINGLE_CHUNK", "0") != "0"
     _needs_chunk_for_dram = (not _force_single) and should_auto_enable_chunked_bounded(
         max_seq_len,
@@ -393,25 +387,13 @@ class ChunkedPrefillPageTableGuardMixin:
             cache = kv_cache[i][0]
             cache_hd = int(cache.shape[-1])
             if cache_hd != int(cfg.head_dim) and cache_hd > 0:
-                # HMA-shared buffer: the byte-invariant reinterpret for this
-                # layer's view must include the kv-head factor, not just head_dim
-                # (operations.effective_block_size). Scaling by head_dim alone
-                # gave 128 for a sliding layer (kv=2 x 256) sharing a buffer
-                # allocated at the full-attention view (kv=1 x 64 x 512): the
-                # page table was then trimmed to one block per 128 tokens while
-                # the kernel addressed 64-token blocks, and the first warmup
-                # fill TT_FATAL'd on the width check.
+                # HMA-shared buffer allocated at another layer's view: tokens per
+                # block in THIS layer's view follow the per-block byte invariant,
+                # kv-head factor included.
                 tp = int(getattr(getattr(attn, "mesh_config", None), "tp", 1) or 1)
                 weights = getattr(attn, "weights", None)
                 kv_local = 1 if getattr(weights, "kv_replicated", False) else max(1, int(cfg.num_key_value_heads) // tp)
-                numer = int(cache.shape[1]) * int(cache.shape[2]) * cache_hd
-                denom = kv_local * int(cfg.head_dim)
-                if numer % denom:
-                    raise ValueError(
-                        f"layer {i}: KV buffer view {tuple(cache.shape)} is not a whole "
-                        f"number of {kv_local}x{cfg.head_dim} blocks"
-                    )
-                return numer // denom
+                return effective_block_size(cache, int(cfg.head_dim), kv_local)
         return block_size
 
     def _paged_prefill_block_size(self, kv_cache):
@@ -811,11 +793,20 @@ class ChunkedPrefillPageTableGuardMixin:
                 return True
         return False
 
-    def _release_all_sliding_prefill_tails(self, model_id=-1, *, clear_persistent: bool = False):
-        for layer in getattr(self.model[model_id], "layers", []):
-            attn = getattr(layer, "self_attn", None)
-            if attn is not None and hasattr(attn, "_release_sliding_prefill_tail"):
-                attn._release_sliding_prefill_tail(clear_persistent=clear_persistent)
+    def _release_all_sliding_prefill_tails(self, model_id=None, *, clear_persistent: bool = False, req_key=None):
+        models = self.model if model_id is None else [self.model[model_id]]
+        for model in models:
+            for layer in getattr(model, "layers", []):
+                attn = getattr(layer, "self_attn", None)
+                if attn is None or not hasattr(attn, "_release_sliding_prefill_tail"):
+                    continue
+                if req_key is not None:
+                    attn._release_sliding_prefill_tail(req_key=req_key)
+                else:
+                    attn._release_sliding_prefill_tail(clear_persistent=clear_persistent)
+
+    def _bind_sliding_tail_key(self, req_key):
+        self._bind_sliding_tail_key(req_key)
 
     def prefill_forward_single_user_text(
         self, tokens, page_table=None, *, kv_cache=None, num_cached_tokens=0, **kwargs
@@ -882,28 +873,11 @@ class ChunkedPrefillPageTableGuardMixin:
                     # Free the previous generation's pool slot / spill clone on
                     # every layer, or dead keys exhaust the 33-slot pool and
                     # grow the spill dict unboundedly (one key per request).
-                    _stale = ((_slot + 1) << 24) + _gen
-                    for _m in self.model:
-                        for _layer in getattr(_m, "layers", []):
-                            _attn = getattr(_layer, "self_attn", None)
-                            if _attn is not None and hasattr(_attn, "_release_sliding_prefill_tail"):
-                                _attn._release_sliding_prefill_tail(req_key=_stale)
+                    self._release_all_sliding_prefill_tails(req_key=((_slot + 1) << 24) + _gen)
                 _gen += 1
             _gens[_slot] = (_gen, _start + int(tokens.shape[-1]))
             req_key = ((_slot + 1) << 24) + _gen
-        if os.environ.get("GEMMA4_DEBUG_PAGED_TAIL", "0") != "0":
-            logger.info(
-                "tail-key: gid={} start={} width={} req_key={}",
-                _gid,
-                int(num_cached_tokens or 0),
-                int(tokens.shape[-1]),
-                req_key,
-            )
-        for model in self.model:
-            for layer in getattr(model, "layers", []):
-                cfg = getattr(getattr(layer, "self_attn", None), "config", None)
-                if cfg is not None:
-                    cfg._g4_active_req_key = req_key
+        self._bind_sliding_tail_key(req_key)
         if page_table is not None and kv_cache is not None:
             block_size = self._effective_paged_block_size(kv_cache)
             needed_blocks = num_blocks_in_seq(tokens.shape[-1] + num_cached_tokens, block_size)
@@ -1094,15 +1068,6 @@ class ChunkedPrefillPageTableGuardMixin:
             )
             page_tables = torch.cat([page_tables, pad], dim=-1)
 
-        # Mode-split async CCL: async RS+AG measured -27% on prefill but
-        # regressed decode, so GEMMA4_CCL_ASYNC_PREFILL=1 enables it for the
-        # duration of this prefill only (ccl_async_enabled() reads the env per
-        # call; decode steps outside this scope see it off).
-        _async_prefill = os.environ.get("GEMMA4_CCL_ASYNC_PREFILL", "0").lower() in ("1", "true", "yes")
-        _async_prev = os.environ.get("GEMMA4_CCL_ASYNC")
-        if _async_prefill:
-            os.environ["GEMMA4_CCL_ASYNC"] = "1"
-
         # Bounded sliding pools are PER-LAYER ring tensors addressed by
         # RING-LOCAL block ids (slot s owns rows [s*rb, (s+1)*rb)); the global
         # table's pool ids would index far past them — decode then reads
@@ -1119,7 +1084,7 @@ class ChunkedPrefillPageTableGuardMixin:
                 if not m:
                     per_layer.append(g_host)
                     continue
-                rb = int(m) // 64
+                rb = int(m) // block_size
                 if rb not in ring_cache:
                     ring_cache[rb] = torch.stack(
                         [torch.arange(s * rb, (s + 1) * rb, dtype=torch.int32) for s in slots_l]
@@ -1208,20 +1173,14 @@ class ChunkedPrefillPageTableGuardMixin:
                     step_logits.deallocate(True)
             last_in_chunk = [i - last_chunk_start for i in last_idx]
 
-        # Row-major device order over (rows, cols): row 0 holds one device per
-        # column, i.e. one full-vocab shard per lane (logits are tp-gathered
-        # inside the forward), in lane order.
+        # Logits are tp-gathered inside the forward, so each lane's first chip
+        # holds that lane's full-vocab logits.
         shards = ttnn.get_device_tensors(tt_logits)
         out = torch.zeros(lanes, model.vocab_size, dtype=torch.float32)
-        for lane in range(lanes):
-            host = ttnn.to_torch(shards[lane]).float()
+        for lane, dev in enumerate(model.lane_device_indices()):
+            host = ttnn.to_torch(shards[dev]).float()
             out[lane] = host[0, 0, last_in_chunk[lane] % 32, : model.vocab_size]
         tt_logits.deallocate(True)
-        if _async_prefill:
-            if _async_prev is None:
-                os.environ.pop("GEMMA4_CCL_ASYNC", None)
-            else:
-                os.environ["GEMMA4_CCL_ASYNC"] = _async_prev
         return out
 
     def _prefill_forward_single_user_text_eager(
