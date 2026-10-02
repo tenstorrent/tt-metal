@@ -226,6 +226,11 @@ def table(fh, fs):
         )
 
 
+def nest(text):
+    """A nested list item's text: its later lines indented, so a multi-line fix stays under its item."""
+    return str(text or "").strip().replace("\n", "\n    ")
+
+
 def detail(fh, fs):
     for i, f in enumerate(fs, 1):
         fh.write(
@@ -256,8 +261,8 @@ def detail(fh, fs):
             )
             for m in f["merged_sites"]:
                 fh.write(
-                    f"- `{m['site']}` ({m['relation']}, {m['severity']}): {m['summary']}\n"
-                    f"  - fails: {m['failure_scenario']}\n  - fix: {m['suggested_fix']}\n"
+                    f"- `{m['site']}` ({m['relation']}, {m['severity']}): {nest(m['summary'])}\n"
+                    f"  - fails: {nest(m['failure_scenario'])}\n  - fix: {nest(m['suggested_fix'])}\n"
                 )
             fh.write("\n")
         if f.get("same_line"):
@@ -266,8 +271,8 @@ def detail(fh, fs):
             )
             for m in f["same_line"]:
                 fh.write(
-                    f"- [{m['category']}, {m['severity']}, {m['status']}] {m['summary']}\n"
-                    f"  - fails: {m['failure_scenario']}\n  - fix: {m['suggested_fix']}\n"
+                    f"- [{m['category']}, {m['severity']}, {m['status']}] {nest(m['summary'])}\n"
+                    f"  - fails: {nest(m['failure_scenario'])}\n  - fix: {nest(m['suggested_fix'])}\n"
                 )
             fh.write("\n")
         if f.get("duplicate_of"):
