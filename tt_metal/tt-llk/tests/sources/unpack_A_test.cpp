@@ -77,8 +77,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
     const std::uint32_t num_blocks         = params.NUM_BLOCKS;
 
-    // Test configuration constants
-    constexpr DstSync sync_mode = DstSync::SyncHalf;
+    constexpr DstSync sync_mode = dest_sync;
 
     // copy srca to dest
     // Use B2D for all broadcasts except NONE (data in srcB), A2D for NONE (data in srcA)
@@ -119,8 +118,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
     const std::uint32_t num_blocks         = params.NUM_BLOCKS;
 
-    // Test configuration constants
-    constexpr DstSync sync_mode = DstSync::SyncHalf;
+    constexpr DstSync sync_mode = dest_sync;
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
         formats.pack_src, formats.pack_dst, params.TEST_FACE_R_DIM * params.TEST_FACE_C_DIM * 4, params.TEST_FACE_R_DIM, TILE_C_DIM, params.num_faces);
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, params.TEST_FACE_R_DIM, TILE_C_DIM, params.num_faces);
