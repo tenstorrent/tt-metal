@@ -12,6 +12,17 @@ by aggregate optimization. See [suite experiment log](suite_20261002.md) for the
 fixed topology, bounded remaining-task gates, forecasts, live CI and current
 handoff. Isolated successes below are prior evidence, not an all-five result.
 
+CI [36969576147](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/36969576147)
+finishes the serial Sympy/sklearn pair in **41m02s dispatch-to-finish**:
+sklearn submits natively in **688.289 seconds**, reward 1 (27 tests), while
+Sympy submits in **898.432 seconds**, reward 0. Astropy's 1,200-second extension
+over-edits a passing intermediate patch into a syntax error; disabling thinking
+also fails. A task-independent focused-completion prompt is being tested.
+Three original tasks now have clean passing candidate evidence, not five.
+The [precision audit](AUTODEBUG.md) confirms fresh BFP8 weight provenance but
+identifies unchanged prefill BFP4 and untested long-context numerical quality;
+it does not establish a cache/position bug.
+
 ## Prior checkpoint (2026-10-01 20:26 UTC)
 
 Experimental configurable-weight BFP8 passes the existing short readiness gate
