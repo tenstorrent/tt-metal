@@ -320,6 +320,15 @@ static ttnn::Tensor bound_matmul(
         }
     }
 
+    // With a user core grid the activation is fused into the kernel, which would apply it before a
+    // post-processed bias. In that case keep it out of the kernel and apply it after the bias instead.
+    std::optional<UnaryWithParam> trailing_activation;
+    if (parameters.user_fused_activation.has_value() &&
+        (!parameters.user_core_coord.has_value() || post_process_bias)) {
+        trailing_activation = parameters.user_fused_activation;
+        parameters.user_fused_activation = std::nullopt;
+    }
+
     auto attributes = ttnn::prim::create_matmul_attributes(
         input_tensor_a_adjusted, input_tensor_b_adjusted, parameters, {optional_output_tensor});
 
@@ -368,11 +377,9 @@ static ttnn::Tensor bound_matmul(
         output_tensor = ttnn::reshape(output_tensor, result_shape);
     }
 
-    if (parameters.user_fused_activation.has_value() && !parameters.user_core_coord.has_value()) {
-        const UnaryWithParam& activation = parameters.user_fused_activation.value();
-
-        output_tensor =
-            ttnn::unary_chain(output_tensor, {activation}, output_tensor.memory_config(), optional_output_tensor);
+    if (trailing_activation.has_value()) {
+        output_tensor = ttnn::unary_chain(
+            output_tensor, {trailing_activation.value()}, output_tensor.memory_config(), optional_output_tensor);
     }
 
     return output_tensor;
