@@ -9,10 +9,10 @@
 #include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt_stl/indestructible.hpp>
 
 #include "hostdev/profiler_zone_id.h"
@@ -24,7 +24,7 @@ namespace {
 
 // Mirrors TT_ZONE_DEFINE_ID; the host walks the section at a fixed 16-byte stride.
 struct ZoneMetaRecord {
-    uint32_t zone_id;
+    uint32_t zone_id;   // the handle's VMA in .tt_zone_ids, which RebaseZoneIds has already moved
     uint32_t name_ptr;  // VMA into .tt_zone_str
     uint32_t file_ptr;  // VMA into .tt_zone_str
     uint32_t line;
@@ -34,13 +34,14 @@ static_assert(
 
 struct State {
     mutable std::shared_mutex mtx;
-    std::unordered_set<std::string> ingested;
+    std::unordered_map<std::string, uint32_t> base_by_path;  // every image seen, and where its ids start
+    uint32_t next_id = 0;
     std::deque<ZoneMetaEntry> log;  // append-only; the listener keeps pointers into it
-    std::unordered_map<uint32_t, uint32_t> id_to_log_idx;
+    std::vector<int32_t> log_idx_by_id = std::vector<int32_t>(TT_ZONE_ID_COUNT, -1);
     ZoneMetaRegistry::Listener listener;
-    uint64_t collisions = 0;
+    uint64_t malformed_records = 0;
     uint64_t foreign_sections = 0;
-    bool collision_logged = false;
+    bool malformed_logged = false;
 };
 
 State& state() {
@@ -73,57 +74,81 @@ ZoneMetaRegistry& ZoneMetaRegistry::instance() {
     return inst;
 }
 
-void ZoneMetaRegistry::ingest_elf(const std::string& elf_path) {
+void ZoneMetaRegistry::ingest_elf(const std::string& elf_path, ll_api::ElfFile& elf) {
+    uint64_t ids_vma = 0;
+    const size_t count = elf.GetSectionContents(".tt_zone_ids", ids_vma).size();
+    if (count == 0) {
+        return;  // no zone sites: dispatch kernels, the relay, anything built without the producer
+    }
+
     State& s = state();
+    uint32_t base = 0;
+    bool first = false;
     {
-        std::shared_lock rd(s.mtx);
-        if (s.ingested.contains(elf_path)) {
-            return;
+        std::unique_lock wr(s.mtx);
+        auto [it, inserted] = s.base_by_path.try_emplace(elf_path, s.next_id);
+        if (inserted) {
+            // The block must stay below the stall id, the one value the device emits without a record.
+            TT_FATAL(
+                static_cast<uint64_t>(s.next_id) + count <= TT_ZONE_STALL_ID,
+                "streaming profiler: loading '{}' ({} zone sites) would exceed the {}-id zone space ({} assigned); "
+                "this process has loaded more distinct device zone sites than the 16-bit id supports",
+                elf_path,
+                count,
+                TT_ZONE_STALL_ID,
+                s.next_id);
+            s.next_id += static_cast<uint32_t>(count);
+            first = true;
         }
+        base = it->second;
+    }
+    // The image is this caller's; its text is packed for the device after we return, so the rebase must
+    // land here whether or not this path's names were already registered.
+    elf.RebaseZoneIds(base);
+    if (!first) {
+        return;
     }
 
     std::vector<ZoneMetaEntry> parsed;
     bool skipped_foreign = false;
+    uint64_t malformed = 0;
     try {
-        ll_api::ElfFile elf;
-        elf.ReadImage(elf_path);
         uint64_t meta_vma = 0;
         auto meta = elf.GetSectionContents(".tt_zone_meta", meta_vma);
-        if (!meta.empty()) {
-            uint64_t str_vma = 0;
-            auto strs = elf.GetSectionContents(".tt_zone_str", str_vma);
-            // The JIT cache key does not cover this section's layout, so a stale root can be reused and walking it at
-            // our stride would bind plausible ids to wrong names; either guard failing means the section is not ours.
-            if (strs.empty()) {
-                log_debug(
-                    tt::LogLLRuntime,
-                    "zone-meta: '{}' has .tt_zone_meta but no .tt_zone_str -- foreign/stale record layout, "
-                    "ignoring the section (its zones will render as Zone_<id>)",
-                    elf_path);
-                skipped_foreign = true;
-            } else if (meta.size() % sizeof(ZoneMetaRecord) != 0) {
-                log_warning(
-                    tt::LogLLRuntime,
-                    "zone-meta: '{}' has a .tt_zone_meta of {} bytes, not a multiple of the {}-byte record "
-                    "stride -- foreign/stale record layout, ignoring the section",
-                    elf_path,
-                    meta.size(),
-                    sizeof(ZoneMetaRecord));
-                skipped_foreign = true;
+        uint64_t str_vma = 0;
+        auto strs = elf.GetSectionContents(".tt_zone_str", str_vma);
+        // The JIT cache key does not cover this section's layout, so a stale root can be reused and walking it at
+        // our stride would bind plausible ids to wrong names; either guard failing means the section is not ours.
+        if (meta.empty() || strs.empty()) {
+            log_debug(
+                tt::LogLLRuntime,
+                "zone-meta: '{}' has zone ids but no .tt_zone_meta/.tt_zone_str -- foreign/stale record layout, "
+                "ignoring the section (its zones will render as Zone_<id>)",
+                elf_path);
+            skipped_foreign = true;
+        } else if (meta.size() % sizeof(ZoneMetaRecord) != 0) {
+            log_warning(
+                tt::LogLLRuntime,
+                "zone-meta: '{}' has a .tt_zone_meta of {} bytes, not a multiple of the {}-byte record "
+                "stride -- foreign/stale record layout, ignoring the section",
+                elf_path,
+                meta.size(),
+                sizeof(ZoneMetaRecord));
+            skipped_foreign = true;
+        }
+        const size_t n = skipped_foreign ? 0 : meta.size() / sizeof(ZoneMetaRecord);
+        parsed.reserve(n);
+        for (size_t i = 0; i < n; i++) {
+            ZoneMetaRecord rec{};
+            std::memcpy(&rec, meta.data() + i * sizeof(ZoneMetaRecord), sizeof(rec));
+            const char* name = resolve(strs, str_vma, rec.name_ptr);
+            const char* file = resolve(strs, str_vma, rec.file_ptr);
+            // Every record's id is a handle in this image's block; anything else is a layout we do not understand.
+            if (name == nullptr || rec.zone_id < base || rec.zone_id >= base + count) {
+                malformed++;
+                continue;
             }
-            const size_t n = skipped_foreign ? 0 : meta.size() / sizeof(ZoneMetaRecord);
-            parsed.reserve(n);
-            for (size_t i = 0; i < n; i++) {
-                ZoneMetaRecord rec{};
-                std::memcpy(&rec, meta.data() + i * sizeof(ZoneMetaRecord), sizeof(rec));
-                const char* name = resolve(strs, str_vma, rec.name_ptr);
-                const char* file = resolve(strs, str_vma, rec.file_ptr);
-                if (name == nullptr) {
-                    continue;
-                }
-                parsed.push_back(
-                    ZoneMetaEntry{rec.zone_id & TT_ZONE_ID_MASK, name, file != nullptr ? file : "", rec.line});
-            }
+            parsed.push_back(ZoneMetaEntry{rec.zone_id, name, file != nullptr ? file : "", rec.line});
         }
     } catch (const std::exception& e) {
         // Non-fatal: a kernel whose zones cannot be named still profiles, rendering as "Zone_<id>".
@@ -131,43 +156,34 @@ void ZoneMetaRegistry::ingest_elf(const std::string& elf_path) {
     }
 
     std::unique_lock wr(s.mtx);
-    if (!s.ingested.insert(elf_path).second) {
-        return;
-    }
     if (skipped_foreign) {
         s.foreign_sections++;
     }
     std::vector<const ZoneMetaEntry*> added;
     for (auto& e : parsed) {
-        auto it = s.id_to_log_idx.find(e.zone_id);
-        if (it != s.id_to_log_idx.end()) {
-            const ZoneMetaEntry& prev = s.log[it->second];
-            if (prev.name != e.name || prev.file != e.file || prev.line != e.line) {
-                s.collisions++;
-                if (!s.collision_logged) {
-                    s.collision_logged = true;
-                    log_warning(
-                        tt::LogLLRuntime,
-                        "zone-meta: structural zone id {} (tu {} local {}) claimed by two source locations: "
-                        "'{}' ({}:{}) and '{}' ({}:{}). Zone names for these will be wrong. This means two "
-                        "translation units share a tu_id -- see get_or_assign_profiler_tu_id in "
-                        "jit_build/build.cpp.",
-                        e.zone_id,
-                        TT_ZONE_TU_OF(e.zone_id),
-                        TT_ZONE_LOCAL_OF(e.zone_id),
-                        prev.name,
-                        prev.file,
-                        prev.line,
-                        e.name,
-                        e.file,
-                        e.line);
-                }
-            }
-            continue;  // first writer wins: a name never changes under a consumer that already read it
+        if (s.log_idx_by_id[e.zone_id] >= 0) {
+            malformed++;  // two records on one handle: not something the emitter can produce
+            continue;
         }
-        s.id_to_log_idx.emplace(e.zone_id, static_cast<uint32_t>(s.log.size()));
+        s.log_idx_by_id[e.zone_id] = static_cast<int32_t>(s.log.size());
         added.push_back(&s.log.emplace_back(std::move(e)));
     }
+    if (malformed != 0) {
+        s.malformed_records += malformed;
+        if (!s.malformed_logged) {
+            s.malformed_logged = true;
+            log_warning(
+                tt::LogLLRuntime,
+                "zone-meta: '{}' has {} zone record(s) whose id is outside its own block [{}, {}) or unnamed; those "
+                "zones will render as Zone_<id> (stale .tt_zone_meta layout in the JIT cache?)",
+                elf_path,
+                malformed,
+                base,
+                base + count);
+        }
+    }
+    log_debug(
+        tt::LogLLRuntime, "zone-meta: '{}' -> zone ids [{}, {}), {} named", elf_path, base, base + count, added.size());
     if (s.listener && !added.empty()) {
         s.listener(added);
     }
@@ -187,10 +203,16 @@ void ZoneMetaRegistry::set_listener(Listener listener) {
     s.listener = std::move(listener);
 }
 
-uint64_t ZoneMetaRegistry::collisions() const {
+uint32_t ZoneMetaRegistry::ids_assigned() const {
     const State& s = state();
     std::shared_lock rd(s.mtx);
-    return s.collisions;
+    return s.next_id;
+}
+
+uint64_t ZoneMetaRegistry::malformed_records() const {
+    const State& s = state();
+    std::shared_lock rd(s.mtx);
+    return s.malformed_records;
 }
 
 uint64_t ZoneMetaRegistry::foreign_sections() const {

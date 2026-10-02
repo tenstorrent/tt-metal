@@ -11,6 +11,7 @@
 
 #include "tt_elffile.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
+#include "zone_meta.hpp"
 
 namespace ll_api {
 
@@ -26,6 +27,14 @@ memory::memory(const std::string& path, Loading loading) : loading_(loading) {
     ElfFile elf;
 
     elf.ReadImage(path);
+    // Streaming profiler: give this image its block of zone ids and register their names, before the text is
+    // packed (the ids are immediates in it) and before XIP rewrites the other relocations. Every
+    // device-executed image, kernel or firmware, is constructed here exactly once (llrt::get_risc_binary),
+    // so a zone's name is registered strictly before it can reach the host. The DRAM profiler's ELFs carry
+    // no zone sections and resolve names their own way.
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_streaming_profiler_enabled()) {
+        tt::llrt::ZoneMetaRegistry::instance().ingest_elf(path, elf);
+    }
     if (loading == Loading::CONTIGUOUS_XIP) {
         elf.MakeExecuteInPlace();
 

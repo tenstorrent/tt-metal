@@ -8,10 +8,6 @@
 #include "jit_build_cache.hpp"
 #include "jit_device_config.hpp"
 
-#include <fcntl.h>
-#include <sys/file.h>
-#include <unistd.h>
-
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -30,8 +26,6 @@
 #include <string_view>
 #include <unordered_map>
 #include <vector>
-
-#include "hostdev/profiler_zone_id.h"
 
 #include <enchantum/enchantum.hpp>
 #include <fmt/base.h>
@@ -65,77 +59,6 @@ using namespace std;
 namespace tt::tt_metal {
 
 namespace {
-
-// Hands out the tu_id half of a structural zone id (hostdev/profiler_zone_id.h) as -DTT_PROFILER_TU_ID.
-// Ids must be unique across TUs and stable across runs (a cached ELF keeps the id in its .tt_zone_meta),
-// hence a file. The key is source identity plus build target: one source compiled for BRISC vs NCRISC can
-// number its zones differently. Compile-time args are left out to keep the registry bounded; two
-// define-variants of one source then share a tu_id, which the host reports as a collision rather than
-// mis-naming. Append-only "<source_id>\t<tu_id>" lines, lowest free id; flock() covers parallel builds
-// sharing a cache root, the mutex covers the JIT's own thread pool.
-uint32_t get_or_assign_profiler_tu_id(const std::string& registry_path, const std::string& source_id) {
-    static std::mutex mtx;
-    std::lock_guard<std::mutex> lk(mtx);
-
-    struct RegistryLock {
-        int fd;
-        explicit RegistryLock(const std::string& path) : fd(::open(path.c_str(), O_RDWR | O_CREAT, 0644)) {
-            TT_FATAL(fd >= 0, "Failed to open profiler zone tu-id registry '{}': {}", path, std::strerror(errno));
-            if (::flock(fd, LOCK_EX) != 0) {
-                int err = errno;
-                ::close(fd);
-                TT_THROW("Failed to lock profiler zone tu-id registry '{}': {}", path, std::strerror(err));
-            }
-        }
-        ~RegistryLock() {
-            ::flock(fd, LOCK_UN);
-            ::close(fd);
-        }
-    } registry_lock(registry_path);
-
-    std::vector<bool> taken(TT_ZONE_TU_COUNT, false);
-    {
-        std::ifstream in(registry_path);
-        std::string line;
-        while (std::getline(in, line)) {
-            auto tab = line.rfind('\t');
-            if (tab == std::string::npos) {
-                continue;
-            }
-            uint32_t entry_id = 0;
-            try {
-                entry_id = static_cast<uint32_t>(std::stoul(line.substr(tab + 1)));
-            } catch (const std::exception&) {
-                continue;
-            }
-            if (entry_id >= TT_ZONE_TU_COUNT) {
-                continue;  // assigned when the tu split was wider
-            }
-            if (line.compare(0, tab, source_id) == 0) {
-                return entry_id;
-            }
-            taken[entry_id] = true;
-        }
-    }
-
-    taken[TT_ZONE_RESERVED_TU] = true;
-    uint32_t id = 0;
-    while (id < TT_ZONE_TU_COUNT && taken[id]) {
-        ++id;
-    }
-    TT_FATAL(
-        id < TT_ZONE_TU_COUNT,
-        "Profiler zone tu-id space ({} ids) is exhausted. Delete '{}' to compact it; ids are re-derived from "
-        "each build's ELFs, so nothing is lost by resetting it.",
-        TT_ZONE_TU_COUNT,
-        registry_path);
-
-    std::ofstream out(registry_path, std::ios::app);
-    out << source_id << '\t' << id << '\n';
-    out.flush();
-    TT_FATAL(out.good(), "Failed to persist profiler zone tu-id registry entry to '{}'", registry_path);
-    return id;
-}
 
 void report_result(const string& target_name, string_view op, const string& cmd, const string& log_file, bool result) {
     if (!result) {
@@ -618,7 +541,10 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     // Linker flags
     this->lflags_ += jit_build_query.linker_flags(params);
     this->lflags_ += fmt::format("-T{} ", this->linker_script_);
-    if (!this->is_fw_) {
+    // Kernels keep their relocations for the XIP transform (llrt/tt_elffile.cpp). Under the streaming
+    // profiler firmware keeps them too: the host rebases every image's zone ids through them at load
+    // (llrt/zone_meta.cpp).
+    if (!this->is_fw_ || env_.get_rtoptions().get_streaming_profiler_enabled()) {
         this->lflags_ += "-Wl,--emit-relocs ";
     }
 
@@ -790,21 +716,11 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
         cflags += " -Winvalid-pch -Wno-error=invalid-pch";
     }
 
-    // Per-TU half of the structural device zone id (STREAMING profiler only; the DRAM profiler's 16-bit
-    // hash ids need no registry). Kept out of `defines_`/`build_key_` on purpose: a tu_id is a property of
-    // the SOURCE, not of the build recipe, so folding it into the cache key would split the cache for no
-    // reason. It is stable for a given source identity, so a cached object never disagrees with a freshly
-    // compiled one.
+    // Streaming profiler only: a zone site emits an assembler label named by TU, and this tag keeps the
+    // labels of this link's TUs apart when LTO merges them into one assembly (hostdev/profiler_zone_id.h).
+    // Kept out of `defines_`/`build_key_`: it is a property of the source list, not of the recipe.
     if (env_.get_rtoptions().get_streaming_profiler_enabled()) {
-        // Firmware has no JitBuildSettings; its source identity is the source path itself plus the target,
-        // which is stable across build configs (out_dir is not -- it carries the build key, and keying on it
-        // would mint a fresh tu_id per config for the same source).
-        const std::string source_id = (settings != nullptr)
-                                          ? settings->get_profiler_zone_src_id() + '\x1f' + this->target_name_
-                                          : "fw\x1f" + this->srcs_[src_index] + '\x1f' + this->target_name_;
-        const uint32_t tu_id =
-            get_or_assign_profiler_tu_id(env_.get_out_root_path() + ".profiler_zone_tu_ids", source_id);
-        defines.push_back(fmt::format("-DTT_PROFILER_TU_ID={}", tu_id));
+        defines.push_back(fmt::format("-DTT_ZONE_TU_TAG={}", src_index));
     }
 
     const std::string obj_path = out_dir + this->objs_[src_index];

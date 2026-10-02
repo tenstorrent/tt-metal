@@ -106,7 +106,9 @@ static_assert(myRiscID < PROFILER_SPSC_MAX_RISC, "this processor has no slot in 
 constexpr uint32_t PROFILER_STALL_ZONE_ID = TT_ZONE_STALL_ID;
 
 // Wire encode, duplicated from spsc_packet.h because the JIT build lacks that include path. word0 = type(5) |
-// low27. A zone ships whole at close: a 2-word ZONE_S when its end is within 2^16 cycles of the lane cursor
+// low27, the low27 carrying a 16-bit zone id (hostdev/profiler_zone_id.h: the id is an address the host
+// rebases at image load, so it reaches here as a plain register value, never a compile-time constant). A zone
+// ships whole at close: a 2-word ZONE_S when its end is within 2^16 cycles of the lane cursor
 // and its duration fits 16 bits, else a 3-word ZONE_ATOMIC (id | end timer_low | duration) that re-anchors
 // the cursor, or a 5-word ZONE_L when the duration overflows 32 bits. Lane identity and the timer's high half
 // are host-reconstructed from stickies.
@@ -424,17 +426,18 @@ __attribute__((noinline)) void finish_profiler() { publish_tail(); }
 // The constructor touches nothing but the wall clock; the whole zone ships at close with the start as member
 // state, 8 B per open zone. Hold exactly these two words: anything more is register pressure across the user
 // code inside the zone, and a globals-maxed kernel on the 192-256 B loader stack floor gets tight around
-// 10-20 open zones (see stackCanaryScope).
-template <uint32_t timer_id>
+// 10-20 open zones (see stackCanaryScope). Site is the type TT_ZONE_DEFINE_ID declares at the zone site; its
+// id() is two instructions at the close, so the id is carried by the type, not by a member.
+template <typename Site>
 struct profileScope {
     uint32_t start_hi, start_lo;
     inline __attribute__((always_inline)) profileScope() { read_wall_clock(start_hi, start_lo); }
-    inline __attribute__((always_inline)) ~profileScope() { mark_zone_close(timer_id, start_hi, start_lo); }
+    inline __attribute__((always_inline)) ~profileScope() { mark_zone_close(Site::id(), start_hi, start_lo); }
 };
 
 // profileScope gated on a bool evaluated once at entry; false reads no clock and writes nothing. A constant argument
 // folds to the plain zone or to no code.
-template <uint32_t timer_id>
+template <typename Site>
 struct profileScopeIf {
     bool on;
     uint32_t start_hi, start_lo;
@@ -445,7 +448,7 @@ struct profileScopeIf {
     }
     inline __attribute__((always_inline)) ~profileScopeIf() {
         if (on) {
-            mark_zone_close(timer_id, start_hi, start_lo);
+            mark_zone_close(Site::id(), start_hi, start_lo);
         }
     }
 };
@@ -499,7 +502,7 @@ struct stackCanaryScope {
     inline __attribute__((always_inline)) stackCanaryScope() { ::__stack_base[0] = STACK_CANARY_PATTERN; }
     inline __attribute__((always_inline)) ~stackCanaryScope() {
         if (__builtin_expect(::__stack_base[0] != STACK_CANARY_PATTERN, 0)) {
-            record_event(STACK_CANARY_DEAD_ID);
+            record_event(STACK_CANARY_DEAD_ID::id());
         }
     }
 };
@@ -524,16 +527,16 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
 // DeviceTimestampedData carries a payload; DeviceRecordEvent is a bare 2-word marker. Both have a compile-time
 // tag and an ELF-resolvable name. The DRAM backend's DeviceRecordEvent takes a runtime uint16 id; here the wire
 // names every point marker from the ELF, so the argument is a compile-time name like the other macros'.
-#define DeviceTimestampedData(name, data)               \
-    {                                                   \
-        TT_ZONE_DEFINE_ID(hash, name);                  \
-        kernel_profiler::time_stamped_data(hash, data); \
+#define DeviceTimestampedData(name, data)                     \
+    {                                                         \
+        TT_ZONE_DEFINE_ID(hash, name);                        \
+        kernel_profiler::time_stamped_data(hash::id(), data); \
     }
 
-#define DeviceRecordEvent(name)              \
-    {                                        \
-        TT_ZONE_DEFINE_ID(hash, name);       \
-        kernel_profiler::record_event(hash); \
+#define DeviceRecordEvent(name)                    \
+    {                                              \
+        TT_ZONE_DEFINE_ID(hash, name);             \
+        kernel_profiler::record_event(hash::id()); \
     }
 
 #define DeviceValidateProfiler(condition) kernel_profiler::set_profiler_zone_valid(condition);

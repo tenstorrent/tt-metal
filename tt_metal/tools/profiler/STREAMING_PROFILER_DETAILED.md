@@ -430,8 +430,9 @@ Host files live in `tt_metal/impl/streaming_profiler/`.
   `tracy_consumer` (the Tracy sink; per-relay
   anchors, k-way merge of a context's lanes by timestamp so Tracy's 2^31-tick unwrap heuristic never fires —
   §4.2).
-- Device producer: `kernel_profiler_streaming.hpp`, selected by `-DPROFILE_STREAMING`. Zone ids are 27-bit
-  structural ids resolved to names per ELF on the host; every RISC emits its own `STICKY_PROG` at launch so
+- Device producer: `kernel_profiler_streaming.hpp`, selected by `-DPROFILE_STREAMING`. Zone ids are 16-bit,
+  assigned per image as it loads (`hostdev/profiler_zone_id.h`, `llrt/zone_meta.cpp`) and resolved to names
+  from the image's ELF on the host; every RISC emits its own `STICKY_PROG` at launch so
   `rec.prog` is exact on every lane (§N+60).
 
 ### 2.4 Sizing and where the numbers come from
@@ -1063,9 +1064,11 @@ see [§4.1](#41-zones-and-point-markers-in-the-tracy-gui).
 
 Every zone ships whole, in one packet, emitted at scope **close** — the RAII scope object carries the
 start timestamp (`start_hi`/`start_lo`, 8 B of member state), so the open touches nothing but the wall
-clock. Packets are sized by need. `word0 = type(5) | id27` in all of them; the id is the full 27-bit
-structural zone id (`tu_id(13) << 14 | local(14)`, the split in `hostdev/profiler_zone_id.h`),
-ELF-name-resolved on the host.
+clock. Packets are sized by need. `word0 = type(5) | id27` in all of them; the id field carries the 16-bit
+zone id (`hostdev/profiler_zone_id.h`: a zone site's id is the address of a one-byte handle in the
+non-ALLOC `.tt_zone_ids` section, and the host gives each image the next block of the id space when it
+loads it, rebasing the `lui`/`addi` immediates through the image's relocations), ELF-name-resolved on the
+host.
 
 | type | name | words | payload after word0 | expresses |
 |---|---|---|---|---|

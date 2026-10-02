@@ -10,8 +10,8 @@
 //    start is not monotonic. One exception: a zone spanning a low-word wrap reads its end before reserving ring
 //    space, so a stall zone raised by that reservation precedes it with a later end.
 //  - Cross-lane and cross-socket interleaving is arbitrary; the record's meta carries lane and device.
-//  - Every id is the 27-bit structural zone id (hostdev/profiler_zone_id.h) and resolves to a name through
-//    the zone-meta registry (llrt/zone_meta.hpp); an unnamed id is a bug.
+//  - Every id is a 16-bit zone id (hostdev/profiler_zone_id.h: a block per image, assigned as the image loads)
+//    and resolves to a name through the zone-meta registry (llrt/zone_meta.hpp); an unnamed id is a bug.
 #pragma once
 
 #include <algorithm>

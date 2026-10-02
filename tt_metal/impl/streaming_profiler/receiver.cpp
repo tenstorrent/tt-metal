@@ -25,6 +25,7 @@
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 
 #include "context/metal_context.hpp"
+#include "hostdev/profiler_zone_id.h"
 #include "llrt/zone_meta.hpp"
 #include "impl/streaming_profiler/spsc_packet.h"
 
@@ -120,13 +121,18 @@ Receiver::~Receiver() {
     }
     log_report();
     const uint64_t foreign = llrt::ZoneMetaRegistry::instance().foreign_sections();
-    const uint64_t collisions = llrt::ZoneMetaRegistry::instance().collisions();
-    if (collisions != 0 || foreign != 0) {
+    const uint64_t malformed = llrt::ZoneMetaRegistry::instance().malformed_records();
+    log_info(
+        tt::LogMetal,
+        "[streaming profiler] zone ids: {} of {} assigned to the images this process loaded",
+        llrt::ZoneMetaRegistry::instance().ids_assigned(),
+        TT_ZONE_STALL_ID);
+    if (malformed != 0 || foreign != 0) {
         log_warning(
             tt::LogMetal,
-            "[streaming profiler] zone names: {} id collisions, {} foreign metadata sections ignored (the JIT "
+            "[streaming profiler] zone names: {} malformed records, {} foreign metadata sections ignored (the JIT "
             "cache holds ELFs from a different .tt_zone_meta layout)",
-            collisions,
+            malformed,
             foreign);
     }
 }

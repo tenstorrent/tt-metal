@@ -91,22 +91,19 @@ constexpr bool covers(RecordType set, RecordType subset) {
     return (static_cast<uint32_t>(set) & static_cast<uint32_t>(subset)) == static_cast<uint32_t>(subset);
 }
 
-inline constexpr uint32_t ZONE_ID_BITS = 27;
-inline constexpr uint32_t ZONE_LOCAL_BITS = 14;
-inline constexpr uint32_t ZONE_TU_COUNT = 1u << (ZONE_ID_BITS - ZONE_LOCAL_BITS);
+// Zone ids are 16-bit and assigned per process: each device image gets the next block as it loads
+// (hostdev/profiler_zone_id.h), so the table is flat and a lookup is one load.
+inline constexpr uint32_t ZONE_ID_BITS = 16;
+inline constexpr uint32_t ZONE_ID_COUNT = 1u << ZONE_ID_BITS;
 
-struct SiteTu {
-    std::span<const MarkerSite* const> sites;
-};
 struct SiteRegistry {
-    static std::atomic<const SiteTu*> tus[ZONE_TU_COUNT];
+    static std::atomic<const MarkerSite*> sites[ZONE_ID_COUNT];
 };
 inline constexpr MarkerSite UNNAMED_SITE{};
 
 inline const MarkerSite& site_of(uint32_t zone_id) {
-    const SiteTu* tu = SiteRegistry::tus[zone_id >> ZONE_LOCAL_BITS].load(std::memory_order_acquire);
-    const uint32_t local = zone_id & ((1u << ZONE_LOCAL_BITS) - 1u);
-    const MarkerSite* s = tu != nullptr && local < tu->sites.size() ? tu->sites[local] : nullptr;
+    const MarkerSite* s =
+        zone_id < ZONE_ID_COUNT ? SiteRegistry::sites[zone_id].load(std::memory_order_acquire) : nullptr;
     return s != nullptr ? *s : UNNAMED_SITE;
 }
 
