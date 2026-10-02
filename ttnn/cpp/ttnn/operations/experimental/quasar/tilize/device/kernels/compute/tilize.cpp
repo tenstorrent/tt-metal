@@ -21,7 +21,11 @@ void kernel_main() {
     constexpr auto per_core_block_tile_cnt = get_arg(args::per_core_block_tile_cnt);
 
 #ifdef ARCH_QUASAR
-    DPRINT(
+    // DPRINT_UNPACK (not DPRINT): g_dfb_interface is defined ONLY on the UNPACK/PACK TRISCs
+    // (guarded UCK_CHLKC_UNPACK||UCK_CHLKC_PACK in trisc.cc) — a plain DPRINT compiles the symbol
+    // reference on the MATH TRISC too and fails to link. The unpack TRISC is also the one that does
+    // the live unpack BD programming from this base, so it is exactly the view we want.
+    DPRINT_UNPACK(
         "QSR tilize DFB base: in={} out={}\n",
         get_local_dfb_interface(static_cast<uint32_t>(dfb::in)).tc_slots[0].base_addr,
         get_local_dfb_interface(static_cast<uint32_t>(dfb::out)).tc_slots[0].base_addr);
