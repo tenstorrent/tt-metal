@@ -344,9 +344,9 @@ jobs:
 
       - name: Comment on PR
         if: >-
-          always() && github.event_name == 'pull_request'
+          ${{ !cancelled() && github.event_name == 'pull_request'
           && steps.measured.outputs.complete == 'true'
-          && hashFiles('perf_gate_report.md') != ''
+          && hashFiles('perf_gate_report.md') != '' }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           ARCH: ${{ inputs.arch }}
@@ -384,7 +384,8 @@ jobs:
 
       - name: Build the Slack payload
         id: slack
-        if: always()
+        # Not after a cancel: a person or a newer push stopped the run on purpose.
+        if: ${{ !cancelled() }}
         env:
           SLACK_CHANNEL_ID: ${{ secrets.LLK_PERF_GATE_SLACK_CHANNEL_ID }}
           PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number || '?' }}
@@ -479,7 +480,7 @@ jobs:
           echo "should_post=false" >> $GITHUB_OUTPUT
 
       - name: Notify Slack
-        if: always() && steps.slack.outputs.should_post == 'true'
+        if: ${{ !cancelled() && steps.slack.outputs.should_post == 'true' }}
         env:
           SLACK_BOT_TOKEN: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
         run: |
