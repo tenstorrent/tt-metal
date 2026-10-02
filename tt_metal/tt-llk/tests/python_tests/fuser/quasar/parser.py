@@ -38,6 +38,7 @@ from fuser.validator import (
     FpuMathSchemaBase,
     OperationSchemaBase,
     PackSchema,
+    TernarySfpuMathSchema,
     UnarySfpuMathSchema,
     eltwise_unpacker_rules,
     forced_unpackers,
@@ -64,6 +65,7 @@ from .packer.matmul import MatmulPacker
 from .packer.packer import Packer
 from .packer.untilize import PackUntilize
 from .sfpu.binary import BinarySfpu
+from .sfpu.ternary import TernarySfpu
 from .sfpu.unary import UnarySfpu
 from .unpacker.matmul import MatmulUnpacker
 from .unpacker.reduce import ReduceUnpacker
@@ -398,6 +400,11 @@ BINARY_SFPU_OPS = {
 }
 
 
+TERNARY_SFPU_OPS = {
+    MathOperation.SfpuWhere,
+}
+
+
 class FpuMathSchema(FpuMathSchemaBase):
     _fpu_map: ClassVar = FPU_MAP
     _unpacker_map: ClassVar = UNPACKER_MAP
@@ -414,8 +421,18 @@ class QuasarBinarySfpuMathSchema(BinarySfpuMathSchema):
     _sfpu_ops: ClassVar = BINARY_SFPU_OPS
 
 
+class QuasarTernarySfpuMathSchema(TernarySfpuMathSchema):
+    _sfpu_cls: ClassVar = TernarySfpu
+    _sfpu_ops: ClassVar = TERNARY_SFPU_OPS
+
+
 MathSchema = Annotated[
-    Union[FpuMathSchema, QuasarUnarySfpuMathSchema, QuasarBinarySfpuMathSchema],
+    Union[
+        FpuMathSchema,
+        QuasarUnarySfpuMathSchema,
+        QuasarBinarySfpuMathSchema,
+        QuasarTernarySfpuMathSchema,
+    ],
     Field(discriminator="type"),
 ]
 
@@ -425,7 +442,10 @@ class QuasarPackSchema(PackSchema):
 
 
 PackEntrySchema = Union[
-    QuasarUnarySfpuMathSchema, QuasarBinarySfpuMathSchema, QuasarPackSchema
+    QuasarUnarySfpuMathSchema,
+    QuasarBinarySfpuMathSchema,
+    QuasarTernarySfpuMathSchema,
+    QuasarPackSchema,
 ]
 
 
