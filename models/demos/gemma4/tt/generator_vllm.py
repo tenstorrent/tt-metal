@@ -1167,16 +1167,17 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             return super()._chunk_prefill_page_table(page_table, user_id=0, model_id=model_id, kv_cache=kv_cache)
 
         # Sequential path: legacy page_table is already the 1-row slice but
-        # ``user_id`` is forced to 0 — pick the matching full-attn row.
+        # ``user_id`` is forced to 0. This runs before the user's row is
+        # activated, so the cursor names the user (its slice content is not
+        # unique under lane rings).
         if (
             isinstance(page_table, torch.Tensor)
             and page_table.dim() > 1
             and int(page_table.shape[0]) == 1
             and int(full_pt.shape[0]) > 1
         ):
-            row = self._match_page_table_row(page_table, per_layer)
-            if row is not None:
-                full_pt = full_pt[row : row + 1]
+            row = int(getattr(model, "_sequential_row_cursor", 0))
+            full_pt = full_pt[row : row + 1]
 
         cache = kv_cache[full_idx][0]
         attn = model.layers[full_idx].self_attn
@@ -1322,8 +1323,8 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         The scheduler merges every waiting prefill into one step, so this call
         can carry any batch size. Requests bucket by owner lane (slot //
         lane_slots, FIFO in call order); round r takes each lane's r-th
-        request, and every round that covers ALL lanes with one shared last
-        32-token tile prefills in ONE chunk walk via prefill_forward_lanes.
+        request, and every round that covers ALL lanes with one shared prompt
+        length prefills in ONE chunk walk via prefill_forward_lanes.
         Leftover requests recurse through
         prefill_forward with subset kwargs and run serially. Partial groups
         cannot run lane-parallel: the tail slice offset is device-replicated,
@@ -1391,14 +1392,14 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         r = 0
         while all(len(b) > r for b in buckets):
             group = [buckets[ln][r] for ln in range(lanes)]
-            if len({(plens[q] - 1) // 32 for q in group}) != 1:
+            if len({plens[q] for q in group}) != 1:
                 break
             groups.append(group)
             r += 1
         if not groups:
             return self._g4_router_reject(
                 f"no full round: B={B} slots={[int(x) for x in slots][:8]} lane_slots={lane_slots} "
-                f"buckets={[len(b) for b in buckets]} head_tiles={[(plens[b[0]] - 1) // 32 for b in buckets if b]}"
+                f"buckets={[len(b) for b in buckets]} lens={[plens[b[0]] for b in buckets if b]}"
             )
         routed = {q for g in groups for q in g}
         remainder = [q for q in range(B) if q not in routed]
@@ -1909,8 +1910,13 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         if ring is None or int(ring) % block_size != 0:
             return None
         # Under the lane fold model_args carries the global slot space while
-        # every KV tensor is per column: size the pool from the per-lane batch.
-        return (int(ring) // block_size) * self._sliding_pool_batch()
+        # every KV tensor is per column: size the pool from the per-lane batch,
+        # plus one scratch block that non-owner columns write through (slot 0's
+        # ring starts at block 0, so block 0 is live storage there).
+        blocks = (int(ring) // block_size) * self._sliding_pool_batch()
+        if self._lanes_enabled():
+            blocks += 1
+        return blocks
 
     def _release_decode_traces_for_fresh_wave(self) -> None:
         """Release captured decode traces (see fresh-wave comment at call site)."""
@@ -2010,6 +2016,9 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         new_blocks = self._bounded_sliding_physical_blocks(sample_bs)
         if new_blocks is None:
             return per_layer_specs
+        if self._lanes_enabled():
+            for m in self.model:
+                m._lane_scratch_block = new_blocks - 1
         out = []
         shrunk = 0
         for i, (shape, dtype, tensor_idx) in enumerate(per_layer_specs):
@@ -2170,6 +2179,9 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
     def _sliding_pool_batch(self):
         """Rows the sliding pool is sized for: per lane under the lane fold, else max batch."""
         return int(getattr(self.model[0], "lane_slots", 0) or self.model_args[0].max_batch_size)
+
+    def _lanes_enabled(self):
+        return bool(getattr(getattr(self.model[0], "mesh_config", None), "lane_sharded", False))
 
     def _pad_sliding_page_tables_for_bounded(
         self, page_tables_per_layer, kv_cache, authoritative=False, row_slots=None

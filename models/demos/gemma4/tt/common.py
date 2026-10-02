@@ -191,6 +191,11 @@ def create_tt_model(
     # whenever a cache filename scheme changes.
     _cache_layout = {
         "layout": "v2-fused-gate-up-ws",
+        # Fractured builds write *_f8x4_* MLP files; a marker seeded by a plain
+        # TP build must not certify them.
+        "weight_layout": (
+            f"fractured-tp_axis{mesh_config.tp_axis}" if bool(getattr(mesh_config, "weight_fracture", False)) else "tp"
+        ),
         "attn_dram_shard": os.environ.get("GEMMA4_ATTN_DRAM_SHARD", "1"),
         "mlp_dram_shard": os.environ.get("GEMMA4_MLP_DRAM_SHARD", "1"),
         "dram_cores": os.environ.get("GEMMA4_DRAM_CORES", "8"),

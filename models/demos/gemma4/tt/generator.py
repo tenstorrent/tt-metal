@@ -256,30 +256,17 @@ class ChunkedPrefillPageTableGuardMixin:
     """
 
     @staticmethod
-    def _match_page_table_row(page_table_1row, page_tables_per_layer) -> int | None:
-        """Return the batch row whose page-table prefix matches ``page_table_1row``."""
-        if page_table_1row is None or not page_tables_per_layer:
-            return None
-        if not isinstance(page_table_1row, torch.Tensor):
-            return None
+    def _page_table_row_matches(page_table_1row, page_tables_per_layer, row) -> bool:
+        """True when some multi-row per-layer table has ``row`` equal to the slice's prefix."""
         pt = page_table_1row if page_table_1row.dim() > 1 else page_table_1row.unsqueeze(0)
-        if int(pt.shape[0]) != 1:
-            return None
-        candidates = [
-            p for p in page_tables_per_layer if isinstance(p, torch.Tensor) and p.dim() > 1 and int(p.shape[0]) > 1
-        ]
-        if not candidates:
-            return 0
         pt32 = pt[0].to(dtype=torch.int32)
-        for ref in candidates:
-            cols = min(int(pt32.shape[0]), int(ref.shape[1]))
-            if cols <= 0:
+        for ref in page_tables_per_layer:
+            if not (isinstance(ref, torch.Tensor) and ref.dim() > 1 and int(ref.shape[0]) > row):
                 continue
-            ref32 = ref.to(dtype=torch.int32)
-            for r in range(int(ref32.shape[0])):
-                if torch.equal(pt32[:cols], ref32[r, :cols]):
-                    return r
-        return None
+            cols = min(int(pt32.shape[0]), int(ref.shape[1]))
+            if cols > 0 and torch.equal(pt32[:cols], ref[row, :cols].to(dtype=torch.int32)):
+                return True
+        return False
 
     def _prepare_decode_trace_once(self, kv_cache, page_table, on_device_sampling):
         """Opt out of the hoisted decode-trace preparation (upstream #53551).
@@ -310,13 +297,12 @@ class ChunkedPrefillPageTableGuardMixin:
         return
 
     def _activate_sequential_per_layer_row(self, page_table) -> None:
-        """Slice multi-row hybrid page-table stash to the active sequential user.
+        """Slice the multi-row hybrid page-table stash to the active sequential user.
 
-        Under bounded sliding the bridge keeps per-layer tables (full vs sliding)
-        and also stuffs the remapped *sliding* table into legacy ``page_table``.
-        Sequential tt_transformers then passes ``user_id=0`` with a 1-row slice —
-        without this, every user writes/reads batch row 0 of the per-layer stash
-        (and chunked full-attn fill uses ``full_pt[0]``).
+        The shared tt_transformers loop prefills users in the per-layer tables'
+        row order with ``user_id=0`` and a 1-row legacy ``page_table`` slice, so
+        the request is identified by position; the slice only confirms it (its
+        content is not unique: lane rings repeat every ``lane_slots`` slots).
         """
         if page_table is None or not isinstance(page_table, torch.Tensor):
             return
@@ -324,6 +310,8 @@ class ChunkedPrefillPageTableGuardMixin:
         if int(pt.shape[0]) != 1:
             return
         for m in self.model:
+            if getattr(m, "_sequential_row_active", False):
+                continue  # nested call inside this request's traced entry
             active = getattr(m, "_active_page_tables_per_layer", None)
             if not active:
                 continue
@@ -332,10 +320,18 @@ class ChunkedPrefillPageTableGuardMixin:
                 if not any(isinstance(p, torch.Tensor) and p.dim() > 1 and int(p.shape[0]) > 1 for p in active):
                     continue
                 m._sequential_batch_page_tables = active
+                m._sequential_row_cursor = 0
                 batch_host = active
-            row = self._match_page_table_row(pt, batch_host)
-            if row is None:
-                continue
+            row = int(getattr(m, "_sequential_row_cursor", 0))
+            rows = max(int(p.shape[0]) for p in batch_host if isinstance(p, torch.Tensor) and p.dim() > 1)
+            if row >= rows:
+                raise ValueError(f"sequential prefill activated row {row} of {rows}-row per-layer page tables")
+            if int(pt.max()) > 0 and not self._page_table_row_matches(pt, batch_host, row):
+                raise ValueError(
+                    f"sequential prefill: legacy page-table slice {pt[0, :4].tolist()} does not match row {row} "
+                    "of the per-layer tables"
+                )
+            m._sequential_row_cursor = row + 1
             sliced = []
             for p in batch_host:
                 if isinstance(p, torch.Tensor) and p.dim() > 1 and int(p.shape[0]) > 1:
@@ -361,6 +357,7 @@ class ChunkedPrefillPageTableGuardMixin:
             m._active_page_tables_per_layer = batch_host
             if hasattr(m, "update_persistent_per_layer_page_tables"):
                 m.update_persistent_per_layer_page_tables(batch_host)
+            m._sequential_row_cursor = 0
             del m._sequential_batch_page_tables
 
     def _effective_paged_block_size(self, kv_cache):
@@ -678,6 +675,7 @@ class ChunkedPrefillPageTableGuardMixin:
         # ``return None`` and warmup crashes in process_logits_after_prefill_trace.
         for m in self.model:
             m._prefill_trace_mode = True
+            m._sequential_row_active = True  # the capture below re-enters the eager path for this user
         try:
             if force_chunk_pt:
                 return self._easy_trace_prefill_with_chunk_page_table(*args, **kwargs)
@@ -685,6 +683,7 @@ class ChunkedPrefillPageTableGuardMixin:
         finally:
             for m in self.model:
                 m._prefill_trace_mode = False
+                m._sequential_row_active = False
 
     def _easy_trace_prefill_with_chunk_page_table(
         self,
@@ -1022,7 +1021,8 @@ class ChunkedPrefillPageTableGuardMixin:
 
         ``tokens`` is [lanes, S] (row i = lane i's user, right-padded to a
         common S); ``page_tables`` is [lanes, 1, blocks] with each lane's own
-        single-user table; ``prompt_lens`` holds the true per-lane lengths.
+        single-user table; ``prompt_lens`` must be equal across lanes (the KV
+        fill runs with one shared valid length).
         Each column runs the proven batch_size=1 prefill on its OWN tokens and
         KV (attention reduces over tp only; the lane MLP gather/scatter sums
         fractured K-chunks across lanes for whatever rows the columns carry).
@@ -1046,8 +1046,10 @@ class ChunkedPrefillPageTableGuardMixin:
         seq_len = int(tokens.shape[-1])
         last_idx = [int(p) - 1 for p in prompt_lens]
         assert len(last_idx) == lanes and all(0 <= i < seq_len for i in last_idx)
-        tiles = {i // 32 for i in last_idx}
-        assert len(tiles) == 1, f"lane prefill needs a shared last tile, got {sorted(tiles)}"
+        if len(set(last_idx)) != 1:
+            # Every lane's KV fill runs with one shared valid length; a shorter
+            # lane would have still-needed window history padded over.
+            raise ValueError(f"lane prefill needs equal prompt lengths, got {[i + 1 for i in last_idx]}")
 
         # Callers pass the per-model kv_cache list (as prefill_forward_text
         # takes); lanes always run the single model.

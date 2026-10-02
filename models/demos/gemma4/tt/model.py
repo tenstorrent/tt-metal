@@ -653,8 +653,8 @@ class Gemma4Model:
                 if bool(self.mesh_config is not None and getattr(self.mesh_config, "weight_fracture", False)):
                     # Penalty and top-k programs are not fracture-aware (per-chip
                     # vocab sharding over the tp axis breaks their eltwise
-                    # shapes): the sampler skips compiling them and drops penalty
-                    # parameters with a one-time warning, so the one-instance mesh
+                    # shapes): the sampler skips compiling them and rejects
+                    # requests that set penalties, so the one-instance mesh
                     # samples greedy / penalty-free only.
                     self.sampling.tt_sampling._allow_penalties_sampling = False
                     self.sampling.tt_sampling._allow_topk_sampling = False
@@ -1604,7 +1604,20 @@ class Gemma4Model:
             return ttnn.ReplicateTensorToMesh(self.mesh_device)
         return None
 
-    def _page_table_host_layout(self, page_table_torch, target_w=None):
+    def _lane_scratch_block_for(self, layer_idx):
+        """Block non-owner lanes write a single-user prefill through.
+
+        Full-attention layers use vLLM's null block 0; bounded sliding layers use
+        the extra block their pool reserves, because block 0 is slot 0's live ring.
+        """
+        if layer_idx is None:
+            return 0
+        cfg = getattr(getattr(self.layers[layer_idx], "self_attn", None), "config", None)
+        if cfg is None or not getattr(cfg, "cache_position_modulo", None):
+            return 0
+        return int(getattr(self, "_lane_scratch_block", 0) or 0)
+
+    def _page_table_host_layout(self, page_table_torch, target_w=None, layer_idx=None):
         """Host layout + mesh mapper for a per-layer page table.
 
         Non-lanes: replicate as-is. Lanes: a full-batch table carries GLOBAL
@@ -1612,9 +1625,8 @@ class Gemma4Model:
         [lane_slots, w] slice (short batches pad with dead rows first); a
         single-row prefill table goes to its OWNER lane
         (``_g4_active_owner_lane``, set by the prefill wrapper from
-        global_user_id) with scratch (block 0) rows elsewhere, mirroring the
-        prefill lane stack so non-owner columns write sliding KV into
-        the lane scratch block.
+        global_user_id) with scratch rows elsewhere (``_lane_scratch_block_for``)
+        so non-owner columns never write a live block.
         """
         pt = page_table_torch if page_table_torch.dim() > 1 else page_table_torch.unsqueeze(0)
         pt = pt.to(dtype=torch.int32)
@@ -1632,7 +1644,7 @@ class Gemma4Model:
         rows = int(pt.shape[0])
         if rows == 1:
             owner = int(getattr(self, "_g4_active_owner_lane", 0) or 0) % lanes
-            host = torch.zeros((lanes, int(pt.shape[-1])), dtype=torch.int32)
+            host = torch.full((lanes, int(pt.shape[-1])), self._lane_scratch_block_for(layer_idx), dtype=torch.int32)
             host[owner] = pt[0]
         elif rows == lanes and lanes != full:
             # Lane-parallel prefill: one row per lane, shard as-is (each
@@ -1646,7 +1658,7 @@ class Gemma4Model:
                 host = pt[:full]
         return host, self.mesh_config.lane_shard_mapper(self.mesh_device, 0)
 
-    def _page_table_torch_to_ttnn(self, page_table_torch):
+    def _page_table_torch_to_ttnn(self, page_table_torch, layer_idx=None):
         """Build a page-table device tensor from a torch tensor.
 
         Prefill is usually batch=1; decode warmup/runtime pass the full
@@ -1654,7 +1666,7 @@ class Gemma4Model:
         ``paged_update_cache`` sees ``page_table.shape[0] == input.shape[1]``
         (per COLUMN under lanes — see ``_page_table_host_layout``).
         """
-        host, mapper = self._page_table_host_layout(page_table_torch)
+        host, mapper = self._page_table_host_layout(page_table_torch, layer_idx=layer_idx)
         return ttnn.from_torch(
             host,
             device=self.mesh_device,
@@ -1729,14 +1741,14 @@ class Gemma4Model:
                 # reading stale addresses; force a recapture on the next decode.
                 self._invalidate_decode_traces_after_page_table_realloc = True
             persistent = []
-            for pt in page_tables_per_layer:
+            for i, pt in enumerate(page_tables_per_layer):
                 if pt is None:
                     persistent.append(None)
                     continue
                 if isinstance(pt, ttnn.Tensor):
                     persistent.append(pt)
                     continue
-                persistent.append(self._page_table_torch_to_ttnn(pt))
+                persistent.append(self._page_table_torch_to_ttnn(pt, layer_idx=i))
             by_batch[batch_key] = persistent
         self._persistent_per_layer_page_tables = persistent
         return persistent
@@ -1799,7 +1811,7 @@ class Gemma4Model:
             if self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False):
                 # Rebuild the sharded host layout (owner stack / frame pad) so
                 # the H2D copy matches the lane-sharded persistent tensor.
-                pt_padded, lane_pt_mapper = self._page_table_host_layout(pt_host, target_w)
+                pt_padded, lane_pt_mapper = self._page_table_host_layout(pt_host, target_w, layer_idx=i)
             else:
                 pt_padded = self._pad_page_table_host_to_shape(pt_host, target_b, target_w)
             if (
@@ -2111,9 +2123,14 @@ class Gemma4Model:
         """Read prefill logits to host and slice to the last token's vocab row.
 
         Under TP, Gemma4 all-gathers logits inside the model so a single
-        device tensor already holds the full vocab.
+        device tensor already holds the full vocab. Under lanes only the owner
+        lane's column prefilled against the request's real page tables (the
+        others attended scratch history), so read that lane's chip.
         """
-        if self.mesh_config is not None and self.mesh_config.tp > 1:
+        if self._lane_sharded:
+            owner = int(getattr(self, "_g4_active_owner_lane", 0) or 0) % self.mesh_config.lanes
+            torch_output = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[self.lane_device_indices()[owner]])
+        elif self.mesh_config is not None and self.mesh_config.tp > 1:
             torch_output = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
         else:
             torch_output = ttnn.to_torch(tt_out)
