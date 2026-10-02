@@ -8,7 +8,8 @@
 
 namespace ttml::ops {
 
-// Canonical SwiGLU: weights use LinearLayer convention [out_features, in_features].
+// Canonical SwiGLU: weights use LinearLayer convention [out_features, in_features], optionally stored with
+// singleton leading dimensions up to rank 4.
 // Composite forward (ttnn matmul + fused silu*multiply), fused swiglu_elemwise_bw kernel
 // for backward, in-place ops, 3 saved tensors. Drop-in replacement for LlamaMLP.
 autograd::TensorPtr swiglu(

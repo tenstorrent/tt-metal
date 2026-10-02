@@ -5,6 +5,8 @@
 #include "swiglu_op.hpp"
 
 #include <cstdlib>
+#include <stdexcept>
+#include <string>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -36,6 +38,18 @@ bool force_swiglu_composite() {
     return std::getenv("TTML_SWIGLU_FORCE_COMPOSITE") != nullptr;
 }
 
+void validate_shared_weight_shape(const ttnn::Shape& shape, const char* name) {
+    if (shape.rank() < 2 || shape.rank() > 4) {
+        throw std::runtime_error(
+            std::string("swiglu expects ") + name + " to have rank 2 through 4 with singleton leading dimensions.");
+    }
+    for (uint32_t dim = 0; dim < shape.rank() - 2; ++dim) {
+        if (shape[dim] != 1U) {
+            throw std::runtime_error(std::string("swiglu expects ") + name + " to have singleton leading dimensions.");
+        }
+    }
+}
+
 }  // namespace
 
 autograd::TensorPtr swiglu_composite(
@@ -60,9 +74,6 @@ autograd::TensorPtr swiglu(
     const autograd::TensorPtr& w3,
     float dropout_prob,
     bool use_per_device_seed) {
-    if (force_swiglu_composite()) {
-        return swiglu_composite(tensor, w1, w2, w3, dropout_prob, use_per_device_seed);
-    }
     // Composite forward: weights are [out, in] (LinearLayer convention)
     // Save linear1 and gate for backward (2 tensors vs autograd's 4+).
     // Fuse silu into multiply: silu(linear1) * gate in one kernel, no separate silu alloc.
@@ -73,10 +84,9 @@ autograd::TensorPtr swiglu(
     const auto w1_shape = w1->get_value().logical_shape();
     const auto w2_shape = w2->get_value().logical_shape();
     const auto w3_shape = w3->get_value().logical_shape();
-    if (w1_shape.rank() < 2 || w2_shape.rank() < 2 || w3_shape.rank() < 2) {
-        throw std::runtime_error(
-            "swiglu expects weights with at least 2 dims; trailing dims must be w1,w3 [H,D], w2 [D,H].");
-    }
+    validate_shared_weight_shape(w1_shape, "w1");
+    validate_shared_weight_shape(w2_shape, "w2");
+    validate_shared_weight_shape(w3_shape, "w3");
 
     const auto d = x_shape[-1];
     const auto h = w1_shape[-2];
@@ -88,6 +98,10 @@ autograd::TensorPtr swiglu(
     }
     if (w2_shape[-2] != d || w2_shape[-1] != h) {
         throw std::runtime_error("swiglu expects w2 trailing dims [D,H] matching input D and hidden H.");
+    }
+
+    if (force_swiglu_composite()) {
+        return swiglu_composite(tensor, w1, w2, w3, dropout_prob, use_per_device_seed);
     }
 
     using EltwiseUnary = ttnn::operations::unary::EltwiseUnaryWithParam;

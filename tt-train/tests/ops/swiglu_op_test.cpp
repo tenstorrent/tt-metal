@@ -6,6 +6,8 @@
 
 #include <gtest/gtest.h>
 
+#include <stdexcept>
+#include <string>
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -325,6 +327,66 @@ void CompareSwiGLUBackwardAgainstReference(const std::vector<uint32_t>& input_sh
     EXPECT_LT(relative_l2(dw3_kernel, ref.dL_dw3), tol) << "dL/dW3 mismatch";
 }
 
+void ExpectSwiGLUWeightContractError(
+    const std::vector<size_t>& input_shape,
+    const std::vector<size_t>& w1_shape,
+    const std::vector<size_t>& w2_shape,
+    const std::vector<size_t>& w3_shape,
+    const std::string& weight_name) {
+    using namespace ttml;
+
+    auto* device = &autograd::ctx().get_device();
+    xt::xarray<float> input_data = xt::ones<float>(input_shape);
+    xt::xarray<float> w1_data = xt::ones<float>(w1_shape);
+    xt::xarray<float> w2_data = xt::ones<float>(w2_shape);
+    xt::xarray<float> w3_data = xt::ones<float>(w3_shape);
+    auto input = autograd::create_tensor(core::from_xtensor(input_data, device));
+    auto w1 = autograd::create_tensor(core::from_xtensor(w1_data, device));
+    auto w2 = autograd::create_tensor(core::from_xtensor(w2_data, device));
+    auto w3 = autograd::create_tensor(core::from_xtensor(w3_data, device));
+
+    bool threw = false;
+    try {
+        (void)ops::swiglu(input, w1, w2, w3);
+    } catch (const std::runtime_error& error) {
+        threw = true;
+        const std::string message = error.what();
+        EXPECT_NE(message.find(weight_name), std::string::npos) << message;
+        EXPECT_NE(message.find("singleton leading dimensions"), std::string::npos) << message;
+    }
+    EXPECT_TRUE(threw) << "swiglu accepted an unsupported " << weight_name << " shape";
+    autograd::ctx().reset_graph();
+}
+
+void RunSwiGLUWithSharedWeightShape(
+    const std::vector<size_t>& w1_shape, const std::vector<size_t>& w2_shape, const std::vector<size_t>& w3_shape) {
+    using namespace ttml;
+
+    auto* device = &autograd::ctx().get_device();
+    xt::xarray<float> input_data = xt::ones<float>(std::vector<size_t>{2, 1, 32, 32}) * 0.01F;
+    xt::xarray<float> w1_data = xt::ones<float>(w1_shape) * 0.01F;
+    xt::xarray<float> w2_data = xt::ones<float>(w2_shape) * 0.01F;
+    xt::xarray<float> w3_data = xt::ones<float>(w3_shape) * 0.01F;
+    auto input = autograd::create_tensor(core::from_xtensor(input_data, device), /*requires_grad=*/true);
+    auto w1 = autograd::create_tensor(core::from_xtensor(w1_data, device), /*requires_grad=*/true);
+    auto w2 = autograd::create_tensor(core::from_xtensor(w2_data, device), /*requires_grad=*/true);
+    auto w3 = autograd::create_tensor(core::from_xtensor(w3_data, device), /*requires_grad=*/true);
+
+    auto out = ops::swiglu(input, w1, w2, w3);
+    EXPECT_EQ(out->get_value().logical_shape(), input->get_value().logical_shape());
+    (void)core::to_xtensor(out->get_value());
+
+    out->set_grad(core::ones_like(out->get_value()));
+    out->backward();
+    EXPECT_EQ(w1->get_grad().logical_shape(), w1->get_value().logical_shape());
+    EXPECT_EQ(w2->get_grad().logical_shape(), w2->get_value().logical_shape());
+    EXPECT_EQ(w3->get_grad().logical_shape(), w3->get_value().logical_shape());
+    (void)core::to_xtensor(w1->get_grad());
+    (void)core::to_xtensor(w2->get_grad());
+    (void)core::to_xtensor(w3->get_grad());
+    autograd::ctx().reset_graph();
+}
+
 }  // namespace
 
 // ============================================================================
@@ -446,6 +508,37 @@ TEST_F(SwiGLUForwardTest, ShapeMismatch_W2WrongDimensions) {
     testing::internal::CaptureStdout();
     EXPECT_THROW(ops::swiglu(input, w1, w2, w3), std::exception);
     testing::internal::GetCapturedStdout();
+}
+
+TEST_F(SwiGLUForwardTest, SharedWeightPrefixesRemainSupported) {
+    RunSwiGLUWithSharedWeightShape({32, 32}, {32, 32}, {32, 32});
+    RunSwiGLUWithSharedWeightShape({1, 32, 32}, {1, 32, 32}, {1, 32, 32});
+    RunSwiGLUWithSharedWeightShape({1, 1, 32, 32}, {1, 1, 32, 32}, {1, 1, 32, 32});
+}
+
+TEST_F(SwiGLUForwardTest, RejectsNonSingletonWeightPrefixesBeforeAndAfterWarmRun) {
+    const std::vector<size_t> input_shape = {2, 1, 32, 32};
+    const std::vector<size_t> shared_weight_shape = {1, 1, 32, 32};
+    const std::vector<size_t> batched_weight_shape = {2, 1, 32, 32};
+
+    ExpectSwiGLUWeightContractError(input_shape, batched_weight_shape, shared_weight_shape, shared_weight_shape, "w1");
+    ExpectSwiGLUWeightContractError(input_shape, shared_weight_shape, batched_weight_shape, shared_weight_shape, "w2");
+    ExpectSwiGLUWeightContractError(input_shape, shared_weight_shape, shared_weight_shape, batched_weight_shape, "w3");
+
+    RunSwiGLUWithSharedWeightShape(shared_weight_shape, shared_weight_shape, shared_weight_shape);
+    ExpectSwiGLUWeightContractError(input_shape, batched_weight_shape, shared_weight_shape, shared_weight_shape, "w1");
+
+    ExpectSwiGLUWeightContractError({1, 2, 32, 32}, {1, 2, 32, 32}, shared_weight_shape, shared_weight_shape, "w1");
+}
+
+TEST_F(SwiGLUForwardTest, RejectsOverrankWeights) {
+    const std::vector<size_t> input_shape = {2, 1, 32, 32};
+    const std::vector<size_t> shared_weight_shape = {1, 1, 32, 32};
+    const std::vector<size_t> overrank_weight_shape = {1, 1, 1, 32, 32};
+
+    ExpectSwiGLUWeightContractError(input_shape, overrank_weight_shape, shared_weight_shape, shared_weight_shape, "w1");
+    ExpectSwiGLUWeightContractError(input_shape, shared_weight_shape, overrank_weight_shape, shared_weight_shape, "w2");
+    ExpectSwiGLUWeightContractError(input_shape, shared_weight_shape, shared_weight_shape, overrank_weight_shape, "w3");
 }
 
 // ============================================================================
