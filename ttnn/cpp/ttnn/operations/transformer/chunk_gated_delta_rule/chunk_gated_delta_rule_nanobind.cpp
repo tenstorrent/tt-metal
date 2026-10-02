@@ -252,7 +252,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 then the pool size P (default: every core the receivers leave free, at most BH*NC);
                 row_local is ignored.
             pool_extra_share (float, optional): the share of every head's chunks the pool's extras take,
-                in [0, 1]; None = NX / P, the balanced load.)doc")
+                in [0, 1]; None = the model's choice between the balanced NX / P and 0.)doc")
         .def(
             nb::init<
                 std::optional<uint32_t>,
@@ -307,7 +307,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
            uint32_t fixed_nv,
            uint32_t fixed_np,
            uint32_t fixed_nbuf,
-           uint32_t candidates) {
+           uint32_t candidates,
+           float fixed_share) {
             const auto c = ttnn::prim::choose_fused_geometry(
                 grid_x,
                 grid_y,
@@ -317,8 +318,10 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 fixed_nv,
                 fixed_np,
                 fixed_nbuf,
-                static_cast<ttnn::prim::FusedCandidates>(static_cast<uint8_t>(candidates)));
-            return std::make_tuple(c.nv, c.np, c.placement, c.nbuf, c.t_fused_us, c.t_phased_us, c.fused_pays);
+                static_cast<ttnn::prim::FusedCandidates>(static_cast<uint8_t>(candidates)),
+                fixed_share);
+            return std::make_tuple(
+                c.nv, c.np, c.placement, c.nbuf, c.t_fused_us, c.t_phased_us, c.fused_pays, c.pool_extra_num);
         },
         nb::arg("grid_x"),
         nb::arg("grid_y"),
@@ -329,12 +332,15 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("fixed_np") = 0,
         nb::arg("fixed_nbuf") = 0,
         nb::arg("candidates") = static_cast<uint32_t>(ttnn::prim::FusedCandidates::Both),
+        nb::arg("fixed_share") = -1.0f,
         R"doc(Fused prep->scan geometry the op picks for (grid_x, grid_y, BH, NC, Vt) when the fused
         program config leaves it free (fixed_nv / fixed_np / fixed_nbuf = a pinned num_receivers /
-        num_producers / handoff_depth, 0 = free): (nv, np, placement, handoff_depth, T_fused_us,
-        T_phased_us, fused_pays). nv == 0 means no fused geometry fits the grid. candidates: 0 = NP
-        producers per head (what producer_pool=False resolves to), 1 = the producer pool (placement 2,
-        np = the pool size; what producer_pool=True resolves to), 2 = both (the op's default dispatch).)doc");
+        num_producers / handoff_depth, 0 = free; fixed_share = a pinned pool_extra_share, < 0 = free):
+        (nv, np, placement, handoff_depth, T_fused_us, T_phased_us, fused_pays, pool_extra_num). nv == 0
+        means no fused geometry fits the grid; pool_extra_num / np is the extras' share of the items of a
+        pool with extras (0 otherwise). candidates: 0 = NP producers per head (what producer_pool=False
+        resolves to), 1 = the producer pool (placement 2, np = the pool size; what producer_pool=True
+        resolves to), 2 = both (the op's default dispatch).)doc");
     mod.def(
         "chunk_gdn_fused_row_local_feasible",
         &ttnn::prim::fused_row_local_feasible,

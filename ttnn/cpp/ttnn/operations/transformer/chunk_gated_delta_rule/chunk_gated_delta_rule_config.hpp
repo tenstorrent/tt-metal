@@ -52,7 +52,8 @@ struct ChunkGdnFusedProgramConfig {
     // the pool is an EXTRA producer serving all heads. num_producers is then the pool size P (default: every
     // core the receivers leave free, at most BH*NC).
     bool producer_pool = false;
-    // Share of every head's chunks the extras take, in [0, 1]; nullopt = NX / P, the balanced load.
+    // Share of every head's chunks the extras take, in [0, 1]; nullopt = the model's choice between the
+    // balanced NX / P and 0.
     std::optional<float> pool_extra_share;
 };
 
