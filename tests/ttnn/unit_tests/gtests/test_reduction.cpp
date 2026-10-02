@@ -1173,7 +1173,6 @@ TEST(ReduceHostPlanner, CallerPreparedSfpuTilesKeepPostScale) {
     for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H}) {
         const auto input = local_reduce_block(Shape{64, 64}, DataType::FLOAT32);
         const auto plan = make_reduce_plan(input, ReduceOpMath::SUM, dim, 0.5F, ReduceFp32Mode::Accurate, hardware);
-        EXPECT_EQ(plan.path, ReducePath::Tiled);
         EXPECT_EQ(plan.partial_mode, compute_kernel_lib::ReducePartialMode::None);
         EXPECT_FLOAT_EQ(plan.post_scale, 0.5F);
     }

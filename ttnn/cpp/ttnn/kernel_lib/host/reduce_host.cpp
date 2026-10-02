@@ -365,7 +365,6 @@ ReducePlan make_tiled_plan(
     std::optional<ReduceAlgorithm> forced_algorithm,
     std::optional<std::uint32_t> threshold_axis_tiles) {
     ReducePlan plan;
-    plan.path = ReducePath::Tiled;
     plan.input_policy = input_policy;
     plan.reduce_dim = dim;
     plan.tail = block.tail;
@@ -1027,7 +1026,6 @@ void check_fits(std::uint32_t value, std::uint32_t mask, const char* field) {
 std::uint32_t encode_configuration(const ReduceCallPlan& call) {
     using namespace reduce_plan_args;
     const auto& plan = call.plan;
-    const auto path = static_cast<std::uint32_t>(plan.path);
     const auto math = encode_math(plan.reduce_math);
     const auto dimension = encode_dimension(plan.reduce_dim);
     const auto fp32_mode = static_cast<std::uint32_t>(plan.fp32_mode);
@@ -1042,7 +1040,6 @@ std::uint32_t encode_configuration(const ReduceCallPlan& call) {
     const auto accumulation_mode = static_cast<std::uint32_t>(call.accumulation_mode);
     const auto partial_mode = static_cast<std::uint32_t>(plan.partial_mode);
 
-    check_fits(path, config::path_mask, "path");
     check_fits(math, config::math_mask, "math");
     check_fits(dimension, config::dimension_mask, "dimension");
     check_fits(fp32_mode, config::fp32_mode_mask, "fp32 mode");
@@ -1054,7 +1051,7 @@ std::uint32_t encode_configuration(const ReduceCallPlan& call) {
     check_fits(accumulation_mode, config::accumulation_mode_mask, "accumulation mode");
     check_fits(partial_mode, config::partial_mode_mask, "partial mode");
 
-    return insert(path, config::path_shift, config::path_mask) | insert(math, config::math_shift, config::math_mask) |
+    return insert(math, config::math_shift, config::math_mask) |
            insert(dimension, config::dimension_shift, config::dimension_mask) |
            insert(fp32_mode, config::fp32_mode_shift, config::fp32_mode_mask) |
            insert(algorithm, config::algorithm_shift, config::algorithm_mask) |

@@ -50,7 +50,6 @@ namespace ttnn::kernel_lib::host {
 
 inline constexpr std::uint32_t no_cb_id = reduce_plan_args::no_cb_id;
 
-using ReducePath = ttnn::kernel_lib::ReducePath;
 using ReduceAuxiliaryTileType = ttnn::kernel_lib::ReduceAuxiliaryTileType;
 
 // Valid elements in one local block. The leading dimensions are flattened into
@@ -129,7 +128,6 @@ struct ReduceAuxiliaryPlan {
 };
 
 struct ReducePlan {
-    ReducePath path = ReducePath::Tiled;
     tt::tt_metal::ReduceOpMath reduce_math = tt::tt_metal::ReduceOpMath::SUM;
     tt::tt_metal::ReduceOpDim reduce_dim = tt::tt_metal::ReduceOpDim::W;
     ReduceFp32Mode fp32_mode = ReduceFp32Mode::Fast;

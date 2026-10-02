@@ -48,31 +48,29 @@ enum class Math : std::uint32_t { Sum, Average, Maximum, Minimum };
 enum class Dimension : std::uint32_t { Row, Column, Scalar };
 
 namespace config {
-inline constexpr std::uint32_t path_shift = 0;
-inline constexpr std::uint32_t path_mask = 0x1;
-inline constexpr std::uint32_t math_shift = 1;
+inline constexpr std::uint32_t math_shift = 0;
 inline constexpr std::uint32_t math_mask = 0x3;
-inline constexpr std::uint32_t dimension_shift = 3;
+inline constexpr std::uint32_t dimension_shift = 2;
 inline constexpr std::uint32_t dimension_mask = 0x3;
-inline constexpr std::uint32_t fp32_mode_shift = 5;
+inline constexpr std::uint32_t fp32_mode_shift = 4;
 inline constexpr std::uint32_t fp32_mode_mask = 0x1;
-inline constexpr std::uint32_t algorithm_shift = 6;
+inline constexpr std::uint32_t algorithm_shift = 5;
 inline constexpr std::uint32_t algorithm_mask = 0x1;
-inline constexpr std::uint32_t input_policy_shift = 7;
+inline constexpr std::uint32_t input_policy_shift = 6;
 inline constexpr std::uint32_t input_policy_mask = 0x7;
-inline constexpr std::uint32_t reload_mode_shift = 10;
+inline constexpr std::uint32_t reload_mode_shift = 9;
 inline constexpr std::uint32_t reload_mode_mask = 0x7;
-inline constexpr std::uint32_t reconfig_mode_shift = 13;
+inline constexpr std::uint32_t reconfig_mode_shift = 12;
 inline constexpr std::uint32_t reconfig_mode_mask = 0x3;
-inline constexpr std::uint32_t within_tile_shift = 15;
+inline constexpr std::uint32_t within_tile_shift = 14;
 inline constexpr std::uint32_t within_tile_mask = 0x1;
-inline constexpr std::uint32_t accumulation_mode_shift = 16;
+inline constexpr std::uint32_t accumulation_mode_shift = 15;
 inline constexpr std::uint32_t accumulation_mode_mask = 0x3;
-inline constexpr std::uint32_t partial_mode_shift = 18;
+inline constexpr std::uint32_t partial_mode_shift = 17;
 inline constexpr std::uint32_t partial_mode_mask = 0x3;
-inline constexpr std::uint32_t has_tail_variant_shift = 20;
+inline constexpr std::uint32_t has_tail_variant_shift = 19;
 inline constexpr std::uint32_t has_tail_variant_mask = 0x1;
-inline constexpr std::uint32_t uses_tail_shape_shift = 21;
+inline constexpr std::uint32_t uses_tail_shape_shift = 20;
 inline constexpr std::uint32_t uses_tail_shape_mask = 0x1;
 }  // namespace config
 

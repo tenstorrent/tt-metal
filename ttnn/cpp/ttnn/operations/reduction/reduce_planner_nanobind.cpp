@@ -53,7 +53,6 @@ void bind_reduce_planner(nb::module_& mod) {
     nb::enum_<ReduceFp32Mode>(planner, "ReduceFp32Mode")
         .value("FAST", ReduceFp32Mode::Fast)
         .value("ACCURATE", ReduceFp32Mode::Accurate);
-    nb::enum_<ttnn::kernel_lib::ReducePath>(planner, "ReducePath").value("TILED", ttnn::kernel_lib::ReducePath::Tiled);
     nb::enum_<ttnn::kernel_lib::ReduceAccumulationMode>(planner, "ReduceAccumulationMode")
         .value("NONE", ttnn::kernel_lib::ReduceAccumulationMode::None)
         .value("INTERMEDIATE", ttnn::kernel_lib::ReduceAccumulationMode::Intermediate)
@@ -184,8 +183,7 @@ void bind_reduce_planner(nb::module_& mod) {
         .def_ro("shape", &host::ReduceTailConfig::shape);
 
     auto py_plan = nb::class_<host::ReducePlan>(planner, "ReducePlan");
-    py_plan.def_ro("path", &host::ReducePlan::path)
-        .def_ro("reduce_math", &host::ReducePlan::reduce_math)
+    py_plan.def_ro("reduce_math", &host::ReducePlan::reduce_math)
         .def_ro("reduce_dim", &host::ReducePlan::reduce_dim)
         .def_ro("fp32_mode", &host::ReducePlan::fp32_mode)
         .def_ro("algorithm", &host::ReducePlan::algorithm)
