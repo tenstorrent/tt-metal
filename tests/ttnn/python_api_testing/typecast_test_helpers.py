@@ -44,6 +44,12 @@ _CLAMP_HIGH = _DTYPE_MAX[ttnn.uint16] + 14465
 _CLAMP_LOW_MAGNITUDE = 1000
 
 
+def device_truncates_float_to_uint16():
+    """Whether float -> uint16 truncates. Round to zero is a Blackhole SFP_STOCH_RND mode;
+    Wormhole still rounds half away from zero (#51655)."""
+    return "blackhole" in ttnn.get_arch_name()
+
+
 def _output_allows_negative(tt_output_dtype):
     # int8 is signed too, but the _NARROW_8BIT_OUTPUT_DTYPES branch above handles it first.
     return tt_output_dtype == ttnn.int32

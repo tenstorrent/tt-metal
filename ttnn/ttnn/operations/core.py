@@ -686,7 +686,8 @@ def _typecast_golden_function(
 
     if output_dtype == ttnn.uint16:
         if input_tensor.is_floating_point():
-            if _ttnn_is_host or input_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+            # Blackhole truncates; Wormhole's SFP_STOCH_RND has no round to zero, so it still rounds (#51655).
+            if _ttnn_is_host or input_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b) or "blackhole" in arch_name:
                 converted = torch.trunc(input_tensor.float())
             elif "quasar" in arch_name:
                 converted = torch.round(input_tensor.float())
