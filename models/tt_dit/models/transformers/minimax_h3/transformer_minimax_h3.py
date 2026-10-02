@@ -147,7 +147,8 @@ class MiniMaxH3Transformer3DModel(Module):
     movement, so the assembly happens *before* fracturing instead, as a row gather over fixed-capacity
     streams so every program has a request-independent (traceable) shape: the projected streams form a
     source table `[text | condition video | condition audio | audio | video]`, `assembly_indices`
-    gathers it into packed order, and `ttnn.mesh_partition` fractures it across SP.
+    gathers it into packed order, and `ttnn.mesh_partition` fractures it across SP (or, with indices
+    already sharded on SP, each device gathers only its own rows and no partition is needed).
 
     Padding
     -------
@@ -373,8 +374,15 @@ class MiniMaxH3Transformer3DModel(Module):
         alignment = self.sp_factor * tile
         if pad_to % alignment:
             raise ValueError(f"pad_to={pad_to} must be a multiple of sp_factor * TILE = {alignment}")
-        if assembly_indices.shape[-1] != pad_to:
-            raise ValueError(f"assembly_indices has {assembly_indices.shape[-1]} rows, pad_to is {pad_to}")
+        # Indices already sharded on SP only need to gather the local rows, so the full-sequence
+        # intermediate doesn't need to be materialised
+        local_rows = pad_to // self.sp_factor
+        indices_already_sharded = self.sp_factor > 1 and assembly_indices.shape[-1] == local_rows
+        if assembly_indices.shape[-1] != pad_to and not indices_already_sharded:
+            raise ValueError(
+                f"assembly_indices has {assembly_indices.shape[-1]} rows; expected pad_to={pad_to} (replicated) "
+                f"or pad_to / sp_factor = {local_rows} (sharded on SP)"
+            )
         if video_out_indices.shape[-1] != video_1BVC.shape[2]:
             raise ValueError("video_out_indices must match the video stream's capacity")
         if audio_out_indices.shape[-1] != audio_1BAC.shape[2]:
@@ -395,7 +403,8 @@ class MiniMaxH3Transformer3DModel(Module):
 
         hidden = ttnn.embedding(as_indices(assembly_indices), source, layout=ttnn.TILE_LAYOUT)
         hidden = ttnn.unsqueeze(hidden, 0)
-        hidden = ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
+        if not indices_already_sharded:
+            hidden = ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
 
         self._temb_state.update(self.time_embedder(self.time_proj(timestep)), traced=traced)
         temb = self._temb_state.value

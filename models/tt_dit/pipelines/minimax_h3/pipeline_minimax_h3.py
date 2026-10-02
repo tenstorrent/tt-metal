@@ -301,6 +301,12 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
 #     couple of MB, so each stage is evicted before the next loads. The cost is a text-encoder
 #     reload per request, which is the trade the Residency note above describes.
 #   * `num_links: 4`, matching the 4 KB router payload the Wormhole Galaxy meshes open with.
+#   * ref2va arena caps for a 12 GB chip. The transformer rebuilds a cap-sized source table every
+#     forward (sum of caps x hidden/TP x bf16): the Blackhole caps make that 322336 rows = 866 MB per
+#     device, and a 15 s target with a 5 s video reference (19136 rows/device) then OOMs at the
+#     first step by 768 B (2026-09-29). These caps keep a full 15 s of reference video and cut the
+#     prompt arena to 16384 tokens: 9 images or one video fit, three 5 s videos (~18K tokens) do not.
+#     Table: 243456 rows = 654 MB; resident prefix 130528 rows instead of 209408.
 #
 # There is no (4, 32) entry: the quad is a Blackhole configuration.
 # TODO: Try to figure out how we can keep components of the the model coresident throughout generation
@@ -314,6 +320,7 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
         "topology": ttnn.Topology.Ring,
         "coresident": False,
         "dit_fsdp": True,
+        "ref2va_arena_caps": MiniMaxH3ArenaCaps(prompt=16384, condition_video_rows=111712, condition_audio_rows=2432),
     },
 }
 
@@ -520,7 +527,7 @@ class MiniMaxH3Pipeline:
 
         self.bucket_ladder = tuple(bucket_ladder if bucket_ladder is not None else default_bucket_ladder(task))
         validate_bucket_ladder(self.bucket_ladder, self.sp_factor * ttnn.TILE_SIZE)
-        self.arena_caps = arena_caps or MiniMaxH3ArenaCaps.for_task(task)
+        self.arena_caps = arena_caps or preset.get(f"{task}_arena_caps") or MiniMaxH3ArenaCaps.for_task(task)
         self.arena_caps.validate()
         self.presentation_ladder = tuple(
             rung for rung in MINIMAX_H3_REF2VA_PRESENTATION_RUNGS if rung < self.arena_caps.prompt
@@ -593,6 +600,11 @@ class MiniMaxH3Pipeline:
                 raise ValueError("MINIMAX_H3_DIT_FSDP must be '0' or '1'")
             self.dit_fsdp = env_dit_fsdp == "1"
         self.last_seq_len: SeqLen | None = None
+
+        # Gather the packed sequence per SP shard instead of whole-then-partition: identical values, but
+        # the transformer never holds the full `[pad_to, hidden/TP]` sequence on every device.
+        # Arch-neutral in principle; enabled on Wormhole only until measured on Blackhole.
+        self._shard_assembly_indices = is_wormhole_b0() and self.sp_factor > 1
 
         self._host_log("building the Qwen3-VL text encoder")
         self.encoder_ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
@@ -1366,6 +1378,8 @@ class MiniMaxH3Pipeline:
         indices[pos : pos + a_len] = torch.arange(src["audio"], src["audio"] + a_len)
         pos += a_len
         indices[pos : pos + v_len] = torch.arange(src["video"], src["video"] + v_len)
+        if self._shard_assembly_indices:
+            return self._row_indices(indices, rung)
         return self._replicated_indices(indices)
 
     def _output_indices(self, start: int, count: int, capacity: int) -> ttnn.Tensor:
@@ -1964,6 +1978,13 @@ class MiniMaxH3Pipeline:
                 condition_spec=condition_spec,
                 on_event=on_event,
             )
+
+        if not self.coresident:
+            # The DiT weights are evicted when the VAE loads, but the DiT's collective buffers are not part
+            # of any stage: the CCL manager caches them by shape for the manager's lifetime. Release them here,
+            # otherwise wormhole OOMs. The next request re-allocates.
+            # TODO: figure out how to keep these allocations in memory.
+            self.ccl_manager.release_buffers()
 
         with event_section(on_event, "vae"):
             video = self._decode_video(
