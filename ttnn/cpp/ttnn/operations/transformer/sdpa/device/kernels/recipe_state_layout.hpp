@@ -26,7 +26,7 @@ struct StateTransfer {
     }
 
     // Host-side page count for a runtime Q chunk; matches pages<fp32, q_tiles>.
-    static constexpr uint32_t page_count(bool fp32, uint32_t q_tiles, uint32_t d_tiles = 4) {
+    static constexpr uint32_t page_count(bool /*fp32*/, uint32_t q_tiles, uint32_t d_tiles = 4) {
         const uint32_t numerator = q_tiles * d_tiles * 4096;
         const uint32_t maxima = q_tiles * 2048;
         const uint32_t denominator = q_tiles * 4096;
