@@ -16,6 +16,16 @@ void EmbeddingBackwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& index_tensor = tensor_args.index_tensor;
     const auto& grad_tensor = tensor_args.grad_tensor;
+
+    TT_FATAL(
+        index_tensor.device() == grad_tensor.device(),
+        "Embedding backward requires index and gradient tensors to be on the same MeshDevice");
+    if (tensor_args.preallocated_output.has_value()) {
+        TT_FATAL(
+            tensor_args.preallocated_output->device() == index_tensor.device(),
+            "Embedding backward requires the preallocated output to be on the same MeshDevice as the input tensors");
+    }
+
     const auto& index_tensor_shape = index_tensor.padded_shape();
     const auto& grad_tensor_shape = grad_tensor.padded_shape();
 
