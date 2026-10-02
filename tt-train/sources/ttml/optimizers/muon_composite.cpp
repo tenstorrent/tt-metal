@@ -9,6 +9,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "ops/newton_schulz_op.hpp"
 #include "serialization/serializable.hpp"
+#include "ttnn/operations/data_movement/clone/clone.hpp"
 
 namespace ttml::optimizers {
 
@@ -82,12 +83,15 @@ void MuonComposite::step() {
             buffer = ttnn::multiply(buffer, m_config.momentum);
             buffer = ttnn::add(buffer, gradients);
         } else {
-            buffer = gradients;
+            // A copy rather than the gradient itself: Tensor copies share their attributes, so pinning an alias of
+            // the gradient below would relabel the caller's gradient as well.
+            buffer = ttnn::clone(
+                gradients,
+                /* dtype */ std::nullopt,
+                /* memory_config */ std::nullopt,
+                /* compute_kernel_config */ std::nullopt);
         }
 
-        // At step 0 (or with momentum == 0) `buffer` IS the gradient tensor, so pinning it relabels the
-        // parameter's gradient too: a gradient's topology label is undefined after a Muon step (an on_step_end
-        // hook must not gather by it). Nothing in tt-train reads it before zero_grad() replaces the gradient.
         buffer_ptr->set_value(core::with_tensor_topology(buffer, topology));
 
         const auto update_direction = ops::newtonschulz5(buffer, m_config.ns_steps, 1e-7f);
