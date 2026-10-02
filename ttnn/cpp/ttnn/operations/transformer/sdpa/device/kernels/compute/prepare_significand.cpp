@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "../prepare_split.hpp"
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
@@ -35,7 +36,14 @@ inline void round_lofi_significand() {
 void kernel_main() {
     constexpr uint32_t bits = get_compile_time_arg_val(0);
     constexpr uint32_t batch = get_compile_time_arg_val(1);
-    const uint32_t count = get_arg_val<uint32_t>(0);
+    const uint32_t count = prepare_range(
+                               get_absolute_logical_x(),
+                               get_absolute_logical_y(),
+                               get_common_arg_val<uint32_t>(0),
+                               get_common_arg_val<uint32_t>(1),
+                               get_common_arg_val<uint32_t>(2),
+                               batch)
+                               .count;
     compute_kernel_hw_startup(0, 16);
     copy_init(0);
     // BF16 copy_init preserves Src zero flags for MOV, but FP32-DST datacopy

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "../prepare_split.hpp"
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
@@ -99,7 +100,14 @@ inline void round_native_bfp4_face() {
 
 void kernel_main() {
     constexpr uint32_t batch = get_compile_time_arg_val(0);
-    const uint32_t count = get_arg_val<uint32_t>(0);
+    const uint32_t count = prepare_range(
+                               get_absolute_logical_x(),
+                               get_absolute_logical_y(),
+                               get_common_arg_val<uint32_t>(0),
+                               get_common_arg_val<uint32_t>(1),
+                               get_common_arg_val<uint32_t>(2),
+                               batch)
+                               .count;
     compute_kernel_hw_startup(0, 16);
     copy_init(0);
     negative_tile_init();
