@@ -72,7 +72,9 @@ def _run(device, nh, nkv, seq, head_dim, is_causal, fp32_dest_acc_en):
 
 
 @pytest.mark.parametrize("fp32_dest_acc_en", [True, False], ids=["fp32dest", "bf16dest"])
-@pytest.mark.parametrize("seq", [256, 512], ids=["seq256", "seq512"])
+# seq200: the vision patch count need not be tile-aligned; K padding then ends inside a tile, which the
+# non-causal padded mask covers with a partial (vertical) tile.
+@pytest.mark.parametrize("seq", [200, 256, 512], ids=["seq200_padded", "seq256", "seq512"])
 def test_sdpa_qwen3_vl_vision(device, seq, fp32_dest_acc_en):
     _run(device, nh=16, nkv=16, seq=seq, head_dim=64, is_causal=False, fp32_dest_acc_en=fp32_dest_acc_en)
 
