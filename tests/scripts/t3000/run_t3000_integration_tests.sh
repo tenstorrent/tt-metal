@@ -105,6 +105,7 @@ run_t3000_tteager_tests() {
 
   # distributed layernorm
   pytest tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm.py ; fail+=$?
+  TT_METAL_OPERATION_TIMEOUT_SECONDS=120 pytest tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_exhaustive.py -k 2d_core_grid --timeout 900 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

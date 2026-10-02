@@ -88,9 +88,10 @@
   cmd: |
     mkdir -p generated/test_reports
     pytest tests/ttnn/distributed/test_distributed_layernorm_TG.py
+    TT_METAL_OPERATION_TIMEOUT_SECONDS=120 pytest tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_exhaustive.py -k 2d_core_grid --timeout 900
   skus:
     wh_galaxy:
-      timeout: 5
+      timeout: 20
 
 # - id: galaxy-prefetcher-tg
 #   name: Galaxy DRAM Prefetcher unit tests
