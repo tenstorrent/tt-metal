@@ -5,17 +5,17 @@
 Architecture
 ------------
 The transformer denoise -- which dominates compute -- runs on the Galaxy using the shared
-``QwenImageTransformer`` at **TP=8 x SP=4** (all 32 Wormhole chips on a single image), the same
-sequence-parallel layout Flux2 uses on WH Galaxy.
+``QwenImageTransformer``. Two layouts on the 32-chip (4, 8) mesh:
 
-Host pre/post-processing (Qwen2.5-VL image+text encode and VAE encode/decode) is driven by the
-reference ``diffusers.QwenImageEditPipeline``, because the tt_dit device encoder is text-only (no
-vision tower) and the tt_dit VAE adapter is decode-only. Those device paths are a tracked follow-up;
-the ``encoder_tp``/``vae_tp`` presets already exist in the base ``pipelines/qwenimage`` for when they
-land. Until then this pipeline cleanly owns the device denoise and delegates the rest to the
-reference implementation so results stay bit-faithful to Qwen-Image-Edit's host plumbing.
+* CFG-parallel (default): two 4x4 submeshes, TP=4 x SP=4 each; the cond and uncond forwards of a
+  step run concurrently, one per submesh (the base ``pipelines/qwenimage`` layout at (4, 8)).
+* sequential: TP=8 x SP=4 on the full mesh; cond and uncond run back to back.
 
-Edit-specific deltas handled by the reference host loop (vs. base text-to-image):
+The Qwen2.5-VL image+text encode runs on host via the reference ``diffusers.QwenImageEditPipeline``
+(the tt_dit device encoder is text-only, no vision tower); the VAE encode + decode run on device
+(:mod:`.vae_device`). The denoise loop reproduces the reference loop's math step for step.
+
+Edit-specific deltas vs. base text-to-image:
   * condition image is VAE-encoded and concatenated on the *token* dim: ``cat([latents, image_latents], dim=1)``
   * ``img_shapes`` has two entries (noise grid + condition grid) for RoPE
   * the VL encoder is conditioned on the input image
@@ -24,33 +24,37 @@ Edit-specific deltas handled by the reference host loop (vs. base text-to-image)
 from __future__ import annotations
 
 import time
-from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 import diffusers as reference
+import numpy as np
 import torch
+from diffusers.pipelines.qwenimage.pipeline_qwenimage_edit import calculate_dimensions, calculate_shift
 from loguru import logger
 from PIL import Image, ImageOps
 
 import ttnn
 from models.tt_dit.models.transformers.transformer_qwenimage import QwenImageTransformer
-from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
+from models.tt_dit.parallel.config import DiTParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
+from models.tt_dit.pipelines.cfg import create_submeshes
 from models.tt_dit.pipelines.qwenimage_edit.vae_device import DeviceVAE
 from models.tt_dit.utils import cache, tensor
 from models.tt_dit.utils.padding import PaddingConfig
 from models.tt_dit.utils.tracing import Tracer
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
 
 _DEFAULT_CHECKPOINT = "Qwen/Qwen-Image-Edit"
 
 # WH Galaxy preset: all 32 chips on one image, cfg replicated, TP across heads, SP across tokens.
 #   axis 0 -> sequence parallel (4),  axis 1 -> tensor parallel (8)
 _PRESETS_WH: dict[tuple[int, ...], dict] = {
-    (4, 8): {"sp": (4, 0), "tp": (8, 1), "num_links": 4},
+    (4, 8): {"cfg": (1, 0), "sp": (4, 0), "tp": (8, 1), "num_links": 4},
+}
+
+# CFG-parallel preset: two 4x4 submeshes (split along axis 1), cond on one and uncond on the other,
+# each TP=4 x SP=4. Same layout as the base Qwen-Image pipeline at (4, 8).
+_PRESETS_WH_CFG_PARALLEL: dict[tuple[int, ...], dict] = {
+    (4, 8): {"cfg": (2, 1), "sp": (4, 0), "tp": (4, 1), "num_links": 4},
 }
 
 
@@ -71,22 +75,17 @@ class QwenImageEditPipelineConfig:
         topology: ttnn.Topology = ttnn.Topology.Linear,
         num_links: int | None = None,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
+        cfg_parallel: bool = False,
     ) -> QwenImageEditPipelineConfig:
-        preset = _PRESETS_WH.get(tuple(mesh_shape))
+        presets = _PRESETS_WH_CFG_PARALLEL if cfg_parallel else _PRESETS_WH
+        preset = presets.get(tuple(mesh_shape))
         if preset is None:
-            msg = (
-                f"No Qwen-Image-Edit preset for mesh shape {tuple(mesh_shape)}; "
-                f"supported shapes: {list(_PRESETS_WH)}"
-            )
+            msg = f"No Qwen-Image-Edit preset for mesh shape {tuple(mesh_shape)}; " f"supported shapes: {list(presets)}"
             raise ValueError(msg)
 
-        # No CFG parallelism: cond/uncond run sequentially on the full mesh so every forward uses
-        # all 32 chips (TP=8 x SP=4). This is the literal "all chips on one image" layout.
-        dit_parallel_config = DiTParallelConfig(
-            cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
-            sequence_parallel=ParallelFactor(factor=preset["sp"][0], mesh_axis=preset["sp"][1]),
-            tensor_parallel=ParallelFactor(factor=preset["tp"][0], mesh_axis=preset["tp"][1]),
-        )
+        # cfg=1: cond/uncond run sequentially on the full mesh (TP=8 x SP=4).
+        # cfg=2: cond/uncond run concurrently on two half-mesh submeshes (TP=4 x SP=4 each).
+        dit_parallel_config = DiTParallelConfig.from_tuples(cfg=preset["cfg"], sp=preset["sp"], tp=preset["tp"])
 
         return cls(
             topology=topology,
@@ -96,263 +95,177 @@ class QwenImageEditPipelineConfig:
         )
 
 
-@dataclass
-class _StepInvariants:
-    """Per-context tensors that don't change across denoise steps (RoPE + prompt + seq lengths).
+class _VisionFeatureCache:
+    """Memoize the Qwen2.5-VL vision tower across the prompt and negative-prompt encodes.
 
-    RoPE depends only on ``img_shapes``/``txt_seq`` and the prompt embeddings are fixed for a given
-    conditioning context, so these are built once and *baked into the trace* -- only the latents and
-    timestep move per step. ``sig`` guards against a resolution/prompt-length change across calls.
+    The reference pipeline encodes the prompt and the negative prompt separately, each with the same
+    condition image, so the vision tower (~45% of a host VL encode at 1024^2) runs twice on identical
+    pixels. This wraps ``get_image_features`` on the VL model instance and returns the cached output
+    when the pixels and grid match the previous call.
     """
 
-    sig: tuple
-    prompt: ttnn.Tensor
-    s_cos: ttnn.Tensor
-    s_sin: ttnn.Tensor
-    p_cos: ttnn.Tensor
-    p_sin: ttnn.Tensor
-    combined_seq: int
-    txt_seq: int
-
-
-class _DeviceTransformer:
-    """Drop-in replacement for ``QwenImageTransformer2DModel`` that runs on the Galaxy.
-
-    Mirrors the subset of the HF transformer surface the reference edit pipeline touches: ``.config``,
-    ``.pos_embed``, a no-op ``cache_context``, and a ``__call__`` with the HF signature. Each call
-    shards the combined (noise + condition) token sequence across the SP axis, runs the shared TT
-    transformer, and gathers the result back to host. RoPE + prompt embeddings are step-invariant,
-    so they are built once per context (:class:`_StepInvariants`) and baked into the trace; only the
-    latents and timestep are transferred per forward.
-    """
-
-    def __init__(
-        self,
-        *,
-        tt_model: QwenImageTransformer,
-        config: object,
-        pos_embed: object,
-        mesh_device: ttnn.MeshDevice,
-        sp_axis: int,
-        trace: bool = True,
-        batch_cfg: bool = False,
-    ) -> None:
-        self.config = config
-        self.pos_embed = pos_embed
-        self._tt = tt_model
-        self._device = mesh_device
-        self._sp_axis = sp_axis
-        self._sp_factor = tuple(mesh_device.shape)[sp_axis]
-        self._trace = trace
-        # CFG batching: run cond+uncond as a single batch-2 forward (same latents, [cond, uncond]
-        # prompts zero-padded to a common length). Halves the number of device forwards. Mirrors the
-        # base qwenimage single-mesh path (``ttnn.concat([latents, latents])`` + zeroed prompt pad).
-        self._batch_cfg = batch_cfg
-        # One trace per key ("cond"/"uncond" when not batching; "batch" when batching).
-        self._tracers: dict[str, Tracer] = {}
-        # Step-invariant RoPE/prompt tensors, cached per key (see _StepInvariants).
-        self._invariants: dict[str, _StepInvariants] = {}
-        self._ctx = "cond"
-        # Batch-CFG interception state: the negative embeds are captured once (constant across
-        # steps); the uncond half of each batched forward is cached and returned on the uncond call.
-        self._uncond_eh: torch.Tensor | None = None
-        self._pending_uncond_out: torch.Tensor | None = None
-        self.forward_times: list[float] = []
-
-    def reset_cfg_state(self) -> None:
-        """Clear captured negative embeds / cached halves (call per new __call__)."""
-        self._uncond_eh = None
-        self._pending_uncond_out = None
-
-    def cache_context(self, name: str):  # noqa: ANN202 - matches HF's context-manager API
-        self._ctx = name
-        return nullcontext()
-
-    def release_traces(self) -> None:
-        for tracer in self._tracers.values():
-            tracer.release_trace()
-        self._tracers.clear()
-        self._invariants.clear()
-
-    def _build_invariants(
-        self,
-        key: str,
-        *,
-        prompt: torch.Tensor,
-        img_shapes: list,
-        combined_seq: int,
-        txt_seq: int,
-        batch: int,
-    ) -> _StepInvariants:
-        """Build (or reuse) the step-invariant RoPE + prompt tensors for ``key``."""
-        sig = (combined_seq, txt_seq, batch, repr(img_shapes))
-        cached = self._invariants.get(key)
-        if cached is not None and cached.sig == sig:
-            return cached
-
-        # A resolution / prompt-length change invalidates any trace captured under this key.
-        stale = self._tracers.pop(key, None)
-        if stale is not None:
-            stale.release_trace()
-
-        dev = self._device
-        spatial_rope, prompt_rope = self.pos_embed.forward(img_shapes, [txt_seq] * batch, "cpu")
-        inv = _StepInvariants(
-            sig=sig,
-            prompt=tensor.from_torch(prompt.to(torch.float32), device=dev),
-            s_cos=tensor.from_torch(
-                spatial_rope.real.repeat_interleave(2, dim=-1), device=dev, mesh_axes=[self._sp_axis, None]
-            ),
-            s_sin=tensor.from_torch(
-                spatial_rope.imag.repeat_interleave(2, dim=-1), device=dev, mesh_axes=[self._sp_axis, None]
-            ),
-            p_cos=tensor.from_torch(prompt_rope.real.repeat_interleave(2, dim=-1), device=dev),
-            p_sin=tensor.from_torch(prompt_rope.imag.repeat_interleave(2, dim=-1), device=dev),
-            combined_seq=combined_seq,
-            txt_seq=txt_seq,
-        )
-        self._invariants[key] = inv
-        return inv
-
-    def _run(
-        self,
-        key: str,
-        *,
-        hidden_states: torch.Tensor,
-        prompt: torch.Tensor,
-        img_shapes: list,
-        timestep: torch.Tensor,
-        allow_trace: bool,
-    ) -> torch.Tensor:
-        """Run one (possibly batched) transformer forward and gather the result to host."""
-        batch, combined_seq, _ = hidden_states.shape
-        txt_seq = prompt.shape[1]
-        dev, sp = self._device, self._sp_axis
-
-        inv = self._build_invariants(
-            key, prompt=prompt, img_shapes=img_shapes, combined_seq=combined_seq, txt_seq=txt_seq, batch=batch
-        )
-
-        # Only the latents + timestep move per step; RoPE/prompt are the same cached device objects
-        # (Tracer manages them as stable buffers and skips the copy when the address is unchanged).
-        # The reference divides the timestep by 1000; the TT time-embedding wants raw scale.
-        tt_spatial = tensor.from_torch(hidden_states.to(torch.float32), device=dev, mesh_axes=[None, sp, None])
-        tt_timestep = tensor.from_torch(
-            timestep.reshape(batch, 1).to(torch.float32) * 1000.0, dtype=ttnn.float32, device=dev
-        )
-        forward_kwargs = {
-            "spatial": tt_spatial,
-            "prompt": inv.prompt,
-            "timestep": tt_timestep,
-            "spatial_rope": (inv.s_cos, inv.s_sin),
-            "prompt_rope": (inv.p_cos, inv.p_sin),
-            "spatial_sequence_length": inv.combined_seq,
-            "prompt_sequence_length": inv.txt_seq,
-        }
-
-        ttnn.synchronize_device(dev)
-        t0 = time.time()
-        if self._trace and allow_trace:
-            tracer = self._tracers.get(key)
-            if tracer is None:
-                tracer = Tracer(self._tt.forward, device=dev, prep_run=True)
-                self._tracers[key] = tracer
-            out = tracer(**forward_kwargs, traced=True)
-        else:
-            out = self._tt.forward(**forward_kwargs)
-        ttnn.synchronize_device(dev)
-        self.forward_times.append(time.time() - t0)
-
-        return tensor.to_torch(out, mesh_axes=[None, sp, None]).to(hidden_states.dtype)
-
-    @staticmethod
-    def _pad_tokens(x: torch.Tensor, length: int) -> torch.Tensor:
-        """Zero-pad the token (dim-1) axis up to ``length`` (padding rows are already zero in HF)."""
-        if x.shape[1] >= length:
-            return x
-        pad = x.new_zeros(x.shape[0], length - x.shape[1], x.shape[2])
-        return torch.cat([x, pad], dim=1)
-
-    def _wrap(self, torch_out: torch.Tensor, return_dict: bool):  # noqa: ANN201
-        if return_dict:
-            return reference.models.modeling_outputs.Transformer2DModelOutput(sample=torch_out)
-        return (torch_out,)
+    def __init__(self, vl_model: torch.nn.Module) -> None:
+        self._fn = vl_model.get_image_features
+        self._key: tuple[torch.Tensor, torch.Tensor] | None = None
+        self._value = None
+        vl_model.get_image_features = self
 
     def __call__(
-        self,
-        *,
-        hidden_states: torch.Tensor,
-        timestep: torch.Tensor,
-        guidance: torch.Tensor | None,  # noqa: ARG002 - edit model is not guidance-distilled
-        encoder_hidden_states: torch.Tensor,
-        encoder_hidden_states_mask: torch.Tensor,  # noqa: ARG002 - shared transformer has no key mask
-        img_shapes: list,
-        attention_kwargs: dict | None = None,  # noqa: ARG002
-        return_dict: bool = False,
-    ):
-        _batch, combined_seq, _ = hidden_states.shape
-        if combined_seq % self._sp_factor != 0:
-            msg = (
-                f"Combined token sequence ({combined_seq}) is not divisible by the SP factor "
-                f"({self._sp_factor}); use a square resolution so noise and condition token counts align."
-            )
-            raise ValueError(msg)
+        self, pixel_values: torch.Tensor, image_grid_thw: torch.Tensor | None = None, **kwargs
+    ):  # noqa: ANN204
+        if (
+            self._key is not None
+            and image_grid_thw is not None
+            and self._key[0].shape == pixel_values.shape
+            and torch.equal(self._key[1], image_grid_thw)
+            and torch.equal(self._key[0], pixel_values)
+        ):
+            return self._value
+        self._value = self._fn(pixel_values, image_grid_thw, **kwargs)
+        self._key = (pixel_values.clone(), image_grid_thw.clone() if image_grid_thw is not None else None)
+        return self._value
 
-        # --- uncond call: capture negative embeds (constant); return the cached batched half. ---
-        if self._ctx == "uncond":
-            self._uncond_eh = encoder_hidden_states
-            if self._pending_uncond_out is not None:
-                out = self._pending_uncond_out
-                self._pending_uncond_out = None
-                return self._wrap(out, return_dict)
-            # Step 0 (no batched half yet): run uncond on its own, eagerly (one-shot, don't trace).
-            out = self._run(
-                "uncond",
-                hidden_states=hidden_states,
-                prompt=encoder_hidden_states,
-                img_shapes=img_shapes,
-                timestep=timestep,
-                allow_trace=not self._batch_cfg,
-            )
-            return self._wrap(out, return_dict)
 
-        # --- cond call: batch cond+uncond into one forward once the negative embeds are known. ---
-        if self._batch_cfg and self._uncond_eh is not None:
-            length = max(encoder_hidden_states.shape[1], self._uncond_eh.shape[1])
-            batched_prompt = torch.cat(
-                [self._pad_tokens(encoder_hidden_states, length), self._pad_tokens(self._uncond_eh, length)], dim=0
-            )
-            batched_hs = torch.cat([hidden_states, hidden_states], dim=0)
-            t = timestep.reshape(-1)[:1]
-            batched_t = torch.cat([t, t], dim=0)
-            out = self._run(
-                "batch",
-                hidden_states=batched_hs,
-                prompt=batched_prompt,
-                img_shapes=img_shapes * 2,
-                timestep=batched_t,
-                allow_trace=True,
-            )
-            self._pending_uncond_out = out[1:2]
-            return self._wrap(out[0:1], return_dict)
+class _DenoiseBranch:
+    """One CFG branch (cond or uncond) of the traced transformer.
 
-        # Step 0 cond (or batching disabled): single forward.
-        out = self._run(
-            "cond",
-            hidden_states=hidden_states,
-            prompt=encoder_hidden_states,
-            img_shapes=img_shapes,
-            timestep=timestep,
-            allow_trace=not self._batch_cfg,
+    ``launch`` writes the latents + timestep and enqueues the traced forward without blocking, so
+    branches on different submeshes execute concurrently; ``collect`` reads the result back.
+
+    All trace inputs live in persistent device buffers that are written in place (host -> device)
+    and handed to the Tracer as-is, so it never copies them. A device tensor allocated after a trace
+    is captured can be overwritten when that trace replays, so with two traces on one mesh
+    (sequential CFG) every branch's buffers must be allocated before the first capture: callers run
+    ``prepare`` on all branches before the first ``launch``, and on a signature change
+    (``needs_reset``) ``reset`` all branches first.
+    """
+
+    def __init__(self, *, tt_model: QwenImageTransformer, device: ttnn.MeshDevice, sp_axis: int, trace: bool) -> None:
+        self._tt = tt_model
+        self._device = device
+        self._sp_axis = sp_axis
+        self._trace = trace
+        self._tracer: Tracer | None = None
+        self._sig: tuple | None = None
+        self._inputs: dict | None = None
+        self._out: ttnn.Tensor | None = None
+        self._pending: tuple[list[ttnn.Tensor], int] | None = None
+
+    @staticmethod
+    def signature(*, prompt: torch.Tensor, img_shapes: list, combined_seq: int) -> tuple:
+        return (combined_seq, prompt.shape[1], repr(img_shapes))
+
+    def needs_reset(self, sig: tuple) -> bool:
+        return self._sig is not None and sig != self._sig
+
+    def reset(self) -> None:
+        if self._tracer is not None:
+            self._tracer.release_trace()
+        self._tracer = None
+        self._sig = None
+        self._inputs = None
+
+    def prepare(
+        self, *, pos_embed: object, prompt: torch.Tensor, img_shapes: list, combined_seq: int, in_channels: int
+    ) -> None:
+        """Write the step-invariant inputs (prompt, RoPE) and allocate the per-step input buffers."""
+        sig = self.signature(prompt=prompt, img_shapes=img_shapes, combined_seq=combined_seq)
+        assert not self.needs_reset(sig), "reset() all branches before preparing a new signature"
+        sp = self._sp_axis
+        spatial_rope, prompt_rope = pos_embed.forward(img_shapes, [prompt.shape[1]], "cpu")
+        host = {
+            "prompt": self._host(prompt),
+            "spatial_rope": (
+                self._host(spatial_rope.real.repeat_interleave(2, dim=-1), mesh_axes=[sp, None]),
+                self._host(spatial_rope.imag.repeat_interleave(2, dim=-1), mesh_axes=[sp, None]),
+            ),
+            "prompt_rope": (
+                self._host(prompt_rope.real.repeat_interleave(2, dim=-1)),
+                self._host(prompt_rope.imag.repeat_interleave(2, dim=-1)),
+            ),
+        }
+        if self._inputs is None:
+            self._sig = sig
+            per_step = {
+                "spatial": self.convert_hidden_states(torch.zeros(1, combined_seq, in_channels)),
+                "timestep": self._host(torch.zeros(1, 1), dtype=ttnn.float32),
+            }
+            self._inputs = {
+                **_tree_to_device({**host, **per_step}, self._device),
+                "spatial_sequence_length": combined_seq,
+                "prompt_sequence_length": prompt.shape[1],
+            }
+        else:
+            _tree_write(host, self._inputs)
+
+    def _host(self, x: torch.Tensor, *, mesh_axes: list | None = None, dtype: ttnn.DataType = ttnn.bfloat16):
+        return tensor.from_torch(
+            x.to(torch.float32), device=self._device, mesh_axes=mesh_axes, dtype=dtype, on_host=True
         )
-        return self._wrap(out, return_dict)
+
+    def launch(self, *, hidden_states: torch.Tensor, timestep: torch.Tensor) -> None:
+        """Write this step's latents + timestep and enqueue the forward (non-blocking when traced)."""
+        assert self._inputs is not None, "prepare() first"
+        ttnn.copy_host_to_device_tensor(self.convert_hidden_states(hidden_states), self._inputs["spatial"])
+        ttnn.copy_host_to_device_tensor(
+            self._host(timestep.reshape(1, 1), dtype=ttnn.float32), self._inputs["timestep"]
+        )
+
+        if not self._trace:
+            self._out = self._tt.forward(**self._inputs)
+            return
+        if self._tracer is None:
+            self._tracer = Tracer(self._tt.forward, device=self._device, prep_run=True)
+        self._out = self._tracer(**self._inputs, traced=True, tracer_blocking_execution=False)
+
+    def convert_hidden_states(self, hidden_states: torch.Tensor) -> ttnn.Tensor:
+        return self._host(hidden_states, mesh_axes=[None, self._sp_axis, None])
+
+    def start_collect(self, num_tokens: int) -> None:
+        """Start a non-blocking read of the first ``num_tokens`` output tokens (finish with ``collect``).
+
+        The output is sharded over SP and replicated over TP, and only the noise tokens (the leading
+        part of the combined sequence) are needed, so only the TP-rank-0 shards covering them are
+        read instead of gathering the whole mesh.
+        """
+        shard_len = self._out.shape[1]  # per-device (SP shard) length
+        num_shards = -(-num_tokens // shard_len)
+        by_sp = {}
+        coords = self._out.tensor_topology().mesh_coords()
+        for coord, dev_tensor in zip(coords, ttnn.get_device_tensors(self._out), strict=True):
+            sp_idx = coord[self._sp_axis]
+            if sp_idx < num_shards and all(c == 0 for i, c in enumerate(coord) if i != self._sp_axis):
+                by_sp[sp_idx] = dev_tensor.cpu(blocking=False)
+        self._pending = ([by_sp[i] for i in range(num_shards)], num_tokens)
+
+    def collect(self) -> torch.Tensor:
+        shards, num_tokens = self._pending
+        self._pending = None
+        ttnn.synchronize_device(self._device)
+        return torch.cat([ttnn.to_torch(t) for t in shards], dim=1)[:, :num_tokens]
+
+
+def _tree_to_device(tree: dict, device: ttnn.MeshDevice) -> dict:
+    return {k: tuple(t.to(device) for t in v) if isinstance(v, tuple) else v.to(device) for k, v in tree.items()}
+
+
+def _tree_write(host: dict, dev: dict) -> None:
+    for k, v in host.items():
+        for h, d in zip(v, dev[k], strict=True) if isinstance(v, tuple) else ((v, dev[k]),):
+            ttnn.copy_host_to_device_tensor(h, d)
 
 
 class QwenImageEditPipeline:
-    """Qwen-Image-Edit with the denoise running on the WH Galaxy at TP=8 x SP=4.
+    """Qwen-Image-Edit with the denoise running on the WH Galaxy.
 
-    Device compute (the transformer) is owned by tt_dit; VL image+text encode and VAE encode/decode
-    are delegated to the reference ``diffusers.QwenImageEditPipeline`` until device equivalents exist.
+    Two denoise layouts:
+
+    * ``cfg_parallel=False``: TP=8 x SP=4 on all 32 chips; cond and uncond forwards run one after the
+      other, driven by the reference ``diffusers.QwenImageEditPipeline`` loop.
+    * ``cfg_parallel=True``: two 4x4 submeshes (TP=4 x SP=4 each); the cond and uncond forwards run
+      concurrently, driven by this class's own denoise loop (same math as the reference loop).
+
+    VL image+text encode stays on host; VAE encode/decode runs on device.
     """
 
     @classmethod
@@ -362,19 +275,19 @@ class QwenImageEditPipeline:
         mesh_device: ttnn.MeshDevice,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
         trace: bool = True,
-        batch_cfg: bool = False,  # measured regression at TP=8xSP=4: batch-2 forward ~3.1x batch-1
+        cfg_parallel: bool = True,
         device_vae: bool = True,
         device_vae_encode: bool = True,
     ) -> QwenImageEditPipeline:
         config = QwenImageEditPipelineConfig.default(
             mesh_shape=mesh_device.shape,
             checkpoint_name=checkpoint_name,
+            cfg_parallel=cfg_parallel,
         )
         return cls(
             device=mesh_device,
             config=config,
             trace=trace,
-            batch_cfg=batch_cfg,
             device_vae=device_vae,
             device_vae_encode=device_vae_encode,
         )
@@ -385,77 +298,95 @@ class QwenImageEditPipeline:
         device: ttnn.MeshDevice,
         config: QwenImageEditPipelineConfig,
         trace: bool = True,
-        batch_cfg: bool = False,
         device_vae: bool = True,
         device_vae_encode: bool = True,
     ) -> None:
         self._mesh_device = device
         self._config = config
         self._parallel_config = config.dit_parallel_config
+        self._cfg_parallel = self._parallel_config.cfg_parallel.factor == 2
 
         sp = self._parallel_config.sequence_parallel
         tp = self._parallel_config.tensor_parallel
         logger.info(f"Qwen-Image-Edit parallel config: {self._parallel_config}")
+
+        # cfg=1 uses the full mesh; cfg=2 splits it into two submeshes (cond, uncond).
+        self._submeshes = create_submeshes(device, self._parallel_config) if self._cfg_parallel else (device,)
         logger.info(
-            f"Mesh shape: {tuple(device.shape)} (SP={sp.factor}@axis{sp.mesh_axis}, TP={tp.factor}@axis{tp.mesh_axis})"
+            f"Mesh shape: {tuple(device.shape)} -> {len(self._submeshes)} x {tuple(self._submeshes[0].shape)} "
+            f"(SP={sp.factor}@axis{sp.mesh_axis}, TP={tp.factor}@axis{tp.mesh_axis})"
         )
 
-        logger.info("loading reference QwenImageEditPipeline (host: VL encode, VAE, scheduler)...")
+        logger.info("loading reference QwenImageEditPipeline (host: VL encode, scheduler)...")
         self._hf = reference.QwenImageEditPipeline.from_pretrained(config.checkpoint_name, torch_dtype=torch.bfloat16)
+        _VisionFeatureCache(self._hf.text_encoder.model)
         hf_transformer = self._hf.transformer
         cfg = hf_transformer.config
+        self._transformer_config = cfg
+        self._pos_embed = hf_transformer.pos_embed
 
-        self._ccl_manager = CCLManager(mesh_device=device, num_links=config.num_links, topology=config.topology)
+        self._ccl_managers = [
+            CCLManager(mesh_device=d, num_links=config.num_links, topology=config.topology) for d in self._submeshes
+        ]
         padding_config = (
             PaddingConfig.from_tensor_parallel_factor(cfg.num_attention_heads, cfg.attention_head_dim, tp.factor)
             if cfg.num_attention_heads % tp.factor != 0
             else None
         )
 
-        logger.info("building TT transformer + loading edit weights...")
-        tt_model = QwenImageTransformer(
-            patch_size=cfg.patch_size,
-            in_channels=cfg.in_channels,
-            num_layers=cfg.num_layers,
-            attention_head_dim=cfg.attention_head_dim,
-            num_attention_heads=cfg.num_attention_heads,
-            joint_attention_dim=cfg.joint_attention_dim,
-            out_channels=cfg.out_channels,
-            device=device,
-            ccl_manager=self._ccl_manager,
-            parallel_config=self._parallel_config,
-            padding_config=padding_config,
-        )
-        cache.load_model(
-            tt_model=tt_model,
-            get_torch_state_dict=hf_transformer.state_dict,
-            model_name=_model_name_for_cache(config.checkpoint_name),
-            subfolder="transformer",
-            parallel_config=self._parallel_config,
-            mesh_shape=tuple(device.shape),
-            mesh_device=device,
-        )
+        logger.info("building TT transformer(s) + loading edit weights...")
+        tt_models = []
+        for submesh, ccl_manager in zip(self._submeshes, self._ccl_managers, strict=True):
+            tt_model = QwenImageTransformer(
+                patch_size=cfg.patch_size,
+                in_channels=cfg.in_channels,
+                num_layers=cfg.num_layers,
+                attention_head_dim=cfg.attention_head_dim,
+                num_attention_heads=cfg.num_attention_heads,
+                joint_attention_dim=cfg.joint_attention_dim,
+                out_channels=cfg.out_channels,
+                device=submesh,
+                ccl_manager=ccl_manager,
+                parallel_config=self._parallel_config,
+                padding_config=padding_config,
+            )
+            cache.load_model(
+                tt_model=tt_model,
+                get_torch_state_dict=hf_transformer.state_dict,
+                model_name=_model_name_for_cache(config.checkpoint_name),
+                subfolder="transformer",
+                parallel_config=self._parallel_config,
+                mesh_shape=tuple(submesh.shape),
+                mesh_device=submesh,
+            )
+            tt_models.append(tt_model)
 
-        # Swap the device-backed transformer into the host pipeline.
-        self._device_transformer = _DeviceTransformer(
-            tt_model=tt_model,
-            config=cfg,
-            pos_embed=hf_transformer.pos_embed,
-            mesh_device=device,
-            sp_axis=sp.mesh_axis,
-            trace=trace,
-            batch_cfg=batch_cfg,
-        )
-        self._hf.transformer = self._device_transformer
+        # Branch 0 = cond, branch 1 = uncond; one per submesh with CFG-parallel, else both share the
+        # full-mesh model.
+        models = tt_models if self._cfg_parallel else tt_models * 2
+        devices = self._submeshes if self._cfg_parallel else (device, device)
+        self._branches = [
+            _DenoiseBranch(tt_model=m, device=d, sp_axis=sp.mesh_axis, trace=trace)
+            for m, d in zip(models, devices, strict=True)
+        ]
+        self.forward_times: list[float] = []  # one entry per denoise step
+        # The host transformer is only needed for its config, RoPE helper and state dict (loaded above).
+        self._hf.transformer = None
+        del hf_transformer
 
-        # Swap the device-backed VAE (encode + decode on the Galaxy) into the host pipeline.
+        # Swap the device-backed VAE (encode + decode) into the host pipeline. With CFG-parallel it
+        # lives on the first submesh. Height on the TP axis, width on the SP axis (base qwenimage
+        # convention).
         if device_vae:
             logger.info(f"building device VAE (encode={device_vae_encode}, decode=True)...")
-            # Match the base qwenimage VAE convention: height on the TP axis, width on the SP axis.
             self._hf.vae = DeviceVAE(
                 checkpoint_name=config.checkpoint_name,
-                mesh_device=device,
-                ccl_manager=self._ccl_manager,
+                mesh_device=self._submeshes[0],
+                # Own CCL manager: the traced transformer bakes in its manager's semaphores and
+                # persistent buffers, which untraced VAE CCLs must not touch between replays.
+                ccl_manager=CCLManager(
+                    mesh_device=self._submeshes[0], num_links=config.num_links, topology=config.topology
+                ),
                 height_axis=tp.mesh_axis,
                 width_axis=sp.mesh_axis,
                 device_encode=device_vae_encode,
@@ -463,16 +394,16 @@ class QwenImageEditPipeline:
         logger.info("Qwen-Image-Edit pipeline ready.")
 
     @property
-    def last_forward_times(self) -> list[float]:
-        """Per-transformer-forward device times (seconds) from the most recent ``__call__``."""
-        return self._device_transformer.forward_times
+    def last_step_times(self) -> list[float]:
+        """Per-step transformer times (seconds, cond + uncond forwards) from the most recent ``__call__``."""
+        return self.forward_times
 
     def __call__(
         self,
         *,
         image: Image.Image,
-        prompt: str | Sequence[str],
-        negative_prompt: str | Sequence[str] = " ",
+        prompt: str,
+        negative_prompt: str = " ",
         num_inference_steps: int = 20,
         true_cfg_scale: float = 4.0,
         side: int = 1024,
@@ -488,31 +419,153 @@ class QwenImageEditPipeline:
         else:
             image = image.convert("RGB").resize((side, side))
 
-        self._device_transformer.forward_times.clear()
-        self._device_transformer.reset_cfg_state()
+        self.forward_times.clear()
         generator = torch.Generator().manual_seed(seed)
 
         t_start = time.time()
-        out = self._hf(
+        images, timings = self._generate(
             image=image,
             prompt=prompt,
             negative_prompt=negative_prompt,
-            height=side,
-            width=side,
             num_inference_steps=num_inference_steps,
             true_cfg_scale=true_cfg_scale,
+            side=side,
             generator=generator,
         )
         wall = time.time() - t_start
 
-        fwd = self._device_transformer.forward_times
-        warm = fwd[2:] if len(fwd) > 2 else fwd
-        per_fwd_ms = (sum(warm) / len(warm) * 1000.0) if warm else float("nan")
+        steps = self.forward_times
+        warm = steps[1:] if len(steps) > 1 else steps
+        per_step_ms = (sum(warm) / len(warm) * 1000.0) if warm else float("nan")
+        breakdown = " | ".join(f"{k} {v:.1f} s" for k, v in timings.items())
         logger.info(
-            f"[qwen-image-edit] {num_inference_steps} steps, {len(fwd)} forwards | "
-            f"warm per-forward {per_fwd_ms:.1f} ms | denoise {sum(fwd):.1f} s | wall {wall:.1f} s"
+            f"[qwen-image-edit] {num_inference_steps} steps (cfg_parallel={self._cfg_parallel}) | "
+            f"warm per-step {per_step_ms:.1f} ms | denoise {sum(steps):.1f} s | wall {wall:.1f} s | {breakdown}"
         )
-        return list(out.images)
+        return images
+
+    @torch.no_grad()
+    def _generate(
+        self,
+        *,
+        image: Image.Image,
+        prompt: str,
+        negative_prompt: str,
+        num_inference_steps: int,
+        true_cfg_scale: float,
+        side: int,
+        generator: torch.Generator,
+    ) -> tuple[list[Image.Image], dict[str, float]]:
+        """Reference ``QwenImageEditPipeline.__call__`` with the transformer forwards on device.
+
+        Mirrors diffusers' edit loop step for step (bf16 host latents, the same timestep rounding,
+        true-CFG with norm rescale, FlowMatch Euler step). Both branches are enqueued before either
+        result is read, so with CFG-parallel they run concurrently on their submeshes.
+        """
+        hf = self._hf
+        timings: dict[str, float] = {}
+
+        t = time.time()
+        calc_w, calc_h, _ = calculate_dimensions(1024 * 1024, image.size[0] / image.size[1])
+        multiple_of = hf.vae_scale_factor * 2
+        height, width = side // multiple_of * multiple_of, side // multiple_of * multiple_of
+        prompt_image = hf.image_processor.resize(image, calc_h, calc_w)
+        image_tensor = hf.image_processor.preprocess(prompt_image, calc_h, calc_w).unsqueeze(2)
+
+        prompt_embeds, _ = hf.encode_prompt(image=prompt_image, prompt=prompt, device="cpu")
+        do_true_cfg = true_cfg_scale > 1 and negative_prompt is not None
+        if do_true_cfg:
+            negative_prompt_embeds, _ = hf.encode_prompt(image=prompt_image, prompt=negative_prompt, device="cpu")
+        timings["vl_encode"] = time.time() - t
+
+        t = time.time()
+        num_channels_latents = self._transformer_config.in_channels // 4
+        latents, image_latents = hf.prepare_latents(
+            image_tensor, 1, num_channels_latents, height, width, prompt_embeds.dtype, "cpu", generator, None
+        )
+        timings["vae_encode"] = time.time() - t
+        img_shapes = [
+            [
+                (1, height // hf.vae_scale_factor // 2, width // hf.vae_scale_factor // 2),
+                (1, calc_h // hf.vae_scale_factor // 2, calc_w // hf.vae_scale_factor // 2),
+            ]
+        ]
+
+        sigmas = np.linspace(1.0, 1 / num_inference_steps, num_inference_steps)
+        mu = calculate_shift(
+            latents.shape[1],
+            hf.scheduler.config.get("base_image_seq_len", 256),
+            hf.scheduler.config.get("max_image_seq_len", 4096),
+            hf.scheduler.config.get("base_shift", 0.5),
+            hf.scheduler.config.get("max_shift", 1.15),
+        )
+        hf.scheduler.set_timesteps(sigmas=sigmas, device="cpu", mu=mu)
+        hf.scheduler.set_begin_index(0)
+        timesteps = hf.scheduler.timesteps
+
+        combined_seq = latents.shape[1] + image_latents.shape[1]
+        sp_factor = self._parallel_config.sequence_parallel.factor
+        if combined_seq % sp_factor != 0:
+            msg = f"Combined token sequence ({combined_seq}) is not divisible by the SP factor ({sp_factor})"
+            raise ValueError(msg)
+
+        branches = self._branches if do_true_cfg else self._branches[:1]
+        contexts = [prompt_embeds, negative_prompt_embeds] if do_true_cfg else [prompt_embeds]
+        # All branches' trace inputs must be (re)allocated before any trace is captured, so a shape
+        # change on either branch resets both (see _DenoiseBranch).
+        sigs = [
+            _DenoiseBranch.signature(prompt=ctx, img_shapes=img_shapes, combined_seq=combined_seq) for ctx in contexts
+        ]
+        if any(b.needs_reset(sig) for b, sig in zip(branches, sigs, strict=False)):
+            for branch in self._branches:
+                branch.reset()
+        for branch, ctx in zip(branches, contexts, strict=True):
+            branch.prepare(
+                pos_embed=self._pos_embed,
+                prompt=ctx,
+                img_shapes=img_shapes,
+                combined_seq=combined_seq,
+                in_channels=self._transformer_config.in_channels,
+            )
+
+        t = time.time()
+        n_lat = latents.shape[1]
+        for step_t in timesteps:
+            latent_model_input = torch.cat([latents, image_latents], dim=1)
+            # Same rounding as the reference loop: timestep cast to the latents dtype, then / 1000;
+            # the TT time embedding takes the raw (x1000) scale.
+            timestep = (step_t.expand(1).to(latents.dtype) / 1000).to(torch.float32) * 1000.0
+
+            t0 = time.time()
+            for branch in branches:
+                branch.launch(hidden_states=latent_model_input, timestep=timestep)
+            for branch in branches:
+                branch.start_collect(n_lat)
+            preds = [branch.collect().to(latents.dtype) for branch in branches]
+            self.forward_times.append(time.time() - t0)
+
+            noise_pred = preds[0]
+            if do_true_cfg:
+                neg_noise_pred = preds[1]
+                comb_pred = neg_noise_pred + true_cfg_scale * (noise_pred - neg_noise_pred)
+                cond_norm = torch.norm(noise_pred, dim=-1, keepdim=True)
+                noise_norm = torch.norm(comb_pred, dim=-1, keepdim=True)
+                noise_pred = comb_pred * (cond_norm / noise_norm)
+
+            latents = hf.scheduler.step(noise_pred, step_t, latents, return_dict=False)[0]
+        timings["denoise_loop"] = time.time() - t
+
+        t = time.time()
+        latents = hf._unpack_latents(latents, height, width, hf.vae_scale_factor)  # noqa: SLF001
+        latents = latents.to(hf.vae.dtype)
+        z_dim = hf.vae.config.z_dim
+        latents_mean = torch.tensor(hf.vae.config.latents_mean).view(1, z_dim, 1, 1, 1).to(latents.dtype)
+        latents_std = 1.0 / torch.tensor(hf.vae.config.latents_std).view(1, z_dim, 1, 1, 1).to(latents.dtype)
+        latents = latents / latents_std + latents_mean
+        decoded = hf.vae.decode(latents, return_dict=False)[0][:, :, 0]
+        images = hf.image_processor.postprocess(decoded, output_type="pil")
+        timings["vae_decode"] = time.time() - t
+        return list(images), timings
 
 
 def _model_name_for_cache(checkpoint_name: str) -> str:
