@@ -548,7 +548,8 @@ constexpr bool is_single_thread_runtype(PerfRunType run_type)
 // whole measured window. A span needs every thread stopped before the read, so those keep the barrier.
 constexpr bool exit_barrier_for(PerfRunType run_type)
 {
-    return !is_single_thread_runtype(run_type);
+    (void)run_type; // experiment: peers wait quietly until the measured thread is done
+    return true;
 }
 
 constexpr bool is_measured_thread(PerfRunType run_type)
@@ -637,6 +638,12 @@ struct perf_counter_scoped
                 }
                 arm_all_counters();
             });
+        // Experiment: let the peers settle into their exit barrier before the measured zone opens.
+        if constexpr (is_single_thread_runtype(RUN_TYPE) && is_measured_thread(RUN_TYPE))
+        {
+            std::uint32_t settle;
+            asm volatile("li %0, 256\n1:\n\taddi %0, %0, -1\n\tbnez %0, 1b" : "=&r"(settle));
+        }
         ckernel::fence_compiler();
     }
 

@@ -15,6 +15,8 @@ GROUP="${1:?usage: run_llk_perf_blackhole.sh <group> <n_groups>}"
 N_GROUPS="${2:?usage: run_llk_perf_blackhole.sh <group> <n_groups>}"
 SPEED_OF_LIGHT="${SPEED_OF_LIGHT:-true}"
 export TT_LLK_DISABLE_ASSERTS="${TT_LLK_DISABLE_ASSERTS:-1}"
+# Experiment (bistability repro): PACK_ISOLATE only; dispatch passes it empty.
+export LLK_PERF_RUN_TYPES="${LLK_PERF_RUN_TYPES:-L1_TO_L1,UNPACK_ISOLATE,MATH_ISOLATE,PACK_ISOLATE,L1_CONGESTION}"
 
 case "$SPEED_OF_LIGHT" in
   true)
