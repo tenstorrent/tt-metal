@@ -573,4 +573,12 @@ void kernel_main() {
 #endif
     }
     dfb_mask_padded_obj.pop_front(1);
+
+    // The reduce scalers are pushed once by the reader and read by every pass over the row, so they
+    // are waited once up front rather than per pass. Pop them here to balance the buffers.
+    dfb_max_scaler_obj.pop_front(1);
+    dfb_sum_scaler_obj.pop_front(1);
+#ifdef FUSED_SCALE_MASK
+    dfb_fused_scale_obj.pop_front(1);
+#endif
 }  // MAIN

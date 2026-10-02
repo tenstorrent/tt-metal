@@ -775,11 +775,11 @@ void kernel_main() {
     }
 
 #ifdef OUT_SHARDED
-    const uint16_t out_sharded_tiles = static_cast<uint16_t>(
+    const uint16_t out_num_tiles = static_cast<uint16_t>(
         batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
-    dfb_out.wait_front(out_sharded_tiles);
+    dfb_out.wait_front(out_num_tiles);
     // Pop the same number of tiles that were waited for.
-    dfb_out.pop_front(out_sharded_tiles);
+    dfb_out.pop_front(out_num_tiles);
 #endif
 #ifdef ENABLE_GLOBAL_CB
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
@@ -790,4 +790,11 @@ void kernel_main() {
     // Barrier both, unconditionally, mirroring the CCL reader fix in #53595.
     noc.async_atomic_barrier();
     noc.async_write_barrier();
+
+    // The sparsity slot is reserved once to take its base address and is re-read by this kernel
+    // alone; it is never handed to a consumer, so complete the handshake here rather than leaving
+    // the reserve dangling. The guard matches the one on the reserve.
+    if constexpr (batchB > 0) {
+        dfb_sparsity.push_back(1);
+    }
 }

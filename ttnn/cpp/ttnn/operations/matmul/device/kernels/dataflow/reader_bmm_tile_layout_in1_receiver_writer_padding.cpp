@@ -240,10 +240,10 @@ void kernel_main() {
     }
 
 #ifdef OUT_SHARDED
-    const uint16_t out_sharded_tiles = static_cast<uint16_t>(
+    const uint16_t out_num_tiles = static_cast<uint16_t>(
         batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
-    dfb_out.wait_front(out_sharded_tiles);
+    dfb_out.wait_front(out_num_tiles);
     // Pop the same number of tiles that were waited for.
-    dfb_out.pop_front(out_sharded_tiles);
+    dfb_out.pop_front(out_num_tiles);
 #endif
 }
