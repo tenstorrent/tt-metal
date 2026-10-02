@@ -9,10 +9,11 @@ from pathlib import Path
 SELECTED_CONFIG = Path(__file__).resolve().parents[1] / "doc/datatype_sweep/selected_precision_config.json"
 WEIGHT_DTYPES = ("bfloat4_b", "bfloat8_b", "bfloat16")
 FIDELITIES = ("LoFi", "HiFi2", "HiFi4")
+PREFILL_WEIGHT_FIELDS = ("prefill_expert_gate_dtype", "prefill_expert_down_dtype")
 
 
-def _baseline_layer(sliding):
-    return {
+def _baseline_layer(sliding, schema_version=1):
+    layer = {
         "qkv_weight_dtype": "bfloat8_b" if sliding else "bfloat4_b",
         "qkv_fidelity": "LoFi",
         "output_weight_dtype": "bfloat8_b",
@@ -59,12 +60,18 @@ def _baseline_layer(sliding):
             "math_approx_mode": False,
         },
     }
+    if schema_version == 2:
+        for key in PREFILL_WEIGHT_FIELDS:
+            layer[key] = layer["fixed"].pop(key)
+    return layer
 
 
-def baseline_precision_config():
+def baseline_precision_config(schema_version=1):
     """Return a fresh complete policy matching the pre-sweep construction path."""
+    if type(schema_version) is not int or schema_version not in (1, 2):
+        raise ValueError("Unsupported precision schema version")
     return {
-        "schema_version": 1,
+        "schema_version": schema_version,
         "config_id": "baseline",
         "model": {
             "head_weight_dtype": "bfloat16",
@@ -89,7 +96,8 @@ def baseline_precision_config():
             },
         },
         "layer_types": {
-            kind: _baseline_layer(kind == "sliding_attention") for kind in ("sliding_attention", "full_attention")
+            kind: _baseline_layer(kind == "sliding_attention", schema_version)
+            for kind in ("sliding_attention", "full_attention")
         },
         "layer_overrides": {},
     }
@@ -113,8 +121,8 @@ def _fixed(actual, expected, path):
         raise ValueError(f"Unsupported fixed precision fields at {path}: {differing}")
 
 
-def _validate_layer(layer, kind):
-    baseline = _baseline_layer(kind == "sliding_attention")
+def _validate_layer(layer, kind, schema_version=1):
+    baseline = _baseline_layer(kind == "sliding_attention", schema_version)
     for key in (
         "qkv_weight_dtype",
         "output_weight_dtype",
@@ -122,6 +130,7 @@ def _validate_layer(layer, kind):
         "expert_down_dtype",
         "shared_gate_dtype",
         "shared_down_dtype",
+        *(PREFILL_WEIGHT_FIELDS if schema_version == 2 else ()),
     ):
         if layer[key] not in WEIGHT_DTYPES:
             raise ValueError(f"Unsupported {key}: {layer[key]}")
@@ -152,10 +161,11 @@ def resolve_precision_config(value=None):
     overrides = value.pop("layer_overrides", {})
     if not isinstance(overrides, dict):
         raise ValueError("layer_overrides must be an object keyed by layer index")
-    result = baseline_precision_config()
-    _merge_known(result, value, "precision")
-    if type(result["schema_version"]) is not int or result["schema_version"] != 1:
+    schema_version = value.get("schema_version", 1)
+    if type(schema_version) is not int or schema_version not in (1, 2):
         raise ValueError("Unsupported precision schema version")
+    result = baseline_precision_config(schema_version)
+    _merge_known(result, value, "precision")
     if not isinstance(result["config_id"], str) or not result["config_id"]:
         raise ValueError("config_id must be a nonempty string")
     model = result["model"]
@@ -163,7 +173,7 @@ def resolve_precision_config(value=None):
         raise ValueError("Unsupported head weight dtype or fidelity")
     _fixed(model["fixed"], baseline_precision_config()["model"]["fixed"], "model.fixed")
     for kind, layer in result["layer_types"].items():
-        _validate_layer(layer, kind)
+        _validate_layer(layer, kind, schema_version)
     for index, override in overrides.items():
         if (
             not isinstance(index, str)
@@ -181,7 +191,7 @@ def resolve_precision_config(value=None):
 def layer_precision_config(config, index, kind):
     layer = copy.deepcopy(config["layer_types"][kind])
     _merge_known(layer, config["layer_overrides"].get(str(index), {}), f"layer_overrides.{index}")
-    _validate_layer(layer, kind)
+    _validate_layer(layer, kind, config["schema_version"])
     return layer
 
 
