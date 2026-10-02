@@ -19,11 +19,13 @@ the centre channels, scaled to metres.
 import torch
 
 import ttnn
-from models.experimental.bevformer.config.decoder_config import CODE_WL, REG_Z
+from models.experimental.bevformer.config.decoder_config import CODE_H, CODE_WL, CODE_XY, CODE_Z
 from models.experimental.bevformer.config.head_config import PC_RANGE
-from models.experimental.bevformer.tt.tt_common import layer_norm
+from models.experimental.bevformer.tt.tt_common import SCORE_DTYPE, layer_norm
 from models.experimental.bevformer.tt.tt_decoder import GRID_DTYPE, TtDetectionTransformerDecoder
-from models.experimental.bevformer.tt.tt_nms_free_coder import SCORE_DTYPE
+
+# TtBEVFormerHead rebuilds the box code by concatenating its parts in channel order.
+assert (CODE_XY.start, CODE_XY.stop, CODE_WL.stop, CODE_Z.stop) == (0, CODE_WL.start, CODE_Z.start, CODE_H.start)
 
 
 class TtBEVFormerHead:
@@ -53,8 +55,8 @@ class TtBEVFormerHead:
         """``bev_embed`` is ``(bs, bev_h * bev_w, embed_dims)``.
 
         Returns every decoder layer's class logits ``(L, bs, num_query, num_classes)``
-        (``SCORE_DTYPE``) and box codes ``(L, bs, num_query, code_size)`` (``GRID_DTYPE``),
-        cx, cy and cz in metres.
+        (``SCORE_DTYPE``) and box predictions ``(L, bs, num_query, code_size)`` (``GRID_DTYPE``):
+        box codes with cx, cy and cz in metres.
         """
         p = self.params
         bs = bev_embed.shape[0]
@@ -70,13 +72,12 @@ class TtBEVFormerHead:
         )
 
         centres = ttnn.add(ttnn.multiply(refined_points, self.pc_size), self.pc_min)
-        # Rebuilds the code in its channel order: REG_XY, CODE_WL, REG_Z, then the rest.
         all_bbox_preds = ttnn.concat(
             [
                 centres[..., 0:2],
                 box_codes[..., CODE_WL],
                 centres[..., 2:3],
-                box_codes[..., REG_Z.stop :],
+                box_codes[..., CODE_H.start :],
             ],
             dim=-1,
         )

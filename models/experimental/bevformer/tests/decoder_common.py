@@ -11,9 +11,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from models.common.utility_functions import comp_pcc
-from models.experimental.bevformer.config.decoder_config import CODE_SIZE, REG_XY, REG_Z
-from models.experimental.bevformer.reference.decoder import DetectionTransformerDecoder, inverse_sigmoid
-from models.experimental.bevformer.reference.head import reg_branch
+from models.experimental.bevformer.tests.backbone_common import assert_pcc
+from models.experimental.bevformer.config.decoder_config import CODE_SIZE, CODE_XY, CODE_Z
+from models.experimental.bevformer.reference.decoder import DetectionTransformerDecoder, inverse_sigmoid, reg_branch
 from models.experimental.bevformer.reference.ms_deformable_attention import MSDeformableAttention
 
 # BEVFormer tiny and base share the decoder; only the BEV grid it attends over differs.
@@ -120,7 +120,7 @@ def build_reg_branches(seed=1):
     with torch.no_grad():
         for branch in branches:
             last = branch[-1]
-            for rows, std in ((REG_XY, REG_XY_WEIGHT_STD), (REG_Z, REG_Z_WEIGHT_STD)):
+            for rows, std in ((CODE_XY, REG_XY_WEIGHT_STD), (CODE_Z, REG_Z_WEIGHT_STD)):
                 last.weight[rows] *= std / last.weight[rows].std()
     return branches.eval().requires_grad_(False)
 
@@ -189,3 +189,10 @@ def layer_metrics(expected, actual, input_reference_points, bev_shape):
         )
         for layer in range(expected_output.shape[0])
     ]
+
+
+def assert_channels_close(expected, actual, pcc=0.99):
+    """PCC of every last-dim channel apart, so a channel of small range cannot hide behind
+    the others."""
+    for channel in range(expected.shape[-1]):
+        assert_pcc(expected[..., channel], actual[..., channel], pcc)

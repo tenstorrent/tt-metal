@@ -8,7 +8,7 @@ Detection head in PyTorch.
 This module implements the part of BEVFormer's ``BEVFormerHead`` that runs on top of the
 encoder's BEV features: the decoder half of ``PerceptionTransformer.forward`` and the
 classification and regression branches. It turns ``(bs, bev_h * bev_w, embed_dims)`` BEV
-features into per-layer class logits and box codes, and is the reference the TTNN head in
+features into per-layer class logits and box predictions, and is the reference the TTNN head in
 ``tt/tt_head.py`` is checked against.
 
 The head performs:
@@ -44,9 +44,9 @@ https://github.com/fundamentalvision/BEVFormer/blob/master/projects/configs/bevf
 import torch
 import torch.nn as nn
 
-from models.experimental.bevformer.config.decoder_config import CODE_SIZE, REG_XY, REG_Z
+from models.experimental.bevformer.config.decoder_config import CODE_SIZE, CODE_XY, CODE_Z
 from models.experimental.bevformer.config.head_config import NUM_CLASSES, PC_RANGE
-from models.experimental.bevformer.reference.decoder import DetectionTransformerDecoder, inverse_sigmoid
+from models.experimental.bevformer.reference.decoder import DetectionTransformerDecoder, inverse_sigmoid, reg_branch
 
 
 def cls_branch(embed_dims, num_classes, num_reg_fcs=2):
@@ -55,14 +55,6 @@ def cls_branch(embed_dims, num_classes, num_reg_fcs=2):
     for _ in range(num_reg_fcs):
         layers += [nn.Linear(embed_dims, embed_dims), nn.LayerNorm(embed_dims), nn.ReLU(inplace=True)]
     return nn.Sequential(*layers, nn.Linear(embed_dims, num_classes))
-
-
-def reg_branch(embed_dims, code_size, num_reg_fcs=2):
-    """``(Linear-ReLU) x num_reg_fcs`` then ``Linear(code_size)``, as BEVFormerHead builds it."""
-    layers = []
-    for _ in range(num_reg_fcs):
-        layers += [nn.Linear(embed_dims, embed_dims), nn.ReLU()]
-    return nn.Sequential(*layers, nn.Linear(embed_dims, code_size))
 
 
 class BEVFormerHead(nn.Module):
@@ -109,7 +101,7 @@ class BEVFormerHead(nn.Module):
         """``bev_embed`` is the encoder output ``(bs, bev_h * bev_w, embed_dims)``.
 
         Returns every decoder layer's class logits ``(L, bs, num_query, num_classes)`` and box
-        codes ``(L, bs, num_query, code_size)``, cx, cy and cz in metres.
+        predictions ``(L, bs, num_query, code_size)``: box codes with cx, cy and cz in metres.
         """
         bs = bev_embed.shape[0]
         query_pos, query = torch.split(self.query_embedding.weight, self.embed_dims, dim=1)
@@ -136,8 +128,8 @@ class BEVFormerHead(nn.Module):
             outputs_classes.append(self.cls_branches[lvl](hs[lvl]))
 
             box = self.reg_branches[lvl](hs[lvl])
-            box[..., REG_XY] = (box[..., REG_XY] + reference[..., 0:2]).sigmoid() * pc_size[0:2] + pc_min[0:2]
-            box[..., REG_Z] = (box[..., REG_Z] + reference[..., 2:3]).sigmoid() * pc_size[2:3] + pc_min[2:3]
+            box[..., CODE_XY] = (box[..., CODE_XY] + reference[..., 0:2]).sigmoid() * pc_size[0:2] + pc_min[0:2]
+            box[..., CODE_Z] = (box[..., CODE_Z] + reference[..., 2:3]).sigmoid() * pc_size[2:3] + pc_min[2:3]
             outputs_coords.append(box)
 
         return torch.stack(outputs_classes), torch.stack(outputs_coords)
