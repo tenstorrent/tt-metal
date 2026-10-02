@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+
 // Welford HW-reduction writer kernel.
 //
 // Phase 1 (per output): Reads Wt partial (mean, var) tile pairs from
@@ -108,6 +110,9 @@ inline void finalize_tree(const WelfordBlockStats* tree, WelfordBlockStats& resu
 }  // namespace
 
 void kernel_main() {
+    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
+
     const std::uint32_t NC_per_core = get_arg(args::NC_per_core);
     const std::uint32_t output_tile_start_id = get_arg(args::output_tile_start_id);
 

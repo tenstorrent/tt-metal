@@ -10,9 +10,14 @@
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
 TT_KERNEL void writer(uint32_t work_item_start, uint32_t work_item_count, uint32_t num_chunks) {
+    using Auxiliary =
+        ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::reduce_auxiliary>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
+
     DataflowBuffer control(dfb::chronology_writer);
     control.wait_front(1);
     const uint32_t valid_chunks =

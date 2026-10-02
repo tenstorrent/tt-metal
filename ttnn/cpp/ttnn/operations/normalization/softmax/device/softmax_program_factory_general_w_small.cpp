@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "softmax_device_operation.hpp"
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -65,7 +66,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralWSmall::create_program_artif
     // Use Float16_b for intermediates when not accumulating in fp32, matching the AttentionOptimized path.
     // This avoids using Bfp8_b for intermediate computations where it lacks precision (issue #32934).
     const auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    // Reader generates mask/scaler with uint16_t (1024 elements = 2048 bytes). Use Float16_b for these CBs when
+    // Masks and reduction scalers use BF16 tiles (1024 elements = 2048 bytes). Use Float16_b for these CBs when
     // input is Bfp8_b so tile size matches; Bfp8_b tile layout is smaller and would be overflowed (issue #32934).
     const auto mask_scaler_format = (data_format == tt::DataFormat::Bfp8_b) ? tt::DataFormat::Float16_b : data_format;
 
@@ -91,9 +92,51 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralWSmall::create_program_artif
     const DFBSpecName RECIP{"recip_sum_exps"};
     const DFBSpecName MAX{"max"};
     const DFBSpecName X_MINUS_MAX{"x_minus_max"};
-    const DFBSpecName TMP{"tmp"};
 
     // ---- DataflowBuffers ----
+    namespace reduce_host = ttnn::kernel_lib::host;
+    const reduce_host::ReduceHardwareConfig reduce_hardware{
+        .arch = arch,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_fidelity = math_fidelity};
+    auto max_plan = reduce_host::make_reduce_plan(
+        reduce_host::ReduceBlockSpec::tiled(
+            32,
+            input_tensor.logical_shape()[-1],
+            input_tensor.dtype(),
+            fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16),
+        ReduceOpMath::MAX,
+        ReduceOpDim::W,
+        1.0F,
+        ReduceFp32Mode::Fast,
+        reduce_hardware,
+        compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop);
+
+    // The exponentials retain their output-padding mask, so their padded
+    // extent is a complete reduction input with zero-valued padding.
+    auto sum_plan = reduce_host::make_reduce_plan(
+        reduce_host::ReduceBlockSpec::tiled(
+            32,
+            Wt * 32,
+            fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
+            fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16),
+        ReduceOpMath::SUM,
+        ReduceOpDim::W,
+        1.0F,
+        ReduceFp32Mode::Fast,
+        reduce_hardware,
+        compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop);
+
+    std::vector<uint32_t> compute_reduce_args;
+    reduce_host::ReduceCallArgs(max_plan, {0, 1, 2}).append_to(compute_reduce_args);
+    reduce_host::ReduceCallArgs(sum_plan, {0, 1, 2}).append_to(compute_reduce_args);
+    std::vector<uint32_t> writer_reduce_args;
+    reduce_host::ReduceAuxiliaryArgs({1, max_plan.auxiliary_tiles}).append_to(writer_reduce_args);
+    reduce_host::ReduceAuxiliaryArgs({1, sum_plan.auxiliary_tiles}).append_to(writer_reduce_args);
+    const auto* max_auxiliary = max_plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
+    const auto* sum_auxiliary = sum_plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
+
     Group<DataflowBufferSpec> dfbs = {
         DataflowBufferSpec{
             .unique_id = IN, .entry_size = in_tile_size, .num_entries = Wt, .data_format_metadata = data_format},
@@ -104,14 +147,14 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralWSmall::create_program_artif
             .data_format_metadata = mask_scaler_format},
         DataflowBufferSpec{
             .unique_id = MAX_SCALER,
-            .entry_size = mask_scaler_tile_size,
-            .num_entries = 1,
-            .data_format_metadata = mask_scaler_format},
+            .entry_size = max_auxiliary->page_size,
+            .num_entries = max_auxiliary->page_count,
+            .data_format_metadata = max_auxiliary->data_format},
         DataflowBufferSpec{
             .unique_id = SUM_SCALER,
-            .entry_size = mask_scaler_tile_size,
-            .num_entries = 1,
-            .data_format_metadata = mask_scaler_format},
+            .entry_size = sum_auxiliary->page_size,
+            .num_entries = sum_auxiliary->page_count,
+            .data_format_metadata = sum_auxiliary->data_format},
         DataflowBufferSpec{
             .unique_id = OUT, .entry_size = in_tile_size, .num_entries = Wt, .data_format_metadata = data_format},
         DataflowBufferSpec{
@@ -135,11 +178,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralWSmall::create_program_artif
             .entry_size = intermed_tile_size,
             .num_entries = Wt,
             .data_format_metadata = intermed_data_format},
-        DataflowBufferSpec{
-            .unique_id = TMP,
-            .entry_size = intermed_tile_size,
-            .num_entries = 1,
-            .data_format_metadata = intermed_data_format},
     };
 
     // ---- Reader kernel ----
@@ -147,16 +185,11 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralWSmall::create_program_artif
         .unique_id = READER,
         .source = std::string(SOFTMAX_KERNEL_PATH_GENERAL) + "/reader_moreh_softmax_w.cpp",
         .dfb_bindings =
-            {DFBBinding{.dfb_spec_name = IN, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER},
-             DFBBinding{.dfb_spec_name = MASK, .accessor_name = "mask", .endpoint_type = DFBEndpointType::PRODUCER},
-             DFBBinding{
-                 .dfb_spec_name = MAX_SCALER,
-                 .accessor_name = "max_scaler",
-                 .endpoint_type = DFBEndpointType::PRODUCER},
-             DFBBinding{
-                 .dfb_spec_name = SUM_SCALER,
-                 .accessor_name = "sum_scaler",
-                 .endpoint_type = DFBEndpointType::PRODUCER}},
+            {
+                DFBBinding{.dfb_spec_name = IN, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{.dfb_spec_name = MASK, .accessor_name = "mask", .endpoint_type = DFBEndpointType::PRODUCER},
+
+            },
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = SRC, .accessor_name = "src"}},
         .compile_time_args = {{"is_fp32", static_cast<std::uint32_t>(input_tensor.dtype() == DataType::FLOAT32)}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "tile_offset", "Wt", "mask_w"}},
@@ -167,11 +200,20 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralWSmall::create_program_artif
     KernelSpec writer{
         .unique_id = WRITER,
         .source = std::string(SOFTMAX_KERNEL_PATH_GENERAL) + "/writer_moreh_softmax_w.cpp",
-        .dfb_bindings = {DFBBinding{
-            .dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .dfb_bindings =
+            {DFBBinding{
+                 .dfb_spec_name = MAX_SCALER,
+                 .accessor_name = "max_scaler",
+                 .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{
+                 .dfb_spec_name = SUM_SCALER,
+                 .accessor_name = "sum_scaler",
+                 .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{.dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = DST, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "tile_offset", "Wt"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
+        .advanced_options = {.compile_time_varargs = writer_reduce_args},
     };
 
     // ---- Compute defines ----
@@ -198,7 +240,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralWSmall::create_program_artif
                 {RECIP, tt::tt_metal::UnpackMode::UnpackToSrc},
                 {MAX, tt::tt_metal::UnpackMode::UnpackToSrc},
                 {X_MINUS_MAX, tt::tt_metal::UnpackMode::UnpackToSrc},
-                {TMP, tt::tt_metal::UnpackMode::UnpackToSrc},
+
             };
         }
         return hw;
@@ -229,8 +271,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralWSmall::create_program_artif
                 .dfb_spec_name = X_MINUS_MAX,
                 .accessor_name = "x_minus_max",
                 .endpoint_type = DFBEndpointType::CONSUMER},
-            DFBBinding{.dfb_spec_name = TMP, .accessor_name = "tmp", .endpoint_type = DFBEndpointType::PRODUCER},
-            DFBBinding{.dfb_spec_name = TMP, .accessor_name = "tmp", .endpoint_type = DFBEndpointType::CONSUMER},
         };
     };
 
@@ -242,6 +282,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralWSmall::create_program_artif
             .dfb_bindings = compute_dfb_bindings(),
             .compile_time_args = {{"N", N}, {"Wt", Wt}},
             .hw_config = make_compute_hw(),
+            .advanced_options = {.compile_time_varargs = compute_reduce_args},
         };
     };
 
@@ -294,7 +335,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralWSmall::create_program_artif
             TT_THROW("Core not in specified core ranges");
         }
 
-        // Reader computes the reduce scaler in-kernel; only shape-derived args are passed.
+        // The writer prepares reduction auxiliary tiles from the host recipe.
         AddRuntimeArgsForNode(
             reader_ra.runtime_arg_values,
             core,

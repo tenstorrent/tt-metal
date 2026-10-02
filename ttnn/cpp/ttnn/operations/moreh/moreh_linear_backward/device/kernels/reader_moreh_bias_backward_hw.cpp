@@ -16,14 +16,6 @@ void kernel_main() {
     const bool do_mask_h = (get_arg(args::do_mask_h) == 1);
     const bool do_mask_w = (get_arg(args::do_mask_w) == 1);
 
-    union {
-        float f;
-        uint32_t u;
-    } scaler;
-    scaler.f = 1.0f;
-    DataflowBuffer dfb_scaler(dfb::scaler);
-    fill_cb_with_value(dfb_scaler, scaler.u);
-
     // The mask buffer is only allocated when a mask applies, so the host binds it — and defines
     // DO_MASK_H_W — on exactly that condition. Without the binding there is no dfb::mask_h_w token
     // to name, hence the preprocessor gate around the otherwise-unchanged runtime check.

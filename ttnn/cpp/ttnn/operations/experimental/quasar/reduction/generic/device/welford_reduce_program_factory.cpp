@@ -10,6 +10,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "welford_reduce_device_operation.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/host/reduce_host.hpp"
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::prim::qsr {
@@ -360,6 +361,9 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
             reduce_batch_size,
             static_cast<uint32_t>(narrow_scratch_to_bf16)};
         TensorAccessorArgs(output).append_to(writer_compile_time_args);
+        namespace rh = ttnn::kernel_lib::host;
+        rh::ReduceAuxiliaryArgs({2, {{0.0F, rh::ReduceAuxiliaryTileType::Zero, 0}}})
+            .append_to(writer_compile_time_args);
         writer_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/experimental/quasar/reduction/generic/device/kernels/dataflow/"
             "writer_welford_hw.cpp";
@@ -369,6 +373,9 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         // W-reduce and H-reduce: generic tile writer.
         std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(output_cb_index)};
         TensorAccessorArgs(output).append_to(writer_compile_time_args);
+        namespace rh = ttnn::kernel_lib::host;
+        rh::ReduceAuxiliaryArgs({2, {{0.0F, rh::ReduceAuxiliaryTileType::Zero, 0}}})
+            .append_to(writer_compile_time_args);
         writer_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/experimental/quasar/reduction/generic/device/kernels/dataflow/"
             "writer_unary_interleaved_start_id.cpp";

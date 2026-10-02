@@ -10,6 +10,7 @@
 #include "api/compute/softmax.h"
 #include "api/compute/reduce.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "softmax_reduce.hpp"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
@@ -31,13 +32,8 @@ ALWI void calc_numeric_stable() {
 
     // Use reduce_helpers for MAX reduce (REDUCE_ROW, PRELOADED mode)
     // Note: The library handles waiting for scaler tile internally
-    compute_kernel_lib::reduce<
-        PoolType::MAX,
-        ReduceDim::REDUCE_ROW,
-        dfb_in_id,
-        dfb_max_scaler_id,
-        dfb_max_id,
-        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(compute_kernel_lib::ReduceInputBlockShape::row(block_w));
+    using MaxCall = SoftmaxReduceCall<PoolType::MAX, 0, dfb_in_id, dfb_max_scaler_id, dfb_max_id>;
+    compute_kernel_lib::reduce<MaxCall>();
 
     // calculate x-max(x)
     ckl::eltwise_chain(
@@ -130,26 +126,17 @@ void kernel_main() {
         // PRELOADED is correct for sharded - all tiles loaded at once
         // Auto-detects FP32 mode from ENABLE_FP32_DEST_ACC define
         dfb_exps_obj.wait_front(block_w);
-        compute_kernel_lib::reduce<
-            PoolType::SUM,
-            ReduceDim::REDUCE_ROW,
-            dfb::exps,
-            dfb::sum_scaler,
-            dfb::recip_sum_exps,
-            compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
-            compute_kernel_lib::ReduceInputBlockShape::row(block_w),
-            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::NoAccumulation{},
-            [](std::uint32_t) {
-                // Preserve the FP32 row sum's precision in its reciprocal, independently of exp approximation.
-                if constexpr (DST_ACCUM_MODE) {
-                    recip_tile_init<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>();
-                    recip_tile<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>(0);
-                } else {
-                    recip_tile_init();
-                    recip_tile(0);
-                }
-            });
+        using SumCall = SoftmaxReduceCall<PoolType::SUM, 0, dfb::exps, dfb::sum_scaler, dfb::recip_sum_exps>;
+        compute_kernel_lib::reduce<SumCall>([](std::uint32_t) {
+            // Preserve the FP32 row sum's precision in its reciprocal, independently of exp approximation.
+            if constexpr (DST_ACCUM_MODE) {
+                recip_tile_init<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>();
+                recip_tile<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>(0);
+            } else {
+                recip_tile_init();
+                recip_tile(0);
+            }
+        });
 
         ckl::mul<
             ckl::input(dfb::exps, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),

@@ -11,6 +11,7 @@ from helpers.golden_generators import (
     BroadcastGolden,
     EltwiseBinaryGolden,
     MatmulGolden,
+    ReduceGolden,
     get_golden_generator,
 )
 from helpers.llk_params import (
@@ -18,6 +19,7 @@ from helpers.llk_params import (
     DestAccumulation,
     MathFidelity,
     MathOperation,
+    ReducePool,
     format_dict,
 )
 from helpers.pack import pack_bfp16
@@ -115,7 +117,10 @@ def test_sdpa_reinits(
     )
 
     # Compute reduce: for each row, find max across the row (first ct_dim*32 elements)
-    golden_output2_untilized = torch.zeros_like(src_A_untilized)
+    golden_output2_untilized = torch.full_like(
+        src_A_untilized,
+        ReduceGolden.padding_value(ReducePool.Max, formats.output_format),
+    )
     for row in range(input_dimensions[0]):
         golden_output2_untilized[row, 0] = torch.max(src_A_untilized[row, :])
 

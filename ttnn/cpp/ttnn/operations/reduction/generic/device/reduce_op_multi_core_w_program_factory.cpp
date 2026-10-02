@@ -192,7 +192,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
     const TensorParamName OUTPUT_TENSOR{"output"};
 
     ProgramSpec spec;
-    spec.name = rm_path              ? "reduce_multi_core_w_dense_rm"
+    spec.name = rm_path               ? "reduce_multi_core_w_dense_rm"
                 : use_height_sharding ? "reduce_multi_core_w_height_sharded"
                                       : "reduce_multi_core_w";
 
@@ -203,6 +203,35 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
     const bool is_sfpu_reduce =
         use_sfpu_reduce_path(a.dtype(), operation_attributes.math_op, operation_attributes.use_sfpu_reduce);
     const bool use_fpu_negate = operation_attributes.negate && !is_sfpu_reduce;
+
+    namespace rh = ttnn::kernel_lib::host;
+    const bool planned_sfpu =
+        use_sfpu_reduce_path(a.dtype(), operation_attributes.math_op, operation_attributes.use_sfpu_reduce);
+    const auto planned_fp32_mode = planned_sfpu && a.dtype() == DataType::FLOAT32 && fp32_dest_acc_en
+                                       ? ReduceFp32Mode::Accurate
+                                       : ReduceFp32Mode::Fast;
+    // These kernels use the legacy double-buffered DEST configuration.
+    const rh::ReduceHardwareConfig reduce_hardware{device.arch(), fp32_dest_acc_en, false, math_fidelity};
+    auto make_unit = [&](uint32_t local_ht, uint32_t local_wt, uint32_t local_nc) {
+        return make_generic_reduce_sequence(
+            a.tensor_spec(),
+            output.tensor_spec(),
+            operation_attributes.math_op,
+            ReduceOpDim::W,
+            operation_attributes.scaler,
+            planned_fp32_mode,
+            reduce_hardware,
+            local_ht,
+            local_wt,
+            local_nc,
+            operation_attributes.negate || planned_sfpu,
+            rm_path ? &plan : nullptr);
+    };
+    const auto reduce_unit = make_unit(
+        rm_path ? tt::div_up(num_rows_per_core_group_1, plan.rm_rows_per_tile) : num_rows_per_core_group_1, Wt, 1);
+    const auto* auxiliary_cb = reduce_unit.calls.front().plan.find_cb(rh::ReduceCbRole::Auxiliary);
+    scaler_cb_data_format = auxiliary_cb->data_format;
+    scaler_single_tile_size = auxiliary_cb->page_size;
 
     // ---- Dataflow buffers ----
     if (rm_path) {
@@ -270,7 +299,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = SCALER_DFB,
         .entry_size = scaler_single_tile_size,
-        .num_entries = 1,
+        .num_entries = static_cast<uint32_t>(reduce_unit.auxiliary.tiles.size()),
         .data_format_metadata = scaler_cb_data_format,
     });
 
@@ -339,11 +368,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
                 .accessor_name = "rm",
                 .endpoint_type = DFBEndpointType::PRODUCER,
             },
-            DFBBinding{
-                .dfb_spec_name = SCALER_DFB,
-                .accessor_name = "scaler",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-            },
+
             // Self-loop: the reader both fills the identity template and re-reads it.
             DFBBinding{
                 .dfb_spec_name = CLEAR_VALUE_DFB,
@@ -362,7 +387,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
             "reader_unary_reduce_input_rows_partitioned_sharded.cpp";
         reader_rta_names = {"num_tiles"};
-        // The sharded reader prepares the scaler tile itself (gated on REDUCE_SCALER).
+        // Preserve the shared reader compile configuration; the writer prepares the scaler.
         reader_defines_map["REDUCE_SCALER"] = "1";
         reader_dfb_bindings = {
             DFBBinding{
@@ -370,11 +395,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
                 .accessor_name = "in0",
                 .endpoint_type = DFBEndpointType::PRODUCER,
             },
-            DFBBinding{
-                .dfb_spec_name = SCALER_DFB,
-                .accessor_name = "scaler",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-            },
+
             // Self-loop: the reader reserves the whole borrowed input shard and re-reads it in place
             // as the NoC source; nothing else touches it.
             DFBBinding{
@@ -401,11 +422,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
                 .accessor_name = "in0",
                 .endpoint_type = DFBEndpointType::PRODUCER,
             },
-            DFBBinding{
-                .dfb_spec_name = SCALER_DFB,
-                .accessor_name = "scaler",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-            },
+
         };
         reader_tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}};
     }
@@ -417,8 +434,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
         .dfb_bindings = std::move(reader_dfb_bindings),
         .tensor_bindings = std::move(reader_tensor_bindings),
         .compile_time_args = std::move(reader_ct_args),
-        .runtime_arg_schema =
-            {.runtime_arg_names = std::move(reader_rta_names), .common_runtime_arg_names = {"scaler_bits"}},
+        .runtime_arg_schema = {.runtime_arg_names = std::move(reader_rta_names)},
         .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
@@ -453,16 +469,24 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
         .unique_id = WRITER,
         .source = writer_source,
         .compiler_options = {.defines = KernelSpec::CompilerOptions::Defines(reduce_defines)},
-        .dfb_bindings = {DFBBinding{
-            .dfb_spec_name = OUT_DFB,
-            .accessor_name = "out",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        }},
+        .dfb_bindings =
+            {DFBBinding{
+                 .dfb_spec_name = SCALER_DFB,
+                 .accessor_name = "scaler",
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+             },
+             DFBBinding{
+                 .dfb_spec_name = OUT_DFB,
+                 .accessor_name = "out",
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+             }},
         .tensor_bindings = std::move(writer_tensor_bindings),
         .compile_time_args = std::move(writer_ct_args),
         .runtime_arg_schema = {.runtime_arg_names = std::move(writer_rta_names)},
         .hw_config = ttnn::create_writer_datamovement_config(),
+        .advanced_options = {.compile_time_varargs = reduce_unit.get_auxiliary_compile_time_args()},
     });
+    spec.kernels.back().compiler_options.defines["REDUCE_AUXILIARY_CB"] = "dfb::scaler";
 
     // ---- Compute kernels (one per core group) ----
     // Legacy resolved a TTNN ComputeKernelConfig but forwarded only math_fidelity,
@@ -631,6 +655,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
             .compile_time_args = std::move(ct_args),
             .runtime_arg_schema = {.common_runtime_arg_names = {"post_mul_scaler_bits"}},
             .hw_config = compute_hw,
+            .advanced_options = {.compile_time_varargs = make_unit(ht_per_core_group, Wt, 1).get_compile_time_args()},
         };
     };
 
@@ -688,8 +713,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
                 }
             }
         } else {
-            cores =
-                grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, false);
+            cores = grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, false);
         }
         TT_FATAL(
             cores.size() == num_cores,
@@ -755,7 +779,6 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
         }
     }
 
-    reader_run_args.common_runtime_arg_values = {{"scaler_bits", std::bit_cast<uint32_t>(operation_attributes.scaler)}};
     run_args.kernel_run_args.push_back(std::move(reader_run_args));
     run_args.kernel_run_args.push_back(std::move(writer_run_args));
 
@@ -784,17 +807,13 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::override_runtime_argument
     const auto& output = tensor_return_value.mesh_tensor();
 
     // Names must match create_program_artifacts.
-    const KernelSpecName READER{"reader"};
     const KernelSpecName COMPUTE_G1{"compute_g1"};
     const KernelSpecName COMPUTE_G2{"compute_g2"};
     const TensorParamName INPUT_TENSOR{"input"};
     const TensorParamName OUTPUT_TENSOR{"output"};
 
-    // compute_program_hash excludes the scalars, so a cache hit must re-apply them.
+    // Only post_mul_scaler is a runtime argument; the scaler is compiled into the planned auxiliary tiles.
     ProgramRunArgs params;
-    params.kernel_run_args.push_back(KernelRunArgs{
-        .kernel = READER,
-        .common_runtime_arg_values = {{"scaler_bits", std::bit_cast<uint32_t>(operation_attributes.scaler)}}});
 
     const KernelRunArgs::CommonRuntimeArgValues post_mul_args{
         {"post_mul_scaler_bits", std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler)}};

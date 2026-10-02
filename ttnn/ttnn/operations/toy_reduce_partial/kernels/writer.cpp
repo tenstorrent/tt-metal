@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+
 // Writer for toy_reduce_partial: writes reduced output tiles to DRAM.
 // Shared by both REDUCE_ROW and REDUCE_COL modes.
 
@@ -14,6 +16,8 @@ void kernel_main() {
 
     constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
     constexpr auto dst_args = TensorAccessorArgs<1>();
+    using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<dst_args.next_compile_time_args_offset()>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     constexpr uint32_t cb_out = 16;
     uint32_t tile_bytes = get_tile_size(cb_out);

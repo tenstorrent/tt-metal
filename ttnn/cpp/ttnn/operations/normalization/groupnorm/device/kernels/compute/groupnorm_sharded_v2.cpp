@@ -17,6 +17,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
@@ -111,10 +112,18 @@ void kernel_main() {
     constexpr uint32_t dfb_ex_external_id = tt::CBIndex::c_10;
     constexpr uint32_t dfb_ex_global_id = num_cores_per_mcast_group == 1 ? dfb_ex_partial_id : tt::CBIndex::c_15;
     constexpr uint32_t dfb_ex2pe_id = tt::CBIndex::c_17;
-    constexpr uint32_t dfb_ones_id = tt::CBIndex::c_26;
+    using MeanArgs = ttnn::kernel_lib::ReduceCallArgs<28>;
+    using VarianceArgs = ttnn::kernel_lib::ReduceCallArgs<MeanArgs::next_compile_time_args_offset()>;
+    using GlobalArgs = ttnn::kernel_lib::ReduceCallArgs<VarianceArgs::next_compile_time_args_offset()>;
+    using MeanCall = ttnn::kernel_lib::BoundReduceCallArgs<MeanArgs, dfb_x_id, dfb_scaler_id, dfb_ex_partial_id>;
+    using VarianceCall =
+        ttnn::kernel_lib::BoundReduceCallArgs<VarianceArgs, dfb_ex2pe_id, dfb_scaler_id, dfb_ex_partial_id>;
+    using GlobalCall =
+        ttnn::kernel_lib::BoundReduceCallArgs<GlobalArgs, dfb_ex_external_id, dfb_scaler_global_id, dfb_ex_global_id>;
+
     // Composed-mask CBs, created only under pad correction (has_row_mask); aliased to
     // always-present CBs otherwise.
-    constexpr uint32_t dfb_rowvalid_id = has_row_mask ? tt::CBIndex::c_18 : tt::CBIndex::c_26;
+    constexpr uint32_t dfb_rowvalid_id = has_row_mask ? tt::CBIndex::c_18 : tt::CBIndex::c_7;
     constexpr uint32_t dfb_mask_last_id = has_row_mask ? tt::CBIndex::c_19 : tt::CBIndex::c_7;
 
     // output cb
@@ -367,60 +376,20 @@ void kernel_main() {
                 index_h_offset += per_core_N;
             }
             dfb_x.push_back(block_hw);
-            reconfig_data_format_srcb(has_row_mask ? dfb_mask_last_id : dfb_input_mask_id, dfb_ones_id);
-            // Partial-E[x]
+            // The planner selects the cross-tile sum algorithm. The scalar
+            // output retains exact zeros outside [0,0], as required by the
+            // reader's packed cross-core statistics protocol.
             dfb_x.wait_front(block_hw);
-            // Accumulate into dest directly by using mul_tiles (tile * 1 is accumulated into dest)
-            // Alternative is to use reduce_tile multiple times, but this showed to be more precise and faster.
-            ckl::eltwise_chain(
-                valid_group_shape,
-                ckl::BinaryFpu<
-                    ckl::BinaryFpuOp::Mul,
-                    x_strided_block_input,
-                    ckl::input(
-                        dfb_ones_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
-                    ckl::Dst::D0,
-                    ckl::DestAccumulation::WholeShape>{ckl::StridedTileRange{0, block_w}},
-                ckl::PackTile<ckl::output(
-                    dfb_ex2pe_id,
-                    ckl::ReservePolicy::OneUpfront,
-                    ckl::PushPolicy::OneAtEnd,
-                    ckl::DataFormatReconfig::Disabled,
-                    ckl::TileAddressing::Direct,
-                    ckl::DestAccumulation::WholeShape)>{});
-
-            // reduce only one final tile
-            //
-            // Note that reader_mcast_sender_unary_sharded_gn_v2.cpp depends on the
-            // documented behavior of REDUCE_SCALAR's packer to set every
-            // non-result datum of dfb_ex_partial to zero.
-            // If this `reduce<…, REDUCE_SCALAR>` pack into dfb_ex_partial is
-            // ever replaced by something that does not have the same
-            // packer-zero contract (e.g. a `pack_tile` / `pack_tile_block`
-            // path like welford_groupnorm_sharded_v2.cpp uses), the sharded
-            // reader's "single-tile-overwrite trick" must be adjusted accordingly
-            // (e.g. use `zero_whole_cb` from groupnorm_zero_fill.hpp, mirroring the
-            // mcast reader). Same applies to the second REDUCE_SCALAR pack into
-            // dfb_ex_partial later in this kernel (variance).
-            compute_kernel_lib::
-                reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, dfb_ex2pe_id, dfb_scaler_id, dfb_ex_partial_id>(
-                    compute_kernel_lib::ReduceInputBlockShape::single());
+            compute_kernel_lib::reduce<MeanCall>();
 
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
-                compute_kernel_lib::reduce<
-                    PoolType::SUM,
-                    ReduceDim::REDUCE_SCALAR,
-                    dfb_ex_external_id,
-                    dfb_scaler_global_id,
-                    dfb_ex_global_id,
-                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::single());
+                compute_kernel_lib::reduce<GlobalCall>();
                 dfb_ex.reserve_back(1);
                 dfb_ex.push_back(1);
             }
 
-            // fp32: reset both srcs so fp32 x/mean aren't read through the partial-E[x] bf16 dfb_ones format.
+            // x - E[x]
+            // Reset both operands after the local/global planned reduction.
             // The reconfig has to precede the init: the init's LLK assert checks that the unpack config
             // registers already describe these operands. (The MOP is built from the init's static
             // arguments; the registers themselves are consumed later, by UNPACR.)
@@ -526,26 +495,13 @@ void kernel_main() {
                     ckl::TileAddressing::Direct,
                     ckl::DestAccumulation::WholeShape)>{});
 
-            // If modifying this code, see the long comment at the first REDUCE_SCALAR
-            // pack into dfb_ex_partial earlier in this kernel.
-            // The sharded reader's "single-tile-overwrite trick" depends on
-            // this pack also clearing every non-result datum of dfb_ex_partial
-            // to exact zero (documented packer behavior for REDUCE_SCALAR).
-            compute_kernel_lib::
-                reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, dfb_ex2pe_id, dfb_scaler_id, dfb_ex_partial_id>(
-                    compute_kernel_lib::ReduceInputBlockShape::single());
+            // Square and accumulate stay fused in DEST to avoid another
+            // full-group L1 buffer; the final HW reduction is host planned.
+            compute_kernel_lib::reduce<VarianceCall>();
 
             dfb_ex_partial.wait_front(1);
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
-                compute_kernel_lib::reduce<
-                    PoolType::SUM,
-                    ReduceDim::REDUCE_SCALAR,
-                    dfb_ex_external_id,
-                    dfb_scaler_global_id,
-                    dfb_ex_global_id,
-                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::single());
+                compute_kernel_lib::reduce<GlobalCall>();
                 dfb_ex.reserve_back(1);
                 dfb_ex.push_back(1);
             }

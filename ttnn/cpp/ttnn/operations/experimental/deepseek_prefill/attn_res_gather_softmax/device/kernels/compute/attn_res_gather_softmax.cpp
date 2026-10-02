@@ -42,6 +42,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 
 using namespace ckernel;
 
@@ -105,13 +106,8 @@ ALWI void reduce_transformed_row(DataflowBuffer& tmp_buf, Init init, TransformOn
     }
     tmp_buf.push_back(Wt);
 
-    compute_kernel_lib::reduce<
-        PoolType::SUM,
-        ReduceDim::REDUCE_ROW,
-        cb_tmp,
-        cb_scaler,
-        cb_local_stats,
-        compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+    using Call = ttnn::kernel_lib::ReduceCallArgs<5>;
+    compute_kernel_lib::reduce<Call>();
 }
 
 // Settle a deferred residual write into the row the statistics are about to be taken

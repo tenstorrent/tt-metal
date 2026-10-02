@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"  // sub
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"       // Exp
@@ -22,6 +23,14 @@ constexpr auto kDataFormatReconfig = ckl::DataFormatReconfig::Enabled;
 constexpr auto kDataFormatReconfig = ckl::DataFormatReconfig::Disabled;
 #endif
 
+using MaxCall =
+    ttnn::kernel_lib::BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<0>, dfb::in0, dfb::max_scaler, dfb::max>;
+using SumCall = ttnn::kernel_lib::BoundReduceCallArgs<
+    ttnn::kernel_lib::ReduceCallArgs<ttnn::kernel_lib::reduce_plan_args::call_compile_time_arg_count()>,
+    dfb::exps,
+    dfb::sum_scaler,
+    dfb::recip_sum_exps>;
+
 void kernel_main() {
     DataflowBuffer dfb_mask_obj(dfb::mask);
     DataflowBuffer dfb_max_scaler_obj(dfb::max_scaler);
@@ -38,37 +47,12 @@ void kernel_main() {
     const std::uint32_t Wt = get_arg(args::Wt);
 
     dfb_mask_obj.wait_front(onetile);
-    dfb_max_scaler_obj.wait_front(onetile);
-    dfb_sum_scaler_obj.wait_front(onetile);
+    dfb_max_scaler_obj.wait_front(MaxCall::auxiliary_tile_count);
+    dfb_sum_scaler_obj.wait_front(SumCall::auxiliary_tile_count);
 
     for (std::uint32_t n = 0; n < N; ++n) {
-        // find max value
-        if (Wt == 1) {
-            mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(0, 0, /*pop0=*/0, /*popm=*/0);
-
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::tmp, dfb::max_scaler, dfb::max>(
-                compute_kernel_lib::ReduceInputBlockShape::single());
-        } else {
-            // Phase 1: reduce Wt-1 full tiles into dfb::max via the helper.
-            // dfb::in0 holds all Wt tiles persistently for later steps, so use
-            // WaitUpfrontNoPop — the helper waits for the slice it needs and never pops.
-            ckl::reduce<
-                PoolType::MAX,
-                ReduceDim::REDUCE_ROW,
-                dfb::in0,
-                dfb::max_scaler,
-                dfb::max,
-                ckl::ReduceInputPolicy::WaitUpfrontNoPop>(ckl::ReduceInputBlockShape::row(Wt - 1));
-
-            // Phase 2: mask the last tile (index Wt-1, no pop) and continue reducing
-            // into dfb::max via Accumulate. The accumulator and output are both dfb::max:
-            // the helper waits+pops the previous tile, then packs+pushes the new one.
-            mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(Wt - 1, 0, /*pop0=*/0, /*popm=*/0);
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::tmp, dfb::max_scaler, dfb::max>(
-                compute_kernel_lib::ReduceInputBlockShape::row(1),
-                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::Accumulate::at(dfb::max, /*iter=*/1));
-        }
+        // The host plan covers the complete logical extent, including its tail.
+        ckl::reduce<MaxCall>();
 
         // compute x - max(x)
         ckl::sub<
@@ -125,39 +109,15 @@ void kernel_main() {
             ckl::PackTile<ckl::output(
                 dfb::exps, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
+        ckl::reduce<SumCall>([](uint32_t dst_idx) {
 #ifdef LOG
-        // log(sum) - pop tiles after reduce
-        ckl::reduce<
-            PoolType::SUM,
-            ReduceDim::REDUCE_ROW,
-            dfb::exps,
-            dfb::sum_scaler,
-            dfb::recip_sum_exps,
-            ckl::ReduceInputPolicy::BulkWaitBulkPop>(
-            ckl::ReduceInputBlockShape::row(Wt),
-            ckl::ReduceInputMemoryLayout::contiguous(),
-            ckl::NoAccumulation{},
-            [](uint32_t dst_idx) {
-                log_tile_init();
-                log_tile(dst_idx);
-            });
+            log_tile_init();
+            log_tile(dst_idx);
 #else
-        // 1/sum - keep tiles for subsequent multiplication
-        ckl::reduce<
-            PoolType::SUM,
-            ReduceDim::REDUCE_ROW,
-            dfb::exps,
-            dfb::sum_scaler,
-            dfb::recip_sum_exps,
-            ckl::ReduceInputPolicy::WaitUpfrontNoPop>(
-            ckl::ReduceInputBlockShape::row(Wt),
-            ckl::ReduceInputMemoryLayout::contiguous(),
-            ckl::NoAccumulation{},
-            [](uint32_t dst_idx) {
-                recip_tile_init();
-                recip_tile(dst_idx);
-            });
+            recip_tile_init();
+            recip_tile(dst_idx);
 #endif
+        });
 
         // compute final result
         dfb_x_m_max_obj.wait_front(Wt);
@@ -196,4 +156,6 @@ void kernel_main() {
 #endif
         dfb_x_m_max_obj.pop_front(Wt);
     }
+    dfb_max_scaler_obj.pop_front(MaxCall::auxiliary_tile_count);
+    dfb_sum_scaler_obj.pop_front(SumCall::auxiliary_tile_count);
 }

@@ -4,7 +4,6 @@
 
 #include <cstdint>
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
@@ -21,8 +20,6 @@ void kernel_main() {
     // Constants
     constexpr auto dfb_in = dfb::in;
     constexpr auto dfb_mask = dfb::mask;
-    constexpr auto dfb_max_scaler = dfb::max_scaler;
-    constexpr auto dfb_sum_scaler = dfb::sum_scaler;
 
     // Ublocks size defined in tiles
     constexpr std::uint32_t onetile = 1;
@@ -30,12 +27,6 @@ void kernel_main() {
     // Input tensor
     constexpr bool is_fp32 = get_arg(args::is_fp32) == 1;
     const auto src_in = TensorAccessor(tensor::src);
-
-    // Generate scaler tiles: MAX needs row-0 fill (reduce LLK), SUM needs col-0 fill (matmul)
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_COL>();
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
 
     // Generate mask tile
     const DataflowBuffer dfb_mask_obj(dfb_mask);

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -43,16 +44,6 @@ void kernel_main() {
     const auto C = num_channels;
     const auto CHtWt = C * HtWt;
     const auto NHtWt = N * HtWt;
-
-    union {
-        float f;
-        uint32_t u;
-    } one;
-    one.f = 1.0f;
-    // The shared compute kernel consumes this buffer as its reduce scaler, so the binding carries the
-    // kernel's name for it; this op fills it with 1.0.
-    DataflowBuffer dfb_scaler(dfb::scaler);
-    fill_cb_with_value(dfb_scaler, one.u);
 
 #ifdef DO_MASK_H
     DataflowBuffer dfb_mask_h(dfb::mask_h);

@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+
 // A worker core's side of the exchange, which is entirely local: park this rank's
 // statistics in its own slot of the shared statistics tensor, tell the gather core
 // this core is done, and wait to be told every rank's slot is filled.
@@ -49,6 +51,11 @@ void kernel_main() {
     // Statistics are split by token row and the fold by output tile, so a core's two
     // runs are unrelated. `num_stat_rows` is zero on a core that only folds.
     const auto num_stat_rows = get_arg_val<uint32_t>(4);
+    if (num_stat_rows > 0) {
+        using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<total_args.next_compile_time_args_offset()>;
+        dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
+    }
+
     const auto stat_start_row = get_arg_val<uint32_t>(5);
     const auto num_fold_tiles = get_arg_val<uint32_t>(6);
     const auto fold_start_tile = get_arg_val<uint32_t>(7);

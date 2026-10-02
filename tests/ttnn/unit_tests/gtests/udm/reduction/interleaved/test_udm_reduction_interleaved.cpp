@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/host/reduce_host.hpp"
 #include <gtest/gtest.h>
 #include <cmath>
 
@@ -52,6 +53,8 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
     std::vector<uint32_t> dataflow_compile_time_args = input_compile_time_args;
     dataflow_compile_time_args.insert(
         dataflow_compile_time_args.end(), output_compile_time_args.begin(), output_compile_time_args.end());
+    ttnn::kernel_lib::host::ReduceAuxiliaryArgs({1, {{1.0F, ttnn::kernel_lib::ReduceAuxiliaryTileType::FirstRow, 32}}})
+        .append_to(dataflow_compile_time_args);
 
     // Get input tensor shape info for CB sizing
     const auto& input_shape = input_mesh_tensor_builder.get_mesh_tensor_shape_in_pages();

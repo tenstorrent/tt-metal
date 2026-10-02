@@ -9,6 +9,7 @@ set(TTNN_OP_NORMALIZATION_SRCS
     batch_norm/device/running_statistics_program_factory.cpp
     batch_norm/device/batch_norm_utils.cpp
     groupnorm/device/groupnorm_program_utils.cpp
+    groupnorm/device/groupnorm_reduce_plans.hpp
     groupnorm/device/groupnorm_device_operation.cpp
     groupnorm/device/groupnorm_sharded_program_factory.cpp
     groupnorm/device/groupnorm_no_mcast_program_factory.cpp
@@ -33,6 +34,7 @@ set(TTNN_OP_NORMALIZATION_SRCS
     rmsnorm/rmsnorm.cpp
     shard_spec_validation.cpp
     softmax/softmax.cpp
+    softmax/device/softmax_reduce_plans.hpp
     softmax/device/softmax_device_operation.cpp
     softmax/device/softmax_program_factory_general_w_small.cpp
     softmax/device/softmax_program_factory_general_w_large.cpp

@@ -14,7 +14,12 @@
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+
 void kernel_main() {
+    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
+
     const uint32_t num_pages = get_arg(args::num_pages);
     const uint32_t start_id = get_arg(args::start_id);
 

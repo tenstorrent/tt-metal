@@ -10,7 +10,14 @@
 #include "api/tensor/noc_traits.h"
 namespace generic = norm::kernel_util::generic;
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+
 void kernel_main() {
+#ifdef REDUCE_AUXILIARY_CB
+    using Auxiliary =
+        ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, REDUCE_AUXILIARY_CB>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
+#endif
     const uint32_t Wt = get_arg(args::Wt);
     const uint32_t num_tile_rows = get_arg(args::num_tile_rows);
     const uint32_t tile_offset = get_arg(args::writer_start);

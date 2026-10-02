@@ -15,7 +15,6 @@ void kernel_main() {
     const auto num_rows_per_core = get_arg_val<uint32_t>(i++);
     const auto num_inner = get_arg_val<uint32_t>(i++);
     const auto tile_offset = get_arg_val<uint32_t>(i++);
-    const auto scaler = get_arg_val<uint32_t>(i++);
     const auto eps = get_arg_val<uint32_t>(i++);
     const auto mask_h = get_arg_val<uint32_t>(i++);
     const auto mask_w = get_arg_val<uint32_t>(i++);
@@ -48,9 +47,7 @@ void kernel_main() {
     const auto beta_addrg = TensorAccessor(beta_args, beta_addr);
 #endif
 
-    DataflowBuffer dfb_scaler(cb_id_scaler);
     DataflowBuffer dfb_eps(cb_id_eps);
-    fill_cb_with_value(dfb_scaler, scaler);
     fill_cb_with_value(dfb_eps, eps);
 
 #ifdef DO_MASK_H

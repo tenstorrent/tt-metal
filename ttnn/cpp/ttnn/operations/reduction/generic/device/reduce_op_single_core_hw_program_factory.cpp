@@ -90,6 +90,25 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
     ProgramSpec spec;
     spec.name = "reduce_single_core_hw";
 
+    namespace rh = ttnn::kernel_lib::host;
+    // REDUCE_SCALAR applies the tile once per reduced dimension, which would square the
+    // scalar. The HW path is therefore always PostMul, so this tile only carries the identity.
+    const auto reduce_unit = make_generic_reduce_sequence(
+        a.tensor_spec(),
+        output.tensor_spec(),
+        operation_attributes.math_op,
+        ReduceOpDim::HW,
+        1.0F,
+        ReduceFp32Mode::Fast,
+        {a.device().arch(), fp32_dest_acc_en, false, math_fidelity},
+        Ht,
+        Wt,
+        NC,
+        true);
+    const auto* auxiliary_cb = reduce_unit.calls.front().plan.find_cb(rh::ReduceCbRole::Auxiliary);
+    scaler_cb_data_format = auxiliary_cb->data_format;
+    scaler_single_tile_size = auxiliary_cb->page_size;
+
     // ---- Dataflow buffers ----
     // One core owns every tile, so a tensor smaller than a batch stays unbatched.
     const uint32_t reader_tiles_per_batch = reduce_reader_batch(num_tensor_tiles);
@@ -103,7 +122,7 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = SCALER_DFB,
         .entry_size = scaler_single_tile_size,
-        .num_entries = 1,
+        .num_entries = static_cast<uint32_t>(reduce_unit.auxiliary.tiles.size()),
         .data_format_metadata = scaler_cb_data_format,
     });
     constexpr uint32_t num_output_tiles = 2;
@@ -153,17 +172,10 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
                     .accessor_name = "in0",
                     .endpoint_type = DFBEndpointType::PRODUCER,
                 },
-                DFBBinding{
-                    .dfb_spec_name = SCALER_DFB,
-                    .accessor_name = "scaler",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
+
             },
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}},
-        // REDUCE_SCALAR applies the tile once per reduced dimension, which would square the
-        // scalar. The HW path is therefore always PostMul, so this tile only carries the identity.
-        .compile_time_args =
-            {{"scaler_bits", std::bit_cast<uint32_t>(1.0f)}, {"tiles_per_batch", reader_tiles_per_batch}},
+        .compile_time_args = {{"tiles_per_batch", reader_tiles_per_batch}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     });
@@ -175,15 +187,23 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
         .unique_id = WRITER,
         .source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
                   "writer_unary_interleaved_start_id_metal2.cpp",
-        .dfb_bindings = {DFBBinding{
-            .dfb_spec_name = OUT_DFB,
-            .accessor_name = "out",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        }},
+        .dfb_bindings =
+            {DFBBinding{
+                 .dfb_spec_name = SCALER_DFB,
+                 .accessor_name = "scaler",
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+             },
+             DFBBinding{
+                 .dfb_spec_name = OUT_DFB,
+                 .accessor_name = "out",
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+             }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
+        .advanced_options = {.compile_time_varargs = reduce_unit.get_auxiliary_compile_time_args()},
     });
+    spec.kernels.back().compiler_options.defines["REDUCE_AUXILIARY_CB"] = "dfb::scaler";
 
     // ---- Compute kernel ----
     // Legacy resolved a TTNN ComputeKernelConfig but forwarded only math_fidelity and
@@ -274,6 +294,7 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
             },
         .runtime_arg_schema = {.common_runtime_arg_names = {"post_mul_scaler_bits"}},
         .hw_config = compute_hw,
+        .advanced_options = {.compile_time_varargs = reduce_unit.get_compile_time_args()},
     });
 
     // ---- Work unit (placement) ----

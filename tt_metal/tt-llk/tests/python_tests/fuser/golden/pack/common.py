@@ -2,17 +2,20 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from helpers.golden_generators import PackGolden
+from helpers.golden_generators import PackGolden, ReduceGolden
 from helpers.llk_params import L1Accumulation, PackerReluType, ReduceDimension
 
 
 def prepare_tile(src, state, pack_node, operation, config):
     tile = state.dest.get(src)
     reduce_dim = operation.reduce_dim
+    fill = ReduceGolden.padding_value(
+        operation.reduce_pool, pack_node.output.data_format
+    )
     if reduce_dim in (ReduceDimension.Row, ReduceDimension.Scalar):
-        tile[:, 1:] = 0
+        tile[:, 1:] = fill
     if reduce_dim in (ReduceDimension.Column, ReduceDimension.Scalar):
-        tile[1:, :] = 0
+        tile[1:, :] = fill
     if pack_node.pack_relu != PackerReluType.NoRelu:
         data_format = config.sentinel.golden_pack_src
         key = (id(pack_node), data_format)

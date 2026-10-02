@@ -24,7 +24,14 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+
 void kernel_main() {
+#ifdef REDUCE_AUXILIARY_CB
+    using Auxiliary =
+        ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, REDUCE_AUXILIARY_CB>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
+#endif
     const uint32_t num_units = get_arg(args::num_units);
 
     DataflowBuffer dfb_out(dfb::out);

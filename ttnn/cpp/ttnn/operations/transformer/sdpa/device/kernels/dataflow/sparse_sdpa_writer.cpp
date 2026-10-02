@@ -52,6 +52,8 @@ void kernel_main() {
     // kv carries a RUNTIME tensor shape (T dim in common runtime args), so its accessor spans both arg streams.
     constexpr auto kv_args =
         TensorAccessorArgs<out_args.next_compile_time_args_offset(), out_args.next_common_runtime_args_offset()>();
+    constexpr auto sink_args =
+        TensorAccessorArgs<kv_args.next_compile_time_args_offset(), kv_args.next_common_runtime_args_offset()>();
 
     const uint32_t out_addr = get_common_arg_val<uint32_t>(sparse_sdpa::writer_common_arg::OUTPUT_ADDRESS);
     const uint32_t tok_start = get_arg_val<uint32_t>(0);
@@ -81,11 +83,8 @@ void kernel_main() {
 
     // --- persistent compute-input tiles (built once; the reader is busier with the K gather) ---
     // Reduce identity scaler (value 1.0; the softmax scale is applied in compute's exp).
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        cb_scale,
-        ckernel::PoolType::MAX,
-        ckernel::ReduceDim::REDUCE_ROW,
-        /*reduce_factor=*/1>();
+    using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<sink_args.next_compile_time_args_offset()>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     // Col-identity (column 0 = 1.0): compute matmul-reduces the partial row-sum against it to finalize the
     // within-tile reduction in normalize_row_streaming.
@@ -106,9 +105,6 @@ void kernel_main() {
 
     if constexpr (use_attention_sink) {
         if (tok_count > 0) {
-            constexpr auto sink_args = TensorAccessorArgs<
-                kv_args.next_compile_time_args_offset(),
-                kv_args.next_common_runtime_args_offset()>();
             const auto sink = TensorAccessor(sink_args, get_common_arg_val<uint32_t>(sparse_sdpa::writer_common_arg::ATTENTION_SINK_ADDRESS));
             experimental::CB sink_cb(cb_attention_sink), scratch(cb_sink_scratch);
             constexpr uint32_t sink_bytes = H * sizeof(uint16_t);

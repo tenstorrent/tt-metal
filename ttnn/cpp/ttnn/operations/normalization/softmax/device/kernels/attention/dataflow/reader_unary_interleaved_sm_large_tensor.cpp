@@ -6,7 +6,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "experimental/kernel_args.h"
 
@@ -55,19 +55,6 @@ void kernel_main() {
 #endif
 
     const auto src_a = TensorAccessor(tensor::src);
-
-    {
-        constexpr std::uint32_t dfb_max_scaler = dfb::max_scaler;
-        constexpr std::uint32_t dfb_sum_scaler = dfb::sum_scaler;
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            dfb_max_scaler,
-            ckernel::PoolType::MAX,
-            ckernel::ReduceDim::REDUCE_ROW>();
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            dfb_sum_scaler,
-            ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_ROW>();
-    }
 
     const Noc noc;
 

@@ -26,6 +26,7 @@
  * - Create actual sender/receiver/compute kernel implementations
  */
 
+#include "ttnn/cpp/ttnn/kernel_lib/host/reduce_host.hpp"
 #include <gtest/gtest.h>
 #include <cmath>
 
@@ -208,6 +209,11 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
         (uint32_t)num_rows_per_worker,
         (uint32_t)num_rows_per_worker_last,
         (uint32_t)coord_dims};
+
+    const auto auxiliary = ttnn::kernel_lib::host::ReduceAuxiliaryArgs(
+        {1, {{1.0F, ttnn::kernel_lib::ReduceAuxiliaryTileType::FirstRow, 32}}});
+    auxiliary.append_to(reader_sender_compile_time_args);
+    auxiliary.append_to(reader_receiver_compile_time_args);
 
     // ===== CREATE READER KERNELS =====
     auto reader_sender_kernel_id = tt::tt_metal::experimental::udm::CreateMeshKernel(

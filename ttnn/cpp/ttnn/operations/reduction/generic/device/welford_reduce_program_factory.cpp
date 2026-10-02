@@ -229,8 +229,8 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         .data_format_metadata = input_cb_data_format,
     });
 
-    // The reader fills one scalar entry on every reduce dim, but no welford compute kernel reads it
-    // (the user scalar is applied post-reduction by the compute kernel instead), so the reader is this
+    // The writer fills one scalar entry on every reduce dim, but no welford compute kernel reads it
+    // (the user scalar is applied post-reduction by the compute kernel instead), so the writer is this
     // buffer's only toucher.
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = SCALAR_DFB,
@@ -315,7 +315,6 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     reduce_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
     reduce_defines["DST_SYNC_FULL"] = dst_full_sync_en ? "1" : "0";
     // --- Reader kernel ---
-    uint32_t scaler_bits = std::bit_cast<uint32_t>(operation_attributes.scalar);
     std::string reader_source;
     KernelSpec::CompileTimeArgs reader_ct_args;
     Group<std::string> reader_rta_names;
@@ -324,8 +323,8 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         // Welford processes one column at a time (SFPU can only track one running
         // mean/M2 state), so the reader must deliver tiles in strict column-major
         // order: all Ht tiles of column 0, then all Ht tiles of column 1, etc.
-        // enable_fp32_sfpu=0: Welford never uses the fp32-SFPU reduce path (use_welford=1 forces
-        // row_chunk=1). The arg keeps this reader's CT-arg set in lockstep with the reduce factories.
+        // The reduce_output_tiles argument below fixes the reader's row_chunk to one.
+        // Legacy flags remain in the shared reader's compile-time argument set.
         reader_source =
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
             "reader_unary_transpose_wh_universal_input_cols_partitioned.cpp";
@@ -352,12 +351,16 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         reader_rta_names = {"num_tiles", "start_id"};
     }
 
+    reader_ct_args.emplace("reduce_output_tiles", 1U);
+    const auto auxiliary_args =
+        ttnn::kernel_lib::host::ReduceAuxiliaryArgs({0, {{0.0F, ttnn::kernel_lib::ReduceAuxiliaryTileType::Zero, 0}}})
+            .get_compile_time_args();
     spec.kernels.push_back(KernelSpec{
         .unique_id = READER,
         .source = reader_source,
         .compiler_options = {.defines = KernelSpec::CompilerOptions::Defines(reduce_defines)},
         // The two readers are shared with the Reduce factories, so their accessor names are the
-        // shared kernels' vocabulary (in0 / scaler), not this factory's local naming.
+        // shared kernels' vocabulary (in0), not this factory's local naming.
         .dfb_bindings =
             {
                 DFBBinding{
@@ -365,23 +368,10 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
                     .accessor_name = "in0",
                     .endpoint_type = DFBEndpointType::PRODUCER,
                 },
-                // Self-loop: no welford compute kernel reads the scalar entry, so the reader is its
-                // only toucher.
-                DFBBinding{
-                    .dfb_spec_name = SCALAR_DFB,
-                    .accessor_name = "scaler",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = SCALAR_DFB,
-                    .accessor_name = "scaler",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
-                },
             },
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}},
         .compile_time_args = std::move(reader_ct_args),
-        .runtime_arg_schema =
-            {.runtime_arg_names = std::move(reader_rta_names), .common_runtime_arg_names = {"scaler_bits"}},
+        .runtime_arg_schema = {.runtime_arg_names = std::move(reader_rta_names)},
         .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
@@ -451,6 +441,11 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         writer_defines = KernelSpec::CompilerOptions::Defines(reduce_defines);
     }
 
+    writer_dfb_bindings.push_back(
+        DFBBinding{.dfb_spec_name = SCALAR_DFB, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::PRODUCER});
+    writer_dfb_bindings.push_back(
+        DFBBinding{.dfb_spec_name = SCALAR_DFB, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::CONSUMER});
+    writer_defines.emplace("REDUCE_AUXILIARY_CB", "dfb::scaler");
     spec.kernels.push_back(KernelSpec{
         .unique_id = WRITER,
         .source = writer_source,
@@ -462,6 +457,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
             {.runtime_arg_names = std::move(writer_rta_names),
              .common_runtime_arg_names = std::move(writer_common_rta_names)},
         .hw_config = ttnn::create_writer_datamovement_config(),
+        .advanced_options = {.compile_time_varargs = auxiliary_args},
     });
 
     // --- Compute kernels ---
@@ -758,7 +754,6 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         }
     }
 
-    reader_run_args.common_runtime_arg_values = {{"scaler_bits", scaler_bits}};
     const KernelRunArgs::CommonRuntimeArgValues compute_common_args{{"post_mul_scaler_bits", post_mul_scaler_bits}};
     compute_g1_run_args.common_runtime_arg_values = compute_common_args;
     compute_g2_run_args.common_runtime_arg_values = compute_common_args;
@@ -788,8 +783,6 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::override_runtime_argu
     const auto& output = tensor_return_value.mesh_tensor();
 
     // Names must match create_program_artifacts.
-    const KernelSpecName READER{"reader"};
-    const KernelSpecName WRITER{"writer"};
     const KernelSpecName COMPUTE_G1{"compute_g1"};
     const KernelSpecName COMPUTE_G2{"compute_g2"};
     const TensorParamName INPUT_TENSOR{"input"};
@@ -801,9 +794,6 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::override_runtime_argu
 
     // compute_program_hash excludes the scalar, so a cache hit must re-apply it.
     ProgramRunArgs params;
-    params.kernel_run_args.push_back(KernelRunArgs{
-        .kernel = READER,
-        .common_runtime_arg_values = {{"scaler_bits", std::bit_cast<uint32_t>(operation_attributes.scalar)}}});
 
     const KernelRunArgs::CommonRuntimeArgValues compute_common_args{
         {"post_mul_scaler_bits", std::bit_cast<uint32_t>(post_mul_scaler)}};

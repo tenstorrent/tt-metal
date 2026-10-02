@@ -4,6 +4,7 @@
 
 #include "layernorm_post_all_gather_device_operation.hpp"
 #include "layernorm_distributed_metal2_helpers.hpp"
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -238,7 +239,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
     const uint32_t in2_tiles = cb_length;
     const uint32_t in3_tiles = cb_length;
     const uint32_t in4_tiles = 1;  // epsilon
-    const uint32_t in5_tiles = 1;  // reduce scalar
 
     const uint32_t intermed0_tiles = tile_cols_per_device;
     const uint32_t intermed1_tiles = 1;
@@ -265,7 +265,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
         TT_FATAL(beta_stick_size_is_power_of_two, "Only power of 2 betas are supported");
         beta_is_row_major = 1;
     }
-    // Reader uses this compile-time reduction width to generate the AVG scaler tile.
+    // This reduction width determines the planned AVG scaler tile.
     const uint32_t reduce_factor = logical_W * num_devices;
 
     // Get program config
@@ -308,8 +308,34 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
     ////////////////////////////////////////////////////////////////////////////
     //                      Dataflow buffers
     ////////////////////////////////////////////////////////////////////////////
-    const tt::DataFormat scaler_data_format =
+    namespace rh = ttnn::kernel_lib::host;
+    std::vector<uint32_t> reduce_compute_args;
+    rh::ReduceAuxiliaryPlan reduce_auxiliary{
+        1, {{1.0F / reduce_factor, rh::ReduceAuxiliaryTileType::FirstRow, tile_width}}};
+    tt::DataFormat scaler_data_format =
         in_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    if (is_rmsnorm) {
+        auto reduce_plan = rh::make_reduce_plan(
+            rh::ReduceBlockSpec::tiled(
+                tile_height,
+                stats_tiles_cols * tile_width,
+                stats.dtype(),
+                fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16),
+            ReduceOpMath::SUM,
+            ReduceOpDim::W,
+            1.0F / reduce_factor,
+            ReduceFp32Mode::Fast,
+            {device->arch(), fp32_dest_acc_en, dst_full_sync_en, math_fidelity},
+            compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
+
+        reduce_compute_args = rh::ReduceCallArgs(reduce_plan, {0, 1, 2}).get_compile_time_args();
+        reduce_auxiliary.tiles = reduce_plan.auxiliary_tiles;
+        scaler_data_format = reduce_plan.find_cb(rh::ReduceCbRole::Auxiliary)->data_format;
+    }
+    for (auto& tile : reduce_auxiliary.tiles) {
+        tile.value = rh::round_reduce_auxiliary_value(tile.value, scaler_data_format);
+    }
+    const auto reduce_auxiliary_args = rh::ReduceAuxiliaryArgs(reduce_auxiliary).get_compile_time_args();
     const uint32_t scaler_tile_size = tt::tile_size(scaler_data_format);
 
     m2::Group<m2::DataflowBufferSpec> dfbs;
@@ -322,7 +348,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
         dfbs.push_back(make_dfb(POST_BETA, in3_tiles, beta_single_tile_size, beta_cb_data_format));
     }
     dfbs.push_back(make_dfb(POST_EPS, in4_tiles, bfloat16_tile_size, tt::DataFormat::Float16_b));
-    dfbs.push_back(make_dfb(POST_REDUCE, in5_tiles, scaler_tile_size, scaler_data_format));
+    dfbs.push_back(make_dfb(POST_REDUCE, reduce_auxiliary.tiles.size(), scaler_tile_size, scaler_data_format));
     // [mean(x**2), mean(x)], layernorm only. RMSNorm reduces the stats straight into the variance
     // buffer and never touches this one.
     if (!is_rmsnorm) {
@@ -365,10 +391,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
                     .endpoint_type = m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{
                     .dfb_spec_name = POST_EPS, .accessor_name = "eps", .endpoint_type = m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{
-                    .dfb_spec_name = POST_REDUCE,
-                    .accessor_name = "reduce",
-                    .endpoint_type = m2::DFBEndpointType::PRODUCER},
+
             },
         .tensor_bindings =
             {
@@ -381,8 +404,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
              {"gamma_is_row_major", gamma_is_row_major},
              {"beta_is_row_major", beta_is_row_major},
              {"dfb_length", cb_length},
-             {"Wt", tiles_per_core_y},
-             {"reduce_factor", reduce_factor}},
+             {"Wt", tiles_per_core_y}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
@@ -402,13 +424,21 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
     m2::KernelSpec writer{
         .unique_id = POST_WRITER,
         .source = POST_WRITER_KERNEL,
-        .dfb_bindings = {m2::DFBBinding{
-            .dfb_spec_name = POST_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
+        .dfb_bindings =
+            {m2::DFBBinding{
+                 .dfb_spec_name = POST_REDUCE,
+                 .accessor_name = "reduce",
+                 .endpoint_type = m2::DFBEndpointType::PRODUCER},
+             m2::DFBBinding{
+                 .dfb_spec_name = POST_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = POST_OUTPUT_T, .accessor_name = "dst"}},
         .compile_time_args = {{"blk", block_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
+
+        .advanced_options = {.compile_time_varargs = reduce_auxiliary_args},
     };
+    writer.compiler_options.defines.emplace("REDUCE_AUXILIARY_CB", "dfb::reduce");
 
     m2::KernelSpec compute{
         .unique_id = POST_COMPUTE,
@@ -442,6 +472,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
              {"dfb_length", cb_length}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt"}},
         .hw_config = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config),
+        .advanced_options = {.compile_time_varargs = reduce_compute_args},
     };
     // Every intermediate below is private to the compute kernel: it packs into the buffer and
     // unpacks it back, so it is that buffer's only endpoint on both sides.
@@ -492,7 +523,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
         // The inputs carry their own tensor's dtype. The epsilon buffer is always Float16_b.
         if (in_data_format == tt::DataFormat::Float32) {
             unpack_via_src(compute_gen1, POST_INPUT);
-            unpack_via_src(compute_gen1, POST_REDUCE);  // the scaler tile mirrors the input's dtype
+        }
+        // RMSNorm's planned auxiliary format follows the stats tensor, which can differ from the input.
+        if (scaler_data_format == tt::DataFormat::Float32) {
+            unpack_via_src(compute_gen1, POST_REDUCE);
         }
         if (stats_data_format == tt::DataFormat::Float32) {
             unpack_via_src(compute_gen1, POST_STATS);

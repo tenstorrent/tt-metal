@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "softmax_device_operation.hpp"
+#include "softmax_reduce_plans.hpp"
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -130,7 +131,18 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     const CoreRangeSet all_device_cores{CoreRange({0, 0}, {num_cores_c - 1, num_cores_r - 1})};
 
     // ---- Resource names (program-scope; local to avoid unity-build symbol clashes) ----
+    const auto reduce_plans = make_softmax_reduce_plans(
+        program_config.block_w,
+        program_config.block_w,
+        input_tensor.dtype(),
+        fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
+        {arch, fp32_dest_acc_en, dst_full_sync_en, math_fidelity},
+        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
+    const auto reduce_compute_args = reduce_plans.compute_args();
+    const auto reduce_auxiliary_args = reduce_plans.auxiliary_args();
+
     const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
     const KernelSpecName COMPUTE{"compute"};
 
     const TensorParamName SRC{"src"};
@@ -160,12 +172,12 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = MAX_SCALER,
         .entry_size = max_scaler_tile_size,
-        .num_entries = 1,
+        .num_entries = static_cast<uint32_t>(reduce_plans.max.auxiliary.tiles.size()),
         .data_format_metadata = max_scaler_cb_data_format});
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = SUM_SCALER,
         .entry_size = sum_scaler_tile_size,
-        .num_entries = 1,
+        .num_entries = static_cast<uint32_t>(reduce_plans.sum.auxiliary.tiles.size()),
         .data_format_metadata = sum_scaler_cb_data_format});
     if (has_mask) {
         dfbs.push_back(DataflowBufferSpec{
@@ -246,13 +258,9 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
             std::string(SOFTMAX_KERNEL_PATH_ATTENTION) + "/dataflow/reader_unary_sharded_sm_causal_mask_hw_dims.cpp";
     }
 
-    // The reader produces the reduce scalers always; the fused-scale / attn-mask bindings and its named args
-    // depend on the mask config (and c_3 is borrowed, not reader-produced, on the sharded-resident path).
+    // Reader bindings depend on the mask configuration; auxiliary tiles are produced by the writer.
     Group<DFBBinding> reader_bindings = {
-        DFBBinding{
-            .dfb_spec_name = MAX_SCALER, .accessor_name = "max_scaler", .endpoint_type = DFBEndpointType::PRODUCER},
-        DFBBinding{
-            .dfb_spec_name = SUM_SCALER, .accessor_name = "sum_scaler", .endpoint_type = DFBEndpointType::PRODUCER},
+
     };
     Group<TensorBinding> reader_tensor_bindings;
     std::vector<std::string> reader_rta_names;
@@ -292,6 +300,25 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
         .compile_time_args = reader_cta,
         .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
         .hw_config = ttnn::create_reader_datamovement_config(),
+    };
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source =
+            "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/attention/dataflow/"
+            "writer_reduce_auxiliary.cpp",
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = MAX_SCALER,
+                    .accessor_name = "max_scaler",
+                    .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{
+                    .dfb_spec_name = SUM_SCALER,
+                    .accessor_name = "sum_scaler",
+                    .endpoint_type = DFBEndpointType::PRODUCER},
+            },
+        .hw_config = ttnn::create_writer_datamovement_config(),
+        .advanced_options = {.compile_time_varargs = reduce_auxiliary_args},
     };
 
     // ---- Compute kernel ----
@@ -349,7 +376,7 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
             }
         };
         add_unpack(IN0, in0_cb_data_format);
-        // out0 is a self-loop here (no writer; compute is CONSUMER as well as PRODUCER), so it needs an
+        // out0 is a self-loop here (compute is CONSUMER as well as PRODUCER), so it needs an
         // unpack entry under fp32 — unlike the interleaved factory where out0 is producer-only.
         add_unpack(OUT0, out0_cb_data_format);
         add_unpack(MAX_SCALER, max_scaler_cb_data_format);
@@ -379,6 +406,7 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
              {"causal_mask", static_cast<std::uint32_t>(attributes.is_causal_mask)},
              {"sharded_causal_mask", static_cast<std::uint32_t>(mask_sharded_resident)}},
         .hw_config = compute_hw,
+        .advanced_options = {.compile_time_varargs = reduce_compute_args},
     };
 
     // ---- Assemble spec ----
@@ -390,11 +418,12 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     }
 
     Group<WorkUnitSpec> work_units;
-    work_units.push_back(WorkUnitSpec{.name = "wu", .kernels = {READER, COMPUTE}, .target_nodes = all_device_cores});
+    work_units.push_back(
+        WorkUnitSpec{.name = "wu", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_device_cores});
 
     ProgramSpec spec{
         .name = "softmax_attention_optimized_sharded",
-        .kernels = {reader, compute},
+        .kernels = {reader, writer, compute},
         .dataflow_buffers = std::move(dfbs),
         .tensor_parameters = std::move(tensor_parameters),
         .work_units = std::move(work_units),

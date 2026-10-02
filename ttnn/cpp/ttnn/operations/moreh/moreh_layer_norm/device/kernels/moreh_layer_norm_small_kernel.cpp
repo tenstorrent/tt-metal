@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_reduce.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 
@@ -51,22 +51,16 @@ void kernel_main() {
     DataflowBuffer dfb_ex_obj(cb_ex);  // E[x]
     constexpr auto cb_xmm = tt::CBIndex::c_25;
     DataflowBuffer dfb_xmm_obj(cb_xmm);  // x - E[x]
-    constexpr auto cb_xmm2 = tt::CBIndex::c_26;
-    DataflowBuffer dfb_xmm2_obj(cb_xmm2);  // (x - E[x])^2
-    constexpr auto cb_xmm2sum = tt::CBIndex::c_27;
-    DataflowBuffer dfb_xmm2sum_obj(cb_xmm2sum);  // Sum[(x - E[x])^2]
     constexpr auto cb_var = tt::CBIndex::c_28;
     DataflowBuffer dfb_var_obj(cb_var);  // E[(x - E[x])^2] = Var[x]
     constexpr auto cb_recip_std = tt::CBIndex::c_29;
     DataflowBuffer dfb_recip_std_obj(cb_recip_std);  // 1.0/(sqrt(Var[x] + eps))
     constexpr auto cb_gamma_beta = tt::CBIndex::c_30;
     DataflowBuffer dfb_gamma_beta_obj(cb_gamma_beta);  // p * gamm + beta
-    constexpr auto cb_xsum = tt::CBIndex::c_31;
-    DataflowBuffer dfb_xsum_obj(cb_xsum);  // Sum[x]
 
     constexpr uint32_t onetile = 1;
 
-    dfb_scaler_obj.wait_front(onetile);  // comes from the reader
+    dfb_scaler_obj.wait_front(get_compile_time_arg_val(13));  // comes from the reader
     dfb_eps_obj.wait_front(onetile);     // comes from the reader
 
     constexpr uint32_t TILE_H = 32;
@@ -90,103 +84,7 @@ void kernel_main() {
     constexpr uint32_t origin_Wt = (origin_W + TILE_W - 1) / TILE_W;
 
     for (uint32_t outer_idx = 0; outer_idx < num_rows_per_core; outer_idx++) {
-        /*
-         * Sum[x]
-         * cb_xsum
-         */
-        dfb_x_obj.wait_front(num_inner);
-        for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx += block_size) {
-            for (uint32_t j = 0; j < block_size; j++) {
-                const uint32_t w_idx = inner_idx + j;
-                if (w_idx == 0) {
-                    tile_regs_acquire();
-                    dfb_xsum_obj.reserve_back(onetile);
-
-                    copy_tile_init_with_dt(dfb_x_obj);
-                    copy_tile(cb_x, first_tile, dst0);  // input
-
-                    if (do_mask_h && need_to_do_mask_h(w_idx, origin_Ht, origin_Wt)) {
-                        copy_tile_init_with_dt(dfb_mask_h_obj);
-                        copy_tile(cb_mask_h, first_tile, dst1);  // mask_h
-
-                        mask_tile_init();
-                        mask_tile(dst0, dst1);
-                    }
-
-                    if (do_mask_w && ((w_idx + 1) % origin_Wt == 0)) {
-                        copy_tile_init_with_dt(dfb_mask_w_obj);
-                        copy_tile(cb_mask_w, first_tile, dst1);  // mask_w
-
-                        mask_tile_init();
-                        mask_tile(dst0, dst1);
-                    }
-                    tile_regs_commit();
-
-                    tile_regs_wait();
-                    pack_tile_with_dt(dst0, dfb_xsum_obj);
-                    dfb_xsum_obj.push_back(onetile);
-                    tile_regs_release();
-                } else {
-                    tile_regs_acquire();
-                    // I use cb_ex temporarily.
-                    constexpr auto cb_tmp = cb_ex;
-                    DataflowBuffer dfb_tmp_obj(cb_tmp);
-                    dfb_tmp_obj.reserve_back(onetile);
-
-                    copy_tile_init_with_dt(dfb_x_obj);
-                    copy_tile(cb_x, inner_idx + j, dst0);  // input
-
-                    const uint32_t mask_dst = dst0 < 15 ? dst0 + 1 : 0;
-
-                    if (do_mask_h && need_to_do_mask_h(w_idx, origin_Ht, origin_Wt)) {
-                        copy_tile_init_with_dt(dfb_mask_h_obj);
-                        copy_tile(cb_mask_h, first_tile, mask_dst);  // mask_h
-
-                        mask_tile_init();
-                        mask_tile(dst0, mask_dst);
-                    }
-
-                    if (do_mask_w && ((w_idx + 1) % origin_Wt == 0)) {
-                        copy_tile_init_with_dt(dfb_mask_w_obj);
-                        copy_tile(cb_mask_w, first_tile, mask_dst);  // mask_w
-
-                        mask_tile_init();
-                        mask_tile(dst0, mask_dst);
-                    }
-                    tile_regs_commit();
-
-                    tile_regs_wait();
-                    pack_tile_with_dt(dst0, dfb_tmp_obj);
-                    dfb_tmp_obj.push_back(onetile);
-                    tile_regs_release();
-
-                    tile_regs_acquire();
-                    dfb_tmp_obj.wait_front(onetile);
-                    dfb_xsum_obj.wait_front(onetile);
-                    dfb_xsum_obj.reserve_back(onetile);
-
-                    add_tiles_init_with_dt(dfb_xsum_obj, dfb_tmp_obj);
-                    add_tiles(cb_xsum, cb_tmp, first_tile, first_tile, dst0);
-                    tile_regs_commit();
-
-                    tile_regs_wait();
-                    pack_tile_with_dt(dst0, dfb_xsum_obj);
-
-                    dfb_tmp_obj.pop_front(onetile);
-                    dfb_xsum_obj.pop_front(onetile);
-                    dfb_xsum_obj.push_back(onetile);
-                    tile_regs_release();
-                }
-            }  // block_size loop
-        }  // num_inner loop
-        // We don't pop cb_x until we compute xmm.
-
-        /*
-         * E[x] - reduce single pre-accumulated tile
-         * cb_ex
-         */
-        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_xsum, cb_scaler, cb_ex>(
-            compute_kernel_lib::ReduceInputBlockShape::single());
+        reduce_moreh_moment<false, false>();
 
         dfb_ex_obj.wait_front(onetile);
         if (mean_has_value) {
@@ -194,8 +92,7 @@ void kernel_main() {
             tile_regs_acquire();
             dfb_mean_obj.reserve_back(onetile);
 
-            copy_tile_init_with_dt(dfb_ex_obj, is_lastdim_layernorm);
-            copy_tile(cb_ex, first_tile, dst0);
+            copy_moreh_statistic(dfb_ex_obj, dst0);
             tile_regs_commit();
 
             tile_regs_wait();
@@ -251,66 +148,7 @@ void kernel_main() {
         dfb_ex_obj.pop_front(onetile);
         dfb_x_obj.pop_front(num_inner);
 
-        /*
-         * Sum[(x - E[x])^2]
-         * cb_xmm2sum
-         */
-        dfb_xmm_obj.wait_front(num_inner);
-        for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx++) {
-            tile_regs_acquire();
-            dfb_xmm2_obj.reserve_back(onetile);
-
-            mul_tiles_init_with_dt(dfb_xmm_obj, dfb_xmm_obj);
-            mul_tiles(cb_xmm, cb_xmm, inner_idx, inner_idx, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, dfb_xmm2_obj);
-
-            dfb_xmm2_obj.push_back(onetile);
-            tile_regs_release();
-            if (inner_idx == 0) {
-                tile_regs_acquire();
-                dfb_xmm2_obj.wait_front(onetile);
-                dfb_xmm2sum_obj.reserve_back(onetile);
-
-                copy_tile_init_with_dt(dfb_xmm2_obj);
-                copy_tile(cb_xmm2, first_tile, dst0);
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, dfb_xmm2sum_obj);
-
-                dfb_xmm2_obj.pop_front(onetile);
-                dfb_xmm2sum_obj.push_back(onetile);
-                tile_regs_release();
-            } else {
-                tile_regs_acquire();
-                dfb_xmm2sum_obj.wait_front(onetile);
-                dfb_xmm2_obj.wait_front(onetile);
-                dfb_xmm2sum_obj.reserve_back(onetile);
-
-                add_tiles_init_with_dt(dfb_xmm2sum_obj, dfb_xmm2_obj);
-                add_tiles(cb_xmm2sum, cb_xmm2, first_tile, first_tile, dst0);
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, dfb_xmm2sum_obj);
-
-                dfb_xmm2sum_obj.pop_front(onetile);
-                dfb_xmm2_obj.pop_front(onetile);
-                dfb_xmm2sum_obj.push_back(onetile);
-                tile_regs_release();
-            }
-        }  // num_inner loop
-        // We don't pop cb_xmm here.
-
-        /*
-         * E[(x-E[x])^2 = Var[x] - reduce single pre-accumulated tile
-         * cb_var
-         */
-        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_xmm2sum, cb_scaler, cb_var>(
-            compute_kernel_lib::ReduceInputBlockShape::single());
+        reduce_moreh_moment<true, false>();
 
         /*
          * 1.0/(sqrt(E[(x-E[x])^2] + eps))
@@ -340,8 +178,7 @@ void kernel_main() {
             tile_regs_acquire();
             dfb_rstd_obj.reserve_back(onetile);
 
-            copy_tile_init_with_dt(dfb_recip_std_obj, is_lastdim_layernorm);
-            copy_tile(cb_recip_std, first_tile, dst0);
+            copy_moreh_statistic(dfb_recip_std_obj, dst0);
             tile_regs_commit();
 
             tile_regs_wait();
@@ -442,7 +279,7 @@ void kernel_main() {
         dfb_recip_std_obj.pop_front(onetile);
         dfb_xmm_obj.pop_front(num_inner);
     }  // num_rows_per_core loop
-    dfb_scaler_obj.pop_front(onetile);
+    dfb_scaler_obj.pop_front(get_compile_time_arg_val(13));
     dfb_eps_obj.pop_front(onetile);
 
     if (do_mask_h) {

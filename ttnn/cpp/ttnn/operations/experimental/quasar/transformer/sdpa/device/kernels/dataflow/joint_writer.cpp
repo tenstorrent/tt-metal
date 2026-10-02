@@ -8,6 +8,7 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "dataflow_common.hpp"
 
 void kernel_main() {
@@ -46,11 +47,9 @@ void kernel_main() {
         CatAddrGenerator(out_writer, output_tile_logical, padded_Nqt, joint_out_writer, joint_tile_logical, padded_Lqt);
 
     DataflowBuffer dfb_col(dfb::col_identity);
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        dfb::identity_scale_in,
-        ckernel::PoolType::MAX,
-        ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
+    using Auxiliary =
+        ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::identity_scale_in>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
     generate_bcast_col_scalar(dfb_col, identity_scalar_packed);
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {

@@ -13,13 +13,14 @@ The ReduceDeviceOperation uses 3 ProgramFactory variants:
     MULTI_CORE_HW which also maps to ReduceSingleCoreHwProgramFactory
 
 compute_program_hash() includes:
-  math_op, dim, scaler_mode, output_mem_config, output_dtype, compute_kernel_config,
+  math_op, dim, scaler, scaler_mode, output_mem_config, output_dtype, compute_kernel_config,
   sub_core_grids, negate, program_factory.index(), input dtype,
   input memory_config, input padded_shape.
 
-It deliberately EXCLUDES the two scalar floats (scaler / post_mul_scaler): they reach the
-kernels as common runtime args, so distinct scalar values share one program (#54180), and
-override_runtime_arguments() re-applies them on a cache hit.
+It EXCLUDES post_mul_scaler: that scalar reaches the kernels as a common runtime arg, so
+PostMul reductions (MAX/MIN, HW, int32 SUM, SFPU fp32) with distinct scalars share one program
+(#54180) and override_runtime_arguments() re-applies it on a cache hit. The scaler is compiled
+into the planned auxiliary tiles, so it is part of the key.
 """
 
 import pytest
@@ -307,11 +308,13 @@ def test_reduce_cache_miss_sub_core_grids(device, isolate_program_cache):
 @pytest.mark.parametrize("op", [ttnn.sum, ttnn.max, ttnn.min, ttnn.mean])
 @pytest.mark.parametrize("dim", [-1, -2])
 def test_reduce_cache_reuse_across_scalars(device, isolate_program_cache, op, dim):
-    """Different scalar values -> 1 cache entry, and each result is correct."""
+    """Each result is correct; MAX/MIN apply the scalar at runtime and share one cache entry, while SUM/MEAN
+    compile it into the planned auxiliary tiles and get one entry per scalar."""
     torch.manual_seed(0)
     shape = [1, 1, 64, 64]
+    scalars = [1.0, 0.5, 2.0]
 
-    for scalar in [1.0, 0.5, 2.0]:
+    for scalar in scalars:
         torch_ref, tt_out = run_reduce_op(device, op, shape, dim=dim, scalar=scalar)
         # test for equivalance
         assert_numeric_metrics(
@@ -323,7 +326,8 @@ def test_reduce_cache_reuse_across_scalars(device, isolate_program_cache, op, di
             frobenius_threshold=1e-09,
         )
 
-    assert device.cache_entries_counter.total == 1
+    expected_entries = 1 if op in (ttnn.max, ttnn.min) else len(scalars)
+    assert device.cache_entries_counter.total == expected_entries
 
 
 @pytest.mark.parametrize("dim", [-2, -1], ids=["H", "W"])
