@@ -209,6 +209,10 @@ def pytest_collection_modifyitems(config, items):
             (1, 8): [FC.FABRIC_2D_TORUS_X],
         },
         CT.BLACKHOLE_GALAXY: {
+            # A TT_VISIBLE_DEVICES-filtered Galaxy column retains its board type. The device
+            # count check below still requires exactly eight visible devices for this mesh;
+            # Torus-Y auto-discovery must map the selected chips into a physical ring.
+            (8, 1): [FC.FABRIC_2D_TORUS_Y],
             (32, 1): [FC.FABRIC_2D],
             (16, 2): [FC.FABRIC_2D],
             (8, 4): [FC.FABRIC_1D, FC.FABRIC_2D, FC.FABRIC_2D_TORUS_XY],
@@ -609,7 +613,7 @@ def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: 
                 # dot-free symlink (e.g. Kimi-K2_7-Code) back to a dotted real dir (Kimi-K2.7-Code), and HF
                 # trust_remote_code cannot import a dynamic module whose name contains a '.'. The
                 # safetensors load works through the symlink either way; only the config import cares.
-                # This matches _resolve_config_only, which already loads config from the raw env path.
+                # _resolve_config_only descends the same way for config.json.
                 return model_path.absolute()
             else:
                 logger.warning(f"{variant.env_var} set but missing index file: {index_file}")
@@ -740,8 +744,11 @@ def _resolve_tokenizer(variant_name: str, padding_side: str):
     # Only variants that ship custom tokenizer code (e.g. Kimi) need trust_remote_code; DeepSeek-V3
     # uses a stock fast tokenizer and turns it off to avoid the flat-config custom-import path.
     trust_remote_code = v.tokenizer_trust_remote_code
+    env_path = os.getenv(v.env_var)
     candidates = [
-        os.getenv(v.env_var),
+        # Descend an HF hub-cache root to its snapshot, where tokenizer.json lives; the root itself
+        # holds only blobs/refs/snapshots, so the glob below never matches it.
+        str(_resolve_hf_snapshot_dir(Path(env_path))) if env_path else None,
         str(v.default_local_path) if v.default_local_path is not None else None,
         str(v.shared_path) if v.shared_path is not None else None,
     ]

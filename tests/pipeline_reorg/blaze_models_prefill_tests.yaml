@@ -1358,7 +1358,7 @@
 
       timeout -k 2m 40m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_mistral4_prefill_block -k "pcc-prompt_5k and no_determinism and iter1" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_chunked.py::test_mistral4_prefill_block_chunked -vvv --tb=short
       '
     ) || rc=$?
     section_end "$rc"
@@ -1437,6 +1437,7 @@
       # Sum of the section timeouts (20+44+40+20+28+52+20 = 224). No margin: models/demo/bh_sc1 in
       # .github/time_budget.yaml is full (1750/1750), so anything above 224 fails verify-time-budgets.
       timeout: 224
+
       tier: 2
       release_ready: false
   owner_id: U0AQ3FGS9MG # Alina Khan
@@ -1444,7 +1445,70 @@
   budget_type: demo
   sp_config: sc1
 
+- name: "Mistral-Small-4-119B chunked prefill throughput 100k"
+  # Without this the workflow skips its TorusXY step, PREFILL_TORUS_XY_CERTIFIED stays unset, and
+  # conftest skips every row before device open.
+  fabric_profile: torus_xy
+  cmd: |
+    export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
+    export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI
 
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -eo pipefail
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_mistral4_prefill_transformer_chunked_no_pcc -k "mistral4 and torus-xy-8x4 and L36 and chunks20 and ten_iters" -vvv --tb=short | tee /tmp/mistral4_chunked_perf.out
+      # A leg whose rows all skip exits 0 and reads as green. Fail instead.
+      grep -qE "[0-9]+ passed" /tmp/mistral4_chunked_perf.out || { echo "::error::mistral4_chunked_perf: every row skipped, so the leg measured nothing; check the TorusXY fabric profile and the certified allocation"; exit 1; }
+    '
+  test_type: mistral4_chunked_perf
+  test_tags: [mistral4, transformer]
+  test_group: module
+  skus:
+    bh_sc1_high_power:
+      # ~1.4x the worst observed step. The swing is weight-cache warmth, not the measured work.
+      timeout: 35
+  owner_id: U0AQ3FGS9MG # Alina Khan
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
+# Traced-vs-eager KV equivalence for the #55126 per-offset query-scale fix. This is the ONLY gate on
+# that path: an unrefreshed scale buffer applies temperature 1.0, which moves the chunked PCC rows by
+# 0.989719 to 0.981986 against a 0.96 bar, so they cannot see it. The test asserts its own sensitivity
+# FIRST -- suppressing the temperature must drive the deep layers BELOW the agreement bar -- so it
+# cannot pass vacuously.
+#
+# fabric_profile torus_xy is load-bearing, not decoration: conftest collect-skips TorusXY cases before
+# device open unless PREFILL_TORUS_XY_CERTIFIED is set, and only this profile's workflow step sets it.
+- name: "Mistral-Small-4-119B traced-vs-eager prefill KV equivalence 30k@5k"
+  fabric_profile: torus_xy
+  cmd: |
+    export MESH_DEVICE=TG
+    export LOGURU_LEVEL=INFO
+    export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
+    export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -eo pipefail
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_chunk_traced_vs_eager.py -vvv --tb=short | tee /tmp/mistral4_traced_vs_eager.out
+      # A leg whose only row skipped exits 0 and reads as green. Fail instead.
+      grep -qE "[0-9]+ passed" /tmp/mistral4_traced_vs_eager.out || { echo "::error::mistral4_traced_vs_eager: nothing ran; check the staged weight cache and the certified TorusXY allocation"; exit 1; }
+    '
+  test_type: mistral4_traced_vs_eager
+  test_tags: [mistral4, runner, kv_cache]
+  test_group: module
+  skus:
+    bh_sc1:
+      # 10 min on CI run 34660979358; 16 is 1.6x.
+      timeout: 16
+      tier: 2
+      release_ready: false
+  owner_id: U0AQ3FGS9MG # Alina Khan
+  team: models
+  budget_type: demo
+  sp_config: sc1
 # ===== GPT-OSS-120B ==================================================================================
 
 # GPT-OSS-120B prefill suite: sections run serially on one allocation; each is time-bounded and
@@ -1575,6 +1639,48 @@
   budget_type: demo
   sp_config: sc1
 
+# Four pipeline ranks share one galaxy (SP=8, TP=1 per rank); the TT_VISIBLE_DEVICES mapping differs
+# between galaxies, so the columns are probed before launching.
+- name: "Mistral-Small-4-119B PP4 prefill KV accuracy + throughput 55k@5k, SC1"
+  fabric_profile: torus_xy
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    # Host-only orchestration tests, run first so a broken gate fails in seconds rather than after a
+    # 12 min weight load. This cmd runs on the host through the container hook, where /opt/venv is
+    # not on PATH, so find an interpreter with pytest and warn rather than fail if there is none.
+    HOST_PY=""
+    for p in "${TT_METAL_HOME}/python_env/bin/python3" /opt/venv/bin/python3 python3; do
+      if "$p" -c 'import pytest' >/dev/null 2>&1; then HOST_PY="$p"; break; fi
+    done
+    if [ -n "${HOST_PY}" ]; then
+      echo "run_multirank_pcc host tests: using ${HOST_PY}"
+      "${HOST_PY}" -m pytest models/demos/common/prefill/runners/ci/test_run_multirank_pcc.py -q --no-header
+    else
+      echo "::warning::no host interpreter with pytest; skipped the run_multirank_pcc host tests"
+    fi
+    # One run gates PCC and throughput both. The gate reads the deepest probe (@55k) from the
+    # runner-side perf JSON, taken during the measured request so the KV readback sits outside it.
+    # The band spans a 44% spread across two galaxies; re-cut it once the CI pool has several runs.
+    export PREFILL_EXPECTED_TPS=29000
+    export PREFILL_PERF_MARGIN=0.25
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh mistral4
+  test_type: mistral4_pp4_kv_pcc
+  test_tags: [mistral4, runner, kv_cache]
+  test_group: module
+  skus:
+    bh_sc1:
+      # 12 min on CI run 34660979358; 30 is 2.5x, looser than the siblings because this leg also
+      # pays per-galaxy column probing and a 36-layer weight load.
+      timeout: 30
+  owner_id: U0AQ3FGS9MG # Alina Khan
+  team: models
+  budget_type: demo
+  sp_config: sc1
 
 # ===== Llama-3.1-8B ===================================================================================
 
