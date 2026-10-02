@@ -68,75 +68,86 @@ def _print(rows):
     )
 
 
-def test_perf_matrix():
-    dev = open_device(device_id=DEVICE_ID)
-    rows = []
-    try:
-        text = wer_band("en", "medium")[0]
-        long_text = " ".join(wer_band("en", "long")[:2])
-        # ---- B=1: the single-user pipeline ----
-        single = TtVoxtralPipeline(dev, max_seq_len=1024)
-        single.warmup()
-        best = None
-        for _ in range(REPEATS):
-            t0 = time.perf_counter()
-            wav = single.synthesize(text, VOICE, seed=0)
-            wall = time.perf_counter() - t0
-            t = single.last_timings
-            if best is None or wall < best[0]:
-                best = (wall, wav.shape[-1] / SR, t["frames"], t["prefill_s"], t.get("codec_s", 0.0))
-        rows.append(_row("single B=1", *best, users=1))
-        t0 = time.perf_counter()
-        wav = single.synthesize(long_text, VOICE, seed=0)
-        long_wall = time.perf_counter() - t0
-        rows.append(
-            _row(
-                "single long",
-                long_wall,
-                wav.shape[-1] / SR,
-                single.last_timings["frames"],
-                single.last_timings["prefill_s"],
-                single.last_timings.get("codec_s", 0.0),
-                users=1,
-            )
-        )
-        single.close()
-        # ---- batched ----
-        for B in BATCHES:
-            pipe = TtVoxtralBatchedPipeline(dev, max_batch=B, max_seq_len=1024)
-            pipe.warmup()
-            reqs = [(text, VOICE, s) for s in range(B)]
-            best = None
-            for _ in range(REPEATS):
-                t0 = time.perf_counter()
-                wavs = pipe.synthesize_batch(reqs)
-                wall = time.perf_counter() - t0
-                t = pipe.last_timings
-                audio = sum(w.shape[-1] for w in wavs) / SR
-                frames = sum(t["frames"])
-                if best is None or wall < best[0]:
-                    best = (
-                        wall,
-                        audio,
-                        frames,
-                        t["prefill_s"],
-                        t.get("codec_s", 0.0),
-                        t["decode_ms_per_frame"],
-                        t["steps"],
-                    )
-            wall, audio, frames, pre, codec, ms_frame, steps = best
-            r = _row(f"batched B={B}", wall, audio, frames, pre, codec, users=B)
-            r["decode_ms_per_frame"] = ms_frame
-            r["steps"] = steps
-            rows.append(r)
-            print(
-                f"[pm] B={B}: {ms_frame:.1f} ms per frame for all users ({(1000 / 12.5) / ms_frame:.2f}x real time each), {steps} steps, trace capture included in wall",
-                flush=True,
-            )
-            pipe.close()
-        _print(rows)
+# Every configuration opens its own device and builds exactly ONE pipeline, closed with the device before
+# the next starts. Two pipelines on one chip in one process (a second one warming up its codec while the
+# first still held device memory -- pipeline.close() frees only the trace) hung the chip on 2026-10-02.
+CONFIGS = ["single"] + BATCHES
+ROWS = []
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _report():
+    yield
+    if ROWS:
+        _print(ROWS)
         if RESULTS_PATH:
-            json.dump({"rows": rows, "jerry": JERRY}, open(RESULTS_PATH, "w"), indent=2)
+            json.dump({"rows": ROWS, "jerry": JERRY}, open(RESULTS_PATH, "w"), indent=2)
+
+
+def _single(dev, text, long_text):
+    single = TtVoxtralPipeline(dev, max_seq_len=1024)
+    single.warmup()
+    best = None
+    for _ in range(REPEATS):
+        t0 = time.perf_counter()
+        wav = single.synthesize(text, VOICE, seed=0)
+        wall = time.perf_counter() - t0
+        t = single.last_timings
+        if best is None or wall < best[0]:
+            best = (wall, wav.shape[-1] / SR, t["frames"], t["prefill_s"], t.get("codec_s", 0.0))
+    rows = [_row("single B=1", *best, users=1)]
+    t0 = time.perf_counter()
+    wav = single.synthesize(long_text, VOICE, seed=0)
+    long_wall = time.perf_counter() - t0
+    t = single.last_timings
+    rows.append(
+        _row("single long", long_wall, wav.shape[-1] / SR, t["frames"], t["prefill_s"], t.get("codec_s", 0.0), users=1)
+    )
+    single.close()
+    return rows
+
+
+def _batched(dev, B, text):
+    pipe = TtVoxtralBatchedPipeline(dev, max_batch=B, max_seq_len=1024)
+    pipe.warmup()
+    reqs = [(text, VOICE, s) for s in range(B)]
+    best = None
+    for _ in range(REPEATS):
+        t0 = time.perf_counter()
+        wavs = pipe.synthesize_batch(reqs)
+        wall = time.perf_counter() - t0
+        t = pipe.last_timings
+        audio = sum(w.shape[-1] for w in wavs) / SR
+        if best is None or wall < best[0]:
+            best = (
+                wall,
+                audio,
+                sum(t["frames"]),
+                t["prefill_s"],
+                t.get("codec_s", 0.0),
+                t["decode_ms_per_frame"],
+                t["steps"],
+            )
+    wall, audio, frames, pre, codec, ms_frame, steps = best
+    r = _row(f"batched B={B}", wall, audio, frames, pre, codec, users=B)
+    r["decode_ms_per_frame"] = ms_frame
+    r["steps"] = steps
+    print(
+        f"[pm] B={B}: {ms_frame:.1f} ms per frame for all users ({(1000 / 12.5) / ms_frame:.2f}x real time each), {steps} steps, trace capture included in wall",
+        flush=True,
+    )
+    pipe.close()
+    return [r]
+
+
+@pytest.mark.parametrize("config", CONFIGS, ids=lambda c: f"B{c}" if c != "single" else "single")
+def test_perf_matrix(config):
+    text = wer_band("en", "medium")[0]
+    long_text = " ".join(wer_band("en", "long")[:2])
+    dev = open_device(device_id=DEVICE_ID)
+    try:
+        rows = _single(dev, text, long_text) if config == "single" else _batched(dev, int(config), text)
+        ROWS.extend(rows)
         assert rows
     finally:
-        ttnn.close_device(dev)
+        ttnn.close_device(dev)  # frees every buffer this configuration allocated

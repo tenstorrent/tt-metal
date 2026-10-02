@@ -10,6 +10,8 @@ Needs no device and no checkpoint -- it only imports the modules.
     pytest -svv models/experimental/voxtral_tts/tests/test_tt_defaults.py
 """
 
+import os
+
 import pytest
 
 ttnn = pytest.importorskip("ttnn")
@@ -46,6 +48,19 @@ def test_codec_output_projection_does_not_use_conv1d():
     # values, so only timing would catch a revert.
     assert "self._pad_causal(" not in src, "the projection is back on the slice-built pad"
     assert "ttnn.gather(" in src and "_out_prefix_idx" in init
+
+
+def test_codec_convs_default_to_matmuls():
+    """The codec's four convs run as tap matmuls by default, not ttnn.conv1d/conv_transpose2d: the halo
+    path hung a chip twice on 2026-10-01/02 (a second pipeline's codec warming up, buckets 512 and 640)."""
+    import inspect
+
+    from models.experimental.voxtral_tts.tt import ttnn_voxtral_codec as codec
+
+    assert codec.CONV_IMPL == "matmul" or os.environ.get("VOXTRAL_CODEC_CONV"), "codec back on ttnn conv ops"
+    src = _flat(inspect.getsource(codec.TtVoxtralCodecDecoder._graph))
+    assert _flat("self._conv1d_mm(") in src and _flat("self._conv_transpose_mm(") in src
+    assert codec.LATENT_PAD % 32 == 0 and codec.LATENT_PAD >= codec.LATENT_DIM
 
 
 def test_backbone_math_config_keeps_fp32_accumulation():

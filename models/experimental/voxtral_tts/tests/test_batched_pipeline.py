@@ -68,9 +68,15 @@ def pipe(dev):
 
 @pytest.fixture(scope="module")
 def single(dev, pipe):
-    """Luka's batch-1 pipeline on the same device, for the equivalence check."""
+    """Luka's batch-1 pipeline on the same device, for the equivalence check. A2 compares codes
+    only, so this pipeline never decodes audio: it borrows the batched pipeline's codec (its own is
+    dropped) and skips the codec warmup. A second codec instance warming up on a chip that already
+    holds the batched pipeline hung the device (2026-10-01, BH Galaxy chip 03:00.0: stuck in the
+    512-frame bucket after 128..384 completed; the same buckets never hang with one codec per chip,
+    which is also what production runs)."""
     s = TtVoxtralPipeline(dev, max_seq_len=MAX_SEQ)
-    s.warmup()
+    s.codec = pipe.codec
+    s.warmup(codec=False)
     yield s
     s.close()
 
