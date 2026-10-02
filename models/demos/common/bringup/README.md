@@ -98,6 +98,10 @@ gate runs it: a component step name, or `adapter` for K.1) and the frozen tests 
 `ledger_gen` adds each test to its step's gate, and each step's brief carries its how-to section. To run them by hand:
 `python -m models.demos.common.bringup.testing.serving --run <step|adapter|all>`.
 
+The runner tests are fed by tt-d-gen's real engine (`testing/dgen_prefill_driver.py`, its own Python 3.12 process,
+found by `testing/dgen_engine.py` under `serving.server_repo` or `/localdev/$USER/tt-d-gen`); without a build they fall
+back to tt-metal's `prefill_producer`. `BRINGUP_DGEN=0` forces the fallback, `BRINGUP_DGEN=1` makes a missing build fail.
+
 ## Perf picks (F57)
 
 A pick has no gate before or after its agent. The agent makes the change behind a `tt/settings.py` switch and runs the
