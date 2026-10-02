@@ -7,7 +7,7 @@ Quasar fork of tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py.
 
 Runs the same windowed (block-diagonal) SDPA cases against
 ttnn.experimental.quasar.transformer.scaled_dot_product_attention by swapping the op entry point
-before the reused tests call it. Those reused tests upload tensors with a device-side tilize, which
+for each test in this module (see _quasar_sdpa). Those reused tests upload tensors with a device-side tilize, which
 Quasar does not run; test_windowed_sdpa_full_chunk_masked below runs on Quasar as well as WH/BH.
 """
 
@@ -17,16 +17,21 @@ import torch
 import ttnn
 from ttnn.experimental.quasar.transformer import scaled_dot_product_attention
 
-ttnn.transformer.scaled_dot_product_attention = scaled_dot_product_attention
-
-from tests.ttnn.unit_tests.operations.sdpa.test_windowed_sdpa import *  # noqa: E402,F401,F403
-from tests.ttnn.unit_tests.operations.sdpa.test_windowed_sdpa import windowed_mask  # noqa: E402
-from tests.ttnn.unit_tests.operations.sdpa import test_windowed_sdpa as _mainline  # noqa: E402
-from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.test_sdpa_attention_sink import (  # noqa: E402
+from tests.ttnn.unit_tests.operations.sdpa.test_windowed_sdpa import *  # noqa: F401,F403
+from tests.ttnn.unit_tests.operations.sdpa.test_windowed_sdpa import windowed_mask
+from tests.ttnn.unit_tests.operations.sdpa import test_windowed_sdpa as _mainline
+from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.test_sdpa_attention_sink import (
     _check,
     _compute_kernel_config,
     _to_device,
 )
+
+
+@pytest.fixture(autouse=True)
+def _quasar_sdpa(monkeypatch):
+    # Point the reused tests at the Quasar fork for each test in this module only; monkeypatch restores the
+    # public op afterwards, so other modules in the same pytest process are unaffected.
+    monkeypatch.setattr(ttnn.transformer, "scaled_dot_product_attention", scaled_dot_product_attention)
 
 
 # Quasar does not support bfloat8_b, so the reused smoke test's bf8 parametrizations run in bfloat16
