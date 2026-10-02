@@ -319,7 +319,7 @@ ALWI void reduce_accumulate_via_add(
     // there). Capacity self-asserts in each wait_front/reserve_back, except NoWaitNoPop which does neither.
     ASSERT(input_dfb_id != output_dfb_id && Ht > 0 && Wt > 0 && NC > 0);
     if constexpr (input_policy == ReduceInputPolicy::WaitAndPopPerTile) {
-        UNPACK(ASSERT(get_dfb_num_pages(input_dfb_id) >= 2 && (get_dfb_num_pages(input_dfb_id) & 1u) == 0));
+        UNPACK(ASSERT(get_dfb_num_pages(input_dfb_id) >= 2));
         if constexpr (is_col) {
             ASSERT(output_group <= 1);
         }

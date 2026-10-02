@@ -99,8 +99,7 @@ namespace compute_kernel_lib {
  *
  * Controls when to wait for input tiles and whether to pop them after processing:
  *
- * - WaitAndPopPerTile: Stream input; AccumulateViaAdd consumes pairs and requires an even capacity of at least two
- * tiles.
+ * - WaitAndPopPerTile: Stream input; AccumulateViaAdd consumes pairs and requires a capacity of at least two tiles.
  *
  * - BulkWaitBulkPop: Wait for bulk, process all with indexed access, pop bulk.
  *   Bulk size depends on reduce dimension:
