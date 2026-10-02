@@ -50,7 +50,7 @@ struct ChainLink {
     FORCE_INLINE void publish(uint32_t value);
 };
 
-// Fixed-sender injector. Guard protects source departure; CallerManaged leaves source lifetime
+// Fixed-sender injector. Guard waits until the source has been read; CallerManaged leaves source lifetime
 // and final write draining to the caller. A distinct local-copy destination always completes before
 // return. Neither guard waits for the whole chain to consume the event.
 // Resource arguments accept numeric IDs or native SemaphoreBindingToken values; all three are required.

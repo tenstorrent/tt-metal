@@ -317,9 +317,11 @@ FORCE_INLINE void SenderPipeImpl<
         noc_.async_write_barrier();
     } else if constexpr (
         SOURCE_GUARD == SourceL1Guard::Guard || (ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Flag)) {
-        // Guard waits for the remote-only payload source to depart. A rotating Flag sender also
+        // Guard waits until the remote-only payload source has been read. A rotating Flag sender also
         // needs this wait before send() resets the local semaphore cell used as the signal source.
-        noc_.async_writes_flushed();
+        // A plain flush is not enough: NIU_MST_NONPOSTED_WR_REQ_SENT advances before the NIU reads the
+        // source. NIU_MST_WRITE_REQS_OUTGOING_ID drops only after; untagged writes use transaction ID 0.
+        noc_.async_writes_flushed<NocOptions::TXN_ID>({.trid = 0});
     }
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
         // inc_multicast is a NON-POSTED multicast atomic: it expects num_dests acks that the flush
