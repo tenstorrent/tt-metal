@@ -39,7 +39,7 @@ import torch
 
 from models.demos.common.bringup.core import defaults, metrics
 from models.demos.common.bringup.reference.interface import run_block
-from models.demos.common.bringup.testing import accuracy_guard, model_precision
+from models.demos.common.bringup.testing import accuracy_guard, determinism, model_precision
 from models.demos.common.bringup.testing.harness import (
     compare,
     component_golden,
@@ -125,12 +125,36 @@ def _run_golden(s, step, layer, mesh, compare_mode, thr, metric) -> bool:
     if getattr(fn, "cpu_bridge", False):
         print(f"FAIL {step}: device_component returned a CPU bridge; a deferred step is not on the device")
         return False
-    out = fn(reference_ctx(ref, layer, g, c), device_ctx(layer, g, c), *inputs)
+    rctx = reference_ctx(ref, layer, g, c)
+    out = fn(rctx, device_ctx(layer, g, c), *inputs)
     mode = compare_mode or default_mode(want)
-    _, ok = compare(
-        metric or f"pcc_{step}_L{layer:02d}", out, want, mode, threshold(s, "component") if thr is None else thr
+    name = metric or f"pcc_{step}_L{layer:02d}"
+    _, ok = compare(name, out, want, mode, threshold(s, "component") if thr is None else thr)
+    from models.demos.common.bringup.testing.component_checks import _clone, _mixed
+
+    b_inputs = [_mixed(t, i) for i, t in enumerate(inputs)]
+    det = _deterministic(
+        s,
+        step,
+        name,
+        lambda: fn(rctx, device_ctx(layer, g, c), *_clone(inputs)),
+        lambda: fn(rctx, device_ctx(layer, g, c), *_clone(b_inputs)),
+        out,
     )
-    return ok
+    return ok and det
+
+
+def _deterministic(s, step: str, name: str, run_a, run_b, first) -> bool:
+    """Device mode only: A (already run), B, then A again, bit-identical (testing/determinism.py)."""
+    if impl_mode() != "device":
+        return True
+    why = determinism.exempt(s, step)
+    if why:
+        print(f"skip {step}: determinism check exempt (tests.nondeterministic: {why})")
+        return True
+    return determinism.check(
+        run_a, run_b, first, label=step, n=determinism.repeats(s), metric=name.replace("pcc_", "det_", 1)
+    )
 
 
 _EXPECT = {}  # (layer, step, chunk, mode, thr) -> Expect; reused only with the same reference object (dev proofs)
@@ -171,7 +195,22 @@ def _run_auto(s, step, layer, mesh, compare_mode, thr, metric) -> bool:
             outs[case.name] = e
     print(ex.describe())
     ok = CC.golden_gate(name, outs["golden"], want, ex.kind, compare_mode, thr)
-    return not ex.evaluate(outs) and ok
+    ok = not ex.evaluate(outs) and ok
+    # A, B, A: the second inputs above already ran after the golden (B); run the golden again and compare its bytes
+    gold = next(x for x in ex.cases if x.name == "golden")
+    other = [x for x in ex.cases if x.name != "golden"]
+    b = other[0] if other else gold
+    b_inputs = CC._clone(b.inputs) if other else [CC._mixed(t, i) for i, t in enumerate(gold.inputs)]
+    r_gold, r_b = gold.rctx(), b.rctx()  # the device module ignores the reference context; build it once
+    det = _deterministic(
+        s,
+        step,
+        name,
+        lambda: fn(r_gold, gold.dctx(), *CC._clone(gold.inputs)),
+        lambda: fn(r_b, b.dctx(), *CC._clone(b_inputs)),
+        outs["golden"],
+    )
+    return ok and det
 
 
 SWAP_STEP_DEFAULTS = {k: v for k, v in defaults.get("thresholds").items() if k.startswith("swap_")}  # defaults.yaml
