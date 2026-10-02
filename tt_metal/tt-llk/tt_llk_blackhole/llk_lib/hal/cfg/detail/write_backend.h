@@ -223,7 +223,7 @@ inline __attribute__((always_inline)) void accumulate_write_data(std::array<std:
 {
     if constexpr (is_field_assignment_v<Operation> && !is_constant_field_assignment_v<Operation> && Plan.groups[Plan.group_of[Index]].count > 1)
     {
-        data[Plan.group_of[Index]] |= encode(operation);
+        data[Plan.group_of[Index]] |= encode<Plan.groups[Plan.group_of[Index]].mask>(operation);
     }
 }
 
