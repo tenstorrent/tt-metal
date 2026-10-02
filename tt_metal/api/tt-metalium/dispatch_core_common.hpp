@@ -7,7 +7,6 @@
 #include <optional>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/core_coord.hpp>
 
 namespace tt::tt_metal {
 
@@ -17,11 +16,11 @@ enum class DispatchCoreAxis { ROW, COL, COUNT };
 
 class DispatchCoreConfig {
 private:
-    DispatchCoreType type_;
+    DispatchCoreType type_ = DispatchCoreType::WORKER;
     std::optional<DispatchCoreAxis> axis_;
 
 public:
-    DispatchCoreConfig() : type_(DispatchCoreType::WORKER) {}
+    DispatchCoreConfig() = default;
 
     DispatchCoreConfig(DispatchCoreType type) : type_(type) {}
 
