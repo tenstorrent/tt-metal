@@ -301,7 +301,7 @@ void D2HLeg::retire(uint32_t core, uint32_t pages) {
     for (uint32_t i = 0; i < pages; ++i) {
         auto* const t = reinterpret_cast<FrameTrailer*>(
             im.core[core].fifo + disarm_off + im.page_size - kFrameTrailerBytes);
-        __atomic_store_n(&t->guard, UINT64_C(0), __ATOMIC_RELEASE);
+        std::atomic_ref<uint64_t>(t->guard).store(UINT64_C(0), std::memory_order_release);
         disarm_off = static_cast<uint32_t>((disarm_off + im.page_size) % im.fifo_bytes);
     }
 
