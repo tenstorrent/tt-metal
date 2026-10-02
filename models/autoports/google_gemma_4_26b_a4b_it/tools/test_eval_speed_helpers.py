@@ -15,11 +15,36 @@ import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
+from measure_context_dedup import canonical, common_prefix_blocks
 from probe_context_dedup import compact
 from probe_loop_recovery import wall_deadline
 from probe_native_eval_action import request_messages
 from replay_eval_requests import post
 from summarize_swe_suite import completed_response_counters, counter_delta
+
+
+class OfflineContextTests(unittest.TestCase):
+    def test_canonical_preserves_reasoning_and_does_not_mutate_history(self):
+        history = [
+            {
+                "role": "assistant",
+                "content": "answer",
+                "reasoning": "plan",
+                "tool_calls": [{"function": {"name": "bash", "arguments": '{"command":"ls"}'}}],
+            }
+        ]
+        saved = copy.deepcopy(history)
+        converted = canonical(history)
+        self.assertEqual(history, saved)
+        self.assertEqual(converted[0]["reasoning"], "plan")
+        self.assertEqual(converted[0]["content"], [{"type": "text", "text": "answer"}])
+        self.assertEqual(converted[0]["tool_calls"][0]["function"]["arguments"], {"command": "ls"})
+
+    def test_block_prefix_requires_matches_and_one_uncached_token(self):
+        self.assertEqual(common_prefix_blocks([], [1] * 100), 0)
+        self.assertEqual(common_prefix_blocks([1] * 64, [1] * 64), 32)
+        self.assertEqual(common_prefix_blocks([1] * 64, [1] * 65), 64)
+        self.assertEqual(common_prefix_blocks([1] * 40 + [2], [1] * 100), 32)
 
 
 class PrefillPrecisionTests(unittest.TestCase):
