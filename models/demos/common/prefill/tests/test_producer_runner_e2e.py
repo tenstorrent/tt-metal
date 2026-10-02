@@ -433,6 +433,7 @@ def _running_runner(tag: str, sc: dict, **extra):
     _cleanup_ipc()  # a stale table/descriptor from a prior scenario would make the readiness poll pass early
     env = _scenario_env(
         sc,
+        PREFILL_ENABLE_MIGRATION="0",
         PREFILL_LAYER_ACK_D2H=sc.get("env", {}).get("PREFILL_LAYER_ACK_D2H", "1"),
         **extra,
     )

@@ -871,7 +871,8 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         logger.warning(
             f"[migration] rank {rank}: {type(runtime).__name__} reported no KV cache stage, so there is "
             "no cache layout to describe and no chunk table is built. A hybrid stack does this when a "
-            "rank owns no KV-writing layer; migration of this rank's cache is not possible."
+            "rank owns no KV-writing layer, and GPT-OSS does it for a bounded sliding cache; migration of "
+            "this rank's cache is not possible."
         )
     elif is_first_rank:
         table_path = runtime.build_kv_chunk_table(
