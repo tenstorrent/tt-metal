@@ -340,7 +340,7 @@ models:
   agentic_research_tier3:
     bh_quietbox_2: 102
   merge_gate:
-    wh_galaxy_merge_gate: 5
+    wh_galaxy: 5
   sanity:
     wh_galaxy_perf: 8
     bh_p150b_civ2_viommu: 110
