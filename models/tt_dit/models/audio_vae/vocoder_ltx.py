@@ -30,7 +30,7 @@ from ...layers.audio_ops import (
     partition_channel,
 )
 from ...layers.audio_resample import Activation1d
-from ...layers.module import Module, ModuleList
+from ...layers.module import Module, ModuleList, release_device_cache
 from ...parallel.config import ParallelFactor
 from ...parallel.manager import CCLManager
 from ...utils.tensor import local_device_to_torch
@@ -359,6 +359,11 @@ class Vocoder(Module):
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         pass
+
+    def deallocate_weights(self) -> None:
+        super().deallocate_weights()
+        # Eviction must take the lazily cached device constants with the weights (see `release_device_cache`).
+        release_device_cache(self._tpad_mask_cache)
 
     def forward(self, mel_spec: torch.Tensor) -> torch.Tensor:
         """``mel_spec``: ``(B, 2, T_frames, mel_bins)`` stereo or

@@ -55,6 +55,37 @@ class _LoadProgress:
             logger.info(f"{self._what}: {self._done}/{self._total} tensors ({pct:.0f}%), {elapsed:.0f}s")
 
 
+def release_device_cache(cache: dict) -> None:
+    """Free the device tensors a module's lazy per-shape cache holds and drop those entries.
+
+    `Module.deallocate_weights` frees parameters only; a module that also memoises device
+    constants (pad blocks, masks, filter taps) keyed by input shape would otherwise keep them
+    resident after its eviction, for the life of the process. Entries without a device tensor
+    (compute configs, recorded op choices) are kept: they cost nothing and are expensive to redo.
+    """
+
+    def has_device_tensor(value) -> bool:
+        if isinstance(value, ttnn.Tensor):
+            try:
+                return value.device() is not None
+            except Exception:  # noqa: BLE001 - a dead tensor is not on device
+                return False
+        if isinstance(value, (list, tuple)):
+            return any(has_device_tensor(v) for v in value)
+        return False
+
+    def free(value) -> None:
+        if isinstance(value, ttnn.Tensor):
+            if has_device_tensor(value) and value.is_allocated():
+                ttnn.deallocate(value)
+        elif isinstance(value, (list, tuple)):
+            for v in value:
+                free(v)
+
+    for key in [k for k, v in cache.items() if has_device_tensor(v)]:
+        free(cache.pop(key))
+
+
 class Module(ABC):
     def __init__(self) -> None:
         self._children = {}
