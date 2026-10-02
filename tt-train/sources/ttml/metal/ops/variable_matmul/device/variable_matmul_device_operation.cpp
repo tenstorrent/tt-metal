@@ -308,8 +308,10 @@ ttnn::Tensor ttml_variable_matmul(
     uint32_t offsets_start_index,
     uint32_t expected_M_tiles) {
     using OperationType = ttml::metal::ops::variable_matmul::device::VariableMatmulDeviceOperation;
+    auto* input_device = input_tensor.device();
+    TT_FATAL(input_device != nullptr, "variable_matmul activation must be an allocated device tensor");
     auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor.device()->arch(),
+        input_device->arch(),
         compute_kernel_config,
         tt::tt_metal::MathFidelity::HiFi4,
         false /*approx_mode*/,

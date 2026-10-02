@@ -4,6 +4,8 @@
 
 #include <gtest/gtest.h>
 
+#include <string_view>
+
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
@@ -97,7 +99,49 @@ const VariableMatmulConfig kConfig{
     .compute_with_storage_grid_size = {10, 10},
 };
 
+template <typename Operation>
+void expect_allocated_device_error(Operation&& operation) {
+    try {
+        operation();
+        ADD_FAILURE() << "Expected variable_matmul to reject a host activation";
+    } catch (const std::exception& error) {
+        EXPECT_NE(
+            std::string_view(error.what()).find("activation must be an allocated device tensor"),
+            std::string_view::npos)
+            << error.what();
+    }
+}
+
 }  // namespace
+
+TEST(VariableMatmulHostValidationTest, RejectsHostActivationBeforeDeviceAccess) {
+    const ttnn::Shape matrix_shape({1U, 1U, 32U, 32U});
+    const auto matrix_spec = tt::tt_metal::TensorSpec(
+        matrix_shape, tt::tt_metal::TensorLayout(ttnn::DataType::BFLOAT16, ttnn::Layout::TILE, ttnn::MemoryConfig{}));
+    const auto offsets_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape({2U}),
+        tt::tt_metal::TensorLayout(ttnn::DataType::UINT32, ttnn::Layout::ROW_MAJOR, ttnn::MemoryConfig{}));
+
+    const auto input = ttnn::Tensor::from_vector(std::vector<float>(matrix_shape.volume()), matrix_spec);
+    const auto weight = ttnn::Tensor::from_vector(std::vector<float>(matrix_shape.volume()), matrix_spec);
+    const auto output = ttnn::Tensor::from_vector(std::vector<float>(matrix_shape.volume()), matrix_spec);
+    const auto offsets = ttnn::Tensor::from_vector(std::vector<uint32_t>{0U, 32U}, offsets_spec);
+    const VariableMatmulConfig config{
+        .M_block_size = 1,
+        .K_block_size = 1,
+        .N_block_size = 1,
+        .subblock_h = 1,
+        .subblock_w = 1,
+        .compute_with_storage_grid_size = {1, 1},
+    };
+
+    ASSERT_EQ(input.storage_type(), ttnn::StorageType::HOST);
+    ASSERT_EQ(input.device(), nullptr);
+
+    expect_allocated_device_error(
+        [&] { ttml::metal::variable_matmul_into_rows(input, weight, config, offsets, output); });
+    expect_allocated_device_error([&] { ttml::metal::variable_matmul_k_sliced(input, weight, config, offsets); });
+}
 
 class VariableMatmulTest : public ::testing::Test {
 protected:
