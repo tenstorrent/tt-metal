@@ -51,6 +51,10 @@ inline constexpr bool kGdnTinvSfpu = true;
 inline constexpr bool kGdnTinvSfpu = false;
 #endif
 
+#if defined(GDN_TINV_FPU)
+#include "chunk_gdn_tinv_fpu.hpp"
+#endif
+
 inline void WAIT(uint32_t cb, uint32_t n) { CircularBuffer(cb).wait_front(n); }
 // Ct is a template parameter of prep_chunk, so every per-tile loop in the helpers below unrolls fully; at Ct == 2
 // that puts the prep program over the 70,656 B kernel-config buffer. The Ct == 2 build passes the tile count
