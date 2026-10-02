@@ -194,7 +194,7 @@ verify:
 # benchmarks land; the text below is the pre-benchmark draft (placeholders in {{...}}).
 card:
   description: |
-    [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) served with vLLM on two Tenstorrent p150a cards linked by ethernet (2 Blackhole chips, 32 GB each). One image, three profiles: `tp2` (default, tensor-parallel over both chips), `p1d1` (one chip prefills, the other decodes), `tp2-dflash2` (`tp2` + [DFlash2](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2) speculative decoding). Sibling packages for the 4-chip P300x2: [qwen3.8-27b-p300x2](https://huggingface.co/changh95/qwen3.8-27b-p300x2), [qwen3.8-27b-dflash2-p300x2](https://huggingface.co/changh95/qwen3.8-27b-dflash2-p300x2).
+    [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) served with vLLM on two Tenstorrent p150a cards linked by ethernet (2 Blackhole chips, 32 GB each). One image, three profiles: `tp2` (default, tensor-parallel over both chips), `p1d1` (one chip prefills, the other decodes), `tp2-dflash2` (`tp2` + [DFlash2](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2) speculative decoding). Sibling package for the 4-chip P300x2: [qwen3.8-27b-p300x2](https://huggingface.co/changh95/qwen3.8-27b-p300x2) (profiles `plain`, `batch8-dflash2`, `single-user-dflash2`).
   quickstart: |
     ### Run
 
@@ -217,30 +217,30 @@ card:
 
     | profile | users | context | KV pool | 1 user tok/s | TTFT 128 / 8k / 32k tokens | pick it for |
     |---|---|---|---|---|---|---|
-    | `tp2` (default) | 32 | 64K | 622K tokens | 17.1 | 0.3 s / 1.9 s / 8.2 s | speed, long prompts, many users, all sampling options |
+    | `tp2` (default) | 32 | 64K | 622K tokens | 17.5 | 0.2 s / 1.8 s / 6.6 s | speed, long prompts, many users, all sampling options |
     | `p1d1` | 8 | 64K | 164K tokens | 13.7 | 0.3 s / 3.8 s / 16 s | steady per-token latency while long prompts keep arriving (decode never pauses for a prefill) |
-    | `tp2-dflash2` | 4 | 64K | 262K tokens | 40.8 (58 on code) | 0.15 s / 2.1 s / 9.2 s | 1-4 greedy users, code, prompts under ~16k tokens |
+    | `tp2-dflash2` | 4 | 64K | 262K tokens | 41.9 | 0.15 s / 1.9 s / 6.8 s | 1-4 greedy users, code, prompts under ~16k tokens |
 
-    * `tp2` is 1.2x faster per user than `p1d1` at 1 user and has 3.8x the KV pool; `p1d1` keeps TPOT at 71-87 ms at 1-8 users across every prompt length, where `tp2` at 8 users degrades to 146-285 ms once prompts reach 16k-32k tokens. At 8 users on prompts up to 4k tokens `p1d1` is within 4-9% of `tp2`'s aggregate throughput.
-    * `tp2-dflash2` is lossless (greedy trajectory of `tp2` up to bf16 near-ties); its gain fades with prompt length (2.4x at 128 tokens, 1.6x at 8k, 1.2x at 32k) and grows with answer length (3.3-3.4x at 1k-token answers).
+    * `tp2` is 1.3x faster per user than `p1d1` at 1 user and has 3.8x the KV pool; `p1d1` keeps TPOT at 71-87 ms at 1-8 users across every prompt length, where `tp2` at 8 users degrades to 134-255 ms once prompts reach 16k-32k tokens. At 8 users on prompts up to 4k tokens `p1d1` delivers 84-90% of `tp2`'s aggregate throughput.
+    * `tp2-dflash2` is lossless (greedy trajectory of `tp2` up to bf16 near-ties); its gain fades with prompt length (2.4x at 128 tokens, 1.9x at 8k, 1.4x at 32k) and grows with answer length (3.1-3.2x at 1k-token answers).
 
     ### Performance
 
-    Method: tt-inference-server `--workflow benchmarks` grid (random prompts of exactly ISL tokens, OSL output tokens, streaming). `t/s` = aggregate output tokens/s, `t/s/u` = per user (= OSL / mean end-to-end latency); TTFT and TPOT are means. Code: SPEED-Bench coding, 80 prompts, thinking off, temperature 0, 1 user. Measured on a P300x2 development box emulating the p150x2 (two chips on different cards over a 2-channel ethernet link), not on a p150a pair.
+    Method: tt-inference-server `--workflow benchmarks` grid (random prompts of exactly ISL tokens, OSL output tokens, streaming). `t/s` = aggregate output tokens/s, `t/s/u` = per user (= OSL / mean end-to-end latency); TTFT and TPOT are means. Measured on a P300x2 development box emulating the p150x2 (two chips on different cards over a 2-channel ethernet link), not on a p150a pair.
 
     #### `tp2`: throughput, t/s (t/s/u)
 
     | ISL / OSL | 1 user | 2 | 4 | 8 | 16 | 32 |
     |---|---|---|---|---|---|---|
-    | 128 / 128 | 17 (17.1) | 29 (14.7) | 54 (13.4) | 92 (11.4) | 143 (9.0) | 193 (6.0) |
-    | 1,024 / 128 | 17 (16.7) | 28 (14.1) | 50 (12.6) | 83 (10.4) | 123 (7.7) | 156 (4.9) |
-    | 2,048 / 128 | 16 (16.3) | 27 (13.7) | 48 (11.9) | 75 (9.3) | 107 (6.7) | 131 (4.1) |
-    | 4,096 / 128 | 15 (15.4) | 25 (12.4) | 41 (10.2) | 59 (7.4) | 78 (4.9) | 90 (2.8) |
-    | 8,192 / 128 | 14 (13.9) | 21 (10.5) | 31 (7.8) | 41 (5.1) | 50 (3.1) | 54 (1.7) |
-    | 16,384 / 128 | 11 (11.4) | 16 (7.9) | 21 (5.2) | 25 (3.1) | 28 (1.8) | 29 (0.9) |
-    | 32,768 / 128 | 8 (8.2) | 10 (5.0) | 12 (3.0) | 13 (1.7) | 14 (0.9) | 14 (0.8) @18 |
-    | 128 / 1,024 | 18 (17.6) | 33 (16.6) | 65 (16.1) | 123 (15.4) | 218 (13.6) | 361 (11.3) |
-    | 8,192 / 1,024 | 17 (16.9) | 31 (15.6) | 57 (14.3) | 98 (12.2) | 153 (9.6) | 210 (6.6) |
+    | 128 / 128 | 17 (17.5) | 33 (16.3) | 58 (14.4) | 100 (12.5) | 162 (10.1) | 245 (7.7) |
+    | 1,024 / 128 | 17 (17.1) | 32 (15.8) | 54 (13.5) | 90 (11.2) | 138 (8.6) | 192 (6.0) |
+    | 2,048 / 128 | 17 (16.8) | 30 (15.2) | 52 (13.0) | 80 (10.0) | 118 (7.4) | 154 (4.8) |
+    | 4,096 / 128 | 16 (15.9) | 28 (13.8) | 45 (11.2) | 64 (8.0) | 84 (5.3) | 103 (3.2) |
+    | 8,192 / 128 | 14 (14.3) | 23 (11.6) | 35 (8.7) | 45 (5.6) | 54 (3.4) | 61 (1.9) |
+    | 16,384 / 128 | 12 (12.3) | 18 (9.0) | 24 (6.0) | 28 (3.6) | 32 (2.0) | 34 (1.1) |
+    | 32,768 / 128 | 9 (9.2) | 12 (6.0) | 14 (3.5) | 15 (1.9) | 16 (1.0) | 16 (0.9) @18 |
+    | 128 / 1,024 | 18 (17.7) | 34 (17.1) | 62 (15.6) | 116 (14.5) | 205 (12.8) | 368 (11.5) |
+    | 8,192 / 1,024 | 17 (17.1) | 32 (16.0) | 59 (14.8) | 97 (12.1) | 151 (9.4) | 219 (6.8) |
 
     `@18`: the KV pool seats 18 prompts of that length.
 
@@ -248,11 +248,11 @@ card:
 
     | ISL / OSL | 1 user | 8 users | 32 users |
     |---|---|---|---|
-    | 128 / 128 | 316 / 57 | 2,394 / 69 | 10,226 / 87 |
-    | 2,048 / 128 | 610 / 57 | 4,518 / 72 | 19,498 / 93 |
-    | 8,192 / 128 | 1,941 / 57 | 14,217 / 84 | 39,474 / 285 |
-    | 32,768 / 128 | 8,243 / 58 | 40,999 / 285 | - |
-    | 128 / 1,024 | 317 / 57 | 2,379 / 63 | 10,322 / 79 |
+    | 128 / 128 | 197 / 56 | 1,436 / 70 | 6,272 / 82 |
+    | 2,048 / 128 | 501 / 56 | 3,600 / 73 | 15,447 / 88 |
+    | 8,192 / 128 | 1,778 / 57 | 12,352 / 81 | 34,181 / 260 |
+    | 32,768 / 128 | 6,631 / 58 | 34,573 / 255 | - |
+    | 128 / 1,024 | 197 / 56 | 1,444 / 68 | 6,273 / 81 |
 
     #### `p1d1`: throughput, t/s (t/s/u)
 
@@ -282,15 +282,14 @@ card:
 
     | ISL / OSL | `tp2` t/s/u | `tp2-dflash2` t/s/u | speed-up | `tp2-dflash2` TTFT / TPOT ms |
     |---|---|---|---|---|
-    | 128 / 128 | 17.1 | 40.8 | 2.39x | 152 / 24 |
-    | 2,048 / 128 | 16.3 | 33.6 | 2.06x | 511 / 26 |
-    | 8,192 / 128 | 13.9 | 22.6 | 1.63x | 2,060 / 28 |
-    | 32,768 / 128 | 8.2 | 9.6 | 1.17x | 9,224 / 32 |
-    | 128 / 1,024 | 17.6 | 58.8 | 3.34x | 154 / 17 |
-    | 8,192 / 1,024 | 16.9 | 56.7 | 3.36x | 2,060 / 16 |
-    | code (SPEED-Bench, EOS-terminated) | 16.2 | 58.4 | 3.6x | 194 / 13 |
+    | 128 / 128 | 17.5 | 41.9 | 2.39x | 149 / 23 |
+    | 2,048 / 128 | 16.8 | 33.7 | 2.01x | 517 / 26 |
+    | 8,192 / 128 | 14.3 | 26.6 | 1.86x | 1,874 / 23 |
+    | 32,768 / 128 | 9.2 | 12.7 | 1.38x | 6,778 / 26 |
+    | 128 / 1,024 | 17.7 | 56.8 | 3.21x | 149 / 18 |
+    | 8,192 / 1,024 | 17.1 | 52.6 | 3.08x | 1,767 / 17 |
 
-    * 4 users: 117 vs 54 t/s aggregate at 128/128 (2.2x), 163 vs 65 at 128/1,024 (2.5x), 42 vs 31 at 8k/128 (1.3x); no gain at 32k prompts with 4 users.
+    * 4 users: 113 vs 58 t/s aggregate at 128/128 (1.9x), 151 vs 62 at 128/1,024 (2.4x), 47 vs 35 at 8k/128 (1.3x); no gain at 32k prompts with 4 users.
 
     ### Notes
 
