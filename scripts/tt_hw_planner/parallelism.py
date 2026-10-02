@@ -20,7 +20,16 @@ Sharding rules:
   Data Parallelism (DP): not modelled (replicates every parameter; doesn't
     save memory).
 
-The total chip count is tp × pp × ep × dp.  Search enumerates only
+  Sequence Parallelism (SP): one REQUEST'S TOKENS are cut into equal,
+    tile-aligned slices, one slice per chip group.  The groups replicate
+    weights like DP replicas but each works on its own slice of the same
+    request, exchanging only attention K/V -- so KV cache and activations
+    divide by sp while weights do not.  It takes the chips DP would leave
+    idle when a run serves fewer concurrent requests than it has spare
+    chips; the rule is agent/tp.py:split_spare_chips, and a run that states
+    no workload keeps sp=1.
+
+The total chip count is tp × pp × ep × dp × sp.  Search enumerates only
 combinations whose product equals the mesh's chip count.
 
 Empirical "replicated weights fraction" (_REPLICATED_FRAC) covers
@@ -52,14 +61,15 @@ class ParallelConfig:
     pp: int = 1
     ep: int = 1
     dp: int = 1
+    sp: int = 1
 
     @property
     def chips(self) -> int:
-        return self.tp * self.pp * self.ep * self.dp
+        return self.tp * self.pp * self.ep * self.dp * self.sp
 
     @property
     def label(self) -> str:
-        if self.pp == self.ep == self.dp == 1:
+        if self.pp == self.ep == self.dp == self.sp == 1:
             return f"TP={self.tp}"
         parts = [f"TP={self.tp}"]
         if self.pp != 1:
@@ -68,7 +78,18 @@ class ParallelConfig:
             parts.append(f"EP={self.ep}")
         if self.dp != 1:
             parts.append(f"DP={self.dp}")
+        if self.sp != 1:
+            parts.append(f"SP={self.sp}")
         return ",".join(parts)
+
+
+def split_label(tp: int, dp: int, sp: int = 1) -> str:
+    """The one spelling of a split the operator-facing lines share ("TP=2 x DP=2", "TP=1 x DP=1 x SP=4").
+    SP is named only when it is in play, so every line that never saw SP reads exactly as before."""
+    out = f"TP={int(tp)} x DP={int(dp)}"
+    if int(sp or 1) > 1:
+        out += f" x SP={int(sp)}"
+    return out
 
 
 def _divisors(n: int):
@@ -112,8 +133,26 @@ def enumerate_parallelism(chips: int, explore_pp: bool = False) -> List[Parallel
     return out
 
 
-def select_parallelism(chips: int, kernel_report) -> ParallelConfig:
-    """Turn per-TP kernel viability into a chosen TP x DP split for `chips`.
+def _fill_spare(tp: int, spare: int, requests, seq_len) -> ParallelConfig:
+    """DP x SP for the `spare` chips a TP group leaves over.
+
+    The rule lives in ONE place, the engine's agent/tp.py:split_spare_chips, because the optimize route
+    applies the same rule to the same two facts. Without a stated workload every spare chip is a replica,
+    exactly as before; the same holds when the engine package is not importable (a tree carrying only
+    this planner), so SP can only ever be chosen where the engine that runs it is present."""
+    dp, sp = spare, 1
+    if requests is not None and seq_len is not None:
+        try:
+            from models.experimental.perf_automation.agent.tp import split_spare_chips
+        except ImportError:
+            split_spare_chips = None
+        if split_spare_chips is not None:
+            dp, sp = split_spare_chips(spare, requests, seq_len)
+    return ParallelConfig(tp=tp, dp=dp, sp=sp)
+
+
+def select_parallelism(chips: int, kernel_report, *, requests=None, seq_len=None) -> ParallelConfig:
+    """Turn per-TP kernel viability into a chosen TP x DP x SP split for `chips`.
 
     The tool computes viability per TP degree (KernelReport.has_blockers(tp) over tp_grid) but never
     acted on it — enumerate_parallelism only ever fills the mesh with TP and DP stays 1. This selector
@@ -121,10 +160,12 @@ def select_parallelism(chips: int, kernel_report) -> ParallelConfig:
     bring-up loop):
 
       tp = largest degree in the report's grid that divides `chips` AND has no kernel blockers
-      dp = chips // tp   (data-parallel replicas fill the remaining chips)
+      the spare chips (chips // tp) become replicas (dp), or -- when the run states fewer concurrent
+      `requests` than spare chips and a `seq_len` that cuts into tile-aligned slices -- groups that
+      split one request's tokens (sp), via _fill_spare. Unstated workload: dp = chips // tp as before.
 
-    Falls back to TP=1 x DP=chips if no larger degree is viable (TP=1 always divides and is the
-    safe floor). Returns a ParallelConfig with tp and dp set."""
+    Falls back to TP=1 if no larger degree is viable (TP=1 always divides and is the safe floor).
+    Returns a ParallelConfig with tp, dp and sp set; tp * dp * sp == chips."""
     if chips <= 1:
         return ParallelConfig(tp=1, dp=1)
     grid = list(getattr(kernel_report, "tp_grid", None) or [1])
@@ -135,15 +176,16 @@ def select_parallelism(chips: int, kernel_report) -> ParallelConfig:
         except Exception:
             blocked = True
         if not blocked:
-            return ParallelConfig(tp=tp, dp=chips // tp)
-    return ParallelConfig(tp=1, dp=chips)
+            return _fill_spare(tp, chips // tp, requests, seq_len)
+    return _fill_spare(1, chips, requests, seq_len)
 
 
-def plan_parallelism(model_id: str, chips: int):
+def plan_parallelism(model_id: str, chips: int, *, requests=None, seq_len=None):
     """Shared topology planner for BOTH emit-e2e and optimize: probe the model, evaluate per-TP kernel
     viability, and return the select_parallelism ParallelConfig for `chips`. Returns None when chips<=1
     or the model cannot be probed (caller then runs single-chip / a 1D default). Engine-neutral: the
-    only place either path decides a TP x DP split, so both stay consistent."""
+    only place either path decides a TP x DP x SP split, so both stay consistent. `requests` and
+    `seq_len` are the workload the run states (see select_parallelism); unstated keeps sp=1."""
     if not model_id or not chips or chips <= 1:
         return None
     try:
@@ -153,7 +195,7 @@ def plan_parallelism(model_id: str, chips: int):
         if not getattr(probe, "raw_config", None):
             return None
         kr = evaluate_kernels(probe.raw_config, tp_grid=None)
-        return select_parallelism(chips, kr)
+        return select_parallelism(chips, kr, requests=requests, seq_len=seq_len)
     except Exception:  # noqa: BLE001
         return None
 
@@ -188,10 +230,12 @@ def shard(
     model: MemoryModel, dtype: str, batch: int, seq: int, kv_dtype_bytes: float, pcfg: ParallelConfig
 ) -> ShardedMemory:
     """
-    Apply (TP, PP) sharding to a MemoryModel and return per-chip byte counts.
+    Apply (TP, PP, SP) sharding to a MemoryModel and return per-chip byte counts.
 
     Model-level sizes are first split along the layer axis by PP, then the
-    remaining per-stage sizes are split along the hidden axis by TP.
+    remaining per-stage sizes are split along the hidden axis by TP.  SP cuts
+    the sequence: each group holds its slice of the KV cache and activations
+    while the weights stay whole on every group (sp=1 changes nothing).
     """
     full_weights = model.weights_bytes(dtype)
     full_kv = model.kv_cache_bytes(batch, seq, kv_dtype_bytes)
@@ -199,6 +243,7 @@ def shard(
 
     tp = max(pcfg.tp, 1)
     pp = max(pcfg.pp, 1)
+    sp = max(getattr(pcfg, "sp", 1), 1)
     arch = model.arch
 
     stage_weights = full_weights // pp
@@ -210,9 +255,9 @@ def shard(
     per_chip_w = replicated_w + sharded_w
 
     effective_kv_shards = min(tp, max(arch.num_key_value_heads, 1))
-    per_chip_kv = stage_kv // effective_kv_shards
+    per_chip_kv = stage_kv // effective_kv_shards // sp
 
-    per_chip_act = stage_act // tp
+    per_chip_act = stage_act // tp // sp
 
     return ShardedMemory(
         weights_bytes=per_chip_w,
@@ -221,18 +266,22 @@ def shard(
     )
 
 
-def write_parallelism_manifest(demo_dir, *, chips: int, tp: int, dp: int) -> Optional[Path]:
+def write_parallelism_manifest(demo_dir, *, chips: int, tp: int, dp: int, sp: int = 1) -> Optional[Path]:
     """Persist the TOPOLOGY bring-up graduated at, so emit-e2e can hard-assert consistency instead of
-    silently recomputing from its own --mesh. Records the decidable degrees only (chips/tp/dp + the
-    MeshShape(dp,tp) it implies); the per-component SCHEME stays in the graduated stub code for the
-    LLM to read. Best-effort: returns the path on success, None on any write failure."""
+    silently recomputing from its own --mesh. Records the decidable degrees only (chips/tp/dp, sp when
+    it is in play, + the MeshShape(dp*sp, tp) it implies: the rows carry the replicas AND the groups that
+    split one request's tokens); the per-component SCHEME stays in the graduated stub code for the LLM
+    to read. A manifest written without SP is byte-identical to before. Best-effort: returns the path
+    on success, None on any write failure."""
     path = Path(demo_dir) / PARALLELISM_MANIFEST
     data = {
         "chips": int(chips),
         "tp": int(tp),
         "dp": int(dp),
-        "mesh": [int(dp), int(tp)],
+        "mesh": [int(dp) * int(sp or 1), int(tp)],
     }
+    if int(sp or 1) != 1:
+        data["sp"] = int(sp)
     try:
         path.write_text(json.dumps(data, indent=2) + "\n")
         return path

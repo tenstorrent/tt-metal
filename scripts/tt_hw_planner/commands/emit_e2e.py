@@ -2473,7 +2473,12 @@ def _emit_e2e_phase_a(args) -> int:
         # (a tp<=1 manifest, or no manifest, is not enforced — see _topology_mismatch)
     _parallel_note = _parallelism_prompt_block(_pc)
     if _pc is not None and _pc.chips > 1:
-        print(f"  chip placement: {_pc.chips}-chip mesh → TP={_pc.tp} x DP={_pc.dp} (kernel-viability selected)")
+        from ..parallelism import split_label
+
+        print(
+            f"  chip placement: {_pc.chips}-chip mesh → {split_label(_pc.tp, _pc.dp, getattr(_pc, 'sp', 1))} "
+            "(kernel-viability selected)"
+        )
         print("  builder will open the mesh at this split; tt-metal auto-discovers the fabric topology.")
         if _pc.tp > 1:
             _sharded = _source_phase2_shard_stubs(demo_dir)
@@ -2830,40 +2835,72 @@ def _topology_mismatch(manifest, pc, given_chips: int):
     per-component SCHEME compatibility is evaluated by the builder LLM, not here."""
     if not manifest:
         return None  # no recorded topology (older bring-up) — don't block, fall through to current behavior
+    from ..parallelism import split_label
+
     g_chips = int(manifest.get("chips", 1))
     g_tp = int(manifest.get("tp", 1))
     g_dp = int(manifest.get("dp", 1))
+    g_sp = int(manifest.get("sp", 1) or 1)  # absent in every manifest written before SP existed
     if g_tp <= 1:
         return None  # bring-up graduated single-device / replicate-only — nothing to enforce
-    hint = f"Pass --mesh {g_dp}x{g_tp} (or --mesh {g_chips}) to match, or re-run bring-up at the new mesh."
+    graduated = split_label(g_tp, g_dp, g_sp)
+    hint = f"Pass --mesh {g_dp * g_sp}x{g_tp} (or --mesh {g_chips}) to match, or re-run bring-up at the new mesh."
     if pc is None:
         return (
-            f"bring-up graduated TP={g_tp} x DP={g_dp} on {g_chips} chips, but --mesh implies "
+            f"bring-up graduated {graduated} on {g_chips} chips, but --mesh implies "
             f"{given_chips} chip(s) (single-device). {hint}"
         )
-    if pc.chips != g_chips or pc.tp != g_tp or pc.dp != g_dp:
+    pc_sp = int(getattr(pc, "sp", 1) or 1)
+    if pc.chips != g_chips or pc.tp != g_tp or pc.dp != g_dp or pc_sp != g_sp:
         return (
-            f"topology mismatch — bring-up graduated TP={g_tp} x DP={g_dp} on {g_chips} chips, but "
-            f"--mesh implies TP={pc.tp} x DP={pc.dp} on {pc.chips} chips. {hint}"
+            f"topology mismatch — bring-up graduated {graduated} on {g_chips} chips, but "
+            f"--mesh implies {split_label(pc.tp, pc.dp, pc_sp)} on {pc.chips} chips. {hint}"
         )
     return None
+
+
+def _seq_parallel_prompt_bullet(pc, rows: int) -> str:
+    """The SEQUENCE-PARALLEL placement rule, only when the split has token groups (pc.sp > 1)."""
+    sp = int(getattr(pc, "sp", 1) or 1)
+    if sp <= 1:
+        return ""
+    return f"""  - SEQUENCE-PARALLEL groups (SP={sp}, inside each replica): the {rows} rows are DP={pc.dp} replica(s) x
+    SP={sp} token groups. Read the degree with `resolve_seq_parallel()` from
+    `models.experimental.perf_automation.agent.perf_adapter` (the tool exports it beside the mesh pair),
+    never from the mesh shape alone, and state it on the pipeline as `self.sp` so the scorecard prices
+    one group's work. Cut each request's TOKEN axis into {sp} equal, tile-aligned slices, one per group
+    row: move token-major tensors on-device with `ttnn.ShardTensor2dMesh(mesh_device, dims=(<token_dim>,
+    <TP shard dim or None>), mesh_shape=({rows}, {pc.tp}))` (None replicates along that mesh axis).
+    Every per-token op (norms, projections, MLP, RoPE) then runs on its slice unchanged, with positions
+    offset by the slice's start. In attention each group needs every key and value: gather K and V along
+    the row axis (`ttnn.all_gather(k, dim=<token_dim>, cluster_axis=0)`, likewise V) before the scores,
+    mask each group's queries causally against the full key range, and keep the query slice local.
+    Reassemble token-major outputs along the token axis (the matching 2-D composer, or on the host).
+    A single-token step has nothing to cut: run it exactly as today. Declare `<stage>_trace_seq_split()`
+    (= {sp}) on every stage that cuts tokens; omit it on stages that do not.
+"""
 
 
 def _parallelism_prompt_block(pc) -> str:
     if pc is None or pc.chips <= 1:
         return ""
+    from ..parallelism import split_label
+
+    sp = int(getattr(pc, "sp", 1) or 1)
+    rows = pc.dp * sp
     return f"""
 
-================ CHIP PLACEMENT — {pc.chips}-CHIP MESH (TP={pc.tp} x DP={pc.dp}) ================
+================ CHIP PLACEMENT — {pc.chips}-CHIP MESH ({split_label(pc.tp, pc.dp, sp)}) ================
 The tool has selected this parallelism split for `{pc.chips}` chips by checking per-TP kernel
 viability (largest kernel-viable TP degree that divides the mesh; the remaining chips become
-data-parallel replicas). Place the pipeline on the mesh accordingly:
+data-parallel replicas, or groups that split one request's tokens when the run serves fewer requests
+than it has spare chips). Place the pipeline on the mesh accordingly:
 
   - BEFORE opening the mesh, enable the inter-chip fabric: `ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)`.
     Without this, any CCL (all_gather / all_reduce) raises `TT_FATAL ... fabric_context_ != nullptr`.
     tt-metal AUTO-DISCOVERS the cluster topology, so do NOT set TT_MESH_GRAPH_DESC_PATH for any mesh size.
-  - Open a mesh device of {pc.chips} chips via `ttnn.open_mesh_device(ttnn.MeshShape({pc.dp}, {pc.tp}))`
-    (rows = DP={pc.dp}, cols = TP={pc.tp}); close it at the end. If only a single device is available
+  - Open a mesh device of {pc.chips} chips via `ttnn.open_mesh_device(ttnn.MeshShape({rows}, {pc.tp}))`
+    (rows = DP={pc.dp}{f" x SP={sp}" if sp > 1 else ""}, cols = TP={pc.tp}); close it at the end. If only a single device is available
     at runtime, fall back to it and note that in the run output.
   - DATA-PARALLEL axis (DP={pc.dp}): replicate the model across the {pc.dp} replica rows using
     `mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)` when moving tensors on-device, and compose
@@ -2873,7 +2910,7 @@ data-parallel replicas). Place the pipeline on the mesh accordingly:
     sharding, shard the sharded weights along the TP axis with `ttnn.ShardTensorToMesh(mesh_device, dim=<shard_dim>)`
     on the {pc.tp} TP columns; keep embeddings / norms / lm_head replicated. If a module does not
     expose a shard dim, keep it replicated rather than guessing a split.
-  - The e2e PCC gate is unchanged: parity is still measured against the same HF golden. Placing the
+{_seq_parallel_prompt_bullet(pc, rows)}  - The e2e PCC gate is unchanged: parity is still measured against the same HF golden. Placing the
     pipeline on more chips must NOT change the numerical result — only where it runs.
 """
 
@@ -3038,6 +3075,11 @@ For EACH stage expose, ON THE PIPELINE object, the generic contract the perf eng
     sharded over a DP mesh axis): return that number of groups. The compute ceiling is per chip, so
     an unstated split prices the stage as if one group did the whole batch. Omit it for a stage that
     runs whole on every group (replicated) or on a single group.
+  <stage>_trace_seq_split(): ZERO-ARG, OPTIONAL. Only for a stage that cuts ONE REQUEST'S TOKENS across
+    chip groups running at the same time (sequence parallelism: each group gets tokens/seq_split of the
+    same request and exchanges attention K/V): return that number of groups. The ceilings price one
+    group's tokens, so an unstated split prices the stage as if one group ran the whole sequence. Omit
+    it for a stage that runs every token on every group, and for single-token steps.
 AR stages ALSO keep the decode contract (decode_prefill seeds resident self- AND, for a seq2seq
 decoder, cross-attn KV; decode_step reads them, never recomputes).
 

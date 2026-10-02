@@ -3280,6 +3280,7 @@ def _run_full_pipeline_ms():
     stage_isl = {}
     stage_modules: dict = {}  # {stage: module paths it runs}, from TRACE_STAGE_MODULES
     stage_split: dict = {}  # {stage: data-parallel groups sharing its items}, from TRACE_STAGE_SPLIT
+    stage_seq_split: dict = {}  # {stage: chip groups splitting one request's tokens}, from TRACE_STAGE_SEQ_SPLIT
     # {stage: items PER REQUEST}, the legacy marker's unit. Kept apart from stage_isl, which holds
     # the TOTAL a stage states for one call.
     stage_isl_per_request = {}
@@ -3294,6 +3295,7 @@ def _run_full_pipeline_ms():
     # guess: if the run reports no topology the scorecard prints 'unknown' rather than fabricating a mesh
     # (the old hardcoded 1x1 silently mislabelled a genuine multi-chip trace as single-chip).
     dp = tp = None
+    sp = None  # the marker's sequence-parallel degree; absent on a pipeline that states none
     shard = None
     batch = 1
     decode_path = prefill_path = "n/a"
@@ -3465,7 +3467,11 @@ def _run_full_pipeline_ms():
                         stage_modules[_mn] = _mv
                 except Exception:  # noqa: BLE001
                     pass
-            for _marker, _into in (("TRACE_STAGE_ITEMS[", stage_isl), ("TRACE_STAGE_SPLIT[", stage_split)):
+            for _marker, _into in (
+                ("TRACE_STAGE_ITEMS[", stage_isl),
+                ("TRACE_STAGE_SPLIT[", stage_split),
+                ("TRACE_STAGE_SEQ_SPLIT[", stage_seq_split),
+            ):
                 if _marker in line:
                     try:
                         _nm = line.split(_marker, 1)[1].split("]", 1)[0].strip()
@@ -3535,6 +3541,9 @@ def _run_full_pipeline_ms():
             m = _re.search(r"DP=(\d+)\s+TP=(\d+)", line)
             if m:
                 dp, tp = int(m.group(1)), int(m.group(2))
+                _msp = _re.search(r"\bSP=(\d+)", line)
+                if _msp:
+                    sp = int(_msp.group(1))
             if "shard_active=True" in line:
                 shard = True
             elif "shard_active=False" in line:
@@ -3573,13 +3582,17 @@ def _run_full_pipeline_ms():
         _tp_s = ("%d" % tp) if tp is not None else "unknown"
         _dp_s = ("%d" % dp) if dp is not None else "unknown"
         _shard_s = "unknown" if shard is None else str(shard)
+        # SP is named only when the run's marker stated a token split, so a scorecard that never saw one
+        # reads exactly as before and every reader of the TP=/DP= fields is untouched.
+        _sp_s = (" SP=%d" % sp) if (sp is not None and sp > 1) else ""
         sys.stderr.write(
-            "[full-pipeline-gate] PERF_SCORECARD mesh=%s TP=%s DP=%s shard=%s on_device=%s "
+            "[full-pipeline-gate] PERF_SCORECARD mesh=%s TP=%s DP=%s%s shard=%s on_device=%s "
             "ISL=%s OSL=%s batch=%d TTFT_ms=%s prefill_path=%s decode_ms=%s decode_path=%s TSU=%.2f TS=%.2f\n"
             % (
                 _mesh_s,
                 _tp_s,
                 _dp_s,
+                _sp_s,
                 _shard_s,
                 (dec is not None or pf is not None),
                 isl,
@@ -3633,6 +3646,7 @@ def _run_full_pipeline_ms():
             for _kind, _vals, _mode, _src in (
                 (_ledger().KIND_STAGE_TOKENS, stage_isl, "items", "trace_replay observed item count"),
                 (_ledger().KIND_STAGE_SPLIT, stage_split, "count", "trace_replay stated data-parallel split"),
+                (_ledger().KIND_STAGE_SEQ_SPLIT, stage_seq_split, "count", "trace_replay stated sequence split"),
             ):
                 for _tn, _tv in (_vals or {}).items():
                     if _tn and int(_tv or 0) > 0:

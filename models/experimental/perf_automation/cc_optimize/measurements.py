@@ -127,6 +127,11 @@ KIND_TP_DEGREE = "tp_degree"
 # The compute ceiling divides a stage's FLOPs by TP x this; pinned per stage for the same reason TP is.
 KIND_STAGE_SPLIT = "stage_split"
 
+# HOW MANY CHIP GROUPS SPLIT ONE REQUEST'S TOKENS in a stage (trace_replay: the pipeline's
+# <stage>_trace_seq_split). Divides a stage's per-token terms like the data-parallel split divides its
+# items; pinned per stage for the same reason.
+KIND_STAGE_SEQ_SPLIT = "stage_seq_split"
+
 PHASE_BEFORE = "before"
 PHASE_AFTER = "after"
 

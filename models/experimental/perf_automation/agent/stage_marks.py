@@ -298,13 +298,23 @@ def stage_module_paths(pipe) -> dict:
     return out
 
 
-def pipeline_tp(pipe) -> int:
-    """The tensor-parallel degree the pipeline says it runs at (stage_seams.TP_ATTR), or 0."""
+def _pipeline_degree(pipe, attr: str) -> int:
+    """A positive parallel degree the pipeline states on `attr`, or 0 when absent or not one."""
     try:
-        v = int(getattr(pipe, _seams.TP_ATTR, 0) or 0)
+        v = int(getattr(pipe, attr, 0) or 0)
     except (TypeError, ValueError):
         return 0
     return v if v > 0 else 0
+
+
+def pipeline_tp(pipe) -> int:
+    """The tensor-parallel degree the pipeline says it runs at (stage_seams.TP_ATTR), or 0."""
+    return _pipeline_degree(pipe, _seams.TP_ATTR)
+
+
+def pipeline_sp(pipe) -> int:
+    """The sequence-parallel degree the pipeline says it runs at (stage_seams.SP_ATTR), or 0."""
+    return _pipeline_degree(pipe, _seams.SP_ATTR)
 
 
 def mark_stages_on_forward(pipe) -> int:

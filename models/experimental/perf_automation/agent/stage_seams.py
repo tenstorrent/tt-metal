@@ -25,6 +25,11 @@ ITEMS = "_trace_items"
 # single-chip or TP-only pipeline is. Only the pipeline knows which of its stages it splits
 # (Qwen-Image-Edit splits the denoise batch over its DP columns and runs the encoders replicated).
 SPLIT = "_trace_split"
+# How many chip groups split ONE REQUEST'S TOKENS in a call (sequence parallelism): each group runs its
+# own tokens/SEQ_SPLIT slice of the same request at the same time and exchanges only attention K/V.
+# Absent means 1: every group runs every token. Only the pipeline knows which stages it cuts along
+# tokens -- a single-token step has nothing to cut.
+SEQ_SPLIT = "_trace_seq_split"
 
 # A stage cannot be measured at all without these: setup does host prep outside the trace, step is
 # the one fixed-shape call inside it.
@@ -32,8 +37,9 @@ REQUIRED = (SETUP, STEP)
 
 # Absent, these degrade rather than break -- but each degrades silently, which is why the contract
 # reports them: INPUTS costs the stage its own boundary, ITEMS costs it a real arithmetic ceiling,
-# SPLIT (on a stage that is split) prices it as if one chip group did the whole batch.
-OPTIONAL = (INPUTS, ITEMS, SPLIT)
+# SPLIT (on a stage that is split) prices it as if one chip group did the whole batch, SEQ_SPLIT (on a
+# stage that cuts tokens) prices it as if one group ran the whole sequence.
+OPTIONAL = (INPUTS, ITEMS, SPLIT, SEQ_SPLIT)
 
 ALL = REQUIRED + OPTIONAL
 
@@ -42,6 +48,9 @@ ALL = REQUIRED + OPTIONAL
 # assumed from the mesh the operator typed: a 4x8 Galaxy can run TP=8 x DP=4 or TP=4 x DP=8, and only
 # the model knows which (Qwen-Image-Edit: `self.tp = device.shape[TP_AXIS]`).
 TP_ATTR = "tp"
+# The sequence-parallel degree a pipeline runs at, when it states one -- the same rule: the mesh rows
+# carry replicas as well as token groups, and only the pipeline knows how many of each.
+SP_ATTR = "sp"
 
 
 def hook(stage: str, seam: str) -> str:

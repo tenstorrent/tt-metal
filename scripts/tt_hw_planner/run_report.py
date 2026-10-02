@@ -156,7 +156,7 @@ def _emit_run_report_impl(
 ) -> Path:
     from .final_categorization import build_final_categorization
     from .overlay_manager import load_persistent_skips
-    from .parallelism import read_parallelism_manifest
+    from .parallelism import read_parallelism_manifest, split_label
 
     report_path = demo_dir / "RUN_REPORT.md"
 
@@ -172,11 +172,13 @@ def _emit_run_report_impl(
     if _topo:
         _tp = int(_topo.get("tp", 1) or 1)
         _dp = int(_topo.get("dp", 1) or 1)
-        _chips = int(_topo.get("chips", _tp * _dp) or (_tp * _dp))
-        if _tp > 1 or _dp > 1:
+        _sp = int(_topo.get("sp", 1) or 1)  # absent in every manifest written before SP existed
+        _rows = _dp * _sp
+        _chips = int(_topo.get("chips", _tp * _rows) or (_tp * _rows))
+        if _tp > 1 or _rows > 1:
             lines.append(
-                f"_Topology: TP={_tp} x DP={_dp} (mesh {_dp}x{_tp}, {_chips} chips) — "
-                f"run emit-e2e / optimize with `--mesh {_dp}x{_tp}`._"
+                f"_Topology: {split_label(_tp, _dp, _sp)} (mesh {_rows}x{_tp}, {_chips} chips) — "
+                f"run emit-e2e / optimize with `--mesh {_rows}x{_tp}`._"
             )
         else:
             lines.append(f"_Topology: single-device ({_chips} chip)._")

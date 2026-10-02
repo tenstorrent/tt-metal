@@ -397,8 +397,10 @@ def _derive_mesh_device_env(args) -> None:
 
 def _derive_topology_env(args, model_dir, demo_dir=None):
     """Reshape topology from --devices/--mesh: chip count -> shared plan_parallelism (kernel-viable
-    TP x DP) -> export TT_PERF_MESH_ROWS/COLS, which the model's open and the perf skeleton read via
-    perf_adapter.resolve_mesh_shape. No-op when chip count is unknown ('all').
+    TP x DP, and SP when the stated workload has fewer requests than spare chips) -> export
+    TT_PERF_MESH_ROWS/COLS (rows = DP x SP), which the model's open and the perf skeleton read via
+    perf_adapter.resolve_mesh_shape, plus the SP degree beside them (perf_adapter.resolve_seq_parallel).
+    No-op when chip count is unknown ('all').
 
     PRECEDENCE, most authoritative first. Only the last of these is a guess, and it used to be the
     only one that could win:
@@ -424,9 +426,11 @@ def _derive_topology_env(args, model_dir, demo_dir=None):
     chips = _optimize_chip_count(args)
     if not chips:
         return
+    sp = 1
     if chips <= 1:
         os.environ["TT_PERF_MESH_ROWS"] = "1"
         os.environ["TT_PERF_MESH_COLS"] = "1"
+        _export_seq_parallel(sp)
         print("  topology : single chip -> mesh 1x1")
         return
     given = _mesh_shape_arg(getattr(args, "mesh", None))
@@ -442,14 +446,50 @@ def _derive_topology_env(args, model_dir, demo_dir=None):
         try:
             from ..parallelism import plan_parallelism
 
-            pc = plan_parallelism(model_id, chips)
+            # The workload the run states (requests + sequence length) decides what the chips TP leaves
+            # over do: replicas, or groups splitting one request's tokens. Unstated, the planner is
+            # asked exactly as before and every spare chip is a replica.
+            _requests, _seq_len = _stated_workload()
+            if _requests and _seq_len:
+                pc = plan_parallelism(model_id, chips, requests=_requests, seq_len=_seq_len)
+            else:
+                pc = plan_parallelism(model_id, chips)
         except Exception:  # noqa: BLE001
             pc = None
         if pc is not None:
-            rows, cols, tag = pc.dp, pc.tp, "kernel-viable"
+            sp = max(1, int(getattr(pc, "sp", 1) or 1))
+            rows, cols, tag = pc.dp * sp, pc.tp, "kernel-viable"
     os.environ["TT_PERF_MESH_ROWS"] = str(rows)
     os.environ["TT_PERF_MESH_COLS"] = str(cols)
-    print(f"  topology : {chips}-chip -> mesh {rows}x{cols} (TP={cols} DP={rows}) [{tag}]")
+    # The rows carry the replicas AND the token groups; the degree says how many of them are groups.
+    # Exported only when in play (and cleared otherwise), so a run that never split tokens reads nothing.
+    _export_seq_parallel(sp)
+    _sp_s = f" SP={sp}" if sp > 1 else ""
+    print(f"  topology : {chips}-chip -> mesh {rows}x{cols} (TP={cols} DP={rows // sp}{_sp_s}) [{tag}]")
+
+
+def _stated_workload():
+    """(requests, seq_len) the run states, each None when unset -- read through the one owner of those
+    two knobs (perf_adapter), the same module the emitted model reads the resulting degree from.
+    Without the engine package on the path nothing is stated, which keeps the old behaviour."""
+    try:
+        from models.experimental.perf_automation.agent.perf_adapter import stated_workload
+
+        return stated_workload()
+    except Exception:  # noqa: BLE001
+        return None, None
+
+
+def _export_seq_parallel(sp: int) -> None:
+    """Export the planned sequence-parallel degree beside the mesh pair, or clear a stale one."""
+    try:
+        from models.experimental.perf_automation.agent.perf_adapter import SEQ_PARALLEL_ENV
+    except Exception:  # noqa: BLE001
+        return
+    if int(sp or 1) > 1:
+        os.environ[SEQ_PARALLEL_ENV] = str(int(sp))
+    else:
+        os.environ.pop(SEQ_PARALLEL_ENV, None)
 
 
 _MIN_FREE_BYTES = 20 * 1024**3

@@ -4,6 +4,7 @@
 manifest + model weight files into a route and exports TT_PERF_TP_REGIME=1 automatically when the
 model does not fit on one chip, or when it fits under a latency metric on a mesh. A throughput metric,
 a missing capacity fact, or any error leaves the regime off."""
+
 import importlib.util
 from pathlib import Path
 
@@ -108,3 +109,17 @@ def test_resolve_model_id_prefers_valid_hint(tmp_path):
         pytest.skip("bge_m3 HF cache not present")
     assert run._resolve_model_id(str(tmp_path), hint="BAAI/bge-m3") == "BAAI/bge-m3"
     assert run._resolve_model_id(str(tmp_path), hint="not/a-real-model") is None
+
+
+def test_a_planned_token_split_keeps_the_regime_off_on_a_latency_metric(tmp_path, monkeypatch, capsys):
+    """optimize exported a sequence-parallel degree for this mesh: those chips are the token groups, so
+    the per-matmul TP sweep that a latency metric would otherwise enable stays off."""
+    import os
+
+    from agent.perf_adapter import SEQ_PARALLEL_ENV
+
+    monkeypatch.delenv("TT_PERF_TP_REGIME", raising=False)
+    monkeypatch.setenv(SEQ_PARALLEL_ENV, "4")
+    run._decide_parallelism_route(_mk_weights(tmp_path, 4), BH, metric="device_ms")
+    assert os.environ.get("TT_PERF_TP_REGIME") != "1"
+    assert "single-chip+seq-parallel" in capsys.readouterr().out

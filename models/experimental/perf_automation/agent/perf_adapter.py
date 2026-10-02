@@ -175,6 +175,53 @@ def resolve_mesh_shape(default_rows: int = 1, default_cols: int = 1) -> tuple[in
     return default_rows, default_cols
 
 
+# The sequence-parallel degree the run planned, exported beside the mesh pair (optimize._derive_topology_env):
+# how many of the mesh ROWS are groups splitting one request's tokens rather than data-parallel replicas
+# (rows = DP x SP). Unset means 1: every row is a replica, as the rows always were.
+SEQ_PARALLEL_ENV = "TT_PERF_MESH_SP"
+# The sequence length the run measures at (the perf workload's prompt length), stated by optimize once
+# the workload shape is known. With BATCH_ENV it is the workload the planner splits the spare chips by.
+SEQ_LEN_ENV = "TT_PERF_SEQ_LEN"
+
+
+def resolve_seq_parallel(default_sp: int = 1) -> int:
+    """How many chip groups split one request's tokens (sequence parallelism): the planned export, else
+    `default_sp`. A pipeline whose open cuts tokens over mesh rows reads this the way it reads
+    resolve_mesh_shape -- the tool plans, the open honours it -- and never infers it from the mesh alone,
+    since rows carry replicas as well. Unparseable -> the default, with a warning, like the mesh pair."""
+    _v = (os.environ.get(SEQ_PARALLEL_ENV) or "").strip()
+    if not _v:
+        return int(default_sp)
+    try:
+        sp = int(_v)
+    except (TypeError, ValueError):
+        sp = 0
+    if sp >= 1:
+        return sp
+    print(
+        "  [perf_adapter] WARNING: %s set but unparseable (%r); falling back to %d -- the run may NOT "
+        "split tokens the way it was planned" % (SEQ_PARALLEL_ENV, _v, int(default_sp)),
+        file=sys.stderr,
+        flush=True,
+    )
+    return int(default_sp)
+
+
+def stated_workload() -> tuple:
+    """(requests, seq_len) the run states through BATCH_ENV and SEQ_LEN_ENV, each None when unset or not
+    a positive integer. The planner splits the spare chips by these two facts; either missing means the
+    spare chips stay replicas, so an unstated workload changes nothing."""
+
+    def _pos(name):
+        try:
+            v = int((os.environ.get(name) or "").strip() or 0)
+        except (TypeError, ValueError):
+            return None
+        return v if v > 0 else None
+
+    return _pos(BATCH_ENV), _pos(SEQ_LEN_ENV)
+
+
 def headline_unit(stage_names, pipeline=None) -> str:
     """Which unit of work the headline measures: "token", "step", or "inference".
 
@@ -375,9 +422,9 @@ def _stated_count(pipeline, stage: str, seam: str) -> int:
 class _Stage:
     """One profilable unit emit-e2e emitted: a name and a host-op-free traceable step."""
 
-    __slots__ = ("name", "step", "self_traced", "trace_path", "items", "recurring", "split")
+    __slots__ = ("name", "step", "self_traced", "trace_path", "items", "recurring", "split", "seq_split")
 
-    def __init__(self, name, step, self_traced=False, trace_path=None, items=0, recurring=None, split=0):
+    def __init__(self, name, step, self_traced=False, trace_path=None, items=0, recurring=None, split=0, seq_split=0):
         self.name = name
         self.step = step
         self.self_traced = bool(self_traced)
@@ -398,6 +445,9 @@ class _Stage:
         # HOW MANY DATA-PARALLEL GROUPS SHARE THOSE ITEMS (stage_seams.SPLIT). 0 means "not stated",
         # which the reader turns into 1 -- the stage runs whole on every group.
         self.split = max(0, int(split or 0))
+        # AND HOW MANY CHIP GROUPS SPLIT ONE REQUEST'S TOKENS in this stage (stage_seams.SEQ_SPLIT). Same
+        # convention: 0 is "not stated", read as 1 -- every group runs every token.
+        self.seq_split = max(0, int(seq_split or 0))
 
 
 class PipelineStageAdapter:
@@ -539,6 +589,7 @@ class PipelineStageAdapter:
                     getattr(p, "trace_path", None) if _selft else None,
                     _n,
                     split=_stated_count(p, name, _seams.SPLIT),
+                    seq_split=_stated_count(p, name, _seams.SEQ_SPLIT),
                 )
             )
         if stages:

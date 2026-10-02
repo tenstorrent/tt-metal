@@ -491,12 +491,12 @@ def _render_kernel_section(kr: KernelReport, p, *, verbose: bool, chips: Optiona
         p("  Note: TP failures rule out that mesh shape, not the model overall.")
         p("        Pick a TP from the rows marked [ ok ] above.")
     if chips and chips > 1:
-        from .parallelism import select_parallelism
+        from .parallelism import select_parallelism, split_label
 
         _pc = select_parallelism(chips, kr)
         p("")
         p(
-            f"  Selected split on {chips} chips: TP={_pc.tp} x DP={_pc.dp}  "
+            f"  Selected split on {chips} chips: {split_label(_pc.tp, _pc.dp, _pc.sp)}  "
             f"(largest kernel-viable TP that divides {chips}; DP fills the rest)"
         )
 

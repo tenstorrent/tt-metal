@@ -718,7 +718,19 @@ def measure_adapter(adapter, device) -> float:
             _dp, _tp = (_dp * _tp) // _own_tp, _own_tp
     except Exception:  # noqa: BLE001 -- an unstated split keeps the mesh's
         pass
-    print("DP=%d TP=%d shard_active=%s" % (_dp, _tp, bool(_dp * _tp > 1)), flush=True)
+    # THE PIPELINE'S OWN SEQUENCE SPLIT, when it states one (stage_marks.pipeline_sp; stage_seams.SP_ATTR):
+    # those rows are groups cutting one request's tokens, not replicas, so the replica count is what is
+    # left of the rows once they are taken out. SP=1 when unstated, which is every pipeline until now.
+    _seqp = 1
+    try:
+        from .stage_marks import pipeline_sp as _pipeline_sp
+
+        _own_sp = _pipeline_sp(getattr(adapter, "_pipe", None) or adapter)
+        if _own_sp > 1 and _dp % _own_sp == 0:
+            _dp, _seqp = _dp // _own_sp, _own_sp
+    except Exception:  # noqa: BLE001 -- an unstated split keeps every row a replica
+        pass
+    print("DP=%d TP=%d SP=%d shard_active=%s" % (_dp, _tp, _seqp, bool(_dp * _tp * _seqp > 1)), flush=True)
 
     stages = list(getattr(adapter, "stages", None) or [])
     if not stages:
@@ -767,6 +779,10 @@ def measure_adapter(adapter, device) -> float:
         _sp = int(getattr(st, "split", 0) or 0)
         if _sp > 1:
             print("TRACE_STAGE_SPLIT[%s]=%d" % (st.name, _sp), flush=True)
+        # AND HOW MANY GROUPS CUT ONE REQUEST'S TOKENS in it (stage_seams.SEQ_SPLIT), for the same reason.
+        _sq = int(getattr(st, "seq_split", 0) or 0)
+        if _sq > 1:
+            print("TRACE_STAGE_SEQ_SPLIT[%s]=%d" % (st.name, _sq), flush=True)
 
     # WHICH MODULES EACH STAGE RUNS, read from the pipeline's own code (stage_marks.stage_module_paths)
     # so perf_mcp can price each stage's compute from the weights it actually multiplies instead of

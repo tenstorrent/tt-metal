@@ -285,3 +285,13 @@ def test_the_compute_roof_is_what_one_chip_does(summary, monkeypatch):
     four = _roofs(summary, monkeypatch, {("stage_split", "alpha"): 4})
     assert one["alpha"]["flops"] == pytest.approx(2 * 1e9 * 1000 / 8), "unsplit: TP alone, as before"
     assert four["alpha"]["flops"] == pytest.approx(one["alpha"]["flops"] / 4), "split over 4 groups"
+
+
+def test_the_compute_roof_divides_by_the_token_groups_too(summary, monkeypatch):
+    """A stage that cuts one request's tokens over chip groups (stage_seams.SEQ_SPLIT) prices one
+    group's tokens, exactly as the data-parallel split prices one group's items -- and both compound."""
+    one = _roofs(summary, monkeypatch, {})
+    two = _roofs(summary, monkeypatch, {("stage_seq_split", "alpha"): 2})
+    both = _roofs(summary, monkeypatch, {("stage_split", "alpha"): 4, ("stage_seq_split", "alpha"): 2})
+    assert two["alpha"]["flops"] == pytest.approx(one["alpha"]["flops"] / 2), "two token groups"
+    assert both["alpha"]["flops"] == pytest.approx(one["alpha"]["flops"] / 8), "4 item groups x 2 token groups"

@@ -437,6 +437,7 @@ def _mcp_config(repo_root: Path, manifest_path: str, pipe: dict, devices: str, k
         "TT_PERF_MODULE_LEVEL",
         "TT_PERF_MESH_ROWS",
         "TT_PERF_MESH_COLS",
+        "TT_PERF_MESH_SP",
         "TT_PERF_SHARD_DEGREE",
     ):
         _v = os.environ.get(_k)
@@ -922,6 +923,7 @@ def _parse_facts(raw: str, sigs: set | None) -> dict:
     facts = {
         "dp": 1,
         "tp": 1,
+        "sp": 1,
         "shard_active": False,
         "host_ops": [],
         "n_op_types": len(sigs or ()),
@@ -930,10 +932,13 @@ def _parse_facts(raw: str, sigs: set | None) -> dict:
     _raw = raw or ""
     _tp = re.search(r"\bTP=(\d+)", _raw)
     _dp = re.search(r"\bDP=(\d+)", _raw)
+    _sp = re.search(r"\bSP=(\d+)", _raw)
     if _tp:
         facts["tp"] = int(_tp.group(1))
     if _dp:
         facts["dp"] = int(_dp.group(1))
+    if _sp:
+        facts["sp"] = int(_sp.group(1))
     facts["parallelism_known"] = bool(_tp or _dp)
     if re.search(r"shard(?:_active)?\s*=\s*(?:True|true|1|yes)", _raw):
         facts["shard_active"] = True
@@ -3330,6 +3335,9 @@ def _print_scorecard(
         arch = env.get("arch") or "?"
         chips = env.get("device_count") or env.get("mesh_chips") or _chip_count(devices)
         dp, tp = facts.get("dp", 1), facts.get("tp", 1)
+        # Named only when the run split tokens, so every scorecard that did not reads as before.
+        _sp = int(facts.get("sp", 1) or 1)
+        _sp_s = " x SP=%d" % _sp if _sp > 1 else ""
         host_ops = facts.get("host_ops", [])
         probed = bool(facts) and facts.get("n_op_types", 0) > 0
         on_device = probed and not host_ops
@@ -3342,8 +3350,8 @@ def _print_scorecard(
         L.append("  │ hardware          : %s  x%s chip(s)" % (arch, chips))
         if facts.get("parallelism_known"):
             L.append(
-                "  │ parallelism       : TP=%s x DP=%s  (%s)"
-                % (tp, dp, "sharded mesh" if facts.get("shard_active") else "single-chip / replicated")
+                "  │ parallelism       : TP=%s x DP=%s%s  (%s)"
+                % (tp, dp, _sp_s, "sharded mesh" if facts.get("shard_active") else "single-chip / replicated")
             )
         else:
             L.append("  │ parallelism       : UNKNOWN  (no TP/DP line in the probe output — not assumed 1x1)")
@@ -6496,8 +6504,15 @@ def _decide_parallelism_route(
                 cfg = {**_hf_cache_dims(mid), **cfg}
         heads = int(cfg.get("num_attention_heads") or cfg.get("num_heads") or 1)
         hidden = int(cfg.get("hidden_size") or cfg.get("d_model") or 1)
-        route = decide_parallelism(weight_bytes, cap, chips, heads, hidden, metric)
+        # The sequence-parallel degree optimize PLANNED for this mesh (exported beside the mesh pair);
+        # the route honours it, so the chips the token groups use are never also swept for TP. Unplanned,
+        # the route is exactly what it was.
+        from agent.perf_adapter import resolve_seq_parallel
+
+        route = decide_parallelism(weight_bytes, cap, chips, heads, hidden, metric, sp=resolve_seq_parallel())
         print(f"  [optimize/cc] parallelism route: {route['route']} — {route['reason']}")
+        if int(route.get("sp", 1) or 1) > 1:
+            print("  [optimize/cc] sequence-parallel planned; the per-matmul TP sweep stays off for these chips")
         if route.get("tp_regime"):
             os.environ["TT_PERF_TP_REGIME"] = "1"
             os.environ["TT_PERF_TP_FLOOR"] = str(route.get("floor", 1))
