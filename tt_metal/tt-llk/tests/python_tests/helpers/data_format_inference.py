@@ -374,7 +374,7 @@ def infer_downstream_unpack_out(unpack_out: DataFormat) -> DataFormat:
         return DataFormat.Bfp8_b
 
     # Map a 2x-packed SrcA/SrcB-only register format back to its paired non-2x family member,
-    # used to derive a math/pack format (those fields cannot hold the 2x format itself).
+    # used to derive a pack_in format (that field cannot hold the 2x format itself).
     if unpack_out == DataFormat.MxFp4_2x_A:
         return DataFormat.Float16
     if unpack_out == DataFormat.MxFp4_2x_B:
