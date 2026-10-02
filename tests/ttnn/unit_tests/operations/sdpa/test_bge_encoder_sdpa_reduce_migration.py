@@ -16,8 +16,12 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.skipif(not is_wormhole_b0(), reason="BGE model-local SDPA targets Wormhole")
-@pytest.mark.parametrize("streaming", [False, True])
-@pytest.mark.parametrize("runtime_lengths", [False, True])
+# The streaming path runs the stock compute kernel, which does not take runtime lengths.
+@pytest.mark.parametrize(
+    "streaming, runtime_lengths",
+    [(False, False), (False, True), (True, False)],
+    ids=["static", "runtime_lengths", "streaming"],
+)
 def test_bge_encoder_sdpa_reduce_auxiliary(device, streaming, runtime_lengths):
     """Exercise the model-local writer recipe with both compute paths and partial KV masking."""
     grid = device.compute_with_storage_grid_size()
