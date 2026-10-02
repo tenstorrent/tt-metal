@@ -56,6 +56,7 @@ case, and never loosen its tolerance. A case dict holds:
 | everything the call needs | tensor shapes, dtypes, layouts and memory placement exactly as captured, the scalar and enum arguments, the compute kernel config, the mesh shape |
 | `seed` | the torch seed for its inputs |
 | tolerance | e.g. `exact: True` for pure data movement, or `pcc` / `atol` / `rtol` for math |
+| `determinism` | only when the op is nondeterministic by design: the reason the check is skipped (section 4b) |
 
 Write values out literally. Do not import them from the model: the case must survive the model changing.
 
@@ -85,6 +86,31 @@ them from the model's output.
 - Check once, by hand, that the test can fail: temporarily corrupt the device output (scale it by 1.01, or zero one
   row) and see the case fail. Do not commit that change.
 
+## 4b. Determinism (mandatory, every case)
+
+Every case also checks that the op is bit-deterministic: run it on its inputs (A), once on other inputs of the same
+shapes, dtypes and arguments (B, e.g. the same builder with `seed + 1`), then on A again until A has run 5 times;
+every A output must be byte-identical to the first. A race (a semaphore, a circular buffer, a multicast counter) or
+state left over from the previous call shows up here long before a tolerance does. Use the framework helper:
+
+```python
+from models.demos.common.bringup.testing import determinism
+
+run_a = lambda: ttnn.bringup.<op>(*inputs_a, **kwargs)     # returns ttnn tensors; every device's shard is compared
+out = run_a()
+# ... the reference check on out, as before ...
+inputs_b = build_inputs(case, seed=case["seed"] + 1)       # built once, before the repeats
+determinism.assert_deterministic(run_a, lambda: ttnn.bringup.<op>(*inputs_b, **kwargs), first=out, label=case["id"])
+```
+
+- Keep it cheap: build A's and B's device inputs once and reuse them; no reference work inside the repeats. The
+  check costs 5 extra op calls and the read-backs (`tests.determinism_repeats` in defaults.yaml sets the count).
+- An op that writes into one of its inputs (a cache fill, an in-place update): restore that input before each call
+  (or give each call a fresh copy) and compare the written tensor, not only the return value.
+- An op that is nondeterministic by design (e.g. it orders near-ties by arrival): skip the check for that case only,
+  with `determinism: "<reason>"` in the case dict, and say why in the test. Never skip it to make a failing case
+  pass: a failure is a race to report (the differing output, element count, and whether it was right after B).
+
 ## 5. The test file
 
 - One mesh per session: `ttnn.open_mesh_device(ttnn.MeshShape(*mesh))` with `ttnn.FabricConfig.FABRIC_2D`, the same
@@ -109,6 +135,7 @@ them from the model's output.
 python -m models.demos.common.bringup.testing.fork_cases --capture <fork_calls.json> --spec <spec> --run-tests
 ```
 
-The run must report `fork_calls_uncovered == 0` and `fork_tests_failed == 0`. This is the gate of task O.1.
+The run must report `fork_calls_uncovered == 0` and `fork_tests_failed == 0`; a case without the determinism check
+(section 4b) counts as not done. This is the gate of task O.1.
 `--run-tests` runs every case of every fork the model uses, other models' cases included. Commit `fork_calls.json`
 with the tests: it is the record of what the model needs from each fork.

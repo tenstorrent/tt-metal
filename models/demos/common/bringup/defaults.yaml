@@ -41,6 +41,9 @@ tests:
                                  # max_precision); shipped precision is judged by the ladder and contract tests
   low_precision_kinds: [moe]  # step kinds with a looser precision factor (bfp8 expert weights, F56)
   contract_tail_pad: 32       # the contract test's last chunk ends this many tokens early
+  determinism_repeats: 5      # component and fork tests: A runs, A,B,A then A again, bit-identical to the first A
+                              # (testing/determinism.py; 0 turns it off). About 5 extra calls per test.
+  nondeterministic: {}        # component steps exempt from that check, {step: reason}
 
 box:
   test_timeout_s: 3600     # one device test, seconds (hang guard)
