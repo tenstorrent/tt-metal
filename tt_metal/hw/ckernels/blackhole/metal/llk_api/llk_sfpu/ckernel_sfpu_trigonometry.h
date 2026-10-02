@@ -692,9 +692,19 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
     return y;
 }
 
+bool bf16_dest_cosh();
+template <int ITERATIONS>
+void calculate_cosh_bf16();
+
 // t = exp(a); cosh(a) = 0.5 * (t + 1/t)
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cosh() {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (bf16_dest_cosh()) {
+            calculate_cosh_bf16<ITERATIONS>();
+            return;
+        }
+    }
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         sfpi::vFloat a = sfpi::setsgn(x, 0);
@@ -834,8 +844,16 @@ void tangent_init() {
     sfpi::vConstFloatPrgm2 = FRAC_2_PI;
 }
 
+void init_cosh_bf16();
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void cosh_init() {
+    if constexpr (!is_fp32_dest_acc_en) {
+        if (bf16_dest_cosh()) {
+            init_cosh_bf16();
+            return;
+        }
+    }
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstFloatPrgm0 = 1.442695f;  // log2(e) == 1 / ln(2)
     if constexpr (is_fp32_dest_acc_en) {
@@ -1206,3 +1224,5 @@ void init_atanh() {
 }
 
 }  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_cosh_bf16.h"
