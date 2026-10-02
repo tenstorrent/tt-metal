@@ -255,7 +255,8 @@ def encode_references(
         encode_video: ``(1, 3, T, H, W)`` to moments, **with** the VAE's
             17-frames-per-5-latents temporal chunking. The video path -- a different
             entry point, not the same one with a bigger T.
-        encode_audio: ``(2, 1, samples)`` to the posterior **mean** ``(2, C, T)``.
+        encode_audio: ``(2, 1, samples)`` plus ``valid_samples=`` (the unpadded length) to the posterior
+            **mean** ``(2, C, T)``.
         audio_latent_channels: width of an audio row, 32 for the released checkpoint.
 
     Returns ``(video_rows, audio_rows)``, both float32 on CPU and both ``None`` when
@@ -288,10 +289,12 @@ def encode_references(
 
         if reference.has_audio:
             waveform = reference.waveform.to(device) if device else reference.waveform
-            num_latents = math.ceil(waveform.shape[-1] / MINIMAX_H3_AUDIO_HOP)
+            valid_samples = waveform.shape[-1]
+            num_latents = math.ceil(valid_samples / MINIMAX_H3_AUDIO_HOP)
             waveform = pad_waveform_to_max_duration(waveform)
-            # The audio VAE is mono; the two stereo channels are two batch items.
-            latents = encode_audio(waveform[:, None]).float().cpu().transpose(1, 2)  # (2, T, C)
+            # The audio VAE is mono; the two stereo channels are two batch items. `valid_samples` lets the
+            # encoder mask the pad after every conv, which is what makes pad-then-trim equal the direct encode.
+            latents = encode_audio(waveform[:, None], valid_samples=valid_samples).float().cpu().transpose(1, 2)
             latents = latents[:, :num_latents]
             reference.num_audio_latents = num_latents
             normalized = (latents - audio_mean) / audio_std

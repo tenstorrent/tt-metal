@@ -56,27 +56,27 @@ def _zero_tail(
     parallel_config,
     cache: dict,
 ) -> ttnn.Tensor:
-    """Zero the trailing ``tail_rows`` global rows of a T-sharded ``(B, T_local, C)`` tensor.
+    """Zero the trailing ``tail_rows`` global rows of a ``(B, T, C)`` tensor, T-sharded or not.
 
     The mask is built on host and uploaded pre-sharded, since downsampled levels are not tile-aligned.
     """
-    if tail_rows <= 0 or parallel_config is None or parallel_config.factor <= 1:
+    if tail_rows <= 0:
         return x_BTC
+    sharded = parallel_config is not None and parallel_config.factor > 1
     local_T = x_BTC.shape[1]
-    global_T = local_T * parallel_config.factor
+    global_T = local_T * parallel_config.factor if sharded else local_T
     key = (global_T, tail_rows, x_BTC.get_dtype())
     mask = cache.get(key)
     if mask is None:
         m = torch.ones(1, global_T, 1, dtype=torch.float32)
         m[:, global_T - tail_rows :, :] = 0.0
-        dims = [None, None]
-        dims[parallel_config.mesh_axis] = 1
+        mapper = None
+        if sharded:
+            dims = [None, None]
+            dims[parallel_config.mesh_axis] = 1
+            mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=tuple(dims))
         mask = ttnn.from_torch(
-            m,
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=x_BTC.get_dtype(),
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=tuple(dims)),
+            m, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=x_BTC.get_dtype(), mesh_mapper=mapper
         )
         cache[key] = mask
     return ttnn.multiply(x_BTC, mask)
@@ -453,10 +453,17 @@ class MiniMaxH3AudioEncoder(Module):
             split_mode=split_mode,
         )
 
-    def forward(self, waveform_BCT: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self, waveform_BCT: torch.Tensor, *, valid_samples: int | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """``(B, 1, samples)`` torch in, ``(mean, logs)`` each ``(B, 32, samples/800)`` torch.
 
         With a ``parallel_config`` the DAC trunk runs T-sharded and is gathered to full T for ``pre_block``.
+
+        ``valid_samples`` marks everything after it as right-pad (e.g. ``pad_waveform_to_max_duration``). The
+        encoder is **not** right-pad invariant on its own -- each conv's bias turns zero padding non-zero, which the
+        next conv's receptive field carries into the last real latents -- so the pad is re-zeroed after every conv,
+        exactly like the T-shard alignment tail. That makes pad-then-trim equal the direct encode.
         """
         _, channels, num_samples = waveform_BCT.shape
         assert channels == 1, f"the audio VAE is mono; stereo is batch 2. Got {channels} channels"
@@ -464,6 +471,9 @@ class MiniMaxH3AudioEncoder(Module):
             num_samples % self.hop_length == 0
         ), f"{num_samples} samples is not a whole number of {self.hop_length}-sample hops"
         num_latents = num_samples // self.hop_length
+        if valid_samples is None:
+            valid_samples = num_samples
+        assert 0 < valid_samples <= num_samples, f"valid_samples {valid_samples} outside (0, {num_samples}]"
 
         sharded = self.parallel_config is not None and self.parallel_config.factor > 1
         tail_samples = 0
@@ -493,7 +503,7 @@ class MiniMaxH3AudioEncoder(Module):
             x, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype, mesh_mapper=mapper
         )
 
-        trunk = self.encoder(x_device, tail_rows=tail_samples)
+        trunk = self.encoder(x_device, tail_rows=tail_samples + num_samples - valid_samples)
         if sharded:
             trunk = ttnn.to_layout(trunk, ttnn.TILE_LAYOUT)
             trunk = _all_gather_t(self.ccl_manager, trunk, self.parallel_config)
