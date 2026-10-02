@@ -241,7 +241,8 @@ questions find each one's files by these names, beside its `<repo>.mined.json`.
    bug issue to its fix commits (closing PR, `closes` references, commits citing the issue) and to later history:
    reverts, re-fixes, later fix-like commits to the same files.
 3. **Triage everything cheaply:** run `mining/make_chunks.py --out-dir <mine>/chunks/<repo>`, then the
-   `mining/triage-wave.js` workflow, then `mining/persist_mining.py <output> <mine>/<repo>_triage.jsonl`. Every case
+   `mining/triage-wave.js` workflow (args: the `repo` and `chunks` make_chunks prints, plus `classes`, the class
+   lists' absolute paths), then `mining/persist_mining.py <output> <mine>/<repo>_triage.jsonl`. Every case
    gets verdict, class, component, symptom and deep-read priority.
 4. **Pick a holdout set first.** `mining/select.py holdout --git <clone> [--exclude <older holdouts>] [--deep <deep
    stores>]` oversamples (about 1.4x the target) a seeded random set of confirmed code bugs with small, code-only
@@ -253,7 +254,9 @@ questions find each one's files by these names, beside its `<repo>.mined.json`.
    share one fix. A pick sharing a fix with an older holdout or a deep-read case is contaminated; mark it `"exclude":
    true` if one slips through. A pack that has seen the benchmark answers scores a meaningless 100%.
 5. **Deep-read** the priority cases: run `mining/select.py deep --exclude <holdout> --out-dir <mine>/deep/<repo>`,
-   then `mining/deep-wave.js`, then `mining/persist_mining.py <output> <mine>/<repo>_deep.jsonl`. For each case:
+   then `mining/deep-wave.js` (args: `repo`, `git` = the clone, `current` = the tree whose siblings it judges,
+   `classes`, and the `batches` select.py printed), then `mining/persist_mining.py <output> <mine>/<repo>_deep.jsonl`.
+   For each case:
    - the root cause;
    - whether the fix was complete (judged from later history and the current tree, never from the fact that it
      merged);
