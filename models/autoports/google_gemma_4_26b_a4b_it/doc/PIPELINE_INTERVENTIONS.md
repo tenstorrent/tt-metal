@@ -413,6 +413,20 @@ JIT-kernel-cache location; only the prompt's Astropy outcome is measured so far.
 Active resumed window is approximately 56 minutes; cumulative approximately
 5h49m. No combined suite result or all-five quality claim yet.
 
+07:02 UTC: the focused prompt fails a fresh Django regression (900.055 seconds,
+reward 0), so it is rejected as a suite-wide policy; the agent does not pick a
+different prompt per task. The completed precision audit motivates an explicit
+fresh-BFP8 EP4 prefill-weight control, keeping the original prompt and other
+numerical policies. TT e2c286b743 adds backward-compatible schema-2 plumbing and
+runtime dtype attestation; 14 host checks pass. The all-layer 100-token gate
+passes prefill top1 .99 (prior .96), decode .98, top5/top100 1.0 and traced decode
+50.403 tokens/s. This is narrow accuracy evidence, not a SWE solve or speedup.
+The exact image is reused with read-only Python/policy overlays. Fresh-container
+username/cache and Tracy-directory permission failures are diagnosed before
+device use; the corrected server opens all four chips normally as UID 6002.
+Sympy policy CI 36973577503 remains monitored. Active resumed time is about 91
+minutes, cumulative about 6h24m; the five-task suite still has no combined result.
+
 - TTFT: `doc/ttft_optimization/`.
 - Remote benchmarks/evals:
   `readiness_vllm/ttft_optimization_remote/README.md`.
