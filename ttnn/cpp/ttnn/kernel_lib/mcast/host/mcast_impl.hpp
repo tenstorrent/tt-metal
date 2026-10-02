@@ -21,7 +21,7 @@ class McastImpl {
 public:
     explicit McastImpl(const tt::tt_metal::IDevice& device, const McastConfig& cfg = {});
     void add_group(
-        tt::tt_metal::CoreRangeSet receivers,
+        const tt::tt_metal::CoreRangeSet& receivers,
         std::vector<tt::tt_metal::CoreCoord> senders,
         std::optional<uint32_t> ack_count_override = std::nullopt);
 
@@ -75,7 +75,7 @@ private:
 
     struct Group {
         Group(
-            tt::tt_metal::CoreRangeSet receivers,
+            const tt::tt_metal::CoreRangeSet& receivers,
             std::vector<tt::tt_metal::CoreCoord> senders,
             std::optional<uint32_t> ack_count_override = std::nullopt);
 

@@ -152,8 +152,8 @@ bool same_encoding(wire::SenderCoordinateMetadata left, wire::SenderCoordinateMe
 }  // namespace
 
 McastImpl::Group::Group(
-    CoreRangeSet receivers, std::vector<CoreCoord> senders, std::optional<uint32_t> ack_count_override) :
-    receivers_(std::move(receivers)), senders_(std::move(senders)), ack_count_override_(ack_count_override) {
+    const CoreRangeSet& receivers, std::vector<CoreCoord> senders, std::optional<uint32_t> ack_count_override) :
+    receivers_(receivers), senders_(std::move(senders)), ack_count_override_(ack_count_override) {
     // Require receivers, at least one sender, and no duplicate senders.
     TT_FATAL(
         !receivers_.empty(), "McastImpl::add_group: receiver set must not be empty; self-only groups are supported");
@@ -384,9 +384,9 @@ std::vector<uint32_t> McastImpl::Group::runtime_args(
 McastImpl::McastImpl(const tt::tt_metal::IDevice& device, const McastConfig& cfg) : device_(device), cfg_(cfg) {}
 
 void McastImpl::add_group(
-    CoreRangeSet receivers, std::vector<CoreCoord> senders, std::optional<uint32_t> ack_count_override) {
+    const CoreRangeSet& receivers, std::vector<CoreCoord> senders, std::optional<uint32_t> ack_count_override) {
     TT_FATAL(!arguments_prepared_, "McastImpl::add_group: cannot add groups after successful preparation");
-    Group candidate(std::move(receivers), std::move(senders), ack_count_override);
+    Group candidate(receivers, std::move(senders), ack_count_override);
     // All groups share one sender mode and rotation length.
     if (!groups_.empty()) {
         const auto& first = groups_.front();
