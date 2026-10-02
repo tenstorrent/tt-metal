@@ -227,6 +227,67 @@ def test_eltwise_unary_typecast_uint32_to_fp32_rounding(
     )
 
 
+# Round to zero is a Blackhole SFP_STOCH_RND mode. Wormhole's has none, so its uint16
+# destination still rounds to nearest with ties away from zero (#51655).
+_UINT16_TRUNCATES = get_chip_architecture() == ChipArchitecture.BLACKHOLE
+
+
+@parametrize(
+    formats=[
+        pair
+        for pair in TYPECAST_PAIRS
+        if pair.input_format in (DataFormat.Float16_b, DataFormat.Float32)
+        and pair.output_format == DataFormat.UInt16
+    ],
+    dest_acc=_production_dest_acc,
+    approx_mode=[ApproximationMode.No],
+    input_dimensions=[[32, 32]],
+)
+def test_eltwise_unary_typecast_fractional_to_uint16(
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+    approx_mode: ApproximationMode,
+    input_dimensions: list[int],
+):
+    # Float -> uint16 truncates toward zero, like every other integer destination.
+    # Half-integers tell truncation apart from both round-to-nearest modes, and the
+    # whole-number stimuli of test_eltwise_unary_typecast never reach one. Quarter
+    # steps below 64 and half steps below 128 are exact in bfloat16. The bf16 source
+    # runs the 16-bit Dest path of the kernel and the fp32 source the 32-bit one.
+    fixed = [k / 4 for k in range(-64, 256)]
+    fixed += [n + 0.5 for n in range(64, 128)]
+    fixed += [65280.0, 65535.0, 65536.0, 70144.0]
+    if formats.input_format == DataFormat.Float32:
+        fixed += [255.5, 1023.5, 32767.5, 65533.5, 65534.25, 65534.5, 65534.75]
+        fixed += [65535.25, 65535.5, 65535.75, 65536.5]
+
+    tile = TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
+    padding = [(k % 256) / 4 for k in range(tile - len(fixed))]
+    values = torch.tensor(fixed + padding)
+    face = tile // 4
+
+    def face_spec(index):
+        chunk = values[index * face : (index + 1) * face]
+        return StimuliSpec(distribution=lambda size, dtype, generator: chunk.to(dtype))
+
+    golden_override = None
+    if not _UINT16_TRUNCATES:
+
+        def golden_override(src):
+            # max(0, x) then round half away from zero, as the Wormhole kernel does.
+            rounded = torch.floor(src.double().clamp(min=0) + 0.5)
+            return rounded.clamp(max=65535).to(format_dict[DataFormat.UInt16])
+
+    _run_typecast(
+        formats,
+        dest_acc,
+        approx_mode,
+        input_dimensions,
+        StimuliSpec(face_specs=[face_spec(i) for i in range(4)]),
+        golden_override=golden_override,
+    )
+
+
 def _run_typecast(
     formats: InputOutputFormat,
     dest_acc: DestAccumulation,
@@ -235,6 +296,7 @@ def _run_typecast(
     spec_A: StimuliSpec,
     *,
     max_ulp: int | None = None,
+    golden_override=None,
 ):
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -245,13 +307,16 @@ def _run_typecast(
         spec_B=spec_A,
     )
 
-    generate_golden = get_golden_generator(TypecastGolden)
-    golden_tensor = generate_golden(
-        src_A,
-        formats.input_format,
-        formats.output_format,
-        input_dimensions,
-    )
+    if golden_override is not None:
+        golden_tensor = golden_override(src_A)
+    else:
+        generate_golden = get_golden_generator(TypecastGolden)
+        golden_tensor = generate_golden(
+            src_A,
+            formats.input_format,
+            formats.output_format,
+            input_dimensions,
+        )
 
     # Unpack straight into Dest when either:
     #  * the input is 32-bit -- the unpacker has no SrcA/SrcB path for
