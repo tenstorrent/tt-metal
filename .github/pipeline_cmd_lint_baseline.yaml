@@ -24,6 +24,5 @@ blaze_models_prefill_tests.yaml:
   # reports before `exit $rc`; splitting them into one leg per section is the owner's call.
   - (Llama-3.1-8B) prefill components, decoder + book top-5 accuracy 2k, 4k
   - (Mistral-Small-4-119B) MLA, MLA chunked, block, MoE, transformer + chunked padded accuracy
-  - (GPT-OSS-120B) prefill runner accuracy longbook 55k@5k + chunked prefill KV accuracy longbook 5k@1k + variable-chunk smoke 1k vs 8k
 ops_unit_tests.yaml:
   - Disaggregated prefill op unit tests (LB)

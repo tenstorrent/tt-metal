@@ -1183,14 +1183,15 @@
 
 # ===== GPT-OSS-120B ==================================================================================
 
-# GPT-OSS-120B prefill suite: sections run serially on one allocation; each is time-bounded and
-# runs regardless of the others, and the job fails if any section fails.
+# GPT-OSS-120B prefill suite: sections run serially on one allocation, each time-bounded; the job
+# stops at the first failed section.
 #
-# [1/3] chunked prefill KV accuracy longbook 5k@2.5k and [2/3] 5k@1k: full-model real-weights
-# chunked prefill + per-layer KV PCC (models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py,
-# standalone harness, not pytest; the GPT-OSS analog of the MiniMax-M3 KV-accuracy stage above).
-# [2/3] is the same harness/goldens at the small variable-chunk size (PREFILL_CHUNK_SIZE=1024 ->
-# 5 chunks over the 5k golden). Auto-SKIP (rc 0) off-galaxy or when PREFILL_TRACE_DIR is unset.
+# [1/3] producer/runner e2e through the common prefill runner (the production path).
+# [2/3] chunked prefill KV accuracy longbook 5k@1k: full-model real-weights chunked prefill +
+# per-layer KV PCC (models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py, standalone harness, not
+# pytest; the GPT-OSS analog of the MiniMax-M3 KV-accuracy stage above) at the small variable-chunk
+# size (PREFILL_CHUNK_SIZE=1024 -> 5 chunks over the 5k golden). Auto-SKIP (rc 0) off-galaxy or when
+# PREFILL_TRACE_DIR is unset.
 # GPT_OSS_KV_PCC_MIN=0.85 is a floor under the measured ~0.92 min KV PCC (ring chunked and
 # 1k-chunk configs, EXPERT_DTYPE=bf8), keeping headroom for bf8/golden noise.
 # [3/3] variable-chunk smoke (models/demos/gpt_oss_d_p/tests/variable_chunk_smoke.py): one
@@ -1220,11 +1221,6 @@
 - name: "(GPT-OSS-120B) prefill runner accuracy longbook 55k@5k + chunked prefill KV accuracy longbook 5k@1k + variable-chunk smoke 1k vs 8k"
   fabric_profile: torus_xy
   cmd: |
-    # errexit off for the whole suite: each section must run whatever the previous one did.
-    set +e
-    suite_rc=0
-    suite_summary=()
-
     # Section bodies run in a subshell "( ... )" so one section's exports cannot leak into the next.
     gpt_oss_prefill_runner() (
       export LOGURU_LEVEL=INFO
@@ -1289,28 +1285,24 @@
       '
     )
 
-    # run_section <n/total> <title> <function>: banner, run, one-line result; never aborts.
+    # run_section <n/total> <title> <function>: banner, run, one-line result; stops the job on failure.
     run_section() {
-      local tag="$1" title="$2" fn="$3" t0=$SECONDS rc verdict note=""
+      local tag="$1" title="$2" fn="$3" t0=$SECONDS
       echo "::group::[$tag] $title"
-      "$fn"
-      rc=$?
+      "$fn" || {
+        local rc=$?
+        echo "::endgroup::"
+        echo "[$tag] FAIL (exit $rc$( { [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; } && echo ', timed out'))  $title"
+        exit "$rc"
+      }
       echo "::endgroup::"
-      if [ "$rc" -eq 0 ]; then verdict=PASS; else verdict=FAIL; suite_rc=1; fi
-      if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then note=", timed out"; fi
       local d=$((SECONDS - t0))
-      echo "[$tag] $verdict (exit $rc, $((d / 60)) min $((d % 60)) s$note)"
-      suite_summary+=("[$tag] $verdict  $title")
+      echo "[$tag] PASS ($((d / 60)) min $((d % 60)) s)  $title"
     }
 
     run_section 1/3 "(GPT-OSS-120B) prefill runner accuracy longbook 55k@5k vs 5k golden prefix" gpt_oss_prefill_runner
     run_section 2/3 "(GPT-OSS-120B) chunked prefill KV accuracy longbook 5k@1k" gpt_oss_kv_pcc_1k
     run_section 3/3 "(GPT-OSS-120B) variable-chunk prefill smoke 1k vs 8k" gpt_oss_varchunk_smoke
-
-    echo "===== GPT-OSS-120B prefill suite summary ====="
-    printf '%s\n' "${suite_summary[@]}"
-    if [ "$suite_rc" -eq 0 ]; then echo "suite: PASS"; else echo "suite: FAIL"; fi
-    exit "$suite_rc"
   test_type: gpt_oss_prefill_suite
   # Per-section tokens: `-f test-type=<token>` selects this job.
   test_tags: [gpt_oss_prefill_runner, gpt_oss_prefill_kv_pcc_1k, gpt_oss_varchunk_smoke]
