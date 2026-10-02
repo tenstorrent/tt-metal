@@ -371,14 +371,34 @@ of the 8.8 ms.
 `pad_logits_to_power_of_2=True` pads the row to 32768 for one `ttnn.pad` and restores
 multi-core eligibility:
 
-| `_sampling_step` | p50 | p10 | p90 |
-| --- | ---: | ---: | ---: |
-| unpadded | 8.809 ms | 8.759 | 8.828 |
-| padded to 32768 | **3.968 ms** | 3.003 | 5.112 |
+Profiled per-op device time, batch 1, one sampling step:
 
-That is 4.84 ms, about 6.7% of a batch-1 decode step. The sampler's cost is fixed in batch --
+| | top-k device time | cores | step device FW |
+| --- | ---: | ---: | ---: |
+| unpadded | 7625.58 us | **1** | 7.936 ms |
+| padded to 32768 | **276.07 us** | **17** | **0.664 ms** |
+
+The top-k is 27.6 times faster and the step's device time falls 91.6%, a saving of 7.27 ms.
+Against a 72.32 ms token-out step that is about 10%. The sampler's cost is fixed in batch --
 tile padding makes one row and 32 rows the same 970 tiles -- so the same absolute saving is
 spread across however many users are being served.
+
+Host-timed eager figures were 8.809 ms and 3.968 ms, which is -55% and understates it. The
+reason is that an unpadded step is one 7.6 ms blocking op, behind which host dispatch hides;
+once the device work collapses, dispatch for 29 programs on an eight-device mesh is exposed and
+dominates the eager number. A traced decode pays the device time and not the dispatch, so 7.27 ms
+is the figure that applies to a real step.
+
+This also settles the composition of the 12.091 ms fixed term: the unpadded sampler is 7.94 ms
+of it, 66%, so the eager attribution that put it at 73% was close for the wrong reason.
+
+Where the remaining 0.664 ms sits, per step: top-k 276.07 us on 17 cores, `ttnn.sampling`
+76.17 us on 32, two all-gathers 74.54 us, fill-pad 74.20 us, twelve tie-break binaries 56.66 us,
+the new pad 38.11 us, manual seed 26.90 us, and 41.7 us across the rest, over 29 programs.
+
+The tie-break programs are 8.5% of the step. Making them redundant by flipping `_topk_stable`
+in `models/common/sampling/tt_sampling.py` would therefore buy at most about 57 us while
+changing shared code with 88 callers, so that lever is closed on evidence rather than untried.
 
 This was a misconfiguration rather than a discovery.
 `should_pad_sampling_logits_to_power_of_2` in `models/tt_transformers/tt/model_config.py:202`
@@ -390,10 +410,10 @@ finite logit, and the per-device index offset still uses `padded_vocab_size // 8
 rather than argued: greedy sampling returns token 103695 against a host argmax over all 248320
 columns, both before and after.
 
-Two things this does not settle. The spread widens from 0.07 ms to 2.1 ms, so 3.968 ms is a
-median and not a dependable per-step cost. And about 4.5 ms remains in the step -- two
-all-gathers and the tie-break programs -- which padding does not touch and which no per-op
-profile has yet separated.
+Profiling this path needs a `full_attention` layer, every fourth index. A `linear_attention`
+layer reaches the KDA performance model, which asserts Blackhole and aborts the run under the
+profiler, so 48 of the 64 layers cannot be profiled on this mesh. That is a real constraint on
+any future profiling here, confirmed by hitting it rather than inferred.
 
 ## Served performance, which is not the traced-decode performance
 
