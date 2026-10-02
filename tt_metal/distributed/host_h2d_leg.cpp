@@ -3,6 +3,7 @@
 
 #include "tt_metal/distributed/host_h2d_leg.hpp"
 
+#include <atomic>
 #include <cstddef>
 
 #include <fmt/format.h>
@@ -43,7 +44,7 @@ struct H2DLeg::Impl {
         CoreCoord virt;
         uint32_t cfg_addr = 0;
         dist::HDSocketConnectorState* connector = nullptr;
-        const volatile uint32_t* bytes_acked = nullptr;
+        uint32_t* bytes_acked = nullptr;  // device-written; read through std::atomic_ref
         uint32_t sent = 0;            // bytes published to the device
         uint64_t consumed_bytes = 0;  // unwrapped total: page need not divide 2^32
         uint64_t drained_tot = 0;     // pages derived from it
@@ -150,7 +151,7 @@ std::unique_ptr<H2DLeg> H2DLeg::create(
         uint8_t* const b = im.alias->base(c);
         im.core[c].cfg_addr = d.config_buffer_address;
         im.core[c].connector = reinterpret_cast<dist::HDSocketConnectorState*>(b + d.connector_state_offset);
-        im.core[c].bytes_acked = reinterpret_cast<const volatile uint32_t*>(b + d.bytes_acked_offset);
+        im.core[c].bytes_acked = reinterpret_cast<uint32_t*>(b + d.bytes_acked_offset);
         im.core[c].data_off = d.data_offset;
     }
     return leg;
@@ -196,7 +197,7 @@ uint32_t H2DLeg::drained(uint32_t core) {
     if (core >= im.cfg.cores || im.core[core].bytes_acked == nullptr) {
         return 0;
     }
-    const uint32_t now = __atomic_load_n(const_cast<const uint32_t*>(im.core[core].bytes_acked), __ATOMIC_ACQUIRE);
+    const uint32_t now = std::atomic_ref<uint32_t>(*im.core[core].bytes_acked).load(std::memory_order_acquire);
     const uint32_t delta = now - im.core[core].last_acked;
     im.core[core].last_acked = now;
     if (delta == 0) {
