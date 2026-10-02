@@ -122,9 +122,9 @@ inline void _llk_unpack_AB_matmul_stream_tile_body_(const bool partial_face, con
     }
     else if (narrow)
     {
-        // SCRATCH_SEC0_val = STRIDE_GPR (after the THCON write of TMP_LO), then CFG_REG += SCRATCH_SEC0_val (0b011 = add, 32-bit mask,
-        // scratch_sel 0): the stride is read from the GPR every tile as before, without the RDCFG and ADDDMAREG round trip
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+        // SCRATCH_SEC0_val = STRIDE_GPR, then CFG_REG += SCRATCH_SEC0_val (0b011 = add, 32-bit mask, scratch_sel 0): the stride is
+        // read from the GPR every tile as before, without the RDCFG and ADDDMAREG round trip (the GPR holds the Scalar Unit's result
+        // before the thread's next instruction, so no STALLWAIT)
         TTI_WRCFG(STRIDE_GPR, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
         TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0, CFG_REG);
     }
@@ -165,8 +165,8 @@ inline void _llk_unpack_AB_matmul_mop_config_(
     const bool reuse_a             = ct_dim >= rt_dim;
     const bool stream_partial_face = reuse_a ? unpA_partial_face : unpB_partial_face;
     // two copies of the streamed tile body, one per config context: the UNPACR group (4 instructions for a partial face,
-    // 1 otherwise), the address advance (3 instructions for a narrow format, 4 otherwise) and the NOP
-    const std::uint32_t replay_buf_run_len  = (stream_partial_face ? 4 : 1) + (stream_narrow ? 3 : 4) + 1;
+    // 1 otherwise), the address advance (2 instructions for a narrow format, 4 otherwise) and the NOP
+    const std::uint32_t replay_buf_run_len  = (stream_partial_face ? 4 : 1) + (stream_narrow ? 2 : 4) + 1;
     const std::uint32_t replay_buf_prog_len = 2 * replay_buf_run_len;
 
     if (reuse_a)
