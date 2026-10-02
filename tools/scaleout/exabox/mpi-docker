@@ -5,6 +5,8 @@ print_usage() {
     echo "       $0 [--image <image>] [--empty-entrypoint] [--print] [--print-only] [global-mpi-args] <per-rank-specs> [: <per-rank-specs> ...]"
     echo
     echo "  --image <image>           (Optional) Docker image to use"
+    echo "  --no-resolve-digest       (Optional) Do not resolve the image tag to a digest on the launcher"
+    echo "                            (by default all hosts are given image@sha256:... so they run the same image)"
     echo "  --empty-entrypoint        (Optional) Pass --entrypoint=\"\" to docker run"
     echo "  --volume <path>           (Optional) Extra host path to mount into the container (repeatable)"
     echo "  --docker-arg <arg>        (Optional) Extra argument passed verbatim to 'docker run' (repeatable)"
@@ -70,6 +72,9 @@ default() {
     # Interface names differ between sites; default works on Markham,
     # override elsewhere via --mpi-interface.
     local mpi_interface="ens5f0np0"
+    # Resolve the image tag to a digest on the launcher and fan out image@sha256 to every
+    # host, so all ranks run the same image even when the tag moves (":latest").
+    local resolve_digest=true
 
     # Parse script-specific arguments first
     local script_args=()
@@ -81,6 +86,10 @@ default() {
                 ;;
             --image=*)
                 image="${1#--image=}"
+                shift
+                ;;
+            --no-resolve-digest)
+                resolve_digest=false
                 shift
                 ;;
             --empty-entrypoint)
@@ -170,6 +179,33 @@ default() {
         echo "Error: MPI arguments and executable are required."
         print_usage
         exit 1
+    fi
+
+    # Each host runs 'docker run <image>' with docker's default --pull=missing, so with a
+    # moving tag hosts can end up on different images in the same MPI job. Pull once here,
+    # resolve to the digest under the same repository name, and pass image@sha256:... to
+    # every rank; hosts that lack it pull exactly that digest. Skipped for --print-only,
+    # --no-resolve-digest, references that are already digests, and images that cannot be
+    # pulled (local-only builds), which keep the literal reference.
+    if [[ "$resolve_digest" == true && "$print_only" == false && "$image" != *@sha256:* ]]; then
+        local image_repo="$image"
+        local image_name="${image##*/}"
+        if [[ "$image_name" == *:* ]]; then
+            image_repo="${image%:*}"
+        fi
+        if docker pull -q "$image" >/dev/null 2>&1; then
+            local digest_ref
+            digest_ref=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image" 2>/dev/null \
+                | grep -m1 "^${image_repo}@sha256:" || true)
+            if [[ -n "$digest_ref" ]]; then
+                echo "mpi-docker: image $image resolved to $digest_ref"
+                image="$digest_ref"
+            else
+                echo "mpi-docker: warning: no digest found for $image; using the tag as given" >&2
+            fi
+        else
+            echo "mpi-docker: warning: could not pull $image on this host; using the tag as given" >&2
+        fi
     fi
 
     # Parse global MPI options (these apply to all ranks)

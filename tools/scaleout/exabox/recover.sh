@@ -133,7 +133,7 @@ EOF
 HOSTS=""
 CONFIG="4x32"
 DOCKER_IMAGE=""
-DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.80.0-dev20260929-17-gdc0d2c494ce"
+DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/exabox-tools:latest"
 NUM_ITERATIONS=5
 MAX_ATTEMPTS=1
 MAX_RETRAINS=5
@@ -548,6 +548,28 @@ for _darg in "${DOCKER_EXTRA_ARGS[@]}"; do
     DOCKER_ARG_FLAGS+=(--docker-arg "$_darg")
 done
 
+# Log exactly which build a run used: the image digest (stable even when the tag moves) and
+# the tt-metal commit baked into it (OCI revision label; older images have no label, so fall
+# back to the checkout inside the image). Pulls here so the digest is known before mpi-docker
+# fans it out; mpi-docker's own pull then finds it cached.
+print_image_provenance() {
+    local image="$1"
+    if ! docker pull -q "$image" >/dev/null 2>&1; then
+        echo "Docker image digest: unknown (could not pull; using local copy if present)"
+        return 0
+    fi
+    local digest revision
+    digest=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image" 2>/dev/null \
+        | grep -m1 '@sha256:' | sed 's/.*@//')
+    revision=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image" 2>/dev/null)
+    if [[ -z "$revision" ]]; then
+        revision=$(docker run --rm --entrypoint='' "$image" \
+            git -c safe.directory='*' -C /home/user/tt-metal rev-parse HEAD 2>/dev/null)
+    fi
+    echo "Docker image digest: ${digest:-unknown}"
+    echo "Docker image tt-metal commit: ${revision:-unknown}"
+}
+
 # Quiesce all expected cross-host Ethernet ports (from the FSD) before a reset. Mirrors the
 # run_cluster_validation launcher below (docker keyed on -n "$DOCKER_IMAGE"), just swapping the
 # validation args for --cross-host-port-down, which makes the binary port-down and exit.
@@ -587,6 +609,7 @@ if [[ "${#MPI_EXTRA_ARGS[@]}" -gt 0 ]]; then
 fi
 if [[ -n "$DOCKER_IMAGE" ]]; then
     echo "Docker image: $DOCKER_IMAGE"
+    print_image_provenance "$DOCKER_IMAGE"
 else
     echo "Using local build (no docker)"
 fi
