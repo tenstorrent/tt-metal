@@ -648,18 +648,17 @@ models/experimental/vovnet @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorr
 models/experimental/yunet @tvardhineniTT @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-models-maintainers
 
 models/perf/ @tenstorrent/metalium-models-maintainers @esmalTT
-models/perf/benchmarking_utils.py @williamlyTT @mtairum @uaydonat
 
 models/tt_dit/ @jonathansuTT @cglagovichTT @tenstorrent/cse-developer-ttnn
 models/tt_transformers @tenstorrent/metalium-models-maintainers @cglagovichTT
-models/**/requirements*.txt @tenstorrent/metalium-developers-infra
+models/**/requirements*.txt @tenstorrent/metalium-developers-infra @tenstorrent/metalium-models-maintainers
 models/vllm_test_utils/ @viktorpusTT @tchedaTT @uaydonat
 
 # tracy
 tools/tracy/ @mo-tenstorrent @akerteszTT @yusufbashiTT
 tt_metal/third_party/tracy @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent-github-bot
 
-tools/scripts/ @mtairum
+tools/scripts/ @tenstorrent/metalium-models-maintainers
 
 # tt-triage
 tools/tests/triage/ @tenstorrent/metalium-developers-triage
