@@ -472,15 +472,13 @@ class SamplingGenerator:
                 # under their sub-device config (untilize with sub_core_grids=None).
                 if force_argmax and not self.tt_sampling._allow_force_argmax_sampling:
                     continue
-                # Models may disable the penalty program the same way (attribute
-                # defaults True elsewhere): e.g. on a 2D-fractured mesh the
-                # penalty buffers' shapes don't match the vocab sharding yet.
+                # A model whose mesh layout the penalty program does not support
+                # sets _allow_penalties_sampling=False (default True elsewhere).
                 if penalties_on and not getattr(self.tt_sampling, "_allow_penalties_sampling", True):
                     continue
-                # Same escape for the top-k/top-p program: its global-index
-                # reconstruction broadcasts are (1,N)-mesh shaped. Rails that
-                # force argmax (e.g. the fractured one-instance mesh) skip
-                # compiling it rather than crash at precompile.
+                # Same opt-out for the top-k/top-p program, whose global-index
+                # reconstruction broadcasts assume a (1,N) mesh; a model that
+                # forces argmax skips compiling it instead of failing at precompile.
                 if (not force_argmax) and not getattr(self.tt_sampling, "_allow_topk_sampling", True):
                     continue
                 self._penalties_active = penalties_on
