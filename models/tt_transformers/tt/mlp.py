@@ -207,7 +207,7 @@ class MLP(LightweightModule):
         w1_out = ttnn.linear(
             x,
             self.w1,
-            dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b if (TG or mode == Mode.DECODE) else activation_dtype or ttnn.bfloat16,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
             program_config=None if use_tg_decode_no_prefetch else pc_1,
@@ -224,7 +224,7 @@ class MLP(LightweightModule):
         w3_out = ttnn.linear(
             x,
             self.w3,
-            dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b if (TG or mode == Mode.DECODE) else activation_dtype or ttnn.bfloat16,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
             program_config=None if use_tg_decode_no_prefetch else pc_3,
