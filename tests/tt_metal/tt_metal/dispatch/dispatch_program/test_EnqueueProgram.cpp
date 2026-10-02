@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <type_traits>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
@@ -34,6 +35,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <distributed/mesh_workload_impl.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include "impl/buffers/semaphore.hpp"
@@ -208,7 +210,7 @@ bool cb_config_successful(
             slow_dispatch::ReadFromL1(
                 *mesh_device,
                 core_coord,
-                workload.get_cb_base_addr(mesh_device, core_coord, CoreType::WORKER),
+                workload.impl().get_cb_base_addr(mesh_device, core_coord, CoreType::WORKER),
                 cb_config_buffer_size,
                 cb_config_vector);
 
@@ -369,7 +371,7 @@ bool test_dummy_EnqueueProgram_with_sems(
             uint32_t expected_semaphore_vals_for_core_idx = 0;
             const uint32_t semaphore_buffer_size =
                 program_config.num_sems * MetalContext::instance().hal().get_alignment(HalMemType::L1);
-            uint32_t semaphore_base = workload.get_sem_base_addr(mesh_device, core_coord, CoreType::WORKER);
+            uint32_t semaphore_base = workload.impl().get_sem_base_addr(mesh_device, core_coord, CoreType::WORKER);
             slow_dispatch::ReadFromL1(*mesh_device, core_coord, semaphore_base, semaphore_buffer_size, semaphore_vals);
             for (uint32_t i = 0; i < semaphore_vals.size();
                  i += (MetalContext::instance().hal().get_alignment(HalMemType::L1) / sizeof(uint32_t))) {
@@ -1379,7 +1381,7 @@ TEST_F(UnitMeshCQFixture, TensixTestMultiCBSharedAddressSpaceSentSingleCore) {
 
         vector<uint32_t> cb_config_vector;
 
-        auto address = workload.get_cb_base_addr(device, core_coord, CoreType::WORKER);
+        auto address = workload.impl().get_cb_base_addr(device, core_coord, CoreType::WORKER);
         slow_dispatch::ReadFromL1(*device, core_coord, address, cb_config_buffer_size, cb_config_vector);
         uint32_t cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);

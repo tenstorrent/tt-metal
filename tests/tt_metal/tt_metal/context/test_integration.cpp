@@ -53,6 +53,7 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include "tt_metal/distributed/mesh_buffer_impl.hpp"
 
 namespace tt::tt_metal {
 

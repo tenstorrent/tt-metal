@@ -16,12 +16,12 @@
 #include <utility>
 #include <vector>
 
+#include <tt-metalium/mesh_buffer.hpp>
 #include "global_semaphore_impl.hpp"
 #include "impl/dispatch/host_device_transfer.hpp"
 #include "mesh_device.hpp"
 #include <tt_stl/reflection.hpp>
 #include "impl/context/metal_context.hpp"
-
 namespace tt::tt_metal {
 
 // GlobalSemaphoreImpl implementation

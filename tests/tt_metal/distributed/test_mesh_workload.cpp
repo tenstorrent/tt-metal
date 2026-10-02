@@ -3,11 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
+#include <type_traits>
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <distributed/mesh_workload_impl.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -57,6 +59,8 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <distributed/mesh_device_impl.hpp>
+#include "tt_metal/distributed/mesh_buffer_impl.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -141,7 +145,7 @@ void verify_cb_config(
                     ::tt::tt_metal::detail::ReadFromDeviceL1(
                         device,
                         core_coord,
-                        workload.get_cb_base_addr(mesh_device, core_coord, CoreType::WORKER),
+                        workload.impl().get_cb_base_addr(mesh_device, core_coord, CoreType::WORKER),
                         dfb_config_buffer_size,
                         dfb_config_vector);
 
@@ -207,8 +211,8 @@ void validate_sems(
     MeshWorkload& mesh_workload,
     std::vector<uint32_t>& expected_semaphore_values) {
     for (const auto& core : crs) {
-        const uint32_t sem_buffer_size = mesh_workload.get_sem_size(mesh_device, core, CoreType::WORKER);
-        const uint32_t sem_buffer_base = mesh_workload.get_sem_base_addr(mesh_device, core, CoreType::WORKER);
+        const uint32_t sem_buffer_size = mesh_workload.impl().get_sem_size(mesh_device, core, CoreType::WORKER);
+        const uint32_t sem_buffer_base = mesh_workload.impl().get_sem_base_addr(mesh_device, core, CoreType::WORKER);
         std::vector<uint32_t> readback_sem_vals;
         ::tt::tt_metal::detail::ReadFromDeviceL1(device, core, sem_buffer_base, sem_buffer_size, readback_sem_vals);
         uint32_t sem_idx = 0;
@@ -338,7 +342,7 @@ TEST_F(MeshWorkloadTest4x8, UnusedDeviceKernelConfigNotOverwritten) {
     };
     // Which ring slots the host still considers in use; the checks below use it to confirm the setup worked.
     auto queued_slots = [&]() {
-        return cq.get_config_buffer_mgr(0).get_queued_entry_indices(
+        return as_mesh_command_queue_base(cq).get_config_buffer_mgr(0).get_queued_entry_indices(
             MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX));
     };
 
@@ -393,7 +397,7 @@ TEST_F(MeshWorkloadTest4x8, UnusedDeviceKernelConfigNotOverwritten) {
 
     // Slots are only freed once the ring runs out of room, so the first pass leaves its own marked as in use. They
     // would sit ahead of the held workload and soak up the fillers instead.
-    cq.get_config_buffer_mgr(0).mark_completely_full(0);
+    as_mesh_command_queue_base(cq).get_config_buffer_mgr(0).mark_completely_full(0);
 
     // Zero the ring so any circular buffer pattern seen later must come from a new write.
     std::vector<uint32_t> ring_zeros(ring_size / sizeof(uint32_t), 0);
@@ -434,7 +438,8 @@ TEST_F(MeshWorkloadTest4x8, UnusedDeviceKernelConfigNotOverwritten) {
     }
     ASSERT_TRUE(held_slot_reused) << "Ring never reused the held slot after " << max_fillers << " fillers; ring is "
                                   << ring_size << " bytes from " << kernel_config_base << " and reached "
-                                  << cq.get_config_buffer_mgr(0).get_last_slot_addr(HalProgrammableCoreType::TENSIX);
+                                  << as_mesh_command_queue_base(cq).get_config_buffer_mgr(0).get_last_slot_addr(
+                                         HalProgrammableCoreType::TENSIX);
 
     // The probe must fit the freed space without a wait of its own, since such a wait would hold its write back for
     // reasons of its own. A wait frees slots, so only the probe's slot may appear.
@@ -443,7 +448,7 @@ TEST_F(MeshWorkloadTest4x8, UnusedDeviceKernelConfigNotOverwritten) {
     ASSERT_EQ(queued_slots().size(), slots_before_probe + 1)
         << "Probe reserved with a wait of its own, so this run cannot show the missing wait";
 
-    const uint32_t probe_cb_base = probe_workload.get_cb_base_addr(mesh_device_, core, CoreType::WORKER);
+    const uint32_t probe_cb_base = probe_workload.impl().get_cb_base_addr(mesh_device_, core, CoreType::WORKER);
     auto probe_config_written = [&]() {
         std::vector<uint32_t> cb_config;
         ::tt::tt_metal::detail::ReadFromDeviceL1(

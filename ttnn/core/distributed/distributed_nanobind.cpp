@@ -48,6 +48,10 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn-nanobind/pipeline_module_nanobind.hpp"
 
+// get_local_mesh_coord_range() is no longer on the public MeshDeviceView; reach through impl() so the
+// Python binding for it keeps working rather than dropping an existing ttnn API.
+#include "tt_metal/distributed/mesh_device_view_impl.hpp"
+
 namespace {
 
 // The device a mesh coordinate names, or the mesh's first device when none is given.
@@ -656,7 +660,7 @@ void py_module(nb::module_& mod) {
         .def("is_local", &MeshDeviceView::is_local, nb::arg("coord"))
         .def(
             "get_local_mesh_coord_range",
-            &MeshDeviceView::get_local_mesh_coord_range,
+            [](const MeshDeviceView& self) { return self.impl().get_local_mesh_coord_range(); },
             R"doc(
             Returns the bounding box of the coordinates of the devices that this process owns.
 

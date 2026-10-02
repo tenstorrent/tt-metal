@@ -15,6 +15,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 #include <tt_align.hpp>
 #include <algorithm>
 #include <cstdint>
@@ -3726,7 +3727,9 @@ uint32_t program_base_addr_on_core(
     TT_FATAL(
         sub_device_ids.size() == 1, "get_sem_base_addr currently only supports programs spanning a single sub-device");
     auto sub_device_index = **sub_device_ids.begin();
-    return cq->get_config_buffer_mgr(sub_device_index).get_last_slot_addr(programmable_core_type);
+    return distributed::as_mesh_command_queue_base(*cq)
+        .get_config_buffer_mgr(sub_device_index)
+        .get_last_slot_addr(programmable_core_type);
 }
 
 void reset_config_buf_mgrs_and_expected_workers(

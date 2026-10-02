@@ -1,4 +1,3 @@
-
 // SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -16,6 +15,7 @@
 #include <tt-metalium/experimental/per_core_allocation/allocator_mode.hpp>
 #include "device.hpp"
 #include "impl/allocator/allocator.hpp"
+#include "mesh_buffer_impl.hpp"
 #include "mesh_device_impl.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/debug/inspector/inspector.hpp"
@@ -207,23 +207,18 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
         mesh_buffer_config);
 
     if (mesh_device->get_view().get_devices().empty()) {
-        auto mesh_buffer =
-            std::shared_ptr<MeshBuffer>(new MeshBuffer(mesh_buffer_config, device_local_config, 0, 0, mesh_device));
-        mesh_buffer->initialize_device_buffers();
-        Inspector::mesh_buffer_allocated(mesh_buffer.get());
-        return mesh_buffer;
+        MeshBufferImpl impl(mesh_buffer_config, device_local_config, 0, 0, mesh_device);
+        impl.initialize_device_buffers();
+        return std::make_shared<MeshBuffer>(std::move(impl));
     }
-
-    std::shared_ptr<MeshBuffer> mesh_buffer;
 
     // Per-core allocation path: each device allocates independently
     if (per_core_allocation::is_per_core_allocation(device_local_config.sharding_args)) {
         TT_FATAL(!address.has_value(), "Per-core allocation does not support explicit address");
-        mesh_buffer = std::shared_ptr<MeshBuffer>(
-            new MeshBuffer(mesh_buffer_config, device_local_config, /*address=*/0, device_local_size, mesh_device));
+        MeshBufferImpl impl(mesh_buffer_config, device_local_config, /*address=*/0, device_local_size, mesh_device);
         // Per-core: each device allocates independently. The mesh-level lockstep allocator queries
         // device per-bank ranges at allocation time, so no explicit mirroring is needed.
-        for (auto& [coord, device_buffer] : mesh_buffer->buffers_) {
+        for (auto& [coord, device_buffer] : impl.buffers()) {
             if (!mesh_device->impl().is_local(coord)) {
                 continue;
             }
@@ -238,7 +233,10 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
                 device_local_config.sub_device_id);
             device_buffer = MaybeRemote<std::shared_ptr<Buffer>>::local(std::move(buffer));
         }
-    } else if (!address.has_value()) {
+        return std::make_shared<MeshBuffer>(std::move(impl));
+    }
+
+    if (!address.has_value()) {
         // In HYBRID mode, set device-level allocators on the mesh allocator so it
         // can query their per-bank ranges and avoid regions occupied on any device.
         auto* mesh_allocator = mesh_device->allocator_impl().get();
@@ -281,20 +279,18 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
 
         hybrid_scope.reset();  // ends the span exactly where the placement does
 
-        mesh_buffer = std::shared_ptr<MeshBuffer>(new MeshBuffer(
-            mesh_buffer_config, device_local_config, device_local_size, mesh_device, std::move(backing_buffer)));
-        mesh_buffer->initialize_device_buffers();
-    } else {
-        mesh_buffer = std::shared_ptr<MeshBuffer>(
-            new MeshBuffer(mesh_buffer_config, device_local_config, address.value(), device_local_size, mesh_device));
-        mesh_buffer->initialize_device_buffers();
+        MeshBufferImpl impl(
+            mesh_buffer_config, device_local_config, device_local_size, mesh_device, std::move(backing_buffer));
+        impl.initialize_device_buffers();
+        return std::make_shared<MeshBuffer>(std::move(impl));
     }
 
-    Inspector::mesh_buffer_allocated(mesh_buffer.get());
-    return mesh_buffer;
+    MeshBufferImpl impl(mesh_buffer_config, device_local_config, address.value(), device_local_size, mesh_device);
+    impl.initialize_device_buffers();
+    return std::make_shared<MeshBuffer>(std::move(impl));
 }
 
-void MeshBuffer::initialize_device_buffers() {
+void MeshBufferImpl::initialize_device_buffers() {
     auto init_device_buffer_at_address = [this](const MeshCoordinate& coord) {
         std::shared_ptr<Buffer> buffer = BufferImpl::create(
             device()->impl().get_device(coord),
@@ -344,7 +340,7 @@ void MeshBuffer::initialize_device_buffers() {
     }
 }
 
-bool MeshBuffer::is_allocated() const {
+bool MeshBufferImpl::is_allocated() const {
     if (std::holds_alternative<DeallocatedState>(state_)) {
         return false;
     }
@@ -354,10 +350,15 @@ bool MeshBuffer::is_allocated() const {
     return true;
 }
 
-MeshBuffer::~MeshBuffer() { deallocate(); }
+bool MeshBufferImpl::is_deallocated() const { return std::holds_alternative<DeallocatedState>(state_); }
 
-MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
-    config_((Inspector::mesh_buffer_deallocated(&other), other.config_)),
+MeshBufferImpl::~MeshBufferImpl() { deallocate(); }
+
+// Inspector is not notified here: it keys mesh buffers by the public `MeshBuffer` pointer, and an impl is only
+// moved while a `MeshBuffer` is being constructed around it, before that pointer exists. Registration and
+// deregistration live on `MeshBuffer` instead.
+MeshBufferImpl::MeshBufferImpl(MeshBufferImpl&& other) noexcept :
+    config_(other.config_),
     device_local_config_(std::move(other.device_local_config_)),
     mesh_device_(std::move(other.mesh_device_)),
     address_(other.address_),
@@ -367,13 +368,11 @@ MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
     other.state_ = DeallocatedState{};
     other.address_ = 0;
     other.device_local_size_ = 0;
-    Inspector::mesh_buffer_allocated(this);
 }
 
-MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
+MeshBufferImpl& MeshBufferImpl::operator=(MeshBufferImpl&& other) noexcept {
     if (this != &other) {
         deallocate();
-        Inspector::mesh_buffer_deallocated(&other);
         config_ = other.config_;
         device_local_config_ = std::move(other.device_local_config_);
         mesh_device_ = std::move(other.mesh_device_);
@@ -385,18 +384,11 @@ MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
         other.state_ = DeallocatedState{};
         other.address_ = 0;
         other.device_local_size_ = 0;
-        Inspector::mesh_buffer_allocated(this);
     }
     return *this;
 }
 
-void MeshBuffer::deallocate() {
-    // Guard against double reporting to Inspector if deallocate() was called explicitly and then again in the
-    // destructor.
-    if (!std::holds_alternative<DeallocatedState>(state_)) {
-        Inspector::mesh_buffer_deallocated(this);
-    }
-
+void MeshBufferImpl::deallocate() {
     auto mesh_device = mesh_device_.lock();
     if (mesh_device) {
         // Check HYBRID mode via rtoptions rather than mesh_device->allocator_impl() because:
@@ -441,17 +433,17 @@ void MeshBuffer::deallocate() {
     state_ = DeallocatedState{};
 }
 
-MeshDevice* MeshBuffer::device() const {
+MeshDevice* MeshBufferImpl::device() const {
     auto device = mesh_device_.lock();
     TT_FATAL(device, "Can't get device from mesh buffer, already deallocated");
     return device.get();
 }
 
-Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const {
+Buffer* MeshBufferImpl::get_device_buffer(const MeshCoordinate& device_coord) const {
     return buffers_.at(device_coord).value().get();
 }
 
-Buffer* MeshBuffer::get_reference_buffer() const {
+Buffer* MeshBufferImpl::get_reference_buffer() const {
     for (const auto& buffer : buffers_.values()) {
         if (buffer.is_local()) {
             return buffer.value().get();
@@ -460,14 +452,14 @@ Buffer* MeshBuffer::get_reference_buffer() const {
     TT_THROW("MeshBuffer: Tried to get reference buffer, but no local buffer found");
 }
 
-Buffer* MeshBuffer::get_backing_buffer() const {
+Buffer* MeshBufferImpl::get_backing_buffer() const {
     if (const auto* owned_state = std::get_if<OwnedBufferState>(&state_)) {
         return owned_state->backing_buffer.get();
     }
     return nullptr;
 }
 
-DeviceAddr MeshBuffer::size() const {
+DeviceAddr MeshBufferImpl::size() const {
     return std::visit(
         ttsl::overloaded{
             [&](const ReplicatedBufferConfig& config) { return config.size; },
@@ -475,19 +467,19 @@ DeviceAddr MeshBuffer::size() const {
         config_);
 }
 
-MeshBufferLayout MeshBuffer::global_layout() const {
+MeshBufferLayout MeshBufferImpl::global_layout() const {
     return std::holds_alternative<ReplicatedBufferConfig>(config_) ? MeshBufferLayout::REPLICATED
                                                                    : MeshBufferLayout::SHARDED;
 }
 
-const ShardedBufferConfig& MeshBuffer::global_shard_spec() const {
+const ShardedBufferConfig& MeshBufferImpl::global_shard_spec() const {
     TT_FATAL(
         (global_layout() == MeshBufferLayout::SHARDED),
         "Can only query the global shard spec for a sharded MeshBuffer");
     return std::get<ShardedBufferConfig>(config_);
 }
 
-uint32_t MeshBuffer::datum_size_bytes() const {
+uint32_t MeshBufferImpl::datum_size_bytes() const {
     // Limitation for now.
     TT_FATAL(
         this->global_layout() == MeshBufferLayout::SHARDED,
@@ -495,7 +487,7 @@ uint32_t MeshBuffer::datum_size_bytes() const {
     return this->global_shard_spec().compute_datum_size_bytes();
 }
 
-Shape2D MeshBuffer::physical_shard_shape() const {
+Shape2D MeshBufferImpl::physical_shard_shape() const {
     TT_FATAL(
         this->global_layout() == MeshBufferLayout::SHARDED,
         "Can only query physical shard shape for buffers sharded across the Mesh");
@@ -503,12 +495,92 @@ Shape2D MeshBuffer::physical_shard_shape() const {
     return sharded_config.physical_shard_shape();
 }
 
-std::pair<bool, bool> MeshBuffer::replicated_dims() const {
+std::pair<bool, bool> MeshBufferImpl::replicated_dims() const {
     TT_FATAL(
         this->global_layout() == MeshBufferLayout::SHARDED,
         "Can only query replicated dims for buffers sharded across the Mesh");
     return this->global_shard_spec().replicated_dims();
 }
+
+// Inspector keys mesh buffers by this pointer, which is also what the socket map is keyed by, so every hook below
+// reports the public `MeshBuffer` rather than its impl. Registering in the constructor covers all of `create`'s
+// allocation paths at once.
+MeshBuffer::MeshBuffer(MeshBufferImpl impl) : impl_(std::make_unique<MeshBufferImpl>(std::move(impl))) {
+    Inspector::mesh_buffer_allocated(this);
+}
+
+MeshBuffer::~MeshBuffer() {
+    // The impl destructor does the actual deallocation; report while it is still alive and readable.
+    report_deallocated_to_inspector();
+}
+
+MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
+    impl_((Inspector::mesh_buffer_deallocated(&other), std::move(other.impl_))) {
+    Inspector::mesh_buffer_allocated(this);
+}
+
+MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
+    if (this != &other) {
+        report_deallocated_to_inspector();
+        Inspector::mesh_buffer_deallocated(&other);
+        impl_ = std::move(other.impl_);
+        Inspector::mesh_buffer_allocated(this);
+    }
+    return *this;
+}
+
+void MeshBuffer::report_deallocated_to_inspector() noexcept {
+    // Guard against double reporting if deallocate() was called explicitly and then again in the destructor, and
+    // against reporting a moved-from MeshBuffer, whose impl now belongs to another instance.
+    if (impl_ != nullptr && !impl_->is_deallocated()) {
+        Inspector::mesh_buffer_deallocated(this);
+    }
+}
+
+const MeshBufferImpl& MeshBuffer::impl() const {
+    TT_FATAL(impl_ != nullptr, "MeshBuffer has been moved from");
+    return *impl_;
+}
+
+MeshBufferImpl& MeshBuffer::impl() {
+    TT_FATAL(impl_ != nullptr, "MeshBuffer has been moved from");
+    return *impl_;
+}
+
+bool MeshBuffer::is_allocated() const { return impl().is_allocated(); }
+
+void MeshBuffer::deallocate() {
+    report_deallocated_to_inspector();
+    impl().deallocate();
+}
+
+MeshDevice* MeshBuffer::device() const { return impl().device(); }
+
+DeviceAddr MeshBuffer::size() const { return impl().size(); }
+
+DeviceAddr MeshBuffer::device_local_size() const { return impl().device_local_size(); }
+
+DeviceAddr MeshBuffer::address() const { return impl().address(); }
+
+MeshBufferLayout MeshBuffer::global_layout() const { return impl().global_layout(); }
+
+const MeshBufferConfig& MeshBuffer::global_config() const { return impl().global_config(); }
+
+const ShardedBufferConfig& MeshBuffer::global_shard_spec() const { return impl().global_shard_spec(); }
+
+const DeviceLocalBufferConfig& MeshBuffer::device_local_config() const { return impl().device_local_config(); }
+
+Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const {
+    return impl().get_device_buffer(device_coord);
+}
+
+Buffer* MeshBuffer::get_reference_buffer() const { return impl().get_reference_buffer(); }
+
+Buffer* MeshBuffer::get_backing_buffer() const { return impl().get_backing_buffer(); }
+
+uint32_t MeshBuffer::page_size() const { return impl().page_size(); }
+
+uint32_t MeshBuffer::num_pages() const { return impl().num_pages(); }
 
 AnyBuffer::AnyBuffer(std::shared_ptr<Buffer> buffer) : buffer_(buffer.get()), holder_(std::move(buffer)) {}
 AnyBuffer::AnyBuffer(std::shared_ptr<MeshBuffer> buffer) :

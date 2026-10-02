@@ -23,6 +23,7 @@
 #include "tt_metal/distributed/dummy_mesh_command_queue.hpp"
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "tt_metal/distributed/mesh_buffer_impl.hpp"
 
 namespace tt::tt_metal::distributed {
 

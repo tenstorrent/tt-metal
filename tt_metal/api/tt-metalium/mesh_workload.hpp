@@ -36,14 +36,8 @@ public:
     std::unordered_map<MeshCoordinateRange, Program>& get_programs();
     const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const;
 
-    // For testing purposes only
-    void set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq);
-    MeshCommandQueue* get_last_used_command_queue() const;
-    uint32_t get_sem_base_addr(std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type);
-    uint32_t get_sem_size(std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type);
-    uint32_t get_cb_base_addr(std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type);
-    uint32_t get_cb_size(std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type);
     MeshWorkloadImpl& impl() { return *pimpl_; }
+    const MeshWorkloadImpl& impl() const { return *pimpl_; }
 
 private:
     std::unique_ptr<MeshWorkloadImpl> pimpl_;

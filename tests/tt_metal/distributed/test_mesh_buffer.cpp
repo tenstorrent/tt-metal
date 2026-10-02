@@ -54,6 +54,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
+#include "tt_metal/distributed/mesh_buffer_impl.hpp"
 #include "tt_metal/impl/dispatch/vector_aligned.hpp"
 
 namespace tt::tt_metal::distributed::test {
@@ -169,7 +170,6 @@ TEST_F(MeshBufferTest2x4, ReplicatedBufferInitialization) {
     EXPECT_EQ(replicated_buffer->global_layout(), MeshBufferLayout::REPLICATED);
     EXPECT_EQ(replicated_buffer->device_local_size(), 16 << 10);
 }
-
 TEST_F(MeshBufferTestSuite, EnqueueWriteMeshBufferValidSrcSize) {
     constexpr size_t buffer_size = 16;
 
@@ -299,7 +299,8 @@ TEST_F(MeshBufferTestSuite, MoveConstructor) {
     EXPECT_EQ(moved_buffer.size(), original_size);
     EXPECT_EQ(moved_buffer.device_local_size(), original_device_local_size);
 
-    EXPECT_FALSE(original_buffer->is_allocated());
+    // The moved-from MeshBuffer no longer owns an implementation.
+    EXPECT_ANY_THROW(original_buffer->impl());
 }
 
 TEST_F(MeshBufferTestSuite, MoveAssignment) {
@@ -329,7 +330,8 @@ TEST_F(MeshBufferTestSuite, MoveAssignment) {
     EXPECT_EQ(target_buffer->size(), source_size);
     EXPECT_EQ(target_buffer->device_local_size(), source_device_local_size);
 
-    EXPECT_FALSE(source_buffer->is_allocated());
+    // The moved-from MeshBuffer no longer owns an implementation.
+    EXPECT_ANY_THROW(source_buffer->impl());
 
     auto new_buffer = MeshBuffer::create(target_buffer_config, device_local_config, mesh_device_.get());
     EXPECT_EQ(new_buffer->address(), target_original_address);

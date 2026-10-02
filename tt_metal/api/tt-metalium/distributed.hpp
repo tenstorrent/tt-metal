@@ -102,10 +102,6 @@ void EnqueueReadMeshBuffer(
 // Make the current thread block until the event is recorded by the associated MeshCommandQueue.
 void EventSynchronize(const MeshEvent& event);
 
-// Query the status of an event tied to a MeshCommandQueue.
-// Returns true if the CQ has completed recording the event, false otherwise.
-bool EventQuery(const MeshEvent& event);
-
 void Synchronize(
     MeshDevice& device,
     ttsl::optional_reference<MeshCommandQueue> mesh_cq,

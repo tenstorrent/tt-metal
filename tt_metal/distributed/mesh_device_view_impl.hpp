@@ -16,6 +16,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/maybe_remote.hpp>
+#include "maybe_remote_utils.hpp"
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 
 namespace tt::tt_metal::distributed {
