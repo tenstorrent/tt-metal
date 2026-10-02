@@ -95,7 +95,7 @@ FORCE_INLINE void SenderPipeImpl<
     if constexpr (ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Counter) {
         data_ready_.up(1);
     }
-    if constexpr (!PRE_HANDSHAKE && ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Flag) {
+    if constexpr (ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Flag) {
         data_ready_.set(INVALID);
     }
 }
@@ -198,7 +198,7 @@ FORCE_INLINE void SenderPipeImpl<
     if constexpr (ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Counter) {
         data_ready_.up(1);
     }
-    if constexpr (!PRE_HANDSHAKE && ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Flag) {
+    if constexpr (ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Flag) {
         data_ready_.set(INVALID);
     }
 }
@@ -311,12 +311,10 @@ FORCE_INLINE void SenderPipeImpl<
         // The sender never calls receive() on itself, so it has no data-ready wait that proves its
         // destination arrived before a same-core consumer observes the caller's publication.
         noc_.async_write_barrier();
-    } else if constexpr (!PRE_HANDSHAKE && ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Flag) {
-        // Without a receiver handshake there is no later ordering point before the local source is
-        // cleared, so complete the flag multicast before the immediate post-send clear.
-        noc_.async_write_barrier();
-    } else if constexpr (SOURCE_GUARD == SourceL1Guard::Guard) {
-        // Guard waits for the remote-only payload source to depart.
+    } else if constexpr (
+        SOURCE_GUARD == SourceL1Guard::Guard || (ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Flag)) {
+        // Guard waits for the remote-only payload source to depart. A rotating Flag sender also
+        // needs this wait before send() resets the local semaphore cell used as the signal source.
         noc_.async_writes_flushed();
     }
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
@@ -409,12 +407,6 @@ FORCE_INLINE void ReceiverPipeImpl<
     const uint32_t sender_x = coords_[mcast_wire::SENDER_COORD_WORDS * sender_index + mcast_wire::SENDER_X];
     const uint32_t sender_y = coords_[mcast_wire::SENDER_COORD_WORDS * sender_index + mcast_wire::SENDER_Y];
     if constexpr (PRE_HANDSHAKE) {
-        if constexpr (DATA_READY_SIGNAL == DataReadySignal::Flag) {
-            // Retire the previously consumed flag before allowing this round's sender to publish.
-            // For rotating senders this also defers clearing their last outbound flag source until
-            // the core next participates as a receiver.
-            data_ready_.set(INVALID);
-        }
         // tell the sender "my dest is free / I am ready" (remote atomic inc on its counter)
         consumer_ready_.up(noc_, sender_x, sender_y, 1);
     }
@@ -422,9 +414,7 @@ FORCE_INLINE void ReceiverPipeImpl<
         data_ready_.wait_min(round + 1);
     } else {
         data_ready_.wait(VALID);
-        if constexpr (!PRE_HANDSHAKE) {
-            data_ready_.set(INVALID);
-        }
+        data_ready_.set(INVALID);  // clear this round's flag; next receive()'s ack follows
     }
 }
 
@@ -443,10 +433,6 @@ FORCE_INLINE uint32_t ReceiverPipeImpl<
     NUM_SENDERS,
     SenderCoordinates>::receive_signal(uint32_t round) {
     if constexpr (PRE_HANDSHAKE) {
-        if constexpr (DATA_READY_SIGNAL == DataReadySignal::Flag) {
-            // Clear the prior control value before acknowledging readiness for the next one.
-            data_ready_.set(INVALID);
-        }
         // tell the round-th sender "I am ready" (remote atomic inc on its counter)
         const uint32_t sender_index = round % NUM_SENDERS;
         consumer_ready_.up(
@@ -463,9 +449,7 @@ FORCE_INLINE uint32_t ReceiverPipeImpl<
         // the caller can distinguish the ordinary VALID doorbell from a typed control state.
         data_ready_.wait_min(VALID);
         const uint32_t value = data_ready_.value();
-        if constexpr (!PRE_HANDSHAKE) {
-            data_ready_.set(INVALID);
-        }
+        data_ready_.set(INVALID);
         return value;
     }
 }

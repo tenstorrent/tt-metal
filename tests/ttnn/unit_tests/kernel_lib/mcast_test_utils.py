@@ -272,6 +272,9 @@ def run_positional_mcast_case(
     caller_managed=False,
     handshake=True,
     kind="rectangle",
+    rounds=None,
+    suppress_round_output=False,
+    stress_flag_source_lifetime=False,
 ):
     """Use unified host assembly with the same payload checks as a mcast."""
 
@@ -294,7 +297,7 @@ def run_positional_mcast_case(
         helper,
         [group],
         config,
-        rounds=4 if handshake else 1,
+        rounds=rounds if rounds is not None else (4 if handshake else 1),
         control=control,
         caller_managed=caller_managed,
         dynamic=False,
@@ -303,6 +306,8 @@ def run_positional_mcast_case(
         round_only_receive=True,
         control_value=1,
         with_barrier=False,
+        suppress_round_output=suppress_round_output,
+        stress_flag_source_lifetime=stress_flag_source_lifetime,
     )
 
 
@@ -326,6 +331,8 @@ def _run_channel(
     round_only_receive=False,
     control_value=7,
     with_barrier=True,
+    suppress_round_output=False,
+    stress_flag_source_lifetime=False,
 ):
     # The config getter uses the runtime NOC enum, while ttnn.NOC is the descriptor enum.
     noc = config.noc.value
@@ -339,9 +346,10 @@ def _run_channel(
         pytest.skip("requires a larger worker grid")
     dispatch = [(x, y) for y in range(height) for x in range(width)]
     participants = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(width - 1, height - 1))])
-    payload = tile_pattern(len(specs) * rounds * max_pages)
+    payload_rounds = 1 if suppress_round_output and control else rounds
+    payload = tile_pattern(len(specs) * payload_rounds * max_pages)
     input_tensor = ttnn.from_torch(payload, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    stride = rounds * max_pages + 1
+    stride = 1 if suppress_round_output else rounds * max_pages + 1
     output_tensor = ttnn.allocate_tensor_on_device(
         ttnn.Shape([len(dispatch) * stride, 1, 32, 32]),
         ttnn.bfloat16,
@@ -376,6 +384,11 @@ def _run_channel(
             int(inside),
             int(group_index is None),
         ]
+    defines = []
+    if suppress_round_output:
+        defines.append(("MCAST_TEST_SUPPRESS_ROUND_OUTPUT", "1"))
+    if stress_flag_source_lifetime:
+        defines.append(("MCAST_TEST_STRESS_FLAG_SOURCE_LIFETIME", "1"))
     kernels = []
     face_rt = ttnn.RuntimeArgs()
     for x, y in dispatch:
@@ -386,6 +399,7 @@ def _run_channel(
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=core_set(dispatch),
             compile_time_args=list(ct),
+            defines=defines,
             runtime_args=face_rt,
             config=ttnn.WriterConfigDescriptor() if noc else ttnn.ReaderConfigDescriptor(),
         )
@@ -430,6 +444,17 @@ def _run_channel(
         descriptor,
     )
     actual = ttnn.to_torch(output).reshape(len(dispatch), stride, 1, 32, 32)
+    if suppress_round_output:
+        for index, coord in enumerate(dispatch):
+            if coord in all_coords:
+                if control:
+                    expected = rounds if counter else control_value
+                    assert actual[index, 0].contiguous().view(torch.int32).flatten()[0].item() == expected, coord
+                else:
+                    group_index = next(i for i, (receivers, _) in enumerate(specs) if coord in receivers)
+                    expected = payload[group_index * rounds * max_pages + (rounds - 1) * max_pages]
+                    assert torch.equal(actual[index, 0], expected), coord
+        return
     for index, coord in enumerate(dispatch):
         if with_barrier and coord not in all_coords:
             assert torch.all(actual[index, -1].contiguous().view(torch.int32) == 0x5A5A5A5A), coord

@@ -390,6 +390,24 @@ def test_rotating_line_counter_smoke(device):
     _run_rotating_line(device, span=2, payload_tiles=1, data_ready_mode=ttnn.McastDataReady.Counter)
 
 
+@pytest.mark.parametrize("control", [False, True], ids=["payload", "signal"])
+def test_rotating_line_flag_source_lifetime(device, control):
+    run_positional_mcast_case(
+        device,
+        width=8,
+        senders=list(range(8)),
+        rotating=True,
+        counter=False,
+        control=control,
+        alternating=False,
+        caller_managed=True,
+        handshake=True,
+        rounds=128,
+        suppress_round_output=True,
+        stress_flag_source_lifetime=True,
+    )
+
+
 def test_rotating_line_outside_sender(device):
     _run_rotating_line(device, span=2, payload_tiles=1, receiver_span=2, sender_indices=[0, 2])
 
