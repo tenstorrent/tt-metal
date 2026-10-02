@@ -38,7 +38,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.TILE_SIZE_UNPACK_B,
         params.TILE_SIZE_UNPACK_A);
 
-    _llk_unpack_AB_compressed_custom_mm_init_<false, true>(params.in0_face_r_dim);
+    _llk_unpack_AB_compressed_custom_mm_init_<false /* transpose */, true /* clear_src */>(params.in0_face_r_dim);
 
     _llk_unpack_AB_compressed_custom_mm_(L1_ADDRESS(params.buffer_B[0]), L1_ADDRESS(params.buffer_A[0]), params.buffer_C[0], KT_DIM, CT_DIM);
 }

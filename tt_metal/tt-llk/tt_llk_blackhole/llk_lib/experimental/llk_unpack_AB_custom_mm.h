@@ -182,6 +182,21 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
     TTI_MOP_CFG(0);
 }
 
+/**
+ * @brief Configure the unpack thread for a custom_mm block matmul.
+ *
+ * Sets the unpacker X ends, records the MOP and replay buffer the execute runs, and resets the counters.
+ *
+ * @tparam transpose: Transpose the SrcA read, values = <true/false>
+ * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>. Only unpB_face_r_dim rows of each
+ *                    SrcB face are unpacked, so zeroing the rest saves FPU power.
+ * @param unpB_face_r_dim: Activation rows per face, 1, 2, 4 or 8. Sets unpacker 1's X end.
+ * @param unpA_dst_format: Unpack destination format of the weights (SrcA); Bfp4_b selects a tuned sequence.
+ * @param ct_dim: Output width in tiles, 1 to 16.
+ * @note Call this before @ref _llk_unpack_AB_custom_mm_, and again after any other op has run, in particular one
+ *       that writes SrcB: the execute does not reprogram the MOP, and the SrcB clear happens only here.
+ * @note On the math thread, pair with @ref _llk_math_custom_mm_init_.
+ */
 template <bool transpose = false, bool clear_src = true>
 inline void _llk_unpack_AB_custom_mm_init_(const std::uint32_t unpB_face_r_dim, const std::uint32_t unpA_dst_format, const std::uint32_t ct_dim = 1)
 {
@@ -273,6 +288,22 @@ inline void _llk_unpack_AB_custom_mm_run_(
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
 }
 
+/**
+ * @brief Unpack a kt_dim x ct_dim block of weight tiles into SrcA and the matching activation tiles into SrcB.
+ *
+ * @tparam read_transposed: Walk the weight tiles column by column (ct_dim tiles with a stride of kt_dim, then the
+ *                          next tile) instead of row by row, values = <true/false>
+ * @param base_address_a: L1 address of the weights (SrcA), in the 16-byte-word encoding of L1_ADDRESS().
+ * @param base_address_b: L1 address of the activations (SrcB), in the same encoding.
+ * @param tile_index_a: First weight tile to read.
+ * @param tile_index_b: First activation tile to read.
+ * @param tile_size_a: Weight tile size, in 16-byte words.
+ * @param tile_size_b: Activation tile size, in 16-byte words.
+ * @param kt_dim: Inner dimension in tiles, 1 to 256.
+ * @param ct_dim: Output width in tiles, 1 to 16.
+ * @note Call @ref _llk_unpack_AB_custom_mm_init_ first.
+ * @note On the math thread, pair with @ref _llk_math_custom_mm_.
+ */
 template <bool read_transposed = false>
 inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t base_address_a,

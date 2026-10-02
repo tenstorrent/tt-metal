@@ -10,7 +10,7 @@
 // the low-level LLKs, because a tt-llk test cannot include tt_metal/hw/inc/api/compute.
 // The three threads mirror the compute API exactly:
 //
-//   UNPACK  llk_unpack_AB_custom_mm_init<transpose, false /*clear_src*/>
+//   UNPACK  llk_unpack_AB_custom_mm_init<transpose, SDPA_CUSTOM_MM_CLEAR_SRC>
 //                                                      -> _llk_unpack_AB_custom_mm_init_
 //           llk_unpack_AB_sdpa_custom_mm<read_transposed>
 //                                                      -> _llk_unpack_AB_sdpa_custom_mm_

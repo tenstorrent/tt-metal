@@ -36,16 +36,17 @@ namespace ckernel {
  *
  * Return value: None
  *
- * | Argument       | Description                                                                            | Type     | Valid Range                           | Required              |
- * |----------------|----------------------------------------------------------------------------------------|----------|---------------------------------------|-----------------------|
- * | transpose      | The transpose flag for performing transpose operation on in1                           | bool     | true/false                            | False (default false) |
- * | split_acc      | Whether to accumulate partials within a single tile in different dest locations        | bool     | true/false                            | False (default false) |
- * | dense_packing  | Whether to pack consecutive tiles 32 rows apart (instead of 64, doubles dest capacity) | bool     | true/false                            | False (default false) |
- * | clear_src      | Whether to clear SrcB at init (saves power as only 1/8 FPU rows are used)              | bool     | true/false                            | False (default true)  |
- * | in0_cb_id      | The identifier of the first input circular buffer (CB)                                 | uint32_t | 0 to 31                               | True                  |
- * | in1_cb_id      | The identifier of the second input circular buffer (CB)                                | uint32_t | 0 to 31                               | True                  |
- * | out_cb_id      | The identifier of the output circular buffer (CB)                                      | uint32_t | 0 to 31                               | True                  |
- * | ct_dim         | The width of the output matrix in tiles                                                | uint32_t | 1 to 16                               | False (default 1)     |
+ * | Argument         | Description                                                                            | Type     | Valid Range                           | Required              |
+ * |------------------|----------------------------------------------------------------------------------------|----------|---------------------------------------|-----------------------|
+ * | transpose        | The transpose flag for performing transpose operation on in1                           | bool     | true/false                            | False (default false) |
+ * | split_acc        | Whether to accumulate partials within a single tile in different dest locations        | bool     | true/false                            | False (default false) |
+ * | dense_packing    | Whether to pack consecutive tiles 32 rows apart (instead of 64, doubles dest capacity) | bool     | true/false                            | False (default false) |
+ * | fp32_dest_acc_en | Whether dest accumulates in fp32; defaults to the kernel's DST_ACCUM_MODE              | bool     | true/false                            | False                 |
+ * | clear_src        | Whether to clear SrcB at init (saves power as only 1/8 FPU rows are used)              | bool     | true/false                            | False (default true)  |
+ * | in0_cb_id        | The identifier of the first input circular buffer (CB)                                 | uint32_t | 0 to 31                               | True                  |
+ * | in1_cb_id        | The identifier of the second input circular buffer (CB)                                | uint32_t | 0 to 31                               | True                  |
+ * | out_cb_id        | The identifier of the output circular buffer (CB)                                      | uint32_t | 0 to 31                               | True                  |
+ * | ct_dim           | The width of the output matrix in tiles                                                | uint32_t | 1 to 16                               | False (default 1)     |
  */
 // clang-format on
 template <

@@ -22,6 +22,18 @@
  * Uses llk_unpack_AB_custom_mm.h as the low-level implementation.
  *************************************************************************/
 
+/**
+ * @brief Configure the unpack thread for a custom_mm block matmul.
+ *
+ * @tparam transpose: Transpose the SrcA read, values = <true/false>
+ * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>
+ * @param operand0: CB of the activations, whose face_r_dim this reads. Its data goes to SrcB.
+ * @param operand1: CB of the weights, whose unpack format selects the instruction tuning. Its data goes to SrcA.
+ * @param ct_dim: Output width in tiles, 1 to 16.
+ * @note Call this before @ref llk_unpack_AB_custom_mm, and again after any other op has run, in particular one
+ *       that writes SrcB.
+ * @note On the math thread, pair with @ref llk_math_custom_mm_init.
+ */
 template <bool transpose = false, bool clear_src = true>
 inline void llk_unpack_AB_custom_mm_init(
     const std::uint32_t operand0, const std::uint32_t operand1, const std::uint32_t ct_dim = 1) {
@@ -35,6 +47,20 @@ inline void llk_unpack_AB_custom_mm_init(
     _llk_unpack_AB_custom_mm_init_<transpose, clear_src>(operandB_face_r_dim, operandA_unpack_dst_format, ct_dim);
 }
 
+/**
+ * @brief Unpack a kt_dim x ct_dim block: weight tiles from operand1 into SrcA, activation tiles from operand0 into
+ *        SrcB.
+ *
+ * @tparam read_transposed: Walk the weight tiles column by column instead of row by row, values = <true/false>
+ * @param operand0: CB of the activations; its read pointer is the SrcB base.
+ * @param operand1: CB of the weights; its read pointer is the SrcA base.
+ * @param tile_index_0: First activation tile, relative to operand0's read pointer.
+ * @param tile_index_1: First weight tile, relative to operand1's read pointer.
+ * @param kt_dim: Inner dimension in tiles, 1 to 256.
+ * @param ct_dim: Output width in tiles, 1 to 16.
+ * @note Call @ref llk_unpack_AB_custom_mm_init first.
+ * @note On the math thread, pair with @ref llk_math_custom_mm.
+ */
 template <bool read_transposed = false>
 inline void llk_unpack_AB_custom_mm(
     const std::uint32_t operand0,

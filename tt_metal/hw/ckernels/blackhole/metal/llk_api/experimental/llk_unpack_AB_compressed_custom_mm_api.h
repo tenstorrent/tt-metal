@@ -22,6 +22,17 @@
  * Uses llk_unpack_AB_custom_mm.h as the low-level implementation.
  *************************************************************************/
 
+/**
+ * @brief Configure the unpack thread for a compressed custom_mm block matmul.
+ *
+ * @tparam transpose: Transpose the SrcA read, values = <true/false>
+ * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>
+ * @param operand0: CB of the activations, whose face_r_dim this reads. Its data goes to SrcB.
+ * @param operand1: CB of the compressed weights, unused here.
+ * @note Call this before @ref llk_unpack_AB_compressed_custom_mm, and again after any other op has run, in
+ *       particular one that writes SrcB, SCRATCH_SEC0-2 or GPRs PERF_UNPACK_NUM_TILES_1-3.
+ * @note On the math thread, pair with @ref llk_math_compressed_custom_mm_init.
+ */
 template <bool transpose = false, bool clear_src = true>
 inline void llk_unpack_AB_compressed_custom_mm_init(const std::uint32_t operand0, const std::uint32_t operand1) {
     SAN_HOOK(unsupported());
@@ -33,6 +44,18 @@ inline void llk_unpack_AB_compressed_custom_mm_init(const std::uint32_t operand0
     _llk_unpack_AB_compressed_custom_mm_init_<transpose, clear_src>(operandB_face_r_dim);
 }
 
+/**
+ * @brief Unpack a kt_dim x ct_dim block of compressed weight tiles into SrcA and activation tiles into SrcB.
+ *
+ * @param operand0: CB of the activations; its read pointer is the SrcB base.
+ * @param operand1: CB of the compressed weights; its read pointer is the start of the weight stream.
+ * @param base_address_meta: Byte address of the per-tile format metadata; see
+ *                           @ref _llk_unpack_AB_compressed_custom_mm_ for the layout.
+ * @param kt_dim: Inner dimension in tiles, an even number from 2 to 256.
+ * @param ct_dim: Output width in tiles, 1 to 16.
+ * @note Call @ref llk_unpack_AB_compressed_custom_mm_init first.
+ * @note On the math thread, pair with @ref llk_math_compressed_custom_mm.
+ */
 inline void llk_unpack_AB_compressed_custom_mm(
     const std::uint32_t operand0,
     const std::uint32_t operand1,
