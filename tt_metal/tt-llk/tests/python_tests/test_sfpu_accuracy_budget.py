@@ -1706,9 +1706,6 @@ def test_the_emitter_and_the_guards_agree_on_which_ops_are_exact():
     )
 
 
-_DATED = re.compile(r"\d{4}-\d{2}-\d{2}")
-
-
 def _sampled_zero_budgets(path=_TABLE_PATH):
     """``(op_name, row_text)`` for every ``max_ulp: 0`` row whose measurement was a
     sample: :func:`_run_of` it is not the exhaustive sweep."""
@@ -1790,7 +1787,7 @@ def _budgets_past_their_measurement(path=_TABLE_PATH):
     comment beside it, which is the table header's rule for raising one. A sampled row
     may sit anywhere in ``[measured, MEASUREMENT_HEADROOM * measured]``, and at 1 over
     a measured 0: a finite sample cannot assert exactness."""
-    from helpers.ulp_sweep import _row_fields, _verdict
+    from helpers.ulp_sweep import _is_exact, _row_fields, _verdict
 
     problems = []
     for op, body, budget, measured, exhaustive in _measured_budget_rows(path):
@@ -1798,12 +1795,15 @@ def _budgets_past_their_measurement(path=_TABLE_PATH):
             continue  # owned by test_every_step_budget_names_the_measurement_it_came_from
         where = f"{op}: {body} (records {measured} ULP)"
         if exhaustive:
-            out_fmt = _row_fields(body)["out"]
-            if ("ulp", budget) != _verdict(measured, out_fmt):
+            # The emitter's own call: the input format decides whether a 0 was seen on
+            # every value (kept) or on a stride of Float32 (written as 1, unless the op
+            # is exact by construction).
+            fields = _row_fields(body)
+            verdict = _verdict(measured, fields["out"], fields.get("in"), _is_exact(op))
+            if ("ulp", budget) != verdict:
                 problems.append(
-                    f"{where}: the emitter writes {_verdict(measured, out_fmt)[1]} for "
-                    f"that measurement, not {budget}. Re-measure rather than edit the "
-                    "number."
+                    f"{where}: the emitter writes {verdict[1]} for that measurement, "
+                    f"not {budget}. Re-measure rather than edit the number."
                 )
         elif measured == 0:
             if budget > 1:
