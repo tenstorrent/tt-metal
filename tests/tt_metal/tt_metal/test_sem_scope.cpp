@@ -527,7 +527,10 @@ protected:
     };
 
     std::vector<uint32_t> run_compute(
-        const ComputeRun& run, uint32_t n_report, std::vector<uint32_t> in = {}, std::vector<uint32_t>* out = nullptr) {
+        const ComputeRun& run,
+        uint32_t n_report,
+        const std::vector<uint32_t>& in = {},
+        std::vector<uint32_t>* out = nullptr) {
         const bool dfb_datacopy = !in.empty();
         std::vector<uint32_t> zero_report(8, 0u);
         slow_dispatch::WriteToL1(*mesh_device_, core, report_addr, zero_report);

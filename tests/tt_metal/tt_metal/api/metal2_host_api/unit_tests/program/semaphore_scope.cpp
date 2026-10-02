@@ -9,6 +9,7 @@
 #include <unordered_map>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/metal2_host_api/semaphore_scope.hpp"
