@@ -1009,11 +1009,15 @@ def test_exp_ring_joint_attention_perf_check(ring_size_expected, max_payload_siz
 # === GRID VALIDATION ===
 # The factory needs 4 columns (1 fabric MUX + 2 MUX-writer + 1 pure SDPA). Validation used to accept 2, so a
 # 2- or 3-column grid failed inside program construction instead of in validation.
+# With TT_EXP_SDPA_MUX_BOTTOM_ROW set the MUX takes a row instead of a column, so 3 columns are enough.
 @pytest.mark.skipif(len(TEST_CONFIGS) == 0, reason="No valid device configuration detected")
 @pytest.mark.parametrize("grid_cols", [2, 3])
 def test_exp_ring_joint_attention_sdpa_grid_too_narrow(grid_cols, expect_error):
+    min_cols = 3 if os.environ.get("TT_EXP_SDPA_MUX_BOTTOM_ROW") is not None else 4
+    if grid_cols >= min_cols:
+        pytest.skip(f"{grid_cols} columns is a valid grid in this layout")
     b, nh, total_seq, d, q_chunk_size, k_chunk_size = TEST_CONFIGS[0]
-    with expect_error(RuntimeError, "needs at least 4 columns"):
+    with expect_error(RuntimeError, f"needs at least {min_cols} columns"):
         run_exp_ring_joint_sdpa_nightly(
             b, nh, total_seq, d, q_chunk_size, k_chunk_size, ttnn.bfloat16, grid_cols=grid_cols
         )
