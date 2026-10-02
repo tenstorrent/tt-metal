@@ -958,7 +958,7 @@ ttnn::Tensor launch_indexer_score(
             *block_cyclic_sp_axis);
     }
     std::optional<BlockCyclicLayout> block_cyclic = std::nullopt;
-    uint32_t key_stripe_split = 1;  // >1 only for a TP-deduplicated (GLM-5.2) key cache; see below
+    uint32_t key_stripe_split = 1;  // >1 only for a TP-deduplicated (GLM-5.3) key cache; see below
     if (full_mesh && block_cyclic_chunk_local.has_value()) {
         const uint32_t sp = q.device()->get_view().shape().mesh_size();
         const uint32_t chunk_local = *block_cyclic_chunk_local;

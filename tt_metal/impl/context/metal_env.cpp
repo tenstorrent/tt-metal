@@ -35,22 +35,11 @@
 
 namespace tt::tt_metal {
 
-// ─── MetalEnvDescriptor ───────────────────────────────────────────────────────
+// ─── MetalEnvImpl core ───────────────────────────────────────────────────────
 
 std::mutex MetalEnvImpl::s_registry_mutex_;
 std::set<MetalEnvImpl*> MetalEnvImpl::s_registry_;
 std::once_flag MetalEnvImpl::s_atfork_registered_;
-
-MetalEnvDescriptor::MetalEnvDescriptor(const std::string& mock_cluster_desc_path) :
-    mock_cluster_desc_path_(
-        mock_cluster_desc_path.empty() ? std::nullopt : std::optional<std::string>(mock_cluster_desc_path)) {}
-MetalEnvDescriptor::MetalEnvDescriptor(std::optional<std::string> mock_cluster_desc_path) :
-    mock_cluster_desc_path_(std::move(mock_cluster_desc_path)) {}
-MetalEnvDescriptor::MetalEnvDescriptor(
-    std::optional<std::string> mock_cluster_desc_path, FabricConfigDescriptor fabric_config_desc) :
-    mock_cluster_desc_path_(std::move(mock_cluster_desc_path)), fabric_config_desc_(fabric_config_desc) {}
-
-// ─── MetalEnvImpl core ───────────────────────────────────────────────────────
 
 void MetalEnvImpl::prefork_check_all() {
     std::lock_guard<std::mutex> lock(s_registry_mutex_);
@@ -64,7 +53,7 @@ MetalEnvImpl::MetalEnvImpl(MetalEnvDescriptor descriptor) : descriptor_(std::mov
     verify_fw_capabilities();
 
     // Apply fabric config from descriptor
-    const auto& fc = descriptor_.fabric_config_descriptor();
+    const auto& fc = descriptor_.fabric;
     fabric_config_ = fc.fabric_config;
     fabric_reliability_mode_ = fc.reliability_mode;
     fabric_tensix_config_ = fc.fabric_tensix_config;
@@ -163,8 +152,8 @@ void MetalEnvImpl::initialize_base_objects() {
     this->rtoptions_ = std::make_unique<llrt::RunTimeOptions>();
 
     if (descriptor_.is_mock_device()) {
-        log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", descriptor_.mock_cluster_desc_path());
-        this->rtoptions_->set_mock_cluster_desc(std::string(descriptor_.mock_cluster_desc_path()));
+        log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *descriptor_.mock_cluster_desc_path);
+        this->rtoptions_->set_mock_cluster_desc(*descriptor_.mock_cluster_desc_path);
     }
 
     const auto platform_arch = get_platform_architecture(*this->rtoptions_);
@@ -227,10 +216,6 @@ tt_fabric::FabricUDMMode MetalEnvImpl::get_fabric_udm_mode() const { return fabr
 tt_fabric::FabricManagerMode MetalEnvImpl::get_fabric_manager() const { return fabric_manager_; }
 
 uint8_t MetalEnvImpl::get_num_fabric_active_routing_planes() const { return num_fabric_active_routing_planes_; }
-
-void MetalEnvImpl::set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config) {
-    fabric_tensix_config_ = fabric_tensix_config;
-}
 
 // The fabric config is normally set once, from the FabricConfigDescriptor supplied at MetalEnv construction time.
 // However, for the legacy backward-compatibility path, the DeviceManager may call set_fabric_config a second time
@@ -314,7 +299,7 @@ bool MetalEnvImpl::set_fabric_config(
     }
     this->num_fabric_active_routing_planes_ = new_val;
 
-    this->set_fabric_tensix_config(fabric_tensix_config);
+    this->fabric_tensix_config_ = fabric_tensix_config;
     this->fabric_udm_mode_ = fabric_udm_mode;
     this->fabric_manager_ = fabric_manager;
     this->fabric_router_config_ = router_config;
@@ -334,10 +319,7 @@ bool MetalEnvImpl::set_fabric_config(
                 prev_fabric_config,
                 this->fabric_config_);
         } else {
-            log_debug(
-                tt::LogMetal,
-                "Fabric config unchanged ({}), reinitializing control plane",
-                this->fabric_config_);
+            log_debug(tt::LogMetal, "Fabric config unchanged ({}), reinitializing control plane", this->fabric_config_);
         }
         system_mesh_.reset();
         this->initialize_control_plane_impl();
@@ -687,13 +669,7 @@ private:
 }  // namespace
 
 std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
-    const distributed::MeshDeviceConfig& config,
-    size_t l1_small_size,
-    size_t trace_region_size,
-    size_t num_command_queues,
-    const DispatchCoreConfig& dispatch_core_config,
-    ttsl::Span<const std::uint32_t> l1_bank_remap,
-    size_t worker_l1_size) {
+    const distributed::MeshDeviceConfig& config, const CreateMeshDeviceOptions& options) {
     // Associate a context ID for the mesh device's dependencies to easily access the MetalContext::instance(contextId)
     // TODO: Remove this and directly pass in the MetalEnv reference
     // If the control plane / system mesh was already accessed, the env owns a registered context; reuse it
@@ -706,12 +682,12 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
     auto mesh_device = distributed::MeshDeviceImpl::create(
         context_id,
         config,
-        l1_small_size,
-        trace_region_size,
-        num_command_queues,
-        dispatch_core_config,
-        l1_bank_remap,
-        worker_l1_size);
+        options.l1_small_size,
+        options.trace_region_size,
+        options.num_command_queues,
+        options.dispatch_core_config,
+        /*l1_bank_remap=*/{},
+        options.worker_l1_size);
     if (context_guard.holds_context()) {
         mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
         context_guard.release();
@@ -719,14 +695,8 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
     return mesh_device;
 }
 
-std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh_device(
-    int device_id,
-    size_t l1_small_size,
-    size_t trace_region_size,
-    size_t num_command_queues,
-    const DispatchCoreConfig& dispatch_core_config,
-    ttsl::Span<const std::uint32_t> l1_bank_remap,
-    size_t worker_l1_size) {
+std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh(
+    ChipId device_id, const CreateMeshDeviceOptions& options) {
     const bool env_owns_context = impl_->has_registered_context();
     ContextId context_id =
         env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
@@ -734,12 +704,12 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh_device(
     auto mesh_device = distributed::MeshDeviceImpl::create_unit_mesh(
         context_id,
         device_id,
-        l1_small_size,
-        trace_region_size,
-        num_command_queues,
-        dispatch_core_config,
-        l1_bank_remap,
-        worker_l1_size);
+        options.l1_small_size,
+        options.trace_region_size,
+        options.num_command_queues,
+        options.dispatch_core_config,
+        /*l1_bank_remap=*/{},
+        options.worker_l1_size);
     if (context_guard.holds_context()) {
         mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
         context_guard.release();
@@ -747,27 +717,21 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh_device(
     return mesh_device;
 }
 
-std::map<int, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_meshes(
-    const std::vector<int>& device_ids,
-    size_t l1_small_size,
-    size_t trace_region_size,
-    size_t num_command_queues,
-    const DispatchCoreConfig& dispatch_core_config,
-    ttsl::Span<const std::uint32_t> l1_bank_remap,
-    size_t worker_l1_size) {
+std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_meshes(
+    ttsl::Span<const ChipId> device_ids, const CreateMeshDeviceOptions& options) {
     const bool env_owns_context = impl_->has_registered_context();
     ContextId context_id =
         env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
     TransitContextGuard context_guard(context_id, env_owns_context);
     auto result = distributed::MeshDeviceImpl::create_unit_meshes(
         context_id,
-        device_ids,
-        l1_small_size,
-        trace_region_size,
-        num_command_queues,
-        dispatch_core_config,
-        l1_bank_remap,
-        worker_l1_size);
+        std::vector<ChipId>(device_ids.begin(), device_ids.end()),
+        options.l1_small_size,
+        options.trace_region_size,
+        options.num_command_queues,
+        options.dispatch_core_config,
+        /*l1_bank_remap=*/{},
+        options.worker_l1_size);
     if (context_guard.holds_context() && !result.empty()) {
         const auto& parent = result.begin()->second->get_parent_mesh();
         TT_FATAL(parent != nullptr, "Unit meshes are submeshes, so they always have a parent to own the context");

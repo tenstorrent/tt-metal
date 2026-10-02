@@ -51,7 +51,7 @@
 #include "distributed/fd_mesh_command_queue.hpp"
 #include "distributed/realtime_profiler_manager.hpp"
 #include <tt-metalium/experimental/trace_allocation_tracker.hpp>
-#include "impl/streaming_profiler/streaming_profiler_receiver.hpp"
+#include "impl/streaming_profiler/receiver.hpp"
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
@@ -1356,11 +1356,11 @@ const std::shared_ptr<distributed::multihost::DistributedContext>& MeshDeviceImp
     return coowner_context_;
 }
 
-std::vector<CoreCoord> MeshDeviceImpl::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
+std::vector<CoreCoord> MeshDeviceImpl::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) const {
     return get_devices().front()->get_optimal_dram_bank_to_logical_worker_assignment(noc);
 }
 std::unordered_map<uint32_t, CoreCoord> MeshDeviceImpl::get_optimal_dram_bank_to_logical_worker_assignment(
-    NOC noc, const MeshCoordinate& coord) {
+    NOC noc, const MeshCoordinate& coord) const {
     // The assignment is a device-local physical property that can only be queried for a local device.
     // If `coord` maps to a local device, use it. Otherwise (a remote device) fall back to an arbitrary
     // local device's assignment; this is a best-effort approximation that is exact only when the mesh
@@ -2026,11 +2026,11 @@ std::vector<CoreCoord> MeshDevice::ethernet_cores_from_logical_cores(
     const std::vector<CoreCoord>& logical_cores) const {
     return pimpl_->ethernet_cores_from_logical_cores(logical_cores);
 }
-std::vector<CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
+std::vector<CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) const {
     return pimpl_->get_optimal_dram_bank_to_logical_worker_assignment(noc);
 }
 std::unordered_map<uint32_t, CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment(
-    NOC noc, const MeshCoordinate& coord) {
+    NOC noc, const MeshCoordinate& coord) const {
     return pimpl_->get_optimal_dram_bank_to_logical_worker_assignment(noc, coord);
 }
 CoreCoord MeshDevice::virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const {

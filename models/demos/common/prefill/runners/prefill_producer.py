@@ -1300,6 +1300,11 @@ def _verify_resident_slots(
         return False
 
     dflash_threshold = float(os.environ.get("PREFILL_DFLASH_PCC", "0.88"))
+    # MTP-level caches (mtp, mtp_index) get their own floor, defaulting to the trunk one so no other
+    # model changes behaviour. An MTP level is a decoder block chained on the trunk output, so its KV
+    # inherits the trunk error and adds one block's worth per level -- GLM-5.3 measures ~0.03/level
+    # against its own CPU reference. Relaxing the shared threshold instead would weaken the trunk gate.
+    mtp_threshold = float(os.environ.get("PREFILL_MTP_PCC", threshold))
     check_dflash = any(name.startswith("dflash_") for name in _config_names(kv_table))
     if check_dflash and not _dflash_caches_are_local(kv_table, device_map, slot_id=min(stats.resident, default=0)):
         logger.info(
@@ -1331,8 +1336,13 @@ def _verify_resident_slots(
         pcc = min(slot_mins.values())
         min_pcc_overall = min(min_pcc_overall, pcc)
         checked += 1
-        if pcc < threshold:
-            failures.append((slot_id, real_len, pcc))
+        below = {
+            cache: value
+            for cache, value in slot_mins.items()
+            if value < (mtp_threshold if cache.startswith("mtp") else threshold)
+        }
+        if below:
+            failures.append((slot_id, real_len, min(below.values())))
         if check_dflash:
             dflash_pcc = dflash_kv_table_pcc_check(
                 kv_table,
@@ -1357,7 +1367,10 @@ def _verify_resident_slots(
     ok = bool(checked) and not failures and not dflash_failures
     _write_pcc_verdict(rank, ok=ok, min_pcc=min_pcc_overall, checked=checked, threshold=threshold, per_cache=per_cache)
     if failures:
-        logger.error(f"[producer] KV cache PCC below {threshold} for (slot, real_len, pcc): {failures}")
+        logger.error(
+            f"[producer] KV cache PCC below {threshold} (MTP caches: {mtp_threshold}) "
+            f"for (slot, real_len, pcc): {failures}"
+        )
     if dflash_failures:
         logger.error(f"[producer] drafter KV PCC below {dflash_threshold} for (slot, real_len, pcc): {dflash_failures}")
     if failures or dflash_failures:

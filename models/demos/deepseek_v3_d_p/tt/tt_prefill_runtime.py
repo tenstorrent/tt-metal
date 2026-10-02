@@ -290,10 +290,10 @@ class TtPrefillRuntime:
         """Build this rank's ``TtMTPPredictor``. Last rank only.
 
         Cache-only, with an empty state_dict; the weights have their own tree,
-        ``$TT_GLM52_MTP_TTNN_CACHE``.
+        ``$TT_GLM53_MTP_TTNN_CACHE``.
         """
         k = self.config.mtp_levels
-        path = os.environ.get("GLM52_HF_MODEL") or os.environ.get("PREFILL_HF_MODEL")
+        path = os.environ.get("GLM53_HF_MODEL") or os.environ.get("PREFILL_HF_MODEL")
         mtp_cfg = (
             MTPConfig.from_pretrained(path, num_levels=k)
             if path
@@ -303,9 +303,9 @@ class TtPrefillRuntime:
         eff = Path(self.config.weight_cache_path)
         assert eff.name and eff.parent.name, (
             f"weight_cache_path {eff} is not the expected <root>/<variant>_<arch>_<N>dev/<sp>x<tp> "
-            "layout, so the sibling MTP cache path cannot be derived; set TT_GLM52_MTP_TTNN_CACHE"
+            "layout, so the sibling MTP cache path cannot be derived; set TT_GLM53_MTP_TTNN_CACHE"
         )
-        mtp_root = Path(os.environ.get(MTP_CACHE_ENV) or eff.parent.parent.parent / "glm52_mtp_ttnn_cache")
+        mtp_root = Path(os.environ.get(MTP_CACHE_ENV) or eff.parent.parent.parent / "glm53_mtp_ttnn_cache")
         mtp_cache_path = mtp_root / eff.parent.name / eff.name
 
         num_devices = self.config.mesh_shape[0] * self.config.mesh_shape[1]
@@ -325,7 +325,7 @@ class TtPrefillRuntime:
             f"MTP weight cache incomplete at {mtp_cache_path}. Building it here would dequantise "
             f"layer {mtp_cfg.mtp_layer_idx}'s 256 fp8 experts inside the serving process; populate it "
             "once with tests/mtp_prefill/test_mtp_transformer_chunks.py, or point "
-            "TT_GLM52_MTP_TTNN_CACHE at a populated tree."
+            "TT_GLM53_MTP_TTNN_CACHE at a populated tree."
         )
 
         logger.info(
@@ -1146,11 +1146,9 @@ class TtPrefillRuntime:
         )
         self._trace_d2h_service = d2h_service
 
-    def kv_migration_base_address(self, kv_caches: MlaKvCaches) -> int:
-        """This stage's primary KV base DRAM address — the engine's single-cache hook for the
-        migration all-gather (it holds the cache but must not introspect its layout). `.kvpe` is an
-        MlaKvCache wrapper rather than a bare tensor, hence `.storage`. A sparse/DSA model migrates a
-        second cache too: see `kv_migration_stages`, which the engine prefers."""
+    def _kvpe_base_address(self, kv_caches: MlaKvCaches) -> int:
+        """This stage's primary KV base DRAM address, the anchor of the KVPE stage. `.kvpe` is an
+        MlaKvCache wrapper rather than a bare tensor, hence `.storage`."""
         return int(kv_caches.kvpe.storage.buffer_address())
 
     def layer_ack_layers(self, global_ack_layers: int, local_ack_layers: int) -> tuple[int, int]:
@@ -1189,7 +1187,7 @@ class TtPrefillRuntime:
         first_layer_idx = self.config.first_layer_idx if first_layer_idx is None else int(first_layer_idx)
         num_my_layers = self.config.num_layers if num_my_layers is None else int(num_my_layers)
         mtp_tail = self.config.mtp_levels if self.config.is_last_rank else 0
-        stages = [KvCacheStage(self.kv_migration_base_address(kv_caches), first_layer_idx, num_my_layers + mtp_tail)]
+        stages = [KvCacheStage(self._kvpe_base_address(kv_caches), first_layer_idx, num_my_layers + mtp_tail)]
 
         index_cache = kv_caches.index
         if index_cache is not None:
@@ -1200,7 +1198,7 @@ class TtPrefillRuntime:
                 raise RuntimeError(
                     f"index cache holds {slots_per_user} layers per slot but this stage owns "
                     f"{count_full} full-indexer layers; the table cannot place its layers unless the "
-                    "cache is sized to the stage (see the GLM-5.2 adapter's allocate_kv_cache)."
+                    "cache is sized to the stage (see the GLM-5.3 adapter's allocate_kv_cache)."
                 )
             stages.append(KvCacheStage(int(index_cache.buffer_address()), first_full, count_full))
 
@@ -1311,8 +1309,7 @@ class TtPrefillRuntime:
                     raise RuntimeError(
                         f"dflash is on, so kv_migration_stages emits {n_block_cyclic} block-cyclic stage(s) "
                         f"plus the drafter's K and V, but {len(stage_layouts)} layouts were gathered. The "
-                        "caller must gather one layout per stage this runtime declares (a stale "
-                        "kv_migration_base_address fallback does not)."
+                        "caller must gather one layout per stage this runtime declares."
                     )
                 *block_cyclic_layouts, k_layout, v_layout = stage_layouts
                 stage_layouts = block_cyclic_layouts
@@ -1412,7 +1409,7 @@ class TtPrefillRuntime:
             # having checked only the KVPE half.
             #
             # Two ways it differs from `.kvpe`: its per-slot stride is its OWN layer count, NOT
-            # config.num_layers (GLM-5.2 sizes it to this stage's `full` indexer layers only);
+            # config.num_layers (GLM-5.3 sizes it to this stage's `full` indexer layers only);
             # and it is a plain ttnn.Tensor, so there is no `.storage` / `unpack_host` (bfp8_b TILE
             # dequantizes on to_torch).
             index = kv_caches.index

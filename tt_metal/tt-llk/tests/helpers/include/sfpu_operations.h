@@ -642,6 +642,12 @@ void call_unary_sfpu_operation_init()
         // longer tanh's own table; the two are fitted separately and free to diverge.
         llk_math_eltwise_unary_sfpu_init<OPERATION>(tanh_derivative_init<APPROX_MODE>);
     }
+    else if constexpr (OPERATION == SfpuType::tanh_derivative)
+    {
+        // Accurate sech^2: tanh_derivative_sech2_init programs vConstFloatPrgm0..2 with the
+        // exp polynomial's C2..C4, which calculate_tanh_derivative_sech2 reads.
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(tanh_derivative_sech2_init<APPROX_MODE>);
+    }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
         // Typecast selects its concrete init from the (IN, OUT) format pair.
@@ -651,8 +657,7 @@ void call_unary_sfpu_operation_init()
         OPERATION == SfpuType::floor || OPERATION == SfpuType::ceil || OPERATION == SfpuType::trunc || OPERATION == SfpuType::frac ||
         OPERATION == SfpuType::round || OPERATION == SfpuType::add1 || OPERATION == SfpuType::relu_max || OPERATION == SfpuType::relu_min ||
         OPERATION == SfpuType::lrelu || OPERATION == SfpuType::hardtanh || OPERATION == SfpuType::clamp || OPERATION == SfpuType::identity ||
-        OPERATION == SfpuType::cast_fp32_to_fp16a || OPERATION == SfpuType::tanh_derivative || OPERATION == SfpuType::sqrt_custom ||
-        OPERATION == SfpuType::expm1_cw)
+        OPERATION == SfpuType::cast_fp32_to_fp16a || OPERATION == SfpuType::sqrt_custom || OPERATION == SfpuType::expm1_cw)
     {
         // These ops need only the generic per-op init (SFPU config reg + ADDR_MOD_7 from
         // llk_math_sfpu_init_once() above, plus a dest RWC counter reset), so route them through
@@ -660,7 +665,7 @@ void call_unary_sfpu_operation_init()
         //   - floor/ceil/trunc/frac/round/relu_max/relu_min/hardtanh/clamp: their production/metal
         //     <op>_init() genuinely reduces to math::reset_counters, so the bare init here
         //     matches production behavior.
-        //   - add1/identity/cast_fp32_to_fp16a/tanh_derivative/sqrt_custom/expm1_cw: the
+        //   - add1/identity/cast_fp32_to_fp16a/sqrt_custom/expm1_cw: the
         //     OPERATION-keyed bare init has no delegate branch.
         //   - lrelu: no linkable definition in this test build, since only the tt-llk common
         //     (not the metal llk_api) header is included.
@@ -1149,8 +1154,25 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::relu_max)
     {
+        // The threshold as fp32 bits, which is the encoding relu_max_tile takes (relu6 passes
+        // 0x40c00000u). Overridable through the SFPU_RELU_MAX_THRESHOLD template parameter, on
+        // the same #ifdef arrangement as SFPU_RELU_MIN_INT_THRESHOLD, so the relu_max threshold
+        // sweep can drive relu6's 6.0, a zero and a negative threshold. A test that does not set
+        // it keeps the fixed 5.0; the golden reads the same value through UnarySFPUGolden's
+        // relu_max_threshold argument, so the two sides move together.
+#ifdef SFPU_RELU_MAX_THRESHOLD
+        constexpr std::uint32_t RELU_MAX_THRESHOLD_BITS = SFPU_RELU_MAX_THRESHOLD;
+#else
+        constexpr std::uint32_t RELU_MAX_THRESHOLD_BITS = 0x40A00000u; // 5.0f
+#endif
         SFPU_UNARY_CALL(
-            DST_SYNC_MODE, DST_ACCUM_MODE, _relu_max_, (sfpi::vFloat, APPROX_MODE, ITERATIONS, float), dst_index, vector_mode, 5.0f /* threshold */);
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _relu_max_,
+            (sfpi::vFloat, APPROX_MODE, ITERATIONS, std::uint32_t),
+            dst_index,
+            vector_mode,
+            RELU_MAX_THRESHOLD_BITS);
     }
     else if constexpr (OPERATION == SfpuType::relu_min)
     {

@@ -375,8 +375,11 @@ public:
                 defines.push_back("NOC_ATT_CONFIG_GRENDEL_QSR1");
             } else if (map == "quasar_aether_2x3") {
                 defines.push_back("NOC_ATT_CONFIG_QUASAR_AETHER_2X3");
+            } else if (map == "horizon_2x3") {
+                defines.push_back("NOC_ATT_CONFIG_HORIZON_2X3");
             } else {
-                TT_THROW("Unknown TT_METAL_NOC_ATT map '{}' (expected grendel_qsr1 or quasar_aether_2x3)", map);
+                TT_THROW(
+                    "Unknown TT_METAL_NOC_ATT map '{}' (expected grendel_qsr1, quasar_aether_2x3 or horizon_2x3)", map);
             }
             // Fast dispatch runs on the V3 CQ flag family (cq_dispatch/cq_prefetch
             // reject non-DRAM-backed CQs at compile time). The watcher NoC sanitizer
@@ -612,6 +615,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
     this->noc_stream_remote_dest_buf_space_available_reg_index_ = 0;         // TODO: add correct value
     this->noc_stream_remote_dest_buf_space_available_update_reg_index_ = 0;  // TODO: add correct value
     this->has_stream_registers_ = false;
+    this->supports_fds_ = true;
     this->noc_topology_ = NoCTopologyType::MESH;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
@@ -637,6 +641,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
         NEO_REGS_0__LOCAL_REGS_TILE_COUNTERS_MIRROR_COUNTERS_0__BUFFER_CAPACITY_REG_OFFSET;
 
     this->has_remapper_ = true;
+    this->noc_att_enabled_ = std::getenv("TT_METAL_NOC_ATT") != nullptr;
     this->remapper_global_control_addr_ = REMAP_GLOBAL_CONTROL_REG_ADDR32;
     this->remapper_client_l_config_base_addr_ = REMAP_CLIENT_L_CONFIG_REG_BASE_ADDR32;
     this->remapper_client_r_config_base_addr_ = REMAP_CLIENT_R_CONFIG_REG_BASE_ADDR32;
