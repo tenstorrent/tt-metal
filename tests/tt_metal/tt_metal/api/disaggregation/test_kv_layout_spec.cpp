@@ -12,6 +12,8 @@
 #include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 
+#include <tt-metalium/constants.hpp>
+
 #include "internal/disaggregation/cache_tensor_layout_spec.hpp"
 
 namespace tt::tt_metal::internal::disaggregation {
@@ -21,7 +23,8 @@ namespace {
 // (KvLayoutSpec has no default ctor because TensorSpec requires a shape + layout).
 TensorSpec dummy_tensor() {
     return TensorSpec(
-        Shape{1, kTile, kTile}, TensorLayout(DataType::BFLOAT8_B, PageConfig(Layout::TILE), MemoryConfig{}));
+        Shape{1, tt::constants::TILE_WIDTH, tt::constants::TILE_WIDTH},
+        TensorLayout(DataType::BFLOAT8_B, PageConfig(Layout::TILE), MemoryConfig{}));
 }
 
 // Skeleton-level tests: exercise the collapsed spec's self-contained parts (TemporalPolicy,
@@ -75,17 +78,12 @@ TEST(KvLayoutSpec, CPU_HasSequenceFromTemporal) {
     EXPECT_FALSE(ssm.has_sequence());
 }
 
-// --- GenerationPolicy / AddressingMode defaults ---
+// --- GenerationPolicy defaults ---
 
 TEST(KvLayoutSpec, CPU_GenerationPolicyDefaultsToOptimalBankOrder) {
     GenerationPolicy policy;
     EXPECT_EQ(policy.bank_order, BankOrder::Optimal);
     EXPECT_EQ(policy.bank_scheme, BankScheme::Natural);
-}
-
-TEST(KvLayoutSpec, CPU_AddressingSupportsBothSlotAndPaged) {
-    // Both representations are first-class; the spec carries which one applies per tensor.
-    EXPECT_NE(AddressingMode::Slot, AddressingMode::Paged);
 }
 
 // --- arch: the layout's target, and the source of the DRAM bank count / OPTIMAL order ---

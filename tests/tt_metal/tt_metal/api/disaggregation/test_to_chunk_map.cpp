@@ -152,7 +152,6 @@ TEST(ToChunkMap, CPU_MlaShardMatchesMigrationReference) {
         .tensor = make_bfp8_ndshard_spec(
             Shape{num_slots, static_cast<uint32_t>(F), max_seq_len}, Shape{1, static_cast<uint32_t>(F), kTileLocal})};
     spec.temporal = temporal::Dense{};
-    spec.addressing = AddressingMode::Slot;
     spec.arch = tt::ARCH::BLACKHOLE;  // 8 DRAM banks + the OPTIMAL order derive from this
 
     // seq axis + feature width are derived from the tensor's NdShardSpec.
@@ -218,7 +217,6 @@ TEST(ToChunkMap, CPU_GqaCyclicMatchesReference) {
             Shape{num_slots, n_kv_heads, max_seq_len, static_cast<uint32_t>(head_dim)},
             Shape{1, 1, kTileLocal, static_cast<uint32_t>(head_dim)})};
     spec.temporal = temporal::Dense{};
-    spec.addressing = AddressingMode::Slot;
     spec.arch = tt::ARCH::BLACKHOLE;  // 8 DRAM banks + the OPTIMAL order derive from this
 
     EXPECT_EQ(spec.sequence_axis().value(), 2u);
