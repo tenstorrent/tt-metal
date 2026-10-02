@@ -7,8 +7,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from models.demos.gemma4.tests.unit.dflash_contract_harness import make_expect_error
-from models.demos.gemma4.tt.generator_vllm import _assert_within_native_context
+# generator_vllm imports vllm at module level; the unit tier has no vllm.
+pytest.importorskip("vllm")
+
+from models.demos.gemma4.tests.unit.dflash_contract_harness import make_expect_error  # noqa: E402
+from models.demos.gemma4.tt.generator_vllm import _assert_within_native_context  # noqa: E402
 
 expect_error = pytest.fixture(lambda: make_expect_error())
 

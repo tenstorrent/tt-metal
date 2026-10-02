@@ -7,9 +7,13 @@ The plugin pads per-layer tables to max_num_seqs rows while each decode trace
 binds the persistent buffers of its own bucket, so the refresh must slice to
 the step's batch."""
 
+import pytest
 import torch
 
-from models.demos.gemma4.tt.generator_vllm import Gemma4ForCausalLM
+# generator_vllm imports vllm at module level; the unit tier has no vllm.
+pytest.importorskip("vllm")
+
+from models.demos.gemma4.tt.generator_vllm import Gemma4ForCausalLM  # noqa: E402
 
 _slice = Gemma4ForCausalLM._slice_page_tables_rows
 

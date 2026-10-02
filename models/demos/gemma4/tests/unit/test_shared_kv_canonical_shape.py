@@ -9,9 +9,13 @@ in layer order — which is the layout the paged kernels reinterpret correctly
 for the fewer-heads layer. The buffer is sized by the larger num_blocks of
 its views, and views with different per-block element counts raise."""
 
+import pytest
 import torch
 
-from models.tt_transformers.tt.generator_vllm import _canonical_shared_kv_shapes
+# tt_transformers' generator_vllm imports vllm at module level; the unit tier has no vllm.
+pytest.importorskip("vllm")
+
+from models.tt_transformers.tt.generator_vllm import _canonical_shared_kv_shapes  # noqa: E402
 
 
 def test_first_layer_view_wins_shared_buffer():
