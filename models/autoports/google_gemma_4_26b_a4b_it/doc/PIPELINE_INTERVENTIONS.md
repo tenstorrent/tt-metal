@@ -427,6 +427,14 @@ device use; the corrected server opens all four chips normally as UID 6002.
 Sympy policy CI 36973577503 remains monitored. Active resumed time is about 91
 minutes, cumulative about 6h24m; the five-task suite still has no combined result.
 
+07:14 UTC: focused Sympy CI 36973577503 completes (1,200.011-second timeout,
+reward 0), confirming that prompt is not a suite candidate. All CI is terminal.
+The same-image prefill-BFP8 server passes a coherence-only six-prompt check,
+with exact-text changes and a thermodynamics wording caveat disclosed. A fresh
+900-second original-prompt Sympy trial now tests the numerical control without
+task-specific guidance. Full-suite measurement remains gated on correct clean
+completion. Active resumed time is about 103 minutes, cumulative about 6h36m.
+
 - TTFT: `doc/ttft_optimization/`.
 - Remote benchmarks/evals:
   `readiness_vllm/ttft_optimization_remote/README.md`.

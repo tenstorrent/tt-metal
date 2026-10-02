@@ -25,6 +25,9 @@ The focused policy **fails its Django regression** (900-second timeout, reward
 0), so it is rejected as a suite-wide default. A fresh prefill BFP8 weight
 control passes the short accuracy gate (prefill top1 .99; traced decode .98),
 but its SWE quality and long-context accuracy are not yet established.
+Focused-prompt Sympy CI also fails (1,200-second timeout, reward 0); all dispatched
+CI is complete. The prefill control is now running a bounded original-prompt
+Sympy trial on the reused local server, with no task-specific guidance.
 The [precision audit](AUTODEBUG.md) confirms fresh BFP8 weight provenance but
 identifies unchanged prefill BFP4 and untested long-context numerical quality;
 it does not establish a cache/position bug.
