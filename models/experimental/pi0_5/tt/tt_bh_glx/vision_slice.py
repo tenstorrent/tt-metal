@@ -131,7 +131,7 @@ class SigLIPCameraSlice:
 
     def forward(self, pixel_values) -> "ttnn.Tensor":
         hidden = self.embed.forward(pixel_values)
-        if _siglip_bs_enabled() and len(self.layers.blocks) > 0:
+        if _siglip_bs_enabled(self.submesh) and len(self.layers.blocks) > 0:
             # Enter BS once before the encoder loop, exit once after — mirrors
             # SigLIPVisionTowerTTNN.forward (ttnn_siglip.py:1529-1554).
             b, num_patches, hidden_dim = hidden.shape

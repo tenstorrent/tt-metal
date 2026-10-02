@@ -293,6 +293,26 @@ Usable = 140 minus one Tensix column reserved for fast dispatch (`DispatchCoreTy
 axis `COL`). Verified via firmware `ENABLED_TENSIX_COL=0x3fff`, UMD Tensix harvesting mask
 `0x0`, and `device.compute_with_storage_grid_size()` = 13×10.
 
+#### Single Chip p150a, restricted to an 11×10 compute grid
+
+Same board, setup and method as above, with the compute grid capped at 11×10 = 110 cores via
+`TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=10,9` (inclusive end core; the dispatch column is unchanged).
+The model sizes its configs from `compute_with_storage_grid_size()`; on a grid narrower than 12
+columns SigLIP uses its interleaved path instead of the (12, 8) block-sharded one. The extra cost is all
+in image encode + VLM prefill (per denoise step is unchanged); e2e PCC 0.9692 vs 0.9787 on 13×10.
+
+```bash
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=10,9 TT_VISIBLE_DEVICES=0 PI0_NUM_CAMERAS=2 PI0_VLM_CHUNK_SIZE=768 \
+  PI05_NUM_DENOISE_STEPS=5 python_env/bin/pytest -sq models/experimental/pi0_5/tests/perf/test_perf_ttnn_full_e2e_trace_2cq.py
+# Check that no op runs on a core outside the grid (device profiler; defaults to 11x10):
+PI0_CORE_GRID=11x10 PI0_NUM_CAMERAS=3 python_env/bin/pytest -sq models/experimental/pi0_5/tests/perf/test_core_grid_bounds.py
+```
+
+| Denoise steps | 2 cameras | 3 cameras |
+|---|---|---|
+| **5 steps** | 36.87 ms (+1.51 vs 13×10) | 42.21 ms (+2.78) |
+| **10 steps** | 51.83 ms (+1.41) | 58.40 ms (+2.71) |
+
 **PCC — TTNN vs torch (device 0).** The full-model e2e needs `PI0_UPSTREAM_MASKS=1`
 (correct prefix-offset suffix RoPE positions for the base checkpoint; the default
 `[0..seq)` positions corrupt the bidirectional suffix attention). `PI0_DENOISE_FP32=1`

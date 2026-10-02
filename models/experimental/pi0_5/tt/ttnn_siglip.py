@@ -62,7 +62,7 @@ _SIGLIP_INTERMEDIATE_PADDED_TILES = 144  # 144*32 = 4608 (padded from 4304/135)
 _SIGLIP_INTERMEDIATE_PADDED = _SIGLIP_INTERMEDIATE_PADDED_TILES * 32
 
 
-def _siglip_bs_enabled() -> bool:
+def _siglip_bs_enabled(device) -> bool:
     """Master switch for SigLIP block-sharded encoder path. Default ON.
 
     History: was flipped OFF after a 40-task LIBERO sweep on pi05_libero
@@ -73,7 +73,14 @@ def _siglip_bs_enabled() -> bool:
     Fixed by un-flattening batch around SDPA inside attention.forward_bs.
 
     Set PI0_SIGLIP_BS=0 to disable (e.g. to A/B against the baseline).
+
+    Always off when the device grid can't hold _SIGLIP_BS_GRID (e.g. an 11x10 grid): the
+    interleaved path adapts to any grid, and on 11x10 it measured 1.3-2.1 ms faster e2e than
+    BS on the largest grid that fits the BS shapes there, (6, 8).
     """
+    grid = device.compute_with_storage_grid_size()
+    if grid.x < _SIGLIP_BS_GRID[0] or grid.y < _SIGLIP_BS_GRID[1]:
+        return False
     v = os.environ.get("PI0_SIGLIP_BS")
     if v is None:
         return True
@@ -865,7 +872,7 @@ class SigLIPMLPTTNN:
         # Tier 2 BS path: pad intermediate (4304) → 4608 (144 tiles) so FC1/FC2
         # align on grid_x=12. Padding columns become zeros (GELU(0)=0 → safe).
         # Falls back to unpadded if BS path disabled.
-        self.bs_enabled = _siglip_bs_enabled()
+        self.bs_enabled = _siglip_bs_enabled(self.device)
         orig_intermediate = weights["mlp.fc1.weight"].shape[0]  # (intermediate, hidden)
         self._intermediate_padded = _SIGLIP_INTERMEDIATE_PADDED if self.bs_enabled else orig_intermediate
         pad_n = self._intermediate_padded - orig_intermediate
@@ -1152,7 +1159,7 @@ class SigLIPBlockTTNN:
 
         # Tier 2 — BS forward path master switch + cached LN PCFG on the
         # encoder common grid (12, 8) so LN matches the matmul shard spec.
-        self.bs_enabled = _siglip_bs_enabled()
+        self.bs_enabled = _siglip_bs_enabled(self.device)
         self._bs_ln_pcfg = None
         self._bs_ln_grid_cached = None
 
@@ -1184,7 +1191,10 @@ class SigLIPBlockTTNN:
             total_m_tiles = (b * m_padded) // 32
             hidden_tiles = self.config.hidden_size // 32  # 1152/32 = 36
             cfg = build_sharded_norm_pcfg(
-                total_m_tiles, hidden_tiles, max_grid_x=12, max_grid_y=min(8, max(1, total_m_tiles))
+                total_m_tiles,
+                hidden_tiles,
+                max_grid_x=min(12, self.device.compute_with_storage_grid_size().x),
+                max_grid_y=min(8, max(1, total_m_tiles)),
             )
             if cfg is not None:
                 pc, memcfg_factory, _grid = cfg
@@ -1403,7 +1413,7 @@ class SigLIPVisionTowerTTNN:
 
         # Tier 2 — BS encoder data path. Memcfgs built lazily on first forward
         # since they depend on the actual (batch, seq_len) at runtime.
-        self.bs_enabled = _siglip_bs_enabled()
+        self.bs_enabled = _siglip_bs_enabled(self.device)
         self._bs_memcfgs_cache: Dict[Tuple[int, int], Tuple] = {}
 
         # Final layer norm weights (handle both formats)

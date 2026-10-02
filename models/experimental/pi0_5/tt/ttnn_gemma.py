@@ -286,7 +286,8 @@ def build_matmul_pcfg(
             override = _DENOISE_TUNE_TABLE.get((k_tiles, n_tiles))
             if override is not None:
                 tuned_cores, tuned_bw = override
-                num_cores = tuned_cores
+                # Tuned on 12x10 / 13x10; cap to this grid so cfg_gy can't exceed grid_y.
+                num_cores = min(tuned_cores, total_cores)
                 if n_tiles % num_cores != 0:
                     per_core_N_1d = (n_tiles + num_cores - 1) // num_cores
                 else:
@@ -412,7 +413,7 @@ def build_matmul_pcfg(
         override = _PREFILL_TUNE_TABLE.get((m_tiles, k_tiles, n_tiles))
         if override is not None:
             tg_x, tg_y, tg_bw = override
-            if k_tiles % tg_bw == 0:
+            if k_tiles % tg_bw == 0 and tg_x <= grid_x and tg_y <= grid_y:
                 per_core_M_t = (m_tiles + tg_y - 1) // tg_y
                 per_core_N_t = (n_tiles + tg_x - 1) // tg_x
                 if per_core_M_t > 0 and per_core_N_t > 0:
@@ -1166,11 +1167,14 @@ class GemmaMLPTTNN:
 
         # BH Galaxy compute grid is 12x10 = 120 cores. Try full 12x10 first
         # (uses all compute cores, smallest per_core_N = best L1 fit).
-        # Falls back to 12x8 / 8x8 on smaller devices.
+        # Narrower grids (e.g. 11x10) use the whole device grid; 12x8 / 8x8 on
+        # smaller devices.
         if self.grid_size[0] >= 12 and self.grid_size[1] >= 10:
             self._pcfg_grid = (12, 10)
         elif self.grid_size[0] >= 12:
             self._pcfg_grid = (12, 8)
+        elif self.grid_size[0] >= 8 and self.grid_size[1] >= 8:
+            self._pcfg_grid = (self.grid_size[0], min(self.grid_size[1], 10))
         else:
             self._pcfg_grid = (8, 8)
 
