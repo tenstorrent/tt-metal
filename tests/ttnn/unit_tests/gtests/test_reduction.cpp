@@ -52,14 +52,20 @@
 namespace ttnn::operations::reduction::test {
 
 namespace {
+ttnn::kernel_lib::host::ReduceBlockSpec whole_input(ttnn::kernel_lib::host::ReduceBlockSpec block) {
+    block.input_cb_tiles = (block.padded_h / block.input_tile.get_height()) *
+                           (block.padded_w / block.input_tile.get_width()) * block.batches;
+    return block;
+}
+
 ttnn::kernel_lib::host::ReduceBlockSpec local_reduce_block(
     const tt::tt_metal::Shape& shape, tt::tt_metal::DataType dtype) {
     uint32_t batches = 1;
     for (size_t i = 0; i + 2 < shape.rank(); ++i) {
         batches *= shape[i];
     }
-    return ttnn::kernel_lib::host::ReduceBlockSpec::tiled(
-        shape[shape.rank() - 2], shape[shape.rank() - 1], dtype, dtype, batches);
+    return whole_input(ttnn::kernel_lib::host::ReduceBlockSpec::tiled(
+        shape[shape.rank() - 2], shape[shape.rank() - 1], dtype, dtype, batches));
 }
 }  // namespace
 
@@ -93,11 +99,11 @@ TEST(ReduceHostPlanner, FidelitySelectsArchitectureAdditiveCrossover) {
                     SCOPED_TRACE(
                         ::testing::Message() << "arch=" << static_cast<int>(arch) << " fidelity=" << fidelity
                                              << " dim=" << d << " tiles=" << tiles << " fp32=" << fp32);
-                    auto block = ReduceBlockSpec::tiled(
+                    auto block = whole_input(ReduceBlockSpec::tiled(
                         dims[d] == ReduceOpDim::H ? tiles * 32 : 32,
                         dims[d] == ReduceOpDim::H ? 32 : tiles * 32,
                         DataType::BFLOAT16,
-                        DataType::FLOAT32);
+                        DataType::FLOAT32));
                     for (const auto math : {ReduceOpMath::SUM, ReduceOpMath::AVG}) {
                         const ReduceCallConfig call{
                             block, math, dims[d], std::nullopt, ReduceFp32Mode::Fast, Policy::BulkWaitBulkPop};
@@ -138,7 +144,8 @@ TEST(ReduceHostPlanner, AdditiveStreamingRequiresPairs) {
     for (const auto arch : {tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE}) {
         for (const auto dtype : {DataType::BFLOAT16, DataType::FLOAT32}) {
             const ReduceHardwareConfig hardware{.arch = arch, .fp32_dest_acc_en = true};
-            const auto block = ReduceBlockSpec::tiled(9 * 32, 14 * 32, dtype, DataType::FLOAT32);
+            auto block = ReduceBlockSpec::tiled(9 * 32, 14 * 32, dtype, DataType::FLOAT32);
+            block.input_cb_tiles = 2;
             for (const auto dim : {ReduceOpDim::W, ReduceOpDim::HW}) {
                 const auto plan = make_reduce_plan(
                     block,
@@ -158,6 +165,20 @@ TEST(ReduceHostPlanner, AdditiveStreamingRequiresPairs) {
                 auto invalid = plan;
                 invalid.input_policy = static_cast<compute_kernel_lib::ReduceInputPolicy>(4);
                 EXPECT_ANY_THROW(ReduceCallArgs(invalid, {0, 1, 16}));
+
+                auto single = block;
+                single.input_cb_tiles = 1;
+                EXPECT_EQ(
+                    make_reduce_plan(
+                        single,
+                        ReduceOpMath::SUM,
+                        dim,
+                        1.0F,
+                        ReduceFp32Mode::Fast,
+                        hardware,
+                        compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile)
+                        .algorithm,
+                    compute_kernel_lib::ReduceAlgorithm::ReduceTile);
             }
         }
     }
@@ -169,23 +190,18 @@ TEST(ReduceHostPlanner, StreamingCapacityDependsOnAlgorithm) {
     using Policy = compute_kernel_lib::ReduceInputPolicy;
     using Algorithm = compute_kernel_lib::ReduceAlgorithm;
     const ReduceHardwareConfig hardware{.arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true};
-    auto block = ReduceBlockSpec::tiled(32, 32, DataType::BFLOAT16, DataType::FLOAT32);
-    block.resident_input_tiles = 1;
+    auto block = whole_input(ReduceBlockSpec::tiled(32, 32, DataType::BFLOAT16, DataType::FLOAT32));
+    block.input_cb_tiles = 1;
     const ReduceCallConfig config{block, ReduceOpMath::SUM, ReduceOpDim::W};
     EXPECT_NO_THROW(make_reduce_sequence_plan({{0, config}}, {1, 2, 16}, hardware, Algorithm::ReduceTile));
     EXPECT_ANY_THROW(make_reduce_sequence_plan({{0, config}}, {1, 2, 16}, hardware, Algorithm::AccumulateViaAdd));
     for (const auto capacity : {2U, 3U, 4U}) {
         auto sized = config;
-        sized.block.resident_input_tiles = capacity;
-        if (capacity % 2 == 0) {
-            EXPECT_NO_THROW(make_reduce_sequence_plan({{0, sized}}, {1, 2, 16}, hardware, Algorithm::AccumulateViaAdd));
-        } else {
-            EXPECT_ANY_THROW(
-                make_reduce_sequence_plan({{0, sized}}, {1, 2, 16}, hardware, Algorithm::AccumulateViaAdd));
-        }
+        sized.block.input_cb_tiles = capacity;
+        EXPECT_NO_THROW(make_reduce_sequence_plan({{0, sized}}, {1, 2, 16}, hardware, Algorithm::AccumulateViaAdd));
     }
     const auto native = make_reduce_plan(
-        ReduceBlockSpec::tiled(32, 256, DataType::BFLOAT16, DataType::FLOAT32),
+        whole_input(ReduceBlockSpec::tiled(32, 256, DataType::BFLOAT16, DataType::FLOAT32)),
         ReduceOpMath::MAX,
         ReduceOpDim::W,
         std::nullopt,
@@ -203,9 +219,8 @@ TEST(ReduceHostPlanner, EmptyAuxiliaryRecipeOmitsAllocationAndSerializesNoCb) {
     const ReduceHardwareConfig hardware{.arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true};
     for (const auto dtype : {DataType::FLOAT32, DataType::INT32}) {
         for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H}) {
-            auto block = ReduceBlockSpec::tiled(256, 256, dtype, dtype);
-            block.resident_input_tiles = 64;
-            block.resident_output_tiles = 8;
+            auto block = whole_input(ReduceBlockSpec::tiled(256, 256, dtype, dtype));
+            block.input_cb_tiles = 64;
             const auto mode = dtype == DataType::FLOAT32 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
             const auto legacy = make_reduce_plan(
                 block,
@@ -226,8 +241,6 @@ TEST(ReduceHostPlanner, EmptyAuxiliaryRecipeOmitsAllocationAndSerializesNoCb) {
                 compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
             EXPECT_TRUE(plan.auxiliary_tiles.empty());
             EXPECT_EQ(plan.find_cb(ReduceCbRole::Auxiliary), nullptr);
-            EXPECT_EQ(plan.total_owned_l1_bytes, 0U);
-            EXPECT_EQ(legacy.total_owned_l1_bytes, legacy.find_cb(ReduceCbRole::Auxiliary)->total_size_bytes);
             const auto words = ReduceCallArgs(plan, {0, no_cb_id, 16}).get_compile_time_args();
             EXPECT_EQ(
                 args::extract(
@@ -247,10 +260,9 @@ TEST(ReduceHostPlanner, EmptyAuxiliaryOptionPreservesRequiredScalersAndTailMasks
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;
     ReduceHardwareConfig hardware{.arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true};
-    auto block = ReduceBlockSpec::tiled(32, 512, DataType::BFLOAT16, DataType::FLOAT32);
+    auto block = whole_input(ReduceBlockSpec::tiled(32, 512, DataType::BFLOAT16, DataType::FLOAT32));
     block.allow_empty_auxiliary = true;
-    block.resident_input_tiles = 16;
-    block.resident_output_tiles = 1;
+    block.input_cb_tiles = 16;
     const auto full = make_reduce_plan(
         block,
         ReduceOpMath::SUM,
@@ -296,17 +308,15 @@ TEST(ReduceHostPlanner, EmptyAuxiliaryOptionPreservesRequiredScalersAndTailMasks
         hardware,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
     ASSERT_EQ(tail.auxiliary_tiles.size(), 3U);
-    EXPECT_EQ(tail.total_owned_l1_bytes, 3U * tt::tile_size(tt::DataFormat::Float16_b));
 }
 
 TEST(ReduceHostPlanner, AdditiveCallsAlwaysShareRequiredZero) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;
     const ReduceHardwareConfig hardware{.arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true};
-    auto block = ReduceBlockSpec::tiled(32, 256, DataType::BFLOAT16, DataType::FLOAT32);
+    auto block = whole_input(ReduceBlockSpec::tiled(32, 256, DataType::BFLOAT16, DataType::FLOAT32));
     block.allow_empty_auxiliary = true;
-    block.resident_input_tiles = 8;
-    block.resident_output_tiles = 1;
+    block.input_cb_tiles = 8;
     const ReduceCallConfig first{
         block,
         ReduceOpMath::SUM,
@@ -317,7 +327,7 @@ TEST(ReduceHostPlanner, AdditiveCallsAlwaysShareRequiredZero) {
     EXPECT_ANY_THROW(make_reduce_sequence_plan({{0, first}, {3, first}}, {no_cb_id, 2, 16}, hardware));
     auto second = first;
     second.block.logical_w = second.block.padded_w = 288;
-    second.block.resident_input_tiles = 9;
+    second.block.input_cb_tiles = 9;
     const auto mixed = make_reduce_sequence_plan({{0, first}, {3, second}}, {1, 2, 16}, hardware);
     ASSERT_EQ(mixed.calls[0].plan.auxiliary_tiles.size(), 1U);
     EXPECT_EQ(mixed.calls[0].auxiliary_cb_id, 1U);
@@ -330,20 +340,18 @@ TEST(ReduceHostPlanner, AdditiveCallsAlwaysShareRequiredZero) {
     EXPECT_ANY_THROW(make_reduce_sequence_plan({{0, first}, {3, second}}, {no_cb_id, 2, 16}, hardware));
 }
 
-TEST(ReduceHostPlanner, DefaultPolicyDoesNotDependOnResidentAllocation) {
+TEST(ReduceHostPlanner, DefaultPolicyDoesNotDependOnInputCapacity) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;
     const ReduceHardwareConfig hardware{.arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true};
-    auto block = ReduceBlockSpec::tiled(256, 256, DataType::BFLOAT16, DataType::FLOAT32);
-    for (bool resident : {false, true}) {
-        if (resident) {
-            block.resident_input_tiles = 64;
-        }
+    auto block = whole_input(ReduceBlockSpec::tiled(256, 256, DataType::BFLOAT16, DataType::FLOAT32));
+    for (const auto capacity : {1U, 64U}) {
+        block.input_cb_tiles = capacity;
         const auto plan =
             make_reduce_plan(block, ReduceOpMath::SUM, ReduceOpDim::H, std::nullopt, ReduceFp32Mode::Fast, hardware);
         EXPECT_EQ(plan.input_policy, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
         EXPECT_EQ(plan.algorithm, compute_kernel_lib::ReduceAlgorithm::ReduceTile);
-        EXPECT_EQ(plan.find_cb(ReduceCbRole::Input)->page_count, resident ? 64U : 1U);
+        EXPECT_EQ(plan.find_cb(ReduceCbRole::Input)->page_count, capacity);
         const ReduceCallConfig config{block, ReduceOpMath::SUM, ReduceOpDim::H};
         EXPECT_EQ(config.input_policy, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
         EXPECT_ANY_THROW(make_reduce_sequence_plan(
@@ -359,9 +367,8 @@ TEST(ReduceHostPlanner, TailPlanningResolvesExactScalersAndMasks) {
     for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H}) {
         for (const auto algorithm :
              {compute_kernel_lib::ReduceAlgorithm::ReduceTile, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd}) {
-            auto block = ReduceBlockSpec::tiled(256, 256, DataType::BFLOAT16, DataType::FLOAT32, 2);
-            block.resident_input_tiles = 128;
-            block.resident_output_tiles = 16;
+            auto block = whole_input(ReduceBlockSpec::tiled(256, 256, DataType::BFLOAT16, DataType::FLOAT32, 2));
+            block.input_cb_tiles = 128;
             const ReduceValidShape shape =
                 dim == ReduceOpDim::W ? ReduceValidShape{65, 135, 1} : ReduceValidShape{135, 65, 1};
             block.tail = ReduceTailConfig{shape};
@@ -417,9 +424,8 @@ TEST(ReduceHostPlanner, AlignedTailNeedsNoEdgeMasks) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;
     const ReduceHardwareConfig hardware{.arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true};
-    auto block = ReduceBlockSpec::tiled(256, 512, DataType::BFLOAT16, DataType::FLOAT32, 2);
-    block.resident_input_tiles = 256;
-    block.resident_output_tiles = 16;
+    auto block = whole_input(ReduceBlockSpec::tiled(256, 512, DataType::BFLOAT16, DataType::FLOAT32, 2));
+    block.input_cb_tiles = 256;
     block.allow_empty_auxiliary = true;
     block.tail = ReduceTailConfig{{64, 448, 1}};
     const auto native = make_reduce_plan(
@@ -446,7 +452,6 @@ TEST(ReduceHostPlanner, AlignedTailNeedsNoEdgeMasks) {
     EXPECT_EQ(add.tail_plan->reduce_factor, 448U);
     ASSERT_EQ(add.auxiliary_tiles.size(), 1U);
     EXPECT_EQ(add.auxiliary_tiles[0].type, ReduceAuxiliaryTileType::Zero);
-    EXPECT_EQ(add.total_owned_l1_bytes, tt::tile_size(tt::DataFormat::Float16_b));
     EXPECT_ANY_THROW(ReduceCallArgs(add, {0, no_cb_id, 16}));
     EXPECT_NO_THROW(ReduceCallArgs(add, {0, 1, 16}));
     // Both choices live in one compiled call, even when their algorithms differ.
@@ -471,14 +476,13 @@ TEST(ReduceHostPlanner, ExplicitAverageScalarBypassesGeometry) {
     for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H}) {
         for (const auto algorithm :
              {compute_kernel_lib::ReduceAlgorithm::ReduceTile, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd}) {
-            auto block = ReduceBlockSpec::tiled(
+            auto block = whole_input(ReduceBlockSpec::tiled(
                 dim == ReduceOpDim::W ? 65 : 256,
                 dim == ReduceOpDim::W ? 256 : 65,
                 DataType::BFLOAT16,
                 DataType::FLOAT32,
-                2);
-            block.resident_input_tiles = 48;
-            block.resident_output_tiles = 6;
+                2));
+            block.input_cb_tiles = 48;
             for (const auto extent : {1U, 41U, 47U, 135U, 256U}) {
                 for (const float scalar : {0.0F, 1.0F, 1.0F / 1024, -0.5F}) {
                     const ReduceCallConfig full{
@@ -526,7 +530,7 @@ TEST(ReduceHostPlanner, OmittedScalarUsesValidGeometryOnlyForAverage) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;
     const ReduceHardwareConfig hardware{.arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true};
-    const auto block = ReduceBlockSpec::tiled(64, 128, DataType::BFLOAT16, DataType::FLOAT32, 3);
+    const auto block = whole_input(ReduceBlockSpec::tiled(64, 128, DataType::BFLOAT16, DataType::FLOAT32, 3));
     for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H, ReduceOpDim::HW}) {
         const uint32_t extent = dim == ReduceOpDim::W ? 128 : (dim == ReduceOpDim::H ? 64 : 64 * 128);
         for (const auto math : {ReduceOpMath::AVG, ReduceOpMath::SUM, ReduceOpMath::MAX}) {
@@ -561,14 +565,14 @@ TEST(ReduceHostPlanner, AccumulatedScalarSettingsMustAgree) {
     using namespace ttnn::kernel_lib::host;
     const ReduceHardwareConfig hardware{.arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true};
     const ReduceCallConfig full{
-        ReduceBlockSpec::tiled(32, 288, DataType::BFLOAT16, DataType::FLOAT32),
+        whole_input(ReduceBlockSpec::tiled(32, 288, DataType::BFLOAT16, DataType::FLOAT32)),
         ReduceOpMath::AVG,
         ReduceOpDim::W,
         std::nullopt,
         ReduceFp32Mode::Fast,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop};
     auto partial = full;
-    partial.block = ReduceBlockSpec::tiled(32, 135, DataType::BFLOAT16, DataType::FLOAT32);
+    partial.block = whole_input(ReduceBlockSpec::tiled(32, 135, DataType::BFLOAT16, DataType::FLOAT32));
     const auto automatic = make_reduce_sequence_plan({{0, full}, {3, partial}}, {1, 2, 16}, hardware);
     EXPECT_EQ(automatic.calls.back().plan.reduce_factor, 288U + 135U);
     partial.scalar = 1.0F / 1024;
@@ -586,7 +590,7 @@ TEST(ReduceHostPlanner, TailShapesAreValidatedBeforePlanning) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;
     const ReduceHardwareConfig hardware{.arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true};
-    auto block = ReduceBlockSpec::tiled(256, 256, DataType::BFLOAT16, DataType::FLOAT32, 2);
+    auto block = whole_input(ReduceBlockSpec::tiled(256, 256, DataType::BFLOAT16, DataType::FLOAT32, 2));
     const auto full = make_reduce_plan(
         block,
         ReduceOpMath::SUM,
@@ -612,26 +616,14 @@ TEST(ReduceHostPlanner, TailShapesAreValidatedBeforePlanning) {
             hardware,
             compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop));
     }
-    // Even if a tail writes one output tile, the shared plan must fit full work.
-    block.tail = ReduceTailConfig{{31, 135, 1}};
-    block.resident_output_tiles = 1;
-    EXPECT_ANY_THROW(make_reduce_plan(
-        block,
-        ReduceOpMath::SUM,
-        ReduceOpDim::W,
-        1.0F,
-        ReduceFp32Mode::Fast,
-        hardware,
-        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop));
 }
 
 TEST(ReduceHostPlanner, TailAuxiliaryRecipesShareOnlyIdenticalPlannedMasks) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;
     ReduceHardwareConfig hardware{.arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true};
-    auto block = ReduceBlockSpec::tiled(96, 256, DataType::BFLOAT16, DataType::FLOAT32);
-    block.resident_input_tiles = 24;
-    block.resident_output_tiles = 3;
+    auto block = whole_input(ReduceBlockSpec::tiled(96, 256, DataType::BFLOAT16, DataType::FLOAT32));
+    block.input_cb_tiles = 24;
     block.tail = ReduceTailConfig{{65, 231, 1}};
     const ReduceCallConfig first{
         block,
@@ -694,14 +686,13 @@ TEST(ReduceHostPlanner, FullAndTailAverageUsesTheirCombinedValidExtent) {
     for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H}) {
         for (const auto algorithm :
              {compute_kernel_lib::ReduceAlgorithm::ReduceTile, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd}) {
-            auto block = ReduceBlockSpec::tiled(
+            auto block = whole_input(ReduceBlockSpec::tiled(
                 dim == ReduceOpDim::W ? 65 : 256,
                 dim == ReduceOpDim::W ? 256 : 65,
                 DataType::BFLOAT16,
                 DataType::FLOAT32,
-                2);
-            block.resident_input_tiles = 48;
-            block.resident_output_tiles = 6;
+                2));
+            block.input_cb_tiles = 48;
             const ReduceCallConfig full{
                 block,
                 ReduceOpMath::AVG,
@@ -736,23 +727,21 @@ TEST(ReduceHostPlanner, TailAuxiliaryRequirementsAreReportedWithoutBudgeting) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;
     const ReduceHardwareConfig hardware{.arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true};
-    auto block = ReduceBlockSpec::tiled(64, 64, DataType::BFLOAT16, DataType::BFLOAT16);
+    auto block = whole_input(ReduceBlockSpec::tiled(64, 64, DataType::BFLOAT16, DataType::BFLOAT16));
     const auto full =
         make_reduce_plan(block, ReduceOpMath::MAX, ReduceOpDim::W, std::nullopt, ReduceFp32Mode::Fast, hardware);
     block.tail = ReduceTailConfig{{63, 63, 1}};
     const auto tail =
         make_reduce_plan(block, ReduceOpMath::MAX, ReduceOpDim::W, std::nullopt, ReduceFp32Mode::Fast, hardware);
     EXPECT_GT(tail.find_cb(ReduceCbRole::Auxiliary)->page_count, full.find_cb(ReduceCbRole::Auxiliary)->page_count);
-    EXPECT_GT(tail.total_owned_l1_bytes, full.total_owned_l1_bytes);
 }
 
-TEST(ReduceHostPlanner, ResidentWholeRowHWTailsUseTheirOwnNormalization) {
+TEST(ReduceHostPlanner, RetainedWholeRowHWTailsUseTheirOwnNormalization) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;
     const ReduceHardwareConfig hardware{.arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true};
-    auto block = ReduceBlockSpec::tiled(160, 64, DataType::BFLOAT16, DataType::FLOAT32);
-    block.resident_input_tiles = 10;
-    block.resident_output_tiles = 1;
+    auto block = whole_input(ReduceBlockSpec::tiled(160, 64, DataType::BFLOAT16, DataType::FLOAT32));
+    block.input_cb_tiles = 10;
     block.tail = ReduceTailConfig{{64, 64, 1}};
     for (const auto algorithm :
          {compute_kernel_lib::ReduceAlgorithm::ReduceTile, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd}) {
@@ -802,7 +791,7 @@ TEST(ReduceHostPlanner, ResidentWholeRowHWTailsUseTheirOwnNormalization) {
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop));
     block.tail->shape = {64, 64, 1};
     block.batches = 2;
-    block.resident_input_tiles = 20;
+    block.input_cb_tiles = 20;
     EXPECT_ANY_THROW(make_reduce_plan(
         block,
         ReduceOpMath::AVG,
@@ -812,7 +801,7 @@ TEST(ReduceHostPlanner, ResidentWholeRowHWTailsUseTheirOwnNormalization) {
         hardware,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop));
     block.batches = 1;
-    block.resident_input_tiles.reset();
+    block.input_cb_tiles = 10;
     EXPECT_NO_THROW(make_reduce_plan(
         block,
         ReduceOpMath::AVG,
@@ -827,7 +816,7 @@ TEST(ReduceHostPlanner, TailPlanningRejectsUnsupportedMaskBackends) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;
     const ReduceHardwareConfig hardware{.arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true};
-    auto block = ReduceBlockSpec::tiled(64, 64, DataType::BFLOAT16, DataType::BFLOAT16);
+    auto block = whole_input(ReduceBlockSpec::tiled(64, 64, DataType::BFLOAT16, DataType::BFLOAT16));
     block.tail = ReduceTailConfig{{63, 63, 1}};
     EXPECT_ANY_THROW(make_reduce_plan(
         block,
@@ -862,10 +851,10 @@ TEST(ReduceHostPlanner, TailStreamsUseFixedBoundedPackets) {
     using namespace ttnn::kernel_lib::host;
     const ReduceHardwareConfig hardware{.arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true};
     for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H}) {
-        auto block =
-            ReduceBlockSpec::tiled(256, dim == ReduceOpDim::W ? 448 : 256, DataType::BFLOAT16, DataType::FLOAT32, 2);
+        auto block = whole_input(
+            ReduceBlockSpec::tiled(256, dim == ReduceOpDim::W ? 448 : 256, DataType::BFLOAT16, DataType::FLOAT32, 2));
         block.tail = ReduceTailConfig{{135, 135, 2}};
-        block.resident_output_tiles = 16;
+        block.input_cb_tiles = 2;
         const auto plan = make_reduce_plan(
             block,
             ReduceOpMath::SUM,
@@ -875,7 +864,7 @@ TEST(ReduceHostPlanner, TailStreamsUseFixedBoundedPackets) {
             hardware,
             compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
         EXPECT_EQ(plan.input_policy, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
-        EXPECT_EQ(plan.find_cb(ReduceCbRole::Input)->page_count, dim == ReduceOpDim::W ? 2U : 1U);
+        EXPECT_EQ(plan.find_cb(ReduceCbRole::Input)->page_count, 2U);
         ASSERT_NE(plan.tail_plan, nullptr);
     }
 }
@@ -884,7 +873,7 @@ TEST(ReduceHostPlanner, LargeBulkRequirementsAreNotRejectedForL1Capacity) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;
     const ReduceHardwareConfig hardware{.arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true};
-    auto block = ReduceBlockSpec::tiled(32, 32768, DataType::BFLOAT16, DataType::FLOAT32);
+    auto block = whole_input(ReduceBlockSpec::tiled(32, 32768, DataType::BFLOAT16, DataType::FLOAT32));
     const auto plan = make_reduce_plan(
         block,
         ReduceOpMath::SUM,
@@ -895,7 +884,15 @@ TEST(ReduceHostPlanner, LargeBulkRequirementsAreNotRejectedForL1Capacity) {
         compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop);
     EXPECT_EQ(plan.input_policy, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop);
     EXPECT_EQ(plan.find_cb(ReduceCbRole::Input)->page_count, 1024U);
-    EXPECT_GT(plan.total_owned_l1_bytes, 1U << 20);
+    block.input_cb_tiles = 1536;
+    EXPECT_ANY_THROW(make_reduce_plan(
+        block,
+        ReduceOpMath::SUM,
+        ReduceOpDim::W,
+        std::nullopt,
+        ReduceFp32Mode::Fast,
+        hardware,
+        compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop));
 }
 
 TEST(ReduceHostPlanner, FullAndTailShareResolvedInputPolicy) {
@@ -907,6 +904,8 @@ TEST(ReduceHostPlanner, FullAndTailShareResolvedInputPolicy) {
         for (const auto policy :
              {Policy::NoWaitNoPop, Policy::WaitUpfrontNoPop, Policy::BulkWaitBulkPop, Policy::WaitAndPopPerTile}) {
             auto block = ReduceBlockSpec::tiled(256, 256, DataType::BFLOAT16, DataType::FLOAT32);
+            // The whole 8x8 block, and a whole number of the 40-tile packets the full and tail bulks share.
+            block.input_cb_tiles = 80;
             block.tail = ReduceTailConfig{{135, 135, 1}};
             const auto plan =
                 make_reduce_plan(block, ReduceOpMath::AVG, dim, std::nullopt, ReduceFp32Mode::Fast, hardware, policy);
@@ -1229,8 +1228,10 @@ TEST(ReduceHostPlanner, BasicAlgorithmAndChunkSanity) {
     EXPECT_FLOAT_EQ(threshold_plan.post_scale, 0.25F);
 
     const auto tile_bytes = tt::tt_metal::tile_size(DataType::BFLOAT16);
+    auto streaming_block = make_block(Shape{1, 1, 32, 10 * 32});
+    streaming_block.input_cb_tiles = 2;
     const auto streaming_plan = make_reduce_plan(
-        make_block(Shape{1, 1, 32, 10 * 32}),
+        streaming_block,
         ReduceOpMath::SUM,
         ReduceOpDim::W,
         1.0F,
@@ -1420,9 +1421,9 @@ TEST(ReduceHostPlanner, BasicAlgorithmAndChunkSanity) {
             plan_args::auxiliary_configuration::tile_type_mask),
         static_cast<std::uint32_t>(ReduceAuxiliaryTileType::Zero));
 
-    auto local_input = ReduceBlockSpec::tiled(32, 4 * 32, DataType::BFLOAT16, DataType::BFLOAT16);
-    local_input.resident_input_tiles = 4;
-    const auto alias_plan = make_reduce_plan(
+    auto local_input = whole_input(ReduceBlockSpec::tiled(32, 4 * 32, DataType::BFLOAT16, DataType::BFLOAT16));
+    local_input.input_cb_tiles = 4;
+    const auto retained_plan = make_reduce_plan(
         local_input,
         ReduceOpMath::SUM,
         ReduceOpDim::W,
@@ -1430,9 +1431,8 @@ TEST(ReduceHostPlanner, BasicAlgorithmAndChunkSanity) {
         ReduceFp32Mode::Fast,
         hardware,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
-    EXPECT_EQ(alias_plan.input_policy, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
-    ASSERT_NE(alias_plan.find_cb(ReduceCbRole::Input), nullptr);
-    EXPECT_EQ(alias_plan.find_cb(ReduceCbRole::Input)->alias, ReduceCbAlias::InputTensor);
+    EXPECT_EQ(retained_plan.input_policy, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
+    ASSERT_NE(retained_plan.find_cb(ReduceCbRole::Input), nullptr);
     EXPECT_ANY_THROW(make_reduce_plan(
         make_block(Shape{1, 1, 32, 4 * 32}),
         ReduceOpMath::SUM,
@@ -1523,13 +1523,12 @@ TEST(ReduceHostPlanner, AdditiveThresholdSpansAccumulatedCalls) {
     }
 }
 
-TEST(ReduceHostPlanner, LocalBlockIsBoundedByResidentAllocation) {
+TEST(ReduceHostPlanner, LocalBlockIsBoundedByInputCapacity) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;
     const ReduceHardwareConfig hardware{tt::ARCH::WORMHOLE_B0, false, false};
-    auto local = ReduceBlockSpec::tiled(64, 64, DataType::BFLOAT16, DataType::BFLOAT16);
-    local.resident_input_tiles = 4;
-    local.resident_output_tiles = 2;
+    auto local = whole_input(ReduceBlockSpec::tiled(64, 64, DataType::BFLOAT16, DataType::BFLOAT16));
+    local.input_cb_tiles = 4;
     const auto plan = make_reduce_plan(
         local,
         ReduceOpMath::SUM,
@@ -1542,8 +1541,6 @@ TEST(ReduceHostPlanner, LocalBlockIsBoundedByResidentAllocation) {
     EXPECT_EQ(plan.Wt, 2U);
     EXPECT_EQ(plan.batches, 1U);
     EXPECT_EQ(plan.input_policy, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
-    EXPECT_FALSE(plan.find_cb(ReduceCbRole::Input)->owns_l1());
-    EXPECT_FALSE(plan.find_cb(ReduceCbRole::Output)->owns_l1());
 
     // A 128x64 global tensor can be split over two cores, each with this 64x64
     // allocation. Describing global work against one core's allocation is an error.
@@ -1551,15 +1548,6 @@ TEST(ReduceHostPlanner, LocalBlockIsBoundedByResidentAllocation) {
     global.logical_h = global.padded_h = 128;
     EXPECT_ANY_THROW(make_reduce_plan(
         global,
-        ReduceOpMath::SUM,
-        ReduceOpDim::W,
-        1.0F,
-        ReduceFp32Mode::Fast,
-        hardware,
-        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop));
-    local.resident_output_tiles = 1;
-    EXPECT_ANY_THROW(make_reduce_plan(
-        local,
         ReduceOpMath::SUM,
         ReduceOpDim::W,
         1.0F,
@@ -1574,10 +1562,9 @@ TEST(ReduceHostPlanner, PartialLocalBlockPreservesPhysicalRowStride) {
     const ReduceHardwareConfig hardware{tt::ARCH::WORMHOLE_B0, false, false};
     // Each batch consumes a 2x3-tile block in a 2x4-tile allocation. Only six
     // elements in the last width tile contribute; the fourth tile is not work.
-    auto block = ReduceBlockSpec::tiled(64, 70, DataType::BFLOAT16, DataType::BFLOAT16, 2);
+    auto block = whole_input(ReduceBlockSpec::tiled(64, 70, DataType::BFLOAT16, DataType::BFLOAT16, 2));
     block.input_row_stride_tiles = 4;
-    block.resident_input_tiles = 16;
-    block.resident_output_tiles = 4;
+    block.input_cb_tiles = 16;
     const auto plan = make_reduce_plan(
         block,
         ReduceOpMath::MAX,
@@ -1593,7 +1580,7 @@ TEST(ReduceHostPlanner, PartialLocalBlockPreservesPhysicalRowStride) {
     EXPECT_EQ(plan.partial_reduce_axis_elements, 6U);
     EXPECT_EQ(plan.find_cb(ReduceCbRole::Input)->page_count, 16U);
     EXPECT_EQ(plan.auxiliary_tiles.back().num_valid_elements, 6U);
-    block.resident_input_tiles = 12;
+    block.input_cb_tiles = 12;
     EXPECT_ANY_THROW(make_reduce_plan(
         block,
         ReduceOpMath::MAX,
@@ -1608,7 +1595,8 @@ TEST(ReduceHostPlanner, LocalTileGeometryDeterminesPageSizes) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;
     const ReduceHardwareConfig hardware{tt::ARCH::WORMHOLE_B0, false, false};
-    const auto block = ReduceBlockSpec::tiled(32, 64, DataType::BFLOAT16, DataType::FLOAT32, 1, Tile({16, 32}));
+    const auto block =
+        whole_input(ReduceBlockSpec::tiled(32, 64, DataType::BFLOAT16, DataType::FLOAT32, 1, Tile({16, 32})));
     const auto plan = make_reduce_plan(
         block,
         ReduceOpMath::SUM,
@@ -1627,7 +1615,7 @@ TEST(ReduceHostPlanner, RejectsInvalidLocalBlockGeometry) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;
     const ReduceHardwareConfig hardware{tt::ARCH::WORMHOLE_B0, false, false};
-    const auto base = ReduceBlockSpec::tiled(64, 70, DataType::BFLOAT16, DataType::BFLOAT16);
+    const auto base = whole_input(ReduceBlockSpec::tiled(64, 70, DataType::BFLOAT16, DataType::BFLOAT16));
     const auto rejects = [&](const auto& change) {
         auto block = base;
         change(block);
@@ -1646,12 +1634,11 @@ TEST(ReduceHostPlanner, RejectsInvalidLocalBlockGeometry) {
     rejects([](auto& b) { b.padded_w = 97; });
     rejects([](auto& b) { b.padded_w = 128; });  // Would mask the wrong tile.
     rejects([](auto& b) { b.logical_w = 64; });  // Whole padding tiles also must not become work.
-    rejects([](auto& b) { b.resident_input_tiles = 0; });
-    rejects([](auto& b) { b.resident_output_tiles = 0; });
-    rejects([](auto& b) { b.input_row_stride_tiles = 4; });  // Streaming has no resident pitch.
+    rejects([](auto& b) { b.input_cb_tiles = 0; });
+    rejects([](auto& b) { b.input_row_stride_tiles = 4; });  // Streaming has no row pitch.
     rejects([](auto& b) {
         b.input_row_stride_tiles = 2;
-        b.resident_input_tiles = 8;
+        b.input_cb_tiles = 8;
     });
     rejects([](auto& b) { b.batches = std::numeric_limits<uint32_t>::max(); });
 }
@@ -1662,13 +1649,13 @@ TEST(ReduceHostPlanner, AccumulatedLocalBlocksInferCompatibleOutput) {
     const ReduceHardwareConfig hardware{tt::ARCH::WORMHOLE_B0, false, false};
     std::vector<ReduceCbConfig> calls{
         {0,
-         {ReduceBlockSpec::tiled(64, 128, DataType::BFLOAT16, DataType::BFLOAT16),
+         {whole_input(ReduceBlockSpec::tiled(64, 128, DataType::BFLOAT16, DataType::BFLOAT16)),
           ReduceOpMath::SUM,
           ReduceOpDim::W,
           1.0F,
           ReduceFp32Mode::Fast}},
         {0,
-         {ReduceBlockSpec::tiled(64, 70, DataType::BFLOAT16, DataType::BFLOAT16),
+         {whole_input(ReduceBlockSpec::tiled(64, 70, DataType::BFLOAT16, DataType::BFLOAT16)),
           ReduceOpMath::SUM,
           ReduceOpDim::W,
           1.0F,
