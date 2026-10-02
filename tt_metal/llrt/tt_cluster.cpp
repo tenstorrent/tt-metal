@@ -847,6 +847,9 @@ void Cluster::write_core(
     tt_cxy_pair core,
     uint64_t addr,
     std::optional<tt::umd::IoOrdering> ordering) const {
+    if (sz_in_bytes == 0) {
+        return;  // nothing to write
+    }
     const ChipId chip_id = core.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
     if (rtoptions_.get_watcher_enabled() && !rtoptions_.watcher_noc_sanitize_disabled()) {
@@ -936,7 +939,7 @@ void Cluster::write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt
 }
 
 void Cluster::read_core(std::vector<uint32_t>& data, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const {
-    data.resize(size_in_bytes / sizeof(uint32_t));
+    data.resize((size_in_bytes + sizeof(uint32_t) - 1) / sizeof(uint32_t));
     read_core(data.data(), size_in_bytes, core, addr);
 }
 

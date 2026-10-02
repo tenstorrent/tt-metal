@@ -678,10 +678,13 @@ AllocatorImpl::~AllocatorImpl() {
         submap.clear();
     }
 
-    dram_manager_->clear();
-    l1_manager_->clear();
-    l1_small_manager_->clear();
-    trace_buffer_manager_->clear();
+    // A derived constructor may throw before the bank managers exist.
+    for (BankManager* manager :
+         {dram_manager_.get(), l1_manager_.get(), l1_small_manager_.get(), trace_buffer_manager_.get()}) {
+        if (manager != nullptr) {
+            manager->clear();
+        }
+    }
     allocated_buffers_.clear();
 }
 

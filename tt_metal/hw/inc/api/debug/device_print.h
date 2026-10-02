@@ -1564,7 +1564,12 @@ void release_lock() {
     asm volatile("" ::: "memory");
 #else
     auto& lock_atomic = get_lock_atomic();
+#if defined(ARCH_QUASAR) && !defined(ENV_LLK_INFRA)
+    // Release with an AMO, not a non-atomic store
+    lock_atomic.exchange(0);
+#else
     lock_atomic = 0;
+#endif
 #endif
 }
 
@@ -1576,7 +1581,12 @@ void initialize_lock() {
     asm volatile("" ::: "memory");
 #else
     auto& lock_atomic = get_lock_atomic();
+#if defined(ARCH_QUASAR) && !defined(ENV_LLK_INFRA)
+    // Release with an AMO, not a non-atomic store
+    lock_atomic.exchange(0);
+#else
     lock_atomic = 0;
+#endif
 #endif
 }
 
@@ -1793,11 +1803,11 @@ constexpr uint32_t get_total_message_size(Args&&...) {
 // instruction for function call and two instructions for arguments).
 __attribute__((noinline)) uint32_t
 begin_message_write(structures::DevicePrintHeader header, std::uintptr_t string_info_address) {
+    volatile tt_l1_ptr DevicePrintBufferType* device_print_buffer = get_device_print_buffer();
     // Get buffer lock (once we change to be single buffer per L1 instead of per risc)
     locking::acquire_lock();
 
     // Check if we need to wrap buffer and wait for enough space in it
-    volatile tt_l1_ptr DevicePrintBufferType* device_print_buffer = get_device_print_buffer();
     uint32_t message_size = sizeof(header.value) + header.message_payload;
     auto write_position = locking::wait_for_space(device_print_buffer, message_size);
 

@@ -170,10 +170,19 @@ void DispatchSKernel::GenerateStaticConfigs() {
 
     // Configuration for DEVICE_PRINT dispatch.
     static_config_.device_print_dispatch_enabled = 0;
+    // Under an ATT map dispatch_s cannot compose the aggregator's raw NOC_XY / DRAM operands, so
+    // DPRINT stays on per-core L1 polling there.
+    const bool aggregation_enabled = !descriptor_.rtoptions().get_noc_att_map().has_value();
+    if (cq_id_ == 0 && !aggregation_enabled && descriptor_.metal_context().dprint_server()) {
+        log_debug(
+            tt::LogMetal,
+            "DPRINT dispatch_s DRAM aggregation disabled on device {}: an ATT NoC map is active",
+            device_->id());
+    }
     // With multiple CQs there is one dispatch_s per CQ, but they all read the same per-core
     // DEVICE_PRINT L1 buffers. Only enable the DRAM-aggregation work on cq_id 0 so the buffers
     // aren't drained twice (which would race the host's rpos updates and reorder/drop messages).
-    if (cq_id_ == 0 && get_dispatch_query_manager_ref().dispatch_s_enabled() &&
+    if (cq_id_ == 0 && aggregation_enabled && get_dispatch_query_manager_ref().dispatch_s_enabled() &&
         descriptor_.metal_context().dprint_server()) {
         auto* dprint_server = descriptor_.metal_context().dprint_server().get();
         auto print_cores = dprint_server->get_print_cores(device_->id());

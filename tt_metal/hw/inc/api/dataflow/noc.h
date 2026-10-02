@@ -157,7 +157,7 @@ public:
     uint8_t get_noc_id() const { return noc_id_; }
 
     bool is_local_bank(uint32_t virtual_x, uint32_t virtual_y) const {
-        return virtual_x == my_x[noc_id_] && virtual_y == my_y[noc_id_];
+        return noc_address_backend::is_local_coordinate(virtual_x, virtual_y, noc_id_);
     }
 
     bool is_local_addr(const uint64_t noc_addr) const { return noc_address_backend::is_local(noc_addr, noc_id_); }
