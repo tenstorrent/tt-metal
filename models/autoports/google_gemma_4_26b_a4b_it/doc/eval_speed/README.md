@@ -43,8 +43,14 @@ The pre-dispatch runtime forecast is 65 minutes best case, 3h06m40s expected,
 These are terminal-event/runtime estimates, **not five-correct-solve estimates**;
 see the suite log for assumptions and the upcoming CI measurement.
 Combined [CI 36981858976](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/36981858976)
-is dispatched at 08:03:11 UTC, job **110758014503**, exact TTI **83d9c26a**.
-It is monitored continuously; ordering, rewards and total time are pending.
+failed before trials at 08:11:46 UTC, job **110758014503**, exact TTI **83d9c26a**:
+the new pinned-cache branch omitted the runtime `MODEL_WEIGHTS_DIR` assignment.
+TTI **f245f6ac** fixes this with success/failure environment regression checks;
+93 launcher/overlay tests pass. Same-image, same-suite retry
+[CI 36983437902](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/36983437902)
+is dispatched at **08:20:06 UTC** and monitored. No SWE result exists from the
+failed startup. Both long-context policies score **122/128 HF top-1** on the
+saved 14,467-token control; this does not support promoting prefill BFP8.
 The [precision audit](AUTODEBUG.md) confirms fresh BFP8 weight provenance but
 identifies unchanged prefill BFP4 and untested long-context numerical quality;
 it does not establish a cache/position bug.
