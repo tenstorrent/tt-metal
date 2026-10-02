@@ -289,6 +289,8 @@ class Engine:
         ctk = r.get("chat_template_kwargs") or {}
         if "enable_thinking" in ctk:
             thinking = bool(ctk["enable_thinking"])
+        elif isinstance(r.get("enable_thinking"), bool):  # Qwen-style top-level flag
+            thinking = r["enable_thinking"]
         if r.get("reasoning_effort") in ("none", "minimal"):
             thinking = False
         tools = r.get("tools") or None

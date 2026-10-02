@@ -8,6 +8,7 @@
   `stop` / `max_tokens` (or `max_completion_tokens`); `stream_options.include_usage`; thinking per request via
   `chat_template_kwargs: {"enable_thinking": false}` or `reasoning_effort: "none"`.
 - `GET /v1/models`, `GET /health`.
+  Thinking per request also via top-level `enable_thinking` (Qwen style).
 - Prefix KV cache across requests: the server keeps the token list in the KV cache and re-prefills only from the chunk
   holding the first differing token (`usage.prompt_tokens_details.cached_tokens`). The template renders past assistant
   turns as `<think>{reasoning_content}</think>content`, so a harness that does not echo `reasoning_content` back
@@ -52,6 +53,7 @@ curl -s localhost:8000/v1/models
       "baseUrl": "http://localhost:8000/v1",
       "api": "openai-completions",
       "apiKey": "none",
+      "compat": { "supportsDeveloperRole": false, "thinkingFormat": "qwen-chat-template", "maxTokensField": "max_tokens" },
       "models": [
         {
           "id": "mimo-v2.6-flash",
@@ -87,7 +89,15 @@ curl -s localhost:8000/v1/models
 }
 ```
 
+Verified on the box (Pi 0.73.1 `pi -p`, opencode 1.18.34 `opencode run`, node 22 from a tarball): both completed a
+read-tool turn and answered. Pi: `PI_CODING_AGENT_DIR=<dir with models.json> pi --model mimo-tt/mimo-v2.6-flash -p "..."`.
+
 ## Performance notes
+
+Measured (BH LoudBox 2x4, 48 layers, chunk 1024, warm JIT): ~4.1-4.6 tok/s at 0-25K context; TTFT 0.21 s for a
+<1K prompt, 5.3 s for a 25K-token prompt with no cache hit vs 0.25 s when the previous turn is reused (24,576 of 25,106
+tokens cached); opencode's 7.2K-token system prompt: 1.86 s first turn, 0.45 s on the tool-result turn (7,168 cached).
+The first request after start-up at a new chunk position pays the JIT compile (~40 s for the very first request).
 
 Generation re-prefills the chunk holding the newest token for every token (no decode path yet), so tok/s is that of a
 `MIMO_SERVE_CHUNK`-token prefill at the current context. Agent system prompts are long; the prefix cache keeps
