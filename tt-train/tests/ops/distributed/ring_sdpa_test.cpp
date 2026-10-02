@@ -20,9 +20,13 @@
 #include "autograd/auto_context.hpp"
 #include "core/distributed/socket_manager.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_kv_device_operation.hpp"
+#include "metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_q_device_operation.hpp"
+#include "metal/ops/ring_sdpa_fw/device/ring_sdpa_fw_device_operation.hpp"
 #include "ops/distributed/ring_attention_sdpa.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
 #include "test_utils/random_data.hpp"
+#include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "ttnn/distributed/create_socket.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
@@ -491,4 +495,89 @@ TEST_F(GalaxyRingSDPATest, LargerSequenceCausalMaskBackward) {
         /*seq_len=*/256,
         /*head_dim=*/64,
         /*test_backward=*/true);
+}
+
+class RingSDPAIntermediateValidationFixture : public tt::tt_metal::MeshDevice1x2Fixture {};
+
+TEST_F(RingSDPAIntermediateValidationFixture, RejectsForeignMeshIntermediatesInAllDeviceOperations) {
+    using FwOperation = ttml::metal::ops::ring_sdpa_fw::RingSDPAFwDeviceOperation;
+    using BwQOperation = ttml::metal::ops::ring_sdpa_bw::q::RingSDPABwQDeviceOperation;
+    using BwKVOperation = ttml::metal::ops::ring_sdpa_bw::kv::RingSDPABwKVDeviceOperation;
+    using tt::tt_metal::BufferType;
+    using tt::tt_metal::Layout;
+    using tt::tt_metal::MemoryConfig;
+    using tt::tt_metal::TensorLayout;
+    using tt::tt_metal::TensorMemoryLayout;
+    using tt::tt_metal::TensorSpec;
+    using tt::tt_metal::distributed::MeshCoordinate;
+    using tt::tt_metal::distributed::MeshShape;
+
+    auto query_mesh = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
+    auto foreign_mesh = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 1));
+
+    const MemoryConfig memory_config{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    const ttnn::Shape shape{1, 1, 32, 32};
+    const TensorSpec bf16_spec(shape, TensorLayout(ttnn::DataType::BFLOAT16, Layout::TILE, memory_config));
+    const TensorSpec fp32_spec(shape, TensorLayout(ttnn::DataType::FLOAT32, Layout::TILE, memory_config));
+
+    const auto bf16_tensor = ttnn::create_device_tensor(bf16_spec, query_mesh.get());
+    const auto u_scaler = ttnn::create_device_tensor(fp32_spec, query_mesh.get());
+    const auto foreign_intermediates = ttnn::create_device_tensor(fp32_spec, foreign_mesh.get());
+
+    const auto expect_same_mesh_rejection = [](auto&& validate) {
+        try {
+            validate();
+            FAIL() << "Expected a foreign intermediate MeshDevice to be rejected";
+        } catch (const std::exception& error) {
+            EXPECT_NE(std::string(error.what()).find("same mesh device as the query"), std::string::npos)
+                << "Unexpected validation failure: " << error.what();
+        }
+    };
+
+    const auto fw_attrs = FwOperation::operation_attributes_t{
+        .ring_size = 1,
+        .ring_axis = 0,
+        .step = 0,
+        .mask_type = ttml::metal::AttentionMaskType::None,
+        .ring_direction = ttml::metal::ops::ring_sdpa_fw::RingDirection::Backward};
+    const auto fw_args = FwOperation::tensor_args_t{
+        .query = bf16_tensor,
+        .key = bf16_tensor,
+        .value = bf16_tensor,
+        .preallocated_output = std::nullopt,
+        .preallocated_intermediates = foreign_intermediates};
+    expect_same_mesh_rejection([&] { FwOperation::validate_on_program_cache_miss(fw_attrs, fw_args); });
+
+    const auto bw_q_attrs = BwQOperation::operation_attributes_t{
+        .ring_size = 1,
+        .ring_axis = 0,
+        .step = 0,
+        .mask_type = ttml::metal::AttentionMaskType::None,
+        .ring_direction = ttml::metal::ops::ring_sdpa_bw::RingDirection::Backward};
+    const auto bw_q_args = BwQOperation::tensor_args_t{
+        .grad_output = bf16_tensor,
+        .attn_output = bf16_tensor,
+        .query = bf16_tensor,
+        .key = bf16_tensor,
+        .value = bf16_tensor,
+        .intermediates = foreign_intermediates,
+        .preallocated_grad_query = std::nullopt};
+    expect_same_mesh_rejection([&] { BwQOperation::validate_on_program_cache_miss(bw_q_attrs, bw_q_args); });
+
+    const auto bw_kv_attrs = BwKVOperation::operation_attributes_t{
+        .ring_size = 1,
+        .ring_axis = 0,
+        .step = 0,
+        .mask_type = ttml::metal::AttentionMaskType::None,
+        .ring_direction = ttml::metal::ops::ring_sdpa_bw::RingDirection::Backward};
+    const auto bw_kv_args = BwKVOperation::tensor_args_t{
+        .grad_output = bf16_tensor,
+        .u_scaler = u_scaler,
+        .query = bf16_tensor,
+        .key = bf16_tensor,
+        .value = bf16_tensor,
+        .intermediates = foreign_intermediates,
+        .preallocated_grad_key = std::nullopt,
+        .preallocated_grad_value = std::nullopt};
+    expect_same_mesh_rejection([&] { BwKVOperation::validate_on_program_cache_miss(bw_kv_attrs, bw_kv_args); });
 }

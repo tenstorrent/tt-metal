@@ -183,14 +183,8 @@ inline void validate_grad_like_tensor(
 // The SDPA kernels read the logsumexp from column 0 of a (B, H, S, TILE_WIDTH) FP32
 // tile-layout tensor; anything else is silently misinterpreted on device.
 inline void validate_intermediates_tensor(const ttnn::Tensor& intermediates, const ttnn::Tensor& query) {
-    TT_FATAL(
-        intermediates.dtype() == ttnn::DataType::FLOAT32,
-        "Intermediates must be FLOAT32, got {}",
-        intermediates.dtype());
-    TT_FATAL(
-        intermediates.layout() == ttnn::Layout::TILE,
-        "Intermediates must be TILE layout, got {}",
-        intermediates.layout());
+    validate_sdpa_tensor(intermediates, "Intermediates", query, ttnn::DataType::FLOAT32);
+
     const auto [batch, heads, seq_len, dim] = query.logical_shape().to_array_4D();
     const ttnn::Shape expected_shape{batch, heads, seq_len, tt::constants::TILE_WIDTH};
     TT_FATAL(
