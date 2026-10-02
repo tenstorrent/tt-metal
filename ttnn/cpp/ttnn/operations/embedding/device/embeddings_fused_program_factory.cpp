@@ -105,8 +105,12 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     uint32_t max_tiles_per_chunk = std::min(max_l1_budget_bytes / weights_single_tile_size, num_tiles_per_block);
     max_tiles_per_chunk = std::max(max_tiles_per_chunk, 1U);
 
-    uint32_t required_memory_bytes = 2 * num_tiles_per_block * weights_single_tile_size;
+    const uint64_t required_memory_bytes = 2ULL * static_cast<uint64_t>(num_tiles_per_block) * weights_single_tile_size;
     bool use_chunked_processing = required_memory_bytes > max_l1_budget_bytes;
+
+    // PADDED and BINARY serve some weight rows out of a locally cached copy instead of fetching them
+    // per token; the other embeddings types have no such rows, so the cache is absent for them.
+    const bool use_local_cache = embeddings_type == EmbeddingsType::PADDED || embeddings_type == EmbeddingsType::BINARY;
 
     // For very large embeddings, use chunked processing
     uint32_t tiles_per_chunk;
@@ -118,8 +122,18 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
 
     if (use_chunked_processing) {
         const uint32_t chunk_cap = std::min(max_tiles_per_chunk, max_double_buffer_tiles);
-        const uint32_t row_bytes = num_tiles_per_block * weights_single_tile_size;
-        if (row_bytes <= max_l1_budget_bytes) {
+        const uint64_t row_bytes = static_cast<uint64_t>(num_tiles_per_block) * weights_single_tile_size;
+        const uint64_t output_row_bytes =
+            output_sharded ? 0 : static_cast<uint64_t>(num_tiles_per_block) * output_single_tile_size;
+        const uint64_t index_scratch_bytes = TILE_HEIGHT * input_element_size_bytes;
+        const uint64_t local_cache_bytes =
+            use_local_cache ? static_cast<uint64_t>(embeddings_type == EmbeddingsType::PADDED ? 1U : 2U) *
+                                  round_up_to_mul32(weight_page_size)
+                            : 0;
+        const uint64_t available_l1_bytes =
+            device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        const uint64_t full_row_local_bytes = row_bytes + output_row_bytes + index_scratch_bytes + local_cache_bytes;
+        if (row_bytes <= max_l1_budget_bytes && full_row_local_bytes <= available_l1_bytes) {
             // One buffer holds the row, so the short last chunk lands on the end.
             tiles_per_chunk = std::min(chunk_cap, num_tiles_per_block);
             num_chunks = (num_tiles_per_block + tiles_per_chunk - 1) / tiles_per_chunk;
@@ -148,10 +162,6 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         buffering = num_tiles_per_block > max_double_buffer_tiles ? 1 : 2;
         dfb_num_entries = buffering * tiles_per_chunk;
     }
-
-    // PADDED and BINARY serve some weight rows out of a locally cached copy instead of fetching them
-    // per token; the other embeddings types have no such rows, so the cache is absent for them.
-    const bool use_local_cache = embeddings_type == EmbeddingsType::PADDED || embeddings_type == EmbeddingsType::BINARY;
 
     // -----------------------------------------------------------------------
     // Resource names

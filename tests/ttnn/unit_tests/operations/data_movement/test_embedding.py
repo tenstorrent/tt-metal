@@ -773,3 +773,20 @@ def test_embedding_chunked_partial_last_chunk(
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_equal(torch_output_tensor, output_tensor)
+
+
+def test_embedding_chunked_full_rows_exceed_l1(device):
+    # Two full-row DFBs at D=16384 require 2 MiB, more than one worker core has.
+    torch.manual_seed(0)
+    vocabulary_size = 4
+    hidden_embedding_dim = 16384
+
+    torch_input_tensor = torch.randint(0, vocabulary_size, (1, 32))
+    torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
+
+    input_tensor = ttnn.to_device(ttnn.from_torch(torch_input_tensor, dtype=ttnn.uint32), device)
+    weights = ttnn.to_device(ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT), device)
+
+    output_tensor = ttnn.embedding(input_tensor, weights, layout=ttnn.TILE_LAYOUT)
+    assert_equal(torch_output_tensor, ttnn.to_torch(output_tensor))
