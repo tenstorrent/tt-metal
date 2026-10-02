@@ -741,8 +741,11 @@ def quantize_input_to_unpack_format(
     """
     Quantize input stimuli to match the values visible after hardware unpack.
 
-    Model Bfp2_b, Bfp4_b, Bfp8_b, Int4, UInt4, and all MX input formats; pass other formats through.
+    Model Bfp2_b, Bfp4_b, Bfp8_b, Int8, Int4, UInt4, and all MX input formats; pass other formats through.
     """
+    if input_format == DataFormat.Int8:
+        # Sign-magnitude Int8 cannot represent -128; pack_int8 writes it to L1 as -127.
+        return torch.clamp(torch.as_tensor(operand), min=-127)
     if input_format is not None and input_format.is_4bit_integer():
         return torch.clamp(
             torch.as_tensor(operand), *FOUR_BIT_INTEGER_RANGE[input_format]
@@ -1082,6 +1085,9 @@ class TransposeGolden:
 
     def _to_format(self, operand, data_format):
         """Convert to data_format, saturating integers like the packer does instead of wrapping."""
+        if operand.dtype == torch.int8:
+            # Sign-magnitude Int8 cannot represent -128; pack_int8 writes it to L1 as -127.
+            operand = torch.clamp(operand, min=-127)
         if data_format.is_integer() and operand.dtype != format_dict[data_format]:
             return saturate_integer(operand, data_format)
         return to_tensor(operand, data_format)
