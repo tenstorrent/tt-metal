@@ -47,6 +47,12 @@ if TYPE_CHECKING:
 
 _DEFAULT_CHECKPOINT = "Qwen/Qwen-Image-Edit"
 
+# The denoise trace is captured per prompt length. Zero-padding the prompt up to a multiple of this
+# many tokens lets prompts of nearby lengths share one trace instead of re-capturing it. The shared
+# transformer has no key mask, so the padding is attended to (as in the base qwenimage pipeline,
+# which pads every prompt to a fixed length); ``None`` keeps the exact, unpadded lengths.
+_DEFAULT_PROMPT_BUCKET = 128
+
 # WH Galaxy preset: all 32 chips on one image, cfg replicated, TP across heads, SP across tokens.
 #   axis 0 -> sequence parallel (4),  axis 1 -> tensor parallel (8)
 _PRESETS_WH: dict[tuple[int, ...], dict] = {
@@ -136,6 +142,7 @@ class _DeviceTransformer:
         sp_axis: int,
         trace: bool = True,
         batch_cfg: bool = False,
+        prompt_bucket: int | None = _DEFAULT_PROMPT_BUCKET,
     ) -> None:
         self.config = config
         self.pos_embed = pos_embed
@@ -152,6 +159,11 @@ class _DeviceTransformer:
         self._tracers: dict[str, Tracer] = {}
         # Step-invariant RoPE/prompt tensors, cached per key (see _StepInvariants).
         self._invariants: dict[str, _StepInvariants] = {}
+        # Keys whose cached prompt embeddings belong to a previous pipeline call. The embeddings
+        # depend on the prompt *and* the input image (VL encode), but the cache is keyed on lengths
+        # only, so they are re-uploaded once per call (not per step).
+        self._stale_prompts: set[str] = set()
+        self._prompt_bucket = prompt_bucket
         self._ctx = "cond"
         # Batch-CFG interception state: the negative embeds are captured once (constant across
         # steps); the uncond half of each batched forward is cached and returned on the uncond call.
@@ -163,6 +175,7 @@ class _DeviceTransformer:
         """Clear captured negative embeds / cached halves (call per new __call__)."""
         self._uncond_eh = None
         self._pending_uncond_out = None
+        self._stale_prompts = set(self._invariants)
 
     def cache_context(self, name: str):  # noqa: ANN202 - matches HF's context-manager API
         self._ctx = name
@@ -188,7 +201,13 @@ class _DeviceTransformer:
         sig = (combined_seq, txt_seq, batch, repr(img_shapes))
         cached = self._invariants.get(key)
         if cached is not None and cached.sig == sig:
+            if key in self._stale_prompts:
+                # Same shapes, new request: keep RoPE and the trace, refresh only the embeddings.
+                # A traced call copies this into the trace's input buffer (see ``_run``).
+                cached.prompt = tensor.from_torch(prompt.to(torch.float32), device=self._device)
+                self._stale_prompts.discard(key)
             return cached
+        self._stale_prompts.discard(key)
 
         # A resolution / prompt-length change invalidates any trace captured under this key.
         stale = self._tracers.pop(key, None)
@@ -226,6 +245,9 @@ class _DeviceTransformer:
     ) -> torch.Tensor:
         """Run one (possibly batched) transformer forward and gather the result to host."""
         batch, combined_seq, _ = hidden_states.shape
+        if self._prompt_bucket:
+            bucket = self._prompt_bucket
+            prompt = self._pad_tokens(prompt, -(-prompt.shape[1] // bucket) * bucket)
         txt_seq = prompt.shape[1]
         dev, sp = self._device, self._sp_axis
 
@@ -258,6 +280,10 @@ class _DeviceTransformer:
                 tracer = Tracer(self._tt.forward, device=dev, prep_run=True)
                 self._tracers[key] = tracer
             out = tracer(**forward_kwargs, traced=True)
+            # Point the cache at the trace's own input buffer: later steps then skip the copy, and a
+            # refreshed prompt allocated after capture is not read again once a replay may have
+            # overwritten it (see Tracer caveat 1).
+            inv.prompt = tracer.inputs["prompt"]
         else:
             out = self._tt.forward(**forward_kwargs)
         ttnn.synchronize_device(dev)
@@ -365,6 +391,7 @@ class QwenImageEditPipeline:
         batch_cfg: bool = False,  # measured regression at TP=8xSP=4: batch-2 forward ~3.1x batch-1
         device_vae: bool = True,
         device_vae_encode: bool = True,
+        prompt_bucket: int | None = _DEFAULT_PROMPT_BUCKET,
     ) -> QwenImageEditPipeline:
         config = QwenImageEditPipelineConfig.default(
             mesh_shape=mesh_device.shape,
@@ -377,6 +404,7 @@ class QwenImageEditPipeline:
             batch_cfg=batch_cfg,
             device_vae=device_vae,
             device_vae_encode=device_vae_encode,
+            prompt_bucket=prompt_bucket,
         )
 
     def __init__(
@@ -388,6 +416,7 @@ class QwenImageEditPipeline:
         batch_cfg: bool = False,
         device_vae: bool = True,
         device_vae_encode: bool = True,
+        prompt_bucket: int | None = _DEFAULT_PROMPT_BUCKET,
     ) -> None:
         self._mesh_device = device
         self._config = config
@@ -445,6 +474,7 @@ class QwenImageEditPipeline:
             sp_axis=sp.mesh_axis,
             trace=trace,
             batch_cfg=batch_cfg,
+            prompt_bucket=prompt_bucket,
         )
         self._hf.transformer = self._device_transformer
 

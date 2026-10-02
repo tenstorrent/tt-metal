@@ -49,6 +49,11 @@ Notes:
   `letterbox=True` (default) pads the input to square without distortion.
 - `batch_cfg` is **off by default**: a batch-2 cond/uncond forward was measured ~3.1x a batch-1
   forward on this SP=4 layout (net regression), so sequential true-CFG is kept.
+- `prompt_bucket` (default 128): the denoise trace is captured per prompt length, so the prompt
+  (VL text + image tokens) is zero-padded up to a multiple of 128 and prompts of nearby lengths
+  replay one trace instead of re-capturing it. The transformer has no key mask, so the padding is
+  attended to, as in the base qwenimage pipeline; `prompt_bucket=None` keeps exact lengths. The
+  prompt embeddings are re-uploaded once per call, so a pipeline object can serve many edits.
 
 ## How we tested
 
