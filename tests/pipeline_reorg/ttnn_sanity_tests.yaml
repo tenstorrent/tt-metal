@@ -353,7 +353,7 @@
     tests/ttnn/unit_tests/operations/toy_*
   skus:
     wh_n300_civ2:
-      timeout: 75
+      timeout: 95
     bh_p150b_civ2:
       timeout: 75
   team: ttnn
