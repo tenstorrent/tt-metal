@@ -4,10 +4,11 @@
 
 """Constants of BEVFormer's detection decoder shared by the reference and the TTNN port."""
 
-# BEVFormer's box code, (cx, cy, w, l, cz, h, sin, cos, vx, vy) with the sizes as logs. In
-# the reg branches' raw output, the box codes, the centre channels are logit offsets the
-# decoder adds to its reference points; the head's box predictions carry the refined
-# centres in metres instead.
+# BEVFormer's box code layout: (cx, cy, w, l, cz, h, sin, cos, vx, vy), the sizes as logs.
+# Box codes, the reg branches' raw output: cx, cy and cz are logit offsets, which the decoder
+# adds to its reference points' logits.
+# Box predictions, the head's output: cx, cy and cz are the refined centers in metres.
+# The other channels are the same in both.
 CODE_SIZE = 10
 CODE_XY = slice(0, 2)
 CODE_WL = slice(2, 4)

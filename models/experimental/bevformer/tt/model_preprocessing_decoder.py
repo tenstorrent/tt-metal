@@ -76,7 +76,7 @@ def create_reg_branch_parameters(reg_branches, device, dtype=DEFAULT_DTYPE):
     """The three Linears of each ``Linear-ReLU-Linear-ReLU-Linear`` branch.
 
     The decoder runs each branch once per layer: it refines its reference points with the
-    centre channels of the box code and returns the whole code, which the head uses.
+    center channels of the box code and returns the whole code, which the head uses.
     """
     branches = []
     for branch in reg_branches:

@@ -11,7 +11,7 @@ decoded to ``(cx, cy, cz, w, l, h, yaw, vx, vy)`` and filtered to ``post_center_
 is the reference the TTNN coder in ``tt/tt_nms_free_coder.py`` is checked against.
 
 BEVFormer is trained with one-to-one matching, so the top scores need no NMS. cz stays at
-the box's gravity centre: upstream ``BEVFormerHead.get_bboxes`` moves it to the bottom face
+the box's gravity center: upstream ``BEVFormerHead.get_bboxes`` moves it to the bottom face
 (``cz - h / 2``) when it builds the LiDAR boxes, after the coder.
 
 Adapted from UniAD's ``NMSFreeCoder`` in ``models/experimental/uniad/reference/nms_free_coder.py``
@@ -32,7 +32,7 @@ from models.experimental.bevformer.config.decoder_config import (
     CODE_Z,
 )
 from models.experimental.bevformer.config.head_config import (
-    BOX_CENTRE,
+    BOX_CENTER,
     MAX_NUM,
     NUM_CLASSES,
     PC_RANGE,
@@ -41,7 +41,7 @@ from models.experimental.bevformer.config.head_config import (
 
 
 def denormalize_bbox(normalized_bboxes):
-    """Box predictions (``config/decoder_config.py``'s code, centres in metres) to
+    """Box predictions (``config/decoder_config.py``'s code, centers in metres) to
     ``(cx, cy, cz, w, l, h, yaw, vx, vy)`` boxes."""
     return torch.cat(
         [
@@ -57,13 +57,13 @@ def denormalize_bbox(normalized_bboxes):
 
 
 def filter_boxes(scores, labels, boxes, post_center_range, score_threshold=None):
-    """One sample's top-k boxes whose centres lie in ``post_center_range`` and, when
+    """One sample's top-k boxes whose centers lie in ``post_center_range`` and, when
     ``score_threshold`` is set, whose score passes it. While no score passes, the threshold
     drops by 10% at a time; once below 0.01, every score passes."""
     post_center_range = torch.tensor(post_center_range)
-    centres = boxes[..., BOX_CENTRE]
-    mask = (centres >= post_center_range[:3]).all(1)
-    mask &= (centres <= post_center_range[3:]).all(1)
+    centers = boxes[..., BOX_CENTER]
+    mask = (centers >= post_center_range[:3]).all(1)
+    mask &= (centers <= post_center_range[3:]).all(1)
     if score_threshold is not None:
         thresh_mask = scores > score_threshold
         tmp_score = score_threshold
@@ -82,10 +82,11 @@ class NMSFreeCoder:
     BEVFormer's NMS-free box coder: top-k by score, decode, range filter.
 
     Args:
-        pc_range, voxel_size: Unused, accepted so upstream's ``bbox_coder`` config applies;
-            upstream's ``denormalize_bbox`` ignores them too, as the head already emits metres.
+        pc_range, voxel_size: Unused, accepted so upstream's ``bbox_coder`` config applies.
+            Upstream stores them unused too: its ``denormalize_bbox`` ignores ``pc_range``, as
+            the head already emits metres.
         post_center_range (tuple[float]): ``(x_min, y_min, z_min, x_max, y_max, z_max)`` box
-            centres are kept in.
+            centers are kept in.
         max_num (int): Boxes kept per sample, by score.
         score_threshold (float, optional): Minimum score; BEVFormer sets none.
         num_classes (int): Class logits per query.
