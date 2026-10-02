@@ -1077,3 +1077,49 @@ def test_untilize_with_unpadding_width_crop(device, padded_width, out_width):
 
     # A bf16 tilize/untilize round trip is an identity, so this is exact.
     assert_equal(ttnn.to_torch(untilized), torch_input[:, :, :out_width])
+
+
+# An empty input gives the factories 0 blocks, so split_blocks_for_tilize returns empty core ranges
+# and no WorkUnitSpec is emitted - while the dataflow buffers have already been declared. The spec
+# then fails CollectSpecData with "DFB 'mci_out' has no producer", which surfaced as a TT_FATAL out
+# of to_layout(TILE -> ROW_MAJOR) on any zero-volume tensor. The op should hand back the empty
+# output instead of building a program with nothing to run.
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (0,),  # rank 1, empty
+        (2, 3, 0),  # empty last dim
+        (2, 0, 4),  # empty interior dim
+        (0, 3, 4),  # empty leading dim
+        (2, 3, 0, 5),  # rank 4
+        (0, 0, 4),  # more than one empty dim
+        # Tile-aligned empty shapes: the padded shape already equals the logical one, so to_layout
+        # takes the ttnn::untilize branch rather than untilize_with_unpadding. These SIGFPE'd
+        # before the guard was added there too.
+        (0, 64),
+        (0, 32),
+        (32, 0),
+    ],
+)
+def test_untilize_with_unpadding_zero_volume(shape, device):
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+    tilized = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Must not raise, and must come back with the same (empty) shape.
+    untilized = ttnn.to_layout(tilized, ttnn.ROW_MAJOR_LAYOUT)
+
+    result = ttnn.to_torch(untilized)
+    assert result.shape == torch_input.shape
+    assert result.numel() == 0
+
+
+# An empty input carries no element to unpad into a non-empty output. to_layout never asks for one
+# (it passes the wrapped sentinel for an empty dim), but a direct caller can, and the empty path
+# skips the device operation's validation - so the op has to reject it rather than invent zeros.
+def test_untilize_with_unpadding_zero_volume_rejects_nonempty_output(device, expect_error):
+    torch_input = torch.rand((0, 32), dtype=torch.bfloat16)
+    tilized = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # output_end is inclusive, so [0, 31] asks for a [1, 32] output out of an empty input.
+    with expect_error(RuntimeError, "zero-volume input requires a zero-volume output"):
+        ttnn.untilize_with_unpadding(tilized, ttnn.Shape([0, 31]))
