@@ -1312,7 +1312,7 @@ class MultichipDecoder(OptimizedDecoder):
         if fold_g:
             # g_proj folded into the QKV matmul (HiFi2 = the gate's own fidelity; decode is DRAM-bound)
             qkv = self._dram_mm(ln, None, self.w["wqkvg_ds"], cfg.hidden, self.meta["qkvg_pad"], self._ck_gate)
-            qkv = ttnn.sharded_to_interleaved(qkv, ttnn.DRAM_MEMORY_CONFIG)
+            qkv = ttnn.sharded_to_interleaved(qkv, ttnn.L1_MEMORY_CONFIG)  # head split in L1 (q -> DRAM before SDPA)
             qkv_w = self.meta["qkv_w"]
             g = ttnn.slice(qkv, [0, 0, 0, qkv_w], [1, 1, B, qkv_w + cfg.num_heads])
         else:
@@ -1381,6 +1381,8 @@ class MultichipDecoder(OptimizedDecoder):
             # See tt/optimized_decoder.py (decode SDPA program config).
             sdpa_kwargs["program_config"] = self._sdpa_pc_decode
             sdpa_kwargs["num_kv_heads"] = cfg.num_kv_heads
+        if q.memory_config().buffer_type != ttnn.BufferType.DRAM:  # paged decode SDPA needs Q in DRAM
+            q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
         attn = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q, kv_cache["k"], kv_cache["v"], **sdpa_kwargs
         )
