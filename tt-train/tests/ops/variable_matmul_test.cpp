@@ -179,6 +179,40 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA_NonT
     EXPECT_EQ(max_abs_error(result, ref), 0.0F) << "variable(InputAndWeightK,tA,M=176) vs minimal not bit-exact";
 }
 
+// Each core processes multiple output blocks, forcing both format transitions: matmul to the
+// Float32 intermediate copy, then copy back to the BF16 matmul inputs. With LLK assertions enabled,
+// the old init-before-reconfigure ordering halted on the first transition.
+TEST_F(VariableMatmulTest, MinimalParity_MultipleOutputBlocks_ColdAndWarm) {
+    constexpr uint32_t M = 256U;
+    constexpr uint32_t K = 128U;
+    constexpr uint32_t N = 256U;
+    auto* device = &ttml::autograd::ctx().get_device();
+    device->enable_program_cache();
+
+    const VariableMatmulConfig cfg{
+        .M_block_size = 2,
+        .K_block_size = 4,
+        .N_block_size = 2,
+        .subblock_h = 2,
+        .subblock_w = 2,
+        .compute_with_storage_grid_size = {2, 2},
+    };
+    auto input = create_random_device_tensor(M, K, device, /*seed=*/144U);
+    auto weight = create_random_device_tensor(K, N, device, /*seed=*/145U);
+    auto offsets = make_offsets({0U, K}, device);
+
+    const auto entries_before_cold = device->num_program_cache_entries();
+    auto cold_result = ttml::metal::variable_matmul_k_sliced(input, weight, cfg, offsets);
+    const auto entries_after_cold = device->num_program_cache_entries();
+    EXPECT_GT(entries_after_cold, entries_before_cold);
+    auto warm_result = ttml::metal::variable_matmul_k_sliced(input, weight, cfg, offsets);
+    EXPECT_EQ(device->num_program_cache_entries(), entries_after_cold);
+
+    auto ref = minimal_matmul_hifi4(input, weight, cfg);
+    EXPECT_EQ(max_abs_error(cold_result, ref), 0.0F);
+    EXPECT_EQ(max_abs_error(warm_result, ref), 0.0F);
+}
+
 // ---------------------------------------------------------------------------
 // M-axis offset parity. InputAndOutputRow reads the input row range [a, b) and writes the same
 // range of the output parent. With matched HiFi4 settings, that sub-region must be bit-identical

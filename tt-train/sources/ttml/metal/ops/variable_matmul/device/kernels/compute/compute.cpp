@@ -15,9 +15,11 @@
 // api/compute/tile_move_copy.h in #49070), which has the identical (uint32_t, uint32_t, uint32_t,
 // uint32_t) signature and is in scope here. See tt-metal#50386.
 void copy_and_pack_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
-    copy_init(in_cb);
+    // The preceding matmul leaves the unpacker configured for its operands. Reconfigure formats
+    // before copy_init, whose LLK init requires the unpacker to already match in_cb.
     reconfig_data_format_srca(in_cb);
     pack_reconfig_data_format(out_cb);
+    copy_init(in_cb);
     constexpr uint32_t dst_id = 0;
     CircularBuffer out_buf(out_cb);
 
@@ -269,6 +271,10 @@ void kernel_main() {
             current_N_block_tiles = n_tile_end - n_tile;
             current_subblock_w = std::min(current_N_block_tiles, subblock_w);
 
+            // After the first output block, copy_and_pack_block leaves the unpacker configured
+            // for intermediate_cb. Restore the matmul formats before its LLK init.
+            reconfig_data_format<SrcOrder::Reverse>(in0_cb_for_matmul, in1_cb);
+            pack_reconfig_data_format(intermediate_cb);
             matmul_block_init(
                 in0_cb_for_matmul,
                 in1_cb,
@@ -276,8 +282,6 @@ void kernel_main() {
                 current_subblock_w /*ct_dim*/,
                 current_subblock_h /*rt_dim*/,
                 K_block_tiles /*kt_dim*/);
-            reconfig_data_format<SrcOrder::Reverse>(in0_cb_for_matmul, in1_cb);
-            pack_reconfig_data_format(intermediate_cb);
             // Disable L1 packer accumulator before k=0 pack so matmul packs cleanly over
             // intermediate_cb instead of adding onto any leftover state from a prior program.
             PACK((llk_pack_reconfig_l1_acc(0)));
@@ -308,6 +312,7 @@ void kernel_main() {
                         // transpose source (in0_cb) back to the matmul operand (in1 feeds SrcA),
                         // then matmul_block_init re-programs the matmul MOP.
                         reconfig_data_format_srca(in0_cb, in1_cb);
+                        pack_reconfig_data_format(intermediate_cb);
                         matmul_block_init(
                             in0_cb_for_matmul,
                             in1_cb,
@@ -315,7 +320,6 @@ void kernel_main() {
                             current_subblock_w,
                             current_subblock_h,
                             K_block_tiles);
-                        pack_reconfig_data_format(intermediate_cb);
                         // transpose_in0_block_streamed disabled the L1 packer accumulator so
                         // its packs would overwrite. Restore it to the right state for the
                         // matmul pack: enabled after k=0 (so the matmul accumulates into
