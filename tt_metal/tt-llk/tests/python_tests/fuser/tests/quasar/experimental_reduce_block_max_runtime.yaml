@@ -1,0 +1,31 @@
+# Multiple block rows and batches, followed by a tiny-tile reduction.
+loop_factor: 2
+dest_acc: false
+
+operands:
+  - {name: a, dims: [64, 256], format: Float16_b, stimuli: [0.1, 1.0]}
+  - {name: scaler, dims: [64, 256], format: Float16_b, stimuli: 1.0}
+  - {name: out, dims: [64, 256], format: Float16_b}
+  - {name: tiny_a, dims: [32, 256], tile_dims: [16, 32], format: Float16_b, stimuli: [0.1, 1.0]}
+  - {name: tiny_scaler, dims: [32, 256], tile_dims: [16, 32], format: Float16_b, stimuli: 1.0}
+  - {name: tiny_out, dims: [32, 256], tile_dims: [16, 32], format: Float16_b}
+
+operations:
+  - math:
+      - type: Fpu
+        operation: ReduceBlockMaxRuntime
+        unpacker: ReduceBlockMaxRuntimeUnpacker
+        in0: a
+        in1: scaler
+        block_size: [64, 64]
+    pack:
+      - {output: out, packer: Packer, block_size: [64, 64]}
+  - math:
+      - type: Fpu
+        operation: ReduceBlockMaxRuntime
+        unpacker: ReduceBlockMaxRuntimeUnpacker
+        in0: tiny_a
+        in1: tiny_scaler
+        block_size: [32, 64]
+    pack:
+      - {output: tiny_out, packer: Packer, block_size: [32, 64]}

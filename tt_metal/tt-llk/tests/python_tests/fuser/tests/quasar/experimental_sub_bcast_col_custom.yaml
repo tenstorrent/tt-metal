@@ -1,0 +1,36 @@
+# SrcB reuse across columns, nonzero row offsets, tiny tiles, and SFPU after SUB.
+loop_factor: 2
+dest_acc: false
+
+operands:
+  - {name: a, dims: [64, 256], format: Float16_b}
+  - {name: b, dims: [64, 256], format: Float16_b}
+  - {name: out, dims: [64, 256], format: Float16_b}
+  - {name: tiny_a, dims: [32, 256], tile_dims: [16, 32], format: Float16_b}
+  - {name: tiny_b, dims: [32, 256], tile_dims: [16, 32], format: Float16_b}
+  - {name: tiny_out, dims: [32, 256], tile_dims: [16, 32], format: Float16_b}
+
+operations:
+  - math:
+      - type: Fpu
+        operation: SubBcastColCustom
+        unpacker: SubBcastColCustomUnpacker
+        in0: a
+        in1: b
+        broadcast_type: COL
+        block_size: [64, 64]
+      - type: UnarySfpu
+        operation: Relu
+        block_size: [64, 64]
+    pack:
+      - {output: out, packer: Packer, block_size: [64, 64]}
+  - math:
+      - type: Fpu
+        operation: SubBcastColCustom
+        unpacker: SubBcastColCustomUnpacker
+        in0: tiny_a
+        in1: tiny_b
+        broadcast_type: COL
+        block_size: [32, 64]
+    pack:
+      - {output: tiny_out, packer: Packer, block_size: [32, 64]}

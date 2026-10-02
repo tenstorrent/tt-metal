@@ -1,0 +1,34 @@
+# Both reuse directions, K accumulation, and replay reinit after an SFPU op.
+loop_factor: 2
+dest_acc: true
+
+operands:
+  - {name: a, dims: [128, 64], format: Float16_b}
+  - {name: b, dims: [64, 128], format: Float16_b}
+  - {name: wide, dims: [128, 128], format: Float16_b}
+  - {name: tall, dims: [128, 128], format: Float16_b}
+
+operations:
+  - math:
+      - type: Fpu
+        operation: MatmulNoMop
+        unpacker: MatmulUnpacker
+        in0: a
+        in1: b
+        block_size: [32, 64]
+        math_fidelity: LoFi
+      - type: UnarySfpu
+        operation: Relu
+        block_size: [32, 64]
+    pack:
+      - {output: wide, packer: Packer, block_size: [32, 64]}
+  - math:
+      - type: Fpu
+        operation: MatmulNoMop
+        unpacker: MatmulUnpacker
+        in0: a
+        in1: b
+        block_size: [64, 32]
+        math_fidelity: HiFi2
+    pack:
+      - {output: tall, packer: Packer, block_size: [64, 32]}
