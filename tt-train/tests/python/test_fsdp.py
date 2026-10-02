@@ -247,7 +247,7 @@ def _set_param_replicated(autograd_tensor, full_np, *, dtype=ttnn.DataType.BFLOA
 
 
 class _TinyBlock(AbstractModuleBase):
-    """Two-linear-layer block with biases. All shapes are tile-aligned (32-mult)."""
+    """Two-linear-layer block with biases."""
 
     def __init__(self, in_features: int, hidden: int, out_features: int) -> None:
         super().__init__()
@@ -475,17 +475,20 @@ class TestFullyShardLinear:
             ttml.fsdp.fully_shard(linear, mesh_axis="this_axis_does_not_exist")
 
     def test_prefers_tile_aligned_shard_dim(self):
-        """``[1,1,48,64]`` over 2: rows would split into 24 (sub-tile), so columns (32) are sharded."""
-        linear = LinearLayer(64, 48, has_bias=False)
+        """``[1,1,24k,32k]`` over ``k``: rows would split into 24 (sub-tile), so columns (32) are sharded."""
+        in_features, out_features = 32 * self.axis_size, 24 * self.axis_size
+        linear = LinearLayer(in_features, out_features, has_bias=False)
         ttml.fsdp.fully_shard(linear)
 
-        assert linear.weight.tensor.shape() == [1, 1, 48, 64 // self.axis_size]
+        assert linear.weight.tensor.shape() == [1, 1, out_features, 32]
         assert linear.weight.tensor._fsdp_shard_dim == 3
 
-    def test_warns_once_per_shape_when_no_dim_is_tile_aligned(self):
-        """Bias ``[1,1,1,48]`` has no aligned dim: still sharded, warned once per shape."""
-        ttml.fsdp._warned_misaligned.clear()
-        first, second = LinearLayer(64, 48, has_bias=True), LinearLayer(64, 48, has_bias=True)
+    def test_warns_once_per_shape_when_no_dim_is_tile_aligned(self, monkeypatch):
+        """Bias ``[1,1,1,24k]`` has no aligned dim: still sharded, warned once per shape."""
+        monkeypatch.setattr(ttml.fsdp, "_warned_misaligned", set())
+        in_features, out_features = 32 * self.axis_size, 24 * self.axis_size
+        first = LinearLayer(in_features, out_features, has_bias=True)
+        second = LinearLayer(in_features, out_features, has_bias=True)
         with pytest.warns(UserWarning, match="composite path") as record:
             ttml.fsdp.fully_shard(first)
             ttml.fsdp.fully_shard(second)
@@ -493,7 +496,7 @@ class TestFullyShardLinear:
         assert sum("composite path" in str(w.message) for w in record) == 1
         for linear in (first, second):
             assert ttml.fsdp.is_fsdp_managed(linear.bias.tensor)
-            assert linear.bias.tensor.shape() == [1, 1, 1, 48 // self.axis_size]
+            assert linear.bias.tensor.shape() == [1, 1, 1, 24]
 
 
 # ---------------------------------------------------------------------------
@@ -591,7 +594,7 @@ class TestFSDPEquivalence:
     @pytest.mark.parametrize("replicate", [(), ("fc1.bias",)], ids=["sharded", "bias_replicated"])
     @pytest.mark.parametrize("hidden", [128, 48], ids=["tile_aligned", "misaligned"])
     def test_backward_matches_reference(self, replicate, hidden):
-        """FSDP gathered gradients ≈ replicated-reference gradients (``hidden=48`` hits composite CCLs)."""
+        """FSDP gathered gradients ≈ replicated-reference gradients (``hidden=48`` shards ``fc1.bias`` sub-tile)."""
         in_features, out_features = 64, 64
         batch_size, seq_len = 2, 32
         input_np = self._make_input(batch_size, seq_len, in_features, seed=1)

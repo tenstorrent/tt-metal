@@ -35,13 +35,10 @@ def test_pick_shard_dim_prefers_tile_aligned(shape, axis_size, expected):
     assert _pick_shard_dim_from_shape(shape, set(), axis_index=1, axis_size=axis_size) == expected
 
 
-def test_pick_shard_dim_skips_dims_sharded_by_another_axis():
-    # rank-1 is TP-sharded, so misaligned rank-2 is used.
-    assert _pick_shard_dim_from_shape([1, 1, 384, 1024], {3}, axis_index=1, axis_size=8) == 2
-
-
-def test_pick_shard_dim_without_axis_size_keeps_legacy_order():
-    assert _pick_shard_dim_from_shape([1, 1, 384, 1024], set(), axis_index=1) == 2
+@pytest.mark.parametrize("tp_dim", [3, -1])
+def test_pick_shard_dim_skips_dims_sharded_by_another_axis(tp_dim):
+    # rank-1 is TP-sharded (given as 3 or -1), so misaligned rank-2 is used.
+    assert _pick_shard_dim_from_shape([1, 1, 384, 1024], {tp_dim}, axis_index=1, axis_size=8) == 2
 
 
 def test_pick_shard_dim_with_no_candidate_returns_none():

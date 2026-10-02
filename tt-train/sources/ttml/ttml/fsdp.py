@@ -320,28 +320,29 @@ def _pick_shard_dim_from_shape(
     shape: List[int],
     already_sharded: set,
     axis_index: int,
-    axis_size: Optional[int] = None,
+    axis_size: int,
 ) -> Optional[int]:
     """Shape-only core of :func:`_auto_shard_dim_for_param`, shared by eager and lazy paths."""
     rank = len(shape)
     if rank < 1:
         return None
 
+    # Placements may count dims from the end (``Shard(-1)``); compare as non-negative dims.
+    taken = {d % rank for d in already_sharded}
     candidates = []
     if rank >= 2:
         candidates.append(rank - 2)
     candidates.append(rank - 1)
-    candidates = [c for c in candidates if c not in already_sharded and shape[c] != 1]
+    candidates = [c for c in candidates if c not in taken and shape[c] != 1]
     if not candidates:
         return None
 
-    if axis_size is not None:
-        for cand in candidates:
-            if _is_tile_aligned_shard(shape, cand, axis_size):
-                return cand
-        for cand in candidates:
-            if shape[cand] % axis_size == 0:
-                return cand
+    for cand in candidates:
+        if _is_tile_aligned_shard(shape, cand, axis_size):
+            return cand
+    for cand in candidates:
+        if shape[cand] % axis_size == 0:
+            return cand
     return candidates[0]
 
 
@@ -379,7 +380,7 @@ def _param_placements(parameter: Parameter) -> Optional[List[Any]]:
     return _get_placements(inner)
 
 
-def _auto_shard_dim_for_param(parameter: Parameter, axis_index: int, axis_size: Optional[int] = None) -> Optional[int]:
+def _auto_shard_dim_for_param(parameter: Parameter, axis_index: int, axis_size: int) -> Optional[int]:
     """Pick a shard dim for ``parameter``, or return ``None`` to skip it.
 
     Rules (shared between lazy and eager paths):
@@ -722,7 +723,9 @@ def fully_shard(
             Auto picks ``rank-2`` or ``rank-1`` (second-to-last or last dim),
             preferring whole-tile shards and skipping dims of size 1 or already
             sharded by another mesh axis (e.g. TP).
-            Parameters with no usable or non-divisible dim stay replicated, with a warning.
+            Parameters with no usable dim, or whose chosen dim isn't divisible by the
+            axis size, stay replicated with a warning. Parameters whose shards aren't
+            whole tiles are still sharded, with a warning once per shape.
         mesh_axis: Name of the mesh axis to shard across. Defaults to ``"fsdp"``
         reshard_after_forward: If ``True`` (default), the module's weights
             are resharded between forward and backward (after forward) to keep peak memory
