@@ -15,9 +15,6 @@
 #endif
 namespace ckernel {
 
-// The SDPA execute never cleared SrcB, so both SDPA inits keep the custom_mm init from clearing it too.
-constexpr bool SDPA_CUSTOM_MM_CLEAR_SRC = false;
-
 ALWI void sdpa_custom_mm_block_init_pack_short() {
     PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(FACE_C_DIM * 8 * 2)));
     PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * 8 * 2)));
@@ -30,7 +27,7 @@ ALWI void sdpa_custom_mm_block_init(
     const std::uint32_t out_cb_id,
     const std::uint32_t ct_dim = 1) {
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in1_cb_id, in0_cb_id)));
-    UNPACK((llk_unpack_AB_custom_mm_init<transpose, SDPA_CUSTOM_MM_CLEAR_SRC>(in0_cb_id, in1_cb_id, ct_dim)));
+    UNPACK((llk_unpack_AB_custom_mm_init<transpose, false /* clear_src */>(in0_cb_id, in1_cb_id, ct_dim)));
 
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
@@ -49,7 +46,7 @@ ALWI void sdpa_custom_mm_block_init_short(
     const std::uint32_t in1_cb_id,
     const std::uint32_t out_cb_id,
     const std::uint32_t ct_dim = 1) {
-    UNPACK((llk_unpack_AB_custom_mm_init<transpose, SDPA_CUSTOM_MM_CLEAR_SRC>(in0_cb_id, in1_cb_id, ct_dim)));
+    UNPACK((llk_unpack_AB_custom_mm_init<transpose, false /* clear_src */>(in0_cb_id, in1_cb_id, ct_dim)));
     MATH((llk_math_sdpa_custom_mm_init<transpose>(in0_cb_id, in1_cb_id, ct_dim)));
 
     if constexpr (init_pack) {
