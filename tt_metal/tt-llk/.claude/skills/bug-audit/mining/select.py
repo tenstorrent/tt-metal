@@ -45,7 +45,9 @@ p.add_argument(
     "--exclude",
     action="append",
     default=[],
-    help="jsonl files of cases to exclude (by id AND by fix commit): old holdouts, the deep-read store",
+    help="jsonl files of cases to exclude: old holdouts, the deep-read store. By id, and by fix commit: a case sharing "
+    "a holdout's fix is always excluded; one sharing a deep-read fix is excluded from a holdout, and from deep reads "
+    "only when every fix it has was read",
 )
 p.add_argument("--n", type=int, default=60)
 p.add_argument("--seed", type=int, default=7)
@@ -76,7 +78,8 @@ p.add_argument(
     "--deep",
     action="append",
     default=[],
-    help="deep-read stores; cases a deep read judged not real are excluded, and so is any case sharing a deep-read fix",
+    help="deep-read stores: their cases are not read again, cases a deep read judged not real are excluded, and fixes "
+    "they read count as read (see --exclude)",
 )
 p.add_argument(
     "--deep-cases",
@@ -148,8 +151,9 @@ for f in a.deep:
 
 def already_read(c):
     """A case to leave out of the deep reads: read under its own id, the twin of a holdout (whose fix must not reach
-    the pack), or every one of its fixes already read under another id. A case that adds a fix nobody has read (a
-    re-fix) is read: that is the incomplete-fix case a deep read is for."""
+    the pack), or every one of its fixes already read under another id. A case with a fix nobody has read is read:
+    that fix is a defect the pack has not seen (an umbrella issue's other fixes, a later fix of the same bug).
+    """
     fixes = {fx["oid"] for fx in c.get("fix", [])}
     return (
         c["id"] in deep_ids

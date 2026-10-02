@@ -791,7 +791,7 @@ def test_a_refresh_deep_selection_still_reads_a_case_with_a_fix_never_read(tmp_p
     _refresh_twin(tmp_path)
     cases = [json.loads(x) for x in open(tmp_path / "cases.jsonl")]
     refix = dict(cases[0]["fix"][0], oid="b" * 40, subject="Fix the race properly")
-    cases[0]["fix"].append(refix)  # I200 also carries a later re-fix nobody has read
+    cases[0]["fix"].append(refix)  # I200 also carries a later fix nobody has read
     write(str(tmp_path / "cases.jsonl"), cases)
     code, out, err = _select(
         tmp_path,
@@ -806,9 +806,7 @@ def test_a_refresh_deep_selection_still_reads_a_case_with_a_fix_never_read(tmp_p
         open(os.path.join(tmp_path / "deep_out", f)).read()
         for f in os.listdir(tmp_path / "deep_out")
     )
-    assert (
-        "I200" in batched
-    ), "a re-fix of a read case is the incomplete-fix case a deep read is for"
+    assert "I200" in batched, "a fix nobody has read is a defect the pack has not seen"
     code, out, err = _select(
         tmp_path,
         "holdout",
@@ -850,6 +848,52 @@ def test_deep_selection_never_rereads_a_deep_read_case_or_samples_its_twin(tmp_p
     d = tmp_path / "deep_out"
     batched = "".join(open(d / f).read() for f in os.listdir(d)) if d.is_dir() else ""
     assert "P100" not in batched and "I200" not in batched, batched
+
+
+def _deep_ids(tmp_path, *extra):
+    code, out, err = run(
+        os.path.join(MINING, "select.py"),
+        "deep",
+        "--cases",
+        tmp_path / "cases.jsonl",
+        "--triage",
+        tmp_path / "triage.jsonl",
+        "--out-dir",
+        tmp_path / "deep_out",
+        *extra,
+    )
+    assert code == 0, out + err
+    d = tmp_path / "deep_out"
+    return "".join(open(d / f).read() for f in os.listdir(d)) if d.is_dir() else ""
+
+
+def test_deep_selection_never_rereads_a_deep_read_case_even_without_a_fix(tmp_path):
+    tri = {
+        "verdict": "code-bug",
+        "classes": ["race"],
+        "mechanism": "m",
+        "component": "c",
+        "deep_priority": 3,
+    }
+    write(
+        str(tmp_path / "cases.jsonl"),
+        [{"id": "P7", "title": "t", "fix": [], "later": {}}],
+    )
+    write(str(tmp_path / "triage.jsonl"), [dict(tri, id="P7")])
+    write(str(tmp_path / "deep.jsonl"), [{"id": "P7", "is_real_bug": "yes"}])
+    assert "P7" not in _deep_ids(tmp_path, "--deep", tmp_path / "deep.jsonl")
+
+
+def test_a_deep_store_passed_only_as_exclude_still_counts_its_fixes_as_read(tmp_path):
+    _refresh_twin(tmp_path)
+    batched = _deep_ids(
+        tmp_path,
+        "--exclude",
+        tmp_path / "deep.jsonl",
+        "--deep-cases",
+        tmp_path / "old_cases.jsonl",
+    )
+    assert "I200" not in batched, "I200's only fix is P100's, which was read"
 
 
 def test_deep_selection_excludes_a_held_out_fix_under_another_id(tmp_path):
@@ -1733,6 +1777,44 @@ def test_a_queued_recheck_outcome_keeps_the_wave_verdict_and_is_queued_again(
     assert [
         i["finding"]["summary"] for i in json.loads(out.splitlines()[0])["items"]
     ] == ["refuted claim"], "and the next recheck wave gets it again"
+
+
+def test_a_recheck_whose_verifiers_died_twice_is_not_handed_out_again(rundir, tmp_path):
+    lead = finding(
+        "l.cpp", 3, status="uncertain", summary="a lead that kills verifiers"
+    )
+    write(str(rundir / "verdicts" / "B-0000.json"), {"findings": [lead]})
+    died = {"confirmed": 0, "refuted": 0, "uncertain": 0, "died": 3}
+    for attempt in range(2):
+        code, out, err = run(
+            os.path.join(ENGINE, "recheck.py"), "--run", rundir, "queue"
+        )
+        (it,) = json.loads(out.splitlines()[0])["items"]
+        write(
+            str(tmp_path / "o.json"),
+            {
+                "items": [
+                    {
+                        "finding": it["finding"],
+                        "why": it["why"],
+                        "outcome": "queued",
+                        "votes": died,
+                        "reasons": [],
+                    }
+                ]
+            },
+        )
+        run(
+            os.path.join(ENGINE, "recheck.py"),
+            "--run",
+            rundir,
+            "persist",
+            tmp_path / "o.json",
+        )
+    code, out, err = run(os.path.join(ENGINE, "recheck.py"), "--run", rundir, "queue")
+    assert json.loads(out.splitlines()[0])["items"] == [], "a looping wave must end"
+    code, out, err = run(os.path.join(ENGINE, "recheck.py"), "--run", rundir, "report")
+    assert "given up" in out and "l.cpp:3" in out, out
 
 
 def test_recheck_wave_keeps_an_item_queued_when_a_verifier_dies():

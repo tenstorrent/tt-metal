@@ -128,9 +128,9 @@ Engine scripts take `--run DIR` (or `BUG_AUDIT_RUN`); paths below are relative t
    `recheck.py persist`, then `recheck.py report`, then `engine/consolidate.py --run <run>`. This rechecks every
    uncertain or needs-recheck candidate, and a 10% seeded sample of the refuted ones. If the sample's reversal rate is
    material (more than about 1 in 10), recheck the whole refuted pile. A candidate whose recheck verifiers died stays
-   queued, so run the loop once more for those; one still queued after that keeps its wave verdict, and so its place
-   in the reports, and `recheck.py report` counts it as still queued. The consolidate is what applies the recheck
-   outcomes: every later step reads `CONFIRMED.json`, and without it they miss each finding the recheck confirmed,
+   queued, so repeat the loop while `recheck.py report` shows any still queued. After its verifiers die on two waves
+   it is given up: `queue` stops handing it out, `report` names it, and it keeps its wave verdict, and so its place in
+   the reports. The consolidate is what applies the recheck outcomes: every later step reads `CONFIRMED.json`, and without it they miss each finding the recheck confirmed,
    including every sibling-sweep lead.
 6. **Dedup, so each bug is filed exactly once.** Two separate steps:
    - **Within the run:** `engine/dedup.py --run <run> inputs`, then `engine/dedup-wave.js`, then
@@ -253,8 +253,8 @@ CLOSED since the watermark: nothing mined before is fetched, triaged or deep-rea
 3. **Build, triage and deep-read only the new cases:** mining steps 2, 3 and 5 on the `closed_*` dumps, with
    `select.py --exclude` and `--deep` given the existing deep-read store and every holdout, and `--deep-cases` given
    the case file that store was built from. It matches by id AND by fix commit, so a case already read under another
-   id (an issue whose fix PR was read) is skipped too; deep-read rows record no commit, so it looks theirs up in
-   `--deep-cases`, and a holdout refuses to run when it cannot. Where a new fix touches the files of an old deep-read
+   id (an issue whose fix PR was read) is skipped too, unless it carries a fix nobody has read; deep-read rows record
+   no commit, so it looks theirs up in `--deep-cases`, and a holdout refuses to run when it cannot. Where a new fix touches the files of an old deep-read
    case, re-read that old case too: its fix-completeness verdict may have changed (a revert, a re-fix).
 4. **Use the new cases twice.** Their `unfixed` siblings go to the sibling sweep. And bugs fixed after the watermark
    were never seen by the mining, so they are a clean holdout: pick the next recall benchmark from them
@@ -278,7 +278,9 @@ whatever file a batch holds, and it needs the deep reads, not the pack.
    `--include-unsure` adds the `unsure` ones too.
 3. **Verify:** `engine/recheck.py --run <run> queue --to-dir <items> --max 330` (three verifiers each; 330 leads is the
    1000-agent cap), then `engine/recheck-wave.js` with the args it prints, then `recheck.py persist`. Repeat until
-   nothing is queued. For hundreds of leads run each wave unattended with `engine/run_workflow_headless.py`.
+   nothing is queued; a lead whose verifiers died on two waves is given up (step 5 of *Running an audit*) and stays
+   an unverified lead in UNCERTAIN.md, never filed. For hundreds of leads run each wave unattended with
+   `engine/run_workflow_headless.py`.
 4. **Consolidate, dedup, file-check, re-rate severity and write the fixes** exactly as in step 6 of *Running an
    audit*. The re-rating matters most here: every lead enters with a placeholder medium.
 The first sweep, over the tt-metal and tt-llk deep reads (927 unfixed-sibling entries), verified 776 leads: 536 were

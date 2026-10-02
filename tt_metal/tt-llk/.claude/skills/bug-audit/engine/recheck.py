@@ -9,7 +9,9 @@
 ones, and prints the Workflow args for engine/recheck-wave.js. The refuted sample is how the run measures its own
 false-negative rate: `report` prints how many sampled refutations were overturned. A high reversal rate means the
 verifiers are killing real bugs, and the whole refuted pile needs a recheck, not a sample.
-`persist` records each outcome; consolidate.py then lets it override the wave verdict.
+`persist` records each outcome; consolidate.py then lets it override the wave verdict. A candidate whose verifiers
+died stays queued for the next wave; after MAX_DIED such waves it is given up (`report` names it) and keeps its wave
+verdict, so a recheck loop always ends.
 """
 import json
 import os
@@ -38,6 +40,14 @@ if not argv:
 
 def opt(name, default, cast):
     return cast(argv[argv.index(name) + 1]) if name in argv else default
+
+
+# a candidate whose recheck verifiers died on this many waves is not handed out again: it keeps its wave verdict
+MAX_DIED = 2
+
+
+def given_up(v):
+    return v["outcome"] == "queued" and v.get("died_waves", 0) >= MAX_DIED
 
 
 if argv[0] == "queue":
@@ -87,7 +97,7 @@ if argv[0] == "queue":
             }
             added += 1
     save(path, rc)
-    todo = [k for k, v in rc.items() if v["outcome"] == "queued"][
+    todo = [k for k, v in rc.items() if v["outcome"] == "queued" and not given_up(v)][
         : opt("--max", 10**9, int)
     ]
     if "--to-dir" in argv:
@@ -137,6 +147,10 @@ elif argv[0] == "persist":
                 reasons=item["reasons"],
                 after_wave=len(st.get("waves", [])),
             )
+            if (
+                item["outcome"] == "queued"
+            ):  # its verifiers died; recheck-wave.js left it unsettled
+                rc[key]["died_waves"] = rc[key].get("died_waves", 0) + 1
             n += 1
     save(path, rc)
     print(f"recorded {n} recheck outcomes; run consolidate.py")
@@ -165,6 +179,12 @@ elif argv[0] == "report":
             for o in ("confirmed", "refuted", "uncertain")
         )
     )
-    print(f"still queued: {sum(1 for v in rc.values() if v['outcome'] == 'queued')}")
+    gone = [v for v in rc.values() if given_up(v)]
+    print(
+        f"still queued: {sum(1 for v in rc.values() if v['outcome'] == 'queued') - len(gone)}; "
+        f"given up (verifiers died on {MAX_DIED} waves, wave verdict kept): {len(gone)}"
+    )
+    for v in gone:
+        print(f"  GIVEN UP {key_of(v['finding'])}: {v['finding']['summary'][:120]}")
 else:
     sys.exit(__doc__)

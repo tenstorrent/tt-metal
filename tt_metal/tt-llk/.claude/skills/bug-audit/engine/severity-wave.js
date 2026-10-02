@@ -43,7 +43,7 @@ Rubric, judged by who hits it and what happens:
   sharding), or a significant contract violation a caller can reasonably hit.
 - low: diagnostics, error messages, logging, tests, benchmarks, tooling, debug-only paths, or behaviour that needs an
   unusual input to reach.
-Rate each on its own merits, from the code and the verifier reasons, not from the claimed severity.
+Rate each on its own merits, from the code and the verifier reasons.
 An item's other_sites are the same defect in sibling copies (another arch, dtype or variant) or another confirmed
 defect on the same line. One rating covers the whole entry, so rate its WORST site: read each site's claim and failure
 scenario too. Return one rating per item, same keys.`
