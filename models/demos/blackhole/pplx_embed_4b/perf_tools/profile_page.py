@@ -30,6 +30,23 @@ SPEC_CORES = 120
 PEAK_SPEC = CLK * SPEC_CORES * FLOP_CYC
 # pplx-embed-4B per layer: QKV [2560, 6144], WO [4096, 2560], FF1 + FF3 [2560, 2 x 9728], FF2 [9728, 2560], bfp4
 N_LAYERS, WEIGHT_PARAMS_PER_LAYER = 36, 2560 * 6144 + 4096 * 2560 + 2560 * 2 * 9728 + 9728 * 2560
+# Achievable whole model (the "achievable" fields), cold at 1.35 GHz and independent of today's dataflow: every activation
+# on chip, so the bound is max(FPU, DRAM, vector) with the three overlapped (serialized FPU + vector is the upper band).
+#   FPU: every matmul / SDPA FLOP at 89% of the 120-core LoFi peak, what the matmul LLK reaches with no data movement
+#        (FF2 bs32 compute only 589 TFLOP/s, 2026-10-02) and the best Blackhole GEMM in tech_reports/GEMM_FLOPS (89.5%)
+#   DRAM: the weights and the embedding rows once, at the attainable 450 GB/s
+#   vector, per layer at measured per-tile rates on 120 cores: one exp per attention score (max-subtract folded into
+#        the exp's bias, row sums as a ones column of P·V, normalise on O) at the SFPLOADMACRO exp's ~64 cycles a tile
+#        (NEGATIVE_RESULTS §65); silu(gate)·up per FF1 output at the landed pass's ~383 cycles an output tile (§62, 184
+#        µs at bs16); the eltwise rest (2 RMSNorms × square / scale / gamma + residual add on 2560, QK-norm + RoPE on
+#        Q / K's 5120, O's 1/sum on 4096) at ~32 cycles a tile (unpack-bound, an estimate)
+ACH_FPU_FRAC, ACH_BW = 0.89, BW
+VEC_CYC = {"exp": 64, "swiglu": 383, "eltwise": 32}
+VEC_TILES_PER_TOKEN = {  # per layer
+    "exp": 32 * ISL / 1024,
+    "swiglu": 9728 / 1024,
+    "eltwise": (2560 * (2 * 3 + 1) + 5120 * (2 + 4) + 4096) / 1024,
+}
 GROUPS = (("QKV", "QKV"), ("WO", "WO"), ("FF1 + FF3", "FF1"), ("FF2", "FF2"), ("SDPA", "SDPA"),
           ("heads + QK-norm + RoPE", "heads"), ("add + RMSNorm", "add + RMSNorm"))  # fmt: skip
 
@@ -374,6 +391,20 @@ def add_roofs(b, measured):
         "groups": {k: {kk: round(vv, 3) for kk, vv in v.items()} for k, v in groups.items()},
     }
     b["ideal"]["model_ms"] = max(b["ideal"]["model_fpu_ms"], b["ideal"]["model_dram_ms"])
+    tokens = b["bs"] * ISL
+    vec = {k: N_LAYERS * tokens * n * VEC_CYC[k] / (CLK * CORES) * 1e3 for k, n in VEC_TILES_PER_TOKEN.items()}
+    a = {
+        "fpu_frac": ACH_FPU_FRAC,
+        "tflops": round(PEAK * ACH_FPU_FRAC / 1e12, 1),
+        "dram_gbs": ACH_BW / 1e9,
+        "fpu_ms": round(flops / (PEAK * ACH_FPU_FRAC) * 1e3, 3),
+        "dram_ms": round(must_bytes / ACH_BW * 1e3, 3),
+        "vector_ms": {k: round(v, 3) for k, v in vec.items()},
+    }
+    a["vector_total_ms"] = round(sum(vec.values()), 3)
+    a["model_ms"] = max(a["fpu_ms"], a["dram_ms"], a["vector_total_ms"])
+    a["serial_ms"] = round(max(a["fpu_ms"] + a["vector_total_ms"], a["dram_ms"]), 3)
+    b["achievable"] = a
     return miss
 
 
