@@ -4,11 +4,14 @@
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
+#include <array>
 #include <climits>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 #include <algorithm>
 #include <cstring>
 #include <exception>
@@ -93,6 +96,7 @@ bool test_dropout_standalone(
     float probability,
     uint32_t seed,
     float const_bias,
+    uint32_t num_tiles,
     std::vector<bfloat16>& res_vec) {
     bool pass = true;
     uint32_t int_probability = probability * (double)INT_MAX;
@@ -114,8 +118,7 @@ bool test_dropout_standalone(
 
         constexpr CoreCoord core = {0, 0};
         constexpr uint32_t single_tile_size = 2 * 1024;
-        constexpr uint32_t num_tiles = 128;
-        constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles;
+        const uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
         distributed::ReplicatedBufferConfig global_config{.size = dram_buffer_size};
         distributed::DeviceLocalBufferConfig dram_config{
@@ -239,8 +242,9 @@ void test_dropout(const std::shared_ptr<distributed::MeshDevice>& mesh_device, c
     uint32_t seed_1 = test_config.seed_1;
 
     std::vector<bfloat16> res_0, res_1, res_2;
-    pass &= test_dropout_standalone(mesh_device, probability, seed_0, fill_constant, res_0);
-    pass &= test_dropout_standalone(mesh_device, probability, seed_0, fill_constant, res_1);
+    constexpr uint32_t num_tiles = 128;
+    pass &= test_dropout_standalone(mesh_device, probability, seed_0, fill_constant, num_tiles, res_0);
+    pass &= test_dropout_standalone(mesh_device, probability, seed_0, fill_constant, num_tiles, res_1);
     bool repeatable = std::equal(res_0.begin(), res_0.end(), res_1.begin());
     if (!repeatable) {
         log_error(tt::LogTest, "Same parameters gave different results probability={}, seed={}", probability, seed_0);
@@ -250,7 +254,7 @@ void test_dropout(const std::shared_ptr<distributed::MeshDevice>& mesh_device, c
     pass &= repeatable;
 
     if (probability != 0.0 && probability != 1.0) {
-        pass &= test_dropout_standalone(mesh_device, probability, seed_1, fill_constant, res_2);
+        pass &= test_dropout_standalone(mesh_device, probability, seed_1, fill_constant, num_tiles, res_2);
         bool unique = !std::equal(res_0.begin(), res_0.end(), res_2.begin());
         if (!unique) {
             log_error(
@@ -268,6 +272,77 @@ void test_dropout(const std::shared_ptr<distributed::MeshDevice>& mesh_device, c
     EXPECT_TRUE(pass);
 }
 
+bool check_lane_stream_correlation(const std::vector<bfloat16>& tiled_result, uint32_t num_tiles, float probability) {
+    constexpr uint32_t tile_height = 32;
+    constexpr uint32_t tile_width = 32;
+    const std::vector<uint32_t> shape = {1, 1, num_tiles * tile_height, tile_width};
+    const auto logical_result =
+        convert_layout<bfloat16>(tiled_result, shape, TensorLayoutType::TILED_NFACES, TensorLayoutType::LIN_ROW_MAJOR);
+    const size_t num_rows = static_cast<size_t>(num_tiles) * tile_height;
+
+    std::array<double, tile_width> means{};
+    for (size_t row = 0; row < num_rows; ++row) {
+        for (size_t col = 0; col < tile_width; ++col) {
+            means[col] += static_cast<float>(logical_result[row * tile_width + col]) == 0.0F ? 1.0 : 0.0;
+        }
+    }
+    for (double& mean : means) {
+        mean /= static_cast<double>(num_rows);
+    }
+
+    double max_rate_error = 0.0;
+    for (const double mean : means) {
+        max_rate_error = std::max(max_rate_error, std::abs(mean - probability));
+    }
+    double max_abs_correlation = 0.0;
+    double max_agreement_excess = 0.0;
+    uint32_t duplicate_streams = 0;
+    for (size_t lhs = 0; lhs < tile_width; ++lhs) {
+        for (size_t rhs = lhs + 1; rhs < tile_width; ++rhs) {
+            double covariance = 0.0;
+            double lhs_variance = 0.0;
+            double rhs_variance = 0.0;
+            double agreement = 0.0;
+            bool duplicate = true;
+            for (size_t row = 0; row < num_rows; ++row) {
+                const bool lhs_dropped = static_cast<float>(logical_result[row * tile_width + lhs]) == 0.0F;
+                const bool rhs_dropped = static_cast<float>(logical_result[row * tile_width + rhs]) == 0.0F;
+                const double lhs_delta = static_cast<double>(lhs_dropped) - means[lhs];
+                const double rhs_delta = static_cast<double>(rhs_dropped) - means[rhs];
+                covariance += lhs_delta * rhs_delta;
+                lhs_variance += lhs_delta * lhs_delta;
+                rhs_variance += rhs_delta * rhs_delta;
+                agreement += lhs_dropped == rhs_dropped ? 1.0 : 0.0;
+                duplicate &= lhs_dropped == rhs_dropped;
+            }
+
+            if (lhs_variance == 0.0 || rhs_variance == 0.0) {
+                log_error(tt::LogTest, "Dropout lane stream had zero variance at probability={}", probability);
+                return false;
+            }
+            const double correlation = covariance / std::sqrt(lhs_variance * rhs_variance);
+            max_abs_correlation = std::max(max_abs_correlation, std::abs(correlation));
+            const double expected_agreement = means[lhs] * means[rhs] + (1.0 - means[lhs]) * (1.0 - means[rhs]);
+            max_agreement_excess =
+                std::max(max_agreement_excess, agreement / static_cast<double>(num_rows) - expected_agreement);
+            duplicate_streams += duplicate ? 1 : 0;
+        }
+    }
+
+    log_info(
+        tt::LogTest,
+        "Dropout lane statistics: max_rate_error={}, max_abs_correlation={}, max_agreement_excess={}, "
+        "duplicate_streams={}",
+        max_rate_error,
+        max_abs_correlation,
+        max_agreement_excess,
+        duplicate_streams);
+    constexpr double max_allowed_rate_error = 0.02;
+    constexpr double max_allowed_abs_correlation = 0.06;
+    return max_rate_error < max_allowed_rate_error && duplicate_streams == 0 &&
+           max_abs_correlation < max_allowed_abs_correlation;
+}
+
 }  // namespace unit_tests::compute::sfpu::dropout
 
 TEST_F(LLKMeshDeviceFixture, TensixComputeDropout) {
@@ -283,6 +358,23 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeDropout) {
             .seed_1 = static_cast<uint32_t>(rand())};
         unit_tests::compute::sfpu::dropout::test_dropout(this->devices_.at(0), test_config);
     }
+}
+
+TEST_F(LLKMeshDeviceFixture, TensixComputeDropoutDecorrelatesLaneStreams) {
+    constexpr float probability = 0.2F;
+    constexpr float fill_constant = 9.0F;
+    constexpr uint32_t seed = 1;
+    constexpr uint32_t num_tiles = 1024;
+    std::vector<bfloat16> first_result;
+    std::vector<bfloat16> repeated_result;
+
+    ASSERT_TRUE(unit_tests::compute::sfpu::dropout::test_dropout_standalone(
+        this->devices_.at(0), probability, seed, fill_constant, num_tiles, first_result));
+    ASSERT_TRUE(unit_tests::compute::sfpu::dropout::test_dropout_standalone(
+        this->devices_.at(0), probability, seed, fill_constant, num_tiles, repeated_result));
+    ASSERT_TRUE(std::equal(first_result.begin(), first_result.end(), repeated_result.begin()));
+    EXPECT_TRUE(
+        unit_tests::compute::sfpu::dropout::check_lane_stream_correlation(first_result, num_tiles, probability));
 }
 
 }  // namespace tt::tt_metal

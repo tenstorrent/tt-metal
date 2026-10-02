@@ -8,6 +8,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_ops.h"
+#include "ckernel_sfpu_rand.h"
 #include "cmath_common.h"
 #include "sfpi.h"
 
@@ -18,34 +19,42 @@ namespace sfpu {
 // scale should be binary representation of a float32
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_dropout(std::uint32_t probability, std::uint32_t scale) {
-    TT_SFPLOADI(p_sfpu::LREG1, 10, scale & 0xFFFF);
-    TT_SFPLOADI(p_sfpu::LREG1, 8, scale >> 16);
+    make_lane_salt();
+
+    TT_SFPLOADI(p_sfpu::LREG5, 10, scale & 0xFFFF);
+    TT_SFPLOADI(p_sfpu::LREG5, 8, scale >> 16);
     TT_SFPLOADI(p_sfpu::LREG2, 10, probability & 0xFFFF);
     TT_SFPLOADI(p_sfpu::LREG2, 8, probability >> 16);
+
+    // Shift counts used by the architecture's validated bijective ARX finalizer.
+    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_SHORT, (-16) & 0xFFFF);
+    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_SHORT, 10);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_SHORT, (-6) & 0xFFFF);
+    TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_SHORT, 13);
+    TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         // Scale samples
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, 3, 0);
-        TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::DEFAULT, 3, 0);
+        TTI_SFPMUL(p_sfpu::LREG6, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG6, 0);
 
-        ////////////////////////
-        // Instruction SFPMOV generates a uint32_t pseudorandom number
-        // when instr_mod1 = 8 and lreg_c =  9.
-        // Arguments: (imm12_math, lreg_c, lreg_dest, instr_mod1)
-        // Unset sign-bit for easy comparison with probability
-        ////////////////////////
-        TTI_SFPMOV(0, 9, p_sfpu::LREG3, 8);
-        TTI_SFPSETSGN(0, p_sfpu::LREG3, p_sfpu::LREG3, 1);
+        // Salt and mix the shifted per-lane hardware streams before thresholding.
+        rand_prng<p_sfpu::LREG1>();
+        TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_CC_NONE);
+        begin_mix_uint32_fast();
+        finish_mix_uint32_fast();
+        TTI_SFPSETSGN(0, p_sfpu::LREG0, p_sfpu::LREG0, sfpsetsgn_mod1_arg_imm);
 
         ////////////////////////
         // Drop samples
         // v_if (rand < probability)
         //   sfpi::dst_reg[0] = 0.0f;
         ///////////////////////
-        TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG3, 10);
-        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG0, 10);
+        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG6, 0);
         TTI_SFPENCC(0, 0, 0, 0);
-        TTI_SFPSTORE(0, InstrModLoadStore::DEFAULT, 3, 0);
+        TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::DEFAULT, 3, 0);
 
         sfpi::dst_reg++;
     }
