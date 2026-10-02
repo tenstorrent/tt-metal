@@ -1101,6 +1101,12 @@ class TransposeGolden:
     def __init__(self):
         pass
 
+    def _to_format(self, operand, data_format):
+        """Convert to data_format, saturating integers like the packer does instead of wrapping."""
+        if data_format.is_integer() and operand.dtype != format_dict[data_format]:
+            return saturate_integer(operand, data_format)
+        return to_tensor(operand, data_format)
+
     def _quantize_transpose_input(self, operand, data_format):
         """Quantize input before transposing to match hardware unpack behavior.
 
@@ -1134,7 +1140,7 @@ class TransposeGolden:
         if num_faces not in [1, 2, 4]:
             raise ValueError(f"num_faces must be 1, 2, or 4, got {num_faces}")
 
-        tensor = to_tensor(operand, data_format)
+        tensor = self._to_format(operand, data_format)
         tensor = self._quantize_transpose_input(tensor, data_format)
         torch_format = format_dict[data_format]
 
@@ -1185,7 +1191,7 @@ class TransposeGolden:
             raise ValueError(f"num_faces must be 1, 2, or 4, got {num_faces}")
 
         torch_format = format_dict[data_format]
-        tensor = to_tensor(operand, data_format)
+        tensor = self._to_format(operand, data_format)
         tensor = self._quantize_transpose_input(tensor, data_format)
 
         total_elements = ELEMENTS_PER_FACE * num_faces
@@ -1239,7 +1245,7 @@ class TransposeGolden:
             raise ValueError("operation_func must be callable")
 
         # Convert and prepare tensor
-        tensor = to_tensor(operand, data_format)
+        tensor = self._to_format(operand, data_format)
 
         # Apply tilization if requested
         if tilize:
