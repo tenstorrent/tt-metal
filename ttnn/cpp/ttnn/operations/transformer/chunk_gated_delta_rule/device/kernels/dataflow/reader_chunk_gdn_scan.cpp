@@ -409,7 +409,10 @@ void kernel_main() {
     if (kickoff_wait_cycles != 0) {
         riscv_wait(kickoff_wait_cycles);
     }
-    read_vslice(s0_acc, cb_S, h * Kt * Vt_full, Kt);
+    {
+        DeviceZoneScopedN("rx_s0");
+        read_vslice(s0_acc, cb_S, h * Kt * Vt_full, Kt);
+    }
     for (uint32_t c = 0; c < NC; c++) {
         {
             DeviceZoneScopedN("rx_wait_valid");
