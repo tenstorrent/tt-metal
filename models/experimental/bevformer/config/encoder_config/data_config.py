@@ -10,6 +10,7 @@ This module provides comprehensive dataset configurations for BEVFormer encoder 
 - KITTI (stereo vision datasets)
 - Waymo (open dataset)
 - Lyft Level 5 (prediction dataset)
+- occb (occupancy surround; meters and the fifth camera are still open)
 
 Each configuration includes dataset-specific parameters like point cloud range, camera count,
 input image sizes, spatial shapes for multi-scale features, and z-axis sampling configuration.
@@ -63,6 +64,19 @@ def create_z_config(pc_range: List[float], num_points: int = 4) -> Dict[str, Any
         "start": pc_range[2],  # z_min
         "end": pc_range[5],  # z_max
     }
+
+
+# Scene the occb preset reproduces. Four cameras share OCCB_IMAGE_SIZE. The fifth
+# is OCCB_WIDE_IMAGE_SIZE, which DatasetConfig cannot store beside the first.
+# OCCB_BEV_SIZE is (bev_h, bev_w) for encoder.forward, not a field of the dataset.
+OCCB_NUM_CAMS = 5
+OCCB_IMAGE_SIZE = (1536, 1536)
+OCCB_WIDE_IMAGE_SIZE = (2304, 1280)
+OCCB_BEV_SIZE = (128, 64)
+# TODO: replace with the delivered ego-frame range in meters, including which
+# axis of the 128x64 grid is forward and where the vehicle sits in that grid.
+# These bounds only keep z sampling finite until then.
+OCCB_PC_RANGE_M = [-1.0, -1.0, -1.0, 1.0, 1.0, 1.0]
 
 
 @dataclass
@@ -125,6 +139,7 @@ class BEVFormerDataConfig:
         self._init_kitti_configs()
         self._init_waymo_configs()
         self._init_lyft_configs()
+        self._init_occb_configs()
 
     def _init_nuscenes_configs(self):
         """Initialize NuScenes dataset configurations (HIGH PRIORITY)."""
@@ -285,6 +300,18 @@ class BEVFormerDataConfig:
             self.datasets[config_name] = DatasetConfig(
                 name=config_name, input_size=(width, height), description=f"Lyft Level 5 v1.0 - {desc}", **lyft_base
             )
+
+    def _init_occb_configs(self):
+        """Occupancy surround. One image size and a placeholder meter range."""
+        # TODO: the fifth camera is OCCB_WIDE_IMAGE_SIZE. One input_size is shared
+        # by every camera, and point sampling normalizes all of them by it.
+        self.datasets["occb_1536x1536"] = DatasetConfig(
+            name="occb_1536x1536",
+            pc_range=list(OCCB_PC_RANGE_M),
+            num_cams=OCCB_NUM_CAMS,
+            input_size=OCCB_IMAGE_SIZE,
+            description=("Occupancy surround, five cameras. Four share 1536x1536. " "BEV grid for forward: 128x64."),
+        )
 
     def get_config(self, dataset_name: str) -> Optional[DatasetConfig]:
         """

@@ -320,6 +320,7 @@ PRESET_CONFIGS = {
     "waymo_small": EncoderConfig("waymo_v1.0_960x640", "small"),
     "lyft_base": EncoderConfig("lyft_v1.0_1920x1080", "base"),
     "lyft_small": EncoderConfig("lyft_v1.0_1280x720", "small"),
+    "occb_base": EncoderConfig("occb_1536x1536", "base"),
 }
 
 

@@ -20,6 +20,10 @@ NUM_CAMS = 6
 IMAGE_HEIGHT = 928
 IMAGE_WIDTH = 1600
 
+# TODO: the occb preset is 5 cameras, four at 1536x1536 and one at 2304x1280.
+# Padding, DRAM slice counts, and this batch are for the 6-camera 1600x928
+# setup and have to be derived again before occb images can run here.
+
 # BEVFormer-base's ResNet101: caffe style, DCNv2 in layer3 and layer4, C3-C5 out.
 RESNET_KWARGS = dict(
     depth=101,

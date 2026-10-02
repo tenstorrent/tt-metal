@@ -112,6 +112,34 @@ KITTI_CAMERA_RIG: Tuple[CameraSpec, ...] = (
 )
 
 
+# Four cameras share one square image. The fifth is wider. Which physical
+# camera is which is unknown, so the wide camera is last.
+# TODO: yaw, focal length, and principal point. Zeros keep this from being a
+# synthetic ring, which would decide bev_mask before a calibration arrives.
+OCCB_SQUARE_IMAGE_SIZE = (1536, 1536)
+OCCB_WIDE_IMAGE_SIZE = (2304, 1280)
+
+
+def _occb(name: str, reference_size: Tuple[int, int]) -> CameraSpec:
+    width, height = reference_size
+    return CameraSpec(
+        name=name,
+        yaw_deg=0.0,
+        focal_px=(0.0, 0.0),
+        principal_px=(width / 2.0, height / 2.0),
+        reference_size=reference_size,
+    )
+
+
+OCCB_CAMERA_RIG: Tuple[CameraSpec, ...] = (
+    _occb("CAM_0", OCCB_SQUARE_IMAGE_SIZE),
+    _occb("CAM_1", OCCB_SQUARE_IMAGE_SIZE),
+    _occb("CAM_2", OCCB_SQUARE_IMAGE_SIZE),
+    _occb("CAM_3", OCCB_SQUARE_IMAGE_SIZE),
+    _occb("CAM_4", OCCB_WIDE_IMAGE_SIZE),
+)
+
+
 def ring_camera_rig(
     num_cams: int,
     input_size: Tuple[int, int],
@@ -194,6 +222,8 @@ def build_lidar2img(
 
 def camera_rig_for_dataset(dataset_config) -> Tuple[CameraSpec, ...]:
     """Pick the rig recorded for a dataset, falling back to a synthetic ring."""
+    if dataset_config.name.startswith("occb") and dataset_config.num_cams == len(OCCB_CAMERA_RIG):
+        return OCCB_CAMERA_RIG
     if dataset_config.name.startswith("nuscenes") and dataset_config.num_cams == len(NUSCENES_CAMERA_RIG):
         return NUSCENES_CAMERA_RIG
     if dataset_config.name.startswith("kitti") and dataset_config.num_cams == len(KITTI_CAMERA_RIG):
