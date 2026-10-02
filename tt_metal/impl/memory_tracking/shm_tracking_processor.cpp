@@ -48,6 +48,8 @@ void ShmTrackingProcessor::track_allocate(const Buffer* buffer) {
         auto underlying_devices = mesh_device->get_devices();
         size_t num_tracked = 0;
         uint64_t size_per_device = buffer->size();
+        // getpid() is a syscall; take it once per buffer, not once per device of the mesh.
+        const pid_t pid = getpid();
 
         // Track on all underlying Devices that have SHM provider
         for (auto* underlying_device : underlying_devices) {
@@ -65,10 +67,10 @@ void ShmTrackingProcessor::track_allocate(const Buffer* buffer) {
                             buffer->device()->id(),
                             static_cast<unsigned>(buffer->buffer_type()),
                             size_per_device,
-                            getpid());
+                            pid);
                     }
                     shm_provider->record_allocation(
-                        getpid(),
+                        pid,
                         size_per_device,
                         to_shm_buffer_type(buffer->buffer_type()),
                         static_cast<uint32_t>(device->id()));
@@ -182,6 +184,7 @@ void ShmTrackingProcessor::track_deallocate(Buffer* buffer) {
 
         auto underlying_devices = mesh_device->get_devices();
         uint64_t size_per_device = buffer->size();
+        const pid_t pid = getpid();
 
         // Track deallocation on all underlying Devices that have SHM provider
         for (auto* underlying_device : underlying_devices) {
@@ -191,7 +194,7 @@ void ShmTrackingProcessor::track_deallocate(Buffer* buffer) {
                 if (shm_provider) {
                     // Track deallocation on this underlying device
                     shm_provider->record_deallocation(
-                        getpid(),
+                        pid,
                         size_per_device,
                         to_shm_buffer_type(buffer->buffer_type()),
                         static_cast<uint32_t>(device->id()));
