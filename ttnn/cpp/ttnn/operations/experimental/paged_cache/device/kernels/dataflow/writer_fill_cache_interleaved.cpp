@@ -289,7 +289,7 @@ void kernel_main() {
     }
 
     // Each of these is reserved once purely as a staging slot for a NOC read that this kernel then
-    // reads through a raw pointer; there is no downstream consumer, so commit the reservations to
+    // reads through a raw pointer; there is no downstream consumer, so push the reserved pages to
     // leave the buffers balanced. Quasar stages through scratchpads instead, which reserve nothing.
 #ifndef ARCH_QUASAR
 #ifdef USE_BATCH_IDX_TENSOR

@@ -31,6 +31,8 @@ void kernel_main() {
 
 #ifdef OUT_SHARDED
     dfb.wait_front(num_pages);
+    // Pop the same number of pages that were waited for.
+    dfb.pop_front(num_pages);
 #else
 
     // single-page ublocks (works for both TILE and ROW_MAJOR layouts)
