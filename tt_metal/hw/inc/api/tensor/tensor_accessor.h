@@ -156,18 +156,16 @@ public:
         return get_noc_addr(get_bank_and_offset(page_coord), offset, noc);
     }
 
-    // Contiguity APIs:
-    // Page-id step between memory-contiguous pages. Constant per accessor. Usually 1, but
-    // tensor_shape[-1] for a one-page-wide shard (row-major width/block sharding).
+    // Contiguity APIs (host twins on BufferDistributionSpec)
+    // Page-id step between the pages of a run; depends only on shapes. 1 unless the shard is one page
+    // wide in the trailing dims, then the product of those tensor dims (tensor {4,6}, shard {4,1}: 6).
     FORCE_INLINE
     uint32_t contiguous_page_stride() const { return dspec().tensor_strides()[contiguous_page_dim()]; }
 
-    // How many pages from page_id are contiguous in memory, page_id included: the page ids
-    // { page_id + k * contiguous_page_stride() } at { get_noc_addr(page_id) + k * aligned_page_size }.
-    // The step is the aligned page size, so a bulk read carries inter-page pad. Padding never
-    // shortens the count, so callers needing packed pages must transfer per page.
-    // end_page_id caps the answer, 0 means the whole tensor.
-    // A run can stop inside a shard (edge padding, shard boundary); use shard_pages() for a whole shard.
+    // Number of pages from page_id (inclusive) contiguous in memory: page ids page_id + k * contiguous_page_stride()
+    // at get_noc_addr(page_id) + k * get_aligned_page_size(). end_page_id is an exclusive page id (0 = tensor
+    // volume), not a count. A run stops at a shard edge, even if the next shard follows in the same bank, and at
+    // the tensor edge. Use shard_pages() to cover a whole shard.
     uint32_t num_contiguous_pages(uint32_t page_id, uint32_t end_page_id = 0) const {
         const uint32_t end = (end_page_id == 0) ? dspec().tensor_volume() : end_page_id;
         ASSERT(page_id < end);
@@ -193,7 +191,7 @@ public:
             const uint32_t to_tensor_edge = extent - page_coord;
             run += ((to_shard_edge < to_tensor_edge ? to_shard_edge : to_tensor_edge) - 1) * block;
 
-            // Only carry outward if the shard covers this dim exactly; an edge or pad breaks the run.
+            // Carry outward only if the shard covers this dim exactly.
             if (shard_extent != extent) {
                 break;
             }
@@ -202,7 +200,7 @@ public:
 
         // end is in page ids, the run steps by stride.
         const uint32_t stride = dspec().tensor_strides()[d];
-        const uint32_t room = (end - page_id + stride - 1) / stride;
+        const uint32_t room = (end - page_id - 1) / stride + 1;
         return run < room ? run : room;
     }
 
@@ -430,12 +428,11 @@ private:
         return {bank_shard.bank_id, bank_page_offset};
     }
 
-    // Innermost dim the shard spans more than one page of. Stepping any dim inside it leaves the
-    // shard, so the run walks this one. Shapes only, so it is constant per accessor.
+    // Innermost dim the shard spans more than one page of (the last dim if none); runs walk this dim.
     FORCE_INLINE
     int contiguous_page_dim() const {
         const int rank = static_cast<int>(dspec().rank());
-        ASSERT(rank > 0);  // callers index tensor_strides() with the result
+        ASSERT(rank > 0);
         for (int i = rank - 1; i >= 0; --i) {
             if (dspec().shard_shape()[i] > 1) {
                 return i;
@@ -453,7 +450,6 @@ private:
 public:
     friend class tensor_accessor::ShardPagesAddressIterator<TensorAccessor>;
     friend class tensor_accessor::StridedShardPagesIterator<TensorAccessor>;
-    friend class tensor_accessor::PagesAddressIteratorSharded<TensorAccessor>;
     friend class tensor_accessor::PagesAddressIteratorInterleaved<TensorAccessor>;
 };
 
@@ -515,17 +511,19 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
     FORCE_INLINE
     const uint32_t get_aligned_page_size() const { return aligned_page_size; }
 
-    // Contiguity APIs:
+    // Contiguity APIs
     // Pages round-robin across banks, so within a bank every num_banks'th page id is contiguous.
     FORCE_INLINE
     uint32_t contiguous_page_stride() const { return IsDram ? NUM_DRAM_BANKS : NUM_L1_BANKS; }
 
-    // See the sharded overload. end_page_id is required: an interleaved accessor has no shape.
+    // As for the sharded accessor, but end_page_id is required and is the only run bound.
+    // Pages are InterleavedAddrGen::aligned_page_size apart, which differs from get_aligned_page_size()
+    // when the ctor is given an unaligned page size.
     FORCE_INLINE
     uint32_t num_contiguous_pages(uint32_t page_id, uint32_t end_page_id) const {
         ASSERT(page_id < end_page_id);
         const uint32_t stride = contiguous_page_stride();
-        return (end_page_id - page_id + stride - 1) / stride;
+        return (end_page_id - page_id - 1) / stride + 1;
     }
 
     // Locality APIs

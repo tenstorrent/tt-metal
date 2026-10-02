@@ -29,7 +29,7 @@ public:
         const Accessor& accessor, uint32_t start_page_id = 0, uint32_t stride = 1, uint8_t noc = noc_index) :
         accessor(accessor), current_page_id(start_page_id), stride_(stride), noc(noc) {
         if (current_page_id < accessor.dspec().tensor_volume()) {
-            // Fast path needs one step to be a whole number of run pages; 0 means it never is.
+            // Pages per step within a run; 0 disables the fast path.
             const uint32_t page_stride = accessor.contiguous_page_stride();
             run_pages_per_step_ = (stride_ % page_stride == 0) ? stride_ / page_stride : 0;
             set_noc_addr(start_page_id);
@@ -123,7 +123,6 @@ private:
     uint64_t current_noc_addr = 0;  // current NOC address for this page
     uint32_t stride_ = 1;           // step size per operator++ (1 for contiguous, N for DM thread stride)
     uint8_t noc = noc_index;
-    // 0 when a step never lands inside a run.
     uint32_t run_pages_per_step_ = 0;
     // Contiguous pages from current_page_id, inclusive. Only valid when run_pages_per_step_ != 0.
     uint32_t run_pages_left_ = 0;
@@ -131,11 +130,10 @@ private:
 
     void update_current_page() { current_page = Page(current_noc_addr, current_page_id); }
 
-    // Keep num_contiguous_pages() out of this function: inlining it here costs ~2x per page.
     void set_noc_addr(uint32_t page_id) { current_noc_addr = accessor.get_noc_addr(page_id, 0, noc); }
 
     void set_run_pages_left(uint32_t page_id) {
-        if (run_pages_per_step_ != 0) {  // at 0 the count is never read
+        if (run_pages_per_step_ != 0) {
             run_pages_left_ = accessor.num_contiguous_pages(page_id);
         }
     }

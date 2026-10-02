@@ -212,6 +212,59 @@ size_t BufferDistributionSpec::num_dev_pages_per_core(size_t core_idx) const {
     return num_shards_per_core(core_idx) * shard_volume_;
 }
 
+int BufferDistributionSpec::contiguous_page_dim() const {
+    const int rank = static_cast<int>(shard_shape_in_pages_.rank());
+    for (int i = rank - 1; i >= 0; --i) {
+        if (shard_shape_in_pages_[i] > 1) {
+            return i;
+        }
+    }
+    return rank - 1;
+}
+
+uint32_t BufferDistributionSpec::contiguous_page_stride() const {
+    return compute_strides(tensor_shape_in_pages_)[contiguous_page_dim()];
+}
+
+uint32_t BufferDistributionSpec::num_contiguous_pages(uint32_t page_id, uint32_t end_page_id) const {
+    const uint32_t tensor_volume = tensor_shape_in_pages_.volume();
+    const uint32_t end = (end_page_id == 0) ? tensor_volume : end_page_id;
+    TT_FATAL(page_id < end, "page_id {} must be less than end page id {}", page_id, end);
+    TT_FATAL(end <= tensor_volume, "end_page_id {} exceeds tensor volume {}", end, tensor_volume);
+
+    const int d = contiguous_page_dim();
+
+    // The shard is one page wide inside d, so the walk starts at d.
+    uint32_t coords = page_id;
+    for (int i = static_cast<int>(tensor_shape_in_pages_.rank()) - 1; i > d; --i) {
+        coords /= tensor_shape_in_pages_[i];
+    }
+
+    uint32_t run = 1;
+    uint32_t block = 1;  // run entries per step of dim i
+    for (int i = d; i >= 0; --i) {
+        const uint32_t extent = tensor_shape_in_pages_[i];
+        const uint32_t shard_extent = shard_shape_in_pages_[i];
+        const uint32_t page_coord = coords % extent;
+        coords /= extent;
+
+        const uint32_t to_shard_edge = shard_extent - page_coord % shard_extent;
+        const uint32_t to_tensor_edge = extent - page_coord;
+        run += (std::min(to_shard_edge, to_tensor_edge) - 1) * block;
+
+        // Carry outward only if the shard covers this dim exactly.
+        if (shard_extent != extent) {
+            break;
+        }
+        block *= extent;
+    }
+
+    // end is in page ids, the run steps by stride.
+    const uint32_t stride = contiguous_page_stride();
+    const uint32_t room = (end - page_id - 1) / stride + 1;
+    return std::min(run, room);
+}
+
 std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t>
 BufferDistributionSpec::core_groups_tuple() const {
     return {
