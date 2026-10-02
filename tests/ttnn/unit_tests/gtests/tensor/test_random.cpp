@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -17,9 +18,11 @@ template <typename T>
 void expect_zeros_and_ones(tt::tt_metal::DataType dtype) {
     seed(0);
     const std::vector<T> values = random(ttnn::Shape({32, 32}), dtype).to_vector<T>();
-    EXPECT_TRUE(std::all_of(values.begin(), values.end(), [](T v) { return v <= 1; }));
-    EXPECT_TRUE(std::any_of(values.begin(), values.end(), [](T v) { return v == 1; }));
-    EXPECT_TRUE(std::any_of(values.begin(), values.end(), [](T v) { return v == 0; }));
+    EXPECT_TRUE(std::ranges::all_of(values, [](T v) { return v <= 1; }));
+    // A uniform draw from {0, 1}: each value should take roughly half the elements.
+    const auto min_count = static_cast<std::ptrdiff_t>(values.size()) * 2 / 5;
+    EXPECT_GT(std::ranges::count(values, T{0}), min_count);
+    EXPECT_GT(std::ranges::count(values, T{1}), min_count);
 }
 
 // Regression: random() returned all zeros for uint8/uint16.

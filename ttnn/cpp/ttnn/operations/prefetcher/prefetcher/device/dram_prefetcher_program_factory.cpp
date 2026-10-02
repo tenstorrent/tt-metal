@@ -111,15 +111,10 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
         global_cb.size());
 
     /* Cores setup */
-    const auto& all_reader_core_range = global_cb.sender_cores();
-    auto reader_core_range_vec = corerange_to_cores(all_reader_core_range, std::nullopt, true);
-    std::vector<CoreRange> active_reader_core_range_vec;
-    active_reader_core_range_vec.reserve(num_readers);
-    for (uint32_t i = 0; i < num_readers; ++i) {
-        auto core = reader_core_range_vec.at(i);
-        active_reader_core_range_vec.push_back(CoreRange{core, core});
-    }
-    auto reader_core_range = CoreRangeSet{std::move(active_reader_core_range_vec)};
+    // The first num_readers sender cores, in sender order: bank ids below are assigned in this order.
+    const auto reader_cores = corerange_to_cores(global_cb.sender_cores(), num_readers, true);
+    // One range per core, not merged, so the set keeps that order too.
+    const auto reader_core_range = CoreRangeSet{std::vector<CoreRange>(reader_cores.begin(), reader_cores.end())};
 
     /* read cb setup */
     uint32_t reader_cb_single_tile_size = max_tile_size;
@@ -244,7 +239,6 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
 
     std::vector<uint32_t> bank_ids;
     bank_ids.reserve(reader_core_range.num_cores());
-    const auto& reader_cores = corerange_to_cores(reader_core_range, std::nullopt, true);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/prefetcher/prefetcher/device/kernels/reader_dram.cpp";

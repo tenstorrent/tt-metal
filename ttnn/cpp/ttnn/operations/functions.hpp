@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <iterator>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/host_buffer.hpp>
@@ -496,9 +497,7 @@ static Tensor uniform(T low, T high, const ttnn::Shape& shape, const Layout layo
         auto rand_value = std::bind(
             std::uniform_int_distribution<uint32_t>(static_cast<uint32_t>(low), static_cast<uint32_t>(high)),
             RANDOM_GENERATOR);
-        for (auto index = 0; index < output_buffer.size(); index++) {
-            output_buffer[index] = static_cast<T>(rand_value());
-        }
+        std::ranges::generate(output_buffer, [&] { return static_cast<T>(rand_value()); });
     } else {
         static_assert(sizeof(T) == 0, "uniform: unsupported element type");
     }
