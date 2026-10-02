@@ -20,14 +20,23 @@ void transfer_recipe_state(Noc& noc, const Accessor& backing) {
         // These full-capacity state banks are at their allocation origin at
         // every segment boundary. Dataflow never advances their CB pointers.
         const uint32_t address = CircularBuffer(cb).get_read_ptr();
+        // The BF16 recipes' numerator CB holds, per Q row, O (plane 0) then a rescaled group's chunk PV
+        // (plane 1, per-chunk scratch). Only plane 0 is state: move each row's d tiles, skipping plane 1.
+        const auto l1_offset = [&](uint32_t offset) -> uint32_t {
+            if (fp32 || plane != 0) {
+                return offset;
+            }
+            const uint32_t tile = offset / Transfer::page_bytes;
+            return ((tile / d_tiles) * 2 * d_tiles + tile % d_tiles) * Transfer::page_bytes + offset % Transfer::page_bytes;
+        };
         if constexpr (Transfer::page_aligned<fp32, q_tiles, d_tiles>) {
             for (uint32_t offset = 0; offset < bytes; offset += Transfer::page_bytes, ++page) {
                 if (restore) {
                     noc.async_read(
-                        backing, CoreLocalMem<uint32_t>(address + offset), Transfer::page_bytes, {.page_id = page}, {});
+                        backing, CoreLocalMem<uint32_t>(address + l1_offset(offset)), Transfer::page_bytes, {.page_id = page}, {});
                 } else {
                     noc.async_write(
-                        CoreLocalMem<uint32_t>(address + offset), backing, Transfer::page_bytes, {}, {.page_id = page});
+                        CoreLocalMem<uint32_t>(address + l1_offset(offset)), backing, Transfer::page_bytes, {}, {.page_id = page});
                 }
             }
         } else {
@@ -36,9 +45,9 @@ void transfer_recipe_state(Noc& noc, const Accessor& backing) {
             for (uint32_t offset = 0; offset < bytes; offset += Transfer::page_bytes, ++page) {
                 const uint32_t size = bytes - offset < Transfer::page_bytes ? bytes - offset : Transfer::page_bytes;
                 if (restore) {
-                    noc.async_read(backing, CoreLocalMem<uint32_t>(address + offset), size, {.page_id = page}, {});
+                    noc.async_read(backing, CoreLocalMem<uint32_t>(address + l1_offset(offset)), size, {.page_id = page}, {});
                 } else {
-                    noc.async_write(CoreLocalMem<uint32_t>(address + offset), backing, size, {}, {.page_id = page});
+                    noc.async_write(CoreLocalMem<uint32_t>(address + l1_offset(offset)), backing, size, {}, {.page_id = page});
                 }
             }
         }
