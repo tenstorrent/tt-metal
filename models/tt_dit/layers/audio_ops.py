@@ -1365,6 +1365,15 @@ class Snake(Module):
                 a = torch.nn.functional.pad(a, (0, self._aligned_channels - a.shape[-1]))
             state["alpha"] = a.contiguous()
 
+    def deallocate_weights(self) -> None:
+        # The C-shard is derived from `alpha` (and *is* `alpha.data` without channel-TP), so it
+        # must go with the parameter: a module that is evicted and reloaded would otherwise hand
+        # `ttnn.multiply` a freed buffer ("Input Tensor B is not allocated").
+        shard, self._alpha_shard = self._alpha_shard, None
+        super().deallocate_weights()
+        if shard is not None and shard.is_allocated():
+            ttnn.deallocate(shard)
+
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
         # α is per-channel; C-shard it under channel-TP.
         if self._alpha_shard is None:
@@ -1417,6 +1426,14 @@ class SnakeBeta(Module):
                     if real < self._aligned_channels:
                         t[..., real:] = 1.0
                 state[name] = t.contiguous()
+
+    def deallocate_weights(self) -> None:
+        # Same reasoning as `Snake.deallocate_weights`: the shards alias or derive from the parameters.
+        shards, self._ab_shard = self._ab_shard, None
+        super().deallocate_weights()
+        for shard in shards or ():
+            if shard.is_allocated():
+                ttnn.deallocate(shard)
 
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
         # α, β per-channel; C-shard under channel-TP.
