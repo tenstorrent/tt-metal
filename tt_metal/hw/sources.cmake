@@ -153,10 +153,12 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/generic_moe_gate.h
     inc/api/compute/experimental/hadamard.h
     inc/api/compute/experimental/indexer_mul_custom.h
+    inc/api/compute/experimental/layernorm.h
     inc/api/compute/experimental/matmul_custom.h
     inc/api/compute/experimental/mul_reduce_scalar.h
     inc/api/compute/experimental/pack_block.h
     inc/api/compute/experimental/pack_rows_to_addr.h
+    inc/api/compute/experimental/reg_api.h
     inc/api/compute/experimental/rmsnorm.h
     inc/api/compute/experimental/rope_sfpu.h
     inc/api/compute/experimental/sdpa.h
@@ -316,6 +318,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/quasar/noc/att/att_config.h
     inc/internal/tt-2xx/quasar/noc/att/noc_address_backend_att.h
     inc/internal/tt-2xx/quasar/noc/att/configs/grendel_qsr1_att_config.h
+    inc/internal/tt-2xx/quasar/noc/att/configs/horizon_2x3_att_config.h
     inc/internal/tt-2xx/quasar/noc/att/configs/quasar_aether_2x3_att_config.h
     inc/internal/tt-2xx/quasar/noc/att/temporary_programming/att_program.h
     inc/internal/tt-2xx/quasar/noc/att/temporary_programming/att_program_data.h

@@ -3,7 +3,7 @@
 
 
 import ttnn
-from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
+from models.demos.minimax_m3.utils.general_utils import get_cache_file_name, is_sparse_attention_layer
 from models.demos.minimax_m3.utils.profiler_utils import COARSE, FINE, zone
 from models.demos.minimax_m3.utils.substate import substate
 
@@ -105,11 +105,7 @@ class DecoderLayer:
         # M3 MSA: layers with sparse_attention_freq[layer_idx]==1 (layers 3-59) run block-sparse
         # attention; layers 0-2 (==0) stay dense. sparse_attention_config may be a dict or an object.
         sparse_cfg = getattr(hf_config, "sparse_attention_config", None)
-        if isinstance(sparse_cfg, dict):
-            freq = sparse_cfg.get("sparse_attention_freq") if sparse_cfg.get("use_sparse_attention") else None
-        else:
-            freq = getattr(sparse_cfg, "sparse_attention_freq", None) if sparse_cfg is not None else None
-        is_sparse = bool(freq[layer_idx]) if freq is not None and layer_idx < len(freq) else False
+        is_sparse = is_sparse_attention_layer(hf_config, layer_idx)
 
         # MSA hyperparams from sparse_attention_config (dict or object); defaults match M3.
         def _sc(name, default):
