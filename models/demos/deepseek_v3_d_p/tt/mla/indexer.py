@@ -22,6 +22,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.mla.fused_projection import fused_projection
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import get_indexer_key_chunk, get_matmul_config
 from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_perm_matrix
 
@@ -470,21 +471,22 @@ class TtIndexer:
             self.tt_ccl.mla_high_bw_all_gather_buffers[key] = output
         return output
 
-    def _tp_rs_ag(self, t, rs_only=False):
+    def _tp_rs_ag(self, t, rs_only=False, already_scattered=False):
         """All-reduce over TP = reduce-scatter (dim 3) then all-gather; rs_only stops after the RS."""
         if self.tp_factor == 1:
             return t
-        t = ttnn.experimental.reduce_scatter_minimal_async(
-            t,
-            persistent_output_buffers=None,
-            dim=3,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
-            num_links=self.ccl_num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.tp_ccl_topology,
-            cluster_axis=self.tp_axis,
-        )
+        if not already_scattered:
+            t = ttnn.experimental.reduce_scatter_minimal_async(
+                t,
+                persistent_output_buffers=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.tp_ccl_topology,
+                cluster_axis=self.tp_axis,
+            )
         if rs_only:
             return t
         assert tuple(t.shape) == (1, 1, self.active_seq_len_local, self.index_args.index_head_dim // self.tp_factor)
@@ -678,14 +680,17 @@ class TtIndexer:
         the cache end needs only its real tokens to fit. forward() reads back the same prefix
         (``valid_pos``)."""
         wk_cfg = self._resolve_mm_cfg("indexer.wk", seq_len)
-        k = ttnn.linear(
-            hidden_states,
-            self._idx_wk,
-            compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=wk_cfg["out_mem_config"] if wk_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
-            **({"program_config": wk_cfg["program_config"]} if wk_cfg is not None else {}),
-        )  # per-chip partial [1, 1, S/sp, D_idx]
-        k = self._tp_rs_ag(k)  # all-reduce over TP
+        k = fused_projection(self, "indexer.wk", hidden_states, self._idx_wk, wk_cfg)
+        fused = k is not None
+        if not fused:
+            k = ttnn.linear(
+                hidden_states,
+                self._idx_wk,
+                compute_kernel_config=self.default_compute_kernel_config,
+                memory_config=wk_cfg["out_mem_config"] if wk_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
+                **({"program_config": wk_cfg["program_config"]} if wk_cfg is not None else {}),
+            )  # per-chip partial [1, 1, S/sp, D_idx]
+        k = self._tp_rs_ag(k, already_scattered=fused)
         k = ttnn.layer_norm(
             k,
             weight=self._idx_knorm_w,
@@ -853,15 +858,25 @@ class TtIndexer:
         # weights_proj: device stem -> reduce TP partials and scatter query rows. The static scale is
         # already folded into the persistent projection weight in _upload_weights().
         wproj_cfg = self._resolve_mm_cfg("indexer.weights_proj", seq_len)
-        weights = ttnn.linear(
+        weights = fused_projection(
+            self,
+            "indexer.weights_proj",
             hidden_states,
             self._idx_wproj,
-            compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=wproj_cfg["out_mem_config"] if wproj_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
-            **({"program_config": wproj_cfg["program_config"]} if wproj_cfg is not None else {}),
+            wproj_cfg,
+            dim=2,
+            rs_compute=self.hifi4_fp32_compute_kernel_config,
         )
-        # Sum TP partials and scatter the sequence rows consumed by local scoring.
-        weights = self._tp_reduce_scatter_sequence(weights)
+        if weights is None:
+            weights = ttnn.linear(
+                hidden_states,
+                self._idx_wproj,
+                compute_kernel_config=self.default_compute_kernel_config,
+                memory_config=wproj_cfg["out_mem_config"] if wproj_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
+                **({"program_config": wproj_cfg["program_config"]} if wproj_cfg is not None else {}),
+            )
+            # Sum TP partials and scatter the sequence rows consumed by local scoring.
+            weights = self._tp_reduce_scatter_sequence(weights)
         # Q and gate weights now have the same TP×SP query ownership. Scoring still uses the original
         # full-SP cache geometry below; only the input query count and its TP sub-offset are smaller.
         qc = (64 if sq_local % 64 == 0 else 32) if tpsp else 64

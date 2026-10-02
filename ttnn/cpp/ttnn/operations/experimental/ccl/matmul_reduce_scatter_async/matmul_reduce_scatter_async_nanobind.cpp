@@ -48,7 +48,12 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async_wrapper(
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
     const std::optional<const std::string>& activation,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const ttnn::CoreGrid> core_grid) {
+    const std::optional<const ttnn::CoreGrid> core_grid,
+    std::optional<uint32_t> cluster_axis,
+    std::optional<uint32_t> num_workers_per_link,
+    std::optional<ttnn::DeviceComputeKernelConfig> rs_compute_kernel_config,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_buffers_per_channel) {
     return ttnn::experimental::matmul_reduce_scatter_async(
         input_tensor,
         weight_tensor,
@@ -71,7 +76,12 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async_wrapper(
         program_config,
         activation,
         compute_kernel_config,
-        core_grid);
+        core_grid,
+        cluster_axis,
+        num_workers_per_link,
+        rs_compute_kernel_config,
+        chunks_per_sync,
+        num_buffers_per_channel);
 }
 
 }  // namespace
@@ -89,6 +99,8 @@ void bind_matmul_reduce_scatter_async(nb::module_& mod) {
             * :attr:`reduce_scatter_core_grid_offset` (ttnn.CoreCoord): Core grid offset for the reduce-scatter operation.
 
         Keyword Args:
+            * :attr:`chunks_per_sync` (int, optional): CCL chunks published per semaphore update. Uses the collective default when omitted.
+            * :attr:`num_buffers_per_channel` (int, optional): CCL channel buffer count. Uses the collective default when omitted.
             * :attr:`bias` (ttnn.Tensor): the bias tensor to be added. If specified, needs to be on the device. Defaults to `None`.
             * :attr:`num_links` (int, optional): Number of links to use for the reduce-scatter operation. Defaults to the maximum available.
             * :attr:`topology` (ttnn.Topology): Communication topology for the reduce-scatter phase. Defaults to `ttnn.Topology.Ring`.
@@ -101,6 +113,9 @@ void bind_matmul_reduce_scatter_async(nb::module_& mod) {
             * :attr:`activation` (Optional[str])
             * :attr:`compute_kernel_config` (Optional[DeviceComputeKernelConfig])
             * :attr:`core_grid` (Optional[ttnn.CoreGrid])
+            * :attr:`cluster_axis` (Optional[int]): Mesh axis of the collective.
+            * :attr:`num_workers_per_link` (Optional[int]): CCL workers per direction per link.
+            * :attr:`rs_compute_kernel_config` (Optional[DeviceComputeKernelConfig]): Reduction precision.
         )doc",
         matmul_reduce_scatter_async_wrapper,
         nb::arg("input_tensor"),
@@ -125,7 +140,12 @@ void bind_matmul_reduce_scatter_async(nb::module_& mod) {
         nb::arg("program_config") = nb::none(),
         nb::arg("activation") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("core_grid") = nb::none());
+        nb::arg("core_grid") = nb::none(),
+        nb::arg("cluster_axis") = nb::none(),
+        nb::arg("num_workers_per_link") = nb::none(),
+        nb::arg("rs_compute_kernel_config") = nb::none(),
+        nb::arg("chunks_per_sync") = nb::none(),
+        nb::arg("num_buffers_per_channel") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ccl

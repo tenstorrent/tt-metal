@@ -232,7 +232,10 @@ struct MatmulFusedOpSignaler {
     bool is_llama_all_gather() const;
 
     void push_matmul_fused_op_rt_args(
-        std::vector<uint32_t>& out_rt_args, uint32_t curr_worker_in0_idx, uint32_t curr_worker_in1_idx);
+        std::vector<uint32_t>& out_rt_args,
+        uint32_t curr_worker_in0_idx,
+        uint32_t curr_worker_in1_idx,
+        bool compact_worker_coords = false);
     void push_matmul_fused_op_rt_args(std::vector<uint32_t>& out_rt_args, bool use_in1_offset);
 };
 

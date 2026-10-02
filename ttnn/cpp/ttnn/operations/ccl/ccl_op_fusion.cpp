@@ -345,7 +345,10 @@ void MatmulFusedOpSignaler::init_fused_op(
 }
 
 void MatmulFusedOpSignaler::push_matmul_fused_op_rt_args(
-    std::vector<uint32_t>& out_rt_args, uint32_t curr_worker_in0_idx, uint32_t curr_worker_in1_idx) {
+    std::vector<uint32_t>& out_rt_args,
+    uint32_t curr_worker_in0_idx,
+    uint32_t curr_worker_in1_idx,
+    bool compact_worker_coords) {
     TT_FATAL(initialized_fused_op && initialized_reduce_scatter, "MatmulFusedOpSignaler not initialized fully.");
 
     out_rt_args.push_back(static_cast<uint32_t>(this->matmul_worker_cores_noc.size()));
@@ -363,8 +366,11 @@ void MatmulFusedOpSignaler::push_matmul_fused_op_rt_args(
     out_rt_args.push_back(static_cast<uint32_t>(curr_worker_index));
     out_rt_args.push_back(static_cast<uint32_t>(this->matmul_worker_sync_semaphore));
 
-    // Push the worker core noc coords
-    for (const auto& core : this->matmul_worker_cores_noc) {
+    // Only the coordinator broadcasts the release; other workers only address the coordinator.
+    const auto coord_count =
+        compact_worker_coords && curr_worker_index != 0 ? 1u : this->matmul_worker_cores_noc.size();
+    for (size_t i = 0; i < coord_count; ++i) {
+        const auto& core = this->matmul_worker_cores_noc[i];
         out_rt_args.push_back(static_cast<uint32_t>(core.x));
         out_rt_args.push_back(static_cast<uint32_t>(core.y));
     }

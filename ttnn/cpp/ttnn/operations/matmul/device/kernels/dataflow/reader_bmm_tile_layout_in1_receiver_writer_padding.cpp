@@ -86,7 +86,7 @@ void kernel_main() {
     constexpr auto out_args = TensorAccessorArgs<19>();
     OpSignaler op_signaler;
     if constexpr (fuse_op_reduce_scatter) {
-        op_signaler = OpSignaler(rt_args_idx);
+        op_signaler = OpSignaler(rt_args_idx, true);
     }
     // WRITER
 

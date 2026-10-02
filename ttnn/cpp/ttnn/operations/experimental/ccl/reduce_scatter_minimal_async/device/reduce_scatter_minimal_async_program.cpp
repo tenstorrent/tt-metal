@@ -427,8 +427,16 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     auto [mcast_forward_args, mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
         sender_device_coord, forward_coord, backward_coord, ring_size - 1, ring_size - 1, mesh_device);
 
-    const auto [all_core_range, all_cores] =
-        choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
+    // Preserve existing placements. A fused consumer can also use a narrow
+    // column strip when row-major placement does not fit the requested offset.
+    const bool needs_columns =
+        fuse_op &&
+        !ttnn::ccl::try_choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset)
+             .all_placeable();
+    const auto core_order =
+        needs_columns ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
+    const auto [all_core_range, all_cores] = choose_worker_cores(
+        num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset, std::nullopt, core_order);
 
     const auto mux_connection_valid = [&backward_coord, &forward_coord](const uint32_t dir) {
         return (!dir && backward_coord.has_value()) || (dir && forward_coord.has_value());
@@ -1232,8 +1240,16 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     uint32_t num_cores_per_link = ttnn::experimental::ccl::reduce_scatter_core_count_per_link(
         num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
 
-    const auto [all_core_range, all_cores] =
-        choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
+    // Preserve existing placements. A fused consumer can also use a narrow
+    // column strip when row-major placement does not fit the requested offset.
+    const bool needs_columns =
+        fuse_op &&
+        !ttnn::ccl::try_choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset)
+             .all_placeable();
+    const auto core_order =
+        needs_columns ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
+    const auto [all_core_range, all_cores] = choose_worker_cores(
+        num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset, std::nullopt, core_order);
 
     const auto mux_connection_valid = [&backward_coord, &forward_coord](const uint32_t dir) {
         return (!dir && backward_coord.has_value()) || (dir && forward_coord.has_value());

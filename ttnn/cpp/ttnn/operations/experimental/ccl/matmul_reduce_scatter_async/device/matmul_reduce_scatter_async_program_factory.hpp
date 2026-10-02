@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <array>
+#include <tt-metalium/runtime_args_data.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation_types.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.hpp"
@@ -14,6 +16,14 @@
 namespace ttnn::experimental::prim {
 
 struct MatmulReduceScatterAsyncSharedVariables {
+    enum Address : uint32_t { Input, Weight, Bias, Matmul, Intermediate, Output, Sem0, Sem1, Sem2, Barrier, Count };
+    // Keep RuntimeArgsData objects, not their data pointers: dispatch may relocate payloads.
+    struct Binding {
+        tt::tt_metal::RuntimeArgsData* args;
+        uint32_t index;
+    };
+    std::array<std::vector<Binding>, Count> bindings;
+
     ttnn::experimental::prim::ReduceScatterProgramArtifacts reduce_scatter_artifacts;
     ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t matmul_shared_variables;
 };

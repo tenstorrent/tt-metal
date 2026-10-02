@@ -3226,7 +3226,8 @@ create_program_mcast_in0_in1(
                     if (fused_op_signaler->is_all_gather()) {
                         fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);
                     } else if (fused_op_signaler->is_reduce_scatter()) {
-                        fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, in0_idx, in1_idx);
+                        fused_op_signaler->push_matmul_fused_op_rt_args(
+                            mm_in1_sender_writer_args, in0_idx, in1_idx, true);
                     } else {
                         TT_FATAL(false, "Fused operation must be either all_gather or reduce_scatter.");
                     }
@@ -3378,7 +3379,8 @@ create_program_mcast_in0_in1(
                 }
 
                 if (fuse_op && fused_op_signaler->is_reduce_scatter()) {
-                    fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_receiver_writer_args, in0_idx, in1_idx);
+                    fused_op_signaler->push_matmul_fused_op_rt_args(
+                        mm_in1_receiver_writer_args, in0_idx, in1_idx, true);
                 }
 
                 // left half

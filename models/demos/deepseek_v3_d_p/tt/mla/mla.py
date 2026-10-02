@@ -11,6 +11,7 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.mla.fused_projection import fused_projection
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     NullIndexer,
     ReuseIndexer,
@@ -1086,26 +1087,33 @@ class ttMLA:
         layer and shared: _q_stem consumes it for q_b_proj, and (when present) TtIndexer.forward reads
         it for the indexer queries — so the sparse path no longer recomputes the q_a stem."""
         # NOTE: input is ideally L1 for chunked, but hidden states memory config is set outside the module
-        qr = ttnn.linear(
-            hidden_states,
-            self.q_a_proj_weight,
-            compute_kernel_config=self.default_compute_kernel_config,
-            **self._get_mm_kwargs("q_a_proj", seq_len_local),
+        qr = fused_projection(
+            self, "q_a_proj", hidden_states, self.q_a_proj_weight, self._resolve_mm_cfg("q_a_proj", seq_len_local)
         )
-
-        # All reduce (skip for single-device TP)
-        if self.tp_factor > 1:
-            qr = ttnn.experimental.reduce_scatter_minimal_async(
-                qr,
-                persistent_output_buffers=None,
-                dim=3,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
-                num_links=self.ccl_num_links,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.tp_ccl_topology,
-                cluster_axis=self.tp_axis,
+        fused = qr is not None
+        if not fused:
+            qr = ttnn.linear(
+                hidden_states,
+                self.q_a_proj_weight,
+                compute_kernel_config=self.default_compute_kernel_config,
+                **self._get_mm_kwargs("q_a_proj", seq_len_local),
             )
+
+        if self.tp_factor > 1:
+            if not fused:
+                qr = ttnn.experimental.reduce_scatter_minimal_async(
+                    qr,
+                    persistent_output_buffers=None,
+                    dim=3,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(
+                        cluster_axis=self.tp_axis
+                    ),
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+                    num_links=self.ccl_num_links,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    topology=self.tp_ccl_topology,
+                    cluster_axis=self.tp_axis,
+                )
             assert seq_len_local == self.active_seq_len_local, (
                 f"q_a latent gather was preallocated for {self.active_seq_len_local} local tokens, "
                 f"got {seq_len_local}"
@@ -1487,6 +1495,11 @@ class ttMLA:
             g = self._output_gate(hidden_states, seq_len_local)
             v_out = ttnn.multiply(v_out, g, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(g)
+        fused = fused_projection(
+            self, "o_proj", v_out, self.o_proj_weight, self._resolve_mm_cfg("o_proj", seq_len_local)
+        )
+        if fused is not None:
+            return fused
         v_out = ttnn.linear(
             v_out,
             self.o_proj_weight,

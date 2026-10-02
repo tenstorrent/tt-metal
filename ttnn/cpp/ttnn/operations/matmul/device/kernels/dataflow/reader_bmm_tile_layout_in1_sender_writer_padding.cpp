@@ -161,7 +161,7 @@ void kernel_main() {
             in1_block_h /* tiles_per_block (in the same dimension */
         );
     } else if constexpr (fuse_op_reduce_scatter) {
-        op_signaler = OpSignaler(rt_args_idx);
+        op_signaler = OpSignaler(rt_args_idx, true);
     }
 
     constexpr auto in1_args = TensorAccessorArgs<33>();

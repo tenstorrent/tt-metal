@@ -36,6 +36,7 @@ struct MatmulReduceScatterAsyncDeviceOperation {
     using tensor_return_value_t = MatmulReduceScatterAsyncResult;
     using program_factory_t = std::variant<MatmulReduceScatterAsyncProgramFactory>;
     using shared_variables_t = MatmulReduceScatterAsyncProgramFactory::shared_variables_t;
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
@@ -68,6 +69,11 @@ ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation::tensor_return
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
     const std::optional<const std::string>& activation = std::nullopt,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    std::optional<const ttnn::CoreGrid> core_grid = std::nullopt);
+    std::optional<const ttnn::CoreGrid> core_grid = std::nullopt,
+    std::optional<uint32_t> cluster_axis = std::nullopt,
+    std::optional<uint32_t> num_workers_per_link = std::nullopt,
+    std::optional<ttnn::DeviceComputeKernelConfig> rs_compute_kernel_config = std::nullopt,
+    std::optional<uint32_t> chunks_per_sync = std::nullopt,
+    std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
 
 }  // namespace ttnn::prim

@@ -77,11 +77,14 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
         ttnn::experimental::ccl::ReduceScatterFusedOpSignaler();
     reduce_scatter_fused_op_signaler->init_fused_op();
 
-    auto resolved_reduce_scatter_compute_kernel_config =
-        ttnn::ccl::resolve_fp32_acc_compute_kernel_config(std::nullopt, output_tensors.mm.dtype());
+    auto resolved_reduce_scatter_compute_kernel_config = ttnn::ccl::resolve_fp32_acc_compute_kernel_config(
+        args.reduce_scatter_params.compute_kernel_config, output_tensors.mm.dtype());
 
     // Reduce Scatter - use the new artifacts-based helper
-    auto reduce_scatter_artifacts = ttnn::experimental::prim::build_ring_reduce_scatter_minimal_async_program_artifacts(
+    const auto build_reduce_scatter = topology == ttnn::ccl::Topology::Linear
+                                          ? build_line_reduce_scatter_minimal_async_program_artifacts
+                                          : build_ring_reduce_scatter_minimal_async_program_artifacts;
+    auto reduce_scatter_artifacts = build_reduce_scatter(
         program,
         output_tensors.mm,
         tensor_args.persistent_intermediate,
@@ -100,9 +103,9 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
         using_persistent_buffers,
         sub_device_id,
         reduce_scatter_fused_op_signaler,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
+        args.reduce_scatter_params.chunks_per_sync,
+        args.reduce_scatter_params.num_workers_per_link,
+        args.reduce_scatter_params.num_buffers_per_channel,
         args.reduce_scatter_core_grid_offset,
         resolved_reduce_scatter_compute_kernel_config);
 
@@ -129,10 +132,64 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
         untilize_out,
         matmul_fused_op_signaler);
 
-    return cached_program_t{
-        std::move(matmul_cached_program.program),
-        {.reduce_scatter_artifacts = std::move(reduce_scatter_artifacts),
-         .matmul_shared_variables = std::move(matmul_cached_program.shared_variables)}};
+    shared_variables_t shared;
+    using S = shared_variables_t;
+    if (!tensor_args.input.is_sharded() && !output_tensors.mm.is_sharded()) {
+        auto bind = [&](S::Address slot, auto kernel, const CoreCoord& core, uint32_t index) {
+            auto& rt = GetRuntimeArgs(matmul_cached_program.program, kernel, core);
+            TT_FATAL(index < rt.size(), "MMRS runtime argument layout changed");
+            shared.bindings[slot].push_back({&rt, index});
+        };
+        const auto& mm = matmul_cached_program.shared_variables;
+        for (const auto& core : mm.in0_sender_interleaved_cores) {
+            bind(S::Input, mm.mm_kernel_in0_sender_id, core, 0);
+        }
+        for (const auto& core : mm.in1_sender_cores) {
+            bind(S::Weight, mm.mm_kernel_in1_sender_writer_id, core, 0);
+            bind(S::Matmul, mm.mm_kernel_in1_sender_writer_id, core, 7);
+            if (tensor_args.bias) {
+                bind(S::Bias, mm.mm_kernel_in1_sender_writer_id, core, 18);
+            }
+        }
+        for (const auto& core : mm.in1_receiver_cores) {
+            bind(S::Matmul, mm.mm_kernel_in1_receiver_writer_id, core, 2);
+        }
+        if (mm.mm_kernel_in1_receiver_writer_id != mm.mm_kernel_in1_receiver_writer_other_noc_setup_id) {
+            for (const auto& core : mm.in1_receiver_other_cores) {
+                bind(S::Matmul, mm.mm_kernel_in1_receiver_writer_other_noc_setup_id, core, 2);
+            }
+        }
+        const auto& rs = reduce_scatter_artifacts;
+        const bool ring = topology == ttnn::ccl::Topology::Ring;
+        for (uint32_t link = 0; link < num_links; ++link) {
+            for (uint32_t dir = 0; dir < rs.num_directions_per_link; ++dir) {
+                for (uint32_t worker = 0; worker < rs.num_workers_per_direction; ++worker) {
+                    const auto core =
+                        rs.all_cores
+                            [link * rs.num_cores_per_link +
+                             dir * (rs.num_mux_cores_per_direction_per_link + rs.num_workers_per_direction) +
+                             rs.num_mux_cores_per_direction_per_link + worker];
+                    bind(S::Matmul, rs.reader_kernel_id, core, 0);
+                    bind(S::Intermediate, rs.reader_kernel_id, core, 1);
+                    bind(S::Output, rs.reader_kernel_id, core, 2);
+                    bind(static_cast<S::Address>(S::Sem0 + (ring ? dir : 0)), rs.reader_kernel_id, core, 3);
+                    bind(S::Intermediate, rs.writer_kernel_id, core, 0);
+                    bind(S::Output, rs.writer_kernel_id, core, 1);
+                    bind(static_cast<S::Address>(S::Sem0 + (ring ? dir : 0)), rs.writer_kernel_id, core, ring ? 6 : 4);
+                    if (ring) {
+                        bind(static_cast<S::Address>(S::Sem0 + !dir), rs.reader_kernel_id, core, 4);
+                        bind(S::Sem2, rs.writer_kernel_id, core, 7);
+                    }
+                    if (barrier_semaphore) {
+                        bind(S::Barrier, rs.writer_kernel_id, core, 9);
+                    }
+                }
+            }
+        }
+    }
+    shared.reduce_scatter_artifacts = std::move(reduce_scatter_artifacts);
+    shared.matmul_shared_variables = std::move(matmul_cached_program.shared_variables);
+    return cached_program_t{std::move(matmul_cached_program.program), std::move(shared)};
 }
 
 void MatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
@@ -142,6 +199,28 @@ void MatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
     MatmulReduceScatterAsyncResult& output_tensors) {
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
+        using S = shared_variables_t;
+        if (!shared_vars.bindings[S::Weight].empty()) {
+            const auto& sem = args.reduce_scatter_params.semaphore;
+            const std::array<uint32_t, S::Count> addresses{
+                tensor_args.input.buffer()->address(),
+                tensor_args.weight.buffer()->address(),
+                tensor_args.bias ? tensor_args.bias->buffer()->address() : 0u,
+                output_tensors.mm.buffer()->address(),
+                tensor_args.persistent_intermediate.buffer()->address(),
+                output_tensors.reduce_scatter.buffer()->address(),
+                sem[0].address(),
+                sem.size() > 1 ? sem[1].address() : 0u,
+                sem.size() > 2 ? sem[2].address() : 0u,
+                args.reduce_scatter_params.barrier_semaphore ? args.reduce_scatter_params.barrier_semaphore->address()
+                                                             : 0u};
+            for (uint32_t slot = 0; slot < S::Count; ++slot) {
+                for (const auto& binding : shared_vars.bindings[slot]) {
+                    binding.args->data()[binding.index] = addresses[slot];
+                }
+            }
+            continue;
+        }
 
         std::vector<Tensor> matmul_output_tensors = {output_tensors.mm};
         ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
@@ -154,7 +233,14 @@ void MatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
             matmul_output_tensors);
 
         // Call reduce scatter runtime arguments override directly using artifacts
-        ttnn::experimental::prim::ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
+        const auto update_rs = [&](auto&&... values) {
+            if (args.reduce_scatter_params.topology == ttnn::ccl::Topology::Linear) {
+                line_reduce_scatter_minimal_async_helper_override_runtime_arguments(values...);
+            } else {
+                ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(values..., std::nullopt);
+            }
+        };
+        update_rs(
             program,
             shared_vars.reduce_scatter_artifacts.reader_kernel_id,
             shared_vars.reduce_scatter_artifacts.writer_kernel_id,
@@ -169,8 +255,7 @@ void MatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
             args.reduce_scatter_params.semaphore,
             output_tensors.mm,
             tensor_args.persistent_intermediate,
-            output_tensors.reduce_scatter,
-            /*penult_intermediate=*/std::nullopt);
+            output_tensors.reduce_scatter);
     }
 }
 
