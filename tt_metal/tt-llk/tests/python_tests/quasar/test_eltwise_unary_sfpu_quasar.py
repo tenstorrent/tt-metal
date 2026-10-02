@@ -617,6 +617,11 @@ def prepare_comp_inputs_uint(
 #   int->float : SFPCAST (+ fp16 narrow if the dst is fp16)
 #   int<->int : store sfpmem mode (widen/equal) or RNE narrow to 8-bit
 #
+# Int16 (signed 16-bit) is not in the ttnn typecast matrix, but the kernel handles
+# it on every path (float<->int16 via SFPCAST + 16-bit store-narrow, int16<->int
+# via the int->int path), so it is swept here too. Mirrors the UInt16 set; Int16
+# has a native Quasar dest format.
+#
 # The functor `calculate_typecast<IN_FMT, OUT_FMT>` needs the format pair at
 # COMPILE time, but the unified dispatcher only carries `SfpuType` at compile time
 # and formats at runtime. We bridge that with the `TYPECAST_FORMATS` template param,
@@ -629,33 +634,50 @@ class TypecastCase:
     dst: DataFormat
 
 
-_TYPECAST_PAIRS = (
-    (DataFormat.Float16_b, DataFormat.Float32),
-    (DataFormat.Float16_b, DataFormat.Int32),
-    (DataFormat.Float16_b, DataFormat.UInt8),
-    (DataFormat.Float16_b, DataFormat.UInt16),
-    (DataFormat.Float32, DataFormat.Int32),
-    (DataFormat.Float32, DataFormat.UInt8),
-    (DataFormat.Float32, DataFormat.UInt16),
-    (DataFormat.UInt16, DataFormat.Int32),
-    (DataFormat.UInt16, DataFormat.UInt8),
-    # Int16 (signed 16-bit) — not in the ttnn typecast matrix, but the kernel handles it on every
-    # path (float<->int16 via SFPCAST + 16-bit store-narrow, int16<->int via the int->int path), so
-    # it is swept here too. Mirrors the UInt16 set; Int16 has a native Quasar dest format.
-    (DataFormat.Float16_b, DataFormat.Int16),
-    (DataFormat.Float32, DataFormat.Int16),
-    (DataFormat.Int16, DataFormat.Int32),
-    (DataFormat.Int16, DataFormat.UInt8),
-)
-
-# Expand each unordered pair into both cast directions.
-TYPECAST_CASES = tuple(
-    TypecastCase(a, b)
-    for src, dst in _TYPECAST_PAIRS
-    for a, b in ((src, dst), (dst, src))
+TYPECAST_CASES = (
+    # float <-> float: widen on store, RNE narrow to fp16
+    TypecastCase(DataFormat.Float16_b, DataFormat.Float32),
+    TypecastCase(DataFormat.Float32, DataFormat.Float16_b),
+    # float <-> int32: SFPCAST (+ fp16 narrow when the dst is fp16)
+    TypecastCase(DataFormat.Float16_b, DataFormat.Int32),
+    TypecastCase(DataFormat.Int32, DataFormat.Float16_b),
+    TypecastCase(DataFormat.Float32, DataFormat.Int32),
+    TypecastCase(DataFormat.Int32, DataFormat.Float32),
+    # float <-> int16
+    TypecastCase(DataFormat.Float16_b, DataFormat.Int16),
+    TypecastCase(DataFormat.Int16, DataFormat.Float16_b),
+    TypecastCase(DataFormat.Float32, DataFormat.Int16),
+    TypecastCase(DataFormat.Int16, DataFormat.Float32),
+    # float <-> uint16
+    TypecastCase(DataFormat.Float16_b, DataFormat.UInt16),
+    TypecastCase(DataFormat.UInt16, DataFormat.Float16_b),
+    TypecastCase(DataFormat.Float32, DataFormat.UInt16),
+    TypecastCase(DataFormat.UInt16, DataFormat.Float32),
+    # float <-> uint8: clamps negatives, then RNE narrows
+    TypecastCase(DataFormat.Float16_b, DataFormat.UInt8),
+    TypecastCase(DataFormat.UInt8, DataFormat.Float16_b),
+    TypecastCase(DataFormat.Float32, DataFormat.UInt8),
+    TypecastCase(DataFormat.UInt8, DataFormat.Float32),
+    # int <-> int: store sfpmem mode (widen/equal) or RNE narrow to 8-bit
+    TypecastCase(DataFormat.UInt16, DataFormat.Int32),
+    TypecastCase(DataFormat.Int32, DataFormat.UInt16),
+    TypecastCase(DataFormat.UInt16, DataFormat.UInt8),
+    TypecastCase(DataFormat.UInt8, DataFormat.UInt16),
+    TypecastCase(DataFormat.Int16, DataFormat.Int32),
+    TypecastCase(DataFormat.Int32, DataFormat.Int16),
+    TypecastCase(DataFormat.Int16, DataFormat.UInt8),
+    TypecastCase(DataFormat.UInt8, DataFormat.Int16),
 )
 
 _RANGE_SAFETY_FACTOR = 0.9
+
+# Integers around the bf16 ulp=2 boundary (256). 255/256/258 are exact; 257 and 259
+# are halfway cases that round-nearest-even must resolve (257→256, 259→260).
+_INT32_TO_FP16B_RNE_BOUNDARIES = (255, 256, 257, 258, 259)
+
+
+def _is_int32_to_fp16b(src_format: DataFormat, dst_format: DataFormat) -> bool:
+    return src_format == DataFormat.Int32 and dst_format == DataFormat.Float16_b
 
 
 def _prepare_typecast_input(
@@ -689,7 +711,22 @@ def _prepare_typecast_input(
         span = af.max() - af.min()
         norm = (af - af.min()) / span if span > 0 else torch.zeros_like(af)
         vals = lo + norm * (cap - lo)
-        return vals.round().to(format_dict[src_format])
+        result = vals.round().to(format_dict[src_format])
+
+        # Int32 → Float16_b: plant bf16 spacing-boundary integers (and their negatives)
+        # so FP32_TO_FP16B nearest-even is actually exercised. The random band above
+        # stays in [-200, 200], which is integer-exact in bf16 and would not catch a
+        # missing or wrong rounding step.
+        if _is_int32_to_fp16b(src_format, dst_format):
+            flat = result.flatten()
+            seeds = list(_INT32_TO_FP16B_RNE_BOUNDARIES) + [
+                -v for v in _INT32_TO_FP16B_RNE_BOUNDARIES
+            ]
+            for i, seed in enumerate(seeds):
+                if i < flat.numel():
+                    flat[i] = seed
+            result = flat.reshape(result.shape)
+        return result
 
     # Float endpoints: log-uniform magnitudes inside both formats' representable ranges,
     # so values stay accurate through the narrowing cast.
@@ -916,11 +953,16 @@ def test_eltwise_unary_sfpu_quasar(
             # float-only pipeline (float dst, tilize, FTZ) that would mangle integer values; applying
             # the op per element keeps integers intact, and for an element-wise op row-major order
             # already matches the packed result. A non-element-wise integer op would need its own path.
-            ops = UnarySFPUGolden().ops
-            op_res = [ops[mathop](x) for x in src_A.flatten().tolist()]
-            golden_tensor = torch.tensor(
-                op_res, dtype=format_dict[formats.output_format]
-            )
+            if _is_int32_to_fp16b(formats.input_format, formats.output_format):
+                # Explicit fp32 → bf16 RNE so planted 257/259 (and negatives) check the
+                # kernel's FP32_TO_FP16B nearest-even step, not an identity bit copy.
+                golden_tensor = src_A.to(torch.float32).to(torch.bfloat16)
+            else:
+                ops = UnarySFPUGolden().ops
+                op_res = [ops[mathop](x) for x in src_A.flatten().tolist()]
+                golden_tensor = torch.tensor(
+                    op_res, dtype=format_dict[formats.output_format]
+                )
 
     # A layout-sensitive op reads the tile's face structure, so it gets the tilized buffer tt-metal
     # would feed it, and its result is read back through the matching untilize. UnarySFPUGolden
@@ -981,6 +1023,11 @@ def test_eltwise_unary_sfpu_quasar(
             tile_count_B=tile_cnt_A,
             tile_count_res=tile_cnt_A,
             num_faces=num_faces,
+            # Unpack-to-Dest copies Int32 L1 as two's-complement. Only Int32 → Float16_b
+            # converts 2SC → SM in the kernel; other integer typecasts still pack SM.
+            twos_complement=_is_int32_to_fp16b(
+                formats.input_format, formats.output_format
+            ),
         ),
         "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,

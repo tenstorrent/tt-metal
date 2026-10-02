@@ -145,3 +145,14 @@
   owner_id: U08JJGXKWKB # Radomir Djogo
   team: syseng
   budget_type: integration
+
+- name: didt_max_util_workload
+  cmd: ./build/test/didt/unit_tests_didt_max_util
+  skus:
+    bh_p100:
+      timeout: 2
+    bh_p150b_civ2:
+      timeout: 2
+  owner_id: U08JJGXKWKB # Radomir Djogo
+  team: syseng
+  budget_type: integration

@@ -304,7 +304,7 @@ private:
 };
 
 static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spec(
-    tt::tt_metal::distributed::MeshDevice& device,
+    const tt::tt_metal::distributed::MeshDevice& device,
     ComputeHardwareConfig compute_hw,
     bool fp32_dest_acc_en,
     bool packer_l1_acc,
@@ -757,6 +757,20 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     tt_metal::NOC in0_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
     tt_metal::NOC in1_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
 
+    // These matmul in0/in1 DM kernels manage their DFB credits explicitly (reserve_back/push_back on the
+    // sender/receiver, TRISC pop on the consumer). On Quasar, implicit-sync would add an extra final-credit ACK
+    // on top of those explicit pops -> in0 tile-counter underflow, so opt the bound DFBs out of implicit sync.
+    // config_1xx (WH/BH placement) and config_2xx (Quasar) are each ignored on the other arch.
+    const auto dm_hw_config = [](tt_metal::DataMovementProcessor proc,
+                                 tt_metal::NOC noc) -> DataMovementHardwareConfig {
+        return DataMovementHardwareConfig{
+            .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{.processor = proc, .noc = noc},
+            .config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true},
+        };
+    };
+    // Arch flag for the mcast-rectangle normalization below (single-NOC Quasar needs ascending [min..max]).
+    const bool is_quasar_mm = device.arch() == tt::ARCH::QUASAR;
+
     ////////////////////////////////////////////////////////////////////////////
     //                      Which kernels this instantiation builds
     ////////////////////////////////////////////////////////////////////////////
@@ -951,6 +965,12 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
         if (in0_noc == tt::tt_metal::NOC::NOC_1) {
             std::swap(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
         }
+        // Quasar single-NOC / non-torus: the block-sharded in0 mcast range must stay ascending [min..max].
+        // in0_noc = preferred_noc_for_dram_write(arch), which is NOC_1 on Quasar (the default case), so the
+        // NOC_1 swap above fires and reverses the range; undo it here.
+        if (is_quasar_mm && in0_mcast_receiver_grid_diff_coord_start > in0_mcast_receiver_grid_diff_coord_end) {
+            std::swap(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
+        }
     }
 
     // Assigns DRAM banks to in1 sender nodes; only stepped when in1 is DRAM width-sharded.
@@ -1044,6 +1064,27 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
             std::swap(in0_mcast_sender, in1_mcast_sender);
             std::swap(in0_mcast_start, in1_mcast_end);
             std::swap(in0_mcast_end, in1_mcast_start);
+        }
+
+        // Quasar is single-NOC / non-torus, so a multicast rectangle MUST be ascending [min..max] regardless
+        // of NOC. The swaps above encode WH/BH torus reverse walks: the in0 mcast keys off in0_noc
+        // (= preferred_noc_for_dram_write = NOC_1 on Quasar) and the in1 mcast off in1_noc
+        // (= preferred_noc_for_dram_read = NOC_0 on Quasar), so on Quasar BOTH swaps fire and reverse their
+        // rectangles to [max..min]. The sender then blocks forever in noc_async_write_multicast (waypoint
+        // NMLW), surfacing as a compute 0x19 downstream. Re-normalize each corner per-axis on Quasar.
+        if (is_quasar_mm) {
+            if (in0_mcast_start.x > in0_mcast_end.x) {
+                std::swap(in0_mcast_start.x, in0_mcast_end.x);
+            }
+            if (in0_mcast_start.y > in0_mcast_end.y) {
+                std::swap(in0_mcast_start.y, in0_mcast_end.y);
+            }
+            if (in1_mcast_start.x > in1_mcast_end.x) {
+                std::swap(in1_mcast_start.x, in1_mcast_end.x);
+            }
+            if (in1_mcast_start.y > in1_mcast_end.y) {
+                std::swap(in1_mcast_start.y, in1_mcast_end.y);
+            }
         }
 
         // in0 sender
@@ -1281,14 +1322,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                              "in0_mcast_dest_noc_end_x",
                              "in0_mcast_dest_noc_end_y"},
                     },
-                .hw_config =
-                    DataMovementHardwareConfig{
-                        .config_1xx =
-                            DataMovementHardwareConfig::DataMovement1XXConfig{
-                                .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                                .noc = in0_noc,
-                            },
-                    },
+                .hw_config = dm_hw_config(tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
                 .advanced_options = {.num_runtime_varargs = num_in0_sender_varargs},
             };
             return k;
@@ -1377,14 +1411,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                          "in0_mcast_dest_noc_end_y",
                          "last_block_h"},
                 },
-            .hw_config =
-                DataMovementHardwareConfig{
-                    .config_1xx =
-                        DataMovementHardwareConfig::DataMovement1XXConfig{
-                            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                            .noc = in0_noc,
-                        },
-                },
+            .hw_config = dm_hw_config(tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
         };
         if (!in0_height_sharded) {
             // Height-sharded in0 arrives resident in the borrowed in0 buffer, so there is no tensor
@@ -1469,14 +1496,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                     {"num_active", 0u},
                 },
             .runtime_arg_schema = {},
-            .hw_config =
-                DataMovementHardwareConfig{
-                    .config_1xx =
-                        DataMovementHardwareConfig::DataMovement1XXConfig{
-                            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                            .noc = in1_noc,
-                        },
-                },
+            .hw_config = dm_hw_config(tt_metal::DataMovementProcessor::RISCV_0, in1_noc),
         };
         std::vector<std::string> in1_sender_rtas = {
             "in1_tensor_start_tile_id",
@@ -1598,14 +1618,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                         {"MtNt", M * N},
                     },
                 .runtime_arg_schema = {},
-                .hw_config =
-                    DataMovementHardwareConfig{
-                        .config_1xx =
-                            DataMovementHardwareConfig::DataMovement1XXConfig{
-                                .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                                .noc = noc,
-                            },
-                    },
+                .hw_config = dm_hw_config(tt_metal::DataMovementProcessor::RISCV_0, noc),
             };
             std::vector<std::string> rtas = {
                 "in1_mcast_sender_noc_x",
@@ -1679,14 +1692,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                 {
                     .runtime_arg_names = {"in0_mcast_sender_noc_x", "in0_mcast_sender_noc_y"},
                 },
-            .hw_config =
-                DataMovementHardwareConfig{
-                    .config_1xx =
-                        DataMovementHardwareConfig::DataMovement1XXConfig{
-                            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                            .noc = noc,
-                        },
-                },
+            .hw_config = dm_hw_config(tt_metal::DataMovementProcessor::RISCV_1, noc),
         };
     };
     if (has_in0_receiver_kernel) {
@@ -1933,7 +1939,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
 ttnn::device_operation::CachedProgram<MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t>
 create_program_mcast_in0_in1(
     tt::tt_metal::Program& program,
-    tt::tt_metal::distributed::MeshDevice& device,
+    const tt::tt_metal::distributed::MeshDevice& device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
@@ -3594,7 +3600,7 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    tt_metal::distributed::MeshDevice* device = a.device();
+    const tt_metal::distributed::MeshDevice& device = a.mesh_tensor().device();
 
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
@@ -3637,7 +3643,7 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
         in1_tile.get_width());
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(device.arch(), compute_kernel_config);
     ////////////////////////////////////////////////////////////////////////////
     //                      Matmul Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -3680,7 +3686,7 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
     ////////////////////////////////////////////////////////////////////////////
     CoreCoord sub_device_start_core = {0, 0};
     if (operation_attributes.sub_device_id.has_value()) {
-        auto sub_device_cores = device->worker_cores(
+        auto sub_device_cores = device.worker_cores(
             tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id.value());
         auto bbox = sub_device_cores.bounding_box();
         sub_device_start_core = bbox.start_coord;
@@ -3691,7 +3697,7 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
     ////////////////////////////////////////////////////////////////////////////
     return reuse_mcast_optimized_helpers::create_program_mcast_in0_in1(
         program,
-        *device,
+        device,
         math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode,
@@ -3819,7 +3825,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast2DProgramFacto
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    tt_metal::distributed::MeshDevice& device = in0_tensor.mutable_device();
+    const tt_metal::distributed::MeshDevice& device = in0_tensor.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device.arch(), compute_kernel_config);

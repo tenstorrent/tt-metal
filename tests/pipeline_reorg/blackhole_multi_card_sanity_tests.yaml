@@ -46,9 +46,10 @@
     pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_quietbox_ci_perf -q
     pytest tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa_perf.py -svv
     pytest tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa_4d.py -svv
+    pytest tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa.py -k "full_mesh or sptp" -svv
   skus:
     bh_quietbox_2:
-      timeout: 30
+      timeout: 40
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   budget_type: sanity
