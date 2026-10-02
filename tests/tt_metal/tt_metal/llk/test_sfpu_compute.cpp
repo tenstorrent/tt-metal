@@ -97,55 +97,84 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"trunc", {{"SFPU_OP_CHAIN_0", "rounding_op_tile_init(); trunc_tile(0);"}}},
     {"frac", {{"SFPU_OP_CHAIN_0", "rounding_op_tile_init(); frac_tile(0);"}}},
     {"round", {{"SFPU_OP_CHAIN_0", "rounding_op_tile_init(); round_tile(0, 0 /* decimals */);"}}},
-};
-
-// ---- Quasar SFPI-port unary ops ------------------------------------------------------------------
-//
-// Compute API entry points whose Quasar kernels were ported from Blackhole's SFPI sources. They are
-// instantiated only in the QuasarPortedSfpuCompute suites below and skipped on other arches, so the
-// Blackhole / Wormhole suites above stay exactly as they were. Scalars match the tt-llk port tests
-// (tt-llk tests/python_tests/helpers/sfpu_dispatch_constants.py).
-const map<std::string, std::map<std::string, std::string>> sfpu_ported_unary_op_to_op_name = {
-    {"hardsigmoid", {{"SFPU_OP_CHAIN_0", "hardsigmoid_tile_init(); hardsigmoid_tile(0);"}}},
-    {"softsign", {{"SFPU_OP_CHAIN_0", "softsign_tile_init(); softsign_tile(0);"}}},
-    {"celu", {{"SFPU_OP_CHAIN_0", "celu_tile_init(); celu_tile(0, 0x3F800000u, 0x3F800000u);"}}},       // alpha 1
-    {"softshrink", {{"SFPU_OP_CHAIN_0", "softshrink_tile_init(); softshrink_tile(0, 0x3F000000u);"}}},  // 0.5
-    {"hardshrink", {{"SFPU_OP_CHAIN_0", "hardshrink_tile_init(); hardshrink_tile(0, 0x3F000000u);"}}},  // 0.5
-    {"elu", {{"SFPU_OP_CHAIN_0", "elu_tile_init(); elu_tile(0, 0x3F800000u);"}}},                       // alpha 1
-    {"selu", {{"SFPU_OP_CHAIN_0", "selu_tile_init(); selu_tile(0, 0x3F867D5Fu, 0x3FD62D7Du);"}}},
-    {"hardtanh", {{"SFPU_OP_CHAIN_0", "hardtanh_tile_init(); hardtanh_tile(0, 0xBF800000u, 0x3F800000u);"}}},
+    // Scalars below match the tt-llk SFPU tests (tests/python_tests/helpers/sfpu_dispatch_constants.py).
+    {"hardsigmoid",
+     {{"SFPU_OP_ACTIVATIONS_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "hardsigmoid_tile_init(); hardsigmoid_tile(0);"}}},
+    {"softsign",
+     {{"SFPU_OP_ACTIVATIONS_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "softsign_tile_init(); softsign_tile(0);"}}},
+    {"celu",
+     {{"SFPU_OP_ACTIVATIONS_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "celu_tile_init(); celu_tile(0, 0x3F800000u, 0x3F800000u);"}}},  // alpha 1
+    {"softshrink",
+     {{"SFPU_OP_ACTIVATIONS_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "softshrink_tile_init(); softshrink_tile(0, 0x3F000000u);"}}},  // 0.5
+    {"hardshrink",
+     {{"SFPU_OP_ACTIVATIONS_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "hardshrink_tile_init(); hardshrink_tile(0, 0x3F000000u);"}}},  // 0.5
+    {"elu", {{"SFPU_OP_CHAIN_0", "elu_tile_init(); elu_tile(0, 0x3F800000u);"}}},         // alpha 1
+    {"selu",
+     {{"SFPU_OP_SELU_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "selu_tile_init(); selu_tile(0, 0x3F867D5Fu, 0x3FD62D7Du);"}}},
+    {"hardtanh",
+     {{"SFPU_OP_HARDTANH_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "hardtanh_tile_init(); hardtanh_tile(0, 0xBF800000u, 0x3F800000u);"}}},
     {"erf", {{"SFPU_OP_CHAIN_0", "erf_tile_init(); erf_tile(0);"}}},
     {"erfc", {{"SFPU_OP_CHAIN_0", "erfc_tile_init(); erfc_tile(0);"}}},
-    {"erfinv", {{"SFPU_OP_CHAIN_0", "erfinv_tile_init(); erfinv_tile(0);"}}},
-    {"cbrt", {{"SFPU_OP_CHAIN_0", "cbrt_tile_init(); cbrt_tile(0);"}}},
-    {"i0", {{"SFPU_OP_CHAIN_0", "i0_tile_init(); i0_tile(0);"}}},
-    {"i1", {{"SFPU_OP_CHAIN_0", "i1_tile_init(); i1_tile(0);"}}},
-    {"identity", {{"SFPU_OP_CHAIN_0", "identity_tile_init(); identity_tile(0);"}}},
-    {"hardmish", {{"SFPU_OP_CHAIN_0", "hardmish_tile_init(); hardmish_tile(0);"}}},
-    {"mish", {{"SFPU_OP_CHAIN_0", "mish_tile_init<SFPU_OP_APPROX>(); mish_tile<SFPU_OP_APPROX>(0);"}}},
-    {"isinf", {{"SFPU_OP_CHAIN_0", "isinf_tile_init(); isinf_tile(0);"}}},
-    {"isposinf", {{"SFPU_OP_CHAIN_0", "isposinf_tile_init(); isposinf_tile(0);"}}},
-    {"isneginf", {{"SFPU_OP_CHAIN_0", "isneginf_tile_init(); isneginf_tile(0);"}}},
-    {"isnan", {{"SFPU_OP_CHAIN_0", "isnan_tile_init(); isnan_tile(0);"}}},
-    {"isfinite", {{"SFPU_OP_CHAIN_0", "isfinite_tile_init(); isfinite_tile(0);"}}},
-    {"lgamma_stirling", {{"SFPU_OP_CHAIN_0", "lgamma_stirling_tile_init(); lgamma_stirling_tile(0);"}}},
-    {"digamma", {{"SFPU_OP_CHAIN_0", "digamma_tile_init(); digamma_tile(0);"}}},
+    {"erfinv", {{"SFPU_OP_ERFINV_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "erfinv_tile_init(); erfinv_tile(0);"}}},
+    {"cbrt", {{"SFPU_OP_CBRT_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "cbrt_tile_init(); cbrt_tile(0);"}}},
+    {"i0", {{"SFPU_OP_I0_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "i0_tile_init(); i0_tile(0);"}}},
+    {"i1", {{"SFPU_OP_I1_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "i1_tile_init(); i1_tile(0);"}}},
+    {"identity", {{"SFPU_OP_IDENTITY_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "identity_tile_init(); identity_tile(0);"}}},
+    {"hardmish", {{"SFPU_OP_HARDMISH_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "hardmish_tile_init(); hardmish_tile(0);"}}},
+    {"mish",
+     {{"SFPU_OP_MISH_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "mish_tile_init<SFPU_OP_APPROX>(); mish_tile<SFPU_OP_APPROX>(0);"}}},
+    {"isinf", {{"SFPU_OP_ISINF_ISNAN_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "isinf_tile_init(); isinf_tile(0);"}}},
+    {"isposinf",
+     {{"SFPU_OP_ISINF_ISNAN_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "isposinf_tile_init(); isposinf_tile(0);"}}},
+    {"isneginf",
+     {{"SFPU_OP_ISINF_ISNAN_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "isneginf_tile_init(); isneginf_tile(0);"}}},
+    {"isnan", {{"SFPU_OP_ISINF_ISNAN_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "isnan_tile_init(); isnan_tile(0);"}}},
+    {"isfinite",
+     {{"SFPU_OP_ISINF_ISNAN_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "isfinite_tile_init(); isfinite_tile(0);"}}},
+    {"lgamma_stirling",
+     {{"SFPU_OP_LGAMMA_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "lgamma_stirling_tile_init(); lgamma_stirling_tile(0);"}}},
+    {"digamma", {{"SFPU_OP_DIGAMMA_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "digamma_tile_init(); digamma_tile(0);"}}},
     // n = 1, scale = (-1)^(n+1) * n! = 1: trigamma.
-    {"polygamma", {{"SFPU_OP_CHAIN_0", "polygamma_tile_init(); polygamma_tile(0, 0x3F800000u, 0x3F800000u);"}}},
-    {"logical_not", {{"SFPU_OP_CHAIN_0", "logical_not_tile_init(); logical_not_tile<DataFormat::Float16_b>(0);"}}},
-    {"prelu", {{"SFPU_OP_CHAIN_0", "prelu_tile_init(); prelu_tile(0, 0x3E800000u);"}}},          // slope 0.25
-    {"rdiv", {{"SFPU_OP_CHAIN_0", "rdiv_tile_init(); rdiv_tile(0, 0x40000000u);"}}},             // 2 / x
-    {"rpow", {{"SFPU_OP_CHAIN_0", "rpow_tile_init(); rpow_tile(0, 0x40000000u);"}}},             // 2 ** x
-    {"fmod", {{"SFPU_OP_CHAIN_0", "fmod_tile_init(0x40000000u, 0x3F000000u); fmod_tile(0);"}}},  // fmod(x, 2)
+    {"polygamma",
+     {{"SFPU_OP_POLYGAMMA_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "polygamma_tile_init(); polygamma_tile(0, 0x3F800000u, 0x3F800000u);"}}},
+    {"logical_not",
+     {{"SFPU_OP_LOGICAL_NOT_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "logical_not_tile_init(); logical_not_tile<DataFormat::Float16_b>(0);"}}},
+    {"prelu",
+     {{"SFPU_OP_PRELU_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "prelu_tile_init(); prelu_tile(0, 0x3E800000u);"}}},  // slope 0.25
+    {"rdiv",
+     {{"SFPU_OP_RDIV_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "rdiv_tile_init(); rdiv_tile(0, 0x40000000u);"}}},  // 2 / x
+    {"rpow",
+     {{"SFPU_OP_RPOW_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "rpow_tile_init(); rpow_tile(0, 0x40000000u);"}}},  // 2 ** x
+    {"fmod",
+     {{"SFPU_OP_FMOD_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "fmod_tile_init(0x40000000u, 0x3F000000u); fmod_tile(0);"}}},  // fmod(x, 2)
     {"remainder",
-     {{"SFPU_OP_CHAIN_0", "remainder_tile_init(0x40000000u, 0x3F000000u); remainder_tile(0);"}}},  // x mod 2
-    {"tanh_derivative", {{"SFPU_OP_CHAIN_0", "tanh_derivative_tile_init(); tanh_derivative_tile(0);"}}},
-    {"tanhshrink", {{"SFPU_OP_CHAIN_0", "tanhshrink_tile_init(); tanhshrink_tile(0);"}}},
+     {{"SFPU_OP_REMAINDER_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "remainder_tile_init(0x40000000u, 0x3F000000u); remainder_tile(0);"}}},  // x mod 2
+    {"tanh_derivative",
+     {{"SFPU_OP_TANH_DERIVATIVE_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "tanh_derivative_tile_init(); tanh_derivative_tile(0);"}}},
+    {"tanhshrink",
+     {{"SFPU_OP_TANHSHRINK_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "tanhshrink_tile_init(); tanhshrink_tile(0);"}}},
     // x > 5 ? x : 10
-    {"threshold", {{"SFPU_OP_CHAIN_0", "threshold_tile_init(); threshold_tile(0, 0x40A00000u, 0x41200000u);"}}},
-    {"xielu", {{"SFPU_OP_CHAIN_0", "xielu_tile_init(); xielu_tile(0, 0x3F800000u, 0x3F800000u);"}}},
+    {"threshold",
+     {{"SFPU_OP_THRESHOLD_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "threshold_tile_init(); threshold_tile(0, 0x40A00000u, 0x41200000u);"}}},
+    {"xielu",
+     {{"SFPU_OP_XIELU_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "xielu_tile_init(); xielu_tile(0, 0x3F800000u, 0x3F800000u);"}}},
     // beta = 5 and its reciprocal
-    {"softcap", {{"SFPU_OP_CHAIN_0", "softcap_tile_init(); softcap_tile(0, 0x40A00000u, 0x3E4CCCCDu);"}}},
+    {"softcap",
+     {{"SFPU_OP_SOFTCAP_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "softcap_tile_init(); softcap_tile(0, 0x40A00000u, 0x3E4CCCCDu);"}}},
     {"unary_ne", {{"SFPU_OP_CHAIN_0", "unary_ne_tile_init(); unary_ne_tile(0, 0x3F000000u);"}}},  // vs 0.5
     {"unary_eq", {{"SFPU_OP_CHAIN_0", "unary_eq_tile_init(); unary_eq_tile(0, 0x3F000000u);"}}},
     {"unary_gt", {{"SFPU_OP_CHAIN_0", "unary_gt_tile_init(); unary_gt_tile(0, 0x3F000000u);"}}},
@@ -159,19 +188,12 @@ const map<std::string, std::map<std::string, std::string>> sfpu_ported_unary_op_
     {"expm1", {{"SFPU_OP_CHAIN_0", "expm1_tile_init(); expm1_tile(0);"}}},
     // base_scale = 1 / ln(10): log10
     {"log_with_base", {{"SFPU_OP_CHAIN_0", "log_with_base_tile_init(); log_with_base_tile(0, 0x3EDE5BD9u);"}}},
+    {"tiled_prod", {{"SFPU_OP_CHAIN_0", "tiled_prod_tile_init(); tiled_prod_tile(0);"}}},
+    {"alt_complex_rotate90", {{"SFPU_OP_CHAIN_0", "alt_complex_rotate90_tile_init(); alt_complex_rotate90_tile(0);"}}},
 };
 
-bool is_ported_unary_sfpu_op(const std::string& op_name) { return sfpu_ported_unary_op_to_op_name.contains(op_name); }
-
-// log / sign were already in the shared suites but skipped on Quasar until their kernels were ported.
-bool is_ported_or_shared_unary_sfpu_op(const std::string& op_name) {
-    return is_ported_unary_sfpu_op(op_name) || op_name == "log" || op_name == "sign";
-}
-
-const std::map<std::string, std::string>& unary_op_defines(const std::string& op_name);
-
 // digamma / trigamma in double: recurrence up to x >= 6, then the asymptotic series.
-double ported_digamma(double x) {
+double digamma(double x) {
     double result = 0.0;
     while (x < 6.0) {
         result -= 1.0 / x;
@@ -183,7 +205,7 @@ double ported_digamma(double x) {
            inv2 * (1.0 / 12 - inv2 * (1.0 / 120 - inv2 * (1.0 / 252 - inv2 * (1.0 / 240 - inv2 / 132))));
 }
 
-double ported_trigamma(double x) {
+double trigamma(double x) {
     double result = 0.0;
     while (x < 6.0) {
         result += 1.0 / (x * x);
@@ -195,7 +217,7 @@ double ported_trigamma(double x) {
 }
 
 // Modified Bessel I_n(x) for n = 0, 1 by its power series; libc++ has no std::cyl_bessel_i.
-double ported_bessel_i(int order, double x) {
+double bessel_i(int order, double x) {
     const double q = 0.25 * x * x;
     double term = order == 0 ? 1.0 : 0.5 * x;
     double sum = term;
@@ -206,238 +228,10 @@ double ported_bessel_i(int order, double x) {
     return sum;
 }
 
-// Golden for the ported unary ops; std::nullopt for any other op.
-std::optional<float> ported_sfpu_function(const std::string& op_name, float x) {
-    const double d = x;
-    if (op_name == "hardsigmoid") {
-        return std::clamp(x / 6.0f + 0.5f, 0.0f, 1.0f);
-    }
-    if (op_name == "softsign") {
-        return x / (1.0f + std::fabs(x));
-    }
-    if (op_name == "celu" || op_name == "elu") {
-        return x > 0.0f ? x : static_cast<float>(std::expm1(d));
-    }
-    if (op_name == "softshrink") {
-        if (x > 0.5f) {
-            return x - 0.5f;
-        }
-        return x < -0.5f ? x + 0.5f : 0.0f;
-    }
-    if (op_name == "hardshrink") {
-        return std::fabs(x) > 0.5f ? x : 0.0f;
-    }
-    if (op_name == "selu") {
-        constexpr double scale = 1.0507009873554805, alpha = 1.6732632423543772;
-        return static_cast<float>(scale * (x > 0.0f ? d : alpha * std::expm1(d)));
-    }
-    if (op_name == "hardtanh") {
-        return std::clamp(x, -1.0f, 1.0f);
-    }
-    if (op_name == "erf") {
-        return static_cast<float>(std::erf(d));
-    }
-    if (op_name == "erfc") {
-        return static_cast<float>(std::erfc(d));
-    }
-    if (op_name == "erfinv") {
-        // Newton on erf(y) = x from a rough start; |x| < 1 here.
-        double y = 0.0;
-        for (int i = 0; i < 60; ++i) {
-            y -= (std::erf(y) - d) / (M_2_SQRTPI * std::exp(-y * y));
-        }
-        return static_cast<float>(y);
-    }
-    if (op_name == "cbrt") {
-        return std::cbrt(x);
-    }
-    if (op_name == "i0") {
-        return static_cast<float>(ported_bessel_i(0, std::fabs(d)));
-    }
-    if (op_name == "i1") {
-        return static_cast<float>(ported_bessel_i(1, d));
-    }
-    if (op_name == "identity") {
-        return x;
-    }
-    if (op_name == "hardmish") {
-        return x * std::clamp(0.5f * x + 1.0f, 0.0f, 1.0f);
-    }
-    if (op_name == "mish") {
-        return static_cast<float>(d * std::tanh(std::log1p(std::exp(d))));
-    }
-    if (op_name == "isinf") {
-        return std::isinf(x) ? 1.0f : 0.0f;
-    }
-    if (op_name == "isposinf") {
-        return (std::isinf(x) && x > 0.0f) ? 1.0f : 0.0f;
-    }
-    if (op_name == "isneginf") {
-        return (std::isinf(x) && x < 0.0f) ? 1.0f : 0.0f;
-    }
-    if (op_name == "isnan") {
-        return std::isnan(x) ? 1.0f : 0.0f;
-    }
-    if (op_name == "isfinite") {
-        return std::isfinite(x) ? 1.0f : 0.0f;
-    }
-    if (op_name == "lgamma_stirling") {
-        return static_cast<float>(std::lgamma(d));
-    }
-    if (op_name == "digamma") {
-        return static_cast<float>(ported_digamma(d));
-    }
-    if (op_name == "polygamma") {
-        return static_cast<float>(ported_trigamma(d));
-    }
-    if (op_name == "logical_not") {
-        return x == 0.0f ? 1.0f : 0.0f;
-    }
-    if (op_name == "prelu") {
-        return x >= 0.0f ? x : 0.25f * x;
-    }
-    if (op_name == "rdiv") {
-        return 2.0f / x;
-    }
-    if (op_name == "rpow") {
-        return static_cast<float>(std::exp2(d));
-    }
-    if (op_name == "fmod") {
-        return static_cast<float>(std::fmod(d, 2.0));
-    }
-    if (op_name == "remainder") {
-        return static_cast<float>(d - 2.0 * std::floor(d / 2.0));
-    }
-    if (op_name == "tanh_derivative") {
-        const double t = std::tanh(d);
-        return static_cast<float>(1.0 - t * t);
-    }
-    if (op_name == "tanhshrink") {
-        return static_cast<float>(d - std::tanh(d));
-    }
-    if (op_name == "threshold") {
-        return x > 5.0f ? x : 10.0f;
-    }
-    if (op_name == "xielu") {
-        // alpha_p = alpha_n = 1, beta = 0.5 (the kernel's fixed beta).
-        return static_cast<float>(x > 0.0f ? d * d + 0.5 * d : std::expm1(d) - d + 0.5 * d);
-    }
-    if (op_name == "softcap") {
-        return static_cast<float>(5.0 * std::tanh(d / 5.0));
-    }
-    if (op_name == "unary_ne") {
-        return x != 0.5f ? 1.0f : 0.0f;
-    }
-    if (op_name == "unary_eq") {
-        return x == 0.5f ? 1.0f : 0.0f;
-    }
-    if (op_name == "unary_gt") {
-        return x > 0.5f ? 1.0f : 0.0f;
-    }
-    if (op_name == "unary_ge") {
-        return x >= 0.5f ? 1.0f : 0.0f;
-    }
-    if (op_name == "unary_lt") {
-        return x < 0.5f ? 1.0f : 0.0f;
-    }
-    if (op_name == "unary_le") {
-        return x <= 0.5f ? 1.0f : 0.0f;
-    }
-    if (op_name == "power") {
-        return x * x;
-    }
-    if (op_name == "power_iterative") {
-        return x * x * x;
-    }
-    if (op_name == "exp2") {
-        return static_cast<float>(std::exp2(d));
-    }
-    if (op_name == "heaviside") {
-        if (x < 0.0f) {
-            return 0.0f;
-        }
-        return x == 0.0f ? 0.5f : 1.0f;
-    }
-    if (op_name == "expm1") {
-        return static_cast<float>(std::expm1(d));
-    }
-    if (op_name == "log_with_base") {
-        return static_cast<float>(std::log10(d));
-    }
-    return std::nullopt;
-}
-
-// Inputs for the ported unary ops; empty for any other op.
-vector<uint32_t> generate_packed_ported_sfpu_input(
-    const unsigned int numel, const std::string& op_name, const int seed) {
-    const auto uniform = [&](float lo, float hi) {
-        return generate_packed_uniform_random_vector<uint32_t, bfloat16>(lo, hi, numel, seed);
-    };
-    const auto pick = [&](vector<bfloat16> values) {
-        return generate_packed_random_vector_from_vector<uint32_t, bfloat16>(values, numel, seed);
-    };
-    if (op_name == "isinf" || op_name == "isposinf" || op_name == "isneginf" || op_name == "isnan" ||
-        op_name == "isfinite") {
-        constexpr float inf = std::numeric_limits<float>::infinity();
-        return pick({-inf, inf, std::numeric_limits<float>::quiet_NaN(), -2.0f, -0.5f, 0.0f, 1.0f, 3.0f});
-    }
-    if (op_name.starts_with("unary_")) {
-        // The comparisons are against 0.5: include it and its neighbours.
-        return pick({-1.0f, 0.0f, 0.25f, 0.5f, 0.75f, 1.0f, 2.0f});
-    }
-    if (op_name == "logical_not" || op_name == "heaviside") {
-        return pick({-2.0f, -0.5f, 0.0f, 0.0f, 0.5f, 1.0f, 3.0f});
-    }
-    if (op_name == "erfinv") {
-        return uniform(-0.95f, 0.95f);
-    }
-    if (op_name == "lgamma_stirling" || op_name == "digamma" || op_name == "polygamma") {
-        return uniform(0.5f, 8.0f);
-    }
-    if (op_name == "log_with_base") {
-        return uniform(0.01f, 10.0f);
-    }
-    if (op_name == "rdiv") {
-        auto packed = uniform(-4.0f, 4.0f);
-        auto values = unpack_vector<bfloat16, uint32_t>(packed);
-        for (auto& v : values) {
-            const float f = static_cast<float>(v);
-            v = bfloat16(std::copysign(std::max(std::fabs(f), 0.25f), f));
-        }
-        return pack_vector<uint32_t, bfloat16>(values);
-    }
-    if (op_name == "threshold") {
-        return uniform(0.0f, 10.0f);
-    }
-    if (op_name == "softcap") {
-        return uniform(-20.0f, 20.0f);
-    }
-    if (op_name == "fmod" || op_name == "remainder") {
-        return uniform(-8.0f, 8.0f);
-    }
-    if (op_name == "cbrt") {
-        return uniform(-8.0f, 8.0f);
-    }
-    if (op_name == "mish") {
-        // Both branches (x < 0, x >= 0) and the x >= 8 saturation.
-        return uniform(-10.0f, 10.0f);
-    }
-    if (op_name == "rpow" || op_name == "exp2" || op_name == "hardsigmoid" || op_name == "softsign" ||
-        op_name == "tanh_derivative" || op_name == "i0" || op_name == "i1") {
-        return uniform(-4.0f, 4.0f);
-    }
-    if (op_name == "power_iterative" || op_name == "expm1") {
-        return uniform(-2.0f, 2.0f);
-    }
-    if (is_ported_unary_sfpu_op(op_name)) {
-        return uniform(-3.0f, 3.0f);
-    }
-    return {};
-}
-
-// Ops whose result is an exact 0 / 1 (or a value copied from a constant), compared bit-exactly.
-bool is_exact_ported_unary_op(const std::string& op_name) {
-    return op_name == "isinf" || op_name == "isposinf" || op_name == "isneginf" || op_name == "isnan" ||
+// Ops whose result is exact (rounding, a 0 / 1 predicate, or a copied value), compared bit-exactly.
+bool is_exact_unary_sfpu_op(const std::string& op_name) {
+    return op_name == "ceil" || op_name == "floor" || op_name == "trunc" || op_name == "frac" || op_name == "round" ||
+           op_name == "isinf" || op_name == "isposinf" || op_name == "isneginf" || op_name == "isnan" ||
            op_name == "isfinite" || op_name == "logical_not" || op_name == "heaviside" || op_name == "identity" ||
            op_name.starts_with("unary_");
 }
@@ -450,6 +244,7 @@ bool is_exact_ported_unary_op(const std::string& op_name) {
 //
 //   * SFPU_OP_INIT_0  — runs once before the per-pair loop. Used to set up
 //                       SFPU lookup tables / state (e.g. div reciprocal LUT).
+//   * SFPU_OP_*_INCLUDE — the sfpu_split_includes.h define for the op's header.
 //   * SFPU_OP_CHAIN_0 — runs once per (LHS, RHS) pair, inside an
 //                       acquire/release section. By convention LHS lives at
 //                       DST[0] and RHS at DST[1]; the result is written back
@@ -459,34 +254,160 @@ bool is_exact_ported_unary_op(const std::string& op_name) {
 // sfpu_binary_function() or get_binary_int_operation_result() for golden compute,
 // and (if its valid input range differs from div) add an arm in generate_packed_sfpu_binary_inputs().
 const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_name = {
-    {"div_binary", {{"SFPU_OP_INIT_0", "div_binary_tile_init();"}, {"SFPU_OP_CHAIN_0", "div_binary_tile(0, 1, 0);"}}},
-    {"mul_float", {{"SFPU_OP_INIT_0", "mul_binary_tile_init();"}, {"SFPU_OP_CHAIN_0", "mul_binary_tile(0, 1, 0);"}}},
-    {"atan2", {{"SFPU_OP_INIT_0", "atan2_binary_tile_init();"}, {"SFPU_OP_CHAIN_0", "atan2_binary_tile(0, 1, 0);"}}},
+    {"div_binary",
+     {{"SFPU_OP_BINARY_DIV_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "div_binary_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "div_binary_tile(0, 1, 0);"}}},
+    {"mul_float",
+     {{"SFPU_OP_BINARY_DIV_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "mul_binary_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "mul_binary_tile(0, 1, 0);"}}},
+    {"atan2",
+     {{"SFPU_OP_BINARY_ATAN2_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "atan2_binary_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "atan2_binary_tile(0, 1, 0);"}}},
     // add_int: Int8 L1 inputs are promoted to sign-magnitude Int32 in DEST via copy_tile + fp32_dest_acc;
     // add_int_tile<Int32> (sign-mag on Quasar via ARCH_QUASAR) then adds in sign-mag space. Result in DST[0].
     {"add_int",
-     {{"SFPU_OP_INIT_0", "add_int_tile_init();"}, {"SFPU_OP_CHAIN_0", "add_int_tile<DataFormat::Int32>(0, 1, 0);"}}},
+     {{"SFPU_OP_BINARY_ADD_INT_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "add_int_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "add_int_tile<DataFormat::Int32>(0, 1, 0);"}}},
     {"mul_int",
-     {{"SFPU_OP_INIT_0", "mul_int_tile_init<DataFormat::Int32>();"},
+     {{"SFPU_OP_BINARY_MUL_INT_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "mul_int_tile_init<DataFormat::Int32>();"},
       {"SFPU_OP_CHAIN_0", "mul_int_tile<DataFormat::Int32>(0, 1, 0);"}}},
     {"gt_int",
-     {{"SFPU_OP_INIT_0", "gt_int_tile_init<DataFormat::Int32>();"},
+     {{"SFPU_OP_BINARY_GT_INT_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "gt_int_tile_init<DataFormat::Int32>();"},
       {"SFPU_OP_CHAIN_0", "gt_int_tile<DataFormat::Int32>(0, 1, 0);"}}},
-    {"binary_max", {{"SFPU_OP_INIT_0", "binary_max_tile_init();"}, {"SFPU_OP_CHAIN_0", "binary_max_tile(0, 1, 0);"}}},
-    {"binary_min", {{"SFPU_OP_INIT_0", "binary_min_tile_init();"}, {"SFPU_OP_CHAIN_0", "binary_min_tile(0, 1, 0);"}}},
+    {"binary_max",
+     {{"SFPU_OP_BINARY_MAX_MIN_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "binary_max_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "binary_max_tile(0, 1, 0);"}}},
+    {"binary_min",
+     {{"SFPU_OP_BINARY_MAX_MIN_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "binary_min_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "binary_min_tile(0, 1, 0);"}}},
     {"binary_max_int32",
-     {{"SFPU_OP_INIT_0", "binary_max_int32_tile_init();"}, {"SFPU_OP_CHAIN_0", "binary_max_int32_tile(0, 1, 0);"}}},
+     {{"SFPU_OP_BINARY_MAX_MIN_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "binary_max_int32_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "binary_max_int32_tile(0, 1, 0);"}}},
     {"binary_min_int32",
-     {{"SFPU_OP_INIT_0", "binary_min_int32_tile_init();"}, {"SFPU_OP_CHAIN_0", "binary_min_int32_tile(0, 1, 0);"}}},
+     {{"SFPU_OP_BINARY_MAX_MIN_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "binary_min_int32_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "binary_min_int32_tile(0, 1, 0);"}}},
     {"copy_dest",
-     {{"SFPU_OP_INIT_0", "copy_dest_values_init();"},
+     {{"SFPU_OP_COPY_DEST_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "copy_dest_values_init();"},
       {"SFPU_OP_CHAIN_0", "copy_dest_values<DataFormat::Float16_b>(1, 0);"}}},
     {"copy_dest_int",
-     {{"SFPU_OP_INIT_0", "copy_dest_values_init();"},
+     {{"SFPU_OP_COPY_DEST_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "copy_dest_values_init();"},
       {"SFPU_OP_CHAIN_0", "copy_dest_values<DataFormat::Int32>(1, 0);"}}},
+    // The integer ops below ride the Int8 -> sign-magnitude Int32 Dest path with non-negative operands,
+    // where sign-magnitude and two's complement agree (their kernels assume two's complement).
+    {"power_binary",
+     {{"SFPU_OP_BINARY_DIV_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "power_binary_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "power_binary_tile(0, 1, 0);"}}},
+    {"fmod_binary",
+     {{"SFPU_OP_BINARY_FMOD_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "fmod_binary_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "fmod_binary_tile(0, 1, 0);"}}},
+    {"remainder_binary",
+     {{"SFPU_OP_BINARY_REMAINDER_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "remainder_binary_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "remainder_binary_tile(0, 1, 0);"}}},
+    // RHS carries exp(-x), computed on the host.
+    {"logsigmoid",
+     {{"SFPU_OP_LOGSIGMOID_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "logsigmoid_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "logsigmoid_tile(0, 1, 0);"}}},
+    // torch defaults: rtol 1e-5, atol 1e-8
+    {"isclose",
+     {{"SFPU_OP_BINARY_ISCLOSE_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "isclose_binary_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "isclose_binary_tile(0, 1, 0, 0x3727C5ACu, 0x322BCC77u);"}}},
+    {"clamped_silu_glu",
+     {{"SFPU_OP_CLAMPED_SILU_GLU_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "clamped_silu_glu_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "clamped_silu_glu_tile(0, 1, 0);"}}},
+    {"situ_glu",
+     {{"SFPU_OP_SITU_GLU_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "situ_glu_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "situ_glu_tile(0, 1, 0);"}}},
+    // mask tile at DST[0] + 1
+    {"mask",
+     {{"SFPU_OP_MASK_INCLUDE", "1"}, {"SFPU_OP_INIT_0", "mask_tile_init();"}, {"SFPU_OP_CHAIN_0", "mask_tile(0, 1);"}}},
+    {"mask_posinf",
+     {{"SFPU_OP_MASK_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "mask_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "mask_posinf_tile(0, 1);"}}},
+    // RHS carries log(x) (x >= 0.5 here), computed on the host.
+    {"lgamma_stirling_float",
+     {{"SFPU_OP_LGAMMA_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "lgamma_stirling_float_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "lgamma_stirling_float_tile(0, 1, 0);"}}},
+    // Float32 in a 32-bit Dest, bf16 in L1.
+    {"add_top_row",
+     {{"SFPU_OP_COMPUTE_KERNEL_API_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "sfpu_add_top_row_init();"},
+      {"SFPU_OP_CHAIN_0", "sfpu_add_top_row<DataFormat::Float32>(0, 1, 0);"}}},
+    // Integer ops.
+    {"add_top_row_int32",
+     {{"SFPU_OP_COMPUTE_KERNEL_API_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "sfpu_add_top_row_init();"},
+      {"SFPU_OP_CHAIN_0", "sfpu_add_top_row<DataFormat::Int32>(0, 1, 0);"}}},
+    {"div_int32_floor",
+     {{"SFPU_OP_BINARY_DIV_INT32_FLOOR_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "div_int32_floor_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "div_int32_floor_tile(0, 1, 0);"}}},
+    {"div_int32_trunc",
+     {{"SFPU_OP_BINARY_DIV_INT32_FLOOR_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "div_int32_trunc_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "div_int32_trunc_tile(0, 1, 0);"}}},
+    // int32 / int32 -> Float32 result.
+    {"div_int32",
+     {{"SFPU_OP_BINARY_DIV_INT32_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "div_int32_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "div_int32_tile(0, 1, 0);"}}},
+    {"fmod_int32",
+     {{"SFPU_OP_BINARY_FMOD_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "fmod_int32_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "fmod_int32_tile(0, 1, 0);"}}},
+    {"remainder_int32",
+     {{"SFPU_OP_BINARY_REMAINDER_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "remainder_int32_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "remainder_int32_tile(0, 1, 0);"}}},
+    {"bitwise_and_binary",
+     {{"SFPU_OP_BINARY_BITWISE_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "binary_bitwise_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "bitwise_and_binary_tile<DataFormat::Int32>(0, 1, 0);"}}},
+    {"bitwise_or_binary",
+     {{"SFPU_OP_BINARY_BITWISE_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "binary_bitwise_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "bitwise_or_binary_tile<DataFormat::Int32>(0, 1, 0);"}}},
+    {"bitwise_xor_binary",
+     {{"SFPU_OP_BINARY_BITWISE_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "binary_bitwise_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "bitwise_xor_binary_tile<DataFormat::Int32>(0, 1, 0);"}}},
+    // DST[1] - DST[0]
+    {"rsub_int",
+     {{"SFPU_OP_BINARY_SUB_INT_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "rsub_int_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "rsub_int_tile<DataFormat::Int32>(0, 1, 0);"}}},
+    // DST[0] += DST[0 + 1]
+    {"sfpu_add_int",
+     {{"SFPU_OP_INT_SUM_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "sfpu_sum_int_init();"},
+      {"SFPU_OP_CHAIN_0", "sfpu_add_int(0, 1);"}}},
+    {"int_mask",
+     {{"SFPU_OP_MASK_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "mask_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "mask_tile(0, 1, DataFormat::Int32);"}}},
 };
 
-// ---- Tile-layout ops (goldens mirror the tt-llk port tests' UnarySFPUGolden) --------------------
+// ---- Tile-layout ops (goldens mirror the tt-llk SFPU tests' UnarySFPUGolden) --------------------
 //
 // L1 holds tiles in face order; these goldens are written in (row, col) of the 32x32 tile, as the
 // tt-llk ones are, so map between the two.
@@ -495,15 +416,13 @@ inline size_t tile_order_index(size_t row, size_t col) {
     return face * 256 + (row % 16) * 16 + (col % 16);
 }
 
-const map<std::string, std::map<std::string, std::string>> sfpu_ported_layout_op_to_op_name = {
-    {"tiled_prod", {{"SFPU_OP_CHAIN_0", "tiled_prod_tile_init(); tiled_prod_tile(0);"}}},
-    {"alt_complex_rotate90", {{"SFPU_OP_CHAIN_0", "alt_complex_rotate90_tile_init(); alt_complex_rotate90_tile(0);"}}},
-};
-
-bool is_ported_layout_sfpu_op(const std::string& op_name) { return sfpu_ported_layout_op_to_op_name.contains(op_name); }
+// Ops that move values across the tile, so their golden works on whole tiles.
+bool is_tile_layout_sfpu_op(const std::string& op_name) {
+    return op_name == "tiled_prod" || op_name == "alt_complex_rotate90";
+}
 
 // One 1024-element tile, face order in and out. `store` rounds a value the way Dest holds it.
-std::vector<float> ported_layout_tile_golden(
+std::vector<float> tile_layout_golden(
     const std::string& op_name, const std::vector<float>& tile, const std::function<float(float)>& store) {
     std::vector<float> out = tile;
     const auto at = [&](size_t row, size_t col) -> float& { return out[tile_order_index(row, col)]; };
@@ -546,7 +465,7 @@ std::vector<float> ported_layout_tile_golden(
 }
 
 // Integer layout ops on Int32 in Dest.
-std::vector<int32_t> ported_int_layout_tile_golden(const std::string& op_name, const std::vector<int32_t>& tile) {
+std::vector<int32_t> int_tile_layout_golden(const std::string& op_name, const std::vector<int32_t>& tile) {
     std::vector<int32_t> out = tile;
     const auto in = [&](size_t row, size_t col) { return static_cast<int64_t>(tile[tile_order_index(row, col)]); };
     if (op_name == "sum_int_col") {
@@ -578,23 +497,36 @@ std::vector<int32_t> ported_int_layout_tile_golden(const std::string& op_name, c
 // ---- Int32 unary ops ------------------------------------------------------------------------------
 //
 // Int8 L1 (non-negative, so sign-magnitude == two's complement) copied into a 32-bit Dest, Int32 out.
-// Scalars match the tt-llk port tests.
-const map<std::string, std::map<std::string, std::string>> sfpu_ported_int_unary_op_to_op_name = {
+// Scalars match the tt-llk SFPU tests.
+const map<std::string, std::map<std::string, std::string>> sfpu_int32_unary_op_to_op_name = {
     {"bitwise_and",
-     {{"SFPU_OP_CHAIN_0", "bitwise_and_tile_init(); bitwise_and_tile<DataFormat::Int32>(0, 0x70FF00F5u);"}}},
+     {{"SFPU_OP_BITWISE_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "bitwise_and_tile_init(); bitwise_and_tile<DataFormat::Int32>(0, 0x70FF00F5u);"}}},
     {"bitwise_or",
-     {{"SFPU_OP_CHAIN_0", "bitwise_or_tile_init(); bitwise_or_tile<DataFormat::Int32>(0, 0x70FF00F5u);"}}},
+     {{"SFPU_OP_BITWISE_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "bitwise_or_tile_init(); bitwise_or_tile<DataFormat::Int32>(0, 0x70FF00F5u);"}}},
     {"bitwise_xor",
-     {{"SFPU_OP_CHAIN_0", "bitwise_xor_tile_init(); bitwise_xor_tile<DataFormat::Int32>(0, 0x70FF00F5u);"}}},
-    {"left_shift", {{"SFPU_OP_CHAIN_0", "left_shift_tile_init(); left_shift_tile<DataFormat::Int32>(0, 3u);"}}},
-    {"right_shift", {{"SFPU_OP_CHAIN_0", "right_shift_tile_init(); right_shift_tile<DataFormat::Int32>(0, 3u);"}}},
-    {"rsub_unary_int32", {{"SFPU_OP_CHAIN_0", "rsub_unary_int32_tile_init(); rsub_unary_int32_tile(0, 0x7FFFFFFFu);"}}},
-    {"logical_not_int32", {{"SFPU_OP_CHAIN_0", "logical_not_tile_init(); logical_not_tile<DataFormat::Int32>(0);"}}},
-    {"sum_int_col", {{"SFPU_OP_CHAIN_0", "sfpu_sum_int_init(); sfpu_sum_int_col(0);"}}},
-    {"sum_int_row", {{"SFPU_OP_CHAIN_0", "sfpu_sum_int_init(); sfpu_sum_int_row(0);"}}},
+     {{"SFPU_OP_BITWISE_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "bitwise_xor_tile_init(); bitwise_xor_tile<DataFormat::Int32>(0, 0x70FF00F5u);"}}},
+    {"left_shift",
+     {{"SFPU_OP_SHIFT_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "left_shift_tile_init(); left_shift_tile<DataFormat::Int32>(0, 3u);"}}},
+    {"right_shift",
+     {{"SFPU_OP_SHIFT_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "right_shift_tile_init(); right_shift_tile<DataFormat::Int32>(0, 3u);"}}},
+    {"rsub_unary_int32",
+     {{"SFPU_OP_RSUB_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "rsub_unary_int32_tile_init(); rsub_unary_int32_tile(0, 0x7FFFFFFFu);"}}},
+    {"logical_not_int32",
+     {{"SFPU_OP_LOGICAL_NOT_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "logical_not_tile_init(); logical_not_tile<DataFormat::Int32>(0);"}}},
+    {"sum_int_col",
+     {{"SFPU_OP_INT_SUM_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "sfpu_sum_int_init(); sfpu_sum_int_col(0);"}}},
+    {"sum_int_row",
+     {{"SFPU_OP_INT_SUM_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "sfpu_sum_int_init(); sfpu_sum_int_row(0);"}}},
 };
 
-int32_t ported_int_unary_result(const std::string& op_name, int32_t x) {
+int32_t int32_unary_result(const std::string& op_name, int32_t x) {
     if (op_name == "bitwise_and") {
         return x & 0x70FF00F5;
     }
@@ -619,178 +551,22 @@ int32_t ported_int_unary_result(const std::string& op_name, int32_t x) {
     TT_THROW("Unsupported int unary op_name in test");
 }
 
-bool is_ported_int_unary_sfpu_op(const std::string& op_name) {
-    return sfpu_ported_int_unary_op_to_op_name.contains(op_name);
-}
-
-// Every op the QuasarPorted* unary suites run.
-bool is_quasar_ported_unary_test_op(const std::string& op_name) {
-    return is_ported_unary_sfpu_op(op_name) || is_ported_layout_sfpu_op(op_name) ||
-           is_ported_int_unary_sfpu_op(op_name);
-}
-
-const std::map<std::string, std::string>& unary_op_defines(const std::string& op_name) {
-    for (const auto* table :
-         {&sfpu_ported_unary_op_to_op_name, &sfpu_ported_layout_op_to_op_name, &sfpu_ported_int_unary_op_to_op_name}) {
-        if (const auto it = table->find(op_name); it != table->end()) {
-            return it->second;
-        }
-    }
-    return sfpu_op_to_op_name.at(op_name);
-}
-
-// ---- Quasar SFPI-port binary ops -----------------------------------------------------------------
-//
-// Same conventions as sfpu_binary_op_to_op_name (LHS in DST[0], RHS in DST[1], result in DST[0]).
-// The integer ops ride the Int8 -> sign-magnitude Int32 Dest path with non-negative operands, where
-// sign-magnitude and two's complement agree (the ported kernels assume two's complement).
-const map<std::string, std::map<std::string, std::string>> sfpu_ported_binary_op_to_op_name = {
-    {"power_binary",
-     {{"SFPU_OP_INIT_0", "power_binary_tile_init();"}, {"SFPU_OP_CHAIN_0", "power_binary_tile(0, 1, 0);"}}},
-    {"fmod_binary",
-     {{"SFPU_OP_INIT_0", "fmod_binary_tile_init();"}, {"SFPU_OP_CHAIN_0", "fmod_binary_tile(0, 1, 0);"}}},
-    {"remainder_binary",
-     {{"SFPU_OP_INIT_0", "remainder_binary_tile_init();"}, {"SFPU_OP_CHAIN_0", "remainder_binary_tile(0, 1, 0);"}}},
-    // RHS carries exp(-x), computed on the host.
-    {"logsigmoid", {{"SFPU_OP_INIT_0", "logsigmoid_tile_init();"}, {"SFPU_OP_CHAIN_0", "logsigmoid_tile(0, 1, 0);"}}},
-    // torch defaults: rtol 1e-5, atol 1e-8
-    {"isclose",
-     {{"SFPU_OP_INIT_0", "isclose_binary_tile_init();"},
-      {"SFPU_OP_CHAIN_0", "isclose_binary_tile(0, 1, 0, 0x3727C5ACu, 0x322BCC77u);"}}},
-    {"clamped_silu_glu",
-     {{"SFPU_OP_INIT_0", "clamped_silu_glu_tile_init();"}, {"SFPU_OP_CHAIN_0", "clamped_silu_glu_tile(0, 1, 0);"}}},
-    {"situ_glu", {{"SFPU_OP_INIT_0", "situ_glu_tile_init();"}, {"SFPU_OP_CHAIN_0", "situ_glu_tile(0, 1, 0);"}}},
-    // mask tile at DST[0] + 1
-    {"mask", {{"SFPU_OP_INIT_0", "mask_tile_init();"}, {"SFPU_OP_CHAIN_0", "mask_tile(0, 1);"}}},
-    {"mask_posinf", {{"SFPU_OP_INIT_0", "mask_tile_init();"}, {"SFPU_OP_CHAIN_0", "mask_posinf_tile(0, 1);"}}},
-    // RHS carries log(x) (x >= 0.5 here), computed on the host.
-    {"lgamma_stirling_float",
-     {{"SFPU_OP_INIT_0", "lgamma_stirling_float_tile_init();"},
-      {"SFPU_OP_CHAIN_0", "lgamma_stirling_float_tile(0, 1, 0);"}}},
-    // Float32 in a 32-bit Dest, bf16 in L1.
-    {"add_top_row",
-     {{"SFPU_OP_INIT_0", "sfpu_add_top_row_init();"},
-      {"SFPU_OP_CHAIN_0", "sfpu_add_top_row<DataFormat::Float32>(0, 1, 0);"}}},
-    // Integer ops.
-    {"add_top_row_int32",
-     {{"SFPU_OP_INIT_0", "sfpu_add_top_row_init();"},
-      {"SFPU_OP_CHAIN_0", "sfpu_add_top_row<DataFormat::Int32>(0, 1, 0);"}}},
-    {"div_int32_floor",
-     {{"SFPU_OP_INIT_0", "div_int32_floor_tile_init();"}, {"SFPU_OP_CHAIN_0", "div_int32_floor_tile(0, 1, 0);"}}},
-    {"div_int32_trunc",
-     {{"SFPU_OP_INIT_0", "div_int32_trunc_tile_init();"}, {"SFPU_OP_CHAIN_0", "div_int32_trunc_tile(0, 1, 0);"}}},
-    // int32 / int32 -> Float32 result.
-    {"div_int32", {{"SFPU_OP_INIT_0", "div_int32_tile_init();"}, {"SFPU_OP_CHAIN_0", "div_int32_tile(0, 1, 0);"}}},
-    {"fmod_int32", {{"SFPU_OP_INIT_0", "fmod_int32_tile_init();"}, {"SFPU_OP_CHAIN_0", "fmod_int32_tile(0, 1, 0);"}}},
-    {"remainder_int32",
-     {{"SFPU_OP_INIT_0", "remainder_int32_tile_init();"}, {"SFPU_OP_CHAIN_0", "remainder_int32_tile(0, 1, 0);"}}},
-    {"bitwise_and_binary",
-     {{"SFPU_OP_INIT_0", "binary_bitwise_tile_init();"},
-      {"SFPU_OP_CHAIN_0", "bitwise_and_binary_tile<DataFormat::Int32>(0, 1, 0);"}}},
-    {"bitwise_or_binary",
-     {{"SFPU_OP_INIT_0", "binary_bitwise_tile_init();"},
-      {"SFPU_OP_CHAIN_0", "bitwise_or_binary_tile<DataFormat::Int32>(0, 1, 0);"}}},
-    {"bitwise_xor_binary",
-     {{"SFPU_OP_INIT_0", "binary_bitwise_tile_init();"},
-      {"SFPU_OP_CHAIN_0", "bitwise_xor_binary_tile<DataFormat::Int32>(0, 1, 0);"}}},
-    // DST[1] - DST[0]
-    {"rsub_int",
-     {{"SFPU_OP_INIT_0", "rsub_int_tile_init();"}, {"SFPU_OP_CHAIN_0", "rsub_int_tile<DataFormat::Int32>(0, 1, 0);"}}},
-    // DST[0] += DST[0 + 1]
-    {"sfpu_add_int", {{"SFPU_OP_INIT_0", "sfpu_sum_int_init();"}, {"SFPU_OP_CHAIN_0", "sfpu_add_int(0, 1);"}}},
-    {"int_mask", {{"SFPU_OP_INIT_0", "mask_tile_init();"}, {"SFPU_OP_CHAIN_0", "mask_tile(0, 1, DataFormat::Int32);"}}},
-};
-
-bool is_ported_binary_sfpu_op(const std::string& op_name) { return sfpu_ported_binary_op_to_op_name.contains(op_name); }
-
-bool is_ported_int_binary_sfpu_op(const std::string& op_name) {
+// Int8 binary ops whose operands stay non-negative (see generate_non_negative_int8_binary_inputs).
+bool is_non_negative_int8_binary_op(const std::string& op_name) {
     return op_name == "add_top_row_int32" || op_name == "div_int32_floor" || op_name == "div_int32_trunc" ||
            op_name == "div_int32" || op_name == "fmod_int32" || op_name == "remainder_int32" ||
            op_name == "bitwise_and_binary" || op_name == "bitwise_or_binary" || op_name == "bitwise_xor_binary" ||
            op_name == "rsub_int" || op_name == "sfpu_add_int" || op_name == "int_mask";
 }
 
-const std::map<std::string, std::string>& binary_op_defines(const std::string& op_name);
-
 // Rows 0-3 of faces 0 and 1 in tile order: what sfpu_add_top_row writes (see ckernel_sfpu_add_top_row.h).
 bool is_add_top_row_element(size_t element_in_tile) {
     return element_in_tile < 64 || (element_in_tile >= 256 && element_in_tile < 320);
 }
 
-// Golden for the ported float binary ops; std::nullopt for any other op.
-std::optional<float> ported_sfpu_binary_function(const std::string& op_name, float lhs, float rhs) {
-    const double a = lhs, b = rhs;
-    if (op_name == "power_binary") {
-        return static_cast<float>(std::pow(a, b));
-    }
-    if (op_name == "fmod_binary") {
-        return static_cast<float>(std::fmod(a, b));
-    }
-    if (op_name == "remainder_binary") {
-        return static_cast<float>(a - b * std::floor(a / b));
-    }
-    if (op_name == "logsigmoid") {
-        return static_cast<float>(-std::log1p(std::exp(-a)));
-    }
-    if (op_name == "isclose") {
-        return std::fabs(a - b) <= 1e-8 + 1e-5 * std::fabs(b) ? 1.0f : 0.0f;
-    }
-    if (op_name == "clamped_silu_glu") {
-        const double gate = std::min(a, 10.0), up = std::clamp(b, -10.0, 10.0);
-        return static_cast<float>(gate / (1.0 + std::exp(-gate)) * up);
-    }
-    if (op_name == "situ_glu") {
-        const double sigmoid = 1.0 / (1.0 + std::exp(-a));
-        return static_cast<float>(4.0 * std::tanh(a / 4.0) * sigmoid * 25.0 * std::tanh(b / 25.0));
-    }
-    if (op_name == "mask") {
-        return rhs == 0.0f ? 0.0f : lhs;
-    }
-    if (op_name == "mask_posinf") {
-        return rhs == 0.0f ? std::numeric_limits<float>::infinity() : lhs;
-    }
-    if (op_name == "lgamma_stirling_float") {
-        // The kernel's Stirling series takes log(x) from RHS, which is bf16-rounded: its
-        // (x - 0.5) * log(x) term carries that rounding, so the golden does too.
-        return static_cast<float>(std::lgamma(a) + (a - 0.5) * (b - std::log(a)));
-    }
-    if (op_name == "add_top_row") {
-        return lhs + rhs;  // top rows only; the caller restores the rest
-    }
-    return std::nullopt;
-}
-
-int32_t ported_int_binary_result(const std::string& op_name, int32_t a, int32_t b) {
-    if (op_name == "add_top_row_int32" || op_name == "sfpu_add_int") {
-        return a + b;
-    }
-    if (op_name == "div_int32_floor" || op_name == "div_int32_trunc") {
-        return a / b;  // non-negative operands: floor == trunc
-    }
-    if (op_name == "fmod_int32" || op_name == "remainder_int32") {
-        return a % b;
-    }
-    if (op_name == "bitwise_and_binary") {
-        return a & b;
-    }
-    if (op_name == "bitwise_or_binary") {
-        return a | b;
-    }
-    if (op_name == "bitwise_xor_binary") {
-        return a ^ b;
-    }
-    if (op_name == "rsub_int") {
-        return b - a;
-    }
-    if (op_name == "int_mask") {
-        return b == 0 ? 0 : a;
-    }
-    TT_THROW("Unsupported ported int binary op_name in test");
-}
-
 // Non-negative Int8 operands, packed four per word (sign bit clear, so sign-magnitude == value).
 // Divisors stay >= 1; rsub_int keeps RHS >= LHS so the result is non-negative too.
-std::pair<vector<uint32_t>, vector<uint32_t>> generate_ported_int8_binary_inputs(
+std::pair<vector<uint32_t>, vector<uint32_t>> generate_non_negative_int8_binary_inputs(
     const unsigned int numel, const std::string& op_name, const int seed) {
     std::mt19937 rng(seed);
     const bool divides = op_name.starts_with("div_int32") || op_name == "fmod_int32" || op_name == "remainder_int32";
@@ -811,66 +587,8 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_ported_int8_binary_inputs
     return {lhs, rhs};
 }
 
-// Inputs for the ported float binary ops; std::nullopt for any other op.
-std::optional<std::pair<vector<uint32_t>, vector<uint32_t>>> generate_ported_float_binary_inputs(
-    const unsigned int numel, const std::string& op_name, const int seed) {
-    const auto uniform = [&](float lo, float hi, int s) {
-        return generate_packed_uniform_random_vector<uint32_t, bfloat16>(lo, hi, numel, s);
-    };
-    const auto map_lhs = [&](const vector<uint32_t>& packed_lhs, auto&& fn) {
-        auto values = unpack_vector<bfloat16, uint32_t>(packed_lhs);
-        for (auto& v : values) {
-            v = bfloat16(fn(static_cast<float>(v)));
-        }
-        return pack_vector<uint32_t, bfloat16>(values);
-    };
-    if (op_name == "power_binary") {
-        return std::pair{uniform(0.5f, 4.0f, seed), uniform(-2.0f, 2.0f, seed + 1)};
-    }
-    if (op_name == "fmod_binary" || op_name == "remainder_binary") {
-        auto rhs = map_lhs(
-            uniform(-4.0f, 4.0f, seed + 1), [](float f) { return std::copysign(std::max(std::fabs(f), 0.5f), f); });
-        return std::pair{uniform(-8.0f, 8.0f, seed), rhs};
-    }
-    if (op_name == "logsigmoid") {
-        auto lhs = uniform(-6.0f, 6.0f, seed);
-        return std::pair{lhs, map_lhs(lhs, [](float f) { return std::exp(-f); })};
-    }
-    if (op_name == "isclose") {
-        // Half the lanes equal, half one bf16 step or more apart.
-        auto lhs = uniform(-4.0f, 4.0f, seed);
-        auto rhs = unpack_vector<bfloat16, uint32_t>(lhs);
-        for (size_t i = 0; i < rhs.size(); i += 2) {
-            rhs[i] = bfloat16(static_cast<float>(rhs[i]) * 1.01f + 0.01f);
-        }
-        return std::pair{lhs, pack_vector<uint32_t, bfloat16>(rhs)};
-    }
-    if (op_name == "clamped_silu_glu" || op_name == "situ_glu") {
-        return std::pair{uniform(-12.0f, 12.0f, seed), uniform(-30.0f, 30.0f, seed + 1)};
-    }
-    if (op_name == "mask" || op_name == "mask_posinf") {
-        auto mask_values = vector<bfloat16>({0.0f, 1.0f});
-        return std::pair{
-            uniform(-4.0f, 4.0f, seed),
-            generate_packed_random_vector_from_vector<uint32_t, bfloat16>(mask_values, numel, seed + 1)};
-    }
-    if (op_name == "lgamma_stirling_float") {
-        auto lhs = uniform(0.5f, 8.0f, seed);
-        return std::pair{lhs, map_lhs(lhs, [](float f) { return std::log(f); })};
-    }
-    if (op_name == "add_top_row") {
-        return std::pair{uniform(-4.0f, 4.0f, seed), uniform(-4.0f, 4.0f, seed + 1)};
-    }
-    return std::nullopt;
-}
-
-const std::map<std::string, std::string>& binary_op_defines(const std::string& op_name) {
-    const auto it = sfpu_ported_binary_op_to_op_name.find(op_name);
-    return it != sfpu_ported_binary_op_to_op_name.end() ? it->second : sfpu_binary_op_to_op_name.at(op_name);
-}
-
 bool is_int8_binary_sfpu_op(const std::string& op_name) {
-    return is_ported_int_binary_sfpu_op(op_name) or (op_name == "add_int") or (op_name == "mul_int") or
+    return is_non_negative_int8_binary_op(op_name) or (op_name == "add_int") or (op_name == "mul_int") or
            (op_name == "gt_int") or (op_name == "binary_max_int32") or (op_name == "binary_min_int32") or
            (op_name == "copy_dest_int");
 }
@@ -880,9 +598,7 @@ bool is_int8_binary_sfpu_op(const std::string& op_name) {
 // Float32 consumes it directly. Keeping the math in one place is what lets the
 // two data-format paths stay in sync.
 float sfpu_function(const std::string& op_name, float input) {
-    if (const auto ported = ported_sfpu_function(op_name, input)) {
-        return *ported;
-    }
+    const double d = input;  // for the goldens computed in double
     if (op_name == "relu") {
         return fmaxf(input, 0.0f);
     }
@@ -979,6 +695,161 @@ float sfpu_function(const std::string& op_name, float input) {
         // Round-half-to-even (matches _round_even_). std::round is away-from-zero.
         return std::nearbyint(input);
     }
+    if (op_name == "hardsigmoid") {
+        return std::clamp(input / 6.0f + 0.5f, 0.0f, 1.0f);
+    }
+    if (op_name == "softsign") {
+        return input / (1.0f + std::fabs(input));
+    }
+    if (op_name == "celu" || op_name == "elu") {
+        return input > 0.0f ? input : static_cast<float>(std::expm1(d));
+    }
+    if (op_name == "softshrink") {
+        if (input > 0.5f) {
+            return input - 0.5f;
+        }
+        return input < -0.5f ? input + 0.5f : 0.0f;
+    }
+    if (op_name == "hardshrink") {
+        return std::fabs(input) > 0.5f ? input : 0.0f;
+    }
+    if (op_name == "selu") {
+        constexpr double scale = 1.0507009873554805, alpha = 1.6732632423543772;
+        return static_cast<float>(scale * (input > 0.0f ? d : alpha * std::expm1(d)));
+    }
+    if (op_name == "hardtanh") {
+        return std::clamp(input, -1.0f, 1.0f);
+    }
+    if (op_name == "erf") {
+        return static_cast<float>(std::erf(d));
+    }
+    if (op_name == "erfc") {
+        return static_cast<float>(std::erfc(d));
+    }
+    if (op_name == "erfinv") {
+        // Newton on erf(y) = x from a rough start; |x| < 1 here.
+        double y = 0.0;
+        for (int i = 0; i < 60; ++i) {
+            y -= (std::erf(y) - d) / (M_2_SQRTPI * std::exp(-y * y));
+        }
+        return static_cast<float>(y);
+    }
+    if (op_name == "cbrt") {
+        return std::cbrt(input);
+    }
+    if (op_name == "i0") {
+        return static_cast<float>(bessel_i(0, std::fabs(d)));
+    }
+    if (op_name == "i1") {
+        return static_cast<float>(bessel_i(1, d));
+    }
+    if (op_name == "identity") {
+        return input;
+    }
+    if (op_name == "hardmish") {
+        return input * std::clamp(0.5f * input + 1.0f, 0.0f, 1.0f);
+    }
+    if (op_name == "mish") {
+        return static_cast<float>(d * std::tanh(std::log1p(std::exp(d))));
+    }
+    if (op_name == "isinf") {
+        return std::isinf(input) ? 1.0f : 0.0f;
+    }
+    if (op_name == "isposinf") {
+        return (std::isinf(input) && input > 0.0f) ? 1.0f : 0.0f;
+    }
+    if (op_name == "isneginf") {
+        return (std::isinf(input) && input < 0.0f) ? 1.0f : 0.0f;
+    }
+    if (op_name == "isnan") {
+        return std::isnan(input) ? 1.0f : 0.0f;
+    }
+    if (op_name == "isfinite") {
+        return std::isfinite(input) ? 1.0f : 0.0f;
+    }
+    if (op_name == "lgamma_stirling") {
+        return static_cast<float>(std::lgamma(d));
+    }
+    if (op_name == "digamma") {
+        return static_cast<float>(digamma(d));
+    }
+    if (op_name == "polygamma") {
+        return static_cast<float>(trigamma(d));
+    }
+    if (op_name == "logical_not") {
+        return input == 0.0f ? 1.0f : 0.0f;
+    }
+    if (op_name == "prelu") {
+        return input >= 0.0f ? input : 0.25f * input;
+    }
+    if (op_name == "rdiv") {
+        return 2.0f / input;
+    }
+    if (op_name == "rpow") {
+        return static_cast<float>(std::exp2(d));
+    }
+    if (op_name == "fmod") {
+        return static_cast<float>(std::fmod(d, 2.0));
+    }
+    if (op_name == "remainder") {
+        return static_cast<float>(d - 2.0 * std::floor(d / 2.0));
+    }
+    if (op_name == "tanh_derivative") {
+        const double t = std::tanh(d);
+        return static_cast<float>(1.0 - t * t);
+    }
+    if (op_name == "tanhshrink") {
+        return static_cast<float>(d - std::tanh(d));
+    }
+    if (op_name == "threshold") {
+        return input > 5.0f ? input : 10.0f;
+    }
+    if (op_name == "xielu") {
+        // alpha_p = alpha_n = 1, beta = 0.5 (the kernel's fixed beta).
+        return static_cast<float>(input > 0.0f ? d * d + 0.5 * d : std::expm1(d) - d + 0.5 * d);
+    }
+    if (op_name == "softcap") {
+        return static_cast<float>(5.0 * std::tanh(d / 5.0));
+    }
+    if (op_name == "unary_ne") {
+        return input != 0.5f ? 1.0f : 0.0f;
+    }
+    if (op_name == "unary_eq") {
+        return input == 0.5f ? 1.0f : 0.0f;
+    }
+    if (op_name == "unary_gt") {
+        return input > 0.5f ? 1.0f : 0.0f;
+    }
+    if (op_name == "unary_ge") {
+        return input >= 0.5f ? 1.0f : 0.0f;
+    }
+    if (op_name == "unary_lt") {
+        return input < 0.5f ? 1.0f : 0.0f;
+    }
+    if (op_name == "unary_le") {
+        return input <= 0.5f ? 1.0f : 0.0f;
+    }
+    if (op_name == "power") {
+        return input * input;
+    }
+    if (op_name == "power_iterative") {
+        return input * input * input;
+    }
+    if (op_name == "exp2") {
+        return static_cast<float>(std::exp2(d));
+    }
+    if (op_name == "heaviside") {
+        if (input < 0.0f) {
+            return 0.0f;
+        }
+        return input == 0.0f ? 0.5f : 1.0f;
+    }
+    if (op_name == "expm1") {
+        return static_cast<float>(std::expm1(d));
+    }
+    if (op_name == "log_with_base") {
+        return static_cast<float>(std::log10(d));
+    }
     TT_THROW("Unsupported op_name in test");
 }
 
@@ -987,29 +858,65 @@ bfloat16 sfpu_function(const std::string& op_name, const bfloat16& input) {
 }
 
 // Reference implementation for binary SFPU ops.
-bfloat16 sfpu_binary_function(const std::string& op_name, const bfloat16& lhs, const bfloat16& rhs) {
-    if (const auto ported = ported_sfpu_binary_function(op_name, static_cast<float>(lhs), static_cast<float>(rhs))) {
-        return bfloat16(*ported);
-    }
+bfloat16 sfpu_binary_function(const std::string& op_name, const bfloat16& lhs_bf16, const bfloat16& rhs_bf16) {
+    const float lhs = static_cast<float>(lhs_bf16), rhs = static_cast<float>(rhs_bf16);
+    const double a = lhs, b = rhs;
     if (op_name == "div_binary") {
-        return bfloat16(static_cast<float>(lhs) / static_cast<float>(rhs));
+        return bfloat16(lhs / rhs);
     }
     if (op_name == "mul_float") {
-        return bfloat16(static_cast<float>(lhs) * static_cast<float>(rhs));
+        return bfloat16(lhs * rhs);
     }
     if (op_name == "atan2") {
         // Compute API convention: the first operand is y and the second is x.
-        return bfloat16(std::atan2(static_cast<float>(lhs), static_cast<float>(rhs)));
+        return bfloat16(std::atan2(lhs, rhs));
     }
     if (op_name == "binary_max") {
-        return bfloat16(std::max(static_cast<float>(lhs), static_cast<float>(rhs)));
+        return bfloat16(std::max(lhs, rhs));
     }
     if (op_name == "binary_min") {
-        return bfloat16(std::min(static_cast<float>(lhs), static_cast<float>(rhs)));
+        return bfloat16(std::min(lhs, rhs));
     }
     if (op_name == "copy_dest") {
         // copy_dest_values(1, 0) copies RHS onto DST[0].
-        return rhs;
+        return rhs_bf16;
+    }
+    if (op_name == "power_binary") {
+        return bfloat16(static_cast<float>(std::pow(a, b)));
+    }
+    if (op_name == "fmod_binary") {
+        return bfloat16(static_cast<float>(std::fmod(a, b)));
+    }
+    if (op_name == "remainder_binary") {
+        return bfloat16(static_cast<float>(a - b * std::floor(a / b)));
+    }
+    if (op_name == "logsigmoid") {
+        return bfloat16(static_cast<float>(-std::log1p(std::exp(-a))));
+    }
+    if (op_name == "isclose") {
+        return bfloat16(std::fabs(a - b) <= 1e-8 + 1e-5 * std::fabs(b) ? 1.0f : 0.0f);
+    }
+    if (op_name == "clamped_silu_glu") {
+        const double gate = std::min(a, 10.0), up = std::clamp(b, -10.0, 10.0);
+        return bfloat16(static_cast<float>(gate / (1.0 + std::exp(-gate)) * up));
+    }
+    if (op_name == "situ_glu") {
+        const double sigmoid = 1.0 / (1.0 + std::exp(-a));
+        return bfloat16(static_cast<float>(4.0 * std::tanh(a / 4.0) * sigmoid * 25.0 * std::tanh(b / 25.0)));
+    }
+    if (op_name == "mask") {
+        return bfloat16(rhs == 0.0f ? 0.0f : lhs);
+    }
+    if (op_name == "mask_posinf") {
+        return bfloat16(rhs == 0.0f ? std::numeric_limits<float>::infinity() : lhs);
+    }
+    if (op_name == "lgamma_stirling_float") {
+        // The kernel's Stirling series takes log(x) from RHS, which is bf16-rounded: its
+        // (x - 0.5) * log(x) term carries that rounding, so the golden does too.
+        return bfloat16(static_cast<float>(std::lgamma(a) + (a - 0.5) * (b - std::log(a))));
+    }
+    if (op_name == "add_top_row") {
+        return bfloat16(lhs + rhs);  // top rows only; the caller restores the rest
     }
     TT_THROW("Unsupported binary op_name in test");
 }
@@ -1021,26 +928,30 @@ bfloat16 sfpu_binary_function(const std::string& op_name, const bfloat16& lhs, c
 // acquire/release section. Mirrors the unary pattern where init and compute
 // are both part of the chain.
 const map<std::string, std::map<std::string, std::string>> sfpu_ternary_op_to_op_name = {
-    {"where", {{"SFPU_OP_CHAIN_0", "where_tile_init(); where_tile<DataFormat::Float16_b>(0, 1, 2, 3);"}}},
-    // Quasar SFPI-port ternary ops (Quasar only). mac always writes DST[0], so its result is copied
-    // to DST[3], the tile this runner packs.
+    {"where",
+     {{"SFPU_OP_WHERE_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "where_tile_init(); where_tile<DataFormat::Float16_b>(0, 1, 2, 3);"}}},
+    // mac always writes DST[0], so its result is copied to DST[3], the tile this runner packs.
     {"mac",
-     {{"SFPU_OP_CHAIN_0",
+     {{"SFPU_OP_MAC_INCLUDE", "1"},
+      {"SFPU_OP_COPY_DEST_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0",
        "mac_tile_init<DataFormat::Float16_b>(); mac_tile<DataFormat::Float16_b>(0, 1, 2, 0); "
        "copy_dest_values_init(); copy_dest_values<DataFormat::Float16_b>(0, 3);"}}},
-    {"lerp", {{"SFPU_OP_CHAIN_0", "lerp_tile_init(); lerp_tile<DataFormat::Float16_b>(0, 1, 2, 3);"}}},
+    {"lerp",
+     {{"SFPU_OP_LERP_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "lerp_tile_init(); lerp_tile<DataFormat::Float16_b>(0, 1, 2, 3);"}}},
     // value = 0.5
     {"addcdiv",
-     {{"SFPU_OP_CHAIN_0", "addcdiv_tile_init(); addcdiv_tile<DataFormat::Float16_b>(0, 1, 2, 3, 0x3F000000u);"}}},
+     {{"SFPU_OP_ADDCDIV_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "addcdiv_tile_init(); addcdiv_tile<DataFormat::Float16_b>(0, 1, 2, 3, 0x3F000000u);"}}},
     {"addcmul",
-     {{"SFPU_OP_CHAIN_0", "addcmul_tile_init(); addcmul_tile<DataFormat::Float16_b>(0, 1, 2, 3, 0x3F000000u);"}}},
+     {{"SFPU_OP_ADDCMUL_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "addcmul_tile_init(); addcmul_tile<DataFormat::Float16_b>(0, 1, 2, 3, 0x3F000000u);"}}},
     {"snake_beta",
-     {{"SFPU_OP_CHAIN_0", "snake_beta_tile_init(); snake_beta_tile<DataFormat::Float16_b>(0, 1, 2, 3);"}}},
+     {{"SFPU_OP_SNAKE_BETA_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "snake_beta_tile_init(); snake_beta_tile<DataFormat::Float16_b>(0, 1, 2, 3);"}}},
 };
-
-bool is_ported_ternary_sfpu_op(const std::string& op_name) {
-    return op_name != "where" && sfpu_ternary_op_to_op_name.contains(op_name);
-}
 
 bfloat16 sfpu_ternary_function(
     const std::string& op_name, const bfloat16& in0, const bfloat16& in1, const bfloat16& in2) {
@@ -1071,9 +982,6 @@ bfloat16 sfpu_ternary_function(
 
 // Reference for int8 binary SFPU ops after sign-magnitude decode.
 int32_t get_binary_int_operation_result(const std::string& op_name, int lhs, int rhs) {
-    if (is_ported_int_binary_sfpu_op(op_name)) {
-        return ported_int_binary_result(op_name, lhs, rhs);
-    }
     if (op_name == "add_int") {
         return static_cast<int32_t>(lhs + rhs);
     }
@@ -1091,6 +999,30 @@ int32_t get_binary_int_operation_result(const std::string& op_name, int lhs, int
     }
     if (op_name == "copy_dest_int") {
         return static_cast<int32_t>(rhs);
+    }
+    if (op_name == "add_top_row_int32" || op_name == "sfpu_add_int") {
+        return lhs + rhs;
+    }
+    if (op_name == "div_int32_floor" || op_name == "div_int32_trunc") {
+        return lhs / rhs;  // non-negative operands: floor == trunc
+    }
+    if (op_name == "fmod_int32" || op_name == "remainder_int32") {
+        return lhs % rhs;
+    }
+    if (op_name == "bitwise_and_binary") {
+        return lhs & rhs;
+    }
+    if (op_name == "bitwise_or_binary") {
+        return lhs | rhs;
+    }
+    if (op_name == "bitwise_xor_binary") {
+        return lhs ^ rhs;
+    }
+    if (op_name == "rsub_int") {
+        return rhs - lhs;
+    }
+    if (op_name == "int_mask") {
+        return rhs == 0 ? 0 : lhs;
     }
     TT_THROW("Unsupported int8 binary op_name in test");
 }
@@ -1119,8 +1051,70 @@ std::vector<uint32_t> compute_packed_int8_binary_golden(
     return packed_golden;
 }
 vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std::string& op_name, const int seed) {
-    if (is_ported_unary_sfpu_op(op_name)) {
-        return generate_packed_ported_sfpu_input(numel, op_name, seed);
+    const auto uniform = [&](float lo, float hi) {
+        return generate_packed_uniform_random_vector<uint32_t, bfloat16>(lo, hi, numel, seed);
+    };
+    const auto pick = [&](vector<bfloat16> values) {
+        return generate_packed_random_vector_from_vector<uint32_t, bfloat16>(values, numel, seed);
+    };
+    if (op_name == "isinf" || op_name == "isposinf" || op_name == "isneginf" || op_name == "isnan" ||
+        op_name == "isfinite") {
+        constexpr float inf = std::numeric_limits<float>::infinity();
+        return pick({-inf, inf, std::numeric_limits<float>::quiet_NaN(), -2.0f, -0.5f, 0.0f, 1.0f, 3.0f});
+    }
+    if (op_name.starts_with("unary_")) {
+        // The comparisons are against 0.5: include it and its neighbours.
+        return pick({-1.0f, 0.0f, 0.25f, 0.5f, 0.75f, 1.0f, 2.0f});
+    }
+    if (op_name == "logical_not" || op_name == "heaviside") {
+        return pick({-2.0f, -0.5f, 0.0f, 0.0f, 0.5f, 1.0f, 3.0f});
+    }
+    if (op_name == "erfinv") {
+        return uniform(-0.95f, 0.95f);
+    }
+    if (op_name == "lgamma_stirling" || op_name == "digamma" || op_name == "polygamma") {
+        return uniform(0.5f, 8.0f);
+    }
+    if (op_name == "log_with_base") {
+        return uniform(0.01f, 10.0f);
+    }
+    if (op_name == "rdiv") {
+        auto packed = uniform(-4.0f, 4.0f);
+        auto values = unpack_vector<bfloat16, uint32_t>(packed);
+        for (auto& v : values) {
+            const float f = static_cast<float>(v);
+            v = bfloat16(std::copysign(std::max(std::fabs(f), 0.25f), f));
+        }
+        return pack_vector<uint32_t, bfloat16>(values);
+    }
+    if (op_name == "threshold") {
+        return uniform(0.0f, 10.0f);
+    }
+    if (op_name == "softcap") {
+        return uniform(-20.0f, 20.0f);
+    }
+    if (op_name == "fmod" || op_name == "remainder") {
+        return uniform(-8.0f, 8.0f);
+    }
+    if (op_name == "cbrt") {
+        return uniform(-8.0f, 8.0f);
+    }
+    if (op_name == "mish") {
+        // Both branches (x < 0, x >= 0) and the x >= 8 saturation.
+        return uniform(-10.0f, 10.0f);
+    }
+    if (op_name == "rpow" || op_name == "exp2" || op_name == "hardsigmoid" || op_name == "softsign" ||
+        op_name == "tanh_derivative" || op_name == "i0" || op_name == "i1") {
+        return uniform(-4.0f, 4.0f);
+    }
+    if (op_name == "power_iterative" || op_name == "expm1") {
+        return uniform(-2.0f, 2.0f);
+    }
+    if (op_name == "celu" || op_name == "elu" || op_name == "selu" || op_name == "softshrink" ||
+        op_name == "hardshrink" || op_name == "hardtanh" || op_name == "erf" || op_name == "erfc" ||
+        op_name == "identity" || op_name == "hardmish" || op_name == "prelu" || op_name == "tanhshrink" ||
+        op_name == "xielu" || op_name == "power") {
+        return uniform(-3.0f, 3.0f);
     }
     if (op_name == "tiled_prod") {
         // A lane's running product spans ~33 values: keep them near 1.
@@ -1182,11 +1176,55 @@ static vector<uint32_t> generate_div_operand(const unsigned int numel, const int
 // their signs and magnitudes vary independently.
 std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs(
     const unsigned int numel, const std::string& op_name, const int seed) {
-    if (is_ported_int_binary_sfpu_op(op_name)) {
-        return generate_ported_int8_binary_inputs(numel, op_name, seed);
+    if (is_non_negative_int8_binary_op(op_name)) {
+        return generate_non_negative_int8_binary_inputs(numel, op_name, seed);
     }
-    if (auto ported = generate_ported_float_binary_inputs(numel, op_name, seed)) {
-        return *std::move(ported);
+    const auto uniform = [&](float lo, float hi, int s) {
+        return generate_packed_uniform_random_vector<uint32_t, bfloat16>(lo, hi, numel, s);
+    };
+    const auto map_lhs = [&](const vector<uint32_t>& packed_lhs, auto&& fn) {
+        auto values = unpack_vector<bfloat16, uint32_t>(packed_lhs);
+        for (auto& v : values) {
+            v = bfloat16(fn(static_cast<float>(v)));
+        }
+        return pack_vector<uint32_t, bfloat16>(values);
+    };
+    if (op_name == "power_binary") {
+        return {uniform(0.5f, 4.0f, seed), uniform(-2.0f, 2.0f, seed + 1)};
+    }
+    if (op_name == "fmod_binary" || op_name == "remainder_binary") {
+        auto rhs = map_lhs(
+            uniform(-4.0f, 4.0f, seed + 1), [](float f) { return std::copysign(std::max(std::fabs(f), 0.5f), f); });
+        return {uniform(-8.0f, 8.0f, seed), rhs};
+    }
+    if (op_name == "logsigmoid") {
+        auto lhs = uniform(-6.0f, 6.0f, seed);
+        return {lhs, map_lhs(lhs, [](float f) { return std::exp(-f); })};
+    }
+    if (op_name == "isclose") {
+        // Half the lanes equal, half one bf16 step or more apart.
+        auto lhs = uniform(-4.0f, 4.0f, seed);
+        auto rhs = unpack_vector<bfloat16, uint32_t>(lhs);
+        for (size_t i = 0; i < rhs.size(); i += 2) {
+            rhs[i] = bfloat16(static_cast<float>(rhs[i]) * 1.01f + 0.01f);
+        }
+        return {lhs, pack_vector<uint32_t, bfloat16>(rhs)};
+    }
+    if (op_name == "clamped_silu_glu" || op_name == "situ_glu") {
+        return {uniform(-12.0f, 12.0f, seed), uniform(-30.0f, 30.0f, seed + 1)};
+    }
+    if (op_name == "mask" || op_name == "mask_posinf") {
+        auto mask_values = vector<bfloat16>({0.0f, 1.0f});
+        return {
+            uniform(-4.0f, 4.0f, seed),
+            generate_packed_random_vector_from_vector<uint32_t, bfloat16>(mask_values, numel, seed + 1)};
+    }
+    if (op_name == "lgamma_stirling_float") {
+        auto lhs = uniform(0.5f, 8.0f, seed);
+        return {lhs, map_lhs(lhs, [](float f) { return std::log(f); })};
+    }
+    if (op_name == "add_top_row") {
+        return {uniform(-4.0f, 4.0f, seed), uniform(-4.0f, 4.0f, seed + 1)};
     }
     if (op_name == "div_binary" || op_name == "mul_float") {
         // Reuse the div operand generator: values in [-4,-0.25] ∪ [0.25,4]. For mul this
@@ -1216,7 +1254,8 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs
 // Returns (in0, in1, in2) packed operand vectors for ternary SFPU ops.
 std::tuple<vector<uint32_t>, vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_ternary_inputs(
     const unsigned int numel, const std::string& op_name, const int seed) {
-    if (is_ported_ternary_sfpu_op(op_name)) {
+    if (op_name == "mac" || op_name == "lerp" || op_name == "addcdiv" || op_name == "addcmul" ||
+        op_name == "snake_beta") {
         // in2 is a divisor for addcdiv and snake_beta (beta): keep it in [0.5, 2].
         return {
             generate_packed_uniform_random_vector<uint32_t, bfloat16>(-2.0f, 2.0f, numel, seed),
@@ -1238,9 +1277,11 @@ std::tuple<vector<uint32_t>, vector<uint32_t>, vector<uint32_t>> generate_packed
 // is_close()'s own defaults for the "everything else" bucket.
 std::pair<float, float> sfpu_tolerance(const std::string& op_name, bool fp32_dest = false) {
     if (op_name == "lgamma_stirling_float") {
-        // The kernel's Stirling series (four Bernoulli terms) is ~0.03 off for z just above 0.5,
-        // outside its z ~ 1 and z ~ 2 Taylor windows; the tt-llk port test gates it at 0.05 / 0.05 too.
-        return {0.05f, 0.05f};
+        // The kernel's Stirling series (four Bernoulli terms) is up to ~0.053 off for z just above 0.5,
+        // outside its z ~ 1 and z ~ 2 Taylor windows. The tt-llk test gates it with torch.isclose at
+        // rtol = atol = 0.05, i.e. atol + rtol * |golden| ~ 0.08 there; is_close takes the larger of
+        // the two bounds instead, so atol carries that whole margin.
+        return {0.05f, 0.08f};
     }
     if (op_name == "erfinv" || op_name == "lgamma_stirling" || op_name == "digamma" || op_name == "polygamma" ||
         op_name == "softcap" || op_name == "i0" || op_name == "i1" || op_name == "log_with_base") {
@@ -1281,8 +1322,7 @@ bool is_close_packed_sfpu_output(
         op_name == "copy_dest" || op_name == "mask" || op_name == "mask_posinf" || op_name == "isclose") {
         return vec_a == vec_b;
     }
-    if (op_name == "ceil" || op_name == "floor" || op_name == "trunc" || op_name == "frac" || op_name == "round" ||
-        is_exact_ported_unary_op(op_name)) {
+    if (is_exact_unary_sfpu_op(op_name)) {
         return is_close_packed_vectors<bfloat16, uint32_t>(
             vec_a, vec_b, [](const bfloat16& a, const bfloat16& b) { return a == b; });
     }
@@ -1778,12 +1818,12 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
     } else {
         auto input = unpack_vector<bfloat16, uint32_t>(packed_input);
         std::vector<bfloat16> golden(input.size());
-        if (sfpu_util::is_ported_layout_sfpu_op(test_config.sfpu_op)) {
+        if (sfpu_util::is_tile_layout_sfpu_op(test_config.sfpu_op)) {
             // Dest holds bf16 for a 16-bit Dest; with a 32-bit Dest the partial products stay fp32.
             const auto store = [&](float v) { return test_config.en_32bit_dest ? v : static_cast<float>(bfloat16(v)); };
             for (size_t base = 0; base < input.size(); base += 1024) {
                 std::vector<float> tile(input.begin() + base, input.begin() + base + 1024);
-                const auto out = sfpu_util::ported_layout_tile_golden(test_config.sfpu_op, tile, store);
+                const auto out = sfpu_util::tile_layout_golden(test_config.sfpu_op, tile, store);
                 std::transform(out.begin(), out.end(), golden.begin() + base, [](float v) { return bfloat16(v); });
             }
         } else {
@@ -1794,14 +1834,11 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
         packed_golden = pack_vector<uint32_t, bfloat16>(golden);
     }
 
-    std::map<std::string, std::string> sfpu_defines = sfpu_util::unary_op_defines(test_config.sfpu_op);
+    std::map<std::string, std::string> sfpu_defines = sfpu_util::sfpu_op_to_op_name.at(test_config.sfpu_op);
     sfpu_defines["SFPU_UNARY_OP"] = "1";
-    if (sfpu_util::is_quasar_ported_unary_test_op(test_config.sfpu_op)) {
-        sfpu_defines["SFPU_OP_PORTED_INCLUDES"] = "1";
-        // For chains that take the approximation mode as a template argument (mish_tile): APPROX is
-        // declared only on the math TRISC, so name the fixture's mode as a literal instead.
-        sfpu_defines["SFPU_OP_APPROX"] = test_config.approx_mode ? "true" : "false";
-    }
+    // For chains that take the approximation mode as a template argument (mish_tile): APPROX is
+    // declared only on the math TRISC, so name the fixture's mode as a literal instead.
+    sfpu_defines["SFPU_OP_APPROX"] = test_config.approx_mode ? "true" : "false";
     sfpu_defines["SFPU_OP_EXP_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_GELU_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_RECIP_INCLUDE"] = "1";
@@ -1827,7 +1864,8 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
 bool run_sfpu_int32_unary(distributed::MeshDevice& mesh_device, const SfpuConfig& test_config) {
     const size_t numel = test_config.num_tiles * 1024;
     const auto seed = std::chrono::system_clock::now().time_since_epoch().count();
-    const auto packed_input = sfpu_util::generate_ported_int8_binary_inputs(numel, test_config.sfpu_op, seed).first;
+    const auto packed_input =
+        sfpu_util::generate_non_negative_int8_binary_inputs(numel, test_config.sfpu_op, seed).first;
 
     std::vector<int32_t> values(numel);
     for (size_t i = 0; i < numel; ++i) {
@@ -1837,20 +1875,19 @@ bool run_sfpu_int32_unary(distributed::MeshDevice& mesh_device, const SfpuConfig
     if (test_config.sfpu_op == "sum_int_col" || test_config.sfpu_op == "sum_int_row") {
         for (size_t base = 0; base < numel; base += 1024) {
             const std::vector<int32_t> tile(values.begin() + base, values.begin() + base + 1024);
-            const auto out = sfpu_util::ported_int_layout_tile_golden(test_config.sfpu_op, tile);
+            const auto out = sfpu_util::int_tile_layout_golden(test_config.sfpu_op, tile);
             std::copy(out.begin(), out.end(), expected.begin() + base);
         }
     } else {
         std::transform(values.begin(), values.end(), expected.begin(), [&](int32_t x) {
-            return sfpu_util::ported_int_unary_result(test_config.sfpu_op, x);
+            return sfpu_util::int32_unary_result(test_config.sfpu_op, x);
         });
     }
     std::vector<uint32_t> packed_golden(numel);
     std::transform(expected.begin(), expected.end(), packed_golden.begin(), int32_to_sign_mag_word);
 
-    std::map<std::string, std::string> sfpu_defines = sfpu_util::unary_op_defines(test_config.sfpu_op);
+    std::map<std::string, std::string> sfpu_defines = sfpu_util::sfpu_int32_unary_op_to_op_name.at(test_config.sfpu_op);
     sfpu_defines["SFPU_UNARY_OP"] = "1";
-    sfpu_defines["SFPU_OP_PORTED_INCLUDES"] = "1";
     const auto dest_buffer_data = run_sfpu_pipeline(mesh_device, test_config, sfpu_defines, packed_input);
     return dest_buffer_data == packed_golden;
 }
@@ -1974,32 +2011,8 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
         packed_golden = pack_vector<uint32_t, bfloat16>(golden);
     }
 
-    std::map<std::string, std::string> sfpu_defines = sfpu_util::binary_op_defines(test_config.sfpu_op);
+    std::map<std::string, std::string> sfpu_defines = sfpu_util::sfpu_binary_op_to_op_name.at(test_config.sfpu_op);
     sfpu_defines["SFPU_BINARY_OP"] = "1";
-    if (sfpu_util::is_ported_binary_sfpu_op(test_config.sfpu_op)) {
-        sfpu_defines["SFPU_OP_PORTED_INCLUDES"] = "1";
-    }
-    if (is_int8_op) {
-        if (test_config.sfpu_op == "add_int") {
-            sfpu_defines["SFPU_OP_BINARY_ADD_INT_INCLUDE"] = "1";
-        } else if (test_config.sfpu_op == "mul_int") {
-            sfpu_defines["SFPU_OP_BINARY_MUL_INT_INCLUDE"] = "1";
-        } else if (test_config.sfpu_op == "gt_int") {
-            sfpu_defines["SFPU_OP_BINARY_GT_INT_INCLUDE"] = "1";
-        } else if (test_config.sfpu_op == "copy_dest_int") {
-            sfpu_defines["SFPU_OP_COPY_DEST_INCLUDE"] = "1";
-        } else {
-            sfpu_defines["SFPU_OP_BINARY_MAX_MIN_INCLUDE"] = "1";
-        }
-    } else if (test_config.sfpu_op == "binary_max" || test_config.sfpu_op == "binary_min") {
-        sfpu_defines["SFPU_OP_BINARY_MAX_MIN_INCLUDE"] = "1";
-    } else if (test_config.sfpu_op == "atan2") {
-        sfpu_defines["SFPU_OP_BINARY_ATAN2_INCLUDE"] = "1";
-    } else if (test_config.sfpu_op == "copy_dest") {
-        sfpu_defines["SFPU_OP_COPY_DEST_INCLUDE"] = "1";
-    } else {
-        sfpu_defines["SFPU_OP_BINARY_DIV_INCLUDE"] = "1";
-    }
 
     const auto node = extract_single_core_node(test_config, "Metal 2.0 binary SFPU path");
     const experimental::DFBSpecName IN0_DFB{"in0_dfb"};
@@ -2158,11 +2171,7 @@ bool run_sfpu_ternary_three_input_buffer(distributed::MeshDevice& mesh_device, c
     std::vector<uint32_t> packed_golden = pack_vector<uint32_t, bfloat16>(golden);
 
     std::map<std::string, std::string> sfpu_defines = sfpu_util::sfpu_ternary_op_to_op_name.at(test_config.sfpu_op);
-    sfpu_defines["SFPU_OP_WHERE_INCLUDE"] = "1";
     sfpu_defines["SFPU_TERNARY_OP"] = "1";
-    if (sfpu_util::is_ported_ternary_sfpu_op(test_config.sfpu_op)) {
-        sfpu_defines["SFPU_OP_PORTED_INCLUDES"] = "1";
-    }
 
     std::vector<uint32_t> dest_buffer_data;
     if (mesh_device.arch() == ARCH::QUASAR) {
@@ -2482,31 +2491,11 @@ void run_quasar_sfpu_unpack_to_dest_16b(
     EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_all_same_buffer(dev, cfg));
 }
 
-// Unary SFPU ops with no Quasar compute-API implementation yet: their
-// compute_kernel_api.h / eltwise_unary headers are wrapped in #ifndef ARCH_QUASAR,
-// so building the kernel would fail with "not declared in this scope". Skip them on
-// Quasar so the suite reflects actual coverage instead of a hard kernel-build failure.
-inline bool is_unary_sfpu_op_unsupported_on_quasar([[maybe_unused]] const std::string& sfpu_op) { return false; }
-
-// The ported-op suites run on Quasar only; their ops' Blackhole / Wormhole coverage lives elsewhere.
-inline bool skip_ported_unary_sfpu_op(tt::ARCH arch, const std::string& sfpu_op) {
-    return arch != tt::ARCH::QUASAR && unit_tests::sfpu_util::is_quasar_ported_unary_test_op(sfpu_op);
-}
-
-std::vector<std::tuple<size_t, std::string>> ported_unary_sfpu_params() {
-    std::vector<std::tuple<size_t, std::string>> params;
-    for (const auto* table :
-         {&unit_tests::sfpu_util::sfpu_ported_unary_op_to_op_name,
-          &unit_tests::sfpu_util::sfpu_ported_layout_op_to_op_name}) {
-        for (const auto& [op_name, defines] : *table) {
-            params.emplace_back(1, op_name);
-        }
-    }
-    return params;
-}
-
-std::string sfpu_param_name(const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
-    return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
+// Unary SFPU ops an arch has no compute-API implementation for, so building the kernel would fail
+// with "not declared in this scope". Skip them there so the suite reflects actual coverage instead
+// of a hard kernel-build failure. softcap has kernels on Blackhole and Quasar only (softcap.h).
+inline bool is_unary_sfpu_op_unsupported(tt::ARCH arch, const std::string& sfpu_op) {
+    return arch == tt::ARCH::WORMHOLE_B0 && sfpu_op == "softcap";
 }
 
 class SingleCoreSingleMeshDeviceSfpuParameterizedFixture
@@ -2516,11 +2505,8 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedFixture, TensixSfpuCompute) {
     size_t num_tiles = std::get<0>(GetParam());
     std::string sfpu_op = std::get<1>(GetParam());
 
-    if (arch_ == tt::ARCH::QUASAR && is_unary_sfpu_op_unsupported_on_quasar(sfpu_op)) {
-        GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' has no Quasar compute-API implementation";
-    }
-    if (skip_ported_unary_sfpu_op(arch_, sfpu_op)) {
-        GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' is covered here on Quasar only";
+    if (is_unary_sfpu_op_unsupported(arch_, sfpu_op)) {
+        GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' has no compute-API implementation on this arch";
     }
 
     CoreRange core_range({0, 0}, {0, 0});
@@ -2602,16 +2588,60 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "tanh"),
         std::make_tuple(4, "sign"),
         std::make_tuple(4, "rsqrt"),
-        std::make_tuple(4, "mul_unary")),
+        std::make_tuple(4, "mul_unary"),
+        std::make_tuple(1, "hardsigmoid"),
+        std::make_tuple(1, "softsign"),
+        std::make_tuple(1, "celu"),
+        std::make_tuple(1, "softshrink"),
+        std::make_tuple(1, "hardshrink"),
+        std::make_tuple(1, "elu"),
+        std::make_tuple(1, "selu"),
+        std::make_tuple(1, "hardtanh"),
+        std::make_tuple(1, "erf"),
+        std::make_tuple(1, "erfc"),
+        std::make_tuple(1, "erfinv"),
+        std::make_tuple(1, "cbrt"),
+        std::make_tuple(1, "i0"),
+        std::make_tuple(1, "i1"),
+        std::make_tuple(1, "identity"),
+        std::make_tuple(1, "hardmish"),
+        std::make_tuple(1, "mish"),
+        std::make_tuple(1, "isinf"),
+        std::make_tuple(1, "isposinf"),
+        std::make_tuple(1, "isneginf"),
+        std::make_tuple(1, "isnan"),
+        std::make_tuple(1, "isfinite"),
+        std::make_tuple(1, "lgamma_stirling"),
+        std::make_tuple(1, "digamma"),
+        std::make_tuple(1, "polygamma"),
+        std::make_tuple(1, "logical_not"),
+        std::make_tuple(1, "prelu"),
+        std::make_tuple(1, "rdiv"),
+        std::make_tuple(1, "rpow"),
+        std::make_tuple(1, "fmod"),
+        std::make_tuple(1, "remainder"),
+        std::make_tuple(1, "tanh_derivative"),
+        std::make_tuple(1, "tanhshrink"),
+        std::make_tuple(1, "threshold"),
+        std::make_tuple(1, "xielu"),
+        std::make_tuple(1, "softcap"),
+        std::make_tuple(1, "unary_ne"),
+        std::make_tuple(1, "unary_eq"),
+        std::make_tuple(1, "unary_gt"),
+        std::make_tuple(1, "unary_ge"),
+        std::make_tuple(1, "unary_lt"),
+        std::make_tuple(1, "unary_le"),
+        std::make_tuple(1, "power"),
+        std::make_tuple(1, "power_iterative"),
+        std::make_tuple(1, "exp2"),
+        std::make_tuple(1, "heaviside"),
+        std::make_tuple(1, "expm1"),
+        std::make_tuple(1, "log_with_base"),
+        std::make_tuple(1, "tiled_prod"),
+        std::make_tuple(1, "alt_complex_rotate90")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
-
-INSTANTIATE_TEST_SUITE_P(
-    QuasarPortedSfpuCompute,
-    SingleCoreSingleMeshDeviceSfpuParameterizedFixture,
-    ::testing::ValuesIn(ported_unary_sfpu_params()),
-    sfpu_param_name);
 
 class SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture
     : public LLKMeshDeviceFixture,
@@ -2621,11 +2651,8 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture, TensixSfpuCompu
     size_t num_tiles = std::get<0>(GetParam());
     std::string sfpu_op = std::get<1>(GetParam());
 
-    if (arch_ == tt::ARCH::QUASAR && is_unary_sfpu_op_unsupported_on_quasar(sfpu_op)) {
-        GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' has no Quasar compute-API implementation";
-    }
-    if (skip_ported_unary_sfpu_op(arch_, sfpu_op)) {
-        GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' is covered here on Quasar only";
+    if (is_unary_sfpu_op_unsupported(arch_, sfpu_op)) {
+        GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' has no compute-API implementation on this arch";
     }
     if (((arch_ == tt::ARCH::WORMHOLE_B0) && (sfpu_op == "relu" || sfpu_op == "relu_min" || sfpu_op == "relu_max")) ||
         ((arch_ == tt::ARCH::WORMHOLE_B0) && (sfpu_op == "exponential")) ||
@@ -2678,16 +2705,60 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "tanh"),
         std::make_tuple(4, "sign"),
         std::make_tuple(4, "rsqrt"),
-        std::make_tuple(4, "mul_unary")),
+        std::make_tuple(4, "mul_unary"),
+        std::make_tuple(1, "hardsigmoid"),
+        std::make_tuple(1, "softsign"),
+        std::make_tuple(1, "celu"),
+        std::make_tuple(1, "softshrink"),
+        std::make_tuple(1, "hardshrink"),
+        std::make_tuple(1, "elu"),
+        std::make_tuple(1, "selu"),
+        std::make_tuple(1, "hardtanh"),
+        std::make_tuple(1, "erf"),
+        std::make_tuple(1, "erfc"),
+        std::make_tuple(1, "erfinv"),
+        std::make_tuple(1, "cbrt"),
+        std::make_tuple(1, "i0"),
+        std::make_tuple(1, "i1"),
+        std::make_tuple(1, "identity"),
+        std::make_tuple(1, "hardmish"),
+        std::make_tuple(1, "mish"),
+        std::make_tuple(1, "isinf"),
+        std::make_tuple(1, "isposinf"),
+        std::make_tuple(1, "isneginf"),
+        std::make_tuple(1, "isnan"),
+        std::make_tuple(1, "isfinite"),
+        std::make_tuple(1, "lgamma_stirling"),
+        std::make_tuple(1, "digamma"),
+        std::make_tuple(1, "polygamma"),
+        std::make_tuple(1, "logical_not"),
+        std::make_tuple(1, "prelu"),
+        std::make_tuple(1, "rdiv"),
+        std::make_tuple(1, "rpow"),
+        std::make_tuple(1, "fmod"),
+        std::make_tuple(1, "remainder"),
+        std::make_tuple(1, "tanh_derivative"),
+        std::make_tuple(1, "tanhshrink"),
+        std::make_tuple(1, "threshold"),
+        std::make_tuple(1, "xielu"),
+        std::make_tuple(1, "softcap"),
+        std::make_tuple(1, "unary_ne"),
+        std::make_tuple(1, "unary_eq"),
+        std::make_tuple(1, "unary_gt"),
+        std::make_tuple(1, "unary_ge"),
+        std::make_tuple(1, "unary_lt"),
+        std::make_tuple(1, "unary_le"),
+        std::make_tuple(1, "power"),
+        std::make_tuple(1, "power_iterative"),
+        std::make_tuple(1, "exp2"),
+        std::make_tuple(1, "heaviside"),
+        std::make_tuple(1, "expm1"),
+        std::make_tuple(1, "log_with_base"),
+        std::make_tuple(1, "tiled_prod"),
+        std::make_tuple(1, "alt_complex_rotate90")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
-
-INSTANTIATE_TEST_SUITE_P(
-    QuasarPortedSfpuCompute,
-    SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture,
-    ::testing::ValuesIn(ported_unary_sfpu_params()),
-    sfpu_param_name);
 
 class SingleCoreSingleMeshDeviceSfpuParameterized32BitDestFixture
     : public LLKMeshDeviceFixture,
@@ -2696,11 +2767,8 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterized32BitDestFixture, TensixSfpuCo
     size_t num_tiles = std::get<0>(GetParam());
     std::string sfpu_op = std::get<1>(GetParam());
 
-    if (arch_ == tt::ARCH::QUASAR && is_unary_sfpu_op_unsupported_on_quasar(sfpu_op)) {
-        GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' has no Quasar compute-API implementation";
-    }
-    if (skip_ported_unary_sfpu_op(arch_, sfpu_op)) {
-        GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' is covered here on Quasar only";
+    if (is_unary_sfpu_op_unsupported(arch_, sfpu_op)) {
+        GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' has no compute-API implementation on this arch";
     }
 
     CoreRange core_range({0, 0}, {0, 0});
@@ -2767,16 +2835,60 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "log"),
         std::make_tuple(4, "tanh"),
         std::make_tuple(4, "sign"),
-        std::make_tuple(4, "rsqrt")),
+        std::make_tuple(4, "rsqrt"),
+        std::make_tuple(1, "hardsigmoid"),
+        std::make_tuple(1, "softsign"),
+        std::make_tuple(1, "celu"),
+        std::make_tuple(1, "softshrink"),
+        std::make_tuple(1, "hardshrink"),
+        std::make_tuple(1, "elu"),
+        std::make_tuple(1, "selu"),
+        std::make_tuple(1, "hardtanh"),
+        std::make_tuple(1, "erf"),
+        std::make_tuple(1, "erfc"),
+        std::make_tuple(1, "erfinv"),
+        std::make_tuple(1, "cbrt"),
+        std::make_tuple(1, "i0"),
+        std::make_tuple(1, "i1"),
+        std::make_tuple(1, "identity"),
+        std::make_tuple(1, "hardmish"),
+        std::make_tuple(1, "mish"),
+        std::make_tuple(1, "isinf"),
+        std::make_tuple(1, "isposinf"),
+        std::make_tuple(1, "isneginf"),
+        std::make_tuple(1, "isnan"),
+        std::make_tuple(1, "isfinite"),
+        std::make_tuple(1, "lgamma_stirling"),
+        std::make_tuple(1, "digamma"),
+        std::make_tuple(1, "polygamma"),
+        std::make_tuple(1, "logical_not"),
+        std::make_tuple(1, "prelu"),
+        std::make_tuple(1, "rdiv"),
+        std::make_tuple(1, "rpow"),
+        std::make_tuple(1, "fmod"),
+        std::make_tuple(1, "remainder"),
+        std::make_tuple(1, "tanh_derivative"),
+        std::make_tuple(1, "tanhshrink"),
+        std::make_tuple(1, "threshold"),
+        std::make_tuple(1, "xielu"),
+        std::make_tuple(1, "softcap"),
+        std::make_tuple(1, "unary_ne"),
+        std::make_tuple(1, "unary_eq"),
+        std::make_tuple(1, "unary_gt"),
+        std::make_tuple(1, "unary_ge"),
+        std::make_tuple(1, "unary_lt"),
+        std::make_tuple(1, "unary_le"),
+        std::make_tuple(1, "power"),
+        std::make_tuple(1, "power_iterative"),
+        std::make_tuple(1, "exp2"),
+        std::make_tuple(1, "heaviside"),
+        std::make_tuple(1, "expm1"),
+        std::make_tuple(1, "log_with_base"),
+        std::make_tuple(1, "tiled_prod"),
+        std::make_tuple(1, "alt_complex_rotate90")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
-
-INSTANTIATE_TEST_SUITE_P(
-    QuasarPortedSfpuCompute,
-    SingleCoreSingleMeshDeviceSfpuParameterized32BitDestFixture,
-    ::testing::ValuesIn(ported_unary_sfpu_params()),
-    sfpu_param_name);
 
 class SingleCoreSingleMeshDeviceSfpuParameterized32BitDestApproxFixture
     : public LLKMeshDeviceFixture,
@@ -2786,11 +2898,8 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterized32BitDestApproxFixture, Tensix
     size_t num_tiles = std::get<0>(GetParam());
     std::string sfpu_op = std::get<1>(GetParam());
 
-    if (arch_ == tt::ARCH::QUASAR && is_unary_sfpu_op_unsupported_on_quasar(sfpu_op)) {
-        GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' has no Quasar compute-API implementation";
-    }
-    if (skip_ported_unary_sfpu_op(arch_, sfpu_op)) {
-        GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' is covered here on Quasar only";
+    if (is_unary_sfpu_op_unsupported(arch_, sfpu_op)) {
+        GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' has no compute-API implementation on this arch";
     }
     if (((arch_ == tt::ARCH::WORMHOLE_B0) && (sfpu_op == "relu" || sfpu_op == "relu_min" || sfpu_op == "relu_max")) ||
         ((arch_ == tt::ARCH::WORMHOLE_B0) && (sfpu_op == "exponential")) ||
@@ -2842,16 +2951,60 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "log"),
         std::make_tuple(4, "tanh"),
         std::make_tuple(4, "sign"),
-        std::make_tuple(4, "rsqrt")),
+        std::make_tuple(4, "rsqrt"),
+        std::make_tuple(1, "hardsigmoid"),
+        std::make_tuple(1, "softsign"),
+        std::make_tuple(1, "celu"),
+        std::make_tuple(1, "softshrink"),
+        std::make_tuple(1, "hardshrink"),
+        std::make_tuple(1, "elu"),
+        std::make_tuple(1, "selu"),
+        std::make_tuple(1, "hardtanh"),
+        std::make_tuple(1, "erf"),
+        std::make_tuple(1, "erfc"),
+        std::make_tuple(1, "erfinv"),
+        std::make_tuple(1, "cbrt"),
+        std::make_tuple(1, "i0"),
+        std::make_tuple(1, "i1"),
+        std::make_tuple(1, "identity"),
+        std::make_tuple(1, "hardmish"),
+        std::make_tuple(1, "mish"),
+        std::make_tuple(1, "isinf"),
+        std::make_tuple(1, "isposinf"),
+        std::make_tuple(1, "isneginf"),
+        std::make_tuple(1, "isnan"),
+        std::make_tuple(1, "isfinite"),
+        std::make_tuple(1, "lgamma_stirling"),
+        std::make_tuple(1, "digamma"),
+        std::make_tuple(1, "polygamma"),
+        std::make_tuple(1, "logical_not"),
+        std::make_tuple(1, "prelu"),
+        std::make_tuple(1, "rdiv"),
+        std::make_tuple(1, "rpow"),
+        std::make_tuple(1, "fmod"),
+        std::make_tuple(1, "remainder"),
+        std::make_tuple(1, "tanh_derivative"),
+        std::make_tuple(1, "tanhshrink"),
+        std::make_tuple(1, "threshold"),
+        std::make_tuple(1, "xielu"),
+        std::make_tuple(1, "softcap"),
+        std::make_tuple(1, "unary_ne"),
+        std::make_tuple(1, "unary_eq"),
+        std::make_tuple(1, "unary_gt"),
+        std::make_tuple(1, "unary_ge"),
+        std::make_tuple(1, "unary_lt"),
+        std::make_tuple(1, "unary_le"),
+        std::make_tuple(1, "power"),
+        std::make_tuple(1, "power_iterative"),
+        std::make_tuple(1, "exp2"),
+        std::make_tuple(1, "heaviside"),
+        std::make_tuple(1, "expm1"),
+        std::make_tuple(1, "log_with_base"),
+        std::make_tuple(1, "tiled_prod"),
+        std::make_tuple(1, "alt_complex_rotate90")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
-
-INSTANTIATE_TEST_SUITE_P(
-    QuasarPortedSfpuCompute,
-    SingleCoreSingleMeshDeviceSfpuParameterized32BitDestApproxFixture,
-    ::testing::ValuesIn(ported_unary_sfpu_params()),
-    sfpu_param_name);
 
 // Binary SFPU parameterized test fixture (mirrors the unary fixture above).
 //
@@ -2871,7 +3024,7 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture, TensixSfpuBinar
 
     if (MetalContext::instance().get_cluster().arch() == ARCH::WORMHOLE_B0 ||
         MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
-        GTEST_SKIP() << "Binary SFPU op test (div_binary / add_int / mul_int / gt_int) not fixed for WH/BH";
+        GTEST_SKIP() << "Binary SFPU op test not fixed for WH/BH";
     }
 
     // add_int/mul_int: Int8 L1 inputs promoted to sign-mag Int32 output. div_binary stays bfloat16.
@@ -2915,25 +3068,33 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "binary_max_int32"),
         std::make_tuple(1, "binary_min_int32"),
         std::make_tuple(1, "copy_dest"),
-        std::make_tuple(1, "copy_dest_int")),
+        std::make_tuple(1, "copy_dest_int"),
+        std::make_tuple(1, "power_binary"),
+        std::make_tuple(1, "fmod_binary"),
+        std::make_tuple(1, "remainder_binary"),
+        std::make_tuple(1, "logsigmoid"),
+        std::make_tuple(1, "isclose"),
+        std::make_tuple(1, "clamped_silu_glu"),
+        std::make_tuple(1, "situ_glu"),
+        std::make_tuple(1, "mask"),
+        std::make_tuple(1, "mask_posinf"),
+        std::make_tuple(1, "lgamma_stirling_float"),
+        std::make_tuple(1, "add_top_row"),
+        std::make_tuple(1, "add_top_row_int32"),
+        std::make_tuple(1, "div_int32_floor"),
+        std::make_tuple(1, "div_int32_trunc"),
+        std::make_tuple(1, "div_int32"),
+        std::make_tuple(1, "fmod_int32"),
+        std::make_tuple(1, "remainder_int32"),
+        std::make_tuple(1, "bitwise_and_binary"),
+        std::make_tuple(1, "bitwise_or_binary"),
+        std::make_tuple(1, "bitwise_xor_binary"),
+        std::make_tuple(1, "rsub_int"),
+        std::make_tuple(1, "sfpu_add_int"),
+        std::make_tuple(1, "int_mask")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
-
-std::vector<std::tuple<size_t, std::string>> ported_binary_sfpu_params() {
-    std::vector<std::tuple<size_t, std::string>> params;
-    params.reserve(unit_tests::sfpu_util::sfpu_ported_binary_op_to_op_name.size());
-    for (const auto& [op_name, defines] : unit_tests::sfpu_util::sfpu_ported_binary_op_to_op_name) {
-        params.emplace_back(1, op_name);
-    }
-    return params;
-}
-
-INSTANTIATE_TEST_SUITE_P(
-    QuasarPortedSfpuBinaryCompute,
-    SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture,
-    ::testing::ValuesIn(ported_binary_sfpu_params()),
-    sfpu_param_name);
 
 class SingleCoreSingleMeshDeviceSfpuTernaryParameterizedFixture
     : public LLKMeshDeviceFixture,
@@ -2945,7 +3106,7 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuTernaryParameterizedFixture, TensixSfpuTern
 
     if (MetalContext::instance().get_cluster().arch() == ARCH::WORMHOLE_B0 ||
         MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
-        GTEST_SKIP() << "Ternary where op test not fixed for WH/BH";
+        GTEST_SKIP() << "Ternary SFPU op test not fixed for WH/BH";
     }
 
     CoreRange core_range({0, 0}, {0, 0});
@@ -2967,32 +3128,29 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuTernaryParameterizedFixture, TensixSfpuTern
 INSTANTIATE_TEST_SUITE_P(
     SingleCoreSfpuTernaryCompute,
     SingleCoreSingleMeshDeviceSfpuTernaryParameterizedFixture,
-    ::testing::Values(std::make_tuple(1, "where")),
-    [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
-        return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
-    });
-
-INSTANTIATE_TEST_SUITE_P(
-    QuasarPortedSfpuTernaryCompute,
-    SingleCoreSingleMeshDeviceSfpuTernaryParameterizedFixture,
     ::testing::Values(
+        std::make_tuple(1, "where"),
         std::make_tuple(1, "mac"),
         std::make_tuple(1, "lerp"),
         std::make_tuple(1, "addcdiv"),
         std::make_tuple(1, "addcmul"),
         std::make_tuple(1, "snake_beta")),
-    sfpu_param_name);
+    [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
+        return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
+    });
 
-// Int32 unary ops (Quasar SFPI port). Int8 L1 -> 32-bit Dest -> Int32 L1; 16-bit Dest cannot hold them,
-// so there is no bf16 / approx split.
-class QuasarPortedSfpuInt32UnaryFixture : public LLKMeshDeviceFixture,
-                                          public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
+// Int32 unary ops: Int8 L1 -> 32-bit Dest -> Int32 L1; 16-bit Dest cannot hold them, so there is no
+// bf16 / approx split.
+class SingleCoreSingleMeshDeviceSfpuInt32UnaryParameterizedFixture
+    : public LLKMeshDeviceFixture,
+      public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
 
-TEST_P(QuasarPortedSfpuInt32UnaryFixture, TensixSfpuCompute) {
+TEST_P(SingleCoreSingleMeshDeviceSfpuInt32UnaryParameterizedFixture, TensixSfpuCompute) {
     const size_t num_tiles = std::get<0>(GetParam());
     const std::string sfpu_op = std::get<1>(GetParam());
-    if (arch_ != tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "Quasar SFPI-port Int32 unary ops are tested on Quasar only";
+    // Same Int8 -> sign-magnitude Int32 Dest path as the binary integer ops.
+    if (arch_ == tt::ARCH::WORMHOLE_B0 || arch_ == tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Int32 unary SFPU op test not fixed for WH/BH";
     }
     CoreRange core_range({0, 0}, {0, 0});
     unit_tests::compute::sfpu::SfpuConfig test_config = {
@@ -3010,20 +3168,22 @@ TEST_P(QuasarPortedSfpuInt32UnaryFixture, TensixSfpuCompute) {
     }
 }
 
-std::vector<std::tuple<size_t, std::string>> ported_int_unary_sfpu_params() {
-    std::vector<std::tuple<size_t, std::string>> params;
-    params.reserve(unit_tests::sfpu_util::sfpu_ported_int_unary_op_to_op_name.size());
-    for (const auto& [op_name, defines] : unit_tests::sfpu_util::sfpu_ported_int_unary_op_to_op_name) {
-        params.emplace_back(1, op_name);
-    }
-    return params;
-}
-
 INSTANTIATE_TEST_SUITE_P(
-    QuasarPortedSfpuCompute,
-    QuasarPortedSfpuInt32UnaryFixture,
-    ::testing::ValuesIn(ported_int_unary_sfpu_params()),
-    sfpu_param_name);
+    SingleCoreSfpuCompute,
+    SingleCoreSingleMeshDeviceSfpuInt32UnaryParameterizedFixture,
+    ::testing::Values(
+        std::make_tuple(1, "bitwise_and"),
+        std::make_tuple(1, "bitwise_or"),
+        std::make_tuple(1, "bitwise_xor"),
+        std::make_tuple(1, "left_shift"),
+        std::make_tuple(1, "right_shift"),
+        std::make_tuple(1, "rsub_unary_int32"),
+        std::make_tuple(1, "logical_not_int32"),
+        std::make_tuple(1, "sum_int_col"),
+        std::make_tuple(1, "sum_int_row")),
+    [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
+        return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
+    });
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuRelu) {
     // 1 and 4-tile, SyncFull and SyncHalf
