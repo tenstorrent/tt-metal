@@ -77,10 +77,18 @@ def test_t2va_performance(mesh_device, reset_seeds, aspect_ratio, duration_s):
             "from the total either way, but the run will take far longer than the reported compute."
         )
 
+    from .bench_recipe_env import recipe_from_env, recipe_tag
+
+    bench_precision, bench_kv = recipe_from_env()
+    prompt = os.environ.get("H3_PROMPT", prompt)
+    if is_host():
+        logger.info(f"bench recipe={recipe_tag()} prompt={prompt!r}")
     pipeline = MiniMaxH3Pipeline.create_pipeline(
         mesh_device=mesh_device,
         weights_dir=weights,
         vae_output_type="yuv420",
+        sdpa_precision=bench_precision,
+        sdpa_kv_dtype=bench_kv,
     )
 
     benchmark_profiler = BenchmarkProfiler()
@@ -115,7 +123,7 @@ def test_t2va_performance(mesh_device, reset_seeds, aspect_ratio, duration_s):
         ttnn.distributed_context_barrier()
     if is_host():
         artifacts = artifact_dir("h3_t2va_artifacts")
-        stem = f"t2va_{aspect_ratio[0]}x{aspect_ratio[1]}_{WIDTH}x{HEIGHT}_{duration_s}s"
+        stem = f"t2va_{aspect_ratio[0]}x{aspect_ratio[1]}_{WIDTH}x{HEIGHT}_{duration_s}s_{recipe_tag()}"
         frames = frames_for_export(output)
         write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem)
 

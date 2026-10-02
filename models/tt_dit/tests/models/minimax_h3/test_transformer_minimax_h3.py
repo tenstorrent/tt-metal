@@ -1103,6 +1103,9 @@ def test_minimax_h3_transformer_block_perf(
         cfg_parallel=None,
     )
 
+    from .bench_recipe_env import recipe_from_env, recipe_tag
+
+    bench_precision, bench_kv = recipe_from_env()
     tt_block = MiniMaxH3TransformerBlock(
         **TT_BLOCK_CONFIG,
         rotary_dim=2 * 3 * ROPE_FREQ_DIM,
@@ -1110,6 +1113,8 @@ def test_minimax_h3_transformer_block_perf(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         is_fsdp=is_fsdp,
+        sdpa_precision=bench_precision,
+        sdpa_kv_dtype=bench_kv,
     )
     tt_block.load_torch_state_dict(torch_block.state_dict())
     del torch_block
@@ -1148,6 +1153,19 @@ def test_minimax_h3_transformer_block_perf(
     signpost("start")
     tt_out = run_block()
     signpost("stop")
+
+    # Bench only: wall time of warm blocks (host dispatch included; untraced, as the 4x8 pipeline runs).
+    iters = int(os.environ.get("H3_BLOCK_ITERS", "0"))
+    if iters:
+        start = time.time()
+        for _ in range(iters):
+            tt_out = run_block()
+        per_block = (time.time() - start) / iters
+        logger.info(
+            f"BLOCKPERF recipe={recipe_tag()} duration={duration_s:g}s text={num_text_tokens} sim={SIM} "
+            f"rows/device={padded_len // sp_factor} ms/block={per_block * 1000:.2f} "
+            f"projected ms/step (50 blocks)={per_block * 50 * 1000:.0f}"
+        )
 
     assert tuple(tt_out.shape) == (
         1,

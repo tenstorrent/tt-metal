@@ -2502,6 +2502,19 @@ class MiniMaxH3Pipeline:
                 t_first = t_step
             else:
                 t_steady += t_step
+            # Bench only (not for merge): H3_DUMP_DIR + H3_DUMP_LATENT_STEPS="1,10,25,50" save the
+            # latents after those steps, outside the step timer.
+            _dump_dir = os.environ.get("H3_DUMP_DIR")
+            if _dump_dir and str(i + 1) in os.environ.get("H3_DUMP_LATENT_STEPS", "").split(","):
+                ttnn.synchronize_device(self.mesh_device)
+                os.makedirs(_dump_dir, exist_ok=True)
+                torch.save(
+                    {
+                        "video": local_device_to_torch(self._tt_video.value).float().cpu(),
+                        "audio": local_device_to_torch(self._tt_audio.value).float().cpu(),
+                    },
+                    os.path.join(_dump_dir, f"step{i + 1:03d}.pt"),
+                )
             on_event(DenoiseStep(step=i + 1, total=len(timesteps), sigma=float(t)))
 
         state.warm = True
