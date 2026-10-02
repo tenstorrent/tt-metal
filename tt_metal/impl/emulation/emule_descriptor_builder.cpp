@@ -13,6 +13,7 @@
 #include <set>
 #include <string>
 #include <tuple>
+#include <unordered_map>
 #include <type_traits>
 
 #include "impl/buffers/circular_buffer.hpp"
@@ -375,6 +376,14 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
     // Per-core CB / DFB / semaphore setup (init_core_cb_sync / allocate_dfbs_on_core / init_core_semaphores).
     // logical_cores() returns one vector per programmable core type; the outer index IS the pct.
     const auto logical_cores = impl.logical_cores();
+    // Creation order is the order prep_kernel's set_cb/dfb_data_fmt_and_tile visit them.
+    std::unordered_map<const void*, uint32_t> cb_creation_index, dfb_creation_index;
+    for (const auto& cb : impl.circular_buffers()) {
+        cb_creation_index.emplace(cb.get(), cb_creation_index.size());
+    }
+    for (const auto& dfb : impl.dataflow_buffers()) {
+        dfb_creation_index.emplace(dfb.get(), dfb_creation_index.size());
+    }
     for (uint32_t pct = 0; pct < logical_cores.size(); ++pct) {
         for (const tt::tt_metal::CoreCoord& core : logical_cores[pct]) {
             CoreDescriptor cs;
@@ -390,19 +399,25 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 cd.address = cb->address();
                 cd.total_size = cb->size();
                 cd.globally_allocated = cb->globally_allocated();
+                cd.creation_index = cb_creation_index.at(cb.get());
                 for (uint8_t idx : cb->local_buffer_indices()) {
                     CbBuffer b;
                     b.index = idx;
                     b.page_size = cb->page_size(idx);
                     b.num_pages = cb->num_pages(idx);
-                    const auto fmt = cb->data_format(idx);
-                    b.data_format = static_cast<uint32_t>(fmt);
-                    // Apply silicon's tile/face precedence here (marshaller has the live Tile);
-                    // the POD carries only the resolved primitives. Mirrors build_kernel_defines.
-                    const tt::tt_metal::emule::ResolvedTileGeometry g =
-                        tt::tt_metal::emule::resolve_tile_geometry(cb->tile(idx), cb->unpack_face_geometry(idx));
-                    b.geom = to_resolved_geom(g, fmt);
                     cd.buffers.push_back(std::move(b));
+                }
+                // set_cb_data_fmt_and_tile's slots: every buffer index, local and remote. Silicon's
+                // tile/face precedence is applied here (marshaller has the live Tile).
+                for (uint8_t idx : cb->buffer_indices()) {
+                    const auto fmt = cb->data_format(idx);
+                    const auto& tile = cb->tile(idx);
+                    const auto& face = cb->unpack_face_geometry(idx);
+                    cd.geom_slots.push_back(CbGeomSlot{
+                        idx,
+                        static_cast<uint32_t>(fmt),
+                        tile.has_value() || face.has_value(),
+                        to_resolved_geom(tt::tt_metal::emule::resolve_tile_geometry(tile, face), fmt)});
                 }
                 cs.cbs.push_back(std::move(cd));
             }
@@ -414,6 +429,7 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 const auto& c = dfb->config;
                 DfbDescriptor dd;
                 dd.device_slot = dfb->device_slot;
+                dd.creation_index = dfb_creation_index.at(dfb.get());
                 dd.entry_size = c.entry_size;
                 dd.num_entries = c.num_entries;
                 dd.num_producers = c.num_producers;
@@ -428,6 +444,7 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                     const tt::tt_metal::emule::ResolvedTileGeometry g =
                         tt::tt_metal::emule::resolve_tile_geometry(c.tile, std::nullopt);
                     dd.geom = to_resolved_geom(g, c.data_format);
+                    dd.sets_tile_dims = c.tile.has_value();
                 }
                 auto cl = dfb->core_lookup_.find(core);
                 dd.has_finalize = (cl != dfb->core_lookup_.end());
