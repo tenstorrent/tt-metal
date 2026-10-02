@@ -1020,10 +1020,11 @@ class TTGptOssForCausalLM:
         reuse_sampling = can_reuse_sampling and self._last_sampling_key == key
         if reuse_sampling:
             sampling_params_for_device = None
+        reload_page_table = reload_page_table or self._ring_tables_dirty
         with self._route_page_tables(
             page_tables_per_layer,
             page_table,
-            update_persistent=reload_inputs or reload_page_table or bucket_changed or self._ring_tables_dirty,
+            update_persistent=reload_inputs or reload_page_table or bucket_changed,
         ):
             result = generator.decode_forward(
                 torch.as_tensor(tokens),
@@ -1033,9 +1034,10 @@ class TTGptOssForCausalLM:
                 enable_trace=enable_trace,
                 sampling_mode="device" if device_sampling else "host",
                 sampling_params=sampling_params_for_device,
-                reset_batch=reset_sampling_state or bucket_changed or recapture_reset,
-                force_host_tokens=force_host_tokens,
-                reload_inputs=force_host_tokens,
+                reload_inputs=force_host_tokens or not enable_trace,
+                reload_page_table=reload_page_table,
+                reload_sampling_params=reload_sampling_params or bucket_changed or recapture_reset,
+                reset_sampling_state=reset_sampling_state or bucket_changed or recapture_reset,
                 prompt_tokens=prompt_tokens,
                 output_tokens=output_tokens,
                 slot_remap=slot_remap,

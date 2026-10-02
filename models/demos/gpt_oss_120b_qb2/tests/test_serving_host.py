@@ -15,6 +15,7 @@ from models.demos.gpt_oss.tt.model import Model as GptOssModel
 from models.demos.gpt_oss_120b_qb2.tt.generator import Generator, TraceEvidence
 from models.demos.gpt_oss_120b_qb2.tt.generator_vllm import TTGptOssForCausalLM
 from models.demos.gpt_oss_120b_qb2.tt.model import decode_trace_buckets
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.generator import Generator as SharedGenerator
 
 
@@ -56,8 +57,7 @@ def test_teardown_calls_canonical_idempotent_release_once():
 
 @pytest.mark.parametrize("width", [1, 4, 8, 32])
 @pytest.mark.parametrize("read_from_device", [False, True])
-@pytest.mark.parametrize("force_host_tokens", [False, True])
-def test_synchronous_host_decode_preserves_full_vocabulary(width, read_from_device, force_host_tokens):
+def test_synchronous_host_decode_preserves_full_vocabulary(width, read_from_device):
     generator = object.__new__(Generator)
     generator.model_args = SimpleNamespace(max_batch_size=32, max_context_len=131072)
     generator._inner = host_logits_inner()
@@ -76,11 +76,13 @@ def test_synchronous_host_decode_preserves_full_vocabulary(width, read_from_devi
         kv_cache=[object()],
         enable_trace=False,
         sampling_mode="host",
-        force_host_tokens=force_host_tokens,
+        reload_inputs=True,
+        reload_page_table=False,
+        reload_sampling_params=False,
+        reset_sampling_state=False,
         read_from_device=read_from_device,
     )
-    if force_host_tokens:
-        assert generator._inner._slots_prefilled_since_decode == set(range(width))
+    assert generator._inner.decode_forward.call_args.kwargs["reload_inputs"] is True
     assert generator._inner.decode_forward.call_args.kwargs["read_from_device"] is False
     if read_from_device:
         generator._inner.read_decode_output.assert_called_once_with(device_output)
@@ -301,3 +303,269 @@ def test_host_prefill_matches_shared_padding_and_preserves_logical_outputs(logic
     assert torch.count_nonzero(prepared[:, logical_len:]) == 0
     expected = all_logits[0, 0, :logical_len] if return_all_logits else all_logits[0, 0, logical_len - 1 : logical_len]
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+def decode_contract_generator():
+    """Use the production shared decode body, with device operations replaced."""
+    generator = object.__new__(Generator)
+    generator.model_args = SimpleNamespace(max_batch_size=32, max_context_len=131072)
+    generator.trace_evidence = TraceEvidence()
+    generator._decode_started = False
+    generator._prepared_device_sampling_params = None
+    model = SimpleNamespace(switch_mode=Mock())
+    inner = SimpleNamespace(
+        model=[model],
+        data_parallel=1,
+        mode=Mode.DECODE,
+        _decode_forward_trace_text=Mock(return_value=object()),
+        _decode_forward_no_trace_text=Mock(return_value=object()),
+        sample_decode_on_device=Mock(side_effect=lambda logits, **kwargs: logits),
+        _apply_sampling_slot_remap=Mock(),
+        read_decode_output=Mock(side_effect=lambda output: output),
+        process_decode_output_host=Mock(side_effect=lambda output, **kwargs: (output, None)),
+    )
+    inner.decode_forward = MethodType(SharedGenerator.decode_forward, inner)
+    generator._inner = inner
+    generator._sampling_has_active_request_seed = Mock(return_value=False)
+    generator._replay_prepared_sampling = Mock(side_effect=lambda logits, **kwargs: logits)
+    return generator
+
+
+def contract_decode(generator, **overrides):
+    args = dict(
+        tokens=torch.tensor([[7], [9]]),
+        start_pos=torch.tensor([31, 63]),
+        page_table=torch.tensor([[3, 4], [5, 6]], dtype=torch.int32),
+        kv_cache=[],
+        read_from_device=False,
+        reload_inputs=False,
+        reload_page_table=False,
+        reload_sampling_params=False,
+        reset_sampling_state=False,
+    )
+    args.update(overrides)
+    return generator.decode_forward(**args)
+
+
+@pytest.mark.parametrize(
+    "reload_inputs,reload_page_table", [(False, False), (False, True), (True, False), (True, True)]
+)
+@pytest.mark.parametrize("reload_sampling_params,reset_sampling_state", [(False, False), (True, False), (True, True)])
+def test_decode_commands_reach_shared_model_and_sampler(
+    reload_inputs, reload_page_table, reload_sampling_params, reset_sampling_state
+):
+    generator = decode_contract_generator()
+    prompt = torch.tensor([[1, 2], [3, 4]])
+    output = torch.tensor([[8], [10]])
+    contract_decode(
+        generator,
+        reload_inputs=reload_inputs,
+        reload_page_table=reload_page_table,
+        reload_sampling_params=reload_sampling_params,
+        reset_sampling_state=reset_sampling_state,
+        prompt_tokens=prompt,
+        output_tokens=output,
+        slot_remap=[0, 1],
+    )
+    model_call = generator._inner._decode_forward_trace_text.call_args.kwargs
+    assert model_call["reload_inputs"] is reload_inputs
+    assert model_call["reload_page_table"] is reload_page_table
+    sampler_call = generator._inner.sample_decode_on_device.call_args.kwargs
+    assert sampler_call["reload_sampling_params"] is reload_sampling_params
+    assert sampler_call["reset_sampling_state"] is reset_sampling_state
+    assert sampler_call["reload_inputs"] is reload_inputs
+    assert sampler_call["prompt_tokens"] is prompt
+    assert sampler_call["output_tokens"] is output
+    assert sampler_call["slot_remap"] == [0, 1]
+    assert generator.trace_evidence.token_input_host_refreshes == int(reload_inputs)
+    assert generator.trace_evidence.page_table_only_refreshes == int(reload_page_table and not reload_inputs)
+    assert generator.trace_evidence.sampling_state_host_refreshes == int(reload_sampling_params)
+
+
+@pytest.mark.parametrize("mode", ["device", "host"])
+def test_eager_decode_requires_authoritative_inputs(mode):
+    generator = decode_contract_generator()
+    with pytest.raises(ValueError, match="reload_inputs=True"):  # allow-pytest.raises: host-only, no device conftest
+        contract_decode(generator, enable_trace=False, sampling_mode=mode)
+    contract_decode(generator, enable_trace=False, sampling_mode=mode, reload_inputs=True)
+    generator._inner._decode_forward_no_trace_text.assert_called_once()
+    generator._inner._decode_forward_trace_text.assert_not_called()
+
+
+@pytest.mark.parametrize("page_only", [False, True])
+def test_fixed_sampling_replay_preserves_parameter_and_history_state(page_only):
+    generator = decode_contract_generator()
+    contract_decode(generator, reload_inputs=True, reload_sampling_params=True, reset_sampling_state=True)
+    generator._inner.sample_decode_on_device.reset_mock()
+    contract_decode(generator, reload_page_table=page_only, reuse_sampling_state=True, slot_remap=[0, 1])
+    generator._inner.sample_decode_on_device.assert_not_called()
+    generator._replay_prepared_sampling.assert_called_once()
+    assert generator._inner._decode_forward_trace_text.call_args.kwargs["reload_page_table"] is page_only
+    assert generator.trace_evidence.sampling_state_host_refreshes == 1
+
+
+@pytest.mark.parametrize("command", ["reload_inputs", "reload_sampling_params", "reset_sampling_state"])
+def test_fixed_sampling_replay_rejects_state_changes(command):
+    generator = decode_contract_generator()
+    contract_decode(generator, reload_inputs=True, reload_sampling_params=True)
+    with pytest.raises(ValueError, match="change sampling state"):  # allow-pytest.raises: host-only, no device conftest
+        contract_decode(generator, reuse_sampling_state=True, **{command: True})
+
+
+def test_fixed_sampling_replay_rejects_remap_or_active_request_seed():
+    generator = decode_contract_generator()
+    contract_decode(generator, reload_inputs=True, reload_sampling_params=True)
+    with pytest.raises(ValueError, match="unchanged slot layout"):  # allow-pytest.raises: host-only, no device conftest
+        contract_decode(generator, reuse_sampling_state=True, slot_remap=[1, 0])
+    generator._sampling_has_active_request_seed.return_value = True
+    with pytest.raises(RuntimeError, match="explicit request seeds"):  # allow-pytest.raises: CPU-only
+        contract_decode(generator, reuse_sampling_state=True)
+
+
+def test_decode_warmup_uses_shared_commands_without_request_history_reset():
+    generator = decode_contract_generator()
+    generator._inner._create_decode_warmup_inputs = Mock(
+        return_value=(torch.zeros(2, 1), torch.zeros(2), torch.zeros(2, 2, dtype=torch.int32))
+    )
+    params = object()
+    generator._inner._create_sampling_params = Mock(return_value=[None, params])
+    generator.warmup_model_decode(
+        kv_cache=[], enable_trace=True, max_batch_size=2, num_blocks=2, can_sample_on_device=True
+    )
+    generator._inner._decode_forward_trace_text.assert_called_once()
+    kwargs = generator._inner.sample_decode_on_device.call_args.kwargs
+    assert kwargs["reload_inputs"] is True
+    assert kwargs["reload_sampling_params"] is True
+    assert kwargs["reset_sampling_state"] is False
+
+
+@pytest.mark.parametrize("reload_inputs", [False, True])
+def test_page_only_reload_preserves_async_tokens_and_positions(reload_inputs, monkeypatch):
+    buffers = [torch.tensor([[71]]), torch.tensor([91]), torch.tensor([92]), torch.tensor([[1, 2]])]
+    inner = SimpleNamespace(
+        data_parallel=1,
+        model=[SimpleNamespace(prepare_decode_inputs_host=lambda token, pos, page: [token, pos, pos + 1, page])],
+        model_args=[SimpleNamespace(mesh_device=object())],
+        trace_ids_decode={True: {0: 123}},
+        trace_inputs_decode={True: [buffers]},
+        trace_output_decode={True: object()},
+    )
+
+    def copy_inputs(*, host_tensors, device_tensors):
+        for host, device in zip(host_tensors, device_tensors):
+            device.copy_(host)
+
+    monkeypatch.setitem(SharedGenerator._decode_forward_trace_text.__globals__, "copy_host_to_device", copy_inputs)
+    monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", lambda host, device: device.copy_(host))
+    monkeypatch.setattr(ttnn, "execute_trace", Mock())
+    SharedGenerator._decode_forward_trace_text(
+        inner,
+        [torch.tensor([[7]])],
+        [torch.tensor([11])],
+        page_table=[torch.tensor([[3, 4]])],
+        on_device_sampling=True,
+        reload_inputs=reload_inputs,
+        reload_page_table=True,
+    )
+    assert buffers[0].item() == (7 if reload_inputs else 71)
+    assert buffers[1].item() == (11 if reload_inputs else 91)
+    assert buffers[2].item() == (12 if reload_inputs else 92)
+    assert buffers[3].tolist() == [[3, 4]]
+    ttnn.execute_trace.assert_called_once()
+
+
+@pytest.mark.parametrize("ring_dirty", [False, True])
+@pytest.mark.parametrize("recapture", [False, True])
+@pytest.mark.parametrize("reload_page_table", [False, True])
+@pytest.mark.parametrize("reload_sampling_params,reset_sampling_state", [(False, False), (True, False), (True, True)])
+def test_vllm_adapter_forwards_explicit_state_commands(
+    reload_page_table, reload_sampling_params, reset_sampling_state, ring_dirty, recapture
+):
+    from collections import defaultdict
+    from contextlib import contextmanager
+
+    generator = decode_contract_generator()
+    adapter = object.__new__(TTGptOssForCausalLM)
+    adapter._require_generator = lambda: generator
+    adapter._transition_sampling_lifecycle = Mock()
+    adapter._device_trace_recapture_requires_reset = recapture
+    adapter._decode_bucket = Mock(return_value=2)
+    adapter._active_decode_bucket = 2
+    adapter._slice_page_tables = lambda tables, bucket: tables
+    adapter._apply_ring_slot_remap = Mock()
+    adapter._sampling_state_reusable = Mock(return_value=False)
+    adapter._last_sampling_key = None
+    adapter._ring_tables_dirty = ring_dirty
+    adapter.serving_counters = defaultdict(int)
+
+    @contextmanager
+    def route(*args, **kwargs):
+        # Production routing clears this marker before yielding.
+        adapter._ring_tables_dirty = False
+        yield
+
+    adapter._route_page_tables = route
+    adapter.decode_forward(
+        tokens=torch.tensor([[7], [9]]),
+        start_pos=torch.tensor([31, 63]),
+        page_table=torch.tensor([[3, 4], [5, 6]], dtype=torch.int32),
+        kv_cache=[],
+        sampling_params=SimpleNamespace(temperature=1.0, top_k=10, top_p=0.9),
+        read_from_device=False,
+        reload_inputs=reset_sampling_state,
+        reload_page_table=reload_page_table,
+        reload_sampling_params=reload_sampling_params,
+        reset_sampling_state=reset_sampling_state,
+    )
+    trace = generator._inner._decode_forward_trace_text.call_args.kwargs
+    sampler = generator._inner.sample_decode_on_device.call_args.kwargs
+    assert trace["reload_inputs"] is (reset_sampling_state or recapture)
+    assert trace["reload_page_table"] is (reload_page_table or ring_dirty)
+    assert sampler["reload_sampling_params"] is (reload_sampling_params or recapture)
+    assert sampler["reset_sampling_state"] is (reset_sampling_state or recapture)
+    assert adapter._device_trace_recapture_requires_reset is False
+
+
+@pytest.mark.parametrize("teacher_forced", [False, True])
+def test_standalone_generation_reloads_teacher_tokens_but_preserves_free_run(teacher_forced):
+    generator = decode_contract_generator()
+    generator.reset = Mock()
+    generator._kv_cache = []
+    generator._require_private_page_table = Mock(return_value=torch.tensor([[3, 4]], dtype=torch.int32))
+    generator._device_prefill_sample = Mock(return_value=5)
+    generator._eos_token_ids = Mock(return_value=set())
+    generator._inner._decode_forward_trace_text.return_value = torch.tensor([7])
+    generator._write_runtime_evidence = Mock()
+    generator._trace_handles_before_measurement = {}
+    generator._warmed_before_measurement = False
+    output = generator.generate([1, 2], 3, next_input=(lambda step, token: 20 + step) if teacher_forced else None)
+    assert output == [5, 7, 7]
+    calls = generator._inner._decode_forward_trace_text.call_args_list
+    assert [call.kwargs["reload_inputs"] for call in calls] == [True, teacher_forced]
+    assert [int(call.kwargs["tokens"][0][0, 0]) for call in calls] == ([20, 21] if teacher_forced else [5, 5])
+    assert [
+        call.kwargs["reset_sampling_state"] for call in generator._inner.sample_decode_on_device.call_args_list
+    ] == [
+        True,
+        teacher_forced,
+    ]
+
+
+def test_split_token_out_initializes_once_then_uses_current_deferred_contract():
+    generator = decode_contract_generator()
+    generator.reset = Mock()
+    generator._kv_cache = []
+    generator._require_private_page_table = Mock(return_value=torch.tensor([[3, 4]], dtype=torch.int32))
+    generator._device_prefill_sample = Mock(return_value=5)
+    generator.read_decode_output = Mock(return_value=torch.tensor([7]))
+    metrics = generator.run_device_token_out(
+        [1, 2], 3, sampling_params=SimpleNamespace(seed=None, temperature=0.0, top_k=1, top_p=1.0)
+    )
+    assert metrics["output_tokens"] == 3
+    assert metrics["final_token"] == 7
+    assert generator._inner.sample_decode_on_device.call_count == 1
+    generator._replay_prepared_sampling.assert_called_once()
+    assert [call.kwargs["reload_inputs"] for call in generator._inner._decode_forward_trace_text.call_args_list] == [
+        True,
+        False,
+    ]

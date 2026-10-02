@@ -14,12 +14,12 @@ variable-bucket path. Full quality, matched baseline/performance, weekly CI and
 two-cycle reopen qualification remain unfinished. The source package's accuracy
 and throughput numbers are not validation of this code.
 
-**Execution blocker:** current main's shared `Generator.decode_forward` requires
-`reload_page_table`, `reload_sampling_params` and `reset_sampling_state`. The
-imported adapter still uses the earlier `reset_batch` contract. Reconcile those
-callers and validate the combined prerequisite tree before running the recipes
-below. No compatibility fallback or runtime policy change is implied by this
-draft.
+The model's decode wrapper and vLLM adapter use current main's explicit input,
+page-table and sampling-state commands. Source-method host regressions cover
+async token feedback, page-only refresh, teacher forcing, trace recapture and
+sampling-state reuse. These checks use CPU tensors and mock device operations;
+they do not qualify execution on this tree. Integrate the separately reviewed
+prerequisites and validate the combined tree before running the recipes below.
 
 ## Configuration
 
@@ -163,7 +163,7 @@ python -m vllm.entrypoints.openai.api_server \
 
 The tested serving configuration reserves 16,384 bytes of small L1. The default
 zero-reserve path has a retained failure and is not qualified. The command above
-still requires current-main API reconciliation and the separate prerequisites.
+still requires the separate prerequisites and combined-tree device validation.
 
 The model declares its ring fabric requirement before the plugin opens the mesh.
 For bulk throughput, set `GPT_OSS_120B_CHUNK_WARMUP=32768`, pass

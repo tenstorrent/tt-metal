@@ -141,8 +141,6 @@ class Generator:
         # latent and physically invalid fallback for the serving path.
         self._page_table = self.allocate_page_table() if cache_owner == "model" else None
         self._dirty_cache = False
-        self._last_page_table: torch.Tensor | None = None
-        self._last_sampling_mode: str | None = None
         self._decode_started = False
         self._prepared_device_sampling_params: SamplingParams | None = None
         self._compiled_prefill_variants: set[tuple[int, int, int, str]] = set()
@@ -637,14 +635,10 @@ class Generator:
             return_all_logits=True,
         )
 
-    def _record_decode_staging(self, *, page_table, sampling_mode, enable_trace, reset_batch):
-        current = page_table.clone()
-        changed = self._last_page_table is None or not torch.equal(self._last_page_table, current)
-        mode_changed = self._last_sampling_mode is not None and self._last_sampling_mode != sampling_mode
+    def _record_decode_staging(self, *, reload_inputs, reload_page_table):
         was_started = self._decode_started
-        full_refresh = sampling_mode == "host" or reset_batch or not was_started or mode_changed
         self.trace_evidence.decode_calls += 1
-        if full_refresh:
+        if reload_inputs:
             self.trace_evidence.full_input_refreshes += 1
             self.trace_evidence.token_input_host_refreshes += 1
             self.trace_evidence.position_rope_host_refreshes += 1
@@ -653,14 +647,13 @@ class Generator:
                 self.trace_evidence.steady_token_input_host_refreshes += 1
                 self.trace_evidence.steady_position_rope_host_refreshes += 1
                 self.trace_evidence.steady_page_table_host_refreshes += 1
-        elif changed:
+        elif reload_page_table:
             self.trace_evidence.page_table_only_refreshes += 1
             self.trace_evidence.page_table_host_refreshes += 1
-            self.trace_evidence.steady_page_table_host_refreshes += 1
+            if was_started:
+                self.trace_evidence.steady_page_table_host_refreshes += 1
         else:
             self.trace_evidence.page_table_reuses += 1
-        self._last_page_table = current
-        self._last_sampling_mode = sampling_mode
         self._decode_started = True
 
     def decode_forward(
@@ -673,9 +666,10 @@ class Generator:
         enable_trace: bool = True,
         sampling_mode: str = "device",
         sampling_params: SamplingParams | None = None,
-        reset_batch: bool = False,
-        force_host_tokens: bool = False,
-        reload_inputs: bool = False,
+        reload_inputs: bool,
+        reload_page_table: bool,
+        reload_sampling_params: bool,
+        reset_sampling_state: bool,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
         slot_remap=None,
@@ -683,7 +677,6 @@ class Generator:
         read_from_device: bool = True,
         reuse_sampling_state: bool = False,
         reuse_greedy_sampling_state: bool = False,
-        **kwargs: Any,
     ):
         """Decode active and inactive rows through the explicit serving state.
 
@@ -693,10 +686,15 @@ class Generator:
         ``reuse_sampling_state=True`` replays both traces without copying
         unchanged k/p/temperature state from the host. Explicit request seeds
         are deliberately excluded because they require a per-token seed update.
+        Reload commands follow the shared generator contract: host tokens and
+        positions are authoritative only with ``reload_inputs=True``; a
+        page-only update preserves device-produced async state. Fixed sampling
+        replay requires unchanged parameters, history and slot layout.
         ``reuse_greedy_sampling_state`` remains as a compatibility alias.
         """
 
-        del kwargs
+        if not enable_trace and not reload_inputs:
+            raise ValueError("Non-traced decode requires reload_inputs=True")
         if sampling_mode not in {"device", "host"}:
             raise ValueError(f"sampling_mode must be 'device' or 'host', got {sampling_mode!r}")
         if tokens.ndim != 2 or tokens.shape[1] != 1:
@@ -716,8 +714,12 @@ class Generator:
             raise ValueError("fixed sampling-state reuse is valid only for device sampling")
         if reuse_fixed_sampling and not enable_trace:
             raise ValueError("fixed sampling-state reuse requires enable_trace=True")
-        if reuse_fixed_sampling and (reset_batch or force_host_tokens):
-            raise ValueError("fixed sampling replay cannot reset the batch or force host tokens")
+        if reuse_fixed_sampling and (reload_inputs or reload_sampling_params or reset_sampling_state):
+            raise ValueError("fixed sampling replay cannot reload inputs or change sampling state")
+        if reuse_fixed_sampling and slot_remap is not None:
+            remap = torch.as_tensor(slot_remap).reshape(-1)
+            if not torch.equal(remap, torch.arange(remap.numel(), device=remap.device)):
+                raise ValueError("fixed sampling replay requires an unchanged slot layout")
         prepared_sampling_params = getattr(self, "_prepared_device_sampling_params", None)
         if reuse_fixed_sampling and prepared_sampling_params is None:
             raise RuntimeError("initialize unseeded device sampling once before reusing its persistent state")
@@ -725,21 +727,7 @@ class Generator:
             raise RuntimeError("reuse_greedy_sampling_state requires canonical greedy persistent state")
         if reuse_fixed_sampling and self._sampling_has_active_request_seed():
             raise RuntimeError("fixed traced sampling-state reuse does not support explicit request seeds")
-        self._record_decode_staging(
-            page_table=page_table_host,
-            sampling_mode=sampling_mode,
-            enable_trace=enable_trace,
-            reset_batch=reset_batch,
-        )
-        if force_host_tokens:
-            # The shared generator normally preserves an async-ahead token that
-            # device sampling wrote into the persistent decode input.  Teacher
-            # forcing is the one case where the caller's token is authoritative.
-            # Mark these fixed slots as freshly supplied so its reset path copies
-            # the host token/position rather than silently continuing free-run.
-            if not hasattr(self._inner, "_slots_prefilled_since_decode"):
-                self._inner._slots_prefilled_since_decode = set()
-            self._inner._slots_prefilled_since_decode.update(range(tokens.shape[0]))
+        self._record_decode_staging(reload_inputs=reload_inputs, reload_page_table=reload_page_table)
         if reuse_fixed_sampling:
             result = self._inner.decode_forward(
                 tokens=tokens,
@@ -750,10 +738,12 @@ class Generator:
                 read_from_device=False,
                 sampling_params=None,
                 defer_device_sampling=True,
-                reset_batch=False,
                 slot_remap=slot_remap,
                 skip_trace_precompile=skip_trace_precompile,
                 reload_inputs=reload_inputs,
+                reload_page_table=reload_page_table,
+                reload_sampling_params=reload_sampling_params,
+                reset_sampling_state=reset_sampling_state,
             )
             if enable_trace:
                 self.trace_evidence.model_execute_submissions += 1
@@ -776,12 +766,14 @@ class Generator:
                 # width. Host logits must use this submission's bucket width.
                 read_from_device=read_from_device and sampling_mode == "device",
                 sampling_params=effective_sampling_params,
-                reset_batch=reset_batch,
                 prompt_tokens=prompt_tokens,
                 output_tokens=output_tokens,
                 slot_remap=slot_remap,
                 skip_trace_precompile=skip_trace_precompile,
                 reload_inputs=reload_inputs,
+                reload_page_table=reload_page_table,
+                reload_sampling_params=reload_sampling_params,
+                reset_sampling_state=reset_sampling_state,
             )
             if enable_trace:
                 self.trace_evidence.model_execute_submissions += 1
@@ -792,10 +784,11 @@ class Generator:
                 if sampling_mode == "device" and not self._sampling_has_active_request_seed():
                     self.trace_evidence.sampling_execute_submissions += 1
             if sampling_mode == "device":
-                self.trace_evidence.sampling_state_host_refreshes += 1
-                self._prepared_device_sampling_params = (
-                    None if self._sampling_has_active_request_seed() else effective_sampling_params
-                )
+                self.trace_evidence.sampling_state_host_refreshes += int(reload_sampling_params)
+                if self._sampling_has_active_request_seed():
+                    self._prepared_device_sampling_params = None
+                elif reload_sampling_params:
+                    self._prepared_device_sampling_params = effective_sampling_params
         self._dirty_cache = True
         if sampling_mode == "device":
             self.trace_evidence.device_token_out_submissions += 1
@@ -991,7 +984,10 @@ class Generator:
                     enable_trace=True,
                     read_from_device=False,
                     sampling_params=params,
-                    reset_batch=True,
+                    reload_inputs=True,
+                    reload_page_table=False,
+                    reload_sampling_params=True,
+                    reset_sampling_state=False,
                     prompt_tokens=tokens,
                     skip_trace_precompile=skip_trace_precompile,
                 )
@@ -1079,7 +1075,10 @@ class Generator:
                 enable_trace=True,
                 sampling_mode="device",
                 sampling_params=sampling_params,
-                reset_batch=True,
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=True,
+                reset_sampling_state=True,
                 prompt_tokens=prompt,
                 read_from_device=False,
             )
@@ -1093,6 +1092,10 @@ class Generator:
                     kv_cache=self._kv_cache,
                     enable_trace=True,
                     sampling_mode="device",
+                    reload_inputs=False,
+                    reload_page_table=False,
+                    reload_sampling_params=False,
+                    reset_sampling_state=False,
                     reuse_sampling_state=True,
                     read_from_device=False,
                 )
@@ -1239,8 +1242,10 @@ class Generator:
                 enable_trace=enable_trace,
                 sampling_mode=sampling_mode,
                 sampling_params=effective_sampling_params,
-                reset_batch=(step == 1 or teacher_forced),
-                force_host_tokens=teacher_forced,
+                reload_inputs=step == 1 or teacher_forced or sampling_mode == "host" or not enable_trace,
+                reload_page_table=False,
+                reload_sampling_params=sampling_mode == "device",
+                reset_sampling_state=sampling_mode == "device" and (step == 1 or teacher_forced),
                 prompt_tokens=prompt if step == 1 else None,
             )
             if sampling_mode == "device":
@@ -1357,8 +1362,6 @@ class Generator:
         self._inner.prev_page_table = None
         self._inner._prev_on_device_sampling = None
         self._inner._slots_prefilled_since_decode = set()
-        self._last_page_table = None
-        self._last_sampling_mode = None
         self._decode_started = False
         self._prepared_device_sampling_params = None
         self.trace_evidence = TraceEvidence()
