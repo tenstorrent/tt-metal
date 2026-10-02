@@ -264,6 +264,17 @@ TEST_F(McastFixture, DefaultEmptyAndDisabledHandshakes) {
     EXPECT_ANY_THROW((Mcast(*device_, McastConfig{.handshake = false, .handshake_cores = empty}, receivers, 2)));
 }
 
+TEST_F(McastFixture, RejectsRotatingFlagWithoutHandshake) {
+    const auto receivers = grid({0, 0}, {1, 0});
+    EXPECT_ANY_THROW((Mcast(*device_, McastConfig{.handshake = false}, receivers, 2, McastRotatingSenderConfig{})));
+    EXPECT_NO_THROW((Mcast(
+        *device_,
+        McastConfig{.handshake = false, .data_ready = dataflow_kernel_lib::DataReadySignal::Counter},
+        receivers,
+        2,
+        McastRotatingSenderConfig{})));
+}
+
 TEST_F(McastFixture, RejectsInvalidGroupingAndSchedules) {
     const auto receivers = grid({0, 0}, {3, 0});
     for (uint32_t size : {0u, 3u, 5u}) {
