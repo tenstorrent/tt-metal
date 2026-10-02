@@ -18,8 +18,9 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 
+#include <tt-metalium/experimental/sockets/hd_socket_descriptor.hpp>
+
 #include "tt_metal/distributed/hd_socket_connector_state.hpp"
-#include "tt_metal/distributed/hd_socket_descriptor.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 
 namespace tt::tt_metal::experimental {
