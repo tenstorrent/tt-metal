@@ -34,5 +34,6 @@ tests:
     why: "dispatch -> combine round trip (dispatch stays the original), ring 4x1 2-link: 8 model shapes at seq 640, TILE and ROW_MAJOR dispatched buffer, predictable and random data"
   - path: models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_dispatch_combine_l1_small_semaphores.py
     k: "combine-torus"
+    mesh: [4, 1]
     unskip: "unfeasible on the given hardware"
     why: "combine's global semaphore in L1_SMALL vs default L1 on a fragmented L1, ring 4x1"
