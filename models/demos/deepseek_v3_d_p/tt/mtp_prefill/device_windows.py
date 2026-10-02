@@ -55,6 +55,25 @@ class MTPSplitChipLookahead:
         """The lookahead for the chunk ``[chunk_start, chunk_end)``, or None when no real row's window needs one:
         every chip holds one run, or the chunk ends ``num_levels`` or more before the next chip's first position.
         ``sp_rank`` holds each chip's SP rank; ``all_gather_sp`` gathers a tile per chip over SP, in SP order."""
+        geometry = cls.geometry(chunk_start, window_len, sp_factor, chunk_end=chunk_end, num_levels=num_levels)
+        if geometry is None:
+            return None
+        split_row, split_chip, next_chip = geometry
+        return cls(
+            split_row=split_row,
+            split_chip_mask=ttnn.eq(sp_rank, float(split_chip)),
+            other_chips_mask=ttnn.ne(sp_rank, float(split_chip)),
+            next_chip=next_chip,
+            all_gather_sp=all_gather_sp,
+        )
+
+    @staticmethod
+    def geometry(
+        chunk_start: int, window_len: int, sp_factor: int, *, chunk_end: int, num_levels: int
+    ) -> Optional[tuple]:
+        """``(split_row, split_chip, next_chip)`` for the chunk ``[chunk_start, chunk_end)``, or None when
+        :meth:`for_chunk_start` needs no lookahead. ``next_chip`` is None when the split chip's own lookahead
+        slots hold the positions after ``split_row``."""
         offset = chunk_start % window_len
         if sp_factor == 1 or offset == 0:
             return None
@@ -67,13 +86,8 @@ class MTPSplitChipLookahead:
             return None
         split_chip = (chunk_start // window_len) % sp_factor
         slots = mtp_lookahead_positions(chunk_start, sp_factor, window_len, chunk_end, num_levels)[split_chip]
-        return cls(
-            split_row=split_row,
-            split_chip_mask=ttnn.eq(sp_rank, float(split_chip)),
-            other_chips_mask=ttnn.ne(sp_rank, float(split_chip)),
-            next_chip=None if slots[0] == chunk_start + split_row else (split_chip + 1) % sp_factor,
-            all_gather_sp=all_gather_sp,
-        )
+        next_chip = None if slots[0] == chunk_start + split_row else (split_chip + 1) % sp_factor
+        return split_row, split_chip, next_chip
 
     def rows(self, union_rows: ttnn.Tensor, window_len: int) -> ttnn.Tensor:
         """The ``[1, 1, 32, H/tp]`` ROW_MAJOR rows a window places just before ``split_row``, from ``union_rows``
@@ -197,6 +211,40 @@ class MTPUnionEmbedding:
                 ttnn.deallocate(piece)
         window = ttnn.to_layout(rows, ttnn.TILE_LAYOUT)
         ttnn.deallocate(rows)
+        return window
+
+    def blended_window(self, shift: int, geometry, all_gather_sp, compute_kernel_config) -> ttnn.Tensor:
+        """:meth:`window` with the split-chip lookahead taken from ``geometry``'s device tensors instead of host
+        ints, so one program serves every chunk. Bit-identical to :meth:`window` with the matching lookahead."""
+        assert self._split_chip_lookahead is None, "blended_window takes its lookahead from geometry"
+        plain = self.window(shift)
+        if not geometry.has_split_chip:
+            return plain
+        k, tile = shift - 1, ttnn.TILE_SIZE
+        union, temp = self._current()
+        s = list(union.shape)
+        tail = ttnn.slice(union, [0, 0, self.window_len, 0], [s[0], s[1], self.window_len + tile, s[3]])
+        head = ttnn.slice(union, [0, 0, 0, 0], [s[0], s[1], tile, s[3]])
+        if temp:
+            ttnn.deallocate(union)
+        heads = all_gather_sp(head)
+        ttnn.deallocate(head)
+        next_head = ttnn.matmul(geometry.next_select, heads, compute_kernel_config=compute_kernel_config)
+        ttnn.deallocate(heads)
+        from_tail = ttnn.multiply(tail, geometry.take_tail)
+        from_next = ttnn.multiply(next_head, geometry.take_next)
+        ttnn.deallocate(tail)
+        ttnn.deallocate(next_head)
+        lookahead = ttnn.add(from_tail, from_next)
+        ttnn.deallocate(from_tail)
+        ttnn.deallocate(from_next)
+        placed = ttnn.matmul(geometry.win_place[k], lookahead, compute_kernel_config=compute_kernel_config)
+        ttnn.deallocate(lookahead)
+        kept = ttnn.multiply(plain, geometry.win_keep[k])
+        ttnn.deallocate(plain)
+        window = ttnn.add(kept, placed)
+        ttnn.deallocate(kept)
+        ttnn.deallocate(placed)
         return window
 
     def set_split_chip_lookahead(self, split_lookahead: "Optional[MTPSplitChipLookahead]") -> None:
