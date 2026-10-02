@@ -928,9 +928,9 @@ class OptimizedDecoder(LightweightModule):
             sel = ttnn.add(scores, self.w["e_bias_f32"])
             _, idx_coarse = ttnn.topk(ttnn.typecast(sel, ttnn.bfloat16), k=K + 1, dim=-1, sorted=True)
             rows = [idx_coarse.shape[i] for i in range(len(idx_coarse.shape) - 1)]
-            kth = ttnn.gather(sel, dim=3, index=ttnn.slice(idx_coarse, [0] * len(rows) + [K - 1], rows + [K]))
-            k1th = ttnn.gather(sel, dim=3, index=ttnn.slice(idx_coarse, [0] * len(rows) + [K], rows + [K + 1]))
-            cutoff = ttnn.multiply(ttnn.add(kth, k1th), 0.5)
+            # ONE gather of the K-th and (K+1)-th selection scores (gather is a ~32 us 1-core op).
+            pair = ttnn.gather(sel, dim=3, index=ttnn.slice(idx_coarse, [0] * len(rows) + [K - 1], rows + [K + 1]))
+            cutoff = ttnn.multiply(ttnn.sum(pair, dim=3, keepdim=True), 0.5)
             shifted = ttnn.typecast(ttnn.subtract(sel, cutoff), ttnn.bfloat16)
             _, idx = ttnn.topk(shifted, k=K, dim=-1, sorted=True)
             wsel = ttnn.gather(scores, dim=3, index=idx)
