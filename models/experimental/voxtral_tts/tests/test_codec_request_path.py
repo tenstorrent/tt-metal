@@ -93,10 +93,13 @@ def test_bucketing_pads_with_last_frame_not_zeros(device):
     assert pcc(bucketed, plain) > 0.999, "padding is leaking into the kept region"
 
 
-def test_prepared_weights_are_deduplicated(device):
-    """Content dedup keeps the prepared-weight cache at <= 8 layouts for 4 convs x 4 buckets."""
+def test_prepared_weights_are_deduplicated(device, monkeypatch):
+    """Content dedup keeps the prepared-weight cache at <= 8 layouts for 4 convs x 4 buckets. Only the
+    ttnn-conv path (VOXTRAL_CODEC_CONV=ttnn) prepares weights; the default matmul path holds none."""
+    from models.experimental.voxtral_tts.tt import ttnn_voxtral_codec as codec
     from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
 
+    monkeypatch.setattr(codec, "CONV_IMPL", "ttnn")
     gen = TtVoxtralCodecDecoder(device)
     for b in (128, 256, 512, 1024):  # four different buckets -> 16 (conv, length) pairs
         gen(ref.make_synthetic_codes(b))

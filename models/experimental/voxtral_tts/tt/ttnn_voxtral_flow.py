@@ -10,6 +10,8 @@ bidirectional transformer over a 3-token sequence, CFG batched to 2B.
     pytest models/experimental/voxtral_tts/tests/pcc/test_flow_pcc.py   # on device
 """
 
+import os
+
 import torch
 import ttnn
 
@@ -73,6 +75,17 @@ COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
     fp32_dest_acc_en=True,
     packer_l1_acc=True,
 )
+# Matmul fidelity for the token-major (B > 1) blocks only, for the fidelity experiment: at 192
+# folded rows the matmuls are compute-bound, so HiFi2 would halve their time; the fp32-reference
+# gate in tests/perf/test_flow_tm.py decides whether it is acceptable. Default HiFi4 (= COMPUTE_CONFIG).
+_FID = {"hifi4": ttnn.MathFidelity.HiFi4, "hifi2": ttnn.MathFidelity.HiFi2, "lofi": ttnn.MathFidelity.LoFi}
+COMPUTE_CONFIG_TM = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=_FID.get(os.environ.get("VOXTRAL_FLOW_FIDELITY", "hifi4").lower(), ttnn.MathFidelity.HiFi4),
+    math_approx_mode=False,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=True,
+)
+
 # Activation dtype; every op inherits it from its input. Accumulation stays fp32 (COMPUTE_CONFIG).
 DTYPE = ttnn.bfloat16
 
@@ -88,7 +101,9 @@ class TtVoxtralFlow:
 
     def __init__(self, device, ckpt_path=DEFAULT_CKPT):
         self.device = device
-        self.decode_prg = decode_program_configs(decode_grid(device.compute_with_storage_grid_size()))
+        self._grid = decode_grid(device.compute_with_storage_grid_size())
+        self.decode_prg = decode_program_configs(self._grid)
+        self._prg_by_tiles = {1: self.decode_prg}  # folded-row tiles -> matmul program configs
         self.dtype = DTYPE
         w = load_flow_state(ckpt_path)
         self.inv_freq = w["time_embedding.inv_freq"]  # host: time_embedding
@@ -147,11 +162,26 @@ class TtVoxtralFlow:
         """RMSNorm, width-sharded (the backbone's `sharded_norm`)."""
         return sharded_norm(x, gamma, FM_NORM_EPS, _L1)
 
+    def _prg(self, rows):
+        """Matmul program configs for `rows` folded rows: the backbone's decode configs for one tile
+        (B=1: 6 rows), per_core_M = tiles otherwise (B users: 2*B*3 rows). Built once per tile count."""
+        m = -(-int(rows) // 32)
+        prg = self._prg_by_tiles.get(m)
+        if prg is None:
+            if m > 1 and os.environ.get("VOXTRAL_FLOW_PRG", "mcast1d") == "default":
+                # ttnn's own matmul choice for multi-tile rows; for the B>1 timing comparison.
+                prg = {k: None for k in decode_program_configs(self._grid)}
+            else:
+                prg = decode_program_configs(self._grid, m_tiles=m)
+            self._prg_by_tiles[m] = prg
+        return prg
+
     def _block(self, x, w, B):
         """x [1,B*3,3072] -> same. Pre-norm, GQA 32/8, unmasked attention, SwiGLU."""
+        prg = self._prg(B * 3)
         h = self._norm(x, w["an"])
         # q, k and v in one matmul, on the backbone's program config.
-        qkv = ttnn.linear(h, w["wqkv"], program_config=self.decode_prg["wqkv"], compute_kernel_config=COMPUTE_CONFIG)
+        qkv = ttnn.linear(h, w["wqkv"], program_config=prg["wqkv"], compute_kernel_config=COMPUTE_CONFIG)
         # hand-rolled head split
         qh, kh, vh = _split_heads(qkv, B)
         # sdpa handles GQA natively. scale=1.0 is mandatory: SCALE is already folded into wqkv's
@@ -167,22 +197,20 @@ class TtVoxtralFlow:
             ttnn.linear(
                 a,
                 w["wo"],
-                program_config=self.decode_prg["wo"],
+                program_config=prg["wo"],
                 compute_kernel_config=COMPUTE_CONFIG,
                 memory_config=_L1,
             ),
         )
         h = self._norm(x, w["fn"])
         # SiLU is fused by the w1 program config, not by an activation kwarg.
-        g = ttnn.linear(
-            h, w["w1"], program_config=self.decode_prg["w1"], compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1
-        )
+        g = ttnn.linear(h, w["w1"], program_config=prg["w1"], compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1)
         u = ttnn.multiply_(
             g,
             ttnn.linear(
                 h,
                 w["w3"],
-                program_config=self.decode_prg["w3"],
+                program_config=prg["w3"],
                 compute_kernel_config=COMPUTE_CONFIG,
                 memory_config=_L1,
             ),
@@ -192,7 +220,7 @@ class TtVoxtralFlow:
             ttnn.linear(
                 u,
                 w["w2"],
-                program_config=self.decode_prg["w2"],
+                program_config=prg["w2"],
                 compute_kernel_config=COMPUTE_CONFIG,
                 memory_config=_L1,
             ),
@@ -282,8 +310,12 @@ class TtVoxtralFlow:
     def _solve(self, x, h, B, n_steps, cfg_alpha):
         """(x0 fp32 [B,1,36], cond++uncond [2B,3072]) -> x fp32 [B,1,36]. PURE DEVICE GRAPH.
 
-        No host ops in here, so it stays traceable.
+        No host ops in here, so it stays traceable. B > 1 takes the token-major solve (`_solve_tm`:
+        1.9x faster at B=32 and closer to the fp32 reference at every B measured) unless
+        VOXTRAL_FLOW_TM=0; B = 1 keeps this path, bit for bit.
         """
+        if B > 1 and os.environ.get("VOXTRAL_FLOW_TM", "1") != "0":  # default for B > 1; see _solve_tm
+            return self._solve_tm(x, h, B, n_steps, cfg_alpha)
         B2 = 2 * B
         # the llm conditioning is constant across the solve: project and reshape it once per frame
         p2 = ttnn.reshape(
@@ -299,6 +331,175 @@ class TtVoxtralFlow:
             v = ttnn.typecast(self._trunk(p0, p1s[i], p2, B2), ttnn.float32)
             v_cond = ttnn.slice(v, [0, 0, 0], [B, 1, N_ACOUSTIC_CODEBOOK])
             v_unc = ttnn.slice(v, [B, 0, 0], [B2, 1, N_ACOUSTIC_CODEBOOK])
+            v_cfg = ttnn.add(ttnn.multiply(v_cond, cfg_alpha), ttnn.multiply(v_unc, 1.0 - cfg_alpha))
+            x = ttnn.add(x, ttnn.multiply(v_cfg, dt))
+        return x
+
+    # ----------------------------------------------------------------------------------
+    # Token-major solve for B > 1 users.
+    #
+    # The 3-token sequence per CFG row pads to 32 rows per head in tile layout, so at 2B = 64 rows
+    # the batch-major `_block` spends most of its time moving padded head tensors (measured: 17.9 of
+    # 35.7 ms per frame in the blocks at B=32, plus 8.2 ms of padded reshapes in the per-step glue,
+    # against 1.5 ms of attention arithmetic). Here the folded rows are ordered token-major
+    # (row = token * 2B + cfg_row), so the sequence is a plain concat of three [1, 2B, 3072]
+    # tensors, attention runs ONCE over all 3*2B rows with a block-diagonal mask through the fused
+    # head ops the backbone prefill uses, and the solver state stays [1, B, 36]. Same math as
+    # `_block`/`_trunk`; only the row order and the op choice differ.
+    # ----------------------------------------------------------------------------------
+    def _tm_rows(self, B2):
+        """Folded rows 3*B2, padded up to a tile multiple (sdpa is wrong on unaligned rows)."""
+        rows = 3 * B2
+        return -(-rows // 32) * 32
+
+    def _tm_mask(self, rows_pad):
+        """[1, 1, rows_pad, rows_pad] additive mask: 0 where two rows belong to the same CFG row
+        (row r of the real 3*B2 belongs to CFG row r % B2), -1e9 elsewhere; padding rows attend
+        only themselves. Built once per (padded row count, B2): two batch sizes can pad to the same row count
+        (B2=8 and B2=10 both give 32) but need different block-diagonal masks."""
+        B2 = self._tm_B2
+        key = ("mask", rows_pad, B2)
+        m = self._sched.get(key)
+        if m is None:
+            rows = 3 * B2
+            r = torch.arange(rows_pad)
+            owner = torch.where(r < rows, r % B2, B2 + r)  # padding rows get unique owners
+            same = owner.reshape(-1, 1) == owner.reshape(1, -1)
+            m = ttnn.from_torch(
+                torch.where(same, 0.0, -1e9).reshape(1, 1, rows_pad, rows_pad).to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
+            self._sched[key] = m
+        return m
+
+    def _tm_sdpa_prg(self):
+        key = ("sdpa_tm",)
+        p = self._sched.get(key)
+        if p is None:
+            g = self.device.compute_with_storage_grid_size()
+            p = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(min(8, g.x), min(8, g.y)),
+                q_chunk_size=32,
+                k_chunk_size=32,
+                exp_approx_mode=False,
+            )
+            self._sched[key] = p
+        return p
+
+    def _schedule_tm(self, B2, n_steps):
+        """The time tokens of `_schedule`, built directly as [1, B2, 3072] rows (a reshape of the
+        padded [B2, 1, 3072] tensors is NOT exact once B2 spans more than one tile)."""
+        key = ("tm", B2, n_steps)
+        if key not in self._sched:
+            ts = torch.linspace(0, 1, n_steps + 1)
+            toks = []
+            for i in range(n_steps):
+                emb = time_embedding(ts[i].view(1, 1).repeat(B2, 1), self.inv_freq)  # [B2, D]
+                p = ttnn.linear(
+                    self._up(emb.reshape(1, B2, -1)), self.proj["time_projection"], compute_kernel_config=COMPUTE_CONFIG
+                )
+                toks.append(p)  # [1, B2, 3072]
+            self._sched[key] = (toks, [float(ts[i + 1] - ts[i]) for i in range(n_steps)])
+        return self._sched[key]
+
+    @staticmethod
+    def _as_rows(t, rows, width):
+        """[rows, 1, width] (padded tiles) or [rows, width] -> [1, rows, width], exactly: through a
+        row-major view when the source is tiled with a padded middle dim."""
+        if tuple(t.shape) == (1, rows, width):
+            return t
+        if len(t.shape) == 2:
+            return ttnn.reshape(t, [1, rows, width])
+        rm = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
+        return ttnn.to_layout(ttnn.reshape(rm, [1, rows, width]), ttnn.TILE_LAYOUT)
+
+    def _block_tm(self, x, w, B2):
+        """x [1, rows_pad, 3072] token-major -> same. Pre-norm, GQA 32/8 masked to each CFG row's
+        own 3 tokens, SwiGLU. rows_pad = 3*B2 rounded up to a tile multiple."""
+        rows = self._tm_rows(B2)
+        self._tm_B2 = B2
+        prg = self._prg(rows)
+        h = self._norm(x, w["an"])
+        qkv = ttnn.linear(h, w["wqkv"], program_config=prg["wqkv"], compute_kernel_config=COMPUTE_CONFIG_TM)
+        qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads(
+            ttnn.reshape(qkv, [1, 1, rows, _QKV_WIDTH]),
+            num_heads=FM_N_HEADS,
+            num_kv_heads=FM_N_KV_HEADS,
+            transpose_k_heads=False,
+            memory_config=_L1,
+        )
+        # Explicit 32-row chunks with exact exp: the default sdpa config at these shapes reads
+        # PCC 0.9999 / max|diff| 0.08 against torch, this one 1.0000 / 0.03 (bf16 noise).
+        a = ttnn.transformer.scaled_dot_product_attention(
+            qh,
+            kh,
+            vh,
+            attn_mask=self._tm_mask(rows),
+            is_causal=False,
+            scale=1.0,
+            program_config=self._tm_sdpa_prg(),
+            compute_kernel_config=COMPUTE_CONFIG,
+        )
+        a = ttnn.reshape(ttnn.experimental.nlp_concat_heads(a, memory_config=_L1), [1, rows, FM_N_HEADS * FM_HEAD_DIM])
+        x = ttnn.add_(
+            x,
+            ttnn.linear(
+                a, w["wo"], program_config=prg["wo"], compute_kernel_config=COMPUTE_CONFIG_TM, memory_config=_L1
+            ),
+        )
+        h = self._norm(x, w["fn"])
+        g = ttnn.linear(
+            h, w["w1"], program_config=prg["w1"], compute_kernel_config=COMPUTE_CONFIG_TM, memory_config=_L1
+        )
+        u = ttnn.multiply_(
+            g,
+            ttnn.linear(
+                h, w["w3"], program_config=prg["w3"], compute_kernel_config=COMPUTE_CONFIG_TM, memory_config=_L1
+            ),
+        )
+        return ttnn.add_(
+            x,
+            ttnn.linear(
+                u, w["w2"], program_config=prg["w2"], compute_kernel_config=COMPUTE_CONFIG_TM, memory_config=_L1
+            ),
+        )
+
+    def _trunk_tm(self, p0, p1, p2, B2):
+        """three [1, B2, 3072] projections -> velocity [1, B2, 36] (token 0's rows)."""
+        seq = ttnn.concat([p0, p1, p2], dim=1, memory_config=_L1)  # [1, 3*B2, 3072], token-major
+        rows_pad = self._tm_rows(B2)
+        if rows_pad != 3 * B2:
+            # keyed by B2 too: B2=8 and B2=10 both pad to 32 rows but need 8 and 2 pad rows (as _tm_mask)
+            key = ("pad", rows_pad, B2)
+            pad = self._sched.get(key)
+            if pad is None:
+                pad = self._sched[key] = self._up(torch.zeros(1, rows_pad - 3 * B2, FM_INPUT_DIM))
+            seq = ttnn.concat([seq, pad], dim=1, memory_config=_L1)
+        self._tm_B2 = B2
+        for w in self.layers:
+            seq = self._block_tm(seq, w, B2)
+        seq = self._norm(seq, self.norm)
+        out = ttnn.linear(seq, self.proj["acoustic_codebook_output"], compute_kernel_config=COMPUTE_CONFIG)
+        return ttnn.slice(out, [0, 0, 0], [1, B2, N_ACOUSTIC_CODEBOOK])
+
+    def _solve_tm(self, x, h, B, n_steps, cfg_alpha):
+        """(x0 fp32 [B,1,36] or [1,B,36], cond++uncond [2B,...,3072]) -> x fp32 [1, B, 36]. Pure device
+        graph, token-major rows. Callers reshape the result to [B, 36] on the host."""
+        B2 = 2 * B
+        x = self._as_rows(x, B, N_ACOUSTIC_CODEBOOK)
+        h = self._as_rows(h, B2, FM_INPUT_DIM)
+        p2 = ttnn.linear(h, self.proj["llm_projection"], compute_kernel_config=COMPUTE_CONFIG)  # [1, B2, 3072]
+        p1s, dts = self._schedule_tm(B2, n_steps)
+        for i, dt in enumerate(dts):
+            x2 = ttnn.concat([x, x], dim=1)  # [1, B2, 36]: cond rows then uncond rows
+            p0 = ttnn.linear(
+                ttnn.typecast(x2, self.dtype), self.proj["input_projection"], compute_kernel_config=COMPUTE_CONFIG
+            )
+            v = ttnn.typecast(self._trunk_tm(p0, p1s[i], p2, B2), ttnn.float32)  # [1, B2, 36]
+            v_cond = ttnn.slice(v, [0, 0, 0], [1, B, N_ACOUSTIC_CODEBOOK])
+            v_unc = ttnn.slice(v, [0, B, 0], [1, B2, N_ACOUSTIC_CODEBOOK])
             v_cfg = ttnn.add(ttnn.multiply(v_cond, cfg_alpha), ttnn.multiply(v_unc, 1.0 - cfg_alpha))
             x = ttnn.add(x, ttnn.multiply(v_cfg, dt))
         return x

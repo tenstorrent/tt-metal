@@ -168,10 +168,11 @@ class TtVoxtralPipeline:
         ac = flow._fsq_quantize(ttnn.to_torch(xr).float().reshape(1, flow.N_ACOUSTIC_CODEBOOK))
         return torch.cat([sem, ac + flow.N_AUDIO_SPECIAL], dim=1)
 
-    def warmup(self, max_frames=None, capture_trace=True, verbose=False):
+    def warmup(self, max_frames=None, capture_trace=True, verbose=False, codec=True):
         """Compile every program the request path can reach, then capture (and release) the
         frame-loop trace. `max_frames` defaults to the cache length, the most any request can
-        reach. Sets `self.warmed`.
+        reach. `codec=False` skips the codec buckets (a caller that never synthesizes audio, e.g.
+        a second pipeline built on a chip that already runs one). Sets `self.warmed`.
         """
         import time as _time
 
@@ -205,10 +206,13 @@ class TtVoxtralPipeline:
 
         bucket = self.codec.bucket or 1
         top = -(-(max_frames or self.backbone.max_seq_len) // bucket) * bucket
-        buckets = list(range(bucket, top + 1, bucket))
+        buckets = list(range(bucket, top + 1, bucket)) if codec else []
         for n in buckets:
             self.codec(_cref.make_synthetic_codes(n))
-        log(f"codec: {len(buckets)} buckets ({buckets[0]}..{buckets[-1]}) in {_time.perf_counter() - t0:.1f}s")
+        if buckets:
+            log(f"codec: {len(buckets)} buckets ({buckets[0]}..{buckets[-1]}) in {_time.perf_counter() - t0:.1f}s")
+        else:
+            log("codec: skipped")
 
         # 4) The frame-loop trace, LAST, after every compile above.
         traced = False

@@ -17,6 +17,7 @@ import wave
 
 from models.experimental.voxtral_tts import frontend
 from models.experimental.voxtral_tts.reference.voxtral_paths import resolve_model_dir
+from models.experimental.voxtral_tts.tt.ttnn_voxtral_batched import TtVoxtralBatchedPipeline
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import FRAME_RATE, TtVoxtralPipeline
 
 SAMPLE_RATE = 24000
@@ -32,6 +33,12 @@ def write_wav(path, wav):
         f.writeframes((a * 32767.0).astype("<i2").tobytes())
 
 
+def _n_frames(t):
+    """Frames of the one request: an int on the host-loop pipeline, a per-request list on the batched one."""
+    f = t["frames"]
+    return f[0] if isinstance(f, (list, tuple)) else f
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("text", nargs="?", help="what to say")
@@ -41,6 +48,11 @@ def main(argv=None):
     ap.add_argument("--max-frames", type=int, default=None, help="80 ms of audio each")
     ap.add_argument("--ckpt", default=None, help="model directory (default: $VOXTRAL_CKPT, else HF hub)")
     ap.add_argument("--list-voices", action="store_true")
+    ap.add_argument(
+        "--host-loop",
+        action="store_true",
+        help="the original single-user pipeline (per-frame sampling on host) instead of the on-device frame loop",
+    )
     a = ap.parse_args(argv)
 
     model_dir = resolve_model_dir(a.ckpt)
@@ -53,7 +65,13 @@ def main(argv=None):
     if a.voice not in presets:
         ap.error(f"unknown voice {a.voice!r}; --list-voices to see the {len(presets)} presets")
 
-    pipe = TtVoxtralPipeline(ckpt_path=model_dir)
+    # Default: the batched pipeline at one user, whose whole per-frame loop (sampling, stop, positions,
+    # noise, next input embedding) runs on device; --host-loop keeps the original single-user path.
+    pipe = (
+        TtVoxtralPipeline(ckpt_path=model_dir)
+        if a.host_loop
+        else TtVoxtralBatchedPipeline(ckpt_path=model_dir, max_batch=1)
+    )
     try:
         # Every prefill shape, every codec bucket, one trace capture; verbose so the wait does
         # not look like a hang.
@@ -61,12 +79,12 @@ def main(argv=None):
         wav = pipe.synthesize(a.text, a.voice, seed=a.seed, max_frames=a.max_frames)
         write_wav(a.out, wav)
         t = pipe.last_timings
-        audio_s = t["frames"] / FRAME_RATE
+        audio_s = _n_frames(t) / FRAME_RATE
         total = t["prefill_s"] + t["decode_s"] + t.get("codec_s", 0.0)
         print(
             f"{a.out}: {audio_s:.1f}s of audio in {total:.2f}s "
             f"({audio_s / max(total, 1e-9):.2f}x real time), "
-            f"{t['frames']} frames at {t['decode_ms_per_frame']:.1f} ms/frame"
+            f"{_n_frames(t)} frames at {t['decode_ms_per_frame']:.1f} ms/frame"
         )
     finally:
         pipe.close()

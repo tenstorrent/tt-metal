@@ -3,8 +3,8 @@
 
 """TTNN port of the Voxtral Codec DECODER (codec): audio codes -> 24 kHz waveform.
 
-Mirrors reference/voxtral_codec_ref.py op-for-op. Everything runs on device except the semantic
-codebook gather (_quantizer_host):
+Mirrors reference/voxtral_codec_ref.py op-for-op. Everything runs on device, the quantizer included
+(quantizer_decode; _quantizer_host is the fp32 host twin kept for comparison); only integer codes go up:
 
     codes [1,37,T] -> quantizer [1,292,T] -> conv k3 -> 4x {2-layer transformer [+ convT k4 s2]}
       -> output projection k7 -> [1,240,8T] -> unpatch -> [1,1,T*1920] @ 24 kHz
@@ -14,6 +14,7 @@ Validate against the reference (on device):
 """
 
 import hashlib
+import os
 
 import torch
 import ttnn
@@ -25,6 +26,7 @@ from models.experimental.voxtral_tts.reference.voxtral_codec_ref import (
 )
 from models.experimental.voxtral_tts.reference.voxtral_common_ref import (
     ACOUSTIC_CODEBOOK_SIZE,
+    SEMANTIC_CODEBOOK_SIZE,
     CODEC_DIM,
     CODEC_HEAD_DIM,
     CODEC_N_HEADS,
@@ -44,6 +46,13 @@ from models.experimental.voxtral_tts.reference.voxtral_common_ref import (
 
 # Quantizer output width: one semantic embedding plus one scalar per acoustic codebook.
 LATENT_DIM = SEMANTIC_DIM + (NUM_CODEBOOKS - 1)  # 256 + 36 = 292
+# Latent channels zero-padded to a tile multiple for the matmul input conv, so its K reduction never
+# reads tile padding.
+LATENT_PAD = 320
+# How the four convs run. "matmul": one ttnn.linear per kernel tap (conv1d) and an even/odd split of the
+# k4 s2 transposed conv, no halo or sharded conv ops (the halo path hung a device on 2026-10-01: second
+# codec on a chip holding the batched pipeline, 512-frame bucket). "ttnn": ttnn.conv1d/conv_transpose2d.
+CONV_IMPL = os.environ.get("VOXTRAL_CODEC_CONV", "matmul")
 # Total length gain across the three stride-2 transposed convs (12.5 Hz frames -> 100 Hz).
 UPSAMPLE = 1
 for _s in DEC_CONV_STRIDES:
@@ -73,6 +82,16 @@ COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
 )
 
 
+def _split_bf16(x, pieces):
+    """fp32 -> `pieces` bf16 tensors whose sum reproduces x (3 pieces: exact)."""
+    out, rest = [], x.float()
+    for _ in range(pieces):
+        p = rest.to(torch.bfloat16)
+        out.append(p)
+        rest = rest - p.float()
+    return out
+
+
 class TtVoxtralCodecDecoder:
     """On-device codec decoder. __call__(codes [1,37,T] int64) -> waveform torch [1,1,T*1920]."""
 
@@ -92,7 +111,13 @@ class TtVoxtralCodecDecoder:
         lin = lambda t: dev(t.t())  # torch Linear [out,in] -> ttnn.linear wants [in,out]
         host = lambda t: ttnn.from_torch(t.contiguous(), dtype=DTYPE)  # conv weights stay on host
 
-        self.semantic_host = w["semantic_embedding"].float()  # host gather; see _quantizer_host
+        self.semantic_host = w["semantic_embedding"].float()  # fp32 reference copy (_quantizer_host)
+        # On-device semantic gather: the fp32 codebook as three bf16 pieces that sum back exactly (ttnn.embedding
+        # takes bf16 tables), row-major for the lookup.
+        self._sem_tabs = [
+            ttnn.from_torch(p.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+            for p in _split_bf16(self.semantic_host, 3)
+        ]
         # Per-tap weights for the output projection, which runs as matmuls (see _graph).
         # torch stores the conv as [out, in, k]; ttnn.linear wants [in, out].
         self._out_taps = [dev(w["output_proj.conv.weight"][:, :, j].t()) for j in range(PATCH_PROJ_KERNEL)]
@@ -116,6 +141,16 @@ class TtVoxtralCodecDecoder:
             },  # [1024,1024,1,4]
         }
         self._prep_cache = {}  # (conv, length) -> prepared tensor (possibly SHARED)
+        if CONV_IMPL == "matmul":
+            # One [in, out] weight per tap. conv1d weights are [out, in, k]; the input conv's in-dim is
+            # zero-padded to LATENT_PAD to match the padded latents. ConvTranspose weights are [in, out, k].
+            w_in = torch.nn.functional.pad(w["decoder_blocks.0.conv.weight"], (0, 0, 0, LATENT_PAD - LATENT_DIM))
+            self._in_taps = [dev(w_in[:, :, j].t()) for j in range(DEC_CONV_KERNELS[0])]
+            self._up_taps = {
+                f"up{i}": [dev(w[f"decoder_blocks.{i}.conv.weight"][:, :, j]) for j in range(k)]
+                for i, k in zip(DEC_CONV_BLOCKS[1:], DEC_CONV_KERNELS[1:])
+            }
+            self._zero_row = dev(torch.zeros(1, 1, 1, CODEC_DIM))  # the transposed conv's first delayed row
         self._layouts = {}  # (conv, content hash) -> the one tensor of that layout
 
         # --- transformer layers ---
@@ -259,6 +294,34 @@ class TtVoxtralCodecDecoder:
         out = out[0] if isinstance(out, (tuple, list)) else out
         return ttnn.reshape(out, [1, 1, -1, out_c])
 
+    def _conv1d_mm(self, x, taps, kernel, stride, pad_mode):
+        """Causal conv1d as one matmul per tap over a shifted view of the padded input. Stride 1 only
+        (the decoder's one conv1d), so the reference's extra right padding is always zero."""
+        assert stride == 1, f"matmul conv1d supports stride 1, got {stride}"
+        if x.shape[3] < LATENT_PAD and taps[0].shape[0] == LATENT_PAD:  # latents: 292 -> 320 zero channels
+            x = ttnn.pad(x, [(0, 0), (0, 0), (0, 0), (0, LATENT_PAD - x.shape[3])], 0.0)
+        x = self._pad_causal(x, kernel - stride, pad_mode)
+        L, C = x.shape[2], x.shape[3]
+        n = L - kernel + 1
+        acc = None
+        for j, tap in enumerate(taps):
+            y = ttnn.linear(ttnn.slice(x, [0, 0, j, 0], [1, 1, j + n, C]), tap, compute_kernel_config=COMPUTE_CONFIG)
+            acc = y if acc is None else ttnn.add(acc, y)
+        return acc
+
+    def _conv_transpose_mm(self, x, taps, channels):
+        """k4 s2 causal transposed conv (right trim 2) as four matmuls: output 2m = x[m]W0 + x[m-1]W2,
+        output 2m+1 = x[m]W1 + x[m-1]W3; the two phases interleave by a concat + reshape."""
+        L = x.shape[2]
+        prev = ttnn.slice(x, [0, 0, 0, 0], [1, 1, L - 1, channels])  # x[m-1] for m >= 1
+
+        def delayed(tap):
+            return ttnn.concat([self._zero_row, ttnn.linear(prev, tap, compute_kernel_config=COMPUTE_CONFIG)], dim=2)
+
+        even = ttnn.add(ttnn.linear(x, taps[0], compute_kernel_config=COMPUTE_CONFIG), delayed(taps[2]))
+        odd = ttnn.add(ttnn.linear(x, taps[1], compute_kernel_config=COMPUTE_CONFIG), delayed(taps[3]))
+        return ttnn.reshape(ttnn.concat([even, odd], dim=-1), [1, 1, 2 * L, channels])
+
     def _conv_transpose(self, x, name, channels, kernel, stride):
         """Length on the WIDTH axis (kernel (1,k), stride (1,s)). Trims (k - stride) samples off the
         RIGHT, matching upstream's trim_ratio=1.0."""
@@ -373,16 +436,55 @@ class TtVoxtralCodecDecoder:
         lat = torch.cat([sem, ac.permute(0, 2, 1)], dim=2)
         return lat.reshape(1, 1, T, LATENT_DIM).contiguous()
 
+    @staticmethod
+    def check_codes(codes):
+        """codes torch [1,37,T] (offset already stripped): semantic in [0, 8192), acoustic in [0, 21). The device
+        lookup does no bounds check: a negative or too-large semantic code wraps in the int32 -> uint32 cast and
+        reads outside the table."""
+        sem, ac = codes[:, 0, :], codes[:, 1:, :]
+        if sem.numel() and (int(sem.min()) < 0 or int(sem.max()) >= SEMANTIC_CODEBOOK_SIZE):
+            raise ValueError(
+                f"semantic codes must be in [0, {SEMANTIC_CODEBOOK_SIZE}): got {int(sem.min())}..{int(sem.max())}"
+            )
+        if ac.numel() and (int(ac.min()) < 0 or int(ac.max()) >= ACOUSTIC_CODEBOOK_SIZE):
+            raise ValueError(
+                f"acoustic codes must be in [0, {ACOUSTIC_CODEBOOK_SIZE}): got {int(ac.min())}..{int(ac.max())}"
+            )
+
     def quantizer_decode(self, codes):
-        """Host quantizer + upload, as one step (the eager path and the tests use this)."""
-        return ttnn.from_torch(self._quantizer_host(codes), dtype=DTYPE, layout=ttnn.TILE_LAYOUT, device=self.device)
+        """codes torch [1,37,T] -> device [1,1,T,292] latents, computed on device: the semantic embedding by
+        three bf16 lookups summed in fp32 (an exact split of the fp32 codebook), the acoustic levels as
+        c * 2 / (K - 1) - 1 from the uploaded integer codes. Only the integer codes cross PCIe."""
+        self.check_codes(codes)
+        T = codes.shape[2]
+        idx = ttnn.from_torch(
+            codes[:, 0, :].reshape(1, T).to(torch.int32).contiguous(),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+        )
+        sem = None
+        for tab in self._sem_tabs:
+            piece = ttnn.typecast(ttnn.embedding(idx, tab, layout=ttnn.TILE_LAYOUT), DTYPE)  # [1,T,256]
+            sem = piece if sem is None else ttnn.add(sem, piece)
+        ac = ttnn.from_torch(
+            codes[0, 1:, :].t().reshape(1, T, NUM_CODEBOOKS - 1).to(torch.float32).contiguous(),
+            dtype=DTYPE,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+        )
+        ac = ttnn.subtract(ttnn.multiply(ac, 2.0 / (ACOUSTIC_CODEBOOK_SIZE - 1)), 1.0)
+        return ttnn.reshape(ttnn.concat([sem, ac], dim=-1), [1, 1, T, LATENT_DIM])
 
     # ----------------------------------------------------------------------------------
     # The device-only op sequence
     # ----------------------------------------------------------------------------------
     def _graph(self, x, stages=None):
         """latents [1,1,T,292] on device -> [1,1,T',240] on device."""
-        x = self._conv1d(x, "in", LATENT_DIM, CODEC_DIM, DEC_CONV_KERNELS[0], DEC_CONV_STRIDES[0], "replicate")
+        if CONV_IMPL == "matmul":
+            x = self._conv1d_mm(x, self._in_taps, DEC_CONV_KERNELS[0], DEC_CONV_STRIDES[0], "replicate")
+        else:
+            x = self._conv1d(x, "in", LATENT_DIM, CODEC_DIM, DEC_CONV_KERNELS[0], DEC_CONV_STRIDES[0], "replicate")
         if stages is not None:
             stages["after_input_conv"] = self._chw(x)
         for stage, (tf_i, n_layers) in enumerate(zip(DEC_TF_BLOCKS, DEC_TF_LENGTHS)):
@@ -395,9 +497,13 @@ class TtVoxtralCodecDecoder:
                 stages[f"after_tf{tf_i}"] = self._chw(x)
             if stage < len(DEC_CONV_BLOCKS) - 1:
                 ci = DEC_CONV_BLOCKS[stage + 1]
-                x = self._conv_transpose(
-                    x, f"up{ci}", CODEC_DIM, DEC_CONV_KERNELS[stage + 1], DEC_CONV_STRIDES[stage + 1]
-                )
+                if CONV_IMPL == "matmul":
+                    assert (DEC_CONV_KERNELS[stage + 1], DEC_CONV_STRIDES[stage + 1]) == (4, 2)
+                    x = self._conv_transpose_mm(x, self._up_taps[f"up{ci}"], CODEC_DIM)
+                else:
+                    x = self._conv_transpose(
+                        x, f"up{ci}", CODEC_DIM, DEC_CONV_KERNELS[stage + 1], DEC_CONV_STRIDES[stage + 1]
+                    )
                 if stages is not None:
                     stages[f"after_up{ci}"] = self._chw(x)
         # Output projection as 7 tap matmuls over a gathered prefix, not ttnn.conv1d: its halo_gather
@@ -432,10 +538,8 @@ class TtVoxtralCodecDecoder:
 
     @torch.no_grad()
     def _decode(self, codes, return_stages=False):
-        lat_host = self._quantizer_host(codes)
         stages = {} if return_stages else None
-        xd = ttnn.from_torch(lat_host, dtype=DTYPE, layout=ttnn.TILE_LAYOUT, device=self.device)
-        x = self._graph(xd, stages)
+        x = self._graph(self.quantizer_decode(codes), stages)
         # unpatch: channels-last [1,1,T',240] flattens (t, c) with c fastest == the reference's
         # permute(0,2,1).reshape(B,1,T'*240)
         out = ttnn.to_torch(x).float().reshape(1, 1, -1)

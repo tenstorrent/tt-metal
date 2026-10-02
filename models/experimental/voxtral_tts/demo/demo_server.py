@@ -19,7 +19,14 @@ import sys
 from models.experimental.voxtral_tts import frontend
 from models.experimental.voxtral_tts.demo.demo import write_wav
 from models.experimental.voxtral_tts.reference.voxtral_paths import resolve_model_dir
+from models.experimental.voxtral_tts.tt.ttnn_voxtral_batched import TtVoxtralBatchedPipeline
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import FRAME_RATE, TtVoxtralPipeline
+
+
+def _n_frames(t):
+    """Frames of the one request: an int on the host-loop pipeline, a per-request list on the batched one."""
+    f = t["frames"]
+    return f[0] if isinstance(f, (list, tuple)) else f
 
 
 def main(argv=None):
@@ -28,13 +35,24 @@ def main(argv=None):
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--max-frames", type=int, default=None)
     ap.add_argument("--ckpt", default=None, help="model directory (default: $VOXTRAL_CKPT, else HF hub)")
+    ap.add_argument(
+        "--host-loop",
+        action="store_true",
+        help="the original single-user pipeline (per-frame sampling on host) instead of the on-device frame loop",
+    )
     a = ap.parse_args(argv)
 
     model_dir = resolve_model_dir(a.ckpt)
     presets = frontend.voices(model_dir)
     if a.voice not in presets:
         ap.error(f"unknown voice {a.voice!r}; one of: {', '.join(presets)}")
-    pipe = TtVoxtralPipeline(ckpt_path=model_dir)
+    # Default: the batched pipeline at one user, whose whole per-frame loop (sampling, stop, positions,
+    # noise, next input embedding) runs on device; --host-loop keeps the original single-user path.
+    pipe = (
+        TtVoxtralPipeline(ckpt_path=model_dir)
+        if a.host_loop
+        else TtVoxtralBatchedPipeline(ckpt_path=model_dir, max_batch=1)
+    )
     try:
         print("warming up: every prefill shape, every codec bucket, one trace capture ...", flush=True)
         pipe.warmup(verbose=True)
@@ -75,7 +93,7 @@ def main(argv=None):
             path = out if n == 0 else f"{root}_{n}{ext}"  # out.wav, out_1.wav, ...; any suffix, or none
             write_wav(path, wav)
             t = pipe.last_timings
-            audio_s = t["frames"] / FRAME_RATE
+            audio_s = _n_frames(t) / FRAME_RATE
             total = t["prefill_s"] + t["decode_s"] + t.get("codec_s", 0.0)
             print(f"  {path}  {audio_s:.1f}s in {total:.2f}s ({audio_s / max(total, 1e-9):.2f}x real time)")
             n += 1
