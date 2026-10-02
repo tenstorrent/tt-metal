@@ -323,20 +323,31 @@ def _drain_layer_acks(ack_channel, expected: int, timeout_s: float = 600.0) -> i
     return drained
 
 
-# L1 alignment on Wormhole, Blackhole and Quasar. Passing it keeps unpack_bfp8 from opening the device.
-_BFP_L1_ALIGNMENT = 16
-
-
 def _decode_bfp8_chunk(raw: bytes, head_dim: int) -> torch.Tensor:
-    if len(raw) != head_dim // 32 * _BFP8_TILE_BYTES:
-        raise ValueError(f"bfp8 KV chunk has {len(raw)} bytes, expected {head_dim // 32 * _BFP8_TILE_BYTES}")
-    values = ttnn._ttnn.bfp_utils.unpack_bfp8(np.frombuffer(raw, dtype="<u4"), l1_alignment=_BFP_L1_ALIGNMENT)
-    return torch.from_numpy(ttnn._ttnn.bfp_utils.untilize(values, _KV_CHUNK_TOKENS, head_dim))
+    TILE = 32
+    n_tiles = head_dim // TILE
+    raw_u8 = np.frombuffer(raw, dtype=np.uint8).reshape(n_tiles, 1088)
+
+    exponents = raw_u8[:, :64].astype(np.int32).reshape(n_tiles, 4, 16)
+    mantissas = raw_u8[:, 64:].reshape(n_tiles, 4, 16, 16)
+    signs = (mantissas >> 7).astype(np.int32)
+    magnitude = (mantissas & 0x7F).astype(np.float32)
+    scale = np.exp2((exponents - 133).astype(np.float32))[..., None]
+    values = np.where(signs > 0, -(magnitude * scale), magnitude * scale)
+
+    by_face = values.reshape(n_tiles, 2, 2, 16, 16).transpose(0, 1, 3, 2, 4).reshape(n_tiles, TILE, TILE)
+    decoded = by_face.transpose(1, 0, 2).reshape(TILE, n_tiles * TILE)
+    return torch.from_numpy(np.ascontiguousarray(decoded))
 
 
 def _decode_bf16_chunk(raw: bytes, head_dim: int) -> torch.Tensor:
-    bits = ttnn._ttnn.bfp_utils.untilize(np.frombuffer(raw, dtype="<u2"), _KV_CHUNK_TOKENS, head_dim)
-    return torch.from_numpy((bits.astype(np.uint32) << 16).view(np.float32))
+    TILE = 32
+    n_tiles = head_dim // TILE
+    u16 = np.frombuffer(raw, dtype="<u2").reshape(n_tiles, 4, 16, 16)
+    f32 = (u16.astype(np.uint32) << 16).view(np.float32)
+    by_face = f32.reshape(n_tiles, 2, 2, 16, 16).transpose(0, 1, 3, 2, 4).reshape(n_tiles, TILE, TILE)
+    decoded = by_face.transpose(1, 0, 2).reshape(TILE, n_tiles * TILE)
+    return torch.from_numpy(np.ascontiguousarray(decoded))
 
 
 def _decode_row_major_chunk(raw: bytes, head_dim: int, dtype: torch.dtype) -> torch.Tensor:
