@@ -59,6 +59,7 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
     const tt::tt_metal::experimental::KernelSpecName compute_kernel_name{"compute"};
 
     const tt::tt_metal::experimental::DFBSpecName act_rm_dfb_name{"act_rm"};
+    const tt::tt_metal::experimental::DFBSpecName act_stage_dfb_name{"act_stage"};
     const tt::tt_metal::experimental::DFBSpecName act_tile_dfb_name{"act_tile"};
     const tt::tt_metal::experimental::DFBSpecName weights_dfb_name{"weights"};
     const tt::tt_metal::experimental::DFBSpecName partial_dfb_name{"partial"};
@@ -86,8 +87,15 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
         };
     };
 
+    // The reader stages one tile row of the block plus its three look-back rows (35 row-major rows of the block's
+    // width) and hands the compute its four tap-shifted windows as local copies; the stage is reader-private and
+    // addressed directly, so it is sized in whole entries, never pushed.
+    const uint32_t block_row_bytes = block_ct * tt::constants::TILE_WIDTH * sizeof(uint16_t);
+    const uint32_t stage_tiles = ((tt::constants::TILE_HEIGHT + 3) * block_row_bytes + tile_size - 1) / tile_size;
+
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dfbs = {
         make_dfb(act_rm_dfb_name, 2 * block_ct),
+        make_dfb(act_stage_dfb_name, stage_tiles),
         make_dfb(act_tile_dfb_name, block_ct),
         make_dfb(weights_dfb_name, tap_count * block_ct),
         make_dfb(partial_dfb_name, 2 * block_ct),
@@ -104,6 +112,10 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
                 tt::tt_metal::experimental::DFBBinding{
                     act_rm_dfb_name, "act_rm", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
                 tt::tt_metal::experimental::DFBBinding{
+                    act_stage_dfb_name, "act_stage", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+                tt::tt_metal::experimental::DFBBinding{
+                    act_stage_dfb_name, "act_stage", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+                tt::tt_metal::experimental::DFBBinding{
                     weights_dfb_name, "weights", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
             },
         .tensor_bindings =
@@ -115,7 +127,7 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
                 tt::tt_metal::experimental::TensorBinding{tap2_tensor_name, "tap2"},
                 tt::tt_metal::experimental::TensorBinding{tap3_tensor_name, "tap3"},
             },
-        .compile_time_args = {{"block_ct", block_ct}, {"num_blocks", num_blocks}},
+        .compile_time_args = {{"block_ct", block_ct}, {"Mt", Mt}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
@@ -138,7 +150,7 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
                 tt::tt_metal::experimental::TensorBinding{k_tensor_name, "k"},
                 tt::tt_metal::experimental::TensorBinding{v_tensor_name, "v"},
             },
-        .compile_time_args = {{"Qt", Qt}, {"Kt", Kt}, {"Vt", Vt}, {"block_ct", block_ct}, {"num_blocks", num_blocks}},
+        .compile_time_args = {{"Qt", Qt}, {"Kt", Kt}, {"Vt", Vt}, {"block_ct", block_ct}, {"Mt", Mt}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
@@ -166,8 +178,8 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
                 tt::tt_metal::experimental::DFBBinding{
                     output_dfb_name, "output", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
             },
-        .compile_time_args = {{"block_ct", block_ct}, {"num_blocks", num_blocks}},
-        .runtime_arg_schema = {.runtime_arg_names = {"wi_count"}},
+        .compile_time_args = {{"block_ct", block_ct}, {"Mt", Mt}},
+        .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::to_compute_hardware_config(attrs.compute_kernel_config),
     };
 
@@ -181,7 +193,9 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values, core, {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}});
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
-            compute_run_args.runtime_arg_values, core, {{"wi_count", dist.wi_count[i]}});
+            compute_run_args.runtime_arg_values,
+            core,
+            {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}});
     }
 
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::TensorParameter> tensor_parameters = {

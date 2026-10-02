@@ -10,10 +10,13 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
-template <uint32_t block_ct, uint32_t num_blocks>
-TT_KERNEL void compute(uint32_t wi_count) {
+// Work item `work` is (channel block work / Mt, tile row work % Mt), as in the reader: the block's taps arrive
+// once per block per core and stay in the weights DFB until the block changes.
+template <uint32_t block_ct, uint32_t Mt>
+TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
     // Kimi-K3 uses a fixed four-tap causal convolution, with three preceding rows supplied by history.
     constexpr uint32_t tap_count = 4;
+    constexpr uint32_t no_block = 0xFFFFFFFFu;
     compute_kernel_hw_startup(dfb::act_rm, dfb::act_tile, dfb::output);
     DataflowBuffer activation(dfb::act_tile);
     DataflowBuffer weights(dfb::weights);
@@ -21,12 +24,17 @@ TT_KERNEL void compute(uint32_t wi_count) {
     DataflowBuffer output(dfb::output);
     silu_tile_init();
 
-    if constexpr (num_blocks == 1) {
-        weights.wait_front(tap_count * block_ct);
-    }
+    uint32_t cur_blk = no_block;
     for (uint32_t item = 0; item < wi_count; ++item) {
-        if constexpr (num_blocks > 1) {
+        const uint32_t blk = (wi_start + item) / Mt;
+        if (blk != cur_blk) {
+            // Release the previous block's taps first: that pop is what lets the reader load this block's into
+            // the one-block-deep weights DFB.
+            if (cur_blk != no_block) {
+                weights.pop_front(tap_count * block_ct);
+            }
             weights.wait_front(tap_count * block_ct);
+            cur_blk = blk;
         }
         for (uint32_t tap = 0; tap < tap_count; ++tap) {
             compute_kernel_lib::tilize<block_ct, dfb::act_rm, dfb::act_tile>(1);
@@ -81,8 +89,8 @@ TT_KERNEL void compute(uint32_t wi_count) {
             }
             activation.pop_front(block_ct);
         }
-        if constexpr (num_blocks > 1) {
-            weights.pop_front(tap_count * block_ct);
-        }
+    }
+    if (cur_blk != no_block) {
+        weights.pop_front(tap_count * block_ct);
     }
 }
