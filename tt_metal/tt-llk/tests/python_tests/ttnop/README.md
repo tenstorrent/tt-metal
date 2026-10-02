@@ -2,8 +2,8 @@
 
 `ttnop` looks for timing races in LLK kernels. Unpack, math, and pack run on
 different Tensix threads; if synchronization is off by a cycle, the answer can
-be wrong even when ordinary runs pass. Use `focus.sh` when you suspect a race
-and want to see whether changing the timing exposes it.
+be wrong even when ordinary runs pass. Use `scripts/focus.sh` when you suspect
+a race and want to see whether changing the timing exposes it.
 
 The tool patches one instruction in the loaded kernel, runs filler instructions
 before that site resumes, and runs the test again. Change the site, filler type,
@@ -14,15 +14,16 @@ This tree targets LLK Python tests. Exalens writes stimuli and reads results
 straight into device L1, so the injector pokes detours there without rebuilding
 the kernel for every delay count.
 
-Run `focus.sh` on one pytest case, read `report.md`, then copy a **Reproduce**
-command to narrow down a finding. See [FOCUS.md](FOCUS.md) for commands and options.
+Run `scripts/focus.sh` on one pytest case, read `report.md`, then copy a
+**Reproduce** command to narrow down a finding. See [FOCUS.md](FOCUS.md) for
+commands and options.
 
-`ci.sh` also exists for sweeping many tests in CI, using the same scanner,
-injector, and report format.
+`scripts/ci.sh` sweeps many tests in CI with the same scanner, injector, and
+report format.
 
 ### `TTNOP_*` and `CHIP_ARCH`
 
-The sweep reads its plan from environment variables. `sweep.py` builds the
+The sweep reads its plan from environment variables. `runtime/sweep.py` builds the
 `(thread, site, filler, delay)` grid from them on every pytest worker. The
 shell scripts set or export these before calling pytest; you can also set them
 yourself.
@@ -40,15 +41,16 @@ yourself.
 | `TTNOP_MAX_DELAY`   | `100`                       | Cave capacity in filler words. Delays above this are rejected; raise it only if the ELF has L1 room.                                       |
 | `TTNOP_FILLER`      | `auto`                      | `auto`, `tti_nop`, `risc_nop`, `sfpnop`, `pacr`, or a raw hex word (`0x08000000`). UNPACR NOPs cannot be selected here.                     |
 | `TTNOP_ENABLE_UNPACR_NOP` | off                   | `1` adds UNPACR0/1 NOPs to automatic unpack-thread sync-site sweeps. Intended for explicit hardware audits only.                           |
-| `TTNOP_REPEATS`     | `1` (`10` in `focus.sh`)    | How many times to run each variant. This is the denominator in `failures / runs` in the report.                                            |
+| `TTNOP_REPEATS`     | `1` (`10` in `scripts/focus.sh`) | How many times to run each variant. This is the denominator in `failures / runs` in the report.                                       |
 | `TTNOP_DRIFT`       | `1`                         | `1` = replay the CPU RNG and compare values to the clean run.                                    |
-| `TTNOP_REPORT_DIR`  | `reports` / `reports/focus` | Where `failures.jsonl` and `report.md` go (`ci.sh` / `focus.sh`).                                                                          |
+| `TTNOP_REPORT_DIR`  | `reports` / `reports/focus` | Where `failures.jsonl` and `report.md` go (`scripts/ci.sh` / `scripts/focus.sh`).                                                          |
 | `TTNOP_DEVICE_JOBS` | `8`                         | pytest workers during the device phase (one Tensix core each).                                                                             |
 | `TTNOP_VERBOSE`     | off                         | Print every detour as it is armed.                                                                                                         |
 
 
-A `report.md` **Reproduce** block is just these variables plus `./focus.sh` on
-one node id. Copy it as-is to rerun that site and delay band.
+A `report.md` **Reproduce** block is just these variables plus
+`./scripts/focus.sh` on one node id. Copy it as-is to rerun that site and delay
+band.
 
 A pytest node id uniquely identifies one collected test, including its parameter
 values, for example `test_file.py::test_name[param]`.
@@ -91,7 +93,7 @@ backward through exactly `n` PACR_STRIDEs, clears the config in `clear`
 slot, executes the displaced instruction, then jumps back to the original
 kernel. Delay 0 bypasses the PACR setup and filler run.
 
-`focus.sh` defaults to 10 repeats per variant.
+`scripts/focus.sh` defaults to 10 repeats per variant.
 
 With repeats greater than 1, delay 0 is included too. It still jumps into the
 cave but runs no fillers. If 0 passes and 8 fails repeatedly, that suggests
@@ -155,7 +157,7 @@ golden can be 0.99 while clean vs NOP might be much lower, and you would never
 see it without drift.
 
 Drift findings go in `report.md` and `failures.jsonl` only. The pytest case
-stays green and `focus.sh` still exits 0.
+stays green and `scripts/focus.sh` still exits 0.
 
 `TTNOP_DRIFT=0` lets the RNG keep advancing between variants. That can still
 find mismatches, but you can no longer compare NOP output to the clean run on the
@@ -173,7 +175,7 @@ the job and you still keep what finished.
 - filler name and word
 - finding type (`mismatch`, `drift`, `assert`, `error`, `hang`, `wedge`)
 - DWARF call chain when available
-- a `focus.sh` line to rerun that site
+- a `scripts/focus.sh` line to rerun that site
 
 The report sorts by widest failing band first. One random failing count is less
 useful than a run of counts.
@@ -185,8 +187,9 @@ experiment.
 
 ## Hangs
 
-`focus.sh` cannot replace a hung worker or reset the card. After a hang, reset
-with `tt-smi -r` before running more device tests. See FOCUS.md for details.
+`scripts/focus.sh` cannot replace a hung worker or reset the card. After a hang,
+reset with `tt-smi -r` before running more device tests. See FOCUS.md for
+details.
 
 ## Sanity check
 

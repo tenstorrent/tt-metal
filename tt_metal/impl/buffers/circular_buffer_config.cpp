@@ -72,24 +72,8 @@ CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : tot
         backing_buffer = descriptor.tensor->mesh_buffer().get_reference_buffer();
     }
     if (backing_buffer) {
-        this->set_globally_allocated_address(*backing_buffer);
-        if (descriptor.address_offset != 0) {
-            uint32_t l1_alignment = hal::get_l1_alignment();
-            TT_FATAL(
-                descriptor.address_offset % l1_alignment == 0,
-                "address_offset ({}) must be aligned to L1 alignment ({})",
-                descriptor.address_offset,
-                l1_alignment);
-            this->address_offset_ = descriptor.address_offset;
-            this->globally_allocated_address_ = this->globally_allocated_address_.value() + descriptor.address_offset;
-            this->max_size_ -= descriptor.address_offset;
-            TT_FATAL(
-                this->total_size_ <= this->max_size_,
-                "address_offset ({}) + total_size ({}) exceeds buffer bank size ({})",
-                descriptor.address_offset,
-                this->total_size_,
-                this->max_size_ + descriptor.address_offset);
-        }
+        this->set_globally_allocated_address_and_total_size(
+            *backing_buffer, descriptor.total_size, descriptor.address_offset);
     }
 
     auto process_format_descriptor = [this](const CBFormatDescriptor& format_descriptor) {
@@ -218,15 +202,40 @@ CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_t
 
 CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_total_size(
     const Buffer& buffer, uint32_t total_size) {
+    return set_globally_allocated_address_and_total_size(buffer, total_size, address_offset_);
+}
+
+CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_total_size(
+    const Buffer& buffer, uint32_t total_size, uint32_t address_offset) {
     if (not buffer.is_l1()) {
         TT_THROW("Only L1 buffers can have an associated circular buffer!");
     }
-    this->globally_allocated_address_ = buffer.address();
+    // Reject invalid retargeting before changing any of the current backing-buffer state.
+    const auto bank_size = buffer.aligned_size_per_bank();
+    TT_FATAL(
+        address_offset <= bank_size, "address_offset ({}) exceeds buffer bank size ({})", address_offset, bank_size);
+    if (address_offset != 0) {
+        const uint32_t l1_alignment = hal::get_l1_alignment();
+        TT_FATAL(
+            address_offset % l1_alignment == 0,
+            "address_offset ({}) must be aligned to L1 alignment ({})",
+            address_offset,
+            l1_alignment);
+    }
+    const auto max_size = bank_size - address_offset;
+    TT_FATAL(
+        total_size <= max_size,
+        "Cannot set circular buffer size to {}. This is larger than the associated dynamically allocated "
+        "L1 buffer bank size of {} B",
+        total_size,
+        max_size);
+    this->globally_allocated_address_ = buffer.address() + address_offset;
+    this->address_offset_ = address_offset;
     this->dynamic_cb_ = true;
-    this->max_size_ = buffer.aligned_size_per_bank();
+    this->max_size_ = max_size;
     this->buffer_size_ = buffer.aligned_size();
     this->shadow_global_buffer = &buffer;
-    this->set_total_size(total_size);
+    this->total_size_ = total_size;
     return *this;
 }
 
@@ -291,7 +300,13 @@ uint32_t CircularBufferConfig::buffer_size() const { return this->buffer_size_; 
 
 uint32_t CircularBufferConfig::address_offset() const { return this->address_offset_; }
 
-void CircularBufferConfig::set_address_offset(uint32_t offset) { this->address_offset_ = offset; }
+void CircularBufferConfig::set_address_offset(uint32_t offset) {
+    if (shadow_global_buffer != nullptr) {
+        set_globally_allocated_address_and_total_size(*shadow_global_buffer, total_size_, offset);
+    } else {
+        address_offset_ = offset;
+    }
+}
 
 CircularBufferConfig::Builder CircularBufferConfig::Builder::LocalBuilder(
     CircularBufferConfig& parent, uint8_t buffer_index) {
