@@ -14,6 +14,21 @@
 constexpr uint32_t onetile = 1U;
 
 /**
+ * Prepare PACK for a new output circular buffer.
+ *
+ * Quasar's pack MOP embeds an init-time buffer descriptor, so changing only
+ * the data format leaves PACK targeting the previous output buffer. Wormhole
+ * and Blackhole derive the output address at pack time and need only the
+ * existing format reconfiguration.
+ */
+inline void prepare_pack_output(const uint32_t cb) {
+    pack_reconfig_data_format(cb);
+#ifdef ARCH_QUASAR
+    pack_init(cb);
+#endif
+}
+
+/**
  * Pack one tile from reg to cb, reserve+wait+pack+push.
  * NOTE: Call after tile_regs_commit(). The order of commit and wait does not matter when adjacent
  * (they affect different threads). Commit releases the lock for math so pack can start; wait
@@ -22,7 +37,7 @@ constexpr uint32_t onetile = 1U;
 inline void pack_and_push(const uint32_t reg, const uint32_t cb) {
     cb_reserve_back(cb, onetile);
     tile_regs_wait();
-    pack_reconfig_data_format(cb);
+    prepare_pack_output(cb);
     pack_tile(reg, cb);
     tile_regs_release();
     cb_push_back(cb, onetile);
@@ -39,9 +54,9 @@ inline void pack_and_push_two_tiles(
     cb_reserve_back(cb_1, onetile);
     cb_reserve_back(cb_2, onetile);
     tile_regs_wait();
-    pack_reconfig_data_format(cb_1);
+    prepare_pack_output(cb_1);
     pack_tile(reg_1, cb_1);
-    pack_reconfig_data_format(cb_2);
+    prepare_pack_output(cb_2);
     pack_tile(reg_2, cb_2);
     tile_regs_release();
     cb_push_back(cb_1, onetile);
@@ -57,7 +72,7 @@ inline void pack_and_push_two_tiles(
 inline void pack_and_push_block(const uint32_t cb_output, const uint32_t block_size) {
     cb_reserve_back(cb_output, block_size);
     tile_regs_wait();
-    pack_reconfig_data_format(cb_output);
+    prepare_pack_output(cb_output);
     for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
         pack_tile(block_idx, cb_output);
     }
@@ -80,7 +95,7 @@ inline void pack_and_push_block(const uint32_t cb_output, const uint32_t block_s
 inline void pack_l1_acc_block(
     const uint32_t cb_idx, const bool first_block, const uint32_t num_tiles, const uint32_t dst_start_index) {
     tile_regs_wait();
-    pack_reconfig_data_format(cb_idx);
+    prepare_pack_output(cb_idx);
     pack_reconfig_l1_acc(first_block ? 0 : 1U);
     for (uint32_t block_idx = 0; block_idx < num_tiles; ++block_idx) {
         pack_tile</* out_of_order_output = */ true>(block_idx, cb_idx, dst_start_index + block_idx);
@@ -98,9 +113,9 @@ inline void pack_two_l1_acc_tiles(
     const bool first_block, const uint32_t reg_0, const uint32_t cb_0, const uint32_t reg_1, const uint32_t cb_1) {
     tile_regs_wait();
     pack_reconfig_l1_acc(first_block ? 0 : 1U);
-    pack_reconfig_data_format(cb_0);
+    prepare_pack_output(cb_0);
     pack_tile</* out_of_order_output = */ true>(reg_0, cb_0, 0U);
-    pack_reconfig_data_format(cb_1);
+    prepare_pack_output(cb_1);
     pack_tile</* out_of_order_output = */ true>(reg_1, cb_1, 0U);
     pack_reconfig_l1_acc(0);
     tile_regs_release();
@@ -121,11 +136,11 @@ inline void pack_three_l1_acc_tiles(
     const uint32_t cb_2) {
     tile_regs_wait();
     pack_reconfig_l1_acc(first_block ? 0 : 1U);
-    pack_reconfig_data_format(cb_0);
+    prepare_pack_output(cb_0);
     pack_tile</* out_of_order_output = */ true>(reg_0, cb_0, 0U);
-    pack_reconfig_data_format(cb_1);
+    prepare_pack_output(cb_1);
     pack_tile</* out_of_order_output = */ true>(reg_1, cb_1, 0U);
-    pack_reconfig_data_format(cb_2);
+    prepare_pack_output(cb_2);
     pack_tile</* out_of_order_output = */ true>(reg_2, cb_2, 0U);
     pack_reconfig_l1_acc(0);
     tile_regs_release();
@@ -148,13 +163,13 @@ inline void pack_four_l1_acc_tiles(
     const uint32_t cb_3) {
     tile_regs_wait();
     pack_reconfig_l1_acc(first_block ? 0 : 1U);
-    pack_reconfig_data_format(cb_0);
+    prepare_pack_output(cb_0);
     pack_tile</* out_of_order_output = */ true>(reg_0, cb_0, 0U);
-    pack_reconfig_data_format(cb_1);
+    prepare_pack_output(cb_1);
     pack_tile</* out_of_order_output = */ true>(reg_1, cb_1, 0U);
-    pack_reconfig_data_format(cb_2);
+    prepare_pack_output(cb_2);
     pack_tile</* out_of_order_output = */ true>(reg_2, cb_2, 0U);
-    pack_reconfig_data_format(cb_3);
+    prepare_pack_output(cb_3);
     pack_tile</* out_of_order_output = */ true>(reg_3, cb_3, 0U);
     pack_reconfig_l1_acc(0);
     tile_regs_release();
@@ -189,11 +204,11 @@ inline void pack_and_push_two_blocks(
     cb_reserve_back(cb_output_1, block_size);
     cb_reserve_back(cb_output_2, block_size);
     tile_regs_wait();
-    pack_reconfig_data_format(cb_output_1);
+    prepare_pack_output(cb_output_1);
     for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
         pack_tile(block_idx, cb_output_1);
     }
-    pack_reconfig_data_format(cb_output_2);
+    prepare_pack_output(cb_output_2);
     for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
         pack_tile(block_idx, cb_output_2);
     }
@@ -210,7 +225,7 @@ inline void pack_tiles_to_output(const uint32_t cb_source, const uint32_t cb_out
     cb_wait_front(cb_source, num_tiles);
     cb_reserve_back(cb_output, num_tiles);
 
-    pack_reconfig_data_format(cb_output);
+    prepare_pack_output(cb_output);
     reconfig_data_format(cb_source, cb_source);
 
     copy_init(cb_source);
