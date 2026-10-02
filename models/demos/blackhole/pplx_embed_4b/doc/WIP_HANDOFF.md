@@ -88,10 +88,14 @@ next matmul / RoPE tables, rotate-half as a tile swap, row sums as ones-vector m
 
 | batch | cold | achievable (SFPU hidden – serialized) | cold ÷ achievable |
 |---|---|---|---|
-| 1 | 14.1 | 6.83 – 7.36 | 1.92 – 2.06× |
-| 8 | 76.7 | 54.7 – 58.9 | 1.30 – 1.40× |
-| 16 | 143.3 | 109.3 – 117.8 | 1.22 – 1.31× |
-| 32 | 291.7 | 218.6 – 235.6 | 1.24 – 1.33× |
+| 1 | 14.1 | 6.92 – 7.50 | 1.88 – 2.04× |
+| 8 | 76.7 | 55.4 – 60.0 | 1.28 – 1.38× |
+| 16 | 143.3 | 110.8 – 120.0 | 1.19 – 1.29× |
+| 32 | 291.7 | 221.6 – 240.0 | 1.22 – 1.32× |
+
+(Revised in version 31: SDPA's matmuls at tt-llk's rate for their shape, Q.K^T K=4 tiles 23.9 and P.[V|1] K=16 19.2
+cycles per tile product, the softmax row sum as P.V's fifth N column; the norms' row sums at the reduce rate, 51.1, since
+a ones-vector matmul with N=1 is 55.7; QK-norm's per-head rsqrt counted as SFPU.)
 
 bs16 per op group, measured vs achievable FPU (+ SFPU), ms: FF1+FF3 58.95 vs 49.75 (+6.62), FF2 25.87 vs 24.87, QKV
 18.81 vs 15.71, WO 11.57 vs 10.47, SDPA 9.55 vs 5.97 (+1.86), add+RMSNorm 9.45 vs 0.99 (9.5×), heads 7.38 vs 1.56
@@ -100,24 +104,23 @@ latency, not math. tt-llk perf harness: `tt_metal/tt-llk/tests/.venv` (requireme
 symlinked to `runtime/sfpi` (same 7.80.0 build), run by node id with `TT_VISIBLE_DEVICES=<chip>`; results land in
 `tt_metal/tt-llk/perf_data/runs/local-*/*.parquet` (per tile = TILE_LOOP / (loop_factor × tile_cnt)).
 
-**Gap to achievable by category (artifact version 30, `profile_page.py` `GAP_LADDER`).** Device-kernel-time ablation
-ladders per op group at bs16 / bs32 (`bench_mm_gap_ladder.py` for the matmuls; SDPA variant trees; heads / add+RMSNorm
-ablation benches), ms over the replay:
+**Gap to achievable by category (artifact version 31, `profile_page.py` `GAP_LADDER` + `formulation()`).** Measured
+device-time ladders per op group (`bench_mm_gap_ladder.py` for the matmuls; SDPA variant trees; heads / add+RMSNorm
+ablation benches) plus, for the custom ops and SDPA, their passes beyond the achievable formulation costed at tt-llk
+rates. ms over the replay:
 
 | category | bs16 | bs32 |
 |---|---|---|
-| inits, handshakes, blocking (matmul compute only above 18.0 cyc/tile-product; custom ops' handshakes-only) | 10.9 | 16.1 |
+| inits, handshakes, blocking (rest of compute only above achievable) | 12.6 | 19.3 |
 | data movement not hidden | 8.7 | 20.2 |
-| compute above the achievable rate (heads, add+RMSNorm, SDPA) | 7.1 | 13.8 |
-| extra passes (FF1+FF3 partial-sum add) | 2.5 | 5.1 |
-| SFPU not hidden (SwiGLU, exp) | 2.0 | 4.3 |
+| formulation (FF1+FF3 K-split add; custom ops' gamma / rotation matmul / V copy / redundant rsqrt; SDPA col_identity sums) | 5.6 | 11.2 |
+| SFPU not hidden (SwiGLU, exp, the custom ops' rsqrt) | 2.7 | 5.8 |
 | cross-core exchange (add+RMSNorm) | 0.6 | 0.6 |
 | in-model vs standalone, small ops | 1.1 | 0.4 |
 | host / dispatch (cold - device) | 1.2 | 12.6 |
 
-bs32's add+RMSNorm DM (8.4 ms, its DRAM sum / a traffic) and heads compute (7.8 ms) are the largest cells. The plain
-matmuls' end-of-block copy costs ~0 (QKV's 2.0-3.0 ms is structure, not the copy). bs32 cold - device is 12.6 ms (bs16
-1.2): host / dispatch at bs32 is worth a look.
+Structure is mostly the heads op (3.5 / 8.2 ms) and add+RMSNorm (3.6 / 5.8), then QKV (2.1 / 3.0). SDPA is at
+achievable + formulation (structure ~0). bs32 cold - device is 12.6 ms (bs16 1.2): host / dispatch at bs32 is worth a look.
 
 Why 89%: `bench_ff13_fused_ablate.py` / `bench_mm_ablate.py` at today's configs (blocks from `capture_qkv_call.py`:
 FF13 4,40,8 1×8 at bs16 and bs32, QKV / FF2 / WO 8,8,8 1×8, bs32 QKV as 4 chunks of M=4096) put every batched matmul's

@@ -47,13 +47,23 @@ N_LAYERS, WEIGHT_PARAMS_PER_LAYER = 36, 2560 * 6144 + 4096 * 2560 + 2560 * 2 * 9
 #   at the fused SwiGLU pass (~383 cycles an output tile; tt-llk sigmoid 221 + 2 SFPU mul 198); rsqrt is per row
 #   (one tile per tile row of a norm) and not counted
 ACH_FPU_FRAC, ACH_BW = 0.89, BW
-ELT, BCOL, RMAX, ONES_MM = 31.1, 28.6, 469 / 64, 18.0
+ELT, BCOL, RSUM, RMAX = 31.1, 28.6, 51.1, 469 / 64
+QK_MM, PV1_MM = 23.9, 19.2  # SDPA matmul cycles per tile product at their shapes (tt-llk perf_matmul, L1 to L1)
+RSQRT_FULL = 607.0  # tt-llk rsqrt, approximate + fast, one full tile
+RSQRT_COL = RSQRT_FULL / 2  # column 0 only (faces 0 / 2): what a row statistic needs, as the heads op's rsqrt_col_tile
 ACH_FPU_CYC_PER_TOKEN = {  # per layer, by op group: tiles per token x cycles per tile
-    "add + RMSNorm": 2 * 2560 / 1024 * (ELT + ELT + ONES_MM + BCOL),  # x2: add, square, row sum, x rstd
-    "heads + QK-norm + RoPE": 5120 / 1024 * (ELT + ONES_MM + BCOL + 3 * ELT),  # Q / K: square, sum, x rstd, RoPE
-    "SDPA": 32 * ISL / 1024 * (RMAX + BCOL + ONES_MM) + 4096 / 1024 * BCOL,  # scores: max, - max, sum; O x 1/sum
+    "add + RMSNorm": 2 * 2560 / 1024 * (ELT + ELT + RSUM + BCOL),  # x2: add, square, row sum, x rstd
+    "heads + QK-norm + RoPE": 5120 / 1024 * (ELT + RSUM + BCOL + 3 * ELT),  # Q / K: square, sum, x rstd, RoPE
+    # Q.K^T (K = 4 tiles: 32 heads x 16 key tiles x 4 per 32 tokens) and P.[V | 1] (K = 16, N = 4 + a ones column
+    # that gives the row sums: 32 x 5 x 16); scores: max, - max; O x 1/sum
+    "SDPA": 64 * QK_MM + 80 * PV1_MM + 32 * ISL / 1024 * (RMAX + BCOL) + 4096 / 1024 * BCOL,
 }
-ACH_SFPU_CYC_PER_TOKEN = {"SDPA": 32 * ISL / 1024 * 64, "FF1 + FF3": 9728 / 1024 * 383}
+ACH_SFPU_CYC_PER_TOKEN = {
+    "SDPA": 32 * ISL / 1024 * 64,  # exp
+    "FF1 + FF3": 9728 / 1024 * 383,  # silu(gate) * up
+    "heads + QK-norm + RoPE": 40 / 32 * RSQRT_COL,  # rsqrt per head (32 Q + 8 K) per 32 tokens
+    "add + RMSNorm": 2 / 32 * RSQRT_COL,  # rsqrt per row, two norms
+}
 
 # Gap to achievable by category (the "breakdown" fields): device kernel µs per call of each op group's main call, from
 # ablation ladders run standalone at the model's placement under the device profiler (2026-10-02, device_kernel_us.py;
@@ -83,29 +93,62 @@ GAP_LADDER = {
                           "handshakes only": 73.9},  # fmt: skip
     },
 }
-GAP_CATS = ("sfpu", "dm", "exchange", "structure", "extra", "compute", "residual")
+GAP_CATS = ("sfpu", "dm", "exchange", "formulation", "structure", "residual")
+R_BY_BS = {16: 5, 32: 4}  # add+RMSNorm: cores per row (the model's QWEN_FUSED_ADD_NORM_R)
 
 
-def gap_split(g, x, ach):
-    """Per-call µs by category for op group g from its ladder x, ach = the call's achievable FPU µs. Matmul math runs
-    at the LLK rate that defines achievable, so compute-only above it is the kernel's structure (block inits,
-    handshakes, DST acquire / release, partial packs); the other ops' structure is their handshakes-only variant (copy
-    compute, nothing moved: an upper bound) and the rest of compute-only above achievable is their compute."""
+def formulation(g, bs):
+    """(formulation, SFPU on the math thread) cycles per data tile: passes the kernel does beyond the achievable
+    formulation, and SFPU work it runs on the math thread (not hidden), at the same tt-llk rates. Per tile of the
+    2560-wide activation (add+RMSNorm), of Q / K (heads op), of attention scores (SDPA)."""
+    if g == "add + RMSNorm":
+        r = R_BY_BS[bs]
+        wc = 80 / r  # tiles of a row per core
+        # the sum packed twice (residual out + scratch: pack-bound, 2 x 26.0 against the add's 31.1), x gamma as a
+        # pass (dest-reuse multiply), and every core of a row summing the partials and running a full-tile rsqrt
+        # (r + 1 adds + rsqrt per wc tiles) where the achievable takes one column-only rsqrt per row
+        return 2 * 26.0 - ELT + ELT + ((r + 1) * ELT + RSQRT_FULL) / wc - RSQRT_COL / 80, RSQRT_COL / 80
+    if g == "heads + QK-norm + RoPE":
+        # eps add per head, x gamma as a pass, rotate-half as a 1-tile matmul against a rotation matrix (tt-llk
+        # 1x1x1: 76.9), V copied through (43.2 per V tile, 1 V tile per 5 Q / K tiles); rsqrt column-only per head
+        return ELT / 4 + ELT + 76.9 + 43.2 / 5, RSQRT_COL / 4
+    if g == "SDPA":
+        # row sums as one col_identity matmul per score tile (tt-llk 2x1x1: 59.5) instead of a ones column in P.V
+        return 59.5 - PV1_MM, 0.0
+    return 0.0, 0.0
+
+
+def tiles_per_call(g, bs, frac):
+    """Data tiles per core per call of the op group's main call (frac: the call's share of the batch)."""
+    tok = bs * ISL * frac
+    return {"add + RMSNorm": tok * 2560, "heads + QK-norm + RoPE": tok * 5120,
+            "SDPA": tok * 32 * ISL}.get(g, 0.0) / 1024 / CORES  # fmt: skip
+
+
+def gap_split(g, x, ach, bs, frac):
+    """Per-call µs by category for op group g from its ladder x, ach = the call's achievable FPU µs. Measured: SFPU not
+    hidden (matmul SwiGLU, SDPA exp), data movement not hidden (full - compute only), the add+RMSNorm exchange, and
+    FF1+FF3's partial-sum add (a formulation difference). Analytic at tt-llk rates (formulation()): the other ops'
+    passes beyond the achievable formulation and their SFPU on the math thread. Inits / handshakes / blocking is the
+    rest of compute only above achievable: block and phase set-ups, CB handshakes, DST acquire / release, partial packs
+    and primitives running slower in the kernel than in isolation."""
     if g == "FF1 + FF3":
-        return {"extra": x["full"] - x["no add"], "sfpu": x["no add"] - x["no add, no SFPU"],
+        return {"formulation": x["full"] - x["no add"], "sfpu": x["no add"] - x["no add, no SFPU"],
                 "dm": x["no add, no SFPU"] - x["compute only"], "structure": x["compute only"] - ach}  # fmt: skip
     if "no copy" in x:
-        return {"dm": x["full"] - x["compute only"], "extra": x["compute only"] - x["no copy"],
+        return {"dm": x["full"] - x["compute only"], "formulation": x["compute only"] - x["no copy"],
                 "structure": x["no copy"] - ach}  # fmt: skip
+    form, sfpu = (c * tiles_per_call(g, bs, frac) / 1350 for c in formulation(g, bs))
     if g == "SDPA":
-        return {"dm": x["full"] - x["compute only"], "sfpu": x["compute only"] - x["compute only, no exp"],
-                "structure": x["handshakes only"],
-                "compute": x["compute only, no exp"] - x["handshakes only"] - ach}  # fmt: skip
+        co = x["compute only, no exp"]
+        return {"dm": x["full"] - x["compute only"], "sfpu": x["compute only"] - co, "formulation": form,
+                "structure": co - ach - form}  # fmt: skip
     if g == "add + RMSNorm":
-        return {"dm": x["full"] - x["no reads, no writes"], "exchange": x["no reads, no writes"] - x["compute + handshakes"],
-                "structure": x["handshakes only"], "compute": x["compute + handshakes"] - x["handshakes only"] - ach}  # fmt: skip
-    return {"dm": x["full"] - x["compute only"], "structure": x["handshakes only"],
-            "compute": x["compute only"] - x["handshakes only"] - ach}  # fmt: skip
+        co = x["compute + handshakes"]
+        return {"dm": x["full"] - x["no reads, no writes"], "exchange": x["no reads, no writes"] - co,
+                "formulation": form, "sfpu": sfpu, "structure": co - ach - form - sfpu}  # fmt: skip
+    co = x["compute only"]
+    return {"dm": x["full"] - co, "formulation": form, "sfpu": sfpu, "structure": co - ach - form - sfpu}
 
 
 GROUPS = (("QKV", "QKV"), ("WO", "WO"), ("FF1 + FF3", "FF1"), ("FF2", "FF2"), ("SDPA", "SDPA"),
@@ -460,15 +503,16 @@ def add_roofs(b, measured):
     ach_peak = PEAK * ACH_FPU_FRAC
     ag = {}
     for g, v in groups.items():
-        fpu = gflops[g] / ach_peak * 1e3 + cyc_ms(ACH_FPU_CYC_PER_TOKEN.get(g, 0.0))
+        fpu = (0.0 if g == "SDPA" else gflops[g] / ach_peak * 1e3) + cyc_ms(ACH_FPU_CYC_PER_TOKEN.get(g, 0.0))
         sfpu = cyc_ms(ACH_SFPU_CYC_PER_TOKEN.get(g, 0.0))
         ag[g] = {"fpu_ms": round(fpu, 3), "sfpu_ms": round(sfpu, 3), "measured_ms": round(v["measured_ms"], 3)}
     a = {
         "fpu_frac": ACH_FPU_FRAC,
         "tflops": round(ach_peak / 1e12, 1),
         "dram_gbs": ACH_BW / 1e9,
-        "mm_ms": round(flops / ach_peak * 1e3, 3),
-        "eltwise_ms": {g: round(cyc_ms(c), 3) for g, c in ACH_FPU_CYC_PER_TOKEN.items()},
+        "mm_ms": round((flops - gflops["SDPA"]) / ach_peak * 1e3 + cyc_ms(64 * QK_MM + 80 * PV1_MM), 3),
+        "eltwise_ms": {g: round(cyc_ms(c - (64 * QK_MM + 80 * PV1_MM if g == "SDPA" else 0)), 3)
+                       for g, c in ACH_FPU_CYC_PER_TOKEN.items()},  # fmt: skip
         "sfpu_parts_ms": {g: round(cyc_ms(c), 3) for g, c in ACH_SFPU_CYC_PER_TOKEN.items()},
         "dram_ms": round(must_bytes / ACH_BW * 1e3, 3),
         "groups": ag,
@@ -488,7 +532,7 @@ def add_roofs(b, measured):
                 m = max(gs, key=lambda s: s["calls"])
                 ach_call = ag["fpu_ms"] * 1e3 * m.get("work_frac", 1) / work
                 main_calls = work / m.get("work_frac", 1)  # every call in units of the main call
-                for k, v in gap_split(g, ladder[g], ach_call).items():
+                for k, v in gap_split(g, ladder[g], ach_call, b["bs"], m.get("work_frac", 1)).items():
                     cat[k] = v * main_calls / 1e3
             cat["residual"] = ag["measured_ms"] - ag["fpu_ms"] - sum(cat.values())
             ag["breakdown_ms"] = {k: round(v, 3) for k, v in cat.items()}
