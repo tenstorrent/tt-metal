@@ -11,10 +11,10 @@ over the ring), so there is no explicit AllGather here:
   ring_joint_scaled_dot_product_attention(q, cache_k, cache_v, kv_actual_isl, logical_n)
                                                             causal GQA over the cached prefix [0:logical_n]
 
-Grouped V (cache stays n_kv heads, 1/chip at TP=4 — NO inflation; Pavle's GQA-causal kernel). No
-balancing / zigzag for chunked prefill (is_balanced=False). The validated building block is
-tests/unit/test_ring_joint_cache_read_sp_vs_ref.py (PCC 0.99994); this is that mechanism as a callable
-model forward. Perf config q_chunk=128 / k_chunk=512 (Pavle's minimax3_gqa_causal_perf).
+Grouped V (cache stays n_kv heads, 1/chip at TP=4 — NO inflation). No balancing / zigzag for chunked
+prefill (is_balanced=False). Validated op-level by tests/unit/test_ring_joint_cache_read_sp_vs_ref.py; this
+is that mechanism as a callable model forward. Perf config q_chunk=128 / k_chunk=512 (the
+minimax3_gqa_causal_perf configuration in tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py).
 """
 
 import ttnn
@@ -42,6 +42,8 @@ def dense_sp_attention(
     layer_idx=0,
     num_layers=1,
     write_chunk=True,
+    slot_id=None,
+    kv_actual_isl_tensor=None,
 ):
     """Write this chunk's K/V into the chunked-KV cache (unless already written), then ring_joint
     cache-read over the prefix.
@@ -53,27 +55,35 @@ def dense_sp_attention(
     kv_actual         prefix length already in the cache before this chunk (drives on-device rotation)
     logical_n         total valid prefix length (q attends causally over [0:logical_n])
     write_chunk       when False, skip the cache write and only read (the per-layer seam is the writer)
+    slot_id, kv_actual_isl_tensor
+                      trace-safe path (both or neither): 1-element uint32 device scalars for the user slot and
+                      kv_actual, taken by both the write and the read so a trace re-targets in place; the host
+                      slot_idx / kv_actual are then ignored. Contract: ring_joint_scaled_dot_product_attention.
     -> out            [1, n_q_local, chunk_local, head_dim]    block-cyclic over the chunk
     """
+    if (slot_id is None) != (kv_actual_isl_tensor is None):
+        raise ValueError("slot_id and kv_actual_isl_tensor must be passed together")
+    # The op folds the layer into the cache batch on both paths; only the slot's form differs (tensors or host ints).
+    slot_kwargs = dict(kv_cache_num_layers=num_layers, kv_cache_layer_idx=layer_idx)
+    if slot_id is not None:
+        slot_kwargs.update(slot_id=slot_id, kv_actual_isl_tensor=kv_actual_isl_tensor)
+    else:
+        slot_kwargs.update(kv_cache_batch_idx=slot_idx, kv_actual_isl=kv_actual)
+
     if write_chunk:
-        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            cache_k,
-            tt_k_chunk,
-            slot_idx=slot_idx,
-            layer_idx=layer_idx,
-            num_layers=num_layers,
-            kv_actual_global=kv_actual,
-            cluster_axis=cluster_axis,
-        )
-        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            cache_v,
-            tt_v_chunk,
-            slot_idx=slot_idx,
-            layer_idx=layer_idx,
-            num_layers=num_layers,
-            kv_actual_global=kv_actual,
-            cluster_axis=cluster_axis,
-        )
+        # The write takes the same two scalars the read consumes, so a re-targeted trace writes and reads one slot;
+        # the argument types pick the op overload.
+        slot_arg, kv_arg = (slot_id, kv_actual_isl_tensor) if slot_id is not None else (slot_idx, kv_actual)
+        for cache, chunk in ((cache_k, tt_k_chunk), (cache_v, tt_v_chunk)):
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                cache,
+                chunk,
+                slot_idx=slot_arg,
+                kv_actual_global=kv_arg,
+                layer_idx=layer_idx,
+                num_layers=num_layers,
+                cluster_axis=cluster_axis,
+            )
 
     out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
         tt_q,
@@ -83,7 +93,7 @@ def dense_sp_attention(
         None,
         None,
         # Persistent ring-gather scratch, allocated once by the CCL manager and reused across all
-        # layers/chunks (was a per-call from_torch(zeros)). dtype MUST match the (bf8) KV cache.
+        # layers/chunks. dtype MUST match the (bf8) KV cache.
         persistent_output_buffer_k=ccl_manager.get_ring_gather_buffer(
             "dense_k", n_kv, cache_global, head_dim, ttnn.bfloat8_b
         ),
@@ -105,12 +115,7 @@ def dense_sp_attention(
         is_causal=True,
         scale=scale,
         is_balanced=False,
-        # Fold the layer into the cache batch index, matching update_padded_kv_cache's write
-        # (batch_idx = slot_idx*num_layers + layer_idx). The cache packs all layers user-major in the
-        # batch dim; passing slot_idx alone made every dense layer read layer 0's cache (L0 correct by
-        # coincidence, L1+ read stale L0 K/V -> wrong attn_out -> residual corruption -> KV-PCC crater).
-        kv_cache_batch_idx=slot_idx * num_layers + layer_idx,
-        kv_actual_isl=kv_actual,
+        **slot_kwargs,
     )
     return out
 
@@ -134,7 +139,7 @@ def dense_sp_attention_nocache(
     Each device's query shard attends to the full `logical_n` sequence reconstructed across the SP ring
     (grouped V, no inflation, is_balanced=False). For the first prefill chunk where there's no prior
     cache; multi-chunk accumulation uses dense_sp_attention (cache-read). Validated op-level by
-    tests/unit/test_ring_joint_sp_vs_ref.py (PCC 0.99998). Returns the per-device query-shard output.
+    tests/unit/test_ring_joint_sp_vs_ref.py. Returns the per-device query-shard output.
 
     n_kv is the GLOBAL KV-head count (e.g. 4); the ring-gather persistent buffer shards it across the TP
     cols (1/device at TP=4), matching the per-device KV head that tt_k/tt_v already carry.

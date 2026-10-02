@@ -9,12 +9,13 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 #include "binary_ng_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include <tt-metalium/constants.hpp>
 #include <algorithm>
 #include <cmath>
-#include <numeric>
 
 using namespace tt::tt_metal;
 
@@ -79,40 +80,19 @@ bool is_quant_op(const BinaryOpType val) {
     return (val == BinaryOpType::QUANT) || (val == BinaryOpType::DEQUANT) || (val == BinaryOpType::REQUANT);
 }
 
-ShardSpec generate_shard_spec_all_cores(
-    const Tensor& input_tensor_a, const Shape& padded_out_shape, const TensorMemoryLayout& memory_layout) {
-    // Generate shard spec using all worker cores
-    auto* device = input_tensor_a.device();
-    auto compute_grid_size = device->compute_with_storage_grid_size();
-    auto all_cores = CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}));
-    uint32_t num_cores = all_cores.num_cores();
-
-    // Calculate squeezed tensor height (all dims except last) and width (last dim)
-    uint32_t tensor_height = 1;
-    for (int i = 0; i < static_cast<int>(padded_out_shape.rank()) - 1; ++i) {
-        tensor_height *= padded_out_shape[i];
-    }
-    uint32_t tensor_width = padded_out_shape[-1];
-
-    // Calculate shard shape based on memory layout (must be tile-aligned for TILE layout)
-    std::array<uint32_t, 2> shard_shape = {0, 0};
-    if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        auto height_padded = tt::round_up(tensor_height, num_cores * tt::constants::TILE_HEIGHT);
-        auto shard_height = tt::round_up(tt::div_up(height_padded, num_cores), tt::constants::TILE_HEIGHT);
-        shard_shape = {shard_height, tensor_width};
-    } else if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        auto shard_width = tt::round_up(tt::div_up(tensor_width, num_cores), tt::constants::TILE_WIDTH);
-        shard_shape = {tensor_height, shard_width};
-    } else {
-        // BLOCK_SHARDED
-        CoreCoord grid_size = all_cores.bounding_box().grid_size();
-        auto height_padded = tt::round_up(tensor_height, grid_size.y * tt::constants::TILE_HEIGHT);
-        auto shard_height = tt::round_up(tt::div_up(height_padded, grid_size.y), tt::constants::TILE_HEIGHT);
-        auto shard_width = tt::round_up(tt::div_up(tensor_width, grid_size.x), tt::constants::TILE_WIDTH);
-        shard_shape = {shard_height, shard_width};
-    }
-    log_debug(tt::LogOp, "BinaryNgDeviceOperation: Generated shard spec using all {} worker cores", num_cores);
-    return ShardSpec(all_cores, shard_shape, ShardOrientation::ROW_MAJOR);
+ShardSpec generate_shard_spec_specless(
+    const Tensor& input_tensor_a,
+    const Shape& padded_out_shape,
+    const TensorMemoryLayout& memory_layout,
+    Layout output_layout) {
+    // Zero-volume specless-sharded is absorbed by the synthesizer's layout-aware degenerate-spec return.
+    return ttnn::operations::data_movement::common::synthesize_output_shard_spec(
+        input_tensor_a.device()->compute_with_storage_grid_size(),
+        padded_out_shape,
+        memory_layout,
+        {.is_tile = (output_layout == Layout::TILE),
+         .orientation_hint = ShardOrientation::ROW_MAJOR,
+         .caller_tag = "QuasarBinaryNg"});
 }
 }  // namespace utils
 
@@ -437,7 +417,8 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
                 shard_spec_opt = ttnn::operations::experimental::quasar::binary_ng::adjust_to_shape(
                     *tensor_b->memory_config().shard_spec(), padded_b_shape, padded_out_shape);
             } else {
-                shard_spec_opt = utils::generate_shard_spec_all_cores(input_tensor_a, padded_out_shape, memory_layout);
+                shard_spec_opt = utils::generate_shard_spec_specless(
+                    input_tensor_a, padded_out_shape, memory_layout, attributes.output_layout);
             }
         }
 
@@ -472,6 +453,24 @@ bool BinaryNgDeviceOperation::skip_launch(
     return tensor_return_value.logical_shape().volume() == 0;
 }
 
+namespace {
+// CMAKE_UNIQUE_NAMESPACE keeps this helper's name from colliding with a sibling's in the unity build.
+namespace CMAKE_UNIQUE_NAMESPACE {
+// A sharded operand is admitted only as an L1-sharded tiled layout (height/block/width) that carries a
+// shard spec: the factories need the spec to borrow or place, and a sharded DRAM tensor or a non-tiled
+// sharded layout is not handled. An interleaved operand always passes (the NoC-read path).
+bool sharded_operand_ok(const tt::tt_metal::MemoryConfig& mc) {
+    if (!mc.is_sharded()) {
+        return true;
+    }
+    const bool tiled_layout = mc.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+                              mc.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+                              mc.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+    return mc.buffer_type() == BufferType::L1 && tiled_layout && mc.shard_spec().has_value();
+}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
 bool BinaryNgDeviceOperation::matches_metal_v2_slice(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // The Metal 2.0 / DataflowBuffer factory (binary_ng_metal_v2_factory.cpp) is a generic port of the
@@ -480,10 +479,10 @@ bool BinaryNgDeviceOperation::matches_metal_v2_slice(
     // activations. Each of input_a / input_b / output may INDEPENDENTLY be interleaved (DRAM or L1,
     // read/written over the NoC) OR L1-sharded (height/block/width). The DFB kernels are per-operand
     // capable (reader: SRC_SHARDED / SRC_SHARDED_B; writer: DST_SHARDED). The factory borrows
-    // all-or-nothing: only when all three operands are L1-sharded on one matching grid are their resident
-    // L1 shards borrowed to back the DFBs (no NoC work); otherwise — any interleaved operand, mixed
-    // strategies, or a divergent grid — NONE are borrowed and every operand is read/written over the NoC
-    // via a sharding-aware TensorAccessor.
+    // all-or-nothing: only when all three operands are L1-sharded with one memory config are their resident
+    // L1 shards borrowed to back the DFBs (no NoC work); otherwise — any interleaved operand or a
+    // different shard spec — NONE are borrowed and every operand is read/written over the NoC via a
+    // sharding-aware TensorAccessor.
     // Everything else falls through to the descriptor path; this predicate is the correctness boundary.
     // Deferred to the descriptor (not handled by the factory): tensor-scalar, where-op, quantization,
     // row-major (non-TILE), and mixed lhs/rhs dtype.
@@ -614,37 +613,16 @@ bool BinaryNgDeviceOperation::matches_metal_v2_slice(
     // Per-operand layout: each of a, b, and the output may INDEPENDENTLY be interleaved OR L1-sharded.
     // The decisive per-operand property the factory acts on is BORROWED (resident L1 shard backs the
     // DFB) vs NoC-READ (sharding-aware TensorAccessor) — not "sharded" — so mixed combinations are
-    // admitted. The only restriction on a sharded operand is that it be L1-sharded with a tiled layout
-    // (height/block/width); a sharded DRAM tensor or a non-tiled sharded layout is not handled here.
-    auto is_l1_sharded_tiled = [](const tt::tt_metal::MemoryConfig& mc) {
-        return mc.is_sharded() && mc.buffer_type() == BufferType::L1 &&
-               (mc.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
-                mc.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
-                mc.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED);
-    };
-    // A sharded operand must be valid L1-sharded-tiled AND actually carry a shard spec (a sharded
-    // memory_config without a shard spec is rejected; the factory needs the spec to borrow / place).
-    auto sharded_operand_ok = [&](const tt::tt_metal::MemoryConfig& mc, bool has_shard_spec) {
-        if (!mc.is_sharded()) {
-            return true;  // interleaved is always fine (NoC-read path)
-        }
-        return is_l1_sharded_tiled(mc) && has_shard_spec;
-    };
-    if (!sharded_operand_ok(a.memory_config(), a.shard_spec().has_value()) ||
-        !sharded_operand_ok(b.memory_config(), b.shard_spec().has_value()) ||
-        !sharded_operand_ok(attributes.memory_config, attributes.memory_config.shard_spec().has_value())) {
+    // admitted. The only restriction on a sharded operand is sharded_operand_ok above.
+    if (!CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(a.memory_config()) ||
+        !CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(b.memory_config()) ||
+        !CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(attributes.memory_config)) {
         return false;
     }
     // When a pre-allocated output tensor is supplied, validate its memory_config the same per-operand
     // way (its shard spec, if any, must be L1-sharded-tiled and present).
-    if (tensor_args.output_tensor.has_value()) {
-        const auto& out_mc = tensor_args.output_tensor->memory_config();
-        if (!sharded_operand_ok(out_mc, tensor_args.output_tensor->shard_spec().has_value())) {
-            return false;
-        }
-    }
-
-    return true;
+    return !tensor_args.output_tensor.has_value() ||
+           CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(tensor_args.output_tensor->memory_config());
 }
 
 bool BinaryNgDeviceOperation::matches_quasar_native_slice(
@@ -709,39 +687,40 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     if (out_spec.data_type() != DataType::BFLOAT16) {
         return false;
     }
+    // get_shard_volumes counts every operand's shard in the output's tiles, so those must be 32x32 too.
+    if (out_spec.tile().get_height() != tt::constants::TILE_HEIGHT ||
+        out_spec.tile().get_width() != tt::constants::TILE_WIDTH) {
+        return false;
+    }
 
     // NONE covers H/W only, so a leading-dim broadcast also reads as NONE. Require full-rank equality.
     if (a.padded_shape() != b.padded_shape() || a.padded_shape() != out_spec.padded_shape()) {
         return false;
     }
-    // Borrowed shards use a different work split than the divisibility check below assumes.
+    // Sharded operands are admitted only when all three are L1 shards the factory borrows, so each DFB
+    // is the resident shard itself. Any shard tile count is admitted: the factory keeps the compute count
+    // and moves the tiles that do not divide by it through small owned rings. Anything mixed -- an
+    // interleaved operand beside a sharded one, a divergent grid or shard spec -- stays on the fallback.
+    // out_spec is the supplied output tensor's own spec when one is given, so it covers that case too.
     if (a.memory_config().is_sharded() || b.memory_config().is_sharded() || out_spec.memory_config().is_sharded()) {
-        return false;
-    }
-    if (tensor_args.output_tensor.has_value() && tensor_args.output_tensor->memory_config().is_sharded()) {
-        return false;
+        if (!CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(a.memory_config()) ||
+            !CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(b.memory_config()) ||
+            !CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(out_spec.memory_config())) {
+            return false;
+        }
+        // Reports all three volumes only for one memory config (is_native_L1_sharding).
+        const auto shard_volumes = get_shard_volumes(a.tensor_spec(), b.tensor_spec(), out_spec);
+        if (!shard_volumes.has_value() || !shard_volumes->a_shard_volume.has_value() ||
+            !shard_volumes->b_shard_volume.has_value() || !shard_volumes->c_shard_volume.has_value()) {
+            return false;
+        }
     }
 
-    // Must match the factory's c.physical_volume(); input_a diverges under leading-dim broadcast.
-    const uint32_t tile_hw = out_spec.tile().get_tile_hw();
-    if (tile_hw == 0) {
-        return false;
-    }
-    const uint64_t total_tiles = out_spec.padded_shape().volume() / tile_hw;
-    if (total_tiles == 0) {
-        return false;
-    }
-    // split_work_to_cores(worker_grid, total_tiles) caps the core count at the tile count.
-    const uint64_t num_cores = std::min<uint64_t>(total_tiles, attributes.worker_grid.num_cores());
-    if (num_cores == 0) {
-        return false;
-    }
-    const uint32_t lcm_rcw = std::lcm(std::lcm(tuning.reader_threads, tuning.compute_threads), tuning.writer_threads);
-    // Unreachable (native_tuning() rejects 0), but the failure mode would be SIGFPE.
-    if (lcm_rcw == 0) {
-        return false;
-    }
-    if (total_tiles % (num_cores * lcm_rcw) != 0) {
+    // A zero-volume output has no work to place, and an empty worker grid has nowhere to place it.
+    // Beyond that there is NO divisibility requirement: every kernel derives its own share from
+    // thread_id and num_threads, so a remainder just gives the low thread ids one extra tile, and
+    // split_work_to_cores already hands each core its own count. Threads that draw zero tiles are fine.
+    if (out_spec.padded_shape().volume() == 0 || attributes.worker_grid.num_cores() == 0) {
         return false;
     }
     // Mirrors dataflow_buffer.cpp's two directional STRIDED asserts; reject rather than trip them.
@@ -879,8 +858,8 @@ ttnn::operations::experimental::quasar::binary_ng::BinaryNgDeviceOperation::tens
                 mem_config_actual = MemoryConfig(
                     memory_layout,
                     mem_config_actual.buffer_type(),
-                    operations::experimental::quasar::binary_ng::utils::generate_shard_spec_all_cores(
-                        input_tensor_a, padded_out_shape, memory_layout));
+                    operations::experimental::quasar::binary_ng::utils::generate_shard_spec_specless(
+                        input_tensor_a, padded_out_shape, memory_layout, output_layout));
             }
         } else {
             log_debug(tt::LogOp, "BinaryNgDeviceOperation: Using provided memory config from function argument");
@@ -915,6 +894,11 @@ ttnn::operations::experimental::quasar::binary_ng::BinaryNgDeviceOperation::tens
         input_tensor_a.layout(),
         input_tensor_b.layout(),
         output_layout};
+
+    if (binary_op_type == ttnn::operations::experimental::quasar::binary_ng::BinaryOpType::BIAS_GELU) {
+        operation_attributes.op_params = ttnn::operations::experimental::quasar::binary::BiasGeluParams{
+            .fast_and_approximate = fast_and_approximate_mode.value_or(false)};
+    }
 
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b, output_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
@@ -990,6 +974,11 @@ ttnn::operations::experimental::quasar::binary_ng::BinaryNgDeviceOperation::tens
         input_tensor_a.layout(),
         Layout::INVALID,
         output_layout};
+
+    if (binary_op_type == ttnn::operations::experimental::quasar::binary_ng::BinaryOpType::BIAS_GELU) {
+        operation_attributes.op_params = ttnn::operations::experimental::quasar::binary::BiasGeluParams{
+            .fast_and_approximate = fast_and_approximate_mode.value_or(false)};
+    }
 
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, std::nullopt, output_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

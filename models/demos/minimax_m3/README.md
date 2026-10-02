@@ -101,7 +101,7 @@ the `prefill_chunk` alignment assert on M3.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `PREFILL_TRACE_DIR` | unset (required) | Golden trace dir (`metadata.json` with `token_ids`, plus `kv_cache/` for the PCC check). |
+| `PREFILL_TRACE_DIR` | unset (required in single-run) | Golden trace dir (`metadata.json` with `token_ids`, plus `kv_cache/` for the PCC check). In multi-run mode it only seeds the initial capacity and the default `PREFILL_GOLDEN_ROOT`. |
 | `PREFILL_CHUNKED` | `0` | `1` = chunked prefill (exercises the cache-read path); `0` = one-shot. |
 | `PREFILL_CHUNK_SIZE` | `5120` | Tokens per chunk (>= 2048 so the first MSA chunk has 16 blocks). |
 | `PREFILL_NUM_LAYERS` | all 60 | Build / run only the first N layers (sets `M3_LOAD_NLAYERS`). |
@@ -112,6 +112,13 @@ the `prefill_chunk` alignment assert on M3.
 | `PREFILL_STANDALONE_CHUNKED_PCC` | `0.88` | Per-layer KV PCC floor (also read by `tt/runners/prefill_kv_validation.py`). |
 | `PREFILL_STANDALONE_CHUNKED_RECORD_ONLY` | `0` | `1` = record PCCs without asserting (`prefill_kv_validation.py`). |
 | `GOLDEN_DIR`, `SRC_TRACE`, `LOGDIR`, `PERF_WORKDIR` | see script header | `run_prefill_perf.sh` trace synthesis and logging paths. |
+| `PREFILL_RUNS` | unset | Multi-run mode: load weights once, then run many specs against the resident model. `<file>` (one spec per line, batch), `-` (stdin) or `fifo:<path>` (FIFO server; `quit` exits). Spec keys: `trace= isl= capacity= iters= skip_pcc= expected_tps= perf_margin= pcc_threshold= label=`. Chunked only. |
+| `PREFILL_GOLDEN_ROOT` | `dirname(PREFILL_TRACE_DIR)` | Directory bare `trace=` names resolve under. |
+| `PREFILL_MAX_SEQ_LEN` | unset (fit) | Multi-run only: pin the KV-cache capacity for runs without `capacity=`; unset fits the cache to each run's padded length (re-allocates cache + rebuilds RoPE, no weight reload). Dense layers gather the whole cache shard per chunk, so an over-sized cache costs time. |
+| `PREFILL_ISL` | trace length | Prefill N tokens: the trace's real tokens tiled cyclically (truncated if shorter). KV PCC still checks the first `min(N, trace)` tokens. Per-spec `isl=` overrides. |
+| `PREFILL_WARMUP_ITERS` | `0` | Untimed whole-sequence passes before the timed iterations (iteration 0 carries the per-ISL JIT). |
+| `PREFILL_COMPILE` | `1` | `0` = skip `compile()`'s warm-up (three chunk variants: first / cache-read / ragged; per-chunk offsets are runtime args, so no per-ISL JIT exists). |
+| `PREFILL_RESULTS_JSONL` | unset | Append one JSON line per run (perf, min PCC, status). |
 
 **Zone profiler** (`tests/perf/profile_prefill.py`, driven by `scripts/run_prefill_profile.sh`): `PROFILE_CHUNK`,
 `PROFILE_CACHE`, `PROFILE_NUM_LAYERS`, `PROFILE_LAYER_IDS`, `PROFILE_READ_EVERY`, `PROFILE_READ_IN_CHUNK`,
@@ -142,6 +149,7 @@ tt/moe/   EP MoE (TtMiniMaxMoE + fused swigluoai routed expert), activation
 tt/               dense_mlp, layer, model, rms_norm, topk, mlp, weight_cache, tt_prefill_runtime
 reference/        torch reference model + sparse GQA prefill
 scripts/          golden KV-cache generation + verification
+scripts/prefill_matrix/  repeatable (new x cached) prefill perf matrix on the 16-stage pipeline (see its README)
 docs/             multi-galaxy pipeline-parallel prefill running & testing
 configs/MiniMax-M3/config.json    dims only (modeling code loaded from the checkpoint via HF_MODEL)
 tests/unit/       module-by-module PCC tests

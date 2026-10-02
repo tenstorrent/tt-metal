@@ -53,14 +53,13 @@ void run_lockstep_beside_per_core_hog(
         GTEST_SKIP() << "HYBRID allocator mode is not active in this process (it is latched at the first "
                         "MetalContext construction); run this binary with TT_METAL_ALLOCATOR_MODE_HYBRID=1";
     }
-    auto* device = md->get_devices()[0];
-    ASSERT_GE(device->compute_with_storage_grid_size().x, 2u) << "Need two disjoint compute cores";
+    ASSERT_GE(md->compute_with_storage_grid_size().x, 2u) << "Need two disjoint compute cores";
 
     const CoreCoord hogged_core(0, 0);
     const CoreCoord free_core(1, 0);
 
     // Over half of L1, so a chip-wide scan cannot fit the second allocation.
-    const auto stats = device->allocator()->get_statistics(BufferType::L1);
+    const auto stats = md->allocator()->get_statistics(BufferType::L1);
     const DeviceAddr alloc_size =
         (stats.largest_free_block_bytes * 6 / 10) / HYBRID_TEST_PAGE_SIZE * HYBRID_TEST_PAGE_SIZE;
     ASSERT_GT(alloc_size, stats.largest_free_block_bytes / 2)

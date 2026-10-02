@@ -77,38 +77,6 @@ inline void _llk_math_srcAB_hw_configure_(DataFormat srcA_format, DataFormat src
     data_format_config_set = DataFormatConfigSet::DEFAULT;
 }
 
-/**
- * @brief Sets up ALU formats for math destination register, specifically for upk to dest.
- *
- * @tparam EN_IMPLIED_MATH_FORMAT: If set to true, will imply math dest format from SrcA reg format
- * @tparam EN_FP32_MATH_FORMAT: Set to true to use math dest in Float32, otherwise default behaviour is Float16/Float16_b depending on input format exponent
- * width
- * @tparam EN_INT32_MATH_FORMAT: Set to true to use math dest in Int32, otherwise default behaviour is Float16/Float16_b depending on input format exponent
- * width
- */
-template <bool EN_IMPLIED_MATH_FORMAT, bool EN_FP32_MATH_FORMAT, bool EN_INT32_MATH_FORMAT>
-inline void _llk_math_upk_to_dest_hw_configure_()
-{
-    // Set implied math dest format mode
-    cfg[DISABLE_IMPLIED_SRCA_FMT_SEC0_Base_ADDR32 + TRISC_ID] = !EN_IMPLIED_MATH_FORMAT;
-
-    alu_config_u alu_config;
-    for (std::uint32_t i = 0; i < NUM_WORDS_ALU_FORMAT; i++)
-    {
-        alu_config.val[i] = 0;
-    }
-
-    // Program DEST fmt
-    alu_config.f.ALU_ACC_CTRL_Fp32_enabled      = EN_FP32_MATH_FORMAT;
-    alu_config.f.ALU_ACC_CTRL_SFPU_Fp32_enabled = EN_FP32_MATH_FORMAT;
-    alu_config.f.ALU_ACC_CTRL_INT8_math_enabled = EN_INT32_MATH_FORMAT;
-
-    for (std::uint32_t i = 0; i < NUM_WORDS_ALU_FORMAT; i++)
-    {
-        cfg[ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32 + i] = alu_config.val[i];
-    }
-}
-
 // Bitmask helper: maps a DataFormat enum value to its corresponding bit in a 64-bit set
 inline constexpr std::uint64_t df_bit(DataFormat df)
 {

@@ -12,6 +12,7 @@
 
 #include "sanitizer/operation.h"
 #include "sanitizer/output.h"
+#include "sanitizer/settings.h"
 #include "sanitizer/types.h"
 
 namespace llk::san
@@ -152,7 +153,7 @@ constexpr OperationDefect operation_defect()
 // ------------
 
 template <Exu E>
-static inline auto& exu_state(State& sanitizer)
+SAN_FUNC static inline auto& exu_state(State& sanitizer)
 {
     if constexpr (E == Exu::Unpack)
     {
@@ -190,7 +191,7 @@ static inline auto& exu_state(State& sanitizer)
  * @tparam Op The Operation being seated.
  */
 template <typename Op>
-static inline typename Op::Struct& operation_set(State& sanitizer)
+SAN_FUNC static inline typename Op::Struct& operation_set(State& sanitizer)
 {
     auto& operation = exu_state<operation_of<Op>::exu>(sanitizer).operation;
 
@@ -210,7 +211,7 @@ static inline typename Op::Struct& operation_set(State& sanitizer)
  * @tparam Op The Operation whose record is wanted.
  */
 template <typename Op>
-static inline typename Op::Struct* operation_get(State& sanitizer)
+SAN_FUNC static inline typename Op::Struct* operation_get(State& sanitizer)
 {
     return std::get_if<typename Op::Struct>(&exu_state<operation_of<Op>::exu>(sanitizer).operation.specific);
 }
@@ -229,7 +230,7 @@ static inline typename Op::Struct* operation_get(State& sanitizer)
  * @tparam E The execution unit whose context is updated.
  */
 template <typename F, Exu E>
-static inline void operand_context_update(ExuContext<E>& context)
+SAN_FUNC static inline void operand_context_update(ExuContext<E>& context)
 {
     if constexpr (E == Exu::Unpack)
     {
@@ -274,7 +275,7 @@ static inline void operand_context_update(ExuContext<E>& context)
  * @tparam E The execution unit whose context is read.
  */
 template <typename F, Exu E>
-static inline UnwindContext operand_context_get(const ExuContext<E>& context)
+SAN_FUNC static inline UnwindContext operand_context_get(const ExuContext<E>& context)
 {
     if constexpr (E == Exu::Unpack)
     {
@@ -341,7 +342,7 @@ static inline UnwindContext operand_context_get(const ExuContext<E>& context)
  * @tparam T The thread the zone runs on.
  */
 template <Exu E, Thread T>
-static inline void exu_context_push(State& sanitizer, const UnwindContext& current)
+SAN_FUNC static inline void exu_context_push(State& sanitizer, const UnwindContext& current)
 {
     if constexpr (is_exu_native(E, T))
     {
@@ -363,7 +364,7 @@ static inline void exu_context_push(State& sanitizer, const UnwindContext& curre
  * @tparam T The thread the zone runs on.
  */
 template <Exu E, Thread T>
-static inline void exu_context_pop(State& sanitizer)
+SAN_FUNC static inline void exu_context_pop(State& sanitizer)
 {
     if constexpr (is_exu_native(E, T))
     {
@@ -385,7 +386,7 @@ static inline void exu_context_pop(State& sanitizer)
  * @tparam T The thread the zone runs on.
  */
 template <Exu E, Thread T>
-static inline void exu_silent_push(State& sanitizer)
+SAN_FUNC static inline void exu_silent_push(State& sanitizer)
 {
     if constexpr (is_exu_native(E, T))
     {
@@ -400,7 +401,7 @@ static inline void exu_silent_push(State& sanitizer)
  * @tparam T The thread the zone runs on.
  */
 template <Exu E, Thread T>
-static inline void exu_silent_pop(State& sanitizer)
+SAN_FUNC static inline void exu_silent_pop(State& sanitizer)
 {
     if constexpr (is_exu_native(E, T))
     {
@@ -413,12 +414,12 @@ static inline void exu_silent_pop(State& sanitizer)
 // --------------------
 
 template <ApiClass A, typename T>
-static inline void field_update(State&, StateDiscard<T>)
+SAN_FUNC static inline void field_update(State&, StateDiscard<T>)
 {
 }
 
 template <ApiClass A, typename F>
-static inline void field_update(State& sanitizer, const StateVal<F>& value)
+SAN_FUNC static inline void field_update(State& sanitizer, const StateVal<F>& value)
 {
     constexpr bool configures  = (A == ApiClass::Configure || A == ApiClass::Reconfigure);
     constexpr bool initializes = (A == ApiClass::Initialize);
@@ -464,12 +465,12 @@ static inline void field_update(State& sanitizer, const StateVal<F>& value)
 // -------------------
 
 template <ApiClass A, typename T>
-static inline void field_check(State&, StateDiscard<T>)
+SAN_FUNC static inline void field_check(State&, StateDiscard<T>)
 {
 }
 
 template <ApiClass A, typename F>
-static inline void field_check(State& sanitizer, const StateVal<F>& value)
+SAN_FUNC static inline void field_check(State& sanitizer, const StateVal<F>& value)
 {
     using G = field_group_t<F>;
 
@@ -501,7 +502,7 @@ static inline void field_check(State& sanitizer, const StateVal<F>& value)
 // ------------
 
 template <Exu E, Thread T>
-static inline void exu_init(State& sanitizer)
+SAN_FUNC static inline void exu_init(State& sanitizer)
 {
     if constexpr (is_exu_native(E, T))
     {
@@ -510,7 +511,7 @@ static inline void exu_init(State& sanitizer)
 }
 
 template <Thread T, typename... Vs>
-static inline void configure(State& sanitizer, Vs&&... values)
+SAN_FUNC static inline void configure(State& sanitizer, Vs&&... values)
 {
     constexpr OperandDefect defect = operand_defect<T, Vs...>();
 
@@ -527,7 +528,7 @@ static inline void configure(State& sanitizer, Vs&&... values)
 }
 
 template <Thread T, typename... Vs>
-static inline void reconfigure(State& sanitizer, Vs&&... values)
+SAN_FUNC static inline void reconfigure(State& sanitizer, Vs&&... values)
 {
     constexpr OperandDefect defect = operand_defect<T, Vs...>();
 
@@ -544,7 +545,7 @@ static inline void reconfigure(State& sanitizer, Vs&&... values)
 }
 
 template <typename Op, Thread T, typename... Vs>
-static inline void init(State& sanitizer, Vs&&... values)
+SAN_FUNC static inline void init(State& sanitizer, Vs&&... values)
 {
     constexpr OperationDefect defect = operation_defect<Op, T, Vs...>();
 
@@ -569,7 +570,7 @@ static inline void init(State& sanitizer, Vs&&... values)
 }
 
 template <typename Op, Thread T, typename... Vs>
-static inline void execute(State& sanitizer, Vs&&... values)
+SAN_FUNC static inline void execute(State& sanitizer, Vs&&... values)
 {
     constexpr OperationDefect defect = operation_defect<Op, T, Vs...>();
 
@@ -604,7 +605,7 @@ static inline void execute(State& sanitizer, Vs&&... values)
 }
 
 template <typename Op, Thread T, typename... Vs>
-static inline void uninit(State& sanitizer, Vs&&... values)
+SAN_FUNC static inline void uninit(State& sanitizer, Vs&&... values)
 {
     constexpr OperationDefect defect = operation_defect<Op, T, Vs...>();
 

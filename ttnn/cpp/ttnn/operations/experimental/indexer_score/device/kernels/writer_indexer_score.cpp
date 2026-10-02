@@ -7,6 +7,9 @@
 // KC strip's 32 rows. block_size>0: extract per-query block maxes from the pooled tiles' col 0, force each
 // query's own block to +inf, scatter (forced-local block / sparse_local_block).
 
+#include "indexer_score_runtime_args.hpp"
+#include "indexer_schedule.hpp"
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -131,8 +134,21 @@ constexpr uint32_t POOL_FACE_ROW_STRIDE =
 constexpr uint32_t POOL_TILE_HW = tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH;
 constexpr uint16_t POOL_POS_INF_BF16 = 0x7F80;                                                  // +inf in bf16
 constexpr uint32_t POOL_BLOCK_KEYS = block_pool ? block_tiles * tt::constants::TILE_WIDTH : 1;  // 1: avoid /0 codegen
+// Each query row's pooled run is one NoC write from its own scratch row. A NoC write keeps each byte at its offset
+// within the write-alignment word, so every scratch row must start at the same offset modulo that alignment as its
+// destination (an aligned row page + col_off_bytes, a multiple of the unit width). The scratch row stride is
+// therefore the full unit width, which the op keeps a multiple of the alignment (blocks_per_unit % 8 == 0,
+// validate_on_program_cache_miss) -- including for a partial unit (the last k-band when kv_len is not a multiple of
+// k_chunk_size), which writes only its valid blocks.
+constexpr uint32_t POOL_SCRATCH_ROW_BYTES = blocks_per_unit * sizeof(uint16_t);
+static_assert(
+    !block_pool || POOL_SCRATCH_ROW_BYTES % NOC_L1_WRITE_ALIGNMENT_BYTES == 0,
+    "indexer_score: the pooled unit width must be a multiple of the NoC write alignment");
+static_assert(
+    !block_pool || tt::constants::TILE_HEIGHT * POOL_SCRATCH_ROW_BYTES <= POOL_TILE_HW * sizeof(uint16_t),
+    "indexer_score: pooled-output scratch rows exceed the one-tile scratch CB");
 
-/** Gather each pooled tile's col-0 into a query-major [TILE_HEIGHT][valid_blocks] scratch, force each
+/** Gather each pooled tile's col-0 into a query-major [TILE_HEIGHT][POOL_SCRATCH_ROW_BYTES] scratch, force each
  *  query's own block to +inf (forced-local / sparse_local_block), then write each query row's run once.
  *  `q_seq_row0` = sequence-local index of this tile-row's query 0 (within Sq). */
 template <typename OutAcc>
@@ -152,7 +168,8 @@ inline void write_pooled_strip(
 
     CircularBuffer scratch_cb(cb_pool_scratch);
     const uint32_t scratch_addr = scratch_cb.get_write_ptr();
-    uint16_t* scratch = reinterpret_cast<uint16_t*>(scratch_addr);  // query-major
+    uint16_t* scratch = reinterpret_cast<uint16_t*>(scratch_addr);  // query-major, POOL_SCRATCH_ROW_BYTES per row
+    constexpr uint32_t row_stride = blocks_per_unit;
 
     for (uint32_t b = 0; b < valid_blocks; ++b) {
         volatile tt_l1_ptr uint16_t* tile = src + b * POOL_TILE_HW;
@@ -160,7 +177,7 @@ inline void write_pooled_strip(
         for (uint32_t fr = 0; fr < POOL_FACE_ROWS; ++fr) {
             const uint32_t face_base = fr * POOL_FACE_ROW_STRIDE;
             for (uint32_t rr = 0; rr < tt::constants::FACE_HEIGHT; ++rr) {
-                scratch[qrow * valid_blocks + b] = tile[face_base + rr * tt::constants::FACE_WIDTH];  // col 0, row qrow
+                scratch[qrow * row_stride + b] = tile[face_base + rr * tt::constants::FACE_WIDTH];  // col 0, row qrow
                 ++qrow;
             }
         }
@@ -176,7 +193,7 @@ inline void write_pooled_strip(
         const uint32_t q_pos = iscore::causal_diag_tile(q_seq, chunk_start_keys, straddle_q_keys, straddle_jump_keys);
         const uint32_t local_block = q_pos / POOL_BLOCK_KEYS;
         if (local_block >= col_off_blocks && local_block < col_off_blocks + valid_blocks) {
-            scratch[rr * valid_blocks + (local_block - col_off_blocks)] = POOL_POS_INF_BF16;
+            scratch[rr * row_stride + (local_block - col_off_blocks)] = POOL_POS_INF_BF16;
         }
     }
 
@@ -184,7 +201,7 @@ inline void write_pooled_strip(
     const uint32_t col_off_bytes = col_off_blocks * sizeof(uint16_t);
     for (uint32_t rr = 0; rr < tt::constants::TILE_HEIGHT; ++rr) {
         noc.async_write(
-            CoreLocalMem<uint32_t>(scratch_addr + rr * row_bytes),
+            CoreLocalMem<uint32_t>(scratch_addr + rr * POOL_SCRATCH_ROW_BYTES),
             out_acc,
             row_bytes,
             {},
@@ -195,21 +212,33 @@ inline void write_pooled_strip(
 }
 
 void kernel_main() {
-    const uint32_t out_addr = get_arg_val<uint32_t>(0);
+    constexpr uint32_t schedule_blocks = get_named_compile_time_arg_val("schedule_blocks");
+    constexpr uint32_t schedule_cols = get_named_compile_time_arg_val("schedule_cols");
+    constexpr uint32_t schedule_groups = get_named_compile_time_arg_val("schedule_groups");
+    constexpr uint32_t schedule_group_rows = get_named_compile_time_arg_val("schedule_group_rows");
+    constexpr uint32_t schedule_ring_size = get_named_compile_time_arg_val("schedule_ring_size");
+    constexpr uint32_t schedule_rotate = get_named_compile_time_arg_val("schedule_rotate");
+    constexpr uint32_t schedule_units = get_named_compile_time_arg_val("schedule_units");
+    const uint32_t out_addr = get_common_arg_val<uint32_t>(indexer_common::writer::Output);
     // Banded schedule (matches reader/compute): group-phase x band rectangle.
-    const uint32_t row_group0 = get_arg_val<uint32_t>(1);
-    const uint32_t group_stride = get_arg_val<uint32_t>(2);
-    const uint32_t num_groups = get_arg_val<uint32_t>(3);
-    const uint32_t band0 = get_arg_val<uint32_t>(4);
-    const uint32_t num_bands = get_arg_val<uint32_t>(5);
-    // [6] max_bands (unused). [7] kv_len_tiles caps columns written per cell (full when unset).
-    uint32_t kv_len_tiles = get_arg_val<uint32_t>(7);
-    // [8] per-device chunk-start (tiles); runtime so distinct values reuse one program. Only the block-pool
+    const uint32_t core_id = get_arg_val<uint32_t>(0);
+    constexpr uint32_t group_stride = schedule_group_rows;
+    constexpr uint32_t num_groups = schedule_groups;
+    const auto schedule = indexer_schedule::for_core<fused_ring_enabled>(
+        core_id,
+        group_stride,
+        {schedule_ring_size, schedule_units, 0, 0, schedule_blocks, schedule_cols, schedule_rotate});
+    const uint32_t row_group0 = schedule.row_group;
+    const uint32_t band0 = schedule.band_start;
+    const uint32_t num_bands = schedule.band_count;
+    // The common valid length caps columns written per cell (full when unset).
+    uint32_t kv_len_tiles = get_common_arg_val<uint32_t>(indexer_common::writer::KvLength);
+    // Per-device chunk-start (tiles); runtime so distinct values reuse one program. Only the block-pool
     // forced-local stamp uses it; always set.
-    // [9],[10] mid-slab boundary-chip forced-local block jump (tiles); both 0 off the boundary chip.
-    uint32_t chunk_start_tiles = get_arg_val<uint32_t>(8);
-    uint32_t straddle_q_tiles = get_arg_val<uint32_t>(9);
-    uint32_t straddle_jump_tiles_rt = get_arg_val<uint32_t>(10);
+    // Mid-slab boundary-chip forced-local block jump (tiles); both 0 off the boundary chip.
+    uint32_t chunk_start_tiles = get_common_arg_val<uint32_t>(indexer_common::writer::ChunkStart);
+    uint32_t straddle_q_tiles = get_common_arg_val<uint32_t>(indexer_common::writer::StraddleQ);
+    uint32_t straddle_jump_tiles_rt = get_common_arg_val<uint32_t>(indexer_common::writer::StraddleJump);
     if constexpr (chunk_start_from_metadata) {
         // Take the reader's derivation, do not re-derive: kv_len_tiles decides how many output columns this
         // kernel drains, and compute produced its strips against the reader's value. One derivation, two
@@ -251,13 +280,19 @@ void kernel_main() {
     constexpr uint32_t sq_rows = q_len_tiles * tt::constants::TILE_HEIGHT;  // rows per plane (Sq)
 
     for (uint32_t phase = 0; phase < num_groups; ++phase) {
+        auto ring_schedule = indexer_ring_schedule::
+            for_lane<shard_physical_sp, k_len_tiles, k_tiles_per_unit, schedule_blocks, schedule_cols, schedule_rotate>(
+                band0);
         const uint32_t group = row_group0 + phase * group_stride;
         for (uint32_t band_i = 0; band_i < num_bands; ++band_i) {
             uint32_t band = band_i;
             uint32_t k_tile0 = 0;
             uint32_t valid_w = 0;
             if constexpr (fused_ring_enabled) {
-                const uint32_t physical_start = get_arg_val<uint32_t>(11 + band_i);
+                uint32_t physical_start = 0;
+                ring_schedule.next(
+                    [](uint32_t shard) { return get_common_arg_val<uint32_t>(indexer_common::writer::Count + shard); },
+                    physical_start);
                 shard_span.set(group, physical_start, k_len_tiles / shard_physical_sp);
                 k_tile0 = physical_start;
                 valid_w = shard_span.k_tiles();

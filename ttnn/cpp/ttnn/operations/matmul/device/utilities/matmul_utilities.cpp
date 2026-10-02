@@ -15,6 +15,7 @@
 #include "tt-metalium/kernel_types.hpp"
 #include "tt-metalium/mesh_device.hpp"
 #include "tt-metalium/work_split.hpp"
+#include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
@@ -82,11 +83,7 @@ uint32_t estimate_interm_tile_size(
 }
 
 uint32_t get_max_l1_space(const ttnn::Tensor& input_tensor_a) {
-    auto* device = input_tensor_a.device();
-    auto lowest_address = device->lowest_occupied_compute_l1_address();
-    uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
-    max_l1_space = max_l1_space - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    return max_l1_space;
+    return static_cast<uint32_t>(ttnn::operations::core::available_program_l1_capacity(input_tensor_a.device()));
 }
 
 bool is_input_batched(const ttnn::Shape& shape) {
@@ -355,7 +352,7 @@ tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const tt
 }
 
 void get_max_page_size_and_num_pages(
-    tt::tt_metal::IDevice* /*device*/,
+    const tt::tt_metal::distributed::MeshDevice& /*device*/,
     uint32_t num_tiles,
     uint32_t tile_size,
     uint32_t& page_size,
@@ -389,11 +386,11 @@ void move_common_entries(
 }
 
 void get_optimal_dram_bank_to_reader_assignment(
-    tt::tt_metal::IDevice* device,
+    const tt::tt_metal::distributed::MeshDevice& device,
     std::vector<tt::tt_metal::CoreCoord>& all_worker_cores_ordered,
     CoreRangeSet& all_worker_cores,
     tt::tt_metal::NOC noc) {
-    all_worker_cores_ordered = device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    all_worker_cores_ordered = device.get_optimal_dram_bank_to_logical_worker_assignment(noc);
     std::set<CoreRange> all_cores_set;
     for (const auto& worker_core : all_worker_cores_ordered) {
         all_cores_set.insert(CoreRange(worker_core));
@@ -402,13 +399,13 @@ void get_optimal_dram_bank_to_reader_assignment(
 }
 
 std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
-    tt::tt_metal::IDevice* device,
+    tt::tt_metal::distributed::MeshDevice& device,
     tt::tt_metal::NOC noc,
     uint32_t workers_per_bank,
     const CoreRangeSet& secondary_reader_excluded_cores) {
     validate_num_workers_per_dram_bank(workers_per_bank);
 
-    const auto primary_workers = device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    const auto primary_workers = device.get_optimal_dram_bank_to_logical_worker_assignment(noc);
     std::vector<DramBankReaderAssignment> assignments;
     assignments.reserve(primary_workers.size() * workers_per_bank);
 
@@ -423,8 +420,7 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
         noc == tt::tt_metal::NOC::NOC_0,
         "Multiple readers per DRAM bank currently require a NOC0 data-movement kernel");
 
-    const auto worker_grid = device->compute_with_storage_grid_size();
-    auto* mesh_device = dynamic_cast<tt::tt_metal::distributed::MeshDevice*>(device);
+    const auto worker_grid = device.compute_with_storage_grid_size();
     std::set<tt::tt_metal::CoreCoord> used(primary_workers.begin(), primary_workers.end());
 
     for (uint32_t bank = 0; bank < primary_workers.size(); ++bank) {
@@ -447,15 +443,12 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
                     // This factory shares one logical reader placement across the mesh, as it
                     // already does for primary readers. Use a representative chip for the hop
                     // heuristic; bank addressing still uses each executing chip's allocator table.
-                    const uint32_t cost = mesh_device ? tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
-                                                            mesh_device,
-                                                            tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(
-                                                                mesh_device->shape().dims()),
-                                                            candidate,
-                                                            primary_workers[bank],
-                                                            noc)
-                                                      : tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
-                                                            device, candidate, primary_workers[bank], noc);
+                    const uint32_t cost = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                        &device,
+                        tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(device.shape().dims()),
+                        candidate,
+                        primary_workers[bank],
+                        noc);
                     // Equal-cost candidates use the same endpoint and hop count. Keep the first candidate in ascending
                     // x/y scan order so that the assignment is deterministic without adding a second routing objective.
                     if (cost < best_cost) {

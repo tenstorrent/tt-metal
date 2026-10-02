@@ -15,11 +15,12 @@
 #include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "../../kernels_dfb/compute/eltwise_format_reference_dfb.hpp"
 
 // Reads `per_core_block_size` tiles from dfb_pre, runs the per-operand activation chain on each tile
 // in DST, writes the results into dfb_post. dfb_out's id is used only to briefly retarget the packer
 // at dfb_post and then restore it to dfb_out's data format. FPU variant: also reconfigures the
-// unpacker srca format for the pre/post switch.
+// unpacker SrcA temporarily, then restores the physical-LHS format for the next pass.
 template <typename ActivationFn>
 ALWI void preprocess_fpu_impl_dfb(
     uint32_t dfb_pre_id,
@@ -32,7 +33,7 @@ ALWI void preprocess_fpu_impl_dfb(
     DataflowBuffer dfb_pre(dfb_pre_id);
     DataflowBuffer dfb_post(dfb_post_id);
 
-    reconfig_data_format_srca(/*old*/ dfb_post_id, /*new*/ dfb_pre_id);
+    reconfig_data_format_srca(/*old*/ QSR_BINARY_SRCA_FORMAT_DFB, /*new*/ dfb_pre_id);
     pack_reconfig_data_format(/*old*/ dfb_out_id, /*new*/ dfb_post_id);
 #ifdef ARCH_QUASAR
     // On Quasar pack_reconfig_data_format only reprograms the packer format gasket, not the packer
@@ -61,7 +62,7 @@ ALWI void preprocess_fpu_impl_dfb(
     dfb_pre.pop_front(per_core_block_size);
     dfb_post.push_back(per_core_block_size);
 
-    reconfig_data_format_srca(/*old*/ dfb_pre_id, /*new*/ dfb_post_id);
+    reconfig_data_format_srca(/*old*/ dfb_pre_id, /*new*/ QSR_BINARY_SRCA_FORMAT_DFB);
     pack_reconfig_data_format(/*old*/ dfb_post_id, /*new*/ dfb_out_id);
 #ifdef ARCH_QUASAR
     pack_init(dfb_out_id);  // restore the packer destination ring to dfb_out (see above)

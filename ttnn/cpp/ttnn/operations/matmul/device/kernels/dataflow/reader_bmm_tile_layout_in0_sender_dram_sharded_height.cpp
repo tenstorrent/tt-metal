@@ -5,9 +5,9 @@
 // Batch-sharded DRAM matmul - in0 reader kernel
 // For batched matmul: [1, B, M, K] x [1, B, K, N] = [1, B, M, N]
 // Each worker handles B/num_workers batches independently
-// Input A is L1 sharded by batch on INPUT STORAGE CORES
-// Workers are on OPTIMAL DRAM READER CORES (different from storage cores)
-// Workers NOC read their in0 shard from their corresponding input storage core
+// Input A is L1 sharded by batch on the input storage cores
+// Workers are the optimal DRAM reader cores, which the factory requires to be exactly those same
+// storage cores, so a worker's NOC read of its in0 shard targets its own L1
 
 #include <stdint.h>
 
@@ -26,8 +26,7 @@ void kernel_main() {
     constexpr auto num_blocks = get_arg(args::num_blocks);  // K / in0_block_w (K blocks in inner loop)
     constexpr auto num_batches_per_core = get_arg(args::num_batches_per_core);  // B / num_cores
     constexpr auto in0_tensor_stride_batch_bytes =
-        get_arg(args::in0_tensor_stride_batch_bytes);                           // bytes per batch in in0
-    constexpr auto in0_shard_size_bytes = get_arg(args::in0_shard_size_bytes);  // full shard size in bytes
+        get_arg(args::in0_tensor_stride_batch_bytes);  // bytes per batch in in0
 
     // RUNTIME ARGS
     const uint32_t worker_core_type = get_arg(args::worker_core_type);

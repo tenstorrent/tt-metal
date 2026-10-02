@@ -251,6 +251,12 @@ uint64_t get_l1_noc_addr(
     return noc_address_backend::bank_address<false>(bank_index, addr, noc);
 }
 
+#if defined(NOC_ATT_ENABLED)
+// System memory (PCIe) has no ATT window on any configured map; any use fails
+// to compile until a map binds one.
+template <typename... Args>
+uint64_t get_system_memory_noc_addr(Args...) = delete;
+#else
 uint64_t get_system_memory_noc_addr(
     const uint32_t id,
     const uint32_t page_size,
@@ -260,6 +266,7 @@ uint64_t get_system_memory_noc_addr(
     uint32_t addr = base_addr + page_size * id + offset;
     return noc_address_backend::system_memory_address(addr, noc);
 }
+#endif
 
 FORCE_INLINE
 std::uint64_t get_noc_addr(std::uint32_t addr, uint8_t noc = noc_index) {
