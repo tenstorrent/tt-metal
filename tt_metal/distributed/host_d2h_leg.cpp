@@ -3,6 +3,8 @@
 
 #include "tt_metal/distributed/host_d2h_leg.hpp"
 
+#include <atomic>
+
 #include <fmt/format.h>
 
 #include <tt-metalium/device.hpp>
@@ -46,7 +48,7 @@ struct D2HLeg::Impl {
         uint32_t acked_dev_off = 0;
         uint32_t data_off = 0;  // the ring's offset inside the arena; 0 for today's layouts
         uint8_t* fifo = nullptr;
-        const volatile uint32_t* bytes_sent = nullptr;
+        uint32_t* bytes_sent = nullptr;  // device-written; read through std::atomic_ref
         dist::HDSocketConnectorState* connector = nullptr;
         uint32_t acked = 0;
         uint32_t read_ptr = 0;
@@ -160,7 +162,7 @@ std::unique_ptr<D2HLeg> D2HLeg::create(
         uint8_t* const b = im.alias->base(c);
         im.core[c].data_off = d.data_offset;
         im.core[c].fifo = b + d.data_offset;
-        im.core[c].bytes_sent = reinterpret_cast<const volatile uint32_t*>(b + d.bytes_sent_offset);
+        im.core[c].bytes_sent = reinterpret_cast<uint32_t*>(b + d.bytes_sent_offset);
         im.core[c].connector = reinterpret_cast<dist::HDSocketConnectorState*>(b + d.connector_state_offset);
         im.core[c].cfg_addr = d.config_buffer_address;
         im.core[c].acked_dev_off = d.bytes_acked_device_offset;
@@ -180,7 +182,7 @@ uint32_t D2HLeg::poll(const Sink& sink) {
             continue;
         }
         // Device-written over PCIe. Acquire orders the trailer reads after it.
-        const uint32_t sent = __atomic_load_n(const_cast<const uint32_t*>(im.core[c].bytes_sent), __ATOMIC_ACQUIRE);
+        const uint32_t sent = std::atomic_ref<uint32_t>(*im.core[c].bytes_sent).load(std::memory_order_acquire);
         const uint64_t available = static_cast<uint64_t>(sent - im.core[c].acked) / im.page_size;
         const uint64_t outstanding = im.core[c].forwarded - im.core[c].retired;
         if (available <= outstanding) {

@@ -7,6 +7,7 @@
 #include <sys/resource.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <cstring>
 #include <stdexcept>
@@ -104,7 +105,7 @@ void publish_header(
     h->pinned_bytes = pinned_bytes;
     h->device_io_base = dev.io_base;
     h->pcie_xy_enc = dev.pcie_xy_enc;
-    __atomic_store_n(&h->magic, kRegionMagic, __ATOMIC_RELEASE);
+    std::atomic_ref<uint64_t>(h->magic).store(kRegionMagic, std::memory_order_release);
 }
 
 }  // namespace
@@ -145,7 +146,7 @@ void HostRegion::release() {
     // Magic first, with a release store, mirroring how publish_header raises it: it is the
     // gate a peer polls, and the pages behind it are about to stop being device-reachable.
     if (region_ != nullptr) {
-        __atomic_store_n(&header()->magic, UINT64_C(0), __ATOMIC_RELEASE);
+        std::atomic_ref<uint64_t>(header()->magic).store(UINT64_C(0), std::memory_order_release);
     }
     pinned_.reset();
     pinned_bytes_ = 0;
@@ -365,17 +366,18 @@ void HostRegion::reset_arenas(uint8_t fill) {
     // Every line of both arrays, not just the cores in use: a stale count in an unused entry
     // is what makes a sender's gate open on a message that was never consumed.
     std::memset(region_ + kCreditArrayOffset, 0, kCreditArrayBytes + kDoneArrayBytes);
-    __atomic_thread_fence(__ATOMIC_RELEASE);
+    std::atomic_thread_fence(std::memory_order_release);
 }
 
 std::string HostRegion::verify_header() const {
     if (region_ == nullptr) {
         return "no region mapped -- reserved_base() has not been called";
     }
-    const RegionHeader* h = header();
-    if (__atomic_load_n(&h->magic, __ATOMIC_ACQUIRE) != kRegionMagic) {
+    // atomic_ref needs a non-const lvalue, so the gate is read before h is narrowed to const.
+    if (std::atomic_ref<uint64_t>(header()->magic).load(std::memory_order_acquire) != kRegionMagic) {
         return "region magic absent -- unprovisioned, or a pointer into the wrong mapping";
     }
+    const RegionHeader* h = header();
     // chips_per_host and grid_width are the dangerous two: a mismatch does not corrupt an
     // offset, it silently names a different core, and that core reads legitimately idle.
     const struct {
