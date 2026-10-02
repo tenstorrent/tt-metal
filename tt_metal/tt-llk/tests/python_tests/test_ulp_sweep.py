@@ -531,18 +531,31 @@ def test_an_unmeasurable_cell_survives_the_xdist_merge_in_either_order(
 
 
 @pytest.mark.parametrize(
-    "arch, failed, refusal",
+    "arch, failed, exitstatus, refusal",
     [
-        (ChipArchitecture.BLACKHOLE, 0, "unkeyed rows are read as wormhole"),
-        (ChipArchitecture.WORMHOLE, 3, "3 failure"),
+        (ChipArchitecture.BLACKHOLE, 0, 0, "unkeyed rows are read as wormhole"),
+        (ChipArchitecture.WORMHOLE, 3, 0, "3 failure"),
+        (
+            ChipArchitecture.WORMHOLE,
+            0,
+            pytest.ExitCode.INTERRUPTED,
+            "exit status INTERRUPTED",
+        ),
     ],
-    ids=["other-arch", "failed-session"],
+    ids=["other-arch", "failed-session", "interrupted-session"],
 )
-def test_emit_refuses_what_the_session_cannot_vouch_for(table, arch, failed, refusal):
-    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+def test_emit_refuses_what_the_session_cannot_vouch_for(
+    table, arch, failed, exitstatus, refusal
+):
+    """The interrupted case has every touched grid complete and nothing failed: pytest
+    still calls ``pytest_sessionfinish`` after a Ctrl-C, so only the exit status knows
+    the run stopped early."""
+    for approx in ("No", "Yes"):
+        for dest in ("No", "Yes"):
+            record("Gelu", ("Float16", "Float16", approx, dest), 5)
     before = table.read_text()
     with _refuses(refusal, RuntimeError):
-        finish_emit(arch, failed, table)
+        finish_emit(arch, failed, table, exitstatus=exitstatus)
     assert table.read_text() == before
 
 

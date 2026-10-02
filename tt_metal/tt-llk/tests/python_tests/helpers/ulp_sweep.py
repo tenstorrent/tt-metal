@@ -618,15 +618,18 @@ def _incomplete_grids() -> List[str]:
     return gaps
 
 
-def finish_emit(arch, testsfailed: int, path=None) -> str:
+def finish_emit(arch, testsfailed: int, path=None, exitstatus: int = 0) -> str:
     """Write this session's measurements into the table, and say what was written.
 
     Five outcomes:
 
     * **nothing written, ``RuntimeError``** when the session cannot vouch for them: off
       ``MEASURED_ARCH``, where unkeyed rows would carry another arch's numbers under
-      Wormhole's name; after a failure, when only a subset was measured; or when an
-      op's ``(in, out)`` grid is incomplete, when a write would drop the rest's rows.
+      Wormhole's name; when *exitstatus* says the session did not run to the end (pytest
+      calls ``pytest_sessionfinish`` after a Ctrl-C too, and an interrupt between two
+      ops leaves every touched grid complete and nothing counted as failed); after a
+      failure, when only a subset was measured; or when an op's ``(in, out)`` grid is
+      incomplete, when a write would drop the rest's rows.
     * **written, then ``RuntimeError``** when some ops could not be placed: an op kept
       verbatim because a row the run covers carries a field ``_render`` cannot put
       back, or an op measured with no key line to write into. Every *other* op's block
@@ -642,6 +645,13 @@ def finish_emit(arch, testsfailed: int, path=None) -> str:
             f"ran on {arch.value}, but the table's unkeyed rows are read as "
             f"{MEASURED_ARCH.value} measurements and `_render` does not emit `arch`. "
             "Nothing written."
+        )
+    if exitstatus != 0:
+        name = getattr(exitstatus, "name", str(exitstatus))
+        raise RuntimeError(
+            f"the session ended with exit status {name}, not OK, so what it measured "
+            "is whatever it got to. Nothing written -- emit from a run that ends on "
+            "its own."
         )
     if testsfailed:
         raise RuntimeError(

@@ -1028,7 +1028,14 @@ def _finish_ulp_emit(session):
             # Silence here read as a successful rewrite: a `-k` that matched nothing, a
             # mode that deselects the sweep.
             raise RuntimeError("nothing was measured, so the table was not touched")
-        message = ulp_sweep.finish_emit(get_chip_architecture(), session.testsfailed)
+        # pytest runs this hook after a Ctrl-C as well, with INTERRUPTED already in
+        # `exitstatus`; the failure count and the grid check cannot tell that apart from
+        # a run that ended on its own.
+        message = ulp_sweep.finish_emit(
+            get_chip_architecture(),
+            session.testsfailed,
+            exitstatus=int(session.exitstatus),
+        )
     except (RuntimeError, ValueError) as exc:
         message = f"--ulp-emit: {exc}"
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
