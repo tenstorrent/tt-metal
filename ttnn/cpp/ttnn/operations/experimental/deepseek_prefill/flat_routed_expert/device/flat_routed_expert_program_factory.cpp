@@ -385,11 +385,15 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
 
     // gate/up cores
     {
+        // NOC1: on NOC0 the gate/up cores' h writes, the DRAM weight reads and the x relays' multicast into these same
+        // cores wedge the NoC (a relay stuck in noc_cmd_buf_ready or in its write barrier; ~1 in 1e4..2e5 launches,
+        // any chip), a hardware hang the NoC probe test reproduces from the traffic alone
+        // (tests/ttnn/unit_tests/operations/noc_hang_probe, op_skeleton); with these writes on NOC1 it never did.
         const auto kr =
             dm("se5_recv.cpp",
                p.gu,
                DataMovementProcessor::RISCV_0,
-               NOC::NOC_0,
+               NOC::NOC_1,
                {0,         x_blk,   1,    p.slot, E * p.nk_gu, V,        p.ring_g, 16,    1,     3,      2,    MTG,
                 H_TILE,    ngu_sg,  DATA, HARR,   GO,          DONE,     KBLK,     HARR,  SFREE, p.hbuf, XARR, HFREE,
                 p.x_slots, x_bytes, S,    NP,     HSFREE,      H_PIECES, p.nk_gu,  GATH1, GATH2, 1,      G,    E},
