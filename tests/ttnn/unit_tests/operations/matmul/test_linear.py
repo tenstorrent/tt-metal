@@ -1191,6 +1191,34 @@ def test_linear_bias_wrong_height_rejected_on_multicore_reuse_program_config(dev
         ttnn.linear(in0, in1, bias=bias, program_config=program_config)
 
 
+def test_linear_narrow_bias_core_grid_activation(device):
+    """With core_grid, the activation is fused into the matmul kernel, while a narrow bias is applied
+    afterwards via add(). The result must still be act(a @ b + bias), not act(a @ b) + bias."""
+    torch.manual_seed(0)
+    a = torch.randn(32, 64, dtype=torch.bfloat16)
+    b = torch.randn(64, 64, dtype=torch.bfloat16)
+    # A large constant bias: PCC alone cannot catch the bug, since act(a @ b) + bias is mostly a shift.
+    bias = torch.tensor([4.0], dtype=torch.bfloat16)
+    expected = torch.relu(a @ b + bias)
+
+    result = ttnn.linear(
+        ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device),
+        ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device),
+        bias=ttnn.from_torch(bias, layout=ttnn.TILE_LAYOUT, device=device),
+        activation="relu",
+        core_grid=ttnn.CoreGrid(y=1, x=1),
+    )
+    assert_numeric_metrics(
+        expected,
+        ttnn.to_torch(result),
+        atol=1.0,
+        rtol=0.05,
+        frobenius_threshold=0.05,
+        pcc_threshold=0.99,
+        check_ulp=False,
+    )
+
+
 @pytest.mark.parametrize("bias_rank", [0, 1, 2, 3, 4])
 @pytest.mark.parametrize("m,k,n", [(32, 32, 32)])
 def test_linear_broadcast_bias_ranks(device, m, k, n, bias_rank):
