@@ -39,9 +39,8 @@ jobs:
               { name: "(Runtime) Sanity tests",         workflow: "runtime-sanity-tests.yaml",     optional: false },
               { name: "L2 Nightly",                    workflow: "tt-metal-l2-nightly.yaml",        optional: false },
               { name: "All Model Tests",               workflow: "all-model-tests.yaml",            optional: true  },
-              { name: "(Single) Choose your pipeline", workflow: "pipeline-select.yaml",            optional: true  },
-              { name: "(T3K) Choose your pipeline",    workflow: "pipeline-select-t3k.yaml",        optional: true  },
-              { name: "(Galaxy) Choose your pipeline", workflow: "pipeline-select-galaxy.yaml",     optional: true  },
+              { name: "T3K tests",                     workflow: "t3000-tests.yaml",                optional: true  },
+              { name: "Galaxy tests",                  workflow: "galaxy-tests.yaml",               optional: true  },
             ];
 
             const badges = [];

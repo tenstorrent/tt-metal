@@ -18,6 +18,16 @@
 namespace ttnn::operations::experimental::transformer::detail {
 
 void bind_nlp_create_qkv_heads(nb::module_& mod) {
+    ttnn::bind_function<"nlp_create_q_heads_split", "ttnn.experimental.">(
+        mod,
+        "Create Q heads and return two contiguous channel regions. Interleaved TILE input; split and head width must "
+        "be tile aligned.",
+        &ttnn::experimental::nlp_create_q_heads_split,
+        nb::arg("input").noconvert(),
+        nb::kw_only(),
+        nb::arg("num_heads").noconvert(),
+        nb::arg("split_head_dim").noconvert(),
+        nb::arg("memory_config").noconvert() = nb::none());
     ttnn::bind_function<"nlp_create_qkv_heads", "ttnn.experimental.">(
         mod,
         R"doc(

@@ -39,7 +39,7 @@ void kernel_main() {
     }
 
     overlay::FdsDispatch::fds_clear_go();
-    overlay::FdsDispatch::fds_go(/*ad_enable=*/false, kSessionGo);
+    overlay::FdsDispatch::fds_go(kSessionGo);
 
     uint32_t result = kComplete;
     constexpr uint32_t num_steps = sizeof(kStepTokens) / sizeof(kStepTokens[0]);
@@ -62,7 +62,7 @@ void kernel_main() {
                 // would prove the filter; the repetition is for a filterless model, whose brief
                 // capture of a payload could fall between two of the worker's polls.
                 for (uint32_t i = 0; i < kPulseRepeats; i++) {
-                    overlay::FdsDispatch::fds_go(/*ad_enable=*/false, kPayloadGo);
+                    overlay::FdsDispatch::fds_go(kPayloadGo);
                     overlay::FdsDispatch::fds_clear_go();
                     overlay::FdsDispatch::fds_read_group_count(kTokenArmed);
                 }
@@ -70,12 +70,12 @@ void kernel_main() {
             case kTokenPulseChecked:
                 // The held value: stable until the worker reports capture, so the long filter must
                 // pass it.
-                overlay::FdsDispatch::fds_go(/*ad_enable=*/false, kPayloadGo);
+                overlay::FdsDispatch::fds_go(kPayloadGo);
                 break;
             case kTokenRearmed:
                 // A fresh change for the floor-threshold capture.
                 overlay::FdsDispatch::fds_clear_go();
-                overlay::FdsDispatch::fds_go(/*ad_enable=*/false, kPayloadGo);
+                overlay::FdsDispatch::fds_go(kPayloadGo);
                 break;
             case kTokenDone: overlay::FdsDispatch::fds_clear_go(); break;
         }

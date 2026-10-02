@@ -19,6 +19,14 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
         K, accumulates the log-decay gate, constructs causal within-chunk interactions,
         and computes the triangular correction used by the recurrence.
 
+        Optional ``actual_start`` and ``actual_end`` are replicated device UINT32
+        row-major scalars defining a 32-token-aligned, nonempty global interval.
+        ``actual_end`` requires ``actual_start``. Omitting both bounds preserves the
+        original unbounded call without allocating a scalar.
+        Omitting ``actual_end`` retains full physical
+        capacity. Their contents may change during trace replay. Padded chunk/group
+        outputs are unspecified. Bounds are caller preconditions, not read on host.
+
         Args:
             q (ttnn.Tensor): Flat queries ``[1, T, H*K]`` in BFLOAT16.
             k (ttnn.Tensor): Flat keys ``[1, T, H*K]`` in BFLOAT16.
@@ -65,7 +73,10 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("output_bf16_mask") = 0);
+        nb::arg("output_bf16_mask") = 0,
+        nb::arg("actual_start") = nb::none(),
+        nb::arg("actual_end") = nb::none(),
+        nb::arg("sequence_parallel_axis") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::kda::prepare_chunk_recurrence::detail

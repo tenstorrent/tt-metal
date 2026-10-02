@@ -8,6 +8,7 @@
 #include <array>
 #include <string>
 #include <optional>
+#include <type_traits>
 #include <utility>
 
 #include <fmt/format.h>
@@ -61,6 +62,9 @@ constexpr auto kFloatAndInt32Dtypes = "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, 
 constexpr auto kFloatAndInt32UInt32Dtypes =
     "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295])";
 constexpr auto kFloatOnlyDtypes = "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32";
+// NEXTAFTER steps one ULP of the destination format, which a block-float tile packed against a
+// shared exponent cannot represent: the step rounds away and the op returns its input.
+constexpr auto kUlpStepFloatDtypes = "BFLOAT16, FLOAT32";
 constexpr auto kBitwiseShiftDtypes = "INT32, UINT16 (range: [0, 65535]), UINT32 (range: [0, 4294967295])";
 constexpr auto kLogicalRightShiftDtypes = "INT32, UINT32 (range: [0, 4294967295])";
 constexpr auto kMultiplyInplaceDtypes =
@@ -94,6 +98,9 @@ constexpr auto kAdditiveFastApproxPostNote =
 constexpr auto kMultiplyFastApproxPostNote =
     R"doc(When :attr:`fast_and_approximate_mode` is `True` for bfloat16 datatype, the operation uses FPU implementation for better performance.
         When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses SFPU with the result rounded to nearest even (RNE).)doc";
+constexpr auto kBiasGeluFastApproxPostNote =
+    R"doc(When :attr:`fast_and_approximate_mode` is `True`, the gelu is computed with the fast lookup-table approximation.
+        When it is `False` (default), the accurate gelu is used, matching the default of :attr:`ttnn.gelu`.)doc";
 constexpr auto kDivideFastApproxPostNote =
     R"doc(When :attr:`fast_and_approximate_mode` is `True`, operation assumes that :attr:`input_tensor_b` is not zero.
         When :attr:`fast_and_approximate_mode` is `False` (default), operation properly handles division by zero.
@@ -924,6 +931,63 @@ void bind_situ_glu(nb::module_& mod, const std::string& description, const std::
 }
 
 template <ttnn::unique_string Name, typename Fn>
+void bind_clamped_silu_glu(nb::module_& mod, const std::string& description, const std::string& math, Fn fn) {
+    auto doc = fmt::format(
+        R"doc(
+        {2}
+
+        .. math::
+            {3}
+
+        Args:
+            gate (ttnn.Tensor): the gate input tensor.
+            up (ttnn.Tensor): the up input tensor.
+            limit (float): the clamp limit. Bounds the gate half from above only and the up half at
+                both ends. Must be positive.
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): the cores to run on. Defaults to `None`.
+            sub_device_id (ttnn.SubDeviceId, optional): sub-device whose worker cores to run on, as an alternative to
+                spelling them out in :attr:`sub_core_grids`. Mutually exclusive with it. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, BFLOAT8_B
+                 - TILE
+
+            Runs as a single multiply with no intermediates, so any output memory config is
+            accepted alongside a core restriction. An interleaved-L1 output still spans every
+            bank: :attr:`sub_core_grids` scopes the compute, not that allocation.
+        )doc",
+        std::string(Name),
+        "ttnn." + std::string(Name),
+        description,
+        math);
+
+    ttnn::bind_function<Name>(
+        mod,
+        doc.c_str(),
+        fn,
+        nb::arg("gate"),
+        nb::arg("up"),
+        nb::arg("limit"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("sub_device_id") = nb::none());
+}
+
+template <ttnn::unique_string Name, typename Fn>
 void bind_binary_composite_with_rtol_atol(
     nb::module_& mod,
     const std::string& description,
@@ -1411,6 +1475,62 @@ Tensor multiply_fast_approx_tensor_tensor(
         sub_device_id);
 }
 
+Tensor bias_gelu_fast_approx_tensor_scalar(
+    const Tensor& input_tensor_a,
+    unary::ScalarVariant value,
+    bool fast_and_approximate_mode,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<ttnn::Tensor>& output_tensor,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt) {
+    return ttnn::bias_gelu(
+        input_tensor_a,
+        value,
+        dtype,
+        memory_config,
+        output_tensor,
+        ttsl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        ttsl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
+        ttsl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
+        sub_core_grids,
+        sub_device_id,
+        fast_and_approximate_mode);
+}
+
+Tensor bias_gelu_fast_approx_tensor_tensor(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    bool fast_and_approximate_mode,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<ttnn::Tensor>& output_tensor,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt) {
+    return ttnn::bias_gelu(
+        input_tensor_a,
+        input_tensor_b,
+        dtype,
+        memory_config,
+        output_tensor,
+        ttsl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        ttsl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
+        ttsl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
+        sub_core_grids,
+        sub_device_id,
+        fast_and_approximate_mode);
+}
+
 Tensor divide_fast_approx_tensor_scalar(
     const Tensor& input_tensor_a,
     unary::ScalarVariant value,
@@ -1493,6 +1613,8 @@ Tensor divide_fast_approx_tensor_tensor(
         sub_device_id);
 }
 
+// An op with no scalar-first form passes nullptr as scalar_tensor_fn: that overload, and the
+// Args text describing it, are then dropped at compile time.
 template <ttnn::unique_string Name, typename TensorScalarFn, typename TensorTensorFn, typename ScalarTensorFn>
 void bind_binary_operation_with_fast_approx(
     nb::module_& mod,
@@ -1500,11 +1622,12 @@ void bind_binary_operation_with_fast_approx(
     const std::string& math,
     TensorScalarFn tensor_scalar_fn,
     TensorTensorFn tensor_tensor_fn,
-    ScalarTensorFn scalar_tensor_fn,
+    [[maybe_unused]] ScalarTensorFn scalar_tensor_fn,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = " ",
     const std::string& post_note = " ",
     bool fast_approx_default = false) {
+    constexpr bool has_scalar_first = !std::is_null_pointer_v<ScalarTensorFn>;
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -1513,8 +1636,7 @@ void bind_binary_operation_with_fast_approx(
             {3}
 
         Args:
-            input_tensor_a (ttnn.Tensor or Number): the input tensor, or the left operand when a Number.
-            input_tensor_b (ttnn.Tensor or Number): the input tensor. At least one of the two operands must be a tensor; there is no scalar-scalar overload.
+            {9}
 
         Keyword args:
             fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `{8}`.
@@ -1554,40 +1676,45 @@ void bind_binary_operation_with_fast_approx(
         note,
         BINARY_BROADCAST_DOC,
         post_note,
-        fast_approx_default ? "True" : "False");
+        fast_approx_default ? "True" : "False",
+        has_scalar_first
+            ? R"doc(input_tensor_a (ttnn.Tensor or Number): the input tensor, or the left operand when a Number.
+            input_tensor_b (ttnn.Tensor or Number): the input tensor. At least one of the two operands must be a tensor; there is no scalar-scalar overload.)doc"
+            : R"doc(input_tensor_a (ttnn.Tensor): the input tensor.
+            input_tensor_b (ttnn.Tensor or Number): the input tensor.)doc");
 
-    ttnn::bind_function<Name>(
-        mod,
-        doc.c_str(),
-        ttnn::overload_t(
-            tensor_scalar_fn,
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::kw_only(),
-            nb::arg("fast_and_approximate_mode") = fast_approx_default,
-            nb::arg("dtype") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("sub_core_grids") = nb::none(),
-            nb::arg("sub_device_id") = nb::none()),
-        ttnn::overload_t(
-            tensor_tensor_fn,
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::kw_only(),
-            nb::arg("fast_and_approximate_mode") = fast_approx_default,
-            nb::arg("dtype") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("sub_core_grids") = nb::none(),
-            nb::arg("sub_device_id") = nb::none()),
-        ttnn::overload_t(
+    auto tensor_scalar_overload = ttnn::overload_t(
+        tensor_scalar_fn,
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::kw_only(),
+        nb::arg("fast_and_approximate_mode") = fast_approx_default,
+        nb::arg("dtype") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
+        nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
+        nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("sub_device_id") = nb::none());
+    auto tensor_tensor_overload = ttnn::overload_t(
+        tensor_tensor_fn,
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::kw_only(),
+        nb::arg("fast_and_approximate_mode") = fast_approx_default,
+        nb::arg("dtype") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
+        nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
+        nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("sub_device_id") = nb::none());
+
+    if constexpr (has_scalar_first) {
+        // Declared inside the branch: overload_t(nullptr, ...) compiles but cannot be bound.
+        auto scalar_tensor_overload = ttnn::overload_t(
             scalar_tensor_fn,
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
@@ -1600,7 +1727,12 @@ void bind_binary_operation_with_fast_approx(
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("sub_core_grids") = nb::none(),
-            nb::arg("sub_device_id") = nb::none()));
+            nb::arg("sub_device_id") = nb::none());
+        ttnn::bind_function<Name>(
+            mod, doc.c_str(), tensor_scalar_overload, tensor_tensor_overload, scalar_tensor_overload);
+    } else {
+        ttnn::bind_function<Name>(mod, doc.c_str(), tensor_scalar_overload, tensor_tensor_overload);
+    }
 }
 
 template <ttnn::unique_string Name, typename Fn>
@@ -2188,15 +2320,16 @@ void py_module(nb::module_& mod) {
         detail::kArithmeticFpuDtypes,
         detail::kMixedFloatFamilyFootnote);
 
-    detail::bind_binary_operation<"bias_gelu">(
+    detail::bind_binary_operation_with_fast_approx<"bias_gelu">(
         mod,
         R"doc(Computes bias_gelu of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|bias_gelu|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::bias_gelu),
-        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::bias_gelu),
-        ". ",
+        &detail::bias_gelu_fast_approx_tensor_scalar,
+        &detail::bias_gelu_fast_approx_tensor_tensor,
+        /*scalar_tensor_fn*/ nullptr,
         detail::kFloatOnlyDtypes,
-        detail::kSameDtypeRequiredFootnote);
+        detail::kSameDtypeRequiredFootnote,
+        detail::kBiasGeluFastApproxPostNote);
 
     detail::bind_binary_operation_with_fast_approx<"multiply">(
         mod,
@@ -2284,7 +2417,7 @@ void py_module(nb::module_& mod) {
 
     detail::bind_bitwise_binary_ops_operation<"bitwise_right_shift">(
         mod,
-        R"doc(Perform bitwise_right_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31))doc",
+        R"doc(Perform bitwise_right_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. Int32 uses an arithmetic shift; uint32 uses a logical shift. For uint32, shift counts >= 32 saturate to 31 for both scalar and tensor counts, matching scalar `right_shift_tile`. For int32, counts outside [0, 31] produce 0.)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_and|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
         static_cast<detail::BitwiseScalarFn>(&ttnn::bitwise_right_shift),
         static_cast<detail::BitwiseTensorFn>(&ttnn::bitwise_right_shift),
@@ -2304,7 +2437,7 @@ void py_module(nb::module_& mod) {
 
     detail::bind_binary_operation<"logical_right_shift">(
         mod,
-        R"doc(Perform logical_right_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31). Logical right shift fills vacated bits with zeros. Equivalent to integer division by 2^shift_amt.)doc",
+        R"doc(Perform logical_right_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. Vacated bits are filled with zeros. Shift counts outside [0, 31] produce 0. Equivalent to integer division by 2^shift_amt for in-range counts.)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|logical_right_shift|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::logical_right_shift),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::logical_right_shift),
@@ -2326,13 +2459,20 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{output\_tensor}_i = \left(\verb|beta1| \cdot \tanh(\mathrm{gate}_i / \verb|beta1|) \cdot \sigma(\mathrm{gate}_i)\right) \cdot \left(\verb|beta2| \cdot \tanh(\mathrm{up}_i / \verb|beta2|)\right))doc",
         &ttnn::situ_glu);
 
+    detail::bind_clamped_silu_glu<"clamped_silu_glu">(
+        mod,
+        R"doc(Computes DeepSeek-V4's clamped SiLU-GLU activation over the pre-split :attr:`gate` and :attr:`up` tensors.)doc",
+        R"doc(\mathrm{output\_tensor}_i = \mathrm{silu}\left(\min(\mathrm{gate}_i, \verb|limit|)\right) \cdot \mathrm{clamp}(\mathrm{up}_i, -\verb|limit|, \verb|limit|))doc",
+        &ttnn::clamped_silu_glu);
+
     detail::bind_binary_composite<"nextafter">(
         mod,
         R"doc(Computes nextafter :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor}_i = \begin{cases} \mathrm{next\_float}(\mathrm{input\_tensor\_a}_i, \mathrm{input\_tensor\_b}_i), & \text{if } \mathrm{input\_tensor\_a}_i \neq \mathrm{input\_tensor\_b}_i \\ \mathrm{input\_tensor\_a}_i, & \text{if } \mathrm{input\_tensor\_a}_i = \mathrm{input\_tensor\_b}_i \end{cases}
         )doc",
         &ttnn::nextafter,
-        detail::kFloatOnlyDtypes);
+        detail::kUlpStepFloatDtypes,
+        detail::kSameDtypeRequiredFootnote);
 
     detail::bind_binary_unary_max_operation<"minimum">(
         mod,

@@ -162,7 +162,7 @@ def rand_bf16_gen(shape, device, *, min=0, max=1, memory_config=ttnn.DRAM_MEMORY
     return pt, tt
 
 
-def assert_inplace_binary_matches(torch_output_tensor, output_tensor, *, pcc_threshold=0.99):
+def assert_inplace_binary_matches(torch_output_tensor, output_tensor, *, pcc_threshold=0.99, uniform_ulp_threshold=4):
     # Contract: both tensors must have the same shape.
     assert (
         torch_output_tensor.shape == output_tensor.shape
@@ -181,7 +181,9 @@ def assert_inplace_binary_matches(torch_output_tensor, output_tensor, *, pcc_thr
                 f"device={output_tensor.flatten()[0]}"
             )
             return
-        assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=4)
+        assert_with_ulp(
+            expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=uniform_ulp_threshold
+        )
         return
 
     # If one tensor is constant (or neither), comp_pcc falls back to allclose.
@@ -692,7 +694,17 @@ def test_inplace_binary_ops_with_tensor(a_shape, b_shape, ttnn_fn, activations, 
         *parameters({"gt_", "le_", "ge_", "lt_"}, {sin_rhs, square_lhs}),
     }
     pcc_threshold = 0.98 if (ttnn_fn, activations) in imprecise_cases else 0.999
-    assert_inplace_binary_matches(torch_output_tensor, output_tensor, pcc_threshold=pcc_threshold)
+    # With a in [0, 1), floor(a) is 0 and exp(floor(a)) is exactly 1, so against a scalar b the output is the
+    # single value (1 - exp(b))^2 and is graded in ULP rather than PCC. bf16 exp is accurate to 1 ULP, and
+    # the squared difference amplifies that by 2x / (x - 1), about 5.7x at exp(b) ~ 1.55 (b = 0.4375 here):
+    # a correct 1-ULP exp lands 5 ULP from the golden once the square rounds to nearest (#57421).
+    uniform_ulp_threshold = 6 if (ttnn_fn, activations) == ("squared_difference_", exp_floor_lhs_exp_rhs) else 4
+    assert_inplace_binary_matches(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=pcc_threshold,
+        uniform_ulp_threshold=uniform_ulp_threshold,
+    )
 
 
 @pytest.mark.parametrize(

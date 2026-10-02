@@ -64,6 +64,10 @@ inline void llk_unpack_tilize_init(
 inline void llk_unpack_tilize_block(
     const std::uint32_t operand, const std::uint32_t block_c_tiles, const std::uint32_t input_tile_index = 0) {
     LLK_TDMA_GUARD_NOTE_TDMA(operand);  // TEN-4746: real unpack (UNPACR) disarms this dfb
+    LLK_REINIT_GUARD_ASSERT_MATCHES(
+        ckernel::trisc::BfdResource::Unp0,
+        operand,
+        "unpack_tilize operand DFB differs from the one llk_unpack_tilize_init programmed");
     const std::uint32_t operand_id = get_operand_id(operand);
 
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
@@ -203,6 +207,15 @@ inline void llk_unpack_tilizeA_B(
 
     LLK_TDMA_GUARD_NOTE_TDMA(operandA);  // TEN-4746: real unpack (UNPACR) disarms these dfbs
     LLK_TDMA_GUARD_NOTE_TDMA(operandB);
+    LLK_REINIT_GUARD_ASSERT_MATCHES(
+        ckernel::trisc::BfdResource::Unp0,
+        operandA,
+        "unpack_tilizeA_B operandA DFB differs from the one llk_unpack_tilizeA_B_init programmed");
+    LLK_REINIT_GUARD_ASSERT_MATCHES(
+        ckernel::trisc::BfdResource::Unp1,
+        operandB,
+        "unpack_tilizeA_B operandB DFB differs from the one llk_unpack_tilizeA_B_init programmed");
+
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
 

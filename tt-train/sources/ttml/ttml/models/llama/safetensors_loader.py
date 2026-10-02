@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import os
 from contextlib import ExitStack
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Iterator, Sequence
+from typing import Callable, Iterator, Sequence
 
 import ml_dtypes
 import numpy as np
+from safetensors import safe_open
 
 import ttnn
 import ttml
@@ -21,9 +23,6 @@ from ttml.common.utils import resolve_padded_load_shape
 
 from .. import WeightTyingType
 from . import LlamaConfig
-
-if TYPE_CHECKING:
-    from safetensors import safe_open
 
 # TTML stores a weight as 4-D (1, 1, out_features, in_features).
 ROW_DIM, COL_DIM = 2, 3
@@ -56,8 +55,6 @@ class _Checkpoint:
     Keyed by canonical name; a read comes back 2-D as ``[out, in]``."""
 
     def __init__(self, directory: str | os.PathLike) -> None:
-        from safetensors import safe_open
-
         files = sorted(Path(directory).glob("*.safetensors"))
         if not files:
             raise FileNotFoundError(f"No .safetensors files found in {Path(directory)}")
@@ -158,6 +155,15 @@ def _to_bf16_4d(arr: np.ndarray) -> np.ndarray:
     return arr.reshape(1, 1, *arr.shape).astype(ml_dtypes.bfloat16, order="C", copy=False)
 
 
+def _host_array(rule: _Rule, checkpoint: _Checkpoint, shape: tuple[int, int], shard_dim: int | None, mesh_size: int):
+    """*rule*'s sources as one bf16 array of *shape*, laid out over *mesh_size* ranks."""
+    blocks = [checkpoint[name].astype(ml_dtypes.bfloat16, copy=False) for name in rule.sources]
+    if rule.transform:
+        blocks = rule.transform(*blocks)
+    host = _assemble(blocks, shard_dim, mesh_size, rule.param)
+    return _fit(host, shape, rule.source_shape, rule.param)
+
+
 @dataclass(frozen=True)
 class _TpAxis:
     mesh: ttml.Mesh
@@ -166,7 +172,7 @@ class _TpAxis:
 
 
 def _tp_axis() -> _TpAxis | None:
-    """None without a mesh or a 'tp' axis: the single-device case, where nothing is sharded."""
+    """None without a mesh or a 'tp' axis: nothing is then sharded over 'tp'."""
     mesh = ttml.maybe_mesh()
     if mesh is None or not mesh.has_axis("tp"):
         return None
@@ -174,14 +180,14 @@ def _tp_axis() -> _TpAxis | None:
 
 
 def _sharded_dim(param, tp: _TpAxis | None, subject: str) -> int | None:
-    """Which tensor dim *param* shards over 'tp', or ``None`` if replicated."""
-    if tp is None:
-        return None
+    """Which tensor dim *param* shards over 'tp', or ``None`` if replicated. A shard over any other
+    axis raises."""
     placements = ttml.Sharding.from_tensor(param).placements
+    tp_index = tp.index if tp else None
     for axis, placement in enumerate(placements):
-        if isinstance(placement, ttnn.PlacementShard) and axis != tp.index:
+        if isinstance(placement, ttnn.PlacementShard) and axis != tp_index:
             raise RuntimeError(f"{subject}: sharded over mesh axis {axis}; this loader places weights over 'tp' only.")
-    if tp.index >= len(placements):  # a fully replicated tensor flattens to a single Replicate
+    if tp is None or tp.index >= len(placements):  # a fully replicated tensor flattens to a single Replicate
         return None
     placement = placements[tp.index]
     if not isinstance(placement, ttnn.PlacementShard):
@@ -260,39 +266,66 @@ def _biases(parameter_names: set[str]) -> set[str]:
 
 
 def _check_coverage(parameter_names: set[str], rules: Sequence[_Rule], checkpoint_names: frozenset[str]) -> None:
-    """Every parameter must be fed by a rule or be a bias the checkpoint does not carry, and every
-    rule must land. A renamed or newly fused module shows up here instead of as a quietly untrained
-    weight; so does a checkpoint that ships the biases the model was built with.
+    """Every parameter must be fed by exactly one rule or be a bias the checkpoint does not carry,
+    and every rule must land. A renamed or newly fused module shows up here instead of as a quietly
+    untrained weight; so does a checkpoint that ships the biases the model was built with, and a
+    rule table that would assign one parameter twice.
     """
-    targets = {rule.param for rule in rules}
-    checkpoint_has_biases = any(name.endswith(".bias") for name in checkpoint_names)
-    exempt = set() if checkpoint_has_biases else _biases(parameter_names)
-    uncovered = sorted(parameter_names - targets - exempt)
+    feeders = Counter(rule.param for rule in rules)
+    targets = set(feeders)
+    by_param = {rule.param: rule for rule in rules}
+
+    def checkpoint_ships(bias: str) -> bool:
+        """True if the checkpoint has a ``.bias`` beside a source of the sibling weight rule."""
+        weight = by_param.get(bias.removesuffix("/bias") + "/weight")
+        sources = weight.sources if weight else ()
+        return any(source.removesuffix(".weight") + ".bias" in checkpoint_names for source in sources)
+
+    biases = _biases(parameter_names)
+    shipped_biases = sorted(bias for bias in biases if checkpoint_ships(bias))
+    uncovered = sorted(parameter_names - targets - biases)
     unknown = sorted(targets - parameter_names)
-    if not uncovered and not unknown:
+    contested = sorted(name for name, count in feeders.items() if count > 1)
+    if not uncovered and not unknown and not contested and not shipped_biases:
         return
 
-    detail = "".join(f"\n  no rule feeds       {name}" for name in uncovered)
-    detail += "".join(f"\n  no such parameter   {name}" for name in unknown)
-    raise RuntimeError(
-        f"the loader and this Llama disagree about its parameters:{detail}\n"
-        f"Update _rules() in {Path(__file__).name} to match the model; a weight_tying or attention_bias "
-        f"mismatch between the LlamaConfig and the model also lands here."
-    )
+    def line(label: str, name: str) -> str:
+        return f"\n  {label:<20}{name}"
+
+    detail = "".join(line("no rule feeds", name) for name in uncovered)
+    detail += "".join(line("no such parameter", name) for name in unknown)
+    detail += "".join(line(f"fed by {feeders[name]} rules", name) for name in contested)
+    detail += "".join(line("bias shipped for", name) for name in shipped_biases)
+    hints = []
+    if uncovered or unknown or contested:
+        hints.append(
+            f"Update _rules() in {Path(__file__).name} to match the model; a weight_tying mismatch between "
+            f"the LlamaConfig and the model also lands here."
+        )
+    if shipped_biases:
+        hints.append("This loader leaves biases at their init values and cannot load the ones this checkpoint ships.")
+    raise RuntimeError(f"the loader and this Llama disagree about its parameters:{detail}\n" + "\n".join(hints))
 
 
 def _check_sources(rules: Sequence[_Rule], checkpoint_names: frozenset[str]) -> None:
     """Every source must exist before anything is read or assigned, so a bad checkpoint fails whole."""
     missing = {rule.param: [s for s in rule.sources if s not in checkpoint_names] for rule in rules}
     missing = {param: sources for param, sources in missing.items() if sources}
-    if not missing:
-        return
+    if missing:
+        detail = "".join(
+            f"\n  {param}: the checkpoint has no {', '.join(sources)}" for param, sources in missing.items()
+        )
+        hint = ""
+        if "embed_tokens.weight" in checkpoint_names and all(s == ["lm_head.weight"] for s in missing.values()):
+            hint = "\nA tied checkpoint ships no lm_head.weight; load it with weight_tying=Enabled."
+        raise RuntimeError(f"the checkpoint lacks tensors the model needs:{detail}{hint}")
 
-    detail = "".join(f"\n  {param}: the checkpoint has no {', '.join(sources)}" for param, sources in missing.items())
-    hint = ""
-    if "embed_tokens.weight" in checkpoint_names and all(s == ["lm_head.weight"] for s in missing.values()):
-        hint = "\nA tied checkpoint ships no lm_head.weight; load it with weight_tying=Enabled."
-    raise RuntimeError(f"the checkpoint lacks tensors the model needs:{detail}{hint}")
+    consumed = {source for rule in rules for source in rule.sources}
+    if "lm_head.weight" in checkpoint_names and "lm_head.weight" not in consumed:
+        raise RuntimeError(
+            "the checkpoint ships lm_head.weight, which a weight-tied model has no parameter for; "
+            "load it with weight_tying=Disabled."
+        )
 
 
 def load_from_safetensors(
@@ -306,12 +339,14 @@ def load_from_safetensors(
     canonical form. Every check that needs only names runs before the first tensor is read.
 
     Raises:
+        FileNotFoundError: no ``.safetensors`` file under *safetensors_path*.
         RuntimeError: for any of
-            - a parameter no rule feeds
-            - a rule naming a parameter the model does not have
-            - a missing source tensor
-            - a shape that disagrees with the config
-            - a parameter sharded over a mesh axis other than 'tp'
+            - a parameter no rule feeds, a rule naming a parameter the model lacks, or two rules for one
+            - a source tensor the checkpoint lacks; a tied checkpoint on an untied model, or the reverse
+            - a bias the checkpoint ships, which this loader cannot load
+            - a tensor named twice across files, or one that is not 1-D or 2-D
+            - a shape that disagrees with the config; a transposed ``[in, out]`` weight is not accepted
+            - a parameter sharded over a mesh axis other than 'tp', or over 'tp' on a dim other than rows or columns
     """
     parameters = model.parameters()
     parameter_names = set(parameters)
@@ -325,13 +360,8 @@ def load_from_safetensors(
 
         for rule in rules:
             param = parameters[rule.param]
-            blocks = [checkpoint[name] for name in rule.sources]
-            if rule.transform:
-                blocks = rule.transform(*blocks)
             shard_dim = _sharded_dim(param, tp, rule.param)
-            host = _assemble(blocks, shard_dim, mesh_size, rule.param)
-            host = _fit(host, _global_shape(param, shard_dim, mesh_size), rule.source_shape, rule.param)
-
+            host = _host_array(rule, checkpoint, _global_shape(param, shard_dim, mesh_size), shard_dim, mesh_size)
             mapper = tp.mesh.axis_mapper("tp", tdim=shard_dim) if tp and shard_dim is not None else None
             param.assign(
                 ttml.autograd.Tensor.from_numpy(

@@ -274,7 +274,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     }
 
     this->handshake_addr = next_l1_addr;
-    next_l1_addr += eth_channel_sync_size;
+    next_l1_addr += 2 * eth_channel_sync_size;
 
     // issue: https://github.com/tenstorrent/tt-metal/issues/29073. TODO: Re-enable after hang is resolved.
     // Ethernet txq IDs on WH are 0,1 and on BH are 0,1,2.
@@ -685,8 +685,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     local_fabric_node_id(local_fabric_node_id),
     peer_fabric_node_id(peer_fabric_node_id),
     is_inter_mesh(local_fabric_node_id.mesh_id != peer_fabric_node_id.mesh_id),
-    handshake_address(tt::round_up(
-        tt::tt_metal::hal::get_erisc_l1_unreserved_base(), FabricEriscDatamoverConfig::eth_channel_sync_size)),
+    handshake_address(config.handshake_addr),
     channel_buffer_size(config.channel_buffer_size_bytes),
     local_sender_channels_connection_info_addr(config.sender_channels_worker_conn_info_base_address),
     termination_signal_ptr(config.termination_signal_address),
@@ -1076,7 +1075,11 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // peer that makes the speedy receiver path safe on this link.
     const bool vc0_is_terminal_or_source_only_after_trim =
         vc0_trim_fast_path_info_.has_value() && vc0_trim_fast_path_info_->terminal_or_source_only;
-    const bool base_enable_deadlock_avoidance = fabric_context.need_deadlock_avoidance_support(this->direction_);
+    // Inter-mesh routers never enable deadlock avoidance, whichever direction: both ends of an inter-mesh
+    // link must agree on Deadlock avoidance polarity and the far end may be a plain Mesh (FABRIC_2D) rank. Intra-mesh
+    // routers follow the direction-based policy, unchanged. See #56298.
+    const bool base_enable_deadlock_avoidance =
+        !this->is_inter_mesh && fabric_context.need_deadlock_avoidance_support(this->direction_);
     const bool final_enable_deadlock_avoidance =
         base_enable_deadlock_avoidance && !vc0_is_terminal_or_source_only_after_trim;
     const bool final_enable_first_level_ack_vc0 = final_enable_deadlock_avoidance;

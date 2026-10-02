@@ -123,7 +123,7 @@ def run_mla_inference(
     if has_indexer:
         rope_tensors = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=seq_len, chunk_size_global=seq_len)
         # Layer-slot count mirrors the serving adapter: the indexer strides the folded user-major cache by
-        # num_full_indexer_layers (GLM-5.2 cross-layer reuse), so the cache must carry that many slots for
+        # num_full_indexer_layers (GLM-5.3 cross-layer reuse), so the cache must carry that many slots for
         # update_padded_kv_cache's cache_batch % num_layers check. Falls back to 1 (no indexer_types).
         index_kv_cache = init_kvpe_cache(
             kvpe_cache_head_dim=config.index_head_dim,
@@ -134,6 +134,7 @@ def run_mla_inference(
             num_kvpe_cache_layers=num_full_indexer_layers(config) or 1,
             num_users=1,
             dtype=ttnn.bfloat8_b,
+            tp_axis=tp_axis,
         )
     else:
         rope_tensors = rope_setup.get_rope_tensors(seq_len)
@@ -169,7 +170,7 @@ def run_mla_inference(
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
-    # GLM-5.2 indexer reuse (return_indices / inject_indices): capture this layer's top-k selection, or
+    # GLM-5.3 indexer reuse (return_indices / inject_indices): capture this layer's top-k selection, or
     # feed a prior layer's to skip the indexer. Defaults leave the forward unchanged.
     mla_out = mla_tt.forward(
         hidden_states=tt_hidden_states,
@@ -514,10 +515,9 @@ DETERMINISM_PCC_THRESHOLD = 1.0
 DETERMINISM_REPS = 3
 
 # Realtime ("lightweight") profiler perf gate: in-process device program records, so no Tracy
-# subprocess, no signposts and no ops-CSV re-parse -- it runs on the plain build (PR #49840).
-# Measured 2026-08-05 on bh_sc1_high_power (run 31010521345): 12.073 ms. Reads 4.4% above the Tracy
-# path's 11_562_468 as expected -- Tracy averages collectives across chips, this takes the max.
-K3_CHUNKED_RT_PERF_NS = 12_073_303
+# subprocess, no signposts and no ops-CSV re-parse -- it runs on the plain build. Not comparable to
+# the Tracy path's number -- Tracy averages collectives across chips, this takes the max.
+K3_CHUNKED_RT_PERF_NS = 10_556_000
 K3_CHUNKED_RT_PERF_MARGIN = 0.03
 
 
@@ -1368,13 +1368,6 @@ def test_mla_chunked_prefill(
     # Incidental, not a K3 guarantee; re-enable when K3 has a runtime that actually feeds metadata.
     if variant.name == "kimi_k3" and use_metadata_tensor:
         pytest.skip("kimi_k3 has no runtime, so the metadata (device-scalar) path is unreachable for it")
-    # No K3 checkpoint is reachable, so no GPU trace was ever recorded for it. _run_chunked_prefill
-    # already asserts on supports_pretrained, but only once a trace root is configured -- so on a box
-    # with MLA_CHUNKED_TRACE_PATH set these cases would hard-fail instead of being cleanly out of
-    # scope. Skip up front; the assert stays as the backstop for any future supports_pretrained=False
-    # variant and for the silent K2.6-trace-substitution it was written to catch.
-    if variant.name == "kimi_k3" and reference == "trace":
-        pytest.skip("kimi_k3 has no reachable checkpoint, so no GPU trace exists for it")
     # Same reason as K3's: the variant-unqualified CI selectors for this test would otherwise run
     # Mistral on Wormhole T3K, where it has never been brought up.
     if variant.name == "mistral_small_4" and not is_blackhole():

@@ -207,6 +207,15 @@ def build_dataset(data_path: str, seq_len: int, vocab_size: int) -> tuple[Causal
     return CausalLMDataset(tokens, seq_len), tokenizer
 
 
+# ── Data parallelism ──────────────────────────────────────────────────────────
+
+
+def resolve_data_parallel_axes(mesh: Any) -> tuple[list[str], int]:
+    """Return the mesh axes the batch is sharded over and the total data-parallel size."""
+    data_axes = [a for a in ("dp", "fsdp") if mesh.has_axis(a) and mesh.axis_size(a) > 1]
+    return data_axes, int(np.prod([mesh.axis_size(a) for a in data_axes]))
+
+
 # ── LR schedule ───────────────────────────────────────────────────────────────
 
 
@@ -506,17 +515,16 @@ def run_training(
     mesh = ttml.mesh()
     # Shard the batch across the data-parallel axes (dp and/or fsdp): one axis → shard along it;
     # HSDP (both) → each device gets a unique B/(D*F) slice; HSDP+TP is unsupported.
-    data_axes = [a for a in ("dp", "fsdp") if mesh.has_axis(a) and mesh.axis_size(a) > 1]
+    data_axes, data_parallel_size = resolve_data_parallel_axes(mesh)
     if len(data_axes) == 1:
         mapper = mesh.axis_mapper(data_axes[0], tdim=0)
     elif len(data_axes) >= 2:
         if mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
             raise NotImplementedError("HSDP + TP batch sharding is not supported.")
-        flat_size = int(np.prod([mesh.axis_size(a) for a in data_axes]))
-        if training_cfg.batch_size % flat_size != 0:
+        if training_cfg.batch_size % data_parallel_size != 0:
             raise ValueError(
                 f"HSDP batch sharding requires batch_size ({training_cfg.batch_size}) to be "
-                f"divisible by D*F ({flat_size}); got data_axes={data_axes}."
+                f"divisible by D*F ({data_parallel_size}); got data_axes={data_axes}."
             )
         device = ttml.autograd.AutoContext.get_instance().get_device()
         mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0, None)
@@ -546,7 +554,7 @@ def run_training(
         callbacks.append(MoECallback(args.log_expert_activations))
 
     # Metrics.
-    callbacks.append(ThroughputCallback(flops_per_token, peak_tflops, log_interval=1))
+    callbacks.append(ThroughputCallback(flops_per_token, peak_tflops, data_parallel_size, log_interval=1))
     if steps_per_epoch > 0:
         callbacks.append(EpochCallback(steps_per_epoch))
     avg_loss_cb = AverageLossCallback()

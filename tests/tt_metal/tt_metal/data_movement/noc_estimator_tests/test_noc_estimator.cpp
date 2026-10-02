@@ -7,11 +7,11 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <distributed/mesh_device_impl.hpp>
 #include <algorithm>
 
 namespace tt::tt_metal {
@@ -162,13 +162,13 @@ static vector<uint32_t> make_reader_compile_args(
     };
 }
 
-static void execute_program(const shared_ptr<distributed::MeshDevice>& mesh_device, Program program) {
+static void execute_program(distributed::MeshDevice& mesh_device, Program program) {
     auto mesh_workload = distributed::MeshWorkload();
     vector<uint32_t> coord_data = {0, 0};
     auto target_devices = distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));
     mesh_workload.add_program(target_devices, std::move(program));
 
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     Finish(cq);
 }
@@ -182,8 +182,7 @@ static vector<uint32_t> make_test_data(size_t bytes) {
 // ============ PATTERN-SPECIFIC RUN FUNCTIONS ============
 
 // Handles ONE_TO_ONE (write) and ONE_FROM_ONE (read)
-static bool run_single_core(const shared_ptr<distributed::MeshDevice>& mesh_device, const NocEstimatorConfig& cfg) {
-    IDevice* device = mesh_device->impl().get_device(0);
+static bool run_single_core(distributed::MeshDevice& mesh_device, const NocEstimatorConfig& cfg) {
     Program program = CreateProgram();
 
     const size_t bytes_per_txn = cfg.pages_per_transaction * cfg.bytes_per_page;
@@ -205,7 +204,7 @@ static bool run_single_core(const shared_ptr<distributed::MeshDevice>& mesh_devi
     }
     uint32_t l1_base = master_l1.base_address;
 
-    CoreCoord phys_sub = device->worker_core_from_logical_core(sub_coord);
+    CoreCoord phys_sub = mesh_device.worker_core_from_logical_core(sub_coord);
     uint32_t packed_sub = (phys_sub.x << 16) | (phys_sub.y & 0xFFFF);
 
     bool is_write = is_write_pattern(cfg.pattern);
@@ -240,19 +239,19 @@ static bool run_single_core(const shared_ptr<distributed::MeshDevice>& mesh_devi
     auto packed_golden = packed_input;
 
     if (is_write) {
-        detail::WriteToDeviceL1(device, master_coord, l1_base, packed_input);
+        slow_dispatch::WriteToL1(mesh_device, master_coord, l1_base, packed_input);
     } else {
-        detail::WriteToDeviceL1(device, sub_coord, l1_base, packed_input);
+        slow_dispatch::WriteToL1(mesh_device, sub_coord, l1_base, packed_input);
     }
-    MetalContext::instance().get_cluster().l1_barrier(device->id());
+    MetalContext::instance().get_cluster().l1_barrier(mesh_device.get_device_ids().front());
 
     execute_program(mesh_device, std::move(program));
 
     vector<uint32_t> packed_output;
     if (is_write) {
-        detail::ReadFromDeviceL1(device, sub_coord, l1_base, bytes_per_txn, packed_output);
+        slow_dispatch::ReadFromL1(mesh_device, sub_coord, l1_base, bytes_per_txn, packed_output);
     } else {
-        detail::ReadFromDeviceL1(device, master_coord, l1_base, bytes_per_txn, packed_output);
+        slow_dispatch::ReadFromL1(mesh_device, master_coord, l1_base, bytes_per_txn, packed_output);
     }
 
     bool is_equal = (packed_output == packed_golden);
@@ -263,8 +262,7 @@ static bool run_single_core(const shared_ptr<distributed::MeshDevice>& mesh_devi
 }
 
 // Handles ONE_TO_ALL (write, unicast/multicast) and ONE_FROM_ALL (read)
-static bool run_one_to_many(const shared_ptr<distributed::MeshDevice>& mesh_device, const NocEstimatorConfig& cfg) {
-    IDevice* device = mesh_device->impl().get_device(0);
+static bool run_one_to_many(distributed::MeshDevice& mesh_device, const NocEstimatorConfig& cfg) {
     Program program = CreateProgram();
 
     const size_t bytes_per_txn = cfg.pages_per_transaction * cfg.bytes_per_page;
@@ -315,8 +313,8 @@ static bool run_one_to_many(const shared_ptr<distributed::MeshDevice>& mesh_devi
         if (is_multicast) {
             writer_mode = (cfg.mechanism == NocMechanism::MULTICAST_LINKED) ? WRITER_MODE_MULTICAST_LINKED
                                                                             : WRITER_MODE_MULTICAST;
-            CoreCoord sub_phys_start = device->worker_core_from_logical_core(sub_start);
-            CoreCoord sub_phys_end = device->worker_core_from_logical_core(sub_end);
+            CoreCoord sub_phys_start = mesh_device.worker_core_from_logical_core(sub_start);
+            CoreCoord sub_phys_end = mesh_device.worker_core_from_logical_core(sub_end);
 
             auto compile_args = make_writer_compile_args(
                 cfg,
@@ -352,7 +350,7 @@ static bool run_one_to_many(const shared_ptr<distributed::MeshDevice>& mesh_devi
 
             vector<uint32_t> rt_args;
             for (auto& core : sub_core_list) {
-                CoreCoord phys = device->worker_core_from_logical_core(core);
+                CoreCoord phys = mesh_device.worker_core_from_logical_core(core);
                 rt_args.push_back((phys.x << 16) | (phys.y & 0xFFFF));
             }
             SetRuntimeArgs(program, kernel, mst_set, rt_args);
@@ -372,7 +370,7 @@ static bool run_one_to_many(const shared_ptr<distributed::MeshDevice>& mesh_devi
 
         vector<uint32_t> rt_args;
         for (auto& core : sub_core_list) {
-            CoreCoord phys = device->worker_core_from_logical_core(core);
+            CoreCoord phys = mesh_device.worker_core_from_logical_core(core);
             rt_args.push_back(phys.x);
             rt_args.push_back(phys.y);
         }
@@ -386,20 +384,20 @@ static bool run_one_to_many(const shared_ptr<distributed::MeshDevice>& mesh_devi
     auto packed_golden = packed_input;
 
     if (is_write) {
-        detail::WriteToDeviceL1(device, mst_coord, mst_l1_addr, packed_input);
+        slow_dispatch::WriteToL1(mesh_device, mst_coord, mst_l1_addr, packed_input);
     } else {
         for (auto& core : sub_core_list) {
-            detail::WriteToDeviceL1(device, core, mst_l1.base_address, packed_input);
+            slow_dispatch::WriteToL1(mesh_device, core, mst_l1.base_address, packed_input);
         }
     }
-    MetalContext::instance().get_cluster().l1_barrier(device->id());
+    MetalContext::instance().get_cluster().l1_barrier(mesh_device.get_device_ids().front());
 
     execute_program(mesh_device, std::move(program));
 
     if (is_write) {
         for (auto& core : sub_core_list) {
             vector<uint32_t> packed_output;
-            detail::ReadFromDeviceL1(device, core, sub_l1_addr, bytes_per_txn, packed_output);
+            slow_dispatch::ReadFromL1(mesh_device, core, sub_l1_addr, bytes_per_txn, packed_output);
             if (packed_output != packed_golden) {
                 log_error(LogTest, "Equality Check failed for test_id {}", cfg.test_id);
                 return false;
@@ -407,7 +405,7 @@ static bool run_one_to_many(const shared_ptr<distributed::MeshDevice>& mesh_devi
         }
     } else {
         vector<uint32_t> packed_output;
-        detail::ReadFromDeviceL1(device, mst_coord, mst_l1.base_address, bytes_per_txn, packed_output);
+        slow_dispatch::ReadFromL1(mesh_device, mst_coord, mst_l1.base_address, bytes_per_txn, packed_output);
         if (packed_output != packed_golden) {
             log_error(LogTest, "Equality Check failed for test_id {}", cfg.test_id);
             return false;
@@ -417,8 +415,7 @@ static bool run_one_to_many(const shared_ptr<distributed::MeshDevice>& mesh_devi
 }
 
 // Handles ALL_TO_ALL (write) and ALL_FROM_ALL (read)
-static bool run_all_pattern(const shared_ptr<distributed::MeshDevice>& mesh_device, const NocEstimatorConfig& cfg) {
-    IDevice* device = mesh_device->impl().get_device(0);
+static bool run_all_pattern(distributed::MeshDevice& mesh_device, const NocEstimatorConfig& cfg) {
     Program program = CreateProgram();
 
     const size_t bytes_per_txn = cfg.pages_per_transaction * cfg.bytes_per_page;
@@ -449,7 +446,7 @@ static bool run_all_pattern(const shared_ptr<distributed::MeshDevice>& mesh_devi
     // Subordinate physical coordinates
     vector<uint32_t> sub_worker_coords;
     for (auto& core : sub_core_list) {
-        CoreCoord phys = device->worker_core_from_logical_core(core);
+        CoreCoord phys = mesh_device.worker_core_from_logical_core(core);
         if (is_write) {
             sub_worker_coords.push_back((phys.x << 16) | (phys.y & 0xFFFF));
         } else {
@@ -491,23 +488,23 @@ static bool run_all_pattern(const shared_ptr<distributed::MeshDevice>& mesh_devi
     if (is_write) {
         // Write source data to master cores at mst_l1_addr
         for (auto& core : mst_core_list) {
-            detail::WriteToDeviceL1(device, core, mst_l1_addr, packed_input);
+            slow_dispatch::WriteToL1(mesh_device, core, mst_l1_addr, packed_input);
         }
     } else {
         // Write source data to subordinate cores at mst_l1_addr
         // (reader kernel reads from local_addr = mst_l1_addr on remote cores)
         for (auto& core : sub_core_list) {
-            detail::WriteToDeviceL1(device, core, mst_l1_addr, packed_input);
+            slow_dispatch::WriteToL1(mesh_device, core, mst_l1_addr, packed_input);
         }
     }
-    MetalContext::instance().get_cluster().l1_barrier(device->id());
+    MetalContext::instance().get_cluster().l1_barrier(mesh_device.get_device_ids().front());
 
     execute_program(mesh_device, std::move(program));
 
     if (is_write) {
         for (auto& core : sub_core_list) {
             vector<uint32_t> packed_output;
-            detail::ReadFromDeviceL1(device, core, sub_l1_addr, bytes_per_txn, packed_output);
+            slow_dispatch::ReadFromL1(mesh_device, core, sub_l1_addr, bytes_per_txn, packed_output);
             if (packed_output != packed_golden) {
                 log_error(LogTest, "Equality Check failed for test_id {}", cfg.test_id);
                 return false;
@@ -517,7 +514,7 @@ static bool run_all_pattern(const shared_ptr<distributed::MeshDevice>& mesh_devi
         // Reader writes to local_addr = mst_l1_addr on each master core
         for (auto& core : mst_core_list) {
             vector<uint32_t> packed_output;
-            detail::ReadFromDeviceL1(device, core, mst_l1_addr, bytes_per_txn, packed_output);
+            slow_dispatch::ReadFromL1(mesh_device, core, mst_l1_addr, bytes_per_txn, packed_output);
             if (packed_output != packed_golden) {
                 log_error(LogTest, "Equality Check failed for test_id {}", cfg.test_id);
                 return false;
@@ -530,9 +527,7 @@ static bool run_all_pattern(const shared_ptr<distributed::MeshDevice>& mesh_devi
 // Handles ROW_TO_ROW / COLUMN_TO_COLUMN with multicast:
 // All masters in the row/column multicast to the same rectangle (the row/column).
 // Masters and subordinates overlap; loopback should be true (INCLUDE_SRC).
-static bool run_many_to_many_multicast(
-    const shared_ptr<distributed::MeshDevice>& mesh_device, const NocEstimatorConfig& cfg) {
-    IDevice* device = mesh_device->impl().get_device(0);
+static bool run_many_to_many_multicast(distributed::MeshDevice& mesh_device, const NocEstimatorConfig& cfg) {
     Program program = CreateProgram();
 
     const size_t bytes_per_txn = cfg.pages_per_transaction * cfg.bytes_per_page;
@@ -563,8 +558,8 @@ static bool run_many_to_many_multicast(
     uint32_t writer_mode =
         (cfg.mechanism == NocMechanism::MULTICAST_LINKED) ? WRITER_MODE_MULTICAST_LINKED : WRITER_MODE_MULTICAST;
 
-    CoreCoord sub_phys_start = device->worker_core_from_logical_core(sub_start);
-    CoreCoord sub_phys_end = device->worker_core_from_logical_core(sub_end);
+    CoreCoord sub_phys_start = mesh_device.worker_core_from_logical_core(sub_start);
+    CoreCoord sub_phys_end = mesh_device.worker_core_from_logical_core(sub_end);
 
     auto compile_args = make_writer_compile_args(
         cfg,
@@ -594,16 +589,16 @@ static bool run_many_to_many_multicast(
 
     // Write source data to all master cores
     for (auto& core : mst_core_list) {
-        detail::WriteToDeviceL1(device, core, mst_l1_addr, packed_input);
+        slow_dispatch::WriteToL1(mesh_device, core, mst_l1_addr, packed_input);
     }
-    MetalContext::instance().get_cluster().l1_barrier(device->id());
+    MetalContext::instance().get_cluster().l1_barrier(mesh_device.get_device_ids().front());
 
     execute_program(mesh_device, std::move(program));
 
     // Verify all subordinate cores
     for (auto& core : sub_core_list) {
         vector<uint32_t> packed_output;
-        detail::ReadFromDeviceL1(device, core, sub_l1_addr, bytes_per_txn, packed_output);
+        slow_dispatch::ReadFromL1(mesh_device, core, sub_l1_addr, bytes_per_txn, packed_output);
         if (packed_output != packed_golden) {
             log_error(LogTest, "Equality Check failed for test_id {}", cfg.test_id);
             return false;
@@ -619,25 +614,24 @@ enum class DramDirection { READ, WRITE };
 // For interleaved mode: each core cycles through all banks via sequential page IDs.
 // For sharded mode: each core reads/writes only the page(s) mapping to its dedicated bank.
 static bool run_dram_accessor(
-    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     const NocEstimatorConfig& cfg,
     const vector<CoreCoord>& cores,
     const vector<uint32_t>& bank_assignments,
     DramDirection direction) {
-    IDevice* device = mesh_device->impl().get_device(0);
     Program program = CreateProgram();
 
     const size_t bytes_per_txn = cfg.pages_per_transaction * cfg.bytes_per_page;
-    uint32_t num_dram_banks = (uint32_t)device->num_dram_channels();
+    uint32_t num_dram_banks = (uint32_t)mesh_device.num_dram_channels();
     uint32_t num_cores = (uint32_t)cores.size();
 
     uint32_t num_pages = num_dram_banks;
 
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue();
     auto dram_buffer = distributed::MeshBuffer::create(
         distributed::ReplicatedBufferConfig{.size = (size_t)num_pages * bytes_per_txn},
         {.page_size = (uint32_t)bytes_per_txn, .buffer_type = BufferType::DRAM},
-        mesh_device.get());
+        &mesh_device);
 
     std::set<CoreRange> core_ranges;
     for (const auto& c : cores) {
@@ -650,7 +644,7 @@ static bool run_dram_accessor(
 
     uint32_t barrier_sem_id = CreateSemaphore(program, core_set, 0);
 
-    CoreCoord coordinator_phys = device->worker_core_from_logical_core(cores[0]);
+    CoreCoord coordinator_phys = mesh_device.worker_core_from_logical_core(cores[0]);
     uint32_t local_scratch_addr = l1_addr + (uint32_t)bytes_per_txn;
 
     uint32_t mem_type = (uint32_t)cfg.memory_type;
@@ -704,7 +698,7 @@ static bool run_dram_accessor(
         full_input.insert(full_input.end(), page_data.begin(), page_data.end());
     }
     distributed::EnqueueWriteMeshBuffer(cq, dram_buffer, full_input, /*blocking=*/true);
-    MetalContext::instance().get_cluster().dram_barrier(device->id());
+    MetalContext::instance().get_cluster().dram_barrier(mesh_device.get_device_ids().front());
 
     execute_program(mesh_device, std::move(program));
 
@@ -713,7 +707,7 @@ static bool run_dram_accessor(
 
 // ============ DISPATCH ============
 
-static bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const NocEstimatorConfig& cfg) {
+static bool run_dm(distributed::MeshDevice& mesh_device, const NocEstimatorConfig& cfg) {
     switch (cfg.pattern) {
         case NocPattern::ONE_TO_ONE:
         case NocPattern::ONE_FROM_ONE: return run_single_core(mesh_device, cfg);
@@ -740,16 +734,15 @@ static bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const
 
 // Returns NOC packet size: 8KB for WH, 16KB for BH
 // Stateful unicast writes are only valid for transfers smaller than one packet
-static uint32_t get_noc_packet_size(IDevice* device) {
-    return device->arch() == ARCH::BLACKHOLE ? 16 * 1024 : 8 * 1024;
+static uint32_t get_noc_packet_size(distributed::MeshDevice& mesh_device) {
+    return mesh_device.arch() == ARCH::BLACKHOLE ? 16 * 1024 : 8 * 1024;
 }
 
-static void packet_sizes_sweep(const shared_ptr<distributed::MeshDevice>& mesh_device, NocEstimatorConfig base_cfg) {
+static void packet_sizes_sweep(distributed::MeshDevice& mesh_device, NocEstimatorConfig base_cfg) {
     auto [bytes_per_page, max_bytes, max_pages] = unit_tests::dm::compute_physical_constraints(mesh_device);
-    IDevice* device = mesh_device->impl().get_device(0);
 
     uint32_t max_transactions = 256;
-    uint32_t max_pages_per_txn = device->arch() == ARCH::BLACKHOLE ? 1024 : 2048;
+    uint32_t max_pages_per_txn = mesh_device.arch() == ARCH::BLACKHOLE ? 1024 : 2048;
 
     base_cfg.bytes_per_page = bytes_per_page;
 
@@ -765,17 +758,15 @@ static void packet_sizes_sweep(const shared_ptr<distributed::MeshDevice>& mesh_d
     }
 
     // Flush profiler DRAM buffer to prevent overflow across many sweep iterations
-    ReadMeshDeviceProfilerResults(*mesh_device);
+    ReadMeshDeviceProfilerResults(mesh_device);
 }
 
 // Stateful sweep for unicast writes - constrained to packets smaller than max stateful size
-static void packet_sizes_sweep_stateful_write(
-    const shared_ptr<distributed::MeshDevice>& mesh_device, NocEstimatorConfig base_cfg) {
+static void packet_sizes_sweep_stateful_write(distributed::MeshDevice& mesh_device, NocEstimatorConfig base_cfg) {
     auto [bytes_per_page, max_bytes, max_pages] = unit_tests::dm::compute_physical_constraints(mesh_device);
-    IDevice* device = mesh_device->impl().get_device(0);
 
     uint32_t max_transactions = 256;
-    uint32_t noc_packet_size = get_noc_packet_size(device);
+    uint32_t noc_packet_size = get_noc_packet_size(mesh_device);
     uint32_t max_stateful_pages = noc_packet_size / bytes_per_page;
 
     base_cfg.bytes_per_page = bytes_per_page;
@@ -793,12 +784,12 @@ static void packet_sizes_sweep_stateful_write(
     }
 
     // Flush profiler DRAM buffer to prevent overflow across many sweep iterations
-    ReadMeshDeviceProfilerResults(*mesh_device);
+    ReadMeshDeviceProfilerResults(mesh_device);
 }
 
 // ============ SWEEP FUNCTIONS ============
 
-static void sweep_one_to_one(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
+static void sweep_one_to_one(distributed::MeshDevice& mesh_device, uint32_t test_id) {
     for (bool same_axis : {true, false}) {
         for (bool stateful : {true, false}) {
             NocEstimatorConfig cfg = {
@@ -814,7 +805,7 @@ static void sweep_one_to_one(const shared_ptr<distributed::MeshDevice>& mesh_dev
     }
 }
 
-static void sweep_one_from_one(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
+static void sweep_one_from_one(distributed::MeshDevice& mesh_device, uint32_t test_id) {
     for (bool same_axis : {true, false}) {
         for (bool stateful : {true, false}) {
             NocEstimatorConfig cfg = {
@@ -830,9 +821,8 @@ static void sweep_one_from_one(const shared_ptr<distributed::MeshDevice>& mesh_d
     }
 }
 
-static void sweep_one_to_all(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
-    IDevice* device = mesh_device->impl().get_device(0);
-    CoreCoord device_grid = device->compute_with_storage_grid_size();
+static void sweep_one_to_all(distributed::MeshDevice& mesh_device, uint32_t test_id) {
+    CoreCoord device_grid = mesh_device.compute_with_storage_grid_size();
 
     struct GridConfig {
         CoreCoord size;
@@ -906,9 +896,8 @@ static void sweep_one_to_all(const shared_ptr<distributed::MeshDevice>& mesh_dev
     }
 }
 
-static void sweep_one_from_all(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
-    IDevice* device = mesh_device->impl().get_device(0);
-    CoreCoord device_grid = device->compute_with_storage_grid_size();
+static void sweep_one_from_all(distributed::MeshDevice& mesh_device, uint32_t test_id) {
+    CoreCoord device_grid = mesh_device.compute_with_storage_grid_size();
 
     // Sweep stateful for reads (reads can always use stateful with UNICAST)
     for (bool stateful : {false, true}) {
@@ -925,9 +914,8 @@ static void sweep_one_from_all(const shared_ptr<distributed::MeshDevice>& mesh_d
     }
 }
 
-static void sweep_all_to_all(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
-    IDevice* device = mesh_device->impl().get_device(0);
-    CoreCoord device_grid = device->compute_with_storage_grid_size();
+static void sweep_all_to_all(distributed::MeshDevice& mesh_device, uint32_t test_id) {
+    CoreCoord device_grid = mesh_device.compute_with_storage_grid_size();
 
     vector<CoreCoord> grid_sizes = {{2, 2}, {3, 3}, {5, 5}, {8, 8}};
     // Add the full device grid if not already included
@@ -957,9 +945,8 @@ static void sweep_all_to_all(const shared_ptr<distributed::MeshDevice>& mesh_dev
     }
 }
 
-static void sweep_all_from_all(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
-    IDevice* device = mesh_device->impl().get_device(0);
-    CoreCoord device_grid = device->compute_with_storage_grid_size();
+static void sweep_all_from_all(distributed::MeshDevice& mesh_device, uint32_t test_id) {
+    CoreCoord device_grid = mesh_device.compute_with_storage_grid_size();
 
     vector<CoreCoord> grid_sizes = {{2, 2}, {3, 3}, {5, 5}, {8, 8}};
     // Add the full device grid if not already included
@@ -994,7 +981,7 @@ static void sweep_all_from_all(const shared_ptr<distributed::MeshDevice>& mesh_d
 // Helper: run a DRAM accessor sweep with the given cores, bank assignments, and direction.
 // Sweeps both NOC_0 and NOC_1 for each configuration.
 static void dram_accessor_sweep(
-    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     uint32_t test_id,
     NocPattern pattern,
     MemoryType memory_type,
@@ -1028,16 +1015,13 @@ static void dram_accessor_sweep(
         }
     }
 
-    ReadMeshDeviceProfilerResults(*mesh_device);
+    ReadMeshDeviceProfilerResults(mesh_device);
 }
 
 static void get_all_cores(
-    const shared_ptr<distributed::MeshDevice>& mesh_device,
-    vector<CoreCoord>& cores,
-    vector<uint32_t>& bank_assignments) {
-    IDevice* device = mesh_device->impl().get_device(0);
-    CoreCoord device_grid = device->compute_with_storage_grid_size();
-    uint32_t num_dram_banks = (uint32_t)device->num_dram_channels();
+    distributed::MeshDevice& mesh_device, vector<CoreCoord>& cores, vector<uint32_t>& bank_assignments) {
+    CoreCoord device_grid = mesh_device.compute_with_storage_grid_size();
+    uint32_t num_dram_banks = (uint32_t)mesh_device.num_dram_channels();
     for (uint32_t y = 0; y < device_grid.y; y++) {
         for (uint32_t x = 0; x < device_grid.x; x++) {
             cores.push_back(CoreCoord(x, y));
@@ -1048,7 +1032,7 @@ static void get_all_cores(
 
 // ---- READ sweeps ----
 
-static void sweep_dram_sharded_one_from_one(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
+static void sweep_dram_sharded_one_from_one(distributed::MeshDevice& mesh_device, uint32_t test_id) {
     vector<CoreCoord> cores = {{0, 0}};
     vector<uint32_t> bank_assignments = {0};
     dram_accessor_sweep(
@@ -1061,7 +1045,7 @@ static void sweep_dram_sharded_one_from_one(const shared_ptr<distributed::MeshDe
         DramDirection::READ);
 }
 
-static void sweep_dram_sharded_all_from_all(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
+static void sweep_dram_sharded_all_from_all(distributed::MeshDevice& mesh_device, uint32_t test_id) {
     vector<CoreCoord> cores;
     vector<uint32_t> bank_assignments;
     get_all_cores(mesh_device, cores, bank_assignments);
@@ -1075,8 +1059,7 @@ static void sweep_dram_sharded_all_from_all(const shared_ptr<distributed::MeshDe
         DramDirection::READ);
 }
 
-static void sweep_dram_interleaved_one_from_all(
-    const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
+static void sweep_dram_interleaved_one_from_all(distributed::MeshDevice& mesh_device, uint32_t test_id) {
     vector<CoreCoord> cores = {{0, 0}};
     vector<uint32_t> bank_assignments = {0};
     dram_accessor_sweep(
@@ -1089,8 +1072,7 @@ static void sweep_dram_interleaved_one_from_all(
         DramDirection::READ);
 }
 
-static void sweep_dram_interleaved_all_from_all(
-    const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
+static void sweep_dram_interleaved_all_from_all(distributed::MeshDevice& mesh_device, uint32_t test_id) {
     vector<CoreCoord> cores;
     vector<uint32_t> bank_assignments;
     get_all_cores(mesh_device, cores, bank_assignments);
@@ -1106,7 +1088,7 @@ static void sweep_dram_interleaved_all_from_all(
 
 // ---- WRITE sweeps ----
 
-static void sweep_dram_sharded_one_to_one(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
+static void sweep_dram_sharded_one_to_one(distributed::MeshDevice& mesh_device, uint32_t test_id) {
     vector<CoreCoord> cores = {{0, 0}};
     vector<uint32_t> bank_assignments = {0};
     dram_accessor_sweep(
@@ -1119,7 +1101,7 @@ static void sweep_dram_sharded_one_to_one(const shared_ptr<distributed::MeshDevi
         DramDirection::WRITE);
 }
 
-static void sweep_dram_sharded_all_to_all(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
+static void sweep_dram_sharded_all_to_all(distributed::MeshDevice& mesh_device, uint32_t test_id) {
     vector<CoreCoord> cores;
     vector<uint32_t> bank_assignments;
     get_all_cores(mesh_device, cores, bank_assignments);
@@ -1133,8 +1115,7 @@ static void sweep_dram_sharded_all_to_all(const shared_ptr<distributed::MeshDevi
         DramDirection::WRITE);
 }
 
-static void sweep_dram_interleaved_one_to_all(
-    const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
+static void sweep_dram_interleaved_one_to_all(distributed::MeshDevice& mesh_device, uint32_t test_id) {
     vector<CoreCoord> cores = {{0, 0}};
     vector<uint32_t> bank_assignments = {0};
     dram_accessor_sweep(
@@ -1147,8 +1128,7 @@ static void sweep_dram_interleaved_one_to_all(
         DramDirection::WRITE);
 }
 
-static void sweep_dram_interleaved_all_to_all(
-    const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
+static void sweep_dram_interleaved_all_to_all(distributed::MeshDevice& mesh_device, uint32_t test_id) {
     vector<CoreCoord> cores;
     vector<uint32_t> bank_assignments;
     get_all_cores(mesh_device, cores, bank_assignments);
@@ -1164,9 +1144,8 @@ static void sweep_dram_interleaved_all_to_all(
 
 // ============ ROW / COLUMN SWEEP FUNCTIONS ============
 
-static void sweep_one_to_row(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
-    IDevice* device = mesh_device->impl().get_device(0);
-    CoreCoord device_grid = device->compute_with_storage_grid_size();
+static void sweep_one_to_row(distributed::MeshDevice& mesh_device, uint32_t test_id) {
+    CoreCoord device_grid = mesh_device.compute_with_storage_grid_size();
 
     // Unicast: master at (0, 0), sends individually to each core in the row
     {
@@ -1220,9 +1199,8 @@ static void sweep_one_to_row(const shared_ptr<distributed::MeshDevice>& mesh_dev
     }
 }
 
-static void sweep_row_to_row(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
-    IDevice* device = mesh_device->impl().get_device(0);
-    CoreCoord device_grid = device->compute_with_storage_grid_size();
+static void sweep_row_to_row(distributed::MeshDevice& mesh_device, uint32_t test_id) {
+    CoreCoord device_grid = mesh_device.compute_with_storage_grid_size();
 
     // Unicast: every core in the row sends individually to every core in the row
     {
@@ -1275,9 +1253,8 @@ static void sweep_row_to_row(const shared_ptr<distributed::MeshDevice>& mesh_dev
     }
 }
 
-static void sweep_one_to_column(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
-    IDevice* device = mesh_device->impl().get_device(0);
-    CoreCoord device_grid = device->compute_with_storage_grid_size();
+static void sweep_one_to_column(distributed::MeshDevice& mesh_device, uint32_t test_id) {
+    CoreCoord device_grid = mesh_device.compute_with_storage_grid_size();
 
     // Unicast: master at (0, 0), sends individually to each core in the column
     {
@@ -1331,9 +1308,8 @@ static void sweep_one_to_column(const shared_ptr<distributed::MeshDevice>& mesh_
     }
 }
 
-static void sweep_column_to_column(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
-    IDevice* device = mesh_device->impl().get_device(0);
-    CoreCoord device_grid = device->compute_with_storage_grid_size();
+static void sweep_column_to_column(distributed::MeshDevice& mesh_device, uint32_t test_id) {
+    CoreCoord device_grid = mesh_device.compute_with_storage_grid_size();
 
     // Unicast: every core in the column sends individually to every core in the column
     {
@@ -1392,77 +1368,77 @@ static void sweep_column_to_column(const shared_ptr<distributed::MeshDevice>& me
 
 // ---- L1 tests (800-809) ----
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1OneToOne) {
-    unit_tests::dm::noc_estimator::sweep_one_to_one(get_mesh_device(), 800);
+    unit_tests::dm::noc_estimator::sweep_one_to_one(this->device(), 800);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1OneFromOne) {
-    unit_tests::dm::noc_estimator::sweep_one_from_one(get_mesh_device(), 801);
+    unit_tests::dm::noc_estimator::sweep_one_from_one(this->device(), 801);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1OneToAll) {
-    unit_tests::dm::noc_estimator::sweep_one_to_all(get_mesh_device(), 802);
+    unit_tests::dm::noc_estimator::sweep_one_to_all(this->device(), 802);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1OneFromAll) {
-    unit_tests::dm::noc_estimator::sweep_one_from_all(get_mesh_device(), 803);
+    unit_tests::dm::noc_estimator::sweep_one_from_all(this->device(), 803);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1AllToAll) {
-    unit_tests::dm::noc_estimator::sweep_all_to_all(get_mesh_device(), 804);
+    unit_tests::dm::noc_estimator::sweep_all_to_all(this->device(), 804);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1AllFromAll) {
-    unit_tests::dm::noc_estimator::sweep_all_from_all(get_mesh_device(), 805);
+    unit_tests::dm::noc_estimator::sweep_all_from_all(this->device(), 805);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1OneToRow) {
-    unit_tests::dm::noc_estimator::sweep_one_to_row(get_mesh_device(), 806);
+    unit_tests::dm::noc_estimator::sweep_one_to_row(this->device(), 806);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1RowToRow) {
-    unit_tests::dm::noc_estimator::sweep_row_to_row(get_mesh_device(), 807);
+    unit_tests::dm::noc_estimator::sweep_row_to_row(this->device(), 807);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1OneToColumn) {
-    unit_tests::dm::noc_estimator::sweep_one_to_column(get_mesh_device(), 808);
+    unit_tests::dm::noc_estimator::sweep_one_to_column(this->device(), 808);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1ColumnToColumn) {
-    unit_tests::dm::noc_estimator::sweep_column_to_column(get_mesh_device(), 809);
+    unit_tests::dm::noc_estimator::sweep_column_to_column(this->device(), 809);
 }
 
 // ---- DRAM Read tests (810-813) ----
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorDRAMShardedOneFromOne) {
-    unit_tests::dm::noc_estimator::sweep_dram_sharded_one_from_one(get_mesh_device(), 810);
+    unit_tests::dm::noc_estimator::sweep_dram_sharded_one_from_one(this->device(), 810);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorDRAMShardedAllFromAll) {
-    unit_tests::dm::noc_estimator::sweep_dram_sharded_all_from_all(get_mesh_device(), 811);
+    unit_tests::dm::noc_estimator::sweep_dram_sharded_all_from_all(this->device(), 811);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorDRAMInterleavedOneFromAll) {
-    unit_tests::dm::noc_estimator::sweep_dram_interleaved_one_from_all(get_mesh_device(), 812);
+    unit_tests::dm::noc_estimator::sweep_dram_interleaved_one_from_all(this->device(), 812);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorDRAMInterleavedAllFromAll) {
-    unit_tests::dm::noc_estimator::sweep_dram_interleaved_all_from_all(get_mesh_device(), 813);
+    unit_tests::dm::noc_estimator::sweep_dram_interleaved_all_from_all(this->device(), 813);
 }
 
 // ---- DRAM Write tests (814-817) ----
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorDRAMShardedOneToOne) {
-    unit_tests::dm::noc_estimator::sweep_dram_sharded_one_to_one(get_mesh_device(), 814);
+    unit_tests::dm::noc_estimator::sweep_dram_sharded_one_to_one(this->device(), 814);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorDRAMShardedAllToAll) {
-    unit_tests::dm::noc_estimator::sweep_dram_sharded_all_to_all(get_mesh_device(), 815);
+    unit_tests::dm::noc_estimator::sweep_dram_sharded_all_to_all(this->device(), 815);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorDRAMInterleavedOneToAll) {
-    unit_tests::dm::noc_estimator::sweep_dram_interleaved_one_to_all(get_mesh_device(), 816);
+    unit_tests::dm::noc_estimator::sweep_dram_interleaved_one_to_all(this->device(), 816);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorDRAMInterleavedAllToAll) {
-    unit_tests::dm::noc_estimator::sweep_dram_interleaved_all_to_all(get_mesh_device(), 817);
+    unit_tests::dm::noc_estimator::sweep_dram_interleaved_all_to_all(this->device(), 817);
 }
 
 }  // namespace tt::tt_metal

@@ -27,6 +27,7 @@ Tests
 * ``test_layernorm_corr``      — fused Welford-LN op vs fp32-PyTorch + determinism.
 * ``test_rmsnorm_module_corr`` — ``DistributedRMSNorm`` module (static weight) e2e.
 * ``test_layernorm_module_corr``— ``DistributedLayerNorm`` module (adaLN) e2e.
+* ``test_dit_per_head_rmsnorm_mesh_cache_rebinding`` — per-chip data, cache rebinding, and trace replay.
 * ``test_traced_corr``         — traced-replay output == eager (semaphore-reset guard).
 * ``test_layernorm_module_bench``— fused LN vs composite-chain speedup (perf, dev).
 
@@ -1361,6 +1362,89 @@ def test_layernorm_module_bench(mesh_device, model, dim, tp, topology, tp_axis, 
         sp = f"{b / f:.2f}x" if (b is not None and f is not None and f > 0) else "-"
         print(f"{r['seq']:>8} {bs:>10} {fs:>10} {sp:>9}")
     print(box)
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 131072}], indirect=True)
+def test_dit_per_head_rmsnorm_mesh_cache_rebinding(mesh_device):
+    # Each chip has different rows and channels, so sharing the program must not
+    # accidentally share one chip's data. Keep both sets alive to force new addresses.
+    rows, cols = tuple(mesh_device.shape)
+    local_rows, heads, head_dim = 64, 2, 128
+    width = cols * heads * head_dim
+    inputs, weights, references = [], [], []
+    for seed in (13, 29):
+        torch.manual_seed(seed)
+        x = torch.randn(1, 1, rows * local_rows, width, dtype=torch.bfloat16)
+        w = torch.randn(1, width, dtype=torch.bfloat16)
+        inputs.append(
+            ttnn.from_torch(
+                x,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(2, 3)),
+            )
+        )
+        weights.append(
+            ttnn.from_torch(
+                w,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(None, 1)),
+            )
+        )
+        xh = x.float().reshape(rows * local_rows, cols * heads, head_dim)
+        y = xh * torch.rsqrt(xh.square().mean(-1, keepdim=True) + NORM_EPS)
+        references.append(y * w.float().reshape(cols * heads, head_dim))
+
+    def run(index):
+        return ttnn.experimental.dit_fused_distributed_rmsnorm(
+            inputs[index],
+            1,
+            mesh_device,
+            [],
+            topology=ttnn.Topology.Linear,
+            epsilon=NORM_EPS,
+            num_heads_per_device=heads,
+            per_head_norm=True,
+            weight=weights[index],
+        )
+
+    def check(output, index):
+        for coord, shard in zip(output.tensor_topology().mesh_coords(), ttnn.get_device_tensors(output)):
+            row, col = tuple(coord)
+            expected = (
+                references[index][row * local_rows : (row + 1) * local_rows, col * heads : (col + 1) * heads]
+                .permute(1, 0, 2)
+                .unsqueeze(0)
+            )
+            actual = ttnn.to_torch(shard).float()
+            pcc = _pcc(expected, actual)
+            assert pcc >= 0.999, f"chip {tuple(coord)}, input {index}: PCC={pcc}"
+
+    mesh_device.enable_program_cache()
+    output = run(0)
+    check(output, 0)
+    cache_entries = mesh_device.num_program_cache_entries()
+    for index in (1, 0, 1):
+        output = run(index)
+        check(output, index)
+        assert mesh_device.num_program_cache_entries() == cache_entries
+
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    traced_output = run(1)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    try:
+        for _ in range(2):
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+            check(traced_output, 1)
+    finally:
+        ttnn.release_trace(mesh_device, trace_id)
+
+    # Cached argument objects must still reach the live dispatch payload after
+    # trace capture/release, including when the next launch binds other tensors.
+    check(run(0), 0)
+    assert mesh_device.num_program_cache_entries() == cache_entries
 
 
 @pytest.mark.parametrize(

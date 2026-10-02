@@ -33,9 +33,12 @@ namespace noc_att {
 using NocAddress = std::uint64_t;
 
 struct NocMulticastAddress {
-    NocAddress start_address;
-    std::uint32_t extent_xy;
-    std::uint32_t rectangle_count;
+    NocAddress start_address;       // operand of the rectangle's start tile
+    std::uint32_t extent_xy;        // (height << 6) | width, for the operand + extent register form
+    std::uint32_t rectangle_count;  // tiles in the rectangle; 0 = invalid rectangle
+    NocAddress end_address;         // operand of the rectangle's end tile
+    std::uint32_t start_node_xy;    // start tile's endpoint word ((y << 6) | x), for the coordinate register form
+    std::uint32_t end_node_xy;      // end tile's endpoint word
 };
 
 /// @brief The roles a window can play in a map. A map assigns a Window to each
@@ -404,9 +407,12 @@ inline constexpr std::uint32_t DESCRIPTOR_BITS = DESCRIPTOR_LOCAL_BITS + 4 * DES
 inline constexpr NocAddress INVALID_MULTICAST_DESCRIPTOR = NocAddress{1} << DESCRIPTOR_BITS;
 
 /// @brief Multicast is worker-rectangle-only, so it works directly in worker
-/// coordinates. The result carries the flat start address plus the extent and
-/// destination count the Quasar multicast registers need (rectangle_count 0 =
-/// invalid rectangle).
+/// coordinates. The result carries both register forms the Quasar multicast
+/// paths need (rectangle_count 0 = invalid rectangle): the start operand plus
+/// the extent for regular writes and atomics, whose destination the NOC
+/// translates with the rectangle math, and the end operand plus the start and
+/// end tiles' endpoint words for inline writes, whose destination field the
+/// NOC translates without it (see noc_nonblocking_api_v3.h).
 template <const MapData& Map>
 constexpr NocMulticastAddress make_worker_multicast(
     std::uint32_t start_x,
@@ -416,16 +422,31 @@ constexpr NocMulticastAddress make_worker_multicast(
     std::uint64_t offset,
     std::uint64_t size = 1) {
     if (end_x < start_x || end_y < start_y) {
-        return {0, 0, 0};
+        return {};
     }
-    const std::optional<NocAddress> start = Address::worker(start_x, start_y, offset).template encode<Map>(size);
-    const std::optional<NocAddress> end = Address::worker(end_x, end_y, offset).template encode<Map>(size);
+    const Address start_tile = Address::worker(start_x, start_y, offset);
+    const Address end_tile = Address::worker(end_x, end_y, offset);
+    const std::optional<NocAddress> start = start_tile.template encode<Map>(size);
+    const std::optional<NocAddress> end = end_tile.template encode<Map>(size);
     if (!start.has_value() || !end.has_value()) {
-        return {0, 0, 0};
+        return {};
+    }
+    // encode() succeeded, so both tiles resolve to worker selectors; the
+    // endpoint table gives their NOC node words.
+    const std::uint32_t start_selector = resolve(Map, start_tile).selector;
+    const std::uint32_t end_selector = resolve(Map, end_tile).selector;
+    if (start_selector >= Map.worker_endpoint_words.size() || end_selector >= Map.worker_endpoint_words.size()) {
+        return {};
     }
     const std::uint32_t width = end_x - start_x + 1;
     const std::uint32_t height = end_y - start_y + 1;
-    return {*start, (height << DESCRIPTOR_NODE_BITS) | width, width * height};
+    return {
+        *start,
+        (height << DESCRIPTOR_NODE_BITS) | width,
+        width * height,
+        *end,
+        Map.worker_endpoint_words[start_selector],
+        Map.worker_endpoint_words[end_selector]};
 }
 
 constexpr NocAddress make_multicast_descriptor(
@@ -447,7 +468,7 @@ constexpr NocAddress make_multicast_descriptor(
 template <const MapData& Map>
 constexpr NocMulticastAddress resolve_worker_multicast(NocAddress descriptor, std::uint64_t size = 1) {
     if ((descriptor >> DESCRIPTOR_BITS) != 0) {
-        return {0, 0, 0};
+        return {};
     }
     const std::uint32_t end_x = (descriptor >> DESCRIPTOR_LOCAL_BITS) & 0x3f;
     const std::uint32_t end_y = (descriptor >> (DESCRIPTOR_LOCAL_BITS + DESCRIPTOR_NODE_BITS)) & 0x3f;

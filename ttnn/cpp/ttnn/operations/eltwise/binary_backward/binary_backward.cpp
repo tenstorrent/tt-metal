@@ -535,6 +535,16 @@ std::vector<std::optional<Tensor>> concat_bw(
     std::optional<Tensor> other_grad) {
     std::vector<std::optional<Tensor>> grad_tensor = {std::nullopt, std::nullopt};
 
+    TT_FATAL(
+        grad_tensor_arg.logical_shape().rank() == 4 && input_tensor_a_arg.logical_shape().rank() == 4 &&
+            other.logical_shape().rank() == 4,
+        "concat_bw expects rank-4 tensors, got grad rank {}, input rank {}, other rank {}",
+        grad_tensor_arg.logical_shape().rank(),
+        input_tensor_a_arg.logical_shape().rank(),
+        other.logical_shape().rank());
+    // Accept negative dims like the forward concat does.
+    dim = grad_tensor_arg.logical_shape().get_normalized_index(dim);
+
     operations::binary_backward::detail::preallocated_tensors_check(
         input_grad,
         other_grad,
@@ -744,16 +754,22 @@ std::vector<std::optional<Tensor>> div_bw(
             result[0] = input_grad;
         }
         if (are_required_outputs.at(1)) {
+            // -grad * input_a / other^2, evaluated as -grad * ((input_a / other) / other).
+            // Squaring first loses the answer at both ends -- infinity below
+            // |other| = 1.0842e-19, zero above 2^63; see the note in rdiv_bw. The op count is
+            // unchanged: one reciprocal and two multiplies either way.
+            Tensor recip_other = ttnn::reciprocal(other, output_mem_config);
             ttnn::multiply(
                 ttnn::neg(grad_tensor, output_mem_config),
                 (ttnn::multiply(
-                    input_a,
-                    ttnn::reciprocal(ttnn::square(other, output_mem_config), output_mem_config),
+                    ttnn::multiply(input_a, recip_other, std::nullopt, output_mem_config),
+                    recip_other,
                     std::nullopt,
                     output_mem_config)),
                 std::nullopt,
                 output_mem_config,
                 other_grad);
+            recip_other.deallocate();
             result[1] = other_grad;
         }
     } else {

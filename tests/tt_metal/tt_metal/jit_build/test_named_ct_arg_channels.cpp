@@ -13,6 +13,7 @@
 
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/host_api.hpp>
 
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
@@ -162,6 +163,40 @@ TEST_F(NamedCtArgChannelsMockBlackholeFixture, LegacyBlazeKernelsCompile) {
         .config = ComputeConfigDescriptor{},
     };
     Program program(ProgramDescriptor{.kernels = {data_movement, compute}});
+    program.impl().compile(devices_.at(0).get());
+}
+
+// No API includes: the kernel wrapper must supply the accessors to all three TRISCs.
+TEST_F(NamedCtArgChannelsMockBlackholeFixture, LegacyComputeArgsWithoutApiIncludes) {
+    Program program = CreateProgram();
+    CreateKernelFromString(
+        program,
+        R"(
+static_assert(get_compile_time_arg_val(0) == 17);
+static_assert(get_compile_time_arg_val(1) == 23);
+static_assert(get_named_compile_time_arg_val("value") == 42);
+void kernel_main() {}
+)",
+        CoreCoord{0, 0},
+        ComputeConfig{.compile_args = {17, 23}, .named_compile_args = {{"value", 42}}});
+    program.impl().compile(devices_.at(0).get());
+}
+
+TEST_F(NamedCtArgChannelsMockBlackholeFixture, Metal2ComputeArgsWithoutApiIncludes) {
+    KernelDescriptor kernel = {
+        .kernel_source = R"(
+static_assert(get_compile_time_arg_val(0) == 17);
+static_assert(get_compile_time_arg_val(1) == 23);
+static_assert(get_named_compile_time_arg_val("value") == 42);
+void kernel_main() {}
+)",
+        .source_type = KernelDescriptor::SourceType::SOURCE_CODE,
+        .core_ranges = CoreRange(CoreCoord{0, 0}),
+        .compile_time_args = {17, 23},
+        .named_compile_time_args = {{"value", 42}},
+        .config = ComputeConfigDescriptor{},
+    };
+    Program program(ProgramDescriptor{.kernels = {kernel}});
     program.impl().compile(devices_.at(0).get());
 }
 

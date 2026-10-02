@@ -32,16 +32,12 @@ public:
 
     DispatchCoreType get_dispatch_core_type() const { return type_; }
 
-    void set_dispatch_core_type(DispatchCoreType new_type) { type_ = new_type; }
-
     DispatchCoreAxis get_dispatch_core_axis() const {
         TT_FATAL(
             axis_.has_value(),
             "Dispatch core axis has not been resolved. Set it explicitly or call resolve_dispatch_core_axis().");
         return axis_.value();
     }
-
-    void set_dispatch_core_axis(DispatchCoreAxis new_axis) { axis_ = new_axis; }
 
     bool operator==(const DispatchCoreConfig& other) const = default;
 };

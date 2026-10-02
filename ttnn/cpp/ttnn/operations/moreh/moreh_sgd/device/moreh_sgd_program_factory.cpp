@@ -43,7 +43,7 @@ ProgramDescriptor MorehSgdOperation::create_descriptor(
 
     auto compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    auto shape = param_in.logical_shape();
+    auto shape = param_in.padded_shape();
     auto H = shape[-2];
     auto W = shape[-1];
     auto num = param_in.physical_volume() / H / W;
@@ -55,7 +55,7 @@ ProgramDescriptor MorehSgdOperation::create_descriptor(
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    IDevice* device = param_in.device();
+    MeshDevice* device = param_in.device();
     auto grid = device->compute_with_storage_grid_size();
     uint32_t units_to_divide = num * Ht * Wt;
     uint32_t core_h = grid.y;
