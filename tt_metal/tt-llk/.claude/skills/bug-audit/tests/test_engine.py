@@ -146,14 +146,25 @@ def test_arch_copies_merge_into_one_entry_at_the_worst_severity(rundir):
     ), "one open entry, listing both sites"
 
 
-def test_a_multi_line_fix_stays_nested_under_its_merged_site(rundir):
+@pytest.mark.parametrize(
+    "fix, rendered",
+    [
+        # the line after its steps is set off by a blank line, or Markdown folds it into the last step
+        (
+            "Reject it.\n- first step\n- second step\nTest: run it",
+            "  - fix: Reject it.\n    - first step\n    - second step\n\n    Test: run it\n",
+        ),
+        # a diff's "- old" inside a code fence is not a list: nothing is added inside the fence
+        (
+            "Flip it:\n```diff\n- if (n > 0)\n+ if (n >= 0)\n  return;\n```\nThen rebuild.",
+            "  - fix: Flip it:\n    ```diff\n    - if (n > 0)\n    + if (n >= 0)\n      return;\n    ```\n"
+            "    Then rebuild.\n",
+        ),
+    ],
+)
+def test_a_multi_line_fix_stays_nested_under_its_merged_site(rundir, fix, rendered):
     wh, bh = "a/wormhole/k.h", "a/blackhole/k.h"
-    copy = finding(
-        bh,
-        12,
-        "high",
-        suggested_fix="Reject it.\n- first step\n- second step\nTest: run it",
-    )
+    copy = finding(bh, 12, "high", suggested_fix=fix)
     write(
         str(rundir / "verdicts" / "B-0000.json"),
         {"findings": [finding(wh, 10, "medium"), copy]},
@@ -173,12 +184,8 @@ def test_a_multi_line_fix_stays_nested_under_its_merged_site(rundir):
     )
     assert run(os.path.join(ENGINE, "consolidate.py"), "--run", rundir)[0] == 0
     md = open(rundir / "OPEN.md").read()
-    # every line of the merged site's fix sits under its "- fix:" item, never back at the top level of the list, and
-    # the line after its steps is set off by a blank line, or Markdown folds it into the last step
-    assert (
-        "  - fix: Reject it.\n    - first step\n    - second step\n\n    Test: run it\n"
-        in md
-    ), md
+    # every line of the merged site's fix sits under its "- fix:" item, never back at the top level of the list
+    assert rendered in md, md
 
 
 def test_a_disposition_closes_the_finding_and_survives_regeneration(rundir):

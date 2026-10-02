@@ -232,11 +232,16 @@ LIST_LINE = re.compile(r"^\s*([-*+]|\d+[.)])\s")
 
 def nest(text):
     """A nested list item's text: its later lines indented, so a multi-line fix stays under its item. An unindented
-    line after a list in the text gets a blank line before it, or Markdown folds it into that list's last bullet.
+    line after a list in the text gets a blank line before it, or Markdown folds it into that list's last bullet. Lines
+    inside a code fence are left as they are: a diff's "- old" is not a list.
     """
-    out, in_list = [], False
+    out, in_list, fence = [], False, False
     for ln in str(text or "").strip().split("\n"):
-        if LIST_LINE.match(ln):
+        if ln.lstrip().startswith(("```", "~~~")):
+            fence, in_list = not fence, False
+        elif fence:
+            pass
+        elif LIST_LINE.match(ln):
             in_list = True
         elif not ln.strip():
             in_list = False
