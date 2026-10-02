@@ -197,15 +197,52 @@ ALL_TEST_PARAMS = list(
 )
 
 
+# Experiment (bistability repro, not for merge): tiny configs only.
+def _repro_tiny(_p):
+    _f, _c, _thr, _nb = _p
+    _td, _fl = _c.tile_dimensions, _c.face_layout_config
+    return (
+        _td.rt_dim == 1 and _td.ct_dim == 1 and _td.kt_dim == 1 and _nb == 1
+        and _thr == 0 and _fl.num_faces == 4 and not _fl.partial_face_math
+        and not _fl.partial_face_in0 and _td.in0_tile_r_dim == 32
+        and not _fl.unpack_transpose_faces.value
+    )
+
+
+ALL_TEST_PARAMS = [_p for _p in ALL_TEST_PARAMS if _repro_tiny(_p) and (str(_p[0]).endswith('LoFi') and _p[1].dest_acc == DestAccumulation.No and _p[1].stochastic_rnd == StochasticRounding.No)]
+
+
+from dataclasses import dataclass as _dataclass
+
+from helpers.test_variant_parameters import TemplateParameter as _TemplateParameter
+
+
+@_dataclass
+class REPRO_KNOB(_TemplateParameter):
+    repro_pad: int = 0
+    repro_delay: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr int REPRO_PAD = {self.repro_pad};\n"
+            f"constexpr int REPRO_DELAY = {self.repro_delay};"
+        )
+
+
+REPRO_KNOBS = [(0, 0), (0, 6), (0, 64), (0, 512), (0, 2000), (1, 0), (1, 6), (1, 64), (1, 512), (1, 2000), (2, 0), (2, 6), (2, 64), (2, 512), (2, 2000), (3, 0), (3, 6), (3, 64), (3, 512), (3, 2000), (4, 0), (4, 6), (4, 64), (4, 512), (4, 2000), (5, 0), (5, 6), (5, 64), (5, 512), (5, 2000), (6, 0), (6, 6), (6, 64), (6, 512), (6, 2000), (7, 0), (7, 6), (7, 64), (7, 512), (7, 2000)]
+
+
 @pytest.mark.perf
 @pytest.mark.parametrize(
     "math_fidelity,matmul_config,throttle,num_blocks", ALL_TEST_PARAMS
 )
+@pytest.mark.parametrize("repro_knob", REPRO_KNOBS)
 def test_perf_math_matmul(
     math_fidelity,
     matmul_config,
     throttle,
     num_blocks,
+    repro_knob,
     perf_report,
 ):
     """
@@ -256,6 +293,7 @@ def test_perf_math_matmul(
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(matmul_config.dest_sync),
             THROTTLE_LEVEL(throttle),
+            REPRO_KNOB(*repro_knob),
         ],
         runtimes=[
             DEST_INDEX(matmul_config.dst_index),
