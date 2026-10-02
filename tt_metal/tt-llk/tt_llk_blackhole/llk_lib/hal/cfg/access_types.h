@@ -51,9 +51,9 @@ enum class GprTransferSize : std::uint8_t
  * @brief Whether a WRCFG helper emits its completion NOP immediately.
  *
  * The instruction immediately after a WRCFG must not consume the configuration
- * that WRCFG wrote; one NOP of separation is enough. Deferred is for a sequence
- * that already provides it. It is a compile-time policy and introduces no
- * runtime control flow.
+ * that WRCFG wrote; one NOP of separation is enough. Deferred, the default,
+ * emits no NOP; request Wait on the transfer whose result the next instruction
+ * consumes. It is a compile-time policy and introduces no runtime control flow.
  */
 enum class WrcfgCompletion : std::uint8_t
 {
