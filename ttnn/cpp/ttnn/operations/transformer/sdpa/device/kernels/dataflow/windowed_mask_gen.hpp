@@ -16,6 +16,8 @@
 // equal: tiles to its right are all -inf, tiles to its left keep their block-diagonal pattern, and the
 // diagonal tiles get their strict upper triangle set to -inf on top of it.
 
+#include <type_traits>
+
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
 #include <tt-metalium/constants.hpp>
@@ -196,20 +198,23 @@ inline void generate_windowed_mask_for_q_chunk(
                     continue;
                 }
 
-                if (inf_tile_idx == -1) {
-                    fill_neginf_tile<mask_tile_bytes>(cb_mask_in, in_mask_tile_id);
-                } else {
+                const bool inf_copied = inf_tile_idx != -1;
+                if (inf_copied) {
                     copy_tile<mask_tile_bytes>(
                         noc, mask_write_ptr_base, mask_write_ptr_base, inf_tile_idx, in_mask_tile_id);
+                } else {
+                    fill_neginf_tile<mask_tile_bytes>(cb_mask_in, in_mask_tile_id);
                 }
                 if (!found_mask_windows || k_end_idx <= window_low_idx || k_start_idx >= window_high_idx ||
                     window_low_idx >= window_high_idx) {
                     inf_tile_idx = in_mask_tile_id;
                     continue;
                 }
-                // Partial tile: the -inf copy above is an async NoC read. Let it land before the direct
-                // writes below, or it can overwrite the zeros they place.
-                noc.async_read_barrier();
+                // Partial tile: a -inf copy is an async NoC read. Let it land before the direct writes below,
+                // or it can overwrite the zeros they place. (fill_neginf_tile writes directly; nothing to wait on.)
+                if (inf_copied) {
+                    noc.async_read_barrier();
+                }
 
                 uint32_t cqs, cks, cqe, cke;
                 do {
@@ -251,11 +256,23 @@ inline void generate_windowed_mask_for_q_chunk(
     }
 }
 
-// Template wrapper so the windowed generator is instantiated ONLY in a windowed mode.
-// kernel_main is not a template, so an `if constexpr` there does NOT discard its body — it would still
-// compile, constexpr-evaluating get_tile_size on a possibly-inactive CB id. Inside this template,
-// `if constexpr (mode != None)` discards properly, so non-windowed writer builds never touch the generator.
-template <WindowedMode mode, uint32_t cb_mask_in, uint32_t cb_cu_window_in>
+// Overloads so the windowed generator is instantiated ONLY in a windowed mode. kernel_main is not a
+// template, so an `if constexpr` there does NOT discard its body — it would still compile,
+// constexpr-evaluating get_tile_size on a possibly-inactive CB id. With WindowedMode::None the no-op
+// overload is selected instead, so non-windowed writer builds never touch the generator.
+template <
+    WindowedMode mode,
+    uint32_t cb_mask_in,
+    uint32_t cb_cu_window_in,
+    std::enable_if_t<!is_windowed_mode(mode), int> = 0,
+    typename... Args>
+inline void windowed_generate_if_enabled(Args&&...) {}
+
+template <
+    WindowedMode mode,
+    uint32_t cb_mask_in,
+    uint32_t cb_cu_window_in,
+    std::enable_if_t<is_windowed_mode(mode), int> = 0>
 inline void windowed_generate_if_enabled(
     Noc& noc,
     uint32_t q_chunk,
@@ -266,17 +283,7 @@ inline void windowed_generate_if_enabled(
     uint32_t k_num_chunks,
     uint32_t cu_window_seqlens_eles,
     uint32_t q_tok_offset) {
-    if constexpr (mode != WindowedMode::None) {
-        constexpr uint32_t mask_tile_bytes = get_tile_size(cb_mask_in);
-        generate_windowed_mask_for_q_chunk<mode, mask_tile_bytes, cb_mask_in, cb_cu_window_in>(
-            noc,
-            q_chunk,
-            Sq_chunk_t,
-            Sk_chunk_t,
-            valid_Sqt,
-            valid_Skt,
-            k_num_chunks,
-            cu_window_seqlens_eles,
-            q_tok_offset);
-    }
+    constexpr uint32_t mask_tile_bytes = get_tile_size(cb_mask_in);
+    generate_windowed_mask_for_q_chunk<mode, mask_tile_bytes, cb_mask_in, cb_cu_window_in>(
+        noc, q_chunk, Sq_chunk_t, Sk_chunk_t, valid_Sqt, valid_Skt, k_num_chunks, cu_window_seqlens_eles, q_tok_offset);
 }

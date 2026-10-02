@@ -71,7 +71,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         const auto Sk = k_shape[2];
         // Windowed causal is exempt: its diagonal is at global positions (windowed_q_token_offset + Q row),
         // so a sequence-parallel Q shard with Sq < Sk is well defined; validate_windowed_mode bounds it.
-        if (attrs.is_causal && attrs.windowed_mode == WindowedMode::None) {
+        if (attrs.is_causal && !is_windowed_mode(attrs.windowed_mode)) {
             TT_FATAL(
                 Sq == Sk, "Causal SDPA requires Q and K to have the same sequence length. Got Q: {}, K: {}", Sq, Sk);
         }
@@ -521,7 +521,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
     check_conditions();
     bool is_chunked_mode = attrs.chunk_start_idx.has_value() || attrs.chunk_start_idx_tensor.has_value();
 
-    if (attrs.windowed_mode != WindowedMode::None) {
+    if (is_windowed_mode(attrs.windowed_mode)) {
         validate_windowed_mode();
     } else if (is_chunked_mode) {
         validate_chunked_mode();

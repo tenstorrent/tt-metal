@@ -98,7 +98,7 @@ void kernel_main() {
     // Windowed K-range narrowing: the reader computes each Q chunk's [k_lo, k_hi) from
     // cu_window_seqlens, streams only that range, and feeds it to compute over a ctrl CB.
     constexpr auto windowed_mode = static_cast<WindowedMode>(get_compile_time_arg_val(33));
-    constexpr bool use_windowed_narrowing = windowed_mode != WindowedMode::None;
+    constexpr bool use_windowed_narrowing = is_windowed_mode(windowed_mode);
 
     constexpr auto q_args = TensorAccessorArgs<34>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();

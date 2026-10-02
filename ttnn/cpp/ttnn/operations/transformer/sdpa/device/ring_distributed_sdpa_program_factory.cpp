@@ -287,16 +287,15 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         0,                  // mla_kv_overlap
         qk_out_subblock_h,  // qk_subblock_h
         0,                  // sliding_window_size (ring uses no sliding window)
-        0                   // use_streaming_compute (ring uses legacy compute)
+        0,                  // use_streaming_compute (ring uses legacy compute)
+        // Semaphore placeholders (not used in ring, but kernel expects them at indices 28-31)
+        0,                                            // arg 28: sender_semaphore_id
+        0,                                            // arg 29: receiver_semaphore_id
+        0,                                            // arg 30: valid_semaphore_id
+        0,                                            // arg 31: mcast_enabled
+        static_cast<uint32_t>(use_zigzag_balancing),  // arg 32
+        static_cast<uint32_t>(WindowedMode::None),    // arg 33: windowed mode — ring is never windowed
     };
-    // Semaphore placeholders (not used in ring, but kernel expects them at indices 28-31)
-    reader_compile_time_args.push_back(0);  // sender_semaphore_id
-    reader_compile_time_args.push_back(0);  // receiver_semaphore_id
-    reader_compile_time_args.push_back(0);  // valid_semaphore_id
-    reader_compile_time_args.push_back(0);  // mcast_enabled
-    reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 32
-    reader_compile_time_args.push_back(
-        static_cast<uint32_t>(WindowedMode::None));  // arg 33: windowed mode — ring is never windowed
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
