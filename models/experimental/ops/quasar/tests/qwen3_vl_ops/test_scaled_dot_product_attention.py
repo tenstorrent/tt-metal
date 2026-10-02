@@ -40,7 +40,7 @@ CASES = [
             {
                 "k": "t",
                 "shape": [1, 16, 12288, 64],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },
@@ -54,7 +54,7 @@ CASES = [
             {
                 "k": "t",
                 "shape": [1, 16, 12288, 64],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },
@@ -65,7 +65,7 @@ CASES = [
             "program_config": {
                 "kind": "SDPAProgramConfig",
                 "fields": {
-                    "compute_with_storage_grid_size": [8, 8],
+                    "compute_with_storage_grid_size": [8, 4],
                     "sub_core_grids": None,
                     "q_chunk_size": 256,
                     "k_chunk_size": 256,
@@ -77,7 +77,7 @@ CASES = [
         },
         "outs": [
             {
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "k": "t",
                 "layout": "TILE",
                 "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
@@ -93,21 +93,21 @@ CASES = [
             {
                 "k": "t",
                 "shape": [1, 32, 4096, 128],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },
             {
                 "k": "t",
                 "shape": [1, 8, 4096, 128],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },
             {
                 "k": "t",
                 "shape": [1, 8, 4096, 128],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },
@@ -119,7 +119,7 @@ CASES = [
             "program_config": {
                 "kind": "SDPAProgramConfig",
                 "fields": {
-                    "compute_with_storage_grid_size": [8, 8],
+                    "compute_with_storage_grid_size": [8, 4],
                     "sub_core_grids": None,
                     "q_chunk_size": 256,
                     "k_chunk_size": 256,
@@ -131,7 +131,7 @@ CASES = [
         },
         "outs": [
             {
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "k": "t",
                 "layout": "TILE",
                 "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
