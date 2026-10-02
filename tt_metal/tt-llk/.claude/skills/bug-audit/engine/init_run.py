@@ -23,6 +23,7 @@ import datetime
 import fnmatch
 import os
 import re
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -186,7 +187,40 @@ if submodules and not a.recurse_submodules:
         file=sys.stderr,
     )
 if a.since:
-    changed = set(git("diff", "--name-only", f"{a.since}...{commit}").splitlines())
+    # -z for the same reason as ls-files above
+    changed = {
+        p
+        for p in git("diff", "--name-only", "-z", f"{a.since}...{commit}").split("\0")
+        if p
+    }
+    if a.recurse_submodules:
+        # the superproject diff names a changed submodule only by its path: diff inside it between the two pins
+        base = git("merge-base", a.since, commit).strip()
+
+        def pin(rev, s):
+            """The commit a submodule is pinned to at rev, or None if it is not there."""
+            entry = git("ls-tree", "-z", rev, "--", s).split("\0")[0].split()
+            return entry[2] if entry else None
+
+        for s in submodules:
+            if s not in changed:
+                continue
+            old, new = pin(base, s), pin(commit, s)
+            try:
+                inner = (
+                    git("-C", s, "diff", "--name-only", "-z", old, new)
+                    if old
+                    else git("-C", s, "ls-files", "-z")
+                )
+                changed |= {f"{s}/{p}" for p in inner.split("\0") if p}
+            except subprocess.CalledProcessError:
+                # the old pin is not in the submodule's clone: every file in it counts as changed
+                changed |= {f for f in files if f.startswith(s + "/")}
+                print(
+                    f"WARNING: {s}: cannot diff {(old or 'none')[:11]}..{(new or 'none')[:11]} (not fetched); "
+                    "all its files are in scope",
+                    file=sys.stderr,
+                )
     files = [f for f in files if f in changed]
 # comma lists, like --prio: a whole list taken as one glob matches nothing, silently
 include = [g.strip() for x in a.include for g in x.split(",") if g.strip()]

@@ -1093,6 +1093,125 @@ def test_init_run_batches_hold_at_most_300_lines_and_every_file_once(tmp_path):
     assert [b["files"] for b in man if "c/f1200.c" in b["files"]] == [["c/f1200.c"]]
 
 
+def _commit_all(tree, msg):
+    import subprocess as sp
+
+    sp.run(["git", "add", "-A"], cwd=tree, check=True)
+    sp.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", msg],
+        cwd=tree,
+        check=True,
+    )
+    return sp.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=tree,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def test_init_run_diff_mode_keeps_changed_files_with_non_ascii_names(tmp_path):
+    odd = "c/ünï cödé.c"
+    tree = _git_tree(tmp_path, ["b/g1.c", "b/same.c", odd])
+    import subprocess as sp
+
+    base = sp.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=tree,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    (tree / "b/g1.c").write_text("int y;\n")
+    (tree / odd).write_text("int y;\n")
+    _commit_all(tree, "change")
+    code, out, files = _init(tmp_path, tree, "--since", base)
+    assert code == 0, out
+    assert files == {"b/g1.c", odd}, files
+
+
+def test_init_run_diff_mode_reaches_changed_files_inside_a_submodule(tmp_path):
+    import subprocess as sp
+
+    sub = tmp_path / "subrepo"
+    sub.mkdir()
+    (sub / "s.c").write_text("int s;\n")
+    (sub / "t.c").write_text("int t;\n")
+    sp.run(["git", "init", "-q"], cwd=sub, check=True)
+    _commit_all(sub, "sub base")
+    tree = _git_tree(tmp_path, ["top.c", "other.c"])
+    sp.run(
+        [
+            "git",
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            str(sub),
+            "sub",
+        ],
+        cwd=tree,
+        check=True,
+        capture_output=True,
+    )
+    base = _commit_all(tree, "add sub")
+    (tree / "sub" / "s.c").write_text(
+        "int s2;\n"
+    )  # change one file inside the submodule checkout
+    _commit_all(tree / "sub", "sub change")
+    (tree / "top.c").write_text("int top2;\n")
+    _commit_all(tree, "bump sub, change top")
+    code, out, files = _init(tmp_path, tree, "--since", base, "--recurse-submodules")
+    assert code == 0, out
+    assert files == {"top.c", "sub/s.c"}, files
+
+
+def test_init_run_diff_mode_takes_a_whole_submodule_whose_old_pin_is_gone(tmp_path):
+    import subprocess as sp
+
+    sub = tmp_path / "subrepo"
+    sub.mkdir()
+    (sub / "s.c").write_text("int s;\n")
+    (sub / "t.c").write_text("int t;\n")
+    sp.run(["git", "init", "-q"], cwd=sub, check=True)
+    _commit_all(sub, "sub base")
+    tree = _git_tree(tmp_path, ["top.c"])
+    sp.run(
+        [
+            "git",
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            str(sub),
+            "sub",
+        ],
+        cwd=tree,
+        check=True,
+        capture_output=True,
+    )
+    inner = tree / "sub"
+    (inner / "s.c").write_text("int pinned;\n")
+    _commit_all(inner, "the old pin, about to vanish")
+    base = _commit_all(tree, "pin it")
+    # rewrite the submodule's history so the old pin is unreachable, then drop it from the clone
+    sp.run(["git", "reset", "-q", "--hard", "HEAD~1"], cwd=inner, check=True)
+    (inner / "t.c").write_text("int t2;\n")
+    _commit_all(inner, "new history")
+    for cmd in (
+        ["reflog", "expire", "--expire=now", "--all"],
+        ["gc", "-q", "--prune=now"],
+    ):
+        sp.run(["git", *cmd], cwd=inner, check=True)
+    _commit_all(tree, "bump sub")
+    code, out, files = _init(tmp_path, tree, "--since", base, "--recurse-submodules")
+    assert code == 0, out
+    assert files == {"sub/s.c", "sub/t.c"} and "not fetched" in out, (files, out)
+
+
 def test_init_run_include_and_exclude_take_comma_lists_like_prio(tmp_path):
     tree = _git_tree(tmp_path, ["a/x.c", "b/y.c", "c/z.c"])
     code, out, files = _init(
