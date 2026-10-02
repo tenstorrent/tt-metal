@@ -58,6 +58,7 @@ from .optimized_decoder import (
 from .prefill_page_table import single_shot_fill_page_table
 
 TOKEN_DISPATCH_ENV = "TT_LAGUNA_MOE_TOKEN_DISPATCH"
+FOLD_GATE_QKV_ENV = "TT_LAGUNA_FOLD_GATE_QKV"  # 0 = separate 1-core g_proj matmul in decode
 MOE_PREFILL_TILE_SPARSE_ENV = "TT_LAGUNA_MOE_PREFILL_TILE_SPARSE"
 TOKEN_DISPATCH_BUCKETS = frozenset({1024, 2048, 4096, 8192})
 TOKEN_DISPATCH_MOE_LAYERS = frozenset(range(1, 40))
@@ -408,6 +409,32 @@ class MultichipDecoder(OptimizedDecoder):
         store_shard("wo", wo, local_q_w, H, policy.attn_o, mesh_dim=0)
         # softplus gate g_proj [H, GQ] column-parallel -> device d gate for its Q heads
         w["wg"] = shard_tt("wg", lambda: g("self_attn.g_proj.weight").t().contiguous(), 1, policy.attn_gate)
+        if _parse_binary_env(FOLD_GATE_QKV_ENV, True):
+            # Decode-only fused [Q_d|K_d|V_d|G_d|0-pad] weight: the g_proj gate (N = lqh, one tile -> a
+            # 1-core matmul) rides the DRAM-sharded QKV matmul on the same `ln` input. N is zero-padded to
+            # a TILE*dram_cores multiple so the DRAM width shards are even. Only the _ds copy is kept.
+            fused_w = local_qkv_w + lqh
+            fused_pad = math.ceil(fused_w / (TILE * dram_cores)) * (TILE * dram_cores)
+
+            def build_qkvg():
+                wg_full = g("self_attn.g_proj.weight").t().contiguous()  # [H, GQ]
+                fused = []
+                for d in range(D):
+                    fused += [
+                        wq[:, d * local_q_w : (d + 1) * local_q_w],
+                        wk[:, d * local_kv_w : (d + 1) * local_kv_w],
+                        wv[:, d * local_kv_w : (d + 1) * local_kv_w],
+                        wg_full[:, d * lqh : (d + 1) * lqh],
+                        torch.zeros(H, fused_pad - fused_w),
+                    ]
+                return torch.cat(fused, dim=1).contiguous()
+
+            qkvg_il = shard_tt("wqkvg", build_qkvg, 1, policy.attn_qkv)
+            w["wqkvg_ds"] = ttnn.to_memory_config(qkvg_il, _dram_weight_memcfg(H, fused_pad, dram_cores))
+            ttnn.deallocate(qkvg_il)
+            qkvg_pad = fused_pad
+        else:
+            qkvg_pad = None
         w["q_norm"] = rep_tt("q_norm", lambda: g("self_attn.q_norm.weight").reshape(1, 1, 1, hd), policy.qk_norm)
         w["k_norm"] = rep_tt("k_norm", lambda: g("self_attn.k_norm.weight").reshape(1, 1, 1, hd), policy.qk_norm)
         w["input_ln"] = rep_tt("input_ln", lambda: g("input_layernorm.weight").reshape(1, 1, 1, H), ttnn.bfloat16)
@@ -527,6 +554,7 @@ class MultichipDecoder(OptimizedDecoder):
             "q_w": local_q_w,
             "kv_w": local_kv_w,
             "qkv_w": local_qkv_w,
+            "qkvg_pad": qkvg_pad,
             "mesh_devices": D,
             "global_experts": global_experts,
             "local_experts": local_experts,
@@ -1243,9 +1271,17 @@ class MultichipDecoder(OptimizedDecoder):
         B = x_1BH.shape[-2]
         residual = x_1BH
         ln = self._rms(x_1BH, self.w["input_ln"])
-        qkv = self._dram_mm(ln, self.w["wqkv"], self.w["wqkv_ds"], cfg.hidden, self.meta["qkv_w"], self._ck_qkv)
-        if self.use_dram_sharded:
+        g = None
+        if self.use_dram_sharded and self.meta.get("qkvg_pad"):
+            # g_proj folded into the QKV matmul (HiFi2 = the gate's own fidelity; decode is DRAM-bound)
+            qkv = self._dram_mm(ln, None, self.w["wqkvg_ds"], cfg.hidden, self.meta["qkvg_pad"], self._ck_gate)
             qkv = ttnn.sharded_to_interleaved(qkv, ttnn.DRAM_MEMORY_CONFIG)
+            qkv_w = self.meta["qkv_w"]
+            g = ttnn.slice(qkv, [0, 0, 0, qkv_w], [1, 1, B, qkv_w + cfg.num_heads])
+        else:
+            qkv = self._dram_mm(ln, self.w["wqkv"], self.w["wqkv_ds"], cfg.hidden, self.meta["qkv_w"], self._ck_qkv)
+            if self.use_dram_sharded:
+                qkv = ttnn.sharded_to_interleaved(qkv, ttnn.DRAM_MEMORY_CONFIG)
         q, k, v = self._split_qkv(qkv, B)
         q = self._per_head_norm(q, self.w["q_norm"])
         k = self._per_head_norm(k, self.w["k_norm"])
@@ -1307,7 +1343,7 @@ class MultichipDecoder(OptimizedDecoder):
             q, kv_cache["k"], kv_cache["v"], **sdpa_kwargs
         )
         attn = ttnn.reshape(attn, (1, 1, B, cfg.num_heads * cfg.head_dim))
-        attn = self._gate(attn, ln)
+        attn = self._gate(attn, ln, g)
         q_w = self.meta["q_w"]
         o = self._dram_mm(attn, self.w["wo"], self.w["wo_ds"], q_w, cfg.hidden, self._ck_o)
         if self.use_dram_sharded:

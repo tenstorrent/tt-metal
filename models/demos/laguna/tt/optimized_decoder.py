@@ -838,9 +838,11 @@ class OptimizedDecoder(LightweightModule):
             return embed
         return ttnn.concat([embed, x_pass], dim=-1)
 
-    def _gate(self, attn, ln):
+    def _gate(self, attn, ln, g=None):
+        """g: optional precomputed g_proj(ln) (e.g. folded into the QKV matmul); else computed here."""
         cfg = self.cfg
-        g = ttnn.linear(ln, self.w["wg"], compute_kernel_config=self._ck_gate)
+        if g is None:
+            g = ttnn.linear(ln, self.w["wg"], compute_kernel_config=self._ck_gate)
         g = ttnn.softplus(g)
         shp = list(attn.shape)
         attn_h = ttnn.reshape(attn, shp[:-1] + [cfg.num_heads, cfg.head_dim])
