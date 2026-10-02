@@ -70,6 +70,7 @@ class TtDistributedRmsNorm(LightweightModule):
         cache_path: Path | None,
         cache_name_prefix: str | None,
         device: ttnn.MeshDevice | None = None,
+        replicate: bool = False,
     ):
         """
         Shared logic for converting norm weight to ttnn with caching.
@@ -81,6 +82,9 @@ class TtDistributedRmsNorm(LightweightModule):
             cache_path: Cache directory path
             cache_name_prefix: Prefix for cache file name
             device: None for cache-only (no device copy), mesh_device for cache+load
+            replicate: the whole [emb_dim] weight on every device (batch-axis mode, TP=1) instead of a
+                1/tp slice. Callers give it its own cache_name_prefix: the sharded tensorbin must never
+                be loaded into the replicated layout.
 
         Returns:
             ttnn.Tensor if device is not None, else None
@@ -92,10 +96,14 @@ class TtDistributedRmsNorm(LightweightModule):
             torch_weight_reshaped = torch.empty(1, 1, emb_dim // 32, 32)
 
         # Create mesh mapper: replicate across rows, shard dim 2 across cols
-        mesh_mapper = ttnn.ShardTensor2dMesh(
-            mesh_device,
-            mesh_shape=mesh_device.shape,
-            dims=(None, 2),
+        mesh_mapper = (
+            ttnn.ReplicateTensorToMesh(mesh_device)
+            if replicate
+            else ttnn.ShardTensor2dMesh(
+                mesh_device,
+                mesh_shape=mesh_device.shape,
+                dims=(None, 2),
+            )
         )
 
         cache_file_name = str(cache_path / f"{cache_name_prefix}_weight") if cache_path and cache_name_prefix else None
@@ -125,6 +133,7 @@ class TtDistributedRmsNorm(LightweightModule):
         mesh_device: ttnn.MeshDevice,
         cache_path: Path,
         cache_name_prefix: str,
+        replicate: bool = False,
     ):
         """
         Build TTNN cache for norm weight without device copy.
@@ -137,7 +146,7 @@ class TtDistributedRmsNorm(LightweightModule):
             cache_name_prefix: Prefix for cache file name
         """
         TtDistributedRmsNorm._convert_and_cache_weight(
-            torch_weight, emb_dim, mesh_device, cache_path, cache_name_prefix, device=None
+            torch_weight, emb_dim, mesh_device, cache_path, cache_name_prefix, device=None, replicate=replicate
         )
 
     def __init__(
@@ -156,6 +165,7 @@ class TtDistributedRmsNorm(LightweightModule):
         cache_name_prefix: Optional[str] = None,
         output_memcfg: ttnn.MemoryConfig = None,
         use_fused: bool = False,
+        replicate: bool = False,
     ):
         """
         Initialize TtDistributedRmsNorm module.
@@ -173,6 +183,9 @@ class TtDistributedRmsNorm(LightweightModule):
             stats_memcfg: Optional memory config for gathered stats (e.g., L1 sharded)
             output_memcfg: Optional memory config for the normalized output
             use_fused: Use the fused distributed op; unsupported tensor shapes raise in the op.
+            replicate: batch-axis mode -- the input carries the FULL hidden dim on every device (the
+                cluster axis holds independent users, not hidden slices), so the weight is replicated
+                and the norm is a plain local rms_norm with no statistics exchange.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -194,6 +207,8 @@ class TtDistributedRmsNorm(LightweightModule):
         self._use_fused = False
         self.fused_weight = None
         self.tt_ccl = None
+        self.replicate = replicate
+        assert not (replicate and use_fused), "the fused distributed op has no replicated (TP=1) form"
 
         logger.debug(f"Initializing TtDistributedRmsNorm with emb_dim={emb_dim}, epsilon={epsilon}")
         logger.debug(f"Mesh shape: {mesh_device.shape}, num_devices={self.num_devices}")
@@ -212,6 +227,7 @@ class TtDistributedRmsNorm(LightweightModule):
                 self.weight_cache_path,
                 self.cache_name_prefix,
                 device=self.mesh_device,
+                replicate=self.replicate,
             )
         else:
             logger.debug("Creating random sharded weight")
@@ -261,6 +277,7 @@ class TtDistributedRmsNorm(LightweightModule):
             self.weight_cache_path,
             self.cache_name_prefix,
             device=self.mesh_device,  # Cache + load to device
+            replicate=self.replicate,
         )
 
         logger.debug(f"Created sharded weight: {tt_weight.shape}")
@@ -314,7 +331,7 @@ class TtDistributedRmsNorm(LightweightModule):
         # (all_gather: "num_devices > 1, got 1"; high_bw_all_gather: "selects a singleton mesh axis"),
         # so which one you hit only depends on whether the tensor's topology supports the high-bw
         # path. Verified bit-identical to the TP>1 path's output on an (8,1) stage submesh.
-        if self.mesh_device.shape[self.cluster_axis] == 1:
+        if self.replicate or self.mesh_device.shape[self.cluster_axis] == 1:
             return ttnn.rms_norm(
                 x,
                 epsilon=self.epsilon,

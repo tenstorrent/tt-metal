@@ -35,6 +35,7 @@ from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import pretrained_m
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.test_prefill_block_chunked import _resolve_trace_dir
+from models.demos.deepseek_v3_d_p.tt.batch_axis import deinterleave_users, interleave_users
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     full_indexer_rank,
     indexer_layer_is_reused,
@@ -76,34 +77,6 @@ def _replicated_norm_weight(w: torch.Tensor, mesh_device) -> ttnn.Tensor:
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-
-
-def interleave_users(x: ttnn.Tensor, num_links: int) -> ttnn.Tensor:
-    """[1, 1, S/sp, H] (this column's user, full hidden) -> [1, 1, U*S/sp, H/U] (all U users, hidden
-    quarter c on column c). Column c splits its hidden into U slices and sends slice h to column h, which
-    concatenates the U received row blocks in source-column order -> rows are [u0 | u1 | u2 | u3]. That
-    is today's TP-sharded MoE input, with U times the tokens."""
-    return ttnn.experimental.all_to_all_async_generic(
-        x,
-        in_dim=2,  # grows: rows of all users
-        out_dim=3,  # splits: hidden quarters
-        num_links=num_links,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        cluster_axis=BATCH_AXIS,
-    )
-
-
-def deinterleave_users(x: ttnn.Tensor, num_links: int) -> ttnn.Tensor:
-    """Inverse of interleave_users: [1, 1, U*S/sp, H/U] -> [1, 1, S/sp, H]. Column h splits its rows
-    into the U user blocks and sends block u to column u, which concatenates the U hidden quarters."""
-    return ttnn.experimental.all_to_all_async_generic(
-        x,
-        in_dim=3,  # grows: hidden quarters back to full hidden
-        out_dim=2,  # splits: per-user row blocks
-        num_links=num_links,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        cluster_axis=BATCH_AXIS,
     )
 
 
@@ -327,7 +300,7 @@ def test_glm_prefill_block_batch4(
         # --- MoE: interleave users -> unchanged TtMoe -> de-interleave ---
         h = ttnn.rms_norm(x, weight=ffn_norm_w, epsilon=config.rms_norm_eps, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         log("ffn_norm (local)", h)
-        moe_in = interleave_users(h, num_links)
+        moe_in = interleave_users(h, BATCH_AXIS, num_links)
         ttnn.deallocate(h)
         log("interleaved MoE input (a2a)", moe_in)
         moe_out, inter = moe(ttnn.squeeze(moe_in, dim=0), return_intermediates=True)
@@ -336,7 +309,7 @@ def test_glm_prefill_block_batch4(
         capacity = moe.dispatch_module.max_dispatch_buffer_token_size
         logger.info(f"[batch4] chunk {c}: max dispatched rows per chip {max_rows} / capacity {capacity}")
         assert max_rows <= capacity, f"dispatch overflow: {max_rows} rows > capacity {capacity} (tokens dropped)"
-        ffn = deinterleave_users(ttnn.unsqueeze(moe_out, dim=0), num_links)
+        ffn = deinterleave_users(ttnn.unsqueeze(moe_out, dim=0), BATCH_AXIS, num_links)
         log("de-interleaved MoE out (a2a)", ffn)
         x = ttnn.add(x, ffn)
         ttnn.deallocate(ffn)

@@ -22,6 +22,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.tt.batch_axis import deinterleave_users
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
@@ -80,6 +81,8 @@ class TtPrefillTransformer(LightweightModule):
         model_cfg: type | None = None,
         routed_expert_weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         mtp_levels: int = 0,
+        batch_axis: bool = False,
+        config=None,
     ) -> bool:
         """
         Top-level cache completeness check for the full transformer.
@@ -111,6 +114,8 @@ class TtPrefillTransformer(LightweightModule):
                 latent-projection cache files and reports a cache missing them as complete.
             mtp_levels: K, the MTP levels this model runs (0 = none). A last rank running MTP loads
                 the embedding table too, so pass the config value and let rank_loads_embedding() decide.
+            batch_axis / config: check the batch-axis layout (replicated norms + MLA, see
+                TtPrefillBlock.check_cache_complete); config lets it check the indexer tensorbins too.
 
         Returns:
             True if all expected cache files exist, False otherwise
@@ -138,6 +143,8 @@ class TtPrefillTransformer(LightweightModule):
                 experts_per_chip,
                 model_cfg=model_cfg,
                 routed_expert_weights_dtype=routed_expert_weights_dtype,
+                batch_axis=batch_axis,
+                config=config,
             ):
                 return False
 
@@ -184,9 +191,17 @@ class TtPrefillTransformer(LightweightModule):
         lm_head_is_column_parallel: bool = True,
         mtp_predictor=None,
         use_fused_rmsnorm: Optional[bool] = None,
+        batch_axis: Optional[int] = None,
     ):
         super().__init__()
         self.mesh_device = mesh_device
+        # batch_axis: one user per coordinate along the TP axis (tt/batch_axis.py). The embedding stays
+        # tensor-parallel over every user's interleaved token rows and is de-interleaved right after,
+        # so each block sees its own user at full hidden width.
+        self.batch_axis = batch_axis
+        self.num_users = mesh_device.shape[batch_axis] if batch_axis is not None else 1
+        self.num_links = num_links
+        assert batch_axis is None or mtp_predictor is None, "MTP is not wired for batch-axis mode"
         self.seq_len = seq_len
         self.padding_side = padding_side
         self.is_chunked = is_chunked
@@ -286,6 +301,7 @@ class TtPrefillTransformer(LightweightModule):
                 first_layer_idx=first_layer_idx,
                 llama4_scale_cache=self._llama4_scale_cache,
                 use_fused_rmsnorm=use_fused_rmsnorm,
+                batch_axis=batch_axis,
             )
             self.layers.append(layer)
 
@@ -414,7 +430,23 @@ class TtPrefillTransformer(LightweightModule):
             layer.release_sub_device_managers()
 
     def _to_host(self, tt_tensor):
-        """Bring SP+TP sharded tensor to host as [1, seq, emb] bfloat16."""
+        """Bring SP+TP sharded tensor to host as [1, seq, emb] bfloat16 -- or, in batch-axis mode, the
+        per-user activations as [num_users, seq, emb] (user u = batch-axis coordinate u)."""
+        if self.batch_axis is not None:
+            assert len(tt_tensor.shape) == 4, f"batch-axis snapshot expects [1, 1, S/sp, H], got {tt_tensor.shape}"
+            dims = [None, None]
+            dims[1 - self.batch_axis] = 2  # the SP axis concatenates the sequence
+            dims[self.batch_axis] = 0  # the batch axis stacks the users
+            return (
+                ttnn.to_torch(
+                    tt_tensor,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        self.mesh_device, dims=tuple(dims), mesh_shape=self.mesh_device.shape
+                    ),
+                )
+                .to(torch.bfloat16)
+                .squeeze(1)
+            )
         host = ttnn.to_torch(
             tt_tensor,
             mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape),
@@ -530,6 +562,12 @@ class TtPrefillTransformer(LightweightModule):
         if self.is_first_rank and not input_is_embedded:
             h = self.embed(token_ids)  # [1, seq_per_chip, emb_dim/tp]
             h = ttnn.unsqueeze_to_4D(h)  # [1, 1, seq_per_chip, emb_dim/tp]
+            if self.batch_axis is not None:
+                # token_ids held every user's rows ([u0 | u1 | ...], see tt/batch_axis.py), so the TP
+                # embedding produced [1, 1, U*S/sp, H/U]; hand each coordinate its own user's full rows.
+                embedded = h
+                h = deinterleave_users(embedded, self.batch_axis, self.num_links)
+                ttnn.deallocate(embedded)
             if return_intermediates:
                 ttnn.synchronize_device(self.mesh_device)
                 intermediates["embed"] = self._to_host(h)

@@ -13,8 +13,10 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.batch_axis import deinterleave_users, interleave_users
 from models.demos.deepseek_v3_d_p.tt.kv_ack import zero_pad_and_ack
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtIndexer, indexer_layer_is_reused, resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, extract_mesh_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -82,8 +84,14 @@ class TtPrefillBlock(LightweightModule):
         *,
         model_cfg: type | None = None,
         routed_expert_weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
+        batch_axis: bool = False,
+        config=None,
     ) -> bool:
         """Check if block cache is complete (norms + MLA + FFN/MoE).
+
+        ``batch_axis`` checks the batch-axis layout instead: the replicated norms and MLA (``*_repl``,
+        written by build_batch_axis_ttnn_cache) plus the unchanged TP FFN/MoE. Pass ``config`` with it
+        so a full-indexer layer's replicated indexer tensorbins are checked too.
 
         ``model_cfg`` is optional but MUST be passed for a LatentMoE model (Kimi-K3): without it this
         cannot know to look for the latent-projection cache files, and would report a cache that is
@@ -95,19 +103,28 @@ class TtPrefillBlock(LightweightModule):
         complete and the empty placeholder is loaded as the weights.
         """
         prefix = f"layer_{layer_idx}"
+        repl = "_repl" if batch_axis else ""
 
-        if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{prefix}.attn_norm"):
+        if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{prefix}.attn_norm{repl}"):
             return False
+        if (
+            batch_axis
+            and config is not None
+            and resolve_has_indexer(config)
+            and not indexer_layer_is_reused(config, layer_idx)
+        ):
+            if not TtIndexer.check_cache_complete(cache_path, f"{prefix}.mla_repl"):
+                return False
         if not ttMLA.check_cache_complete(
             cache_path,
-            f"{prefix}.mla",
+            f"{prefix}.mla{repl}",
             # #54836: a cache missing the MLA output gate reported complete, and `ttnn.as_tensor` then
             # loaded a `torch.empty` placeholder as the weights. Reading the flag off `model_cfg` keeps
             # every non-gated model's existing cache valid, since only Kimi-K3 sets USE_OUTPUT_GATE.
             has_output_gate=bool(getattr(model_cfg, "USE_OUTPUT_GATE", False)),
         ):
             return False
-        if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{prefix}.ffn_norm"):
+        if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{prefix}.ffn_norm{repl}"):
             return False
 
         if is_dense:
@@ -246,6 +263,46 @@ class TtPrefillBlock(LightweightModule):
 
         logger.info(f"Cache built for layer {layer_idx}")
 
+    @staticmethod
+    def build_batch_axis_ttnn_cache(
+        state_dict: dict,
+        layer_idx: int,
+        cache_path: Path,
+        mesh_device: ttnn.MeshDevice,
+        config: PretrainedConfig,
+        sp_axis: int = 0,
+        tp_axis: int = 1,
+    ):
+        """Write the batch-axis-only tensorbins of one block: the replicated attn/ffn norms and the
+        replicated MLA (+ indexer on full layers), all under ``*_repl`` names. The FFN / MoE run
+        tensor-parallel in batch-axis mode too and keep the cache build_ttnn_cache writes, so they are
+        not touched. Every layer gets an ffn_norm, including the one a kv-only last layer skips: the
+        cache is model-wide, the kv-only choice is per run.
+
+        state_dict keys: attn_norm_weight, ffn_norm_weight [hidden]; mla_weights (ttMLA host dict)."""
+        emb_dim = config.hidden_size
+        for name in ("attn_norm", "ffn_norm"):
+            TtDistributedRmsNorm.build_ttnn_cache(
+                torch_weight=state_dict[f"{name}_weight"],
+                emb_dim=emb_dim,
+                mesh_device=mesh_device,
+                cache_path=cache_path,
+                cache_name_prefix=f"layer_{layer_idx}.{name}_repl",
+                replicate=True,
+            )
+        ttMLA.build_ttnn_cache(
+            state_dict=state_dict["mla_weights"],
+            cache_path=cache_path,
+            mesh_device=mesh_device,
+            config=config,
+            layer_idx=layer_idx,
+            seq_len=0,  # unused by the weight conversion
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+            replicate_tp=True,
+        )
+        logger.info(f"Batch-axis cache built for layer {layer_idx}")
+
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
@@ -277,8 +334,18 @@ class TtPrefillBlock(LightweightModule):
         first_layer_idx: Optional[int] = None,
         llama4_scale_cache: Optional[dict] = None,
         use_fused_rmsnorm: Optional[bool] = None,
+        batch_axis: Optional[int] = None,
     ):
         super().__init__()
+        # batch_axis: one user per coordinate along the TP axis (see tt/batch_axis.py). Attention is TP=1
+        # per user (replicated norms + MLA), while the FFN / MoE stay tensor-parallel over all users'
+        # interleaved rows, so they are built for num_users x seq_len tokens.
+        assert batch_axis is None or batch_axis == tp_axis, f"batch_axis ({batch_axis}) must be tp_axis ({tp_axis})"
+        self.batch_axis = batch_axis
+        self.num_users = mesh_device.shape[batch_axis] if batch_axis is not None else 1
+        if batch_axis is not None:
+            use_fused_rmsnorm = False  # the fused distributed op has no replicated form
+        repl = "_repl" if batch_axis is not None else ""
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
         # Overlap the shared expert with dispatch via a sub-device manager (default). Must be False
         # for ttnn trace capture: load/clear_sub_device_manager resets worker state inside forward,
@@ -318,7 +385,8 @@ class TtPrefillBlock(LightweightModule):
 
         # --- Attention norm ---
         use_glm53_l1_attn_norm = (
-            is_blackhole()
+            batch_axis is None  # 4x wider in batch-axis mode; the batch-axis matmul table expects DRAM
+            and is_blackhole()
             and is_chunked
             and seq_len // mesh_device.shape[sp_axis] == 640
             and config.num_attention_heads == 64
@@ -334,9 +402,10 @@ class TtPrefillBlock(LightweightModule):
             num_links=num_links,
             topology=tp_topology,
             weight_cache_path=weight_cache_path,
-            cache_name_prefix=f"layer_{layer_idx}.attn_norm",
+            cache_name_prefix=f"layer_{layer_idx}.attn_norm{repl}",
             use_fused=use_fused_rmsnorm,
             output_memcfg=ttnn.L1_MEMORY_CONFIG if use_glm53_l1_attn_norm else None,
+            replicate=batch_axis is not None,
         )
 
         # --- MLA ---
@@ -364,6 +433,7 @@ class TtPrefillBlock(LightweightModule):
             sparse_kv_cache_format=sparse_kv_cache_format,
             first_layer_idx=first_layer_idx,
             llama4_scale_cache=llama4_scale_cache,
+            batch_axis=batch_axis,
         )
 
         if kv_only:
@@ -380,8 +450,9 @@ class TtPrefillBlock(LightweightModule):
             num_links=num_links,
             topology=tp_topology,
             weight_cache_path=weight_cache_path,
-            cache_name_prefix=f"layer_{layer_idx}.ffn_norm",
+            cache_name_prefix=f"layer_{layer_idx}.ffn_norm{repl}",
             use_fused=use_fused_rmsnorm,
+            replicate=batch_axis is not None,
         )
 
         # --- FFN (MoE or dense) ---
@@ -391,7 +462,7 @@ class TtPrefillBlock(LightweightModule):
                 model_cfg=model_cfg,
                 config=config,
                 state_dict=state_dict,
-                seq_len=seq_len,
+                seq_len=seq_len * self.num_users,  # batch-axis: all users' interleaved rows
                 sp_axis=sp_axis,
                 emb_dim=emb_dim,
                 num_links=num_links,
@@ -714,7 +785,28 @@ class TtPrefillBlock(LightweightModule):
             # post_attention_layernorm output (the FFN norm), TP-sharded on hidden.
             kv_intermediates["post_attn_norm"] = ttnn.clone(ffn_norm_out)
 
-        if self.is_moe:
+        if self.batch_axis is not None:
+            # Batch-axis: the FFN / MoE weights are split across the user axis, so hand them every
+            # user's rows with a hidden slice (today's TP layout, num_users x the tokens) and take each
+            # user's rows back afterwards. Padding awareness is off: its per-chip config describes one
+            # user's real-token count, and these rows hold num_users users (processing every row is
+            # always correct).
+            ffn_in = interleave_users(ffn_norm_out, self.batch_axis, self.num_links)
+            if self.is_moe:
+                ffn_out = self._moe_path(
+                    ffn_in,
+                    return_intermediates=return_intermediates,
+                    actual_isl=None,
+                    padding_side=padding_side,
+                    actual_start=actual_start,
+                    metadata=metadata,
+                    cache_user_id=cache_user_id,
+                )
+            else:
+                ffn_out = self._dense_ffn_path(ffn_in)
+            ttnn.deallocate(ffn_in)
+            ffn_out = deinterleave_users(ffn_out, self.batch_axis, self.num_links)
+        elif self.is_moe:
             logger.info(f"MOE path: {ffn_norm_out.shape}")
             ffn_out = self._moe_path(
                 ffn_norm_out,

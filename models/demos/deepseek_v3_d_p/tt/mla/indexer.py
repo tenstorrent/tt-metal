@@ -160,11 +160,28 @@ class TtIndexer:
 
     @classmethod
     def build_ttnn_cache(
-        cls, idx_host, cache_path, mesh_device, config, layer_idx, sp_axis: int = 0, tp_axis: int = 1
+        cls,
+        idx_host,
+        cache_path,
+        mesh_device,
+        config,
+        layer_idx,
+        sp_axis: int = 0,
+        tp_axis: int = 1,
+        replicate_tp: bool = False,
     ) -> None:
-        """Write the indexer tensorbins to disk (device=None, no device copy)."""
+        """Write the indexer tensorbins to disk (device=None, no device copy). replicate_tp writes the
+        batch-axis (replicated) layout under its own prefix -- see _convert_and_cache_weights."""
         cls._convert_and_cache_weights(
-            idx_host, mesh_device, config, layer_idx, sp_axis, tp_axis, cache_path=cache_path, device=None
+            idx_host,
+            mesh_device,
+            config,
+            layer_idx,
+            sp_axis,
+            tp_axis,
+            cache_path=cache_path,
+            device=None,
+            replicate_tp=replicate_tp,
         )
 
     @classmethod

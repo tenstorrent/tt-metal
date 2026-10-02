@@ -266,12 +266,23 @@ class ttMLA:
         tp_axis: int = 1,
         kv_only: bool = False,
         has_indexer: bool | None = None,
+        replicate_tp: bool = False,
     ):
         """Build TTNN cache for MLA weights using device=None (no device copy). For DSA-sparse
         variants also writes the indexer tensorbins. Fails fast if sparse mode is resolved but the
-        host indexer weights are missing — never silently builds a dense-only cache for a sparse layer."""
+        host indexer weights are missing — never silently builds a dense-only cache for a sparse layer.
+        replicate_tp builds the batch-axis (replicated, ``layer_{i}.mla_repl``) layout instead."""
         ttMLA._convert_and_cache_weights(
-            state_dict, mesh_device, config, layer_idx, sp_axis, tp_axis, cache_path, device=None, kv_only=kv_only
+            state_dict,
+            mesh_device,
+            config,
+            layer_idx,
+            sp_axis,
+            tp_axis,
+            cache_path,
+            device=None,
+            kv_only=kv_only,
+            replicate_tp=replicate_tp,
         )
         # GLM-5.3 shared layers are sparse but own no indexer weights (they reuse a prior full layer's
         # top-k) -> build the MLA cache only, skip the indexer tensorbins.
@@ -284,7 +295,14 @@ class ttMLA:
                     f"pass has_indexer=False."
                 )
             TtIndexer.build_ttnn_cache(
-                TtIndexer.extract_host_weights(state_dict), cache_path, mesh_device, config, layer_idx, sp_axis, tp_axis
+                TtIndexer.extract_host_weights(state_dict),
+                cache_path,
+                mesh_device,
+                config,
+                layer_idx,
+                sp_axis,
+                tp_axis,
+                replicate_tp=replicate_tp,
             )
 
     def __init__(
