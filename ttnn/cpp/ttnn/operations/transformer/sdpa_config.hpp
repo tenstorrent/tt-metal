@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <tt-metalium/base_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 
 namespace ttnn::operations::transformer {
@@ -18,6 +19,16 @@ struct SDPAProgramConfig {
     std::size_t k_chunk_size;
     std::optional<bool> exp_approx_mode;
     uint32_t max_cores_per_head_batch = 16;
+    // Ring joint chunked prefill only: up to this many cores may share one (head, Q chunk) unit along K when the
+    // units leave the grid idle. 1 disables the split.
+    uint32_t max_k_splits = 1;
+    // Ring joint streaming compute only: fidelity of the QK^T and softmax @ V matmuls; the rest of the kernel keeps
+    // the compute kernel config's.
+    std::optional<tt::tt_metal::MathFidelity> matmul_math_fidelity;
+    // Ring joint chunked prefill only: each core accumulates each ring iteration separately and merges, so no bf16
+    // running sum spans the whole prefix. Ignored where K is split; the op refuses it when a core would hold several
+    // Q chunks (raise q_chunk_size).
+    bool segmented_accumulation = false;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and

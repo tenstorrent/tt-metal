@@ -22,7 +22,7 @@ class DeepSeekV4FlashConfig:
     # shape the fused op wins 64-128 by 25-37%, 192 and 256 are ties inside 0.7%, and the composite
     # takes 320 onward by 6.7% and more. 256 is the top of that tie band, so the cut costs nothing
     # either way inside it.
-    # Not enabled: only Kimi K2.6/K2.7 and GLM 5.1/5.2 dispatch both routed-expert ops today.
+    # Not enabled: only Kimi K2.6/K2.7 and GLM 5.2 dispatch both routed-expert ops today.
     # The measured crossover is kept under _MEASURED so it is not re-derived; rename it back to
     # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD to turn the split on, which is all the readers look for.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 256

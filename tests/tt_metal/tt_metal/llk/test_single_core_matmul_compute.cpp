@@ -1005,10 +1005,15 @@ void run_matmul_no_mop(const std::shared_ptr<distributed::MeshDevice>& mesh_devi
         kt_dim,
         static_cast<int>(test_config.math_fidelity));
 
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
+    // One page per buffer, not one per tile: the reader and writer kernels walk a single DRAM bank
+    // linearly (one bank_id, the address advancing by a tile per transfer), and a page-per-tile
+    // buffer is interleaved across the channels, so tile k would be fetched from page
+    // k * num_banks and the walk would leave that bank's share of the buffer part way through.
     auto make_dram = [&](std::uint32_t num_tiles) {
-        distributed::ReplicatedBufferConfig cfg{.size = single_tile_size * num_tiles};
+        const std::uint32_t buffer_size = single_tile_size * num_tiles;
+        distributed::DeviceLocalBufferConfig dram_config{
+            .page_size = buffer_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
+        distributed::ReplicatedBufferConfig cfg{.size = buffer_size};
         return distributed::MeshBuffer::create(cfg, dram_config, mesh_device.get());
     };
     auto in0_dram = make_dram(in0_num_tiles);

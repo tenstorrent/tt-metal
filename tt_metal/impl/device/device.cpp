@@ -5,7 +5,6 @@
 #include <tt_stl/fmt.hpp>
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
-#include "context/context_types.hpp"
 #include "context/metal_env_accessor.hpp"
 #include "device_impl.hpp"
 
@@ -14,7 +13,6 @@
 #include <initializer_list>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
-#include "impl/sub_device/sub_device_impl.hpp"
 #include "impl/device/mock_allocator.hpp"
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/hal.hpp>
@@ -35,7 +33,6 @@
 #include <vector>
 
 #include "allocator.hpp"
-#include "common/env_lib.hpp"
 #include <tt_stl/assert.hpp>
 #include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
@@ -521,7 +518,7 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
 void Device::init_command_queue_device() { TT_FATAL(false, "Call init_command_queue_device_with_topology instead"); }
 
 bool Device::compile_fabric() {
-    fabric_program_ = tt::tt_fabric::create_and_compile_fabric_program(this);
+    fabric_program_ = tt::tt_fabric::create_and_compile_fabric_program(MetalEnvAccessor(*env_).impl(), this);
     return fabric_program_ != nullptr;
 }
 
@@ -530,7 +527,7 @@ void Device::configure_fabric() {
         return;
     }
 
-    tt::tt_fabric::configure_fabric_cores(this);
+    tt::tt_fabric::configure_fabric_cores(MetalEnvAccessor(*env_).impl(), this);
 
     fabric_program_->impl().finalize_offsets(this);
 
@@ -708,9 +705,12 @@ bool Device::close() {
     this->command_queue_programs_.clear();
     this->command_queues_.clear();
     this->sysmem_manager_.reset();
-    this->optimal_dram_bank_to_logical_worker_assignment_.clear();
-    this->optimal_dram_bank_to_logical_worker_assignment_noc_.reset();
-    this->optimal_dram_bank_to_logical_worker_assignment_grid_size_.reset();
+    {
+        std::lock_guard<std::mutex> lock(optimal_dram_bank_to_logical_worker_assignment_mutex_);
+        this->optimal_dram_bank_to_logical_worker_assignment_.clear();
+        this->optimal_dram_bank_to_logical_worker_assignment_noc_.reset();
+        this->optimal_dram_bank_to_logical_worker_assignment_grid_size_.reset();
+    }
 
     // Clean up shared memory stats provider
     this->shm_stats_provider_.reset();
@@ -1001,20 +1001,24 @@ void Device::reset_sub_device_stall_group() {
     TT_FATAL(false, "reset_sub_device_stall_group is deprecated for device");
 }
 
-std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
+std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) const {
     // Top level function that users (ex: Op Writers) can use to assign Tensix Worker cores
     // as DRAM readers or writers. Returns logical coordinates of optimally placed workers.
     // This function queries Physical Coordinates (only exposed directly to the Device class)
     // and passes them to logic in core_assignment.cpp to derive the most optimal core placement
     // based on architecture specific logic and Physical Grid configuration.
     const auto noc_tag = static_cast<std::uint8_t>(noc);
-    auto compute_with_storage_grid_size = this->compute_with_storage_grid_size();
-    if (!this->optimal_dram_bank_to_logical_worker_assignment_.empty() &&
-        this->optimal_dram_bank_to_logical_worker_assignment_noc_ == noc_tag &&
-        this->optimal_dram_bank_to_logical_worker_assignment_grid_size_ == compute_with_storage_grid_size) {
-        return this->optimal_dram_bank_to_logical_worker_assignment_;
+    const auto compute_with_storage_grid_size = this->compute_with_storage_grid_size();
+    {
+        std::lock_guard<std::mutex> lock(optimal_dram_bank_to_logical_worker_assignment_mutex_);
+        if (!this->optimal_dram_bank_to_logical_worker_assignment_.empty() &&
+            this->optimal_dram_bank_to_logical_worker_assignment_noc_ == noc_tag &&
+            this->optimal_dram_bank_to_logical_worker_assignment_grid_size_ == compute_with_storage_grid_size) {
+            return this->optimal_dram_bank_to_logical_worker_assignment_;
+        }
     }
-    this->optimal_dram_bank_to_logical_worker_assignment_.clear();
+    // Build the assignment locally so a failure leaves the published cache intact, and so the mutex
+    // is not held across the grid walk.
 
     uint32_t full_grid_size_x = this->grid_size().x;
     uint32_t full_grid_size_y = this->grid_size().y;
@@ -1065,6 +1069,8 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
     // Do not use soc_desc.translate_coord_to(NOC0, LOGICAL): that numbers all Tensix cores including
     // dispatch columns. Also do not split x/y lookups via worker_phy_x/y alone: (phys_x, phys_y) must
     // match physical_worker_core_from_logical_core((lx, ly)) as a pair.
+    std::vector<CoreCoord> assignment;
+    assignment.reserve(physical_worker_cores.size());
     for (const auto& physical_worker_core : physical_worker_cores) {
         bool found = false;
         uint32_t logical_x = 0;
@@ -1095,8 +1101,16 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
             logical_y,
             num_cores_x,
             num_cores_y);
-        this->optimal_dram_bank_to_logical_worker_assignment_.push_back(CoreCoord(logical_x, logical_y));
+        assignment.push_back(CoreCoord(logical_x, logical_y));
     }
+    std::lock_guard<std::mutex> lock(optimal_dram_bank_to_logical_worker_assignment_mutex_);
+    // Another thread may have published this same key while we computed.
+    if (!this->optimal_dram_bank_to_logical_worker_assignment_.empty() &&
+        this->optimal_dram_bank_to_logical_worker_assignment_noc_ == noc_tag &&
+        this->optimal_dram_bank_to_logical_worker_assignment_grid_size_ == compute_with_storage_grid_size) {
+        return this->optimal_dram_bank_to_logical_worker_assignment_;
+    }
+    this->optimal_dram_bank_to_logical_worker_assignment_ = std::move(assignment);
     this->optimal_dram_bank_to_logical_worker_assignment_noc_ = noc_tag;
     this->optimal_dram_bank_to_logical_worker_assignment_grid_size_ = compute_with_storage_grid_size;
     return this->optimal_dram_bank_to_logical_worker_assignment_;

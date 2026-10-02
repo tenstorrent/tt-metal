@@ -152,6 +152,7 @@ AUDIO_SHIFT = 3.0
 
 _AUDIO_T_FACTOR_ENV = "MINIMAX_H3_AUDIO_T_FACTOR"
 _DEFAULT_AUDIO_T_FACTOR = 8
+_AUDIO_PACK_BANDS = {5: 2, 6: 4}
 
 
 def _requested_audio_t_factor(audio_t_factor: int | None, default: int = _DEFAULT_AUDIO_T_FACTOR) -> tuple[int, bool]:
@@ -447,8 +448,9 @@ class MiniMaxH3Pipeline:
         topology: ttnn.Topology | None = None,
         coresident: bool | None = None,
         task: str = "t2va",
-        audio_split_mode: str = "full",
+        audio_split_mode: str | None = None,
         audio_t_factor: int | None = None,
+        audio_trace: bool | None = None,
         dit_fsdp: bool | None = None,
         trace_denoise: bool | None = None,
         bucket_denoise: bool | None = None,
@@ -503,13 +505,12 @@ class MiniMaxH3Pipeline:
         self.tp_factor, self.sp_factor = shape[tp_axis], shape[sp_axis]
         # The only residency control; see `_make_resident` for the measurements behind the default.
         self.coresident = coresident
-        # Audio fidelity/latency trade, same weights on disk: "full" (default) splits the dense-conv
-        # operands for the fp32-exact kernels' best accuracy (~67 dB vs CPU); "off" skips the split
-        # for a lower-fidelity decode (~42 dB). Keys the device-weight cache via `weights_variant`.
-        # audio_t_factor=4 timings: 2.2 s (full) / 1.6 s (off) on 4x8; default is 8 (~1.4 s full).
-        if audio_split_mode not in ("off", "weight", "full"):
-            raise ValueError(f"audio_split_mode must be 'off', 'weight', or 'full', got {audio_split_mode!r}")
+        if audio_split_mode is None:
+            audio_split_mode = "kernel"
+        if audio_split_mode not in ("off", "weight", "full", "kernel"):
+            raise ValueError(f"audio_split_mode must be 'off', 'weight', 'full' or 'kernel', got {audio_split_mode!r}")
         self.audio_split_mode = audio_split_mode
+        self.audio_trace = True if audio_trace is None else bool(audio_trace)
         audio_t_factor, self._audio_t_factor_from_env = _requested_audio_t_factor(
             audio_t_factor, default=preset.get("audio_t_factor", _DEFAULT_AUDIO_T_FACTOR)
         )
@@ -649,8 +650,9 @@ class MiniMaxH3Pipeline:
         num_links: int | None = None,
         topology: ttnn.Topology | None = None,
         task: str = "t2va",
-        audio_split_mode: str = "full",
+        audio_split_mode: str | None = None,
         audio_t_factor: int | None = None,
+        audio_trace: bool | None = None,
         dit_fsdp: bool | None = None,
         trace_denoise: bool | None = None,
         bucket_denoise: bool | None = None,
@@ -686,6 +688,7 @@ class MiniMaxH3Pipeline:
             topology=topology,
             task=task,
             audio_split_mode=audio_split_mode,
+            audio_trace=audio_trace,
             audio_t_factor=audio_t_factor,
             dit_fsdp=dit_fsdp,
             trace_denoise=trace_denoise,
@@ -1534,6 +1537,13 @@ class MiniMaxH3Pipeline:
                 else None
             )
             audio_ccl = self.audio_ccl_manager if audio_parallel_config is not None else None
+            batch_shard_axis = None
+            if audio_parallel_config is not None and not ttnn.using_distributed_env():
+                other = 1 - self._audio_t_axis
+                if tuple(self.mesh_device.shape)[other] >= 2:
+                    batch_shard_axis = other
+                else:
+                    logger.warning(f"audio batch shard skipped: mesh axis {other} has one device")
             decoder = MiniMaxH3AudioDecoder(
                 latent_channels=config["latent_channels"],
                 latent_dim=config["latent_dim"],
@@ -1546,6 +1556,9 @@ class MiniMaxH3Pipeline:
                 parallel_config=audio_parallel_config,
                 ccl_manager=audio_ccl,
                 split_mode=self.audio_split_mode,
+                pack_bands=_AUDIO_PACK_BANDS,
+                act_mode="fused",
+                batch_shard_axis=batch_shard_axis,
             )
 
             def read_state() -> dict[str, torch.Tensor]:
@@ -1565,7 +1578,14 @@ class MiniMaxH3Pipeline:
                 model_name=MODEL_NAME,
                 # The audio precision levers change the module's parameter set, so they are part of
                 # the cache key -- read off the module so the key cannot drift from what was built.
-                subfolder="audio_decoder" + weights_variant(decoder.split_mode, decoder.max_c_in_block),
+                subfolder="audio_decoder"
+                + weights_variant(
+                    decoder.split_mode,
+                    decoder.max_c_in_block,
+                    decoder.pack_bands,
+                    act_mode=decoder.act_mode,
+                    polyphase=decoder.polyphase_ups,
+                ),
                 parallel_config=self.vae_parallel_config,
                 mesh_shape=tuple(self.mesh_device.shape),
                 mesh_device=self.mesh_device,
@@ -2292,6 +2312,9 @@ class MiniMaxH3Pipeline:
         return tracer is not None and tracer.trace_captured
 
     def release_traces(self) -> None:
+        decoder = self._audio_decoder
+        if decoder is not None:
+            decoder.release_trace()
         transformer = self._transformer
         if transformer is None:
             return
@@ -2436,6 +2459,22 @@ class MiniMaxH3Pipeline:
 
         t_preamble = time.time() - t_preamble
         t_first = t_steady = 0.0
+
+        def step_levels(i: int) -> torch.Tensor:
+            t = float(timesteps[i])
+            level_kwargs = {"video_timestep": t, "audio_timestep": float(audio_timesteps[i])}
+            if "condition_video" in slot_roles:
+                level_kwargs["condition_video_timestep"] = max(t, MINIMAX_H3_KEYFRAME_NOISE_AUG)
+            if "condition_audio" in slot_roles:
+                level_kwargs["condition_audio_timestep"] = MINIMAX_H3_AUDIO_CONDITION_TIMESTEP
+            return slot_levels(slot_roles, **level_kwargs)
+
+        def upload_levels(levels: torch.Tensor) -> None:
+            self._tt_timestep.update(
+                levels.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
+            )
+
+        upload_levels(step_levels(0))
         if _is_host_rank():
             _tqdm_spacer()
         for i, t in enumerate(
@@ -2448,19 +2487,6 @@ class MiniMaxH3Pipeline:
             )
         ):
             t_step = time.time()
-            level_kwargs = {
-                "video_timestep": float(t),
-                "audio_timestep": float(audio_timesteps[i]),
-            }
-            if "condition_video" in slot_roles:
-                level_kwargs["condition_video_timestep"] = max(float(t), MINIMAX_H3_KEYFRAME_NOISE_AUG)
-            if "condition_audio" in slot_roles:
-                level_kwargs["condition_audio_timestep"] = MINIMAX_H3_AUDIO_CONDITION_TIMESTEP
-            levels = slot_levels(slot_roles, **level_kwargs)
-            self._tt_timestep.update(
-                levels.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
-            )
-
             video_velocity, audio_velocity = transformer(
                 video_1BVC=self._tt_video.value,
                 audio_1BAC=self._tt_audio.value,
@@ -2477,13 +2503,15 @@ class MiniMaxH3Pipeline:
                 traced=traced,
             )
 
-            ttnn.synchronize_device(self.mesh_device)
-            if ttnn.using_distributed_env():
-                ttnn.distributed_context_barrier()
             ttnn.multiply_(video_velocity, float(scheduler.step_coefficient(i)))
             ttnn.add_(self._tt_video.value, video_velocity)
             ttnn.multiply_(audio_velocity, float(audio_scheduler.step_coefficient(i)))
             ttnn.add_(self._tt_audio.value, audio_velocity)
+            if i + 1 < len(timesteps):
+                upload_levels(step_levels(i + 1))
+            ttnn.synchronize_device(self.mesh_device)
+            if ttnn.using_distributed_env():
+                ttnn.distributed_context_barrier()
             t_step = time.time() - t_step
             if i == 0:
                 t_first = t_step
@@ -2615,6 +2643,6 @@ class MiniMaxH3Pipeline:
         assert rows.shape[0] == expected, f"expected {expected} target audio rows to decode, got {rows.shape[0]}"
         latents = unpack_audio_tokens(rows, num_audio_latents)
         latents = self._denormalize(latents, self.audio_config["latents_mean"], self.audio_config["latents_std"])
-        waveform = audio_decoder(latents)
+        waveform = audio_decoder(latents, traced=self.audio_trace)
         # The audio VAE is mono and took the two stereo channels as two batch items.
         return waveform.float().permute(1, 0, 2)
