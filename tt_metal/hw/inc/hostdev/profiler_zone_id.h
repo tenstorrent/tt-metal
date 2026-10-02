@@ -27,6 +27,7 @@
 // plain array.
 // Record layout (little-endian; must match ZoneMetaRecord in llrt/zone_meta.cpp):
 //   [0] u32 zone_id (the handle's VMA)   [4] u32 name_ptr (VMA in .tt_zone_str)   [8] u32 file_ptr   [12] u32 line
+// The whole path, with diagrams: tools/profiler/STREAMING_PROFILER_ZONE_IDS.md.
 #pragma once
 
 #include <stdint.h>
