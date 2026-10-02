@@ -279,9 +279,11 @@ CLOSED since the watermark: nothing mined before is fetched, triaged or deep-rea
 2. **Fetch the delta:** `mining/fetch_repo.py owner/name <mine>/raw/<repo> --since <watermark date>`. It windows on the
    CLOSE date, into `closed_*.jsonl` files beside the full fetch. Windowing on the creation date misses most of it:
    of the 40 tt-metal issues closed in the two days after one watermark, 38 had been opened before it.
-3. **Build, triage and deep-read only the new cases:** mining steps 2, 3 and 5 on the `closed_*` dumps, with
-   `select.py --exclude` and `--deep` given the existing deep-read store and every holdout, and `--deep-cases` given
-   the case file that store was built from. It matches by id AND by fix commit, so a case already read under another
+3. **Build, triage and deep-read only the new cases:** mining steps 2, 3 and 5 on the new `closed_*` dumps. Write
+   the cases to a new `<mine>/<repo>_cases-<date>.jsonl`, never over `<repo>_cases.jsonl`; triage and deep reads go
+   into the existing `<repo>_triage.jsonl` and `<repo>_deep.jsonl`, which update by case id. Give `select.py --exclude`
+   and `--deep` the existing deep-read store and every holdout, and `--deep-cases` every `<repo>_cases*.jsonl`
+   (the deep store was built from all of them). It matches by id AND by fix commit, so a case already read under another
    id (an issue whose fix PR was read) is skipped too, unless it carries a fix nobody has read; deep-read rows record
    no commit, so it looks theirs up in `--deep-cases`, and a holdout refuses to run when it cannot. Where a new fix
    touches the files of an old deep-read case, re-read that old case too: its fix-completeness verdict may have
