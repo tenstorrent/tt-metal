@@ -104,6 +104,26 @@ bool get_exp_approx_mode(const std::optional<ttnn::operations::transformer::SDPA
     return true;
 }
 
+// The streaming kernel's per-phase matmul fidelity defines (only when a phase is set) and its LoFi compute-config flag.
+void add_matmul_fidelity_defines(
+    std::map<std::string, std::string>& defines,
+    const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config,
+    MathFidelity math_fidelity,
+    bool use_streaming_compute) {
+    if (program_config.has_value() && program_config->qk_math_fidelity.has_value()) {
+        TT_FATAL(use_streaming_compute, "qk_math_fidelity needs the streaming compute path (fp32_dest_acc_en=false)");
+        defines["QK_MATH_FIDELITY"] = std::to_string(static_cast<uint32_t>(*program_config->qk_math_fidelity));
+    }
+    if (program_config.has_value() && program_config->pv_math_fidelity.has_value()) {
+        TT_FATAL(use_streaming_compute, "pv_math_fidelity needs the streaming compute path (fp32_dest_acc_en=false)");
+        defines["PV_MATH_FIDELITY"] = std::to_string(static_cast<uint32_t>(*program_config->pv_math_fidelity));
+    }
+    // MATH_FIDELITY is not defined on the unpack TRISC, and all three must agree on how P.V is set up.
+    if (use_streaming_compute && math_fidelity == MathFidelity::LoFi) {
+        defines["SDPA_COMPUTE_LOFI"] = "1";
+    }
+}
+
 // Effective (num_kv_heads_k, num_kv_heads_v, block_size) for an HMA-shared paged buffer.
 // Apply PagedCacheGeometryOverride only when !use_mla: MLA never passes overrides (validated
 // upstream), and applying num_kv_heads to V under MLA would skip the elems/block check.
@@ -736,18 +756,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     defines_map["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines_map["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines_map["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
-    if (program_config.has_value() && program_config->qk_math_fidelity.has_value()) {
-        TT_FATAL(use_streaming_compute, "qk_math_fidelity needs the streaming compute path (fp32_dest_acc_en=false)");
-        defines_map["QK_MATH_FIDELITY"] = std::to_string(static_cast<uint32_t>(*program_config->qk_math_fidelity));
-    }
-    if (program_config.has_value() && program_config->pv_math_fidelity.has_value()) {
-        TT_FATAL(use_streaming_compute, "pv_math_fidelity needs the streaming compute path (fp32_dest_acc_en=false)");
-        defines_map["PV_MATH_FIDELITY"] = std::to_string(static_cast<uint32_t>(*program_config->pv_math_fidelity));
-    }
-    // MATH_FIDELITY is not defined on the unpack TRISC, and all three must agree on how P.V is set up.
-    if (use_streaming_compute && math_fidelity == tt::tt_metal::MathFidelity::LoFi) {
-        defines_map["SDPA_COMPUTE_LOFI"] = "1";
-    }
+    add_matmul_fidelity_defines(defines_map, program_config, math_fidelity, use_streaming_compute);
     log_debug(tt::LogOp, "use_zigzag_balancing: {}", use_zigzag_balancing);
 
     KernelDescriptor::Defines defines(defines_map.begin(), defines_map.end());
