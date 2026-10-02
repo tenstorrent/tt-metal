@@ -15,40 +15,33 @@ namespace ttnn::operations::moreh::moreh_adamw {
 
 void MorehAdamWDeviceOperation::validate_inputs(
     const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args) {
-    check_tensor(tensor_args.param_in, "moreh_adamw", "param_in", {DataType::BFLOAT16, DataType::BFLOAT8_B});
-    check_tensor(tensor_args.grad, "moreh_adamw", "grad", {DataType::BFLOAT16, DataType::BFLOAT8_B});
-    check_tensor(tensor_args.exp_avg_in, "moreh_adamw", "exp_avg_in", {DataType::BFLOAT16, DataType::BFLOAT8_B});
-    check_tensor(tensor_args.exp_avg_sq_in, "moreh_adamw", "exp_avg_sq_in", {DataType::BFLOAT16, DataType::BFLOAT8_B});
+    const auto& param_in = tensor_args.param_in;
+    auto validate_tensor = [&param_in](const Tensor& tensor, const std::string& name) {
+        check_tensor(tensor, "moreh_adamw", name, {DataType::BFLOAT16, DataType::BFLOAT8_B});
+        TT_FATAL(
+            tensor.device() == param_in.device(), "moreh_adamw {} must be on the same MeshDevice as param_in", name);
+    };
+
+    validate_tensor(param_in, "param_in");
+    validate_tensor(tensor_args.grad, "grad");
+    validate_tensor(tensor_args.exp_avg_in, "exp_avg_in");
+    validate_tensor(tensor_args.exp_avg_sq_in, "exp_avg_sq_in");
 
     if (tensor_args.max_exp_avg_sq_in.has_value()) {
-        check_tensor(
-            tensor_args.max_exp_avg_sq_in.value(),
-            "moreh_adamw",
-            "max_exp_avg_sq_in",
-            {DataType::BFLOAT16, DataType::BFLOAT8_B});
+        validate_tensor(tensor_args.max_exp_avg_sq_in.value(), "max_exp_avg_sq_in");
     }
 
     if (tensor_args.param_out.has_value()) {
-        check_tensor(
-            tensor_args.param_out.value(), "moreh_adamw", "param_out", {DataType::BFLOAT16, DataType::BFLOAT8_B});
+        validate_tensor(tensor_args.param_out.value(), "param_out");
     }
     if (tensor_args.exp_avg_out.has_value()) {
-        check_tensor(
-            tensor_args.exp_avg_out.value(), "moreh_adamw", "exp_avg_out", {DataType::BFLOAT16, DataType::BFLOAT8_B});
+        validate_tensor(tensor_args.exp_avg_out.value(), "exp_avg_out");
     }
     if (tensor_args.exp_avg_sq_out.has_value()) {
-        check_tensor(
-            tensor_args.exp_avg_sq_out.value(),
-            "moreh_adamw",
-            "exp_avg_sq_out",
-            {DataType::BFLOAT16, DataType::BFLOAT8_B});
+        validate_tensor(tensor_args.exp_avg_sq_out.value(), "exp_avg_sq_out");
     }
     if (tensor_args.max_exp_avg_sq_out.has_value()) {
-        check_tensor(
-            tensor_args.max_exp_avg_sq_out.value(),
-            "moreh_adamw",
-            "max_exp_avg_sq_out",
-            {DataType::BFLOAT16, DataType::BFLOAT8_B});
+        validate_tensor(tensor_args.max_exp_avg_sq_out.value(), "max_exp_avg_sq_out");
     }
 }
 

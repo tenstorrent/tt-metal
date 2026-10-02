@@ -28,6 +28,9 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(tensor.buffer() != nullptr, "Tensor '{}' must be allocated on device (buffer is null).", name);
 
         TT_FATAL(
+            tensor.device() == param.device(), "Tensor '{}' must be on the same MeshDevice as the parameter", name);
+
+        TT_FATAL(
             tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Tensor '{}' must be in DRAM. Got buffer type: '{}'",
             name,
