@@ -605,6 +605,16 @@ proxy-only advisory without executing tools, avoiding another20-minute prefix.
 23 helper checks pass. Combined suite remains the measured2/5 baseline; no new
 CI/full-suite/ten-task run. Resumed active time338min, cumulative~10h31m.
 
+11:14 UTC handoff: short Sympy replay completes189.509s/8768 output tokens,
+choosing only`git status`, not submission. No tool execution. Template audit
+shows user advisories implicitly drop earlier reasoning, so reminder-only
+speed attribution is invalid. All CI complete, actual five-task baseline
+2h14m54s/2of5 correct remains authoritative. No promoted follow-up candidate.
+Next causal quality control needs authorized fast HF/GPU access; local host
+has noGPU/~11GiB free, prior128-token CPUreference1001.174s. Only the owned
+inference server is stopped; caches/evidence/unrelated processes retained.
+All-five-correct objective remains unfinished. Cumulative active time~10h36m.
+
 - TTFT: `doc/ttft_optimization/`.
 - Remote benchmarks/evals:
   `readiness_vllm/ttft_optimization_remote/README.md`.
