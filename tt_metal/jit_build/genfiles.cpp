@@ -170,9 +170,25 @@ void emit_programmatic_binding_token_getter(
     // using null_token_ptr_t = const <null_binding_type>*;
     // return null_token_ptr_t{nullptr};
     if (entries.empty()) {
+        // Equivalent to:
+        // template <::internal::TemplateString name>
+        // constexpr auto get_token_if_present() {
+        //     using null_token_ptr_t = const <null_binding_type>*;
+        //     return null_token_ptr_t{nullptr};
+        // }
         content << padding << "using null_token_ptr_t = const " << null_binding_type << "*;\n"
                 << padding << "return null_token_ptr_t{nullptr};\n";
     } else {
+        // Equivalent to:
+        // template <::internal::TemplateString name>
+        // constexpr auto get_token_if_present() {
+        //     if constexpr (name == "entry_name") {
+        //         return &entry_name;
+        //     /* ... */
+        //     } else {
+        //         using null_token_ptr_t = const <null_binding_type>*;
+        //         return null_token_ptr_t{nullptr};
+        //     }
         content << padding << "} else {\n"
                 << padding << padding << "using null_token_ptr_t = const " << null_binding_type << "*;\n"
                 << padding << padding << "return null_token_ptr_t{nullptr};\n"
@@ -206,6 +222,13 @@ string generate_cached_semaphore_list(const JitBuildSettings& settings) {
 
 // METAL 2.0 only:
 // This is only invoked for Metal 2.0 kernels created via the new ProgramSpec host APIs.
+//
+// This function emits the kernel_bindings_generated.h header file,
+// with **public facing** resource bindings that can be represented as CTA.
+//
+// These resource bindings are emitted as static object instaniations of various binding classes within appropriate
+// namespaces.
+//
 // Legacy kernels (created via CreateKernel) do not get kernel_bindings_generated.h.
 void write_kernel_bindings_generated_header(const string& out_dir, const JitBuildSettings& settings) {
     const string path = out_dir + "kernel_bindings_generated.h";
@@ -217,23 +240,6 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     auto bindings_with_token_getters = ranges::filter_view(
         all_bindings, [](const auto& binding) { return binding.programmatic_getter_config.has_value(); });
 
-    // Emit the header content:
-    //  - DFB binding tokens are emitted into the dfb namespace
-    //  - Semaphore binding tokens are emitted into the sem namespace
-    //  - TensorBindings are emitted into the tensor namespace
-    //  - Scratchpad binding tokens are emitted into the scratch namespace
-    //
-    // NOTE: DFB and semaphore tokens are emitted as constexpr variables, i.e. as implicit CTAs.
-    //       This is a design decision; we could alternatively emit them as implicit CRTAs.
-    //       (Or, we could give the user the choice via the Metal 2.0 host API, on a per-kernel or per-binding basis.)
-    //       Implicit CTA is simpler and cheaper, but could theoretically cause unnecessary kernel cache hit misses.
-    //       We are starting simple and can adjust later if problems arise.
-    //       Legacy kernels passed semaphores both ways, kernel folks think this was more random than intentional.
-    //
-    //       TensorBindings are the first binding category to use implicit CRTAs (for the tensor base address).
-    //       Each binding's tensor base address is specified per-enqueue, from the corresponding TensorArgument.
-    //       The static layout tensor metadata (rank, shape, bank coords, etc.) comes in through positional CTAs,
-    //       added automatically by the Metal 2.0 host API machinery.
     ostringstream content;
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n";
@@ -253,14 +259,8 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     }
 
     // get_token_if_present() helper need to pull additional includes.
-    includes.insert("internal/template_string.h");
-
-    // If a binding needs programmatic binding token getter and have a templated type,
-    // we must emit the includes for it's types as we cannot forward declare them.
-    for (const auto& binding : bindings_with_token_getters) {
-        if (binding.is_binding_type_templated) {
-            includes.insert(binding.includes.begin(), binding.includes.end());
-        }
+    if (!ranges::empty(bindings_with_token_getters)) {
+        includes.insert("internal/template_string.h");
     }
 
     // Emit the includes
@@ -273,20 +273,24 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Forward declarations:
 
-    // get_token_if_present() is always emitted. When this kernel has no DFB / scratchpad bindings,
-    // the headers that define those token types are omitted from includes, but the empty getter still returns
-    // const BindingTokenType*{nullptr} and needs those types in scope.
+    // Programmatic binding tokens are always emitted.
+    // When there's no entries within the binding,
+    // it needs to return null to all inquiries.
+    //
+    // This requires the pointed to type to be available in scope.
+    // If there's no binding entries, it's associated includes will not be pulled in,
+    // thus we need to forward declare the binding type.
+    auto bindings_need_forward_declarations =
+        ranges::filter_view(bindings_with_token_getters, [](const auto& binding) { return binding.entries.empty(); });
 
-    auto bindings_need_forward_declarations = ranges::filter_view(bindings_with_token_getters, [](const auto& binding) {
-        // Token getter needs to be able to reference the binding type.
-        //
-        // We need to forward declare the ones that does not have their includes pulled in.
-        return binding.entries.empty() && !binding.is_binding_type_templated;
-    });
-
-    // Omit binding
+    // Omit binding types
     for (const auto& binding : bindings_need_forward_declarations) {
-        content << fmt::format("struct {};\n", binding.binding_type);
+        string_view binding_type = binding.binding_type;
+        // Some binding may provide specic "null" binding type
+        if (auto binding_type_override = binding.programmatic_getter_config->null_binding_type) {
+            binding_type = *binding_type_override;
+        }
+        content << fmt::format("struct {};\n", binding_type);
     }
 
     // Section spacing
@@ -303,12 +307,12 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     auto emit_binding_entries = [&](string_view type_name, const vector<BindingEntry>& entries) {
         for (const auto& entry : entries) {
             if (entry.template_args.empty()) {
-                content << fmt::format("constexpr {} {}({});", type_name, entry.name, fmt::join(entry.args, ", "));
+                content << fmt::format("constexpr {} {}({});\n", type_name, entry.name, fmt::join(entry.args, ", "));
             } else {
                 // spell out the type first
                 content << fmt::format(
                     "using {}_t = {}<{}>;\n", entry.name, type_name, fmt::join(entry.template_args, ", "));
-                content << fmt::format("constexpr {0}_t {0}({1});", entry.name, fmt::join(entry.args, ", "));
+                content << fmt::format("constexpr {0}_t {0}({1});\n", entry.name, fmt::join(entry.args, ", "));
             }
         }
     };
@@ -336,6 +340,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
 
             // Emit programmatic binding token getter.
             if (const auto& getter_config = binding->programmatic_getter_config) {
+                // Resolve the null binding type as it could be overridden.
                 string_view null_binding_type = binding->binding_type;
                 if (const auto& nb_override = getter_config->null_binding_type) {
                     null_binding_type = *nb_override;

@@ -46,6 +46,9 @@ struct ProgrammaticBindingTokenGetterConfig {
     //   using null_token_ptr_t = const <null_binding_type>*;
     //   return null_token_ptr_t{nullptr};
     // }
+    //
+    // This should be set when a resource have a dedicated "null" binding type.
+    // e.g. when the binding type is template.
     std::optional<std::string> null_binding_type;
 };
 
@@ -55,12 +58,29 @@ struct Binding {
     // - If is_binding_type_templated is false,
     //   then for all entries, BindingEntry::template_args must be empty.
 
-    std::string name, emission_namespace, binding_type;
-    bool is_binding_type_templated = false;
+    // Human readable name for the class of binding.
+    // e.g. "scratchpad"
+    std::string name;
+
+    // The namespace bindings entries are emitted into:
+    //
+    // e.g. a scratchpad binding is accessible from user kernel as "scratch::something"
+    //      "scratch" is the emission namespace.
+    std::string emission_namespace;
+
+    // The type of the binding.
+    // e.g. "ScratchpadBinding"
+    std::string binding_type;
+
+    // The includes bindings needs to pull in.
+    // e.g. "api/scratchpad_binding_token.h"
     std::set<std::string> includes;
+
+    // The individual entries within the binding class.
     std::vector<BindingEntry> entries;
 
-    // Generates programmatic binding token getter for the binding.
+    // Configs for generating programmatic binding token getter for the binding.
+    // If the field is empty, no programmatic binding token getter will be generated.
     std::optional<ProgrammaticBindingTokenGetterConfig> programmatic_getter_config;
 };
 
