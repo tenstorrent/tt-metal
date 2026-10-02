@@ -4,7 +4,9 @@
 
 #include "swiglu_op.hpp"
 
+#include <cmath>
 #include <cstdlib>
+#include <stdexcept>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -36,6 +38,12 @@ bool force_swiglu_composite() {
     return std::getenv("TTML_SWIGLU_FORCE_COMPOSITE") != nullptr;
 }
 
+void validate_dropout_probability(float probability) {
+    if (!std::isfinite(probability) || probability < 0.0F || probability >= 1.0F) {
+        throw std::invalid_argument("swiglu dropout probability must be finite and in [0, 1).");
+    }
+}
+
 }  // namespace
 
 autograd::TensorPtr swiglu_composite(
@@ -45,6 +53,7 @@ autograd::TensorPtr swiglu_composite(
     const autograd::TensorPtr& w3,
     float dropout_prob,
     bool use_per_device_seed) {
+    validate_dropout_probability(dropout_prob);
     // Baseline-only reference used by the isolated benchmark A/B table.
     // Keep model/runtime paths on fused swiglu().
     const auto swished = ops::silu(ops::linear_op(tensor, w1, nullptr));
@@ -60,6 +69,7 @@ autograd::TensorPtr swiglu(
     const autograd::TensorPtr& w3,
     float dropout_prob,
     bool use_per_device_seed) {
+    validate_dropout_probability(dropout_prob);
     if (force_swiglu_composite()) {
         return swiglu_composite(tensor, w1, w2, w3, dropout_prob, use_per_device_seed);
     }

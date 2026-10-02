@@ -6,6 +6,9 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
+#include <limits>
+#include <stdexcept>
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -34,6 +37,27 @@ protected:
         ttml::autograd::ctx().close_device();
     }
 };
+
+TEST(SwiGLUProbabilityTest, RejectsInvalidProbabilityBeforeTensorAccess) {
+    const ttml::autograd::TensorPtr tensor;
+    const ttml::autograd::TensorPtr weight;
+    const std::array invalid_probabilities = {
+        -0.1F,
+        1.0F,
+        1.1F,
+        std::numeric_limits<float>::infinity(),
+        -std::numeric_limits<float>::infinity(),
+        std::numeric_limits<float>::quiet_NaN(),
+    };
+
+    for (const float probability : invalid_probabilities) {
+        EXPECT_THROW(
+            static_cast<void>(ttml::ops::swiglu(tensor, weight, weight, weight, probability)), std::invalid_argument);
+        EXPECT_THROW(
+            static_cast<void>(ttml::ops::swiglu_composite(tensor, weight, weight, weight, probability)),
+            std::invalid_argument);
+    }
+}
 
 // ============================================================================
 // Section 1: Shared reference helpers
