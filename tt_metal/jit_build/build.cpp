@@ -539,9 +539,9 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     const auto& jit_build_query = hal.get_jit_build_query();
 
     this->target_name_ = jit_build_query.target_name(params);
-    this->is_compute_pack_ = build_config.core_type == HalProgrammableCoreType::TENSIX &&
-                             build_config.processor_class == HalProcessorClassType::COMPUTE &&
-                             build_config.processor_id == 2;
+    this->is_tensix_compute_ = build_config.core_type == HalProgrammableCoreType::TENSIX &&
+                               build_config.processor_class == HalProcessorClassType::COMPUTE;
+    this->processor_id_ = static_cast<uint32_t>(build_config.processor_id);
     // Per-kernel opt-in flags (applied in export_target_recipe); empty when unsupported.
     this->rvv_cflags_ = jit_build_query.rvv_compile_flags(params);
     // Includes
@@ -1127,15 +1127,17 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
     target.target_name = target_name_;
     target.cflags = cflags_;
     target.pch_umbrella = (fs::path(env_.root_) / jit_build::PCH_UMBRELLA).string();
-    // Per-kernel RVV opt-in: only the pack (TRISC2) compile of a kernel that set
-    // ComputeConfig::enable_trisc2_rvv gets the vector flags. Compile-only: lflags_ is
+    // Per-kernel RVV opt-in: only the compile of the compute processor the kernel opted in for
+    // gets the vector flags (TRISC2 on Blackhole, TRISC0 on Quasar). Compile-only: lflags_ is
     // untouched, so the link stays stock (the -fno-lto object simply opts out of LTO).
-    if (settings != nullptr && this->is_compute_pack_ && settings->get_trisc2_rvv_enabled()) {
+    if (settings != nullptr && this->is_tensix_compute_ &&
+        settings->get_rvv_enabled_for_compute_processor(this->processor_id_)) {
         TT_FATAL(
             !this->rvv_cflags_.empty(),
-            "Kernel {} sets enable_trisc2_rvv, but this architecture does not support RVV code "
-            "generation on the pack processor",
-            settings->get_full_kernel_name());
+            "Kernel {} enables RVV code generation for compute processor {}, but this architecture does not "
+            "support RVV code generation on that processor",
+            settings->get_full_kernel_name(),
+            this->processor_id_);
         target.cflags += this->rvv_cflags_;
     }
     target.lflags = lflags_;

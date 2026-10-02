@@ -433,6 +433,18 @@ public:
         return cflags;
     }
 
+    std::string rvv_compile_flags(const Params& params) const override {
+        // Only TRISC0 of each Neo has the vector unit on Quasar.
+        constexpr uint32_t trisc_per_neo = 4;
+        if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
+              params.processor_class == HalProcessorClassType::COMPUTE && params.processor_id % trisc_per_neo == 0)) {
+            return {};
+        }
+
+        return "-march=rv32im_zmmul_zaamo_zve32x_zvl128b_xtttensixqsr_xttzbkb -fno-lto "
+               "-fno-tree-vectorize -fno-tree-slp-vectorize -Wno-error=array-bounds ";
+    }
+
     bool firmware_is_kernel_object(const Params&) const override { return true; }
     std::string linker_script(const Params& params) const override {
         switch (params.core_type) {

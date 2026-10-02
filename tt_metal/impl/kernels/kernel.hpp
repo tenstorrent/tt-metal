@@ -711,7 +711,9 @@ public:
 
     std::string_view get_linker_opt_level() const override;
 
-    bool get_trisc2_rvv_enabled() const override { return this->config_.enable_trisc2_rvv; }
+    bool get_rvv_enabled_for_compute_processor(uint32_t processor_id) const override {
+        return this->config_.enable_trisc2_rvv && processor_id == 2;
+    }
 
 private:
     const ComputeConfig config_;
@@ -883,6 +885,12 @@ public:
     std::string_view get_compiler_opt_level() const override;
 
     std::string_view get_linker_opt_level() const override;
+
+    // Each TRISC slot is built under its group's first processor (any Neo), so the unpack slot is
+    // identified by processor_id % QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE == 0.
+    bool get_rvv_enabled_for_compute_processor(uint32_t processor_id) const override {
+        return this->config_.enable_trisc0_rvv && (processor_id % QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE) == 0;
+    }
 
     void set_build_options(JitBuildOptions& build_options) const override;
 

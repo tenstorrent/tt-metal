@@ -1636,7 +1636,7 @@ std::string QuasarComputeKernel::config_hash() const {
         unpack_mode_descriptor = fmt::format("{}", fmt::join(unpack_modes, "."));
     }
 
-    return fmt::format(
+    std::string hash = fmt::format(
         "{}_{}_{}_{}_{}_{}_{}",
         fmt::join(compute_processors_, "_"),
         enchantum::to_string(config_.math_fidelity),
@@ -1645,6 +1645,12 @@ std::string QuasarComputeKernel::config_hash() const {
         config_.dst_full_sync_en,
         config_.bfp8_pack_precise,
         unpack_mode_descriptor);
+    // Appended only when opted in, so hashes of kernels that don't use
+    // the RVV knob are unchanged.
+    if (config_.enable_trisc0_rvv) {
+        hash += "_rvv";
+    }
+    return hash;
 }
 
 uint8_t QuasarComputeKernel::expected_num_binaries() const {
