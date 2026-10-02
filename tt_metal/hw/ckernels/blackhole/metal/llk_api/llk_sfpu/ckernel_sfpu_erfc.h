@@ -60,8 +60,18 @@ constexpr std::array<float, ERFC_LUT_SIZE> ERFC_LUT = {{// Breakpoints
                                              1.2677097321e-01f,
                                              -2.1375391632e-02f}};
 
-template <int ITERATIONS = 8>
+bool bf16_dest_erfc();
+template <int ITERATIONS>
+void calculate_erfc_bf16();
+
+template <int ITERATIONS = 8, bool is_fp32_dest_acc_en>
 inline void calculate_erfc() {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (bf16_dest_erfc()) {
+            calculate_erfc_bf16<ITERATIONS>();
+            return;
+        }
+    }
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         // Clamp |x| to 5.0 before evaluation (avoids extrapolation, saves one branch)
@@ -77,10 +87,20 @@ inline void calculate_erfc() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+void init_erfc_bf16();
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void erfc_init() {
+    if constexpr (!is_fp32_dest_acc_en) {
+        if (bf16_dest_erfc()) {
+            init_erfc_bf16();
+            return;
+        }
+    }
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<true>();
 }
 
 }  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_erfc_bf16.h"
