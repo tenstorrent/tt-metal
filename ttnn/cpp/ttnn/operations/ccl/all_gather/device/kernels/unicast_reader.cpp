@@ -29,7 +29,8 @@ void kernel_main() {
     constexpr uint32_t num_devices = get_compile_time_arg_val(4);
     constexpr uint32_t cb0_id = get_compile_time_arg_val(5);
     constexpr uint32_t cb_page_size = get_compile_time_arg_val(6);
-    constexpr auto input_tensor_args = TensorAccessorArgs<7>();
+    constexpr bool do_init_barrier = get_compile_time_arg_val(7) != 0;
+    constexpr auto input_tensor_args = TensorAccessorArgs<8>();
     constexpr auto output_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t inputs_per_cb_page = cb_page_size / input_page_size;
@@ -51,7 +52,7 @@ void kernel_main() {
     const uint32_t final_count = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t input_page_id_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t input_page_id_end = get_arg_val<uint32_t>(arg_idx++);
-    const address_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
+    [[maybe_unused]] const address_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);  // used only if do_init_barrier
     const address_t data_valid_sem = get_arg_val<uint32_t>(arg_idx++);
 
     auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_tensor_address);
@@ -69,11 +70,12 @@ void kernel_main() {
 
     // Startup barrier: wait for downstream remote device to be ready.
     // A sink direction (num_iters == 0) has no upstream here and is never signalled, so it must not wait.
-    // Run on every launch: with a reused output, the neighbour may still be reading it from the last launch.
     // Consume the credit instead of resetting, so an early handshake for the next launch is kept.
-    if (num_iters > 0) {
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
-        noc_semaphore_inc(get_noc_addr(barrier_sem), uint32_t{0} - 1);
+    if constexpr (do_init_barrier) {
+        if (num_iters > 0) {
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
+            noc_semaphore_inc(get_noc_addr(barrier_sem), uint32_t{0} - 1);
+        }
     }
 
     uint32_t stripe = initial_stripe;

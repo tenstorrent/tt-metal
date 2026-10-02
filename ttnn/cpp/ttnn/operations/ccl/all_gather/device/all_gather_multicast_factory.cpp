@@ -167,6 +167,11 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // Enabled if any axis is an even-sized ring.
     const bool load_balance_across_alt_routes = ew_load_balance || ns_load_balance;
 
+    // We use an init barrier to wait for remote output tensors to be allocated. This only
+    // matters when the output is freshly allocated by the op; a persistent/preallocated
+    // output is guaranteed to already exist on every device before op kernel begins.
+    const bool do_init_barrier = !tensor_args.persistent_output_tensor.has_value();
+
     const uint32_t packet_size = operation_attributes.packet_size;
 
     ////////////////////////////////////////////////////////////////
@@ -369,6 +374,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         packet_size,                     // packet_size
         load_balance_across_alt_routes,  // load_balance_across_alt_routes
         (e_hops > 0) + (s_hops > 0),     // num_connections
+        do_init_barrier,                 // do_init_barrier
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
@@ -384,6 +390,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         packet_size,                     // packet_size
         load_balance_across_alt_routes,  // load_balance_across_alt_routes
         (w_hops > 0) + (n_hops > 0),     // num_connections
+        do_init_barrier,                 // do_init_barrier
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
 

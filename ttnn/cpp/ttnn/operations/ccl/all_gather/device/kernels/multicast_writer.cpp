@@ -34,7 +34,8 @@ void kernel_main() {
     constexpr uint32_t packet_size = get_compile_time_arg_val(6);
     constexpr bool load_balance_across_alt_routes = get_compile_time_arg_val(7) != 0;
     constexpr uint32_t num_connections = get_compile_time_arg_val(8);
-    constexpr auto output_tensor_args = TensorAccessorArgs<9>();
+    constexpr bool do_init_barrier = get_compile_time_arg_val(9) != 0;
+    constexpr auto output_tensor_args = TensorAccessorArgs<10>();
 
     constexpr bool enable_fabric = (num_connections > 0);
     constexpr uint32_t output_page_size = output_chunks_per_page * output_chunk_size;
@@ -146,7 +147,7 @@ void kernel_main() {
     // Reader fires sem increment forward, and also owns sem wait + decrement.
     // Writer fires sem increment backward, and implicitly gets blocked waiting for CB to
     // contain valid data.
-    if constexpr (enable_fabric) {
+    if constexpr (do_init_barrier && enable_fabric) {
         uint64_t barrier_sem_noc_addr_in_pkt =
             safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
         fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(

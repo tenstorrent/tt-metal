@@ -45,7 +45,7 @@ AllGatherUnicastFactory::cached_mesh_workload_t AllGatherUnicastFactory::create_
     // Since Fabric doesn't provide such capability within kernels, we need to manually sync using global semaphores.
     // Allocate the semaphore in L1_SMALL to avoid fragmenting the larger L1 memory pool.
     // Two semaphores:
-    // - barrier_sem: per-launch init handshake ("I'm alive") to the neighbor.
+    // - barrier_sem: one-shot init handshake ("I'm alive") to the neighbor.
     // - data_valid_sem: chunks upstream has relayed into our output (relay gate + completion).
     bool l1_small_size = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
     auto sem_buffer_type = l1_small_size > 0 ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
@@ -133,6 +133,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // Even-sized ring: for load balancing, the antipode device receives the antipode stripe as halves from both
     // forward and backward directions.
     const bool ring_even_split = is_ring && (num_devices % 2 == 0);
+    const bool do_init_barrier = !tensor_args.persistent_output_tensor.has_value();
 
     const uint32_t packet_size = operation_attributes.packet_size;
 
@@ -433,6 +434,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         num_devices,               // device count (stripe indexing)
         cb0_id,                    // cb id
         cb_page_size,              // cb entry size
+        do_init_barrier,           // wait for remote output allocation before relaying
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
@@ -446,6 +448,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         cb0_id,                    // cb id
         cb_page_size,              // cb entry size
         packet_size,               // packet_size
+        do_init_barrier,           // send init handshake before relaying
         data_valid_granularity,    // signal data_valid once per this many CB pages
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);

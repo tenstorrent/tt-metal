@@ -35,8 +35,9 @@ void kernel_main() {
     constexpr uint32_t cb0_id = get_compile_time_arg_val(4);
     constexpr uint32_t cb_page_size = get_compile_time_arg_val(5);
     constexpr uint32_t packet_size = get_compile_time_arg_val(6);
-    constexpr uint32_t data_valid_granularity = get_compile_time_arg_val(7);
-    constexpr auto output_tensor_args = TensorAccessorArgs<8>();
+    constexpr bool do_init_barrier = get_compile_time_arg_val(7) != 0;
+    constexpr uint32_t data_valid_granularity = get_compile_time_arg_val(8);
+    constexpr auto output_tensor_args = TensorAccessorArgs<9>();
 
 #ifdef USE_WORKER_MUX
     // Fabric-mux geometry, appended by ccl::fabric_mux_connection_ct_args (after the tensor-accessor args).
@@ -63,7 +64,7 @@ void kernel_main() {
     const uint32_t final_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t final_count = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t do_local_write = get_arg_val<uint32_t>(arg_idx++);
-    const address_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
+    [[maybe_unused]] const address_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);  // used only if do_init_barrier
     const address_t data_valid_sem = get_arg_val<uint32_t>(arg_idx++);
     [[maybe_unused]] const uint8_t barrier_sem_noc_x = get_arg_val<uint32_t>(arg_idx++);  // neighbor opposite-dir core
     [[maybe_unused]] const uint8_t barrier_sem_noc_y = get_arg_val<uint32_t>(arg_idx++);
@@ -144,7 +145,9 @@ void kernel_main() {
 
     // Init handshake (send only): tell the neighbor's opposite-direction reader we're alive, so it lets its
     // paired writer start writing into our output. Our own reader does the matching wait.
-    fabric.atomic_inc(safe_get_noc_addr(barrier_sem_noc_x, barrier_sem_noc_y, barrier_sem, 0), 1);
+    if constexpr (do_init_barrier) {
+        fabric.atomic_inc(safe_get_noc_addr(barrier_sem_noc_x, barrier_sem_noc_y, barrier_sem, 0), 1);
+    }
 
     const uint64_t downstream_data_valid_addr =
         safe_get_noc_addr(data_valid_sem_noc_x, data_valid_sem_noc_y, data_valid_sem, 0);
