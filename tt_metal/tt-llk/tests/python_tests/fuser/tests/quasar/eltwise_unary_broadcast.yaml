@@ -18,36 +18,39 @@ operands:
 operations:
   - math:
       - type: "Fpu"
+        block_size: [64, 64]
         in0: "input_A"
         operation: "UnaryBroadcast"
         unpacker: "UnaryBroadcastUnpacker"
         broadcast_type: "COL"
         math_fidelity: "LoFi"
-    block_size: [64, 64]
     pack:
       - output: "output_col"
+        block_size: [64, 64]
         packer: "Packer"
 
   - math:
       - type: "Fpu"
+        block_size: [64, 64]
         in0: "input_A"
         operation: "UnaryBroadcast"
         unpacker: "UnaryBroadcastUnpacker"
         broadcast_type: "ROW"
         math_fidelity: "LoFi"
-    block_size: [64, 64]
     pack:
       - output: "output_row"
+        block_size: [64, 64]
         packer: "Packer"
 
   - math:
       - type: "Fpu"
+        block_size: [64, 64]
         in0: "input_A"
         operation: "UnaryBroadcast"
         unpacker: "UnaryBroadcastUnpacker"
         broadcast_type: "SCALAR"
         math_fidelity: "LoFi"
-    block_size: [64, 64]
     pack:
       - output: "output_scalar"
+        block_size: [64, 64]
         packer: "Packer"

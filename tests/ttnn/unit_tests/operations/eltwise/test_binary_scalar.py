@@ -7,9 +7,12 @@ import pytest
 import ttnn
 import random
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, assert_with_ulp
 
 pytestmark = pytest.mark.use_module_device
+
+# Scalar-first arithmetic against the device measures at most 2 ULP, on bf16 add and subtract.
+_SCALAR_FIRST_ULP_THRESHOLD = 3
 
 
 @pytest.mark.parametrize(
@@ -608,3 +611,457 @@ def test_scalar_tensor_row_major_sharded(device, op_name):
     output = ttnn.to_torch(ttnn_fn(scalar, input_tensor))
 
     assert_with_pcc(torch_fn(scalar, torch_input), output, 0.999)
+
+
+@pytest.mark.parametrize("tensor_dtype", [ttnn.int32, ttnn.uint32])
+@pytest.mark.parametrize("scalar", [2.5, 0.5, -1.5])
+@pytest.mark.parametrize("ttnn_op", [ttnn.multiply, ttnn.div])
+def test_int_tensor_float_scalar_promotes(device, ttnn_op, tensor_dtype, scalar):
+    # The scalar is packed using the tensor's dtype, so without promotion 2.5 arrives as 2 and 0.5
+    # as 0 -- div(int32, 0.5) used to return inf instead of 14. mul/div promote, matching both torch
+    # and what the tensor-tensor path already does for a mixed int/float pair.
+    torch_input = torch.tensor([[7, 6, 12, 100]], dtype=torch.int32)
+    a = ttnn.from_torch(torch_input, dtype=tensor_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn_op(a, scalar)
+    torch_golden = (torch_input.float() * scalar) if ttnn_op is ttnn.multiply else (torch_input.float() / scalar)
+
+    assert output.dtype == ttnn.float32
+    assert_with_ulp(expected_result=torch_golden, actual_result=output, ulp_threshold=1)
+
+
+@pytest.mark.parametrize("tensor_dtype", [ttnn.int32, ttnn.uint32])
+@pytest.mark.parametrize("ttnn_op", [ttnn.add, ttnn.subtract])
+def test_int_tensor_fractional_scalar_rejected(device, ttnn_op, tensor_dtype, expect_error):
+    # add/subtract reject a mixed int/float tensor pair rather than promoting, so a scalar they
+    # cannot represent is rejected too instead of being silently truncated.
+    torch_input = torch.tensor([[7, 6, 12, 100]], dtype=torch.int32)
+    a = ttnn.from_torch(torch_input, dtype=tensor_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    with expect_error(RuntimeError, "cannot represent the scalar"):
+        ttnn_op(a, 2.5)
+
+
+@pytest.mark.parametrize("tensor_dtype", [ttnn.int32, ttnn.uint32])
+@pytest.mark.parametrize("ttnn_op", [ttnn.add, ttnn.subtract, ttnn.multiply])
+def test_int_tensor_integer_scalar_stays_exact_above_2_24(device, ttnn_op, tensor_dtype):
+    # float32 carries a 24-bit mantissa, so a promoted tensor cannot represent integers past 2^24:
+    # 16777217 * 2 would come back as 33554432 rather than 33554434. An integer scalar reaches the
+    # kernel intact on the integer path, so it stays there and keeps these exact -- this is how a
+    # caller asks for exactness now that an integral *float* like 2.0 promotes instead.
+    torch_input = torch.tensor([[2**24 - 1, 2**24, 2**24 + 1, 2**24 + 3]], dtype=torch.int32)
+    a = ttnn.from_torch(torch_input, dtype=tensor_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn_op(a, 2)
+    torch_golden = {
+        ttnn.add: torch_input + 2,
+        ttnn.subtract: torch_input - 2,
+        ttnn.multiply: torch_input * 2,
+    }[ttnn_op]
+
+    # compared as integers: routing these through float32 would silently round them
+    assert output.dtype == tensor_dtype
+    assert ttnn.to_torch(output).flatten().tolist() == torch_golden.flatten().tolist()
+
+
+@pytest.mark.parametrize("tensor_dtype", [ttnn.int32, ttnn.uint32])
+def test_int_tensor_integral_float_scalar_promotes_like_torch(device, tensor_dtype):
+    # Promotion keys off the scalar's type, not its value, so 2.0 promotes exactly as 2.5 does.
+    # torch agrees -- int32_tensor * 2.0 is float32 there too -- and deciding by value instead would
+    # make the output dtype depend on a runtime number. add/subtract are not here because they
+    # reject a mixed int/float pair rather than promoting, which is separate policy (#55685).
+    torch_input = torch.tensor([[7, 6, 12, 100]], dtype=torch.int32)
+    a = ttnn.from_torch(torch_input, dtype=tensor_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    for ttnn_op, torch_op in ((ttnn.multiply, torch.mul), (ttnn.div, torch.div)):
+        output = ttnn_op(a, 2.0)
+        expected = torch_op(torch_input.float(), 2.0)
+
+        assert output.dtype == ttnn.float32, f"{ttnn_op} with 2.0 should promote like torch"
+        assert_with_ulp(expected_result=expected, actual_result=output, ulp_threshold=1)
+
+
+@pytest.mark.parametrize("tensor_dtype", [ttnn.int32, ttnn.uint32])
+@pytest.mark.parametrize("ttnn_op", [ttnn.add, ttnn.subtract, ttnn.multiply])
+def test_int_tensor_integer_scalar_unchanged(device, ttnn_op, tensor_dtype):
+    # An integer scalar loses nothing in the pack, so it must keep the integer dtype and value.
+    torch_input = torch.tensor([[7, 6, 12, 100]], dtype=torch.int32)
+    a = ttnn.from_torch(torch_input, dtype=tensor_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn_op(a, 2)
+    torch_golden = {
+        ttnn.add: torch_input + 2,
+        ttnn.subtract: torch_input - 2,
+        ttnn.multiply: torch_input * 2,
+    }[ttnn_op]
+
+    assert output.dtype == tensor_dtype
+    assert torch.equal(ttnn.to_torch(output).float(), torch_golden.float())
+
+
+@pytest.mark.parametrize("rounding_mode", ["floor", "trunc"])
+@pytest.mark.parametrize("scalar", [2.5, 0.5, -1.5, 3e9])
+def test_int_tensor_float_scalar_rounded_division(device, rounding_mode, scalar):
+    # The DIV_FLOOR/DIV_TRUNC kernels are int32-only and take the divisor through the int32 scalar
+    # packing, so a divisor they cannot carry has to be divided in floating point and rounded after.
+    # These used to be rejected outright even though div(rounding_mode=None) accepted them. 3e9 is
+    # the integral-but-out-of-range case, which the fractional check alone would have missed.
+    torch_input = torch.tensor([[-13, -7, 6, 100]], dtype=torch.int32)
+    a = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.div(a, scalar, rounding_mode=rounding_mode)
+    quotient = torch_input.float() / scalar
+    torch_golden = torch.floor(quotient) if rounding_mode == "floor" else torch.trunc(quotient)
+
+    # Negative numerators are in the input on purpose: the quotient has to be rounded while it is
+    # still floating point, or floor(-13/2.5) comes back as -5 instead of -6.
+    assert output.dtype == ttnn.float32
+    assert_with_ulp(expected_result=torch_golden, actual_result=output, ulp_threshold=1)
+
+
+@pytest.mark.parametrize("rounding_mode", ["floor", "trunc"])
+@pytest.mark.parametrize("scalar, expected_dtype", [(2, ttnn.int32), (2.0, ttnn.float32)])
+def test_int_tensor_rounded_division_dtype_follows_scalar_type(device, rounding_mode, scalar, expected_dtype):
+    # ttnn.div decides from the divisor's type rather than its value: an integer 2 keeps exact int32
+    # division, while 2.0 promotes the tensor and divides in floating point. Worth pinning because it
+    # is the opposite of what multiply does -- multiply(int32, 2.0) stays int32, since an integral
+    # scalar reaches the kernel intact and promoting would cap exact integers at 2**24.
+    torch_input = torch.tensor([[-13, -7, 6, 100]], dtype=torch.int32)
+    a = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.div(a, scalar, rounding_mode=rounding_mode)
+    quotient = torch_input.float() / 2
+    torch_golden = torch.floor(quotient) if rounding_mode == "floor" else torch.trunc(quotient)
+
+    assert output.dtype == expected_dtype
+    assert ttnn.to_torch(output).float().flatten().tolist() == torch_golden.flatten().tolist()
+
+
+@pytest.mark.parametrize(
+    "tensor_dtype, scalar",
+    [
+        # Integral, so the old fractional-only check let these through to an undefined
+        # float-to-integer cast: inf arrived as INT32_MIN and 2**32 as 0.
+        (ttnn.int32, 2.0**31),  # one past INT32_MAX
+        (ttnn.int32, -(2.0**31) - 2048),  # one representable step below INT32_MIN
+        (ttnn.int32, float("inf")),
+        (ttnn.int32, float("-inf")),
+        (ttnn.uint32, -3.0),  # negative against an unsigned tensor
+        (ttnn.uint32, 2.0**32),  # one past UINT32_MAX
+        (ttnn.uint32, float("inf")),
+    ],
+)
+@pytest.mark.parametrize("ttnn_op", [ttnn.add, ttnn.subtract])
+def test_int_tensor_unrepresentable_scalar_rejected(device, ttnn_op, tensor_dtype, scalar, expect_error):
+    # Being integral is not enough: the value also has to be finite and inside the tensor dtype's
+    # range, or the cast in pack_scalar_runtime_arg is undefined and silently changes it.
+    torch_input = torch.tensor([[7, 6, 12, 100]], dtype=torch.int32)
+    a = ttnn.from_torch(torch_input, dtype=tensor_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    with expect_error(RuntimeError, "cannot represent the scalar"):
+        ttnn_op(a, scalar)
+
+
+@pytest.mark.parametrize(
+    "tensor_dtype, scalar",
+    [
+        (ttnn.int32, -(2.0**31)),  # INT32_MIN, must survive the lower bound
+        (ttnn.int32, 2147483520.0),  # largest float32 below INT32_MAX
+        (ttnn.uint32, 0.0),  # lower bound for an unsigned tensor
+        (ttnn.uint32, 4294965248.0),  # largest float32 below UINT32_MAX
+    ],
+)
+def test_int_tensor_boundary_scalar_accepted(device, tensor_dtype, scalar):
+    # The limits themselves have to stay on the integer path, since rejecting them would be as wrong
+    # as accepting the values past them. INT32_MAX and UINT32_MAX are not float32 values, so the
+    # check compares against powers of two and these are the largest floats below each limit.
+    # Added to zero so the sum itself cannot overflow the dtype and confuse the result.
+    torch_input = torch.zeros([1, 32], dtype=torch.int32)
+    a = ttnn.from_torch(torch_input, dtype=tensor_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.add(a, scalar)
+
+    assert output.dtype == tensor_dtype
+    assert ttnn.to_torch(output, dtype=torch.int64).flatten().tolist() == [int(scalar)] * torch_input.numel()
+
+
+@pytest.mark.parametrize("op_name", ("add", "subtract", "multiply", "div"))
+@pytest.mark.parametrize("ttnn_dtype, torch_dtype", ((ttnn.bfloat16, torch.bfloat16), (ttnn.int32, torch.int32)))
+def test_scalar_tensor_golden_matches_device(device, op_name, ttnn_dtype, torch_dtype):
+    """The goldens key dtype-dependent branches off the tensor operand rather than the argument
+    position, so they stay callable when a scalar occupies operand a. Reading the dtype off
+    operand a instead raises AttributeError, which comparison mode swallows into a skip."""
+    torch.manual_seed(0)
+    if torch_dtype == torch.int32:
+        torch_input = torch.randint(1, 100, (1, 1, 320, 384), dtype=torch_dtype)
+        scalar = 7
+    else:
+        torch_input = torch.rand((1, 1, 320, 384), dtype=torch_dtype) + 0.5
+        scalar = 3.14
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    golden = ttnn.get_golden_function(getattr(ttnn, op_name))
+    expected = golden(scalar, torch_input)
+    output = ttnn.to_torch(getattr(ttnn, op_name)(scalar, input_tensor))
+
+    # The golden is the reference the device is graded against, so it has to carry operand order
+    # too: for subtract and div a reversed golden would still be a valid tensor of the right shape.
+    # Comparing through .float() would let a golden of the wrong dtype pass, which is the class of
+    # bug this keys off the tensor operand to avoid.
+    assert expected.dtype == output.dtype
+    if torch_dtype == torch.int32 and op_name != "div":
+        # Integer add/subtract/multiply run the integer LLKs and are bit-exact on device.
+        assert_equal(expected, output)
+    else:
+        # Measured worst case is 2 ULP, on bf16 add and subtract.
+        assert_with_ulp(expected_result=expected, actual_result=output, ulp_threshold=_SCALAR_FIRST_ULP_THRESHOLD)
+
+
+@pytest.mark.parametrize(
+    "op_name",
+    (
+        "add",
+        "subtract",
+        "multiply",
+        # Comparison mode never grades scalar-first div: no threshold, however impossible, fails
+        # it. That is not this PR's doing -- tensor-tensor add and div skip grading on main too --
+        # so it is marked strict, to fail the day div starts being compared and this can go.
+        pytest.param("div", marks=pytest.mark.xfail(strict=True, reason="scalar-first div is not graded")),
+    ),
+)
+def test_scalar_tensor_comparison_mode_validates(device, op_name, expect_error):
+    """Comparison mode must actually grade a scalar-first call, not skip it. A golden that raises
+    is caught at decorators.py and downgraded to a warning, so the op looks validated while it is
+    not; comparison_mode_should_raise_exception turns that silence into a failure.
+
+    The threshold is relaxed from the 0.9999 default because bf16 add and subtract miss it against
+    their goldens for tensor-first calls too -- a pre-existing tolerance gap this test is not
+    about. What is asserted here is that the comparison runs at all, which only means something
+    once a threshold the call cannot meet is shown to fail it."""
+    torch.manual_seed(0)
+    torch_input = torch.rand((1, 1, 320, 384), dtype=torch.bfloat16) + 0.5
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    with ttnn.manage_config("enable_comparison_mode", True), ttnn.manage_config(
+        "comparison_mode_should_raise_exception", True
+    ):
+        # An unreachable threshold first: if this does not raise, the comparison never ran and the
+        # 0.99 call below would pass for the same reason, proving nothing.
+        with ttnn.manage_config("comparison_mode_pcc", 1.0):
+            with expect_error(RuntimeError, "Comparing output tensor 0 against CPU locally failed"):
+                getattr(ttnn, op_name)(3.14, input_tensor)
+
+        with ttnn.manage_config("comparison_mode_pcc", 0.99):
+            getattr(ttnn, op_name)(3.14, input_tensor)
+
+
+@pytest.mark.parametrize("op_name", ("add", "subtract", "multiply"))
+@pytest.mark.parametrize("torch_dtype, bit_width", ((torch.uint16, 16), (torch.uint32, 32)))
+@pytest.mark.parametrize("scalar", (70000, -2.5, 2**32))
+def test_unsigned_golden_wraps_scalar_outside_operand_range(op_name, torch_dtype, bit_width, scalar):
+    """A scalar wider than the operand wraps to its storage width, so the golden masks it rather
+    than rejecting it. Materializing the scalar in the unsigned dtype instead fails Torch's
+    conversion range check, turning the wrap into an error in both operand orders."""
+    # A scalar the integer arms of the variant cannot hold arrives as a float, and multiply then
+    # promotes the operand to float32 instead of wrapping it.
+    binds_as_float = not float(scalar).is_integer() or not -(1 << 31) <= scalar < (1 << 32)
+    if op_name == "multiply" and bit_width == 32 and binds_as_float:
+        pytest.skip("multiply promotes a 32-bit integer operand against a float-bound scalar")
+
+    torch.manual_seed(0)
+    torch_fn = getattr(torch, op_name)
+    mask = (1 << bit_width) - 1
+    torch_input = torch.randint(0, 60000, (1, 1, 32, 32)).to(torch_dtype)
+    wide, wrapped = torch_input.to(torch.int64), int(scalar) & mask
+
+    golden = ttnn.get_golden_function(getattr(ttnn, op_name))
+
+    assert torch.equal(golden(torch_input, scalar), (torch_fn(wide, wrapped) & mask).to(torch_dtype))
+    assert torch.equal(golden(scalar, torch_input), (torch_fn(wrapped, wide) & mask).to(torch_dtype))
+
+
+@pytest.mark.parametrize("rounding_mode", ("trunc", "floor"))
+@pytest.mark.parametrize("scalar", (7, 2.5))
+@pytest.mark.parametrize("scalar_first", (True, False))
+def test_scalar_tensor_div_rounding_golden_matches_device(device, rounding_mode, scalar, scalar_first):
+    """The integer division path requires both operands integral, not just the tensor one: a float
+    scalar promotes an INT32 tensor before dividing. Only the device decides which is right, so
+    this grades the golden against it for both scalar types, in both operand orders -- the
+    promotion applies to the tensor-first form that predates the scalar-first overloads too."""
+    torch.manual_seed(0)
+    torch_input = torch.randint(1, 100, (1, 1, 320, 384), dtype=torch.int32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    golden_args = (scalar, torch_input) if scalar_first else (torch_input, scalar)
+    device_args = (scalar, input_tensor) if scalar_first else (input_tensor, scalar)
+    expected = ttnn.get_golden_function(ttnn.div)(*golden_args, rounding_mode=rounding_mode)
+    output = ttnn.to_torch(ttnn.div(*device_args, rounding_mode=rounding_mode))
+
+    assert expected.dtype == output.dtype
+    if expected.dtype.is_floating_point:
+        assert_with_ulp(expected_result=expected, actual_result=output, ulp_threshold=_SCALAR_FIRST_ULP_THRESHOLD)
+    else:
+        # An integer scalar keeps exact integer division on both sides.
+        assert_equal(expected, output)
+
+
+@pytest.mark.parametrize("scalar_first", (True, False))
+@pytest.mark.parametrize("op_name", ("multiply", "div"))
+@pytest.mark.parametrize(
+    "scalar, promotes",
+    (
+        (2.5, True),
+        (-1.5, True),
+        # An integral float still promotes: the device keys the decision off the scalar's type so
+        # the output dtype cannot depend on a runtime value.
+        (2.0, True),
+        # Too wide for either integer arm of the scalar variant, so it arrives as a float.
+        ((1 << 32) + 512, True),
+        # The integer arms, which stay on the integer path and keep the operand's dtype.
+        (2, False),
+        (-2, False),
+    ),
+)
+@pytest.mark.parametrize("ttnn_dtype, torch_dtype", ((ttnn.int32, torch.int32), (ttnn.uint32, torch.uint32)))
+def test_float_scalar_promotes_integer_tensor(device, ttnn_dtype, torch_dtype, scalar, promotes, op_name, scalar_first):
+    """multiply and div promote a 32-bit integer operand against a float scalar rather than
+    truncating it; every other op rejects the call. The golden has to follow the same rule, or it
+    reports an integer where the device returns float32 and comparison mode fails on dtype alone."""
+    if op_name == "div" and not promotes:
+        pytest.skip("div is true division, so an integer scalar has no integer device path here")
+
+    torch_input = torch.arange(1, 1025, dtype=torch.int64).reshape(1, 1, 32, 32).to(torch_dtype)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    golden_args = (scalar, torch_input) if scalar_first else (torch_input, scalar)
+    device_args = (scalar, input_tensor) if scalar_first else (input_tensor, scalar)
+    expected = ttnn.get_golden_function(getattr(ttnn, op_name))(*golden_args)
+    output = ttnn.to_torch(getattr(ttnn, op_name)(*device_args))
+
+    assert expected.dtype == output.dtype, f"golden {expected.dtype} != device {output.dtype}"
+    assert (expected.dtype == torch.float32) == promotes, f"{scalar!r} promoted to {expected.dtype}"
+    if promotes:
+        assert_with_ulp(expected_result=expected, actual_result=output, ulp_threshold=_SCALAR_FIRST_ULP_THRESHOLD)
+    else:
+        assert_equal(expected, output)
+
+
+@pytest.mark.parametrize("op_name", ("add", "subtract", "rsub"))
+@pytest.mark.parametrize("scalar", (-(2**31) - 1, -(2**31) - 128))
+def test_scalar_float32_rounds_into_range_before_the_exactness_check(device, op_name, scalar):
+    """A scalar too wide for either integer arm is bound as a float, and float32 is spaced 256
+    apart at 2**31 -- so the 128 integers in [-2**31 - 128, -2**31) round to exactly -2**31, clear
+    the range check that would otherwise reject them, and reach the kernel as -2**31. Taking the
+    unrounded value here does not cost a unit at the near edge: at the far one it wraps to the
+    opposite end of the range. One integer below the band, float32 lands out of range and the
+    device rejects the call instead."""
+    torch_input = torch.tensor([[1, 2, 3, 4]], dtype=torch.int32).repeat(32, 8)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    expected = ttnn.get_golden_function(getattr(ttnn, op_name))(torch_input, scalar)
+    output = ttnn.to_torch(getattr(ttnn, op_name)(input_tensor, scalar))
+
+    assert_equal(expected, output)
+
+
+@pytest.mark.parametrize("op_name", ("add", "subtract", "rsub"))
+def test_scalar_below_the_rounding_band_is_rejected(device, op_name, expect_error):
+    """One integer below the band the rounding lands outside the operand's range, and the integer
+    path refuses the call rather than packing a value it would change."""
+    torch_input = torch.tensor([[1, 2, 3, 4]], dtype=torch.int32).repeat(32, 8)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    with expect_error(RuntimeError, "cannot represent the scalar"):
+        getattr(ttnn, op_name)(input_tensor, -(2**31) - 129)
+
+
+@pytest.mark.parametrize("op_name", ("add", "subtract"))
+@pytest.mark.parametrize(
+    "scalar",
+    (
+        # Above the operand's range, and fractional: the integer path refuses both rather than
+        # letting the pack change the value silently. The golden still masks, which stays
+        # unreachable through the device because the op rejects the call before a golden runs.
+        (1 << 32) + 512,
+        -2.5,
+    ),
+)
+def test_uint32_scalar_the_integer_path_cannot_represent_is_rejected(device, op_name, scalar, expect_error):
+    """A UINT32 operand takes a scalar only where packing it as an integer is exact. Only add and
+    subtract refuse: multiply promotes the operand to float32 and keeps the scalar. UINT16 wraps
+    all of these, so the guard is keyed to the 32-bit path rather than to unsignedness."""
+    torch_input = torch.tensor([[[[0, 1, 2, 3, 100, 500, 4464, 65535]]]], dtype=torch.int64).repeat(1, 1, 32, 4)
+    input_tensor = ttnn.from_torch(
+        torch_input.to(torch.uint32), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    with expect_error(RuntimeError, "cannot represent the scalar"):
+        getattr(ttnn, op_name)(scalar, input_tensor)
+
+
+@pytest.mark.parametrize(
+    "op_name, rounding_mode", (("div", "trunc"), ("div", "floor"), ("div", None), ("multiply", None))
+)
+@pytest.mark.parametrize("scalar_first", (True, False))
+def test_zero_dim_float_tensor_promotes_like_a_python_float(device, op_name, rounding_mode, scalar_first):
+    """_has_float_scalar reads a 0-d tensor's dtype to decide whether to promote its INT32 partner,
+    which is only correct if the device promotes for a 0-d operand the same way it does for a
+    Python float. On device that is a tensor-tensor call, so nothing about the scalar overloads
+    guarantees it. Both ops sharing the helper are covered: promotion moves the operand to float32
+    and so decides which branch each of them takes afterwards."""
+    torch.manual_seed(0)
+    torch_input = torch.randint(1, 100, (1, 1, 320, 384), dtype=torch.int32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    torch_scalar = torch.tensor(2.5, dtype=torch.float32)
+    scalar_tensor = ttnn.from_torch(torch_scalar, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    golden_args = (torch_scalar, torch_input) if scalar_first else (torch_input, torch_scalar)
+    device_args = (scalar_tensor, input_tensor) if scalar_first else (input_tensor, scalar_tensor)
+    # multiply has no rounding_mode, and promotion is what decides its output dtype just the same.
+    kwargs = {"rounding_mode": rounding_mode} if op_name == "div" else {}
+    op = getattr(ttnn, op_name)
+    expected = ttnn.get_golden_function(op)(*golden_args, **kwargs)
+    output = ttnn.to_torch(op(*device_args, **kwargs))
+
+    assert expected.dtype == output.dtype, f"golden {expected.dtype} != device {output.dtype}"
+    assert expected.dtype == torch.float32, f"promotion did not happen: {expected.dtype}"
+    if rounding_mode is None:
+        assert_with_ulp(expected_result=expected, actual_result=output, ulp_threshold=_SCALAR_FIRST_ULP_THRESHOLD)
+    else:
+        assert_equal(expected, output)
+
+
+def test_tensor_operand_keeps_a_dtype_when_neither_operand_is_shaped():
+    """A 0-d tensor against a Python number leaves no shaped operand, and the dtype-dependent
+    branches still dereference whichever one is returned."""
+    golden = ttnn.get_golden_function(ttnn.add)
+
+    assert_equal(golden(torch.tensor(3, dtype=torch.int32), 2), torch.tensor(5, dtype=torch.int32))
+
+
+@pytest.mark.parametrize("op_name", ("add", "subtract", "multiply"))
+@pytest.mark.parametrize(
+    "ttnn_dtype, torch_dtype, bit_width, scalar",
+    (
+        (ttnn.uint16, torch.uint16, 16, (1 << 16) + 4464),
+        # A negative scalar reaches the operand width through a float-to-unsigned conversion whose
+        # truncated value is out of range, which C++ leaves undefined rather than defining as
+        # modulo. These are measured to wrap, so the golden matches what the hardware does; it is
+        # not a guarantee the standard makes.
+        (ttnn.uint16, torch.uint16, 16, -2.5),
+        (ttnn.uint16, torch.uint16, 16, -2),
+        (ttnn.uint32, torch.uint32, 32, -2),
+    ),
+)
+def test_scalar_tensor_unsigned_out_of_range_scalar(device, op_name, ttnn_dtype, torch_dtype, bit_width, scalar):
+    """A scalar wider than the operand reaches the kernel through an out-of-range cast in
+    pack_scalar_runtime_arg, so the width it lands on is the device's to define, not the golden's.
+    The wraparound the golden models is only a reference if it agrees here."""
+    torch_input = torch.tensor([[[[0, 1, 2, 3, 100, 500, 4464, 65535]]]], dtype=torch.int64).repeat(1, 1, 32, 4)
+    torch_input = (torch_input & ((1 << bit_width) - 1)).to(torch_dtype)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    expected = ttnn.get_golden_function(getattr(ttnn, op_name))(scalar, torch_input)
+    output = ttnn.to_torch(getattr(ttnn, op_name)(scalar, input_tensor)).to(torch_dtype)
+
+    assert_equal(expected, output)

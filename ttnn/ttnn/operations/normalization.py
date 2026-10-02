@@ -7,8 +7,6 @@ from typing import Optional
 
 import ttnn
 
-import math
-
 from ttnn._ttnn.operations.normalization import (
     create_group_norm_input_mask,
     create_group_norm_input_negative_mask,
@@ -124,6 +122,148 @@ def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, *
 
 ttnn.attach_golden_function(ttnn.rms_norm, golden_function=_golden_function)
 
+
+def _golden_function_batch_norm(
+    input,
+    *,
+    running_mean=None,
+    running_var=None,
+    training=False,
+    eps=1e-05,
+    momentum=0.1,
+    weight=None,
+    bias=None,
+    **_,
+):
+    import torch
+
+    def to_channel_vector(parameter):
+        return parameter.reshape(-1) if parameter is not None else None
+
+    running_mean = to_channel_vector(running_mean)
+    running_var = to_channel_vector(running_var)
+    weight = to_channel_vector(weight)
+    bias = to_channel_vector(bias)
+
+    # TTNN stores channel parameters as [1,C,1,1], while PyTorch requires [C].
+    # PyTorch also requires running statistics as a pair, so supply a neutral missing companion.
+    channels = input.shape[1]
+    if running_mean is None and running_var is not None:
+        running_mean = torch.zeros(channels, dtype=input.dtype, device=input.device)
+    elif running_var is None and running_mean is not None:
+        running_var = torch.ones(channels, dtype=input.dtype, device=input.device)
+    return torch.nn.functional.batch_norm(
+        input,
+        running_mean,
+        running_var,
+        weight,
+        bias,
+        training,
+        momentum,
+        eps,
+    )
+
+
+ttnn.attach_golden_function(ttnn.batch_norm, golden_function=_golden_function_batch_norm)
+
+
+# All-gather stats tensors are laid out in tile-wide blocks: sum(x^2) rides column 0 of each
+# block, and sum(x) column _TILE_WIDTH when present.
+_TILE_WIDTH = 32
+
+
+def _apply_affine(normalized, weight, bias):
+    """Apply per-channel scale/shift, slicing padded parameters to the hidden width."""
+    if weight is not None:
+        weight = weight.reshape(-1)[: normalized.shape[-1]]
+        normalized = normalized * weight.reshape(*([1] * (normalized.ndim - 1)), normalized.shape[-1])
+    if bias is not None:
+        bias = bias.reshape(-1)[: normalized.shape[-1]]
+        normalized = normalized + bias.reshape(*([1] * (normalized.ndim - 1)), normalized.shape[-1])
+    return normalized
+
+
+def _golden_pre_all_gather_stats(input_tensor, residual_input_tensor, *, include_sum):
+    """Pack partial statistics into tile-wide blocks; only the stat columns are well-defined."""
+    import torch
+
+    if residual_input_tensor is not None:
+        input_tensor = input_tensor + residual_input_tensor
+    *batch_dims, _ = input_tensor.shape
+    stats_width = 2 * _TILE_WIDTH if include_sum else _TILE_WIDTH
+    stats = torch.zeros((*batch_dims, stats_width), dtype=torch.float32)
+    mask = torch.zeros((*batch_dims, stats_width), dtype=torch.bool)
+    stats[..., 0] = (input_tensor**2).sum(dim=-1)
+    mask[..., 0] = True
+    if include_sum:
+        stats[..., _TILE_WIDTH] = input_tensor.sum(dim=-1)
+        mask[..., _TILE_WIDTH] = True
+    ttnn.decorators.set_golden_comparison_config(stats, method="allclose", scope="all", rtol=1e-2, atol=1e-2, mask=mask)
+    return stats
+
+
+def _golden_function_layer_norm_pre_all_gather(input_tensor, *, residual_input_tensor=None, **_):
+    # The stats tensor is two tiles wide: sum(x^2) rides the leftmost column of tile 0, sum(x) tile 1.
+    return _golden_pre_all_gather_stats(input_tensor, residual_input_tensor, include_sum=True)
+
+
+ttnn.attach_golden_function(ttnn.layer_norm_pre_all_gather, golden_function=_golden_function_layer_norm_pre_all_gather)
+
+
+def _golden_function_layer_norm_post_all_gather(input_tensor, stats, *, epsilon=1e-12, weight=None, bias=None, **_):
+    import torch
+
+    # Tile column 0 of each device block is sum(x^2), and column _TILE_WIDTH is sum(x).
+    num_devices = stats.shape[-1] // (2 * _TILE_WIDTH)
+    global_width = input_tensor.shape[-1] * num_devices
+    ex2 = sum(stats[..., d * 2 * _TILE_WIDTH] for d in range(num_devices)) / global_width
+    ex = sum(stats[..., d * 2 * _TILE_WIDTH + _TILE_WIDTH] for d in range(num_devices)) / global_width
+    var = ex2 - ex**2
+    normalized = (input_tensor - ex.unsqueeze(-1)) * torch.rsqrt(var.unsqueeze(-1) + epsilon)
+    return _apply_affine(normalized, weight, bias)
+
+
+ttnn.attach_golden_function(
+    ttnn.layer_norm_post_all_gather, golden_function=_golden_function_layer_norm_post_all_gather
+)
+
+
+def _golden_function_rms_norm_pre_all_gather(input_tensor, *, residual_input_tensor=None, **_):
+    # RMS norm only needs sum(x^2); the stats tensor is a single tile wide with sum(x^2) at column 0.
+    return _golden_pre_all_gather_stats(input_tensor, residual_input_tensor, include_sum=False)
+
+
+ttnn.attach_golden_function(ttnn.rms_norm_pre_all_gather, golden_function=_golden_function_rms_norm_pre_all_gather)
+
+
+def _golden_function_rms_norm_post_all_gather(input_tensor, stats, *, epsilon=1e-12, weight=None, bias=None, **_):
+    import torch
+
+    # Stats holds one per-device partial sum(x^2) in column 0 of each tile-wide block.
+    num_devices = stats.shape[-1] // _TILE_WIDTH
+    global_width = input_tensor.shape[-1] * num_devices
+    ex2 = sum(stats[..., d * _TILE_WIDTH] for d in range(num_devices)) / global_width
+    normalized = input_tensor * torch.rsqrt(ex2.unsqueeze(-1) + epsilon)
+    return _apply_affine(normalized, weight, bias)
+
+
+ttnn.attach_golden_function(ttnn.rms_norm_post_all_gather, golden_function=_golden_function_rms_norm_post_all_gather)
+
+
+def _golden_function_fused_rms_minimal(input_tensor, *_, residual_input_tensor=None, epsilon=1e-12, weight=None, **__):
+    import torch
+
+    # Fused distributed RMS norm: optional residual add, then RMS norm over the hidden dim with gamma scaling.
+    if residual_input_tensor is not None:
+        input_tensor = input_tensor + residual_input_tensor
+    variance = input_tensor.to(torch.float32).pow(2).mean(-1, keepdim=True)
+    normalized = input_tensor * torch.rsqrt(variance + epsilon)
+    return _apply_affine(normalized, weight, None)
+
+
+ttnn.attach_golden_function(ttnn.fused_rms_minimal, golden_function=_golden_function_fused_rms_minimal)
+
+
 LayerNormProgramConfig = ttnn._ttnn.operations.normalization.LayerNormProgramConfig
 LayerNormDefaultProgramConfig = ttnn._ttnn.operations.normalization.LayerNormDefaultProgramConfig
 LayerNormShardedMultiCoreProgramConfig = ttnn._ttnn.operations.normalization.LayerNormShardedMultiCoreProgramConfig
@@ -147,7 +287,9 @@ def create_layer_norm_reciprocals(device: ttnn.Device, core_range_set: ttnn.Core
     the per-core width in elements. The tensor is replicated for each core so that
     when sharded to L1 memory, each core has a complete copy.
 
-    This tensor is required when using the Welford algorithm (use_welford=True).
+    Required by LayerNorm backends that consume a reciprocal lookup table,
+    including the streaming interleaved Welford kernel. The compact interleaved
+    two-pass kernel uses compile-time reciprocals and does not require this tensor.
 
     Args:
         device: The device to create the tensor on.
@@ -357,48 +499,6 @@ def find_max_tile_span(W, group_size, tile_width):
         max_tile_span = max(max_tile_span, current_tile_span)
         current_position = group_end
     return max_tile_span
-
-
-def create_group_norm_reciprocals_impl(N, C, H, W, num_groups, core_grid):
-    """
-    Create reciprocals tensor for group norm with welford algorithm.
-    Generates reciprocal values 1/1, 1/2, 1/3, ..., 1/N.
-    The number of elements is based on the tensor size and the number of groups.
-    The tensor is replicated for each core so that when sharded to L1 memory, each core has a complete copy.
-
-    Args:
-        N: Batch size
-        C: Number of channels
-        H: Height
-        W: Width
-        num_groups: Number of groups
-        core_grid: Core grid
-
-    Returns:
-        Row major tensor with reciprocal values
-    """
-    import torch
-
-    num_virtual_cols = dram_group_norm_virtual_columns(core_grid, C, num_groups)
-    num_virtual_rows = (core_grid.x // num_virtual_cols) * core_grid.y
-
-    # Calculate batch distribution
-    num_virtual_rows_per_group = 1 if N >= num_virtual_rows else num_virtual_rows // N
-    num_channels_per_group = C // num_groups
-    num_height_tiles_per_group = math.ceil(H * W / ttnn.TILE_SIZE)
-
-    num_reciprocals_per_group = num_channels_per_group * num_height_tiles_per_group
-    num_reciprocals_per_core = num_reciprocals_per_group // num_virtual_rows_per_group
-
-    # Create reciprocal values: 1/1, 1/2, 1/3, ..., 1/max_n
-    reciprocals_tensor = 1.0 / torch.arange(1, num_reciprocals_per_core + 1, dtype=torch.float32)
-
-    # Repeat the reciprocals tensor for each core so they all have identical copies
-    return reciprocals_tensor.repeat(core_grid.x * core_grid.y, 1)
-
-
-def create_group_norm_reciprocals(N, C, H, W, num_groups, core_grid):
-    return create_group_norm_reciprocals_impl(N, C, H, W, num_groups, core_grid)
 
 
 def get_group_norm_cores_across_channel(memory_layout, core_grid, shard_orientation=None):

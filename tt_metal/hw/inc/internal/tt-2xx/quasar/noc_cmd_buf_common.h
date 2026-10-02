@@ -413,7 +413,17 @@ inline __attribute__((always_inline)) void init_at_cmd_buf(uint64_t my_xy, uint3
     __builtin_riscv_ttrocc_scmdbuf_reset();
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, CMD_BUF_MISC_ATOMIC);
-    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, atomic_ret_val);
+#if defined(NOC_ATT_ENABLED)
+    // Under ATT every source address is a complete operand: the default atomic
+    // return slot is this initiator's local-window operand. A raw local address
+    // matches no window, so the response write would fault and the atomic's
+    // ack would never arrive (noc_async_atomic_barrier hangs).
+    const uint64_t atomic_ret_operand = NOC_ATT_LOCAL_WINDOW_BASE | static_cast<uint64_t>(atomic_ret_val);
+#else
+    const uint64_t atomic_ret_operand = atomic_ret_val;
+#endif
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, atomic_ret_operand);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_COORD_REG_OFFSET / 8, my_xy);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, NOC_OVERLAY_WR_RESP_VC);

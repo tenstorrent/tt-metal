@@ -15,6 +15,7 @@ struct ArgmaxParams {
     bool keepdim{};
     std::optional<CoreRangeSet> sub_core_grids;
     tt::tt_metal::MemoryConfig output_mem_config;
+    std::optional<bool> enable_secondary_dm;
 };
 
 struct ArgmaxInputs {

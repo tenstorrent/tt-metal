@@ -960,7 +960,7 @@ void kernel_main() {
             num_activated_tokens_per_expert[e] = per_expert_counts[e];
         }
 
-        // Push per_expert_total_tokens_cb and total_chunks_cb so writer can read them
+        // Push per_expert_total_tokens_cb (read by the writer) and total_chunks_cb (read by the tilize compute kernel)
         // (drain core already pushed, non-drain cores need to mark as available)
         cb_per_expert_total_tokens.reserve_back(1);
         cb_per_expert_total_tokens.push_back(1);

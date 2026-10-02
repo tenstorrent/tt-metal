@@ -39,7 +39,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMMetalV2ProgramFactory::cre
     const auto& sub_core_grid = operation_attributes.sub_core_grid;
 
     const uint32_t data_size = input.element_size();
-    IDevice* device = input.device();
+    MeshDevice* device = input.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     CoreRange default_cores({0, 0}, {compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1});
     CoreRangeSet total_cores = sub_core_grid.has_value() ? sub_core_grid.value() : CoreRangeSet(default_cores);
@@ -110,8 +110,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMMetalV2ProgramFactory::cre
                   "nop"}},
         // Repages with sub-tile writes (dest_page can be < source_page; tt_memmove chunks) -> per
         // ~/implicit_sync.md rule (A), revert to explicit credits.
-        .hw_config =
-            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     spec.kernels = {reader};

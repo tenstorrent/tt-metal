@@ -41,8 +41,10 @@
 namespace tt::tt_metal::distributed {
 namespace {
 
+using ::testing::HasSubstr;
 using ::testing::IsEmpty;
 using ::testing::SizeIs;
+using ::testing::ThrowsMessage;
 
 // Builds the expected bank id -> worker core map from a per-bank list (indexed by DRAM bank id).
 std::unordered_map<uint32_t, CoreCoord> to_bank_map(const std::vector<CoreCoord>& per_bank) {
@@ -59,6 +61,29 @@ TEST(MeshDeviceInitTest, Init1x1Mesh) {
     EXPECT_NO_THROW({
         auto mesh = tt::tt_metal::distributed::MeshDevice::create(
             config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, tt::tt_metal::DispatchCoreType::WORKER);
+        mesh->close();
+    });
+}
+
+// A 2x2 shape over one device makes MeshDeviceView throw; that must surface as an exception rather
+// than a segfault in ~MeshDevice, and must leave the devices reusable. Issue #51236.
+TEST(MeshDeviceInitTest, CreateWithMismatchedShapeThrowsWithoutCrashing) {
+    MeshDeviceConfig mismatched_config(MeshShape(2, 2), /*offset=*/std::nullopt, /*physical_device_ids=*/{0});
+
+    EXPECT_THAT(
+        [&] {
+            MeshDevice::create(
+                mismatched_config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
+        },
+        ThrowsMessage<std::runtime_error>(HasSubstr("Shape and values size mismatch")));
+
+    EXPECT_NO_THROW({
+        auto mesh = MeshDevice::create(
+            MeshDeviceConfig(MeshShape(1, 1)),
+            DEFAULT_L1_SMALL_SIZE,
+            DEFAULT_TRACE_REGION_SIZE,
+            1,
+            DispatchCoreType::WORKER);
         mesh->close();
     });
 }
@@ -250,6 +275,27 @@ TEST_F(MeshDevice2x4Test, GetOptimalDramBankToLogicalWorkerAssignmentPerDevice) 
             EXPECT_EQ(per_device, to_bank_map(device->get_optimal_dram_bank_to_logical_worker_assignment(noc)));
         }
     }
+}
+
+TEST_F(MeshDevice2x4Test, WorkerCoreFromLogicalCoreUsesSelectedDevice) {
+    const CoreCoord logical_core{0, 0};
+    auto& metal_context = tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id());
+    const auto& control_plane = metal_context.get_control_plane();
+
+    for (const auto& mesh_coordinate : MeshCoordinateRange(mesh_device_->shape())) {
+        // Derive the expected coordinate from the chip's SoC descriptor rather than from the device
+        // object the implementation itself uses, so the two cannot agree by construction.
+        const auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(
+            mesh_device_->impl().get_fabric_node_id(mesh_coordinate));
+        EXPECT_EQ(
+            tt::tt_metal::experimental::Device::worker_core_from_logical_core(
+                *mesh_device_, mesh_coordinate, logical_core),
+            metal_context.get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                physical_chip_id, logical_core, CoreType::WORKER));
+    }
+
+    EXPECT_ANY_THROW(tt::tt_metal::experimental::Device::worker_core_from_logical_core(
+        *mesh_device_, MeshCoordinate{mesh_device_->shape()[0], 0}, logical_core));
 }
 
 TEST(GetWorkerNocHopDistanceAPI, UnitMeshes) {

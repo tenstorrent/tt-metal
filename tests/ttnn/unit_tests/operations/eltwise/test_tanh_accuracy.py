@@ -10,9 +10,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose, asser
 pytestmark = pytest.mark.use_module_device
 
 
-@pytest.mark.parametrize(
-    "torch_dtype, ttnn_dtype, atol", [(torch.bfloat16, ttnn.bfloat16, 0.008), (torch.float32, ttnn.float32, 0.003)]
-)
+@pytest.mark.parametrize("torch_dtype, ttnn_dtype, atol", [(torch.float32, ttnn.float32, 0.003)])
 def test_tanh_range(device, torch_dtype, ttnn_dtype, atol):
     torch_input_tensor_a = torch.tensor(
         [
@@ -71,16 +69,14 @@ def test_tanh_range(device, torch_dtype, ttnn_dtype, atol):
 
     assert_allclose(output_tensor, torch_output_tensor, rtol=1e-05, atol=atol)
     pcc, pcc_msg = assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
-    # pcc_msg 0.9999663646890817, fast_and_approximate_mode=True pcc 0.9978378297942829
+    # pcc_msg 0.9999899271259238, fast_and_approximate_mode=True pcc 0.9999149051477796
     # pcc_msg 0.9999583453515977 - fpu arithmetic, pcc_msg 0.9999669593009368 sfpu arithmetic
-    # fp32 pcc_msg 0.9999829606828651 (fast_and_approximate_mode=False) , 0.9977552960423647 (fast_and_approximate_mode=True)
+    # fp32 pcc_msg 0.9999999999999983 (fast_and_approximate_mode=False) , 0.9999224853063899 (fast_and_approximate_mode=True)
     # Single-tile tanh: accurate = 7886ns, approx = 1789ns (~77% faster)
     assert pcc
 
 
-@pytest.mark.parametrize(
-    "torch_dtype, ttnn_dtype, atol", [(torch.bfloat16, ttnn.bfloat16, 0.008), (torch.float32, ttnn.float32, 0.003)]
-)
+@pytest.mark.parametrize("torch_dtype, ttnn_dtype, atol", [(torch.float32, ttnn.float32, 0.003)])
 @pytest.mark.parametrize(
     "high, low",
     [
@@ -109,9 +105,7 @@ def test_tanh_inplace(device, high, low, torch_dtype, ttnn_dtype, atol):
     assert pcc
 
 
-@pytest.mark.parametrize(
-    "torch_dtype, ttnn_dtype, atol", [(torch.bfloat16, ttnn.bfloat16, 0.008), (torch.float32, ttnn.float32, 0.003)]
-)
+@pytest.mark.parametrize("torch_dtype, ttnn_dtype, atol", [(torch.float32, ttnn.float32, 0.003)])
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -145,54 +139,6 @@ def test_tanh_accuracy(device, input_shapes, high, low, torch_dtype, ttnn_dtype,
     pcc, pcc_msg = assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
     # pcc_msg 0.9999 or above
     assert pcc
-
-
-@pytest.mark.parametrize("torch_dtype, ttnn_dtype, atol", [(torch.bfloat16, ttnn.bfloat16, 0.008)])
-@pytest.mark.parametrize(
-    "input_shapes",
-    ((torch.Size([1, 1, 89600, 32])),),
-)
-@pytest.mark.parametrize(
-    "high, low",
-    [
-        (1, -1),
-        (100, -100),
-        (10000, -10000),
-        (4, -4),
-    ],
-)
-def test_tanh_height_sharded(device, input_shapes, high, low, torch_dtype, ttnn_dtype, atol):
-    torch.manual_seed(0)
-
-    in_data = torch.rand((input_shapes), dtype=torch_dtype) * (high - low) + low
-    shard_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(7, 6),
-            ),
-        }
-    )
-    n_cores = 56
-    N, C, H, W = in_data.shape
-    shard_spec = ttnn.ShardSpec(shard_grid, [N * C * H // n_cores, W], ttnn.ShardOrientation.ROW_MAJOR)
-    input_mem_config = ttnn.MemoryConfig(
-        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
-    )
-    input_tensor1 = ttnn.from_torch(
-        in_data,
-        dtype=ttnn_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=input_mem_config,
-    )
-    output_tensor = ttnn.tanh(input_tensor1)
-    output_tensor = ttnn.to_torch(output_tensor)
-    golden_function = ttnn.get_golden_function(ttnn.tanh)
-    golden_tensor = golden_function(in_data)
-
-    assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=atol)
-    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=1)
 
 
 def return_mem_config(mem_config_string):

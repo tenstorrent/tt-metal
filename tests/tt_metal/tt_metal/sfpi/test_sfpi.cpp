@@ -31,6 +31,7 @@ bool runTest(
     const CoreCoord& coord,
     const std::string& path,
     unsigned baseLen) {
+    const auto device_id = mesh_device->get_device_ids()[0];
     uint32_t args_addr = mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
     std::vector<uint32_t> compile_args{args_addr};
@@ -49,7 +50,7 @@ bool runTest(
 
     distributed::Finish(mesh_device->mesh_command_queue());
 
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(mesh_device->get_devices()[0]->id());
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
     auto noc_xy = mesh_device->worker_core_from_logical_core(coord);
     unsigned expected = 0;
     // If path ends in -[digits], extract the expected value
@@ -66,8 +67,8 @@ bool runTest(
         }
         expected |= 0x4000;
     }
-    std::vector<uint32_t> args = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        mesh_device->get_devices()[0]->id(), noc_xy, args_addr, sizeof(uint32_t));
+    std::vector<uint32_t> args =
+        tt::tt_metal::MetalContext::instance().get_cluster().read_core(device_id, noc_xy, args_addr, sizeof(uint32_t));
     unsigned result = args[0];
     bool pass = result == expected;
     if (pass) {

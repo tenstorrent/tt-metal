@@ -310,7 +310,7 @@ authoritative mapping before relying on it.
 | `weights-cache-mode` | Host source mounted at `/mnt/MLPerf/huggingface` | Used by SKUs |
 |---|---|---|
 | `cloud-mlperf` | `/mnt/MLPerf/huggingface` (shared NFS) | `bh_p150`, `bh_loudbox` |
-| `yyz4-mnt-models` | `/mnt/models/huggingface` (YYZ4 Exabox NFS mount) | `bh_quietbox_2`, `bh_quietbox_2_iommu` |
+| `yyz4-mnt-models` | `/mnt/models/huggingface` (YYZ4 Exabox NFS mount) | `bh_quietbox_2` |
 | `local-disk` | `/localdev/blackhole_demos/huggingface_data` (per-runner) | `bh_p150_perf` |
 | `lfc` | `/localdev/blackhole_demos/huggingface_data` (per-runner, `:rw`; not pre-populated — see below) | `bh_p300`, `bh_p300_viommu`, `bh_p150b_civ2` |
 | *(field absent)* | `/mnt/MLPerf` — the **whole tree**, not just `huggingface` | all WH SKUs, BH Galaxy, `bh_p100*`, `bh_sc*`, and every other SKU with no `weights-cache-mode` |
