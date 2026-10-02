@@ -13,7 +13,7 @@ set -euo pipefail
 
 GROUP="${1:?usage: run_llk_perf_wormhole.sh <group> <n_groups>}"
 N_GROUPS="${2:?usage: run_llk_perf_wormhole.sh <group> <n_groups>}"
-SPEED_OF_LIGHT="${SPEED_OF_LIGHT:-true}"
+SPEED_OF_LIGHT="${SPEED_OF_LIGHT:-false}"
 export TT_LLK_DISABLE_ASSERTS="${TT_LLK_DISABLE_ASSERTS:-1}"
 # Experiment (bistability repro): PACK_ISOLATE only; dispatch passes it empty.
 export LLK_PERF_RUN_TYPES="${LLK_PERF_RUN_TYPES:-PACK_ISOLATE}"
@@ -33,16 +33,20 @@ esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/python_tests"
+if [ "${GROUP}" != "1" ]; then
+  echo "experiment: only group 1 measures; this group exits."
+  exit 0
+fi
 mkdir -p perf_data
 
 PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
 PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
 
-pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-producer -n 10 -m "perf and not accuracy" --timeout=60 \
-  --splits "$N_GROUPS" --group "$GROUP" \
+pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-producer -n 10 -m "perf and not accuracy" -k "test_perf_math_matmul" --timeout=60 \
+  --splits 1 --group 1 \
   --junitxml="pytest-report-wormhole-${GROUP}-compile.xml" .
-pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-consumer --dist loadgroup -n 15 -x -m "perf and not accuracy" --timeout=60 \
-  --splits "$N_GROUPS" --group "$GROUP" \
+pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-consumer --dist load -n 15 -x -m "perf and not accuracy" -k "test_perf_math_matmul" --timeout=60 \
+  --splits 1 --group 1 \
   --junitxml="pytest-report-wormhole-${GROUP}-run.xml" .
 # Experiment (bistability repro): keep build.h and the pack run_kernel disassembly of each variant.
 DIS="$SCRIPT_DIR/../perf_data/runs/disasm-${GROUP}"; mkdir -p "$DIS"
