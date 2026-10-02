@@ -173,9 +173,10 @@ def test_a_multi_line_fix_stays_nested_under_its_merged_site(rundir):
     )
     assert run(os.path.join(ENGINE, "consolidate.py"), "--run", rundir)[0] == 0
     md = open(rundir / "OPEN.md").read()
-    # every line of the merged site's fix sits under its "- fix:" item, never back at the top level of the list
+    # every line of the merged site's fix sits under its "- fix:" item, never back at the top level of the list, and
+    # the line after its steps is set off by a blank line, or Markdown folds it into the last step
     assert (
-        "  - fix: Reject it.\n    - first step\n    - second step\n    Test: run it\n"
+        "  - fix: Reject it.\n    - first step\n    - second step\n\n    Test: run it\n"
         in md
     ), md
 

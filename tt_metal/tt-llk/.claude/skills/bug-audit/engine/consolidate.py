@@ -18,6 +18,7 @@ Record outcomes with disposition.py, never in these files.
 import collections
 import datetime
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -226,9 +227,25 @@ def table(fh, fs):
         )
 
 
+LIST_LINE = re.compile(r"^\s*([-*+]|\d+[.)])\s")
+
+
 def nest(text):
-    """A nested list item's text: its later lines indented, so a multi-line fix stays under its item."""
-    return str(text or "").strip().replace("\n", "\n    ")
+    """A nested list item's text: its later lines indented, so a multi-line fix stays under its item. An unindented
+    line after a list in the text gets a blank line before it, or Markdown folds it into that list's last bullet.
+    """
+    out, in_list = [], False
+    for ln in str(text or "").strip().split("\n"):
+        if LIST_LINE.match(ln):
+            in_list = True
+        elif not ln.strip():
+            in_list = False
+        elif in_list and not ln[:1].isspace():
+            out.append("")
+            in_list = False
+        out.append(ln)
+    first, *rest = out
+    return "\n".join([first] + [("    " + ln) if ln else "" for ln in rest])
 
 
 def detail(fh, fs):
