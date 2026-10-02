@@ -5,9 +5,6 @@ import pytest
 import torch
 from helpers.constraints import get_valid_math_fidelities
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.golden_generators import (
-    EltwiseBinaryGolden,
-    get_golden_generator,
 from helpers.golden_generator.heavyweight.operations.quasar_operations import (
     QuasarEltwiseBinaryGolden,
 )
@@ -188,7 +185,7 @@ def test_eltwise_binary(
         dest_acc=(dest_acc == DestAccumulation.Yes),
         num_faces=_TILE_SHAPE.total_num_faces(),
         face_r_dim=_TILE_SHAPE.face_r_dim,
-        num_tiles_per_accumulation=num_tiles_per_accumulation,
+        num_tiles_per_output=num_tiles_per_accumulation,
     )
 
     if is_perf and perf_report is None:

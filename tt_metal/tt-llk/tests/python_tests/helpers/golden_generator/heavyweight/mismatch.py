@@ -18,28 +18,35 @@ So this adds a step-ranked table, the golden's pre-pack Dest beside it, and the
 chain that produced it. Use it alongside ``passed_test``, not instead of it.
 """
 
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Tuple
 
 import torch
-from helpers.utils import calculate_pcc
+from helpers.format_config import DataFormat
+from helpers.utils import _MXFP_COMPARE_PARAMS, calculate_pcc, mxfp_local_step
 
 from .operations.chain import Chain, StageRecord
 
 
-def local_step(magnitude: torch.Tensor, mantissa_bits: int) -> torch.Tensor:
-    """The MX-float lattice step at each element's own magnitude.
+def lattice_step(
+    magnitude: torch.Tensor, output_format: DataFormat
+) -> Optional[Tuple[torch.Tensor, int]]:
+    """``(step, max_steps)`` for an MX-float output, or ``None`` if unmodelled.
 
-    Mirrors ``_mxfp_block_aware_compare``: an MX-float element carries its own
-    exponent above the block scale, so the spacing between representable values
-    depends on the value. Zero and negatives fall back to a step of 1, which
-    only affects ranking.
+    Delegates to :func:`helpers.utils.mxfp_local_step`, the same calculation
+    ``_mxfp_block_aware_compare`` uses to decide pass/fail, so a datum this
+    report calls a failure is one the comparator rejects. Computing the step
+    here independently went wrong in exactly the way that invites: the
+    normal-value formula alone reports the smallest E4M3 subnormal as eight
+    steps from zero, where the comparator has them adjacent.
     """
-    safe = magnitude > 0
-    step = torch.ones_like(magnitude)
-    step[safe] = torch.pow(
-        2.0, torch.floor(torch.log2(magnitude[safe])) - mantissa_bits
+    params = _MXFP_COMPARE_PARAMS.get(output_format)
+    if params is None:
+        return None
+    mantissa_bits, max_steps, element_max_normal, element_min_subnormal = params
+    step = mxfp_local_step(
+        magnitude, mantissa_bits, element_max_normal, element_min_subnormal
     )
-    return step
+    return step, max_steps
 
 
 def describe_mismatch(
@@ -47,20 +54,19 @@ def describe_mismatch(
     actual: torch.Tensor,
     *,
     context: str = "",
-    mantissa_bits: int = 0,
+    output_format: Optional[DataFormat] = None,
     datums_per_tile: int = 1024,
     chain: Optional[Chain] = None,
     trace: Optional[Sequence[StageRecord]] = None,
     dest: Optional[torch.Tensor] = None,
     worst: int = 8,
-    max_steps: int = 2,
 ) -> str:
     """Rank a golden-vs-device disagreement by lattice steps.
 
-    `mantissa_bits` is the MX-float element width (``MXFP_MANTISSA_BITS``); 0
-    means no lattice model, and then the ranking falls back to absolute error,
-    the steps column is omitted and the tolerance is not shown. `dest` is the
-    golden's pre-pack Dest, when the caller collected it.
+    `output_format` selects the lattice the result landed on; a format with no
+    MX-float model falls back to ranking by absolute error, omits the steps
+    column and does not claim a tolerance. `dest` is the golden's pre-pack
+    Dest, when the caller collected it.
     """
     g = golden.flatten().float()
     a = actual.flatten().float()
@@ -68,11 +74,16 @@ def describe_mismatch(
         return f"GOLDEN MISMATCH {context}\n  length {g.numel()} vs {a.numel()}"
 
     err = (g - a).abs()
-    steps = (
-        err / local_step(torch.maximum(g.abs(), a.abs()), mantissa_bits)
-        if mantissa_bits
-        else err
-    )
+    lattice = lattice_step(torch.maximum(g.abs(), a.abs()), output_format)
+    if lattice:
+        # A step of 0 means both values were 0, so the error is 0 too. Dividing
+        # would give NaN, and torch sorts NaN first descending -- which empties
+        # the table below, since it stops at the first zero-error datum.
+        steps = torch.zeros_like(err)
+        nonzero = lattice[0] > 0
+        steps[nonzero] = err[nonzero] / lattice[0][nonzero]
+    else:
+        steps = err
     differ = err > 0
 
     lines = [f"GOLDEN MISMATCH  {context}".rstrip()]
@@ -80,7 +91,8 @@ def describe_mismatch(
     # and is only listed because it is non-zero -- say which datums actually
     # break the test, or the top of the table reads as the cause when it is
     # noise.
-    if mantissa_bits:
+    if lattice:
+        max_steps = lattice[1]
         over = steps > max_steps
         lines.append(
             f"  {int(differ.sum())} / {g.numel()} datums differ, of which "
@@ -107,12 +119,12 @@ def describe_mismatch(
     # mean.
     lines.append(
         "  worst datums, by lattice steps:"
-        if mantissa_bits
+        if lattice
         else "  worst datums, by absolute error:"
     )
     lines.append(
         f"    {'index':>8} {'tile':>5} {'golden':>14} {'device':>14} {'abs err':>12}"
-        + (f" {'steps':>8}" if mantissa_bits else "")
+        + (f" {'steps':>8}" if lattice else "")
         + (f" {'golden dest':>14}" if d is not None else "")
     )
     for i in order.tolist():
@@ -121,7 +133,7 @@ def describe_mismatch(
         lines.append(
             f"    {i:>8} {i // datums_per_tile:>5} "
             f"{g[i].item():>14.7g} {a[i].item():>14.7g} {err[i].item():>12.6g}"
-            + (f" {steps[i].item():>8.2f}" if mantissa_bits else "")
+            + (f" {steps[i].item():>8.2f}" if lattice else "")
             + (f" {d[i].item():>14.7g}" if d is not None else "")
         )
 

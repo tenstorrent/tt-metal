@@ -12,11 +12,12 @@ from helpers.llk_params import (
     MathFidelity,
     MathOperation,
 )
+from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES
 
 from ..data_transfer_blocks.l1_codec import datums_per_tile
 from .chain import Chain, Registers, StageRecord
 from .eltwise import EltwiseBinaryGolden
-from .golden import OpConfig
+from .golden import OpConfig, check_pack_effects, check_source_layout
 
 
 class EltwiseBinaryReuseDestGolden(EltwiseBinaryGolden):
@@ -26,7 +27,7 @@ class EltwiseBinaryReuseDestGolden(EltwiseBinaryGolden):
     ``srcA op srcB``, and the feedback happens through the operand — one src
     register is loaded from Dest rather than from L1.
 
-        l1_to_dest(seed)
+        l1_to_srcA(seed), datacopy(A2D)             seeds Dest through SrcA
         repeat: dest_to_srcA, l1_to_srcB, math      (or the srcB mirror)
         dest_to_l1
 
@@ -54,7 +55,28 @@ class EltwiseBinaryReuseDestGolden(EltwiseBinaryGolden):
     SEED = "seed"
 
     def build_chain(self, cfg: OpConfig) -> Chain:
-        chain = Chain([self.l1_to_dest(cfg, source=self.SEED)])
+        # The seed reaches Dest through SrcA, not straight from L1. The kernel's
+        # phase 1 unpacks into SrcA with IS_32B_DEST_EN=false and moves it over
+        # with an A2D datacopy -- the same two steps DataCopyGolden runs -- so
+        # the seed sees src-register storage on the way. l1_to_dest would model
+        # the unpack_to_dest=true path, which this test does not configure.
+        #
+        # It only changes the numbers for an input wider than a src register's
+        # SRC_MANT_BITS mantissa: a Float32 seed is truncated to 10 bits at SrcA
+        # and then rounded into Dest, where l1_to_dest rounds once from the full
+        # 23. Every format the sweep currently runs (Float16, Float16_b, MxFp4)
+        # fits in a src datum exactly, so this is a no-op for them today.
+        chain = Chain(
+            [
+                self.l1_to_srcA(cfg, source=self.SEED),
+                self.src_to_dest(
+                    cfg,
+                    lambda regs: regs["srcA"],
+                    reads=("srcA",),
+                    name="datacopy(A2D)",
+                ),
+            ]
+        )
         for tile in range(cfg.tiles_per_output):
             if self.reuse_dest_type is EltwiseBinaryReuseDestType.DEST_TO_SRCA:
                 chain.then(
@@ -81,8 +103,8 @@ class EltwiseBinaryReuseDestGolden(EltwiseBinaryGolden):
         output_tiles_in_block: int = 1,
         dest_acc: bool = False,
         dest_format: Optional[DataFormat] = None,
-        num_faces: int = 4,
-        face_r_dim: int = 16,
+        num_faces: int = MAX_NUM_FACES,
+        face_r_dim: int = MAX_FACE_R_DIM,
         trace: Optional[List[StageRecord]] = None,
         dest_out: Optional[List[torch.Tensor]] = None,
         **pack_effects,
@@ -108,16 +130,18 @@ class EltwiseBinaryReuseDestGolden(EltwiseBinaryGolden):
         cfg = OpConfig(
             in_formats=list(in_formats),
             out_format=out_format,
-            dest_format=dest_format
-            or self.blocks.dest_format_for(in_formats[0], dest_acc),
+            dest_format=self.blocks.resolve_dest_format(
+                dest_format, in_formats[0], dest_acc
+            ),
             geometry=geometry,
             tiles_per_output=inner_dim,
-            **pack_effects,
+            **check_pack_effects(pack_effects),
         )
         chain = self.build_chain(cfg)
         self.last_chain = chain
 
         flat_a, flat_b = src_a.reshape(-1), src_b.reshape(-1)
+        check_source_layout(flat_a.numel() // per_tile, geometry)
         tile_count_out = flat_a.numel() // (per_tile * inner_dim)
         input_tiles_in_block = inner_dim * output_tiles_in_block
 

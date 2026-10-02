@@ -19,12 +19,13 @@ architecture and call it with tensors.
     result = golden.run(stimuli, in_format, out_format)
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Callable, Dict, List, Optional, Sequence, Union
 
 import torch
 from helpers.format_config import DataFormat
 from helpers.llk_params import PackerReluType, StochasticRounding
+from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES, MAX_TILE_ELEMENTS
 
 from ..data_transfer_blocks.data_transfer_blocks import DataTransferBlocks
 from ..data_transfer_blocks.l1_codec import datums_per_tile
@@ -53,6 +54,55 @@ class OpConfig:
     relu_threshold: float = 0.0
     edge_mask: Optional[PackEdgeMask] = None
     stoch_rnd: StochasticRounding = StochasticRounding.No
+
+
+def check_source_layout(tile_count: int, geometry: Dict) -> None:
+    """Refuse a stimuli layout this model cannot infer.
+
+    ``pack_to_l1`` lays tiles out back to back, ``datums_per_tile`` apart. The
+    harness has two writers and only one of them matches that:
+
+    * ``write_matrix_w_tile_dimensions`` (``use_dense_tile_dimensions=True``)
+      strides the source by the tile's own datum count -- same as here.
+    * ``write_matrix``, the default, always strides the source by
+      ``MAX_TILE_ELEMENTS`` regardless of tile size, writing only
+      ``num_faces * face_r_dim * 16`` of each stride.
+
+    They coincide only when a tile *is* ``MAX_TILE_ELEMENTS`` datums, or when
+    there is a single tile and the stride never applies. For a smaller tile over
+    several tiles the two read different source elements from tile 1 on, so the
+    golden would quietly compute on data the device never saw. Which writer a
+    test used is not visible from here, so raise rather than pick one.
+    """
+    per_tile = datums_per_tile(**geometry)
+    if tile_count > 1 and per_tile != MAX_TILE_ELEMENTS:
+        raise ValueError(
+            f"{tile_count} tiles of {per_tile} datums is ambiguous: this packs "
+            f"tiles {per_tile} apart, but StimuliConfig.write_matrix strides the "
+            f"source by {MAX_TILE_ELEMENTS} for any tile size, so the two agree "
+            f"only at {MAX_TILE_ELEMENTS} datums per tile or on a single tile. "
+            f"Use use_dense_tile_dimensions=True in the StimuliConfig, which "
+            f"strides by the tile's own size, or hand over real L1 buffers with "
+            f"run_l1."
+        )
+
+
+def check_pack_effects(pack_effects: Dict) -> Dict:
+    """Reject a keyword that would otherwise fail later, inside OpConfig.
+
+    ``run`` funnels its surplus keywords into :class:`OpConfig`, so a misspelled
+    argument surfaces as an OpConfig error naming a class the caller never
+    mentioned. Checking here names the caller's own options instead.
+    """
+    unknown = sorted(set(pack_effects) - {f.name for f in fields(OpConfig)})
+    if unknown:
+        raise TypeError(
+            f"run() got unexpected keyword argument(s) {unknown}. It takes "
+            f"dest_acc, dest_format, num_faces, face_r_dim, "
+            f"num_tiles_per_output, trace, and the pack effects relu_type, "
+            f"relu_threshold, edge_mask and stoch_rnd."
+        )
+    return pack_effects
 
 
 class Golden:
@@ -96,6 +146,52 @@ class Golden:
     # The data-transfer blocks, as chainable steps
     # ------------------------------------------------------------------
 
+    #: Src registers an unpack step can target, and the block method for each.
+    #: The register name is the whole difference between the three public
+    #: methods below, so they share one builder -- the format-slot argument
+    #: order had to be corrected in two separate copies of the Dest feedback
+    #: pair for exactly this reason.
+    def _l1_to_register(
+        self,
+        cfg: OpConfig,
+        register: str,
+        source: str,
+        into: str,
+        index: int,
+        src_format: Optional[DataFormat],
+    ) -> Step:
+        """One unpack step, L1 -> `register`."""
+        l1_format = cfg.in_formats[index]
+        unpack = getattr(self.blocks, f"l1_to_{register}")
+
+        def run(regs: Registers) -> None:
+            regs[into] = unpack(regs[source], l1_format, src_format, **cfg.geometry)
+
+        return Step(f"l1_to_{register}({source})", run, reads=(source,), writes=(into,))
+
+    def _dest_to_register(
+        self,
+        cfg: OpConfig,
+        register: str,
+        source: str,
+        into: str,
+        src_format: Optional[DataFormat],
+    ) -> Step:
+        """One Dest-feedback step, Dest -> `register`."""
+        fmt = src_format or self.blocks.src_format(cfg.in_formats[0])
+        convert = getattr(self.blocks, f"dest_to_{register}")
+
+        def run(regs: Registers) -> None:
+            # The conversion branches on the **Dest** format; the src format
+            # only decides whether a wide Dest gets its exponent rebiased. Both
+            # are needed, and they differ whenever dest_acc widens Dest or the
+            # input is Float32/Tf32.
+            regs[into] = convert(regs[source], cfg.dest_format, fmt)
+
+        return Step(
+            f"dest_to_{register}({source})", run, reads=(source,), writes=(into,)
+        )
+
     def l1_to_srcA(
         self,
         cfg: OpConfig,
@@ -109,14 +205,7 @@ class Golden:
         `src_format` overrides the storage format the unpacker lands it in;
         ``None`` lets the architecture choose.
         """
-        l1_format = cfg.in_formats[index]
-
-        def run(regs: Registers) -> None:
-            regs[into] = self.blocks.l1_to_srcA(
-                regs[source], l1_format, src_format, **cfg.geometry
-            )
-
-        return Step(f"l1_to_srcA({source})", run, reads=(source,), writes=(into,))
+        return self._l1_to_register(cfg, "srcA", source, into, index, src_format)
 
     def l1_to_srcB(
         self,
@@ -131,14 +220,7 @@ class Golden:
         `src_format` overrides the storage format the unpacker lands it in;
         ``None`` lets the architecture choose.
         """
-        l1_format = cfg.in_formats[index]
-
-        def run(regs: Registers) -> None:
-            regs[into] = self.blocks.l1_to_srcB(
-                regs[source], l1_format, src_format, **cfg.geometry
-            )
-
-        return Step(f"l1_to_srcB({source})", run, reads=(source,), writes=(into,))
+        return self._l1_to_register(cfg, "srcB", source, into, index, src_format)
 
     def l1_to_srcS(
         self,
@@ -153,19 +235,17 @@ class Golden:
         `src_format` overrides the storage format the unpacker lands it in;
         ``None`` lets the architecture choose.
         """
-        l1_format = cfg.in_formats[index]
-
-        def run(regs: Registers) -> None:
-            regs[into] = self.blocks.l1_to_srcS(
-                regs[source], l1_format, src_format, **cfg.geometry
-            )
-
-        return Step(f"l1_to_srcS({source})", run, reads=(source,), writes=(into,))
+        return self._l1_to_register(cfg, "srcS", source, into, index, src_format)
 
     def l1_to_dest(
         self, cfg: OpConfig, source: str = "in0", into: str = "dest", index: int = 0
     ) -> Step:
-        """Seed Dest straight from an L1 buffer, bypassing the src registers."""
+        """Seed Dest straight from an L1 buffer, bypassing the src registers.
+
+        Not shared with :meth:`_l1_to_register`: the third argument is the Dest
+        format, not a src format, which is the slot the two kept getting mixed
+        up in.
+        """
         l1_format = cfg.in_formats[index]
 
         def run(regs: Registers) -> None:
@@ -183,12 +263,7 @@ class Golden:
         src_format: Optional[DataFormat] = None,
     ) -> Step:
         """Feed Dest back into SrcA, re-quantized to src-register precision."""
-        fmt = src_format or self.blocks.src_format(cfg.in_formats[0])
-
-        def run(regs: Registers) -> None:
-            regs[into] = self.blocks.dest_to_srcA(regs[source], fmt)
-
-        return Step(f"dest_to_srcA({source})", run, reads=(source,), writes=(into,))
+        return self._dest_to_register(cfg, "srcA", source, into, src_format)
 
     def dest_to_srcB(
         self,
@@ -198,12 +273,7 @@ class Golden:
         src_format: Optional[DataFormat] = None,
     ) -> Step:
         """Feed Dest back into SrcB, re-quantized to src-register precision."""
-        fmt = src_format or self.blocks.src_format(cfg.in_formats[0])
-
-        def run(regs: Registers) -> None:
-            regs[into] = self.blocks.dest_to_srcB(regs[source], fmt)
-
-        return Step(f"dest_to_srcB({source})", run, reads=(source,), writes=(into,))
+        return self._dest_to_register(cfg, "srcB", source, into, src_format)
 
     def dest_to_l1(
         self, cfg: OpConfig, into: str = "out", source: str = "dest"
@@ -232,24 +302,42 @@ class Golden:
         reads: tuple = ("srcA",),
         into: str = "dest",
         accumulate: bool = False,
+        name: Optional[str] = None,
     ) -> Step:
         """The maths between the src registers and Dest.
 
         `fn` supplies the arithmetic, which is the operation's business; the
         block decides how the result lands in a Dest slot.
 
+        `name` labels the step in a trace. It defaults to the operation's name,
+        which is right for the step that *is* the operation; pass it when a
+        chain has a second src-to-Dest step that is something else, such as the
+        datacopy that seeds Dest in a reuse-dest chain.
+
         With `accumulate`, the result is added to what Dest already holds rather
         than replacing it, and each pass rounds to Dest precision — which is what
         lets a multi-pass op be written as a loop.
         """
 
-        def run(regs: Registers) -> None:
-            regs[into] = self.blocks.src_to_dest(
-                fn(regs), cfg.dest_format, regs.get(into) if accumulate else None
-            )
+        # Accumulating reads Dest as well as the src registers, so declare it:
+        # otherwise dry_run calls an accumulate-before-any-write chain sound.
+        declared_reads = tuple(reads)
+        if accumulate and into not in declared_reads:
+            declared_reads += (into,)
 
-        name = f"{self.op_name}+=" if accumulate else self.op_name
-        return Step(name, run, reads=reads, writes=(into,))
+        def run(regs: Registers) -> None:
+            # Subscript, not .get -- a missing Dest here means the chain put an
+            # accumulating step before anything wrote the slot, and silently
+            # accumulating onto nothing turns that into a plain replace with a
+            # plausible-looking result.
+            current = regs[into] if accumulate else None
+            regs[into] = self.blocks.src_to_dest(fn(regs), cfg.dest_format, current)
+
+        if name is None:
+            name = f"{self.op_name}+=" if accumulate else self.op_name
+        elif accumulate:
+            name = f"{name}+="
+        return Step(name, run, reads=declared_reads, writes=(into,))
 
     # ------------------------------------------------------------------
     # Running
@@ -263,8 +351,8 @@ class Golden:
         *,
         dest_acc: bool = False,
         dest_format: Optional[DataFormat] = None,
-        num_faces: int = 4,
-        face_r_dim: int = 16,
+        num_faces: int = MAX_NUM_FACES,
+        face_r_dim: int = MAX_FACE_R_DIM,
         num_tiles_per_output: int = 1,
         trace: Optional[List[StageRecord]] = None,
         **pack_effects,
@@ -286,22 +374,20 @@ class Golden:
         cfg = OpConfig(
             in_formats=list(in_formats),
             out_format=out_format,
-            dest_format=dest_format
-            or self.blocks.dest_format_for(in_formats[0], dest_acc),
+            dest_format=self.blocks.resolve_dest_format(
+                dest_format, in_formats[0], dest_acc
+            ),
             geometry=geometry,
             tiles_per_output=num_tiles_per_output,
-            **pack_effects,
+            **check_pack_effects(pack_effects),
         )
         if num_tiles_per_output > 1:
             return self._run_blocked(stimuli, in_formats, cfg, trace)
-        # Lay the stimuli out in L1 exactly as the test harness does before
-        # writing them to the device, so the chain reads the bytes the hardware
-        # read. Note this packs tiles contiguously while
-        # ``StimuliConfig.write_matrix`` strides its source buffer at 1024
-        # elements; the two agree only because every entry in
-        # SUPPORTED_TILE_SIZES has num_faces * face_r_dim * 16 == tile rows *
-        # cols. Suspect this first if a partial-face multi-tile case disagrees
-        # with hardware.
+        # Lay the stimuli out in L1 the way the harness does, so the chain
+        # reads the bytes the hardware read. Tiles go back to back here, which
+        # matches the dense writer but not the default one -- see
+        # check_source_layout for the cases that cannot agree.
+        check_source_layout(stimuli[0].numel() // datums_per_tile(**geometry), geometry)
         regs = Registers(
             **{
                 f"in{i}": self.blocks.pack_to_l1(t, f, **geometry)
@@ -333,6 +419,7 @@ class Golden:
                 f"{depth} tiles accumulated per Dest"
             )
 
+        check_source_layout(total_tiles, cfg.geometry)
         chain = self.build_chain(cfg)
         self.last_chain = chain
         packed_blocks: List[int] = []

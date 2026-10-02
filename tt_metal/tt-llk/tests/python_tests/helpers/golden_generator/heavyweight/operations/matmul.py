@@ -4,17 +4,34 @@
 """Matmul — the MVMUL family."""
 
 from functools import partial
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import torch
+from helpers.format_config import DataFormat
 from helpers.llk_params import MathFidelity
+from helpers.tilize_untilize import tilize_block, untilize_block
 
+from ..data_transfer_blocks.l1_codec import datums_per_tile
 from .chain import Chain, Registers
-from .fidelity import FIDELITY_PHASES, operand_halves
+from .fidelity import (
+    FIDELITY_PHASES,
+    operand_halves,
+    resolve_non_finite,
+    warn_unmodelled_split,
+)
 from .golden import Golden, OpConfig
 
 #: Datums along one edge of a tile.
 TILE_DIM = 32
+
+
+def self_shape(geometry: dict) -> dict:
+    """Tile geometry in the form the tilize/untilize helpers take."""
+    return dict(
+        dimensions=[TILE_DIM, TILE_DIM],
+        tile_dimensions=[TILE_DIM, TILE_DIM],
+        **geometry,
+    )
 
 
 class MatmulGolden(Golden):
@@ -45,10 +62,15 @@ class MatmulGolden(Golden):
 
     #: Which src register each stimulus lands in, in argument order. Set so that
     #: ``run([arg0, arg1])`` mirrors ``_llk_unpack_matmul_init_(arg0, arg1)`` and
-    #: produces ``arg0 @ arg1`` on every architecture -- the per-architecture
-    #: difference is which register each operand travels through, not what the
-    #: caller has to pass.
-    OPERAND_REGISTERS: Tuple[str, str] = ("srcA", "srcB")
+    #: produces ``arg0 @ arg1``, which holds on every architecture -- what the
+    #: caller passes does not change, only which register each operand rides.
+    #:
+    #: Every architecture routes the first operand to SrcB and the second to
+    #: SrcA, so this is the default rather than a Quasar specialisation:
+    #: ``llk_math_matmul.h`` states "D = in0 * in1, where in0 is loaded to SrcB
+    #: and in1 to SrcA" on Wormhole and Blackhole alike, matching Quasar's
+    #: ``_llk_unpack_matmul_init_``.
+    OPERAND_REGISTERS: Tuple[str, str] = ("srcB", "srcA")
 
     def __init__(
         self,
@@ -81,41 +103,99 @@ class MatmulGolden(Golden):
                 chain.then(
                     self.src_to_dest(
                         cfg,
-                        partial(self.partial_product, phase=phase),
+                        partial(
+                            self.partial_product,
+                            phase=phase,
+                            geometry=cfg.geometry,
+                        ),
                         reads=("srcA", "srcB"),
                         accumulate=phase > 0,
                     )
                 )
         else:
-            chain.then(self.src_to_dest(cfg, self.apply, reads=("srcA", "srcB")))
+            warn_unmodelled_split(self.op_name, type(self).__name__)
+            chain.then(
+                self.src_to_dest(
+                    cfg,
+                    partial(self.apply, geometry=cfg.geometry),
+                    reads=("srcA", "srcB"),
+                )
+            )
         return chain.then(self.dest_to_l1(cfg, into="out"))
 
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _as_tile(values: torch.Tensor) -> torch.Tensor:
-        return values.float().reshape(TILE_DIM, TILE_DIM)
+    def _as_tile(values: torch.Tensor, geometry: Dict) -> torch.Tensor:
+        """A src register's contents as the logical matrix the FPU multiplies.
 
-    def _product(self, srcA: torch.Tensor, srcB: torch.Tensor) -> torch.Tensor:
-        """The matrix product, in this architecture's operand order.
-
-        The one place operand order lives, so a subclass that inverts it does
-        not have to override both the exact and the per-phase paths. Summed in
-        float64 and returned flat: the hardware's accumulator is wider than its
-        operands, so the model must not introduce a float32 accumulation error
-        the hardware does not have.
+        A src register holds its tile **face-ordered**, the way the unpacker
+        wrote it, so a plain ``reshape(32, 32)`` is not the logical matrix: its
+        row 0 is logical row 0 columns 0-15 followed by logical row 1 columns
+        0-15. The leading entries of each row line up, which is exactly why the
+        wrong answer reads as a plausible one.
         """
+        expected = datums_per_tile(**geometry)
+        if values.numel() != expected:
+            raise ValueError(
+                f"matmul handles one {TILE_DIM}x{TILE_DIM} tile at a time; got "
+                f"{values.numel()} datums where {expected} were expected. A "
+                f"multi-tile matmul is a block matmul over the inner dimension, "
+                f"which this golden does not model yet."
+            )
+        return untilize_block(
+            values.float(), stimuli_format=DataFormat.Float32, **self_shape(geometry)
+        ).reshape(TILE_DIM, TILE_DIM)
+
+    @staticmethod
+    def _from_tile(matrix: torch.Tensor, geometry: Dict) -> torch.Tensor:
+        """The logical result back in face order, which is how Dest holds it."""
         return (
-            (self._as_tile(srcA).double() @ self._as_tile(srcB).double())
-            .reshape(-1)
+            tilize_block(
+                matrix.reshape(-1).float(),
+                stimuli_format=DataFormat.Float32,
+                **self_shape(geometry),
+            )
+            .flatten()
             .float()
         )
 
-    def apply(self, regs: Registers) -> torch.Tensor:
-        """The exact product, for architectures whose split is not modelled."""
-        return self._product(regs["srcA"], regs["srcB"])
+    def _product(
+        self, srcA: torch.Tensor, srcB: torch.Tensor, geometry: Dict
+    ) -> torch.Tensor:
+        """The matrix product, in this architecture's operand order.
 
-    def partial_product(self, regs: Registers, *, phase: int) -> torch.Tensor:
-        """One fidelity phase: the matrix product of the chosen operand halves."""
+        ``Dest = SrcB @ SrcA``, which is not a transpose of the caller's
+        arguments: :attr:`OPERAND_REGISTERS` puts the first operand in SrcB, so
+        the two together give ``arg0 @ arg1``. Both halves are load-bearing and
+        have to agree -- the routing without this order, or this order without
+        the routing, transposes the result into something wrong everywhere but
+        still plausible-looking, which is how it was last caught.
+
+        The one place operand order lives, so a subclass that diverges does not
+        have to override both the exact and the per-phase paths. Summed in
+        float64: the hardware's accumulator is wider than its operands, so the
+        model must not introduce a float32 accumulation error the hardware does
+        not have.
+        """
+        product = (
+            self._as_tile(srcB, geometry).double()
+            @ self._as_tile(srcA, geometry).double()
+        )
+        return self._from_tile(product, geometry)
+
+    def apply(self, regs: Registers, *, geometry: Dict) -> torch.Tensor:
+        """The exact product, for architectures whose split is not modelled."""
+        return self._product(regs["srcA"], regs["srcB"], geometry)
+
+    def partial_product(
+        self, regs: Registers, *, phase: int, geometry: Dict
+    ) -> torch.Tensor:
+        """One fidelity phase: the matrix product of the chosen operand halves.
+
+        Non-finite operands go through :func:`.fidelity.resolve_non_finite`,
+        which carries them on the first phase and zeroes them on the rest.
+        """
         a, b = operand_halves(regs["srcA"], regs["srcB"], self.MANTISSA_SPLIT, phase)
-        return self._product(a, b)
+        a, b = resolve_non_finite(a, b, regs["srcA"], regs["srcB"], phase)
+        return self._product(a, b, geometry)

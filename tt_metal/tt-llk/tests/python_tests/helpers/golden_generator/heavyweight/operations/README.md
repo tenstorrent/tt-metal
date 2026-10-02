@@ -208,7 +208,7 @@ the chain is *built* from, fixed before it runs. Data flows through `Registers`.
 | `relu_type` | `NoRelu` | Packer ReLU. |
 | `relu_threshold` | `0.0` | Narrowed to the packer register's 16 bits before comparison. |
 | `edge_mask` | `None` | `PackEdgeMask`. |
-| `stoch_rnd` | `No` | Accepted, **not reproducible** — golden returns round-to-nearest. |
+| `stoch_rnd` | `No` | Accepted, but only `No` is reproducible — anything else returns round-to-nearest and warns. `Fpu` included: it randomises the Dest write, not the pack. |
 
 ## `Golden`
 
@@ -397,7 +397,7 @@ in Dest. The only difference is that the partial product is a *matrix* product.
 | Member | Notes |
 |---|---|
 | `MANTISSA_SPLIT` | `(srcA_bits, srcB_bits)`. Quasar `(7, 7)`. `None` → the product is computed exactly and fidelity is ignored. |
-| `OPERAND_REGISTERS` | Which src register each stimulus lands in, in argument order. Base `("srcA", "srcB")`, Quasar `("srcB", "srcA")`. |
+| `OPERAND_REGISTERS` | Which src register each stimulus lands in, in argument order. `("srcB", "srcA")` on every architecture. |
 | `models_fidelity` | True when `MANTISSA_SPLIT` is set. |
 | `_product(srcA, srcB)` | The one place operand order lives, so a subclass inverting it overrides neither `apply` nor `partial_product`. |
 | `TILE_DIM` | 32. |
@@ -422,20 +422,35 @@ precision and the no-denormal rule as usual.
 ### Operand order
 
 `run([arg0, arg1])` mirrors `_llk_unpack_matmul_init_(arg0, arg1)` and produces
-`arg0 @ arg1` **on every architecture**. The per-architecture difference is which
-register each operand travels through, not what the caller passes.
+`arg0 @ arg1`. What the caller passes never changes; the model's job is to get
+right which register each operand rides, because that is what the mantissa split
+is indexed by.
 
-Quasar needs both halves of that, and either alone transposes the result into
-something wrong everywhere but still plausible-looking:
+**Every architecture sends the first operand to SrcB and the second to SrcA**, so
+this lives in the base class and no architecture overrides it. Wormhole and
+Blackhole are not the mirror image of Quasar — `llk_math_matmul.h` says "D = in0
+* in1, where in0 is loaded to SrcB and in1 to SrcA" on both, and
+`llk_unpack_AB_matmul.h` agrees with "in0/inA - loaded to SrcB".
 
 ```python
 OPERAND_REGISTERS = ("srcB", "srcA")    # init's arg0 → SrcB, arg1 → SrcA
 def _product(self, srcA, srcB): return srcB @ srcA     # Dest = SrcB @ SrcA
 ```
 
+Both halves are load-bearing and must agree. Either one alone transposes the
+result into something wrong everywhere but still plausible-looking:
+
 > This was a live bug until it was caught by cross-checking against the
 > lightweight golden: the two disagreed on 1018/1024 datums purely because
 > `stimuli[0]` was being routed to SrcA.
+
+Flipping *both* is a no-op on the numbers, which is why the base class carried
+the wrong routing harmlessly for a while: with `("srcA", "srcB")` and
+`srcA @ srcB` the product is still `arg0 @ arg1`. It only becomes a real bug once
+an architecture defines an asymmetric `MANTISSA_SPLIT`, because the split is
+indexed by *register* — so the SrcA penalty would be charged to the wrong
+operand. Wormhole/Blackhole will hit exactly that when their split is filled in,
+SrcA there losing its least significant bit.
 
 ### Cross-validation against the lightweight golden
 
@@ -590,8 +605,9 @@ datacopy / eltwise / matmul for Wormhole and Blackhole.
 - **Whether the matmul AL×BL phase is observable** — this model says HiFi3 ==
   HiFi4; the lightweight golden says otherwise. Unresolved for matmul, though
   hardware agrees with this model for eltwise.
-- **Partial-face multi-tile layout** — `Golden.run` packs tiles contiguously while
-  `StimuliConfig.write_matrix` strides at 1024 elements. They agree only because
-  every `SUPPORTED_TILE_SIZES` entry satisfies
-  `num_faces × face_r_dim × 16 == rows × cols`. Suspect this first if a
-  partial-face multi-tile case disagrees with silicon.
+- **Multi-tile layout for sub-1024-datum tiles** — `Golden.run` lays tiles out
+  back to back, which matches `write_matrix_w_tile_dimensions`
+  (`use_dense_tile_dimensions=True`). The *default* `StimuliConfig.write_matrix`
+  strides the source by `MAX_TILE_ELEMENTS` whatever the tile size, so the two
+  only coincide at 1024 datums per tile, or on a single tile. `check_source_layout`
+  raises for the rest rather than quietly computing on data the device never saw.
