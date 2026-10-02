@@ -8,11 +8,14 @@
 #include <cstdint>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/ops/moe_group/device/moe_group_device_operation.hpp"
 #include "metal/ops/moe_group/moe_group.hpp"
 #include "moe_test_utils.hpp"
 
@@ -354,4 +357,46 @@ TEST_F(MoeGroupTest, LargeELocal) {
     leids.reserve(32);
     for (uint16_t i = 0; i < 32; ++i) leids.push_back(i);
     check_against_reference(make_inputs(D, B, S, H, E, K), leids, K);
+}
+
+TEST_F(MoeGroupTest, RejectsMetadataFromAnotherDeviceBeforeDispatch) {
+    if (tt::tt_metal::GetNumAvailableDevices() < 2U) {
+        GTEST_SKIP() << "Requires two devices to construct a foreign-device tensor";
+    }
+
+    constexpr uint32_t D = 1U, B = 1U, S = 32U, H = 32U, E = 2U, K = 1U;
+    const std::vector<uint16_t> leids = {0U};
+    const auto host = make_inputs(D, B, S, H, E, K);
+    auto& primary_device = ttml::autograd::ctx().get_device();
+    auto primary_inputs = ttml::test_utils::moe::to_device_inputs(host, leids, &primary_device);
+    auto foreign_device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(1);
+
+    {
+        const xt::xarray<uint16_t> metadata_u16 = xt::cast<uint16_t>(host.metadata);
+        auto foreign_metadata = ttml::core::from_xtensor<uint16_t, ttnn::DataType::UINT16>(
+            metadata_u16, foreign_device.get(), ttnn::Layout::ROW_MAJOR);
+
+        using Op = ttml::metal::ops::moe_group::device::MoeGroupDeviceOperation;
+        const auto attrs = Op::operation_attributes_t{
+            .e_local = static_cast<uint32_t>(leids.size()),
+            .k = K,
+            .d = D,
+            .b = B,
+            .s = S,
+            .h = H,
+            .t_cap = compute_t_cap(static_cast<uint32_t>(leids.size()), K, D, B, S),
+        };
+        auto args = Op::tensor_args_t{
+            .dispatched = primary_inputs.dispatched_bf16,
+            .metadata = primary_inputs.metadata_u16,
+            .scores = primary_inputs.scores_bf16,
+            .local_expert_ids = primary_inputs.leids_u16,
+        };
+
+        EXPECT_NO_THROW(Op::validate_on_program_cache_miss(attrs, args));
+        args.metadata = std::move(foreign_metadata);
+        EXPECT_THROW(Op::validate_on_program_cache_miss(attrs, args), std::exception);
+    }
+
+    foreign_device->close();
 }

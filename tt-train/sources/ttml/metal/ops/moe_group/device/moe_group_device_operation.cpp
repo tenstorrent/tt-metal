@@ -48,6 +48,14 @@ void MoeGroupDeviceOperation::validate_on_program_cache_miss(
     check(args.scores, "scores", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::BFLOAT16);
     check(args.local_expert_ids, "local_expert_ids", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT16);
 
+    auto* device = args.dispatched.device();
+    auto check_same_device = [device](const ttnn::Tensor& t, const char* name) {
+        TT_FATAL(t.device() == device, "moe_group: {} must be on the same device as dispatched", name);
+    };
+    check_same_device(args.metadata, "metadata");
+    check_same_device(args.scores, "scores");
+    check_same_device(args.local_expert_ids, "local_expert_ids");
+
     const auto& ds = args.dispatched.logical_shape();
     TT_FATAL(ds.rank() == 4U, "moe_group: dispatched must be 4D [D,B,S,H]");
     TT_FATAL(

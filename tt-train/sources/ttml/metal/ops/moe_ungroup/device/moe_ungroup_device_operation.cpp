@@ -48,6 +48,14 @@ void MoeUngroupDeviceOperation::validate_on_program_cache_miss(
     check(args.offsets, "offsets", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT32);
     check(args.grouped_scores, "grouped_scores", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::BFLOAT16);
 
+    auto* device = args.expert_out.device();
+    auto check_same_device = [device](const ttnn::Tensor& t, const char* name) {
+        TT_FATAL(t.device() == device, "moe_ungroup: {} must be on the same device as expert_out", name);
+    };
+    check_same_device(args.plan, "plan");
+    check_same_device(args.offsets, "offsets");
+    check_same_device(args.grouped_scores, "grouped_scores");
+
     const auto& es = args.expert_out.logical_shape();
     TT_FATAL(es.rank() == 4U, "moe_ungroup: expert_out must be 4D [1,1,T_cap,H]");
     TT_FATAL(

@@ -8,11 +8,14 @@
 #include <cstdint>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/ops/moe_group/moe_group.hpp"
+#include "metal/ops/moe_ungroup/device/moe_ungroup_device_operation.hpp"
 #include "metal/ops/moe_ungroup/moe_ungroup.hpp"
 #include "moe_test_utils.hpp"
 
@@ -162,6 +165,60 @@ TEST_F(MoeUngroupTest, LargeELocal) {
     leids.reserve(32);
     for (uint32_t i = 0; i < 32; ++i) leids.push_back(static_cast<uint16_t>(i));
     run_and_check(make_inputs(D, B, S, H, E, K), leids, K);
+}
+
+TEST_F(MoeUngroupTest, RejectsGroupedScoresFromAnotherDeviceBeforeDispatch) {
+    if (tt::tt_metal::GetNumAvailableDevices() < 2U) {
+        GTEST_SKIP() << "Requires two devices to construct a foreign-device tensor";
+    }
+
+    constexpr uint32_t ELocal = 1U, D = 1U, B = 1U, S = 32U, H = 32U, TCap = 32U;
+    auto& primary_device = ttml::autograd::ctx().get_device();
+    auto foreign_device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(1);
+
+    {
+        auto expert_out = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
+            std::vector<float>(TCap * H, 0.0F), ttnn::Shape({1U, 1U, TCap, H}), &primary_device, ttnn::Layout::TILE);
+        auto plan = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+            std::vector<uint32_t>(TCap, kSentinel),
+            ttnn::Shape({1U, 1U, 1U, TCap}),
+            &primary_device,
+            ttnn::Layout::ROW_MAJOR);
+        auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+            std::vector<uint32_t>{0U, TCap},
+            ttnn::Shape({1U, 1U, 1U, ELocal + 1U}),
+            &primary_device,
+            ttnn::Layout::ROW_MAJOR);
+        auto grouped_scores = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
+            std::vector<float>(TCap, 1.0F), ttnn::Shape({1U, 1U, 1U, TCap}), &primary_device, ttnn::Layout::ROW_MAJOR);
+        auto foreign_grouped_scores = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
+            std::vector<float>(TCap, 1.0F),
+            ttnn::Shape({1U, 1U, 1U, TCap}),
+            foreign_device.get(),
+            ttnn::Layout::ROW_MAJOR);
+
+        using Op = ttml::metal::ops::moe_ungroup::device::MoeUngroupDeviceOperation;
+        const auto attrs = Op::operation_attributes_t{
+            .e_local = ELocal,
+            .d = D,
+            .b = B,
+            .s = S,
+            .h = H,
+            .t_cap = TCap,
+        };
+        auto args = Op::tensor_args_t{
+            .expert_out = expert_out,
+            .plan = plan,
+            .offsets = offsets,
+            .grouped_scores = grouped_scores,
+        };
+
+        EXPECT_NO_THROW(Op::validate_on_program_cache_miss(attrs, args));
+        args.grouped_scores = std::move(foreign_grouped_scores);
+        EXPECT_THROW(Op::validate_on_program_cache_miss(attrs, args), std::exception);
+    }
+
+    foreign_device->close();
 }
 
 // End-to-end integration: moe_group -> identity FFN (expert_out = grouped) ->
