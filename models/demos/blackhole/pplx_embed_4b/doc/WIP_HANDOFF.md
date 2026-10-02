@@ -29,30 +29,90 @@ From the e2e-vs-roofline analysis on the device-profile artifact (https://claude
    own trid landed but neutral (`QWEN_ADD_NORM_PART_TRID=1`); two-wave CBs negative (bs8 +1.8%, bs16 / 32 do not fit).
    E2e after all of it: bs8 76.7 / 99, bs16 143.3 / 194, bs32 291 / 378 ms cold / sustained (chips 1 / 2 / 0).
 
-## Where we stopped (2026-10-01, HEAD bc9b069 on `amorrison/high-batch-optim`, not pushed)
+## Where we stopped (2026-10-02, project paused; HEAD a8ce76c on `amorrison/high-batch-optim`, not pushed)
 
-**Numbers now** (e2e from `sustained_run.sh`, cold / sustained ms; device = one profiled replay at 1.35 GHz):
+The last two sessions built a roofline (an implementation-independent, asymptotic upper bound on performance) and split
+every op group's gap to it by cause. No model code changed since cdb9143 (bs8 / 16 / 32) and 3164ba1 (bs1), so the
+profiles and the e2e numbers below are current.
 
-| batch | cold | sustained | × H200 sustained | device replay | practical roofline | ideal, whole model (120 cores, 512 GB/s) |
+**Numbers** (e2e from `sustained_run.sh`, cold / sustained ms; device = one profiled replay at 1.35 GHz; roofline =
+cold, SFPU hidden – SFPU serialized):
+
+| batch | cold | sustained | × H200 sustained | device replay | roofline | cold ÷ roofline |
 |---|---|---|---|---|---|---|
-| 1 (3164ba1) | 14.1 | 14.3 | 2.63× | 13.96 | 7.65 | 5.84 |
-| 8 (cdb9143) | 76.7 | 99.1 | 3.00× | 76.07 | 59.7 | 46.7 |
-| 16 (cdb9143) | 143.3 | 193.1 | 2.87× | 142.1 | 114.3 | 93.4 |
-| 32 (cdb9143) | 291.7 | 377.6 | 2.71× | 279.1 | 230.4 | 186.9 |
+| 1 (3164ba1) | 14.1 | 14.3 | 2.63× | 13.96 | 6.92 – 7.50 | 1.88 – 2.04× |
+| 8 (cdb9143) | 76.7 | 99.1 | 3.00× | 76.07 | 55.4 – 60.0 | 1.28 – 1.38× |
+| 16 (cdb9143) | 143.3 | 193.1 | 2.87× | 142.1 | 110.8 – 120.0 | 1.19 – 1.29× |
+| 32 (cdb9143) | 291.7 | 377.6 | 2.71× | 279.1 | 221.6 – 240.0 | 1.22 – 1.32× |
 
-bs8 / 16 / 32 code is unchanged since cdb9143 (today's changes are bs1-only), so their profiles are current.
+Sustained is cold plus the power cap (AICLK settles at ~1.0 GHz at bs16 / 32); the roofline is a cold, 1.35 GHz bound.
 
-**Build.** The installed `_ttnncpp.so` / `_ttnn.so` include 61fb987 (host C++ in the matmul 1D factory and the device-op
-factory selector), built with `ninja -C build ttnn/_ttnncpp.so ttnn/_ttnn.so` and copied over `build/lib/` and
-`ttnn/ttnn/_ttnn.so`. A fresh checkout or another box needs that rebuild, or bs1's FF1 / FF3 fail (the Metal 2.0 1D
-factory rejects a DRAM width-sharded in1). All 8 chips were reset at 15:30 and open at 12×10.
+**Build.** The installed `_ttnncpp.so` / `_ttnn.so` include tt-metal 61fb987 (host C++ in the matmul 1D factory and the
+device-op factory selector), built with `ninja -C build ttnn/_ttnncpp.so ttnn/_ttnn.so` and copied over `build/lib/`
+and `ttnn/ttnn/_ttnn.so`. A fresh checkout or another box needs that rebuild, or bs1's FF1 / FF3 fail. After any
+host-side C++ change: rebuild (PERF_GUIDE §4); a stale `.so` deadlocks in the first warmup prefill instead of erroring.
 
-**Profile artifact** (https://claude.ai/artifact/EyeLiogdyYu3soMry6akYn, version 26). Per-op tables with practical
-rooflines (attainable 450 GB/s, measured device-time floors for SDPA / heads / add+RMSNorm at bs8-32 and for the bs1
-heads op and SwiGLU), a bs16 / bs32 section (measured vs practical vs ideal, per op group, where the gap goes) and the
-whole-model ideal line on the e2e chart. The page template (sections, JS) lives only in the published page: regenerate
-by reading the artifact, then `python3 perf_tools/profile_page.py <saved page.html> runs.json <out.html>` (PERF_GUIDE
-§5) and republish to the same URL. runs.json for the current state:
+### The roofline (`perf_tools/profile_page.py`, `achievable` fields; the page calls it "roofline")
+
+Cold, 1.35 GHz, 120 cores, every activation on chip, weights read once. Range = [max(FPU, SFPU, DRAM), FPU + SFPU].
+- **FPU**, in sequence: matmul FLOPs at 89% of the LoFi peak (590.6 TFLOP/s: the LLK's 18.0 cycles per tile product at
+  long K, matches GEMM_FLOPS' best Blackhole GEMM and this model's compute-only matmuls); SDPA's matmuls at tt-llk's rate
+  for their shape (Q.K^T, K = 4 tiles: 23.9; P.[V | 1], K = 16, a ones column giving the softmax row sums: 19.2);
+  eltwise passes at tt-llk perf-suite rates (add / mul 31.1, column-broadcast 28.6, row reduce 51.1 cycles per bfp8
+  tile, L1 to L1) and the softmax row max at SDPA's demonstrated ~7 cycles a tile.
+- **Formulation** (the user's choice, 2026-10-02): RMSNorm gamma folded into the next matmul's weights, QK-norm gamma
+  into the RoPE cos / sin tables, rotate-half as a whole-tile swap, softmax max kept, norms' row sums as reduces.
+- **SFPU**: exp per score (64 cycles a tile, SDPA's SFPLOADMACRO path), silu(gate)·up (383 per output tile, the fused
+  SwiGLU pass), rsqrt per norm row on column 0 only (607 / 2).
+- **DRAM**: bfp4 weights + embedding rows at 450 GB/s (~4.6 ms; never the bound).
+
+Rates come from the tt-llk perf suite run on chip 1 (see "tt-llk perf harness" below; the CI warehouse copy needs a
+service keypair we do not have). Earlier versions of the bound that the user rejected: hiding all vector work under the
+FPU (gave the custom ops 0 ms), ones-vector row sums at 18 cycles (an N = 1 matmul is 55.7), SDPA at 89% of peak.
+
+### Gap to the roofline by category (`profile_page.py` `GAP_LADDER` + `formulation()`)
+
+Measured device-kernel-time ablation ladders of each op group's main call, standalone at the model's placement (every
+full call within 1% of in-model except bs16 QKV, 529 vs 522 µs), plus the custom ops' and SDPA's passes beyond the
+roofline formulation costed at the same tt-llk rates. ms over the replay:
+
+| category | bs16 | bs32 | largest cells |
+|---|---|---|---|
+| inits, handshakes, blocking (compute only above roofline, less formulation) | 12.6 | 19.3 | heads 3.5 / 8.2, add+RMSNorm 3.6 / 5.8, QKV 2.1 / 3.0, FF1+FF3 1.9 / 2.1 |
+| data movement not hidden (full - compute only) | 8.7 | 20.2 | add+RMSNorm 2.1 / 8.4, FF1+FF3 3.8 / 2.9, FF2 0.4 / 3.5, QKV 1.3 / 2.5 |
+| formulation | 5.6 | 11.2 | FF1+FF3 partial-sum add 2.4 / 5.0, SDPA col_identity sums 1.2 / 2.4, heads 1.1 / 2.3, add+RMSNorm 0.9 / 1.6 |
+| SFPU not hidden | 2.7 | 5.8 | SwiGLU 1.2 / 2.8, exp 0.8 / 1.5, heads rsqrt 0.7 / 1.4 |
+| cross-core exchange (add+RMSNorm) | 0.6 | 0.6 | |
+| in-model vs standalone, small unfused ops | 1.1 | 0.4 | bs16 post-MLP add+RMSNorm (a in L1) +22 µs a call in-model |
+| host, dispatch, gaps between ops (cold - device) | 1.2 | **12.6** | |
+
+Findings behind it: every batched matmul is compute-kernel-bound (compute only 78-90% of peak); the plain matmuls'
+end-of-block intermediate -> out copy costs ~0 (QKV's excess is loop structure, not the copy); a matmul's math-free
+skeleton alone takes 30-40% of compute only and is almost all hidden; SDPA sits at roofline + formulation (structure ~0;
+its analytic formulation slightly overstates, structure -0.17 ms at bs32); bs32 FF2's compute only beats 89% (90%).
+
+### Next, in the order I would take them
+
+1. **bs32 host / dispatch: 12.6 ms** between cold and device replay (bs16: 1.2). Unexplained and the largest single bs32
+   item: look at the device timeline's gaps between ops (tracy report) and at what bs32 does differently (4 QKV / heads
+   chunks per layer, 503 ops per replay against 293).
+2. **Inits / handshakes / blocking in the custom ops** (heads, add+RMSNorm): fusing their phases into the neighbouring
+   matmuls (norm as a QKV / FF1 prologue, QK-norm + RoPE as a QKV epilogue) removes most of it and their data movement.
+   Before that, per-phase device-profiler zones would split phase overhead from primitive slowness.
+3. **Formulation fixes** with direct payback: gamma folded into weights / RoPE tables, rotate-half as a tile swap instead
+   of the rotation matmul, V written by QKV instead of copied through, SDPA row sums as a ones column in P.V.
+4. **Data movement not hidden**: FF1+FF3's output round trip through DRAM (an FF13 -> FF2 fusion in token chunks would
+   remove it), add+RMSNorm's a / sum in DRAM at bs32 (8.4 ms).
+5. **The power cap** (sustained = cold + 26-35%). Faster kernels have lowered the settled clock before (§59): measure
+   J / pass, not only ms; tt-smi sampling is too sparse for J / inference today.
+6. Housekeeping: upstream 61fb987 as its own tt-metal PR (432 matmul unit tests passed); `lut2` sigmoid for bs1.
+
+### How to resume
+
+- **Profile page** (https://claude.ai/artifact/EyeLiogdyYu3soMry6akYn, version 32, shared with the org). The template
+  (sections, JS) lives only in the published page: read the artifact (Artifact tool, action read) to get the HTML, then
+  `python3 perf_tools/profile_page.py <saved page.html> runs.json <out.html>` and republish to the same URL. Visible text
+  says "roofline"; the JSON / JS fields and the generator still say `achievable`. runs.json for the current profiles:
 
 ```json
 {"commit": "3164ba1 (bs1) · cdb9143 (bs8 / bs16 / bs32)", "date": "2026-10-01", "batches": [
@@ -62,96 +122,28 @@ by reading the artifact, then `python3 perf_tools/profile_page.py <saved page.ht
  {"bs": 32, "report": "2026_10_01_15_48_29", "e2e": {"cold": 291.7, "sus": 377.6, "aiclk": "993 (981-1037)", "power": 139}}]}
 ```
 
-**Done today (bs1, 15.6 -> 14.1 ms cold):**
-- SwiGLU product through `silu_mul` mode 3 (minimal_matmul's single-pass bfp8-sized SwiGLU): 52.1 -> 30.0 µs per call,
-  more accurate than stock (§68). Now at 95% of its compute floor. The 3-segment LUT sigmoid hits the read floor
-  (18.6 µs) at 7x the error; a 6-segment `lut2` sigmoid is the untried middle (<= 10 µs / layer).
-- FF1 / FF3 on the 1D matmul over 120 cores with DRAM-streamed weights (tt-metal 61fb987 + model 3164ba1): 69.7 ->
-  62.2 µs per call (§69). The bs1 matmuls are compute-kernel-bound (~21 cycles per tile matmul vs 16, data movement
-  hidden; config sweeps exhausted); QKV / WO / FF2 cannot fill 120 cores (192 / 80 N tiles).
-- bs1 SDPA closed (§70): compute-bound at 91% of its compute floor; more cores need ragged row groups in the streaming
-  compute (q160 picks 1-row groups) and K / V delivery for heads spanning grid rows; bounded at ~ -0.17 ms.
-
-**Where the batched gap is** (bs16, from the artifact's new section; bs32 proportionally the same): sustained 193.1 ->
-cold 143.3 is the power cap (49.8 ms, AICLK ~1000 MHz; the ideal at that clock is ~126 ms); cold -> device 1.2 ms;
-device -> practical 27.8 ms of kernels above their bounds (FF1+FF3 14.7, QKV 4.8, FF2 3.7, WO 2.2); practical -> ideal
-per op 13.5 ms, all of it the SDPA / heads / add+RMSNorm floors (softmax, norms, RoPE); ideal per op -> whole model
-7.4 ms of activations crossing DRAM.
-
-**Achievable whole-model range (2026-10-02, artifact version 28).** Cold, implementation-independent, every activation
-on chip, weights read once at 450 GB/s: [max(FPU, SFPU, DRAM), FPU + SFPU] (`profile_page.py` `achievable`). FPU =
-matmul / SDPA FLOPs at 89% of the LoFi peak (590.6 TFLOP/s) + the norms' / RoPE's / softmax's eltwise passes in
-sequence; SFPU = exp + SwiGLU, hidden (low end) or serialized (high end). Rates are tt-llk perf-suite cycles per bfp8 tile
-measured on this board (add / mul 31.1, column-broadcast 28.6, matmul 18.0 per tile product at long K) or the best rate a
-kernel here demonstrates (row max ~7 / tile, exp 64, SwiGLU 383). Formulation (user's choice): gamma folded into the
-next matmul / RoPE tables, rotate-half as a tile swap, row sums as ones-vector matmuls, softmax max kept.
-
-| batch | cold | achievable (SFPU hidden – serialized) | cold ÷ achievable |
-|---|---|---|---|
-| 1 | 14.1 | 6.92 – 7.50 | 1.88 – 2.04× |
-| 8 | 76.7 | 55.4 – 60.0 | 1.28 – 1.38× |
-| 16 | 143.3 | 110.8 – 120.0 | 1.19 – 1.29× |
-| 32 | 291.7 | 221.6 – 240.0 | 1.22 – 1.32× |
-
-(Revised in version 31: SDPA's matmuls at tt-llk's rate for their shape, Q.K^T K=4 tiles 23.9 and P.[V|1] K=16 19.2
-cycles per tile product, the softmax row sum as P.V's fifth N column; the norms' row sums at the reduce rate, 51.1, since
-a ones-vector matmul with N=1 is 55.7; QK-norm's per-head rsqrt counted as SFPU.)
-
-bs16 per op group, measured vs achievable FPU (+ SFPU), ms: FF1+FF3 58.95 vs 49.75 (+6.62), FF2 25.87 vs 24.87, QKV
-18.81 vs 15.71, WO 11.57 vs 10.47, SDPA 9.55 vs 5.97 (+1.86), add+RMSNorm 9.45 vs 0.99 (9.5×), heads 7.38 vs 1.56
-(4.7×). The two custom ops are the largest relative gaps; their ablations (§67) put them on data movement / per-wave
-latency, not math. tt-llk perf harness: `tt_metal/tt-llk/tests/.venv` (requirements.txt via uv) with `tests/sfpi`
-symlinked to `runtime/sfpi` (same 7.80.0 build), run by node id with `TT_VISIBLE_DEVICES=<chip>`; results land in
-`tt_metal/tt-llk/perf_data/runs/local-*/*.parquet` (per tile = TILE_LOOP / (loop_factor × tile_cnt)).
-
-**Gap to achievable by category (artifact version 31, `profile_page.py` `GAP_LADDER` + `formulation()`).** Measured
-device-time ladders per op group (`bench_mm_gap_ladder.py` for the matmuls; SDPA variant trees; heads / add+RMSNorm
-ablation benches) plus, for the custom ops and SDPA, their passes beyond the achievable formulation costed at tt-llk
-rates. ms over the replay:
-
-| category | bs16 | bs32 |
-|---|---|---|
-| inits, handshakes, blocking (rest of compute only above achievable) | 12.6 | 19.3 |
-| data movement not hidden | 8.7 | 20.2 |
-| formulation (FF1+FF3 K-split add; custom ops' gamma / rotation matmul / V copy / redundant rsqrt; SDPA col_identity sums) | 5.6 | 11.2 |
-| SFPU not hidden (SwiGLU, exp, the custom ops' rsqrt) | 2.7 | 5.8 |
-| cross-core exchange (add+RMSNorm) | 0.6 | 0.6 |
-| in-model vs standalone, small ops | 1.1 | 0.4 |
-| host / dispatch (cold - device) | 1.2 | 12.6 |
-
-Structure is mostly the heads op (3.5 / 8.2 ms) and add+RMSNorm (3.6 / 5.8), then QKV (2.1 / 3.0). SDPA is at
-achievable + formulation (structure ~0). bs32 cold - device is 12.6 ms (bs16 1.2): host / dispatch at bs32 is worth a look.
-
-Why 89%: `bench_ff13_fused_ablate.py` / `bench_mm_ablate.py` at today's configs (blocks from `capture_qkv_call.py`:
-FF13 4,40,8 1×8 at bs16 and bs32, QKV / FF2 / WO 8,8,8 1×8, bs32 QKV as 4 chunks of M=4096) put every batched matmul's
-compute-only floor at 78-89% of 663.6 TFLOP/s (FF2 bs32 589, FF13 no SFPU / no add 566 / 576, WO 545 / 570, QKV 517 /
-528), matching GEMM_FLOPS's best Blackhole GEMM (89.5%). Above the compute-only floors, per layer at bs16 / bs32: FF13
-partial-sum add 67 / 142 µs, FF13 DM 88 / 69, FF13 SwiGLU 34 / 79, FF2 weight re-reads at bs32 98, QKV in0 read at bs16 35.
-QKV runs ~2 cycles per tile·K worse than the others (20.5 vs 18.6-18.8); untested guess: the plain path's end-of-block
-`copy_and_pack_block`, amortized over 10 K blocks in QKV against 38 in FF2.
-
-**Next, in the order I would take them:**
-1. Batched matmuls above their bounds (~25 ms at bs16, ~41 ms at bs32; `minimal_matmul` FF1+FF3 at 1.27-1.33x its
-   bound). Start with compute-only / DM-only floors at today's configs (`bench_mm_ablate.py`, `bench_ff13_fused_ablate.py`)
-   to see whether it is still the partial-sum add (§60/§62) or per-block overhead as at bs1.
-2. The power cap (the largest single step). Faster kernels have lowered the settled clock before (§59): measure
-   J / pass, not only ms, when A/B-ing; tt-smi sampling is too sparse for J / inference today.
-3. Add+norm at bs8 / 16 (DM-bound on per-wave latency; leads below) and the heads op read path.
-4. Housekeeping: upstream 61fb987 as its own tt-metal PR (432 matmul unit tests passed); `lut2` sigmoid for bs1.
-
-- **Add+norm leads, if revisited.** What is exposed is each wave's read / write latency (no reads: −15 / −15 / −42 µs;
-  no writes: −4 / −4 / −58 µs). Options not tried: software-pipeline the compute (next wave's add / square / partial
-  before this wave's normalise) with CB 8 turned into a ring of 2-3 waves to free L1 (it holds every wave now: 147 KB
-  per core at bs32); larger read batches per barrier / trid ping-pong in the reader.
-- **Heads op, only if its compute gets faster:** the read path is next (read-only ≈ compute at bs8 / 32; ~2 GB/s per
-  core from L1, one barrier per 26 KB unit) — that is where trid-pipelined reads would pay.
-- **Build hygiene.** After any host-side C++ change: rebuild (PERF_GUIDE §4). A stale `.so` against newer kernels
-  deadlocks in the first warmup prefill instead of erroring (NEGATIVE_RESULTS §67).
-- **Tools added today** (`perf_tools/`): `profile_page.py` (artifact data + rooflines), `device_kernel_us.py` (device
-  µs per call of a traced bench under the profiler; use it for floors, wall-clock includes dispatch gaps),
-  `mm_legacy_variants.py` + `bench_bs1_mm_ablate.py`, `bench_bs1_ff13_1d.py`, `bench_bs1_swiglu.py`,
-  `bench_silu_mul_floors.py`, `bench_sdpa_bs1_floors.py`; `bench_heads_placement_ablate.py` `HB1=1` (bs1 call),
-  `bench_add_norm_ablate.py` `AN_A_L1=1`. Kernel-variant trees must run from a directory with no `ttnn/` tree.
-
-`sustained_run.sh` reports AICLK / power over the sustained window and J/inference, but tt-smi samples swing 30-155 W
-within a window (host gaps), so J/inference is too noisy to rank variants yet.
+- **After a kernel change**, re-run the ladders and update `GAP_LADDER` (device µs per call), or the breakdown goes
+  stale. Each in its own process with `TT_VISIBLE_DEVICES=<chip>`:
+  - matmuls: `MM_BLOCKS=4,40,8,1,8 bench_mm_gap_ladder.py ff13fused 16|32`; `bench_mm_gap_ladder.py qkv 16`,
+    `MM_BLOCKS=8,8,8,1,8 bench_mm_gap_ladder.py qkv 8` (bs32 chunk), `ff2 16|32`, `wo 16|32`. It patches
+    `compute_metal2.cpp` / `matmul_dataflow_common_metal2.hpp` in the repo and restores them in a finally block: run one
+    at a time, and `git status` after any interrupted run (an interrupt can leave the patch in place).
+  - SDPA: build trees with `sdpa_kernel_variants.py` (base, conly, and conly + noexp composed via its `VARIANTS` /
+    `patch_dm`), run `bench_sdpa_floors.py <label> <bs>` from a directory with no `ttnn/` tree under the profiler, parse
+    with `bench_sdpa_floors.py --parse <dir>` (K/V L1 arm; bs32's all-L1 arm fails to allocate, expected).
+  - heads / add+RMSNorm: `bench_heads_placement_ablate.py 16 16` / `8 32`, `bench_add_norm_ablate.py 16 32` under
+    `TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=40000 TT_METAL_PROFILER_DIR=<dir>`, read with
+    `device_kernel_us.py <dir> <labels...>`.
+- **tt-llk perf harness** (primitive cycles per tile): venv `tt_metal/tt-llk/tests/.venv` (`uv pip install -r
+  requirements.txt`) and `tt_metal/tt-llk/tests/sfpi` symlinked to `runtime/sfpi` (same SFPI 7.80.0; untracked, keep it
+  out of commits). Run tests by node id (`-k` cannot parse `->`) with `TT_VISIBLE_DEVICES=<chip> TT_LLK_DISABLE_ASSERTS=1`;
+  results in `tt_metal/tt-llk/perf_data/runs/local-*/*.parquet`, per tile = TILE_LOOP mean / (loop_factor × tile_cnt).
+  `perf_matmul` skips Half dest sync with a bfp output (#56073): use the SyncFull variants; its K sweep is {1, 4, 32}
+  (K = 16 came from a scratch copy with `KT_DIMS = [16]`).
+- **Tools** (`perf_tools/`): `profile_page.py` (page data, roofline, gap split), `bench_mm_gap_ladder.py`,
+  `device_kernel_us.py`, `bench_mm_ablate.py` / `bench_ff13_fused_ablate.py` (wall-clock ablations),
+  `capture_qkv_call.py` (`CAP_N=6144,19456,9728,2560` prints the model's matmul calls), `sdpa_kernel_variants.py`,
+  `bench_sdpa_floors.py`, `bench_heads_placement_ablate.py`, `bench_add_norm_ablate.py`, `sustained_run.sh`.
+- **Earlier leads, still open**: add+RMSNorm per-wave read / write latency (software-pipelined compute with CB 8 as a
+  2-3 wave ring; larger read batches per barrier); the heads op's L1 read path once its compute is faster (~2 GB/s per
+  core, one barrier per 26 KB unit).
