@@ -522,32 +522,27 @@ static void validate_implicit_burst_fits_one_packet(const DataflowBufferImpl& df
         return;
     }
     const uint32_t noc_max_burst_bytes = hal.get_noc_max_burst_size_bytes();
-    const uint32_t prod_burst = dfb_effective_block_entries(dfb, /*is_producer=*/true);
-    const uint32_t cons_burst = dfb_effective_block_entries(dfb, /*is_producer=*/false);
-    const bool producer_has_dm = has_dm_risc(config.producer_risc_mask);
-    const bool consumer_has_dm = has_dm_risc(config.consumer_risc_mask);
-    if (config.enable_producer_implicit_sync && producer_has_dm && prod_burst > 1) {
+    const auto check_side = [&](bool is_producer) {
+        const bool implicit_sync =
+            is_producer ? config.enable_producer_implicit_sync : config.enable_consumer_implicit_sync;
+        const bool has_dm = has_dm_risc(is_producer ? config.producer_risc_mask : config.consumer_risc_mask);
+        const uint32_t burst = dfb_effective_block_entries(dfb, is_producer);
+        if (!(implicit_sync && has_dm && burst > 1)) {
+            return;
+        }
         TT_FATAL(
-            prod_burst * config.entry_size <= noc_max_burst_bytes,
-            "DFB {}: implicit-sync BLOCKED producer requires block_size * entry_size <= {} bytes (one NoC "
+            burst * config.entry_size <= noc_max_burst_bytes,
+            "DFB {}: implicit-sync BLOCKED {} requires block_size * entry_size <= {} bytes (one NoC "
             "packet); got {} B ({} x {}). Use explicit sync for larger blocks.",
             dfb.id,
+            is_producer ? "producer" : "consumer",
             noc_max_burst_bytes,
-            prod_burst * config.entry_size,
-            prod_burst,
+            burst * config.entry_size,
+            burst,
             config.entry_size);
-    }
-    if (config.enable_consumer_implicit_sync && consumer_has_dm && cons_burst > 1) {
-        TT_FATAL(
-            cons_burst * config.entry_size <= noc_max_burst_bytes,
-            "DFB {}: implicit-sync BLOCKED consumer requires block_size * entry_size <= {} bytes (one NoC "
-            "packet); got {} B ({} x {}). Use explicit sync for larger blocks.",
-            dfb.id,
-            noc_max_burst_bytes,
-            cons_burst * config.entry_size,
-            cons_burst,
-            config.entry_size);
-    }
+    };
+    check_side(/*is_producer=*/true);
+    check_side(/*is_producer=*/false);
 }
 
 size_t serialize_dfb_config_for_core(
@@ -1447,7 +1442,7 @@ static std::pair<uint8_t, uint8_t> get_tc_counts(const DfbGroup& group) {
 }
 
 // Recompute {capacity, stride_in_entries} from the DFB's num_entries / access pattern. Re-validates the
-// producer/consumer divisibility constraints.
+// num_entries divisibility constraints.
 static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowBufferImpl& dfb) {
     const DataflowBufferConfig& config = dfb.config;
     TT_FATAL(
@@ -1463,13 +1458,6 @@ static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowB
         case ::dfb::AccessPattern::STRIDED:
             if (config.pap == ::dfb::AccessPattern::BLOCKED) {
                 const uint32_t block = std::max<uint32_t>(config.producer_block_size, 1u);
-                TT_FATAL(
-                    block % config.num_consumers == 0,
-                    "BLOCKED-producer -> STRIDED DFB {}: block_size {} must be divisible by num_consumers {} "
-                    "(each consumer takes an equal share of every block)",
-                    dfb.id,
-                    block,
-                    config.num_consumers);
                 TT_FATAL(
                     config.num_entries % (static_cast<uint64_t>(block) * config.num_producers) == 0,
                     "BLOCKED-producer -> STRIDED DFB {}: num_entries {} must be divisible by "
@@ -1521,15 +1509,7 @@ static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowB
         case ::dfb::AccessPattern::BLOCKED: {
             const uint32_t L = std::lcm(config.num_producers, config.num_consumers);
             const uint32_t block = std::max<uint32_t>(config.consumer_block_size, 1u);
-            const uint32_t pblock = std::max<uint32_t>(config.producer_block_size, 1u);
             if (config.pap == ::dfb::AccessPattern::STRIDED) {
-                TT_FATAL(
-                    block % config.num_producers == 0,
-                    "STRIDED-producer -> BLOCKED DFB {}: block_size {} must be divisible by num_producers {} "
-                    "(each producer fills an equal share of every block)",
-                    dfb.id,
-                    block,
-                    config.num_producers);
                 TT_FATAL(
                     config.num_entries % (static_cast<uint64_t>(block) * config.num_consumers) == 0,
                     "STRIDED-producer -> BLOCKED DFB {}: num_entries {} must be divisible by "
@@ -1542,12 +1522,6 @@ static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowB
                 stride_in_entries = config.num_producers;
                 break;
             }
-            TT_FATAL(
-                pblock == block,
-                "BLOCKED DFB {}: producer_block_size {} must equal consumer_block_size {}",
-                dfb.id,
-                pblock,
-                block);
             TT_FATAL(
                 config.num_entries % (static_cast<uint64_t>(block) * L) == 0,
                 "BLOCKED DFB {} num_entries {} must be divisible by block_size * lcm(P, C) = {} * {} "
@@ -2490,12 +2464,6 @@ void ProgramImpl::finalize_single_dfb_config(
             config.tensix_scope.has_value(),
             "Both producer and consumer are Tensix-only RISCs. Set tensix_scope to INTRA (same Neo) or INTER "
             "(different Neos). Un-scoped Tensix-to-Tensix DFBs are not allowed.");
-    }
-    if (config.is_relay) {
-        TT_FATAL(
-            config.pap != ::dfb::AccessPattern::BLOCKED && config.cap != ::dfb::AccessPattern::BLOCKED,
-            "DFB {}: a PrefetcherPipe relay DFB does not support the BLOCKED access pattern on either side yet.",
-            dfb->id);
     }
     if ((config.pap == ::dfb::AccessPattern::BLOCKED || config.cap == ::dfb::AccessPattern::BLOCKED) &&
         (has_tensix_risc(config.producer_risc_mask) || has_tensix_risc(config.consumer_risc_mask))) {

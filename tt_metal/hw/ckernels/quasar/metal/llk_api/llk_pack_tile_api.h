@@ -59,8 +59,10 @@ inline std::uint32_t get_output_tile_index(std::uint8_t output_id, std::uint32_t
     std::uint32_t l1_tile_index;
     LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(output_id);
     if constexpr (out_of_order_output) {
-        // The kernel chooses the slot; the index is added to the bookmark unchanged.
-        l1_tile_index = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx + output_tile_index;
+        // The kernel chooses the entry within its reserved share, consecutive
+        // entries of this producer are stride_size_tiles apart in the ring.
+        l1_tile_index = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx +
+                        output_tile_index * local_dfb_interface.stride_size_tiles;
     } else {
         if constexpr (untilize) {
             // TODO: uplift this option from BBE

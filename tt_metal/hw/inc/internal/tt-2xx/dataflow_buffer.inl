@@ -34,6 +34,14 @@ inline DataflowBuffer<Pap, Cap>::DataflowBuffer(uint16_t logical_dfb_id)
     if constexpr (!pattern_known) {
         // UNKNOWN (raw id) only supports rings with no BLOCKED side.
         ASSERT(local_dfb_interface_.block_size <= 1u);
+    } else {
+        stride_tiles_cache_ = wire_stride_tiles();
+        if constexpr (producer_blocked != consumer_blocked) {
+            // Exactly one BLOCKED side: the other side moves block_size / stride entries per op.
+            const uint32_t block = local_dfb_interface_.block_size;
+            peer_share_cache_ =
+                static_cast<uint16_t>((block > stride_tiles_cache_) ? block / stride_tiles_cache_ : 1u);
+        }
     }
     // Declare this DFB's L1 extent to the NOC-debug tracker so a write into it without holding the
     // lock can be flagged.
@@ -254,8 +262,6 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_ring_span_num_entries() const {
 #endif
 }
 
-// The stride the host serialized for this hart, in entries: entry spacing on a STRIDED side,
-// the per-tile cursor hop on a BLOCKED DM side.
 #ifndef COMPILE_FOR_TRISC
 template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline bool DataflowBuffer<Pap, Cap>::producer_broadcast() const {
@@ -286,35 +292,44 @@ inline uint16_t DataflowBuffer<Pap, Cap>::wire_stride_tiles() const {
 // Spacing between the entries of one op: 1 on a BLOCKED side (a whole block), the stride on a
 // STRIDED side facing BLOCKED peers.
 template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
-inline uint16_t DataflowBuffer<Pap, Cap>::get_producer_stride_tiles() const {
-    if constexpr (producer_blocked) {
+template <bool IsProducer>
+inline uint16_t DataflowBuffer<Pap, Cap>::side_stride_tiles() const {
+#if DFB_IS_COMPUTE_MATH
+    return 1u;
+#else
+    if constexpr (IsProducer ? producer_blocked : consumer_blocked) {
         return 1u;
+    } else if constexpr (pattern_known) {
+        return stride_tiles_cache_;
     } else {
         return wire_stride_tiles();
     }
+#endif
+}
+
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+inline uint16_t DataflowBuffer<Pap, Cap>::get_producer_stride_tiles() const {
+    return side_stride_tiles<true>();
 }
 
 template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline uint16_t DataflowBuffer<Pap, Cap>::get_consumer_stride_tiles() const {
-    if constexpr (consumer_blocked) {
-        return 1u;
-    } else {
-        return wire_stride_tiles();
-    }
+    return side_stride_tiles<false>();
 }
 
 // Tiles per op on this side, derived from block_size and this hart's stride.
 template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
-inline uint16_t DataflowBuffer<Pap, Cap>::get_producer_share() const {
+template <bool IsProducer>
+inline uint16_t DataflowBuffer<Pap, Cap>::side_share() const {
 #if DFB_IS_COMPUTE_MATH
     return 1u;
 #else
-    const uint32_t block = local_dfb_interface_.block_size;
-    const uint32_t stride = wire_stride_tiles();
-    if constexpr (producer_blocked) {
-        return static_cast<uint16_t>(block);
-    } else if constexpr (consumer_blocked) {
-        return static_cast<uint16_t>((block > stride) ? block / stride : 1u);
+    constexpr bool this_side_blocked = IsProducer ? producer_blocked : consumer_blocked;
+    constexpr bool peer_side_blocked = IsProducer ? consumer_blocked : producer_blocked;
+    if constexpr (this_side_blocked) {
+        return local_dfb_interface_.block_size;
+    } else if constexpr (peer_side_blocked) {
+        return peer_share_cache_;
     } else {
         return 1u;
     }
@@ -322,20 +337,13 @@ inline uint16_t DataflowBuffer<Pap, Cap>::get_producer_share() const {
 }
 
 template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+inline uint16_t DataflowBuffer<Pap, Cap>::get_producer_share() const {
+    return side_share<true>();
+}
+
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline uint16_t DataflowBuffer<Pap, Cap>::get_consumer_share() const {
-#if DFB_IS_COMPUTE_MATH
-    return 1u;
-#else
-    const uint32_t block = local_dfb_interface_.block_size;
-    const uint32_t stride = wire_stride_tiles();
-    if constexpr (consumer_blocked) {
-        return static_cast<uint16_t>(block);
-    } else if constexpr (producer_blocked) {
-        return static_cast<uint16_t>((block > stride) ? block / stride : 1u);
-    } else {
-        return 1u;
-    }
-#endif
+    return side_share<false>();
 }
 
 template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
