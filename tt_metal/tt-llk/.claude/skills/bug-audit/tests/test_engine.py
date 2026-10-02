@@ -1364,6 +1364,105 @@ def test_a_line_keyed_recheck_from_an_older_run_still_applies_to_its_own_finding
     ], conf
 
 
+def test_a_recheck_whose_verifiers_died_stays_queued_and_settles_nothing(
+    rundir, tmp_path
+):
+    ref = finding("r.cpp", 2, "high", status="refuted", summary="refuted claim")
+    ref["votes"] = {"refuted": 3}
+    write(str(rundir / "verdicts" / "B-0000.json"), {"findings": [ref]})
+    code, out, err = run(
+        os.path.join(ENGINE, "recheck.py"),
+        "--run",
+        rundir,
+        "queue",
+        "--refuted-sample",
+        "1",
+    )
+    assert code == 0, out + err
+    (it,) = json.loads(out.splitlines()[0])["items"]
+    # what recheck-wave.js returns when its verifiers die: the item stays queued
+    died = {"confirmed": 0, "refuted": 0, "uncertain": 0, "died": 3}
+    write(
+        str(tmp_path / "o.json"),
+        {
+            "items": [
+                {
+                    "finding": it["finding"],
+                    "why": it["why"],
+                    "outcome": "queued",
+                    "votes": died,
+                    "reasons": [],
+                }
+            ]
+        },
+    )
+    run(
+        os.path.join(ENGINE, "recheck.py"),
+        "--run",
+        rundir,
+        "persist",
+        tmp_path / "o.json",
+    )
+    assert run(os.path.join(ENGINE, "consolidate.py"), "--run", rundir)[0] == 0
+    assert (
+        "refuted claim" in open(rundir / "REFUTED.md").read()
+    ), "the wave verdict stands"
+    code, out, _ = run(os.path.join(ENGINE, "recheck.py"), "--run", rundir, "queue")
+    assert [
+        i["finding"]["summary"] for i in json.loads(out.splitlines()[0])["items"]
+    ] == ["refuted claim"], "and the next recheck wave gets it again"
+
+
+def test_recheck_wave_keeps_an_item_queued_when_a_verifier_dies():
+    quickjs = pytest.importorskip(
+        "quickjs"
+    )  # a JS engine, to run the Workflow script with stub agents
+    plan = {
+        "all-dead": [None, None, None],
+        "dead-two-refute": [None, "refuted", "refuted"],
+        "dead-two-confirm": [None, "confirmed", "confirmed"],
+        "split": ["confirmed", "refuted", "uncertain"],
+    }
+    items = [
+        {"finding": {"file": "a.c", "line": i, "summary": k}, "why": "x"}
+        for i, k in enumerate(plan)
+    ]
+    src = (
+        open(os.path.join(ENGINE, "recheck-wave.js"))
+        .read()
+        .replace("export const meta", "const meta", 1)
+    )
+    ctx = quickjs.Context()
+    ctx.eval(
+        f"""
+globalThis.args = {json.dumps({"run": "/r", "root": "/t", "items": items})};
+const plan = {json.dumps(plan)};
+globalThis.log = () => {{}};
+globalThis.agent = async (prompt) => {{
+  const k = Object.keys(plan).find((s) => prompt.includes("Claim: " + s + "\\n"));
+  const lens = prompt.includes("Lens: reachability") ? 0 : prompt.includes("Lens: semantics") ? 1 : 2;
+  return plan[k][lens] === null ? null : {{ verdict: plan[k][lens], reason: "r" }};
+}};
+globalThis.parallel = (ts) => Promise.all(ts.map((t) => t()));
+globalThis.pipeline = (xs, f) => Promise.all(xs.map(f));
+(async function () {{
+{src}
+}})().then((r) => {{ globalThis.out = JSON.stringify(r) }}, (e) => {{ globalThis.out = "ERR " + e }});
+"""
+    )
+    while ctx.execute_pending_job():
+        pass
+    res = ctx.eval("globalThis.out")
+    assert not res.startswith("ERR"), res
+    got = {i["finding"]["summary"]: i["outcome"] for i in json.loads(res)["items"]}
+    assert got == {
+        "all-dead": "queued",
+        "dead-two-refute": "queued",
+        "dead-two-confirm": "confirmed",
+        "split": "uncertain",
+    }, got
+
+
 def test_every_program_and_helper_spawn_allows_is_used():
     # spawn.py is the allowlist of what the skill may start; an entry nothing uses only widens it
     import ast

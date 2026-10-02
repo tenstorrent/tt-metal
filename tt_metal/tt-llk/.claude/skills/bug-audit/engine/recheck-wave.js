@@ -63,13 +63,17 @@ const results = await pipeline(ITEMS, (it) =>
       const got = vs.filter(Boolean)
       const n = (v) => got.filter((x) => x.verdict === v).length
       const c = n('confirmed'), r = n('refuted')
-      const outcome = c >= 2 ? 'confirmed' : r >= 2 ? 'refuted' : 'uncertain'
+      const died = LENSES.length - got.length
+      // as in a wave, a dead verifier is unknown, never a vote: short of a confirmation, the item stays queued for the
+      // next recheck wave instead of being settled on the votes that happened to be cast
+      let outcome = c >= 2 ? 'confirmed' : r >= 2 ? 'refuted' : 'uncertain'
+      if (died > 0 && outcome !== 'confirmed') outcome = 'queued'
       return { finding: it.finding, why: it.why, path: it.path, outcome,
-               votes: { confirmed: c, refuted: r, uncertain: n('uncertain'), died: LENSES.length - got.length },
+               votes: { confirmed: c, refuted: r, uncertain: n('uncertain'), died },
                reasons: got.map((v) => `[${v.verdict}] ${v.reason}`) }
     }))
 
 const items = results.filter(Boolean)
 const flips = items.filter((i) => i.why === 'refuted-sample' && i.outcome === 'confirmed').length  // file-mode items report why=undefined
-log(`rechecked ${items.length}: confirmed ${items.filter((i) => i.outcome === 'confirmed').length}, refuted ${items.filter((i) => i.outcome === 'refuted').length}, uncertain ${items.filter((i) => i.outcome === 'uncertain').length}; refuted-sample reversals ${flips}`)
+log(`rechecked ${items.length}: confirmed ${items.filter((i) => i.outcome === 'confirmed').length}, refuted ${items.filter((i) => i.outcome === 'refuted').length}, uncertain ${items.filter((i) => i.outcome === 'uncertain').length}, still queued (a verifier died) ${items.filter((i) => i.outcome === 'queued').length}; refuted-sample reversals ${flips}`)
 return { items }
