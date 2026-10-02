@@ -131,6 +131,66 @@ def resolve_batched_prefill_chunk_users(padded_batch: int, prefill_seq_len: int)
     return supported[-1] if supported else 1
 
 
+def mask_page_table_columns_past_allocation(page_tables, prompt_lens, block_sizes):
+    """Zero every page-table column past each request's own allocation.
+
+    The vLLM plugin hands prefill the persistent block-table rows of its input
+    batch. vLLM tracks only how many entries of a row are live; the columns past
+    that still hold the block ids of whichever requests occupied the row before
+    (the batch's condense/move leave them in place), and those blocks are
+    usually live residents' blocks. The model's K/V fill writes whole padded
+    rows -- the traced single-chunk prefill cannot cap on the host, and
+    ``paged_fill_cache`` only caps bounded rings in-kernel -- so a 157-token
+    chunk padded to 1024 followed those stale ids and overwrote another
+    request's K/V (one-token glitches in a concurrent long-context burst).
+    Column 0 is vLLM's null block, never allocated, so zero absorbs such
+    writes harmlessly.
+
+    ``block_sizes[i]`` is layer ``i``'s tokens-per-column. Entries that are not
+    host tensors (device tables, ``None``) and rows without a prompt length pass
+    through. Returns ``(tables, zeroed_columns)``; a table that needed masking
+    comes back as a new tensor (a shared object stays shared), the inputs are
+    left untouched.
+    """
+    if page_tables is None or prompt_lens is None:
+        return page_tables, 0
+    try:
+        lens = [int(p) for p in (prompt_lens.tolist() if hasattr(prompt_lens, "tolist") else list(prompt_lens))]
+    except (TypeError, ValueError):
+        return page_tables, 0
+    out = []
+    zeroed = 0
+    done = {}
+    for i, pt in enumerate(page_tables):
+        bs = block_sizes[i] if i < len(block_sizes) else None
+        if not isinstance(pt, torch.Tensor) or bs is None or int(bs) <= 0:
+            out.append(pt)
+            continue
+        key = (id(pt), int(bs))
+        if key in done:
+            out.append(done[key])
+            continue
+        table = pt if pt.dim() > 1 else pt.unsqueeze(0)
+        masked = None
+        for r in range(min(int(table.shape[0]), len(lens))):
+            if lens[r] <= 0:
+                continue
+            first_free = -(-lens[r] // int(bs))
+            if first_free >= int(table.shape[1]):
+                continue
+            stale = int((table[r, first_free:] != 0).sum())
+            if stale == 0:
+                continue
+            if masked is None:
+                masked = table.clone()
+            masked[r, first_free:] = 0
+            zeroed += stale
+        result = pt if masked is None else (masked if pt.dim() > 1 else masked[0])
+        done[key] = result
+        out.append(result)
+    return out, zeroed
+
+
 def _load_text_tokenizer(model_path):
     # The 12B tokenizer config can advertise multimodal extra_special_tokens as
     # a list (for example ["<|video|>"]), while this transformers version expects
@@ -345,8 +405,7 @@ class ChunkedPrefillPageTableGuardMixin:
             # returns existing B=1 device buffers *without* refreshing content.
             # Without this H2D, users after the first keep reading/writing user
             # 0's block IDs (full-attn cross-chunk SDPA + sliding ring fill).
-            if hasattr(m, "update_persistent_per_layer_page_tables"):
-                m.update_persistent_per_layer_page_tables(sliced)
+            self._install_per_layer_page_tables(m, sliced, writer="prefill")
 
     def _clear_sequential_batch_page_tables(self) -> None:
         """Put the full-batch per-layer tables back after sequential prefill."""
@@ -355,10 +414,58 @@ class ChunkedPrefillPageTableGuardMixin:
             if batch_host is None:
                 continue
             m._active_page_tables_per_layer = batch_host
-            if hasattr(m, "update_persistent_per_layer_page_tables"):
-                m.update_persistent_per_layer_page_tables(batch_host)
+            self._install_per_layer_page_tables(m, batch_host, writer="prefill")
             m._sequential_row_cursor = 0
             del m._sequential_batch_page_tables
+
+    @staticmethod
+    def _page_tables_rows(page_tables_per_layer):
+        """Row count that keys a per-layer table list's persistent device buffers
+        (the same rule as ``Gemma4Model._host_page_tables_batch``)."""
+        for pt in page_tables_per_layer or []:
+            if isinstance(pt, torch.Tensor):
+                return int(pt.shape[0]) if pt.dim() > 1 else 1
+        return None
+
+    @classmethod
+    def _install_per_layer_page_tables(cls, model, page_tables_per_layer, *, writer):
+        """H2D the per-layer tables into the persistent buffers keyed by their
+        row count and record who wrote them.
+
+        Prefill and decode share those buffers: a decode trace for bucket B
+        replays against the B-row buffers, and a prefill step writes the same
+        buffers whenever its batch (or the 1-row sequential slice) has B rows.
+        Decode only re-uploads on the plugin's explicit reload command, which
+        tracks the residents' own tables, so without this record a decoder whose
+        tables were stable kept replaying against the last prefilled user's
+        block ids: it read that user's KV and wrote its new token into that
+        user's blocks (garbage after a few tokens at the first lone decoder of a
+        concurrent long-context burst; the prefilling user's context damaged).
+        """
+        if not hasattr(model, "update_persistent_per_layer_page_tables"):
+            return
+        model.update_persistent_per_layer_page_tables(page_tables_per_layer)
+        rows = cls._page_tables_rows(page_tables_per_layer)
+        if rows is None:
+            return
+        writers = getattr(model, "_g4_page_table_writer_by_rows", None)
+        if writers is None:
+            writers = {}
+            model._g4_page_table_writer_by_rows = writers
+        writers[rows] = writer
+
+    @classmethod
+    def _page_tables_written_by_prefill(cls, models, per_submesh) -> bool:
+        """Whether any submesh's persistent buffers for these tables' row count
+        were last written by prefill (so decode must re-upload before replay)."""
+        for model, tables in zip(models, per_submesh or []):
+            rows = cls._page_tables_rows(tables)
+            if rows is None:
+                continue
+            writers = getattr(model, "_g4_page_table_writer_by_rows", None) or {}
+            if writers.get(rows) == "prefill":
+                return True
+        return False
 
     def _effective_paged_block_size(self, kv_cache):
         """Effective block_size the paged ops address this model's K/V cache with.

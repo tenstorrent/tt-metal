@@ -23,6 +23,7 @@ from models.demos.gemma4.tt.generator import (
     SDPA_CHUNK_ALIGN,
     ChunkedPrefillPageTableGuardMixin,
     align_num_cached_tokens_to_sdpa,
+    mask_page_table_columns_past_allocation,
     max_batched_prefill_users,
     resolve_batched_prefill_chunk_users,
 )
@@ -1474,6 +1475,91 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 out[q] = sub_out[pos]
         return out
 
+    def _prefill_page_table_block_sizes(self, kv_cache):
+        """Tokens per page-table column for every layer: the layer's effective
+        block size when it views an HMA-shared buffer, the declared one otherwise
+        (same rule as :meth:`_effective_paged_block_size`, per layer)."""
+        from models.demos.gemma4.tt.attention.operations import effective_block_size
+        from models.tt_transformers.tt.common import get_block_size
+
+        layers = getattr(self.model[0], "layers", [])
+        # The plugin passes ``kv_caches`` nested per submesh ([dp][layer][k, v]);
+        # the generator-level callers pass one submesh's per-layer list.
+        if (
+            kv_cache
+            and len(kv_cache) != len(layers)
+            and isinstance(kv_cache[0], (list, tuple))
+            and len(kv_cache[0]) == len(layers)
+        ):
+            kv_cache = kv_cache[0]
+        try:
+            default = int(get_block_size(kv_cache))
+        except Exception:
+            return []
+        sizes = []
+        for i, layer in enumerate(layers):
+            bs = default
+            attn = getattr(layer, "self_attn", None)
+            cfg = getattr(attn, "config", None)
+            if cfg is not None and i < len(kv_cache) and kv_cache[i] is not None:
+                cache = kv_cache[i][0]
+                try:
+                    cache_hd = int(cache.shape[-1])
+                except Exception:
+                    cache_hd = 0
+                if cache_hd and cache_hd != int(cfg.head_dim):
+                    tp = int(getattr(getattr(attn, "mesh_config", None), "tp", 1) or 1)
+                    weights = getattr(attn, "weights", None)
+                    kv_local = (
+                        1 if getattr(weights, "kv_replicated", False) else max(1, int(cfg.num_key_value_heads) // tp)
+                    )
+                    bs = int(effective_block_size(cache, int(cfg.head_dim), kv_local))
+            sizes.append(bs)
+        return sizes
+
+    def _mask_stale_prefill_page_tables(self, full_page_tables, kwargs):
+        """Zero the page-table columns past each request's allocation before
+        any fill can follow them (see
+        :func:`mask_page_table_columns_past_allocation`). Applies to the
+        per-layer tables and the legacy ``page_table`` (group 0's stride).
+        GEMMA4_MASK_STALE_PAGE_TABLE_COLS=0 restores the raw plugin rows."""
+        if not gemma4_env_flag("GEMMA4_MASK_STALE_PAGE_TABLE_COLS", "1"):
+            return full_page_tables, kwargs
+        prompt_lens = kwargs.get("prompt_lens")
+        kv_cache = kwargs.get("kv_cache")
+        if prompt_lens is None or kv_cache is None:
+            return full_page_tables, kwargs
+        sizes = self._prefill_page_table_block_sizes(kv_cache)
+        if not sizes:
+            if not getattr(self, "_g4_stale_page_table_cols_unresolved", False):
+                self._g4_stale_page_table_cols_unresolved = True
+                logger.warning(
+                    "Gemma4 vLLM: could not resolve per-layer block sizes from kv_cache; "
+                    "prefill page tables keep the plugin's raw rows (stale columns unmasked)"
+                )
+            return full_page_tables, kwargs
+        zeroed = 0
+        if full_page_tables:
+            full_page_tables, zeroed = mask_page_table_columns_past_allocation(full_page_tables, prompt_lens, sizes)
+        legacy = kwargs.get("page_table")
+        if isinstance(legacy, torch.Tensor):
+            (masked_legacy,), n_legacy = mask_page_table_columns_past_allocation([legacy], prompt_lens, sizes[:1])
+            if n_legacy:
+                kwargs = dict(kwargs)
+                kwargs["page_table"] = masked_legacy
+                zeroed += n_legacy
+        if zeroed:
+            if not getattr(self, "_g4_stale_page_table_cols_logged", False):
+                self._g4_stale_page_table_cols_logged = True
+                logger.info(
+                    "Gemma4 vLLM: zeroed {} stale page-table column(s) past the requests' allocations "
+                    "before prefill (plugin rows carry earlier occupants' block ids; further hits at debug level)",
+                    zeroed,
+                )
+            else:
+                logger.debug("Gemma4 vLLM: zeroed {} stale page-table column(s) before prefill", zeroed)
+        return full_page_tables, kwargs
+
     def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
         tokens = kwargs.get("tokens")
         if tokens is None and args:
@@ -1504,6 +1590,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         # that one user).
         rings_live_before_prefill = len(getattr(self, "_bounded_ring_slot_map", None) or {})
         full_page_tables = self._build_per_layer_page_tables(page_tables_per_layer, kwargs.get("page_table"))
+        full_page_tables, kwargs = self._mask_stale_prefill_page_tables(full_page_tables, kwargs)
         full_page_tables = self._pad_sliding_page_tables_for_bounded(
             full_page_tables, kwargs.get("kv_cache"), row_slots=kwargs.get("empty_slots")
         )
@@ -1666,7 +1753,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         per_submesh = self._chunk_page_tables_per_dp(full_page_tables)
         if per_submesh is not None:
             for m, pt_for_submesh in zip(self.model, per_submesh):
-                m.update_persistent_per_layer_page_tables(pt_for_submesh)
+                self._install_per_layer_page_tables(m, pt_for_submesh, writer="prefill")
         else:
             for m in self.model:
                 if hasattr(m, "_active_page_tables_per_layer"):
@@ -1774,7 +1861,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             page_tables_per_layer, kwargs.get("kv_cache"), authoritative=True
         )
         per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
-        if per_submesh is not None and self._reload_per_layer_page_tables(kwargs):
+        if per_submesh is not None:
             # The decode trace for bucket B replays against the persistent
             # per-layer buffers keyed by B rows (warmup captures with
             # bucket-sized tables). The plugin pads its per-layer tables to
@@ -1785,8 +1872,14 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             _tok = args[0] if _tok is None and args else _tok
             host_b = int(_tok.shape[0]) // max(1, int(self.data_parallel)) if _tok is not None else None
             per_submesh = [self._slice_page_tables_rows(pt_list, host_b) for pt_list in per_submesh]
-            for m, pt_for_submesh in zip(self.model, per_submesh):
-                m.update_persistent_per_layer_page_tables(pt_for_submesh)
+            # The plugin's reload command tracks the residents' own tables; a
+            # prefill step in between writes the same bucket buffers (see
+            # _install_per_layer_page_tables), so re-upload after one as well.
+            if self._reload_per_layer_page_tables(kwargs) or self._page_tables_written_by_prefill(
+                self.model, per_submesh
+            ):
+                for m, pt_for_submesh in zip(self.model, per_submesh):
+                    self._install_per_layer_page_tables(m, pt_for_submesh, writer="decode")
         # If persistent page-table buffers grew after decode-trace capture,
         # drop the stale Metal traces so the next step recaptures against
         # the new addresses (see Gemma4Model._page_tables_to_ttnn).
