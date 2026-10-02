@@ -32,13 +32,9 @@ void kernel_main() {
     constexpr auto v_a = TensorAccessorArgs<k_a.next_compile_time_args_offset()>();
     constexpr auto g_a = TensorAccessorArgs<v_a.next_compile_time_args_offset()>();
     constexpr auto b_a = TensorAccessorArgs<g_a.next_compile_time_args_offset()>();
-    constexpr auto eye_a = TensorAccessorArgs<b_a.next_compile_time_args_offset()>();
-    constexpr auto tril_a = TensorAccessorArgs<eye_a.next_compile_time_args_offset()>();
-    constexpr auto ones_a = TensorAccessorArgs<tril_a.next_compile_time_args_offset()>();
-    constexpr auto mask_a = TensorAccessorArgs<ones_a.next_compile_time_args_offset()>();
     // OPT-A: trailing compile args (after all TensorAccessorArgs). 1 => read that tensor FLAT token-major.
-    constexpr uint32_t V_FLAT = get_compile_time_arg_val(mask_a.next_compile_time_args_offset());
-    constexpr uint32_t QK_FLAT = get_compile_time_arg_val(mask_a.next_compile_time_args_offset() + 1);
+    constexpr uint32_t V_FLAT = get_compile_time_arg_val(b_a.next_compile_time_args_offset());
+    constexpr uint32_t QK_FLAT = get_compile_time_arg_val(b_a.next_compile_time_args_offset() + 1);
 
     // A work-item is a flat (head, chunk) index — exactly the DRAM tile-group index h*NC + c.
 #if defined(GDN_FUSED_PRODUCER)
@@ -54,29 +50,28 @@ void kernel_main() {
     const uint32_t v_addr = get_arg_val<uint32_t>(4);
     const uint32_t g_addr = get_arg_val<uint32_t>(5);
     const uint32_t b_addr = get_arg_val<uint32_t>(6);
-    // Args 7..10: the DRAM copies of eye, tril, ones, masks; the constants are built in L1 instead.
     // Flat metadata (used by V_FLAT/QK_FLAT): NC = chunks/head, HV = value-head count, Hk = key-head count.
-    const uint32_t NC = get_arg_val<uint32_t>(11);
-    const uint32_t HV = get_arg_val<uint32_t>(12);
-    const uint32_t Hk = get_arg_val<uint32_t>(13);
+    const uint32_t NC = get_arg_val<uint32_t>(7);
+    const uint32_t HV = get_arg_val<uint32_t>(8);
+    const uint32_t Hk = get_arg_val<uint32_t>(9);
     // Cycles to wait before the first read: the fused factory's kickoff stagger, 0 for the phased prep.
-    const uint32_t kickoff_wait_cycles = get_arg_val<uint32_t>(15);
+    const uint32_t kickoff_wait_cycles = get_arg_val<uint32_t>(11);
 #if defined(GDN_FUSED_PRODUCER)
     // The producer map: BH, then (NPH, NX, num, den) as in chunk_gdn_fused_map.hpp.
     const GdnFusedMap map{
-        get_arg_val<uint32_t>(14),
+        get_arg_val<uint32_t>(10),
         NC,
-        get_arg_val<uint32_t>(16),
-        get_arg_val<uint32_t>(17),
-        get_arg_val<uint32_t>(18),
-        get_arg_val<uint32_t>(19)};
+        get_arg_val<uint32_t>(12),
+        get_arg_val<uint32_t>(13),
+        get_arg_val<uint32_t>(14),
+        get_arg_val<uint32_t>(15)};
     auto item_wi = [&](uint32_t n) {
         const GdnFusedItem it = gdn_fused_item(map, p, n);
         return it.h * NC + it.c;
     };
 #else
     // Work-item stride: 1 for a contiguous slice (phased prep).
-    const uint32_t wi_stride = get_arg_val<uint32_t>(14);
+    const uint32_t wi_stride = get_arg_val<uint32_t>(10);
     auto item_wi = [&](uint32_t n) { return wi_start + n * wi_stride; };
 #endif
 

@@ -277,10 +277,6 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     TensorAccessorArgs(*in.v.buffer()).append_to(prep_reader_ct);
     TensorAccessorArgs(*in.g.buffer()).append_to(prep_reader_ct);
     TensorAccessorArgs(*in.beta.buffer()).append_to(prep_reader_ct);
-    TensorAccessorArgs(*in.eye_c.buffer()).append_to(prep_reader_ct);
-    TensorAccessorArgs(*in.tril_c.buffer()).append_to(prep_reader_ct);
-    TensorAccessorArgs(*in.ones_c.buffer()).append_to(prep_reader_ct);
-    TensorAccessorArgs(*in.masks_c.buffer()).append_to(prep_reader_ct);
     // OPT-A: trailing compile args after all TensorAccessorArgs — 1 => read that tensor flat token-major.
     prep_reader_ct.push_back(attrs.v_flat ? 1u : 0u);
     prep_reader_ct.push_back(attrs.qk_flat ? 1u : 0u);
@@ -396,10 +392,6 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     auto* v_buf = in.v.buffer();
     auto* g_buf = in.g.buffer();
     auto* beta_buf = in.beta.buffer();
-    auto* eye_buf = in.eye_c.buffer();
-    auto* tril_buf = in.tril_c.buffer();
-    auto* ones_buf = in.ones_c.buffer();
-    auto* masks_buf = in.masks_c.buffer();
     auto* s0_buf = in.initial_state.buffer();
     auto* o_buf = outputs[0].buffer();
     auto* fs_buf = outputs[1].buffer();
@@ -492,11 +484,23 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     for (uint32_t p = 0; p < P; p++) {
         const CoreCoord& pc = prod_cores[p];
         prep_reader.emplace_runtime_args(
-            pc, {p,        n_items[p], q_buf,     k_buf,
-                 v_buf,    g_buf,      beta_buf,  eye_buf,
-                 tril_buf, ones_buf,   masks_buf, NC,
-                 attrs.HV, attrs.Hk,   BH,        c_first[p] * kProducerKickoffStaggerCycles,
-                 map.NPH,  map.NX,     map.num,   map.den});
+            pc,
+            {p,
+             n_items[p],
+             q_buf,
+             k_buf,
+             v_buf,
+             g_buf,
+             beta_buf,
+             NC,
+             attrs.HV,
+             attrs.Hk,
+             BH,
+             c_first[p] * kProducerKickoffStaggerCycles,
+             map.NPH,
+             map.NX,
+             map.num,
+             map.den});
         prep_compute.emplace_runtime_args(pc, {n_items[p]});
         std::vector<std::variant<uint32_t, Buffer*>> w_args = {
             p, n_items[p], BH, NC, map.NPH, map.NX, map.num, map.den};
