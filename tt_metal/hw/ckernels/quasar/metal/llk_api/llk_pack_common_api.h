@@ -85,17 +85,54 @@ inline bool should_reconfig_pack_in_data_format(const std::uint32_t old_output, 
 }
 
 /**
- * Reprograms packer THCON IN_DATA_FORMAT only (gasket); L1 format stays in buffer descriptors.
+ * Returns the packer IN_DATA_FORMAT for an output when the dest register is in the EN_32BIT_DEST width.
+ *
+ * pack_src_format[] is generated for the kernel's compiled width (DST_ACCUM_MODE) only. After a mid-kernel
+ * enable/disable_fp32_dest_acc the dest width differs from it, and the packer reads dest at the width its
+ * IN_DATA_FORMAT implies (Quasar has no Read_32b_data bit). Mirrors the host rule in get_single_pack_src_format:
+ * 32-bit dest packs every float output from Float32; 16-bit dest packs floats from the 16-bit format with the
+ * output's exponent width. Integer formats keep the table value.
  */
-template <bool EN_32BIT_DEST /*maybe_unused*/>
+template <bool EN_32BIT_DEST>
+inline std::uint32_t llk_pack_src_format_for_dest_width(const std::uint32_t output_id) {
+    const std::uint32_t table_src = pack_src_format[output_id];
+    if constexpr (EN_32BIT_DEST == static_cast<bool>(DST_ACCUM_MODE)) {
+        return table_src;
+    } else {
+        const DataFormat dst = static_cast<DataFormat>(pack_dst_format[output_id]);
+        const bool is_int =
+            dst == DataFormat::Int32 || dst == DataFormat::Int16 || dst == DataFormat::Int8 || dst == DataFormat::UInt8;
+        if (is_int) {
+            return table_src;
+        }
+        if constexpr (EN_32BIT_DEST) {
+            return static_cast<std::uint32_t>(DataFormat::Float32);
+        } else {
+            // DRAFT: exponent-A outputs (Float16) keep Float16; everything else packs from Float16_b.
+            return static_cast<std::uint32_t>(dst == DataFormat::Float16 ? DataFormat::Float16 : DataFormat::Float16_b);
+        }
+    }
+}
+
+/**
+ * Reprograms packer THCON IN_DATA_FORMAT only (gasket); L1 format stays in buffer descriptors.
+ *
+ * @tparam EN_32BIT_DEST: Current dest width. Pass the toggled width after enable/disable_fp32_dest_acc so the
+ * packer reads dest at the right width; it defaults to DST_ACCUM_MODE at the Compute API.
+ */
+template <bool EN_32BIT_DEST>
 inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const std::uint32_t output_id = get_output_id(new_output);
-    _llk_pack_reconfig_data_format_<p_pacr::PACK0>(pack_src_format[output_id], pack_dst_format[output_id]);
+    _llk_pack_reconfig_data_format_<p_pacr::PACK0>(
+        llk_pack_src_format_for_dest_width<EN_32BIT_DEST>(output_id), pack_dst_format[output_id]);
 }
 
 template <bool EN_32BIT_DEST>
 inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const std::uint32_t new_output) {
-    if (!should_reconfig_pack_in_data_format(old_output, new_output)) {
+    // A width different from DST_ACCUM_MODE can need a new IN_DATA_FORMAT even when the two outputs' table
+    // formats match, so only skip in the compiled width.
+    if (EN_32BIT_DEST == static_cast<bool>(DST_ACCUM_MODE) &&
+        !should_reconfig_pack_in_data_format(old_output, new_output)) {
         return;
     }
     llk_pack_reconfig_data_format<EN_32BIT_DEST>(new_output);

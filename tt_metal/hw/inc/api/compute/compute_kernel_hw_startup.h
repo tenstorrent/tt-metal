@@ -128,10 +128,12 @@ ALWI void compute_kernel_hw_startup(std::uint32_t icb0, std::uint32_t ocb) {
  * Must be paired with disable_fp32_dest_acc() when switching back to
  * BF16 accumulation mode within the same kernel.
  *
- * On Quasar the packer has no Read_32b_data bit (its dest read width follows the pack
- * IN_DATA_FORMAT, which the caller must reprogram), the ALU format latch is reset so the
- * next math init rewrites the ALU config, and the isolated-SFPU TRISC is not part of the
- * handshake (kernels that drive the SFPU on dest from TRISC3 must not use this).
+ * On Quasar the packer has no Read_32b_data bit: its dest read width follows the pack
+ * IN_DATA_FORMAT, so after the toggle call pack_reconfig_data_format<false, enable>(ocb).
+ * Pass the toggled width to tile_regs_commit / tile_regs_release / *_tiles as well. If the
+ * MOV-ops ALU config (transpose-dest, unpack-to-dest broadcast) is active, the next math
+ * init rewrites the ALU config. The isolated-SFPU TRISC (TRISC3) is not part of the
+ * handshake, so kernels that drive the SFPU on dest from TRISC3 must not use this.
  *
  * Return value: None
  */
@@ -158,10 +160,12 @@ ALWI void enable_fp32_dest_acc() {
  * All three TRISC threads must call this together. TRISC mailboxes must not
  * be in use.
  *
- * On Quasar the packer has no Read_32b_data bit (its dest read width follows the pack
- * IN_DATA_FORMAT, which the caller must reprogram), the ALU format latch is reset so the
- * next math init rewrites the ALU config, and the isolated-SFPU TRISC is not part of the
- * handshake (kernels that drive the SFPU on dest from TRISC3 must not use this).
+ * On Quasar the packer has no Read_32b_data bit: its dest read width follows the pack
+ * IN_DATA_FORMAT, so after the toggle call pack_reconfig_data_format<false, enable>(ocb).
+ * Pass the toggled width to tile_regs_commit / tile_regs_release / *_tiles as well. If the
+ * MOV-ops ALU config (transpose-dest, unpack-to-dest broadcast) is active, the next math
+ * init rewrites the ALU config. The isolated-SFPU TRISC (TRISC3) is not part of the
+ * handshake, so kernels that drive the SFPU on dest from TRISC3 must not use this.
  *
  * Return value: None
  */
@@ -186,10 +190,12 @@ ALWI void disable_fp32_dest_acc() {
  * (compute_kernel_hw_startup already programmed the requested mode).
  * Must be paired with restore_fp32_dest_acc<enable>() using the same flag.
  *
- * On Quasar the packer has no Read_32b_data bit (its dest read width follows the pack
- * IN_DATA_FORMAT, which the caller must reprogram), the ALU format latch is reset so the
- * next math init rewrites the ALU config, and the isolated-SFPU TRISC is not part of the
- * handshake (kernels that drive the SFPU on dest from TRISC3 must not use this).
+ * On Quasar the packer has no Read_32b_data bit: its dest read width follows the pack
+ * IN_DATA_FORMAT, so after the toggle call pack_reconfig_data_format<false, enable>(ocb).
+ * Pass the toggled width to tile_regs_commit / tile_regs_release / *_tiles as well. If the
+ * MOV-ops ALU config (transpose-dest, unpack-to-dest broadcast) is active, the next math
+ * init rewrites the ALU config. The isolated-SFPU TRISC (TRISC3) is not part of the
+ * handshake, so kernels that drive the SFPU on dest from TRISC3 must not use this.
  *
  * Return value: None
  *
@@ -223,10 +229,12 @@ ALWI void set_fp32_dest_acc() {
  * No-op when `enable` already matches DST_ACCUM_MODE (the matching set
  * was also a no-op). Pass the same `enable` used at the set.
  *
- * On Quasar the packer has no Read_32b_data bit (its dest read width follows the pack
- * IN_DATA_FORMAT, which the caller must reprogram), the ALU format latch is reset so the
- * next math init rewrites the ALU config, and the isolated-SFPU TRISC is not part of the
- * handshake (kernels that drive the SFPU on dest from TRISC3 must not use this).
+ * On Quasar the packer has no Read_32b_data bit: its dest read width follows the pack
+ * IN_DATA_FORMAT, so after the toggle call pack_reconfig_data_format<false, enable>(ocb).
+ * Pass the toggled width to tile_regs_commit / tile_regs_release / *_tiles as well. If the
+ * MOV-ops ALU config (transpose-dest, unpack-to-dest broadcast) is active, the next math
+ * init rewrites the ALU config. The isolated-SFPU TRISC (TRISC3) is not part of the
+ * handshake, so kernels that drive the SFPU on dest from TRISC3 must not use this.
  *
  * Return value: None
  *

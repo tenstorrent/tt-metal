@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "common_globals.h"
 #include "sanitizer/api.h"
 #include "api/compute/src_order.h"
@@ -23,8 +24,9 @@ namespace detail {
 // through these helpers so the primary, deprecated, and _skip_int8 surfaces stay in lockstep.
 
 // p_dim_stride_target is declared only on the unpack thread (via the unpack API header). This helper, and every other
-// reference to that type, therefore lives under TRISC_UNPACK and is called only inside UNPACK((...)) -- which expands to
-// nothing on the math/pack threads, so the type is never named there (naming it unconditionally breaks the math build).
+// reference to that type, therefore lives under TRISC_UNPACK and is called only inside UNPACK((...)) -- which expands
+// to nothing on the math/pack threads, so the type is never named there (naming it unconditionally breaks the math
+// build).
 #ifdef TRISC_UNPACK
 constexpr p_dim_stride_target dim_stride_of(bool is_tile_dim_reconfig_en) {
     return is_tile_dim_reconfig_en ? p_dim_stride_target::FACE_ROW_MAJOR : p_dim_stride_target::IGNORE;
@@ -32,7 +34,7 @@ constexpr p_dim_stride_target dim_stride_of(bool is_tile_dim_reconfig_en) {
 #endif
 
 template <bool is_tile_dim_reconfig_en, bool skip_int8>
-ALWI void reconfig_df_both(const uint32_t src_a_operand, const uint32_t src_b_operand) {
+ALWI void reconfig_df_both(const std::uint32_t src_a_operand, const std::uint32_t src_b_operand) {
     UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE, dim_stride_of(is_tile_dim_reconfig_en), skip_int8>(
         src_a_operand, src_b_operand)));
     MATH((llk_math_reconfig_data_format<DST_ACCUM_MODE, skip_int8>(src_a_operand, src_b_operand)));
@@ -40,10 +42,10 @@ ALWI void reconfig_df_both(const uint32_t src_a_operand, const uint32_t src_b_op
 
 template <bool is_tile_dim_reconfig_en, bool skip_int8>
 ALWI void reconfig_df_both(
-    const uint32_t src_a_old_operand,
-    const uint32_t src_a_new_operand,
-    const uint32_t src_b_old_operand,
-    const uint32_t src_b_new_operand) {
+    const std::uint32_t src_a_old_operand,
+    const std::uint32_t src_a_new_operand,
+    const std::uint32_t src_b_old_operand,
+    const std::uint32_t src_b_new_operand) {
     UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE, dim_stride_of(is_tile_dim_reconfig_en), skip_int8>(
         src_a_old_operand, src_a_new_operand, src_b_old_operand, src_b_new_operand)));
     MATH((llk_math_reconfig_data_format<DST_ACCUM_MODE, skip_int8>(
@@ -51,28 +53,28 @@ ALWI void reconfig_df_both(
 }
 
 template <bool is_tile_dim_reconfig_en, bool skip_int8>
-ALWI void reconfig_df_srca(const uint32_t srca_new_operand) {
+ALWI void reconfig_df_srca(const std::uint32_t srca_new_operand) {
     UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, dim_stride_of(is_tile_dim_reconfig_en), skip_int8>(
         srca_new_operand)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE, skip_int8>(srca_new_operand)));
 }
 
 template <bool is_tile_dim_reconfig_en, bool skip_int8>
-ALWI void reconfig_df_srca(const uint32_t srca_old_operand, const uint32_t srca_new_operand) {
+ALWI void reconfig_df_srca(const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
     UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, dim_stride_of(is_tile_dim_reconfig_en), skip_int8>(
         srca_old_operand, srca_new_operand)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE, skip_int8>(srca_old_operand, srca_new_operand)));
 }
 
 template <bool is_tile_dim_reconfig_en, bool skip_int8>
-ALWI void reconfig_df_srcb(const uint32_t srcb_new_operand) {
+ALWI void reconfig_df_srcb(const std::uint32_t srcb_new_operand) {
     UNPACK((llk_unpack_reconfig_data_format_srcb<DST_ACCUM_MODE, dim_stride_of(is_tile_dim_reconfig_en), skip_int8>(
         srcb_new_operand)));
     MATH((llk_math_reconfig_data_format_srcb<DST_ACCUM_MODE, skip_int8>(srcb_new_operand)));
 }
 
 template <bool is_tile_dim_reconfig_en, bool skip_int8>
-ALWI void reconfig_df_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_new_operand) {
+ALWI void reconfig_df_srcb(const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
     UNPACK((llk_unpack_reconfig_data_format_srcb<DST_ACCUM_MODE, dim_stride_of(is_tile_dim_reconfig_en), skip_int8>(
         srcb_old_operand, srcb_new_operand)));
     MATH((llk_math_reconfig_data_format_srcb<DST_ACCUM_MODE, skip_int8>(srcb_old_operand, srcb_new_operand)));
@@ -83,33 +85,33 @@ ALWI void reconfig_df_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_
 // mirroring the reconfig_df_* naming. Defined only off Quasar, where tile geometry is programmed at op init, not by
 // reconfig -- so the whole geometry surface (reconfig_full_operand / reconfig_tile_shape) is compiled out there.
 #ifndef ARCH_QUASAR
-ALWI void reconfig_ts_both(const uint32_t src_a_operand, const uint32_t src_b_operand) {
+ALWI void reconfig_ts_both(const std::uint32_t src_a_operand, const std::uint32_t src_b_operand) {
     UNPACK((llk_unpack_reconfig_tile_shape_srca(src_a_operand)));
     UNPACK((llk_unpack_reconfig_tile_shape_srcb(src_b_operand)));
 }
 
 ALWI void reconfig_ts_both(
-    const uint32_t src_a_old_operand,
-    const uint32_t src_a_new_operand,
-    const uint32_t src_b_old_operand,
-    const uint32_t src_b_new_operand) {
+    const std::uint32_t src_a_old_operand,
+    const std::uint32_t src_a_new_operand,
+    const std::uint32_t src_b_old_operand,
+    const std::uint32_t src_b_new_operand) {
     UNPACK((llk_unpack_reconfig_tile_shape_srca(src_a_old_operand, src_a_new_operand)));
     UNPACK((llk_unpack_reconfig_tile_shape_srcb(src_b_old_operand, src_b_new_operand)));
 }
 
-ALWI void reconfig_ts_srca(const uint32_t srca_new_operand) {
+ALWI void reconfig_ts_srca(const std::uint32_t srca_new_operand) {
     UNPACK((llk_unpack_reconfig_tile_shape_srca(srca_new_operand)));
 }
 
-ALWI void reconfig_ts_srca(const uint32_t srca_old_operand, const uint32_t srca_new_operand) {
+ALWI void reconfig_ts_srca(const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
     UNPACK((llk_unpack_reconfig_tile_shape_srca(srca_old_operand, srca_new_operand)));
 }
 
-ALWI void reconfig_ts_srcb(const uint32_t srcb_new_operand) {
+ALWI void reconfig_ts_srcb(const std::uint32_t srcb_new_operand) {
     UNPACK((llk_unpack_reconfig_tile_shape_srcb(srcb_new_operand)));
 }
 
-ALWI void reconfig_ts_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_new_operand) {
+ALWI void reconfig_ts_srcb(const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
     UNPACK((llk_unpack_reconfig_tile_shape_srcb(srcb_old_operand, srcb_new_operand)));
 }
 #endif
@@ -155,7 +157,7 @@ ALWI void reconfig_ts_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_
  * SrcA/SrcB. Does not reprogram tile/face geometry -- use reconfig_full_operand when the tile shape also changes.
  */
 template <SrcOrder src_order = SrcOrder::Regular>
-ALWI void reconfig_data_format(const uint32_t icb0_new_operand, const uint32_t icb1_new_operand) {
+ALWI void reconfig_data_format(const std::uint32_t icb0_new_operand, const std::uint32_t icb1_new_operand) {
     LLK_SAN_FUNCTION();
     constexpr bool reverse = (src_order == SrcOrder::Reverse);
     detail::reconfig_df_both<false, false>(
@@ -171,10 +173,10 @@ ALWI void reconfig_data_format(const uint32_t icb0_new_operand, const uint32_t i
  */
 template <SrcOrder src_order = SrcOrder::Regular>
 ALWI void reconfig_data_format(
-    const uint32_t icb0_old_operand,
-    const uint32_t icb0_new_operand,
-    const uint32_t icb1_old_operand,
-    const uint32_t icb1_new_operand) {
+    const std::uint32_t icb0_old_operand,
+    const std::uint32_t icb0_new_operand,
+    const std::uint32_t icb1_old_operand,
+    const std::uint32_t icb1_new_operand) {
     LLK_SAN_FUNCTION();
     constexpr bool reverse = (src_order == SrcOrder::Reverse);
     detail::reconfig_df_both<false, false>(
@@ -187,7 +189,7 @@ ALWI void reconfig_data_format(
 /**
  * Reconfigures the srcA data format for a new operand, always re-deriving the int8/unsigned state from the new format.
  */
-ALWI void reconfig_data_format_srca(const uint32_t srca_new_operand) {
+ALWI void reconfig_data_format_srca(const std::uint32_t srca_new_operand) {
     LLK_SAN_FUNCTION();
     detail::reconfig_df_srca<false, false>(srca_new_operand);
 }
@@ -196,7 +198,7 @@ ALWI void reconfig_data_format_srca(const uint32_t srca_new_operand) {
  * Reconfigures the srcA data format only if the new operand's format differs from the old one. See the conditional
  * geometry note on reconfig_data_format(old, new, ...).
  */
-ALWI void reconfig_data_format_srca(const uint32_t srca_old_operand, const uint32_t srca_new_operand) {
+ALWI void reconfig_data_format_srca(const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
     LLK_SAN_FUNCTION();
     detail::reconfig_df_srca<false, false>(srca_old_operand, srca_new_operand);
 }
@@ -204,7 +206,7 @@ ALWI void reconfig_data_format_srca(const uint32_t srca_old_operand, const uint3
 /**
  * Reconfigures the srcB data format for a new operand, always re-deriving the int8/unsigned state from the new format.
  */
-ALWI void reconfig_data_format_srcb(const uint32_t srcb_new_operand) {
+ALWI void reconfig_data_format_srcb(const std::uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
     detail::reconfig_df_srcb<false, false>(srcb_new_operand);
 }
@@ -213,7 +215,7 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_new_operand) {
  * Reconfigures the srcB data format only if the new operand's format differs from the old one. See the conditional
  * geometry note on reconfig_data_format(old, new, ...).
  */
-ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_new_operand) {
+ALWI void reconfig_data_format_srcb(const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
     detail::reconfig_df_srcb<false, false>(srcb_old_operand, srcb_new_operand);
 }
@@ -229,7 +231,7 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint3
  * what is currently programmed. Operands are in natural (icb0, icb1) order and honor src_order.
  */
 template <SrcOrder src_order = SrcOrder::Regular>
-ALWI void reconfig_full_operand(const uint32_t icb0_new_operand, const uint32_t icb1_new_operand) {
+ALWI void reconfig_full_operand(const std::uint32_t icb0_new_operand, const std::uint32_t icb1_new_operand) {
     LLK_SAN_FUNCTION();
     constexpr bool reverse = (src_order == SrcOrder::Reverse);
     detail::reconfig_df_both<true, false>(
@@ -242,10 +244,10 @@ ALWI void reconfig_full_operand(const uint32_t icb0_new_operand, const uint32_t 
  */
 template <SrcOrder src_order = SrcOrder::Regular>
 ALWI void reconfig_full_operand(
-    const uint32_t icb0_old_operand,
-    const uint32_t icb0_new_operand,
-    const uint32_t icb1_old_operand,
-    const uint32_t icb1_new_operand) {
+    const std::uint32_t icb0_old_operand,
+    const std::uint32_t icb0_new_operand,
+    const std::uint32_t icb1_old_operand,
+    const std::uint32_t icb1_new_operand) {
     LLK_SAN_FUNCTION();
     constexpr bool reverse = (src_order == SrcOrder::Reverse);
     detail::reconfig_df_both<true, false>(
@@ -258,7 +260,7 @@ ALWI void reconfig_full_operand(
 /**
  * Reconfigures the srcA data format and tile/face geometry for a new operand, re-deriving the int8/unsigned state.
  */
-ALWI void reconfig_full_operand_srca(const uint32_t srca_new_operand) {
+ALWI void reconfig_full_operand_srca(const std::uint32_t srca_new_operand) {
     LLK_SAN_FUNCTION();
     detail::reconfig_df_srca<true, false>(srca_new_operand);
 }
@@ -266,7 +268,7 @@ ALWI void reconfig_full_operand_srca(const uint32_t srca_new_operand) {
 /**
  * Reconfigures the srcA data format and tile/face geometry only if the new operand's format differs from the old one.
  */
-ALWI void reconfig_full_operand_srca(const uint32_t srca_old_operand, const uint32_t srca_new_operand) {
+ALWI void reconfig_full_operand_srca(const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
     LLK_SAN_FUNCTION();
     detail::reconfig_df_srca<true, false>(srca_old_operand, srca_new_operand);
 }
@@ -274,7 +276,7 @@ ALWI void reconfig_full_operand_srca(const uint32_t srca_old_operand, const uint
 /**
  * Reconfigures the srcB data format and tile/face geometry for a new operand, re-deriving the int8/unsigned state.
  */
-ALWI void reconfig_full_operand_srcb(const uint32_t srcb_new_operand) {
+ALWI void reconfig_full_operand_srcb(const std::uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
     detail::reconfig_df_srcb<true, false>(srcb_new_operand);
 }
@@ -282,7 +284,7 @@ ALWI void reconfig_full_operand_srcb(const uint32_t srcb_new_operand) {
 /**
  * Reconfigures the srcB data format and tile/face geometry only if the new operand's format differs from the old one.
  */
-ALWI void reconfig_full_operand_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_new_operand) {
+ALWI void reconfig_full_operand_srcb(const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
     detail::reconfig_df_srcb<true, false>(srcb_old_operand, srcb_new_operand);
 }
@@ -301,7 +303,7 @@ ALWI void reconfig_full_operand_srcb(const uint32_t srcb_old_operand, const uint
  *       fully handled here.
  */
 template <SrcOrder src_order = SrcOrder::Regular>
-ALWI void reconfig_tile_shape(const uint32_t icb0_new_operand, const uint32_t icb1_new_operand) {
+ALWI void reconfig_tile_shape(const std::uint32_t icb0_new_operand, const std::uint32_t icb1_new_operand) {
     LLK_SAN_FUNCTION();
     constexpr bool reverse = (src_order == SrcOrder::Reverse);
     detail::reconfig_ts_both(
@@ -314,10 +316,10 @@ ALWI void reconfig_tile_shape(const uint32_t icb0_new_operand, const uint32_t ic
  */
 template <SrcOrder src_order = SrcOrder::Regular>
 ALWI void reconfig_tile_shape(
-    const uint32_t icb0_old_operand,
-    const uint32_t icb0_new_operand,
-    const uint32_t icb1_old_operand,
-    const uint32_t icb1_new_operand) {
+    const std::uint32_t icb0_old_operand,
+    const std::uint32_t icb0_new_operand,
+    const std::uint32_t icb1_old_operand,
+    const std::uint32_t icb1_new_operand) {
     LLK_SAN_FUNCTION();
     constexpr bool reverse = (src_order == SrcOrder::Reverse);
     detail::reconfig_ts_both(
@@ -330,7 +332,7 @@ ALWI void reconfig_tile_shape(
 /**
  * Reprograms only the srcA unpacker tile size and face geometry for a new operand, leaving the format untouched.
  */
-ALWI void reconfig_tile_shape_srca(const uint32_t srca_new_operand) {
+ALWI void reconfig_tile_shape_srca(const std::uint32_t srca_new_operand) {
     LLK_SAN_FUNCTION();
     detail::reconfig_ts_srca(srca_new_operand);
 }
@@ -338,7 +340,7 @@ ALWI void reconfig_tile_shape_srca(const uint32_t srca_new_operand) {
 /**
  * Reprograms the srcA unpacker tile size and face geometry only if the new operand's geometry (or CB) differs.
  */
-ALWI void reconfig_tile_shape_srca(const uint32_t srca_old_operand, const uint32_t srca_new_operand) {
+ALWI void reconfig_tile_shape_srca(const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
     LLK_SAN_FUNCTION();
     detail::reconfig_ts_srca(srca_old_operand, srca_new_operand);
 }
@@ -346,7 +348,7 @@ ALWI void reconfig_tile_shape_srca(const uint32_t srca_old_operand, const uint32
 /**
  * Reprograms only the srcB unpacker tile size and face geometry for a new operand, leaving the format untouched.
  */
-ALWI void reconfig_tile_shape_srcb(const uint32_t srcb_new_operand) {
+ALWI void reconfig_tile_shape_srcb(const std::uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
     detail::reconfig_ts_srcb(srcb_new_operand);
 }
@@ -354,7 +356,7 @@ ALWI void reconfig_tile_shape_srcb(const uint32_t srcb_new_operand) {
 /**
  * Reprograms the srcB unpacker tile size and face geometry only if the new operand's geometry (or CB) differs.
  */
-ALWI void reconfig_tile_shape_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_new_operand) {
+ALWI void reconfig_tile_shape_srcb(const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
     detail::reconfig_ts_srcb(srcb_old_operand, srcb_new_operand);
 }
@@ -371,7 +373,7 @@ ALWI void reconfig_tile_shape_srcb(const uint32_t srcb_old_operand, const uint32
  * reconfig never crosses an Int8/UInt8/Int32 boundary and wants to avoid the extra register write.
  */
 template <SrcOrder src_order = SrcOrder::Regular>
-ALWI void reconfig_data_format_skip_int8(const uint32_t icb0_new_operand, const uint32_t icb1_new_operand) {
+ALWI void reconfig_data_format_skip_int8(const std::uint32_t icb0_new_operand, const std::uint32_t icb1_new_operand) {
     LLK_SAN_FUNCTION();
     constexpr bool reverse = (src_order == SrcOrder::Reverse);
     detail::reconfig_df_both<false, true>(
@@ -384,10 +386,10 @@ ALWI void reconfig_data_format_skip_int8(const uint32_t icb0_new_operand, const 
  */
 template <SrcOrder src_order = SrcOrder::Regular>
 ALWI void reconfig_data_format_skip_int8(
-    const uint32_t icb0_old_operand,
-    const uint32_t icb0_new_operand,
-    const uint32_t icb1_old_operand,
-    const uint32_t icb1_new_operand) {
+    const std::uint32_t icb0_old_operand,
+    const std::uint32_t icb0_new_operand,
+    const std::uint32_t icb1_old_operand,
+    const std::uint32_t icb1_new_operand) {
     LLK_SAN_FUNCTION();
     constexpr bool reverse = (src_order == SrcOrder::Reverse);
     detail::reconfig_df_both<false, true>(
@@ -400,7 +402,7 @@ ALWI void reconfig_data_format_skip_int8(
 /**
  * reconfig_data_format_srca without re-deriving the int8/unsigned state. See reconfig_data_format_skip_int8.
  */
-ALWI void reconfig_data_format_srca_skip_int8(const uint32_t srca_new_operand) {
+ALWI void reconfig_data_format_srca_skip_int8(const std::uint32_t srca_new_operand) {
     LLK_SAN_FUNCTION();
     detail::reconfig_df_srca<false, true>(srca_new_operand);
 }
@@ -408,7 +410,8 @@ ALWI void reconfig_data_format_srca_skip_int8(const uint32_t srca_new_operand) {
 /**
  * Conditional srcA reconfig without re-deriving the int8/unsigned state. See reconfig_data_format_skip_int8.
  */
-ALWI void reconfig_data_format_srca_skip_int8(const uint32_t srca_old_operand, const uint32_t srca_new_operand) {
+ALWI void reconfig_data_format_srca_skip_int8(
+    const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
     LLK_SAN_FUNCTION();
     detail::reconfig_df_srca<false, true>(srca_old_operand, srca_new_operand);
 }
@@ -416,7 +419,7 @@ ALWI void reconfig_data_format_srca_skip_int8(const uint32_t srca_old_operand, c
 /**
  * reconfig_data_format_srcb without re-deriving the int8/unsigned state. See reconfig_data_format_skip_int8.
  */
-ALWI void reconfig_data_format_srcb_skip_int8(const uint32_t srcb_new_operand) {
+ALWI void reconfig_data_format_srcb_skip_int8(const std::uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
     detail::reconfig_df_srcb<false, true>(srcb_new_operand);
 }
@@ -424,7 +427,8 @@ ALWI void reconfig_data_format_srcb_skip_int8(const uint32_t srcb_new_operand) {
 /**
  * Conditional srcB reconfig without re-deriving the int8/unsigned state. See reconfig_data_format_skip_int8.
  */
-ALWI void reconfig_data_format_srcb_skip_int8(const uint32_t srcb_old_operand, const uint32_t srcb_new_operand) {
+ALWI void reconfig_data_format_srcb_skip_int8(
+    const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
     detail::reconfig_df_srcb<false, true>(srcb_old_operand, srcb_new_operand);
 }
@@ -432,18 +436,22 @@ ALWI void reconfig_data_format_srcb_skip_int8(const uint32_t srcb_old_operand, c
 // -------------------------------------------------------------------------------------------------------------------
 // Deprecated (tt-metal#34499). The is_tile_dim_reconfig_en bool is replaced by intent-named entry points:
 //   reconfig_data_format<SrcOrder, false> -> reconfig_data_format<SrcOrder>()
-//   reconfig_data_format<SrcOrder, true>  -> reconfig_full_operand<SrcOrder>() (or reconfig_tile_shape() for geometry-only)
+//   reconfig_data_format<SrcOrder, true>  -> reconfig_full_operand<SrcOrder>() (or reconfig_tile_shape() for
+//   geometry-only)
 // (and the matching _srca / _srcb / _skip_int8 forms). These <SrcOrder, is_tile_dim> overloads preserve today's exact
 // behavior and work until 2026-09-15. They coexist with the older <to_from_int8, is_tile_dim> bool overloads (further
 // down), disambiguated by first template arg type: a SrcOrder first arg selects these; a bool first arg selects the
 // older ones. The cleanup PR removes both.
 // -------------------------------------------------------------------------------------------------------------------
 
-/// \cond DEPRECATED_RECONFIG_DATA_FORMAT_TILE_DIM (excluded from published docs; overloads the current API by template only)
-#define RECONFIG_DF_TILE_DIM_DEPRECATED(new_fn)                                                                       \
-    [[deprecated("The is_tile_dim_reconfig_en bool on reconfig_data_format_* is replaced by intent-named APIs and "   \
-                 "will be removed after September 15th 2026 (tt-metal#34499). Use " new_fn "() for geometry, or the " \
-                 "plain reconfig_data_format*() when only the format changes.")]]
+/// \cond DEPRECATED_RECONFIG_DATA_FORMAT_TILE_DIM (excluded from published docs; overloads the current API by template
+/// only)
+#define RECONFIG_DF_TILE_DIM_DEPRECATED(new_fn)                                                            \
+    [[deprecated(                                                                                          \
+        "The is_tile_dim_reconfig_en bool on reconfig_data_format_* is replaced by intent-named APIs and " \
+        "will be removed after September 15th 2026 (tt-metal#34499). Use " new_fn                          \
+        "() for geometry, or the "                                                                         \
+        "plain reconfig_data_format*() when only the format changes.")]]
 
 /**
  * @deprecated Use reconfig_full_operand<SrcOrder>() (geometry on) or reconfig_data_format<SrcOrder>() (format only).
@@ -451,7 +459,7 @@ ALWI void reconfig_data_format_srcb_skip_int8(const uint32_t srcb_old_operand, c
  */
 template <SrcOrder src_order, bool is_tile_dim_reconfig_en>
 RECONFIG_DF_TILE_DIM_DEPRECATED("reconfig_full_operand<SrcOrder>")
-ALWI void reconfig_data_format(const uint32_t icb0_new_operand, const uint32_t icb1_new_operand) {
+ALWI void reconfig_data_format(const std::uint32_t icb0_new_operand, const std::uint32_t icb1_new_operand) {
     LLK_SAN_FUNCTION();
     constexpr bool reverse = (src_order == SrcOrder::Reverse);
     detail::reconfig_df_both<is_tile_dim_reconfig_en, false>(
@@ -464,10 +472,10 @@ ALWI void reconfig_data_format(const uint32_t icb0_new_operand, const uint32_t i
 template <SrcOrder src_order, bool is_tile_dim_reconfig_en>
 RECONFIG_DF_TILE_DIM_DEPRECATED("reconfig_full_operand<SrcOrder>")
 ALWI void reconfig_data_format(
-    const uint32_t icb0_old_operand,
-    const uint32_t icb0_new_operand,
-    const uint32_t icb1_old_operand,
-    const uint32_t icb1_new_operand) {
+    const std::uint32_t icb0_old_operand,
+    const std::uint32_t icb0_new_operand,
+    const std::uint32_t icb1_old_operand,
+    const std::uint32_t icb1_new_operand) {
     LLK_SAN_FUNCTION();
     constexpr bool reverse = (src_order == SrcOrder::Reverse);
     detail::reconfig_df_both<is_tile_dim_reconfig_en, false>(
@@ -482,7 +490,7 @@ ALWI void reconfig_data_format(
  */
 template <bool is_tile_dim_reconfig_en>
 RECONFIG_DF_TILE_DIM_DEPRECATED("reconfig_full_operand_srca")
-ALWI void reconfig_data_format_srca(const uint32_t srca_new_operand) {
+ALWI void reconfig_data_format_srca(const std::uint32_t srca_new_operand) {
     LLK_SAN_FUNCTION();
     detail::reconfig_df_srca<is_tile_dim_reconfig_en, false>(srca_new_operand);
 }
@@ -492,7 +500,7 @@ ALWI void reconfig_data_format_srca(const uint32_t srca_new_operand) {
  */
 template <bool is_tile_dim_reconfig_en>
 RECONFIG_DF_TILE_DIM_DEPRECATED("reconfig_full_operand_srca")
-ALWI void reconfig_data_format_srca(const uint32_t srca_old_operand, const uint32_t srca_new_operand) {
+ALWI void reconfig_data_format_srca(const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
     LLK_SAN_FUNCTION();
     detail::reconfig_df_srca<is_tile_dim_reconfig_en, false>(srca_old_operand, srca_new_operand);
 }
@@ -502,7 +510,7 @@ ALWI void reconfig_data_format_srca(const uint32_t srca_old_operand, const uint3
  */
 template <bool is_tile_dim_reconfig_en>
 RECONFIG_DF_TILE_DIM_DEPRECATED("reconfig_full_operand_srcb")
-ALWI void reconfig_data_format_srcb(const uint32_t srcb_new_operand) {
+ALWI void reconfig_data_format_srcb(const std::uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
     detail::reconfig_df_srcb<is_tile_dim_reconfig_en, false>(srcb_new_operand);
 }
@@ -512,7 +520,7 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_new_operand) {
  */
 template <bool is_tile_dim_reconfig_en>
 RECONFIG_DF_TILE_DIM_DEPRECATED("reconfig_full_operand_srcb")
-ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_new_operand) {
+ALWI void reconfig_data_format_srcb(const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
     detail::reconfig_df_srcb<is_tile_dim_reconfig_en, false>(srcb_old_operand, srcb_new_operand);
 }
@@ -524,7 +532,7 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint3
  */
 template <SrcOrder src_order, bool is_tile_dim_reconfig_en>
 RECONFIG_DF_TILE_DIM_DEPRECATED("reconfig_data_format_skip_int8<SrcOrder>")
-ALWI void reconfig_data_format_skip_int8(const uint32_t icb0_new_operand, const uint32_t icb1_new_operand) {
+ALWI void reconfig_data_format_skip_int8(const std::uint32_t icb0_new_operand, const std::uint32_t icb1_new_operand) {
     LLK_SAN_FUNCTION();
     constexpr bool reverse = (src_order == SrcOrder::Reverse);
     detail::reconfig_df_both<is_tile_dim_reconfig_en, true>(
@@ -537,10 +545,10 @@ ALWI void reconfig_data_format_skip_int8(const uint32_t icb0_new_operand, const 
 template <SrcOrder src_order, bool is_tile_dim_reconfig_en>
 RECONFIG_DF_TILE_DIM_DEPRECATED("reconfig_data_format_skip_int8<SrcOrder>")
 ALWI void reconfig_data_format_skip_int8(
-    const uint32_t icb0_old_operand,
-    const uint32_t icb0_new_operand,
-    const uint32_t icb1_old_operand,
-    const uint32_t icb1_new_operand) {
+    const std::uint32_t icb0_old_operand,
+    const std::uint32_t icb0_new_operand,
+    const std::uint32_t icb1_old_operand,
+    const std::uint32_t icb1_new_operand) {
     LLK_SAN_FUNCTION();
     constexpr bool reverse = (src_order == SrcOrder::Reverse);
     detail::reconfig_df_both<is_tile_dim_reconfig_en, true>(
@@ -555,7 +563,7 @@ ALWI void reconfig_data_format_skip_int8(
  */
 template <bool is_tile_dim_reconfig_en>
 RECONFIG_DF_TILE_DIM_DEPRECATED("reconfig_data_format_srca_skip_int8")
-ALWI void reconfig_data_format_srca_skip_int8(const uint32_t srca_new_operand) {
+ALWI void reconfig_data_format_srca_skip_int8(const std::uint32_t srca_new_operand) {
     LLK_SAN_FUNCTION();
     detail::reconfig_df_srca<is_tile_dim_reconfig_en, true>(srca_new_operand);
 }
@@ -565,7 +573,8 @@ ALWI void reconfig_data_format_srca_skip_int8(const uint32_t srca_new_operand) {
  */
 template <bool is_tile_dim_reconfig_en>
 RECONFIG_DF_TILE_DIM_DEPRECATED("reconfig_data_format_srca_skip_int8")
-ALWI void reconfig_data_format_srca_skip_int8(const uint32_t srca_old_operand, const uint32_t srca_new_operand) {
+ALWI void reconfig_data_format_srca_skip_int8(
+    const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
     LLK_SAN_FUNCTION();
     detail::reconfig_df_srca<is_tile_dim_reconfig_en, true>(srca_old_operand, srca_new_operand);
 }
@@ -575,7 +584,7 @@ ALWI void reconfig_data_format_srca_skip_int8(const uint32_t srca_old_operand, c
  */
 template <bool is_tile_dim_reconfig_en>
 RECONFIG_DF_TILE_DIM_DEPRECATED("reconfig_data_format_srcb_skip_int8")
-ALWI void reconfig_data_format_srcb_skip_int8(const uint32_t srcb_new_operand) {
+ALWI void reconfig_data_format_srcb_skip_int8(const std::uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
     detail::reconfig_df_srcb<is_tile_dim_reconfig_en, true>(srcb_new_operand);
 }
@@ -585,7 +594,8 @@ ALWI void reconfig_data_format_srcb_skip_int8(const uint32_t srcb_new_operand) {
  */
 template <bool is_tile_dim_reconfig_en>
 RECONFIG_DF_TILE_DIM_DEPRECATED("reconfig_data_format_srcb_skip_int8")
-ALWI void reconfig_data_format_srcb_skip_int8(const uint32_t srcb_old_operand, const uint32_t srcb_new_operand) {
+ALWI void reconfig_data_format_srcb_skip_int8(
+    const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
     detail::reconfig_df_srcb<is_tile_dim_reconfig_en, true>(srcb_old_operand, srcb_new_operand);
 }
@@ -602,9 +612,10 @@ ALWI void reconfig_data_format_srcb_skip_int8(const uint32_t srcb_old_operand, c
 // -------------------------------------------------------------------------------------------------------------------
 
 /// \cond DEPRECATED_RECONFIG_DATA_FORMAT (excluded from published docs; overloads the current API by template only)
-#define RECONFIG_DF_DEPRECATED(new_fn)                                                                              \
-    [[deprecated("This call to reconfig_data_format_* will be removed after August 20th 2026 (tt-metal#34499). Use " \
-                 new_fn "() or the *_skip_int8 variant; int8/unsigned state is now always derived from the format.")]]
+#define RECONFIG_DF_DEPRECATED(new_fn)                                                                             \
+    [[deprecated(                                                                                                  \
+        "This call to reconfig_data_format_* will be removed after August 20th 2026 (tt-metal#34499). Use " new_fn \
+        "() or the *_skip_int8 variant; int8/unsigned state is now always derived from the format.")]]
 
 /**
  * @deprecated Use reconfig_data_format<SrcOrder::Regular>() / reconfig_full_operand<SrcOrder::Regular>() (or
@@ -613,7 +624,7 @@ ALWI void reconfig_data_format_srcb_skip_int8(const uint32_t srcb_old_operand, c
  */
 template <bool to_from_int8, bool is_tile_dim_reconfig_en>
 RECONFIG_DF_DEPRECATED("reconfig_data_format<SrcOrder::Regular>")
-ALWI void reconfig_data_format(const uint32_t srca_new_operand, const uint32_t srcb_new_operand) {
+ALWI void reconfig_data_format(const std::uint32_t srca_new_operand, const std::uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
 #ifdef ARCH_QUASAR
     // to_from_int8 is silently ignored on Quasar: the unpack LLK marks it [[maybe_unused]] and the
@@ -631,10 +642,10 @@ ALWI void reconfig_data_format(const uint32_t srca_new_operand, const uint32_t s
 template <bool to_from_int8, bool is_tile_dim_reconfig_en>
 RECONFIG_DF_DEPRECATED("reconfig_data_format<SrcOrder::Regular>")
 ALWI void reconfig_data_format(
-    const uint32_t srca_old_operand,
-    const uint32_t srca_new_operand,
-    const uint32_t srcb_old_operand,
-    const uint32_t srcb_new_operand) {
+    const std::uint32_t srca_old_operand,
+    const std::uint32_t srca_new_operand,
+    const std::uint32_t srcb_old_operand,
+    const std::uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
 #ifdef ARCH_QUASAR
     // to_from_int8 is silently ignored on Quasar: the unpack LLK marks it [[maybe_unused]] and the
@@ -646,13 +657,13 @@ ALWI void reconfig_data_format(
 }
 
 /**
- * @deprecated Use reconfig_data_format_srca() / reconfig_full_operand_srca() (or reconfig_data_format_srca_skip_int8()).
- * Kept until 2026-08-20; to_from_int8 is ignored and the int8/unsigned state is always re-derived from the format.
- * See tt-metal#34499.
+ * @deprecated Use reconfig_data_format_srca() / reconfig_full_operand_srca() (or
+ * reconfig_data_format_srca_skip_int8()). Kept until 2026-08-20; to_from_int8 is ignored and the int8/unsigned state is
+ * always re-derived from the format. See tt-metal#34499.
  */
 template <bool to_from_int8, bool is_tile_dim_reconfig_en>
 RECONFIG_DF_DEPRECATED("reconfig_data_format_srca")
-ALWI void reconfig_data_format_srca(const uint32_t srca_new_operand) {
+ALWI void reconfig_data_format_srca(const std::uint32_t srca_new_operand) {
     LLK_SAN_FUNCTION();
 #ifdef ARCH_QUASAR
     // to_from_int8 is silently ignored on Quasar: the unpack LLK marks it [[maybe_unused]] and the
@@ -663,13 +674,13 @@ ALWI void reconfig_data_format_srca(const uint32_t srca_new_operand) {
 }
 
 /**
- * @deprecated Use reconfig_data_format_srca() / reconfig_full_operand_srca() (or reconfig_data_format_srca_skip_int8()).
- * Kept until 2026-08-20; to_from_int8 is ignored and the int8/unsigned state is always re-derived from the format.
- * See tt-metal#34499.
+ * @deprecated Use reconfig_data_format_srca() / reconfig_full_operand_srca() (or
+ * reconfig_data_format_srca_skip_int8()). Kept until 2026-08-20; to_from_int8 is ignored and the int8/unsigned state is
+ * always re-derived from the format. See tt-metal#34499.
  */
 template <bool to_from_int8, bool is_tile_dim_reconfig_en>
 RECONFIG_DF_DEPRECATED("reconfig_data_format_srca")
-ALWI void reconfig_data_format_srca(const uint32_t srca_old_operand, const uint32_t srca_new_operand) {
+ALWI void reconfig_data_format_srca(const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
     LLK_SAN_FUNCTION();
 #ifdef ARCH_QUASAR
     // to_from_int8 is silently ignored on Quasar: the unpack LLK marks it [[maybe_unused]] and the
@@ -680,13 +691,13 @@ ALWI void reconfig_data_format_srca(const uint32_t srca_old_operand, const uint3
 }
 
 /**
- * @deprecated Use reconfig_data_format_srcb() / reconfig_full_operand_srcb() (or reconfig_data_format_srcb_skip_int8()).
- * Kept until 2026-08-20; to_from_int8 is ignored and the int8/unsigned state is always re-derived from the format.
- * See tt-metal#34499.
+ * @deprecated Use reconfig_data_format_srcb() / reconfig_full_operand_srcb() (or
+ * reconfig_data_format_srcb_skip_int8()). Kept until 2026-08-20; to_from_int8 is ignored and the int8/unsigned state is
+ * always re-derived from the format. See tt-metal#34499.
  */
 template <bool to_from_int8, bool is_tile_dim_reconfig_en>
 RECONFIG_DF_DEPRECATED("reconfig_data_format_srcb")
-ALWI void reconfig_data_format_srcb(const uint32_t srcb_new_operand) {
+ALWI void reconfig_data_format_srcb(const std::uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
 #ifdef ARCH_QUASAR
     // to_from_int8 is silently ignored on Quasar: the unpack LLK marks it [[maybe_unused]] and the
@@ -697,13 +708,13 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_new_operand) {
 }
 
 /**
- * @deprecated Use reconfig_data_format_srcb() / reconfig_full_operand_srcb() (or reconfig_data_format_srcb_skip_int8()).
- * Kept until 2026-08-20; to_from_int8 is ignored and the int8/unsigned state is always re-derived from the format.
- * See tt-metal#34499.
+ * @deprecated Use reconfig_data_format_srcb() / reconfig_full_operand_srcb() (or
+ * reconfig_data_format_srcb_skip_int8()). Kept until 2026-08-20; to_from_int8 is ignored and the int8/unsigned state is
+ * always re-derived from the format. See tt-metal#34499.
  */
 template <bool to_from_int8, bool is_tile_dim_reconfig_en>
 RECONFIG_DF_DEPRECATED("reconfig_data_format_srcb")
-ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_new_operand) {
+ALWI void reconfig_data_format_srcb(const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
 #ifdef ARCH_QUASAR
     // to_from_int8 is silently ignored on Quasar: the unpack LLK marks it [[maybe_unused]] and the
@@ -724,7 +735,9 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint3
  *
  * NOTE(ARCH_QUASAR): On Quasar, buffer descriptors are programmed at op init. pack_reconfig_data_format
  * only reprograms THCON IN_DATA_FORMAT (gasket), not the MOP or buffer descriptors. When the pack output
- * operand changes, call pack_init(new_cb_id) before pack_tile.
+ * operand changes, call pack_init(new_cb_id) before pack_tile. The packer has no Read_32b_data bit: it reads
+ * dest at the width IN_DATA_FORMAT implies, so after enable/disable_fp32_dest_acc pass the toggled width as
+ * is_fp32_dest_acc_en (on WH/BH the parameter is ignored; the toggle programs Read_32b_data itself).
  *
  * NOTE: Packer reconfiguration functions are used similarly to the initialization function, in a sense
  * that they are called before the call to the packer function that uses the new configuration. It is
@@ -735,17 +748,18 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint3
  * | Param Type | Name                    | Description                   | Type     | Valid Range | Required |
  * |------------|-------------------------|-------------------------------|----------|-------------|----------|
  * | Template   | is_tile_dim_reconfig_en | Toggle tile reconfiguration   | bool     | true/false  | False    |
+ * | Template   | is_fp32_dest_acc_en     | Current dest width (Quasar)   | bool     | true/false  | False    |
  * | Function   | new_cb_id               | New data format operand value | uint32_t | Any         | True     |
  */
 // clang-format on
-template <bool is_tile_dim_reconfig_en = false>
-ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
+template <bool is_tile_dim_reconfig_en = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void pack_reconfig_data_format(const std::uint32_t new_cb_id) {
     LLK_SAN_FUNCTION();
 #ifdef ARCH_QUASAR
     static_assert(
         !is_tile_dim_reconfig_en,
         "Quasar pack reconfig does not support tile-dimension changes; call pack_init instead");
-    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(new_cb_id)));
+    PACK((llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(new_cb_id)));
 #else
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(new_cb_id)));
     if constexpr (is_tile_dim_reconfig_en) {
@@ -774,18 +788,19 @@ ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
  * | Param Type | Name                    | Description                        | Type     | Valid Range | Required |
  * |------------|-------------------------|------------------------------------|----------|-------------|----------|
  * | Template   | is_tile_dim_reconfig_en | Toggle tile reconfiguration        | bool     | true/false  | False    |
+ * | Template   | is_fp32_dest_acc_en     | Current dest width (Quasar)        | bool     | true/false  | False    |
  * | Function   | old_cb_id               | Previous data format operand value | uint32_t | Any         | True     |
  * | Function   | new_cb_id               | New data format operand value      | uint32_t | Any         | True     |
  */
 // clang-format on
-template <bool is_tile_dim_reconfig_en = false>
-ALWI void pack_reconfig_data_format(const uint32_t old_cb_id, const uint32_t new_cb_id) {
+template <bool is_tile_dim_reconfig_en = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void pack_reconfig_data_format(const std::uint32_t old_cb_id, const std::uint32_t new_cb_id) {
     LLK_SAN_FUNCTION();
 #ifdef ARCH_QUASAR
     static_assert(
         !is_tile_dim_reconfig_en,
         "Quasar pack reconfig does not support tile-dimension changes; call pack_init instead");
-    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(old_cb_id, new_cb_id)));
+    PACK((llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(old_cb_id, new_cb_id)));
 #else
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(old_cb_id, new_cb_id)));
     if constexpr (is_tile_dim_reconfig_en) {

@@ -253,10 +253,10 @@ inline void _configure_mov_ops_explicit_alu_data_format_state_(DataFormat srcA_f
  * @brief Math-thread half of a mid-kernel FP32 dest-acc reconfiguration.
  *
  * Runs the MATH side of @ref _llk_set_fp32_dest_acc_ (flips ALU_ACC_CTRL Fp32_enabled and
- * SFPU_Fp32_enabled once Unpack and Pack have drained), then invalidates the ALU format latch. The
- * MOV_OPS_EXPLICIT_FMT config set has more width-dependent fields than those two bits (Tf32 src
- * formats, Dstacc override), and the INT8_math_enabled bit depends on width too, so the next math init
- * must rewrite the whole ALU config with the new width instead of early-returning on the latch.
+ * SFPU_Fp32_enabled once Unpack and Pack have drained). If the MOV_OPS_EXPLICIT_FMT config set is active, it
+ * also invalidates the ALU format latch: that set has more width-dependent fields than those two bits (Tf32
+ * src formats, Dstacc override), so the next MOV init must rewrite the whole ALU config with the new width.
+ * In the DEFAULT set with float formats the two bits are the only width-dependent fields, so the latch is kept.
  *
  * @param enable: True to enable FP32 dest accumulation, false to disable.
  * @note Pair with @ref _llk_set_fp32_dest_acc_ on the unpack (T0) and pack (T2) threads. Every math init
@@ -265,7 +265,13 @@ inline void _configure_mov_ops_explicit_alu_data_format_state_(DataFormat srcA_f
 inline void _llk_math_set_fp32_dest_acc_(const bool enable)
 {
     _llk_set_fp32_dest_acc_<ThreadId::MathThreadId>(enable);
-    data_format_config_set = DataFormatConfigSet::UNCONFIGURED;
+    // Only the MOV_OPS_EXPLICIT_FMT set has width-dependent fields beyond the two bits written above. Keep a
+    // DEFAULT latch: the next DEFAULT init then early-returns and leaves the new bits alone, which matters
+    // because several metal inits still pass the compiled DST_ACCUM_MODE instead of the toggled width.
+    if (data_format_config_set == DataFormatConfigSet::MOV_OPS_EXPLICIT_FMT)
+    {
+        data_format_config_set = DataFormatConfigSet::UNCONFIGURED;
+    }
 }
 
 /**

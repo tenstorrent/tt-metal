@@ -26,8 +26,8 @@ inline constexpr bool always_false_v = false;
 /**
  * Math-thread half of a mid-kernel FP32 dest-acc reconfiguration.
  *
- * Flips ALU_ACC_CTRL Fp32_enabled / SFPU_Fp32_enabled after Unpack and Pack have drained, and
- * invalidates the ALU format latch so the next math init rewrites the config with the new width.
+ * Flips ALU_ACC_CTRL Fp32_enabled / SFPU_Fp32_enabled after Unpack and Pack have drained. Invalidates the
+ * ALU format latch only if the MOV_OPS_EXPLICIT_FMT set is active (see _llk_math_set_fp32_dest_acc_).
  *
  * @param enable True to enable FP32 dest accumulation, false to disable.
  * @note Must be called together with llk_unpack_wait_fp32_dest_acc and llk_pack_wait_fp32_dest_acc.
