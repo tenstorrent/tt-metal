@@ -15,6 +15,7 @@ from typing import List, Optional, Union
 
 import torch
 import ttnn
+from loguru import logger
 
 from models.experimental.pi0_5.common.configs import (
     DenoiseConfig,
@@ -111,6 +112,16 @@ class Pi0_5ModelTTNN:
         )
 
         self._init_components()
+        # Configs are sized from the device's compute grid at construction (no flag): grids that hold
+        # SigLIP's (12, 8) block-sharded encoder and a 12x10 MLP grid (p150 13x10, Galaxy 12x10) run the
+        # original configs; narrower grids (e.g. 11x10) use SigLIP's interleaved path and the whole grid.
+        grid = self.device.compute_with_storage_grid_size()
+        vision = self.backbone.vision_tower
+        logger.info(
+            f"pi0.5 TTNN on compute grid {grid.x}x{grid.y} ({grid.x * grid.y} cores): SigLIP block-sharded "
+            f"encoder {'on' if vision is not None and vision.bs_enabled else 'off'}, "
+            f"VLM MLP grid {self.backbone.vlm_blocks[0].mlp._pcfg_grid}"
+        )
         self._precompute_bs1_timestep_tensors()
         self._precompute_bs1_adarms_cond()
         self._precompute_bs1_modulations()
