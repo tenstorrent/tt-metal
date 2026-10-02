@@ -97,6 +97,7 @@ def main():
     ap.add_argument("--source-reference", type=Path, default=XS_REFERENCE)
     ap.add_argument("--router-dump", type=Path, default=None, help="directory for per-MoE-layer router inputs")
     ap.add_argument("--threads", type=int, default=0, help="torch CPU threads (0 = torch default)")
+    ap.add_argument("--save-logits", type=Path, default=None, help="also save the [G, vocab] fp32 logits (accuracy gates)")
     args = ap.parse_args()
     if args.threads:
         torch.set_num_threads(args.threads)
@@ -165,6 +166,11 @@ def main():
     h = rms_norm(h, top["model.norm.weight"], config.rms_norm_eps)
     logits = h[P - 1 : P + G - 1] @ top["lm_head.weight"].t()  # predictions for positions P .. P+G-1
     topk = torch.topk(logits, args.top_k, dim=-1).indices.to(torch.int32)
+    if args.save_logits is not None:
+        args.save_logits.parent.mkdir(parents=True, exist_ok=True)
+        torch.save({"logits": logits.to(torch.float32).contiguous(), "prompt_len": P, "gen_len": G,
+                    "model": MODEL_ID, "dtype": args.dtype}, args.save_logits)
+        print(f"Logits saved to: {args.save_logits} {tuple(logits.shape)}", flush=True)
     agree = (topk[:, 0] == torch.tensor(cont_ids, dtype=torch.int32)).float().mean().item()
     print(f"HF top-1 equals the forced continuation token at {agree:.3f} of positions", flush=True)
 
