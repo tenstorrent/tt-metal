@@ -60,7 +60,7 @@ void kernel_main() {
     // Variable-M: read actual M values from runtime args (after output address).
     // OFFSET_ROW_MODE overrides M_tiles and M_blocks_per_core from on-device offsets.
     uint32_t M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 1);
-    const uint32_t padded_M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 2);
+    uint32_t padded_M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 2);
     uint32_t M_blocks_per_core = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 3);
     // Row and K offsets are initialized to 0 here and overwritten below from offsets[start..start+2].
     uint32_t out_row_offset_tiles = 0U;
@@ -120,6 +120,9 @@ void kernel_main() {
             }
             constexpr uint32_t kAxisCores = IN0_AXIS_CORES;
             const uint32_t per_core = (actual_eff_M + kAxisCores - 1U) / kAxisCores;
+            // expected_M_tiles is only an orientation hint. Keep the shape bound aligned with the
+            // offsets-derived runtime partition, including a positive bound for an empty expert.
+            padded_M_tiles = (per_core > 0U ? per_core : 1U) * kAxisCores;
             // Uniform M_blocks_per_core across cores — matches dm_in0_sender; bounds checks
             // clip out-of-range reads/writes for the tail cores.
             M_start_tile = per_core * in0_idx;

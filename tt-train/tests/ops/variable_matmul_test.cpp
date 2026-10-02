@@ -203,6 +203,25 @@ float subregion_max_abs_error(
     }
     return err;
 }
+
+float outside_subregion_max_abs_error(
+    const std::vector<float>& actual,
+    const std::vector<float>& expected,
+    uint32_t m_lo,
+    uint32_t m_hi,
+    uint32_t M,
+    uint32_t N) {
+    float err = 0.0F;
+    for (uint32_t m = 0; m < M; ++m) {
+        if (m >= m_lo && m < m_hi) {
+            continue;
+        }
+        for (uint32_t n = 0; n < N; ++n) {
+            err = std::max(err, std::abs(actual[m * N + n] - expected[m * N + n]));
+        }
+    }
+    return err;
+}
 }  // namespace
 
 TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndOutputRow) {
@@ -257,6 +276,107 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndOutputRow) {
         }
     }
     EXPECT_EQ(untouched_err, 0.0F) << "variable(InputAndOutputRow) corrupted untouched rows";
+}
+
+TEST_F(VariableMatmulTest, InputAndOutputRow_SkewedSpanExceedsExpectedMTiles_Cold) {
+    constexpr uint32_t M_parent = 160U, K = 32U, N = 32U;
+    constexpr uint32_t kStart = 1U;
+    constexpr uint32_t m_lo = 32U;
+    constexpr uint32_t m_hi = 128U;
+    constexpr uint32_t actual_M = m_hi - m_lo;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input = create_random_device_tensor(M_parent, K, device, /*seed=*/246U);
+    auto weight = create_random_device_tensor(K, N, device, /*seed=*/247U);
+    auto parent_out = create_random_device_tensor(M_parent, N, device, /*seed=*/248U);
+    const auto parent_orig_vec = ttml::core::to_vector<float>(parent_out);
+    auto offsets = make_offsets({0U, 32U, 128U, 160U}, device);
+
+    auto cfg = kConfig;
+    cfg.compute_with_storage_grid_size = {2, 2};
+    ttml::metal::variable_matmul_into_rows(
+        /*input_tensor=*/input,
+        /*weight_tensor=*/weight,
+        /*config=*/cfg,
+        /*offsets_tensor=*/offsets,
+        /*output_tensor=*/parent_out,
+        /*offsets_start_index=*/kStart,
+        /*expected_M_tiles=*/1U,
+        /*transpose_a=*/false,
+        /*transpose_b=*/false);
+
+    auto input_slice = ttnn::slice(
+        input,
+        ttsl::SmallVector<uint32_t>{0U, 0U, m_lo, 0U},
+        ttsl::SmallVector<uint32_t>{1U, 1U, m_hi, K},
+        ttsl::SmallVector<uint32_t>{1U, 1U, 1U, 1U});
+    auto ref = minimal_matmul_hifi4(input_slice, weight, cfg);
+    const auto ref_vec = ttml::core::to_vector<float>(ref);
+    const auto written_vec = ttml::core::to_vector<float>(parent_out);
+
+    EXPECT_EQ(subregion_max_abs_error(written_vec, ref_vec, m_lo, actual_M, N), 0.0F)
+        << "skewed row span differs from minimal_matmul";
+    EXPECT_EQ(outside_subregion_max_abs_error(written_vec, parent_orig_vec, m_lo, m_hi, M_parent, N), 0.0F)
+        << "skewed row span corrupted untouched parent rows";
+}
+
+TEST_F(VariableMatmulTest, InputAndOutputRow_SkewedSpanExceedsExpectedMTiles_Warm) {
+    constexpr uint32_t M_parent = 160U, K = 32U, N = 32U;
+    constexpr uint32_t m_lo = 32U;
+    constexpr uint32_t m_hi = 128U;
+    constexpr uint32_t actual_M = m_hi - m_lo;
+    auto* device = &ttml::autograd::ctx().get_device();
+    device->enable_program_cache();
+
+    auto input = create_random_device_tensor(M_parent, K, device, /*seed=*/249U);
+    auto weight = create_random_device_tensor(K, N, device, /*seed=*/250U);
+    auto parent_out = create_random_device_tensor(M_parent, N, device, /*seed=*/251U);
+    auto offsets = make_offsets({0U, 32U, 128U, 160U}, device);
+
+    auto cfg = kConfig;
+    cfg.compute_with_storage_grid_size = {2, 2};
+    // Build the program with the safe one-tile expert first.
+    ttml::metal::variable_matmul_into_rows(
+        /*input_tensor=*/input,
+        /*weight_tensor=*/weight,
+        /*config=*/cfg,
+        /*offsets_tensor=*/offsets,
+        /*output_tensor=*/parent_out,
+        /*offsets_start_index=*/0U,
+        /*expected_M_tiles=*/1U,
+        /*transpose_a=*/false,
+        /*transpose_b=*/false);
+    const auto parent_before_skew_vec = ttml::core::to_vector<float>(parent_out);
+    const auto entries_after_cold = device->num_program_cache_entries();
+    EXPECT_GT(entries_after_cold, 0U) << "program cache not populated after cold call";
+
+    // Reuse it for a three-tile expert. The orientation hint pads to only two tiles on this grid.
+    ttml::metal::variable_matmul_into_rows(
+        /*input_tensor=*/input,
+        /*weight_tensor=*/weight,
+        /*config=*/cfg,
+        /*offsets_tensor=*/offsets,
+        /*output_tensor=*/parent_out,
+        /*offsets_start_index=*/1U,
+        /*expected_M_tiles=*/1U,
+        /*transpose_a=*/false,
+        /*transpose_b=*/false);
+    EXPECT_EQ(device->num_program_cache_entries(), entries_after_cold)
+        << "skewed row span compiled a new program instead of reusing the cold program";
+
+    auto input_slice = ttnn::slice(
+        input,
+        ttsl::SmallVector<uint32_t>{0U, 0U, m_lo, 0U},
+        ttsl::SmallVector<uint32_t>{1U, 1U, m_hi, K},
+        ttsl::SmallVector<uint32_t>{1U, 1U, 1U, 1U});
+    auto ref = minimal_matmul_hifi4(input_slice, weight, cfg);
+    const auto ref_vec = ttml::core::to_vector<float>(ref);
+    const auto written_vec = ttml::core::to_vector<float>(parent_out);
+
+    EXPECT_EQ(subregion_max_abs_error(written_vec, ref_vec, m_lo, actual_M, N), 0.0F)
+        << "warm skewed row span differs from minimal_matmul";
+    EXPECT_EQ(outside_subregion_max_abs_error(written_vec, parent_before_skew_vec, m_lo, m_hi, M_parent, N), 0.0F)
+        << "warm skewed row span corrupted untouched parent rows";
 }
 
 TEST_F(VariableMatmulTest, InputAndOutputRow_DefaultExpectedMTiles_ReadsCorrectRows) {
