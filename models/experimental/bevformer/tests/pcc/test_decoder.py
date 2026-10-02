@@ -52,7 +52,8 @@ def _host_input(name, tensor, batch_first):
 
 
 def _check(torch_outputs, tt_outputs, input_reference_points, bev_shape, batch_first):
-    tt_outputs = tuple(ttnn.to_torch(t).float() for t in tt_outputs)
+    # The box codes are the head's to check, against its reference.
+    tt_outputs = tuple(ttnn.to_torch(t).float() for t in tt_outputs[:2])
     if batch_first:
         tt_outputs = (tt_outputs[0].permute(0, 2, 1, 3), tt_outputs[1])
     # comp_pcc zeroes NaN and Inf before correlating, so they must be ruled out here.
