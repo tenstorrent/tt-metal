@@ -119,9 +119,10 @@ Host and device timestamps are aligned so that Tracy (or other consumers) can re
 
 ### 4.1 The record
 
-dispatch_s writes one record per command: two 16-byte timestamps (`realtime_profiler_timestamp_t`) making a
-32-byte `realtime_profiler_record_t` of eight 4-byte words (offsets below are in bytes). Records for commands
-that are not a profiled program carry id 0, and the BRISC drops them before they reach the host.
+dispatch_s writes one 32-byte record per command (`realtime_profiler_record_t`): a start entry and an end entry
+(`realtime_profiler_timestamp_t`, 16 B each), each holding a 64-bit device time (8 B), the program id and a header
+word. That is eight 4-byte words; offsets below are in bytes. Records for commands that are not a profiled program
+carry id 0, and the BRISC drops them before they reach the host.
 
 | Offset | Field | Contents |
 |--------|-------|----------|
