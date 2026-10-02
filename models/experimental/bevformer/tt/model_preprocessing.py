@@ -6,6 +6,8 @@ BEVFormer model parameter preprocessing utilities for TTNN.
 """
 
 import torch
+from types import SimpleNamespace
+
 import ttnn
 from typing import Optional
 
@@ -146,6 +148,14 @@ def preprocess_linear_bias(bias, *, dtype=None, layout=None, weights_mesh_mapper
     kwargs = _build_ttnn_kwargs(dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper, device=device)
     bias = ttnn.from_torch(bias, **kwargs)
     return bias
+
+
+def linear_params(weight, bias, device, dtype):
+    """A Linear's ``weight`` and ``bias`` as ``ttnn.linear`` takes them, on ``device``."""
+    return SimpleNamespace(
+        weight=preprocess_linear_weight(weight, dtype=dtype, device=device),
+        bias=preprocess_linear_bias(bias, dtype=dtype, device=device),
+    )
 
 
 def preprocess_ms_deformable_attention_parameters(

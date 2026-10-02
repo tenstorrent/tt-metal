@@ -11,7 +11,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from models.common.utility_functions import comp_pcc
+from models.experimental.bevformer.config.decoder_config import CODE_SIZE
 from models.experimental.bevformer.reference.decoder import DetectionTransformerDecoder, inverse_sigmoid
+from models.experimental.bevformer.reference.head import reg_branch
 from models.experimental.bevformer.reference.ms_deformable_attention import MSDeformableAttention
 
 # BEVFormer tiny and base share the decoder; only the BEV grid it attends over differs.
@@ -21,7 +23,6 @@ NUM_HEADS = 8
 NUM_LAYERS = 6
 FEEDFORWARD_CHANNELS = 512
 NUM_POINTS = 4
-CODE_SIZE = 10
 
 BEV_SHAPES = {"tiny": (50, 50), "base": (200, 200)}
 
@@ -107,16 +108,7 @@ def build_reference_decoder(seed=0):
 def build_reg_branches(seed=1):
     """BEVFormer's per-layer box regression head: ``Linear-ReLU-Linear-ReLU-Linear(code_size)``."""
     torch.manual_seed(seed)
-    branches = nn.ModuleList(
-        nn.Sequential(
-            nn.Linear(EMBED_DIMS, EMBED_DIMS),
-            nn.ReLU(),
-            nn.Linear(EMBED_DIMS, EMBED_DIMS),
-            nn.ReLU(),
-            nn.Linear(EMBED_DIMS, CODE_SIZE),
-        )
-        for _ in range(NUM_LAYERS)
-    )
+    branches = nn.ModuleList(reg_branch(EMBED_DIMS, CODE_SIZE) for _ in range(NUM_LAYERS))
     return branches.eval().requires_grad_(False)
 
 

@@ -12,21 +12,12 @@ from types import SimpleNamespace
 
 import torch
 
-from models.experimental.bevformer.config.decoder_config import REG_XY, REG_Z
 from models.experimental.bevformer.tt.model_preprocessing import (
     DEFAULT_DTYPE,
+    linear_params,
     preprocess_layer_norm_parameters,
-    preprocess_linear_bias,
-    preprocess_linear_weight,
     preprocess_ms_deformable_attention_parameters,
 )
-
-
-def _linear_params(weight, bias, device, dtype):
-    return SimpleNamespace(
-        weight=preprocess_linear_weight(weight, dtype=dtype, device=device),
-        bias=preprocess_linear_bias(bias, dtype=dtype, device=device),
-    )
 
 
 def _self_attn_parameters(mha, device, dtype):
@@ -40,9 +31,9 @@ def _self_attn_parameters(mha, device, dtype):
     scale = head_dim**-0.5
     return SimpleNamespace(
         num_heads=mha.num_heads,
-        qk_proj=_linear_params(torch.cat([q_w * scale, k_w]), torch.cat([q_b * scale, k_b]), device, dtype),
-        v_proj=_linear_params(v_w, v_b, device, dtype),
-        out_proj=_linear_params(mha.out_proj.weight, mha.out_proj.bias, device, dtype),
+        qk_proj=linear_params(torch.cat([q_w * scale, k_w]), torch.cat([q_b * scale, k_b]), device, dtype),
+        v_proj=linear_params(v_w, v_b, device, dtype),
+        out_proj=linear_params(mha.out_proj.weight, mha.out_proj.bias, device, dtype),
     )
 
 
@@ -61,8 +52,8 @@ def _layer_parameters(layer, device, dtype):
         self_attn=_self_attn_parameters(layer.attentions[0].attn, device, dtype),
         cross_attn=_cross_attn_parameters(layer.attentions[1], device, dtype),
         ffn=SimpleNamespace(
-            linear1=_linear_params(ffn[0][0].weight, ffn[0][0].bias, device, dtype),
-            linear2=_linear_params(ffn[1].weight, ffn[1].bias, device, dtype),
+            linear1=linear_params(ffn[0][0].weight, ffn[0][0].bias, device, dtype),
+            linear2=linear_params(ffn[1].weight, ffn[1].bias, device, dtype),
         ),
         norms=[
             SimpleNamespace(**preprocess_layer_norm_parameters(norm, device=device, dtype=dtype))
@@ -82,22 +73,12 @@ def create_decoder_parameters(torch_model, device, dtype=DEFAULT_DTYPE):
 
 
 def create_reg_branch_parameters(reg_branches, device, dtype=DEFAULT_DTYPE):
-    """The three Linears of each ``Linear-ReLU-Linear-ReLU-Linear`` branch, for the decoder's
-    reference-point refinement.
+    """The three Linears of each ``Linear-ReLU-Linear-ReLU-Linear`` branch.
 
-    The last Linear keeps only the box-code rows the refinement reads, (x, y, z) in that
-    order (``REG_XY``, ``REG_Z``), so the decoder adds its output to the points' logits as is.
+    The decoder runs each branch once per layer: it refines its reference points with the
+    centre channels of the box code and returns the whole code, which the head uses.
     """
-    code_size = reg_branches[0][-1].out_features
-    rows = list(range(code_size))[REG_XY] + list(range(code_size))[REG_Z]
-    branches = []
-    for branch in reg_branches:
-        first, second, last = (module for module in branch if isinstance(module, torch.nn.Linear))
-        branches.append(
-            [
-                _linear_params(first.weight, first.bias, device, dtype),
-                _linear_params(second.weight, second.bias, device, dtype),
-                _linear_params(last.weight[rows], last.bias[rows], device, dtype),
-            ]
-        )
-    return branches
+    return [
+        [linear_params(m.weight, m.bias, device, dtype) for m in branch if isinstance(m, torch.nn.Linear)]
+        for branch in reg_branches
+    ]

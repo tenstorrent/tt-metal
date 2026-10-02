@@ -21,6 +21,7 @@ import dataclasses
 import math
 
 import ttnn
+from models.experimental.bevformer.config.decoder_config import REG_XY, REG_Z
 from models.experimental.bevformer.tt.tt_common import layer_norm
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention, fp32_grid_sample_config
 
@@ -125,8 +126,7 @@ class TtDetectionTransformerDecoder:
     def _reg_branch(x, branch):
         x = ttnn.linear(x, branch[0].weight, bias=branch[0].bias, activation="relu")
         x = ttnn.linear(x, branch[1].weight, bias=branch[1].bias, activation="relu")
-        # (x, y, z) logit updates (see create_reg_branch_parameters), in GRID_DTYPE as they
-        # are added to the reference points' logits.
+        # GRID_DTYPE, as the centre channels are added to the reference points' logits.
         return ttnn.linear(x, branch[2].weight, bias=branch[2].bias, dtype=GRID_DTYPE)
 
     def __call__(self, query, value, query_pos, reference_points, reg_branches):
@@ -134,8 +134,9 @@ class TtDetectionTransformerDecoder:
         ``(bs, nq, C)`` and ``(bs, bev_h * bev_w, C)`` with ``batch_first``; ``reference_points``
         ``(bs, nq, 3)`` ``GRID_DTYPE`` in [0, 1] either way.
 
-        Returns every layer's output ``(L, nq, bs, C)`` (``(L, bs, nq, C)`` with ``batch_first``)
-        and refined reference points ``(L, bs, nq, 3)``.
+        Returns every layer's output ``(L, nq, bs, C)`` (``(L, bs, nq, C)`` with ``batch_first``),
+        refined reference points ``(L, bs, nq, 3)`` and the reg branches' box codes
+        ``(L, bs, nq, code_size)``, both ``GRID_DTYPE``.
         """
         if reference_points.dtype != GRID_DTYPE:
             raise ValueError(f"reference_points must be {GRID_DTYPE}, got {reference_points.dtype}")
@@ -150,18 +151,22 @@ class TtDetectionTransformerDecoder:
         logits = ttnn.logit(reference_points, eps=INVERSE_SIGMOID_EPS)
         intermediate = []
         intermediate_reference_points = []
+        box_codes = []
         for layer, branch in zip(self.layers, reg_branches, strict=True):
             # The cross-attention's single level is the new axis 2.
             output = layer(output, value, query_pos, ttnn.unsqueeze(reference_points[..., :2], 2))
 
+            box_code = self._reg_branch(output, branch)
+            centre_delta = ttnn.concat([box_code[..., REG_XY], box_code[..., REG_Z]], dim=-1)
             # The clamp (a no-op on the first layer's logit output) runs inside the add.
-            logits = ttnn.add(self._reg_branch(output, branch), logits, input_tensor_b_activations=CLAMP_LOGITS)
+            logits = ttnn.add(centre_delta, logits, input_tensor_b_activations=CLAMP_LOGITS)
             reference_points = ttnn.sigmoid(logits)
 
             intermediate.append(output)
             intermediate_reference_points.append(reference_points)
+            box_codes.append(box_code)
 
         outputs = ttnn.stack(intermediate, dim=0)
         if not self.batch_first:
             outputs = ttnn.permute(outputs, (0, 2, 1, 3))
-        return outputs, ttnn.stack(intermediate_reference_points, dim=0)
+        return outputs, ttnn.stack(intermediate_reference_points, dim=0), ttnn.stack(box_codes, dim=0)
