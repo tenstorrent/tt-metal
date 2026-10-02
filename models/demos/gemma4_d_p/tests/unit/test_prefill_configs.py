@@ -23,7 +23,9 @@ GRID = SimpleNamespace(x=11, y=10)
         (256, False, (64, 256, 3, True)),
         (512, False, (128, 256, 3, True)),
         (1024, False, (96, 256, 1, True)),
-        (256, True, (128, 128, 1, False)),
+        (256, True, (128, 128, 3, False)),
+        (512, True, (128, 128, 3, False)),
+        (1024, True, (128, 128, 1, False)),
         # A quarter slab that is not whole tiles falls back to one tile.
         (64, False, (32, 256, 3, True)),
         (160, False, (32, 256, 3, True)),
@@ -37,6 +39,20 @@ GRID = SimpleNamespace(x=11, y=10)
 )
 def test_ring_sdpa_chunk_sizes(slab, sliding, expected):
     assert ring_sdpa_chunk_sizes(slab, sliding, num_heads=8, num_cores=110) == expected
+
+
+@pytest.mark.parametrize(
+    "slab, num_heads, num_cores, k_splits",
+    [
+        # Three bands of every (head, q 128 chunk) unit must fit on the cores.
+        (512, 8, 96, 3),
+        (512, 8, 95, 1),
+        (256, 16, 96, 3),
+        (512, 16, 110, 1),
+    ],
+)
+def test_ring_sdpa_sliding_k_splits(slab, num_heads, num_cores, k_splits):
+    assert ring_sdpa_chunk_sizes(slab, True, num_heads=num_heads, num_cores=num_cores)[2] == k_splits
 
 
 @pytest.mark.parametrize(
