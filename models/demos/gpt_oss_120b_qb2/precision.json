@@ -1,0 +1,41 @@
+{
+  "schema_version": 2,
+  "config_id": "ds00_baseline",
+  "weight_groups": {
+    "embedding": "bfloat16",
+    "attention_qkv": "bfloat8_b",
+    "attention_output": "bfloat8_b",
+    "router": "bfloat16",
+    "experts_gate_up": "bfloat4_b",
+    "experts_down": "bfloat4_b",
+    "normalization": "bfloat16",
+    "lm_head": "bfloat8_b"
+  },
+  "layer_exceptions": {},
+  "compute_fidelities": {
+    "decode_attention_projection": "LoFi",
+    "prefill_attention_projection": "HiFi2",
+    "attention_sdpa": "HiFi4",
+    "expert_matmul": "LoFi",
+    "router_matmul": "HiFi2",
+    "lm_head": "HiFi2"
+  },
+  "activation_residual_dtype": {
+    "stack_residual": "bfloat16",
+    "attention_projection_input": "bfloat8_b",
+    "expert_intermediate": "bfloat16"
+  },
+  "ccl_dtype": {
+    "attention": "bfloat8_b",
+    "experts": "bfloat16"
+  },
+  "kv_cache_dtype": "bfloat8_b",
+  "logits_sampling_dtype_assumptions": {
+    "lm_head_output": "bfloat8_b",
+    "full_logits_gather": {
+      "mode": "not_materialized"
+    },
+    "topk_values_gather_dtype": "bfloat16",
+    "sampling_accumulator": "bfloat16"
+  }
+}
