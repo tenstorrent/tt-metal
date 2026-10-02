@@ -583,10 +583,12 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Hardshrink: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-4.0, high=4.0)
     ),
-    # softplus: smooth; span both signs and past the linear threshold (20) so the
-    # kernel's linear-passthrough branch (input > threshold -> softplus(x) ~= x) is covered.
+    # softplus: span the negative tail this kernel used to flush to 0 (t < -5, down
+    # toward the bf16 normal floor near -87), both signs, and past the linear
+    # threshold (20) so the passthrough branch is covered. -80 stays where exp(-|x|)
+    # is still a normal fp32, so the float golden does not underflow ahead of bf16.
     MathOperation.Softplus: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=30.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-80.0, high=30.0)
     ),
     # sigmoid_appx: LUT approximation of sigmoid; span both signs across the knee at 0
     MathOperation.SigmoidAppx: OperandSpecs(

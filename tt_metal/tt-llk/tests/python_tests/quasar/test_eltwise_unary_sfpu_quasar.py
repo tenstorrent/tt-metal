@@ -38,7 +38,7 @@ from helpers.sfpu_dispatch_constants import (
     RELU_MAX_THRESHOLD,
     RELU_MIN_THRESHOLD,
 )
-from helpers.sfpu_domains import op_edge_points
+from helpers.sfpu_domains import for_op, op_edge_points
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
     StimuliSpec,
@@ -85,6 +85,10 @@ SFPU_UNARY_FORMATS = input_output_formats(
         DataFormat.Float16_b,
     ]
 )
+
+# Below this the bf16 softplus kernel used to return exactly 0 (its residual clamp); the
+# sweep asserts every result under it is positive.
+SOFTPLUS_TAIL_START = -5.0
 
 # The trigonometry / inverse-hyperbolic transcendentals. Float-only (they share the
 # SFPU_UNARY_FORMATS set), each with its own safe input domain (see prepare_trig_inputs).
@@ -414,11 +418,13 @@ def prepare_inputs_for_operation(
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
     elif mathop == MathOperation.Softplus:
-        # Span both signs and past the linear threshold (20) so the kernel's polynomial region, the
-        # negative saturation region, and the linear passthrough (t > threshold -> softplus ~= x) are
-        # all covered (mirrors sfpu_domains' Softplus spec).
-        min_val = -8.0
-        max_val = 30.0
+        # Read the range off sfpu_domains' Softplus spec rather than repeating it: the two
+        # copies had drifted (-5 vs -8) before. It spans the negative tail (t < -5, toward the
+        # bf16 floor), both signs, and past the linear threshold (20); its floor keeps
+        # exp(-|x|) a normal fp32 so the golden does not underflow ahead of bf16.
+        spec = for_op(MathOperation.Softplus).spec_A
+        min_val = spec.low
+        max_val = spec.high
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
     elif mathop in ROUNDING_OPS:
@@ -1066,6 +1072,23 @@ def test_eltwise_unary_sfpu_quasar(
         formats.output_format,
     ), "Assert against golden failed"
 
+    if mathop == MathOperation.Softplus and formats.output_format in (
+        DataFormat.Float16_b,
+        DataFormat.Float32,
+    ):
+        # The tolerance verdict above cannot see the tail this kernel used to flush to 0:
+        # softplus(x) is below 6.7e-3 for x < -5, inside its atol, so a 0 result passes it.
+        # softplus stays in (0, inf) for finite input, and over this stimulus exp(x) is still
+        # a normal bf16/fp32, so every tail lane must come back positive. fp16 output is not
+        # gated: it legitimately underflows below about -17.
+        tail = src_A.to(torch.float32).flatten() < SOFTPLUS_TAIL_START
+        assert tail.any(), "softplus stimulus does not reach the negative tail"
+        tail_res = res_tensor.to(torch.float32).flatten()[tail]
+        assert torch.all(tail_res > 0), (
+            f"softplus returned {int((tail_res <= 0).sum())} non-positive results for "
+            f"x < {SOFTPLUS_TAIL_START} ({formats.output_format.name} output)"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Cumsum layout / face-boundary detector.
@@ -1125,7 +1148,7 @@ def test_cumsum_tilized_dest_quasar(cumsum_formats_dest_acc):
     so both the input and the output permutation are load-bearing: an untilized row-major
     reading of Dest cannot satisfy this oracle.
     """
-    (formats, dest_acc) = cumsum_formats_dest_acc[0]
+    formats, dest_acc = cumsum_formats_dest_acc[0]
 
     input_dimensions = [DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM]
     src_A = _cumsum_detector_stimulus().to(format_dict[formats.input_format])

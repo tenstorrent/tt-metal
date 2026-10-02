@@ -252,6 +252,12 @@ void init_unary_sfpu_operation_quasar()
     {
         selu_init();
     }
+    else if constexpr (OPERATION == SfpuType::softplus)
+    {
+        // Loads vConstFloatPrgm0/1/2 for the bf16 path. The fp32-dest instantiation
+        // leaves them untouched.
+        softplus_init<is_fp32_dest_acc_en>();
+    }
     else if constexpr (OPERATION == SfpuType::softshrink)
     {
         softshrink_init();
@@ -815,14 +821,7 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     }
     else if constexpr (OPERATION == SfpuType::power_iterative)
     {
-        SFPU_UNARY_CALL(
-            DST_SYNC,
-            is_fp32_dest_acc_en,
-            calculate_unary_power_iterative,
-            (APPROX, ITERATIONS),
-            dst_index,
-            VectorMode::RC,
-            3u /* exponent */);
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_unary_power_iterative, (APPROX, ITERATIONS), dst_index, VectorMode::RC, 3u /* exponent */);
     }
     else if constexpr (OPERATION == SfpuType::log)
     {
