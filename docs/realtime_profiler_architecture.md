@@ -7,59 +7,33 @@ This document describes how the **dispatch core** (dispatch_s), **real-time prof
 ## 1. High-Level Architecture
 
 ```
-+--------------------------------------------------------------------------------------------------+
-|  HOST                                                                                            |
-|                                                                                                  |
-|  +-----------------------------+  +-------------------+  +------------------------------------+  |
-|  | Init / calibration          |  | D2H socket        |  | Receiver thread                    |  |
-|  | - Pick the profiler core    |  | - Config buffer   |  | - wait_for_pages()                 |  |
-|  | - Create the D2H socket     |  | - Pages over PCIe |  | - Parse timestamps                 |  |
-|  | - Run the clock sync        |  +-------------------+  | - InvokeProgramRealtimeCallbacks() |  |
-|  | - Start the receiver thread |                         +------------------------------------+  |
-|  +-----------------------------+                                                                 |
-|                 |                           |                               |                    |
-|                 | L1 writes:                | PCIe write                    | PCIe read          |
-|                 |   sync_request,           |   (pages)                     |   (pages)          |
-|                 |   sync_host_timestamp,    |                               |                    |
-|                 |   config_buffer_addr      |                               |                    |
-+--------------------------------------------------------------------------------------------------+
-                  |                           |                               |
-                  v                           |                               |
-+--------------------------------------------------------------------------------------------------+
-|  DEVICE (per chip)                                                                               |
-|                                                                                                  |
-|  +--------------------------------------------------------------------------------------------+  |
-|  | REAL-TIME PROFILER CORE (Tensix, closest to PCIe)                                          |  |
-|  | Kernels: cq_realtime_profiler.cpp (BRISC), cq_realtime_profiler_push.cpp (NCRISC)          |  |
-|  |                                                                                            |  |
-|  | +------------------------+  +------------------------------------------------------+       |  |
-|  | | Mailbox (L1)           |  | BRISC reader loop:                                   |       |  |
-|  | | - config_buffer_addr   |  | - rd_idx != wr_idx: NOC-read the pending slots       |       |  |
-|  | | - record_wr_idx        |  |   into the ring (NCRISC pushes it over D2H),         |       |  |
-|  | | - sync_request         |  |   then ack rd_idx to dispatch_s                      |       |  |
-|  | | - sync_host_timestamp  |  | - sync_request: run sync() (keeps draining)          |       |  |
-|  | +------------------------+  | - TERMINATE bit and everything read: exit            |       |  |
-|  |                             +------------------------------------------------------+       |  |
-|  +--------------------------------------------------------------------------------------------+  |
-|                 ^                                       |  NOC read (record slots)               |
-|                 |                                       |  NOC write record_rd_idx               |
-|                 |  record_wr_idx                        |                                        |
-|                 |  NOC write                            v                                        |
-|  +--------------------------------------------------------------------------------------------+  |
-|  | DISPATCH CORE (dispatch_s)                                                                 |  |
-|  | Kernel: cq_dispatch_subordinate.cpp                                                        |  |
-|  |                                                                                            |  |
-|  | L1 carve-out realtime_profiler_msg_t:                                                      |  |
-|  |   records[4] (SPSC ring), record_wr_idx, record_rd_idx, program_id_fifo,                   |  |
-|  |   realtime_profiler_core_noc_xy, realtime_profiler_remote_wr_idx_addr                      |  |
-|  |                                                                                            |  |
-|  | Per command:                                                                               |  |
-|  |   - record the start timestamp and program id into the open slot                           |  |
-|  |   - process the command (end timestamp written while waiting on workers)                   |  |
-|  |   - publish_realtime_profiler_record(): wait while the ring is full,                       |  |
-|  |     open the next slot, NOC-write record_wr_idx to the profiler core                       |  |
-|  +--------------------------------------------------------------------------------------------+  |
-+--------------------------------------------------------------------------------------------------+
++--------------------------------------------------------------+
+| dispatch_s  (dispatch core)                                  |
+| Stamps each program's start and end time into a 4-slot ring. |
+| If all 4 slots are still unread, it waits.                   |
++--------------------------------------------------------------+
+            |  record ready                       ^  slot free
+            v                                     |
++--------------------------------------------------------------+
+| BRISC  (profiler core)                                       |
+| Copies each ready record into a big ring in its own L1,      |
+| then tells dispatch_s the slot is free.                      |
+| Also answers the host's clock-sync requests.                 |
++--------------------------------------------------------------+
+            |  records
+            v
++--------------------------------------------------------------+
+| NCRISC  (profiler core)                                      |
+| Sends the ring's records to the host over PCIe               |
+| and tells the host how many it sent.                         |
++--------------------------------------------------------------+
+            |  records (PCIe)                     ^  records read
+            v                                     |
++--------------------------------------------------------------+
+| Receiver thread  (host)                                      |
+| Reads the records and hands each one to the callbacks        |
+| (e.g. Tracy), then tells the NCRISC how many it has read.    |
++--------------------------------------------------------------+
 ```
 
 ---
@@ -80,11 +54,11 @@ This document describes how the **dispatch core** (dispatch_s), **real-time prof
     |    advance record_wr_idx |                             |
     | 5. NOC write wr_idx ---->|                             |
     |                          | 6. See rd_idx != wr_idx     |
-    | <------------------------| 7. NOC-read pending slots   |
+    | <------------------------| 7. BRISC NOC-reads slots    |
     |                          |    from dispatch_s L1, then |
     | <---- record_rd_idx -----|    ack rd_idx (frees slots) |
-    |                          | 8. Push pages to the D2H    |
-    |                          |    socket (PCIe write)      |
+    |                          | 8. NCRISC pushes ring       |
+    |                          |    entries to D2H (PCIe)    |
     |                          | --------------------------->| 9. wait_for_pages, get_read_ptr
     |                          |                             | 10. Parse start/end ts, program_id
     |                          |                             | 11. InvokeProgramRealtimeCallbacks()
