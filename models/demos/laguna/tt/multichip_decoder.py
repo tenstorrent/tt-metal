@@ -461,6 +461,8 @@ class MultichipDecoder(OptimizedDecoder):
             E, I = global_experts, cfg.moe_intermediate
             # router replicated (full 256-wide logits/top-k on every device)
             w["gate_w"] = rep_tt("gate_w", lambda: g("mlp.gate.weight").t().contiguous(), policy.router)
+            # DRAM-width-sharded copy for the decode router (N=E=8 tiles -> interleaved linear ran on 8 cores)
+            w["gate_w_ds"] = ttnn.to_memory_config(w["gate_w"], _dram_weight_memcfg(H, E, dram_cores))
             w["e_bias"] = rep_tt(
                 "e_bias", lambda: g("mlp.experts.e_score_correction_bias").reshape(1, 1, 1, E), ttnn.bfloat16
             )

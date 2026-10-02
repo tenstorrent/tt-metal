@@ -919,9 +919,25 @@ class OptimizedDecoder(LightweightModule):
             _, idx = ttnn.topk(ttnn.typecast(sel, ttnn.bfloat16), k=K, dim=-1, sorted=True)
             wsel = ttnn.gather(scores, dim=3, index=idx)
         else:
-            logits32 = ttnn.linear(
-                ln_flat, self.w["gate_w"], compute_kernel_config=self._ck_router_precise, dtype=ttnn.float32
-            )
+            if "gate_w_ds" in self.w and ln_flat.shape[-2] <= TILE:
+                # decode: DRAM-sharded router logits (one N tile per DRAM bank, K width-sharded in L1)
+                H, E = cfg.hidden, cfg.num_experts
+                num_cores = _decode_shard_cores(H, E)
+                x_sh = ttnn.to_memory_config(ln_flat, _width_sharded_l1(TILE, H, num_cores))
+                logits32 = ttnn.linear(
+                    x_sh,
+                    self.w["gate_w_ds"],
+                    program_config=_dram_matmul_pc(TILE, H, E, num_cores),
+                    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                    compute_kernel_config=self._ck_router_precise,
+                    dtype=ttnn.float32,
+                )
+                ttnn.deallocate(x_sh)
+                logits32 = ttnn.sharded_to_interleaved(logits32, ttnn.L1_MEMORY_CONFIG)
+            else:
+                logits32 = ttnn.linear(
+                    ln_flat, self.w["gate_w"], compute_kernel_config=self._ck_router_precise, dtype=ttnn.float32
+                )
             # Callers use ``logits`` only as the bf16 [1,1,T,E] template of the dense routing matrix.
             logits = ttnn.typecast(logits32, ttnn.bfloat16)
             scores = ttnn.sigmoid(logits32)
