@@ -788,6 +788,31 @@ class OptimizedDecoder(LightweightModule):
 
     # ---- shared ops -------------------------------------------------------- #
     def _rms(self, x, weight):
+        # Decode-sized rows: the interleaved norm runs on ONE core (~65 us for [32, 3072]); width-shard
+        # the row across cores (same 32-core split as the QKV matmul input) and normalize in L1.
+        rows = x.shape[-2]
+        if len(x.shape) == 4 and x.shape[0] * x.shape[1] == 1 and rows <= 128 and x.layout == ttnn.TILE_LAYOUT:
+            m = ((rows + TILE - 1) // TILE) * TILE
+            h = x.shape[-1]
+            num_cores = _decode_shard_cores(h, h)
+            grid = _core_grid(num_cores)
+            block_w = h // TILE // num_cores
+            x_sh = ttnn.to_memory_config(x, _width_sharded_l1(m, h, num_cores))
+            out = ttnn.rms_norm(
+                x_sh,
+                weight=weight,
+                epsilon=self.cfg.eps,
+                compute_kernel_config=self._norm_ck,
+                program_config=ttnn.LayerNormShardedMultiCoreProgramConfig(
+                    compute_with_storage_grid_size=(grid.x, grid.y),
+                    subblock_w=block_w,
+                    block_h=m // TILE,
+                    block_w=block_w,
+                    inplace=False,
+                ),
+                memory_config=x_sh.memory_config(),
+            )
+            return ttnn.sharded_to_interleaved(out, ttnn.L1_MEMORY_CONFIG)
         return ttnn.rms_norm(x, weight=weight, epsilon=self.cfg.eps, compute_kernel_config=self._norm_ck)
 
     def _per_head_norm(self, x, weight):
