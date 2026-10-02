@@ -10,6 +10,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.gemma4.tt.attention import _RING_HEADROOM_BLOCK, SPEC_RING_HEADROOM_ENV
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.dflash_constants import VERIFY_WIDTH_MARGIN
 from models.demos.gemma4.tt.generator import (
@@ -29,7 +30,11 @@ from models.demos.gemma4.tt.generator_trace import (
 )
 from models.tt_transformers.tt.common import get_padded_prefill_len
 from models.tt_transformers.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES, create_submeshes
-from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM, allocate_vllm_kv_cache
+from models.tt_transformers.tt.generator_vllm import (
+    HybridAttentionForCausalLM,
+    allocate_vllm_kv_cache,
+    allocate_vllm_kv_cache_per_layer,
+)
 
 
 def _vllm_force_full_isl_single_chunk() -> bool:
@@ -155,6 +160,42 @@ def _resolve_vllm_bounded_sliding(max_seq_len, mesh_device, model_path, *, hybri
     return _bs_env.lower() in ("1", "true", "yes")
 
 
+def _assert_within_native_context(max_seq_len: int, model_args) -> None:
+    """Refuse a serving length beyond gemma4's native RoPE window.
+
+    vLLM's own ceiling check (max_model_len vs the HF-derived maximum) is
+    waived in the serving templates by ``VLLM_ALLOW_LONG_MAX_MODEL_LEN=1``,
+    and the spec convention sizes the all-user KV pool as "B=1 x max_context"
+    -- so a template with ``max_context`` above the native 262,144 admits a
+    SINGLE request of that length end to end. Gemma4 has no rope scaling
+    (``rope_scaling: null``): past ``max_position_embeddings`` RoPE indexes
+    off the table and the bounded sliding rings see positions the sizing
+    never accounted for, failing at runtime instead of at boot. Guard here,
+    at the one choke point every gemma4 vLLM class passes through.
+    ``GEMMA4_ALLOW_BEYOND_NATIVE=1`` opts back in, explicitly and per-launch.
+    """
+    native = int(getattr(model_args, "max_context_len", 0) or 0)
+    if not native or max_seq_len <= native:
+        return
+    if os.environ.get("GEMMA4_ALLOW_BEYOND_NATIVE", "0").lower() in ("1", "true", "yes"):
+        logger.warning(
+            "Gemma4 vLLM: max_seq_len={} exceeds the native context {} and "
+            "GEMMA4_ALLOW_BEYOND_NATIVE is set -- serving beyond the RoPE table "
+            "is unvalidated.",
+            max_seq_len,
+            native,
+        )
+        return
+    raise ValueError(
+        f"max_seq_len {max_seq_len} exceeds gemma-4's native max_position_embeddings "
+        f"({native}, no rope scaling). vLLM's ceiling check is disabled by "
+        "VLLM_ALLOW_LONG_MAX_MODEL_LEN in the serving templates, so this length would "
+        "be accepted and then fail at runtime for any single request past the native "
+        "window. Lower max_context / --max-model-len, or set "
+        "GEMMA4_ALLOW_BEYOND_NATIVE=1 to accept unvalidated behavior."
+    )
+
+
 def _patch_model_args(
     model_args,
     mesh_device,
@@ -165,6 +206,7 @@ def _patch_model_args(
     *,
     bounded_sliding=False,
 ):
+    _assert_within_native_context(max_seq_len, model_args)
     model_args.max_batch_size = max_batch_size
     model_args.max_seq_len = max_seq_len
     # Prefill chunking (two cooperating layers after tenstorrent/vllm#448):
@@ -239,6 +281,10 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
     """
 
     decode_input_update_contract = 1
+
+    #: Speculating subclasses that stop proposing before a verify would wrap the
+    #: bounded ring set this; they are advised rather than refused at startup.
+    _SPEC_DECLINES_AT_RING_WRAP = False
 
     # Async decode closes the ~15–20% metal↔server B=1 gap (#51186): with
     # ``async_scheduling`` the plugin overlaps CPU scheduling with the previous
@@ -970,6 +1016,8 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             model_path,
             hybrid_groups_enabled=cls._HYBRID_KV_CACHE_GROUPS_ENABLED,
         )
+        # Before create_tt_model: it sizes the bounded KV specs from the ring.
+        _auto_size_spec_ring(cls, hf_config, bounded_sliding_kv_cache)
 
         model_args = []
         model = []
@@ -1750,11 +1798,19 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         # Legacy uniform path (vLLM falls back here when ``get_kv_cache_spec``
         # isn't consulted). The hybrid path uses ``allocate_kv_cache_per_layer``
         # inherited from :class:`HybridAttentionForCausalLM`.
+        #
+        # ``tt_cache_path=None``: never disk-cache the zero-filled KV tensors.
+        # All DP ranks share one tt_metal_cache dir, so at DP>1 a rank can load
+        # an empty-KV cache file another rank is still writing — a torn read
+        # that segfaults in memcpy_to_device (observed on BH Galaxy DP=4 at
+        # GEMMA4_MAX_TOKENS_ALL_USERS=524288, where each global-layer file is
+        # 539 MB and the write window is seconds). Tilizing zeros in-process
+        # costs ~1 s/global layer; the cache saved less than it risked.
         return allocate_vllm_kv_cache(
             *args,
             **kwargs,
             dp_model=self.model,
-            tt_cache_path=self.cache_path,
+            tt_cache_path=None,
         )
 
     def _text_config(self):
@@ -1951,7 +2007,11 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         allocation — see :meth:`_shrink_bounded_sliding_kv_specs`.
         """
         per_layer_specs = self._shrink_bounded_sliding_kv_specs(per_layer_specs)
-        kv_cache = super().allocate_kv_cache_per_layer(per_layer_specs)
+        # Direct util call instead of super(): pass ``tt_cache_path=None`` so
+        # the zero-filled KV tensors are never disk-cached — DP ranks share one
+        # cache dir and racing create/load of the same empty-KV file is a
+        # torn-read segfault (see :meth:`allocate_kv_cache`).
+        kv_cache = allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model=self.model, tt_cache_path=None)
         for submesh_idx, submesh_kv in enumerate(kv_cache):
             kv_shared_map = getattr(self.model[submesh_idx], "kv_shared_layer_map", None)
             if not kv_shared_map:
@@ -2633,56 +2693,111 @@ def _spec_first_slot(empty_slots):
         return None
 
 
-def _reserve_spec_ring_headroom(sliding_window, verify_width, where):
-    """Reserve bounded-ring headroom for speculative candidate writes.
-
-    A ring of exactly ``sliding_window`` is correct for plain decode, but a
-    packed verify writes candidates at p+1..p+K BEFORE attention runs, and slot
-    (p+j)%W holds position p+j-W, which is still inside the live window. Those
-    writes evict history that an earlier candidate query in the SAME forward
-    still needs, and masking future candidates cannot bring it back.
+def _spec_ring_blocks_for(window, drafts):
+    """Headroom blocks giving the smallest legal ring that holds ``drafts`` extra rows.
 
     The ring must stay a power of two (chunk starts must be multiples of both
-    the ring and SDPA's q_chunk_size), so the smallest legal ring larger than
-    the window is twice the window -- which also clears any K up to the window.
-    Set through the env because the ring is read process-wide by
-    ``bounded_ring_modulo`` from the model and trace paths, which do not know
-    whether speculation is on. ``setdefault`` leaves an operator's own value
-    alone.
-
-    Only the demo used to set this, so a SERVER ran bounded sliding plus
-    speculation on an exact-window ring and corrupted from the first token at
-    K>1 (tt-metal#56048 review 3).
+    the ring and SDPA's q_chunk_size), so this rounds ``window + drafts`` up to
+    one. For the shipped 1024 window and K=5 that is 2048, i.e. 16 blocks.
     """
-    from models.demos.gemma4.tt.attention import _RING_HEADROOM_BLOCK, SPEC_RING_HEADROOM_ENV
+    need = int(window) + int(drafts)
+    ring = 1 << (need - 1).bit_length()
+    return (ring - int(window)) // _RING_HEADROOM_BLOCK
+
+
+def _auto_size_spec_ring(cls, hf_config, bounded_sliding):
+    """Size the bounded ring so a speculating class can hold its verify rows.
+
+    A packed verify writes the anchor and K drafts before attention runs. Only
+    the K DRAFT writes evict live history: the anchor at p lands in slot
+    p % ring, which held p - ring, already outside the window. So the ring needs
+    ``K`` slots of headroom, not K + 1 -- the same test the contract rail
+    applies per request (``_dflash_ring_advice``).
+
+    Done here because ``bounded_ring_modulo`` is read process-wide by the model
+    and trace paths, which do not know whether the serving class speculates,
+    and because ``create_tt_model`` sizes the bounded KV specs from it. An
+    operator's own value is left alone.
+
+    This used to be the operator's job through the env var, and a server that
+    did not set it speculated on an exact ring and served plausible, wrong text
+    (tt-metal#57701). The env var was the wrong interface: the model already
+    knows the class, K, whether bounded sliding resolved on, and the window.
+    """
+    if not bounded_sliding:
+        return
+    drafts = int(getattr(cls, "_SPEC_N", 0) or 0) - 1
+    if drafts <= 0:
+        return  # not a speculating class, or K=0
+    text_config = getattr(hf_config, "text_config", hf_config)
+    window = getattr(text_config, "sliding_window", None)
+    if window is None:
+        return  # full attention everywhere: no ring
+    window = int(window)
+    if window <= 0 or window % _RING_HEADROOM_BLOCK:
+        return
+    if os.environ.get(SPEC_RING_HEADROOM_ENV):
+        return  # operator pinned a value; _reserve_spec_ring_headroom checks it
+    blocks = _spec_ring_blocks_for(window, drafts)
+    os.environ[SPEC_RING_HEADROOM_ENV] = str(blocks)
+    logger.info(
+        f"{cls.__name__}: bounded sliding KV with speculation (K={drafts}) needs ring headroom; "
+        f"set {SPEC_RING_HEADROOM_ENV}={blocks} (ring {window + blocks * _RING_HEADROOM_BLOCK} "
+        f"for a {window} window). The bounded pool is sized per sliding layer from the ring."
+    )
+
+
+def _reserve_spec_ring_headroom(sliding_window, verify_width, where, *, declines_at_wrap=False):
+    """Refuse to speculate on a bounded ring that cannot hold the verify.
+
+    ``_auto_size_spec_ring`` gives every speculating class a ring that passes
+    this, so reaching the raise means an operator pinned
+    ``GEMMA4_SPEC_RING_HEADROOM_BLOCKS`` too small. It is kept as a backstop
+    because the failure it catches is silent: a packed verify writes drafts at
+    p+1..p+K before attention runs, and slot (p+j)%ring still holds position
+    p+j-ring, which is inside the live window. Every sliding layer -- 50 of 60
+    on 31B -- then attends a shortened window, so the COMMITTED tokens are wrong
+    from the first generated token of any prompt past ``ring - K``, with no
+    failed request and no error (tt-metal#57701).
+
+    ``declines_at_wrap`` classes stop proposing before a verify would wrap and
+    continue as plain decode, so an exact ring costs them speed, not
+    correctness. They are advised, not refused.
+    """
+    from models.demos.gemma4.tt.attention import _RING_HEADROOM_BLOCK, SPEC_RING_HEADROOM_ENV, bounded_ring_modulo
 
     if sliding_window is None:
         return
     window = int(sliding_window)
     if window <= 0 or window % _RING_HEADROOM_BLOCK:
         return
-    if os.environ.get(SPEC_RING_HEADROOM_ENV):
+    # Validated before the width check so this guard's error path does not depend
+    # on verify_width: a ring that is not a power of two is wrong for any width,
+    # and bounded_ring_modulo raising here names the bad env value at config time
+    # rather than leaving it to surface from the model or trace path later.
+    ring = bounded_ring_modulo(window)
+
+    # Only the drafts evict live history; the anchor write lands on a slot
+    # holding ``p - ring``, which the window has already dropped.
+    drafts = int(verify_width or 0) - 1
+    if drafts <= 0:
         return
-    # NOT reserved automatically. The ring must stay a power of two, so the
-    # smallest legal headroom DOUBLES it, and the bounded pool is sized
-    # (ring/block)*max_batch for EVERY sliding layer -- 50 of them on 31B. That
-    # doubling OOMs the shipped P150x8 config during KV allocation, so it
-    # cannot be switched on by default; fitting it needs the full-attention
-    # pool (GEMMA4_MAX_TOKENS_ALL_USERS) reduced to pay for it.
-    #
-    # Warn instead of proceeding silently: on an exact-window ring a packed
-    # verify writes candidates at p+1..p+K into slots still holding live
-    # window positions, so drafts corrupt from the first token at K>1
-    # (tt-metal#56048 review 3). Loud, with the knob named, beats wrong tokens.
-    blocks = window // _RING_HEADROOM_BLOCK
-    logger.warning(
-        f"{where}: bounded sliding with an EXACT-window ring ({window}) and "
-        f"speculation (verify width {verify_width}). A packed verify writes "
-        f"candidates at p+1..p+{verify_width} into slots that still hold live "
-        f"window positions, which corrupts drafts at width > 1. Set "
-        f"{SPEC_RING_HEADROOM_ENV}={blocks} to double the ring, and lower "
-        "GEMMA4_MAX_TOKENS_ALL_USERS to pay for it -- the bounded pool is "
-        "sized per sliding layer and doubling it OOMs the default config."
+    if ring is not None and int(ring) - window >= drafts:
+        return  # headroom covers every draft write
+    if declines_at_wrap:
+        return  # the class stops proposing before the wrap; it says so itself
+
+    blocks = _spec_ring_blocks_for(window, drafts)
+    raise RuntimeError(
+        f"{where}: bounded sliding KV on a ring of {ring} cannot hold a verify of "
+        f"{drafts} drafts on a {window} window. The drafts land in slots that still "
+        f"hold live window positions, so every sliding layer attends a shortened "
+        f"window and the committed tokens are wrong from the first one past position "
+        f"{int(ring) - drafts} (tt-metal#57701). Unset {SPEC_RING_HEADROOM_ENV} to let "
+        f"the model size the ring itself, or set it to {blocks} (ring "
+        f"{window + blocks * _RING_HEADROOM_BLOCK}); the bounded pool is sized per "
+        f"sliding layer from the ring, so lower GEMMA4_MAX_TOKENS_ALL_USERS if it "
+        f"does not fit. Serving without bounded sliding KV also avoids this."
     )
 
 
@@ -2828,7 +2943,10 @@ class Gemma4DFlashBase(Gemma4ForCausalLM):
         self._spec_horizon = int(os.environ.get("GEMMA4_DFLASH_SERVE_HORIZON", "2048"))
         if self._bounded_sliding_kv_cache:
             _reserve_spec_ring_headroom(
-                getattr(self._text_config(), "sliding_window", None), self._SPEC_N, "Gemma4DFlash"
+                getattr(self._text_config(), "sliding_window", None),
+                self._SPEC_N,
+                type(self).__name__,
+                declines_at_wrap=self._SPEC_DECLINES_AT_RING_WRAP,
             )
         # WIDTH SET (vllm-tt-plugin#110 s.8, tt-metal#56048 review step 3): the
         # verify widths are derived from max_model_len at CONFIG time and every
@@ -2994,6 +3112,160 @@ class Gemma4DFlashBase(Gemma4ForCausalLM):
             f"Gemma4DFlash: captured {len(cost)} verify widths in {_time.time()-t0:.1f}s "
             f"(max_model_len={max_seq_len}, widths={ladder}, per-width={ {k: round(v, 2) for k, v in cost.items()} })"
         )
+
+    def _spec_pending_is_mine(self, page_table):
+        """True when the pending session was captured for the request whose
+        page table this is. Unknown identity on either side (no page table)
+        falls back to True: that is the pre-existing single-session behaviour,
+        and the scheduler's mirror still owns the width contract."""
+        owner = getattr(self, "_spec_pending_owner", None)
+        cur = self._spec_pt_identity(page_table)
+        if owner is None or cur is None:
+            return True
+        return owner == cur
+
+    def _spec_active_is_mine(self, page_table):
+        """True when the LIVE session belongs to the request whose page table
+        this is. Unknown identity on either side falls back to True, matching
+        _spec_pending_is_mine: the scheduler's mirror still owns the width
+        contract, and a missing page table is not evidence of a hand-off."""
+        owner = getattr(self, "_spec_active_owner", None)
+        cur = self._spec_pt_identity(page_table)
+        if owner is None or cur is None:
+            return True
+        return owner == cur
+
+    def _spec_drop_session(self, why):
+        """Drop the single global spec session (pending taps AND any live one).
+
+        Called on every path that serves a prefill as plain baseline. The taps
+        are only valid for the prompt they were captured from, and the session
+        slot is global: leaving it armed lets an unrelated later solo decode
+        bootstrap another prompt's residuals, and leaving a live session armed
+        lets it outlive the request whose width the scheduler reserved. The
+        plugin's scheduler mirrors exactly these transitions, so the reserved
+        width and the emitted width stay in lockstep.
+        """
+        if self._spec_pending is not None or self._spec_active:
+            logger.info(f"Gemma4DFlash: dropping spec session ({why})")
+        self._spec_pending = None
+        self._spec_pending_owner = None
+        if self._spec_active:
+            self._spec_release_decoder()
+        # DISARM the residual-tap hook. capture() arms it with buffers=tap_bufs,
+        # which are sized for the fused DECODE body (P_v rows), and nothing
+        # disarms it when the session ends -- so it stays armed after any spec
+        # request. A later prefill served as plain baseline then runs the eager
+        # chunked forward with that hook still live and ttnn.copy's a full
+        # prefill chunk into a P_v-row buffer, killing the engine:
+        #   TT_FATAL: Input tensor shape Shape([1, 1, 4096, 5376]) does not
+        #   match output tensor shape Shape([1, 1, 6, 5376])
+        # (copy_device_operation.cpp:112 -- 4096 = prefill chunk, 6 = P_v at
+        # GEMMA4_DFLASH_VERIFY=5). Reproduced on a P150x8 256K benchmark sweep at
+        # the first point above GEMMA4_DFLASH_MAX_SPEC_ISL: 131072 served fine,
+        # 196608 took the engine down. Disarming here covers every drop path.
+        try:
+            self.model[0].dflash_capture_taps(None)
+        except Exception:
+            pass
+
+    # -- prefill: capture taps (untraced) ------------------------------------
+    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False):
+        """Warm the prefill buckets eagerly: this rail never replays a prefill trace.
+
+        Every prefill on the dFlash rails runs untraced at runtime -- the drafter
+        reads residual taps from a python hook that a traced replay does not run,
+        and ``_left_pad_kv_to_hist`` is not trace-safe (see ``prefill_forward``).
+        The inherited warmup only cleared ``enable_trace`` for bounded sliding, so
+        an unbounded dFlash server captured every prefill bucket at warmup and
+        then never replayed one: warmup work and trace-region space spent on
+        traces that cannot be used (tt-metal#57853).
+
+        The warmup itself still runs, eagerly, so the buckets are warm.
+        """
+        super().warmup_model_prefill(
+            kv_cache,
+            enable_trace=False,
+            can_sample_on_device=can_sample_on_device,
+            greedy_only=greedy_only,
+        )
+
+    def prefill_forward(self, *args, **kwargs):
+        tokens = kwargs.get("tokens")
+        if tokens is None and args:
+            tokens = args[0]
+        # Baseline pickup: dFlash spec is B=1 block-output. In a non-block-output
+        # / throughput deployment (GEMMA4_DFLASH_SERVE_BLOCK=1) or for any
+        # batched (concurrency>1) prefill, serve via the plain baseline path and
+        # skip the drafter tap capture entirely.
+        if self._SPEC_BLOCK <= 1 or (tokens is not None and int(tokens.shape[0]) != 1):
+            # model0's dFlash tap-capture state is SHARED; a prior solo session
+            # can leave it armed (with decode-sized buffers). Disarm before a
+            # plain baseline prefill so the tap hook does not fire on it (a stale
+            # buffer copy would shape-mismatch against the prefill hidden).
+            try:
+                self.model[0].dflash_capture_taps(None)
+            except Exception:
+                pass
+            self._spec_drop_session("baseline prefill")
+            if self._SPEC_BLOCK > 1:
+                # gemma4's prefill KV-history write (_left_pad_kv_to_hist) is not
+                # trace-safe; the dFlash spec prefill runs untraced for the same
+                # reason. Keep the adaptive batched baseline prefill untraced too.
+                kwargs["enable_trace"] = False
+            return super().prefill_forward(*args, **kwargs)
+        drafter = self._spec_get_drafter()
+        model0 = self.model[0]
+        # Boot warmup prefills feed all-zero dummy tokens (and warmup_prefill=1);
+        # capturing their taps would seed the drafter ctx with garbage. Only the
+        # REAL prompt prefill sets the pending spec session.
+        is_warmup = bool(kwargs.get("warmup_prefill")) or (tokens is not None and int(tokens.abs().sum()) == 0)
+        # Force EAGER prefill: the residual taps are captured by a python hook in
+        # the eager forward, which a traced replay skips. enable_trace=False gates
+        # the prefill-bucket trace; GEMMA4_CHUNKED_PREFILL_TRACE=0 (model spec)
+        # gates the per-chunk trace so multi-chunk prefills (ISL > one chunk)
+        # still fire the hook -- without it the drafter gets empty taps at ISL
+        # above the chunk size and the request fails.
+        kwargs["enable_trace"] = False
+        if is_warmup:
+            return super().prefill_forward(*args, **kwargs)
+        # SPEC-ISL CEILING (GEMMA4_DFLASH_MAX_SPEC_ISL, 0=off): above this prompt
+        # length the fused-verify capture no longer fits in DRAM alongside the
+        # batched-baseline persistent buffers (max_num_seqs>1) -- the capture
+        # allocation OOMs (bank_manager.cpp:462) and kills the engine. Serve such
+        # requests as plain baseline through the existing solo-no-session adaptive
+        # path instead: skip the tap capture entirely so decode finds no pending
+        # session. Frontier measured on P150x8 @ ctx=262144:
+        # max_num_seqs=32 -> 131072 OK / 196608 OOM; 16 -> 196608 OK / 229376 OOM;
+        # 1 -> 253952 OK. Keeps full batch fallback capacity while long-context
+        # requests degrade gracefully to baseline speed rather than crashing.
+        _max_spec_isl = int(os.environ.get("GEMMA4_DFLASH_MAX_SPEC_ISL", "0"))
+        if _max_spec_isl > 0:
+            _pl = kwargs.get("prompt_lens")
+            _n0 = int(_pl[0]) if _pl is not None else int(tokens.shape[1])
+            if _n0 > _max_spec_isl:
+                logger.info(
+                    f"Gemma4DFlash: prompt {_n0} > spec ceiling {_max_spec_isl}; "
+                    "serving as plain baseline (no spec session)"
+                )
+                self._spec_drop_session("prompt over spec ceiling")
+                return super().prefill_forward(*args, **kwargs)
+        model0.dflash_capture_taps(drafter.target_layer_ids, keep_last=12)
+        try:
+            out = super().prefill_forward(*args, **kwargs)
+        finally:
+            taps = model0.pop_dflash_taps()
+            model0.dflash_capture_taps(None)
+        prompt_lens = kwargs.get("prompt_lens")
+        n = int(prompt_lens[0]) if prompt_lens is not None else int(tokens.shape[1])
+        self._spec_pending = (taps, n)
+        self._spec_pending_owner = self._spec_pt_identity(kwargs.get("page_table"))
+        # The runner releases by STATE SLOT, not by page table, so record the
+        # slot too: release_request(row) has to tell "my request finished" from
+        # "some other request finished" (see release_request).
+        self._spec_owner_slot = _spec_first_slot(kwargs.get("empty_slots"))
+        self._spec_active = False
+        return out
 
     # -- session: bootstrap from prefill taps, release ---------------------
     def _spec_bootstrap(self, anchor_id, start, page_table, kv_cache, page_tables_per_layer=None):
@@ -3869,6 +4141,13 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
     # read these; on this rail the verify count is the contract K.
     _SPEC_V = _SPEC_CONTRACT_K
     _SPEC_N = _SPEC_CONTRACT_K + 1
+    # This rail stops proposing before a verify would wrap the ring and carries
+    # on as plain decode (``_dflash_ring_advice``), so an exact ring costs it
+    # speed, not correctness. The inherited startup guard must not refuse it.
+    _SPEC_DECLINES_AT_RING_WRAP = True
+    # The inherited prefill and warmup paths read ``_SPEC_BLOCK > 1`` as
+    # "speculation is on". The value never reaches the wire here.
+    _SPEC_BLOCK = max(2, int(os.environ.get("GEMMA4_DFLASH_SERVE_BLOCK", "64")))
     _DFLASH_ASYNC = _dflash_env_flag("GEMMA4_CONTRACT_ASYNC", "0")
 
     model_capabilities = {
@@ -4803,7 +5082,12 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
         )
         self._spec_warm = False
         if self._bounded_sliding_kv_cache:
-            _reserve_spec_ring_headroom(getattr(self._text_config(), "sliding_window", None), self._SPEC_N, "Gemma4MTP")
+            _reserve_spec_ring_headroom(
+                getattr(self._text_config(), "sliding_window", None),
+                self._SPEC_N,
+                "Gemma4MTP",
+                declines_at_wrap=self._SPEC_DECLINES_AT_RING_WRAP,
+            )
         self._spec_horizon = int(os.environ.get("GEMMA4_MTP_SERVE_HORIZON", "2048"))
         logger.info(
             f"Gemma4MTP serving: K={self._SPEC_K} (N={self._SPEC_N}/step), "
