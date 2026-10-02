@@ -46,10 +46,13 @@ void EmbeddingBackwardDeviceOperation::validate_on_program_cache_miss(
         grad_tensor.dtype() == operation_attributes.output_dtype,
         "Output and input gradient tensors must have the same dtype");
 
+    const auto& output_memory_config = tensor_args.preallocated_output.has_value()
+                                           ? tensor_args.preallocated_output->memory_config()
+                                           : operation_attributes.output_mem_config;
     TT_FATAL(
-        grad_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED or
-            index_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED or
-            operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        grad_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED and
+            index_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED and
+            output_memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Embedding b/w does not currently support sharding");
 
     TT_FATAL(
