@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -76,19 +76,20 @@ class TtModulatedDeformConv2dPack:
 
     def __call__(self, x):
         """``x`` is a (1, 1, B*H*W, C_in) tensor in conv2d's layout. Returns the
-        (B, H_out, W_out, C_out) NHWC output and its height and width."""
+        (1, 1, B*H_out*W_out, C_out) output, also in conv2d's layout, and its height and width."""
         out, out_h, out_w = self.conv_offset(x)
         out = ttnn.reshape(out, (self.batch_size, out_h, out_w, out.shape[-1]))
         grid_offset = out[:, :, :, : self.num_offset_channels]
         mask = ttnn.sigmoid(out[:, :, :, self.num_offset_channels :])
         ttnn.deallocate(out)
 
-        # At stride 1 the input has the output's height and width.
-        x_nhwc = ttnn.reshape(x, (self.batch_size, out_h, out_w, x.shape[-1]))
-        out_nhwc = self.device_dcn(x_nhwc, grid_offset, mask)
+        # At stride 1 the input has the output's height and width. To ROW_MAJOR first, the layout
+        # grid_sample reads, where the reshape to NHWC moves no data.
+        x_nhwc = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (self.batch_size, out_h, out_w, x.shape[-1]))
+        out = self.device_dcn(x_nhwc, grid_offset, mask)
         ttnn.deallocate(grid_offset)
         ttnn.deallocate(mask)
-        return out_nhwc, out_h, out_w
+        return out, out_h, out_w
 
 
 class TtResLayer:
