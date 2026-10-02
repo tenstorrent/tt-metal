@@ -146,6 +146,18 @@ def _provenance_by_op(text: str) -> Dict[str, Tuple[str, List[str]]]:
     return by_op
 
 
+def _key_value(value) -> str:
+    """A key field as the registry reads it. YAML 1.1 reads a bare ``Yes``/``No`` as a
+    boolean and the registry maps it back to the enum member; keyed as ``"True"`` the
+    row would describe a cell that does not exist, and the two readers would disagree
+    about which cell a raise landed on."""
+    if value is True:
+        return "Yes"
+    if value is False:
+        return "No"
+    return str(value)
+
+
 def parse_table(text: str) -> Dict[Cell, Row]:
     """Every row of the table, keyed by the cell it governs: values through PyYAML, so
     anchors and ``<<`` merge keys mean what they mean, and comments through a positional
@@ -165,7 +177,9 @@ def parse_table(text: str) -> Dict[Cell, Row]:
             if not isinstance(fields, dict):
                 continue
             key = tuple(
-                (k, str(fields[k])) for k in KEY_FIELDS if fields.get(k) is not None
+                (k, _key_value(fields[k]))
+                for k in KEY_FIELDS
+                if fields.get(k) is not None
             )
             if (op, key) in rows:
                 # `_load_table` refuses two rows of equal specificity, so this table

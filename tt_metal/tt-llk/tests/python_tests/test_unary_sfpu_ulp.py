@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Every distinct finite 16-bit value -- a stride of Float32 -- every ULP-gateable unary
-SFPU op.
+"""Every distinct finite 16-bit value -- a stride of Float32 -- every enrolled unary SFPU
+op.
 
 The functional drivers in test_eltwise_unary_sfpu.py sample a few thousand points from
 an op's safe domain, so a budget measured that way can only ever be re-confirmed by
@@ -21,8 +21,6 @@ or re-measure and fold the results back into helpers/sfpu_accuracy_budget.yaml::
     pytest test_unary_sfpu_ulp.py --ulp-emit            # every op with a key line
     pytest test_unary_sfpu_ulp.py --ulp-emit --op MyOp  # one op, matched exactly
 """
-
-import sys
 
 import pytest
 import torch
@@ -43,7 +41,7 @@ from helpers.llk_params import (
 from helpers.param_config import get_num_blocks_and_num_tiles_in_block
 from helpers.sfpu_accuracy_budget import (
     _SFPU_ACCURACY_BUDGET,
-    FLUSH_SUBNORMAL_OUTPUTS,
+    MEASURED_ARCH,
     Metric,
     accuracy_contract,
 )
@@ -77,9 +75,20 @@ from helpers.ulp_sweep import (
 )
 from helpers.utils import _record_ulp_measurement, passed_test
 
-#: `accuracy` is the marker every LLK workflow deselects; `nightly` would not do, since
-#: llk-e2e runs it.
-pytestmark = pytest.mark.accuracy
+#: `accuracy` is the marker every LLK workflow deselects; `nightly` is deselected only
+#: by the PR gate, so llk-e2e would still run it.
+pytestmark = [
+    pytest.mark.accuracy,
+    # Every unkeyed budget is a Wormhole measurement and binds nowhere else
+    # (sfpu_accuracy_budget.MEASURED_ARCH), so off it every cell resolves to tolerance,
+    # nothing can fail, and the headroom report would hold another chip's figures
+    # against this table's. --ulp-emit refuses off Wormhole for the same reason.
+    pytest.mark.skipif(
+        get_chip_architecture() != MEASURED_ARCH,
+        reason=f"the table's budgets are {MEASURED_ARCH.value} measurements; this sweep "
+        "gates nothing on another architecture",
+    ),
+]
 
 #: 64 tiles x 1024 lanes = 65,536: every finite bf16 and fp16 value in one run, the
 #: Float32 stride's sample count, and the generator's own ceiling. A smaller count would
@@ -167,31 +176,22 @@ def run_sweep(mathop, formats, approx_mode, dest_acc):
     return src_A, golden, torch.tensor(result, dtype=format_dict[formats.output_format])
 
 
-def _emitting():
-    """Whether this session measures rather than gates. ``ulp_sweep.EMIT`` is set in
-    ``pytest_configure``, too late for collection, and an xdist worker's argv lacks the
-    flag -- so both are read, or ``--compile-producer -n N`` builds the wrong set."""
-    return ulp_sweep.EMIT or "--ulp-emit" in sys.argv
-
-
 def _sweep_ops():
-    """Gating sweeps every unary op with a step budget on some variant. Emitting sweeps
-    every unary op with a key line in the table, whatever its rows say: the key line is
-    the enrolment (SFPU_ULP.md, step 2), the measurement fills it in. An op without one
-    has nowhere to be written, so sweeping it would only turn the emit red after the
-    rest was written -- and `sfpu_unary_ops()` admits every newly registered op, so a
-    whole-table emit would go red the day anyone adds an op."""
+    """Every unary op with a key line in the table, whatever its rows say, gating or
+    emitting. The key line is the enrolment (SFPU_ULP.md, step 2) and the measurement
+    fills it in; an op without one has nowhere to be written, and `sfpu_unary_ops()`
+    admits every newly registered op, so a wider set would turn a whole-table emit red
+    the day anyone adds an op.
+
+    The gate run used to take only the ops with a step budget somewhere. Since every
+    cell is measured, gated or not, and the headroom report holds a tolerance cell to
+    the figure its row records, that left the ops on tolerance everywhere -- Digamma,
+    Erfc, Expm1Cw, GeluAppx, Lgamma, Polygamma, SigmoidAppx, Softplus, 333 rows -- with
+    recorded figures and no run behind them."""
     unary = sfpu_unary_ops()
-    if _emitting():
-        ops = {op for op in _SFPU_ACCURACY_BUDGET if op in unary} - set(
-            _UNARY_OPS_NOT_SWEPT
-        )
-    else:
-        ops = {
-            op
-            for op, table in _SFPU_ACCURACY_BUDGET.items()
-            if op in unary and any(c.metric == Metric.ULP for c in table.values())
-        }
+    ops = {op for op in _SFPU_ACCURACY_BUDGET if op in unary} - set(
+        _UNARY_OPS_NOT_SWEPT
+    )
     return sorted(ops, key=lambda op: op.name)
 
 
