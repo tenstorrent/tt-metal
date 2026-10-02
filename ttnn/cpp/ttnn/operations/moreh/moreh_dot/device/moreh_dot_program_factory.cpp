@@ -43,7 +43,7 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
     uint32_t pad_w = a_shape_wo_padding[3] % tt::constants::TILE_WIDTH;
     uint32_t mask_w = (pad_w == 0) ? (tt::constants::TILE_WIDTH) : (pad_w);
 
-    IDevice* device = input_a.device();
+    auto* device = input_a.device();
 
     const uint32_t in0_t = 2;   // a
     const uint32_t in1_t = 2;   // b
@@ -137,7 +137,7 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
                 TensorBinding{.tensor_parameter_name = INPUT_B, .accessor_name = "src1"},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = create_reader_datamovement_config(device->arch()),
+        .hw_config = create_reader_datamovement_config(),
     };
 
     // ----- Writer kernel -----
@@ -156,7 +156,7 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
                 TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = create_writer_datamovement_config(device->arch()),
+        .hw_config = create_writer_datamovement_config(),
     };
     writer.advanced_options.compile_time_varargs = reduce_sequence.get_auxiliary_compile_time_args();
 
@@ -181,8 +181,8 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
                 DFBBinding{.dfb_spec_name = IM1, .accessor_name = "im1", .endpoint_type = DFBEndpointType::CONSUMER},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"per_core_block_cnt"}},
-        // Style A: op resolves a TTNN ComputeKernelConfig; translate it to the Gen1 hardware config.
-        .hw_config = to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config),
+        // Style A: op resolves a TTNN ComputeKernelConfig; translate it to the hardware config.
+        .hw_config = to_compute_hardware_config(operation_attributes.compute_kernel_config),
     };
     compute.compile_time_args = {{"reduce_auxiliary_tiles", auxiliary_tiles}};
     compute.advanced_options.compile_time_varargs = reduce_sequence.get_compile_time_args();

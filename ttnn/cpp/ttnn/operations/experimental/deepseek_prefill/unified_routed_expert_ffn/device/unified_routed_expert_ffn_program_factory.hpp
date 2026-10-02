@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <vector>
-
 #include "unified_routed_expert_ffn_types.hpp"
 
 #include "ttnn/device_operation.hpp"
@@ -15,8 +13,6 @@ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_exper
 struct UnifiedRoutedExpertFfnSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id = 0;
     tt::tt_metal::KernelHandle writer_kernel_id = 0;
-    tt::tt_metal::KernelHandle compute_kernel_id = 0;
-    std::vector<CoreCoord> cores;
 };
 
 struct UnifiedRoutedExpertFfnProgramFactory {

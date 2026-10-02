@@ -196,7 +196,7 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHLar
             },
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = SRC, .accessor_name = "src"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "tile_offset", "Ht", "Wt"}},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -214,7 +214,7 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHLar
              DFBBinding{.dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = DST, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "tile_offset", "Ht", "Wt"}},
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
     writer.advanced_options.compile_time_varargs = writer_reduce_args;
 
@@ -233,9 +233,9 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHLar
 
     // create compute kernel
     auto make_compute_hw = [&]() {
-        auto hw = ttnn::to_compute_hardware_config(arch, compute_kernel_config);
+        auto hw = ttnn::to_compute_hardware_config(compute_kernel_config);
         if (fp32_dest_acc_en) {
-            std::get<ComputeGen1Config>(hw).unpack_modes = {
+            hw.unpack_modes = {
                 {IN, tt::tt_metal::UnpackMode::UnpackToSrc},
                 {MAX_SCALER, tt::tt_metal::UnpackMode::UnpackToSrc},
                 {SUM_SCALER, tt::tt_metal::UnpackMode::UnpackToSrc},

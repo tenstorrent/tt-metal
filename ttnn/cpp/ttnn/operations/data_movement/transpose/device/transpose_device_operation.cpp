@@ -14,6 +14,7 @@ using namespace tt::tt_metal;
 using ttnn::operations::data_movement::transpose::adjust_shard_spec_to_shape;
 using ttnn::operations::data_movement::transpose::generate_transpose_shard_spec;
 using ttnn::operations::data_movement::transpose::is_native_transpose_sharding;
+using ttnn::operations::data_movement::transpose::OutputTiling;
 
 namespace ttnn::prim {
 
@@ -89,8 +90,14 @@ MemoryConfig derive_effective_output_memory_config(
             }
         }
     }
-    auto shard_spec =
-        generate_transpose_shard_spec(input_tensor, output_padded_shape, output_mem_config.memory_layout());
+    // Device-op fallback: use tile-inflated synth so the downstream interleaved factory sees a
+    // tensor-width-divisor shard (RM synth can produce a shard_w that doesn't divide tensor_w).
+    auto shard_spec = generate_transpose_shard_spec(
+        input_tensor,
+        output_padded_shape,
+        output_mem_config.memory_layout(),
+        std::nullopt,
+        OutputTiling::Default);
     return MemoryConfig(output_mem_config.memory_layout(), output_mem_config.buffer_type(), shard_spec);
 }
 
@@ -126,19 +133,23 @@ TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_pro
                                 output_memory_config.shard_spec()->shape[0] == output_height;
     bool output_width_and_height_fully_in_shard =
         output_height_sharded && output_memory_config.shard_spec()->shape[0] % output_height == 0;
+    // Second disjunct is TILE-only; the RM branch below dispatches on use_sharded_wh_rm, not use_sharded_wh.
     bool use_sharded_wh =
         native && ((input_width_and_height_fully_in_shard && output_width_and_height_fully_in_shard) ||
                    (N == 1 && C == 1 && input_height_sharded && output_width_sharded));
+    // RM factory hardcodes num_hw_blocks_per_core = shard_height/H, so RM demands the fully-in-shard subset.
+    bool use_sharded_wh_rm = native && input_width_and_height_fully_in_shard && output_width_and_height_fully_in_shard;
     bool use_sharded_hc = native && input_height_sharded && output_height_sharded && is_row_major;
 
     auto parallelization_strategy = get_parallelization_strategy(operation_attributes, tensor_args);
 
     switch (parallelization_strategy) {
         case TransposeOpParallelizationStrategy::MULTI_CORE_WH:
-            if (use_sharded_wh) {
-                if (is_row_major) {
+            if (is_row_major) {
+                if (use_sharded_wh_rm) {
                     return TransposeWHShardedRMProgramFactory{};
                 }
+            } else if (use_sharded_wh) {
                 return TransposeWHShardedProgramFactory{};
             }
             return TransposeWHProgramFactory{};

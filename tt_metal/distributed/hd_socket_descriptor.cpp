@@ -8,7 +8,8 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/distributed.hpp>
-#include "impl/context/metal_context.hpp"
+#include "distributed/mesh_device_impl.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include <umd/device/pcie/pci_device.hpp>
 
 #include <cerrno>
@@ -54,7 +55,7 @@ void HDSocketDescriptor::populate_from_owner(
     auto vc = mesh_device->worker_core_from_logical_core(core.core_coord);
     virtual_core_x = vc.x;
     virtual_core_y = vc.y;
-    pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    pcie_alignment = mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::HOST);
 }
 
 void HDSocketDescriptor::write_to_file(const std::string& path) const {

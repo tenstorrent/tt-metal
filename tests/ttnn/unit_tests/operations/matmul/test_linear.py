@@ -90,6 +90,7 @@ def test_linear(
     )
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("m_size", [384])
 @pytest.mark.parametrize("k_size", [1024])
@@ -410,6 +411,7 @@ def test_linear_fp32_acc(device, m_size, k_size, n_size):
     )
 
 
+@pytest.mark.merge_gate
 def test_bloom_ff2_linear(device):
     torch.manual_seed(0)
     torch_input_tensor = torch_random((8, 384, 4096), -0.1, 0.1, dtype=torch.float32)
@@ -512,6 +514,7 @@ def test_linear_by_passing_in_1D_systolic_array_program_config_and_optional_outo
     assert_with_pcc(optional_output_tensor, output_tensor, 0.997)
 
 
+@pytest.mark.merge_gate
 def test_linear_with_fp32_dest_acc_and_bias(device):
     torch.manual_seed(0)
     torch_input_tensor_a = torch.rand([64, 1, 256, 384])

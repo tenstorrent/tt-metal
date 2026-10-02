@@ -46,6 +46,7 @@
 
 // Access to internal API: ProgramImpl::validate_circular_buffer_region
 #include "tt_metal/impl/program/program_impl.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -58,7 +59,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     SubDevice sub_device_1(std::array{sharded_cores_1});
     auto sub_device_manager_1 = mesh_device->create_sub_device_manager({sub_device_1}, k_local_l1_size);
     DeviceAddr l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    DeviceAddr l1_max_size = mesh_device->get_devices()[0]->l1_size_per_core();
+    DeviceAddr l1_max_size = mesh_device->l1_size_per_core();
     DeviceAddr l1_total_size = l1_max_size - l1_unreserved_base;
     mesh_device->load_sub_device_manager(sub_device_manager_1);
     // Program-local CBs are DRAM-aligned from persistent high-water. Leave three
@@ -466,8 +467,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceProgramReuseRtas) {
 
             distributed::Synchronize(*mesh_device, std::nullopt);
             std::vector<uint32_t> kernel_result;
-            tt_metal::detail::ReadFromDeviceL1(
-                mesh_device->get_devices()[0], core, l1_unreserved_base, sizeof(int), kernel_result);
+            slow_dispatch::ReadFromL1(*mesh_device, core, l1_unreserved_base, sizeof(int), kernel_result);
             EXPECT_EQ(kernel_result[0], unique_runtime_args[0] + common_runtime_args[0]);
         }
     }

@@ -17,6 +17,7 @@
     sim_bh_p150:
       timeout: 15
   team: ttnn
+  budget_type: merge_gate
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
 
 # Codegen-path coverage for every op that has one (untilize, repeat, repeat_interleave and gather
@@ -48,6 +49,7 @@
     wh_n300_civ2:
       timeout: 5
   team: ttnn
+  budget_type: merge_gate
   owner_id: U07M7QZ0BQA # Camilo Vega -- Slack member ID
 
 # Eltwise infra coverage: broadcast classes, tensor-scalar variants and op-dispatch liveness.
@@ -76,23 +78,47 @@
 #    caught here rather than in nightly sanity:
 #   unary ........................... relu, relu6, sigmoid, tanh, gelu, silu, neg, log2, log1p,
 #                                     sin, mish, tril, triu
-#   binary .......................... relational (t-t and t-s), logical and/or/xor, left/right
-#                                     shift, atan2, nextafter, floor_div, ldexp, logaddexp,
-#                                     logaddexp2, xlogy, bias_gelu, arithmetic operator overloads
-#   div family (whole file) ......... div, div_no_nan, fmod, remainder, incl. the output-dtype
-#                                     and mixed-dtype paths
+#   binary .......................... relational (t-t and t-s), left/right shift, atan2,
+#                                     nextafter, ldexp, logaddexp, logaddexp2, xlogy, bias_gelu,
+#                                     arithmetic operator overloads (logical and/or/xor moved to
+#                                     item 3)
+#   div family (whole file) ......... fp32 remainder/fmod, div_no_nan scalar memory-config
+#                                     plumbing, int32 div paths, output-dtype and mixed-dtype
+#                                     paths (bf16 fmod/remainder moved out, see item 3)
 #   ternary ......................... mac, lerp, addcmul, addcdiv
+#
+# 3. Checks from the two category test files, standing in for basic-case coverage this gate used
+#    to get for free from tests since deleted upstream:
+#   test_floor_div (category5) ...... replaces the deleted test_binary_floor_div_ttnn; a full
+#                                     2048x2048 sweep
+#   test_modulo_ops (+ scalar/shapes,
+#     category5) .................... replaces the deleted test_binary_fmod_bf16,
+#                                     test_remainder_scalar, test_fmod_scalar; runs a (64, 32)
+#                                     tile plus a handful of fixed shapes, not a full sweep
+#   test_logical_ops (+ scalar,
+#     category3) .................... logical_and/or/xor (and their inplace variants), t-t and
+#                                     t-s; replaces the test_binary_logical_and__ttnn /
+#                                     _or__ttnn / _xor_ttnn selectors, all three dead here since
+#                                     #57637 moved this coverage to test_binary_category3_bfloat16.py
+#   test_floor_div/test_modulo_ops together add ~2s of test time on top of this job's own device
+#   bring-up (measured in isolation), since the divide/remainder/fmod kernels are already warm
+#   from the rest of this selection; test_logical_ops (+ scalar) adds ~7s on its own (60 cases,
+#   full pairwise/broadcast bf16 grids) -- more than the other two but still a rounding error
+#   against the ~50s this job runs at locally, and it restores dispatch-liveness coverage for
+#   three ops the gate had silently lost.
 #
 # Deliberately excluded: the heavy sweeps inside those same files (isclose, celu, inverse trig,
 # fill, div-scalar dtype matrices, clamp/clip) -- they are accuracy and dtype coverage, they cost
-# minutes, and they belong in the nightly eltwise groups where they already run.
+# minutes even with warm kernels, and they belong in the nightly eltwise groups where they already
+# run.
 #
-# 753 tests selected -- 737 pass, 9 skip, 7 xfail. The test step measured 115s in CI on this branch
-# (run 33844607890) against the 10-minute timeout. Locally on an N300 the same selection is 45-47s
-# of pytest / 52-55s of wall-clock with a warm kernel cache and 230s / 237s on a total ccache miss;
-# the whole spread is kernel compilation, and this job runs with enable-kernel-ccache against the
-# shared Redis backend, so it sits at the warm end. One pytest invocation on purpose: device
-# bring-up is ~7s, so splitting this into per-file entries would cost more than the tests do.
+# 1252 tests selected locally on an N300 with a warm kernel cache -- 1225 pass, 19 skip, 8 xfail,
+# 57s of pytest (this entry is merge-queue-gated, so it hasn't run in CI on this branch; treat this
+# as a floor, not the real number, until it has). An older, smaller selection measured 45-47s of
+# pytest / 52-55s of wall-clock warm and 230s / 237s on a total ccache miss; the whole spread is
+# kernel compilation, and this job runs with enable-kernel-ccache against the shared Redis backend,
+# so it sits at the warm end. One pytest invocation on purpose: device bring-up is ~7s, so
+# splitting this into per-file entries would cost more than the tests do.
 # Hardware only. Blackhole eltwise coverage in the merge gate comes from the tt-nn-validation-basic
 # gtest suite (tests/ttnn/unit_tests/gtests/test_eltwise.cpp), which runs on bh_p150b_civ2_viommu
 # as well as wh_n150_civ2.
@@ -111,14 +137,15 @@
     tests/ttnn/unit_tests/operations/eltwise/test_composite.py
     tests/ttnn/unit_tests/operations/eltwise/test_elt_binary.py
     tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category5_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category3_bfloat16.py
     -k "(subtile or where_bcast or program_cache_different_broadcast_shapes
     or test_where_tss or test_where_tst or test_where_tts
     or test_gelu or test_silu or test_01_volume_sin
     or test_div_ops or test_binary_scalar
     or test_binary_relational_ttnn or test_binary_relational_scalar_ttnn
-    or test_binary_atan2_ttnn or test_binary_floor_div_ttnn
-    or test_binary_logical_and__ttnn or test_binary_logical_or__ttnn
-    or test_binary_logical_xor_ttnn or test_binary_nextafter_ttnn
+    or test_binary_atan2_ttnn or test_floor_div or test_modulo_ops
+    or test_logical_ops or test_binary_nextafter_ttnn
     or test_binary_left_shift or test_binary_right_shift
     or test_mac_ttnn or test_lerp_ttnn
     or test_ternary_addcmul_ttnn or test_ternary_addcdiv_ttnn
@@ -135,4 +162,24 @@
     wh_n300_civ2:
       timeout: 10
   team: ttnn
+  budget_type: merge_gate
   owner_id: U09BX3N0N95 # Mateusz Nowak
+
+# Matmul, fused and reduction coverage, reusing the Sanity op groups.
+#
+# The selection lives in the test files, as @pytest.mark.merge_gate (registered in pytest.ini),
+# not as a list of node IDs here.
+- name: "ttnn matmul fused reduction ops"
+  cmd: >-
+    pytest --timeout 60 -xv -m merge_gate
+    tests/ttnn/unit_tests/operations/matmul
+    tests/ttnn/unit_tests/operations/fused
+    tests/ttnn/unit_tests/operations/reduce
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+    bh_p150b_civ2_viommu:
+      timeout: 10
+  team: ttnn
+  budget_type: merge_gate
+  owner_id: U084B1CES7M # Borys Bradel

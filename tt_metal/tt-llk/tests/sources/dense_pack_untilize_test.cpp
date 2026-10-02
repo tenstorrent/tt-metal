@@ -103,6 +103,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             L1_ADDRESS(params.buffer_Res[block * params.NUM_TILES_IN_BLOCK]), params.num_faces / 2, 0 /* tile_dst_rt_offset */);
         _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
+    _llk_pack_untilize_uninit_(formats.pack_src);
 }
 
 #endif

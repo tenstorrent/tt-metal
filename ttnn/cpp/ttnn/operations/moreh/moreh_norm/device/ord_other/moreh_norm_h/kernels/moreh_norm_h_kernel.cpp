@@ -23,11 +23,13 @@ void kernel_main() {
     DataflowBuffer values(dfb::val);
     compute_kernel_hw_startup(dfb::x, dfb::x, dfb::y);
 
+    constexpr bool is_zero = get_arg(args::is_zero) != 0;
+    constexpr bool minus_inf = get_arg(args::minus_inf) != 0;
     const auto post_reduce = [](uint32_t dst) {
-#ifdef MINUS_INF
-        negative_tile_init();
-        negative_tile(dst);
-#endif
+        if constexpr (minus_inf) {
+            negative_tile_init();
+            negative_tile(dst);
+        }
     };
     for (uint32_t output = 0; output < num_outputs; ++output) {
         for (uint32_t block = 0; block < num_blocks; ++block) {
@@ -40,17 +42,17 @@ void kernel_main() {
                 reconfig_data_format_srca(dfb::x);
                 copy_init(dfb::x);
                 copy_tile(dfb::x, 0, 0);
-#ifdef IS_ZERO
-                unary_ne_tile_init();
-                unary_ne_tile(0, 0);
-#else
-                abs_tile_init();
-                abs_tile(0);
-#endif
-#ifdef MINUS_INF
-                negative_tile_init();
-                negative_tile(0);
-#endif
+                if constexpr (is_zero) {
+                    unary_ne_tile_init();
+                    unary_ne_tile(0, 0);
+                } else {
+                    abs_tile_init();
+                    abs_tile(0);
+                }
+                if constexpr (minus_inf) {
+                    negative_tile_init();
+                    negative_tile(0);
+                }
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_reconfig_data_format(dfb::val);

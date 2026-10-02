@@ -143,6 +143,17 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
             optional_output_tensor.value().layout() == Layout::ROW_MAJOR,
             "Output tensor must have ROW_MAJOR layout, got {}",
             optional_output_tensor.value().layout());
+
+        // Only page size and page count must match; rank may differ for the shared sampling buffer.
+        const auto expected_shape = ttnn::Shape(get_output_shape(input_tensor_a, args.dim, args.keepdim));
+        const auto& actual_shape = optional_output_tensor.value().logical_shape();
+        const auto page_width = [](const ttnn::Shape& shape) -> uint32_t { return shape.rank() > 0 ? shape[-1] : 1; };
+        TT_FATAL(
+            actual_shape.volume() == expected_shape.volume() && page_width(actual_shape) == page_width(expected_shape),
+            "Preallocated output tensor is not page-compatible with the reduction result! Got : {}, "
+            "expected: {} (or any shape with the same volume and last dimension)",
+            actual_shape,
+            expected_shape);
     }
 
     if (args.dim.has_value()) {
@@ -221,7 +232,8 @@ ttnn::Tensor argmax(
     bool keepdim,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    std::optional<ttnn::Tensor> optional_output_tensor) {
+    std::optional<ttnn::Tensor> optional_output_tensor,
+    std::optional<bool> enable_secondary_dm) {
     return ttnn::device_operation::launch<ArgMaxDeviceOperation>(
         ArgMaxDeviceOperation::operation_attributes_t{
             .output_dtype = output_dtype,
@@ -229,6 +241,7 @@ ttnn::Tensor argmax(
             .keepdim = keepdim,
             .sub_core_grids = sub_core_grids,
             .output_mem_config = output_mem_config,
+            .enable_secondary_dm = enable_secondary_dm,
         },
         ArgMaxDeviceOperation::tensor_args_t{
             .input = input, .optional_output_tensor = std::move(optional_output_tensor)});

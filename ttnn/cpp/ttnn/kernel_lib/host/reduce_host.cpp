@@ -160,8 +160,9 @@ bool is_supported_add_type(DataType dtype) {
            dtype == DataType::BFLOAT4_B;
 }
 
-bool requires_sfpu(DataType dtype, ReduceFp32Mode fp32_mode) {
-    return dtype == DataType::INT32 || (dtype == DataType::FLOAT32 && fp32_mode == ReduceFp32Mode::Accurate);
+bool requires_sfpu(DataType dtype, ReduceOpMath math, ReduceFp32Mode fp32_mode) {
+    return dtype == DataType::INT32 || (dtype == DataType::BFLOAT16 && math == ReduceOpMath::MIN) ||
+           (dtype == DataType::FLOAT32 && fp32_mode == ReduceFp32Mode::Accurate);
 }
 
 void validate_backend_support(
@@ -173,18 +174,20 @@ void validate_backend_support(
     bool accumulates) {
     // Keep the host contract aligned with is_sfpu_reduce_path() and reduce()'s
     // static assertions. In particular, AVG and HW do not select the SFPU.
-    const bool sfpu = requires_sfpu(dtype, fp32_mode);
+    const bool sfpu = requires_sfpu(dtype, math, fp32_mode);
     TT_FATAL(dtype != DataType::INT32 || math != ReduceOpMath::AVG, "Reduce planner: INT32 AVG is not supported");
     TT_FATAL(
         dtype != DataType::FLOAT32 || fp32_mode != ReduceFp32Mode::Accurate || math != ReduceOpMath::AVG,
         "Reduce planner: accurate FLOAT32 AVG requires lowering to SUM with a normalization scalar");
     TT_FATAL(
         math != ReduceOpMath::MIN || sfpu,
-        "Reduce planner: MIN requires INT32 or accurate FLOAT32; lower native MIN to -MAX(-x)");
+        "Reduce planner: MIN requires INT32, BFLOAT16 or accurate FLOAT32; lower native MIN to -MAX(-x)");
     TT_FATAL(
         !sfpu || dim != ReduceOpDim::HW,
-        "Reduce planner: INT32 and accurate FLOAT32 HW reductions require separate W and H calls");
-    TT_FATAL(!sfpu || hardware.arch != tt::ARCH::QUASAR, "Reduce planner: SFPU reductions are not supported on Quasar");
+        "Reduce planner: INT32, BFLOAT16 MIN and accurate FLOAT32 HW reductions require separate W and H calls");
+    TT_FATAL(
+        !sfpu || hardware.arch != tt::ARCH::QUASAR || (dtype == DataType::BFLOAT16 && math == ReduceOpMath::MIN),
+        "Reduce planner: on Quasar only BFLOAT16 MIN supports an SFPU reduction");
     TT_FATAL(
         dtype != DataType::FLOAT32 || fp32_mode != ReduceFp32Mode::Accurate || hardware.fp32_dest_acc_en,
         "Reduce planner: accurate FLOAT32 reduction requires fp32 DEST accumulation");
@@ -415,7 +418,7 @@ ReducePlan make_tiled_plan(
     const std::uint32_t partial_elements =
         dim == ReduceOpDim::W ? logical_w % tile_w : (dim == ReduceOpDim::H ? logical_h % tile_h : 0U);
     const bool has_axis_partial = partial_elements != 0;
-    const bool uses_sfpu = requires_sfpu(block.input_dtype, fp32_mode);
+    const bool uses_sfpu = requires_sfpu(block.input_dtype, math, fp32_mode);
     // The SFPU implementations do not consume scaler tiles. A ReduceTile plan
     // may use either GMPOOL or SFPU, depending on its dtype and accuracy mode.
     TT_FATAL(
@@ -1202,6 +1205,7 @@ ReduceCallArgs::ReduceCallArgs(const ReduceCallPlan& call) {
         const auto* input = plan.find_cb(ReduceCbRole::Input);
         const bool sfpu =
             input && (input->data_format == tt::DataFormat::Int32 ||
+                      (input->data_format == tt::DataFormat::Float16_b && plan.reduce_math == ReduceOpMath::MIN) ||
                       (input->data_format == tt::DataFormat::Float32 && plan.fp32_mode == ReduceFp32Mode::Accurate));
         TT_FATAL(
             sfpu && plan.partial_mode == compute_kernel_lib::ReducePartialMode::None && !has_output_mask(plan) &&

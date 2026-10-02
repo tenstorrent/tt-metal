@@ -127,7 +127,7 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
             },
         .compile_time_args = {{"Vt", Vt}, {"H", attrs.num_heads}, {"Mt", Mt}, {"epsilon_bits", eps_bits}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     m2::KernelSpec writer{
@@ -141,13 +141,12 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
         .tensor_bindings = {m2::TensorBinding{OUTPUT, "output"}},
         .compile_time_args = {{"Vt", Vt}, {"H", attrs.num_heads}, {"Mt", Mt}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
-
+        .hw_config = ttnn::create_writer_datamovement_config(),
         .advanced_options = {.compile_time_varargs = auxiliary_args},
     };
 
-    auto compute_hw = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config);
-    auto& unpack_modes = m2::unpack_modes(compute_hw);
+    auto compute_hw = ttnn::to_compute_hardware_config(attrs.compute_kernel_config);
+    auto& unpack_modes = compute_hw.unpack_modes;
     unpack_modes[TMP_DFB] = UnpackMode::UnpackToSrc;
     unpack_modes[STATS_DFB] = UnpackMode::UnpackToSrc;
     unpack_modes[INV_DFB] = UnpackMode::UnpackToSrc;

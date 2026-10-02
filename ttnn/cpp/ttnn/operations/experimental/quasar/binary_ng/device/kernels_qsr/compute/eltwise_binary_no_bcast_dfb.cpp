@@ -97,14 +97,21 @@ void kernel_main() {
     };
 
     // Thread c of C consumes its own share. WHICH tiles is the DFB's business, so unlike the
-    // dataflow kernels only the trip count changes here. The gate's even divisibility makes the
-    // division exact.
-    const uint32_t my_tiles = num_tiles / get_num_threads();
+    // dataflow kernels only the trip count changes here. The DFB hands consumer thread c the
+    // sub-stream {c, c+C, ...}, whose length is floor(n/C) + (c < n mod C): low thread ids take
+    // the remainder. A truncating divide would leave num_tiles % C entries unconsumed and hang.
+    const uint32_t num_threads = get_num_threads();
+    const uint32_t my_tiles = num_tiles / num_threads + (get_my_thread_id() < num_tiles % num_threads ? 1u : 0u);
 
-    // No remainder branch: the gate rejects sharding, which pins num_tiles_per_cycle to 1, so
-    // my_tiles % num_tiles_per_cycle is always 0.
     const uint32_t num_full_chunks = my_tiles / num_tiles_per_cycle;
     for (uint32_t chunk = 0; chunk < num_full_chunks; ++chunk) {
         process_tiles(num_tiles_per_cycle);
+    }
+    // num_tiles_per_cycle is 1 on every admitted config today, so this is dead -- but the factory's own
+    // TT_FATAL permits n > 1 at R=C=W=1, and without this the tail would be dropped and the writer would
+    // hang on credits that never arrive. Mirrors kernels_dfb's compute kernel.
+    const uint32_t remainder = my_tiles % num_tiles_per_cycle;
+    if (remainder > 0) {
+        process_tiles(remainder);
     }
 }

@@ -56,7 +56,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_B>(static_cast<DataFormat>(formats.unpack_A_dst));
         _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_A>(static_cast<DataFormat>(formats.unpack_B_dst));
 
-        // SrcA transpose is not supported on Quasar.
         _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(
             ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
             ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),

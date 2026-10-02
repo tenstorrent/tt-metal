@@ -53,7 +53,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
     DataFormat dst_dfb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tile_size(dst_dfb_data_format);
 
-    IDevice* device = input.device();
+    MeshDevice* device = input.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -146,7 +146,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
                 {"HtWt", HtWt},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"col_start_tile_id", "curr_col_in_batch", "num_cols"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     // ---- Writer kernel ----
@@ -166,12 +166,12 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
              }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
         .advanced_options = {.compile_time_varargs = writer_reduce_args},
     });
 
     // ---- Compute kernels (two groups) ----
-    auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
+    auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
 
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t units_per_core) {
         Group<DFBBinding> dfb_bindings = {

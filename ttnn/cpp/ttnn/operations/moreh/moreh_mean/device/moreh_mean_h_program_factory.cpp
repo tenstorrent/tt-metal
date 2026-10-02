@@ -139,7 +139,7 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanHFactory::
                 {"HtWt", HtWt},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"col_start_tile_id", "curr_col_in_batch", "num_cols"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     Group<DFBBinding> writer_dfb_bindings = {DFBBinding{
@@ -164,12 +164,12 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanHFactory::
         .dfb_bindings = std::move(writer_dfb_bindings),
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
         .advanced_options = {.compile_time_varargs = writer_reduce_args},
     });
 
     // ---- Compute kernels (two groups) ----
-    auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
+    auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
 
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t units_per_core) {
         Group<DFBBinding> dfb_bindings = {

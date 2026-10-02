@@ -10,13 +10,14 @@
 // Shared metadata read invalidates the reused L1 address before loading the next value.
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
 #include "topk_large_indices_metadata.hpp"
+#include "topk_large_indices_runtime_args.hpp"
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t start_row = get_arg_val<uint32_t>(1);
-    const uint32_t num_rows = get_arg_val<uint32_t>(2);
-    uint32_t search_len = get_arg_val<uint32_t>(3);
-    const uint32_t input_page_bytes = get_arg_val<uint32_t>(4);
+    const uint32_t src_addr = get_common_arg_val<uint32_t>(topk_common_args::input_address);
+    const uint32_t start_row = get_arg_val<uint32_t>(0);
+    const uint32_t num_rows = get_arg_val<uint32_t>(1);
+    uint32_t search_len = get_common_arg_val<uint32_t>(topk_common_args::search_length);
+    const uint32_t input_page_bytes = get_common_arg_val<uint32_t>(topk_common_args::input_row_bytes);
 
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
     constexpr uint32_t chunk_bytes = get_compile_time_arg_val(1);
@@ -26,10 +27,15 @@ void kernel_main() {
     constexpr uint32_t llk_k = chunk_bytes / element_bytes;
     constexpr auto input_args = TensorAccessorArgs<4>();
     constexpr uint32_t metadata_args_base = input_args.next_compile_time_args_offset();
-    constexpr bool valid_length_from_metadata = get_compile_time_arg_val(metadata_args_base) != 0;
+    // THE metadata-mode selector for this kernel. One flag, not one per metadata argument: the host
+    // validates the metadata tensors as a group, so inside this mode every metadata read is legal.
+    constexpr bool metadata_mode = get_compile_time_arg_val(metadata_args_base) != 0;
     constexpr uint32_t meta_cb = get_compile_time_arg_val(metadata_args_base + 1);
     constexpr uint32_t meta_offset = get_compile_time_arg_val(metadata_args_base + 2);
     constexpr auto meta_args = TensorAccessorArgs<metadata_args_base + 3>();
+    // Real-token-end block, appended after the accessor above so those offsets are untouched.
+    constexpr uint32_t vend_args_base = meta_args.next_compile_time_args_offset();
+    constexpr auto vend_args = TensorAccessorArgs<vend_args_base>();
 
     const auto input = TensorAccessor(input_args, src_addr, input_page_bytes);
     const uint32_t input_width = input_page_bytes / element_bytes;
@@ -37,12 +43,12 @@ void kernel_main() {
     Noc noc;
 
     TopkMetadataBounds bounds;
-    if constexpr (valid_length_from_metadata) {
+    if constexpr (metadata_mode) {
         CircularBuffer meta_cb_obj(meta_cb);
         meta_cb_obj.reserve_back(1);
         const uint32_t scratch = meta_cb_obj.get_write_ptr();
-        const uint32_t metadata_length =
-            trace_metadata::read_metadata_scalar_u32(noc, meta_args, get_arg_val<uint32_t>(5), scratch);
+        const uint32_t metadata_length = trace_metadata::read_metadata_scalar_u32(
+            noc, meta_args, get_common_arg_val<uint32_t>(topk_common_args::metadata_address), scratch);
         // Validate before addition so the offset cannot wrap and no malformed metadata can produce a NoC read
         // outside the input row. ASSERT is watcher-gated, so it compiles to nothing in a normal build; pair it
         // with a clamp, as bounded_kv_actual_isl / bounded_cache_batch_idx do, or the bound would hold only
@@ -52,6 +58,19 @@ void kernel_main() {
                                     (metadata_length != 0 || meta_offset != 0);
         ASSERT(metadata_valid);
         search_len = metadata_valid ? metadata_length + meta_offset : input_width;
+        // 0 = no bound supplied (full chunk): the host zeroes the slot rather than compiling a second
+        // variant, so presence costs a compare here instead of a program hash split.
+        const uint32_t valid_end_addr = get_common_arg_val<uint32_t>(topk_common_args::valid_end_address);
+        if (valid_end_addr != 0) {
+            // Same scratch page as the read above: the helper invalidates the L1 line before loading, which
+            // is exactly what it documents for a reused address.
+            const uint32_t valid_end =
+                trace_metadata::read_metadata_scalar_u32(noc, vend_args, valid_end_addr, scratch);
+            const uint32_t capped = ((valid_end + 31) / 32) * 32;
+            if (capped < search_len) {
+                search_len = capped;
+            }
+        }
         bounds = calculate_topk_bounds(search_len, llk_k);
         CoreLocalMem<TopkMetadataBounds> mailbox(scratch);
         mailbox->num_chunks = bounds.num_chunks;

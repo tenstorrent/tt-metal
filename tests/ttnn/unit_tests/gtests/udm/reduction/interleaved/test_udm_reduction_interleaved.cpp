@@ -237,7 +237,7 @@ void validate(
 
         // Debug: Print first few rows
         if (row < 8) {
-            log_info(
+            log_debug(
                 tt::LogTest,
                 "  Row {}: expected={:.4f}, actual={:.4f}",
                 row,

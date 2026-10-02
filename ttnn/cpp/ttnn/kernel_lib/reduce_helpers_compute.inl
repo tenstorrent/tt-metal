@@ -107,10 +107,8 @@ template <PoolType pool_type, DataFormat format>
 ALWI void sfpu_reduce_fold_init() {
     if constexpr (pool_type == PoolType::SUM) {
         sfpu_reduce_sum_fold_init<format>();
-#ifndef ARCH_QUASAR  // Quasar's ckernel::PoolType has no MIN (and no SFPU reduce path)
     } else if constexpr (pool_type == PoolType::MIN) {
         sfpu_reduce_min_fold_init<format>();
-#endif
     } else {
         sfpu_reduce_max_fold_init<format>();
     }
@@ -127,10 +125,8 @@ ALWI void sfpu_copy_and_fold(
         copy_tile(input_cb_id, tile_idx, work_dst);
         if constexpr (pool_type == PoolType::SUM) {
             sfpu_reduce_sum_fold_tile<format>(dst_idx, work_dst, dst_idx);
-#ifndef ARCH_QUASAR  // Quasar's ckernel::PoolType has no MIN (and no SFPU reduce path)
         } else if constexpr (pool_type == PoolType::MIN) {
             sfpu_reduce_min_fold_tile<format>(dst_idx, work_dst, dst_idx);
-#endif
         } else {
             sfpu_reduce_max_fold_tile<format>(dst_idx, work_dst, dst_idx);
         }
@@ -303,7 +299,7 @@ ALWI void reduce_accumulate_via_add(
     // reduce() call, so it is not done here. Per call we do only the light format reconfig (gated by
     // reconfig_mode, to adapt SrcA/SrcB/packer formats when this reduce chains after a different-format op —
     // the AccumulateViaAdd analogue of the standard path's reconfig_data_format) plus the light SFPU-macro
-    // (re)load; the per-output add_tiles_init / copy_tile_init below re-arm the MOP. This mirrors how ReduceTile
+    // (re)load; the per-output add_init / copy_init below re-arm the MOP. This mirrors how ReduceTile
     // relies on boot hw_configure + light reduce_init.
     constexpr bool reconfig_in =
         (reconfig_mode == ReduceDataFormatReconfigMode::INPUT ||
@@ -378,7 +374,7 @@ ALWI void reduce_accumulate_via_add(
 
     auto add_input_with_zero = [&](uint32_t input_idx, uint32_t dst_idx = 0) {
         reconfig_data_format_srcb(input_dfb_id, scaler_dfb_id);
-        add_tiles_init(input_dfb_id, scaler_dfb_id, true);
+        add_init(input_dfb_id, scaler_dfb_id, true);
         add_tiles(input_dfb_id, scaler_dfb_id, input_idx, zero_idx, dst_idx);
         reconfig_data_format_srcb(scaler_dfb_id, input_dfb_id);
     };
@@ -462,7 +458,7 @@ ALWI void reduce_accumulate_via_add(
                         const uint32_t acc_cb = accumulate.config.cb_accumulator;
                         accum_dfb.wait_front(current_outputs);
                         reconfig_data_format_srca(input_dfb_id, acc_cb);
-                        copy_tile_init(acc_cb);
+                        copy_init(acc_cb);
                         for (uint32_t out = 0; out < current_outputs; ++out) {
                             copy_tile(acc_cb, out, out);
                         }
@@ -481,7 +477,7 @@ ALWI void reduce_accumulate_via_add(
                     h = 1;
                 }
                 if (h < full_cnt) {
-                    add_tiles_init(input_dfb_id, input_dfb_id, true);
+                    add_init(input_dfb_id, input_dfb_id, true);
                     for (; h < full_cnt; h += 2) {
                         for (uint32_t out = 0; out < current_outputs; ++out) {
                             add_tiles(
@@ -534,7 +530,7 @@ ALWI void reduce_accumulate_via_add(
                     const uint32_t acc_cb = accumulate.config.cb_accumulator;
                     accum_dfb.wait_front(1);
                     reconfig_data_format_srca(input_dfb_id, acc_cb);
-                    copy_tile_init(acc_cb);
+                    copy_init(acc_cb);
                     copy_tile(acc_cb, 0, 0);
                     reconfig_data_format_srca(acc_cb, input_dfb_id);
                     loaded_accumulator = true;
@@ -560,7 +556,7 @@ ALWI void reduce_accumulate_via_add(
                 input_dfb.pop_front(1);
                 consumed = 1;
             }
-            add_tiles_init(input_dfb_id, input_dfb_id, true);
+            add_init(input_dfb_id, input_dfb_id, true);
             for (; consumed + 1 < full_cnt; consumed += 2) {
                 input_dfb.wait_front(2);
                 add_tiles(input_dfb_id, input_dfb_id, 0, 1, 0);
@@ -605,7 +601,7 @@ ALWI void reduce_accumulate_via_add(
                         add_input_with_zero(start);
                         k = 1;
                     }
-                    add_tiles_init(input_dfb_id, input_dfb_id, true);
+                    add_init(input_dfb_id, input_dfb_id, true);
                     for (; k < full_cnt; k += 2) {
                         add_tiles(input_dfb_id, input_dfb_id, start + k * stride, start + (k + 1) * stride, 0);
                     }
@@ -622,33 +618,33 @@ ALWI void reduce_accumulate_via_add(
                     if (accumulate.reload == AccumulateReloadMode::FoldViaAdd) {
                         // Fold the accumulator as an add_tiles SRCB operand — no dest reload. Reads acc via
                         // SrcB, so ONLY valid when acc_cb is UnpackToDestMode::Default. Parity of full_cnt
-                        // decides; add_tiles_init does NOT reconfig format, so reconfig SRCB around the acc-add
+                        // decides; add_init does NOT reconfig format, so reconfig SRCB around the acc-add
                         // (acc may be fp32 while the input is bf16) and restore it after.
                         if (full_cnt & 1u) {
                             if (full_cnt == 1u) {
                                 reconfig_data_format_srcb(input_dfb_id, acc_cb);
-                                add_tiles_init(input_dfb_id, acc_cb, true);  // fresh DST reads 0 -> new[0] + acc
+                                add_init(input_dfb_id, acc_cb, true);  // fresh DST reads 0 -> new[0] + acc
                                 add_tiles(input_dfb_id, acc_cb, start, 0, 0);
                                 reconfig_data_format_srcb(acc_cb, input_dfb_id);
                             } else {
-                                add_tiles_init(input_dfb_id, input_dfb_id, true);                 // fresh DST reads 0
+                                add_init(input_dfb_id, input_dfb_id, true);                 // fresh DST reads 0
                                 add_tiles(input_dfb_id, input_dfb_id, start, start + stride, 0);  // seed new pair
-                                add_tiles_init(input_dfb_id, input_dfb_id, true);
+                                add_init(input_dfb_id, input_dfb_id, true);
                                 for (uint32_t k = 2; k + 1 < full_cnt; k += 2) {
                                     add_tiles(
                                         input_dfb_id, input_dfb_id, start + k * stride, start + (k + 1) * stride, 0);
                                 }
                                 reconfig_data_format_srcb(input_dfb_id, acc_cb);
-                                add_tiles_init(input_dfb_id, acc_cb, true);  // last new tile + accumulator
+                                add_init(input_dfb_id, acc_cb, true);  // last new tile + accumulator
                                 add_tiles(input_dfb_id, acc_cb, start + (full_cnt - 1u) * stride, 0, 0);
                                 reconfig_data_format_srcb(acc_cb, input_dfb_id);
                             }
                         } else {
                             reconfig_data_format_srca(input_dfb_id, acc_cb);
-                            copy_tile_init(acc_cb);
+                            copy_init(acc_cb);
                             copy_tile(acc_cb, 0, 0);  // DST = accumulator (even count reloads as the seed)
                             reconfig_data_format_srca(acc_cb, input_dfb_id);
-                            add_tiles_init(input_dfb_id, input_dfb_id, true);
+                            add_init(input_dfb_id, input_dfb_id, true);
                             for (uint32_t k = 0; k < full_cnt; k += 2) {
                                 add_tiles(input_dfb_id, input_dfb_id, start + k * stride, start + (k + 1) * stride, 0);
                             }
@@ -665,13 +661,13 @@ ALWI void reduce_accumulate_via_add(
                                 add_input_with_zero(start);
                                 k = 1;
                             }
-                            add_tiles_init(input_dfb_id, input_dfb_id, true);
+                            add_init(input_dfb_id, input_dfb_id, true);
                             for (; k < full_cnt; k += 2) {
                                 add_tiles(input_dfb_id, input_dfb_id, start + k * stride, start + (k + 1) * stride, 0);
                             }
                         }
                         reconfig_data_format_srca(input_dfb_id, acc_cb);
-                        copy_tile_init(acc_cb);
+                        copy_init(acc_cb);
                         copy_tile(acc_cb, 0, 1);  // DST[1] = accumulator (adjacent slot)
                         reconfig_data_format_srca(acc_cb, input_dfb_id);
 #ifndef ARCH_QUASAR
@@ -691,7 +687,7 @@ ALWI void reduce_accumulate_via_add(
                         // uses SrcA (or unpack-direct-to-dest when tagged), so reconfig SRCA around it; SrcB is
                         // left at input from the per-call reconfig; the zero/mask folds switch it as needed.
                         reconfig_data_format_srca(input_dfb_id, acc_cb);
-                        copy_tile_init(acc_cb);
+                        copy_init(acc_cb);
                         copy_tile(acc_cb, 0, 0);  // DST = accumulator
                         reconfig_data_format_srca(acc_cb, input_dfb_id);
                         if (accumulate.reload == AccumulateReloadMode::CopySeedUniform) {
@@ -704,7 +700,7 @@ ALWI void reduce_accumulate_via_add(
                                 add_input_with_zero(start);
                                 k = 1;
                             }
-                            add_tiles_init(input_dfb_id, input_dfb_id, true);
+                            add_init(input_dfb_id, input_dfb_id, true);
                             for (; k < full_cnt; k += 2) {
                                 add_tiles(input_dfb_id, input_dfb_id, start + k * stride, start + (k + 1) * stride, 0);
                             }
@@ -723,7 +719,7 @@ ALWI void reduce_accumulate_via_add(
                     add_input_with_zero(start);
                     k = 1;
                 }
-                add_tiles_init(input_dfb_id, input_dfb_id, true);
+                add_init(input_dfb_id, input_dfb_id, true);
                 for (; k < full_cnt; k += 2) {
                     add_tiles(input_dfb_id, input_dfb_id, start + k * stride, start + (k + 1) * stride, 0);
                 }
@@ -920,7 +916,7 @@ ALWI void reduce(
     ReducePartialMode partial_mode,
     uint32_t output_group,
     uint32_t auxiliary_tile_offset) {
-    // Int32 and Accurate fp32 route to the SFPU via is_sfpu_reduce_path<>(); others use FPU/GMPOOL.
+    // Int32, bf16 MIN and Accurate fp32 route to the SFPU via is_sfpu_reduce_path<>(); others use FPU/GMPOOL.
     constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[input_dfb_id]);
     constexpr bool has_auxiliary = auxiliary_dfb_id != ttnn::kernel_lib::reduce_plan_args::no_cb_id;
     // The unused native/mask branches are still instantiated on the additive
@@ -940,11 +936,10 @@ ALWI void reduce(
     static_assert(
         reduce_factor == 1 || reduce_type == PoolType::AVG,
         "A non-default reduce_factor is only valid with PoolType::AVG");
-#ifndef ARCH_QUASAR  // Quasar's ckernel::PoolType has no MIN, so this check is vacuous there
     static_assert(
         reduce_type != PoolType::MIN || is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format, fp32_mode>(),
-        "MIN is only valid on an SFPU path (Int32 or Accurate fp32); FPU MIN arrives as PoolType::MAX via -MAX(-x)");
-#endif
+        "MIN requires an SFPU path: Int32, bf16, or Accurate fp32, bf16 only on Quasar, on REDUCE_ROW/COL. "
+        "The FPU has no min pool at all, so every other MIN is lowered to -MAX(-x) and arrives as PoolType::MAX");
     static_assert(
         input_policy == ReduceInputPolicy::WaitAndPopPerTile || input_policy == ReduceInputPolicy::BulkWaitBulkPop ||
             input_policy == ReduceInputPolicy::WaitUpfrontNoPop || input_policy == ReduceInputPolicy::NoWaitNoPop,
@@ -1296,17 +1291,8 @@ ALWI void reduce(
 
                 // SFPU intra-tile finalize
                 if constexpr (is_sfpu) {
-#ifndef ARCH_QUASAR
                     sfpu_reduce_init<reduce_type, reduce_format>();
                     sfpu_reduce<reduce_type, reduce_format, reduce_dim>(dst_idx, /*ct_dim=*/1, /*rt_dim=*/1);
-#else
-                    // The SFPU reduce path (Int32, or accurate-fp32 SUM) is unported on Quasar:
-                    // sfpu_reduce/_init are ARCH_QUASAR-guarded out. is_sfpu_reduce_path() is false for the
-                    // FPU/GMPOOL paths Quasar does support (e.g. avg_pool SUM, MAX), so this branch is dead
-                    // there; static_assert makes an actual Quasar SFPU-reduce instantiation fail loudly
-                    // rather than silently drop the finalize.
-                    static_assert(!is_sfpu, "SFPU reduce path is not supported on Quasar");
-#endif
                 }
 
                 // Call post-reduce operation (e.g., recip_tile for softmax)
@@ -1431,18 +1417,12 @@ ALWI void reduce(
 
                 // SFPU intra-tile finalize per output slot
                 if constexpr (is_sfpu) {
-#ifndef ARCH_QUASAR
                     const uint32_t sfpu_base_dst = get_dst_index(accumulate);
                     sfpu_reduce_init<reduce_type, reduce_format>();
                     for (uint32_t k = 0; k < current_chunk; ++k) {
                         sfpu_reduce<reduce_type, reduce_format, reduce_dim>(
                             sfpu_base_dst + k, /*ct_dim=*/1, /*rt_dim=*/1);
                     }
-#else
-                    // SFPU reduce path unported on Quasar (see the matching guard above); dead for the
-                    // FPU/GMPOOL paths Quasar supports, static_assert catches a real Quasar SFPU reduce.
-                    static_assert(!is_sfpu, "SFPU reduce path is not supported on Quasar");
-#endif
                 }
 
                 // Post-reduce operation for each output tile in chunk

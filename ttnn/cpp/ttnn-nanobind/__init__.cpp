@@ -18,6 +18,7 @@
 #include "ttnn-nanobind/layer_completion.hpp"
 #include "ttnn-nanobind/global_circular_buffer.hpp"
 #include "ttnn-nanobind/global_semaphore.hpp"
+#include "ttnn-nanobind/prefetcher_pipe.hpp"
 #include "ttnn-nanobind/hd_socket.hpp"
 #include "ttnn-nanobind/d2d_stream_service.hpp"
 #include "ttnn-nanobind/counter_channel.hpp"
@@ -26,6 +27,7 @@
 #include "ttnn-nanobind/layer_ack_service.hpp"
 #include "ttnn-nanobind/mesh_socket.hpp"
 #include "ttnn-nanobind/bfp_utils.hpp"
+#include "ttnn-nanobind/ccl_host.hpp"
 #include "ttnn-nanobind/operations/copy.hpp"
 #include "ttnn-nanobind/operations/core.hpp"
 #include "ttnn-nanobind/operations/trace.hpp"
@@ -253,6 +255,7 @@ NB_MODULE(_ttnn, mod) {
     auto m_events = mod.def_submodule("events", "ttnn events");
     auto m_global_circular_buffer = mod.def_submodule("global_circular_buffer", "ttnn global circular buffer");
     auto m_global_semaphore = mod.def_submodule("global_semaphore", "ttnn global semaphore");
+    auto m_prefetcher_pipe = mod.def_submodule("prefetcher_pipe", "ttnn prefetcher pipe (experimental)");
     auto m_hd_socket = mod.def_submodule("hd_socket", "ttnn host-device sockets");
     auto m_h2d_stream_service =
         mod.def_submodule("h2d_stream_service", "ttnn persistent host-to-device streaming service");
@@ -272,8 +275,10 @@ NB_MODULE(_ttnn, mod) {
     auto m_program_descriptors = mod.def_submodule("program_descriptor", "Program descriptors types");
     auto m_program_specs = mod.def_submodule("program_spec", "Metal 2.0 program spec types");
     auto m_tensor_accessor_args = mod.def_submodule("tensor_accessor_args", "Tensor accessor args types");
+    auto m_ccl_host =
+        mod.def_submodule("ccl_host", "Host-side CCL helpers (counterpart of kernel_lib/ccl dataflow helpers)");
     auto m_mcast_host =
-        mod.def_submodule("mcast_host", "Host-side mcast helper (counterpart of kernel_lib/mcast_pipe)");
+        mod.def_submodule("mcast_host", "Host-side mcast helper (counterpart of kernel_lib/mcast/kernel/mcast_pipe)");
 
     // TYPES
     ttnn::tensor::tensor_mem_config_module_types(m_tensor);
@@ -290,6 +295,7 @@ NB_MODULE(_ttnn, mod) {
     ttnn::events::py_module_types(m_events);
     ttnn::global_circular_buffer::py_module_types(m_global_circular_buffer);
     ttnn::global_semaphore::py_module_types(m_global_semaphore);
+    ttnn::prefetcher_pipe::py_module_types(m_prefetcher_pipe);
     ttnn::hd_socket::py_module_types(m_hd_socket);
     ttnn::h2d_stream_service::py_module_types(m_h2d_stream_service);
     ttnn::d2h_stream_service::py_module_types(m_d2h_stream_service);
@@ -302,6 +308,7 @@ NB_MODULE(_ttnn, mod) {
     ttnn::program_descriptors::py_module_types(m_program_descriptors);
     ttnn::program_specs::py_module_types(m_program_specs);
     ttnn::tensor_accessor_args::py_module_types(m_tensor_accessor_args);
+    ttnn::ccl_host::py_module_types(m_ccl_host);
     ttnn::mcast_host::py_module_types(m_mcast_host);
 
     // FUNCTIONS / OPERATIONS
@@ -335,6 +342,7 @@ NB_MODULE(_ttnn, mod) {
     ttnn::events::py_module(m_events);
     ttnn::global_circular_buffer::py_module(m_global_circular_buffer);
     ttnn::global_semaphore::py_module(m_global_semaphore);
+    ttnn::prefetcher_pipe::py_module(m_prefetcher_pipe);
     ttnn::hd_socket::py_module(m_hd_socket);
     ttnn::h2d_stream_service::py_module(m_h2d_stream_service);
     ttnn::d2h_stream_service::py_module(m_d2h_stream_service);
@@ -350,6 +358,7 @@ NB_MODULE(_ttnn, mod) {
     // because ttnn defines additional type bindings.
     // TODO: pull them out of the ttnn::operations::py_module.
     ttnn::operations::py_module(m_operations);
+    ttnn::ccl_host::py_module(m_ccl_host);
     // tt::operations::primary::py_module(m_primary_ops);
 
     // CONFIG is a shared mutable global: Python code reads and writes properties

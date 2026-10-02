@@ -6,7 +6,7 @@ Sampling SFPU helpers test.
 Covers every entry point of
 hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sampling.h:
 
-  recip_scalar<legacy_compat>          1/x                    rows 0-3
+  recip_scalar                         1/x                    rows 0-3
   clamp_max_scalar(max)                min(x, max)            rows 0-3
   mul_unary_scalar_first_column(k)     x * k                  rows 0-15
   binary_comp_first_column<le|lt|ge>   (in0 OP in1) ? 1 : 0   rows 0-15
@@ -56,7 +56,6 @@ from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
-    SAMPLING_LEGACY_COMPAT,
     SAMPLING_OP,
     SAMPLING_PRGM0_HAZARD,
     SFPU_UNARY_SCALAR,
@@ -210,14 +209,10 @@ def assert_even_columns(
     formats=FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     op=list(SAMPLING_OPS.keys()),
-    legacy_compat=[True, False],
     vector_mode=[VectorMode.None_, VectorMode.C],
 )
-def test_sfpu_sampling(formats, dest_acc, op, legacy_compat, vector_mode):
+def test_sfpu_sampling(formats, dest_acc, op, vector_mode):
     is_binary, rows_per_face = SAMPLING_OPS[op]
-
-    if op != "recip_scalar" and not legacy_compat:
-        pytest.skip("legacy_compat only applies to recip_scalar")
 
     if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
         pytest.skip("Float32 inputs with dest_acc=No are not supported")
@@ -270,7 +265,6 @@ def test_sfpu_sampling(formats, dest_acc, op, legacy_compat, vector_mode):
         formats,
         templates=[
             SAMPLING_OP(sampling_op=op),
-            SAMPLING_LEGACY_COMPAT(legacy_compat=legacy_compat),
             SFPU_UNARY_SCALAR(value_bits=scalar_bits),
             VECTOR_MODE(vector_mode=vector_mode),
         ],
@@ -365,7 +359,7 @@ def test_sfpu_sampling(formats, dest_acc, op, legacy_compat, vector_mode):
 # ---------------------------------------------------------------------------
 # The sweep above always calls sampling_recip_init immediately before the op, so it proves
 # the init *works* but never that it is *necessary*. #52745's stated motivation is the
-# opposite direction: the legacy_compat=false reciprocal reads vConstFloatPrgm0 as its
+# opposite direction: the reciprocal reads vConstFloatPrgm0 as its
 # Newton-Raphson constant, and only sfpu_reciprocal_init writes the 2.0f it expects, so a
 # kernel that ran some other vConstFloatPrgm0-owning op earlier computes silently wrong.
 #
@@ -380,20 +374,13 @@ _HAZARD_ROWS = 4  # recip_scalar walks DEST rows 0-3 of face 0
 @parametrize(
     formats=FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    legacy_compat=[True, False],
     skip_init=[False, True],
 )
-def test_sfpu_sampling_recip_prgm0_hazard(formats, dest_acc, legacy_compat, skip_init):
+def test_sfpu_sampling_recip_prgm0_hazard(formats, dest_acc, skip_init):
     """Prove sampling_recip_init repairs a polluted vConstFloatPrgm0, and is required to.
 
-    Assertion matrix, with an earlier log_init having taken vConstFloatPrgm0:
-
-    | legacy_compat | recip_init | expectation |
-    |---------------|------------|-------------|
-    | true          | either     | correct -- the legacy reciprocal never reads Prgm0, so
-    |               |            | it must be immune to the pollution |
-    | false         | called     | correct -- this is what the init exists for |
-    | false         | skipped    | WRONG -- log's constant survives into the Newton step |
+    With an earlier log_init having taken vConstFloatPrgm0, calling the reciprocal
+    init must repair the constant; skipping it must expose the loss of refinement.
 
     The polluter always runs, so it is a constant in the driver rather than an axis: with
     no polluter and no init, vConstFloatPrgm0 holds whatever the invariant LLK SFPU init
@@ -430,7 +417,6 @@ def test_sfpu_sampling_recip_prgm0_hazard(formats, dest_acc, legacy_compat, skip
         formats,
         templates=[
             SAMPLING_OP(sampling_op="recip_scalar"),
-            SAMPLING_LEGACY_COMPAT(legacy_compat=legacy_compat),
             SFPU_UNARY_SCALAR(value_bits=scalar_bits),
             VECTOR_MODE(vector_mode=VectorMode.None_),
             SAMPLING_PRGM0_HAZARD(pollute=True, skip_init=skip_init),
@@ -494,11 +480,11 @@ def test_sfpu_sampling_recip_prgm0_hazard(formats, dest_acc, legacy_compat, skip
         dest_acc == DestAccumulation.No or formats.output_format == DataFormat.Float32
     )
 
-    expect_correct = legacy_compat or not skip_init
+    expect_correct = not skip_init
 
     if not strict_cell:
         assert close, (
-            f"recip_scalar(legacy_compat={legacy_compat}, recip_init={not skip_init}) "
+            f"recip_scalar(recip_init={not skip_init}) "
             f"exceeded even the loose suite tolerance: max_rel={max_rel:.3e}"
         )
         return
@@ -507,19 +493,14 @@ def test_sfpu_sampling_recip_prgm0_hazard(formats, dest_acc, legacy_compat, skip
 
     if expect_correct:
         assert refined, (
-            f"recip_scalar(legacy_compat={legacy_compat}, recip_init={not skip_init}) "
+            f"recip_scalar(recip_init={not skip_init}) "
             f"after log_init polluted vConstFloatPrgm0: max_rel={max_rel:.3e} exceeds "
             f"{_STRICT_REL:.0e}, i.e. the Newton-Raphson refinement did not run. "
-            + (
-                "With legacy_compat=true the reciprocal must not read Prgm0 at all, so "
-                "pollution must be irrelevant."
-                if legacy_compat
-                else "sampling_recip_init should have restored the 2.0f constant."
-            )
+            + "sampling_recip_init should have restored the 2.0f constant."
         )
     else:
         assert not refined, (
-            f"recip_scalar(legacy_compat=False) refined to max_rel={max_rel:.3e} "
+            f"recip_scalar refined to max_rel={max_rel:.3e} "
             f"(<= {_STRICT_REL:.0e}) even though vConstFloatPrgm0 was polluted by "
             "log_init and sampling_recip_init was skipped -- the init is not "
             "load-bearing here, so #52745's motivation for adding it does not "

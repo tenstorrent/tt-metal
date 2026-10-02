@@ -244,6 +244,22 @@ def _numerical_space_cases() -> list[ReduceCase]:
                     output_dtype="int32",
                 )
             )
+
+    # bf16 MIN is the one non-Int32 pool that takes the SFPU without an fp32_mode opt-in.
+    for dim in ("REDUCE_ROW", "REDUCE_COL"):
+        rows, cols, _ = _shape_for_dim(dim)
+        cases.append(
+            ReduceCase(
+                name=f"numeric-bf16-MIN-{dim}",
+                family="numerical-space",
+                dim=dim,
+                rows=rows,
+                cols=cols,
+                pool="MIN",
+                input_dtype="bf16",
+                output_dtype="bf16",
+            )
+        )
     return cases
 
 
@@ -439,6 +455,7 @@ def _assert_complete_case_matrix() -> None:
     expected_numerical |= {
         ("int32", pool, dim, "Fast") for pool in ("SUM", "MAX", "MIN") for dim in ("REDUCE_ROW", "REDUCE_COL")
     }
+    expected_numerical |= {("bf16", "MIN", dim, "Fast") for dim in ("REDUCE_ROW", "REDUCE_COL")}
     assert actual_numerical == expected_numerical
 
 
@@ -1879,7 +1896,11 @@ def test_reduce_helpers_mixed_auxiliary_format(device, dtype, dim, input_mode, p
 @pytest.mark.parametrize("case", ALL_CASES, ids=lambda case: case.name)
 def test_reduce_helpers_complete_input_space(device, case: ReduceCase):
     """Exercise every valid helper branch and its numerical/layout boundaries."""
-    if "QUASAR" in str(device.arch()).upper() and (case.input_dtype == "int32" or case.fp32_mode == "Accurate"):
+    if "QUASAR" in str(device.arch()).upper() and (
+        case.input_dtype == "int32"
+        or case.fp32_mode == "Accurate"
+        or (case.input_dtype == "bf16" and case.pool == "MIN")
+    ):
         pytest.skip("The reduce helper rejects SFPU reduce paths on Quasar")
     if "QUASAR" in str(device.arch()).upper() and case.pool == "MAX" and case.dim == "REDUCE_ROW" and case.calls > 1:
         pytest.skip("The MAX row accumulator reload is not supported on Quasar")

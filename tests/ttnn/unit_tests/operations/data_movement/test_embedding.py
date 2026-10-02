@@ -215,6 +215,44 @@ def test_embedding_tiled_input(
     assert_equal(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.parametrize("batch_size", [2])
+@pytest.mark.parametrize("sentence_size", [640])
+@pytest.mark.parametrize("hidden_embedding_dim", [1792])
+@pytest.mark.parametrize("vocabulary_size", [512])
+def test_embedding_tiled_input_qwen_like_shapes(
+    device, batch_size, sentence_size, hidden_embedding_dim, vocabulary_size
+):
+    """TILE UINT32 indices + RM weights + TILE output; shapes from Qwen-Image text encoder (TP-sharded hidden)."""
+    torch.manual_seed(1234)
+
+    torch_input_tensor = torch.randint(0, vocabulary_size, (batch_size, sentence_size))
+    torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
+
+    input_tensor = ttnn.to_device(
+        ttnn.from_torch(torch_input_tensor, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT),
+        device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    weights = ttnn.to_device(
+        ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+        device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.embedding(
+        input_tensor,
+        weights,
+        embeddings_type=ttnn.EmbeddingsType.GENERIC,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_equal(torch_output_tensor, output_tensor)
+
+
 def reverse_embedding_output(output_tensor, weights_tensor):
     """
     Reverse the embedding operation by finding the indices of rows in the output tensor
@@ -386,6 +424,95 @@ def test_embedding_tiled_sharded_output(
         memory_config=output_mem_config,  # Default memory config
         queue_id=0,  # Default queue id
         layout=layout,
+    )
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_equal(torch_output_tensor, output_tensor)
+
+
+# Exercises the Fused (RM indices -> TILE output) reader with a per-core weight column offset:
+# width-/block-sharded output whose shard width is strictly smaller than the weight row, so each
+# core reads only its column slice of every weight row (reader runtime arg `weight_offset` != 0).
+# GENERIC reads every token from DRAM; PADDED additionally serves the pad row out of a local cache
+# that must hold the same column slice; BINARY serves BOTH of its two weight rows out of that cache
+# (vocabulary is exactly {0, 1}), so every output element comes from a cached column slice.
+@pytest.mark.parametrize("batch_size, sentence_size, vocabulary_size", [(2, 256, 4096)])
+@pytest.mark.parametrize(
+    "hidden_embedding_dim, output_memory_layout, shard_width, num_cores_x, num_cores_y",
+    [
+        (1024, ttnn.TensorMemoryLayout.WIDTH_SHARDED, 32, 8, 4),  # one tile wide per core
+        (1024, ttnn.TensorMemoryLayout.WIDTH_SHARDED, 128, 8, 1),
+        (2048, ttnn.TensorMemoryLayout.WIDTH_SHARDED, 256, 8, 1),
+        (1024, ttnn.TensorMemoryLayout.BLOCK_SHARDED, 256, 4, 2),
+        (2048, ttnn.TensorMemoryLayout.BLOCK_SHARDED, 512, 4, 4),
+    ],
+)
+@pytest.mark.parametrize(
+    "embeddings_type", [ttnn.EmbeddingsType.GENERIC, ttnn.EmbeddingsType.PADDED, ttnn.EmbeddingsType.BINARY]
+)
+def test_embedding_tiled_sharded_output_weight_column_offset(
+    device,
+    batch_size,
+    sentence_size,
+    vocabulary_size,
+    hidden_embedding_dim,
+    output_memory_layout,
+    shard_width,
+    num_cores_x,
+    num_cores_y,
+    embeddings_type,
+):
+    torch.manual_seed(1234)
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if num_cores_x > compute_grid_size.x or num_cores_y > compute_grid_size.y:
+        pytest.skip(f"Need a {num_cores_x}x{num_cores_y} core grid but device has {compute_grid_size}")
+    assert shard_width < hidden_embedding_dim, "test must exercise a non-zero per-core weight column offset"
+
+    fused_height = batch_size * sentence_size
+    num_cores = num_cores_x * num_cores_y
+    if output_memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        assert shard_width * num_cores == hidden_embedding_dim
+        shard_shape = (fused_height, shard_width)
+    else:
+        assert shard_width * num_cores_x == hidden_embedding_dim
+        shard_shape = (fused_height // num_cores_y, shard_width)
+    shard_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))]
+    )
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_config = ttnn.MemoryConfig(output_memory_layout, ttnn.BufferType.L1, shard_spec)
+
+    if embeddings_type == ttnn.EmbeddingsType.BINARY:
+        vocabulary_size = 2  # the op requires a two-row weight table; both rows are served from the local cache
+    torch_input_tensor = torch.randint(0, vocabulary_size - 1, (batch_size, sentence_size))
+    pad_token = None
+    if embeddings_type == ttnn.EmbeddingsType.PADDED:
+        pad_token = vocabulary_size - 1
+        torch_input_tensor[:, ::5] = pad_token  # make sure the local pad-row cache is actually used
+    elif embeddings_type == ttnn.EmbeddingsType.BINARY:
+        torch_input_tensor = torch.randint(0, 2, (batch_size, sentence_size))  # rows 0 and 1, both cached
+    torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
+
+    input_tensor = ttnn.to_device(
+        ttnn.from_torch(torch_input_tensor, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
+        device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    weights = ttnn.to_device(
+        ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+        device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.embedding(
+        input_tensor,
+        weights,
+        padding_idx=pad_token,  # non-None selects EmbeddingsType.PADDED
+        embeddings_type=embeddings_type,
+        dtype=ttnn.bfloat16,
+        memory_config=output_mem_config,
+        layout=ttnn.TILE_LAYOUT,
     )
     output_tensor = ttnn.to_torch(output_tensor)
 

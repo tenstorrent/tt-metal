@@ -290,6 +290,51 @@ def lazy_weight_cache_dir_for_demo(mesh_device: ttnn.MeshDevice, hf_model_id: st
     return root
 
 
+def _warmup_demo_executor(
+    executor,
+    *,
+    kv_cache,
+    page_table,
+    prefill_compile_case=None,
+    prefill_sampling_params=None,
+    prefill_compile_execution=None,
+):
+    """Compile eager programs and representative requests before trace activation.
+
+    Same helper as the qwen3_32b demo: prefill and decode traces are only captured by the
+    executor's warmup (``requires_prefill_trace_warmup``), never lazily on first use, so every
+    fresh traced executor has to go through this before its first request.
+    """
+    config = executor.config
+    prefill_kwargs = {
+        "kv_cache": kv_cache,
+        "can_sample_on_device": config.device_sampling_enabled,
+    }
+    decode_kwargs = {
+        "kv_cache": kv_cache,
+        "max_batch_size": int(executor.model.config.max_batch_size),
+        "num_blocks": int(page_table.shape[-1]),
+        "can_sample_on_device": config.device_sampling_enabled,
+    }
+    executor.warmup_model_decode(enable_trace=False, **decode_kwargs)
+    executor.warmup_model_prefill(enable_trace=False, **prefill_kwargs)
+    if prefill_compile_case is not None:
+        tokens, prompt_lens = prefill_compile_case
+        executor.compile_prefill(
+            tokens=tokens,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            prompt_lens=prompt_lens,
+            empty_slots=list(range(tokens.shape[0])),
+            sampling_params=prefill_sampling_params,
+            execution=prefill_compile_execution if prefill_compile_execution is not None else executor.eager_execution,
+        )
+    if config.trace.prefill_enabled:
+        executor.warmup_model_prefill(enable_trace=True, **prefill_kwargs)
+    if config.trace.decode_enabled:
+        executor.warmup_model_decode(enable_trace=True, **decode_kwargs)
+
+
 def ref_basename_for_hf(hf_model_id: str) -> str:
     """Match ``ModelArgs.model_name`` style used for ``.refpt`` filenames."""
     return hf_model_id.strip("/").split("/")[-1]
@@ -1163,11 +1208,13 @@ def _run_eval_repeat_batch32(model, mesh_device):
 
     # Fresh traced executor + zeroed KV cache per repeat (driver owns the lifecycle), so the rotated
     # batches are fully independent — see run_eval_repeat_batch32 for why reuse corrupts the 3rd repeat.
+    #
+    # decode_only, as in the qwen3_32b eval-32 leg: eager prefill + traced decode is enough for a
+    # determinism gate, and each fresh executor is warmed up in allocate_kv_cache below. Without that
+    # warmup the shared runner's first request fails preflight with TraceCoverageError (traces are
+    # only captured by warmup, never lazily), which is how this leg failed on main.
     def make_executor():
-        return TracedQwen25Coder32BExecutor(model, mesh_device)
-
-    def allocate_kv_cache(executor):
-        return executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
+        return TracedQwen25Coder32BExecutor(model, mesh_device, trace_mode="decode_only")
 
     # TTTv1 ci-eval-32 numeric prompts (parity).
     prompts = load_eval_repeat_prompts_batch32()
@@ -1185,7 +1232,19 @@ def _run_eval_repeat_batch32(model, mesh_device):
         if sampling_mode in _on_device_params and getattr(model, "supports_on_device_sampling", False)
         else None
     )
+    representative_prefill = tokenize_fn(prompts)
     logger.info(f"[eval-32] SAMPLING_MODE={sampling_mode} -> sampling_params={sampling_params}")
+
+    def allocate_kv_cache(executor):
+        kv_cache = executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
+        _warmup_demo_executor(
+            executor,
+            kv_cache=kv_cache,
+            page_table=page_table,
+            prefill_compile_case=representative_prefill,
+            prefill_sampling_params=sampling_params,
+        )
+        return kv_cache
 
     run_eval_repeat_batch32(
         make_executor=make_executor,

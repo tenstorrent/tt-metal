@@ -128,7 +128,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHLargeFactory::create_program
             {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "y"},
              TensorBinding{.tensor_parameter_name = OUTPUT_GRAD_TENSOR, .accessor_name = "dy"}},
         .runtime_arg_schema = {.runtime_arg_names = {"N", "tile_offset", "Ht", "Wt"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device.arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer_spec{
@@ -147,13 +147,13 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHLargeFactory::create_program
              }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_GRAD_TENSOR, .accessor_name = "dx"}},
         .runtime_arg_schema = {.runtime_arg_names = {"N", "tile_offset", "Ht", "Wt"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device.arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
     writer_spec.advanced_options.compile_time_varargs = writer_reduce_args;
 
     // create compute kernel
-    auto compute_hw_config = ttnn::to_compute_hardware_config(device.arch(), compute_kernel_config);
-    unpack_modes(compute_hw_config) = MakeUnpackModes(
+    auto compute_hw_config = ttnn::to_compute_hardware_config(compute_kernel_config);
+    compute_hw_config.unpack_modes = MakeUnpackModes(
         fp32_dest_acc_en,
         {{Y_DFB, data_format},
          {DY_DFB, data_format},

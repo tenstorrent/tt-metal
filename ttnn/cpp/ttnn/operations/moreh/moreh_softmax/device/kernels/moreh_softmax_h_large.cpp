@@ -24,17 +24,14 @@ using SumCall = ttnn::kernel_lib::BoundReduceCallArgs<
 
 void kernel_main() {
     constexpr auto dfb_in0 = dfb::in0;
-    DataflowBuffer dfb_in0_obj(dfb_in0);
     constexpr auto dfb_max_scaler = dfb::max_scaler;
     constexpr auto dfb_sum_scaler = dfb::sum_scaler;
     constexpr auto dfb_out0 = dfb::out0;
-    DataflowBuffer dfb_out0_obj(dfb_out0);
     constexpr auto dfb_exps = dfb::exps;
     DataflowBuffer dfb_exps_obj(dfb_exps);
     constexpr auto dfb_recipsumexps = dfb::recip_sum_exps;
     DataflowBuffer dfb_recipsumexps_obj(dfb_recipsumexps);
     constexpr auto dfb_add = dfb::add;
-    DataflowBuffer dfb_add_obj(dfb_add);
     constexpr auto dfb_max = dfb::max;
     DataflowBuffer dfb_max_obj(dfb_max);
     constexpr auto dfb_tmp = dfb::tmp;
@@ -72,7 +69,7 @@ void kernel_main() {
             const uint32_t current_tiles = block + 1 == num_blocks ? Ht - block * block_tiles : block_tiles;
             dfb_exps_obj.reserve_back(buffer_tiles);
             for (uint32_t tile = 0; tile < current_tiles; ++tile) {
-                sub_tiles_bcast_rows_to_cb(dfb_in0_obj, dfb_max_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
+                sub_tiles_bcast_rows_to_dfb<dfb::in0, dfb::max, dfb::tmp>(0, 0, /*pop0=*/1, /*pop1=*/0);
                 dfb_tmp_obj.wait_front(1);
                 tile_regs_acquire();
                 copy_tile_init_with_dt(dfb_tmp_obj);
@@ -109,9 +106,9 @@ void kernel_main() {
 #ifdef LOG
 #ifdef SOFTMAX
             // x - max - log(sum)
-            sub_tiles_bcast_rows_to_cb(dfb_in0_obj, dfb_max_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            sub_tiles_bcast_rows_to_dfb<dfb::in0, dfb::max, dfb::tmp>(0, 0, /*pop0=*/1, /*pop1=*/0);
 
-            sub_tiles_bcast_rows_to_cb(dfb_tmp_obj, dfb_recipsumexps_obj, dfb_out0_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            sub_tiles_bcast_rows_to_dfb<dfb::tmp, dfb::recip_sum_exps, dfb::out0>(0, 0, /*pop0=*/1, /*pop1=*/0);
 #else
             // -x + max - log(sum)
             // logsoftmin not implemented
@@ -119,18 +116,18 @@ void kernel_main() {
 #else
 #ifdef SOFTMAX
             // exp(x - max) / sum
-            sub_tiles_bcast_rows_to_cb(dfb_in0_obj, dfb_max_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            sub_tiles_bcast_rows_to_dfb<dfb::in0, dfb::max, dfb::tmp>(0, 0, /*pop0=*/1, /*pop1=*/0);
 
-            exp_tile_to_cb(dfb_tmp_obj, dfb_add_obj);
+            exp_tile_to_dfb<dfb::tmp, dfb::add>();
 
-            mul_tiles_bcast_rows_to_cb(dfb_add_obj, dfb_recipsumexps_obj, dfb_out0_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            mul_tiles_bcast_rows_to_dfb<dfb::add, dfb::recip_sum_exps, dfb::out0>(0, 0, /*pop0=*/1, /*pop1=*/0);
 #else
             // rexp(x - max) / sum
-            sub_tiles_bcast_rows_to_cb(dfb_in0_obj, dfb_max_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            sub_tiles_bcast_rows_to_dfb<dfb::in0, dfb::max, dfb::tmp>(0, 0, /*pop0=*/1, /*pop1=*/0);
 
-            rexp_tile_to_cb(dfb_tmp_obj, dfb_add_obj);
+            rexp_tile_to_dfb<dfb::tmp, dfb::add>();
 
-            mul_tiles_bcast_rows_to_cb(dfb_add_obj, dfb_recipsumexps_obj, dfb_out0_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            mul_tiles_bcast_rows_to_dfb<dfb::add, dfb::recip_sum_exps, dfb::out0>(0, 0, /*pop0=*/1, /*pop1=*/0);
 #endif
 #endif
         }

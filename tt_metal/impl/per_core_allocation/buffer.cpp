@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
 #include "impl/buffers/buffer_impl.hpp"
 #include "impl/buffers/buffer_sharding_args_impl.hpp"
 #include <tt_stl/assert.hpp>
@@ -39,6 +40,15 @@ void copy_per_core_addresses(Buffer& dst, const Buffer& src) {
 }
 
 BufferShardingArgs& set_per_core_allocation(BufferShardingArgs& args, bool enable) {
+    if (enable) {
+        // The reverse of the check in set_range_lockstep_allocation. Without it the two flags can
+        // both end up set by calling the setters the other way round, and allocate_buffer takes the
+        // per-core branch first, so range lockstep is silently ignored rather than reported.
+        TT_FATAL(
+            !range_lockstep_allocation::is_range_lockstep_allocation(args),
+            "per_core_allocation and range_lockstep_allocation are mutually exclusive: a buffer either takes an "
+            "independent address on each core or one address across them");
+    }
     args.impl().per_core_allocation_ = enable;
     return args;
 }

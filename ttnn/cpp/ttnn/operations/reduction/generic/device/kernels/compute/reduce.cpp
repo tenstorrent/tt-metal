@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Thin wrapper around compute_kernel_lib::reduce<>. The input data format is deduced from the input
-// buffer inside the helper, so Int32 MAX, MIN and SUM are routed to the SFPU path automatically;
-// otherwise FPU/GMPOOL. Accurate fp32 also uses the SFPU; fast-mode float/bf16 MIN is lowered to
-// -MAX(-x) via reduce_{h,w}_neg on the host.
+// buffer inside the helper, so Int32 MAX, MIN and SUM, and bf16 MIN, are routed to the SFPU path
+// automatically; otherwise FPU/GMPOOL. Accurate fp32 also uses the SFPU. Every other MIN (bfloat8_b,
+// fast-mode fp32) never reaches here: the host rewrites it as -MAX(-x) and dispatches
+// reduce_{h,w}_neg instead.
 
 #include <cstdint>
 #include "api/compute/cb_api.h"
@@ -13,6 +14,7 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
+#include "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_compute_common.hpp"
 
 void kernel_main() {
     using Call =
@@ -25,7 +27,10 @@ void kernel_main() {
         // scaler buffer entirely, so both paths apply the user scalar here per output tile.
         // reduce_post_mul_tile handles Int32 (typecast-bracketed) and float formats uniformly.
         [](uint32_t dst_idx) {
-            constexpr auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
+            const auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
+            if (post_mul_scaler_bits == k_identity_scaler_bits) {
+                return;
+            }
             // The data format has to be a constant expression here (it is a template argument), so it
             // is read from the JIT descriptor array indexed by the DFB handle rather than off a
             // DataflowBuffer object: DataflowBuffer's constructor is not constexpr, so no such object

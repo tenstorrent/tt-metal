@@ -93,12 +93,12 @@ CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : tot
     }
 
     auto process_format_descriptor = [this](const CBFormatDescriptor& format_descriptor) {
-        uint32_t max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
-        if (format_descriptor.buffer_index > max_cbs - 1) {
+        uint32_t max_dfbs = tt::tt_metal::MetalContext::instance().hal().get_num_dataflow_buffers();
+        if (format_descriptor.buffer_index > max_dfbs - 1) {
             TT_THROW(
                 "Buffer index ({}) exceeds max number of circular buffers per core ({})",
                 format_descriptor.buffer_index,
-                max_cbs);
+                max_dfbs);
         }
         this->data_formats_[format_descriptor.buffer_index] = format_descriptor.data_format;
         if (this->total_size_ % format_descriptor.page_size != 0) {
@@ -167,9 +167,9 @@ CircularBufferConfig::CircularBufferConfig(
 }
 
 CircularBufferConfig& CircularBufferConfig::set_page_size(uint8_t buffer_index, uint32_t page_size) {
-    uint32_t max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
-    if (buffer_index > max_cbs - 1) {
-        TT_THROW("Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_cbs);
+    uint32_t max_dfbs = tt::tt_metal::MetalContext::instance().hal().get_num_dataflow_buffers();
+    if (buffer_index > max_dfbs - 1) {
+        TT_THROW("Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_dfbs);
     }
     if (!this->buffer_indices_.contains(buffer_index)) {
         TT_THROW(
@@ -237,9 +237,9 @@ CircularBufferConfig& CircularBufferConfig::set_tile_dims(uint8_t buffer_index, 
 
 CircularBufferConfig& CircularBufferConfig::set_unpack_face_geometry(
     uint8_t buffer_index, uint32_t face_r_dim, uint32_t num_faces) {
-    uint32_t max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
-    if (buffer_index > max_cbs - 1) {
-        TT_THROW("Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_cbs);
+    uint32_t max_dfbs = tt::tt_metal::MetalContext::instance().hal().get_num_dataflow_buffers();
+    if (buffer_index > max_dfbs - 1) {
+        TT_THROW("Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_dfbs);
     }
     if (!this->buffer_indices_.contains(buffer_index)) {
         TT_THROW(
@@ -320,9 +320,9 @@ CircularBufferConfig::Builder CircularBufferConfig::Builder::RemoteBuilder(
 
 CircularBufferConfig::Builder::Builder(CircularBufferConfig& parent, uint8_t buffer_index) :
     parent_(parent), buffer_index_(buffer_index) {
-    uint32_t max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
-    if (buffer_index > max_cbs - 1) {
-        TT_THROW("Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_cbs);
+    uint32_t max_dfbs = tt::tt_metal::MetalContext::instance().hal().get_num_dataflow_buffers();
+    if (buffer_index > max_dfbs - 1) {
+        TT_THROW("Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_dfbs);
     }
     parent_.buffer_indices_.insert(buffer_index_);
 }
@@ -356,17 +356,17 @@ CircularBufferConfig::Builder CircularBufferConfig::remote_index(uint8_t buffer_
 }
 
 void CircularBufferConfig::set_config(const std::map<uint8_t, tt::DataFormat>& data_format_spec) {
-    uint32_t max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
-    if (data_format_spec.size() > max_cbs) {
+    uint32_t max_dfbs = tt::tt_metal::MetalContext::instance().hal().get_num_dataflow_buffers();
+    if (data_format_spec.size() > max_dfbs) {
         TT_THROW(
             "Only {} circular buffer slots are available but data formats are specified for {} indices",
-            max_cbs,
+            max_dfbs,
             data_format_spec.size());
     }
 
     for (const auto& [buffer_index, data_format] : data_format_spec) {
-        if (buffer_index > max_cbs - 1) {
-            TT_THROW("Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_cbs);
+        if (buffer_index > max_dfbs - 1) {
+            TT_THROW("Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_dfbs);
         }
         this->data_formats_[buffer_index] = data_format;
         this->buffer_indices_.insert(buffer_index);

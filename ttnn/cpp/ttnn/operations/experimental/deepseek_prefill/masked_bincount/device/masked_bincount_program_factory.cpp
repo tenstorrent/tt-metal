@@ -34,7 +34,7 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
     const uint32_t tile_h = input.tensor_spec().page_config().get_tile().get_height();
     const uint32_t tokens = input.padded_shape()[0];
 
-    CoreRangeSet all_cores(CoreRange(CoreCoord(0, 0), CoreCoord(7, 7)));
+    CoreRangeSet all_cores(CoreRange(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(7, 7)));
     uint32_t num_cores = all_cores.num_cores();
     TT_FATAL(tokens % num_cores == 0, "Token count ({}) must be divisible by the {}-core grid", tokens, num_cores);
     uint32_t shard_height = tokens / num_cores;  // rows per core
@@ -55,8 +55,8 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
     uint32_t mask_page_size = mask_buffer->aligned_page_size();
 
     auto all_cores_vec = tt::tt_metal::corerange_to_cores(all_cores, num_cores, true);
-    CoreCoord collector_core = all_cores_vec[0];
-    const tt::tt_metal::IDevice* device = input.device();
+    tt::tt_metal::CoreCoord collector_core = all_cores_vec[0];
+    const tt::tt_metal::distributed::MeshDevice* device = input.device();
     auto collector_noc = device->worker_core_from_logical_core(collector_core);
 
     // --- Circular Buffers ---

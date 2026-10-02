@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ast
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -319,7 +320,7 @@ def test_demo_resolves_qwen3_trace_region_and_matches_ring_fabric():
     assert 'resolve_trace_region_size("qwen3-32b", env)' in _DEMO_SOURCE
     assert '"trace_region_size": 50_000_000' not in _DEMO_SOURCE
     assert "ttnn.FabricConfig.FABRIC_1D_RING" in _DEMO_SOURCE
-    assert resolve_trace_region_size("qwen3-32b", "T3K") == 90_000_000
+    assert resolve_trace_region_size("qwen3-32b", "T3K") == 120_000_000
     assert resolve_trace_region_size("qwen3-32b", "P150x4") == 100_000_000
 
 
@@ -333,7 +334,9 @@ def test_demo_exposes_p150x4_and_uses_canonical_device_naming():
 
 def test_required_bh_gate_failures_are_not_converted_to_fixture_skips():
     assert 'mesh_device_name in {"P150", "P300", "P150X4"}' in _COMMON_CONFTEST_SOURCE
-    assert "if blackhole_selected:\n                raise" in _COMMON_CONFTEST_SOURCE
+    # The gate may carry extra "or ..." conditions (02822d86a9a added the hung-PCIe check); what matters
+    # is that a Blackhole selection still re-raises instead of turning into a skip.
+    assert re.search(r"if blackhole_selected(?: or [^\n:]+)?:\n\s+raise\b", _COMMON_CONFTEST_SOURCE)
 
 
 def test_demo_uses_model_owned_runtime_compatibility_wrappers():

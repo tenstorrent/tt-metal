@@ -100,6 +100,7 @@ kj::Own<kj::AsyncIoStream> connect_with_keepalive(kj::AsyncIoContext& io, const 
         } catch (const kj::Exception&) {
             // Best-effort: if a sockopt isn't supported, fall back to the app-level timeout in
             // wait_all(). Never fail the connection over keepalive tuning.
+            return stream;
         }
     }
     return stream;
@@ -143,6 +144,7 @@ void fill_target_recipe(rpc::TargetRecipe::Builder& builder, const TargetRecipe&
         defines.set(i, target.defines[i]);
     }
     builder.setIncludes(target.includes);
+    builder.setPchUmbrella(target.pch_umbrella);
     builder.setCompilerOptLevel(target.compiler_opt_level);
     auto srcs = builder.initSrcs(target.srcs.size());
     for (std::size_t i = 0; i < target.srcs.size(); ++i) {
@@ -381,7 +383,7 @@ std::vector<CompileResponse> JitCompileRpcSession::wait_all() {
             // arrived — connection wedged / half-open), it throws and we surface a transport
             // error so the caller can fall back to a local compile instead of hanging forever.
             kj::Timer& timer = impl_->io.provider->getTimer();
-            kj::Promise<capnp::Response<rpc::JitCompile::CompileResults>> rpc = kj::mv(promise);
+            auto rpc = promise.dropPipeline();
             auto timed_out =
                 timer.afterDelay(timeout_s * kj::SECONDS)
                     .then([]() -> capnp::Response<rpc::JitCompile::CompileResults> {

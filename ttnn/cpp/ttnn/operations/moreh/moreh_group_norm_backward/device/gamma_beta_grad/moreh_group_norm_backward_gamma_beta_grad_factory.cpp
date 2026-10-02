@@ -272,7 +272,7 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
                      "origin_h",
                      "origin_w"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     Group<DFBBinding> writer_dfb_bindings{
@@ -302,7 +302,7 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
             {
                 .runtime_arg_names = {"tile_offset", "num_channels_per_core", "num_inner_tiles", "batch"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
         .advanced_options = {.compile_time_varargs = reduction.sequence.get_auxiliary_compile_time_args()},
     };
 
@@ -350,10 +350,10 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
             DFBBinding{.dfb_spec_name = DBETA, .accessor_name = "dbeta", .endpoint_type = DFBEndpointType::PRODUCER});
     }
 
-    ComputeHardwareConfig compute_hw = ComputeGen1Config{.enable_32_bit_dest = true};
+    ComputeHardwareConfig compute_hw{.enable_32_bit_dest = true};
     for (const auto& buffer : dfbs) {
         if (buffer.data_format_metadata == tt::DataFormat::Float32) {
-            unpack_modes(compute_hw).emplace(buffer.unique_id, UnpackMode::UnpackToSrc);
+            compute_hw.unpack_modes.emplace(buffer.unique_id, UnpackMode::UnpackToSrc);
         }
     }
 

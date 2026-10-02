@@ -91,13 +91,19 @@ struct OpConfig {
     };
 
     template <class EnumT>
-    OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std::optional<DataType> dtype = std::nullopt);
+    OpConfig(
+        BinaryOpType binary_op_type,
+        std::in_place_type_t<EnumT>,
+        std::optional<DataType> dtype = std::nullopt,
+        const std::optional<binary::BinaryOpParams>& op_params = std::nullopt);
 
     std::map<std::string, std::string> as_defines(DataType dtype) const;
 
     std::optional<unary::UnaryOpType> process_lhs;
     std::optional<unary::UnaryOpType> process_rhs;
-    std::optional<unary::UnaryOpType> postprocess;
+    // Carries a parameter: a bare UnaryOpType reaches get_op_init_and_func_default, which emits the
+    // paramless form and so inherits the compute API's default template argument.
+    std::optional<unary::EltwiseUnaryWithParam> postprocess;
     std::variant<FpuBinaryOp, SfpuBinaryOp> binary_op;
     bool is_sfpu_op() const;
 };
@@ -145,12 +151,20 @@ ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::S
 MemoryConfig compute_mem_config_actual(const ttnn::Tensor& input_tensor_a, const ttnn::Shape& shape_b);
 
 // Env-driven tuning for ProgramFactoryQuasarNative, read once per process. R/C/W set KernelSpec
-// num_threads AND gate admission: matches_quasar_native_slice rejects shapes whose per-core tile count
-// does not divide by lcm(R,C,W), because the kernels' strided share assumes an exact split.
+// num_threads. They no longer restrict which shapes are admitted: each kernel derives its own share
+// from thread_id and num_threads, so any tile count works and a thread may draw zero tiles. The only
+// R/C/W admission rule left is the per-DFB STRIDED ratio, max(p,c) % min(p,c) == 0.
 struct NativeTuning {
-    bool implicit_sync = false;       // parsed and logged; NOT consumed -- the factory hardcodes
-                                      // explicit sync, so setting the env var changes nothing
+    bool implicit_sync = false;       // NOT consumed, and native_tuning() throws if set: enabling it
+                                      // needs the guarantee that no thread draws zero tiles, which
+                                      // uneven tile counts removed
     uint32_t entries_per_thread = 2;  // per-thread ring depth; num_entries = this x max(producers, consumers)
+    uint32_t tiles_per_cycle = 0;     // EXPERIMENTAL override for num_tiles_per_cycle (COMPUTE side);
+                                      // 0 = use the derived value. Needs entries_per_thread >= 2x this,
+                                      // or wait_front never completes and the op hangs
+    uint32_t dm_batch = 1;            // EXPERIMENTAL tiles per barrier in the reader/writer. Same
+                                      // capacity rule. Independent of tiles_per_cycle: a ring lets
+                                      // producer and consumer transact at different granularities
     uint32_t reader_threads = 1;      // R
     uint32_t compute_threads = 1;     // C -- must be 1, 2 or 4
     uint32_t writer_threads = 1;      // W

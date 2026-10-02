@@ -4,23 +4,16 @@
 
 from typing import TYPE_CHECKING, List
 
-import torch
-
 if TYPE_CHECKING:
     from .l1_operation import L1Operation
     from .fuser_config import GlobalConfig
 
-from helpers.golden_generators import ReduceGolden
-from helpers.llk_params import (
-    L1Accumulation,
-    PackerReluType,
-    ReduceDimension,
-    ReducePool,
-)
+from helpers.llk_params import L1Accumulation, PackerReluType, PerfRunType
 
 from .arch_common import pack_common
 from .base_packer import Packer
 from .block_data import BlockData
+from .indexing import KernelInvocation
 from .operand import Operand
 
 
@@ -33,6 +26,9 @@ class PackNode:
     independent relu or L1 accumulation configs.
     """
 
+    block_tiles_x = None
+    block_tiles_y = None
+
     def __init__(
         self,
         packer: Packer,
@@ -40,9 +36,11 @@ class PackNode:
         pack_relu: PackerReluType = PackerReluType.NoRelu,
         relu_threshold: float = 0.0,
         pack_l1_accumulation: L1Accumulation = L1Accumulation.No,
+        index_spec=None,
     ):
         self.packer = packer
         self.output = output
+        self.index_spec = index_spec
         self.pack_relu = pack_relu
         self.relu_threshold = relu_threshold
         self.pack_l1_accumulation = pack_l1_accumulation
@@ -58,13 +56,21 @@ class PackNode:
         code += pack_common.l1_accumulation_config(config, operation, self)
         return code
 
-    def pack_loop(
+    def pack_call(
         self,
         operation: "L1Operation",
         config: "GlobalConfig",
         block: BlockData,
+        call: KernelInvocation,
     ) -> str:
-        return self.packer.loop.pack_loop(operation, config, self, block)
+        if config.perf_run_type in (
+            PerfRunType.UNPACK_ISOLATE,
+            PerfRunType.MATH_ISOLATE,
+        ):
+            return ""
+        block.tile_id_dest = call.dest
+        block.tile_id_out = call.out
+        return self.packer.pack(self, operation, config, block)
 
     def uninit(
         self,
@@ -72,28 +78,6 @@ class PackNode:
         config: "GlobalConfig",
     ) -> str:
         return self.packer.uninit(self, operation, config, None)
-
-    def golden(
-        self,
-        tensor: torch.Tensor,
-        operation: "L1Operation",
-        config: "GlobalConfig",
-    ) -> torch.Tensor:
-        if operation.reduce_pool == ReducePool.Max:
-            # Reapply the edge mask after any fused math/SFPU operations and before pack transforms.
-            mask = torch.ones_like(tensor, dtype=torch.bool)
-            tile_rows, tile_cols = operation.tile_shape.tile_dims
-            if operation.reduce_dim == ReduceDimension.Row:
-                mask[:, ::tile_cols] = False
-            elif operation.reduce_dim == ReduceDimension.Column:
-                mask[::tile_rows, :] = False
-            else:
-                mask[::tile_rows, ::tile_cols] = False
-            tensor = tensor.masked_fill(
-                mask,
-                ReduceGolden.padding_value(ReducePool.Max, self.output.data_format),
-            )
-        return self.packer.golden(tensor, self, operation, config)
 
     def get_headers(self) -> List[str]:
         return self.packer.get_headers()

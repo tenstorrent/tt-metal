@@ -348,7 +348,7 @@ Fraction of packer-busy cycles where destination data was available.
 *Counter group: TDMA_PACK. Computed, exported as `pack_dest_eff_pct`.*
 
 ```
-Packer Efficiency = PACKER_DEST_READ_AVAILABLE / PACKER_BUSY * 100
+Packer Efficiency = PACKER0_DEST_READ_REQ / PACKER_BUSY * 100
 ```
 
 - **High value (~100%)**: Packer never waits for math output (no dest-read stalls).
@@ -363,8 +363,8 @@ Unpacker write duty cycle. Despite the name this is **not** backpressure: the nu
 *Counter group: TDMA_UNPACK. Computed, exported as `unpack_to_math_flow0_pct`, `unpack_to_math_flow1_pct`, `unpack_to_math_flow_pct`.*
 
 ```
-flow0 = SRCA_WRITE_AVAILABLE / UNPACK0_BUSY_THREAD0 * 100
-flow1 = SRCB_WRITE_AVAILABLE / UNPACK1_BUSY_THREAD0 * 100
+flow0 = SRCA_WRITE_REQ / UNPACK0_BUSY_THREAD0 * 100
+flow1 = SRCB_WRITE_REQ / UNPACK1_BUSY_THREAD0 * 100
 combined = mean(flow0, flow1)          # mean of the two ratios, not the ratio of two means
 ```
 
@@ -467,13 +467,13 @@ per-zone CSV, so they can be worked out by hand. Counter names are as they appea
 | 12 | SrcA/SrcB Clear Wait | INSTRN_THREAD | `SrcA Clear Wait = WAITING_FOR_SRCA_CLEAR / INSTRN_OUT_L * 100 SrcB Clear Wait = WAITING_FOR_SRCB_CLEAR / INSTRN_OUT_L * 100` | both |
 | 13 | Math / Pack / Unpack Idle Wait | INSTRN_THREAD | `Math Idle Wait T1 = WAITING_FOR_MATH_IDLE_1 / INSTRN_OUT_L * 100 Pack Idle Wait T2 = WAITING_FOR_PACK_IDLE_2 / INSTRN_OUT_L * 100 Unpack Idle Wait T0 = WAITING_FOR_UNPACK_IDLE_0 / INSTRN_OUT_L * 100` | both |
 | 15 | Data Hazard Stall Rate | TDMA_UNPACK | `Data Hazard Stall = (MATH_INSTRN_AVAILABLE - DATA_HAZARD_STALLS_MOVD2A) / MATH_INSTRN_AVAILABLE * 100` | both |
-| 16 | SrcA/SrcB Write Port Blocked | TDMA_UNPACK | `SrcA Port Blocked = (SRCA_WRITE_AVAILABLE - SRCB_WRITE_NOT_BLOCKED_PORT) / SRCA_WRITE_AVAILABLE * 100 SrcB Port Blocked = (SRCB_WRITE_AVAILABLE - SRCB_WRITE_NOT_BLOCKED_PORT) / SRCB_WRITE_AVAILABLE * 100` | both |
-| 17 | SrcA/SrcB Write Overwrite Blocked | TDMA_UNPACK | `SrcA Overwrite Blocked = (SRCA_WRITE_AVAILABLE - SRCA_WRITE_NOT_BLOCKED_OVR) / SRCA_WRITE_AVAILABLE * 100 SrcB Overwrite Blocked = (SRCB_WRITE_AVAILABLE - SRCB_WRITE_ACTUAL) / SRCB_WRITE_AVAILABLE * 100` | both |
-| 18 | Dest Read Backpressure | TDMA_PACK | `Dest Read BP = (PACKER_DEST_READ_AVAILABLE - DEST_READ_GRANTED_0) / PACKER_DEST_READ_AVAILABLE * 100` | both |
+| 16 | SrcA/SrcB Write Port Blocked | TDMA_UNPACK | `SrcA Port Blocked = (SRCA_WRITE_REQ - SRCB_WRITE_NOT_BLOCKED_PORT) / SRCA_WRITE_REQ * 100 SrcB Port Blocked = (SRCB_WRITE_REQ - SRCB_WRITE_NOT_BLOCKED_PORT) / SRCB_WRITE_REQ * 100` | both |
+| 17 | SrcA/SrcB Write Overwrite Blocked | TDMA_UNPACK | `SrcA Overwrite Blocked = (SRCA_WRITE_REQ - SRCA_WRITE_NOT_BLOCKED_OVR) / SRCA_WRITE_REQ * 100 SrcB Overwrite Blocked = (SRCB_WRITE_REQ - SRCB_WRITE_ACTUAL) / SRCB_WRITE_REQ * 100` | both |
+| 18 | Dest Read Backpressure | TDMA_PACK | `Dest Read BP = (PACKER0_DEST_READ_REQ - DEST_READ_GRANTED_0) / PACKER0_DEST_READ_REQ * 100` | both |
 | 19 | Math Scoreboard Stall Rate | TDMA_PACK | `Math Scoreboard Stall = (MATH_INSTRN_AVAILABLE - AVAILABLE_MATH) / MATH_INSTRN_AVAILABLE * 100` | both |
 | 20 | Per-type Instruction Availability | INSTRN_THREAD | `TYPE Avail Rate = TYPE_INSTRN_AVAILABLE_N / INSTRN_OUT_L * 100` | both |
-| 21 | SrcA Write Actual Efficiency | TDMA_UNPACK | `SrcA Write Actual Efficiency = SRCA_WRITE_ACTUAL / SRCA_WRITE_AVAILABLE * 100` | both |
-| 22 | SrcB Write Actual Efficiency | TDMA_UNPACK | `SrcB Write Actual Efficiency = SRCB_WRITE_ACTUAL / SRCB_WRITE_AVAILABLE * 100` | both |
+| 21 | SrcA Write Actual Efficiency | TDMA_UNPACK | `SrcA Write Actual Efficiency = SRCA_WRITE_ACTUAL / SRCA_WRITE_REQ * 100` | both |
+| 22 | SrcB Write Actual Efficiency | TDMA_UNPACK | `SrcB Write Actual Efficiency = SRCB_WRITE_ACTUAL / SRCB_WRITE_REQ * 100` | both |
 | 24 | L1 Port / NoC Ring Utilisation | L1 | `L1 Port Util = L1_PORT_REQ / L1_OUT_L * 100 NoC Ring Util = avg(NOC_RINGN_CHANNEL_0, NOC_RINGN_CHANNEL_1) / L1_OUT_L * 100` | both |
 | 25 | L1 Backpressure | L1 | `L1 BP = (REQ - GRANT) / REQ * 100` | both |
 | 26 | Stall Cause Overlap Factor per Thread | INSTRN_THREAD | `Stall Overlap TN = sum(all WAITING_FOR_*_N) / THREAD_STALLS_N` | both |

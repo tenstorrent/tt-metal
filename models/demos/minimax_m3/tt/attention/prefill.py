@@ -197,8 +197,8 @@ def attention_forward(
                 )
         if cached_len > 0:
             # Cache-read: the current chunk attends the accumulated prefix, gathered across SP straight
-            # from this (user, layer) slot of the packed cache (msa_sp_attention_cache_read). Chunks are
-            # chunk-aligned (asserted by the runtime), so cached_len is a whole number of chunks.
+            # from this (user, layer) slot of the packed cache (msa_sp_attention_cache_read). cached_len may be
+            # mid-slab (a 32-aligned multi-turn resume); the read sizes the gather for the fullest rank.
             slot = user_id * kv_cache.num_layers + layer_idx
             tt_sdpa_out = msa_sp_attention_cache_read(
                 tt_q,

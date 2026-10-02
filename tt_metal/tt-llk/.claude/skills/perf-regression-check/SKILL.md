@@ -35,7 +35,11 @@ already cached) without running a sweep — cheap, use it to confirm the refs fi
 - **arch** (required): `wormhole` or `blackhole`. Infer from the machine (`tt-smi`) if possible.
 - **baseline / current**: any refs. Default: baseline = `git merge-base origin/main HEAD`,
   current = `HEAD`. If the user names commits ("compare abc123 and def456"), pass both.
-- **threshold**: `--threshold`, default `0.05` (5%).
+- **threshold**: `--threshold`, default `0.02` (2%).
+- **min cycles**: `--min-cycles`, default `30`. A point is a regression only when it is
+  **both** more than `--threshold` slower **and** more than `--min-cycles` slower. The
+  percentage clause alone fires on small markers such as `INIT`; the cycle clause alone
+  fires on large `TILE_LOOP` values. `0` disables the cycle clause.
 - **iterations**: `--iterations`, default `3` per side.
 - **speed of light**: `--speed-of-light`. The script applies it to both sides.
 

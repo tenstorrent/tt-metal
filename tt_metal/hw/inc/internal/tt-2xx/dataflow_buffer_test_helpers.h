@@ -40,9 +40,12 @@ inline void preload_posted_counter(DataflowBuffer& dfb, uint16_t value) {
         dfb.ptxn_id_loop_cnt_ = value / per_tc;
         dfb.ptxn_id_index_ = static_cast<uint8_t>(dfb.ptxn_id_loop_cnt_ % dfb.local_dfb_interface_.num_txn_ids);
     }
-    // Bump the kernel-side transactions-issued counter so handle_final_credits's
-    // (transactions_issued % N, / N) math matches the HW posted value at finish time.
-    dfb.ptiles_read_ = value;
+    // `value` was added to every round-robin counter. The software cursor counts
+    // issues globally, so it is value * N (broadcast posts one issue to every
+    // counter, so the cursor stays `value`). N is 1 for the D1 wrap test.
+    dfb.ptiles_read_ = dfb.local_dfb_interface_.broadcast_tc
+                           ? value
+                           : static_cast<uint32_t>(value) * dfb.local_dfb_interface_.num_tcs_to_rr;
 }
 
 inline void preload_acked_counter(DataflowBuffer& dfb, uint16_t value) {
@@ -55,7 +58,9 @@ inline void preload_acked_counter(DataflowBuffer& dfb, uint16_t value) {
         dfb.ctxn_id_loop_cnt_ = value / per_tc;
         dfb.ctxn_id_index_ = static_cast<uint8_t>(dfb.ctxn_id_loop_cnt_ % dfb.local_dfb_interface_.num_txn_ids);
     }
-    dfb.ctiles_written_ = value;
+    dfb.ctiles_written_ = dfb.local_dfb_interface_.broadcast_tc
+                              ? value
+                              : static_cast<uint32_t>(value) * dfb.local_dfb_interface_.num_tcs_to_rr;
 }
 
 #endif  // defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)

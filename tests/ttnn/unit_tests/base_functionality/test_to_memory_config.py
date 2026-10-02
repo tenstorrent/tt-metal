@@ -2732,3 +2732,68 @@ def test_to_memory_config_tile_interleaved_l1_dram(device, src_buffer, dst_buffe
     assert output_tensor.memory_config().buffer_type == dst_buffer
     output_torch = ttnn.to_torch(output_tensor)
     assert_equal(torch_input, output_torch)
+
+
+def test_to_memory_config_interleaved_to_sharded_with_resident_l1(device):
+    """Regression #54621: ``can_use_interleaved_to_sharded`` must budget the fast-path CB
+    against live free L1, not the whole of L1. Asserts only on the result, so a regression
+    back to whole-of-L1 budgeting compiles fine but crashes here at dispatch.
+    """
+    torch.manual_seed(0)
+
+    TILE_BYTES = 2048  # bfloat16 tile
+
+    def create_dram_interleaved_tensor(l1_pressure_bytes):
+        """DRAM-interleaved bfloat16 input tensor and matching DRAM WIDTH_SHARDED output config.
+
+        Sized so ``can_use_interleaved_to_sharded``'s ``dst_is_dram`` branch would size the
+        fast-path CB to ``l1_pressure_bytes`` per core.
+        """
+        tiles_per_bank = l1_pressure_bytes // TILE_BYTES
+        num_dram_banks = device.dram_grid_size().x
+        torch_input = torch.randn([1, 1, 32 * tiles_per_bank, 32 * num_dram_banks], dtype=torch.bfloat16)
+        input_tensor = ttnn.from_torch(
+            torch_input,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        shard_spec = ttnn.ShardSpec(
+            make_full_dram_core_range_set(device),
+            (32 * tiles_per_bank, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+        return torch_input, input_tensor, output_mem_config
+
+    def allocate_l1_blocker(l1_pressure_bytes):
+        """Interleaved-L1 bfloat16 tensor that occupies ``l1_pressure_bytes`` bytes per L1 bank."""
+        tiles_per_bank = l1_pressure_bytes // TILE_BYTES
+        l1_num_banks = ttnn.get_memory_view(device, ttnn.BufferType.L1).num_banks
+        return ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, 32 * tiles_per_bank, 32 * l1_num_banks]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            device,
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+        )
+
+    # Scale both sides off actual free L1 (b): blocker = 0.75 * b per bank -> ~0.25 * b
+    # free per bank; fast-path CB = 0.75 * b per core.
+    free_l1_per_bank = ttnn.get_memory_view(device, ttnn.BufferType.L1).largest_contiguous_bytes_free_per_bank
+    l1_pressure_bytes = int(free_l1_per_bank * 0.75)
+
+    torch_input, input_tensor, output_mem_config = create_dram_interleaved_tensor(l1_pressure_bytes)
+    resident = allocate_l1_blocker(l1_pressure_bytes)
+    try:
+        free_after = ttnn.get_memory_view(device, ttnn.BufferType.L1).largest_contiguous_bytes_free_per_bank
+        assert free_after < l1_pressure_bytes, (
+            f"testing to_memory_config regression: blocker left {free_after} B free per L1 bank; "
+            f"regression needs < {l1_pressure_bytes} B"
+        )
+
+        output_tensor = ttnn.to_memory_config(input_tensor, memory_config=output_mem_config)
+        assert_equal(torch_input, ttnn.to_torch(output_tensor))
+    finally:
+        ttnn.deallocate(resident)

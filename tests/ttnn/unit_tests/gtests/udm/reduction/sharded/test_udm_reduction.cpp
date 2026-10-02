@@ -387,7 +387,7 @@ void validate(const ttnn::Tensor& input_tensor, const ttnn::Tensor& output_tenso
         float expected_f = expected_sum;
         float diff = std::abs(actual_f - expected_f);
         if (row < 16 || diff > 0.1f * std::abs(expected_f)) {
-            log_info(
+            log_debug(
                 tt::LogTest, "  Row {}: expected={:.2f}, actual={:.2f}, diff={:.2f}", row, expected_f, actual_f, diff);
         }
     }

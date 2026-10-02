@@ -49,14 +49,14 @@ CoreRangeSet cores_to_corerangeset(const std::vector<CoreCoord>& cores) {
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores_fuse(
     size_t num_links,
     size_t num_workers_per_link,
-    IDevice* device,
+    const MeshDevice& device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const std::optional<CoreRangeSet>& reserved_core_range = std::nullopt) {
     CoreRangeSet sender_worker_core_range;
     const size_t num_workers_preferred = num_workers_per_link * num_links;
-    auto available_cores = device->worker_cores(
+    auto available_cores = device.worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
-        sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+        sub_device_id.has_value() ? *sub_device_id : device.get_sub_device_ids().at(0));
     if (reserved_core_range.has_value()) {
         available_cores = available_cores.subtract(*reserved_core_range);
     }
@@ -328,7 +328,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
     const auto [sender_worker_core_range, sender_worker_cores] = choose_worker_cores_fuse(
         operation_attributes.num_links,
         num_workers_per_link,
-        mesh_device,
+        *mesh_device,
         operation_attributes.sub_device_id,
         reserved_cores);
 

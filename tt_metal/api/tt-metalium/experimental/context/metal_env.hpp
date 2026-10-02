@@ -4,12 +4,15 @@
 
 #pragma once
 
+#include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
+#include <string>
+#include <vector>
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
 
 namespace tt::tt_metal {
@@ -32,7 +35,7 @@ struct FabricConfigDescriptor {
 // The default descriptor discovers and connects to the physical cluster present in the system.
 // A custom MetalEnvDescriptor can be supplied to target a mock/simulated cluster instead.
 //
-// Only one MetalEnv for the physical cluster may exist at a time  due to UMD limitations.
+// Only one MetalEnv for the physical cluster may exist at a time due to UMD limitations.
 class MetalEnvDescriptor {
 public:
     MetalEnvDescriptor() = default;
@@ -98,8 +101,8 @@ public:
     /// @return Required address alignment in bytes for L1 allocations of this environment.
     uint32_t get_l1_alignment() const;
 
-    /// @return Maximum number of circular buffers per core of this environment.
-    uint32_t get_arch_num_circular_buffers() const;
+    /// @return Maximum number of dataflow buffers per core of this environment.
+    uint32_t get_num_dataflow_buffers() const;
 
     /// @return Maximum usable L1 size in bytes when the ring-buffer size is 0 of this environment.
     uint32_t get_max_worker_l1_unreserved_size() const;
@@ -148,15 +151,11 @@ public:
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
-    // Create a SubDevice that uses this MetalEnv
-    SubDevice create_sub_device(ttsl::Span<const CoreRangeSet> cores);
-
 private:
     friend class MetalEnvAccessor;
     std::unique_ptr<MetalEnvImpl> impl_;
 
     MetalEnvImpl& impl() { return *impl_; }
-    MetalEnvDescriptor descriptor_;
 };
 
 }  // namespace tt::tt_metal

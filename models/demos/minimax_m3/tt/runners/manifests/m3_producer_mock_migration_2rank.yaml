@@ -27,7 +27,7 @@ workload:
   max_requests: 2                 # one resident request per slot
   interleave: round_robin
   check_pcc: true                 # this IS the gate: per-slot read-back vs golden
-  trace_dir: /data/philei/models/minimax-m3-prefill-cache/golden/longbook_10240
+  trace_dir: /mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill/golden/longbook_10240
 
 migration:
   issue: false

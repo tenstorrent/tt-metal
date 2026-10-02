@@ -25,11 +25,9 @@ void kernel_main() {
 
     DataflowBuffer dfb_y_obj(dfb::y);
     DataflowBuffer dfb_dy_obj(dfb::dy);
-    DataflowBuffer dfb_dx_obj(dfb::dx);
 
     DataflowBuffer dfb_ydy_obj(dfb::ydy);  // y * dy
     DataflowBuffer dfb_sum_obj(dfb::sum);
-    DataflowBuffer dfb_dy_m_sum_obj(dfb::dy_m_sum);
 
     compute_kernel_hw_startup(dfb::y, dfb::scaler, dfb::dx);
 
@@ -43,13 +41,13 @@ void kernel_main() {
 
         for (uint32_t w = 0; w < Wt; w += onetile) {
             // exp(y)
-            auto& dfb_exp_obj = dfb_ydy_obj;  // the y * dy buffer, reused to hold exp(y)
-            exp_tile_to_cb(dfb_y_obj, dfb_exp_obj, 0);
+            constexpr auto dfb_exp_id = dfb::ydy;  // the y * dy buffer, reused to hold exp(y)
+            exp_tile_to_dfb<dfb::y, dfb_exp_id>(0);
             // sum * exp(y)
-            mul_tiles_bcast_cols_to_cb(dfb_exp_obj, dfb_sum_obj, dfb_dy_m_sum_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            mul_tiles_bcast_cols_to_dfb<dfb_exp_id, dfb::sum, dfb::dy_m_sum>(0, 0, /*pop0=*/1, /*pop1=*/0);
 
             // dy - sum * exp(y)
-            sub_tiles_to_cb(dfb_dy_obj, dfb_dy_m_sum_obj, dfb_dx_obj);
+            sub_tiles_to_dfb<dfb::dy, dfb::dy_m_sum, dfb::dx>();
         }
 
         dfb_sum_obj.pop_front(onetile);
@@ -90,14 +88,14 @@ void kernel_main() {
         // step 3, compute final result
         for (uint32_t w = 0; w < Wt; w += onetile) {
             // dy - sum
-            sub_tiles_bcast_cols_to_cb(dfb_dy_obj, dfb_sum_obj, dfb_dy_m_sum_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            sub_tiles_bcast_cols_to_dfb<dfb::dy, dfb::sum, dfb::dy_m_sum>(0, 0, /*pop0=*/1, /*pop1=*/0);
 
 #ifdef SOFTMAX
             // (dy - sum) * y
-            mul_tiles_to_cb(dfb_y_obj, dfb_dy_m_sum_obj, dfb_dx_obj);
+            mul_tiles_to_dfb<dfb::y, dfb::dy_m_sum, dfb::dx>();
 #else
             // -(dy - sum) * y
-            mul_tiles_and_negative_to_cb(dfb_y_obj, dfb_dy_m_sum_obj, dfb_dx_obj);
+            mul_tiles_and_negative_to_dfb<dfb::y, dfb::dy_m_sum, dfb::dx>();
 #endif
         }
 

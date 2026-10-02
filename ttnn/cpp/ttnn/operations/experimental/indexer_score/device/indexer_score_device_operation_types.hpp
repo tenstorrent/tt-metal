@@ -71,7 +71,7 @@ struct operation_attributes_t {
     // the optional TP axis (only alongside an SP axis + block_cyclic) adds a Sq-row sub-offset so each device
     // owns [tp_rank*Sq, (tp_rank+1)*Sq) of its SP chip's chunk_local slab. Read via sp_axis()/tp_axis().
     // Hashed via those accessors (it shapes the causal geometry, so distinct shardings get distinct programs).
-    std::vector<uint32_t> seq_shard_axes{};
+    std::vector<uint32_t> seq_shard_axes;
     std::optional<uint32_t> sp_axis() const {
         return seq_shard_axes.empty() ? std::nullopt : std::optional<uint32_t>(seq_shard_axes.front());
     }
@@ -145,6 +145,8 @@ struct tensor_args_t {
     // derives kv_len from this value so the causal position and valid prefix remain consistent.
     std::optional<Tensor> chunk_start_idx_tensor{std::nullopt};
     bool has_chunk_start_metadata() const { return chunk_start_idx_tensor.has_value(); }
+    std::optional<Tensor> valid_end_tensor{std::nullopt};
+    bool has_valid_end_metadata() const { return valid_end_tensor.has_value(); }
     // TRACE-SAFE cache-slot select (fused indexed mode). `cache_batch_idx` is a host runtime arg that
     // selects which (user, layer) slot of the persistent index-K cache this dispatch reads. A trace REPLAY
     // never re-runs that patch, so a captured program keeps reading the slot that was live at capture time

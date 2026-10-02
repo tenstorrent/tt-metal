@@ -14,13 +14,12 @@ tile. The sender may sit inside the rectangle or outside it.
 The point of the op is the mcast plumbing: one McastFamily.attach() call writes the semaphores,
 bindings, named CT args and per-core varargs into the spec, and the kernel reads them back with
 MCAST_ARGS(row). Neither side spells a CT or RT offset -- and the SAME reader kernel serves both
-topologies unchanged, because the wire (four named CT words + a 4-word vararg block) is identical.
+topologies using the metadata and per-core roles emitted by native attachment.
 """
 
 from pathlib import Path
 
 import ttnn
-from ttnn.mcast_spec import McastFamily
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 TILE = 32
@@ -63,12 +62,11 @@ def create_program_artifacts(inp: ttnn.Tensor, rows: int, cols: int):
     tile_bytes = inp.buffer_page_size()
     cores = [ttnn.CoreCoord(x, y) for y in range(rows) for x in range(cols)]
 
-    mcast = McastFamily(
+    mcast = ttnn.Mcast1D(
         device,
         grid,
-        MCAST_PREFIX,
-        shape=ttnn.Mcast1DShape.PerRow,
-        sender_index=0,
+        ttnn.Mcast1DShape.PerRow,
+        ttnn.Mcast1DFixedSenderConfig(starting_sender_index=0),
         config=ttnn.McastConfig(noc=ttnn.NOC.NOC_0),
     )
 
@@ -81,7 +79,7 @@ def create_program_artifacts(inp: ttnn.Tensor, rows: int, cols: int):
                 hw_config=ttnn.create_reader_dm_config(),
                 dfb_bindings=[ttnn.producer_of(DFB_TILE, DFB_TILE)],
                 tensor_bindings=[ttnn.TensorBinding(TP_IN, TP_IN)],
-                runtime_arg_schema=ttnn.RuntimeArgSchema(runtime_arg_names=["row_page", "is_sender"]),
+                runtime_arg_schema=ttnn.RuntimeArgSchema(runtime_arg_names=["row_page"]),
             ),
             ttnn.KernelSpec(
                 unique_id=K_WRITER,
@@ -108,7 +106,6 @@ def create_program_artifacts(inp: ttnn.Tensor, rows: int, cols: int):
                 kernel=K_READER,
                 runtime_arg_values={
                     "row_page": {c: c.y for c in cores},
-                    "is_sender": {c: int(mcast.is_sender(c)) for c in cores},
                 },
             ),
             ttnn.KernelRunArgs(
@@ -118,7 +115,7 @@ def create_program_artifacts(inp: ttnn.Tensor, rows: int, cols: int):
         ]
     )
 
-    mcast.attach(spec, run_args, kernels=[K_READER], cores=cores)
+    mcast.attach(spec, run_args, MCAST_PREFIX, kernels=[K_READER])
 
     # io_tensors is [inp, out].
     return out, spec, run_args, {TP_IN: 0, TP_OUT: 1}
@@ -129,7 +126,7 @@ def create_2d_program_artifacts(inp: ttnn.Tensor, rows: int, cols: int, sender=N
 
     `inp` is (1, 1, 32, 32). `sender` is the one broadcasting core, inside the rectangle or outside
     it; it defaults to the rectangle's origin. Returns (1, 1, 32, 32 * n) holding one copy of the
-    tile per participating core, in the enumeration order of `McastFamily.nodes` -- a flat mapping
+    tile per participating core, in the enumeration order of `McastFamily.participating_cores()` -- a flat mapping
     rather than a grid-shaped one so that a sender outside the rectangle needs no special case.
     """
     if inp.layout != ttnn.TILE_LAYOUT or inp.dtype != ttnn.bfloat16:
@@ -146,10 +143,12 @@ def create_2d_program_artifacts(inp: ttnn.Tensor, rows: int, cols: int, sender=N
 
     # The kernel spells MCAST_ARGS(row), so the prefix stays "row" for the 2D family too: the macro
     # names a family, not a topology.
-    mcast = McastFamily(device, rect, MCAST_PREFIX, sender=sender, config=ttnn.McastConfig(noc=ttnn.NOC.NOC_0))
+    mcast = ttnn.McastFamily(device, ttnn.McastConfig(noc=ttnn.NOC.NOC_0))
+    mcast.add_group(rect, [sender])
+    mcast.prepare_arguments()
     # nodes is the rectangle plus the sender when the sender sits outside it; every one of those
     # cores runs the program, so it is both the work unit and the output page map.
-    cores = list(ttnn.corerange_to_cores(mcast.nodes, None, True))
+    cores = list(ttnn.corerange_to_cores(mcast.participating_cores(), None, True))
 
     out_spec = ttnn.TensorSpec(
         ttnn.Shape([1, 1, TILE, TILE * len(cores)]),
@@ -169,7 +168,7 @@ def create_2d_program_artifacts(inp: ttnn.Tensor, rows: int, cols: int, sender=N
                 hw_config=ttnn.create_reader_dm_config(),
                 dfb_bindings=[ttnn.producer_of(DFB_TILE, DFB_TILE)],
                 tensor_bindings=[ttnn.TensorBinding(TP_IN, TP_IN)],
-                runtime_arg_schema=ttnn.RuntimeArgSchema(runtime_arg_names=["row_page", "is_sender"]),
+                runtime_arg_schema=ttnn.RuntimeArgSchema(runtime_arg_names=["row_page"]),
             ),
             ttnn.KernelSpec(
                 unique_id=K_WRITER,
@@ -187,7 +186,9 @@ def create_2d_program_artifacts(inp: ttnn.Tensor, rows: int, cols: int, sender=N
             ttnn.TensorParameter(unique_id=TP_IN, spec=inp.spec),
             ttnn.TensorParameter(unique_id=TP_OUT, spec=out.spec),
         ],
-        work_units=[ttnn.WorkUnitSpec(name="main", kernels=[K_READER, K_WRITER], target_nodes=mcast.nodes)],
+        work_units=[
+            ttnn.WorkUnitSpec(name="main", kernels=[K_READER, K_WRITER], target_nodes=mcast.participating_cores())
+        ],
     )
 
     run_args = ttnn.ProgramRunArgs(
@@ -196,7 +197,6 @@ def create_2d_program_artifacts(inp: ttnn.Tensor, rows: int, cols: int, sender=N
                 kernel=K_READER,
                 runtime_arg_values={
                     "row_page": {c: 0 for c in cores},
-                    "is_sender": {c: int(mcast.is_sender(c)) for c in cores},
                 },
             ),
             ttnn.KernelRunArgs(
@@ -206,7 +206,7 @@ def create_2d_program_artifacts(inp: ttnn.Tensor, rows: int, cols: int, sender=N
         ]
     )
 
-    mcast.attach(spec, run_args, kernels=[K_READER], cores=cores)
+    mcast.attach(spec, run_args, MCAST_PREFIX, kernels=[K_READER])
 
     # io_tensors is [inp, out].
     return out, spec, run_args, {TP_IN: 0, TP_OUT: 1}

@@ -872,14 +872,13 @@ tt::tt_metal::ShardSpec adjust_to_shape(
     uint32_t from_volume_except_width = 1;
     uint32_t to_volume_except_width = 1;
 
-    const int rank = std::max(from_shape.rank(), to_shape.rank());
-
-    // Accumulate all dimensions except the last
-    for (int i = 0; i < rank - 1; ++i) {
-        uint32_t from_dim = (i < from_shape.rank()) ? from_shape[i] : 1;
-        uint32_t to_dim = (i < to_shape.rank()) ? to_shape[i] : 1;
-        from_volume_except_width *= from_dim;
-        to_volume_except_width *= to_dim;
+    // Each shape over its own rank: the two can differ in rank, and a shared left-aligned loop would
+    // fold the shorter shape's width into its height volume.
+    for (int i = 0; i < static_cast<int>(from_shape.rank()) - 1; ++i) {
+        from_volume_except_width *= from_shape[i];
+    }
+    for (int i = 0; i < static_cast<int>(to_shape.rank()) - 1; ++i) {
+        to_volume_except_width *= to_shape[i];
     }
 
     // Get width dimensions

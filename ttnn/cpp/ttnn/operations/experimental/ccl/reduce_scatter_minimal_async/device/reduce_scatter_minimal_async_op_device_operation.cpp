@@ -533,7 +533,9 @@ std::vector<Tensor> reduce_scatter_minimal_async(
         chunks_per_sync,
         num_workers_per_link,
         num_buffers_per_channel,
-        compute_kernel_config};
+        compute_kernel_config,
+        input_tensor.device()->shape(),
+        input_tensor.device()->get_view().get_fabric_node_ids()};
     auto tensor_args = OperationType::tensor_args_t{
         input_tensor, optional_intermediate_tensor, optional_output_tensor, optional_penult_intermediate_tensor};
 

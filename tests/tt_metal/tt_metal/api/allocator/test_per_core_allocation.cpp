@@ -8,6 +8,7 @@
 #include "impl/buffers/buffer_impl.hpp"
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <numeric>
 #include <optional>
 #include <string>
@@ -17,8 +18,13 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "tests/tt_metal/tt_metal/api/allocator/hybrid_allocator_fixture.hpp"
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
@@ -35,39 +41,11 @@ namespace tt::tt_metal {
 
 namespace per_core = experimental::per_core_allocation;
 
-class PerCoreAllocationTest : public MeshDeviceSingleCardBufferFixture {
-protected:
-    void SetUp() override {
-        // Enable HYBRID allocator mode before device creation.
-        setenv("TT_METAL_ALLOCATOR_MODE_HYBRID", "1", /*overwrite=*/1);
+// The fixture is shared with test_range_lockstep_allocation.cpp; the name is kept so the
+// existing test ids do not move.
+using PerCoreAllocationTest = HybridAllocatorTest;
 
-        if (!this->validate_dispatch_mode()) {
-            GTEST_SKIP();
-        }
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        std::vector<ChipId> ids;
-        for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
-            ids.push_back(id);
-        }
-        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
-        id_to_device_ = distributed::MeshDevice::create_unit_meshes(
-            ids, l1_small_size_, trace_region_size_, 1, dispatch_core_config, {}, DEFAULT_WORKER_L1_SIZE);
-        devices_.clear();
-        for (const auto& [device_id, device] : id_to_device_) {
-            devices_.push_back(device);
-        }
-        init_max_cbs();
-    }
-
-    void TearDown() override {
-        MeshDeviceSingleCardBufferFixture::TearDown();
-        unsetenv("TT_METAL_ALLOCATOR_MODE_HYBRID");
-    }
-};
-
-// Use 1024-byte page size to be safely above all alignment requirements
-// (FreeListOpt internally uses DRAM alignment which may be larger than L1 alignment)
-static constexpr DeviceAddr PAGE_SIZE = 1024;
+static constexpr DeviceAddr PAGE_SIZE = HYBRID_TEST_PAGE_SIZE;
 
 TEST_F(PerCoreAllocationTest, BasicPerCoreAllocation) {
     auto* device = this->devices_[0]->get_devices()[0];
@@ -140,16 +118,20 @@ TEST_F(PerCoreAllocationTest, PerCoreAndLockstepCoexist) {
 }
 
 TEST_F(PerCoreAllocationTest, PerCoreSkipsPersistentL1OnSameCore) {
-    if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "PrefetcherPipe is not supported on Quasar yet";
-    }
     ASSERT_GE(this->devices_[0]->compute_with_storage_grid_size().x, 2);
 
     auto* mesh_device = this->devices_[0].get();
     const CoreCoord sender(0, 0);
     const CoreCoord receiver(1, 0);
-    auto pipe = experimental::CreatePrefetcherPipe(
-        mesh_device, sender, CoreRangeSet(CoreRange(receiver)), /*ring_size=*/1024);
+    auto space = experimental::CreatePrefetcherPipeSpace(
+        *mesh_device,
+        experimental::PrefetcherPipeSpaceConfig{
+            .sender_cores = CoreRangeSet(CoreRange(sender)),
+            .receiver_domain = CoreRangeSet(CoreRange(receiver)),
+            .ring_size = 1024,
+            .max_receivers_per_pipe = 1,
+        });
+    auto pipe = space.create_pipe(sender, CoreRangeSet(CoreRange(receiver)));
 
     const CoreRangeSet pipe_cores = CoreRangeSet(CoreRange(sender, receiver));
     ShardSpecBuffer shard_spec(pipe_cores, {32, 32}, ShardOrientation::ROW_MAJOR, {32, 32}, {2, 1});
@@ -237,7 +219,6 @@ std::pair<distributed::MeshSocket, distributed::MeshSocket> make_per_core_socket
 
 TEST_F(PerCoreAllocationTest, PerCoreSocketDataBufferPlacement) {
     auto md = this->devices_[0];
-    auto* device = md->get_devices()[0];
 
     const CoreCoord sender_core(0, 0);
     const CoreCoord receiver_core(0, 1);
@@ -251,7 +232,7 @@ TEST_F(PerCoreAllocationTest, PerCoreSocketDataBufferPlacement) {
     // The FIFO occupies L1 only on the receiver core, at a valid per-core address.
     auto pc_addr = per_core::get_per_core_address(*data_buffer, distributed::MeshCoordinate(0, 0), receiver_core);
     EXPECT_GT(pc_addr, 0u) << "Receiver per-core address should be above the L1 base";
-    EXPECT_LT(pc_addr, device->l1_size_per_core()) << "Receiver per-core address exceeds L1 size";
+    EXPECT_LT(pc_addr, md->l1_size_per_core()) << "Receiver per-core address exceeds L1 size";
 
     // A per-core buffer has no single lockstep address.
     EXPECT_EQ(data_buffer->address(), 0u);
@@ -364,7 +345,6 @@ TEST_F(PerCoreAllocationTest, H2DSocketPerCoreFifoBaseIsAPerCoreAddress) {
     if (auto reason = per_core_h2d_skip_reason(md)) {
         GTEST_SKIP() << *reason;
     }
-    auto* device = md->get_devices()[0];
 
     const uint32_t fifo_size = 4 * h2d_host_alignment();
     const distributed::MeshCoreCoord recv_core(distributed::MeshCoordinate(0, 0), CoreCoord(0, 1));
@@ -373,7 +353,7 @@ TEST_F(PerCoreAllocationTest, H2DSocketPerCoreFifoBaseIsAPerCoreAddress) {
     const auto desc = socket.populate_descriptor();
     EXPECT_GT(desc.aligned_data_buf_start, 0u)
         << "FIFO base is 0 — a per-core buffer has no lockstep address(), so the host would push to the L1 base";
-    EXPECT_LT(desc.aligned_data_buf_start, device->l1_size_per_core()) << "FIFO base exceeds L1 size";
+    EXPECT_LT(desc.aligned_data_buf_start, md->l1_size_per_core()) << "FIFO base exceeds L1 size";
     EXPECT_EQ(desc.aligned_data_buf_start % h2d_host_alignment(), 0u) << "FIFO base must stay PCIe-aligned";
     EXPECT_EQ(desc.fifo_size, fifo_size);
 }

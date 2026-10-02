@@ -18,7 +18,7 @@ def _extract_dtype_from_state_dict(model):
         state_dict = model.state_dict()
         for key, param in state_dict.items():
             if "weight" in key:
-                print(f"get_ref_model_dype: key={key}, dtype={param.dtype}")
+                logger.debug(f"get_ref_model_dype: key={key}, dtype={param.dtype}")
                 return param.dtype
     except Exception as e:
         pass

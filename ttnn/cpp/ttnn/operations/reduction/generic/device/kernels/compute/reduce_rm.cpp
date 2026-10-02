@@ -30,6 +30,7 @@
 
 #ifdef REDUCE_POST_MUL
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_compute_common.hpp"
 #endif
 
 namespace {
@@ -41,9 +42,12 @@ FORCE_INLINE void reduce_chunk() {
     compute_kernel_lib::reduce<Call>(
 #ifdef REDUCE_POST_MUL
         [](uint32_t dst_idx) {
-            constexpr auto bits = get_arg(args::post_mul_scaler_bits);
+            const auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
+            if (post_mul_scaler_bits == k_identity_scaler_bits) {
+                return;
+            }
             binop_with_scalar_tile_init();
-            mul_unary_tile(dst_idx, bits);
+            mul_unary_tile(dst_idx, post_mul_scaler_bits);
         }
 #else
         compute_kernel_lib::NoOp{}
