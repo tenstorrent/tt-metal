@@ -11,7 +11,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/triangle_solve.h"
 #include "api/dataflow/circular_buffer.h"
-#ifdef TRISC_MATH
+#if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "internal/tt-1xx/risc_common.h"
 #endif
 #include "../../../../../ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp"
@@ -34,7 +34,8 @@
 //              unpack published, 11 probe MOVD2B of one face over the unpacker's SrcB, 12 probe MOVD2B of X then
 //              MOVD2A of one face of I over the unpacker's SrcA, 13 probe the chain's own face product (addr mods,
 //              fidelity phases, dest immediates) on X faces x I16, 14/15 the fused Horner / HornerR dataflow through
-//              LLK matmul rounds (anchor; inputs carry the quadrants, three output tiles), 16 fused FPU HornerR
+//              LLK matmul rounds (anchor; inputs carry the quadrants, three output tiles), 16 fused FPU HornerR,
+//              17 fused FPU HornerR with the chain issued by the PACK thread after tile_regs_wait (feasibility)
 //   1 NUM_IN   negN tiles consumed
 //   2 REPS     repetitions per tile
 //   3 STALL    1: STALLWAIT(MATH) between the fused chain's stages
@@ -70,6 +71,18 @@ using gdn_tinv_fpu::Form;
 using gdn_tinv_fpu::NSrc;
 constexpr NSrc kNSrc = NSRC == 0 ? NSrc::Unpack : NSrc::Dst;
 
+#ifdef TRISC_PACK
+volatile tt_l1_ptr uint32_t* g_pstats = nullptr;  // PACK timestamps, 4 KB above the MATH records
+uint32_t g_prec = 0;
+inline void precord(uint32_t t0, uint32_t t1, uint32_t t2) {
+    g_pstats[1 + 4 * g_prec + 0] = t0;
+    g_pstats[1 + 4 * g_prec + 1] = t1;
+    g_pstats[1 + 4 * g_prec + 2] = t2;
+    g_pstats[1 + 4 * g_prec + 3] = t2;
+    g_prec++;
+    g_pstats[0] = g_prec;
+}
+#endif
 #ifdef TRISC_MATH
 volatile tt_l1_ptr uint32_t* g_stats = nullptr;
 uint32_t g_rec = 0;
@@ -215,6 +228,53 @@ inline void llk_rounds_variant() {
     cb_pop_front(cb_D, 1);
 }
 
+// gdn_tinv_fpu::tinv with the chain issued by the PACK thread (NSrc::Dst): MATH copies I and negN and commits,
+// PACK runs the chain in the committed half, packs and releases.
+inline void fpu_pack_issued_variant() {
+    cb_reserve_back(cb_out, 1);
+    reconfig_data_format_srca(cb_eye);
+    pack_reconfig_data_format(cb_out);
+    copy_init(cb_eye);
+#ifdef TRISC_MATH
+    if constexpr (SPLIT) {
+        riscv_wait(2000);  // keep MATH's Src use clear of PACK's chain on the previous half
+    }
+#endif
+    tile_regs_acquire();
+    copy_tile(cb_eye, 0, gdn_tinv_fpu::kTout);
+    copy_tile(cb_n, 0, gdn_tinv_fpu::kTn);
+    UNPACK((llk_unpack_set_srcb_dummy_valid()));
+    tile_regs_commit();
+    tile_regs_wait();
+#ifdef TRISC_PACK
+    const uint32_t p0 = get_timestamp_32b();
+    if constexpr (VARIANT == 17) {
+        gdn_tinv_fpu::detail::chain<Form::HornerR, NSrc::Dst, STALL, FMT>();
+    } else {
+        // minimal: I (T0 face 0) -> SrcA/SrcB, I x I into T0 face 1 (zero), so the output shows where PACK's
+        // moves read and its MVMULs write
+        namespace gf = gdn_tinv_fpu;
+        TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, get_dest_buffer_base());
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+        gf::detail::set_common_mods();
+        gf::detail::src_format_enter<FMT>();
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
+        gf::detail::d2b<0, gf::row(gf::kTout, 0)>();
+        gf::detail::d2a<0, gf::row(gf::kTout, 0)>();
+        gf::detail::face_mm<gf::row(gf::kTout, 1)>();
+        TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+        gf::detail::src_format_leave<FMT>();
+    }
+    const uint32_t p1 = get_timestamp_32b();
+#endif
+    pack_tile(gdn_tinv_fpu::kTout, cb_out, 0);
+    tile_regs_release();
+    cb_push_back(cb_out, 1);
+#ifdef TRISC_PACK
+    precord(p0, p1, get_timestamp_32b());
+#endif
+}
+
 // X (c_0 front tile) through the FPU identity product, the X operand supplied by the path under test.
 inline void probe_variant() {
     cb_reserve_back(cb_out, 1);
@@ -304,6 +364,10 @@ void kernel_main() {
     g_stats = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(0));
     g_stats[0] = 0;
 #endif
+#ifdef TRISC_PACK
+    g_pstats = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(0) + 4096);
+    g_pstats[0] = 0;
+#endif
     compute_kernel_hw_startup(cb_n, cb_eye, cb_out);
     cb_wait_front(cb_eye, 1);
     cb_wait_front(cb_mask, 3);
@@ -340,6 +404,8 @@ void kernel_main() {
                 } else {
                     gdn_tinv_fpu::tinv<Form::HornerR, kNSrc, STALL, FMT>(cb_n, cb_eye, cb_out);
                 }
+            } else if constexpr (VARIANT == 17 || VARIANT == 18) {
+                fpu_pack_issued_variant();
             } else {
                 probe_variant();
             }

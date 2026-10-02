@@ -43,7 +43,7 @@ constexpr uint32_t kTn = 3;    // negN (faces 0, 2, 3)
 constexpr uint32_t row(uint32_t tile, uint32_t face, uint32_t r = 0) { return tile * 64 + face * 16 + r; }
 constexpr uint32_t kFmtDefault = 3;  // pin SrcA and SrcB to tf32 for the chain (detail::kFmtSrcA | kFmtSrcB)
 
-#ifdef TRISC_MATH
+#if defined(TRISC_MATH) || defined(TRISC_PACK)
 namespace detail {
 using namespace ckernel;
 
@@ -288,15 +288,18 @@ inline void src_format_leave() {
     }
     if constexpr (FMT & kFmtKeepZero) {
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
+#ifdef TRISC_MATH
         math::_invalidate_src_zero_flag_state_();
+#endif
     }
 }
 
 // Full MATH-side inverse: DST offset at the bank base, counters 0, banks returned at the end.
 template <Form F, NSrc S, bool STALL, uint32_t FMT = kFmtSrcA | kFmtSrcB>
 inline void chain() {
-    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(0);
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    // DST offset at this thread's current bank base, counters 0 (the per-thread MATH offset register and RWCs).
+    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, get_dest_buffer_base());
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
     src_format_enter<FMT>();
     if constexpr (F == Form::Square) {
         square_chain<S, STALL>();
@@ -307,7 +310,7 @@ inline void chain() {
     src_format_leave<FMT>();
 }
 }  // namespace detail
-#endif  // TRISC_MATH
+#endif  // TRISC_MATH || TRISC_PACK
 
 // T_inv = (I - negN)^-1 of one tile.
 //   negN   : fp32 CB whose front tile is -strictly_lower(N), front-waited by the caller.

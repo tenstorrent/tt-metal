@@ -70,6 +70,8 @@ enum class Variant : uint32_t {
     LlkRoundsHorner = 14,
     LlkRoundsHornerR = 15,
     FpuHornerR = 16,
+    FpuHornerRPack = 17,
+    ProbePackFaceMm = 18,
 };
 
 const char* variant_name(Variant v) {
@@ -91,6 +93,8 @@ const char* variant_name(Variant v) {
         case Variant::LlkRoundsHorner: return "llk_rounds_horner";
         case Variant::LlkRoundsHornerR: return "llk_rounds_hornerR";
         case Variant::FpuHornerR: return "fpu_hornerR";
+        case Variant::FpuHornerRPack: return "fpu_hornerR_pack";
+        case Variant::ProbePackFaceMm: return "probe_pack_face_mm";
     }
     return "?";
 }
@@ -120,7 +124,8 @@ struct RunConfig {
 
 struct RunResult {
     std::vector<std::vector<float>> tiles;  // row-major output tiles, num_in * reps
-    std::vector<uint32_t> stamps;           // 4 timestamps per repetition
+    std::vector<uint32_t> stamps;           // 4 timestamps per repetition (MATH)
+    std::vector<uint32_t> pack_stamps;      // 4 timestamps per repetition (PACK, variant 17)
 };
 
 // --- stimulus ----------------------------------------------------------------------------------------------
@@ -462,8 +467,13 @@ RunResult run(
     std::vector<uint32_t> stats;
     detail::ReadFromDeviceL1(
         mesh_device->get_devices().at(0), core, static_cast<uint32_t>(stats_buffer->address()), kStatsBytes, stats);
-    const uint32_t n = std::min<uint32_t>(stats.empty() ? 0 : stats[0], (kStatsBytes / 4 - 1) / 4);
+    const uint32_t n = std::min<uint32_t>(stats.empty() ? 0 : stats[0], (kStatsBytes / 8 - 1) / 4);
     res.stamps.assign(stats.begin() + 1, stats.begin() + 1 + 4 * n);
+    const uint32_t pbase = 1024;  // the PACK records start 4 KB into the buffer
+    if (stats.size() > pbase) {
+        const uint32_t np = std::min<uint32_t>(stats[pbase], (kStatsBytes / 8 - 1) / 4);
+        res.pack_stamps.assign(stats.begin() + pbase + 1, stats.begin() + pbase + 1 + 4 * np);
+    }
     return res;
 }
 
@@ -695,6 +705,40 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixTinvFpuProbeMoves) {
     }
 }
 
+// PACK-thread issue: the identity moved into Src and one I x I face product into T0 face 1, all issued by the
+// PACK thread after tile_regs_wait. Expected face sums 16 / 16 / 0 / 16 (face 0 = I, face 1 = I x I).
+TEST_F(LLKBlackholeSingleCardFixture, TensixTinvFpuProbePackIssue) {
+    const auto negn = regime_tiles(Regime::Typical, 1, 1000);
+    for (const bool math_delay : {false, true}) {
+        const auto res =
+            run(this->devices_.at(0),
+                RunConfig{.variant = Variant::ProbePackFaceMm, .num_in = 1, .reps = 4, .nsrc = 1, .split = math_delay},
+                negn);
+        ASSERT_EQ(res.tiles.size(), 4u);
+        for (uint32_t t = 0; t < 4; ++t) {
+            double sums[4] = {0, 0, 0, 0};
+            uint32_t diag1 = 0;
+            for (uint32_t i = 0; i < kTileHW; ++i) {
+                const uint32_t r = i / kTileDim, cc = i % kTileDim;
+                sums[(r / 16) * 2 + cc / 16] += res.tiles[t][i];
+                if (r < 16 && cc == r + 16 && res.tiles[t][i] == 1.0f) {
+                    diag1++;
+                }
+            }
+            log_info(
+                tt::LogTest,
+                "TINV_PACKPROBE math_delay={} rep {}: face sums {:.1f} {:.1f} {:.1f} {:.1f}; face-1 diagonal ones {}",
+                math_delay,
+                t,
+                sums[0],
+                sums[1],
+                sums[2],
+                sums[3],
+                diag1);
+        }
+    }
+}
+
 // Fact (b), the discouraged form: a MATH-side SETDVALID instead of the unpacker's dummy-valid.
 TEST_F(LLKBlackholeSingleCardFixture, TensixTinvFpuProbeSetDvalid) {
     const auto x_tiles = regime_tiles(Regime::RandomFp32, 1, 201);
@@ -882,6 +926,9 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixTinvFpuTiming) {
         {"fpu_horner nsrc=dst", {.variant = Variant::FpuHorner, .reps = kReps, .nsrc = 1}},
         {"fpu_square nsrc=dst", {.variant = Variant::FpuSquare, .reps = kReps, .nsrc = 1}},
         {"fpu_hornerR nsrc=dst", {.variant = Variant::FpuHornerR, .reps = kReps, .nsrc = 1}},
+        {"fpu_hornerR PACK-issued", {.variant = Variant::FpuHornerRPack, .reps = kReps, .nsrc = 1}},
+        {"fpu_hornerR PACK-issued +mathdelay",
+         {.variant = Variant::FpuHornerRPack, .reps = kReps, .nsrc = 1, .split = true}},
         {"fpu_horner split", {.variant = Variant::FpuHorner, .reps = kReps, .split = true}},
         {"fpu_hornerR split", {.variant = Variant::FpuHornerR, .reps = kReps, .split = true}},
         {"fpu_square split", {.variant = Variant::FpuSquare, .reps = kReps, .split = true}},
@@ -891,27 +938,67 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixTinvFpuTiming) {
         SCOPED_TRACE(cs.label);
         const auto res = run(this->devices_.at(0), cs.cfg, negn);
         const uint32_t per_rep = cs.cfg.variant == Variant::LlkRoundsHorner ? 3 : 1;
+        // The PACK-issued chain without the MATH delay races MATH's next-repetition datacopies on the Matrix
+        // Unit's shared Src bank pointers: it is measured, not asserted.
+        const bool pack_race = cs.cfg.variant == Variant::FpuHornerRPack && !cs.cfg.split;
         if (per_rep == 1 && static_cast<uint32_t>(cs.cfg.variant) >= 2) {
-            auto it = first_tile.find(cs.cfg.variant);
+            // the PACK-issued chain is the same HornerR arithmetic
+            const Variant form = cs.cfg.variant == Variant::FpuHornerRPack ? Variant::FpuHornerR : cs.cfg.variant;
+            auto it = first_tile.find(form);
             if (it == first_tile.end()) {
-                first_tile[cs.cfg.variant] = res.tiles.at(0);
+                first_tile[form] = res.tiles.at(0);
             } else {
-                EXPECT_EQ(std::memcmp(it->second.data(), res.tiles.at(0).data(), kTileBytes), 0)
-                    << cs.label << " differs from the first run of its form";
+                const bool same = std::memcmp(it->second.data(), res.tiles.at(0).data(), kTileBytes) == 0;
+                EXPECT_TRUE(same || pack_race) << cs.label << " differs from the first run of its form";
+                if (!same) {
+                    uint32_t ndiff = 0, nzero = 0;
+                    for (uint32_t i = 0; i < kTileHW; ++i) {
+                        ndiff += it->second[i] != res.tiles[0][i];
+                        nzero += res.tiles[0][i] == 0.0f;
+                    }
+                    log_info(
+                        tt::LogTest,
+                        "TINV_DIFF {}: {} elements differ, {} zeros in the new tile",
+                        cs.label,
+                        ndiff,
+                        nzero);
+                    for (uint32_t r : {0u, 1u, 2u, 17u, 18u, 31u}) {
+                        std::string a, b;
+                        for (uint32_t c2 = 0; c2 < 8; ++c2) {
+                            a += fmt::format("{:>10.4g}", it->second[r * kTileDim + c2]);
+                            b += fmt::format("{:>10.4g}", res.tiles[0][r * kTileDim + c2]);
+                        }
+                        log_info(tt::LogTest, "TINV_DIFF r{:>2} ref:{}", r, a);
+                        log_info(tt::LogTest, "TINV_DIFF r{:>2} new:{}", r, b);
+                    }
+                }
             }
         }
         ASSERT_EQ(res.tiles.size(), kReps * per_rep);
         // every repetition reproduces the same tile(s)
-        for (uint32_t r = 1; r < kReps; ++r) {
+        for (uint32_t r = 1; r < kReps && !pack_race; ++r) {
             EXPECT_EQ(std::memcmp(res.tiles[0].data(), res.tiles[r * per_rep].data(), kTileBytes), 0) << "rep " << r;
         }
-        if (per_rep == 1) {
+        if (per_rep == 1 && !pack_race) {
             const Accuracy a = measure(negn[0], res.tiles[0]);
             EXPECT_TRUE(a.finite);
             EXPECT_LT(a.rel_max(), 1e-2);
         }
-        const Timing t = summarize(res, cs.cfg.split);
-        log_timing(cs.label, t, cs.cfg.split);
+        const bool math_split = cs.cfg.split && cs.cfg.variant != Variant::FpuHornerRPack;
+        const Timing t = summarize(res, math_split);
+        log_timing(cs.label, t, math_split);
+        if (!res.pack_stamps.empty()) {
+            RunResult pr;
+            pr.stamps = res.pack_stamps;
+            const Timing pt = summarize(pr, true);
+            log_info(
+                tt::LogTest,
+                "TINV_PACK   {:<34} chain={:>6.0f}  pack+release={:>6.0f} cyc (PACK medians, n={})",
+                cs.label,
+                pt.ph_setup,
+                pt.ph_chain,
+                pt.n);
+        }
     }
 }
 
