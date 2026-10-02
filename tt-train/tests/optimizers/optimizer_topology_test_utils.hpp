@@ -15,7 +15,6 @@
 #include <memory>
 #include <string>
 #include <tt-metalium/host_api.hpp>
-#include <umd/device/cluster.hpp>
 #include <variant>
 
 #include "autograd/auto_context.hpp"
@@ -101,14 +100,10 @@ void expect_step_keeps_topology(const Config& config, bool collapsed_1d_label) {
     }
 }
 
-inline bool check_board_is_n300() {
-    return tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0) == tt::BoardType::N300;
-}
-
-// Opens one (1, 2) mesh per test suite. An N300 opens it natively; any other board needs TT_MESH_GRAPH_DESC_PATH
-// naming a 1x2 mesh graph descriptor (on blackhole tt-train/configs/mgd/bh_galaxy_1_2_line_line.textproto, as the
-// Python tp_mesh fixture sets), since tt-train has no built-in default for two chips -- without one the suite is
-// skipped instead of failing in open_device.
+// Opens one (1, 2) mesh per test suite. Needs TT_MESH_GRAPH_DESC_PATH naming a 1x2 mesh graph descriptor (on
+// blackhole tt-train/configs/mgd/bh_galaxy_1_2_line_line.textproto, as the Python tp_mesh fixture sets), since
+// tt-train has no built-in default for two chips -- without one the suite is skipped instead of failing in
+// open_device.
 class MeshTopologyTest : public ::testing::Test {
 public:
     static void SetUpTestSuite() {
@@ -117,8 +112,8 @@ public:
             s_skip_reason = "a (1, 2) mesh needs at least two chips";
             return;
         }
-        if (!check_board_is_n300() && std::getenv("TT_MESH_GRAPH_DESC_PATH") == nullptr) {
-            s_skip_reason = "off an N300, set TT_MESH_GRAPH_DESC_PATH to a 1x2 mesh graph descriptor";
+        if (std::getenv("TT_MESH_GRAPH_DESC_PATH") == nullptr) {
+            s_skip_reason = "set TT_MESH_GRAPH_DESC_PATH to a 1x2 mesh graph descriptor";
             return;
         }
         ttnn_fixed::distributed::enable_fabric(2U);
