@@ -418,6 +418,7 @@ class CMakeBuild(build_ext):
 
 packages = find_packages(where="ttnn", exclude=["ttnn.examples", "ttnn.examples.*"])
 packages += find_packages("tools")
+packages.append("tt_host_layout")
 
 # Empty sources in order to force extension executions
 ttnn_lib_C = Extension("ttnn._ttnn", sources=[])
@@ -439,6 +440,7 @@ setup(
         "": "ttnn",
         "tracy": "tools/tracy",
         "triage": "tools/triage",
+        "tt_host_layout": "tt_host_layout",
     },
     ext_modules=ext_modules,
     cmdclass=dict(build_ext=CMakeBuild, editable_wheel=EditableWheel),

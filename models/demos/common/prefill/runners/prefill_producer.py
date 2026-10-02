@@ -33,6 +33,7 @@ from models.demos.common.prefill.runners.runner_utils import (
     num_mtp_tokens,
     resolve_trace_dir,
 )
+from tt_host_layout import decode_chunk
 
 
 def _apply_manifest_env(manifest_path: str) -> dict:
@@ -323,31 +324,16 @@ def _drain_layer_acks(ack_channel, expected: int, timeout_s: float = 600.0) -> i
     return drained
 
 
-def _decode_bfp8_chunk(raw: bytes, head_dim: int) -> torch.Tensor:
-    TILE = 32
-    n_tiles = head_dim // TILE
-    raw_u8 = np.frombuffer(raw, dtype=np.uint8).reshape(n_tiles, 1088)
-
-    exponents = raw_u8[:, :64].astype(np.int32).reshape(n_tiles, 4, 16)
-    mantissas = raw_u8[:, 64:].reshape(n_tiles, 4, 16, 16)
-    signs = (mantissas >> 7).astype(np.int32)
-    magnitude = (mantissas & 0x7F).astype(np.float32)
-    scale = np.exp2((exponents - 133).astype(np.float32))[..., None]
-    values = np.where(signs > 0, -(magnitude * scale), magnitude * scale)
-
-    by_face = values.reshape(n_tiles, 2, 2, 16, 16).transpose(0, 1, 3, 2, 4).reshape(n_tiles, TILE, TILE)
-    decoded = by_face.transpose(1, 0, 2).reshape(TILE, n_tiles * TILE)
+def _as_torch(decoded: np.ndarray) -> torch.Tensor:
     return torch.from_numpy(np.ascontiguousarray(decoded))
+
+
+def _decode_bfp8_chunk(raw: bytes, head_dim: int) -> torch.Tensor:
+    return _as_torch(decode_chunk(raw, dtype="bfp8", width=head_dim, storage="tile"))
 
 
 def _decode_bf16_chunk(raw: bytes, head_dim: int) -> torch.Tensor:
-    TILE = 32
-    n_tiles = head_dim // TILE
-    u16 = np.frombuffer(raw, dtype="<u2").reshape(n_tiles, 4, 16, 16)
-    f32 = (u16.astype(np.uint32) << 16).view(np.float32)
-    by_face = f32.reshape(n_tiles, 2, 2, 16, 16).transpose(0, 1, 3, 2, 4).reshape(n_tiles, TILE, TILE)
-    decoded = by_face.transpose(1, 0, 2).reshape(TILE, n_tiles * TILE)
-    return torch.from_numpy(np.ascontiguousarray(decoded))
+    return _as_torch(decode_chunk(raw, dtype="bf16", width=head_dim, storage="tile"))
 
 
 def _decode_row_major_chunk(raw: bytes, head_dim: int, dtype: torch.dtype) -> torch.Tensor:
