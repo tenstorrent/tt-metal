@@ -102,19 +102,37 @@ struct DispatchSNocCmdBufGuard {
     uint32_t saved_rd_targ_coord;
     uint32_t saved_wr_ctrl;
     uint32_t saved_wr_ret_coord;
+#ifdef ARCH_BLACKHOLE
+    // The dispatcher's 64 bit reads and writes program MID from the full address, and on Blackhole plain
+    // transactions do not reprogram it. A DRAM core's print buffer carries the DRAM L1 NOC offset in the high
+    // word, so without this the next kernel on this core inherits it.
+    uint32_t saved_rd_targ_mid;
+    uint32_t saved_wr_ret_mid;
+#endif
 
     DispatchSNocCmdBufGuard() {
         saved_rd_ctrl = NOC_CMD_BUF_READ_REG(NOC_INDEX, NCRISC_RD_CMD_BUF, NOC_CTRL);
         saved_rd_targ_coord = NOC_CMD_BUF_READ_REG(NOC_INDEX, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_COORDINATE);
         saved_wr_ctrl = NOC_CMD_BUF_READ_REG(NOC_INDEX, NCRISC_WR_CMD_BUF, NOC_CTRL);
         saved_wr_ret_coord = NOC_CMD_BUF_READ_REG(NOC_INDEX, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_COORDINATE);
+#ifdef ARCH_BLACKHOLE
+        saved_rd_targ_mid = NOC_CMD_BUF_READ_REG(NOC_INDEX, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID);
+        saved_wr_ret_mid = NOC_CMD_BUF_READ_REG(NOC_INDEX, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_MID);
+#endif
     }
 
     ~DispatchSNocCmdBufGuard() {
+        // The dispatcher's last transaction may still hold either buffer, and a busy initiator must not be written.
+        while (!noc_cmd_buf_ready(NOC_INDEX, NCRISC_RD_CMD_BUF));
+        while (!noc_cmd_buf_ready(NOC_INDEX, NCRISC_WR_CMD_BUF));
         NOC_CMD_BUF_WRITE_REG(NOC_INDEX, NCRISC_RD_CMD_BUF, NOC_CTRL, saved_rd_ctrl);
         NOC_CMD_BUF_WRITE_REG(NOC_INDEX, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_COORDINATE, saved_rd_targ_coord);
         NOC_CMD_BUF_WRITE_REG(NOC_INDEX, NCRISC_WR_CMD_BUF, NOC_CTRL, saved_wr_ctrl);
         NOC_CMD_BUF_WRITE_REG(NOC_INDEX, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_COORDINATE, saved_wr_ret_coord);
+#ifdef ARCH_BLACKHOLE
+        NOC_CMD_BUF_WRITE_REG(NOC_INDEX, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID, saved_rd_targ_mid);
+        NOC_CMD_BUF_WRITE_REG(NOC_INDEX, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_MID, saved_wr_ret_mid);
+#endif
     }
 
     DispatchSNocCmdBufGuard(const DispatchSNocCmdBufGuard&) = delete;
