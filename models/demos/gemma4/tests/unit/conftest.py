@@ -40,7 +40,6 @@ from models.demos.gemma4.tests.unit.dflash_contract_harness import (  # noqa: E4
 )
 
 _ENV_CLEARED = (
-    "GEMMA4_CONTRACT_ASYNC",
     "GEMMA4_DFLASH_MAX_SPEC_ISL",
     "GEMMA4_DFLASH_SERVE_BLOCK",
     "GEMMA4_DFLASH_WIDTH_SET",
@@ -276,7 +275,7 @@ def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,)):
 
     def decode(self, *args, page_tables_per_layer=None, **kwargs):
         model.events.append(("decode", kwargs["tokens"].reshape(-1).tolist(), kwargs["start_pos"].reshape(-1).tolist()))
-        model.reloads.append(bool(kwargs.get("reset_batch", False)))
+        model.reloads.append(bool(kwargs.get("reload_inputs", False)))
         assert model.results, "Supply a plain decode result before submitting the step"
         return model.results.pop(0)
 
