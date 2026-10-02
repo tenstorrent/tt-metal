@@ -58,6 +58,26 @@ def test_exact_block_floor_scales_full_group_for_262k_probe_only():
     assert hybrid_kv.exact_hybrid_kv_num_blocks(config) == 4508
 
 
+@pytest.mark.parametrize(
+    ("num_seqs", "max_model_len", "expected"),
+    [
+        # One sequence keeps the one-sequence reservation (137 per sliding group).
+        (1, 131072, 2048 + 3 * 137 + 1),
+        (1, 1048576, 16384 + 3 * 137 + 1),
+        # Two sequences: min(2 * 137, 2 * (ceil(511 / 64) + 2) + ceil(8192 / 64)) = min(274, 148).
+        (2, 1048576, 16384 + 3 * 148 + 1),
+        # 32 sequences: min(32 * 137, 32 * (ceil(511 / 64) + 2) + ceil(8192 / 64)) = min(4384, 448).
+        (32, 1048576, 16384 + 3 * 448 + 1),
+        (32, 131072, 2048 + 3 * 448 + 1),
+    ],
+)
+def test_block_floor_reserves_each_sequence_window_and_one_shared_chunk(num_seqs, max_model_len, expected):
+    config = _config(48)
+    config.scheduler_config.max_num_seqs = num_seqs
+    config.model_config.max_model_len = max_model_len
+    assert hybrid_kv.exact_hybrid_kv_num_blocks(config) == expected
+
+
 def test_worker_patch_raises_underallocated_plugin_heuristic_and_is_idempotent():
     worker = SimpleNamespace(
         get_num_available_blocks_tt=lambda _config, _num_devices=1: 2113,
@@ -128,7 +148,8 @@ def test_platform_patch_retains_pinned_plugin_policy_when_hybrid_is_off(monkeypa
         (lambda c: setattr(c.cache_config, "block_size", 32), "block_size=64"),
         (lambda c: setattr(c.scheduler_config, "enable_chunked_prefill", False), "scheduler chunked prefill"),
         (lambda c: setattr(c.scheduler_config, "max_num_batched_tokens", 4096), "max_num_batched_tokens=8192"),
-        (lambda c: setattr(c.scheduler_config, "max_num_seqs", 2), "max_num_seqs=1"),
+        (lambda c: setattr(c.scheduler_config, "max_num_seqs", 33), "1 <= max_num_seqs <= 32"),
+        (lambda c: setattr(c.scheduler_config, "max_num_seqs", 0), "1 <= max_num_seqs <= 32"),
         (lambda c: setattr(c.model_config.hf_config, "model_type", "other"), "Laguna-specific"),
         (lambda c: c.model_config.hf_config.layer_types.__setitem__(17, "full_attention"), "exact 40-layer"),
         (lambda c: setattr(c.model_config.hf_config, "sliding_window", 1024), "sliding_window=512"),

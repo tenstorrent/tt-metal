@@ -10,8 +10,8 @@ reserve enough shared block IDs even for an 8192-token scheduler chunk.
 
 This extension is active only when ``TT_LAGUNA_HYBRID_KV=1``. It temporarily
 admits ``model_type=laguna`` through the TT plugin's chunked-prefill policy,
-validates the exact cache-off/single-sequence/8192-token envelope, and raises the
-worker's block count to the exact full-plus-three-sliding requirement (including
+validates the cache-off/8192-token envelope (1..32 sequences), and raises the
+worker's block count to the full-plus-three-sliding requirement (including
 vLLM's globally reserved null block). No installed package is modified, and all
 other TT models retain the pinned plugin behavior.
 """
@@ -32,6 +32,7 @@ QUALIFIED_SCHEDULER_CHUNK = 8192
 QUALIFIED_SLIDING_WINDOW = 512
 QUALIFIED_NUM_LAYERS = (40, 48)  # Laguna-XS-2.1, Laguna-S-2.1
 QUALIFIED_SLIDING_GROUPS = 3
+MAX_NUM_SEQS = 32  # one decode tile of rows
 
 _PLATFORM_PATCH_MARKER = "_laguna_hybrid_kv_platform_patch"
 _WORKER_PATCH_MARKER = "_laguna_hybrid_kv_worker_patch"
@@ -75,8 +76,10 @@ def validate_hybrid_kv_vllm_config(vllm_config: Any) -> None:
             "Laguna hybrid KV requires max_num_batched_tokens="
             f"{QUALIFIED_SCHEDULER_CHUNK}, got {scheduler_config.max_num_batched_tokens}"
         )
-    if int(scheduler_config.max_num_seqs) != 1:
-        raise RuntimeError(f"Laguna hybrid KV requires max_num_seqs=1, got {scheduler_config.max_num_seqs}")
+    if not 1 <= int(scheduler_config.max_num_seqs) <= MAX_NUM_SEQS:
+        raise RuntimeError(
+            f"Laguna hybrid KV requires 1 <= max_num_seqs <= {MAX_NUM_SEQS}, got {scheduler_config.max_num_seqs}"
+        )
 
     text_config = _text_config(vllm_config)
     layer_types = tuple(getattr(text_config, "layer_types", ()) or ())
@@ -93,33 +96,39 @@ def validate_hybrid_kv_vllm_config(vllm_config: Any) -> None:
 
 
 def exact_hybrid_kv_num_blocks(vllm_config: Any) -> int:
-    """Exact vLLM-visible pool floor for one full and three sliding groups.
+    """vLLM-visible pool floor for one full and three sliding groups, for 1..32 sequences.
 
-    The four groups use disjoint IDs in one ``BlockPool``. At the largest
-    scheduler step, the full group retains the entire context. Each sliding
-    group can temporarily retain ``window - 1`` old tokens plus the fresh
-    scheduler chunk; ``SlidingWindowSpec`` adds one block for an unaligned
-    window boundary. Finally, vLLM removes block 0 from the free queue as its
-    global null block. At the qualified 131K context the result is therefore
-    2460: 2459 live block IDs plus that null block. The explicit 262K probe uses
-    the same formula and yields 4508; this sizing result alone is not a claim of
-    end-to-end 262K qualification.
+    The four groups use disjoint IDs in one ``BlockPool``. The full group retains every token of every
+    running sequence; vLLM's token budget for the whole pool is ``max_model_len`` (the adapter's
+    ``get_max_tokens_all_users``), so the full group needs ``ceil(max_model_len / block)`` IDs however
+    many sequences share it. Each sliding group retains, per sequence, ``window - 1`` old tokens plus that
+    sequence's freshly scheduled tokens, and ``SlidingWindowSpec`` adds one block for an unaligned window
+    boundary. The scheduled tokens of one step total at most ``max_num_batched_tokens`` across all
+    sequences, so with N sequences one sliding group needs at most
+    ``N * (ceil((window - 1) / block) + 2) + ceil(max_num_batched_tokens / block)`` IDs, and never more
+    than N times the one-sequence requirement. vLLM also removes block 0 from the free queue as its global
+    null block.
 
-    Do not add Laguna's prefill-padding block here. The adapter allocates that
-    private scratch row outside vLLM's ID space, so a vLLM-visible ``num_blocks``
-    of 2460 deliberately becomes a physical tensor first dimension of 2461.
+    One sequence at the qualified 131K context gives 2460 (2459 live IDs plus the null block), exactly as
+    before; at 1,048,576 it gives 16,796. 32 sequences at 1,048,576 give 17,729.
+
+    Do not add Laguna's prefill-padding block here. The adapter allocates that private scratch row outside
+    vLLM's ID space, so a vLLM-visible ``num_blocks`` of 2460 deliberately becomes a physical tensor first
+    dimension of 2461.
     """
 
     validate_hybrid_kv_vllm_config(vllm_config)
     block_size = int(vllm_config.cache_config.block_size)
     max_model_len = int(vllm_config.model_config.max_model_len)
     max_num_batched_tokens = int(vllm_config.scheduler_config.max_num_batched_tokens)
+    num_seqs = int(vllm_config.scheduler_config.max_num_seqs)
     full_blocks = ceil(max_model_len / block_size)
-    sliding_tokens = min(
-        QUALIFIED_SLIDING_WINDOW - 1 + max_num_batched_tokens,
-        max_model_len,
+    one_sequence_tokens = min(QUALIFIED_SLIDING_WINDOW - 1 + max_num_batched_tokens, max_model_len)
+    one_sequence_blocks = ceil(one_sequence_tokens / block_size) + 1
+    shared_chunk_bound = num_seqs * (ceil((QUALIFIED_SLIDING_WINDOW - 1) / block_size) + 2) + ceil(
+        max_num_batched_tokens / block_size
     )
-    sliding_blocks = ceil(sliding_tokens / block_size) + 1
+    sliding_blocks = min(num_seqs * one_sequence_blocks, shared_chunk_bound)
     null_blocks = 1
     return full_blocks + QUALIFIED_SLIDING_GROUPS * sliding_blocks + null_blocks
 

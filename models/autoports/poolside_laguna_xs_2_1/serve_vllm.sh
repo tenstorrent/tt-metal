@@ -152,7 +152,8 @@ case "$LAGUNA_PROFILE" in
     PROFILE_VISIBLE_DEVICES=0,1,2,3
     PROFILE_MESH_DEVICE=P150x4
     PROFILE_MAX_MODEL_LEN=131072
-    PROFILE_MAX_NUM_SEQS=8
+    PROFILE_MAX_NUM_SEQS=32  # one decode tile of rows; the KV pool (max_model_len tokens) is shared by all sequences
+    PROFILE_DEFAULT_NUM_SEQS=8
     PROFILE_FABRIC_CONFIG=FABRIC_1D_RING
     PROFILE_CCL_TOPOLOGY=ring
     PROFILE_CCL_NUM_LINKS=2
@@ -178,7 +179,7 @@ esac
 # A checkpoint sets its own limits: S's hybrid context (1048576) and S's lower uniform-KV cap (larger KV per token).
 if [ "$TT_LAGUNA_HYBRID_KV" -eq 1 ] && [ "$HYBRID_KV_DEFAULT" -eq 1 ] && [ -n "$MODEL_HYBRID_MAX_MODEL_LEN" ]; then
   PROFILE_MAX_MODEL_LEN=$MODEL_HYBRID_MAX_MODEL_LEN
-  PROFILE_MAX_NUM_SEQS=1  # hybrid KV is qualified with one sequence (see the hybrid checks below)
+  PROFILE_DEFAULT_NUM_SEQS=1  # served decode is padded to max_num_seqs; up to the profile limit on request
 elif [ -n "$MODEL_MAX_MODEL_LEN_CAP" ] && ((PROFILE_MAX_MODEL_LEN > MODEL_MAX_MODEL_LEN_CAP)); then
   PROFILE_MAX_MODEL_LEN=$MODEL_MAX_MODEL_LEN_CAP
 fi
@@ -268,7 +269,7 @@ else
   CONTEXT_STATUS=profile_qualified_limit
 fi
 
-MAX_NUM_SEQS="${LAGUNA_MAX_NUM_SEQS:-$PROFILE_MAX_NUM_SEQS}"
+MAX_NUM_SEQS="${LAGUNA_MAX_NUM_SEQS:-${PROFILE_DEFAULT_NUM_SEQS:-$PROFILE_MAX_NUM_SEQS}}"
 is_positive_integer "$MAX_NUM_SEQS" || die "LAGUNA_MAX_NUM_SEQS must be a positive integer"
 if ((10#$MAX_NUM_SEQS > PROFILE_MAX_NUM_SEQS)); then
   [ "$TT_LAGUNA_MULTI_SEQ_POOL" -eq 1 ] &&
@@ -606,8 +607,6 @@ if [ "$TT_LAGUNA_HYBRID_KV" -eq 1 ]; then
   esac
   [ "$TT_LAGUNA_PREFIX_CACHE" -eq 0 ] ||
     die "Laguna hybrid KV qualification requires TT_LAGUNA_PREFIX_CACHE=0"
-  [ "$MAX_NUM_SEQS" -eq 1 ] ||
-    die "Laguna hybrid KV qualification requires LAGUNA_MAX_NUM_SEQS=1"
   [ -z "${TT_LAGUNA_SPEC_DECODE:-}" ] ||
     die "Laguna hybrid KV qualification does not support TT_LAGUNA_SPEC_DECODE"
   [ "$TT_LAGUNA_STREAMING_PREFILL" -eq 1 ] ||

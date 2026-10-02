@@ -684,6 +684,20 @@ def test_xs_p150x4_is_unchanged_by_s_policies(tmp_path):
     assert "trace_region_size=1500000000\n" in result.stdout
 
 
+@pytest.mark.parametrize("hybrid", ("1", "0"))
+def test_s_p150x4_accepts_up_to_32_sequences_on_request(tmp_path, hybrid):
+    accepted = _config(tmp_path, HF_MODEL=S, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3",
+                       TT_LAGUNA_HYBRID_KV=hybrid, LAGUNA_MAX_NUM_SEQS="32")
+    assert accepted.returncode == 0, accepted.stderr
+    assert "max_num_seqs=32\n" in accepted.stdout
+    assert f"hybrid_kv={hybrid}\n" in accepted.stdout
+
+    rejected = _config(tmp_path, HF_MODEL=S, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3",
+                       TT_LAGUNA_HYBRID_KV=hybrid, LAGUNA_MAX_NUM_SEQS="33")
+    assert rejected.returncode == 2
+    assert "exceeds the p150x4 limit 32" in rejected.stderr
+
+
 @pytest.mark.parametrize(("profile", "devices"), (("p150", "0"), ("p150x2", "0,1")))
 def test_s_rejects_profiles_that_cannot_hold_it(tmp_path, profile, devices):
     result = _config(tmp_path, HF_MODEL=S, LAGUNA_PROFILE=profile, TT_VISIBLE_DEVICES=devices)
