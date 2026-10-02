@@ -14,6 +14,16 @@ from pathlib import Path
 from urllib.request import urlopen
 
 
+def sampling_kwargs(original, temperature=None):
+    """Copy the source policy; change only an explicitly requested temperature."""
+    if temperature is not None and not 0 <= temperature <= 2:
+        raise ValueError("temperature must be between zero and two")
+    copied = copy.deepcopy(original)
+    if temperature is not None:
+        copied["config"]["model"]["model_kwargs"]["temperature"] = temperature
+    return copied
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tti-root", type=Path, required=True)
@@ -23,6 +33,7 @@ def main():
     parser.add_argument("--task", required=True)
     parser.add_argument("--server", default="http://127.0.0.1:8000")
     parser.add_argument("--seconds", type=int, default=900)
+    parser.add_argument("--temperature", type=float, help="Explicit sampling-policy control; not a serving speedup")
     parser.add_argument("--repetition-detection", type=json.loads)
     parser.add_argument("--disable-thinking", action="store_true", help="Separate, explicit agent-policy experiment")
     parser.add_argument("--agent-system-template", type=Path, help="Explicit task-independent agent-policy control")
@@ -47,7 +58,7 @@ def main():
     from llm_module.agentic.harbor import HarborRunConfig, run
 
     saved = json.loads(args.source_config.read_text())
-    kwargs = copy.deepcopy(saved["agents"][0]["kwargs"])
+    kwargs = sampling_kwargs(saved["agents"][0]["kwargs"], args.temperature)
     if args.agent_system_template:
         kwargs["config"].setdefault("agent", {})["system_template"] = args.agent_system_template.read_text()
     if args.disable_thinking:
@@ -93,6 +104,7 @@ def main():
                 "task": args.task,
                 "agent_timeout_sec": args.seconds,
                 "request_seed_override": args.request_seed,
+                "temperature_override": args.temperature,
                 "disable_thinking": args.disable_thinking,
                 "normalize_submission_marker": args.normalize_submission_marker,
                 "repeated_tool_feedback": args.repeated_tool_feedback,

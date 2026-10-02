@@ -20,7 +20,27 @@ from probe_context_dedup import compact
 from probe_loop_recovery import wall_deadline
 from probe_native_eval_action import request_messages
 from replay_eval_requests import post
+from run_local_eval_probe import sampling_kwargs
 from summarize_swe_suite import completed_response_counters, counter_delta
+
+
+class DiagnosticSamplingTests(unittest.TestCase):
+    def test_default_does_not_change_or_alias_source_policy(self):
+        original = {"config": {"model": {"model_kwargs": {"temperature": 1, "max_tokens": 32768}}}}
+        candidate = sampling_kwargs(original)
+        self.assertEqual(candidate, original)
+        candidate["config"]["model"]["model_kwargs"]["max_tokens"] = 1
+        self.assertEqual(original["config"]["model"]["model_kwargs"]["max_tokens"], 32768)
+
+    def test_explicit_greedy_control_changes_only_temperature(self):
+        model = {"temperature": 1, "top_p": 0.95, "max_tokens": 32768, "extra_body": {"top_k": 20}}
+        original = {"config": {"model": {"model_kwargs": model}}}
+        actual = sampling_kwargs(original, 0)["config"]["model"]["model_kwargs"]
+        self.assertEqual(actual, {**model, "temperature": 0})
+        self.assertEqual(model["temperature"], 1)
+        for invalid in (-1, 3, float("nan")):
+            with self.assertRaises(ValueError):
+                sampling_kwargs(original, invalid)
 
 
 class OfflineContextTests(unittest.TestCase):
