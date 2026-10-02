@@ -173,10 +173,20 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
     // different RISCs, so it buys real overlap (measured ~1-3% on shapes that already fit) -- and
     // fall back to a single buffer only when the double-buffered program would not fit at all,
     // which today throws at allocation instead of running.
+    namespace rh = ttnn::kernel_lib::host;
+    const auto reduce_plan = make_pre_norm_reduce_plan(
+        a.logical_shape()[-1],
+        fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
+        output.dtype(),
+        unpack_fp32_active,
+        {device->arch(),
+         fp32_dest_acc_en,
+         operation_attributes.compute_kernel_config.dst_full_sync_en,
+         operation_attributes.compute_kernel_config.math_fidelity});
     const uint32_t x2_tiles_double_buffered = Wt * double_buffer_constant;
     const uint32_t out0_tiles_estimate = is_rmsnorm ? 1 : 2;
     const uint32_t static_bytes_double_buffered =
-        in0_tiles * in_single_tile_size + in1_tiles * scaler_tile_size +
+        in0_tiles * in_single_tile_size + reduce_plan.auxiliary_tiles.size() * scaler_tile_size +
         (fuse_pre_add ? (res_tiles * inb_single_tile_size + fused_tiles * single_tile_size) : 0) +
         x2_tiles_double_buffered * single_tile_size + out0_tiles_estimate * out_single_tile_size;
     // Budget is L1 above the reserved base, matching what validate_dataflow_buffer_region compares
@@ -247,16 +257,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
     ////////////////////////////////////////////////////////////////////////////
     m2::Group<m2::DataflowBufferSpec> dfbs;
     dfbs.push_back(make_dfb(PRE1D_INPUT, in0_tiles, in_single_tile_size, in_data_format));
-    namespace rh = ttnn::kernel_lib::host;
-    const auto reduce_plan = make_pre_norm_reduce_plan(
-        a.logical_shape()[-1],
-        fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
-        output.dtype(),
-        unpack_fp32_active,
-        {device->arch(),
-         fp32_dest_acc_en,
-         operation_attributes.compute_kernel_config.dst_full_sync_en,
-         operation_attributes.compute_kernel_config.math_fidelity});
     const auto reduce_compute_args = rh::ReduceCallArgs(reduce_plan, {0, 1, 2}).get_compile_time_args();
     const auto reduce_auxiliary_args =
         rh::ReduceAuxiliaryArgs({1, reduce_plan.auxiliary_tiles}).get_compile_time_args();

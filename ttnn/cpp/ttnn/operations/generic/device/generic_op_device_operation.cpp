@@ -244,7 +244,8 @@ size_t hash_kernel_spec(const m2::KernelSpec& kernel) {
         hash,
         ttsl::hash::hash_objects_with_default_seed(
             kernel.advanced_options.num_runtime_varargs, kernel.advanced_options.num_common_runtime_varargs));
-    ttsl::hash::hash_combine(hash, kernel.advanced_options.compile_time_varargs);
+    ttsl::hash::hash_combine(
+        hash, ttsl::hash::hash_objects_with_default_seed(kernel.advanced_options.compile_time_varargs));
     return hash;
 }
 
