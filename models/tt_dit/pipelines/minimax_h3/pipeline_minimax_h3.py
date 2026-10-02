@@ -91,7 +91,6 @@ from .packing import (
     MINIMAX_H3_AUDIO_CHANNELS,
     MINIMAX_H3_AUDIO_LATENTS_PER_SECOND,
     MINIMAX_H3_FPS,
-    MINIMAX_H3_FRAMES_PER_CHUNK,
     MINIMAX_H3_KEYFRAME_NOISE_AUG,
     MINIMAX_H3_MAX_DURATION,
     MINIMAX_H3_TEXT_TAG,
@@ -120,12 +119,11 @@ from .packing_ref2va import (
     sample_reference_video_frames,
 )
 from .policy import (
+    MINIMAX_H3_DURATIONS_S,
     MINIMAX_H3_MAX_DECODABLE_KEYFRAME_PATCHES,
     MINIMAX_H3_MAX_KEYFRAME_TOKENS,
-    MINIMAX_H3_MAX_NUM_FRAMES,
     MINIMAX_H3_MAX_REFERENCE_PATCHES,
     MINIMAX_H3_MAX_TEXT_TOKENS,
-    MINIMAX_H3_MIN_NUM_FRAMES,
     MINIMAX_H3_SERVED_REFERENCE_RESIZE_MODE,
     align_num_frames,
     decodable_canvases,
@@ -303,6 +301,7 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "bucket_denoise": True,
         "bucket_ladder": {"t2va": MINIMAX_H3_BUCKET_LADDER_4X8, "ref2va": MINIMAX_H3_REF2VA_BUCKET_LADDER_4X8},
         "use_persistent_ccl_buffers": False,
+        "trace_audio": True,
     },
     # Quad Blackhole Galaxy, 4 MPI hosts x 32 chips. Same axes, links and topology; SP goes 8 -> 32,
     # which moves the SP alignment to 32 * TILE_SIZE = 1024 and re-keys every packed length.
@@ -323,6 +322,7 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "bucket_ladder": {"t2va": MINIMAX_H3_BUCKET_LADDER, "ref2va": MINIMAX_H3_REF2VA_BUCKET_LADDER},
         "audio_t_shard": True,
         "audio_t_factor": 32,
+        "trace_audio": True,
     },
 }
 
@@ -491,7 +491,7 @@ class MiniMaxH3Pipeline:
         task: str = "t2va",
         audio_split_mode: str | None = None,
         audio_t_factor: int | None = None,
-        audio_trace: bool | None = None,
+        trace_audio: bool | None = None,
         dit_fsdp: bool | None = None,
         trace_denoise: bool | None = None,
         bucket_denoise: bool | None = None,
@@ -563,7 +563,8 @@ class MiniMaxH3Pipeline:
         if audio_split_mode not in ("off", "weight", "full", "kernel"):
             raise ValueError(f"audio_split_mode must be 'off', 'weight', 'full' or 'kernel', got {audio_split_mode!r}")
         self.audio_split_mode = audio_split_mode
-        self.audio_trace = True if audio_trace is None else bool(audio_trace)
+        self.trace_audio = preset.get("trace_audio", False) if trace_audio is None else bool(trace_audio)
+        assert not self.trace_audio or self.bucket_denoise, "trace_audio requires bucket_denoise"
         audio_t_factor, self._audio_t_factor_from_env = _requested_audio_t_factor(
             audio_t_factor, default=preset.get("audio_t_factor", _DEFAULT_AUDIO_T_FACTOR)
         )
@@ -727,7 +728,7 @@ class MiniMaxH3Pipeline:
         task: str = "t2va",
         audio_split_mode: str | None = None,
         audio_t_factor: int | None = None,
-        audio_trace: bool | None = None,
+        trace_audio: bool | None = None,
         dit_fsdp: bool | None = None,
         trace_denoise: bool | None = None,
         bucket_denoise: bool | None = None,
@@ -764,7 +765,7 @@ class MiniMaxH3Pipeline:
             topology=topology,
             task=task,
             audio_split_mode=audio_split_mode,
-            audio_trace=audio_trace,
+            trace_audio=trace_audio,
             audio_t_factor=audio_t_factor,
             dit_fsdp=dit_fsdp,
             trace_denoise=trace_denoise,
@@ -2124,7 +2125,6 @@ class MiniMaxH3Pipeline:
                 num_frames=num_frames,
                 height=height,
                 width=width,
-                num_inference_steps=3,
                 rung_requests=rung_requests,
             )
             return
@@ -2167,7 +2167,6 @@ class MiniMaxH3Pipeline:
             num_frames=num_frames,
             height=height,
             width=width,
-            num_inference_steps=3,
             rung_requests=rung_requests,
         )
 
@@ -2182,12 +2181,14 @@ class MiniMaxH3Pipeline:
         height: int | None = None,
         width: int | None = None,
         aspect_ratio: tuple[int, int] = (16, 9),
-        num_inference_steps: int = 50,
         rung_requests: Mapping[int, dict] | None = None,
     ) -> None:
         """
-        Buffer allocation and, when tracing, trace capture.
+        Buffer allocation and, when tracing, trace capture. Only a bucketed pipeline has a bounded
+        set of programs to compile, so a non-bucketed one has nothing to warm.
         """
+        if not self.bucket_denoise:
+            return
         generation_kwargs = dict(
             image=image,
             last_image=last_image,
@@ -2197,63 +2198,76 @@ class MiniMaxH3Pipeline:
             width=width,
             aspect_ratio=aspect_ratio,
         )
+        overrides = dict(rung_requests or {})
+        # Warmup generations decode audio untraced so every program is compiled before any trace
+        # is captured; `_capture_audio` is the only place audio traces are taken.
+        trace_audio = self.trace_audio
+        self.trace_audio = False
         self._log_generation = False
         try:
-            self(prompt, num_inference_steps=num_inference_steps, **generation_kwargs)
-
-            if not self.bucket_denoise:
-                return
-            natural = self.last_seq_len.padded
-
             if self.vae_output_type == "yuv420":
                 self._warm_vae_decode()
             self._warm_audio_decode()
-            if self.task == "ref2va":
-                self._warm_ref2va_prompt_encoder_envelope()
-            else:
-                self._warm_prompt_encoder_envelope()
-
-            overrides = dict(rung_requests or {})
-            fitted: dict[int, dict] = {}
-            shrunk = generation_kwargs
-            host = _is_host_rank()
-            bind_rungs = sorted(self.bucket_ladder, reverse=True)
-            if host:
-                _tqdm_spacer()
-            for rung in tqdm.tqdm(
-                bind_rungs,
-                desc=f"Initializing bucket buffers: {','.join(map(str, bind_rungs))}",
-                disable=not host,
-                file=sys.stderr,
-                bar_format=_TQDM_BAR_FORMAT,
-            ):
-                bucket = self._buckets.get(rung)
-                shrink = rung < natural and rung not in overrides
-                request = overrides.get(rung, shrunk if shrink else generation_kwargs)
-                if bucket is None or not bucket.warm:
-                    request = self._run_forced_fit(rung, prompt, request, shrink=shrink)
-                    if request is None:
-                        continue
-                    if shrink:
-                        shrunk = request
-                fitted[rung] = request
-            if not self.trace_denoise:
-                return
-            capture_rungs = sorted(fitted, reverse=True)
-            if host:
-                _tqdm_spacer()
-            for rung in tqdm.tqdm(
-                capture_rungs,
-                desc=f"Capturing bucket traces: {','.join(map(str, capture_rungs))}",
-                disable=not host,
-                file=sys.stderr,
-                bar_format=_TQDM_BAR_FORMAT,
-            ):
-                if not self._rung_captured(rung):
-                    shrink = rung < natural and rung not in overrides
-                    self._run_forced_fit(rung, prompt, fitted[rung], shrink=shrink)
+            self._warm_prompt_encoder()
+            fitted = self._warm_denoise_buckets(prompt, generation_kwargs, overrides)
+            self._capture_traces(prompt, fitted, overrides, trace_audio)
         finally:
+            self.trace_audio = trace_audio
             self._log_generation = True
+
+    def _warm_denoise_buckets(
+        self, prompt: str, generation_kwargs: dict, overrides: Mapping[int, dict]
+    ) -> dict[int, dict]:
+        """Bind each rung's buffers. Returns the request that fit each rung, for `_capture_denoise`."""
+        fitted: dict[int, dict] = {}
+        shrunk = generation_kwargs
+        host = _is_host_rank()
+        bind_rungs = sorted(self.bucket_ladder, reverse=True)
+        if host:
+            _tqdm_spacer()
+        for rung in tqdm.tqdm(
+            bind_rungs,
+            desc=f"Initializing bucket buffers: {','.join(map(str, bind_rungs))}",
+            disable=not host,
+            file=sys.stderr,
+            bar_format=_TQDM_BAR_FORMAT,
+        ):
+            bucket = self._buckets.get(rung)
+            shrink = rung not in overrides
+            request = overrides.get(rung, shrunk)
+            if bucket is None or not bucket.warm:
+                request = self._run_forced_fit(rung, prompt, request, shrink=shrink)
+                if request is None:
+                    continue
+                if shrink:
+                    shrunk = request
+            fitted[rung] = request
+        return fitted
+
+    def _capture_traces(
+        self, prompt: str, fitted: Mapping[int, dict], overrides: Mapping[int, dict], trace_audio: bool
+    ) -> None:
+        """Capture every trace a served request replays, after all programs are compiled."""
+        self._capture_denoise(prompt, fitted, overrides)
+        self._capture_audio(trace_audio)
+
+    def _capture_denoise(self, prompt: str, fitted: Mapping[int, dict], overrides: Mapping[int, dict]) -> None:
+        """Capture each fitted rung's denoise trace by replaying the request that fit it."""
+        if not self.trace_denoise:
+            return
+        capture_rungs = sorted(fitted, reverse=True)
+        host = _is_host_rank()
+        if host:
+            _tqdm_spacer()
+        for rung in tqdm.tqdm(
+            capture_rungs,
+            desc=f"Capturing bucket traces: {','.join(map(str, capture_rungs))}",
+            disable=not host,
+            file=sys.stderr,
+            bar_format=_TQDM_BAR_FORMAT,
+        ):
+            if not self._rung_captured(rung):
+                self._run_forced_fit(rung, prompt, fitted[rung], shrink=rung not in overrides)
 
     def _run_forced(self, rung: int, prompt: str, generation_kwargs: dict) -> None:
         """One short generation padded to `rung` regardless of its natural rung -- warmup's ladder walk."""
@@ -2284,6 +2298,13 @@ class MiniMaxH3Pipeline:
         """A prompt of exactly `num_tokens` tokens: only length keys the encoder's programs, so any
         single-token word repeated works."""
         return " village" * num_tokens
+
+    def _warm_prompt_encoder(self) -> None:
+        """Compile every prompt-encoding program the pipeline's task can reach."""
+        if self.task == "ref2va":
+            self._warm_ref2va_prompt_encoder_envelope()
+        else:
+            self._warm_prompt_encoder_envelope()
 
     def _warm_prompt_encoder_envelope(self) -> None:
         """Compile every prompt-encoding program a served t2va/fl2va request can reach, strictly
@@ -2389,29 +2410,51 @@ class MiniMaxH3Pipeline:
             self._vae.decode(latents, output_type="yuv420")
         self._host_log(f"VAE decode warmed: +{self.mesh_device.num_program_cache_entries() - before} programs")
 
-    def _warm_audio_decode(self) -> None:
-        """Compile the audio decode at every servable length, strictly before trace capture.
+    def _audio_warm_inputs(self) -> list[torch.Tensor]:
+        """One zero latent per served audio length, shared by the compile and capture passes.
 
         The vocoder's pad-masking slices bake in the T pad, which differs at every length, so each
-        servable length is decoded once.
+        length needs its own programs and its own trace.
         """
-        decoder = self._prepare_audio_decoder()
         channels = self.audio_config["latent_channels"]
-        lengths = range(MINIMAX_H3_MIN_NUM_FRAMES, MINIMAX_H3_MAX_NUM_FRAMES + 1, MINIMAX_H3_FRAMES_PER_CHUNK)
+        frames = sorted({get_num_frames(duration) for duration in MINIMAX_H3_DURATIONS_S})
+        return [torch.zeros(2, channels, audio_latent_num_frames(num_frames)) for num_frames in frames]
 
+    def _warm_audio_decode(self) -> None:
+        """Compile the audio decode at every served length, strictly before trace capture."""
+        decoder = self._prepare_audio_decoder()
         before = self.mesh_device.num_program_cache_entries()
         host = _is_host_rank()
         if host:
             _tqdm_spacer()
-        for num_frames in tqdm.tqdm(
-            lengths,
+        for latents in tqdm.tqdm(
+            self._audio_warm_inputs(),
             desc="Warming audio decode lengths",
             disable=not host,
             file=sys.stderr,
             bar_format=_TQDM_BAR_FORMAT,
         ):
-            decoder(torch.zeros(2, channels, audio_latent_num_frames(num_frames)))
+            decoder(latents)
         self._host_log(f"audio decode warmed: +{self.mesh_device.num_program_cache_entries() - before} programs")
+
+    def _capture_audio(self, trace_audio: bool) -> None:
+        """Capture the audio decode trace at every served length, keyed on the shape `_decode_audio` serves."""
+        if not trace_audio:
+            return
+        decoder = self._prepare_audio_decoder()
+        inputs = self._audio_warm_inputs()
+        host = _is_host_rank()
+        if host:
+            _tqdm_spacer()
+        for latents in tqdm.tqdm(
+            inputs,
+            desc="Capturing audio decode traces",
+            disable=not host,
+            file=sys.stderr,
+            bar_format=_TQDM_BAR_FORMAT,
+        ):
+            decoder(latents, traced=True)
+        self._host_log(f"audio decode traces captured: {len(inputs)}")
 
     def _warm_ref2va_prompt_encoder_envelope(self) -> None:
         """Compile every prompt-encoding program a served ref2va request can reach, strictly before
@@ -2880,6 +2923,6 @@ class MiniMaxH3Pipeline:
         assert rows.shape[0] == expected, f"expected {expected} target audio rows to decode, got {rows.shape[0]}"
         latents = unpack_audio_tokens(rows, num_audio_latents)
         latents = self._denormalize(latents, self.audio_config["latents_mean"], self.audio_config["latents_std"])
-        waveform = audio_decoder(latents, traced=self.audio_trace)
+        waveform = audio_decoder(latents, traced=self.trace_audio)
         # The audio VAE is mono and took the two stereo channels as two batch items.
         return waveform.float().permute(1, 0, 2)
