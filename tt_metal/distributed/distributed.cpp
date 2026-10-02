@@ -20,6 +20,7 @@
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/program/slow_dispatch.hpp"
 #include <tt-metalium/tt_metal.hpp>
+#include <cstdint>
 #include "llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal::distributed {
@@ -168,13 +169,13 @@ void Synchronize(
         TT_FATAL(mesh_cq.value().device() == &device, "MeshCommandQueue belongs to a different MeshDevice");
         mesh_cq.value().finish(sub_device_ids);
     } else {
-        for (uint8_t cq_id = 0; cq_id < device.num_hw_cqs(); ++cq_id) {
+        for (std::uint8_t cq_id = 0; cq_id < device.num_hw_cqs(); ++cq_id) {
             device.mesh_command_queue(cq_id).finish(sub_device_ids);
         }
     }
 }
 
-void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, ttsl::Span<const SubDeviceId> sub_device_ids) {
+void Synchronize(MeshDevice* device, std::optional<std::uint8_t> cq_id, ttsl::Span<const SubDeviceId> sub_device_ids) {
     if (!device->is_initialized()) {
         return;
     }
@@ -185,13 +186,11 @@ void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, ttsl::Span<co
     }
 }
 
-MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id) {
+MeshTraceId BeginTraceCapture(MeshDevice* device, std::uint8_t cq_id) {
     return device->begin_mesh_trace(device->mesh_command_queue(cq_id));
 }
 
-void Finish(MeshCommandQueue& mesh_cq, ttsl::Span<const SubDeviceId> sub_device_ids) {
-    mesh_cq.finish(sub_device_ids);
-}
+void Finish(MeshCommandQueue& mesh_cq, ttsl::Span<const SubDeviceId> sub_device_ids) { mesh_cq.finish(sub_device_ids); }
 
 bool UsingDistributedEnvironment() {
     using multihost::DistributedContext;
