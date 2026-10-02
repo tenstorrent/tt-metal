@@ -959,9 +959,16 @@ class MultichipDecoder(OptimizedDecoder):
             gu = ttnn.reshape(gu, (1, LE, T, 2 * I))
         gate_o = ttnn.slice(gu, [0, 0, 0, 0], [1, LE, T, I])
         up_o = ttnn.slice(gu, [0, 0, 0, I], [1, LE, T, 2 * I])
-        glu = ttnn.mul(ttnn.silu(gate_o), up_o)
+        wv = ttnn.reshape(dense_local, (1, T, LE))
+        wv = ttnn.permute(wv, (0, 2, 1))
+        wv = ttnn.reshape(wv, (1, LE, T, 1))
+        # silu fused into the gate*up mul, and the per-(expert, token) routing weight applied BEFORE the
+        # linear down projection on the I-wide glu (I < H): w*(glu@Wd) == (w*glu)@Wd, and sparse_matmul
+        # zero-fills skipped experts, so the H-wide post-down weighting mul is gone.
+        glu = ttnn.mul(gate_o, up_o, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
+        glu = ttnn.mul(glu, wv)
         dn_pc = _sparse_pc(H, T, I)
-        down_o = ttnn.sparse_matmul(
+        weighted = ttnn.sparse_matmul(
             glu,
             self.w["exp_down"],
             sparsity=down_sparsity,
@@ -970,11 +977,7 @@ class MultichipDecoder(OptimizedDecoder):
             compute_kernel_config=self._ck_moe,
             memory_config=moe_mem,
             output_tile=otile,
-        )
-        wv = ttnn.reshape(dense_local, (1, T, LE))
-        wv = ttnn.permute(wv, (0, 2, 1))
-        wv = ttnn.reshape(wv, (1, LE, T, 1))
-        weighted = ttnn.mul(down_o, wv)  # [1, LE, T, H]
+        )  # [1, LE, T, H], already routing-weighted
         if self._use_fused_reduce:  # gated (TT_LAGUNA_FUSED_REDUCE=1); PCC-validate before enabling
             (reduced,) = ttnn.experimental.deepseek_moe_fast_reduce_nc(
                 weighted, dim=1, split_size=H, output_memory_config=moe_mem, compute_kernel_config=self._ck_moe
