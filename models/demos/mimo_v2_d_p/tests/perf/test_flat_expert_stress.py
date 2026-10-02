@@ -5,7 +5,8 @@ MIMO_FLAT_BETWEEN names some, as in test_flat_expert_mesh.py), cycling over MIMO
 active-expert schedule changes every launch. Every chip runs the op on every launch, so a hang that always lands on
 the same chip points at that chip; one that wanders points at the kernel.
 
-    MIMO_FSTRESS_ITERS (200000), MIMO_FSTRESS_SETS (16), MIMO_FSTRESS_SYNC (sync every N launches, 200), MIMO_FLAT_M
+    MIMO_FSTRESS_ITERS (200000), MIMO_FSTRESS_SETS (16), MIMO_FSTRESS_SYNC (sync every N launches, 200), MIMO_FLAT_M,
+    MIMO_FSTRESS_IMPL (cpp: the C++ op; py: the generic_op builder FlatExpert, whose MIMO_FL_* knobs then apply)
 """
 
 import os
@@ -19,7 +20,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 from models.demos.mimo_v2_d_p.tests.mesh import MESH_PARAMS, mesh_id
 from models.demos.mimo_v2_d_p.tests.unit.test_flat_expert_mesh import _between
-from models.demos.mimo_v2_d_p.tt.flat_expert import FlatRoutedExpert
+from models.demos.mimo_v2_d_p.tt.flat_expert import FlatExpert, FlatRoutedExpert
 
 H, I, E_GLOBAL = 4096, 2048, 256
 ITERS = int(os.environ.get("MIMO_FSTRESS_ITERS", "200000"))
@@ -55,7 +56,8 @@ def test_flat_expert_stress(mesh_device, device_params):
         [(torch.randn(H, I) * 0.02, torch.randn(H, I) * 0.02, torch.randn(I, H) * 0.02) for _ in range(epc)]
         for _ in range(n_dev)
     ]
-    fe = FlatRoutedExpert(mesh_device, weights, m=m, H=H, I=I, gids=gids, n_global=E_GLOBAL, pin=1)
+    impl = FlatExpert if os.environ.get("MIMO_FSTRESS_IMPL", "cpp") == "py" else FlatRoutedExpert
+    fe = impl(mesh_device, weights, m=m, H=H, I=I, gids=gids, n_global=E_GLOBAL, pin=1)
     g = torch.Generator().manual_seed(int(os.environ.get("MIMO_FSTRESS_SEED", "0")))
     mesh_tensor = lambda ts, dt: ttnn.from_torch(
         torch.stack(ts),
