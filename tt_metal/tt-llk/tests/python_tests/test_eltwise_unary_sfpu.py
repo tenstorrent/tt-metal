@@ -1077,6 +1077,7 @@ def test_eltwise_unary_sfpu_signbit(
         FastMode.No,
         input_dimensions,
         spec_A=spec_A,
+        gate_on_step_budget=True,
     )
 
 
@@ -1159,6 +1160,7 @@ def test_eltwise_unary_sfpu_isinf_isnan(
         FastMode.No,
         input_dimensions,
         spec_A=_isinf_isnan_stimuli_spec(),
+        gate_on_step_budget=True,
     )
 
 
@@ -1234,6 +1236,7 @@ def test_eltwise_unary_sfpu_threshold(
         FastMode.No,
         input_dimensions,
         spec_A=_threshold_op_stimuli_spec(mathop),
+        gate_on_step_budget=True,
     )
 
 
@@ -1250,7 +1253,11 @@ def eltwise_unary_sfpu(
     relu_min_int_threshold=None,
     relu_max_threshold=None,
     twos_complement=False,
+    gate_on_step_budget=False,
 ):
+    """*gate_on_step_budget* is for a caller whose hand-built stimulus the op's step
+    budget was measured on (``MEASURED_ON_SWEEP`` in test_sfpu_accuracy_budget.py): it
+    gates on the whole contract rather than only its tolerance arm."""
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
 
@@ -1369,10 +1376,12 @@ def eltwise_unary_sfpu(
     # CUSTOM_TOLERANCES used to be read in the test bodies; keeping it in the driver
     # means all eight call sites pick it up at once, and a change is a registry edit.
     #
-    # Tolerance only, deliberately. A step budget measured over every value the format
-    # has -- which is what the nightly sweep measures -- is much wider than one measured
+    # Tolerance only by default. A step budget measured over every value the format has
+    # -- which is what the exhaustive sweep measures -- is much wider than one measured
     # over this driver's sampled domain, so enforcing it here would replace a gate that
-    # binds with one that does not. The budgets are enforced where they were measured.
+    # binds with one that does not. The budgets are enforced where they were measured:
+    # the signbit, isinf/isnan and threshold sweeps' predicates were measured on these
+    # very stimuli, so those three pass gate_on_step_budget.
     contract = accuracy_contract(
         mathop,
         output_format=formats.output_format,
@@ -1385,7 +1394,11 @@ def eltwise_unary_sfpu(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        **contract.tolerance_kwargs(),
+        **(
+            contract.passed_test_kwargs()
+            if gate_on_step_budget
+            else contract.tolerance_kwargs()
+        ),
     ), "Assert against golden failed"
 
     # For callers that want a stricter gate than the op's tolerance (an exact-bits check on

@@ -119,21 +119,31 @@ class AccuracyContract:
     def tolerance_kwargs(self) -> Dict[str, Any]:
         """The contract as ``passed_test`` arguments for a *tolerance-only* caller.
 
-        The functional drivers gate on tolerance and PCC. A step budget is measured by
-        the exhaustive sweep over every value the format has, so it is far wider than
-        the few thousand values a driver samples warrant, and feeding it back would
-        loosen the driver's gate rather than tighten it. An op on the ULP metric
-        therefore keeps today's per-format tolerance here.
+        The unary functional driver gates on tolerance and PCC. A unary step budget is
+        measured by the exhaustive sweep over every value the format has, so it is far
+        wider than the few thousand values that driver samples warrant, and feeding it
+        back would loosen its gate rather than tighten it. An op on the ULP metric
+        therefore keeps today's per-format tolerance here. The binary and ternary
+        drivers take :meth:`passed_test_kwargs`: their rows were measured over their own
+        sweeps.
         """
         if self.metric is Metric.ULP:
             return {}
         return {"custom_atol": self.atol, "custom_rtol": self.rtol}
 
-    def passed_test_kwargs(self) -> Dict[str, Any]:
+    def passed_test_kwargs(self, flush_subnormals: bool = False) -> Dict[str, Any]:
         """The contract as ``passed_test`` keyword arguments, whichever metric it is on,
-        so a call site is one ``**`` expansion and switching metrics is a table edit."""
+        so a call site is one ``**`` expansion and switching metrics is a table edit.
+
+        *flush_subnormals* asks the ULP arm to rank with the subnormal band collapsed,
+        which only changes anything on an fp16 output: the golden keeps IEEE fp16
+        subnormals the pack does not reproduce. The tolerance arm has no such notion, so
+        it is dropped there rather than passed on for ``passed_test`` to refuse."""
         if self.metric is Metric.ULP:
-            return {"max_ulp": self.max_ulp, "near_zero_atol": self.near_zero_atol}
+            kwargs = {"max_ulp": self.max_ulp, "near_zero_atol": self.near_zero_atol}
+            if flush_subnormals:
+                kwargs["flush_subnormals"] = True
+            return kwargs
         return {"custom_atol": self.atol, "custom_rtol": self.rtol}
 
 
@@ -450,12 +460,15 @@ def assert_against_contract(
     """Resolve *op*'s declared contract for the variant that ran, and gate on it.
 
     The binary and ternary drivers' shared last line, so that the resolution and the
-    caveat below are written once. The numbers live beside the op in the registry, and
+    caveats below are written once. The numbers live beside the op in the registry, and
     an unenrolled op resolves to today's per-format tolerance unchanged; enrolment is a
     table edit rather than a driver edit.
 
-    Tolerance arm only (``tolerance_kwargs``): a step budget is measured by the
-    exhaustive unary sweep, which is the one caller that gates on ``max_ulp``.
+    The whole contract, step budget included: every binary and ternary row was measured
+    over those drivers' own sweeps, so unlike a unary budget from the exhaustive sweep
+    it describes the stimuli it gates. Ranked with fp16 subnormal outputs flushed, as
+    the exhaustive sweep ranks them: a near-cancelling ``a - b`` lands in the band the
+    golden keeps and the pack does not, 140 steps from a correct kernel.
 
     *approx_mode* is left unset for a kernel that compiles no ``APPROX_MODE`` -- naming
     one would claim a measurement taken for a mode that path does not select. Where the
@@ -477,7 +490,7 @@ def assert_against_contract(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        **contract.tolerance_kwargs(),
+        **contract.passed_test_kwargs(flush_subnormals=True),
     ):
         raise AssertionError("Assert against golden failed")
 
