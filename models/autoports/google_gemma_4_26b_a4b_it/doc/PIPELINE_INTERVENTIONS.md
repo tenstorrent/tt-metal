@@ -400,6 +400,19 @@ The Sympy/sklearn pair remains monitored; the full suite stays gated.
 This resumed window has used approximately 42 minutes of active agent wall time
 so far (cumulative approximately 5h35m, excluding the prior user stop interval).
 
+06:27 UTC checkpoint: the serial pair completes in 2,462 dispatch seconds:
+sklearn 688.289 agent seconds, native reward 1; Sympy 898.432 seconds, submitted
+reward 0 after restoring the source and narrating an unexecuted fix. The generic
+focused-completion policy then yields clean native Astropy reward 1 in 655.569
+seconds (427 tests), not merely an earlier passing timeout. Matching Sympy CI
+36973577503 and a local Django policy regression probe are monitored. An earlier
+Sympy dispatch 36973397458 failed checkout because the agent used an abbreviated
+SHA; full-SHA redispatch fixes the orchestration error without a rebuild.
+TTI 95a67381 includes the explicit prompt, C1 request counters, and persistent
+JIT-kernel-cache location; only the prompt's Astropy outcome is measured so far.
+Active resumed window is approximately 56 minutes; cumulative approximately
+5h49m. No combined suite result or all-five quality claim yet.
+
 - TTFT: `doc/ttft_optimization/`.
 - Remote benchmarks/evals:
   `readiness_vllm/ttft_optimization_remote/README.md`.

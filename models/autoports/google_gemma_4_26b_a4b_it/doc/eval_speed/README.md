@@ -18,7 +18,9 @@ sklearn submits natively in **688.289 seconds**, reward 1 (27 tests), while
 Sympy submits in **898.432 seconds**, reward 0. Astropy's 1,200-second extension
 over-edits a passing intermediate patch into a syntax error; disabling thinking
 also fails. A task-independent focused-completion prompt is being tested.
-Three original tasks now have clean passing candidate evidence, not five.
+That prompt produces **clean native Astropy submission in 655.569 seconds**,
+reward 1, all 427 tests passing. Four original tasks now have clean passing
+evidence across declared policies, not one validated all-five configuration.
 The [precision audit](AUTODEBUG.md) confirms fresh BFP8 weight provenance but
 identifies unchanged prefill BFP4 and untested long-context numerical quality;
 it does not establish a cache/position bug.
