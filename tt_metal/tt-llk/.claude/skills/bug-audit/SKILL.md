@@ -52,7 +52,7 @@ benchmark and a sibling sweep.
 | Mode | Scope | How |
 |---|---|---|
 | full | every source file in the repo | `init_run.py` with priority globs, then the wave loop |
-| area | a subtree | `init_run.py --prio 'A=<subtree>/**' --exclude ...` |
+| area | a subtree | `init_run.py --include '<subtree>/**' [--exclude ...]`: `--include` sets the scope (`--prio` only orders batches) |
 | diff | files changed since a commit | `init_run.py --since <commit>`, the cheap way to keep an old full audit current |
 | siblings | the unfixed copies of past fixes, from mined deep reads | `engine/siblings.py from-deep`, then the recheck verification (*Sweeping siblings from history*) |
 | bench | real past bugs, at the commit before their fix | `engine/bench.py prepare/score`, which measures recall |
