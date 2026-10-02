@@ -67,8 +67,7 @@ def test_bucket_selection():
     logger.info("PASSED: bucket selection picks smallest pow2 >= num_active and never drops active rows")
 
 
-def test_positional_slot_remap_moves_gdn_state_and_keeps_full_width(monkeypatch):
-    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
+def test_positional_slot_remap_moves_gdn_state_and_keeps_full_width(monkeypatch, qwen36_vllm):
     from models.tt_transformers.tt.generator import Generator
 
     remaps = []
@@ -89,7 +88,7 @@ def test_positional_slot_remap_moves_gdn_state_and_keeps_full_width(monkeypatch)
     tokens, positions = _padded_decode_batch(1, 4)
     slot_remap = [0, 1, 2, 3]
 
-    result = Qwen36ForCausalLM.decode_forward(
+    result = qwen36_vllm.Qwen36ForCausalLM.decode_forward(
         wrapper,
         tokens,
         positions,
@@ -112,9 +111,7 @@ def test_positional_slot_remap_moves_gdn_state_and_keeps_full_width(monkeypatch)
     assert forwarded[0][0][0].shape[0] == 4
 
 
-def test_unsupported_device_sampling_fails_at_startup(expect_error):
-    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
-
+def test_unsupported_device_sampling_fails_at_startup(expect_error, qwen36_vllm):
     model = SimpleNamespace(
         sampling=None,
         mesh_device=SimpleNamespace(shape=(1, 1)),
@@ -123,9 +120,9 @@ def test_unsupported_device_sampling_fails_at_startup(expect_error):
     )
     wrapper = SimpleNamespace(model=[model])
 
-    Qwen36ForCausalLM._validate_device_sampling_request(wrapper, False)
+    qwen36_vllm.Qwen36ForCausalLM._validate_device_sampling_request(wrapper, False)
     with expect_error(RuntimeError, "requires a certified TP topology"):
-        Qwen36ForCausalLM._validate_device_sampling_request(wrapper, True)
+        qwen36_vllm.Qwen36ForCausalLM._validate_device_sampling_request(wrapper, True)
 
 
 def test_trace_buffer_reuse_is_opt_in(monkeypatch):
@@ -219,15 +216,14 @@ def test_bucket_trace_teardown_releases_all_stores(monkeypatch):
     del generator
 
 
-def _decode_warmup_harness(monkeypatch):
+def _decode_warmup_harness(monkeypatch, qwen36_vllm):
     """Qwen adapter + real Generator staging/capture code, with device work stubbed out."""
-    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
     from models.tt_transformers.tt.generator import Generator
 
     monkeypatch.setenv("TT_DECODE_BUCKETING", "1")
     monkeypatch.setattr(ttnn, "synchronize_device", lambda *_: None)
     events = []
-    gen = object.__new__(Qwen36ForCausalLM)
+    gen = object.__new__(qwen36_vllm.Qwen36ForCausalLM)
     gen.model = [
         SimpleNamespace(
             num_devices=4,
@@ -293,9 +289,9 @@ def _release_harness(gen):
     gen.model = []
 
 
-def test_decode_warmup_stages_every_width_before_capture(monkeypatch):
+def test_decode_warmup_stages_every_width_before_capture(monkeypatch, qwen36_vllm):
     """#56474: eager warmup stages every width x sampling variant; trace warmup only records them."""
-    gen, events = _decode_warmup_harness(monkeypatch)
+    gen, events = _decode_warmup_harness(monkeypatch, qwen36_vllm)
     warmup = dict(kv_cache=None, max_batch_size=8, num_blocks=4, can_sample_on_device=True)
     try:
         gen.warmup_model_decode(enable_trace=False, **warmup)
@@ -311,9 +307,9 @@ def test_decode_warmup_stages_every_width_before_capture(monkeypatch):
     assert sorted((w, s) for kind, w, s, _ in events if kind == "record") == sorted(expected)
 
 
-def test_decode_warmup_restages_when_num_blocks_changes(monkeypatch):
+def test_decode_warmup_restages_when_num_blocks_changes(monkeypatch, qwen36_vllm):
     """A repeated eager warmup with a new page-table width replaces the staged inputs of every width."""
-    gen, events = _decode_warmup_harness(monkeypatch)
+    gen, events = _decode_warmup_harness(monkeypatch, qwen36_vllm)
     try:
         gen.warmup_model_decode(
             enable_trace=False, kv_cache=None, max_batch_size=8, num_blocks=4, can_sample_on_device=False
@@ -329,10 +325,8 @@ def test_decode_warmup_restages_when_num_blocks_changes(monkeypatch):
     assert staged == {1: 8, 2: 8, 4: 8, 8: 8}
 
 
-def test_prefill_warmup_prepares_eagerly_and_only_records_when_traced():
+def test_prefill_warmup_prepares_eagerly_and_only_records_when_traced(qwen36_vllm):
     """#56474: the eager call allocates/compiles prefill; the traced call records on the same buffers."""
-    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
-
     calls = []
     model = SimpleNamespace(num_devices=4, args=SimpleNamespace(max_batch_size=8), _chunked_trace_id=None)
 
@@ -350,9 +344,9 @@ def test_prefill_warmup_prepares_eagerly_and_only_records_when_traced():
     wrapper = SimpleNamespace(model=[model], mesh_device="mesh")
     kv_cache = [(SimpleNamespace(shape=(100, 1, 64, 128)), None)]
 
-    Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, False)
-    Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, True)
-    Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, True)
+    qwen36_vllm.Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, False)
+    qwen36_vllm.Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, True)
+    qwen36_vllm.Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, True)
 
     prepare, unbind = ("prepare", (1, 128)), ("unbind", "batched")
     assert calls == ["bind", prepare, unbind, "slot_ops", "bind", prepare, "record", unbind, "slot_ops"]
@@ -1124,23 +1118,24 @@ def test_all_buckets_fit_trace_region(mesh_device, reset_seeds, ensure_gc):
         ttnn.release_trace(mesh_device, tid)
 
 
-@pytest.mark.timeout(3600)
+@pytest.mark.timeout(900)
 @torch.no_grad()
 @_parametrize_traced()
 @pytest.mark.parametrize("prefill_first", [True, False], ids=["prefill_first", "decode_first"])
 @pytest.mark.parametrize("sampling", [False, True], ids=["host_sampling", "device_sampling"])
-def test_vllm_warmup_leaves_no_late_allocations(mesh_device, prefill_first, sampling, reset_seeds, ensure_gc):
+def test_vllm_warmup_leaves_no_late_allocations(
+    mesh_device, prefill_first, sampling, reset_seeds, ensure_gc, qwen36_vllm
+):
     """#56474: after the two-phase vLLM warmup (either order, host or device sampling) every trace replays clean."""
     if not trace_allocation_tracker.TRACE_ALLOC_TRACKING:
         pytest.skip("needs TT_METAL_TRACE_ALLOC_TRACKING=1")
     from models.common.sampling.sampling_params import SamplingParams
-    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
 
     bmax = 8
     model, page_table = _build(mesh_device, bmax)
     if sampling and model.sampling is None:
         pytest.skip("on-device sampling unsupported on this mesh")
-    gen = Qwen36ForCausalLM([model], [model.args], mesh_device)
+    gen = qwen36_vllm.Qwen36ForCausalLM([model], [model.args], mesh_device)
     gen._tt_allow_decode_trace_buffer_reuse = False  # let the tracker see the decode trace inputs too
     kv_cache = model._paged_kv_caches
     prefill_kw = dict(kv_cache=kv_cache, can_sample_on_device=False)
