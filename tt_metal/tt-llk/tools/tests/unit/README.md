@@ -9,27 +9,16 @@ CXX=clang++ LLVM_BIN=/usr/lib/llvm-20/bin lit -v tools/tests/unit
 No device is required. LLVM supplies `split-file` and `FileCheck`; host diagnostic
 tests require Clang. Tests requiring libfmt skip when it is unavailable.
 
-The Blackhole CFG tests under `lit/` include:
-
-- `functional/test_cfg_write_plan.cpp`: host checks for grouping and overlap.
-- `diagnostics/test_cfg_access_bounds.cpp`: array, MMIO read, and GPR bank bounds,
-  plus section-dependent spans of wide fields and groups without a `Raw` anchor.
-- `diagnostics/test_cfg_write_overlap.cpp`: field and GPR destination overlap,
-  including all four words of a 128-bit transfer in both operand orders.
-- `codegen/test_cfg_access.cpp`: public calls compared with handwritten hardware
-  instructions and MMIO references at `-O3` for TRISC0 and TRISC2. The comparison
-  ignores comments and local-label numbering; other assembly differences fail.
-  A FileCheck case checks the merged MMIO mask, data, and single store directly.
-
-CFG tests require hardware headers at `../hw/inc/internal/tt-1xx/blackhole`.
-Public API tests additionally need the SFPI headers in `tests/sfpi/include` and
-`tests/sfpi/compiler/bin/riscv-tt-elf-g++`. Set `SFPI_CXX` to use another SFPI
-compiler. These tests are reported as unsupported when dependencies are absent.
+The HAL tests under `lit/hal/` call the public API and check only its observable
+results: the emitted instructions and MMIO accesses, or the compile-time
+diagnostic. They need the hardware headers at `../hw/inc/internal/tt-1xx/` and the
+SFPI toolchain in `tests/sfpi/compiler/bin`, and are reported as unsupported when
+the toolchain is absent.
 
 ## Additional HAL coverage
 
 
-- `lit/diagnostics/` is for compile-only Clang and SFPI diagnostics.
+- `lit/diagnostics/` is for compile-only Clang diagnostics.
 - `lit/functional/` is for tests that compile and execute a host binary.
 - `lit/hal/<architecture>/codegen/` is for target assembly and disassembly
   checks. Architecture-local `lit.local.cfg` files provide the target compiler,
