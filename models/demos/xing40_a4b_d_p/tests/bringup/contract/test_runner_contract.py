@@ -12,7 +12,7 @@ with first_layer_idx / num_my_layers / stage_layout, no KV Manager). The feeder,
             testing/dgen_engine.find_build finds a build. It admits ENGINE_CASE (below) and the engine decides slots,
             chunks, prefix reuse and interleave; the test checks what it did against server_rules (the plan per slot,
             the remount at 2944, the interleave) and every request's PREFILL_DONE (each chunk retired on 40 acks).
-  producer  fallback, only when no build is found (BRINGUP_DGEN=1 makes that a failure): producer_case.py, tt-metal's
+  producer  fallback, only with serving.require_engine: false (or BRINGUP_DGEN=0) and no build: producer_case.py, tt-metal's
             prefill_producer sending server_rules.interleave of
             slot 0: 3000 -> (0, 3000); 56000 from resident 2944 -> (2944, 8064) ... (49024, 54144), (51200, 56000)
             slot 1: 12345 -> (0, 5120), (5120, 10240), (10240, 12345); 20000 from 12288 -> (12288, 17408), (17408, 20000)
@@ -105,15 +105,19 @@ def feeder_files(env: dict, out: Path) -> tuple[str, Path, Path]:
 
 def use_engine(out: Path, env: dict, requests: list[dict], snapshots: dict, max_slots: int) -> str:
     """Make the runner's feeder tt-d-gen's real engine when a build is found (testing/dgen_engine.find_build: spec
-    serving.server_repo or /localdev/$USER/tt-d-gen with a built tt_engine), else leave the producer fallback.
+    serving.server_repo or /localdev/$USER/tt-d-gen with a built tt_engine); without one, fail unless
+    serving.require_engine is false (then the producer fallback).
     requests: [{"name", "token_ids", "after"}] (dgen_prefill_driver.py). Returns the feeder description, printed and
     recorded by the caller."""
     from models.demos.common.bringup.testing import dgen_engine as D
 
     build, why = D.find_build(S)
     if build is None:
-        if os.environ.get("BRINGUP_DGEN") == "1":
-            pytest.fail(f"BRINGUP_DGEN=1 but no tt-d-gen engine build: {why}", pytrace=False)
+        if D.engine_required(S):
+            pytest.fail(
+                f"no tt-d-gen engine build ({why}); build it (agents/dgen-build.md) or set serving.require_engine: false",
+                pytrace=False,
+            )
         return f"prefill_producer (fallback: {why})"
     plan = {
         "service_id": env["PREFILL_H2D_SERVICE_ID"],

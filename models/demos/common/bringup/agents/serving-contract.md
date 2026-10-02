@@ -95,8 +95,8 @@ in the PREFILL role on `device_prefill_pipeline(<runner's H2D service id>, "/tt_
 layers per chunk, timeout, SP)`. The driver admits the requests and pumps the engine until each one's PREFILL_DONE. The
 engine picks the slots, chunks, prefix reuse and interleave, and the test checks what it did against the server rules.
 The engine never sends the runner's shutdown sentinel, so `dgen_engine.driver_shell` sends it afterwards from our
-Python. Use tt-metal's `prefill_producer` only as a fallback, when no build is found (`BRINGUP_DGEN=1` turns that case
-into a failure, `BRINGUP_DGEN=0` forces the fallback). The test output and the runner smoke's recorded answer
+Python. Without a build the test fails (`serving.require_engine`, default true; the `dgen-build` agent makes the build). Keep
+tt-metal's `prefill_producer` as the fallback for `serving.require_engine: false` (`BRINGUP_DGEN=0` forces it). The test output and the runner smoke's recorded answer
 (`feeder`) name the path that ran. Before writing the test, check the three things the two sides share against the
 tt-d-gen commit: the H2D stream service, the ack channel name and the 12-byte header `{slot, start, end}`. The real
 engine's prefix index matches across slots: while another slot holds a longer prefix of the same tokens, a follow-up
