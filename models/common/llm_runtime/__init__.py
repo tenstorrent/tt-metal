@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 raise ImportError(
-    "TTTv2 left tt-metal. Import from https://github.com/tenstorrent/tt_transformers "
+    "TTTv2 left tt-metal. Import from https://github.com/tenstorrent/tt-transformers "
     "(models.common.llm_runtime -> tt_transformers.llm_runtime). "
     "Keepers: models.common.{lazy_weight, tt_ccl, moe}."
 )

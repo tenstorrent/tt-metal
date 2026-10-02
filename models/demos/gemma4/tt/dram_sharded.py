@@ -64,8 +64,7 @@ def _find_grid(n_tiles, target=32):
 def _find_grid_k_n(k_tiles, n_tiles, max_rows=8, max_cols=8):
     """Core grid that evenly divides both K and N tile counts.
 
-    Same contract as ``tt_transformers.ModelArgs.find_grid_k_n`` /
-    ``models.common.modules.mlp.mlp_1d._find_grid_k_n``. A K-only grid with
+    Same contract as ``tt_transformers.ModelArgs.find_grid_k_n``. A K-only grid with
     ``per_core_N = n_tiles // num_cores`` silently truncates N when
     ``n_tiles % num_cores != 0`` — tt_transformers documents this as bad PCC
     (``dram_shard_grid_width`` comment). Prefer the largest feasible core count.

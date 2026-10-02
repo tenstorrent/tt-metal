@@ -60,7 +60,7 @@ def _resolve_max_trace_batched_prefill_tokens() -> int:
     """Virtual-token ceiling above which batched prefill drops to eager.
 
     Aligned with the shared planner's ``_MAX_BATCHED_PREFILL_TOKENS`` (128Ki in
-    models/common/llm_runtime/prefill/plan.py). Gemma4 previously used 32Ki --
+    tt-transformers src/tt_transformers/llm_runtime/prefill/plan.py). Gemma4 previously used 32Ki --
     4x tighter than the shared value, and a batch x seq gate no peer model has
     at all (tt_transformers ``can_enable_trace`` gates on seq_len only, per
     (model, device), via ``trace_prefill_supported_seq_lens``).
