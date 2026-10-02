@@ -613,7 +613,6 @@ models/experimental/petr/ @tenstorrent/cse-developer-ttnn @dvartaniansTT @sdawle
 models/experimental/pi0 @sdawle-TT @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-models-maintainers
 models/experimental/tt_transformers_v2 @tenstorrent/metalium-models-maintainers
 
-
 models/tt_dit/ @jonathansuTT @cglagovichTT @tenstorrent/cse-developer-ttnn
 models/tt_transformers @tenstorrent/metalium-models-maintainers @cglagovichTT
 models/**/requirements*.txt @tenstorrent/metalium-developers-infra @tenstorrent/metalium-models-maintainers
