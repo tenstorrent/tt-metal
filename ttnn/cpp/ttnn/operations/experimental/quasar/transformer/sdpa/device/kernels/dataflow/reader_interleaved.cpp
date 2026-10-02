@@ -435,7 +435,7 @@ void kernel_main() {
             [[maybe_unused]] uint32_t windowed_k_hi = k_num_chunks;
 #ifdef USE_WINDOWED_NARROWING
             {
-                const auto range = windowed_k_chunk_range(
+                const auto range = windowed_k_chunk_range<WindowedMode::Bidirectional>(
                     q_chunk,
                     Sq_chunk_t,
                     valid_Sqt,

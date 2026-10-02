@@ -106,7 +106,7 @@ inline void generate_windowed_mask_for_q_chunk(
     // K/V streaming and to feed compute — the three kernels' per-Q-chunk counts must agree exactly.
     // Skipping the out-of-range chunks cannot change the cursor walk below: their tiles all take the
     // -inf `continue` branches, which never advance `local_window_idx`.
-    const auto k_range = windowed_k_chunk_range(
+    const auto k_range = windowed_k_chunk_range<WindowedMode::Bidirectional>(
         q_chunk,
         Sq_chunk_t,
         valid_Sqt,
