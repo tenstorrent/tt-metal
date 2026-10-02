@@ -8,7 +8,7 @@ not a claim that the five-task evaluation has been repaired.
 ## Current aggregate-suite continuation (2026-10-02)
 
 The user requests the measured **original five tasks together**, then aggregate
-optimization. As of **10:18 UTC**, the actual combined baseline is still running:
+optimization. As of **10:42 UTC**, the actual combined baseline has completed:
 [CI36983437902](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/36983437902),
 job110763074189, runner120-qb2-p03t02, dispatched08:20:06. One persistent loaded
 server, serial C1, exact original tasks,7200s per trial; reused ad58 image,
@@ -17,10 +17,24 @@ BFP8. Seed9472, async, wide repetition guard, corrected testbed PATH and the
 submission adapter are declared candidate deviations. No APC/chunked prefill.
 All newer local policies below are **excluded** from this fixed baseline.
 
+**Measured dispatch-to-finish: 2h14m54s; trial span: 2h01m06.002s; agent sum:
+1h58m20.457s. All five submitted without timeout, but only 2/5 passed.**
+Observed order and agent seconds: Astropy1980.799 (reward1), Matplotlib2472.355
+(reward0), Sympy1340.569 (reward0), Django809.311 (reward1), sklearn497.422
+(reward0). This is a faster terminal result, not an all-five correctness success.
+Artifacts11222185972 are retained under
+`/home/mvasiljevic/gemma4-eval-speed-evidence/combined_five_36983437902`.
+All task server counters match exclusive-C1 request counts/tokens; no late
+responses/actions. TTFT4456.272s, post-first-token2598.299s, tools23.459s.
+The63.17% TTFT fraction includes request setup/prefill, not measured pure kernels.
+Matplotlib truncates source and fails imports; Sympy fails two existing
+regressions; sklearn leaves the required estimator attribute absent.
+
 The pre-dispatch terminal-event forecast was **65m /3h06m40s /5h20m**
 best/expected/conservative, not a prediction of five correct solves. The
-optimistic bound is exceeded. Final task order, rewards, phase times and total
-dispatch-to-finish remain pending; aggregate counters cannot establish them.
+optimistic bound is exceeded; actual is51m46s below the expected terminal-event
+forecast. Astropy finishes instead of timing out, while Matplotlib is much
+slower than predicted. No all-five correct-solve time has been established.
 The earlier startup-only attempt36981858976 failed before trials; f245f6ac
 fixed the pinned-cache environment assignment with93 passing checks.
 
@@ -34,11 +48,12 @@ Prior bounded evidence is not a single all-five result:
 | Astropy |655.569s clean local, reward1,427 tests | Different focused prompt; rejected globally after Django regression |
 | Sympy |1200.028s timeout, reward1,18 tests | Correct patch **without submission**, not a solve time |
 
-Current bounded probe: `local_sympy_old_bfp8_repeat_guarded_seed9472`, started
-**10:12:50**, cap1200s, old BFP8/original T1 plus the existing generic repeat
-advisory v2 and new cancellation guards. Previous advisory trials used the
-new-prefill policy. Accept only clean reward1, then check known-good tasks.
-Local server`gemma4-eval-history-limit` remains exclusively owned by that trial.
+Latest bounded probe: `local_sympy_old_bfp8_repeat_guarded_seed9472`, started
+**10:12:50**, ends at1200.440s with reward1 but no submission. Two repeat
+advisories, zero late actions, one cancelled upstream request; not promoted.
+Next diagnostic is a fresh local sklearn control followed by the existing
+one-time generic submission review, capped900s each. No task-specific hints.
+Local server`gemma4-eval-history-limit` is idle and exclusively owned.
 
 New default-off harness repairs at TTI**4fcfdcfb** stop owned container processes
 before verification and cancel abandoned upstream requests.58 host tests,
@@ -53,7 +68,7 @@ that is not broad free-generation equivalence. Prefix caching is unimplemented.
 See the [suite experiment log](suite_20261002.md) for all forecasts, failures,
 commands, exact provenance, raw artifact locations and live-monitor path.
 The [precision audit](AUTODEBUG.md) documents numerical hypotheses, not a proven
-cache/position bug. Latest TT checkpoint before this handoff is**f8b3c7f615**;
+cache/position bug. Latest TT checkpoint before this handoff is**c358bf2240**;
 all scoped changes and evidence are pushed. No ten-task expansion is authorized
 by the evidence yet.
 
