@@ -145,17 +145,19 @@ struct ChunkGdnDeviceOperation {
 //   plus the head skew, home / extra = the remaining items of the busiest home / extra producer, and balance
 //   the bump two near-equal bounds cost each other (Vtl <= 2); over (NV | Vt, NP, depth in {2, 3}) with a
 //   feasible layout (the row-major fallback is link-bound), and for a pool of P serving every head
-//   (placement 2) at the balanced share NX / P. Ties -> fewer cores, then smaller NV, then the shallower
-//   ring. T_phased(BH) from the measured table.
-// The op host uses it for whichever of num_receivers / num_producers / row_local / handoff_depth the
-// fused program config leaves free, and to decide fused vs phased when no program config is given;
-// test_chunk_gdn_fused_geometry.py checks it against a Python oracle on several grids.
+//   (placement 2) over the extras' share from the balanced NX / P down to 0. Ties -> fewer cores, then
+//   smaller NV, then the shallower ring. T_phased(BH) from the measured table.
+// The op host uses it for whichever of num_receivers / num_producers / row_local / handoff_depth /
+// pool_extra_share the fused program config leaves free, and to decide fused vs phased when no program
+// config is given; test_chunk_gdn_fused_geometry.py checks it against a Python oracle on several grids.
 // ---------------------------------------------------------------------------------------------------
 struct FusedGeometryChoice {
     uint32_t nv = 0;  // 0 => no fused geometry fits this grid
     uint32_t np = 0;  // producers per head; the pool size P when placement == 2
     uint32_t placement = 0;  // 1 row-local, 0 row-major fallback, 2 producer pool
     uint32_t nbuf = 2;       // hand-off depth
+    uint32_t pool_extra_num = 0;  // placement 2 with extras: the extras' share of the items, num / den
+    uint32_t pool_extra_den = 1;
     float t_fused_us = 0.0f;
     float t_phased_us = 0.0f;
     bool fused_pays = false;
@@ -170,7 +172,7 @@ uint32_t fused_pool_home_producers(uint32_t grid_x, uint32_t grid_y, uint32_t BH
 bool fused_pool_feasible(uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t P);
 // fixed_nv / fixed_np / fixed_nbuf = 0 -> free; a non-zero value pins that field and the model chooses
 // the others so the pair still fits (and prefers a row-local layout for it). With the pool candidates
-// fixed_np pins the pool size.
+// fixed_np pins the pool size and fixed_share >= 0 the extras' share (< 0 -> the model's choice).
 FusedGeometryChoice choose_fused_geometry(
     uint32_t grid_x,
     uint32_t grid_y,
@@ -180,7 +182,8 @@ FusedGeometryChoice choose_fused_geometry(
     uint32_t fixed_nv = 0,
     uint32_t fixed_np = 0,
     uint32_t fixed_nbuf = 0,
-    FusedCandidates candidates = FusedCandidates::Both);
+    FusedCandidates candidates = FusedCandidates::Both,
+    float fixed_share = -1.0f);
 
 // Design D9: the fused program's core map, a pure function of its arguments (no device), shared by
 // the program factory and the nanobind geometry oracle. placement 0 = row-major 1xNV receiver
