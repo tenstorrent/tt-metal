@@ -510,6 +510,22 @@ def test_positional_no_handshake(device, noc, counter):
     )
 
 
+@pytest.mark.parametrize("control", [False, True], ids=["payload", "signal"])
+def test_no_handshake_flag_survives_late_receiver_construction(device, control):
+    run_positional_mcast_case(
+        device,
+        width=2,
+        senders=[2],
+        rotating=False,
+        counter=False,
+        control=control,
+        alternating=False,
+        handshake=False,
+        rounds=1,
+        delay_receiver_construction=True,
+    )
+
+
 @pytest.mark.parametrize("noc", [0, 1])
 @pytest.mark.parametrize("control", [False, True])
 def test_mixed_local_only_sender_turn(device, noc, control):

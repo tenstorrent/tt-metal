@@ -383,12 +383,7 @@ FORCE_INLINE ReceiverPipeImpl<
     noc_(noc),
     data_ready_(detail::make_mcast_semaphore<DataReadyBinding{}>()),
     consumer_ready_(detail::make_mcast_semaphore<ConsumerReadyBinding{}>()),
-    coords_(sender_coords) {
-    // Init the flag THIS side waits on. The Counter signal needs no reset/init (monotone).
-    if constexpr (DATA_READY_SIGNAL == DataReadySignal::Flag) {
-        data_ready_.set(INVALID);
-    }
-}
+    coords_(sender_coords) {}
 
 template <
     typename DataReadyBinding,
