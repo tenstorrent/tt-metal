@@ -23,6 +23,8 @@ def main():
     parser.add_argument("--server", default="http://127.0.0.1:8000")
     parser.add_argument("--seconds", type=int, default=900)
     parser.add_argument("--repetition-detection", type=json.loads)
+    parser.add_argument("--disable-thinking", action="store_true", help="Separate, explicit agent-policy experiment")
+    parser.add_argument("--agent-system-template", type=Path, help="Explicit task-independent agent-policy control")
     parser.add_argument(
         "--normalize-submission-marker", action="store_true", help="Opt-in audited harness policy change"
     )
@@ -36,6 +38,12 @@ def main():
 
     saved = json.loads(args.source_config.read_text())
     kwargs = copy.deepcopy(saved["agents"][0]["kwargs"])
+    if args.agent_system_template:
+        kwargs["config"].setdefault("agent", {})["system_template"] = args.agent_system_template.read_text()
+    if args.disable_thinking:
+        kwargs["config"]["model"]["model_kwargs"].setdefault("extra_body", {})["chat_template_kwargs"] = {
+            "enable_thinking": False
+        }
     if args.request_seed is not None:
         kwargs["config"]["model"]["model_kwargs"]["seed"] = args.request_seed
     if args.repetition_detection:
