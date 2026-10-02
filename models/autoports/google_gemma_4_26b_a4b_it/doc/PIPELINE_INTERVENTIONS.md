@@ -555,6 +555,16 @@ saves only1.027–2.966% input and stays offline;21 host helper tests pass.
 Combined CI remains unchanged, active and monitored. Resumed active time~251min,
 cumulative~9h04m; no image build, device reset or new user intervention.
 
+09:58 UTC: TTI36292d7e implements opt-in owned-process timeout cleanup. A reused-
+image Docker control proves the old late-write leak and prevents it with81ms
+cleanup while preserving an unrelated peer. Eight ownership/config tests pass.
+A20-second real Harbor smoke stops3 owned processes and has no late saved
+action; first request/response match the original control. It is not a solve
+test. The abandoned upstream response still costs12.36s after agent end,
+separately instrumented (22 TT helper tests pass). Disposable control container
+is removed; reports are retained. Combined CI is unchanged and monitored.
+Resumed active time~267min, cumulative~9h20m; no new human intervention.
+
 - TTFT: `doc/ttft_optimization/`.
 - Remote benchmarks/evals:
   `readiness_vllm/ttft_optimization_remote/README.md`.
