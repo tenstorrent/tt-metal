@@ -258,6 +258,10 @@ public:
     void process_compile_time_args(std::function<void(const std::vector<uint32_t>& values)>) const override;
     void process_named_compile_time_args(
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const override;
+
+    void process_user_facing_resource_binding_handles(
+        const std::function<void(const tt::tt_metal::Binding&)>&) const override;
+
     void process_dataflow_buffer_binding_handles(const std::function<void(
                                                      const std::string& accessor_name,
                                                      uint16_t logical_dfb_id,

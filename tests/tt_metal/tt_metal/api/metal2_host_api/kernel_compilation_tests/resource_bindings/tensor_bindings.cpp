@@ -57,9 +57,6 @@ void kernel_main() {
     auto noc_addr = accessor.get_noc_addr(0);
     (void)noc_addr;
 }
-
-static_assert(tensor::get_token_if_present<"input_tensor">() == &tensor::input_tensor);
-static_assert(tensor::get_token_if_present<"not_a_tensor">() == nullptr);
 )"};
 
     spec.kernels = {dm_kernel};

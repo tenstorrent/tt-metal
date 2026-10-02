@@ -49,9 +49,6 @@ void kernel_main() {
     volatile uint32_t base = pad.get_base_address();
     (void)base;
 }
-
-static_assert(scratch::get_token_if_present<"scratch">() == &scratch::scratch);
-static_assert(scratch::get_token_if_present<"not_a_scratch">() == nullptr);
 )"};
     dm_kernel.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
@@ -81,9 +78,6 @@ void kernel_main() {
     volatile uint32_t base = pad.get_base_address();
     (void)base;
 }
-
-static_assert(scratch::get_token_if_present<"scratch">() == &scratch::scratch);
-static_assert(scratch::get_token_if_present<"not_a_scratch">() == nullptr);
 )"};
 
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
@@ -136,9 +130,6 @@ void kernel_main() {
     volatile int32_t sink = acc;  // keep the loop live so the range-for is actually instantiated
     (void)sink;
 }
-
-static_assert(scratch::get_token_if_present<"scratch">() == &scratch::scratch);
-static_assert(scratch::get_token_if_present<"not_a_scratch">() == nullptr);
 )"};
     dm_kernel.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
