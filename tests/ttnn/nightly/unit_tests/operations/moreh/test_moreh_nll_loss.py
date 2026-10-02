@@ -467,3 +467,85 @@ def test_moreh_nll_loss_step2_3d_multi_face(shape, reduction, none_weight, devic
         device=device,
         has_ignored=False,
     )
+
+
+def run_moreh_nll_loss_backward_zero_divisor(shape, target_value, ignore_index, device, weight=None):
+    """Run mean forward/backward for a case whose selected weight is zero.
+
+    Forward supplies the zero divisor used by backward. Its non-finite loss is
+    deliberately not returned or asserted here; that is a separate contract.
+    """
+    target_shape = shape[:1] + shape[2:]
+    torch_input = torch.full(shape, -2.0, dtype=torch.float32)
+    torch_target = torch.full(target_shape, target_value, dtype=torch.long)
+    torch_divisor = torch.zeros([1], dtype=torch.float32)
+    torch_output = torch.zeros([1], dtype=torch.float32)
+    torch_output_grad = torch.ones([1], dtype=torch.float32)
+    torch_input_grad = torch.full(shape, float("nan"), dtype=torch.float32)
+
+    compute_kernel_config = get_compute_kernel_options(True)
+    tt_input = to_ttnn(torch_input, device=device)
+    tt_target = to_ttnn(torch_target, dtype=ttnn.int32, device=device)
+    tt_weight = to_ttnn(weight, device=device)
+    tt_divisor = to_ttnn(torch_divisor, device=device)
+    tt_output = to_ttnn(torch_output, device=device)
+    tt_output_grad = to_ttnn(torch_output_grad, device=device)
+    tt_input_grad = to_ttnn(torch_input_grad, device=device)
+
+    ttnn.operations.moreh.nll_loss(
+        tt_input,
+        tt_target,
+        "mean",
+        weight_tensor=tt_weight,
+        divisor_tensor=tt_divisor,
+        output_tensor=tt_output,
+        ignore_index=ignore_index,
+        compute_kernel_config=compute_kernel_config,
+    )
+
+    tt_input_grad = ttnn.operations.moreh.nll_loss_backward(
+        target_tensor=tt_target,
+        weight_tensor=tt_weight,
+        divisor_tensor=tt_divisor,
+        output_grad_tensor=tt_output_grad,
+        input_grad_tensor=tt_input_grad,
+        ignore_index=ignore_index,
+        reduction_mean=True,
+        compute_kernel_config=compute_kernel_config,
+    )
+    return to_torch(tt_input_grad, shape=shape), to_torch(tt_divisor, shape=[1])
+
+
+@pytest.mark.parametrize(
+    "shape, ignore_index",
+    [
+        ([5, 10], 1),
+        ([5, 10], -100),
+        ([2, 10, 33], 1),
+        ([2, 10, 3, 5], 1),
+    ],
+)
+def test_moreh_nll_loss_backward_mean_all_ignored_is_zero(shape, ignore_index, device):
+    """All ignored labels have zero gradient even though the mean divisor is zero."""
+    tt_input_grad, tt_divisor = run_moreh_nll_loss_backward_zero_divisor(
+        shape, target_value=ignore_index, ignore_index=ignore_index, device=device
+    )
+    assert torch.equal(tt_divisor, torch.zeros_like(tt_divisor))
+    assert torch.equal(tt_input_grad, torch.zeros_like(tt_input_grad))
+
+
+def test_moreh_nll_loss_backward_mean_zero_weight_preserves_selected_nan(device):
+    """A zero weight is still selected: only non-target lanes are forced to zero."""
+    shape = [5, 10]
+    torch_weight = torch.ones(shape[1], dtype=torch.float32)
+    torch_weight[0] = 0.0
+
+    tt_input_grad, tt_divisor = run_moreh_nll_loss_backward_zero_divisor(
+        shape, target_value=0, ignore_index=-100, device=device, weight=torch_weight
+    )
+
+    # PyTorch produces NaN at the selected zero-weight class (0 / 0), while its
+    # sparse NLL backward contract leaves every non-target lane exactly zero.
+    assert torch.equal(tt_divisor, torch.zeros_like(tt_divisor))
+    assert torch.all(~torch.isfinite(tt_input_grad[:, 0]))
+    assert torch.equal(tt_input_grad[:, 1:], torch.zeros_like(tt_input_grad[:, 1:]))

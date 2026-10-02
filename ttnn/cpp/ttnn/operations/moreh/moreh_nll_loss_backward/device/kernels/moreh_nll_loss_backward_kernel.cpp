@@ -9,8 +9,10 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/generators/fill.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/special.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -22,6 +24,12 @@ void kernel_main() {
 #ifdef DIVISOR
     // These buffers are bound only for the divisor variant; keep their names out of the other variant.
     DataflowBuffer dfb_tmp1_obj(dfb::tmp1);
+
+#if defined(FP32_DEST_ACC_EN)
+    constexpr auto target_mask_data_format = DataFormat::Float32;
+#else
+    constexpr auto target_mask_data_format = DataFormat::Float16_b;
+#endif
 
     compute_kernel_hw_startup(dfb::divisor, dfb::tmp1);
     ckl::unary<
@@ -67,10 +75,33 @@ void kernel_main() {
                 ckl::InputTileMapping::Scalar,
                 ckernel::moreh_data_format_reconfig),
             ckl::output(
+                dfb::tmp3, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckernel::moreh_data_format_reconfig)>(
+            ckl::IterationShape::one_tile());
+
+        // `tmp_weight` is a dense one-hot/weight tile. When the divisor is zero, multiplying its
+        // non-target zero lanes by the reciprocal produces NaN. Restore the sparse-write NLL
+        // contract with an independent selected-target mask; a weight value of zero is still a
+        // selected lane and must not be confused with an ignored target.
+        ckl::eltwise_chain(
+            ckl::IterationShape::one_tile(),
+            ckl::CopyTile<
+                ckl::input(
+                    dfb::target_mask,
+                    ckl::WaitPolicy::PerTile,
+                    ckl::PopPolicy::PerTile,
+                    ckernel::moreh_data_format_reconfig),
+                D::D0>{},
+            ckl::CopyTile<
+                ckl::input(
+                    dfb::tmp3, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckernel::moreh_data_format_reconfig),
+                D::D1>{},
+            ckl::FillBitcast<D::D2>{0U},
+            ckl::Where<target_mask_data_format, D::D0, D::D1, D::D2, D::D0>{},
+            ckl::PackTile<ckl::output(
                 dfb::input_grad,
                 ckl::ReservePolicy::PerTile,
                 ckl::PushPolicy::PerTile,
-                ckernel::moreh_data_format_reconfig)>(ckl::IterationShape::one_tile());
+                ckernel::moreh_data_format_reconfig)>{});
     }
     dfb_output_grad_obj.pop_front(1);
     dfb_tmp1_obj.pop_front(1);

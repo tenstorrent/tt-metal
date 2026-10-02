@@ -22,6 +22,9 @@ void kernel_main() {
 
     DataflowBuffer dfb_target_obj(dfb::target);
     DataflowBuffer dfb_tmp_weight_obj(dfb::tmp_weight);
+#if defined(DIVISOR)
+    DataflowBuffer dfb_target_mask_obj(dfb::target_mask);
+#endif
 #if defined(WEIGHT)
     DataflowBuffer dfb_weight_obj(dfb::weight);
     const auto addrg_weight = TensorAccessor(tensor::weight);
@@ -54,9 +57,15 @@ void kernel_main() {
         read_tile(dfb_target_obj, addrg_target, target_noc_id);
 
         dfb_tmp_weight_obj.reserve_back(onetile);
+#if defined(DIVISOR)
+        dfb_target_mask_obj.reserve_back(onetile);
+#endif
         dfb_target_obj.wait_front(onetile);
 
         CoreLocalMem<volatile FP32_DEST_ACC_FTYPE> tmp_weight_l1_ptr(dfb_tmp_weight_obj.get_write_ptr());
+#if defined(DIVISOR)
+        CoreLocalMem<volatile FP32_DEST_ACC_FTYPE> target_mask_l1_ptr(dfb_target_mask_obj.get_write_ptr());
+#endif
         CoreLocalMem<volatile int32_t> target_l1_ptr(dfb_target_obj.get_read_ptr());
 
         for (uint32_t h = 0; h < TILE_HEIGHT; h++) {
@@ -75,13 +84,22 @@ void kernel_main() {
 #else
                     tmp_weight_l1_ptr[tmp_weight_tilized_idx] = fp32_dest_acc_cast(1.0f);
 #endif
+#if defined(DIVISOR)
+                    target_mask_l1_ptr[tmp_weight_tilized_idx] = fp32_dest_acc_cast(1.0f);
+#endif
                     continue;
                 }
                 tmp_weight_l1_ptr[tmp_weight_tilized_idx] = fp32_dest_acc_cast(0.0f);
+#if defined(DIVISOR)
+                target_mask_l1_ptr[tmp_weight_tilized_idx] = fp32_dest_acc_cast(0.0f);
+#endif
             }
         }
 
         dfb_tmp_weight_obj.push_back(onetile);
+#if defined(DIVISOR)
+        dfb_target_mask_obj.push_back(onetile);
+#endif
 
         dfb_target_obj.pop_front(onetile);
     }

@@ -34,8 +34,10 @@ const DFBSpecName DFB_WEIGHT{"weight"};
 const DFBSpecName DFB_DIVISOR{"divisor"};
 const DFBSpecName DFB_WEIGHT_SCRATCH{"weight_scratch"};
 const DFBSpecName DFB_TMP_WEIGHT{"tmp_weight"};
+const DFBSpecName DFB_TARGET_MASK{"target_mask"};
 const DFBSpecName DFB_TMP1{"tmp1"};
 const DFBSpecName DFB_TMP2{"tmp2"};
+const DFBSpecName DFB_TMP3{"tmp3"};
 const DFBSpecName DFB_INPUT_GRAD{"input_grad"};
 
 const TensorParamName TENSOR_TARGET{"target"};
@@ -120,11 +122,12 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_2d(
     }
     spec.dataflow_buffers.push_back(make_dfb(DFB_TMP_WEIGHT, 1, fp32_dest_acc_en_data_format));
     if (divisor_has_value) {
-        // tmp1 and tmp2 are touched only by the compute kernel's divisor branch, so they exist
-        // exactly when that branch does. Allocating them unconditionally would leave two buffers
-        // with no producer and no consumer in the no-divisor build, which cannot be expressed.
+        // The target mask and temporary buffers are touched only by the compute kernel's divisor
+        // branch, so they exist exactly when that branch does.
+        spec.dataflow_buffers.push_back(make_dfb(DFB_TARGET_MASK, 1, fp32_dest_acc_en_data_format));
         spec.dataflow_buffers.push_back(make_dfb(DFB_TMP1, 1, fp32_dest_acc_en_data_format));
         spec.dataflow_buffers.push_back(make_dfb(DFB_TMP2, 1, fp32_dest_acc_en_data_format));
+        spec.dataflow_buffers.push_back(make_dfb(DFB_TMP3, 1, fp32_dest_acc_en_data_format));
     }
     spec.dataflow_buffers.push_back(make_dfb(DFB_INPUT_GRAD, 1, data_format));
 
@@ -236,6 +239,11 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_2d(
             .accessor_name = "divisor",
             .endpoint_type = DFBEndpointType::PRODUCER,
         });
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_TARGET_MASK,
+            .accessor_name = "target_mask",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
     }
 
     Group<TensorBinding> reader_tensor_bindings{
@@ -304,8 +312,13 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_2d(
             .accessor_name = "divisor",
             .endpoint_type = DFBEndpointType::CONSUMER,
         });
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_TARGET_MASK,
+            .accessor_name = "target_mask",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
         // The compute kernel packs each intermediate and reads it straight back within its own
-        // loop, so it holds both ends of tmp1 and tmp2.
+        // loop, so it holds both ends of tmp1, tmp2 and tmp3.
         compute_dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_TMP1,
             .accessor_name = "tmp1",
@@ -324,6 +337,16 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_2d(
         compute_dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_TMP2,
             .accessor_name = "tmp2",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_TMP3,
+            .accessor_name = "tmp3",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_TMP3,
+            .accessor_name = "tmp3",
             .endpoint_type = DFBEndpointType::CONSUMER,
         });
     }
@@ -333,8 +356,10 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_2d(
     require_unpack_mode(compute_unpack_modes, fp32_dest_acc_en, DFB_TMP_WEIGHT, fp32_dest_acc_en_data_format);
     if (divisor_has_value) {
         require_unpack_mode(compute_unpack_modes, fp32_dest_acc_en, DFB_DIVISOR, data_format);
+        require_unpack_mode(compute_unpack_modes, fp32_dest_acc_en, DFB_TARGET_MASK, fp32_dest_acc_en_data_format);
         require_unpack_mode(compute_unpack_modes, fp32_dest_acc_en, DFB_TMP1, fp32_dest_acc_en_data_format);
         require_unpack_mode(compute_unpack_modes, fp32_dest_acc_en, DFB_TMP2, fp32_dest_acc_en_data_format);
+        require_unpack_mode(compute_unpack_modes, fp32_dest_acc_en, DFB_TMP3, fp32_dest_acc_en_data_format);
     }
 
     auto compute_hw_config = ttnn::to_compute_hardware_config(compute_kernel_config);
@@ -482,11 +507,12 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_3d(
     }
     spec.dataflow_buffers.push_back(make_dfb(DFB_TMP_WEIGHT, 1, fp32_dest_acc_en_data_format));
     if (divisor_has_value) {
-        // tmp1 and tmp2 are touched only by the compute kernel's divisor branch, so they exist
-        // exactly when that branch does. Allocating them unconditionally would leave two buffers
-        // with no producer and no consumer in the no-divisor build, which cannot be expressed.
+        // The target mask and temporary buffers are touched only by the compute kernel's divisor
+        // branch, so they exist exactly when that branch does.
+        spec.dataflow_buffers.push_back(make_dfb(DFB_TARGET_MASK, 1, fp32_dest_acc_en_data_format));
         spec.dataflow_buffers.push_back(make_dfb(DFB_TMP1, 1, fp32_dest_acc_en_data_format));
         spec.dataflow_buffers.push_back(make_dfb(DFB_TMP2, 1, fp32_dest_acc_en_data_format));
+        spec.dataflow_buffers.push_back(make_dfb(DFB_TMP3, 1, fp32_dest_acc_en_data_format));
     }
     spec.dataflow_buffers.push_back(make_dfb(DFB_INPUT_GRAD, 1, data_format));
 
@@ -598,6 +624,11 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_3d(
             .accessor_name = "divisor",
             .endpoint_type = DFBEndpointType::PRODUCER,
         });
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_TARGET_MASK,
+            .accessor_name = "target_mask",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
     }
 
     Group<TensorBinding> reader_tensor_bindings{
@@ -667,8 +698,13 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_3d(
             .accessor_name = "divisor",
             .endpoint_type = DFBEndpointType::CONSUMER,
         });
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_TARGET_MASK,
+            .accessor_name = "target_mask",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
         // The compute kernel packs each intermediate and reads it straight back within its own
-        // loop, so it holds both ends of tmp1 and tmp2.
+        // loop, so it holds both ends of tmp1, tmp2 and tmp3.
         compute_dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_TMP1,
             .accessor_name = "tmp1",
@@ -687,6 +723,16 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_3d(
         compute_dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_TMP2,
             .accessor_name = "tmp2",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_TMP3,
+            .accessor_name = "tmp3",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_TMP3,
+            .accessor_name = "tmp3",
             .endpoint_type = DFBEndpointType::CONSUMER,
         });
     }
@@ -696,8 +742,10 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_3d(
     require_unpack_mode(compute_unpack_modes, fp32_dest_acc_en, DFB_TMP_WEIGHT, fp32_dest_acc_en_data_format);
     if (divisor_has_value) {
         require_unpack_mode(compute_unpack_modes, fp32_dest_acc_en, DFB_DIVISOR, data_format);
+        require_unpack_mode(compute_unpack_modes, fp32_dest_acc_en, DFB_TARGET_MASK, fp32_dest_acc_en_data_format);
         require_unpack_mode(compute_unpack_modes, fp32_dest_acc_en, DFB_TMP1, fp32_dest_acc_en_data_format);
         require_unpack_mode(compute_unpack_modes, fp32_dest_acc_en, DFB_TMP2, fp32_dest_acc_en_data_format);
+        require_unpack_mode(compute_unpack_modes, fp32_dest_acc_en, DFB_TMP3, fp32_dest_acc_en_data_format);
     }
 
     auto compute_hw_config = ttnn::to_compute_hardware_config(compute_kernel_config);
@@ -848,11 +896,12 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_4d(
     }
     spec.dataflow_buffers.push_back(make_dfb(DFB_TMP_WEIGHT, 1, fp32_dest_acc_en_data_format));
     if (divisor_has_value) {
-        // tmp1 and tmp2 are touched only by the compute kernel's divisor branch, so they exist
-        // exactly when that branch does. Allocating them unconditionally would leave two buffers
-        // with no producer and no consumer in the no-divisor build, which cannot be expressed.
+        // The target mask and temporary buffers are touched only by the compute kernel's divisor
+        // branch, so they exist exactly when that branch does.
+        spec.dataflow_buffers.push_back(make_dfb(DFB_TARGET_MASK, 1, fp32_dest_acc_en_data_format));
         spec.dataflow_buffers.push_back(make_dfb(DFB_TMP1, 1, fp32_dest_acc_en_data_format));
         spec.dataflow_buffers.push_back(make_dfb(DFB_TMP2, 1, fp32_dest_acc_en_data_format));
+        spec.dataflow_buffers.push_back(make_dfb(DFB_TMP3, 1, fp32_dest_acc_en_data_format));
     }
     spec.dataflow_buffers.push_back(make_dfb(DFB_INPUT_GRAD, 1, data_format));
 
@@ -964,6 +1013,11 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_4d(
             .accessor_name = "divisor",
             .endpoint_type = DFBEndpointType::PRODUCER,
         });
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_TARGET_MASK,
+            .accessor_name = "target_mask",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
     }
 
     Group<TensorBinding> reader_tensor_bindings{
@@ -1033,8 +1087,13 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_4d(
             .accessor_name = "divisor",
             .endpoint_type = DFBEndpointType::CONSUMER,
         });
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_TARGET_MASK,
+            .accessor_name = "target_mask",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
         // The compute kernel packs each intermediate and reads it straight back within its own
-        // loop, so it holds both ends of tmp1 and tmp2.
+        // loop, so it holds both ends of tmp1, tmp2 and tmp3.
         compute_dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_TMP1,
             .accessor_name = "tmp1",
@@ -1053,6 +1112,16 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_4d(
         compute_dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_TMP2,
             .accessor_name = "tmp2",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_TMP3,
+            .accessor_name = "tmp3",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_TMP3,
+            .accessor_name = "tmp3",
             .endpoint_type = DFBEndpointType::CONSUMER,
         });
     }
@@ -1062,8 +1131,10 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_4d(
     require_unpack_mode(compute_unpack_modes, fp32_dest_acc_en, DFB_TMP_WEIGHT, fp32_dest_acc_en_data_format);
     if (divisor_has_value) {
         require_unpack_mode(compute_unpack_modes, fp32_dest_acc_en, DFB_DIVISOR, data_format);
+        require_unpack_mode(compute_unpack_modes, fp32_dest_acc_en, DFB_TARGET_MASK, fp32_dest_acc_en_data_format);
         require_unpack_mode(compute_unpack_modes, fp32_dest_acc_en, DFB_TMP1, fp32_dest_acc_en_data_format);
         require_unpack_mode(compute_unpack_modes, fp32_dest_acc_en, DFB_TMP2, fp32_dest_acc_en_data_format);
+        require_unpack_mode(compute_unpack_modes, fp32_dest_acc_en, DFB_TMP3, fp32_dest_acc_en_data_format);
     }
 
     auto compute_hw_config = ttnn::to_compute_hardware_config(compute_kernel_config);
