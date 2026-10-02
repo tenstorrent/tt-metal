@@ -38,7 +38,7 @@ UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory::create_program_artif
     const auto& input_shape = a.padded_shape();
     const auto& output_shape = output.padded_shape();
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
     CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     CoreRangeSet default_grid(default_cores);
@@ -118,8 +118,7 @@ UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory::create_program_artif
              {"third_dim", third_dim},
              {"number_blocks_per_core", nblocks_per_core}},
         .runtime_arg_schema = {.runtime_arg_names = {"core_number", "tiles_per_row", "num_blocks"}},
-        .hw_config =
-            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Writer kernel ----
@@ -139,8 +138,7 @@ UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory::create_program_artif
              {"unpadded_X_size", unpadded_row_size_bytes}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"core_number", "size_per_row_per_block", "blocks_per_core", "width_size"}},
-        .hw_config =
-            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Compute kernel (full + cliff) ----
@@ -152,10 +150,9 @@ UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory::create_program_artif
     auto make_compute_hw = [&]() -> ComputeHardwareConfig {
         ttnn::ComputeKernelConfig cfg{
             .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
-        ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(device->arch(), cfg);
+        ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(cfg);
         if (fp32_dest_acc_en) {
-            std::visit(
-                [&](auto& c) { c.unpack_modes.emplace(IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest); }, compute_hw);
+            compute_hw.unpack_modes.emplace(IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest);
         }
         return compute_hw;
     };

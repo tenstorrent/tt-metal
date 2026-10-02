@@ -290,7 +290,6 @@ def test_recurrent_chunk_scan_is_device_deterministic(zero_actual_start, device:
 def test_recurrent_chunk_scan_cache_hit_rebinds_fresh_tensors(
     zero_actual_start, device: ttnn.Device, isolated_program_cache: None
 ) -> None:
-    case = _REGRESSION_CASE
     host_a, state_a_host, inputs_a, state_a = _regression_inputs(device, protocol_seed=1911, state_seed=1913)
     host_b, state_b_host, inputs_b, state_b = _regression_inputs(device, protocol_seed=1912, state_seed=1914)
     outputs_a = run_recurrent(inputs_a, state_a, actual_start=zero_actual_start)
@@ -320,7 +319,6 @@ def test_recurrent_chunk_scan_cache_hit_rebinds_fresh_tensors(
 def test_recurrent_chunk_scan_default_compute_config_matches_explicit_defaults(
     zero_actual_start, device: ttnn.Device, isolated_program_cache: None
 ) -> None:
-    case = _REGRESSION_CASE
     _, _, inputs, state = _regression_inputs(device, protocol_seed=817, state_seed=817)
     implicit = run_recurrent(inputs, state, actual_start=zero_actual_start)
     entries = device.num_program_cache_entries()
@@ -342,7 +340,6 @@ def test_recurrent_chunk_scan_default_compute_config_matches_explicit_defaults(
 def test_recurrent_chunk_scan_approximate_math_uses_distinct_accurate_program(
     zero_actual_start, device: ttnn.Device, isolated_program_cache: None
 ) -> None:
-    case = _REGRESSION_CASE
     host_inputs, host_state, inputs, state = _regression_inputs(device, protocol_seed=818, state_seed=818)
     exact = run_recurrent(inputs, state, actual_start=zero_actual_start)
     entries = device.num_program_cache_entries()
@@ -368,7 +365,6 @@ def test_recurrent_chunk_scan_approximate_math_uses_distinct_accurate_program(
 def test_recurrent_chunk_scan_rejects_unsupported_compute_config(
     zero_actual_start, device: ttnn.Device, expect_error: Callable
 ) -> None:
-    case = _REGRESSION_CASE
     _, _, inputs, state = _regression_inputs(device, protocol_seed=819, state_seed=819)
     unsupported_config = ttnn.types.BlackholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,

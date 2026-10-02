@@ -387,6 +387,7 @@ private:
     uint32_t noc_stream_remote_dest_buf_space_available_update_reg_index_{};
     uint32_t operand_start_stream_{};
     bool has_stream_registers_{};
+    bool supports_fds_{};
     NoCTopologyType noc_topology_{};
     std::vector<uint32_t> noc_x_id_translate_table_;
     std::vector<uint32_t> noc_y_id_translate_table_;
@@ -413,6 +414,7 @@ private:
     uint32_t neo_tile_counters_buffer_capacity_offset_{};
 
     bool has_remapper_{};
+    bool noc_att_enabled_{};
     uint32_t remapper_global_control_addr_{};
     uint32_t remapper_client_l_config_base_addr_{};
     uint32_t remapper_client_r_config_base_addr_{};
@@ -434,7 +436,8 @@ private:
         uint32_t profiler_dram_bank_size_per_risc_bytes,
         bool enable_dram_backed_cq,
         bool is_simulator,
-        bool enable_blackhole_dram_programmable_cores);
+        bool enable_blackhole_dram_programmable_cores,
+        bool enable_aerisc_ptp_trace);
     void initialize_qa(uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq);
 
     // Functions where implementation varies by architecture
@@ -463,7 +466,8 @@ public:
         uint32_t profiler_dram_bank_size_per_risc_bytes,
         bool enable_dram_backed_cq,
         bool is_simulator = false,
-        bool enable_blackhole_dram_programmable_cores = false);
+        bool enable_blackhole_dram_programmable_cores = false,
+        bool enable_aerisc_ptp_trace = false);
 
     tt::ARCH get_arch() const { return arch_; }
 
@@ -500,6 +504,7 @@ public:
         return noc_stream_remote_dest_buf_space_available_update_reg_index_;
     }
     uint32_t get_operand_start_stream() const { return operand_start_stream_; }
+    bool supports_fds() const { return supports_fds_; }
     bool has_stream_registers() const { return has_stream_registers_; }
     bool has_tile_counter_registers() const { return has_tile_counter_registers_; }
     bool supports_implicit_dfb_sync() const { return supports_implicit_dfb_sync_; }
@@ -512,6 +517,7 @@ public:
     uint32_t get_neo_tile_counters_buffer_capacity_offset() const { return neo_tile_counters_buffer_capacity_offset_; }
 
     bool has_remapper() const { return has_remapper_; }
+    bool noc_att_enabled() const { return noc_att_enabled_; }
     uint32_t get_remapper_global_control_addr() const { return remapper_global_control_addr_; }
     uint32_t get_remapper_client_l_config_base_addr() const { return remapper_client_l_config_base_addr_; }
     uint32_t get_remapper_client_r_config_base_addr() const { return remapper_client_r_config_base_addr_; }
@@ -527,9 +533,7 @@ public:
     float get_inf() const { return inf_; }
 
     // NUM_CIRCULAR_BUFFERS is a temporary constant pending DFB migration
-    uint32_t get_arch_num_circular_buffers() const {
-        return (arch_ == tt::ARCH::WORMHOLE_B0) ? 32 : NUM_CIRCULAR_BUFFERS;
-    }
+    uint32_t get_num_dataflow_buffers() const { return (arch_ == tt::ARCH::WORMHOLE_B0) ? 32 : NUM_CIRCULAR_BUFFERS; }
 
     uint32_t get_noc_max_burst_size_bytes() const { return noc_max_burst_size_bytes_; }
 

@@ -90,6 +90,7 @@ def test_linear(
     )
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("m_size", [384])
 @pytest.mark.parametrize("k_size", [1024])
@@ -410,6 +411,7 @@ def test_linear_fp32_acc(device, m_size, k_size, n_size):
     )
 
 
+@pytest.mark.merge_gate
 def test_bloom_ff2_linear(device):
     torch.manual_seed(0)
     torch_input_tensor = torch_random((8, 384, 4096), -0.1, 0.1, dtype=torch.float32)
@@ -512,6 +514,7 @@ def test_linear_by_passing_in_1D_systolic_array_program_config_and_optional_outo
     assert_with_pcc(optional_output_tensor, output_tensor, 0.997)
 
 
+@pytest.mark.merge_gate
 def test_linear_with_fp32_dest_acc_and_bias(device):
     torch.manual_seed(0)
     torch_input_tensor_a = torch.rand([64, 1, 256, 384])
@@ -648,7 +651,7 @@ def test_resnet50_linear(device):
         ((32, 2, 32), (32, 32), (1, 32)),  # 4D tensors with no bias
     ],
 )
-def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
+def test_vector_linear(device, shape_a, shape_b, shape_bias) -> None:
     """
     Test the compatibility of the torch and ttnn linear for the given operation and different
     tensor shapes.
@@ -701,16 +704,14 @@ def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
         logger.info('[EXPECTED_ERROR END] RuntimeError message="Unsupported bias shape"')
 
     # Compare error behavior
-    if torch_errored != ttnn_errored:
-        return (
-            False,
-            f"mismatch in errors raised: torch: {torch_errored} ({torch_error_msg}), ttnn: {ttnn_errored} ({ttnn_error_msg})",
-        )
+    assert (
+        torch_errored == ttnn_errored
+    ), f"mismatch in errors raised: torch: {torch_errored} ({torch_error_msg}), ttnn: {ttnn_errored} ({ttnn_error_msg})"
 
     # Skip the rest of the test if an exception was raised in both
     if torch_errored:
         logger.warning(f"both torch and ttnn raised errors: torch: {torch_error_msg}, ttnn: {ttnn_error_msg}")
-        return (True, "")
+        return
 
     # Convert ttnn result to torch for comparison
     ttnn_result_torch = ttnn.to_torch(ttnn.from_device(ttnn_result))
@@ -733,9 +734,9 @@ def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
     # Allow some tolerance for numeric differences
     atol = rtol = 0.1
 
-    assert torch.allclose(torch_result, ttnn_result_torch, atol=atol, rtol=rtol, equal_nan=True), (
-        f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result_torch}",
-    )
+    assert torch.allclose(
+        torch_result, ttnn_result_torch, atol=atol, rtol=rtol, equal_nan=True
+    ), f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result_torch}"
 
 
 @pytest.mark.parametrize("in0_block_w", [1, 2, 4, 8])

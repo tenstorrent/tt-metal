@@ -53,6 +53,7 @@ class TtKimiK3Transformer(LightweightModule):
         kv_only_last_layer: bool = False,
         model_cfg: type | None = None,
         routed_expert_weights_dtype=None,
+        mtp_levels: int = 0,  # TtKimiK3Runtime rejects nonzero before this runs
     ) -> bool:
         """Whether this rank's whole slice is on disk, in the signature the runtime calls.
 
@@ -105,9 +106,12 @@ class TtKimiK3Transformer(LightweightModule):
         # left to `**block_kwargs`, which would forward them to `TtKimiK3Block` and raise.
         padding_side: str = "right",
         sparse_kv_cache_format=None,
+        mtp_predictor=None,
         **block_kwargs,
     ):
         super().__init__()
+        if mtp_predictor is not None:
+            raise ValueError("Kimi-K3 has no MTP predictor; got a non-None mtp_predictor")
         # Kimi-K3's MLA cache is dense: `zero_padded_kv_cache` asserts TILE layout, which a sparse
         # kvpe cache (bf16/fp8 ROW_MAJOR, read natively by sparse_sdpa) does not satisfy. Accepting a
         # sparse format silently would produce a cache the pad-zero path cannot touch, so refuse it.
@@ -433,6 +437,10 @@ class TtKimiK3Transformer(LightweightModule):
         rope_tensors=None,
         padding_side: Optional[str] = None,
         layer_tap: Optional[Callable] = None,
+        mtp_union=None,
+        on_mtp_complete: Optional[Callable] = None,
+        input_is_embedded: bool = False,
+        provided_levels: int = 0,
     ):
         """Run this rank's layers. Returns the post-norm hidden state, or the raw one mid-pipeline.
 
@@ -452,6 +460,8 @@ class TtKimiK3Transformer(LightweightModule):
             raise ValueError("Kimi-K3 has no DSA indexer; index_kv_cache must be None")
         if return_intermediates:
             raise NotImplementedError("Kimi-K3 does not implement return_intermediates")
+        if mtp_union is not None or on_mtp_complete is not None or input_is_embedded or provided_levels:
+            raise ValueError("Kimi-K3 has no MTP predictor; MTP forward arguments must be left at their defaults")
         # The constructor argument is the channel `TtPrefillTransformer` uses (it reads
         # `self.padding_side` and takes no per-call value), so defaulting the keyword to "right"
         # here made a `padding_side="left"` model mask the wrong end of every chunk.

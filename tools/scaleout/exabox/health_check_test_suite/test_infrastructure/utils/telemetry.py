@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import requests
 from prometheus_client.parser import text_string_to_metric_families
@@ -113,14 +114,47 @@ def _split_unreadable(name: str, samples: list[dict]) -> tuple[list[dict], list[
     return readable, unreadable
 
 
-def collect_prometheus_metrics(port: int = SLURM_TELEMETRY_PORT) -> dict[str, list[dict]] | None:
+def _write_dump(dump_path: Path, body: bytes) -> None:
+    """Keep the endpoint's reply on disk, as the bytes it arrived as.
+
+    ``resp.text`` would decode with whatever encoding requests guessed and
+    ``write_text`` re-encode with the locale's, which loses exactly the
+    malformed reply the dump is most wanted for. An unwritable results_dir is
+    logged rather than raised: this is an artifact, not the run's verdict.
+    """
+    try:
+        dump_path.parent.mkdir(parents=True, exist_ok=True)
+        dump_path.write_bytes(body)
+    except OSError as exc:
+        log.warning("Could not write raw telemetry to %s: %s", dump_path, exc)
+    else:
+        log.info("Raw telemetry (%d bytes) written to %s", len(body), dump_path)
+
+
+def collect_prometheus_metrics(
+    port: int = SLURM_TELEMETRY_PORT, dump_path: Path | None = None
+) -> dict[str, list[dict]] | None:
     """Collect telemetry metrics from the local Prometheus endpoint.
 
     Returns a dict mapping metric name to a list of
     ``{"labels": {…}, "value": float}`` dicts, or *None* if the endpoint is
     unreachable or no relevant metrics are found.
+
+    ``dump_path`` keeps the reply verbatim, because only TELEMETRY_METRICS is
+    parsed out of it and that is a sixth of what the endpoint sends. The rest is
+    gone the moment this returns: per-link queue drops and resends, the
+    ``tt_fabric_*`` bandwidth, packet and router-state families, and the
+    per-device readable percentages. Written before parsing so a reply the parser
+    chokes on is still on disk to look at.
     """
     url = f"http://localhost:{port}/metrics"
+
+    if dump_path is not None:
+        # Dropped before the request, not after a failed one: the requeue from a
+        # self-heal reboot keeps the job id and so reuses results_dir, and a
+        # scrape taken just after that reboot is the likeliest one to fail. The
+        # previous run's dump would then be attached as this run's telemetry.
+        dump_path.unlink(missing_ok=True)
 
     try:
         resp = requests.get(url, timeout=10)
@@ -128,6 +162,9 @@ def collect_prometheus_metrics(port: int = SLURM_TELEMETRY_PORT) -> dict[str, li
     except requests.RequestException as exc:
         log.info("Prometheus metrics endpoint not available at %s: %s", url, exc)
         return None
+
+    if dump_path is not None:
+        _write_dump(dump_path, resp.content)
 
     metrics: dict[str, list[dict]] = {}
     for family in text_string_to_metric_families(resp.text):

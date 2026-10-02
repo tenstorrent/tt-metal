@@ -332,7 +332,6 @@ template <uint32_t tile_bytes>
 void fill_neginf_tile(uint32_t cb_id, uint32_t tile_id) {
     constexpr uint32_t num_exponents = tt::constants::FACE_HEIGHT * (tt::constants::TILE_HW / tt::constants::FACE_HW);
     constexpr uint32_t bfp4_size = num_exponents + tt::constants::TILE_HW / 2;
-    constexpr uint32_t bfp8_size = num_exponents + tt::constants::TILE_HW;
     constexpr uint32_t bf16_size = tt::constants::TILE_HW * 2;
 
     CircularBuffer cb(cb_id);
@@ -910,8 +909,6 @@ void generate_causal_sliding_window_mask(
 
     int zero_tile_idx = -1;
     int inf_tile_idx = -1;
-    int triu_diag_tile_idx = -1;
-    int tril_diag_tile_idx = -1;
 
     int32_t min_window_start, max_window_start, min_window_end, max_window_end;
     for (uint32_t q_tile = 0; q_tile < Sq_chunk_t; ++q_tile) {
@@ -1571,9 +1568,11 @@ void write_block(
     const uint32_t cols,
     const uint32_t out_tile_id,
     const uint32_t tile_bytes,
-    const uint32_t barrier_threshold) {
+    const uint32_t barrier_threshold,
+    const uint32_t row_stride = 0) {
     uint32_t barrier_count = 0;
     uint32_t tile_id = out_tile_id;
+    const uint32_t row_skip = (row_stride ? row_stride : cols) - cols;
 
     CircularBuffer cb(cb_out);
     cb.wait_front(out_chunk_tiles);
@@ -1590,6 +1589,7 @@ void write_block(
                 barrier_count = 0;
             }
         }
+        tile_id += row_skip;
     }
     noc.async_write_barrier();
     cb.pop_front(out_chunk_tiles);
@@ -1612,10 +1612,12 @@ void write_block_row_grouped(
     const uint32_t out_tile_id,
     const uint32_t tile_bytes,
     const uint32_t sbh,
-    const uint32_t barrier_threshold) {
+    const uint32_t barrier_threshold,
+    const uint32_t row_stride = 0) {
     constexpr uint32_t default_trid = 0;
     uint32_t tile_id = out_tile_id;
     uint32_t barrier_count = 0;
+    const uint32_t row_skip = (row_stride ? row_stride : cols) - cols;
 
     const uint32_t num_full_groups = total_rows / sbh;
     const uint32_t remainder_rows = total_rows - num_full_groups * sbh;
@@ -1638,6 +1640,7 @@ void write_block_row_grouped(
                         barrier_count = 0;
                     }
                 }
+                tile_id += row_skip;
             }
         }
         // Flush THIS drain's writes (default trid) before pop so compute can safely reuse the L1 slot.

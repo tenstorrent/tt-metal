@@ -15,7 +15,7 @@
  * in1 tile shape: [32, 32]
  * rt_dim: 1
  * ct_dim: any integer from 1 to 16
- * kt_dim: even number from 2 to 256 (inclusive)
+ * kt_dim: any integer from 1 to 256 (inclusive)
  * fidelity: LoFi only
  * throttle: not supported
  *
@@ -53,7 +53,6 @@ inline void llk_unpack_AB_custom_mm(
     const std::uint32_t tile_index_B = tile_index_0;
     const std::uint32_t tile_size_A = get_local_cb_interface(operandA_id).fifo_page_size;
     const std::uint32_t tile_size_B = get_local_cb_interface(operandB_id).fifo_page_size;
-
     _llk_unpack_AB_custom_mm_<read_transposed, clear_src>(
         base_address_A, base_address_B, tile_index_A, tile_index_B, tile_size_A, tile_size_B, kt_dim, ct_dim);
 }

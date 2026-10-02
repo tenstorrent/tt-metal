@@ -113,6 +113,13 @@ class TestFactory:
         }
 
 
+# A fabric mux carves raw L1 upward from the unreserved base, outside the allocator, so a
+# GlobalSemaphore allocated in general L1 can land inside the mux's map and be silently
+# overwritten (#56769). L1_SMALL sits above the mux's ceiling, so every mesh shape that can
+# reach a CCL op needs the region to exist. Opening with 0 is a build-time fatal.
+L1_SMALL_SIZE = 16384
+
+
 def parametrize_mesh_with_fabric(mesh_shapes=None):
     """Universal mesh + fabric parametrization for gpt_oss tests.
 
@@ -168,7 +175,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
         params = [
             pytest.param(
                 (1, 1),
-                {"fabric_config": None, TRACE_MODEL_KEY_PARAM: "gpt-oss-120b"},
+                {"fabric_config": None, "l1_small_size": L1_SMALL_SIZE, TRACE_MODEL_KEY_PARAM: "gpt-oss-120b"},
                 id="1x1",
                 marks=pytest.mark.skip(reason="No supported gpt_oss mesh shape fits on this system"),
             )
@@ -179,6 +186,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
                 shape,
                 {
                     "fabric_config": (None if shape == (1, 1) else ttnn.FabricConfig.FABRIC_1D_RING),
+                    "l1_small_size": L1_SMALL_SIZE,
                     TRACE_MODEL_KEY_PARAM: "gpt-oss-120b",
                 },
                 id=f"{shape[0]}x{shape[1]}",
