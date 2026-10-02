@@ -121,7 +121,7 @@ def test_a2_rows_match_the_single_user_pipeline(pipe, single):
     from models.experimental.voxtral_tts.reference import voxtral_backbone_ref as bref
 
     reqs = _requests_all_voices(pipe.model_dir)
-    probe = [0, 1, 5, 12]
+    probe = [p for p in (0, 1, 5, 12) if p < B]  # rows that exist at this batch (B=1: row 0 only)
     K = 20
     # The history both sides are fed: the single-user pipeline's own free run for each probe row.
     history, embeds, lens = {}, {}, {}
