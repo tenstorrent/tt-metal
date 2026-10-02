@@ -272,7 +272,18 @@ public:
         std::function<
             void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)>)
         const override;
+    void process_tensor_binding_handles(const std::function<void(
+                                            const std::string& accessor_name,
+                                            uint32_t cta_offset,
+                                            uint32_t addr_crta_offset,
+                                            uint32_t num_runtime_field_crta_words,
+                                            const LLKMetadata&)>&) const override;
     const std::vector<TensorBindingHandle>& tensor_binding_handles() const { return tensor_binding_handles_; }
+    void process_scratchpad_binding_handles(const std::function<void(
+                                                const std::string& accessor_name,
+                                                uint32_t size_bytes,
+                                                uint32_t addr_crta_word,
+                                                const std::optional<LLKMetadata>&)>&) const override;
     // Scratchpad binding handles are set post-construction.
     // Non-const accessor lets allocate_scratchpads fill each handle's allocated_address after L1 allocation.
     const std::vector<ScratchpadBindingHandle>& scratchpad_binding_handles() const {
@@ -284,12 +295,16 @@ public:
     }
     // PrefetcherPipe binding handles are set post-construction (before compile: they are part of
     // the kernel cache key and of kernel_bindings_generated.h).
+    void process_prefetcher_pipe_binding_handles(
+        std::function<void(const std::string& accessor_name, uint8_t prefetcher_pipe_id)>) const override;
     const std::vector<PrefetcherPipeBindingHandle>& prefetcher_pipe_binding_handles() const {
         return prefetcher_pipe_binding_handles_;
     }
     void set_prefetcher_pipe_binding_handles(std::vector<PrefetcherPipeBindingHandle> handles) {
         prefetcher_pipe_binding_handles_ = std::move(handles);
     }
+    void process_tensor_binding_sequences(
+        std::function<void(const std::string& sequence_name, const std::vector<std::string>& members)>) const override;
     void set_tensor_binding_sequences(std::vector<TensorBindingSequenceHandle> sequences) {
         tensor_binding_sequences_ = std::move(sequences);
     }
