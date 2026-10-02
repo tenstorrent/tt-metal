@@ -36,7 +36,7 @@ autograd::TensorPtr embedding_op(const autograd::TensorPtr& tensor, const autogr
         weight->add_grad(weight_grad);
     };
 
-    out->set_node(autograd::add_backward_node(std::move(grad), out, weight, tensor));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, weight));
     return out;
 }
 

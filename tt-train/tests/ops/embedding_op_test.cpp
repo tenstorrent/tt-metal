@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include "autograd/auto_context.hpp"
+#include "autograd/callback.hpp"
 #include "autograd/tensor.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
@@ -19,6 +20,7 @@ protected:
     }
 
     void TearDown() override {
+        ttml::autograd::ctx().reset_graph();
         ttml::autograd::ctx().close_device();
     }
 };
@@ -63,6 +65,44 @@ TEST_F(EmbeddingOpTest, EmbeddingForwardBackward) {
                 1e-2);
         }
     }
+}
+
+TEST_F(EmbeddingOpTest, EmbeddingDoesNotLinkIndexAutogradAncestry) {
+    using namespace ttml;
+
+    auto* device = &autograd::ctx().get_device();
+    constexpr uint32_t kNumEmbeddings = 32U;
+    constexpr uint32_t kEmbeddingDim = 32U;
+    constexpr uint32_t kSentenceSize = 32U;
+
+    std::vector<uint32_t> index_data(kSentenceSize);
+    std::iota(index_data.begin(), index_data.end(), 0U);
+    auto index_leaf = autograd::create_tensor(core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        index_data, ttnn::Shape({1U, 1U, 1U, kSentenceSize}), device, ttnn::Layout::ROW_MAJOR));
+    uint32_t index_visits = 0U;
+    auto indices = autograd::autograd_callback(index_leaf, [&index_visits]() { ++index_visits; });
+
+    auto weight_leaf = autograd::create_tensor(
+        core::zeros(ttnn::Shape({1U, 1U, kNumEmbeddings, kEmbeddingDim}), device),
+        /* requires_grad */ true);
+    uint32_t weight_visits = 0U;
+    auto weight = autograd::autograd_callback(weight_leaf, [&weight_visits]() { ++weight_visits; });
+
+    auto embeddings = ops::embedding_op(indices, weight);
+    ASSERT_TRUE(indices->get_node().has_value());
+    ASSERT_TRUE(weight->get_node().has_value());
+    ASSERT_TRUE(embeddings->get_node().has_value());
+
+    const auto& embedding_node = embeddings->get_node().value();
+    const auto& parents = embedding_node.get_graph().get_edges().at(embedding_node.get_id());
+    ASSERT_EQ(parents, std::vector<size_t>{weight->get_node()->get_id()});
+
+    embeddings->backward();
+    EXPECT_EQ(weight_visits, 1U);
+    EXPECT_EQ(index_visits, 0U);
+    EXPECT_TRUE(weight_leaf->is_grad_initialized());
+    EXPECT_FALSE(indices->is_grad_initialized());
+    EXPECT_FALSE(index_leaf->is_grad_initialized());
 }
 
 TEST_F(EmbeddingOpTest, EmbeddingNumEmbeddingsEmbeddingDimNotDivisibleBy32) {
