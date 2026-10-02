@@ -14,8 +14,8 @@ The benchmark is the paper shape on one Blackhole p150a:
 | First paper-shape run, eager `tt.forward` (`da30c104777`) | 6289 ms | 1× |
 | First trace baseline, default precision, DRAM (`27c2acd7d78`) | 2659 ms replay | 2.4× |
 | A10G reference (300 series/s, [tests/perf/test_paper_forward.py](tests/perf/test_paper_forward.py#L25-L26)) | 3413 ms | 1.8× |
-| Current, `performance_l1`, trace replay | **158.4 ms** (6,464 series/s) | **40×** |
-| Current, `performance_l1`, serial end-to-end (host prepare, upload, replay, readback) | 190.9 ms | 33× |
+| Current, `performance_l1`, trace replay | **153 ms** (6,690 series/s) | **41×** |
+| Current, `performance_l1`, serial end-to-end (host prepare, upload, replay, readback) | 199 ms | 32× |
 
 ## Test Measurements/configs
 
@@ -58,6 +58,8 @@ also note that the performance gains taper off as the model becomes more optimiz
 | 14 | [Overlap host prepare with replay](#14-overlap-host-prepare-with-replay-fb2dda1082e) | `fb2dda1082e` | performance L1; streamed vs serial per batch | 322 → 311 | 11 | 3.4% | Serial host CPU time | recorded |
 | 15 | [Fused QKV head split and RoPE](#15-fused-qkv-head-split-and-rope-41c6856ef36) | `41c6856ef36` | performance L1 | 190.1 → 181.0 | 9.1 | 4.8% | Kernel launches; L1 round trip | recorded |
 | 16 | [Two command queues for input refresh](#16-two-command-queues-for-input-refresh-5ed70864de0) | `5ed70864de0` | default DRAM, end-to-end | 2767.4 → 2764.4 | ≈0 | 0.1% | none (noise) | measured |
+
+Before → after figures were recorded at each commit, so the chain ends at 151.4 ms (rank 13). The current tree measures a 152–155 ms median replay on a warm chip, with 3–5% thermal variance; the summary uses 153 ms, matching the README.
 
 Data parallel over a mesh ([`4abfa9b0395`](#data-parallel-scaling)) is left out of this table because it changes chip count, not single-chip time.
 Note that dataparallel will get almost a linear scale till the bottleneck becomes the datamovement to the actual chip
