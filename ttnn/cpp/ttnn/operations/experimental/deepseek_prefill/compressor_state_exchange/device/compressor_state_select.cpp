@@ -48,6 +48,11 @@ CompressorStateSelectDeviceOperation::tensor_return_value_t CompressorStateSelec
     return create_device_tensor(compute_output_specs(params, args), args.initial_state.device());
 }
 
+ttsl::hash::hash_t CompressorStateSelectDeviceOperation::compute_program_hash(
+    const operation_attributes_t& params, const tensor_args_t& args) {
+    return ttsl::hash::hash_objects_with_default_seed(params.cluster_axis, args);
+}
+
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

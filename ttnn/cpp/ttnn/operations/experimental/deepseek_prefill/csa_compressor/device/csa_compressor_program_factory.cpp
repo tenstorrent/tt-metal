@@ -4,6 +4,7 @@
 #include "csa_compressor_device_operation.hpp"
 
 #include <algorithm>
+#include <initializer_list>
 #include <utility>
 
 #include <tt-metalium/constants.hpp>
@@ -232,6 +233,49 @@ KernelDescriptor state_kernel_descriptor(
     return descriptor;
 }
 
+// Kernel order of CsaCompressionProgramFactory::create_descriptor's pushes; state preparation has only
+// the state kernel, at index 0.
+enum : uint32_t { kReaderIdx, kComputeIdx, kWriterIdx, kCompressionStateIdx };
+
+// Every value a cache hit has to refresh -- buffer addresses and the chunk position -- is the same on
+// all of a kernel's cores, so the patch overwrites those slots on each core that carries args and leaves
+// the shape-derived tile split from the miss in place.
+void patch_runtime_args(
+    Program& program, uint32_t kernel_idx, std::initializer_list<std::pair<uint32_t, uint32_t>> slots) {
+    for (auto& column : GetRuntimeArgs(program, kernel_idx)) {
+        for (auto& args : column) {
+            if (args.size() == 0) {
+                continue;
+            }
+            for (const auto& [index, value] : slots) {
+                args[index] = value;
+            }
+        }
+    }
+}
+
+void patch_state_args(
+    Program& program,
+    uint32_t kernel_idx,
+    const CsaStateInputs& args,
+    const Tensor& output_kv,
+    const Tensor& output_score,
+    uint32_t local_valid,
+    uint32_t absolute_start) {
+    patch_runtime_args(
+        program,
+        kernel_idx,
+        {{rt::index(rt::State::KvAddress), args.kv.buffer()->address()},
+         {rt::index(rt::State::GateAddress), args.gate.buffer()->address()},
+         {rt::index(rt::State::BiasAddress), args.position_bias.buffer()->address()},
+         {rt::index(rt::State::BaseKvAddress), args.base_kv_state.buffer()->address()},
+         {rt::index(rt::State::BaseScoreAddress), args.base_score_state.buffer()->address()},
+         {rt::index(rt::State::OutputKvAddress), output_kv.buffer()->address()},
+         {rt::index(rt::State::OutputScoreAddress), output_score.buffer()->address()},
+         {rt::index(rt::State::LocalValid), local_valid},
+         {rt::index(rt::State::AbsoluteStart), absolute_start}});
+}
+
 }  // namespace
 
 ProgramDescriptor CsaStatePreparationProgramFactory::create_descriptor(
@@ -257,6 +301,17 @@ ProgramDescriptor CsaStatePreparationProgramFactory::create_descriptor(
     desc.kernels.push_back(
         state_kernel_descriptor(args, outputs, state_cores, cores, state_tiles, local_valid, absolute_start));
     return desc;
+}
+
+void CsaStatePreparationProgramFactory::override_runtime_arguments(
+    Program& program,
+    const CsaRuntimeParams& params,
+    const CsaStateInputs& args,
+    std::array<Tensor, 2>& outputs,
+    const std::optional<MeshCoordinate>& mesh_dispatch_coordinate) {
+    const auto [local_valid, absolute_start] =
+        local_runtime(params, args.kv.logical_shape()[-2], *mesh_dispatch_coordinate);
+    patch_state_args(program, /*kernel_idx=*/0, args, outputs[0], outputs[1], local_valid, absolute_start);
 }
 
 ProgramDescriptor CsaCompressionProgramFactory::create_descriptor(
@@ -380,6 +435,30 @@ ProgramDescriptor CsaCompressionProgramFactory::create_descriptor(
     desc.kernels.push_back(state_kernel_descriptor(
         state_args, state_outputs, state_cores, state_core_list, state_tiles, local_valid, absolute_start));
     return desc;
+}
+
+void CsaCompressionProgramFactory::override_runtime_arguments(
+    Program& program,
+    const CsaRuntimeParams& params,
+    const CsaCompressionInputs& args,
+    std::array<Tensor, 3>& outputs,
+    const std::optional<MeshCoordinate>& mesh_dispatch_coordinate) {
+    const auto [local_valid, absolute_start] =
+        local_runtime(params, args.kv.logical_shape()[-2], *mesh_dispatch_coordinate);
+    patch_runtime_args(
+        program,
+        kReaderIdx,
+        {{rt::index(rt::Reader::KvAddress), args.kv.buffer()->address()},
+         {rt::index(rt::Reader::GateAddress), args.gate.buffer()->address()},
+         {rt::index(rt::Reader::BiasAddress), args.position_bias.buffer()->address()},
+         {rt::index(rt::Reader::PredecessorKvAddress), args.predecessor_kv_state.buffer()->address()},
+         {rt::index(rt::Reader::PredecessorScoreAddress), args.predecessor_score_state.buffer()->address()},
+         {rt::index(rt::Reader::CompleteWindows), local_valid / 4},
+         {rt::index(rt::Reader::AbsoluteStart), absolute_start}});
+    patch_runtime_args(program, kWriterIdx, {{rt::index(rt::Writer::OutputAddress), outputs[0].buffer()->address()}});
+    const CsaStateInputs state_args{
+        args.kv, args.gate, args.position_bias, args.predecessor_kv_state, args.predecessor_score_state};
+    patch_state_args(program, kCompressionStateIdx, state_args, outputs[1], outputs[2], local_valid, absolute_start);
 }
 
 }  // namespace ttnn::experimental::prim

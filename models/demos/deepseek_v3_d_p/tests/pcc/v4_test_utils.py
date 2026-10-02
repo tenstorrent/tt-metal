@@ -4,9 +4,14 @@
 
 """Shared helpers for the DeepSeek-V4 attention PCC and perf tests (HCA, CSA)."""
 
+from loguru import logger
+
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4.configuration_deepseek_v4 import DeepseekV4Config
 
 V4_SEED = 42
+# The stored compressed entries of a chunked run. They are written once and never recomputed, so this
+# holds ~0.9997 no matter how deep the run goes.
+V4_CACHE_PCC = 0.998
 
 
 def v4_reference_config(model_config, num_hidden_layers=4):
@@ -29,3 +34,14 @@ def v4_reference_config(model_config, num_hidden_layers=4):
     )
     cfg._attn_implementation = "eager"  # V4 is eager-only: the sdpa interface silently drops the sinks
     return cfg
+
+
+def report_chunk_pccs(pccs, floor):
+    """Log every chunk's PCC, then let the worst one decide. Asserting inside the loop stops at the first
+    chunk under the floor, and PCC can dip and recover -- reporting first means one run tells the whole
+    story instead of one chunk per run. ``pccs`` rows are ``(iter, kv_actual, valid, pcc)``."""
+    for it, kv_actual, valid, pcc in pccs:
+        log = logger.warning if pcc < floor else logger.info
+        log(f"  iter {it} (kv_actual={kv_actual} valid={valid}): PCC {pcc:.6f}")
+    worst_it, _, _, worst = min(pccs, key=lambda row: row[3])
+    assert worst >= floor, f"worst chunk PCC {worst:.6f} (iter {worst_it}) is below the floor {floor}"
