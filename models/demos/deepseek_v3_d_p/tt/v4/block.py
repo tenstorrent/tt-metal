@@ -32,6 +32,10 @@ _TRACED_RAGGED0 = os.environ.get("PREFILL_TRACED_CHUNK0_RAGGED", "1") == "1"  # 
 _TRACED_CHUNK0 = (
     os.environ.get("PREFILL_TRACED_CHUNK0", "1") == "1"
 )  # default on (DS4F-0300: closer to the torch reference)
+# DS4F-0300: the shortest ragged chunk (chunk 0 or a final tail) that runs its attention on the islands. Was 256 (= 32 x sp, the
+# EAGER path's alignment step -- no traced-path constraint behind it): every prompt < 256 tokens paid ~1.5 s of eager attention issue
+# and every tail < 256 tokens ran the whole layer eager. 256 restores the old floor (A/B).
+_TRACED_MIN_LEN = max(1, int(os.environ.get("PREFILL_TRACED_MIN_LEN", "1")))
 # DS4F-0300 measurement only (PREFILL_ISLAND_TIMING=1): synchronize after every island / glue step of a traced layer and add the
 # wall time to ISLAND_TIMES[(kind, step)]; the runtime logs and clears it per chunk. Serialises host and device -- timing runs only.
 _ISLAND_TIMING = os.environ.get("PREFILL_ISLAND_TIMING", "0") == "1"
@@ -519,10 +523,9 @@ class TtV4PrefillBlock(LightweightModule):
             and len(attn_islands) > 2
             and attn_islands[2] is not None
             and int(state.kv_actual) == 0
-            and (real_len >= 256 or real_len == getattr(self, "_chunk_tokens", -1))
+            and (real_len >= _TRACED_MIN_LEN or real_len == getattr(self, "_chunk_tokens", -1))
         ):
-            # chunk 0 on its own A2 island (DS4F-0300); a ragged chunk 0 under 256 tokens keeps the eager attention (the
-            # traced ragged path's alignment floor, DS4F-0268)
+            # chunk 0 on its own A2 island (DS4F-0300), any length >= PREFILL_TRACED_MIN_LEN (default 1)
             A1, A2 = attn_islands[0], attn_islands[2]
             a2_label = "A2c0"
             traced_attn = True
@@ -614,12 +617,12 @@ class TtV4PrefillBlock(LightweightModule):
         # DS4F-0268: a ragged FINAL chunk may ride the full-chunk islands (PREFILL_TRACED_RAGGED=1): the input buffer is
         # always chunk-wide, the attention is causal (pad rows never feed a real row), the eager glue / epilogue take the
         # real length (the HCA/CSA compressor masks read it from a scalar; the ring rows are re-derived; entries past the
-        # real ones stay -inf in the score mask and beyond the migrated range). Chunk 0 and tails under 256 tokens stay
-        # eager (the attention islands need trace_ready; the eager path's alignment step is 32 * sp).
+        # real ones stay -inf in the score mask and beyond the migrated range). A tail shorter than PREFILL_TRACED_MIN_LEN
+        # (default 1; was 256 = the eager path's 32 * sp alignment step) stays eager.
         ragged_traced = (
             _TRACED_RAGGED
             and real_len < chunk
-            and real_len >= 256
+            and real_len >= _TRACED_MIN_LEN
             and int(actual_start) > 0
             and bool(getattr(self, "_attn_islands", None))
             and slot in self._attn_islands
