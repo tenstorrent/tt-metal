@@ -229,14 +229,19 @@ Engine scripts take `--run DIR` (or `BUG_AUDIT_RUN`); paths below are relative t
   To extend an old run, do a diff-mode run from its commit rather than re-auditing everything.
 
 ## Mining a repo (building `packs/<repo>.md`)
-The same pipeline built the shipped packs. It is repo-agnostic.
-1. **Fetch:** `mining/fetch_repo.py owner/name <mine>/raw` (all closed issues and PRs; resumable; weekly windows).
-2. **Build cases:** `mining/make_cases.py --issues '<mine>/raw/issue/*.jsonl' --prs '<mine>/raw/pr/*.jsonl'
-   --git <clone> --out <mine>/cases.jsonl` [`--xref-git <clone>` when fixes landed in another repo]. This links each
+The same pipeline built the shipped packs. It is repo-agnostic. Name every output after the repository, as below
+(`<repo>` is its name without the owner, e.g. `tt-metal`): one mine can hold several repositories, and the start
+questions find each one's files by these names, beside its `<repo>.mined.json`.
+1. **Fetch:** `mining/fetch_repo.py owner/name <mine>/raw/<repo>` (all closed issues and PRs; resumable; weekly
+   windows). The per-repository directory keeps two repositories' dumps apart.
+2. **Build cases:** `mining/make_cases.py --issues '<mine>/raw/<repo>/issue/*.jsonl' --prs
+   '<mine>/raw/<repo>/pr/*.jsonl' --git <clone> --out <mine>/<repo>_cases.jsonl` [`--xref-git <clone>` when fixes
+   landed in another repo]. This links each
    bug issue to its fix commits (closing PR, `closes` references, commits citing the issue) and to later history:
    reverts, re-fixes, later fix-like commits to the same files.
-3. **Triage everything cheaply:** run `mining/make_chunks.py`, then the `mining/triage-wave.js` workflow, then
-   `mining/persist_mining.py`. Every case gets verdict, class, component, symptom and deep-read priority.
+3. **Triage everything cheaply:** run `mining/make_chunks.py --out-dir <mine>/chunks/<repo>`, then the
+   `mining/triage-wave.js` workflow, then `mining/persist_mining.py <output> <mine>/<repo>_triage.jsonl`. Every case
+   gets verdict, class, component, symptom and deep-read priority.
 4. **Pick a holdout set first.** `mining/select.py holdout --git <clone> [--exclude <older holdouts>] [--deep <deep
    stores>]` oversamples (about 1.4x the target) a seeded random set of confirmed code bugs with small, code-only
    fixes. `mining/holdout-screen-wave.js` then asks of each one whether the pre-fix code was really defective, and
@@ -246,21 +251,23 @@ The same pipeline built the shipped packs. It is repo-agnostic.
    skips it. Exclusion works by fix COMMIT, not only by case id, because an issue and its PR are separate cases that
    share one fix. A pick sharing a fix with an older holdout or a deep-read case is contaminated; mark it `"exclude":
    true` if one slips through. A pack that has seen the benchmark answers scores a meaningless 100%.
-5. **Deep-read** the priority cases: run `mining/select.py deep --exclude <holdout>`, then `mining/deep-wave.js`. For
-   each case:
+5. **Deep-read** the priority cases: run `mining/select.py deep --exclude <holdout> --out-dir <mine>/deep/<repo>`,
+   then `mining/deep-wave.js`, then `mining/persist_mining.py <output> <mine>/<repo>_deep.jsonl`. For each case:
    - the root cause;
    - whether the fix was complete (judged from later history and the current tree, never from the fact that it
      merged);
    - unfixed siblings in the current tree;
    - the general audit check that would have caught it.
-6. **Mine reviews:** run `mining/fetch_reviews.py` on PRs with review threads, then `mining/make_review_chunks.py` (a
+6. **Mine reviews:** run `mining/fetch_reviews.py` on PRs with review threads (into `<mine>/raw/<repo>/reviews.jsonl`),
+   then `mining/make_review_chunks.py` (a
    loose keyword filter that drops nits before any agent sees them), then `mining/review-wave.js`. This
    gives the defects reviewers caught before merge, and the lessons in PRs closed without merging.
 7. **Synthesise:** `mining/synthesize.py` computes the class weights and hot spots. Then write the pack by hand:
    a weighted class table, hot spots, seeds, incomplete fixes, and reviewer checks. The unfixed siblings from step 5
    are candidate bugs: sweep them (*Sweeping siblings from history*); never file them straight from mining.
 8. **Mark how far the mining reached:** `mining/marker.py write <mine>/<repo>.mined.json --repo owner/name --dumps
-   '<mine>/raw/issue/*.jsonl,<mine>/raw/pr/*.jsonl' --deep <deep.jsonl> --holdout <holdouts> [--tree-commit <sha>]`.
+   '<mine>/raw/<repo>/issue/*.jsonl,<mine>/raw/<repo>/pr/*.jsonl' --deep <mine>/<repo>_deep.jsonl --holdout
+   <holdouts> [--tree-commit <sha>]`.
    The watermark is the latest close time in the dumps. A published pack gets its own `packs/<repo>.mined.json`,
    written with `--public` (dates and counts, no issue or PR ids).
 
@@ -268,7 +275,7 @@ The same pipeline built the shipped packs. It is repo-agnostic.
 Mining a repo's whole history is the expensive part, and it is done once. After that, a refresh reads only what
 CLOSED since the watermark: nothing mined before is fetched, triaged or deep-read again.
 1. **What is new:** `mining/marker.py delta <mine>/<repo>.mined.json` counts the issues and PRs closed since.
-2. **Fetch the delta:** `mining/fetch_repo.py owner/name <mine>/raw --since <watermark date>`. It windows on the
+2. **Fetch the delta:** `mining/fetch_repo.py owner/name <mine>/raw/<repo> --since <watermark date>`. It windows on the
    CLOSE date, into `closed_*.jsonl` files beside the full fetch. Windowing on the creation date misses most of it:
    of the 40 tt-metal issues closed in the two days after one watermark, 38 had been opened before it.
 3. **Build, triage and deep-read only the new cases:** mining steps 2, 3 and 5 on the `closed_*` dumps, with
