@@ -18,13 +18,27 @@ from pathlib import Path
 from measure_context_dedup import canonical, common_prefix_blocks
 from probe_context_dedup import compact, compact_warning_blocks
 from probe_loop_recovery import wall_deadline
-from probe_native_eval_action import request_messages
+from probe_native_eval_action import forwarded_feedback, request_messages
 from replay_eval_requests import post
 from run_local_eval_probe import sampling_kwargs
 from summarize_swe_suite import completed_response_counters, counter_delta, deadline_audit
 
 
 class DiagnosticSamplingTests(unittest.TestCase):
+    def test_native_replay_restores_only_selected_request_feedback(self):
+        events = [
+            {"event": "request_start", "request_id": "old", "message_count": 4},
+            {"event": "repeated_tool_feedback", "request_id": "old", "feedback": "old note"},
+            {"event": "request_start", "request_id": "new", "message_count": 6},
+            {"event": "repeated_tool_feedback", "request_id": "new", "feedback": "current note"},
+        ]
+        self.assertEqual(forwarded_feedback(events, 6), [{"role": "user", "content": "current note"}])
+        with self.assertRaises(ValueError):
+            forwarded_feedback(events, 8)
+        events.append({"event": "reasoning_history_limited", "request_id": "new"})
+        with self.assertRaises(ValueError):
+            forwarded_feedback(events, 6)
+
     def test_default_does_not_change_or_alias_source_policy(self):
         original = {"config": {"model": {"model_kwargs": {"temperature": 1, "max_tokens": 32768}}}}
         candidate = sampling_kwargs(original)

@@ -52,9 +52,11 @@ Latest bounded probe: `local_sympy_old_bfp8_repeat_guarded_seed9472`, started
 **10:12:50**, ends at1200.440s with reward1 but no submission. Two repeat
 advisories, zero late actions, one cancelled upstream request; not promoted.
 Fresh local sklearn control submits in473.752s, reward0, same missing-attribute
-failure. The existing one-time generic submission-review candidate starts
-10:53:02, cap900s; no task-specific hints. Local server
-`gemma4-eval-history-limit` is exclusively owned by this bounded probe.
+failure. The one-time generic submission-review candidate submits in830.660s,
+also reward0: it immediately resubmits after review without repository tests.
+Policy rejected. A bounded saved-context Sympy next-action replay starts11:07;
+no tools are executed and no solve claim is possible. Local server
+`gemma4-eval-history-limit` remains exclusively owned.
 
 New default-off harness repairs at TTI**4fcfdcfb** stop owned container processes
 before verification and cancel abandoned upstream requests.58 host tests,
