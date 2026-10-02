@@ -70,9 +70,9 @@ _CMD_MISTRAL4_CHUNKED_8X1 = (
     "pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla_chunked_prefill_loudbox "
     "--wrapper-invocation"
 )
-# Mean of CI LoudBox runs 35232459600, 35263216504 and 35304150758, which span 0.075%. SDPA is 86%
-# of this total and CCL is 0, so the row tracks the depth-proportional term almost alone.
-_MISTRAL4_MLA_CHUNKED_LB_8X1_NS = 9_726_191
+# CI LoudBox run 36924353598. SDPA is 87% of this total and CCL is 0, so the row tracks the
+# depth-proportional term almost alone.
+_MISTRAL4_MLA_CHUNKED_LB_8X1_NS = 8_944_184
 
 
 @pytest.mark.timeout(0)
