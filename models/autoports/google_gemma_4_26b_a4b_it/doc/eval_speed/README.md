@@ -31,6 +31,10 @@ Sympy trial on the reused local server, with no task-specific guidance. It fails
 at **900.115 seconds**, reward 0, with repeated successful algebra inspections.
 A separate default-off exact-command/result advisory is now under bounded test;
 the numerical improvement alone has not established a better suite candidate.
+The first advisory yields a **639.742-second clean submission**, but reward stays
+0: it fixes the reported bug and breaks two existing regressions. A further
+generic existing-test/diff-review advisory control is pending; no hidden tests
+or task-specific solution are passed to the agent.
 The [precision audit](AUTODEBUG.md) confirms fresh BFP8 weight provenance but
 identifies unchanged prefill BFP4 and untested long-context numerical quality;
 it does not establish a cache/position bug.
