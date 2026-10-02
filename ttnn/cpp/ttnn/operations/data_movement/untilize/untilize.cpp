@@ -9,6 +9,7 @@
 #include "device/untilize_device_operation.hpp"
 #include "untilize_force.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
@@ -156,6 +157,26 @@ ttnn::Tensor untilize(
     using ttnn::operations::data_movement::untilize_codegen::is_demoted;
     using ttnn::operations::data_movement::untilize_codegen::supported_by_codegen;
     using ttnn::operations::data_movement::untilize_codegen::supported_execution_controls;
+
+    // Nothing to untilize. Both routes below split work by block count, which is 0 for an empty
+    // input, so neither emits a work unit while the dataflow buffers are already declared, and the
+    // spec is rejected. to_layout(TILE -> ROW_MAJOR) reaches here rather than
+    // untilize_with_unpadding whenever the padded shape already equals the logical one - a
+    // tile-aligned empty shape, or any sharded empty input. Allocate the output instead; untilize
+    // only changes layout, so the shape is the input's. Allocated, not filled: there is no element
+    // to initialise, a host upload would fail inside trace capture, and this keeps the input's mesh
+    // topology.
+    if (input_tensor.logical_volume() == 0) {
+        return create_device_tensor(
+            tt::tt_metal::TensorSpec(
+                input_tensor.logical_shape(),
+                tt::tt_metal::TensorLayout(
+                    operations::data_movement::untilize_output_dtype(input_tensor.dtype()),
+                    tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
+                    memory_config.value_or(input_tensor.memory_config()))),
+            input_tensor.device(),
+            input_tensor.tensor_topology());
+    }
 
     const bool controls_ok = supported_execution_controls(use_multicore, sub_core_grids);
 
