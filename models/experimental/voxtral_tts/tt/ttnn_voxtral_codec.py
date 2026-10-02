@@ -3,8 +3,8 @@
 
 """TTNN port of the Voxtral Codec DECODER (codec): audio codes -> 24 kHz waveform.
 
-Mirrors reference/voxtral_codec_ref.py op-for-op. Everything runs on device except the semantic
-codebook gather (_quantizer_host):
+Mirrors reference/voxtral_codec_ref.py op-for-op. Everything runs on device, the quantizer included
+(quantizer_decode; _quantizer_host is the fp32 host twin kept for comparison); only integer codes go up:
 
     codes [1,37,T] -> quantizer [1,292,T] -> conv k3 -> 4x {2-layer transformer [+ convT k4 s2]}
       -> output projection k7 -> [1,240,8T] -> unpatch -> [1,1,T*1920] @ 24 kHz
@@ -81,6 +81,16 @@ COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
 )
 
 
+def _split_bf16(x, pieces):
+    """fp32 -> `pieces` bf16 tensors whose sum reproduces x (3 pieces: exact)."""
+    out, rest = [], x.float()
+    for _ in range(pieces):
+        p = rest.to(torch.bfloat16)
+        out.append(p)
+        rest = rest - p.float()
+    return out
+
+
 class TtVoxtralCodecDecoder:
     """On-device codec decoder. __call__(codes [1,37,T] int64) -> waveform torch [1,1,T*1920]."""
 
@@ -100,7 +110,13 @@ class TtVoxtralCodecDecoder:
         lin = lambda t: dev(t.t())  # torch Linear [out,in] -> ttnn.linear wants [in,out]
         host = lambda t: ttnn.from_torch(t.contiguous(), dtype=DTYPE)  # conv weights stay on host
 
-        self.semantic_host = w["semantic_embedding"].float()  # host gather; see _quantizer_host
+        self.semantic_host = w["semantic_embedding"].float()  # fp32 reference copy (_quantizer_host)
+        # On-device semantic gather: the fp32 codebook as three bf16 pieces that sum back exactly (ttnn.embedding
+        # takes bf16 tables), row-major for the lookup.
+        self._sem_tabs = [
+            ttnn.from_torch(p.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+            for p in _split_bf16(self.semantic_host, 3)
+        ]
         # Per-tap weights for the output projection, which runs as matmuls (see _graph).
         # torch stores the conv as [out, in, k]; ttnn.linear wants [in, out].
         self._out_taps = [dev(w["output_proj.conv.weight"][:, :, j].t()) for j in range(PATCH_PROJ_KERNEL)]
@@ -420,8 +436,28 @@ class TtVoxtralCodecDecoder:
         return lat.reshape(1, 1, T, LATENT_DIM).contiguous()
 
     def quantizer_decode(self, codes):
-        """Host quantizer + upload, as one step (the eager path and the tests use this)."""
-        return ttnn.from_torch(self._quantizer_host(codes), dtype=DTYPE, layout=ttnn.TILE_LAYOUT, device=self.device)
+        """codes torch [1,37,T] -> device [1,1,T,292] latents, computed on device: the semantic embedding by
+        three bf16 lookups summed in fp32 (an exact split of the fp32 codebook), the acoustic levels as
+        c * 2 / (K - 1) - 1 from the uploaded integer codes. Only the integer codes cross PCIe."""
+        T = codes.shape[2]
+        idx = ttnn.from_torch(
+            codes[:, 0, :].reshape(1, T).to(torch.int32).contiguous(),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+        )
+        sem = None
+        for tab in self._sem_tabs:
+            piece = ttnn.typecast(ttnn.embedding(idx, tab, layout=ttnn.TILE_LAYOUT), DTYPE)  # [1,T,256]
+            sem = piece if sem is None else ttnn.add(sem, piece)
+        ac = ttnn.from_torch(
+            codes[0, 1:, :].t().reshape(1, T, NUM_CODEBOOKS - 1).to(torch.float32).contiguous(),
+            dtype=DTYPE,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+        )
+        ac = ttnn.subtract(ttnn.multiply(ac, 2.0 / (ACOUSTIC_CODEBOOK_SIZE - 1)), 1.0)
+        return ttnn.reshape(ttnn.concat([sem, ac], dim=-1), [1, 1, T, LATENT_DIM])
 
     # ----------------------------------------------------------------------------------
     # The device-only op sequence
@@ -485,10 +521,8 @@ class TtVoxtralCodecDecoder:
 
     @torch.no_grad()
     def _decode(self, codes, return_stages=False):
-        lat_host = self._quantizer_host(codes)
         stages = {} if return_stages else None
-        xd = ttnn.from_torch(lat_host, dtype=DTYPE, layout=ttnn.TILE_LAYOUT, device=self.device)
-        x = self._graph(xd, stages)
+        x = self._graph(self.quantizer_decode(codes), stages)
         # unpatch: channels-last [1,1,T',240] flattens (t, c) with c fastest == the reference's
         # permute(0,2,1).reshape(B,1,T'*240)
         out = ttnn.to_torch(x).float().reshape(1, 1, -1)

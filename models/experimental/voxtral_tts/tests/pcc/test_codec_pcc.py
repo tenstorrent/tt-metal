@@ -60,7 +60,7 @@ def test_waveform_pcc(pair, n_frames):
 
 
 def test_quantizer_is_exact(pair):
-    """The semantic gather runs on host, in fp32, so this stays exact."""
+    """The on-device quantizer (3-piece bf16 split of the fp32 codebook) matches the fp32 reference."""
     gen, w = pair
     codes = ref.make_synthetic_codes(16)
     from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
