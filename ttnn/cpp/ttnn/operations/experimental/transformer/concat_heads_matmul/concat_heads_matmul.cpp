@@ -17,7 +17,7 @@ ttnn::Tensor concat_heads_matmul(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::DataType> output_dtype,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config) {
+    const std::optional<ttnn::operations::matmul::MatmulProgramConfig>& program_config) {
     using namespace tt::constants;
 
     TT_FATAL(attn.storage_type() == StorageType::DEVICE, "attn must be on device");

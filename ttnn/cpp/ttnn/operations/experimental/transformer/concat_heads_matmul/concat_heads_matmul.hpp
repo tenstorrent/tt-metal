@@ -21,6 +21,6 @@ ttnn::Tensor concat_heads_matmul(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<tt::tt_metal::DataType> output_dtype = std::nullopt,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt);
+    const std::optional<ttnn::operations::matmul::MatmulProgramConfig>& program_config = std::nullopt);
 
 }  // namespace ttnn::experimental

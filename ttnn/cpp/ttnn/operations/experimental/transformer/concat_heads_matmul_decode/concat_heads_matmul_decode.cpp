@@ -4,6 +4,8 @@
 
 #include "ttnn/operations/experimental/transformer/concat_heads_matmul_decode/concat_heads_matmul_decode.hpp"
 
+#include <utility>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 
@@ -76,8 +78,8 @@ ttnn::Tensor concat_heads_matmul_decode(
         /*fused_gelu_approx=*/false,
         /*reshard_input=*/true,
         /*reshard_cores=*/reshard_cores,
-        /*residual=*/residual,
-        /*gate=*/gate);
+        /*residual=*/std::move(residual),
+        /*gate=*/std::move(gate));
 
     return out;
 }

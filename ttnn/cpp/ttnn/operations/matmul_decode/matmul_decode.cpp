@@ -4,6 +4,8 @@
 
 #include "matmul_decode.hpp"
 
+#include <utility>
+
 #include "device/matmul_decode_device_operation.hpp"
 #include "device/gate_up_matmul_decode_device_operation.hpp"
 
@@ -33,8 +35,8 @@ Tensor matmul_decode(
         fused_gelu_approx,
         reshard_input,
         reshard_cores,
-        residual,
-        gate);
+        std::move(residual),
+        std::move(gate));
 }
 
 Tensor gate_up_matmul_decode(

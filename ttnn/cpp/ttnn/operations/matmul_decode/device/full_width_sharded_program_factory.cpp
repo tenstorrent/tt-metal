@@ -306,7 +306,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     std::vector<CoreCoord> default_noc_cores;
     default_noc_cores.reserve(all_reader_cores.size());
     for (const auto& core : all_reader_cores) {
-        if (sender_id_by_core.find(core) == sender_id_by_core.end()) {
+        if (!sender_id_by_core.contains(core)) {
             default_noc_cores.push_back(core);
         }
     }

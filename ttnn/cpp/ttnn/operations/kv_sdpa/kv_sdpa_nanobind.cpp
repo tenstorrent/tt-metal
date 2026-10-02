@@ -17,8 +17,7 @@ namespace ttnn::operations::kv_sdpa {
 void bind_kv_sdpa_operation(nb::module_& mod) {
     ttnn::bind_function<"kv_sdpa">(
         mod,
-        R"doc(kv_sdpa(q, k, v, *, attn_mask=None, scale=None, compute_kernel_config=None) -> ttnn.Tensor
-
+        R"doc(
         Specialized fused-flash scaled-dot-product attention for the small-query MQA case: Q length is
         one tile (32), K/V have a single (or grouped) KV head shared across Q heads, and attention is
         non-causal full attention. One core per Q head runs the transformer-SDPA online-softmax flash

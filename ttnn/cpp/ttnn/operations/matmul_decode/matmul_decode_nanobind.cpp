@@ -17,8 +17,7 @@ namespace ttnn::operations::matmul_decode {
 void bind_matmul_decode_operation(nb::module_& mod) {
     ttnn::bind_function<"matmul_decode">(
         mod,
-        R"doc(matmul_decode(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, partial_width_sharded: bool = False, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
-
+        R"doc(
         Returns the matrix product of two tensors.
 
         Args:
@@ -54,8 +53,7 @@ void bind_matmul_decode_operation(nb::module_& mod) {
 
     ttnn::bind_function<"gate_up_matmul_decode">(
         mod,
-        R"doc(gate_up_matmul_decode(input_tensor_a: ttnn.Tensor, gate_b: ttnn.Tensor, up_b: ttnn.Tensor, *, dtype: Optional[ttnn.DataType] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, fused_gelu_approx: bool = False, reshard_input: bool = False, reshard_cores: int = 2) -> ttnn.Tensor
-
+        R"doc(
         Fused GeGLU gate+up projection: ONE gather of A, TWO partial-width-sharded weights, ONE
         output. Returns hid = gelu(A @ gate_w) * (A @ up_w). gate_b and up_b are partial-width-
         sharded resident-L1 weights laid out on the SAME core grid. Replaces two separate
