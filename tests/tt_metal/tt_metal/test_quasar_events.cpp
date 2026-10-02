@@ -23,18 +23,22 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
+constexpr const char* SIMPLE_L1_WRITE_KERNEL =
+    OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp";
+
 distributed::MeshWorkload make_l1_write_workload(
     distributed::MeshDevice& mesh_device,
     const experimental::NodeCoord& node,
     std::uint32_t address,
     std::uint32_t value,
-    const std::string& kernel_id) {
+    const std::string& kernel_id,
+    const std::string& source = SIMPLE_L1_WRITE_KERNEL) {
     distributed::MeshWorkload wl;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device.shape());
     const experimental::KernelSpecName DM_KERNEL{kernel_id};
     experimental::KernelSpec dm_kernel_spec{
         .unique_id = DM_KERNEL,
-        .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
+        .source = source,
         .num_threads = 1,
         .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
         .hw_config = experimental::DataMovementHardwareConfig{},
@@ -236,4 +240,52 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, RecordEventToHostFromBothCQs) {
     std::vector<std::uint32_t> out_1(1, 0);
     slow_dispatch::ReadFromL1(this->device(), node, address_1, sizeof(std::uint32_t), out_1);
     ASSERT_EQ(out_1[0], value_1);
+}
+
+// An event marks the recording queue's work up to the point it was recorded, so waiting on it must not wait for work
+// that queue takes on afterwards: here a workload that only finishes once the host releases it.
+TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, WaitOnEventIgnoresLaterWork) {
+    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
+        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
+                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
+    }
+
+    const experimental::NodeCoord node{0, 0};
+
+    const std::uint32_t written_address = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const std::uint32_t release_address = written_address + sizeof(std::uint32_t);
+    const std::uint32_t written_value = 0x2c3c0000;
+    const std::uint32_t release_value = 0x2c3c0001;
+
+    std::vector<std::uint32_t> zeros(2, 0);
+    slow_dispatch::WriteToL1(this->device(), node, written_address, zeros);
+
+    distributed::MeshCommandQueue& cq0 = this->device().mesh_command_queue(0);
+    distributed::MeshCommandQueue& cq1 = this->device().mesh_command_queue(1);
+
+    auto write_wl = make_l1_write_workload(this->device(), node, written_address, written_value, "write_kernel");
+    auto spin_wl = make_l1_write_workload(
+        this->device(),
+        node,
+        release_address,
+        release_value,
+        "spin_kernel",
+        OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_wait_for_value_2_0.cpp");
+
+    distributed::EnqueueMeshWorkload(cq0, write_wl, false);
+    distributed::MeshEvent event = cq0.enqueue_record_event();
+    distributed::EnqueueMeshWorkload(cq0, spin_wl, false);
+
+    // Returns without waiting for spin_wl, which would never finish before the release below
+    cq1.enqueue_wait_for_event(event);
+
+    std::vector<std::uint32_t> written(1, 0);
+    slow_dispatch::ReadFromL1(this->device(), node, written_address, sizeof(std::uint32_t), written);
+    ASSERT_EQ(written[0], written_value);
+
+    std::vector<std::uint32_t> release(1, release_value);
+    slow_dispatch::WriteToL1(this->device(), node, release_address, release);
+    distributed::Finish(cq0);
+    distributed::Finish(cq1);
 }

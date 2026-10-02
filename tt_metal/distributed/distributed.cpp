@@ -134,6 +134,8 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
 
 void EventSynchronize(const MeshEvent& event) {
     if (!event.device()->impl().metal_env().get_rtoptions().get_fast_dispatch()) {
+        // Slow dispatch records no event, so wait for the recording queue's workloads to finish.
+        event.device()->mesh_command_queue(event.impl().mesh_cq_id()).enqueue_wait_for_event(event);
         return;
     }
     for (const auto& coord : event.impl().device_range()) {

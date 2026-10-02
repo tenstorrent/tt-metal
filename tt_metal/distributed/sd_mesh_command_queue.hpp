@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 
 #include "mesh_command_queue_base.hpp"
@@ -94,6 +95,8 @@ private:
 
     bool asynchronous_slow_dispatch_enabled_ = false;
     bool configure_only_ = false;
+    // Stamped into each recorded event, so a wait can tell whether this queue has moved past it
+    std::atomic<std::uint32_t> num_workloads_enqueued_{0};
 
     std::shared_ptr<ThreadPool> launch_thread_pool_;
     void dispatch_program(const MeshCoordinateRange& coord_range, Program& program, bool blocking);

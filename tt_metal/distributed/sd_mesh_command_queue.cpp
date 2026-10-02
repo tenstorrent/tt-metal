@@ -6,6 +6,7 @@
 #include <tt_stl/fmt.hpp>
 #include <mutex>
 #include "sd_mesh_command_queue.hpp"
+#include "mesh_event_impl.hpp"
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/host_device_transfer.hpp"
@@ -305,6 +306,7 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     if (!asynchronous_slow_dispatch_enabled_) {
         wait_for_cores_idle();
     }
+    num_workloads_enqueued_++;
 
     auto& range_program_map = mesh_workload.get_programs();
 
@@ -379,14 +381,14 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
 MeshEvent SDMeshCommandQueue::enqueue_record_event(
     ttsl::Span<const SubDeviceId>, const std::optional<MeshCoordinateRange>& device_range) {
-    // No synchronization is needed for slow dispatch, returning a dummy value
-    return MeshEvent(0, *this, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
+    // Slow dispatch records no event; the id says how many workloads this queue had enqueued
+    return MeshEvent(num_workloads_enqueued_, *this, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
 }
 
 MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host_nolock(
     ttsl::Span<const SubDeviceId>, const std::optional<MeshCoordinateRange>& device_range) {
-    // No synchronization is needed for slow dispatch, returning a dummy value
-    return MeshEvent(0, *this, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
+    // Slow dispatch records no event; the id says how many workloads this queue had enqueued
+    return MeshEvent(num_workloads_enqueued_, *this, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
 }
 
 MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host(
@@ -395,10 +397,20 @@ MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host(
     return this->enqueue_record_event_to_host_nolock(sub_device_ids, device_range);
 }
 
-void SDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent&) {
+void SDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
     auto lock = lock_api_function_();
     drain_emule_run(mesh_device_, get_target_device_type());
-    wait_for_cores_idle();
+    // Slow dispatch records no event. Without asynchronous dispatch a queue's next workload waits for its previous one,
+    // so the work the event follows has finished if the recording queue has enqueued anything since; otherwise it has
+    // finished once that queue's cores are idle.
+    auto& event_cq =
+        dynamic_cast<SDMeshCommandQueue&>(mesh_device_->mesh_command_queue(sync_event.impl().mesh_cq_id()));
+    if (event_cq.asynchronous_slow_dispatch_enabled_ || (event_cq.num_workloads_enqueued_ == sync_event.impl().id())) {
+        event_cq.wait_for_cores_idle();
+    }
+    if (&event_cq != this) {
+        wait_for_cores_idle();
+    }
 }
 
 void SDMeshCommandQueue::enqueue_write_dram_core_counter(
