@@ -992,6 +992,52 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
                    : sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
 }
 
+// copy_dest_values must move a Dst word's bits unchanged. The words are unpacked straight to a 32-bit
+// Dst, copied Dst[0] -> Dst[1] -> Dst[0], packed back, and must come out bit-identical. Unpack-to-dest
+// keeps the SrcA datacopy, which zeroes subnormals, out of the path; Gen1 allows it only for a 32-bit
+// Dst, and a bfloat16 tile flushes subnormals on its own way through, so both runs feed Float32 tiles.
+// For Float16_b the words are every bfloat16 pattern (subnormals, signed zeros, infinities and NaNs)
+// with a zero low half; for Float32 they cover every sign, exponent and high mantissa.
+bool run_sfpu_copy_dest_bits(distributed::MeshDevice& mesh_device, tt::DataFormat copy_format) {
+    constexpr uint32_t num_patterns = 1u << 16;
+    const bool is_fp32 = copy_format == tt::DataFormat::Float32;
+    std::vector<uint32_t> packed_input(num_patterns);
+    for (uint32_t i = 0; i < num_patterns; ++i) {
+        packed_input[i] = (i << 16) | (is_fp32 ? (i * 0x9E37u + 0x5A5Au) & 0xFFFFu : 0u);
+    }
+
+    const SfpuConfig test_config = {
+        .num_tiles = num_patterns / (32 * 32),
+        .tile_byte_size = tt::tile_size(tt::DataFormat::Float32),
+        .l1_input_data_format = tt::DataFormat::Float32,
+        .l1_output_data_format = tt::DataFormat::Float32,
+        .cores = CoreRangeSet(CoreRange({0, 0}, {0, 0})),
+        .sfpu_op = "copy_dest",
+        .approx_mode = false,
+        .unpack_to_dest = true,
+        .en_32bit_dest = true};
+    const std::string data_format = is_fp32 ? "DataFormat::Float32" : "DataFormat::Float16_b";
+    const std::map<std::string, std::string> defines = {
+        {"SFPU_UNARY_OP", "1"},
+        {"SFPU_OP_COPY_DEST_INCLUDE", "1"},
+        {"SFPU_OP_INIT_0", "copy_dest_values_init();"},
+        {"SFPU_OP_CHAIN_0",
+         "copy_dest_values<" + data_format + ">(0, 1); copy_dest_values<" + data_format + ">(1, 0);"}};
+    const std::vector<uint32_t> output = run_sfpu_pipeline(mesh_device, test_config, defines, packed_input);
+
+    size_t mismatches = 0;
+    for (size_t i = 0; i < num_patterns; ++i) {
+        const uint32_t out = i < output.size() ? output[i] : ~packed_input[i];
+        if (out != packed_input[i] && mismatches++ < 8) {
+            log_error(tt::LogTest, "copy_dest_values changed 0x{:x} into 0x{:x}", packed_input[i], out);
+        }
+    }
+    if (mismatches != 0) {
+        log_error(tt::LogTest, "copy_dest_values changed {} of {} values", mismatches, num_patterns);
+    }
+    return mismatches == 0;
+}
+
 namespace {
 
 // Validates that cfg describes a single-core CoreRange and returns the Quasar NodeCoord.
@@ -1919,6 +1965,26 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "rsqrt")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
+    });
+
+class SingleCoreSingleMeshDeviceSfpuCopyDestBitsFixture : public LLKMeshDeviceFixture,
+                                                          public testing::WithParamInterface<tt::DataFormat> {};
+
+TEST_P(SingleCoreSingleMeshDeviceSfpuCopyDestBitsFixture, TensixSfpuCopyDestBits) {
+    if (arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar's copy_dest_value is a separate kernel and is not covered here";
+    }
+    for (auto& device : this->devices_) {
+        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_copy_dest_bits(*device, GetParam()));
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SingleCoreSfpuCopyDestBits,
+    SingleCoreSingleMeshDeviceSfpuCopyDestBitsFixture,
+    ::testing::Values(tt::DataFormat::Float16_b, tt::DataFormat::Float32),
+    [](const testing::TestParamInfo<tt::DataFormat>& info) {
+        return std::string(info.param == tt::DataFormat::Float32 ? "Float32" : "Float16_b");
     });
 
 // Binary SFPU parameterized test fixture (mirrors the unary fixture above).
