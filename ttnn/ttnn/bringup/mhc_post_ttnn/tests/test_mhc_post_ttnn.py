@@ -12,6 +12,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.common.bringup.testing import determinism
 
 _HERE = Path(__file__).resolve().parent
 
@@ -78,22 +79,25 @@ def _check(name, got, want, pcc, max_rel):
     return p, rel
 
 
-@pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
-def test_mhc_post(mesh, case):
-    g = torch.Generator().manual_seed(case["seed"])
+def _inputs(case, seed, mesh):
+    """Host (f, x, post, comb) for `seed` and their device tensors."""
+    g = torch.Generator().manual_seed(seed)
     n_dev = _devices(mesh)
     f = _host(case["input"], g, True, n_dev)
     x = _host(case["residual"], g, True, n_dev)
     post = (_host(case["post"], g, True, n_dev).float().sigmoid() * 2).to(torch.float32)  # post = 2 sigmoid(.)
     comb = _host(case["comb"], g, True, n_dev).float().abs().to(torch.float32) / 4  # a comb-like positive mix
-    kw = {"comb_transposed": case["comb_transposed"]} if "comb_transposed" in case else {}
-    out = ttnn.bringup.mhc_post(
-        *(
-            _to_device(t, case[k], mesh, True)
-            for t, k in ((f, "input"), (x, "residual"), (post, "post"), (comb, "comb"))
-        ),
-        **kw,
+    dev = tuple(
+        _to_device(t, case[k], mesh, True) for t, k in ((f, "input"), (x, "residual"), (post, "post"), (comb, "comb"))
     )
+    return (f, x, post, comb), dev
+
+
+@pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
+def test_mhc_post(mesh, case):
+    (f, x, post, comb), dev = _inputs(case, case["seed"], mesh)
+    kw = {"comb_transposed": case["comb_transposed"]} if "comb_transposed" in case else {}
+    out = ttnn.bringup.mhc_post(*dev, **kw)
     want = ref.mhc_post(f, x, post, comb, **kw)
     p, r = _check("out", _from_device(out, mesh), want, case["pcc"], case["max_rel"])
     if kw.get("comb_transposed") is False:
@@ -101,3 +105,10 @@ def test_mhc_post(mesh, case):
         _, r_t = _check("out_t", want, ref.mhc_post(f, x, post, comb), -1.0, float("inf"))
         assert r_t > 50 * max(r, 1e-6), f"comb vs comb^T references too close (rel {r_t})"
     print(f"{case['id']}: pcc {p:.7f} rel {r:.6f}")
+    dev_b = _inputs(case, case["seed"] + 1, mesh)[1]
+    determinism.assert_deterministic(
+        lambda: ttnn.bringup.mhc_post(*dev, **kw),
+        lambda: ttnn.bringup.mhc_post(*dev_b, **kw),
+        first=out,
+        label=case["id"],
+    )
