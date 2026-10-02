@@ -190,6 +190,15 @@ def setup_fast_dispatch(device, *, allow_destructive=False):
     resident on a core that Fast Dispatch will claim: dispatch cores may not
     hold L1 allocations while Fast Dispatch is active.
 
+    Limitations:
+        - Any interleaved L1 buffer resident when the session opens is refused,
+          whatever its size: its pages are spread over every L1 bank.
+        - A non-default sub-device manager still loaded on any view over an
+          active chip is refused, even with allow_destructive: the check sees
+          only the default manager's allocations. Sub-device managers load only
+          under Fast Dispatch, so clear it before leaving the block that
+          loaded it.
+
     Args:
         device: The device to enable Fast Dispatch on.
         allow_destructive: If True, proceed with a warning instead of refusing.

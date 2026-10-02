@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <iostream>
 #include <map>
@@ -29,6 +30,8 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
@@ -1051,6 +1054,51 @@ TEST_F(DispatchContextFixture, UnitMeshSessionDoesNotThrowTrackerError) {
         experimental::DispatchContext::get().terminate_fast_dispatch(unit.get());
     }
     EXPECT_TRUE(error.empty()) << "fast-dispatch setup from a unit mesh threw:\n" << error;
+}
+
+// WHAT: a non-default sub-device manager loaded inside one clean session and still loaded at the next.
+//       Sub-device managers can only be loaded with Fast Dispatch on, so this is how a live one reaches
+//       initialize_fast_dispatch.
+// WHY:  MeshDevice::allocator_impl() is the default manager's allocator, so buffers under another manager
+//       are invisible to the preflight. The guard must refuse rather than check an incomplete ledger, and
+//       the refusal must leave slow dispatch usable.
+// EXPECT: refused with "non-default sub-device manager"; a DRAM write/read still works. The manager stays
+//         loaded (clearing it needs Fast Dispatch) and is released when the mesh closes.
+TEST_F(DispatchContextFixture, RefusesWithNonDefaultSubDeviceManagerLoaded) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+    if (!has_expected_dispatch_column(*mesh)) {
+        GTEST_SKIP() << "This test expects Blackhole dispatch cores (12,0) and (12,1).";
+    }
+
+    // One sub-device, matching the single sub-device the manual session's queues are built for.
+    ASSERT_NO_THROW(experimental::DispatchContext::get().initialize_fast_dispatch(mesh.get()));
+    SubDevice sub_device(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
+    const SubDeviceManagerId manager = mesh->create_sub_device_manager({sub_device}, /*local_l1_size=*/0);
+    mesh->load_sub_device_manager(manager);
+    ASSERT_NO_THROW(experimental::DispatchContext::get().terminate_fast_dispatch(mesh.get()));
+    ASSERT_NE(mesh->get_active_sub_device_manager_id(), mesh->get_default_sub_device_manager_id());
+
+    const std::string error = capture_default_fd_refusal(mesh.get());
+    ASSERT_FALSE(error.empty()) << "Expected the loaded sub-device manager to block Fast Dispatch setup.";
+    EXPECT_NE(error.find("non-default sub-device manager"), std::string::npos) << error;
+
+    // A refusal must leave the original Slow Dispatch queue usable.
+    constexpr uint32_t page_size = 4096;
+    DeviceLocalBufferConfig dram{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+    ReplicatedBufferConfig dram_global{.size = page_size};
+    auto probe = MeshBuffer::create(dram_global, dram, mesh.get());
+    std::vector<uint32_t> src(page_size / sizeof(uint32_t));
+    std::iota(src.begin(), src.end(), 11);
+    EnqueueWriteMeshBuffer(mesh->mesh_command_queue(), probe, src);
+    Finish(mesh->mesh_command_queue());
+    std::vector<uint32_t> dst;
+    ReadShard(mesh->mesh_command_queue(), dst, probe, MeshCoordinate(0, 0));
+    EXPECT_EQ(dst, src);
 }
 
 TEST_F(DispatchContextFixture, TestWritesAndWorkloads) {

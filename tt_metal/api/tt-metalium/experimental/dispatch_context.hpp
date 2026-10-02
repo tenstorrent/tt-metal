@@ -44,7 +44,19 @@ struct FastDispatchSetupOptions {
 class DispatchContext {
 public:
     static DispatchContext& get();
+    // Axis of the live dispatch-core configuration: COL (dispatch on the last column, the Blackhole
+    // default) or ROW (last row; Blackhole with fabric tensix enabled, Wormhole). Callers that place
+    // data around a manual Fast Dispatch session use it to find the dispatch edge (tt-blaze's two-phase
+    // upload writes the shards on that edge under Slow Dispatch, after the session).
     ::tt::tt_metal::DispatchCoreAxis get_dispatch_core_axis(distributed::MeshDevice* mesh_device) const;
+    // Enables Fast Dispatch on a mesh opened in Slow Dispatch. Before any firmware is written, refuses
+    // (throws, with host state back in Slow Dispatch) if an allocator-tracked L1 allocation has data on
+    // a core Fast Dispatch claims, unless options.allow_destructive is set. Also refused:
+    //  - any interleaved L1 buffer resident at session time, whatever its size (its pages span every
+    //    L1 bank);
+    //  - a non-default sub-device manager loaded on any view over an active chip, even with
+    //    allow_destructive: the preflight sees only the default manager's allocator. Managers load
+    //    only under Fast Dispatch, so clear one before terminate_fast_dispatch.
     void initialize_fast_dispatch(distributed::MeshDevice* mesh_device);
     void initialize_fast_dispatch(distributed::MeshDevice* mesh_device, const FastDispatchSetupOptions& options);
     void terminate_fast_dispatch(distributed::MeshDevice* mesh_device);

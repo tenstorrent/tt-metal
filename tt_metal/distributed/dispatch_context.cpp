@@ -31,6 +31,7 @@
 #include "impl/device/device_impl.hpp"
 #include "impl/dispatch/cq_shared_state.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
+#include "impl/dispatch/system_memory_manager.hpp"
 #include "llrt/hal/generated/dev_msgs.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/llrt.hpp"
@@ -71,7 +72,8 @@ bool l1_buffer_touches_core(const Buffer& buffer, const CoreCoord& core) {
         return std::find(cores.begin(), cores.end(), core) != cores.end();
     }
     // Interleaved: pages are spread round-robin over every L1 bank, so the buffer is attributed to every
-    // core. Conservative for a buffer with fewer pages than banks.
+    // core. Deliberately conservative for a buffer with fewer pages than banks: L1 bank ids are shuffled
+    // across cores, so which cores such a buffer lands on is not something the caller can predict.
     return true;
 }
 
@@ -208,11 +210,16 @@ std::vector<FdL1Conflict> find_fd_l1_conflicts(
                 }
             }
         }
+        // MeshDevice::allocator_impl() is the default sub-device manager's allocator, so buffers under any
+        // other manager would be invisible below. Managers load only under fast dispatch, so a live one
+        // was left loaded through an earlier session's terminate.
         for (distributed::MeshDevice* view : views_over_device) {
             if (view->get_active_sub_device_manager_id() != view->get_default_sub_device_manager_id()) {
                 TT_THROW(
-                    "Fast-dispatch L1 preflight does not support a live non-default sub-device manager on mesh {}. "
-                    "Unload it before entering a manual Fast Dispatch session.",
+                    "Fast-dispatch L1 preflight does not support a live non-default sub-device manager on mesh {}: "
+                    "its buffers are not visible to the preflight. Clear it with clear_loaded_sub_device_manager() "
+                    "before terminating the Fast Dispatch session that loaded it; it cannot be cleared under Slow "
+                    "Dispatch.",
                     view->id());
             }
         }
@@ -261,6 +268,9 @@ void DispatchContext::unwind_failed_fd_setup(
     for (::tt::tt_metal::Device* device : devices) {
         device->command_queue_programs_.clear();
         device->command_queues_.clear();
+        // Drop the fast-dispatch SystemMemoryManager that init_command_queue_host() installed, after the
+        // queues that reference it. Device::sysmem_manager() creates a fresh one on demand.
+        device->sysmem_manager_.reset();
     }
     context.set_fast_dispatch_mode(false);
 }
