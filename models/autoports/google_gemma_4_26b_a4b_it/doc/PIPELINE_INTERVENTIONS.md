@@ -538,6 +538,14 @@ No review/history/advisory policy is promoted; combined five-task CI remains
 fixed and monitored.18 host helper checks pass. Resumed active time~230min,
 cumulative~8h43m. No image build, device reset or new human intervention.
 
+09:29 UTC: five-task CI is still active; its65-minute optimistic bound is
+exceeded. Warmup-only counters measure2.931s versus~99s in earlier probes;
+causal cache attribution awaits final logs. Roughly64% of completed inference
+time is TTFT, not decoding. An initial-prompt audit exposes one-token kernel-
+version differences between local/CI environments, so same-seed cross-machine
+trajectories are not treated as paired controls. The local greedy Sympy probe
+is bounded and ongoing. Resumed active time~238min, cumulative~8h51m.
+
 - TTFT: `doc/ttft_optimization/`.
 - Remote benchmarks/evals:
   `readiness_vllm/ttft_optimization_remote/README.md`.
