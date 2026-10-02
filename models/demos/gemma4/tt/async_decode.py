@@ -15,6 +15,21 @@ from __future__ import annotations
 import torch
 
 
+def prefilled_rows(prefilled_slots, slot_remap_local, host_b: int, slot_offset: int = 0) -> set[int]:
+    """Rows of one rank's decode batch whose state slot was prefilled since the
+    last decode. Row ``i`` owns slot ``slot_remap_local[i]`` (identity when
+    ``None``); ``slot_offset`` rebases this rank's local slots to the global
+    ids the prefill recorded."""
+    if not prefilled_slots:
+        return set()
+    rows = set()
+    for row in range(int(host_b)):
+        slot = int(slot_remap_local[row]) if slot_remap_local is not None else row
+        if slot + slot_offset in prefilled_slots:
+            rows.add(row)
+    return rows
+
+
 def merge_async_ahead_decode_tokens(
     host_toks: torch.Tensor,
     host_pos: torch.Tensor,

@@ -1733,6 +1733,15 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         try:
             with self._route_per_layer_page_tables(per_submesh):
                 out = super().prefill_forward_text(**kwargs)
+            # These state slots' next decode input is the prefill-sampled token
+            # the host supplies; the async-ahead merge must not replace it with
+            # whatever a device feedback row at the same position still holds.
+            slots = kwargs.get("empty_slots")
+            if slots is not None:
+                prefilled = getattr(self, "_slots_prefilled_since_decode", None)
+                if prefilled is None:
+                    prefilled = self._slots_prefilled_since_decode = set()
+                prefilled.update(int(s) for s in slots)
         finally:
             if use_sequential:
                 args0.disable_batched_prefill = prev_disable
@@ -1761,6 +1770,25 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         self._perf_decode_s = 0.0
         return out
 
+    @staticmethod
+    def _slice_page_tables_rows(page_tables_per_layer, rows):
+        """First ``rows`` rows of each per-layer host table; tables that are the
+        same object stay the same object so the H2D fan-out still copies once."""
+        if rows is None or rows <= 0 or not page_tables_per_layer:
+            return page_tables_per_layer
+        sliced_by_id = {}
+        out = []
+        for pt in page_tables_per_layer:
+            if not isinstance(pt, torch.Tensor) or pt.dim() < 2 or int(pt.shape[0]) <= rows:
+                out.append(pt)
+                continue
+            sliced = sliced_by_id.get(id(pt))
+            if sliced is None:
+                sliced = pt[:rows].contiguous()
+                sliced_by_id[id(pt)] = sliced
+            out.append(sliced)
+        return out
+
     def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
         # Free tensors retired by the last batched-prefill consumption BEFORE
         # this step's trace replay (the retired list is host-consumed already;
@@ -1774,10 +1802,18 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         page_tables_per_layer = self._pad_sliding_page_tables_for_bounded(
             page_tables_per_layer, kwargs.get("kv_cache"), authoritative=True
         )
-        # Do *not* pad decode page tables to max_batch — keep the plugin's
-        # nearest-bucket batch so B=1 uses the B=1 decode trace / SDPA grid.
         per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
         if per_submesh is not None:
+            # The decode trace for bucket B replays against the persistent
+            # per-layer buffers keyed by B rows (warmup captures with
+            # bucket-sized tables). The plugin pads its per-layer tables to
+            # max_num_seqs rows, so refreshing them unsliced writes the
+            # max-batch buffers and leaves the bucket's buffers at their
+            # warmup content: every row then decodes against mock block ids.
+            _tok = kwargs.get("tokens")
+            _tok = args[0] if _tok is None and args else _tok
+            host_b = int(_tok.shape[0]) // max(1, int(self.data_parallel)) if _tok is not None else None
+            per_submesh = [self._slice_page_tables_rows(pt_list, host_b) for pt_list in per_submesh]
             for m, pt_for_submesh in zip(self.model, per_submesh):
                 m.update_persistent_per_layer_page_tables(pt_for_submesh)
         # If persistent page-table buffers grew after decode-trace capture,

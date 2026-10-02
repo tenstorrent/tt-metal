@@ -11,7 +11,7 @@ from transformers import AutoTokenizer
 
 import ttnn
 from models.common.sampling import SamplingParams, slice_sampling_params
-from models.demos.gemma4.tt.async_decode import merge_async_ahead_decode_tokens
+from models.demos.gemma4.tt.async_decode import merge_async_ahead_decode_tokens, prefilled_rows
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.generator_trace import (
     apply_gemma4_prefill_trace_policy,
@@ -1675,8 +1675,17 @@ class ChunkedPrefillPageTableGuardMixin:
         ):
             new_tokens = []
             new_start_pos = []
+            # A continuing row's last sampled token sits in the trace inputs of
+            # the bucket it last decoded in, at the row ``slot_remap`` names for
+            # it (the plugin's state slot is the request's previous decode row).
+            # After a nearest-bucket change the current bucket's buffer only
+            # holds rows from some earlier batch, so read the previous bucket's.
+            prev_b = getattr(self, "_prev_decode_batch", None)
+            feedback_key = (on_device_sampling, int(prev_b)) if prev_b else decode_trace_key
+            if not self.trace_inputs_decode[feedback_key]:
+                feedback_key = decode_trace_key
             for i, tok_chunk in enumerate(tokens):
-                trace_in = self.trace_inputs_decode[decode_trace_key][i]
+                trace_in = self.trace_inputs_decode[feedback_key][i]
                 host_pos = start_pos[i].reshape(-1).to(torch.int64)
                 host_toks = tok_chunk.reshape(-1)
                 host_b = int(host_toks.shape[0])
@@ -1690,11 +1699,11 @@ class ChunkedPrefillPageTableGuardMixin:
                     remap = slot_remap[i * host_b : (i + 1) * host_b]
                     remap_t = (remap if isinstance(remap, torch.Tensor) else torch.tensor(remap)).long()
                     slot_remap_local = remap_t - i * host_b
-                prefilled = getattr(self, "_slots_prefilled_since_decode", None)
-                prefilled_local = None
-                if prefilled:
-                    bs = tok_chunk.shape[0]
-                    prefilled_local = {slot - i * bs for slot in prefilled if i * bs <= slot < (i + 1) * bs}
+                # Rows whose state slot was prefilled since the last decode keep
+                # the host token: their device feedback row is another request's.
+                prefilled_local = prefilled_rows(
+                    getattr(self, "_slots_prefilled_since_decode", None), slot_remap_local, host_b, i * host_b
+                )
                 merged, merged_pos, src = merge_async_ahead_decode_tokens(
                     host_toks,
                     host_pos,
