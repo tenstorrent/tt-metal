@@ -45,6 +45,8 @@ checkpoint:
 contract: {adapter: $model}
 serving:                         # answers to serving_contract.md's questions for the owner (SC.1); empty until then
   server_repo: /localdev/$$USER/tt-d-gen   # the inference server read at its latest commit
+  require_engine: true           # runner tests drive the model with tt-d-gen's engine (asked at intake; false on boxes
+                                 # tt-d-gen does not run on, e.g. QuietBox: tt-metal's prefill_producer stands in)
   # kv_dtype: bf16               # the KV cache dtype the decode side reads (bf16 | bfp8)
   # slots: 16                    # users per prefill mesh (PREFILL_NUM_USERS = the server's max_slots)
   # prefix_reuse: true           # follow-up turns start inside a chunk
