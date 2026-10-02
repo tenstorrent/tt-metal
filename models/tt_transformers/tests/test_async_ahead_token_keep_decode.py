@@ -120,7 +120,7 @@ def generator(mesh_device):
 
 
 def _decode(gen, tokens, positions):
-    output = gen.decode_forward(
+    return gen.decode_forward(
         torch.tensor(tokens, dtype=torch.int32).reshape(len(tokens), 1),
         torch.tensor(positions, dtype=torch.int32),
         page_table=None,
@@ -134,9 +134,6 @@ def _decode(gen, tokens, positions):
         # The keep applies only where the batch composition changed.
         reset_batch=True,
     )
-    # Nothing here can sample the deferred payload, so release it for the next decode.
-    gen._pending_deferred_decode_sampling = None
-    return output
 
 
 @torch.no_grad()

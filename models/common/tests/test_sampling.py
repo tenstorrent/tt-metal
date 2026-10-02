@@ -554,6 +554,78 @@ def test_prefill_admission_into_same_slot_fully_resets_seed_state():
     assert seed_manager.seed_counters[1] == 0
 
 
+def test_finished_requests_release_seeds_before_permuted_prefill():
+    """A unique seed must replay from prefill, before decode can reconcile slots."""
+    manager = _make_host_only_seed_manager(max_batch_size=32)
+    slots = [0, 10, 20, 31]
+    seeds = [100, 101, 102, 103]
+    first = {}
+    for slot, seed in zip(slots, seeds):
+        manager.reset_seed([seed], [slot])
+        first[seed] = [manager._next_device_seed_for_slot(slot) for _ in range(4)]
+    for slot in slots:
+        manager.release_slot(slot)
+    for slot, seed in zip(reversed(slots), seeds):
+        manager.reset_seed([seed], [slot])
+        assert manager.seed_salts[slot] == 0
+        assert [manager._next_device_seed_for_slot(slot) for _ in range(4)] == first[seed]
+
+
+def test_release_keeps_surviving_duplicate_stream_and_frees_only_finished_salt():
+    manager = _make_host_only_seed_manager()
+    manager.reset_seed([55, 55], [0, 1])
+    manager._next_device_seed_for_slot(1)
+    survivor_rng = manager.rngs[1].getstate()
+    manager.release_slot(0)
+    manager.release_slot(0)  # Idempotent; a live sibling still owns salt 1.
+    assert manager.seed_salts[1] == 1
+    assert manager.seed_counters[1] == 1
+    assert manager.rngs[1].getstate() == survivor_rng
+    assert manager._next_device_seed_for_slot(1) == _hash_request_seed_to_device_seed(55, 1, 1)
+    manager.reset_seed([55], [3])
+    assert manager.seed_salts[3] == 0
+    assert manager.seed_salts[1] == 1
+
+
+def test_releasing_last_seeded_request_rearms_unseeded_sampling():
+    manager = _RecordingSeedManager(4)
+    manager.reset_seed([42], [3])
+    manager.get_new_values([3])
+    manager.release_slot(3)
+    assert not manager._seed_active
+    assert manager._reseted
+    first = manager.get_new_values([0])
+    assert all(0 < seed < MAX_UINT32 for seed in first)
+    assert manager.get_new_values([0]) == (MAX_UINT32,) * 4
+    assert manager.get_new_values([0]) is None
+
+
+@pytest.mark.parametrize("capacity,replicas,slot", [(32, 1, 31), (32, 2, 63), (128, 1, 127)])
+def test_generator_release_request_routes_global_state_slot(capacity, replicas, slot):
+    from models.tt_transformers.tt.generator import Generator
+
+    managers = [_make_host_only_seed_manager(capacity) for _ in range(replicas)]
+    for manager in managers:
+        manager.reset_seed([17, 17], [0, capacity - 1])
+    generator = SimpleNamespace(
+        model_args=[SimpleNamespace(max_batch_size=capacity)],
+        data_parallel=replicas,
+        model=[SimpleNamespace(sampling=SimpleNamespace(seed_manager=m)) for m in managers],
+        _slots_prefilled_since_decode={0, slot},
+    )
+    Generator.release_request(generator, slot)
+    rank, local_slot = divmod(slot, capacity)
+    assert managers[rank].seeds[local_slot] is None
+    assert managers[rank].seeds[0] == 17
+    assert generator._slots_prefilled_since_decode == {0}
+    for other_rank, manager in enumerate(managers):
+        if other_rank != rank:
+            assert manager.seeds[-1] == 17
+    for invalid_slot in (-1, capacity * replicas):
+        with pytest.raises(ValueError, match="outside"):  # allow-pytest.raises: host-only bounds regression
+            Generator.release_request(generator, invalid_slot)
+
+
 def test_broadcast_sampling_params_preserves_none_list_fields():
     params = SamplingParams(temperature=[1.0, 1.0], top_k=[1, 1], top_p=[1.0, 1.0], seed=[None, 42])
 
@@ -820,13 +892,14 @@ def test_deferred_sampling_uses_owned_state_once(
     deferred = DeferredDecodeSampling(
         tt_logits=[object()],
         start_pos=[positions],
-        reset_batch=True,
         prompt_tokens=None,
         output_tokens=None,
         slot_remap=None,
         enable_trace=True,
         skip_precompile=True,
         reload_inputs=True,
+        reload_sampling_params=True,
+        reset_sampling_state=True,
     )
     generator._pending_deferred_decode_sampling = deferred
     params = SamplingParams(
@@ -861,7 +934,12 @@ def test_deferred_sampling_uses_owned_state_once(
 
     sample_count = len(sampling.sample_calls)
     with expect_error(TypeError, "sample_deferred_decode"):
-        generator.sample_decode_on_device(deferred, sampling_params=params)
+        generator.sample_decode_on_device(
+            deferred,
+            sampling_params=params,
+            reload_sampling_params=True,
+            reset_sampling_state=False,
+        )
     assert len(sampling.sample_calls) == sample_count
     generator.model = []
 
@@ -875,15 +953,11 @@ def test_deferred_sampling_remaps_before_seeding():
     class OrderedSeedManager:
         max_batch_size = SEED_TEST_BATCH * 2
 
-        def apply_slot_remap(self, remap):
-            events.append(("remap", list(map(int, remap))))
-
         def deactivate_slots_except(self, slots):
             events.append(("deactivate", list(slots)))
 
-        def reset_seed_from_slots_if_needed(self, _seeds, slots):
+        def reset_seed_from_slots(self, _seeds, slots):
             events.append(("seed-reset", list(slots)))
-            return []
 
         def align_seed_counters_to_positions(self, _seeds, slots, _positions):
             events.append(("seed-align", list(slots)))
@@ -894,6 +968,9 @@ def test_deferred_sampling_remaps_before_seeding():
     class OrderedSampling:
         seed_manager = OrderedSeedManager()
         tt_sampling = SimpleNamespace(max_batch_size=SEED_TEST_BATCH)
+
+        def apply_slot_remap(self, remap):
+            events.append(("remap", list(map(int, remap))))
 
         def validate_grammar_bitmask(self, _grammar):
             events.append(("validate", None))
@@ -915,13 +992,14 @@ def test_deferred_sampling_remaps_before_seeding():
     deferred = DeferredDecodeSampling(
         tt_logits=[object()],
         start_pos=[torch.arange(SEED_TEST_BATCH, dtype=torch.int32)],
-        reset_batch=False,
         prompt_tokens=None,
         output_tokens=None,
         slot_remap=remap,
         enable_trace=False,
         skip_precompile=False,
         reload_inputs=True,
+        reload_sampling_params=True,
+        reset_sampling_state=True,
     )
     generator._pending_deferred_decode_sampling = deferred
     params = SamplingParams(
@@ -948,136 +1026,6 @@ def test_deferred_sampling_remaps_before_seeding():
     generator.model = []
 
 
-def test_slot_remap_is_local_per_model():
-    """Each model receives its slot remap in local zero-based indices."""
-    from models.tt_transformers.tt.generator import DeferredDecodeSampling, Generator
-
-    remaps = []
-
-    class RecordingSeedManager:
-        max_batch_size = SEED_TEST_BATCH
-
-        def apply_slot_remap(self, remap):
-            remaps.append(list(map(int, remap)))
-
-        def deactivate_slots_except(self, _slots):
-            pass
-
-        def reset_seed_from_slots_if_needed(self, _seeds, _slots):
-            return []
-
-        def align_seed_counters_to_positions(self, *_args):
-            pass
-
-        def get_new_values(self, _slots):
-            pass
-
-    class RecordingSampling:
-        tt_sampling = SimpleNamespace(max_batch_size=SEED_TEST_BATCH)
-
-        def __init__(self):
-            self.seed_manager = RecordingSeedManager()
-
-        def validate_grammar_bitmask(self, _grammar):
-            pass
-
-        def apply_decode_state(self, _chunks, **_kwargs):
-            pass
-
-        def sample(self, logits=None, **_kwargs):
-            return logits
-
-    generator = Generator.__new__(Generator)
-    generator.data_parallel = 2
-    generator._deferred_decode_sampling_failed = False
-    generator.trace_inputs_decode = {True: None}
-    generator.model = [
-        SimpleNamespace(sampling=RecordingSampling(), sampling_dp=1),
-        SimpleNamespace(sampling=RecordingSampling(), sampling_dp=1),
-    ]
-    generator.model_args = [
-        SimpleNamespace(max_batch_size=SEED_TEST_BATCH),
-        SimpleNamespace(max_batch_size=SEED_TEST_BATCH),
-    ]
-    global_remap = torch.arange(2 * SEED_TEST_BATCH, dtype=torch.int32)
-    global_remap[SEED_TEST_BATCH : SEED_TEST_BATCH + 2] = torch.tensor(
-        [SEED_TEST_BATCH + 1, SEED_TEST_BATCH],
-        dtype=torch.int32,
-    )
-    deferred = DeferredDecodeSampling(
-        tt_logits=[object(), object()],
-        start_pos=[
-            torch.arange(SEED_TEST_BATCH, dtype=torch.int32),
-            torch.arange(SEED_TEST_BATCH, dtype=torch.int32),
-        ],
-        reset_batch=False,
-        prompt_tokens=None,
-        output_tokens=None,
-        slot_remap=global_remap,
-        enable_trace=False,
-        skip_precompile=False,
-        reload_inputs=True,
-    )
-    generator._pending_deferred_decode_sampling = deferred
-    total_batch = 2 * SEED_TEST_BATCH
-    params = SamplingParams(
-        temperature=[1.0] * total_batch,
-        top_k=[1] * total_batch,
-        top_p=[1.0] * total_batch,
-        seed=[None] * total_batch,
-    )
-
-    generator.sample_deferred_decode(
-        deferred,
-        sampling_params=params,
-        grammar_bitmask=torch.full((total_batch, 2), -1, dtype=torch.int32),
-    )
-
-    assert remaps == [
-        list(range(SEED_TEST_BATCH)),
-        [1, 0, *range(2, SEED_TEST_BATCH)],
-    ]
-    generator.model = []
-
-
-def test_host_decode_remaps_device_seeds():
-    """Host decode still moves dormant device seed state with requests."""
-    from models.tt_transformers.tt.generator import Generator, Mode
-
-    remaps = []
-    seed_manager = SimpleNamespace(
-        max_batch_size=SEED_TEST_BATCH * 2,
-        apply_slot_remap=lambda remap: remaps.append(list(map(int, remap))),
-    )
-    generator = Generator.__new__(Generator)
-    generator.data_parallel = 1
-    generator._deferred_decode_sampling_failed = False
-    generator._pending_deferred_decode_sampling = None
-    generator.mode = Mode.DECODE
-    generator.model = [
-        SimpleNamespace(
-            switch_mode=lambda _mode: None,
-            sampling=SimpleNamespace(seed_manager=seed_manager),
-        )
-    ]
-    generator._decode_forward_no_trace_text = lambda **_kwargs: ["logits"]
-    generator._slots_prefilled_since_decode = set()
-    remap = torch.tensor([1, 0, 2, 3], dtype=torch.int32)
-
-    output = generator.decode_forward(
-        tokens=torch.zeros((4, 1), dtype=torch.int32),
-        start_pos=torch.arange(4, dtype=torch.int32),
-        enable_trace=False,
-        read_from_device=False,
-        sampling_params=None,
-        slot_remap=remap,
-    )
-
-    assert output == ["logits"]
-    assert remaps == [[1, 0, 2, 3]]
-    generator.model = []
-
-
 @pytest.mark.parametrize(
     ("failure_stage", "error_type", "message"),
     [
@@ -1099,13 +1047,14 @@ def test_deferred_failure_stops_future_work(
     deferred = DeferredDecodeSampling(
         tt_logits=[object()],
         start_pos=[torch.arange(SEED_TEST_BATCH, dtype=torch.int32)],
-        reset_batch=True,
         prompt_tokens=None,
         output_tokens=None,
         slot_remap=None,
         enable_trace=False,
         skip_precompile=False,
         reload_inputs=True,
+        reload_sampling_params=True,
+        reset_sampling_state=True,
     )
     generator._pending_deferred_decode_sampling = deferred
     grammar = torch.full((SEED_TEST_BATCH, 2), -1, dtype=torch.int32)
@@ -1136,6 +1085,10 @@ def test_deferred_failure_stops_future_work(
             generator,
             torch.zeros((1, 1), dtype=torch.int32),
             torch.zeros((1,), dtype=torch.int32),
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
         )
     generator.model = []
 
@@ -1155,6 +1108,8 @@ def test_poisoned_generator_rejects_sampling(expect_error):
         generator.sample_decode_on_device(
             [object()],
             sampling_params=params,
+            reload_sampling_params=True,
+            reset_sampling_state=False,
         )
 
     assert sampling.sample_calls == []
@@ -1169,13 +1124,14 @@ def test_pending_payload_rejects_raw_logits(expect_error):
     generator._pending_deferred_decode_sampling = DeferredDecodeSampling(
         tt_logits=[object()],
         start_pos=[torch.arange(SEED_TEST_BATCH, dtype=torch.int32)],
-        reset_batch=False,
         prompt_tokens=None,
         output_tokens=None,
         slot_remap=None,
         enable_trace=False,
         skip_precompile=False,
         reload_inputs=True,
+        reload_sampling_params=False,
+        reset_sampling_state=False,
     )
     params = SamplingParams(
         temperature=[1.0] * SEED_TEST_BATCH,
@@ -1188,6 +1144,8 @@ def test_pending_payload_rejects_raw_logits(expect_error):
         generator.sample_decode_on_device(
             [object()],
             sampling_params=params,
+            reload_sampling_params=True,
+            reset_sampling_state=False,
         )
 
     assert sampling.sample_calls == []
@@ -1230,6 +1188,8 @@ def test_grammar_mask_splits_per_model():
             torch.arange(SEED_TEST_BATCH),
             torch.arange(SEED_TEST_BATCH),
         ],
+        reload_sampling_params=True,
+        reset_sampling_state=False,
         grammar_bitmask=grammar,
     )
 
@@ -1258,6 +1218,8 @@ def _decode_sampling_step(generator, seeds, positions, reload_inputs, max_batch_
         [None],
         sampling_params=params,
         start_pos=[torch.tensor(positions, dtype=torch.int32)],
+        reload_sampling_params=True,
+        reset_sampling_state=False,
         reload_inputs=reload_inputs,
     )
     return generator.model[0].sampling.seed_manager.pushed[-1]
