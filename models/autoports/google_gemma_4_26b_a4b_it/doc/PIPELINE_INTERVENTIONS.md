@@ -452,6 +452,14 @@ and task information are preserved, but prompt-policy and warmer-cache effects
 are declared separately. Active resumed time is about 121 minutes, cumulative
 about 6h54m. The original five still lack a combined measurement.
 
+07:35 UTC: before the advisory fires, seven matched Sympy requests reproduce
+28,216 input / 4,192 output tokens and the same commands. Warm loaded-server
+proxy time is 105.852 versus 210.263 seconds; exact TTFT falls 124.355→20.143,
+post-first-token time stays 85.70→85.66. This is a measured 104.411-second
+warm-state saving for that prefix, not an outcome or decode-speed improvement,
+and not proof of disk-cache-only restart gains. It supports measuring the five
+tasks on one persistent server as the user requested.
+
 - TTFT: `doc/ttft_optimization/`.
 - Remote benchmarks/evals:
   `readiness_vllm/ttft_optimization_remote/README.md`.
