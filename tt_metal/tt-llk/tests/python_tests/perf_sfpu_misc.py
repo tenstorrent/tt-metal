@@ -9,6 +9,7 @@ rand scale form or the reshuffle_rows index pattern; misc_init_per_tile re-runs 
 """
 
 import pytest
+from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import ApproximationMode, DestAccumulation, Transpose
 from helpers.param_config import parametrize
@@ -24,6 +25,8 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
 )
+
+pytestmark = [skip_for_wormhole]
 
 _BF16 = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
 _INT32 = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
