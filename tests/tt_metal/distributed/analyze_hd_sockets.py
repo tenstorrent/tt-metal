@@ -359,7 +359,9 @@ def leg_print_report(df, name_prefix):
         err = ((pred - obs) / obs.where(obs != 0)).abs() * 100.0
         print("\n  amortized x in_flight vs measured dwell (should agree):")
         for a, p, o, e in zip(df[args[0]] if args else range(len(df)), pred, obs, err):
-            print(f"    {args[0] if args else 'row'}={a:<8} predicted={p:10.2f} us  measured={o:10.2f} us  err={e:6.1f}%")
+            print(
+                f"    {args[0] if args else 'row'}={a:<8} predicted={p:10.2f} us  measured={o:10.2f} us  err={e:6.1f}%"
+            )
 
 
 def leg_export_csv(df, name_prefix, out):
