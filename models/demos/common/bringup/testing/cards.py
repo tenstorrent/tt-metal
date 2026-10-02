@@ -40,7 +40,8 @@ DEV_DIR = Path("/dev/tenstorrent")
 MAX_PROBES = 40  # per shape; consecutive runs come first, so a regular box answers in a few
 
 
-def num_cards(dev_dir: Path = DEV_DIR) -> int:
+def num_cards(dev_dir: Path | None = None) -> int:
+    dev_dir = dev_dir or DEV_DIR  # read at call time, so a patched DEV_DIR is seen
     return sum(1 for p in dev_dir.iterdir() if p.name.isdigit()) if dev_dir.is_dir() else 0
 
 

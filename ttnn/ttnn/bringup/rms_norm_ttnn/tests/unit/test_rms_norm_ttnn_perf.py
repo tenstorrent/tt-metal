@@ -41,7 +41,7 @@ rms_norm_ttnn = ttnn.bringup.rms_norm
 # do not need it.
 try:
     from ttnn.operations.rms_norm import rms_norm as rms_norm_seed
-except ModuleNotFoundError:
+except ImportError:
     rms_norm_seed = None
 
 _NO_SEED = "the seed op ttnn.operations.rms_norm is not present in this tree"
@@ -268,7 +268,7 @@ try:
     from ttnn.operations.rms_norm.rms_norm_program_descriptor import (  # noqa: E402
         create_program_descriptor as seed_descriptor,
     )
-except ModuleNotFoundError:
+except ImportError:
     seed_descriptor = None
 from ttnn.bringup.rms_norm_ttnn.rms_norm_ttnn_program_descriptor import (  # noqa: E402
     _PC_NONE,
