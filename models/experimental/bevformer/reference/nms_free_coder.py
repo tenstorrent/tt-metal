@@ -5,8 +5,8 @@
 """
 NMS-free box coder in PyTorch.
 
-This module turns the detection head's last-layer class logits and box codes into
-detections: the top ``max_num`` (query, class) pairs by sigmoid score, their box codes
+This module turns the detection head's last-layer class logits and box predictions into
+detections: the top ``max_num`` (query, class) pairs by sigmoid score, their predictions
 decoded to ``(cx, cy, cz, w, l, h, yaw, vx, vy)`` and filtered to ``post_center_range``. It
 is the reference the TTNN coder in ``tt/tt_nms_free_coder.py`` is checked against.
 
@@ -28,8 +28,8 @@ from models.experimental.bevformer.config.decoder_config import (
     CODE_SIN,
     CODE_VELOCITY,
     CODE_WL,
-    REG_XY,
-    REG_Z,
+    CODE_XY,
+    CODE_Z,
 )
 from models.experimental.bevformer.config.head_config import (
     BOX_CENTRE,
@@ -41,11 +41,12 @@ from models.experimental.bevformer.config.head_config import (
 
 
 def denormalize_bbox(normalized_bboxes):
-    """Box codes (``config/decoder_config.py``) to ``(cx, cy, cz, w, l, h, yaw, vx, vy)`` boxes."""
+    """Box predictions (``config/decoder_config.py``'s code, centres in metres) to
+    ``(cx, cy, cz, w, l, h, yaw, vx, vy)`` boxes."""
     return torch.cat(
         [
-            normalized_bboxes[..., REG_XY],
-            normalized_bboxes[..., REG_Z],
+            normalized_bboxes[..., CODE_XY],
+            normalized_bboxes[..., CODE_Z],
             normalized_bboxes[..., CODE_WL].exp(),
             normalized_bboxes[..., CODE_H].exp(),
             torch.atan2(normalized_bboxes[..., CODE_SIN], normalized_bboxes[..., CODE_COS]),
@@ -105,7 +106,7 @@ class NMSFreeCoder:
         self.num_classes = num_classes
 
     def topk(self, cls_scores, bbox_preds):
-        """One sample's ``(num_query, num_classes)`` logits and ``(num_query, code_size)`` box codes
+        """One sample's ``(num_query, num_classes)`` logits and ``(num_query, code_size)`` box predictions
         to the top ``max_num`` scores, sorted, with their labels, query indexes and decoded boxes."""
         scores, indexes = cls_scores.sigmoid().view(-1).topk(self.max_num)
         query_index = indexes // self.num_classes
