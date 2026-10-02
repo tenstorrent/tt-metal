@@ -131,10 +131,9 @@ void RunZeroModeTest(MeshWatcherFixture* fixture, const std::shared_ptr<distribu
         << "Safe run (barrier present) unexpectedly tripped the watcher: "
         << MetalContext::instance().watcher_server()->exception_message();
 
-    // 2) Violation run: NoC write with no intervening barrier -> watcher assert (the producer signals
-    // dispatch-done before hanging, so RunProgram's Finish() returns).
+    // 2) Violation run: NoC write with no intervening barrier -> watcher assert.
     set_args(program, /*should_trip=*/1);
-    fixture->RunProgram(mesh_device, workload);
+    fixture->RunProgramExpectingWatcherError(mesh_device, workload);
 
     std::string exception;
     constexpr auto timeout = std::chrono::milliseconds(5000);

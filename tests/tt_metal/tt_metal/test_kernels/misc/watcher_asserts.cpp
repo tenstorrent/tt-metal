@@ -6,6 +6,7 @@
 #include "api/debug/assert.h"
 #include "api/debug/ring_buffer.h"
 #include "internal/firmware_common.h"
+#include "watcher_test_helpers.h"
 #include "api/compile_time_args.h"
 
 /*
@@ -25,16 +26,13 @@ void kernel_main() {
         //Need to signal completion to dispatcher before hanging so that
         //Dispatcher Kernel is able to finish.
         //Device Close () requires fast dispatch kernels to finish.
-        volatile tt_l1_ptr go_msg_t* go_message_in = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
-
         // Signal completion to dispatcher before assert hangs the kernel
         // SD signaling: IDLE_ERISC, DRISC, and dispatch-engine DMs require RUN_MSG_DONE
 #if defined(COMPILE_FOR_IDLE_ERISC) or defined(COMPILE_FOR_DRISC) or defined(COMPILE_FOR_DISPATCH_ENGINE)
-        go_message_in->signal = RUN_MSG_DONE;
+        GET_MAILBOX_ADDRESS_DEV(go_messages[0])->signal = RUN_MSG_DONE;
 #else
         // FD: ACTIVE_ETH notifies dispatcher via NOC
-        uint64_t dispatch_addr = calculate_dispatch_addr(go_message_in);
-        notify_dispatch_core_done(dispatch_addr, noc_index);
+        signal_completion_before_hang();
 #endif
     }
     if (assert_type == DebugAssertHwFault && a==b) {

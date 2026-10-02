@@ -15,6 +15,7 @@
 #include <unistd.h>
 #include <cstring>
 #include <cerrno>
+#include <stdexcept>
 #include "tt_stl/assert.hpp"
 #include "fmt/format.h"
 
@@ -112,6 +113,19 @@ public:
         if (wait_for_dump) {
             int curr_count = MetalContext::instance().watcher_server()->dump_count();
             while (MetalContext::instance().watcher_server()->dump_count() < curr_count + 2) {;}
+        }
+    }
+
+    // For a program that deliberately trips the watcher. The host's wait for the program aborts once the watcher
+    // trips, but the program may complete first, so the throw is tolerated rather than required. Callers verify
+    // the watcher error itself.
+    void RunProgramExpectingWatcherError(
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device, distributed::MeshWorkload& workload) {
+        try {
+            RunProgram(mesh_device, workload);
+        } catch (const std::runtime_error& e) {
+            log_info(tt::LogTest, "Caught exception (one is expected in this test)");
+            EXPECT_NE(std::string(e.what()).find("Aborting wait due to watcher error"), std::string::npos) << e.what();
         }
     }
 

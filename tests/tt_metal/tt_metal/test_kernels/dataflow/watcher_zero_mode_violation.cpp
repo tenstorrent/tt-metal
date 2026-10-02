@@ -14,6 +14,7 @@
 #include "api/tensor/noc_traits.h"
 #include "api/kernel_thread_globals.h"
 #include "internal/firmware_common.h"
+#include "tests/tt_metal/tt_metal/test_kernels/misc/watcher_test_helpers.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
@@ -27,13 +28,7 @@ void kernel_main() {
     noc.async_write_zeros(dfb, zero_bytes);  // marks zero-mode active (sets the watcher flag)
 
     if (should_trip != 0) {
-        volatile tt_l1_ptr go_msg_t* go_message_in = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
-#if defined(COMPILE_FOR_DM)
-        go_message_in->signal = RUN_MSG_DONE;
-#else
-        uint64_t dispatch_addr = calculate_dispatch_addr(go_message_in);
-        notify_dispatch_core_done(dispatch_addr, noc_index);
-#endif
+        signal_completion_before_hang();
     } else {
         noc.write_zeros_l1_barrier();  // safe: clears zero-mode before any NoC write
     }
