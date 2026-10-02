@@ -63,7 +63,7 @@ def _reference(frames: int):
 
 
 @GALAXY_RING
-@pytest.mark.parametrize("frames", [pytest.param(32, id="f32_s32256"), pytest.param(96, id="f96_s96768")])
+@pytest.mark.parametrize("frames", [pytest.param(48, id="f48_s48384"), pytest.param(96, id="f96_s96768")])
 def test_minimax_h3_attention_recipe_accuracy(
     mesh_device, sp_axis, tp_axis, num_links, frames, is_fsdp, topology, reset_seeds
 ):
