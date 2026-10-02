@@ -15,6 +15,24 @@
 
 namespace tt::tt_fabric {
 
+namespace {
+
+void check_valid_vc(uint32_t vc) {
+    TT_FATAL(vc < builder_config::MAX_NUM_VCS, "Credit transport plan has no VC{}", vc);
+}
+
+}  // namespace
+
+const std::vector<L1CreditCounterReason>& CreditTransportPlan::reasons(uint32_t vc) const {
+    check_valid_vc(vc);
+    return reasons_[vc];
+}
+
+void CreditTransportPlan::add_counter_reason(uint32_t vc, L1CreditCounterReason reason) {
+    check_valid_vc(vc);
+    reasons_[vc].push_back(reason);
+}
+
 // ============================================================================
 // Requirement-driven assignment
 // ============================================================================
@@ -52,11 +70,11 @@ StreamRequirements stream_requirements(const StreamPlacementInputs& placement, c
     need.add(StreamRole::RECEIVER_PKTS_SENT, 2, (vc1_has_receiver && vc2_has_receiver) ? 1 : 0);
 
     // A VC still on registers needs one ack (VC0 only) and one completion register per sender.
-    if (!plan.vc0_uses_counters) {
+    if (!plan.vc_uses_counters(0)) {
         need.add(StreamRole::SENDER_PKTS_ACKED, 0, placement.max_sender_counts[0]);
         need.add(StreamRole::SENDER_PKTS_COMPLETED, 0, placement.max_sender_counts[0]);
     }
-    if (!plan.vc1_uses_counters) {
+    if (!plan.vc_uses_counters(1)) {
         // The family's full VC1 width is the need. The completed table's declared extent covers
         // every position VC0 and VC1 can produce (0..8), and the register budget is
         // make_stream_assignment's check -- no extent arithmetic belongs here.
@@ -69,7 +87,7 @@ StreamRequirements stream_requirements(const StreamPlacementInputs& placement, c
     // the other mechanism, which wedges the link with no error. Widening the table to ten names
     // (kernel header included) is what it would take to put VC2 back on registers.
     TT_FATAL(
-        !placement.vc2_present || plan.vc2_uses_counters,
+        !placement.vc2_present || plan.vc_uses_counters(2),
         "VC2 is present but its credit plan says stream registers. Its sender is flat position {}, past "
         "the completed table's declared extent of {} positions, so it has no completion register.",
         need.sender_flat_base[2],
