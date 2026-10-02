@@ -52,6 +52,13 @@ static constexpr std::uint32_t SLAB_OFFSET[4] = {0, 2, 16, 18};
 
 static const std::array<std::uint32_t, 0> no_lut {};
 
+// Wormhole's 2-bit SFPU address-mode field counts from base 4 (set by _llk_math_eltwise_sfpu_start_): 3 is ADDR_MOD_7.
+#ifdef ARCH_BLACKHOLE
+static constexpr std::uint32_t RECIP_STORE_ADDR_MOD = ckernel::ADDR_MOD_7;
+#else
+static constexpr std::uint32_t RECIP_STORE_ADDR_MOD = ckernel::ADDR_MOD_3;
+#endif
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -75,10 +82,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             const std::uint32_t offset_even = 32 * (slab >> 4) + 4 * ((slab >> 2) & 3) + SLAB_OFFSET[slab & 3];
             const std::uint32_t offset_odd  = 32 * (slab >> 4) + 4 * ((slab >> 2) & 3) + SLAB_OFFSET[(slab + 1) & 3];
             _load_recip_of_idx_<0, false>(idx, no_lut);
-            TT_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, offset_even);
+            TT_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, RECIP_STORE_ADDR_MOD, offset_even);
             ++idx;
             _load_recip_of_idx_<0, true>(idx, no_lut);
-            TT_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, offset_odd);
+            TT_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, RECIP_STORE_ADDR_MOD, offset_odd);
             ++idx;
         }
         _llk_math_eltwise_sfpu_done_();
