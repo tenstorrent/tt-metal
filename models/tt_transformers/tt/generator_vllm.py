@@ -41,23 +41,15 @@ from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs,
 def _canonical_shared_kv_shapes(per_layer_specs) -> dict:
     """Resolve one allocation shape per shared KV buffer (``tensor_idx``).
 
-    HMA sharing can put layers with different views on one buffer (gemma4
-    hybrid: sliding kv=2 x head_dim=256 and full-attention kv=1 x 512 per
-    device). The buffer takes the FIRST layer's view (in layer order that is
-    the sliding view), which is the layout the paged kernels reinterpret
-    correctly: a fewer-heads layer writing/reading a more-heads buffer via
-    ``effective_block_size`` serves coherently; the reverse (allocating at
-    the wider full-attention view) corrupts sliding-layer KV even on a
-    single-chunk prompt (measured 2026-10-02, 31B hybrid). The chunked
-    prefill SDPA still lacks that reinterpretation (tt-metal op work), so
-    hybrid multi-chunk prefill stays blocked regardless of this choice.
-
-    The larger ``num_blocks`` of the views sizes the buffer (a shrunk sliding
-    spec must not undersize a buffer a full-attention layer also reads), and
-    views that disagree on per-block element counts raise: the kernels'
-    byte-invariant reinterpretation is impossible then (seen when vLLM
-    unified page sizes with a 128-token full-attention block against a
-    64-token sliding block before the spec reported replicated heads).
+    vLLM's kv-cache tensor sharing can place layers with different
+    ``(num_kv_heads, block_size, head_dim)`` views on one buffer. The buffer
+    is allocated at the view of the first layer that uses it (layer order);
+    the other layers address it through their own effective block size, which
+    the paged kernels support only in that direction. The largest
+    ``num_blocks`` among the views sizes the buffer, so a layer whose spec was
+    shrunk cannot undersize a buffer another layer reads in full. Views that
+    disagree on per-block element counts cannot share a buffer at all and
+    raise.
     """
     canonical: dict = {}
     for kv_cache_shape, _dtype, tensor_idx in per_layer_specs:
