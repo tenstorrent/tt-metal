@@ -160,7 +160,7 @@ def test_preempted_metric_is_adjusted_in_its_own_bucket():
     (
         ({"groups": 2}, "exactly one uniform"),
         ({"spec_type": _OtherSpec}, "FullAttentionSpec"),
-        ({"block_size": 128, "scheduler_block_size": 64}, "KV group block size"),
+        ({"block_size": 128, "scheduler_block_size": 64}, "KV group 0 block size"),
         ({"scheduler_block_size": 128}, "scheduler block size"),
         ({"use_eagle": True}, "EAGLE/MTP"),
         ({"eagle_group": True}, "EAGLE KV group"),
@@ -352,7 +352,6 @@ def test_model_internal_spec_decode_fails_closed(monkeypatch):
     (
         ("TT_LAGUNA_PREFILL_FAST", "0"),
         ("TT_LAGUNA_PREFILL_SDPA_CHUNK", "4096"),
-        ("TT_LAGUNA_HYBRID_KV", "1"),
     ),
 )
 def test_direct_vllm_invocation_rejects_incompatible_model_env(
@@ -362,3 +361,68 @@ def test_direct_vllm_invocation_rejects_incompatible_model_env(
 
     with pytest.raises(RuntimeError, match=name):
         quantum.validate_prefix_cache_vllm_config(_vllm_config())
+
+
+def test_hybrid_kv_prefix_caching_requires_8192_token_scheduler_chunks(monkeypatch):
+    monkeypatch.setenv("TT_LAGUNA_HYBRID_KV", "1")
+    config = _vllm_config()
+    with pytest.raises(RuntimeError, match="hybrid KV requires scheduler chunked prefill"):
+        quantum.validate_prefix_cache_vllm_config(config)
+    config.scheduler_config.enable_chunked_prefill = True
+    config.scheduler_config.max_num_batched_tokens = 4096
+    with pytest.raises(RuntimeError, match="hybrid KV scheduler chunk is 4096, expected 8192"):
+        quantum.validate_prefix_cache_vllm_config(config)
+    config.scheduler_config.max_num_batched_tokens = 8192
+    quantum.validate_prefix_cache_vllm_config(config)
+
+
+def test_hybrid_lookup_caps_vllm_search_until_the_hit_is_canonical(monkeypatch):
+    """A sliding group may shorten a hit to a non-canonical length; the lookup retries at the next lower
+    canonical cap instead of slicing blocks (a sliding group's earlier window was replaced by null blocks)."""
+
+    class FullAttentionSpec:
+        block_size = 64
+
+    class SlidingWindowSpec:
+        block_size = 64
+
+    monkeypatch.setattr(quantum, "_full_attention_spec_type", lambda: FullAttentionSpec)
+    monkeypatch.setattr(quantum, "_sliding_window_spec_type", lambda: SlidingWindowSpec)
+    monkeypatch.setenv("TT_LAGUNA_PREFIX_CACHE", "1")
+    monkeypatch.setenv("TT_LAGUNA_HYBRID_KV", "1")
+    caps = []
+    answers = {24576: 20000, 16384: 16384}
+
+    class Coordinator:
+        scheduler_block_size = 64
+
+        def find_longest_cache_hit(self, block_hashes, cap):
+            caps.append(cap)
+            hits = answers[cap]
+            return (("blocks", hits),), hits
+
+    def spec(cls):
+        return cls()
+
+    groups = [SimpleNamespace(kv_cache_spec=spec(FullAttentionSpec))] + [
+        SimpleNamespace(kv_cache_spec=spec(SlidingWindowSpec)) for _ in range(3)
+    ]
+    recorded = []
+    manager = SimpleNamespace(
+        enable_caching=True,
+        use_eagle=False,
+        coordinator=Coordinator(),
+        kv_cache_config=SimpleNamespace(kv_cache_groups=groups),
+        log_stats=True,
+        prefix_cache_stats=SimpleNamespace(record=lambda **kw: recorded.append(kw)),
+        empty_kv_cache_blocks="empty",
+        create_kv_cache_blocks=lambda blocks: ("kv", blocks),
+    )
+    request = SimpleNamespace(num_tokens=30000, block_hashes=[], skip_reading_prefix_cache=False, num_preemptions=0)
+
+    blocks, hits = quantum._canonical_hybrid_lookup(manager, request, 8192)
+
+    assert caps == [24576, 16384]
+    assert hits == 16384
+    assert blocks == ("kv", (("blocks", 16384),))
+    assert recorded == [{"num_tokens": 30000, "num_hits": 16384, "preempted": False}]

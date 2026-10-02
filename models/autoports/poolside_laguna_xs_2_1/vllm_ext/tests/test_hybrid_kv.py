@@ -144,7 +144,7 @@ def test_platform_patch_retains_pinned_plugin_policy_when_hybrid_is_off(monkeypa
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [
-        (lambda c: setattr(c.cache_config, "enable_prefix_caching", True), "prefix caching disabled"),
+        (lambda c: setattr(c.cache_config, "enable_prefix_caching", True), "requires TT_LAGUNA_PREFIX_CACHE=1"),
         (lambda c: setattr(c.cache_config, "block_size", 32), "block_size=64"),
         (lambda c: setattr(c.scheduler_config, "enable_chunked_prefill", False), "scheduler chunked prefill"),
         (lambda c: setattr(c.scheduler_config, "max_num_batched_tokens", 4096), "max_num_batched_tokens=8192"),

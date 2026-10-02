@@ -605,8 +605,6 @@ if [ "$TT_LAGUNA_HYBRID_KV" -eq 1 ]; then
     *" $LAGUNA_PROFILE "*) ;;
     *) die "Laguna hybrid KV for $HF_MODEL is restricted to LAGUNA_PROFILE=$MODEL_HYBRID_PROFILES" ;;
   esac
-  [ "$TT_LAGUNA_PREFIX_CACHE" -eq 0 ] ||
-    die "Laguna hybrid KV qualification requires TT_LAGUNA_PREFIX_CACHE=0"
   [ "$TT_LAGUNA_STREAMING_PREFILL" -eq 1 ] ||
     die "Laguna hybrid KV qualification requires TT_LAGUNA_STREAMING_PREFILL=1"
   [ "$TT_LAGUNA_MOE_TOKEN_DISPATCH" -eq 0 ] && [ "$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE" -eq 0 ] ||
@@ -699,6 +697,8 @@ if [ "$TT_LAGUNA_PREFIX_CACHE" -eq 1 ]; then
     die "Laguna canonical prefix caching requires TT_LAGUNA_PREFILL_SDPA_CHUNK=$PREFIX_CACHE_QUANTUM"
   [ -z "${TT_LAGUNA_SPEC_DECODE:-}" ] ||
     die "Laguna canonical prefix caching does not support TT_LAGUNA_SPEC_DECODE"
+  # Hybrid KV prefills in 8192-token scheduler chunks, which start on the canonical chunk grid.
+  [ "$TT_LAGUNA_HYBRID_KV" -eq 0 ] || PREFIX_CACHE_SCHEDULER_POLICY=max_num_seqs_1_chunked_prefill_8192
 fi
 
 printf -v VLLM_ADDITIONAL_CONFIG \

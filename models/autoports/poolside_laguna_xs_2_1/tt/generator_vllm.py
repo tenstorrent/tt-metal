@@ -172,14 +172,10 @@ class LagunaForCausalLM:
     _DFLASH_DEVICE_COUNT = int(DFLASH_SPEC.serving_device_count)
     _DFLASH_PROFILE = DFLASH_SPEC.serving_profile
     model_capabilities = {
-        # Prefix + aliased hybrid KV is a separate ownership qualification.  Do
-        # not advertise it while a cache-off hybrid or DFlash tranche is selected.
-        "supports_prefix_caching": (
-            _PREFIX_CACHE_ENABLED and not _HYBRID_KV_CACHE_GROUPS_ENABLED and not _DFLASH_SERVING_ENABLED
-        ),
-        "supports_prefix_caching_with_sliding_window": (
-            _PREFIX_CACHE_ENABLED and not _HYBRID_KV_CACHE_GROUPS_ENABLED and not _DFLASH_SERVING_ENABLED
-        ),
+        # Prefix caching works with uniform or hybrid KV (canonical 8192-token admission; the hybrid lookup is
+        # bounded per group in laguna_vllm_ext.prefix_cache_quantum). Not advertised with DFlash.
+        "supports_prefix_caching": _PREFIX_CACHE_ENABLED and not _DFLASH_SERVING_ENABLED,
+        "supports_prefix_caching_with_sliding_window": _PREFIX_CACHE_ENABLED and not _DFLASH_SERVING_ENABLED,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
     }
@@ -199,12 +195,8 @@ class LagunaForCausalLM:
 
     @staticmethod
     def _validate_kv_feature_combination(prefix_enabled, hybrid_enabled):
-        if bool(prefix_enabled) and bool(hybrid_enabled):
-            raise RuntimeError(
-                "Laguna hybrid KV is qualified cache-off first and cannot be combined with "
-                "prefix caching yet; set either TT_LAGUNA_HYBRID_KV=0 or "
-                "TT_LAGUNA_PREFIX_CACHE=0."
-            )
+        """Prefix caching and hybrid KV combine (2026-10-02); kept as the single place for future rules."""
+        return None
 
     @classmethod
     def _validate_dflash_serving_envelope(

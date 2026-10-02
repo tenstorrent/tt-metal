@@ -14,6 +14,13 @@ hits only in whole canonical outer chunks.  Crucially, truncation happens in
 references: the rejected tail receives fresh writable blocks and the model
 never mutates shared cached blocks.
 
+With hybrid KV (``TT_LAGUNA_HYBRID_KV=1``: one full-attention group plus three
+512-token sliding-window groups) the cut cannot be made by slicing the returned
+block lists: a sliding group keeps real blocks only for the window that ends at
+the hit, so a shorter hit needs blocks the longer one replaced with null blocks.
+The hybrid lookup therefore caps vLLM's own hybrid-aware search at a canonical
+length and repeats with a lower cap until the hit it returns is canonical.
+
 Only complete canonical prompt chunks are inserted into the prefix hash map.
 This prevents both partial prompt chunks and token-by-token decode KV from
 winning vLLM's oldest-first duplicate lookup and poisoning a later canonical
@@ -33,6 +40,10 @@ PATCH_MARKER = "_laguna_prefix_cache_quantum_patch"
 DEFAULT_PREFIX_QUANTUM = 8192
 QUALIFIED_KV_BLOCK_SIZE = 64
 QUALIFIED_MAX_NUM_SEQS = 1
+
+
+def hybrid_kv_enabled() -> bool:
+    return os.environ.get("TT_LAGUNA_HYBRID_KV", "0") == "1"
 
 
 def prefix_cache_quantum_enabled() -> bool:
@@ -77,7 +88,16 @@ def validate_prefix_cache_vllm_config(vllm_config: Any) -> None:
         errors.append(
             f"KV block size is {cache_config.block_size}, expected {QUALIFIED_KV_BLOCK_SIZE}"
         )
-    if bool(scheduler_config.enable_chunked_prefill):
+    if hybrid_kv_enabled():
+        # Hybrid KV prefills in 8192-token scheduler chunks; chunks starting at a canonical boundary keep the
+        # canonical partition, so a cache hit truncated to the quantum resumes on the same chunk grid.
+        if not bool(scheduler_config.enable_chunked_prefill):
+            errors.append("hybrid KV requires scheduler chunked prefill")
+        elif int(scheduler_config.max_num_batched_tokens) != quantum:
+            errors.append(
+                f"hybrid KV scheduler chunk is {scheduler_config.max_num_batched_tokens}, expected {quantum}"
+            )
+    elif bool(scheduler_config.enable_chunked_prefill):
         errors.append("scheduler chunked prefill is enabled")
     if int(scheduler_config.max_num_seqs) != QUALIFIED_MAX_NUM_SEQS:
         errors.append(
@@ -93,8 +113,6 @@ def validate_prefix_cache_vllm_config(vllm_config: Any) -> None:
         errors.append("TT_LAGUNA_PREFILL_FAST is not 1")
     if os.environ.get("TT_LAGUNA_PREFILL_SDPA_CHUNK", str(quantum)) != str(quantum):
         errors.append(f"TT_LAGUNA_PREFILL_SDPA_CHUNK is not {quantum}")
-    if os.environ.get("TT_LAGUNA_HYBRID_KV", "0") != "0":
-        errors.append("TT_LAGUNA_HYBRID_KV is not 0")
     if errors:
         raise RuntimeError(
             f"Laguna canonical prefix-cache policy (quantum={quantum}) rejected the vLLM config: "
@@ -106,6 +124,12 @@ def _full_attention_spec_type() -> type:
     from vllm.v1.kv_cache_interface import FullAttentionSpec
 
     return FullAttentionSpec
+
+
+def _sliding_window_spec_type() -> type:
+    from vllm.v1.kv_cache_interface import SlidingWindowSpec
+
+    return SlidingWindowSpec
 
 
 def _canonical_cache_limit(request: Any, quantum: int) -> int:
@@ -138,30 +162,69 @@ def _validate_manager_geometry(manager: Any, quantum: int) -> None:
             f"got {scheduler_block_size}"
         )
     groups = manager.kv_cache_config.kv_cache_groups
-    if len(groups) != 1:
-        raise RuntimeError(
-            "Laguna canonical prefix caching requires exactly one uniform KV cache group, "
-            f"got {len(groups)}"
-        )
-    group = groups[0]
-    spec = group.kv_cache_spec
-    if not isinstance(spec, _full_attention_spec_type()):
-        raise RuntimeError(
-            "Laguna canonical prefix caching requires one FullAttentionSpec KV group, "
-            f"got {type(spec).__name__}"
-        )
-    if bool(getattr(group, "is_eagle_group", False)):
-        raise RuntimeError("Laguna canonical prefix caching does not support an EAGLE KV group")
-    block_size = int(spec.block_size)
-    if block_size != QUALIFIED_KV_BLOCK_SIZE:
-        raise RuntimeError(
-            f"Laguna prefix caching requires KV group block size {QUALIFIED_KV_BLOCK_SIZE}, "
-            f"got {block_size}"
-        )
-    if quantum % block_size:
-        raise RuntimeError(
-            f"Laguna prefix-cache quantum {quantum} is not divisible by KV block size {block_size}"
-        )
+    full_spec = _full_attention_spec_type()
+    if hybrid_kv_enabled():
+        sliding_spec = _sliding_window_spec_type()
+        kinds = [type(group.kv_cache_spec) for group in groups]
+        full_count = sum(1 for group in groups if isinstance(group.kv_cache_spec, full_spec)
+                         and not isinstance(group.kv_cache_spec, sliding_spec))
+        sliding_count = sum(1 for group in groups if isinstance(group.kv_cache_spec, sliding_spec))
+        if full_count != 1 or sliding_count != len(groups) - 1 or len(groups) < 2:
+            raise RuntimeError(
+                "Laguna hybrid prefix caching requires one full-attention group plus sliding-window groups, "
+                f"got {[kind.__name__ for kind in kinds]}"
+            )
+    else:
+        if len(groups) != 1:
+            raise RuntimeError(
+                "Laguna canonical prefix caching requires exactly one uniform KV cache group, "
+                f"got {len(groups)}"
+            )
+        if not isinstance(groups[0].kv_cache_spec, full_spec):
+            raise RuntimeError(
+                "Laguna canonical prefix caching requires one FullAttentionSpec KV group, "
+                f"got {type(groups[0].kv_cache_spec).__name__}"
+            )
+    for index, group in enumerate(groups):
+        if bool(getattr(group, "is_eagle_group", False)):
+            raise RuntimeError("Laguna canonical prefix caching does not support an EAGLE KV group")
+        block_size = int(group.kv_cache_spec.block_size)
+        if block_size != QUALIFIED_KV_BLOCK_SIZE:
+            raise RuntimeError(
+                f"Laguna prefix caching requires KV group {index} block size {QUALIFIED_KV_BLOCK_SIZE}, "
+                f"got {block_size}"
+            )
+        if quantum % block_size:
+            raise RuntimeError(
+                f"Laguna prefix-cache quantum {quantum} is not divisible by KV block size {block_size}"
+            )
+
+
+def _canonical_hybrid_lookup(manager: Any, request: Any, quantum: int):
+    """Longest cache hit that is valid for every KV group and a whole number of canonical chunks."""
+
+    _validate_manager_geometry(manager, quantum)
+    if not manager.enable_caching or request.skip_reading_prefix_cache:
+        return manager.empty_kv_cache_blocks, 0
+    cap = (int(request.num_tokens) - 1) // quantum * quantum
+    blocks, hits = None, 0
+    while cap > 0:
+        blocks, hits = manager.coordinator.find_longest_cache_hit(request.block_hashes, cap)
+        hits = int(hits)
+        if hits % quantum == 0:
+            break
+        cap = hits // quantum * quantum
+    if cap <= 0 or hits <= 0:
+        blocks, hits = None, 0
+    if manager.log_stats:
+        stats = manager.prefix_cache_stats
+        if stats is None:
+            raise RuntimeError("Laguna prefix-cache stats are enabled but unavailable")
+        stats.record(num_tokens=request.num_tokens, num_hits=hits, preempted=request.num_preemptions > 0)
+    if blocks is None:
+        return manager.empty_kv_cache_blocks, 0
+    logger.info("Laguna canonical hybrid prefix-cache admission: hit_tokens=%d quantum=%d", hits, quantum)
+    return manager.create_kv_cache_blocks(blocks), hits
 
 
 def _adjust_recorded_hits(manager: Any, request: Any, dropped_tokens: int) -> None:
@@ -248,6 +311,8 @@ def _patch_kv_cache_manager(manager_class: type) -> bool:
 
     @functools.wraps(original_get)
     def get_computed_blocks(self: Any, request: Any):
+        if prefix_cache_quantum_enabled() and hybrid_kv_enabled():
+            return _canonical_hybrid_lookup(self, request, canonical_prefix_quantum())
         blocks, raw_tokens = original_get(self, request)
         if not prefix_cache_quantum_enabled():
             return blocks, raw_tokens

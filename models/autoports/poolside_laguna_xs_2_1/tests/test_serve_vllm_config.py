@@ -395,14 +395,17 @@ def test_setup_rejects_missing_tt_runtime_plugin_before_build(tmp_path):
     assert "First run builds tt-metal" not in result.stdout
 
 
-def test_hybrid_kv_rejects_prefix_overlap_or_non_d2_topology(tmp_path):
+def test_hybrid_kv_combines_with_prefix_caching_and_rejects_non_d2_topology(tmp_path):
     overlap = _config(
         tmp_path,
         TT_LAGUNA_HYBRID_KV="1",
         LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES="1",
     )
-    assert overlap.returncode == 2
-    assert "requires TT_LAGUNA_PREFIX_CACHE=0" in overlap.stderr
+    assert overlap.returncode == 0, overlap.stderr
+    assert "hybrid_kv=1\n" in overlap.stdout
+    assert "prefix_cache=1\n" in overlap.stdout
+    assert "prefix_cache_scheduler_policy=max_num_seqs_1_chunked_prefill_8192\n" in overlap.stdout
+    assert "--enable-chunked-prefill --max-num-batched-tokens 8192" in overlap.stdout
 
     non_d2 = _config(
         tmp_path,

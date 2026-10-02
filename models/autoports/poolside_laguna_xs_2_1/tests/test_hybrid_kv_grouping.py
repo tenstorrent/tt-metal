@@ -326,8 +326,8 @@ def test_get_kv_cache_spec_is_opt_in_and_emits_exact_ten_full_thirty_sliding(mon
 def test_get_kv_cache_spec_rejects_prefix_overlap_and_checkpoint_drift(monkeypatch, expect_error):
     monkeypatch.setattr(LagunaForCausalLM, "_HYBRID_KV_CACHE_GROUPS_ENABLED", True)
     monkeypatch.setattr(LagunaForCausalLM, "_PREFIX_CACHE_ENABLED", True)
-    with expect_error(RuntimeError, "cannot be combined"):
-        LagunaForCausalLM.get_kv_cache_spec(_vllm_config())
+    # Prefix caching combines with hybrid KV: the grouped spec is produced as for cache-off serving.
+    assert LagunaForCausalLM.get_kv_cache_spec(_vllm_config())
 
     monkeypatch.setattr(LagunaForCausalLM, "_PREFIX_CACHE_ENABLED", False)
     changed = _vllm_config().model_config.hf_config.layer_types.copy()

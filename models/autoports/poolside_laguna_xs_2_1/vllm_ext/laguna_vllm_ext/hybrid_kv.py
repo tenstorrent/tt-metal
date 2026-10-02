@@ -63,8 +63,8 @@ def validate_hybrid_kv_vllm_config(vllm_config: Any) -> None:
     model_type = getattr(hf_config, "model_type", None)
     if model_type != MODEL_TYPE:
         raise RuntimeError(f"{HYBRID_ENV}=1 is Laguna-specific; got model_type={model_type!r}")
-    if bool(cache_config.enable_prefix_caching):
-        raise RuntimeError("Laguna hybrid KV qualification requires prefix caching disabled")
+    if bool(cache_config.enable_prefix_caching) and os.environ.get("TT_LAGUNA_PREFIX_CACHE", "0") != "1":
+        raise RuntimeError("Laguna hybrid KV with vLLM prefix caching requires TT_LAGUNA_PREFIX_CACHE=1")
     if int(cache_config.block_size) != QUALIFIED_BLOCK_SIZE:
         raise RuntimeError(
             f"Laguna hybrid KV requires block_size={QUALIFIED_BLOCK_SIZE}, " f"got {cache_config.block_size}"
