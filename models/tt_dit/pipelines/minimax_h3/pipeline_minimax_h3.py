@@ -69,8 +69,6 @@ from ...encoders.qwen3vl.loader_minimax_h3 import (
 )
 from ...encoders.qwen3vl.model_qwen3vl import create_rope_tensors, mrope_position_ids, vision_token_runs
 from ...encoders.qwen3vl.vision_qwen3vl import pad_patches_for_sp, vision_cu_seqlens
-from ...experimental.lora.h3_adapter_loader import load_h3_adapter_into
-from ...experimental.lora.promote import lora_modules
 from ...layers.audio_ops import weights_variant
 from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
@@ -133,7 +131,7 @@ from .policy import (
 )
 from .references import encode_references, prepare_references, reference_condition_shapes, split_condition_blocks
 from .scheduler import MiniMaxH3Scheduler
-from .weights_minimax_h3 import resolve_adapter_settings, resolve_weights_dir
+from .weights_minimax_h3 import LORA_PATH_ENV, resolve_weights_dir
 
 # ImageNet statistics; the video VAE emits normalized RGB and the pipeline reverts it. Imported from
 # `conditioning` rather than restated: the keyframe path normalizes *into* the VAE with these and the
@@ -147,9 +145,8 @@ MINIMAX_H3_PIXEL_STD = _MINIMAX_H3_PIXEL_STD
 # conditioning rows, which sit at max(t, 0.999). See `references.py`.
 MINIMAX_H3_AUDIO_CONDITION_TIMESTEP = 1.0
 
-# Read from the two scheduler_config.json files, which hold nothing else.
-# A distillation adapter may be trained against a different video shift and says so in its own
-# card; `video_shift` and `audio_shift` on the pipeline carry that.
+# Read from the two scheduler_config.json files, which hold nothing else. A pipeline can be built
+# with other shifts: a distillation adapter is trained against one sigma grid and says so in its card.
 VIDEO_SHIFT = 12.0
 AUDIO_SHIFT = 3.0
 
@@ -452,8 +449,6 @@ class MiniMaxH3Pipeline:
         topology: ttnn.Topology | None = None,
         coresident: bool | None = None,
         task: str = "t2va",
-        lora_path: str | os.PathLike | None = None,
-        lora_strength: float = 1.0,
         video_shift: float | None = None,
         audio_shift: float | None = None,
         audio_split_mode: str | None = None,
@@ -470,11 +465,6 @@ class MiniMaxH3Pipeline:
     ) -> None:
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
-        # Registered onto the built transformer, never fused into the checkpoint, so the weight
-        # cache stays adapter-independent and one cached copy serves every adapter and strength.
-        self.lora_path = None if lora_path is None else Path(lora_path)
-        self.lora_strength = float(lora_strength)
-        self._lora_handle = None
         self.video_shift = VIDEO_SHIFT if video_shift is None else float(video_shift)
         self.audio_shift = AUDIO_SHIFT if audio_shift is None else float(audio_shift)
         supplied = (tp_axis, sp_axis, num_links, topology)
@@ -665,8 +655,6 @@ class MiniMaxH3Pipeline:
         num_links: int | None = None,
         topology: ttnn.Topology | None = None,
         task: str = "t2va",
-        lora_path: str | os.PathLike | None = None,
-        lora_strength: float | None = None,
         video_shift: float | None = None,
         audio_shift: float | None = None,
         audio_split_mode: str | None = None,
@@ -681,6 +669,7 @@ class MiniMaxH3Pipeline:
         adaln_slot_roles: tuple[str, ...] | None = None,
         warmup: bool = True,
         coresident: bool | None = None,
+        **subclass_kwargs,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
 
@@ -690,11 +679,17 @@ class MiniMaxH3Pipeline:
         `trace_denoise` defaults to the mesh preset; `bucket_ladder`, `arena_caps` and `adaln_slot_roles`
         default to the task's envelope.
 
-        `lora_path`, `lora_strength`, `video_shift` and `audio_shift` fall back to `MINIMAX_H3_LORA_PATH`,
-        `MINIMAX_H3_LORA_STRENGTH`, `MINIMAX_H3_VIDEO_SHIFT` and `MINIMAX_H3_AUDIO_SHIFT`, so a deployment
-        that builds the pipeline with only a mesh and a weights directory can still serve an adapter.
-        `lora_strength` multiplies the adapter's own published scale; 1.0 runs it as trained.
+        A deployment that names an adapter through `MINIMAX_H3_LORA_PATH` gets the Turbo pipeline from
+        here: the serving runner builds from a mesh, a weights directory and an output type alone, so the
+        environment is the only way an adapter can reach it. `subclass_kwargs` go to the constructor of
+        whichever subclass is being built.
         """
+        if cls is MiniMaxH3Pipeline and os.environ.get(LORA_PATH_ENV):
+            from .pipeline_minimax_h3_turbo import MiniMaxH3TurboPipeline
+
+            # Nothing but the parameters is bound yet, so `locals()` is exactly the call to forward.
+            forwarded = {k: v for k, v in locals().items() if k not in ("cls", "subclass_kwargs")}
+            return MiniMaxH3TurboPipeline.create_pipeline(**forwarded, **subclass_kwargs)
         transformer_subfolder = "transformer_ref" if task == "ref2va" else "transformer"
         weights_dir = resolve_weights_dir(
             transformer_subfolder,
@@ -702,14 +697,6 @@ class MiniMaxH3Pipeline:
             "vae",
             "audio_vae",
             weights_dir=weights_dir,
-        )
-        adapter = resolve_adapter_settings(
-            lora_path=lora_path,
-            lora_strength=lora_strength,
-            video_shift=video_shift,
-            audio_shift=audio_shift,
-            default_video_shift=VIDEO_SHIFT,
-            default_audio_shift=AUDIO_SHIFT,
         )
         return cls(
             mesh_device=mesh_device,
@@ -719,10 +706,8 @@ class MiniMaxH3Pipeline:
             num_links=num_links,
             topology=topology,
             task=task,
-            lora_path=adapter.lora_path,
-            lora_strength=adapter.lora_strength,
-            video_shift=adapter.video_shift,
-            audio_shift=adapter.audio_shift,
+            video_shift=video_shift,
+            audio_shift=audio_shift,
             audio_split_mode=audio_split_mode,
             audio_trace=audio_trace,
             audio_t_factor=audio_t_factor,
@@ -735,6 +720,7 @@ class MiniMaxH3Pipeline:
             adaln_slot_roles=adaln_slot_roles,
             warmup=warmup,
             coresident=coresident,
+            **subclass_kwargs,
         )
 
     def _read_config(self, subfolder: str) -> dict:
@@ -1282,20 +1268,6 @@ class MiniMaxH3Pipeline:
             mesh_device=self.mesh_device,
             get_torch_state_dict=lambda: self._read_safetensors(self.transformer_subfolder),
         )
-        if self.lora_path is not None:
-            if self._lora_handle is None:
-                self._lora_handle = load_h3_adapter_into(
-                    self._transformer,
-                    str(self.lora_path),
-                    scale=self.lora_strength,
-                    name=self.lora_path.name,
-                )
-            else:
-                # `coresident=False` evicts the transformer between stages and `cache.load_model`
-                # brings back the cached *base* weights, so the fused delta has to be merged again.
-                # A no-op while the weights stayed resident.
-                for module in lora_modules(self._transformer):
-                    module.reapply_after_load()
         return self._transformer
 
     @property
