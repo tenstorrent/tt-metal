@@ -71,7 +71,7 @@ cheapest reliable catch: a non-default build flavour (5), a sanitizer or static 
 target arch (2). For 16, the analysts proposed a narrow prompt rule or class, which would overfit if added one by one.
 Only 1 of 29 was not findable from source or execution. **Built from it** (never measured in isolation): the recorded
 and audited contract-trace ledger, smaller priority-A batches, the "look hard / one defect per finding" hunter rules,
-and the optional execution tier.
+and an optional execution tier, since removed (see *Why the audit is static*).
 
 ## Round 3: a fresh holdout (the only out-of-sample number)
 `packs/tt-metal-holdout-v2.jsonl`: 50 screened bugs, none in the first holdout or among the deep-read fixes; 3 excluded
@@ -109,6 +109,23 @@ that the default batches found, at the same cost.
   across 12 families in the same 300-line batches: hunters caught 58 of them (85%), but only 1 of 5 numerics plants.
   The plants also displaced the real findings (0 of the 10 real bugs were reported), so calibrate in a separate run
   and never plant inside an audit.
+
+## Why the audit is static
+The skill once had an opt-in execution tier: build flavours, analyzers and existing tests, whose diagnostics went to
+the hunters as leads. It was removed because it did not pay for itself:
+- **Re-running tests finds little.** A test that passes in CI passes again at the audited commit; only a setting CI
+  does not use (another arch, the watcher, LLK asserts) can turn it red.
+- **Test selection missed the code that matters.** Tests were picked by name match against the batch's files, but
+  tests call ops (`ttnn.argmax(...)`), not program factories or kernels. On the batch-size pilot's 35 batches, 27
+  got no test, including all three that held the confirmed bugs.
+- **What only compiling catches is not worth it.** In the 29-miss post-mortem, the execution-only catches were build
+  breaks in flavours nobody ships, an `#if` on an undefined macro, a kernel stack overflow (the watcher in CI
+  reports those) and pyright on model code. The two test catches (a Blackhole alignment rule, an LLK-assert-only
+  failure) are findable by reading, under `tt-hardcoded-arch-constant` and `tt-dead-llk-assert`.
+- **Kernel analyzer output is mostly noise.** In one group of the weekly kernel clang-tidy capture, the 11 CRITICAL
+  findings were clang-only errors in SFPI code that sfpi-gcc compiles; there were 15,147 findings in all.
+
+A finding is confirmed by the developer running the relevant tests while debugging it, as the filing rules require.
 
 ## Does verification earn its cost?
 On round 3 verification confirmed 260 of 261 candidates: tiny batches that really held a bug produced almost no false

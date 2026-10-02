@@ -2,7 +2,7 @@ export const meta = {
     name: 'bug-audit-wave',
     description: 'Hunt one wave of file batches for real bugs, then verify every candidate adversarially (staged, 3-valued)',
     whenToUse:
-        'One wave of a bug-audit run. args = {run, root, batches: [ids], knowledge: [abs paths], roots?: {batch: tree}, roots_dir?, exec_signals_dir?, known_dir?}. Persist the result with persist_wave.py immediately after it finishes.',
+        'One wave of a bug-audit run. args = {run, root, batches: [ids], knowledge: [abs paths], roots?: {batch: tree}, roots_dir?, known_dir?}. Persist the result with persist_wave.py immediately after it finishes.',
     phases: [
         {title: 'Hunt', detail: 'one agent per batch: read every assigned file fully, hunt grounded bugs'},
         {title: 'Trace audit', detail: 're-trace a sample of each hunter\u2019s boundary ledger; misses become new candidates'},
@@ -84,7 +84,7 @@ const FIND_SCHEMA = {
           failure_scenario: { type: 'string', description: 'concrete inputs/config/state -> wrong output, crash, hang, leak' },
           evidence: { type: 'string', description: 'quoted code + why it is wrong, incl. the sibling/caller/contract that proves intent' },
           suggested_fix: { type: 'string' },
-          source: { type: 'string', enum: ['own-hunt', 'knowledge-class', 'knowledge-seed', 'execution-signal', 'trace-audit'], description: 'what led you to it' },
+          source: { type: 'string', enum: ['own-hunt', 'knowledge-class', 'knowledge-seed', 'trace-audit'], description: 'what led you to it' },
         },
       },
     },
@@ -112,15 +112,6 @@ verify, never a finding by itself.
 They are a FLOOR, never a ceiling — hunt every defect you can ground, whether or not a listed class names it.`
   : ''
 
-const execBlock = (batch) => A.exec_signals_dir
-  ? `EXECUTION SIGNALS: if ${A.exec_signals_dir}/${batch}.json exists, read it first. It lists diagnostics that a
-build, a static analyzer, a sanitizer or an existing test produced on YOUR files (tool, file:line, severity, message).
-Treat each one as a lead, not a verdict. Decide whether it reveals a real, reachable defect: most warnings are noise,
-while a link error, a sanitizer report or a failing test almost always points at something real. Report the real ones
-with source "execution-signal", quoting the signal in the evidence.
-`
-  : ''
-
 const knownBlock = (batch) => A.known_dir
   ? `PRIOR RUNS: if ${A.known_dir}/${batch}.json exists, read it. It lists what earlier audits already CONFIRMED or
 REFUTED in your files, with the refutation reasons. Do not re-report a confirmed one. Re-raise a refuted one only
@@ -134,9 +125,8 @@ Tree to audit: ${rootOf(batch)}   (pinned checkout — audit THIS tree, not any 
 ${ROOTS[batch] ? 'This is a benchmark tree: do NOT run git log/show/blame or read any other checkout, issue or PR; judge the code as it stands.\n' : ''}
 ${knowledgeBlock}
 
-${execBlock(batch)}${knownBlock(batch)}
-Do NOT build, run tests, run the code, or touch any device or hardware: this hunt is read-only analysis. Execution,
-when the user enabled it, happens in a separate tier whose results you see as EXECUTION SIGNALS.
+${knownBlock(batch)}
+Do NOT build, run tests, run the code, or touch any device or hardware: this hunt is read-only analysis.
 
 ASSIGNMENT: batch \`${batch}\`.
 1. Read ${RUN}/batches/manifest.json and find the object whose "batch" field == "${batch}". Its "files" array lists

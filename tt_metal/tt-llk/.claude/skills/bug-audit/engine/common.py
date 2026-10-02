@@ -13,8 +13,8 @@ import sys
 SEV_ORDER = {"high": 0, "medium": 1, "low": 2}
 
 # Headless audit sessions run unattended in auto mode, and their agents (workflow agents inherit the session's
-# permission rules) must never build, run tests, touch a card, or change the audited tree: execution belongs to
-# exec_tier.py, which runs its commands itself. Deny rules are checked before auto mode's classifier, and match any
+# permission rules) must never build, run tests, touch a card, or change the audited tree: the audit is static.
+# Deny rules are checked before auto mode's classifier, and match any
 # subcommand of a compound command. They match the command text only, so this is a guard, not a sandbox.
 _DENY_CMDS = [
     "make",

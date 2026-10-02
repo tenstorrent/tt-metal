@@ -67,50 +67,25 @@ batches, and a real batch gives each hunter more code to read, so treat these as
 agent count.
 
 ## Start of every audit: ask the user
-Before `init_run.py`, ask questions 1-4 in one AskUserQuestion call, then question 5 in a second call: its cost
-depends on the scope answer, and one call takes at most four questions. Record the answers in the run's state (the execution tier
-through `exec_tier.py configure`), and never assume a default for the execution tier.
+Before `init_run.py`, ask questions 1-3 in one AskUserQuestion call, then question 4 in a second call: its cost
+depends on the scope answer. Record the answers in the run's state.
 1. **Scope:** full repo, an area (globs), or a diff since a commit.
-2. **Execution tier (OPTIONAL, off unless the user says yes).** Should the audit also build, analyse and test, to
-   catch what reading cannot? Options:
-   - **No:** static only (the default answer; nothing is built or run).
-   - **Build flavours:** compile every configuration the user names, and turn compiler and linker diagnostics into
-     leads. A non-default flavour exposes bugs the default build hides.
-   - **Static analyzers and sanitizers:** clang-tidy with the repo's own config, and ASan/UBSan/TSan builds.
-   - **Existing tests:** runs the tests that reference each batch's files. A test that several batches pick runs
-     once, on its own, and its result goes to every batch that picked it. This needs the target hardware, and the
-     user must confirm which machine and card(s) can be used; the cards go to `exec_tier.py configure --devices`,
-     which pins every test to them (`TT_VISIBLE_DEVICES`) and resets only them.
-   If yes, ask for the exact commands (or confirm the presets below) and the machine, and state the worst-case time:
-   up to the timeout per distinct picked test, twice if it fails and is re-run (about 4 hours per test with the
-   preset 7,200 s), with no overall cap. The run prints the number of distinct tests before it starts them. The
-   tier runs the repo's code with those commands, so confirm it is acceptable on this machine.
-3. **Cost, and the second pass.** The audit is exhaustive by design: it runs until every in-scope file is audited,
+2. **Cost, and the second pass.** The audit is exhaustive by design: it runs until every in-scope file is audited,
    with no token or time cap. State the cost for the chosen scope up front (see the calibration above); a user who
    wants to spend less narrows the scope (question 1) rather than capping the run. Ask whether to run the optional
    second pass over priority A.
-4. **New history since the last mining.** Run `mining/marker.py delta <mine>/<repo>.mined.json` first (count queries
+3. **New history since the last mining.** Run `mining/marker.py delta <mine>/<repo>.mined.json` first (count queries
    only) and report what closed since the watermark. If there is any, offer the refresh (*Refreshing the mined
    history*): it costs agents only for the new cases, and it gives the sibling sweep new leads and the recall
    measurement a fresh holdout.
-5. **Sibling sweep** (ask whenever the repo has mined deep reads, `<mine>/<repo>_deep.jsonl`; recommend yes). Should
+4. **Sibling sweep** (ask whenever the repo has mined deep reads, `<mine>/<repo>_deep.jsonl`; recommend yes). Should
    the audit also verify the unfixed copies of past fixes that fall inside its scope? This is the part of the mined
    history with a measured payoff (536 of 776 leads confirmed on tt-metal), and it finds bugs the hunt does not.
    Cost: three verifiers per in-scope lead. With the question, give the rough size: count the `unfixed` sibling
    locations under the chosen scope's paths in the deep reads. After init, `--in-scope` prints the exact count.
 
-tt-metal presets for the execution tier (confirm with the user; they take a clean build dir and many minutes each):
-```
-exec_tier.py --run <run> configure \
-  --build 'release=./build_metal.sh --build-tests' \
-  --build 'asan=./build_metal.sh -b ASan --build-tests' \
-  --analyze 'clang-tidy=run-clang-tidy -p build_Release -quiet $(git ls-files "*.cpp" | grep -E "^(tt_metal|ttnn)/")' \
-  --test-cmd 'pytest -q {tests}' --test-root tests/ttnn --test-root tests/tt_metal --max-tests 6 --timeout 7200 \
-  --devices <confirmed ids> --reset-cmd 'tt-smi -r {devices}'   # a hung test wedges the board; reset between groups
-exec_tier.py --run <run> run        # before the first wave; re-run after re-pointing the tree
-```
-The signals land in `<run>/exec/signals/<batch>.json`, and `next_wave.py` hands them to the hunters automatically.
-A signal is a lead, never a finding: the hunter triages it and the normal verification applies.
+The audit is static: nothing is built, run or tested (*references/measurement-history.md*, "Why the audit is
+static"). A developer confirms a finding by running the relevant tests while debugging it.
 
 ## Running an audit
 Engine scripts take `--run DIR` (or `BUG_AUDIT_RUN`); paths below are relative to this skill directory.
@@ -339,8 +314,6 @@ in `references/measurement-history.md`. What matters when running an audit:
 - **Independent passes find different bugs.** Run the second pass (step 7) over priority A when those areas matter.
 - **Verification earns its cost on real input.** It refuted 28% of candidates in the whole-repo July audit and in the
   sibling sweep, though almost nothing on the tiny benchmark batches.
-- **Execution catches what reading cannot:** for 11 of 29 post-fix misses, a build flavour, a sanitizer or a test was
-  the cheapest catch (the optional execution tier).
 
 ## Lessons from earlier large audits
 - **Hunt, don't fill a checklist.** A candidate-list-driven pass found nothing in a tree where a method-driven hunt
@@ -371,8 +344,7 @@ in `references/measurement-history.md`. What matters when running an audit:
   told not to build, run or touch hardware, and the headless drivers enforce it: their sessions deny builds, test
   runners, card tools and tree-changing commands (`common.STATIC_DENY`), and workflow agents inherit those rules.
   Read-only commands are unaffected. Each wave records how many calls were refused (`blocked_actions` in the run's
-  headless state). The rules match command text, so they are a guard, not a sandbox. Execution happens only in the
-  opt-in tier, whose commands `exec_tier.py` runs itself.
+  headless state). The rules match command text, so they are a guard, not a sandbox.
 - **Workflow mechanics:** a thrown workflow returns `[]`, but its journal survives on disk, so resume with
   `resumeFromRunId` (`run_headless.py` does this). Read results from the task's output file, never from the
   completion notification, which truncates large returns. The Workflow tool refuses some script paths: pass the
