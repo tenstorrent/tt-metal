@@ -411,7 +411,7 @@ def _warn_misaligned_shard(rel_name: str, shape: List[int], dim: int, axis_size:
     _warned_misaligned.add(key)
     warnings.warn(
         f"FSDP: {rel_name!r} {shape} has sub-tile shards on dim {dim}; "
-        f"its CCLs will use the slower composite path. Reported once per shape.",
+        f"its CCLs will use the slower composite path. Reported once per shape, shard dim, and axis size.",
         stacklevel=3,
     )
 
