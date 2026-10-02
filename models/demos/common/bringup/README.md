@@ -165,6 +165,8 @@ $O resume --spec <spec>
   freeze without a review agent when their sweep passes (`agents.component_review`, `agents.swap_review`).
 - An agent step fails if the tree changed outside the brief's paths, a command reached the device without a safe
   runner, the known-issues file lost its format, or a changed file reads the environment outside `tt/settings.py`.
+- Component tests and fork tests check bitwise determinism: A, B, A, then A until 5 runs, every A byte-identical
+  (`testing/determinism.py`; `tests.determinism_repeats`, `tests.nondeterministic` for a step exempt with its reason).
 - With `serving.kv_dtype` set, every ladder rung must run on that KV format: one cache format for the ladder, the
   contract and serving.
 - Commits stage only the task's paths; formatting runs before testing and hashing, so the tested bytes are committed.
