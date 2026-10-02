@@ -16,18 +16,18 @@ constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
 constexpr uint32_t Wt = get_compile_time_arg_val(2);
 
-constexpr uint32_t dfb_linear1_id = tt::CBIndex::c_0;
-constexpr uint32_t dfb_gate_id = tt::CBIndex::c_1;
-constexpr uint32_t dfb_dL_dprod_id = tt::CBIndex::c_2;
-constexpr uint32_t dfb_dL_dlinear1_id = tt::CBIndex::c_3;
-constexpr uint32_t dfb_dL_dgate_id = tt::CBIndex::c_4;
+constexpr uint32_t cb_linear1 = tt::CBIndex::c_0;
+constexpr uint32_t cb_gate = tt::CBIndex::c_1;
+constexpr uint32_t cb_dL_dprod = tt::CBIndex::c_2;
+constexpr uint32_t cb_dL_dlinear1 = tt::CBIndex::c_3;
+constexpr uint32_t cb_dL_dgate = tt::CBIndex::c_4;
 
 void kernel_main() {
     namespace ckl = compute_kernel_lib;
     constexpr uint32_t one = 0x3F800000;
     constexpr uint32_t padded_Wt = ((Wt + block_size - 1) / block_size) * block_size;
 
-    compute_kernel_hw_startup(dfb_linear1_id, dfb_dL_dlinear1_id);
+    compute_kernel_hw_startup(cb_linear1, cb_dL_dlinear1);
 
     // Input tiles are consumed in blocks:
     //   linear1(U), gate, dL/dprod
@@ -42,7 +42,7 @@ void kernel_main() {
         // D0 = U, D1 = sigmoid(U).
         ckl::CopyTile<
             ckl::input(
-                dfb_linear1_id,
+                cb_linear1,
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
                 ckl::InputTileMapping::Block,
@@ -60,7 +60,7 @@ void kernel_main() {
         // D3 = dL/dprod.
         ckl::CopyTile<
             ckl::input(
-                dfb_dL_dprod_id,
+                cb_dL_dprod,
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
                 ckl::InputTileMapping::Block,
@@ -73,7 +73,7 @@ void kernel_main() {
         // keep dL/dgate live until all computation is complete.
         ckl::PackTile<
             ckl::output(
-                dfb_dL_dgate_id,
+                cb_dL_dgate,
                 ckl::ReservePolicy::PerBlockSize,
                 ckl::PushPolicy::PerBlockSize,
                 ckl::DataFormatReconfig::Enabled),
@@ -81,7 +81,7 @@ void kernel_main() {
         // D1 = dL/dlinear1 = (gate * dL/dprod) * silu'(U); sigmoid(U) is no longer needed.
         ckl::CopyTile<
             ckl::input(
-                dfb_gate_id,
+                cb_gate,
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
                 ckl::InputTileMapping::Block,
@@ -91,7 +91,7 @@ void kernel_main() {
         ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1>{},
         ckl::PackTile<
             ckl::output(
-                dfb_dL_dlinear1_id,
+                cb_dL_dlinear1,
                 ckl::ReservePolicy::PerBlockSize,
                 ckl::PushPolicy::PerBlockSize,
                 ckl::DataFormatReconfig::Enabled),

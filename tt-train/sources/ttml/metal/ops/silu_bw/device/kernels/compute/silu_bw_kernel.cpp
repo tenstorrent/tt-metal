@@ -14,24 +14,24 @@ constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
 constexpr uint32_t Wt = get_compile_time_arg_val(2);
 
-// DFBs with input data
-constexpr uint32_t dfb_input_idx_id = tt::CBIndex::c_0;
-constexpr uint32_t dfb_dL_out_idx_id = tt::CBIndex::c_1;
-// DFBs with output data
-constexpr uint32_t dfb_dL_da_idx_id = tt::CBIndex::c_2;
+// CBs with input data
+constexpr uint32_t cb_input_idx = tt::CBIndex::c_0;
+constexpr uint32_t cb_dL_out_idx = tt::CBIndex::c_1;
+// CBs with output data
+constexpr uint32_t cb_dL_da_idx = tt::CBIndex::c_2;
 void kernel_main() {
     namespace ckl = compute_kernel_lib;
     constexpr uint32_t one = 0x3F800000;  // FP32 encoding of 1.0
     constexpr uint32_t padded_Wt = ((Wt + block_size - 1) / block_size) * block_size;
 
-    compute_kernel_hw_startup(dfb_input_idx_id, dfb_dL_da_idx_id);
+    compute_kernel_hw_startup(cb_input_idx, cb_dL_da_idx);
 
     // dL/dx = dL/dout * sigmoid(x) * (1 + x*(1-sigmoid(x))).
     ckl::eltwise_chain(
         ckl::IterationShape::grid(num_rows_per_core, padded_Wt).block_size(block_size),
         ckl::CopyTile<
             ckl::input(
-                dfb_input_idx_id,
+                cb_input_idx,
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
                 ckl::InputTileMapping::Block,
@@ -50,17 +50,17 @@ void kernel_main() {
         ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1>{},
         ckl::CopyTile<
             ckl::input(
-                dfb_dL_out_idx_id,
+                cb_dL_out_idx,
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
                 ckl::InputTileMapping::Block,
                 ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D2>{},
         // Compute: ((1 - sigmoid(x)) * input + 1) * sigmoid(x) * dL_dout
-        // The result is stored in dfb_dL_da_idx_id.
+        // The result is stored in cb_dL_da_idx.
         ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0>{},
         ckl::PackTile<ckl::output(
-            dfb_dL_da_idx_id,
+            cb_dL_da_idx,
             ckl::ReservePolicy::PerBlockSize,
             ckl::PushPolicy::PerBlockSize,
             ckl::DataFormatReconfig::Enabled)>{});
