@@ -559,6 +559,49 @@ def test_emit_refuses_what_the_session_cannot_vouch_for(
     assert table.read_text() == before
 
 
+@pytest.mark.parametrize(
+    "arch",
+    [ChipArchitecture.WORMHOLE, ChipArchitecture.BLACKHOLE],
+    ids=lambda a: a.value,
+)
+def test_the_sweep_cells_are_the_ones_testconfig_builds_as_asked(arch):
+    """`sweep_cells` leaves out the cells TestConfig would run as another, and both now
+    read the one rule (`effective_dest_acc`): a cell is swept exactly when the Dest it
+    asks for is the Dest it gets. The promoted exponent-B -> Float16 `No` cells are the
+    ones left out, and their `Yes` twins stay."""
+    from helpers.data_format_inference import effective_dest_acc
+    from helpers.ulp_sweep import SWEEP_FORMATS, sweep_cells
+
+    cells = sweep_cells(arch)
+    assert cells == [
+        (i, o, a, d)
+        for i in SWEEP_FORMATS
+        for o in SWEEP_FORMATS
+        for a in ApproximationMode
+        for d in DestAccumulation
+        if effective_dest_acc(i, o, d, arch) == d
+    ]
+    promoted = {(i, o) for i, o, _, d in cells if d == DestAccumulation.No} ^ {
+        (i, o) for i, o, _, d in cells if d == DestAccumulation.Yes
+    }
+    assert promoted == {
+        (DataFormat.Float16_b, DataFormat.Float16),
+        (DataFormat.Bfp8_b, DataFormat.Float16),
+    }
+    assert (
+        effective_dest_acc(
+            DataFormat.Float16_b, DataFormat.Float16, DestAccumulation.No, arch
+        )
+        == DestAccumulation.Yes
+    )
+    assert (
+        effective_dest_acc(
+            DataFormat.Float16, DataFormat.Float16, DestAccumulation.No, arch
+        )
+        == DestAccumulation.No
+    )
+
+
 def test_emit_sweeps_every_keyed_op_and_only_those(monkeypatch):
     """The key line is the enrolment and the only place a measurement can land, so the
     emit set is exactly the unary ops that have one -- an op on tolerance everywhere

@@ -115,6 +115,32 @@ def is_format_combination_outlier(
     )
 
 
+def effective_dest_acc(
+    input_format: DataFormat,
+    output_format: DataFormat,
+    dest_acc: DestAccumulation,
+    arch: Optional[ChipArchitecture] = None,
+) -> DestAccumulation:
+    """The Dest width a kernel built for this variant actually runs with.
+
+    ``TestConfig`` promotes ``dest_acc`` to ``Yes`` for an outlier combination (an
+    exponent-B input packed to Float16, see :func:`is_format_combination_outlier`) on
+    every architecture but Quasar, and does so silently. Everything that reasons about
+    the kernel that ran -- the Dest capacity in block sizing, the distinct modes of a
+    perf sweep, the cells an exhaustive sweep can key a measurement on -- has to apply
+    the same rule, and used to spell it out again each time. *arch* defaults to the
+    chip this session targets; a host check of another architecture's table passes
+    its own.
+    """
+    if arch is None:
+        arch = get_chip_architecture()
+    if arch != ChipArchitecture.QUASAR and is_format_combination_outlier(
+        input_format, output_format, dest_acc
+    ):
+        return DestAccumulation.Yes
+    return dest_acc
+
+
 _SRCAB_ONLY_FORMATS = {
     DataFormat.MxFp4_2x_A: ChipArchitecture.QUASAR,
     DataFormat.MxFp4_2x_B: ChipArchitecture.QUASAR,

@@ -58,20 +58,19 @@ def sweep_cells(arch=None) -> List[Tuple[DataFormat, DataFormat, object, object]
     A host check of the Wormhole table passes ``MEASURED_ARCH``, so its verdict does not
     depend on which ``CHIP_ARCH`` the host happens to set.
     """
-    from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-    from helpers.data_format_inference import is_format_combination_outlier
+    from helpers.chip_architecture import get_chip_architecture
+    from helpers.data_format_inference import effective_dest_acc
     from helpers.llk_params import ApproximationMode, DestAccumulation
 
     if arch is None:
         arch = get_chip_architecture()
-    promotes = arch != ChipArchitecture.QUASAR
     return [
         (in_fmt, out_fmt, approx, dest)
         for in_fmt in SWEEP_FORMATS
         for out_fmt in SWEEP_FORMATS
         for approx in ApproximationMode
         for dest in DestAccumulation
-        if not (promotes and is_format_combination_outlier(in_fmt, out_fmt, dest))
+        if effective_dest_acc(in_fmt, out_fmt, dest, arch) == dest
     ]
 
 
