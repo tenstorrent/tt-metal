@@ -56,6 +56,11 @@ env:
           - "check-farbot /"
           - "check-harbor /"
 
+      - name: models-t1-e2e-tests
+        workflow_id: models-t1-e2e-tests.yaml
+        include_prefixes:
+          - "models-e2e-tests /"
+
 jobs:
   scan:
     runs-on: ubuntu-latest
