@@ -297,6 +297,15 @@ _TEARDOWN_NOISE = re.compile(r"nanobind|leaked (type|function)|reference countin
 
 
 def _useful_tail(out: str, n: int = 2000) -> str:
-    """Last n chars of the output with teardown noise removed, so the real error survives."""
+    """Last n chars of the output with teardown noise removed, so the real error survives -- led by
+    any dead-board evidence the cut would drop (device_recovery.dead_board_evidence). This text is
+    what check_pcc hands the device-recovery policy, and a tail of pytest's warnings summary carried
+    none of the signatures that justify a reset."""
     kept = [ln for ln in (out or "").splitlines() if not _TEARDOWN_NOISE.search(ln)]
-    return "\n".join(kept).strip()[-n:]
+    tail = "\n".join(kept).strip()[-n:]
+    try:
+        from .device_recovery import dead_board_evidence
+    except Exception:  # noqa: BLE001 -- without the policy module there is no evidence to carry
+        return tail
+    lead = [ln for ln in dead_board_evidence("\n".join(kept)).splitlines() if ln not in tail]
+    return "\n".join(lead + [tail]) if lead else tail

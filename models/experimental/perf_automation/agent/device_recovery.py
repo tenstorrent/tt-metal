@@ -221,6 +221,30 @@ def is_device_bringup_failure(text) -> bool:
     return bool(_HARD_FAULT_RE.search(s))
 
 
+def dead_board_evidence(text, limit: int = 20) -> str:
+    """The lines of `text` that carry is_dead_board's evidence, in order, at most `limit` of them.
+
+    A caller that keeps only the END of a failure's output loses them: pytest prints its warnings
+    summary AFTER the traceback, so the last 2000 characters of a crashed e2e test were deprecation
+    warnings while "Timed out waiting for ETH heartbeat" sat above them. is_dead_board then saw no
+    signature, the telemetry veto skipped the reset, and every later round met the same stuck fabric
+    (Qwen-Image-Edit, 2026-10-02). Kept: every line with a dead-board signature, and -- because the
+    bring-up rule needs both -- pytest's setup-failure line and every hard-fault line.
+    is_dead_board(dead_board_evidence(t)) equals is_dead_board(t) whenever `t` holds at most `limit`
+    such lines."""
+    out, seen = [], set()
+    for ln in str(text or "").splitlines():
+        low = ln.lower()
+        if any(sig in low for sig in DEAD_BOARD_SIGS) or _SETUP_FAILURE_REPORT in low or _HARD_FAULT_RE.search(ln):
+            key = ln.strip()
+            if key and key not in seen:
+                seen.add(key)
+                out.append(key)
+                if len(out) >= limit:
+                    break
+    return "\n".join(out)
+
+
 def is_dead_board(text) -> bool:
     """Is this the UNAMBIGUOUS 'the card stopped answering' signature?
 
