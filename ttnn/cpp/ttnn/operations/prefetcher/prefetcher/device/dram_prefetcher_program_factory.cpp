@@ -116,7 +116,7 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
     std::vector<CoreRange> active_reader_core_range_vec;
     active_reader_core_range_vec.reserve(num_readers);
     for (uint32_t i = 0; i < num_readers; ++i) {
-        auto core = reader_core_range_vec[i];
+        auto core = reader_core_range_vec.at(i);
         active_reader_core_range_vec.push_back(CoreRange{core, core});
     }
     auto reader_core_range = CoreRangeSet{std::move(active_reader_core_range_vec)};

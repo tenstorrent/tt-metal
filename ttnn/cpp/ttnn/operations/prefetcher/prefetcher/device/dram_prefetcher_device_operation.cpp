@@ -31,6 +31,12 @@ void DramPrefetcherOperation::validate_on_program_cache_miss(
     // Check that global_cb sender_receiver_core_mapping has same number of receivers for each sender core
     const auto& sender_receiver_core_mapping = global_cb.sender_receiver_core_mapping();
     uint32_t num_readers = input_tensors[0].shard_spec()->grid.num_cores();
+    TT_FATAL(num_readers > 0, "Number of reader cores must be greater than zero");
+    TT_FATAL(
+        num_readers <= sender_receiver_core_mapping.size(),
+        "Global circular buffer has {} sender cores but the input tensors are sharded over {} reader cores",
+        sender_receiver_core_mapping.size(),
+        num_readers);
     for (uint32_t i = 0; i < num_readers; ++i) {
         const auto& [sender_core, receiver_core_range] = sender_receiver_core_mapping[i];
         TT_FATAL(
@@ -39,7 +45,6 @@ void DramPrefetcherOperation::validate_on_program_cache_miss(
     }
     uint32_t num_receivers_per_sender = sender_receiver_core_mapping[0].second.num_cores();
 
-    TT_FATAL(num_readers > 0, "Number of reader cores must be greater than zero");
     TT_FATAL(num_receivers_per_sender > 0, "Number of receiver cores per sender must be greater than zero");
 
     for (size_t i = 0; i < input_tensors.size() - 1; ++i) {

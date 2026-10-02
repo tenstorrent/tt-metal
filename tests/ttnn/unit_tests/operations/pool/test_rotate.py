@@ -547,5 +547,22 @@ def test_multichannel_consistency(device, input_shape, angle, interpolation_mode
         assert max_diff < 1e-5, f"Bilinear channels rotated differently: {max_diff}"
 
 
+@pytest.mark.parametrize("input_buffer, output_buffer", [("DRAM", "L1"), ("L1", "DRAM")])
+@pytest.mark.parametrize("input_shape", [(1, 64, 64, 24), (2, 32, 32, 40)])
+def test_nearest_rotate_across_buffer_types(device, input_shape, input_buffer, output_buffer):
+    # Regression: across DRAM and L1 the reader and writer strode the CB by different stick sizes.
+    memory_config = {"DRAM": ttnn.DRAM_MEMORY_CONFIG, "L1": ttnn.L1_MEMORY_CONFIG}
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(
+        torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config[input_buffer]
+    )
+
+    ttnn_output = ttnn.rotate(
+        ttnn_input, angle=0.0, interpolation_mode="nearest", memory_config=memory_config[output_buffer]
+    )
+
+    assert torch.equal(ttnn.to_torch(ttnn_output), torch_input)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
