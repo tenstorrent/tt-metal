@@ -205,12 +205,15 @@ def test_program_config_defaults():
     assert (f.num_producers, f.num_receivers, f.row_local) == (None, None, None)
     assert (f.handoff_depth, f.unicast, f.posted) == (None, True, False)
     assert (f.producer_pool, f.pool_extra_share) == (False, None)
+    assert f.dynamic_handoff is False
     f = ttnn.ChunkGdnFusedProgramConfig(num_receivers=4, num_producers=5, row_local=False, handoff_depth=3)
     assert (f.num_receivers, f.num_producers, f.row_local, f.handoff_depth) == (4, 5, False, 3)
     assert "num_receivers=4" in repr(f) and "row_local=False" in repr(f)
     f = ttnn.ChunkGdnFusedProgramConfig(num_receivers=2, num_producers=78, producer_pool=True, pool_extra_share=0.25)
     assert (f.num_producers, f.producer_pool) == (78, True) and abs(f.pool_extra_share - 0.25) < 1e-6
     assert "producer_pool=True" in repr(f) and "pool_extra_share=0.25" in repr(f)
+    d = ttnn.ChunkGdnFusedProgramConfig(producer_pool=True, dynamic_handoff=True)
+    assert d.dynamic_handoff is True and "dynamic_handoff=True" in repr(d)
     p = ttnn.ChunkGdnPhasedProgramConfig()
     assert (p.use_mcast, p.scan_serial, p.prep_serial) == (True, False, False)
     assert repr(ttnn.ChunkGdnPhasedProgramConfig(use_mcast=False)) == (
@@ -1124,3 +1127,62 @@ def test_fused_pool_infeasible_raises(device, expect_error):
         _run_op(device, tensors, const_tiles, s0, _fused(2, None, producer_pool=True, pool_extra_share=1.5))
     with expect_error(RuntimeError, "pool_extra_share must be in"):  # a pool with no extras (P = BH*NPH)
         _run_op(device, tensors, const_tiles, s0, _fused(2, 3 * hv, producer_pool=True, pool_extra_share=-0.1))
+
+
+# ---------------------------------------------------------------------------
+# Dynamic hand-off (producer_pool=True, dynamic_handoff=True). The producers claim their chunks at run time from
+# per-head counters as they become free (a home producer from its own head, the extras rotating over the heads); the
+# receivers credit whichever producer registered as a chunk's owner. Same kernels compute the same items from the
+# same inputs, so the gate is unchanged:
+# torch.equal vs phased, and a protocol error hangs rather than corrupts. Cases: the target geometries at depth
+# 2 and 3, T = 1024 and 2048, pools that are not a multiple of BH, NV 1 / 2, unicast / multicast / posted.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "hk, hv, nv, pool, nc, kwargs",
+    [
+        (4, 16, 2, 78, 8, dict()),  # BH=16 NV=2 P=78 (78 % 16 != 0): the target geometry, depth 2
+        (4, 16, 2, 78, 64, dict(handoff_depth=3)),  # T=2048, depth 3
+        (4, 12, 2, 86, 32, dict()),  # BH=12 NV=2 P=86, T=1024
+        (4, 12, 2, 86, 9, dict(unicast=False, handoff_depth=3)),  # the multicast chain, NC not a multiple of the ring
+        (4, 16, 1, 94, 8, dict(handoff_depth=3)),  # NV=1
+        (1, 4, 2, 102, 32, dict(posted=True)),  # BH=4: more producers than items in flight; posted writes
+    ],
+    ids=lambda v: str(sorted(v.items())) if isinstance(v, dict) else str(v),
+)
+def test_fused_pool_dynamic_bit_exact_vs_phased(device, hk, hv, nv, pool, nc, kwargs):
+    """Fused with the dynamic hand-off == phased, bit for bit."""
+    _skip_unless_pool_fits(device, hv, nv, pool, nc)
+    (o_ph, fs_ph), (o_fu, fs_fu), delta, _ = _fused_vs_phased(
+        device, hk, hv, nc, nv, pool, 20261010 + hv + pool + nc, producer_pool=True, dynamic_handoff=True, **kwargs
+    )
+    assert delta == 1, f"dynamic fused(NV={nv},P={pool},{kwargs}) compiled {delta} programs (expected 1)"
+    bad = _vblock_mismatches(o_ph, o_fu, hv, nv)
+    assert not bad, f"dynamic fused BH={hv} NV={nv} P={pool} {kwargs}: o differs in (head, vblock) slices {bad}"
+    assert torch.equal(o_fu, o_ph) and torch.equal(fs_fu, fs_ph), f"dynamic fused {kwargs} differs from phased"
+
+
+def test_fused_pool_dynamic_cache_identity_and_relaunch(device, expect_error):
+    """dynamic_handoff is hashed (the static pool -> dynamic compiles one program); the cached dynamic program's
+    second and third launches (dispatch-reset semaphores, cached runtime args) are bit-exact; dynamic without the
+    pool is refused."""
+    hk, hv, nv, pool, nc = 4, 16, 2, 78, 8
+    _skip_unless_pool_fits(device, hv, nv, pool, nc)
+    _, tensors, s0 = _make_inputs(device, 1, nc * CHUNK, hk, hv, True, seed=20261011)
+    const_tiles = _const_tiles(device)
+
+    o_s, fs_s = _run_op(device, tensors, const_tiles, s0, _fused(nv, pool, producer_pool=True))
+    n0 = device.num_program_cache_entries()
+    dyn = _fused(nv, pool, producer_pool=True, dynamic_handoff=True)
+    o_d, fs_d = _run_op(device, tensors, const_tiles, s0, dyn)
+    n1 = device.num_program_cache_entries()
+    assert n1 - n0 == 1, f"static pool -> dynamic compiled {n1 - n0} programs (expected 1: dynamic must be hashed)"
+    o_d2, fs_d2 = _run_op(device, tensors, const_tiles, s0, dyn)
+    o_d3, fs_d3 = _run_op(device, tensors, const_tiles, s0, dyn)
+    assert device.num_program_cache_entries() == n1, "relaunching the dynamic program compiled again"
+    assert torch.equal(o_s, o_d) and torch.equal(fs_s, fs_d), "dynamic differs from the static pool"
+    assert torch.equal(o_d, o_d2) and torch.equal(fs_d, fs_d2), "the second launch of the dynamic program differs"
+    assert torch.equal(o_d, o_d3) and torch.equal(fs_d, fs_d3), "the third launch of the dynamic program differs"
+    with expect_error(RuntimeError, "dynamic_handoff requires producer_pool"):
+        _run_op(device, tensors, const_tiles, s0, _fused(nv, 3, dynamic_handoff=True))

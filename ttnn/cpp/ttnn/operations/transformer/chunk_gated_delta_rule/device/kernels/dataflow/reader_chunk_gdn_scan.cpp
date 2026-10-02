@@ -22,7 +22,13 @@
 //                        shared producer map, chunk_gdn_fused_map.hpp) -> wait VALID -> push. The
 //                        producer sends only once all NV receivers have credited. A one-time init
 //                        barrier (SEM_INIT) orders the producers' zeroing of their credit words
-//                        before any credit.
+//                        before any credit. With GDN_DYNAMIC_ITEMS the owner of chunk c is not a
+//                        formula but a registration: the producer that claimed (h, c) writes owner[c]
+//                        (x | y << 8 | credit index << 16 | valid bit) into this core's owner table,
+//                        which this core zeroes at start and then announces on SEM_READY to every
+//                        producer; the credit goes to that core's credit[index]. The credit step is
+//                        non-blocking, so an unregistered chunk never blocks the VALID wait of an
+//                        earlier one.
 // The handshake follows the production matmul in0 mcast idiom (reader_bmm_tile_layout_in0_
 // sender_padding.cpp / _receiver.cpp): ready counts receivers that RESERVED space (so the sender
 // can never overwrite unconsumed data), the data mcasts and the valid-flag mcast share one NOC /
@@ -100,6 +106,13 @@ void kernel_main() {
     constexpr uint32_t CREDIT_OFF = get_compile_time_arg_val(s0_a.next_compile_time_args_offset() + 4);
     constexpr uint32_t NBUF = get_compile_time_arg_val(s0_a.next_compile_time_args_offset() + 5);  // hand-off slots
     (void)SEM_READY;  // superseded by the credit words on this variant
+#if defined(GDN_DYNAMIC_ITEMS)
+    constexpr uint32_t OWNER_OFF = get_compile_time_arg_val(s0_a.next_compile_time_args_offset() + 6);  // owner table
+    // The two aggregated kickoff barriers, counted on receiver (0, 0): receivers' "owner table zeroed" (R) and
+    // producers' "credit words zeroed" (P); that receiver fans SEM_READY / SEM_INIT out (one increment each).
+    constexpr uint32_t SEM_RDY_AGG = get_compile_time_arg_val(s0_a.next_compile_time_args_offset() + 7);
+    constexpr uint32_t SEM_INIT_AGG = get_compile_time_arg_val(s0_a.next_compile_time_args_offset() + 8);
+#endif
 #endif
 #endif
 
@@ -119,6 +132,18 @@ void kernel_main() {
     // the producers' virtual worker coords x | y << 8, two per word, producer p in word p / 2.
     const uint32_t N_INIT = get_arg_val<uint32_t>(4);
     const uint32_t kickoff_wait_cycles = get_arg_val<uint32_t>(5);
+#if defined(GDN_DYNAMIC_ITEMS)
+    // Dynamic hand-off (args 8..10 unused): NPH (arg 7, the home producers per head), P producers, the aggregating
+    // receiver's coords, R receivers. Common args: the producers' coords, then the receivers' coords (two per word
+    // each).
+    const uint32_t NPH = get_arg_val<uint32_t>(7);
+    const uint32_t P = get_arg_val<uint32_t>(11);
+    const uint32_t agg_xy = get_arg_val<uint32_t>(12);
+    const uint32_t R = get_arg_val<uint32_t>(13);
+    auto receiver_word = [&](uint32_t r) {
+        return (get_common_arg_val<uint32_t>((P + 1) / 2 + r / 2) >> (16 * (r % 2))) & 0xFFFFu;
+    };
+#else
     const GdnFusedMap map{
         get_arg_val<uint32_t>(6),
         NC,
@@ -126,6 +151,7 @@ void kernel_main() {
         get_arg_val<uint32_t>(8),
         get_arg_val<uint32_t>(9),
         get_arg_val<uint32_t>(10)};
+#endif
     auto producer_word = [](uint32_t p) { return (get_common_arg_val<uint32_t>(p / 2) >> (16 * (p % 2))) & 0xFFFFu; };
 #elif defined(GDN_MCAST_RECEIVER)
     const uint32_t vb_addr = get_arg_val<uint32_t>(3);
@@ -360,6 +386,113 @@ void kernel_main() {
     // hidden behind D receiver steps instead of sitting on the critical path.
     constexpr uint32_t D = (NBUF > 1) ? NBUF - 1 : 1;
 
+#if defined(GDN_DYNAMIC_ITEMS)
+    // Owner table: NC words in the u/mask CB. Zero it, then report to the aggregating receiver (SEM_RDY_AGG); that
+    // receiver, once all R have reported, tells every producer (SEM_READY) so no registration can precede a zeroing,
+    // and, once all P producers reported their zeroed credit words (SEM_INIT_AGG), tells every receiver (SEM_INIT).
+    // The producers' credit words sit at CREDIT_OFF of the same union-declared CB on every core; the index comes
+    // with the registration.
+    volatile tt_l1_ptr uint32_t* owner =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CircularBuffer(CB_CREDIT).get_read_ptr() + OWNER_OFF);
+    for (uint32_t c = 0; c < NC; c++) {
+        owner[c] = 0;
+    }
+    if (vb == 0) {
+        // Head h's chunk counter (the producers' fetch-and-add target), seeded past the home producers' first chunks.
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            CircularBuffer(CB_CREDIT).get_read_ptr() + CREDIT_OFF + kGdnDynHeadCtrOff) = NPH;
+    }
+    asm volatile("fence");
+    Semaphore<> rdy_agg(SEM_RDY_AGG);
+    rdy_agg.up(noc, agg_xy & 0xFFu, agg_xy >> 8, 1);
+    if (h == 0 && vb == 0) {
+        // The fan-outs are serialised at this core's NIU (~0.25 us each): the producers' ready first (the extras'
+        // first claims), then the receivers' init (their first credits, due when the first items are done).
+        rdy_agg.wait(R);
+        Semaphore<> ready(SEM_READY);
+        for (uint32_t p = 0; p < P; p++) {
+            const uint32_t pw = producer_word(p);
+            ready.up(noc, pw & 0xFFu, pw >> 8, 1);
+        }
+        Semaphore<>(SEM_INIT_AGG).wait(P);
+        for (uint32_t r = 0; r < R; r++) {
+            const uint32_t rw = receiver_word(r);
+            init.up(noc, rw & 0xFFu, rw >> 8, 1);
+        }
+    }
+    const uint32_t credit_base = CircularBuffer(CB_CREDIT).get_read_ptr() + CREDIT_OFF + kGdnDynCreditOff;
+
+    // Init barrier: every producer zeroed its credit words (N_INIT = 1, from the aggregating receiver).
+    init.wait(N_INIT);
+
+    uint32_t next = 0;  // chunks issued (reserved, credited)
+    // Issue chunk `next` if it is within D of the chunk being waited for, its owner is registered and its slot is
+    // free (compute popped chunk next - NBUF): reserve, credit the owner's credit[index]. Non-blocking: called from
+    // the VALID wait of the current chunk, so that wait may begin before its chunk is issued; the slot's VALID flag is
+    // therefore consumed (reset) as soon as it is seen, below, not here: a flag left VALID by chunk c - NBUF would
+    // otherwise pass chunk c's wait before chunk c was even credited.
+    auto try_issue = [&](uint32_t c_wait) {
+        if (next >= NC || next >= c_wait + D) {
+            return;
+        }
+        invalidate_l1_cache();
+        const uint32_t ow = owner[next];
+        if (ow == 0) {
+            return;
+        }
+        if (!(CircularBuffer(cb_vbeta).pages_reservable_at_back(D * cv) &&
+              CircularBuffer(cb_nkd).pages_reservable_at_back(D * ck) &&
+              CircularBuffer(cb_qdecay).pages_reservable_at_back(D * ck) &&
+              CircularBuffer(cb_intra).pages_reservable_at_back(D * cc) &&
+              CircularBuffer(cb_kdec_t).pages_reservable_at_back(D * kc) &&
+              CircularBuffer(cb_dl).pages_reservable_at_back(D * 1) &&
+              CircularBuffer(cb_Tinv).pages_reservable_at_back(D * cc))) {
+            return;
+        }
+        CircularBuffer(cb_vbeta).reserve_back(D * cv);
+        CircularBuffer(cb_nkd).reserve_back(D * ck);
+        CircularBuffer(cb_qdecay).reserve_back(D * ck);
+        CircularBuffer(cb_intra).reserve_back(D * cc);
+        CircularBuffer(cb_kdec_t).reserve_back(D * kc);
+        CircularBuffer(cb_dl).reserve_back(D * 1);
+        CircularBuffer(cb_Tinv).reserve_back(D * cc);
+        const uint64_t dst =
+            get_noc_addr(ow & 0xFFu, (ow >> 8) & 0xFFu, credit_base + 4 * ((ow >> 16) & 0xFFu), noc.get_noc_id());
+        noc_semaphore_inc(dst, 1, noc.get_noc_id());
+        next++;
+    };
+
+    try_issue(0);
+    if (kickoff_wait_cycles != 0) {
+        riscv_wait(kickoff_wait_cycles);
+    }
+    read_vslice(s0_acc, cb_S, h * Kt * Vt_full, Kt);
+    for (uint32_t c = 0; c < NC; c++) {
+        {
+            DeviceZoneScopedN("rx_wait_valid");
+            volatile tt_l1_ptr uint32_t* valid =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_VALID + (c % NBUF)));
+            for (;;) {
+                invalidate_l1_cache();
+                if (*valid == VALID) {
+                    break;
+                }
+                try_issue(c);
+            }
+            *valid = INVALID;  // consumed: the slot's next chunk starts from INVALID whenever it is credited
+        }
+
+        CircularBuffer(cb_vbeta).push_back(cv);
+        CircularBuffer(cb_nkd).push_back(ck);
+        CircularBuffer(cb_qdecay).push_back(ck);
+        CircularBuffer(cb_intra).push_back(cc);
+        CircularBuffer(cb_kdec_t).push_back(kc);
+        CircularBuffer(cb_dl).push_back(1);
+        CircularBuffer(cb_Tinv).push_back(cc);
+
+        try_issue(c + 1);
+    }
+#else
     // The producers' credit words sit in the last tile of the union-declared u/mask CB — the same L1
     // address on every core of the program — so this receiver can name head h's words on any
     // producer without being told an address. Word (h, slot) is at CREDIT_OFF + 4*(h*NBUF + slot).
@@ -430,6 +563,7 @@ void kernel_main() {
             next++;
         }
     }
+#endif
 
     for (uint32_t s = 0; s < NBUF; s++) {
         Semaphore<>(SEM_VALID + s).set(INVALID);  // local store: restore the initial values

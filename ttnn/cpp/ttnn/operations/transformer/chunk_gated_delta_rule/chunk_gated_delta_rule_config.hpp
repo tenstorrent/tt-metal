@@ -54,6 +54,11 @@ struct ChunkGdnFusedProgramConfig {
     bool producer_pool = false;
     // Share of every head's chunks the extras take, in [0, 1]; nullopt = NX / P, the balanced load.
     std::optional<float> pool_extra_share;
+    // With producer_pool: the producers claim their chunks at run time from per-head counters as they become free
+    // (a home producer from its own head, the extras rotating over the heads), instead of the static item lists; the
+    // receivers credit whichever producer registered as a chunk's owner. Same outputs, bit for bit; only the timing
+    // changes.
+    bool dynamic_handoff = false;
 };
 
 using ChunkGdnProgramConfig =

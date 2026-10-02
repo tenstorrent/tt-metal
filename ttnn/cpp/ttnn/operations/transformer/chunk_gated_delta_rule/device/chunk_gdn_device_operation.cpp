@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "chunk_gdn_device_operation.hpp"
+#include "kernels/dataflow/chunk_gdn_fused_map.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -122,8 +123,21 @@ void ChunkGdnDeviceOperation::validate_on_program_cache_miss(
             "chunk_gdn_fused: the extras' share {}/{} is not a fraction in [0, 1]",
             attrs.pool_extra_num,
             attrs.pool_extra_den);
+        if (attrs.dynamic) {
+            // The owner table is one 4 KB tile of NC words; the Q credit / item words bound the reader's lead.
+            TT_FATAL(
+                attrs.num_chunks <= 1024,
+                "chunk_gdn_fused: the dynamic hand-off's owner table holds 1024 chunks (got {})",
+                attrs.num_chunks);
+            TT_FATAL(
+                attrs.nbuf + 4 <= kGdnDynQ,
+                "chunk_gdn_fused: the dynamic hand-off needs handoff_depth + 4 <= {} (got {})",
+                kGdnDynQ,
+                attrs.nbuf);
+        }
         return;
     }
+    TT_FATAL(!attrs.dynamic, "chunk_gdn_fused: the dynamic hand-off needs the producer pool (placement 2)");
     if (attrs.placement == 0) {
         const uint32_t hpr = grid.x / attrs.nv;
         TT_FATAL(
@@ -213,6 +227,7 @@ constexpr float kTailUs = 9.0f;              // last scan step -> kernel end (he
 constexpr float kPaceMarginUs = 0.4f;        // depth-2 jitter exposure with the supply within 10 % of the step
 constexpr float kRowMajorPenalty = 1.7f;     // row-major placement, link-bound chain (BH=16: 1.66x and 1.72x)
 constexpr float kPoolJitter = 1.10f;         // pooled pace: ordering jitter of the balanced item map (BH >= 8)
+constexpr float kPoolJitterDynamic = kPoolJitter;  // pooled pace with the dynamic hand-off (fitted separately)
 constexpr uint32_t kHandoffTiles = 19;       // fp32 tiles per hand-off slot (C=32, K=V=128)
 constexpr uint32_t kProducerPrepTiles = 48;  // the producer's prep CBs, in fp32-tile units
 constexpr uint32_t kTileBytes = 4096;
@@ -245,9 +260,9 @@ constexpr float pace_us(uint32_t Vtl, float supply, uint32_t depth) {
     return pace;
 }
 // Pooled per-chunk period: the extras' statically balanced map has no slack, so ordering jitter stretches
-// max(step, supply) by kPoolJitter.
-constexpr float pace_pool_us(uint32_t Vtl, float supply, uint32_t depth) {
-    return std::max(t_step_us(Vtl, depth), supply) * kPoolJitter;
+// max(step, supply) by kPoolJitter; the dynamic hand-off claims items in consumption order, kPoolJitterDynamic.
+constexpr float pace_pool_us(uint32_t Vtl, float supply, uint32_t depth, bool dynamic) {
+    return std::max(t_step_us(Vtl, depth), supply) * (dynamic ? kPoolJitterDynamic : kPoolJitter);
 }
 // L1 at hand-off depth `depth` on the fuller side: the slots, the 4-tile u/credit CB and the larger of
 // the receiver's scan CBs at the slice width (20*Vtl + 1 tiles) and the producer's prep CBs.
@@ -440,7 +455,8 @@ FusedGeometryChoice choose_fused_geometry(
     uint32_t fixed_nv,
     uint32_t fixed_np,
     uint32_t fixed_nbuf,
-    FusedCandidates candidates) {
+    FusedCandidates candidates,
+    bool dynamic) {
     FusedGeometryChoice best;
     best.t_phased_us = t_phased_us(BH, NC);
     bool have = false;
@@ -459,7 +475,7 @@ FusedGeometryChoice choose_fused_geometry(
         const uint32_t cores = BH * nv + producers;
         const bool pooled = placement == 2 && np > BH * fused_pool_home_producers(grid_x, grid_y, BH, nv, np);
         const float supply = BH * w_p_us(producers) / producers;  // us per chunk of one head
-        const float pace = pooled ? pace_pool_us(Vtl, supply, depth) : pace_us(Vtl, supply, depth);
+        const float pace = pooled ? pace_pool_us(Vtl, supply, depth, dynamic) : pace_us(Vtl, supply, depth);
         float t = fill_us(BH) + NC * pace + kTailUs;
         // Row-major: the receiver rows' shared links saturate unless the chain is well supply-bound.
         if (placement == 0 && supply < 2.0f * t_step_us(Vtl, depth)) {
@@ -630,7 +646,8 @@ std::vector<Tensor> chunk_gdn(
             nv_pin,
             np_pin,
             nbuf_pin,
-            pool ? FusedCandidates::Pool : FusedCandidates::PerHead);
+            pool ? FusedCandidates::Pool : FusedCandidates::PerHead,
+            fused_cfg->dynamic_handoff);
         TT_FATAL(
             choice.nv >= 1,
             "chunk_gdn_fused: no fused geometry fits BH={} on a {}x{} grid with num_receivers={} num_producers={} "
@@ -667,6 +684,8 @@ std::vector<Tensor> chunk_gdn(
         attrs.nbuf = nbuf_pin ? nbuf_pin : choice.nbuf;
         attrs.unicast = fused_cfg->unicast;
         attrs.posted = fused_cfg->posted;
+        TT_FATAL(!fused_cfg->dynamic_handoff || pool, "chunk_gdn_fused: dynamic_handoff requires producer_pool=True");
+        attrs.dynamic = fused_cfg->dynamic_handoff;
         TT_FATAL(
             !attrs.posted || attrs.unicast,
             "chunk_gdn_fused: posted writes require the unicast transport (unicast=true)");

@@ -22,6 +22,9 @@
 #include "api/compute/common.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "chunk_gdn_math.hpp"
+#if defined(GDN_DYNAMIC_ITEMS)
+#include "internal/tt-1xx/cache.h"
+#endif
 
 namespace {
 
@@ -87,10 +90,18 @@ void kernel_main() {
     constexpr uint32_t QK_NORM = get_compile_time_arg_val(3);
     constexpr uint32_t SCALE_BITS = get_compile_time_arg_val(4);
     constexpr uint32_t EPS_BITS = get_compile_time_arg_val(5);
+#if defined(GDN_DYNAMIC_ITEMS)
+    // Dynamic hand-off (fused producer pool): the reader publishes the items as it claims them, in two words of
+    // cb_u's fourth tile (byte offsets PUB_OFF / FIN_OFF): the published count and 1 + the final count once the
+    // reader ran out. Both words only grow, so the three TRISCs leave the loop at the same item.
+    constexpr uint32_t PUB_OFF = get_compile_time_arg_val(6);
+    constexpr uint32_t FIN_OFF = get_compile_time_arg_val(7);
+#else
     // Chunk-parallel: NC here is this core's local work-item count (chunks assigned to it), NOT the
     // sequence-wide chunk count. Each work-item is an independent (head, chunk) prep — no cross-item
     // state — so the loop just processes `NC` items regardless of which (h, c) they map to.
     const uint32_t NC = get_arg_val<uint32_t>(0);
+#endif
 
     constexpr uint32_t cc = Ct * Ct;
 
@@ -101,11 +112,31 @@ void kernel_main() {
     WAIT(cb_tril, cc);
     WAIT(cb_ones, cc);
     WAIT(cb_mask, 3);  // Qtl, Qbr, Q10 (used by invert_block)
+#if defined(GDN_DYNAMIC_ITEMS)
+    // UNPACK reads the tile's address after the wait above and hands it to MATH and PACK through the mailboxes, so
+    // every thread's first poll follows the reader's zeroing of the two words (done before it pushes the masks).
+    // The TRISC data cache is off (the solve enables it only inside its own window).
+    const uint32_t ctrl = get_tile_address(cb_u, 3);
+    volatile tt_l1_ptr uint32_t* pub = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl + PUB_OFF);
+    volatile tt_l1_ptr uint32_t* fin = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl + FIN_OFF);
+#endif
 
     // PHASE A (prep): state-independent per-chunk quantities. No recurrent state here; the
     // sequential state scan lives in the separate scan kernel. Outputs (per chunk) u, w, k_dec_t,
     // q_decay, intra, dl are pushed to their CBs and streamed to DRAM by the prep writer.
+#if defined(GDN_DYNAMIC_ITEMS)
+    for (uint32_t c = 0;; c++) {
+        bool more;
+        do {
+            invalidate_l1_cache();
+            more = *pub > c;
+        } while (!more && *fin != c + 1);
+        if (!more) {
+            break;
+        }
+#else
     for (uint32_t c = 0; c < NC; c++) {
+#endif
 #if defined(PROFILE_KERNEL)
         {
             // Diagnostic only (Tracy device runs): wait for the item's inputs up front so the zone

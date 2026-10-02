@@ -32,6 +32,11 @@
 // Receiver coordinates: common runtime args, HEAD_WORDS per head — the multicast rectangle, already
 // ORDERED for this kernel's NoC (NOC_1 wants bottom-right -> top-left; coordinates themselves are
 // virtual and never flipped on Blackhole), then the NV receivers' coords, two per word.
+//
+// GDN_DYNAMIC_ITEMS (chunk_gdn_fused_map.hpp): the items come from the reader's control block in the credit tile:
+// item n is item[n % Q] = h << 16 | c once SEM_PUB > n, and SEM_FIN = n + 1 ends the loop after n items. Its credit
+// word is credit[n % Q] (the receivers learn the index from the reader's owner registration); the per-(head, slot)
+// words are not used. The init bump goes to the aggregating receiver (SEM_INIT_AGG), which fans SEM_INIT out.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -63,15 +68,24 @@ void kernel_main() {
         get_compile_time_arg_val(11) != 0;  // A/B (unicast only): posted data, ordered VALID, no barrier
     static_assert(!POSTED || UNICAST, "posted hand-off requires the unicast transport");
     static_assert(Vtl * NV == Vt, "NV receivers must tile the full V width");
+#if defined(GDN_DYNAMIC_ITEMS)
+    constexpr uint32_t SEM_PUB = get_compile_time_arg_val(12);       // reader: items published
+    constexpr uint32_t SEM_FIN = get_compile_time_arg_val(13);       // reader: 1 + the item count, once known
+    constexpr uint32_t SEM_INIT_AGG = get_compile_time_arg_val(14);  // on the aggregating receiver: producers done
 
+    const uint32_t BH = get_arg_val<uint32_t>(2);  // heads: head-table entries
+#else
     const uint32_t p = get_arg_val<uint32_t>(0);        // this producer's index in the map
     const uint32_t n_items = get_arg_val<uint32_t>(1);  // its item count
     const uint32_t BH = get_arg_val<uint32_t>(2);       // heads: credit words to zero, head-table entries
     const uint32_t NC = get_arg_val<uint32_t>(3);
     const GdnFusedMap map{
         BH, NC, get_arg_val<uint32_t>(4), get_arg_val<uint32_t>(5), get_arg_val<uint32_t>(6), get_arg_val<uint32_t>(7)};
+#endif
+#if !defined(GDN_DYNAMIC_ITEMS)
     // The heads this producer serves, one bit each: words 8 .. 8 + ceil(BH / 32) - 1.
     auto serves_head = [](uint32_t h) { return (get_arg_val<uint32_t>(8 + h / 32) >> (h % 32)) & 1u; };
+#endif
     // Common args, per head: the rectangle word x0 | y0 << 8 | x1 << 16 | y1 << 24, then the receivers'
     // coords x | y << 8, two per word (receiver v in the low half of word 1 + v/2 when v is even).
     constexpr uint32_t HEAD_WORDS = 1 + (NV + 1) / 2;
@@ -141,6 +155,17 @@ void kernel_main() {
     // producer serves (init barrier).
     volatile tt_l1_ptr uint32_t* credit =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CircularBuffer(CB_CREDIT).get_read_ptr() + CREDIT_OFF);
+#if defined(GDN_DYNAMIC_ITEMS)
+    volatile tt_l1_ptr uint32_t* items = credit + kGdnDynItemOff / 4;
+    volatile tt_l1_ptr uint32_t* pub = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_PUB));
+    volatile tt_l1_ptr uint32_t* fin = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_FIN));
+    for (uint32_t i = 0; i < kGdnDynQ; i++) {
+        noc_semaphore_set(credit + kGdnDynCreditOff / 4 + i, 0);
+    }
+    // The aggregating receiver's coords follow the head mask words; it fans SEM_INIT out once every producer bumped.
+    const uint32_t agg_xy = get_arg_val<uint32_t>(8 + (BH + 31) / 32);
+    Semaphore<>(SEM_INIT_AGG).up(noc, agg_xy & 0xFFu, agg_xy >> 8, 1);
+#else
     for (uint32_t i = 0; i < BH * NBUF; i++) {
         noc_semaphore_set(credit + i, 0);
     }
@@ -153,6 +178,7 @@ void kernel_main() {
             init.up(noc, rx[v], ry[v], 1);
         }
     }
+#endif
 
     // Hand-off CB base addresses, captured BEFORE any pop (read_ptr starts at the CB base, and
     // the union declaration makes each base identical on every receiver).
@@ -216,10 +242,25 @@ void kernel_main() {
             /*linked=*/false);
     };
 
+#if defined(GDN_DYNAMIC_ITEMS)
+    for (uint32_t n = 0;; n++) {
+        bool more;
+        do {
+            invalidate_l1_cache();
+            more = *pub > n;
+        } while (!more && *fin != n + 1);
+        if (!more) {
+            break;
+        }
+        const uint32_t w = items[n % kGdnDynQ];
+        const uint32_t h = w >> 16;
+        const uint32_t c = w & 0xFFFFu;
+#else
     for (uint32_t n = 0; n < n_items; n++) {
         const GdnFusedItem item = gdn_fused_item(map, p, n);
         const uint32_t h = item.h;
         const uint32_t c = item.c;
+#endif
         const uint32_t slot = c % NBUF;  // the receivers' reserved slot for GLOBAL chunk c (shared CBs)
         load_head(h);
         // Wait for the chunk's outputs in the phased prep writer's drain order (roughly
@@ -239,7 +280,11 @@ void kernel_main() {
         // would be a protocol bug and shows up as a hang here rather than as corrupt output. The
         // word is per (head, slot): its next credit (chunk c + NBUF) can only follow this chunk's
         // VALID -> pop -> reserve, so the reset below never races an increment.
+#if defined(GDN_DYNAMIC_ITEMS)
+        volatile tt_l1_ptr uint32_t* credit_word = credit + kGdnDynCreditOff / 4 + n % kGdnDynQ;
+#else
         volatile tt_l1_ptr uint32_t* credit_word = credit + h * NBUF + slot;
+#endif
         {
             DeviceZoneScopedN("tx_wait_credit");
             noc_semaphore_wait(credit_word, NV);

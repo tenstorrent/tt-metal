@@ -47,6 +47,14 @@
 // coincide with prep's output indices, so the same physical CB is prep's output AND scan's input:
 //   v_beta=14  nkd=18  q_decay=19  intra=20  k_dec_t=24  dl=22  t_inv=13
 //
+// Dynamic hand-off (attrs.dynamic, placement 2 only; define GDN_DYNAMIC_ITEMS on the four hand-off kernels):
+// the map's item lists are replaced by per-head chunk counters (a word on receiver (h, 0), fetch-and-add by the
+// producers' readers: a home producer claims from its head, an extra rotates over the heads), a per-producer
+// control block in the credit tile (kernels/dataflow/chunk_gdn_fused_map.hpp), an owner table per receiver in a
+// fifth tile of the u/mask CB, and two kickoff barriers aggregated on receiver (0, 0): SEM_INIT (every producer's
+// credit words zeroed) and SEM_READY (every counter seeded, every owner table zeroed). The map is still evaluated
+// here for the placement and the roles; its item lists are unused.
+//
 // Bit-exactness: the compute kernels and the math header are byte-identical to the phased path and
 // the seven intermediates are packed at the same CB boundaries in fp32, so fused == phased bit for
 // bit; any difference is plumbing.
@@ -157,6 +165,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     const std::vector<CoreCoord>& prod_cores = layout.producers;
     const uint32_t R = BH * NV;                                   // receiver cores
     const uint32_t P = static_cast<uint32_t>(prod_cores.size());  // producer cores
+    const bool dynamic = attrs.dynamic;                           // run-time claims instead of the item lists
     // The producer map (chunk_gdn_fused_map.hpp): home producers per head, extras, the extras' share.
     const GdnFusedMap map{
         BH, NC, layout.home_per_head, P - BH * layout.home_per_head, attrs.pool_extra_num, attrs.pool_extra_den};
@@ -196,10 +205,13 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     add_cb(union_set, fcb::dl, 1, kHandoffNbuf);
     add_cb(union_set, fcb::Tinv, cc, kHandoffNbuf);
     // (1b) The u/mask CB, ALSO on the union: 3 mask tiles (prep reads them once) + 1 credit tile whose
-    // BH x nbuf leading words are the producer-side credit counters credit[h][slot].
-    // Union-declared so the receivers can address a producer's credit word from their own CB base.
-    const uint32_t u_tiles = 3 + 1;
-    const uint32_t credit_off_bytes = (u_tiles - 1) * tile_f32;
+    // BH x nbuf leading words are the producer-side credit counters credit[h][slot] (dynamic: the
+    // producer's control block, chunk_gdn_fused_map.hpp) + with the dynamic hand-off 1 owner-table tile
+    // (the receivers' NC owner words). Union-declared so the receivers can address a producer's credit
+    // word from their own CB base, and the producers a receiver's owner table.
+    const uint32_t u_tiles = 3 + 1 + (dynamic ? 1 : 0);
+    const uint32_t credit_off_bytes = 3 * tile_f32;
+    const uint32_t owner_off_bytes = 4 * tile_f32;
     add_cb(union_set, fcb::u, u_tiles);
 
     // (2) The remaining prep CBs on the PRODUCER cores only — the phased prep factory's sizes (scratch
@@ -257,11 +269,21 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     //                   CBs". One flag per hand-off slot lets a receiver keep nbuf-1 hand-offs in
     //                   flight. Consecutive ids => consecutive L1 words, so the kernels
     //                   address slot s as id (sem_valid_id + s). Program cap is 16 semaphores: nbuf <= 8.
+    //   dynamic only, after the valid ids: pub (reader -> writer/compute: items published), fin (1 + the
+    //                   final item count), rdy_agg / init_agg (the kickoff barriers, counted on rcv_cores[0],
+    //                   which fans ready / init out). The per-head chunk counters are plain words on the receivers
+    //                   (kGdnDynHeadCtrOff), seeded by them. Dispatch resets semaphores every launch, so none of
+    //                   them needs reset code.
     constexpr uint32_t sem_ready_id = 0;
     constexpr uint32_t sem_init_id = 1;
     constexpr uint32_t sem_valid_id = 2;
-    TT_FATAL(sem_valid_id + kHandoffNbuf <= 16, "chunk_gdn_fused: nbuf {} needs too many semaphores", kHandoffNbuf);
-    for (uint32_t id = 0; id < sem_valid_id + kHandoffNbuf; id++) {
+    const uint32_t sem_pub_id = sem_valid_id + kHandoffNbuf;
+    const uint32_t sem_fin_id = sem_pub_id + 1;
+    const uint32_t sem_rdy_agg_id = sem_pub_id + 2;
+    const uint32_t sem_init_agg_id = sem_pub_id + 3;
+    const uint32_t n_sems = dynamic ? sem_init_agg_id + 1 : sem_valid_id + kHandoffNbuf;
+    TT_FATAL(n_sems <= 16, "chunk_gdn_fused: nbuf {} needs too many semaphores", kHandoffNbuf);
+    for (uint32_t id = 0; id < n_sems; id++) {
         desc.semaphores.push_back(SemaphoreDescriptor{
             .id = id, .core_type = tt::CoreType::WORKER, .core_ranges = union_set, .initial_value = 0});
     }
@@ -284,14 +306,25 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     // OPT-A: trailing compile args after all TensorAccessorArgs — 1 => read that tensor flat token-major.
     prep_reader_ct.push_back(attrs.v_flat ? 1u : 0u);
     prep_reader_ct.push_back(attrs.qk_flat ? 1u : 0u);
+    if (dynamic) {
+        // The control-block CB and offsets, then the ready / pub / fin semaphore ids.
+        for (uint32_t a : {fcb::u, credit_off_bytes, owner_off_bytes, sem_ready_id, sem_pub_id, sem_fin_id}) {
+            prep_reader_ct.push_back(a);
+        }
+    }
 
     std::vector<uint32_t> prep_compute_ct = ct_prep;
     prep_compute_ct.push_back(attrs.qk_norm ? 1u : 0u);
     prep_compute_ct.push_back(std::bit_cast<uint32_t>(attrs.scale));
     prep_compute_ct.push_back(std::bit_cast<uint32_t>(1e-6f));
+    if (dynamic) {
+        // The published / finished words the compute polls, as byte offsets in the credit tile.
+        prep_compute_ct.push_back(kGdnDynPubOff);
+        prep_compute_ct.push_back(kGdnDynFinOff);
+    }
 
     // Fused writer: plain scalars, no accessors (it writes no DRAM at all).
-    const std::vector<uint32_t> fused_writer_ct = {
+    std::vector<uint32_t> fused_writer_ct = {
         Ct,
         Kt,
         Vt,
@@ -304,6 +337,11 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         credit_off_bytes,
         attrs.unicast ? 1u : 0u,
         attrs.posted ? 1u : 0u};
+    if (dynamic) {
+        fused_writer_ct.push_back(sem_pub_id);
+        fused_writer_ct.push_back(sem_fin_id);
+        fused_writer_ct.push_back(sem_init_agg_id);
+    }
 
     // ---- Receiver-side CT args: the phased SCAN layout at the V-slice width, with Vt_full for strides ----
     const std::vector<uint32_t> ct_scan = {Ct, Kt, Vtl, Vt};
@@ -318,6 +356,11 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     receiver_ct.push_back(fcb::u);
     receiver_ct.push_back(credit_off_bytes);
     receiver_ct.push_back(kHandoffNbuf);
+    if (dynamic) {
+        receiver_ct.push_back(owner_off_bytes);
+        receiver_ct.push_back(sem_rdy_agg_id);
+        receiver_ct.push_back(sem_init_agg_id);
+    }
 
     std::vector<uint32_t> scan_writer_ct = ct_scan;
     TensorAccessorArgs(*outputs[0].buffer()).append_to(scan_writer_ct);
@@ -335,6 +378,9 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         .config = ReaderConfigDescriptor{},
     };
     prep_reader.runtime_args.reserve(P);
+    if (dynamic) {
+        prep_reader.defines.push_back({"GDN_DYNAMIC_ITEMS", "1"});
+    }
 
     KernelDescriptor prep_compute{
         .kernel_source = kdir + "compute/chunk_gdn_prep.cpp",
@@ -346,6 +392,9 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         .config = gdn_compute_config(attrs.compute_kernel_config),
     };
     prep_compute.runtime_args.reserve(P);
+    if (dynamic) {
+        prep_compute.defines.push_back({"GDN_DYNAMIC_ITEMS", "1"});
+    }
 
     // The fused writer runs on the WriterConfigDescriptor's RISC/NoC (BRISC / NOC_1 on Blackhole).
     // Its multicast rectangles must be given in that NoC's own order: NOC_1 multicasts from the
@@ -362,6 +411,9 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         .config = WriterConfigDescriptor{},
     };
     fused_writer.runtime_args.reserve(P);
+    if (dynamic) {
+        fused_writer.defines.push_back({"GDN_DYNAMIC_ITEMS", "1"});
+    }
 
     KernelDescriptor receiver_reader{
         .kernel_source = kdir + "dataflow/reader_chunk_gdn_scan.cpp",
@@ -372,6 +424,9 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         .config = ReaderConfigDescriptor{},
     };
     receiver_reader.runtime_args.reserve(R);
+    if (dynamic) {
+        receiver_reader.defines.push_back({"GDN_DYNAMIC_ITEMS", "1"});
+    }
 
     KernelDescriptor scan_compute{
         .kernel_source = kdir + "compute/chunk_gdn_scan.cpp",
@@ -420,6 +475,13 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     for (uint32_t p = 0; p < P; p++) {
         producer_table[p / 2] |= pack_xy(prod_cores[p]) << (16 * (p % 2));
     }
+    // Dynamic: the receivers' coords follow the producers' in the receiver reader's common args (the aggregating
+    // receiver, rcv_cores[0], fans SEM_INIT out).
+    std::vector<uint32_t> receiver_table((R + 1) / 2, 0);
+    for (uint32_t r = 0; r < R; r++) {
+        receiver_table[r / 2] |= pack_xy(rcv_cores[r]) << (16 * (r % 2));
+    }
+    const uint32_t agg_xy = pack_xy(rcv_cores[0]);
 
     // Each producer's items from the shared map: count, first chunk (kickoff stagger), the heads it serves
     // (init bumps), and per head the distinct producers serving it (the receivers' N_INIT).
@@ -476,36 +538,71 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         }
 
         // Receiver (h, v): its V-slice index, s0 from DRAM, N_INIT (the distinct producers serving this
-        // head, each bumps `init` once), the kickoff hold and the map; the producers' coords are common.
+        // head, each bumps `init` once; 1 when dynamic: the aggregating receiver), the kickoff hold and the map;
+        // the producers' coords are common. Dynamic: P, the aggregating receiver, R as args 11..13.
         for (uint32_t v = 0; v < NV; v++) {
             const CoreCoord& rc = rcv_cores[h * NV + v];
-            receiver_reader.emplace_runtime_args(
-                rc, {h, v, NC, s0_buf, n_init[h], kReceiverKickoffWaitCycles, BH, map.NPH, map.NX, map.num, map.den});
+            std::vector<std::variant<uint32_t, Buffer*>> r_args = {
+                h,
+                v,
+                NC,
+                s0_buf,
+                dynamic ? 1u : n_init[h],
+                kReceiverKickoffWaitCycles,
+                BH,
+                map.NPH,
+                map.NX,
+                map.num,
+                map.den};
+            if (dynamic) {
+                for (uint32_t a : {P, agg_xy, R}) {
+                    r_args.push_back(a);
+                }
+            }
+            receiver_reader.emplace_runtime_args(rc, r_args);
             scan_compute.emplace_runtime_args(rc, {NC});
             scan_writer.emplace_runtime_args(rc, {h, v, NC, o_buf, fs_buf});
         }
     }
     receiver_reader.common_runtime_args = producer_table;
+    if (dynamic) {
+        receiver_reader.common_runtime_args.insert(
+            receiver_reader.common_runtime_args.end(), receiver_table.begin(), receiver_table.end());
+    }
 
     // Producer p: its map index and item count (the reader and writer walk the same list), the map, and for
-    // the writer the heads it serves; the receivers' coords are common.
+    // the writer the heads it serves; the receivers' coords are common. Dynamic: no kickoff stagger, the
+    // reader also gets the SEM_READY count, NV and its own coords (args 20..22) plus the head table as common
+    // args, and the writer gets the aggregating receiver after the head mask.
     for (uint32_t p = 0; p < P; p++) {
         const CoreCoord& pc = prod_cores[p];
-        prep_reader.emplace_runtime_args(
-            pc, {p,        n_items[p], q_buf,     k_buf,
-                 v_buf,    g_buf,      beta_buf,  eye_buf,
-                 tril_buf, ones_buf,   masks_buf, NC,
-                 attrs.HV, attrs.Hk,   BH,        c_first[p] * kProducerKickoffStaggerCycles,
-                 map.NPH,  map.NX,     map.num,   map.den});
+        std::vector<std::variant<uint32_t, Buffer*>> r_args = {
+            p,        n_items[p], q_buf,     k_buf,
+            v_buf,    g_buf,      beta_buf,  eye_buf,
+            tril_buf, ones_buf,   masks_buf, NC,
+            attrs.HV, attrs.Hk,   BH,        dynamic ? 0u : c_first[p] * kProducerKickoffStaggerCycles,
+            map.NPH,  map.NX,     map.num,   map.den};
+        if (dynamic) {
+            for (uint32_t a : {1u, NV, pack_xy(pc)}) {
+                r_args.push_back(a);
+            }
+        }
+        prep_reader.emplace_runtime_args(pc, r_args);
         prep_compute.emplace_runtime_args(pc, {n_items[p]});
         std::vector<std::variant<uint32_t, Buffer*>> w_args = {
             p, n_items[p], BH, NC, map.NPH, map.NX, map.num, map.den};
         for (uint32_t w = 0; w < mask_words; w++) {
             w_args.push_back(head_mask[p * mask_words + w]);
         }
+        if (dynamic) {
+            w_args.push_back(agg_xy);
+        }
         fused_writer.emplace_runtime_args(pc, w_args);
     }
     fused_writer.common_runtime_args = head_table;
+    if (dynamic) {
+        prep_reader.common_runtime_args = head_table;
+    }
 
     desc.kernels.push_back(std::move(prep_reader));
     desc.kernels.push_back(std::move(prep_compute));

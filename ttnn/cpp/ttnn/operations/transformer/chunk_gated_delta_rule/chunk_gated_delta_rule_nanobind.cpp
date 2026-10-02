@@ -252,7 +252,12 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 then the pool size P (default: every core the receivers leave free, at most BH*NC);
                 row_local is ignored.
             pool_extra_share (float, optional): the share of every head's chunks the pool's extras take,
-                in [0, 1]; None = NX / P, the balanced load.)doc")
+                in [0, 1]; None = NX / P, the balanced load.
+            dynamic_handoff (bool): default False. With producer_pool: the producers claim their chunks at
+                run time from per-head counters as they become free (a home producer from its own head, the
+                extras rotating over the heads) instead of following the static item lists, and the receivers
+                credit whichever producer registered as a chunk's owner. Bit-identical outputs; only the
+                timing changes.)doc")
         .def(
             nb::init<
                 std::optional<uint32_t>,
@@ -262,7 +267,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 bool,
                 bool,
                 bool,
-                std::optional<float>>(),
+                std::optional<float>,
+                bool>(),
             nb::kw_only(),
             nb::arg("num_producers") = nb::none(),
             nb::arg("num_receivers") = nb::none(),
@@ -271,7 +277,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             nb::arg("unicast") = true,
             nb::arg("posted") = false,
             nb::arg("producer_pool") = false,
-            nb::arg("pool_extra_share") = nb::none())
+            nb::arg("pool_extra_share") = nb::none(),
+            nb::arg("dynamic_handoff") = false)
         .def_rw("num_producers", &ChunkGdnFusedProgramConfig::num_producers)
         .def_rw("num_receivers", &ChunkGdnFusedProgramConfig::num_receivers)
         .def_rw("row_local", &ChunkGdnFusedProgramConfig::row_local)
@@ -280,10 +287,11 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         .def_rw("posted", &ChunkGdnFusedProgramConfig::posted)
         .def_rw("producer_pool", &ChunkGdnFusedProgramConfig::producer_pool)
         .def_rw("pool_extra_share", &ChunkGdnFusedProgramConfig::pool_extra_share)
+        .def_rw("dynamic_handoff", &ChunkGdnFusedProgramConfig::dynamic_handoff)
         .def("__repr__", [](const ChunkGdnFusedProgramConfig& c) {
             return fmt::format(
                 "ChunkGdnFusedProgramConfig(num_producers={}, num_receivers={}, row_local={}, handoff_depth={}, "
-                "unicast={}, posted={}, producer_pool={}, pool_extra_share={})",
+                "unicast={}, posted={}, producer_pool={}, pool_extra_share={}, dynamic_handoff={})",
                 py_opt(c.num_producers),
                 py_opt(c.num_receivers),
                 py_opt(c.row_local),
@@ -291,7 +299,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 py_bool(c.unicast),
                 py_bool(c.posted),
                 py_bool(c.producer_pool),
-                py_opt(c.pool_extra_share));
+                py_opt(c.pool_extra_share),
+                py_bool(c.dynamic_handoff));
         });
 
     // Host-side geometry oracle: what the fused op will choose for (grid, BH, NC, Vt) when the program
@@ -307,7 +316,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
            uint32_t fixed_nv,
            uint32_t fixed_np,
            uint32_t fixed_nbuf,
-           uint32_t candidates) {
+           uint32_t candidates,
+           bool dynamic) {
             const auto c = ttnn::prim::choose_fused_geometry(
                 grid_x,
                 grid_y,
@@ -317,7 +327,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 fixed_nv,
                 fixed_np,
                 fixed_nbuf,
-                static_cast<ttnn::prim::FusedCandidates>(static_cast<uint8_t>(candidates)));
+                static_cast<ttnn::prim::FusedCandidates>(static_cast<uint8_t>(candidates)),
+                dynamic);
             return std::make_tuple(c.nv, c.np, c.placement, c.nbuf, c.t_fused_us, c.t_phased_us, c.fused_pays);
         },
         nb::arg("grid_x"),
@@ -329,12 +340,14 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("fixed_np") = 0,
         nb::arg("fixed_nbuf") = 0,
         nb::arg("candidates") = static_cast<uint32_t>(ttnn::prim::FusedCandidates::Both),
+        nb::arg("dynamic") = false,
         R"doc(Fused prep->scan geometry the op picks for (grid_x, grid_y, BH, NC, Vt) when the fused
         program config leaves it free (fixed_nv / fixed_np / fixed_nbuf = a pinned num_receivers /
         num_producers / handoff_depth, 0 = free): (nv, np, placement, handoff_depth, T_fused_us,
         T_phased_us, fused_pays). nv == 0 means no fused geometry fits the grid. candidates: 0 = NP
         producers per head (what producer_pool=False resolves to), 1 = the producer pool (placement 2,
-        np = the pool size; what producer_pool=True resolves to), 2 = both (the op's default dispatch).)doc");
+        np = the pool size; what producer_pool=True resolves to), 2 = both (the op's default dispatch).
+        dynamic: the pool candidates pace with the dynamic hand-off's jitter factor.)doc");
     mod.def(
         "chunk_gdn_fused_row_local_feasible",
         &ttnn::prim::fused_row_local_feasible,

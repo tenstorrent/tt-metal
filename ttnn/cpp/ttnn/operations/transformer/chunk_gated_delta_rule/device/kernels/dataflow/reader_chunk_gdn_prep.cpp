@@ -6,6 +6,18 @@
 // The reads of one item, and at kickoff the constants as well, are issued as one flight behind a single
 // read barrier: the compute cannot start an item before q and k have landed, and at kickoff every
 // producer of the fused program reads at once, so each extra barrier is a contended round trip.
+//
+// GDN_FUSED_PRODUCER + GDN_DYNAMIC_ITEMS (chunk_gdn_fused_map.hpp): the items are claimed at run time. A home producer
+// (p < BH*NPH, head p / NPH, rank p % NPH) starts with chunk rank of its head and claims its head's later chunks; an
+// extra claims from head x*BH/NX and moves one head on after each claim; a target head whose counter is past NC is
+// exhausted and the producer moves on, until all BH heads are. A claim is a NoC fetch-and-add on head h's counter
+// (receiver (h, 0); the response, the pre-increment value c, lands in this core's return word), issued right after the
+// current item's reads and collected only after the next item's input slots are reserved, so its round trip hides
+// behind an item. Per item: item[n % Q] = h << 16 | c, SEM_PUB = n + 1 (the writer and the compute spin on it), this
+// core registered as the owner of (h, c) at the head's NV receivers (owner[c] = x | y << 8 | (n % Q) << 16 | valid
+// bit, an inline dword write), then the reads. Once every head is exhausted SEM_FIN = n + 1 ends the loop. The first
+// registration and claim wait for SEM_READY (the aggregating receiver's "every counter seeded, every owner table
+// zeroed").
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -13,6 +25,10 @@
 #include "api/tensor/noc_traits.h"
 #if defined(GDN_FUSED_PRODUCER)
 #include "chunk_gdn_fused_map.hpp"
+#endif
+#if defined(GDN_FUSED_PRODUCER) && defined(GDN_DYNAMIC_ITEMS)
+#include "api/dataflow/noc_semaphore.h"
+#include "risc_common.h"
 #endif
 
 constexpr uint32_t cb_q = 0, cb_k = 1, cb_v = 2, cb_g = 3, cb_beta = 4;
@@ -38,16 +54,30 @@ void kernel_main() {
     // OPT-A: trailing compile args (after all TensorAccessorArgs). 1 => read that tensor FLAT token-major.
     constexpr uint32_t V_FLAT = get_compile_time_arg_val(mask_a.next_compile_time_args_offset());
     constexpr uint32_t QK_FLAT = get_compile_time_arg_val(mask_a.next_compile_time_args_offset() + 1);
+#if defined(GDN_FUSED_PRODUCER) && defined(GDN_DYNAMIC_ITEMS)
+    // Dynamic hand-off: the control-block CB (the u/mask CB) with the credit-tile and owner-table offsets, then the
+    // semaphore ids: ready (the aggregating receiver -> producers), published / finished (local).
+    constexpr uint32_t CB_CTRL = get_compile_time_arg_val(mask_a.next_compile_time_args_offset() + 2);
+    constexpr uint32_t CTRL_OFF = get_compile_time_arg_val(mask_a.next_compile_time_args_offset() + 3);
+    constexpr uint32_t OWNER_OFF = get_compile_time_arg_val(mask_a.next_compile_time_args_offset() + 4);
+    constexpr uint32_t SEM_READY = get_compile_time_arg_val(mask_a.next_compile_time_args_offset() + 5);
+    constexpr uint32_t SEM_PUB = get_compile_time_arg_val(mask_a.next_compile_time_args_offset() + 6);
+    constexpr uint32_t SEM_FIN = get_compile_time_arg_val(mask_a.next_compile_time_args_offset() + 7);
+#endif
 
     // A work-item is a flat (head, chunk) index — exactly the DRAM tile-group index h*NC + c.
-#if defined(GDN_FUSED_PRODUCER)
+#if defined(GDN_FUSED_PRODUCER) && defined(GDN_DYNAMIC_ITEMS)
+    // Dynamic hand-off: producer p's role comes from the map (home producer or extra); arg 1 (item count) is unused.
+    const uint32_t p = get_arg_val<uint32_t>(0);
+#elif defined(GDN_FUSED_PRODUCER)
     // Fused producer p of the map (chunk_gdn_fused_map.hpp): its wi_count items in map order.
     const uint32_t p = get_arg_val<uint32_t>(0);
+    const uint32_t wi_count = get_arg_val<uint32_t>(1);
 #else
     // Chunk-parallel: this core handles the work-items wi_start + n * wi_stride, n < wi_count.
     const uint32_t wi_start = get_arg_val<uint32_t>(0);
-#endif
     const uint32_t wi_count = get_arg_val<uint32_t>(1);
+#endif
     const uint32_t q_addr = get_arg_val<uint32_t>(2);
     const uint32_t k_addr = get_arg_val<uint32_t>(3);
     const uint32_t v_addr = get_arg_val<uint32_t>(4);
@@ -63,7 +93,17 @@ void kernel_main() {
     const uint32_t Hk = get_arg_val<uint32_t>(13);
     // Cycles to wait before the first read: the fused factory's kickoff stagger, 0 for the phased prep.
     const uint32_t kickoff_wait_cycles = get_arg_val<uint32_t>(15);
-#if defined(GDN_FUSED_PRODUCER)
+#if defined(GDN_FUSED_PRODUCER) && defined(GDN_DYNAMIC_ITEMS)
+    // Dynamic hand-off: BH, NPH and NX (home producers per head, extras; args 18..19 of the map are unused), the
+    // SEM_READY count, NV and this core's own packed coords. Common args: the fused writer's head table (per head the
+    // rectangle word, then the NV receivers' coords two per word).
+    const uint32_t BH = get_arg_val<uint32_t>(14);
+    const uint32_t NPH = get_arg_val<uint32_t>(16);
+    const uint32_t NX = get_arg_val<uint32_t>(17);
+    const uint32_t ready_count = get_arg_val<uint32_t>(20);
+    const uint32_t NV = get_arg_val<uint32_t>(21);
+    const uint32_t my_xy = get_arg_val<uint32_t>(22);
+#elif defined(GDN_FUSED_PRODUCER)
     // The producer map: BH, then (NPH, NX, num, den) as in chunk_gdn_fused_map.hpp.
     const GdnFusedMap map{
         get_arg_val<uint32_t>(14),
@@ -180,6 +220,155 @@ void kernel_main() {
         publish(cb_beta, Ct);
     };
 
+#if defined(GDN_FUSED_PRODUCER) && defined(GDN_DYNAMIC_ITEMS)
+    // Control block in this core's credit tile (chunk_gdn_fused_map.hpp offsets); SEM_PUB / SEM_FIN are semaphore
+    // words, so dispatch resets them every launch. The owner tables sit at OWNER_OFF of every receiver's u/mask CB.
+    const uint32_t u_base = CircularBuffer(CB_CTRL).get_read_ptr();
+    const uint32_t ret_addr = u_base + CTRL_OFF + kGdnDynRetOff;
+    volatile tt_l1_ptr uint32_t* ret = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ret_addr);
+    volatile tt_l1_ptr uint32_t* items =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(u_base + CTRL_OFF + kGdnDynItemOff);
+    volatile tt_l1_ptr uint32_t* pub = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_PUB));
+    volatile tt_l1_ptr uint32_t* fin = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_FIN));
+    // The compute kernel's copies: zeroed here, before the first claim and before the mask tiles it waits for.
+    volatile tt_l1_ptr uint32_t* cpub =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(u_base + CTRL_OFF + kGdnDynPubOff);
+    volatile tt_l1_ptr uint32_t* cfin =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(u_base + CTRL_OFF + kGdnDynFinOff);
+    *cpub = 0;
+    *cfin = 0;
+    asm volatile("fence");
+    const uint32_t owner_base = u_base + OWNER_OFF;
+    const uint8_t nid = noc.get_noc_id();
+    const uint32_t head_words = 1 + (NV + 1) / 2;
+    auto rcv_word = [&](uint32_t h, uint32_t v) {
+        return (get_common_arg_val<uint32_t>(h * head_words + 1 + v / 2) >> (16 * (v % 2))) & 0xFFFFu;
+    };
+    const uint32_t ctr_off = u_base + CTRL_OFF + kGdnDynHeadCtrOff;  // head h's counter: this offset on receiver (h, 0)
+
+    struct Item {
+        uint32_t h, c, idx;  // idx = n % Q: the credit word and item word of this item
+    };
+    uint32_t n = 0;  // items published
+    // Publish (h, c) as this core's item n: the item word first, then SEM_PUB = n + 1 and the compute's copy.
+    auto publish_item_word = [&](Item& it, uint32_t h, uint32_t c) {
+        it = Item{h, c, n % kGdnDynQ};
+        items[it.idx] = (h << 16) | c;
+        asm volatile("fence");
+        *pub = ++n;
+        *cpub = n;
+    };
+    // The role: a home producer claims from its head until that is exhausted; an extra starts at a head of its own
+    // (the extras spread evenly over the heads) and moves one head on after every claim; past an exhausted head both
+    // move on, and once all BH heads are exhausted the items are over.
+    const bool home = p < BH * NPH;
+    uint32_t target = home ? p / NPH : ((p - BH * NPH) * BH / NX) % BH;
+    uint32_t exhausted = 0;  // consecutive target heads found past NC
+    // The claim: one fetch-and-add in flight at a time, issued by claim_issue on the target head's counter and
+    // collected by claim_complete, which publishes the item (moving the target on when so required), or, with every
+    // head exhausted, sets SEM_FIN = n + 1 and returns false.
+    auto claim_issue = [&]() {
+        const uint32_t w = rcv_word(target, 0);
+        noc_fast_atomic_increment<DM_DEDICATED_NOC, /*program_ret_addr=*/true>(
+            nid,
+            write_at_cmd_buf,
+            get_noc_addr(w & 0xFFu, w >> 8, ctr_off, nid),
+            NOC_UNICAST_WRITE_VC,
+            1,
+            31,
+            false,
+            false,
+            ret_addr);
+    };
+    auto claim_complete = [&](Item& it) -> bool {
+        DeviceZoneScopedN("p_claim");
+        for (;;) {
+            noc.async_atomic_barrier();  // the pre-increment value is in ret[0]
+            const uint32_t c = ret[0];
+            if (c < NC) {
+                publish_item_word(it, target, c);
+                exhausted = 0;
+                if (!home) {
+                    target = (target + 1) % BH;
+                }
+                return true;
+            }
+            if (++exhausted == BH) {
+                *fin = n + 1;
+                *cfin = n + 1;
+                return false;
+            }
+            target = (target + 1) % BH;
+            claim_issue();
+        }
+    };
+    // The input slots of one item, without the reads: the wait for the compute to pop an earlier item, taken before
+    // the claim is collected so the claim's round trip hides behind it (issue_item's own reserves then return at once).
+    auto reserve_item = [&]() {
+        CircularBuffer(cb_q).reserve_back(ck);
+        CircularBuffer(cb_k).reserve_back(ck);
+        CircularBuffer(cb_v).reserve_back(cv);
+        CircularBuffer(cb_g).reserve_back(Ct);
+        CircularBuffer(cb_beta).reserve_back(Ct);
+    };
+    // Register this core as the owner of (h, c) at head h's receivers: owner[c] on each.
+    auto register_owner = [&](const Item& it) {
+        DeviceZoneScopedN("p_reg");
+        const uint32_t word = my_xy | (it.idx << 16) | kGdnDynOwnerValid;
+        for (uint32_t v = 0; v < NV; v++) {
+            const uint32_t w = rcv_word(it.h, v);
+            noc_inline_dw_write(get_noc_addr(w & 0xFFu, w >> 8, owner_base + 4 * it.c, nid), word, 0xF, nid);
+        }
+    };
+
+    // Kickoff: a home producer's first item (chunk = its rank, below its head's seeded counter) and the constants in
+    // one flight; the registration and the first claim wait for the receivers' seeded counters and zeroed owner
+    // tables (SEM_READY).
+    if (kickoff_wait_cycles != 0) {
+        riscv_wait(kickoff_wait_cycles);
+    }
+    Item cur{};
+    if (home) {
+        publish_item_word(cur, target, p % NPH);
+        issue_item(cur.h * NC + cur.c);
+    }
+    issue(eye_acc, cb_eye, 0, cc, tb_f);
+    issue(tril_acc, cb_tril, 0, cc, tb_f);
+    issue(ones_acc, cb_ones, 0, cc, tb_f);
+    issue(mask_acc, cb_mask, 0, 3, tb_f);  // Qtl, Qbr, Q10 (tiles 0,1,2)
+    Semaphore<>(SEM_READY).wait(ready_count);
+    if (home) {
+        register_owner(cur);
+    }
+    claim_issue();
+    noc.async_read_barrier();
+    if (home) {
+        publish_item();
+    }
+    publish(cb_eye, cc);
+    publish(cb_tril, cc);
+    publish(cb_ones, cc);
+    publish(cb_mask, 3);
+
+    for (;;) {
+        reserve_item();
+        if (!claim_complete(cur)) {
+            break;
+        }
+        register_owner(cur);
+        issue_item(cur.h * NC + cur.c);
+        claim_issue();  // collected after the next reserve: a whole item to return
+        noc.async_read_barrier();
+        publish_item();
+    }
+    // Drain the registrations (non-posted writes) and the claims (non-posted atomics), then give the AT command
+    // buffer its default return address back: the claims pointed it at ret_addr and the firmware re-initialises it
+    // only when the NoC mode changes.
+    noc.async_write_barrier();
+    noc.async_atomic_barrier();
+    while (!noc_cmd_buf_ready(nid, write_at_cmd_buf));
+    noc_cmd_buf_set_ret_addr(nid, write_at_cmd_buf, NOC_XY_ADDR(my_x[nid], my_y[nid], MEM_NOC_ATOMIC_RET_VAL_ADDR));
+#else
     // Kickoff: the first item's inputs and the constants in one flight.
     if (kickoff_wait_cycles != 0) {
         riscv_wait(kickoff_wait_cycles);
@@ -205,4 +394,5 @@ void kernel_main() {
         noc.async_read_barrier();
         publish_item();
     }
+#endif
 }

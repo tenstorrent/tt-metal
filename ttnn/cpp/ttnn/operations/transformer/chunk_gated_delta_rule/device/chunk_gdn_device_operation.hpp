@@ -93,6 +93,11 @@ struct ChunkGdnParams {
     // without extras).
     uint32_t pool_extra_num = 0;
     uint32_t pool_extra_den = 1;
+    // Placement 2: dynamic hand-off (ChunkGdnFusedProgramConfig::dynamic_handoff). The producers claim their chunks
+    // at run time from per-head counters (a home producer from its head, the extras rotating over the heads) instead
+    // of the static item lists, and the receivers credit the producer that registered as a chunk's owner
+    // (kernels/dataflow/chunk_gdn_fused_map.hpp).
+    bool dynamic = false;
     // WY-inverse method of the producer's prep compute (GdnTinv, chunk_gdn_compute_config.hpp).
     GdnTinv tinv = GdnTinv::HORNER;
     bool output_final_state = false;
@@ -144,7 +149,8 @@ struct ChunkGdnDeviceOperation {
 //   T_fused(NV, NP, depth) = fill(BH) + NC * pace + tail,  pace = max(supply, t_step(Vt / NV, depth))
 //   plus the depth-2 jitter margin, with supply = w_p / NP for NP producers per head, over (NV | Vt, NP,
 //   depth in {2, 3}) with a feasible layout (the row-major fallback carries a link-sharing penalty); for a
-//   pool of P serving every head (placement 2) pace = max(BH * w_p / P, t_step) * kPoolJitter at depth 2.
+//   pool of P serving every head (placement 2) pace = max(BH * w_p / P, t_step) * kPoolJitter at depth 2
+//   (kPoolJitterDynamic with the dynamic hand-off).
 //   Ties -> fewer cores, then smaller NV, then the shallower ring. T_phased(BH) from the measured table.
 // The op host uses it for whichever of num_receivers / num_producers / row_local / handoff_depth the
 // fused program config leaves free, and to decide fused vs phased when no program config is given;
@@ -179,7 +185,8 @@ FusedGeometryChoice choose_fused_geometry(
     uint32_t fixed_nv = 0,
     uint32_t fixed_np = 0,
     uint32_t fixed_nbuf = 0,
-    FusedCandidates candidates = FusedCandidates::Both);
+    FusedCandidates candidates = FusedCandidates::Both,
+    bool dynamic = false);
 
 // Design D9: the fused program's core map, a pure function of its arguments (no device), shared by
 // the program factory and the nanobind geometry oracle. placement 0 = row-major 1xNV receiver
