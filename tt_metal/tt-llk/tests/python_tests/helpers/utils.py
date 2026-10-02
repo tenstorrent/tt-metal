@@ -518,19 +518,61 @@ _RECORD_TEST_ORDER: bool = False
 #   max_steps = accepted adjacent-representable steps (same role as MxInt's
 #     max_ulp_steps). max_normal and min_subnormal define the element lattice
 #     used with each block's inferred E8M0 scale.
-#: Element mantissa bits per MX-float format, for anything that needs to reason
-#: in lattice steps the way _mxfp_block_aware_compare does.
-MXFP_MANTISSA_BITS = {
-    DataFormat.MxFp4: 1,
-    DataFormat.MxFp8R: 2,
-    DataFormat.MxFp8P: 3,
-}
-
 _MXFP_COMPARE_PARAMS = {
     DataFormat.MxFp4: (1, 2, 6.0, 2.0**-1),  # E2M1
     DataFormat.MxFp8R: (2, 2, 57344.0, 2.0**-16),  # E5M2
     DataFormat.MxFp8P: (3, 2, 448.0, 2.0**-9),  # E4M3
 }
+
+
+def mxfp_local_step(
+    magnitude: torch.Tensor,
+    mantissa_bits: int,
+    element_max_normal: float,
+    element_min_subnormal: float,
+) -> torch.Tensor:
+    """The MX-float lattice step at each element, including the block's floor.
+
+    An MX-float element carries its own exponent above the block's E8M0 scale,
+    so the spacing between representable values follows the element's own
+    magnitude -- but only down to the point where the element format goes
+    subnormal, below which the spacing is constant at the scaled element
+    minimum. The normal-value formula alone *underestimates* the step there,
+    which makes zero and the smallest nonzero subnormal look many steps apart
+    when MX has them adjacent.
+
+    Shared by :func:`_mxfp_block_aware_compare`, which decides pass/fail, and by
+    the failure report that ranks datums by step, so the two cannot disagree
+    about how far apart two values are.
+    """
+    n = magnitude.numel()
+    safe = magnitude > 0
+    exp = torch.zeros_like(magnitude)
+    exp[safe] = torch.floor(torch.log2(magnitude[safe]))
+    local_ulp = torch.where(
+        safe, torch.pow(2.0, exp - mantissa_bits), torch.zeros_like(magnitude)
+    )
+
+    block_size = 32
+    block_max = torch.stack(
+        [
+            magnitude[start : start + block_size].max()
+            for start in range(0, n, block_size)
+        ]
+    )
+    has_nonzero = block_max > 0
+    # E8M0 = floor(log2(block_max)) - elem_exp_max_unbiased, and the element
+    # format's max unbiased exponent is floor(log2(element_max_normal))
+    # (15 for E5M2's 57344, 8 for E4M3's 448, 2 for E2M1's 6.0).
+    elem_exp_max_unbiased = math.floor(math.log2(element_max_normal))
+    scale_exp = torch.zeros_like(block_max)
+    scale_exp[has_nonzero] = (
+        torch.floor(torch.log2(block_max[has_nonzero])) - elem_exp_max_unbiased
+    )
+    block_min_ulp = (
+        torch.pow(2.0, scale_exp) * element_min_subnormal
+    ).repeat_interleave(block_size)[:n]
+    return torch.where(safe, torch.maximum(local_ulp, block_min_ulp), local_ulp)
 
 
 def _mxfp_block_aware_compare(
@@ -574,29 +616,9 @@ def _mxfp_block_aware_compare(
         torch.maximum(g.abs(), r.abs()), nan=0.0, posinf=0.0, neginf=0.0
     )
     safe = a > 0
-    exp = torch.zeros_like(a)
-    exp[safe] = torch.floor(torch.log2(a[safe]))
-    local_ulp = torch.where(
-        safe, torch.pow(2.0, exp - mantissa_bits), torch.zeros_like(a)
+    local_ulp = mxfp_local_step(
+        a, mantissa_bits, element_max_normal, element_min_subnormal
     )
-
-    block_size = 32
-    block_max = torch.stack(
-        [a[start : start + block_size].max() for start in range(0, n, block_size)]
-    )
-    has_nonzero = block_max > 0
-    # E8M0 = floor(log2(block_max)) - elem_exp_max_unbiased, and the element
-    # format's max unbiased exponent is floor(log2(element_max_normal))
-    # (15 for E5M2's 57344, 8 for E4M3's 448, 2 for E2M1's 6.0).
-    elem_exp_max_unbiased = math.floor(math.log2(element_max_normal))
-    scale_exp = torch.zeros_like(block_max)
-    scale_exp[has_nonzero] = (
-        torch.floor(torch.log2(block_max[has_nonzero])) - elem_exp_max_unbiased
-    )
-    block_min_ulp = (
-        torch.pow(2.0, scale_exp) * element_min_subnormal
-    ).repeat_interleave(block_size)[:n]
-    local_ulp = torch.where(safe, torch.maximum(local_ulp, block_min_ulp), local_ulp)
 
     diff = (g - r).abs()
     # Relative float32-rounding guard (~1 ULP at the comparison magnitude) instead of a

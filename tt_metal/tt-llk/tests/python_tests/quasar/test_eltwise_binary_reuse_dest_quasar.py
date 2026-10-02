@@ -16,7 +16,6 @@ from helpers.llk_params import (
     DestSync,
     EltwiseBinaryReuseDestType,
     ImpliedMathFormat,
-    MathFidelity,
     MathOperation,
     PerfRunType,
     format_dict,
@@ -50,7 +49,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import FACE_C_DIM, get_tile_params
 from helpers.tilize_untilize import tilize_block
-from helpers.utils import MXFP_MANTISSA_BITS, passed_test
+from helpers.utils import passed_test
 
 INPUT_DIMENSIONS = [
     [512, 32],
@@ -223,7 +222,6 @@ def test_eltwise_binary_reuse_dest_quasar(
     src_A_t = src_A_tilized.flatten()
     src_B_t = src_B_tilized.flatten()
 
-    torch_format = format_dict[formats.output_format]
     # No MX pre-quantization: the stimuli and the golden go through the same
     # packer, so they land on the same lattice by construction. Pre-quantizing
     # with a different rounding rule and then packing would round twice.
@@ -329,9 +327,18 @@ def test_eltwise_binary_reuse_dest_quasar(
                     f"tiles_in_block={output_tiles_in_block}"
                 ),
                 datums_per_tile=num_faces * face_r_dim * FACE_C_DIM,
-                # Rank failures the way passed_test judges them: in lattice
-                # steps at each element's own magnitude, not absolute error.
-                mantissa_bits=MXFP_MANTISSA_BITS.get(formats.output_format, 0),
+                # Rank failures on whatever lattice the output landed on. For
+                # this sweep that is absolute error: every output here is
+                # Float16 or Float16_b, which have no MX lattice model, and
+                # passed_test judged them with isclose/PCC rather than in
+                # steps. The report says as much when it falls back, so the
+                # ranking never claims a tolerance it does not have.
+                #
+                # Passed anyway, because an MX-output variant is the case that
+                # needs it: a step is relative to each element's magnitude, so
+                # ranking by absolute error there puts large-magnitude datums
+                # that comfortably pass above the one that actually failed.
+                output_format=formats.output_format,
                 chain=generate_golden.last_chain,
                 dest=torch.cat(golden_dest) if golden_dest else None,
             )

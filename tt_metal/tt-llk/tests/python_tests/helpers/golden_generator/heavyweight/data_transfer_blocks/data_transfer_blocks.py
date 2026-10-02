@@ -23,15 +23,26 @@ machinery lives here and each architecture supplies the differences. Notably
 Quasar has the MX family and **no block float**; Wormhole/Blackhole the reverse.
 """
 
-from abc import ABC, abstractmethod
+import warnings
+from abc import ABC
 from typing import ClassVar, FrozenSet, Optional, Sequence, Union
 
 import torch
 from helpers.format_config import DataFormat
 from helpers.llk_params import PackerReluType, StochasticRounding, format_dict
 
-from .l1_codec import pack_to_l1, unpack_from_l1
-from .pack_effects import PackEdgeMask, apply_pack_effects
+from .l1_codec import (
+    MODELLED_L1_FORMATS,
+    _no_codec_message,
+    pack_to_l1,
+    unpack_from_l1,
+)
+from .pack_effects import (
+    STOCH_RND_EFFECTS,
+    PackEdgeMask,
+    apply_pack_effects,
+    is_deterministic,
+)
 
 #: Explicit mantissa bits a src-register datum holds. The datum is 19 bits:
 #: 1 sign + 8 exponent + 10 mantissa, whatever format is stored in it.
@@ -78,13 +89,25 @@ class DataTransferBlocks(ABC):
     """Base for the per-architecture data-transfer blocks."""
 
     #: L1 formats this architecture's unpacker can read.
+    #: L1 formats this architecture's unpacker can read. Empty in the base: a
+    #: subclass has to declare it, and that -- not any method -- is what makes
+    #: this class abstract in practice. An instance that reached here with the
+    #: empty set would reject every format, so :meth:`__init__` says so up
+    #: front instead of failing one call later.
     SUPPORTED_L1_FORMATS: ClassVar[FrozenSet[DataFormat]] = frozenset()
+
+    def __init__(self) -> None:
+        if not self.SUPPORTED_L1_FORMATS:
+            raise TypeError(
+                f"{type(self).__name__} declares no SUPPORTED_L1_FORMATS, so it "
+                f"can read nothing from L1. Instantiate an architecture's "
+                f"subclass, or give this one its format set."
+            )
 
     # ------------------------------------------------------------------
     # Blocks
     # ------------------------------------------------------------------
 
-    @abstractmethod
     def l1_to_srcA(
         self,
         l1_bytes: L1Buffer,
@@ -92,7 +115,14 @@ class DataTransferBlocks(ABC):
         src_format: Optional[DataFormat] = None,
         **geometry,
     ) -> torch.Tensor:
-        """Values visible in SrcA after unpacking `l1_bytes` from L1."""
+        """Values visible in SrcA after unpacking `l1_bytes` from L1.
+
+        Concrete, because the unpack itself does not vary by architecture --
+        what varies is :meth:`_src_format`, which decides the storage format,
+        and ``SUPPORTED_L1_FORMATS``. An architecture whose unpack genuinely
+        differs can still override this.
+        """
+        return self._l1_to_src(l1_bytes, l1_format, src_format, **geometry)
 
     def l1_to_srcB(
         self,
@@ -227,12 +257,30 @@ class DataTransferBlocks(ABC):
         *unpacker's* output, i.e. the input format, never the pack format. Use
         :meth:`dest_format_for` to derive it from the input side.
 
-        `stoch_rnd` is accepted for completeness but **cannot be reproduced** —
-        it is driven by a pseudo-random sequence on device. With it enabled the bytes returned here are
-        the round-to-nearest result, which hardware matches only in expectation.
-        Check :func:`.pack_effects.is_deterministic` and compare with PCC.
+        `stoch_rnd` is accepted so a caller can describe the hardware
+        configuration it is comparing against, but any mode other than ``No``
+        **warns** rather than being silently ignored — including ``Fpu``, which
+        randomises the Dest write rather than this block's. See
+        :func:`.pack_effects.is_deterministic`.
         """
         self._check_dest_format(dest_format)
+        if not is_deterministic(stoch_rnd):
+            # The golden cannot follow a device-seeded random sequence, so say so
+            # at the call site rather than hand back round-to-nearest bytes that
+            # look like a reproducible answer. Name the stage that is actually
+            # randomised: under Fpu the packer behaves normally and it is the
+            # Dest write that drifts, so blaming the packer would send a reader
+            # looking in the wrong block. warnings dedupes per location, so a
+            # multi-tile run reports this once.
+            warnings.warn(
+                f"{stoch_rnd} cannot be reproduced -- "
+                f"{STOCH_RND_EFFECTS[stoch_rnd]}, driven by a device-seeded "
+                f"pseudo-random sequence. These bytes are the round-to-nearest "
+                f"result, which hardware matches only in expectation: each datum "
+                f"may land one ULP of {l1_format} either side. Compare with PCC, "
+                f"not exactly.",
+                stacklevel=2,
+            )
         # Normally already at Dest precision (src_to_dest wrote it there); this
         # is a no-op then, and a safety net for a caller that bypassed Dest.
         values = self._to_dest_storage(dest_values, dest_format)
@@ -250,8 +298,18 @@ class DataTransferBlocks(ABC):
     # ------------------------------------------------------------------
 
     def supports(self, l1_format: DataFormat) -> bool:
-        """Whether this architecture's unpacker can read `l1_format` from L1."""
-        return l1_format in self.SUPPORTED_L1_FORMATS
+        """Whether this golden can move `l1_format` through L1 on this arch.
+
+        Two conditions, and they are not the same question: the architecture
+        has to be able to hold the format in L1, *and* this golden has to have
+        a codec for it. ``Tf32`` is a real L1 format everywhere and ``Bfp8`` on
+        Wormhole/Blackhole, but neither has a codec here, so answering on
+        architecture support alone would promise bytes that cannot be written.
+        :meth:`_check_supported` says which of the two failed.
+        """
+        return (
+            l1_format in self.SUPPORTED_L1_FORMATS and l1_format in MODELLED_L1_FORMATS
+        )
 
     @property
     def supported_dest_formats(self) -> FrozenSet[DataFormat]:
@@ -290,18 +348,73 @@ class DataTransferBlocks(ABC):
     ) -> DataFormat:
         """The Dest format for an op whose *input* was `l1_input_format`.
 
-        Dest follows the unpacker's src output, so it is the input format that
-        decides the family — never the pack format. `dest_acc` then picks the
-        32- or 16-bit member of that family.
+        Dest takes the src register's format, so the input format decides the
+        family and `dest_acc` picks the 32- or 16-bit member of it.
+
+        **Except for Float32 and Tf32 input, where the input format is not
+        enough to decide.** A 19-bit src datum cannot hold an fp32, and both
+        families are legal targets: Float16 keeps 10 mantissa bits but only a
+        5-bit exponent, so values outside roughly [6.1e-05, 65504] saturate to
+        zero or infinity, while Float16_b/Tf32 keeps fp32's range and narrows
+        Dest to bf16's 7 mantissa bits instead. Which one the kernel gets is a
+        harness decision -- ``infer_unpack_out`` picks the family from the
+        *output* format, to limit exponent mixing -- and guessing it here would
+        model a different kernel than the one under test. So raise, and let the
+        caller pass the formats it configured.
+
+        `dest_acc` resolves it: a 32-bit Dest is Float32 for either family, and
+        the harness lands the src in Tf32, which is what ``_src_format`` returns.
         """
         self._check_supported(l1_input_format)
         if l1_input_format.is_integer():
             return DataFormat.Int32 if dest_acc else l1_input_format
         if dest_acc:
             return DataFormat.Float32
+        if l1_input_format in (DataFormat.Float32, DataFormat.Tf32):
+            raise ValueError(
+                f"{l1_input_format} input with a 16-bit Dest does not determine "
+                f"the register family on its own: the unpacker may land it as "
+                f"Float16 (10 mantissa bits, 5-bit exponent, saturates outside "
+                f"~[6.1e-05, 65504]) or as Float16_b/Tf32 (full fp32 range, "
+                f"bf16's 7 mantissa bits in Dest). The harness chooses from the "
+                f"*output* format in infer_unpack_out, so pass the dest_format "
+                f"and src_format it configured, or enable dest_acc, where both "
+                f"families give a Float32 Dest."
+            )
         # Narrow Dest keeps the exponent family the unpacker put in the src register.
         src = self._src_format(l1_input_format)
         return DataFormat.Float16 if src is DataFormat.Float16 else DataFormat.Float16_b
+
+    def resolve_dest_format(
+        self,
+        dest_format: Optional[DataFormat],
+        l1_input_format: DataFormat,
+        dest_acc: bool,
+    ) -> DataFormat:
+        """The Dest format to run with: derived from the input, or validated.
+
+        With `dest_format` left as ``None`` this is :meth:`dest_format_for`.
+        Given one explicitly, it is checked against `dest_acc` instead of taken
+        on trust, because the two are not independent settings: a Dest slot is
+        32-bit exactly when accumulation is on, so ``Float32`` with
+        ``dest_acc=False`` describes a machine state that cannot exist. Left
+        unchecked that combination runs and produces a plausible answer at the
+        wrong precision -- full fp32 where the device had 16 bits, or the
+        reverse -- which is indistinguishable from a maths bug downstream.
+        """
+        if dest_format is None:
+            return self.dest_format_for(l1_input_format, dest_acc)
+        self._check_dest_format(dest_format)
+        if (dest_format in DEST_32_BIT_FORMATS) != dest_acc:
+            wide = dest_format in DEST_32_BIT_FORMATS
+            raise ValueError(
+                f"dest_format={dest_format} is a {32 if wide else 16}-bit Dest "
+                f"format but dest_acc={dest_acc}, and Dest is 32-bit exactly "
+                f"when accumulation is enabled. Pass "
+                f"dest_acc={'True' if wide else 'False'}, or leave dest_format "
+                f"as None to derive it from the input format."
+            )
+        return dest_format
 
     def _check_dest_format(self, dest_format: DataFormat) -> None:
         if dest_format not in self.supported_dest_formats:
@@ -354,11 +467,17 @@ class DataTransferBlocks(ABC):
         return unpack_from_l1(l1_bytes, l1_format, **geometry)
 
     def _check_supported(self, l1_format: DataFormat) -> None:
-        if not self.supports(l1_format):
+        # Two different failures, kept apart because they call for opposite
+        # responses: a format the hardware cannot hold means the test is asking
+        # for something impossible, while a missing codec means the test is
+        # reasonable and the model has a hole.
+        if l1_format not in self.SUPPORTED_L1_FORMATS:
             raise ValueError(
                 f"{type(self).__name__} cannot read {l1_format} from L1 on this "
                 f"architecture."
             )
+        if l1_format not in MODELLED_L1_FORMATS:
+            raise ValueError(_no_codec_message(l1_format))
 
     # ------------------------------------------------------------------
     # Format conversion
@@ -382,6 +501,11 @@ class DataTransferBlocks(ABC):
         Everything else resolves to one of the two 16-bit exponent families, and
         integer formats pass through unchanged. Override where an architecture
         diverges; :meth:`src_format` does the support check.
+
+        A format reaching the final pass-through stays in the src register as
+        itself, which is only right for integers. A float that lands there is a
+        format whose exponent family is unknown to :mod:`helpers.format_config`
+        and which therefore needs a case here — see ``Fp8_e4m3``.
         """
         if l1_format in (DataFormat.Float32, DataFormat.Tf32):
             return DataFormat.Tf32
@@ -389,6 +513,15 @@ class DataTransferBlocks(ABC):
             # The unpacker converts MX into the 8-bit-exponent family regardless of
             # the pack format, so math and Dest see bf16.
             return DataFormat.Float16_b
+        if l1_format is DataFormat.Fp8_e4m3:
+            # An L1-only encoding: every architecture that has it widens it to
+            # Float16 in the register, alongside Float16 and Lf8 in the A-format
+            # exponent family. It needs naming explicitly because it reports
+            # neither exponent family -- is_exponent_A() and is_exponent_B() are
+            # both False for it -- so without this it would fall through to the
+            # pass-through below and stay Fp8_e4m3 in a src register, which no
+            # architecture does.
+            return DataFormat.Float16
         if l1_format.is_exponent_A():
             return DataFormat.Float16
         if l1_format.is_exponent_B():
@@ -409,7 +542,16 @@ class DataTransferBlocks(ABC):
         """
         if src_format is None:
             src_format = self.src_format(l1_format)
-        elif not self._is_valid_src_format(l1_format, src_format):
+        elif not self._is_valid_src_format(
+            l1_format, src_format, geometry.get("use_srcs", False)
+        ):
+            if src_format is DataFormat.Float32:
+                raise ValueError(
+                    "Float32 reaches a src register only as Tf32, Float16 or "
+                    "Float16_b -- a 19-bit datum cannot hold it. Use "
+                    "l1_to_dest for the unpack-to-Dest path, or l1_to_srcS, "
+                    "which are the two destinations that keep full fp32."
+                )
             raise ValueError(
                 f"{src_format} is not a src-register storage format. "
                 f"A src register can hold {sorted(str(f) for f in SRC_STORAGE_FORMATS)}"
@@ -419,8 +561,18 @@ class DataTransferBlocks(ABC):
         return self._to_src_storage(values, src_format)
 
     @staticmethod
-    def _is_valid_src_format(l1_format: DataFormat, src_format: DataFormat) -> bool:
-        """A src storage format, or the input format passed through unconverted."""
+    def _is_valid_src_format(
+        l1_format: DataFormat, src_format: DataFormat, use_srcs: bool = False
+    ) -> bool:
+        """A src storage format, or the input format passed through unconverted.
+
+        Float32 is the exception: the unpacker may land a Float32 source as
+        Float32 only when the destination is Dest or SrcS, never SrcA/SrcB, so
+        asking for it on the ordinary unpack path models a configuration the
+        hardware rejects.
+        """
+        if src_format is DataFormat.Float32 and not use_srcs:
+            return False
         return src_format in SRC_STORAGE_FORMATS or src_format == l1_format
 
     @staticmethod
@@ -435,9 +587,13 @@ class DataTransferBlocks(ABC):
           above it saturate to infinity and values below the smallest normal
           flush to zero. The Tf32 family has fp32's range and clips nothing.
 
-        Float32 is *not* a conversion target: a 19-bit datum cannot hold it, so
-        the unpacker splits it across two lanes (mantissa MSBs low, LSBs high)
-        and every bit survives. Integer formats pass through unchanged.
+        **Float32 into a src register loses its low 13 mantissa bits.** A 19-bit
+        datum cannot hold fp32, and the unpacker's format table allows a
+        Float32 source to land only in Tf32, Float16 or Float16_b when the
+        destination is a src register -- all of which keep 10. Full fp32
+        survives only on the unpack-to-Dest path (and SrcS), which
+        :meth:`l1_to_dest` models; the ``Float32`` case below is reachable only
+        there. Integer formats pass through unchanged.
         """
         if src_format is DataFormat.Float16:
             # 1+5+10 is IEEE fp16 exactly. Truncate first so the cast only has

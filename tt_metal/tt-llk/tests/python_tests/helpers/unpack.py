@@ -7,6 +7,8 @@ import ml_dtypes
 import numpy as np
 import torch
 from helpers.format_config import (
+    E8M0_BIAS,
+    E8M0_NAN_CODE,
     MX_FORMAT_BLOCK_SIZE,
     MXFP8_SRCS_SLICE_32B_PACKED_BYTE_LEN,
     MXFP8_SRCS_SLICE_PACKED_BYTE_LEN,
@@ -256,8 +258,8 @@ def _unpack_mxfp8(packed_bytes, fp8_dtype, num_faces=4, face_r_dim=MAX_FACE_R_DI
     # element * 2^block_exp exact across the whole E8M0 range, so the range
     # clamps below (not a float32 round) decide overflow and underflow.
     scales_array = np.frombuffer(bytes(scales_e8m0), dtype=np.uint8)
-    nan_blocks = scales_array == 255
-    block_exp_unbiased = scales_array.astype(np.int32) - 127  # E8M0 bias=127
+    nan_blocks = scales_array == E8M0_NAN_CODE
+    block_exp_unbiased = scales_array.astype(np.int32) - E8M0_BIAS
     scaled_blocks = (
         fp8_blocks.astype(np.float64)
         * np.exp2(block_exp_unbiased.astype(np.float64))[:, np.newaxis]
@@ -449,8 +451,14 @@ def unpack_mxfp4(
         .astype(np.float32)
     )
 
-    block_exp_unbiased = scales_u8.astype(np.int32) - 127  # E8M0 bias=127
-    scaled_blocks = fp4_f32 * np.exp2(block_exp_unbiased.astype(np.float32))[:, None]
+    nan_blocks = scales_u8 == E8M0_NAN_CODE
+    block_exp_unbiased = scales_u8.astype(np.int32) - E8M0_BIAS
+    # exp2 overflows float32 at the 0xFF NaN scale (2^128), and the Inf then
+    # becomes a NaN by invalid-multiply rather than by the NaN-block rule
+    # below. Those rows are overwritten anyway, so exponentiate something
+    # harmless for them instead of raising two warnings on every call.
+    safe_exp = np.where(nan_blocks, 0, block_exp_unbiased).astype(np.float32)
+    scaled_blocks = fp4_f32 * np.exp2(safe_exp)[:, None]
 
     # Extract 2-bit exponent field from E2M1 format
     unit_exp_field = (
@@ -465,7 +473,6 @@ def unpack_mxfp4(
     unit_exp_unbiased = np.where(unit_exp_field == 0, 0, unit_exp_field - 1)
     combined_unbiased = block_exp_unbiased[:, None] + unit_exp_unbiased
 
-    nan_blocks = scales_u8 == 0xFF
     overflow_mask = (combined_unbiased >= 128) & ~nan_blocks[:, None]
     underflow_mask = (combined_unbiased < -127) & ~nan_blocks[:, None]
 
@@ -486,17 +493,27 @@ def _mxint_decode_blocks(scales_e8m0, int_blocks, elem_scale_divisor: float):
     (num_blocks, 32) int8 array of per-element values, return the decoded
     bfloat16 tensor. `elem_scale_divisor` is the format's implicit scale
     denominator (64 for MxInt8's 2^-6, 4 for MxInt4's 2^-2, 1 for MxInt2's
-    2^0). NaN scale (0xFF) zeros the block; the unpacker gasket instead NaNs
-    the whole block on block_exp_all_ones, but MxInt pack never emits 0xFF
-    (it coerces NaN datums to 0), so no stimulus reaches this path.
+    2^0).
+
+    A 0xFF scale NaNs the whole block, zeros included, as the unpacker does and
+    as `_unpack_mxfp8` and `unpack_mxfp4` already do. The MxInt packer does
+    reach this: it coerces NaN *elements* to 0, but an all-NaN block still gets
+    scale 255, so the two are separate decisions and only the element one is a
+    coercion. No current stimulus builds an all-NaN block, so nothing exercises
+    it today.
     """
     scales_array = np.frombuffer(bytes(scales_e8m0), dtype=np.uint8)
-    scale_factors = np.where(
-        scales_array == 255, 0.0, np.exp2(scales_array.astype(np.float32) - 127.0)
-    )
+    nan_blocks = scales_array == E8M0_NAN_CODE
+    # Substitute a harmless scale for 0xFF before exponentiating: exp2(128)
+    # overflows float32 to Inf, and Inf times a coerced-to-zero element is a
+    # NaN raised by invalid-multiply rather than by the rule below. These rows
+    # are overwritten wholesale anyway.
+    safe_scales = np.where(nan_blocks, E8M0_BIAS, scales_array).astype(np.float32)
+    scale_factors = np.exp2(safe_scales - E8M0_BIAS)
     decoded = int_blocks.astype(np.float32) * (
         scale_factors[:, np.newaxis] / elem_scale_divisor
     )
+    decoded[nan_blocks] = np.nan
     return torch.tensor(decoded.flatten(), dtype=torch.bfloat16)
 
 

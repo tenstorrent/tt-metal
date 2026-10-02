@@ -110,6 +110,14 @@ Dest is **32-bit when accumulation is enabled and 16-bit otherwise** — that is
 the whole of what `DestAccumulation` controls. `Tf32` has no separate Dest
 encoding; it lives in a `Float32` container.
 
+`resolve_dest_format(dest_format, l1_input_format, dest_acc)` is what every
+`run()` calls: it derives the Dest format from the input when none is given, and
+otherwise checks the one supplied against `dest_acc` using
+`DEST_32_BIT_FORMATS`. The two are not independent settings, so `Float32` with
+`dest_acc=False` is rejected rather than run — unchecked it produces a
+believable answer at the wrong precision, which looks like a maths bug further
+down the chain.
+
 ### `src_to_dest(values, dest_format, current=None)`
 
 The maths belongs to the operation; what belongs here is **where it lands**. A
@@ -205,7 +213,7 @@ to the bytes the device read.
 
 | Member | Notes |
 |---|---|
-| `PACKERS` | Format → packer, 20 entries, mirroring `StimuliConfig.get_packer`. |
+| `PACKERS` | Format → packer, 19 entries, mirroring `StimuliConfig.get_packer`. `MODELLED_L1_FORMATS` is its key set — the formats this golden can actually move bytes for, which is **narrower** than an architecture's `SUPPORTED_L1_FORMATS`. `Tf32` (all) and `Bfp8` (WH/BH) are real L1 formats with no codec here, so `supports()` returns False for them and the error says it is a model gap, not a hardware limit. |
 | `datums_per_tile(num_faces=4, face_r_dim=16)` | `num_faces × face_r_dim × 16`. The geometry primitive everything counts in. |
 | `pack_to_l1(tensor, l1_format, *, tile_count=None, num_faces=4, face_r_dim=16, use_srcs=False, dest_acc=False)` | Where precision is lost for the block-scaled formats. |
 | `unpack_from_l1(packed, l1_format, *, tile_count=None, tile_stride_bytes=None, num_faces=4, face_r_dim=16, use_srcs=False, dest_acc=False, twos_complement=False)` | Reads bytes back as values. |
@@ -236,11 +244,16 @@ has no bfloat16 and most packers go straight to `.numpy()`.
 > compatibility — correct only when the geometry really is 32×32. Pass the
 > device's stride explicitly when reading a buffer laid out that way.
 
-> **Known sharp edge.** `Golden.run` packs tiles contiguously while
-> `StimuliConfig.write_matrix` strides its source buffer at 1024 elements. The
-> two agree only because every entry in `SUPPORTED_TILE_SIZES` satisfies
-> `num_faces × face_r_dim × 16 == rows × cols`. Suspect this first if a
-> partial-face multi-tile case disagrees with silicon.
+> **Two source strides, only one of which matches.** `Golden.run` lays tiles out
+> back to back, `datums_per_tile` apart. `write_matrix_w_tile_dimensions`
+> (`use_dense_tile_dimensions=True`) strides the source the same way, but the
+> *default* `StimuliConfig.write_matrix` always strides by `MAX_TILE_ELEMENTS`
+> whatever the tile size, writing only `num_faces × face_r_dim × 16` of each
+> stride. They coincide only at 1024 datums per tile, or on a single tile where
+> the stride never applies — below that, over several tiles, the two read
+> different source elements from tile 1 on. `operations/golden.py`'s
+> `check_source_layout` raises for those rather than silently computing on data
+> the device never saw.
 
 ---
 
@@ -287,13 +300,20 @@ or `-inf`. Construction validates mask count, bit width and mode.
 
 ## `is_deterministic(stoch_rnd)`
 
-Stochastic rounding is driven by a pseudo-random sequence seeded on device and
+Stochastic rounding draws from a pseudo-random sequence seeded on device and
 **cannot be reproduced here**. With it enabled the golden returns the
 round-to-nearest result, which hardware matches only in expectation — each datum
 may land one ULP of the output format either side. Check this and compare with
 PCC rather than exactly.
 
-Returns `True` for `No` and `Fpu`.
+Returns `True` for `No` only. `Fpu` randomises the FPU's write to Dest rather
+than the packer's write to L1, so the packer behaves normally under it — but the
+value reaching the packer is already off, which the golden can no more follow.
+It only actually diverges when that Dest write has to round at all (a 16-bit
+Dest, or a long enough accumulation), so a test that knows its Dest write is
+exact can still compare exactly under `Fpu`; this predicate just will not make
+that call for it. `STOCH_RND_EFFECTS` maps each mode to the stage it randomises,
+which is what `dest_to_l1` puts in its warning.
 
 ---
 

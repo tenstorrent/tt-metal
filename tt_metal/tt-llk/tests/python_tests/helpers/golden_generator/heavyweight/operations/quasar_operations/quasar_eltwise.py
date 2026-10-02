@@ -5,6 +5,7 @@
 
 from ...data_transfer_blocks.quasar_data_transfer import QuasarDataTransferBlocks
 from ..eltwise import EltwiseBinaryGolden
+from .quasar_fidelity import QUASAR_MANTISSA_SPLIT
 
 
 class QuasarEltwiseBinaryGolden(EltwiseBinaryGolden):
@@ -19,4 +20,4 @@ class QuasarEltwiseBinaryGolden(EltwiseBinaryGolden):
     """
 
     blocks_class = QuasarDataTransferBlocks
-    MANTISSA_SPLIT = (7, 7)
+    MANTISSA_SPLIT = QUASAR_MANTISSA_SPLIT

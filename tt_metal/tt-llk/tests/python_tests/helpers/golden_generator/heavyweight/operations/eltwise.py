@@ -16,7 +16,9 @@ from .fidelity import (
     flush_pre_carry_denormals,
     min_normal_exponent,
     operand_halves,
+    resolve_non_finite,
     split_mantissa,
+    warn_unmodelled_split,
 )
 from .golden import Golden, OpConfig
 
@@ -90,6 +92,8 @@ class EltwiseBinaryGolden(Golden):
                     )
                 )
         else:
+            if self.operation is MathOperation.Elwmul:
+                warn_unmodelled_split(self.op_name, type(self).__name__)
             chain.then(
                 self.src_to_dest(
                     cfg, self.apply, reads=("srcA", "srcB"), accumulate=accumulate
@@ -114,6 +118,7 @@ class EltwiseBinaryGolden(Golden):
         matmul is exempt. Pass `dest_format` to model it; ``None`` skips it.
         """
         a, b = operand_halves(regs["srcA"], regs["srcB"], self.MANTISSA_SPLIT, phase)
+        a, b = resolve_non_finite(a, b, regs["srcA"], regs["srcB"], phase)
         product = a * b
         if dest_format is None:
             return product
@@ -128,7 +133,10 @@ class EltwiseBinaryGolden(Golden):
         if self.operation is MathOperation.Elwsub:
             return a - b
         if self.operation is MathOperation.Elwmul:
-            return (
-                a * b
-            )  # Only done for LoFi. Checkout the high fidelity implementation above.
+            # The exact product, reached only where MANTISSA_SPLIT is None --
+            # i.e. on an architecture whose split is not modelled, at every
+            # fidelity. Where the split *is* modelled, as on Quasar, the
+            # multiply always goes through partial_product and never arrives
+            # here, LoFi included: LoFi is one phase, not zero.
+            return a * b
         raise ValueError(f"{self.operation} is not an element-wise binary op")

@@ -14,10 +14,11 @@ L1 buffers to each other the way the hardware does.
 """
 
 import inspect
-from typing import Callable, Dict, List, Optional, Sequence, Union
+from typing import Callable, Dict, FrozenSet, List, Optional, Sequence, Union
 
 import torch
 from helpers.format_config import DataFormat
+from helpers.llk_params import format_tile_sizes
 from helpers.pack import (
     pack_bfp2_b,
     pack_bfp4_b,
@@ -39,7 +40,12 @@ from helpers.pack import (
     pack_uint16,
     pack_uint32,
 )
-from helpers.tile_constants import FACE_C_DIM
+from helpers.tile_constants import (
+    FACE_C_DIM,
+    MAX_FACE_R_DIM,
+    MAX_NUM_FACES,
+    calculate_tile_size_bytes,
+)
 from helpers.unpack import unpack_res_tiles
 
 #: Tensor -> L1 bytes, per format. Mirrors ``StimuliConfig.get_packer``, which is
@@ -78,9 +84,52 @@ def _call_accepted(fn: Callable, tensor: torch.Tensor, **kwargs):
     return fn(tensor, **{k: v for k, v in kwargs.items() if k in accepted})
 
 
-def datums_per_tile(num_faces: int = 4, face_r_dim: int = 16) -> int:
+def datums_per_tile(
+    num_faces: int = MAX_NUM_FACES, face_r_dim: int = MAX_FACE_R_DIM
+) -> int:
     """Datums one tile holds at this geometry."""
     return num_faces * face_r_dim * FACE_C_DIM
+
+
+def tile_dimensions_for(num_faces: int, face_r_dim: int) -> list:
+    """``[rows, cols]`` for a tile of `num_faces` faces of `face_r_dim` rows.
+
+    Faces tile the 32-datum row before they stack, so up to two sit side by
+    side and the rest go underneath: 1 face is 16 wide, 2 or more are 32.
+    """
+    faces_c = min(num_faces, 2)
+    return [(num_faces // faces_c) * face_r_dim, faces_c * FACE_C_DIM]
+
+
+def tile_bytes_for(
+    l1_format: DataFormat,
+    num_faces: int = MAX_NUM_FACES,
+    face_r_dim: int = MAX_FACE_R_DIM,
+    use_srcs: bool = False,
+    dest_acc: bool = False,
+) -> int:
+    """Bytes one tile of `l1_format` occupies in L1, as the harness sizes it.
+
+    Delegates to :func:`helpers.tile_constants.calculate_tile_size_bytes`, the
+    same sizing ``StimuliConfig`` uses, because a datum count is not enough:
+
+    * the **BFP** packers hold a minimum of 16 exponents, so a tile with fewer
+      than 8 rows per face occupies more bytes than its datums imply -- 48
+      rather than 34 for a 1x32 ``Bfp8_b`` tile.
+    * with **use_srcs** an MX tile is written as 16-byte-aligned per-slice
+      blocks, 1152 bytes rather than the dense 1056, and 1280 under
+      ``dest_acc``.
+
+    Computing the stride from ``num_bytes_per_tile(datums)`` misses both, which
+    truncates a single-tile read and misaligns every tile after the first.
+    """
+    return calculate_tile_size_bytes(
+        l1_format,
+        tile_dimensions_for(num_faces, face_r_dim),
+        format_tile_sizes,
+        use_srcs=use_srcs,
+        dest_acc=dest_acc,
+    )
 
 
 def pack_to_l1(
@@ -88,8 +137,8 @@ def pack_to_l1(
     l1_format: DataFormat,
     *,
     tile_count: Optional[int] = None,
-    num_faces: int = 4,
-    face_r_dim: int = 16,
+    num_faces: int = MAX_NUM_FACES,
+    face_r_dim: int = MAX_FACE_R_DIM,
     use_srcs: bool = False,
     dest_acc: bool = False,
 ) -> List[int]:
@@ -105,7 +154,7 @@ def pack_to_l1(
     """
     packer = PACKERS.get(l1_format)
     if packer is None:
-        raise ValueError(f"No packer for {l1_format}")
+        raise ValueError(_no_codec_message(l1_format))
     if tensor.dtype is torch.bfloat16:
         # numpy has no bfloat16 and most packers go straight to .numpy().
         # float32 holds every bf16 value exactly, so this is lossless.
@@ -133,32 +182,56 @@ def pack_to_l1(
     return packed
 
 
+#: L1 formats this module can actually move bytes for. Derived from
+#: :data:`PACKERS` because the two directions cover exactly the same formats --
+#: there is no format with a packer and no unpacker, or the reverse -- so one
+#: gate is enough for both. Deliberately separate from an architecture's
+#: ``SUPPORTED_L1_FORMATS``, which says what the *hardware* can hold: a format
+#: can be perfectly real on the device and still have no codec here.
+MODELLED_L1_FORMATS: FrozenSet[DataFormat] = frozenset(PACKERS)
+
+
+def _no_codec_message(l1_format: DataFormat) -> str:
+    return (
+        f"{l1_format} has no L1 codec in this golden, so its bytes cannot be "
+        f"written or read here. This is a gap in the model, not a statement "
+        f"about the hardware. Modelled formats: "
+        f"{sorted(str(f) for f in MODELLED_L1_FORMATS)}."
+    )
+
+
 def unpack_from_l1(
     packed: Union[Sequence[int], bytes],
     l1_format: DataFormat,
     *,
     tile_count: Optional[int] = None,
     tile_stride_bytes: Optional[int] = None,
-    num_faces: int = 4,
-    face_r_dim: int = 16,
+    num_faces: int = MAX_NUM_FACES,
+    face_r_dim: int = MAX_FACE_R_DIM,
     use_srcs: bool = False,
     dest_acc: bool = False,
     twos_complement: bool = False,
 ) -> torch.Tensor:
     """Read `packed` L1 bytes back as values, exactly as the unpacker sees them.
 
-    `tile_stride_bytes` defaults to the **dense** size of one tile at this
-    geometry, which is what :func:`pack_to_l1` writes. Left to its own devices
-    ``unpack_res_tiles`` assumes a full 32x32 tile stride for backward
-    compatibility, which is only correct when the geometry really is 32x32 —
-    pass the device's stride explicitly when reading a buffer laid out that way.
+    `tile_stride_bytes` defaults to what :func:`pack_to_l1` actually writes at
+    this geometry, via :func:`tile_bytes_for` -- which accounts for the BFP
+    exponent minimum and the ``use_srcs`` slice layout, neither of which a
+    datum count captures. Left to its own devices ``unpack_res_tiles`` assumes a
+    full 32x32 tile stride for backward compatibility, which is only correct
+    when the geometry really is 32x32; pass the device's stride explicitly when
+    reading a buffer laid out some other way.
 
     `tile_count` defaults to however many whole tiles the buffer holds.
     """
+    if l1_format not in MODELLED_L1_FORMATS:
+        # unpack_res_tiles would reach a bare dict lookup and raise KeyError
+        # with nothing but the format name in it.
+        raise ValueError(_no_codec_message(l1_format))
     packed = list(packed)
     if tile_stride_bytes is None:
-        tile_stride_bytes = l1_format.num_bytes_per_tile(
-            datums_per_tile(num_faces, face_r_dim)
+        tile_stride_bytes = tile_bytes_for(
+            l1_format, num_faces, face_r_dim, use_srcs, dest_acc
         )
     if tile_count is None:
         tile_count = max(1, len(packed) // tile_stride_bytes)

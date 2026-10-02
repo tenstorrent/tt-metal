@@ -8,6 +8,9 @@ import numpy as np
 import torch
 
 from .format_config import (
+    E8M0_BIAS,
+    E8M0_INF_CODE,
+    E8M0_NAN_CODE,
     MX_FORMAT_BLOCK_SIZE,
     MX_FORMAT_MAX_NORMAL,
     DataFormat,
@@ -350,7 +353,7 @@ def _pad_to_l1_alignment(data: list[int]) -> list[int]:
     return data if pad == 0 else data + [0] * pad
 
 
-def _mx_shared_exponents(blocks, elem_exp_max_unbiased, exp_rnd_en):
+def _mx_shared_exponents(blocks, elem_exp_max_unbiased):
     """Derive one E8M0 block scale per 32-datum block, as the Tensix packer does.
 
     Mirrors ``tt_t6_com_elem_to_mx_convert.sv`` (``mxfmt_exponent_s0``), whose
@@ -375,8 +378,6 @@ def _mx_shared_exponents(blocks, elem_exp_max_unbiased, exp_rnd_en):
     Args:
         blocks: (num_blocks, MX_FORMAT_BLOCK_SIZE) float32 array of raw datums
         elem_exp_max_unbiased: Element format's unbiased max exponent
-        exp_rnd_en: If True, increment non-zero, non-special block exponents to
-            model FMT_CTRL_MX_BLOCK_EXP_RND_TO_INF (``i_mx_block_exp_rnd_to_inf``)
 
     Returns:
         (num_blocks,) int32 array of E8M0 scale codes
@@ -389,14 +390,13 @@ def _mx_shared_exponents(blocks, elem_exp_max_unbiased, exp_rnd_en):
     _, frexp_exp = np.frexp(max_abs_values)
     shared_exp = np.where(max_abs_values == 0, 0, frexp_exp - 1)
 
-    if exp_rnd_en:
-        # RTL skips the increment when max_exp_final is 0 (all-zero block) or
-        # already 0xFE/0xFF, i.e. amax == 0 or floor(log2(amax)) >= 127.
-        can_increment = (max_abs_values != 0) & (shared_exp < 127)
-        shared_exp = np.where(can_increment, shared_exp + 1, shared_exp)
+    # The shared exponent is always the floor of log2(amax). The packer has a
+    # round-the-block-exponent-toward-infinity setting that would add one here,
+    # but it is not the default and nothing in this harness configures it, so it
+    # is deliberately not modelled rather than modelled and left untested.
 
-    shared_exp_adj = np.maximum(shared_exp - elem_exp_max_unbiased, -127)
-    scales_e8m0_array = shared_exp_adj.astype(np.int32) + 127
+    shared_exp_adj = np.maximum(shared_exp - elem_exp_max_unbiased, -E8M0_BIAS)
+    scales_e8m0_array = shared_exp_adj.astype(np.int32) + E8M0_BIAS
 
     # Special block exponents:
     # - every datum NaN                                   -> 0xFF (NaN block)
@@ -406,8 +406,32 @@ def _mx_shared_exponents(blocks, elem_exp_max_unbiased, exp_rnd_en):
     all_inf_or_zero = np.all(inf_or_zero_or_nan, axis=1)
     has_inf = np.any(np.isinf(blocks), axis=1)
 
-    scales_e8m0_array = np.where(all_nan_blocks, 255, scales_e8m0_array)
-    return np.where(all_inf_or_zero & has_inf, 254, scales_e8m0_array)
+    scales_e8m0_array = np.where(all_nan_blocks, E8M0_NAN_CODE, scales_e8m0_array)
+    return np.where(all_inf_or_zero & has_inf, E8M0_INF_CODE, scales_e8m0_array)
+
+
+def _e8m0_scale_factors(scales_e8m0_array):
+    """E8M0 scale codes decoded to float32 multipliers, NaN where the code is 0xFF.
+
+    0xFF is the reserved NaN scale rather than an exponent, so it decodes to NaN
+    and that NaN then propagates into whatever the caller does with the block --
+    straight through to the output for the MX-float formats, and down to 0 for
+    MxInt, which has no NaN element encoding.
+
+    A harmless code is substituted before exponentiating because ``exp2(128)``
+    overflows float32. Computing it and masking afterwards gives the same
+    numbers but raises a spurious overflow warning, which then has to be
+    suppressed at every call site.
+
+    Args:
+        scales_e8m0_array: (num_blocks,) array of E8M0 scale codes, 0..255
+
+    Returns:
+        (num_blocks,) float32 array of multipliers, NaN at the 0xFF entries
+    """
+    nan_scales = scales_e8m0_array == E8M0_NAN_CODE
+    safe_scales = np.where(nan_scales, E8M0_BIAS, scales_e8m0_array).astype(np.float32)
+    return np.where(nan_scales, np.nan, np.exp2(safe_scales - E8M0_BIAS))
 
 
 def _pack_mxfp8(
@@ -416,8 +440,6 @@ def _pack_mxfp8(
     element_max_normal,
     num_faces=4,
     face_r_dim=16,
-    exp_rnd_en: bool = False,
-    ovf_en: bool = False,
 ):
     """
     Internal helper to pack MXFP8 formats with FULLY SEPARATED layout.
@@ -437,12 +459,6 @@ def _pack_mxfp8(
         element_max_normal: Maximum normal value for element format
         num_faces: Number of faces to pack (1, 2, or 4). Defaults to 4.
         face_r_dim: Number of rows per face (1, 2, 4, 8, or 16). Defaults to 16.
-        exp_rnd_en: If True, increment non-zero, non-special E8M0 scales to
-            model FMT_CTRL_MX_BLOCK_EXP_RND_TO_INF behavior (default: disabled).
-        ovf_en: If True, out-of-range elements overflow (Inf for E5M2, NaN for
-            E4M3); if False they saturate to ±element_max_normal. Models
-            FMT_CTRL_FP8_OVF_EN, which resets to 0 (saturate) and is left
-            untouched by the LLK (default: disabled).
 
     Returns:
         List of packed bytes: [all scales][all elements]
@@ -473,29 +489,20 @@ def _pack_mxfp8(
     scales_e8m0_array = _mx_shared_exponents(
         blocks,
         elem_exp_max_unbiased=ml_dtypes.finfo(fp8_dtype).maxexp - 1,
-        exp_rnd_en=exp_rnd_en,
     )
     scales_e8m0 = scales_e8m0_array.astype(np.uint8).tolist()
 
-    # Vectorized scale decoding for applying to blocks
-    # np.where evaluates both branches eagerly, so the NaN-scale code (255)
-    # still runs exp2(128) and overflows float32; the mask discards it.
-    with np.errstate(over="ignore"):
-        scale_factors = np.where(
-            scales_e8m0_array == 255,
-            np.nan,
-            np.exp2(scales_e8m0_array.astype(np.float32) - 127.0),
-        )
+    scale_factors = _e8m0_scale_factors(scales_e8m0_array)
 
     # Scale blocks and convert to FP8. With the floor block scale the largest
-    # datum can land above the element format's max normal; clamping the scaled
-    # value first turns the fp8 cast's native overflow (Inf for E5M2, NaN for
-    # E4M3 — the FP8_OVF_EN=1 behavior) into the saturation HW does by default.
-    # NaN survives the clamp, and Inf clamps to the saturation value, matching
-    # the packer's Inf-with-saturation path.
+    # datum can land above the element format's max normal, and the clamp is
+    # what makes that saturate, which is what the packer does by default. Left
+    # unclamped the fp8 cast would overflow natively instead -- Inf for E5M2,
+    # NaN for E4M3 -- which is the packer's non-default overflow setting and is
+    # deliberately not modelled, since nothing here configures it. NaN survives
+    # the clamp, and Inf clamps to the saturation value.
     scaled_blocks = blocks / scale_factors[:, np.newaxis]
-    if not ovf_en:
-        scaled_blocks = np.clip(scaled_blocks, -element_max_normal, element_max_normal)
+    scaled_blocks = np.clip(scaled_blocks, -element_max_normal, element_max_normal)
     fp8_blocks = scaled_blocks.astype(fp8_dtype)
 
     # FULLY SEPARATED layout: all scales first, then all elements (both 16B-aligned)
@@ -509,8 +516,6 @@ def _pack_mxfp8_srcs(
     fp8_dtype,
     element_max_normal,
     dest_acc: bool = False,
-    exp_rnd_en: bool = False,
-    ovf_en: bool = False,
 ):
     """Pack a tensor into per-slice SrcS blocks for MX formats.
 
@@ -537,8 +542,6 @@ def _pack_mxfp8_srcs(
                 element_max_normal,
                 num_faces=1,
                 face_r_dim=slice_row_dim,
-                exp_rnd_en=exp_rnd_en,
-                ovf_en=ovf_en,
             )
         )
     return out
@@ -550,8 +553,6 @@ def pack_mxfp8r(
     face_r_dim=16,
     use_srcs: bool = False,
     dest_acc: bool = False,
-    exp_rnd_en: bool = False,
-    ovf_en: bool = False,
 ):
     """
     Pack tensor into MXFP8R format (MXFP8 E5M2 variant).
@@ -572,10 +573,6 @@ def pack_mxfp8r(
         use_srcs: If True, split into SrcS slices (per-slice blocks in L1).
         dest_acc: If True (with use_srcs), use 32-bit SrcS slice geometry
             (4×16, 80 bytes/slice) instead of 16-bit (8×16, 144 bytes/slice).
-        exp_rnd_en: If True, increment non-zero, non-special E8M0 scales to
-            model FMT_CTRL_MX_BLOCK_EXP_RND_TO_INF behavior (default: disabled).
-        ovf_en: If True, out-of-range elements overflow to ±Inf instead of
-            saturating to ±57,344 (models FMT_CTRL_FP8_OVF_EN, default: disabled).
 
     Returns:
         List of packed bytes in FULLY SEPARATED layout: [all_scales][all_elements]
@@ -591,8 +588,6 @@ def pack_mxfp8r(
             ml_dtypes.float8_e5m2,
             MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8R],
             dest_acc,
-            exp_rnd_en=exp_rnd_en,
-            ovf_en=ovf_en,
         )
     return _pack_mxfp8(
         tensor,
@@ -600,8 +595,6 @@ def pack_mxfp8r(
         MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8R],
         num_faces,
         face_r_dim,
-        exp_rnd_en=exp_rnd_en,
-        ovf_en=ovf_en,
     )
 
 
@@ -611,8 +604,6 @@ def pack_mxfp8p(
     face_r_dim=16,
     use_srcs: bool = False,
     dest_acc: bool = False,
-    exp_rnd_en: bool = False,
-    ovf_en: bool = False,
 ):
     """
     Pack tensor into MXFP8P format (MXFP8 E4M3 variant).
@@ -633,10 +624,6 @@ def pack_mxfp8p(
         use_srcs: If True, split into SrcS slices (per-slice blocks in L1).
         dest_acc: If True (with use_srcs), use 32-bit SrcS slice geometry
             (4×16, 80 bytes/slice) instead of 16-bit (8×16, 144 bytes/slice).
-        exp_rnd_en: If True, increment non-zero, non-special E8M0 scales to
-            model FMT_CTRL_MX_BLOCK_EXP_RND_TO_INF behavior (default: disabled).
-        ovf_en: If True, out-of-range elements overflow to NaN instead of
-            saturating to ±448 (models FMT_CTRL_FP8_OVF_EN, default: disabled).
 
     Returns:
         List of packed bytes in FULLY SEPARATED layout: [all_scales][all_elements]
@@ -652,8 +639,6 @@ def pack_mxfp8p(
             ml_dtypes.float8_e4m3fn,
             MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P],
             dest_acc,
-            exp_rnd_en=exp_rnd_en,
-            ovf_en=ovf_en,
         )
     return _pack_mxfp8(
         tensor,
@@ -661,8 +646,6 @@ def pack_mxfp8p(
         MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P],
         num_faces,
         face_r_dim,
-        exp_rnd_en=exp_rnd_en,
-        ovf_en=ovf_en,
     )
 
 
@@ -672,7 +655,6 @@ def pack_mxfp4(
     face_r_dim=16,
     use_srcs: bool = False,
     dest_acc: bool = False,
-    exp_rnd_en: bool = False,
 ):
     """
     Pack tensor into MXFP4 format (E2M1 variant).
@@ -701,8 +683,6 @@ def pack_mxfp4(
         use_srcs: If True, split into SrcS slices (per-slice blocks in L1).
         dest_acc: If True (with use_srcs), use 32-bit SrcS slice geometry
             (4×16, 40 bytes/slice) instead of 16-bit (8×16, 72 bytes/slice).
-        exp_rnd_en: If True, increment non-zero, non-special E8M0 scales to
-            model FMT_CTRL_MX_BLOCK_EXP_RND_TO_INF behavior (default: disabled).
 
     Returns:
         List of packed bytes in FULLY SEPARATED layout: [all_scales][all_elements]
@@ -741,20 +721,10 @@ def pack_mxfp4(
 
     # E8M0 block scales, per the packer's floor(log2(amax)) rule
     # (elem_exp_max_unbiased is 2 for E2M1: max normal 6.0 = 1.5 * 2^2)
-    scales_e8m0_array = _mx_shared_exponents(
-        blocks_raw, elem_exp_max_unbiased=2, exp_rnd_en=exp_rnd_en
-    )
+    scales_e8m0_array = _mx_shared_exponents(blocks_raw, elem_exp_max_unbiased=2)
     scales_e8m0 = scales_e8m0_array.astype(np.uint8).tolist()
 
-    # Vectorized scale decoding for applying to blocks
-    # np.where evaluates both branches eagerly, so the NaN-scale code (255)
-    # still runs exp2(128) and overflows float32; the mask discards it.
-    with np.errstate(over="ignore"):
-        scale_factors = np.where(
-            scales_e8m0_array == 255,
-            np.nan,
-            np.exp2(scales_e8m0_array.astype(np.float32) - 127.0),
-        )
+    scale_factors = _e8m0_scale_factors(scales_e8m0_array)
 
     # Scale blocks and convert to FP4 using storage.py-style rounding.
     scaled_blocks = blocks / scale_factors[:, np.newaxis]
@@ -893,28 +863,22 @@ def _mxint_block_scale_and_quantize(
         max_abs_exp = np.where(
             max_abs_values == 0, 0, np.floor(np.log2(max_abs_values))
         )
-    shared_exp_adj = np.where(max_abs_exp >= -127, max_abs_exp, -127)
-    scales_e8m0_array = shared_exp_adj.astype(np.int32) + 127
+    shared_exp_adj = np.where(max_abs_exp >= -E8M0_BIAS, max_abs_exp, -E8M0_BIAS)
+    scales_e8m0_array = shared_exp_adj.astype(np.int32) + E8M0_BIAS
 
     # Special-case block scales (mirror MxFp encoding).
     all_nan_blocks = np.all(np.isnan(blocks_raw), axis=1)
     inf_or_zero_or_nan = np.isinf(blocks_raw) | np.isnan(blocks_raw) | (blocks_raw == 0)
     all_inf_or_zero = np.all(inf_or_zero_or_nan, axis=1)
     has_inf = np.any(np.isinf(blocks_raw), axis=1)
-    scales_e8m0_array = np.where(all_nan_blocks, 255, scales_e8m0_array)
-    scales_e8m0_array = np.where(all_inf_or_zero & has_inf, 254, scales_e8m0_array)
+    scales_e8m0_array = np.where(all_nan_blocks, E8M0_NAN_CODE, scales_e8m0_array)
+    scales_e8m0_array = np.where(
+        all_inf_or_zero & has_inf, E8M0_INF_CODE, scales_e8m0_array
+    )
 
     scales_e8m0 = scales_e8m0_array.astype(np.uint8).tolist()
 
-    # Decode scale factors for applying to blocks (NaN scale -> NaN -> 0 below).
-    # np.where evaluates both branches eagerly, so the NaN-scale code (255)
-    # still runs exp2(128) and overflows float32; the mask discards it.
-    with np.errstate(over="ignore"):
-        scale_factors = np.where(
-            scales_e8m0_array == 255,
-            np.nan,
-            np.exp2(scales_e8m0_array.astype(np.float32) - 127.0),
-        )
+    scale_factors = _e8m0_scale_factors(scales_e8m0_array)
 
     # Scale blocks; saturate Inf to ±2.0 and replace NaN with 0 so that int
     # conversion below can't overflow.

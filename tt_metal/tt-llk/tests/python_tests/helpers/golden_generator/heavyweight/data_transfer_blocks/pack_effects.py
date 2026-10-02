@@ -15,7 +15,9 @@ Two of the three are exactly modellable. Stochastic rounding is not — see
 :func:`is_deterministic`.
 """
 
+import struct
 from dataclasses import dataclass
+from enum import IntEnum
 from typing import Optional, Sequence, Union
 
 import torch
@@ -29,8 +31,14 @@ EDGE_MASK_WIDTH = 16
 EDGE_MASK_COUNT = 4
 
 
-class EdgeMaskMode:
-    """What a masked datum becomes."""
+class EdgeMaskMode(IntEnum):
+    """What a masked datum becomes.
+
+    An ``IntEnum`` because these are hardware field values, so a caller holding
+    a raw 0 or 1 still compares and packs correctly, while the names carry the
+    meaning. Matches how the other mode knobs in :mod:`helpers.llk_params` are
+    declared.
+    """
 
     #: Masked datums are zeroed.
     ZERO = 0
@@ -54,7 +62,7 @@ class PackEdgeMask:
 
     masks: Sequence[int] = (0xFFFF,)
     select: Union[int, Sequence[int]] = 0
-    mode: int = EdgeMaskMode.ZERO
+    mode: EdgeMaskMode = EdgeMaskMode.ZERO
 
     def __post_init__(self):
         if not 1 <= len(self.masks) <= EDGE_MASK_COUNT:
@@ -63,8 +71,10 @@ class PackEdgeMask:
             )
         if any(not 0 <= m < (1 << EDGE_MASK_WIDTH) for m in self.masks):
             raise ValueError(f"each mask must fit {EDGE_MASK_WIDTH} bits")
-        if self.mode not in (EdgeMaskMode.ZERO, EdgeMaskMode.NEG_SATURATE):
-            raise ValueError(f"unknown edge mask mode {self.mode}")
+        # Raises for anything outside the enum, and normalises a raw int to the
+        # member, so the stored value matches the annotation. object.__setattr__
+        # because the dataclass is frozen.
+        object.__setattr__(self, "mode", EdgeMaskMode(self.mode))
 
     def keep(self, count: int) -> torch.Tensor:
         """Bool tensor, True where datum *i* survives the mask."""
@@ -95,16 +105,53 @@ class PackEdgeMask:
         return torch.where(keep, flat, replacement).reshape(values.shape)
 
 
-def _encode_threshold(threshold: float, dest_format: DataFormat) -> float:
-    """Round the ReLU threshold to the 16 bits the packer's register holds.
+#: Formats whose ReLU threshold field is read as fp16 rather than bf16.
+#: The 8-bit and sub-8-bit block formats (Fp8, Bfp4a, Bfp2a) belong here too
+#: once the harness supports them.
+FP16_THRESHOLD_FORMATS = (DataFormat.Float16, DataFormat.Bfp8)
 
-    The register stores the threshold in the packer's intermediate format, so a
-    value the golden compares against must go through the same narrowing. The
-    Float16 (exponent-A) family stores it as fp16, everything else as bf16.
+
+def _encode_threshold_bits(threshold: float, dest_format: DataFormat) -> int:
+    """The 16-bit threshold field as the packer's config register stores it.
+
+    The field is 16 bits wide whatever the pack format, so the threshold is
+    narrowed to reach it -- and the two branches narrow *differently*. The
+    Float16 family reads the field as fp16, so the value is **rounded** to
+    fp16. Everything else reads it as bf16, which the register takes as the top
+    half of the fp32 and therefore **truncates**; for a 32-bit Dest the
+    hardware shifts those bits back up by 16 to rebuild the comparand.
     """
-    if dest_format in (DataFormat.Float16, DataFormat.Bfp8):
-        return float(torch.tensor(threshold, dtype=torch.float16))
-    return float(torch.tensor(threshold, dtype=torch.bfloat16))
+    if dest_format in FP16_THRESHOLD_FORMATS:
+        return torch.tensor(threshold, dtype=torch.float16).view(torch.uint16).item()
+    fp32_bits = struct.unpack(">I", struct.pack(">f", threshold))[0]
+    return (fp32_bits >> 16) & 0xFFFF
+
+
+def _decode_threshold_bits(bits: int, dest_format: DataFormat) -> float:
+    """The value those 16 bits represent -- the inverse of the encode above."""
+    if dest_format in FP16_THRESHOLD_FORMATS:
+        return torch.tensor(bits, dtype=torch.uint16).view(torch.float16).item()
+    return struct.unpack(">f", struct.pack(">I", (bits & 0xFFFF) << 16))[0]
+
+
+def _encode_threshold(threshold: float, dest_format: DataFormat) -> float:
+    """The threshold as the configuration register actually holds it.
+
+    A ReLU compares against the register, not against the float the test asked
+    for, so the golden has to narrow first. Narrowing with a plain bf16 cast
+    rounds where the register truncates, which shifts the threshold a full bf16
+    step for any value with mantissa bits below the cut -- 0.3 becomes 0.30078
+    instead of 0.29883, and every datum between the two is then clamped
+    differently.
+
+    This duplicates the encoding in ``PackGolden`` on purpose: heavyweight owns
+    its own model of the packer so the old golden can be retired without
+    stranding it. The two were bit-identical across every format and threshold
+    swept when this was written; keep them so, or retire the other one.
+    """
+    return _decode_threshold_bits(
+        _encode_threshold_bits(threshold, dest_format), dest_format
+    )
 
 
 def apply_relu(
@@ -113,9 +160,10 @@ def apply_relu(
     threshold: float = 0.0,
     dest_format: DataFormat = DataFormat.Float16_b,
 ) -> torch.Tensor:
-    """Packer ReLU. Mirrors ``PackGolden.apply_relu``.
-
-    The threshold is narrowed to what the packer's register can hold first.
+    """
+    Takes the type and threshold directly rather than the packed 32-bit
+    ``relu_config`` word, and narrows the threshold to what the register holds
+    before comparing -- see :func:`_encode_threshold`.
     """
     if relu_type is PackerReluType.NoRelu:
         return values
@@ -131,17 +179,44 @@ def apply_relu(
     raise ValueError(f"unknown relu type {relu_type}")
 
 
-def is_deterministic(stoch_rnd: StochasticRounding) -> bool:
-    """Whether the packer's rounding can be reproduced by a golden model.
+#: Which stage each stochastic-rounding mode randomises, and therefore why the
+#: golden cannot follow it. ``No`` is absent: nothing is randomised.
+STOCH_RND_EFFECTS = {
+    StochasticRounding.Fpu: (
+        "the FPU rounds stochastically when it writes Dest, where this golden's "
+        "Dest write rounds to nearest"
+    ),
+    StochasticRounding.Pack: (
+        "the packer rounds stochastically on the way to L1, where this golden's "
+        "pack rounds to nearest"
+    ),
+    StochasticRounding.All: (
+        "both the FPU's Dest write and the packer's L1 write round "
+        "stochastically, where this golden rounds to nearest at each"
+    ),
+}
 
-    Stochastic rounding is driven by a pseudo-random sequence seeded on device,
-    so its result is **not** reproducible
-    here. When it is enabled the golden returns the round-to-nearest result,
-    which the hardware matches only in expectation — each datum may land one ULP
-    of the output format either side. Compare with PCC rather than exactly, as
-    ``test_unpack_matmul`` already does.
+
+def is_deterministic(stoch_rnd: StochasticRounding) -> bool:
+    """Whether the golden can reproduce this rounding configuration exactly.
+
+    Only ``No`` can be. Every other mode draws from a pseudo-random sequence
+    seeded on device, so the golden's answer is the round-to-nearest one, which
+    hardware matches only in expectation -- each datum may land one ULP either
+    side. Compare with PCC rather than exactly, as ``test_unpack_matmul`` does.
+
+    ``Fpu`` counts as nondeterministic even though the packer rounds normally
+    under it: the randomness simply lands a stage earlier, in the FPU's write
+    to Dest, which this golden's ``src_to_dest`` rounds to nearest. It only
+    *diverges* when that write actually has to round -- a 16-bit Dest, or an
+    accumulation long enough for the error to build -- which is why
+    ``matmul_sweep.skip_matmul_combination`` skips only the bf16 /
+    ``DestAccumulation.No`` / ``kt_dim >= 4`` corner rather than every ``Fpu``
+    variant. A yes/no answer has no room for that, so it answers conservatively
+    and leaves the narrower judgement to the caller: a test that knows its
+    Dest write is exact can use an exact compare under ``Fpu`` anyway.
     """
-    return stoch_rnd in (StochasticRounding.No, StochasticRounding.Fpu)
+    return stoch_rnd is StochasticRounding.No
 
 
 def apply_pack_effects(

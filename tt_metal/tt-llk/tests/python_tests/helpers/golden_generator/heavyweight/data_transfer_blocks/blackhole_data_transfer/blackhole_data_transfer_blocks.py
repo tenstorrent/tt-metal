@@ -3,12 +3,11 @@
 
 """Blackhole L1 -> Src register data-transfer blocks."""
 
-from typing import ClassVar, FrozenSet, Optional
+from typing import ClassVar, FrozenSet
 
-import torch
 from helpers.format_config import DataFormat
 
-from ..data_transfer_blocks import DataTransferBlocks, L1Buffer
+from ..data_transfer_blocks import DataTransferBlocks
 
 #: Block float is the Wormhole/Blackhole answer to what MX does on Quasar.
 _BFP_FORMATS = frozenset(
@@ -41,12 +40,3 @@ class BlackholeDataTransferBlocks(DataTransferBlocks):
             DataFormat.UInt8,
         }
     )
-
-    def l1_to_srcA(
-        self,
-        l1_bytes: L1Buffer,
-        l1_format: DataFormat,
-        src_format: Optional[DataFormat] = None,
-        **geometry,
-    ) -> torch.Tensor:
-        return self._l1_to_src(l1_bytes, l1_format, src_format, **geometry)

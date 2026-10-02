@@ -15,6 +15,7 @@ matrix one.
 """
 
 import math
+import warnings
 from typing import Optional, Tuple
 
 import torch
@@ -41,6 +42,30 @@ PHASE_OPERAND_HALVES = (
 
 #: Explicit mantissa bits a float32 datum carries.
 FP32_MANTISSA_BITS = 23
+
+
+def warn_unmodelled_split(op_name: str, golden_name: str) -> None:
+    """Say so when a multiply falls back to the exact product.
+
+    A multiply whose ``MANTISSA_SPLIT`` is ``None`` is computed exactly and
+    ``math_fidelity`` is ignored entirely. That is not a near-miss: hardware
+    truncates both operands' mantissas on every phase, so the golden comes out
+    *more* accurate than the device at every fidelity, and a test comparing
+    against it sees real mismatches with nothing obviously wrong in the golden.
+
+    Note "every fidelity", not just the reduced ones. On Wormhole and Blackhole
+    the per-phase masks never cover SrcA's least significant bit -- the four
+    phases reach mantissa bits 9..1 and bit 0 participates in none of them -- so
+    even HiFi4 is not the exact product there. HiFi4 is merely the closest.
+    """
+    warnings.warn(
+        f"{golden_name} computes {op_name} as an exact product: this "
+        f"architecture's per-phase mantissa split is not modelled, so "
+        f"math_fidelity is ignored and the result is more accurate than the "
+        f"device at every fidelity, HiFi4 included. Treat it as a reference, "
+        f"not as an exact golden.",
+        stacklevel=3,
+    )
 
 
 def split_mantissa(
@@ -81,6 +106,45 @@ def operand_halves(
     )
 
 
+def resolve_non_finite(
+    a_half: torch.Tensor,
+    b_half: torch.Tensor,
+    srcA: torch.Tensor,
+    srcB: torch.Tensor,
+    phase: int,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Fix up operand positions holding an infinity or a NaN.
+
+    A non-finite datum has no mantissa to split, and ``split_mantissa``'s
+    ``value - high`` makes ``Inf - Inf = NaN``. Zeroing only the low half is not
+    enough either: a later phase would then multiply the surviving infinity by a
+    zero low half, and ``Inf * 0`` is a NaN by IEEE.
+
+    So carry the raw value at those positions on the first phase, where it is
+    the whole of that datum's contribution, and zero on every later phase. The
+    finite positions keep their truncated halves, so LoFi stays truncated, and
+    an infinity reaches the result once rather than being split, flushed or
+    turned into a NaN. ``Inf + 0`` stays ``Inf``; a NaN propagates as a NaN.
+
+    Applies to the element-wise and matrix products alike: in a matmul the
+    phase-0 term carries the infinity into every output position that sums over
+    it, and the later phases add exact zeros there.
+    """
+    bad_a = ~torch.isfinite(srcA.float())
+    bad_b = ~torch.isfinite(srcB.float())
+    if not (bool(bad_a.any()) or bool(bad_b.any())):
+        return a_half, b_half
+    if phase == 0:
+        return (
+            torch.where(bad_a, srcA.float(), a_half),
+            torch.where(bad_b, srcB.float(), b_half),
+        )
+    return (
+        torch.where(bad_a, torch.zeros_like(a_half), a_half),
+        torch.where(bad_b, torch.zeros_like(b_half), b_half),
+    )
+
+
 def min_normal_exponent(dest_format: DataFormat) -> Optional[int]:
     """Lowest exponent the Dest format holds as a normal, or None if integer."""
     dtype = format_dict[dest_format]
@@ -97,6 +161,17 @@ def ieee_exponent(values: torch.Tensor) -> torch.Tensor:
     """
     _, exponent = torch.frexp(values.to(torch.float32))
     return exponent - 1
+
+
+def non_finite_lanes(srcA: torch.Tensor, srcB: torch.Tensor) -> torch.Tensor:
+    """Lanes where either operand is an infinity or a NaN.
+
+    These need excluding from the mantissa-split and flush rules, both of which
+    assume a finite operand with a meaningful exponent and mantissa. ``frexp``
+    reports exponent 0 for a non-finite value, which reads as a magnitude near
+    2^-1 and would make the flush rule treat an infinity as a tiny number.
+    """
+    return ~(torch.isfinite(srcA.float()) & torch.isfinite(srcB.float()))
 
 
 def flush_pre_carry_denormals(
@@ -129,5 +204,10 @@ def flush_pre_carry_denormals(
     """
     if min_exponent is None:
         return product
+    # A non-finite operand stores an all-ones exponent field, so the lane's
+    # exponent adder can never land below the normal floor and no flush occurs.
+    # Without this guard frexp's exponent-0 for Inf/NaN reads as ~2^-1 and
+    # Inf * b flushes to zero for any |b| below the floor.
     pre_carry = ieee_exponent(srcA) + ieee_exponent(srcB)
-    return torch.where(pre_carry < min_exponent, torch.zeros_like(product), product)
+    dead = (pre_carry < min_exponent) & ~non_finite_lanes(srcA, srcB)
+    return torch.where(dead, torch.zeros_like(product), product)

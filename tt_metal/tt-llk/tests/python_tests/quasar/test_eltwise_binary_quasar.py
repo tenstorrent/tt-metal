@@ -312,7 +312,7 @@ def test_eltwise_binary(
         dest_acc=(dest_acc == DestAccumulation.Yes),
         num_faces=num_faces,
         face_r_dim=tile_shape.face_r_dim,
-        num_tiles_per_accumulation=num_tiles_per_accumulation,
+        num_tiles_per_output=num_tiles_per_accumulation,
     )
 
     if is_perf and perf_report is None:
