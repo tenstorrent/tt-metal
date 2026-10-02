@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 #include <ttnn/tensor/shape/shape.hpp>
+#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "core/system_utils.hpp"
@@ -140,6 +141,111 @@ TEST_F(CrossEntropyBackwardTest, ValidatesPreallocatedOutputContractOnCacheMissA
 
     auto result = ttnn::prim::ttml_cross_entropy_bw(input, target, attributes.scaler, expected_output);
     EXPECT_EQ(result.buffer()->address(), expected_output.buffer()->address());
+}
+
+TEST_F(CrossEntropyBackwardTest, ProgramCacheSeparatesTargetPagePitchAndRebindsAddresses) {
+    using Operation = ttml::metal::ops::cross_entropy_bw::device::CrossEntropyBackwardDeviceOperation;
+
+    auto* device = &ttml::autograd::ctx().get_device();
+    const uint32_t num_dram_banks = device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
+    const uint32_t N = 2U * num_dram_banks + 1U;
+    constexpr uint32_t H = 32U;
+    constexpr uint32_t W = 64U;
+    constexpr float SCALER = 0.25F;
+
+    const auto make_input_host = [&](uint32_t seed) {
+        return ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{N, 1U, H, W}, -2.0F, 2.0F, seed);
+    };
+    const auto make_target_host = [&](uint32_t label) {
+        auto target = xt::zeros<uint32_t>({N, H});
+        target.fill(label);
+        return target;
+    };
+    const auto make_target = [&](const xt::xarray<uint32_t>& host, uint32_t row_alignment) {
+        const auto spec = tt::tt_metal::TensorSpec(
+            ttnn::Shape({N, H}),
+            tt::tt_metal::TensorLayout(
+                ttnn::DataType::UINT32,
+                ttnn::Layout::ROW_MAJOR,
+                ttnn::DRAM_MEMORY_CONFIG,
+                tt::tt_metal::Alignment({1U, row_alignment})));
+        return ttnn::Tensor::from_vector(std::vector<uint32_t>(host.begin(), host.end()), spec, device);
+    };
+
+    const auto input_a_host = make_input_host(201U);
+    const auto input_a_prime_host = make_input_host(202U);
+    const auto input_b_host = make_input_host(203U);
+    const auto input_b_prime_host = make_input_host(204U);
+    const auto target_a_host = make_target_host(2U);
+    const auto target_a_prime_host = make_target_host(3U);
+    const auto target_b_host = make_target_host(1U);
+    const auto target_b_prime_host = make_target_host(5U);
+
+    auto input_a = ttml::core::from_xtensor(input_a_host, device);
+    auto input_a_prime = ttml::core::from_xtensor(input_a_prime_host, device);
+    auto input_b = ttml::core::from_xtensor(input_b_host, device);
+    auto input_b_prime = ttml::core::from_xtensor(input_b_prime_host, device);
+    auto target_a = make_target(target_a_host, 1U);
+    auto target_a_prime = make_target(target_a_prime_host, 1U);
+    auto target_b = make_target(target_b_host, 64U);
+    auto target_b_prime = make_target(target_b_prime_host, 64U);
+
+    ASSERT_EQ(target_a.buffer()->aligned_page_size(), H * sizeof(uint32_t));
+    ASSERT_EQ(target_b.buffer()->aligned_page_size(), 64U * sizeof(uint32_t));
+    EXPECT_NE(target_a.buffer()->address(), target_a_prime.buffer()->address());
+    EXPECT_NE(target_b.buffer()->address(), target_b_prime.buffer()->address());
+
+    const Operation::operation_attributes_t attributes{.scaler = SCALER};
+    EXPECT_NE(
+        Operation::compute_program_hash(
+            attributes,
+            Operation::tensor_args_t{.input = input_a, .target = target_a, .preallocated_output = std::nullopt}),
+        Operation::compute_program_hash(
+            attributes,
+            Operation::tensor_args_t{.input = input_a, .target = target_b, .preallocated_output = std::nullopt}));
+
+    device->disable_and_clear_program_cache();
+    device->enable_program_cache();
+
+    auto output_a = ttnn::prim::ttml_cross_entropy_bw(input_a, target_a, SCALER);
+    const auto entries_after_a = device->num_program_cache_entries();
+    EXPECT_GT(entries_after_a, 0U);
+
+    auto output_a_prime = ttnn::prim::ttml_cross_entropy_bw(input_a_prime, target_a_prime, SCALER);
+    const auto entries_after_a_prime = device->num_program_cache_entries();
+    EXPECT_EQ(entries_after_a_prime, entries_after_a);
+
+    // A has the smaller physical target pitch. Reusing A's program for B stays in bounds but
+    // reads B's row padding as labels once a DRAM bank receives its second page.
+    auto output_b = ttnn::prim::ttml_cross_entropy_bw(input_b, target_b, SCALER);
+    const auto entries_after_b = device->num_program_cache_entries();
+    EXPECT_GT(entries_after_b, entries_after_a_prime);
+
+    auto output_b_prime = ttnn::prim::ttml_cross_entropy_bw(input_b_prime, target_b_prime, SCALER);
+    EXPECT_EQ(device->num_program_cache_entries(), entries_after_b);
+
+    EXPECT_TRUE(xt::allclose(
+        ttml::core::to_xtensor(output_a),
+        calculate_cross_entropy_backward(input_a_host, target_a_host, SCALER),
+        3e-2F,
+        1e-2F));
+    EXPECT_TRUE(xt::allclose(
+        ttml::core::to_xtensor(output_a_prime),
+        calculate_cross_entropy_backward(input_a_prime_host, target_a_prime_host, SCALER),
+        3e-2F,
+        1e-2F));
+    EXPECT_TRUE(xt::allclose(
+        ttml::core::to_xtensor(output_b),
+        calculate_cross_entropy_backward(input_b_host, target_b_host, SCALER),
+        3e-2F,
+        1e-2F));
+    EXPECT_TRUE(xt::allclose(
+        ttml::core::to_xtensor(output_b_prime),
+        calculate_cross_entropy_backward(input_b_prime_host, target_b_prime_host, SCALER),
+        3e-2F,
+        1e-2F));
+
+    device->disable_and_clear_program_cache();
 }
 
 TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Small_Backward) {
