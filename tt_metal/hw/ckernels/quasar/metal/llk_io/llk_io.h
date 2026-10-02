@@ -9,6 +9,20 @@
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h"
 
 #if defined(COMPILE_FOR_TRISC) && (defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK))
+// Whether an op on this side is split over all of this hart's tile counters (one whole-block op
+// shared by every counter): a BLOCKED producer feeding STRIDED consumers, or a BLOCKED consumer fed
+// by STRIDED producers.
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap, bool IsProducer>
+inline bool dfb_op_is_split(const LocalDFBInterface& intf) {
+    if constexpr (Pap == dfb::AccessPattern::UNKNOWN || Cap == dfb::AccessPattern::UNKNOWN) {
+        return intf.split_tc != 0;
+    } else if constexpr (IsProducer) {
+        return Pap == dfb::AccessPattern::BLOCKED && Cap == dfb::AccessPattern::STRIDED;
+    } else {
+        return Pap == dfb::AccessPattern::STRIDED && Cap == dfb::AccessPattern::BLOCKED;
+    }
+}
+
 // Cursor helpers shared by pack (wr_entry_idx) and unpack (rd_entry_idx).
 
 // On a BLOCKED ring one op must cover exactly one block.

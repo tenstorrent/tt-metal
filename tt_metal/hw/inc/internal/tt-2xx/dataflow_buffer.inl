@@ -356,7 +356,7 @@ inline void DataflowBuffer<Pap, Cap>::reserve_back_impl(uint16_t num_entries) {
     ASSERT(num_entries == get_producer_share() || !share_strict);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= dfb_trisc_per_counter(local_dfb_interface_, num_entries));
-    llk_wait_for_free_tiles(logical_dfb_id_, num_entries);
+    llk_wait_for_free_tiles<Pap, Cap>(logical_dfb_id_, num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
     if (producer_broadcast()) {
         // BROADCAST: every consumer reads every entry, so every counter must have room for all of them.
@@ -382,7 +382,7 @@ inline void DataflowBuffer<Pap, Cap>::push_back_impl(uint16_t num_entries) {
     ASSERT(num_entries == get_producer_share() || !share_strict);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= dfb_trisc_per_counter(local_dfb_interface_, num_entries));
-    llk_push_tiles(logical_dfb_id_, num_entries);
+    llk_push_tiles<0x1, Pap, Cap>(logical_dfb_id_, num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
     if (producer_broadcast()) {
         // BROADCAST: post the full count to every counter (every consumer reads every entry).
@@ -415,7 +415,7 @@ inline void DataflowBuffer<Pap, Cap>::wait_front_impl(uint16_t num_entries) {
         return;
     }
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= dfb_trisc_per_counter(local_dfb_interface_, num_entries));
-    llk_wait_tiles(logical_dfb_id_, num_entries);
+    llk_wait_tiles<Pap, Cap>(logical_dfb_id_, num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
     if (consumer_split) {
         // SPLIT: the block belongs to every counter, wait for each one's share.
@@ -441,7 +441,7 @@ inline void DataflowBuffer<Pap, Cap>::pop_front_impl(uint16_t num_entries) {
         return;
     }
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= dfb_trisc_per_counter(local_dfb_interface_, num_entries));
-    llk_pop_tiles(logical_dfb_id_, num_entries);
+    llk_pop_tiles<0x3, Pap, Cap>(logical_dfb_id_, num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
     if (consumer_split) {
         // SPLIT: ack each counter its share of the block and step every bookmark past it.
