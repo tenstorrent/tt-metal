@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include <map>
 #include <memory>
 #include <optional>
+#include <string>
 #include "tt_metal/fabric/fabric_router_builder.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
@@ -130,6 +132,13 @@ private:
      * @param downstream_router The target router to connect to
      */
     void establish_connections_to_router(ComputeMeshRouterBuilder& downstream_router);
+
+    /**
+     * The preprocessor defines the router kernel is compiled with.
+     *
+     * @param is_2D_routing Whether the fabric uses 2D routing (no defines are set otherwise)
+     */
+    std::map<std::string, std::string> kernel_defines(bool is_2D_routing) const;
 
     /**
      * Map router-level injection flags to a child builder variant's channel space.
