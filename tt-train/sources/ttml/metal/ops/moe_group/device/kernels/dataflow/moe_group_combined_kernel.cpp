@@ -577,22 +577,30 @@ void kernel_main() {
             bool is_last_chunk = (chunk == num_chunks - 1U);
             uint32_t read_bytes = is_last_chunk ? last_chunk_bytes : hidden_chunk_bytes;
             uint32_t pad_bytes = hidden_chunk_bytes - read_bytes;
+            bool zeros_pending = false;
 
             for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
                 uint32_t src = plan_l1_buf[r];
                 uint32_t row_off = r * hidden_chunk_bytes;
                 if (src == SENTINEL) {
                     noc.async_write_zeros(src0_cb, hidden_chunk_bytes, {.offset_bytes = row_off});
+                    zeros_pending = true;
                 } else {
                     uint64_t row_noc = dispatched_addrgen.get_noc_addr(src, chunk_off_bytes);
                     noc_async_read(row_noc, dst + row_off, read_bytes);
-                    if (pad_bytes > 0U) {
-                        noc.async_write_zeros(src0_cb, pad_bytes, {.offset_bytes = row_off + read_bytes});
-                    }
                 }
             }
             noc_async_read_barrier();
-            noc.write_zeros_l1_barrier();
+            if (zeros_pending) {
+                noc.write_zeros_l1_barrier();
+            }
+            if (pad_bytes > 0U) {
+                for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
+                    if (plan_l1_buf[r] != SENTINEL) {
+                        fill_bfloat16_zeros_local(dst + r * hidden_chunk_bytes + read_bytes, pad_bytes);
+                    }
+                }
+            }
             cb_push_back(cb_src0, tiles_per_chunk);
         }
     }

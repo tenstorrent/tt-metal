@@ -233,25 +233,23 @@ void kernel_main() {
                     noc_async_read(dst_noc, row_buf, chunk_bytes);
                 }
                 noc_async_read_barrier();
-                // Zero the partial-last-tile tail AFTER the reads complete:
-                // doing it before the barrier would race with NOC writes that
-                // can land slightly after their request size due to packet
-                // alignment, overwriting the pad with neighbour-row bytes.
+                if (zeros_pending) {
+                    // SENTINEL fills went through async_write_zeros; restore
+                    // the write path before write_chunk's NoC writes.
+                    noc.write_zeros_l1_barrier();
+                }
+                // The valid row can end at any BF16 boundary, while
+                // async_write_zeros requires a 16-byte-aligned destination on
+                // Wormhole and Blackhole. Fill the partial tail locally after
+                // the reads complete instead.
                 if (pad_bytes > 0U) {
                     for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
                         uint32_t flat = plan_buf[r];
                         if (flat == SENTINEL) {
                             continue;
                         }
-                        fill_zeros_async(noc, cb_existing_rm, pad_bytes, r * hidden_chunk_bytes + chunk_bytes);
-                        zeros_pending = true;
+                        fill_bfloat16_zeros_local(existing_l1 + r * hidden_chunk_bytes + chunk_bytes, pad_bytes);
                     }
-                }
-                if (zeros_pending) {
-                    // SENTINEL and pad fills went through async_write_zeros; one
-                    // barrier covers the whole batch and restores the write path
-                    // (Quasar zero mode) before write_chunk's NoC writes.
-                    noc.write_zeros_l1_barrier();
                 }
                 cb_push_back(cb_existing_rm, tt::constants::TILE_HEIGHT);
             };

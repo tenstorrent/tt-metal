@@ -332,6 +332,17 @@ TEST_F(MoeGroupTest, NonTileAlignedH) {
     check_against_reference(make_inputs(D, B, S, H, E, K), leids, K);
 }
 
+TEST_F(MoeGroupTest, MisalignedTailSingleAndMultiChunk) {
+    constexpr uint32_t D = 1, B = 1, S = 1, E = 1, K = 1;
+    const std::vector<uint16_t> leids = {0};
+
+    // H=65 ends the single chunk at L1 offset 130; H=2049 ends the
+    // second chunk at offset 1986. Neither is 16-byte aligned, so the old
+    // NOC-based tail fill violates the WH/BH local-L1 zeroing contract.
+    check_against_reference(make_inputs(D, B, S, /*H=*/65, E, K), leids, K);
+    check_against_reference(make_inputs(D, B, S, /*H=*/2049, E, K), leids, K);
+}
+
 TEST_F(MoeGroupTest, ExpertZeroActive) {
     constexpr uint32_t D = 2, B = 1, S = 32, H = 64;
     constexpr uint32_t E = 4, K = 2;

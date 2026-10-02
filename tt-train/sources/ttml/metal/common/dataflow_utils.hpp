@@ -179,6 +179,20 @@ inline void fill_zeros_async(const Noc& noc, uint32_t cb_id, uint32_t bytes, uin
     noc.async_write_zeros(cb, bytes, {.offset_bytes = offset_bytes});
 }
 
+/**
+ * Zero-fill a BF16 L1 span with local stores.
+ *
+ * Unlike Noc::async_write_zeros, this supports destinations that are only
+ * BF16-aligned. Callers must wait for any NOC transfer targeting the span
+ * before invoking this helper.
+ */
+inline void fill_bfloat16_zeros_local(uint32_t write_addr, uint32_t bytes) {
+    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(write_addr);
+    for (uint32_t i = 0; i < bytes / sizeof(uint16_t); ++i) {
+        ptr[i] = 0U;
+    }
+}
+
 // Fills a tile (32x32 bfloat16 values) with a single bfloat16 value.
 // This avoids writing 1024 individual 16-bit values by packing them into 512 32-bit writes.
 void generate_tile_with_bfloat16_value(const uint32_t cb_id, const uint16_t bf16_value) {

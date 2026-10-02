@@ -207,6 +207,13 @@ TEST_F(MoeUngroupTest, GroupUngroupRoundTripNonTileAlignedH) {
     check_group_ungroup_roundtrip(/*D=*/2, /*B=*/1, /*S=*/32, /*H=*/80, /*E=*/4, /*K=*/2);
 }
 
+TEST_F(MoeUngroupTest, GroupUngroupRoundTripMisalignedTailSingleAndMultiChunk) {
+    // Exercise both the one-chunk and two-chunk paths with final BF16 row
+    // boundaries that are not 16-byte aligned.
+    check_group_ungroup_roundtrip(/*D=*/1, /*B=*/1, /*S=*/1, /*H=*/65, /*E=*/1, /*K=*/1);
+    check_group_ungroup_roundtrip(/*D=*/1, /*B=*/1, /*S=*/1, /*H=*/2049, /*E=*/1, /*K=*/1);
+}
+
 TEST_F(MoeUngroupTest, GroupUngroupRoundTripLargerS) {
     check_group_ungroup_roundtrip(/*D=*/2, /*B=*/1, /*S=*/128, /*H=*/64, /*E=*/4, /*K=*/2);
 }
