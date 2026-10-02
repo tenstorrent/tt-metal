@@ -503,7 +503,7 @@ static void test_single_core_copy_num_contiguous_pages(
     constexpr CoreCoord grid = {0, 0};
     const auto data_format = datatype_to_dataformat_converter(params.dtype);
 
-    // Several pages per transfer, so runs longer than one page are actually exercised.
+    // More than one page per transfer, so multi-page runs are exercised.
     constexpr uint32_t cb_num_pages = 4;
     CBHandle cb_idx = tt::CBIndex::c_0;
     auto cb_config = CircularBufferConfig(aligned_page_size * cb_num_pages, {{cb_idx, data_format}})
@@ -517,7 +517,6 @@ static void test_single_core_copy_num_contiguous_pages(
     const auto output_compile_time_args = output_accessor_args.get_compile_time_args();
     compile_time_args.insert(compile_time_args.end(), output_compile_time_args.begin(), output_compile_time_args.end());
     compile_time_args.push_back(cb_idx);
-    compile_time_args.push_back(aligned_page_size);
     compile_time_args.push_back(input_buffer->num_pages());
     compile_time_args.push_back(cb_num_pages);
 
