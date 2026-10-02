@@ -1441,22 +1441,26 @@ class OptimizedDecoder(LightweightModule):
         mlp_out = self._mlp(ln2, B, sharded=True)
         return ttnn.add(h, mlp_out)
 
-    def _shard_kv(self, kv, B, y0=0):
-        """Height-shard one user per core from core row ``y0`` (an offset keeps K and V on disjoint cores
-        for paged_fused_update_cache)."""
-        nkv = self.cfg.num_kv_heads
-        nkv32 = ((nkv + TILE - 1) // TILE) * TILE
+    def _kv_shard_memcfg(self, B, y0=0):
+        nkv32 = ((self.cfg.num_kv_heads + TILE - 1) // TILE) * TILE
         row = 8
         core_grid = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, y0), ttnn.CoreCoord((B - 1) % row, y0 + (B - 1) // row))}
         )
-        mem = ttnn.create_sharded_memory_config(
+        return ttnn.create_sharded_memory_config(
             shape=(nkv32, self.cfg.head_dim),
             core_grid=core_grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
+
+    def _shard_kv(self, kv, B, y0=0):
+        """Height-shard one user per core from core row ``y0`` (an offset keeps K and V on disjoint cores
+        for paged_fused_update_cache). An input already in that layout (the fused RoPE's K) passes through."""
+        mem = self._kv_shard_memcfg(B, y0)
+        if kv.is_sharded() and kv.memory_config() == mem:
+            return kv
         return ttnn.to_memory_config(kv, mem)
 
     def _seq_kv_write(self, cache, kv_sh, cur_pos, page_table, B):
@@ -1531,10 +1535,12 @@ class OptimizedDecoder(LightweightModule):
         )
         return ttnn.to_memory_config(t, mem)
 
-    def _fused_rope_decode(self, x, cos_sh, sin_sh, nheads, B):
+    def _fused_rope_decode(self, x, cos_sh, sin_sh, nheads, B, sharded_out_cfg=None):
         """Fused HF rotate_half decode RoPE for one of q/k. Partial rotary (rd<hd, full-attn layers)
         handled by slicing the rotary lanes, fusing, and concatenating the pass-through — numerically
-        identical to _apply_rope (both HF rotate_half over the same cos/sin)."""
+        identical to _apply_rope (both HF rotate_half over the same cos/sin). ``sharded_out_cfg``: when the
+        height-sharded RoPE output already has this memory config (K vs. the KV-cache write layout), return
+        it sharded instead of moving it to DRAM."""
         cfg = self.cfg
         rd, hd = cfg.rotary_dim, cfg.head_dim
         if x.dtype != ttnn.bfloat16:
@@ -1546,6 +1552,8 @@ class OptimizedDecoder(LightweightModule):
             x_pass = ttnn.slice(x, [0, 0, 0, rd], [1, B, nheads, hd])
         x_sh = self._shard_batch(x_rot, nheads, rd, B)
         out_sh = ttnn.experimental.rotary_embedding_hf(x_sh, cos_sh, sin_sh, is_decode_mode=True)
+        if x_pass is None and sharded_out_cfg is not None and out_sh.memory_config() == sharded_out_cfg:
+            return out_sh
         out = ttnn.sharded_to_interleaved(out_sh, ttnn.DRAM_MEMORY_CONFIG)
         if x_pass is None:
             return out

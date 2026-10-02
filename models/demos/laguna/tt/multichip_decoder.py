@@ -1354,7 +1354,9 @@ class MultichipDecoder(OptimizedDecoder):
             cos_sh = self._shard_cossin(cos, B, cfg.rotary_dim)
             sin_sh = self._shard_cossin(sin, B, cfg.rotary_dim)
             q = self._fused_rope_decode(q, cos_sh, sin_sh, cfg.num_heads, B)
-            k = self._fused_rope_decode(k, cos_sh, sin_sh, cfg.num_kv_heads, B)
+            # K straight from the RoPE's height shard into the KV write (no s2i to DRAM + reshard) when the
+            # layouts coincide (full-rotary layers)
+            k = self._fused_rope_decode(k, cos_sh, sin_sh, cfg.num_kv_heads, B, self._kv_shard_memcfg(B))
         else:
             q = self._apply_rope(q, cos, sin)
             k = self._apply_rope(k, cos, sin)
