@@ -34,7 +34,7 @@ from loguru import logger
 
 import ttnn
 
-from ....layers.module import Module, Parameter
+from ....layers.module import Module, Parameter, release_device_cache
 from ....utils.conv3d import _FP32_BLOCKINGS, _ntuple, aligned_channels, get_conv3d_config, register_conv3d_configs
 from ....utils.tensor import local_device_to_torch
 
@@ -311,6 +311,11 @@ class MiniMaxH3CausalConv3d(Module):
         for dim, before, after in zip(dims, pad_left, pad_right):
             x_BTHWC = reflect_edge_correction(x_BTHWC, dim, before, after, edge_masks=self._edge_masks.get(dim))
         return x_BTHWC
+
+    def deallocate_weights(self) -> None:
+        super().deallocate_weights()
+        # Eviction must take the lazily cached device constants with the weights (see `release_device_cache`).
+        release_device_cache(self._causal_zeros)
 
     def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
         """``x_BTHWC``: ``(B, T, H, W, C)`` ROW_MAJOR, C already tile-aligned."""
