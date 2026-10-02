@@ -345,6 +345,23 @@ is work the plugin and vLLM do around the call. The steady-state figures also co
 traced-decode numbers reproduce through the adapter rather than only through `generate()`:
 58.3 ms against 60.3 ms at batch 1, and 89.1 ms against 89.5 ms at batch 8.
 
+The served configuration was also missing every optimization flag `tests/run_ci.sh` sets, which
+is a second and larger reason the served numbers were poor. Measured on this mesh at batch 8
+with all ten set against none:
+
+| batch 8 | no flags | all flags | gain |
+| --- | ---: | ---: | ---: |
+| plugin reload path | 93.60 ms | 83.52 ms | 10.8% |
+| steady state | 89.10 ms | 78.28 ms | 12.1% |
+
+With eight slots active the decode bucket equals the batch, so that figure is what compact
+decode attention and MLP plus batched RoPE are worth; the bucket is worth more and separately.
+Without `QWEN_DECODE_BUCKETS` every step takes the full batch-8 shape however few requests are
+active, so one user pays 89.1 ms for one token where a batch-1 step costs 58.3 ms. Without
+`QWEN_BATCHED_PREFILL` prefill serves one request at a time, which is why a served TTFT of
+344 ms at one request became 3482 ms at eight. Every local figure recorded above this section
+was also measured without these flags, so they understate the model path too.
+
 `reset_batch` is what separates the two arms. `decode_forward` treats it as
 `refresh = reset_batch or not self._decode_bound or ...`, and a refresh rebinds sampling and
 rewrites tokens and positions from host; the plugin passes it on every step while it reports
