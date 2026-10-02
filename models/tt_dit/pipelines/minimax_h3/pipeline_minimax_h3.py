@@ -1349,7 +1349,6 @@ class MiniMaxH3Pipeline:
             is_fsdp=self.dit_fsdp,
             # Bucketed rungs each pin their own K/V gather pair; size one at the top rung for all.
             kv_gather_capacity=self.bucket_ladder[-1] if self.bucket_denoise else None,
-            # use_persistent_ccl_buffers=self.use_persistent_ccl_buffers,
         )
 
     def _prepare_transformer(self) -> MiniMaxH3Transformer3DModel:

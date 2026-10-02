@@ -806,13 +806,6 @@ def _set_tpad_tail_local(x_BTC, tpad_image, *, mode, mesh_device, parallel_confi
     return x_BTC
 
 
-# The zero padding below is done with ``ttnn.pad``: one device kernel that writes the zeros itself. It
-# replaces a per-shape cache of ``ttnn.zeros`` constants (host-built, so they had to be cached for trace
-# capture) that grew without bound -- every new clip length added activation-sized zero blocks that
-# were never released (~210 MiB per DRAM bank over the 16 warmup lengths on the 4x8 Wormhole Galaxy).
-# ``ttnn.pad`` is a device op, so it traces, and allocates nothing that outlives the call.
-
-
 def _zero_pad_t(x_BTC: ttnn.Tensor, pad_left: int, pad_right: int, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
     """Zero-pad along the T axis."""
     if pad_left == 0 and pad_right == 0:
