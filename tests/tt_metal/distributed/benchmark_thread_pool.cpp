@@ -2,17 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Fan-out latency of the host thread pools: per-task hand-off cost on the caller, submit->start latency
-// after an idle gap, join cost, and CPU spent by the workers.
-//
-// Each iteration keeps the caller busy for `gap_us` (host work between ops), then submits
-// `tasks_per_worker` tasks to each of `workers` workers, each busy for `work_ns`, and joins.
-// Only the submit and join are timed. The pass-through pool runs the same tasks inline and is the
-// serial reference.
-//
-// The default grid is sized for a regression run; TT_POOL_BENCH_FULL=1 registers the full grid.
-// TT_POOL_BENCH_WORKERS sets the device-bound pool size (default 32) and TT_POOL_BENCH_CALLER_CPU pins
-// the calling thread.
+// Fan-out latency of the host thread pools. Each iteration keeps the caller busy for gap_us, gives each of `workers`
+// workers tasks_per_worker tasks of work_ns, and joins; only submit and join are timed. PassThrough is the serial
+// reference.
+// TT_POOL_BENCH_FULL=1 runs the full grid, TT_POOL_BENCH_WORKERS sets the pool size (32), TT_POOL_BENCH_CALLER_CPU
+// pins the caller.
 
 #include <benchmark/benchmark.h>
 
@@ -89,8 +83,7 @@ void pin_caller() {
     (void)pinned;
 }
 
-// Pools are created once per process: core assignment advances a process-wide counter on every pool
-// creation, so recreating them per benchmark would move workers onto different cores.
+// Created once: every pool creation moves later pools to other cores.
 struct DeviceBoundPool {
     static constexpr const char* name = "DeviceBound";
     static constexpr bool runs_on_caller = false;
@@ -115,7 +108,6 @@ struct alignas(64) TaskTimes {
     int64_t end = 0;
 };
 
-// Submits one fan-out. Batched submit APIs get their own variant of this function.
 template <typename MakeTask>
 void submit_fan_out(ThreadPool& pool, uint32_t workers, uint32_t tasks_per_worker, const MakeTask& make_task) {
     for (uint32_t t = 0; t < tasks_per_worker; t++) {
@@ -140,7 +132,7 @@ void BM_FanOut(benchmark::State& state) {
     const uint32_t num_tasks = workers * tasks_per_worker;
     std::vector<TaskTimes> times(num_tasks);
     std::vector<double> wall_us, submit_us, first_start_us, last_start_us, join_us;
-    // Padding makes the capture exceed the callable's small buffer, as the dispatch captures do.
+    // Exceeds the callable's small buffer, like the dispatch captures.
     std::array<char, PadBytes> pad{};
     auto make_task = [&times, work_ns, &pad](uint32_t i) {
         return [slot = &times[i], work_ns, pad]() {
@@ -193,8 +185,7 @@ void BM_FanOut(benchmark::State& state) {
     if (!Pool::runs_on_caller) {
         const double worker_cpu_s = (self_after.cpu_s - self_before.cpu_s) - (caller_after.cpu_s - caller_before.cpu_s);
         const double task_cpu_s = iters * num_tasks * work_ns * 1e-9;
-        // Cores kept busy by the workers beyond the task bodies (spinning, wake-ups, queue operations),
-        // averaged over the run including the idle gaps.
+        // Worker CPU beyond the task bodies, averaged over the run.
         state.counters["worker_overhead_cores"] = (worker_cpu_s - task_cpu_s) / run_s;
         state.counters["worker_parks"] = ((self_after.voluntary_switches - self_before.voluntary_switches) -
                                           (caller_after.voluntary_switches - caller_before.voluntary_switches)) /
@@ -223,15 +214,13 @@ void register_pool() {
         register_fan_out<Pool, 64>({{32}, {1}, {600}, {0, 63}}, 2000);
         return;
     }
-    // Measured on GLM-5.2 and Kimi K2.7 chunked prefill on a Blackhole Galaxy (#57586): a per-device command write
-    // takes 0.6 us at the median and 1.3 us at p90, and the host spends 63 us between enqueues at the median and
-    // 144 us at p90.
+    // p50/p90 per-device write and host gap in GLM-5.2 and Kimi K2.7 prefill (#57586).
     register_fan_out<Pool, 0>({{8, 32}, {1}, {600, 1300}, {0, 63, 144}}, 5000);
     // Chunked fan-out.
     register_fan_out<Pool, 0>({{32}, {4}, {600}, {0}}, 5000);
     // Capture larger than the callable's small buffer.
     register_fan_out<Pool, 64>({{32}, {1}, {600}, {0}}, 5000);
-    // Parked workers: the dispatch pool's fan-outs in those models are ~10 ms apart.
+    // Parked workers: the dispatch pool's fan-outs are ~10 ms apart in those models.
     register_fan_out<Pool, 0>({{32}, {1}, {600}, {10000}}, 300);
 }
 
@@ -243,9 +232,7 @@ const bool registered = [] {
 
 }  // namespace
 
-// Bulk enqueue throughput, kept from the earlier benchmark: N tasks of a 20 us sleep round-robin over the workers,
-// then one wait(). Each run makes its own pool, so it is registered after the fan-out benchmarks above, whose pools
-// would otherwise move to other cores.
+// Bulk enqueue throughput. Registered last because it creates a pool per run.
 template <typename ThreadPoolCreator>
 static void BM_ThreadPool(benchmark::State& state, ThreadPoolCreator create_thread_pool) {
     uint32_t num_threads = tt::parse_env("TT_METAL_NUM_BENCHMARK_THREADS", 8);
