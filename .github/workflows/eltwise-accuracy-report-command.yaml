@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 
-# Two copies kept in step: tt-metal `.github/workflows/accuracy-report-command.yaml`, and
-# tenstorrent/tt-eltwise-accuracy-report `docs/tt-metal-accuracy-report-command.yaml`.
+# Two copies kept in step: tt-metal `.github/workflows/eltwise-eltwise-accuracy-report-command.yaml`, and
+# tenstorrent/tt-eltwise-accuracy-report `docs/tt-metal-eltwise-accuracy-report-command.yaml`.
 # Setup, tokens and what it measures: that repository's `docs/pr-command.md`.
 
-name: accuracy-report-command
+name: eltwise-accuracy-report-command
 
 # Quoted: a bare `#` would start a comment.
-run-name: "/accuracy-report on #${{ github.event.issue.number }}"
+run-name: "/eltwise-accuracy-report on #${{ github.event.issue.number }}"
 
 on:
   issue_comment:
@@ -26,14 +26,14 @@ env:
 jobs:
   dispatch:
     # Forks inherit this file but not the secret; without the repo guard they answer with a failure.
-    # Gated like `/test`: an outsider starts no run. Exact, or `/accuracy-reporting` would fire it.
+    # Gated like `/test`: an outsider starts no run. Exact, or `/eltwise-accuracy-reporting` would fire it.
     if: "github.repository == 'tenstorrent/tt-metal'
       && github.event.issue.pull_request != null
       && contains(fromJSON('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'),
                   github.event.comment.author_association)
-      && (github.event.comment.body == '/accuracy-report'
-          || startsWith(github.event.comment.body, '/accuracy-report ')
-          || startsWith(github.event.comment.body, '/accuracy-report\n'))"
+      && (github.event.comment.body == '/eltwise-accuracy-report'
+          || startsWith(github.event.comment.body, '/eltwise-accuracy-report ')
+          || startsWith(github.event.comment.body, '/eltwise-accuracy-report\n'))"
     runs-on: ubuntu-slim
     # Two API calls and a 30s wait; longer means a hung `gh`.
     timeout-minutes: 10
@@ -42,7 +42,7 @@ jobs:
         shell: bash -euo pipefail {0}
     # One per PR. The default group would be shared, since `github.ref` is always `main`.
     concurrency:
-      group: accuracy-report-command-${{ github.event.issue.number }}
+      group: eltwise-accuracy-report-command-${{ github.event.issue.number }}
     steps:
       # The real control: the gate above admits read-only collaborators and all org members.
       - name: Refuse anyone without write access
@@ -61,7 +61,7 @@ jobs:
           fi
           case "$level" in
             admin|maintain|write) echo "$ACTOR may run this" ;;
-            *) echo "::error::$ACTOR has $level access; /accuracy-report needs write"; exit 1 ;;
+            *) echo "::error::$ACTOR has $level access; /eltwise-accuracy-report needs write"; exit 1 ;;
           esac
 
       - name: Start the run
@@ -99,7 +99,7 @@ jobs:
             sleep 5
             id=$(gh run list --repo "$ORACLE" --workflow accuracy-command.yml \
               --limit 20 --json databaseId,createdAt,name 2>/dev/null \
-              | jq -r --arg name "accuracy-report for tt-metal#$PR" --arg since "$since" \
+              | jq -r --arg name "eltwise-accuracy-report for tt-metal#$PR" --arg since "$since" \
                 '[.[] | select(.name == $name and .createdAt >= $since)]
                  | sort_by(.createdAt) | last | .databaseId // empty' || true)
             [ -z "$id" ] || break
@@ -122,7 +122,7 @@ jobs:
             body="$body Informational: it does not gate this pull request."
           else
             # This run's log: the `gh` error is there, not on the oracle.
-            body="\`/accuracy-report\` could not start a run on \`$ORACLE\`, most likely a"
+            body="\`/eltwise-accuracy-report\` could not start a run on \`$ORACLE\`, most likely a"
             body="$body missing \`ACCURACY_REPORT_DISPATCH_TOKEN\`."
             body="$body [Log]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."
           fi
