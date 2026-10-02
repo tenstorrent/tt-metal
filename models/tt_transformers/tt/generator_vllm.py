@@ -38,6 +38,43 @@ from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup
 
 
+def _canonical_shared_kv_shapes(per_layer_specs) -> dict:
+    """Resolve one allocation shape per shared KV buffer (``tensor_idx``).
+
+    HMA sharing can put layers with different views on one buffer (gemma4
+    hybrid: sliding kv=2 x head_dim=256 and full-attention kv=1 x 512 per
+    device). The buffer takes the FIRST layer's view (in layer order that is
+    the sliding view), which is the layout the paged kernels reinterpret
+    correctly: a fewer-heads layer writing/reading a more-heads buffer via
+    ``effective_block_size`` serves coherently; the reverse (allocating at
+    the wider full-attention view) corrupts sliding-layer KV even on a
+    single-chunk prompt (measured 2026-10-02, 31B hybrid). The chunked
+    prefill SDPA still lacks that reinterpretation (tt-metal op work), so
+    hybrid multi-chunk prefill stays blocked regardless of this choice.
+
+    The larger ``num_blocks`` of the views sizes the buffer (a shrunk sliding
+    spec must not undersize a buffer a full-attention layer also reads), and
+    views that disagree on per-block element counts raise: the kernels'
+    byte-invariant reinterpretation is impossible then (seen when vLLM
+    unified page sizes with a 128-token full-attention block against a
+    64-token sliding block before the spec reported replicated heads).
+    """
+    canonical: dict = {}
+    for kv_cache_shape, _dtype, tensor_idx in per_layer_specs:
+        nb, heads, bs, hd = kv_cache_shape
+        cur = canonical.get(tensor_idx)
+        if cur is None:
+            canonical[tensor_idx] = tuple(kv_cache_shape)
+            continue
+        if cur[1] * cur[2] * cur[3] != heads * bs * hd:
+            raise ValueError(
+                f"KV buffer {tensor_idx} shared by layers with different "
+                f"per-block element counts: {cur} vs {tuple(kv_cache_shape)}"
+            )
+        canonical[tensor_idx] = (max(cur[0], nb), *cur[1:])
+    return canonical
+
+
 def allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model: List[Transformer], tt_cache_path):
     """Allocate KV cache tensors with optional cross-layer DRAM sharing.
 
@@ -59,6 +96,7 @@ def allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model: List[Transformer
         ``layer_idx`` entries may refer to the same underlying tensor
         objects when they share a ``tensor_idx``.
     """
+    canonical_shape = _canonical_shared_kv_shapes(per_layer_specs)
     submesh_devices = [model.mesh_device for model in dp_model]
     kv_cache = []
     for mesh_idx, submesh in enumerate(submesh_devices):
@@ -73,6 +111,7 @@ def allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model: List[Transformer
             if existing is not None:
                 kv_tt.append(existing)
                 continue
+            kv_cache_shape = canonical_shape[tensor_idx]
             cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
             # Get the dtype for the kv cache based on the configured optimizations in the model
             if dp_model[mesh_idx].args.optimizations is not None:

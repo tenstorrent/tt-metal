@@ -386,14 +386,32 @@ class ChunkedPrefillPageTableGuardMixin:
         """
         block_size = get_block_size(kv_cache)
         for i, layer in enumerate(getattr(self.model[0], "layers", [])):
-            cfg = getattr(getattr(layer, "self_attn", None), "config", None)
+            attn = getattr(layer, "self_attn", None)
+            cfg = getattr(attn, "config", None)
             if cfg is None or i >= len(kv_cache) or kv_cache[i] is None:
                 continue
             cache = kv_cache[i][0]
             cache_hd = int(cache.shape[-1])
             if cache_hd != int(cfg.head_dim) and cache_hd > 0:
-                # HMA-shared buffer: byte-invariant reinterpret for this layer's head_dim.
-                return int(cache.shape[2]) * cache_hd // int(cfg.head_dim)
+                # HMA-shared buffer: the byte-invariant reinterpret for this
+                # layer's view must include the kv-head factor, not just head_dim
+                # (operations.effective_block_size). Scaling by head_dim alone
+                # gave 128 for a sliding layer (kv=2 x 256) sharing a buffer
+                # allocated at the full-attention view (kv=1 x 64 x 512): the
+                # page table was then trimmed to one block per 128 tokens while
+                # the kernel addressed 64-token blocks, and the first warmup
+                # fill TT_FATAL'd on the width check.
+                tp = int(getattr(getattr(attn, "mesh_config", None), "tp", 1) or 1)
+                weights = getattr(attn, "weights", None)
+                kv_local = 1 if getattr(weights, "kv_replicated", False) else max(1, int(cfg.num_key_value_heads) // tp)
+                numer = int(cache.shape[1]) * int(cache.shape[2]) * cache_hd
+                denom = kv_local * int(cfg.head_dim)
+                if numer % denom:
+                    raise ValueError(
+                        f"layer {i}: KV buffer view {tuple(cache.shape)} is not a whole "
+                        f"number of {kv_local}x{cfg.head_dim} blocks"
+                    )
+                return numer // denom
         return block_size
 
     def _paged_prefill_block_size(self, kv_cache):
@@ -832,6 +850,55 @@ class ChunkedPrefillPageTableGuardMixin:
                 # slot 0 legitimately starts at block id 0, and a falsy key
                 # would silently bypass the pool for that request.
                 req_key = int(pt2d[0, 0]) + 1
+        # Slot source: global_user_id is only forwarded on lane-sharded paths
+        # (measured None here on the baseline serving path); the plain per-call
+        # slot arrives as the user_id kwarg. Batched prefill passes a list —
+        # leave those on the legacy key (batched requires num_cached==0, where
+        # the cold-start reset already isolates requests).
+        _slot_src = _gid if isinstance(_gid, int) else kwargs.get("user_id")
+        if req_key is not None and isinstance(_slot_src, int):
+            # Prefix caching makes first-block ids COLLIDE across requests
+            # sharing a cached prefix, and a cache-hit resume starts at
+            # chunk_start>0 so the cold-start stash reset never runs: the
+            # resume then consumed the previous same-prefix request's final
+            # window tail (cross-request contamination, apc_gate3 garbles).
+            # Bind identity to the slot plus a per-slot generation instead:
+            # a call whose start offset is not the slot's expected
+            # continuation offset begins a new generation, so its stash
+            # lookup misses and the sliding path rebuilds the tail from the
+            # paged pool. Scheduler-grant continuations (start == expected)
+            # keep their generation and their exact bf16 stash. A new request
+            # landing exactly on the previous occupant's expected offset is
+            # the residual collision window; slot release isn't visible here.
+            _slot = int(_slot_src)
+            _start = int(num_cached_tokens or 0)
+            _gens = getattr(self, "_g4_slot_tail_gen", None)
+            if _gens is None:
+                _gens = {}
+                self._g4_slot_tail_gen = _gens
+            _gen, _expected = _gens.get(_slot, (0, None))
+            if _start == 0 or _expected is None or _start != _expected:
+                if _gen:
+                    # Free the previous generation's pool slot / spill clone on
+                    # every layer, or dead keys exhaust the 33-slot pool and
+                    # grow the spill dict unboundedly (one key per request).
+                    _stale = ((_slot + 1) << 24) + _gen
+                    for _m in self.model:
+                        for _layer in getattr(_m, "layers", []):
+                            _attn = getattr(_layer, "self_attn", None)
+                            if _attn is not None and hasattr(_attn, "_release_sliding_prefill_tail"):
+                                _attn._release_sliding_prefill_tail(req_key=_stale)
+                _gen += 1
+            _gens[_slot] = (_gen, _start + int(tokens.shape[-1]))
+            req_key = ((_slot + 1) << 24) + _gen
+        if os.environ.get("GEMMA4_DEBUG_PAGED_TAIL", "0") != "0":
+            logger.info(
+                "tail-key: gid={} start={} width={} req_key={}",
+                _gid,
+                int(num_cached_tokens or 0),
+                int(tokens.shape[-1]),
+                req_key,
+            )
         for model in self.model:
             for layer in getattr(model, "layers", []):
                 cfg = getattr(getattr(layer, "self_attn", None), "config", None)
