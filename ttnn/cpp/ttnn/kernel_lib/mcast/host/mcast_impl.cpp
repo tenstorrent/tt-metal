@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/kernel_lib/mcast/host/mcast_host_impl.hpp"
-#include "ttnn/kernel_lib/mcast/mcast_compile_time_args.hpp"
+#include "ttnn/kernel_lib/mcast/host/mcast_impl.hpp"
+#include "ttnn/kernel_lib/mcast/mcast_protocol.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -150,12 +150,6 @@ bool same_encoding(wire::SenderCoordinateMetadata left, wire::SenderCoordinateMe
            left.x_ranges == right.x_ranges && left.y_ranges == right.y_ranges;
 }
 }  // namespace
-
-std::vector<uint32_t> detail::absent_mcast_compile_time_args() {
-    std::vector<uint32_t> args(wire::ABSENT_CT_WORDS);
-    args[0] = wire::ABSENT;
-    return args;
-}
 
 McastImpl::Group::Group(
     CoreRangeSet receivers, std::vector<CoreCoord> senders, std::optional<uint32_t> ack_count_override) :

@@ -6,8 +6,8 @@
 #include <algorithm>
 #include <array>
 #include <set>
-#include "ttnn/kernel_lib/mcast/host/mcast_host.hpp"
-#include "ttnn/kernel_lib/mcast/mcast_compile_time_args.hpp"
+#include "ttnn/kernel_lib/mcast/host/mcast.hpp"
+#include "ttnn/kernel_lib/mcast/mcast_protocol.hpp"
 #include "ttnn_test_fixtures.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
@@ -365,9 +365,18 @@ TEST_F(McastFixture, DescriptorSpecAndDirectAttachmentParity) {
     auto direct = channel;
     tt::tt_metal::Program program;
     direct.append_semaphores(program);
-    const auto offsets = direct.append_kernel_args_to(direct_ct, direct_rt, receivers);
-    EXPECT_EQ(offsets.compile_time, 1u);
-    EXPECT_EQ(offsets.runtime, 2u);
+    const auto ct_offset = static_cast<uint32_t>(direct_ct.size());
+    const auto rt_offset = static_cast<uint32_t>(
+        std::max_element(direct_rt.begin(), direct_rt.end(), [](const auto& lhs, const auto& rhs) {
+            return lhs.second.size() < rhs.second.size();
+        })->second.size());
+    EXPECT_EQ(ct_offset, 1u);
+    EXPECT_EQ(rt_offset, 2u);
+    direct.append_compile_time_args_to(direct_ct);
+    for (auto& [core, args] : direct_rt) {
+        args.resize(rt_offset, 0u);
+        direct.append_runtime_args_to(args, core);
+    }
     EXPECT_EQ(direct_ct, kernel.compile_time_args);
     EXPECT_EQ(direct_rt, kernel.runtime_args);
     EXPECT_EQ(kernel.runtime_args.front().second.at(1), 0u);

@@ -4,9 +4,9 @@
 // Attaches multicast to Metal 2.0 ProgramSpec using named semaphore bindings and compile-time/runtime metadata.
 // Validates kernel placement and names, populates run arguments, and supports absent channels.
 
-#include "ttnn/kernel_lib/mcast/host/mcast_host_impl.hpp"
-#include "ttnn/kernel_lib/mcast/mcast_compile_time_args.hpp"
-#include "ttnn/kernel_lib/mcast/mcast_spec_common.hpp"
+#include "ttnn/kernel_lib/mcast/host/mcast_impl.hpp"
+#include "ttnn/kernel_lib/mcast/mcast_protocol.hpp"
+#include "ttnn/kernel_lib/mcast/mcast_common_metal2.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -31,7 +31,7 @@ using tt::tt_metal::CoreRangeSet;
 using tt::tt_metal::NOC;
 
 std::string spec_name(std::string_view prefix, std::string_view field) {
-    return std::string(prefix) + TT_MCAST_SPEC_STRING(TT_MCAST_SPEC_STEM) + std::string(field);
+    return std::string(prefix) + TT_MCAST_METAL2_STRING(TT_MCAST_METAL2_STEM) + std::string(field);
 }
 
 CoreRangeSet node_ranges(const m2::Nodes& nodes) {
@@ -261,7 +261,7 @@ void McastImpl::attach(
     run_args = std::move(staged_args);
 }
 
-void attach_absent(m2::ProgramSpec& spec, std::string_view prefix, std::span<const m2::KernelSpecName> targets) {
+void attach_absent_mcast(m2::ProgramSpec& spec, std::string_view prefix, std::span<const m2::KernelSpecName> targets) {
     const auto indices = validate_targets(spec, prefix, targets);
     auto staged = spec;
     for (const auto index : indices) {

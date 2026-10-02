@@ -4,7 +4,7 @@
 #include "mcast_host_test_common.hpp"
 
 namespace ttnn::kernel_lib::host::test {
-TEST_F(McastHostFixture, CompactPlacementGoldensAndDirectDescriptorParity) {
+TEST_F(McastHostFixture, CompactPlacementGoldens) {
     using namespace tt::tt_metal;
     for (const auto noc : {NOC::NOC_0, NOC::NOC_1}) {
         for (bool handshake : {false, true}) {
@@ -33,26 +33,6 @@ TEST_F(McastHostFixture, CompactPlacementGoldensAndDirectDescriptorParity) {
             EXPECT_EQ(emitted_metadata(sender.compile_time_args).kernel.roles, 1u);
             EXPECT_EQ(emitted_metadata(receiver.compile_time_args).kernel.roles, 2u);
             EXPECT_EQ(emitted_metadata(inactive.compile_time_args).kernel.roles, 0u);
-            auto bound = mcast;
-            Program program;
-            bound.append_semaphores(program);
-            for (const auto* expected : {&sender, &receiver, &inactive}) {
-                std::vector<uint32_t> ct;
-                KernelDescriptor::RuntimeArgs rt;
-                const auto offsets = bound.append_kernel_args_to(ct, rt, expected->core_ranges);
-                EXPECT_EQ(offsets.compile_time, 0u);
-                EXPECT_EQ(offsets.runtime, 0u);
-                EXPECT_EQ(ct, expected->compile_time_args);
-                EXPECT_EQ(rt, expected->runtime_args);
-            }
-            std::vector<uint32_t> ct{17};
-            KernelDescriptor::RuntimeArgs rt{{{7, 7}, {19}}};
-            const auto before = rt;
-            EXPECT_ANY_THROW(bound.append_kernel_args_to(ct, rt, sender.core_ranges));
-            EXPECT_EQ(ct, (std::vector<uint32_t>{17}));
-            EXPECT_EQ(rt, before);
-            // Placement specialization must not mutate the conservative paired API.
-            EXPECT_EQ(emitted_metadata(compile_args(mcast)).kernel.roles, 0xFFFFFFFFu);
         }
     }
     auto local = make_mcast(device_, {{cores({{2, 3}}), {{2, 3}}}});
@@ -63,12 +43,12 @@ TEST_F(McastHostFixture, CompactPlacementGoldensAndDirectDescriptorParity) {
         tt::tt_metal::DataMovementConfigDescriptor{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0};
     local.attach(descriptor, "local", std::array{std::ref(kernel)}, 0);
     EXPECT_TRUE(kernel.runtime_args.front().second.empty());
-    EXPECT_EQ(kernel.compile_time_args[0] & 15u, 3u);
+    EXPECT_NE(kernel.compile_time_args[0], wire::ABSENT);
     EXPECT_EQ(emitted_metadata(kernel.compile_time_args).mcast.remote_count_known, 1u);
     tt::tt_metal::KernelDescriptor empty;
     empty.config = kernel.config;
     local.attach(descriptor, "empty", std::array{std::ref(empty)}, local.next_semaphore_id());
-    EXPECT_EQ(empty.compile_time_args[0] & 15u, 3u);
+    EXPECT_NE(empty.compile_time_args[0], wire::ABSENT);
     EXPECT_EQ(emitted_metadata(empty.compile_time_args).kernel.roles, 0xFFFFFFFFu);
     EXPECT_EQ(emitted_metadata(empty.compile_time_args).kernel.capabilities, 3u);
     EXPECT_TRUE(empty.runtime_args.empty());
@@ -124,7 +104,7 @@ TEST_F(McastHostFixture, DescriptorAppendPadsPerKernelAndPreservesBindings) {
     EXPECT_ANY_THROW(mcast.attach(desc, "second", std::array{std::ref(desc.kernels[0])}, mcast.next_semaphore_id()));
     EXPECT_EQ(desc.semaphores.size(), 4u);
     EXPECT_EQ(desc.kernels[0].compile_time_args, before);
-    attach_absent(desc.kernels[0], "absent");
+    attach_absent_mcast(desc.kernels[0], "absent");
     EXPECT_EQ(desc.kernels[0].compile_time_args.back(), 0u);
     EXPECT_EQ(desc.kernels[0].runtime_args[0].second.size(), old_rt_size + runtime_args(mcast, {0, 0}).size());
 }
@@ -178,7 +158,7 @@ TEST_F(McastHostFixture, DescriptorAttachAppendsAfterPrefixesAndPreservesBufferB
     EXPECT_EQ(desc.semaphores[3].id, 4u);
     EXPECT_EQ(mcast.next_semaphore_id(), 5u);
     const auto& attached = desc.kernels[0];
-    const std::vector<uint32_t> expected_ct{17, 19, 0x024E2E13u, 3, 4, 1};
+    const std::vector<uint32_t> expected_ct{17, 19, 0x0024E2E1u, 3, 4, 1};
     EXPECT_EQ(attached.compile_time_args, expected_ct);
     const auto a = device_->worker_core_from_logical_core({0, 0});
     const auto b = device_->worker_core_from_logical_core({1, 0});
@@ -242,7 +222,7 @@ TEST_F(McastHostFixture, DescriptorAttachAndAbsence) {
     EXPECT_EQ(emitted_semaphore(desc.kernels[0].compile_time_args, wire::CONSUMER_READY, 1), UNUSED_SEM_ID);
     EXPECT_EQ(emitted_metadata(desc.kernels[0].compile_time_args, 1).mcast.flags, 0u);
     const auto runtime = desc.kernels[0].runtime_args;
-    attach_absent(desc.kernels[0], "absent_mcast");
+    attach_absent_mcast(desc.kernels[0], "absent_mcast");
     EXPECT_EQ(desc.kernels[0].compile_time_args.back(), 0u);
     EXPECT_EQ(desc.kernels[0].compile_time_args[0], 31u);
     EXPECT_EQ(desc.kernels[0].runtime_args, runtime);
@@ -275,7 +255,7 @@ TEST_F(McastHostFixture, DescriptorAttachConsumesIdsAndSupportsIndependentMcasts
     EXPECT_EQ(desc.semaphores[2].id, 7u);
     EXPECT_EQ(desc.semaphores[3].id, 8u);
     EXPECT_EQ(second_mcast.next_semaphore_id(), 9u);
-    const std::vector<uint32_t> expected{97, 0x024E2E13u, 5, 6, 1, 0x024E2E13u, 7, 8, 1};
+    const std::vector<uint32_t> expected{97, 0x0024E2E1u, 5, 6, 1, 0x0024E2E1u, 7, 8, 1};
     EXPECT_EQ(desc.kernels[0].compile_time_args, expected);
     for (const auto& [core, args] : desc.kernels[0].runtime_args) {
         ASSERT_EQ(args.size(), 14u);

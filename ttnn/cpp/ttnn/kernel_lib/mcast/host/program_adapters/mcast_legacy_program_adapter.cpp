@@ -4,7 +4,7 @@
 
 // Allocates multicast semaphore IDs in a regular Program through the public host API.
 
-#include "ttnn/kernel_lib/mcast/host/mcast_host_impl.hpp"
+#include "ttnn/kernel_lib/mcast/host/mcast_impl.hpp"
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/host_api.hpp>

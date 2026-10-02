@@ -37,9 +37,9 @@ NO_CORE = 0xFFFFFFFF
 @pytest.mark.parametrize("dynamic", [False, True])
 @pytest.mark.parametrize("has_successor", [False, True])
 def test_compact_chain_decoder(roles, capabilities, dynamic, has_successor):
-    # Literal v3 layout, including unrelated argument prefixes and a trailing block.
+    # Literal layout, including unrelated argument prefixes and a trailing block.
     compact_chain_flags = 9
-    control = 3 | (compact_chain_flags << 4) | (capabilities << 18) | ((1 << 17) if dynamic else roles << 15)
+    control = compact_chain_flags | (capabilities << 14) | ((1 << 13) if dynamic else roles << 11)
     coordinate_sentinels = [7, 8]
     successor_sentinels = [9, 10]
     coordinates = coordinate_sentinels if capabilities & RECEIVER_CAPABILITY else []

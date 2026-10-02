@@ -19,7 +19,7 @@
 
 #pragma once
 
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/pipes/pipe_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_semaphore.hpp"
 
 #include "api/dataflow/noc.h"
@@ -28,6 +28,26 @@
 #include "hostdevcommon/common_values.hpp"
 
 namespace dataflow_kernel_lib {
+
+// One host-prepared rectangle consumed by a hardware-multicast sender pipe.
+struct RectangleRuntimeArguments {
+    NocBounds bounds;
+    uint32_t remote_count;
+    uint32_t loopback_count;
+    SenderMcastMode sender_mcast_mode;
+};
+
+// Owning, capacity-sized pipe state, independent of the serialized runtime-argument layout.
+template <uint32_t Capacity>
+struct SenderRuntimeArgumentsFor {
+    static_assert(Capacity >= 1 && Capacity <= MAX_MCAST_RECTANGLES, "Multicast supports one to three rectangles");
+    RectangleRuntimeArguments rectangles[Capacity]{};
+    uint32_t num_rectangles = 0;
+    uint32_t ack_count = 0;
+};
+
+static_assert(sizeof(RectangleRuntimeArguments) == mcast_wire::RECT_WORDS * sizeof(uint32_t));
+
 namespace detail {
 
 // =============================================================================
@@ -198,4 +218,4 @@ using ReceiverPipe = detail::ReceiverPipeImpl<
 
 }  // namespace dataflow_kernel_lib
 
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_pipe.inl"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/pipes/mcast_pipe.inl"

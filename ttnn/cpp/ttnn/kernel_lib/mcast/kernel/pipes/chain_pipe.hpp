@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/pipes/pipe_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_semaphore.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/endpoints.h"
@@ -129,4 +129,4 @@ using ChainReceiverPipe = detail::ChainReceiverPipeImpl<
 
 }  // namespace dataflow_kernel_lib
 
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/chain_pipe.inl"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/pipes/chain_pipe.inl"

@@ -6,9 +6,9 @@
 
 #include <optional>
 
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_compile_time_args.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/chain_pipe.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_pipe.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_protocol.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/pipes/chain_pipe.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/pipes/mcast_pipe.hpp"
 
 namespace dataflow_kernel_lib {
 
@@ -79,7 +79,7 @@ struct InactiveReceiverPipe {
 // RT view. No pointer into a temporary decoder and no expanded-table argument.
 template <mcast_wire::SenderCoordinateMetadata METADATA, uint32_t NUM_SENDERS>
 struct ExpandedSenderCoordinates {
-    std::array<uint32_t, mcast_wire::SENDER_COORD_WORDS * NUM_SENDERS> values;
+    uint32_t values[mcast_wire::SENDER_COORD_WORDS * NUM_SENDERS]{};
 
     template <typename Coordinates>
     FORCE_INLINE explicit ExpandedSenderCoordinates(const Coordinates& payload) {
@@ -143,7 +143,6 @@ struct McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyBin
         mcast_wire::concrete(sender_mcast_mode) || sender_mcast_mode == SenderMcastMode::Unknown,
         "Invalid sender multicast mode");
     static constexpr uint32_t remote_count = METADATA.mcast.uniform_remote_count;
-    static constexpr uint32_t loopback_count = remote_count + 1;
     static constexpr uint8_t sender_noc = (flags & mcast_wire::NOC1) ? 1 : 0;
 
     static constexpr uint32_t rectangle_capacity = METADATA.mcast.rectangle_capacity;
@@ -278,7 +277,6 @@ struct PositionalMcastCompileTime {
 
 template <typename Words, bool SEMAPHORE_IDS = true>
 constexpr mcast_wire::ArgumentMetadata mcast_metadata() {
-    static_assert(mcast_wire::valid_compile_time_control(Words{}[0]), "Unsupported multicast wire tag");
     return mcast_wire::decode_compile_time_metadata(Words{}, SEMAPHORE_IDS);
 }
 
@@ -305,9 +303,6 @@ struct McastArgs : detail::McastArgsImpl<
                            detail::positional_mcast_semaphore<CT_BASE, mcast_wire::CONSUMER_READY>()}>,
                        detail::McastSemaphoreToken<McastSemaphoreBinding{
                            detail::positional_mcast_semaphore<CT_BASE, mcast_wire::SIGNAL_SOURCE>()}>> {
-    static_assert(
-        mcast_wire::valid_compile_time_control(get_compile_time_arg_val(CT_BASE)),
-        "Unsupported multicast wire tag; rebuild host and kernels for the current wire format");
     static constexpr uint32_t next_compile_time_args_offset() {
         return CT_BASE + mcast_wire::CompileTimeLayout(get_compile_time_arg_val(CT_BASE)).words;
     }
