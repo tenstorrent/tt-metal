@@ -58,11 +58,16 @@ inline constexpr ConstantFieldAssignment<F, S, Value> set()
  *         register word; it must start at bit zero, and a multi-word anchor must cover the transfer.
  * @tparam S Register section; must be within the anchor's count.
  * @tparam Size Transfer width: GprTransferSize::Bits32 or GprTransferSize::Bits128; defaults to Bits32.
- * @tparam Completion WRCFG completion policy; defaults to WrcfgCompletion::Wait.
+ * @tparam Completion WRCFG completion policy; defaults to WrcfgCompletion::Deferred.
  * @tparam GprIndex GPR index deduced from source.
  * @param source Source GPR operand created with hal::gpr<Index>() or hal::gpr(index).
  */
-template <const auto& Anchor, Sec S, GprTransferSize Size = GprTransferSize::Bits32, WrcfgCompletion Completion = WrcfgCompletion::Wait, std::uint32_t GprIndex>
+template <
+    const auto& Anchor,
+    Sec S,
+    GprTransferSize Size       = GprTransferSize::Bits32,
+    WrcfgCompletion Completion = WrcfgCompletion::Deferred,
+    std::uint32_t GprIndex>
 inline constexpr auto from_gpr(const hal::Gpr<GprIndex> source)
 {
     return GprWrite<detail::word_anchor<Anchor>, S, GprIndex, Size, Completion> {source};
@@ -275,7 +280,7 @@ inline __attribute__((always_inline)) void write(const First& first, const Rest&
  *         register word; it must start at bit zero, and a multi-word anchor must cover the transfer.
  * @tparam S Register section; must be within the anchor's count.
  * @tparam Size Transfer width: GprTransferSize::Bits32 or GprTransferSize::Bits128; defaults to Bits32.
- * @tparam Completion WRCFG completion policy used by Access::TensixCfgUnit; defaults to WrcfgCompletion::Wait.
+ * @tparam Completion WRCFG completion policy used by Access::TensixCfgUnit; defaults to WrcfgCompletion::Deferred.
  * @tparam GprIndex GPR index deduced from source.
  * @param source Source GPR operand created with hal::gpr<Index>() or hal::gpr(index).
  * @note TensixCfgUnit emits WRCFG and its requested completion NOP. TensixScalarUnit
@@ -286,7 +291,7 @@ template <
     const auto& Anchor,
     Sec S,
     GprTransferSize Size       = GprTransferSize::Bits32,
-    WrcfgCompletion Completion = WrcfgCompletion::Wait,
+    WrcfgCompletion Completion = WrcfgCompletion::Deferred,
     std::uint32_t GprIndex>
 inline __attribute__((always_inline)) void write(const hal::Gpr<GprIndex> source)
 {
