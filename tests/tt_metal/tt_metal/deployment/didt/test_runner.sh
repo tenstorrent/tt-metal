@@ -6,6 +6,7 @@
 set -u
 
 LOGDIR="."
+PYTHON="$(command -v python3 || command -v python)"
 MGD="tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
 
 usage() {
@@ -23,12 +24,12 @@ while [ -n "${1:-}" ]
 do
 	case "$1" in
 	--output)
-		if [ -z "$2" ]; then echo "Missing argument to $1"; exit 1; fi
+		if [ -z "${2:-}" ]; then echo "Missing argument to $1"; exit 1; fi
 		LOGDIR="$2"
 		shift
 		;;
 	--mgd)
-		if [ -z "$2" ]; then echo "Missing argument to $1"; exit 1; fi
+		if [ -z "${2:-}" ]; then echo "Missing argument to $1"; exit 1; fi
 		MGD="$2"
 		shift
 		;;
@@ -64,17 +65,51 @@ fi
 mkdir -p "$LOGDIR"
 
 log="$LOGDIR/didt_all_chips.log"
+junit="$LOGDIR/didt_all_chips_junit.xml"
 
 # Carries pytest's exit status out of the tee pipeline
 RCFILE="$(mktemp)"
 echo 0 > "$RCFILE"
-{ python3 -m pytest tests/didt/test_minimal_matmul.py::test_minimal_matmul \
+{ $PYTHON -m pytest tests/didt/test_minimal_matmul.py::test_minimal_matmul \
 	-k "all and bf16_HiFi2" \
 	--didt-workload-iterations 500 \
 	--determinism-check-interval 50 \
-	--timeout 400 -q 2>&1 || echo "$?" > "$RCFILE"; } | tee "$log"
+	--timeout 400 -q --junitxml="$junit" 2>&1 || echo "$?" > "$RCFILE"; } | tee "$log"
 rc="$(cat "$RCFILE")"
 rm -f "$RCFILE"
+
+if [ "$rc" -eq 0 ]
+then
+	if [ ! -f "$junit" ]
+	then
+		echo "DIDT (all chips): FAILED, missing JUnit report $junit"
+		rc=1
+	else
+		counts="$($PYTHON - "$junit" << 'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+root = ET.parse(sys.argv[1]).getroot()
+suites = root.findall("testsuite") if root.tag == "testsuites" else [root]
+tests = sum(int(s.get("tests", 0)) for s in suites)
+failures = sum(int(s.get("failures", 0)) for s in suites)
+errors = sum(int(s.get("errors", 0)) for s in suites)
+skipped = sum(int(s.get("skipped", 0)) for s in suites)
+print(tests, failures, errors, skipped)
+PY
+)"
+		set -- $counts
+		tests="$1"
+		failures="$2"
+		errors="$3"
+		skipped="$4"
+		if [ "$tests" -ne 1 ] || [ "$failures" -ne 0 ] || [ "$errors" -ne 0 ] || [ "$skipped" -ne 0 ]
+		then
+			echo "DIDT (all chips): FAILED, expected exactly 1 passed test with zero skips (tests=$tests failures=$failures errors=$errors skipped=$skipped)"
+			rc=1
+		fi
+	fi
+fi
 
 if [ "$rc" -eq 0 ]
 then
