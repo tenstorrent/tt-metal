@@ -176,7 +176,7 @@ verify:
 # placeholder for a number measured on this build (lane B2 benchmarks); fill the source, then re-render.
 card:
   description: |
-    [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) served with vLLM on a Tenstorrent P300x2 (2× P300 = 4 Blackhole chips, 4-way tensor parallel), 256K context. One image, three profiles: `plain` (default; plain batched decode for up to 32 users with every sampling option), `batch8-dflash2` (lossless [DFlash2](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2) speculative decoding for 1 to 8 users, {{B8_GAIN_RANGE}}× `plain` per user) and `single-user-dflash2` (the fastest single stream: {{SU_CODE_1U}} tokens/s on coding prompts vs {{PLAIN_CODE_1U}} for `plain`). It replaces [changh95/qwen3.8-27b-dflash2-p300x2](https://huggingface.co/changh95/qwen3.8-27b-dflash2-p300x2), whose profiles now live here.
+    [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) served with vLLM on a Tenstorrent P300x2 (2× P300 = 4 Blackhole chips, 4-way tensor parallel), 256K context. One image, three profiles: `plain` (default; plain batched decode for up to 32 users with every sampling option), `batch8-dflash2` (lossless [DFlash2](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2) speculative decoding for 1 to 8 users, 1.2-1.8× `plain` per user) and `single-user-dflash2` (the fastest single stream: 60 tokens/s at short prompts and 83 with 1k-token answers, vs 32 for `plain`). It replaces [changh95/qwen3.8-27b-dflash2-p300x2](https://huggingface.co/changh95/qwen3.8-27b-dflash2-p300x2), whose profiles now live here.
   quickstart: |
     ### Run
 
@@ -189,7 +189,7 @@ card:
     ```
 
     * `batch32` is now called `plain`: same configuration, new name. `--profile batch32` no longer exists; use `--profile plain` or no flag.
-    * First boot converts the weights ({{FIRST_BOOT_MIN}} min); later boots take about {{WARM_BOOT_MIN}} min.
+    * First boot converts the weights and compiles the kernels (about 7 min); later boots take about 2-3 min.
 
     ### Drafter weights (DFlash2 profiles only, once)
 
@@ -215,121 +215,113 @@ card:
 
     | profile | users | context | KV pool | 1 user tok/s | TTFT 128 / 8k / 32k tokens | pick it for |
     |---|---|---|---|---|---|---|
-    | `plain` (default) | 32 | 256K | 525K tokens | {{was 32.3}} | {{was 0.09 s}} / {{was 1.0 s}} / {{was 4.5 s}} | many users, long prompts, all sampling options (temperature, top-p/top-k, penalties, logprobs, structured outputs) |
-    | `batch8-dflash2` | 8 | 256K | 525K tokens | {{was 56.1}} ({{was 112}} on code) | {{B8_TTFT_128}} / {{B8_TTFT_8K}} / {{B8_TTFT_32K}} | 1-8 greedy users, code; {{was 1.4-1.9}}x plain per user |
-    | `single-user-dflash2` | 1 | 256K | 525K tokens | {{was 58.5}} ({{was 119}} on code) | {{was 0.14 s}} / {{was 1.2 s}} / {{was 5.1 s}} | exactly one greedy user, fastest per token |
+    | `plain` (default) | 32 | 256K | 525K tokens | 31.6 | 0.2 s / 1.1 s / 4.0 s | many users, long prompts, all sampling options (temperature, top-p/top-k, penalties, logprobs, structured outputs) |
+    | `batch8-dflash2` | 8 | 256K | 525K tokens | 57.3 | 0.1 s / 1.1 s / 4.1 s | 1-8 greedy users |
+    | `single-user-dflash2` | 1 | 256K | 525K tokens | 60.1 | 0.1 s / 1.1 s / 4.1 s | exactly one greedy user, fastest per token |
 
-    * `plain` is the old `batch32` profile under a new name. At 1 user it is {{PLAIN_VS_B8_1U}}x slower per user than `batch8-dflash2`; from {{CROSSOVER_USERS}} users on, its aggregate throughput is higher, and it is the only profile with sampled output and more than 8 users.
-    * The DFlash2 profiles are lossless: each request follows the target model's greedy trajectory (up to bf16 near-ties). Their gain is largest on code and long answers ({{B8_GAIN_1K_OSL}}x at 1,024-token answers) and fades with prompt length ({{B8_GAIN_32K}}x at 32k-token prompts).
+    * `plain` is the old `batch32` profile under a new name. At 1 user `batch8-dflash2` is 1.8x faster per user; at 8 users it still leads in aggregate throughput (271 vs 163 t/s at 128 / 128). Beyond 8 users, or for sampled output, use `plain` (up to 688 t/s at 32 users).
+    * The DFlash2 profiles are lossless: each request follows the target model's greedy trajectory (up to bf16 near-ties). Their gain is largest with long answers (1.6x at 1,024-token answers, 1 user) and fades with prompt length (1.19x at 32k tokens).
 
     ## Benchmarks
 
-    tt-inference-server `--workflow benchmarks` (standard P300X2 grid: random prompts of exactly ISL tokens, `ignore_eos`, greedy, streaming) on one P300x2, measured {{BENCH_DATE}} on this image. `t/s` = aggregate output tokens per second, `(t/s/u)` = per user (= OSL / mean end-to-end latency); TTFT and TPOT are means. Placeholder cells `{{was X}}` show the value the previous package published.
+    tt-inference-server `--workflow benchmarks` (standard P300X2 grid: random prompts of exactly ISL tokens, `ignore_eos`, greedy, streaming) on one P300x2, measured 2026-10-01/02 on this image, one profile at a time. `t/s` = aggregate output tokens per second, `(t/s/u)` = per user (= OSL / mean end-to-end latency); TTFT and TPOT are means. Points with several runs (the 1-user rows repeat in every run; `single-user-dflash2` ran three times) show the median.
 
     ### `plain` (default), t/s (t/s/u)
 
     | ISL / OSL | 1 user | 2 users | 4 users | 8 users | 16 users | 32 users |
     |---|---|---|---|---|---|---|
-    | 128 / 128 | {{was 32 (32.3)}} | {{was 54 (26.8)}} | {{was 103 (25.6)}} | {{was 188 (23.5)}} | {{was 324 (20.2)}} | {{was 491 (15.3)}} |
-    | 1,024 / 128 | {{was 31 (31.0)}} | {{was 51 (25.7)}} | {{was 95 (23.9)}} | {{was 165 (20.7)}} | {{was 264 (16.5)}} | {{was 366 (11.4)}} |
-    | 2,048 / 128 | {{was 31 (30.8)}} | {{was 50 (25.0)}} | {{was 90 (22.6)}} | {{was 151 (18.9)}} | {{was 227 (14.2)}} | {{was 299 (9.3)}} |
-    | 4,096 / 128 | {{was 29 (28.8)}} | {{was 45 (22.6)}} | {{was 76 (19.1)}} | {{was 116 (14.5)}} | {{was 157 (9.8)}} | {{was 188 (5.9)}} |
-    | 8,192 / 128 | {{was 26 (25.8)}} | {{was 38 (19.1)}} | {{was 58 (14.6)}} | {{was 79 (9.9)}} | {{was 96 (6.0)}} | {{was 107 (3.3)}} |
-    | 16,384 / 128 | {{was 21 (21.1)}} | {{was 29 (14.4)}} | {{was 39 (9.8)}} | {{was 47 (5.9)}} | {{was 52 (3.3)}} | {{was 51 (1.6)}} |
-    | 32,768 / 128 | {{was 15 (15.1)}} | {{PLAIN_32768_128_U2}} | {{PLAIN_32768_128_U4}} | {{PLAIN_32768_128_U8}} | {{PLAIN_32768_128_U16}} | {{was 27 (1.8) @15}} |
-    | 65,536 / 128 | {{was 9 (9.2)}} | {{PLAIN_65536_128_U2}} | {{PLAIN_65536_128_U4}} | {{was 12 (1.5)}} | {{PLAIN_65536_128_U16}} | {{PLAIN_65536_128_U32}} |
-    | 131,072 / 128 | {{was 5 (4.6)}} | {{PLAIN_131072_128_U2}} | {{was 5 (1.3)}} | {{PLAIN_131072_128_U8}} | {{PLAIN_131072_128_U16}} | {{PLAIN_131072_128_U32}} |
-    | 128 / 1,024 | {{was 33 (32.6)}} | {{was 60 (30.2)}} | {{was 119 (29.7)}} | {{was 230 (28.7)}} | {{was 434 (27.1)}} | {{was 739 (23.1)}} |
-    | 8,192 / 1,024 | {{was 31 (31.2)}} | {{was 56 (28.2)}} | {{was 104 (25.9)}} | {{was 183 (22.9)}} | {{was 295 (18.5)}} | {{was 412 (12.9)}} |
-    | 10,000 / 1,024 | {{was 31 (30.9)}} | {{PLAIN_10000_1024_U2}} | {{PLAIN_10000_1024_U4}} | {{PLAIN_10000_1024_U8}} | {{PLAIN_10000_1024_U16}} | {{was 361 (11.3)}} |
+    | 128 / 128 | 31.6 (31.6) | 50.9 (25.4) | 94.0 (23.5) | 163.4 (20.4) | 256.8 (16.1) | 359.0 (11.2) |
+    | 1,024 / 128 | 30.8 (30.8) | 48.9 (24.5) | 88.4 (22.1) | 146.1 (18.3) | 218.1 (13.6) | 283.9 (8.9) |
+    | 2,048 / 128 | 30.0 (30.0) | 47.2 (23.6) | 82.2 (20.6) | 131.4 (16.4) | 186.9 (11.7) | 235.1 (7.3) |
+    | 4,096 / 128 | 28.3 (28.3) | 43.3 (21.6) | 71.0 (17.8) | 104.4 (13.0) | 137.4 (8.6) | 160.8 (5.0) |
+    | 8,192 / 128 | 25.4 (25.4) | 36.8 (18.4) | 55.9 (14.0) | 73.5 (9.2) | 88.9 (5.6) | 98.3 (3.1) |
+    | 16,384 / 128 | 21.5 (21.5) | 28.9 (14.4) | 38.5 (9.6) | 47.0 (5.9) | 52.6 (3.3) | – |
+    | 32,768 / 128 | 16.0 (16.0) | 19.7 (9.8) | 23.4 (5.9) | 25.7 (3.2) | – | – |
+    | 65,536 / 128 | 9.8 (9.8) | 11.2 (5.6) | 12.3 (3.1) | 12.5 (1.6) | – | – |
+    | 131,072 / 128 | 4.8 (4.8) | 5.3 (2.6) | 5.5 (1.4) | – | – | – |
+    | 128 / 1,024 | 32.4 (32.4) | 59.7 (29.9) | 117.0 (29.3) | 224.1 (28.0) | 415.8 (26.0) | 687.7 (21.5) |
+    | 8,192 / 1,024 | 31.1 (31.1) | 56.0 (28.0) | 103.5 (25.9) | 179.7 (22.5) | 286.8 (17.9) | 393.8 (12.3) |
+    | 10,000 / 1,024 | 30.9 (30.9) | 54.9 (27.4) | 100.1 (25.0) | 170.6 (21.3) | 266.1 (16.6) | 356.1 (11.1) |
 
-    * `@N`: the 525K-token KV pool seats only N prompts of that length; the workflow runs that point at N users.
+    * A dash = the 525K-token KV pool does not seat that many prompts of that length (the workflow skips the point).
 
     ### `plain`, TTFT ms / TPOT ms
 
     | ISL / OSL | 1 user | 8 users | 32 users |
     |---|---|---|---|
-    | 128 / 128 | {{was 94 / 30.5}} | {{PLAIN_LAT_128_128_U8}} | {{was 2,742 / 44.1}} |
-    | 1,024 / 128 | {{was 185 / 30.8}} | {{PLAIN_LAT_1024_128_U8}} | {{was 5,420 / 45.4}} |
-    | 2,048 / 128 | {{was 259 / 30.8}} | {{PLAIN_LAT_2048_128_U8}} | {{was 7,775 / 46.7}} |
-    | 4,096 / 128 | {{was 507 / 31.0}} | {{PLAIN_LAT_4096_128_U8}} | {{was 15,409 / 50.0}} |
-    | 8,192 / 128 | {{was 1,016 / 30.9}} | {{PLAIN_LAT_8192_128_U8}} | {{was 31,096 / 57.1}} |
-    | 16,384 / 128 | {{was 2,087 / 31.2}} | {{PLAIN_LAT_16384_128_U8}} | {{was 47,418 / 253.0}} |
-    | 32,768 / 128 | {{was 4,457 / 31.7}} | {{PLAIN_LAT_32768_128_U8}} | {{PLAIN_LAT_32768_128_U32}} |
-    | 65,536 / 128 | {{was 9,727 / 32.6}} | {{PLAIN_LAT_65536_128_U8}} | {{PLAIN_LAT_65536_128_U32}} |
-    | 131,072 / 128 | {{was 23,463 / 34.3}} | {{PLAIN_LAT_131072_128_U8}} | {{PLAIN_LAT_131072_128_U32}} |
-    | 128 / 1,024 | {{was 97 / 30.7}} | {{PLAIN_LAT_128_1024_U8}} | {{was 2,736 / 40.7}} |
-    | 8,192 / 1,024 | {{was 1,024 / 31.2}} | {{PLAIN_LAT_8192_1024_U8}} | {{was 30,941 / 47.5}} |
-    | 10,000 / 1,024 | {{was 1,319 / 31.1}} | {{PLAIN_LAT_10000_1024_U8}} | {{PLAIN_LAT_10000_1024_U32}} |
+    | 128 / 128 | 157 / 30.7 | 1,183 / 40.0 | 5,019 / 50.3 |
+    | 1,024 / 128 | 245 / 30.8 | 1,810 / 40.9 | 7,920 / 51.2 |
+    | 2,048 / 128 | 345 / 30.9 | 2,495 / 41.7 | 10,772 / 52.3 |
+    | 4,096 / 128 | 587 / 30.9 | 4,216 / 44.1 | 18,361 / 55.9 |
+    | 8,192 / 128 | 1,103 / 31.0 | 7,776 / 48.4 | 33,750 / 62.3 |
+    | 16,384 / 128 | 1,982 / 31.3 | 14,673 / 56.2 | – |
+    | 32,768 / 128 | 4,003 / 31.6 | 30,395 / 74.2 | – |
+    | 65,536 / 128 | 9,024 / 32.3 | 53,087 / 224.8 | – |
+    | 131,072 / 128 | 22,314 / 33.9 | – | – |
+    | 128 / 1,024 | 158 / 30.7 | 1,202 / 34.6 | 5,169 / 41.5 |
+    | 8,192 / 1,024 | 1,113 / 31.1 | 7,753 / 37.0 | 33,766 / 48.3 |
+    | 10,000 / 1,024 | 1,255 / 31.1 | 9,347 / 37.8 | 36,777 / 54.0 |
 
     ### `batch8-dflash2`, t/s (t/s/u)
 
-    | ISL / OSL | 1 user | 2 users | 4 users | 8 users | `plain` 1 user |
+    | ISL / OSL | 1 user | 2 users | 4 users | 8 users | `plain` 1 user t/s/u |
     |---|---|---|---|---|---|
-    | 128 / 128 | {{was 56.1 (56.2)}} | {{was 100.6 (53.1)}} | {{was 182.3 (46.2)}} | {{was 273.2 (35.1)}} | {{was 32.3}} |
-    | 1,024 / 128 | {{was 53.6 (53.6)}} | {{was 99.0 (50.2)}} | {{was 159.6 (42.5)}} | {{was 244.0 (31.4)}} | {{was 31.3}} |
-    | 2,048 / 128 | {{was 51.4 (51.4)}} | {{was 86.6 (44.4)}} | {{was 131.5 (34.8)}} | {{was 194.3 (24.9)}} | {{was 30.7}} |
-    | 4,096 / 128 | {{was 45.7 (45.8)}} | {{was 76.7 (38.8)}} | {{was 102.8 (26.7)}} | {{was 134.9 (17.1)}} | {{was 28.8}} |
-    | 8,192 / 128 | {{was 35.0 (35.0)}} | {{was 53.2 (26.7)}} | {{was 68.8 (17.8)}} | {{was 80.1 (10.4)}} | {{was 25.9}} |
-    | 16,384 / 128 | {{was 26.0 (26.0)}} | {{was 33.5 (16.9)}} | {{was 38.5 (10.2)}} | {{was 44.0 (5.7)}} | {{was 21.2}} |
-    | 32,768 / 128 | {{was 16.3 (16.3)}} | {{was 19.7 (10.2)}} | {{was 22.1 (5.6)}} | {{was 23.3 (2.9)}} | {{was 15.1}} |
-    | 65,536 / 128 | {{was 9.7 (9.7)}} | {{was 10.3 (5.2)}} | {{was 10.7 (2.7)}} | {{was 9.8 (1.3)}} | {{was 9.2}} |
-    | 131,072 / 128 | {{was 4.4 (4.4)}} | {{was 4.6 (2.3)}} | {{was 4.7 (1.2)}} | – | {{was 4.6}} |
-    | 128 / 1,024 | {{was 51.4 (51.4)}} | {{was 86.8 (43.9)}} | {{was 168.3 (49.2)}} | {{was 297.8 (41.9)}} | {{was 32.6}} |
-    | 8,192 / 1,024 | {{was 57.5 (57.5)}} | {{was 62.7 (33.0)}} | {{was 123.3 (36.0)}} | {{was 196.9 (29.8)}} | {{was 31.1}} |
-    | 10,000 / 1,024 | {{was 58.5 (58.5)}} | {{was 63.6 (33.4)}} | {{was 100.1 (33.1)}} | {{was 184.0 (26.0)}} | {{was 30.9}} |
+    | 128 / 128 | 57.3 (57.3) | 100.6 (51.4) | 173.9 (45.8) | 270.5 (34.9) | 31.6 |
+    | 1,024 / 128 | 55.7 (55.7) | 101.2 (51.0) | 162.8 (43.5) | 245.6 (31.5) | 30.8 |
+    | 2,048 / 128 | 48.7 (48.7) | 87.1 (45.0) | 140.0 (36.0) | 195.1 (24.9) | 30.0 |
+    | 4,096 / 128 | 45.0 (45.0) | 73.2 (38.1) | 108.9 (28.1) | 141.9 (18.0) | 28.3 |
+    | 8,192 / 128 | 38.4 (38.4) | 54.2 (27.4) | 69.9 (18.7) | 85.1 (10.8) | 25.4 |
+    | 16,384 / 128 | 28.2 (28.2) | 37.8 (19.2) | 43.4 (11.4) | 51.9 (6.6) | 21.5 |
+    | 32,768 / 128 | 19.0 (19.0) | 23.4 (11.8) | 22.7 (6.2) | 25.5 (3.4) | 16.0 |
+    | 65,536 / 128 | 10.7 (10.7) | 12.1 (6.1) | 11.7 (3.1) | 12.3 (1.6) | 9.8 |
+    | 131,072 / 128 | 4.9 (4.9) | 5.4 (2.7) | 5.5 (1.4) | – | 4.8 |
+    | 128 / 1,024 | 53.2 (53.2) | 88.1 (44.6) | 162.2 (45.2) | 279.0 (39.5) | 32.4 |
+    | 8,192 / 1,024 | 43.2 (43.2) | 62.2 (32.7) | 121.1 (35.3) | 219.4 (30.9) | 31.1 |
+    | 10,000 / 1,024 | 52.7 (52.7) | 64.8 (36.8) | 153.6 (40.4) | 191.5 (29.4) | 30.9 |
 
-    * A dash = the KV pool does not seat that many users at that length. At 1 to 4 users the server drafts 7 tokens per step; at 5 to 8, 3 per step. Long prompts (8k tokens or more) that arrive while other users decode are prefilled in 2,048-token chunks, which keeps the other users' tokens flowing and raises that prompt's own TTFT.
+    * A dash = the KV pool does not seat that many users at that length. At 1 to 4 users the server drafts 7 tokens per step; at 5 to 8, 3 per step. Long prompts (8,192 tokens or more) that arrive while other users decode are prefilled in 2,048-token chunks, which keeps the other users' tokens flowing and raises that prompt's own TTFT.
+
+    ### `batch8-dflash2`, TTFT ms / TPOT ms
+
+    | ISL / OSL | 1 user | 8 users |
+    |---|---|---|
+    | 128 / 128 | 138 / 16.5 | 331 / 26.3 |
+    | 1,024 / 128 | 190 / 16.6 | 565 / 27.5 |
+    | 2,048 / 128 | 288 / 18.4 | 890 / 33.5 |
+    | 4,096 / 128 | 550 / 18.0 | 1,840 / 41.6 |
+    | 8,192 / 128 | 1,079 / 17.7 | 5,603 / 49.3 |
+    | 16,384 / 128 | 2,003 / 20.0 | 10,244 / 73.1 |
+    | 32,768 / 128 | 4,085 / 20.9 | 30,933 / 55.6 |
+    | 65,536 / 128 | 9,208 / 22.2 | 54,090 / 206.9 |
+    | 131,072 / 128 | 22,733 / 27.3 | – |
+    | 128 / 1,024 | 139 / 18.7 | 376 / 25.0 |
+    | 8,192 / 1,024 | 1,080 / 22.1 | 4,411 / 28.0 |
+    | 10,000 / 1,024 | 1,231 / 17.8 | 5,891 / 28.3 |
 
     ### `single-user-dflash2`, one user
 
     | ISL / OSL | TTFT ms | TPOT ms | t/s/u | `plain` t/s/u |
     |---|---|---|---|---|
-    | 128 / 128 | {{was 135}} | {{was 16.2}} | {{was 58.5}} | {{was 32.3}} |
-    | 1,024 / 128 | {{was 182}} | {{was 16.3}} | {{was 56.8}} | {{was 31.3}} |
-    | 2,048 / 128 | {{was 300}} | {{was 16.9}} | {{was 52.4}} | {{was 30.7}} |
-    | 4,096 / 128 | {{was 597}} | {{was 18.4}} | {{was 43.8}} | {{was 28.8}} |
-    | 8,192 / 128 | {{was 1,184}} | {{was 20.0}} | {{was 34.4}} | {{was 25.9}} |
-    | 16,384 / 128 | {{was 2,436}} | {{was 19.5}} | {{was 26.1}} | {{was 21.2}} |
-    | 32,768 / 128 | {{was 5,077}} | {{was 18.4}} | {{was 17.3}} | {{was 15.1}} |
-    | 65,536 / 128 | {{was 11,109}} | {{was 18.7}} | {{was 9.5}} | {{was 9.2}} |
-    | 131,072 / 128 | {{was 26,006}} | {{was 17.2}} | {{was 4.5}} | {{was 4.6}} |
-    | 128 / 1,024 | {{was 134}} | {{was 12.5}} | {{was 79.0}} | {{was 32.6}} |
-    | 8,192 / 1,024 | {{was 1,182}} | {{was 11.2}} | {{was 80.9}} | {{was 31.1}} |
-    | 10,000 / 1,024 | {{was 1,493}} | {{was 11.4}} | {{was 77.9}} | {{was 30.9}} |
+    | 128 / 128 | 134 | 15.7 | 60.1 | 31.6 |
+    | 1,024 / 128 | 184 | 16.1 | 57.6 | 30.8 |
+    | 2,048 / 128 | 289 | 17.4 | 51.3 | 30.0 |
+    | 4,096 / 128 | 537 | 16.9 | 47.5 | 28.3 |
+    | 8,192 / 128 | 1,067 | 16.1 | 41.1 | 25.4 |
+    | 16,384 / 128 | 1,991 | 17.4 | 30.5 | 21.5 |
+    | 32,768 / 128 | 4,086 | 17.2 | 20.4 | 16.0 |
+    | 65,536 / 128 | 9,187 | 18.8 | 11.1 | 9.8 |
+    | 131,072 / 128 | 22,620 | 18.5 | 5.1 | 4.8 |
+    | 128 / 1,024 | 134 | 12.5 | 79.2 | 32.4 |
+    | 8,192 / 1,024 | 1,082 | 11.0 | 83.2 | 31.1 |
+    | 10,000 / 1,024 | 1,221 | 13.1 | 70.0 | 30.9 |
 
-    ### Code (SPEED-Bench `coding`, 80 prompts; greedy; answers end at EOS), t/s (tok/s per user)
-
-    | thinking | users | `batch8-dflash2` | `single-user-dflash2` | `plain` | speed-up |
-    |---|---|---|---|---|---|
-    | off | 1 | {{was 84 (112)}} | {{was 95 (119)}} | {{was 35 (36)}} | {{was 3.3x}} |
-    | off | 8 | {{was 211 (59)}} | – | {{was 111 (23)}} | {{was 2.6x}} |
-    | on | 1 | {{was 73 (76)}} | {{was 80 (83)}} | {{CODE_PLAIN_ON_1}} | {{CODE_SPEEDUP_ON_1}} |
-    | on | 8 | {{was 397 (55)}} | – | {{was 218 (29)}} | {{was 1.9x}} |
-
-    * Per-user speed = 1000 / mean time per output token (decode only); `t/s` = aggregate output tokens per second over the run, which includes prefill and the gaps between a user's requests. `thinking off` passes `"chat_template_kwargs": {"enable_thinking": false}`; `thinking on` is the served default, with answers capped at 4,096 tokens. Speed-up = per-user speed of the faster speculative profile over `plain` at the same user count.
-
-    ### Chat vs code (SPEED-Bench `qa`, `roleplay`, `writing`, `humanities`, 80 prompts each; greedy), tok/s per user
-
-    | thinking | category | 1 user `batch8-dflash2` | 1 user `single-user-dflash2` | 8 users `batch8-dflash2` (t/s total) | 1 user `plain` |
-    |---|---|---|---|---|---|
-    | off | qa | {{was 61}} | {{was 64}} | {{was 44 (344)}} | {{CHAT_PLAIN_OFF_QA}} |
-    | off | roleplay | {{was 59}} | {{was 63}} | {{was 33 (248)}} | {{CHAT_PLAIN_OFF_ROLEPLAY}} |
-    | off | writing | {{was 60}} | {{was 64}} | {{was 49 (365)}} | {{CHAT_PLAIN_OFF_WRITING}} |
-    | off | humanities | {{was 64}} | {{was 65}} | {{was 42 (215)}} | {{CHAT_PLAIN_OFF_HUMANITIES}} |
-    | on | qa | {{was 72}} | {{was 78}} | {{was 54 (421)}} | {{CHAT_PLAIN_ON_QA}} |
-    | on | roleplay | {{was 65}} | {{was 70}} | {{was 49 (373)}} | {{CHAT_PLAIN_ON_ROLEPLAY}} |
-    | on | writing | {{was 67}} | {{was 73}} | {{was 52 (387)}} | {{CHAT_PLAIN_ON_WRITING}} |
-    | on | humanities | {{was 63}} | {{was 67}} | {{was 49 (341)}} | {{CHAT_PLAIN_ON_HUMANITIES}} |
-    | off | **code** | {{was 112}} | {{was 119}} | {{was 59 (211)}} | {{was 36}} |
-    | on | **code** | {{was 76}} | {{was 83}} | {{was 55 (397)}} | {{CODE_PLAIN_ON_1}} |
-
-    * The drafter accepts fewer tokens on chat than on code: {{was 3.3-3.7}} tokens committed per verify step against {{was 4.8-5.0}} for code (thinking off, 1 user); the step itself costs the same (about {{was 52-55}} ms). `plain` decodes at the same speed on every category.
+    * Median of three runs per point.
 
     ### Changes in this release
 
     * One package for the P300x2. The DFlash2 profiles moved here from [changh95/qwen3.8-27b-dflash2-p300x2](https://huggingface.co/changh95/qwen3.8-27b-dflash2-p300x2), which is retired (its page points here). The old plain profile `batch32` is now `plain`.
     * `plain` now includes two correctness fixes. Earlier plain images could produce degenerate greedy text on short prompts, and their output could change from the second request on. The traced short-prompt prefill no longer trusts stale page-table rows, and each request's Gated-DeltaNet state is written into its decode slot exactly.
     * `batch8-dflash2` prefills long prompts in chunks. A prompt of 8,192 tokens or more that arrives while other requests decode is prefilled in 2,048-token chunks between their steps, so they keep streaming (first shipped in the last DFlash2 release, 2026-09-30).
-    * Faster prefill of long prompts: TTFT at 32k tokens {{TTFT32K_B8_OLD}} -> {{TTFT32K_B8_NEW}} ms on `batch8-dflash2` and {{TTFT32K_PLAIN_OLD}} -> {{TTFT32K_PLAIN_NEW}} ms on `plain` (1 user).
+    * Faster prefill of long prompts: TTFT at 32k tokens 5,149 -> 4,085 ms on `batch8-dflash2`, 5,077 -> 4,086 ms on `single-user-dflash2` and 4,457 -> 4,003 ms on `plain` (1 user).
+    * `plain` throughput: the exact slot write costs time per admitted request, so short prompts at many users are slower than with the previous plain image: 128 / 128 tokens at 32 users 491 -> 359 tokens/s (-27%), at 8 users 188 -> 163 (-13%), TTFT at 128 tokens 94 -> 157 ms. One user decodes at the same speed (32.3 -> 31.6 t/s/u); long answers at 32 users lose 7% (739 -> 688 t/s at 128 / 1,024). The previous image's higher numbers came from a slot write that was not exact.
     * Intended output change: on the DFlash2 profiles, prompts of 2,048 tokens or more now prefill with exactly the numerics of the `plain` path. Greedy output for those prompts can differ from the previous DFlash2 package at bf16 near-ties. Shorter prompts give the same output as before.
