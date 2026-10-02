@@ -607,8 +607,6 @@ if [ "$TT_LAGUNA_HYBRID_KV" -eq 1 ]; then
   esac
   [ "$TT_LAGUNA_PREFIX_CACHE" -eq 0 ] ||
     die "Laguna hybrid KV qualification requires TT_LAGUNA_PREFIX_CACHE=0"
-  [ -z "${TT_LAGUNA_SPEC_DECODE:-}" ] ||
-    die "Laguna hybrid KV qualification does not support TT_LAGUNA_SPEC_DECODE"
   [ "$TT_LAGUNA_STREAMING_PREFILL" -eq 1 ] ||
     die "Laguna hybrid KV qualification requires TT_LAGUNA_STREAMING_PREFILL=1"
   [ "$TT_LAGUNA_MOE_TOKEN_DISPATCH" -eq 0 ] && [ "$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE" -eq 0 ] ||

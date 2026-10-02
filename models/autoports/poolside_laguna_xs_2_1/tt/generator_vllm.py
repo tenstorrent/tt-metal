@@ -2546,11 +2546,30 @@ class LagunaForCausalLM:
         tok = g._rep(torch.zeros([1, 1, 1, K1], dtype=torch.int32), ttnn.uint32)
         cur = g._rep(torch.zeros([K1], dtype=torch.int32), ttnn.int32)
         ridx = g._rep(torch.zeros([1, K1], dtype=torch.int32), ttnn.uint32)
-        pt = self._page_table_to_device(pt_host)
+        hybrid = self._kv_cache_is_hybrid(kv_cache)
+        if hybrid:
+            # One persistent block table per KV group (full + three sliding), refreshed before every replay.
+            pt, pt_groups, _ = self._decode_pt_grouped_alloc([pt_host.clone() for _ in kv_cache])
+            self._decode_pt_grouped_refresh(
+                {"pt_groups": pt_groups, "last_pt_host_groups": {}}, [pt_host.clone() for _ in kv_cache]
+            )
+        else:
+            pt, pt_groups = self._page_table_to_device(pt_host), None
         ttnn.copy_host_to_device_tensor(self._host_rank4_tok_batch(tokens.reshape(K1, 1), K1), tok)
         ttnn.copy_host_to_device_tensor(self._host_pos_batch(pos), cur)
         ttnn.copy_host_to_device_tensor(self._host_ridx_batch(pos), ridx)
-        st = dict(tid=None, tok=tok, cur=cur, ridx=ridx, pt=pt, logits_mode=logits_mode, k1=K1)
+        st = dict(
+            tid=None,
+            tok=tok,
+            cur=cur,
+            ridx=ridx,
+            pt=pt,
+            logits_mode=logits_mode,
+            k1=K1,
+            hybrid=hybrid,
+            pt_groups=pt_groups,
+            last_pt_host_groups={},
+        )
         if not logits_mode:
             # FORCE-ARGMAX path (Sampling1D._sample_argmax = all-gather vocab + ttnn.argmax). Passing k/p/temp
             # all None selects it (allow_force_argmax=True); passing k=1/p=1/temp=1 instead selects the top-k
@@ -2625,19 +2644,15 @@ class LagunaForCausalLM:
                 page_tables_per_layer=page_tables_per_layer,
             )
             return torch.argmax(logits, dim=-1).to(torch.int32)
-        # HARD GUARD (audit item 4): traced spec-verify has NO hybrid grouped-PT path. The traced page-table
-        # refresh below only fires when `page_tables_per_layer is None`; a hybrid per-layer PT would replay the
-        # FROZEN warmup identity table and silently emit wrong greedy ids. Hybrid KV is dead at serving today
-        # (the plugin never calls get_kv_cache_spec), so this is dormant — but enabling hybrid KV (the wanted
-        # capacity win) MUST fail loudly here, not corrupt. Fix: eager verify (traced=False), or extend the
-        # trace refresh to grouped PTs before combining hybrid KV with traced spec-decode.
+        # Hybrid KV: the traced replay refreshes one persistent table per KV group (full + three sliding),
+        # each the request's row repeated to K1 rows. Uniform: one table, refreshed below.
+        rows_per_layer = None
         if page_tables_per_layer is not None:
-            raise NotImplementedError(
-                "traced spec-decode verify does not support hybrid per-layer page tables "
-                "(page_tables_per_layer): the traced page-table refresh is uniform-only, so a hybrid PT would "
-                "replay a stale identity table and produce silently-wrong tokens. Run eager verify "
-                "(traced=False), or add a grouped-PT trace-refresh path before enabling hybrid KV + spec-decode."
-            )
+            layout = self._hybrid_kv_layout()
+            groups = self._validated_group_page_tables(page_tables_per_layer, purpose="spec-decode verify")
+            group_rows = [groups[g][:1].repeat(K1, 1) if K1 > 1 else groups[g][:1] for g in range(layout.num_groups)]
+            rows_per_layer = layout.expand_group_values(group_rows)
+            page_table = group_rows[0]
         pt_row = torch.as_tensor(page_table, dtype=torch.int32)
         if pt_row.dim() == 1:
             pt_row = pt_row.unsqueeze(0)
@@ -2651,12 +2666,8 @@ class LagunaForCausalLM:
                 f"this step includes compile+capture, not a warm replay.",
                 flush=True,
             )
+            # Capture records the trace; the refresh + replay below executes it for this request.
             st = self._capture_verify_decode(K1, kv_cache, tokens, pos, pt_host)  # lazy fallback
-            if st.get("logits_mode"):
-                return torch.argmax(self.model.logits_to_host(st["logits"]).reshape(K1, int(self.vocab)), dim=-1).to(
-                    torch.int32
-                )
-            return ttnn.to_torch(ttnn.get_device_tensors(st["tok_out"])[0]).reshape(-1)[:K1].to(torch.int32)
         ttnn.copy_host_to_device_tensor(self._host_rank4_tok_batch(tokens.reshape(K1, 1), K1), st["tok"])
         ttnn.copy_host_to_device_tensor(self._host_pos_batch(pos), st["cur"])
         ttnn.copy_host_to_device_tensor(self._host_ridx_batch(pos), st["ridx"])
@@ -2664,7 +2675,11 @@ class LagunaForCausalLM:
         # st["pt"] stays frozen at the warmup identity table (arange) and the verify indexes the WRONG
         # physical KV blocks on any real (non-identity) served page table -> silently wrong greedy ids.
         # (Uniform serving path; hybrid grouped-PT verify is a separate follow-up — serving is uniform today.)
-        if page_tables_per_layer is None and st.get("pt") is not None:
+        if rows_per_layer is not None:
+            if not st.get("hybrid"):
+                raise RuntimeError(f"spec-decode verify trace K1={K1} was captured for uniform KV, got hybrid tables")
+            self._decode_pt_grouped_refresh(st, rows_per_layer)
+        elif st.get("pt") is not None:
             if st.get("last_pt_host") is None or not torch.equal(pt_host, st["last_pt_host"]):
                 ttnn.copy_host_to_device_tensor(self._page_table_to_device_host(pt_host), st["pt"])
                 st["last_pt_host"] = pt_host.clone()
@@ -2763,6 +2778,7 @@ class LagunaForCausalLM:
         base = 2 * block_size
         dummy = torch.zeros(base, dtype=torch.int64)
         ptp = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
+        hybrid = self._kv_cache_is_hybrid(kv_cache)
         self.prefill_forward(
             dummy.reshape(1, base),
             page_table=ptp,
@@ -2770,6 +2786,7 @@ class LagunaForCausalLM:
             prompt_lens=[base],
             start_pos=[0],
             sampling_params=None,
+            page_tables_per_layer=[ptp.clone() for _ in kv_cache] if hybrid else None,
         )
         pos = torch.arange(base - 1, base - 1 + K1, dtype=torch.int32)
         tokens = torch.zeros(K1, dtype=torch.int64)
@@ -2790,6 +2807,7 @@ class LagunaForCausalLM:
         base = 2 * block_size
         dummy = torch.zeros(base, dtype=torch.int64)
         ptp = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
+        hybrid = self._kv_cache_is_hybrid(kv_cache)
         self.prefill_forward(
             dummy.reshape(1, base),
             page_table=ptp,
@@ -2797,6 +2815,7 @@ class LagunaForCausalLM:
             prompt_lens=[base],
             start_pos=[0],
             sampling_params=None,
+            page_tables_per_layer=[ptp.clone() for _ in kv_cache] if hybrid else None,
         )
         staged = {}
         for K1 in K1s:  # phase 1: allocate + compile every K1 (no trace resident)
