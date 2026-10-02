@@ -422,6 +422,10 @@ void call_unary_sfpu_operation_init()
     if constexpr (OPERATION == SfpuType::acosh || OPERATION == SfpuType::asinh)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(init_inverse_hyperbolic<APPROX_MODE, is_fp32_dest_acc_en>);
+        if constexpr (OPERATION == SfpuType::acosh && !is_fp32_dest_acc_en)
+        {
+            ckernel::sfpu::init_acosh_bf16();
+        }
     }
     else if constexpr (OPERATION == SfpuType::atanh)
     {

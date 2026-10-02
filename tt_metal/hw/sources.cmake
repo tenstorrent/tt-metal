@@ -388,4 +388,12 @@ set(HW_JIT_API_HEADERS
     toolchain/erisc-b0-app-sections.ld
     toolchain/erisc-b0-memory.ld
     toolchain/erisc-b0-kernel.ld
+    ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_core_bridge_exponent.inc
+    ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_rational_interleaved_core.inc
+    ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_rational_scalar_tile.inc
+    ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_rational_segment_core.inc
+    ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_core_bridge_exponent.inc
+    ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_rational_interleaved_core.inc
+    ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_rational_scalar_tile.inc
+    ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_rational_segment_core.inc
 )

@@ -78,6 +78,11 @@ ALWI void cos_tile(uint32_t idst) {
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void acosh_tile_init() {
     MATH(SFPU_UNARY_INIT_FN(acosh, ckernel::sfpu::init_inverse_hyperbolic, (APPROX, is_fp32_dest_acc_en)));
+#ifndef ARCH_QUASAR
+    if constexpr (!is_fp32_dest_acc_en) {
+        MATH(ckernel::sfpu::init_acosh_bf16());
+    }
+#endif
 }
 
 // clang-format off
@@ -96,6 +101,18 @@ ALWI void acosh_tile_init() {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void acosh_tile(uint32_t idst) {
+#ifndef ARCH_QUASAR
+    if constexpr (!is_fp32_dest_acc_en) {
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_acosh,
+            (APPROX, is_fp32_dest_acc_en, 32),
+            idst,
+            VectorMode::None));
+        return;
+    }
+#endif
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
