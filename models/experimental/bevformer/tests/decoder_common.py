@@ -11,10 +11,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from models.common.utility_functions import comp_pcc
-from models.experimental.bevformer.tests.backbone_common import assert_pcc
 from models.experimental.bevformer.config.decoder_config import CODE_SIZE
 from models.experimental.bevformer.reference.decoder import DetectionTransformerDecoder, inverse_sigmoid, reg_branch
 from models.experimental.bevformer.reference.ms_deformable_attention import MSDeformableAttention
+from models.experimental.bevformer.tests.backbone_common import assert_pcc
 
 # BEVFormer tiny and base share the decoder; only the BEV grid it attends over differs.
 NUM_QUERY = 900

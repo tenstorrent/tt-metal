@@ -128,7 +128,7 @@ class TtDetectionTransformerDecoder:
     def _reg_branch(x, branch):
         x = ttnn.linear(x, branch[0].weight, bias=branch[0].bias, activation="relu")
         x = ttnn.linear(x, branch[1].weight, bias=branch[1].bias, activation="relu")
-        # GRID_DTYPE, as the centre channels are added to the reference points' logits.
+        # GRID_DTYPE, as the center channels are added to the reference points' logits.
         return ttnn.linear(x, branch[2].weight, bias=branch[2].bias, dtype=GRID_DTYPE)
 
     def __call__(self, query, value, query_pos, reference_points, reg_branches):
@@ -138,7 +138,7 @@ class TtDetectionTransformerDecoder:
 
         Returns every layer's output ``(L, nq, bs, C)`` (``(L, bs, nq, C)`` with ``batch_first``),
         refined reference points ``(L, bs, nq, 3)`` and the reg branches' raw box codes
-        ``(L, bs, nq, code_size)`` (batch-first either way), both ``GRID_DTYPE``. The codes' centre
+        ``(L, bs, nq, code_size)`` (batch-first either way), both ``GRID_DTYPE``. The codes' center
         channels are logit offsets; the refined points are their outcome.
         """
         if reference_points.dtype != GRID_DTYPE:
@@ -160,9 +160,9 @@ class TtDetectionTransformerDecoder:
             output = layer(output, value, query_pos, ttnn.unsqueeze(reference_points[..., :2], 2))
 
             box_code = self._reg_branch(output, branch)
-            centre_delta = ttnn.concat([box_code[..., CODE_XY], box_code[..., CODE_Z]], dim=-1)
+            center_delta = ttnn.concat([box_code[..., CODE_XY], box_code[..., CODE_Z]], dim=-1)
             # The clamp (a no-op on the first layer's logit output) runs inside the add.
-            logits = ttnn.add(centre_delta, logits, input_tensor_b_activations=CLAMP_LOGITS)
+            logits = ttnn.add(center_delta, logits, input_tensor_b_activations=CLAMP_LOGITS)
             reference_points = ttnn.sigmoid(logits)
 
             intermediate.append(output)

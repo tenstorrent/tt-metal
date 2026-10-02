@@ -26,7 +26,7 @@ from models.experimental.bevformer.tt.tt_common import SCORE_DTYPE
 
 
 def denormalize_bbox(normalized_bboxes):
-    """Box predictions (``config/decoder_config.py``'s code, centres in metres) to
+    """Box predictions (``config/decoder_config.py``'s code, centers in metres) to
     ``(cx, cy, cz, w, l, h, yaw, vx, vy)`` boxes."""
     return ttnn.concat(
         [
@@ -61,8 +61,9 @@ class TtNMSFreeCoder:
 
     def topk(self, cls_scores, bbox_preds):
         """``(bs, num_query, num_classes)`` ``SCORE_DTYPE`` logits and ``(bs, num_query, code_size)``
-        box predictions to each sample's top ``max_num`` scores, sorted, as device tensors: scores and
-        labels ``(bs, max_num)``, query indexes ``(bs, max_num, 1)`` and boxes ``(bs, max_num, 9)``."""
+        box predictions to each sample's top ``max_num`` scores, sorted, as device tensors: scores
+        ``(bs, max_num)`` float32, labels ``(bs, max_num)`` uint32, query indexes ``(bs, max_num, 1)``
+        uint32 and boxes ``(bs, max_num, 9)`` in the box predictions' dtype."""
         if cls_scores.dtype != SCORE_DTYPE:
             raise ValueError(f"cls_scores must be {SCORE_DTYPE}, got {cls_scores.dtype}")
         bs, num_query, num_classes = cls_scores.shape

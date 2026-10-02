@@ -16,8 +16,9 @@ The head performs:
 2. Initial reference points ``sigmoid(reference_points(query_pos))``
 3. The detection decoder over the BEV features, refining the points after every layer
 4. Per decoder layer, the classification branch on the layer output (class logits) and the
-   regression branch (box code), whose cx, cy and cz are refined from the layer's input
-   reference points and scaled from [0, 1] to ``pc_range`` metres
+   regression branch (box codes), whose cx, cy and cz offsets refine the layer's input
+   reference points; the refined points, scaled from [0, 1] to ``pc_range`` metres, replace
+   them in the box predictions
 
 Only inference with BEVFormer's settings is kept: box refinement (``with_box_refine``, one
 branch per layer), no two-stage proposals, no losses or assigners. The BEV encoder side of
@@ -49,10 +50,11 @@ from models.experimental.bevformer.config.head_config import NUM_CLASSES, PC_RAN
 from models.experimental.bevformer.reference.decoder import DetectionTransformerDecoder, inverse_sigmoid, reg_branch
 
 
-def cls_branch(embed_dims, num_classes, num_reg_fcs=2):
-    """``(Linear-LayerNorm-ReLU) x num_reg_fcs`` then ``Linear(num_classes)``, as BEVFormerHead builds it."""
+def cls_branch(embed_dims, num_classes, num_fcs=2):
+    """``(Linear-LayerNorm-ReLU) x num_fcs`` then ``Linear(num_classes)``, as BEVFormerHead builds
+    it; ``num_fcs`` is upstream's ``num_reg_fcs``, which both branches share."""
     layers = []
-    for _ in range(num_reg_fcs):
+    for _ in range(num_fcs):
         layers += [nn.Linear(embed_dims, embed_dims), nn.LayerNorm(embed_dims), nn.ReLU(inplace=True)]
     return nn.Sequential(*layers, nn.Linear(embed_dims, num_classes))
 
@@ -67,7 +69,7 @@ class BEVFormerHead(nn.Module):
         num_classes (int): Class logits per query.
         embed_dims (int): Channels of the queries and of the BEV features.
         code_size (int): Box code channels, see ``config/decoder_config.py``.
-        pc_range (tuple[float]): Box centre range in metres the [0, 1] reference points map to.
+        pc_range (tuple[float]): Box center range in metres the [0, 1] reference points map to.
         decoder (dict, optional): ``DetectionTransformerDecoder`` arguments; BEVFormer's by default.
 
     Each decoder layer has its own classification and regression branch; the decoder refines
@@ -101,7 +103,8 @@ class BEVFormerHead(nn.Module):
         """``bev_embed`` is the encoder output ``(bs, bev_h * bev_w, embed_dims)``.
 
         Returns every decoder layer's class logits ``(L, bs, num_query, num_classes)`` and box
-        predictions ``(L, bs, num_query, code_size)``: box codes with cx, cy and cz in metres.
+        predictions ``(L, bs, num_query, code_size)``: ``config/decoder_config.py``'s code layout
+        with cx, cy and cz in metres.
         """
         bs = bev_embed.shape[0]
         query_pos, query = torch.split(self.query_embedding.weight, self.embed_dims, dim=1)
