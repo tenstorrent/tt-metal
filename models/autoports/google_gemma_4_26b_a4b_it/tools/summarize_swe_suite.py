@@ -56,6 +56,21 @@ def counter_delta(events, responses):
     }
 
 
+def completed_response_counters(events, responses):
+    """Attribute saved responses only, excluding a trailing uncompleted request."""
+    end = next(
+        (
+            i + 1
+            for i in range(len(events) - 1, -1, -1)
+            if events[i].get("event") == "server_metrics" and events[i].get("phase") == "after_response"
+        ),
+        0,
+    )
+    result = counter_delta(events[:end], responses)
+    result["scope"] = "saved completed API responses, including any late response; not clipped agent time"
+    return result
+
+
 def summarize(root):
     events = []
     for path in root.glob("**/*requests.jsonl"):
@@ -92,6 +107,8 @@ def summarize(root):
             metrics_collection_s=sum(event.get("collection_s", 0) for event in trial_events),
             submission_normalizations=sum(event["event"] == "submission_marker_normalized" for event in trial_events),
             server=counter_delta(trial_events, responses),
+            completed_response_server=completed_response_counters(trial_events, responses),
+            repeated_tool_advisories=sum(event["event"] == "repeated_tool_feedback" for event in trial_events),
         )
         verifier = path.parent.parent / "verifier/report.json"
         if verifier.exists():

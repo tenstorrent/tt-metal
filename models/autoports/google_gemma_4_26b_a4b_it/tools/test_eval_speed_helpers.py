@@ -19,7 +19,7 @@ from probe_context_dedup import compact
 from probe_loop_recovery import wall_deadline
 from probe_native_eval_action import request_messages
 from replay_eval_requests import post
-from summarize_swe_suite import counter_delta
+from summarize_swe_suite import completed_response_counters, counter_delta
 
 
 class PrefillPrecisionTests(unittest.TestCase):
@@ -84,6 +84,12 @@ class SuiteCounterTests(unittest.TestCase):
         result = counter_delta(events, responses)
         self.assertTrue(result["valid"])
         self.assertEqual((result["ttft_s"], result["post_first_token_s"]), (2, 3))
+        trailing = events + [{"event": "server_metrics", "phase": "before_request", "counters": final}]
+        self.assertFalse(counter_delta(trailing, responses)["valid"])
+        saved = completed_response_counters(trailing, responses)
+        self.assertTrue(saved["valid"])
+        self.assertEqual((saved["ttft_s"], saved["post_first_token_s"]), (2, 3))
+        self.assertIn("not clipped agent time", saved["scope"])
         final["request_success_total"] = 0
         self.assertFalse(counter_delta(events, responses)["valid"])
         self.assertFalse(counter_delta([], responses)["valid"])
