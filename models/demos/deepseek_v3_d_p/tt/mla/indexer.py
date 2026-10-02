@@ -22,7 +22,11 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.mla.mla_config import get_indexer_key_chunk, get_matmul_config
+from models.demos.deepseek_v3_d_p.tt.mla.mla_config import (
+    get_batch_axis_matmul_config,
+    get_indexer_key_chunk,
+    get_matmul_config,
+)
 from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_perm_matrix
 
 # DSA indexer weight names are owned by TtIndexer.WEIGHT_NAMES (single source of truth). A
@@ -165,7 +169,16 @@ class TtIndexer:
 
     @classmethod
     def _convert_and_cache_weights(
-        cls, idx_host, mesh_device, config, layer_idx, sp_axis: int = 0, tp_axis: int = 1, cache_path=None, device=None
+        cls,
+        idx_host,
+        mesh_device,
+        config,
+        layer_idx,
+        sp_axis: int = 0,
+        tp_axis: int = 1,
+        cache_path=None,
+        device=None,
+        replicate_tp: bool = False,
     ):
         """Indexer weights → device (or cache). Mirrors dense MLA's converter:
         - host tensors present: transpose/shard/replicate and (optionally) write the cache;
@@ -185,15 +198,19 @@ class TtIndexer:
         q_lora_rank = config.q_lora_rank
         hidden_size = config.hidden_size
 
+        # replicate_tp (batch-axis mode): wk / weights_proj are replicated instead of K-split on TP, under
+        # a distinct prefix so a TP-sharded tensorbin can never be loaded into the replicated layout.
+        cache_prefix = f"layer_{layer_idx}.mla_repl" if replicate_tp else f"layer_{layer_idx}.mla"
+
         def _cache_name(short):
-            return str(cache_path / f"layer_{layer_idx}.mla.indexer_{short}") if cache_path else None
+            return str(cache_path / f"{cache_prefix}.indexer_{short}") if cache_path else None
 
         # A device load with no host weights must be backed by a complete tensorbin set, else
         # `as_tensor` converts the empty placeholders into garbage indexer weights. Mirror dense MLA's
         # lenient placeholder load (don't block construction) — but, unlike dense which is silent, WARN
         # loudly so the misuse is visible. The layer still stays sparse (binds TtIndexer); it does not
         # fall back to dense. (Build mode, device=None, is gated upstream by ttMLA.build_ttnn_cache.)
-        if not idx_host and device is not None and not cls.check_cache_complete(cache_path, f"layer_{layer_idx}.mla"):
+        if not idx_host and device is not None and not cls.check_cache_complete(cache_path, cache_prefix):
             logger.warning(
                 f"Sparse MLA layer {layer_idx}: indexer has neither host weights nor a complete cache at "
                 f"{cache_path!r}; loading from empty placeholders — indexer output will be garbage. "
@@ -231,6 +248,8 @@ class TtIndexer:
         def shard(
             t, axis, short, dtype=ttnn.bfloat16
         ):  # host [out, in] -> device [in, out], dim `axis` sharded across tp
+            if replicate_tp:
+                return repl(t, short, transpose=True, dtype=dtype)
             dims = [None, None]
             dims[tp_axis] = axis
             return ttnn.as_tensor(
@@ -292,6 +311,7 @@ class TtIndexer:
         layer_num: int = 1,
         first_layer_idx: int | None = None,
         output_tp_sequence_sharded: bool = False,
+        batch_axis: int | None = None,
     ):
         """Architecture constants are read from the HF config with no defaults (index_n_heads,
         index_head_dim, index_topk, index_rope_interleave — a sparse config that omits any of them
@@ -310,7 +330,10 @@ class TtIndexer:
         self.tp_axis = tp_axis
         mesh_shape = list(mesh_device.shape)
         self.sp_factor = mesh_shape[sp_axis]
-        self.tp_factor = mesh_shape[tp_axis]
+        # batch_axis (see ttMLA): the TP axis carries independent users, so the indexer is TP=1 per user,
+        # its weights are replicated and its key cache / fused ring live on the SP axis only.
+        self.batch_axis = batch_axis
+        self.tp_factor = 1 if batch_axis is not None else mesh_shape[tp_axis]
         # MLA's head-to-sequence redistribution consumes exactly the TP query shards scored here.
         # Other consumers retain the SP-only output contract (gather query rows over TP).
         self.output_tp_sequence_sharded = output_tp_sequence_sharded
@@ -447,11 +470,11 @@ class TtIndexer:
 
     @property
     def tp_shard_kv_axis(self):
-        """The tp_axis to hand the cache-write ops. Always set: the indexer exists only on the sparse (DSA)
-        path and that path always dedups its caches across SP*TP, so there is no TP-replicated variant to
-        return None for. Kept as a property (rather than inlining self.tp_axis) so every
+        """The tp_axis to hand the cache-write ops. Set whenever the caches are deduped across SP*TP (the
+        TP sparse path); None in batch-axis mode, where each user's key cache is striped over SP only.
+        Kept as a property (rather than inlining self.tp_axis) so every
         update_padded_kv_cache call site keeps reading the axis from one place."""
-        return self.tp_axis
+        return None if self.batch_axis is not None else self.tp_axis
 
     # Inlined TP/SP collectives — the indexer owns its own copy so it depends on tt_ccl, not on ttMLA
     # (the dense MLA forward keeps its own equivalents; both go through the same tt_ccl handles).
@@ -560,6 +583,7 @@ class TtIndexer:
             self.tp_axis,
             cache_path=self.weight_cache_path,
             device=self.mesh_device,
+            replicate_tp=self.batch_axis is not None,
         )
         self._idx_wq_b = w["wq_b"]
         self._idx_wk = w["wk"]
@@ -641,7 +665,12 @@ class TtIndexer:
         """Return the model-gated Blackhole config for an indexer matmul."""
         if not self._is_blackhole:
             return None
-        entry = get_matmul_config(weight_name, seq_len_local)
+        # The main table is tuned for TP-sharded per-device shapes (K-split wk / weights_proj, TP-split
+        # query rows); batch-axis mode's unsharded shapes have their own (see ttMLA._resolve_mm_cfg).
+        if self.batch_axis is not None:
+            entry = get_batch_axis_matmul_config(weight_name, seq_len_local)
+        else:
+            entry = get_matmul_config(weight_name, seq_len_local)
         candidates = entry if isinstance(entry, list) else [entry]
         return next(
             (
@@ -890,7 +919,9 @@ class TtIndexer:
         # mesh itself is the block-cyclic ring: one full-mesh snake replaces the SP ring plus a TP leg.
         # cluster_axis=None is what selects it; the op resolves the snake across both mesh axes.
         k_local = index_kv_cache
-        k_full = self.tt_ccl.get_indexer_ring_k_buffer(local_k=k_local, sp_axis=None)
+        # Batch-axis mode: one SP ring per user column instead of the full-mesh snake.
+        ring_axis = self.sp_axis if self.batch_axis is not None else None
+        k_full = self.tt_ccl.get_indexer_ring_k_buffer(local_k=k_local, sp_axis=ring_axis)
         # Trace-safe path: the start position, cache slot and valid length ride device tensors instead of
         # the host scalars a captured program would freeze at their capture-time values.
         traced = metadata is not None
@@ -900,8 +931,8 @@ class TtIndexer:
             k_full,
             weights,
             k_local,
-            self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=None),
-            cluster_axis=None,
+            self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=ring_axis),
+            cluster_axis=ring_axis,
             topology=self.sp_ccl_topology,
             num_links=self.ccl_num_links,
             program_config=cfg,
@@ -926,7 +957,8 @@ class TtIndexer:
             # Full mesh leaves the sequence-axis roles empty: sp == mesh_size already expresses both the
             # sp*tp striping and the TP query split, so naming either axis would double-apply it.
             seq_subshard_axis=None,
-            block_cyclic_sp_axis=None,
+            # The SP ring names its block-cyclic axis; the full mesh leaves it empty (see above).
+            block_cyclic_sp_axis=ring_axis,
             # The per-device slab is this chip's Q rows.
             block_cyclic_chunk_local=q_dev.shape[2],
             # The full mesh stripes the key cache over every device already.

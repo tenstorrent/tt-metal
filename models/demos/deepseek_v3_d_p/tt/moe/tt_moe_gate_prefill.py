@@ -1185,6 +1185,7 @@ class TtMoEGatePrefill(LightweightModule):
         actual_start: int = 0,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         mode = self.fallback_mode
+        logger.debug(f"Moe Gate called with shape: {x.shape}")
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[MoeGate] fallback_mode={mode.value}")
 
@@ -1248,6 +1249,9 @@ class TtMoEGatePrefill(LightweightModule):
             ttnn_scores = self._host_scores_to_device(host_scores)
             ttnn_top_k_experts_indices = self._host_indices_to_device(host_indices)
 
+        logger.info(f"TTNN scores shape: {ttnn_scores.shape}")
+        logger.info(f"TTNN top-k experts indices shape: {ttnn_top_k_experts_indices.shape}")
+        logger.info(f"Logits shape: {logits.shape}")
         return (
             ttnn_scores,
             ttnn_top_k_experts_indices,

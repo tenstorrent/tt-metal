@@ -824,6 +824,7 @@ def init_kvpe_cache(
     layout=ttnn.TILE_LAYOUT,
     full_mesh=False,
     tp_axis=None,
+    batch_axis=None,
 ):
     """
     Initialize KVPE cache for MLA.
@@ -843,6 +844,11 @@ def init_kvpe_cache(
         tp_axis: KV dedup. None (default) = SP-sharded, TP-replicated (per-device rows = seq_len / sp).
             When set, also sharded across TP (rows = seq_len / (sp*tp)); the container topology is
             unchanged (the op defines the per-device layout) — only the per-device seq width shrinks.
+        batch_axis: Batch-axis mode (ttMLA batch_axis): every coordinate along this axis holds a DIFFERENT
+            user's cache, each striped over sp_axis only. Allocation is identical to the SP-only cache;
+            only the declared topology differs -- a 2-D [Shard(2) on sp_axis, Replicate on batch_axis]
+            instead of the 1-D Replicate, because the per-user SP-axis gather (high_bw_all_gather with
+            cluster_axis=sp_axis) validates cluster_axis against the declared distribution rank.
 
     Returns:
         kvpe_cache: Initialized KVPE cache on device
@@ -854,6 +860,10 @@ def init_kvpe_cache(
     assert not (
         full_mesh and tp_axis is not None
     ), f"full_mesh already shards across every mesh coordinate; tp_axis ({tp_axis}) has nothing left to split"
+    assert batch_axis is None or (tp_axis is None and not full_mesh and batch_axis != sp_axis), (
+        f"batch_axis ({batch_axis}) excludes KV dedup (tp_axis={tp_axis}, full_mesh={full_mesh}) and must differ "
+        f"from sp_axis ({sp_axis})"
+    )
     assert tp_axis is None or tp_axis != sp_axis, (
         f"tp_axis ({tp_axis}) must differ from sp_axis ({sp_axis}): the same physical axis cannot carry both "
         f"shardings, and dividing by its extent twice would under-allocate the cache"
@@ -913,6 +923,18 @@ def init_kvpe_cache(
     )
     DRAMZeroFill.op(kvpe_cache)
 
+    if batch_axis is not None:
+        dist_shape = ttnn.MeshShape(mesh_device.shape[0], mesh_device.shape[1])
+        coords = [
+            ttnn.MeshCoordinate([coord[i] for i in range(coord.dims())])
+            for coord in ttnn.MeshCoordinateRange(dist_shape)
+        ]
+        placements = [None, None]
+        placements[sp_axis] = ttnn.PlacementShard(2)
+        placements[batch_axis] = ttnn.PlacementReplicate()
+        kvpe_cache.update_tensor_topology(ttnn.TensorTopology(dist_shape, placements, coords))
+        return kvpe_cache
+
     if row_major_seq_topology is not None:
         # DRAMZeroFill is an in-place generic op whose output follows the allocator's default replicated
         # topology, so stamp the intended distribution after the fill.
@@ -958,6 +980,7 @@ def init_mla_kv_cache(
     num_users=1,
     full_mesh=False,
     tp_axis=None,
+    batch_axis=None,
 ) -> MlaKvCache:
     """Allocate and zero a persistent MLA cache in the selected physical format.
 
@@ -966,6 +989,7 @@ def init_mla_kv_cache(
     aligned page size, not the logical row width.
 
     tp_axis: KV dedup, forwarded to init_kvpe_cache -- see its docstring.
+    batch_axis: one user per coordinate along this axis, forwarded to init_kvpe_cache.
     """
     cache_format = MlaKvCacheFormat(cache_format)
     geometry = MlaKvCacheGeometry.from_config(hf_config)
@@ -983,6 +1007,7 @@ def init_mla_kv_cache(
         num_users=num_users,
         full_mesh=full_mesh,
         tp_axis=tp_axis,
+        batch_axis=batch_axis,
     )
     return MlaKvCache(format=cache_format, storage=storage, geometry=geometry)
 

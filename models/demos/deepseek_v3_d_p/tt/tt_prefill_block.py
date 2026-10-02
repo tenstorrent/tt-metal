@@ -641,6 +641,8 @@ class TtPrefillBlock(LightweightModule):
         # --- Attention ---
         attn_norm_out = self.attn_norm(x)
         seq_len_local = attn_norm_out.shape[2]
+
+        logger.info(f"MLA input shape: {attn_norm_out.shape}")
         mla_out = self.mla.forward(
             attn_norm_out,
             rope_tensors,
@@ -713,6 +715,7 @@ class TtPrefillBlock(LightweightModule):
             kv_intermediates["post_attn_norm"] = ttnn.clone(ffn_norm_out)
 
         if self.is_moe:
+            logger.info(f"MOE path: {ffn_norm_out.shape}")
             ffn_out = self._moe_path(
                 ffn_norm_out,
                 return_intermediates=return_intermediates,

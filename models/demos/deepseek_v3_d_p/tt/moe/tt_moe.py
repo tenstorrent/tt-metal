@@ -698,6 +698,7 @@ class TtMoe(LightweightModule):
         input_ids: Optional[torch.Tensor] = None,
         cache_user_id: int = 0,
     ) -> tuple[ttnn.Tensor, Optional[TtMoEIntermediates]]:
+        logger.info(f"Forward pass through MoE layer {self.layer_idx} with input shape: {x.shape}")
         """
         Forward pass through the full MoE pipeline.
 

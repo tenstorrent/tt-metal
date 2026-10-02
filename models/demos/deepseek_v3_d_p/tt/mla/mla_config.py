@@ -796,6 +796,147 @@ MLA_SDPA_CONFIG = {
 }
 
 
+def _bax_mc2d(in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N):
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=COMPUTE_GRID,
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fuse_batch=False,
+        fused_activation=None,
+    )
+
+
+def _bax_reuse(in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N):
+    return ttnn.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=COMPUTE_GRID,
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+    )
+
+
+# Batch-axis attention (ttMLA(batch_axis=...), one user per mesh column, TP=1): every chip runs the
+# WHOLE GLM-5.3 projection of its user, so the per-chip shapes are the TP=4 ones with the TP-split dim
+# 4x wider, which the table above cannot serve. Kept as a separate table (selected only in batch-axis
+# mode) so the TP candidates stay untouched. Tuned on one Blackhole chip by
+# tests/op_unit_tests/test_mla_matmuls_glm_batch_axis.py (HiFi2, warm, best of 3); the comment on each
+# entry is that measurement vs the TTNN-default fallback batch-axis used before.
+_GLM_BATCH_AXIS_TAGS = {"num_heads": 64, "q_lora_rank": 2048}
+MLA_BATCH_AXIS_MATMUL_CONFIG = {
+    # 640x6144x2048: 74.1 us, 110 cores, 71% (default 81.1 us). Act stays DRAM: it is the block's
+    # attn-norm output; in L1 it measured 68.8 us.
+    "q_a_proj": {
+        640: {
+            **_GLM_BATCH_AXIS_TAGS,
+            "program_config": _bax_mc2d(16, 1, 6, 2, 6),
+            "act_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+            "out_mem_config": ttnn.L1_MEMORY_CONFIG,
+            "out_dtype": ttnn.bfloat16,
+        }
+    },
+    # 640x2048x16384: 236.1 us, 110 cores, 60% (default 304.8 us on 103 cores). The 21 MB output does
+    # not fit L1 beside the CBs, so it stays in DRAM; act_mem_config places the q_a_layernorm output.
+    "q_b_proj": {
+        640: {
+            **_GLM_BATCH_AXIS_TAGS,
+            "program_config": _bax_mc2d(8, 1, 8, 2, 48),
+            "act_mem_config": ttnn.L1_MEMORY_CONFIG,
+            "out_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+            "out_dtype": ttnn.bfloat16,
+        }
+    },
+    # 640x6144x576: 43.1 us, 90 cores (N_t=18 floor) (default 44.5 us). DM-bound: 42.6-45.1 us across
+    # every blocking; only an L1 activation moves it (32.9 us).
+    "kv_a_proj_with_mqa": {
+        640: {
+            **_GLM_BATCH_AXIS_TAGS,
+            "program_config": _bax_mc2d(16, 1, 2, 2, 2),
+            "act_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+            "out_mem_config": ttnn.L1_MEMORY_CONFIG,
+            "out_dtype": ttnn.bfloat16,
+        }
+    },
+    # Z=64 x 640x192x512: 202.8 us, 64 cores (default 1D mcast 810.1 us on 20 cores). Reuse needs
+    # per_core_M | M_t and per_core_N == N, so 1280/20 = 64 cores is the grid ceiling; per_core_M=10
+    # (110 cores, 128 blocks) measured 206.4 us and is NOT used -- the same over-subscription returned
+    # garbage on wkv_b2. The 42 MB output does not fit L1.
+    "wkv_b1": {
+        640: {
+            **_GLM_BATCH_AXIS_TAGS,
+            "program_config": _bax_reuse(6, 2, 4, 20, 16),
+            "act_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+            "out_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+            "out_dtype": ttnn.bfloat16,
+        }
+    },
+    # Z=64 x 640x512x256: 191.6 us, 64 cores (default 1D mcast 758.2 us on 20 cores). DM-bound.
+    "wkv_b2": {
+        640: {
+            **_GLM_BATCH_AXIS_TAGS,
+            "program_config": _bax_reuse(4, 1, 8, 20, 8),
+            "act_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+            "out_mem_config": ttnn.L1_MEMORY_CONFIG,
+            "out_dtype": ttnn.bfloat8_b,
+        }
+    },
+    # 640x16384x6144: 493.5 us, 110 cores, 86% (default 849.1 us on 96 cores). in0_block_w=32 overflows L1.
+    "o_proj": {
+        640: {
+            **_GLM_BATCH_AXIS_TAGS,
+            "program_config": _bax_mc2d(16, 1, 6, 2, 18),
+            "act_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+            "out_mem_config": ttnn.L1_MEMORY_CONFIG,
+            "out_dtype": ttnn.bfloat16,
+        }
+    },
+    # 640x2048x4096 (all 640 query rows; no TP query split): 48.7 us with qr in L1, 110 cores, 73%
+    # (default 93.0 us). qr lands in L1 through q_b_proj's act_mem_config above.
+    "indexer.wq_b": {
+        640: {
+            **_GLM_BATCH_AXIS_TAGS,
+            "program_config": _bax_mc2d(8, 1, 6, 2, 12),
+            "act_mem_config": ttnn.L1_MEMORY_CONFIG,
+            "out_mem_config": ttnn.L1_MEMORY_CONFIG,
+            "out_dtype": ttnn.bfloat16,
+        }
+    },
+    # 640x6144x128: 41.3 us, 40 cores (N_t=4 floor) (default 42.2 us). DM-bound on the activation
+    # (27.9 us with it in L1).
+    "indexer.wk": {
+        640: {
+            **_GLM_BATCH_AXIS_TAGS,
+            "program_config": _bax_mc2d(24, 1, 1, 2, 1),
+            "act_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+            "out_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+            "out_dtype": ttnn.bfloat16,
+        }
+    },
+    # 640x6144x32 (BF16 weight): 33.6 us, 10 cores (N_t=1 floor) (default 74.9 us on 20 cores). 18.5 us
+    # with the activation in L1.
+    "indexer.weights_proj": {
+        640: {
+            **_GLM_BATCH_AXIS_TAGS,
+            "program_config": _bax_mc2d(8, 1, 1, 2, 1),
+            "act_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+            "out_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+            "out_dtype": ttnn.bfloat16,
+        }
+    },
+}
+
+
+def get_batch_axis_matmul_config(weight_name: str, seq_len_local: int) -> dict | None:
+    """Batch-axis (TP=1, one user per mesh column) matmul entry, or None. Gating tags are not applied
+    here -- callers check them, as with get_matmul_config."""
+    return MLA_BATCH_AXIS_MATMUL_CONFIG.get(weight_name, {}).get(seq_len_local)
+
+
 def get_matmul_config(weight_name: str, seq_len_local: int) -> dict | list | None:
     """Raw matmul entry for a given weight and local sequence length (per-device).
 

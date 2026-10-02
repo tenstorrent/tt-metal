@@ -18,7 +18,11 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     indexer_layer_is_reused,
     resolve_has_indexer,
 )
-from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
+from models.demos.deepseek_v3_d_p.tt.mla.mla_config import (
+    MLA_MATMUL_CONFIG,
+    MLA_SDPA_CONFIG,
+    get_batch_axis_matmul_config,
+)
 from models.demos.deepseek_v3_d_p.tt.mla.utils import llama4_scale_host
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat, MlaKvCacheGeometry
@@ -77,6 +81,7 @@ class ttMLA:
         cache_path: Path | None = None,
         device: ttnn.MeshDevice | None = None,
         kv_only: bool = False,
+        replicate_tp: bool = False,
     ) -> dict | None:
         """
         Shared logic for converting MLA weights to ttnn with caching.
@@ -90,6 +95,9 @@ class ttMLA:
             tp_axis: Tensor parallel axis
             cache_path: Cache directory path
             device: None for cache-only (build cache), mesh_device for load to device
+            replicate_tp: batch-axis mode (see ttMLA batch_axis). Every weight is replicated across the
+                whole mesh instead of TP-sharded, and cached under a distinct ``layer_{i}.mla_repl``
+                prefix so a TP-sharded tensorbin can never be loaded into the replicated layout.
 
         Returns:
             Dict of ttnn.Tensor if device is not None, else None
@@ -104,8 +112,10 @@ class ttMLA:
         qk_head_dim = qk_nope_head_dim + qk_rope_head_dim
         use_gate = bool(getattr(config, "mla_use_output_gate", False))
 
+        cache_prefix = f"layer_{layer_idx}.mla_repl" if replicate_tp else f"layer_{layer_idx}.mla"
+
         def _cache_name(name):
-            return str(cache_path / f"layer_{layer_idx}.mla.{name}") if cache_path else None
+            return str(cache_path / f"{cache_prefix}.{name}") if cache_path else None
 
         # Prepare tensors — real weights or placeholders
         if state_dict and "q_a_layernorm.weight" in state_dict:
@@ -139,6 +149,8 @@ class ttMLA:
         shard_dims_tp1[tp_axis] = 1
         shard_dims_tp1[sp_axis] = None
         mapper_tp1 = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims_tp1)
+        if replicate_tp:
+            mapper_tp0 = mapper_tp1 = ttnn.ReplicateTensorToMesh(mesh_device)
 
         mem = ttnn.DRAM_MEMORY_CONFIG if device else None
 
@@ -297,7 +309,17 @@ class ttMLA:
         first_layer_idx: Optional[int] = None,
         llama4_scale_cache: Optional[dict] = None,
         sparse_mla_overlap_profile: Optional[str] = None,
+        batch_axis: Optional[int] = None,
     ):
+        # batch_axis: mesh axis that carries independent USERS instead of tensor parallelism (one user
+        # per index along it). Attention then runs TP=1 per user: hidden and all heads are local to the
+        # chip, every weight is replicated, the KVPE / index-key caches are striped over the SP axis
+        # only, and the KVPE gather plus the fused ring indexer run as SP-axis rings (one per user)
+        # instead of the full-mesh snake. It must name the axis TP would otherwise use. None = TP.
+        assert (
+            batch_axis is None or batch_axis == tp_axis
+        ), f"batch_axis ({batch_axis}) must be the axis TP would otherwise use (tp_axis={tp_axis})"
+        self.batch_axis = batch_axis
         # DSA indexer weights (v3.2 / GLM): extract NON-mutating, so the caller's state_dict survives
         # repeated construction / cache build+load (the old pop() emptied it on the first pass). Dense
         # v3.1 has none. Sparse capability is resolved below via resolve_has_indexer (config DSA fields /
@@ -436,7 +458,8 @@ class ttMLA:
 
         # Create CCL object for semaphore management
         self.tt_ccl = get_tt_ccl(mesh_device)
-        self.tp_factor = mesh_device.shape[self.tp_axis]
+        # Batch-axis mode: the TP axis carries users, so attention is TP=1 on every chip.
+        self.tp_factor = 1 if self.batch_axis is not None else mesh_device.shape[self.tp_axis]
         self.sp_factor = mesh_device.shape[self.sp_axis]
         assert (
             self.active_seq_len % self.sp_factor == 0
@@ -544,6 +567,7 @@ class ttMLA:
             self.weight_cache_path,
             device=mesh_device,
             kv_only=kv_only,
+            replicate_tp=self.batch_axis is not None,
         )
         self.kv_a_layernorm_weight = weights["kv_a_layernorm"]
         self.kv_a_proj_with_mqa_weight = weights["kv_a_proj_with_mqa"]
@@ -569,7 +593,7 @@ class ttMLA:
         self._sparse_kv_gather_buffer = None
 
         self.tp_shard_kv = self._has_indexer and self.tp_factor > 1
-        if self._has_indexer:
+        if self._has_indexer and self.batch_axis is None:
             assert self.tp_factor > 1, (
                 f"the sparse (DSA) path requires tp_factor > 1 (got {self.tp_factor}): its KV and indexer-key "
                 "caches are deduped across SP*TP and the full-mesh gather has no TP leg to reassemble at tp=1"
@@ -609,6 +633,11 @@ class ttMLA:
         if requested_overlap_profile is None:
             requested_overlap_profile = getattr(config, "sparse_mla_overlap_profile", None)
         if requested_overlap_profile is not None and requested_overlap_profile.lower() in ("", "0", "off", "none"):
+            requested_overlap_profile = None
+        if self.batch_axis is not None and requested_overlap_profile is not None:
+            # The overlap region's gather sub-device is sized for the full-mesh snake; the per-user SP
+            # ring has not been validated inside it, so batch-axis mode runs the sequential path.
+            logger.info(f"MLA layer {layer_idx}: batch_axis set, sparse MLA overlap disabled")
             requested_overlap_profile = None
 
         self._sparse_mla_overlap = None
@@ -652,6 +681,7 @@ class ttMLA:
                     layer_num=self.layer_num,
                     first_layer_idx=first_layer_idx,
                     output_tp_sequence_sharded=self._needs_head_to_seq_reshard,
+                    batch_axis=self.batch_axis,
                 )
         else:
             self._indexer = NullIndexer()  # dense v3.1: forward calls .forward() -> None (dense path)
@@ -822,6 +852,10 @@ class ttMLA:
         Returns None when no tuned config applies (caller falls back to defaults)."""
         if not self._is_blackhole:
             return None
+        # The main table holds TP-sharded per-device shapes, which batch-axis mode's unsharded weights
+        # (4x the N or K at tp=4) overflow; it has its own table. No entry -> TTNN defaults.
+        if self.batch_axis is not None:
+            return self._select_cfg(get_batch_axis_matmul_config(weight_name, seq_len_local), weight_name)
         return self._select_cfg(self.mm_configs[weight_name].get(seq_len_local), weight_name)
 
     def _weight_kt(self, weight_name: str) -> int | None:
@@ -2079,6 +2113,7 @@ class ttMLA:
 
         q_seq_sharded = q
         if transpose_head_to_seq:
+            logger.info(f"Transposing head to sequence for q with shape: {q.shape}")
             q_seq_sharded = ttnn.experimental.all_to_all_async_generic(
                 q,
                 in_dim=1,
@@ -2087,6 +2122,7 @@ class ttMLA:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cluster_axis=self.tp_axis,
             )  # [1,H,S/(sp·tp),576] — FABRIC_2D path selected at runtime; topology resolves to Linear
+            logger.info(f"q after head-to-sequence transpose has shape: {q_seq_sharded.shape}")
 
         q_rm = ttnn.to_layout(q_seq_sharded, ttnn.ROW_MAJOR_LAYOUT)  # the op is ROW_MAJOR-only; q comes in TILE
         if q_seq_sharded is not q:
@@ -2122,7 +2158,9 @@ class ttMLA:
             k_chunk_size=k_chunk,
             block_cyclic_sp_axis=self.sp_axis,
             block_cyclic_chunk_local=block_cyclic_chunk_local,
-            block_cyclic_cache_tp_sharded=True,
+            # The gathered prefix is in sp*tp chip-major order under TP dedup; in batch-axis mode it is
+            # one user's SP ring, i.e. plain SP block-cyclic order.
+            block_cyclic_cache_tp_sharded=self.batch_axis is None,
             cache_batch_idx=cache_batch_idx,
         )
         ttnn.deallocate(q_rm)
@@ -2134,6 +2172,7 @@ class ttMLA:
         if transpose_head_to_seq:
             # Invert the redistribution so the result matches the head-sharded
             # [1, H/tp, S/sp, v_dim] consumed by the epilogue.
+            logger.info(f"Transposing head to sequence for ret with shape: {ret.shape}")
             head_sharded = ttnn.experimental.all_to_all_async_generic(
                 ret,
                 in_dim=2,
@@ -2142,6 +2181,7 @@ class ttMLA:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cluster_axis=self.tp_axis,
             )
+            logger.info(f"Head-sharded ret has shape: {head_sharded.shape}")
             ttnn.deallocate(ret)
             ret = head_sharded
         return ret
@@ -2236,7 +2276,9 @@ class ttMLA:
             dim=2,
             output_tensor=self._sparse_kv_gather_buffer,
             num_links=self.ccl_num_links,
-            cluster_axis=None,
+            # Batch-axis mode: each user's cache lives on its own SP column, so gather along SP only
+            # (one ring per user). Otherwise one snake over the whole sp*tp-striped mesh.
+            cluster_axis=self.sp_axis if self.batch_axis is not None else None,
             **slot_meta_kwargs,
             **extent_kwargs,
         )
