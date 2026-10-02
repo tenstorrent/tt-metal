@@ -37,6 +37,15 @@ void add_dram_skip_defines_if_needed(tt::ARCH arch, std::map<std::string, std::s
 bool should_sync_after_in1_dram(tt::ARCH arch);
 
 /*
+ * Opt-in LUT-sigmoid SwiGLU epilogue for the fused-SwiGLU matmul kernels (minimal_matmul and
+ * all_gather_minimal_matmul_async compute kernels, swiglu_lut.hpp). Enabled by setting env var
+ * TT_MM_SWIGLU_LUT_SILU=1, which adds the SWIGLU_LUT_SILU define; the define is part of the kernel hash, so
+ * builds with and without it coexist in the kernel cache. Off (the exact silu_tile + mul_binary_tile epilogue)
+ * unless set. Wormhole only: the LUT pass uses the Wormhole sfpi LUT programming.
+ */
+void add_swiglu_lut_silu_define_if_needed(tt::ARCH arch, std::map<std::string, std::string>& mm_kernel_defines);
+
+/*
  * Optionally limit matmul compute throughput by inserting NOP instructions between MVMUL instructions of matmul kernel
  * This will slow down the OP if UNPACK/PACK threads are capable of feeding data sufficiently fast (MATH compute bound)
  *

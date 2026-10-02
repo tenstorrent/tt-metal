@@ -440,20 +440,19 @@ void matmul_blocks(
             uint32_t in0_index = in0_index_offset;
             uint32_t in1_index = in1_index_offset;
 
-            for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
-                matmul_block(
-                    in0_cb,
-                    in1_cb,
-                    in0_index,
-                    in1_index,
-                    dst_index,
-                    false /*transpose*/,
-                    subblock_w,
-                    subblock_h,
-                    K_block_tiles);
-                in0_index++;
-                in1_index += full_N_block_tiles;
-            }
+            // One call for the whole K loop of this subblock: on Wormhole a 2x2 subblock alternates its MVMUL
+            // order between K tiles so the late source-register refills are spread over both unpackers.
+            matmul_block_kloop(
+                in0_cb,
+                in1_cb,
+                in0_index,
+                in1_index,
+                dst_index,
+                false /*transpose*/,
+                subblock_w,
+                subblock_h,
+                K_block_tiles,
+                full_N_block_tiles /*in1_kt_stride*/);
             tile_regs_commit();
             tile_regs_wait();
             uint32_t write_dst_index = 0;
@@ -554,7 +553,7 @@ void kernel_main() {
             current_N_block_tiles = n_tile_end - n_tile;
             current_subblock_w = std::min(current_N_block_tiles, subblock_w);
 
-            matmul_block_init(
+            matmul_block_kloop_init(
                 in0_cb,
                 in1_cb,
                 false /*transpose*/,

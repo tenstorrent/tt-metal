@@ -14,18 +14,30 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/operations/experimental/minimal_matmul/device/kernels/swiglu_lut.hpp"
 
 #ifdef FUSE_SWIGLU
 // Fused SwiGLU output stage. The matmul produced an interleaved gate/up block in `in_cb`:
 // within each M row, column tile 2p is the gate projection and 2p+1 the up projection (the
 // weight was tile-pair interleaved on the host). Each pair emits one output tile = silu(gate)*up,
 // so the block shrinks from N_block_tiles to N_block_tiles/2 along N. No extra CB / DRAM
-// round-trip. N_block_tiles must be even (enforced host-side). silu and mul_binary are distinct
-// SFPU programs, so each is re-initialised right before use.
+// round-trip. N_block_tiles must be even (enforced host-side). In the exact build silu and mul_binary are
+// distinct SFPU programs, so each is re-initialised right before use; the opt-in -DSWIGLU_LUT_SILU build does both in
+// one LUT-sigmoid pass (swiglu_lut.hpp).
 //
 // With FUSE_BIAS: bias is interleaved identically (tile 2p = gate bias, 2p+1 = up bias)
 // and added via row-broadcast before silu/mul: out = silu(gate + bias_gate) * (up + bias_up).
-void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+// current_M / current_N: the rows and columns of this block that hold real output (the block at the M or N edge
+// of a core's patch is ragged). Only those gate/up pairs are computed; the out CB is still pushed at the full block
+// layout, which is what the writer consumes and clips (write_block_sync skips the padded tiles).
+void swiglu_block(
+    uint32_t in_cb,
+    uint32_t bias_cb,
+    uint32_t out_cb,
+    uint32_t M_block_tiles,
+    uint32_t N_block_tiles,
+    uint32_t current_M_block_tiles,
+    uint32_t current_N_block_tiles) {
 #ifdef FUSE_BIAS
     reconfig_data_format(in_cb, bias_cb);
 #else
@@ -35,11 +47,18 @@ void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_
 
     constexpr uint32_t GATE_DST = 0;
     constexpr uint32_t UP_DST = 1;
+    static_assert(UP_DST == GATE_DST + 1, "swiglu_lut_tile reads the up tile at GATE_DST + 1");
     const uint32_t out_N_block_tiles = N_block_tiles >> 1;
+    const uint32_t live_pairs = (current_N_block_tiles + 1) >> 1;  // gate/up pairs with real data in this block
 
     for (uint32_t m = 0; m < M_block_tiles; m++) {
+        if (m >= current_M_block_tiles) {
+            // padded row: keep the out CB layout the writer expects, compute nothing
+            cb_push_back(out_cb, out_N_block_tiles);
+            continue;
+        }
         const uint32_t row_base = m * N_block_tiles;
-        for (uint32_t p = 0; p < out_N_block_tiles; p++) {
+        for (uint32_t p = 0; p < live_pairs; p++) {
             const uint32_t gate_n = p << 1;
             const uint32_t up_n = gate_n + 1;
             const uint32_t gate_tile_id = row_base + gate_n;
@@ -55,10 +74,20 @@ void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_
             copy_tile(in_cb, gate_tile_id, GATE_DST);
             copy_tile(in_cb, up_tile_id, UP_DST);
 #endif
-            silu_tile_init();
-            silu_tile(GATE_DST);
-            mul_binary_tile_init();
-            mul_binary_tile(GATE_DST, UP_DST, GATE_DST);
+            if constexpr (kSwigluLutSilu) {
+                // Opt-in (-DSWIGLU_LUT_SILU): sigmoid from a 6-segment SFPLUTFP32 table, fused with the up multiply
+                // into one SFPU pass (swiglu_lut.hpp). Reads the up tile at GATE_DST + 1. Off by default.
+                swiglu_lut_tile_init();
+                swiglu_lut_tile(GATE_DST);
+            } else {
+                silu_tile_init();
+                silu_tile<false>(GATE_DST);  // bf16-grade exp + 1 NR step: the output is packed to bf16 anyway
+                mul_binary_tile_init();
+                // <true>: the fp32-DST code path, i.e. no software round-to-nearest-even per vector. Under fp32 dest it
+                // is the default; under bf16 dest the store truncates instead of rounding (the output is bf16 either
+                // way).
+                mul_binary_tile<true>(GATE_DST, UP_DST, GATE_DST);
+            }
             tile_regs_commit();
 
             tile_regs_wait();
@@ -360,20 +389,19 @@ void matmul_blocks(
             uint32_t in0_index = in0_index_offset;
             uint32_t in1_index = in1_index_offset;
 
-            for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
-                matmul_block(
-                    in0_cb.get_cb_id(),
-                    in1_cb.get_cb_id(),
-                    in0_index,
-                    in1_index,
-                    dst_index,
-                    false /*transpose*/,
-                    subblock_w,
-                    subblock_h,
-                    K_block_tiles);
-                in0_index++;
-                in1_index += full_N_block_tiles;
-            }
+            // One call for the whole K loop of this subblock: on Wormhole a 2x2 subblock alternates its MVMUL
+            // order between K tiles so the late source-register refills are spread over both unpackers.
+            matmul_block_kloop(
+                in0_cb.get_cb_id(),
+                in1_cb.get_cb_id(),
+                in0_index,
+                in1_index,
+                dst_index,
+                false /*transpose*/,
+                subblock_w,
+                subblock_h,
+                K_block_tiles,
+                full_N_block_tiles /*in1_kt_stride*/);
             tile_regs_commit();
             tile_regs_wait();
             uint32_t write_dst_index = 0;
@@ -469,7 +497,7 @@ void kernel_main() {
             current_N_block_tiles = n_tile_end - n_tile;
             current_subblock_w = std::min(current_N_block_tiles, subblock_w);
 
-            matmul_block_init(
+            matmul_block_kloop_init(
                 in0_cb_id,
                 in1_cb_id,
                 false /*transpose*/,
@@ -531,7 +559,13 @@ void kernel_main() {
             in2_cb.wait_front(N_block_tiles);
 #endif
             swiglu_block(
-                intermediate_cb.get_cb_id(), in2_cb.get_cb_id(), out_cb.get_cb_id(), M_block_tiles, N_block_tiles);
+                intermediate_cb.get_cb_id(),
+                in2_cb.get_cb_id(),
+                out_cb.get_cb_id(),
+                M_block_tiles,
+                N_block_tiles,
+                current_M_block_tiles,
+                current_N_block_tiles);
 #ifdef FUSE_BIAS
             in2_cb.pop_front(N_block_tiles);
 #endif

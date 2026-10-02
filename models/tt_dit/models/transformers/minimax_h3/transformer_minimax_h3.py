@@ -14,10 +14,10 @@ from ....layers.module import Module, ModuleList
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
-from ....utils.tensor import pad_single
+from ....utils.tensor import from_torch, pad_single
 from ....utils.tracing import StateTensor, traced_function
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
-from .transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
+from .transformer_block_minimax_h3 import ADALN_TABLE_COPIES, MiniMaxH3TransformerBlock
 
 # shift, scale -- the order `norm_out.linear` emits them in.
 NUM_OUT_MODULATION_PARAMS = 2
@@ -201,6 +201,8 @@ class MiniMaxH3Transformer3DModel(Module):
         self.ccl_manager = ccl_manager
         self._temb_state = StateTensor()
         self._timestep_idx_state: dict[int, StateTensor] = {}
+        # `position % ADALN_TABLE_COPIES` per padded length, built outside the traced block loop.
+        self._adaln_spread: dict[int, ttnn.Tensor] = {}
         self._static_source_state = StateTensor()
         self.parallel_config = parallel_config
         self.tp_mesh_axis = parallel_config.tensor_parallel.mesh_axis
@@ -401,6 +403,16 @@ class MiniMaxH3Transformer3DModel(Module):
         temb = self._temb_state.value
 
         adaln_idx = as_indices(adaln_indices)
+        n_local = adaln_idx.shape[-1]
+        if n_local not in self._adaln_spread:
+            self._adaln_spread[n_local] = from_torch(
+                (torch.arange(n_local) % ADALN_TABLE_COPIES).to(torch.int32).reshape(1, n_local),
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.Layout.ROW_MAJOR,
+                mesh_axes=[None, None],
+            )
+        adaln_spread = self._adaln_spread[n_local]
         ts_state = self._timestep_idx_state.setdefault(pad_to, StateTensor())
         ts_state.update(as_indices(timestep_indices), traced=traced)
         timestep_idx = ts_state.value
@@ -412,6 +424,7 @@ class MiniMaxH3Transformer3DModel(Module):
             adaln_idx,
             rope_cos,
             rope_sin,
+            adaln_spread,
             traced=traced,
             tracer_trace_key=pad_to,
         )
@@ -449,6 +462,7 @@ class MiniMaxH3Transformer3DModel(Module):
         adaln_indices: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
+        adaln_spread: ttnn.Tensor,
     ) -> ttnn.Tensor:
         for block in self.transformer_blocks:
             hidden = block(
@@ -458,6 +472,7 @@ class MiniMaxH3Transformer3DModel(Module):
                 adaln_indices=adaln_indices,
                 rope_cos=rope_cos,
                 rope_sin=rope_sin,
+                adaln_spread=adaln_spread,
             )
         return hidden
 

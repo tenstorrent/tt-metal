@@ -995,3 +995,322 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
         t++;
     }
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 2x2 K-loop MVMUL schedules. A schedule is a period-P list of per-step orders of the four operand pairs; the bank
+// operations between MVMULs are derived from the order at compile time: a source whose tile changes and is used again
+// later in the step gets a read-bank flip (SETRWC CLR_x, a pure flip because both DVALID auto-clears are disabled by
+// _llk_math_matmul_kloop_init_), a source whose tile has had its last use is handed back with CLEARDVALID (which also
+// flips). At the end of a step both current tiles are done and are handed back together. A source whose read bank does
+// not return to bank 0 after a step (odd number of flips) gets a compensating flip at the start of the next step, so the
+// unpacker's fixed write order (tile 0 -> bank 0, tile 1 -> bank 1 per step) never has to change. dst index = B*2 + A.
+// MM_KLOOP_SCHED selects the schedule; 1 is the production reuse-A / reuse-B mirror.
+#ifndef MM_KLOOP_SCHED
+#define MM_KLOOP_SCHED 1
+#endif
+namespace kloop_sched
+{
+// pair code p = A*2 + B: 0 = A0B0, 1 = A0B1, 2 = A1B0, 3 = A1B1
+constexpr std::uint8_t kOrders[][4][4] = {
+    // Measured 2026-09-23/24 on one Wormhole device, ff1 plain (8,7,10) 2x2 fp32 HiFi2, cycles per K-tile step, full loop / no packer.
+    {{0, 1, 2, 3}},                                           // 0  row-major (reuse-A) every step = the legacy per-tile order:   210 / 198
+    {{0, 1, 2, 3}, {0, 2, 1, 3}},                             // 1  reuse-A / reuse-B mirror, period 2 = production:              202 / 193
+    {{0, 2, 1, 3}},                                           // 2  column-major (reuse-B) every step:                            210 / 198
+    {{0, 1, 2, 3}, {3, 2, 1, 0}},                             // 3  row-major / row-major from tile 1: HANGS (see note below)
+    {{0, 1, 3, 2}},                                           // 4  zigzag every step (odd bank flips):              not measured, needs the unpacker enabler
+    {{0, 1, 3, 2}, {0, 2, 3, 1}},                             // 5  zigzag / mirrored zigzag, period 2:              not measured, same
+    {{0, 1, 2, 3}, {0, 2, 1, 3}, {3, 2, 1, 0}, {3, 1, 2, 0}}, // 6  row, col, row from tile 1, col from tile 1: not measured, same
+    {{0, 3, 1, 2}},                                           // 7  diagonal-first, control:                        not measured, same
+    {{0, 2, 1, 3}, {0, 1, 2, 3}},                             // 8  mirror with the parity swapped:                                 201 / 193
+};
+// Note on schedules that start a step on tile 1 or flip a source an odd number of times: the compensating SETRWC flip
+// this interpreter emits moves the FPU's read bank onto a bank the unpacker has not written yet (it always writes tile 0
+// into bank 0 first), and the loop deadlocks (schedule 3 hung the device). Those schedules need the unpacker to write
+// tile 1 first on the matching steps (a period-2 write order in _llk_unpack_AB_matmul_), not a read-pointer flip. Only
+// schedules whose every step starts on tile 0 for both sources with an even number of flips (0, 1, 2, 8) are safe here.
+constexpr int kPeriod[] = {1, 2, 1, 2, 1, 2, 4, 1, 2};
+
+constexpr int tile(int S, int par, int i, bool isA)
+{
+    return isA ? (kOrders[S][par][i] >> 1) : (kOrders[S][par][i] & 1);
+}
+
+constexpr int dst_of(int S, int par, int i)
+{
+    return (kOrders[S][par][i] & 1) * 2 + (kOrders[S][par][i] >> 1);
+}
+
+// transition after MVMUL i for one source: 0 = nothing, 1 = flip (tile changes, current tile used again later), 2 = release
+constexpr int trans(int S, int par, int i, bool isA)
+{
+    if (i == 3)
+    {
+        return 2;
+    }
+    const int cur = tile(S, par, i, isA);
+    if (tile(S, par, i + 1, isA) == cur)
+    {
+        return 0;
+    }
+    for (int j = i + 2; j < 4; j++)
+    {
+        if (tile(S, par, j, isA) == cur)
+        {
+            return 1;
+        }
+    }
+    return 2;
+}
+
+constexpr int flips(int S, int par, bool isA)
+{
+    int n = 0;
+    for (int i = 0; i < 4; i++)
+    {
+        n += (trans(S, par, i, isA) != 0) ? 1 : 0;
+    }
+    return n & 1;
+}
+
+constexpr int first_tile(int S, int par, bool isA)
+{
+    return tile(S, par, 0, isA);
+}
+
+// read-bank position after step `par`, given it started on the bank of its first tile (tile i lives in bank i)
+constexpr int end_bank(int S, int par, bool isA)
+{
+    return (first_tile(S, par, isA) + flips(S, par, isA)) & 1;
+}
+
+// steady-state read-bank position going into step position `par` of a period (the previous step's end)
+constexpr int in_bank_ss(int S, int par, bool isA)
+{
+    return par == 0 ? end_bank(S, kPeriod[S] - 1, isA) : end_bank(S, par - 1, isA);
+}
+
+template <int S, int PAR, int I>
+inline void emit_mvmul(const std::uint32_t dst_index)
+{
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + dst_of(S, PAR, I));
+    ckernel_template::run();
+    constexpr int ka = trans(S, PAR, I, true), kb = trans(S, PAR, I, false);
+    if constexpr (I == 3)
+    {
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD);
+        TTI_CLEARDVALID(p_setrwc::CLR_AB, 0); // both current tiles done: hand back, flip
+    }
+    else
+    {
+        if constexpr (ka == 2 && kb == 2)
+        {
+            TTI_CLEARDVALID(p_setrwc::CLR_AB, 0);
+        }
+        else
+        {
+            if constexpr (ka == 2)
+            {
+                TTI_CLEARDVALID(p_setrwc::CLR_A, 0);
+            }
+            if constexpr (kb == 2)
+            {
+                TTI_CLEARDVALID(p_setrwc::CLR_B, 0);
+            }
+        }
+        if constexpr (ka == 1 && kb == 1)
+        {
+            TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
+        }
+        else if constexpr (ka == 1)
+        {
+            TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
+        }
+        else if constexpr (kb == 1)
+        {
+            TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
+        }
+    }
+}
+
+// INA / INB: the read-bank position of each source on entry; a compensating flip moves it to the bank of the step's first tile
+template <int S, int PAR, int INA, int INB>
+inline void emit_step(const std::uint32_t dst_index)
+{
+    constexpr bool fa = INA != first_tile(S, PAR, true), fb = INB != first_tile(S, PAR, false);
+    if constexpr (fa && fb)
+    {
+        TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
+    }
+    else if constexpr (fa)
+    {
+        TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
+    }
+    else if constexpr (fb)
+    {
+        TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
+    }
+    emit_mvmul<S, PAR, 0>(dst_index);
+    emit_mvmul<S, PAR, 1>(dst_index);
+    emit_mvmul<S, PAR, 2>(dst_index);
+    emit_mvmul<S, PAR, 3>(dst_index);
+}
+
+// one period starting from read-bank positions (A0IN, B0IN) for its first step; later steps chain statically
+template <int S, int A0IN, int B0IN>
+inline void emit_period(const std::uint32_t dst_index, const std::uint32_t steps)
+{
+    constexpr int P = kPeriod[S];
+    if (steps > 0)
+    {
+        emit_step<S, 0, A0IN, B0IN>(dst_index);
+    }
+    if constexpr (P > 1)
+    {
+        if (steps > 1)
+        {
+            emit_step<S, 1, end_bank(S, 0, true), end_bank(S, 0, false)>(dst_index);
+        }
+    }
+    if constexpr (P > 2)
+    {
+        if (steps > 2)
+        {
+            emit_step<S, 2, end_bank(S, 1, true), end_bank(S, 1, false)>(dst_index);
+        }
+    }
+    if constexpr (P > 3)
+    {
+        if (steps > 3)
+        {
+            emit_step<S, 3, end_bank(S, 2, true), end_bank(S, 2, false)>(dst_index);
+        }
+    }
+}
+
+template <MathFidelity math_fidelity, int S>
+inline void run_schedule(const std::uint32_t dst_index, const std::uint32_t kt_dim)
+{
+    constexpr int P = kPeriod[S];
+    static_assert(
+        first_tile(S, 0, true) == 0 && first_tile(S, 0, false) == 0 && end_bank(S, 0, true) == 0 && end_bank(S, 0, false) == 0 &&
+            (P < 2 || (first_tile(S, 1, true) == 0 && first_tile(S, 1, false) == 0 && end_bank(S, 1, true) == 0 && end_bank(S, 1, false) == 0)) &&
+            (P < 3 || (first_tile(S, 2, true) == 0 && first_tile(S, 2, false) == 0 && end_bank(S, 2, true) == 0 && end_bank(S, 2, false) == 0)) &&
+            (P < 4 || (first_tile(S, 3, true) == 0 && first_tile(S, 3, false) == 0 && end_bank(S, 3, true) == 0 && end_bank(S, 3, false) == 0)),
+        "kloop schedule: every step must start on tile 0 of both sources and flip each source an even number of times; other "
+        "schedules deadlock against the unpacker's fixed write order (see the note above kOrders)");
+    if (kt_dim == 0)
+    {
+        return;
+    }
+    // first period enters with both read banks at 0 (the unpacker filled tile 0 into bank 0; the previous call left the pointer there)
+    const std::uint32_t first = kt_dim < P ? kt_dim : P;
+    emit_period<S, 0, 0>(dst_index, first);
+    std::uint32_t k = first;
+    for (; k + P <= kt_dim; k += P)
+    {
+        emit_period<S, in_bank_ss(S, 0, true), in_bank_ss(S, 0, false)>(dst_index, P);
+    }
+    const std::uint32_t r = kt_dim - k; // tail steps, entered in steady state
+    if (r > 0)
+    {
+        emit_period<S, in_bank_ss(S, 0, true), in_bank_ss(S, 0, false)>(dst_index, r);
+    }
+    // leave both read banks at 0 for the next call: the last executed step is parity (r ? r : P) - 1
+    const std::uint32_t last = (r ? r : P) - 1;
+    const bool fa            = (last == 0 && end_bank(S, 0, true)) || (last == 1 && end_bank(S, 1 % P, true)) || (last == 2 && end_bank(S, 2 % P, true)) ||
+                    (last == 3 && end_bank(S, 3 % P, true));
+    const bool fb = (last == 0 && end_bank(S, 0, false)) || (last == 1 && end_bank(S, 1 % P, false)) || (last == 2 && end_bank(S, 2 % P, false)) ||
+                    (last == 3 && end_bank(S, 3 % P, false));
+    if (fa && fb)
+    {
+        TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
+    }
+    else if (fa)
+    {
+        TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
+    }
+    else if (fb)
+    {
+        TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
+    }
+}
+} // namespace kloop_sched
+
+/**
+ * @brief Configure the math thread for @ref _llk_math_matmul_kloop_: the standard matmul init, plus, for a 2x2
+ *        block, both SrcA and SrcB DVALID auto-clears disabled so the K loop can hand banks back explicitly.
+ *
+ * Both disable bits live in the same 16-bit config word that @ref _llk_math_matmul_init_ writes, so a later plain
+ * matmul init (or @ref _llk_math_matmul_uninit_) restores the standard state. Blocks other than 2x2 are configured
+ * exactly as by @ref _llk_math_matmul_init_ and run the standard loop.
+ *
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @param in0_tile_r_dim: Row dimension of an in0 tile.
+ * @param in0_tile_c_dim: Column dimension of an in0 tile.
+ * @param in1_tile_r_dim: Row dimension of an in1 tile.
+ * @param in1_tile_c_dim: Column dimension of an in1 tile.
+ * @param partial_face: True when the tile has fewer than the full set of faces.
+ * @param transpose: Non-zero to transpose in1 faces during the multiply.
+ * @param ct_dim: Number of column tiles in the output block.
+ * @param rt_dim: Number of row tiles in the output block.
+ */
+template <MathFidelity math_fidelity>
+inline void _llk_math_matmul_kloop_init_(
+    const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
+    const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
+    const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
+    const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
+    const bool partial_face            = false,
+    const std::uint32_t transpose      = 0,
+    const std::uint32_t ct_dim         = 1,
+    const std::uint32_t rt_dim         = 1)
+{
+    _llk_math_matmul_init_<math_fidelity, 0>(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
+    if (ct_dim == 2 && rt_dim == 2)
+    {
+        // Every bank hand-back in the 2x2 K loop is an explicit CLEARDVALID; SETRWC CLR_A / CLR_B become pure
+        // read-bank flips. Same config word as the SrcB disable the init above wrote.
+        TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, CLR_DVALID_SrcA_Disable_MASK | CLR_DVALID_SrcB_Disable_MASK);
+    }
+}
+
+/**
+ * @brief Run kt_dim consecutive K-tile steps of a matmul block, alternating the 2x2 MVMUL order between steps.
+ *
+ * For a 2x2 block the unpacker delivers, per K tile, two in0 tiles B0,B1 to the two SrcB banks and two in1 tiles
+ * A0,A1 to the two SrcA banks (see @ref _llk_unpack_AB_matmul_). The standard reuse-A order A0B0, A0B1, A1B0, A1B1
+ * hands A0 back after the 2nd MVMUL, B0 after the 3rd, A1 and B1 after the 4th, while the next step needs A0,B0
+ * first, then B1, then A1: both refills that arrive late are SrcB's. The mirrored reuse-B order A0B0, A1B0, A0B1,
+ * A1B1 has the same shape with SrcA and SrcB swapped. Alternating the two orders puts each step's second late
+ * refill on the unpacker that would otherwise be idle. Both orders flip each source's read bank an even number of
+ * times per step, so the unpacker's write order is unchanged, and every dst tile accumulates the same products in
+ * the same order, so the result is bit-identical to @ref _llk_math_matmul_ called kt_dim times.
+ *
+ * Requires @ref _llk_math_matmul_kloop_init_ with the same ct_dim / rt_dim (both DVALID auto-clears disabled for
+ * 2x2). Blocks other than 2x2 fall through to @ref _llk_math_matmul_.
+ *
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @param dst_index: Base tile index into the destination register for the output block.
+ * @param ct_dim: Number of column tiles in the output block.
+ * @param rt_dim: Number of row tiles in the output block.
+ * @param kt_dim: Number of K-tile steps to run.
+ * @note On the unpack thread, pair with @ref _llk_unpack_AB_matmul_kloop_ (or kt_dim calls of @ref _llk_unpack_AB_matmul_).
+ */
+template <MathFidelity math_fidelity>
+inline void _llk_math_matmul_kloop_(const std::uint32_t dst_index, const std::uint32_t ct_dim, const std::uint32_t rt_dim, const std::uint32_t kt_dim)
+{
+    if (ct_dim != 2 || rt_dim != 2)
+    {
+        for (std::uint32_t k = 0; k < kt_dim; k++)
+        {
+            _llk_math_matmul_<math_fidelity, 0>(dst_index, ct_dim, rt_dim);
+        }
+        return;
+    }
+
+    LLK_ASSERT(
+        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
+        "matmul kloop: Src zero-substitution flag does not hold the operand-driven value (see _llk_math_matmul_)");
+
+    kloop_sched::run_schedule<math_fidelity, MM_KLOOP_SCHED>(dst_index, kt_dim);
+}

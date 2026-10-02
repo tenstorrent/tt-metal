@@ -89,9 +89,12 @@ def has_mmrs_config(m: int, k: int, n: int, core_grid: ttnn.CoreCoord) -> bool:
     `core_grid` is the device's compute grid, and it is load-bearing rather than decorative: *both*
     ways of resolving a real blocking are architecture-specific -- `_SWEPT_BLOCKINGS` is only valid
     on `_DEVICE_GRID`, and the v2.3 rule engine is Blackhole-only. Gating on the shape alone accepted
-    every tile-aligned M on Wormhole too, where neither source can hit, so all 50 ff2 blocks per
+    every tile-aligned M on Wormhole too, where neither source could hit, so all 50 ff2 blocks per
     denoise step silently ran the very fallback this gate exists to avoid. Ask
     `resolves_fused_mmrs_config` about the real grid instead of assuming the answer from (m, k, n).
+    Wormhole now resolves through the global table's own 8x9 entries (`fused_mmrs_configs` in
+    `utils/matmul.py`: the 15 s M = 13664 shape, swept 2026-09-23); every other Wormhole M stays on
+    the unfused path until it is swept the same way.
     """
     if not (k == _K and n == _N and m % _TILE == 0):
         return False

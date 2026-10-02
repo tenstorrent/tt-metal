@@ -7,10 +7,13 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include <algorithm>
+#include <cstdlib>
+#include <string>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tuple>
 #include <utility>
@@ -384,7 +387,32 @@ all_gather_minimal_matmul_async_factory_helper(
     //
     // The PR's single-buffered output is KEPT (not reverted to 2x): it is what lets large-N
     // shapes such as chunks=3 QKV fit in L1; re-doubling it OOMs those here.
-    const uint32_t double_buffer_factor = 2;
+    // TT_AGMM_CB_DEPTH=<n> deepens the in0/in1 operand CBs for delivery experiments (default 2; the
+    // caller owns the L1 budget). TT_AGMM_CB_DEPTH=auto picks the deepest of 4 / 3 / 2 whose CBs stay
+    // under a fixed budget, from the blocking alone (no allocator query), so every AGMM shape of a
+    // model gets the depth its L1 allows.
+    uint32_t double_buffer_factor = 2;
+    if (const char* depth_env = std::getenv("TT_AGMM_CB_DEPTH")) {
+        if (std::string(depth_env) == "auto") {
+            const uint32_t single_cb_bytes =
+                (fuse_swiglu ? out_block_num_tiles / 2 : out_block_num_tiles) * out_tile_size +
+                out_block_num_tiles * intermediate_tile_size + (use_bias ? in2_block_num_tiles * in2_tile_size : 0) +
+                (use_fused_ternary ? (out_block_num_tiles + N_block_tiles) * in1_tile_size : 0);
+            const uint32_t operand_cb_bytes = in0_block_num_tiles * in0_tile_size + in1_block_num_tiles * in1_tile_size;
+            constexpr uint32_t cb_budget_bytes = 1'350'000;  // of the 1,499,136 B the CB region may reach on Wormhole
+            for (uint32_t depth : {4u, 3u}) {
+                if (single_cb_bytes + depth * operand_cb_bytes <= cb_budget_bytes) {
+                    double_buffer_factor = depth;
+                    break;
+                }
+            }
+        } else {
+            const int depth = std::atoi(depth_env);
+            if (depth >= 2) {
+                double_buffer_factor = static_cast<uint32_t>(depth);
+            }
+        }
+    }
     uint32_t in0_cb_num_tiles = in0_block_num_tiles * double_buffer_factor;
     uint32_t in1_cb_num_tiles = in1_block_num_tiles * double_buffer_factor;
     // SwiGLU writes half the N tiles per block (one per gate/up pair); the intermediate
@@ -657,10 +685,20 @@ all_gather_minimal_matmul_async_factory_helper(
     if (use_bias) {
         defines["FUSE_BIAS"] = "1";
     }
+    // TT_AGMM_INJECTOR_DEFER=1: injector cores defer their output write like the other cores instead of
+    // writing synchronously at the M block end (which stalls the next M block's operand feed for the
+    // epilogue plus the write). The write stagger below then shifts by one row so no core writes at K
+    // block 0, where the deferred write would run before the block's first operand read.
+    const char* injector_defer_env = std::getenv("TT_AGMM_INJECTOR_DEFER");
+    const bool injector_defer = injector_defer_env != nullptr && std::string(injector_defer_env) != "0";
+    if (injector_defer) {
+        defines["AGMM_INJECTOR_DEFER"] = "1";
+    }
     // Added to `defines` before the per-kernel copies below (in0/in1/compute) so every
     // kernel containing output-writer or compute code sees FUSE_SWIGLU.
     if (fuse_swiglu) {
         defines["FUSE_SWIGLU"] = "1";
+        ttnn::operations::compute_throttle_utils::add_swiglu_lut_silu_define_if_needed(device->arch(), defines);
     }
     if (use_fused_ternary) {
         defines["FUSE_TERNARY"] = "1";
@@ -698,9 +736,25 @@ all_gather_minimal_matmul_async_factory_helper(
     in0_defines = defines;
     in0_defines["READ_FROM_LOCAL_INPUT"] = "1";
     in0_defines["IS_IN0"] = "1";
+    // in0 delivery: by default each core of an in0 chain forwards the block one hop to the next core
+    // (store-and-forward relay, one semaphore round trip per hop). TT_AGMM_IN0_MCAST=1 has the chain's
+    // injector multicast every block to all other cores of the chain in one NoC write instead; the
+    // receivers signal the injector rather than their predecessor. The fabric senders are unaffected:
+    // every core still holds the block at the same CB address. Opt-in while it is being evaluated.
+    const char* in0_mcast_env = std::getenv("TT_AGMM_IN0_MCAST");
+    const bool in0_mcast = in0_mcast_env != nullptr && std::string(in0_mcast_env) != "0";
+    if (in0_mcast) {
+        in0_defines["IN0_MCAST"] = "1";
+    }
     in0_fabric_defines = in0_defines;
     in0_fabric_defines["USE_MUX"] = "1";
     auto in1_defines = defines;
+    // Same switch for the in1 chain (the weight block relayed along the other grid axis).
+    const char* in1_mcast_env = std::getenv("TT_AGMM_IN1_MCAST");
+    const bool in1_mcast = in1_mcast_env != nullptr && std::string(in1_mcast_env) != "0";
+    if (in1_mcast) {
+        in1_defines["IN1_MCAST"] = "1";
+    }
     if (persistent_weight_buffer.has_value()) {
         in1_defines["FSDP_FUSED"] = "1";
         in1_defines["IS_IN1"] = "1";
@@ -1281,20 +1335,45 @@ all_gather_minimal_matmul_async_factory_helper(
 
         // Defer write to K block with same coordinate as core
         // The writer receiver cores always have core.x > 0
-        uint32_t defer_write_k_block = core.y * k_blocks_per_core;
+        uint32_t defer_write_k_block = (core.y + (injector_defer ? 1u : 0u)) * k_blocks_per_core;
         defer_write_k_block = std::min(defer_write_k_block, K_blocks - 1);
 
         bool is_in0_sink = core == in0_core_order.back();
         bool is_in1_sink = core == in1_core_order.back();
 
         auto in0_injector_virtual_core = device->worker_core_from_logical_core(in0_core_order.front());
+        // in0 multicast rectangle: every chain core but the injector, in virtual coords. The chain is one
+        // row or column of the grid with the injector at its start, so the rest is a contiguous range.
+        // NOC_1 addresses its rectangles from the high corner, so start/end swap on that NoC (the same
+        // rule the 2D matmul factory applies to its in0 multicast).
+        tt::tt_metal::CoreCoord in0_mcast_start_virtual{0, 0};
+        tt::tt_metal::CoreCoord in0_mcast_end_virtual{0, 0};
+        uint32_t in0_mcast_num_receivers = 0;
+        if (in0_mcast && in0_core_order.size() > 1) {
+            std::size_t min_x = SIZE_MAX, min_y = SIZE_MAX, max_x = 0, max_y = 0;
+            for (std::size_t i = 1; i < in0_core_order.size(); ++i) {
+                auto v = device->worker_core_from_logical_core(in0_core_order[i]);
+                min_x = std::min(min_x, v.x);
+                min_y = std::min(min_y, v.y);
+                max_x = std::max(max_x, v.x);
+                max_y = std::max(max_y, v.y);
+            }
+            in0_mcast_start_virtual = {min_x, min_y};
+            in0_mcast_end_virtual = {max_x, max_y};
+            if (in0_noc == tt::tt_metal::NOC::NOC_1) {
+                std::swap(in0_mcast_start_virtual, in0_mcast_end_virtual);
+            }
+            in0_mcast_num_receivers = static_cast<uint32_t>(in0_core_order.size() - 1);
+        }
+        // Receivers signal the core that feeds them: the injector under multicast, the predecessor otherwise.
+        const auto in0_feeder_physical = in0_mcast ? in0_injector_virtual_core : in0_prev_core_physical;
         // Per-core args only (common values set via SetCommonRuntimeArgs above)
         std::vector<uint32_t> in0_args = {
             is_in0_sink,
             (std::uint32_t)in0_next_core_physical.x,  // in0_dest_noc_x
             (std::uint32_t)in0_next_core_physical.y,  // in0_dest_noc_y
-            (std::uint32_t)in0_prev_core_physical.x,  // in0_sender_noc_x
-            (std::uint32_t)in0_prev_core_physical.y,  // in0_sender_noc_y
+            (std::uint32_t)in0_feeder_physical.x,     // in0_sender_noc_x
+            (std::uint32_t)in0_feeder_physical.y,     // in0_sender_noc_y
             in0_sender_semaphore_id,
             in0_receiver_semaphore_id,
             in0_valid_semaphore_id,
@@ -1310,7 +1389,12 @@ all_gather_minimal_matmul_async_factory_helper(
             in0_core_order_index,
             in0_core_order.size(),
             in0_fwd_idx,
-            in0_bwd_idx};
+            in0_bwd_idx,
+            (std::uint32_t)in0_mcast_start_virtual.x,
+            (std::uint32_t)in0_mcast_start_virtual.y,
+            (std::uint32_t)in0_mcast_end_virtual.x,
+            (std::uint32_t)in0_mcast_end_virtual.y,
+            in0_mcast_num_receivers};
         if (in0_is_fabric_core) {
             uint32_t worker_idx = in0_idx % num_workers_per_link;
 
@@ -1387,12 +1471,33 @@ all_gather_minimal_matmul_async_factory_helper(
 
         // Per-core args only (common values set via SetCommonRuntimeArgs above)
         auto in1_injector_virtual_core = device->worker_core_from_logical_core(in1_core_order.front());
+        // in1 multicast rectangle: every chain core but the injector (see the in0 rectangle above).
+        tt::tt_metal::CoreCoord in1_mcast_start_virtual{0, 0};
+        tt::tt_metal::CoreCoord in1_mcast_end_virtual{0, 0};
+        uint32_t in1_mcast_num_receivers = 0;
+        if (in1_mcast && in1_core_order.size() > 1) {
+            std::size_t min_x = SIZE_MAX, min_y = SIZE_MAX, max_x = 0, max_y = 0;
+            for (std::size_t i = 1; i < in1_core_order.size(); ++i) {
+                auto v = device->worker_core_from_logical_core(in1_core_order[i]);
+                min_x = std::min(min_x, v.x);
+                min_y = std::min(min_y, v.y);
+                max_x = std::max(max_x, v.x);
+                max_y = std::max(max_y, v.y);
+            }
+            in1_mcast_start_virtual = {min_x, min_y};
+            in1_mcast_end_virtual = {max_x, max_y};
+            if (in1_noc == tt::tt_metal::NOC::NOC_1) {
+                std::swap(in1_mcast_start_virtual, in1_mcast_end_virtual);
+            }
+            in1_mcast_num_receivers = static_cast<uint32_t>(in1_core_order.size() - 1);
+        }
+        const auto in1_feeder_physical = in1_mcast ? in1_injector_virtual_core : in1_prev_core_physical;
         std::vector<uint32_t> in1_args = {
             is_in1_sink,
             (std::uint32_t)in1_next_core_physical.x,  // in1_dest_noc_x
             (std::uint32_t)in1_next_core_physical.y,  // in1_dest_noc_y
-            (std::uint32_t)in1_prev_core_physical.x,  // in1_sender_noc_x
-            (std::uint32_t)in1_prev_core_physical.y,  // in1_sender_noc_y
+            (std::uint32_t)in1_feeder_physical.x,     // in1_sender_noc_x
+            (std::uint32_t)in1_feeder_physical.y,     // in1_sender_noc_y
             in1_sender_semaphore_id,
             in1_receiver_semaphore_id,
             in1_valid_semaphore_id,
@@ -1401,6 +1506,11 @@ all_gather_minimal_matmul_async_factory_helper(
             N_start_tile,
             N_end_tile,
             defer_write_k_block,
+            (std::uint32_t)in1_mcast_start_virtual.x,
+            (std::uint32_t)in1_mcast_start_virtual.y,
+            (std::uint32_t)in1_mcast_end_virtual.x,
+            (std::uint32_t)in1_mcast_end_virtual.y,
+            in1_mcast_num_receivers,
         };
         // FSDP fabric senders are the in1 chain tail — the last two cores of in1_core_order, one per
         // direction (size-2 backward, size-1 forward). For a transpose grid the in1 chain runs along

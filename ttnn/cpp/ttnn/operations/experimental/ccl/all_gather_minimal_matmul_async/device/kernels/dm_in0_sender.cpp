@@ -146,6 +146,13 @@ void kernel_main() {
     // Fabric-sender chain indices, supplied by the host (order: forward then backward)
     const uint32_t forward_in0_core_order_index = get_arg_val<uint32_t>(argidx++);
     const uint32_t backward_in0_core_order_index = get_arg_val<uint32_t>(argidx++);
+    // in0 multicast rectangle (virtual coords, NoC-oriented by the host) and its receiver count; only read
+    // under IN0_MCAST, always present so the mux args that follow keep their position.
+    [[maybe_unused]] const uint32_t in0_mcast_start_x = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const uint32_t in0_mcast_start_y = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const uint32_t in0_mcast_end_x = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const uint32_t in0_mcast_end_y = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const uint32_t in0_mcast_num_receivers = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
     constexpr auto in0_args = TensorAccessorArgs<ct_arg_count>();
@@ -453,6 +460,41 @@ void kernel_main() {
                 // Critical to performance for sender to push data to compute before mcasting
                 // This frees sender to start next read earlier
                 cb_in0.push_back(in0_block_num_tiles);
+#ifdef IN0_MCAST
+                // The injector delivers the block to every other core of the chain in one multicast once
+                // all of them have reserved the CB slot (each receiver bumps the injector's sender
+                // semaphore after reserve_back). Receivers forward nothing. Every core's in0 CB advances
+                // in lockstep, so the block lands at the injector's own write address on each receiver.
+                if constexpr (is_injector_core) {
+                    if (in0_mcast_num_receivers > 0) {
+                        in0_sender_sem.wait(in0_mcast_num_receivers);
+                        in0_sender_sem.set(0);
+                        noc_obj.async_write_multicast(
+                            CoreLocalMem<uint32_t>(in0_start_address),
+                            MulticastEndpoint{},
+                            current_block_bytes,
+                            in0_mcast_num_receivers,
+                            {},
+                            {.noc_x_start = in0_mcast_start_x,
+                             .noc_y_start = in0_mcast_start_y,
+                             .noc_x_end = in0_mcast_end_x,
+                             .noc_y_end = in0_mcast_end_y,
+                             .addr = in0_start_address},
+                            /*linked=*/true);
+#ifdef ARCH_BLACKHOLE
+                        noc_obj.async_writes_flushed();
+#endif
+                        in0_valid_sem.relay_multicast(
+                            noc_obj,
+                            in0_receiver_sem,
+                            in0_mcast_start_x,
+                            in0_mcast_start_y,
+                            in0_mcast_end_x,
+                            in0_mcast_end_y,
+                            in0_mcast_num_receivers);
+                    }
+                }
+#else
                 if (!is_sink_core) {
                     in0_sender_sem.wait(1);
                     in0_sender_sem.set(0);
@@ -474,6 +516,7 @@ void kernel_main() {
 
                     in0_valid_sem.relay_unicast(noc_obj, in0_receiver_sem, in0_dest_noc_x, in0_dest_noc_y);
                 }
+#endif  // IN0_MCAST
 #ifdef USE_MUX
                 if (n_block_iter == 0) {
                     if constexpr (is_linear) {
@@ -651,7 +694,12 @@ void kernel_main() {
              * of the next output block.
              */
             defer_write = !((m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1)));
+#ifndef AGMM_INJECTOR_DEFER
+            // Injectors write their output block synchronously at the end of the M block: the feed of the
+            // next M block waits for the epilogue and the write. AGMM_INJECTOR_DEFER lets them defer like
+            // every other core (the host shifts the write stagger so no core writes at K block 0).
             defer_write = defer_write && !is_injector_core;
+#endif
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {

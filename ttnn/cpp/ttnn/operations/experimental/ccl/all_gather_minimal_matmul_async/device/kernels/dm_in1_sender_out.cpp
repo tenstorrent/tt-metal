@@ -115,6 +115,13 @@ void kernel_main() {
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
+    // in1 multicast rectangle (virtual coords, NoC-oriented by the host) and its receiver count; only read
+    // under IN1_MCAST, always present so the FSDP args that follow keep their position.
+    [[maybe_unused]] const uint32_t in1_mcast_start_x = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const uint32_t in1_mcast_start_y = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const uint32_t in1_mcast_end_x = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const uint32_t in1_mcast_end_y = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const uint32_t in1_mcast_num_receivers = get_arg_val<uint32_t>(argidx++);
 
 #ifdef FSDP_FUSED
     const uint32_t my_virtual_x = get_arg_val<uint32_t>(argidx++);
@@ -518,6 +525,49 @@ void kernel_main() {
                 // This frees sender to start next read earlier
                 cb_in1.push_back(in1_block_num_tiles);
 
+#ifdef IN1_MCAST
+                // The injector delivers the block to every other core of the chain in one multicast once
+                // all of them have reserved the CB slot (each receiver bumps the injector's sender
+                // semaphore after reserve_back). Receivers forward nothing. A full N block goes as one
+                // write; a partial one row by row, skipping the padded N tiles like the relay does.
+                if constexpr (is_injector_core) {
+                    if (in1_mcast_num_receivers > 0) {
+                        in1_sender_sem.wait(in1_mcast_num_receivers);
+                        in1_sender_sem.set(0);
+                        uint32_t mcast_src = in1_start_address;
+                        const uint32_t mcast_rows = (current_N_tiles_bytes == full_N_tiles_bytes) ? 1u : K_block_tiles;
+                        const uint32_t mcast_bytes = (current_N_tiles_bytes == full_N_tiles_bytes)
+                                                         ? K_block_tiles * full_N_tiles_bytes
+                                                         : current_N_tiles_bytes;
+                        for (uint32_t i = 0; i < mcast_rows; i++) {
+                            noc_obj.async_write_multicast(
+                                CoreLocalMem<uint32_t>(mcast_src),
+                                MulticastEndpoint{},
+                                mcast_bytes,
+                                in1_mcast_num_receivers,
+                                {},
+                                {.noc_x_start = in1_mcast_start_x,
+                                 .noc_y_start = in1_mcast_start_y,
+                                 .noc_x_end = in1_mcast_end_x,
+                                 .noc_y_end = in1_mcast_end_y,
+                                 .addr = mcast_src},
+                                /*linked=*/true);
+                            mcast_src += full_N_tiles_bytes;
+                        }
+#ifdef ARCH_BLACKHOLE
+                        noc_obj.async_writes_flushed();
+#endif
+                        in1_valid_sem.relay_multicast(
+                            noc_obj,
+                            in1_receiver_sem,
+                            in1_mcast_start_x,
+                            in1_mcast_start_y,
+                            in1_mcast_end_x,
+                            in1_mcast_end_y,
+                            in1_mcast_num_receivers);
+                    }
+                }
+#else
                 if (!is_sink_core) {
                     in1_sender_sem.wait(1);
                     in1_sender_sem.set(0);
@@ -539,6 +589,7 @@ void kernel_main() {
 
                     in1_valid_sem.relay_unicast(noc_obj, in1_receiver_sem, in1_dest_noc_x, in1_dest_noc_y);
                 }
+#endif  // IN1_MCAST
 #ifdef FSDP_FUSED
                 // Fabric relay (uni-ring, mirrors in0): on the first m-pass, relay the just-consumed
                 // full K-block to the FSDP predecessor's PWB. Skewed (a+b) sharding makes our consume
@@ -657,7 +708,12 @@ void kernel_main() {
              * of the next output block.
              */
             defer_write = !((m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1)));
+#ifndef AGMM_INJECTOR_DEFER
+            // Injectors write their output block synchronously at the end of the M block: the feed of the
+            // next M block waits for the epilogue and the write. AGMM_INJECTOR_DEFER lets them defer like
+            // every other core (the host shifts the write stagger so no core writes at K block 0).
             defer_write = defer_write && !is_injector_core;
+#endif
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {

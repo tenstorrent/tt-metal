@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -25,6 +27,14 @@ MODALITY_NUM = 3
 
 # Modulation parameters per block, in the reference's chunk order.
 NUM_MODULATION_PARAMS = 6
+
+# Copies of every modulation-table row, interleaved (row r, copy c at r * COPIES + c). The gather reads
+# one 2.7 KB table row per packed row from DRAM, and an interleaved buffer puts each row in one bank:
+# with a handful of distinct rows every core of the grid queues on the same bank and the six gathers
+# per block run at ~7% of DRAM bandwidth (1.6 ms each at 13664 rows/device). Spreading consecutive
+# rows over COPIES copies puts the reads on every bank; measured 0.35 ms per gather at 12+ copies, the
+# same as a plain read+write of the output. 16 covers Wormhole's 12 and Blackhole's 8 DRAM channels.
+ADALN_TABLE_COPIES = 16
 (
     _SHIFT_MSA,
     _SCALE_MSA,
@@ -143,6 +153,24 @@ class MiniMaxH3TransformerBlock(Module):
         self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and self.tp_factor > 1
         # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
         self._ff1_kn = (hidden_size, 2 * ffn_dim // self.tp_factor)
+        self.ff1_block_size = None  # None: the per-call M-keyed `agmm_block_size` default
+        # Exploration switch (MINIMAX_H3_MM_FP32_DEST=0): run ff1 with fp32 dest accumulation off, which frees 8 DST tiles
+        # per half and allows a 2x4 subblock (6 unpacks per 8 tile-MACs instead of 4 per 4), at the cost of bf16 partial
+        # sums between K blocks. ff2, to_out and the adaLN projection keep fp32 dest. The blocking is the 15 s / 768P
+        # mesh-bench winner on the 8x8 AGMM grid.
+        self.ff1_compute_kernel_config = None
+        _fp32_dest_env = os.environ.get(
+            "MINIMAX_H3_MM_FP32_DEST", "1"
+        )  # "1" (default), "0" = ff1 and to_qkv off, "ff1" / "qkv" = one of them
+        if _fp32_dest_env == "0" or "ff1" in _fp32_dest_env:
+            self.ff1_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+            self.ff1_block_size = (8, 7, 16, (2, 4))
 
     # ------------------------------------------------------------------ weights
 
@@ -173,9 +201,10 @@ class MiniMaxH3TransformerBlock(Module):
     def _modulation_tables(self, temb: ttnn.Tensor) -> list[ttnn.Tensor]:
         """Project `temb` into the six per-(timestep, modality) modulation tables.
 
-        `temb` is [1, 1, num_timesteps, time_embed_dim]. Returns six [num_timesteps * MODALITY_NUM,
-        hidden_local] tables, row `t * MODALITY_NUM + modality`, matching the row order that
-        `adaln_indices` addresses.
+        `temb` is [1, 1, num_timesteps, time_embed_dim]. Returns six ROW_MAJOR
+        [num_timesteps * MODALITY_NUM * ADALN_TABLE_COPIES, hidden_local] tables, row
+        `(t * MODALITY_NUM + modality) * ADALN_TABLE_COPIES + copy`, matching the rows `forward`
+        addresses once it has spread `adaln_indices` over the copies.
 
         The SiLU runs at `temb`'s own (float32) precision and only its result is cast
         down to the bfloat16 projection, as the reference is explicit about: every block reads the
@@ -199,6 +228,10 @@ class MiniMaxH3TransformerBlock(Module):
         rows = num_timesteps * MODALITY_NUM
         projected = ttnn.to_layout(projected, ttnn.ROW_MAJOR_LAYOUT)
         projected = ttnn.reshape(projected, (1, 1, rows, NUM_MODULATION_PARAMS * self.hidden_local))
+        # Interleaved copies of every row (see ADALN_TABLE_COPIES), done once here on the tiny joint
+        # table rather than once per parameter below.
+        projected = ttnn.repeat_interleave(projected, ADALN_TABLE_COPIES, dim=2)
+        rows *= ADALN_TABLE_COPIES
         projected = ttnn.to_layout(projected, ttnn.TILE_LAYOUT)
 
         tables = []
@@ -209,11 +242,23 @@ class MiniMaxH3TransformerBlock(Module):
             # gather would cost one over the whole packed sequence, per scale, per block.
             if p in (_SCALE_MSA, _SCALE_MLP):
                 table = ttnn.add(table, 1.0)
-            # ttnn.embedding wants a 2D [num_embeddings, embedding_dim] weight.
+            # ttnn.embedding wants a 2D ROW_MAJOR [num_embeddings, embedding_dim] weight.
             table = ttnn.to_layout(table, ttnn.ROW_MAJOR_LAYOUT)
-            table = ttnn.reshape(table, (rows, self.hidden_local))
-            tables.append(ttnn.to_layout(table, ttnn.TILE_LAYOUT))
+            tables.append(ttnn.reshape(table, (rows, self.hidden_local)))
         return tables
+
+    @staticmethod
+    def spread_adaln_indices(indices: ttnn.Tensor, spread: ttnn.Tensor | None = None) -> ttnn.Tensor:
+        """Map table rows to their interleaved copies: `row * ADALN_TABLE_COPIES + position % COPIES`.
+
+        `indices` is [1, N_local] uint32. `spread` is the [1, N_local] uint32 `position % COPIES` vector;
+        the transformer passes one it built once per padded length (this runs inside the traced block
+        loop, so nothing persistent may be allocated here), and a caller without one gets it computed.
+        """
+        if spread is None:
+            positions = ttnn.arange(0, indices.shape[-1], 1, dtype=ttnn.uint32, device=indices.device())
+            spread = ttnn.bitwise_and(ttnn.reshape(positions, (1, indices.shape[-1])), ADALN_TABLE_COPIES - 1)
+        return ttnn.add(ttnn.multiply(indices, ADALN_TABLE_COPIES), spread)
 
     def _gather_rows(self, table: ttnn.Tensor, adaln_indices: ttnn.Tensor) -> ttnn.Tensor:
         """Select one table row per row of the local packed sequence -> [1, 1, S_local, hidden_local]."""
@@ -230,11 +275,13 @@ class MiniMaxH3TransformerBlock(Module):
         adaln_indices: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
+        adaln_spread: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fractured hidden_size on TP
         temb: [1, 1, num_timesteps, time_embed_dim], replicated, float32
-        adaln_indices: [1, 1, 1, N_local] integer row indices, fractured N on SP
+        adaln_indices: [1, 1, 1, N_local] integer row indices `t * MODALITY_NUM + modality`, fractured N on SP
+        adaln_spread: optional [1, N_local] uint32 `position % ADALN_TABLE_COPIES`, see `spread_adaln_indices`
         rope_cos/rope_sin: [1, 1, N_local, rotary_dim], fractured N on SP, replicated on TP
         logical_n: logical (unfractured) packed length as a [1, 1, 1, 1] uint32 device tensor.
 
@@ -246,6 +293,7 @@ class MiniMaxH3TransformerBlock(Module):
         indices = ttnn.reshape(adaln_indices, (1, adaln_indices.shape[-1]))
         if indices.dtype != ttnn.uint32:
             indices = ttnn.typecast(indices, ttnn.uint32)
+        indices = self.spread_adaln_indices(indices, adaln_spread)
 
         def modulation(param: int) -> ttnn.Tensor:
             return self._gather_rows(tables[param], indices)
@@ -294,7 +342,7 @@ class MiniMaxH3TransformerBlock(Module):
         # Async only supports Ring topology"), so a line-cabled mesh has to take the unfused path
         # below. Gated here rather than left to fail, because the assert fires on the first denoise
         # step of the first request -- long after warmup reports the model loaded.
-        ff1_block_size = agmm_block_size(*self._ff1_kn, normed.padded_shape[-2])
+        ff1_block_size = self.ff1_block_size or agmm_block_size(*self._ff1_kn, normed.padded_shape[-2])
         ff2_shape = (normed.shape[2], self.ffn_dim // self.tp_factor, self.hidden_size)
         # The grid is what decides whether a swept blocking or a rule pick can be resolved at all,
         # so it has to reach the gate: without it every tile-aligned M looked servable, and Wormhole
@@ -316,6 +364,7 @@ class MiniMaxH3TransformerBlock(Module):
                 parallel_config=self.parallel_config if self.use_fused_agmm else None,
                 default_block_size=ff1_block_size,
                 force_transpose=False,
+                ff1_compute_kernel_config=self.ff1_compute_kernel_config,
             )
         ff_out = self.ff(
             normed,
@@ -323,5 +372,6 @@ class MiniMaxH3TransformerBlock(Module):
             parallel_config=self.parallel_config if self.use_fused_agmm else None,
             default_block_size=ff1_block_size,
             force_transpose=False,
+            ff1_compute_kernel_config=self.ff1_compute_kernel_config,
         )
         return ttnn.addcmul(residual, ff_out, modulation(_GATE_MLP))
