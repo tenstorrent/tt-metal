@@ -67,8 +67,24 @@ def completed_response_counters(events, responses):
         0,
     )
     result = counter_delta(events[:end], responses)
-    result["scope"] = "saved completed API responses, including any late response; not clipped agent time"
+    result["scope"] = "completed proxy responses, including unsaved/late responses; not clipped agent time"
     return result
+
+
+def deadline_audit(events, deadline):
+    starts = {event["request_id"]: event["unix_s"] for event in events if event["event"] == "request_start"}
+    responses = [event for event in events if event["event"] == "response"]
+    late = [event for event in responses if event["unix_s"] > deadline]
+    return {
+        "proxy_response_seconds_after_agent_end": [event["unix_s"] - deadline for event in late],
+        "requests_started_after_agent_end": sum(value > deadline for value in starts.values()),
+        "completed_proxy_wait_after_agent_end_s": sum(
+            max(0, event["unix_s"] - max(deadline, starts[event["request_id"]]))
+            for event in responses
+            if event["request_id"] in starts
+        ),
+        "scope": "proxy wait, not pure device time; a late response alone does not prove a late tool action",
+    }
 
 
 def summarize(root):
@@ -108,6 +124,7 @@ def summarize(root):
             submission_normalizations=sum(event["event"] == "submission_marker_normalized" for event in trial_events),
             server=counter_delta(trial_events, responses),
             completed_response_server=completed_response_counters(trial_events, responses),
+            deadline_audit=deadline_audit(trial_events, epoch(result["agent_execution"]["finished_at"])),
             repeated_tool_advisories=sum(event["event"] == "repeated_tool_feedback" for event in trial_events),
             reasoning_history_interventions=sum(
                 event["event"] == "reasoning_history_limited" for event in trial_events

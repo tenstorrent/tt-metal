@@ -21,7 +21,7 @@ from probe_loop_recovery import wall_deadline
 from probe_native_eval_action import request_messages
 from replay_eval_requests import post
 from run_local_eval_probe import sampling_kwargs
-from summarize_swe_suite import completed_response_counters, counter_delta
+from summarize_swe_suite import completed_response_counters, counter_delta, deadline_audit
 
 
 class DiagnosticSamplingTests(unittest.TestCase):
@@ -152,6 +152,18 @@ class PrefillPrecisionTests(unittest.TestCase):
 
 
 class SuiteCounterTests(unittest.TestCase):
+    def test_deadline_audit_distinguishes_late_proxy_work_from_saved_agent_actions(self):
+        events = [
+            {"event": "request_start", "request_id": "a", "unix_s": 1},
+            {"event": "response", "request_id": "a", "unix_s": 7},
+            {"event": "request_start", "request_id": "b", "unix_s": 8},
+            {"event": "response", "request_id": "b", "unix_s": 10},
+        ]
+        report = deadline_audit(events, 5)
+        self.assertEqual(report["proxy_response_seconds_after_agent_end"], [2, 5])
+        self.assertEqual(report["requests_started_after_agent_end"], 1)
+        self.assertEqual(report["completed_proxy_wait_after_agent_end_s"], 4)
+
     def test_only_matched_complete_counter_window_is_accepted(self):
         zero = {
             "request_success_total": 0,
