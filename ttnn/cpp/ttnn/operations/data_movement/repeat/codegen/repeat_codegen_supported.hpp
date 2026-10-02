@@ -44,6 +44,9 @@ struct CodegenLegPlan {
     // interleaved in the requested buffer type, followed by one placement hop.
     MemoryConfig final_mc;
     bool final_in_place = false;
+    // Whether the last leg can write a preallocated output directly. A fold leaves the last leg's
+    // shape short of the requested one, which the leg's output validation rejects.
+    bool final_into_prealloc = false;
     // Per-axis leg repeat counts. A repeat of a size-1 axis followed by one of the next axis is folded
     // into the latter as the product: both orders visit the output pages identically, and the fold
     // saves a whole-tensor leg. The folded axis keeps count 1 and the router views the result back to

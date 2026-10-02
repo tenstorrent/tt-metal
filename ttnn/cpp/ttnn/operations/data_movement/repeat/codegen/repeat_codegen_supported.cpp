@@ -229,6 +229,8 @@ CodegenLegPlan plan_codegen_legs(
     plan.final_in_place =
         last_leg_writes_result && shard_spec_is_page_identical(output_mem_config, out_shape, input.layout());
     plan.final_mc = plan.final_in_place ? output_mem_config : interleaved_in(output_mem_config.buffer_type());
+    plan.final_into_prealloc =
+        plan.final_in_place && std::equal(plan.leg_repeats.cbegin(), plan.leg_repeats.cend(), repeat_dims.cbegin());
     return plan;
 }
 
@@ -312,7 +314,7 @@ bool row_major_legs_fit(
         const bool is_final = i + 1 == plan.rep_dims.size();
         const MemoryConfig& leg_mc = is_final ? plan.final_mc : plan.intermediate_mc;
         const auto leg_out = spec_like(input, out_shape, Layout::ROW_MAJOR, leg_mc);
-        if (!(is_final && plan.final_in_place && final_output_allocated)) {
+        if (!(is_final && plan.final_into_prealloc && final_output_allocated)) {
             committed += l1_bytes_per_bank(input, leg_out);
         }
         if (!fits(leg_in, leg_out, committed)) {

@@ -331,7 +331,7 @@ ttnn::Tensor repeat_via_codegen(
     const MemoryConfig& output_mem_config,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
     const auto plan = repeat_codegen::plan_codegen_legs(tensor, repetition_vector, output_mem_config);
-    const std::optional<Tensor> final_out = plan.final_in_place ? optional_output_tensor : std::nullopt;
+    const std::optional<Tensor> final_out = plan.final_into_prealloc ? optional_output_tensor : std::nullopt;
     const size_t num_legs = plan.rep_dims.size();
 
     ttnn::Tensor working = tensor;

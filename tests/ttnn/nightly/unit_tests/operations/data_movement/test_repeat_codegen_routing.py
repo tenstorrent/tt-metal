@@ -440,6 +440,29 @@ def test_repeat_codegen_falls_back_when_free_l1_holds_no_slot(device):
         ttnn.deallocate(resident)
 
 
+@pytest.mark.parametrize(
+    "shape,repeat_dims,layout",
+    [
+        ([1, 1, 1, 1], [1, 3, 10, 20], ttnn.ROW_MAJOR_LAYOUT),
+        ([1, 1, 32, 32], [2, 3, 1, 1], ttnn.TILE_LAYOUT),
+    ],
+    ids=["rm", "tile"],
+)
+def test_repeat_codegen_folded_legs_fill_preallocated_output(device, shape, repeat_dims, layout):
+    # A size-1 axis folds into the next leg, so the last leg's shape differs from the preallocated one.
+    x = _make_input(shape, ttnn.bfloat16)
+    expected = x.repeat(*repeat_dims)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    prealloc = ttnn.empty(list(expected.shape), ttnn.bfloat16, layout, device, ttnn.L1_MEMORY_CONFIG)
+    device.clear_program_cache()
+    _force_native(xt, ttnn.Shape(repeat_dims))
+    entries_before = device.num_program_cache_entries()
+    out = ttnn.repeat(xt, repeat_dims, optional_output_tensor=prealloc)
+    assert device.num_program_cache_entries() > entries_before, "auto served the case on native; expected codegen"
+    assert out.buffer_address() == prealloc.buffer_address()
+    assert_equal(expected, ttnn.to_torch(prealloc))
+
+
 def test_forced_codegen_refuses_out_of_scope_case(device, expect_error):
     # The forced leg exists to be compared against native, so it has to fail loudly outside its
     # support scope: if it fell back, every bit-exactness result gathered through it would really be
