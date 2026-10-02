@@ -9,6 +9,7 @@ are written; histories and commands remain in their original evidence files.
 
 import argparse
 import copy
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -83,6 +84,7 @@ def main():
                     "message_index": index,
                     "recorded_tokens": usage["prompt_tokens"],
                     "baseline_tokens": before,
+                    "prompt_sha256": hashlib.sha256(json.dumps(tokens).encode()).hexdigest(),
                     "candidate_tokens": after,
                     "removed_tokens": before - after,
                     "compacted_outputs": len(changes),

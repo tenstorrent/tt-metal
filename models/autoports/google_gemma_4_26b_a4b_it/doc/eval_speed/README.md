@@ -57,7 +57,13 @@ aggregate input savings) and measures92.68–95.22% matching input-prefix blocks
 without claiming implemented APC. A separate default-off local policy control
 keeps only the latest assistant reasoning block while preserving all visible
 answers/task/tool evidence; it starts at08:42:51 under a900-second cap. The
-combined suite is unchanged. See the suite log for provenance and limitations.
+combined suite is unchanged. That history control fails (reward0/timeout).
+The next original-history Sympy control reaches reward1 at its1,200-second
+timeout, all18 tests passing, but **does not submit**. Its once-only submission
+review never triggers, so no policy benefit is established. A separately
+declared temperature-zero control is prepared to test long stochastic detours;
+the actual serial five-task CI remains unchanged and monitored. See the suite
+log for provenance and limitations.
 The [precision audit](AUTODEBUG.md) confirms fresh BFP8 weight provenance but
 identifies unchanged prefill BFP4 and untested long-context numerical quality;
 it does not establish a cache/position bug.

@@ -529,6 +529,15 @@ with restored source, not a timeout-only extension; no task-specific solution
 or hidden tests enter prompts. Combined original-five CI continues unchanged
 with no inference errors so far. Resumed active time~209min, cumulative~8h22m.
 
+09:21 UTC: original-history Sympy reaches reward1 (all18 tests), but times out
+at1200.028 seconds without submission. The review gate never triggers, so it
+is neither a clean solve nor evidence of policy improvement. Completed-response
+TTFT463.106s/post-first-token725.855s versus tools2.879s motivates a separately
+declared temperature-zero control, capped900s, with all other policy unchanged.
+No review/history/advisory policy is promoted; combined five-task CI remains
+fixed and monitored.18 host helper checks pass. Resumed active time~230min,
+cumulative~8h43m. No image build, device reset or new human intervention.
+
 - TTFT: `doc/ttft_optimization/`.
 - Remote benchmarks/evals:
   `readiness_vllm/ttft_optimization_remote/README.md`.
