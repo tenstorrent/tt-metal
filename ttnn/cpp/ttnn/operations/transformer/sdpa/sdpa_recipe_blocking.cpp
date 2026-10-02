@@ -390,6 +390,11 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
             if (!recipe_geometry_supported(p.op, p.policy, qt, kt, p.d_tiles)) {
                 continue;
             }
+            // Ring / exp ring round a paired recipe's odd Q chunk up to the next even one (sdpa.cpp); the even
+            // candidate is costed on its own.
+            if (!dense && qt % 2 != 0 && recipe_compute_q_tiles(p.policy, qt) != qt) {
+                continue;
+            }
             // Dense/joint L1 grows with Q and K: stop at the first K that does not fit.
             if (dense &&
                 recipe_l1_bytes(p.op, p.policy, qt, kt, p.d_tiles, {.mask_page_bytes = p.mask_page_bytes}).minimum >
@@ -555,10 +560,6 @@ void reject_auto_blocking_without_recipe(const std::optional<SDPAProgramConfig>&
 
 namespace {
 
-uint64_t unreserved_l1(tt::tt_metal::distributed::MeshDevice& device) {
-    return device.l1_size_per_core() - device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-}
-
 uint32_t fixed_tiles(std::size_t chunk) { return chunk % kTile == 0 ? static_cast<uint32_t>(chunk / kTile) : 0; }
 
 SDPAProgramConfig apply_choice(
@@ -615,6 +616,14 @@ bool invalid_fixed(const SDPAProgramConfig& config) {
 
 }  // namespace
 
+// CB budget below the lowest live L1 buffer: global semaphores and persistent buffers occupy the top of L1 in
+// a pipeline, and static CBs must not overlap them (the ring and exp ring factories check the same bound).
+static uint64_t free_l1_below_live_buffers(tt::tt_metal::distributed::MeshDevice& device) {
+    const auto lowest = device.lowest_occupied_compute_l1_address();
+    const uint64_t top = lowest.has_value() ? static_cast<uint64_t>(*lowest) : device.l1_size_per_core();
+    return top - device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+}
+
 std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     const PrecisionPolicy& policy,
     const Tensor& q,
@@ -638,7 +647,7 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     problem.k_rows = k.padded_shape()[2];
     problem.joint_q_rows = joint_q ? joint_q->padded_shape()[2] : 0;
     problem.joint_k_rows = joint_k ? joint_k->padded_shape()[2] : 0;
-    problem.l1_bytes = unreserved_l1(*device);
+    problem.l1_bytes = free_l1_below_live_buffers(*device);
     problem.mask_page_bytes = attn_mask ? attn_mask->buffer()->page_size() : 0;
     const auto choice = invalid_fixed(config) ? std::nullopt : choose_recipe_blocking(problem);
     return apply_choice(config, choice, problem, joint_q ? "joint" : "dense");
@@ -662,7 +671,7 @@ SDPAProgramConfig resolve_ring_recipe_blocking(
     problem.joint_q_rows = has_joint ? joint_q->padded_shape()[2] : 0;
     problem.joint_k_rows = has_joint && joint_k ? joint_k->padded_shape()[2] : 0;
     problem.ring_size = ring_size;
-    problem.l1_bytes = unreserved_l1(*q.device());
+    problem.l1_bytes = free_l1_below_live_buffers(*q.device());
     const auto choice = invalid_fixed(program_config) ? std::nullopt : choose_recipe_blocking(problem);
     return apply_choice(program_config, choice, problem, "ring");
 }
@@ -685,12 +694,7 @@ SDPAProgramConfig resolve_exp_ring_recipe_blocking(
     problem.joint_k_rows = problem.joint_q_rows;
     problem.ring_size = ring_size;
     problem.exp_mux_on_bottom_row = ttnn::prim::exp_sdpa_mux_on_bottom_row();
-    // The exp-ring factory budgets CBs below the lowest live L1 buffer (global semaphores and
-    // persistent buffers occupy the top of L1 in a pipeline).
-    auto* device = q.device();
-    const auto lowest = device->lowest_occupied_compute_l1_address();
-    const uint64_t top = lowest.has_value() ? static_cast<uint64_t>(*lowest) : device->l1_size_per_core();
-    problem.l1_bytes = top - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    problem.l1_bytes = free_l1_below_live_buffers(*q.device());
     const auto choice = invalid_fixed(program_config) ? std::nullopt : choose_recipe_blocking(problem);
     return apply_choice(program_config, choice, problem, "exp ring");
 }
