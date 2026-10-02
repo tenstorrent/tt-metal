@@ -547,14 +547,12 @@ def _promoted(in_fmt, out_fmt, dest) -> bool:
     Wormhole and Blackhole an exponent-B input packed to Float16 needs a 32-bit Dest,
     so a ``No`` request runs the ``Yes`` kernel -- against a golden a driver built for
     ``No``."""
-    from .chip_architecture import ChipArchitecture, get_chip_architecture
-    from .data_format_inference import is_format_combination_outlier
+    from .data_format_inference import effective_dest_acc
 
     if in_fmt is None or out_fmt is None or dest is None:
         return False
-    return get_chip_architecture() != ChipArchitecture.QUASAR and (
-        is_format_combination_outlier(in_fmt, out_fmt, dest)
-    )
+    # The one rule, read where TestConfig reads it, rather than re-derived here.
+    return effective_dest_acc(in_fmt, out_fmt, dest) != dest
 
 
 def _record_ulp_measurement(distance, *, mask) -> None:
