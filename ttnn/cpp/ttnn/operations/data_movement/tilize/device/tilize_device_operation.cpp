@@ -143,6 +143,14 @@ bool can_use_sharded_optimized_factories(
 }
 }  // namespace
 
+// A tilize row wider than this many tiles is routed by select_program_factory() to the multicore
+// Block/Default wide-row path (reader_unary_stick_layout_split_rows). That path's FLOAT32 variant hangs on
+// Quasar — fp32 unpack-to-DEST is unimplemented in the LLK — so validate_on_program_cache_miss() rejects it
+// there. This is the picker's selection boundary (shared with threshold_row_block in select_program_factory),
+// NOT a tuned DEST-capacity limit: a future fp32 unpack-to-DEST LLK fix should REMOVE the Quasar guard
+// entirely rather than raise this number.
+constexpr uint32_t WIDE_ROW_TILE_THRESHOLD = 32;
+
 void TilizeDeviceOperation::validate_on_program_cache_miss(
     const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
@@ -203,7 +211,7 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
     // ttnn.experimental.quasar.tilize instead.
     TT_FATAL(
         !(input_tensor_a.device()->arch() == tt::ARCH::QUASAR && input_tensor_a.dtype() == DataType::FLOAT32 &&
-          operation_attributes.use_multicore && (width / tile_width) > 32),
+          operation_attributes.use_multicore && (width / tile_width) > WIDE_ROW_TILE_THRESHOLD),
         "Wide FLOAT32 tilize ({} tiles/row) is not supported on Quasar: the fp32 unpack-to-DEST LLK path is "
         "unimplemented and the wide multicore tilize hangs. Cast the input to BFLOAT16 before tilizing, or use "
         "ttnn.experimental.quasar.tilize.",
@@ -358,7 +366,7 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
 
     size_t grid_area = available_grid.num_cores();
     auto [ncores, nblocks_per_core] = compute_ncores(grid_area, nblocks);
-    constexpr uint32_t threshold_row_block = 32;
+    constexpr uint32_t threshold_row_block = WIDE_ROW_TILE_THRESHOLD;
     if (num_tiles_per_row > threshold_row_block &&
         (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col)) {
         uint32_t num_blocks_block =
