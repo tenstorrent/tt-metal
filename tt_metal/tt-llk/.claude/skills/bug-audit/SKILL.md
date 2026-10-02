@@ -70,22 +70,39 @@ more: a wave of 1-3 file benchmark batches, each known to hold a bug, took 37M t
 which would put the same run near 8B tokens and 200,000 agents. Verification is most of the agent count.
 
 ## Start of every audit: ask the user
-Before `init_run.py`, ask questions 1-3 in one AskUserQuestion call, then question 4 in a second call: its cost
-depends on the scope answer. Record the answers in the run's state.
+Ask in two AskUserQuestion calls, because the later questions depend on the earlier answers. Record the answers in
+the run's state.
+
+**First call:**
 1. **Scope:** full repo, an area (globs), or a diff since a commit.
-2. **Cost, and the second pass.** The audit is exhaustive by design: it runs until every in-scope file is audited,
+2. **Mined history:** the directory holding mined history, or none. It is kept outside the repo, so only the user
+   knows where: ask, never guess, search the machine, or assume there is none. Below, `<mine>` is that directory.
+   It can hold several repositories, and any of them can apply, not only the audited one: one repository's deep
+   reads can name sites in another (tt-llk's fixes name copies in tt-metal's vendored `tt_metal/tt-llk`). List what
+   it holds: each mined repository has a watermark `*.mined.json` naming it in its `repo` field, with its deep reads
+   `*_deep.jsonl` beside it; names may drop punctuation (`ttmetal_deep.jsonl` for tt-metal). `<repo>.mined.json` and
+   `<repo>_deep.jsonl` below mean those files, for each repository used. Tell the user what was found and which
+   repositories apply (those whose deep reads name files in the audited tree; ask when unsure). With none, the audit
+   runs on the class lists alone; mining (*Mining a repo*) is a separate, costly job, offered but never started on
+   its own.
+
+**Then check what the answers allow,** and ask the second call, leaving out any question that does not apply:
+3. **Cost, and the second pass.** The audit is exhaustive by design: it runs until every in-scope file is audited,
    with no token or time cap. State the cost for the chosen scope up front (see the calibration above); a user who
    wants to spend less narrows the scope (question 1) rather than capping the run. Ask whether to run the optional
    second pass over priority A.
-3. **New history since the last mining.** Run `mining/marker.py delta <mine>/<repo>.mined.json` first (count queries
-   only) and report what closed since the watermark. If there is any, offer the refresh (*Refreshing the mined
-   history*): it costs agents only for the new cases, and it gives the sibling sweep new leads and the recall
-   measurement a fresh holdout.
-4. **Sibling sweep** (ask whenever the repo has mined deep reads, `<mine>/<repo>_deep.jsonl`; recommend yes). Should
-   the audit also verify the unfixed copies of past fixes that fall inside its scope? This is the part of the mined
-   history with a measured payoff (536 of 776 leads confirmed on tt-metal), and it finds bugs the hunt does not.
-   Cost: three verifiers per in-scope lead. With the question, give the rough size: count the `unfixed` sibling
-   locations under the chosen scope's paths in the deep reads. After init, `--in-scope` prints the exact count.
+4. **New history since the last mining** (only when a watermark was found). For each repository used, run
+   `mining/marker.py delta <mine>/<repo>.mined.json` first (count queries only) and report what closed since its
+   watermark. If there is any,
+   offer the refresh (*Refreshing the mined history*): it costs agents only for the new cases, and it gives the
+   sibling sweep new leads and the recall measurement a fresh holdout. Run it before the sweep, so the sweep sees
+   the new leads.
+5. **Sibling sweep** (only when deep reads were found; recommend yes). Should the audit also verify the unfixed
+   copies of past fixes, from every repository used, that fall inside its scope? This is the part of the mined
+   history with a measured payoff
+   (536 of 776 leads confirmed on tt-metal), and it finds bugs the hunt does not. Cost: three verifiers per in-scope
+   lead. With the question, give the rough size: count the `unfixed` sibling locations under the chosen scope's
+   paths in the deep reads. After init, `--in-scope` prints the exact count.
 
 The audit is static: nothing is built, run or tested (*references/measurement-history.md*, "Why the audit is
 static"). A developer confirms a finding by running the relevant tests while debugging it.
@@ -121,20 +138,24 @@ Engine scripts take `--run DIR` (or `BUG_AUDIT_RUN`); paths below are relative t
    nothing is pending. Re-run the same command to resume after a crash. It never loses a finished agent.
 4. **Repeat until `status.py` shows 0 pending and 0 in flight.** Batches the read check sent back are re-issued
    first, automatically.
-   **Sibling sweep, if the user said yes:** `engine/siblings.py --run <run> from-deep <mine>/<repo>_deep.jsonl
-   --in-scope`. The in-scope leads enter the run as uncertain `history-sibling` findings, so step 5 verifies them with
-   the rest. Their severity is a placeholder: re-rate the confirmed ones with `engine/severity-wave.js` in step 6.
+   **Sibling sweep, if the user said yes:** `engine/siblings.py --run <run> from-deep
+   <mine>/<repo>_deep.jsonl=<repo> [...] --in-scope`, one pair for each repository used (both tt-metal and tt-llk
+   for a tt-metal audit). The in-scope leads enter the run as uncertain `history-sibling` findings, so step 5 verifies
+   them with the rest. Their severity is a placeholder: re-rate the confirmed ones with `engine/severity-wave.js` in
+   step 6.
 5. **Close the verification gaps:** run `engine/recheck.py --run <run> queue`, then `engine/recheck-wave.js`, then
    `recheck.py persist`, then `recheck.py report`, then `engine/consolidate.py --run <run>`. This rechecks every
-   uncertain or needs-recheck candidate, and a 10% seeded sample of the refuted ones. If the sample's reversal rate is
-   material (more than about 1 in 10), recheck the whole refuted pile. A candidate whose recheck verifiers died stays
-   queued, so repeat the loop while `recheck.py report` shows any still queued. After its verifiers die on two waves
-   it is given up: `queue` stops handing it out, `report` names it, and it keeps its wave verdict, and so its place in
-   the reports. The consolidate is what applies the recheck outcomes: every later step reads `CONFIRMED.json`, and without it they miss each finding the recheck confirmed,
-   including every sibling-sweep lead.
+   uncertain or needs-recheck candidate, and a 10% seeded sample of the refuted ones. If the sample's reversal rate
+   is material (more than about 1 in 10), recheck the whole refuted pile. A candidate whose recheck verifiers died
+   stays queued, so repeat the loop while `recheck.py report` shows any still queued. After its verifiers die on two
+   waves it is given up: `queue` stops handing it out, `report` names it, and it keeps its wave verdict, and so its
+   place in the reports. The consolidate is what applies the recheck outcomes: every later step reads
+   `CONFIRMED.json`, and without it they miss each finding the recheck confirmed, including every sibling-sweep lead.
 6. **Dedup, so each bug is filed exactly once.** Two separate steps:
    - **Within the run:** `engine/dedup.py --run <run> inputs`, then `engine/dedup-wave.js`, then
-     `dedup.py persist <output>`, then `consolidate.py`. The same defect reported at several lines becomes one entry. Groups are directories, plus cross-directory sets of findings that name at least two of the same identifiers (a defect reported at a call site and at its definition), so the judge compares those too.
+     `dedup.py persist <output>`, then `consolidate.py`. The same defect reported at several lines becomes one
+     entry. Groups are directories, plus cross-directory sets of findings that name at least two of the same
+     identifiers (a defect reported at a call site and at its definition), so the judge compares those too.
      The same defect in any number of architecture or platform copies (Grayskull, Wormhole, Blackhole, Quasar,
      or a repo's own variants, added with `--variant`) is MERGED into ONE entry, never dropped:
      - the entry lists every site, with each copy's own failure mode and suggested fix, since copies can differ;
@@ -217,16 +238,16 @@ The same pipeline built the shipped packs. It is repo-agnostic.
 3. **Triage everything cheaply:** run `mining/make_chunks.py`, then the `mining/triage-wave.js` workflow, then
    `mining/persist_mining.py`. Every case gets verdict, class, component, symptom and deep-read priority.
 4. **Pick a holdout set first.** `mining/select.py holdout --git <clone> [--exclude <older holdouts>] [--deep <deep
-   stores>]` oversamples (about 1.4x the target) a
-   seeded random set of confirmed code bugs with small, code-only fixes. `mining/holdout-screen-wave.js` then asks of
-   each one whether the pre-fix code was really defective, and `select.py screened` keeps the first N valid cases in
-   `packs/<repo>-holdout.jsonl`. Exclude that set from everything after this step. Skipping the screen let 9 of 75
-   non-defects (cleanups, lint fixes, feature enablement) into the first benchmark. A case later found invalid is
-   marked `"valid": false` (never deleted), and `bench.py` skips it. Exclusion works by fix COMMIT, not only by case
-   id, because an issue and its PR are separate cases that share one fix. A pick sharing a fix with an older holdout
-   or a deep-read case is contaminated; mark it `"exclude": true` if one slips through. A pack that has seen the benchmark
-   answers scores a meaningless 100%.
-5. **Deep-read** the priority cases: run `mining/select.py deep --exclude <holdout>`, then `mining/deep-wave.js`. For each case:
+   stores>]` oversamples (about 1.4x the target) a seeded random set of confirmed code bugs with small, code-only
+   fixes. `mining/holdout-screen-wave.js` then asks of each one whether the pre-fix code was really defective, and
+   `select.py screened` keeps the first N valid cases in `packs/<repo>-holdout.jsonl`. Exclude that set from
+   everything after this step. Skipping the screen let 9 of 75 non-defects (cleanups, lint fixes, feature enablement)
+   into the first benchmark. A case later found invalid is marked `"valid": false` (never deleted), and `bench.py`
+   skips it. Exclusion works by fix COMMIT, not only by case id, because an issue and its PR are separate cases that
+   share one fix. A pick sharing a fix with an older holdout or a deep-read case is contaminated; mark it `"exclude":
+   true` if one slips through. A pack that has seen the benchmark answers scores a meaningless 100%.
+5. **Deep-read** the priority cases: run `mining/select.py deep --exclude <holdout>`, then `mining/deep-wave.js`. For
+   each case:
    - the root cause;
    - whether the fix was complete (judged from later history and the current tree, never from the fact that it
      merged);
@@ -254,8 +275,9 @@ CLOSED since the watermark: nothing mined before is fetched, triaged or deep-rea
    `select.py --exclude` and `--deep` given the existing deep-read store and every holdout, and `--deep-cases` given
    the case file that store was built from. It matches by id AND by fix commit, so a case already read under another
    id (an issue whose fix PR was read) is skipped too, unless it carries a fix nobody has read; deep-read rows record
-   no commit, so it looks theirs up in `--deep-cases`, and a holdout refuses to run when it cannot. Where a new fix touches the files of an old deep-read
-   case, re-read that old case too: its fix-completeness verdict may have changed (a revert, a re-fix).
+   no commit, so it looks theirs up in `--deep-cases`, and a holdout refuses to run when it cannot. Where a new fix
+   touches the files of an old deep-read case, re-read that old case too: its fix-completeness verdict may have
+   changed (a revert, a re-fix).
 4. **Use the new cases twice.** Their `unfixed` siblings go to the sibling sweep. And bugs fixed after the watermark
    were never seen by the mining, so they are a clean holdout: pick the next recall benchmark from them
    (mining step 4) before they join the deep reads.
