@@ -82,6 +82,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
+            // Experiment (bistability repro): idle before this thread ends its zone.
+            for (std::uint32_t repro_i = 0; repro_i < static_cast<std::uint32_t>(REPRO_TAIL + REPRO_TAIL_U); repro_i++)
+            {
+                asm volatile("nop");
+            }
             return;
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -161,6 +166,62 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
+            // Experiment (bistability repro): one controlled operation REPRO_INJ_AT spins after the zone opens.
+            if constexpr (REPRO_INJ >= 11)
+            {
+                // One loop, one fixed code path: at iteration REPRO_INJ_AT the body falls through into a single
+                // 4-byte slot: nop (11), L1 load (12), L1 store (13) or wall-clock MMIO read (14).
+                volatile std::uint32_t* repro_l1 = &llk_profiler::buffer[llk_profiler::TRISC_ID][llk_profiler::BUFFER_LENGTH - 1];
+                volatile std::uint32_t* repro_mmio = reinterpret_cast<volatile std::uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+                volatile std::uint32_t* repro_addr = (REPRO_INJ == 14) ? repro_mmio : repro_l1;
+                std::uint32_t repro_n, repro_k, repro_v;
+                asm volatile(
+                    ".option push\n\t.option norvc\n\t"
+                    "li %0, 20000\n\tli %1, %4\n"
+                    "1:\n\tnop\n\tbne %0, %1, 2f\n\t"
+                    ".if %5 == 12 || %5 == 14\n\tlw %2, 0(%3)\n\t.elseif %5 == 13\n\tsw zero, 0(%3)\n\t.else\n\tnop\n\t.endif\n"
+                    "2:\n\taddi %0, %0, -1\n\tbnez %0, 1b\n\t.option pop"
+                    : "=&r"(repro_n), "=&r"(repro_k), "=&r"(repro_v)
+                    : "r"(repro_addr), "i"(20000 - REPRO_INJ_AT), "i"(REPRO_INJ)
+                    : "memory");
+            }
+            else if constexpr (REPRO_INJ != 0)
+            {
+                for (std::uint32_t repro_k = 0; repro_k < static_cast<std::uint32_t>(REPRO_INJ_AT); repro_k++)
+                {
+                    asm volatile("nop");
+                }
+                if constexpr (REPRO_INJ == 1)
+                {
+                    llk_profiler::buffer[llk_profiler::TRISC_ID][llk_profiler::BUFFER_LENGTH - 1] = 0;
+                    asm volatile("" ::: "memory");
+                }
+                else if constexpr (REPRO_INJ == 2)
+                {
+                    (void)ckernel::read_wall_clock();
+                }
+                else if constexpr (REPRO_INJ == 3)
+                {
+                    TTI_NOP;
+                }
+                else if constexpr (REPRO_INJ == 5)
+                {
+                    asm volatile(".option push\n\t.option norvc\n\t.rept 64\n\tnop\n\t.endr\n\t.option pop");
+                }
+                else if constexpr (REPRO_INJ == 6)
+                {
+                    (void)*reinterpret_cast<volatile std::uint32_t*>(&llk_profiler::buffer[llk_profiler::TRISC_ID][llk_profiler::BUFFER_LENGTH - 1]);
+                }
+                else if constexpr (REPRO_INJ == 7)
+                {
+                    asm volatile(".option push\n\t.option norvc\n\t.rept 8\n\tnop\n\t.endr\n\t.option pop");
+                }
+            }
+            // Experiment (bistability repro): idle before this thread ends its zone.
+            for (std::uint32_t repro_i = 0; repro_i < static_cast<std::uint32_t>(REPRO_TAIL + REPRO_TAIL_M); repro_i++)
+            {
+                asm volatile("nop");
+            }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
@@ -201,6 +262,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     _llk_math_matmul_uninit_();
+    if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+    {
+        // Experiment (bistability repro): idle before this thread ends its zone.
+        for (std::uint32_t repro_i = 0; repro_i < static_cast<std::uint32_t>(REPRO_TAIL_MA); repro_i++)
+        {
+            asm volatile("nop");
+        }
+    }
 }
 
 #endif
@@ -247,6 +316,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
+        // Experiment (bistability repro): REPRO_PAD skipped nops move the pack loop by 4*REPRO_PAD
+        // bytes at a constant executed cost; REPRO_DELAY spins with constant code size.
+        asm volatile(".option push\n\t.option norvc\n\tj 1f\n\t.rept %0\n\tnop\n\t.endr\n1:\n\t.option pop" ::"i"(REPRO_PAD));
+        {
+            std::uint32_t repro_spin;
+            asm volatile(".option push\n\t.option norvc\n\tli %0, %1\n2:\n\taddi %0, %0, -1\n\tbnez %0, 2b\n\t.option pop" : "=&r"(repro_spin) : "i"(REPRO_DELAY + 1));
+        }
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             return;

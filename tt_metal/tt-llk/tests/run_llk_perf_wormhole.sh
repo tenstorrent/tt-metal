@@ -15,6 +15,8 @@ GROUP="${1:?usage: run_llk_perf_wormhole.sh <group> <n_groups>}"
 N_GROUPS="${2:?usage: run_llk_perf_wormhole.sh <group> <n_groups>}"
 SPEED_OF_LIGHT="${SPEED_OF_LIGHT:-true}"
 export TT_LLK_DISABLE_ASSERTS="${TT_LLK_DISABLE_ASSERTS:-1}"
+# Experiment (bistability repro): PACK_ISOLATE only; dispatch passes it empty.
+export LLK_PERF_RUN_TYPES="${LLK_PERF_RUN_TYPES:-PACK_ISOLATE}"
 
 case "$SPEED_OF_LIGHT" in
   true)
@@ -36,10 +38,10 @@ mkdir -p perf_data
 PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
 PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
 
-pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-producer -n 10 -m "perf and not accuracy" --timeout=60 \
+pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --dump-perf-counters --compile-producer -n 10 -m "perf and not accuracy" --timeout=60 \
   --splits "$N_GROUPS" --group "$GROUP" \
   --junitxml="pytest-report-wormhole-${GROUP}-compile.xml" .
-pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-consumer --dist loadgroup -n 15 -x -m "perf and not accuracy" --timeout=60 \
+pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --dump-perf-counters --compile-consumer --dist loadgroup -n 15 -x -m "perf and not accuracy" --timeout=60 \
   --splits "$N_GROUPS" --group "$GROUP" \
   --junitxml="pytest-report-wormhole-${GROUP}-run.xml" .
 junitparser merge pytest-report-wormhole-${GROUP}-compile.xml pytest-report-wormhole-${GROUP}-run.xml pytest-report-wormhole-${GROUP}.xml
