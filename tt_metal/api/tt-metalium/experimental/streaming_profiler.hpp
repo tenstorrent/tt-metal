@@ -73,24 +73,21 @@ class Callback;
 
 // Implementation detail.
 namespace detail {
-inline constexpr uint32_t EVENT_DESCRIPTOR_ID_BITS = 27;
-inline constexpr uint32_t EVENT_DESCRIPTOR_LOCAL_BITS = 14;
-inline constexpr uint32_t EVENT_DESCRIPTOR_TU_COUNT = 1u << (EVENT_DESCRIPTOR_ID_BITS - EVENT_DESCRIPTOR_LOCAL_BITS);
+// Zone ids are 16-bit and assigned per process: each device image gets the next block as it loads
+// (hostdev/observability_event_descriptor.h), so the table is flat and a lookup is one load.
+inline constexpr uint32_t EVENT_DESCRIPTOR_ID_BITS = 16;
+inline constexpr uint32_t EVENT_DESCRIPTOR_ID_COUNT = 1u << EVENT_DESCRIPTOR_ID_BITS;
 
-struct DescriptorTu {
-    std::span<const ObservabilityEventDescriptor* const> descriptors;
-};
 struct DescriptorRegistry {
-    static std::atomic<const DescriptorTu*> tus[EVENT_DESCRIPTOR_TU_COUNT];
+    static std::atomic<const ObservabilityEventDescriptor*> sites[EVENT_DESCRIPTOR_ID_COUNT];
 };
 inline constexpr ObservabilityEventDescriptor UNNAMED_DESCRIPTOR{};
 
 inline const ObservabilityEventDescriptor& descriptor_of(uint32_t descriptor_id) {
-    const DescriptorTu* tu =
-        DescriptorRegistry::tus[descriptor_id >> EVENT_DESCRIPTOR_LOCAL_BITS].load(std::memory_order_acquire);
-    const uint32_t local = descriptor_id & ((1u << EVENT_DESCRIPTOR_LOCAL_BITS) - 1u);
     const ObservabilityEventDescriptor* s =
-        tu != nullptr && local < tu->descriptors.size() ? tu->descriptors[local] : nullptr;
+        descriptor_id < EVENT_DESCRIPTOR_ID_COUNT
+            ? DescriptorRegistry::sites[descriptor_id].load(std::memory_order_acquire)
+            : nullptr;
     return s != nullptr ? *s : UNNAMED_DESCRIPTOR;
 }
 
