@@ -75,8 +75,7 @@ public:
     // Handle receiver readiness when enabled, then broadcast a control signal.
     // Flag sends `value`; Counter records one event. Pairs with ReceiverPipe::receive_signal(round).
     // CallerManaged requires the caller to preserve the local Flag semaphore value until the NoC
-    // has read it. A rotating Flag is cleared at the next handshake receive, or behind a write
-    // barrier when handshakes are disabled. Counter atomic completion remains protected in either policy.
+    // has read it. Rotating Flag cleanup and Counter atomic completion remain protected in either policy.
     template <SourceL1Guard SOURCE_GUARD = SourceL1Guard::Guard>
     FORCE_INLINE void send_signal(uint32_t value = VALID);
 
