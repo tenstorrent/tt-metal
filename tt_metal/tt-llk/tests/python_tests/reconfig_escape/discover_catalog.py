@@ -86,6 +86,103 @@ def build_restore_entries(arch, pristine_path):
     return entries
 
 
+def op_capture_paths(op):
+    snap = op["snapshot_path"]
+    return (
+        snap,
+        snap.replace(".snapshot.json", ".addrmod.json"),
+        snap.replace(".snapshot.json", ".adc_ch1x.json"),
+    )
+
+
+def config_diff_entries(arch, snapshot_path, pristine):
+    """One op's Config-space write footprint only: addr32 words where its captured snapshot
+    differs from the pristine baseline. Deliberately does NOT exclude addr-mod-numbered Config
+    addresses (unlike main()'s dedup signature) -- those are real, independent Config-space
+    registers that happen to share a numeric index with a ThreadConfig addr-mod field, not the
+    same state, and must be composed like any other Config word.
+    """
+    with open(snapshot_path) as f:
+        snap = json.load(f)
+    boot_owned = _BOOT_OWNED.get(arch, set())
+    entries = []
+    for state, addr32, val in snap:
+        if state != 0 or addr32 in boot_owned or val == pristine.get(addr32):
+            continue
+        mask = _RESTORE_MASK_OVERRIDE.get(addr32, 0xFFFFFFFF)
+        entries.append([_RESTORE_SPACE_CONFIG, addr32, val, 0, 0, mask])
+    return entries
+
+
+def merge_addrmod_chain(chain_ops):
+    """ThreadConfig/addr-mod write footprint for a WHOLE chain of ops, merged per (thread, addr32).
+
+    snapshot_addr_mod reads every (thread, addr32) pair unconditionally, so a single op's capture
+    is a full snapshot of the whole addr-mod space, not a diff -- there's no real pristine addr-mod
+    capture to diff against (ThreadConfig isn't reachable from a Config-space read at all).
+    build_restore_entries' zero-guess convention applies here too: a captured 0 means "this op
+    didn't write this thread here," so only nonzero values participate, with later chain members
+    winning on a shared (thread, addr32). Concatenating each op's full per-op entry instead would
+    collapse the whole chain to its last member for every address, since every op's capture covers
+    the full range.
+    """
+    merged = {}
+    for op in chain_ops:
+        _, addrmod_path, _ = op_capture_paths(op)
+        if not os.path.exists(addrmod_path):
+            continue
+        with open(addrmod_path) as f:
+            snap = json.load(f)
+        for thread, addr32, val in snap:
+            if val == 0:
+                continue
+            merged.setdefault(addr32, [0, 0, 0])[thread] = val
+    return [
+        [_RESTORE_SPACE_THREADCONFIG, addr32, *v, 0] for addr32, v in sorted(merged.items())
+    ]
+
+
+def last_ch1x_entry(chain_ops):
+    """ADC channel1-X isn't addressed (one physical register per unpacker/packer side), so unlike
+    addr-mod there's nothing to merge per-field: whoever wrote it most recently is exactly what a
+    real chain would leave, so the last chain member with a capture simply wins.
+    """
+    for op in reversed(chain_ops):
+        _, _, ch1x_path = op_capture_paths(op)
+        if os.path.exists(ch1x_path):
+            with open(ch1x_path) as f:
+                ch1x = json.load(f)
+            return [[_RESTORE_SPACE_ADC_CH1X, 0, ch1x["unpacker"], ch1x["packer"], 0, 0]]
+    return []
+
+
+def build_chain_entries(arch, pristine_path, pristine, chain_ops):
+    """Composes D real ops' own write footprints into one restore plan via most-recent-writer-
+    per-field (chain_ops[0] then [1] ... then [-1], each overwriting the ones before it on any
+    field they share) -- the state a victim sees at launch after a real D-deep kernel sequence,
+    not just the single most-recent op pair_sweep.py's own depth-1 sweep already covers.
+
+    Folds the whole chain down to one entry per (space, addr32) before returning -- the device
+    side's last-write-wins apply loop would get the same final state from a raw concatenation of
+    every op's entries, but shipping N separate entries per address makes the wire plan scale with
+    chain depth for no reason (and overflows the fixed-size L1 scratch region trisc.cpp reads it
+    from at depth 3+). Collapsing here instead bounds the plan size at the address space itself --
+    every Config word plus every addr-mod address plus ch1x -- the same size regardless of depth.
+    """
+    merged = {}
+    for e in build_restore_entries(arch, pristine_path):
+        merged[(e[0], e[1])] = e
+    for op in chain_ops:
+        snap_path, _, _ = op_capture_paths(op)
+        for e in config_diff_entries(arch, snap_path, pristine):
+            merged[(e[0], e[1])] = e
+    for e in merge_addrmod_chain(chain_ops):
+        merged[(e[0], e[1])] = e
+    for e in last_ch1x_entry(chain_ops):
+        merged[(e[0], e[1])] = e
+    return list(merged.values())
+
+
 def build_addrmod_restore_entries(addrmod_path, ch1x=None):
     """Real per-thread addr-mod restore entries from a captured snapshot (host snapshot_addr_mod
     JSON: [[thread, addr32, val], ...]), plus an optional ADC channel1-X entry.
@@ -752,6 +849,7 @@ def main():
         "source": "discover_catalog.py",
         "seed": seed,
         "sample_per_test": args.sample_per_test,
+        "pristine_snapshot": pristine_snap_path,
         "ops": [],
     }
     for i, r in enumerate(representatives):

@@ -1992,8 +1992,6 @@ class TestConfig:
                 boot_mode == BootMode.BRISC
                 and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
             ):
-                # WH's early-return path releases the TRISCs before the fall-through
-                # call below runs, so this needs its own copy of the injection.
                 maybe_restore_cfg_from_env(TestConfig.TENSIX_LOCATION)
                 commit_brisc_command(
                     TestConfig.TENSIX_LOCATION,
@@ -2002,11 +2000,7 @@ class TestConfig:
                 )
                 return
 
-        # Reconfig-escape sweep: while the TRISCs are still held in reset (ELFs loaded,
-        # not yet released), optionally replay a captured restore plan into the CFG space.
-        # Anything the victim's init fails to (re)write stays at that replayed residue.
-        # No-op unless an LLK_CFG_RESTORE* env var is set. CFG is not reset at launch, so
-        # this survives.
+        # Before reset is released, see if config should be applied.
         maybe_restore_cfg_from_env(TestConfig.TENSIX_LOCATION)
 
         match boot_mode:

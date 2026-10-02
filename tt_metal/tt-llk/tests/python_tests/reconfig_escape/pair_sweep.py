@@ -53,18 +53,32 @@ Every shard still sweeps against the full victim set, so a shard's own escapes a
 ground truth for that (polluter, victim) pair. No merge step is needed beyond concatenating
 each shard's report, same as every other sharded suite in this repo.
 
+--depth > 1 switches from exhaustive single-op pairs to a depth-D CHAIN sweep: D real ops'
+write footprints are composed into one restore plan (most-recent-writer-per-field, via
+discover_catalog.build_chain_entries), and --chains random chains are swept against every
+victim the same way a single op's restore_path is swept at depth 1. This targets what depth-1
+structurally can't see: residue an op left several kernels back, untouched by everything since,
+still live when a victim launches (B U (A \\ B) for two ops, generalized to D). Every chain
+escape is additionally checked for whether any single member alone already reproduces it via
+that member's own depth-1 restore_path -- an escape only a chain finds, not subsumed by any
+depth-1 pair, is the novel signal depth-D sweeping is for.
+
 Usage:
   python3 pair_sweep.py --worktree DIR --arch blackhole --manifest /path/to/manifest.json \
       --out /path/to/findings.jsonl [--self-pairs] [--jobs 8] [--timeout 90] [--port 5556] \
-      [--splits N --group G]
+      [--splits N --group G] [--depth 2 --chains 80 --seed S]
 """
 
 import argparse
+import datetime
 import json
 import os
+import random
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
+
+import discover_catalog
 
 PASS, FAIL, HANG, ENVERR = "PASS", "FAIL", "HANG", "ENVERR"
 _CODE = {0: PASS, 1: FAIL, 5: HANG}
@@ -172,11 +186,13 @@ def parse_junit(junit_path):
 
 
 def verify_ground_truth(
-    worktree, arch, polluter_nodeid, victim_nodeid, timeout, junit_path
+    worktree, arch, polluter_nodeids, victim_nodeid, timeout, junit_path
 ):
-    """Reset, then run the real polluter then the real victim in ONE serial pytest invocation
-    (no -n, so both pin to the same physical core as pytest-xdist's own "master" worker) with no
-    restore/plan-map machinery at all. Returns the victim's own verdict from that real run.
+    """Reset, then run the real polluter(s) then the real victim, back to back, in ONE serial
+    pytest invocation (no -n, so they all pin to the same physical core as pytest-xdist's own
+    "master" worker) with no restore/plan-map machinery at all. Returns the victim's own verdict
+    from that real run. polluter_nodeids is a list: one element at depth 1, D elements for a
+    depth-D chain.
     """
     reset()
     cmd = [
@@ -186,7 +202,7 @@ def verify_ground_truth(
         "--compile-consumer",
         f"--timeout={timeout}",
         f"--junitxml={junit_path}",
-        polluter_nodeid,
+    ] + list(polluter_nodeids) + [
         victim_nodeid,
     ]
     proc = subprocess.run(
@@ -245,6 +261,30 @@ def main():
         default=1,
         help="1-indexed shard to run, in [1, --splits]",
     )
+    p.add_argument(
+        "--depth",
+        type=int,
+        default=1,
+        help="1 (default): today's exhaustive single-op pairs, unchanged. >1: switch to a "
+        "depth-D chain sweep -- sample --chains random D-op combos instead of every pair; "
+        "2 is the minimum that can find anything depth-1 structurally can't",
+    )
+    p.add_argument(
+        "--chains",
+        type=int,
+        default=80,
+        help="random chains to sample when --depth > 1. 80 is sized for a ~3-3.5h sweep "
+        "per machine at depth 2, -n 8 (measured ~128s/chain against a ~100-victim pool, "
+        "plus margin for verify-phase overhead and hardware timing variance)",
+    )
+    p.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="RNG seed for chain sampling (--depth > 1 only). Default derives from the "
+        "current ISO year+week (same convention as discover_catalog.py), so a weekly CI "
+        "run is reproducible within that week and samples different chains the next",
+    )
     args = p.parse_args()
     if not 1 <= args.group <= args.splits:
         p.error(f"--group must be in [1, {args.splits}] (got {args.group})")
@@ -252,11 +292,50 @@ def main():
     with open(args.manifest) as f:
         manifest = json.load(f)
     ops = manifest["ops"]
+    op_by_key = {o["key"]: o for o in ops}
     victims = [o for o in ops if o.get("baseline") == PASS]
     restore_x = [o for o in victims if o.get("usable")]
     fallback_x = [o for o in victims if not o.get("usable")]
     nodeids = [v["test_id"] for v in victims]
     nodeid_by_key = {v["key"]: v["test_id"] for v in victims}
+
+    if args.depth > 1:
+        if args.depth > len(restore_x):
+            p.error(f"--depth {args.depth} > {len(restore_x)} usable polluters in the manifest")
+        seed = (
+            args.seed
+            if args.seed is not None
+            else int(datetime.date.today().strftime("%Y%V"))
+        )
+        print(
+            f"[pair_sweep] depth={args.depth} chains={args.chains} seed={seed}"
+            + (" (explicit)" if args.seed is not None else " (derived from ISO year+week)"),
+            file=sys.stderr,
+        )
+        rng = random.Random(seed)
+        pristine_path = manifest["pristine_snapshot"]
+        with open(pristine_path) as f:
+            pristine = {a: v for s, a, v in json.load(f) if s == 0}
+        chains_dir = os.path.join(os.path.dirname(os.path.abspath(args.out)) or ".", "chains")
+        os.makedirs(chains_dir, exist_ok=True)
+
+        chain_members = [rng.sample(restore_x, args.depth) for _ in range(args.chains)]
+        restore_x = []
+        for ci, chain in enumerate(chain_members):
+            entries = discover_catalog.build_chain_entries(
+                args.arch, pristine_path, pristine, chain
+            )
+            restore_path = os.path.join(chains_dir, f"chain{ci:03d}.restore.json")
+            with open(restore_path, "w") as f:
+                json.dump({"entries": entries}, f)
+            restore_x.append(
+                {
+                    "key": "+".join(o["key"] for o in chain),
+                    "restore_path": restore_path,
+                    "members": [o["key"] for o in chain],
+                }
+            )
+        fallback_x = []  # chain members are already gate-passed usable polluters
 
     if args.splits > 1:
         restore_x = restore_x[args.group - 1 :: args.splits]
@@ -326,9 +405,10 @@ def main():
                 yield seq[i : i + size]
 
         for xi, x in enumerate(restore_x):
+            x_members = set(x.get("members", [x["key"]]))
             plan_map = {}
             for k, nodeid in zip(victims, nodeids):
-                if x["key"] == k["key"] and not args.self_pairs:
+                if k["key"] in x_members and not args.self_pairs:
                     continue
                 plan_map[nodeid] = x["restore_path"]
             if not plan_map:
@@ -381,7 +461,14 @@ def main():
                 if nodeid not in plan_map:
                     continue
                 v = results.get(nodeid, ENVERR)
-                record("restore", x["key"], k["key"], v, k["baseline"])
+                record(
+                    "restore",
+                    x["key"],
+                    k["key"],
+                    v,
+                    k["baseline"],
+                    extra={"members": x["members"]} if args.depth > 1 else None,
+                )
 
     # --- Fallback phase: full reset per pair, for X's that failed their own restore-gate. ---
     for x in fallback_x:
@@ -483,20 +570,51 @@ def main():
                 )
                 continue
             verified_so_far += 1
-            px, vk = nodeid_by_key.get(e["polluter"]), nodeid_by_key.get(e["victim"])
-            if not px or not vk:
+            member_keys = e.get("members", [e["polluter"]])
+            px = [nodeid_by_key[k] for k in member_keys if k in nodeid_by_key]
+            vk = nodeid_by_key.get(e["victim"])
+            if len(px) != len(member_keys) or not vk:
                 e["verified"] = False
                 e["verify_result"] = ENVERR
                 continue
+
+            # A chain escape only matters if it's NOT already visible to a depth-1 sweep: check
+            # whether any single member alone, via its own manifest restore_path, already breaks
+            # this victim.
+            if len(member_keys) > 1:
+                subsumed_by = []
+                for mk in member_keys:
+                    m = op_by_key[mk]
+                    single_plan_path = os.path.join(
+                        verify_dir, f"verify_single_{i}_{mk}.map.json"
+                    )
+                    with open(single_plan_path, "w") as f:
+                        json.dump({vk: m["restore_path"]}, f)
+                    single_junit = os.path.join(
+                        verify_dir, f"verify_single_{i}_{mk}.junit.xml"
+                    )
+                    reset()
+                    run_round(
+                        args.worktree, args.arch, [vk], single_plan_path, 1, args.timeout,
+                        single_junit,
+                    )
+                    if os.path.exists(single_junit):
+                        v = parse_junit(single_junit).get(vk, ENVERR)
+                        if v != e["victim_baseline"]:
+                            subsumed_by.append(mk)
+                e["subsumed_by_depth1"] = subsumed_by
+
             junit_path = os.path.join(verify_dir, f"verify_{i}.junit.xml")
             result, _ = verify_ground_truth(
                 args.worktree, args.arch, px, vk, args.timeout, junit_path
             )
             e["verify_result"] = result
             e["verified"] = result == FAIL
+            tag = "CONFIRMED" if e["verified"] else "NOT reproduced (noise)"
+            if e["verified"] and e.get("subsumed_by_depth1"):
+                tag += f" but SUBSUMED by depth-1 member(s) {e['subsumed_by_depth1']}"
             print(
-                f"    [{verified_so_far}/{len(to_verify)}] {e['polluter']} -> {e['victim']}: "
-                f"{'CONFIRMED' if e['verified'] else 'NOT reproduced (noise)'}",
+                f"    [{verified_so_far}/{len(to_verify)}] {e['polluter']} -> {e['victim']}: {tag}",
                 file=sys.stderr,
             )
 
@@ -525,7 +643,12 @@ def main():
         report_escapes = verified_escapes
     for e in report_escapes:
         print(
-            f"  {e['polluter']} -> {e['victim']}: {e['verdict']} (baseline {e['victim_baseline']}) [{e['mode']}]",
+            f"  {e['polluter']} -> {e['victim']}: {e['verdict']} (baseline {e['victim_baseline']}) [{e['mode']}]"
+            + (
+                f" [subsumed by {e['subsumed_by_depth1']}]"
+                if e.get("subsumed_by_depth1")
+                else ""
+            ),
             file=sys.stderr,
         )
 

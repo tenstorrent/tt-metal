@@ -69,36 +69,24 @@ void copy_runtimes_from_L1(struct RuntimeParams* temp_args)
 // Reconfig testing applies a config space state written into L1 before the kernel runs.
 // The dprint L1 region is reused for this... until we get a better memory map.
 #ifndef LLK_DEVICE_PRINT_BUFFER_BASE
-static constexpr std::uint32_t LLK_RESTORE_PLAN_BASE  = 0x1A000;
-static constexpr std::uint32_t LLK_RESTORE_PLAN_MAGIC = 0x43464731u; // "CFG1"
-
-// A kernel can leave residue in three distinct Tensix state spaces: Config (shared,
-// double-buffered CFG bus), ThreadConfig (addr-mod/state-id, banked per thread), and ADC
-// channel1-X (address_counters, outside Config/ThreadConfig entirely). Each entry here targets
-// one of them, tagged by `space`, instead of each space getting its own plan/buffer/magic.
+static constexpr std::uint32_t RESTORE_PLAN_BASE  = 0x1A000;
+static constexpr std::uint32_t RESTORE_PLAN_MAGIC = 0x43464731u; // "CFG1"
 static constexpr std::uint32_t RESTORE_SPACE_CONFIG       = 0;
 static constexpr std::uint32_t RESTORE_SPACE_THREADCONFIG = 1;
 static constexpr std::uint32_t RESTORE_SPACE_ADC_CH1X     = 2;
 static constexpr std::uint32_t RESTORE_ENTRY_WORDS        = 6;
 
-// Plan is [magic][N][data], data is N x [space, addr32, v0, v1, v2, mask]:
-//   space CONFIG:       v0 masked by `mask`, RMW'd at addr32 (addr32/mask unused by other spaces).
-//   space THREADCONFIG: v0/v1/v2 are the UNPACK/MATH/PACK values; each thread SETC16s only its own.
-//   space ADC_CH1X:     v0 is the unpacker value (applied by UNPACK only), v1 is the packer value
-//                       (applied by PACK only).
-static inline void apply_restore_plan()
+// Plan is [magic][N][data], data is N x [space, addr32, v0, v1, v2, mask].
+static inline void restore_state()
 {
-    volatile std::uint32_t* plan = reinterpret_cast<volatile std::uint32_t*>(LLK_RESTORE_PLAN_BASE);
-    if (plan[0] != LLK_RESTORE_PLAN_MAGIC)
-    {
-        return;
-    }
+    volatile std::uint32_t* plan = reinterpret_cast<volatile std::uint32_t*>(RESTORE_PLAN_BASE);
+    if (plan[0] != RESTORE_PLAN_MAGIC) return;
 #if defined(LLK_TRISC_UNPACK)
-    constexpr std::uint32_t my_thread = 0;
+    constexpr std::uint32_t thread = 0;
 #elif defined(LLK_TRISC_MATH)
-    constexpr std::uint32_t my_thread = 1;
+    constexpr std::uint32_t thread = 1;
 #elif defined(LLK_TRISC_PACK)
-    constexpr std::uint32_t my_thread = 2;
+    constexpr std::uint32_t thread = 2;
 #endif
     const std::uint32_t n = plan[1];
     for (std::uint32_t i = 0; i < n; i++)
@@ -115,7 +103,7 @@ static inline void apply_restore_plan()
 #if defined(LLK_TRISC_UNPACK) || defined(LLK_TRISC_MATH) || defined(LLK_TRISC_PACK)
         else if (space == RESTORE_SPACE_THREADCONFIG)
         {
-            TT_SETC16(a, e[2 + my_thread] & 0xFFFF);
+            TT_SETC16(a, e[2 + thread] & 0xFFFF);
         }
 #endif
 #if defined(LLK_TRISC_UNPACK)
@@ -171,7 +159,7 @@ int main(void)
         ckernel::fence_compiler();
 
 #ifndef LLK_DEVICE_PRINT_BUFFER_BASE
-        apply_restore_plan();
+        restore_state();
 #endif
 
         run_kernel(temp_args);
