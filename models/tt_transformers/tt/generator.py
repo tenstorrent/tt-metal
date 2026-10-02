@@ -3030,6 +3030,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         """
         Input tt_out is list of tuples of (tt_out_tok, tt_log_probs)
         tt_log_probs can be: ttnn.Tensor (old path), LogProbsResult (new path), or None.
+
+        Selective reads retain rank positions in host_outputs, using None for
+        inactive ranks. read_events contains only actual transfers, in active
+        rank order. Consumers must wait on every event before host processing;
+        events are not indexed by rank and contain no None placeholders.
         """
 
         def _read_logprobs(lp, blocking: bool = True):

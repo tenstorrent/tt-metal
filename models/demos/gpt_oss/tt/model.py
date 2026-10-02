@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from dataclasses import dataclass
-
 import torch
 from loguru import logger
 
@@ -16,18 +14,9 @@ from models.demos.gpt_oss.utils.substate import substate
 from models.tt_transformers.tt.common import copy_host_to_device, rope_scaling_model_factory
 from models.tt_transformers.tt.rope import RotarySetup
 
+from .host_readback import DecodeHostReadback, DecodeHostRows
 from .layer import DecoderLayer
 from .rms_norm import RMSNorm
-
-
-@dataclass(frozen=True)
-class DecodeHostRows:
-    tensor: ttnn.Tensor
-    batch_per_row: int
-    row_start: int
-    sample_rows: tuple[int, ...]
-    # Keep the temporary slice allocated until the async read has completed.
-    device_tensor: ttnn.Tensor
 
 
 def compute_per_device_vocab(vocab_size, num_tp):
@@ -271,6 +260,16 @@ class Model:
             logger.info(f"On-device sampling initialized (vocab_size={self.vocab_size}, splits={sampling_splits})")
         else:
             self.sampling = None
+
+        # Slice programs and their persistent destinations must precede all
+        # prefill, decode, and sampling traces, including device-only warmup.
+        decode_tp = self.mesh_config.get_config(Mode.DECODE).tp
+        self._host_readback = DecodeHostReadback(
+            mesh_device,
+            max_local_batch_size,
+            per_device_padded,
+            mesh_device.get_num_devices() // decode_tp if users_row_sharded else 1,
+        )
 
     def _make_sampling_args(self, hf_config, mesh_device):
         """Create a minimal args object for SamplingGenerator/TTSampling."""
@@ -1249,23 +1248,8 @@ class Model:
         )
 
     def read_output_decode(self, tt_out, sample_rows, blocking=True):
-        """Read the active slot range in one transfer without changing the trace tensor."""
-        config = self.mesh_config.get_config(Mode.DECODE)
-        batch_per_row = tt_out.shape[-2]
-        num_rows = len(ttnn.get_device_tensors(tt_out)) // config.tp if self.users_row_sharded else 1
-        if (
-            not sample_rows
-            or len(set(sample_rows)) != len(sample_rows)
-            or any(row < 0 or row >= num_rows * batch_per_row for row in sample_rows)
-        ):
-            raise ValueError(f"Invalid selective readback rows {sample_rows} for capacity {num_rows * batch_per_row}")
-        row_start = min(row % batch_per_row for row in sample_rows)
-        row_end = max(row % batch_per_row for row in sample_rows) + 1
-        if row_start != 0 or row_end != batch_per_row:
-            starts, ends = [0] * len(tt_out.shape), list(tt_out.shape)
-            starts[-2], ends[-2] = row_start, row_end
-            tt_out = ttnn.slice(tt_out, starts, ends)
-        return DecodeHostRows(tt_out.cpu(blocking=blocking), batch_per_row, row_start, tuple(sample_rows), tt_out)
+        """Read a prepared slot range without compiling or allocating device buffers."""
+        return self._host_readback.read(tt_out, sample_rows, blocking=blocking)
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False, sample_rows=None):
         """Process decode output and convert to torch tensors.
