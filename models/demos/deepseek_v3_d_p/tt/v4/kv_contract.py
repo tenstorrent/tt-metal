@@ -38,10 +38,14 @@ HEAD_DIM = 512
 INDEX_HEAD_DIM = 128
 CSA_RATE = 4
 HCA_RATE = 128
-ENGINE_CHUNK_TOKENS = (
-    5120  # the prefill engine's chunk (PREFILL_CHUNK_OUTPUT_TOKENS); CSA writes chunk/4 entries per chunk
-)
+# the prefill engine's chunk (the runner's PREFILL_CHUNK_SIZE, default 5120); CSA writes chunk/4 entries per chunk, so the
+# CSA write headroom must follow the chunk actually used (DS4F-0300: an 8192 chunk writes 2048 entries -- 1280 rows of
+# headroom would let the last chunk write past the cache)
+ENGINE_CHUNK_TOKENS = int(__import__("os").environ.get("PREFILL_CHUNK_SIZE", "5120"))
 CSA_CHUNK_ENTRIES = ENGINE_CHUNK_TOKENS // CSA_RATE
+# HCA's tail-tile write covers this chunk's entries plus the 0..31 rows already in the last tile, rounded up to whole tiles
+# (heavily_compressed_attention._cache_write_rows): 64 rows for 4096, 96 for 5120 / 8192; 96 kept as the floor
+HCA_WRITE_HEADROOM = max(96, -(-(31 + ENGINE_CHUNK_TOKENS // HCA_RATE) // 32) * 32)
 
 # dtype tags (ttnn-free); bytes per 32-row chunk of ``width`` columns
 _BFP8_TILE_BYTES = 1088  # 32x32 bfp8_b tile: 1024 B mantissas + 64 B shared exponents
@@ -130,7 +134,7 @@ def build_contract(window_dtype_tag: str | None = None) -> tuple[KvGroupSpec, ..
     wd = window_dtype_tag or window_cache_dtype_tag()
     return (
         KvGroupSpec("swa_window", "sliding_attention", wd, HEAD_DIM),
-        KvGroupSpec("hca_unified", "heavily_compressed_attention", wd, HEAD_DIM, write_headroom=96),
+        KvGroupSpec("hca_unified", "heavily_compressed_attention", wd, HEAD_DIM, write_headroom=HCA_WRITE_HEADROOM),
         # CSA writes a whole chunk's entries at once (1280 for the engine's 5120-token chunk), padded width included
         KvGroupSpec(
             "csa_unified", "compressed_sparse_attention", "bf16_rm", HEAD_DIM, write_headroom=CSA_CHUNK_ENTRIES
