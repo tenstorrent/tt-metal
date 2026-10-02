@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_phase_fidelity.hpp"
 #include "kernels/chunked_q_mapping.hpp"
 #include "kernels/dataflow/chunked_prefill_utils.hpp"
 #include "kernels/ring_joint_ksplit.hpp"
@@ -1396,6 +1397,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     // Ring-joint streaming supports single-Q-subblock shapes; only fp32 dest acc stays on the legacy path.
     const bool use_streaming_compute = !fp32_dest_acc_en;
+    ttnn::operations::transformer::sdpa::validate_phase_fidelity(
+        args.program_config, use_streaming_compute, "ring_joint_scaled_dot_product_attention");
+    TT_FATAL(
+        !(args.program_config.has_value() && args.program_config->matmul_math_fidelity.has_value()) ||
+            use_streaming_compute,
+        "matmul_math_fidelity needs the streaming compute path (fp32_dest_acc_en=false)");
     TT_FATAL(
         !kv_pad_rotation_enabled || use_streaming_compute,
         "kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path selected by "
@@ -1871,9 +1878,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // build_sliding_q_work_plan so it stays in lockstep with the reader.
         circular_kv_slab_count,
         // Slots 47-48: logical-length transport. Compute cannot NoC-read DRAM, so it takes the live values
-        // from cb_kv_pad_derived, which the reader fills. CB block starts at 49.
+        // from cb_kv_pad_derived, which the reader fills.
         static_cast<uint32_t>(has_logical_n_tensor),
-        static_cast<uint32_t>(has_logical_l_tensor)};
+        static_cast<uint32_t>(has_logical_l_tensor),
+        // Slot 49: per-phase matmul fidelity (compute_streaming.hpp): the phase's own knob, else
+        // matmul_math_fidelity, else the compute kernel config's. CB block starts at 50.
+        ttnn::operations::transformer::sdpa::matmul_fidelity_ct_arg(qk_math_fidelity, pv_math_fidelity, math_fidelity)};
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -1881,22 +1891,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
-    if (qk_math_fidelity.has_value() || pv_math_fidelity.has_value()) {
-        TT_FATAL(
-            use_streaming_compute,
-            "matmul_math_fidelity, qk_math_fidelity and pv_math_fidelity need the streaming compute path "
-            "(fp32_dest_acc_en=false)");
-    }
-    if (qk_math_fidelity.has_value()) {
-        defines["QK_MATH_FIDELITY"] = std::to_string(static_cast<uint32_t>(*qk_math_fidelity));
-    }
-    if (pv_math_fidelity.has_value()) {
-        defines["PV_MATH_FIDELITY"] = std::to_string(static_cast<uint32_t>(*pv_math_fidelity));
-    }
-    // MATH_FIDELITY is not defined on the unpack TRISC, and all three must agree on how P.V is set up.
-    if (math_fidelity == MathFidelity::LoFi) {
-        defines["SDPA_COMPUTE_LOFI"] = "1";
-    }
     defines["SLIDING_HALO_SLOT_COUNT"] =
         std::to_string(has_sliding_window ? chunked_sliding_halo_layout.halo_slot_count : 0);
     defines["SLIDING_MAX_SOURCE_RANGES"] = std::to_string(

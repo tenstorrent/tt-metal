@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_phase_fidelity.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_interleaved_cb_ids.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
@@ -102,26 +103,6 @@ bool get_exp_approx_mode(const std::optional<ttnn::operations::transformer::SDPA
         return program_config->exp_approx_mode.value();
     }
     return true;
-}
-
-// The streaming kernel's per-phase matmul fidelity defines (only when a phase is set) and its LoFi compute-config flag.
-void add_matmul_fidelity_defines(
-    std::map<std::string, std::string>& defines,
-    const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config,
-    MathFidelity math_fidelity,
-    bool use_streaming_compute) {
-    if (program_config.has_value() && program_config->qk_math_fidelity.has_value()) {
-        TT_FATAL(use_streaming_compute, "qk_math_fidelity needs the streaming compute path (fp32_dest_acc_en=false)");
-        defines["QK_MATH_FIDELITY"] = std::to_string(static_cast<uint32_t>(*program_config->qk_math_fidelity));
-    }
-    if (program_config.has_value() && program_config->pv_math_fidelity.has_value()) {
-        TT_FATAL(use_streaming_compute, "pv_math_fidelity needs the streaming compute path (fp32_dest_acc_en=false)");
-        defines["PV_MATH_FIDELITY"] = std::to_string(static_cast<uint32_t>(*program_config->pv_math_fidelity));
-    }
-    // MATH_FIDELITY is not defined on the unpack TRISC, and all three must agree on how P.V is set up.
-    if (use_streaming_compute && math_fidelity == MathFidelity::LoFi) {
-        defines["SDPA_COMPUTE_LOFI"] = "1";
-    }
 }
 
 // Effective (num_kv_heads_k, num_kv_heads_v, block_size) for an HMA-shared paged buffer.
@@ -498,6 +479,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
 
     const bool use_streaming_compute = can_use_streaming_compute(fp32_dest_acc_en);
+    ttnn::operations::transformer::sdpa::validate_phase_fidelity(
+        program_config, use_streaming_compute, "scaled_dot_product_attention");
 
     const bool has_sliding_window = sliding_window_size.value_or(0) != 0;
     // A user-provided dense mask on the streaming path takes its own per-chunk apply
@@ -748,6 +731,11 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         k_partial_col,                                // arg 28: K partial-tile col (0 = no partial)
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 29: unified zigzag remap
         static_cast<uint32_t>(is_windowed),           // arg 30: K-range narrowing (bounds from the ctrl CB)
+        // Per-phase matmul fidelity (compute_streaming.hpp); the CB block follows.
+        ttnn::operations::transformer::sdpa::matmul_fidelity_ct_arg(
+            program_config.has_value() ? program_config->qk_math_fidelity : std::nullopt,
+            program_config.has_value() ? program_config->pv_math_fidelity : std::nullopt,
+            math_fidelity),
     };
 
     std::map<std::string, std::string> defines_map;
@@ -756,7 +744,6 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     defines_map["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines_map["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines_map["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
-    add_matmul_fidelity_defines(defines_map, program_config, math_fidelity, use_streaming_compute);
     log_debug(tt::LogOp, "use_zigzag_balancing: {}", use_zigzag_balancing);
 
     KernelDescriptor::Defines defines(defines_map.begin(), defines_map.end());

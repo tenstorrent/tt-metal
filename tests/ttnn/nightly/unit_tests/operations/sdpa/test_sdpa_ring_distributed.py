@@ -343,3 +343,22 @@ def test_ring_distributed_sdpa_prefix_and_paged_kv(device, s, prefix_len, page_b
 
 if __name__ == "__main__":
     print("Minimal ring-distributed SDPA test file ready!")
+
+
+def test_ring_distributed_sdpa_rejects_phase_fidelity(device, expect_error):
+    """The ring-distributed kernel runs at the compute kernel config's fidelity, so the per-phase knobs are refused."""
+    torch.manual_seed(0)
+    tensors = [
+        ttnn.from_torch(torch.randn(1, 8, 256, 128), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        for _ in range(3)
+    ]
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=32,
+        k_chunk_size=32,
+        qk_math_fidelity=ttnn.MathFidelity.LoFi,
+    )
+    with expect_error(RuntimeError, "does not support qk_math_fidelity / pv_math_fidelity"):
+        ttnn.transformer.ring_distributed_scaled_dot_product_attention(
+            *tensors, ring_size=4, ring_id=0, program_config=program_config
+        )

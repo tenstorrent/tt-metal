@@ -203,3 +203,15 @@ def test_joint_sdpa_zero_heads(device, expect_error):
         ttnn.transformer.joint_scaled_dot_product_attention(
             q, k, v, joint_q, joint_k, joint_v, joint_strategy="rear", program_config=program_config
         )
+
+
+def test_joint_sdpa_rejects_phase_fidelity(device, expect_error):
+    """The joint kernel runs every matmul at the compute kernel config's fidelity, so the per-phase knobs are refused."""
+    q, k, v, joint_q, joint_k, joint_v = _zero_div_tensors(device, 6)
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=(1, 1), q_chunk_size=32, k_chunk_size=32, pv_math_fidelity=ttnn.MathFidelity.LoFi
+    )
+    with expect_error(RuntimeError, "does not support qk_math_fidelity / pv_math_fidelity"):
+        ttnn.transformer.joint_scaled_dot_product_attention(
+            q, k, v, joint_q, joint_k, joint_v, joint_strategy="rear", program_config=program_config
+        )

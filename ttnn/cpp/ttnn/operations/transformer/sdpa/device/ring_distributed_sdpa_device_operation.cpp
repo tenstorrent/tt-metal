@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ring_distributed_sdpa_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_phase_fidelity.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -19,6 +20,8 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 void RingDistributedSdpaDeviceOperation::validate_on_program_cache_miss(
     const RingDistributedSDPAParams& operation_attributes, const RingDistributedSDPAInputs& tensor_args) {
+    ttnn::operations::transformer::sdpa::reject_phase_fidelity(
+        operation_attributes.program_config, "ring_distributed_scaled_dot_product_attention");
     std::vector<Tensor> input_tensors = {tensor_args.q, tensor_args.k, tensor_args.v};
 
     const auto& input_tensor_q = tensor_args.q;

@@ -317,6 +317,11 @@ class MiniMaxH3Attention(Module):
                     fidelity = math_fidelity_from_env(var)
                     if fidelity is not None:
                         phase_fidelity[field] = fidelity
+                if len(phase_fidelity) == 2:
+                    raise ValueError(
+                        "set at most one of MINIMAX_H3_SDPA_QK_FIDELITY and MINIMAX_H3_SDPA_PV_FIDELITY; "
+                        "MINIMAX_H3_SDPA_FIDELITY changes both phases"
+                    )
             self._sdpa_program_configs[key] = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=grid,
                 q_chunk_size=q_chunk,

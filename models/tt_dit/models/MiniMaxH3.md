@@ -452,7 +452,7 @@ bit-identical from broken, because any bf16-level difference diverges over the s
 |---|---|
 | `MINIMAX_H3_FAST=1` | the recipe: `MINIMAX_H3_BF8_WEIGHTS=qkv,ff1` and `MINIMAX_H3_SDPA_PV_FIDELITY=LoFi` (explicit settings win) |
 | `MINIMAX_H3_BF8_WEIGHTS=qkv,ff1[,out,ff2]` | typecast those linears' weights to bfloat8_b after loading (`out`/`ff2` need a bf8 residual for the fused addcmul, so they are normally left bf16) |
-| `MINIMAX_H3_SDPA_PV_FIDELITY` / `MINIMAX_H3_SDPA_QK_FIDELITY` / `MINIMAX_H3_SDPA_FIDELITY` | ring-SDPA matmul fidelity for the PV phase, the QK^T phase, or the whole kernel (`SDPAProgramConfig.pv_math_fidelity` / `qk_math_fidelity`, or the compute kernel config). LoFi on PV keeps the logits at HiFi2; LoFi on both phases degrades the output; not yet applied on the quad-galaxy exp-ring SDPA path, which keeps the compute kernel config's fidelity |
+| `MINIMAX_H3_SDPA_PV_FIDELITY` / `MINIMAX_H3_SDPA_QK_FIDELITY` / `MINIMAX_H3_SDPA_FIDELITY` | ring-SDPA matmul fidelity for the PV phase, the QK^T phase, or the whole kernel (`SDPAProgramConfig.pv_math_fidelity` / `qk_math_fidelity`, or the compute kernel config). LoFi on PV keeps the logits at HiFi2; at most one per-phase knob may be set (`MINIMAX_H3_SDPA_FIDELITY` changes both), and LoFi on both phases degrades the output; not yet applied on the quad-galaxy exp-ring SDPA path, which keeps the compute kernel config's fidelity |
 
 ## Audio decode precision
 
