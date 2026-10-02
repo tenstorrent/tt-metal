@@ -17,7 +17,7 @@ from tt_transformers.modules.lazy_weight import LazyWeight
 from tt_transformers.modules.lm_head.lm_head_1d import LMHead1D, LMHead1DConfig
 
 import ttnn
-from models.common.modules.tt_ccl import TT_CCL
+from models.common.tt_ccl import TT_CCL
 from models.demos.llama31_8b_qb2.tt.decoder import LlamaDecoder, validate_qb2_mesh
 from models.demos.llama31_8b_qb2.tt.precision import load_precision_config
 
