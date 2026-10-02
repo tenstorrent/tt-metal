@@ -6,6 +6,10 @@ import math
 
 import ttnn
 
+# The dtype of the head's class logits, which the coder ranks: in bfloat16 many of the
+# num_query * num_classes scores tie, and the top-k order departs from the reference's.
+SCORE_DTYPE = ttnn.float32
+
 
 def layer_norm(x, params, residual=None):
     """``ttnn.layer_norm(x + residual)`` with the eps of the module ``params`` were preprocessed from.

@@ -17,23 +17,21 @@ from models.experimental.bevformer.config.decoder_config import (
     CODE_SIN,
     CODE_VELOCITY,
     CODE_WL,
-    REG_XY,
-    REG_Z,
+    CODE_XY,
+    CODE_Z,
 )
 from models.experimental.bevformer.config.head_config import MAX_NUM, NUM_CLASSES, PC_RANGE, POST_CENTER_RANGE
 from models.experimental.bevformer.reference.nms_free_coder import filter_boxes
-
-# The dtype the coder ranks scores in: in bfloat16 many of the num_query * num_classes
-# scores tie, and the top-k order departs from the reference's.
-SCORE_DTYPE = ttnn.float32
+from models.experimental.bevformer.tt.tt_common import SCORE_DTYPE
 
 
 def denormalize_bbox(normalized_bboxes):
-    """Box codes (``config/decoder_config.py``) to ``(cx, cy, cz, w, l, h, yaw, vx, vy)`` boxes."""
+    """Box predictions (``config/decoder_config.py``'s code, centres in metres) to
+    ``(cx, cy, cz, w, l, h, yaw, vx, vy)`` boxes."""
     return ttnn.concat(
         [
-            normalized_bboxes[..., REG_XY],
-            normalized_bboxes[..., REG_Z],
+            normalized_bboxes[..., CODE_XY],
+            normalized_bboxes[..., CODE_Z],
             ttnn.exp(normalized_bboxes[..., CODE_WL]),
             ttnn.exp(normalized_bboxes[..., CODE_H]),
             ttnn.atan2(normalized_bboxes[..., CODE_SIN], normalized_bboxes[..., CODE_COS]),
@@ -63,7 +61,7 @@ class TtNMSFreeCoder:
 
     def topk(self, cls_scores, bbox_preds):
         """``(bs, num_query, num_classes)`` ``SCORE_DTYPE`` logits and ``(bs, num_query, code_size)``
-        box codes to each sample's top ``max_num`` scores, sorted, as device tensors: scores and
+        box predictions to each sample's top ``max_num`` scores, sorted, as device tensors: scores and
         labels ``(bs, max_num)``, query indexes ``(bs, max_num, 1)`` and boxes ``(bs, max_num, 9)``."""
         if cls_scores.dtype != SCORE_DTYPE:
             raise ValueError(f"cls_scores must be {SCORE_DTYPE}, got {cls_scores.dtype}")

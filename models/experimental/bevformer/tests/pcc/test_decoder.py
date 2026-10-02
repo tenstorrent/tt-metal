@@ -10,6 +10,7 @@ import ttnn
 from models.experimental.bevformer.tests.backbone_common import assert_pcc
 from models.experimental.bevformer.tests.decoder_common import (
     BEV_SHAPES,
+    assert_channels_close,
     build_reference_decoder,
     build_reg_branches,
     layer_metrics,
@@ -52,17 +53,21 @@ def _host_input(name, tensor, batch_first):
 
 
 def _check(torch_outputs, tt_outputs, input_reference_points, bev_shape, batch_first):
-    # The box codes are the head's to check, against its reference.
-    tt_outputs = tuple(ttnn.to_torch(t).float() for t in tt_outputs[:2])
+    """``torch_outputs`` and ``tt_outputs`` are (layer outputs, refined points, box codes); the
+    box codes are batch-first in both."""
+    tt_outputs = tuple(ttnn.to_torch(t).float() for t in tt_outputs)
     if batch_first:
-        tt_outputs = (tt_outputs[0].permute(0, 2, 1, 3), tt_outputs[1])
+        tt_outputs = (tt_outputs[0].permute(0, 2, 1, 3), *tt_outputs[1:])
     # comp_pcc zeroes NaN and Inf before correlating, so they must be ruled out here.
-    for name, tensor in zip(("output", "reference points"), tt_outputs):
+    for name, tensor in zip(("output", "reference points", "box codes"), tt_outputs):
         assert torch.isfinite(tensor).all(), f"non-finite values in the decoder {name}"
-    for layer, metrics in enumerate(layer_metrics(torch_outputs, tt_outputs, input_reference_points, bev_shape)):
+    for layer, metrics in enumerate(
+        layer_metrics(torch_outputs[:2], tt_outputs[:2], input_reference_points, bev_shape)
+    ):
         logger.info(f"layer {layer}: " + ", ".join(f"{key} {value:.5f}" for key, value in metrics.items()))
     assert_pcc(torch_outputs[0], tt_outputs[0], 0.99)
     assert_pcc(torch_outputs[1], tt_outputs[1], 0.99)
+    assert_channels_close(torch_outputs[2], tt_outputs[2])
 
 
 @torch.no_grad()
@@ -75,7 +80,11 @@ def test_decoder(device, reset_seeds, name, bev_shape, batch_size, traced, batch
     spatial_shapes = torch.tensor([bev_shape])
 
     def reference(inputs):
-        return torch_model(**inputs, spatial_shapes=spatial_shapes, reg_branches=reg_branches)
+        """The reference decoder's outputs, plus the box codes the TT decoder also returns: each
+        layer's reg branch on its output."""
+        outputs, points = torch_model(**inputs, spatial_shapes=spatial_shapes, reg_branches=reg_branches)
+        box_codes = torch.stack([branch(out.permute(1, 0, 2)) for branch, out in zip(reg_branches, outputs)])
+        return outputs, points, box_codes
 
     tt_model = TtDetectionTransformerDecoder(
         create_decoder_parameters(torch_model, device), device, bev_shape, batch_first=batch_first

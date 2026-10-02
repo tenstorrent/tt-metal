@@ -9,6 +9,8 @@ The layers run batch-first, the layout the cross-attention and reg branches need
 default the decoder takes and returns the reference's sequence-first
 ``(num_query, bs, embed_dims)`` tensors, permuting ``query``, ``query_pos`` and ``value`` on
 entry and the stacked layer outputs on exit; ``batch_first=True`` skips those permutes.
+Unlike the reference, it also returns each layer's box codes, the reg branches' raw output,
+so ``TtBEVFormerHead`` builds its box predictions without running the branches again.
 Parameters come from ``model_preprocessing_decoder.create_decoder_parameters``. Forward runs
 on device only.
 
@@ -21,7 +23,7 @@ import dataclasses
 import math
 
 import ttnn
-from models.experimental.bevformer.config.decoder_config import REG_XY, REG_Z
+from models.experimental.bevformer.config.decoder_config import CODE_XY, CODE_Z
 from models.experimental.bevformer.tt.tt_common import layer_norm
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention, fp32_grid_sample_config
 
@@ -135,8 +137,9 @@ class TtDetectionTransformerDecoder:
         ``(bs, nq, 3)`` ``GRID_DTYPE`` in [0, 1] either way.
 
         Returns every layer's output ``(L, nq, bs, C)`` (``(L, bs, nq, C)`` with ``batch_first``),
-        refined reference points ``(L, bs, nq, 3)`` and the reg branches' box codes
-        ``(L, bs, nq, code_size)``, both ``GRID_DTYPE``.
+        refined reference points ``(L, bs, nq, 3)`` and the reg branches' raw box codes
+        ``(L, bs, nq, code_size)`` (batch-first either way), both ``GRID_DTYPE``. The codes' centre
+        channels are logit offsets; the refined points are their outcome.
         """
         if reference_points.dtype != GRID_DTYPE:
             raise ValueError(f"reference_points must be {GRID_DTYPE}, got {reference_points.dtype}")
@@ -157,7 +160,7 @@ class TtDetectionTransformerDecoder:
             output = layer(output, value, query_pos, ttnn.unsqueeze(reference_points[..., :2], 2))
 
             box_code = self._reg_branch(output, branch)
-            centre_delta = ttnn.concat([box_code[..., REG_XY], box_code[..., REG_Z]], dim=-1)
+            centre_delta = ttnn.concat([box_code[..., CODE_XY], box_code[..., CODE_Z]], dim=-1)
             # The clamp (a no-op on the first layer's logit output) runs inside the add.
             logits = ttnn.add(centre_delta, logits, input_tensor_b_activations=CLAMP_LOGITS)
             reference_points = ttnn.sigmoid(logits)

@@ -48,7 +48,7 @@ import torch
 import torch.nn as nn
 
 from models.experimental.bevformer.config import DeformableAttentionConfig
-from models.experimental.bevformer.config.decoder_config import REG_XY, REG_Z
+from models.experimental.bevformer.config.decoder_config import CODE_XY, CODE_Z
 from models.experimental.bevformer.reference.ms_deformable_attention import MSDeformableAttention
 
 
@@ -59,6 +59,15 @@ def inverse_sigmoid(x, eps=1e-5):
     x1 = x.clamp(min=eps)
     x2 = (1 - x).clamp(min=eps)
     return torch.log(x1 / x2)
+
+
+def reg_branch(embed_dims, code_size, num_reg_fcs=2):
+    """A layer's box regression branch, ``(Linear-ReLU) x num_reg_fcs`` then ``Linear(code_size)``,
+    as BEVFormerHead builds it; the decoder refines its reference points with it."""
+    layers = []
+    for _ in range(num_reg_fcs):
+        layers += [nn.Linear(embed_dims, embed_dims), nn.ReLU()]
+    return nn.Sequential(*layers, nn.Linear(embed_dims, code_size))
 
 
 class MultiheadAttention(nn.Module):
@@ -170,8 +179,8 @@ class DetectionTransformerDecoder(nn.Module):
             box_delta = reg_branches[lid](output.permute(1, 0, 2))
             new_reference_points = torch.cat(
                 [
-                    box_delta[..., REG_XY] + inverse_sigmoid(reference_points[..., :2]),
-                    box_delta[..., REG_Z] + inverse_sigmoid(reference_points[..., 2:3]),
+                    box_delta[..., CODE_XY] + inverse_sigmoid(reference_points[..., :2]),
+                    box_delta[..., CODE_Z] + inverse_sigmoid(reference_points[..., 2:3]),
                 ],
                 dim=-1,
             )

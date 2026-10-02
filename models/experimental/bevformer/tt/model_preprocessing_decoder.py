@@ -78,7 +78,9 @@ def create_reg_branch_parameters(reg_branches, device, dtype=DEFAULT_DTYPE):
     The decoder runs each branch once per layer: it refines its reference points with the
     centre channels of the box code and returns the whole code, which the head uses.
     """
-    return [
-        [linear_params(m.weight, m.bias, device, dtype) for m in branch if isinstance(m, torch.nn.Linear)]
-        for branch in reg_branches
-    ]
+    branches = []
+    for branch in reg_branches:
+        # Unpacking checks the three Linears TtDetectionTransformerDecoder._reg_branch runs.
+        first, second, last = (m for m in branch if isinstance(m, torch.nn.Linear))
+        branches.append([linear_params(m.weight, m.bias, device, dtype) for m in (first, second, last)])
+    return branches
