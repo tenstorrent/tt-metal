@@ -320,7 +320,12 @@ class MultichipDecoder(OptimizedDecoder):
                 num_links=self.num_links,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )  # [1, D, rows, H]
-            out = ttnn.sum(gathered, dim=1, keepdim=True)
+            # ttnn.sum(dim=1) is FillPad + fast_reduce_nc + slice: the ~5 us FillPad of the 1-row tensor's tile
+            # padding is unnecessary for a reduction over dim 1 (it never mixes rows), so call the other two directly
+            rows = gathered.shape[-2]
+            out = ttnn.experimental.fast_reduce_nc(gathered, dims=[1], memory_config=ttnn.L1_MEMORY_CONFIG)
+            if out.shape[-2] != rows:
+                out = ttnn.slice(out, [0, 0, 0, 0], [1, 1, rows, out.shape[-1]])
             return ttnn.typecast(out, ttnn.bfloat16) if out.dtype != ttnn.bfloat16 else out
         if ccl == ttnn.bfloat16:
             return ttnn.all_reduce(x, cluster_axis=self.tp_axis, topology=self.ccl_topology, num_links=self.num_links)
