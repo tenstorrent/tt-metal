@@ -41,27 +41,32 @@ VT = 4  # V = 128 -> 4 tiles; invariant across the Qwen GDN family
 # it is an independent re-derivation of chunk_gdn_device_operation.cpp (choose_fused_geometry,
 # fused_row_local_feasible, fused_placement), so a bug has to be made twice to pass.
 # Cost-model constants: QB2, re-measured 2026-10-02 (Tracy device time, T=2048 -> NC=64, C=32, K=V=128, medians of
-# ops 2-5) on the producer-lever stack with the prep constants built in L1.
+# ops 2-5) on the FPU-inverse tree (wy_inverse=FPU_HORNER, the 12.9 us prep item).
 # ---------------------------------------------------------------------------------------------
-_W_P_US = 15.98  # producer item period; flat over BH and the producer count
+_W_P_US = 12.74  # producer item period (VALID to VALID); flat over BH and the producer count
 _T_STEP_US = {1: 3.17, 2: 2.63, 4: 4.50}  # receiver step per V-slice width Vtl, before the per-head slope
 _T_STEP_POOL_VTL1_US = 4.25  # Vtl=1 is round-trip bound; a pool's extras lengthen the round trip
 _CHAIN_SLOPE_US = 0.003  # receiver chunk period growth per head (shared DRAM / NoC)
 _SKEW_A_US, _SKEW_B_US = 6.0, 0.25  # slowest chain behind the median chain: A + B * BH
 _TAIL_US = 4.0  # last chunk consumed -> kernel end
-_FILL_A_US, _FILL_B_US, _FILL_C_US = 21.4, 0.34, 0.042  # fill = A + B * BH + C * producers
+_FILL_A_US, _FILL_B_US, _FILL_C_US = 19.6, 0.38, 0.013  # fill = A + B * BH + C * producers
 _ROW_MAJOR_PACE_US = 8.4  # link-bound chunk period of the row-major placement
 # Balance bumps: two bounds within `width` of each other expose each side's jitter to the other, up to `peak`
-# when equal. Chain vs producers at Vtl <= 2; home vs extra producers of a pool.
+# when equal. Chain vs producers at Vtl <= 2; home vs extra producers of a pool (per hand-off depth), weighted by
+# how close the home producers' bound is to the run's bound (the relevance width).
 _BALANCE_PEAK, _BALANCE_WIDTH = 0.08, 0.15
-_POOL_BALANCE_PEAK, _POOL_BALANCE_WIDTH = 0.16, 0.40
+_POOL_BALANCE = {2: (0.43, 0.64), 3: (0.64, 0.41)}  # hand-off depth -> (peak, width)
+_POOL_RELEVANCE_WIDTH = 0.40
 _POOL_SKEW_US = 4.0  # extra chain skew of a pool
-_DEPTH2_ROUND_TRIP_US = {1: 4.1, 2: 2.9}  # depth 2 exposes the credit -> VALID round trip per step (Vtl 1 / 2, no extras)
+# Depth 2 exposes the credit -> VALID round trip per step: Vtl 1 / 2; at Vtl 2 the leftover-column heads of a
+# layout (BH > k * grid_y, their producers stacked vertically) pay more.
+_DEPTH2_ROUND_TRIP_US = {1: 4.1, 2: 2.72}
+_DEPTH2_LEFTOVER_VTL2_US = 2.9
 _DEPTHS = (2, 3)  # hand-off depths the model chooses between
 _NV_CANDIDATES = (1, 2, 4, 8)  # receivers per head the model considers (those dividing Vt)
 _HANDOFF_TILES, _PRODUCER_PREP_TILES, _TILE_BYTES, _L1_BUDGET_BYTES = 19, 48, 4096, 1400 * 1024
 # Measured phased device time (prep + scan) at NC=64, interpolated linearly in BH; beyond the table scaled by BH/48.
-_PHASED_TABLE = ((4, 359.8), (8, 461.5), (12, 603.0), (16, 769.4), (32, 1278.8), (48, 1907.9))
+_PHASED_TABLE = ((4, 330.2), (8, 441.7), (12, 582.7), (16, 736.0), (32, 1235.8), (48, 1834.9))
 
 
 def _fill(bh, producers):
@@ -99,11 +104,16 @@ def _pool_load(bh, nc, nph, nx, num, den):
     return -(-nh // nph), -(-ne // nx)
 
 
-def _t_fused(bh, nc, nv, np_, depth, placement, nph=None, num=0, den=1):
+def _leftover_heads(gx, gy, bh, nv, nph):
+    """The row-local layout of (nv, nph) per head puts BH - k * gy heads in the leftover columns."""
+    return bh > (gx // (nv + nph)) * gy
+
+
+def _t_fused(bh, nc, nv, np_, depth, placement, nph=None, num=0, den=1, leftover=False):
     """Device time of one geometry: the pipeline fill, then the slowest of the chain (NC-1 steps plus the head
     skew), the busiest home producer's remaining items and the busiest extra's, stretched by the balance bumps,
     then the tail. placement 2: np_ is the pool size P with nph home producers per head and the extras' share
-    num / den; a pool without extras is the per-head geometry it is."""
+    num / den; a pool without extras is the per-head geometry it is. leftover: the layout has leftover-column heads."""
     vtl = VT // nv
     producers = np_ if placement == 2 else bh * np_
     nph = nph if placement == 2 else np_
@@ -111,8 +121,10 @@ def _t_fused(bh, nc, nv, np_, depth, placement, nph=None, num=0, den=1):
     pooled = nx > 0
     n_home, n_extra = _pool_load(bh, nc, nph, nx, num, den)
     pace = _t_step(vtl, pooled) + _CHAIN_SLOPE_US * bh
-    if depth <= 2 and (vtl == 1 or (vtl == 2 and n_extra == 0)):
-        pace = max(pace, _DEPTH2_ROUND_TRIP_US[vtl])
+    if depth <= 2 and vtl == 1:
+        pace = max(pace, _DEPTH2_ROUND_TRIP_US[1])
+    elif depth <= 2 and vtl == 2:
+        pace = max(pace, _DEPTH2_LEFTOVER_VTL2_US if leftover else _DEPTH2_ROUND_TRIP_US[2])
     H = (n_home - 1) * _W_P_US
     X = (n_extra - 1) * _W_P_US if n_extra else 0.0
     if placement == 0 and max(H, X) < 2.0 * (nc - 1) * pace:  # row-major: link-bound unless well production-bound
@@ -123,8 +135,9 @@ def _t_fused(bh, nc, nv, np_, depth, placement, nph=None, num=0, den=1):
         pen = _balance(C, H, _BALANCE_WIDTH, _BALANCE_PEAK)
         if pooled:  # the home/extra balance matters only where the producers bound the run
             m = max(C, H, X)
-            g = max(0.0, 1.0 - (m - max(H, X)) / (_POOL_BALANCE_WIDTH * m))
-            pen = max(pen, g * _balance(H, X, _POOL_BALANCE_WIDTH, _POOL_BALANCE_PEAK))
+            g = max(0.0, 1.0 - (m - max(H, X)) / (_POOL_RELEVANCE_WIDTH * m))
+            peak, width = _POOL_BALANCE[3 if depth >= 3 else 2]
+            pen = max(pen, g * _balance(H, X, width, peak))
     return _fill(bh, producers) + max(C, H, X) * (1.0 + pen) + _TAIL_US
 
 
@@ -181,7 +194,7 @@ def _choose_geometry(grid, bh, nc, fixed_nv=0, fixed_np=0, fixed_nbuf=0, candida
     depth as is), minimise T_fused; with no row-local layout, fall back to row-major placement (link-bound).
     Pool candidates: the same NV set, P = every core the receivers leave (or the pinned size), at most BH*NC,
     with the extras' share pinned or the best of every share from the balanced NX / P down to 0 (ties -> the
-    larger share); a pool with no extras is the per-head geometry (NV, NPH). Ties -> fewer cores in total,
+    smaller share at Vtl <= 2, the larger otherwise); a pool with no extras is the per-head geometry (NV, NPH). Ties -> fewer cores in total,
     then smaller NV, then the shallower ring."""
     gx, gy = grid
     depths = (fixed_nbuf,) if fixed_nbuf else _DEPTHS
@@ -190,23 +203,25 @@ def _choose_geometry(grid, bh, nc, fixed_nv=0, fixed_np=0, fixed_nbuf=0, candida
     def consider(nv, np_, placement, nph=None, num=0, den=1):
         nonlocal best
         cores = bh * nv + (np_ if placement == 2 else bh * np_)
+        lo = placement != 0 and _leftover_heads(gx, gy, bh, nv, nph if placement == 2 else np_)
         for depth in depths:
             if not fixed_nbuf and not _handoff_fits_l1(VT // nv, depth):
                 continue
-            key = (_t_fused(bh, nc, nv, np_, depth, placement, nph, num, den), cores, nv, depth)
+            key = (_t_fused(bh, nc, nv, np_, depth, placement, nph, num, den, lo), cores, nv, depth)
             if best is None or key < best[0]:
                 best = (key, nv, np_, placement, depth, num if num else 0, den if num else 1)
 
     def consider_pool(nv, P, nph):
         nx = P - bh * nph
         nums = [int(fixed_share * P + 0.5)] if fixed_share >= 0 else range(nx, -1, -1)
+        lo = _leftover_heads(gx, gy, bh, nv, nph)
         for depth in depths:
             if not fixed_nbuf and not _handoff_fits_l1(VT // nv, depth):
                 continue
             t_best, num_best = None, None
             for num in nums:
-                t = _t_fused(bh, nc, nv, P, depth, 2, nph, num, P)
-                if t_best is None or t < t_best:
+                t = _t_fused(bh, nc, nv, P, depth, 2, nph, num, P, lo)
+                if t_best is None or t < t_best or (t == t_best and VT // nv <= 2):
                     t_best, num_best = t, num
             key = (t_best, bh * nv + P, nv, depth)
             nonlocal best
@@ -638,59 +653,68 @@ def test_infeasible_placement_raises(expect_error, grid, bh, nv, np_, placement,
 
 
 # ---------------------------------------------------------------------------------------------
-# Calibration anchors: the shipped model reproduces the QB2 measurements it was fitted to (2026-10-02, the
-# producer-lever stack with the prep constants built in L1; Tracy device time at T=2048 -> NC=64, median of ops 2-5)
+# Calibration anchors: the shipped model reproduces the QB2 measurements it was fitted to (2026-10-02, the FPU-inverse
+# tree, wy_inverse=FPU_HORNER; Tracy device time at T=2048 -> NC=64, median of ops 2-5, medians over captures where
+# a row has several)
 # ---------------------------------------------------------------------------------------------
 
 
 def test_phased_model_matches_measurements():
     """T_phased reproduces the measured phased device-time points (prep + scan) within 2 %."""
-    for bh, meas in ((4, 359.8), (8, 461.5), (12, 603.0), (16, 769.4), (32, 1278.8), (48, 1907.9)):
+    for bh, meas in ((4, 330.2), (8, 441.7), (12, 582.7), (16, 736.0), (32, 1235.8), (48, 1834.9)):
         t_ph = _t.chunk_gdn_fused_geometry(11, 10, bh, 64, VT)[5]
         assert abs(t_ph - meas) / meas < 0.02, (bh, t_ph, meas)
     t24 = _t.chunk_gdn_fused_geometry(11, 10, 24, 64, VT)[5]
-    assert 1000 <= t24 <= 1050, t24  # interpolated between BH=16 and 32
+    assert 960 <= t24 <= 1010, t24  # interpolated between BH=16 and 32
 
 
-# Per-head fused device time: (BH, NV, NP, handoff_depth, placement, us, tolerance). Depth 2 is modelled at the
-# round-trip floor: at BH <= 8 no head pays it (7 % under the model), at BH=12 NP=7 two heads pay more (5 % over).
-# Vtl=1 at the balance (BH=12 NV=4 NP=5) runs 12-17 % above the model: its round-trip-bound step is more fragile
-# than the Vtl=2 bump says, and the model never picks NV=4.
+# Per-head fused device time: (BH, NV, NP, handoff_depth, placement, us, tolerance). Depth 2 at Vtl=2 is modelled
+# at its round-trip floor (2.72; 2.9 for the leftover-column heads at BH=12): at BH <= 8 the slower chain is absorbed
+# by the tail (depth 2 = depth 3 within 1 us, 2 % under the model); at BH=12 the leftover heads' cost is bistable
+# (NP=7 5 % over, NP=5/6 3-4 % under). Vtl=1 at BH=12 NP=5 runs 12-20 % above the model (its chains skew by 30-50 us;
+# the model never picks NV=4).
 _FUSED_MEASUREMENTS = [
-    (4, 2, 9, 2, 1, 204.0, 0.08),
-    (4, 2, 9, 3, 1, 204.8, 0.05),
-    (4, 2, 7, 2, 1, 203.4, 0.08),
-    (4, 4, 7, 2, 1, 292.7, 0.05),
-    (4, 4, 7, 3, 1, 238.8, 0.05),
-    (8, 2, 9, 2, 1, 207.0, 0.08),
-    (8, 2, 9, 3, 1, 207.7, 0.05),
-    (8, 2, 7, 2, 1, 206.2, 0.08),
-    (8, 2, 6, 2, 1, 205.7, 0.08),
-    (8, 2, 5, 2, 1, 232.7, 0.05),
-    (8, 4, 7, 2, 1, 305.1, 0.05),
-    (8, 4, 7, 3, 1, 254.0, 0.08),
-    (12, 2, 7, 2, 1, 236.6, 0.08),
-    (12, 2, 7, 3, 1, 209.9, 0.05),
-    (12, 2, 6, 2, 1, 215.9, 0.05),
-    (12, 2, 6, 3, 1, 207.8, 0.05),
-    (12, 2, 5, 2, 1, 234.6, 0.05),
-    (12, 2, 5, 3, 1, 234.5, 0.05),
-    (12, 4, 5, 2, 1, 342.0, 0.20),
-    (12, 4, 5, 3, 1, 301.8, 0.20),
-    (16, 1, 4, 2, 1, 336.2, 0.05),
-    (16, 1, 4, 3, 1, 336.6, 0.05),
-    (16, 1, 3, 2, 1, 370.5, 0.05),
-    (16, 2, 3, 2, 1, 367.5, 0.05),
-    (16, 2, 3, 3, 1, 367.6, 0.05),
-    (16, 2, 4, 2, 0, 564.1, 0.05),
-    (16, 1, 5, 2, 0, 601.4, 0.05),
-    (16, 4, 2, 2, 0, 535.8, 0.12),
-    (24, 1, 3, 2, 1, 374.0, 0.05),
-    (24, 1, 3, 3, 1, 373.7, 0.05),
-    (24, 2, 2, 2, 1, 534.3, 0.05),
-    (32, 1, 2, 2, 1, 539.5, 0.05),
-    (32, 2, 1, 2, 1, 1037.6, 0.05),
-    (48, 1, 1, 2, 1, 1046.0, 0.05),
+    (4, 2, 9, 2, 1, 200.8, 0.05),
+    (4, 2, 9, 3, 1, 201.6, 0.05),
+    (4, 2, 7, 2, 1, 200.4, 0.05),
+    (4, 2, 7, 3, 1, 201.2, 0.05),
+    (4, 2, 4, 3, 1, 225.4, 0.05),
+    (4, 4, 7, 2, 1, 288.7, 0.05),
+    (4, 4, 7, 3, 1, 235.6, 0.05),
+    (8, 2, 9, 2, 1, 204.2, 0.05),
+    (8, 2, 9, 3, 1, 204.4, 0.05),
+    (8, 2, 7, 2, 1, 203.2, 0.05),
+    (8, 2, 7, 3, 1, 203.8, 0.05),
+    (8, 2, 6, 2, 1, 202.5, 0.05),
+    (8, 2, 5, 2, 1, 202.3, 0.05),
+    (8, 2, 4, 2, 1, 228.4, 0.05),
+    (8, 2, 4, 3, 1, 228.6, 0.05),
+    (8, 4, 7, 2, 1, 300.9, 0.05),
+    (8, 4, 7, 3, 1, 250.3, 0.08),
+    (12, 2, 7, 2, 1, 233.1, 0.08),
+    (12, 2, 7, 3, 1, 207.4, 0.05),
+    (12, 2, 6, 2, 1, 211.8, 0.06),
+    (12, 2, 6, 3, 1, 205.1, 0.05),
+    (12, 2, 5, 2, 1, 213.4, 0.05),
+    (12, 2, 5, 3, 1, 204.4, 0.05),
+    (12, 2, 4, 2, 1, 229.9, 0.05),
+    (12, 2, 4, 3, 1, 231.0, 0.05),
+    (12, 4, 5, 2, 1, 338.2, 0.16),
+    (12, 4, 5, 3, 1, 298.7, 0.22),
+    (16, 1, 4, 2, 1, 333.6, 0.05),
+    (16, 1, 4, 3, 1, 333.1, 0.05),
+    (16, 1, 3, 2, 1, 333.7, 0.05),
+    (16, 2, 3, 2, 1, 295.9, 0.05),
+    (16, 2, 3, 3, 1, 296.2, 0.05),
+    (16, 2, 4, 2, 0, 566.5, 0.05),
+    (16, 1, 5, 2, 0, 594.6, 0.06),
+    (16, 4, 2, 2, 0, 536.8, 0.08),
+    (24, 1, 3, 2, 1, 337.4, 0.05),
+    (24, 1, 3, 3, 1, 337.2, 0.05),
+    (24, 2, 2, 2, 1, 430.4, 0.05),
+    (32, 1, 2, 2, 1, 436.1, 0.05),
+    (32, 2, 1, 2, 1, 830.5, 0.05),
+    (48, 1, 1, 2, 1, 839.0, 0.05),
 ]
 
 
@@ -704,16 +728,16 @@ def test_fused_model_matches_measurements(bh, nv, np_, depth, placement, meas, t
 
 
 def test_qb2_operating_points():
-    """The Qwen3.6-27B TP-4 shape (BH=12) on QB2 picks NV=2 per-head at hand-off depth 3, 7 producers per head
-    (measured 210 us; 6 per head 208, the pool 209), ~210 us vs phased 603; BH=4 and 8 the same NV=2 NP=7
-    geometry; BH=48 pays with the pool of 62 (one home producer per head + 14 extras, ~827 vs the phased 1908);
+    """The Qwen3.6-27B TP-4 shape (BH=12) on QB2 picks NV=2 per-head at hand-off depth 3, 6 producers per head
+    (measured 205 us; 7 per head 207, the pool 207), ~206 us vs phased 583; BH=4 and 8 the same NV=2 NP=6
+    geometry; BH=48 pays with the pool of 62 (one home producer per head + 14 extras, ~667 vs the phased 1835);
     BH=64 needs >= 128 cores, so no fused geometry exists and the op must dispatch phased."""
     nv, np_, pl, nbuf, t_f, t_ph, pays, _ = _t.chunk_gdn_fused_geometry(11, 10, 12, 64, VT)
-    assert (nv, np_, pl, nbuf) == (2, 7, 1, 3) and pays
-    assert 205 <= t_f <= 215 and 595 <= t_ph <= 610
+    assert (nv, np_, pl, nbuf) == (2, 6, 1, 3) and pays
+    assert 200 <= t_f <= 212 and 575 <= t_ph <= 590
     for bh in (4, 8):
         nv, np_, _, nbuf = _t.chunk_gdn_fused_geometry(11, 10, bh, 64, VT)[:4]
-        assert (nv, np_, nbuf) == (2, 7, 3), (bh, nv, np_, nbuf)
+        assert (nv, np_, nbuf) == (2, 6, 3), (bh, nv, np_, nbuf)
     nv, np_, pl, nbuf, t_f, t_ph, pays48, num = _t.chunk_gdn_fused_geometry(11, 10, 48, 64, VT)
     assert (nv, np_, pl, nbuf, num) == (1, 62, 2, 2, 14) and pays48 and t_f < 0.5 * t_ph, (nv, np_, pl, nbuf, t_f, t_ph)
     nv, _, _, _, _, _, pays, _ = _t.chunk_gdn_fused_geometry(11, 10, 64, 64, VT)
@@ -721,52 +745,66 @@ def test_qb2_operating_points():
 
 
 # Pooled fused device time: (BH, NV, P, handoff_depth, extras' share, us, tolerance). The share sweeps at the pool
-# picks (BH=16: NV=2 P=78, balanced 30/78; 24: NV=1 P=86, 14/86; 32: NV=1 P=78, 14/78; 48: NV=1 P=62, 14/62)
-# and the pools of BH 4-12 at their balanced share. Around the BH=16 optimum (shares 0.32-0.36, 270-272 us) the
-# model steps with the busiest home producer's item count; the staggered first items smooth that in reality.
-# The balanced BH=16 pool at depth 3 runs 11 % over the model (its slowest chains end 35 us late); depth 2 is the pick.
+# geometries (BH=16: NV=2 P=78, balanced 30/78; 24: NV=1 P=86, 14/86; 32: NV=1 P=78, 14/78; 48: NV=1 P=62, 14/62)
+# and the pools of BH 4-12 at their balanced share. The BH=16 pool is chain-bound from share ~0.26 up with a chain
+# that slows as the extras' share grows (3.2-3.6 us per step against 2.65), steeper at depth 3; its optimum is
+# 20-22/78 at depth 3 (234-238 us) and 17-20/78 at depth 2 (244-247). Within a tie of the item map (20-22/78) the
+# model cannot order the shares and takes the smallest; measured, 22/78 is 2 % slower than 20-21/78 at both depths.
 _POOL_MEASUREMENTS = [
-    (16, 2, 78, 2, 30 / 78, 277.3, 0.06),
-    (16, 2, 78, 3, 30 / 78, 310.8, 0.15),
-    (16, 2, 78, 2, 0.36, 270.2, 0.06),
-    (16, 2, 78, 2, 0.34, 272.2, 0.06),
-    (16, 2, 78, 2, 0.32, 270.1, 0.06),
-    (16, 2, 78, 2, 0.30, 275.3, 0.06),
-    (16, 2, 78, 2, 0.26, 282.2, 0.06),
-    (16, 2, 78, 2, 0.22, 294.6, 0.06),
-    (16, 2, 78, 2, 0.179, 307.2, 0.06),
-    (16, 2, 78, 2, 0.14, 320.3, 0.06),
-    (16, 2, 78, 2, 0.10, 332.3, 0.06),
-    (16, 2, 78, 2, 0.06, 344.1, 0.06),
-    (16, 2, 78, 2, 0.03, 355.9, 0.06),
-    (16, 2, 78, 2, 0.0, 367.6, 0.06),
-    (16, 2, 78, 3, 0.34, 274.7, 0.06),
-    (16, 2, 78, 3, 0.30, 273.5, 0.06),
-    (16, 1, 94, 2, 30 / 94, 337.1, 0.06),
-    (12, 2, 86, 2, 2 / 86, 209.2, 0.08),
-    (12, 2, 86, 3, 2 / 86, 209.0, 0.08),
-    (12, 2, 86, 2, 0.0, 235.5, 0.06),
-    (12, 2, 86, 3, 0.0, 210.7, 0.06),
-    (8, 2, 94, 2, 22 / 94, 207.9, 0.06),
-    (8, 2, 94, 3, 22 / 94, 207.9, 0.06),
-    (4, 2, 102, 2, 66 / 102, 207.7, 0.06),
-    (4, 2, 102, 3, 66 / 102, 207.7, 0.06),
-    (4, 4, 94, 2, 66 / 94, 303.8, 0.06),
-    (24, 1, 86, 2, 14 / 86, 343.8, 0.06),
-    (24, 1, 86, 3, 14 / 86, 343.6, 0.06),
-    (24, 1, 86, 2, 0.10, 345.3, 0.06),
-    (24, 1, 86, 2, 0.05, 359.8, 0.06),
-    (24, 1, 86, 2, 0.0, 373.8, 0.06),
-    (32, 1, 78, 2, 14 / 78, 453.2, 0.06),
-    (32, 1, 78, 3, 14 / 78, 453.6, 0.06),
-    (32, 1, 78, 2, 0.10, 490.4, 0.06),
-    (32, 1, 78, 2, 0.05, 516.1, 0.06),
-    (32, 1, 78, 2, 0.0, 539.4, 0.06),
-    (48, 1, 62, 2, 14 / 62, 822.7, 0.06),
-    (48, 1, 62, 3, 14 / 62, 823.5, 0.06),
-    (48, 1, 62, 2, 0.10, 952.0, 0.06),
-    (48, 1, 62, 2, 0.05, 999.0, 0.06),
-    (48, 1, 62, 2, 0.0, 1045.9, 0.06),
+    (16, 2, 78, 2, 30 / 78, 276.0, 0.05),
+    (16, 2, 78, 3, 30 / 78, 302.9, 0.05),
+    (16, 2, 78, 2, 0.36, 264.1, 0.05),
+    (16, 2, 78, 2, 0.34, 261.3, 0.05),
+    (16, 2, 78, 2, 0.32, 261.8, 0.05),
+    (16, 2, 78, 2, 0.30, 250.3, 0.06),
+    (16, 2, 78, 2, 0.282, 249.0, 0.05),
+    (16, 2, 78, 2, 0.269, 249.6, 0.05),
+    (16, 2, 78, 2, 0.26, 246.7, 0.05),
+    (16, 2, 78, 2, 0.244, 246.8, 0.05),
+    (16, 2, 78, 2, 0.231, 246.2, 0.05),
+    (16, 2, 78, 2, 0.22, 243.8, 0.05),
+    (16, 2, 78, 2, 0.179, 251.4, 0.05),
+    (16, 2, 78, 2, 0.14, 259.3, 0.05),
+    (16, 2, 78, 2, 0.10, 269.6, 0.05),
+    (16, 2, 78, 2, 0.06, 278.7, 0.05),
+    (16, 2, 78, 2, 0.03, 287.5, 0.05),
+    (16, 2, 78, 2, 0.0, 296.0, 0.05),
+    (16, 2, 78, 3, 0.34, 273.3, 0.05),
+    (16, 2, 78, 3, 0.32, 256.2, 0.05),
+    (16, 2, 78, 3, 0.30, 243.7, 0.05),
+    (16, 2, 78, 3, 0.282, 241.8, 0.05),
+    (16, 2, 78, 3, 0.269, 234.0, 0.05),
+    (16, 2, 78, 3, 0.26, 236.8, 0.05),
+    (16, 2, 78, 3, 0.244, 240.7, 0.05),
+    (16, 2, 78, 3, 0.231, 245.8, 0.05),
+    (16, 2, 78, 3, 0.22, 242.8, 0.05),
+    (16, 2, 78, 3, 0.179, 249.8, 0.05),
+    (16, 1, 94, 2, 30 / 94, 333.9, 0.05),
+    (12, 2, 86, 2, 2 / 86, 235.8, 0.06),
+    (12, 2, 86, 3, 2 / 86, 206.5, 0.05),
+    (12, 2, 86, 2, 0.0, 235.8, 0.06),
+    (12, 2, 86, 3, 0.0, 206.3, 0.05),
+    (8, 2, 94, 2, 22 / 94, 207.8, 0.05),
+    (8, 2, 94, 3, 22 / 94, 204.7, 0.05),
+    (4, 2, 102, 2, 66 / 102, 206.7, 0.05),
+    (4, 2, 102, 3, 66 / 102, 204.4, 0.05),
+    (4, 4, 94, 2, 66 / 94, 300.4, 0.05),
+    (24, 1, 86, 2, 14 / 86, 340.2, 0.05),
+    (24, 1, 86, 3, 14 / 86, 340.1, 0.05),
+    (24, 1, 86, 2, 0.10, 339.4, 0.05),
+    (24, 1, 86, 3, 0.10, 342.1, 0.05),
+    (24, 1, 86, 2, 0.05, 337.6, 0.05),
+    (24, 1, 86, 2, 0.0, 337.6, 0.05),
+    (32, 1, 78, 2, 14 / 78, 371.2, 0.05),
+    (32, 1, 78, 3, 14 / 78, 370.3, 0.05),
+    (32, 1, 78, 2, 0.10, 399.2, 0.05),
+    (32, 1, 78, 2, 0.05, 417.7, 0.05),
+    (32, 1, 78, 2, 0.0, 436.2, 0.05),
+    (48, 1, 62, 2, 14 / 62, 662.4, 0.05),
+    (48, 1, 62, 3, 14 / 62, 661.2, 0.05),
+    (48, 1, 62, 2, 0.10, 765.0, 0.05),
+    (48, 1, 62, 2, 0.05, 801.8, 0.05),
+    (48, 1, 62, 2, 0.0, 838.9, 0.05),
 ]
 
 
@@ -781,16 +819,19 @@ def test_pool_model_matches_measurements(bh, nv, P, depth, share, meas, tol):
 def test_qb2_pool_operating_points():
     """The producer pool on QB2 (what producer_pool=True resolves to with the geometry left free): every core the
     receivers leave, in the row-local map of the largest NPH the pool allows plus the extras, at the model's
-    share. BH=16 NV=2: 78 producers = 3 per head + 30 extras at 27/78 (measured 271 us; the balanced 30/78 277);
-    BH=24 NV=1: 86 = 3 per head + 14 extras, balanced; BH=32: 78 = 2 per head + 14, balanced; BH=48: 62 = 1 per
-    head + 14, balanced. The pool is the default pick from BH=16 up (16: 262 vs the per-head 330; 24: 341 vs 372;
-    32: 455 vs 534; 48: 827 vs 1051) and loses to the per-head geometry at BH <= 12."""
+    share and depth. BH=16 NV=2: 78 producers = 3 per head + 30 extras at 20/78, depth 3 (measured 237 us; the
+    balanced 30/78 276 at depth 2); BH=24 NV=1: 86 = 3 per head + 14 extras, balanced; BH=32: 78 = 2 per head
+    + 14, balanced (13/78 ties in the model and measured 374 vs 371); BH=48: 62 = 1 per head + 14, balanced;
+    BH <= 12: the extras idle (share 0: every share ties, the chain binds; measured 201.5 vs 204.4 at BH=4). The
+    pool is the default pick at BH=16 (233 vs the
+    per-head 298) and from BH=32 up (32: 368 vs 432; 48: 667 vs 845); it loses to the per-head geometry at BH <= 12
+    and, by its 4 us of extra chain skew and 14 more cores, at BH=24 (338 vs 334, both chain-bound)."""
     for bh, nv, P, nph, num, nbuf, wins in (
-        (16, 2, 78, 3, 27, 2, True),
-        (12, 2, 86, 7, 1, 2, False),
-        (8, 2, 94, 9, 22, 2, False),
-        (4, 2, 102, 9, 66, 2, False),
-        (24, 1, 86, 3, 14, 2, True),
+        (16, 2, 78, 3, 20, 3, True),
+        (12, 2, 86, 7, 0, 3, False),
+        (8, 2, 94, 9, 0, 3, False),
+        (4, 2, 102, 9, 0, 3, False),
+        (24, 1, 86, 3, 14, 2, False),
         (32, 1, 78, 2, 14, 2, True),
         (48, 1, 62, 1, 14, 2, True),
     ):
@@ -803,9 +844,9 @@ def test_qb2_pool_operating_points():
         t_head = _t.chunk_gdn_fused_geometry(11, 10, bh, 64, VT, candidates=PER_HEAD)[4]
         assert (t_pool < t_head) == wins, (bh, t_pool, t_head)
     nv, P, pl, nbuf, t_pool, _, _, num = _t.chunk_gdn_fused_geometry(11, 10, 16, 64, VT, candidates=POOL)
-    assert (nv, P, pl, nbuf, num) == (2, 78, 2, 2, 27) and 257 <= t_pool <= 268, (nv, P, pl, nbuf, num, t_pool)
+    assert (nv, P, pl, nbuf, num) == (2, 78, 2, 3, 20) and 228 <= t_pool <= 238, (nv, P, pl, nbuf, num, t_pool)
     t_head = _t.chunk_gdn_fused_geometry(11, 10, 16, 64, VT, candidates=PER_HEAD)[4]
-    assert 325 <= t_head <= 336, t_head
+    assert 292 <= t_head <= 303, t_head
     for bh, expect_pool in (
         (1, False),
         (2, False),
@@ -815,7 +856,7 @@ def test_qb2_pool_operating_points():
         (8, False),
         (12, False),
         (16, True),
-        (24, True),
+        (24, False),
         (32, True),
         (48, True),
     ):
@@ -829,17 +870,19 @@ def test_qb2_pool_operating_points():
 
 
 def test_pool_share_choice():
-    """The model's share for the BH=16 pool follows the measured sweep: a little under the balance (27/78 = 0.346,
-    the home producers carry 15 % more than the extras) is the optimum; the balance itself costs the ordering
-    penalty, lower shares make the home producers the bottleneck. A pinned share is taken as is, and the
-    oracle agrees with the C++ at every share."""
+    """The model's share for the BH=16 pool at its depth (3) follows the measured sweep: 20/78 = 0.256 (the home
+    producers carry 16 items, the chain's extra-share slow-down is still small) is the optimum, the smallest share
+    of the item map's tie 20-22/78; the balance costs the slow chain, lower shares make the home producers the
+    bottleneck. A pinned share is taken as is, and the oracle agrees with the C++ at every share."""
     t_at = {}
     for num in range(31):
-        got = _t.chunk_gdn_fused_geometry(11, 10, 16, 64, VT, 2, 78, 2, POOL, num / 78)
-        o = _choose_geometry((11, 10), 16, 64, fixed_nv=2, fixed_np=78, fixed_nbuf=2, candidates=POOL, fixed_share=num / 78)
+        got = _t.chunk_gdn_fused_geometry(11, 10, 16, 64, VT, 2, 78, 3, POOL, num / 78)
+        o = _choose_geometry((11, 10), 16, 64, fixed_nv=2, fixed_np=78, fixed_nbuf=3, candidates=POOL, fixed_share=num / 78)
         assert got[7] == num == o["num"] and abs(got[4] - o["T_fused"]) < 0.5, (num, got, o)
         t_at[num] = got[4]
-    assert min(t_at, key=t_at.get) == 27, t_at
-    assert t_at[30] > t_at[27] * 1.03 and t_at[0] > t_at[27] * 1.25, t_at
-    free = _t.chunk_gdn_fused_geometry(11, 10, 16, 64, VT, 2, 78, 2, POOL)
-    assert free[7] == 27 and free[4] == t_at[27]
+    assert t_at[20] == min(t_at.values()) and t_at[20] == t_at[21] == t_at[22] < t_at[19], t_at
+    assert t_at[30] > t_at[20] * 1.2 and t_at[0] > t_at[20] * 1.2, t_at
+    free = _t.chunk_gdn_fused_geometry(11, 10, 16, 64, VT, 2, 78, 3, POOL)
+    assert free[7] == 20 and free[4] == t_at[20]
+    free = _t.chunk_gdn_fused_geometry(11, 10, 16, 64, VT, 2, 78, 0, POOL)
+    assert (free[3], free[7]) == (3, 20) and free[4] == t_at[20]

@@ -51,6 +51,15 @@ inline constexpr bool kGdnTinvSfpu = true;
 inline constexpr bool kGdnTinvSfpu = false;
 #endif
 
+#if defined(GDN_TINV_FPU)
+#include "chunk_gdn_tinv_fpu.hpp"
+inline constexpr bool kGdnTinvFpu = true;
+#else
+inline constexpr bool kGdnTinvFpu = false;
+#endif
+// The single-tile inverses (SFPU solve, DEST-chained FPU) share the solve build's block forms below.
+inline constexpr bool kGdnTinvSingleTile = kGdnTinvSfpu || kGdnTinvFpu;
+
 inline void WAIT(uint32_t cb, uint32_t n) { CircularBuffer(cb).wait_front(n); }
 // Ct is a template parameter of prep_chunk, so every per-tile loop in the helpers below unrolls fully; at Ct == 2
 // that puts the prep program over the 70,656 B kernel-config buffer. The Ct == 2 build passes the tile count
@@ -797,9 +806,9 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     uint32_t Q = cb.q, Kk = cb.k;
     // The solve build waits for the normalized q/k at their first readers (Kk at k_beta, Q at intra); the Horner
     // build drains them here, at its size limit.
-    constexpr bool kLateNormWaits = qk_norm && kGdnTinvSfpu;
+    constexpr bool kLateNormWaits = qk_norm && kGdnTinvSingleTile;
     // The fused Ct == 1 solve producer's forms of the blocks below; the Horner and Ct == 2 builds keep theirs.
-    constexpr bool kCt1Sfpu = kGdnTinvSfpu && Ct == 1;
+    constexpr bool kCt1Sfpu = kGdnTinvSingleTile && Ct == 1;
     {
         GDN_ZONE("pp_norm");
         if constexpr (qk_norm) {
@@ -872,7 +881,8 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     {
         GDN_ZONE("pp_negn");
         // ---- N = strictly_lower(k_beta@k^T * L_mask); T_inv = (I + strictly_lower)^-1 ----
-        // The WY inverse. With GDN_TINV_SFPU (FORWARD_SUBSTITUTION, AUTO on Blackhole at chunk 32) it is one
+        // The WY inverse. With GDN_TINV_FPU (FPU_HORNER, AUTO on Blackhole at chunk 32) it is the quadrant-split
+        // Horner chained through DEST (chunk_gdn_tinv_fpu.hpp); with GDN_TINV_SFPU (FORWARD_SUBSTITUTION) one
         // SFPU forward substitution on negN, see sfpu_tinv. HORNER mirrors FLA's solve_tril: block down to 16x16
         // (invert_block splits each 32x32 tile into 16-quadrants), invert the small diagonal blocks with bounded
         // Horners, and merge off-diagonal blocks exactly. This keeps every intermediate bounded, unlike a single
@@ -894,6 +904,10 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
 #if defined(GDN_TINV_SFPU)
             // One SFPU forward-substitution solve on negN in place.
             sfpu_tinv(cb.scr3, cb.eye, cb.Tinv);
+            POP(cb.scr3, cc);
+#elif defined(GDN_TINV_FPU)
+            // The quadrant-split Horner inverses chained through DEST.
+            gdn_tinv_fpu::tinv<>(cb.scr3, cb.eye, cb.Tinv);
             POP(cb.scr3, cc);
 #else
             // Single 32x32 block: T_inv is just its inverse.

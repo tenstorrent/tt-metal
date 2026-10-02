@@ -172,8 +172,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         .value(
             "AUTO",
             ChunkGdnWyInverse::AUTO,
-            "the forward-substitution solve wherever it is supported (Blackhole, chunk_size == 32), Horner everywhere "
-            "else")
+            "FPU_HORNER wherever it is supported (Blackhole, chunk_size == 32), Horner everywhere else")
         .value(
             "HORNER",
             ChunkGdnWyInverse::HORNER,
@@ -182,6 +181,11 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             "FORWARD_SUBSTITUTION",
             ChunkGdnWyInverse::FORWARD_SUBSTITUTION,
             "one forward-substitution solve on the SFPU, reading the factor as fp32 in place; Blackhole-only, "
+            "chunk_size == 32, and refused (not downgraded) where unsupported")
+        .value(
+            "FPU_HORNER",
+            ChunkGdnWyInverse::FPU_HORNER,
+            "the quadrant-split Horner inverses on the matrix engine chained through DEST; Blackhole-only, "
             "chunk_size == 32, and refused (not downgraded) where unsupported");
 
     nb::class_<ChunkGdnMonoProgramConfig>(
@@ -190,7 +194,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         R"doc(chunk_gated_delta_rule on a simple single-kernel path: one core per head for every chunk.
         The slowest path, kept as the benchmark/debug reference; it does not accept
         flat (token-major) q/k/v, and it computes the WY inverse with Horner only (wy_inverse AUTO
-        resolves to it; an explicit FORWARD_SUBSTITUTION is refused).)doc")
+        resolves to it; an explicit FORWARD_SUBSTITUTION or FPU_HORNER is refused).)doc")
         .def(nb::init<>())
         .def("__repr__", [](const ChunkGdnMonoProgramConfig&) { return std::string("ChunkGdnMonoProgramConfig()"); });
 
@@ -467,11 +471,11 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 laid out on the chip — the alternative you pass selects the path, its fields the
                 geometry (see each class). None: the fused path or the phased path depending on the cost model.
             wy_inverse (ttnn.ChunkGdnWyInverse): default AUTO. How each chunk's WY inverse is
-                computed: HORNER on the matrix engine (every architecture),
-                FORWARD_SUBSTITUTION (one solve on the SFPU, Blackhole and chunk_size 32 only, refused
-                where unsupported) or AUTO (FORWARD_SUBSTITUTION wherever supported, else Horner). The
-                mono program is Horner-only: AUTO resolves to it there and an explicit
-                FORWARD_SUBSTITUTION is refused.
+                computed: HORNER on the matrix engine through L1 (every architecture), FPU_HORNER (the
+                same inverse chained through DEST, Blackhole and chunk_size 32 only, refused where
+                unsupported), FORWARD_SUBSTITUTION (one solve on the SFPU, same support) or AUTO
+                (FPU_HORNER wherever supported, else Horner). The mono program is Horner-only: AUTO
+                resolves to it there and the other explicit methods are refused.
             memory_config (ttnn.MemoryConfig, optional): default DRAM interleaved. Placement of the
                 device op's outputs (the head-major o and final_state) and, on the phased path, of its
                 seven DRAM intermediates; not passed to the token-major post-processing.
@@ -551,7 +555,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             prep_serial (bool): default False. ChunkGdnPhasedProgramConfig.prep_serial: BH cores
                 (one per head) instead of the whole grid. Measurement only.
             wy_inverse (ttnn.ChunkGdnWyInverse): default AUTO — the WY-inverse method, as on the
-                public op (HORNER / FORWARD_SUBSTITUTION / AUTO).
+                public op (HORNER / FORWARD_SUBSTITUTION / FPU_HORNER / AUTO).
 
         Returns:
             list[ttnn.Tensor]: the 7 fp32 per-chunk DRAM intermediates the scan consumes —

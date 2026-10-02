@@ -360,8 +360,8 @@ def _tinv_fp64(k, g, beta):
 
 
 # T_inv max-abs error vs the fp64 inverse, per (method, regime), at ~2x the value measured on QB2
-# (Blackhole p300c, 2026-09-22; measured in the comment). Both methods share the error of the device's
-# own N (tf32-class matmul operands, SFPU exp in L_mask), which is the ~1e-3 floor.
+# (Blackhole p300c, 2026-09-22; fpu_horner on bh-qbge-15 p150, 2026-10-02; measured in the comment). All methods
+# share the error of the device's own N (tf32-class matmul operands, SFPU exp in L_mask), which is the ~1e-3 floor.
 _TINV_BOUNDS = {
     ("horner", "typical"): 2.1e-3,  # 1.04e-3
     ("horner", "hard"): 7.3e-3,  # 3.65e-3
@@ -369,16 +369,23 @@ _TINV_BOUNDS = {
     ("forward_substitution", "typical"): 2.0e-3,  # 0.98e-3
     ("forward_substitution", "hard"): 6.1e-3,  # 3.04e-3
     ("forward_substitution", "adversarial"): 3.4e-3,  # 1.67e-3
+    ("fpu_horner", "typical"): 2.1e-3,  # 1.00e-3
+    ("fpu_horner", "hard"): 6.0e-3,  # 2.87e-3
+    ("fpu_horner", "adversarial"): 3.8e-3,  # 1.86e-3
 }
-_WY = {"horner": ttnn.ChunkGdnWyInverse.HORNER, "forward_substitution": ttnn.ChunkGdnWyInverse.FORWARD_SUBSTITUTION}
+_WY = {
+    "horner": ttnn.ChunkGdnWyInverse.HORNER,
+    "forward_substitution": ttnn.ChunkGdnWyInverse.FORWARD_SUBSTITUTION,
+    "fpu_horner": ttnn.ChunkGdnWyInverse.FPU_HORNER,
+}
 
 
 @pytest.mark.parametrize("regime", ["typical", "hard", "adversarial"])
 def test_prep_tinv_methods(device, regime):
-    """The two WY-inverse methods on the same device-built N: each T_inv within its bound of the fp64
-    inverse (finite, even where powers of N reach ~1e8), the SFPU solve no less accurate than the Horner
-    reference, the six other prep outputs bit-identical across methods — the inverse is the only thing
-    the method changes — and wy_inverse=AUTO resolving to the solve on this device."""
+    """The three WY-inverse methods on the same device-built N: each T_inv within its bound of the fp64
+    inverse (finite, even where powers of N reach ~1e8), the SFPU solve and the DEST-chained FPU inverse no
+    less accurate than the Horner reference, the six other prep outputs bit-identical across methods — the
+    inverse is the only thing the method changes — and wy_inverse=AUTO resolving to FPU_HORNER on this device."""
     # 32 chunks per head: 384 items over the grid, so every core runs several chunks and re-reads negN at the
     # same CB address (the case the solve's cache invalidate exists for).
     q, k, v, g, beta = _tinv_inputs(regime, 12, 32, seed=20260922)
@@ -397,7 +404,7 @@ def test_prep_tinv_methods(device, regime):
         return [ttnn.to_torch(o) for o in outs]
 
     outs, errs = {}, {}
-    for method in ("horner", "forward_substitution"):
+    for method in ("horner", "forward_substitution", "fpu_horner"):
         got = prep(_WY[method])
         assert torch.isfinite(got[6]).all(), f"{method}/{regime}: non-finite T_inv"
         errs[method] = (got[6].double() - ref).abs().max().item()
@@ -407,11 +414,9 @@ def test_prep_tinv_methods(device, regime):
     assert (
         errs["forward_substitution"] <= 1.05 * errs["horner"]
     ), f"{regime}: SFPU solve less accurate than Horner: {errs}"
-    for i, name in enumerate(["v_beta", "kd", "q_decay", "intra", "k_dec_t", "dl"]):
-        assert torch.equal(
-            outs["forward_substitution"][i], outs["horner"][i]
-        ), f"{name} changed (only T_inv may differ)"
+    assert errs["fpu_horner"] <= 1.05 * errs["horner"], f"{regime}: FPU_HORNER less accurate than Horner: {errs}"
+    for method in ("forward_substitution", "fpu_horner"):
+        for i, name in enumerate(["v_beta", "kd", "q_decay", "intra", "k_dec_t", "dl"]):
+            assert torch.equal(outs[method][i], outs["horner"][i]), f"{method}: {name} changed (only T_inv may differ)"
     auto = prep(ttnn.ChunkGdnWyInverse.AUTO)
-    assert torch.equal(
-        auto[6], outs["forward_substitution"][6]
-    ), f"{regime}: wy_inverse=AUTO did not resolve to the SFPU solve"
+    assert torch.equal(auto[6], outs["fpu_horner"][6]), f"{regime}: wy_inverse=AUTO did not resolve to FPU_HORNER"
