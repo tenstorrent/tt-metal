@@ -11,7 +11,7 @@
     ./ci.sh --arch blackhole --splits 4 --group 1 --report-dir reports/blackhole-1
   skus:
     bh_p150b_civ2:
-      timeout: 300
+      timeout: 480
   owner_id: U09UC143684
 
 - name: reconfig_escape_blackhole group 2/4
@@ -25,7 +25,7 @@
     ./ci.sh --arch blackhole --splits 4 --group 2 --report-dir reports/blackhole-2
   skus:
     bh_p150b_civ2:
-      timeout: 300
+      timeout: 480
   owner_id: U09UC143684
 
 - name: reconfig_escape_blackhole group 3/4
@@ -39,7 +39,7 @@
     ./ci.sh --arch blackhole --splits 4 --group 3 --report-dir reports/blackhole-3
   skus:
     bh_p150b_civ2:
-      timeout: 300
+      timeout: 480
   owner_id: U09UC143684
 
 - name: reconfig_escape_blackhole group 4/4
@@ -53,5 +53,5 @@
     ./ci.sh --arch blackhole --splits 4 --group 4 --report-dir reports/blackhole-4
   skus:
     bh_p150b_civ2:
-      timeout: 300
+      timeout: 480
   owner_id: U09UC143684

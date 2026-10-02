@@ -76,25 +76,14 @@ import os
 import random
 import subprocess
 import sys
-import xml.etree.ElementTree as ET
 
 import discover_catalog
 
-PASS, FAIL, HANG, ENVERR = "PASS", "FAIL", "HANG", "ENVERR"
+PASS, FAIL, ENVERR = discover_catalog.PASS, discover_catalog.FAIL, discover_catalog.ENVERR
+HANG = "HANG"
 _CODE = {0: PASS, 1: FAIL, 5: HANG}
-
-
-def reset():
-    subprocess.run(["tt-smi", "-r"], capture_output=True, text=True)
-
-
-def pytest_env(worktree):
-    env = dict(os.environ)
-    reconfig_escape_dir = os.path.join(
-        worktree, "tests", "python_tests", "reconfig_escape"
-    )
-    env["PYTHONPATH"] = reconfig_escape_dir + os.pathsep + env.get("PYTHONPATH", "")
-    return env
+reset = discover_catalog._reset_card
+pytest_env = discover_catalog.pytest_env
 
 
 def _run_test_sh(
@@ -175,14 +164,7 @@ def run_round(worktree, arch, nodeids, plan_map_path, jobs, timeout, junit_path)
     )
 
 
-def parse_junit(junit_path):
-    tree = ET.parse(junit_path)
-    results = {}
-    for case in tree.getroot().iter("testcase"):
-        nodeid = f"{case.get('classname')}.py::{case.get('name')}"
-        failed = case.find("failure") is not None or case.find("error") is not None
-        results[nodeid] = FAIL if failed else PASS
-    return results
+parse_junit = discover_catalog.parse_junit
 
 
 def verify_ground_truth(
@@ -400,10 +382,6 @@ def main():
         # 12, to leave margin since a round's own launch count per worker isn't otherwise bounded.
         SAFE_LAUNCHES_PER_WORKER = 10
 
-        def _chunks(seq, size):
-            for i in range(0, len(seq), size):
-                yield seq[i : i + size]
-
         for xi, x in enumerate(restore_x):
             x_members = set(x.get("members", [x["key"]]))
             plan_map = {}
@@ -415,7 +393,7 @@ def main():
                 continue
             round_nodeids = list(plan_map.keys())
             batch_size = SAFE_LAUNCHES_PER_WORKER * args.jobs
-            batches = list(_chunks(round_nodeids, batch_size))
+            batches = list(discover_catalog._chunks(round_nodeids, batch_size))
 
             print(
                 f"[pair_sweep] restore-mode round {xi+1}/{len(restore_x)}: polluter {x['key']}, "

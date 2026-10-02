@@ -22,6 +22,8 @@ from .device_io import write_words_to_device
 from .logger import logger
 
 TENSIX_CFG_BASE = 0xFFEF0000
+# reconfig_escape/discover_catalog.py duplicates these constants (can't import this package
+# directly -- see its own comment) -- keep both in sync by hand.
 _CFG_STATE_SIZE = {
     ChipArchitecture.BLACKHOLE: 56,
     ChipArchitecture.WORMHOLE: 47,
@@ -71,6 +73,8 @@ def thread_items(arch: ChipArchitecture) -> list:
 # L1 layout trisc.cpp expects
 _INKERNEL_RESTORE_BASE = 0x1A000
 _INKERNEL_RESTORE_MAGIC = 0x43464731  # 'CFG1'
+# reconfig_escape/discover_catalog.py duplicates these three (its own _RESTORE_SPACE_* and
+# trisc.cpp's restore_state()) -- keep all three in sync by hand.
 RESTORE_SPACE_CONFIG = 0
 RESTORE_SPACE_THREADCONFIG = 1
 RESTORE_SPACE_ADC_CH1X = 2
@@ -107,7 +111,8 @@ _THD_STATE_SIZE = {
 
 _THREAD_CFG_IDS = (0, 1, 2)  # THREAD_0_CFG/1/2 == UNPACK/MATH/PACK
 
-# Addr mod fields from cfg_defines.h.
+# Addr mod fields from cfg_defines.h. Duplicated in reconfig_escape/discover_catalog.py's
+# _ADDR_MOD_ADDR32["blackhole"] -- keep both in sync.
 _ADDR_MOD_ADDR32_BH = sorted(
     set(range(12, 20))
     | set(range(20, 28))

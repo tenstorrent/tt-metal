@@ -24,6 +24,10 @@ import xml.etree.ElementTree as ET
 
 PASS, FAIL, ENVERR = "PASS", "FAIL", "ENVERR"
 
+# Duplicated from helpers/cfg_restore.py's _CFG_STATE_SIZE/_ADDR_MOD_ADDR32_BH rather than
+# imported: that module is part of the `helpers` package (relative imports, requires ttexalens)
+# while this script runs standalone with only its own directory on PYTHONPATH. Keep numerically
+# in sync with cfg_restore.py and trisc.cpp's restore_state() by hand.
 _CFG_STATE_SIZE = {"blackhole": 56}
 _ADDR_MOD_ADDR32 = {
     "blackhole": sorted(
@@ -34,13 +38,11 @@ _ADDR_MOD_ADDR32 = {
         | set(range(47, 55))  # ADDR_MOD_BIAS_SEC0-7
     ),
 }
-_BOOT_OWNED = {"blackhole": set()}
+_BOOT_OWNED = {"blackhole": set()} # TODO: Wormhole
 
-# Tensix state space each restore entry targets -- must match trisc.cpp's RESTORE_SPACE_*
-# constants and cfg_restore.py's copy of the same tags.
-_RESTORE_SPACE_CONFIG = 0
-_RESTORE_SPACE_THREADCONFIG = 1
-_RESTORE_SPACE_ADC_CH1X = 2
+_RESTORE_SPACE_CONFIG = 0  # must match cfg_restore.py's RESTORE_SPACE_CONFIG / trisc.cpp
+_RESTORE_SPACE_THREADCONFIG = 1  # must match cfg_restore.py's RESTORE_SPACE_THREADCONFIG
+_RESTORE_SPACE_ADC_CH1X = 2  # must match cfg_restore.py's RESTORE_SPACE_ADC_CH1X
 
 # addr32 2 bits 22-31 are firmware-owned: DISABLE_RISC_BP_Disable_{main,trisc,ncrisc} and their
 # _bmp_clear_* siblings (cfg_defines.h), all packed into that top range. Masked out of restore so
@@ -208,10 +210,11 @@ def build_addrmod_restore_entries(addrmod_path, ch1x=None):
     return entries
 
 
-# Embedded verbatim, not imported: written to a generated plugin dir at runtime so `-p
-# xdist_capture_plugin` resolves it by bare name. The GATE round's `-p xdist_plan_plugin` (below)
-# instead resolves pair_sweep.py's real sibling file via PYTHONPATH (pytest_env puts the real
-# reconfig_escape/ dir on the path).
+# Embedded as a string, not a real file on disk, because pytest's `-p xdist_capture_plugin`
+# needs to resolve a module by that bare name -- so this gets written out to a generated plugin
+# dir at runtime instead. pytest_env also puts the real reconfig_escape/ dir on PYTHONPATH (same
+# as for `-p xdist_plan_plugin` below), so the plugin body itself can still import discover_catalog
+# normally.
 _XDIST_CAPTURE_PLUGIN_SRC = '''\
 """pytest plugin: one-shot restore-to-pristine + direct post-exec residue capture, per test item.
 
@@ -235,23 +238,12 @@ survive from test-body-end to that same test's own teardown, a strictly smaller 
                               overlap with unrelated tests in the same invocation).
 """
 
-import hashlib
 import json
 import os
-import re
+
+from discover_catalog import _sanitize
 
 _RESTORE_VAR = "LLK_CFG_RESTORE"
-
-
-def _sanitize(nodeid):
-    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", nodeid)
-    if len(safe) <= 200:
-        return safe
-    # A long parametrize id can share its first 200 sanitized chars with another (e.g. two
-    # variants differing only in a trailing param); truncating alone would collide the two
-    # onto the same capture file. Suffix with a digest of the FULL nodeid so it stays unique.
-    digest = hashlib.sha256(nodeid.encode()).hexdigest()[:16]
-    return safe[:183] + "_" + digest
 
 
 def pytest_addoption(parser):
