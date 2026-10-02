@@ -546,6 +546,35 @@ def test_emit_refuses_what_the_session_cannot_vouch_for(table, arch, failed, ref
     assert table.read_text() == before
 
 
+def test_emit_sweeps_every_keyed_op_and_only_those(monkeypatch):
+    """The key line is the enrolment and the only place a measurement can land, so the
+    emit set is exactly the unary ops that have one -- an op on tolerance everywhere
+    included, an unregistered-in-the-table op excluded. Sweeping the latter made every
+    whole-table emit exit red after writing the rest (65 of 93 ops had no block)."""
+    import test_unary_sfpu_ulp as sweep
+    from helpers import ulp_sweep
+    from helpers.sfpu_accuracy_budget import _SFPU_ACCURACY_BUDGET, Metric
+    from helpers.sfpu_domains import _UNARY_OPS_NOT_SWEPT, sfpu_unary_ops
+
+    monkeypatch.setattr(ulp_sweep, "EMIT", True)
+    emitted = set(sweep._sweep_ops())
+    monkeypatch.setattr(ulp_sweep, "EMIT", False)
+    monkeypatch.setattr(
+        sweep.sys, "argv", [a for a in sweep.sys.argv if a != "--ulp-emit"]
+    )
+    gated = set(sweep._sweep_ops())
+
+    keyed = {op for op in _SFPU_ACCURACY_BUDGET if op in sfpu_unary_ops()}
+    assert emitted == keyed - set(_UNARY_OPS_NOT_SWEPT)
+    assert gated <= emitted
+    tolerance_only = {
+        op
+        for op in emitted
+        if not any(c.metric == Metric.ULP for c in _SFPU_ACCURACY_BUDGET[op].values())
+    }
+    assert tolerance_only.isdisjoint(gated)
+
+
 def test_emit_writes_on_a_clean_wormhole_session(table):
     for approx in ("No", "Yes"):
         for dest in ("No", "Yes"):

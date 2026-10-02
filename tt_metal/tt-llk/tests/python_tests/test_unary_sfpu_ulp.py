@@ -163,11 +163,16 @@ def _emitting():
 
 def _sweep_ops():
     """Gating sweeps every unary op with a step budget on some variant. Emitting sweeps
-    every sweepable unary op, enrolled or not: a measurement decides enrolment, so it
-    cannot be limited to what is already enrolled."""
+    every unary op with a key line in the table, whatever its rows say: the key line is
+    the enrolment (SFPU_ULP.md, step 2), the measurement fills it in. An op without one
+    has nowhere to be written, so sweeping it would only turn the emit red after the
+    rest was written -- and `sfpu_unary_ops()` admits every newly registered op, so a
+    whole-table emit would go red the day anyone adds an op."""
     unary = sfpu_unary_ops()
     if _emitting():
-        ops = set(unary) - set(_UNARY_OPS_NOT_SWEPT)
+        ops = {op for op in _SFPU_ACCURACY_BUDGET if op in unary} - set(
+            _UNARY_OPS_NOT_SWEPT
+        )
     else:
         ops = {
             op
@@ -205,8 +210,16 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         arch=get_chip_architecture(),
     )
     if contract.metric != Metric.ULP and not ulp_sweep.EMIT:
-        # Nothing to gate. An emit run measures it anyway: that is how it gets enrolled.
-        pytest.skip(f"{mathop.name} is on the tolerance metric for this variant")
+        # Nothing to gate, so the cell is not swept here at all: neither the step count
+        # nor the non-finite check runs on it. Its safe domain is the functional driver's
+        # (test_eltwise_unary_sfpu.py, tolerance arm); the whole-format tail is measured
+        # only by an emit run, which is what wrote the row's comment. The nightly sweep
+        # that measures every cell and holds a tolerance row to its recorded maximum
+        # arrives with the headroom report (#57527).
+        pytest.skip(
+            f"{cell}: on the tolerance metric, so unswept at gate time; its safe "
+            "domain is the functional driver's, the full-format tail only an emit's"
+        )
 
     try:
         src, golden, result = run_sweep(mathop, formats, approx_mode, dest_acc)

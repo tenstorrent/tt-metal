@@ -26,16 +26,17 @@ CHIP_ARCH=wormhole pytest test_unary_sfpu_ulp.py --op MyOp --compile-consumer
 ```
 
 `--op` matches the op name exactly. `-k MyOp` is a substring match: `-k Exp` also runs
-`ExpWithBase`, `Expm1` and `Expm1Cw`, and an op it pulls in that has no block in the
-table is measured but cannot be written (see step 2).
+`ExpWithBase`, `Expm1` and `Expm1Cw`, and rewrites their blocks too.
 
 `--ulp-emit` **writes the checked-in table**, once, at the end of the session; under
 `-n` the controller merges every worker's measurements first. It refuses to write unless
-you are on Wormhole, no test in the session failed and every touched `(in, out)` grid is
-complete — but it is still a deliberate act, so read the diff before committing it. The
-producer half only compiles, so it writes nothing and says so. An op it measured but
-could not place (no key line, or a floor it cannot regenerate) fails the session *after*
-every other op has been written.
+you are on Wormhole, the session ran to the end (an interrupt, `pytest.exit()` or an
+internal error writes nothing, however many grids were complete), no test in it failed
+and every touched `(in, out)` grid is complete — but it is still a deliberate act, so
+read the diff before committing it. The producer half only compiles, so it writes
+nothing and says so. An op whose block it could not regenerate (a floor row on a
+measured cell) is kept verbatim and fails the session *after* every other op has been
+written.
 
 ## Why a step budget rather than a tolerance
 
@@ -248,11 +249,12 @@ with the measurement beside them.
   between, recompile.
 - **The sweep is marked `accuracy`**, which every LLK workflow deselects. Run it by name
   or by `-m accuracy`. `nightly` would *not* have kept it out of `llk-e2e`.
-- **`--ulp-emit` widens the op set** to every measurable unary op, not just the enrolled
-  ones. Restricting it to ops that already carry a budget is the loop the sweep exists
-  to break. An op with no block in the table is measured and named at the end, not
-  written. Pass the flag to the **producer too** -- without it the producer collects the
-  narrow gating set and the consumer fails on missing ELFs, not on budgets.
+- **`--ulp-emit` widens the op set** from the ops with a step budget to every unary op
+  with a key line in the table, whatever its rows say. The key line is the enrolment,
+  so an op on tolerance everywhere is re-measured and an op with no block is not swept
+  at all (step 2 adds the block first). Pass the flag to the **producer too** -- without
+  it the producer collects the narrow gating set and the consumer fails on missing
+  ELFs, not on budgets.
 - **`CHIP_ARCH` must be set**, and `--ulp-emit` refuses to write on anything but
   Wormhole, because `_render` does not emit `arch` and the rows would be badged wrongly.
 
