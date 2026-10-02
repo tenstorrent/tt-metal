@@ -72,44 +72,6 @@ bool dfbs_fit(const UnifiedMatmulPlan& plan, uint64_t l1_budget) {
     return plan.l1_bytes <= l1_budget;
 }
 
-// Subblock (what DST holds) for a C slice split over num_compute_threads threads, among the shapes the
-// caller's fits predicate accepts (L1 fit and borrow preservation stay external). The C slice is rounded
-// up to subblock multiples and the overshoot is clipped on write; its subblocks are dealt round-robin to
-// the threads. Least work on the busiest thread first (its subblocks x the subblock's tiles, padding
-// included), then the largest subblock (fewer DST round trips and operand unpacks per tile), then the
-// least padding. With one thread this is the least padded area, then the max-volume subblock. 1x1 if
-// nothing is accepted, and the caller's DFB sizing FATALs with the full breakdown.
-template <typename FitsSubblock>
-std::pair<uint32_t, uint32_t> choose_subblock(
-    uint32_t C_slice_M_tiles,
-    uint32_t C_slice_N_tiles,
-    uint32_t dst_capacity_tiles,
-    uint32_t num_compute_threads,
-    const FitsSubblock& fits) {
-    std::pair<uint32_t, uint32_t> best{1, 1};
-    uint64_t best_tiles_per_thread = UINT64_MAX;
-    uint64_t best_volume = 0;
-    uint64_t best_padded_area = UINT64_MAX;
-    for (uint32_t h = 1; h <= dst_capacity_tiles; ++h) {
-        for (uint32_t w = 1; h * w <= dst_capacity_tiles; ++w) {
-            const uint64_t volume = h * w;
-            const uint64_t num_subblocks = (uint64_t)tt::div_up(C_slice_M_tiles, h) * tt::div_up(C_slice_N_tiles, w);
-            const uint64_t tiles_per_thread = tt::div_up(num_subblocks, (uint64_t)num_compute_threads) * volume;
-            const uint64_t padded_area = num_subblocks * volume;
-            const bool better = tiles_per_thread != best_tiles_per_thread ? tiles_per_thread < best_tiles_per_thread
-                                : volume != best_volume                   ? volume > best_volume
-                                                                          : padded_area < best_padded_area;
-            if (better && fits(h, w)) {
-                best = {h, w};
-                best_tiles_per_thread = tiles_per_thread;
-                best_volume = volume;
-                best_padded_area = padded_area;
-            }
-        }
-    }
-    return best;
-}
-
 // Completes a candidate plan for one K chunk: chunking, formats, DFB entry counts and byte totals.
 // Takes the plan by value so the K chunk search can size several candidates.
 UnifiedMatmulPlan size_dfbs(
@@ -244,11 +206,12 @@ UnifiedMatmulPlan plan_unified_matmul(
 
     // ---- Compute threads ----
     const bool is_quasar = device.arch() == tt::ARCH::QUASAR;
-    base.num_compute_threads = config.num_compute_threads != 0 ? config.num_compute_threads : (is_quasar ? 4 : 1);
+    const std::size_t requested_threads = config.num_compute_threads;  // checked before it narrows to uint32_t
     TT_FATAL(
-        base.num_compute_threads == 1 || base.num_compute_threads == 2 || base.num_compute_threads == 4,
-        "MatmulUnifiedProgramConfig.num_compute_threads must be 1, 2 or 4, got {}",
-        base.num_compute_threads);
+        requested_threads == 0 || requested_threads == 1 || requested_threads == 2 || requested_threads == 4,
+        "MatmulUnifiedProgramConfig.num_compute_threads must be 0 (auto), 1, 2 or 4, got {}",
+        requested_threads);
+    base.num_compute_threads = requested_threads != 0 ? static_cast<uint32_t>(requested_threads) : (is_quasar ? 4 : 1);
     TT_FATAL(
         base.num_compute_threads == 1 || is_quasar,
         "MatmulUnifiedProgramConfig.num_compute_threads = {} needs Quasar; this device has one compute engine per "
@@ -377,7 +340,7 @@ UnifiedMatmulPlan plan_unified_matmul(
             plan.subblock_M_tiles = config.subblock_M_tiles;
             plan.subblock_N_tiles = config.subblock_N_tiles;
         } else {
-            std::tie(plan.subblock_M_tiles, plan.subblock_N_tiles) = choose_subblock(
+            std::tie(plan.subblock_M_tiles, plan.subblock_N_tiles) = detail::maximize_subblock_size(
                 C_slice_M_tiles, C_slice_N_tiles, dst_capacity_tiles, plan.num_compute_threads, subblock_viable);
         }
         plan.C_slice_M_padded_tiles = tt::round_up(C_slice_M_tiles, plan.subblock_M_tiles);

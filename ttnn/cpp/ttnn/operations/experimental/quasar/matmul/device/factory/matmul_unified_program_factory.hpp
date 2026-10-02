@@ -4,9 +4,12 @@
 
 #pragma once
 
+#include <cstdint>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 #include "ttnn/device_operation.hpp"
@@ -89,6 +92,49 @@ struct UnifiedMatmulPlan {
     // Only meaningful for a sharded output: the layout implied by how the C slices tile C.
     tt::tt_metal::TensorMemoryLayout sharded_output_layout{};
 };
+
+namespace detail {
+
+// Max-volume DST-filling subblock among the shapes the caller's fits predicate accepts (L1 fit and
+// borrow preservation stay external): the C slice is rounded up to subblock multiples and the
+// overshoot is clipped on write. Ties prefer the least padding waste; 1x1 (no padding) if nothing
+// is accepted, and the caller's DFB sizing FATALs with the full breakdown. With several compute threads
+// the subblocks are dealt round-robin, so the least work on the busiest thread comes first.
+template <typename FitsSubblock>
+std::pair<uint32_t, uint32_t> maximize_subblock_size(
+    uint32_t C_slice_M_tiles,
+    uint32_t C_slice_N_tiles,
+    uint32_t dst_capacity_tiles,
+    uint32_t num_compute_threads,
+    const FitsSubblock& fits) {
+    std::pair<uint32_t, uint32_t> best{1, 1};
+    uint64_t best_busiest_thread_tiles = UINT64_MAX;
+    uint64_t best_volume = 0;
+    uint64_t best_padded_area = UINT64_MAX;
+    for (uint32_t h = 1; h <= dst_capacity_tiles; ++h) {
+        for (uint32_t w = 1; h * w <= dst_capacity_tiles; ++w) {
+            const uint64_t volume = h * w;
+            const uint64_t num_subblocks = (uint64_t)tt::div_up(C_slice_M_tiles, h) * tt::div_up(C_slice_N_tiles, w);
+            const uint64_t padded_area = num_subblocks * volume;
+            // Padding included; 0 with one thread, which leaves the volume-then-padding rule.
+            const uint64_t busiest_thread_tiles =
+                num_compute_threads > 1 ? tt::div_up(num_subblocks, (uint64_t)num_compute_threads) * volume : 0;
+            const bool better = busiest_thread_tiles != best_busiest_thread_tiles
+                                    ? busiest_thread_tiles < best_busiest_thread_tiles
+                                : volume != best_volume ? volume > best_volume
+                                                        : padded_area < best_padded_area;
+            if (better && fits(h, w)) {
+                best = {h, w};
+                best_busiest_thread_tiles = busiest_thread_tiles;
+                best_volume = volume;
+                best_padded_area = padded_area;
+            }
+        }
+    }
+    return best;
+}
+
+}  // namespace detail
 
 // `output` is the C tensor when the caller supplied one (or the op already created it); it decides whether
 // C can be packed in place. Without it the op allocates C from the plan, which matches by construction.

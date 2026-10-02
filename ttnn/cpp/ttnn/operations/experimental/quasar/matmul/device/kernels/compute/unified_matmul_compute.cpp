@@ -83,10 +83,10 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                 pack_init(pack_target_id);
 #endif
 
-                // The previous K chunk's partials stay in this thread's share of C_partials while their credits
-                // are released (this NEO is the share's only writer, and each subblock is reloaded before it is
-                // overwritten), so the reserve below gets the share back. dummy_unpack orders the pop after the
-                // wait on Quasar (a no-op elsewhere).
+                // Release the previous K chunk's partials credits so the reserve below gets this thread's share
+                // back. The reloads below still read them: a thread's part of C_partials is exactly one share, so
+                // the cursor returns to it, and this NEO is its only writer (each subblock is reloaded before it
+                // is overwritten). dummy_unpack orders the pop after the wait on Quasar (a no-op elsewhere).
                 if (K_chunk > 0) {
                     C_partials.wait_front(C_entries_per_thread);
                     dummy_unpack(dfb::C_partials);
