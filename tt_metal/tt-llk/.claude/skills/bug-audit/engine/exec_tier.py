@@ -15,7 +15,7 @@ Nothing here decides a bug: a warning or a failing test is a lead, and the norma
 
 Traps from earlier audits, handled here:
 - A hung test WEDGES the device, and every later test then fails for no code reason. --reset-cmd runs before each
-  test group and after any timeout.
+  test and after any timeout.
 - On a shared machine, other people's cards must never be touched. --devices takes the cards the user confirmed
   (UMD chip ids or PCI BDFs, comma-separated, one kind only) and is required with --test-cmd or --reset-cmd. Every
   command runs with TT_VISIBLE_DEVICES set to them, and {devices} in the reset command expands to them, so the reset
@@ -26,10 +26,15 @@ Traps from earlier audits, handled here:
 Commands run with the audited tree as the working directory. They execute the repo's code, so run them only on a
 machine the user has agreed to, and for tests only when the target hardware is available and the user said so.
 {tree} in a command expands to the audited tree's path.
+Each batch picks up to --max-tests tests (pick_tests); a test that several batches pick runs once, in its own
+invocation ({tests} is that one path), and its signals go to every batch that picked it. One test per invocation
+also means a runner's stop-at-first-failure flag (pytest -x) can only skip tests inside that test file, so leave it
+out of --test-cmd.
 Diagnostics understood: compiler, linker and clang-tidy "file:line[:col]: error|warning|note: msg" lines; sanitizer
 "runtime error" lines and "#N 0x... in fn file:line" stack frames; and Python 'File "file", line N' frames. Test
 selection ranks the tests under the test roots by how specifically they name the batch's files (pick_tests).
 """
+
 import json
 import os
 import re
@@ -274,6 +279,12 @@ if argv[0] == "configure":
         sys.exit(
             "--reset-cmd must name its cards as {devices} (e.g. 'tt-smi -r {devices}'), never a fixed card number"
         )
+    tcmd = ex["tests"]["cmd"] or ""
+    if re.search(r"(^|\s)(-x|--exitfirst|--maxfail(=|\s))", tcmd):
+        print(
+            "warning: --test-cmd stops at the first failure (-x/--exitfirst/--maxfail): the test functions after a "
+            "failure in the same test file will not run; drop the flag to keep them"
+        )
     st["execution"] = ex
     save(os.path.join(out, "state.json"), st)
     print(json.dumps(ex, indent=1))
@@ -317,48 +328,54 @@ elif argv[0] == "run":
             sigs += found
     tc = ex.get("tests", {})
     if "tests" in steps and tc.get("cmd"):
+        # Each batch picks its tests exactly as before; neighbouring batches mostly pick the same ones. A distinct
+        # test runs ONCE, on its own, and its result goes to every batch that picked it, so every batch gets the
+        # same evidence as running its own group, without re-running shared tests once per batch.
+        # test -> the batches that picked it, in first-pick order (batch order, then rank)
+        pickers = {}
         for b, m in sorted(man.items()):
-            chosen = pick_tests(
+            for t in pick_tests(
                 m["files"],
                 tc.get("roots") or ["tests"],
                 tc.get("max_per_batch", 8),
                 tree,
-            )
-            if not chosen:
-                continue
+            ):
+                pickers.setdefault(t, []).append(b)
+        print(
+            f"tests: {len(pickers)} distinct test files for {len({b for bs in pickers.values() for b in bs})} batches"
+        )
+        for i, (t, batches) in enumerate(pickers.items()):
+            name = f"test-{i:04d}"
             if ex.get("reset_cmd"):
-                run_cmd(f"reset-before-{b}", ex["reset_cmd"], tree, 600)
+                run_cmd(f"reset-before-{name}", ex["reset_cmd"], tree, 600)
             # test paths are repository content: quote each one before it reaches the shell
-            test_cmd = tc["cmd"].replace("{tests}", " ".join(map(shlex.quote, chosen)))
-            rc, text, secs = run_cmd(f"tests-{b}", test_cmd, tree, ex["timeout"])
+            test_cmd = tc["cmd"].replace("{tests}", shlex.quote(t))
+            rc, text, secs = run_cmd(name, test_cmd, tree, ex["timeout"])
             if rc == "timeout" and ex.get("reset_cmd"):
                 run_cmd(
-                    f"reset-after-timeout-{b}", ex["reset_cmd"], tree, 600
+                    f"reset-after-timeout-{name}", ex["reset_cmd"], tree, 600
                 )  # a hang wedges the device
+            rec = {
+                "step": "tests",
+                "name": t,
+                "log": name,
+                "batches": batches,
+                "rc": rc,
+                "seconds": secs,
+            }
             if rc not in (0,):
                 if ex.get("reset_cmd"):
-                    run_cmd(f"reset-before-rerun-{b}", ex["reset_cmd"], tree, 600)
-                rc2, text2, _ = run_cmd(
-                    f"tests-{b}-rerun", test_cmd, tree, ex["timeout"]
-                )
+                    run_cmd(f"reset-before-rerun-{name}", ex["reset_cmd"], tree, 600)
+                rc2, text2, _ = run_cmd(f"{name}-rerun", test_cmd, tree, ex["timeout"])
                 if rc2 == 0:
-                    runs.append(
-                        {
-                            "step": "tests",
-                            "name": b,
-                            "rc": rc,
-                            "seconds": secs,
-                            "tests": chosen,
-                            "signals": 0,
-                            "flaky": True,
-                        }
-                    )
+                    runs.append({**rec, "signals": 0, "flaky": True})
                     print(
-                        f"tests {b}: failed then passed on rerun, logged as flaky, not a signal"
+                        f"tests {t}: failed then passed on rerun, logged as flaky, not a signal"
                     )
                     continue
                 # a failure that reproduced: judge the rerun, not the first run (whose output may be a timeout)
                 rc, text = rc2, text2
+                rec["rc"] = rc
             found = parse(text, tree, "tests", "test")
             if rc == "timeout" and not found:
                 # it timed out on the first run AND the rerun: a reproducible hang, the lead this tier exists for
@@ -366,10 +383,9 @@ elif argv[0] == "run":
                     {
                         "kind": "test",
                         "tool": "tests",
-                        "file": m["files"][0],
                         "line": 0,
                         "severity": "test-hang",
-                        "message": f"selected tests hung twice (timeout {ex['timeout']}s): {' '.join(chosen)[:300]}; see exec/tests-{b}.log",
+                        "message": f"test hung twice (timeout {ex['timeout']}s): {t[:300]}; see exec/{name}.log",
                     }
                 ]
             if rc not in (0, "timeout") and not found:
@@ -377,28 +393,22 @@ elif argv[0] == "run":
                     {
                         "kind": "test",
                         "tool": "tests",
-                        "file": m["files"][0],
                         "line": 0,
                         "severity": "test-failure",
-                        "message": f"selected tests failed (rc={rc}): {' '.join(chosen)[:300]}; see exec/tests-{b}.log",
+                        "message": f"test failed (rc={rc}): {t[:300]}; see exec/{name}.log",
                     }
                 ]
-            for s in found:
-                s.setdefault("batch", b)
-            runs.append(
-                {
-                    "step": "tests",
-                    "name": b,
-                    "rc": rc,
-                    "seconds": secs,
-                    "tests": chosen,
-                    "signals": len(found),
-                }
-            )
+            for b in batches:
+                for s in found:
+                    s = {**s, "batch": b}
+                    if s["severity"] in ("test-hang", "test-failure"):
+                        # a whole-test lead points at the picking batch
+                        s["file"] = man[b]["files"][0]
+                    sigs.append(s)
+            runs.append({**rec, "signals": len(found)})
             print(
-                f"tests {b}: rc={rc} in {secs}s, {len(chosen)} test files, {len(found)} signals"
+                f"tests {t}: rc={rc} in {secs}s, {len(found)} signals, for {len(batches)} batches"
             )
-            sigs += found
     save(os.path.join(EXEC, "runs.json"), runs)
     per = {}
     for s in sigs:

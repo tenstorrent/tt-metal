@@ -1092,7 +1092,7 @@ def test_init_run_refuses_a_pack_without_hot_areas(tmp_path):
     assert code != 0 and "Hot areas" in out, out
 
 
-def _exec_run(tmp_path, test_files, batch_files, *configure):
+def _exec_run(tmp_path, test_files, batch_files, *configure, init=()):
     """An audit run over a tiny git tree, with the execution tier configured; returns (code, output, run dir, tree).
     test_files maps each test path to its contents."""
     tree = _git_tree(tmp_path, [*batch_files, *test_files], test_files)
@@ -1109,6 +1109,7 @@ def _exec_run(tmp_path, test_files, batch_files, *configure):
         ",".join(batch_files),
         "--ext",
         ".c,.cpp,.hpp,.py",
+        *init,
     )
     assert code == 0, o + e
     code, o, e = run(
@@ -1128,7 +1129,7 @@ def test_exec_tier_quotes_test_paths_for_the_shell(tmp_path):
         {odd: "import widget\n"},
         ["src/widget.c"],
         "--test-cmd",
-        "printf '%s\\n' {tests} > {tree}/picked.txt",
+        "printf '%s\\n' {tests} >> {tree}/picked.txt",
         "--test-root",
         "tests",
         "--devices",
@@ -1228,7 +1229,7 @@ def test_exec_tier_picks_tests_that_name_the_file_before_bare_stems(tmp_path):
         tests,
         ["src/widget.hpp", "src/common.c"],
         "--test-cmd",
-        "printf '%s\\n' {tests} > {tree}/picked.txt",
+        "printf '%s\\n' {tests} >> {tree}/picked.txt",
         "--test-root",
         "tests",
         "--max-tests",
@@ -1252,7 +1253,7 @@ def test_exec_tier_falls_back_to_a_generic_stem_when_nothing_better_exists(tmp_p
         _generic_tests(),
         ["src/common.c"],
         "--test-cmd",
-        "printf '%s\\n' {tests} > {tree}/picked.txt",
+        "printf '%s\\n' {tests} >> {tree}/picked.txt",
         "--test-root",
         "tests",
         "--max-tests",
@@ -1263,6 +1264,104 @@ def test_exec_tier_falls_back_to_a_generic_stem_when_nothing_better_exists(tmp_p
     assert code == 0, out
     picked = open(os.path.join(tree, "picked.txt")).read().splitlines()
     assert picked == ["tests/g/test_g00.py", "tests/g/test_g01.py"], picked
+
+
+RUN_SH = """#!/bin/sh
+# one test path per invocation; logs it, then behaves as the test's name says
+echo "$1" >> ran.txt
+case "$1" in
+  *fail*) echo 'File "src/b.c", line 1, in check'; exit 1 ;;
+  *flaky*) [ -e flaky.done ] && exit 0; touch flaky.done; exit 1 ;;
+  *hang*) sleep 30 ;;
+esac
+"""
+
+
+def test_exec_tier_runs_each_picked_test_once_and_every_picking_batch_gets_its_result(
+    tmp_path,
+):
+    tests = {
+        "tests/test_shared.py": "import src.a\nimport src.b\n",
+        "tests/test_a.py": "import a.c\n",
+        "tests/test_b.py": "import b.c\n",
+        "tests/test_fail.py": "a.c b.c\n",
+        "tests/test_z_after.py": "a.c\n",
+        "tests/test_flaky.py": "b.c\n",
+        "tests/test_hang.py": "a.c\n",
+        "run.sh": RUN_SH,
+    }
+    code, out, run_dir_, tree = _exec_run(
+        tmp_path,
+        tests,
+        ["src/a.c", "src/b.c"],
+        "--test-cmd",
+        "sh run.sh {tests}",
+        "--test-root",
+        "tests",
+        "--timeout",
+        "2",
+        "--devices",
+        "0",
+        "--reset-cmd",
+        "echo reset {devices} >> {tree}/reset.txt",
+        # one file per batch, so both batches pick test_shared and test_fail
+        init=("--max-lines", "1"),
+    )
+    assert code == 0, out
+    man = json.load(open(run_dir_ / "batches" / "manifest.json"))
+    batch_of = {f: b["batch"] for b in man for f in b["files"]}
+    assert len(set(batch_of.values())) == 2, man
+    ran = open(os.path.join(tree, "ran.txt")).read().splitlines()
+    # every distinct pick ran, a shared test once, and only a failure ran a second time (its rerun)
+    assert sorted(set(ran)) == sorted(t for t in tests if t.startswith("tests/")), ran
+    reruns = {"tests/test_fail.py", "tests/test_flaky.py", "tests/test_hang.py"}
+    assert {t: ran.count(t) for t in set(ran)} == {
+        t: 2 if t in reruns else 1 for t in set(ran)
+    }, ran
+    # one invocation per test: test_z_after (ranked after test_fail in batch a) ran although test_fail failed
+    assert ran.index("tests/test_z_after.py") > ran.index("tests/test_fail.py"), ran
+    # a reset before every test and every rerun, plus one after the first run's timeout (the next test's own
+    # reset follows a rerun that hangs)
+    resets = open(os.path.join(tree, "reset.txt")).read().splitlines()
+    assert len(resets) == len(set(ran)) + len(reruns) + 1, resets
+
+    def sig(f):
+        return json.load(open(run_dir_ / "exec" / "signals" / f"{batch_of[f]}.json"))
+
+    a, b = sig("src/a.c"), sig("src/b.c")
+    # the failing test was picked by both batches, so BOTH get its stack-frame lead, as with one group per batch
+    for got in (a, b):
+        assert [
+            (x["file"], x["line"]) for x in got if x["severity"] == "stack-frame"
+        ] == [("src/b.c", 1)], got
+    # the hang was picked by batch a only; a lead with no file:line points at the picking batch's file
+    assert [x["file"] for x in a if x["severity"] == "test-hang"] == ["src/a.c"], a
+    assert not [x for x in b if x["severity"] == "test-hang"], b
+    # the flaky test passed on its rerun: logged, never a lead
+    assert not [x for x in a + b if "flaky" in x["message"]]
+    runs = json.load(open(run_dir_ / "exec" / "runs.json"))
+    assert [r["name"] for r in runs if r.get("flaky")] == ["tests/test_flaky.py"], runs
+    shared = [r for r in runs if r["name"] == "tests/test_shared.py"]
+    assert len(shared) == 1 and sorted(shared[0]["batches"]) == sorted(
+        set(batch_of.values())
+    ), runs
+
+
+@pytest.mark.parametrize(
+    "cmd", ["pytest -x -q {tests}", "pytest --maxfail=1 {tests}", "pytest -xq {tests}"]
+)
+def test_exec_tier_warns_when_the_test_command_stops_at_the_first_failure(
+    tmp_path, cmd
+):
+    code, out = _configure(tmp_path, "--test-cmd", cmd, "--devices", "0")
+    assert code == 0 and "stops at the first failure" in out, out
+
+
+def test_exec_tier_does_not_warn_for_a_command_that_runs_every_test(tmp_path):
+    code, out = _configure(
+        tmp_path, "--test-cmd", "pytest -q {tests}", "--devices", "0"
+    )
+    assert code == 0 and "stops at the first failure" not in out, out
 
 
 def test_headless_sessions_deny_builds_tests_devices_and_tree_changes():
@@ -1339,7 +1438,7 @@ def test_exec_tier_matches_a_stem_literally(tmp_path):
         {"tests/test_ops.py": "op = 'axb'\n", "tests/test_real.py": "a.b\n"},
         ["src/a.b.c"],
         "--test-cmd",
-        "printf '%s\\n' {tests} > {tree}/picked.txt",
+        "printf '%s\\n' {tests} >> {tree}/picked.txt",
         "--test-root",
         "tests",
         "--devices",

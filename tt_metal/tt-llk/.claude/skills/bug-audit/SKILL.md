@@ -77,13 +77,14 @@ through `exec_tier.py configure`), and never assume a default for the execution 
    - **Build flavours:** compile every configuration the user names, and turn compiler and linker diagnostics into
      leads. A non-default flavour exposes bugs the default build hides.
    - **Static analyzers and sanitizers:** clang-tidy with the repo's own config, and ASan/UBSan/TSan builds.
-   - **Existing tests:** runs the tests that reference each batch's files. This needs the target hardware, and the
+   - **Existing tests:** runs the tests that reference each batch's files. A test that several batches pick runs
+     once, on its own, and its result goes to every batch that picked it. This needs the target hardware, and the
      user must confirm which machine and card(s) can be used; the cards go to `exec_tier.py configure --devices`,
      which pins every test to them (`TT_VISIBLE_DEVICES`) and resets only them.
    If yes, ask for the exact commands (or confirm the presets below) and the machine, and state the worst-case time:
-   up to the timeout per batch's test group, twice if it fails and is re-run (about 4 hours per batch with the preset
-   7,200 s), with no overall cap. The tier runs the repo's code with those commands, so confirm it is acceptable on
-   this machine.
+   up to the timeout per distinct picked test, twice if it fails and is re-run (about 4 hours per test with the
+   preset 7,200 s), with no overall cap. The run prints the number of distinct tests before it starts them. The
+   tier runs the repo's code with those commands, so confirm it is acceptable on this machine.
 3. **Cost, and the second pass.** The audit is exhaustive by design: it runs until every in-scope file is audited,
    with no token or time cap. State the cost for the chosen scope up front (see the calibration above); a user who
    wants to spend less narrows the scope (question 1) rather than capping the run. Ask whether to run the optional
@@ -104,7 +105,7 @@ exec_tier.py --run <run> configure \
   --build 'release=./build_metal.sh --build-tests' \
   --build 'asan=./build_metal.sh -b ASan --build-tests' \
   --analyze 'clang-tidy=run-clang-tidy -p build_Release -quiet $(git ls-files "*.cpp" | grep -E "^(tt_metal|ttnn)/")' \
-  --test-cmd 'pytest -x -q {tests}' --test-root tests/ttnn --test-root tests/tt_metal --max-tests 6 --timeout 7200 \
+  --test-cmd 'pytest -q {tests}' --test-root tests/ttnn --test-root tests/tt_metal --max-tests 6 --timeout 7200 \
   --devices <confirmed ids> --reset-cmd 'tt-smi -r {devices}'   # a hung test wedges the board; reset between groups
 exec_tier.py --run <run> run        # before the first wave; re-run after re-pointing the tree
 ```
