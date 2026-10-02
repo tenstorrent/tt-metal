@@ -283,10 +283,6 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     TensorAccessorArgs(*in.v.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.g.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.beta.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.eye_c.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.tril_c.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.ones_c.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.masks_c.buffer()).append_to(reader_ct);
     // OPT-A: trailing compile args after all TensorAccessorArgs — 1 => read that tensor flat token-major.
     reader_ct.push_back(attrs.v_flat ? 1u : 0u);
     reader_ct.push_back(attrs.qk_flat ? 1u : 0u);
@@ -344,10 +340,6 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     auto* v_buf = in.v.buffer();
     auto* g_buf = in.g.buffer();
     auto* beta_buf = in.beta.buffer();
-    auto* eye_buf = in.eye_c.buffer();
-    auto* tril_buf = in.tril_c.buffer();
-    auto* ones_buf = in.ones_c.buffer();
-    auto* masks_buf = in.masks_c.buffer();
     auto* vb_buf = outputs[0].buffer();    // v_beta
     auto* nkd_buf = outputs[1].buffer();   // nkd = -(k_beta*decay_exp)
     auto* qd_buf = outputs[2].buffer();    // q_decay
@@ -369,9 +361,26 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
         // then the work-item stride (1: contiguous here), the kickoff wait (0: no staggering on the phased
         // prep), four words the fused producer map occupies, and the gates' source (tokens, tile sizes).
         reader.emplace_runtime_args(
-            core, {wi_start, wi_count,  q_buf, k_buf,        v_buf,          g_buf, beta_buf, eye_buf, tril_buf,
-                   ones_buf, masks_buf, NC,    attrs.HV,     attrs.Hk,       1u,    0u,       0u,      0u,
-                   0u,       0u,        T,     g_tile_bytes, beta_tile_bytes});
+            core,
+            {wi_start,
+             wi_count,
+             q_buf,
+             k_buf,
+             v_buf,
+             g_buf,
+             beta_buf,
+             NC,
+             attrs.HV,
+             attrs.Hk,
+             1u,
+             0u,
+             0u,
+             0u,
+             0u,
+             0u,
+             T,
+             g_tile_bytes,
+             beta_tile_bytes});
         writer.emplace_runtime_args(
             core, {wi_start, wi_count, vb_buf, nkd_buf, qd_buf, it_buf, kdec_buf, dl_buf, ti_buf});
         compute.emplace_runtime_args(core, {wi_count});
