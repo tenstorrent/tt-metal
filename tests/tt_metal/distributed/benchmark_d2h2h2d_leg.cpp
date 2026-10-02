@@ -101,7 +101,7 @@ public:
             return;
         }
 
-        const mh::ContextPtr world = mh::DistributedContext::get_current_world();
+        const mh::ContextPtr& world = mh::DistributedContext::get_current_world();
         rank_ = static_cast<uint32_t>(*world->rank());
         ranks_ = static_cast<uint32_t>(*world->size());
         sending_ = rank_ == 0;
@@ -399,7 +399,7 @@ BENCHMARK_REGISTER_F(D2H2H2DFixture, Volume)
 int main(int argc, char** argv) {
     // Before Initialize: the context takes MPI's own argv entries first.
     mh::DistributedContext::create(argc, argv);
-    const mh::ContextPtr world = mh::DistributedContext::get_current_world();
+    const mh::ContextPtr& world = mh::DistributedContext::get_current_world();
     const uint32_t rank = static_cast<uint32_t>(*world->rank());
     if (*world->size() != 2) {
         if (rank == 0) {
