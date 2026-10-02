@@ -2,24 +2,41 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "matmul_wo_program_factory.hpp"
-#include "matmul_wo_device_operation_types.hpp"
+#include "matmul_wo_device_operation.hpp"
 
-#include <tt-metalium/math.hpp>
+#include <tt_stl/assert.hpp>
+
 #include <tt-metalium/constants.hpp>
-#include "ttnn/operations/cb_utils.hpp"
-#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+
 #include <algorithm>
-#include <numeric>
+#include <cstdint>
 #include <set>
-#include <tuple>
 #include <utility>
 #include <vector>
 
-namespace ttnn::operations::experimental::deepseek::mla::program {
+namespace ttnn::operations::experimental::deepseek::mla {
 
-static std::vector<CoreCoord> find_collector_core_coords(
+namespace {
+
+using tt::tt_metal::CBDescriptor;
+using tt::tt_metal::CBFormatDescriptor;
+using tt::tt_metal::ComputeConfigDescriptor;
+using tt::tt_metal::CoreCoord;
+using tt::tt_metal::CoreRangeSet;
+using tt::tt_metal::KernelDescriptor;
+using tt::tt_metal::ReaderConfigDescriptor;
+using tt::tt_metal::SemaphoreDescriptor;
+using tt::tt_metal::WriterConfigDescriptor;
+
+constexpr uint32_t kReduceSemaphoreId = 0;
+
+std::vector<CoreCoord> find_collector_core_coords(
     const CoreCoord& full_grid_size, const std::set<CoreCoord>& dram_cores_set, size_t num_collectors) {
     std::vector<CoreCoord> collector_core_coords;
     collector_core_coords.reserve(num_collectors);
@@ -40,12 +57,30 @@ static std::vector<CoreCoord> find_collector_core_coords(
     return {};
 }
 
-MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
-    const deepseek::mla::operation_attributes_t& operation_attributes,
-    const deepseek::mla::tensor_args_t& tensor_args,
-    deepseek::mla::tensor_return_value_t&) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+CBDescriptor make_cb(
+    tt::CBIndex index,
+    tt::DataFormat data_format,
+    bool is_tile,
+    uint32_t tiles_per_cb,
+    const CoreRangeSet& core_ranges,
+    tt::tt_metal::Buffer* buffer) {
+    const uint32_t bytes_per_tile = is_tile ? tt::tile_size(data_format) : tt::datum_size(data_format);
+    CBDescriptor cb_desc;
+    cb_desc.total_size = tiles_per_cb * bytes_per_tile;
+    cb_desc.core_ranges = core_ranges;
+    cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+        .buffer_index = static_cast<uint8_t>(index),
+        .data_format = data_format,
+        .page_size = bytes_per_tile,
+    });
+    cb_desc.buffer = buffer;
+    return cb_desc;
+}
 
+}  // namespace
+
+tt::tt_metal::ProgramDescriptor MatmulWODeviceOperation::create_descriptor(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, tensor_return_value_t&) {
     // Get the cores for the program
     const auto dram_bank2core_coords =
         tensor_args.input_tensor.device()->get_optimal_dram_bank_to_logical_worker_assignment(
@@ -73,7 +108,7 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
     }
 
     // Put them in defines for kernel to access
-    const std::map<std::string, std::string> kernel_defines = {
+    const KernelDescriptor::Defines kernel_defines = {
         {"COLLECTOR_CORE_COORDS", ttnn::operations::ccl::common::stringify(collector_core_physical_coords)}};
 
     auto all_cores = dram_cores.merge(collector_cores);
@@ -91,144 +126,124 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
         ------------------------------------------------------------------------------------
     */
 
-    // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
-    const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t, CoreRangeSet>> cb_specs0 = {
-        {"cb_r2c_w", tt::CBIndex::c_0, tt::DataFormat::Bfp8_b, true, 7 * 3 * 2, dram_cores},
-        {"cb_c2w_out", tt::CBIndex::c_2, tt::DataFormat::Float16_b, true, 28, dram_cores},
-        {"cb_s2c_in2", tt::CBIndex::c_3, tt::DataFormat::Float16_b, true, 48, all_cores},
+    auto* input_buffer = tensor_args.input_tensor.buffer();
+    auto* weight_buffer = tensor_args.w_tensor.buffer();
+    auto* output_buffer = tensor_args.output_tensor.buffer();
+    TT_FATAL(input_buffer != nullptr, "matmul_wo input tensor buffer is null");
+    TT_FATAL(weight_buffer != nullptr, "matmul_wo weight tensor buffer is null");
+    TT_FATAL(output_buffer != nullptr, "matmul_wo output tensor buffer is null");
+
+    tt::tt_metal::ProgramDescriptor program_desc;
+    // Buffer* runtime args and CBDescriptor::buffer are patched on a program-cache hit.
+    program_desc.cbs = {
+        make_cb(tt::CBIndex::c_0, tt::DataFormat::Bfp8_b, true, 7 * 3 * 2, dram_cores, nullptr),
+        make_cb(tt::CBIndex::c_2, tt::DataFormat::Float16_b, true, 28, dram_cores, nullptr),
+        make_cb(tt::CBIndex::c_3, tt::DataFormat::Float16_b, true, 48, all_cores, nullptr),
+        make_cb(tt::CBIndex::c_1, tt::DataFormat::Float16_b, true, 512, dram_cores, input_buffer),
+        make_cb(tt::CBIndex::c_4, tt::DataFormat::Float16_b, true, 4, collector_cores, output_buffer),
     };
-
-    [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles, cb_handles_sharded;
-
-    // Create CBs
-    for (const auto& [name, index, data_format, is_tile, tiles_per_cb, core_range_set] : cb_specs0) {
-        const uint32_t bytes_per_tile = is_tile ? tt::tile_size(data_format) : tt::datum_size(data_format);
-        const auto cb_config = tt::tt_metal::CircularBufferConfig(tiles_per_cb * bytes_per_tile, {{index, data_format}})
-                                   .set_page_size(index, bytes_per_tile);
-
-        cb_handles[name] = tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_config);
-    }
-
-    // Create sharded CBs
-    // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb, Buffer*
-    const std::vector<
-        std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t, tt::tt_metal::Buffer*, CoreRangeSet>>
-        sharded_cb_specs = {
-            {"cb_s2c_in",
-             tt::CBIndex::c_1,
-             tt::DataFormat::Float16_b,
-             true,
-             512,
-             tensor_args.input_tensor.buffer(),
-             dram_cores},
-            {"cb_s2c_out",
-             tt::CBIndex::c_4,
-             tt::DataFormat::Float16_b,
-             true,
-             4,
-             tensor_args.output_tensor.buffer(),
-             collector_cores}};
-
-    for (const auto& [name, index, data_format, is_tile, tiles_per_cb, p_buffer, core_range_set] : sharded_cb_specs) {
-        const uint32_t bytes_per_tile = is_tile ? tt::tile_size(data_format) : tt::datum_size(data_format);
-        const auto cb_config = tt::tt_metal::CircularBufferConfig(tiles_per_cb * bytes_per_tile, {{index, data_format}})
-                                   .set_page_size(index, bytes_per_tile)
-                                   .set_globally_allocated_address(*p_buffer);
-        cb_handles_sharded[name] = tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_config);
-    }
 
     // Create compile args for the program
-    const auto tensors =
-        std::vector<const Tensor*>{&tensor_args.input_tensor, &tensor_args.w_tensor, &tensor_args.output_tensor};
+    const auto tensors = std::vector<tt::tt_metal::Buffer*>{input_buffer, weight_buffer, output_buffer};
 
     std::vector<uint32_t> compile_args;
-    for (const auto& tensor : tensors) {
-        tt::tt_metal::TensorAccessorArgs(*tensor->buffer()).append_to(compile_args);
+    for (const auto* buffer : tensors) {
+        tt::tt_metal::TensorAccessorArgs(*buffer).append_to(compile_args);
     }
 
-    // Create semaphores for reducing the partials at the end
-    const auto reduce_semaphore_id = tt::tt_metal::CreateSemaphore(program, collector_cores, 0);
-
-    std::unordered_map<std::string, uint32_t> named_compile_time_args = {
+    const KernelDescriptor::NamedCompileTimeArgs named_compile_time_args = {
         {"layer_id", operation_attributes.layer_id},
-        {"num_cores", static_cast<uint32_t>(num_cores)},
-        {"reduce_semaphore_id", reduce_semaphore_id},
+        {"num_cores", num_cores},
+        {"reduce_semaphore_id", kReduceSemaphoreId},
     };
 
-    // Create kernels for the program
-    auto dm0_kernel_handle = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/device/kernels/dm0.cpp",
-        dram_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::NOC_0,
-            .compile_args = compile_args,
-            .defines = kernel_defines,
-            .named_compile_args = named_compile_time_args});
+    // Create semaphores for reducing the partials at the end
+    program_desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = kReduceSemaphoreId,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = collector_cores,
+        .initial_value = 0,
+    });
 
-    auto dm1_kernel_handle = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/device/kernels/dm1.cpp",
-        dram_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::NOC_1,
-            .compile_args = compile_args,
-            .defines = kernel_defines,
-            .named_compile_args = named_compile_time_args});
+    const std::string dm0_kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/device/kernels/dm0.cpp";
+    const std::string dm1_kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/device/kernels/dm1.cpp";
+    const std::string compute_kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/device/kernels/compute.cpp";
+    const std::string dm1_collector_kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/device/kernels/dm1_collector.cpp";
+    const std::string compute_collector_kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/device/kernels/compute_collector.cpp";
 
-    auto compute_kernel_handle = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/device/kernels/compute.cpp",
-        dram_cores,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = tt::tt_metal::MathFidelity::LoFi,
-            .fp32_dest_acc_en = false,
-            .dst_full_sync_en = false,
-            .bfp8_pack_precise = false,
-            .math_approx_mode = true,
-            .compile_args = compile_args,
-            .defines = kernel_defines,
-            .named_compile_args = named_compile_time_args});
+    KernelDescriptor dm0_kernel{
+        .kernel_source = dm0_kernel_source,
+        .source_type = KernelDescriptor::SourceType::FILE_PATH,
+        .core_ranges = dram_cores,
+        .compile_time_args = compile_args,
+        .named_compile_time_args = named_compile_time_args,
+        .defines = kernel_defines,
+        .config = ReaderConfigDescriptor{},
+    };
+
+    KernelDescriptor dm1_kernel{
+        .kernel_source = dm1_kernel_source,
+        .source_type = KernelDescriptor::SourceType::FILE_PATH,
+        .core_ranges = dram_cores,
+        .compile_time_args = compile_args,
+        .named_compile_time_args = named_compile_time_args,
+        .defines = kernel_defines,
+        .config = WriterConfigDescriptor{},
+    };
+
+    KernelDescriptor compute_kernel{
+        .kernel_source = compute_kernel_source,
+        .source_type = KernelDescriptor::SourceType::FILE_PATH,
+        .core_ranges = dram_cores,
+        .compile_time_args = compile_args,
+        .named_compile_time_args = named_compile_time_args,
+        .defines = kernel_defines,
+        .config =
+            ComputeConfigDescriptor{
+                .math_fidelity = tt::tt_metal::MathFidelity::LoFi,
+                .fp32_dest_acc_en = false,
+                .dst_full_sync_en = false,
+                .bfp8_pack_precise = false,
+                .math_approx_mode = true,
+            },
+    };
 
     //-------------------------------------------------------------------------
     // Collector cores - these collect all data and reduce them.
     //-------------------------------------------------------------------------
-    auto dm1_collector_kernel_handle = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/device/kernels/dm1_collector.cpp",
-        collector_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::NOC_1,
-            .compile_args = compile_args,
-            .defines = kernel_defines,
-            .named_compile_args = named_compile_time_args});
+    KernelDescriptor dm1_collector_kernel{
+        .kernel_source = dm1_collector_kernel_source,
+        .source_type = KernelDescriptor::SourceType::FILE_PATH,
+        .core_ranges = collector_cores,
+        .compile_time_args = compile_args,
+        .named_compile_time_args = named_compile_time_args,
+        .defines = kernel_defines,
+        .config = WriterConfigDescriptor{},
+    };
 
-    auto compute_collector_kernel_handle = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/device/kernels/compute_collector.cpp",
-        collector_cores,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = tt::tt_metal::MathFidelity::LoFi,
-            .fp32_dest_acc_en = false,
-            .dst_full_sync_en = false,
-            .bfp8_pack_precise = false,
-            .math_approx_mode = true,
-            .compile_args = compile_args,
-            .defines = kernel_defines,
-            .named_compile_args = named_compile_time_args});
+    KernelDescriptor compute_collector_kernel{
+        .kernel_source = compute_collector_kernel_source,
+        .source_type = KernelDescriptor::SourceType::FILE_PATH,
+        .core_ranges = collector_cores,
+        .compile_time_args = compile_args,
+        .named_compile_time_args = named_compile_time_args,
+        .defines = kernel_defines,
+        .config =
+            ComputeConfigDescriptor{
+                .math_fidelity = tt::tt_metal::MathFidelity::LoFi,
+                .fp32_dest_acc_en = false,
+                .dst_full_sync_en = false,
+                .bfp8_pack_precise = false,
+                .math_approx_mode = true,
+            },
+    };
 
     // Set the runtime arguments for the kernels
-    std::vector<uint32_t> runtime_args;
-    runtime_args.reserve(2 + tensors.size());
-    runtime_args.push_back(0);  // DRAM Bank ID placeholder
-    runtime_args.push_back(0);  // VChannel placeholder
-    for (const auto& tensor : tensors) {
-        runtime_args.push_back(tensor->buffer()->address());
-    }
-
     std::vector<uint32_t> vchannels;
     vchannels.reserve(dram_bank2core_coords.size());
     uint32_t dram_bank = 0;
@@ -250,55 +265,33 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
         }
         vchannels.push_back(vchannel);
 
-        runtime_args[0] = dram_bank++;
-        runtime_args[1] = vchannel;
-
-        tt::tt_metal::SetRuntimeArgs(program, dm0_kernel_handle, core, runtime_args);
-        tt::tt_metal::SetRuntimeArgs(program, dm1_kernel_handle, core, runtime_args);
-        tt::tt_metal::SetRuntimeArgs(program, compute_kernel_handle, core, runtime_args);
+        KernelDescriptor::RTArgList runtime_args;
+        runtime_args.reserve(5);
+        runtime_args.push_back(dram_bank);
+        runtime_args.push_back(vchannel);
+        runtime_args.push_back(input_buffer);
+        runtime_args.push_back(weight_buffer);
+        runtime_args.push_back(output_buffer);
+        dm0_kernel.emplace_runtime_args(core, runtime_args);
+        dm1_kernel.emplace_runtime_args(core, runtime_args);
+        compute_kernel.emplace_runtime_args(core, runtime_args);
+        dram_bank++;
     }
-
-    std::vector<uint32_t> collector_runtime_args;
-    collector_runtime_args.push_back(0);  // Core ID placeholder
 
     uint32_t core_id = 0;
     for (const auto& core : collector_core_coords) {
-        collector_runtime_args[0] = core_id++;
-        tt::tt_metal::SetRuntimeArgs(program, dm1_collector_kernel_handle, core, collector_runtime_args);
-        tt::tt_metal::SetRuntimeArgs(program, compute_collector_kernel_handle, core, collector_runtime_args);
+        dm1_collector_kernel.emplace_runtime_args(core, {core_id});
+        compute_collector_kernel.emplace_runtime_args(core, {core_id});
+        core_id++;
     }
 
-    return cached_program_t{
-        std::move(program),
-        MatmulWOSharedVariables{
-            .cb_handles_sharded = cb_handles_sharded,
-            .kernel_handles = {dm0_kernel_handle, dm1_kernel_handle, compute_kernel_handle},
-            .worker_cores = dram_bank2core_coords}};
+    program_desc.kernels.reserve(5);
+    program_desc.kernels.push_back(std::move(dm0_kernel));
+    program_desc.kernels.push_back(std::move(dm1_kernel));
+    program_desc.kernels.push_back(std::move(compute_kernel));
+    program_desc.kernels.push_back(std::move(dm1_collector_kernel));
+    program_desc.kernels.push_back(std::move(compute_collector_kernel));
+    return program_desc;
 }
 
-void MatmulWOProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t&,
-    const tensor_args_t& tensor_args,
-    deepseek::mla::tensor_return_value_t&) {
-    auto& program = cached_program.program;
-    auto& shared_variables = cached_program.shared_variables;
-
-    // Update sharded circular buffer addresses
-    tt::tt_metal::UpdateDynamicCircularBufferAddress(
-        program, shared_variables.cb_handles_sharded["cb_s2c_in"], *tensor_args.input_tensor.buffer());
-
-    tt::tt_metal::UpdateDynamicCircularBufferAddress(
-        program, shared_variables.cb_handles_sharded["cb_s2c_out"], *tensor_args.output_tensor.buffer());
-
-    // Update runtime args for all kernels with new tensor addresses
-    // Runtime args layout: [3] = w_tensor address
-    for (const auto& core : shared_variables.worker_cores) {
-        for (const auto& kernel_handle : shared_variables.kernel_handles) {
-            auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, kernel_handle, core);
-            runtime_args[3] = tensor_args.w_tensor.buffer()->address();
-        }
-    }
-}
-
-}  // namespace ttnn::operations::experimental::deepseek::mla::program
+}  // namespace ttnn::operations::experimental::deepseek::mla

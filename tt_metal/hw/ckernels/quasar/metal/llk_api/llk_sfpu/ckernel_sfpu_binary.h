@@ -130,7 +130,9 @@ sfpi_inline void calculate_add_srcs() {
 template <bool APPROXIMATION_MODE /*maybe_unused*/, BinaryOp BINOP>
 inline void sfpu_binary_init() {
     if constexpr (BINOP == BinaryOp::DIV) {
-        _init_reciprocal_<APPROXIMATION_MODE>();
+        // DIV always runs the Newton-refined _sfpu_reciprocal_<2>, so the Newton constant is
+        // needed in every mode, not just the non-approximate one.
+        _init_reciprocal_</*APPROXIMATION_MODE=*/false>();
     }
 }
 

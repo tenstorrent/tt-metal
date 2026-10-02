@@ -5,8 +5,8 @@
 #include "dit_fused_distributed_rmsnorm_program_factory.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cstdlib>
-#include <cstring>
 #include <map>
 #include <string>
 #include <vector>
@@ -46,16 +46,6 @@ namespace ttnn::experimental::prim {
 //     compute (PRE+POST), worker_writer (stick push + gather read + output
 //     drain), forwarder (coalesce + fabric mcast + cross-chip sync).
 // =============================================================================
-
-namespace {
-
-uint32_t float_to_u32(float v) {
-    uint32_t out;
-    std::memcpy(&out, &v, sizeof(float));
-    return out;
-}
-
-}  // namespace
 
 // num_tile_rows below this uses a single worker — spinning up forwarders + the
 // per-round AG handshake doesn't pay off with <4 tile-rows of compute per chip.
@@ -449,7 +439,7 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id = std::nullopt;
     std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
     uint32_t device_index = 0;
-    if (args.ring_size > 1) {
+    if (args.ring_size > 1 && !args.per_head_norm) {
         forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
             input_tensor, mesh_coordinate, /*offset=*/1, args.topology, args.cluster_axis);
         backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
@@ -466,7 +456,7 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
 
     uint32_t num_targets_forward = 0;
     uint32_t num_targets_backward = 0;
-    if (args.ring_size > 1) {
+    if (args.ring_size > 1 && !args.per_head_norm) {
         if (args.topology == ttnn::ccl::Topology::Linear) {
             ttnn::ccl::LineTopology line_topology(args.ring_size, device_index);
             num_targets_forward = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::FORWARD);
@@ -1166,7 +1156,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         writer_compile_args.push_back(epsilon_cb_id);
         writer_compile_args.push_back(transformation_mat_cb_id);
         writer_compile_args.push_back(reduce_factor);
-        writer_compile_args.push_back(float_to_u32(args.epsilon));
+        writer_compile_args.push_back(std::bit_cast<uint32_t>(args.epsilon));
         writer_compile_args.push_back(static_cast<uint32_t>(fuse_rope));
         if (fuse_rope) {
             TensorAccessorArgs(trans_mat.value().buffer()).append_to(writer_compile_args);
@@ -1209,7 +1199,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         writer_compile_args.push_back(epsilon_cb_id);
         writer_compile_args.push_back(transformation_mat_cb_id);
         writer_compile_args.push_back(reduce_factor);
-        writer_compile_args.push_back(float_to_u32(args.epsilon));
+        writer_compile_args.push_back(std::bit_cast<uint32_t>(args.epsilon));
         writer_compile_args.push_back(static_cast<uint32_t>(fuse_rope));
         if (fuse_rope) {
             TensorAccessorArgs(trans_mat.value().buffer()).append_to(writer_compile_args);
@@ -1249,6 +1239,15 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
             go_sem_id,
         };
         TensorAccessorArgs(stats_dram_buffer).append_to(fwd_ct);
+        // 2D fabric multicasts N hops in one physical direction: the cluster axis must be a straight physical line.
+        TT_FATAL(
+            !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) ||
+                ttnn::ccl::is_axis_straight(*mesh_device, args.cluster_axis),
+            "Fused distributed norm requires a straight physical cluster axis on 2D fabric");
+        const auto [forward_route, backward_route] = ttnn::ccl::get_forward_backward_line_mcast_configuration(
+            mesh_coordinate, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
+        fwd_ct.insert(fwd_ct.end(), forward_route.begin(), forward_route.end());
+        fwd_ct.insert(fwd_ct.end(), backward_route.begin(), backward_route.end());
         forwarder_kernel_ids[f] = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_norm_common/kernels/dataflow/"
@@ -1303,7 +1302,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         args.num_heads_per_device,
         static_cast<uint32_t>(per_token_weight),
         static_cast<uint32_t>(per_token_bias),
-        float_to_u32(args.epsilon),  // eps_bits: fp32 scalar for fused +eps in reduce post-op
+        std::bit_cast<uint32_t>(args.epsilon),  // eps_bits: fp32 scalar for fused +eps in reduce post-op
         static_cast<uint32_t>(streaming_low_l1),
         static_cast<uint32_t>(fuse_mm_rope),      // block-major POST: fuse matmul+rope per block (rotated block-local)
         static_cast<uint32_t>(block_major_post),  // full block-major POST (all sub-phases per block; wide low-TP)
@@ -1369,7 +1368,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     const uint32_t stats_dram_addr = use_mux ? stats_dram_buffer->address() : 0u;
 
     uint32_t out_ready_sem_bank_addr = 0;
-    if (args.ring_size > 1) {
+    if (args.ring_size > 1 && !args.per_head_norm) {
         TT_FATAL(
             !args.multi_device_global_semaphore.empty(),
             "TP>1 requires at least one GlobalSemaphore in multi_device_global_semaphore");
@@ -1390,35 +1389,27 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // ------------------------------------------------------------------------
     // Per-worker runtime args (contiguous tile-row split).
     // ------------------------------------------------------------------------
-    std::optional<size_t> stats_dram_addr_writer_arg_idx;  // worker-writer stats_dram slot (override refresh)
+    // Buffer bindings are uniform across workers; keep row ranges and forwarder
+    // routing in per-core args so a cache hit updates each binding only once.
+    SetCommonRuntimeArgs(
+        program, reader_kernel_id, {input_addr, weight_addr, bias_addr, rope_cos_addr, rope_sin_addr, recip_addr_rt});
+    if (use_mux) {
+        SetCommonRuntimeArgs(program, writer_kernel_id, {output_addr, trans_mat_addr_rt, stats_dram_addr});
+    } else {
+        SetCommonRuntimeArgs(program, writer_kernel_id, {output_addr, trans_mat_addr_rt});
+    }
     for (uint32_t i = 0; i < num_workers; i++) {
         const auto& core = worker_cores[i];
         const uint32_t tile_row_start = std::min(i * num_tile_rows_per_worker, num_tile_rows);
         const uint32_t tile_row_end = std::min(tile_row_start + num_tile_rows_per_worker, num_tile_rows);
         const uint32_t this_core_rows = tile_row_end - tile_row_start;
 
-        std::vector<uint32_t> reader_rt_args = {
-            input_addr,
-            weight_addr,
-            bias_addr,
-            rope_cos_addr,
-            rope_sin_addr,
-            tile_row_start,
-            tile_row_end,
-            recip_addr_rt};  // RT 7: recip LUT DRAM addr (0 when unused; refreshed on cache hit)
-        SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
+        SetRuntimeArgs(program, reader_kernel_id, core, {tile_row_start, tile_row_end});
 
-        std::vector<uint32_t> writer_rt_args;
-        if (!use_mux) {
-            // is_tp_1 drain-only writer: output_addr, start, end, trans_mat (rt[3]).
-            writer_rt_args = {output_addr, tile_row_start, tile_row_end, trans_mat_addr_rt};
-        } else {
-            // worker-writer: output, start, end, trans_mat, stats_dram (rt[4]),
-            // forwarder NoC x/y, my_forwarder_index, my_slot.
+        std::vector<uint32_t> writer_rt_args = {tile_row_start, tile_row_end};
+        if (use_mux) {
+            // Per-worker row range followed by forwarder NoC x/y, group index, and slot.
             const uint32_t f = worker_forwarder(i);
-            writer_rt_args = {output_addr, tile_row_start, tile_row_end, trans_mat_addr_rt};
-            stats_dram_addr_writer_arg_idx = writer_rt_args.size();
-            writer_rt_args.push_back(stats_dram_addr);
             writer_rt_args.push_back(static_cast<uint32_t>(forwarder_virtual[f].x));
             writer_rt_args.push_back(static_cast<uint32_t>(forwarder_virtual[f].y));
             writer_rt_args.push_back(f);
@@ -1476,17 +1467,20 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         }
     }
 
-    return {
-        std::move(program),
-        DitFusedDistributedRmsnormSharedVariables{
-            .reader_kernel_ids = {reader_kernel_id},
-            .writer_kernel_ids = {writer_kernel_id},
-            .compute_kernel_ids = {compute_kernel_id},
-            .forwarder_kernel_ids = forwarder_kernel_ids,
-            .forwarder_cores = forwarder_cores,
-            .cores = worker_cores,
-            .stats_dram_addr_writer_arg_idx = stats_dram_addr_writer_arg_idx,
-        }};
+    DitFusedDistributedRmsnormSharedVariables shared{
+        .reader_common_args = &GetCommonRuntimeArgs(program, reader_kernel_id),
+        .writer_common_args = &GetCommonRuntimeArgs(program, writer_kernel_id),
+        .forwarder_runtime_args = {},
+    };
+    TT_ASSERT(shared.reader_common_args->size() == 6);
+    TT_ASSERT(shared.writer_common_args->size() == (use_mux ? 3 : 2));
+    shared.forwarder_runtime_args.reserve(forwarder_kernel_ids.size());
+    for (size_t f = 0; f < forwarder_kernel_ids.size(); ++f) {
+        auto& runtime_args = GetRuntimeArgs(program, forwarder_kernel_ids[f], forwarder_cores[f]);
+        TT_ASSERT(runtime_args.size() >= 2);
+        shared.forwarder_runtime_args.push_back(&runtime_args);
+    }
+    return {std::move(program), std::move(shared)};
 }
 
 DitFusedDistributedRmsnormMeshWorkloadFactory::cached_mesh_workload_t
@@ -1498,9 +1492,27 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_mesh_workload(
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
+    // The physical route is fixed for a cached workload. Resolve ring
+    // availability only here, not on every invocation of the operator.
+    auto resolved_args = operation_attributes;
+    if (resolved_args.ring_size > 1 && !resolved_args.per_head_norm) {
+        resolved_args.topology =
+            ttnn::ccl::get_usable_topology(tensor_args.input, resolved_args.topology, resolved_args.cluster_axis);
+    } else {
+        resolved_args.topology = ttnn::ccl::Topology::Linear;
+    }
+
     for (const auto& range : tensor_coords.ranges()) {
+        // Local normalization has no device-specific routing or runtime arguments.
+        // Reuse one program across each participating range, including per-head TP>1.
+        if (resolved_args.ring_size == 1 || resolved_args.per_head_norm) {
+            auto cached = create_at(resolved_args, range.start_coord(), tensor_args, tensor_return_value);
+            workload.add_program(range, std::move(cached.program));
+            shared_variables.emplace(range, std::move(cached.shared_variables));
+            continue;
+        }
         for (const auto& coord : range) {
-            auto cached = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
+            auto cached = create_at(resolved_args, coord, tensor_args, tensor_return_value);
             workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached.program));
             shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached.shared_variables));
         }
@@ -1524,40 +1536,31 @@ void DitFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
         tensor_args.rope_cos.has_value() ? tensor_args.rope_cos.value().buffer()->address() : 0;
     const uint32_t rope_sin_addr =
         tensor_args.rope_sin.has_value() ? tensor_args.rope_sin.value().buffer()->address() : 0;
-    // Stats DRAM scratch is reallocated per launch (it's a regular device
-    // tensor), so its address changes and must be refreshed on cache hits.
-    // The worker writer reads it from a fixed runtime-arg slot whose host-side
-    // index is captured in shared.stats_dram_addr_writer_arg_idx (set at
-    // create_at time, only on the all-gather path).
+    // Stats DRAM scratch and the output are refreshed on each cache hit.
     const uint32_t stats_dram_addr = tensor_return_value.size() > 1 ? tensor_return_value[1].buffer()->address() : 0u;
     // Recip LUT tensor is also a regular (caller-owned) device tensor; refresh its addr.
     const uint32_t recip_addr =
         tensor_args.reciprocals.has_value() ? tensor_args.reciprocals.value().buffer()->address() : 0u;
 
-    for (auto& [range, program] : cached_workload.workload.get_programs()) {
-        const auto& shared = cached_workload.shared_variables.at(range);
-        const auto& reader_kernel_id = shared.reader_kernel_ids[0];
-        const auto& writer_kernel_id = shared.writer_kernel_ids[0];
+    const uint32_t out_ready_sem_addr = operation_attributes.multi_device_global_semaphore.empty()
+                                            ? 0u
+                                            : operation_attributes.multi_device_global_semaphore.front().address();
+    // The workload owns the kernels backing these argument objects. No program,
+    // kernel, or core lookup is needed; data() follows dispatch payload relocation.
+    for (const auto& [range, shared] : cached_workload.shared_variables) {
+        auto* reader_common = shared.reader_common_args->data();
+        reader_common[0] = input_addr;
+        reader_common[1] = weight_addr;
+        reader_common[2] = bias_addr;
+        reader_common[3] = rope_cos_addr;
+        reader_common[4] = rope_sin_addr;
+        reader_common[5] = recip_addr;
 
-        auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-        auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
-
-        for (const auto& core : shared.cores) {
-            auto& reader_args = reader_runtime_args_by_core.at(core.x).at(core.y);
-            reader_args[0] = input_addr;
-            reader_args[1] = weight_addr;
-            reader_args[2] = bias_addr;
-            reader_args[3] = rope_cos_addr;
-            reader_args[4] = rope_sin_addr;
-            reader_args[7] = recip_addr;  // RT 7: recip LUT DRAM addr
-
-            auto& writer_args = writer_runtime_args_by_core.at(core.x).at(core.y);
-            writer_args[0] = output_addr;
-            writer_args[3] = trans_mat_addr;  // worker-writer + drain-only writer: trans_mat at rt[3]
-            if (shared.stats_dram_addr_writer_arg_idx.has_value()) {
-                // worker-writer (AG path): stats_dram scratch at rt[4].
-                writer_args[shared.stats_dram_addr_writer_arg_idx.value()] = stats_dram_addr;
-            }
+        auto* writer_common = shared.writer_common_args->data();
+        writer_common[0] = output_addr;
+        writer_common[1] = trans_mat_addr;
+        if (!shared.forwarder_runtime_args.empty()) {
+            writer_common[2] = stats_dram_addr;
         }
         // Forwarders read the stats DRAM scratch base at rt[0] and the out_ready
         // GlobalSemaphore address at rt[1]. BOTH must be refreshed on cache hits:
@@ -1567,14 +1570,10 @@ void DitFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
         // defeating the ping-pong isolation and racing the in-kernel sem reset
         // against peers' in-flight fabric atomic-incs (AG desync / hang). Mirrors
         // rms_allgather_program_factory's runtime_args[7] = semaphore.address().
-        const uint32_t out_ready_sem_addr = operation_attributes.multi_device_global_semaphore.empty()
-                                                ? 0u
-                                                : operation_attributes.multi_device_global_semaphore.at(0).address();
-        for (size_t f = 0; f < shared.forwarder_kernel_ids.size(); f++) {
-            auto& fwd_args_by_core = GetRuntimeArgs(program, shared.forwarder_kernel_ids[f]);
-            const auto& fc = shared.forwarder_cores[f];
-            fwd_args_by_core.at(fc.x).at(fc.y)[0] = stats_dram_addr;
-            fwd_args_by_core.at(fc.x).at(fc.y)[1] = out_ready_sem_addr;
+        for (auto* args : shared.forwarder_runtime_args) {
+            auto* forwarder_data = args->data();
+            forwarder_data[0] = stats_dram_addr;
+            forwarder_data[1] = out_ready_sem_addr;
         }
     }
 }

@@ -10,7 +10,7 @@ silently becomes a block argument and raises `TypeError` on the first layer, aft
 weight load. That is a long way to travel for a signature mismatch, and it is only reachable through
 `build_runtime`, which no eager test exercises.
 
-`tp_shard_kv` did exactly this: it arrived with GLM-5.2's 2D KV sharding (#51968), after the branch's
+`tp_shard_kv` did exactly this: it arrived with GLM-5.3's 2D KV sharding (#51968), after the branch's
 merge-base, and broke every runner construction until it was named.
 
 Hardware-free: this reads the call site's keyword list out of the source and binds it against the two

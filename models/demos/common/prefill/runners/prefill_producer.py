@@ -20,6 +20,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
+from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens, rotated_chunk_positions
 from models.demos.common.prefill.runners.migration import (
     is_per_host_storage,
     migration_table_path,
@@ -140,10 +141,14 @@ def _chunk_slice(pool, actual_start: int, actual_isl=None):
     return _pool_slice(pool, actual_start, CHUNK_SIZE, actual_isl)
 
 
-def _h2d_rows(tokens):
+def _h2d_rows(tokens, actual_start: int = 0):
+    # Same host-side reshuffle as the engine's H2D prefill connector: a chunk starting mid-slab (multi-turn
+    # resume) is rotated so each SP chip receives the tokens the KV writer places on it (identity when the
+    # start is chunk-aligned).
     sp = GLOBAL_MESH_SHAPE[0]
     stride = h2d_row_len(CHUNK_SIZE, sp)
     assert len(tokens) == CHUNK_SIZE, f"expected {CHUNK_SIZE} tokens, got {len(tokens)}"
+    tokens = rotate_chunk_tokens(list(tokens), actual_start, sp)
     return _to_host_array(torch.tensor(tokens, dtype=torch.int64).view(sp, 1, stride))
 
 
@@ -154,7 +159,10 @@ def _mtp_rows(pool, actual_start: int, actual_isl=None):
     sp = GLOBAL_MESH_SHAPE[0]
     stride = h2d_row_len(CHUNK_SIZE, sp)
     align_pad = [MTP_PAD_TOKEN_ID] * (n_mtp - MTP_LEVELS)
-    rows = [_pool_slice(pool, actual_start + (c + 1) * stride, MTP_LEVELS, actual_isl) + align_pad for c in range(sp)]
+    # Each chip's lookahead follows its own last row: actual_start + (c + 1) * stride for a chunk-aligned start,
+    # the rotated last position otherwise (see _h2d_rows).
+    last = [row[-1] for row in rotated_chunk_positions(actual_start, sp, stride)]
+    rows = [_pool_slice(pool, last[c] + 1, MTP_LEVELS, actual_isl) + align_pad for c in range(sp)]
     return _to_host_array(torch.tensor(rows, dtype=torch.int64).unsqueeze(1))
 
 
@@ -1292,6 +1300,11 @@ def _verify_resident_slots(
         return False
 
     dflash_threshold = float(os.environ.get("PREFILL_DFLASH_PCC", "0.88"))
+    # MTP-level caches (mtp, mtp_index) get their own floor, defaulting to the trunk one so no other
+    # model changes behaviour. An MTP level is a decoder block chained on the trunk output, so its KV
+    # inherits the trunk error and adds one block's worth per level -- GLM-5.3 measures ~0.03/level
+    # against its own CPU reference. Relaxing the shared threshold instead would weaken the trunk gate.
+    mtp_threshold = float(os.environ.get("PREFILL_MTP_PCC", threshold))
     check_dflash = any(name.startswith("dflash_") for name in _config_names(kv_table))
     if check_dflash and not _dflash_caches_are_local(kv_table, device_map, slot_id=min(stats.resident, default=0)):
         logger.info(
@@ -1323,8 +1336,13 @@ def _verify_resident_slots(
         pcc = min(slot_mins.values())
         min_pcc_overall = min(min_pcc_overall, pcc)
         checked += 1
-        if pcc < threshold:
-            failures.append((slot_id, real_len, pcc))
+        below = {
+            cache: value
+            for cache, value in slot_mins.items()
+            if value < (mtp_threshold if cache.startswith("mtp") else threshold)
+        }
+        if below:
+            failures.append((slot_id, real_len, min(below.values())))
         if check_dflash:
             dflash_pcc = dflash_kv_table_pcc_check(
                 kv_table,
@@ -1349,7 +1367,10 @@ def _verify_resident_slots(
     ok = bool(checked) and not failures and not dflash_failures
     _write_pcc_verdict(rank, ok=ok, min_pcc=min_pcc_overall, checked=checked, threshold=threshold, per_cache=per_cache)
     if failures:
-        logger.error(f"[producer] KV cache PCC below {threshold} for (slot, real_len, pcc): {failures}")
+        logger.error(
+            f"[producer] KV cache PCC below {threshold} (MTP caches: {mtp_threshold}) "
+            f"for (slot, real_len, pcc): {failures}"
+        )
     if dflash_failures:
         logger.error(f"[producer] drafter KV PCC below {dflash_threshold} for (slot, real_len, pcc): {dflash_failures}")
     if failures or dflash_failures:
@@ -1566,7 +1587,9 @@ def main() -> None:
         metadata = _pack_metadata(slot_id, actual_start, actual_end)
         logger.info(f"[producer] push slot={slot_id} cidx={chunk_idx} start={actual_start} end={actual_end}")
         push_start = time.perf_counter()
-        _push(service, payload_bytes, _h2d_rows(tokens), _mtp_rows(pool, actual_start, actual_isl), metadata)
+        _push(
+            service, payload_bytes, _h2d_rows(tokens, actual_start), _mtp_rows(pool, actual_start, actual_isl), metadata
+        )
         return (time.perf_counter() - push_start) * 1000.0
 
     warmup_chunks = int(os.environ.get("PREFILL_PRODUCER_WARMUP_CHUNKS", "0"))

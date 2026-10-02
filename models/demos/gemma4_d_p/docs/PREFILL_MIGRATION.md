@@ -25,6 +25,12 @@ For loopback, first [build and start the migration endpoint](PREFILL_TEST_FLOWS.
 GEMMA4_TEST_LOOPBACK=1 pytest models/demos/gemma4_d_p/tests/test_prefill_migration.py::test_prefill_migration[loopback-256k] -sv
 ```
 
+Both gates run at the service's chunk size, 8192. To validate another chunk size, set `GEMMA4_TEST_CHUNK_SIZE`:
+
+```bash
+GEMMA4_TEST_CHUNK_SIZE=4096 pytest models/demos/gemma4_d_p/tests/test_prefill_migration.py::test_prefill_migration[mock-256k] -sv
+```
+
 List available cases with:
 
 ```bash

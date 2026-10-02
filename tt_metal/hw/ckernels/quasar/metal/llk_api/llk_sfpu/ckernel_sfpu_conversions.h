@@ -4,11 +4,39 @@
 
 #pragma once
 
+#include <cstdint>
+#include <limits>
+
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_operand.h"
 
 namespace ckernel {
 namespace sfpu {
+
+// Helper function for _sfpu_binary_power_
+// This function is based on _float32_to_int32_, but expects a positive input, which simplifies the code
+// and makes it faster
+sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
+    sfpi::vInt result;
+    sfpi::vInt exp = exexp(in);  // extract exponent
+    v_if(exp < 0) { result = 0; }
+    v_elseif(exp > 30)  // overflow occurs above this range
+    {
+        // set to int32 max value in case of overflow
+        result = std::numeric_limits<std::int32_t>::max();
+    }
+    v_else {
+        // extract mantissa
+        sfpi::vInt man = exman(in, sfpi::MantissaMode::ImplicitOne);
+        // shift the mantissa by (23-exponent) to the right
+        sfpi::vInt shift = exp - 23;  // 23 is number of mantissa bits in float32
+        man = shft(man, shift, sfpi::ShiftMode::Logical);
+
+        result = man;
+    }
+    v_endif;
+    return result;
+}
 
 /**
  * @brief Converts float32 to bfloat16 using IEEE 754 Round-to-Nearest-Even (RNE).
