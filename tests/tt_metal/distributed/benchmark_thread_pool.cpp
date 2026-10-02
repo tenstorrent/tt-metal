@@ -2,12 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Fan-out latency of the host thread pools. Each iteration keeps the caller busy for gap_us, gives each of `workers`
-// workers tasks_per_worker tasks of work_ns, and joins; only submit and join are timed. PassThrough is the serial
-// reference.
-// TT_POOL_BENCH_FULL=1 runs the full grid, TT_POOL_BENCH_WORKERS sets the pool size (32), TT_POOL_BENCH_CALLER_CPU
-// pins the caller.
-
 #include <benchmark/benchmark.h>
 
 #include <sched.h>
@@ -117,6 +111,11 @@ void submit_fan_out(ThreadPool& pool, uint32_t workers, uint32_t tasks_per_worke
     }
 }
 
+// Fan-out latency of the host thread pools. Each iteration keeps the caller busy for gap_us, gives each of `workers`
+// workers tasks_per_worker tasks of work_ns, and joins; only submit and join are timed. PassThrough is the serial
+// reference.
+// TT_POOL_BENCH_FULL=1 runs the full grid, TT_POOL_BENCH_WORKERS sets the pool size (32), TT_POOL_BENCH_CALLER_CPU
+// pins the caller.
 template <typename Pool, size_t PadBytes>
 void BM_FanOut(benchmark::State& state) {
     const auto workers = static_cast<uint32_t>(state.range(0));
