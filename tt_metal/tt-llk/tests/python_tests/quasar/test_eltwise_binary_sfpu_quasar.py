@@ -632,7 +632,7 @@ def _run_max_min(
             DEST_SYNC(),
             # 2's-complement datapath (default); only the quant family reads this.
             SIGN_MAGNITUDE_FORMAT(False),
-            SFPU_DST_ROUNDING_MODE(),
+            SFPU_DST_ROUNDING_MODE(DstRoundingMode.Default),
             # The shared unary-SFPU dispatch in sfpu_operations_quasar.h has a typecast
             # branch that references the non-dependent globals TYPECAST_IN_FORMAT /
             # TYPECAST_OUT_FORMAT, so every build that includes it must define them.
@@ -889,7 +889,7 @@ def _run_quant(
             UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
             DEST_SYNC(),
             SIGN_MAGNITUDE_FORMAT(sign_magnitude),
-            SFPU_DST_ROUNDING_MODE(),
+            SFPU_DST_ROUNDING_MODE(DstRoundingMode.Default),
             TYPECAST_FORMATS(),
         ],
         "runtimes": [
