@@ -43,15 +43,6 @@ FORCE_INLINE uint16_t dfb_read_hart_blob_offset(uintptr_t config_cached, uint8_t
         static_cast<uintptr_t>(hart_u8) * sizeof(uint16_t)));
 }
 
-// End of hart h's init blob. The host emits one blob per hart, contiguously and in ascending
-// hart order (non-participating harts get a 4B stub), so the next hart's offset is this blob's
-// end and the signal region bounds the last hart.
-FORCE_INLINE uint32_t dfb_read_hart_blob_end(uintptr_t config_cached, uint8_t hart_u8, uint32_t signal_region_off) {
-    return (static_cast<uint32_t>(hart_u8) + 1u < static_cast<uint32_t>(::dfb::NUM_PARTICIPATING_HARTIDS))
-               ? static_cast<uint32_t>(dfb_read_hart_blob_offset(config_cached, hart_u8 + 1u))
-               : signal_region_off;
-}
-
 FORCE_INLINE uint32_t dfb_read_blob_u32(uintptr_t blob_addr, uint32_t byte_off) {
     return *dfb_l1_uncached_u32_ptr(blob_addr + byte_off);
 }
@@ -176,7 +167,7 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_read_init_entry_header(uintptr_t entry_add
     return dfb_unpack_entry_header(dfb_l1_uncached_u32_ptr(entry_addr));
 }
 
-// Cached variant — used by DM after invalidate_l2_cache_range covers the blob.
+// Cached variant — used by DM. The host writes the config with a snooped NOC write, so no L2 invalidate is needed.
 // Plain (non-volatile) pointer: no TL1 bypass; reads go through L2->D$->TL1
 // Bytes [12,24) are in LocalDFBInterface DTCM order (host writes via dfb_write_dm_scalar_pack_to_blob).
 FORCE_INLINE dfb_init_entry_hdr_t dfb_read_init_entry_header_cached(uintptr_t entry_addr) {
@@ -386,8 +377,8 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
         return;
     }
 
-    // uncached bootstrap of offset/masks, one invalidate over threshold+desc pools, then cached walks (non-volatile
-    // after inv).
+    // uncached bootstrap of offset/masks, then cached walks over the threshold+desc pools. The host's config write
+    // is snooped, so cached lines left from a previous launch are not stale and need no invalidate.
     const uint32_t dm0_isr_blob_offset =
         *dfb_l1_uncached_u32_ptr(config_cached + offsetof(dfb_global_header_t, dm0_isr_blob_offset));
     const uintptr_t dm0_blob_base = config_cached + dm0_isr_blob_offset;
@@ -397,9 +388,7 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
 
     const uint32_t txn_hw_bytes = dm0_isr_txn_hw_pool_byte_size(producer_txn_id_mask, consumer_txn_id_mask);
     const uint32_t pool_bytes = dm0_isr_txn_desc_pool_byte_size(producer_txn_id_mask, consumer_txn_id_mask);
-    // Core header already read uncached — invalidate only the pools the cached walk touches.
     const uintptr_t pools_base = dm0_blob_base + sizeof(dfb_dm0_isr_blob_core_header_t);
-    invalidate_l2_cache_range(pools_base, txn_hw_bytes + pool_bytes);
 
     WAYPOINT("IS1");
 
@@ -530,20 +519,13 @@ FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32
 
     const uintptr_t config_cached = reinterpret_cast<uintptr_t>(dfb_config_base);
 
-    // Host may rewrite overlapping L1 across programs: uncached bootstrap of offset/num_slots,
-    // one invalidate over slots when non-empty, then cached remapper slot walk.
+    // Uncached bootstrap of offset/num_slots, then cached remapper slot walk. The host may rewrite
+    // overlapping L1 across programs, but its config write is snooped, so no invalidate is needed.
     const uint32_t dm1_remapper_blob_offset =
         *dfb_l1_uncached_u32_ptr(config_cached + offsetof(dfb_global_header_t, dm1_remapper_blob_offset));
     const uintptr_t dm1_blob_base = config_cached + dm1_remapper_blob_offset;
     const uint16_t num_slots_bootstrap = *reinterpret_cast<volatile uint16_t*>(
         dfb_l1_uncached_byte_ptr(dm1_blob_base + offsetof(dfb_dm1_remapper_core_header_t, num_slots)));
-    // Skip invalidate when empty: no cached slot walk.
-    // Header already bootstrapped uncached — invalidate only the slot array.
-    if (num_slots_bootstrap > 0u) {
-        const uintptr_t slots_base = dm1_blob_base + sizeof(dfb_dm1_remapper_core_header_t);
-        invalidate_l2_cache_range(
-            slots_base, static_cast<uint32_t>(num_slots_bootstrap) * sizeof(dfb_dm1_remapper_slot_t));
-    }
 
     WAYPOINT("RS");
 
@@ -712,27 +694,15 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
     // Sequential init blob walk: no pointer-table lookups, no per-DFB indirection.
     // Entry count = popcount(participation_mask[hart_u8]); blob starts at init entries.
     // Each entry header is loaded as packed u32 words; TC arrays are read as u32 pairs.
-    // DM invalidates L2 over the blob once, then walks with cached TL1 pointers.
+    // DM walks the blob with cached TL1 pointers (the host's config write is snooped, so no invalidate).
     // -----------------------------------------------------------------------
 
     // Widen walk counters to uint32_t so RV64 codegen avoids zext.b/zext.w on every
     // increment / compare. Blob fields stay uint8_t; only locals are widened.
     const uint32_t num_init = dfb_hart_participation_count(participation_mask);
 
-    // DM: invalidate L2 over this hart's init blob so subsequent reads go through
-    // L1 D$ + L2. Global header fields and the signal region stay on the uncached
-    // alias (cross-hart visibility without cache management). The range is the blob's
-    // exact extent: bounding it by num_init × the largest entry size (6 TCs → 84B)
-    // overshoots more than 2x for the common 1-2 TC entry and spills into the
-    // neighbouring harts' blobs, discarding lines those harts are concurrently walking.
-#ifndef COMPILE_FOR_TRISC
-    if (num_init > 0) {
-        const uintptr_t blob_start = reinterpret_cast<uintptr_t>(p);
-        const uintptr_t blob_end =
-            config_cached + dfb_read_hart_blob_end(config_cached, hart_u8, dfb_signal_region_off);
-        invalidate_l2_cache_range(blob_start, blob_end - blob_start);
-    }
-#endif
+    // DM: this hart's init blob is read through L1 D$ + L2. Global header fields and the signal
+    // region stay on the uncached alias (cross-hart visibility without cache management).
 
     for (uint32_t i = 0; i < num_init; i++) {
         const uintptr_t e_addr = reinterpret_cast<uintptr_t>(p);

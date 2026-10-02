@@ -205,8 +205,25 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
                         kernel_config_base,
                         program.impl().get_program_config(index).dfb_offset,
                         bytes_written);
-                    metal_ctx.get_cluster().write_core(
-                        device_id, physical_core, std::span<const uint8_t>(dfb_config_vec.data(), bytes_written), addr);
+                    // The DFB config is read by the DMs through their caches, so the host write must be
+                    // snooped: otherwise a core that cached a previous launch's config at this address keeps
+                    // reading the stale copy. write_core() cannot carry window flags, so the write goes
+                    // through an IoWindow created with WindowFlags::Snoop.
+                    // Same translation write_core() performs internally (tt_cluster.cpp): create_io_window
+                    // takes a umd::CoreCoord, not a tt_metal one.
+                    const auto& soc_desc = metal_ctx.get_cluster().get_soc_desc(device_id);
+                    const tt::umd::CoreCoord core_coord =
+                        soc_desc.get_coord_at(tt_cxy_pair(device_id, physical_core), tt::CoordSystem::TRANSLATED);
+                    auto window = metal_ctx.get_cluster().get_driver()->create_io_window(
+                        device_id,
+                        core_coord,
+                        addr,
+                        tt::umd::HostIoWindowConfig{tt::umd::HostMemoryCaching::WC, bytes_written},
+                        tt::umd::IoOrdering::Strict,
+                        std::nullopt,
+                        tt::umd::WindowFlags::UnicastWrite | tt::umd::WindowFlags::Snoop);
+                    TT_FATAL(window != nullptr, "DFB config: create_io_window returned null");
+                    window->write_block(0, dfb_config_vec.data(), bytes_written);
                 }
 
                 // CrossNodeDFB dense index in the worker kernel-config window. Full host

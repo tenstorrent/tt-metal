@@ -279,4 +279,123 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_NumEntriesOverride_ReEntry_4Sx1S
         /*num_consumers=*/1);
 }
 
+// ---- direct host-write snoop probe (issue #55788) ----
+//
+// Independent of DFB. The kernel caches a word holding zero, tells the host it is ready, then
+// spins on the CACHED view. The host writes a magic value with WindowFlags::Snoop while it spins;
+// the core only sees it if the snooped write acts on the line it has cached. This isolates the
+// mechanism the DFB config write depends on (slow_dispatch.cpp) from every DFB-specific concern.
+
+// Host write of one word with WindowFlags::Snoop. Mirrors the DFB config write in slow_dispatch.cpp:
+// write_core() cannot carry window flags, so a window created with the flag is the only way to
+// request a snooped write.
+static void write_word_snooped(distributed::MeshDevice& mesh, const CoreCoord& logical, uint32_t addr, uint32_t value) {
+    auto& cluster = MetalContext::instance().get_cluster();
+    const auto device_id = mesh.get_device_ids()[0];
+    const CoreCoord virt = mesh.worker_core_from_logical_core(logical);
+    const tt::umd::CoreCoord core_coord =
+        cluster.get_soc_desc(device_id).get_coord_at(tt_cxy_pair(device_id, virt), tt::CoordSystem::TRANSLATED);
+    auto window = cluster.get_driver()->create_io_window(
+        device_id,
+        core_coord,
+        addr,
+        tt::umd::HostIoWindowConfig{tt::umd::HostMemoryCaching::WC, sizeof(value)},
+        tt::umd::IoOrdering::Strict,
+        std::nullopt,
+        tt::umd::WindowFlags::UnicastWrite | tt::umd::WindowFlags::Snoop);
+    TT_FATAL(window != nullptr, "create_io_window returned null");
+    window->write_block(0, &value, sizeof(value));
+}
+
+static void run_host_snoop_spin_probe(distributed::MeshDevice& mesh) {
+    if (mesh.arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "snoop probe is Quasar-only";
+    }
+    // One cache line apart: the uncached flag/result/abort publishes must not disturb the line under test.
+    const uint32_t l1 = mesh.allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t data_addr = l1;
+    const uint32_t flag_addr = l1 + 128u;
+    const uint32_t result_addr = l1 + 256u;
+    const uint32_t abort_addr = l1 + 384u;
+    constexpr uint32_t kMagic = 0xA5A5A5A5u;
+    const CoreCoord logical{0, 0};
+
+    const experimental::KernelSpecName PROBE{"snoop_spin_probe"};
+    experimental::KernelSpec probe_spec{
+        .unique_id = PROBE,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/snoop_spin_probe.cpp",
+        .num_threads = 1,
+        .compile_time_args =
+            {{"data_addr", data_addr},
+             {"flag_addr", flag_addr},
+             {"result_addr", result_addr},
+             {"abort_addr", abort_addr}},
+        .hw_config = experimental::DataMovementHardwareConfig{},
+    };
+    experimental::WorkUnitSpec wu{
+        .name = "main", .kernels = {PROBE}, .target_nodes = CoreRangeSet(CoreRange(logical, logical))};
+    experimental::ProgramSpec spec{
+        .name = "host_snoop_spin_probe",
+        .kernels = {probe_spec},
+        .work_units = {wu},
+    };
+
+    auto device_range = distributed::MeshCoordinateRange(mesh.shape());
+    distributed::MeshWorkload mesh_workload;
+    mesh_workload.add_program(device_range, experimental::MakeProgramFromSpec(mesh, spec));
+
+    // Clear flag and abort so stale values cannot be mistaken for "ready" / "stop".
+    std::vector<uint32_t> zero{0u};
+    for (uint32_t a : {flag_addr, abort_addr}) {
+        ASSERT_TRUE(slow_dispatch::WriteToL1(mesh, logical, a, zero));
+    }
+
+    auto& cq = mesh.mesh_command_queue();
+    // Non-blocking: the kernel spins until the host writes, so the host must keep running.
+    distributed::EnqueueMeshWorkload(cq, mesh_workload, /*blocking=*/false);
+
+    // Wait until the kernel has cached the line and is spinning. Wall-clock deadline with a slow
+    // cadence: each L1 read is expensive on the emulator.
+    bool ready = false;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(120);
+    while (std::chrono::steady_clock::now() < deadline) {
+        std::vector<uint32_t> flag;
+        slow_dispatch::ReadFromL1(mesh, logical, flag_addr, sizeof(uint32_t), flag);
+        if (!flag.empty() && flag[0] == 1u) {
+            ready = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+
+    // Whatever happens below, the kernel must be released before anything is reported: a failure
+    // that left it spinning would hang device teardown instead of failing the test.
+    std::string write_error;
+    if (ready) {
+        try {
+            write_word_snooped(mesh, logical, data_addr, kMagic);
+        } catch (const std::exception& e) {
+            write_error = e.what();
+        }
+        // Give the spinning core a chance to observe it, then end the spin unconditionally.
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+    }
+    std::vector<uint32_t> one{1u};
+    ASSERT_TRUE(slow_dispatch::WriteToL1(mesh, logical, abort_addr, one));
+    distributed::Finish(cq);
+
+    ASSERT_TRUE(ready) << "kernel never published its ready flag";
+    ASSERT_TRUE(write_error.empty()) << "snooped host write failed: " << write_error;
+
+    std::vector<uint32_t> res;
+    slow_dispatch::ReadFromL1(mesh, logical, result_addr, sizeof(uint32_t), res);
+    ASSERT_FALSE(res.empty());
+    const uint32_t seen = res[0];
+    ASSERT_NE(seen, 0xFFFFFFFFu) << "kernel did not reach the end of its spin";
+    EXPECT_EQ(seen, kMagic) << "snooped host write was never observed through the core's cache (read 0x" << std::hex
+                            << seen << ")";
+}
+
+TEST_F(UnitMeshAnyDispatchFixture, HostSnoopSpinProbe_Snoop) { run_host_snoop_spin_probe(this->device()); }
+
 }  // namespace tt::tt_metal
