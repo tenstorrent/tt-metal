@@ -58,10 +58,7 @@ ALWI void softcap_tile(uint32_t idst, uint32_t beta, uint32_t beta_recip) {
 /**
  * Please refer to documentation for any_init.
  */
-// Names softcap_init explicitly: Quasar's bare SFPU_UNARY_INIT runs only the common SFPU init,
-// not the tanh polynomial coefficients softcap_init loads. On Blackhole this is the same init
-// the bare form dispatches to.
-ALWI void softcap_tile_init() { MATH(SFPU_UNARY_INIT(softcap, sfpu::softcap_init)); }
+ALWI void softcap_tile_init() { MATH(SFPU_UNARY_INIT(softcap)); }
 
 }  // namespace ckernel
 
