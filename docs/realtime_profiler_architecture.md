@@ -44,49 +44,42 @@ A record leaves the device through three single-producer, single-consumer queues
 writer, and a full queue makes its producer wait, so a slow host slows dispatch down instead of losing records.
 
 ```
-  dispatch_s              BRISC                   NCRISC                  Host
-  (dispatch core)         (profiler core)         (profiler core)         (receiver thread)
+  dispatch_s                   BRISC                        NCRISC                       Host
+  (dispatch core)              (profiler core)              (profiler core)              (receiver thread)
 
-   |                       |                       |                       |
-   | 1. Write the record   |                       |                       |
-   |    into the open slot |                       |                       |
-   |    (own L1)           |                       |                       |
-   | 2. If no slot is      |                       |                       |
-   |    free: WAIT         |                       |                       |
-   | 3. Advance wr_idx,    |                       |                       |
-   |    NoC-write it to    |                       |                       |
-   |    the profiler core  |                       |                       |
-   | ------ wr_idx ------->|                       |                       |
-   |                       | 4. See wr_idx move    |                       |
-   |                       | 5. If the ring is     |                       |
-   |                       |    full: WAIT         |                       |
-   |                       | 6. NoC-read the slot  |                       |
-   |                       |    into the ring,     |                       |
-   |                       |    bump write_index   |                       |
-   | --- record (32 B) --->|                       |                       |
-   |                       | ---- write_index ---->|                       |
-   |                       | 7. NoC-write rd_idx   |                       |
-   |                       |    back: slot free    |                       |
-   | <------ rd_idx -------|                       |                       |
-   |                       |                       | 8. See write_index    |
-   |                       |                       |    move               |
-   |                       |                       | 9. If the host FIFO   |
-   |                       |                       |    is full: WAIT      |
-   |                       |                       | 10. NoC-write the     |
-   |                       |                       |     entries to the    |
-   |                       |                       |     host FIFO (PCIe)  |
-   |                       |                       | ------ records ------>|
-   |                       |                       | 11. Write bytes_sent  |
-   |                       |                       |     to the host, bump |
-   |                       |                       |     read_index        |
-   |                       |                       | ---- bytes_sent ----->|
-   |                       | <---- read_index -----|                       |
-   |                       |                       |                       | 12. See bytes_sent;
-   |                       |                       |                       |     read the pages,
-   |                       |                       |                       |     run the callbacks
-   |                       |                       |                       | 13. Write bytes_acked
-   |                       |                       |                       |     into profiler L1
-   |                       |                       | <---- bytes_acked ----|
+   |                            |                            |                            |
+   | 1. Store the record in the |                            |                            |
+   |    open slot (own L1)      |                            |                            |
+   | 2. No free slot: WAIT      |                            |                            |
+   | 3. Bump wr_idx and         |                            |                            |
+   |    NoC-write it to the     |                            |                            |
+   |    profiler core           |                            |                            |
+   | --------- wr_idx --------->|                            |                            |
+   |                            | 4. See wr_idx move         |                            |
+   |                            | 5. Ring full: WAIT         |                            |
+   |                            | 6. Copy the slot into the  |                            |
+   |                            |    ring (NoC read) and     |                            |
+   |                            |    bump write_index        |                            |
+   | ----- record (32 B) ------>|                            |                            |
+   |                            | ------ write_index ------->|                            |
+   |                            | 7. NoC-write rd_idx back   |                            |
+   |                            |    (slot is free)          |                            |
+   | <--------- rd_idx ---------|                            |                            |
+   |                            |                            | 8. See write_index move    |
+   |                            |                            | 9. Host FIFO full: WAIT    |
+   |                            |                            | 10. NoC-write the entries  |
+   |                            |                            |     to the host FIFO       |
+   |                            |                            |     over PCIe              |
+   |                            |                            | -------- records --------->|
+   |                            |                            | 11. Send bytes_sent to the |
+   |                            |                            |     host; bump read_index  |
+   |                            |                            | ------- bytes_sent ------->|
+   |                            | <------- read_index -------|                            |
+   |                            |                            |                            | 12. See bytes_sent, read the
+   |                            |                            |                            |     pages, run the callbacks
+   |                            |                            |                            | 13. Write bytes_acked into the
+   |                            |                            |                            |     profiler core L1
+   |                            |                            | <------ bytes_acked -------|
 ```
 
 | Queue | Lives in | Size | Producer advances | Consumer advances | When full |
@@ -122,7 +115,59 @@ Host and device timestamps are aligned so that Tracy (or other consumers) can re
 
 ---
 
-## 4. Carve-out layout (conceptual)
+## 4. Records and Memory
+
+### 4.1 The record
+
+dispatch_s writes one record per command: two 16-byte timestamps (`realtime_profiler_timestamp_t`) making a
+32-byte `realtime_profiler_record_t`. Records for commands that are not a profiled program carry id 0, and the
+BRISC drops them before they reach the host.
+
+| Bytes | Field | Contents |
+|-------|-------|----------|
+| 0-3 | `kernel_start.time_hi` | Device wall clock when dispatch_s started the command, high 32 bits |
+| 4-7 | `kernel_start.time_lo` | Same, low 32 bits |
+| 8-11 | `kernel_start.id` | Program runtime id; 0 = not a profiled program |
+| 12-15 | `kernel_start.header` | Always 0 in a program record (marks marker entries, see 4.2) |
+| 16-19 | `kernel_end.time_hi` | Last worker completion seen while the slot was open, high 32 bits |
+| 20-23 | `kernel_end.time_lo` | Same, low 32 bits |
+| 24-27 | `kernel_end.id` | Same program runtime id |
+| 28-31 | `kernel_end.header` | Cycles dispatch_s waited for a free slot before publishing; 0 = no wait. The BRISC turns it into a stall marker and zeroes it |
+
+The BRISC never lets an end time go backwards: a slot that saw no completion while open is given the previous
+record's end time.
+
+### 4.2 Ring entries and markers
+
+The BRISC-to-NCRISC ring and the host FIFO hold 64-byte entries, because 64 bytes is the D2H socket page size: the
+32-byte record followed by 32 bytes of padding. The BRISC also writes two kinds of marker entry, told apart by word 3:
+
+| Entry | Word 3 | Words 0-1 | Word 2 |
+|-------|--------|-----------|--------|
+| Program record | 0 | Start time | Program runtime id |
+| Sync marker | `0xFFFFFFFF` | Device time of the sample | Host time it answers |
+| Dispatch-stall marker | `0xFFFFFFFE` | Time the stall ended (the next record's start) | Stall length in cycles |
+
+On the host, each program record becomes a `ProgramRealtimeRecord` (runtime id, chip id, 64-bit start and end
+timestamps, clock frequency, kernel source paths): 48 bytes on a 64-bit host.
+
+### 4.3 Memory used
+
+| Where | What | Size |
+|-------|------|------|
+| Dispatch core L1 | `realtime_profiler_msg_t`: 4 record slots (128 B), program-id FIFO of 32 ids (128 B), indices and control words (44 B) | 300 B |
+| Prefetch and profiler core L1 | The same struct at the same address, because the dispatch memory map lays it out on every core it covers. Only the config and sync words are used on the profiler core | 300 B each |
+| Profiler core L1 | BRISC-to-NCRISC ring: 64 B header plus 16,384 entries of 64 B | 1,048,640 B |
+| Profiler core L1 | D2H socket config | 128 B |
+| Profiler core L1, total | `RealtimeProfilerCoreL1` (ring plus socket config) | 1,048,768 B (~1 MiB) |
+| Host, pinned memory | D2H socket FIFO: 32,768 pages of 64 B | 2 MiB |
+| Host, heap | Record ring for the callback threads: 4 x min(2^20, 32,768 x devices) records of 48 B, capped at 2^22 records | 6 MiB for 1 device, at most 192 MiB |
+| Host, heap | Per callback consumer: a batch buffer of min(2^20, 32,768 x devices) records | 1.5 MiB per consumer for 1 device |
+
+`realtime_profiler_msg_t` is not part of `mailboxes_t`, so worker cores carry none of this: on a worker the same
+address range is ordinary allocatable L1.
+
+### 4.4 Mailbox fields by core
 
 | Location | Contents (`realtime_profiler_msg_t`) |
 |----------|----------------------------------------|
