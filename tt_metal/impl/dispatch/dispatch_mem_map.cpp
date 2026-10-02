@@ -15,7 +15,21 @@
 #include <hostdevcommon/dispatch_telemetry_types.hpp>
 #include <tt_stl/enum.hpp>
 
+#include <filesystem>
+
 namespace tt::tt_metal {
+
+namespace {
+
+// Snooped host writes need a UMD window that can carry the NOC snoop bit, and today only the RTL simulator's
+// window can. UMD picks the RTL simulator when TT_METAL_SIMULATOR names a directory rather than a TTSim .so.
+bool use_prefetch_q_snoop(const Hal& hal, const CoreType& core_type, const tt::llrt::RunTimeOptions& rtoptions) {
+    const std::filesystem::path& simulator = rtoptions.get_simulator_path();
+    const bool rtl_simulator = !simulator.empty() && simulator.extension() != ".so";
+    return hal.get_arch() == tt::ARCH::QUASAR && core_type != CoreType::ETH && rtl_simulator;
+}
+
+}  // namespace
 
 DispatchMemMap::DispatchMemMap(
     const CoreType& core_type,
@@ -43,6 +57,7 @@ DispatchMemMap::DispatchMemMap(
         // observed to fail on Quasar, and using one width everywhere keeps host/kernel code simple. WH ETH
         // stays at 2 bytes because of tighter memory constraints.
         (hal.get_arch() == tt::ARCH::WORMHOLE_B0 && core_type == CoreType::ETH) ? 2u : 4u)),
+    prefetch_q_snoop_(use_prefetch_q_snoop(hal, core_type, rtoptions)),
     num_cqs_per_core_(cq_layout.num_cqs_per_core),
     host_alignment_(hal.get_alignment(HalMemType::HOST)),
     l1_alignment_(hal.get_alignment(HalMemType::L1)),
@@ -137,6 +152,14 @@ DispatchMemMap::DispatchMemMap(
 
     uint32_t prefetch_dispatch_unreserved_base =
         device_cq_addrs_[ttsl::as_underlying_type<CommandQueueDeviceAddrType>(CommandQueueDeviceAddrType::UNRESERVED)];
+    // Snooped fetch queue writes cover whole 16B beats (QUAS-4226). The queue base and cmddat_q are both aligned to
+    // pcie_alignment, so when that is a multiple of the beat, the beats line up with the queue and the last one ends
+    // in the padding before cmddat_q.
+    TT_FATAL(
+        !prefetch_q_snoop_ || pcie_alignment % PREFETCH_Q_SNOOP_BEAT_BYTES == 0,
+        "PCIe alignment {} B is not a multiple of the {} B snoop beat",
+        pcie_alignment,
+        PREFETCH_Q_SNOOP_BEAT_BYTES);
     cmddat_q_base_ = align(prefetch_dispatch_unreserved_base + settings.prefetch_q_size_, pcie_alignment);
     scratch_db_base_ = align(cmddat_q_base_ + settings.prefetch_cmddat_q_size_, pcie_alignment);
     if (cq_layout.fd_kernels_on_same_core) {
@@ -222,6 +245,8 @@ DispatchMemMap::DispatchMemMap(
 uint32_t DispatchMemMap::prefetch_q_entries() const { return settings.prefetch_q_entries_; }
 
 uint32_t DispatchMemMap::prefetch_q_entry_size_bytes() const { return settings.prefetch_q_entry_size_bytes_; }
+
+bool DispatchMemMap::prefetch_q_snoop() const { return prefetch_q_snoop_; }
 
 uint32_t DispatchMemMap::prefetch_q_size() const { return settings.prefetch_q_size_; }
 
