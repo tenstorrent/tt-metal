@@ -18,6 +18,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
+from fractions import Fraction
 from functools import lru_cache
 from typing import Dict, List, Optional, Set, Tuple, Union
 
@@ -724,7 +725,8 @@ def _verdict(measured: int, out_fmt: str) -> Tuple[str, int]:
     """What the table should say for a measured worst lane on *out_fmt*.
 
     ``("ulp", budget)`` while a step budget is still *stronger* than the tolerance it
-    replaces, and ``("tolerance", measured)`` once it is not. The bound is the table's
+    replaces, and ``("tolerance", budget)`` once it is not -- the budget either way, so
+    the row's comment can name the number that actually crossed the line. The bound is the table's
     own ``usable_budget_ceiling``: ~419,430 steps for fp32, 51 for fp16, 6 for bf16, 25
     for Bfp8_b. Decided per cell and before collapsing, because it depends on the output
     format and collapsing may drop it.
@@ -749,9 +751,14 @@ def _verdict(measured: int, out_fmt: str) -> Tuple[str, int]:
         # Bfp8_b output from random mixed-magnitude blocks (the table's Bfp8_b note) and
         # 393 from the sorted sweep. Enrolling the second would hide the first.
         return ("block", measured)
-    budget = 0 if measured == 0 else math.ceil(measured * EMIT_HEADROOM)
+    # In exact arithmetic: `100 * 1.1` is 110.00000000000001 in binary floating point,
+    # so a float ceil wrote 111 -- and 12 for a measured 10 -- one step past the rule.
+    budget = math.ceil(Fraction(measured) * Fraction(str(EMIT_HEADROOM)))
     if budget > usable_budget_ceiling(DataFormat[out_fmt]):
-        return ("tolerance", measured)
+        # The *budget* is what crosses the line, not the measurement: with 1.1x headroom
+        # a measured 6 becomes a budget of 7, past bf16's 6.4. Writing "max 6 ULP, past
+        # this output's usable ceiling" then made a checkable claim that is false.
+        return ("tolerance", budget)
     return ("ulp", budget)
 
 
@@ -815,17 +822,67 @@ def _collapse(decided: Dict[Tuple, Tuple]) -> List[dict]:
     return rows
 
 
+#: The run identity, stated once on the op's key line rather than on each of its ~2,000
+#: rows (a quarter of the file). Rows this run did not supersede keep their own suffix,
+#: or are given one by :func:`_stamp_kept`.
+_MEASURED_BY = "measured by: {suffix}, except where a row says otherwise"
+
+#: For stripping a previous run's clause, so a re-emit replaces it instead of appending.
+_MEASURED_BY_RE = re.compile(
+    r";?\s*measured by: .*?, except where a row says otherwise"
+)
+
+
+#: A run identity names its date; a row without one relied on its key line for it.
+_DATED = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _stamp_kept(kept: List[str], key_line: str) -> List[str]:
+    """*kept* with each row that names no run of its own stamped with the one it had.
+
+    ``_render`` replaces the key line's ``measured by:`` clause with this run's, and a
+    row this run did not supersede would then be credited to it -- a pair-narrowed
+    re-emit, or a sampled ``{out: Float32, max_ulp: 0}`` under an exhaustive clause the
+    sweep cannot produce. So before the clause goes, it goes onto those rows: a row that
+    already carries a note (``max 1 ULP``, from an earlier emit) gets the outgoing
+    clause's run, and a bare row -- hand-authored, never emitted -- the key line's own
+    header comment, which is the provenance it was written against.
+    """
+    _, _, comment = key_line.rstrip("\n").partition("#")
+    clause = _MEASURED_BY_RE.search(comment)
+    outgoing = (
+        clause.group(0).split("measured by: ", 1)[1].rsplit(", except where", 1)[0]
+        if clause
+        else ""
+    )
+    header = _MEASURED_BY_RE.sub("", comment).strip().rstrip(";").strip()
+    stamped = []
+    for row in kept:
+        body, _, note = row.rstrip("\n").partition("#")
+        note = note.strip()
+        origin = (outgoing or header) if note else (header or outgoing)
+        if _DATED.search(note) or not origin:
+            stamped.append(row)
+            continue
+        stamped.append(f"{body.rstrip()}  # {note + ', ' if note else ''}{origin}\n")
+    return stamped
+
+
 def _render(key_line: str, rows: List[dict], suffix: str) -> List[str]:
     """One op's block: each row with its verdict, and the measurement behind it.
 
-    *key_line* is passed through verbatim. Several ops carry their measurement as a
-    header comment on that line -- `Fill:  # 0 ULP, 115 variants` -- and it is the
-    provenance for every row of theirs this sweep does not reach. Rewriting the key as
-    a bare `Fill:` dropped it, and the guard that every budget names its measurement
-    then failed on rows that had one all along.
+    The run identity is appended to *key_line*, which keeps whatever it already said:
+    a header comment such as `Fill:  # 0 ULP, 115 variants` is the provenance for every
+    row this sweep does not reach. Each row still carries its own number, which is what
+    the provenance audit reads.
     """
+    from helpers.sfpu_accuracy_budget import usable_budget_ceiling
+
     order = ("in", "out", "approx", "dest")
-    out = [key_line]
+    head, _, comment = key_line.rstrip("\n").partition("#")
+    measured_by = _MEASURED_BY.format(suffix=suffix)
+    existing = _MEASURED_BY_RE.sub("", comment).strip().rstrip(";").strip()
+    out = [f"{head.rstrip()}  # {existing + '; ' if existing else ''}{measured_by}\n"]
     for row in rows:
         metric, value = row["verdict"]
         body = ", ".join(
@@ -841,10 +898,13 @@ def _render(key_line: str, rows: List[dict], suffix: str) -> List[str]:
         if metric == "unmeasurable":
             note = f"not measurable: {value}"
         elif metric == "tolerance":
-            note += ", past this output's usable ceiling, so tolerance"
+            # Just the two numbers: the reason is in the table header, and this pair
+            # keeps the claim checkable against `usable_budget_ceiling`.
+            ceiling = usable_budget_ceiling(DataFormat[row["out"]])
+            note += f", budget would be {value} > {ceiling:.0f}-step ceiling"
         elif metric == "block":
-            note += ", but a sorted sweep flatters a block format, so tolerance"
-        out.append(f"  - {{{pairs}}}  # {note}, {suffix}\n")
+            note += ", block-quantized, so tolerance"
+        out.append(f"  - {{{pairs}}}  # {note}\n")
     return out
 
 
@@ -1002,7 +1062,9 @@ def write_table(path, suffix: str) -> Tuple[int, List[str]]:
                 written.add(name)
                 i = j
                 continue
-            kept = [l for l in rows if not _replaceable(l, emitted_cells)]
+            kept = _stamp_kept(
+                [l for l in rows if not _replaceable(l, emitted_cells)], line
+            )
             out.extend(_render(line, _collapse(_decide(MEASURED[name])), suffix))
             # Rows this run did not supersede -- a format it does not reach, an
             # arch-keyed entry, a floor `_render` cannot re-derive -- are the
@@ -1023,8 +1085,9 @@ def write_table(path, suffix: str) -> Tuple[int, List[str]]:
         raise UnplacedMeasurements(
             f"{path.name}: measured {', '.join(missing)} but found no key line to "
             "write into, so those were not written; every other op was. Add the op's "
-            "block to the table first -- the key line is passed through verbatim so a "
-            "header comment survives, and cannot be generated here.",
+            "block to the table first -- the emitter keeps a key line's name and comment "
+            "and only adds or replaces its `measured by:` clause, so it cannot be "
+            "generated here.",
             written=len(written) - len(kept_verbatim),
             kept=kept_verbatim,
             missing=missing,
