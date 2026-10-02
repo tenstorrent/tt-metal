@@ -47,10 +47,21 @@ on:
       # which the test compiler puts on the include path (helpers/test_config.py).
       # Without it a change to one of those headers would not trigger the sweep.
       - "tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/**"
-      # ...the table itself, and the machinery that measures and judges it.
+      # ...the table itself, and the machinery that measures and judges it: the gate
+      # function, the golden, the Dest/format model, the stimulus and the kernel the
+      # sweep compiles. A change to any of these moves what the sweep measures as surely
+      # as a kernel change does, and used to run no sweep until the next nightly.
       - "tt_metal/tt-llk/tests/python_tests/helpers/sfpu_accuracy_budget.*"
       - "tt_metal/tt-llk/tests/python_tests/helpers/ulp*.py"
+      - "tt_metal/tt-llk/tests/python_tests/helpers/utils.py"
+      - "tt_metal/tt-llk/tests/python_tests/helpers/golden_generators.py"
+      - "tt_metal/tt-llk/tests/python_tests/helpers/test_config.py"
+      - "tt_metal/tt-llk/tests/python_tests/helpers/data_format_inference.py"
+      - "tt_metal/tt-llk/tests/python_tests/helpers/sfpu_domains.py"
+      - "tt_metal/tt-llk/tests/python_tests/helpers/stimuli_generator/**"
       - "tt_metal/tt-llk/tests/python_tests/test_unary_sfpu_ulp.py"
+      - "tt_metal/tt-llk/tests/sources/eltwise_unary_sfpu_test.cpp"
+      - "tt_metal/tt-llk/tests/helpers/include/sfpu_operations.h"
       - "tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml"
       - ".github/workflows/llk-sfpu-accuracy*.yaml"
   workflow_dispatch:

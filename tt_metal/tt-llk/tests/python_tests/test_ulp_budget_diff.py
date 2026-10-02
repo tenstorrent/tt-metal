@@ -20,6 +20,7 @@ from helpers.ulp_budget_diff import (
     _nonfinite_cells,
     compare,
     parse_table,
+    recorded_max,
     recorded_nonfinite,
     render_budget_diff,
     render_headroom,
@@ -279,6 +280,34 @@ def test_a_row_without_a_comment_inherits_its_op_header():
     assert raised.kind == "raised" and raised.remeasured
     (stale,) = [c for c in compare(base, table("sweep A", 4)) if c.is_regression]
     assert stale.kind == "raised" and not stale.remeasured
+
+
+def test_an_unquoted_yaml_boolean_names_the_same_cell_as_a_quoted_one():
+    """``dest: Yes`` is a YAML boolean; the registry maps it to the enum member
+    (test_a_quoted_and_an_unquoted_no_mean_the_same_thing). Keyed as "True" here, a
+    raise written that way would be reported against a cell that does not exist."""
+    quoted = parse_table(
+        'Abs:\n  - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 9}  # c\n'
+    )
+    bare = parse_table(
+        "Abs:\n  - {in: Float16_b, out: Float16_b, dest: Yes, max_ulp: 9}  # c\n"
+    )
+    assert set(quoted) == set(bare)
+    assert dict(next(iter(bare))[1])["dest"] == "Yes"
+
+
+def test_a_not_measurable_row_still_records_the_measurable_lanes_maximum():
+    """The emitter writes both numbers into one note; each reader takes its own, and
+    the finite lanes of a demoted cell stay judged."""
+    table = parse_table(
+        'I1:\n  - {in: Float16_b, out: Float32, dest: "No", metric: tolerance}  # not '
+        "measurable: 31120 lane(s) disagreeing with the golden about being finite "
+        "(golden -> result: x=91: inf -> -1.16e37); max 7 ULP over the 34159 measurable "
+        "lanes\n"
+    )
+    row = next(iter(table.values()))
+    assert recorded_nonfinite(row) == 31120
+    assert recorded_max(row) == 7
 
 
 def test_a_duplicated_cell_is_refused_rather_than_judged():
