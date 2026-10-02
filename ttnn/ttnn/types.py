@@ -122,7 +122,7 @@ compute_program_descriptor_hash = ttnn._ttnn.operations.generic.compute_program_
 TensorAccessorArgs = ttnn._ttnn.tensor_accessor_args.TensorAccessorArgs
 
 # Host-side multicast helper (counterpart of kernel_lib/mcast/kernel/mcast_pipe).
-attach_absent = ttnn._ttnn.mcast_host.attach_absent
+attach_absent_mcast = ttnn._ttnn.mcast_host.attach_absent_mcast
 TransferMode = ttnn._ttnn.mcast_host.TransferMode
 Mcast = ttnn._ttnn.mcast_host.Mcast
 McastCoreOrder = ttnn._ttnn.mcast_host.McastCoreOrder

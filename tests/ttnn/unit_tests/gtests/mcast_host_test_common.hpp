@@ -6,8 +6,8 @@
 #include <algorithm>
 #include <array>
 #include <vector>
-#include "ttnn/kernel_lib/mcast/host/mcast_host_impl.hpp"
-#include "ttnn/kernel_lib/mcast/mcast_compile_time_args.hpp"
+#include "ttnn/kernel_lib/mcast/host/mcast_impl.hpp"
+#include "ttnn/kernel_lib/mcast/mcast_protocol.hpp"
 #include "ttnn_test_fixtures.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
@@ -99,22 +99,21 @@ struct DecodedCompileTime {
 };
 
 inline DecodedCompileTime decode_emitted_ct(const std::vector<uint32_t>& ct, uint32_t base = 0, bool ids = true) {
-    // Independent literal v3 decoder; complete-block goldens below pin the bits
+    // Independent literal decoder; complete-block goldens below pin the bits
     // and optional-field order without using the production codec or its layout.
     DecodedCompileTime result;
     const uint32_t control = ct.at(base);
     if (control == 0) {
         return result;
     }
-    EXPECT_EQ(control & 15u, 3u);
     auto& m = result.metadata;
-    m.mcast.flags = (control >> 4) & 31u;
-    m.mcast.has_remote_receivers = (control >> 9) & 1u;
-    m.mcast.sender_mcast_mode = SenderMcastMode((control >> 10) & 7u);
-    m.mcast.rectangle_capacity = (control >> 13) & 3u;
-    m.kernel.roles = control & (1u << 17) ? 0xFFFFFFFFu : (control >> 15) & 3u;
-    m.kernel.capabilities = (control >> 18) & 3u;
-    m.coordinates.encoding = wire::SenderCoordinateEncoding((control >> 20) & 3u);
+    m.mcast.flags = control & 31u;
+    m.mcast.has_remote_receivers = (control >> 5) & 1u;
+    m.mcast.sender_mcast_mode = SenderMcastMode((control >> 6) & 7u);
+    m.mcast.rectangle_capacity = (control >> 9) & 3u;
+    m.kernel.roles = control & (1u << 13) ? 0xFFFFFFFFu : (control >> 11) & 3u;
+    m.kernel.capabilities = (control >> 14) & 3u;
+    m.coordinates.encoding = wire::SenderCoordinateEncoding((control >> 16) & 3u);
     auto next = [&]() { return ct.at(base + result.words++); };
     if (ids) {
         result.semaphores[0] = next();
@@ -125,18 +124,18 @@ inline DecodedCompileTime decode_emitted_ct(const std::vector<uint32_t>& ct, uin
             result.semaphores[2] = next();
         }
     }
-    m.mcast.remote_count_known = (control >> 22) & 1u;
+    m.mcast.remote_count_known = (control >> 18) & 1u;
     if (m.mcast.remote_count_known) {
         m.mcast.uniform_remote_count = next();
     }
-    const uint32_t ack = (control >> 24) & 3u;
+    const uint32_t ack = (control >> 20) & 3u;
     switch (ack) {
         case 1: m.mcast.ack_count = next(); break;
         case 2: m.mcast.ack_count = m.mcast.uniform_remote_count; break;
         case 3: m.mcast.ack_count = 0xFFFFFFFFu; break;
         default: m.mcast.ack_count = 0u; break;
     }
-    if (control & (1u << 23)) {
+    if (control & (1u << 19)) {
         m.mcast.rotating_span = next();
     }
     if (uint32_t(m.coordinates.encoding) != 0) {

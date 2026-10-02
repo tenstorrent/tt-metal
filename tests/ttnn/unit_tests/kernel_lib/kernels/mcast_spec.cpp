@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_spec.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_metal2.hpp"
 
 // Numeric IDs retain the legacy scope; native tokens preserve every supported scope.
 static_assert(std::is_same_v<decltype(dataflow_kernel_lib::detail::make_mcast_semaphore<3>()), Semaphore<>>);
@@ -22,9 +22,9 @@ static_assert(
 
 void kernel_main() {
     using namespace dataflow_kernel_lib;
-    constexpr auto channel = MCAST_SPEC_ARGS(channel);
-    constexpr auto second = MCAST_SPEC_ARGS(second);
-    constexpr auto absent = MCAST_SPEC_ARGS(absent);
+    constexpr auto channel = MCAST_ARGS(channel);
+    constexpr auto second = MCAST_ARGS(second);
+    constexpr auto absent = MCAST_ARGS(absent);
     static_assert(!absent.active);
     constexpr uint32_t rounds = get_arg(args::rounds);
     constexpr bool control = get_arg(args::control) != 0;

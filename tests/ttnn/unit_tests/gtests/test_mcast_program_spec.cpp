@@ -155,7 +155,7 @@ TEST_F(McastHostFixture, SpecAttachValidatesUniformVarargSchemaAndNormalizesOver
 
 TEST_F(McastHostFixture, SpecAbsentNeedsNoResourcesOrRunArgumentObject) {
     auto spec = spec_pair(3);
-    attach_absent(spec, "none", spec_targets);
+    attach_absent_mcast(spec, "none", spec_targets);
     EXPECT_TRUE(spec.semaphores.empty());
     for (const auto& kernel : spec.kernels) {
         EXPECT_EQ(kernel.compile_time_args.get("none_mcast_ct_base").value(), 2u);
@@ -167,7 +167,7 @@ TEST_F(McastHostFixture, SpecAbsentNeedsNoResourcesOrRunArgumentObject) {
             EXPECT_EQ(value, "std::nullptr_t");
         }
     }
-    EXPECT_ANY_THROW(attach_absent(spec, "none", spec_targets));
+    EXPECT_ANY_THROW(attach_absent_mcast(spec, "none", spec_targets));
 }
 
 TEST_F(McastHostFixture, SpecAttachAllowsOtherNocOnlyOnPureMulticastReceivers) {
@@ -247,7 +247,7 @@ void run_spec_device_contract(
     mcast.attach(spec, populated, "channel", targets);
     auto second = make_mcast(&device, {GroupInput(participants, {{0, 0}})}, McastConfig{.noc = noc});
     second.attach(spec, populated, "second", targets);
-    attach_absent(spec, "absent", targets);
+    attach_absent_mcast(spec, "absent", targets);
     // Named RT values may be declared after attach: generated get_vararg must use
     // the final named-argument offset, preserving both the caller prefix and helper slices.
     spec.kernels.front().runtime_arg_schema.runtime_arg_names = {"seed", "report_addr"};
@@ -296,39 +296,6 @@ void run_spec_device_contract(
 
 TEST_F(McastHostFixture, SpecDeviceSmoke) {
     run_spec_device_contract(*device_, NOC::NOC_0, false, false, false, false, true, false);
-}
-
-TEST_F(McastHostFixture, SpecDeviceOldTag) {
-    using namespace tt::tt_metal;
-    const std::array targets{m2::KernelSpecName{"old_tag"}};
-    m2::ProgramSpec spec{
-        .kernels =
-            {{.unique_id = targets.front(),
-              .source = m2::KernelSpec::SourceCode{R"(
-                #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_spec.hpp"
-                void kernel_main() { constexpr auto channel = MCAST_SPEC_ARGS(channel); }
-            )"},
-              .hw_config =
-                  m2::DataMovementHardwareConfig{
-                      .config_1xx =
-                          m2::DataMovementHardwareConfig::DataMovement1XXConfig{
-                              .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0}}}},
-        .work_units = {{.name = "old_tag", .kernels = {targets.front()}, .target_nodes = CoreCoord{0, 0}}}};
-    auto mcast = make_mcast(device_, {{grid({0, 0}, {1, 0}), {{0, 0}}}});
-    m2::ProgramRunArgs args;
-    mcast.attach(spec, args, "channel", targets);
-    const auto ct_base = spec.kernels.front().compile_time_args.get("channel_mcast_ct_base").value();
-    spec.kernels.front().advanced_options.compile_time_varargs[ct_base] = 2;
-    try {
-        auto workload = m2::MakeMeshWorkloadFromSpec(*device_, spec);
-        for (auto& [region, program] : workload.get_programs()) {
-            m2::SetProgramRunArgs(program, args);
-        }
-        tt::tt_metal::distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, true);
-        FAIL() << "The native decoder accepted an obsolete multicast tag";
-    } catch (const std::exception& error) {
-        EXPECT_NE(std::string(error.what()).find("Unsupported multicast wire tag"), std::string::npos);
-    }
 }
 
 TEST_F(McastHostFixture, SpecDeviceMatrix) {

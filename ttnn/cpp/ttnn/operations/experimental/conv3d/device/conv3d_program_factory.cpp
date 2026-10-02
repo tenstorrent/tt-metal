@@ -6,7 +6,7 @@
 #include "conv3d_program_factory.hpp"
 #include "conv3d_device_operation_types.hpp"
 #include "kernels/conv3d_gather_tuning.hpp"
-#include "ttnn/kernel_lib/mcast/host/mcast_host.hpp"
+#include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/constants.hpp>
@@ -1331,7 +1331,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         weights_mcast->attach(
             desc, "weights_mcast", std::array{std::ref(writer_desc)}, static_cast<uint32_t>(desc.semaphores.size()));
     } else {
-        mcast::attach_absent(writer_desc, "weights_mcast");
+        mcast::attach_absent_mcast(writer_desc, "weights_mcast");
     }
     desc.kernels.push_back(std::move(writer_desc));
 

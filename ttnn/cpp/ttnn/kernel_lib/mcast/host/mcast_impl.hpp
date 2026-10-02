@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "ttnn/kernel_lib/mcast/host/mcast_host.hpp"
+#include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 
 #include <array>
 #include <tt-metalium/program.hpp>
@@ -42,25 +42,30 @@ public:
     template <typename Args>
     void append_compile_time_args_to(Args& destination) const {
         require_program_bound_();
-        detail::append_args_to(destination, compile_time_args_(program_semaphore_ids_, argument_metadata_()));
+        append_args_to_(destination, compile_time_args_(program_semaphore_ids_, argument_metadata_()));
     }
 
     template <typename Args>
     void append_runtime_args_to(Args& destination, const tt::tt_metal::CoreCoord& core) const {
         require_program_bound_();
-        detail::append_args_to(destination, runtime_args_(core, argument_metadata_()));
+        append_args_to_(destination, runtime_args_(core, argument_metadata_()));
     }
-
-    McastArgumentOffsets append_kernel_args_to(
-        std::vector<uint32_t>& compile_time_args,
-        tt::tt_metal::KernelDescriptor::RuntimeArgs& runtime_args,
-        const tt::tt_metal::CoreRangeSet& placement) const;
 
     const tt::tt_metal::CoreRangeSet& participating_cores() const;
     tt::tt_metal::CoreRangeSet sender_only_cores() const;
 
 private:
     friend class Mcast;
+
+    template <typename Args>
+    static void append_args_to_(Args& destination, const std::vector<uint32_t>& args) {
+        if constexpr (requires { destination.append(args); }) {
+            destination.append(args);
+        } else {
+            destination.insert(destination.end(), args.begin(), args.end());
+        }
+    }
+
     void prepare_topology_() const;
     void prepare_arguments_() const;
     dataflow_kernel_lib::mcast_wire::ArgumentMetadata argument_metadata_(

@@ -60,11 +60,11 @@ set(TTNN_CORE_SRCS
 
 set(TTNNCPP_SRCS
     # FIXME: Move these out to appropriate sub targets
-    cpp/ttnn/kernel_lib/mcast/host/mcast_host.cpp
-    cpp/ttnn/kernel_lib/mcast/host/mcast_host_impl.cpp
-    cpp/ttnn/kernel_lib/mcast/host/program_bindings/mcast_program.cpp
-    cpp/ttnn/kernel_lib/mcast/host/program_bindings/mcast_descriptor.cpp
-    cpp/ttnn/kernel_lib/mcast/host/program_bindings/mcast_spec.cpp
+    cpp/ttnn/kernel_lib/mcast/host/mcast.cpp
+    cpp/ttnn/kernel_lib/mcast/host/mcast_impl.cpp
+    cpp/ttnn/kernel_lib/mcast/host/program_adapters/mcast_legacy_program_adapter.cpp
+    cpp/ttnn/kernel_lib/mcast/host/program_adapters/mcast_descriptor_adapter.cpp
+    cpp/ttnn/kernel_lib/mcast/host/program_adapters/mcast_spec_adapter.cpp
     cpp/ttnn/operations/compute_throttle_utils.cpp
     cpp/ttnn/operations/trace.cpp
     cpp/ttnn/graph/capture_program_config_registry.cpp

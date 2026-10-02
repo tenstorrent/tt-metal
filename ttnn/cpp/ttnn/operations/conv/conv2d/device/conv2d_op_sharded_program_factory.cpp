@@ -32,7 +32,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
-#include "ttnn/kernel_lib/mcast/host/mcast_host.hpp"
+#include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 
 namespace ttnn::prim {
 
@@ -1425,7 +1425,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     // Allocate weights resources after the operation's activation and split-reader semaphores.
     if (skip_weights_mcast) {
         // No receiver kernel exists when weights multicast is skipped.
-        ttnn::kernel_lib::host::attach_absent(writer_mcast_sender_desc, "weights_mcast");
+        ttnn::kernel_lib::host::attach_absent_mcast(writer_mcast_sender_desc, "weights_mcast");
     } else {
         const std::array weights_kernels{std::ref(writer_mcast_sender_desc), std::ref(writer_mcast_receiver_desc)};
         weights_mcast->attach(desc, "weights_mcast", weights_kernels, static_cast<uint32_t>(desc.semaphores.size()));
