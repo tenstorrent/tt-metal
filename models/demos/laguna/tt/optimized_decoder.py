@@ -987,10 +987,16 @@ class OptimizedDecoder(LightweightModule):
             wsel = ttnn.typecast(wsel, ttnn.bfloat16)
         return logits, idx, wsel
 
-    @staticmethod
-    def _dense_routing(cfg, dense):
+    def _dense_routing(self, cfg, dense):
         """Masked router scores [1,1,T,E] (fp32) -> normalized, scaled bf16 dense routing matrix."""
-        if cfg.norm_topk_prob:
+        if cfg.norm_topk_prob and "ones_ee_f32" in self.w:
+            # row sum broadcast to every column by one matmul with an all-ones [E, E]: ttnn.sum over dim 3 of
+            # the 1-row decode tensor is a FillPad of its tile padding + a reduce, two ops instead of one
+            rowsum = ttnn.matmul(
+                dense, self.w["ones_ee_f32"], compute_kernel_config=self._ck_router_precise, dtype=ttnn.float32
+            )
+            dense = ttnn.div(dense, rowsum)
+        elif cfg.norm_topk_prob:
             dense = ttnn.div(dense, ttnn.sum(dense, dim=3, keepdim=True))
         if cfg.routed_scaling != 1.0:
             dense = ttnn.multiply(dense, cfg.routed_scaling)

@@ -488,6 +488,8 @@ class MultichipDecoder(OptimizedDecoder):
             w["expert_iota_f32"] = rep_tt(
                 "expert_iota", lambda: torch.arange(E, dtype=torch.float32).reshape(1, 1, 1, E), ttnn.float32
             )
+            if cfg.norm_topk_prob:  # all-ones [E, E]: the router's row-sum-and-broadcast matmul (_dense_routing)
+                w["ones_ee_f32"] = rep_tt("ones_ee", lambda: torch.ones(1, 1, E, E), ttnn.float32)
             # For D>1, a mesh-sharded identity selects device d's contiguous local expert scores.
             # D=1 already owns every score, so avoid the large identity weight and selector matmul.
             if D > 1:
