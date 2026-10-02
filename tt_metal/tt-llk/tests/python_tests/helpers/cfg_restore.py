@@ -117,73 +117,37 @@ def thread_items(arch: ChipArchitecture) -> list:
     return [(0, a) for a in _thread_words(arch)]
 
 
-# L1 base/magic for the restore-mode plan trisc.cpp applies -- must match apply_plan_at() there.
+# L1 base/magic for the restore plan trisc.cpp's apply_restore_plan() applies.
 _INKERNEL_RESTORE_BASE = 0x1A000
-_INKERNEL_RESTORE_MAGIC = 0x52535431  # 'RST1'
-# L1 base/magic for the per-thread addr-mod plan -- must match trisc.cpp's apply_addrmod_restore().
-# Applied AFTER the restore plan above, so a real captured addr-mod value overwrites that plan's
-# reset-default-0 guess for the same addresses.
-_INKERNEL_ADDRMOD_RESTORE_BASE = 0x1C000
-_INKERNEL_ADDRMOD_RESTORE_MAGIC = 0x41525431  # 'ART1', must match trisc.cpp
+_INKERNEL_RESTORE_MAGIC = 0x43464731  # 'CFG1'
 
-# addr32 written via SETC16 (thread-private ThreadConfig) in real LLK code: the addr-mod section
-# regs and CFG_STATE_ID. Everything else defaults to the shared cfg_write port. (BH addr32.)
-_SETC16_ADDR32 = set(range(12, 55)) | {
-    0
-}  # ADDR_MOD_AB/DST/BIAS SEC0-7 span ~12..54; refine as needed
-
-
-def _port_for(addr32: int) -> int:
-    return 1 if addr32 in _SETC16_ADDR32 else 0
+# Tensix state space each entry targets -- must match trisc.cpp's RESTORE_SPACE_* constants.
+RESTORE_SPACE_CONFIG = 0
+RESTORE_SPACE_THREADCONFIG = 1
+RESTORE_SPACE_ADC_CH1X = 2
 
 
 def write_inkernel_restore(
     location: str, entries, *, device_id: int = 0, context=None
 ) -> int:
-    """Write a restore plan [(addr32, value[, port[, mask]]), ...] to L1 0x1A000.
+    """Write a restore plan to L1 0x1A000, applied by trisc.cpp before the victim's own init runs.
 
-    Replayed by trisc.cpp before the victim's own init runs, so a trial starts from the captured
-    residue without a per-trial tt-smi -r. port omitted -> inferred from _port_for; mask omitted
-    -> 0xFFFFFFFF, RMW'd on the shared port so unmasked firmware-owned bits are preserved.
+    Each entry is [space, addr32, v0, v1, v2, mask], fixed-width across all three Tensix state
+    spaces a kernel can leave residue in:
+      RESTORE_SPACE_CONFIG:       Config (shared, double-buffered CFG bus). v0 masked by `mask`,
+                                   RMW'd at addr32.
+      RESTORE_SPACE_THREADCONFIG: ThreadConfig (per-thread-banked: addr-mod, state id). v0/v1/v2
+                                   are the UNPACK/MATH/PACK values; each thread SETC16s only its own.
+      RESTORE_SPACE_ADC_CH1X:     address_counters channel1-X, outside Config/ThreadConfig
+                                   entirely. v0 is the unpacker value (UNPACK only), v1 is the
+                                   packer value (PACK only).
+    addr32/mask are ignored by spaces that don't use them.
     """
     words = [_INKERNEL_RESTORE_MAGIC, len(entries)]
-    for e in entries:
-        addr32, value = e[0], e[1]
-        port = e[2] if len(e) > 2 else _port_for(addr32)
-        mask = e[3] if len(e) > 3 else 0xFFFFFFFF
-        words += [addr32, value, port, mask]
+    for space, addr32, v0, v1, v2, mask in entries:
+        words += [space, addr32, v0, v1, v2, mask]
     write_words_to_device(
         location, _INKERNEL_RESTORE_BASE, words, device_id=device_id, context=context
-    )
-    return len(entries)
-
-
-def write_inkernel_addrmod_restore(
-    location: str, entries, *, ch1x=None, device_id: int = 0, context=None
-) -> int:
-    """Write a per-thread addr-mod restore plan [(addr32, v0, v1, v2), ...] to L1 0x1C000.
-
-    Each compiled TRISC applies only its own v_thread (see apply_addrmod_restore() in trisc.cpp).
-    ch1x, if given, is (unpacker0_val, packer_val) -- address_counters' channel1-X residue (see
-    snapshot_adc_ch1x) -- appended as two trailing words gated by an explicit has_ch1x header:
-    this L1 buffer is reused across trials, so trisc.cpp must never infer the trailer from
-    leftover bytes of a longer prior plan.
-    """
-    words = [
-        _INKERNEL_ADDRMOD_RESTORE_MAGIC,
-        len(entries),
-        1 if ch1x is not None else 0,
-    ]
-    for addr32, v0, v1, v2 in entries:
-        words += [addr32, v0, v1, v2]
-    if ch1x is not None:
-        words += [ch1x[0] & 0x3FFFF, ch1x[1] & 0x3FFFF]
-    write_words_to_device(
-        location,
-        _INKERNEL_ADDRMOD_RESTORE_BASE,
-        words,
-        device_id=device_id,
-        context=context,
     )
     return len(entries)
 
@@ -262,13 +226,11 @@ def snapshot_adc_ch1x(location: str, *, device_id: int = 0, context=None) -> dic
 def maybe_restore_cfg_from_env(location: str, *, device_id: int = 0, context=None):
     """Restore / snapshot CFG based on env vars. No-op (returns None) unless one is set.
 
-    LLK_CFG_RESTORE=<path>          JSON {entries:[[addr32,value,port,mask]..]} ->
-                                    write_inkernel_restore.
-    LLK_CFG_ADDRMOD_RESTORE=<path>  JSON {entries:[[addr32,v0,v1,v2]..], ch1x:[unpacker,packer]}
-                                    -> write_inkernel_addrmod_restore. ch1x is optional.
-    LLK_CFG_SNAPSHOT=<path>         Dump every kernel-owned word to <path> as JSON; do not
-                                    restore. Run once on a device where the kernel passes --
-                                    that run's pre-kernel CFG is the pair-sweep baseline.
+    LLK_CFG_RESTORE=<path>   JSON {entries:[[space,addr32,v0,v1,v2,mask]..]} ->
+                             write_inkernel_restore.
+    LLK_CFG_SNAPSHOT=<path>  Dump every kernel-owned word to <path> as JSON; do not restore. Run
+                             once on a device where the kernel passes -- that run's pre-kernel CFG
+                             is the pair-sweep baseline.
     """
     arch = get_chip_architecture()
 
@@ -281,19 +243,6 @@ def maybe_restore_cfg_from_env(location: str, *, device_id: int = 0, context=Non
             location, rentries, device_id=device_id, context=context
         )
         msg = f"[CFG-RESTORE] restore entries={nr} -> L1 0x{_INKERNEL_RESTORE_BASE:X}"
-        print(msg, file=sys.stderr, flush=True)
-        logger.warning(msg)
-
-    addrmod_restore_path = os.environ.get("LLK_CFG_ADDRMOD_RESTORE")
-    if addrmod_restore_path:
-        with open(addrmod_restore_path) as f:
-            arplan = json.load(f)
-        arentries = [tuple(e) for e in arplan["entries"]]
-        ch1x = tuple(arplan["ch1x"]) if arplan.get("ch1x") is not None else None
-        nar = write_inkernel_addrmod_restore(
-            location, arentries, ch1x=ch1x, device_id=device_id, context=context
-        )
-        msg = f"[CFG-RESTORE] addrmod restore entries={nar} -> L1 0x{_INKERNEL_ADDRMOD_RESTORE_BASE:X}"
         print(msg, file=sys.stderr, flush=True)
         logger.warning(msg)
 

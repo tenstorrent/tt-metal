@@ -70,45 +70,26 @@ void copy_runtimes_from_L1(struct RuntimeParams* temp_args)
 // The dprint L1 region is reused for this... until we get a better memory map.
 #ifndef LLK_DEVICE_PRINT_BUFFER_BASE
 static constexpr std::uint32_t LLK_RESTORE_PLAN_BASE  = 0x1A000;
-static constexpr std::uint32_t LLK_RESTORE_PLAN_MAGIC = 0x52535431u; // "RST1"
+static constexpr std::uint32_t LLK_RESTORE_PLAN_MAGIC = 0x43464731u; // "CFG1"
 
-// Apply the passed config plan that starts at BASE.
-// The plan is stored as [magic][N][data], where data is N x [addr32, value, port, mask].
-static inline void apply_plan_at(std::uint32_t base, std::uint32_t magic)
+// A kernel can leave residue in three distinct Tensix state spaces: Config (shared,
+// double-buffered CFG bus), ThreadConfig (addr-mod/state-id, banked per thread), and ADC
+// channel1-X (address_counters, outside Config/ThreadConfig entirely). Each entry here targets
+// one of them, tagged by `space`, instead of each space getting its own plan/buffer/magic.
+static constexpr std::uint32_t RESTORE_SPACE_CONFIG       = 0;
+static constexpr std::uint32_t RESTORE_SPACE_THREADCONFIG = 1;
+static constexpr std::uint32_t RESTORE_SPACE_ADC_CH1X     = 2;
+static constexpr std::uint32_t RESTORE_ENTRY_WORDS        = 6;
+
+// Plan is [magic][N][data], data is N x [space, addr32, v0, v1, v2, mask]:
+//   space CONFIG:       v0 masked by `mask`, RMW'd at addr32 (addr32/mask unused by other spaces).
+//   space THREADCONFIG: v0/v1/v2 are the UNPACK/MATH/PACK values; each thread SETC16s only its own.
+//   space ADC_CH1X:     v0 is the unpacker value (applied by UNPACK only), v1 is the packer value
+//                       (applied by PACK only).
+static inline void apply_restore_plan()
 {
-    volatile std::uint32_t* plan = reinterpret_cast<volatile std::uint32_t*>(base);
-    if (plan[0] != magic)
-    {
-        return;
-    }
-    const std::uint32_t n = plan[1];
-    for (std::uint32_t i = 0; i < n; i++)
-    {
-        const std::uint32_t a    = plan[2 + 4 * i + 0];
-        const std::uint32_t v    = plan[2 + 4 * i + 1];
-        const std::uint32_t port = plan[2 + 4 * i + 2];
-        const std::uint32_t mask = plan[2 + 4 * i + 3];
-        if (port == 1)
-        {
-            TT_SETC16(a, v & mask & 0xFFFF);
-        }
-        else
-        {
-            const std::uint32_t cur = ckernel::cfg_read(a);
-            ckernel::cfg_write(a, (cur & ~mask) | (v & mask));
-        }
-    }
-}
-
-// Plan format is [magic][N][has_ch1x][data], where data is N x [addr32, v_t0, v_t1, v_t2],
-// and, if has_ch1x is set, [adc_ch1x_unpacker][adc_ch1x_packer] at the very end.
-static constexpr std::uint32_t LLK_RESTORE_ADDRMOD_BASE  = 0x1C000;
-static constexpr std::uint32_t LLK_RESTORE_ADDRMOD_MAGIC = 0x41525431u; // 'ART1'
-
-static inline void apply_addrmod_restore()
-{
-    volatile std::uint32_t* plan = reinterpret_cast<volatile std::uint32_t*>(LLK_RESTORE_ADDRMOD_BASE);
-    if (plan[0] != LLK_RESTORE_ADDRMOD_MAGIC)
+    volatile std::uint32_t* plan = reinterpret_cast<volatile std::uint32_t*>(LLK_RESTORE_PLAN_BASE);
+    if (plan[0] != LLK_RESTORE_PLAN_MAGIC)
     {
         return;
     }
@@ -118,33 +99,38 @@ static inline void apply_addrmod_restore()
     constexpr std::uint32_t my_thread = 1;
 #elif defined(LLK_TRISC_PACK)
     constexpr std::uint32_t my_thread = 2;
-#else
-    return;
 #endif
-    const std::uint32_t n        = plan[1];
-    const std::uint32_t has_ch1x = plan[2];
+    const std::uint32_t n = plan[1];
     for (std::uint32_t i = 0; i < n; i++)
     {
-        const std::uint32_t a = plan[3 + 4 * i + 0];
-        const std::uint32_t v = plan[3 + 4 * i + 1 + my_thread];
-        TT_SETC16(a, v & 0xFFFF);
-    }
-    if (!has_ch1x)
-    {
-        return;
-    }
-#if defined(LLK_TRISC_UNPACK)
-    // By unpacker_addr_counter_init, we restore only UNP_A.
-    TT_SETADCXY(ckernel::p_setadc::UNP_A, 0, plan[3 + 4 * n + 0], 0, 0, 0b0100);
-#elif defined(LLK_TRISC_PACK)
-    TT_SETADCXY(ckernel::p_setadc::PAC, 0, plan[3 + 4 * n + 1], 0, 0, 0b0100);
+        const volatile std::uint32_t* e = &plan[2 + RESTORE_ENTRY_WORDS * i];
+        const std::uint32_t space       = e[0];
+        const std::uint32_t a           = e[1];
+        if (space == RESTORE_SPACE_CONFIG)
+        {
+            const std::uint32_t mask = e[5];
+            const std::uint32_t cur  = ckernel::cfg_read(a);
+            ckernel::cfg_write(a, (cur & ~mask) | (e[2] & mask));
+        }
+#if defined(LLK_TRISC_UNPACK) || defined(LLK_TRISC_MATH) || defined(LLK_TRISC_PACK)
+        else if (space == RESTORE_SPACE_THREADCONFIG)
+        {
+            TT_SETC16(a, e[2 + my_thread] & 0xFFFF);
+        }
 #endif
-}
-
-static inline void apply_restore_plan()
-{
-    apply_plan_at(LLK_RESTORE_PLAN_BASE, LLK_RESTORE_PLAN_MAGIC);
-    apply_addrmod_restore();
+#if defined(LLK_TRISC_UNPACK)
+        else if (space == RESTORE_SPACE_ADC_CH1X)
+        {
+            // By unpacker_addr_counter_init, we restore only UNP_A.
+            TT_SETADCXY(ckernel::p_setadc::UNP_A, 0, e[2], 0, 0, 0b0100);
+        }
+#elif defined(LLK_TRISC_PACK)
+        else if (space == RESTORE_SPACE_ADC_CH1X)
+        {
+            TT_SETADCXY(ckernel::p_setadc::PAC, 0, e[3], 0, 0, 0b0100);
+        }
+#endif
+    }
 }
 
 #endif

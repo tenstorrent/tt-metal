@@ -330,10 +330,7 @@ def main():
             for k, nodeid in zip(victims, nodeids):
                 if x["key"] == k["key"] and not args.self_pairs:
                     continue
-                plan_map[nodeid] = {
-                    "restore": x["restore_path"],
-                    "addrmod_restore": x.get("addrmod_restore_path"),
-                }
+                plan_map[nodeid] = x["restore_path"]
             if not plan_map:
                 continue
             round_nodeids = list(plan_map.keys())

@@ -36,6 +36,12 @@ _ADDR_MOD_ADDR32 = {
 }
 _BOOT_OWNED = {"blackhole": set()}
 
+# Tensix state space each restore entry targets -- must match trisc.cpp's RESTORE_SPACE_*
+# constants and cfg_restore.py's copy of the same tags.
+_RESTORE_SPACE_CONFIG = 0
+_RESTORE_SPACE_THREADCONFIG = 1
+_RESTORE_SPACE_ADC_CH1X = 2
+
 # addr32 2 bits 22-31 are firmware-owned: DISABLE_RISC_BP_Disable_{main,trisc,ncrisc} and their
 # _bmp_clear_* siblings (cfg_defines.h), all packed into that top range. Masked out of restore so
 # we never write firmware-owned bits.
@@ -51,8 +57,8 @@ _RESTORE_MASK_OVERRIDE = {2: (1 << _DISABLE_RISC_BP_SHAMT) - 1}
 def build_restore_entries(arch, pristine_path):
     """Restore plan from a captured pristine snapshot (host snapshot_cfg JSON: [[state,addr32,val]..]).
 
-    State-0 cfg-bus words become port-0 full-word writes, re-establishing the shared banked
-    baseline. Addr-mod words become port-1 SETC16 writes of 0, the reset default.
+    State-0 cfg-bus words become Config-space full-word entries, re-establishing the shared banked
+    baseline. Addr-mod words become ThreadConfig entries writing 0, the reset default.
 
     Config[state][addr32] (the shared double-buffered CFG bus) and ThreadConfig[thread][idx]
     (a separate per-thread-banked array, see BackendConfiguration.md) are different address
@@ -61,7 +67,8 @@ def build_restore_entries(arch, pristine_path):
     cfg_read()/cfg_write() can only reach Config. RISCV stores can't reach ThreadConfig at all;
     only SETC16 can. So there is no captured addr-mod value to replay here -- 0 is a guess, not
     a measurement. Replaying whatever Config-space value happens to share that addr32 number
-    instead breaks more victims than this guess does.
+    instead breaks more victims than this guess does. build_addrmod_restore_entries' real captured
+    values, appended after these, overwrite this guess when a caller has them.
     """
     with open(pristine_path) as f:
         snap = json.load(f)
@@ -70,24 +77,38 @@ def build_restore_entries(arch, pristine_path):
     for state, addr32, val in snap:
         if state != 0 or addr32 >= n or addr32 in _BOOT_OWNED[arch]:
             continue
-        entries.append([addr32, val, 0, _RESTORE_MASK_OVERRIDE.get(addr32, 0xFFFFFFFF)])
+        mask = _RESTORE_MASK_OVERRIDE.get(addr32, 0xFFFFFFFF)
+        entries.append([_RESTORE_SPACE_CONFIG, addr32, val, 0, 0, mask])
     for a in _ADDR_MOD_ADDR32.get(arch, []):
-        entries.append([a, 0, 1, 0xFFFF])  # thread-private addr-mod -> reset-default 0
+        entries.append(
+            [_RESTORE_SPACE_THREADCONFIG, a, 0, 0, 0, 0]
+        )  # reset-default guess
     return entries
 
 
-def build_addrmod_restore_entries(addrmod_path):
-    """Per-thread addr-mod restore plan from a captured snapshot (host snapshot_addr_mod JSON:
-    [[thread, addr32, val], ...]). Groups by addr32 into [addr32, v_thread0, v_thread1, v_thread2]
-    quads for write_inkernel_addrmod_restore(); a thread with no captured entry for an address
-    defaults to 0 (reset-default), matching build_restore_entries' fallback for the same address.
+def build_addrmod_restore_entries(addrmod_path, ch1x=None):
+    """Real per-thread addr-mod restore entries from a captured snapshot (host snapshot_addr_mod
+    JSON: [[thread, addr32, val], ...]), plus an optional ADC channel1-X entry.
+
+    A thread with no captured entry for an address defaults to 0 (reset-default), matching
+    build_restore_entries' fallback for the same address. ch1x, if given, is
+    (unpacker0_val, packer_val) -- address_counters' channel1-X residue (see snapshot_adc_ch1x).
+    Entries here are meant to be appended after build_restore_entries' output: applied in that
+    order, a real captured value here overwrites that plan's reset-default-0 guess for the same
+    address.
     """
     with open(addrmod_path) as f:
         snap = json.load(f)
     by_addr = {}
     for thread, addr32, val in snap:
         by_addr.setdefault(addr32, [0, 0, 0])[thread] = val
-    return [[addr32, *by_addr[addr32]] for addr32 in sorted(by_addr)]
+    entries = [
+        [_RESTORE_SPACE_THREADCONFIG, addr32, *by_addr[addr32], 0]
+        for addr32 in sorted(by_addr)
+    ]
+    if ch1x is not None:
+        entries.append([_RESTORE_SPACE_ADC_CH1X, 0, ch1x[0], ch1x[1], 0, 0])
+    return entries
 
 
 # Embedded verbatim, not imported: written to a generated plugin dir at runtime so `-p
@@ -684,30 +705,22 @@ def main():
     plan_map = {}
     for r in representatives:
         entries = build_restore_entries(args.arch, r["snapshot_path"])
-        restore_path = r["snapshot_path"].replace(".snapshot.json", ".restore.json")
-        with open(restore_path, "w") as f:
-            json.dump({"entries": entries}, f)
-        r["restore_path"] = restore_path
 
         addrmod_path = r["snapshot_path"].replace(".snapshot.json", ".addrmod.json")
-        addrmod_entries = build_addrmod_restore_entries(addrmod_path)
         ch1x_path = addrmod_path.replace(".addrmod.json", ".adc_ch1x.json")
         ch1x = None
         if os.path.exists(ch1x_path):
             with open(ch1x_path) as f:
                 ch1x_snap = json.load(f)
             ch1x = [ch1x_snap["unpacker"], ch1x_snap["packer"]]
-        addrmod_restore_path = addrmod_path.replace(
-            ".addrmod.json", ".addrmod_restore.json"
-        )
-        with open(addrmod_restore_path, "w") as f:
-            json.dump({"entries": addrmod_entries, "ch1x": ch1x}, f)
-        r["addrmod_restore_path"] = addrmod_restore_path
+        entries += build_addrmod_restore_entries(addrmod_path, ch1x=ch1x)
 
-        plan_map[r["test_id"]] = {
-            "restore": restore_path,
-            "addrmod_restore": addrmod_restore_path,
-        }
+        restore_path = r["snapshot_path"].replace(".snapshot.json", ".restore.json")
+        with open(restore_path, "w") as f:
+            json.dump({"entries": entries}, f)
+        r["restore_path"] = restore_path
+
+        plan_map[r["test_id"]] = restore_path
     plan_map_path = os.path.join(args.out_dir, "gate_plan_map.json")
     with open(plan_map_path, "w") as f:
         json.dump(plan_map, f)
@@ -755,7 +768,6 @@ def main():
                 "usable": gate_v == PASS,
                 "snapshot_path": r["snapshot_path"],
                 "restore_path": r["restore_path"],
-                "addrmod_restore_path": r["addrmod_restore_path"],
             }
         )
     with open(args.manifest, "w") as f:
