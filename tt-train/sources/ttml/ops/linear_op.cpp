@@ -4,6 +4,8 @@
 
 #include "linear_op.hpp"
 
+#include <stdexcept>
+
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
@@ -18,11 +20,49 @@ using namespace tt::constants;
 
 namespace ttml::ops {
 
+namespace {
+
+void validate_linear_contract(
+    const autograd::TensorPtr& tensor, const autograd::TensorPtr& weight, const autograd::TensorPtr& bias) {
+    const auto& input_shape = tensor->get_value().logical_shape();
+    const auto& weight_shape = weight->get_value().logical_shape();
+
+    if (weight_shape.rank() < 2U || weight_shape.rank() > 4U) {
+        throw std::runtime_error("linear_op expects weight rank 2 through 4 with singleton leading dimensions.");
+    }
+    for (uint32_t dim = 0; dim < weight_shape.rank() - 2U; ++dim) {
+        if (weight_shape[dim] != 1U) {
+            throw std::runtime_error("linear_op expects weight to have singleton leading dimensions.");
+        }
+    }
+    if (input_shape.rank() < 1U || weight_shape[-1] != input_shape[-1]) {
+        throw std::runtime_error("linear_op expects weight[-1] to match input[-1].");
+    }
+
+    if (bias != nullptr) {
+        const auto& bias_shape = bias->get_value().logical_shape();
+        if (bias_shape.rank() < 1U || bias_shape.rank() > 4U) {
+            throw std::runtime_error("linear_op expects bias rank 1 through 4 with singleton leading dimensions.");
+        }
+        for (uint32_t dim = 0; dim < bias_shape.rank() - 1U; ++dim) {
+            if (bias_shape[dim] != 1U) {
+                throw std::runtime_error("linear_op expects bias to have singleton leading dimensions.");
+            }
+        }
+        if (bias_shape[-1] != weight_shape[-2]) {
+            throw std::runtime_error("linear_op expects bias[-1] to match weight[-2].");
+        }
+    }
+}
+
+}  // namespace
+
 void ttnn_linear_backward(
     const autograd::TensorPtr& tensor,
     const autograd::TensorPtr& weight,
     const autograd::TensorPtr& bias,
     const autograd::TensorPtr& out) {
+    validate_linear_contract(tensor, weight, bias);
     const auto& tensor_value = tensor->get_value();
     auto volume_without_features =
         tensor_value.logical_volume() / static_cast<uint64_t>(tensor_value.logical_shape()[-1]);
@@ -54,6 +94,7 @@ void moreh_linear_backward(
     const autograd::TensorPtr& weight,
     const autograd::TensorPtr& bias,
     const autograd::TensorPtr& out) {
+    validate_linear_contract(tensor, weight, bias);
     auto tensor_grad = ttnn::empty_like(tensor->get_value());
     auto weight_grad = ttnn::empty_like(weight->get_value());
 
@@ -89,6 +130,7 @@ void moreh_linear_backward(
 
 autograd::TensorPtr linear_op(
     const autograd::TensorPtr& tensor, const autograd::TensorPtr& weight, const autograd::TensorPtr& bias) {
+    validate_linear_contract(tensor, weight, bias);
     auto out = autograd::create_tensor();
 
     const auto grid_size = tensor->get_value().device()->compute_with_storage_grid_size();

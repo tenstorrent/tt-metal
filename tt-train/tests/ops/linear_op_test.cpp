@@ -7,6 +7,9 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <optional>
+#include <stdexcept>
+#include <string>
 
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
@@ -23,6 +26,34 @@ protected:
         ttml::autograd::ctx().close_device();
     }
 };
+
+namespace {
+
+ttml::autograd::TensorPtr make_tensor(const ttnn::Shape& shape) {
+    auto tensor = ttml::autograd::create_tensor();
+    ttml::init::uniform_init(tensor, shape, ttml::init::UniformRange{-0.1F, 0.1F});
+    return tensor;
+}
+
+void expect_linear_contract_error(
+    const ttnn::Shape& input_shape,
+    const ttnn::Shape& weight_shape,
+    const std::optional<ttnn::Shape>& bias_shape,
+    const std::string& expected_message) {
+    auto input = make_tensor(input_shape);
+    auto weight = make_tensor(weight_shape);
+    auto bias = bias_shape.has_value() ? make_tensor(*bias_shape) : nullptr;
+
+    try {
+        (void)ttml::ops::linear_op(input, weight, bias);
+        FAIL() << "linear_op accepted an unsupported parameter shape";
+    } catch (const std::runtime_error& error) {
+        EXPECT_NE(std::string(error.what()).find(expected_message), std::string::npos) << error.what();
+    }
+    ttml::autograd::ctx().reset_graph();
+}
+
+}  // namespace
 
 void compare_tensors(const ttnn::Tensor& t1, const ttnn::Tensor& t2, float eps) {
     ASSERT_EQ(t1.logical_shape(), t2.logical_shape());
@@ -101,6 +132,52 @@ TEST_F(LinearOpTest, TTNNLargeLinearOpWithBias) {
     uint32_t dim = 4096;
     uint32_t batch = 32;  // it works with batch = 1, please try to check from 4 to 64
     EXPECT_NO_FATAL_FAILURE(test_linear(batch, 4 * dim));
+}
+
+TEST_F(LinearOpTest, SharedRank4ParametersRemainSupported) {
+    auto input = make_tensor(ttnn::Shape({2, 1, 32, 32}));
+    auto weight = make_tensor(ttnn::Shape({1, 1, 64, 32}));
+    auto bias = make_tensor(ttnn::Shape({1, 1, 1, 64}));
+
+    auto output_with_bias = ttml::ops::linear_op(input, weight, bias);
+    EXPECT_EQ(output_with_bias->get_value().logical_shape(), ttnn::Shape({2, 1, 32, 64}));
+
+    auto output_without_bias = ttml::ops::linear_op(input, weight, nullptr);
+    EXPECT_EQ(output_without_bias->get_value().logical_shape(), ttnn::Shape({2, 1, 32, 64}));
+    ttml::autograd::ctx().reset_graph();
+}
+
+TEST_F(LinearOpTest, RejectsNonSingletonWeightPrefixes) {
+    const auto shared_bias = ttnn::Shape({1, 1, 1, 64});
+
+    expect_linear_contract_error(
+        ttnn::Shape({2, 1, 32, 32}),
+        ttnn::Shape({2, 1, 64, 32}),
+        std::nullopt,
+        "weight to have singleton leading dimensions");
+    expect_linear_contract_error(
+        ttnn::Shape({2, 1, 32, 32}),
+        ttnn::Shape({2, 1, 64, 32}),
+        shared_bias,
+        "weight to have singleton leading dimensions");
+    expect_linear_contract_error(
+        ttnn::Shape({1, 2, 32, 32}),
+        ttnn::Shape({1, 2, 64, 32}),
+        shared_bias,
+        "weight to have singleton leading dimensions");
+}
+
+TEST_F(LinearOpTest, RejectsNonSharedBias) {
+    expect_linear_contract_error(
+        ttnn::Shape({2, 1, 32, 32}),
+        ttnn::Shape({1, 1, 64, 32}),
+        ttnn::Shape({2, 1, 1, 64}),
+        "bias to have singleton leading dimensions");
+    expect_linear_contract_error(
+        ttnn::Shape({2, 1, 32, 32}),
+        ttnn::Shape({1, 1, 64, 32}),
+        ttnn::Shape({1, 1, 32, 64}),
+        "bias to have singleton leading dimensions");
 }
 
 // Currently raises SEGFAULT
