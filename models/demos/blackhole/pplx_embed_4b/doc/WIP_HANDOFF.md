@@ -100,6 +100,25 @@ latency, not math. tt-llk perf harness: `tt_metal/tt-llk/tests/.venv` (requireme
 symlinked to `runtime/sfpi` (same 7.80.0 build), run by node id with `TT_VISIBLE_DEVICES=<chip>`; results land in
 `tt_metal/tt-llk/perf_data/runs/local-*/*.parquet` (per tile = TILE_LOOP / (loop_factor × tile_cnt)).
 
+**Gap to achievable by category (artifact version 30, `profile_page.py` `GAP_LADDER`).** Device-kernel-time ablation
+ladders per op group at bs16 / bs32 (`bench_mm_gap_ladder.py` for the matmuls; SDPA variant trees; heads / add+RMSNorm
+ablation benches), ms over the replay:
+
+| category | bs16 | bs32 |
+|---|---|---|
+| inits, handshakes, blocking (matmul compute only above 18.0 cyc/tile-product; custom ops' handshakes-only) | 10.9 | 16.1 |
+| data movement not hidden | 8.7 | 20.2 |
+| compute above the achievable rate (heads, add+RMSNorm, SDPA) | 7.1 | 13.8 |
+| extra passes (FF1+FF3 partial-sum add) | 2.5 | 5.1 |
+| SFPU not hidden (SwiGLU, exp) | 2.0 | 4.3 |
+| cross-core exchange (add+RMSNorm) | 0.6 | 0.6 |
+| in-model vs standalone, small ops | 1.1 | 0.4 |
+| host / dispatch (cold - device) | 1.2 | 12.6 |
+
+bs32's add+RMSNorm DM (8.4 ms, its DRAM sum / a traffic) and heads compute (7.8 ms) are the largest cells. The plain
+matmuls' end-of-block copy costs ~0 (QKV's 2.0-3.0 ms is structure, not the copy). bs32 cold - device is 12.6 ms (bs16
+1.2): host / dispatch at bs32 is worth a look.
+
 Why 89%: `bench_ff13_fused_ablate.py` / `bench_mm_ablate.py` at today's configs (blocks from `capture_qkv_call.py`:
 FF13 4,40,8 1×8 at bs16 and bs32, QKV / FF2 / WO 8,8,8 1×8, bs32 QKV as 4 chunks of M=4096) put every batched matmul's
 compute-only floor at 78-89% of 663.6 TFLOP/s (FF2 bs32 589, FF13 no SFPU / no add 566 / 576, WO 545 / 570, QKV 517 /
