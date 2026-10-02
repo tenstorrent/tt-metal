@@ -25,7 +25,7 @@ Two layers of framing sit between line rate and payload.
 
 Ethernet packets run from 16 B to 1500 B. Each carries upwards of 50 B of headers, FEC and CRC. A payload larger than 1500 B is fragmented into several packets, and each one pays that overhead again.
 
-The fabric adds its own header on top: 48 B for 1D routing, 80 to 128 B for 2D. The payload behind it defaults to 4352 B, or four `bfloat8_b` tiles. It caps at 7616 B (7 `bfloat8_b` tiles) on Wormhole and 15232 B (14 `bfloat8_b` tiles) on Blackhole.
+The fabric adds its own header on top: 48 B for 1D routing (64 B beyond 16 hops), 80 to 128 B for 2D. The payload behind it defaults to 4352 B, or four `bfloat8_b` tiles. It caps at 7616 B (7 `bfloat8_b` tiles) on Wormhole and 15232 B (14 `bfloat8_b` tiles) on Blackhole.
 
 For a fabric payload of `P` bytes behind a header of `H`:
 
@@ -49,7 +49,7 @@ Several things cut a packet short. A scatter write carries at most four segments
 
 `num_links` selects routing planes per direction. The usable count is the minimum across every hop on the axis, so the weakest hop sets it for the whole collective.
 
-Some systems do not attach every device to the host. There, remote devices are reached over an ethernet tunnel, and one routing plane per tunneled direction is reserved for fast dispatch. Where every device is host-attached, nothing is reserved. Two systems with identical cabling can therefore offer different link counts, and one system can differ between its axes. Any bandwidth figure must state the count it was normalized by.
+Some systems do not attach every device to the host. There, remote devices are reached over an ethernet tunnel, and every device on the tunnel (the host-attached one included) reserves one routing plane per direction for dispatch. Where every device is host-attached, nothing is reserved. Two systems with identical cabling can therefore offer different link counts, and one system can differ between its axes. Any bandwidth figure must state the count it was normalized by.
 
 ### Bytes through the bottleneck link
 
@@ -239,14 +239,14 @@ In our data, every curve keeps falling as size shrinks, and none of them flatten
 
 **The ramp.** Fixed costs amortize as the payload grows. In our data, the floor-plus-ceiling model predicts `all_gather` on a line within about 2% at typical sizes, and within 13% in the ramp, on both machines. `reduce_scatter` runs slower than `all_gather`'s model: up to 35% at large sizes, and up to 90% at small sizes on a line. On a line, it passes data through a worker at every hop, which adds and forwards it. So each hop costs about twice as much as in `all_gather`.
 
-**Steps in the ramp.** Worker cores per link and synchronization granularity are chosen by size-thresholded heuristics, so bandwidth can step or dip where a threshold sits.
+**Steps in the ramp.** Worker cores per link, synchronization granularity and, for some ops, the algorithm itself are chosen by size-thresholded heuristics, so bandwidth can step or dip where a threshold sits.
 
 **The asymptote.** Fixed costs are negligible here. In our data, on Wormhole, lines flatten at 84–94% of line rate, close to the payload ceiling, and rings at 66–83%. On Blackhole topology makes no difference: lines reach 66–96% and rings 68–95%. L1 versus DRAM rules out memory hierarchy, which leaves the transfer pipeline: packet fill, worker count, and how well the implementation keeps the link fed.
 
 **Line versus ring.** A ring halves both the bytes per link and the distance, so at eight devices it should finish twice as fast. In our data, Blackhole reaches that: every collective lands within a few percent of 2×. Wormhole does not, running 1.5 to 1.8 times faster. Besides the fabric cost of a ring, the ops behave differently there:
 
-- `all_gather` relays each chunk through worker cores, hop by hop. On a line it multicasts, and the routers forward.
-- `reduce_scatter` synchronizes with its neighbor every 4 chunks on a ring, against every 20 on a line.
+- On a ring, `all_gather` relays each chunk through worker cores, hop by hop, past the smallest sizes. On a line it multicasts, and the routers forward.
+- `reduce_scatter` synchronizes with its neighbor every 4 chunks or fewer on a ring, against 20 or fewer on a line. For small tensors on a ring, it runs a one-shot direct algorithm instead.
 - `all_reduce` is a reduce-scatter followed by an all-gather, so it inherits both.
 
 ## All data
