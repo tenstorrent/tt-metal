@@ -51,9 +51,10 @@ Prior bounded evidence is not a single all-five result:
 Latest bounded probe: `local_sympy_old_bfp8_repeat_guarded_seed9472`, started
 **10:12:50**, ends at1200.440s with reward1 but no submission. Two repeat
 advisories, zero late actions, one cancelled upstream request; not promoted.
-Next diagnostic is a fresh local sklearn control followed by the existing
-one-time generic submission review, capped900s each. No task-specific hints.
-Local server`gemma4-eval-history-limit` is idle and exclusively owned.
+Fresh local sklearn control submits in473.752s, reward0, same missing-attribute
+failure. The existing one-time generic submission-review candidate starts
+10:53:02, cap900s; no task-specific hints. Local server
+`gemma4-eval-history-limit` is exclusively owned by this bounded probe.
 
 New default-off harness repairs at TTI**4fcfdcfb** stop owned container processes
 before verification and cancel abandoned upstream requests.58 host tests,
