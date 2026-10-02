@@ -88,6 +88,12 @@ inline void _calculate_reciprocal_internal_(const int iterations) {
             out = sfpu_reciprocal_iter<2>(in);
         } else {
             out = sfpu_reciprocal_iter<1>(in);
+            // Incorporate lower-error rounding logic for correctly rounded 0-ULP BF16 reciprocal
+            sfpi::vUInt in_bits = sfpi::as<sfpi::vUInt>(in);
+            sfpi::vUInt out_bits = sfpi::as<sfpi::vUInt>(out);
+            sfpi::vUInt adj = (in_bits ^ out_bits) & 0x00008000;
+            out_bits -= adj;
+            out = sfpi::as<sfpi::vFloat>(out_bits);
             out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = out;
