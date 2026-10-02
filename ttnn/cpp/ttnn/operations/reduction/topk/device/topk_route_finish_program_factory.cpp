@@ -43,6 +43,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
+#include <algorithm>
 #include <limits>
 
 using namespace tt::constants;
@@ -95,10 +96,7 @@ FinishWorkSplit compute_work_split(const Tensor& input, const Tensor& indices, u
     split.row_tiles_per_batch = padded[-2] / TILE_HEIGHT;
     split.k_rounded = indices.logical_shape()[-1];
     split.k_tiles = tt::div_up(split.k_rounded, TILE_WIDTH);
-    // A core's time is the gather latency of one unit, so whenever the single faces fit the grid hand
-    // them out instead of the half tile units and halve that latency.
-    const uint32_t half_units = split.total_tile_rows * split.k_tiles * 2;
-    split.units_per_tile = 2 * half_units <= num_cores ? 4 : 2;
+    split.units_per_tile = finish_units_per_tile(input, indices, num_cores);
     split.total_units = split.total_tile_rows * split.k_tiles * split.units_per_tile;
     split.index_is_u32 = padded[-1] > std::numeric_limits<uint16_t>::max();
     return split;
@@ -158,6 +156,22 @@ void set_runtime_args(
 }
 
 }  // namespace
+
+uint32_t finish_units_per_tile(const Tensor& input, const Tensor& indices, uint32_t num_cores) {
+    const auto& padded = input.padded_shape();
+    const uint32_t total_tile_rows = (input.physical_volume() / padded[-1]) / TILE_HEIGHT;
+    const uint32_t k_rounded = indices.logical_shape()[-1];
+    const uint32_t half_units = total_tile_rows * tt::div_up(k_rounded, TILE_WIDTH) * 2;
+    // The reader gathers rows r % 16 < 8 of each tile row and the writer the others, each on its own NoC.
+    const uint32_t rows = input.logical_shape()[-2];
+    const uint32_t reader_rows = rows / 16 * 8 + std::min(rows % 16, 8u);
+    const uint32_t batches = input.physical_volume() / (padded[-2] * padded[-1]);
+    const uint32_t noc_gathers = batches * std::max(reader_rows, rows - reader_rows) * k_rounded;
+    // Single faces halve each core's gather latency, but past 6144 gathers on the busier NoC that NoC sets the time:
+    // there the half tile units are faster on up to 39 cores and the face units from 40 half units on (p100a).
+    const bool faces_fit = 2 * half_units <= num_cores;
+    return faces_fit && (noc_gathers <= 6144 || half_units >= 40) ? 4 : 2;
+}
 
 TopkRouteFinishProgramFactory::cached_program_t TopkRouteFinishProgramFactory::create(
     const operation_attributes_t& /*operation_attributes*/,
