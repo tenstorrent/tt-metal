@@ -132,6 +132,10 @@ KIND_STAGE_SPLIT = "stage_split"
 # items; pinned per stage for the same reason.
 KIND_STAGE_SEQ_SPLIT = "stage_seq_split"
 
+# HOW MANY TIMES ONE REQUEST RUNS A STAGE'S STEP (trace_replay: the pipeline's <stage>_trace_repeats).
+# The full-pipeline pass times each step once; the report states this beside it. Pinned like the splits.
+KIND_STAGE_REPEATS = "stage_repeats"
+
 PHASE_BEFORE = "before"
 PHASE_AFTER = "after"
 

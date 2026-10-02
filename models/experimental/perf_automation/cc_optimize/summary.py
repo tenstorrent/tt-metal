@@ -1886,6 +1886,37 @@ def _pinned_ceiling_input(kind: str, stage, model: str = "", task: str = ""):
         return None
 
 
+def _per_request_note(model: str = "", task: str = "") -> str:
+    """What the full-pipeline line covers, when a stage runs more than once per request; "" otherwise.
+
+    The pass times each stage's step once. A stage the pipeline replays per request -- it states how
+    many times through <stage>_trace_repeats, pinned as KIND_STAGE_REPEATS -- costs that many steps,
+    so the line read as one request when it was one step of each stage: Qwen-Image-Edit's 35.7 s
+    covered 1 of its 50 denoise steps. Names and counts are the pipeline's own; with no stage stating
+    more than one, nothing is printed and the report is unchanged."""
+    try:
+        led = _ledger()
+        reps = {}
+        for r in led.rows(led.KIND_STAGE_REPEATS, model=model, task=task):
+            n = int(float(r.get("value_ms") or 0))
+            if r.get("depth") and n > 1:
+                reps.setdefault(str(r["depth"]), n)  # first pinned value wins, as anchors do
+        if not reps:
+            return ""
+        from cc_optimize.perf_mcp import read_stage_ms
+
+        stage_ms = read_stage_ms(model=model) or {}
+        which = ", ".join("%s %dx" % (k, v) for k, v in sorted(reps.items()))
+        note = "  that pass ran each stage's step once; one request runs %s" % which
+        known = {k.lower(): v for k, v in stage_ms.items()}
+        if known and all(k in known for k in reps):
+            total = sum(v * reps.get(k, 1) for k, v in known.items())
+            note += " -> ~%.0f ms per request (this run's stage times x repeats)" % total
+        return note
+    except Exception:  # noqa: BLE001 -- a note that cannot be formed is simply not printed
+        return ""
+
+
 def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stage_ms=None, model="", task=""):
     """Both ceilings for both stages, from the MODEL'S OWN facts rather than from summing annotated ops.
 
@@ -3596,6 +3627,9 @@ def render_summary(
     _fp = _ledger_line(_ledger().KIND_FULLPIPE, "trace+1CQ %s" % _trace_scope, model, task)
     if _fp:
         lines.append(_fp)
+        _per_req = _per_request_note(model, task)
+        if _per_req:
+            lines.append(_per_req)
     lines.append("")
 
     if not isinstance(throughput, dict):

@@ -783,6 +783,10 @@ def measure_adapter(adapter, device) -> float:
         _sq = int(getattr(st, "seq_split", 0) or 0)
         if _sq > 1:
             print("TRACE_STAGE_SEQ_SPLIT[%s]=%d" % (st.name, _sq), flush=True)
+        # AND HOW MANY TIMES ONE REQUEST RUNS IT (stage_seams.REPEATS): the pass below times it once.
+        _rp = int(getattr(st, "repeats", 0) or 0)
+        if _rp > 1:
+            print("TRACE_STAGE_REPEATS[%s]=%d" % (st.name, _rp), flush=True)
 
     # WHICH MODULES EACH STAGE RUNS, read from the pipeline's own code (stage_marks.stage_module_paths)
     # so perf_mcp can price each stage's compute from the weights it actually multiplies instead of

@@ -3080,6 +3080,10 @@ For EACH stage expose, ON THE PIPELINE object, the generic contract the perf eng
     same request and exchanges attention K/V): return that number of groups. The ceilings price one
     group's tokens, so an unstated split prices the stage as if one group ran the whole sequence. Omit
     it for a stage that runs every token on every group, and for single-token steps.
+  <stage>_trace_repeats(): ZERO-ARG, OPTIONAL. Only for a stage whose step ONE REQUEST runs more than
+    once (a decode step per output token, a denoise step per scheduler step): return how many times,
+    from the pipeline's own schedule. The full-pipeline pass times each step once, so the report uses
+    this to state what one request costs. Omit it for a stage that runs once per request.
 AR stages ALSO keep the decode contract (decode_prefill seeds resident self- AND, for a seq2seq
 decoder, cross-attn KV; decode_step reads them, never recomputes).
 

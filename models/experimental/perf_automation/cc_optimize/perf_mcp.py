@@ -3281,6 +3281,7 @@ def _run_full_pipeline_ms():
     stage_modules: dict = {}  # {stage: module paths it runs}, from TRACE_STAGE_MODULES
     stage_split: dict = {}  # {stage: data-parallel groups sharing its items}, from TRACE_STAGE_SPLIT
     stage_seq_split: dict = {}  # {stage: chip groups splitting one request's tokens}, from TRACE_STAGE_SEQ_SPLIT
+    stage_repeats: dict = {}  # {stage: times one request runs its step}, from TRACE_STAGE_REPEATS
     # {stage: items PER REQUEST}, the legacy marker's unit. Kept apart from stage_isl, which holds
     # the TOTAL a stage states for one call.
     stage_isl_per_request = {}
@@ -3471,6 +3472,7 @@ def _run_full_pipeline_ms():
                 ("TRACE_STAGE_ITEMS[", stage_isl),
                 ("TRACE_STAGE_SPLIT[", stage_split),
                 ("TRACE_STAGE_SEQ_SPLIT[", stage_seq_split),
+                ("TRACE_STAGE_REPEATS[", stage_repeats),
             ):
                 if _marker in line:
                     try:
@@ -3647,6 +3649,7 @@ def _run_full_pipeline_ms():
                 (_ledger().KIND_STAGE_TOKENS, stage_isl, "items", "trace_replay observed item count"),
                 (_ledger().KIND_STAGE_SPLIT, stage_split, "count", "trace_replay stated data-parallel split"),
                 (_ledger().KIND_STAGE_SEQ_SPLIT, stage_seq_split, "count", "trace_replay stated sequence split"),
+                (_ledger().KIND_STAGE_REPEATS, stage_repeats, "count", "trace_replay stated repeats per request"),
             ):
                 for _tn, _tv in (_vals or {}).items():
                     if _tn and int(_tv or 0) > 0:

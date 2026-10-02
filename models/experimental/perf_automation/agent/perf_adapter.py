@@ -422,9 +422,11 @@ def _stated_count(pipeline, stage: str, seam: str) -> int:
 class _Stage:
     """One profilable unit emit-e2e emitted: a name and a host-op-free traceable step."""
 
-    __slots__ = ("name", "step", "self_traced", "trace_path", "items", "recurring", "split", "seq_split")
+    __slots__ = ("name", "step", "self_traced", "trace_path", "items", "recurring", "split", "seq_split", "repeats")
 
-    def __init__(self, name, step, self_traced=False, trace_path=None, items=0, recurring=None, split=0, seq_split=0):
+    def __init__(
+        self, name, step, self_traced=False, trace_path=None, items=0, recurring=None, split=0, seq_split=0, repeats=0
+    ):
         self.name = name
         self.step = step
         self.self_traced = bool(self_traced)
@@ -448,6 +450,9 @@ class _Stage:
         # AND HOW MANY CHIP GROUPS SPLIT ONE REQUEST'S TOKENS in this stage (stage_seams.SEQ_SPLIT). Same
         # convention: 0 is "not stated", read as 1 -- every group runs every token.
         self.seq_split = max(0, int(seq_split or 0))
+        # AND HOW MANY TIMES ONE REQUEST RUNS THIS STEP (stage_seams.REPEATS). 0 is "not stated", read
+        # as 1 -- the step is the stage's whole work for a request.
+        self.repeats = max(0, int(repeats or 0))
 
 
 class PipelineStageAdapter:
@@ -590,6 +595,7 @@ class PipelineStageAdapter:
                     _n,
                     split=_stated_count(p, name, _seams.SPLIT),
                     seq_split=_stated_count(p, name, _seams.SEQ_SPLIT),
+                    repeats=_stated_count(p, name, _seams.REPEATS),
                 )
             )
         if stages:

@@ -30,6 +30,11 @@ SPLIT = "_trace_split"
 # Absent means 1: every group runs every token. Only the pipeline knows which stages it cuts along
 # tokens -- a single-token step has nothing to cut.
 SEQ_SPLIT = "_trace_seq_split"
+# How many times ONE REQUEST runs this stage's step. Absent means 1: the step is the stage's whole work
+# for a request. A loop the pipeline replays per request -- one token per decode step, one scheduler
+# step per denoise step -- states its count, so the report can say that a full-pipeline pass timed each
+# stage once while a request runs it N times. Only the pipeline knows N (its own schedule length).
+REPEATS = "_trace_repeats"
 
 # A stage cannot be measured at all without these: setup does host prep outside the trace, step is
 # the one fixed-shape call inside it.
@@ -39,7 +44,7 @@ REQUIRED = (SETUP, STEP)
 # reports them: INPUTS costs the stage its own boundary, ITEMS costs it a real arithmetic ceiling,
 # SPLIT (on a stage that is split) prices it as if one chip group did the whole batch, SEQ_SPLIT (on a
 # stage that cuts tokens) prices it as if one group ran the whole sequence.
-OPTIONAL = (INPUTS, ITEMS, SPLIT, SEQ_SPLIT)
+OPTIONAL = (INPUTS, ITEMS, SPLIT, SEQ_SPLIT, REPEATS)
 
 ALL = REQUIRED + OPTIONAL
 
