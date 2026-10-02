@@ -686,46 +686,50 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_atomics_flushed(
     return (NOC_STATUS_READ_REG(noc, NIU_MST_ATOMIC_RESP_RECEIVED) == noc_nonposted_atomics_acked[noc]);
 }
 
+inline __attribute__((always_inline)) void noc_init_one(uint32_t noc, uint32_t atomic_ret_val) {
+    uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_CFG(NOC_ID_LOGICAL));
+    uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
+    uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
+    uint64_t xy_local_addr = NOC_XY_ADDR(my_x, my_y, 0);
+
+    NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_CMD_BUF, NOC_TARG_ADDR_MID, 0x0);
+    NOC_CMD_BUF_WRITE_REG(
+        noc,
+        NCRISC_WR_CMD_BUF,
+        NOC_TARG_ADDR_COORDINATE,
+        (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+    NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_REG_CMD_BUF, NOC_TARG_ADDR_MID, 0x0);
+    NOC_CMD_BUF_WRITE_REG(
+        noc,
+        NCRISC_WR_REG_CMD_BUF,
+        NOC_TARG_ADDR_COORDINATE,
+        (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+
+    uint64_t atomic_ret_addr = NOC_XY_ADDR(my_x, my_y, atomic_ret_val);
+    NOC_CMD_BUF_WRITE_REG(noc, NCRISC_AT_CMD_BUF, NOC_RET_ADDR_LO, (uint32_t)(atomic_ret_addr & 0xFFFFFFFF));
+    NOC_CMD_BUF_WRITE_REG(noc, NCRISC_AT_CMD_BUF, NOC_RET_ADDR_MID, 0x0);
+    NOC_CMD_BUF_WRITE_REG(
+        noc,
+        NCRISC_AT_CMD_BUF,
+        NOC_RET_ADDR_COORDINATE,
+        (uint32_t)(atomic_ret_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+
+    uint32_t noc_rd_cmd_field =
+        NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+    NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_MID, 0x0);  // get rid of this?
+    NOC_CMD_BUF_WRITE_REG(
+        noc,
+        NCRISC_RD_CMD_BUF,
+        NOC_RET_ADDR_COORDINATE,
+        (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+}
+
 template <uint8_t MAX_NOCS_TO_INIT = NUM_NOCS>
 inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
 #pragma GCC unroll 0
     for (uint8_t noc = 0; noc < MAX_NOCS_TO_INIT; noc++) {
-        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_CFG(NOC_ID_LOGICAL));
-        uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
-        uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
-        uint64_t xy_local_addr = NOC_XY_ADDR(my_x, my_y, 0);
-
-        NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_CMD_BUF, NOC_TARG_ADDR_MID, 0x0);
-        NOC_CMD_BUF_WRITE_REG(
-            noc,
-            NCRISC_WR_CMD_BUF,
-            NOC_TARG_ADDR_COORDINATE,
-            (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-        NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_REG_CMD_BUF, NOC_TARG_ADDR_MID, 0x0);
-        NOC_CMD_BUF_WRITE_REG(
-            noc,
-            NCRISC_WR_REG_CMD_BUF,
-            NOC_TARG_ADDR_COORDINATE,
-            (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-
-        uint64_t atomic_ret_addr = NOC_XY_ADDR(my_x, my_y, atomic_ret_val);
-        NOC_CMD_BUF_WRITE_REG(noc, NCRISC_AT_CMD_BUF, NOC_RET_ADDR_LO, (uint32_t)(atomic_ret_addr & 0xFFFFFFFF));
-        NOC_CMD_BUF_WRITE_REG(noc, NCRISC_AT_CMD_BUF, NOC_RET_ADDR_MID, 0x0);
-        NOC_CMD_BUF_WRITE_REG(
-            noc,
-            NCRISC_AT_CMD_BUF,
-            NOC_RET_ADDR_COORDINATE,
-            (uint32_t)(atomic_ret_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-
-        uint32_t noc_rd_cmd_field =
-            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
-        NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
-        NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_MID, 0x0);  // get rid of this?
-        NOC_CMD_BUF_WRITE_REG(
-            noc,
-            NCRISC_RD_CMD_BUF,
-            NOC_RET_ADDR_COORDINATE,
-            (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+        noc_init_one(noc, atomic_ret_val);
     }
 }
 
@@ -846,14 +850,18 @@ inline __attribute__((always_inline)) void ncrisc_noc_counters_init() {
     }
 }
 
+inline __attribute__((always_inline)) void ncrisc_noc_sync(uint32_t noc) {
+    while (!ncrisc_noc_reads_flushed(noc));
+    while (!ncrisc_noc_nonposted_writes_sent(noc));
+    while (!ncrisc_noc_nonposted_writes_flushed(noc));
+    while (!ncrisc_noc_nonposted_atomics_flushed(noc));
+    while (!ncrisc_noc_posted_writes_sent(noc));
+}
+
 template <uint8_t MAX_NOCS_TO_INIT = NUM_NOCS>
 inline __attribute__((always_inline)) void ncrisc_noc_full_sync() {
     for (uint32_t n = 0; n < MAX_NOCS_TO_INIT; n++) {
-        while (!ncrisc_noc_reads_flushed(n));
-        while (!ncrisc_noc_nonposted_writes_sent(n));
-        while (!ncrisc_noc_nonposted_writes_flushed(n));
-        while (!ncrisc_noc_nonposted_atomics_flushed(n));
-        while (!ncrisc_noc_posted_writes_sent(n));
+        ncrisc_noc_sync(n);
     }
 }
 

@@ -11,6 +11,7 @@
 #include <nanobind/stl/tuple.h>
 
 #include <tuple>
+#include <cstdint>
 
 #include "ttnn/device.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
@@ -65,8 +66,7 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
                 num_out_blocks (int, optional): For non-sharded (interleaved) inputs, splits the per-core output height (``block_h``, in tiles) into ``num_out_blocks`` chunks so each iteration uses less SRAM, at the cost of performance. Ignored for sharded inputs. Should only be set if needed to relieve SRAM pressure. Accepted explicit values are ``-1`` (use the built-in auto-heuristic) or a chunk count in range ``[1, block_h]``. Defaults to `None`, whose meaning depends on :attr:`core_grid` (non-sharded inputs only): when :attr:`core_grid` is also `None` (auto-selected), ``num_out_blocks`` is determined automatically using the same auto-heuristic as ``-1``, and passing an explicit ``num_out_blocks`` in that case is rejected. When :attr:`core_grid` is provided and ``num_out_blocks`` is `None` (default), ``num_out_blocks`` defaults to ``1`` (no chunking).
                 compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration for the op. Defaults to `None`.
                 negative_mask (ttnn.Tensor, optional): Defaults to `None`. Can be used only in row-major sharded input/output tensors. Created with ttnn.create_group_norm_input_negative_mask. Used to reduce the number of CB's used in the sharded version of the kernel. When no tensor is passed the op synthesizes the mask in L1 if and only if the program would otherwise not fit in L1.
-                use_welford (bool, optional): Defaults to `False`. If `True`, the Welford's algorithm is used to compute the mean and variance. Welford cannot exclude the tile-padding rows, so if the per-sample ``H*W`` is not a multiple of the tile height this silently falls back to the two-pass path -- which handles that case correctly -- and :attr:`reciprocals` is ignored. The fallback is warned once per process.
-                reciprocals (ttnn.Tensor, optional): Defaults to `None`. FP32 tensor containing pre-computed reciprocal values. Only valid when ``use_welford`` is True. Must be sharded to L1 using the legacy ``ShardSpec`` representation, with the shard grid matching the compute :attr:`core_grid`. Interleaved tensors and ``NdShardSpec`` sharding are currently not supported for the :attr:`reciprocals` tensor.
+                use_welford (bool, optional): Defaults to `False`. If `True`, stable two-pass statistics with FP32 accumulation are used to compute the mean and variance. For non-tile-aligned ``H*W``, the operation falls back to the tile-reduction path so padding rows can be excluded correctly. The argument name is retained for compatibility.
 
             Returns:
                 ttnn.Tensor: the output tensor.
@@ -117,7 +117,7 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
               - For a TILE-layout :attr:`input_tensor`, the per-sample H*W need not be a multiple of the tile size (32); the fused kernel corrects for the tile-padding rows it reduces over. Residual error comes from the bfloat16 cancellation in ``Var - K*E[x]^2``, so it grows with *both* the padding fraction ``K = padded_HW / logical_HW - 1`` and the input's mean-to-spread ratio ``E[x]^2 / Var`` -- the latter dominates. Note ``K`` is not monotonic in H*W; it spikes just above every tile boundary, so H*W=33 (``K=0.94``) is worse than H*W=50 (``K=0.28``). Measured: with near-zero-mean inputs every shape tested stays inside the op's tolerance, including ``K=3`` (H*W=8) at 0.067 versus an aligned-control 0.041; with a large mean (uniform[0,1), ``E[x]^2/Var`` ~ 3) only H*W <= 16 (``K >= 1``) exceeds it. See #50682.
               - For a ROW_MAJOR :attr:`input_tensor`, H*W must still be a multiple of the tile size (32); non-multiples are rejected rather than silently approximated.
               - For the :attr:`input_mask`, C must match the number of groups, H must match a tile's height, and W must be a multiple of a tile's width.
-              - If :attr:`core_grid` is not provided, it is inferred from the inputs: for a sharded :attr:`input_tensor`, from the bounding box of its shard grid; otherwise, for sharded :attr:`reciprocals` (when provided), from the bounding box of the reciprocals shard grid; otherwise (interleaved/DRAM input), via the same logic as :func:`ttnn.determine_expected_group_norm_dram_grid_size`. The inferred grid may not be optimal; pass :attr:`core_grid` explicitly to override it. To prepare a sharded input ahead of time and obtain a matching grid in one step, see :func:`ttnn.determine_expected_group_norm_sharded_config_and_grid_size`.
+              - If :attr:`core_grid` is not provided, it is inferred from the sharded input's shard grid or, for interleaved/DRAM input, via the same logic as :func:`ttnn.determine_expected_group_norm_dram_grid_size`. The inferred grid may not be optimal; pass :attr:`core_grid` explicitly to override it. To prepare a sharded input ahead of time and obtain a matching grid in one step, see :func:`ttnn.determine_expected_group_norm_sharded_config_and_grid_size`.
               - :attr:`inplace` is not supported for TILE-layout inputs and requires input and output layouts to be identical.
               - When generating inputs (e.g. weight, bias) for block sharded tensors, the number of cores in a column should draw upon core.x rather than core.y.
               - When generating inputs (e.g. weight, bias) for height sharded tensors, the number of cores in a column should be 1 rather than core.y.
@@ -135,7 +135,6 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
         nb::arg("input_mask") = nb::none(),
         nb::arg("weight") = nb::none(),
         nb::arg("bias") = nb::none(),
-        nb::arg("reciprocals") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("dtype") = nb::none(),
         nb::arg("core_grid") = nb::none(),
@@ -147,13 +146,13 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
         nb::arg("use_welford") = false);
     mod.def(
         "create_group_norm_input_mask",
-        [](int64_t num_channel,
-           int64_t num_groups,
-           int64_t num_cores_across_channel,
+        [](std::int64_t num_channel,
+           std::int64_t num_groups,
+           std::int64_t num_cores_across_channel,
            DataType data_type,
-           int64_t tile_height,
-           int64_t tile_width,
-           int64_t rows_in_last_tile) {
+           std::int64_t tile_height,
+           std::int64_t tile_width,
+           std::int64_t rows_in_last_tile) {
             return create_group_norm_input_mask(
                 num_channel,
                 num_groups,
@@ -182,12 +181,12 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
         )doc");
     mod.def(
         "create_group_norm_input_negative_mask",
-        [](int64_t num_channel,
-           int64_t num_groups,
-           int64_t num_cores_across_channel,
+        [](std::int64_t num_channel,
+           std::int64_t num_groups,
+           std::int64_t num_cores_across_channel,
            DataType data_type,
-           int64_t tile_height,
-           int64_t tile_width) {
+           std::int64_t tile_height,
+           std::int64_t tile_width) {
             return create_group_norm_input_negative_mask(
                 num_channel, num_groups, num_cores_across_channel, data_type, tile_height, tile_width);
         },
@@ -203,7 +202,7 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
         )doc");
     mod.def(
         "_compute_num_virtual_cols",
-        [](uint32_t grid_x, int num_groups, uint32_t num_channels) -> uint32_t {
+        [](std::uint32_t grid_x, int num_groups, std::uint32_t num_channels) -> std::uint32_t {
             return compute_num_virtual_cols(grid_x, num_groups, num_channels);
         },
         nb::arg("grid_x"),
@@ -217,12 +216,12 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
         )doc");
     mod.def(
         "_find_expected_dram_grid",
-        [](uint32_t max_x,
-           uint32_t max_y,
-           uint32_t num_channels,
+        [](std::uint32_t max_x,
+           std::uint32_t max_y,
+           std::uint32_t num_channels,
            int num_groups,
-           uint32_t input_nhw,
-           uint32_t num_batches) -> ttnn::CoreGrid {
+           std::uint32_t input_nhw,
+           std::uint32_t num_batches) -> ttnn::CoreGrid {
             auto result = find_expected_dram_grid(max_x, max_y, num_channels, num_groups, input_nhw, num_batches);
             if (!result.has_value()) {
                 throw std::runtime_error(
@@ -247,9 +246,9 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
     mod.def(
         "determine_expected_group_norm_sharded_config_and_grid_size",
         [](ttnn::MeshDevice* device,
-           uint32_t num_channels,
+           std::uint32_t num_channels,
            int num_groups,
-           uint32_t input_nhw,
+           std::uint32_t input_nhw,
            bool is_height_sharded,
            bool is_row_major) {
             TT_FATAL(

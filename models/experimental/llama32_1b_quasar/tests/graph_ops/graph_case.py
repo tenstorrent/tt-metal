@@ -43,7 +43,7 @@ Fidelity caveats (deliberate, documented, all visible in the generated data)
   (page tables, cur_pos, update_idxs, embedding ids) would fault the device with
   random values, so they get semantic values from ``INDEX_VALUES`` below.
 * Program configs are rebuilt field-for-field from the repr (including
-  LayerNorm's ``legacy_reduction`` / ``legacy_rsqrt`` / ``use_welford`` and SDPA's
+  LayerNorm's ``legacy_reduction`` and ``use_welford``, and SDPA's
   ``max_cores_per_head_batch``). The only exceptions are the optional
   CoreRangeSet restrictions (``sub_core_grids``, ``allowed_worker_cores``): those
   print as ``std::nullopt`` in every capture so far, and a non-null value skips
@@ -71,6 +71,18 @@ from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
 # Re-exported so generated files need one import only.
 with_default_mesh = U.with_default_mesh
 from_tt = U.from_tt
+
+
+def _is_quasar(mesh_device=None):
+    """True when running on the Quasar architecture. Mirrors utility_functions.is_quasar()
+    (`"quasar" in ttnn.get_arch_name()`); the arch is process-global, so `mesh_device` is accepted only for
+    call-site symmetry. Used by the small-grid / emu tests to strict-xfail known Quasar-only op blockers while
+    still requiring WH/BH to pass."""
+    try:
+        return "quasar" in ttnn.get_arch_name()
+    except Exception:
+        return False
+
 
 # =============================================================================
 # Enum tables (capture string -> ttnn object)
@@ -249,7 +261,6 @@ _PROGRAM_CONFIG_FIELDS = {
         "block_w",
         "inplace",
         "legacy_reduction",
-        "legacy_rsqrt",
         "use_welford",
     ),
     "SDPAProgramConfig": (
@@ -287,7 +298,6 @@ _BOOL_FIELDS = frozenset(
     {
         "inplace",
         "legacy_reduction",
-        "legacy_rsqrt",
         "use_welford",
         "transpose_mcast",
         "fuse_batch",
@@ -446,14 +456,100 @@ def _is_partial_shard(spec):
     return _rows_of(spec["shape"]) < _shard_row_capacity(mem)
 
 
+# Per-element host byte sizes, for the RAM budget below.
+_DTYPE_BYTES = {
+    "BFLOAT16": 2,
+    "BFLOAT8_B": 1,
+    "BFLOAT4_B": 1,
+    "FLOAT32": 4,
+    "UINT32": 4,
+    "INT32": 4,
+    "UINT16": 2,
+    "UINT8": 1,
+}
+
+# A single captured input larger than this cannot be materialized on the 2-compute-node emulator: the full
+# host torch tensor plus its copy in the simulator's host-modeled DRAM exhausts RAM and the OS OOM-killer
+# takes the worker (a hard SIGKILL with no traceback, not a clean device OOM). The real llama vocab table
+# [1,1,128256,2048] bf16 is ~525 MB and hits exactly this; the model runs embedding on host anyway, so the
+# full-table device embedding these cases capture is never actually executed in the e2e.
+_HOST_TENSOR_RAM_BUDGET = 256_000_000  # ~256 MB
+
+
+def _host_tensor_bytes(spec):
+    return math.prod(spec["shape"]) * _DTYPE_BYTES.get(spec["dtype"], 4)
+
+
+# Float dtypes we materialize into TILE layout via quasar.tilize on Quasar (see _quasar_tilize_build).
+_QUASAR_TILE_REROUTE_DTYPES = {"BFLOAT16", "FLOAT32"}
+# Only reroute SHORT tensors (height in rows). The mainline-tilize fault is a 1-tile-tall (32-row)
+# multicore row-split artifact; taller tensors split cleanly and don't need the reroute, and rerouting a
+# large tensor just adds a slow device tilize on the sim. 64 = 2 tile-rows, comfortably covers the fault.
+_QUASAR_TILE_REROUTE_MAX_HEIGHT = 64
+
+
+def _quasar_tilize_build(data, tt_dtype, memory_config, mesh_device):
+    """Build a TILE tensor on Quasar via a ROW_MAJOR upload + quasar.tilize, then place it in the target
+    memory config.
+
+    ttnn.from_torch(layout=TILE) routes to the MAINLINE device tilize on Quasar, which faults
+    (Neo0TRISC2 MEM_READ_NO_RESPONSE in tilize_metal2.cpp) on wide-short (1-tile-tall) tensors AND leaks
+    state that faults a later tilize in the same run (seen when graph_ops tests are batched). quasar.tilize
+    is the Quasar-safe tilize the model itself uses. We tilize to DRAM interleaved and then resh/re-place
+    into the captured memory config (a no-op when that is already DRAM interleaved).
+    """
+    rm = ttnn.from_torch(
+        data,
+        dtype=tt_dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+    )
+    quasar_tilize = getattr(getattr(ttnn.experimental, "quasar", None), "tilize", None)
+    tt = (quasar_tilize or ttnn.tilize)(rm, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=tt_dtype)
+    if memory_config is not None and memory_config != ttnn.DRAM_MEMORY_CONFIG:
+        tt = ttnn.to_memory_config(tt, memory_config)
+    return tt
+
+
 def build_tensor(spec, mesh_device, case, op_name, key):
     """Materialize one captured input tensor. Returns (ttnn tensor, torch source)."""
+    nbytes = _host_tensor_bytes(spec)
+    if nbytes > _HOST_TENSOR_RAM_BUDGET:
+        pytest.skip(
+            f"input {key} {spec['shape']} {spec['dtype']} ~{nbytes / 1e6:.0f} MB exceeds the emulator host RAM "
+            f"budget (~{_HOST_TENSOR_RAM_BUDGET / 1e6:.0f} MB) — materializing it would OOM-kill the worker"
+        )
     data = _torch_data(spec, case, op_name, key)
     if (op_name, key) in HOST_INPUT:
         return ttnn.from_torch(data, dtype=DTYPE[spec["dtype"]], layout=LAYOUT[spec["layout"]]), data
 
     memory_config = build_memory_config(spec.get("mem"), mesh_device) or ttnn.DRAM_MEMORY_CONFIG
     partial = _is_partial_shard(spec)
+
+    # Quasar: from_torch(layout=TILE) routes to the mainline device tilize, which faults on wide-SHORT
+    # tensors (1-tile-tall: the multicore row-split sub-tiles -> MEM_READ_NO_RESPONSE) and leaks state into
+    # later ops. Build those via quasar.tilize instead (the model's path). Gated to:
+    #   * SHORT height (<= _QUASAR_TILE_REROUTE_MAX_HEIGHT): tall tensors split cleanly and never hit the
+    #     fault, so they keep from_torch -- rerouting them just adds a slow device tilize of many tiles on
+    #     the ~50KHz sim (a 1024x8192 = 8192-tile input blew the 300s test timeout).
+    #   * tile-aligned (dim%32==0): from_torch(TILE) auto-pads a non-aligned dim, quasar.tilize FATALs on it.
+    #   * float dtype, non-partial-shard: partial shards / non-float / ROW_MAJOR keep from_torch.
+    shp = spec["shape"]
+    tile_aligned = len(shp) >= 2 and shp[-2] % 32 == 0 and shp[-1] % 32 == 0
+    short = len(shp) >= 2 and shp[-2] <= _QUASAR_TILE_REROUTE_MAX_HEIGHT
+    if (
+        _is_quasar(mesh_device)
+        and spec["layout"] == "TILE"
+        and spec["dtype"] in _QUASAR_TILE_REROUTE_DTYPES
+        and tile_aligned
+        and short
+        and not partial
+    ):
+        tt = _quasar_tilize_build(data, DTYPE[spec["dtype"]], memory_config, mesh_device)
+        return tt, data
+
     tt = ttnn.from_torch(
         data,
         dtype=DTYPE[spec["dtype"]],
@@ -1065,6 +1161,19 @@ def _golden_pcc(case, op_name):
     return min(floors)
 
 
+# Ops whose captured call faults on the Quasar device itself (LLK assert / hang), not fixable at the harness
+# level and not host-catchable, so run_case skips them pre-flight. Value = why. These are mainline ops the
+# model does NOT use on Quasar (it uses the quasar-experimental equivalents), so skipping them here does not
+# reduce coverage of the actual model path.
+_QUASAR_UNSUPPORTED_OPS = {
+    # Compute kernel calls compute_kernel_hw_startup twice (call-once violation, #52395) -> corrupts Quasar
+    # Tensix engine state -> LLK assert (Neo0TRISC2 line 94), every case/memory-config. The model uses the
+    # quasar rope_1d op, not this mainline rotary_embedding_llama.
+    "ttnn.experimental.rotary_embedding_llama": "mainline kernel double compute_kernel_hw_startup (#52395) "
+    "corrupts Quasar engine state (LLK assert); model uses quasar rope_1d",
+}
+
+
 def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
     """Materialize one captured call, run it, and check the result.
 
@@ -1072,6 +1181,12 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
     ``Tensor.__getitem__``); ``case`` is one entry of a generated ``CASES`` list.
     """
     op_name = op_name or case["op"]
+
+    # Some captured ops fault ON the Quasar device (LLK asserts / hangs), which are not host-catchable
+    # RuntimeErrors -- so skip them pre-flight, before any device work, rather than hanging the run.
+    if _is_quasar(mesh_device) and op_name in _QUASAR_UNSUPPORTED_OPS:
+        pytest.skip(f"{op_name} faults on Quasar: {_QUASAR_UNSUPPORTED_OPS[op_name]}")
+
     torch_inputs: dict[str, torch.Tensor] = {}
 
     args = [_build_value(spec, mesh_device, case, op_name, str(i), torch_inputs) for i, spec in enumerate(case["args"])]
@@ -1080,7 +1195,25 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
         for name, spec in case["kwargs"].items()
     }
 
-    out = op(*args, **kwargs)
+    # Captured cases were recorded on an 8x8 (64-core) N150; many pin a grid or allocate buffers that do not
+    # fit the 2-compute-node Quasar emulator. Some of those mismatches are only discovered inside the op (a grid
+    # derived from num_heads, a program-config grid, or an L1 allocation), AFTER build_memory_config's shard-grid
+    # pre-check has passed -- so convert those specific device-too-small FATALs into a skip rather than a failure.
+    # (Errors that are not clearly a device-size mismatch still propagate.)
+    try:
+        out = op(*args, **kwargs)
+    except RuntimeError as e:
+        msg = str(e)
+        _too_small = (
+            "Target number of cores" in msg  # e.g. nlp_concat_heads_decode num_heads(32) > device cores
+            or "must not contain more cores than the device" in msg  # SDPA program-config grid > device
+            or "exceeds grid size" in msg
+            or "Out of Memory" in msg  # e.g. concat output/intermediate L1 > 2-bank capacity
+            or "Not enough space to allocate" in msg
+        )
+        if _too_small:
+            pytest.skip(f"captured case does not fit this device (grid/memory): {msg.splitlines()[0][:200]}")
+        raise
 
     _check_output(out, case, mesh_device, op_name)
 

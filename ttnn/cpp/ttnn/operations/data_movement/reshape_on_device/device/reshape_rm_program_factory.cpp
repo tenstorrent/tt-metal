@@ -29,7 +29,7 @@ ProgramDescriptor ReshapeRMProgramFactory::create_descriptor(
         input_tensor.dtype(),
         output_tensor.dtype());
 
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
 
     auto output_shape = output_tensor.padded_shape();
     Buffer* src0_buffer = input_tensor.buffer();

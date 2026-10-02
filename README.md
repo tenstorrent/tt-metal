@@ -65,7 +65,9 @@ The Models team is focused on developing the following models, optimizing them f
 
 Blackhole software optimization is under active development.  Please join us in shaping the future of open source AI! <br> [\[Discord\]](https://discord.gg/tenstorrent) [\[Developer Hub\]](https://tenstorrent.com/developers)
 
-For more information regarding vLLM installation and environment creation visit the [Tenstorrent vLLM TT plugin README](https://github.com/tenstorrent/vllm/blob/dev/plugins/vllm-tt-plugin/README.md).
+For more information regarding vLLM installation and environment creation visit the [Tenstorrent vLLM TT plugin README](https://github.com/tenstorrent/vllm-tt-plugin).
+Note that the previously maintained [vLLM TT fork](https://github.com/tenstorrent/vllm)
+is deprecated.
 
 ## Model Updates
 

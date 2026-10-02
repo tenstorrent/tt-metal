@@ -12,6 +12,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
 from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
@@ -430,6 +431,34 @@ def test_prepare_chunk_recurrence_t_inv_is_stable_for_correlated_keys(device: tt
     )
     for output in reference:
         ttnn.deallocate(output)
+
+
+@pytest.mark.parametrize("output_bf16_mask", [0, 0x26])
+def test_prepare_chunk_recurrence_unbounded_legacy_call_matches_explicit_bounds(device, output_bf16_mask):
+    case = _UNIT_TEST_CASE
+    inputs = _device_inputs(_case_host_inputs(case, seed=1912), device)
+    start = make_actual_start(device, 0)
+    end = make_actual_start(device, case.num_chunks * CHUNK_SIZE)
+    legacy = _run(inputs, case.num_heads, output_bf16_mask=output_bf16_mask)
+    for bound in (None, end):
+        explicit = ttnn.experimental.kda.prepare_chunk_recurrence(
+            *inputs, case.num_heads, actual_start=start, actual_end=bound, output_bf16_mask=output_bf16_mask
+        )
+        for name, unbounded, bounded in zip(OUTPUT_NAMES, legacy, explicit, strict=True):
+            assert_bit_identical(ttnn.to_torch(unbounded), ttnn.to_torch(bounded), name=name)
+        for tensor in explicit:
+            ttnn.deallocate(tensor)
+    for tensor in (*legacy, *inputs, start, end):
+        ttnn.deallocate(tensor)
+
+
+def test_prepare_chunk_recurrence_rejects_end_without_start(device, expect_error):
+    inputs = _device_inputs(_host_inputs(2, 2, 32, 32), device)
+    end = make_actual_start(device, 64)
+    with expect_error(RuntimeError, "actual_end requires actual_start"):
+        ttnn.experimental.kda.prepare_chunk_recurrence(*inputs, 2, actual_end=end)
+    for tensor in (*inputs, end):
+        ttnn.deallocate(tensor)
 
 
 def test_prepare_chunk_recurrence_cache_hit_rebinds_fresh_tensors(device: ttnn.Device) -> None:

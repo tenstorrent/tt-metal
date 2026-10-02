@@ -1,0 +1,539 @@
+name: "LLK perf gate impl"
+
+on:
+  workflow_call:
+    inputs:
+      arch:
+        description: "Architecture to gate on (wormhole or blackhole)"
+        required: false
+        default: wormhole
+        type: string
+      perf_run_id:
+        description: >-
+          The workflow run that produced this PR's perf data. Leave empty when a
+          job in THIS run uploaded it; the download then reads the current run.
+        required: false
+        type: string
+      baseline_run_id:
+        description: "Baseline from this run's artifacts instead of the warehouse"
+        required: false
+        type: string
+      warehouse_table:
+        description: "Warehouse view (default TTDATASF.LLK_PERF.LLK_PERF_V)"
+        required: false
+        type: string
+      baseline_pipeline:
+        description: "Baseline source: 'baseline' (pinned), 'nightly' (rolling) or 'merge_baseline'"
+        required: false
+        default: baseline
+        type: string
+      baseline_match_ref:
+        description: >-
+          Take the warehouse run measured at the newest LLK perf change at or before
+          merge-base(this ref, HEAD), where the merge gate uploads one. Blank takes
+          the newest run.
+        required: false
+        default: ""
+        type: string
+      baseline_wait_minutes:
+        description: "How long to wait for that run before taking an older one, marked stale"
+        required: false
+        default: "0"
+        type: string
+      speed_of_light:
+        description: "Which mode's rows to take as the baseline"
+        required: false
+        default: "false"
+        type: string
+      baseline_artifact_pattern:
+        description: >-
+          Take the baseline from THIS run's artifacts matching this pattern
+          instead of the warehouse, for a PR measured against its branch point.
+        required: false
+        default: ""
+        type: string
+      current_artifact_pattern:
+        description: "Artifact pattern for the current side (blank = perf-data-<arch>-*)"
+        required: false
+        default: ""
+        type: string
+      baseline_commit:
+        description: "Commit the baseline side was measured at, for the report"
+        required: false
+        default: ""
+        type: string
+      measure_result:
+        description: >-
+          Results of the measuring jobs, comma-separated. Anything other than
+          success or skipped means the suite is incomplete, so nothing is compared.
+        required: false
+        default: ""
+        type: string
+      run_types:
+        description: "Comma-separated run types to gate on (e.g. L1_TO_L1, MATH_ISOLATE, PACK_ISOLATE)"
+        required: false
+        default: L1_TO_L1
+        type: string
+      fail_on_regression:
+        description: "Fail the job on a regression. False reports to Slack only."
+        required: false
+        default: true
+        type: boolean
+      threshold:
+        description: "Relative slowdown counting as a regression (BH 0.02, WH 0.08)"
+        required: false
+        default: "0.02"
+        type: string
+      module_thresholds:
+        description: "Per-module thresholds, comma-separated, e.g. perf_matmul=0.25"
+        required: false
+        default: ""
+        type: string
+      min_cycles:
+        description: "A point must also move more than this many cycles"
+        required: false
+        default: "30"
+        type: string
+      gate_name:
+        description: "Name of the gate in the Slack message"
+        required: false
+        default: LLK perf gate
+        type: string
+      pr_number:
+        description: >-
+          The PR the compared runs came from. Only used to label the Slack
+          message when there is no pull_request event to read it from,
+          as on a pilot dispatch. Nothing is posted to the PR.
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  checks: write
+  pull-requests: write
+
+env:
+  LLK_PATH: tt_metal/tt-llk
+
+jobs:
+  llk-perf-gate:
+    name: "Compare perf: current vs main"
+    runs-on: ubuntu-slim
+    outputs:
+      gate_exit_code: ${{ steps.compare.outputs.gate_exit_code }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        timeout-minutes: 20
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install pandas snowflake-connector-python cryptography
+
+      - name: Check the measurement is complete
+        id: measured
+        env:
+          MEASURE_RESULT: ${{ inputs.measure_result }}
+        run: |
+          COMPLETE=true
+          IFS=',' read -ra RESULTS <<< "$MEASURE_RESULT"
+          for R in "${RESULTS[@]}"; do
+            R=$(echo "$R" | xargs)
+            case "$R" in ""|success|skipped) ;; *) COMPLETE=false ;; esac
+          done
+          echo "complete=$COMPLETE" >> "$GITHUB_OUTPUT"
+          if [ "$COMPLETE" != "true" ]; then
+            echo "::error::The measurement did not complete (${MEASURE_RESULT}), so the gate compares nothing."
+          fi
+
+      - name: Read the baseline from the warehouse
+        if: inputs.baseline_run_id == '' && inputs.baseline_artifact_pattern == ''
+        env:
+          SNOWFLAKE_ACCOUNT: TLUIIGS-MN66866
+          SNOWFLAKE_USER: SVC_TTOPS_SWEEPS
+          SNOWFLAKE_WAREHOUSE: PUBLIC
+          SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SWEEPS_SNOWFLAKE_KEY }}
+          ARCH: ${{ inputs.arch }}
+          BASELINE_PIPELINE: ${{ inputs.baseline_pipeline }}
+          SPEED_OF_LIGHT: ${{ inputs.speed_of_light }}
+          MEASURED_RUN: ${{ inputs.perf_run_id || github.run_id }}
+          MATCH_REF: ${{ inputs.baseline_match_ref }}
+          WAIT_MINUTES: ${{ inputs.baseline_wait_minutes }}
+          LLK_PERF_WAREHOUSE_TABLE: >-
+            ${{ inputs.warehouse_table || vars.LLK_PERF_WAREHOUSE_TABLE }}
+        run: |
+          COMMITS_ARG=()
+          if [ -n "$MATCH_REF" ]; then
+            # An empty list is passed on, so the reader skips instead of taking any run.
+            COMMITS=$(.github/scripts/llk-perf-baseline-commits.sh "$MATCH_REF") \
+              || { echo "::warning::No LLK perf change found before ${MATCH_REF}; no baseline."; COMMITS=""; }
+            COMMITS=$(echo "$COMMITS" | paste -sd, -)
+            echo "Expected baseline commit: ${COMMITS%%,*}"
+            COMMITS_ARG=(--commits "$COMMITS")
+          fi
+          python3 ${{ env.LLK_PATH }}/perf/baseline_from_warehouse.py \
+            --arch "$ARCH" \
+            --pipeline "$BASELINE_PIPELINE" \
+            --speed-of-light "$SPEED_OF_LIGHT" \
+            --exclude-workflow-run "$MEASURED_RUN" \
+            "${COMMITS_ARG[@]}" \
+            --wait-minutes "${WAIT_MINUTES:-0}" \
+            --out baseline_perf/baseline.csv \
+            --metadata baseline_metadata.json
+
+      - name: Download the baseline from a workflow run
+        if: inputs.baseline_run_id != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: perf-data-${{ inputs.arch }}-*
+          merge-multiple: true
+          path: baseline_perf
+          run-id: ${{ inputs.baseline_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Record the baseline run as the baseline
+        if: inputs.baseline_run_id != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASELINE_RUN_ID: ${{ inputs.baseline_run_id }}
+          ARCH: ${{ inputs.arch }}
+        run: |
+          COUNT=$(find baseline_perf -name '*.csv' -not -name '*.post.csv' | wc -l)
+          echo "Baseline ${ARCH} CSVs from run ${BASELINE_RUN_ID}: ${COUNT}"
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::Run ${BASELINE_RUN_ID} published no perf-data-${ARCH}-* artifacts."
+            echo "false" > have_baseline.txt
+            echo '{}' > baseline_metadata.json
+            exit 1
+          fi
+
+          BASELINE_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${BASELINE_RUN_ID}" \
+            --jq '.head_sha') || BASELINE_SHA=""
+          python3 - "$BASELINE_SHA" "$BASELINE_RUN_ID" > baseline_metadata.json <<'PYTHON'
+          import json
+          import sys
+
+          sha, run_id = sys.argv[1], sys.argv[2]
+          print(json.dumps({"commit_sha": sha, "run_id": run_id}))
+          PYTHON
+          echo "true" > have_baseline.txt
+          echo "Baseline commit: ${BASELINE_SHA:-unknown}"
+
+      - name: Take the baseline from this run's artifacts
+        if: inputs.baseline_artifact_pattern != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: ${{ inputs.baseline_artifact_pattern }}
+          merge-multiple: true
+          path: baseline_perf
+
+      - name: Record the branch point as the baseline
+        if: inputs.baseline_artifact_pattern != ''
+        env:
+          BASELINE_COMMIT: ${{ inputs.baseline_commit }}
+          PATTERN: ${{ inputs.baseline_artifact_pattern }}
+        run: |
+          COUNT=$(find baseline_perf -name '*.csv' -not -name '*.post.csv' | wc -l)
+          echo "Branch-point CSVs (${PATTERN}): ${COUNT}"
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::Nothing matched ${PATTERN}; the branch point measured nothing."
+            echo "false" > have_baseline.txt
+            echo '{}' > baseline_metadata.json
+            exit 1
+          fi
+          printf '{"commit_sha": "%s", "source": "branch point, measured in this run"}\n' \
+            "$BASELINE_COMMIT" > baseline_metadata.json
+          echo "true" > have_baseline.txt
+
+      - name: Download the PR's perf data
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: ${{ inputs.current_artifact_pattern || format('perf-data-{0}-*', inputs.arch) }}
+          merge-multiple: true
+          path: current_perf
+          run-id: ${{ inputs.perf_run_id || github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check that perf data arrived
+        env:
+          ARCH: ${{ inputs.arch }}
+          EXPECT_SOL: ${{ inputs.speed_of_light }}
+        run: |
+          COUNT=$(find current_perf -name '*.csv' -not -name '*.post.csv' | wc -l)
+          echo "Current-side CSVs for ${ARCH}: ${COUNT}"
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::No ${ARCH} perf CSVs for the current side. The gate measured nothing."
+            echo "::error::Check that the run published perf-data-${ARCH}-* artifacts."
+            exit 1
+          fi
+          python3 - <<'PYTHON'
+          import csv
+          import glob
+          import os
+          import sys
+
+          want = os.environ["EXPECT_SOL"].strip().lower() == "true"
+          for path in glob.glob("current_perf/**/*.csv", recursive=True):
+              if path.endswith(".post.csv"):
+                  continue
+              with open(path, newline="") as fh:
+                  row = next(csv.DictReader(fh), None)
+              if not row or "speed_of_light" not in row:
+                  continue
+              got = str(row["speed_of_light"]).strip().lower() == "true"
+              if got != want:
+                  sys.exit(
+                      f"::error::The current side is speed_of_light={got}, the "
+                      f"baseline is {want}. The two sides share no points, so "
+                      f"the gate cannot compare them."
+                  )
+              break
+          PYTHON
+
+      - name: Compare regressions
+        id: compare
+        if: >-
+          steps.measured.outputs.complete == 'true'
+          && hashFiles('baseline_perf/**/*.csv') != ''
+        env:
+          RUN_TYPES: ${{ inputs.run_types }}
+          THRESHOLD: ${{ inputs.threshold }}
+          MIN_CYCLES: ${{ inputs.min_cycles }}
+          MODULE_THRESHOLDS: ${{ inputs.module_thresholds }}
+          BASELINE_LABEL: >-
+            ${{ inputs.baseline_artifact_pattern && 'branch point on main'
+                || inputs.baseline_pipeline == 'merge_baseline' && 'merge baseline'
+                || 'pinned baseline' }}
+        run: |
+          set +e
+          BASELINE_SHA=$(python3 -c "import json; print(json.load(open('baseline_metadata.json')).get('commit_sha') or 'unknown')")
+          if python3 -c "import json, sys; sys.exit(not json.load(open('baseline_metadata.json')).get('stale'))"; then
+            BASELINE_LABEL="${BASELINE_LABEL}, stale"
+          fi
+
+          python3 ${{ env.LLK_PATH }}/perf/regression_compare.py \
+            --current 'current_perf/**/*.csv' \
+            --baseline 'baseline_perf/**/*.csv' \
+            --run-types "$RUN_TYPES" \
+            --threshold "$THRESHOLD" \
+            --min-cycles "$MIN_CYCLES" \
+            --module-threshold "$MODULE_THRESHOLDS" \
+            --report perf_gate_report.md \
+            --test 'LLK perf' \
+            --baseline-sha "$BASELINE_SHA" \
+            --current-sha "${{ github.event.pull_request.head.sha || github.sha }}" \
+            --baseline-label "$BASELINE_LABEL" \
+            --current-label "${{ github.event_name == 'pull_request' && 'PR head' || github.event_name == 'merge_group' && 'merge queue' || github.ref_name }}"
+          EXIT_CODE=$?
+          echo "gate_exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          if [ -f perf_gate_report.verdict.json ]; then
+            echo "comparison_finished=true" >> $GITHUB_OUTPUT
+          else
+            echo "comparison_finished=false" >> $GITHUB_OUTPUT
+            echo "::warning::The comparison did not finish (exit ${EXIT_CODE}); no verdict."
+          fi
+          exit 0  # Don't fail the step; let the verdict step decide
+
+      - name: Comment on PR
+        if: >-
+          always() && github.event_name == 'pull_request'
+          && steps.measured.outputs.complete == 'true'
+          && hashFiles('perf_gate_report.md') != ''
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          ARCH: ${{ inputs.arch }}
+        with:
+          script: |
+            const fs = require('fs');
+            if (!fs.existsSync('perf_gate_report.md')) {
+              core.warning('The comparison wrote no report; nothing to post.');
+              return;
+            }
+            const marker = `<!-- llk-perf-gate:${process.env.ARCH} -->`;
+            const body = `${marker}\n${fs.readFileSync('perf_gate_report.md', 'utf8')}`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            const mine = comments.find(
+              (c) => c.user.type === 'Bot' && c.body.startsWith(marker));
+            if (mine) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+      - name: Upload the gate report
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: llk-perf-gate-report-${{ inputs.arch }}
+          path: |
+            perf_gate_report.md
+            perf_gate_report.points.csv
+            perf_gate_report.regressions.csv
+          if-no-files-found: ignore
+
+      - name: Build the Slack payload
+        id: slack
+        if: always()
+        env:
+          SLACK_CHANNEL_ID: ${{ secrets.LLK_PERF_GATE_SLACK_CHANNEL_ID }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number || '?' }}
+          PR_URL: >-
+            ${{ github.event.pull_request.html_url
+                || (inputs.pr_number
+                    && format('{0}/{1}/pull/{2}', github.server_url, github.repository, inputs.pr_number))
+                || '' }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          GATE_EXIT_CODE: ${{ steps.compare.outputs.gate_exit_code }}
+          COMPARISON_FINISHED: ${{ steps.compare.outputs.comparison_finished }}
+          MEASURE_RESULT: ${{ inputs.measure_result }}
+          ARCH: ${{ inputs.arch }}
+          RUN_TYPES: ${{ inputs.run_types }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT_SHA: ${{ github.sha }}
+          MODE: >-
+            ${{ inputs.speed_of_light == 'true'
+                && 'speed of light' || 'non speed-of-light' }}
+          GATE_NAME: ${{ inputs.gate_name }}
+          TRIGGER: >-
+            ${{ github.event_name == 'schedule' && 'nightly'
+                || github.event_name == 'workflow_dispatch' && format('manual run on {0}', github.ref_name)
+                || github.event_name }}
+          WAIT_MINUTES: ${{ inputs.baseline_wait_minutes }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -z "$SLACK_CHANNEL_ID" ]; then
+            echo "LLK_PERF_GATE_SLACK_CHANNEL_ID is unset. No notification is sent."
+            echo "should_post=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          if [[ "$PR_NUMBER" == "?" && "$GITHUB_REF" =~ gh-readonly-queue/[^/]+/pr-([0-9]+)- ]]; then
+            PR_NUMBER="${BASH_REMATCH[1]}"
+            PR_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/pull/${PR_NUMBER}"
+            PR_TITLE=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .title) || PR_TITLE=""
+            PR_AUTHOR=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .user.login) || PR_AUTHOR=""
+          fi
+
+          BASELINE_SHA=$(python3 - <<'PYTHON'
+          import json
+          import os
+
+          path = "baseline_metadata.json"
+          data = json.load(open(path)) if os.path.exists(path) else {}
+          print(data.get("commit_sha", ""))
+          PYTHON
+          )
+
+          NOTE=$(python3 - <<'PYTHON'
+          import json
+          import os
+
+          path = "baseline_metadata.json"
+          data = json.load(open(path)) if os.path.exists(path) else {}
+          if data.get("stale"):
+              wait = float(os.environ.get("WAIT_MINUTES") or 0)
+              print(
+                  f"Stale baseline: none at {data['expected_commit'][:11]} "
+                  f"{f'after {wait:g} min' if wait else 'yet'}, so this compares "
+                  f"with {data.get('commit_sha', '?')[:11]} ({data.get('run_ts', '?')})."
+              )
+          PYTHON
+          )
+
+          python3 "${LLK_PATH}/perf/gate_slack_notify.py" \
+            --regressions perf_gate_report.regressions.csv \
+            --report perf_gate_report.md \
+            --have-baseline have_baseline.txt \
+            --exit-code "${GATE_EXIT_CODE:-0}" \
+            --comparison-finished "${COMPARISON_FINISHED:-true}" \
+            --measure-result "$MEASURE_RESULT" \
+            --channel "$SLACK_CHANNEL_ID" \
+            --pr-number "$PR_NUMBER" \
+            --pr-url "$PR_URL" \
+            --pr-title "$PR_TITLE" \
+            --author "$PR_AUTHOR" \
+            --arch "$ARCH" \
+            --run-types "$RUN_TYPES" \
+            --run-url "$RUN_URL" \
+            --baseline-sha "$BASELINE_SHA" \
+            --commit "$COMMIT_SHA" \
+            --mode "$MODE" \
+            --gate-name "$GATE_NAME" \
+            --trigger "$TRIGGER" \
+            --note "$NOTE" \
+            --out slack_payload.json && exit 0
+
+          echo "::error::The gate could not build its Slack notification."
+          echo "should_post=false" >> $GITHUB_OUTPUT
+
+      - name: Notify Slack
+        if: always() && steps.slack.outputs.should_post == 'true'
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
+        run: |
+          if [ -z "$SLACK_BOT_TOKEN" ]; then
+            echo "::error::LLK_SLACK_REPORTING_BOT_TOKEN is unset; the gate could not notify Slack."
+            exit 0
+          fi
+
+          RESPONSE=$(curl -sS -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+            -H "Content-type: application/json; charset=utf-8" \
+            --data @slack_payload.json) || true
+
+          case "$RESPONSE" in
+            *'"ok":true'*)
+              echo "Posted the gate verdict to Slack."
+              ;;
+            *)
+              echo "::error::Slack rejected the gate notification: ${RESPONSE}"
+              ;;
+          esac
+
+      - name: Gate verdict
+        if: always()
+        run: |
+          HAVE_BASELINE=$(cat have_baseline.txt)
+          EXIT_CODE=${{ steps.compare.outputs.gate_exit_code }}
+
+          if [ "${{ steps.measured.outputs.complete }}" != "true" ]; then
+            echo "::error::The measurement did not complete, so the gate compared nothing."
+            echo "This is an infrastructure fault, not a performance result."
+            exit 1
+          fi
+
+          if [ "$HAVE_BASELINE" != "true" ]; then
+            echo "⚠️  No baseline found; gate skipped (first run or data missing)"
+            exit 0
+          fi
+
+          if [ "${{ steps.compare.outputs.comparison_finished }}" = "false" ]; then
+            echo "::error::The comparison did not finish, so the gate has no verdict."
+            echo "This is an infrastructure fault, not a performance result."
+            exit 1
+          fi
+
+          if [ "$EXIT_CODE" != "0" ]; then
+            echo "❌ Performance regressions detected"
+            cat perf_gate_report.md
+            if [ "${{ inputs.fail_on_regression }}" = "true" ]; then
+              exit 1
+            fi
+            echo "Report-only: Slack carries the verdict; the job does not fail."
+            exit 0
+          fi
+
+          echo "✅ No regressions detected"
+          cat perf_gate_report.md

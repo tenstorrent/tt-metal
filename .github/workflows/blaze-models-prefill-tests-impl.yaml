@@ -180,6 +180,8 @@ jobs:
       PREFILL_SUMMARIES: /ci/prefill_summaries/${{ github.run_id }}-${{ github.run_attempt }}/${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
       # On /ci for the same reason as PREFILL_SUMMARIES: triage runs on a worker node.
       TRIAGE_OUTPUT_DIR: /ci/triage_output/${{ github.run_id }}-${{ github.run_attempt }}/${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+      # Pinned host-memory H2D makes weight load 10x slower; 0 restores the copy path. See #52893.
+      TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES: "0"
     strategy:
       fail-fast: false
       matrix:
@@ -255,6 +257,15 @@ jobs:
         with:
           name: test-log-${{ matrix.test-group.name }} (attempt ${{ github.run_attempt }})
           path: /home/user/tt-metal/generated/test_logs/**
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: ⬆️ Upload test results
+        if: always() && !cancelled() && matrix.test-group.artifact_subdir
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: prefill-results-${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }} (attempt ${{ github.run_attempt }})
+          path: ${{ env.PREFILL_SUMMARIES }}/${{ matrix.test-group.artifact_subdir }}/
           if-no-files-found: warn
           retention-days: 30
 

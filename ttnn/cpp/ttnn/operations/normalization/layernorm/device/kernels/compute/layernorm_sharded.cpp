@@ -35,7 +35,6 @@ void kernel_main() {
     constexpr auto num_tiles_per_block = get_arg(args::num_tiles_per_block);
     constexpr bool FLOAT32_DTYPE = get_arg(args::float32_dtype) == 1;
     constexpr bool FP32_DEST_ACC = compute_kernel_lib::get_fp32_dest_acc_enabled();
-    constexpr bool LEGACY_RSQRT = get_arg(args::legacy_rsqrt) == 1;
     constexpr auto num_blocks_second_stage = get_arg(args::num_blocks_second_stage);
     // gamma and beta each gate a buffer that only exists when their tensor was supplied, so the flag
     // has to reach the preprocessor as well as `if constexpr`.
@@ -114,7 +113,9 @@ void kernel_main() {
     constexpr uint32_t dfb_ex_global_id = dfb::ex_global;        // E[x] global reduce
     constexpr uint32_t dfb_xmm2_id = dfb_x;                      // xmm^2
     constexpr uint32_t dfb_ex2pe_id = dfb::ex2pe;                // E[(x-E[x])^2]+eps
-    constexpr uint32_t dfb_fusion_id = dfb::xmm;                 // stream gamma/beta (alias of dfb_xmm_id)
+    // Without gamma, normalisation must not reserve its still-full xmm input
+    // for output. Use the now-consumed variance scratch, and let beta read it.
+    constexpr uint32_t dfb_fusion_id = do_gamma ? dfb::xmm : dfb_x;
     constexpr uint32_t dfb_out_id = dfb::out;
 #ifdef DO_COL_MASK
 #ifndef RMSNORM
@@ -456,8 +457,8 @@ void kernel_main() {
                 add_init(dfb_ex2_id, dfb_eps);
                 add_tiles(dfb_ex2_id, dfb_eps, i, 0, dst0);
                 tile_regs_wait();
-                rsqrt_tile_init<LEGACY_RSQRT>();
-                rsqrt_tile<LEGACY_RSQRT>(dst0);
+                rsqrt_tile_init();
+                rsqrt_tile(dst0);
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(dst0, dfb_ex2pe_id);

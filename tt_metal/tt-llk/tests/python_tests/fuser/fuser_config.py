@@ -18,9 +18,11 @@ from helpers.perf.schema import LOOP_FACTOR_COLUMN, MARKER, TEST_NAME_COLUMN
 from helpers.profiler import Profiler, ProfilerData
 from helpers.test_config import BuildMode, ProfilerBuild, StimuliMode, TestConfig
 
+from .fpu_node import FpuNode
 from .l1_operation import L1Operation
 from .operand import OperandRegistry
 from .sentinel import FuserSentinel
+from .sfpu_node import SfpuNode
 
 
 @dataclass
@@ -80,6 +82,32 @@ class FuserConfig(TestConfig):
 
         if self.global_config.architecture is None:
             self.global_config.architecture = self.CHIP_ARCH
+        self._validate_pack_sfpu_formats()
+
+    def _validate_pack_sfpu_formats(self):
+        config = self.global_config
+        if config.dest_acc.value or not any(
+            isinstance(node, SfpuNode) for op in self.pipeline for node in op.pack_nodes
+        ):
+            return
+        formats = set()
+        for op in self.pipeline:
+            config.sentinel.prepare_operation(config, op)
+            output_format = op._get_pack_nodes()[0].output.data_format
+            for node in op.math_nodes:
+                if isinstance(node, FpuNode) and node.src_a is not None:
+                    formats.add(
+                        config.sentinel._infer_node_formats(
+                            config, node, output_format, op
+                        )[4]
+                    )
+            for node in op.pack_nodes:
+                if isinstance(node, SfpuNode):
+                    formats.add(config.sentinel._dest_source_format(config, op, node))
+        if len(formats) > 1:
+            raise ValueError(
+                "pack-thread SFPU requires a stable math format throughout a 16-bit Dst pipeline"
+            )
 
     def generate_variant_hash(self):
         NON_COMPILATION_ARGUMENTS = [

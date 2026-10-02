@@ -37,6 +37,23 @@ jit_telemetry_pattern = re.compile(
     r"mean=(?P<mean_value>\d+(?:\.\d+)?)(?:ms|B)?"
 )
 
+# The per-process cache-stats summary line, e.g.:
+#   JIT cache stats: 0/5660 hits (0.0%) [0 cached, 1032 build-once dedup, 0 merged artifacts, 0 merged genfiles]
+# Only the leading "hits/lookups" pair is required; the bracketed counters are matched
+# best-effort below so a change to that list drops the extras rather than failing. The
+# hit rate is intentionally not stored -- it is derivable (hits / lookups) and, unlike a
+# raw count, cannot be summed across process blocks.
+jit_cache_stats_pattern = re.compile(r"JIT cache stats:\s*(?P<hits>\d+)\s*/\s*(?P<lookups>\d+)\s+hits")
+
+# metric-name -> pattern for each optional bracketed counter. Kept raw-count only so the
+# same sum-across-blocks aggregation used for JIT telemetry stays correct.
+_jit_cache_extra_patterns = {
+    "jit_cache.cached": re.compile(r"(\d+)\s+cached"),
+    "jit_cache.build_once_dedup": re.compile(r"(\d+)\s+build-once dedup"),
+    "jit_cache.merged_artifacts": re.compile(r"(\d+)\s+merged artifacts"),
+    "jit_cache.merged_genfiles": re.compile(r"(\d+)\s+merged genfiles"),
+}
+
 
 def search_for_tt_smi_version_in_log_file_(log_file):
     # Defense-in-depth: resolve and confirm this is a real file before opening.
@@ -208,56 +225,77 @@ def search_for_jit_telemetry_in_log_file_(log_file):
     independent blocks, each cumulative for its own process only. Occurrences of the
     same metric are therefore aggregated across blocks (counts and totals summed,
     min/max reduced, mean recomputed as total/count) to give a job-level figure. A
-    metric seen once is passed through with its reported mean. Returns a list of
-    dicts with keys: metric_name, unit, sample_count, total_value, min_value,
-    max_value, mean_value.
+    metric seen once is passed through with its reported mean.
+
+    The per-process ``JIT cache stats`` line is captured too, as raw-count metrics
+    named ``jit_cache.*`` (hits, lookups, and the bracketed counters). Storing them
+    in the same flat metric shape means no new schema is needed downstream, and the
+    same sum-across-blocks aggregation is correct because they are counters. Returns
+    a list of dicts with keys: metric_name, unit, sample_count, total_value,
+    min_value, max_value, mean_value.
     """
     # Defense-in-depth: resolve and confirm this is a real file before opening.
     log_file = pathlib.Path(log_file).resolve()
     assert log_file.is_file(), f"Not a readable log file: {log_file}"
 
     metrics_by_name = {}
+
+    def fold(metric_name, unit, sample_count, total_value, min_value, max_value, mean_value):
+        """Insert a metric or fold a later process block into the running aggregate."""
+        existing = metrics_by_name.get(metric_name)
+        if existing is None:
+            metrics_by_name[metric_name] = {
+                "metric_name": metric_name,
+                "unit": unit,
+                "sample_count": sample_count,
+                "total_value": total_value,
+                "min_value": min_value,
+                "max_value": max_value,
+                "mean_value": mean_value,
+            }
+            return
+        existing["sample_count"] += sample_count
+        existing["total_value"] += total_value
+        existing["min_value"] = min(existing["min_value"], min_value)
+        existing["max_value"] = max(existing["max_value"], max_value)
+        # Recompute from the aggregate rather than averaging per-block means,
+        # which would be wrong when blocks have different sample counts.
+        existing["mean_value"] = existing["total_value"] / existing["sample_count"] if existing["sample_count"] else 0.0
+
+    def fold_counter(metric_name, value):
+        """Fold a single scalar counter as a one-sample metric (min=max=mean=value)."""
+        fold(metric_name, "count", 1, value, value, value, value)
+
     # errors="replace" so a stray non-UTF-8 byte in a log never aborts the scan.
     with open(log_file, "r", errors="replace") as log_f:
         for line in log_f:
             match = jit_telemetry_pattern.search(line)
-            if match is None:
+            if match is not None:
+                metric_name = match.group("metric_name").strip()
+                if not metric_name:
+                    continue
+                unit = match.group("unit_paren") or match.group("unit_suffix")
+                fold(
+                    metric_name,
+                    unit.strip() if unit else None,
+                    int(match.group("sample_count")),
+                    float(match.group("total_value")),
+                    float(match.group("min_value")),
+                    float(match.group("max_value")),
+                    float(match.group("mean_value")),
+                )
                 continue
 
-            metric_name = match.group("metric_name").strip()
-            if not metric_name:
-                continue
-
-            unit = match.group("unit_paren") or match.group("unit_suffix")
-            sample_count = int(match.group("sample_count"))
-            total_value = float(match.group("total_value"))
-            min_value = float(match.group("min_value"))
-            max_value = float(match.group("max_value"))
-            mean_value = float(match.group("mean_value"))
-
-            existing = metrics_by_name.get(metric_name)
-            if existing is None:
-                metrics_by_name[metric_name] = {
-                    "metric_name": metric_name,
-                    "unit": unit.strip() if unit else None,
-                    "sample_count": sample_count,
-                    "total_value": total_value,
-                    "min_value": min_value,
-                    "max_value": max_value,
-                    "mean_value": mean_value,
-                }
-                continue
-
-            # Second or later block for this metric: fold it into the running total.
-            existing["sample_count"] += sample_count
-            existing["total_value"] += total_value
-            existing["min_value"] = min(existing["min_value"], min_value)
-            existing["max_value"] = max(existing["max_value"], max_value)
-            # Recompute from the aggregate rather than averaging per-block means,
-            # which would be wrong when blocks have different sample counts.
-            existing["mean_value"] = (
-                existing["total_value"] / existing["sample_count"] if existing["sample_count"] else 0.0
-            )
+            cache_match = jit_cache_stats_pattern.search(line)
+            if cache_match is not None:
+                fold_counter("jit_cache.hits", float(cache_match.group("hits")))
+                fold_counter("jit_cache.lookups", float(cache_match.group("lookups")))
+                # Bracketed counters are best-effort: a format change drops them
+                # rather than breaking the scan.
+                for metric_name, pattern in _jit_cache_extra_patterns.items():
+                    extra = pattern.search(line)
+                    if extra is not None:
+                        fold_counter(metric_name, float(extra.group(1)))
 
     return list(metrics_by_name.values())
 

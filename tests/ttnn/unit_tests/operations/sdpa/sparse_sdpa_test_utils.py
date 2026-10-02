@@ -11,36 +11,7 @@ import pytest
 import torch
 
 import ttnn
-
-# Head dims (k_dim, v_dim) are supplied by each test, not baked in here. MASKED_INDEX is the op's sentinel.
-MASKED_INDEX = 0xFFFFFFFF  # sentinel: a masked slot (scores -inf, contributes 0); a contiguous tail per row
-
-
-def sparse_mla(q, kvpe, indices, scale, v_dim, attention_sink=None):
-    """Torch reference for the sparse-MLA prefill op. Absorbed MQA over the top-k selected latents named by
-    `indices` (one shared latent KV head); masking is baked into `indices` (index == MASKED_INDEX scores -inf).
-    Dims are derived from the inputs; V is the leading `v_dim` cols of the K_DIM-wide kvpe.
-        q [1,H,S,K_DIM], kvpe [T,K_DIM], indices [1,1,S,k] uint32  ->  out [1,H,S,v_dim]
-    """
-    B, H, S, Dk = q.shape
-    k = indices.shape[-1]
-    T = kvpe.shape[0]
-    idx = indices.reshape(B, S, k)
-    masked = idx == MASKED_INDEX
-    idx_safe = torch.where(masked, torch.zeros_like(idx), idx).to(torch.int64)  # clamp sentinels in-bounds
-    kv = kvpe.unsqueeze(0).expand(B, T, Dk)
-    sel = torch.gather(  # gather the k selected KV rows (shared across heads): [B,T,Dk] -> [B,S,k,Dk]
-        kv.unsqueeze(1).expand(B, S, T, Dk), 2, idx_safe.view(B, S, k, 1).expand(B, S, k, Dk)
-    )
-    scores = torch.einsum("bhsd,bsjd->bhsj", q, sel) * scale  # full-K_DIM scores [B,H,S,k]
-    scores = scores.masked_fill(masked.view(B, 1, S, k), float("-inf"))
-    if attention_sink is not None:
-        sink_scores = attention_sink.float().expand(B, H, S, 1) * scale
-        scores = torch.cat([scores, sink_scores], dim=-1)
-    probs = scores.softmax(dim=-1, dtype=torch.float32).to(q.dtype)
-    if attention_sink is not None:
-        probs = probs[..., :-1]
-    return torch.einsum("bhsj,bsjd->bhsd", probs, sel[..., :v_dim])  # weighted sum of V views [B,H,S,v_dim]
+from ttnn.operations.transformer_golden import MASKED_INDEX, sparse_mla
 
 
 def make_inputs(H, S, T, TOPK, k_dim, n_valid_fn, seed=0):
