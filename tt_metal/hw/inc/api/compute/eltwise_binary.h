@@ -435,11 +435,15 @@ ALWI void binary_reuse_dest_tiles(std::uint32_t in_cb_id, std::uint32_t in_tile_
     UNPACK(constexpr bool acc_to_dest = false);
 #endif
     UNPACK((llk_unpack_A<BroadcastType::NONE, acc_to_dest, reuse_dest>(in_cb_id, in_tile_index)));
+    // Fidelity applies to ELWMUL only, as in add_tiles/sub_tiles.
+    MATH(
+        constexpr MathFidelity math_fidelity =
+            (eltwise_binary_type == EltwiseBinaryType::ELWMUL) ? MATH_FIDELITY : MathFidelity::LoFi);
     MATH((llk_math_eltwise_binary<
           eltwise_binary_type,
           BroadcastType::NONE,
           is_fp32_dest_acc_en,
-          MATH_FIDELITY,
+          math_fidelity,
           reuse_dest>(in_cb_id, in_cb_id, dst_tile_index, true /* clear_fp32_dst_acc */)));
 }
 }  // namespace detail
