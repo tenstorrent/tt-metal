@@ -15,6 +15,11 @@
 //   4 one complete 16B read issue, with the previous read already finished
 //   5 four read issues back to back, so the later ones go out while earlier reads are in flight
 //   6 the prefetcher's sequence: set trid, issue a read, reset trid to 0
+//   7 one 16B read issue from DRAM bank 0, with the previous read already finished
+//   8 the same DRAM read issue, right after a local NoC write and a NoC atomic increment, as in relay inline
+//   9 the same DRAM read issue, right after an uncached store
+//  10 the same DRAM read issue, right after a cached store
+//  11 the same DRAM read issue, right after an uncached load whose value it does not use
 // Phases 1 to 3 time the whole loop. Phases 4 to 6 time only the issue, and wait for the read outside it.
 //
 // Result layout at result_addr, as 32-bit words:
@@ -30,10 +35,11 @@
 
 namespace {
 
-constexpr std::uint32_t kNumPhases = 7;
+constexpr std::uint32_t kNumPhases = 12;
 constexpr std::uint32_t kNumCounters = 6;
 constexpr std::uint32_t kReadBytes = 16;
 constexpr std::uint32_t kTrid = 5;
+constexpr std::uint32_t kDramAddr = 0x100000;
 
 constexpr std::uint64_t kEventDcacheBlocked = 1 | (1ull << (8 + 4));
 constexpr std::uint64_t kEventLongLatency = 1 | (1ull << (8 + 1));
@@ -155,7 +161,56 @@ void kernel_main() {
         noc_async_read_set_trid(0);
         accumulate(phases[6], start, read_counters());
     }
+    const std::uint64_t dram_noc_addr = get_noc_addr_from_bank_id<true>(0, kDramAddr);
+    for (std::uint32_t i = 0; i < num_iters; i++) {
+        noc_async_read_barrier();
+        const Counters start = read_counters();
+        noc_async_read(dram_noc_addr, dst_addr, kReadBytes);
+        accumulate(phases[7], start, read_counters());
+    }
+    const std::uint64_t write_noc_addr = get_noc_addr(dst_addr + 256);
+    const std::uint64_t sem_noc_addr = get_noc_addr(dst_addr + 512);
+    for (std::uint32_t i = 0; i < num_iters; i++) {
+        noc_async_read_barrier();
+        noc_async_write_barrier();
+        noc_async_atomic_barrier();
+        noc_async_write(src_addr, write_noc_addr, kReadBytes);
+        noc_semaphore_inc(sem_noc_addr, 1);
+        const Counters start = read_counters();
+        noc_async_read(dram_noc_addr, dst_addr, kReadBytes);
+        accumulate(phases[8], start, read_counters());
+    }
     noc_async_read_barrier();
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
+
+    volatile std::uint32_t* uncached =
+        reinterpret_cast<volatile std::uint32_t*>(dst_addr + 1024 + MEM_L1_UNCACHED_BASE);
+    volatile std::uint32_t* cached = reinterpret_cast<volatile std::uint32_t*>(dst_addr + 1024);
+    std::uint32_t sink = 0;
+    for (std::uint32_t i = 0; i < num_iters; i++) {
+        noc_async_read_barrier();
+        *uncached = i;
+        const Counters start = read_counters();
+        noc_async_read(dram_noc_addr, dst_addr, kReadBytes);
+        accumulate(phases[9], start, read_counters());
+    }
+    for (std::uint32_t i = 0; i < num_iters; i++) {
+        noc_async_read_barrier();
+        *cached = i;
+        const Counters start = read_counters();
+        noc_async_read(dram_noc_addr, dst_addr, kReadBytes);
+        accumulate(phases[10], start, read_counters());
+    }
+    for (std::uint32_t i = 0; i < num_iters; i++) {
+        noc_async_read_barrier();
+        sink += *uncached;
+        const Counters start = read_counters();
+        noc_async_read(dram_noc_addr, dst_addr, kReadBytes);
+        accumulate(phases[11], start, read_counters());
+    }
+    noc_async_read_barrier();
+    *uncached = sink;
 
     Counters probe = {};
     for (std::uint32_t i = 0; i < num_iters; i++) {

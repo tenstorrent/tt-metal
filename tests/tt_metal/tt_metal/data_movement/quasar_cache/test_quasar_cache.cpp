@@ -742,7 +742,7 @@ PollResult run_poll(distributed::MeshDevice& mesh_device, tt::umd::WindowFlags f
 // What programming and issuing a NoC read through the RoCC command buffer costs, per operation.
 void run_rocc_latency(distributed::MeshDevice& mesh_device) {
     constexpr std::uint32_t kIters = 64;
-    constexpr std::uint32_t kNumPhases = 7;
+    constexpr std::uint32_t kNumPhases = 12;
     constexpr std::uint32_t kNumCounters = 6;
     constexpr std::uint32_t kDstAddr = kEntryBase + 4096;
     std::vector<std::uint32_t> src(16, 0x5A5A5A5A);
@@ -773,8 +773,14 @@ void run_rocc_latency(distributed::MeshDevice& mesh_device) {
         "6 register writes of a read",
         "1 read issue, previous read done",
         "per read, 4 issued back to back",
-        "set trid + read issue + reset trid"};
-    const std::uint32_t per_phase_ops[kNumPhases] = {1, kIters, kIters, kIters, kIters, 4 * kIters, kIters};
+        "set trid + read issue + reset trid",
+        "1 DRAM read issue, previous read done",
+        "DRAM read issue after write + atomic",
+        "DRAM read issue after uncached store",
+        "DRAM read issue after cached store",
+        "DRAM read issue after uncached load"};
+    const std::uint32_t per_phase_ops[kNumPhases] = {
+        1, kIters, kIters, kIters, kIters, 4 * kIters, kIters, kIters, kIters, kIters, kIters, kIters};
     const char* counter_names[kNumCounters] = {"cycles", "instret", "d$_blocked", "long_lat", "d$_miss", "load_use"};
     for (std::uint32_t p = 1; p < kNumPhases; p++) {
         const std::uint32_t baseline = p <= 3 ? 0 : kNumPhases;

@@ -181,6 +181,7 @@ FORCE_INLINE uint32_t prefetch_q_read_slot(volatile tt_l1_ptr prefetch_q_entry_t
 //   4: the fetch bookkeeping between the group 2 regions: loop top checks, read_from_pcie before and after the
 //      read issue (after includes consume), in-flight bookkeeping after an issue, and retire bookkeeping, with
 //      HPM deltas
+//   5: the read issue alone, with HPM deltas
 #if defined(PREFETCH_Q_STATS)
 struct PrefetchQStats {
     uint64_t start_cycle;
@@ -199,12 +200,13 @@ inline __attribute__((always_inline)) uint64_t prefetch_q_cycle_now() {
 
 constexpr uint32_t pq_group = PREFETCH_Q_STATS;
 // Group 1 probes also read minstret and the four HPM counters, so each region gets its own event counts.
-constexpr bool pq_full = pq_group == 1 || pq_group == 4;
+constexpr bool pq_full = pq_group == 1 || pq_group == 4 || pq_group == 5;
 constexpr uint32_t PQ_NUM_COUNTERS = 6;  // mcycle, minstret, mhpmcounter3..6
 
 // Rocket HPM event selectors: bits [7:0] pick the event set, higher bits select events within it. D$ blocked and
 // long-latency interlock were checked against the cache latency test; the two I$ events were not.
 constexpr uint64_t PQ_EVENT_ICACHE_BLOCKED = 1 | (1ull << (8 + 3));
+constexpr uint64_t PQ_EVENT_DCACHE_MISS = 2 | (1ull << (8 + 1));
 constexpr uint64_t PQ_EVENT_DCACHE_BLOCKED = 1 | (1ull << (8 + 4));
 constexpr uint64_t PQ_EVENT_LONG_LATENCY = 1 | (1ull << (8 + 1));
 constexpr uint64_t PQ_EVENT_ICACHE_MISS = 2 | (1ull << (8 + 0));
@@ -233,7 +235,9 @@ enum PqRegion : uint32_t {
 constexpr uint32_t pq_region_group(uint32_t region) {
     return region <= PQ_PROCESS ? 1U : region <= PQ_READ_WAIT ? 2U : region <= PQ_RELEASE ? 3U : 4U;
 }
-constexpr bool pq_active(uint32_t region) { return pq_region_group(region) == pq_group; }
+constexpr bool pq_active(uint32_t region) {
+    return pq_region_group(region) == pq_group || (pq_group == 5 && region == PQ_READ_ISSUE);
+}
 
 struct PqSnap {
     uint64_t v[PQ_NUM_COUNTERS];
@@ -3406,7 +3410,7 @@ void kernel_main() {
     invalidate_l2_cache_range(prefetch_q_view_base, prefetch_q_size);
 #endif
 #if defined(PREFETCH_Q_STATS)
-    __asm__ __volatile__("csrw 0x323, %0" ::"r"(PQ_EVENT_ICACHE_BLOCKED));
+    __asm__ __volatile__("csrw 0x323, %0" ::"r"(PQ_EVENT_DCACHE_MISS));
     __asm__ __volatile__("csrw 0x324, %0" ::"r"(PQ_EVENT_DCACHE_BLOCKED));
     __asm__ __volatile__("csrw 0x325, %0" ::"r"(PQ_EVENT_LONG_LATENCY));
     __asm__ __volatile__("csrw 0x326, %0" ::"r"(PQ_EVENT_ICACHE_MISS));
@@ -3462,7 +3466,7 @@ void kernel_main() {
         prefetch_q_stats.idle_waits,
         prefetch_q_stats.max_busy_cycles);
     DPRINT(
-        "prefetch_q_hpm event3={} instret={} icache_blocked={} dcache_blocked={} long_latency={} icache_miss={}\n",
+        "prefetch_q_hpm event3={} instret={} dcache_miss={} dcache_blocked={} long_latency={} icache_miss={}\n",
         pq_event3_readback,
         pq_run_end.v[1] - pq_run_start.v[1],
         pq_run_end.v[2] - pq_run_start.v[2],
@@ -3471,12 +3475,12 @@ void kernel_main() {
         pq_run_end.v[5] - pq_run_start.v[5]);
     DPRINT("prefetch_q_probe cycles={} instret={}\n", pq_probe_cycles, pq_probe_instret);
     for (uint32_t region = 0; region < PQ_NUM_REGIONS; region++) {
-        if (pq_region_group(region) != pq_group) {
+        if (!pq_active(region)) {
             continue;
         }
         const PqRegionStats& r = pq_regions[region];
         DPRINT(
-            "prefetch_q_region id={} n={} cycles={} instret={} icache_blocked={} dcache_blocked={} long_latency={} "
+            "prefetch_q_region id={} n={} cycles={} instret={} dcache_miss={} dcache_blocked={} long_latency={} "
             "icache_miss={}\n",
             region,
             r.count,

@@ -541,11 +541,11 @@ void PrefetchKernel::CreateKernel() {
         defines["PREFETCH_Q_SNOOP"] = "1";
     }
     // TEMP, do not commit: prefetcher cycle accounting. The value picks which group of regions is timed, see
-    // cq_prefetch.cpp. Anything other than 1 to 4 times no regions.
+    // cq_prefetch.cpp. Anything other than 1 to 5 times no regions.
     if (const char* stats = std::getenv("TT_METAL_FD_PREFETCH_Q_STATS"); stats != nullptr) {
         const std::string_view group(stats);
         defines["PREFETCH_Q_STATS"] =
-            (group == "1" || group == "2" || group == "3" || group == "4") ? std::string(group) : "0";
+            (group == "1" || group == "2" || group == "3" || group == "4" || group == "5") ? std::string(group) : "0";
     }
 
     if (!is_hd()) {
