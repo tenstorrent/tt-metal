@@ -35,6 +35,13 @@ The first advisory yields a **639.742-second clean submission**, but reward stay
 0: it fixes the reported bug and breaks two existing regressions. A further
 generic existing-test/diff-review advisory control is pending; no hidden tests
 or task-specific solution are passed to the agent.
+That follow-up also fails. The first **actual five-task combined baseline** is
+now prepared with the original-prompt configurable-weight BFP8 candidate that
+already has three clean solves, excluding the unproven prefill/advisory changes.
+The pre-dispatch runtime forecast is 65 minutes best case, 3h06m40s expected,
+5h20m conservative, plus an explicit 10-hour hard summed agent-budget ceiling.
+These are terminal-event/runtime estimates, **not five-correct-solve estimates**;
+see the suite log for assumptions and the upcoming CI measurement.
 The [precision audit](AUTODEBUG.md) confirms fresh BFP8 weight provenance but
 identifies unchanged prefill BFP4 and untested long-context numerical quality;
 it does not establish a cache/position bug.
