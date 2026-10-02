@@ -143,6 +143,9 @@ inline std::shared_ptr<dist::MeshDevice> unit_mesh(int device_id) {
 // has every rank claiming every chip.
 inline std::shared_ptr<dist::MeshDevice> split_unit_mesh(int device_id) {
     static std::shared_ptr<dist::MeshDevice> mesh = [device_id] {
+        // An OWNING COPY, not a reference: get_current_world() returns a reference to the
+        // global that set_current_world() below replaces, so a reference would restore solo.
+        // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
         const mh::ContextPtr world = mh::DistributedContext::get_current_world();
         const mh::ContextPtr solo = world->split(mh::Color{static_cast<int>(*world->rank())}, mh::Key{0});
         mh::DistributedContext::set_current_world(solo);
