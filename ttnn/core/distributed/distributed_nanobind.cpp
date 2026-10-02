@@ -38,7 +38,7 @@
 #include <tt-metalium/maybe_remote.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt_stl/assert.hpp>
-#include <ttnn/api/ttnn/types.hpp>
+#include "ttnn/types.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -653,7 +653,19 @@ void py_module(nb::module_& mod) {
     auto py_mesh_device_view = static_cast<nb::class_<MeshDeviceView>>(mod.attr("MeshDeviceView"));
     py_mesh_device_view.def("shape", &MeshDeviceView::shape, nb::rv_policy::reference_internal)
         .def("num_devices", &MeshDeviceView::num_devices)
-        .def("is_local", &MeshDeviceView::is_local, nb::arg("coord"));
+        .def("is_local", &MeshDeviceView::is_local, nb::arg("coord"))
+        .def(
+            "get_local_mesh_coord_range",
+            &MeshDeviceView::get_local_mesh_coord_range,
+            R"doc(
+            Returns the bounding box of the coordinates of the devices that this process owns.
+
+            The range is the smallest box that holds every local coordinate. If the local
+            devices do not form a box, the range also holds coordinates of remote devices.
+
+            Raises:
+                RuntimeError: If no device in the view is local.
+            )doc");
 
     auto py_tensor_to_mesh = static_cast<nb::class_<TensorToMesh>>(mod.attr("CppTensorToMesh"));
     py_tensor_to_mesh.def(
@@ -959,6 +971,23 @@ void py_module(nb::module_& mod) {
        Args:
            mesh_device (MeshDevice): The mesh to create the mapper for.
            config (MeshMapperConfig): A config object representing a set of placements.
+
+       Returns:
+           TensorToMesh: A mapper providing the desired sharding.
+   )doc");
+    mod.def(
+        "create_mesh_mapper",
+        [](const MeshShape& mesh_shape, const MeshMapperConfig& config) -> nbh::unique_ptr<TensorToMesh> {
+            return nbh::steal_rewrap_unique<TensorToMesh>(create_mesh_mapper(mesh_shape, config));
+        },
+        nb::arg("mesh_shape"),
+        nb::arg("config"),
+        R"doc(
+       Returns an ND mapper that constructs every host shard without a device.
+
+       Args:
+           mesh_shape (MeshShape): The full logical mesh shape.
+           config (MeshMapperConfig): The placements, distribution shape, and mesh offset.
 
        Returns:
            TensorToMesh: A mapper providing the desired sharding.

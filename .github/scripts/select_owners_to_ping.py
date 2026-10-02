@@ -134,6 +134,7 @@ SLACK_ID_OVERRIDES: dict[str, str] = {
     "nsextonTT": "U08TVGQGGAE",
     "ncvetkovicTT": "U07AUABTEP6",
     "jvegaTT": "U07M7QZ0BQA",
+    "jyuanTT": "U0A1JMYFVNV",
 }
 
 # users.getPresence is rate limited and only ever breaks a tie, so cap the calls

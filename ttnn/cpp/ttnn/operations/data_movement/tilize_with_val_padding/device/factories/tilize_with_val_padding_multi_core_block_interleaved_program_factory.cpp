@@ -41,10 +41,10 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInter
 
     // Spec names are function-local: the op's factories are unity-built, and same-named
     // anonymous-namespace constants across them would redefine.
-    const DFBSpecName STAGE_FULL{"stage_full"};
+    const ScratchpadSpecName STAGE_FULL{"stage_full"};
     const DFBSpecName IN_FULL{"in_full"};
     const DFBSpecName OUT_FULL{"out_full"};
-    const DFBSpecName STAGE_CLIFFROW{"stage_cliffrow"};
+    const ScratchpadSpecName STAGE_CLIFFROW{"stage_cliffrow"};
     const DFBSpecName IN_CLIFFROW{"in_cliffrow"};
     const DFBSpecName OUT_CLIFFROW{"out_cliffrow"};
     const TensorParamName INPUT{"input"};
@@ -75,7 +75,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInter
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
                         output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
     CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     CoreRangeSet default_grid(default_cores);
@@ -115,13 +115,13 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInter
 
     ProgramSpec spec{.name = "tilize_with_val_padding_multi_core_block"};
 
-    // DFB specs: per non-empty buffer set, a per-row staging scratchpad (a reader-private self-loop),
+    // Buffers: per non-empty buffer set, a per-row staging Scratchpad (reader-private, no FIFO),
     // the input buffer the reader fills and compute tilizes, and the output buffer compute produces
     // and the writer drains. Each is sized once over the whole set from that set's scalar
     // `block_tiles`; the sizes mirror `push_buffer_set` (data_movement/common), the single source of
     // the split and its sizing. Keeping the two sets on distinct DFB names is a correctness property
     // (#51305): one index sized at two block widths across nodes is the corruption the split prevents.
-    const auto stage_dfb_of = [&](const BlockBufferSet& set) -> const DFBSpecName& {
+    const auto stage_scratch_of = [&](const BlockBufferSet& set) -> const ScratchpadSpecName& {
         return (&set == &cliffrow_set) ? STAGE_CLIFFROW : STAGE_FULL;
     };
     const auto in_dfb_of = [&](const BlockBufferSet& set) -> const DFBSpecName& {
@@ -142,11 +142,9 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInter
         // the byte accounting (the reader rounds the DRAM read down to alignment and re-copies).
         const uint32_t input_row_bytes = input_single_tile_size / TILE_HEIGHT;
         const uint32_t staging_size = input_row_bytes * set->block_tiles + 2 * dram_alignment;
-        spec.dataflow_buffers.push_back(DataflowBufferSpec{
-            .unique_id = stage_dfb_of(*set),
-            .entry_size = staging_size,
-            .num_entries = 1,
-            .data_format_metadata = input_data_format,
+        spec.scratchpads.push_back(ScratchpadSpec{
+            .unique_id = stage_scratch_of(*set),
+            .size_per_node = staging_size,
         });
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = in_dfb_of(*set),
@@ -192,28 +190,21 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInter
     // buffers. A set's cores are exactly the cores whose block width its buffers are sized for, so
     // every instance's raw block write lands in a buffer that is an exact multiple of it. The set's
     // cores are the union of the compute regions below, so the reader/writer specs are shared by that
-    // set's work units. The staging buffer is a single-toucher scratchpad -- the reader is bound to it
-    // as both producer and consumer (a Gen1-legal DM self-loop).
+    // set's work units. The staging buffer is a single-toucher Scratchpad the reader fills and drains
+    // itself (formerly a DM self-loop DFB, a shape unsupported on Gen2).
     auto make_reader_spec = [&](const KernelSpecName& id, const BlockBufferSet& set) {
         return KernelSpec{
             .unique_id = id,
             .source = std::filesystem::path{READER_SRC},
-            .dfb_bindings =
-                {DFBBinding{
-                     .dfb_spec_name = in_dfb_of(set),
-                     .accessor_name = "in",
-                     .endpoint_type = DFBEndpointType::PRODUCER,
-                 },
-                 DFBBinding{
-                     .dfb_spec_name = stage_dfb_of(set),
-                     .accessor_name = "staging",
-                     .endpoint_type = DFBEndpointType::PRODUCER,
-                 },
-                 DFBBinding{
-                     .dfb_spec_name = stage_dfb_of(set),
-                     .accessor_name = "staging",
-                     .endpoint_type = DFBEndpointType::CONSUMER,
-                 }},
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = in_dfb_of(set),
+                .accessor_name = "in",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            }},
+            .scratchpad_bindings = {ScratchpadBinding{
+                .scratchpad_spec_name = stage_scratch_of(set),
+                .accessor_name = "staging",
+            }},
             .tensor_bindings = {TensorBinding{
                 .tensor_parameter_name = INPUT,
                 .accessor_name = "src",
@@ -239,7 +230,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInter
                          "sub_block_width_size",
                          "single_sub_block_size_row_arg"},
                 },
-            .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+            .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
         };
     };
 
@@ -266,7 +257,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInter
                 {
                     .runtime_arg_names = {"start_id", "single_block_size_row_arg", "single_block_size_col_arg"},
                 },
-            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+            .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
         };
     };
 
@@ -304,9 +295,18 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInter
         // unpack_to_dest_mode[input_index]=UnpackToDestFp32 set when fp32 accumulation is on. Marking
         // only the bound set's input keeps the validator from rejecting an entry for a DFB the kernel
         // does not bind (the other set's input, which may not exist on any core).
-        ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_llk_acc};
+        ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_llk_acc};
         if (fp32_llk_acc) {
             compute_cfg.unpack_modes.insert({in_dfb_of(set), UnpackMode::UnpackToDest});
+        }
+
+        // Quasar gets only the common fields set above; WH/BH use compute_cfg as is.
+        ComputeHardwareConfig compute_hw = compute_cfg;
+        if (device->arch() == tt::ARCH::QUASAR) {
+            ComputeHardwareConfig compute_cfg_gen2;
+            compute_cfg_gen2.enable_32_bit_dest = compute_cfg.enable_32_bit_dest;
+            compute_cfg_gen2.unpack_modes = compute_cfg.unpack_modes;  // TODO(#52269): copied from WH/BH
+            compute_hw = compute_cfg_gen2;
         }
 
         const bool is_cliff_row_set = (&set == &cliffrow_set);
@@ -331,7 +331,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInter
                     {"block_size_row", block_size_row},
                     {"third_dim", third_dim},
                 },
-            .hw_config = std::move(compute_cfg),
+            .hw_config = std::move(compute_hw),
         });
         spec.work_units.push_back(WorkUnitSpec{
             .name = work_unit_name,

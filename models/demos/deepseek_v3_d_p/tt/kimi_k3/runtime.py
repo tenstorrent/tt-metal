@@ -3,15 +3,16 @@
 
 """The prefill runtime for Kimi-K3.
 
-`TtPrefillRuntime` is reused whole. Only two things differ, and both are consequences of Kimi-K3
-carrying recurrent state that no other model in this package has:
+`TtPrefillRuntime` is reused with Kimi-K3-specific transformer, carry and interval handling:
 
 * the transformer it drives is `TtKimiK3Transformer` (the `MODEL_CLS` seam), because only 24 of
   Kimi-K3's 93 layers write a KV slab and its residual is block-structured, so it cannot reuse the
   shared block; and
 * the KDA carries must be zeroed at the head of a request. A carry summarises the whole prefix
   behind it, so leaving the previous request's carry in place is not a small error — it conditions
-  every token of the new one on text it never saw.
+  every token of the new one on text it never saw; and
+* both chunk bounds must be 32-token aligned for KDA. Host bounds are checked before execution;
+  device-only trace metadata must satisfy the same contract on every replay.
 """
 
 from __future__ import annotations
@@ -21,12 +22,19 @@ import inspect
 from loguru import logger
 
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import validate_kda_bounds
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 
 
 class TtKimiK3Runtime(TtPrefillRuntime):
     MODEL_CLS = TtKimiK3Transformer
+
+    def _build_model(self, state_dict: dict) -> None:
+        # The shared build starts GLM-5.3's MTP predictor before MODEL_CLS runs, so reject here.
+        if self.config.mtp_levels:
+            raise ValueError(f"Kimi-K3 has no MTP predictor; got mtp_levels={self.config.mtp_levels}")
+        super()._build_model(state_dict)
 
     @property
     def activation_planes(self) -> int:
@@ -124,6 +132,9 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         # boundary and multi-chunk prefill would silently lose its recurrence.
         bound = inspect.signature(TtPrefillRuntime.prefill_chunk).bind_partial(self, *args, **kwargs)
         actual_start = bound.arguments.get("actual_start")
+        # Validate before resetting carries or replaying a trace. Device-only
+        # metadata must satisfy the same aligned, nonempty-interval contract.
+        validate_kda_bounds(actual_start, bound.arguments.get("actual_end"))
         if actual_start == 0:
             states = getattr(self.model, "kda_states", None)
             if states is not None:

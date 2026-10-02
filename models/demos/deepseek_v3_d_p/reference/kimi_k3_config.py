@@ -66,7 +66,7 @@ class KimiK3Config:
     # 3584x3072 routed-expert shape, between 128 and 192: the composite's cost is flat inside an M
     # chunk while the fused op's rises with the count. The composite takes 192 by 8.5% and never
     # gives the band back. Measured under SituGlu, the activation these experts actually run.
-    # Not enabled: only Kimi K2.6/K2.7 and GLM 5.1/5.2 dispatch both routed-expert ops today.
+    # Not enabled: only Kimi K2.6/K2.7 and GLM 5.2 dispatch both routed-expert ops today.
     # The measured crossover is kept under _MEASURED so it is not re-derived; rename it back to
     # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD to turn the split on, which is all the readers look for.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 128
@@ -170,7 +170,7 @@ def kimi_k3_hf_config(max_seq: int = 8192):
     raises ``ImportError`` at module import without ``fla-core``, which is not installed here.
 
     ``rope_scaling=None`` is the real K3 value and exercises ``ttMLA``'s guard; do not substitute
-    ``{"factor": 1.0, ...}`` as ``glm_5_2_hf_config`` does, since K3 has no rotary embedding at all.
+    ``{"factor": 1.0, ...}`` as ``glm_5_3_hf_config`` does, since K3 has no rotary embedding at all.
     ``max_position_embeddings`` is capped at ``max_seq`` because the CPU reference eagerly builds
     ``[max_position_embeddings, qk_rope_head_dim]`` cos/sin buffers -- 512 MB at K3's true 1M.
     """

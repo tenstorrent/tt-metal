@@ -48,7 +48,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarMailboxMinimal) {
         .source = "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/quasar_mailbox_minimal_compute.cpp",
         .num_threads = 1,
         .runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}},
-        .hw_config = experimental::ComputeGen2Config{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
     const experimental::WorkUnitSpec wu{
@@ -125,7 +125,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarDmToTriscMailbox) {
         .num_threads = 1,
         .compile_time_args =
             {{"value_unpack", DM_MBX_VAL_UNPACK}, {"value_math", DM_MBX_VAL_MATH}, {"value_pack", DM_MBX_VAL_PACK}},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     // num_threads = 1 places the compute kernel on Tensix engine 0 (NEO0) of the cluster -- the
@@ -135,7 +135,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarDmToTriscMailbox) {
         .source = "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/quasar_dm_mailbox_scratch_compute.cpp",
         .num_threads = 1,
         .runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}},
-        .hw_config = experimental::ComputeGen2Config{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
     const experimental::WorkUnitSpec wu{
@@ -233,7 +233,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarCbL1ReadApi) {
                  .endpoint_type = experimental::DFBEndpointType::CONSUMER,
              }},
         .runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}},
-        .hw_config = experimental::ComputeGen2Config{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
     const experimental::WorkUnitSpec wu{

@@ -8,6 +8,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 #include <tt-metalium/constants.hpp>
@@ -60,7 +61,6 @@ void kernel_main() {
 
 #ifdef USE_ALIGNED_PATH
     {
-        DataflowBuffer dfb_aligned_scratch(dfb::aligned_scratch);
         constexpr bool read_phase_1 = (PHASES_TO_READ == 0 || PHASES_TO_READ == 1);
         constexpr bool read_phase_2 = (PHASES_TO_READ == 0 || PHASES_TO_READ == 2);
         // The NOC alignment rule requires (src & (alignment-1)) == (dst & (alignment-1)).
@@ -68,7 +68,16 @@ void kernel_main() {
         // also be aligned. L1 buffer allocations are only L1-aligned (16 B on BH), so round up the
         // scratch base; the program factory oversizes the buffer by one DRAM_ALIGN_BYTES chunk to
         // accommodate this rounding.
+        // The staging scratch is a single-toucher (fill via NOC, drain via datamover) with no FIFO ops, so
+        // on Quasar (Gen2, which forbids a DM self-loop DFB) it is a node-local Scratchpad; WH/BH keep the
+        // self-loop DFB. Both expose the same "aligned_scratch" accessor; only the base-pointer getter differs.
+#ifdef ARCH_QUASAR
+        Scratchpad<uint8_t> aligned_scratch(scratch::aligned_scratch);
+        const uint32_t raw_scratch_base = aligned_scratch.get_base_address();
+#else
+        DataflowBuffer dfb_aligned_scratch(dfb::aligned_scratch);
         const uint32_t raw_scratch_base = dfb_aligned_scratch.get_write_ptr();
+#endif
         const uint32_t scratch_base = (raw_scratch_base + DRAM_ALIGN_BYTES - 1u) & ~(DRAM_ALIGN_BYTES - 1u);
 
         auto stage_phase = [&](uint32_t write_addr_base, uint32_t starting_tile_id, uint32_t phase_offset) {

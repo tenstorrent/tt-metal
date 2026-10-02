@@ -28,7 +28,6 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
-    quasar_mx_smoke,
     runtime,
     select_perf_tile_sizes,
 )
@@ -183,26 +182,22 @@ def generate_qsr_pack_combinations(
     return combinations
 
 
-# MxFp8R/P encode only: one Float16_b -> MxFp8* pair each, kept off the cross
-# product. Decode of those two formats lives on test_unpack_unary_operand_quasar.
-PACK_FORMATS = (
-    input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float16,
-            DataFormat.Float32,
-            DataFormat.Int32,
-            DataFormat.Int8,
-            DataFormat.UInt8,
-            DataFormat.Int16,
-            DataFormat.MxFp4,
-            DataFormat.MxInt8,
-            DataFormat.MxInt4,
-            DataFormat.MxInt2,
-        ]
-    )
-    + quasar_mx_smoke(DataFormat.Float16_b, DataFormat.MxFp8R)
-    + quasar_mx_smoke(DataFormat.Float16_b, DataFormat.MxFp8P)
+PACK_FORMATS = input_output_formats(
+    [
+        DataFormat.Float16_b,
+        DataFormat.Float16,
+        DataFormat.Float32,
+        DataFormat.Int32,
+        DataFormat.Int8,
+        DataFormat.UInt8,
+        DataFormat.Int16,
+        DataFormat.MxFp8R,
+        DataFormat.MxFp8P,
+        DataFormat.MxFp4,
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
+    ]
 )
 ALL_PACK_COMBINATIONS = generate_qsr_pack_combinations(PACK_FORMATS)
 PERF_PACK_COMBINATIONS = generate_qsr_pack_combinations(PACK_FORMATS, is_perf=True)
@@ -297,8 +292,9 @@ def test_pack_quasar(
             tile_shape=tile_shape,
         )
 
+        # THCON_PACKER<n>_RELU_THRESHOLD has to be a +ve number, so use the mean magnitude
         tensor_average = (
-            torch.mean(golden_tensor).item()
+            torch.mean(torch.abs(golden_tensor)).item()
             if not formats.output_format.is_integer()
             else 0.0
         )

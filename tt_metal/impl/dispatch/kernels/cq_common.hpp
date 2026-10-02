@@ -103,11 +103,11 @@ constexpr SemScope fd_upstream_sem_scope = SemScope::LOCAL_NONATOMIC;
 // in firmware_config_init(). The token is built here, not host-generated, because only it takes a scope.
 template <uint32_t sem_id, SemScope scope>
 FORCE_INLINE auto fd_semaphore() {
-    return Semaphore<programmable_core_type, scope>(SemaphoreBindingToken<sem_id, scope>{});
+    return Semaphore<programmable_core_type>(SemaphoreBindingToken{sem_id, scope});
 }
 
 // The host's init write lands in the ordinary semaphore slot, not the pool, so copy it across. Remove this
-// if FD becomes a Metal 2.0 kernel -- codegen's init_dm_local_cached() does it. A plain store is safe here:
+// if FD becomes a Metal 2.0 kernel -- the firmware's init_dm_local_cached() does it. A plain store is safe here:
 // a consumer returns credits only after consuming a command, which prefetch can only send after seeding.
 template <uint32_t sem_id>
 FORCE_INLINE void fd_seed_upstream_sem() {
@@ -491,8 +491,8 @@ template <
 class CBReader {
 public:
     FORCE_INLINE void wait_all_pages() {
-        volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
+        volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
 
         uint32_t to_wait_for = upstream_count_;
 
@@ -535,8 +535,8 @@ protected:
     template <typename T = NoTelemetryBlockGuard>
     FORCE_INLINE uint32_t acquire_pages() {
         static_assert(is_telemetry_block_guard<T>::value, "T must be a telemetry block guard");
-        volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
+        volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
 
         if (local_count_ == upstream_count_) {
             WAYPOINT("UAPW");

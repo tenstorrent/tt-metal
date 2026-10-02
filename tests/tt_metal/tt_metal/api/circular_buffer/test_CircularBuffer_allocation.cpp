@@ -57,10 +57,10 @@ void validate_cb_address(
     const std::map<CoreCoord, std::map<uint8_t, uint32_t>>& core_to_address_per_buffer_index) {
     auto& cq = mesh_device->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    uint32_t max_cbs = MetalContext::instance().hal().get_arch_num_circular_buffers();
+    uint32_t max_dfbs = MetalContext::instance().hal().get_num_dataflow_buffers();
 
     vector<uint32_t> cb_config_vector;
-    uint32_t cb_config_buffer_size = max_cbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+    uint32_t cb_config_buffer_size = max_dfbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
     for (const CoreRange& core_range : cr_set.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
@@ -96,7 +96,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBuffersSequentiallyPlaced) {
 
         std::map<uint8_t, uint32_t> expected_addresses;
         auto expected_cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
-        for (uint32_t cb_id = 0; cb_id < max_cbs_; cb_id++) {
+        for (uint32_t cb_id = 0; cb_id < max_dfbs_; cb_id++) {
             CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{cb_id, cb_config.data_format}})
                                                .set_page_size(cb_id, cb_config.page_size);
             CreateCircularBuffer(program_, core, config1);
@@ -150,7 +150,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferSequentialAcrossAllCores) {
 
         auto expected_multi_core_address =
             device->allocator()->get_base_allocator_addr(HalMemType::L1) + (max_num_cbs * cb_config.page_size);
-        uint32_t multicore_buffer_idx = max_cbs_ - 1;
+        uint32_t multicore_buffer_idx = max_dfbs_ - 1;
         CircularBufferConfig config2 =
             CircularBufferConfig(cb_config.page_size, {{multicore_buffer_idx, cb_config.data_format}})
                 .set_page_size(multicore_buffer_idx, cb_config.page_size);
@@ -524,7 +524,7 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferPageSize) {
         distributed::EnqueueMeshWorkload(cq, workload, false);
 
         vector<uint32_t> cb_config_vector;
-        uint32_t cb_config_buffer_size = max_cbs_ * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+        uint32_t cb_config_buffer_size = max_dfbs_ * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
         for (const CoreRange& core_range : cr_set.ranges()) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {

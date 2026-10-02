@@ -81,8 +81,8 @@ BmmTensors create_bmm_tensors(distributed::MeshDevice& mesh_device, const BmmPar
 template <typename TargetNodes>
 experimental::ProgramSpec build_bmm_program_spec(
     const BmmParams& p, const BmmTensors& tensors, const TargetNodes& target_nodes, bool use_implicit_sync) {
-    // Both kernels expose Gen1 + Gen2 data movement configs so the same spec runs on WH/BH and
-    // Quasar; the runtime picks the right one per arch. The kernel sources use the unified
+    // Data movement configs are chosen per arch so the same spec runs on WH/BH and
+    // Quasar. The kernel sources use the unified
     // DataflowBuffer device API on both arches (CB-backed on Gen1, DFB-backed on Gen2).
     // On Quasar we also enable implicit sync on each DFB so the reader/writer kernels can drop
     // explicit reserve_back/wait_front/push_back/pop_front; on WH/BH implicit sync is unsupported
@@ -92,15 +92,35 @@ experimental::ProgramSpec build_bmm_program_spec(
     experimental::DataMovementHardwareConfig writer_config;
     experimental::ComputeHardwareConfig compute_config;
     if (is_quasar) {
-        reader_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = !use_implicit_sync};
-        writer_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = !use_implicit_sync};
-        compute_config = experimental::ComputeGen2Config{};
+        reader_config = experimental::DataMovementHardwareConfig{
+            .config_2xx =
+                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = !use_implicit_sync,
+                },
+        };
+        writer_config = experimental::DataMovementHardwareConfig{
+            .config_2xx =
+                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = !use_implicit_sync,
+                },
+        };
+        compute_config = experimental::ComputeHardwareConfig{};
     } else {
-        reader_config = experimental::DataMovementGen1Config{
-            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default};
-        writer_config = experimental::DataMovementGen1Config{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
-        compute_config = experimental::ComputeGen1Config{};
+        reader_config = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_1,
+                    .noc = NOC::RISCV_1_default,
+                },
+        };
+        writer_config = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::RISCV_0_default,
+                },
+        };
+        compute_config = experimental::ComputeHardwareConfig{};
     }
 
     experimental::DataflowBufferSpec src0_dfb_spec{

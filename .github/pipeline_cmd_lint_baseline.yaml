@@ -1,0 +1,29 @@
+# Baseline for .github/scripts/utils/lint_pipeline_cmds.py.
+#
+# These test entries predate the lint. Their cmd blocks record a failed test command
+# and start the next one on devices that were not reset (tt-metal#57706). New entries
+# and the models tier yamls must not be added here: use `|| exit $?` instead. pr-gate
+# runs the lint with --base-baseline (this file as on main), so an entry that is not
+# already on main is rejected.
+#
+# The lint reports an entry listed here that no longer has a finding, so remove the
+# entry from this file when you fix it. This list can only shrink.
+#
+# Format: <yaml basename>: [<entry name>, ...]
+agentic_research_model_tests.yaml:
+  - Gemma4 31B QB2 decoder, GPQA subset and serving
+blackhole_e2e_tests.yaml:
+  - Disaggregated prefill accuracy tests
+  - Disaggregated prefill perf tests
+  - Disaggregated prefill accuracy & weight cache tests
+blaze_models_prefill_tests.yaml:
+  - Ring joint SDPA perf + ring MLA chunked 55k@5k perf, accuracy, determinism
+  - high_bw_all_gather CCL perf + accuracy
+  # The three single-job legs below landed on 2026-09-29/30 (#58412, #58413, #58415) while
+  # this lint was in review. Each runs its sections as `( ... ) || rc=$?` so every section
+  # reports before `exit $rc`; splitting them into one leg per section is the owner's call.
+  - (Llama-3.1-8B) prefill components, decoder + book top-5 accuracy 2k, 4k
+  - (Mistral-Small-4-119B) MLA, MLA chunked, block, MoE, transformer + chunked padded accuracy
+  - (GPT-OSS-120B) chunked prefill KV accuracy longbook 5k@2.5k, 5k@1k + variable-chunk smoke 1k vs 8k
+ops_unit_tests.yaml:
+  - Disaggregated prefill op unit tests (LB)

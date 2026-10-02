@@ -92,7 +92,7 @@ void kernel_main() {
                     ckl::DataFormatReconfig::Enabled,
                     ckl::TileAddressing::Offset),
                 ckl::input(dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{1, 0u},
-            ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::On, ckl::Dst::D0>{},
+            ckl::Rsqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(dfb_recip_sqrt_var_id)>{});
 
         // Process tiles across width in blocks

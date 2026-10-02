@@ -69,7 +69,7 @@ VBENCH_THRESHOLDS = {
     "dynamic_degree": 1.0,
     "imaging_quality": 0.64,
 }
-CLIP_THRESHOLD = 33.0  # measured mean 37.05 (2026-08-04, fox prompt, seed 0)
+CLIP_THRESHOLD = 33.0  # calibrated 2026-08-04, fox prompt, seed 0
 
 # tier-6 thresholds are calibrated against this exact prompt; swapping it invalidates both bars.
 PROMPT = CALIBRATED_FOX_PROMPT
@@ -144,7 +144,6 @@ def test_t2va_end_to_end(mesh_device, reset_seeds, aspect_ratio, duration_s):
     pipeline = MiniMaxH3Pipeline.create_pipeline(
         mesh_device=mesh_device,
         weights_dir=weights,
-        dit_fsdp=False,
         vae_output_type="float",
     )
 
@@ -203,7 +202,7 @@ def test_t2va_end_to_end(mesh_device, reset_seeds, aspect_ratio, duration_s):
             check_written_file(paths, expected_frames, height=HEIGHT, width=WIDTH)
 
             # CLIP_THRESHOLD was measured at 16:9 / 5 s. Applying it across the sweep is an extrapolation,
-            # but a generous one: the calibrated point measures ~37 against a bar of 33, and the score is a
+            # but a generous one: the bar sits well under the calibrated point, and the score is a
             # prompt-alignment number rather than a resolution-dependent one. A prompt change would
             # invalidate it outright -- recalibrate before swapping PROMPT.
             gate_clip(frames, prompt, CLIP_THRESHOLD, stem)

@@ -15,18 +15,17 @@ construction. The dicts are:
     UNARY/BINARY_SFPU_OPS  set of supported MathOperation, set via _sfpu_ops class attr
 """
 
-from typing import Annotated, ClassVar, List, Literal, Optional, Tuple
+from typing import Annotated, ClassVar, Dict, List, Literal, Optional, Tuple, Union
 
-from fuser.compute_pipeline import ComputePipeline
 from fuser.fpu_node import FpuNode
 from fuser.l1_operation import L1Operation
 from fuser.pack_node import PackNode
+from fuser.pipeline_plan import dest_tile_capacity, plan_pipeline
 from fuser.sfpu_node import SfpuNode
 from helpers.llk_params import (
     AccToDest,
     ApproximationMode,
     BroadcastType,
-    ClearFP32DstAcc,
     DataFormat,
     DestSync,
     EltwiseBinaryReuseDestType,
@@ -65,6 +64,77 @@ SFPU_TILE_SIZES = {
     (32, 16),
     (32, 32),
 }
+
+INDEX_SLOT_NAMES = frozenset({"in0", "in1", "dest", "out", "src0", "src1"})
+
+
+class IndexSlotSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    base: int = 0
+    multipliers: Dict[str, int] = {}
+
+
+class IndexSequence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    start: int = 0
+    count: int = Field(gt=0)
+    step: int = 1
+
+    def expand(self) -> List[int]:
+        return [self.start + index * self.step for index in range(self.count)]
+
+
+IndexSlot = Union[List[int], int, IndexSlotSpec, IndexSequence]
+
+
+class IndexesSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ref: Optional[str] = None
+    in0: Optional[IndexSlot] = None
+    in1: Optional[IndexSlot] = None
+    dest: Optional[IndexSlot] = None
+    out: Optional[IndexSlot] = None
+    src0: Optional[IndexSlot] = None
+    src1: Optional[IndexSlot] = None
+
+    @field_validator(*INDEX_SLOT_NAMES, mode="after")
+    @classmethod
+    def expand_sequence(cls, value):
+        if isinstance(value, list) and not value:
+            raise ValueError("index lists must not be empty")
+        return value.expand() if isinstance(value, IndexSequence) else value
+
+    @model_validator(mode="after")
+    def validate_lists(self) -> "IndexesSchema":
+        template = {
+            s: len(getattr(self, s))
+            for s in ("dest", "src0", "src1")
+            if isinstance(getattr(self, s), list)
+        }
+        walked = {
+            s: len(getattr(self, s))
+            for s in ("in0", "in1", "out")
+            if isinstance(getattr(self, s), list)
+        }
+        if len(set(template.values())) > 1:
+            raise ValueError(
+                f"dest/src block lists must have the same length, got {template}"
+            )
+        if len(set(walked.values())) > 1:
+            raise ValueError(
+                f"in0/in1/out block lists must have the same length, got {walked}"
+            )
+        return self
+
+    def slot_overrides(self) -> Dict[str, IndexSlot]:
+        return {
+            slot: getattr(self, slot)
+            for slot in INDEX_SLOT_NAMES
+            if getattr(self, slot) is not None
+        }
 
 
 def reject(condition, message):
@@ -281,6 +351,25 @@ MATMUL_DIMS = lambda a, b: (a[0], b[1])
 SRC_A_DIMS = lambda a, b: a
 
 
+def parse_sfpu_operation(value, supported_ops, kind: str) -> MathOperation:
+    if isinstance(value, str):
+        try:
+            value = MathOperation[value]
+        except KeyError:
+            valid_ops = sorted(op.name for op in supported_ops)
+            raise ValueError(
+                f"Unknown operation: {value}, expected one of: {', '.join(valid_ops)}"
+            )
+    if not isinstance(value, MathOperation):
+        raise ValueError(f"Invalid operation: {value}")
+    if value not in supported_ops:
+        valid_ops = sorted(op.name for op in supported_ops)
+        raise ValueError(
+            f"{value.name} is not a supported {kind} SFPU operation, expected one of: {', '.join(valid_ops)}"
+        )
+    return value
+
+
 class UnarySfpuMathSchema(BaseModel):
     """Base schema for unary SFPU math nodes (type="UnarySfpu").
 
@@ -296,39 +385,24 @@ class UnarySfpuMathSchema(BaseModel):
     type: Literal["UnarySfpu"]
     operation: MathOperation
     approximation_mode: ApproximationMode = ApproximationMode.No
-    iterations: Annotated[int, Field(ge=1)] = 8
-    dst_dest_tile_index: Annotated[int, Field(ge=0)] = 0
+    iterations: Literal[8, 32] = 8
     fill_const_value: float = 1.0
+    indexes: Optional[Union[str, IndexesSchema]] = None
+    block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
 
     @field_validator("operation", mode="before")
     @classmethod
     def parse_operation(cls, v):
-        if isinstance(v, str):
-            try:
-                v = MathOperation[v]
-            except KeyError:
-                valid_ops = sorted(op.name for op in cls._sfpu_ops)
-                raise ValueError(
-                    f"Unknown operation: {v}, expected one of: {', '.join(valid_ops)}"
-                )
-        if not isinstance(v, MathOperation):
-            raise ValueError(f"Invalid operation: {v}")
-        if v not in cls._sfpu_ops:
-            valid_ops = sorted(op.name for op in cls._sfpu_ops)
-            raise ValueError(
-                f"{v.name} is not a supported unary SFPU operation, expected one of: {', '.join(valid_ops)}"
-            )
-        return v
+        return parse_sfpu_operation(v, cls._sfpu_ops, "unary")
 
     def to_node(self, operands):
         sfpu = type(self)._sfpu_cls(
             self.operation,
             self.approximation_mode,
             self.iterations,
-            self.dst_dest_tile_index,
             self.fill_const_value,
         )
-        return SfpuNode(sfpu=sfpu)
+        return SfpuNode(sfpu=sfpu, index_spec=self.indexes)
 
     def get_output_dimensions(self, operands) -> Optional[Tuple[int, int]]:
         return None
@@ -349,41 +423,22 @@ class BinarySfpuMathSchema(BaseModel):
     type: Literal["BinarySfpu"]
     operation: MathOperation
     approximation_mode: ApproximationMode = ApproximationMode.No
-    iterations: Annotated[int, Field(ge=1)] = 8
-    src1_dest_tile_index: Annotated[int, Field(ge=0)] = 0
-    src2_dest_tile_index: Annotated[int, Field(ge=0)] = 0
-    dst_dest_tile_index: Annotated[int, Field(ge=0)] = 0
+    iterations: Literal[8, 32] = 8
+    indexes: Optional[Union[str, IndexesSchema]] = None
+    block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
 
     @field_validator("operation", mode="before")
     @classmethod
     def parse_operation(cls, v):
-        if isinstance(v, str):
-            try:
-                v = MathOperation[v]
-            except KeyError:
-                valid_ops = sorted(op.name for op in cls._sfpu_ops)
-                raise ValueError(
-                    f"Unknown operation: {v}, expected one of: {', '.join(valid_ops)}"
-                )
-        if not isinstance(v, MathOperation):
-            raise ValueError(f"Invalid operation: {v}")
-        if v not in cls._sfpu_ops:
-            valid_ops = sorted(op.name for op in cls._sfpu_ops)
-            raise ValueError(
-                f"{v.name} is not a supported binary SFPU operation, expected one of: {', '.join(valid_ops)}"
-            )
-        return v
+        return parse_sfpu_operation(v, cls._sfpu_ops, "binary")
 
     def to_node(self, operands):
         sfpu = type(self)._sfpu_cls(
             self.operation,
             self.approximation_mode,
             self.iterations,
-            self.src1_dest_tile_index,
-            self.src2_dest_tile_index,
-            self.dst_dest_tile_index,
         )
-        return SfpuNode(sfpu=sfpu)
+        return SfpuNode(sfpu=sfpu, index_spec=self.indexes)
 
     def get_output_dimensions(self, operands) -> Optional[Tuple[int, int]]:
         return None
@@ -407,7 +462,6 @@ class FpuMathSchemaBase(BaseModel):
     operation: str
     unpacker: Optional[str] = None
     broadcast_type: BroadcastType = BroadcastType.None_
-    broadcast_tile: Optional[Annotated[int, Field(ge=0)]] = None
     reuse_dest: EltwiseBinaryReuseDestType = EltwiseBinaryReuseDestType.NONE
     reduce_pool: Optional[ReducePool] = None
     reduce_dim: Optional[ReduceDimension] = None
@@ -417,9 +471,10 @@ class FpuMathSchemaBase(BaseModel):
     transpose_faces: Transpose = Transpose.No
     math_fidelity: MathFidelity = MathFidelity.LoFi
     unpack_to_dest: UnpackToDest = UnpackToDest.No
-    reduce_to_tile: bool = False
     in0: Optional[str] = None
     in1: Optional[str] = None
+    indexes: Optional[Union[str, IndexesSchema]] = None
+    block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
 
     @property
     def has_transpose(self) -> bool:
@@ -437,15 +492,6 @@ class FpuMathSchemaBase(BaseModel):
                 f"Unknown FPU operation: {v}, expected one of: {', '.join(valid_ops)}"
             )
         return v
-
-    @model_validator(mode="after")
-    def validate_broadcast_tile(self) -> "FpuMathSchemaBase":
-        if (
-            self.broadcast_tile is not None
-            and self.broadcast_type == BroadcastType.None_
-        ):
-            raise ValueError("broadcast_tile requires a broadcast_type")
-        return self
 
     @field_validator("unpacker", mode="after")
     @classmethod
@@ -473,11 +519,9 @@ class FpuMathSchemaBase(BaseModel):
         src_a = None
         if self.in0 is not None:
             src_a = operands.get(self.in0)
-            src_a.is_input = True
         src_b = None
         if self.in1 is not None:
             src_b = operands.get(self.in1)
-            src_b.is_input = True
 
         factory, checks = type(self)._fpu_map[self.operation]
 
@@ -493,31 +537,23 @@ class FpuMathSchemaBase(BaseModel):
 
         fpu = factory(self)
 
-        clear_fp32_dst_acc = (
-            ClearFP32DstAcc.Yes
-            if self.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA
-            or self.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCB
-            else ClearFP32DstAcc.No
-        )
-
         kwargs = {
             "transpose_within_face": self.transpose_within_face,
             "transpose_faces": self.transpose_faces,
             "broadcast_type": self.broadcast_type,
-            "broadcast_tile": self.broadcast_tile,
             "reuse_dest": self.reuse_dest,
             "math_fidelity": self.math_fidelity,
             "enforce_fp32_accumulation": self.enforce_fp32_accumulation,
-            "clear_fp32_dst_acc": clear_fp32_dst_acc,
             "acc_to_dest": self.acc_to_dest,
             "unpack_to_dest": self.unpack_to_dest,
-            "reduce_to_tile": self.reduce_to_tile,
         }
         if self.unpacker is not None:
             unpacker_factory, _ = type(self)._unpacker_map[self.unpacker]
             kwargs["unpacker"] = unpacker_factory(self)
 
-        return FpuNode(fpu=fpu, src_a=src_a, src_b=src_b, **kwargs)
+        return FpuNode(
+            fpu=fpu, src_a=src_a, src_b=src_b, index_spec=self.indexes, **kwargs
+        )
 
     def get_output_dimensions(self, operands) -> Optional[Tuple[int, int]]:
         fn = type(self)._output_dims.get(self.operation)
@@ -535,10 +571,12 @@ class PackSchema(BaseModel):
 
     type: Literal["Pack"] = "Pack"
     output: str = Field(..., min_length=1)
-    packer: str = "Packer"
+    packer: str
     pack_relu: PackerReluType = PackerReluType.NoRelu
     relu_threshold: float = 0.0
     pack_l1_accumulation: L1Accumulation = L1Accumulation.No
+    indexes: Optional[Union[str, IndexesSchema]] = None
+    block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
 
     @field_validator("packer", mode="after")
     @classmethod
@@ -565,6 +603,7 @@ class PackSchema(BaseModel):
             pack_relu=self.pack_relu,
             relu_threshold=self.relu_threshold,
             pack_l1_accumulation=self.pack_l1_accumulation,
+            index_spec=self.indexes,
         )
 
 
@@ -581,7 +620,6 @@ class OperationSchemaBase(BaseModel):
     dest_consuming_operations: ClassVar[frozenset] = frozenset()
 
     dest_sync: DestSync = DestSync.Half
-    block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
     pack: List[PackSchema] = Field(..., min_length=1)
 
     @model_validator(mode="after")
@@ -676,32 +714,32 @@ class OperationSchemaBase(BaseModel):
 
         tile_r = tile_shape.total_row_dim()
         tile_c = tile_shape.total_col_dim()
-        block_r, block_c = self.block_size
 
-        if block_r % tile_r != 0 or block_c % tile_c != 0:
+        capacity = dest_tile_capacity(tile_shape, self.dest_sync, dest_acc)
+
+        def node_block_dims(schema):
+            block_r, block_c = schema.block_size
+            if block_r % tile_r != 0 or block_c % tile_c != 0:
+                raise ValueError(
+                    f"block_size ({schema.block_size}) must be a multiple of tile "
+                    f"dimensions ({tile_r}, {tile_c})"
+                )
+            return (block_c // tile_c, block_r // tile_r)
+
+        # Each node may use its own block_size; the shared dest bank spans the
+        # per-axis max. Nodes address dest tiles through their index_spec arrays.
+        all_schemas = list(self.math) + list(self.pack)
+        node_dims = [node_block_dims(s) for s in all_schemas]
+        bank_x = max(nx for nx, _ in node_dims)
+        bank_y = max(ny for _, ny in node_dims)
+        if bank_x * bank_y > capacity:
             raise ValueError(
-                f"Block size ({self.block_size}) must be a multiple of tile dimensions "
-                f"({tile_r}, {tile_c})"
+                f"block bank needs {bank_x * bank_y} dest tiles but only "
+                f"{capacity} fit (dest_sync={self.dest_sync.name}, "
+                f"dest_acc={dest_acc})"
             )
 
-        block_tiles = (block_r // tile_r) * (block_c // tile_c)
-        dest_faces = 32 if self.dest_sync == DestSync.Half else 64
-        if dest_acc:
-            dest_faces //= 2
-        dest_tile_capacity = dest_faces // tile_shape.total_num_faces()
-
-        if block_tiles > dest_tile_capacity:
-            raise ValueError(
-                f"Block size {self.block_size} requires {block_tiles} tiles "
-                f"({block_tiles * tile_shape.total_num_faces()} faces) but dest can hold "
-                f"{dest_tile_capacity} tiles ({dest_faces} faces) with "
-                f"dest_sync={self.dest_sync.name}, dest_acc={dest_acc}"
-            )
-
-        for p in self.pack:
-            p._block_size = self.block_size
         for m in self.math:
-            m._block_size = self.block_size
             if isinstance(m, FpuMathSchemaBase):
                 m._dest_tile_shape = tile_shape
 
@@ -720,6 +758,12 @@ class OperationSchemaBase(BaseModel):
             except ValueError as e:
                 raise ValueError(f"Math node {i + 1} ({node_type})\n    {e}") from None
 
+        for schema, node in zip(
+            list(self.math) + list(self.pack), math_ops + pack_nodes
+        ):
+            node.block_tiles_x = schema.block_size[1] // tile_c
+            node.block_tiles_y = schema.block_size[0] // tile_r
+
         has_sfpu = any(isinstance(node, SfpuNode) for node in math_ops)
         has_fpu = any(isinstance(node, FpuNode) for node in math_ops)
         if has_sfpu and not has_fpu:
@@ -732,25 +776,20 @@ class OperationSchemaBase(BaseModel):
 
         max_out_dims = self._calculate_max_output_dimensions(operands)
 
-        reduce_dim = None
-        for node in math_ops:
-            if isinstance(node, FpuNode) and hasattr(node.fpu, "reduce_dim"):
-                reduce_dim = node.fpu.reduce_dim
-                break
-
         kwargs = {
-            "block_size": self.block_size,
             "tile_shape": tile_shape,
             "dest_sync": self.dest_sync,
-            "reduce_dim": reduce_dim,
         }
         kwargs.update(self._arch_kwargs())
 
-        return L1Operation(
-            math=ComputePipeline(math_ops, pack_nodes),
+        operation = L1Operation(
+            math_nodes=math_ops,
+            pack_nodes=pack_nodes,
             max_output_dimensions=max_out_dims,
             **kwargs,
         )
+        plan_pipeline(operation, dest_acc)
+        return operation
 
     def _calculate_max_output_dimensions(self, operands) -> Tuple[int, int]:
         dims = []

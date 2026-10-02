@@ -160,7 +160,7 @@ void kernel_main() {
         // Signal worker that this sender's partial is ready
         Semaphore<> worker_sem(sem_partial_ready);
         worker_sem.up(noc, worker_phys_x, worker_phys_y, 1);
-        noc_async_atomic_barrier();
+        noc.async_atomic_barrier();
 
         cb_local_out.pop_front(1);
         return;
@@ -256,7 +256,7 @@ void kernel_main() {
         // Signal collector
         Semaphore<> coll_sem(sem_topk_ready);
         coll_sem.up(noc, collector_phys_x, collector_phys_y, 1);
-        noc_async_atomic_barrier();
+        noc.async_atomic_barrier();
 
         cb_topk_val.pop_front(1);
         cb_index.pop_front(1);
