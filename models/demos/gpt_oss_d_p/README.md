@@ -32,7 +32,7 @@ work can resume as-is.
 | Chunked prefill, full 36-layer model, real weights | merged; every chunk goes through the cache-backed ring SDPA |
 | Variable chunk sizes (one runtime serving several sizes) | merged |
 | Bounded sliding-window KV cache (circular window for the 18 sliding layers) | merged, opt-in (`GPT_OSS_BOUNDED_SLIDING_KV=1`) |
-| Per-layer KV-PCC validation vs a CPU golden; two galaxy CI accuracy stages and a smoke stage | merged |
+| Per-layer KV-PCC validation vs a CPU golden; one galaxy CI job with two accuracy sections and a smoke section | merged |
 | GPT-OSS through the common prefill runner (producer/runner e2e), with its galaxy CI stage | in review, [#56519](https://github.com/tenstorrent/tt-metal/pull/56519) |
 | Trace capture of the prefill chunk | planned, [#56661](https://github.com/tenstorrent/tt-metal/issues/56661) (stage one [#56660](https://github.com/tenstorrent/tt-metal/issues/56660), stage two [#56115](https://github.com/tenstorrent/tt-metal/issues/56115)) |
 | Bounded sliding cache as the default, KV migration of a bounded cache | planned, [#55646](https://github.com/tenstorrent/tt-metal/issues/55646) |
@@ -46,7 +46,7 @@ work can resume as-is.
   EP** for the 128 routed experts, 4 experts per chip.
 - **Topology**: `ttnn.Topology.Ring` by default (torus wraparound links, faster CCLs);
   `PREFILL_TOPOLOGY=linear` for pods without wraparound. The ring SDPA cache read needs ring
-  connectivity along the SP axis, which the CI stages get from the `torus_xy` fabric profile.
+  connectivity along the SP axis, which the CI job gets from the `torus_xy` fabric profile.
   Under the common runner the GPT-OSS manifest (`tt/runners/manifests/gpt_oss_d_p.json`) sets
   `PREFILL_FABRIC_MODE=1d_ring`; the runner-path CI stage in [#56519](https://github.com/tenstorrent/tt-metal/pull/56519) exports `2d_torus_xy` instead.
   Both provide that ring. Accepted values live in `models/demos/common/prefill/runners/runner_utils.py`.
@@ -107,7 +107,7 @@ fills in, and `bounded_sliding_kv_cache`. The runtime has no trace path.
 `mpirun`, not pytest. It loads real weights from the tilized TTNN cache and prefills the golden
 prompt in chunks. It prints throughput two ways, over the real prompt tokens and over the processed
 (padded) tokens. Then it reads every layer's K and V back, PCCs them against the golden, and fails
-below `GPT_OSS_KV_PCC_MIN`. The two CI accuracy stages run exactly this; it is the quickest way to
+below `GPT_OSS_KV_PCC_MIN`. The two CI accuracy sections run exactly this; it is the quickest way to
 reproduce a number.
 
 ```bash
@@ -207,9 +207,11 @@ Unit tests: `pytest models/demos/gpt_oss_d_p/tests/unit` (the CPU-only ones run 
 | `tests/galaxy_prefill_kv_pcc.py` | galaxy | full model, real weights, throughput + per-layer PCC |
 | `tests/variable_chunk_smoke.py` | galaxy | one runtime prefilling the same tokens as a 1k and an 8k chunk (no PCC) |
 
-Galaxy CI (`tests/pipeline_reorg/blaze_models_prefill_tests.yaml`, "Blaze Models Prefill tests"):
-`(GPT-OSS-120B) chunked prefill KV accuracy longbook 5k@2.5k` and `... 5k@1k` run the harness with
-the PCC gate and `(GPT-OSS-120B) variable-chunk prefill smoke 1k vs 8k` runs the smoke.
+Galaxy CI (`tests/pipeline_reorg/blaze_models_prefill_tests.yaml`, "Blaze Models Prefill tests") runs
+one job, `(GPT-OSS-120B) chunked prefill KV accuracy longbook 5k@2.5k, 5k@1k + variable-chunk smoke 1k vs 8k`
+(`-f test-type=gpt_oss_prefill_suite`), with three time-bounded sections on one allocation: the harness
+with the PCC gate at 5k@2.5k and at 5k@1k, then the variable-chunk smoke. Every section runs even if an
+earlier one failed; the job fails if any of them did.
 `(GPT-OSS-120B) prefill runner accuracy longbook 55k@5k vs 5k golden prefix`, the e2e scenario
 through the common runner, lands with [#56519](https://github.com/tenstorrent/tt-metal/pull/56519). Op-level coverage for the sliding ring read lives in
 `tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py` (production and circular-cache accuracy,
