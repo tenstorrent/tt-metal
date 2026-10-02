@@ -2277,7 +2277,9 @@ def run_ring_joint_sdpa_chunked(
             reuse_seq = (
                 compact_sliding_seq
                 if compact_sliding_seq is not None
-                else reuse_kv_stable_seq if reuse_kv_buffer else total_seq
+                else reuse_kv_stable_seq
+                if reuse_kv_buffer
+                else total_seq
             )
             shared_persistent_buffers = (
                 create_ring_mla_kv_buffer(reuse_seq, b) if use_ring_mla else create_persistent_buffers(reuse_seq, b)
