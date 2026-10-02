@@ -145,7 +145,7 @@ def test_optimizer_direct_perf():
                 ttnn.copy_host_to_device_tensor(gen._host_pos(P), cur)
                 ttnn.copy_host_to_device_tensor(gen._host_ridx(P), ridx)
 
-            stage()
+            _ = stage()
             for _ in range(4):
                 ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)
             ttnn.synchronize_device(mesh)
@@ -158,14 +158,17 @@ def test_optimizer_direct_perf():
         for _ in range(prefill_samples):
             signpost("stage:prefill", profiling and not DECODE_ONLY)
             t = time.perf_counter()
-            prefill()
+            # Assigned, not a bare call: the optimizer brackets the last bare no-argument call on the
+            # profiled path with start/stop signposts (agent.stage_marks), which would move the profiled
+            # window from decode to prefill. This gate's own signposts already mark the decode stage.
+            _ = prefill()
             ttnn.synchronize_device(mesh)
             prefill_ms.append((time.perf_counter() - t) * 1000.0)
             signpost("stage:prefill:end", profiling and not DECODE_ONLY)
         ttft_ms = statistics.median(prefill_ms)
 
         if enable_trace:
-            stage()
+            _ = stage()
             ttnn.synchronize_device(mesh)
         signpost("start", profiling and DECODE_ONLY)
         signpost("stage:decode", profiling)
