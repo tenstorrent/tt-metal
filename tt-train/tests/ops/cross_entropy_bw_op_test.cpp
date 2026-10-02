@@ -5,17 +5,21 @@
 #include <gtest/gtest.h>
 #include <sys/types.h>
 
+#include <array>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 #include <ttnn/tensor/shape/shape.hpp>
+#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "ops/losses.hpp"
+#include "ops/reshape_op.hpp"
+#include "ops/sampling_op.hpp"
 #include "ops/unary_ops.hpp"
 #include "test_utils/random_data.hpp"
 
@@ -33,7 +37,39 @@ protected:
     void SetUp() override {
         ttml::autograd::ctx().set_seed(42);
     }
+
+    void TearDown() override {
+        ttml::autograd::ctx().reset_graph();
+    }
 };
+
+namespace {
+
+constexpr uint32_t kLossClasses = 32U;
+
+ttml::autograd::TensorPtr make_prediction_with_ancestry() {
+    std::vector<float> values(kLossClasses, -1.0F);
+    auto leaf = ttml::autograd::create_tensor(
+        ttml::core::from_vector(values, ttnn::Shape({1U, 1U, 1U, kLossClasses}), &ttml::autograd::ctx().get_device()),
+        /* requires_grad */ true);
+    std::array<uint32_t, 4> shape{1U, 1U, 1U, kLossClasses};
+    return ttml::ops::reshape(leaf, shape);
+}
+
+void expect_only_prediction_parent(
+    const ttml::autograd::TensorPtr& loss,
+    const ttml::autograd::TensorPtr& prediction,
+    const ttml::autograd::TensorPtr& target) {
+    ASSERT_TRUE(loss->get_node().has_value());
+    ASSERT_TRUE(prediction->get_node().has_value());
+    ASSERT_TRUE(target->get_node().has_value());
+
+    const auto& loss_node = loss->get_node().value();
+    const auto& loss_edges = loss_node.get_graph().get_edges().at(loss_node.get_id());
+    EXPECT_EQ(loss_edges, std::vector<std::size_t>{prediction->get_node()->get_id()});
+}
+
+}  // namespace
 
 xt::xarray<float> calculate_cross_entropy_backward(
     const xt::xarray<float>& input, const xt::xarray<uint32_t>& target, const float scaler = 1.0F) {
@@ -256,4 +292,38 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyForwardBackward_ReduceMeanVsNone) {
     EXPECT_TRUE(xt::allclose(result_none_after_mean_xtensor, result_mean_xtensor, 3e-2F, 1e-2F));
     assert((result_none_with_mean_after_grad.shape() == result_mean_grad.shape()));
     EXPECT_TRUE(xt::allclose(result_none_with_mean_after_grad, result_mean_grad, 3e-2F, 1e-2F));
+}
+
+TEST_F(CrossEntropyBackwardTest, CrossEntropyDoesNotLinkSampledTargetAutogradAncestry) {
+    using namespace ttml;
+
+    auto* device = &autograd::ctx().get_device();
+    auto prediction = make_prediction_with_ancestry();
+    std::vector<float> sampler_values(kLossClasses, -1.0F);
+    sampler_values[7] = 1.0F;
+    auto sampler_logits = autograd::create_tensor(
+        core::from_vector(sampler_values, ttnn::Shape({1U, 1U, 1U, kLossClasses}), device),
+        /* requires_grad */ true);
+    auto sampled = ops::sample_op(sampler_logits, /* temperature */ 0.0F, /* seed */ 42U);
+    std::array<uint32_t, 2> cross_entropy_target_shape{1U, 1U};
+    auto cross_entropy_target = ops::reshape(sampled, cross_entropy_target_shape);
+
+    auto cross_entropy = ops::cross_entropy_loss(prediction, cross_entropy_target, ops::ReduceType::MEAN);
+    expect_only_prediction_parent(cross_entropy, prediction, cross_entropy_target);
+}
+
+TEST_F(CrossEntropyBackwardTest, NllDoesNotLinkTargetAutogradAncestry) {
+    using namespace ttml;
+
+    auto* device = &autograd::ctx().get_device();
+    auto prediction = make_prediction_with_ancestry();
+    auto nll_target_leaf = autograd::create_tensor(
+        core::from_vector<int32_t, ttnn::DataType::INT32>(
+            std::vector<int32_t>{7}, ttnn::Shape({1U, 1U}), device, ttnn::Layout::TILE),
+        /* requires_grad */ true);
+    std::array<uint32_t, 1> nll_target_shape{1U};
+    auto nll_target = ops::reshape(nll_target_leaf, nll_target_shape);
+
+    auto nll = ops::nll_loss(prediction, nll_target, ops::ReduceType::MEAN);
+    expect_only_prediction_parent(nll, prediction, nll_target);
 }

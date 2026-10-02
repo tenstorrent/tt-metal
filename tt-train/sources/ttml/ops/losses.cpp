@@ -99,7 +99,7 @@ autograd::TensorPtr cross_entropy_loss(
         prediction->add_grad(grad);
     };
 
-    out->set_node(autograd::add_backward_node(std::move(grad), out, prediction, target));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, prediction));
     return out;
 }
 
@@ -143,7 +143,7 @@ autograd::TensorPtr nll_loss(
         grad = ttnn::reshape(grad, prediction->get_value().logical_shape());
         prediction->add_grad(grad);
     };
-    out->set_node(autograd::add_backward_node(std::move(grad), out, prediction, target));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, prediction));
 
     return out;
 }
