@@ -2491,11 +2491,15 @@ void run_quasar_sfpu_unpack_to_dest_16b(
     EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_all_same_buffer(dev, cfg));
 }
 
-// Unary SFPU ops an arch has no compute-API implementation for, so building the kernel would fail
-// with "not declared in this scope". Skip them there so the suite reflects actual coverage instead
-// of a hard kernel-build failure. softcap has kernels on Blackhole and Quasar only (softcap.h).
+// Unary SFPU ops not tested on an arch. softcap has kernels on Blackhole and Quasar only (softcap.h);
+// the special-value predicates are Quasar-only here.
 inline bool is_unary_sfpu_op_unsupported(tt::ARCH arch, const std::string& sfpu_op) {
-    return arch == tt::ARCH::WORMHOLE_B0 && sfpu_op == "softcap";
+    if (arch == tt::ARCH::WORMHOLE_B0 && sfpu_op == "softcap") {
+        return true;
+    }
+    return (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE) &&
+           (sfpu_op == "isinf" || sfpu_op == "isposinf" || sfpu_op == "isneginf" || sfpu_op == "isnan" ||
+            sfpu_op == "isfinite");
 }
 
 class SingleCoreSingleMeshDeviceSfpuParameterizedFixture
@@ -2506,7 +2510,7 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedFixture, TensixSfpuCompute) {
     std::string sfpu_op = std::get<1>(GetParam());
 
     if (is_unary_sfpu_op_unsupported(arch_, sfpu_op)) {
-        GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' has no compute-API implementation on this arch";
+        GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' is not tested on this arch";
     }
 
     CoreRange core_range({0, 0}, {0, 0});
@@ -2652,7 +2656,7 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture, TensixSfpuCompu
     std::string sfpu_op = std::get<1>(GetParam());
 
     if (is_unary_sfpu_op_unsupported(arch_, sfpu_op)) {
-        GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' has no compute-API implementation on this arch";
+        GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' is not tested on this arch";
     }
     if (((arch_ == tt::ARCH::WORMHOLE_B0) && (sfpu_op == "relu" || sfpu_op == "relu_min" || sfpu_op == "relu_max")) ||
         ((arch_ == tt::ARCH::WORMHOLE_B0) && (sfpu_op == "exponential")) ||
@@ -2768,7 +2772,7 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterized32BitDestFixture, TensixSfpuCo
     std::string sfpu_op = std::get<1>(GetParam());
 
     if (is_unary_sfpu_op_unsupported(arch_, sfpu_op)) {
-        GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' has no compute-API implementation on this arch";
+        GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' is not tested on this arch";
     }
 
     CoreRange core_range({0, 0}, {0, 0});
@@ -2899,7 +2903,7 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterized32BitDestApproxFixture, Tensix
     std::string sfpu_op = std::get<1>(GetParam());
 
     if (is_unary_sfpu_op_unsupported(arch_, sfpu_op)) {
-        GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' has no compute-API implementation on this arch";
+        GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' is not tested on this arch";
     }
     if (((arch_ == tt::ARCH::WORMHOLE_B0) && (sfpu_op == "relu" || sfpu_op == "relu_min" || sfpu_op == "relu_max")) ||
         ((arch_ == tt::ARCH::WORMHOLE_B0) && (sfpu_op == "exponential")) ||
