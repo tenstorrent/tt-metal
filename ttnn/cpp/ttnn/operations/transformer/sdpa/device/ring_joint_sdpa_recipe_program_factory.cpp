@@ -116,8 +116,10 @@ public:
             return bytes;
         };
         uint64_t cb_bytes = cb_total();
-        const uint64_t available =
-            device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        // Static CBs must stay below the lowest live L1 buffer (global semaphores, persistent buffers).
+        const auto lowest = device->lowest_occupied_compute_l1_address();
+        const uint64_t top = lowest.has_value() ? static_cast<uint64_t>(*lowest) : device->l1_size_per_core();
+        const uint64_t available = top - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
         if (cb_bytes > available) {
             // The recipe double-buffers Q. The ring reader reserves one Q chunk at a time and
             // compute pops it when done, so a single slot is correct; it only gives up Q prefetch.
