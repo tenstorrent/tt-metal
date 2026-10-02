@@ -17,12 +17,13 @@
  * @param dfb_id: Dataflow Buffer ID, values = [0-31]
  * @param num_tiles: Number of tiles of free space to wait for in dataflow buffer
  */
+template <dfb::AccessPattern Pap = dfb::AccessPattern::UNKNOWN, dfb::AccessPattern Cap = dfb::AccessPattern::UNKNOWN>
 inline void llk_wait_for_free_tiles(const std::int32_t dfb_id, const std::int32_t num_tiles) {
     LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(dfb_id);
     LLK_ASSERT(
         dfb_op_is_whole_share(local_dfb_interface, num_tiles),
         "llk_wait_for_free_tiles: an op on a BLOCKED ring must move this hart's whole share");
-    if (local_dfb_interface.split_tc) {
+    if (dfb_op_is_split<Pap, Cap, true>(local_dfb_interface)) {
         // Split: the block will belong to every counter, wait for each one's share of free space.
         const std::int32_t per_tc = num_tiles / local_dfb_interface.num_tcs_to_rr;
         for (std::uint8_t i = 0; i < local_dfb_interface.num_tcs_to_rr; i++) {
@@ -46,7 +47,10 @@ inline void llk_wait_for_free_tiles(const std::int32_t dfb_id, const std::int32_
  * @param num_tiles: Number of tiles to push into dataflow buffer
  */
 // Push N tiles to stream buffer (increment write pointer)
-template <std::uint8_t PACK_SEL = 0x1>
+template <
+    std::uint8_t PACK_SEL = 0x1,
+    dfb::AccessPattern Pap = dfb::AccessPattern::UNKNOWN,
+    dfb::AccessPattern Cap = dfb::AccessPattern::UNKNOWN>
 inline void llk_push_tiles(const std::int32_t dfb_id, const std::int32_t num_tiles) {
     // TEN-4746: pushing a dfb that was reserved but never packed (no PACR since wait_for_free) is a HW
     // hazard -- the free-space wait can resolve before space is actually available.
@@ -56,7 +60,7 @@ inline void llk_push_tiles(const std::int32_t dfb_id, const std::int32_t num_til
     LLK_ASSERT(
         dfb_op_is_whole_share(local_dfb_interface, num_tiles),
         "llk_push_tiles: an op on a BLOCKED ring must move this hart's whole share");
-    if (local_dfb_interface.split_tc) {
+    if (dfb_op_is_split<Pap, Cap, true>(local_dfb_interface)) {
         // Split: post each counter its share of the block and step every bookmark past it.
         const std::int32_t per_tc = num_tiles / local_dfb_interface.num_tcs_to_rr;
         for (std::uint8_t i = 0; i < local_dfb_interface.num_tcs_to_rr; i++) {
