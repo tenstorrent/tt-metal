@@ -808,8 +808,7 @@ class EagerLLMExecutor:
         empty_slots: list[int] | None = None,
         sampling_params: SamplingParams | None = None,
         start_pos: torch.Tensor | None = None,  # [batch_size], int64
-        return_argmax_tokens: bool = False,  # device next-token: return argmax token ids [batch_size] (not logits)
-    ) -> torch.Tensor:  # logits [batch_size,1,vocab_size]; or token ids [batch_size] when return_argmax_tokens
+    ) -> torch.Tensor:  # [batch_size, 1, vocab_size], float32
         """Per-user prefill loop with chunked prefill + prefix caching.
 
         Args:
@@ -837,9 +836,6 @@ class EagerLLMExecutor:
         batch_size, batch_seq_len = tokens.shape
         vocab_size = self.model.vocab_size
         cluster_shape = self.model_args.cluster_shape if self.model_args else [1, 1]
-        # Device next-token argmax (zero host compute): argmax the vocab dim on-device per user and return
-        # token ids instead of the full host logits. Caller (run_teacher_forcing) only sets this on Quasar.
-        device_argmax = return_argmax_tokens
 
         # todo)) output_tensor is just overwritten later? why allocate it here then?
         output_tensor = torch.zeros(batch_size, 1, vocab_size)
@@ -854,14 +850,9 @@ class EagerLLMExecutor:
         # plan leaves sequential (or all positions when batching is off / declined) fall through to the
         # per-user loop below, which is byte-identical to the pre-feature path.
         num_cached_per_user = [int(start_pos[i]) if start_pos is not None else 0 for i in range(len(empty_slots))]
-        if device_argmax:
-            # Device next-token argmax: force the sequential per-user path so every prefill_results entry is a
-            # token block (no mixed logits/token entries). Batch-1 prefill uses sequential anyway.
-            batched_groups, sequential_positions = [], None
-        else:
-            batched_groups, sequential_positions = _plan_batched_prefill(
-                self.model_args, empty_slots, prompt_lens, num_cached_per_user
-            )
+        batched_groups, sequential_positions = _plan_batched_prefill(
+            self.model_args, empty_slots, prompt_lens, num_cached_per_user
+        )
         seq_filter = None
         if batched_groups:
             seq_filter = sequential_positions
@@ -915,21 +906,13 @@ class EagerLLMExecutor:
             )
 
             logits = ttnn.untilize(logits, use_multicore=True)
-            if device_argmax:
-                # Device next-token: argmax the vocab (last) dim on-device; store only the [1,1,32] token-id
-                # block (not the full-vocab logits). The last real token is at last_token_idx % 32 (below).
-                tok_all = ttnn.argmax(logits, dim=-1, keepdim=False)
-                prefill_results.append(
-                    {"idx": idx, "last_token_idx": last_token_idx, "token_all": tok_all.cpu(blocking=False)}
-                )
-            else:
-                prefill_results.append(
-                    {
-                        "idx": idx,
-                        "last_token_idx": last_token_idx,
-                        "logits": logits.cpu(blocking=False),
-                    }
-                )
+            prefill_results.append(
+                {
+                    "idx": idx,
+                    "last_token_idx": last_token_idx,
+                    "logits": logits.cpu(blocking=False),
+                }
+            )
 
         # One device barrier drains every pending ``logits.cpu(blocking=False)`` transfer dispatched
         # above; ``_process_output_prefill`` then runs on the already-resident HOST tensors (no device
@@ -940,15 +923,6 @@ class EagerLLMExecutor:
         # -> 1 on batch-32). Cache keyed by tensor identity, so the sequential path is unchanged.
         if prefill_results:
             ttnn.synchronize_device(self.mesh_device)
-        if device_argmax:
-            # Assemble device-argmax token ids: each entry holds a [1,1,32] token block; the user's token is
-            # at last_token_idx % 32 (the same position the logits path extracts). Return [batch_size] ids.
-            first_tokens = torch.zeros(batch_size, dtype=torch.long)
-            for res in prefill_results:
-                toks = ttnn.to_torch(res["token_all"]).view(1, 1, -1)
-                last_relative = res["last_token_idx"] - (int(start_pos[res["idx"]]) if start_pos is not None else 0)
-                first_tokens[res["idx"]] = int(toks[0, 0, last_relative % 32])
-            return first_tokens
         _concat_cache: dict = {}
         for res in prefill_results:
             key = id(res["logits"])
@@ -2585,32 +2559,6 @@ class TeacherForceResult:
         return self.decode_tok_s_u * self.batch_size
 
 
-def _is_quasar_arch() -> bool:
-    try:
-        return "quasar" in ttnn.get_arch_name()
-    except Exception:
-        return False
-
-
-def _device_sampling_enabled(executor) -> bool:
-    """True when the next-token argmax should run ON DEVICE (zero host compute) instead of a host
-    torch.argmax over the full readback logits. Default ON for Quasar (LLAMA_QSR_DEVICE_SAMPLING=0 falls
-    back to host); OFF on WH/BH so their behavior is unchanged."""
-    return (
-        _is_quasar_arch()
-        and os.environ.get("LLAMA_QSR_DEVICE_SAMPLING", "1") == "1"
-        and hasattr(executor, "mesh_device")
-    )
-
-
-def _device_argmax_tokens(logits_tt) -> torch.Tensor:
-    """Greedy next-token ON DEVICE: ttnn.argmax over the vocab (last) dim of the untilized ROW_MAJOR
-    logits (as gather_and_untilize_logits returns), then read back only the small token-id tensor.
-    Mirrors sampling_1d._sample_argmax and the validated debug_ops/test_quasar_sampling_argmax path."""
-    tok = ttnn.argmax(logits_tt, dim=-1, keepdim=False)
-    return ttnn.to_torch(tok).view(-1).to(torch.long)
-
-
 def run_teacher_forcing(
     executor: EagerLLMExecutor | TracedLLMExecutor,
     *,
@@ -2690,32 +2638,17 @@ def run_teacher_forcing(
     )
     # Inference prefill: timed run with ops already compiled (this is TTFT). Mirror
     # run_perf_benchmark: synchronize inside the timed region for an accurate prefill duration.
-    # Device next-token argmax (zero host compute) on Quasar: prefill_forward returns the argmax token ids
-    # instead of host logits (Eager executor only; LLAMA_QSR_DEVICE_SAMPLING=0 or WH/BH -> host argmax).
-    use_device_sampling = _device_sampling_enabled(executor)
-    # The executor may be a thin wrapper (EagerLlama32_1BExecutor) rather than EagerLLMExecutor, so probe for
-    # the return_argmax_tokens capability rather than isinstance; the Traced path doesn't support it.
-    import inspect as _inspect
-
-    use_device_prefill = use_device_sampling and (
-        "return_argmax_tokens" in _inspect.signature(executor.prefill_forward).parameters
-    )
-    prefill_argmax_kwargs = {"return_argmax_tokens": True} if use_device_prefill else {}
     if profiler is not None:
         profiler.start("inference_prefill")
     t0 = time.perf_counter()
-    prefill_output = executor.prefill_forward(prompt_tokens, **prefill_kwargs, **prefill_argmax_kwargs)
+    prefill_output = executor.prefill_forward(prompt_tokens, **prefill_kwargs)
     if hasattr(executor, "mesh_device"):
         ttnn.synchronize_device(executor.mesh_device)
     prefill_time_s = time.perf_counter() - t0
     if profiler is not None:
         profiler.end("inference_prefill")
 
-    if use_device_prefill:
-        # prefill_forward returned device-argmax token ids [batch_size].
-        first_tokens = prefill_output.view(-1)[:batch_size].tolist()
-    else:
-        first_tokens = torch.argmax(prefill_output, dim=-1).view(-1).tolist()
+    first_tokens = torch.argmax(prefill_output, dim=-1).view(-1).tolist()
     predicted_tokens_per_user = [[int(tok)] for tok in first_tokens]
 
     logger.info(f"Teacher forcing: decoding {num_target - 1} tokens")
@@ -2729,14 +2662,10 @@ def run_teacher_forcing(
 
         current_pos = torch.full((batch_size,), prompt_len + step - 1, dtype=torch.long)
 
-        # Next-token selection ON DEVICE on Quasar: keep the logits on device (read_from_device=False),
-        # ttnn.argmax over the vocab dim, and read back only the token ids — zero host compute for the
-        # token pick (use_device_sampling computed once above). LLAMA_QSR_DEVICE_SAMPLING=0 (or WH/BH)
-        # falls back to the host torch.argmax below.
         decode_kwargs = dict(
             page_table=page_table,
             kv_cache=kv_cache,
-            read_from_device=not use_device_sampling,
+            read_from_device=True,
         )
         t0 = time.perf_counter()
         logits, _ = executor.decode_forward(decode_token, current_pos, **decode_kwargs)
@@ -2748,10 +2677,7 @@ def run_teacher_forcing(
         else:
             decode_times_s.append(elapsed)
 
-        if use_device_sampling:
-            next_tokens = _device_argmax_tokens(logits).view(-1)[:batch_size].tolist()
-        else:
-            next_tokens = torch.argmax(logits[:, -1, :], dim=-1).view(-1).tolist()
+        next_tokens = torch.argmax(logits[:, -1, :], dim=-1).view(-1).tolist()
         for user_id, tok in enumerate(next_tokens):
             predicted_tokens_per_user[user_id].append(int(tok))
     if profiler is not None:
