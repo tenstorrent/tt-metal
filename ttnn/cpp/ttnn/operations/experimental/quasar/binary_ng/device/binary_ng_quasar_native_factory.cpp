@@ -53,7 +53,8 @@
 //     shard; kernels_qsr/ does not read it.
 //
 // Deferred to the descriptor (rejected by the ORIGINAL's matches_metal_v2_slice; the native gate
-// matches_quasar_native_slice is strictly narrower still -- see below): row-major (non-tile)
+// matches_quasar_native_slice is narrower still in op, dtype and broadcast, and it also admits DRAM
+// shards, which the original sends to the descriptor -- see below): row-major (non-tile)
 // layout, tensor-scalar (no input_tensor_b), where-op, quantization, and mixed lhs/rhs dtype. Mixed
 // sharded/interleaved layouts AND width sharding ARE handled: the borrow path is taken only when all
 // three operands are co-resident L1 shards with one memory config, or all three are L1-interleaved with a

@@ -17,6 +17,68 @@ simulator (~15 s/run, deterministic) with no transfer latency and no contention 
 happens. The *hardware emulator* is the closest thing to real behaviour we can get; it is available but far
 less accessible, so it is spent deliberately and rarely. **Never mix numbers from the two.**
 
+# ► Week of 2026-09-29, part 2 — DRAM-sharded operands run on the native NoC path
+
+## 1. TL;DR
+
+- **DRAM-sharded operands run on the native factory**, alone or beside DRAM- and L1-interleaved
+  operands: height, width and block sharding, even and uneven. Only L1 can back a DFB, so a DRAM shard is
+  never borrowed. The reader and the writer move it by page id through its sharding-aware
+  TensorAccessor, as they move an interleaved operand. The change is in the gate only.
+- **Before, these ops did not run on Quasar at all.** Both the native and the Metal 2.0 gates rejected a
+  DRAM shard, and the descriptor fallback stops with `DataMovementKernel is not supported on Quasar`.
+  The Metal 2.0 gate is unchanged, so with `TTNN_QSR_NATIVE` unset they still stop there.
+- **Still outside the native factory:** an L1 shard beside a DRAM shard or an interleaved operand (the
+  mixed-layout milestone), and ND sharding.
+- **Verified** (slide 3): RED 2 of 2; GREEN 9 of 9 on craq-sim 9f6314bf and on ad401613; the native
+  module 68 passed, 1 skipped, 2 expected failures native ON, and 1 / 70 OFF; 78 of 78 suite cases through
+  each factory; clang-tidy 0 findings, with a control that reported 1.
+
+---
+
+## 2. Design: the gate admits a DRAM shard as a NoC operand
+
+- **Gate** (`matches_quasar_native_slice`): with an L1 shard among the operands, the rule is unchanged:
+  all three are L1 shards with one memory config, and the factory borrows them. Without an L1 shard, each
+  operand must be interleaved or a DRAM shard with a 2D shard spec (`noc_operand_ok`). The 2D spec is
+  needed because the factory's shard helpers (`is_uneven`) dereference it.
+- **Factory and kernels: no change.** The Quasar `is_native_L1_sharding` returns false for any DRAM
+  operand, and the slice check needs three L1-interleaved operands. So the factory takes the NoC path:
+  `split_work_to_cores` over the worker grid and a TensorBinding per operand, for which Metal 2.0 emits
+  DRAM-sharded TensorAccessor args. The writer needs no shard-row wrap: each core writes a linear page
+  range, and the accessor maps each page to its shard.
+- **A DRAM shard grid is in DRAM-bank coordinates** (craq-sim: `dram_grid_size` is 2 x 1).
+  `get_worker_grid`, the same code as production, finds the sub-device by numeric overlap with the Tensix
+  workers, so it works because both grids start at (0, 0). A test pins that the op spreads over all 32
+  clusters, not over one cluster per DRAM bank.
+- **Simulator:** craq-sim builds before 9f6314bf re-map DRAM streams as if they were interleaved (removed
+  in craq-sim #335), which can corrupt a single-bank stream such as a DRAM shard's. These cases passed on
+  both builds.
+- **Not measured** (the rule picks the path, no perf work): the sharded accessor divides per page, and on
+  silicon a DRAM shard is one bank, so a thread's run of pages from one shard hits one bank.
+
+---
+
+## 3. Verification
+
+- **RED** (craq-sim 9f6314bf, before the gate change): both new tests failed on the descriptor's
+  `TT_FATAL: DataMovementKernel is not supported on Quasar`.
+- **GREEN, 9 of 9 on craq-sim 9f6314bf and on ad401613:**
+  - `test_native_dram_sharded_is_bit_exact` at 1,1,1, 1,4,1 and 4,4,2, each with DM batch 1 and 8, over 16
+    ops per child: every layout alone and beside another placement (a mapping error that a, b and c share
+    would still give c = a + b), a DRAM-sharded output from interleaved inputs, a 1024-tile case for full
+    DM batches, a cache-hit repeat and an in-place `add_`.
+  - `test_native_dram_sharded_spreads_over_the_worker_grid` on 3 cases: the device profiler shows 32
+    clusters, each with 6 DM cores and 4 Neos at 4,4,2.
+- **Regression** (craq-sim ad401613): the native module 68 passed, 1 skipped, 2 expected failures native
+  ON, and 1 / 70 OFF; 78 of 78 suite cases through each factory. The arm scripts' routing check now also
+  fails on any binary_ng kernel outside `kernels_qsr/` and `kernels_dfb/`, such as the descriptor's.
+- **code-review-tt**: approve after fixes, all applied except one test, which would pin that an L1 shard
+  beside a DRAM shard stays off the native factory. It needs a harness mode that expects the descriptor's
+  failure, and the mixed-layout milestone changes that case anyway.
+
+---
+
 # ► Week of 2026-09-29 — F16: L1-interleaved operands borrowed in place; the default `1,1,1` runs at 46.75 cyc/tile
 
 ## 1. TL;DR

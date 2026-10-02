@@ -13,10 +13,10 @@
 // The output is written over the NoC, or borrowed from this core's L1 (DST_SHARDED): its shard, or its
 // slice of an L1-interleaved tensor, which the compute packs in place. The factory borrows all or none.
 //
-// The writer's cascade is the milder case -- an output is never broadcast, so its strides are always
-// dense and only the sharded-row wrap (dst_shard_width) of a NoC-written sharded output is lost, which
-// the gate rejects. The reader's is the load-bearing one; see the note in reader_no_bcast_dfb.cpp
-// before widening the gate.
+// The writer's cascade is the milder case: an output is never broadcast, so its strides are dense. A
+// NoC-written sharded output needs no shard-row wrap: each core writes a linear page range, and the
+// sharding-aware TensorAccessor maps each page to its shard. The reader's cascade is the load-bearing
+// one; see the note in reader_no_bcast_dfb.cpp before widening the gate.
 
 #include <cstdint>
 

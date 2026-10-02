@@ -613,8 +613,9 @@ _BORROWED_ARMS = [(1, 1, 1), (1, 4, 1), (4, 4, 2)]
 
 # Same shape as _ARM_SRC: a fixed child script, parameters as JSON in the environment. ARM_EXPECT names
 # the factory every op in the child must have bound: "qsr" for native, "dfb" for the fallback. The
-# strategy "l1" or "dram" places a tensor interleaved, and then the shard shape and range are None. A
-# shard entry may carry a sixth element, a dict of options: "out" gives the output its own placement
+# strategy "l1" or "dram" places a tensor interleaved, and then the shard shape and range are None. The
+# strategies "dram_height", "dram_width" and "dram_block" shard it over all DRAM banks, and then the range
+# is None. A shard entry may carry a sixth element, a dict of options: "out" gives the output its own placement
 # (otherwise it takes the inputs'), "b" does the same for b, "in_place" adds b into a with add_, and
 # "grid" (x0, y0, x1, y1) runs the op on that sub-core grid. Every tensor stays alive to the end, so an
 # entry that repeats an earlier spec lands at new addresses and must hit the program cache. With
@@ -634,6 +635,9 @@ EXPECT_CORES = int(os.environ.get("ARM_EXPECT_CORES", "0"))
 STRATEGY = {"height": ttnn.ShardStrategy.HEIGHT, "block": ttnn.ShardStrategy.BLOCK,
             "width": ttnn.ShardStrategy.WIDTH}
 INTERLEAVED = {"l1": ttnn.L1_MEMORY_CONFIG, "dram": ttnn.DRAM_MEMORY_CONFIG}
+DRAM_SHARDED = {"dram_height": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                "dram_width": ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                "dram_block": ttnn.TensorMemoryLayout.BLOCK_SHARDED}
 root = pathlib.Path(os.environ.get("TT_METAL_LOGS_PATH") or os.environ.get("TT_METAL_HOME") or os.getcwd())
 profile_csv = root / "generated" / "profiler" / ".logs" / "profile_log_device.csv"
 if (EXPECT_NEOS or EXPECT_DMS) and profile_csv.exists():
@@ -643,6 +647,12 @@ if (EXPECT_NEOS or EXPECT_DMS) and profile_csv.exists():
 def memory_config(strategy, shard_shape, rng):
     if strategy in INTERLEAVED:
         return INTERLEAVED[strategy]
+    if strategy in DRAM_SHARDED:
+        # The shard grid of a DRAM tensor is in DRAM-bank coordinates, not Tensix cores.
+        g = device.dram_grid_size()
+        banks = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(g.x - 1, g.y - 1))})
+        spec = ttnn.ShardSpec(banks, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        return ttnn.MemoryConfig(DRAM_SHARDED[strategy], ttnn.BufferType.DRAM, spec)
     x0, y0, x1, y1 = rng
     return ttnn.create_sharded_memory_config(
         shard_shape,
@@ -691,12 +701,16 @@ finally:
 sources = [ln.split("source:", 1)[1].strip()
            for ln in (root / "generated" / "inspector" / "kernels.yaml").read_text().splitlines()
            if "source:" in ln]
-qsr = [s for s in sources if "kernels_qsr/" in s]
-dfb = [s for s in sources if "kernels_dfb/" in s]
-if EXPECT == "qsr" and (dfb or not qsr):
-    failures.append("expected every op on kernels_qsr, bound qsr={} dfb={}".format(len(qsr), len(dfb)))
-if EXPECT == "dfb" and (qsr or not dfb):
-    failures.append("expected every op on kernels_dfb, bound qsr={} dfb={}".format(len(qsr), len(dfb)))
+# Every binary_ng kernel tree counts: the descriptor binds kernels/ and kernels_ng/, which neither the
+# native nor the Metal 2.0 factory uses.
+binary_ng = [s for s in sources if "/binary_ng/device/kernels" in s]
+qsr = [s for s in binary_ng if "kernels_qsr/" in s]
+dfb = [s for s in binary_ng if "kernels_dfb/" in s]
+other = len(binary_ng) - len(qsr) - len(dfb)
+if EXPECT == "qsr" and (dfb or other or not qsr):
+    failures.append("expected every op on kernels_qsr, bound qsr={} dfb={} other={}".format(len(qsr), len(dfb), other))
+if EXPECT == "dfb" and (qsr or other or not dfb):
+    failures.append("expected every op on kernels_dfb, bound qsr={} dfb={} other={}".format(len(qsr), len(dfb), other))
 if EXPECT_NEOS or EXPECT_DMS:
     # A Neo ran the compute on a core when one of its TRISCs recorded a kernel zone there, and a DM core
     # ran a reader or writer thread when it recorded one.
@@ -942,3 +956,104 @@ def test_native_l1_interleaved_keeps_the_noc_path(case, cores):
         },
     )
     _check_arm(p, f"{case[0]} on the NoC path at 4,4,2")
+
+
+# DRAM-sharded operands, alone and beside interleaved ones. The shapes need at least two DRAM banks; the
+# simulator has two, so each case makes two shards, and the uneven ones leave the second shard partial. A
+# wrong page-to-bank map that a, b and the output share would still give c = a + b, so every layout also
+# appears beside an operand with another placement. dram_width_1024 holds 32 tiles per cluster, enough for
+# full DM batches of 8 at every arm. dram_width_again repeats dram_width while its tensors are alive, a
+# cache hit that must rebind.
+_DRAM_SHARDED = [
+    ("dram_width", "dram_width", [4 * 32, 8 * 32], None, (4 * 32, 16 * 32)),
+    ("dram_height", "dram_height", [32 * 32, 2 * 32], None, (64 * 32, 2 * 32)),
+    ("dram_block", "dram_block", [4 * 32, 4 * 32], None, (4 * 32, 8 * 32)),
+    ("dram_height_uneven", "dram_height", [4 * 32, 32], None, (7 * 32, 32)),
+    ("dram_width_uneven", "dram_width", [32, 3 * 32], None, (32, 5 * 32)),
+    ("dram_a_dram_b", "dram_width", [4 * 32, 8 * 32], None, (4 * 32, 16 * 32), {"b": ("dram", None, None)}),
+    (
+        "dram_a_l1_b_dram_out",
+        "dram_height",
+        [32 * 32, 2 * 32],
+        None,
+        (64 * 32, 2 * 32),
+        {"b": ("l1", None, None), "out": ("dram", None, None)},
+    ),
+    ("dram_block_dram_out", "dram_block", [4 * 32, 4 * 32], None, (4 * 32, 8 * 32), {"out": ("dram", None, None)}),
+    ("dram_height_uneven_dram_b", "dram_height", [4 * 32, 32], None, (7 * 32, 32), {"b": ("dram", None, None)}),
+    ("dram_width_uneven_l1_b", "dram_width", [32, 3 * 32], None, (32, 5 * 32), {"b": ("l1", None, None)}),
+    (
+        "dram_height_dram_width_out",
+        "dram_height",
+        [2 * 32, 16 * 32],
+        None,
+        (4 * 32, 16 * 32),
+        {"out": ("dram_width", [4 * 32, 8 * 32], None)},
+    ),
+    (
+        "dram_in_dram_sharded_out",
+        "dram",
+        None,
+        None,
+        (64 * 32, 2 * 32),
+        {"out": ("dram_height", [32 * 32, 2 * 32], None)},
+    ),
+    (
+        "l1_in_dram_sharded_out",
+        "l1",
+        None,
+        None,
+        (4 * 32, 16 * 32),
+        {"out": ("dram_width", [4 * 32, 8 * 32], None)},
+    ),
+    ("dram_width_1024", "dram_width", [32 * 32, 16 * 32], None, (32 * 32, 32 * 32), {"b": ("dram", None, None)}),
+    ("dram_width_again", "dram_width", [4 * 32, 8 * 32], None, (4 * 32, 16 * 32)),
+    ("dram_width_in_place", "dram_width", [4 * 32, 8 * 32], None, (4 * 32, 16 * 32), {"in_place": True}),
+]
+_DRAM_SHARDED_ARMS = [(1, 1, 1), (1, 4, 1), (4, 4, 2)]
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.parametrize("dm_batch", [1, 8], ids=["dm1", "dm8"])
+@pytest.mark.parametrize("rcw", _DRAM_SHARDED_ARMS, ids=lambda t: "R{}C{}W{}".format(*t))
+def test_native_dram_sharded_is_bit_exact(rcw, dm_batch):
+    """DRAM-sharded operands must run native and bit-exact, alone or beside interleaved operands.
+
+    Their fallback is the descriptor, which does not run on Quasar, so a refusing gate fails the test. A
+    page read from the wrong bank or offset fails the bit comparison, and a cached program that keeps the
+    first call's addresses fails the repeat.
+    """
+    knobs = {"TTNN_QSR_DM_BATCH": "8", "TTNN_QSR_ENTRIES_PER_THREAD": "16"} if dm_batch > 1 else None
+    p = _run_shard_arm(rcw, _DRAM_SHARDED, expect="qsr", timeout=900, knobs=knobs)
+    _check_arm(p, f"DRAM-sharded R={rcw[0]} C={rcw[1]} W={rcw[2]} dm_batch={dm_batch}")
+
+
+# One case per child, as above. Each case has at least 32 tiles, one per worker cluster. dram_width_in_place
+# supplies the output tensor, which takes another path to the worker grid.
+_DRAM_SHARDED_PLACEMENT = [
+    s for s in _DRAM_SHARDED if s[0] in ("dram_width", "dram_in_dram_sharded_out", "dram_width_in_place")
+]
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.parametrize("case", _DRAM_SHARDED_PLACEMENT, ids=[c[0] for c in _DRAM_SHARDED_PLACEMENT])
+def test_native_dram_sharded_spreads_over_the_worker_grid(case):
+    """A DRAM-sharded op must run the tuned threads on every worker cluster, not on its shard grid.
+
+    The shard grid of a DRAM tensor is in DRAM-bank coordinates. The NoC path splits the output tiles over
+    the worker grid, so at 4,4,2 all 32 clusters run 6 DM cores and 4 Neos. A placement taken from the DRAM
+    shard grid would run on one cluster per DRAM bank.
+    """
+    p = _run_shard_arm(
+        (4, 4, 2),
+        [case],
+        expect="qsr",
+        timeout=900,
+        knobs={
+            "TT_METAL_DEVICE_PROFILER": "1",
+            "ARM_EXPECT_DMS": "6",
+            "ARM_EXPECT_NEOS": "4",
+            "ARM_EXPECT_CORES": "32",
+        },
+    )
+    _check_arm(p, f"{case[0]} on the worker grid at 4,4,2")
