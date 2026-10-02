@@ -1900,7 +1900,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 #endif
     volatile uint32_t* fabric_heartbeat_ptr = reinterpret_cast<volatile uint32_t*>(FABRIC_KERNEL_HEARTBEAT_ADDR);
 
-    auto execute_main_loop = [&]() {
+    auto execute_main_loop = [&]() __attribute__((always_inline)) {
         ActualSpeedySenderState<super_speedy_mode> local_speedy_sender_state;
         ActualSpeedyReceiverState<super_speedy_mode, 0> local_speedy_receiver_state;
 #if defined(FABRIC_2D_VC2_SERVICED)
@@ -2755,12 +2755,16 @@ void kernel_main() {
     // Common runtime args:
     ///////////////////////
     // Read the fixed maximum sender-channel connection semaphore array.
-    std::array<size_t, MAX_NUM_SENDER_CHANNELS> local_sender_channel_connection_semaphore_addrs;
+    // Init-time arrays live in kernel static storage (.bss, zeroed at kernel entry) rather than on the
+    // stack: they are only read while setting up connections, and on Wormhole the active ERISC runs
+    // kernel_main on base firmware's stack, which has under 2 KB to spare. Hot state stays on the
+    // stack, which is in fast local memory.
+    static std::array<size_t, MAX_NUM_SENDER_CHANNELS> local_sender_channel_connection_semaphore_addrs;
     for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS; i++) {
         local_sender_channel_connection_semaphore_addrs[i] = get_arg_val<uint32_t>(arg_idx++);
     }
     // Read the fixed maximum sender-channel connection buffer-index array.
-    std::array<size_t, MAX_NUM_SENDER_CHANNELS> local_sender_channel_connection_buffer_index_ids;
+    static std::array<size_t, MAX_NUM_SENDER_CHANNELS> local_sender_channel_connection_buffer_index_ids;
     for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS; i++) {
         local_sender_channel_connection_buffer_index_ids[i] = get_arg_val<uint32_t>(arg_idx++);
     }
@@ -2771,7 +2775,7 @@ void kernel_main() {
     // For 2D: read densely packed connection data for up to four compact direction slots.
     // For 1D: reads as 1D and only uses first element
 #if defined(FABRIC_2D)
-    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc0_buffer_base_addresses;
+    static std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc0_buffer_base_addresses;
     for (size_t i = 0; i < NUM_DOWNSTREAM_SENDERS_VC0; i++) {
         downstream_edm_vc0_buffer_base_addresses[i] = get_arg_val<uint32_t>(arg_idx++);
     }
@@ -2783,9 +2787,9 @@ void kernel_main() {
     const auto downstream_edm_vc0_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
 #if defined(FABRIC_2D)
-    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc0_worker_registration_ids;
-    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc0_worker_location_info_addresses;
-    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc0_buffer_index_semaphore_addresses;
+    static std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc0_worker_registration_ids;
+    static std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc0_worker_location_info_addresses;
+    static std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc0_buffer_index_semaphore_addresses;
     for (size_t i = 0; i < NUM_DOWNSTREAM_SENDERS_VC0; i++) {
         downstream_edm_vc0_worker_registration_ids[i] = get_arg_val<uint32_t>(arg_idx++);
     }
@@ -2803,7 +2807,7 @@ void kernel_main() {
 
 #if defined(FABRIC_2D_VC1_ACTIVE)
     const auto has_downstream_edm_vc1_buffer_connection = get_arg_val<uint32_t>(arg_idx++);
-    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC1> downstream_edm_vc1_buffer_base_addresses;
+    static std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC1> downstream_edm_vc1_buffer_base_addresses;
     for (size_t i = 0; i < NUM_DOWNSTREAM_SENDERS_VC1; i++) {
         downstream_edm_vc1_buffer_base_addresses[i] = get_arg_val<uint32_t>(arg_idx++);
     }
@@ -2811,9 +2815,9 @@ void kernel_main() {
     const auto downstream_edm_vc1_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_edm_vc1_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
-    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC1> downstream_edm_vc1_worker_registration_ids;
-    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC1> downstream_edm_vc1_worker_location_info_addresses;
-    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC1> downstream_edm_vc1_buffer_index_semaphore_addresses;
+    static std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC1> downstream_edm_vc1_worker_registration_ids;
+    static std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC1> downstream_edm_vc1_worker_location_info_addresses;
+    static std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC1> downstream_edm_vc1_buffer_index_semaphore_addresses;
     for (size_t i = 0; i < NUM_DOWNSTREAM_SENDERS_VC1; i++) {
         downstream_edm_vc1_worker_registration_ids[i] = get_arg_val<uint32_t>(arg_idx++);
     }
@@ -2830,7 +2834,7 @@ void kernel_main() {
     const auto downstream_vc1_noc_interface_buffer_index_local_addr = 0;
 
     // Read teardown semaphores (MAX_NUM_SENDER_CHANNELS channels)
-    std::array<size_t, MAX_NUM_SENDER_CHANNELS> my_sem_for_teardown_from_edm;
+    static std::array<size_t, MAX_NUM_SENDER_CHANNELS> my_sem_for_teardown_from_edm;
     for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS; i++) {
         my_sem_for_teardown_from_edm[i] = get_arg_val<uint32_t>(arg_idx++);
     }
@@ -2911,10 +2915,12 @@ void kernel_main() {
     auto local_sender_channels =
         tt::tt_fabric::SenderChannelBuffersFromAllocs<PACKET_HEADER_TYPE, channel_allocs, SENDER_TO_ENTRY_IDX>::make();
 
-    std::array<size_t, NUM_SENDER_CHANNELS> local_sender_connection_live_semaphore_addresses =
+    static std::array<size_t, NUM_SENDER_CHANNELS> local_sender_connection_live_semaphore_addresses;
+    local_sender_connection_live_semaphore_addresses =
         take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
             local_sender_channel_connection_semaphore_addrs);
-    std::array<size_t, NUM_SENDER_CHANNELS> local_sender_connection_info_addresses =
+    static std::array<size_t, NUM_SENDER_CHANNELS> local_sender_connection_info_addresses;
+    local_sender_connection_info_addresses =
         take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
             std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
                 local_sender_channel_0_connection_info_addr,
