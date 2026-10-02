@@ -27,6 +27,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifdef ARCH_BLACKHOLE
+    // an 8-bit streamed operand is streamed at its data rate (Wormhole's init has no such argument)
+    const bool stream_narrow = _llk_unpack_AB_matmul_stream_narrow_(params.CT_DIM, params.RT_DIM, formats.unpack_A_src, formats.unpack_B_src);
+#define MATMUL_STREAM_NARROW_ARG(narrow) , narrow
+#else
+#define MATMUL_STREAM_NARROW_ARG(narrow)
+#endif
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src,
         formats.unpack_B_src,
@@ -48,7 +55,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         4 /* unpA_num_faces */,
         4 /* unpB_num_faces */,
         false /* unpA_partial_face */,
-        false /* unpB_partial_face */);
+        false /* unpB_partial_face */ MATMUL_STREAM_NARROW_ARG(stream_narrow));
     for (std::uint32_t phase = 0; phase < 2; phase++)
     {
         _llk_unpack_AB_matmul_set_in1_column_stride_(params.TILE_SIZE_UNPACK_B, phase == 0 ? params.KT_DIM : 1);
