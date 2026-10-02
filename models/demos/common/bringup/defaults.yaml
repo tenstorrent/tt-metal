@@ -46,6 +46,10 @@ box:
   test_timeout_s: 3600     # one device test, seconds (hang guard)
   chip_dram_gb: 32         # per-chip DRAM for the plan's memory check
 
+serving:
+  server_repo: ""           # tt-d-gen checkout; "" = /localdev/$USER/tt-d-gen. Asked at intake; the dgen-build agent fetches and builds it
+  require_engine: true      # runner tests fail without a tt-d-gen engine build; false lets tt-metal's prefill_producer stand in
+
 contract:
   num_users: 2             # slots the contract test allocates (the serving contract may ask for more)
   slot: 1                  # the slot it prefills
