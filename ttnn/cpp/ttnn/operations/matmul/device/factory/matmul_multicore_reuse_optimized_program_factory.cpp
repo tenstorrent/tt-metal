@@ -83,7 +83,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     tt::DataFormat output_data_format =
         tt_metal::datatype_to_dataformat_converter(operation_attributes.output_dtype.value());
 
-    tt_metal::distributed::MeshDevice& device = in0_buffer.mutable_device();
+    const tt_metal::distributed::MeshDevice& device = in0_buffer.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device.arch(), operation_attributes.compute_kernel_config.value());

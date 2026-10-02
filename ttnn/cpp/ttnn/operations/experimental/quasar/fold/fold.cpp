@@ -633,8 +633,10 @@ Tensor fold(
     const auto in_channels = shape[3];
     const bool was_tiled = processed_tensor.layout() == Layout::TILE;
 
-    // The interleaved fold kernels operate on row-major data, so untilize first.
-    if (was_tiled) {
+    // Rejection falls back to untilize→RM so prim::qsr::fold takes the 1-stick RM path; validate_fold FATALs on same
+    // predicate.
+    if (was_tiled &&
+        !ttnn::operations::experimental::quasar::is_tile_native_fold_supported(processed_tensor, stride_h, stride_w)) {
         processed_tensor = ttnn::operations::experimental::quasar::to_layout(processed_tensor, Layout::ROW_MAJOR);
     }
 
