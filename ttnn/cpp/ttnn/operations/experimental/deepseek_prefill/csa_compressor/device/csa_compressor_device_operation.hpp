@@ -8,6 +8,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt_stl/reflection.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
@@ -36,6 +37,13 @@ struct CsaStatePreparationProgramFactory {
         const CsaStateInputs&,
         std::array<Tensor, 2>&,
         const std::optional<ttnn::MeshCoordinate>&);
+
+    static void override_runtime_arguments(
+        tt::tt_metal::Program&,
+        const CsaRuntimeParams&,
+        const CsaStateInputs&,
+        std::array<Tensor, 2>&,
+        const std::optional<ttnn::MeshCoordinate>&);
 };
 
 struct CsaStatePreparationDeviceOperation {
@@ -47,6 +55,7 @@ struct CsaStatePreparationDeviceOperation {
     using program_factory_t = std::variant<CsaStatePreparationProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static topology_return_value_t compute_output_topologies(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
@@ -66,6 +75,13 @@ struct CsaCompressionProgramFactory {
         const CsaCompressionInputs&,
         std::array<Tensor, 3>&,
         const std::optional<ttnn::MeshCoordinate>&);
+
+    static void override_runtime_arguments(
+        tt::tt_metal::Program&,
+        const CsaRuntimeParams&,
+        const CsaCompressionInputs&,
+        std::array<Tensor, 3>&,
+        const std::optional<ttnn::MeshCoordinate>&);
 };
 
 struct CsaCompressionDeviceOperation {
@@ -77,6 +93,7 @@ struct CsaCompressionDeviceOperation {
     using program_factory_t = std::variant<CsaCompressionProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static topology_return_value_t compute_output_topologies(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
