@@ -118,6 +118,37 @@ def _git_head() -> str:
         return ""
 
 
+# One JSON line per gate run (accuracy over the optimizer's lifetime). The working-tree diff hash tells
+# candidates on the same HEAD apart.
+HISTORY_PATH = Path(
+    os.environ.get("OPTIMIZER_ACCURACY_HISTORY")
+    or "/home/ttuser/benchmark-results/ashwary-laguna/accuracy_history.jsonl"
+)
+
+
+def _tree_diff_hash() -> str:
+    try:
+        diff = subprocess.run(
+            ["git", "diff", "HEAD"], cwd=str(MODEL_DIR), capture_output=True, timeout=60
+        ).stdout
+    except Exception:  # noqa: BLE001
+        return ""
+    if not diff:
+        return "clean"
+    import hashlib
+
+    return hashlib.sha1(diff).hexdigest()[:12]
+
+
+def _append_history(record: dict) -> None:
+    try:
+        HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with HISTORY_PATH.open("a") as handle:
+            handle.write(json.dumps(record) + "\n")
+    except OSError as error:
+        print(f"ACCURACY_HISTORY not written ({error})", flush=True)
+
+
 def _load_baseline() -> dict | None:
     try:
         doc = json.loads(BASELINE_PATH.read_text())
@@ -245,6 +276,25 @@ def test_optimizer_full_model_pcc():
                 f"mean_corr_delta={mean_corr - baseline['mean_corr']:+.6f}",
                 flush=True,
             )
+        _append_history(
+            {
+                "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "tree": _git_head(),
+                "diff": _tree_diff_hash(),
+                "top1_pct": top1_pct,
+                "top5_pct": top5_pct,
+                "traced_top1_pct": traced_top1,
+                "mean_corr": mean_corr,
+                "worst_corr": worst_corr,
+                "top100_mean_corr": top100_mean,
+                "top100_worst_corr": worst_top,
+                "score": score if not failures else 0.0,
+                "passed": not failures and score >= PCC_THRESHOLD,
+                "failures": failures,
+                "eager_seconds": round(eager_seconds, 1),
+                "traced_seconds": round(traced_seconds, 1),
+            }
+        )
         if failures:
             print("ACCURACY GATE FAILED: " + "; ".join(failures), flush=True)
             print("PCC: 0.000000 (accuracy gate failed, see ACCURACY GATE FAILED above)", flush=True)

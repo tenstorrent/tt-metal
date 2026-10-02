@@ -58,6 +58,25 @@ DECODE_ONLY = os.environ.get("OPTIMIZER_DECODE_ONLY") == "1"
 PROFILER_BUFFER_AT_IMPORT = os.environ.get("TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT") or "default"
 
 
+PERF_HISTORY_PATH = os.environ.get("OPTIMIZER_PERF_HISTORY") or "/home/ttuser/benchmark-results/ashwary-laguna/perf_history.jsonl"
+
+
+def _append_perf_history(record: dict) -> None:
+    """One JSON line per gate run, so decode speed can be followed over the optimizer's lifetime."""
+    import json
+    import subprocess
+
+    try:
+        record["tree"] = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, timeout=30
+        ).stdout.strip()
+        os.makedirs(os.path.dirname(PERF_HISTORY_PATH), exist_ok=True)
+        with open(PERF_HISTORY_PATH, "a") as handle:
+            handle.write(json.dumps(record) + "\n")
+    except Exception as error:  # noqa: BLE001
+        print(f"PERF_HISTORY not written ({error})", flush=True)
+
+
 def signpost(name: str, enabled: bool) -> None:
     """Tracy signpost, only under the device profiler. Call sites pass literal names (the optimizer's harness
     scanner reads `signpost("...")` calls from the source)."""
@@ -172,6 +191,19 @@ def test_optimizer_direct_perf():
             f"ttft_samples_ms={','.join(f'{ms:.3f}' for ms in prefill_ms)} "
             f"decode_tokens_per_second={decode_tokens_per_second:.3f}",
             flush=True,
+        )
+        _append_perf_history(
+            {
+                "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "role": role,
+                "profiling": int(profiling),
+                "trace": int(enable_trace),
+                "layers": depth or FULL_DEPTH,
+                "decode_tokens": decode_tokens,
+                "decode_ms_per_token": round(per_token_ms, 4),
+                "decode_tokens_per_second": round(decode_tokens_per_second, 3),
+                "ttft_ms": round(ttft_ms, 3),
+            }
         )
         if not profiling and enable_trace:
             if not DECODE_ONLY:
