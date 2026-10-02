@@ -454,6 +454,11 @@ def test_vllm_dflash_output_buffer_and_runtime_guards(monkeypatch, expect_error)
 
     class FakeController:
         pending_tokens = ()
+        active = False
+        expected = (None, None)
+
+        def expected_input(self):
+            return self.expected
 
         @staticmethod
         def serve_token(**kwargs):
@@ -491,6 +496,19 @@ def test_vllm_dflash_output_buffer_and_runtime_guards(monkeypatch, expect_error)
     assert calls[0][1]["known_bonus"] == 7 and calls[0][1]["position"] == 20
     assert calls[0][1]["verify_kwargs"]["page_tables_per_layer"] is None
     assert int(copied[0][0].reshape(-1)[0]) == 23
+
+    # Async steady decode: the host position/token can lag one step behind. A steady step (no batch reset)
+    # follows the controller's expected input; a batch reset keeps the host values for the strict check.
+    bridge._dflash_controller.active = True
+    bridge._dflash_controller.expected = (21, 9)
+    bridge._dflash_serve(
+        torch.tensor([[7]]), torch.tensor([20]), [[0]], [{"block_size": 64}], None, greedy, False, reset_batch=False
+    )
+    assert calls[-1][1]["known_bonus"] == 9 and calls[-1][1]["position"] == 21
+    bridge._dflash_serve(torch.tensor([[7]]), torch.tensor([20]), [[0]], [{"block_size": 64}], None, greedy, False)
+    assert calls[-1][1]["known_bonus"] == 7 and calls[-1][1]["position"] == 20
+    bridge._dflash_controller.active = False
+    bridge._dflash_controller.expected = (None, None)
 
     for position, expected_path in ((48, "proposal"), (49, "target"), (63, "target"), (64, "proposal")):
         bridge._dflash_serve(
