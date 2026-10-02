@@ -275,8 +275,15 @@ The collective dtype is split by phase: bfloat8_b for decode, bfloat16 for prefi
 
 Both decode boundaries are reported because they answer different questions: the no-readback
 figure is the logits-side comparison, and token out adds the final norm, LM head, sampling and
-the caller-visible readback. The boundary between them costs 0.799 ms, 1.10% of the step, so
-sampler work is not the dominant token-out cost.
+the caller-visible readback. The boundary between them costs 0.799 ms, 1.10% of the step.
+
+**That 0.799 ms is the readback, not the sampler, and an earlier revision wrongly read it as
+evidence that sampling is cheap.** The sampling trace replays on both sides of that boundary,
+so the difference never contained it. Measured directly on this mesh, `_sampling_step` is
+**8.817 ms** eager at batch 1, with a p10 to p90 spread of 0.03 ms -- tight enough to indicate
+device-bound work rather than host dispatch, unlike a decoder layer which spreads 4.28 to
+7.65 ms eager against 0.72 to 0.97 ms traced. It is the largest single cost outside the layer
+stack. See the fixed-cost attribution below.
 
 Steady-state host work is one refresh each of token, position and RoPE per 148 trace replays,
 not one per generated token, so decode state advances on device rather than from the host.
@@ -309,6 +316,48 @@ be near 16.8 t/s/u, still 43%. That is consistent with the platform deltas recor
 64 worker cores against roughly 110, one usable ethernet link against two, and one DRAM reader
 per bank because multiple readers are Blackhole-only. It is a hardware gap rather than a defect,
 but it is larger than the phrase "slower on Wormhole" would suggest.
+
+## Fixed per-step cost, attributed
+
+The layer-stack fit reports a 9.600 ms intercept, which is a derived number rather than a
+measurement, so it was attributed directly. Traced decode was measured at shallow depths where
+the original fit had no data (its depths were 4, 16, 32 and 64):
+
+| depth | traced decode, token out | the 4/16/32/64 line predicts |
+| ---: | ---: | ---: |
+| 1 | 13.259 ms | 10.568 ms |
+| 2 | 13.029 ms | 11.535 ms |
+| 4 | 14.984 ms | 13.470 ms |
+| 8 | 17.967 ms | 17.341 ms |
+
+A shallow fit gives 0.7249 ms per layer on a 12.091 ms intercept, so the fixed cost is real and
+larger than the original fit implied; depth 2 is inside noise of depth 1, which is what a
+dominant fixed term looks like. Layer composition does not explain the slope difference: depth
+8 is 6 GDN and 2 full-attention, the same 25% full-attention fraction as the whole model.
+
+The components, measured eager at batch 1 on a one-layer model, since none of them depends on
+depth:
+
+| component | eager p50 | p10 to p90 |
+| --- | ---: | --- |
+| `_sampling_step`, top-k then two all-gathers then sample | **8.817 ms** | 8.808 to 8.840 |
+| `logits`, norm and head and moves and concat | 1.469 ms | 1.415 to 1.571 |
+| `rope` | 0.960 ms | 0.940 to 0.981 |
+| `embed`, including the ring all-gather | 0.889 ms | 0.865 to 0.967 |
+| sum | 12.135 ms | against a 12.091 ms intercept |
+
+Two traces and a token readback -- the whole scaffolding of a decode step -- cost 0.278 ms
+together, measured with no model present: 0.060 ms for a device synchronise, 0.160 ms for the
+readback, and about 0.05 ms per trace launch. So neither trace replay nor host synchronisation
+is where the fixed cost goes.
+
+The sampler runs in the served path. `compat` comes from the generator's `host_sampling`
+constructor argument, not from `QWEN_VLLM_HOST_COMPATIBILITY`, which only permits host paths
+rather than selecting them; the adapter passes `host_sampling=not device_sampling`, and benign
+sampling parameters leave device sampling on.
+
+Eager timings carry per-op host dispatch and so bound the traced cost from above. They are used
+here to locate the dominant term, which they do unambiguously, not to state its traced value.
 
 ## Served performance, which is not the traced-decode performance
 
