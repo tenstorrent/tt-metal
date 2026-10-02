@@ -106,7 +106,8 @@ struct MatmulUnifiedProgramConfig {
     std::size_t K_chunk_tiles = 0;
     // Subblock: the C slice's tiles accumulated in DST at once; holds <= 8 tiles (4 with fp32
     // accumulation). Need not divide the C slice: it is padded up to subblock multiples and the
-    // overshoot is clipped on write. 0 for both = auto (max-volume subblock).
+    // overshoot is clipped on write. 0 for both = auto: max volume, least padding on ties; with several
+    // compute threads, least work on the busiest thread first.
     std::size_t subblock_M_tiles = 0;
     std::size_t subblock_N_tiles = 0;
     // Order `cores` are walked when handing out C slices: ROW_MAJOR x fastest, COL_MAJOR y fastest. A

@@ -50,7 +50,8 @@ TT_KERNEL void writer(uint32_t first_C_slice, uint32_t num_C_slices) {
     }
     const auto C = TensorAccessor(tensor::C);
     Noc noc;
-    // A subblock sits in the entry row-major in tiles, as the compute packs it.
+    // A subblock sits in the entry row-major in tiles, as the compute packs it. get_tile_size is one tile's
+    // size, also when an entry holds several tiles.
     const uint32_t C_tile_bytes = get_tile_size(dfb::C_slice);
 
     for (uint32_t batch = 0; batch < batch_size; ++batch) {
