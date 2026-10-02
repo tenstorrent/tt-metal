@@ -1192,8 +1192,8 @@ def test_linear_bias_wrong_height_rejected_on_multicore_reuse_program_config(dev
 
 
 def test_linear_narrow_bias_core_grid_activation(device):
-    """With core_grid, the activation is fused into the matmul kernel, while a narrow bias is applied
-    afterwards via add(). The result must still be act(a @ b + bias), not act(a @ b) + bias."""
+    """With core_grid, activation would normally be fused into the matmul kernel. A narrow bias is applied
+    via add(), so activation must run afterward to produce act(a @ b + bias)."""
     torch.manual_seed(0)
     a = torch.randn(32, 64, dtype=torch.bfloat16)
     b = torch.randn(64, 64, dtype=torch.bfloat16)
