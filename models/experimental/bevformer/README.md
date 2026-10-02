@@ -1,6 +1,6 @@
 # BEVFormer
 
-This directory holds the BEVFormer-base image backbone (ResNet101-DCN) and FPN neck, the BEVFormer encoder, and the detection decoder.
+This directory holds the BEVFormer-base image backbone (ResNet101-DCN) and FPN neck, the BEVFormer encoder, the detection decoder, and the detection head with its NMS-free box coder.
 
 BEVFormer Encoder is a transformer-based 3D object detection model that creates Bird's-Eye-View (BEV) representations from multi-camera images. The encoder uses spatiotemporal transformers to learn unified BEV representations by combining spatial cross-attention for feature extraction from camera views and temporal self-attention for modeling temporal dependencies.
 
@@ -49,6 +49,36 @@ six DETR layers of self-attention, single-level deformable cross-attention over 
   consumes them, so each decoder instance needs its own `create_decoder_parameters` call.
 - Inputs and outputs are sequence-first by default, as in the reference; `batch_first=True` takes
   and returns batch-first tensors and skips the permutes.
+- Besides the layer outputs and refined points, it returns each layer's box codes, the
+  `reg_branches` raw output, which the head builds its box predictions from. The branches come
+  from `create_reg_branch_parameters`, three Linears each.
+
+### Detection Head and Box Coder
+
+`tt/tt_head.py` ports the part of BEVFormer's `BEVFormerHead` on top of the encoder's
+`(bs, bev_h * bev_w, 256)` BEV features: it runs the decoder batch-first over the object queries
+and, per decoder layer, the classification branch.
+
+- The object queries, their positional embeddings and the initial reference points depend on
+  the weights only, so `tt/model_preprocessing_head.py` computes them once. The parameters also
+  carry the head's BEV shape and `pc_range`, and are single use, like the decoder's.
+- The box predictions are the decoder's box codes with cx, cy and cz replaced by its refined
+  float32 points, scaled from [0, 1] to `pc_range` metres. The class logits are float32, the
+  dtype the coder ranks.
+- The encoder side of BEVFormer's `PerceptionTransformer` (BEV queries, positional encoding, can
+  bus, previous BEV) is not part of the head.
+
+`tt/tt_nms_free_coder.py` ports `NMSFreeCoder`: the top 300 (query, class) pairs of the last
+layer by score, their box predictions decoded to `(cx, cy, cz, w, l, h, yaw, vx, vy)`, and a
+range filter.
+
+- The top-k and the decoding run on device. A float32 top-k over all 9000 scores is slow, so the
+  logits are ranked in bfloat16 against a pivot, the bfloat16 k-th logit, and the 512 candidates
+  are re-ranked exactly in float32.
+- Only the final range filter runs on host: it keeps a data-dependent number of boxes and ends
+  the pipeline.
+- cz stays at the box's gravity center; upstream `get_bboxes` moves it to the bottom face after
+  the coder.
 
 ## Project Structure
 
@@ -64,7 +94,7 @@ models/experimental/bevformer/
 
 ## Section 1: Test Files
 
-The test suite validates the image backbone, the FPN, the individual components of the BEVFormer encoder and the detection decoder, ensuring correctness of both reference and TTNN implementations.
+The test suite validates the image backbone, the FPN, the individual components of the BEVFormer encoder, the detection decoder, and the detection head and box coder, ensuring correctness of both reference and TTNN implementations.
 
 ### PCC (Pearson Correlation Coefficient) Tests
 
@@ -113,8 +143,8 @@ Tests the six-layer detection decoder.
 
 **What it tests:**
 - The tiny (50x50) and base (200x200) BEV grids, a non-square 50x100 grid and batch size 2
-- PCC 0.99 on the stacked six-layer outputs and refined reference points; per-layer PCC and the
-  refined points' error in BEV pixels are logged
+- PCC 0.99 on the stacked six-layer outputs and refined reference points, and per channel on the
+  box codes; per-layer PCC and the refined points' error in BEV pixels are logged
 - Traced runs: capture proves the forward has no host reads or writes, and the replay runs on new
   inputs
 - That a second eager run adds no programs to the program cache
@@ -128,6 +158,40 @@ refinement, faster on the 200x200 grid.
 **Usage:**
 ```bash
 pytest models/experimental/bevformer/tests/pcc/test_decoder.py
+```
+
+#### test_head.py
+Tests the detection head, and the coder on the head's outputs.
+
+**What it tests:**
+- The tiny grid, a traced run on new BEV features, and batch size 2
+- PCC 0.99 on the class logits and, channel by channel, on the box predictions, over all layers
+  and on the last one; a joint PCC would be carried by the metre-scale centers alone
+- That the coder, on the head's outputs, selects pairs within twice the score error of the reference
+  head's top 300, with the reference's scores and boxes at those pairs
+
+The base grid is an expected failure: with the head's queries and reference points, some
+non-center box channels fall below PCC 0.99 there; the centers do not.
+
+**Usage:**
+```bash
+pytest models/experimental/bevformer/tests/pcc/test_head.py
+```
+
+#### test_nms_free_coder.py
+Tests the box coder on head-shaped inputs.
+
+**What it tests:**
+- Distinct logits, so the top 300 labels and queries must match the reference exactly, spread
+  evenly and in a background-dominated shape whose dense band defeats a bfloat16 top-k without
+  the pivot
+- The decoded boxes channel by channel, yaw through its sine and cosine, and the scores to a few
+  float32 ulps
+- The range filter's kept boxes, and that a second call only hits the program cache
+
+**Usage:**
+```bash
+pytest models/experimental/bevformer/tests/pcc/test_nms_free_coder.py
 ```
 
 #### test_encoder.py
