@@ -387,14 +387,32 @@ class ChunkedPrefillPageTableGuardMixin:
         """
         block_size = get_block_size(kv_cache)
         for i, layer in enumerate(getattr(self.model[0], "layers", [])):
-            cfg = getattr(getattr(layer, "self_attn", None), "config", None)
+            attn = getattr(layer, "self_attn", None)
+            cfg = getattr(attn, "config", None)
             if cfg is None or i >= len(kv_cache) or kv_cache[i] is None:
                 continue
             cache = kv_cache[i][0]
             cache_hd = int(cache.shape[-1])
             if cache_hd != int(cfg.head_dim) and cache_hd > 0:
-                # HMA-shared buffer: byte-invariant reinterpret for this layer's head_dim.
-                return int(cache.shape[2]) * cache_hd // int(cfg.head_dim)
+                # HMA-shared buffer: the byte-invariant reinterpret for this
+                # layer's view must include the kv-head factor, not just head_dim
+                # (operations.effective_block_size). Scaling by head_dim alone
+                # gave 128 for a sliding layer (kv=2 x 256) sharing a buffer
+                # allocated at the full-attention view (kv=1 x 64 x 512): the
+                # page table was then trimmed to one block per 128 tokens while
+                # the kernel addressed 64-token blocks, and the first warmup
+                # fill TT_FATAL'd on the width check.
+                tp = int(getattr(getattr(attn, "mesh_config", None), "tp", 1) or 1)
+                weights = getattr(attn, "weights", None)
+                kv_local = 1 if getattr(weights, "kv_replicated", False) else max(1, int(cfg.num_key_value_heads) // tp)
+                numer = int(cache.shape[1]) * int(cache.shape[2]) * cache_hd
+                denom = kv_local * int(cfg.head_dim)
+                if numer % denom:
+                    raise ValueError(
+                        f"layer {i}: KV buffer view {tuple(cache.shape)} is not a whole "
+                        f"number of {kv_local}x{cfg.head_dim} blocks"
+                    )
+                return numer // denom
         return block_size
 
     def _paged_prefill_block_size(self, kv_cache):

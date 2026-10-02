@@ -923,6 +923,30 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         tp = parallel_config.tensor_parallel_size
         sliding_kv_heads_per_dev = sliding_kv_heads // tp
         full_kv_heads_per_dev = full_kv_heads // tp
+        if cls._HYBRID_KV_CACHE_GROUPS_ENABLED:
+            # vLLM's TP is 1 on TT (the mesh shards internally), so these counts
+            # are GLOBAL and vLLM unifies page bytes from them. A group whose kv
+            # heads are fewer than the mesh devices is REPLICATED per device
+            # (31B: 4 full heads over 8 chips = 1/device, the same 512
+            # elems/token as sliding's 16/8 x 256), but vLLM only sees 4 x 512
+            # = half of sliding's bytes and doubles the full block to 128
+            # tokens — a page one shared device buffer cannot hold beside a
+            # 64-token sliding page (allocator raises on the element mismatch).
+            # Report the full group at the head count that keeps vLLM's
+            # per-token ratio equal to the device's; it also makes the pool
+            # accounting charge replication as the real cost it is.
+            mesh = max(1, (ttnn.get_num_devices() or 1) // max(1, parallel_config.data_parallel_size))
+            dev_full = full_head_dim * (full_kv_heads // min(mesh, full_kv_heads))
+            dev_slid = sliding_head_dim * (sliding_kv_heads // min(mesh, sliding_kv_heads))
+            num = dev_full * sliding_kv_heads * sliding_head_dim
+            den = dev_slid * full_head_dim
+            if num % den:
+                raise ValueError(
+                    "hybrid kv-cache groups: cannot report a full-attention head count "
+                    f"matching the device per-token ratio (full {full_kv_heads}x{full_head_dim}, "
+                    f"sliding {sliding_kv_heads}x{sliding_head_dim}, mesh {mesh})"
+                )
+            full_kv_heads_per_dev = (num // den) // tp
 
         dtype = (
             model_config.dtype

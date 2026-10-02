@@ -257,8 +257,27 @@ def _clone_sliding_prefill_tail(tt_k, tt_v, hist, head_dim, valid_seq_len=None, 
     return (k_owned, v_owned)
 
 
+def _reinterpret_block_view(part, kv_local, head_dim):
+    """Check that a paged block already has this layer's view.
+
+    Shared HMA buffers take the first layer's (sliding) view, which is the
+    layout the sliding tail reconstruction reads, so a mismatch here means a
+    full-attention-view allocation that the paged kernels do not reinterpret
+    correctly for sliding layers either (measured 2026-10-02). Re-viewing the
+    tile stream host-side is not attempted: the kernels' tile order for a
+    reinterpreted block is not a documented contract. Fail loudly instead.
+    """
+    _, cache_kv, _cache_rows, cache_hd = (int(x) for x in part.shape)
+    if cache_kv == kv_local and cache_hd == head_dim:
+        return part
+    raise ValueError(
+        f"sliding tail reconstruction needs the layer's own KV view ({kv_local}x{head_dim}); "
+        f"the shared buffer is allocated as {tuple(part.shape)}"
+    )
+
+
 def _read_sliding_tail_from_paged_cache(
-    k_cache, v_cache, page_table, user_id, chunk_offset, sliding_window, head_dim, out_dtype
+    k_cache, v_cache, page_table, user_id, chunk_offset, sliding_window, head_dim, out_dtype, kv_local=None
 ):
     """Reconstruct the prior-window K/V tail from the paged cache.
 
@@ -280,8 +299,15 @@ def _read_sliding_tail_from_paged_cache(
     if os.environ.get("GEMMA4_SLIDING_TAIL_FROM_CACHE", "1") == "0":
         return None
     try:
-        block_size = int(k_cache.padded_shape[2])
-        num_kv = int(k_cache.padded_shape[1])
+        cache_kv = int(k_cache.padded_shape[1])
+        cache_rows = int(k_cache.padded_shape[2])
+        cache_hd = int(k_cache.padded_shape[-1])
+        kv_local = int(kv_local or cache_kv)
+        # Tokens per block in THIS layer's view: the buffer may be allocated at
+        # a wider (shared) view, so invert the per-block byte invariant rather
+        # than trusting shape[2] (operations.effective_block_size).
+        block_size = (cache_kv * cache_rows * cache_hd) // (kv_local * head_dim)
+        num_kv = cache_kv
         take = min(int(sliding_window), int(chunk_offset))
         start = chunk_offset - take
         if block_size <= 0 or chunk_offset % block_size or start % block_size:
@@ -306,8 +332,18 @@ def _read_sliding_tail_from_paged_cache(
             )
         if not blocks or any(b < 0 or b >= int(k_cache.padded_shape[0]) for b in blocks):
             return None
-        k_parts = [ttnn.slice(k_cache, [b, 0, 0, 0], [b + 1, num_kv, block_size, head_dim]) for b in blocks]
-        v_parts = [ttnn.slice(v_cache, [b, 0, 0, 0], [b + 1, num_kv, block_size, head_dim]) for b in blocks]
+        k_parts = [
+            _reinterpret_block_view(
+                ttnn.slice(k_cache, [b, 0, 0, 0], [b + 1, num_kv, cache_rows, cache_hd]), kv_local, head_dim
+            )
+            for b in blocks
+        ]
+        v_parts = [
+            _reinterpret_block_view(
+                ttnn.slice(v_cache, [b, 0, 0, 0], [b + 1, num_kv, cache_rows, cache_hd]), kv_local, head_dim
+            )
+            for b in blocks
+        ]
         k_tail = ttnn.concat(k_parts, dim=2) if len(k_parts) > 1 else k_parts[0]
         v_tail = ttnn.concat(v_parts, dim=2) if len(v_parts) > 1 else v_parts[0]
         # Block slices are always partial (one block of a many-block pool), so
@@ -780,6 +816,7 @@ def _prefill_forward_single(
                 sliding_window,
                 config.head_dim,
                 tt_k.dtype,
+                kv_local=1 if weights.kv_replicated else config.num_key_value_heads // tp,
             )
         if sliding_tail_in is not None:
             k_tail, v_tail = sliding_tail_in

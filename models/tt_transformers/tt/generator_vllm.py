@@ -41,19 +41,23 @@ from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs,
 def _canonical_shared_kv_shapes(per_layer_specs) -> dict:
     """Resolve one allocation shape per shared KV buffer (``tensor_idx``).
 
-    A shared buffer serves layers with DIFFERENT per-layer views (HMA
-    sharing can mix sliding and full attention: e.g. Gemma4 sliding
-    kv=N x head_dim=256 with full kv=M x head_dim=512 over identical
-    per-block bytes). Allocate each shared buffer with the view of the
-    WIDEST head_dim among its layers: paged fill/update/decode reconcile
-    any view via the ``effective_block_size`` override, but the
-    full-attention chunked-prefill SDPA validates ``k_shape[-1] == head_dim``
-    and has no such knob — handing it a buffer allocated at the sliding view
-    TT_FATALs at the first chunked long prefill. The larger ``num_blocks`` of
-    the views sizes the buffer (a shrunk sliding spec must not undersize a
-    buffer a full-attention layer also reads). Views must agree on per-block
-    element counts; a mismatch means the specs are inconsistent, not
-    reconcilable.
+    HMA sharing can put layers with different views on one buffer (gemma4
+    hybrid: sliding kv=2 x head_dim=256 and full-attention kv=1 x 512 per
+    device). The buffer takes the FIRST layer's view (in layer order that is
+    the sliding view), which is the layout the paged kernels reinterpret
+    correctly: a fewer-heads layer writing/reading a more-heads buffer via
+    ``effective_block_size`` serves coherently; the reverse (allocating at
+    the wider full-attention view) corrupts sliding-layer KV even on a
+    single-chunk prompt (measured 2026-10-02, 31B hybrid). The chunked
+    prefill SDPA still lacks that reinterpretation (tt-metal op work), so
+    hybrid multi-chunk prefill stays blocked regardless of this choice.
+
+    The larger ``num_blocks`` of the views sizes the buffer (a shrunk sliding
+    spec must not undersize a buffer a full-attention layer also reads), and
+    views that disagree on per-block element counts raise: the kernels'
+    byte-invariant reinterpretation is impossible then (seen when vLLM
+    unified page sizes with a 128-token full-attention block against a
+    64-token sliding block before the spec reported replicated heads).
     """
     canonical: dict = {}
     for kv_cache_shape, _dtype, tensor_idx in per_layer_specs:
@@ -67,8 +71,7 @@ def _canonical_shared_kv_shapes(per_layer_specs) -> dict:
                 f"KV buffer {tensor_idx} shared by layers with different "
                 f"per-block element counts: {cur} vs {tuple(kv_cache_shape)}"
             )
-        widest = tuple(kv_cache_shape) if hd > cur[-1] else cur
-        canonical[tensor_idx] = (max(cur[0], nb), *widest[1:])
+        canonical[tensor_idx] = (max(cur[0], nb), *cur[1:])
     return canonical
 
 
