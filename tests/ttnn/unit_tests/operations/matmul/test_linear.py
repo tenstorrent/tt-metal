@@ -662,28 +662,29 @@ def test_vector_linear(device, shape_a, shape_b, shape_bias) -> None:
     torch_a = torch.randn(*shape_a, dtype=torch.bfloat16)
     torch_b = torch.randn(*shape_b, dtype=torch.bfloat16)
 
-    # For torch.linear, weight matrix is expected to be (out_features, in_features)
-    # but internally it's transposed during the operation
-    torch_weight = torch_b
-    if len(shape_b) >= 2:
-        torch_weight = torch.transpose(torch_weight, -1, -2)
-
     # Create bias tensor if shape_bias is not empty
     torch_bias = None
     ttnn_bias = None
     if shape_bias is not None:
-        torch_bias = torch.randn(*shape_bias, dtype=torch.bfloat16) if shape_bias != tuple() else torch.randn(())
+        torch_bias = (
+            torch.randn(*shape_bias, dtype=torch.bfloat16)
+            if shape_bias != tuple()
+            else torch.randn((), dtype=torch.bfloat16)
+        )
         ttnn_bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
     # Create ttnn tensors
     ttnn_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
 
-    # Handle exceptions in torch
+    # ttnn.linear takes b as (in_features, out_features), so the reference is matmul + bias.
+    # torch.nn.functional.linear is not used because it rejects a 2D input with a 1D weight and a bias.
     torch_errored = False
     torch_error_msg = ""
     try:
-        torch_result = torch.nn.functional.linear(torch_a, torch_weight, torch_bias)
+        torch_result = torch.matmul(torch_a, torch_b)
+        if torch_bias is not None:
+            torch_result = torch_result + torch_bias
     except Exception as e:
         torch_errored = True
         torch_error_msg = str(e)
