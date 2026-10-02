@@ -1154,6 +1154,19 @@ def test_minimax_h3_transformer_block_perf(
     tt_out = run_block()
     signpost("stop")
 
+    # Bench only: digest of the whole block output across the mesh (build-to-build bit identity).
+    digest_path = os.environ.get("H3_BLOCK_DIGEST")
+    if digest_path:
+        import hashlib
+
+        full = ttnn.to_torch(
+            tt_out,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=[0, 1], mesh_shape=tuple(mesh_device.shape)),
+        )
+        sha = hashlib.sha256(full.contiguous().view(torch.uint8).numpy().tobytes()).hexdigest()[:16]
+        with open(digest_path, "a") as handle:
+            handle.write(f"{recipe_tag()} {duration_s:g}s {sha}\n")
+
     # Bench only: wall time of warm blocks (host dispatch included; untraced, as the 4x8 pipeline runs).
     iters = int(os.environ.get("H3_BLOCK_ITERS", "0"))
     if iters:
