@@ -193,8 +193,7 @@ shield:
     wh_n300_civ2: 10
     bh_p150: 60
   demo:
-    bh_sc4: 60
-    bh_sc4_high_power: 300
+    bh_sc4: 360
     bh_sc1: 120
     bh_sc1_high_power: 210
 
@@ -452,7 +451,7 @@ models:
     wh_galaxy_perf: 430
     bh_quietbox_2: 310
     wh_llmbox: 342
-    bh_loudbox: 245
+    bh_loudbox: 290
     bh_galaxy: 65
     wh_n150: 65
 umd:
