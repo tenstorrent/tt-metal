@@ -11,9 +11,11 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
+NATIVE_DIR = Path(__file__).resolve().parents[1] / "native"
 ARCH = os.environ.get("CHIP_ARCH", "wormhole").strip().lower()
-SCANNERS = {arch: HERE / f"scan-{arch}" for arch in ("wormhole", "blackhole", "quasar")}
+SCANNERS = {
+    arch: NATIVE_DIR / f"scan-{arch}" for arch in ("wormhole", "blackhole", "quasar")
+}
 SCANNER = SCANNERS[ARCH]
 SCANNER_ELF_NAME = "kernel.elf"
 TTNOP_ELF_NAMES = {
@@ -58,7 +60,10 @@ _cache: dict = {}
 
 def _build() -> None:
     subprocess.run(
-        ["make", "--silent", SCANNER.name], cwd=HERE, check=True, shell=False
+        ["make", "--silent", SCANNER.name],
+        cwd=NATIVE_DIR,
+        check=True,
+        shell=False,
     )
 
 
