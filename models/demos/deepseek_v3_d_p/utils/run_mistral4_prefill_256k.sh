@@ -47,7 +47,7 @@ TOPO=models/demos/common/prefill/runners/topology_configuration
 
 # MODE selects the rank count and the binding; everything else below is shared.
 case "$MODE" in
-  1rank) RANKS=1; BASE="$TOPO/pipeline_prefill_request_1rank.yaml" ;;
+  1rank) RANKS=1; BASE="$TOPO/pipeline_prefill_request_1rank_mistral4.yaml" ;;
   # torus_y wraps the SP axis, worth ~13% over the plain-2d sibling; the two are not interchangeable
   # for a quoted number.
   pp4)   RANKS=4; BASE="$TOPO/pipeline_prefill_request_intragalaxy_4rank_8x1_torus_y.yaml" ;;
