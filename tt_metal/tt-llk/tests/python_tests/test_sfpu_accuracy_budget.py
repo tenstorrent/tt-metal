@@ -2000,6 +2000,181 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
 }
 
 
+#: How many not-measurable cells each *wildcard* acknowledgement above covers today. An
+#: acknowledgement that leaves a dimension open -- an op-wide one most of all -- would
+#: otherwise approve every cell of the op that is ever demoted, for any cause, and the
+#: stale check below could not retire it while one such cell remained. Pinning the count
+#: makes a newly demoted cell a change someone has to read: the table moved, the cause
+#: must be looked at, and the number here bumped on purpose. Exact-cell keys need no pin.
+_UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
+    (MathOperation.Tan, DataFormat.Float16, DataFormat.Float16_b, None, None): 2,
+    (MathOperation.Tan, DataFormat.Float16, DataFormat.Float32, None, None): 2,
+    (
+        MathOperation.Cosh,
+        DataFormat.Float16,
+        DataFormat.Float16_b,
+        None,
+        DestAccumulation.Yes,
+    ): 1,
+    (
+        MathOperation.Cosh,
+        DataFormat.Float16,
+        DataFormat.Float32,
+        None,
+        DestAccumulation.Yes,
+    ): 1,
+    (
+        MathOperation.Exp,
+        DataFormat.Float16,
+        DataFormat.Float16_b,
+        None,
+        DestAccumulation.Yes,
+    ): 2,
+    (
+        MathOperation.Exp,
+        DataFormat.Float16,
+        DataFormat.Float32,
+        None,
+        DestAccumulation.Yes,
+    ): 2,
+    (
+        MathOperation.Exp2,
+        DataFormat.Float16,
+        DataFormat.Float16_b,
+        None,
+        DestAccumulation.Yes,
+    ): 1,
+    (
+        MathOperation.Exp2,
+        DataFormat.Float16,
+        DataFormat.Float32,
+        None,
+        DestAccumulation.Yes,
+    ): 1,
+    (
+        MathOperation.Expm1,
+        DataFormat.Float16,
+        DataFormat.Float16_b,
+        None,
+        DestAccumulation.Yes,
+    ): 1,
+    (
+        MathOperation.Expm1,
+        DataFormat.Float16,
+        DataFormat.Float32,
+        None,
+        DestAccumulation.Yes,
+    ): 1,
+    (
+        MathOperation.Selu,
+        DataFormat.Float16,
+        DataFormat.Float16_b,
+        None,
+        DestAccumulation.Yes,
+    ): 1,
+    (
+        MathOperation.Selu,
+        DataFormat.Float16,
+        DataFormat.Float32,
+        None,
+        DestAccumulation.Yes,
+    ): 1,
+    (
+        MathOperation.Sinh,
+        DataFormat.Float16,
+        DataFormat.Float16_b,
+        None,
+        DestAccumulation.Yes,
+    ): 1,
+    (
+        MathOperation.Sinh,
+        DataFormat.Float16,
+        DataFormat.Float32,
+        None,
+        DestAccumulation.Yes,
+    ): 1,
+    (
+        MathOperation.Square,
+        DataFormat.Float16,
+        DataFormat.Float16_b,
+        None,
+        DestAccumulation.Yes,
+    ): 1,
+    (
+        MathOperation.Square,
+        DataFormat.Float16,
+        DataFormat.Float32,
+        None,
+        DestAccumulation.Yes,
+    ): 1,
+    (
+        MathOperation.UnaryPower,
+        DataFormat.Float16,
+        DataFormat.Float16_b,
+        None,
+        DestAccumulation.Yes,
+    ): 1,
+    (
+        MathOperation.UnaryPower,
+        DataFormat.Float16,
+        DataFormat.Float32,
+        None,
+        DestAccumulation.Yes,
+    ): 1,
+    (
+        MathOperation.Xielu,
+        DataFormat.Float16,
+        DataFormat.Float16_b,
+        None,
+        DestAccumulation.Yes,
+    ): 1,
+    (
+        MathOperation.Xielu,
+        DataFormat.Float16,
+        DataFormat.Float32,
+        None,
+        DestAccumulation.Yes,
+    ): 1,
+    (
+        MathOperation.Cbrt,
+        DataFormat.Float16_b,
+        DataFormat.Float16,
+        None,
+        DestAccumulation.Yes,
+    ): 1,
+    (MathOperation.Sinh, DataFormat.Float16, None, None, DestAccumulation.No): 2,
+    (
+        MathOperation.Exp,
+        DataFormat.Float16,
+        DataFormat.Float16,
+        ApproximationMode.Yes,
+        None,
+    ): 2,
+    (
+        MathOperation.Exp,
+        DataFormat.Float32,
+        DataFormat.Float16,
+        ApproximationMode.Yes,
+        None,
+    ): 2,
+    (MathOperation.Digamma, None, None, None, None): 22,
+    (MathOperation.ExpWithBase, None, None, ApproximationMode.Yes, None): 25,
+    (
+        MathOperation.ExpWithBase,
+        DataFormat.Float16,
+        None,
+        ApproximationMode.No,
+        DestAccumulation.Yes,
+    ): 2,
+    (MathOperation.Expm1Cw, None, None, None, None): 25,
+    (MathOperation.I0, None, None, None, None): 22,
+    (MathOperation.I1, None, None, None, None): 20,
+    (MathOperation.Lgamma, None, None, None, None): 20,
+    (MathOperation.Polygamma, None, None, None, None): 46,
+    (MathOperation.Rpow, None, None, None, None): 22,
+}
+
+
 def _not_measurable_cells(path=_TABLE_PATH):
     """``(op, in, out, approx_or_None, dest_or_None)`` for every ``not measurable`` row
     on an output a step budget could gate."""
@@ -2031,6 +2206,58 @@ def _acknowledges(key, cell) -> bool:
     return all(k is None or k == c for k, c in zip(key, cell))
 
 
+#: Swept cells of an enrolled unary op that resolve to no row of the op's own, with why.
+#: Empty: every enrolled op covers every cell the sweep drives. The emitter writes whole
+#: grids, so a hole can only open where it keeps a block verbatim (a floor row) and the
+#: sweep's format set then grows -- the cell is measured, resolves to the global default,
+#: and nothing holds it. A cell listed here is a decision, with its reason, not a gap.
+_UNRESOLVED_SWEPT_CELLS: dict = {}
+
+
+def test_every_swept_cell_of_an_enrolled_op_resolves_to_a_row_of_its_own():
+    """The sweep gates a ULP row and the headroom report judges a tolerance row; a
+    swept cell that resolves to ``TOLERANCE_CONTRACT`` -- no row of the op covers it --
+    is measured and judged by nothing, and reads in the table exactly like a cell nobody
+    ever enrolled. ``test_every_swept_cell_of_an_exact_op_is_gated_or_waived`` asks this
+    of the exact ops; this asks it of every enrolled op."""
+    from helpers.sfpu_domains import sfpu_unary_ops
+    from helpers.ulp_sweep import sweep_cells
+
+    unary = sfpu_unary_ops()
+    unresolved, resolved = [], []
+    for op in enrolled_ops():
+        if op not in unary:
+            continue
+        table = _SFPU_ACCURACY_BUDGET[op]
+        for in_fmt, out_fmt, approx, dest in sweep_cells(MEASURED_ARCH):
+            query = BudgetKey(
+                input_format=in_fmt,
+                output_format=out_fmt,
+                approx_mode=approx,
+                dest_acc=dest,
+                arch=MEASURED_ARCH,
+            )
+            cell = (op, in_fmt, out_fmt, approx, dest)
+            if resolve_contract(table, query, label=op.name) is TOLERANCE_CONTRACT:
+                if cell not in _UNRESOLVED_SWEPT_CELLS:
+                    unresolved.append(cell)
+            elif cell in _UNRESOLVED_SWEPT_CELLS:
+                resolved.append(cell)
+
+    def _name(cell):
+        op, i, o, a, d = cell
+        return f"{op.name} {i.name}->{o.name} approx={a.name} dest={d.name}"
+
+    assert not unresolved, (
+        "swept cells no row of the op covers (measured by the sweep, judged by "
+        "nothing): give them a row, or list them in _UNRESOLVED_SWEPT_CELLS with why:\n"
+        + "\n".join(f"  {_name(c)}" for c in unresolved)
+    )
+    assert not resolved, "listed as unresolved but a row covers them now: " + ", ".join(
+        _name(c) for c in resolved
+    )
+
+
 def test_a_not_measurable_verdict_on_a_gateable_cell_is_acknowledged():
     cells = _not_measurable_cells()
     unacknowledged = [
@@ -2054,6 +2281,36 @@ def test_a_not_measurable_verdict_on_a_gateable_cell_is_acknowledged():
     assert not stale, "acknowledgements no row needs any more: " + ", ".join(
         f"{op.name} {i.name}->{o.name}" for op, i, o, _, _ in stale
     )
+    wildcard = [
+        k for k in _UNMEASURABLE_CELLS_ACKNOWLEDGED if any(v is None for v in k[1:])
+    ]
+    unpinned = [k for k in wildcard if k not in _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS]
+    assert (
+        not unpinned
+    ), "wildcard acknowledgements with no cell count pinned: " + ", ".join(
+        f"{k[0].name} {tuple(getattr(v, 'name', None) for v in k[1:])}"
+        for k in unpinned
+    )
+    covered = {
+        key: sum(1 for cell in cells if _acknowledges(key, cell))
+        for key in _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS
+    }
+    moved = {
+        key: (now, pinned)
+        for key, pinned in _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS.items()
+        if (now := covered[key]) != pinned
+    }
+    assert not moved, (
+        "the cells a wildcard acknowledgement covers changed; read the new rows, then "
+        "bump the pin: "
+        + ", ".join(
+            f"{k[0].name} {tuple(getattr(v, 'name', None) for v in k[1:])}: {now} "
+            f"cells, pinned {pinned}"
+            for k, (now, pinned) in moved.items()
+        )
+    )
+    orphaned = set(_UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS) - set(wildcard)
+    assert not orphaned, f"count pins with no acknowledgement: {sorted(orphaned)}"
 
 
 def test_every_unary_op_is_enrolled_or_excused():
