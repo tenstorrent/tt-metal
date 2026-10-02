@@ -63,6 +63,16 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         grad_output.device() == query.device() && query.device() == key.device() && key.device() == value.device(),
         "All input tensors must be on the same device");
+    if (tensor_args.preallocated_grad_key.has_value()) {
+        TT_FATAL(
+            tensor_args.preallocated_grad_key->device() == query.device(),
+            "preallocated_grad_key must be on the same device as query");
+    }
+    if (tensor_args.preallocated_grad_value.has_value()) {
+        TT_FATAL(
+            tensor_args.preallocated_grad_value->device() == query.device(),
+            "preallocated_grad_value must be on the same device as query");
+    }
 
     TT_FATAL(tensor_args.u_scaler.device() == query.device(), "u_scaler must be on the same device as query");
     TT_FATAL(tensor_args.u_scaler.layout() == tt::tt_metal::Layout::TILE, "u_scaler must have TILE layout");

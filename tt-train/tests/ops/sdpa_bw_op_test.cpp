@@ -7,6 +7,8 @@
 
 #include <cmath>
 #include <limits>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -14,6 +16,8 @@
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/ops/sdpa_bw/device/sdpa_bw_kv_device_operation.hpp"
+#include "metal/ops/sdpa_bw/device/sdpa_bw_q_device_operation.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
@@ -1103,6 +1107,69 @@ TEST_F(SDPABackwardTest, Validation_RejectsNonzeroDropout) {
         /*dropout_probability=*/0.5F))
         << "sdpa_bw should reject nonzero dropout: backward has no dropout support and would "
            "silently return gradients of the dropout-free forward";
+}
+
+TEST_F(SDPABackwardTest, Validation_RejectsPreallocatedOutputsOnDifferentMeshDevice) {
+    using QOperation = ttml::metal::ops::sdpa_bw::device::SDPABackwardQDeviceOperation;
+    using KVOperation = ttml::metal::ops::sdpa_bw::device::SDPABackwardKVDeviceOperation;
+
+    if (tt::tt_metal::GetNumAvailableDevices() < 2U) {
+        GTEST_SKIP() << "requires two devices to construct tensors with different MeshDevice owners";
+    }
+
+    const auto in = make_minimal_sdpa_bw_inputs();
+    auto* local_device = &ttml::autograd::ctx().get_device();
+    auto foreign_device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(1);
+    const auto bf16_host = xt::zeros<float>({1U, 1U, 32U, 32U});
+    const auto fp32_host = xt::zeros<float>({1U, 1U, 32U, 32U});
+    const auto foreign_grad = ttml::core::from_xtensor(bf16_host, foreign_device.get());
+    const auto local_u_scaler = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(fp32_host, local_device);
+    const auto foreign_u_scaler =
+        ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(fp32_host, foreign_device.get());
+    const std::optional<ttnn::Tensor> no_mask = std::nullopt;
+
+    const QOperation::operation_attributes_t q_attributes{
+        .mask_type = ttml::metal::AttentionMaskType::None, .dropout_probability = 0.0F};
+    const QOperation::tensor_args_t q_local_args{
+        .grad_output = in.grad_output,
+        .attn_output = in.attn_output,
+        .query = in.query,
+        .key = in.key,
+        .value = in.value,
+        .attn_mask = no_mask,
+        .intermediates = in.intermediates,
+        .preallocated_grad_query = std::nullopt,
+        .preallocated_u_scaler = std::nullopt};
+    auto q_foreign_grad_args = q_local_args;
+    q_foreign_grad_args.preallocated_grad_query = foreign_grad;
+    auto q_foreign_u_scaler_args = q_local_args;
+    q_foreign_u_scaler_args.preallocated_u_scaler = foreign_u_scaler;
+
+    EXPECT_NO_THROW(QOperation::validate_on_program_cache_miss(q_attributes, q_local_args));
+    EXPECT_THROW(QOperation::validate_on_program_cache_miss(q_attributes, q_foreign_grad_args), std::exception);
+    EXPECT_THROW(QOperation::validate_on_program_cache_miss(q_attributes, q_foreign_u_scaler_args), std::exception);
+
+    const KVOperation::operation_attributes_t kv_attributes{
+        .mask_type = ttml::metal::AttentionMaskType::None, .dropout_probability = 0.0F};
+    const KVOperation::tensor_args_t kv_local_args{
+        .grad_output = in.grad_output,
+        .query = in.query,
+        .key = in.key,
+        .value = in.value,
+        .attn_mask = no_mask,
+        .intermediates = in.intermediates,
+        .u_scaler = local_u_scaler,
+        .preallocated_grad_key = std::nullopt,
+        .preallocated_grad_value = std::nullopt};
+    auto kv_foreign_grad_key_args = kv_local_args;
+    kv_foreign_grad_key_args.preallocated_grad_key = foreign_grad;
+    auto kv_foreign_grad_value_args = kv_local_args;
+    kv_foreign_grad_value_args.preallocated_grad_value = foreign_grad;
+
+    EXPECT_NO_THROW(KVOperation::validate_on_program_cache_miss(kv_attributes, kv_local_args));
+    EXPECT_THROW(KVOperation::validate_on_program_cache_miss(kv_attributes, kv_foreign_grad_key_args), std::exception);
+    EXPECT_THROW(
+        KVOperation::validate_on_program_cache_miss(kv_attributes, kv_foreign_grad_value_args), std::exception);
 }
 
 TEST_F(SDPABackwardTest, Validation_RejectsPaddedQK) {

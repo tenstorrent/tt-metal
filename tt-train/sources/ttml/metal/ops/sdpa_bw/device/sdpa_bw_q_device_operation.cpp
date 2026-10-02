@@ -66,6 +66,16 @@ void SDPABackwardQDeviceOperation::validate_on_program_cache_miss(
         grad_output.device() == query.device() && tensor_args.attn_output.device() == query.device() &&
             query.device() == key.device() && key.device() == value.device(),
         "All input tensors must be on the same device");
+    if (tensor_args.preallocated_grad_query.has_value()) {
+        TT_FATAL(
+            tensor_args.preallocated_grad_query->device() == query.device(),
+            "preallocated_grad_query must be on the same device as query");
+    }
+    if (tensor_args.preallocated_u_scaler.has_value()) {
+        TT_FATAL(
+            tensor_args.preallocated_u_scaler->device() == query.device(),
+            "preallocated_u_scaler must be on the same device as query");
+    }
 
     // Extract and validate heads from tensor shapes
     const auto [qB, qH, qS, qE] = query_shape.to_array_4D();
