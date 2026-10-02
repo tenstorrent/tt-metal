@@ -66,7 +66,7 @@ jobs:
           if [[ "$CHANGED_ONLY" != "true" ]]; then
             echo "base-sha=" >> "$GITHUB_OUTPUT"
             echo "mode=full" >> "$GITHUB_OUTPUT"
-            echo "shards=15" >> "$GITHUB_OUTPUT"
+            echo "shards=3" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -115,7 +115,7 @@ jobs:
           count=${#selected_tests[@]}
           if [[ "$count" -gt 0 ]]; then
             mode=changed
-            shards=15
+            shards=3
           else
             mode=none
             shards=0
