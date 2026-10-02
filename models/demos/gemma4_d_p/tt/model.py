@@ -356,14 +356,10 @@ class Gemma4Model:
         packed_rope_by_type = {}
         if self._rope_prefill_positions is not None:
             for layer_type in set(self.hf_config.layer_types[: len(self.layers)]):
-                cos, sin = self.rope_caches_2d[layer_type]
-                gathered_rope[layer_type] = (
-                    ttnn.unsqueeze_to_4D(ttnn.embedding(self._rope_prefill_positions, cos, layout=ttnn.TILE_LAYOUT)),
-                    ttnn.unsqueeze_to_4D(ttnn.embedding(self._rope_prefill_positions, sin, layout=ttnn.TILE_LAYOUT)),
-                )
-                # Packed lanes straight from pre-permuted tables: the same values as gathering columns
-                # out of the lookups above, without the per-chunk column gathers.
                 if layer_type in self.rope_caches_2d_packed:
+                    # Packed lanes straight from pre-permuted tables: the same values as gathering columns out of
+                    # the canonical lookups, without the per-chunk column gathers. The packed attention paths read
+                    # only these, so the canonical lookups are skipped.
                     packed_rope_by_type[layer_type] = (
                         *(
                             ttnn.unsqueeze_to_4D(
@@ -373,6 +369,13 @@ class Gemma4Model:
                         ),
                         self._packed_global_rope_trans_mat,
                     )
+                    gathered_rope[layer_type] = (None, None)
+                    continue
+                cos, sin = self.rope_caches_2d[layer_type]
+                gathered_rope[layer_type] = (
+                    ttnn.unsqueeze_to_4D(ttnn.embedding(self._rope_prefill_positions, cos, layout=ttnn.TILE_LAYOUT)),
+                    ttnn.unsqueeze_to_4D(ttnn.embedding(self._rope_prefill_positions, sin, layout=ttnn.TILE_LAYOUT)),
+                )
 
         for i, layer in enumerate(self.layers):
             layer_type = self.hf_config.layer_types[i]
