@@ -555,8 +555,8 @@ tests/ttnn/unit_tests/base_functionality/test_graph_report.py @tenstorrent/third
 ttnn/ttnn/graph_report.py @tenstorrent/thirdparty-lights-on-software @tenstorrent/metalium-developers-ttnn-core
 
 # models
-/**/functional_*/ @uaydonat @esmalTT
-/models/ @uaydonat @yieldthought @cglagovichTT @jonathansuTT
+/**/functional_*/ @esmalTT @tenstorrent/metalium-models-maintainers
+/models/ @cglagovichTT @jonathansuTT @tenstorrent/metalium-models-maintainers
 /models/tt_cnn/ @esmalTT @tenstorrent/metalium-developers-convolutions
 
 models/common @tenstorrent/metalium-models-maintainers
@@ -595,7 +595,7 @@ models/demos/vision/segmentation/segmentation_evaluation @tenstorrent/cse-develo
 models/demos/vision/segmentation/ufld_v2/ @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-models-maintainers
 models/demos/vision/segmentation/vanilla_unet @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-models-maintainers
 models/demos/vision/segmentation/vgg_unet/ @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-models-maintainers
-models/demos/wormhole @uaydonat @yieldthought @cglagovichTT
+models/demos/wormhole @cglagovichTT @tenstorrent/metalium-models-maintainers
 models/demos/wormhole/bge_large_en @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-models-maintainers
 models/demos/wormhole/bge_m3 @gtobarTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-models-maintainers
 models/demos/wormhole/falcon7b @djordje-tt @uaydonat
