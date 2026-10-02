@@ -444,10 +444,17 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
                 .simulator_directory = rtoptions_.get_simulator_path(),
             });
         } else {
+            // Open every chip UMD discovery finds for wh/bh.
+            const bool umd_discovers_topology =
+                rtoptions_.get_simulator_path().extension() == ".so" && this->arch_ != tt::ARCH::QUASAR;
+            std::unordered_set<ChipId> target_devices;
+            if (!umd_discovers_topology) {
+                target_devices = {0};
+            }
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
                 .chip_type = tt::umd::ChipType::SIMULATION,
                 .num_host_mem_ch_per_mmio_device = 1,
-                .target_devices = {0},
+                .target_devices = target_devices,
                 .simulator_directory = rtoptions_.get_simulator_path(),
             });
         }
