@@ -640,6 +640,9 @@ class OptimizedDecoder(LightweightModule):
         # The precise router's logits matmul: HiFi4 keeps every mantissa bit of the bf16 operands and
         # fp32 accumulation/output keeps the near-tie ordering (S layer 1: K-th vs (K+1)-th median gap 1.7e-4).
         self._ck_router_precise = self._ck_hifi4
+        # set by a subclass whose dense-routing consumer reads sharded logits / casts the fp32 weights itself
+        self._router_sharded_logits = False
+        self._router_fp32_out = False
 
     # ---- construction ------------------------------------------------------ #
     @classmethod
@@ -939,7 +942,10 @@ class OptimizedDecoder(LightweightModule):
                     dtype=ttnn.float32,
                 )
                 ttnn.deallocate(x_sh)
-                logits32 = ttnn.sharded_to_interleaved(logits32, ttnn.L1_MEMORY_CONFIG)
+                # the 1-token dense-mask router's eltwise ops read the width-sharded logits directly (sharded
+                # first operand, interleaved output); every other path wants them interleaved
+                if not (want_dense and self._route_rank and ln_flat.shape[-2] == 1 and self._router_sharded_logits):
+                    logits32 = ttnn.sharded_to_interleaved(logits32, ttnn.L1_MEMORY_CONFIG)
             else:
                 logits32 = ttnn.linear(
                     ln_flat, self.w["gate_w"], compute_kernel_config=self._ck_router_precise, dtype=ttnn.float32
@@ -1000,7 +1006,9 @@ class OptimizedDecoder(LightweightModule):
             rowsum = ttnn.matmul(
                 dense, self.w["ones_ee_f32"], compute_kernel_config=self._ck_router_precise, dtype=ttnn.float32
             )
-            return ttnn.typecast(ttnn.div(dense, rowsum), ttnn.bfloat16)
+            dense = ttnn.div(dense, rowsum)
+            # fp32 out when the caller's EP-select matmul emits bf16 itself (no separate typecast)
+            return dense if self._router_fp32_out else ttnn.typecast(dense, ttnn.bfloat16)
         elif cfg.norm_topk_prob:
             dense = ttnn.div(dense, ttnn.sum(dense, dim=3, keepdim=True))
         if cfg.routed_scaling != 1.0:

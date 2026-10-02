@@ -268,6 +268,9 @@ class MultichipDecoder(OptimizedDecoder):
         self._fused_kv_update = _parse_binary_env("TT_LAGUNA_FUSED_KV_UPDATE", True)  # K+V cache in one op
         self._sharded_residual = _parse_binary_env("TT_LAGUNA_SHARDED_RESIDUAL", True)  # decode residual in L1 shards
         self._glu_out_sharded = _parse_binary_env("TT_LAGUNA_GLU_OUT_SHARDED", True)  # decode MLP out stays sharded
+        # 1-token router: eltwise ops read the sharded logits; the EP-select matmul casts the fp32 weights to bf16
+        self._router_sharded_logits = _parse_binary_env("TT_LAGUNA_ROUTER_SHARDED_LOGITS", True)
+        self._router_fp32_out = self.D > 1 and self.PACK_GATE_UP and _parse_binary_env("TT_LAGUNA_ROUTER_FP32_OUT", True)
         self._token_dispatch_fallback_reason = "feature flag is disabled"
         # On a 1×1 MeshDevice, TTNN's explicit parallel decode-SDPA program is inaccurate once
         # the cache crosses long/non-aligned boundaries (observed PCC ~= 0 at positions 513/2048).
@@ -955,8 +958,10 @@ class MultichipDecoder(OptimizedDecoder):
         # idx is None when the router returned the dense [1,1,T,E] routing matrix directly
         dense = wsel if idx is None else ttnn.scatter(ttnn.zeros_like(logits), dim=3, index=idx, src=wsel)
         dense_local = (
-            dense if self.D == 1 else ttnn.matmul(dense, self.w["ep_sel"], compute_kernel_config=self._ck_router)
-        )
+            dense
+            if self.D == 1
+            else ttnn.matmul(dense, self.w["ep_sel"], compute_kernel_config=self._ck_router, dtype=ttnn.bfloat16)
+        )  # bf16 out (dense may be the router's fp32 weights)
         # Preserve the established full-T union for the down projection.  The
         # optional grouped union applies only to gate/up below.
         # one token: the union over T rows IS the single routing row (skip the fill-pad + reduce)
