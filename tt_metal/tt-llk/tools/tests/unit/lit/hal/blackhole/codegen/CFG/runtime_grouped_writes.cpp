@@ -37,7 +37,6 @@ extern "C" __attribute__((noinline, used)) void write_shuffled_runtime_group(std
 // CHECK: sw {{a[0-7]}},0({{a[0-7]}})
 // CHECK-NEXT: ttrmwcib0 63,21,72
 // CHECK-NEXT: ttwrcfg 4,1,76
-// CHECK-NEXT: ttnop
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_mixed_constant_runtime_word(std::uint32_t format)
@@ -57,7 +56,6 @@ extern "C" __attribute__((noinline, used)) void write_mixed_constant_runtime_wor
 // CHECK: R_RISCV_HI20 __instrn_buffer
 // CHECK: sw {{a[0-7]}},0({{a[0-7]}})
 // CHECK-NEXT: ttwrcfg 4,0,76
-// CHECK-NEXT: ttnop
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_thread_and_state_same_address(std::uint32_t base, std::uint32_t override_address)
@@ -83,7 +81,6 @@ extern "C" __attribute__((noinline, used)) void write_thread_and_state_same_addr
 // CHECK: sw {{a[0-7]}},0({{a[0-7]}})
 // CHECK-NEXT: ttrmwcib0 1,1,5
 // CHECK-NEXT: ttwrcfg 4,0,76
-// CHECK-NEXT: ttnop
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_thread_constants_across_gpr()
@@ -97,7 +94,6 @@ extern "C" __attribute__((noinline, used)) void write_thread_constants_across_gp
 // CHECK-LABEL: <write_thread_constants_across_gpr>:
 // CHECK-NEXT: ttsetc16 5,6
 // CHECK-NEXT: ttwrcfg 4,0,76
-// CHECK-NEXT: ttnop
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_same_field_two_sections()
@@ -124,7 +120,6 @@ extern "C" __attribute__((noinline, used)) void write_word_after_gpr_transfer()
 // Word 80 immediately follows the four-word transfer to 76-79 and is disjoint.
 // CHECK-LABEL: <write_word_after_gpr_transfer>:
 // CHECK-NEXT: ttwrcfg 4,1,76
-// CHECK-NEXT: ttnop
 // CHECK-NEXT: ttrmwcib0 255,3,80
 // CHECK-NEXT: ttrmwcib1 255,0,80
 // CHECK-NEXT: ttrmwcib2 255,0,80
