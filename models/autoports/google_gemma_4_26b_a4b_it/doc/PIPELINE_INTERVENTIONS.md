@@ -596,6 +596,15 @@ cleanup prevents late actions. TTIed5cd392 removes50ms host polling overhead
 sklearn review control, not another full suite. Active cumulative~10h04m,
 no new human intervention, image build or device reset. All CI is complete.
 
+11:09 UTC: local sklearn control473.752s and one-time submission-review
+candidate830.660s both submit with reward0. Review is actually exercised but
+the model immediately resubmits without repository tests; not promoted.
+Unseeded agent-written tests explain pre-intervention divergence, so no causal
+slowdown claim. A300-second native Sympy next-action replay restores its saved
+proxy-only advisory without executing tools, avoiding another20-minute prefix.
+23 helper checks pass. Combined suite remains the measured2/5 baseline; no new
+CI/full-suite/ten-task run. Resumed active time338min, cumulative~10h31m.
+
 - TTFT: `doc/ttft_optimization/`.
 - Remote benchmarks/evals:
   `readiness_vllm/ttft_optimization_remote/README.md`.
