@@ -423,6 +423,14 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         "supports_sample_on_device": True,
         "output_tokens_per_step": 256,
     }
+    # This block-output adapter owns its decode canvas, absolute position,
+    # sampling schedule, and KV state. The version-1 autoregressive commands
+    # cannot describe that state: with async disabled, version 1 would command
+    # reload_inputs=True on every block even though the host's one-token input
+    # cannot reconstruct the model-owned 256-token session. Keep the legacy
+    # interface explicit until the plugin defines a block-session update
+    # contract.
+    decode_input_update_contract = 0
 
     @classmethod
     def get_max_tokens_all_users(cls, *, max_model_len=None, max_num_seqs=1, **kwargs) -> int:

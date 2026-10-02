@@ -65,8 +65,10 @@ class LlamaForCausalLM:
 
     allocate_kv_cache = allocate_vllm_kv_cache
 
-    def _sampling(self, params, positions, *, reset_state=True):
+    def _sampling(self, params, positions, *, reload_params: bool, reset_state: bool):
         if params is None:
+            if reload_params or reset_state:
+                raise ValueError("Sampling update commands require device sampling")
             return
         seed = None
         if reset_state:
@@ -75,7 +77,15 @@ class LlamaForCausalLM:
             # Absolute positions preserve each request's random stream through
             # scheduler compaction; steady decode advances the seed on device.
             seed += torch.as_tensor(positions).flatten().clamp_min(0)
-        self.generator.set_sampling(top_k=params.top_k, top_p=params.top_p, temperature=params.temperature, seed=seed)
+        if reload_params:
+            self.generator.set_sampling(
+                top_k=params.top_k,
+                top_p=params.top_p,
+                temperature=params.temperature,
+                seed=seed,
+            )
+        elif reset_state:
+            self.generator.reset_sampling_seed(seed)
 
     def prefill_forward(
         self,
@@ -110,7 +120,12 @@ class LlamaForCausalLM:
                 updates[name] = padded
             sampling_params = replace(sampling_params, **updates)
         # Prefill predicts at length-1; decode consumes that token at length.
-        self._sampling(sampling_params, positions - 1)
+        self._sampling(
+            sampling_params,
+            positions - 1,
+            reload_params=sampling_params is not None,
+            reset_state=sampling_params is not None,
+        )
         self.generator.refresh_decode_inputs(
             torch.zeros(self.max_batch_size, dtype=torch.int32), positions, page_table=table
         )
@@ -133,10 +148,10 @@ class LlamaForCausalLM:
         enable_trace=True,
         read_from_device=True,
         sampling_params=None,
-        reload_inputs=True,
-        reload_page_table=False,
-        reload_sampling_params=True,
-        reset_sampling_state=True,
+        reload_inputs: bool,
+        reload_page_table: bool,
+        reload_sampling_params: bool,
+        reset_sampling_state: bool,
         **kwargs,
     ):
         if "reset_batch" in kwargs:
@@ -147,14 +162,19 @@ class LlamaForCausalLM:
             raise ValueError("Resetting sampling state requires current tokens and positions")
         sample = sampling_params is not None
         if reload_sampling_params or reset_sampling_state:
-            self._sampling(sampling_params, start_pos, reset_state=reset_sampling_state)
+            self._sampling(
+                sampling_params,
+                start_pos,
+                reload_params=reload_sampling_params,
+                reset_state=reset_sampling_state,
+            )
         output = self.generator.decode_forward(
             tokens,
             start_pos,
             page_table=page_table,
             kv_cache=kv_cache,
             sample_on_device=sample,
-            reset_batch=reload_inputs,
+            reload_inputs=reload_inputs,
             reload_page_table=reload_page_table,
             read_from_device=False,
         )

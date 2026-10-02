@@ -206,8 +206,11 @@ def main():
                 enable_trace=False,
                 page_table=page_table,
                 kv_cache=[tt_kv_cache],
-                reset_batch=(i == 0),
                 sampling_params=None,
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=False,
+                reset_sampling_state=False,
             )
             cur_tok = torch.argmax(logits.view(1, -1)[:, : args.vocab_size], dim=-1, keepdim=True)
             if cur_tok.item() == eos_id:

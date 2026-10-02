@@ -65,7 +65,6 @@ class PrefillHostTests(unittest.TestCase):
         self.gen = FakePrefillGenerator()
         self.adapter = Qwen38ForCausalLM(self.gen, 4, 128)
         self.adapter.cache = self.gen.cache
-        self.adapter._decode_bound = True
         read = patch.object(self.adapter, "read_decode_output", side_effect=lambda tensor: tensor.clone())
         read.start()
         self.addCleanup(read.stop)
@@ -117,7 +116,6 @@ class PrefillHostTests(unittest.TestCase):
             self.assertTrue(torch.equal(kwargs["page_table"], expected_table))
         self.assertTrue(torch.equal(self.gen.page_host, before))
         self.assertEqual(self.gen.sampling["seed"][:2], [10, 46])
-        self.assertFalse(self.adapter._decode_bound)
         self.assertEqual(result.flatten().tolist(), [2, 134])
         self.assertTrue(torch.equal(deltas, torch.zeros(2, dtype=torch.int64)))
 

@@ -122,6 +122,10 @@ class Qwen3ASRDecoder(Transformer):
                 kv_cache=None,
                 enable_trace=False,
                 read_from_device=True,
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=False,
+                reset_sampling_state=False,
             )
             dl = (dl[0] if isinstance(dl, tuple) else dl).squeeze().float()
             nxt = int(dl.argmax())

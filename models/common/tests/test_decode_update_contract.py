@@ -261,8 +261,9 @@ def test_decode_warmup_does_not_reset_absent_request_history():
 def test_qwen_vl_slot_remap_moves_persistent_rope_deltas():
     from models.demos.qwen3_vl.tt.generator import Generator as Qwen3Generator
     from models.demos.qwen25_vl.tt.generator import Generator as Qwen25Generator
+    from models.experimental.ops.quasar.qwen3_vl.tt.generator import Generator as QuasarQwen3Generator
 
-    for generator_cls in (Qwen25Generator, Qwen3Generator):
+    for generator_cls in (Qwen25Generator, Qwen3Generator, QuasarQwen3Generator):
         generator = SimpleNamespace(
             model=SimpleNamespace(
                 rope_setup=SimpleNamespace(
@@ -280,8 +281,9 @@ def test_qwen_vl_slot_remap_moves_persistent_rope_deltas():
 def test_qwen_vl_generator_forwards_slot_remap_to_shared_sampling_owner():
     from models.demos.qwen3_vl.tt.generator import Generator as Qwen3Generator
     from models.demos.qwen25_vl.tt.generator import Generator as Qwen25Generator
+    from models.experimental.ops.quasar.qwen3_vl.tt.generator import Generator as QuasarQwen3Generator
 
-    for generator_cls in (Qwen25Generator, Qwen3Generator):
+    for generator_cls in (Qwen25Generator, Qwen3Generator, QuasarQwen3Generator):
         calls = []
         generator = SimpleNamespace(
             _ttt_generator=SimpleNamespace(decode_forward=lambda **kwargs: calls.append(kwargs) or "output")
@@ -442,9 +444,16 @@ def test_all_known_shared_generator_callers_supply_every_decode_update_command()
     }
     expected_calls = {
         Path("tt-train/sources/examples/grpo_remote_rollout/utils/ttt_generation_worker.py"): 1,
+        Path("models/demos/audio/qwen3_asr/tt/qwen3_asr_decoder.py"): 1,
+        Path("models/demos/blackhole/paddleocr_vl/tests/probe_ocr_e2e.py"): 1,
+        Path("models/demos/blackhole/paddleocr_vl/tests/test_ocr_accuracy.py"): 1,
+        Path("models/demos/blackhole/paddleocr_vl/tests/test_resolution_ceiling.py"): 1,
+        Path("models/tt_transformers/demo/exaone_45_vision_hybrid.py"): 1,
+        Path("models/experimental/cohere/tests/test_cohere_vllm_e2e.py"): 1,
         Path("models/experimental/ops/quasar/gpt_oss/demo/text_demo.py"): 2,
         Path("models/experimental/ops/quasar/gpt_oss/tests/accuracy/test_model.py"): 1,
         Path("models/experimental/ops/quasar/qwen3_vl/demo/demo.py"): 1,
+        Path("models/experimental/ops/quasar/qwen3_vl/tt/generator.py"): 1,
     }
 
     for source_path, expected_count in expected_calls.items():
@@ -459,6 +468,133 @@ def test_all_known_shared_generator_callers_supply_every_decode_update_command()
         assert len(calls) == expected_count, source_path
         for call in calls:
             assert required <= {keyword.arg for keyword in call.keywords}, (source_path, call.lineno)
+
+
+def test_migrated_vllm_adapters_advertise_decode_update_contract_v1():
+    expected_classes = {
+        Path("models/tt_transformers/tt/generator_vllm.py"): {
+            "CohereForCausalLM",
+            "Exaone4_5_ForConditionalGeneration",
+        },
+        Path("models/demos/blackhole/paddleocr_vl/tt/generator_vllm.py"): {
+            "PaddleOCRVLForConditionalGeneration",
+        },
+        Path("models/demos/llama31_8b_qb2/tt/generator_vllm.py"): {
+            "LlamaForCausalLM",
+        },
+        Path("models/demos/qwen38_27b_qb2/tt/generator_vllm.py"): {
+            "Qwen38ForCausalLM",
+        },
+        Path("models/experimental/ops/quasar/qwen3_vl/tt/generator_vllm.py"): {
+            "Qwen3VLForConditionalGeneration",
+        },
+    }
+
+    for source_path, class_names in expected_classes.items():
+        tree = ast.parse(source_path.read_text())
+        classes = {node.name: node for node in tree.body if isinstance(node, ast.ClassDef) and node.name in class_names}
+        assert classes.keys() == class_names, source_path
+        for class_name, class_node in classes.items():
+            marker = next(
+                (
+                    node
+                    for node in class_node.body
+                    if isinstance(node, ast.Assign)
+                    and any(
+                        isinstance(target, ast.Name) and target.id == "decode_input_update_contract"
+                        for target in node.targets
+                    )
+                ),
+                None,
+            )
+            assert marker is not None, (source_path, class_name)
+            assert isinstance(marker.value, ast.Constant) and marker.value.value == 1, (source_path, class_name)
+
+
+def test_diffusion_gemma_explicitly_remains_on_the_block_session_contract():
+    source_path = Path("models/experimental/diffusion_gemma/tt/generator_vllm.py")
+    source_text = source_path.read_text()
+    tree = ast.parse(source_text)
+    adapter = next(
+        node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "DiffusionGemmaForCausalLM"
+    )
+    assignments = {
+        target.id: node.value
+        for node in adapter.body
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+
+    marker = assignments["decode_input_update_contract"]
+    assert isinstance(marker, ast.Constant) and marker.value == 0
+    capabilities = assignments["model_capabilities"]
+    assert isinstance(capabilities, ast.Dict)
+    values = {
+        key.value: value.value
+        for key, value in zip(capabilities.keys, capabilities.values)
+        if isinstance(key, ast.Constant) and isinstance(value, ast.Constant)
+    }
+    assert values["supports_async_decode"] is False
+    assert values["output_tokens_per_step"] == 256
+
+
+def test_custom_qb2_adapters_require_every_decode_update_command():
+    adapters = {
+        Path("models/demos/llama31_8b_qb2/tt/generator_vllm.py"): "LlamaForCausalLM",
+        Path("models/demos/qwen38_27b_qb2/tt/generator_vllm.py"): "Qwen38ForCausalLM",
+    }
+    required = {
+        "reload_inputs",
+        "reload_page_table",
+        "reload_sampling_params",
+        "reset_sampling_state",
+    }
+
+    for source_path, class_name in adapters.items():
+        tree = ast.parse(source_path.read_text())
+        adapter = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == class_name)
+        decode = next(
+            node for node in adapter.body if isinstance(node, ast.FunctionDef) and node.name == "decode_forward"
+        )
+        defaults = {arg.arg: default for arg, default in zip(decode.args.kwonlyargs, decode.args.kw_defaults)}
+        assert required <= defaults.keys(), source_path
+        assert all(defaults[name] is None for name in required), source_path
+
+
+def test_exaone_hybrid_page_table_reload_uses_the_explicit_commands():
+    source_path = Path("models/tt_transformers/tt/generator_vllm.py")
+    source_text = source_path.read_text()
+    tree = ast.parse(source_text)
+    adapter = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "Exaone4_5_ForConditionalGeneration"
+    )
+    decode = next(node for node in adapter.body if isinstance(node, ast.FunctionDef) and node.name == "decode_forward")
+    decode_source = ast.get_source_segment(source_text, decode)
+
+    assert decode_source is not None
+    assert "self._reload_per_layer_page_tables(kwargs)" in decode_source
+
+
+def test_migrated_qwen_vl_adapters_route_slot_remap_to_rope_and_sampling_state():
+    expected_classes = {
+        Path("models/demos/blackhole/paddleocr_vl/tt/generator_vllm.py"): "PaddleOCRVLForConditionalGeneration",
+        Path("models/experimental/ops/quasar/qwen3_vl/tt/generator_vllm.py"): "Qwen3VLForConditionalGeneration",
+    }
+
+    for source_path, class_name in expected_classes.items():
+        source_text = source_path.read_text()
+        tree = ast.parse(source_text)
+        class_node = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == class_name)
+        decode = next(
+            node for node in class_node.body if isinstance(node, ast.FunctionDef) and node.name == "decode_forward"
+        )
+        decode_source = ast.get_source_segment(source_text, decode)
+        assert decode_source is not None
+        assert "remap_rope_deltas(slot_remap)" in decode_source
+        assert 'kwargs["slot_remap"] = slot_remap' in decode_source
 
 
 def test_shared_generator_preserves_explicit_commands_after_mainline_seed_fix():

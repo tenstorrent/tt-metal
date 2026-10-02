@@ -836,6 +836,8 @@ class CohereForCausalLM(Generator):
     Canada Quant Labs (org-internal) - bounty tt-metal#49307 track.
     """
 
+    decode_input_update_contract = 1
+
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": True,
@@ -1137,6 +1139,8 @@ class Exaone4_5_ForConditionalGeneration(HybridAttentionForCausalLM):
     this serves text-only requests.
     """
 
+    decode_input_update_contract = 1
+
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": False,  # Sliding window => no prefix caching
@@ -1210,7 +1214,7 @@ class Exaone4_5_ForConditionalGeneration(HybridAttentionForCausalLM):
             return super(HybridAttentionForCausalLM, self).decode_forward(*args, **kwargs)
         page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
         per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
-        if per_submesh is not None:
+        if per_submesh is not None and self._reload_per_layer_page_tables(kwargs):
             for m, pt_for_submesh in zip(self.model, per_submesh):
                 m.update_persistent_per_layer_page_tables(pt_for_submesh)
         with self._route_per_layer_page_tables(per_submesh):
