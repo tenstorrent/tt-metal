@@ -235,13 +235,19 @@ TopkRouteFinishProgramFactory::cached_program_t TopkRouteFinishProgramFactory::c
         reader_bounce_cb_index,
         values_cb_index,
         indices_cb_index,
-        split.index_is_u32 ? 1u : 0u,
-        split.units_per_tile};
+        split.index_is_u32 ? 1u : 0u};
+    // Single face units run their own kernels; the half tile units keep the original ones.
+    const bool faces = split.units_per_tile == 4;
+    if (faces) {
+        reader_compile_args.push_back(split.units_per_tile);
+    }
     tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(*indices.buffer()).append_to(reader_compile_args);
     auto reader_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_topk_route_finish_gather.cpp",
+        faces ? "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/"
+                "reader_topk_route_finish_gather_faces.cpp"
+              : "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_topk_route_finish_gather.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
 
@@ -254,15 +260,19 @@ TopkRouteFinishProgramFactory::cached_program_t TopkRouteFinishProgramFactory::c
         writer_bounce_cb_index,
         value_half_bytes,
         idx_half_bytes,
-        split.index_is_u32 ? 1u : 0u,
-        split.units_per_tile};
+        split.index_is_u32 ? 1u : 0u};
+    if (faces) {
+        writer_compile_args.push_back(split.units_per_tile);
+    }
     tt::tt_metal::TensorAccessorArgs(*values_out.buffer()).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(*indices_out.buffer()).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(*indices.buffer()).append_to(writer_compile_args);
     auto writer_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_topk_route_finish_tiles.cpp",
+        faces
+            ? "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_topk_route_finish_tiles_faces.cpp"
+            : "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_topk_route_finish_tiles.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
 
