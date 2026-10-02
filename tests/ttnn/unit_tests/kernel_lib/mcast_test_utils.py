@@ -88,17 +88,16 @@ def attach_for_inspection(mcast, cores, noc=ttnn.NOC.NOC_0):
 
 
 def inspect_mcast_ct(kernel, prefix="mcast"):
-    """Independent v3 decoder; literal bits and field order, not the C++ codec."""
+    """Independent decoder; literal bits and field order, not the C++ codec."""
     named = dict(kernel.named_compile_time_args)
     ct = kernel.compile_time_args[named[prefix + "_ct_offset"] :]
     control = ct[0]
-    assert control & 15 == 3
     fields = dict(
-        flags=(control >> 4) & 31,
-        capacity=(control >> 13) & 3,
-        roles=0xFFFFFFFF if control & (1 << 17) else (control >> 15) & 3,
-        capabilities=(control >> 18) & 3,
-        encoding=(control >> 20) & 3,
+        flags=control & 31,
+        capacity=(control >> 9) & 3,
+        roles=0xFFFFFFFF if control & (1 << 13) else (control >> 11) & 3,
+        capabilities=(control >> 14) & 3,
+        encoding=(control >> 16) & 3,
         remote=0,
         span=0,
         consumer_ready=0xFFFFFFFF,
@@ -117,13 +116,13 @@ def inspect_mcast_ct(kernel, prefix="mcast"):
         fields["consumer_ready"] = take()
     if (fields["flags"] >> 3) & 3:
         fields["signal_source"] = take()
-    if control & (1 << 22):
+    if control & (1 << 18):
         fields["remote"] = take()
-    ack_mode = (control >> 24) & 3
+    ack_mode = (control >> 20) & 3
     fields["ack"] = (
         take() if ack_mode == 1 else fields["remote"] if ack_mode == 2 else 0xFFFFFFFF if ack_mode == 3 else 0
     )
-    if control & (1 << 23):
+    if control & (1 << 19):
         fields["span"] = take()
     if fields["encoding"]:
         for name in ("columns", "rows", "x_ranges", "y_ranges"):
@@ -429,7 +428,7 @@ def _run_channel(
             x, y = senders[0]
             assert inspect_mcast(geometry_kernel, ttnn.CoreCoord(x, y))["rectangles"] >= min_rectangles
     for kernel in kernels:
-        ttnn.attach_absent(kernel, "absent_mcast")
+        ttnn.attach_absent_mcast(kernel, "absent_mcast")
     if with_barrier:
         barrier = ttnn.Mcast(
             device,
@@ -441,7 +440,7 @@ def _run_channel(
         barrier.attach(descriptor, "barrier_mcast", kernels, mcast.next_semaphore_id())
     else:
         for kernel in kernels:
-            ttnn.attach_absent(kernel, "barrier_mcast")
+            ttnn.attach_absent_mcast(kernel, "barrier_mcast")
     descriptor.cbs = [make_cb(i, participants, pages=2 * max_pages) for i in (0, 1)]
     descriptor.kernels = kernels
     output = ttnn.generic_op(

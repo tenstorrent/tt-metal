@@ -77,7 +77,7 @@ def _stress(device, noc, counter, events, guards, includes_sender, reverse_chann
     if reverse:
         reverse.attach(program, "reverse_mcast", [kernel], mcast.next_semaphore_id())
     else:
-        ttnn.attach_absent(kernel, "reverse_mcast")
+        ttnn.attach_absent_mcast(kernel, "reverse_mcast")
     program.kernels = [kernel]
     # A fresh invocation must initialize semaphore-backed Counter progression again, including cache hits.
     for _ in range(2):

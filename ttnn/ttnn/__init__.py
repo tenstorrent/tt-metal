@@ -306,7 +306,7 @@ from ttnn.types import (
     FaceGeometry,
     compute_program_descriptor_hash,
     TensorAccessorArgs,
-    attach_absent,
+    attach_absent_mcast,
     TransferMode,
     Mcast,
     McastCoreOrder,

@@ -18,7 +18,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
-#include "ttnn/kernel_lib/mcast/host/mcast_host.hpp"
+#include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 
 namespace ttnn::mcast_host {
 
@@ -74,8 +74,10 @@ void py_module(nb::module_& mod) {
         .def("next_semaphore_id", &kh::Mcast::next_semaphore_id);
 
     mod.def(
-        "attach_absent",
-        [](tt::tt_metal::KernelDescriptor& kernel, const std::string& prefix) { kh::attach_absent(kernel, prefix); },
+        "attach_absent_mcast",
+        [](tt::tt_metal::KernelDescriptor& kernel, const std::string& prefix) {
+            kh::attach_absent_mcast(kernel, prefix);
+        },
         nb::arg("kernel"),
         nb::arg("prefix"));
 

@@ -5,7 +5,7 @@
 
 #include <cstddef>
 #include <type_traits>
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_protocol.hpp"
 #include "api/dataflow/noc_semaphore.h"
 
 namespace dataflow_kernel_lib {

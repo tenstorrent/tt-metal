@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/kernel_lib/mcast/host/mcast_host.hpp"
-#include "ttnn/kernel_lib/mcast/host/mcast_host_impl.hpp"
+#include "ttnn/kernel_lib/mcast/host/mcast.hpp"
+#include "ttnn/kernel_lib/mcast/host/mcast_impl.hpp"
 
 #include <algorithm>
 #include <tuple>
@@ -138,13 +138,6 @@ std::vector<uint32_t> Mcast::compile_time_args_() const {
 std::vector<uint32_t> Mcast::runtime_args_(const CoreCoord& core) const {
     impl_->require_program_bound_();
     return impl_->runtime_args_(core, impl_->argument_metadata_());
-}
-
-McastArgumentOffsets Mcast::append_kernel_args_to(
-    std::vector<uint32_t>& compile_time_args,
-    tt::tt_metal::KernelDescriptor::RuntimeArgs& runtime_args,
-    const CoreRangeSet& placement) const {
-    return impl_->append_kernel_args_to(compile_time_args, runtime_args, placement);
 }
 
 const CoreRangeSet& Mcast::participating_cores() const { return impl_->participating_cores(); }

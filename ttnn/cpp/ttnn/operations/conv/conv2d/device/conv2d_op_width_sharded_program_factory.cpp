@@ -23,7 +23,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
 #include <tt-metalium/math.hpp>
-#include "ttnn/kernel_lib/mcast/host/mcast_host.hpp"
+#include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
 
 namespace ttnn::prim {
@@ -633,7 +633,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
             std::array{std::ref(act_kernel_desc)},
             static_cast<uint32_t>(desc.semaphores.size()));
     } else {
-        ttnn::kernel_lib::host::attach_absent(act_kernel_desc, "activation_mcast");
+        ttnn::kernel_lib::host::attach_absent_mcast(act_kernel_desc, "activation_mcast");
     }
     desc.kernels.push_back(std::move(act_kernel_desc));
     desc.kernels.push_back(std::move(weights_kernel_desc));

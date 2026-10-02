@@ -121,7 +121,7 @@ def test_current_host_api_is_exported():
         "McastRotatingSenderConfig",
         "McastSenderGridConfig",
         "McastExplicitSenderConfig",
-        "attach_absent",
+        "attach_absent_mcast",
     ]:
         assert getattr(ttnn, name) is getattr(module, name)
 
@@ -168,7 +168,7 @@ def test_current_sender_config_bindings_round_trip():
     assert explicit.senders_per_group == senders
 
 
-def test_attach_absent_uses_current_named_offsets():
+def test_attach_absent_mcast_uses_current_named_offsets():
     kernel = ttnn.KernelDescriptor(
         kernel_source="inspection-only.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
@@ -180,7 +180,7 @@ def test_attach_absent_uses_current_named_offsets():
             noc=ttnn.NOC.NOC_0,
         ),
     )
-    ttnn.attach_absent(kernel, "optional_channel")
+    ttnn.attach_absent_mcast(kernel, "optional_channel")
     offsets = dict(kernel.named_compile_time_args)
     assert offsets["optional_channel_ct_offset"] == 1
     assert offsets["optional_channel_rt_offset"] == 0

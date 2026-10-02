@@ -75,8 +75,6 @@ def test_forwarding_receive_compile_contract(device, expect_error, with_dense_gr
         "direct-sender",
         "direct-receiver",
         "coordinates",
-        "old-tag",
-        "old-tag-v2",
         "absent-coordinates",
         "mixed-coordinates",
         "data-ready-semaphore",
@@ -85,7 +83,7 @@ def test_forwarding_receive_compile_contract(device, expect_error, with_dense_gr
     ],
 )
 def test_compact_compile_contract(device, expect_error, case):
-    sender_placement = case in ("optional-sender", "direct-receiver", "coordinates", "old-tag", "old-tag-v2")
+    sender_placement = case in ("optional-sender", "direct-receiver", "coordinates")
     core = (0, 0) if sender_placement else (1, 0)
     action = {
         "optional-sender": 0,
@@ -93,8 +91,6 @@ def test_compact_compile_contract(device, expect_error, case):
         "direct-sender": 1,
         "direct-receiver": 2,
         "coordinates": 3,
-        "old-tag": 0,
-        "old-tag-v2": 0,
         "absent-coordinates": 3,
         "mixed-coordinates": 4,
         "data-ready-semaphore": 5,
@@ -114,14 +110,12 @@ def test_compact_compile_contract(device, expect_error, case):
         kernel.core_ranges = core_set([(0, 0), (1, 0)])
         kernel.runtime_args = [(ttnn.CoreCoord(x, 0), [0]) for x in range(2)]
     if case == "absent-coordinates":
-        ttnn.attach_absent(kernel, "mcast")
+        ttnn.attach_absent_mcast(kernel, "mcast")
     else:
         mcast.attach(descriptor, "mcast", [kernel], 0)
     ct = list(kernel.compile_time_args)
     ct[1] = len(kernel.runtime_args[core[0]][core[1]])
     ct[2] = len(ct)
-    if case.startswith("old-tag"):
-        ct = ct[:3] + [2 if case.endswith("v2") else 1]  # Reject before reading obsolete/short blocks.
     if case == "mixed-coordinates":
         mapped = device.worker_core_from_logical_core(ttnn.CoreCoord(0, 0))
         ct.extend([mapped.x, mapped.y])
@@ -137,8 +131,6 @@ def test_compact_compile_contract(device, expect_error, case):
             "direct-sender": "sender pipe is unavailable",
             "direct-receiver": "receiver pipe is unavailable",
             "coordinates": "Sender coordinates are unavailable",
-            "old-tag": "Unsupported multicast wire tag",
-            "old-tag-v2": "Unsupported multicast wire tag",
             "absent-coordinates": "has no member named 'sender_x'",
             "data-ready-semaphore": "has no member named 'data_ready'",
             "consumer-ready-semaphore": "has no member named 'consumer_ready'",

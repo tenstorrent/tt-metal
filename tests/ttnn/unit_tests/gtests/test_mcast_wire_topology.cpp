@@ -8,11 +8,18 @@
 namespace ttnn::kernel_lib::host::test {
 namespace {
 
+struct DecodedRectangle {
+    dataflow_kernel_lib::NocBounds bounds;
+    uint32_t remote_count;
+    uint32_t loopback_count;
+    SenderMcastMode sender_mcast_mode;
+};
+
 struct DecodedMcast {
     uint32_t roles = 0;
     uint32_t phase = wire::NO_SENDER_ROUND;
     uint32_t ack = 0;
-    std::vector<dataflow_kernel_lib::RectangleRuntimeArguments> rectangles;
+    std::vector<DecodedRectangle> rectangles;
     std::vector<uint32_t> coordinates;
 };
 
@@ -27,7 +34,7 @@ DecodedMcast decode_multicast(const wire::ArgumentMetadata& metadata, std::span<
         const uint32_t count = layout.rectangle_count == wire::OMITTED ? 1 : words[layout.rectangle_count];
         for (uint32_t i = 0; i < count; ++i) {
             const uint32_t base = layout.rectangles + i * layout.rectangle_stride;
-            dataflow_kernel_lib::RectangleRuntimeArguments rectangle{};
+            DecodedRectangle rectangle{};
             if (layout.rectangle_bounds != wire::OMITTED) {
                 const uint32_t bounds = base + layout.rectangle_bounds;
                 rectangle.bounds = {words[bounds], words[bounds + 1], words[bounds + 2], words[bounds + 3]};
@@ -95,7 +102,7 @@ void check_group(
     const auto workers = worker_coordinates(device);
     const auto ct = compile_args(mcast, existing);
     ASSERT_EQ(ct.size(), decode_emitted_ct(ct).words);
-    ASSERT_EQ(ct[0] & 15u, 3u);
+    ASSERT_NE(ct[0], wire::ABSENT);
     const uint32_t count = group.senders.size();
     EXPECT_EQ(emitted_metadata(ct).mcast.rotating_span, (count > 1) ? count : 0u);
     Coordinates expected;
@@ -195,16 +202,14 @@ constexpr wire::ArgumentMetadata fixed_metadata(uint32_t roles) {
 TEST(McastHostWire, CompactCompileTimeCountsAndFullWidthValues) {
     constexpr auto sender = fixed_metadata(1);
     constexpr uint32_t control = wire::compile_time_control(sender);
-    static_assert(control == 0x0244AE13u);
+    static_assert(control == 0x00244AE1u);
     static_assert(wire::CompileTimeLayout(control).words == 4);         // + two named offsets = 6.
     static_assert(wire::CompileTimeLayout(control, false).words == 2);  // Native bindings, no numeric IDs.
-    constexpr std::array<uint32_t, 4> literal{0x0244AE13u, 11, 13, 7};
+    constexpr std::array<uint32_t, 4> literal{0x00244AE1u, 11, 13, 7};
     constexpr auto decoded = wire::decode_compile_time_metadata(literal);
     static_assert(decoded.mcast.ack_count == 7 && decoded.mcast.uniform_remote_count == 7);
     static_assert(decoded.kernel.roles == 1 && decoded.kernel.capabilities == 1);
     EXPECT_EQ(decode_emitted_ct(std::vector<uint32_t>(literal.begin(), literal.end())).words, 4u);
-    EXPECT_FALSE(wire::valid_compile_time_control(1));
-    EXPECT_FALSE(wire::valid_compile_time_control(2));
     constexpr std::array<uint32_t, 1> absent{0};
     static_assert(wire::CompileTimeLayout(0).words == 1);
     static_assert(wire::decode_compile_time_metadata(absent).mcast.rotating_span == 0);
@@ -407,11 +412,11 @@ TEST_F(McastHostFixture, NamedOffsetsPreserveSerializedWireValues) {
     McastImpl mcast(*device_, cfg);
     const std::vector<CoreCoord> senders{{6, 1}, {1, 6}};
     mcast.add_group(grid({2, 3}, {4, 5}), senders, 5);
-    const std::vector<uint32_t> expected_ct{0x01CE2A73u, 0, 1, 9, 5, 2};
+    const std::vector<uint32_t> expected_ct{0x001CE2A7u, 0, 1, 9, 5, 2};
     EXPECT_EQ(compile_args(mcast), expected_ct);
     cfg.handshake = false;
     auto passive = make_mcast(device_, {GroupInput(grid({2, 3}, {4, 5}), senders, 5)}, cfg);
-    const std::vector<uint32_t> face_ct{0x00CE2A63u, 0, 9, 2};
+    const std::vector<uint32_t> face_ct{0x000CE2A6u, 0, 9, 2};
     EXPECT_EQ(compile_args(passive), face_ct);
     auto mapped = [&](CoreCoord core) { return device_->worker_core_from_logical_core(core); };
     const auto a = mapped(senders[0]), b = mapped(senders[1]);
@@ -711,6 +716,9 @@ TEST_F(McastHostFixture, McastSerializationAndRouting) {
                 groups.emplace_back(receivers[i], senders, i == 2 ? 1u : 0u);
             }
             auto mcast = make_mcast(device_, groups, cfg);
+            auto bound_mcast = mcast;
+            tt::tt_metal::Program program;
+            bind_for_inspection(bound_mcast, program, {});
             ASSERT_EQ(emitted_metadata(compile_args(mcast)).mcast.rectangle_capacity, 3u);
             EXPECT_EQ(allocated_semaphores(mcast).size(), 2u);
             for (size_t i = 0; i < groups.size(); ++i) {
@@ -718,14 +726,14 @@ TEST_F(McastHostFixture, McastSerializationAndRouting) {
                 EXPECT_EQ(decoded_args(mcast, first[i]).rectangles.size(), i + 1u);
                 EXPECT_EQ(decoded_args(mcast, first[i]).ack, i == 2 ? 1u : 0u);
                 std::vector<uint32_t> appended{99};
-                detail::append_args_to(appended, runtime_args(mcast, first[i]));
+                bound_mcast.append_runtime_args_to(appended, first[i]);
                 auto expected = runtime_args(mcast, first[i]);
                 expected.insert(expected.begin(), 99);
                 EXPECT_EQ(appended, expected);
             }
             EXPECT_EQ(mcast.sender_only_cores(), rotating ? cores(outside) : CoreRangeSet{});
             std::vector<uint32_t> appended{42};
-            detail::append_args_to(appended, compile_args(mcast));
+            bound_mcast.append_compile_time_args_to(appended);
             auto expected = compile_args(mcast);
             expected.insert(expected.begin(), 42);
             EXPECT_EQ(appended, expected);
@@ -863,18 +871,21 @@ TEST_F(McastHostFixture, ChainMcastUsesOneCompileTimeTransportForEveryGeometry) 
     EXPECT_EQ(local_rt[layout.chain_neighbors + wire::PREDECESSOR_X], dataflow_kernel_lib::NO_CHAIN_NEIGHBOR);
     EXPECT_EQ(local_rt[layout.chain_neighbors + wire::SUCCESSOR_X], dataflow_kernel_lib::NO_CHAIN_NEIGHBOR);
     EXPECT_EQ(local_rt[layout.chain_neighbors + wire::INCLUDES_SENDER], 1u);
+    auto bound_mcast = mcast;
+    tt::tt_metal::Program program;
+    bind_for_inspection(bound_mcast, program, {});
     for (auto core : std::vector<CoreCoord>{{0, 0}, {1, 0}, {0, 2}, {2, 2}, {6, 0}, {7, 7}}) {
         const auto rt = runtime_args(mcast, core);
         ASSERT_EQ(rt.size(), 8u);  // Dynamic role, head coordinates, and neighbors; no transport selector.
         std::vector<uint32_t> args{123};
-        detail::append_args_to(args, runtime_args(mcast, core));
-        detail::append_args_to(args, runtime_args(mcast, core));
+        bound_mcast.append_runtime_args_to(args, core);
+        bound_mcast.append_runtime_args_to(args, core);
         EXPECT_EQ(args.size(), 1 + 2 * rt.size());
         EXPECT_TRUE(std::equal(rt.begin(), rt.end(), args.begin() + 1));
         EXPECT_TRUE(std::equal(rt.begin(), rt.end(), args.begin() + 1 + rt.size()));
     }
     std::vector<uint32_t> appended;
-    detail::append_args_to(appended, compile_args(mcast));
+    bound_mcast.append_compile_time_args_to(appended);
     EXPECT_EQ(appended, ct);
     EXPECT_EQ(allocated_semaphores(mcast).size(), 3u);
     EXPECT_EQ(allocated_semaphores(mcast)[2].core_ranges, mcast.participating_cores());
@@ -895,7 +906,7 @@ TEST_F(McastHostFixture, ChainSignalSourceAllocationAndWire) {
     const GroupInput group(cores({{0, 0}, {2, 0}}), {{0, 0}});
     auto cfg = chain_config();
     auto mcast = make_mcast(device_, {group}, cfg);
-    const std::vector<uint32_t> expected{0x000E1293u, 0, 1, 2};
+    const std::vector<uint32_t> expected{0x0000E129u, 0, 1, 2};
     EXPECT_EQ(compile_args(mcast), expected);
     EXPECT_EQ(allocated_semaphores(mcast).size(), 3u);
     const auto owned = allocated_semaphores(mcast);

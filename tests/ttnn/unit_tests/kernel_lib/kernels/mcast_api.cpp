@@ -4,11 +4,11 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_spec.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_metal2.hpp"
 
 void kernel_main() {
     using namespace dataflow_kernel_lib;
-    constexpr auto channel = MCAST_SPEC_ARGS(channel);
+    constexpr auto channel = MCAST_ARGS(channel);
     static_assert(channel.ack_count == UINT32_MAX && channel.num_senders == 2);
     static_assert(channel.signal == DataReadySignal::Counter);
     constexpr uint32_t rounds = get_arg(args::rounds);
