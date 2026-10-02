@@ -80,6 +80,10 @@ constexpr static std::uint32_t get_dram_unreserved_base(std::uint32_t dram_profi
 constexpr static std::uint32_t get_dram_unreserved_size(std::uint32_t dram_profiler_size, bool enable_dram_backed_cq) {
     return MEM_DRAM_SIZE - get_dram_unreserved_base(dram_profiler_size, enable_dram_backed_cq);
 }
+// Snapshot the env once: includes() runs separately for firmware and
+// kernel builds, and a mid-process env change must not compile them
+// against different maps.
+static const char* const quasar_variant = std::getenv("TT_METAL_QUASAR_VARIANT");
 
 static constexpr float EPS_QA = 1.19209e-7f;  // TODO: verify
 static constexpr float NAN_QA = 7.0040e+19;   // TODO: verify
@@ -308,10 +312,6 @@ public:
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/noc");
-        // Snapshot the env once: includes() runs separately for firmware and
-        // kernel builds, and a mid-process env change must not compile them
-        // against different maps.
-        static const char* const quasar_variant = std::getenv("TT_METAL_QUASAR_VARIANT");
         // TODO: Use UMD supplied variant instead of env var
         // defaults to Quasar if no variant is set
         if (quasar_variant != nullptr && (std::string(quasar_variant) == "horizon" || std::string(quasar_variant) == "2.0.1")) {
@@ -618,7 +618,11 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
     this->noc_stream_remote_dest_buf_space_available_reg_index_ = 0;         // TODO: add correct value
     this->noc_stream_remote_dest_buf_space_available_update_reg_index_ = 0;  // TODO: add correct value
     this->has_stream_registers_ = false;
-    this->supports_fds_ = true;
+    if (quasar_variant != nullptr && (std::string(quasar_variant) != "trinity" && std::string(quasar_variant) != "2.0.2")) {
+        this->supports_fds_ = true;
+    } else {
+        this->supports_fds_ = false;
+    }
     this->noc_topology_ = NoCTopologyType::MESH;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
