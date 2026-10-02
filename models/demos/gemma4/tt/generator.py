@@ -805,7 +805,11 @@ class ChunkedPrefillPageTableGuardMixin:
                     attn._release_sliding_prefill_tail(clear_persistent=clear_persistent)
 
     def _bind_sliding_tail_key(self, req_key):
-        self._bind_sliding_tail_key(req_key)
+        for model in self.model:
+            for layer in getattr(model, "layers", []):
+                cfg = getattr(getattr(layer, "self_attn", None), "config", None)
+                if cfg is not None:
+                    cfg._g4_active_req_key = req_key
 
     def prefill_forward_single_user_text(
         self, tokens, page_table=None, *, kv_cache=None, num_cached_tokens=0, **kwargs
@@ -1129,11 +1133,7 @@ class ChunkedPrefillPageTableGuardMixin:
             # request's boundary tail to the next (stale cross-chunk window).
             self._g4_lane_prefill_calls = int(getattr(self, "_g4_lane_prefill_calls", 0)) + 1
             req_key = (self._g4_lane_prefill_calls << 20) + int(page_tables[0, 0, 0]) + 1
-            for _m in self.model:
-                for _layer in getattr(_m, "layers", []):
-                    _cfg = getattr(getattr(_layer, "self_attn", None), "config", None)
-                    if _cfg is not None:
-                        _cfg._g4_active_req_key = req_key
+            self._bind_sliding_tail_key(req_key)
             chunk_size = get_max_prefill_chunk_size(seq_len, max_chunk)
             last_abs = max(last_idx)
             last_chunk_start = (last_abs // chunk_size) * chunk_size

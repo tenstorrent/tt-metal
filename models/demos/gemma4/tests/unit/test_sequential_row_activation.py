@@ -68,6 +68,26 @@ def test_more_requests_than_rows_raises(expect_error):
         gen._activate_sequential_per_layer_row(_slice())
 
 
+def test_bind_and_release_walk_every_layer():
+    from types import SimpleNamespace
+
+    class _Attn:
+        def __init__(self):
+            self.config = SimpleNamespace()
+            self.released = []
+
+        def _release_sliding_prefill_tail(self, req_key=None, clear_persistent=False):
+            self.released.append(req_key)
+
+    model = _Model(_tables())
+    model.layers = [SimpleNamespace(self_attn=_Attn()) for _ in range(3)]
+    gen = _Generator(model)
+    gen._bind_sliding_tail_key(77)
+    assert [layer.self_attn.config._g4_active_req_key for layer in model.layers] == [77, 77, 77]
+    gen._release_all_sliding_prefill_tails(req_key=77)
+    assert [layer.self_attn.released for layer in model.layers] == [[77], [77], [77]]
+
+
 def test_legacy_slice_must_match_the_positional_row(expect_error):
     model = _Model(_tables())
     gen = _Generator(model)
