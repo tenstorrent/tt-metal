@@ -406,3 +406,85 @@ def test_convert_to_hwc_dram_input_without_memory_config_should_fail(device, exp
 
     with expect_error(RuntimeError, r"Output shard width must be rounded up to next multiple of 8"):
         ttnn.experimental.convert_to_hwc(input_tensor, dtype=ttnn.bfloat16, memory_config=output_mem_config)
+
+
+# 2112 and 2240 on 1 core produce 2 blocks of 33 and 35 tiles (odd tile count)
+@pytest.mark.parametrize("C", CHANNEL_TEST_CASES)
+@pytest.mark.parametrize(
+    "HW, core_grid, padded_sharded_dim",
+    (
+        (
+            2112,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            2112,
+        ),
+        (
+            2240,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            2240,
+        ),
+    ),
+)
+def test_convert_to_hwc_with_l1_input_odd_tiles_per_block(device, C, HW, core_grid, padded_sharded_dim):
+    B = 1
+    input_tensor = torch.randn([1, B, C, HW], dtype=torch.bfloat16)
+    expected = input_tensor.transpose(2, 3).reshape(1, 1, B * HW, C)
+
+    input_shard_shape = (B * C, padded_sharded_dim)
+    input_shard_spec = ttnn.ShardSpec(core_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+    input_tensor = ttnn.Tensor(
+        input_tensor, ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, mem_config=input_mem_config
+    )
+
+    output_shard_shape = (B * padded_sharded_dim, round_up(C, 8))
+    output_shard_spec = ttnn.ShardSpec(core_grid, output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
+
+    actual = ttnn.experimental.convert_to_hwc(input_tensor, memory_config=output_mem_config, dtype=ttnn.bfloat16)
+    actual = ttnn.to_torch(actual)
+
+    passed, message = assert_equal(
+        expected, actual[:, :, :, : expected.shape[-1]]
+    )  # slice off padding that is applied when C % 8 != 0
+    assert passed, message
+
+
+def test_convert_to_hwc_dram_program_cache(device):
+    B, C, HW = 1, 4, 32
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+
+    input_shard_shape = (B * C, HW)
+    input_shard_spec = ttnn.ShardSpec(core_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, input_shard_spec)
+
+    output_shard_shape = (B * HW, round_up(C, 8))
+    output_shard_spec = ttnn.ShardSpec(core_grid, output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    # Keep prior tensors alive so each convert allocates at a new DRAM address
+    keep_alive = []
+    entries = None
+    for i in range(4):
+        torch_input = torch.randn([1, B, C, HW], dtype=torch.bfloat16)
+        expected = torch_input.transpose(2, 3).reshape(1, 1, B * HW, C)
+        tt_input = ttnn.Tensor(
+            torch_input, ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, mem_config=input_mem_config
+        )
+        tt_output = ttnn.experimental.convert_to_hwc(tt_input, memory_config=output_mem_config, dtype=ttnn.bfloat16)
+        keep_alive += [tt_input, tt_output]
+        actual = ttnn.to_torch(tt_output)
+        passed, message = assert_equal(expected, actual[:, :, :, : expected.shape[-1]])
+        assert passed, message
+        if i == 0:
+            entries = device.num_program_cache_entries()
+        else:
+            assert (
+                device.num_program_cache_entries() == entries
+            ), "convert_to_hwc must reuse the cached program on a hit"
+
+    assert entries >= 1, "convert_to_hwc should cache at least one program"
+    device.disable_and_clear_program_cache()
