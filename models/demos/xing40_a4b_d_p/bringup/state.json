@@ -2565,6 +2565,25 @@
   "status": "PASS",
   "waiting": null
  },
+ "K.4": {
+  "attempts": 0,
+  "duration_s": 101.0,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-10-02T00:01:43"
+   }
+  ],
+  "last_run": "2026-10-02T00:01:43",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/K.4.log",
+  "metrics": {
+   "smoke_runner_ok": 1
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-02T00:00:02",
+  "status": "PASS"
+ },
  "L.last": {
   "attempts": 0,
   "duration_s": 167.8,
