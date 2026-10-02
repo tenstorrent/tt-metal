@@ -622,7 +622,10 @@ class LagunaModel:
         """Tiled matmul (decode): hidden [1,1,B,H] -> per-device logit shard [1,1,B,V/D]."""
         # the layers' width-sharded decode RMSNorm (the interleaved norm runs on 1 core, ~65 us)
         normed = self.layers[0]._rms(hidden_1BH, self.norm_w)
-        return ttnn.linear(normed, self.lm_head_w, compute_kernel_config=self._lm_ck)
+        # logits shard (~0.8 MB) in L1: the sampler's typecast / pad / top-k read it from L1, not DRAM
+        return ttnn.linear(
+            normed, self.lm_head_w, compute_kernel_config=self._lm_ck, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
 
     def lm_head_shards_dflash(self, draft_hidden, *, enable_experimental=False):
         """Project DFlash-normalized rows with the target-owned LM head.
