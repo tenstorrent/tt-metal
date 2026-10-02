@@ -11,7 +11,9 @@ runner startup (full model load + kernel JIT) once PER scenario.
 """
 
 import contextlib
+import copy
 import glob
+import json
 import os
 import signal
 import subprocess
@@ -25,10 +27,18 @@ from models.common.utility_functions import is_blackhole, skip_for_slow_dispatch
 
 CHUNK_SIZE = 5120
 NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", "2"))
-# GLM-5.2 golden trace carrying BOTH the 78 kv_cache layers and the 21 dsa/indexer_k_layer_* dirs, at
-# 56320 rows (= 11 x CHUNK_SIZE). The adapter's own prefill_trace_default omits dsa/, which would leave
-# the merged table's index config with no golden to PCC against.
-GLM52_TRACE = "/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k"
+# GLM-5.3 golden trace carrying BOTH the 78 kv_cache layers and the 21 dsa/indexer_k_layer_* dirs, at
+# 56320 rows (= 11 x CHUNK_SIZE). Pinned here (same path as the adapter's prefill_trace_default) because a
+# trace without dsa/ would leave the merged table's index config with no golden to PCC against.
+GLM53_TRACE = "/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k"
+GLM53_MTP_TRACE = os.environ.get(
+    "GLM53_MTP_TRACE",
+    "/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/mtp-tail-802cad1b-56320tok-L7-nozeropos0",
+)
+GLM53_HF_MODEL = os.environ.get("GLM53_HF_MODEL", "/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4")
+GLM53_MTP_TTNN_CACHE = os.environ.get(
+    "TT_GLM53_MTP_TTNN_CACHE", "/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/glm53_mtp_ttnn_cache"
+)
 SERVICE_ID = "ci_ds_prefill"
 TABLE_PATH = "/tmp/ci_prefill_kv_table.pb"  # IPC rendezvous files; cleaned up around each scenario
 DEVMAP_PATH = "/tmp/ci_prefill_kv_devmap.json"
@@ -134,7 +144,7 @@ SCENARIOS = {
             "PREFILL_PRODUCER_P_BURST": "0.2",
         },
     },
-    # 4) GLM-5.2 (sparse / DSA) full-depth single user over ALL 78 layers. This is the gate for the
+    # 4) GLM-5.3 (sparse / DSA) full-depth single user over ALL 78 layers. This is the gate for the
     #    MERGED two-config KV chunk address table: config 0 = the bf16 ROW_MAJOR MLA KVPE cache (all 78
     #    layers), config 1 = the bfp8 lightning-indexer KEY cache (only the 21 `full` layers, compacted).
     #    The runner builds that single merged table under PREFILL_MOCK_MIGRATION and the producer reads
@@ -144,25 +154,58 @@ SCENARIOS = {
     #    ALL layers is mandatory here, not a preference: the index cache is sized from the model's whole
     #    indexer_types map (21 full layers), so a truncated run leaves the upper index ranks unwritten —
     #    the producer asserts on exactly that mismatch rather than PCC'ing untouched memory.
-    "glm52_full_depth_kv_table": {
+    "glm53_full_depth_kv_table": {
         "users": 1,
         "layers": 78,
         "max_seq_len": 56320,
         "env": {
-            "PREFILL_MODEL": "glm_5_2",
-            "PREFILL_TRACE_DIR": GLM52_TRACE,
-            # GLM-5.2's calibrated KVPE floor. The 0.88 default is above what this model reaches
+            "PREFILL_MODEL": "glm_5_3",
+            "PREFILL_TRACE_DIR": GLM53_TRACE,
+            # GLM-5.3's calibrated KVPE floor. The 0.88 default is above what this model reaches
             # (~0.857 min per-layer), so it has to be set explicitly here.
             "PREFILL_STANDALONE_CHUNKED_PCC": "0.85",
         },
-        # 78 layers of GLM-5.2 weights + kernel JIT, then a two-config PCC sweep of ~174k sequential
+        # 78 layers of GLM-5.3 weights + kernel JIT, then a two-config PCC sweep of ~174k sequential
         # read_dram_umd block reads (78 x 1760 for KVPE + 21 x 1760 for the index cache). Both phases
         # are far past the Kimi-sized defaults.
         "ready_timeout_s": 3600,
         "producer_timeout_s": 7200,
         "producer": {"PREFILL_PRODUCER_CHUNKS": "11", "PREFILL_PRODUCER_MAX_REQUESTS": "1"},
     },
+    "glm53_mtp4": {
+        "users": 1,
+        "layers": 78,
+        "max_seq_len": 56320,
+        "env": {
+            "PREFILL_MODEL": "glm_5_3",
+            "PREFILL_TRACE_DIR": GLM53_TRACE,
+            "PREFILL_MTP_TRACE_DIR": GLM53_MTP_TRACE,
+            "PREFILL_MTP_LEVELS": "4",
+            "TT_GLM53_MTP_TTNN_CACHE": GLM53_MTP_TTNN_CACHE,
+            "PREFILL_HF_MODEL": GLM53_HF_MODEL,
+            "PREFILL_STANDALONE_CHUNKED_PCC": "0.85",
+            # The MTP levels chain off the trunk output, so they inherit its error and add ~0.03/level on
+            # GLM-5.3 (test_mtp.py L4: KVPE 0.874 vs GLM-5.2 0.903): 7 levels land near 0.83 while the
+            # trunk still scores 0.855. Gate them separately so the trunk keeps its own 0.85 floor.
+            "PREFILL_MTP_PCC": "0.80",
+        },
+        "ready_timeout_s": 3600,
+        "producer_timeout_s": 7200,
+        "producer": {"PREFILL_PRODUCER_CHUNKS": "11", "PREFILL_PRODUCER_MAX_REQUESTS": "1"},
+    },
 }
+
+SCENARIOS["glm53_mtp7"] = copy.deepcopy(SCENARIOS["glm53_mtp4"])
+SCENARIOS["glm53_mtp7"]["env"]["PREFILL_MTP_LEVELS"] = "7"
+SCENARIOS["glm53_mtp7"]["producer_timeout_s"] = 8400
+
+# Keep the Llama golden prerequisite out of the existing Kimi/GLM CI scenarios.
+# Select the Llama acceptance case explicitly with PREFILL_MODEL=llama_3p1_8b.
+if os.environ.get("PREFILL_MODEL") == "llama_3p1_8b":
+    from models.demos.llama_3p1_8b_d_p.tests.utils import prefill_runner_scenario, validate_prefill_slot_traces
+
+    SCENARIOS = {"llama31": prefill_runner_scenario()}
+    validate_prefill_slot_traces(os.environ.get("PREFILL_PRODUCER_SLOT_TRACES", ""), SCENARIOS["llama31"])
 
 # Opt-in prompt-driven scenario: instead of a recorded golden trace, generate the reference KV from a
 # user prompt on the host (device-less pre-step) and validate device KV against it. Enabled by pointing
@@ -388,7 +431,12 @@ def _running_runner(tag: str, sc: dict, **extra):
     os.makedirs(_REPORT_DIR, exist_ok=True)
     log_path = os.path.join(_REPORT_DIR, f"ci_runner_{tag}.log")
     _cleanup_ipc()  # a stale table/descriptor from a prior scenario would make the readiness poll pass early
-    env = _scenario_env(sc, PREFILL_MOCK_MIGRATION="1", PREFILL_LAYER_ACK_D2H="1", **extra)
+    env = _scenario_env(
+        sc,
+        PREFILL_MOCK_MIGRATION="1",
+        PREFILL_LAYER_ACK_D2H=sc.get("env", {}).get("PREFILL_LAYER_ACK_D2H", "1"),
+        **extra,
+    )
     ready_timeout_s = int(sc.get("ready_timeout_s", _READY_TIMEOUT_S))
     mode = _launch_mode()
     if mode == "ci":
@@ -472,22 +520,26 @@ def _scenario_params():
 
 
 @pytest.mark.parametrize("scenario", _scenario_params())
+# A fresh runner publishes the cache; the producer compares each resident slot to its golden.
 def test_producer_runner_pcc(scenario, tmp_path):
     """Spin up a fresh runner for the scenario, drive it with the producer, and require the per-slot
     KV PCC gate to pass (the producer exits non-zero if any resident slot is below threshold)."""
     sc = SCENARIOS[scenario]
     prod_log = os.path.join(_REPORT_DIR, f"ci_producer_{scenario}.log")
-    trace_env = {}
+    trace_env = {"PREFILL_PCC_SUMMARY_DIR": str(tmp_path / "pcc")}
     if "prompt_file" in sc:
         model = os.environ.get("PREFILL_MODEL", "kimi_k2_7")
         trace_env["PREFILL_MODEL"] = model
-        reuse_dir = os.environ.get("PREFILL_REUSE_TRACE_DIR")
-        if reuse_dir and os.path.exists(os.path.join(reuse_dir, "metadata.json")):
-            trace_dir = reuse_dir
-        else:
-            trace_dir = str(tmp_path / "prompt_trace")
-            _generate_prompt_trace(trace_dir, sc["isl"], sc["prompt_file"], model)
-        trace_env["PREFILL_TRACE_DIR"] = trace_dir
+        from models.demos.common.prefill.runners.trace_utils import ensure_trace
+
+        output = tmp_path / "prompt_trace"
+
+        def generate():
+            _generate_prompt_trace(str(output), sc["isl"], sc["prompt_file"], model)
+            return output
+
+        trace_dir = ensure_trace(os.environ.get("PREFILL_REUSE_TRACE_DIR") or output, sc["isl"], generate)
+        trace_env["PREFILL_TRACE_DIR"] = str(trace_dir)
     with _running_runner(scenario, sc, **trace_env) as runner_stream:
         env = _scenario_env(sc, PREFILL_PRODUCER_CHECK_PCC="1", **trace_env, **sc["producer"])
         producer_stream = _ChildStream("producer", prod_log)
@@ -525,3 +577,6 @@ def test_producer_runner_pcc(scenario, tmp_path):
             # already in the log verbatim would land in it four times over, ~800 lines of pure noise.
             + ("" if _STREAM_LOGS else f" Runner tail:\n{_tail(runner_stream.log_path)}")
         )
+        if "expected_slots" in sc:
+            verdict = json.loads((tmp_path / "pcc" / "rank0.json").read_text())
+            assert verdict["ok"] and verdict["slots_checked"] == sc["expected_slots"], verdict

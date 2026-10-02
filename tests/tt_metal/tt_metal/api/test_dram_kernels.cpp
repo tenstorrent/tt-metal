@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <array>
 #include <cstdint>
 #include <vector>
 #include <chrono>
@@ -102,6 +103,29 @@ protected:
         return usable.front();
     }
 
+    std::array<uint32_t, 3> set_mpfe_weights(uint32_t bank, const std::array<uint32_t, 3>& weights) {
+        const CoreCoord logical_dram_core{bank, first_usable_dram_endpoint(bank)};
+        const CoreCoord virtual_dram_core =
+            mesh_device_->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
+
+        Program program = CreateProgram();
+        const auto kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/drisc_gddr_mc_priority.cpp",
+            logical_dram_core,
+            DramConfig{.noc = NOC::NOC_0});
+        SetRuntimeArgs(program, kernel, logical_dram_core, {weights[0], weights[1], weights[2], drisc_l1_base_});
+        run_workload(std::move(program));
+
+        std::array<uint32_t, 3> readback{};
+        MetalContext::instance().get_cluster().read_core(
+            readback.data(),
+            sizeof(readback),
+            tt_cxy_pair(mesh_device_->build_id(), virtual_dram_core),
+            drisc_l1_noc_addr_);
+        return readback;
+    }
+
     distributed::MeshDevice* mesh_device_{};
     distributed::MeshCoordinateRange device_range_{distributed::MeshCoordinate(0, 0)};
     uint32_t drisc_l1_base_{};
@@ -196,6 +220,19 @@ TEST_F(DramKernelFixture, DramKernelNiuModesSetByFirmware) {
     // The point of the per-core mask: an endpoint that serves neither NOC gets both NIUs streaming,
     // rather than NOC1 sitting in NOC2AXI for nothing.
     EXPECT_GT(num_noc1_stream, 0u) << "No DRISC endpoint of bank " << bank << " has a free NOC1 NIU";
+}
+
+TEST_F(DramKernelFixture, GddrMcMpfeRoundRobinWeights) {
+    constexpr std::array<std::array<uint32_t, 3>, 4> kWeightSequence = {
+        std::array<uint32_t, 3>{7, 7, 7},
+        std::array<uint32_t, 3>{0, 0, 0},
+        std::array<uint32_t, 3>{0, 1, 5},
+        std::array<uint32_t, 3>{0, 0, 0},
+    };
+
+    for (const auto& weights : kWeightSequence) {
+        EXPECT_EQ(set_mpfe_weights(/*bank=*/0, weights), weights);
+    }
 }
 
 // Run the same kernel across multiple DRAM cores.

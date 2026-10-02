@@ -134,6 +134,19 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
     // it keeps pointing at the real sparsity tensor.
     const Tensor& in1_sparsity_tensor = use_indices ? tensor_args.optional_input_tensors.at(0).value() : sparsity;
     auto* const in1_sparsity_buffer = in1_sparsity_tensor.buffer();
+    // Per-group fused bias (indexed mode only, validated by the device op): optional_input_tensors[1] is a
+    // TILE tensor whose tile row e holds group e's [1, N] bias. The shared in1 reader fetches tile row
+    // indices[bB] for every group (BIAS_PER_GROUP) and the compute kernel adds it row-broadcast before
+    // packing, replacing the caller's separate gather + add.
+    const bool use_bias = operation_attributes.use_bias && tensor_args.optional_input_tensors.size() > 1 &&
+                          tensor_args.optional_input_tensors.at(1).has_value();
+    const Tensor* bias_tensor = use_bias ? &tensor_args.optional_input_tensors.at(1).value() : nullptr;
+    auto* const bias_buffer = use_bias ? bias_tensor->buffer() : nullptr;
+    const auto bias_data_format =
+        use_bias ? tt_metal::datatype_to_dataformat_converter(bias_tensor->dtype()) : tt::DataFormat::Float16_b;
+    const auto bias_tile = use_bias ? bias_tensor->tensor_spec().tile() : tt::tt_metal::Tile({32, 32});
+    const uint32_t bias_single_tile_size = bias_tile.get_tile_size(bias_data_format);
+    const uint32_t bias_aligned_tile_size = tt::align(bias_single_tile_size, dram_alignment);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config.value());
@@ -417,8 +430,8 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
         (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
         // batch args
         (std::uint32_t)Mt * Nt,  // MtNt
-        // bias args (placeholders)
-        (std::uint32_t)0,  // in3_tensor_stride_w
+        // bias args (stride 1 along N when a per-group bias is fused, else placeholder)
+        (std::uint32_t)(use_bias ? 1 : 0),  // in3_tensor_stride_w
         // fuse op args
         (std::uint32_t)false,  // fuse_op
         (std::uint32_t)false,  // fuse_op_reduce_scatter
@@ -430,7 +443,11 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
     // Indexed/gather mode reuses this slot for the active-group id list (see in1_sparsity_buffer).
     tt::tt_metal::TensorAccessorArgs(*in1_sparsity_buffer).append_to(in1_sender_writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*out_buffer).append_to(in1_sender_writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs().append_to(in1_sender_writer_compile_time_args);  // placeholder for bias
+    if (use_bias) {
+        tt::tt_metal::TensorAccessorArgs(*bias_buffer).append_to(in1_sender_writer_compile_time_args);
+    } else {
+        tt::tt_metal::TensorAccessorArgs().append_to(in1_sender_writer_compile_time_args);  // placeholder for bias
+    }
 
     std::vector<uint32_t> in0_receiver_compile_time_args = {
         // in0 block args
@@ -467,7 +484,19 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
         mm_kernel_defines,
         ttnn::get_throttle_level(operation_attributes.compute_kernel_config));
 
+    if (in0_mcast_receiver_num_cores == 1) {
+        mm_kernel_in0_sender_writer_defines["SKIP_MCAST"] = "1";
+    }
+
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
+    if (use_bias) {
+        // FUSE_BIAS selects the shared kernels' fused-bias path; BIAS_PER_GROUP makes the reader fetch
+        // tile row indices[bB] for every group and the compute kernel wait/pop the bias per group.
+        mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
+        mm_kernel_in1_sender_writer_defines["BIAS_PER_GROUP"] = "1";
+        mm_kernel_defines["FUSE_BIAS"] = "1";
+        mm_kernel_defines["BIAS_PER_GROUP"] = "1";
+    }
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
@@ -561,7 +590,22 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
         get_batch_from_reader,  // get_batch_from_reader
         false,                  // in0_transpose_tile
     };
-
+    if (use_bias) {
+        compute_kernel_args.push_back(1u);  // Broadcast row 0 of each group's bias over its M rows.
+    }
+    // Bias reads partials through SrcA; FP32 reloads need a separate UnpackToDest view of the same
+    // SRAM. c_6 and c_7 hold sparse metadata, so use c_8 for the reload alias.
+    constexpr auto cb_intermed0_alias = tt::CBIndex::c_8;
+    const bool bias_reload_alias = use_bias && fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32;
+    if (bias_reload_alias) {
+        mm_kernel_defines["MM_PARTIALS_RELOAD_ALIAS_CB"] = std::to_string(static_cast<uint32_t>(cb_intermed0_alias));
+    }
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
+        const auto reload_cb = bias_reload_alias ? cb_intermed0_alias : tt::CBIndex::c_5;
+        unpack_to_dest_mode[reload_cb] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
     // Create compute kernel
     // bool fp32_dest_acc_en = false;
     // Gelu currently has better accuracy when run in approx mode
@@ -579,14 +623,13 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
         {"cb_out", tt::CBIndex::c_4},
         {"cb_intermed0", tt::CBIndex::c_5},
         {"cb_in0_transposed", tt::CBIndex::c_10},
+        {"bias_ntiles", in1_per_core_w},
     };
-    // unpack_to_dest_mode and opt_level are left at their descriptor defaults to preserve
-    // behaviour: an empty unpack_to_dest_mode matches the legacy ComputeConfig default, and the
-    // default opt_level applies O2 for data movement and O3 for compute, as the legacy configs did.
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
         .math_approx_mode = math_approx_mode};
     ////////////////////////////////////////////////////////////////////////////
     //                      Descriptor Assembly
@@ -668,6 +711,19 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
         desc.cbs.push_back(std::move(cb_desc));
     }
 
+    if (use_bias) {
+        // Double-buffer one bias tile row per output block to overlap the next group's read.
+        CBDescriptor bias_cb;
+        bias_cb.total_size = 2 * out_block_w * bias_aligned_tile_size;
+        bias_cb.core_ranges = all_cores;
+        bias_cb.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_3,
+            .data_format = bias_data_format,
+            .page_size = bias_aligned_tile_size,
+            .tile = TileDescriptor{bias_tile}});
+        desc.cbs.push_back(std::move(bias_cb));
+    }
+
     uint32_t output_cb_index = tt::CBIndex::c_4;
     uint32_t interm0_cb_index = tt::CBIndex::c_5;
     if (interm0_data_format != output_data_format) {
@@ -681,6 +737,13 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
                 .data_format = interm0_data_format,
                 .page_size = interm0_single_tile_size,
                 .tile = output_tile_desc});
+            if (bias_reload_alias) {
+                cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+                    .buffer_index = cb_intermed0_alias,
+                    .data_format = interm0_data_format,
+                    .page_size = interm0_single_tile_size,
+                    .tile = output_tile_desc});
+            }
             desc.cbs.push_back(std::move(cb_desc));
         }
         log_debug(
@@ -717,6 +780,13 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
             .data_format = interm0_data_format,
             .page_size = interm0_single_tile_size,
             .tile = output_tile_desc});
+        if (bias_reload_alias) {
+            cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = cb_intermed0_alias,
+                .data_format = interm0_data_format,
+                .page_size = interm0_single_tile_size,
+                .tile = output_tile_desc});
+        }
         desc.cbs.push_back(std::move(cb_desc));
     }
     log_debug(
@@ -844,8 +914,9 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
                 mm_in1_sender_writer_args.push_back(0);
             }
 
-            mm_in1_sender_writer_args.push_back(0);
-            mm_in1_sender_writer_args.push_back(0);
+            // bias args: address and this core's first bias tile (its N offset within tile row 0)
+            mm_in1_sender_writer_args.push_back(0);  // Bound to the bias buffer below.
+            mm_in1_sender_writer_args.push_back(use_bias ? (std::uint32_t)(per_core_N * output_idx_x) : 0);
 
             if (output_idx_x == num_blocks_x - 1) {
                 mm_in1_sender_writer_args.push_back(last_out_num_blocks_w);
@@ -864,6 +935,9 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
             in1_args[0] = in1_buffer;
             in1_args[6] = in1_sparsity_buffer;
             in1_args[7] = out_buffer;
+            if (use_bias) {
+                in1_args[18] = bias_buffer;
+            }
             in1_sender_writer_kernel_desc.emplace_runtime_args(core, in1_args);
         }
     }

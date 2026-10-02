@@ -200,14 +200,33 @@ CoreRangeSet get_worker_grid(
 }
 
 tt::tt_metal::ShardSpec generate_output_shard_spec(
-    const Tensor& input_tensor, const ttnn::Shape& padded_out_shape, tt::tt_metal::TensorMemoryLayout memory_layout) {
+    const Tensor& input_tensor,
+    const ttnn::Shape& padded_out_shape,
+    tt::tt_metal::TensorMemoryLayout memory_layout,
+    uint32_t output_element_size_bytes) {
     // Unary: forced ROW_MAJOR — no input-orientation inheritance path (unlike Transpose/Repeat/Fold).
+    // Output layout mirrors input (unary is dtype-only), so is_tile is derived from input layout.
     auto* device = input_tensor.device();
+    const auto compute_grid_size = device->compute_with_storage_grid_size();
+    const bool is_tile = (input_tensor.layout() == tt::tt_metal::Layout::TILE);
     auto spec = ttnn::operations::data_movement::common::synthesize_output_shard_spec(
-        device->compute_with_storage_grid_size(),
+        compute_grid_size,
         padded_out_shape,
         memory_layout,
-        {.is_tile = true, .orientation_hint = tt::tt_metal::ShardOrientation::ROW_MAJOR, .caller_tag = "Unary"});
+        {.is_tile = is_tile,
+         .orientation_hint = tt::tt_metal::ShardOrientation::ROW_MAJOR,
+         .caller_tag = "Unary"});
+    // Shrink only when we produced an RM synth; typecast means the OUTPUT element size drives the page.
+    if (!is_tile) {
+        spec = *ttnn::operations::data_movement::common::shrink_shard_for_rm_page_alignment(
+            spec,
+            input_tensor.layout(),
+            output_element_size_bytes,
+            static_cast<uint64_t>(padded_out_shape[-1]),
+            compute_grid_size,
+            memory_layout,
+            ttnn::operations::data_movement::common::RmPageAlignmentMode::Lenient);
+    }
     log_debug(tt::LogOp, "Unary: Generated shard spec over {} populated cores", spec.grid.num_cores());
     return spec;
 }

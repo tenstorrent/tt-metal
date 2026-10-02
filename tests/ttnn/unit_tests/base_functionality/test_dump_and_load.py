@@ -4,11 +4,82 @@
 
 import pytest
 
+import os
 import pathlib
+import struct
+import subprocess
+import sys
 
 import torch
 
 import ttnn
+
+
+def test_load_tensor_without_device_leaves_devices_alone(tmp_path, device):
+    # The device fixture holds the chips open. A load that initialized MetalContext would open
+    # the cluster again in the child, which logs the UMD line below or blocks on the chip lock.
+    shards = torch.cat([torch.full((32, 64), value, dtype=torch.bfloat16) for value in (11, 29)], dim=1)
+    mapper = ttnn.create_mesh_mapper(
+        ttnn.MeshShape(1, 2),
+        ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementShard(1)]),
+    )
+    tensor_path = tmp_path / "two_shards.tensorbin"
+    torch_path = tmp_path / "loaded.pt"
+    tensor = ttnn.from_torch(shards, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper)
+    ttnn.dump_tensor(tensor_path, tensor, mode=ttnn.DumpTensorMode.LOCAL)
+
+    child = (
+        "import sys, torch, ttnn\n"
+        "loaded = ttnn.load_tensor(sys.argv[1])\n"
+        "torch.save([ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(loaded)], sys.argv[2])\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", child, str(tensor_path), str(torch_path)],
+        env={**os.environ, "TT_LOGGER_LEVEL": "Info"},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert "Opening user mode device driver" not in output, output
+    loaded = torch.load(torch_path)
+    assert len(loaded) == 2
+    torch.testing.assert_close(torch.cat(loaded, dim=1), shards, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("malformation", ["header-size", "shard-buffer"])
+def test_load_malformed_tensor_raises(tmp_path, expect_error, malformation):
+    file_name = tmp_path / "malformed.tensorbin"
+    expected = torch.full((32, 32), 11, dtype=torch.bfloat16)
+    tensor = ttnn.from_torch(expected, layout=ttnn.TILE_LAYOUT)
+    ttnn.dump_tensor(file_name, tensor, mode=ttnn.DumpTensorMode.LOCAL)
+    original = file_name.read_bytes()
+    data = bytearray(original)
+    if malformation == "header-size":
+        data[:8] = len(data).to_bytes(8, byteorder="little")
+    else:
+        # tensor.fbs: Tensor.shards is field 2; TensorShard.buffer_type is field 0.
+        # NONE is structurally valid FlatBuffers data but cannot represent a tensor shard.
+        def field(table, index):
+            vtable = table - struct.unpack_from("<i", data, table)[0]
+            return table + struct.unpack_from("<H", data, vtable + 4 + index * 2)[0]
+
+        root = 8 + struct.unpack_from("<I", data, 8)[0]
+        shards_field = field(root, 2)
+        shards = shards_field + struct.unpack_from("<I", data, shards_field)[0]
+        first_shard = shards + 4 + struct.unpack_from("<I", data, shards + 4)[0]
+        buffer_type = field(first_shard, 0)
+        assert data[buffer_type] == 1
+        data[buffer_type] = 0
+    file_name.write_bytes(data)
+
+    diagnostic = "truncated or corrupt" if malformation == "header-size" else "Only InlineFileStorage"
+    with expect_error(RuntimeError, diagnostic):
+        ttnn.load_tensor(file_name)
+
+    file_name.write_bytes(original)
+    torch.testing.assert_close(ttnn.to_torch(ttnn.load_tensor(file_name)), expected, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("height", [1024])
