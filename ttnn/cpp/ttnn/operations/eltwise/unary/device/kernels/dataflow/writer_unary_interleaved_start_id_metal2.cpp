@@ -28,15 +28,19 @@ void kernel_main() {
     // its consumer.
     DataflowBuffer dfb(dfb::out);
 
-    // Get page size from the DFB entry size (works for both TILE and ROW_MAJOR layouts)
+#ifdef ENTRIES_PER_PAGE
+    // The op sets these when a page spans several DFB entries, or is shorter than one.
+    constexpr uint32_t onepage = ENTRIES_PER_PAGE;
+    constexpr uint32_t page_bytes = PAGE_BYTES;
+#else
+    // One page per DFB entry (works for both TILE and ROW_MAJOR layouts)
+    constexpr uint32_t onepage = 1;
     const uint32_t page_bytes = dfb.get_entry_size();
+#endif
 
 #ifdef OUT_SHARDED
-    dfb.wait_front(num_pages);
+    dfb.wait_front(num_pages * onepage);
 #else
-
-    // single-page ublocks (works for both TILE and ROW_MAJOR layouts)
-    constexpr uint32_t onepage = 1;
 
     const auto s = TensorAccessor(tensor::dst);
 
