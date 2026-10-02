@@ -25,6 +25,9 @@ CODE_SIZE = 10
 
 BEV_SHAPES = {"tiny": (50, 50), "base": (200, 200)}
 
+# Spread of the random weights on top of the upstream init, so the test sees trained-like
+# behaviour: sampling offsets that move a few BEV cells off the init pattern, and attention
+# logits that make the softmaxes neither uniform nor one-hot.
 SAMPLING_OFFSET_STD_PX = 2.0
 ATTENTION_LOGIT_STD = 2.0
 SELF_ATTENTION_LOGIT_STD = 2.0
@@ -81,6 +84,8 @@ def _init_self_attention(mha, generator):
 
 
 def build_reference_decoder(seed=0):
+    """BEVFormer's decoder with dummy weights: ``_init_cross_attention`` and ``_init_self_attention``
+    on top of PyTorch's default init, which the rest keeps."""
     torch.manual_seed(seed)
     model = DetectionTransformerDecoder(
         num_layers=NUM_LAYERS,
