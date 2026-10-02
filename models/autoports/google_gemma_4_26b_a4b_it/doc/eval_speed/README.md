@@ -54,9 +54,21 @@ advisories, zero late actions, one cancelled upstream request; not promoted.
 Fresh local sklearn control submits in473.752s, reward0, same missing-attribute
 failure. The one-time generic submission-review candidate submits in830.660s,
 also reward0: it immediately resubmits after review without repository tests.
-Policy rejected. A bounded saved-context Sympy next-action replay starts11:07;
-no tools are executed and no solve claim is possible. Local server
-`gemma4-eval-history-limit` remains exclusively owned.
+Policy rejected. Saved-context Sympy replay completes189.509s/8768 output
+tokens, choosing only `git status` and considering restoring the correct file:
+not evidence it was nearly finished. No tools were executed. Generic user-note
+injection also suppresses earlier reasoning through the pinned chat template;
+it is not a pure reminder intervention. All CI/local trials are complete.
+
+Next causal quality check needs an authorized fast HF reference endpoint/GPU.
+This host has no NVIDIA device/tool,~11GiB available RAM at11:10; the existing
+14.5K-prefix/128-token CPU HF control takes1001.174s. That does not establish
+reference full-task capability or permit cheap full-agent comparisons. Do not
+claim TT numerical error or inherent HF inability from the current evidence.
+No candidate justifies a second full suite or ten-task expansion. The owned
+server`gemma4-eval-history-limit` exits cleanly at11:15:27; images/caches/raw
+evidence and unrelated containers are retained. This is a handoff with unresolved
+quality, **not completion of the all-five-correct objective**.
 
 New default-off harness repairs at TTI**4fcfdcfb** stop owned container processes
 before verification and cancel abandoned upstream requests.58 host tests,
@@ -71,7 +83,7 @@ that is not broad free-generation equivalence. Prefix caching is unimplemented.
 See the [suite experiment log](suite_20261002.md) for all forecasts, failures,
 commands, exact provenance, raw artifact locations and live-monitor path.
 The [precision audit](AUTODEBUG.md) documents numerical hypotheses, not a proven
-cache/position bug. Latest TT checkpoint before this handoff is**c358bf2240**;
+cache/position bug. Latest TT checkpoint before this handoff is**a62131d59c**;
 all scoped changes and evidence are pushed. No ten-task expansion is authorized
 by the evidence yet.
 
