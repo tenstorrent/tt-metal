@@ -8,18 +8,15 @@ Run with:
     lit -v tools/tests/unit
 
 The diagnostics suite is compile-only and the functional suite builds and runs host
-binaries. Blackhole CFG access tests cross-compile with SFPI; nothing needs a device.
+binaries. The HAL suite cross-compiles with SFPI; nothing needs a device.
 clang is required for the host tests' -verify diagnostics.
 
 Override the compiler with CXX, and the LLVM tool directory with LLVM_BIN:
     CXX=/path/to/clang++ LLVM_BIN=/usr/lib/llvm-20/bin lit -v tools/tests/unit
-
-SFPI_CXX overrides the CFG tests' default compiler in tests/sfpi/compiler/bin.
 """
 
 import glob
 import os
-import shlex
 import shutil
 import subprocess
 import sys
@@ -83,66 +80,6 @@ split_file = _require(
 
 # Make the rest of the LLVM tools reachable from RUN lines.
 config.environment["PATH"] = os.pathsep.join([llvm_bin, os.environ.get("PATH", "")])
-
-# Blackhole CFG planning is host-only, but uses the hardware register layout
-# supplied by a surrounding tt-metal checkout. Standalone LLK checkouts skip it.
-llk_root = os.path.abspath(os.path.join(config.test_source_root, "..", "..", ".."))
-blackhole_cfg_include = os.path.join(
-    llk_root, "..", "hw", "inc", "internal", "tt-1xx", "blackhole"
-)
-config.substitutions.append(("%{llk_root}", llk_root))
-config.substitutions.append(("%{blackhole_cfg_include}", blackhole_cfg_include))
-if os.path.isfile(os.path.join(blackhole_cfg_include, "cfg_defines.h")):
-    config.available_features.add("blackhole-cfg")
-
-# Public CFG access includes target intrinsics, so compile it with SFPI rather
-# than the host compiler. Missing optional dependencies skip only these tests.
-sfpi_cxx = shutil.which(
-    os.environ.get(
-        "SFPI_CXX",
-        os.path.join(llk_root, "tests", "sfpi", "compiler", "bin", "riscv-tt-elf-g++"),
-    )
-)
-if sfpi_cxx and os.path.isfile(
-    os.path.join(llk_root, "tests", "sfpi", "include", "sfpi.h")
-):
-    _require(
-        shutil.which("FileCheck", path=llvm_bin),
-        "FileCheck",
-        "Set LLVM_BIN to an LLVM bin directory.",
-    )
-    config.available_features.add("sfpi")
-
-cfg_flags = [
-    "-std=c++17",
-    "-mcpu=tt-bh-tensix",
-    "-DENV_LLK_INFRA",
-    "-DTENSIX_FIRMWARE",
-    "-ftt-nttp",
-    "-ftt-constinit",
-    "-ftt-consteval",
-    "-ftt-no-dyninit",
-    "-fno-exceptions",
-    "-fno-rtti",
-    "-fno-use-cxa-atexit",
-    "-mno-tt-fix-whbhebreak",
-]
-cfg_flags += [
-    "-I" + os.path.join(llk_root, path)
-    for path in [
-        "tt_llk_blackhole/llk_lib",
-        "tt_llk_blackhole/common/inc",
-        "common",
-        "tests/sfpi/include",
-        "../hw/inc",
-        "../hw/inc/internal/tt-1xx/blackhole",
-    ]
-]
-config.substitutions.append(
-    ("%{sfpi_cxx}", shlex.quote(sfpi_cxx or "riscv-tt-elf-g++"))
-)
-config.substitutions.append(("%{cfg_flags}", shlex.join(cfg_flags)))
-config.substitutions.append(("%{python}", shlex.quote(sys.executable)))
 
 # ---- headers under test ---------------------------------------------------------------
 # The tests include sanitizer/types.h straight out of the source tree. Resolving the

@@ -87,3 +87,24 @@ extern "C" __attribute__((noinline, used)) void write_state_reset_via_gpr()
 // CHECK-NEXT: ttwrcfg 4,0,4
 // CHECK-NEXT: ttnop
 // CHECK-NEXT: ret
+
+// A field group stands in for its Raw anchor in whole-word GPR transfers.
+extern "C" __attribute__((noinline, used)) void write_field_group_gpr()
+{
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg0].TileDescriptor, cfg::Sec::S1, cfg::GprTransferSize::Bits128>(hal::gpr<4>());
+}
+
+// CHECK-LABEL: <write_field_group_gpr>:
+// CHECK-NEXT: ttwrcfg 4,1,112
+// CHECK-NEXT: ttnop
+// CHECK-NEXT: ret
+
+extern "C" __attribute__((noinline, used)) void write_field_group_from_gpr()
+{
+    cfg::write<cfg::Access::TensixCfgUnit>(cfg::from_gpr<cfg::Thcon[cfg::Reg0].TileDescriptor, cfg::Sec::S1, cfg::GprTransferSize::Bits128>(hal::gpr<4>()));
+}
+
+// CHECK-LABEL: <write_field_group_from_gpr>:
+// CHECK-NEXT: ttwrcfg 4,1,112
+// CHECK-NEXT: ttnop
+// CHECK-NEXT: ret
