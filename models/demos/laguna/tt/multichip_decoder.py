@@ -267,6 +267,7 @@ class MultichipDecoder(OptimizedDecoder):
         self._route_rank = _parse_binary_env("TT_LAGUNA_ROUTE_RANK", True)  # 1-token router: rank<K, no topk
         self._fused_kv_update = _parse_binary_env("TT_LAGUNA_FUSED_KV_UPDATE", True)  # K+V cache in one op
         self._sharded_residual = _parse_binary_env("TT_LAGUNA_SHARDED_RESIDUAL", True)  # decode residual in L1 shards
+        self._glu_out_sharded = _parse_binary_env("TT_LAGUNA_GLU_OUT_SHARDED", True)  # decode MLP out stays sharded
         self._token_dispatch_fallback_reason = "feature flag is disabled"
         # On a 1×1 MeshDevice, TTNN's explicit parallel decode-SDPA program is inaccurate once
         # the cache crosses long/non-aligned boundaries (observed PCC ~= 0 at positions 513/2048).
@@ -1032,8 +1033,16 @@ class MultichipDecoder(OptimizedDecoder):
             routed_local = ttnn.reshape(reduced, (1, 1, T, H))
         else:
             routed_local = ttnn.reshape(ttnn.sum(weighted, dim=1), (1, 1, T, H))
-        shared_partial = self._glu_mlp(ln_flat, "sh", cfg.hidden, cfg.shared_intermediate, self._ck_shared, sharded)
-        combined = ttnn.add(routed_local, ttnn.reshape(shared_partial, (1, 1, T, H)))
+        keep = sharded and self._glu_out_sharded and T <= TILE
+        shared_partial = self._glu_mlp(
+            ln_flat, "sh", cfg.hidden, cfg.shared_intermediate, self._ck_shared, sharded, keep
+        )
+        if keep:
+            # width-sharded shared output as the add's first operand, the interleaved routed sum as the second:
+            # the add writes interleaved for the all_gather (no separate sharded->interleaved)
+            combined = ttnn.add(shared_partial, routed_local, memory_config=ttnn.L1_MEMORY_CONFIG)
+        else:
+            combined = ttnn.add(routed_local, ttnn.reshape(shared_partial, (1, 1, T, H)))
         return self._reduce(combined)
 
     # ---- MoE baseline (unpacked gate/up: two separate sparse_matmuls) ------ #
@@ -1100,7 +1109,9 @@ class MultichipDecoder(OptimizedDecoder):
         return self._reduce(combined)  # all_reduce -> total routed + shared (replicated)
 
     # ---- dense / shared SwiGLU MLP: one packed gate+up matmul, split, SwiGLU (else unpacked base) ---- #
-    def _glu_mlp(self, x, key, H, I, ck, sharded):
+    def _glu_mlp(self, x, key, H, I, ck, sharded, keep_sharded=False):
+        """keep_sharded: return the decode down-projection output width-sharded (its consumer -- the decode
+        all_gather or a residual add -- reads the shard directly; no sharded->interleaved)."""
         if not self.PACK_GATE_UP:
             return super()._glu_mlp(x, key, H, I, ck, sharded)
         guk, dk = {"mlp": ("mlp_gate_up", "mlp_down"), "sh": ("sh_gate_up", "sh_down")}[key]
@@ -1113,7 +1124,7 @@ class MultichipDecoder(OptimizedDecoder):
             u = ttnn.slice(gu, [0] * (len(shp) - 1) + [I], shp[:-1] + [2 * I])
             gg = ttnn.mul(g, u, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])  # silu fused: one op
             out = self._dram_mm(gg, w[dk], w[dk + "_ds"], I, H, ck)
-            return ttnn.sharded_to_interleaved(out, ttnn.L1_MEMORY_CONFIG)
+            return out if keep_sharded else ttnn.sharded_to_interleaved(out, ttnn.L1_MEMORY_CONFIG)
         # prefill: interleaved packed gate+up linear, split, SwiGLU, down
         gu = ttnn.linear(x, w[guk], compute_kernel_config=ck)  # [.,seq,2I]
         shp = list(gu.shape)
@@ -1127,8 +1138,11 @@ class MultichipDecoder(OptimizedDecoder):
         cfg = self.cfg
         ln_flat = ttnn.reshape(ln, (1, 1, T, cfg.hidden))
         if not cfg.is_moe:
-            partial = self._glu_mlp(ln_flat, "mlp", cfg.hidden, cfg.intermediate, self._ck_dense, sharded)
-            return self._reduce(ttnn.reshape(partial, (1, 1, T, cfg.hidden)))
+            keep = sharded and self._glu_out_sharded and T <= TILE
+            partial = self._glu_mlp(ln_flat, "mlp", cfg.hidden, cfg.intermediate, self._ck_dense, sharded, keep)
+            if tuple(partial.shape) != (1, 1, T, cfg.hidden):
+                partial = ttnn.reshape(partial, (1, 1, T, cfg.hidden))
+            return self._reduce(partial)  # the decode all_gather reads a width-sharded partial directly
         use_token_dispatch, reason = self._token_dispatch_guard(T, sharded)
         if use_token_dispatch:
             return self._moe_token_dispatch(ln_flat, T)
