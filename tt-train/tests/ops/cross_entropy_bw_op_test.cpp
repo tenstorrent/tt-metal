@@ -89,6 +89,74 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Small_Backward) {
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
 }
 
+TEST_F(CrossEntropyBackwardTest, MeanScalerIsAppliedAfterTargetSubtractionOnColdAndWarmRuns) {
+    using namespace ttml;
+
+    auto* device = &autograd::ctx().get_device();
+    device->enable_program_cache();
+
+    constexpr uint32_t N = 1U;
+    constexpr uint32_t H = 3U;
+    constexpr uint32_t W = 2U;
+    constexpr float scaler = 1.0F / static_cast<float>(N * H);
+
+    auto run = [&](uint32_t target_class) {
+        const auto input_tensor = xt::zeros<float>({N, 1U, H, W});
+        auto target_tensor = xt::zeros<uint32_t>({N, H});
+        target_tensor.fill(target_class);
+        const auto grad_tensor = xt::ones<float>({1U, 1U, 1U, 1U});
+
+        const auto input = core::from_xtensor(input_tensor, device);
+        const auto target =
+            core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(target_tensor, device, ttnn::Layout::ROW_MAJOR);
+        const auto grad = core::from_xtensor(grad_tensor, device);
+
+        return core::to_xtensor(metal::cross_entropy_bw(input, target, grad, scaler));
+    };
+
+    const auto cold = run(/* target_class */ 0U);
+    const auto entries_after_cold = device->num_program_cache_entries();
+    const auto warm = run(/* target_class */ 1U);
+    const auto entries_after_warm = device->num_program_cache_entries();
+
+    EXPECT_EQ(entries_after_warm, entries_after_cold) << "identical tensor specs should reuse cached programs";
+    for (uint32_t h = 0; h < H; ++h) {
+        // Equal logits have exact probabilities 1/2. Applying 1/3 before the primitive's
+        // BF16 target update leaves an asymmetric one-ULP residue; subtracting first keeps
+        // the target and non-target gradients exact opposites on both cache paths.
+        EXPECT_FLOAT_EQ(cold(0, 0, h, 0), -cold(0, 0, h, 1));
+        EXPECT_FLOAT_EQ(warm(0, 0, h, 0), -warm(0, 0, h, 1));
+    }
+}
+
+TEST_F(CrossEntropyBackwardTest, NoneReductionAppliesPerPositionUpstreamGradient) {
+    using namespace ttml;
+
+    constexpr uint32_t N = 2U;
+    constexpr uint32_t H = 33U;
+    constexpr uint32_t W = 65U;
+    const auto input_tensor = xt::zeros<float>({N, 1U, H, W});
+    auto target_tensor = xt::zeros<uint32_t>({N, H});
+    auto grad_tensor = xt::ones<float>({N, 1U, H, 1U});
+    grad_tensor(0, 0, 0, 0) = 0.0F;
+    grad_tensor(0, 0, 1, 0) = -2.0F;
+    grad_tensor(1, 0, 32, 0) = 0.5F;
+
+    auto* device = &autograd::ctx().get_device();
+    const auto input = core::from_xtensor(input_tensor, device);
+    const auto target =
+        core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(target_tensor, device, ttnn::Layout::ROW_MAJOR);
+    const auto grad = core::from_xtensor(grad_tensor, device);
+
+    const auto result = core::to_xtensor(metal::cross_entropy_bw(input, target, grad, /* scaler */ 1.0F));
+    xt::xarray<float> expected = calculate_cross_entropy_backward(input_tensor, target_tensor) * grad_tensor;
+
+    EXPECT_TRUE(xt::allclose(result, expected, 3e-2F, 1e-2F));
+    for (uint32_t w = 0; w < W; ++w) {
+        EXPECT_FLOAT_EQ(result(0, 0, 0, w), 0.0F);
+    }
+}
+
 TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Batch) {
     using namespace ttml;
 
@@ -234,26 +302,28 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyForwardBackward_ReduceMeanVsNone) {
     xt::xarray<uint32_t> target_tensor =
         ttml::test_utils::make_uniform_xarray<uint32_t>(std::array<std::size_t, 2>{N, H}, 0U, W - 1U, seed + 1U);
 
-    auto input = ttml::autograd::create_tensor(
+    auto input_mean = ttml::autograd::create_tensor(
+        core::from_xtensor(input_tensor, &autograd::ctx().get_device()), /* requires_grad */ true);
+    auto input_none = ttml::autograd::create_tensor(
         core::from_xtensor(input_tensor, &autograd::ctx().get_device()), /* requires_grad */ true);
     auto target = ttml::autograd::create_tensor(core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
         target_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR));
 
-    auto result_none = ttml::ops::cross_entropy_loss(input, target, ttml::ops::ReduceType::NONE);
+    auto result_none = ttml::ops::cross_entropy_loss(input_none, target, ttml::ops::ReduceType::NONE);
     auto result_none_with_mean_after = ttml::ops::mean(result_none);
-    auto result_mean = ttml::ops::cross_entropy_loss(input, target, ttml::ops::ReduceType::MEAN);
+    auto result_mean = ttml::ops::cross_entropy_loss(input_mean, target, ttml::ops::ReduceType::MEAN);
 
     result_mean->backward();
     result_none_with_mean_after->backward();
 
-    auto result_mean_grad = core::to_xtensor(result_mean->get_grad());
-    auto result_none_with_mean_after_grad = core::to_xtensor(result_none_with_mean_after->get_grad());
+    auto input_mean_grad = core::to_xtensor(input_mean->get_grad());
+    auto input_none_grad = core::to_xtensor(input_none->get_grad());
 
     auto result_none_after_mean_xtensor = core::to_xtensor(result_none_with_mean_after->get_value());
     auto result_mean_xtensor = core::to_xtensor(result_mean->get_value());
 
     assert((result_none_after_mean_xtensor.shape() == result_mean_xtensor.shape()));
     EXPECT_TRUE(xt::allclose(result_none_after_mean_xtensor, result_mean_xtensor, 3e-2F, 1e-2F));
-    assert((result_none_with_mean_after_grad.shape() == result_mean_grad.shape()));
-    EXPECT_TRUE(xt::allclose(result_none_with_mean_after_grad, result_mean_grad, 3e-2F, 1e-2F));
+    assert((input_none_grad.shape() == input_mean_grad.shape()));
+    EXPECT_TRUE(xt::allclose(input_none_grad, input_mean_grad, 3e-2F, 1e-4F));
 }
