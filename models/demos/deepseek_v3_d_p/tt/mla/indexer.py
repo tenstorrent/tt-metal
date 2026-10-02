@@ -706,15 +706,13 @@ class TtIndexer:
         k_h = ttnn.matmul(
             k,
             self._index_hadamard,
-            dtype=ttnn.bfloat16,
+            dtype=index_kbuf.dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.default_compute_kernel_config,
             **({"program_config": k_hadamard_cfg["program_config"]} if k_hadamard_cfg is not None else {}),
         )
         ttnn.deallocate(k)
         k = k_h
-        if k.dtype != index_kbuf.dtype:  # write dtype must match the cache (update_padded_kv_cache asserts)
-            k = ttnn.typecast(k, index_kbuf.dtype)
         if metadata is not None:
             # Trace-safe: slot_idx (metadata[0]) + kv_actual_global (metadata[1]) read on-device. num_layers
             # stays the compacted stride so the kernel recomposes the same (user, layer) slot as the scalar path.
