@@ -95,6 +95,11 @@ void kernel_main() {
         }
     }
     auto sender = mc.optional_sender(noc);
+#ifdef MCAST_TEST_DELAY_RECEIVER_CONSTRUCTION
+    if (inside) {
+        riscv_wait(1000000);
+    }
+#endif
     auto receiver = mc.optional_receiver(noc);
     auto barrier_sender = barrier.optional_sender(noc);
     auto barrier_receiver = barrier.optional_receiver(noc);
