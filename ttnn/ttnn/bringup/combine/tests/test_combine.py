@@ -15,6 +15,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.common.bringup.testing import determinism
 
 _HERE = Path(__file__).resolve().parent
 
@@ -83,8 +84,59 @@ def _combine_groups(mesh_device, c):
         c["experts_per_chip"],
     )
     assert E == epc * n_dev
+    tt, buf, back = _group_inputs(mesh_device, c, c["seed"])
+    out = _call(c, tt)
+    outs = ttnn.get_device_tensors(out)
+    assert len(outs) == n_dev
+    for d, dt in enumerate(outs):
+        got = ttnn.to_torch(dt)
+        assert tuple(got.shape) == (1, 1, S, K, H), got.shape
+        want = torch.zeros(S, K, H, dtype=torch.bfloat16)
+        n = 0
+        for t, k, dst, row in back[d]:
+            want[t, k] = buf[dst, 0, row]
+            n += t.numel()
+        bad = (got.reshape(S, K, H) != want).any(dim=-1)
+        print(f"dev {d}: {n} routed (token, slot) rows, {S * K - n} zero")
+        assert not bad.any(), f"dev {d}: {int(bad.sum())}/{S * K} (token, slot) rows differ"
+    tt_b = _group_inputs(mesh_device, c, c["seed"] + 1)[0]
+    determinism.assert_deterministic(lambda: _call(c, tt), lambda: _call(c, tt_b), first=out, label=c["id"])
+
+
+def _call(c, tt):
+    tt_buf, tt_meta, tt_cnt, tt_reg = tt
+    return ttnn.bringup.combine(
+        tt_buf,
+        tt_meta,
+        tt_cnt,
+        tt_reg,
+        dispatch_group_size=c["dispatch_group_size"],
+        experts_per_chip=c["experts_per_chip"],
+        num_experts_per_tok=c["num_experts_per_tok"],
+        seq_len_per_chip=c["seq_len_per_chip"],
+        cluster_axis=c["cluster_axis"],
+        num_links=c["num_links"],
+        topology=getattr(ttnn.Topology, c["topology"]),
+        memory_config=_mem(c["memory_config"]),
+        init_zeros=c["init_zeros"],
+        use_fp8_combine=c["use_fp8_combine"],
+    )
+
+
+def _group_inputs(mesh_device, c, seed):
+    """The device inputs of a dispatch-group case for `seed`, the (device-rounded) buffer and, per source device,
+    its routed (t, k, destination device, row)."""
+    rows, cols = c["mesh"]
+    n_dev = rows * cols
+    S, H, E, K, epc = (
+        c["seq_len_per_chip"],
+        c["emb_dim"],
+        c["num_routed_experts"],
+        c["num_experts_per_tok"],
+        c["experts_per_chip"],
+    )
     N = c["max_dispatch_buffer_token_size"]
-    g = torch.Generator().manual_seed(c["seed"])
+    g = torch.Generator().manual_seed(seed)
 
     # Random expert outputs; metadata / counts / regions as dispatch + offset_cumsum leave them for random top-k ids.
     buf = torch.randn(n_dev, 1, N, H, generator=g).to(torch.bfloat16)
@@ -116,36 +168,7 @@ def _combine_groups(mesh_device, c):
     # The device order the test assumes (row-major): device d holds counts[d].
     for d, t in enumerate(ttnn.get_device_tensors(tt_cnt)):
         assert torch.equal(ttnn.to_torch(t).reshape(-1).to(torch.int64), counts[d]), f"device order: dev {d}"
-
-    out = ttnn.bringup.combine(
-        tt_buf,
-        tt_meta,
-        tt_cnt,
-        tt_reg,
-        dispatch_group_size=c["dispatch_group_size"],
-        experts_per_chip=epc,
-        num_experts_per_tok=K,
-        seq_len_per_chip=S,
-        cluster_axis=c["cluster_axis"],
-        num_links=c["num_links"],
-        topology=getattr(ttnn.Topology, c["topology"]),
-        memory_config=_mem(c["memory_config"]),
-        init_zeros=c["init_zeros"],
-        use_fp8_combine=c["use_fp8_combine"],
-    )
-    outs = ttnn.get_device_tensors(out)
-    assert len(outs) == n_dev
-    for d, dt in enumerate(outs):
-        got = ttnn.to_torch(dt)
-        assert tuple(got.shape) == (1, 1, S, K, H), got.shape
-        want = torch.zeros(S, K, H, dtype=torch.bfloat16)
-        n = 0
-        for t, k, dst, row in back[d]:
-            want[t, k] = buf[dst, 0, row]
-            n += t.numel()
-        bad = (got.reshape(S, K, H) != want).any(dim=-1)
-        print(f"dev {d}: {n} routed (token, slot) rows, {S * K - n} zero")
-        assert not bad.any(), f"dev {d}: {int(bad.sum())}/{S * K} (token, slot) rows differ"
+    return (tt_buf, tt_meta, tt_cnt, tt_reg), buf, back
 
 
 @pytest.mark.timeout(1800)
@@ -168,8 +191,31 @@ def test_combine(mesh_device, device_params, case):
         c["num_experts_per_tok"],
         c["experts_per_chip"],
     )
+    tt, buf, routed = _row_inputs(mesh_device, c, c["seed"])
+    out = _call(c, tt)
+    for d, dt in enumerate(ttnn.get_device_tensors(out)):
+        got = ttnn.to_torch(dt)
+        assert tuple(got.shape) == (1, 1, S, K, H), got.shape
+        want = ref.combine(buf[d, 0], *routed[d], seq=S, top_k=K, init_zeros=c["init_zeros"])
+        bad = (got.reshape(S, K, H) != want).any(dim=-1)
+        assert not bad.any(), f"dev {d}: {int(bad.sum())}/{S * K} (token, slot) rows differ"
+    tt_b = _row_inputs(mesh_device, c, c["seed"] + 1)[0]
+    determinism.assert_deterministic(lambda: _call(c, tt), lambda: _call(c, tt_b), first=out, label=c["id"])
+
+
+def _row_inputs(mesh_device, c, seed):
+    """The device inputs of a 1-row case for `seed`, the (device-rounded) buffer and the routed (t, k, row) per
+    device."""
+    rows, cols = c["mesh"]
+    S, H, E, K, epc = (
+        c["seq_len_per_chip"],
+        c["emb_dim"],
+        c["num_routed_experts"],
+        c["num_experts_per_tok"],
+        c["experts_per_chip"],
+    )
     N = c["max_dispatch_buffer_token_size"]
-    g = torch.Generator().manual_seed(c["seed"])
+    g = torch.Generator().manual_seed(seed)
 
     # Random expert outputs, and the metadata / counts / regions dispatch + offset_cumsum give for random top-k ids.
     buf = torch.randn(cols, 1, N, H, generator=g).to(torch.bfloat16)
@@ -194,26 +240,4 @@ def test_combine(mesh_device, device_params, case):
     tt_meta = _to_mesh(mesh_device, torch.stack(metas), c["metadata"])
     tt_cnt = _to_mesh(mesh_device, torch.cat(counts).to(torch.int32), c["counts"])
     tt_reg = _to_mesh(mesh_device, torch.cat(regions).to(torch.int32), c["regions"])
-
-    out = ttnn.bringup.combine(
-        tt_buf,
-        tt_meta,
-        tt_cnt,
-        tt_reg,
-        dispatch_group_size=c["dispatch_group_size"],
-        experts_per_chip=epc,
-        num_experts_per_tok=K,
-        seq_len_per_chip=S,
-        cluster_axis=c["cluster_axis"],
-        num_links=c["num_links"],
-        topology=getattr(ttnn.Topology, c["topology"]),
-        memory_config=_mem(c["memory_config"]),
-        init_zeros=c["init_zeros"],
-        use_fp8_combine=c["use_fp8_combine"],
-    )
-    for d, dt in enumerate(ttnn.get_device_tensors(out)):
-        got = ttnn.to_torch(dt)
-        assert tuple(got.shape) == (1, 1, S, K, H), got.shape
-        want = ref.combine(buf[d, 0], *routed[d], seq=S, top_k=K, init_zeros=c["init_zeros"])
-        bad = (got.reshape(S, K, H) != want).any(dim=-1)
-        assert not bad.any(), f"dev {d}: {int(bad.sum())}/{S * K} (token, slot) rows differ"
+    return (tt_buf, tt_meta, tt_cnt, tt_reg), buf, routed

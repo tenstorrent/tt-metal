@@ -20,6 +20,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.common.bringup.testing import determinism
 
 _HERE = Path(__file__).resolve().parent
 
@@ -76,58 +77,14 @@ def test_ring_indexer_score_dsa(mesh_device, device_params, case):
     sp, tp = rows, cols
     H, D, Sq, T, cl = c["heads"], c["head_dim"], c["q_rows"], c["t"], c["block_cyclic_chunk_local"]
     assert cl == tp * Sq and c["k_local_rows"] == T // sp and c["kv_len"] == T
-    dt, lay = getattr(ttnn.DataType, c["dtype"]), getattr(ttnn.Layout, c["layout"])
-    g = torch.Generator().manual_seed(c["seed"])
-
-    # Host inputs, bf16. Device d = r * cols + c (row-major) gets query block d; its rows start at
-    # chunk_start + r * chunk_local + c * Sq = chunk_start + d * Sq.
-    q = torch.randn(1, H, n_dev * Sq, D, generator=g).to(torch.bfloat16)
-    w = (torch.randn(1, 1, n_dev * Sq, H, generator=g) * c["gate_scale"]).to(torch.bfloat16)
-    k_nat = torch.randn(T, D, generator=g).to(torch.bfloat16)
-    garbage = torch.randn(1, 1, T, D, generator=g).to(torch.bfloat16)
-    pos = ref.k_local_positions(T, sp, tp, cl)  # [sp, T / sp]
-    k_local_host = k_nat[pos.reshape(-1)].reshape(1, 1, T, D)  # SP row r = rows [r * T / sp, (r + 1) * T / sp)
-
-    dram = ttnn.DRAM_MEMORY_CONFIG
-    per_dev = ttnn.ShardTensorToMesh(mesh_device, dim=2)  # dim 2 split over all devices, row-major
-
-    def put(t, mapper):
-        return ttnn.from_torch(t, device=mesh_device, dtype=dt, layout=lay, memory_config=dram, mesh_mapper=mapper)
-
-    tt_q, tt_w = put(q, per_dev), put(w, per_dev)
-    tt_k_local = put(k_local_host, ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(2, None)))
-    tt_k = put(garbage, ttnn.ReplicateTensorToMesh(mesh_device))
-    assert list(tt_q.shape) == [1, H, Sq, D] and list(tt_w.shape) == [1, 1, Sq, H]
-    assert list(tt_k_local.shape) == [1, 1, T // sp, D] and list(tt_k.shape) == [1, 1, T, D]
-
     grid = mesh_device.compute_with_storage_grid_size()
     crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
     sems = [ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(c["num_semaphores"])]
-    pc = c["program_config"]
-
-    out = ttnn.bringup.ring_indexer_score_dsa(
-        tt_q,
-        tt_k,
-        tt_w,
-        tt_k_local,
-        sems,
-        cluster_axis=c["cluster_axis"],
-        topology=getattr(ttnn.Topology, c["topology"]),
-        num_links=c["num_links"],
-        chunk_start_idx=c["chunk_start_idx"],
-        program_config=ttnn.bringup.IndexerScoreProgramConfig(
-            q_chunk_size=pc["q_chunk_size"], k_chunk_size=pc["k_chunk_size"], head_group_size=pc["head_group_size"]
-        ),
-        compute_kernel_config=_kernel_config(c["compute_kernel_config"]),
-        kv_len=c["kv_len"],
-        seq_subshard_axis=c["seq_subshard_axis"],
-        block_cyclic_sp_axis=c["block_cyclic_sp_axis"],
-        block_cyclic_chunk_local=cl,
-        block_cyclic_cache_tp_sharded=c["block_cyclic_cache_tp_sharded"],
-    )
+    host, dev = _inputs(mesh_device, c, c["seed"])
+    q, w, k_nat = host
+    out, tt_k = _call(mesh_device, c, dev, sems)
     outs = [ttnn.to_torch(t).float().reshape(Sq, T) for t in ttnn.get_device_tensors(out)]
     assert len(outs) == n_dev
-    ttnn.deallocate(out)
 
     for d in range(n_dev):
         r, cc = divmod(d, cols)
@@ -147,3 +104,80 @@ def test_ring_indexer_score_dsa(mesh_device, device_params, case):
         assert (
             pcc >= c["pcc"] and rel <= c["rel"]
         ), f"dev {d}: pcc {pcc:.7f} (min {c['pcc']}), rel {rel:.5f} (max {c['rel']})"
+
+    # The op fills the ring's k buffer (an input): each call gets a fresh copy of its starting garbage (_call), and
+    # the filled buffer is compared too.
+    dev_b = _inputs(mesh_device, c, c["seed"] + 1)[1]
+    determinism.assert_deterministic(
+        lambda: _call(mesh_device, c, dev, sems),
+        lambda: _call(mesh_device, c, dev_b, sems),
+        first=(out, tt_k),
+        label=c["id"],
+    )
+    ttnn.deallocate(out)
+
+
+def _put(mesh_device, c, t, mapper):
+    return ttnn.from_torch(
+        t,
+        device=mesh_device,
+        dtype=getattr(ttnn.DataType, c["dtype"]),
+        layout=getattr(ttnn.Layout, c["layout"]),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mapper,
+    )
+
+
+def _inputs(mesh_device, c, seed):
+    """Host (q, w, k_nat) for `seed` and the device inputs (q, w, k_local) plus the host garbage of the k buffer."""
+    rows, cols = c["mesh"]
+    n_dev = rows * cols
+    sp, tp = rows, cols
+    H, D, Sq, T, cl = c["heads"], c["head_dim"], c["q_rows"], c["t"], c["block_cyclic_chunk_local"]
+    g = torch.Generator().manual_seed(seed)
+
+    # Host inputs, bf16. Device d = r * cols + c (row-major) gets query block d; its rows start at
+    # chunk_start + r * chunk_local + c * Sq = chunk_start + d * Sq.
+    q = torch.randn(1, H, n_dev * Sq, D, generator=g).to(torch.bfloat16)
+    w = (torch.randn(1, 1, n_dev * Sq, H, generator=g) * c["gate_scale"]).to(torch.bfloat16)
+    k_nat = torch.randn(T, D, generator=g).to(torch.bfloat16)
+    garbage = torch.randn(1, 1, T, D, generator=g).to(torch.bfloat16)
+    pos = ref.k_local_positions(T, sp, tp, cl)  # [sp, T / sp]
+    k_local_host = k_nat[pos.reshape(-1)].reshape(1, 1, T, D)  # SP row r = rows [r * T / sp, (r + 1) * T / sp)
+
+    per_dev = ttnn.ShardTensorToMesh(mesh_device, dim=2)  # dim 2 split over all devices, row-major
+    tt_q, tt_w = _put(mesh_device, c, q, per_dev), _put(mesh_device, c, w, per_dev)
+    k_map = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(2, None))
+    tt_k_local = _put(mesh_device, c, k_local_host, k_map)
+    assert list(tt_q.shape) == [1, H, Sq, D] and list(tt_w.shape) == [1, 1, Sq, H]
+    assert list(tt_k_local.shape) == [1, 1, T // sp, D]
+    return (q, w, k_nat), (tt_q, tt_w, tt_k_local, garbage)
+
+
+def _call(mesh_device, c, dev, sems):
+    """One call on a fresh copy of the k buffer's garbage; returns (scores, the filled k buffer)."""
+    tt_q, tt_w, tt_k_local, garbage = dev
+    tt_k = _put(mesh_device, c, garbage, ttnn.ReplicateTensorToMesh(mesh_device))
+    assert list(tt_k.shape) == [1, 1, c["t"], c["head_dim"]]
+    pc = c["program_config"]
+    out = ttnn.bringup.ring_indexer_score_dsa(
+        tt_q,
+        tt_k,
+        tt_w,
+        tt_k_local,
+        sems,
+        cluster_axis=c["cluster_axis"],
+        topology=getattr(ttnn.Topology, c["topology"]),
+        num_links=c["num_links"],
+        chunk_start_idx=c["chunk_start_idx"],
+        program_config=ttnn.bringup.IndexerScoreProgramConfig(
+            q_chunk_size=pc["q_chunk_size"], k_chunk_size=pc["k_chunk_size"], head_group_size=pc["head_group_size"]
+        ),
+        compute_kernel_config=_kernel_config(c["compute_kernel_config"]),
+        kv_len=c["kv_len"],
+        seq_subshard_axis=c["seq_subshard_axis"],
+        block_cyclic_sp_axis=c["block_cyclic_sp_axis"],
+        block_cyclic_chunk_local=c["block_cyclic_chunk_local"],
+        block_cyclic_cache_tp_sharded=c["block_cyclic_cache_tp_sharded"],
+    )
+    return out, tt_k

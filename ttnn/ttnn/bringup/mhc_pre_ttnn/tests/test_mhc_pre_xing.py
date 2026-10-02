@@ -14,6 +14,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.common.bringup.testing import determinism
 
 _HERE = Path(__file__).resolve().parent
 
@@ -64,10 +65,10 @@ def _check(name, got, want, pcc, max_rel):
     assert p >= pcc and rel <= max_rel, f"{name}: pcc {p:.8f} (>= {pcc}), rel L2 {rel:.3e} (<= {max_rel})"
 
 
-def _inputs(case, n_dev):
+def _inputs(case, n_dev, seed=None):
     """Per-device random streams [n_dev, 1, T, n*C], a full-width projection -> reduced row [n_dev, 1, T, 32]
     (mixes of the full 4 x hidden row, sum x^2), base, and a valid hc for the collapse."""
-    g = torch.Generator().manual_seed(case["seed"])
+    g = torch.Generator().manual_seed(case["seed"] if seed is None else seed)
     n, T, C, H = case["n"], case["T"], case["C"], case["hidden"]
     x = torch.randn(n_dev, 1, T, n * C, generator=g)
     full = torch.randn(n_dev, 1, T, n * H, generator=g)  # the whole row the all_reduce sums over
@@ -119,38 +120,60 @@ def _check_hc(case, got, want):
     assert col <= 1e-5, f"comb column sums off 1 by {col}"
 
 
-@pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
-def test_mhc_pre_xing(mesh, case):
-    n_dev = mesh.get_num_devices()
+def _device_call(case, mesh, seed):
+    """Host (x, row, base, reference coefficients) for `seed` and a call of the case's mode on their device tensors
+    (built once here; the call only runs the op)."""
     n = case["n"]
-    x, row, base = _inputs(case, n_dev)
+    x, row, base = _inputs(case, mesh.get_num_devices(), seed)
+    want = None if case["mode"] == "pack" else _coef_ref(case, row, base)
     if case["mode"] == "pack":
         mix = row.clone()
         mix[..., NG] = 0.0
-        out = ttnn.bringup.mhc_pre_xing_pack(_dev(mix, mesh), _dev(x, mesh), n=n)
+        row = mix
+        args = (_dev(mix, mesh), _dev(x, mesh))
+        call = lambda: ttnn.bringup.mhc_pre_xing_pack(*args, n=n)
+    elif case["mode"] == "coef":
+        args = (_dev(row, mesh),)
+        call = lambda: _call_coef(case, args[0], None, base)
+    elif case["mode"] == "collapse":
+        args = (_dev(want.float(), mesh), _dev(x, mesh))
+        call = lambda: ttnn.bringup.mhc_pre_xing(*args, n=n, coefficients_given=True)
+    else:  # both
+        args = (_dev(row, mesh), _dev(x, mesh))
+        call = lambda: _call_coef(case, args[0], args[1], base)
+    return (x, row, base, want), call
+
+
+@pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
+def test_mhc_pre_xing(mesh, case):
+    n = case["n"]
+    (x, row, base, want), run_a = _device_call(case, mesh, case["seed"])
+    out = run_a()
+    if case["mode"] == "pack":
+        mix = row
         got = _host(out, mesh)
         _check(f"{case['id']} ss", got[..., NG], x.double().square().sum(-1), case["pcc"], case["max_rel"]["ss"])
         other = torch.cat([got[..., :NG], got[..., NG + 1 :]], -1)
         assert torch.equal(other, torch.cat([mix[..., :NG], mix[..., NG + 1 :]], -1).double()), "mix columns changed"
-        return
-    want = _coef_ref(case, row, base)
-    if case["mode"] == "coef":
-        hc, y = _call_coef(case, _dev(row, mesh), None, base)
+    elif case["mode"] == "coef":
+        hc, y = out
         assert y is None and tuple(hc.shape)[-1] == NG
         _check_hc(case, _host(hc, mesh), want)
     elif case["mode"] == "collapse":
         hc_in = want.float()
-        hc, y = ttnn.bringup.mhc_pre_xing(_dev(hc_in, mesh), _dev(x, mesh), n=n, coefficients_given=True)
+        hc, y = out
         assert hc is None
         _check(
             f"{case['id']} y", _host(y, mesh), ref.mhc_pre_xing_collapse(hc_in, x, n), case["pcc"], case["max_rel"]["y"]
         )
     else:  # both
-        hc, y = _call_coef(case, _dev(row, mesh), _dev(x, mesh), base)
+        hc, y = out
         _check_hc(case, _host(hc, mesh), want)
         _check(
             f"{case['id']} y", _host(y, mesh), ref.mhc_pre_xing_collapse(want, x, n), case["pcc"], case["max_rel"]["y"]
         )
+    run_b = _device_call(case, mesh, case["seed"] + 1)[1]
+    determinism.assert_deterministic(run_a, run_b, first=out, label=case["id"])
 
 
 def test_reference_matches_xing_ref():

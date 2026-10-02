@@ -12,6 +12,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.common.bringup.testing import determinism
 
 _HERE = Path(__file__).resolve().parent
 
@@ -80,24 +81,39 @@ def _check(name, got, want, pcc, max_rel):
     return p, rel
 
 
-@pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
-def test_mhc_pre(mesh, case):
-    g = torch.Generator().manual_seed(case["seed"])
+def _inputs(case, seed, mesh):
+    """Host (x, w, b) for `seed` and their device tensors (x sharded, w and b replicated)."""
+    g = torch.Generator().manual_seed(seed)
     n_dev = _devices(mesh)
     nc = case["input"]["shape"][-1]
     x = _host(case["input"], g, True, n_dev)
     w = _host(case["proj_weight"], g, False, n_dev, scale=nc**-0.5)
     b = _host(case["proj_bias"], g, False, n_dev, scale=0.5)
-    out = ttnn.bringup.mhc_pre(
+    dev = (
         _to_device(x, case["input"], mesh, True),
         _to_device(w, case["proj_weight"], mesh, False),
         _to_device(b, case["proj_bias"], mesh, False),
+    )
+    return (x, w, b), dev
+
+
+def _call(case, dev):
+    return ttnn.bringup.mhc_pre(
+        *dev,
         scale=tuple(case["scale"]),
         sinkhorn_iters=case["sinkhorn_iters"],
         eps=case["eps"],
         norm_eps=case["norm_eps"],
     )
+
+
+@pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
+def test_mhc_pre(mesh, case):
+    (x, w, b), dev = _inputs(case, case["seed"], mesh)
+    out = _call(case, dev)
     want = ref.mhc_pre(x, w, b, case["scale"], case["sinkhorn_iters"], case["eps"], case["norm_eps"])
     for name, t, e in zip(("y", "post", "comb"), out, want):
         p, r = _check(name, _from_device(t, mesh), e, case["pcc"], case["max_rel"][name])
         print(f"{case['id']} {name}: pcc {p:.7f} rel {r:.6f}")
+    dev_b = _inputs(case, case["seed"] + 1, mesh)[1]
+    determinism.assert_deterministic(lambda: _call(case, dev), lambda: _call(case, dev_b), first=out, label=case["id"])
