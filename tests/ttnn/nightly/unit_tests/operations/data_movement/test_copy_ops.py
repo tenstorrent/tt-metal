@@ -42,8 +42,7 @@ def _host_typecast_golden(torch_tensor, output_dtype):
     if output_dtype == ttnn.uint8:
         return torch.clamp(torch_tensor, 0, 255).to(torch.uint8)
     if output_dtype == ttnn.uint16:
-        # The host truncates on every architecture. The device now matches it on Blackhole and
-        # still rounds elsewhere, so this cannot fall through to the device golden.
+        # The host truncates on every arch; the device still rounds on Wormhole.
         return torch.clamp(torch_tensor.to(torch.int32), min=0, max=65535)
     return eltwise_typecast(torch_tensor, tt_input_dtype=ttnn.float32, tt_output_dtype=output_dtype)
 

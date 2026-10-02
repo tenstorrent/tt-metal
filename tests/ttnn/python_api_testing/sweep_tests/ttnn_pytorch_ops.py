@@ -225,9 +225,7 @@ def _simulate_bfp_quantization(x, man_bits):
 
 
 def _float_to_uint16_clamp(x):
-    # Truncation, matching every other float -> integer typecast destination and the host path,
-    # on the architectures whose uint16 kernel truncates. The rest still round to nearest with
-    # ties away from zero; see device_truncates_float_to_uint16.
+    # Truncation where the device truncates, otherwise round half away from zero.
     values = x.float()
     if not device_truncates_float_to_uint16():
         values = torch.floor(values + 0.5)

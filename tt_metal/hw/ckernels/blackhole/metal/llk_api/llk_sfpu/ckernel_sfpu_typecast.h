@@ -37,12 +37,8 @@ constexpr std::int32_t TYPECAST_INT8_MINUS_128_IMM12 = -128 & 0xfff;
 // SFPGT mod1 selector that sets the destination to all-ones (-1) when the comparison is true.
 constexpr std::uint32_t SFPGT_MOD1_SET_ALL_ONES = 8;
 
-// SFP_STOCH_RND rounding mode. RND_ZERO truncates toward zero, which is what the mantissa-shift
-// destinations (int32, uint32, uint8), the host static_cast and torch all do; the default operand 0
-// is round to nearest with ties away from zero. Three FP32 inputs are a documented hardware
-// exception that RND_ZERO cannot fix: 0x3F7FFFFE, 0x3F7FFFFF and 0x3FFFFFFF still round away from
-// zero (tt-isa-documentation, BlackholeA0 SFPSTOCHRND_FloatInt.md). No bfloat16 or block-float input
-// can encode them, and round to nearest got them wrong as well.
+// RND_ZERO truncates like the other integer destinations. Per the ISA doc, three FP32 inputs
+// (0x3F7FFFFE, 0x3F7FFFFF, 0x3FFFFFFF) still round away from zero.
 constexpr std::uint32_t SFPSTOCHRND_TRUNCATE = sfpi::SFPSTOCHRND_RND_ZERO;
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>

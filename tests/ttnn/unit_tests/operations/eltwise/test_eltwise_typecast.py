@@ -938,12 +938,7 @@ def test_unary_chain_typecast_int8(tt_output_dtype, device):
 
 
 def _fractional_typecast_stimulus(signed, pt_input_dtype):
-    """Values whose fractional part tells truncation apart from any rounding mode.
-
-    Half-integers are the discriminator: truncation, round-to-nearest with ties away
-    from zero, and round-to-nearest-even all disagree on them. bfloat16 has 8 mantissa
-    bits, so quarter steps below 64 are exact and survive the trip to the device.
-    """
+    """Quarter steps below 64, exact in bfloat16. Half-integers tell truncation from rounding."""
     offsets = torch.tensor([0.25, 0.5, 0.75], dtype=torch.float32)
     base = torch.arange(0, 63, dtype=torch.float32)
     values = (base[:, None] + offsets[None, :]).flatten()
@@ -973,23 +968,12 @@ def _fractional_typecast_stimulus(signed, pt_input_dtype):
 )
 @pytest.mark.parametrize("memory_config", mem_configs)
 def test_typecast_rounding_fractional(tt_output_dtype, signed, pt_input_dtype, tt_input_dtype, memory_config, device):
-    """float -> integer typecast truncates toward zero, for every integer destination.
-
-    Truncation is what the host path (`static_cast`), torch, and the int32/uint32/uint8
-    kernels all do, int8 among them because it shares the uint8 kernel. What pins it here
-    is the stimulus: deterministic quarter steps that include exact half-integers, the
-    values where truncation and both round-to-nearest modes disagree. The uniform random
-    stimuli used elsewhere in this file land on a half-integer only by accident, and the
-    LLK suite feeds whole numbers, where every rounding mode agrees.
-
-    Both input dtypes matter: a float32 source sets `preserve_fp32_precision`, so it takes
-    the 32-bit Dest path of the uint16 kernel while a bfloat16 source takes the 16-bit one.
-    """
+    """float -> integer typecast truncates toward zero. The float32 source takes the 32-bit
+    Dest path of the uint16 kernel and the bfloat16 source the 16-bit one."""
     torch_input = _fractional_typecast_stimulus(signed, pt_input_dtype)
     expected = torch.trunc(torch_input.float())
     if tt_output_dtype == ttnn.uint16 and not device_truncates_float_to_uint16():
-        # Round to zero is a Blackhole mode, so uint16 still rounds elsewhere. The stimulus is
-        # non-negative for uint16, so round half up is the same as ties away from zero here.
+        # Wormhole uint16 rounds half away from zero (non-negative stimulus, so floor(x + 0.5)).
         expected = torch.floor(torch_input.float() + 0.5)
 
     input_tensor = ttnn.from_torch(

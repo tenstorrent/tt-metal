@@ -686,10 +686,7 @@ def _typecast_golden_function(
 
     if output_dtype == ttnn.uint16:
         if input_tensor.is_floating_point():
-            # Blackhole truncates toward zero, like the host path and every other integer
-            # destination: round to zero is a Blackhole SFP_STOCH_RND mode. Wormhole's
-            # SFP_STOCH_RND has no such mode, so it still rounds to nearest with ties away from
-            # zero, which is the remaining half of #51655.
+            # Blackhole truncates; Wormhole's SFP_STOCH_RND has no round to zero, so it still rounds (#51655).
             if _ttnn_is_host or input_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b) or "blackhole" in arch_name:
                 converted = torch.trunc(input_tensor.float())
             elif "quasar" in arch_name:

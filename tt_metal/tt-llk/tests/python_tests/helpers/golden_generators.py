@@ -1901,9 +1901,7 @@ class TypecastGolden:
             if input_format.is_integer():
                 values = operand.to(torch.int64)
             else:
-                # Every integer destination truncates toward zero. Stimuli are
-                # whole numbers, so this arm is not what pins the contract down;
-                # test_typecast_rounding_fractional covers the fractional cases.
+                # Every integer destination truncates toward zero.
                 values = torch.trunc(operand.float()).to(torch.int64)
             result = self._to_integer(values, output_format)
         elif output_format in self._BLOCK_FLOAT_FORMATS:
