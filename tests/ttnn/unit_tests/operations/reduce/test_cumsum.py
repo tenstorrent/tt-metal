@@ -363,3 +363,166 @@ def test_cumsum_disable_compensated_sum(device):
         "disable_compensated_sum=True did not change the result: the plain path stayed within the "
         "compensated bound, so the flag is not reaching the accumulation kernel"
     )
+
+
+@pytest.mark.parametrize("scan_length", [4, 8, 33])
+@pytest.mark.parametrize("dim", [0, -1])
+@pytest.mark.parametrize("disable_compensated", [False, True])
+def test_cumsum_fp32_inf_handling(scan_length, dim, disable_compensated, device):
+    """Regression test for #58986: FP32 cumsum must preserve IEEE/PyTorch behavior
+    after +inf, -inf, and finite-input overflow.
+
+    Before the fix, the compensated (Kahan) summation path produced NaN for all
+    elements after the running total became infinite, because the compensation
+    term computed inf - inf = NaN, poisoning subsequent outputs.
+
+    Example: [1.0, inf, 1.0, 1.0] gave [1.0, inf, nan, nan] instead of
+    [1.0, inf, inf, inf].
+    """
+    # Case 1: +inf in the middle
+    torch_input = torch.tensor([1.0, float("inf"), 1.0, 1.0], dtype=torch.float32)
+    # Pad/truncate to scan_length
+    if scan_length > 4:
+        torch_input = torch.cat([torch_input, torch.ones(scan_length - 4, dtype=torch.float32)])
+    else:
+        torch_input = torch_input[:scan_length]
+
+    # Reshape for dim testing: dim=0 needs 2D, dim=-1 works with 1D
+    if dim == 0:
+        torch_input = torch_input.unsqueeze(0).expand(2, -1).contiguous()
+
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    output_tensor = ttnn.cumsum(
+        input_tensor, dim=dim, disable_compensated_sum=disable_compensated
+    )
+    torch_output = ttnn.to_torch(output_tensor, dtype=torch.float32)
+    expected = torch.cumsum(torch_input, dim=dim)
+
+    # For inf handling, we need exact match (not approximate) on the inf pattern
+    # PyTorch: [1.0, inf, inf, inf] — ttnn must match
+    assert torch.equal(torch.isnan(torch_output), torch.isnan(expected)), (
+        f"NaN pattern mismatch for +inf case (scan_length={scan_length}, dim={dim}, "
+        f"disable_compensated={disable_compensated}): got {torch_output}, expected {expected}"
+    )
+    assert torch.equal(torch.isinf(torch_output), torch.isinf(expected)), (
+        f"Inf pattern mismatch for +inf case (scan_length={scan_length}, dim={dim}, "
+        f"disable_compensated={disable_compensated}): got {torch_output}, expected {expected}"
+    )
+    # Finite values must match exactly where both are finite
+    finite_mask = torch.isfinite(torch_output) & torch.isfinite(expected)
+    assert torch.equal(torch_output[finite_mask], expected[finite_mask]), (
+        f"Finite value mismatch for +inf case: got {torch_output}, expected {expected}"
+    )
+
+
+@pytest.mark.parametrize("scan_length", [4, 8, 33])
+@pytest.mark.parametrize("dim", [0, -1])
+@pytest.mark.parametrize("disable_compensated", [False, True])
+def test_cumsum_fp32_neg_inf_handling(scan_length, dim, disable_compensated, device):
+    """Regression test for #58986: -inf must also preserve PyTorch behavior."""
+    torch_input = torch.tensor([1.0, float("-inf"), 1.0, 1.0], dtype=torch.float32)
+    if scan_length > 4:
+        torch_input = torch.cat([torch_input, torch.ones(scan_length - 4, dtype=torch.float32)])
+    else:
+        torch_input = torch_input[:scan_length]
+
+    if dim == 0:
+        torch_input = torch_input.unsqueeze(0).expand(2, -1).contiguous()
+
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    output_tensor = ttnn.cumsum(
+        input_tensor, dim=dim, disable_compensated_sum=disable_compensated
+    )
+    torch_output = ttnn.to_torch(output_tensor, dtype=torch.float32)
+    expected = torch.cumsum(torch_input, dim=dim)
+
+    assert torch.equal(torch.isnan(torch_output), torch.isnan(expected)), (
+        f"NaN pattern mismatch for -inf case: got {torch_output}, expected {expected}"
+    )
+    assert torch.equal(torch.isinf(torch_output), torch.isinf(expected)), (
+        f"Inf pattern mismatch for -inf case: got {torch_output}, expected {expected}"
+    )
+    finite_mask = torch.isfinite(torch_output) & torch.isfinite(expected)
+    assert torch.equal(torch_output[finite_mask], expected[finite_mask]), (
+        f"Finite value mismatch for -inf case: got {torch_output}, expected {expected}"
+    )
+
+
+@pytest.mark.parametrize("scan_length", [4, 8, 33])
+@pytest.mark.parametrize("dim", [0, -1])
+def test_cumsum_fp32_overflow_handling(scan_length, dim, device):
+    """Regression test for #58986: finite inputs that overflow to inf must
+    produce inf (not NaN) for subsequent elements, matching PyTorch."""
+    # Use large finite values that overflow when summed
+    large_val = torch.finfo(torch.float32).max / 2
+    torch_input = torch.tensor([large_val, large_val, 1.0, 1.0], dtype=torch.float32)
+    if scan_length > 4:
+        torch_input = torch.cat([torch_input, torch.ones(scan_length - 4, dtype=torch.float32)])
+    else:
+        torch_input = torch_input[:scan_length]
+
+    if dim == 0:
+        torch_input = torch_input.unsqueeze(0).expand(2, -1).contiguous()
+
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    # Test both paths
+    for disable_compensated in [False, True]:
+        output_tensor = ttnn.cumsum(
+            input_tensor, dim=dim, disable_compensated_sum=disable_compensated
+        )
+        torch_output = ttnn.to_torch(output_tensor, dtype=torch.float32)
+        expected = torch.cumsum(torch_input, dim=dim)
+
+        assert torch.equal(torch.isnan(torch_output), torch.isnan(expected)), (
+            f"NaN pattern mismatch for overflow case "
+            f"(disable_compensated={disable_compensated}): got {torch_output}, expected {expected}"
+        )
+        # After overflow, PyTorch gives inf, not NaN
+        assert not torch.isnan(torch_output).any() or torch.isnan(expected).any(), (
+            f"Unexpected NaN in overflow case: got {torch_output}, expected {expected}"
+        )
+
+
+@pytest.mark.parametrize("dim", [0, -1])
+def test_cumsum_fp32_special_values_unchanged(dim, device):
+    """Verify #58986 fix does not change behavior for existing special-value cases:
+    - NaN inputs
+    - Infinity at the final scan element
+    - +inf followed by -inf
+    """
+    # NaN input: PyTorch propagates NaN
+    torch_input = torch.tensor([1.0, float("nan"), 1.0, 1.0], dtype=torch.float32)
+    if dim == 0:
+        torch_input = torch_input.unsqueeze(0).expand(2, -1).contiguous()
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    output_tensor = ttnn.cumsum(input_tensor, dim=dim)
+    torch_output = ttnn.to_torch(output_tensor, dtype=torch.float32)
+    expected = torch.cumsum(torch_input, dim=dim)
+    assert torch.equal(torch.isnan(torch_output), torch.isnan(expected)), (
+        f"NaN input behavior changed: got {torch_output}, expected {expected}"
+    )
+
+    # Inf at final element: should not affect earlier elements
+    torch_input = torch.tensor([1.0, 1.0, 1.0, float("inf")], dtype=torch.float32)
+    if dim == 0:
+        torch_input = torch_input.unsqueeze(0).expand(2, -1).contiguous()
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    output_tensor = ttnn.cumsum(input_tensor, dim=dim)
+    torch_output = ttnn.to_torch(output_tensor, dtype=torch.float32)
+    expected = torch.cumsum(torch_input, dim=dim)
+    assert torch.equal(torch.isnan(torch_output), torch.isnan(expected))
+    assert torch.equal(torch.isinf(torch_output), torch.isinf(expected))
+
+    # +inf followed by -inf: PyTorch gives NaN (inf + -inf = NaN), must be preserved
+    torch_input = torch.tensor([1.0, float("inf"), float("-inf"), 1.0], dtype=torch.float32)
+    if dim == 0:
+        torch_input = torch_input.unsqueeze(0).expand(2, -1).contiguous()
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    output_tensor = ttnn.cumsum(input_tensor, dim=dim)
+    torch_output = ttnn.to_torch(output_tensor, dtype=torch.float32)
+    expected = torch.cumsum(torch_input, dim=dim)
+    # PyTorch: [1.0, inf, nan, nan] — this NaN is CORRECT (inf + -inf = NaN)
+    # The fix must not change this; only the inf->finite case was broken
+    assert torch.equal(torch.isnan(torch_output), torch.isnan(expected)), (
+        f"+inf/-inf behavior changed: got {torch_output}, expected {expected}"
+    )
