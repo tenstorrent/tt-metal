@@ -460,6 +460,15 @@ warm-state saving for that prefix, not an outcome or decode-speed improvement,
 and not proof of disk-cache-only restart gains. It supports measuring the five
 tasks on one persistent server as the user requested.
 
+07:44 UTC: the first advisory cleanly submits Sympy in 639.742 seconds, but
+reward remains 0: the required bug is fixed while two existing regressions break.
+The agent used only custom examples. A generic existing-repository-test and
+diff-review requirement is added to the default-off advisory, with no task-
+specific solution or hidden-test hints. A fresh same-cap control starts at
+07:44:17. All 33 telemetry tests pass; 14 helper tests also validate distinct
+saved-response versus censored-window counter reporting. Active resumed time
+is about 133 minutes, cumulative about 7h06m. Still no all-five combined result.
+
 - TTFT: `doc/ttft_optimization/`.
 - Remote benchmarks/evals:
   `readiness_vllm/ttft_optimization_remote/README.md`.
