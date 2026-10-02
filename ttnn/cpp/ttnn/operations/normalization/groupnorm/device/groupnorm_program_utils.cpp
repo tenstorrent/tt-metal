@@ -41,6 +41,11 @@ bool groupnorm_fp32_stats_for_bf16() {
     return enabled;
 }
 
+bool groupnorm_exact_mean() {
+    static const bool enabled = std::getenv("TT_GN_EXACT_MEAN") != nullptr;
+    return enabled;
+}
+
 bool groupnorm_needs_fp32_reconfig(std::initializer_list<tt::DataFormat> reconfig_formats) {
     return std::any_of(reconfig_formats.begin(), reconfig_formats.end(), [](tt::DataFormat format) {
         return format != tt::DataFormat::Float16_b;

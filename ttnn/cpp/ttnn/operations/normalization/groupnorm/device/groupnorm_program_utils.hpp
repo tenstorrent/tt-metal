@@ -61,6 +61,12 @@ bool groupnorm_needs_fp32_reconfig(std::initializer_list<tt::DataFormat> reconfi
 // while x / xmm / output stay bf16. Only takes effect together with TT_GN_PLAIN_TWO_PASS=1.
 bool groupnorm_fp32_stats_for_bf16();
 
+// PROTOTYPE KNOB (remove before merge): TT_GN_EXACT_MEAN=1, on top of TT_GN_FP32_STATS=1, computes
+// the pass-1 means (per out-block and over the gathered partials) with a REDUCE_COL block reduce
+// followed by an SFPU fp32 row-sum instead of REDUCE_SCALAR, whose DEST->SrcB->SrcA transpose of
+// the column sums truncates them to ~bf16. Interleaved factories only.
+bool groupnorm_exact_mean();
+
 int get_max_subblock(uint32_t n, uint32_t max_subblock_w);
 
 bool is_rectangle_grid(const std::vector<tt::tt_metal::CoreCoord>& core_coords);

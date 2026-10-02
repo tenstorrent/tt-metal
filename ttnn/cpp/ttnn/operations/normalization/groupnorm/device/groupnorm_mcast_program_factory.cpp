@@ -284,6 +284,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     const tt::DataFormat stats_data_format = stats_fp32 ? tt::DataFormat::Float32 : cb_data_format;
     const uint32_t stats_single_tile_size = tt::tile_size(stats_data_format);
     const uint32_t stats_datum_size_bytes = stats_fp32 ? 4 : datum_size_bytes;
+    // PROTOTYPE (remove before merge): REDUCE_COL + SFPU row-sum means; see groupnorm_exact_mean().
+    const bool exact_mean = stats_fp32 && groupnorm_exact_mean();
 
     const bool enable_fp32_reconfig = groupnorm_needs_fp32_reconfig(
         {in_data_format,
@@ -797,6 +799,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_19)] =
             tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
+    if (exact_mean) {
+        // The SFPU row-sum copies the fp32 column-sum tile into DEST; through SrcA it would be TF32.
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_18)] =
+            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
 
     mcast_sender_compute_named_compile_time_args["welford_fp32_alias"] = static_cast<uint32_t>(welford_fp32_alias);
     mcast_sender_compute_named_compile_time_args["welford_unpack_fp32_active"] =
@@ -823,6 +830,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     mcast_receiver_compute_named_compile_time_args["corrected_stats"] = static_cast<uint32_t>(corrected_stats);
     mcast_sender_compute_named_compile_time_args["stats_fp32"] = static_cast<uint32_t>(stats_fp32);
     mcast_receiver_compute_named_compile_time_args["stats_fp32"] = static_cast<uint32_t>(stats_fp32);
+    mcast_sender_compute_named_compile_time_args["exact_mean"] = static_cast<uint32_t>(exact_mean);
+    mcast_receiver_compute_named_compile_time_args["exact_mean"] = static_cast<uint32_t>(exact_mean);
 
     KernelDescriptor compute_sender_desc;
     compute_sender_desc.kernel_source = compute_kernel_path;
@@ -1226,6 +1235,20 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
                 .page_size = reciprocal_CB_size,
             }}},
             .buffer = reciprocals.value().buffer(),
+        });
+    }
+    if (exact_mean) {
+        // PROTOTYPE: one fp32 tile of column sums between the REDUCE_COL block reduce and the SFPU
+        // row-sum. c_18 is the Welford reciprocals CB, which the two-pass path never creates.
+        constexpr uint32_t cb_colsum_index = tt::CBIndex::c_18;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = stats_single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_colsum_index),
+                .data_format = stats_data_format,
+                .page_size = stats_single_tile_size,
+            }}},
         });
     }
 

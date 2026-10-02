@@ -125,6 +125,14 @@ void kernel_main() {
     // The src reconfigs before the sub / variance / normalize steps are the existing
     // enable_fp32_reconfig ones (the host sets it when any of these formats is fp32).
     constexpr bool stats_fp32 = get_named_compile_time_arg_val("stats_fp32") == 1;
+    // Pass-1 means without REDUCE_SCALAR. That LLK pools each tile into a DEST row of 32 column
+    // sums and then moves the row through SrcB and SrcA to pool it to a scalar; the round trip holds
+    // the sums at ~bf16 precision whatever the DEST mode, so the mean of large-|mu| data is biased
+    // toward zero by ~0.3% per reduce stage. REDUCE_COL is plain GAPOOL accumulation in DEST with no
+    // such move: reducing the block as one column of tiles leaves exact fp32 column sums in one
+    // tile, and an SFPU fp32 row-sum of that tile puts the total at [0,0]. Needs stats_fp32.
+    constexpr bool exact_mean = get_named_compile_time_arg_val("exact_mean") == 1;
+    static_assert(!exact_mean || stats_fp32, "exact_mean keeps its column sums in fp32 CBs");
 
     constexpr std::uint32_t block_h = get_named_compile_time_arg_val("block_h");
     constexpr std::uint32_t block_w = get_named_compile_time_arg_val("block_w");
@@ -200,6 +208,8 @@ void kernel_main() {
     constexpr std::uint32_t dfb_ex_global_id = tt::CBIndex::c_15;
     constexpr std::uint32_t dfb_ex2_global_id = tt::CBIndex::c_14;
     constexpr std::uint32_t dfb_ex2pe_id = tt::CBIndex::c_27;
+    // exact_mean only: the fp32 column-sum tile (c_18 is the Welford reciprocals CB, unused here).
+    constexpr std::uint32_t dfb_colsum_id = tt::CBIndex::c_18;
     // corrected_stats only. c_11: per-out-block partial of (x - s); c_12: global D (c_19 is the
     // reader's alias of c_12, like c_9 is of c_15); c_7: a tile filled with D for the pass-3
     // DEST-reuse subtract; c_1: the writer's all-ones tile that fill is broadcast from.
@@ -500,21 +510,55 @@ void kernel_main() {
 
                 // Partial/E[x]
                 dfb_x.wait_front(static_cast<uint16_t>(out_block_hw_normal));
-                if constexpr (stats_fp32) {
-                    pack_reconfig_data_format(dfb_ex_partial_id);
+                if constexpr (exact_mean) {
+                    // All out_block_h_actual * block_w tiles as one column: every tile adds into the
+                    // same 32 fp32 column sums. Then the SFPU (Accurate fp32) row-sum collapses them.
+                    pack_reconfig_data_format(dfb_colsum_id);
+                    compute_kernel_lib::reduce<
+                        PoolType::SUM,
+                        ReduceDim::REDUCE_COL,
+                        dfb_x_id,
+                        dfb_scaler_id,
+                        dfb_colsum_id,
+                        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+                        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                        compute_kernel_lib::ReduceInputBlockShape::col(out_block_h_actual * block_w),
+                        compute_kernel_lib::ReduceInputMemoryLayout::contiguous());
+                    reconfig_data_format_srca(dfb_colsum_id);
+                    // Two-argument form: both fp32, so this compares and skips the packer drain.
+                    pack_reconfig_data_format(dfb_colsum_id, dfb_ex_partial_id);
+                    compute_kernel_lib::reduce<
+                        PoolType::SUM,
+                        ReduceDim::REDUCE_ROW,
+                        dfb_colsum_id,
+                        dfb_scaler_id,
+                        dfb_ex_partial_id,
+                        compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE,
+                        ReduceFp32Mode::Accurate>(
+                        compute_kernel_lib::ReduceInputBlockShape::single(),
+                        compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                        compute_kernel_lib::NoAccumulation{},
+                        scale_by_mean_recip);
+                    // The next out-block's mask multiply unpacks bf16 input through srcA.
+                    reconfig_data_format_srca(dfb_input_id);
+                } else {
+                    if constexpr (stats_fp32) {
+                        pack_reconfig_data_format(dfb_ex_partial_id);
+                    }
+                    compute_kernel_lib::reduce<
+                        PoolType::SUM,
+                        ReduceDim::REDUCE_SCALAR,
+                        dfb_x_id,
+                        dfb_scaler_id,
+                        dfb_ex_partial_id,
+                        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+                        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                        compute_kernel_lib::ReduceInputBlockShape::of(out_block_h_actual, block_w),
+                        compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                        compute_kernel_lib::NoAccumulation{},
+                        scale_by_mean_recip);
                 }
-                compute_kernel_lib::reduce<
-                    PoolType::SUM,
-                    ReduceDim::REDUCE_SCALAR,
-                    dfb_x_id,
-                    dfb_scaler_id,
-                    dfb_ex_partial_id,
-                    compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::of(out_block_h_actual, block_w),
-                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                    compute_kernel_lib::NoAccumulation{},
-                    scale_by_mean_recip);
                 dfb_x.pop_front(static_cast<uint16_t>(out_block_hw_normal));
 
                 dfb_ex_partial.wait_front(1);
@@ -525,18 +569,50 @@ void kernel_main() {
                 if constexpr (stats_fp32) {
                     reconfig_data_format_srca(dfb_ex_external_id);
                 }
-                compute_kernel_lib::reduce<
-                    PoolType::SUM,
-                    ReduceDim::REDUCE_SCALAR,
-                    dfb_ex_external_id,
-                    dfb_scaler_global_id,
-                    dfb_ex_global_id,
-                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::col(dfb_ex_external_tiles_required),
-                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                    compute_kernel_lib::NoAccumulation{},
-                    scale_by_global_recip);
+                if constexpr (exact_mean) {
+                    // The gathered partials' column sums must not go through the REDUCE_SCALAR
+                    // transpose either; same two steps as the per-block mean. The packer is still on
+                    // the fp32 partial, so the two-argument reconfigs here compare and skip.
+                    pack_reconfig_data_format(dfb_ex_partial_id, dfb_colsum_id);
+                    compute_kernel_lib::reduce<
+                        PoolType::SUM,
+                        ReduceDim::REDUCE_COL,
+                        dfb_ex_external_id,
+                        dfb_scaler_global_id,
+                        dfb_colsum_id,
+                        compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                        compute_kernel_lib::ReduceInputBlockShape::col(dfb_ex_external_tiles_required),
+                        compute_kernel_lib::ReduceInputMemoryLayout::contiguous());
+                    reconfig_data_format_srca(dfb_colsum_id);
+                    pack_reconfig_data_format(dfb_colsum_id, dfb_ex_global_id);
+                    compute_kernel_lib::reduce<
+                        PoolType::SUM,
+                        ReduceDim::REDUCE_ROW,
+                        dfb_colsum_id,
+                        dfb_scaler_global_id,
+                        dfb_ex_global_id,
+                        compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE,
+                        ReduceFp32Mode::Accurate>(
+                        compute_kernel_lib::ReduceInputBlockShape::single(),
+                        compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                        compute_kernel_lib::NoAccumulation{},
+                        scale_by_global_recip);
+                } else {
+                    compute_kernel_lib::reduce<
+                        PoolType::SUM,
+                        ReduceDim::REDUCE_SCALAR,
+                        dfb_ex_external_id,
+                        dfb_scaler_global_id,
+                        dfb_ex_global_id,
+                        compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                        compute_kernel_lib::ReduceInputBlockShape::col(dfb_ex_external_tiles_required),
+                        compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                        compute_kernel_lib::NoAccumulation{},
+                        scale_by_global_recip);
+                }
                 if constexpr (num_cores_per_mcast_group > 1) {
                     dfb_ex.reserve_back(1);
                     dfb_ex.push_back(1);
@@ -724,21 +800,53 @@ void kernel_main() {
 
                 // Partial-Var(x)
                 dfb_xmm.wait_front(static_cast<uint16_t>(out_block_hw_normal));
-                if constexpr (stats_fp32) {
-                    pack_reconfig_data_format(dfb_ex2_partial_id);
+                if constexpr (exact_mean) {
+                    // Same as pass 1: the squared residuals' column sums would otherwise be truncated
+                    // in the REDUCE_SCALAR transpose (rstd came out 0.2-0.5% high without this).
+                    pack_reconfig_data_format(dfb_colsum_id);
+                    compute_kernel_lib::reduce<
+                        PoolType::SUM,
+                        ReduceDim::REDUCE_COL,
+                        dfb_xmm_id,
+                        dfb_scaler_id,
+                        dfb_colsum_id,
+                        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+                        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                        compute_kernel_lib::ReduceInputBlockShape::col(out_block_h_actual * block_w),
+                        compute_kernel_lib::ReduceInputMemoryLayout::contiguous());
+                    reconfig_data_format_srca(dfb_colsum_id);
+                    pack_reconfig_data_format(dfb_colsum_id, dfb_ex2_partial_id);
+                    compute_kernel_lib::reduce<
+                        PoolType::SUM,
+                        ReduceDim::REDUCE_ROW,
+                        dfb_colsum_id,
+                        dfb_scaler_id,
+                        dfb_ex2_partial_id,
+                        compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE,
+                        ReduceFp32Mode::Accurate>(
+                        compute_kernel_lib::ReduceInputBlockShape::single(),
+                        compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                        compute_kernel_lib::NoAccumulation{},
+                        scale_by_mean_recip);
+                    // The next out-block starts with the enable_fp32_reconfig src resets.
+                } else {
+                    if constexpr (stats_fp32) {
+                        pack_reconfig_data_format(dfb_ex2_partial_id);
+                    }
+                    compute_kernel_lib::reduce<
+                        PoolType::SUM,
+                        ReduceDim::REDUCE_SCALAR,
+                        dfb_xmm_id,
+                        dfb_scaler_id,
+                        dfb_ex2_partial_id,
+                        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+                        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                        compute_kernel_lib::ReduceInputBlockShape::of(out_block_h_actual, block_w),
+                        compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                        compute_kernel_lib::NoAccumulation{},
+                        scale_by_mean_recip);
                 }
-                compute_kernel_lib::reduce<
-                    PoolType::SUM,
-                    ReduceDim::REDUCE_SCALAR,
-                    dfb_xmm_id,
-                    dfb_scaler_id,
-                    dfb_ex2_partial_id,
-                    compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::of(out_block_h_actual, block_w),
-                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                    compute_kernel_lib::NoAccumulation{},
-                    scale_by_mean_recip);
                 dfb_xmm.pop_front(static_cast<uint16_t>(out_block_hw_normal));
             }
             // End Local Reduce
@@ -747,18 +855,47 @@ void kernel_main() {
                 if constexpr (stats_fp32) {
                     reconfig_data_format_srca(dfb_ex_external_id);
                 }
-                compute_kernel_lib::reduce<
-                    PoolType::SUM,
-                    ReduceDim::REDUCE_SCALAR,
-                    dfb_ex_external_id,
-                    dfb_scaler_global_id,
-                    dfb_ex2_global_id,
-                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::col(dfb_ex_external_tiles_required),
-                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                    compute_kernel_lib::NoAccumulation{},
-                    scale_by_global_recip);
+                if constexpr (exact_mean) {
+                    pack_reconfig_data_format(dfb_ex2_partial_id, dfb_colsum_id);
+                    compute_kernel_lib::reduce<
+                        PoolType::SUM,
+                        ReduceDim::REDUCE_COL,
+                        dfb_ex_external_id,
+                        dfb_scaler_global_id,
+                        dfb_colsum_id,
+                        compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                        compute_kernel_lib::ReduceInputBlockShape::col(dfb_ex_external_tiles_required),
+                        compute_kernel_lib::ReduceInputMemoryLayout::contiguous());
+                    reconfig_data_format_srca(dfb_colsum_id);
+                    pack_reconfig_data_format(dfb_colsum_id, dfb_ex2_global_id);
+                    compute_kernel_lib::reduce<
+                        PoolType::SUM,
+                        ReduceDim::REDUCE_ROW,
+                        dfb_colsum_id,
+                        dfb_scaler_global_id,
+                        dfb_ex2_global_id,
+                        compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE,
+                        ReduceFp32Mode::Accurate>(
+                        compute_kernel_lib::ReduceInputBlockShape::single(),
+                        compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                        compute_kernel_lib::NoAccumulation{},
+                        scale_by_global_recip);
+                } else {
+                    compute_kernel_lib::reduce<
+                        PoolType::SUM,
+                        ReduceDim::REDUCE_SCALAR,
+                        dfb_ex_external_id,
+                        dfb_scaler_global_id,
+                        dfb_ex2_global_id,
+                        compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                        compute_kernel_lib::ReduceInputBlockShape::col(dfb_ex_external_tiles_required),
+                        compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                        compute_kernel_lib::NoAccumulation{},
+                        scale_by_global_recip);
+                }
                 if constexpr (num_cores_per_mcast_group > 1) {
                     dfb_ex2.reserve_back(1);
                     dfb_ex2.push_back(1);
