@@ -153,10 +153,9 @@ def _h2d_rows(tokens, actual_start: int = 0):
 
 
 def _mtp_rows(pool, actual_start: int, actual_isl=None, actual_end=None):
-    """Each chip's MTP lookahead slots as the inference server sends them: the ``MTP_LEVELS`` ids after its
-    last position, then pad. On a chunk starting off a per-chip boundary, the split chip's carry the next chip's
-    first ``MTP_LEVELS`` instead while its second run lies past ``actual_end``. deepseek_v3_d_p's
-    ``mtp_lookahead_positions``, inlined."""
+    """Each chip's MTP lookahead slots as the inference server sends them: the ``MTP_LEVELS`` ids after its last
+    position, then pad; a split chip whose second run lies at or past ``actual_end`` takes the next chip's first ids.
+    A copy of deepseek_v3_d_p's ``mtp_lookahead_positions``."""
     n_mtp = num_mtp_tokens(MTP_LEVELS)
     if not n_mtp:
         return None

@@ -19,17 +19,9 @@ __all__ = ["MTPSplitChipLookahead", "MTPUnionEmbedding", "MTPDeviceEmbedSource",
 
 
 class MTPSplitChipLookahead:
-    """The split chip's first-run lookahead: the next chip's first positions, placed in its MTP windows.
-
-    A chunk that starts off a ``window_len`` boundary is rotated so that ONE chip, the split chip, holds
-    two position runs: rows ``[0, split_row)`` end where the next chip's rows begin, and rows
-    ``[split_row, window_len)`` continue into its own lookahead. A window shifted by ``d`` therefore
-    needs, in rows ``[split_row - d, split_row)``, the next chip's first ``d`` positions. While the chunk
-    ends before the second run, the inference server sends those in the split chip's lookahead slots
-    (``mtp_lookahead_positions``). Once the second run holds the chunk's end, those slots carry the next
-    chunk's first positions instead, so ``next_chip`` is set and the next chip's first rows come over SP.
-    Every other chip keeps its own rows there, so one SPMD program serves the whole mesh.
-    """
+    """Gives the split chip's MTP windows the next chip's first positions, which a plain row shift would miss.
+    A chunk resuming mid-chip leaves one chip holding two position runs; the positions come from its own lookahead
+    slots, or over SP (``next_chip``) when those carry the next chunk's. Other chips keep their own rows."""
 
     def __init__(
         self,
@@ -60,13 +52,9 @@ class MTPSplitChipLookahead:
         chunk_end: int,
         num_levels: int,
     ) -> "Optional[MTPSplitChipLookahead]":
-        """The lookahead for the chunk ``[chunk_start, chunk_end)``, or None when no real row needs one.
-
-        None when every chip holds one run, or when the chunk ends ``num_levels`` or more positions before
-        ``chunk_start + split_row``, the next chip's first position: no real row's window reaches it then.
-        ``sp_rank`` is ``[1, 1, 1, 1]`` holding each chip's SP rank; ``all_gather_sp`` all-gathers a
-        ``[1, 1, 32, H/tp]`` tile over SP into ``[1, 1, 32*sp, H/tp]``, in SP order.
-        """
+        """The lookahead for the chunk ``[chunk_start, chunk_end)``, or None when no real row's window needs one:
+        every chip holds one run, or the chunk ends ``num_levels`` or more before the next chip's first position.
+        ``sp_rank`` holds each chip's SP rank; ``all_gather_sp`` gathers a tile per chip over SP, in SP order."""
         offset = chunk_start % window_len
         if sp_factor == 1 or offset == 0:
             return None
@@ -88,11 +76,8 @@ class MTPSplitChipLookahead:
         )
 
     def rows(self, union_rows: ttnn.Tensor, window_len: int) -> ttnn.Tensor:
-        """``[1, 1, 32, H/tp]`` ROW_MAJOR whose leading rows fill a window's rows before ``split_row``: on the
-        split chip the next chip's first positions -- its lookahead slots, or the next chip's first rows over
-        SP when ``next_chip`` is set -- and this chip's own rows from ``split_row`` everywhere else. Each is
-        cut to whole tiles first, so the masks multiply tiles. ``union_rows`` is ROW_MAJOR, not consumed.
-        """
+        """The ``[1, 1, 32, H/tp]`` ROW_MAJOR rows a window places just before ``split_row``, from ``union_rows``
+        (not consumed): on the split chip the next chip's first positions, elsewhere its rows from ``split_row``."""
         s = list(union_rows.shape)
         tile = ttnn.TILE_SIZE
 
@@ -194,8 +179,7 @@ class MTPUnionEmbedding:
 
     def window(self, shift: int) -> ttnn.Tensor:
         """MTP window ``shift`` (1..K): rows ``[shift, shift + window_len)`` as
-        ``[1, 1, window_len, H/tp]`` bf16 TILE, with the next chip's first positions placed just before the
-        split row when a split-chip lookahead is set. Caller frees it."""
+        ``[1, 1, window_len, H/tp]`` bf16 TILE, with the split-chip lookahead applied when set. Caller frees it."""
         assert 1 <= shift <= self.num_levels, f"shift {shift} out of range [1, {self.num_levels}]"
         src = self._row_major()
         s = list(src.shape)
@@ -229,6 +213,7 @@ class MTPUnionEmbedding:
         self._split_chip_lookahead = split_lookahead
 
     def clear_split_chip_lookahead(self) -> None:
+        """Back to plain shifts: :meth:`window` stops applying the lookahead."""
         self.set_split_chip_lookahead(None)
 
     def clear_rows(self, keep_mask: ttnn.Tensor) -> None:
@@ -301,6 +286,7 @@ class MTPUnionEmbedding:
         return self._split_chip_lookahead_rows
 
     def _drop_split_chip_lookahead_rows(self) -> None:
+        """Free the cached lookahead rows; the next :meth:`window` rebuilds them."""
         if self._split_chip_lookahead_rows is not None:
             ttnn.deallocate(self._split_chip_lookahead_rows)
             self._split_chip_lookahead_rows = None

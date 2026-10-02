@@ -90,14 +90,9 @@ def prepare_prefill_mtp_tokens(
     chunk_start: int = 0,
     chunk_end: Optional[int] = None,
 ) -> ttnn.Tensor:
-    """Upload the MTP lookahead ids, laid out as the inference server sends them.
-
-    ``token_ids`` is the chunk followed by the ``num_mtp_tokens`` ids after it; its real ids end at
-    ``chunk_end`` (default: the whole chunk). Chip ``c``'s first ``num_levels`` slots take the ids
-    ``mtp_lookahead_positions`` assigns it: on a chunk starting off a per-chip boundary, the split chip's
-    take the next chip's first ids while its second run lies past ``chunk_end``. Every later slot is
-    ``MTP_PAD_TOKEN_ID``. Block-cyclic only.
-    """
+    """Upload the MTP lookahead ids as the inference server lays them out (``mtp_lookahead_positions``).
+    ``token_ids`` is the chunk, then the ids after it, real up to ``chunk_end`` (default: the whole chunk).
+    Every other slot is ``MTP_PAD_TOKEN_ID``. Block-cyclic only."""
     assert num_mtp_tokens > 0, f"num_mtp_tokens must be positive, got {num_mtp_tokens}"
     isl_per_chip = (len(token_ids) - num_mtp_tokens) // sp_factor
     assert len(token_ids) == sp_factor * isl_per_chip + num_mtp_tokens, (
@@ -137,10 +132,10 @@ def mtp_generation_union_rows(
 ) -> list:
     """Where global position ``actual_end + level`` sits in each chip's union, or None.
 
-    The geometry of last-chunk generation, stated once for both mask builders below. A position can sit
-    in one chip's trunk and another's lookahead slots, and every copy gets patched. Block-cyclic only, and
-    keyed off ``rotated_chip_positions`` and ``mtp_lookahead_positions``: a chunk resuming off a chunk
-    boundary is rotated, so chip c's rows are NOT ``[chunk_start + c*isl_per_chip, ...)``.
+    The geometry of last-chunk generation, stated once for both mask builders below. Adjacent chips'
+    unions overlap, so a position can land on two chips and both get patched. Block-cyclic only, and
+    keyed off ``rotated_chip_positions``: a chunk resuming off a chunk boundary is rotated, so chip
+    c's rows are NOT ``[chunk_start + c*isl_per_chip, ...)``.
     """
     assert num_mtp_tokens > 0, f"num_mtp_tokens must be positive, got {num_mtp_tokens}"
     assert chunk_size % sp_factor == 0, f"chunk {chunk_size} not divisible by sp_factor {sp_factor}"

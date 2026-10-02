@@ -3,11 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """``MTPSplitChipLookahead`` on device: a chunk resuming at any tile-aligned start still gets exact MTP windows.
-
-The union holds a random table indexed by global position, its lookahead slots laid out as the inference
-server sends them, so the window every real row must produce is known in closed form -- the embedding
-``d`` positions on -- and the check is bit-exact. No weights.
-"""
+The union holds a random table row per global position, its lookahead slots laid out as the inference server
+sends them, so every window is known exactly and checked bit-exact. No weights."""
 
 from __future__ import annotations
 
@@ -35,9 +32,8 @@ PAD_ROW = 3 * CHUNK + 2 * LOOKAHEAD
 """The table row every pad slot holds: no real position's embedding."""
 
 STARTS = (0, 3200, 32, 608, 3296, 4512, 5088, 8000)
-"""Resume points: chunk- and chip-aligned controls (no split chip), the largest and the smallest split row, a
-mid-chunk resume, the last chip as the split chip at both extremes (its next chip wraps to chip 0), a later
-chunk."""
+"""Resume points: chunk- and chip-aligned controls (no split chip), the largest and smallest split rows, a
+mid-chunk resume, the last chip as the split chip at both extremes (next chip wraps to 0), a later chunk."""
 
 GENERATED_ROWS = (3, 40, 77, 200)
 """Rows of the gathered generation block that the patch writes, one per generated position."""
@@ -53,6 +49,7 @@ def _union_positions(start: int, sp: int, window_len: int, chunk_end: int) -> li
 
 
 def _upload(t: torch.Tensor, mesh_device, dims) -> ttnn.Tensor:
+    """Shard a host tensor over the mesh along ``dims``, as bf16 TILE in DRAM."""
     return ttnn.from_torch(
         t.contiguous(),
         device=mesh_device,
@@ -71,6 +68,7 @@ def _download(t: ttnn.Tensor, mesh_device) -> torch.Tensor:
 
 
 def _per_device_scalars(t: ttnn.Tensor) -> list:
+    """The first element of ``t`` on every device, in device order."""
     return [ttnn.to_torch(d).flatten()[0].item() for d in ttnn.get_device_tensors(t)]
 
 
@@ -108,6 +106,8 @@ _MESH_PARAMS = [
 @pytest.mark.skipif(not is_blackhole(), reason="deepseek_v3_d_p prefill is Blackhole-only")
 @pytest.mark.timeout(1200)
 def test_mtp_split_chip_windows(mesh_device, device_params, num_links):
+    """Every MTP window of every ``STARTS`` resume, for both lookahead sources and one- and two-block unions, before
+    and after a generation patch; also the SP-rank masks and where ``for_chunk_start`` turns the lookahead on."""
     sp, tp = tuple(mesh_device.shape)
     window_len = CHUNK // sp
     union_len = window_len + LOOKAHEAD
@@ -147,8 +147,7 @@ def test_mtp_split_chip_windows(mesh_device, device_params, num_links):
                 if lookahead is not None:
                     lookahead.deallocate()
 
-        # Ending one past the next chip's first position, the split chip's slots carry that chip's first ids; on a
-        # full chunk the split chip holds the end, its slots carry the next chunk's, and the lookahead all-gathers.
+        # Both lookahead sources: an end one past the next chip's first position (own slots), a full chunk (SP).
         chunk_ends = (start + CHUNK, start + window_len - offset + 1) if offset else (start + CHUNK,)
         for chunk_end in chunk_ends:
             positions = _union_positions(start, sp, window_len, chunk_end)

@@ -90,10 +90,7 @@ SCHEDULE_AXIS = {
 """Name -> K -> the ``(actual_start, actual_isl)`` of every chunk this test drives, in order.
 
 ``provided-*`` vary how much of the final chunk's lookahead is already in the stream; ``partial``
-ends mid-chunk, and ``multiturn`` resumes one cache at a chip-aligned but not chunk-aligned start.
-``multiturn-split`` resumes inside a chip's rows, for a second turn of two chunks;
-``multiturn-split-end`` stops that turn just short of the split row, so generation writes the rows the
-split chip's lookahead reads.
+ends mid-chunk, and ``multiturn*`` run two turns on one cache, varying where the resume and the turn end sit.
 """
 
 MTP_LEVEL_AXIS = (4, 7)
@@ -216,8 +213,7 @@ def _mtp_union(
 
     Mirrors the runtime's first-rank branch: upload both id tensors, gather each with the model's own
     embedding, and hand the blocks to ``from_ids``. The union owns ``trunk`` and frees it. ``start``
-    lets both uploads place each id on the chip that will rope and cache it; ``end``, the chunk's real
-    end, lays out the lookahead slots as the inference server sends them.
+    lets both uploads place each id on the chip that will rope and cache it.
     """
     chunk_ids = prepare_prefill_input_tensor(
         list(stream[: transformer.seq_len]),
@@ -356,8 +352,7 @@ def test_mtp_transformer_chunks(
     """GLM-5.3 MTP4/MTP7 chunked prefill end to end: every window, every level, exact ids.
 
     Four claims, most-local first: the stream the socket delivers, every level's output against the
-    teacher-forced reference, row 0 and the split-chip lookahead rows of every window, and the last chunk's
-    generated tokens.
+    teacher-forced reference, row 0 and the split-chip rows of every window, and the last chunk's generated tokens.
     """
     torch.manual_seed(42)
     if not skip_pcc and num_layers == 78 and schedule == "provided-all":
