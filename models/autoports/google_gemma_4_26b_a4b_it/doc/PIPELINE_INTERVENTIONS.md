@@ -581,6 +581,21 @@ to faster warmed kernels or one cache change. README is consolidated into a
 current handoff, separating ongoing CI from historical probes. Combined results
 remain pending. Resumed active time~287min, cumulative~9h40m.
 
+10:42 UTC: first actual combined original-five run36983437902 completes at
+10:35:00: **2h14m54s dispatch-to-finish**,2h01m06.002s trial span,7100.457s
+agent sum,2/5 reward1 (Astropy/Django), all five submit without timeout. This
+is78.25% shorter than original SWE trial span, with changed policy/precision
+and different outcomes, not a serving-only win or all-five correctness success.
+Failure audit: Matplotlib truncates source, Sympy breaks two regressions,
+sklearn fixes the example path but misses required estimator state. Tools23.459s
+versus7054.571s server e2e,63.17% TTFT. Forecast186m40s versus actual134m54s;
+optimistic65m missed. Full table/provenance in the suite log. No ten-task expansion.
+Old-policy advisory Sympy retains correct patch at1200.440s but does not submit;
+cleanup prevents late actions. TTIed5cd392 removes50ms host polling overhead
+(paired CPU-only median50.255→0.488ms,58 tests). Next is a bounded paired local
+sklearn review control, not another full suite. Active cumulative~10h04m,
+no new human intervention, image build or device reset. All CI is complete.
+
 - TTFT: `doc/ttft_optimization/`.
 - Remote benchmarks/evals:
   `readiness_vllm/ttft_optimization_remote/README.md`.
