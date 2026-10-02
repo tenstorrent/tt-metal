@@ -88,6 +88,13 @@ public:
     // XIPify
     void MakeExecuteInPlace();
 
+    // Streaming-profiler zone ids (hostdev/profiler_zone_id.h): move the non-ALLOC .tt_zone_ids
+    // section to BASE, re-resolving every relocation against it -- the lui/addi pair each zone site
+    // materializes its id with, and the id word of each .tt_zone_meta record -- so the image emits
+    // ids [BASE, BASE + size). Needs the link's relocations (-Wl,--emit-relocs). Returns the
+    // section's size, 0 when the image has no zone sites.
+    uint32_t RebaseZoneIds(address_t base);
+
 private:
     class Impl;
 

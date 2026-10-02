@@ -2,81 +2,88 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Structural zone ids and the ELF records that name them. An id travels in low27 of a streaming marker's
-// word0; the DRAM backend keeps its own 16-bit timer_id.
-//   zone_id = tu_id << TT_ZONE_LOCAL_BITS | local
-//   tu_id  13 bits  per-TU id from the flock-guarded registry in jit_build/build.cpp, -DTT_PROFILER_TU_ID
-//   local  14 bits  the zone's raw __COUNTER__ in this TU (other __COUNTER__ uses eat the same budget)
-// Both halves are unique by construction and overflow is a static_assert at the site. Nothing on the host may
-// discriminate on a structural id's value: it moves when a source line does. Ids that must be the same constant
-// on both sides live in the reserved tu partition below, which the registry never hands out.
-// The record is emitted from assembler directives (after libmeta): zero .text and zero device memory, since
-// neither .tt_zone_str nor .tt_zone_meta is SHF_ALLOC and the host rebases pointers by the section's own
-// sh_addr; .tt_zone_str is "MS" so __FILE__ is stored once per file; .tt_zone_meta has a real sh_entsize of
-// 16 so the host walks a plain array; the id is stored explicitly because an inlined-away zone leaves a hole
-// in emission order.
+// Zone ids and the ELF records that name them, for the streaming device profiler. An id travels in low27 of a
+// streaming marker's word0; the DRAM backend keeps its own 16-bit timer_id.
+//
+// An id is the ADDRESS of a one-byte handle the zone site emits into the non-ALLOC section .tt_zone_ids. The
+// linker lays the handles out back to back from TT_ZONE_IDS_LINK_VMA (hw/toolchain/main.ld), so one image's
+// ids are dense in link order. When the host loads the image (llrt/zone_meta.cpp, from ll_api::memory) it
+// gives the image the next free block of the process-wide 16-bit id space and rebases the section there by
+// re-resolving the relocations against it: the lui/addi pair each site materializes its id with, and the id
+// word of each .tt_zone_meta record. Ids are thus unique across every image a process loads, with no per-TU
+// partition, no registry file, and nothing computed on the device: an id costs the two instructions any
+// 32-bit constant does. Nothing on the host may discriminate on an id's value: it depends on load order. The
+// one exception is TT_ZONE_STALL_ID, the top of the space, which the allocator never hands out.
+//
+// Emission is assembler directives inside the one asm statement of the site's id(), after libmeta: zero
+// .text beyond the two instructions and zero device memory, since none of .tt_zone_ids, .tt_zone_str,
+// .tt_zone_meta is SHF_ALLOC. Directives rather than C++ objects with section attributes because a zone site
+// inside a vague-linkage function (inline, template, class-template member) makes such objects COMDAT, which
+// GCC will not put in a named section (without LTO a "section type conflict", with LTO an lto1 ICE). The
+// handle's label is local to the object and guarded by .ifndef, so however many times an inlined site is
+// expanded there is one handle and one record for it; TT_ZONE_TU_TAG (this TU's index in its link, from
+// jit_build/build.cpp) keeps labels apart when LTO merges a link's TUs into one assembly. .tt_zone_str is
+// "MS" so __FILE__ is stored once per file; .tt_zone_meta has a real sh_entsize of 16 so the host walks a
+// plain array.
 // Record layout (little-endian; must match ZoneMetaRecord in llrt/zone_meta.cpp):
-//   [0] u32 zone_id   [4] u32 name_ptr (VMA in .tt_zone_str)   [8] u32 file_ptr   [12] u32 line
+//   [0] u32 zone_id (the handle's VMA)   [4] u32 name_ptr (VMA in .tt_zone_str)   [8] u32 file_ptr   [12] u32 line
 #pragma once
 
 #include <stdint.h>
 
-// Total width of the id as it sits in low27 of a streaming marker word0.
-#define TT_ZONE_ID_BITS 27
-
-// The split: change this line and both halves resize together.
-#define TT_ZONE_LOCAL_BITS 14
-#define TT_ZONE_TU_BITS (TT_ZONE_ID_BITS - TT_ZONE_LOCAL_BITS)
-
-#define TT_ZONE_LOCAL_COUNT (1u << TT_ZONE_LOCAL_BITS)
-#define TT_ZONE_TU_COUNT (1u << TT_ZONE_TU_BITS)
-#define TT_ZONE_ID_MASK ((1u << TT_ZONE_ID_BITS) - 1u)
-
-#define TT_ZONE_MAKE_ID(tu, local) ((((unsigned)(tu)) << TT_ZONE_LOCAL_BITS) | ((unsigned)(local)))
-#define TT_ZONE_TU_OF(id) (((unsigned)(id)) >> TT_ZONE_LOCAL_BITS)
-#define TT_ZONE_LOCAL_OF(id) (((unsigned)(id)) & (TT_ZONE_LOCAL_COUNT - 1u))
-#define TT_ZONE_RESERVED_TU (TT_ZONE_TU_COUNT - 1u)
+// The id space: a process assigns [0, TT_ZONE_STALL_ID) to images in load order.
+#define TT_ZONE_ID_BITS 16
+#define TT_ZONE_ID_COUNT (1u << TT_ZONE_ID_BITS)
+#define TT_ZONE_ID_MASK (TT_ZONE_ID_COUNT - 1u)
 // The profiler's own stall zone: recognized by value, so it has no ELF record and no source location.
-#define TT_ZONE_STALL_ID TT_ZONE_MAKE_ID(TT_ZONE_RESERVED_TU, 0)
+#define TT_ZONE_STALL_ID (TT_ZONE_ID_COUNT - 1u)
 
 // Bytes per .tt_zone_meta record. Also the section's sh_entsize -- see the host walk in llrt/zone_meta.cpp.
 #define TT_ZONE_META_RECORD_BYTES 16
 
+// Where the linker script places .tt_zone_ids before the host rebases it (hw/toolchain/main.ld carries the
+// same value). Any address with nonzero upper 20 bits serves: it keeps linker relaxation from folding a site's
+// lui/addi into one instruction, which the host could not rebase.
+#define TT_ZONE_IDS_LINK_VMA 0x6800000
+
 #define TT_ZONE_STR_(x) #x
 #define TT_ZONE_STR(x) TT_ZONE_STR_(x)
 
-// Injected by the JIT build; a TU the host did not compile falls back to partition 0.
-#ifndef TT_PROFILER_TU_ID
-#define TT_PROFILER_TU_ID 0
+// This TU's index among the objects of its link, injected by the JIT build; a TU built outside it is alone.
+#ifndef TT_ZONE_TU_TAG
+#define TT_ZONE_TU_TAG 0
 #endif
 
-// Raw __COUNTER__, not rebased against a GAS `.set` symbol: under -flto=auto lto-wrapper partitions that
-// symbol away from the records and the link dies.
-#define TT_ZONE_LOCAL_IDX(ctr) ((unsigned)(ctr))
+#define TT_ZONE_LABEL(ctr) "__tt_zone_" TT_ZONE_STR(TT_ZONE_TU_TAG) "_" TT_ZONE_STR(ctr)
 
-// Declares `var` as this site's zone id and emits its record; usable at namespace or block scope. `ctr` is a
-// parameter because __COUNTER__ increments on every appearance and the id and the record must see one value.
-#define TT_ZONE_DEFINE_ID_AT(var, name, ctr)                                                               \
-    static_assert(                                                                                         \
-        TT_ZONE_LOCAL_IDX(ctr) < TT_ZONE_LOCAL_COUNT,                                                      \
-        "too many KERNEL_PROFILER zone sites in one translation unit for TT_ZONE_LOCAL_BITS -- widen the " \
-        "split in hostdev/profiler_zone_id.h");                                                      \
-    static_assert(                                                                                         \
-        (unsigned)(TT_PROFILER_TU_ID) < TT_ZONE_RESERVED_TU,                                               \
-        "TT_PROFILER_TU_ID is not below TT_ZONE_RESERVED_TU -- the tu-id registry handed out an id this "  \
-        "split cannot express; see get_or_assign_profiler_tu_id in jit_build/build.cpp");                  \
-    constexpr uint32_t var = (uint32_t)TT_ZONE_MAKE_ID(TT_PROFILER_TU_ID, TT_ZONE_LOCAL_IDX(ctr));         \
-    asm(".pushsection .tt_zone_str,\"MS\",@progbits,1\n"                                                      \
-        "8880:\t.asciz \"" name "\"\n"                                                                        \
-        "8881:\t.asciz \"" __FILE__ "\"\n"                                                                    \
-        ".popsection\n"                                                                                       \
-        ".pushsection .tt_zone_meta,\"M\",@progbits," TT_ZONE_STR(TT_ZONE_META_RECORD_BYTES) "\n"             \
-        ".balign 4\n"                                                                                         \
-        ".long ((" TT_ZONE_STR(TT_PROFILER_TU_ID) ") << " TT_ZONE_STR(TT_ZONE_LOCAL_BITS) ") | (" TT_ZONE_STR( \
-            ctr) ")\n"                                                                                        \
-        ".long 8880b\n"                                                                                       \
-        ".long 8881b\n"                                                                                       \
-        ".long " TT_ZONE_STR(__LINE__) "\n"                                                                   \
-        ".popsection\n")
+// Declares `site` as this zone site's type; site::id() returns the site's id in two instructions with no
+// memory access. Usable at namespace or block scope. `ctr` is a parameter because __COUNTER__ increments on
+// every appearance and the label needs one value. The asm is not volatile: beyond its result it has no effect
+// the compiler must order, so repeated uses of one site in a function may share a materialization.
+#define TT_ZONE_DEFINE_ID_AT(site, name, ctr)                                                                   \
+    struct site {                                                                                               \
+        static inline __attribute__((always_inline)) uint32_t id() {                                            \
+            uint32_t v;                                                                                         \
+            asm(".ifndef " TT_ZONE_LABEL(ctr) "\n"                                                            \
+                ".pushsection .tt_zone_ids,\"\",@progbits\n" TT_ZONE_LABEL(ctr) ":\t.byte 0\n"               \
+                ".popsection\n"                                                                               \
+                ".pushsection .tt_zone_str,\"MS\",@progbits,1\n"                                              \
+                "8880:\t.asciz \"" name "\"\n"                                                                \
+                "8881:\t.asciz \"" __FILE__ "\"\n"                                                            \
+                ".popsection\n"                                                                               \
+                ".pushsection .tt_zone_meta,\"M\",@progbits," TT_ZONE_STR(TT_ZONE_META_RECORD_BYTES) "\n"     \
+                ".balign 4\n"                                                                                 \
+                ".long " TT_ZONE_LABEL(ctr) "\n"                                                              \
+                ".long 8880b\n"                                                                               \
+                ".long 8881b\n"                                                                               \
+                ".long " TT_ZONE_STR(__LINE__) "\n"                                                           \
+                ".popsection\n"                                                                               \
+                ".endif\n\t"                                                                                  \
+                "lui %0, %%hi(" TT_ZONE_LABEL(ctr) ")\n\t"                                                    \
+                "addi %0, %0, %%lo(" TT_ZONE_LABEL(ctr) ")"                                                   \
+                : "=r"(v)); \
+            return v;                                                                                           \
+        }                                                                                                       \
+    }
 
-#define TT_ZONE_DEFINE_ID(var, name) TT_ZONE_DEFINE_ID_AT(var, name, __COUNTER__)
+#define TT_ZONE_DEFINE_ID(site, name) TT_ZONE_DEFINE_ID_AT(site, name, __COUNTER__)

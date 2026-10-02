@@ -93,6 +93,7 @@ public:
     virtual void WeakenDataSymbols(std::span<const std::string_view> strong_names) = 0;
     virtual void ObjectifyExecutable() = 0;
     virtual void XIPify() = 0;
+    virtual uint32_t RebaseZoneIds(address_t base) = 0;
 
     virtual std::span<std::byte> GetSectionContents(std::string_view name, uint64_t& virtual_address) const = 0;
 
@@ -130,6 +131,7 @@ public:
     virtual void WeakenDataSymbols(std::span<const std::string_view> strong_names) override;
     virtual void ObjectifyExecutable() override;
     virtual void XIPify() override;
+    virtual uint32_t RebaseZoneIds(address_t base) override;
 
     virtual std::span<std::byte> GetSectionContents(std::string_view name, uint64_t& virtual_address) const override {
         for (const auto& shdr : GetShdrs()) {
@@ -349,6 +351,8 @@ void ElfFile::WeakenDataSymbols(std::span<std::string_view const> strong) { pimp
 void ElfFile::ObjectifyExecutable() { pimpl_->ObjectifyExecutable(); }
 
 void ElfFile::MakeExecuteInPlace() { pimpl_->XIPify(); }
+
+uint32_t ElfFile::RebaseZoneIds(address_t base) { return pimpl_->RebaseZoneIds(base); }
 
 void ElfFile::Impl::XIPify() {
     // The text segment is now XIP
@@ -698,6 +702,115 @@ void ElfFile::Impl::Elf<Is64>::ObjectifyExecutable() {
     hdr.e_phoff = 0;
     hdr.e_phnum = 0;
     hdr.e_phentsize = 0;
+}
+
+// The zone-id section is the only one whose VMA the host chooses: the link places it at a fixed fake
+// address (hw/toolchain/main.ld) so that each site's id is lui/addi of a one-byte handle, and the loader moves
+// it to the image's block of the 16-bit id space by rewriting those immediates. Both halves of a pair carry
+// the full symbol value in their own reloc, so they are patched independently and need no pairing.
+template <bool Is64>
+uint32_t ElfFile::Impl::Elf<Is64>::RebaseZoneIds(address_t base) {
+    unsigned ids_ix = 0;
+    for (unsigned ix = 1; ix < GetShdrs().size(); ix++) {
+        if (std::strcmp(GetName(GetShdr(ix)), ".tt_zone_ids") == 0) {
+            ids_ix = ix;
+            break;
+        }
+    }
+    if (ids_ix == 0) {
+        return 0;
+    }
+    Shdr& ids = GetShdrs()[ids_ix];
+    if (ids.sh_flags & SHF_ALLOC) {
+        TT_THROW("{}: .tt_zone_ids is allocatable; the linker script must place it (INFO)", path_);
+    }
+    if (ids.sh_size == 0) {
+        return 0;
+    }
+    // Relaxation folds lui/addi of an address below 4 KiB into one addi, which cannot be rebased; the linker
+    // script's placement rules that out, and an orphan (a script without the section) lands at 0.
+    if ((ids.sh_addr >> mask_hi20_shift) == 0) {
+        TT_THROW(
+            "{}: .tt_zone_ids sits at {:#x}; the linker script must place it above 4 KiB so each zone site keeps "
+            "its lui (hw/toolchain/main.ld TT_ZONE_IDS_VMA)",
+            path_,
+            ids.sh_addr);
+    }
+    const uint32_t delta = base - static_cast<uint32_t>(ids.sh_addr);
+    if (delta == 0) {
+        return ids.sh_size;
+    }
+
+    bool saw_relocs = false;
+    for (const auto& relhdr : GetShdrs()) {
+        if (relhdr.sh_type != SHT_RELA) {
+            continue;
+        }
+        saw_relocs = true;
+        const Shdr& target = GetShdr(relhdr.sh_info);
+        if (target.sh_type == SHT_NOBITS) {
+            continue;
+        }
+        auto symbols = GetSymbols(GetShdr(relhdr.sh_link));
+        for (auto& reloc : GetRelocations(relhdr)) {
+            const unsigned type = GetRelocType(reloc);
+            if (type == R_RISCV_NONE || type == R_RISCV_RELAX) {
+                continue;
+            }
+            const unsigned sym_ix = GetRelocSymIx(reloc);
+            if (sym_ix >= symbols.size() || symbols[sym_ix].st_shndx != ids_ix) {
+                continue;
+            }
+            if (reloc.r_offset < target.sh_addr ||
+                reloc.r_offset - target.sh_addr + sizeof(uint32_t) > target.sh_size) {
+                TT_THROW(
+                    "{}: zone-id relocation @ {:#x} is outside of section {}", path_, reloc.r_offset, GetName(target));
+            }
+            const uint32_t value =
+                static_cast<uint32_t>(symbols[sym_ix].st_value) + static_cast<uint32_t>(reloc.r_addend) + delta;
+            const uint32_t insn = Read32(target, reloc.r_offset);
+            switch (type) {
+                case R_RISCV_HI20:
+                    Write32(
+                        target,
+                        reloc.r_offset,
+                        (insn & mask_hi20) | ((((value + 0x800u) >> mask_hi20_shift) << mask_hi20_shift)));
+                    break;
+                case R_RISCV_LO12_I:
+                    Write32(target, reloc.r_offset, (insn & mask_lo12_i) | ((value & 0xfffu) << mask_lo12_i_shift));
+                    break;
+                case R_RISCV_LO12_S:
+                    Write32(
+                        target,
+                        reloc.r_offset,
+                        (insn & mask_lo12_s) | ((value & ((1u << mask_lo12_s_split) - 1)) << mask_lo12_s_shift_1) |
+                            (((value & 0xfffu) >> mask_lo12_s_split) << mask_lo12_s_shift_2));
+                    break;
+                case R_RISCV_32: Write32(target, reloc.r_offset, value); break;
+                default:
+                    TT_THROW(
+                        "{}: unexpected relocation type {} against .tt_zone_ids at {:#x}", path_, type, reloc.r_offset);
+            }
+        }
+    }
+    if (!saw_relocs) {
+        TT_THROW("{}: has zone sites but no relocations; link it with -Wl,--emit-relocs", path_);
+    }
+
+    // Keep the symbol table and the section header consistent with the patched code, so that a dump of this
+    // image (the .xip.elf the loader writes) and a second rebase read true.
+    for (const auto& shdr : GetShdrs()) {
+        if (shdr.sh_type != SHT_SYMTAB) {
+            continue;
+        }
+        for (auto& sym : GetSymbols(shdr)) {
+            if (sym.st_shndx == ids_ix) {
+                sym.st_value += delta;
+            }
+        }
+    }
+    ids.sh_addr = base;
+    return ids.sh_size;
 }
 
 template <bool Is64>
