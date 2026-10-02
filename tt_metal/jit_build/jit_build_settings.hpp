@@ -135,6 +135,33 @@ public:
     // prefetcher_pipe_id is 0xFF unless the binding is a PrefetcherPipe relay, in which case
     // it identifies the persistent slot the relay-token constructor aligns from on TRISC.
 
+    // Emits a stream of Compile time resource bindings.
+    // Each binding represents a kind of user facing resource provided to the user kernel.
+    // Bindings consists of individual entries that tries to model an object instaniation,
+    // where the object is an individual resource binding.
+    //
+    // Conceptually, scratchpad bindings can be represented as follows:
+    //  Binding {
+    //      name: "scratchpad",
+    //      emission_namespace: "scratch",
+    //      type: "ScratchpadBinding",
+    //      entries: [
+    //          BindingEntry {
+    //              name: "scratchpad",
+    //              args: [/* scratchpad size = */ "1024"]
+    //          }
+    //      ],
+    //      // ...
+    //  }
+    //
+    // This is then expected to be serialized by the underlying build system into:
+    // namespace scratch {
+    //   constexpr ScratchpadBinding scratchpad_binding{1024};
+    // }
+    //
+    // Post condition:
+    // - For each Binding::emission_namespace, there maybe only one Binding object that have a non-empty
+    // programmatic_getter_config.
     virtual void process_user_facing_resource_binding_handles(
         const std::function<void(const tt::tt_metal::Binding&)>&) const {}
 

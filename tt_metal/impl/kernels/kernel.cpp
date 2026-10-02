@@ -311,6 +311,25 @@ void Kernel::process_named_compile_time_args(
 
 void Kernel::process_user_facing_resource_binding_handles(
     const std::function<void(const tt::tt_metal::Binding&)>& callback) const {
+    // Emit the header content:
+    //  - DFB binding tokens are emitted into the dfb namespace
+    //  - Semaphore binding tokens are emitted into the sem namespace
+    //  - TensorBindings and TensorBindingSequences are emitted into the tensor namespace
+    //  - Scratchpad binding tokens are emitted into the scratch namespace
+    //  - PrefetcherPipe binding tokens are emitted into the pipe namespace
+    //
+    // NOTE: DFB and semaphore tokens are emitted as constexpr variables, i.e. as implicit CTAs.
+    //       This is a design decision; we could alternatively emit them as implicit CRTAs.
+    //       (Or, we could give the user the choice via the Metal 2.0 host API, on a per-kernel or per-binding basis.)
+    //       Implicit CTA is simpler and cheaper, but could theoretically cause unnecessary kernel cache hit misses.
+    //       We are starting simple and can adjust later if problems arise.
+    //       Legacy kernels passed semaphores both ways, kernel folks think this was more random than intentional.
+    //
+    //       TensorBindings are the first binding category to use implicit CRTAs (for the tensor base address).
+    //       Each binding's tensor base address is specified per-enqueue, from the corresponding TensorArgument.
+    //       The static layout tensor metadata (rank, shape, bank coords, etc.) comes in through positional CTAs,
+    //       added automatically by the Metal 2.0 host API machinery.
+
     Binding general_dfb_binding{
         .name = "DFBBindingToken",
         .emission_namespace = "dfb",
@@ -390,7 +409,6 @@ void Kernel::process_user_facing_resource_binding_handles(
         .name = "TensorBindingToken",
         .emission_namespace = "tensor",
         .binding_type = "::tensor_accessor::TensorBindingToken",
-        .is_binding_type_templated = true,
         .includes = {"api/tensor/tensor_binding_token.h"},
         .programmatic_getter_config =
             ProgrammaticBindingTokenGetterConfig{
