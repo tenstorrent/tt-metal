@@ -19,9 +19,12 @@
 #include "mesh_device_impl.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/debug/inspector/inspector.hpp"
+#include "impl/lightmetal/host_api_capture_helpers.hpp"
 #include <tt-metalium/distributed_context.hpp>
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
 #include <cstring>
 #include <map>
 #include <mutex>
@@ -174,6 +177,46 @@ void validate_mesh_buffer_config(const MeshBufferConfig& config, const MeshDevic
         mesh_device.num_devices());
 }
 
+// Device buffers are built lazily, except where creating one does more than wrap the address: per-core allocations
+// carry their own addresses, Emule registers each device's live ranges, and light-metal capture records buffers in
+// allocation order.
+bool build_all_device_buffers_at_allocation(MeshDevice& mesh_device, const DeviceLocalBufferConfig& config) {
+    return per_core_allocation::is_per_core_allocation(config.sharding_args) ||
+           mesh_device.impl().metal_env().get_cluster().get_target_device_type() == tt::TargetDevice::Emule ||
+           LightMetalCaptureContext::get().is_tracing();
+}
+
+// Builds the non-owning Buffer for one device of `mesh_buffer`, at the mesh buffer's lockstep address.
+std::shared_ptr<Buffer> create_device_buffer_at_lockstep_address(const MeshBuffer& mesh_buffer, IDevice* device) {
+    const auto& config = mesh_buffer.device_local_config();
+    std::shared_ptr<Buffer> buffer = BufferImpl::create(
+        device,
+        mesh_buffer.address(),
+        mesh_buffer.device_local_size(),
+        config.page_size,
+        config.buffer_type,
+        config.sharding_args,
+        config.bottom_up,
+        /*sub_device_id=*/std::nullopt);  // TODO: sub_device_id is unsupported
+    // For per-core allocation, propagate per-core addresses from the backing buffer.
+    if (per_core_allocation::is_per_core_allocation(*buffer)) {
+        const Buffer* backing_buffer = mesh_buffer.get_backing_buffer();
+        TT_FATAL(backing_buffer != nullptr, "Per-core allocation is not supported for externally-owned MeshBuffers");
+        per_core_allocation::copy_per_core_addresses(*buffer, *backing_buffer);
+    }
+    return buffer;
+}
+
+// Guards the lazily built entries of MeshBuffer::buffers_. A pool keyed by address keeps the lock out of the class.
+// It is only held to read or publish one entry, so MeshBuffers that share a mutex cannot deadlock.
+std::mutex& lazy_device_buffer_mutex(const MeshBuffer* mesh_buffer) {
+    constexpr int kNumMutexBits = 6;
+    static std::array<std::mutex, 1 << kNumMutexBits> mutexes;
+    // Heap addresses are aligned, so take the high bits of a multiplicative hash.
+    const auto key = static_cast<uint64_t>(reinterpret_cast<std::uintptr_t>(mesh_buffer));
+    return mutexes[(key * 0x9E3779B97F4A7C15ULL) >> (64 - kNumMutexBits)];
+}
+
 }  // namespace
 
 uint32_t ShardedBufferConfig::compute_datum_size_bytes() const {
@@ -294,43 +337,29 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
     return mesh_buffer;
 }
 
-std::shared_ptr<Buffer> MeshBuffer::create_device_buffer(const MeshCoordinate& coord) const {
-    std::shared_ptr<Buffer> buffer = BufferImpl::create(
-        device()->impl().get_device(coord),
-        address_,
-        device_local_size_,
-        device_local_config_.page_size,
-        device_local_config_.buffer_type,
-        device_local_config_.sharding_args,
-        device_local_config_.bottom_up,
-        /*sub_device_id=*/std::nullopt);  // TODO: sub_device_id is unsupported
-    // For per-core allocation, propagate per-core addresses from the backing buffer.
-    if (per_core_allocation::is_per_core_allocation(*buffer)) {
-        TT_FATAL(
-            std::holds_alternative<OwnedBufferState>(state_),
-            "Per-core allocation is not supported for externally-owned MeshBuffers");
-        const auto& owned = std::get<OwnedBufferState>(state_);
-        per_core_allocation::copy_per_core_addresses(*buffer, *owned.backing_buffer);
-    }
-    return buffer;
-}
-
 void MeshBuffer::initialize_device_buffers() {
-    // Building a Buffer per device made every allocation cost O(mesh size) on the host. Build the reference buffer
-    // now and leave the rest to get_device_buffer(); per-core allocations stay eager, each device buffer carries its
-    // own per-core addresses.
-    const bool build_all = per_core_allocation::is_per_core_allocation(device_local_config_.sharding_args);
-    if (auto mesh_device = mesh_device_.lock(); mesh_device != nullptr) {
-        bool built_reference = false;
+    auto mesh_device = mesh_device_.lock();
+    if (mesh_device == nullptr) {
+        return;
+    }
+    if (build_all_device_buffers_at_allocation(*mesh_device, device_local_config_)) {
         for (auto& [coord, device_buffer] : buffers_) {
-            if (!mesh_device->impl().is_local(coord)) {
-                continue;
+            if (mesh_device->impl().is_local(coord)) {
+                device_buffer = MaybeRemote<std::shared_ptr<Buffer>>::local(
+                    create_device_buffer_at_lockstep_address(*this, mesh_device->impl().get_device(coord)));
             }
-            if (build_all || !built_reference) {
-                device_buffer = MaybeRemote<std::shared_ptr<Buffer>>::local(create_device_buffer(coord));
-                built_reference = true;
-            } else {
-                device_buffer = MaybeRemote<std::shared_ptr<Buffer>>::local(nullptr);
+        }
+    } else {
+        // Build device buffers lazily so that allocation does not scale with the mesh size. Only the reference (first
+        // local) buffer, which dispatch reads, is built here; get_device_buffer() builds the others on first use.
+        bool is_reference = true;
+        for (auto& [coord, device_buffer] : buffers_) {
+            if (mesh_device->impl().is_local(coord)) {
+                device_buffer = MaybeRemote<std::shared_ptr<Buffer>>::local(
+                    is_reference
+                        ? create_device_buffer_at_lockstep_address(*this, mesh_device->impl().get_device(coord))
+                        : nullptr);
+                is_reference = false;
             }
         }
     }
@@ -340,9 +369,7 @@ void MeshBuffer::initialize_device_buffers() {
     // Only L1 buffers need mirroring — DRAM buffers use a separate address space.
     // Note: we check HYBRID via rtoptions rather than mesh_device->allocator_impl() because
     // allocator_impl() crashes on remote-only MeshDevices (sub_device_manager_tracker_ is null).
-    if (auto mesh_device = mesh_device_.lock();
-        mesh_device != nullptr && std::holds_alternative<OwnedBufferState>(state_) &&
-        device_local_config_.buffer_type == BufferType::L1 &&
+    if (std::holds_alternative<OwnedBufferState>(state_) && device_local_config_.buffer_type == BufferType::L1 &&
         mesh_device->impl().metal_env().get_rtoptions().get_allocator_mode_hybrid()) {
         auto* backing = get_backing_buffer();
         auto alloc_size = backing->aligned_size_per_bank();
@@ -459,10 +486,37 @@ MeshDevice* MeshBuffer::device() const {
 }
 
 Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const {
-    std::lock_guard<std::mutex> lock(device_buffers_mutex_);
-    auto& device_buffer = buffers_.at(device_coord).value();
+    // Builds the entry on first use; see initialize_device_buffers(). The entries live in the container's heap storage,
+    // not in the MeshBuffer object, so filling one in from this const method is well defined.
+    auto& device_buffer = const_cast<std::shared_ptr<Buffer>&>(buffers_.at(device_coord).value());
+    std::mutex& entry_mutex = lazy_device_buffer_mutex(this);
+    {
+        std::lock_guard<std::mutex> lock(entry_mutex);
+        if (device_buffer != nullptr) {
+            return device_buffer.get();
+        }
+    }
+
+    // After deallocate() the address may already belong to another buffer.
+    auto mesh_device = mesh_device_.lock();
+    TT_FATAL(
+        !std::holds_alternative<DeallocatedState>(state_) && mesh_device != nullptr,
+        "MeshBuffer::get_device_buffer({}): the MeshBuffer is deallocated or its MeshDevice is gone",
+        device_coord);
+    IDevice* device = mesh_device->impl().get_device(device_coord);
+    TT_FATAL(
+        device->is_initialized(), "MeshBuffer::get_device_buffer({}): device {} is closed", device_coord, device->id());
+
+    // Build outside the lock; if another thread publishes the entry first, this copy is dropped.
+    std::shared_ptr<Buffer> buffer;
+    {
+        // Keep lazily built buffers out of a light-metal capture that started after this allocation.
+        LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+        buffer = create_device_buffer_at_lockstep_address(*this, device);
+    }
+    std::lock_guard<std::mutex> lock(entry_mutex);
     if (device_buffer == nullptr) {
-        device_buffer = create_device_buffer(device_coord);
+        device_buffer = std::move(buffer);
     }
     return device_buffer.get();
 }
