@@ -60,11 +60,13 @@ benchmark and a sibling sweep.
 | refresh | only what closed since the last mining | `mining/marker.py delta`, then `fetch_repo.py --since` (*Refreshing the mined history*) |
 
 Full, area and bench runs fan out through the **Workflow** tool. That needs the user's explicit opt-in to
-multi-agent orchestration. Get it, and state the cost first. Measured: one 50-batch wave took about 37M tokens and
-881 agents. A full tt-metal run (about 18,000 files and 4.4M lines with the default extensions, so about 1,250
-batches) is therefore about 25 waves: roughly 0.9B tokens and 22,000 agents. That wave was 1-3 file benchmark
-batches, and a real batch gives each hunter more code to read, so treat these as a floor. Verification is most of the
-agent count.
+multi-agent orchestration. Get it, and state the cost first, from the batch count `init_run.py` prints for the chosen
+scope. Measured at the 300-line default: 25 batches of ttnn op code took 6.0M tokens and 74 agents, plus 29 candidates
+deferred at the agent limit (about 3 verifier agents each), so about 0.5M tokens and 6.4 agents per batch in all. A
+full tt-metal run (18,500 files and 4.4M lines with the default extensions) is about 11,200 batches, or 250 waves of
+45: roughly 6B tokens and 70,000 agents. Code dense with real bugs costs more: a wave of 1-3 file benchmark batches,
+each known to hold a bug, took 37M tokens and 881 agents for 50 batches (17.7 agents per batch), which would put the
+same run near 8B tokens and 200,000 agents. Verification is most of the agent count.
 
 ## Start of every audit: ask the user
 Before `init_run.py`, ask questions 1-3 in one AskUserQuestion call, then question 4 in a second call: its cost
@@ -182,8 +184,10 @@ Engine scripts take `--run DIR` (or `BUG_AUDIT_RUN`); paths below are relative t
   audit overturned. A high rate means the hunters are skimming.
 - **Little code per hunter.** Batches default to 300 lines (`--max-lines`; `--batch-lines` sets a budget per
   priority). Depth follows lines per agent: on the same full-size code, hunters found 4 of 4 verified bugs at 300
-  lines, 1 at 800 and 0 at the old 1,500-3,500 (*references/measurement-history.md*). It costs about 5x a wave of
-  the old batches. The post-fix miss analysis found the same cause: hunters read 27 of 29 missed bugs but skimmed them.
+  lines, 1 at 800 and 0 at the old 1,500-3,500 (*references/measurement-history.md*). The same code costs more: on
+  those files the hunters cost about 5x what they did at the old size (6.3M against 1.28M price-weighted tokens),
+  and the trace audits, which scale with the number of batches, added another 3.3M. The post-fix miss analysis found
+  the same cause: hunters read 27 of 29 missed bugs but skimmed them.
 - **Coverage is proven, not claimed.** Each hunter reports every file's line count and last non-blank line.
   `persist_wave.py` checks both against the tree, and a mismatch sends the batch back. `ledger.tsv` has one row per
   in-scope file (pending, reread or audited, plus its confirmed-finding count) and is updated on every persist. The run is not done while
