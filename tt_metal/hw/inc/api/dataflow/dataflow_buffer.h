@@ -324,11 +324,7 @@ public:
     // Deprecated no-op on Quasar: the write barrier runs in ~DataflowBuffer().
     // On WH/BH this should not be used if the read into/write out of the DFB uses transaction ids because the
     // transaction ids are not tracked. Instead, use noc.async_write_barrier<NocOptions::TXN_ID>({.trid = trid})
-    void write_barrier([[maybe_unused]] const Noc& noc) const {
-#ifndef ARCH_QUASAR
-        write_barrier_impl(noc);
-#endif
-    }
+    void write_barrier(const Noc& noc) const { write_barrier_impl(noc); }
 #endif
 
     // Peek current FIFO cursors (byte address / arch units). Use for local entry data access —
@@ -421,10 +417,9 @@ private:
 #ifndef COMPILE_FOR_TRISC
     friend struct noc_traits_t<DataflowBuffer>;
 
+    void write_barrier_impl(const Noc& noc) const;
 #ifdef ARCH_QUASAR
     void write_barrier_impl(uint8_t noc_id) const;
-#else
-    void write_barrier_impl(const Noc &noc) const;
 #endif
 #endif
 
@@ -486,7 +481,6 @@ private:
     // The implicit copy constructor copies this pointer, so every copy points at the original. Traffic is
     // recorded on the original, and only the original drains.
     DataflowBuffer* drain_owner_ = this;
-    // Write-barrier in the destructor only if entries were drained out of the DFB.
     bool has_outbound_writes_ = false;
 #endif
 };
@@ -513,6 +507,9 @@ struct noc_traits_t<DataflowBuffer> {
         static_assert(
             address_type == Noc::AddressType::LOCAL_L1,
             "DataflowBuffer without mcast range can only be used as L1 source");
+#ifdef ARCH_QUASAR
+        src.drain_owner_->has_outbound_writes_ = true;
+#endif
         // Use cached addresses for NOC APIs
         return src.get_noc_read_addr() + args.offset_bytes;
     }

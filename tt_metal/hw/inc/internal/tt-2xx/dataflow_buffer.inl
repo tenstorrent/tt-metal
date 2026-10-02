@@ -231,7 +231,6 @@ inline void DataflowBuffer::wait_front_impl(uint16_t num_entries) {
 
 inline void DataflowBuffer::pop_front_impl(uint16_t num_entries) {
 #if !DFB_IS_COMPUTE_MATH
-    drain_owner_->has_outbound_writes_ = true;
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
@@ -576,6 +575,8 @@ inline void DataflowBuffer::lock_release_impl(ScopedLockRegion region, uint16_t 
         }
     }
 }
+
+inline void DataflowBuffer::write_barrier_impl([[maybe_unused]] const Noc& noc) const {}
 
 // Consumer barrier: waits outbound write from DFB writes to arrive at their destination
 // Falls back to a full barrier when no txn_ids are assigned
