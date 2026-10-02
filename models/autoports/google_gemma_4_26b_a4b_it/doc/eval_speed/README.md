@@ -27,7 +27,10 @@ control passes the short accuracy gate (prefill top1 .99; traced decode .98),
 but its SWE quality and long-context accuracy are not yet established.
 Focused-prompt Sympy CI also fails (1,200-second timeout, reward 0); all dispatched
 CI is complete. The prefill control is now running a bounded original-prompt
-Sympy trial on the reused local server, with no task-specific guidance.
+Sympy trial on the reused local server, with no task-specific guidance. It fails
+at **900.115 seconds**, reward 0, with repeated successful algebra inspections.
+A separate default-off exact-command/result advisory is now under bounded test;
+the numerical improvement alone has not established a better suite candidate.
 The [precision audit](AUTODEBUG.md) confirms fresh BFP8 weight provenance but
 identifies unchanged prefill BFP4 and untested long-context numerical quality;
 it does not establish a cache/position bug.
