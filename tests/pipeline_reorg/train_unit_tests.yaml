@@ -54,13 +54,22 @@
 
 - name: tt-train python unit tests
   cmd: |
-    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
     python -m pytest tt-train/tests/python
   skus:
     bh_p100:
       timeout: 35
     bh_p150b_civ2:
       timeout: 30
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  budget_type: unit
+
+- name: tt-train python distributed unit tests
+  cmd: |
+    # Workaround for hang in QB2 https://github.com/tenstorrent/tt-metal/issues/55957
+    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
+    python -m pytest tt-train/tests/python
+  skus:
     bh_quietbox_2:
       timeout: 25
   owner_id: U07K00A281X # Kevin Wu
