@@ -38,8 +38,6 @@ class _ReductionGoldenSpec(NamedTuple):
     widen_unsigned: bool = False
     # argmax reduces the flattened tensor when dim is None instead of expanding to all dims.
     dim_none_means_flatten: bool = False
-    # A negative scalar reverses the ordering, so max(s * x) is s * min(x); names the mirrored spec.
-    negative_scalar_spec: Optional[str] = None
     # Applies TTNN's scalar argument to the reduced output as (output, scalar, input_dtype).
     scale_output: Optional[Callable] = None
 
@@ -47,12 +45,8 @@ class _ReductionGoldenSpec(NamedTuple):
 _REDUCTION_GOLDEN_SPECS = {
     "mean": _ReductionGoldenSpec("mean", scale_output=_scale_linearly),
     "sum": _ReductionGoldenSpec("sum", scale_output=_scale_linearly),
-    "max": _ReductionGoldenSpec(
-        "max", multi_axis_torch_name="amax", values_only=True, negative_scalar_spec="min", scale_output=_scale_linearly
-    ),
-    "min": _ReductionGoldenSpec(
-        "min", multi_axis_torch_name="amin", values_only=True, negative_scalar_spec="max", scale_output=_scale_linearly
-    ),
+    "max": _ReductionGoldenSpec("max", multi_axis_torch_name="amax", values_only=True, scale_output=_scale_linearly),
+    "min": _ReductionGoldenSpec("min", multi_axis_torch_name="amin", values_only=True, scale_output=_scale_linearly),
     "var": _ReductionGoldenSpec("var", passes_correction=True, scale_output=_scale_squared),
     "std": _ReductionGoldenSpec("std", passes_correction=True, scale_output=_scale_absolute),
     "argmax": _ReductionGoldenSpec("argmax", widen_unsigned=True, dim_none_means_flatten=True),
