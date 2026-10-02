@@ -9,6 +9,8 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
@@ -211,19 +213,12 @@ struct DeviceOutputs {
     uint32_t H{};
 };
 
-DeviceOutputs run_op(
-    const ttml::test_utils::moe::MoeHostInputs& host, const std::vector<uint16_t>& local_expert_ids, uint32_t k) {
-    auto& dev = ttml::autograd::ctx().get_device();
-    const uint32_t E_local = static_cast<uint32_t>(local_expert_ids.size());
-    const uint32_t H = static_cast<uint32_t>(host.dispatched.shape(3));
-
-    auto dev_in = ttml::test_utils::moe::to_device_inputs(host, local_expert_ids, &dev);
-
+DeviceOutputs run_op(const ttml::test_utils::moe::MoeDeviceInputs& dev_in, uint32_t e_local, uint32_t h, uint32_t k) {
     auto [grouped, grouped_scores, k_slot, counts, offsets, plan] = ttml::metal::moe_group(
-        dev_in.dispatched_bf16, dev_in.metadata_u16, dev_in.scores_bf16, dev_in.leids_u16, E_local, k);
+        dev_in.dispatched_bf16, dev_in.metadata_u16, dev_in.scores_bf16, dev_in.leids_u16, e_local, k);
 
     DeviceOutputs out;
-    out.H = H;
+    out.H = h;
     auto grouped_rm = ttnn::to_layout(grouped, ttnn::ROW_MAJOR_LAYOUT);
     auto grouped_xt = ttml::core::to_xtensor(grouped_rm);
     out.T_cap = static_cast<uint32_t>(grouped_xt.shape(2));
@@ -247,8 +242,21 @@ DeviceOutputs run_op(
     return out;
 }
 
-void check_against_reference(
+DeviceOutputs run_op(
     const ttml::test_utils::moe::MoeHostInputs& host, const std::vector<uint16_t>& local_expert_ids, uint32_t k) {
+    auto& dev = ttml::autograd::ctx().get_device();
+    const uint32_t E_local = static_cast<uint32_t>(local_expert_ids.size());
+    const uint32_t H = static_cast<uint32_t>(host.dispatched.shape(3));
+
+    auto dev_in = ttml::test_utils::moe::to_device_inputs(host, local_expert_ids, &dev);
+    return run_op(dev_in, E_local, H, k);
+}
+
+void check_outputs_against_reference(
+    const ttml::test_utils::moe::MoeHostInputs& host,
+    const std::vector<uint16_t>& local_expert_ids,
+    uint32_t k,
+    const DeviceOutputs& out) {
     const uint32_t D = static_cast<uint32_t>(host.dispatched.shape(0));
     const uint32_t B = static_cast<uint32_t>(host.dispatched.shape(1));
     const uint32_t S = static_cast<uint32_t>(host.dispatched.shape(2));
@@ -261,8 +269,6 @@ void check_against_reference(
     const uint32_t num_workers = compute_num_workers(E_local, k, D, B, S);
     const uint32_t t_cap = compute_t_cap(E_local, k, D, B, S);
     auto ref = moe_group_reference(disp_rt, host.metadata, host.scores, local_expert_ids, k, num_workers, t_cap);
-
-    auto out = run_op(host, local_expert_ids, k);
 
     ASSERT_EQ(out.T_cap, ref.t_cap);
     ASSERT_EQ(out.counts.size(), ref.counts.size());
@@ -307,6 +313,24 @@ void check_against_reference(
             EXPECT_FLOAT_EQ(got, exp) << "grouped[" << i << ", " << hh << "] (plan=" << src << ")";
         }
     }
+}
+
+void check_against_reference(
+    const ttml::test_utils::moe::MoeHostInputs& host, const std::vector<uint16_t>& local_expert_ids, uint32_t k) {
+    check_outputs_against_reference(host, local_expert_ids, k, run_op(host, local_expert_ids, k));
+}
+
+template <typename T>
+ttnn::Tensor make_custom_row_major_tensor(
+    const std::vector<T>& data, const ttnn::Tensor& canonical, uint32_t width_alignment) {
+    const auto spec = tt::tt_metal::TensorSpec(
+        canonical.logical_shape(),
+        tt::tt_metal::TensorLayout(
+            canonical.dtype(),
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+            ttnn::DRAM_MEMORY_CONFIG,
+            tt::tt_metal::Alignment({width_alignment})));
+    return ttnn::Tensor::from_vector(data, spec, &ttml::autograd::ctx().get_device());
 }
 
 }  // namespace
@@ -354,4 +378,64 @@ TEST_F(MoeGroupTest, LargeELocal) {
     leids.reserve(32);
     for (uint16_t i = 0; i < 32; ++i) leids.push_back(i);
     check_against_reference(make_inputs(D, B, S, H, E, K), leids, K);
+}
+
+TEST_F(MoeGroupTest, CustomInputPageGeometryIsSafeOnColdAndWarmRuns) {
+    constexpr uint32_t D = 2, B = 1, S = 32, H = 64;
+    constexpr uint32_t E = 4, K = 2;
+    const std::vector<uint16_t> leids = {0, 1};
+    const auto host = make_inputs(D, B, S, H, E, K);
+    auto& device = ttml::autograd::ctx().get_device();
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+
+    const xt::xarray<uint16_t> metadata_u16 = xt::cast<uint16_t>(host.metadata);
+    const std::vector<uint16_t> metadata_data(metadata_u16.begin(), metadata_u16.end());
+    std::vector<::bfloat16> scores_data;
+    scores_data.reserve(host.scores.size());
+    for (const float value : host.scores) {
+        scores_data.emplace_back(value);
+    }
+
+    enum class CustomInput { Metadata, Scores, LocalExpertIds };
+    const auto make_inputs_with_custom_page = [&](CustomInput custom_input) {
+        auto inputs = ttml::test_utils::moe::to_device_inputs(host, leids, &device);
+        switch (custom_input) {
+            case CustomInput::Metadata:
+                inputs.metadata_u16 =
+                    make_custom_row_major_tensor(metadata_data, inputs.metadata_u16, 4U * dram_alignment);
+                break;
+            case CustomInput::Scores:
+                inputs.scores_bf16 = make_custom_row_major_tensor(scores_data, inputs.scores_bf16, 4U * dram_alignment);
+                break;
+            case CustomInput::LocalExpertIds:
+                inputs.leids_u16 = make_custom_row_major_tensor(leids, inputs.leids_u16, 2048U);
+                break;
+        }
+        return inputs;
+    };
+
+    device.enable_program_cache();
+    for (const auto custom_input : {CustomInput::Metadata, CustomInput::Scores, CustomInput::LocalExpertIds}) {
+        device.clear_program_cache();
+
+        auto cold_inputs = make_inputs_with_custom_page(custom_input);
+        const auto& cold_custom = custom_input == CustomInput::Metadata ? cold_inputs.metadata_u16
+                                  : custom_input == CustomInput::Scores ? cold_inputs.scores_bf16
+                                                                        : cold_inputs.leids_u16;
+        const auto cold_page = tt::tt_metal::TensorAccessorArgs(cold_custom.buffer()).get_compile_time_args().at(1);
+        ASSERT_GT(cold_page, dram_alignment);
+        const auto entries_before_cold = device.num_program_cache_entries();
+        auto cold_out = run_op(cold_inputs, static_cast<uint32_t>(leids.size()), H, K);
+        const auto entries_after_cold = device.num_program_cache_entries();
+        EXPECT_GT(entries_after_cold, entries_before_cold);
+        check_outputs_against_reference(host, leids, K, cold_out);
+
+        auto warm_inputs = make_inputs_with_custom_page(custom_input);
+        const auto entries_before_warm = device.num_program_cache_entries();
+        auto warm_out = run_op(warm_inputs, static_cast<uint32_t>(leids.size()), H, K);
+        const auto entries_after_warm = device.num_program_cache_entries();
+        EXPECT_EQ(entries_after_warm, entries_before_warm);
+        check_outputs_against_reference(host, leids, K, warm_out);
+    }
+    device.clear_program_cache();
 }

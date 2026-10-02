@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
@@ -85,6 +87,7 @@ struct GroupOutputs {
     ttnn::Tensor offsets;
     ttnn::Tensor grouped_scores;
     std::vector<uint32_t> plan_host;
+    std::vector<uint32_t> offsets_host;
     std::vector<float> grouped_scores_host;
     xt::xarray<float> expert_out_host;  // [T_cap, H]
 };
@@ -98,9 +101,11 @@ GroupOutputs build_group_inputs(
     auto [grouped, grouped_scores, k_slot, counts, offsets, plan] = ttml::metal::moe_group(
         dev_in.dispatched_bf16, dev_in.metadata_u16, dev_in.scores_bf16, dev_in.leids_u16, E_local, k);
 
-    GroupOutputs g{std::move(grouped), std::move(plan), std::move(offsets), std::move(grouped_scores), {}, {}, {}};
+    GroupOutputs g{std::move(grouped), std::move(plan), std::move(offsets), std::move(grouped_scores), {}, {}, {}, {}};
     auto plan_xt = ttml::core::to_xtensor<uint32_t>(g.plan);
     g.plan_host.assign(plan_xt.begin(), plan_xt.end());
+    auto offsets_xt = ttml::core::to_xtensor<uint32_t>(g.offsets);
+    g.offsets_host.assign(offsets_xt.begin(), offsets_xt.end());
     auto gs_xt = ttml::core::to_xtensor(g.grouped_scores);
     g.grouped_scores_host.assign(gs_xt.begin(), gs_xt.end());
     auto grouped_rm = ttnn::to_layout(g.expert_out, ttnn::ROW_MAJOR_LAYOUT);
@@ -162,6 +167,50 @@ TEST_F(MoeUngroupTest, LargeELocal) {
     leids.reserve(32);
     for (uint32_t i = 0; i < 32; ++i) leids.push_back(static_cast<uint16_t>(i));
     run_and_check(make_inputs(D, B, S, H, E, K), leids, K);
+}
+
+TEST_F(MoeUngroupTest, CustomOffsetsPageGeometryIsSafeOnColdAndWarmRuns) {
+    constexpr uint32_t D = 2, B = 1, S = 32, H = 64;
+    constexpr uint32_t E = 4, K = 2;
+    const std::vector<uint16_t> leids = {0, 1};
+    auto g = build_group_inputs(make_inputs(D, B, S, H, E, K), leids, K);
+    auto& device = ttml::autograd::ctx().get_device();
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+
+    const auto offsets_spec = tt::tt_metal::TensorSpec(
+        g.offsets.logical_shape(),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::UINT32,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+            ttnn::DRAM_MEMORY_CONFIG,
+            tt::tt_metal::Alignment({dram_alignment / sizeof(uint32_t) + 1U})));
+    const auto make_custom_offsets = [&]() { return ttnn::Tensor::from_vector(g.offsets_host, offsets_spec, &device); };
+    const auto reference = moe_ungroup_reference(g.expert_out_host, g.plan_host, g.grouped_scores_host, D, B, S);
+    const auto run_and_check_offsets = [&](const ttnn::Tensor& offsets) {
+        auto output = ttml::metal::moe_ungroup(
+            g.expert_out, g.plan, offsets, g.grouped_scores, static_cast<uint32_t>(leids.size()), D, B, S);
+        EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(output), reference, kRtol, kAtol));
+    };
+
+    device.enable_program_cache();
+    device.clear_program_cache();
+
+    auto cold_offsets = make_custom_offsets();
+    const auto cold_accessor_args = tt::tt_metal::TensorAccessorArgs(cold_offsets.buffer()).get_compile_time_args();
+    ASSERT_EQ(cold_accessor_args.size(), 2U);
+    ASSERT_EQ(cold_accessor_args[1], 2U * dram_alignment);
+    const auto entries_before_cold = device.num_program_cache_entries();
+    run_and_check_offsets(cold_offsets);
+    const auto entries_after_cold = device.num_program_cache_entries();
+    EXPECT_GT(entries_after_cold, entries_before_cold);
+
+    auto warm_offsets = make_custom_offsets();
+    const auto entries_before_warm = device.num_program_cache_entries();
+    run_and_check_offsets(warm_offsets);
+    const auto entries_after_warm = device.num_program_cache_entries();
+    EXPECT_EQ(entries_after_warm, entries_before_warm);
+
+    device.clear_program_cache();
 }
 
 // End-to-end integration: moe_group -> identity FFN (expert_out = grouped) ->

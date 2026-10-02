@@ -29,10 +29,10 @@ constexpr uint32_t kCbOut = tt::CBIndex::c_2;
 constexpr uint32_t kCbReaderScratch = tt::CBIndex::c_3;  // reader offsets + per-expert caches
 constexpr uint32_t kCbScratch = tt::CBIndex::c_4;        // writer's scratch (zero buf, offsets, plan, w)
 constexpr uint32_t kCbW = tt::CBIndex::c_5;              // COL-broadcast weight tile (only col 0 populated, w[r])
-constexpr uint32_t kCbExistingRm = tt::CBIndex::c_6;    // row-major existing rows from ungrouped (writer fills)
-constexpr uint32_t kCbExistingTile = tt::CBIndex::c_7;  // tilized existing (compute internal)
-constexpr uint32_t kCbCombined = tt::CBIndex::c_8;      // mul+add output tiles (untilize input)
-constexpr uint32_t kCbCtrl = tt::CBIndex::c_10;         // NCRISC->compute: per-core active-block count
+constexpr uint32_t kCbExistingRm = tt::CBIndex::c_6;     // row-major existing rows from ungrouped (writer fills)
+constexpr uint32_t kCbExistingTile = tt::CBIndex::c_7;   // tilized existing (compute internal)
+constexpr uint32_t kCbCombined = tt::CBIndex::c_8;       // mul+add output tiles (untilize input)
+constexpr uint32_t kCbCtrl = tt::CBIndex::c_10;          // NCRISC->compute: per-core active-block count
 
 constexpr uint32_t kTargetChunkBytes = 128U * 1024U;
 
@@ -65,6 +65,12 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     const uint32_t h = attrs.h;
     const uint32_t e_local = attrs.e_local;
     const uint32_t total_rows = attrs.d * attrs.b * attrs.s;
+
+    auto* expert_out_buf = args.expert_out.buffer();
+    auto* ungrouped_buf = output.buffer();
+    auto* plan_buf = args.plan.buffer();
+    auto* offsets_buf = args.offsets.buffer();
+    auto* grouped_scores_buf = args.grouped_scores.buffer();
 
     const uint32_t num_chunks = pick_num_chunks(h);
     // ceil(h / TILE_WIDTH); the last tile is padded with zeros if h % 32 != 0.
@@ -155,8 +161,10 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     // slice + w + rmw_buf. With moe_group emitting grouped_scores per row, we
     // no longer keep metadata/scores/leids buffers here; the writer reads a
     // 32-entry slice of grouped_scores per tile-row directly into w_buf.
-    const uint32_t dram_align_bytes = tt::tt_metal::hal::get_dram_alignment();
-    const uint32_t offsets_page_bytes = tt::round_up((e_local + 1U) * sizeof(uint32_t), dram_align_bytes);
+    // Match the TensorAccessor page compiled into the writer. The operation
+    // accepts custom row-major alignment, so a logical-shape reconstruction
+    // can be smaller than the full-page DMA and its following staging regions.
+    const uint32_t offsets_page_bytes = static_cast<uint32_t>(offsets_buf->aligned_page_size());
     uint32_t scratch_bytes = 0U;
     scratch_bytes += tt::round_up(h * 2U, offsets_page_bytes);         // zero_buf, aligns offsets_buf start
     scratch_bytes += offsets_page_bytes;                               // offsets_buf, matches TensorAccessor page
@@ -178,15 +186,6 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     const uint32_t down_sem_id = tt::tt_metal::CreateSemaphore(program, worker_all, 0U);
     const uint32_t brisc_done_sem_id = tt::tt_metal::CreateSemaphore(program, worker_all, 0U);
     const uint32_t brisc_release_sem_id = tt::tt_metal::CreateSemaphore(program, worker_all, 0U);
-
-    // -------------------------------------------------------------------------
-    // Buffer pointers
-    // -------------------------------------------------------------------------
-    auto* expert_out_buf = args.expert_out.buffer();
-    auto* ungrouped_buf = output.buffer();
-    auto* plan_buf = args.plan.buffer();
-    auto* offsets_buf = args.offsets.buffer();
-    auto* grouped_scores_buf = args.grouped_scores.buffer();
 
     // -------------------------------------------------------------------------
     // Mcast rectangle (covers full worker grid).

@@ -65,6 +65,17 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     auto& offsets = std::get<4>(outputs);
     auto& plan = std::get<5>(outputs);
 
+    auto* metadata_buf = args.metadata.buffer();
+    auto* scores_buf = args.scores.buffer();
+    auto* plan_buf = plan.buffer();
+    auto* grouped_scores_buf = grouped_scores.buffer();
+    auto* k_slot_buf = k_slot.buffer();
+    auto* counts_buf = counts.buffer();
+    auto* offsets_buf = offsets.buffer();
+    auto* leids_buf = args.local_expert_ids.buffer();
+    auto* dispatched_buf = args.dispatched.buffer();
+    auto* grouped_buf = grouped.buffer();
+
     tt::tt_metal::Program program{};
 
     const uint32_t h = attrs.h;
@@ -135,7 +146,7 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     create_circular_buffer_bytes(program, all_cores, kCbCtrl, tt::DataFormat::UInt32, cb_ctrl_bytes);
 
     // cb_scan: every core's scratch for scan + shared tables (only meaningful on lead).
-    // Layout: [stage 128B][leids_buf 32B][counts e_local*4][offsets (e_local+1)*4]
+    // Layout: [stage][leids_buf][counts e_local*4][offsets (e_local+1)*4]
     //         [cursors e_local*4]
     //         [shared_local_counts num_total_cores * e_local * 4]
     //         [shared_per_core_start num_total_cores * e_local * 4]
@@ -146,31 +157,20 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     if (slice_block_rows == 0U)
         slice_block_rows = 1U;
 
-    // Named sizes for the cb_scan layout.
-    const uint32_t dram_align_bytes = tt::tt_metal::hal::get_dram_alignment();
-    // Stage scratch must hold the offsets DMA write of size off_page_bytes
-    // = round_up((e_local+1)*4, kL1_ALIGN). Pin a 128 B floor so leids_buf
-    // stays at a stable offset for small e_local.
-    const uint32_t off_page_bytes_host = tt::round_up((e_local + 1U) * sizeof(uint32_t), kL1_ALIGN);
-    const uint32_t kStageBytes = std::max<uint32_t>(off_page_bytes_host, 128U);
-    // leids_buf must match the kernel TensorAccessor's aligned page for the
-    // leids tensor. On BH this is DRAM-aligned (64B), and using only the L1
-    // alignment places shared_local_counts on top of the private counts array.
-    const uint32_t leids_aligned_page_host = tt::round_up(e_local * sizeof(uint16_t), dram_align_bytes);
-    const uint32_t kLeidsBufBytes = std::max<uint32_t>(leids_aligned_page_host, 32U);
+    // Derive every full-page scratch extent from the same buffers whose
+    // TensorAccessorArgs are compiled into the kernel. The validators accept
+    // custom row-major alignment, so reconstructing canonical pages from K or
+    // E_local can underallocate this CB on the very first custom-spec call.
+    const uint32_t offsets_page_bytes = static_cast<uint32_t>(offsets_buf->aligned_page_size());
+    const uint32_t leids_page_bytes = static_cast<uint32_t>(leids_buf->aligned_page_size());
+    const uint32_t metadata_page_bytes = static_cast<uint32_t>(metadata_buf->aligned_page_size());
+    const uint32_t scores_page_bytes = static_cast<uint32_t>(scores_buf->aligned_page_size());
+    const uint32_t stage_bytes = std::max<uint32_t>(offsets_page_bytes, 128U);
+    const uint32_t leids_buf_bytes = std::max<uint32_t>(leids_page_bytes, 32U);
     constexpr uint32_t kPlanChunk = 32U;  // plan pre-fill burst size (entries per chunk)
-    // Metadata / scores aligned page = round_up(K * sizeof(uint16), DRAM_ALIGNMENT). DRAM alignment
-    // is arch-specific (32 B on WH, 64 B on BH) and must match the TensorAccessor's AlignedPageSize
-    // computed kernel-side — otherwise cb_scan is undersized and md_block / sc_block writes overflow
-    // into plan_stage / gs_stage / ks_stage, corrupting the NOC staging buffers that publish
-    // offsets/counts/plan to DRAM.
-    const uint32_t kMdAlignedPage = tt::round_up(k * sizeof(uint16_t), dram_align_bytes);
-    constexpr uint32_t kOverheadSlack = 64U;  // safety pad between sections (covers alignment carry-over)
     // counts(e_local) + offsets(e_local+1) + cursors(e_local) = 3*e_local + 1 uint32 entries.
     constexpr uint32_t kHeaderU32PerExpert = 3U;
     const uint32_t header_bytes = (kHeaderU32PerExpert * e_local + 1U) * sizeof(uint32_t);
-
-    const uint32_t overhead_bytes = kStageBytes + kLeidsBufBytes + header_bytes + kOverheadSlack;
     // Each shared table has num_total_cores slots; slot size =
     // round_up_to_align(e_local) uint32s (smallest multiple of the arch's L1
     // alignment that fits e_local). Arch-specific via HAL (16 B on WH/BH today,
@@ -181,47 +181,31 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
         shared_slot_u32 = l1_align_u32;
     const uint32_t kSharedSlotBytes = shared_slot_u32 * sizeof(uint32_t);
     const uint32_t shared_table_bytes = num_total_cores * kSharedSlotBytes;
-    const uint32_t two_shared_tables = 2U * shared_table_bytes;
-    const uint32_t md_block_bytes = slice_block_rows * kMdAlignedPage + kMdAlignedPage;
-    // sc_block holds scores in lock-step with md_block. scores is bf16 with the
-    // same K count per row, so the aligned page size matches md_aligned_page.
-    const uint32_t sc_block_bytes = slice_block_rows * kMdAlignedPage + kMdAlignedPage;
+    // Keep this host layout identical to the kernel pointer arithmetic.
+    const uint32_t shared_tables_offset = tt::round_up(stage_bytes + leids_buf_bytes + header_bytes, kL1_ALIGN);
+    const uint32_t shared_tables_end = shared_tables_offset + 2U * shared_table_bytes;
+    const uint32_t md_block_addr = tt::round_up(shared_tables_end, metadata_page_bytes);
+    const uint32_t md_block_end = md_block_addr + slice_block_rows * metadata_page_bytes;
+    const uint32_t sc_block_addr = tt::round_up(md_block_end, scores_page_bytes);
+    const uint32_t sc_block_end = sc_block_addr + slice_block_rows * scores_page_bytes;
     const uint32_t plan_stage_bytes = tt::round_up(e_local * kPlanChunk * sizeof(uint32_t), kL1_ALIGN);
     // gs_stage / ks_stage each hold e_local * kPlanChunk uint16-sized entries
     // (bf16 grouped_scores / uint16 k_slot).
     const uint32_t gs_stage_bytes = tt::round_up(e_local * kPlanChunk * sizeof(uint16_t), kL1_ALIGN);
     const uint32_t ks_stage_bytes = tt::round_up(e_local * kPlanChunk * sizeof(uint16_t), kL1_ALIGN);
     const uint32_t fill_bytes = tt::round_up(e_local * sizeof(uint32_t), kL1_ALIGN);
-    uint32_t scan_scratch_bytes = overhead_bytes + two_shared_tables + md_block_bytes + sc_block_bytes +
-                                  plan_stage_bytes + gs_stage_bytes + ks_stage_bytes + fill_bytes;
-    scan_scratch_bytes = tt::round_up(scan_scratch_bytes, kL1_ALIGN);
+    const uint32_t plan_stage_addr = tt::round_up(sc_block_end, kL1_ALIGN);
+    const uint32_t gs_stage_addr = tt::round_up(plan_stage_addr + plan_stage_bytes, kL1_ALIGN);
+    const uint32_t ks_stage_addr = tt::round_up(gs_stage_addr + gs_stage_bytes, kL1_ALIGN);
+    const uint32_t fill_addr = tt::round_up(ks_stage_addr + ks_stage_bytes, kL1_ALIGN);
+    const uint32_t scan_scratch_bytes = tt::round_up(fill_addr + fill_bytes, kL1_ALIGN);
     create_circular_buffer_bytes(program, all_cores, kCbScan, tt::DataFormat::UInt32, scan_scratch_bytes);
-
-    // Compute address of shared tables in cb_scan (offset within scratch).
-    // Layout: stage(kStageBytes), leids_buf(kLeidsBufBytes), counts, offsets, cursors.
-    // MUST be kL1_ALIGN-aligned for cross-core NOC writes to land correctly.
-    const uint32_t shared_tables_offset_raw = kStageBytes + kLeidsBufBytes + header_bytes;
-    const uint32_t shared_tables_offset = tt::round_up(shared_tables_offset_raw, kL1_ALIGN);
 
     // Phase semaphores
     const uint32_t scan_phase1_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0U);
     const uint32_t scan_phase2_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0U);
     const uint32_t scan_phase3_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0U);
     const uint32_t plan_ready_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0U);
-
-    // -------------------------------------------------------------------------
-    // Buffer pointers
-    // -------------------------------------------------------------------------
-    auto* metadata_buf = args.metadata.buffer();
-    auto* scores_buf = args.scores.buffer();
-    auto* plan_buf = plan.buffer();
-    auto* grouped_scores_buf = grouped_scores.buffer();
-    auto* k_slot_buf = k_slot.buffer();
-    auto* counts_buf = counts.buffer();
-    auto* offsets_buf = offsets.buffer();
-    auto* leids_buf = args.local_expert_ids.buffer();
-    auto* dispatched_buf = args.dispatched.buffer();
-    auto* grouped_buf = grouped.buffer();
 
     // -------------------------------------------------------------------------
     // NOC coords used as CT args by the combined kernel
