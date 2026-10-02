@@ -15,10 +15,14 @@ def test_time_attention_golden():
     cfg = tiny_config()
     torch.manual_seed(0)
     x = torch.randn(2, 8, cfg.d_model)
-    out = RefTSA(cfg).eval()(
-        x,
-        attention_mask=torch.zeros(2, cfg.num_heads, 8, 8),
-        position_ids=torch.arange(8).unsqueeze(0).expand(2, -1),
-    ).hidden_states
+    out = (
+        RefTSA(cfg)
+        .eval()(
+            x,
+            attention_mask=torch.zeros(2, cfg.num_heads, 8, 8),
+            position_ids=torch.arange(8).unsqueeze(0).expand(2, -1),
+        )
+        .hidden_states
+    )
     assert out.shape == x.shape
     log_golden("time_attn/out", out)

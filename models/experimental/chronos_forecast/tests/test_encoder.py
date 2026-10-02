@@ -15,11 +15,15 @@ def test_encoder_golden():
     cfg = tiny_config()
     torch.manual_seed(0)
     x = torch.randn(2, 8, cfg.d_model)
-    out = RefEncoder(cfg).eval()(
-        inputs_embeds=x,
-        group_ids=torch.arange(2),
-        attention_mask=torch.ones(2, 8),
-    ).last_hidden_state
+    out = (
+        RefEncoder(cfg)
+        .eval()(
+            inputs_embeds=x,
+            group_ids=torch.arange(2),
+            attention_mask=torch.ones(2, 8),
+        )
+        .last_hidden_state
+    )
     assert out.shape == x.shape
     assert torch.isfinite(out).all()
     log_golden("encoder/out", out)

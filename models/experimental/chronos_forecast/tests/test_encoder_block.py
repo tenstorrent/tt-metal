@@ -15,11 +15,15 @@ def test_encoder_block_golden():
     cfg = tiny_config()
     torch.manual_seed(0)
     x = torch.randn(2, 8, cfg.d_model)
-    out = RefBlock(cfg).eval()(
-        x,
-        position_ids=torch.arange(8).unsqueeze(0).expand(2, -1),
-        attention_mask=torch.zeros(2, cfg.num_heads, 8, 8),
-        group_time_mask=torch.zeros(8, 1, 2, 2),
-    ).hidden_states
+    out = (
+        RefBlock(cfg)
+        .eval()(
+            x,
+            position_ids=torch.arange(8).unsqueeze(0).expand(2, -1),
+            attention_mask=torch.zeros(2, cfg.num_heads, 8, 8),
+            group_time_mask=torch.zeros(8, 1, 2, 2),
+        )
+        .hidden_states
+    )
     assert out.shape == x.shape
     log_golden("encoder_block/out", out)
