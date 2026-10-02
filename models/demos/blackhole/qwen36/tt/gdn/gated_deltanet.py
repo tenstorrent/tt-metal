@@ -60,11 +60,9 @@ class Qwen36GatedDeltaNet:
         self.split_conv_state = None
         # Trace capture support
         self.use_inplace_state = False
-        # When True (set during chunk-outer traced-prefill capture), the chunk (prefill)
-        # path writes recurrent + conv state into the persistent external buffers IN PLACE
-        # (ttnn.copy) instead of reassigning a fresh tensor, so the state carries across
-        # execute_trace() replays (each replay re-runs the same baked buffer addresses).
-        # Eager prefill keeps the reassign path. See Qwen36Model.capture_prefill_trace_chunked.
+        # When True (set by Qwen36Model.allocate_kv_caches once the state is bound to the persistent
+        # external buffers), the chunk (prefill) path writes recurrent + conv state into those buffers
+        # IN PLACE (ttnn.copy) instead of reassigning a fresh tensor, so trace-baked addresses stay valid.
         self._chunk_inplace_state = False
 
     def forward(self, x, mode="recurrent", chunk_size=None, valid_len=None):

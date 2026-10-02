@@ -1128,23 +1128,6 @@ class Qwen36Model:
             device=device,
         )
 
-        # Bind GDN to persistent external state; enable in-place carry across replays.
-        for layer, (ext_rec, ext_conv) in zip(
-            (l for l in self.layers if not l.is_full_attention), self._deltanet_external_states
-        ):
-            dn = layer.attention
-            dn.recurrent_state = ext_rec
-            dn.fused_conv_state = ext_conv
-            dn.conv_state_q = None
-            dn.conv_state_k = None
-            dn.conv_state_v = None
-            if dn.split_conv_state is not None:
-                for buf in dn.split_conv_state:
-                    ttnn.deallocate(buf)
-                dn.split_conv_state = None
-            dn._chunk_inplace_state = True
-        self._init_dn_zero_buffers()
-
         # Warmup outside trace: compile per-chunk programs.
         self._reset_dn_state_inplace()
         warmup_out = self._forward_prefill_chunk(
@@ -2628,12 +2611,17 @@ class Qwen36Model:
         return self._masked_bucket_logits_tp(self._chunked_trace_output, chunk_size, chunk_size)
 
     def reset_state(self, batch_size=None):
-        """Reset layer state for a new sequence (eager/pre-trace path; trace uses _reset_dn_state_inplace)."""
+        """Reset layer state for a new sequence; GDN bound to the external buffers is zeroed in place."""
+        inplace = False
         for layer in self.layers:
             if layer.is_full_attention:
                 layer.attention.reset_cache()
+            elif getattr(layer.attention, "_chunk_inplace_state", False):
+                inplace = True
             else:
                 layer.attention.reset_state(batch_size)
+        if inplace:
+            self._reset_dn_state_inplace()
 
     def _reset_gdn_state_for_new_sequence(self):
         """Zero GDN recurrent+conv at sequence start.
@@ -2737,8 +2725,10 @@ class Qwen36Model:
                     device=self.device,
                 )
                 dn.set_external_state(rec, conv)
+                dn._chunk_inplace_state = True
                 self._deltanet_external_states.append((rec, conv))
 
+        self._init_dn_zero_buffers()
         return kv_caches
 
     def free_kv_caches(self):
@@ -2749,7 +2739,10 @@ class Qwen36Model:
             ttnn.release_trace(self.device, self._chunked_trace_id)
             self._chunked_trace_id = None
         self._chunked_prepared_key = None
-        for rec, conv in self._deltanet_external_states:
+        for layer, (rec, conv) in zip(
+            (l for l in self.layers if not l.is_full_attention), self._deltanet_external_states
+        ):
+            layer.attention._chunk_inplace_state = False
             ttnn.deallocate(rec)
             ttnn.deallocate(conv)
         self._deltanet_external_states = None
@@ -3146,18 +3139,6 @@ class Qwen36Model:
                 if dn.fused_conv_state is None and dn.conv_state_q is not None:
                     dn.fused_conv_state = ttnn.concat([dn.conv_state_q, dn.conv_state_k, dn.conv_state_v], dim=2)
                     dn.fused_conv_state = ttnn.to_layout(dn.fused_conv_state, ttnn.TILE_LAYOUT)
-
-        # Copy DeltaNet state into external pre-allocated buffers.
-        if self._deltanet_external_states is not None:
-            dn_idx = 0
-            for layer in self.layers:
-                if not layer.is_full_attention:
-                    dn = layer.attention
-                    ext_rec, ext_conv = self._deltanet_external_states[dn_idx]
-                    ttnn.copy(dn.recurrent_state, ext_rec)
-                    if dn.fused_conv_state is not None:
-                        ttnn.copy(dn.fused_conv_state, ext_conv)
-                    dn_idx += 1
 
         return logits
 
