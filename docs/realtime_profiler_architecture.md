@@ -7,65 +7,59 @@ This document describes how the **dispatch core** (dispatch_s), **real-time prof
 ## 1. High-Level Architecture
 
 ```
-+-----------------------------------------------------------------------------+
-| HOST                                                                        |
-|                                                                             |
-|   +-------------------+  +------------------+  +-------------------------+  |
-|   | Init/Calibration  |  | D2H Socket       |  | Receiver thread         |  |
-|   | - Pick profiler   |  | - Config buffer  |  | - wait_for_pages()      |  |
-|   |   core            |  | - Page flow      |  | - Parse timestamps      |  |
-|   | - Create D2H      |  |   (PCIe)         |  | - InvokeProgramRealtime |  |
-|   |   socket          |  |                  |  |   Callbacks()           |  |
-|   | - Run sync        |  |                  |  |                         |  |
-|   | - Start recv      |  |                  |  |                         |  |
-|   +--------+----------+  +--------+---------+  +------------+------------+  |
-|            |                     |                          |               |
-|            | L1 writes           | PCIe read                | PCIe read     |
-|            | (sync_request,      | (timestamp pages)        | (timestamp    |
-|            |  sync_host_ts,      |                          |  pages)       |
-|            |  config_buffer_addr)|                          |               |
-+------------+---------------------+--------------------------+---------------+
-             |                     |                          |               |
-             v                     |                          |               |
-+-----------------------------------------------------------------------------+
-| DEVICE (per chip)                                                           |
-|                                                                             |
-|   +---------------------------------------------------------------------+   |
-|   | REAL-TIME PROFILER CORE (Tensix, closest to PCIe)                   |   |
-|   | Kernel: cq_realtime_profiler.cpp                                    |   |
-|   |                                                                     |   |
-|   |   +---------------+  +-------------------------------------------+  |   |
-|   |   | Mailbox (L1)  |  | Loop:                                     |  |   |
-|   |   | - config_buf  |  |   rd_idx != wr_idx -> NOC read slot(s)    |  |   |
-|   |   |   _addr       |  |     -> ring -> D2H push; ack rd_idx       |  |   |
-|   |   | - record_wr   |  |   sync_request -> sync() (still drains)   |  |   |
-|   |   |   _idx        |  |   TERMINATE bit + all read -> exit        |  |   |
-|   |   | - sync_req    |  |                                           |  |   |
-|   |   | - sync_host_ts|  |                                           |  |   |
-|   |   +-------+-------+  +-------------------------------------------+  |   |
-|   |           ^                        | NOC read (record slots)        |   |
-|   |           |                        | NOC write record_rd_idx        |   |
-|   +-----------+------------------------+--------------------------------+   |
-|               |                        |                                    |
-|               | record_wr_idx          |                                    |
-|               | NOC write              v                                    |
-|               v                        |                                    |
-|   +---------------------------------------------------------------------+   |
-|   | DISPATCH CORE (dispatch_s)                                          |   |
-|   | Kernel: cq_dispatch_subordinate.cpp                                 |   |
-|   |                                                                     |   |
-|   |   L1 carve-out realtime_profiler_msg_t:                              |   |
-|   |     records[4] (SPSC ring), record_wr_idx, record_rd_idx,           |   |
-|   |     program_id_fifo, realtime_profiler_core_noc_xy,                 |   |
-|   |     realtime_profiler_remote_wr_idx_addr                            |   |
-|   |                                                                     |   |
-|   |   Per-command: record start ts + program id into the open slot,     |   |
-|   |     process cmd (end ts written while waiting on workers),          |   |
-|   |     publish_realtime_profiler_record(): wait while the ring is      |   |
-|   |     full, open the next slot, NOC-write record_wr_idx to the        |   |
-|   |     profiler core                                                   |   |
-|   +---------------------------------------------------------------------+   |
-+-----------------------------------------------------------------------------+
++--------------------------------------------------------------------------------------------------+
+|  HOST                                                                                            |
+|                                                                                                  |
+|  +-----------------------------+  +-------------------+  +------------------------------------+  |
+|  | Init / calibration          |  | D2H socket        |  | Receiver thread                    |  |
+|  | - Pick the profiler core    |  | - Config buffer   |  | - wait_for_pages()                 |  |
+|  | - Create the D2H socket     |  | - Pages over PCIe |  | - Parse timestamps                 |  |
+|  | - Run the clock sync        |  +-------------------+  | - InvokeProgramRealtimeCallbacks() |  |
+|  | - Start the receiver thread |                         +------------------------------------+  |
+|  +-----------------------------+                                                                 |
+|                 |                           |                               |                    |
+|                 | L1 writes:                | PCIe write                    | PCIe read          |
+|                 |   sync_request,           |   (pages)                     |   (pages)          |
+|                 |   sync_host_timestamp,    |                               |                    |
+|                 |   config_buffer_addr      |                               |                    |
++--------------------------------------------------------------------------------------------------+
+                  |                           |                               |
+                  v                           |                               |
++--------------------------------------------------------------------------------------------------+
+|  DEVICE (per chip)                                                                               |
+|                                                                                                  |
+|  +--------------------------------------------------------------------------------------------+  |
+|  | REAL-TIME PROFILER CORE (Tensix, closest to PCIe)                                          |  |
+|  | Kernels: cq_realtime_profiler.cpp (BRISC), cq_realtime_profiler_push.cpp (NCRISC)          |  |
+|  |                                                                                            |  |
+|  | +------------------------+  +------------------------------------------------------+       |  |
+|  | | Mailbox (L1)           |  | BRISC reader loop:                                   |       |  |
+|  | | - config_buffer_addr   |  | - rd_idx != wr_idx: NOC-read the pending slots       |       |  |
+|  | | - record_wr_idx        |  |   into the ring (NCRISC pushes it over D2H),         |       |  |
+|  | | - sync_request         |  |   then ack rd_idx to dispatch_s                      |       |  |
+|  | | - sync_host_timestamp  |  | - sync_request: run sync() (keeps draining)          |       |  |
+|  | +------------------------+  | - TERMINATE bit and everything read: exit            |       |  |
+|  |                             +------------------------------------------------------+       |  |
+|  +--------------------------------------------------------------------------------------------+  |
+|                 ^                                       |  NOC read (record slots)               |
+|                 |                                       |  NOC write record_rd_idx               |
+|                 |  record_wr_idx                        |                                        |
+|                 |  NOC write                            v                                        |
+|  +--------------------------------------------------------------------------------------------+  |
+|  | DISPATCH CORE (dispatch_s)                                                                 |  |
+|  | Kernel: cq_dispatch_subordinate.cpp                                                        |  |
+|  |                                                                                            |  |
+|  | L1 carve-out realtime_profiler_msg_t:                                                      |  |
+|  |   records[4] (SPSC ring), record_wr_idx, record_rd_idx, program_id_fifo,                   |  |
+|  |   realtime_profiler_core_noc_xy, realtime_profiler_remote_wr_idx_addr                      |  |
+|  |                                                                                            |  |
+|  | Per command:                                                                               |  |
+|  |   - record the start timestamp and program id into the open slot                           |  |
+|  |   - process the command (end timestamp written while waiting on workers)                   |  |
+|  |   - publish_realtime_profiler_record(): wait while the ring is full,                       |  |
+|  |     open the next slot, NOC-write record_wr_idx to the profiler core                       |  |
+|  +--------------------------------------------------------------------------------------------+  |
++--------------------------------------------------------------------------------------------------+
 ```
 
 ---
@@ -73,31 +67,28 @@ This document describes how the **dispatch core** (dispatch_s), **real-time prof
 ## 2. Data Flow: Program Timestamp to Host
 
 ```
-  DISPATCH_S                 REAL-TIME PROFILER CORE              HOST
-  (dispatch_s)               (cq_realtime_profiler)               (receiver thread)
+  DISPATCH_S                 REAL-TIME PROFILER CORE       HOST
+  (dispatch_s)               (cq_realtime_profiler)        (receiver thread)
 
-       |                              |                                  |
-       | 1. Record start ts,          |                                  |
-       |    program_id into the       |                                  |
-       |    open record slot          |                                  |
-       | 2. Process command           |                                  |
-       | 3. Record end ts             |                                  |
-       | 4. Wait for a free slot,     |                                  |
-       |    advance record_wr_idx     |                                  |
-       | 5. NOC write wr_idx -------> |                                  |
-       |                              | 6. See rd_idx != wr_idx          |
-       |                              | 7. NOC read each pending slot    |
-       | <----------------------------|    from dispatch_s L1, then      |
-       | <------ record_rd_idx -------|    ack rd_idx (frees the slots)  |
-       |                              | 8. Push page to D2H socket       |
-       |                              |    (PCIe write to host buffer)   |
-       |                              | -------------------------------> | 9. wait_for_pages
-       |                              |                                  |    get_read_ptr
-       |                              |                                  | 10. Parse start/end ts,
-       |                              |                                  |     program_id
-       |                              |                                  | 11. InvokeProgramRealtime
-       |                              |                                  |     Callbacks(record)
-       |                              | <------------------------------- | pop_pages, notify_sender
+    |                          |                             |
+    | 1. Record start ts and   |                             |
+    |    program_id into the   |                             |
+    |    open record slot      |                             |
+    | 2. Process command       |                             |
+    | 3. Record end ts         |                             |
+    | 4. Wait for a free slot, |                             |
+    |    advance record_wr_idx |                             |
+    | 5. NOC write wr_idx ---->|                             |
+    |                          | 6. See rd_idx != wr_idx     |
+    | <------------------------| 7. NOC-read pending slots   |
+    |                          |    from dispatch_s L1, then |
+    | <---- record_rd_idx -----|    ack rd_idx (frees slots) |
+    |                          | 8. Push pages to the D2H    |
+    |                          |    socket (PCIe write)      |
+    |                          | --------------------------->| 9. wait_for_pages, get_read_ptr
+    |                          |                             | 10. Parse start/end ts, program_id
+    |                          |                             | 11. InvokeProgramRealtimeCallbacks()
+    |                          | <---------------------------| pop_pages, notify_sender
 ```
 
 ---
@@ -107,24 +98,25 @@ This document describes how the **dispatch core** (dispatch_s), **real-time prof
 Host and device timestamps are aligned so that Tracy (or other consumers) can relate device cycles to host time.
 
 ```
-  HOST                              REAL-TIME PROFILER CORE
+  HOST                                  REAL-TIME PROFILER CORE
 
-    |  Write sync_request = 1 (L1)        |
-    | ---------------------------------> |  Poll sync_request
-    |  Write sync_host_timestamp = T     |
-    | ---------------------------------> |  See host_ts > 0
-    |                                    |  Capture device wall clock (D)
-    |                                    |  Push page: (D_hi, D_lo, T,
-    |                                    |    REALTIME_PROFILER_SYNC_MARKER_ID)
-    |                                    |  Clear sync_host_timestamp
-    |  wait_for_pages(1)                 |
-    | <--------------------------------- |  (D2H page arrives)
-    |  Parse device_time D, host_time T  |
-    |  Repeat for N samples              |
-    |  Write sync_request = 0 (L1)       |
-    | ---------------------------------> |  Exit sync loop
-    |  Linear regression -> frequency,   |
-    |  first_timestamp for this device   |
+    |                                     |
+    | Write sync_request = 1 (L1)         |
+    | ----------------------------------->| Poll sync_request
+    | Write sync_host_timestamp = T       |
+    | ----------------------------------->| See host_ts > 0
+    |                                     | Capture device wall clock (D)
+    |                                     | Push page: (D_hi, D_lo, T,
+    |                                     |   REALTIME_PROFILER_SYNC_MARKER_ID)
+    |                                     | Clear sync_host_timestamp
+    | wait_for_pages(1)                   |
+    | <-----------------------------------| (D2H page arrives)
+    | Parse device_time D, host_time T    |
+    | Repeat for N samples                |
+    | Write sync_request = 0 (L1)         |
+    | ----------------------------------->| Exit sync loop
+    | Linear regression -> frequency      |
+    | and first_timestamp for this device |
 ```
 
 ---
