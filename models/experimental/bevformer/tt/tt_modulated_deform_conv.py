@@ -120,7 +120,9 @@ class TtModulatedDeformConv2dDevice:
             )
 
         if bias is not None:
-            self.bias = ttnn.from_torch(bias.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            self.bias = ttnn.from_torch(
+                bias.reshape(1, -1).contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            )
         else:
             self.bias = None
 
@@ -141,6 +143,7 @@ class TtModulatedDeformConv2dDevice:
         H_out = (H_in + 2 * self.padding[0] - self.dilation[0] * (self.K - 1) - 1) // self.stride[0] + 1
         W_out = (W_in + 2 * self.padding[1] - self.dilation[1] * (self.K - 1) - 1) // self.stride[1] + 1
         self.io_shape = (batch, H_in, W_in, H_out, W_out)
+        self.relu = relu
         self.output_activations = [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)] if relu else None
         self.base_grid = ttnn.from_torch(
             self._build_base_grid(H_in, W_in, H_out, W_out, batch),
@@ -185,8 +188,8 @@ class TtModulatedDeformConv2dDevice:
         """Forward.
 
         Args:
-          x_nhwc: (B, H_in, W_in, C_in) NHWC TILE on device, bfloat16 or bfloat8_b;
-              it is sampled as bfloat16 ROW_MAJOR.
+          x_nhwc: (B, H_in, W_in, C_in) NHWC on device, bfloat16 or bfloat8_b, preferably
+              already ROW_MAJOR, the layout it is sampled in.
           grid_offset_nhwc: (B, H_out, W_out, 2*K*K) bfloat16 NHWC TILE offsets in grid
               units (pixel offsets times ``2 / [W_in, H_in]``), in (x, y) order per kernel
               position, see `grid_offset_order`.
@@ -194,7 +197,7 @@ class TtModulatedDeformConv2dDevice:
               after sigmoid.
 
         Returns:
-          (B, H_out, W_out, C_out) bfloat16 NHWC TILE_LAYOUT on device.
+          (1, 1, B*H_out*W_out, C_out) bfloat16 TILE_LAYOUT on device, conv2d's layout.
         """
         B, H_in, W_in, C_in = x_nhwc.shape
         _, H_out, W_out, _ = mask_nhwc.shape
@@ -242,19 +245,22 @@ class TtModulatedDeformConv2dDevice:
             # reshape back to flatten kk into the channel axis.
             sampled = ttnn.reshape(sampled, (B, H_out, W_out, K * K, self.c_chunk))
             weighted = ttnn.multiply(sampled, mask_b)
-            weighted = ttnn.reshape(weighted, (B, H_out, W_out, K * K * self.c_chunk))
-
-            weighted_tile = ttnn.to_layout(weighted, ttnn.TILE_LAYOUT)
-            # Fold (B, H_out, W_out) into M so the matmul heuristic sees a
-            # large 2-D problem instead of bcast_batch with M=W_out, which
-            # pins the kernel to 8 cores on small spatial dims.
-            weighted_tile_flat = ttnn.reshape(weighted_tile, (1, 1, B * H_out * W_out, K * K * self.c_chunk))
-            partial = ttnn.matmul(
-                weighted_tile_flat,
-                self.weight_cat_chunks[q],
-                compute_kernel_config=self.compute_kernel_config,
-            )
-            partial = ttnn.reshape(partial, (B, H_out, W_out, partial.shape[-1]))
+            # Fold (B, H_out, W_out) into M so the matmul heuristic sees a large 2-D problem
+            # instead of bcast_batch with M=W_out, which pins the kernel to 8 cores on small
+            # spatial dims. Reshaped while ROW_MAJOR, where it moves no data; on a tiled tensor
+            # whose H_out*W_out is not a multiple of 32 it would copy.
+            weighted = ttnn.reshape(weighted, (1, 1, B * H_out * W_out, K * K * self.c_chunk))
+            weighted = ttnn.to_layout(weighted, ttnn.TILE_LAYOUT)
+            if self.n_c_chunks == 1:
+                # One chunk: bias and ReLU run in the matmul.
+                return ttnn.linear(
+                    weighted,
+                    self.weight_cat_chunks[q],
+                    bias=self.bias,
+                    activation="relu" if self.relu else None,
+                    compute_kernel_config=self.compute_kernel_config,
+                )
+            partial = ttnn.matmul(weighted, self.weight_cat_chunks[q], compute_kernel_config=self.compute_kernel_config)
             output_acc = partial if output_acc is None else ttnn.add(output_acc, partial)
 
         if self.bias is not None:
