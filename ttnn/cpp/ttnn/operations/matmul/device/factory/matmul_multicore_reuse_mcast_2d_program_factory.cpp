@@ -1027,10 +1027,18 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
         std::vector<KernelSpecName> kernels_here;
 
         CoreCoord left_core = {(std::size_t)start_core_x, (std::size_t)core.y};
-        CoreCoord left_core_plus_one = {(std::size_t)start_core_x + 1, (std::size_t)core.y};
+        // Single-row/col clamp (ported from the experimental/quasar 2D matmul factory): the mcast "+1"
+        // corner (the first receiver past the sender) does not exist when a dimension has a single core --
+        // e.g. the 2-core emulator (2x1 grid), where start_core_y+1 = (0,1) has no core and
+        // worker_core_from_logical_core throws "No core coordinate found at (0,1)". Clamp the +1 to the
+        // sender's own coord when that dimension is single-core; the degenerate mcast then covers 0 receivers
+        // so the clamped rectangle is unused. Multi-row/col grids (num_cores_with_work_* > 1) are unchanged.
+        CoreCoord left_core_plus_one = {
+            (std::size_t)start_core_x + (num_cores_with_work_c > 1 ? 1u : 0u), (std::size_t)core.y};
         CoreCoord right_core = {(std::size_t)start_core_x + num_cores_with_work_c - 1, (std::size_t)core.y};
         CoreCoord top_core = {(std::size_t)core.x, (std::size_t)start_core_y};
-        CoreCoord top_core_plus_one = {(std::size_t)core.x, (std::size_t)start_core_y + 1};
+        CoreCoord top_core_plus_one = {
+            (std::size_t)core.x, (std::size_t)start_core_y + (num_cores_with_work_r > 1 ? 1u : 0u)};
         CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)start_core_y + num_cores_with_work_r - 1};
 
         auto left_core_physical = device.worker_core_from_logical_core(left_core);
@@ -3043,10 +3051,18 @@ create_program_mcast_in0_in1(
 
     for (const auto& core : cores) {
         CoreCoord left_core = {(std::size_t)start_core_x, (std::size_t)core.y};
-        CoreCoord left_core_plus_one = {(std::size_t)start_core_x + 1, (std::size_t)core.y};
+        // Single-row/col clamp (ported from the experimental/quasar 2D matmul factory): the mcast "+1"
+        // corner (the first receiver past the sender) does not exist when a dimension has a single core --
+        // e.g. the 2-core emulator (2x1 grid), where start_core_y+1 = (0,1) has no core and
+        // worker_core_from_logical_core throws "No core coordinate found at (0,1)". Clamp the +1 to the
+        // sender's own coord when that dimension is single-core; the degenerate mcast then covers 0 receivers
+        // so the clamped rectangle is unused. Multi-row/col grids (num_cores_with_work_* > 1) are unchanged.
+        CoreCoord left_core_plus_one = {
+            (std::size_t)start_core_x + (num_cores_with_work_c > 1 ? 1u : 0u), (std::size_t)core.y};
         CoreCoord right_core = {(std::size_t)start_core_x + num_cores_with_work_c - 1, (std::size_t)core.y};
         CoreCoord top_core = {(std::size_t)core.x, (std::size_t)start_core_y};
-        CoreCoord top_core_plus_one = {(std::size_t)core.x, (std::size_t)start_core_y + 1};
+        CoreCoord top_core_plus_one = {
+            (std::size_t)core.x, (std::size_t)start_core_y + (num_cores_with_work_r > 1 ? 1u : 0u)};
         CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)start_core_y + num_cores_with_work_r - 1};
 
         auto left_core_physical = device.worker_core_from_logical_core(left_core);
