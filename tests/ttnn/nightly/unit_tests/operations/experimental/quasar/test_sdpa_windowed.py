@@ -21,11 +21,27 @@ ttnn.transformer.scaled_dot_product_attention = scaled_dot_product_attention
 
 from tests.ttnn.unit_tests.operations.sdpa.test_windowed_sdpa import *  # noqa: E402,F401,F403
 from tests.ttnn.unit_tests.operations.sdpa.test_windowed_sdpa import windowed_mask  # noqa: E402
+from tests.ttnn.unit_tests.operations.sdpa import test_windowed_sdpa as _mainline  # noqa: E402
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.test_sdpa_attention_sink import (  # noqa: E402
     _check,
     _compute_kernel_config,
     _to_device,
 )
+
+
+# Quasar does not support bfloat8_b, so the reused smoke test's bf8 parametrizations run in bfloat16
+# (same ids and shapes, bf16 PCC threshold), as the quasar sdpa_decode fork does for its bfp8 cases.
+def test_windowed_sdpa_smoke(
+    device, dtype, pcc_threshold, num_heads, seq_len, chunk, cu_window_seqlens, fp32_dest_acc_en
+):
+    if dtype == ttnn.bfloat8_b:
+        dtype, pcc_threshold = ttnn.bfloat16, 0.99
+    _mainline.test_windowed_sdpa_smoke(
+        device, dtype, pcc_threshold, num_heads, seq_len, chunk, cu_window_seqlens, fp32_dest_acc_en
+    )
+
+
+test_windowed_sdpa_smoke.pytestmark = _mainline.test_windowed_sdpa_smoke.pytestmark
 
 
 @pytest.mark.parametrize(
