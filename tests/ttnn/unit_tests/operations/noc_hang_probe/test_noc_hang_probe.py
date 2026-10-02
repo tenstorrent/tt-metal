@@ -375,7 +375,7 @@ def _skeleton(device, iters, dram):
     """FlatRoutedExpert's NoC traffic on its own cores (flat_expert_rolemap.json, MIMO_FL_SHOW's ROLEMAP of the 2048
     token model shape), without its protocol: every role streams its traffic for the whole launch. NOC_PROBE_SKEL_DROP
     names parts (SKEL_PARTS) to leave out; NOC_PROBE_MC_LINKED (1); NOC_PROBE_SKEL_RELAYS (0,1: west, east); NOC_PROBE_SKEL_NOC1 (parts moved to NOC1:
-    mcast, gu_h, rd_dram)."""
+    mcast, gu_h, rd_dram); NOC_PROBE_SKEL_GU_SPLIT (h1 | a1: the gate/up h writes / atomics alone on NOC1)."""
     import json
 
     rm = json.load(open(ROLEMAP))
@@ -414,6 +414,8 @@ def _skeleton(device, iters, dram):
         on1.update(("x_dram!0", "helper"))  # the helpers' landing writes move with the multicast
     if "rd_dram" in on1:
         on1.add("fwd!0")
+    if "dn_dram" in on1:  # the down cores' h chain / y writes take NOC0 (the builder's DN_NOC=0)
+        on1.update(("dn_y!0", "dn_chain!0"))
     nocof = lambda part, default: N0 if part + "!0" in on1 else (N1 if part in on1 else default)
     kernels = []
 
@@ -469,7 +471,13 @@ def _skeleton(device, iters, dram):
         add(1, [(h, [iters * 8, pk(p), 8704, 8, 0]) for h, p in zip(helpers, prim)], "RISCV_1", nocof("helper", N0))
     # gate/up: BRISC NOC0 h slices into the chain heads, atomics (freed words) to their rectangle's relay
     rect_of = lambda c: 0 if c.x <= 5 else 1
-    if "gu_h" not in drop or "gu_atomics" not in drop:
+    split = os.environ.get("NOC_PROBE_SKEL_GU_SPLIT")  # "h1": h writes NCRISC NOC1, atomics BRISC NOC0; "a1": reverse
+    if split:
+        h_noc, a_noc = (N1, N0) if split == "h1" else (N0, N1)
+        risc = lambda noc: "RISCV_1" if noc == N1 else "RISCV_0"
+        add(1, [(c, [iters * 4, pk(heads[i % len(heads)]), 2048, 0, 0]) for i, c in enumerate(gu)], risc(h_noc), h_noc)
+        add(1, [(c, [iters * 4, pk(prim[rect_of(c)]), 0, 4, 0]) for c in gu], risc(a_noc), a_noc)
+    elif "gu_h" not in drop or "gu_atomics" not in drop:
         fb = 0 if "gu_h" in drop else 2048
         every = 0 if "gu_atomics" in drop else 4
         add(
@@ -490,13 +498,21 @@ def _skeleton(device, iters, dram):
         )
     # down: NCRISC NOC0 weight reads from DRAM, BRISC NOC1 h chain to the next down core / y writes to DRAM
     if "dn_dram" not in drop:
-        add(2, [(c, rd_args(i, iters * 4)) for i, c in enumerate(down)], "RISCV_1", N0)
+        add(2, [(c, rd_args(i, iters * 4)) for i, c in enumerate(down)], "RISCV_1", nocof("dn_dram", N0))
     if "dn_y" not in drop:
         add(
-            3, [(c, [iters * 2, dram.buffer_address(), 4096, i, 1, 1, 0, 1]) for i, c in enumerate(down)], "RISCV_0", N1
+            3,
+            [(c, [iters * 2, dram.buffer_address(), 4096, i, 1, 1, 0, 1]) for i, c in enumerate(down)],
+            "RISCV_0",
+            nocof("dn_y", N1),
         )
     elif "dn_chain" not in drop:
-        add(1, [(c, [iters * 4, pk(down[(i + 1) % len(down)]), 4096, 0, 0]) for i, c in enumerate(down)], "RISCV_0", N1)
+        add(
+            1,
+            [(c, [iters * 4, pk(down[(i + 1) % len(down)]), 4096, 0, 0]) for i, c in enumerate(down)],
+            "RISCV_0",
+            nocof("dn_chain", N1),
+        )
     used = list(dict.fromkeys(readers + gu + down + relays))
     if "compute" not in drop:
         crt = ttnn.RuntimeArgs()
