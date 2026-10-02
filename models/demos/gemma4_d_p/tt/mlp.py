@@ -20,6 +20,9 @@ from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
 # x / (1 + exp(-2u)): within 1 BF16 ULP of the FP32 tanh form and cheaper on the SFPU.
 _GATE_GELU = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH, 1.0)
 
+# Most rows per device whose MLP intermediates stay in L1 (chunk 8192 at CP8 is 1024).
+_MLP_L1_MAX_ROWS = 1152
+
 
 # Weight columns per core of the short-M down projection (the gate and up projections keep the 1D default of 2).
 _DOWN_PER_CORE_N = 4
@@ -143,6 +146,10 @@ class MLP:
         # All three intermediates are short-lived, deallocated in this call, and
         # touch no SDPA input and no collective, so they are L1 candidates.
         act_mc = prefill_short_lived_memcfg()
+        # Above _MLP_L1_MAX_ROWS rows per device the projections take taller per-core blocks whose circular buffers
+        # no longer fit beside three L1 intermediates (gate, up and their product), so those go to DRAM.
+        if hidden_states.padded_shape[-2] > _MLP_L1_MAX_ROWS:
+            act_mc = ttnn.DRAM_MEMORY_CONFIG
 
         # Short-M activations are read width-sharded from L1 (see matmul_config.to_l1_width_sharded); gate and up
         # share one sharded copy.

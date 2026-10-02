@@ -8,10 +8,10 @@ import ttnn
 # Weight columns per core in the 1D config: with 2-row output subblocks, 2 x 2 tiles fill the fp32 dest.
 _PER_CORE_N_1D = 2
 
-# Tallest per-core output block measured to fit in L1 (chunk 8192 at CP8). Chunk 16384 gives 7 tiles
-# per core, whose circular buffers need 1,660,032 B against 1,572,864 B of L1, so larger shapes keep
-# ttnn's default config.
-_MAX_PER_CORE_M = 4
+# Tallest per-core output block measured to fit in L1: 6 tiles (chunk 12288 at CP8), with K blocks of at most 14
+# tiles above 4 rows per core. Chunk 16384 gives 7 tiles per core, whose circular buffers need 1,660,032 B against
+# 1,572,864 B of L1, so larger shapes keep ttnn's default config.
+_MAX_PER_CORE_M = 6
 
 
 def prefill_matmul_program_config(hidden_states, weight, grid_x, grid_y, fused_activation=None, fp32_dest_acc=False):
@@ -35,7 +35,7 @@ def prefill_matmul_program_config(hidden_states, weight, grid_x, grid_y, fused_a
     max_subblock_tiles = 4 if fp32_dest_acc else 8
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(grid_x, grid_y),
-        in0_block_w=_in0_block_w(k_tiles),
+        in0_block_w=_in0_block_w(k_tiles, 16 if per_core_m <= 4 else 14),
         out_subblock_h=next(h for h in (4, 3, 2, 1) if per_core_m % h == 0 and h * subblock_w <= max_subblock_tiles),
         out_subblock_w=subblock_w,
         per_core_M=per_core_m,
@@ -86,8 +86,8 @@ def prefill_1d_matmul_program_config(
     )
 
 
-def _in0_block_w(k_tiles):
-    return max(d for d in range(1, min(k_tiles, 16) + 1) if k_tiles % d == 0)
+def _in0_block_w(k_tiles, max_w=16):
+    return max(d for d in range(1, min(k_tiles, max_w) + 1) if k_tiles % d == 0)
 
 
 # Most tile rows (per device) that the 1D projection config takes.
