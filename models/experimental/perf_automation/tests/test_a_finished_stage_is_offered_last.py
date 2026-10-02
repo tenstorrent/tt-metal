@@ -27,19 +27,22 @@ for _p in (str(PERF), str(PERF.parent.parent.parent), str(_CC)):
 _SRC = (_CC / "perf_mcp.py").read_text(encoding="utf-8")
 
 
+def _pm():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("pm_order_ut", str(_CC / "perf_mcp.py"))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+_PM = _pm()
+
+
 def _order(short, rows):
-    """The shipped ordering, applied to a candidate list."""
+    """The shipped ordering (perf_mcp._blocking_order_key), applied to a candidate list."""
     names = {s for s in short}
-    return [
-        r["op"]
-        for r in sorted(
-            rows,
-            key=lambda b: (
-                1 if (names and b.get("stage") and b.get("stage") not in names) else 0,
-                -(b.get("eff_gap_ms") or b.get("gap_ms") or 0.0),
-            ),
-        )
-    ]
+    return [r["op"] for r in sorted(rows, key=lambda b: _PM._blocking_order_key(b, names))]
 
 
 # STAGES THIS TEST INVENTED. The ordering is about a stack being short or not, never about which

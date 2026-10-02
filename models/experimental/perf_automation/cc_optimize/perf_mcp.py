@@ -7752,6 +7752,43 @@ def _stages_short_of_achievable() -> list:
         return []
 
 
+def stage_cost_weights(profile) -> dict:
+    """{stage: how much more one profiled ms of that stage costs in the real pipeline}, mean 1.
+
+    The ranking reads op gaps off the PROFILE, and the profile is a capped capture: every block
+    stack the depth knob cuts runs 2 blocks, every stack it cannot cut runs in full. So the stages
+    are not sampled alike -- Qwen-Image-Edit 2026-10-02: denoise was 31% of the profile and ~49% of
+    the full pipeline, the VAE 18.5% and ~1.4% -- and a gap in an under-sampled stage ranked below
+    an equal real cost elsewhere. Each stage's weight is its full-pipeline time (this run's own
+    trace_replay, read_stage_ms) over its profiled time (stage_buckets), divided by the mean so the
+    units stay those of the profile and a stage without both readings sits at the mean (1).
+
+    {} when either side is missing -- no replay yet, an unmarked capture -- and the ranking is then
+    exactly the unweighted one. Stage names are whatever the capture and the replay report."""
+    try:
+        full = read_stage_ms(model=_model_key()) or {}
+        ratios = {}
+        for stage, buckets in ((profile or {}).get("stage_buckets") or {}).items():
+            prof_ms = sum(float(b.get("device_ms") or 0.0) for b in (buckets or []) if isinstance(b, dict))
+            if prof_ms > 0 and float(full.get(stage) or 0.0) > 0:
+                ratios[stage] = float(full[stage]) / prof_ms
+        if len(ratios) < 2:
+            return {}  # one stage has nothing to be weighed against
+        mean = sum(ratios.values()) / len(ratios)
+        return {k: v / mean for k, v in ratios.items()}
+    except Exception:  # noqa: BLE001 -- a weight that cannot be read leaves the ranking unweighted
+        return {}
+
+
+def _blocking_order_key(b: dict, short_names) -> tuple:
+    """The work queue's order, in ONE place: an op in a stage already inside its band goes last, then
+    the largest gap first, the gap weighed by its stage's real cost (`cost_weight`, 1 when absent).
+    An op the capture could not place ("" stage) is never demoted."""
+    done = 1 if (short_names and b.get("stage") and b.get("stage") not in short_names) else 0
+    gap = b.get("eff_gap_ms") or b.get("gap_ms") or 0.0
+    return (done, -float(gap) * float(b.get("cost_weight") or 1.0))
+
+
 def stage_of_op(op, profile) -> str:
     """Which stage this op costs the most in, read from the capture, or "" when it cannot say.
 
@@ -8175,12 +8212,13 @@ def termination_check() -> dict:
     # unplaced work would bury whatever the marks failed to cover. When nothing is short the key is
     # constant and the order is exactly what it was.
     _short_names = _short_stage_names()
-    blocking.sort(
-        key=lambda b: (
-            1 if (_short_names and b.get("stage") and b.get("stage") not in _short_names) else 0,
-            -(b.get("eff_gap_ms") or b.get("gap_ms") or 0.0),
-        )
-    )
+    # WEIGHED BY WHAT THE STAGE REALLY COSTS (stage_cost_weights): the gap is read off a capped
+    # profile that samples the stages unequally. The gap itself is reported unchanged; only the
+    # order uses the weight, and with no weights every op's is 1 and the order is the old one.
+    _weights = stage_cost_weights(prof)
+    for b in blocking:
+        b["cost_weight"] = round(float(_weights.get(b.get("stage") or "", 1.0)), 4)
+    blocking.sort(key=lambda b: _blocking_order_key(b, _short_names))
     can_stop = not blocking
     # AND NOTHING MATERIAL MAY BE UNTRIED. `blocking` empties as each op's checklist fills, so an op
     # that was never SELECTED never appears there and never blocks -- which is how a run ends with
