@@ -400,7 +400,8 @@ TEST(MatmulAutoConfig, LargeBlockKDepth) {
     ASSERT_TRUE(chosen.has_value());
     EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast2D));
     EXPECT_GT(
-        chosen->blocking.out_block_h * chosen->blocking.out_block_w, HeuristicBlocking::Params{}.large_block_tiles);
+        chosen->blocking.out_block_h * chosen->blocking.out_block_w,
+        HeuristicBlocking::Params{}.tuned.large_block_tiles);
     EXPECT_EQ(chosen->blocking.in0_block_w, 16u);
     // 1x4 blocks: max_in0_block_w would give 8, but 2D goes no shallower than legacy's Kt / grid width = 16
     p = make_matmul(1, 1, 256, 4096, 1024, tt::DataFormat::Bfp8_b);

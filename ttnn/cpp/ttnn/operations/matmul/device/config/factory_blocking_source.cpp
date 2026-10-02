@@ -34,10 +34,12 @@ uint32_t max_in0_block_w(
         case Family::Mcast1DIn1: self_read = out_block_h; break;
         case Family::Reuse: self_read = out_block_h + out_block_w; break;
     }
-    const bool large_2d_block = family == Family::Mcast2D && out_block_h * out_block_w > params.large_block_tiles;
-    const uint32_t depth = large_2d_block ? 2 * params.max_in0_block_w : params.max_in0_block_w;
+    const bool large_2d_block = family == Family::Mcast2D && out_block_h * out_block_w > params.tuned.large_block_tiles;
+    const uint32_t depth = large_2d_block ? params.tuned.large_block_in0_block_w : params.tuned.max_in0_block_w;
     const uint32_t self_read_limit =
-        self_read == 0 ? depth : std::max(params.min_in0_block_w, params.max_self_read_tiles_per_k_step / self_read);
+        self_read == 0
+            ? depth
+            : std::max(params.limits.min_in0_block_w, params.tuned.max_self_read_tiles_per_k_step / self_read);
     return std::min({depth, two_blocks, self_read_limit});
 }
 
@@ -275,11 +277,14 @@ std::optional<Blocking> block_reuse(
 
 }  // namespace
 
+HeuristicBlocking::Params HeuristicBlocking::Params::for_arch(tt::ARCH /*arch*/) { return {}; }
+
 std::optional<Blocking> HeuristicBlocking::block(
     const MatmulDesc& p, const HardwareDesc& hw, Family family, const Split& split, const BlockRules& rules) const {
+    const Params params = params_.value_or(Params::for_arch(hw.arch));
     switch (family) {
         case Family::Mcast2D: {
-            auto b = block_2d(params_, p, hw, split.per_core_M, split.per_core_N, split.fuse_batch, rules);
+            auto b = block_2d(params, p, hw, split.per_core_M, split.per_core_N, split.fuse_batch, rules);
             if (b && !sharded_layout(p)) {
                 deepen_to_legacy_k_depth(p, hw, split.fuse_batch, *b);
             }
@@ -287,8 +292,8 @@ std::optional<Blocking> HeuristicBlocking::block(
         }
         case Family::Mcast1DIn0:
         case Family::Mcast1DIn1:
-            return block_1d(params_, p, hw, family, split.per_core_M, split.per_core_N, split.fuse_batch, rules);
-        case Family::Reuse: return block_reuse(params_, p, hw, split, rules);
+            return block_1d(params, p, hw, family, split.per_core_M, split.per_core_N, split.fuse_batch, rules);
+        case Family::Reuse: return block_reuse(params, p, hw, split, rules);
     }
     return std::nullopt;
 }
@@ -439,9 +444,12 @@ bool one_tile_2d(const Candidate& c) {
 
 }  // namespace
 
+HeuristicFamily::Params HeuristicFamily::Params::for_arch(tt::ARCH /*arch*/) { return {}; }
+
 std::optional<Candidate> HeuristicFamily::choose(
     const MatmulDesc& p, const HardwareDesc& hw, std::span<const Candidate> all) const {
-    auto chosen = choose_family(params_.one_d_core_advantage, p, all);
+    const Params params = params_.value_or(Params::for_arch(hw.arch));
+    auto chosen = choose_family(params.tuned.one_d_core_advantage, p, all);
     if (!chosen || !one_tile_2d(*chosen)) {
         return chosen;
     }
@@ -469,10 +477,29 @@ FactoryBlockingSource::FactoryBlockingSource(
 std::vector<Candidate> FactoryBlockingSource::propose(const MatmulDesc& p, const HardwareDesc& hw) const {
     const auto all = candidates(p, hw);
     // A sharded layout fixes the family: its candidate is the only one
-    const auto chosen = sharded_layout(p) ? (all.empty() ? std::nullopt : std::optional<Candidate>(all.front()))
-                                          : family_->choose(p, hw, all);
+    auto chosen = sharded_layout(p) ? (all.empty() ? std::nullopt : std::optional<Candidate>(all.front()))
+                                    : family_->choose(p, hw, all);
     if (!chosen) {
         return {};
+    }
+    // With a batched A fused into M, a layout that splits only M (1D in1, or 2D with blocks one tile wide) gives
+    // each core one tall block, whose output is written after its last K step. Looping over the batch instead gives
+    // each core one shorter block per batch, whose output writes overlap the next one's compute, provided one batch
+    // still keeps as many cores busy. Decided after the family, which the estimate compares with the batch fused.
+    const bool splits_only_m =
+        chosen->family == Family::Mcast1DIn1 || (chosen->family == Family::Mcast2D && chosen->blocking.per_core_N == 1);
+    if (!sharded_layout(p) && splits_only_m && chosen->fuse_batch && p.batch_a > 1) {
+        const uint32_t rows = chosen->family == Family::Mcast2D ? hw.grid.y : hw.grid.x * hw.grid.y;
+        if (auto looped =
+                blocking_->block(p, hw, chosen->family, {div_up(p.Mt, rows), chosen->blocking.per_core_N, false}, {})) {
+            // Only when one batch still keeps as many cores busy as the fused batches did
+            const uint32_t looped_cores = div_up(p.Mt, looped->per_core_M) * div_up(p.Nt, looped->per_core_N);
+            if (looped_cores >= chosen->cores) {
+                chosen->blocking = subblock_->subblock(p, chosen->family, *looped);
+                chosen->fuse_batch = false;
+                chosen->cores = looped_cores;
+            }
+        }
     }
     std::vector<Candidate> result = {*chosen};
     for (auto& n : k_depth_neighbours(p, hw, *chosen)) {

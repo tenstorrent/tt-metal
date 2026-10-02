@@ -84,31 +84,46 @@ public:
 // A layout's preferred in0_block_w wins whenever some block fits with it.
 class HeuristicBlocking final : public BlockingPolicy {
 public:
-    struct Params {
+    // Chosen: design limits, set by judgment rather than fitted
+    struct Limits {
+        // K block depth never goes below this (unless K itself is shallower): single-tile K steps pay a block
+        // handshake per tile.
+        uint32_t min_in0_block_w = 2;
+    };
+    // Tuned: fitted to benchmark data. Each records its basis and, where measured, the range over which the
+    // choices come out the same; a value outside the range is untested, not wrong.
+    struct Tuned {
         // K block depth, for every family: in0_block_w is at most this. Deeper K blocks stop paying for
         // themselves, and in 2D the block-size heuristic would otherwise trade output-block size (the only source
         // of data reuse) for K depth. The mcast families also keep at least two K blocks, since with a single
-        // block they single-buffer the inputs.
+        // block they single-buffer the inputs. Basis: 8 against 16 on the Wormhole OOB suite; range not measured.
         uint32_t max_in0_block_w = 8;
-        // 2D output blocks of more than this many tiles may use K blocks up to 2 * max_in0_block_w deep. Every K
-        // block ends with a pack of the whole output block (L1 accumulation of the partials), which sits on the
-        // compute path; a large block is compute bound, so deeper K blocks amortize that pack. Smaller blocks
-        // wait on data, where the pack is hidden and a deeper K block only lengthens the pipeline fill. On the
-        // Wormhole 2D sweeps, with the output block fixed, K depth 16 beat 8 on 6 of 10 larger blocks and lost on
-        // none, while on smaller blocks 8 won 51 to 19. The threshold is where the sweeps turn, not derived.
+        // 2D output blocks of more than large_block_tiles tiles may use K blocks up to large_block_in0_block_w
+        // deep. Every K block ends with a pack of the whole output block (L1 accumulation of the partials), which
+        // sits on the compute path; a large block is compute bound, so deeper K blocks amortize that pack. Smaller
+        // blocks wait on data, where the pack is hidden and a deeper K block only lengthens the pipeline fill.
+        // Basis: the Wormhole 2D sweeps with the output block fixed, where depth 16 beat 8 on 6 of 10 larger
+        // blocks and lost on none, while on smaller blocks 8 won 51 to 19; the threshold is where they turn.
         uint32_t large_block_tiles = 64;
+        uint32_t large_block_in0_block_w = 16;
         // K block depth is further limited so that the operand a core reads by itself (not by multicast) moves at
         // most this many tiles per K step: B's slice in 1D in0-mcast, A's in 1D in1-mcast, both in Reuse, none in
-        // 2D. Small per-step reads keep the double-buffered DRAM stream ahead of math; wide per-core blocks get
-        // shallower K blocks, but never below min_in0_block_w (single-tile K steps pay a block handshake per
-        // tile).
+        // 2D. Small per-step reads keep the
+        // double-buffered DRAM stream ahead of math; wide per-core blocks get shallower K blocks, but never below
+        // Limits::min_in0_block_w. Basis: 8 against 4 on the Wormhole OOB suite; range not measured.
         uint32_t max_self_read_tiles_per_k_step = 8;
-        uint32_t min_in0_block_w = 2;
+    };
+    struct Params {
+        Limits limits;
+        Tuned tuned;
+        // The values for an architecture (the same for every architecture today)
+        static Params for_arch(tt::ARCH arch);
     };
 
+    // The values for each matmul's architecture
     HeuristicBlocking() = default;
+    // Fixed values, whatever the architecture
     explicit HeuristicBlocking(const Params& params) : params_(params) {}
-    const Params& params() const { return params_; }
 
     std::optional<Blocking> block(
         const MatmulDesc& matmul,
@@ -118,7 +133,7 @@ public:
         const BlockRules& rules) const override;
 
 private:
-    Params params_;
+    std::optional<Params> params_;
 };
 
 // The largest-area subblock that fits DST and divides the block, two tiles or more on each side unless B's tiles
@@ -136,21 +151,29 @@ public:
 //  - a 2D choice whose per-core blocks are one tile tall or wide: the lowest roofline estimate instead.
 class HeuristicFamily final : public FamilyPolicy {
 public:
-    struct Params {
+    // Tuned: fitted to benchmark data (see HeuristicBlocking::Tuned)
+    struct Tuned {
         // Switching away from the default layout needs at least this many times as many cores busy: 1D over 2D
         // (1D multicasts a whole operand to every core), and for batched B a batch-looping multicast layout over
-        // Reuse. On the Wormhole sweep anything from 1.25 to 2 performs about the same.
+        // Reuse. Basis: the Wormhole family sweep; range 1.25 to 2 performs about the same.
         double one_d_core_advantage = 1.5;
     };
+    struct Params {
+        Tuned tuned;
+        // The values for an architecture (the same for every architecture today)
+        static Params for_arch(tt::ARCH arch);
+    };
 
+    // The values for each matmul's architecture
     HeuristicFamily() = default;
+    // Fixed values, whatever the architecture
     explicit HeuristicFamily(const Params& params) : params_(params) {}
 
     std::optional<Candidate> choose(
         const MatmulDesc& matmul, const HardwareDesc& hw, std::span<const Candidate> candidates) const override;
 
 private:
-    Params params_;
+    std::optional<Params> params_;
 };
 
 class FactoryBlockingSource final : public CandidateSource {

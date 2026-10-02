@@ -22,7 +22,7 @@ using namespace detail;
 
 namespace {
 
-// Headroom kept free below the L1 budget, for allocator alignment and small factory-side buffers
+// Chosen: headroom kept free below the L1 budget, for allocator alignment and small factory-side buffers
 constexpr uint32_t L1_HEADROOM_BYTES = 16 * 1024;
 
 tt::tt_metal::TensorMemoryLayout memory_layout(const Placement& t) {
