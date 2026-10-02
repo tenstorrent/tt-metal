@@ -71,14 +71,32 @@ def _tp_topology():
     return per_axis_topology()[1]
 
 
-def reduce_scatter_tp(x, mesh_device, num_links=None):
+def reduce_scatter_rows(x, mesh_device, cluster_axis, *, rs_op="ttnn", num_links=None, topology=None):
+    """Sum of [1,1,G S,H] TILE partials over a mesh axis, rows scattered (chip p: rows p S ..), as ttnn.reduce_scatter(
+    dim=2) does. ``rs_op="fabric"``: the fabric_reduce_scatter example (a line add-and-forward relay at the link rate,
+    ~2x ttnn's on the LoudBox)."""
+    if rs_op == "fabric":
+        from ttnn.operations.examples.fabric_reduce_scatter.program_descriptor_with_inline_kernels import (
+            fabric_reduce_scatter,
+        )
+
+        return fabric_reduce_scatter(x, cluster_axis=cluster_axis, num_links=num_links or 2)
+    return ttnn.reduce_scatter(
+        x,
+        dim=2,
+        cluster_axis=cluster_axis,
+        topology=topology,
+        num_links=num_links,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def reduce_scatter_tp(x, mesh_device, num_links=None, rs_op="ttnn"):
     """Sum over the TP (col) axis, rows scattered: [1,1,S,H] partials -> [1,1,S/TP,H] (col c: rows c S/TP ..); deallocates
     ``x``. The sequence-parallel residual's end of a block (MiMoRuntimeOptions.sp_residual)."""
     if mesh_device.shape[1] == 1:
         return x
-    out = ttnn.reduce_scatter(
-        x, dim=2, cluster_axis=1, topology=_tp_topology(), num_links=num_links, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
+    out = reduce_scatter_rows(x, mesh_device, 1, rs_op=rs_op, num_links=num_links, topology=_tp_topology())
     x.deallocate(True)
     return out
 
@@ -149,7 +167,7 @@ class TtDenseMLP:
         out = ttnn.linear(h, self.w_down, dtype=ttnn.bfloat16, compute_kernel_config=self.cfg, program_config=pc_down)
         h.deallocate(True)
         if tp_out == "scattered":
-            return reduce_scatter_tp(out, self.mesh_device, self.options.ar_links)
+            return reduce_scatter_tp(out, self.mesh_device, self.options.ar_links, self.options.rs_op)
         return all_reduce_tp(out, self.mesh_device, self.options.ar_links)
 
 

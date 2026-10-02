@@ -249,5 +249,5 @@ class TtAttention:
         )
         oc.deallocate(True)
         if tp_out == "scattered":
-            return reduce_scatter_tp(out, self.mesh_device, self.options.ar_links)
+            return reduce_scatter_tp(out, self.mesh_device, self.options.ar_links, self.options.rs_op)
         return all_reduce_tp(out, self.mesh_device, self.options.ar_links)

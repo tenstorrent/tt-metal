@@ -52,6 +52,9 @@ class MiMoRuntimeOptions:
     # The MoE block's all-gathers: "fabric" (ttnn.experimental.fabric_all_gather: ~10-20% faster on device, traced; eager
     # its per-call fence absorbs the chips' launch skew and it loses 2-3 ms per 6 layers on the LoudBox), or "high_bw".
     moe_ag_gather_op: str = "high_bw"  # MIMO_MOE_AG_GATHER_OP
+    # Row reduce-scatters (attention / MLP / MoE TP out, the > 2-row MoE send-back): "ttnn" (ttnn.reduce_scatter) or
+    # "fabric" (the fabric_reduce_scatter example: a line add-and-forward relay at the link rate).
+    rs_op: str = "ttnn"  # MIMO_RS_OP
     # Per-layer static expert placement (JSON, tests/perf/expert_placement.py; all-gather block only). None: the EP table.
     expert_placement: str | None = None  # MIMO_EXPERT_PLACEMENT
     # Gather the top-k idx / w as tiles and untilize after the gather (high_bw_all_gather costs per page).
@@ -129,6 +132,7 @@ class MiMoRuntimeOptions:
         kw["sp_residual"] = flag("MIMO_SP_RESIDUAL", True)
         kw["moe_ag_tp_in_gather"] = flag("MIMO_MOE_AG_TP_IN_GATHER", True)
         kw["moe_ag_gather_op"] = env.get("MIMO_MOE_AG_GATHER_OP", "high_bw")
+        kw["rs_op"] = env.get("MIMO_RS_OP", "ttnn")
         kw["untilize_width"] = int(env.get("MIMO_UA_W", "32"))
         root = env.get("MIMO_TTNN_CACHE")
         kw["ttnn_cache"] = root not in ("0", "off", "none", "")

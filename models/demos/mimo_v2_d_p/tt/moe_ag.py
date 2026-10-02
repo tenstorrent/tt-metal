@@ -380,7 +380,11 @@ class MoeAgBlock:
             col = self.lreduce(y_rm, self.plan_op.y_slot, self.gw)
         else:  # > 2 rows: reduce-scatter of the [T, H] partials over the rows (tiles)
             part = self.lreduce(y_rm, self.plan_op.y_slot, self.gw)  # bf16 tiles (LocalReduce tiled)
-            col = ttnn.reduce_scatter(part, dim=2, cluster_axis=0, topology=self.sp_topo, num_links=self.rs_links)
+            from models.demos.mimo_v2_d_p.tt.ffn import reduce_scatter_rows
+
+            col = reduce_scatter_rows(
+                part, self.dev, 0, rs_op=self.options.rs_op, num_links=self.rs_links, topology=self.sp_topo
+            )
         return self._tp_allreduce(col, scatter)
 
     def _tp_allreduce(self, col, scatter=False):
@@ -388,8 +392,12 @@ class MoeAgBlock:
         if self.cols == 1:
             return ttnn.to_layout(col, ttnn.TILE_LAYOUT) if col.layout != ttnn.TILE_LAYOUT else col
         if scatter:  # sequence-parallel residual: this col's rows of the sum only
+            from models.demos.mimo_v2_d_p.tt.ffn import reduce_scatter_rows
+
             t = ttnn.to_layout(col, ttnn.TILE_LAYOUT) if col.layout != ttnn.TILE_LAYOUT else col
-            rs = ttnn.reduce_scatter(t, dim=2, cluster_axis=1, topology=self.tp_topo, num_links=self.rs_links)
+            rs = reduce_scatter_rows(
+                t, self.dev, 1, rs_op=self.options.rs_op, num_links=self.rs_links, topology=self.tp_topo
+            )
             if t is not col:
                 ttnn.deallocate(t)
             return rs
