@@ -620,7 +620,8 @@ class LagunaModel:
 
     def lm_head_shards_decode(self, hidden_1BH):
         """Tiled matmul (decode): hidden [1,1,B,H] -> per-device logit shard [1,1,B,V/D]."""
-        normed = self.final_norm(hidden_1BH)
+        # the layers' width-sharded decode RMSNorm (the interleaved norm runs on 1 core, ~65 us)
+        normed = self.layers[0]._rms(hidden_1BH, self.norm_w)
         return ttnn.linear(normed, self.lm_head_w, compute_kernel_config=self._lm_ck)
 
     def lm_head_shards_dflash(self, draft_hidden, *, enable_experimental=False):
