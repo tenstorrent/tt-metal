@@ -7,6 +7,7 @@
 #include <sys/types.h>
 
 #include <cassert>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
@@ -98,6 +99,41 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Negetive_Values) {
     auto result_xtensor = core::to_xtensor(result);
     assert((result_xtensor.shape() == expected_result.shape()));
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
+}
+
+TEST_F(CrossEntropyForwardTest, BlackholeAccurateExpPreservesNearZeroLoss) {
+    using namespace ttml;
+
+    if (autograd::ctx().get_device().arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "This regression covers the Blackhole-specific cross-entropy exp path.";
+    }
+
+    constexpr uint32_t N = 1U;
+    constexpr uint32_t C = 1U;
+    constexpr uint32_t H = 32U;
+    constexpr uint32_t W = 32U;
+
+    // A full logical tile avoids vocabulary padding. The winning target logit is zero and
+    // every other logit is far into the softmax tail, so a BF16-oriented exp(0) bias remains
+    // visible after the FP32 log-sum-exp instead of being hidden by the usual broad tolerance.
+    xt::xarray<float> input_tensor = xt::zeros<float>({N, C, H, W});
+    input_tensor.fill(-16.0F);
+    for (uint32_t h = 0; h < H; ++h) {
+        input_tensor(0, 0, h, 0) = 0.0F;
+    }
+    xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
+
+    auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
+    auto target = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
+        target_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
+
+    auto result = ttml::metal::cross_entropy_fw(input, target);
+    auto result_xtensor = core::to_xtensor(result);
+
+    const float expected = std::log1p(static_cast<float>(W - 1U) * std::exp(-16.0F));
+    for (uint32_t h = 0; h < H; ++h) {
+        EXPECT_NEAR(result_xtensor(0, 0, h, 0), expected, 1.0e-4F) << "row " << h;
+    }
 }
 
 TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Batch) {
