@@ -19,7 +19,12 @@ import os
 import torch
 
 import ttnn
-from models.demos.gemma4.tt.ccl import ccl_allreduce
+from models.demos.gemma4.tt.ccl import (
+    ccl_allreduce,
+    ccl_allreduce_fractured,
+    ccl_lane_gather_rows,
+    ccl_lane_scatter_rows,
+)
 from models.demos.gemma4.tt.compute_config import gelu_variant
 from models.demos.gemma4.tt.dram_sharded import TILE_SIZE, DramShardedLinear, can_dram_shard
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
@@ -73,7 +78,18 @@ class SharedMLP:
         self.intermediate_size = resolve_shared_mlp_intermediate_size(hf_config, state_dict, layer_idx)
 
         tp = mesh_config.tp if mesh_config else 1
-        tp_suffix = f"_tp{tp}" if tp > 1 else ""
+        # 2D weight fracture (galaxy one-instance): the projections split their
+        # sharded dim over rows*cols chips instead of tp, so the mesh holds ONE
+        # weight copy. The residual stays replicated: gate_up keeps K full (no
+        # activation redistribution), and down's partial outputs are completed
+        # by ccl_allreduce_fractured (one all-reduce per mesh axis).
+        fractured = bool(mesh_config and getattr(mesh_config, "weight_fracture", False))
+        ways = mesh_config.fracture_ways if fractured else tp
+        if fractured:
+            tp_suffix = f"_f{mesh_config.mesh_shape[0]}x{mesh_config.mesh_shape[1]}"
+        else:
+            tp_suffix = f"_tp{tp}" if tp > 1 else ""
+        self._fractured = fractured
 
         # Tag the cache filenames with the weight dtype so that flipping a
         # SharedMLP weight's dtype (e.g. bf16 → bfp8 for DRAM-pressure relief)
@@ -83,7 +99,14 @@ class SharedMLP:
         _dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
         dtype_suffix = f"_{_dtype_str}"
 
-        if tp > 1:
+        if fractured:
+            # Host reshapes below expose the mesh-row factor as tensor dim 1,
+            # so the two mesh axes shard different dims (mapper requires it):
+            # gate_up [1, rows, K, cols*2n] dims=(1,3); down [1, rows, cols*k, H]
+            # dims=(1,2). Per-chip shapes match the plain-TP layout exactly.
+            col_mapper = mesh_config.fractured_mapper(mesh_device, 1, 3)
+            row_mapper = mesh_config.fractured_mapper(mesh_device, 1, 2)
+        elif tp > 1:
             col_mapper = mesh_config.column_parallel(mesh_device)
             row_mapper = mesh_config.row_parallel(mesh_device)
         else:
@@ -94,10 +117,10 @@ class SharedMLP:
         # experts/weights.py). At TP=8, 2112/8=264 is not tile-aligned; TILE
         # slice rounds the GeGLU half to 288 while an unpadded down_proj stays
         # K=264 → matmul width/height mismatch on WH/BH e2e.
-        if tp > 1:
-            per_device = self.intermediate_size // tp
+        if ways > 1:
+            per_device = self.intermediate_size // ways
             padded_per_device = ((per_device + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
-            pad_amount = padded_per_device * tp - self.intermediate_size
+            pad_amount = padded_per_device * ways - self.intermediate_size
         else:
             padded_per_device = self.intermediate_size
             pad_amount = 0
@@ -126,14 +149,27 @@ class SharedMLP:
                 up_t = torch.nn.functional.pad(up_t, (0, pad_amount))
                 # down: [I, H] → pad K (dim 0)
                 down_t = torch.nn.functional.pad(down_t, (0, 0, 0, pad_amount))
-            if tp > 1:
-                gate_shards = torch.chunk(gate_t, tp, dim=-1)
-                up_shards = torch.chunk(up_t, tp, dim=-1)
-                gate_up_t = torch.cat([torch.cat([up_shards[i], gate_shards[i]], dim=-1) for i in range(tp)], dim=-1)
+            if ways > 1:
+                gate_shards = torch.chunk(gate_t, ways, dim=-1)
+                up_shards = torch.chunk(up_t, ways, dim=-1)
+                gate_up_t = torch.cat([torch.cat([up_shards[i], gate_shards[i]], dim=-1) for i in range(ways)], dim=-1)
             else:
                 gate_up_t = torch.cat([up_t, gate_t], dim=-1)
-            gate_up_weight = gate_up_t.unsqueeze(0).unsqueeze(0)  # [1,1,hidden,2*inter_pad]
-            down_proj_weight = down_t.unsqueeze(0).unsqueeze(0)
+            if fractured:
+                rows, cols = mesh_config.mesh_shape
+                k_dim = gate_up_t.shape[0]
+                two_n = 2 * padded_per_device
+                # N is chunk-major (ways chunks of [up_i|gate_i]): expose rows.
+                gate_up_weight = (
+                    gate_up_t.reshape(k_dim, rows, cols * two_n).permute(1, 0, 2).contiguous().unsqueeze(0)
+                )  # [1, rows, K, cols*2n]
+                # down K is chunk-major along dim 0: reshape splits it directly.
+                down_proj_weight = (
+                    down_t.reshape(rows, cols * padded_per_device, -1).contiguous().unsqueeze(0)
+                )  # [1, rows, cols*k, hidden]
+            else:
+                gate_up_weight = gate_up_t.unsqueeze(0).unsqueeze(0)  # [1,1,hidden,2*inter_pad]
+                down_proj_weight = down_t.unsqueeze(0).unsqueeze(0)
         else:
             gate_up_weight = None
             down_proj_weight = None
@@ -144,7 +180,7 @@ class SharedMLP:
         # PCC to ~0.93 vs HF (threshold 0.99) on BH 1x4. Keep interleaved path
         # for MoE; dense 12B/31B retain the sharded opt.
         is_moe = bool(getattr(hf_config, "enable_moe_block", False))
-        dram_shard = _DRAM_SHARD_MLP and tp > 1 and not is_moe
+        dram_shard = _DRAM_SHARD_MLP and tp > 1 and not is_moe and not fractured
 
         if dram_shard and can_dram_shard(self.hidden_size, gu_n, dtype=dtype):
             self.gate_up_proj = DramShardedLinear(
@@ -209,6 +245,11 @@ class SharedMLP:
         # Fused gate/up projection: one matmul produces [.., 2*inter_pad/device]
         # laid out as [up_i | gate_i]. Split with the padded half-width so TILE
         # slice bounds stay aligned (264 would round to 288 and break down_proj).
+        lane_sharded = bool(self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False))
+        if lane_sharded:
+            # Slice-3 choreography: rows are lane-local but the weights are
+            # fractured across lanes, so gather all lanes' rows first ...
+            hidden_states = ccl_lane_gather_rows(hidden_states, self.mesh_config)
         gate_up = self.gate_up_proj(hidden_states)
         shard = self._inter_per_device
         s = gate_up.shape[-2]
@@ -228,7 +269,13 @@ class SharedMLP:
         hidden.deallocate(True)
 
         # Allreduce after row-parallel down_proj
-        if self.mesh_config is not None and self.mesh_config.tp > 1:
+        if lane_sharded:
+            # ... and reduce_scatter re-shards rows to their lanes while
+            # summing the cross-lane K-chunks (plus the tp-axis all-reduce).
+            output = ccl_lane_scatter_rows(output, self.mesh_config)
+        elif self._fractured:
+            output = ccl_allreduce_fractured(output, self.mesh_config, self.ccl_manager)
+        elif self.mesh_config is not None and self.mesh_config.tp > 1:
             output = ccl_allreduce(output, self.mesh_config, self.ccl_manager)
 
         return output

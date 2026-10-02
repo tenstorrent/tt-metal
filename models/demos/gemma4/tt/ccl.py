@@ -169,13 +169,15 @@ class CCLManager:
         self._barrier_idx = (self._barrier_idx + 1) % 2
         return sem
 
-    def _shape_key(self, shape, dtype, memory_config):
-        return (tuple(int(x) for x in shape), str(dtype), str(memory_config))
+    def _shape_key(self, shape, dtype, memory_config, axis=None):
+        # axis distinguishes same-shape buffers used by collectives on different
+        # cluster axes (per-device shard layout differs even when shapes match).
+        return (tuple(int(x) for x in shape), str(dtype), str(memory_config), axis)
 
     def _alloc_like(self, ref_tensor, memory_config):
         return ttnn.zeros_like(ref_tensor, device=self.mesh_device, memory_config=memory_config)
 
-    def get_persistent_ag_buffer(self, scattered, memory_config, tp):
+    def get_persistent_ag_buffer(self, scattered, memory_config, tp, axis=None):
         """Allocate a persistent AG destination sized by TP group width.
 
         Disabled by default in ``ccl_allreduce`` / ``ccl_allgather``: the gathered
@@ -189,7 +191,7 @@ class CCLManager:
         # All-gather expands dim=3 by the TP group size (cluster_axis width).
         out_shape = list(scattered.shape)
         out_shape[3] = int(out_shape[3]) * tp
-        key = self._shape_key(out_shape, scattered.dtype, memory_config)
+        key = self._shape_key(out_shape, scattered.dtype, memory_config, axis)
         buf = self._persistent_ag.get(key)
         if buf is None:
             buf = ttnn.zeros(
@@ -203,7 +205,7 @@ class CCLManager:
             logger.debug(f"CCL persistent AG buffer allocated shape={out_shape}")
         return buf
 
-    def get_persistent_rs_buffers(self, tensor, memory_config, tp):
+    def get_persistent_rs_buffers(self, tensor, memory_config, tp, axis=None):
         if not ccl_persistent_buffers_enabled():
             return None
         if tp <= 1:
@@ -215,8 +217,8 @@ class CCLManager:
         inter_shape = list(tensor.shape)
         if self.topology == ttnn.Topology.Linear:
             inter_shape = [2] + inter_shape
-        inter_key = self._shape_key(inter_shape, tensor.dtype, ttnn.DRAM_MEMORY_CONFIG)
-        out_key = self._shape_key(out_shape, tensor.dtype, memory_config)
+        inter_key = self._shape_key(inter_shape, tensor.dtype, ttnn.DRAM_MEMORY_CONFIG, axis)
+        out_key = self._shape_key(out_shape, tensor.dtype, memory_config, axis)
         inter = self._persistent_rs_inter.get(inter_key)
         if inter is None:
             inter = ttnn.zeros(
@@ -241,26 +243,30 @@ class CCLManager:
         return [inter, out]
 
 
-def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
+def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None, axis=None, group_size=None):
     """All-reduce across TP devices.
 
     Sync ``ttnn.all_reduce`` by default. With ``GEMMA4_CCL_ASYNC=1``, uses
     reduce_scatter_minimal_async + all_gather_async (tt_transformers composite
     pattern) on ``ccl_manager.topology`` (Ring on P150x8).
+
+    ``axis``/``group_size`` generalize the collective to either mesh axis
+    (galaxy one-instance completions); the defaults keep the historical
+    tp-axis behavior for every existing caller.
     """
-    if mesh_config is None or mesh_config.tp <= 1:
+    if mesh_config is None or (axis is None and mesh_config.tp <= 1):
         return tensor
 
     memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
-    tp_axis = mesh_config.tp_axis
+    tp_axis = mesh_config.tp_axis if axis is None else axis
     topology = ccl_manager.topology
 
     chunks = ccl_chunks_per_sync()
     workers = ccl_num_workers_per_link()
     nbuf = ccl_num_buffers_per_channel()
     if ccl_async_enabled():
-        tp = mesh_config.tp
-        rs_bufs = ccl_manager.get_persistent_rs_buffers(tensor, memory_config, tp)
+        tp = mesh_config.tp if group_size is None else group_size
+        rs_bufs = ccl_manager.get_persistent_rs_buffers(tensor, memory_config, tp, axis=tp_axis)
         scattered = ttnn.experimental.reduce_scatter_minimal_async(
             tensor,
             persistent_output_buffers=rs_bufs,
@@ -308,6 +314,73 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
     )
     tensor.deallocate(True)
     return result
+
+
+def ccl_allreduce_fractured(tensor, mesh_config, ccl_manager, memory_config=None):
+    """Complete partial sums under 2D weight fracture (galaxy one-instance).
+
+    With ``mesh_config.weight_fracture`` the down/output projections split
+    their K dim over BOTH mesh axes, so every chip holds a partial of the full
+    output. Summing along each mesh axis in turn completes it. Uses the sync
+    ``ttnn.all_reduce`` per axis — the correctness path; ring/async CCLs land
+    with the perf pass. Falls back to the ordinary TP all-reduce when
+    fracture is off.
+    """
+    if mesh_config is None or not getattr(mesh_config, "weight_fracture", False):
+        return ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config)
+
+    memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
+    out = tensor
+    for axis in (0, 1):
+        if mesh_config.mesh_shape[axis] <= 1:
+            continue
+        if ccl_manager is not None and ccl_async_enabled():
+            out = ccl_allreduce(
+                out,
+                mesh_config,
+                ccl_manager,
+                memory_config,
+                axis=axis,
+                group_size=mesh_config.mesh_shape[axis],
+            )
+        else:
+            reduced = ttnn.all_reduce(out, cluster_axis=axis, memory_config=memory_config)
+            out.deallocate(True)
+            out = reduced
+    return out
+
+
+def ccl_lane_gather_rows(tensor, mesh_config, memory_config=None):
+    """All-gather the row (batch/seq) dim across lanes (slice-3 choreography).
+
+    Before a weight-fractured matmul, each lane holds only its own rows;
+    gathering along the non-tp axis gives every chip all rows so its weight
+    chunk sees the full batch. Sync path (perf CCLs with the ring pass).
+    """
+    if mesh_config is None or not getattr(mesh_config, "lane_sharded", False):
+        return tensor
+    memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
+    gathered = ttnn.all_gather(tensor, dim=2, cluster_axis=mesh_config.sp_axis, memory_config=memory_config)
+    tensor.deallocate(True)
+    return gathered
+
+
+def ccl_lane_scatter_rows(tensor, mesh_config, memory_config=None):
+    """Complete a fractured matmul under lane sharding.
+
+    The down/output projection leaves every chip with a partial over its
+    weight K-chunk for ALL rows. reduce_scatter along the lane axis sums the
+    cross-lane chunks AND re-shards rows back to the owning lane; the tp-axis
+    all-reduce then sums the within-column chunks.
+    """
+    if mesh_config is None or not getattr(mesh_config, "lane_sharded", False):
+        return tensor
+    memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
+    scattered = ttnn.reduce_scatter(tensor, dim=2, cluster_axis=mesh_config.sp_axis, memory_config=memory_config)
+    tensor.deallocate(True)
+    reduced = ttnn.all_reduce(scattered, cluster_axis=mesh_config.tp_axis, memory_config=memory_config)
+    scattered.deallocate(True)
+    return reduced
 
 
 def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):

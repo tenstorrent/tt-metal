@@ -388,6 +388,19 @@ def _device_params():
             False,
             True,
         ),
+        (  # long-context-256k-b2 — TWO users, each with a FULL 256k context
+            "models/tt_transformers/demo/sample_prompts/input_data_long_256k.json",
+            True,
+            256 * 1024,
+            2,
+            200,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 8192},
+            {"temperature": 0, "top_p": 0.08},
+            True,
+            False,
+            True,
+        ),
         (  # ci-1 — single user, fixed iteration count for perf tracking
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",
             True,
@@ -411,6 +424,7 @@ def _device_params():
         "long-context-64k",
         "long-context-128k",
         "long-context-256k",
+        "long-context-256k-b2",
         "ci-1",
     ],
 )

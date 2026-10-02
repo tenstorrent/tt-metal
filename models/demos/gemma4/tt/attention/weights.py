@@ -41,6 +41,10 @@ class AttentionWeights:
     k_norm_weight: ttnn.Tensor  # Replicated across devices
     is_global: bool  # Controls K=V tying and partial RoPE
     kv_replicated: bool = False  # True when KV heads are replicated (not split) across TP devices
+    # 2D weight fracture (galaxy one-instance): mesh axis whose all-reduce
+    # completes the QKV partials (weights also split K over that axis).
+    # None = ordinary TP weights.
+    fracture_reduce_axis: int = None
 
 
 def load_attention_weights(
@@ -60,6 +64,10 @@ def load_attention_weights(
     q_size = config.num_attention_heads * config.head_dim
     kv_size = config.num_key_value_heads * config.head_dim
     tp = mesh_config.tp
+    fractured = bool(getattr(mesh_config, "weight_fracture", False))
+    f_rows, f_cols = mesh_config.mesh_shape if fractured else (tp, 1)
+    if fractured and tp != f_rows:
+        raise NotImplementedError("weight_fracture expects tp == mesh rows (heads over axis 0)")
 
     # When KV heads < TP, each device gets the KV head(s) its Q heads map to via GQA.
     # E.g. 16 Q / 2 KV / 8 TP: devices 0-3 get KV head 0, devices 4-7 get KV head 1.
@@ -131,8 +139,13 @@ def load_attention_weights(
         q_norm_w = None
         k_norm_w = None
 
-    # Mesh mappers
-    if tp > 1:
+    # Mesh mappers. Under weight_fracture (galaxy one-instance) attention
+    # stays heads-over-tp_axis and REPLICATES across the other axis: the
+    # tp_axis-aware column/row mappers express that directly, per-chip
+    # mechanics match plain TP, and no extra completion CCLs are needed.
+    # (Full attention-weight fracture needs a width-sharded residual — the
+    # llama70b layout — and lands with the perf pass.)
+    if tp > 1 or fractured:
         col_mapper = mesh_config.column_parallel(mesh_device)
         row_mapper = mesh_config.row_parallel(mesh_device)
         replicate_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
@@ -142,7 +155,7 @@ def load_attention_weights(
         replicate_mapper = None
 
     o_proj_cache_suffix = "_padded" if o_proj_pad_size > 0 and tp > 1 else ""
-    tp_suffix = f"_tp{tp}" if tp > 1 else ""
+    tp_suffix = f"_tp{tp}" if (tp > 1 or fractured) else ""
     # Tag the wqkv / o_proj cache filenames with their dtype so flipping
     # ``attention`` precision in precision_overrides.json doesn't reuse a
     # stale cached tensor at the previous dtype. q_norm / k_norm stay at
@@ -163,7 +176,7 @@ def load_attention_weights(
     # MoE (26B-A4B): sharded QKV/O-proj decode matmuls regress layer-decode PCC
     # on BH 1x4 (~0.93 vs 0.99). Dense models keep the opt.
     is_moe = bool(getattr(config, "enable_moe_block", False))
-    dram_shard = _DRAM_SHARD_ATTN and tp > 1 and not is_moe
+    dram_shard = _DRAM_SHARD_ATTN and tp > 1 and not is_moe and not fractured
     qkv_cache = get_cache_file_name(tensor_cache_path, f"wqkv{tp_suffix}{dtype_suffix}")
     oproj_cache = get_cache_file_name(tensor_cache_path, f"o_proj{o_proj_cache_suffix}{tp_suffix}{dtype_suffix}")
     qkv_cache_ws = (qkv_cache + ".ws") if qkv_cache else None
@@ -224,4 +237,5 @@ def load_attention_weights(
         k_norm_weight=k_norm_weight,
         is_global=is_global,
         kv_replicated=kv_replicated,
+        fracture_reduce_axis=None,
     )

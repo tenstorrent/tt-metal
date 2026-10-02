@@ -17,6 +17,9 @@ Handles:
 
 import os
 
+import torch
+from loguru import logger
+
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
 from models.demos.gemma4.tt.dram_sharded import DramShardedLinear
@@ -289,7 +292,16 @@ def prefill_sdpa_program_config(head_dim, seq_len, sliding_window=None):
 
 
 def chunked_prefill_sdpa(
-    tt_q, k_cache, v_cache, page_table, user_id, head_dim, scale=1.0, base_offset=0, num_kv_heads=None
+    tt_q,
+    k_cache,
+    v_cache,
+    page_table,
+    user_id,
+    head_dim,
+    scale=1.0,
+    base_offset=0,
+    num_kv_heads=None,
+    mesh_config=None,
 ):
     """Chunked causal prefill SDPA over a paged KV cache.
 
@@ -381,6 +393,38 @@ def chunked_prefill_sdpa(
         user_pt = page_table
         owns_user_pt = False
 
+    # CP prefill v1 (galaxy one-instance): split this Q chunk's rows across the
+    # lane (sp) axis — the paged cache is replicated per column and already
+    # holds the FULL chunk (fill precedes SDPA), so each column attends the
+    # complete prefix for its quarter via a per-column start offset, and the
+    # output rows are gathered back. Remnant chunks whose length does not
+    # split into lane-aligned q_chunks fall back to the replicated path.
+    cp = bool(mesh_config is not None and getattr(mesh_config, "cp_prefill", False))
+    cp_lanes = mesh_config.mesh_shape[mesh_config.sp_axis] if cp else 1
+    if cp and (seq_len % (cp_lanes * q_chunk_size) != 0):
+        logger.info(f"CP prefill fallback: seq_len={seq_len} % (lanes {cp_lanes} * q_chunk {q_chunk_size}) != 0")
+        cp = False
+    elif cp and not getattr(chunked_prefill_sdpa, "_cp_logged", False):
+        chunked_prefill_sdpa._cp_logged = True
+        logger.info(f"CP prefill ACTIVE: lanes={cp_lanes} seq_len={seq_len} sp_axis={mesh_config.sp_axis}")
+    elif mesh_config is None and not getattr(chunked_prefill_sdpa, "_nomc_logged", False):
+        chunked_prefill_sdpa._nomc_logged = True
+        logger.info("CP prefill: mesh_config is None at chunked_prefill_sdpa")
+    cp_col_off = None
+    if cp:
+        seq_local = seq_len // cp_lanes
+        q_full = tt_q
+        tt_q = ttnn.mesh_partition(tt_q, 2, cluster_axis=mesh_config.sp_axis)
+        seq_len = seq_local
+        col_host = torch.arange(cp_lanes, dtype=torch.int32) * seq_local  # 1D -> [1] per chip
+        cp_col_off = ttnn.from_torch(
+            col_host,
+            device=q_full.device(),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=mesh_config.lane_shard_mapper(q_full.device(), 0),
+        )
+
     outs = []
     start = 0
     while start < seq_len:
@@ -393,7 +437,29 @@ def chunked_prefill_sdpa(
             q_unpadded = q_chunk
             q_chunk = ttnn.pad(q_unpadded, [(0, 0), (0, 0), (0, pad), (0, 0)], value=0.0)
             q_unpadded.deallocate(True)
-        if isinstance(base_offset, ttnn.Tensor):
+        if cp:
+            # Per-column start: base_offset (+ intra-loop start) + column origin.
+            if isinstance(base_offset, ttnn.Tensor):
+                chunk_start_t = ttnn.add(base_offset, cp_col_off)
+                if start:
+                    chunk_start_t2 = ttnn.add(chunk_start_t, start)
+                    chunk_start_t.deallocate(True)
+                    chunk_start_t = chunk_start_t2
+            else:
+                chunk_start_t = ttnn.add(cp_col_off, int(base_offset) + start)
+            out_chunk = ttnn.transformer.chunked_scaled_dot_product_attention(
+                q_chunk,
+                k_cache,
+                v_cache,
+                user_pt,
+                chunk_start_idx_tensor=chunk_start_t,
+                scale=scale,
+                program_config=program_config,
+                compute_kernel_config=compute_kernel_config,
+                paged_cache_geometry=paged_cache_geometry,
+            )
+            chunk_start_t.deallocate(True)
+        elif isinstance(base_offset, ttnn.Tensor):
             # Traced multi-chunk: runtime offset from device tensor. Generator
             # chunks are <= PREFILL_CHUNK_SIZE so ``start`` is 0 here.
             if start:
@@ -443,6 +509,17 @@ def chunked_prefill_sdpa(
 
     if owns_user_pt:
         user_pt.deallocate(True)
+
+    if cp:
+        local = outs[0] if len(outs) == 1 else ttnn.concat(outs, dim=2)
+        if len(outs) > 1:
+            for o in outs:
+                o.deallocate(True)
+        gathered = ttnn.all_gather(local, dim=2, cluster_axis=mesh_config.sp_axis)
+        local.deallocate(True)
+        cp_col_off.deallocate(True)
+        tt_q.deallocate(True)  # the partitioned view created above; q_full stays caller-owned
+        return gathered
     if len(outs) == 1:
         return outs[0]
     out = ttnn.concat(outs, dim=2)
@@ -491,6 +568,13 @@ def chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, head_dim, sca
         packer_l1_acc=False,
     )
 
+    # NOTE: no CP branch here. This stride-sliced sliding path indexes Q and
+    # K/V with the same GLOBAL positions; partitioning Q across the lane axis
+    # would need per-column offsets in every slice plus an output gather, none
+    # of which exists. An earlier copy of the CP preamble referenced names
+    # outside this function's scope and would NameError on entry (the function
+    # is only reached by a single forward whose seq exceeds the non-chunked
+    # SDPA cliff, which the 24576-chunk configs never hit).
     outs = []
     start = 0
     while start < seq_len:
@@ -613,7 +697,12 @@ def apply_output_projection(tensor, weights: AttentionWeights):
 
 
 def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
-    """Apply tensor-parallel allreduce if TP > 1."""
+    """Apply tensor-parallel allreduce if TP > 1.
+
+    Galaxy one-instance note: attention weights shard heads over tp_axis and
+    replicate across the other axis, so this ordinary tp-axis all-reduce also
+    completes the fractured-mesh o_proj (columns hold identical partial sums).
+    """
     return ccl_allreduce(tensor, mesh_config, ccl_manager)
 
 

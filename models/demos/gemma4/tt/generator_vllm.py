@@ -76,7 +76,18 @@ def _full_isl_prefill_chunk_size(max_seq_len: int) -> int:
 class _Gemma4VllmOptimizations:
     @staticmethod
     def get_tensor_dtype(decoder_id, tensor, prefetcher=False):
-        del decoder_id, tensor, prefetcher
+        del decoder_id, prefetcher
+        # GEMMA4_KV_BFP8: the SERVING pools allocate through
+        # allocate_vllm_kv_cache(_per_layer), which reads this override -- the
+        # env gate in Gemma4Model.__init__ only covers the metal/demo path, so
+        # without this branch every serving boot silently stayed bf16 while
+        # the metal needle gate ran bfp8 (caught by a DP=4 pool OOM whose
+        # failing buffer decoded to ~1024 B/token, 2026-09-30).
+        if os.environ.get("GEMMA4_KV_BFP8", "0") == "1":
+            from models.tt_transformers.tt.model_config import TensorGroup
+
+            if tensor == TensorGroup.KV_CACHE:
+                return ttnn.bfloat8_b
         return ttnn.bfloat16
 
 
@@ -149,6 +160,42 @@ def _resolve_vllm_bounded_sliding(max_seq_len, mesh_device, model_path, *, hybri
     return _bs_env.lower() in ("1", "true", "yes")
 
 
+def _assert_within_native_context(max_seq_len: int, model_args) -> None:
+    """Refuse a serving length beyond gemma4's native RoPE window.
+
+    vLLM's own ceiling check (max_model_len vs the HF-derived maximum) is
+    waived in the serving templates by ``VLLM_ALLOW_LONG_MAX_MODEL_LEN=1``,
+    and the spec convention sizes the all-user KV pool as "B=1 x max_context"
+    -- so a template with ``max_context`` above the native 262,144 admits a
+    SINGLE request of that length end to end. Gemma4 has no rope scaling
+    (``rope_scaling: null``): past ``max_position_embeddings`` RoPE indexes
+    off the table and the bounded sliding rings see positions the sizing
+    never accounted for, failing at runtime instead of at boot. Guard here,
+    at the one choke point every gemma4 vLLM class passes through.
+    ``GEMMA4_ALLOW_BEYOND_NATIVE=1`` opts back in, explicitly and per-launch.
+    """
+    native = int(getattr(model_args, "max_context_len", 0) or 0)
+    if not native or max_seq_len <= native:
+        return
+    if os.environ.get("GEMMA4_ALLOW_BEYOND_NATIVE", "0").lower() in ("1", "true", "yes"):
+        logger.warning(
+            "Gemma4 vLLM: max_seq_len={} exceeds the native context {} and "
+            "GEMMA4_ALLOW_BEYOND_NATIVE is set -- serving beyond the RoPE table "
+            "is unvalidated.",
+            max_seq_len,
+            native,
+        )
+        return
+    raise ValueError(
+        f"max_seq_len {max_seq_len} exceeds gemma-4's native max_position_embeddings "
+        f"({native}, no rope scaling). vLLM's ceiling check is disabled by "
+        "VLLM_ALLOW_LONG_MAX_MODEL_LEN in the serving templates, so this length would "
+        "be accepted and then fail at runtime for any single request past the native "
+        "window. Lower max_context / --max-model-len, or set "
+        "GEMMA4_ALLOW_BEYOND_NATIVE=1 to accept unvalidated behavior."
+    )
+
+
 def _patch_model_args(
     model_args,
     mesh_device,
@@ -159,6 +206,7 @@ def _patch_model_args(
     *,
     bounded_sliding=False,
 ):
+    _assert_within_native_context(max_seq_len, model_args)
     model_args.max_batch_size = max_batch_size
     model_args.max_seq_len = max_seq_len
     # Prefill chunking (two cooperating layers after tenstorrent/vllm#448):
@@ -172,6 +220,13 @@ def _patch_model_args(
     # the configured max_context. Override with GEMMA4_GEN_PREFILL_CHUNK, or
     # force full-ISL single-chunk via GEMMA4_VLLM_SINGLE_CHUNK=1.
     chunk_override = int(os.environ.get("GEMMA4_GEN_PREFILL_CHUNK", "0"))
+    from models.demos.gemma4.tt.common import gemma4_cp_prefill_engaged
+
+    if chunk_override <= 0 and gemma4_cp_prefill_engaged(mesh_device):
+        # CP prefill pairs with a large generator chunk (measured 254K ladder:
+        # optimum 24576; CP alone and big-chunks alone are both <=0). Same
+        # default as the standalone generator path.
+        chunk_override = 24576
     if chunk_override > 0:
         model_args.max_prefill_chunk_size = chunk_override
         logger.info(
@@ -423,6 +478,12 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             sizes = sorted({int(x) for x in override.split(",") if x.strip() and int(x) <= max_b})
         else:
             sizes = sorted({1, max_b} if max_b > 1 else {1})
+        if getattr(getattr(self.model[0], "mesh_config", None), "lane_sharded", False):
+            # Lane-sharded decode always runs the full lane-major frame (the
+            # model pads short batches up to it), so smaller buckets would
+            # capture traces identical in shape to B=max under a different
+            # key. Warm and declare only the full frame.
+            sizes = [max_b]
         # Restrict to declared supported buckets.
         supported = set(self.tt_supported_decode_batch_sizes)
         sizes = [b for b in sizes if b in supported or b == max_b]
@@ -890,6 +951,31 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         return spec_per_layer
 
     @classmethod
+    def _tt_folds_dp_into_lanes(cls):
+        """Plugin marker: run ``--data_parallel_size N`` as N in-process lanes.
+
+        True only under the galaxy one-instance lanes gate; the DP=4 rail keeps
+        standard multi-process DP (one submesh per rank).
+        """
+        return os.environ.get("GEMMA4_GALAXY_LANES", "0").lower() in ("1", "true", "yes")
+
+    @classmethod
+    def _tt_lane_prefill_group(cls):
+        """Plugin marker: merged prefill steps should arrive as pure lane groups.
+
+        True when the lane-parallel prefill router is enabled: the plugin then
+        admits at most one new prefill per lane per step and gathers lanes
+        briefly, so a group covers every lane once and the router prefills it
+        in ONE multi-pipe chunk walk (a mixed group+serial mega-call returns
+        every first token at call END and dilutes the TTFT win).
+        """
+        return cls._tt_folds_dp_into_lanes() and os.environ.get("GEMMA4_LANE_PREFILL_ROUTER", "0").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+
+    @classmethod
     def initialize_vllm_model(
         cls,
         hf_config,
@@ -912,7 +998,15 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             )
 
         model_path = hf_config._name_or_path
-        submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
+        lanes_fold = os.environ.get("GEMMA4_GALAXY_LANES", "0").lower() in ("1", "true", "yes")
+        if lanes_fold and tt_data_parallel > 1:
+            # One-instance lane fold: ONE model on the FULL mesh; the plugin's
+            # lane coordinator schedules tt_data_parallel lanes that map onto
+            # mesh columns (owner-lane KV), not submeshes. Global slots are
+            # rows: lane = slot // lane_slots (block convention).
+            submesh_devices = [mesh_device]
+        else:
+            submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
 
         # Bounded sliding: mirror demo (auto policy + env). Hybrid-groups mode
         # still defaults ON when env unset — see ``_resolve_vllm_bounded_sliding``.
@@ -963,15 +1057,31 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                     model_path,
                     prefill_trace_enabled,
                 )
+            if lanes_fold and tt_data_parallel > 1:
+                # Generator-visible batch is the GLOBAL slot space; the model
+                # and KV stay sized per column (create above used the per-lane
+                # split). lane_slots lets prefill derive a slot's owner lane.
+                _lanes = getattr(getattr(model_i, "mesh_config", None), "lanes", None)
+                assert (
+                    _lanes == tt_data_parallel
+                ), f"lane fold expects mesh lanes == tt_data_parallel: {_lanes} != {tt_data_parallel}"
+                model_i.lane_slots = max_batch_size // tt_data_parallel
             _patch_model_args(
                 model_args_i,
                 submesh,
-                max_batch_size=max_batch_size // tt_data_parallel,
+                max_batch_size=(
+                    max_batch_size if (lanes_fold and tt_data_parallel > 1) else max_batch_size // tt_data_parallel
+                ),
                 max_seq_len=max_seq_len,
                 model_path=model_path,
                 prefill_trace_enabled=prefill_trace_enabled,
                 bounded_sliding=bounded_sliding_kv_cache,
             )
+            if lanes_fold and tt_data_parallel > 1:
+                # The batched-prefill flatten path is not lane-aware (it would
+                # hand _lane_stack the slot LIST); prefills stay per-user, and
+                # same-tile bursts get lane-parallel routing separately.
+                model_args_i.disable_batched_prefill = True
             # The shared TT vLLM cache allocator reads ``model.args.optimizations``;
             # mirror the text-transformer wrappers by exposing model_args here.
             model_i.args = model_args_i
@@ -1168,6 +1278,167 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             return merged_tokens, merged_log_probs
         return merged_output
 
+    def _g4_router_reject(self, reason):
+        logger.info("Gemma4 vLLM: lane router ineligible -- {}", reason)
+        return None
+
+    def _try_lane_parallel_prefill(self, kwargs, full_page_tables, raw_page_tables_per_layer=None, enable_trace=True):
+        """Split a merged prefill step into lane-parallel groups.
+
+        The scheduler merges every waiting prefill into one step, so this call
+        can carry any batch size. Requests bucket by owner lane (slot //
+        lane_slots, FIFO in call order); round r takes each lane's r-th
+        request, and every round that covers ALL lanes with one shared last
+        32-token tile prefills in ONE chunk walk via prefill_forward_lanes
+        (metal-measured 3.4-3.9x). Leftover requests recurse through
+        prefill_forward with subset kwargs and run serially. Partial groups
+        cannot run lane-parallel: the tail slice offset is device-replicated,
+        and scratch rows would write KV through ring block 0 of an absent
+        lane's column -- a resident user's block.
+
+        Returns the call's full [batch, 1, vocab] host logits (the serial
+        path's contract), or None to fall back entirely (no full round,
+        warmup, device sampling, cached prefixes, or multimodal kwargs).
+        Opt-in via GEMMA4_LANE_PREFILL_ROUTER=1.
+        """
+        if os.environ.get("GEMMA4_LANE_PREFILL_ROUTER", "0").lower() not in ("1", "true", "yes"):
+            return None
+        model = self.model[0]
+        mesh_cfg = getattr(model, "mesh_config", None)
+        if mesh_cfg is None or not getattr(mesh_cfg, "lane_sharded", False):
+            return None
+        tokens = kwargs.get("tokens")
+        slots = kwargs.get("empty_slots")
+        prompt_lens = kwargs.get("prompt_lens")
+        if tokens is None or slots is None or prompt_lens is None:
+            return self._g4_router_reject(
+                f"missing kwargs: tokens={tokens is not None} slots={slots is not None} plens={prompt_lens is not None}"
+            )
+        if kwargs.get("model_id_warmup") is not None or kwargs.get("warmup_prefill"):
+            return self._g4_router_reject("warmup call")
+        if kwargs.get("sampling_params") is not None:
+            return self._g4_router_reject("device sampling_params present")
+
+        # The plugin always merges multi_modal_kwargs; for a multimodal-capable
+        # model class a TEXT batch still carries pixel_values=[None]*B, so an
+        # is-not-None test rejects everything. Route unless some entry is real.
+        def _mm_present(v):
+            if v is None:
+                return False
+            if isinstance(v, (list, tuple)):
+                return any(x is not None for x in v)
+            return True
+
+        if any(_mm_present(kwargs.get(k)) for k in ("pixel_values", "images", "image_embeds")):
+            return self._g4_router_reject("multimodal kwargs")
+        start_pos = kwargs.get("start_pos")
+        if start_pos is not None and any(int(p) > 0 for p in torch.as_tensor(start_pos).reshape(-1)):
+            return self._g4_router_reject("cached prefix (start_pos > 0)")
+        B = int(tokens.shape[0])
+        lanes = mesh_cfg.lanes
+        lane_slots = int(getattr(model, "lane_slots", 0) or 32)
+        if B < lanes:
+            return self._g4_router_reject(f"B={B} < lanes={lanes}")
+        if not full_page_tables:
+            return self._g4_router_reject("no per-layer page tables")
+        g_idxs = [i for i, lt in enumerate(model.hf_config.layer_types) if lt == "full_attention"]
+        if not g_idxs or full_page_tables[g_idxs[0]] is None:
+            return self._g4_router_reject("no full-attention table")
+        bad_pt = [i for i, pt in enumerate(full_page_tables) if pt is None or isinstance(pt, ttnn.Tensor)]
+        if bad_pt:
+            return self._g4_router_reject(
+                f"non-host per-layer tables at layers {bad_pt[:6]} (of {len(full_page_tables)})"
+            )
+
+        plens = [int(p) for p in torch.as_tensor(prompt_lens).reshape(-1)][:B]
+        lane_of = [int(s) // lane_slots for s in slots]
+        buckets = [[q for q in range(B) if lane_of[q] == ln] for ln in range(lanes)]
+        groups = []
+        r = 0
+        while all(len(b) > r for b in buckets):
+            group = [buckets[ln][r] for ln in range(lanes)]
+            if len({(plens[q] - 1) // 32 for q in group}) != 1:
+                break
+            groups.append(group)
+            r += 1
+        if not groups:
+            return self._g4_router_reject(
+                f"no full round: B={B} slots={[int(x) for x in slots][:8]} lane_slots={lane_slots} "
+                f"buckets={[len(b) for b in buckets]} head_tiles={[(plens[b[0]] - 1) // 32 for b in buckets if b]}"
+            )
+        routed = {q for g in groups for q in g}
+        remainder = [q for q in range(B) if q not in routed]
+
+        # The serial impl pads short prompts to get_padded_prefill_len inside
+        # prepare; the group walk gets raw-width tokens, so pad here or the
+        # sliding fill hands SDPA a sub-tile V (TT_FATAL K=32 vs V=25 on the
+        # ~25-token gate prompts).
+        S = int(tokens.shape[-1])
+        S_pad = int(get_padded_prefill_len(S))
+        gpt = full_page_tables[g_idxs[0]]
+        gpt = gpt if gpt.dim() > 1 else gpt.unsqueeze(0)
+        out = torch.zeros(B, 1, model.vocab_size)
+        logger.info(
+            "Gemma4 vLLM: lane-parallel prefill router -- {} requests, {} full group(s), {} serial, seq {}",
+            B,
+            len(groups),
+            len(remainder),
+            S_pad,
+        )
+        for group in groups:
+            toks4 = torch.zeros(lanes, S_pad, dtype=tokens.dtype)
+            plens4 = [1] * lanes
+            tables4 = torch.zeros(lanes, 1, int(gpt.shape[-1]), dtype=torch.int32)
+            for ln, q in enumerate(group):
+                toks4[ln, :S] = tokens[q]
+                plens4[ln] = plens[q]
+                # Plugin per-layer tables arrive in LOCAL prefill order (row
+                # i = request i), not slot-indexed (the debt #1 lesson).
+                tables4[ln, 0] = gpt[q].to(torch.int32)
+            per_layer = []
+            for pt in full_page_tables:
+                pt2 = pt if pt.dim() > 1 else pt.unsqueeze(0)
+                rows = torch.zeros(lanes, int(pt2.shape[-1]), dtype=torch.int32)
+                for ln, q in enumerate(group):
+                    rows[ln] = pt2[q].to(torch.int32)
+                per_layer.append(rows)
+            model._active_page_tables_per_layer = per_layer
+            out_rows = self.prefill_forward_lanes(toks4, tables4, kwargs.get("kv_cache"), plens4, slot_ids=None)
+            for ln, q in enumerate(group):
+                out[q] = out_rows[ln].reshape(1, -1)[:, : model.vocab_size]
+        if hasattr(model, "_active_page_tables_per_layer"):
+            del model._active_page_tables_per_layer
+
+        if remainder:
+            sub_kwargs = dict(kwargs)
+            sub_kwargs["tokens"] = tokens[remainder]
+            sub_kwargs["prompt_lens"] = [plens[q] for q in remainder]
+            sub_kwargs["empty_slots"] = [slots[q] for q in remainder]
+            sub_kwargs["enable_trace"] = enable_trace
+            if start_pos is not None:
+                sp = torch.as_tensor(start_pos).reshape(-1)
+                sub_kwargs["start_pos"] = [int(sp[q]) for q in remainder]
+            pt_kw = kwargs.get("page_table")
+            if isinstance(pt_kw, torch.Tensor) and pt_kw.dim() >= 2 and pt_kw.shape[0] >= B:
+                sub_kwargs["page_table"] = pt_kw[remainder]
+            sub_pts = None
+            if raw_page_tables_per_layer is not None:
+                sub_pts = []
+                for pt in raw_page_tables_per_layer:
+                    if isinstance(pt, torch.Tensor) and pt.dim() >= 2 and pt.shape[0] >= B:
+                        sub_pts.append(pt[remainder])
+                    else:
+                        sub_pts.append(pt)
+            logger.info(
+                "Gemma4 vLLM: lane router serial remainder -- {} request(s) on lanes {}",
+                len(remainder),
+                sorted({lane_of[q] for q in remainder}),
+            )
+            sub_out = self.prefill_forward(page_tables_per_layer=sub_pts, **sub_kwargs)
+            for pos, q in enumerate(remainder):
+                out[q] = sub_out[pos]
+        return out
+
     def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
         tokens = kwargs.get("tokens")
         if tokens is None and args:
@@ -1198,7 +1469,9 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         # that one user).
         rings_live_before_prefill = len(getattr(self, "_bounded_ring_slot_map", None) or {})
         full_page_tables = self._build_per_layer_page_tables(page_tables_per_layer, kwargs.get("page_table"))
-        full_page_tables = self._pad_sliding_page_tables_for_bounded(full_page_tables, kwargs.get("kv_cache"))
+        full_page_tables = self._pad_sliding_page_tables_for_bounded(
+            full_page_tables, kwargs.get("kv_cache"), row_slots=kwargs.get("empty_slots")
+        )
         full_page_tables = self._pad_page_tables_batch_to_max(full_page_tables)
         if self._bounded_sliding_kv_cache and full_page_tables:
             sliding_idxs = self._sliding_layer_indices()
@@ -1241,6 +1514,24 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             kwargs["start_pos"] = align_num_cached_tokens_to_sdpa([int(n) for n in start_pos])
 
         t0 = time.perf_counter()
+
+        # Lane-parallel prefill router (opt-in): a lane-step group prefills all
+        # its lanes in one chunk walk instead of serially. Falls back to the
+        # serial path on any ineligibility.
+        routed = self._try_lane_parallel_prefill(
+            kwargs, full_page_tables, raw_page_tables_per_layer=page_tables_per_layer, enable_trace=enable_trace
+        )
+        if routed is not None:
+            dt = time.perf_counter() - t0
+            logger.info(
+                "[gemma4-vllm-perf] lane-router prefill TTFT={:.1f} ms | batch={} | seq_len={}",
+                dt * 1000.0,
+                len(routed),
+                int(kwargs["tokens"].shape[-1]),
+            )
+            self._perf_decode_tokens = 0
+            self._perf_decode_s = 0.0
+            return routed
 
         # B>4 true-batched prefill hangs on P150x8 after the first all_gather.
         # Micro-batching with remapped local slots (0..chunk) also breaks decode:
@@ -1491,6 +1782,18 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             )
         return out
 
+    @property
+    def kv_head_shard_devices(self):
+        """How many devices KV heads shard over (the TP group), for the
+        plugin's per-device kv-cache spec. On a 2D one-instance mesh this is
+        the tp-axis size (8), not the mesh device count (32) — dividing by 32
+        under-declared sliding heads (1 instead of 2) and broke the paged-fill
+        geometry checks at warmup. Equals device count on 1xN meshes.
+        """
+        models = getattr(self, "model", None) or []
+        mc = getattr(models[0], "mesh_config", None) if models else None
+        return getattr(mc, "tp", None) if mc is not None else None
+
     def allocate_kv_cache(self, *args, **kwargs):
         # Legacy uniform path (vLLM falls back here when ``get_kv_cache_spec``
         # isn't consulted). The hybrid path uses ``allocate_kv_cache_per_layer``
@@ -1544,7 +1847,11 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         ring = bounded_ring_modulo(int(sliding_window))
         if ring is None or int(ring) % block_size != 0:
             return None
-        max_batch = int(self.model_args[0].max_batch_size)
+        # Under the lane fold model_args carries the GLOBAL slot space while
+        # every KV tensor (sliding rings included) is PER COLUMN: size the pool
+        # from the per-lane batch or the ring quadruples and DRAM OOMs at
+        # allocation (941 MB short at layer 53/60 on the first lanes boot).
+        max_batch = int(getattr(self.model[0], "lane_slots", 0) or self.model_args[0].max_batch_size)
         return (int(ring) // block_size) * max_batch
 
     def _release_decode_traces_for_fresh_wave(self) -> None:
@@ -1660,7 +1967,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 shrunk,
                 len(sliding_idxs),
                 new_blocks,
-                int(self.model_args[0].max_batch_size),
+                int(getattr(self.model[0], "lane_slots", 0) or self.model_args[0].max_batch_size),
             )
         return out
 
@@ -1802,7 +2109,9 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             out.append(padded)
         return out
 
-    def _pad_sliding_page_tables_for_bounded(self, page_tables_per_layer, kv_cache, authoritative=False):
+    def _pad_sliding_page_tables_for_bounded(
+        self, page_tables_per_layer, kv_cache, authoritative=False, row_slots=None
+    ):
         """Remap sliding-layer page tables onto the bounded physical pool.
 
         With hybrid groups OFF, vLLM hands every layer the same full-ISL
@@ -1886,8 +2195,15 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 break
             if ref is None:
                 ref = pt
+        lane_slots_n = 0
+        if bool(getattr(getattr(model, "mesh_config", None), "lane_sharded", False)):
+            lane_slots_n = int(getattr(model, "lane_slots", 0) or 0)
         slots_by_row = (
-            self._bounded_ring_slots(ref, max_slots or int(ref.shape[0]), authoritative) if ref is not None else None
+            self._bounded_ring_slots(
+                ref, max_slots or int(ref.shape[0]), authoritative, row_slots=row_slots, lane_slots=lane_slots_n
+            )
+            if ref is not None
+            else None
         )
 
         out = []
@@ -1918,7 +2234,9 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                         f"slot reference has {len(slots_by_row)} — falling back to per-layer slot "
                         "derivation. Rings can diverge across layers if row identities differ."
                     )
-                slots = self._bounded_ring_slots(pt, max_slots or batch, False)
+                slots = self._bounded_ring_slots(
+                    pt, max_slots or batch, False, row_slots=row_slots, lane_slots=lane_slots_n
+                )
             # Always W columns (demo layout). Keeping vLLM's full-ISL width
             # here thrash-reallocates persistent buffers vs short prefill
             # tables and is unused under cache_position_modulo.
@@ -1943,7 +2261,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             return None
         return int(row[0])
 
-    def _bounded_ring_slots(self, pt, max_slots, authoritative):
+    def _bounded_ring_slots(self, pt, max_slots, authoritative, row_slots=None, lane_slots=None):
         """Assign each page-table row a persistent bounded-ring slot.
 
         ``authoritative`` must be set only by the decode path: a decode step
@@ -1957,6 +2275,36 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             slot_map = {}
             self._bounded_ring_slot_map = slot_map
         keys = [self._bounded_row_key(pt[u]) for u in range(int(pt.shape[0]))]
+        # Lanes fold: each column's sliding pool holds only lane_slots rings,
+        # and device slots are stable and lane-local for a request's lifetime,
+        # so the ring is simply slot % lane_slots. The dense insertion-order
+        # ids below are wrong here twice over: they exceed the per-column pool
+        # once cumulative arrivals pass lane_slots (out-of-pool block ids ->
+        # silent junk, observed at every depth), and a recycled vLLM block id
+        # can hit a departed request's stale entry and inherit its ring. A
+        # prefill call (row_slots = empty_slots, local row order) REBINDS its
+        # keys unconditionally; decode/spec calls look up what prefill bound.
+        if lane_slots and row_slots is not None:
+            slots = []
+            for u, k in enumerate(keys):
+                if k is None or u >= len(row_slots):
+                    slots.append(None)
+                    continue
+                ring = int(row_slots[u]) % int(lane_slots)
+                slot_map[k] = ring
+                slots.append(ring)
+            return slots
+        if lane_slots:
+            missing = [k for k in keys if k is not None and k not in slot_map]
+            if missing and not getattr(self, "_g4_ring_lookup_miss_warned", False):
+                self._g4_ring_lookup_miss_warned = True
+                logger.warning(
+                    "Gemma4 bounded: {} ring key(s) unseen by any prefill on the lanes rail; "
+                    "falling back to dense assignment for them",
+                    len(missing),
+                )
+            if not missing:
+                return [None if k is None else slot_map[k] for k in keys]
         # Do NOT release a slot merely because its key is missing from this
         # batch. vLLM does not necessarily schedule every running request in
         # every decode step, so an absent key is not proof the request ended;

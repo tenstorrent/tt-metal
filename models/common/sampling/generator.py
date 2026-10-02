@@ -344,6 +344,18 @@ class SamplingGenerator:
             and is_default_value(sampling_params.frequency_penalty, self._DEFAULT_PENALTIES["frequency"])
             and is_default_value(sampling_params.repetition_penalty, self._DEFAULT_PENALTIES["repetition"])
         )
+        if self._penalties_active and not getattr(self.tt_sampling, "_allow_penalties_sampling", True):
+            # Rails that skip compiling the penalties program (precompile loop
+            # above) must also never EXECUTE it: requests with penalties would
+            # otherwise crash in apply_penalties. Ignore them, loudly once.
+            if not getattr(self, "_penalties_suppressed_logged", False):
+                self._penalties_suppressed_logged = True
+                logger.warning(
+                    "Sampling penalties requested but the penalties program is "
+                    "disabled on this mesh (_allow_penalties_sampling=False); "
+                    "ignoring penalty parameters."
+                )
+            self._penalties_active = False
         if (
             not self.tt_sampling.force_argmax_sampling
             or self._penalties_active
@@ -463,6 +475,17 @@ class SamplingGenerator:
                 # Models that disable force-argmax never reach that program, and it is not runnable
                 # under their sub-device config (untilize with sub_core_grids=None).
                 if force_argmax and not self.tt_sampling._allow_force_argmax_sampling:
+                    continue
+                # Models may disable the penalty program the same way (attribute
+                # defaults True elsewhere): e.g. on a 2D-fractured mesh the
+                # penalty buffers' shapes don't match the vocab sharding yet.
+                if penalties_on and not getattr(self.tt_sampling, "_allow_penalties_sampling", True):
+                    continue
+                # Same escape for the top-k/top-p program: its global-index
+                # reconstruction broadcasts are (1,N)-mesh shaped. Rails that
+                # force argmax (e.g. the fractured one-instance mesh) skip
+                # compiling it rather than crash at precompile.
+                if (not force_argmax) and not getattr(self.tt_sampling, "_allow_topk_sampling", True):
                     continue
                 self._penalties_active = penalties_on
                 # Set the flag directly: reset_params() would re-derive it from k/p/temp and overwrite
