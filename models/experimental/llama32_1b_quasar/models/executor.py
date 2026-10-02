@@ -2693,11 +2693,18 @@ def run_teacher_forcing(
     # Device next-token argmax (zero host compute) on Quasar: prefill_forward returns the argmax token ids
     # instead of host logits (Eager executor only; LLAMA_QSR_DEVICE_SAMPLING=0 or WH/BH -> host argmax).
     use_device_sampling = _device_sampling_enabled(executor)
-    use_device_prefill = use_device_sampling and isinstance(executor, EagerLLMExecutor)
+    # The executor may be a thin wrapper (EagerLlama32_1BExecutor) rather than EagerLLMExecutor, so probe for
+    # the return_argmax_tokens capability rather than isinstance; the Traced path doesn't support it.
+    import inspect as _inspect
+
+    use_device_prefill = use_device_sampling and (
+        "return_argmax_tokens" in _inspect.signature(executor.prefill_forward).parameters
+    )
+    prefill_argmax_kwargs = {"return_argmax_tokens": True} if use_device_prefill else {}
     if profiler is not None:
         profiler.start("inference_prefill")
     t0 = time.perf_counter()
-    prefill_output = executor.prefill_forward(prompt_tokens, **prefill_kwargs, return_argmax_tokens=use_device_prefill)
+    prefill_output = executor.prefill_forward(prompt_tokens, **prefill_kwargs, **prefill_argmax_kwargs)
     if hasattr(executor, "mesh_device"):
         ttnn.synchronize_device(executor.mesh_device)
     prefill_time_s = time.perf_counter() - t0

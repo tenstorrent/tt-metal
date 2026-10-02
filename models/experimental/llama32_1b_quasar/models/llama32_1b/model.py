@@ -1207,6 +1207,7 @@ class EagerLlama32_1BExecutor:
         empty_slots=None,
         sampling_params=None,
         start_pos=None,
+        return_argmax_tokens=False,
     ):
         return self._engine.prefill_forward(
             tokens,
@@ -1216,6 +1217,7 @@ class EagerLlama32_1BExecutor:
             empty_slots=empty_slots,
             sampling_params=sampling_params,
             start_pos=start_pos,
+            return_argmax_tokens=return_argmax_tokens,
         )
 
     def _prefill_single_user(self, tokens, page_table, user_id, last_token_idx, num_cached_tokens=0):
