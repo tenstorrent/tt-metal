@@ -43,6 +43,7 @@ _STATE_GLOBS = (
     "perf_measurements_*.jsonl.lock",
     "perf_mcp_baseline_*.json",
     "perf_mcp_full_pipeline_baseline_1cq_*.json",
+    "perf_mcp_trace_region_*.json",
     "perf_mcp_throughput_*.json",
     "perf_mcp_stage_ms_*.json",
     "perf_mcp_gate_verdicts_*.json",

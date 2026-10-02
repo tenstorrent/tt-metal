@@ -2628,6 +2628,54 @@ def _adaptive_run(cmd, cwd, env, label="device run", stall_s=None, backstop=None
     return _AdaptiveResult(rc, "".join(buf))
 
 
+def _trace_region_memory_path():
+    """Where the trace region a full-pipeline run last FIT in is remembered, keyed like the verdicts."""
+    return state_dir() / ("perf_mcp_trace_region_%s_%s.json" % (_model_key(), os.environ.get("PERF_MCP_TASK", "main")))
+
+
+def _trace_region_board_key() -> str:
+    """The board the remembered size belongs to, from what Step 1 detected; "" when it is not known.
+
+    A size that fit one board is not carried to another: per-chip trace bytes follow the per-chip work,
+    and a Blackhole box has more DRAM than a Wormhole Galaxy."""
+    try:
+        parts = [str(_ENV.get(k) or "").strip() for k in ("arch", "dram_capacity_bytes", "device_count")]
+        return ":".join(parts) if all(parts) else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def remembered_trace_region() -> int:
+    """The trace region a full-pipeline run of this model last fit in on this board, or 0."""
+    key = _trace_region_board_key()
+    if not key:
+        return 0
+    try:
+        return max(0, int((json.loads(_trace_region_memory_path().read_text()) or {}).get(key) or 0))
+    except Exception:  # noqa: BLE001 -- absent or unreadable: nothing remembered
+        return 0
+
+
+def _remember_trace_region(nbytes: int) -> None:
+    """Keep the largest region a run that MEASURED something fit in. Best-effort: never costs the run."""
+    key = _trace_region_board_key()
+    try:
+        nbytes = int(nbytes or 0)
+        if not key or nbytes <= _TRACE_REGION_DEFAULT or nbytes <= remembered_trace_region():
+            return
+        p = _trace_region_memory_path()
+        try:
+            doc = json.loads(p.read_text()) or {}
+        except Exception:  # noqa: BLE001
+            doc = {}
+        doc[key] = nbytes
+        tmp = p.with_suffix(p.suffix + ".tmp")
+        tmp.write_text(json.dumps(doc))
+        os.replace(str(tmp), str(p))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _grow_trace_region_and_retry(cmd, repo, env, out, r):
     """Re-run with a bigger trace region until the capture fits, growing up to the DRAM-derived
     ceiling. Model- and hardware-agnostic. Fires on EITHER of the two ways a too-small region shows up:
@@ -3186,6 +3234,13 @@ def _run_full_pipeline_ms():
     _cur_reg = int(env.get("TT_PERF_TRACE_REGION") or 0)
     if _TRACE_REGION_DEFAULT > _cur_reg:
         env["TT_PERF_TRACE_REGION"] = str(_TRACE_REGION_DEFAULT)
+    # AND AT THE SIZE THIS MODEL LAST FIT IN ON THIS BOARD (remembered_trace_region). The grow below is
+    # per call: it fixed env for that one run and the next check started at the default again, so every
+    # check ran the model twice -- once to overflow, once for real. Qwen-Image-Edit on a WH Galaxy
+    # (2026-10-02): 192 MB -> overflow -> 1.43 GB on EVERY check, ~30 min each against ~10 for one run.
+    _mem_reg = remembered_trace_region()
+    if _mem_reg > int(env.get("TT_PERF_TRACE_REGION") or 0) and _mem_reg <= _TRACE_REGION_MAX:
+        env["TT_PERF_TRACE_REGION"] = str(_mem_reg)
     _prof = os.environ.get("PERF_MCP_PROFILE_ENV")
     if _prof:
         try:
@@ -3345,6 +3400,13 @@ def _run_full_pipeline_ms():
         # a different depth. perf_test_gen has had this since a5aa6a96af ("no fixed magic number")
         # -- it was simply never wired into this path.
         out, r = _grow_trace_region_and_retry(cmd, repo, env, out, r)
+        try:
+            from agent.tracy_tool import per_token_readings as _ptr
+
+            if any(v > 0 for v in _ptr(out or "")):
+                _remember_trace_region(int(env.get("TT_PERF_TRACE_REGION") or 0))
+        except Exception:  # noqa: BLE001 -- remembering is a shortcut, never a reason to fail the run
+            pass
         # UMD prints the clamp itself, so the run tells us whether its own clock was valid. Cheaper
         # and more reliable than sampling telemetry alongside, which aliases against short runs.
         if _run_reported_clamp(out):
