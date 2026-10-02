@@ -11,9 +11,9 @@ worktree in TT_METAL_HOME), so the matrix follows the current picks:
   auto      the op's own pick (no program config), --repeats captures    -> the headline, the pick to confirm
   perhead   per NV (1, 2, 4): the largest NP that fits and the model's NP at that NV with its neighbours, depths 2 and 3
             -> item, step per Vtl, slope, fill, skew, the chain/production balance bump
-  pool      per NV (1, 2): the full pool at the balanced share, depths 2 and 3  -> pool step, pool skew, credit term
+  pool      per NV (1, 2): the full pool at the balanced share, depths 2 and 3  -> pool step, pool skew, depth-2 floor
   share     at the model's pool pick: the share from the balance down (balanced, -1, -2, -3, -5, -8, half, quarter, 0)
-            -> the home/extra bump, the pool start term, the share choice
+            -> the home/extra bump, the share choice
   rowmajor  the per-head pick with row_local=0 (one row per BH)        -> kRowMajorPaceUs
 Captures take ~10 s each once the JIT cache is warm; a full matrix for seven BH values is ~190 rows.
 """
