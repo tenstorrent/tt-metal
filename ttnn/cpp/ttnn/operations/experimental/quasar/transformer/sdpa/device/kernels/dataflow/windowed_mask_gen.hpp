@@ -146,7 +146,10 @@ inline void generate_windowed_mask_for_q_chunk(
                 if (q_start_idx >= window_low_idx && q_end_idx <= window_high_idx && k_start_idx >= window_low_idx &&
                     k_end_idx <= window_high_idx) {
                     if (zero_tile_idx == -1) {
-                        fill_tile_zeros<mask_tile_bytes, false>(noc, dfb_mask_in, in_mask_tile_id);
+                        // Barrier: later zero tiles are NoC-read copies of this one, and on Quasar the
+                        // zero fill completes on iDMA (not the NoC read path), so it must land first. It
+                        // also leaves zero mode before the writer's next async_write.
+                        fill_tile_zeros<mask_tile_bytes>(noc, dfb_mask_in, in_mask_tile_id);
                     } else {
                         copy_tile<mask_tile_bytes>(
                             noc, mask_write_ptr_base, mask_write_ptr_base, zero_tile_idx, in_mask_tile_id);
