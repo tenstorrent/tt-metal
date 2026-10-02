@@ -271,7 +271,7 @@ def _cost_model_path(device, bh, nc):
     from ttnn._ttnn.operations import transformer as _t
 
     grid = device.compute_with_storage_grid_size()
-    nv, np_, pl, nbuf, t_f, t_ph, pays = _t.chunk_gdn_fused_geometry(grid.x, grid.y, bh, nc, VDIM // 32)
+    nv, np_, pl, nbuf, t_f, t_ph, pays = _t.chunk_gdn_fused_geometry(grid.x, grid.y, bh, nc, VDIM // 32)[:7]
     return ("fused", pl == 2) if (nv >= 1 and pays) else ("phased", False)
 
 
@@ -799,7 +799,7 @@ def test_fused_default_geometry_repeats(device, hk, hv):
     grid = device.compute_with_storage_grid_size()
     from ttnn._ttnn.operations import transformer as _t
 
-    nv, np_producers, placement, nbuf, _, _, _ = _t.chunk_gdn_fused_geometry(grid.x, grid.y, hv, nc, VDIM // 32)
+    nv, np_producers, placement, nbuf = _t.chunk_gdn_fused_geometry(grid.x, grid.y, hv, nc, VDIM // 32)[:4]
     if nv == 0:
         pytest.skip(f"no fused geometry for BH={hv} on the {grid.x}x{grid.y} grid")
     _, tensors, s0 = _make_inputs(device, 1, nc * CHUNK, hk, hv, True, seed=20260931 + hv)
@@ -829,7 +829,7 @@ def test_fused_config_pinned_geometry_matches_free(device):
     grid = device.compute_with_storage_grid_size()
     from ttnn._ttnn.operations import transformer as _t
 
-    nv, np_producers, placement, nbuf, _, _, _ = _t.chunk_gdn_fused_geometry(grid.x, grid.y, hv, nc, VDIM // 32)
+    nv, np_producers, placement, nbuf = _t.chunk_gdn_fused_geometry(grid.x, grid.y, hv, nc, VDIM // 32)[:4]
     if nv == 0:
         pytest.skip(f"no fused geometry for BH={hv} on the {grid.x}x{grid.y} grid")
     _, tensors, s0 = _make_inputs(device, 1, nc * CHUNK, hk, hv, True, seed=20260933)

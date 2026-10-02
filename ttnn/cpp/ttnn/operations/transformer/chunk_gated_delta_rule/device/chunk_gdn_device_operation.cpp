@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "chunk_gdn_device_operation.hpp"
+#include "kernels/dataflow/chunk_gdn_fused_map.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -206,48 +207,104 @@ ChunkGdnDeviceOperation::tensor_return_value_t ChunkGdnDeviceOperation::create_o
 // Fused geometry cost model and placement
 // ---------------------------------------------------------------------------------------------------
 namespace {
-// QB2 constants, re-measured 2026-10-01 (Tracy device time, T=2048 -> NC=64, C=32, K=V=128, medians of 5)
-// with the SFPU forward-substitution solve in the producer.
-constexpr float kWpUs = 18.5f;               // producer item; flat from 36 to 96 concurrent producers
-constexpr float kTailUs = 9.0f;              // last scan step -> kernel end (head skew)
-constexpr float kPaceMarginUs = 0.4f;        // depth-2 jitter exposure with the supply within 10 % of the step
-constexpr float kRowMajorPenalty = 1.7f;     // row-major placement, link-bound chain (BH=16: 1.66x and 1.72x)
-constexpr float kPoolJitter = 1.10f;         // pooled pace: ordering jitter of the balanced item map (BH >= 8)
+// QB2 constants, re-measured 2026-10-02 (Tracy device time, T=2048 -> NC=64, C=32, K=V=128, medians of ops 2-5)
+// on the producer-lever stack.
+constexpr float kWpUs = 15.98f;          // producer item period; flat over BH and the producer count
+constexpr float kChainSlopeUs = 0.012f;  // receiver chunk period growth per head (shared DRAM / NoC)
+constexpr float kSkewAUs = 4.0f;         // slowest chain behind the median chain: A + B*BH
+constexpr float kSkewBUs = 0.5f;
+constexpr float kTailUs = 4.0f;          // last chunk consumed -> kernel end
+constexpr float kFillAUs = 19.5f;        // first scan step done: A + min(BH, 24) * (B + C * producers)
+constexpr float kFillBUs = 0.72f;
+constexpr float kFillCUs = 1.0f / 144.0f;
+constexpr float kRowMajorPaceUs = 8.4f;  // link-bound chunk period of the row-major placement
+// Balance bumps: two bounds within `width` of each other expose each side's jitter to the other, up to `peak`
+// when equal. Chain vs producers at Vtl <= 2 (narrower at depth >= 3); home vs extra producers of a pool.
+constexpr float kBalancePeak = 0.08f;
+constexpr float kBalanceWidthD2 = 0.25f;
+constexpr float kBalanceWidthD3 = 0.15f;
+constexpr float kPoolBalancePeak = 0.25f;
+constexpr float kPoolBalanceWidth = 0.25f;
+constexpr float kPoolStartUs = 20.0f;     // pool, Vtl <= 2: the home producers' first items end later, by
+constexpr float kPoolStartShare = 0.25f;  // kPoolStartUs * min(1, share / kPoolStartShare)
+constexpr float kPoolSkewUs = 4.0f;       // extra chain skew of a pool
+constexpr float kPoolCreditD2Us = 0.025f;  // pool at depth 2, Vtl <= 2: credit round trip exposed per step, per head
 constexpr uint32_t kHandoffTiles = 19;       // fp32 tiles per hand-off slot (C=32, K=V=128)
 constexpr uint32_t kProducerPrepTiles = 48;  // the producer's prep CBs, in fp32-tile units
 constexpr uint32_t kTileBytes = 4096;
 constexpr uint32_t kL1BudgetBytes = 1400u * 1024u;  // Wormhole's 1464 KB less the system map and the small region
 constexpr uint32_t kNvCandidates[] = {1, 2, 4, 8};  // receivers per head the model considers (those dividing Vt)
-// Pipeline fill (first scan step done): 25.0 + 0.88*BH, fitted to BH=4..32.
-constexpr float fill_us(uint32_t BH) { return 25.0f + 0.88f * BH; }
-// Producer item. Load-independent since the solve; the argument stays for load-dependent variants.
-constexpr float w_p_us(uint32_t /*producers*/) { return kWpUs; }
-// Receiver step (period) per V-slice width. Vtl=1 computes in ~1.4 us: at depth 2 the hand-off round
-// trip (credit -> send -> VALID) is its floor; depth >= 3 keeps two hand-offs in flight.
-constexpr float t_step_us(uint32_t Vtl, uint32_t depth = 2) {
+constexpr float fill_us(uint32_t BH, uint32_t producers) {
+    return kFillAUs + std::min<uint32_t>(BH, 24) * (kFillBUs + kFillCUs * producers);
+}
+// Receiver step per V-slice width, before the per-head slope. Vtl=1 is round-trip bound (it computes in ~1.4 us);
+// a pool's extras lengthen that round trip.
+constexpr float t_step_us(uint32_t Vtl, bool pooled = false) {
     switch (Vtl) {
-        case 1: return depth >= 3 ? 3.3f : 4.2f;
-        case 2: return 2.78f;
-        case 4: return 4.67f;
+        case 1: return pooled ? 4.25f : 3.17f;
+        case 2: return 2.69f;
+        case 4: return 4.45f;
         default: return -1.0f;  // unmeasured width
     }
 }
-// Per-chunk period of one head: the slower of the receiver step and its producers' supply (w_p / NP from
-// its own NP producers, BH * w_p / P from a pool of P). At depth 2 with the supply within 10 % of the step,
-// producer jitter exposes the round trip (~2.1 us at NV=2, most of the 2.78 step); at Vtl=4 (~1.3 us of
-// 4.67) it stays hidden.
-constexpr float pace_us(uint32_t Vtl, float supply, uint32_t depth) {
-    const float step = t_step_us(Vtl, depth);
-    float pace = std::max(step, supply);
-    if (depth <= 2 && Vtl <= 2 && supply >= 0.9f * step && supply <= 1.1f * step) {
-        pace += kPaceMarginUs;
+constexpr float balance_us(float a, float b, float width, float peak) {
+    if (a <= 0.0f || b <= 0.0f) {
+        return 0.0f;
     }
-    return pace;
+    const float m = std::max(a, b);
+    return peak * std::max(0.0f, 1.0f - std::abs(a - b) / (width * m));
 }
-// Pooled per-chunk period: the extras' statically balanced map has no slack, so ordering jitter stretches
-// max(step, supply) by kPoolJitter.
-constexpr float pace_pool_us(uint32_t Vtl, float supply, uint32_t depth) {
-    return std::max(t_step_us(Vtl, depth), supply) * kPoolJitter;
+// Items of the busiest home producer and of the busiest extra under the shared item map.
+struct PoolLoad {
+    uint32_t n_home;
+    uint32_t n_extra;
+};
+PoolLoad pool_load(uint32_t BH, uint32_t NC, uint32_t NPH, uint32_t NX, uint32_t num, uint32_t den) {
+    const GdnFusedMap m{BH, NC, NPH, NX, num, den};
+    uint32_t nh = 0;
+    for (uint32_t h = 0; h < BH; h++) {
+        nh = std::max(nh, gdn_fused_n_home_chunks(m, h));
+    }
+    const uint32_t ne = gdn_fused_n_extra_items(m);
+    return {(nh + NPH - 1) / NPH, NX != 0 ? (ne + NX - 1) / NX : 0u};
+}
+// Device time of one geometry: the pipeline fill, then the slowest of the chain (NC-1 steps plus the head skew),
+// the busiest home producer's remaining items and the busiest extra's, stretched by the balance bumps, then the
+// tail. `producers` is the total producer count; `pooled` = a pool with extras, `share` their share of the items.
+float t_fused_us(
+    uint32_t BH,
+    uint32_t NC,
+    uint32_t Vtl,
+    uint32_t depth,
+    uint32_t placement,
+    uint32_t producers,
+    PoolLoad load,
+    bool pooled,
+    float share) {
+    float pace = t_step_us(Vtl, pooled) + kChainSlopeUs * BH;
+    if (pooled && Vtl <= 2 && depth <= 2) {
+        pace += kPoolCreditD2Us * BH;
+    }
+    const float H = (load.n_home - 1) * kWpUs;
+    const float X = load.n_extra ? (load.n_extra - 1) * kWpUs : 0.0f;
+    // Row-major: the receiver rows' shared links bound the chain unless it is well production-bound.
+    if (placement == 0 && std::max(H, X) < 2.0f * (NC - 1) * pace) {
+        pace = std::max(pace, kRowMajorPaceUs);
+    }
+    const float C = (NC - 1) * pace + kSkewAUs + kSkewBUs * BH + (pooled ? kPoolSkewUs : 0.0f);
+    float pen = 0.0f;
+    float start = 0.0f;
+    if (Vtl <= 2) {
+        pen = balance_us(C, H, depth <= 2 ? kBalanceWidthD2 : kBalanceWidthD3, kBalancePeak);
+        if (pooled) {
+            // The home/extra balance matters only where the producers bound the run.
+            const float m = std::max({C, H, X});
+            const float g = std::max(0.0f, 1.0f - (m - std::max(H, X)) / (kPoolBalanceWidth * m));
+            pen = std::max(pen, g * balance_us(H, X, kPoolBalanceWidth, kPoolBalancePeak));
+            start = kPoolStartUs * std::min(1.0f, share / kPoolStartShare);
+        }
+    }
+    return fill_us(BH, producers) + std::max({C, H + start, X}) * (1.0f + pen) + kTailUs;
 }
 // L1 at hand-off depth `depth` on the fuller side: the slots, the 4-tile u/credit CB and the larger of
 // the receiver's scan CBs at the slice width (20*Vtl + 1 tiles) and the producer's prep CBs.
@@ -255,13 +312,20 @@ constexpr bool handoff_fits_l1(uint32_t Vtl, uint32_t depth) {
     const uint32_t tiles = kHandoffTiles * depth + 4 + std::max(20 * Vtl + 1, kProducerPrepTiles);
     return tiles * kTileBytes <= kL1BudgetBytes;
 }
+// Measured phased device time (prep + scan) at NC=64, interpolated linearly in BH; beyond the table scaled by BH/48.
+constexpr float kPhasedBH[] = {4.0f, 8.0f, 12.0f, 16.0f, 32.0f, 48.0f};
+constexpr float kPhasedUs[] = {359.8f, 461.5f, 603.0f, 769.4f, 1278.8f, 1907.9f};
 constexpr float t_phased_us(uint32_t BH, uint32_t NC) {
-    // Measured device time at NC=64 (prep + scan, 2026-10-01): 4 -> 367, 8 -> 473, 12 -> 604, 16 -> 783,
-    // 32 -> 1300, 48 -> 1933. Linear 217 + 33.9*BH to BH=32, then interpolated to the BH=48 point.
-    const float t32 = 217.0f + 33.9f * 32.0f;
-    float t = (BH <= 32) ? (217.0f + 33.9f * BH) : (t32 + (1933.0f - t32) * (std::min<uint32_t>(BH, 48) - 32) / 16.0f);
-    if (BH > 48) {
-        t *= BH / 48.0f;
+    constexpr size_t n = sizeof(kPhasedBH) / sizeof(kPhasedBH[0]);
+    const float bh = std::min<float>(BH, kPhasedBH[n - 1]);
+    size_t i = 0;
+    while (i + 2 < n && bh > kPhasedBH[i + 1]) {
+        i++;
+    }
+    const float w = (bh - kPhasedBH[i]) / (kPhasedBH[i + 1] - kPhasedBH[i]);
+    float t = kPhasedUs[i] + w * (kPhasedUs[i + 1] - kPhasedUs[i]);
+    if (BH > kPhasedBH[n - 1]) {
+        t *= BH / kPhasedBH[n - 1];
     }
     return t * NC / 64.0f;
 }
@@ -440,7 +504,8 @@ FusedGeometryChoice choose_fused_geometry(
     uint32_t fixed_nv,
     uint32_t fixed_np,
     uint32_t fixed_nbuf,
-    FusedCandidates candidates) {
+    FusedCandidates candidates,
+    float fixed_share) {
     FusedGeometryChoice best;
     best.t_phased_us = t_phased_us(BH, NC);
     bool have = false;
@@ -448,23 +513,20 @@ FusedGeometryChoice choose_fused_geometry(
     // Hand-off depths the model chooses between (deeper measured no better); a pinned depth is taken as is.
     const uint32_t depths[2] = {fixed_nbuf ? fixed_nbuf : 2u, fixed_nbuf ? fixed_nbuf : 3u};
     const uint32_t n_depths = fixed_nbuf ? 1u : 2u;
-    // One candidate: NP producers per head (placements 0/1) or a pool of NP serving every head (placement 2);
-    // a pool with no extras (NP = BH*NPH) paces as the per-head geometry it is.
-    auto consider = [&](uint32_t nv, uint32_t np, uint32_t placement, uint32_t depth) {
+    // One candidate: NP producers per head (placements 0/1) or a pool of NP serving every head (placement 2)
+    // with the extras' share num/den; a pool with no extras (NP = BH*NPH) is the per-head geometry it is.
+    auto consider = [&](uint32_t nv, uint32_t np, uint32_t placement, uint32_t depth, uint32_t num, uint32_t den) {
         const uint32_t Vtl = Vt / nv;
         if (!fixed_nbuf && !handoff_fits_l1(Vtl, depth)) {
             return;
         }
         const uint32_t producers = placement == 2 ? np : BH * np;
         const uint32_t cores = BH * nv + producers;
-        const bool pooled = placement == 2 && np > BH * fused_pool_home_producers(grid_x, grid_y, BH, nv, np);
-        const float supply = BH * w_p_us(producers) / producers;  // us per chunk of one head
-        const float pace = pooled ? pace_pool_us(Vtl, supply, depth) : pace_us(Vtl, supply, depth);
-        float t = fill_us(BH) + NC * pace + kTailUs;
-        // Row-major: the receiver rows' shared links saturate unless the chain is well supply-bound.
-        if (placement == 0 && supply < 2.0f * t_step_us(Vtl, depth)) {
-            t *= kRowMajorPenalty;
-        }
+        const uint32_t nph = placement == 2 ? fused_pool_home_producers(grid_x, grid_y, BH, nv, np) : np;
+        const uint32_t nx = placement == 2 ? np - BH * nph : 0;
+        const PoolLoad load = nx ? pool_load(BH, NC, nph, nx, num, den) : PoolLoad{(NC + nph - 1) / nph, 0};
+        const float t =
+            t_fused_us(BH, NC, Vtl, depth, placement, producers, load, nx > 0, nx ? float(num) / den : 0.0f);
         // ties -> fewer cores, then smaller NV, then the shallower ring
         const bool better =
             !have || t < best.t_fused_us ||
@@ -476,13 +538,38 @@ FusedGeometryChoice choose_fused_geometry(
             best.placement = placement;
             best.nbuf = depth;
             best.t_fused_us = t;
+            best.pool_extra_num = nx ? num : 0;
+            best.pool_extra_den = nx ? den : 1;
             best_cores = cores;
             have = true;
         }
     };
     auto consider_depths = [&](uint32_t nv, uint32_t np, uint32_t placement) {
         for (uint32_t i = 0; i < n_depths; i++) {
-            consider(nv, np, placement, depths[i]);
+            consider(nv, np, placement, depths[i], 0, 1);
+        }
+    };
+    // A pool with extras: the pinned share, or the best of every share from the balanced NX / P down to 0
+    // (ties -> the larger share).
+    auto consider_pool = [&](uint32_t nv, uint32_t P, uint32_t nx) {
+        for (uint32_t i = 0; i < n_depths; i++) {
+            if (fixed_share >= 0.0f) {
+                consider(nv, P, 2, depths[i], static_cast<uint32_t>(std::lround(fixed_share * P)), P);
+                continue;
+            }
+            const uint32_t Vtl = Vt / nv;
+            const uint32_t nph = (P - nx) / BH;
+            uint32_t best_num = nx;
+            float best_t = 0.0f;
+            for (uint32_t num = nx + 1; num-- > 0;) {
+                const float t = t_fused_us(
+                    BH, NC, Vtl, depths[i], 2, P, pool_load(BH, NC, nph, nx, num, P), true, float(num) / P);
+                if (num == nx || t < best_t) {
+                    best_num = num;
+                    best_t = t;
+                }
+            }
+            consider(nv, P, 2, depths[i], best_num, P);
         }
     };
     auto nv_ok = [&](uint32_t nv) {
@@ -536,7 +623,7 @@ FusedGeometryChoice choose_fused_geometry(
                     consider_depths(nv, P, 2);
                 }
             } else {
-                consider(nv, P, 2, fixed_nbuf ? fixed_nbuf : 2u);  // pooled depth 3 measured no better
+                consider_pool(nv, P, P - BH * nph);
             }
         }
     }
@@ -618,8 +705,13 @@ std::vector<Tensor> chunk_gdn(
             !fused_cfg->handoff_depth.has_value() || (nbuf_pin >= 1 && nbuf_pin <= 8),
             "chunk_gdn_fused: handoff_depth must be in [1, 8] (got {})",
             nbuf_pin);
-        // The model fills whatever the config leaves free (geometry, hand-off depth, or all) so the pair fits
-        // the grid.
+        const auto& share = fused_cfg->pool_extra_share;
+        TT_FATAL(
+            !share.has_value() || (*share >= 0.0f && *share <= 1.0f),
+            "chunk_gdn_fused: pool_extra_share must be in [0, 1] (got {})",
+            share.value_or(0.0f));
+        // The model fills whatever the config leaves free (geometry, hand-off depth, the extras' share, or all)
+        // so the pair fits the grid.
         const bool pool = fused_cfg->producer_pool;
         const auto choice = choose_fused_geometry(
             grid0.x,
@@ -630,7 +722,8 @@ std::vector<Tensor> chunk_gdn(
             nv_pin,
             np_pin,
             nbuf_pin,
-            pool ? FusedCandidates::Pool : FusedCandidates::PerHead);
+            pool ? FusedCandidates::Pool : FusedCandidates::PerHead,
+            share.value_or(-1.0f));
         TT_FATAL(
             choice.nv >= 1,
             "chunk_gdn_fused: no fused geometry fits BH={} on a {}x{} grid with num_receivers={} num_producers={} "
@@ -642,20 +735,16 @@ std::vector<Tensor> chunk_gdn(
             np_pin,
             pool);
         attrs.nv = nv_pin ? nv_pin : choice.nv;
-        const auto& share = fused_cfg->pool_extra_share;
-        TT_FATAL(
-            !share.has_value() || (*share >= 0.0f && *share <= 1.0f),
-            "chunk_gdn_fused: pool_extra_share must be in [0, 1] (got {})",
-            share.value_or(0.0f));
         if (pool) {
             // The pool size, at most one producer per item; its home producers per head come from the
-            // layout (validated), the extras' share from the config or the balanced NX / P.
+            // layout (validated), the extras' share from the config or the model's choice.
             attrs.np = np_pin ? std::min<uint32_t>(np_pin, BH * num_chunks) : choice.np;
             attrs.placement = 2;
             const uint32_t nph = fused_pool_home_producers(grid0.x, grid0.y, BH, attrs.nv, attrs.np);
             const uint32_t nx = nph >= 1 ? attrs.np - BH * nph : 0;
             if (nx >= 1) {
-                attrs.pool_extra_num = share.has_value() ? static_cast<uint32_t>(std::lround(*share * attrs.np)) : nx;
+                attrs.pool_extra_num = share.has_value() ? static_cast<uint32_t>(std::lround(*share * attrs.np))
+                                                         : choice.pool_extra_num;
                 attrs.pool_extra_den = attrs.np;
             }
         } else {
