@@ -504,7 +504,8 @@ FusedGeometryChoice choose_fused_geometry(
     uint32_t fixed_nv,
     uint32_t fixed_np,
     uint32_t fixed_nbuf,
-    FusedCandidates candidates) {
+    FusedCandidates candidates,
+    float fixed_share) {
     FusedGeometryChoice best;
     best.t_phased_us = t_phased_us(BH, NC);
     bool have = false;
@@ -537,6 +538,8 @@ FusedGeometryChoice choose_fused_geometry(
             best.placement = placement;
             best.nbuf = depth;
             best.t_fused_us = t;
+            best.pool_extra_num = nx ? num : 0;
+            best.pool_extra_den = nx ? den : 1;
             best_cores = cores;
             have = true;
         }
@@ -546,10 +549,27 @@ FusedGeometryChoice choose_fused_geometry(
             consider(nv, np, placement, depths[i], 0, 1);
         }
     };
-    // A pool with extras at the balanced share NX / P.
+    // A pool with extras: the pinned share, or the best of every share from the balanced NX / P down to 0
+    // (ties -> the larger share).
     auto consider_pool = [&](uint32_t nv, uint32_t P, uint32_t nx) {
         for (uint32_t i = 0; i < n_depths; i++) {
-            consider(nv, P, 2, depths[i], nx, P);
+            if (fixed_share >= 0.0f) {
+                consider(nv, P, 2, depths[i], static_cast<uint32_t>(std::lround(fixed_share * P)), P);
+                continue;
+            }
+            const uint32_t Vtl = Vt / nv;
+            const uint32_t nph = (P - nx) / BH;
+            uint32_t best_num = nx;
+            float best_t = 0.0f;
+            for (uint32_t num = nx + 1; num-- > 0;) {
+                const float t = t_fused_us(
+                    BH, NC, Vtl, depths[i], 2, P, pool_load(BH, NC, nph, nx, num, P), true, float(num) / P);
+                if (num == nx || t < best_t) {
+                    best_num = num;
+                    best_t = t;
+                }
+            }
+            consider(nv, P, 2, depths[i], best_num, P);
         }
     };
     auto nv_ok = [&](uint32_t nv) {
@@ -690,8 +710,8 @@ std::vector<Tensor> chunk_gdn(
             !share.has_value() || (*share >= 0.0f && *share <= 1.0f),
             "chunk_gdn_fused: pool_extra_share must be in [0, 1] (got {})",
             share.value_or(0.0f));
-        // The model fills whatever the config leaves free (geometry, hand-off depth, or all) so the pair fits
-        // the grid.
+        // The model fills whatever the config leaves free (geometry, hand-off depth, the extras' share, or all)
+        // so the pair fits the grid.
         const bool pool = fused_cfg->producer_pool;
         const auto choice = choose_fused_geometry(
             grid0.x,
@@ -702,7 +722,8 @@ std::vector<Tensor> chunk_gdn(
             nv_pin,
             np_pin,
             nbuf_pin,
-            pool ? FusedCandidates::Pool : FusedCandidates::PerHead);
+            pool ? FusedCandidates::Pool : FusedCandidates::PerHead,
+            share.value_or(-1.0f));
         TT_FATAL(
             choice.nv >= 1,
             "chunk_gdn_fused: no fused geometry fits BH={} on a {}x{} grid with num_receivers={} num_producers={} "
@@ -716,13 +737,14 @@ std::vector<Tensor> chunk_gdn(
         attrs.nv = nv_pin ? nv_pin : choice.nv;
         if (pool) {
             // The pool size, at most one producer per item; its home producers per head come from the
-            // layout (validated), the extras' share from the config or the balanced NX / P.
+            // layout (validated), the extras' share from the config or the model's choice.
             attrs.np = np_pin ? std::min<uint32_t>(np_pin, BH * num_chunks) : choice.np;
             attrs.placement = 2;
             const uint32_t nph = fused_pool_home_producers(grid0.x, grid0.y, BH, attrs.nv, attrs.np);
             const uint32_t nx = nph >= 1 ? attrs.np - BH * nph : 0;
             if (nx >= 1) {
-                attrs.pool_extra_num = share.has_value() ? static_cast<uint32_t>(std::lround(*share * attrs.np)) : nx;
+                attrs.pool_extra_num = share.has_value() ? static_cast<uint32_t>(std::lround(*share * attrs.np))
+                                                         : choice.pool_extra_num;
                 attrs.pool_extra_den = attrs.np;
             }
         } else {
