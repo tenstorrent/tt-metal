@@ -21,6 +21,7 @@
     # (variant-qualified markers, fail-closed unverifiable variants, sidecar single-load) that
     # every tt_transformers e2e leg depends on. See #45400.
     pytest --timeout 120 models/tt_transformers/tests/test_warm_cache_marker.py
+    pytest --timeout 300 models/tt_transformers/tests/test_load_state_dict_layers.py
     pytest --timeout 300 models/tt_transformers/tests/test_traced_prefill_rope_slice.py
     pytest --timeout 300 models/tt_transformers/tests/test_embedding.py
     pytest --timeout 300 models/tt_transformers/tests/test_rms_norm.py
@@ -48,6 +49,7 @@
   cmd: |
     export TT_METAL_WATCHER=30
     export HF_MODEL=meta-llama/Llama-3.2-1B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.2-1B-Instruct
+    pytest --timeout 300 models/tt_transformers/tests/test_load_state_dict_layers.py
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py -k 32-page_params  # batch 32 only
     pytest --timeout 300 models/tt_transformers/tests/test_decoder_prefill.py -k 128-page_params  # 128 seqlen only
   model: llama3.2-1b
@@ -202,18 +204,27 @@
 
 - name: Qwen3.6 unit tests
   cmd: |
-    export TT_METAL_WATCHER=30
+    export TT_METAL_WATCHER=30 TT_METAL_WATCHER_DISABLE_ETH=1
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B
+    # Deselections (-k) drop tests subsumed by stricter ones in this leg or dead under CI; see PR 55548 review notes.
     pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_attention_tp.py
-    pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
+    pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_gdn_tp.py -k "not test_gdn_tp_prefill"
     pytest --timeout 60 models/demos/blackhole/qwen36/tests/test_mlp_tp.py
-    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model_tp.py
-    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_decode_bucketing.py -k "test_bucket_warmup_compiles_all_widths_before_capture or test_bucket_trace_teardown_releases_all_stores"
-    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mlp.py
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model_tp.py -k "not test_model_tp_decode_batched and not test_model_tp_long_prefill_traced"
+    # test_all_buckets_fit_trace_region is deselected here and runs last on its own budget (see below);
+    # the three kept here are host-only (monkeypatched, no device), so 120 s is ample.
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_decode_bucketing.py -k "test_bucket_warmup_compiles_all_widths_before_capture or test_bucket_trace_teardown_releases_all_stores or test_condense_remaps_gdn_before_decode_in_both_sampling_modes"
+    # MTP speculative decode (unit-test coverage only until batch>1 lands; e2e runs plain decode).
+    # QWEN36_SPEC_TEST_N_LAYERS=8: lossless/determinism hold on a truncated model, and the 8 layers are
+    # already in the tensor cache from test_model_tp, so no 64-layer load happens in this leg.
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_spec_sampling_math.py
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mtp_torch_ref.py
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_fused_recurrent_gdn.py -k "not perf and not (no_initial_state and (blackhole-1 or blackhole-2))"
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mtp_tp.py
+    QWEN36_SPEC_TEST_N_LAYERS=8 pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_spec_lossless.py
+    QWEN36_SPEC_TEST_N_LAYERS=8 pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_spec_determinism.py -k "not (test_spec_decode_is_deterministic and 128)"
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_patch_merger.py
-    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_vision_attention.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_vision_block.py
-    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_wrapped_model.py
     # Last on purpose: this test builds the full 64-layer 27B model from /mnt/MLPerf (the trace-region
     # property it proves needs full depth). Passing CI runs took 58-251 s, and the layer load alone
@@ -226,6 +237,7 @@
     bh_quietbox_2:
       # 28 min assumed the 300 s cap on test_decode_bucketing; with its real cost (up to ~13 min on a
       # cold NAS) the whole entry reconstructs to ~33 min from the 2026-09-08 run.
+      # The MTP spec files were added to the cmd after that run, so this may need another raise.
       timeout: 40
       tier: 1
   owner_id: U08HL8X1ECD # Aniruddha Tupe
@@ -668,7 +680,9 @@
   cmd: |
     export TT_METAL_WATCHER=15
     export HF_MODEL=mistralai/Mixtral-8x7B-v0.1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mixtral-8x7B-v0.1
-    pytest --timeout 300 models/tt_transformers/tests/mixtral/test_mixtral_rms_norm.py  # PREFILL-4096 layernorm first-compile can exceed 120s
+    pytest --timeout 120 models/tt_transformers/tests/test_load_checkpoints.py
+    pytest --timeout 900 models/tt_transformers/tests/test_load_state_dict_layers.py
+    pytest --timeout 300 models/tt_transformers/tests/mixtral/test_mixtral_rms_norm.py
     pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_mlp.py
     pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_moe.py
     pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_decoder.py
@@ -742,6 +756,22 @@
       # Worker cores stay watched, which is where the #50886 faults have been.
       watcher_setup: "export TT_METAL_WATCHER=30; export TT_METAL_WATCHER_DISABLE_ETH=1"
   owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
+  budget_type: unit
+
+# Generic Galaxy CI is not wrap-cabling certified. The torus arm is registered
+# separately under kimi_rmsnorm in blaze_models_prefill_tests.yaml.
+- name: Kimi-K2.7 fused RMSNorm linear unit tests (BH Galaxy 8x4)
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+    pytest --timeout 180 models/demos/deepseek_v3_d_p/tests/pcc/test_rmsnorm_fused.py -k linear-1d -vv --tb=short
+  model: kimi-k2.7-rmsnorm
+  skus:
+    bh_galaxy:
+      timeout: 5
+      tier: 1
+  owner_id: U089NPHL0GN # Diego Gomez
   team: models
   budget_type: unit
 
@@ -1651,6 +1681,10 @@
 # ----------------------------------------------------------------------------
 - name: TT-DiT Wan2.2-A14B transformer block unit tests
   cmd: |
+    # Multihost jobs skip setup-job's watcher env; DISABLE_ETH avoids the ACTIVE_ETH overflow.
+    # tt-run forwards TT_* variables to every rank, so all four galaxies are watched.
+    export TT_METAL_WATCHER=30 TT_METAL_WATCHER_APPEND=1
+    export TT_METAL_WATCHER_NOINLINE=1 TT_METAL_WATCHER_DISABLE_ETH=1
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000
     MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
