@@ -11,6 +11,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.common.bringup.testing import determinism
 
 _HERE = Path(__file__).resolve().parent
 
@@ -50,7 +51,46 @@ def test_offset_cumsum(mesh_device, device_params, case):
     rows, cols = c["mesh"]
     (E,) = c["hist_shape"]
     epc = c["experts_per_chip"]
-    g = torch.Generator().manual_seed(c["seed"])
+    hists, tt_h = _inputs(mesh_device, c, c["seed"])
+    outs = _call(c, tt_h)
+    assert len(outs) == 4, len(outs)
+    per_dev = [[ttnn.to_torch(t).reshape(-1).to(torch.int64) for t in ttnn.get_device_tensors(o)] for o in outs]
+    for dev in range(rows * cols):
+        r, col = divmod(dev, cols)
+        # The dispatch group of device (r, col): the devices along cluster_axis.
+        group = hists[:, col, :] if c["cluster_axis"] == 0 else hists[r, :, :]
+        pos = r if c["cluster_axis"] == 0 else col
+        offsets, totals, regions = ref.offset_cumsum(group, epc)
+        for name, want, got in zip(("offsets", "totals", "regions"), (offsets[pos], totals, regions), per_dev):
+            got = got[dev]
+            assert got.shape == want.shape, (name, dev, got.shape)
+            bad = got != want
+            assert not bad.any(), f"dev {dev} {name}: {int(bad.sum())}/{E} differ"
+        # all_global_dispatch_offsets (#57859): row k is what device k of the group receives in `offsets`.
+        got = per_dev[3][dev]
+        assert got.numel() == offsets.numel(), ("all_offsets", dev, got.shape)
+        bad = got != offsets.reshape(-1)
+        assert not bad.any(), f"dev {dev} all_offsets: {int(bad.sum())}/{offsets.numel()} differ"
+    tt_h_b = _inputs(mesh_device, c, c["seed"] + 1)[1]
+    determinism.assert_deterministic(lambda: _call(c, tt_h), lambda: _call(c, tt_h_b), first=outs, label=c["id"])
+
+
+def _call(c, tt_h):
+    return ttnn.bringup.offset_cumsum(
+        tt_h,
+        cluster_axis=c["cluster_axis"],
+        num_links=c["num_links"],
+        experts_per_chip=c["experts_per_chip"],
+        memory_config=_mem(c["memory_config"]),
+    )
+
+
+def _inputs(mesh_device, c, seed):
+    """The host histograms [rows, cols, E] for `seed` and the device histogram tensor."""
+    rows, cols = c["mesh"]
+    (E,) = c["hist_shape"]
+    epc = c["experts_per_chip"]
+    g = torch.Generator().manual_seed(seed)
 
     # hists[r, col, :] is the histogram of device (r, col); random counts, about 1 in 8 experts empty.
     hists = torch.randint(0, c["max_count"] + 1, (rows, cols, E), generator=g, dtype=torch.int64)
@@ -71,29 +111,4 @@ def test_offset_cumsum(mesh_device, device_params, case):
     )
     tt_h = ttnn.reshape(tt_h, (E,))  # per device [1, E] -> [E], as captured
     assert list(tt_h.shape) == c["hist_shape"]
-
-    outs = ttnn.bringup.offset_cumsum(
-        tt_h,
-        cluster_axis=c["cluster_axis"],
-        num_links=c["num_links"],
-        experts_per_chip=epc,
-        memory_config=_mem(c["memory_config"]),
-    )
-    assert len(outs) == 4, len(outs)
-    per_dev = [[ttnn.to_torch(t).reshape(-1).to(torch.int64) for t in ttnn.get_device_tensors(o)] for o in outs]
-    for dev in range(rows * cols):
-        r, col = divmod(dev, cols)
-        # The dispatch group of device (r, col): the devices along cluster_axis.
-        group = hists[:, col, :] if c["cluster_axis"] == 0 else hists[r, :, :]
-        pos = r if c["cluster_axis"] == 0 else col
-        offsets, totals, regions = ref.offset_cumsum(group, epc)
-        for name, want, got in zip(("offsets", "totals", "regions"), (offsets[pos], totals, regions), per_dev):
-            got = got[dev]
-            assert got.shape == want.shape, (name, dev, got.shape)
-            bad = got != want
-            assert not bad.any(), f"dev {dev} {name}: {int(bad.sum())}/{E} differ"
-        # all_global_dispatch_offsets (#57859): row k is what device k of the group receives in `offsets`.
-        got = per_dev[3][dev]
-        assert got.numel() == offsets.numel(), ("all_offsets", dev, got.shape)
-        bad = got != offsets.reshape(-1)
-        assert not bad.any(), f"dev {dev} all_offsets: {int(bad.sum())}/{offsets.numel()} differ"
+    return hists, tt_h
