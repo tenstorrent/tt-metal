@@ -799,6 +799,8 @@ def test_softmax_large_non_divisible_width(device, Wt):
         (64, False, 7, 15),
         (16, True, 2, 15),
         (16, True, 4, 30),
+        # large kernel with a mask and a padded last tile
+        (1, False, 637, 15),
     ],
 )
 @pytest.mark.parametrize("fp32_acc_en", [True, False])
@@ -881,20 +883,25 @@ def test_scale_mask_softmax_causal_large_kernel(device):
 @pytest.mark.parametrize("W", [17, 98])
 @pytest.mark.parametrize("causal", [False, True])
 @pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32])
-def test_attention_softmax_non_tile_aligned_width(device, W, causal, in_dtype):
+@pytest.mark.parametrize("mask_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32])
+def test_attention_softmax_non_tile_aligned_width(device, W, causal, in_dtype, mask_dtype):
     torch.manual_seed(0)
 
     head_size = 64
     torch_dtype = torch.float32 if in_dtype == ttnn.float32 else torch.bfloat16
     torch_input = torch.randn((2, 1, W if causal else 64, W), dtype=torch_dtype)
+    # bfloat8_b has no inf
+    masked = -1e4 if mask_dtype == ttnn.bfloat8_b else float("-inf")
     attention_mask = torch.zeros((2, 1, W, W) if causal else (2, 1, 32, W), dtype=torch.bfloat16)
-    attention_mask[torch.rand_like(attention_mask, dtype=torch.float32) < 0.2] = float("-inf")
+    attention_mask[torch.rand_like(attention_mask, dtype=torch.float32) < 0.2] = masked
 
     golden_mask = attention_mask if causal else attention_mask[:, :, :1, :]
     torch_output = F.softmax(torch_input.float() / head_size**0.5 + golden_mask.float(), dim=-1)
 
     ttnn_input = ttnn.from_torch(torch_input, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_mask = ttnn.from_torch(attention_mask, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True)
+    ttnn_mask = ttnn.from_torch(
+        attention_mask, dtype=mask_dtype, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True
+    )
     ttnn_output = ttnn.transformer.attention_softmax_(
         ttnn_input, head_size=head_size, attention_mask=ttnn_mask, causal_mask=causal
     )
