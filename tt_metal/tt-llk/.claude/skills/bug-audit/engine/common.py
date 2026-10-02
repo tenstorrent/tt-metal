@@ -146,6 +146,24 @@ def key_of(f):
     return f"{f['file']}:{f['line']}"
 
 
+def recheck_key(f):
+    """One recheck entry per finding, not per line: a line can hold several findings (a second defect, a sibling
+    lead), and a verdict reached on one of them must not settle the others."""
+    return f"{key_of(f)}#{hashlib.sha1(f['summary'].encode()).hexdigest()[:10]}"
+
+
+def recheck_entry(rc, f):
+    """This finding's recheck entry. An entry keyed by line alone (from an older run) applies only to the finding
+    whose claim it stored."""
+    e = rc.get(recheck_key(f))
+    if e is None:
+        e = rc.get(key_of(f))
+        stored = (e or {}).get("finding") or {}
+        if stored.get("summary") != f.get("summary"):
+            e = None
+    return e
+
+
 def seeded_order(items, seed, key):
     """A reproducible shuffle: the same seed and ids always give the same order, a new seed a new one."""
     return sorted(

@@ -691,7 +691,8 @@ def test_recheck_queues_a_candidate_deferred_at_the_agent_limit(rundir):
     )
     assert code == 0, out + err
     rc = json.load(open(rundir / "recheck.json"))
-    assert rc["d.cpp:7"]["why"] == "deferred at the wave's agent limit", rc
+    (entry,) = [v for v in rc.values() if v["finding"]["file"] == "d.cpp"]
+    assert entry["why"] == "deferred at the wave's agent limit", rc
 
 
 def test_deep_selection_excludes_a_held_out_fix_under_another_id(tmp_path):
@@ -1271,6 +1272,96 @@ def test_severity_rater_sees_every_merged_site_and_the_worst_one_it_must_cover(
     assert sites[f"{bh}:12"]["claim"] == "BH copy hangs every matmul", item
     assert sites[f"{bh}:12"]["severity"] == "high", item
     assert item["hunters_worst"] == "high", item
+
+
+def _recheck_all(rundir, tmp_path, outcome_of):
+    """queue -> a fake recheck wave that answers outcome_of(summary) -> persist -> consolidate; returns queued items."""
+    code, out, err = run(os.path.join(ENGINE, "recheck.py"), "--run", rundir, "queue")
+    assert code == 0, out + err
+    items = json.loads(out.splitlines()[0])["items"]
+    write(
+        str(tmp_path / "rc_out.json"),
+        {
+            "items": [
+                {
+                    "finding": it["finding"],
+                    "why": it["why"],
+                    "outcome": outcome_of(it["finding"]["summary"]),
+                    "votes": {"confirmed": 3},
+                    "reasons": ["[x] y"],
+                }
+                for it in items
+            ]
+        },
+    )
+    code, out, err = run(
+        os.path.join(ENGINE, "recheck.py"),
+        "--run",
+        rundir,
+        "persist",
+        tmp_path / "rc_out.json",
+    )
+    assert code == 0, out + err
+    assert run(os.path.join(ENGINE, "consolidate.py"), "--run", rundir)[0] == 0
+    return items
+
+
+def test_a_recheck_verdict_applies_only_to_the_finding_it_judged(rundir, tmp_path):
+    refuted = finding(
+        "z.cpp", 9, "high", status="refuted", summary="hunt claim, refuted"
+    )
+    refuted["votes"] = {"refuted": 3}
+    lead = finding("z.cpp", 9, "low", status="uncertain", summary="sibling lead")
+    lead["votes"] = {}
+    write(str(rundir / "verdicts" / "B-0000.json"), {"findings": [refuted, lead]})
+    _recheck_all(rundir, tmp_path, lambda s: "confirmed")
+    conf = json.load(open(rundir / "CONFIRMED.json"))
+    # the confirmed entry is the lead the recheck judged, at its own severity, not the refuted HIGH claim
+    assert [(f["summary"], f["severity"]) for f in conf] == [
+        ("sibling lead", "low")
+    ], conf
+
+
+def test_two_unsettled_findings_on_one_line_are_each_rechecked(rundir, tmp_path):
+    a = finding("y.cpp", 7, status="uncertain", summary="first claim")
+    b = finding("y.cpp", 7, status="uncertain", summary="second claim")
+    write(str(rundir / "verdicts" / "B-0000.json"), {"findings": [a, b]})
+    items = _recheck_all(
+        rundir, tmp_path, lambda s: "refuted" if s == "first claim" else "confirmed"
+    )
+    assert sorted(i["finding"]["summary"] for i in items) == [
+        "first claim",
+        "second claim",
+    ]
+    conf = json.load(open(rundir / "CONFIRMED.json"))
+    assert [f["summary"] for f in conf] == ["second claim"], conf
+
+
+def test_a_line_keyed_recheck_from_an_older_run_still_applies_to_its_own_finding(
+    rundir,
+):
+    a = finding("x.cpp", 4, status="uncertain", summary="judged claim")
+    b = finding("x.cpp", 4, status="uncertain", summary="other claim")
+    write(str(rundir / "verdicts" / "B-0000.json"), {"findings": [a, b]})
+    write(
+        str(rundir / "recheck.json"),
+        {
+            "x.cpp:4": {
+                "why": "no verifier could settle it",
+                "outcome": "confirmed",
+                "finding": {"file": "x.cpp", "line": 4, "summary": "judged claim"},
+                "votes": {"confirmed": 3},
+                "reasons": [],
+            }
+        },
+    )
+    assert run(os.path.join(ENGINE, "consolidate.py"), "--run", rundir)[0] == 0
+    conf = json.load(open(rundir / "CONFIRMED.json"))
+    assert [f["summary"] for f in conf] == ["judged claim"], conf
+    # the other claim on the line was never judged: it stays unsettled, riding on the entry
+    assert [(m["summary"], m["status"]) for m in conf[0]["same_line"]] == [
+        ("other claim", "uncertain")
+    ], conf
 
 
 def test_every_program_and_helper_spawn_allows_is_used():

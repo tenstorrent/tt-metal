@@ -16,7 +16,16 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import key_of, load, run_dir, save, seeded_order, state  # noqa: E402
+from common import (  # noqa: E402
+    key_of,
+    load,
+    recheck_entry,
+    recheck_key,
+    run_dir,
+    save,
+    seeded_order,
+    state,
+)
 
 out = run_dir()
 st = state(out)
@@ -57,8 +66,8 @@ if argv[0] == "queue":
             why = "deferred at the wave's agent limit"
         if why is None and key in sample:
             why = "refuted-sample"
-        if why and key not in rc and key not in confirmed:
-            rc[key] = {
+        if why and recheck_entry(rc, f) is None and key not in confirmed:
+            rc[recheck_key(f)] = {
                 "why": why,
                 "outcome": "queued",
                 "finding": {
@@ -112,7 +121,14 @@ elif argv[0] == "persist":
     for item in r.get("items", []):
         if "path" in item and not index:
             index = load(os.path.join(os.path.dirname(item["path"]), "index.json"), {})
-        key = index.get(item.get("path")) or key_of(item["finding"])
+        key = index.get(item.get("path"))
+        if key is None:
+            fin = item["finding"]
+            key = recheck_key(fin) if recheck_key(fin) in rc else key_of(fin)
+            stored = rc.get(key, {}).get("finding") or {}
+            if stored.get("summary") != fin.get("summary"):
+                # a line-keyed entry that judged another finding on this line
+                key = None
         if key in rc:
             # the waves it saw: a later pass that re-confirms this site is new evidence the recheck never judged
             rc[key].update(

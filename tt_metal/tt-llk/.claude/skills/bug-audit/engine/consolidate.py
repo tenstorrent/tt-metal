@@ -21,7 +21,16 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import SEV_ORDER, key_of, load, manifest, run_dir, save, state  # noqa: E402
+from common import (  # noqa: E402
+    SEV_ORDER,
+    key_of,
+    load,
+    manifest,
+    recheck_entry,
+    run_dir,
+    save,
+    state,
+)
 
 ACTIVE = ("in_progress", "pr_open")
 DONE = (
@@ -44,7 +53,7 @@ for fn in sorted(os.listdir(os.path.join(out, "verdicts"))):
 # a recheck overrides the wave verdict of the candidate it re-examined
 recheck = load(os.path.join(out, "recheck.json"), {})
 for f in rows:
-    rc = recheck.get(key_of(f))
+    rc = recheck_entry(recheck, f)
     if (
         rc
         and "after_wave" in rc
