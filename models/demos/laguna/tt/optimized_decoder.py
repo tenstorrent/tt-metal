@@ -946,16 +946,19 @@ class OptimizedDecoder(LightweightModule):
             # Callers use ``logits`` only as the bf16 [1,1,T,E] template of the dense routing matrix, which
             # the want_dense paths never build -- skip that typecast there.
             logits = None if want_dense else ttnn.typecast(logits32, ttnn.bfloat16)
-            scores = ttnn.sigmoid(logits32)
-            sel = ttnn.add(scores, self.w["e_bias_f32"])
-            if want_dense and self._route_rank and sel.shape[-2] == 1:
+            if want_dense and self._route_rank and logits32.shape[-2] == 1:
                 # decode (one token): exact fp32 top-K with no top-k op (ttnn.topk is single-core below
                 # 8192 wide, ~45 us here). rank_e = #experts with a strictly larger selection score, from one
-                # [E, E] broadcast compare + row sum on the full grid; the routing mask is rank < K.
-                sel_col = ttnn.transpose(sel, -2, -1)  # [1, 1, E, 1]
-                rank = ttnn.sum(ttnn.gt(sel, sel_col), dim=3, keepdim=True)  # [1, 1, E, 1]
-                mask = ttnn.transpose(ttnn.lt(rank, K), -2, -1)  # [1, 1, 1, E]
-                return logits, None, self._dense_routing(cfg, ttnn.mul(scores, mask))
+                # [E, E] broadcast compare + column sum on the full grid (the [1, E] row comes out directly, no
+                # transpose back); the routing mask is rank < K. sigmoid runs fused as the lhs activation of the
+                # bias add and of the masked-score mul (same sigmoid_tile), so there is no standalone sigmoid op.
+                sig = [ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)]
+                sel = ttnn.add(logits32, self.w["e_bias_f32"], input_tensor_a_activations=sig)  # [1, 1, 1, E]
+                rank = ttnn.sum(ttnn.gt(ttnn.transpose(sel, -2, -1), sel), dim=2, keepdim=True)  # [1, 1, 1, E]
+                dense = ttnn.mul(logits32, ttnn.lt(rank, K), input_tensor_a_activations=sig)
+                return logits, None, self._dense_routing(cfg, dense)
+            scores = ttnn.sigmoid(logits32)
+            sel = ttnn.add(scores, self.w["e_bias_f32"])
             _, idx_coarse = ttnn.topk(ttnn.typecast(sel, ttnn.bfloat16), k=K + 1, dim=-1, sorted=True)
             rows = [idx_coarse.shape[i] for i in range(len(idx_coarse.shape) - 1)]
             pair_idx = ttnn.slice(idx_coarse, [0] * len(rows) + [K - 1], rows + [K + 1])
@@ -991,11 +994,12 @@ class OptimizedDecoder(LightweightModule):
         """Masked router scores [1,1,T,E] (fp32) -> normalized, scaled bf16 dense routing matrix."""
         if cfg.norm_topk_prob and "ones_ee_f32" in self.w:
             # row sum broadcast to every column by one matmul with an all-ones [E, E]: ttnn.sum over dim 3 of
-            # the 1-row decode tensor is a FillPad of its tile padding + a reduce, two ops instead of one
+            # the 1-row decode tensor is a FillPad of its tile padding + a reduce, two ops instead of one. The
+            # matrix holds 1/routed_scaling, so the div also applies the scaling and emits bf16 directly.
             rowsum = ttnn.matmul(
                 dense, self.w["ones_ee_f32"], compute_kernel_config=self._ck_router_precise, dtype=ttnn.float32
             )
-            dense = ttnn.div(dense, rowsum)
+            return ttnn.typecast(ttnn.div(dense, rowsum), ttnn.bfloat16)
         elif cfg.norm_topk_prob:
             dense = ttnn.div(dense, ttnn.sum(dense, dim=3, keepdim=True))
         if cfg.routed_scaling != 1.0:
