@@ -42,6 +42,7 @@ These models use the [weekly Agentic Research pipeline](#agentic-research-model-
 
 | Model implementation | System | Tier | Weekly coverage |
 |----------------------|--------|------|-----------------|
+| Qwen Image 2.1 | BH P150 | 3 | Full 40-step image API: one text image against a CUDA reference, one two-image edit regression, repeated requests and prompt eviction |
 | Llama3.1-8B QB2 TP4 | BH QuietBox 2 | 3 | Decoder PCC and trace replay; scored IFEval serving |
 | Gemma4 31B QB2 TP4 | BH QuietBox 2 | 3 | Decoder PCC, trace and API tests; GPQA 10/198 subset; fixed-length serving performance |
 | Qwen3.8-27B QB2 TP4 | BH QuietBox 2 | 3 | Full decoder serving; linear-attention convolution PCC; GPQA 10/198 subset; API and fixed-length performance |
