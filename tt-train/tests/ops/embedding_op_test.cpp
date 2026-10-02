@@ -10,7 +10,9 @@
 #include "autograd/tensor.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "models/llama.hpp"
 #include "ops/losses.hpp"
+#include "ops/unary_ops.hpp"
 
 class EmbeddingOpTest : public ::testing::Test {
 protected:
@@ -105,6 +107,39 @@ TEST_F(EmbeddingOpTest, EmbeddingSentenceDimNotDivisibleBy32) {
     autograd::TensorPtr input = autograd::create_tensor(input_tensor);
 
     EXPECT_NO_THROW(ops::embedding_op(input, weight));
+}
+
+TEST_F(EmbeddingOpTest, LlamaNonalignedSequencePreservesEmbeddingGradient) {
+    using namespace ttml;
+
+    models::llama::LlamaConfig config;
+    config.num_heads = 1;
+    config.num_groups = 1;
+    config.embedding_dim = 32;
+    config.num_blocks = 0;
+    config.vocab_size = 32;
+    config.max_sequence_length = 32;
+    config.weight_tying = models::llama::WeightTyingType::Disabled;
+    auto model = models::llama::create(config);
+
+    constexpr uint32_t batch_size = 1;
+    constexpr uint32_t sentence_size = 13;
+    std::vector<uint32_t> input_data(batch_size * sentence_size);
+    std::iota(input_data.begin(), input_data.end(), 1U);
+    auto input = autograd::create_tensor(core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        input_data,
+        ttnn::Shape({batch_size, 1, 1, sentence_size}),
+        &autograd::ctx().get_device(),
+        ttnn::Layout::ROW_MAJOR));
+
+    auto output = (*model)(input, std::nullopt);
+    EXPECT_EQ(output->get_value().logical_shape()[2], sentence_size);
+    ops::mean(output)->backward();
+
+    const auto parameters = model->parameters();
+    const auto embedding_weight = parameters.at("llama/tok_emb/weight");
+    EXPECT_TRUE(embedding_weight->is_grad_initialized());
+    autograd::ctx().reset_graph();
 }
 
 // This test was previously throwing an exception, but now it just freezes

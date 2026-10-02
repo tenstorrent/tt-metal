@@ -120,6 +120,30 @@ class TestLlama:
 
         ttml.autograd.AutoContext.get_instance().reset_graph()
 
+    def test_nonaligned_sequence_preserves_embedding_gradient(self, tiny_config):
+        """The embedding unpad must keep its backward edge for a partial tile."""
+        config = replace(tiny_config, num_hidden_layers=0, max_position_embeddings=32)
+        model = Llama(config)
+        model.train()
+
+        seq_len = 13
+        tokens = np.arange(1, seq_len + 1, dtype=np.uint32).reshape(1, 1, 1, seq_len)
+        input_tensor = ttml.autograd.Tensor.from_numpy(
+            tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
+        )
+
+        logits = model(input_tensor, create_causal_mask(seq_len))
+        assert logits.shape()[2] == seq_len
+        ttml.ops.unary.mean(logits).backward(False)
+
+        embedding_weight = model.tok_emb.weight.tensor
+        assert embedding_weight.is_grad_initialized(), "Nonaligned unpadding detached the embedding backward node"
+        embedding_grad = embedding_weight.get_grad_tensor().to_numpy()
+        np.testing.assert_array_equal(embedding_grad[0, 0, 0], np.zeros(config.hidden_size, dtype=np.float32))
+        assert np.any(embedding_grad[0, 0, 1 : seq_len + 1] != 0.0)
+
+        ttml.autograd.AutoContext.get_instance().reset_graph()
+
     def test_model_callable(self, tiny_config):
         """Test that model is callable via __call__."""
         model = Llama(tiny_config)

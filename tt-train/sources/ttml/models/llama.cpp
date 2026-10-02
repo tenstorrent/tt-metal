@@ -4,10 +4,33 @@
 
 #include "llama.hpp"
 
+#include "autograd/graph_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "serialization/safetensors.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
 
 namespace {
+
+ttml::autograd::TensorPtr unpad_embedding_sequence(const ttml::autograd::TensorPtr& input, uint32_t sequence_size) {
+    const auto input_shape = input->get_value().logical_shape();
+    if (input_shape[2] == sequence_size) {
+        return input;
+    }
+
+    const ttsl::SmallVector<uint32_t> start = {0, 0, 0, 0};
+    const ttsl::SmallVector<uint32_t> end = {input_shape[0], input_shape[1], sequence_size, input_shape[3]};
+    const ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
+    auto output = ttml::autograd::create_tensor(ttnn::slice(input->get_value(), start, end, step));
+
+    ttml::autograd::GradFunction grad = [input, output, padding_size = input_shape[2] - sequence_size]() {
+        const ttsl::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding = {
+            {0, 0}, {0, 0}, {0, padding_size}, {0, 0}};
+        input->add_grad(ttnn::pad(output->get_grad(), padding, 0.0F));
+    };
+    output->set_node(ttml::autograd::add_backward_node(std::move(grad), output, input));
+    return output;
+}
 
 static std::vector<float> pad_and_resize_flat(
     const std::vector<float>& flat, int64_t rows, int64_t cols, int64_t target_rows, int64_t target_cols) {
@@ -206,21 +229,8 @@ ttml::autograd::TensorPtr Llama::operator()(
 
     auto tok_emb_out = (*tok_emb)(x_padded);
 
-    // Unpad after embedding to restore original sequence length
-    autograd::TensorPtr out = tok_emb_out;
-    if (padded_seq_len != actual_seq_len) {
-        // Slice back to original sequence length (sequence dimension is now at index 2)
-        // Create a new tensor instead of modifying in-place
-        ttsl::SmallVector<uint32_t> slice_start = {0, 0, 0, 0};
-        ttsl::SmallVector<uint32_t> slice_end = {
-            tok_emb_out->get_value().logical_shape()[0],
-            tok_emb_out->get_value().logical_shape()[1],
-            actual_seq_len,
-            tok_emb_out->get_value().logical_shape()[3]};
-        ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
-        auto out_tensor = ttnn::slice(tok_emb_out->get_value(), slice_start, slice_end, step);
-        out = autograd::create_tensor(out_tensor);
-    }
+    // Unpad after embedding while preserving the embedding's backward edge.
+    auto out = unpad_embedding_sequence(tok_emb_out, actual_seq_len);
 
     // llama does positional embedding in the attention blocks
 

@@ -22,6 +22,7 @@ import ttml
 from ttml.modules import AbstractModuleBase, Embedding, ModuleList, LinearLayer
 
 from .. import RunnerType, WeightTyingType, memory_efficient_runner
+from ..autograd_ops import SequencePrefixSlice
 from .transformer import Qwen3Block, Qwen3RMSNorm
 from .safetensors_loader import load_from_safetensors
 
@@ -161,22 +162,13 @@ class Qwen3(AbstractModuleBase):
         if padded_seq_len != actual_seq_len:
             padding = [(0, 0), (0, 0), (0, 0), (0, padded_seq_len - actual_seq_len)]
             input_val_padded = ttnn.pad(input.get_value(), padding=padding, value=0.0)
-            input_padded = ttml.autograd.create_tensor(input_val_padded)
+            input_padded = ttml.autograd.create_tensor(input_val_padded, requires_grad=False)
 
         tok_emb_out = self.tok_emb(input_padded)
 
         out = tok_emb_out
         if padded_seq_len != actual_seq_len:
-            slice_start = [0, 0, 0, 0]
-            slice_end = [
-                tok_emb_out.shape()[0],
-                tok_emb_out.shape()[1],
-                actual_seq_len,
-                tok_emb_out.shape()[3],
-            ]
-            step = [1, 1, 1, 1]
-            out_val = ttnn.slice(tok_emb_out.get_value(), slice_start, slice_end, step)
-            out = ttml.autograd.create_tensor(out_val)
+            out = SequencePrefixSlice.apply(tok_emb_out, actual_seq_len)
 
         out = self._snapshot(out, "AFTER_EMBEDDING_FWD", "AFTER_EMBEDDING_BWD")
 
