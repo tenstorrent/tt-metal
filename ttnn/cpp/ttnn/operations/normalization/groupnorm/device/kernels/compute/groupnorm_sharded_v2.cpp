@@ -717,7 +717,11 @@ void kernel_main() {
 
     if constexpr (!use_negative_mask) {
         dfb_out.push_back(per_core_MN);
+#ifdef TILIZE_IN
+        // Only the tilize path fills dfb_in (and waits on it above); without TILIZE_IN nothing was
+        // pushed, so a pop would over-acknowledge and break the later gamma/beta waits on this CB.
         dfb_in.pop_front(per_core_MN);
+#endif
 
     } else {
         // nothing, for the negative mask implementation, cb_in_id is the only cb in use, and it already has the data
