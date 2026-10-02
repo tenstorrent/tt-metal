@@ -11,11 +11,8 @@
 #include <tt-metalium/tile.hpp>
 #include <tt_stl/span.hpp>
 
-namespace tt::tt_metal::internal {
+namespace tt::tt_metal::experimental {
 
-// Internal, unstable API - read the stability/usage conditions in tt_metal/api/internal/README.md
-// before depending on anything here.
-//
 // Same as ::unpack_bfp8_tiles_into_float_vec, with the exponent section padded to `l1_alignment`
 // bytes instead of the HAL's L1 alignment, so it does not create a MetalContext.
 std::vector<float> unpack_bfp8_tiles_into_float_vec(
@@ -25,4 +22,4 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
     uint32_t l1_alignment,
     const std::optional<Tile>& tile = std::nullopt);
 
-}  // namespace tt::tt_metal::internal
+}  // namespace tt::tt_metal::experimental
