@@ -21,7 +21,12 @@
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include "impl/context/context_types.hpp"
 
-namespace {
+// Fan-out latency of the host thread pools. Each iteration keeps the caller busy for gap_us, then times only the
+// submit and the join. Supported env variables:
+//  * TT_POOL_BENCH_FULL=1 runs the full grid (false),
+//  * TT_POOL_BENCH_WORKERS sets the pool size (32),
+//  * TT_POOL_BENCH_CALLER_CPU pins the caller thread (unset).
+namespace fan_out {
 
 using tt::tt_metal::ThreadPool;
 
@@ -77,17 +82,18 @@ void pin_caller() {
     (void)pinned;
 }
 
-// Created once: every pool creation moves later pools to other cores.
 struct DeviceBoundPool {
     static constexpr const char* name = "DeviceBound";
     static constexpr bool runs_on_caller = false;
     static ThreadPool& get() {
+        // Created once: every pool creation moves later pools to other cores.
         static auto pool =
             tt::tt_metal::create_device_bound_thread_pool(tt::tt_metal::DEFAULT_CONTEXT_ID, max_workers());
         return *pool;
     }
 };
 
+// PassThrough: serial reference.
 struct PassThroughPool {
     static constexpr const char* name = "PassThrough";
     static constexpr bool runs_on_caller = true;
@@ -111,11 +117,6 @@ void submit_fan_out(ThreadPool& pool, uint32_t workers, uint32_t tasks_per_worke
     }
 }
 
-// Fan-out latency of the host thread pools. Each iteration keeps the caller busy for gap_us, gives each of `workers`
-// workers tasks_per_worker tasks of work_ns, and joins; only submit and join are timed. PassThrough is the serial
-// reference.
-// TT_POOL_BENCH_FULL=1 runs the full grid, TT_POOL_BENCH_WORKERS sets the pool size (32), TT_POOL_BENCH_CALLER_CPU
-// pins the caller.
 template <typename Pool, size_t PadBytes>
 void BM_FanOut(benchmark::State& state) {
     const auto workers = static_cast<uint32_t>(state.range(0));
@@ -131,8 +132,7 @@ void BM_FanOut(benchmark::State& state) {
     const uint32_t num_tasks = workers * tasks_per_worker;
     std::vector<TaskTimes> times(num_tasks);
     std::vector<double> wall_us, submit_us, first_start_us, last_start_us, join_us;
-    // Exceeds the callable's small buffer, like the dispatch captures.
-    std::array<char, PadBytes> pad{};
+    std::array<char, PadBytes> pad{};  // Optionally exceeds the callable's small buffer, like the dispatch captures.
     auto make_task = [&times, work_ns, &pad](uint32_t i) {
         return [slot = &times[i], work_ns, pad]() {
             slot->start = now_ns();
@@ -229,9 +229,12 @@ const bool registered = [] {
     return true;
 }();
 
-}  // namespace
+}  // namespace fan_out
 
-// Bulk enqueue throughput. Registered last because it creates a pool per run.
+// Bulk enqueue throughput. Must stay after fan_out: each run creates a pool. Supported env variables:
+//  * TT_METAL_NUM_BENCHMARK_THREADS sets the pool size (8).
+namespace bulk {
+
 template <typename ThreadPoolCreator>
 static void BM_ThreadPool(benchmark::State& state, ThreadPoolCreator create_thread_pool) {
     uint32_t num_threads = tt::parse_env("TT_METAL_NUM_BENCHMARK_THREADS", 8);
@@ -276,3 +279,5 @@ static void BM_DeviceBoundThreadPool(benchmark::State& state) {
 }
 
 BENCHMARK(BM_DeviceBoundThreadPool)->RangeMultiplier(2)->Range(1, 1 << 18)->Complexity(benchmark::oN)->UseRealTime();
+
+}  // namespace bulk
