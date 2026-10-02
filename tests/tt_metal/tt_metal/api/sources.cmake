@@ -31,14 +31,6 @@ set(UNIT_TESTS_API_SOURCES
     dataflow_buffer/test_dataflow_buffer_disjoint_slots.cpp
     dataflow_buffer/test_borrowed_memory_dataflow_buffer.cpp
     distribution_spec/test_buffer_distribution_spec.cpp
-    metal2_host_api/test_mesh_workload_factories_hw.cpp
-    metal2_host_api/test_prefetcher_pipe_spec.cpp
-    metal2_host_api/test_program_spec.cpp
-    metal2_host_api/test_program_spec_hw.cpp
-    metal2_host_api/test_scratchpad_hw.cpp
-    metal2_host_api/test_program_run_args.cpp
-    metal2_host_api/test_table.cpp
-    metal2_host_api/test_tensor_spec_relaxations.cpp
     test_kernel_thread_sync.cpp
     test_banked.cpp
     test_bit_utils.cpp
@@ -93,7 +85,11 @@ set(UNIT_TESTS_API_SOURCES
     test_scoped_lock_cache.cpp
     test_zero_memory_api.cpp
     disaggregation/test_kv_chunk_address_table.cpp
+    disaggregation/test_kv_chunk_table_cache.cpp
 )
+
+# Metal 2.0 Host API tests. Their source list lives in metal2_host_api/sources.cmake.
+include(${CMAKE_CURRENT_LIST_DIR}/metal2_host_api/sources.cmake)
 
 # tt-emule ASAN sanitizer tests. Their source list is emule-team-owned (see
 # CODEOWNERS for tests/tt_metal/tt_metal/api/emule/) and lives in that dir's

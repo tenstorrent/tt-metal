@@ -64,23 +64,6 @@ inline void emit_semaphore_binding_tokens(std::ostream& os, const std::vector<Se
     os << "}  // namespace sem\n";
 }
 
-// Emits the list of cached semaphores this kernel binds: each one's id and how many harts on
-// this core use it.
-inline void emit_cached_semaphore_list(std::ostream& os, const std::vector<SemBindingEntry>& entries) {
-    os << "namespace sem_internal {\n";
-    os << "constexpr ::sem_internal::CachedSemaphore kCachedSemaphores[] = {";
-    const char* sep = "";
-    for (const auto& entry : entries) {
-        if (entry.scope != SemScope::DM_LOCAL_CACHED) {
-            continue;
-        }
-        os << sep << "{" << entry.id << "u, " << entry.total_binder_harts << "u}";
-        sep = ", ";
-    }
-    os << "};\n";
-    os << "}  // namespace sem_internal\n";
-}
-
 // Metal 2.0: precomputed layout of a kernel's common runtime args (CRTA) buffer.
 //
 // The CRTA buffer is laid out as four back-to-back sections:
