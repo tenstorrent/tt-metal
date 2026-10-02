@@ -170,10 +170,39 @@ address range is ordinary allocatable L1.
 
 ### 4.4 Mailbox fields by core
 
-| Location | Contents (`realtime_profiler_msg_t`) |
-|----------|----------------------------------------|
-| **Dispatch_s L1** | Record ring (`records[4]`, `record_wr_idx` = open slot, `record_rd_idx` = reader's ack), program_id_fifo, **realtime_profiler_core_noc_xy**, **realtime_profiler_remote_wr_idx_addr**, realtime_profiler_state (stops the compute helper). Host writes the profiler tensix L1 address of `record_wr_idx`, then NOC XY (which enables publishing), after the reader kernels launch. |
-| **Profiler tensix L1** | **config_buffer_addr**, **record_wr_idx** (published count; written only by dispatch_s, terminate flag in bit 31), sync_request, sync_host_timestamp. |
+The dispatch memory map gives every core it lays out the same 300-byte `realtime_profiler_msg_t` at the same L1
+address, but each core uses different fields:
+
+| Core | Mailbox size | Used | Unused |
+|------|--------------|------|--------|
+| Dispatch core | 300 B | 288 B | 12 B: `config_buffer_addr`, `sync_request`, `sync_host_timestamp` |
+| Profiler core | 300 B | 16 B | 284 B: the record slots, the program-id FIFO and the dispatch-side indices |
+| Prefetch core | 300 B | 0 B | 300 B: reserved only because the layout is shared |
+
+Each line below gives the field, what it is for, and who writes it.
+
+**Dispatch core**
+
+- `records[4]`: the record ring's slots (dispatch_s writes; the BRISC reads them over NoC)
+- `record_wr_idx`: the slot dispatch_s is filling (dispatch_s)
+- `record_rd_idx`: how many records the BRISC has read (BRISC, NoC write)
+- `record_full_wait_count`: how many times dispatch_s waited for a free slot (dispatch_s)
+- `program_id_fifo`, `program_id_fifo_start`, `program_id_fifo_end`: program ids queued for dispatch_s
+  (dispatch_d adds them, dispatch_s removes them)
+- `realtime_profiler_core_noc_xy`: the profiler core's NoC address; non-zero turns publishing on (host)
+- `realtime_profiler_remote_wr_idx_addr`: the L1 address of `record_wr_idx` on the profiler core (host)
+- `realtime_profiler_state`: tells dispatch_s's compute helper to stop (dispatch_s)
+
+**Profiler core**
+
+- `config_buffer_addr`: where the D2H socket config is, so the NCRISC can find the socket (host)
+- `record_wr_idx`: how many records dispatch_s has published; bit 31 means dispatch_s has terminated
+  (dispatch_s, NoC write)
+- `sync_request`: turns clock sync on and off (host)
+- `sync_host_timestamp`: the host time for each sync sample (host)
+
+The host writes `realtime_profiler_remote_wr_idx_addr` and then `realtime_profiler_core_noc_xy` only after the
+profiler core's kernels are running, so dispatch_s never publishes to a reader that is not there yet.
 
 Layout: `tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h`. HAL: `tt::tt_metal::realtime_profiler_msgs`. Not in `mailboxes_t`.
 
