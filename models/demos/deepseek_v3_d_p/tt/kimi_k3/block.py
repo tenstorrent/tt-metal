@@ -66,6 +66,7 @@ class TtKimiK3Block(LightweightModule):
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         routing_use_l1_small_for_semaphores: bool = False,
         overlap_shared_expert_with_dispatch: bool = True,
+        use_fused_rmsnorm: bool = False,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -94,6 +95,7 @@ class TtKimiK3Block(LightweightModule):
             topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.attn_norm",
+            use_fused=use_fused_rmsnorm,
         )
 
         if kv_only:
@@ -113,6 +115,7 @@ class TtKimiK3Block(LightweightModule):
             topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.ffn_norm",
+            use_fused=use_fused_rmsnorm,
         )
 
         if self.is_moe:

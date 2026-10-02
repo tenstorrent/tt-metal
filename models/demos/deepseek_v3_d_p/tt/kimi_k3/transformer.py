@@ -24,6 +24,7 @@ from typing import Callable, Optional
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE, TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import CHECKPOINT_PREFIX, load_attn_res_weights
@@ -107,6 +108,9 @@ class TtKimiK3Transformer(LightweightModule):
         padding_side: str = "right",
         sparse_kv_cache_format=None,
         mtp_predictor=None,
+        # Fused distributed RMSNorm for every block's norms. None takes the model default, as
+        # `TtPrefillBlock` does: `USE_FUSED_PREFILL_RMSNORM` in Blackhole chunked prefill.
+        use_fused_rmsnorm: Optional[bool] = None,
         **block_kwargs,
     ):
         super().__init__()
@@ -135,6 +139,8 @@ class TtKimiK3Transformer(LightweightModule):
         # the fabric actually opened, which is what `MLAPrefillAdapter.build_runtime` passes too.
         topology = topology if topology is not None else per_axis_topology()
         self.topology = topology
+        if use_fused_rmsnorm is None:
+            use_fused_rmsnorm = getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False) and is_blackhole() and is_chunked
         self.schedule = KimiK3LayerSchedule.build(model_cfg, first_layer_idx, num_layers)
         self.first_layer_idx = first_layer_idx
         self.num_layers = num_layers
@@ -282,6 +288,7 @@ class TtKimiK3Transformer(LightweightModule):
                     gate_fallback_mode=gate_fallback_mode,
                     weight_cache_path=weight_cache_path,
                     kv_only=kv_only_last_layer and is_last,
+                    use_fused_rmsnorm=use_fused_rmsnorm,
                     **block_kwargs,
                 )
             )
