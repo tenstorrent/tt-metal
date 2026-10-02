@@ -519,6 +519,16 @@ agent-context intervention, default off; TTI **d1816c8f**, 68 host tests pass.
 Same image/old BFP8 policy, no source overlay or rebuild. It is not promoted to
 the combined CI. Resumed active time about 188 minutes, cumulative **8h01m**.
 
+09:00 UTC: reasoning-history limit fails Sympy (900.121-second timeout/reward0,
+two repetition stops), despite lowering completed-response TTFT to131.227s;
+decode/reasoning consumes643.987s. It is not promoted. After trial completion
+and idle-counter verification, a separate20-minute original-history control
+starts with an audited, once-only read-only diff-review submission checkpoint,
+TTI **947caf78**,70 host tests pass. This targets the prior wrong submission
+with restored source, not a timeout-only extension; no task-specific solution
+or hidden tests enter prompts. Combined original-five CI continues unchanged
+with no inference errors so far. Resumed active time~209min, cumulative~8h22m.
+
 - TTFT: `doc/ttft_optimization/`.
 - Remote benchmarks/evals:
   `readiness_vllm/ttft_optimization_remote/README.md`.
