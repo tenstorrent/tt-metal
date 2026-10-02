@@ -59,7 +59,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             params.num_faces_B,
             params.TILE_SIZE_UNPACK_A,
             params.TILE_SIZE_UNPACK_B);
-        _llk_unpack_AB_custom_mm_init_<MM_TRANSPOSE>(params.in0_face_r_dim, formats.unpack_A_dst, CT_DIM);
+        _llk_unpack_AB_custom_mm_init_<MM_TRANSPOSE, false /* clear_src */>(params.in0_face_r_dim, formats.unpack_A_dst, CT_DIM);
         PROFILER_SYNC();
     }
     {

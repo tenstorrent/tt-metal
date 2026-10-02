@@ -47,7 +47,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             params.num_faces_A,
             params.TILE_SIZE_UNPACK_B,
             params.TILE_SIZE_UNPACK_A);
-        _llk_unpack_AB_compressed_custom_mm_init_<false /* transpose */>(params.in0_face_r_dim);
+        _llk_unpack_AB_compressed_custom_mm_init_<false /* transpose */, true /* clear_src */>(params.in0_face_r_dim);
         PROFILER_SYNC();
     }
     {
@@ -74,7 +74,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                _llk_unpack_AB_compressed_custom_mm_<true /* clear_src */>(
+                _llk_unpack_AB_compressed_custom_mm_(
                     L1_ADDRESS(params.buffer_B[0]), L1_ADDRESS(params.buffer_A[0]), reinterpret_cast<std::uint32_t>(META_L1), KT_DIM, CT_DIM);
             }
         }
