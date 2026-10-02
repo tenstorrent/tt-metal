@@ -4,6 +4,7 @@
 
 #include "untilize_with_unpadding.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/device/untilize_with_unpadding_device_operation.hpp"
@@ -100,6 +101,43 @@ Tensor untilize_with_unpadding(
     // get_pending_l1_output_reservation waves through as nothing to reserve. Both made enough_space_height
     // more permissive than the row factory it selects.
     const DataType output_dtype = operations::data_movement::untilize_output_dtype(input_tensor.dtype());
+
+    // Nothing to untilize. The factories split work by block count, which is 0 for an empty input,
+    // so split_blocks_for_tilize hands back empty core ranges and no WorkUnitSpec is emitted - while
+    // the dataflow buffers have already been declared. CollectSpecData then rejects the spec with
+    // "DFB '<name>' has no producer" (program_spec.cpp), which surfaces as a TT_FATAL out of
+    // to_layout(TILE -> ROW_MAJOR) on any zero-volume tensor. Allocate the empty output here rather
+    // than building a program that has nothing to run. output_tensor_end holds inclusive end
+    // indices, so the produced extent is end + 1 per dim; for an empty dim that end is the uint32
+    // wrap of 0 - 1, and + 1 returns it to 0.
+    if (input_tensor.logical_volume() == 0) {
+        ttsl::SmallVector<uint32_t> empty_shape;
+        empty_shape.reserve(output_tensor_end.rank());
+        for (size_t index = 0; index < output_tensor_end.rank(); ++index) {
+            empty_shape.push_back(output_tensor_end[index] + 1);
+        }
+        const ttnn::Shape output_shape(std::move(empty_shape));
+        // An empty input carries no element to unpad into a non-empty output. to_layout never asks
+        // for one, but a direct caller can, and this path skips the device operation's validation,
+        // so reject it here rather than manufacturing zeros.
+        TT_FATAL(
+            output_shape.volume() == 0,
+            "untilize_with_unpadding: a zero-volume input requires a zero-volume output, got {}",
+            output_shape);
+        // Allocated rather than filled: there is no element to initialise, and going through a host
+        // tensor would upload to the device, which fails outright inside trace capture and drops the
+        // input's mesh topology on the way. Carry that topology across instead.
+        return create_device_tensor(
+            tt::tt_metal::TensorSpec(
+                output_shape,
+                tt::tt_metal::TensorLayout(
+                    output_dtype,
+                    tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
+                    memory_config.value_or(input_tensor.memory_config()))),
+            input_tensor.device(),
+            input_tensor.tensor_topology());
+    }
+
     auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_dtype);
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
