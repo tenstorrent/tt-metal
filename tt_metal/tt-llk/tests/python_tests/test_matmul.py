@@ -4,6 +4,7 @@
 from typing import List
 
 import torch
+from conftest import skip_for_wormhole
 from helpers.device import BootMode
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
 from helpers.golden_generators import MatmulGolden, get_golden_generator
@@ -192,6 +193,8 @@ FULL_SYNC_BLOCKS = [
 ]
 
 
+# Wormhole's unpack AB matmul MOP zmask covers 8 tiles in config context 1, short of the 16-tile rows here.
+@skip_for_wormhole
 @parametrize(
     math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2],
     formats=FULL_SYNC_FORMATS,
