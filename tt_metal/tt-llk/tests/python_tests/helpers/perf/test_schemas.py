@@ -1233,7 +1233,7 @@ PERF_TEST_SCHEMAS_QSR = {
         },
     },
     "perf_sfpu_exp_parallel_matmul_quasar": {
-        "version": 3,
+        "version": 4,
         "columns": [
             "c_dimm",
             "dest_acc",
@@ -1256,12 +1256,15 @@ PERF_TEST_SCHEMAS_QSR = {
             "num_faces_A",
             "num_faces_B",
             "r_dimm",
-            "sfpu_srcs_impl",
+            "sfpu_issue",
             "tile_cnt",
             "unpack_to_dest",
             "unpack_transpose_faces",
         ],
-        "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "aliases": {
+            "formats.sfpu_math": "formats.sfpu_src",
+            "sfpu_srcs_impl": "sfpu_issue",
+        },
         "test_name_aliases": {
             "perf_sfpu_exp_parallel_matmul_quasar": "perf_sfpu_exp_parallel_matmul_quasar"
         },

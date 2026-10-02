@@ -27,7 +27,7 @@ from helpers.llk_params import (
     MathFidelity,
     MathOperation,
     PerfRunType,
-    SfpuSrcsImpl,
+    SfpuIssue,
     Transpose,
     format_dict,
 )
@@ -51,7 +51,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_FIDELITY,
     NUM_FACES,
-    SFPU_SRCS_IMPL,
+    SFPU_ISSUE,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
@@ -70,10 +70,10 @@ DIMENSION_PROFILES = (
 
 
 # ttsim has no SFPLOADMACRO, so under --disable-sfploadmacro only the SFPI implementation is built.
-SFPU_SRCS_IMPLS = (
-    (SfpuSrcsImpl.Sfpi,)
+SFPU_ISSUES = (
+    (SfpuIssue.Sfpi,)
     if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1"
-    else tuple(SfpuSrcsImpl)
+    else tuple(SfpuIssue)
 )
 
 
@@ -117,14 +117,14 @@ def generate_parallel_matmul_exp_combinations(
                         dest_sync,
                     ):
                         continue
-                    for sfpu_srcs_impl in SFPU_SRCS_IMPLS:
+                    for sfpu_issue in SFPU_ISSUES:
                         combinations.append(
                             (
                                 fmt,
                                 dest_acc,
                                 dest_sync,
                                 implied_math_format,
-                                sfpu_srcs_impl,
+                                sfpu_issue,
                                 runtime(exp_input_dimensions),
                                 runtime(input_A_dimensions),
                                 runtime(input_B_dimensions),
@@ -154,7 +154,7 @@ def test_sfpu_exp_parallel_matmul_quasar(
         dest_acc,
         dest_sync,
         implied_math_format,
-        sfpu_srcs_impl,
+        sfpu_issue,
         exp_input_dimensions,
         input_A_dimensions,
         input_B_dimensions,
@@ -268,7 +268,7 @@ def test_sfpu_exp_parallel_matmul_quasar(
             ENABLE_DIRECT_INDEXING(False),
             DEST_SYNC(dest_sync),
             UNPACK_TRANS_FACES(Transpose.No),
-            SFPU_SRCS_IMPL(sfpu_srcs_impl),
+            SFPU_ISSUE(sfpu_issue),
         ],
         "runtimes": [
             CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),

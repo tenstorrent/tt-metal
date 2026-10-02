@@ -146,7 +146,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_ISOLATE_SFPU
 
-#include "ckernel_template.h"
 #include "cmath_common.h"
 #include "llk_bfd_alloc.h"
 #include "llk_math_common.h"
@@ -161,89 +160,20 @@ using namespace ckernel;
 using namespace ckernel::math;
 using namespace ckernel::sfpu;
 
-#ifndef DISABLE_SFPLOADMACRO
-void run_exp_loadmacro(RUNTIME_PARAMETERS params)
-{
-#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
-    const FormatConfig& formats = params.formats;
-#endif
-    const std::uint32_t num_tiles   = params.TILE_CNT;
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+// SFPU_ISSUE_LOADMACRO comes from the test's SfpuIssue parameter.
+constexpr SfpuIssue EXP_ISSUE = SFPU_ISSUE_LOADMACRO ? SfpuIssue::LoadMacro : SfpuIssue::Sfpi;
 
-    const bool PARAM_SRCS_32BIT_MODE                = _is_srcs_32bit_mode_(static_cast<DataFormat>(formats.unpack_S_dst));
-    constexpr std::uint32_t PARAM_SRCS_XDIM         = srcs_dims::XDIM;
-    constexpr std::uint32_t PARAM_SRCS_ZDIM         = srcs_dims::ZDIM;
-    const std::uint32_t PARAM_SRCS_YDIM             = srcs_dims::ydim(PARAM_SRCS_32BIT_MODE);
-    const std::uint32_t PARAM_SRCS_SLICE_COUNT      = srcs_dims::slice_count(PARAM_SRCS_32BIT_MODE);
-    constexpr std::uint32_t PARAM_SRCS_INSTRN_COUNT = 1;
-
-    const int num_sfpu_iterations = PARAM_SRCS_YDIM >> 1;
-    const int load_base_addr      = ckernel::math::SFPU_SRCS_BASE_ADDR;
-
-    // The SFPU load reads what UNP_S wrote (unpack_S_dst); the folded store writes what PACK1
-    // will read (pack_S_src).
-    const std::uint32_t load_sfpmem  = _sfpu_sfpmem_type_(static_cast<DataFormat>(formats.unpack_S_dst));
-    const std::uint32_t store_sfpmem = _sfpu_sfpmem_type_(static_cast<DataFormat>(formats.pack_S_src));
-
-    // One MOP run issues one REPLAY per SrcS slice of a tile. The `done` bit on the final
-    // LOADMACRO of each replay swaps the SrcS banks and resets the dvalids in hardware, so the
-    // SFPU is paced purely by the dvalid handshake with the unpacker and packer.
-    ckernel_template mop(PARAM_SRCS_SLICE_COUNT, 1 /*inner_loop_len*/, _exp_loadmacro_op_(num_sfpu_iterations));
-
-    {
-        ZONE_SCOPED("INIT")
-        const ckernel::TensorShape srcs_shape = tensor_shape_from_dimensions(PARAM_SRCS_YDIM, PARAM_SRCS_XDIM, PARAM_SRCS_ZDIM, PARAM_SRCS_ZDIM);
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp2_Slice0>(srcs_shape, L1_ADDRESS(params.buffer_S[0]), formats.unpack_S_src);
-        _llk_unpack_configure_unary_<p_unpacr::UNP_S>(static_cast<DataFormat>(formats.unpack_S_dst));
-
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack1>(srcs_shape, L1_ADDRESS(params.buffer_Res[0]), formats.pack_S_dst);
-        _llk_pack_hw_configure_<p_pacr::PACK1, false /*EN_32BIT_DEST*/>(static_cast<DataFormat>(formats.pack_S_src), ckernel::ReluConfig::none());
-
-        _llk_unpack_srcs_config_for_tile_<PARAM_SRCS_INSTRN_COUNT>(PARAM_SRCS_32BIT_MODE);
-        _llk_pack_srcs_config_for_tile_<PARAM_SRCS_INSTRN_COUNT>(PARAM_SRCS_32BIT_MODE);
-        _llk_math_eltwise_sfpu_init_();
-
-        // One-time setup of the exp LOADMACRO replay. The store offset (2 * YDIM = slice size) must
-        // be a compile-time constant, so branch on the runtime 32-bit mode into constexpr variants.
-        if (PARAM_SRCS_32BIT_MODE)
-        {
-            _exp_init_loadmacro_<2 * srcs_dims::ydim(true /*srcs_32bit_mode*/) /*STORE_OFFSET*/>(
-                load_base_addr, num_sfpu_iterations, load_sfpmem, store_sfpmem);
-        }
-        else
-        {
-            _exp_init_loadmacro_<2 * srcs_dims::ydim(false /*srcs_32bit_mode*/) /*STORE_OFFSET*/>(
-                load_base_addr, num_sfpu_iterations, load_sfpmem, store_sfpmem);
-        }
-        mop.program(instrn_buffer);
-        PROFILER_SYNC();
-    }
-    {
-        ZONE_SCOPED("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
-        {
-            const std::uint8_t bfd_unpack = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp2_Slice0>();
-            const std::uint8_t bfd_pack   = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack1>();
-            // Full TRISC3 path: UNP_S -> SFPU exp (self-contained SFPLOADMACRO replay) -> PACK1.
-            // Pack is kicked before the MOP so PACK1 is already waiting on the output dvalids.
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
-            {
-                for (std::uint32_t i = 0; i < num_tiles; ++i)
-                {
-                    _llk_unpack_srcs_<PARAM_SRCS_INSTRN_COUNT>(bfd_unpack, i * PARAM_SRCS_SLICE_COUNT);
-                    _llk_pack_srcs_<PARAM_SRCS_INSTRN_COUNT>(bfd_pack, i * PARAM_SRCS_SLICE_COUNT);
-                    ckernel_template::run(instrn_buffer);
-                }
-            }
-        }
-        wait_mop_idle();
-        wait_pack_idle();
-        PROFILER_SYNC();
-    }
-}
+#ifdef DISABLE_SFPLOADMACRO
+// resolve_sfpu_issue would quietly build Sfpi here; fail instead so a LoadMacro variant never reports Sfpi results.
+static_assert(!SFPU_ISSUE_LOADMACRO, "SFPLOADMACRO is disabled; only the Sfpi variant can be built");
 #endif
 
-void run_exp_sfpi(RUNTIME_PARAMETERS params)
+// The exp op type depends on the SrcS layout, known only at runtime: each phase dispatches once and
+// uses the same type for init and the tile loop.
+template <class Layout>
+using ExpOp = ExpSrcs<true /*APPROXIMATION_MODE*/, Layout::layout, EXP_ISSUE>;
+
+void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
@@ -255,28 +185,33 @@ void run_exp_sfpi(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
         LLK_ASSERT(srcs_format == static_cast<DataFormat>(formats.pack_S_src), "SrcS EXP requires matching unpack destination and pack source formats");
-        llk_sfpu_srcs_unary_init(
-            L1_ADDRESS(params.buffer_S[0]),
-            static_cast<DataFormat>(formats.unpack_S_src),
+        dispatch_sfpu_srcs_format(
             srcs_format,
-            L1_ADDRESS(params.buffer_Res[0]),
-            static_cast<DataFormat>(formats.pack_S_src),
-            static_cast<DataFormat>(formats.pack_S_dst),
-            IMPLIED_MATH_FORMAT);
+            [&](auto layout)
+            {
+                llk_sfpu_srcs_unary_init<ExpOp<decltype(layout)>>(
+                    L1_ADDRESS(params.buffer_S[0]),
+                    static_cast<DataFormat>(formats.unpack_S_src),
+                    srcs_format,
+                    L1_ADDRESS(params.buffer_Res[0]),
+                    static_cast<DataFormat>(formats.pack_S_src),
+                    static_cast<DataFormat>(formats.pack_S_dst),
+                    IMPLIED_MATH_FORMAT);
+            });
         PROFILER_SYNC();
     }
     {
         ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
         {
+            // UNP_S -> SFPU exp -> PACK1; the op type decides Sfpi or LoadMacro and who clears the SrcS valids.
             dispatch_sfpu_srcs_format(
                 srcs_format,
                 [&](auto layout)
                 {
-                    using Layout = decltype(layout);
                     for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
                     {
-                        llk_sfpu_srcs_unary(num_tiles, srcs_format, [](int, int, int) { calculate_exponential_srcs<true, Layout::layout>(); });
+                        llk_sfpu_srcs_unary<ExpOp<decltype(layout)>>(num_tiles, srcs_format);
                     }
                 });
         }
@@ -285,23 +220,6 @@ void run_exp_sfpi(RUNTIME_PARAMETERS params)
         wait_pack_idle();
         PROFILER_SYNC();
     }
-}
-
-void run_kernel(RUNTIME_PARAMETERS params)
-{
-#ifdef DISABLE_SFPLOADMACRO
-    static_assert(!SFPU_SRCS_LOADMACRO, "SFPLOADMACRO is disabled; only the SFPI implementation can be built");
-    run_exp_sfpi(params);
-#else
-    if constexpr (SFPU_SRCS_LOADMACRO)
-    {
-        run_exp_loadmacro(params);
-    }
-    else
-    {
-        run_exp_sfpi(params);
-    }
-#endif
 }
 
 #endif

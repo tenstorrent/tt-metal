@@ -330,22 +330,6 @@ void calculate_exponential([[maybe_unused]] const std::uint32_t exp_base_scale_f
     }
 }
 
-/**
- * @brief EXP over one SrcS slice (slots per @ref SrcsLayout), algorithm per @ref ExpAlgo.
- *
- * @tparam LAYOUT: Load and store layout, values = <F16a/F16b/F32>; unpack destination and pack
- *         source formats must match.
- * @note The caller runs unpack/pack and clears the SrcS valids after this call, as
- *       llk_sfpu_srcs_unary does.
- */
-template <bool APPROXIMATION_MODE, sfpi::DataLayout LAYOUT>
-sfpi_inline void calculate_exponential_srcs() {
-    using Layout = SrcsLayout<LAYOUT>;
-    using Operand = SfpuOperand<SfpuReg::SrcS, SfpiFormat<LAYOUT, sfpi::vFloat>>;
-    using Algo = ExpAlgo<APPROXIMATION_MODE, LAYOUT == sfpi::DataLayout::F32>;
-    calculate_exponential_operands<Algo, Layout::ops>(Operand{Layout::in0}, Operand{Layout::out});
-}
-
 template <
     bool APPROXIMATION_MODE /*maybe_unused*/,
     std::uint32_t scale /*maybe_unused*/ = 0x3F800000,
@@ -419,7 +403,57 @@ inline std::uint32_t _exp_loadmacro_op_(const int num_sfpu_iterations) {
     return TT_OP_REPLAY(0, _exp_loadmacro_replay_len_(num_sfpu_iterations), 0, 0, 0, 0);
 }
 
+/**
+ * @brief SrcS EXP through SFPLOADMACRO: one self-contained macro per SFPU pass, replayed per slice.
+ *
+ * Only the HW lookup table fits in a macro, so this exists for @ref ExpHwLut alone. It issues the
+ * same SFPNONLINEAR EXP as ExpHwLut::apply, so results match the Sfpi version bit for bit.
+ *
+ * @tparam LAYOUT: Load and store layout, values = <F16a/F16b/F32>.
+ * @note Owns replay slot 0 and LOADMACRO sequence 0; rerun init() after any other op programs
+ *       either.
+ */
+template <sfpi::DataLayout LAYOUT>
+struct SrcsUnaryOp<ExpHwLut, LAYOUT, SfpuIssue::LoadMacro> {
+    using Layout = SrcsLayout<LAYOUT>;
+    static_assert(Layout::ops <= 4, "Replay cycles LREG0-3 (d & 3); >4 in-flight macros would reuse a live LREG");
+
+    // The last macro's `done` bit hands both SrcS banks back.
+    static constexpr bool hw_clears_valids = true;
+
+    static void init() {
+        // The folded store lands in the out slot: STORE_OFFSET is the in0 -> out distance in rows.
+        constexpr std::uint32_t store_offset =
+            static_cast<std::uint32_t>((Layout::out - Layout::in0) * ckernel::math::SFP_ROWS);
+        _exp_init_loadmacro_<store_offset>(
+            ckernel::math::SFPU_SRCS_BASE_ADDR + Layout::in0 * ckernel::math::SFP_ROWS,
+            Layout::ops,
+            Layout::sfpmem,
+            Layout::sfpmem);
+    }
+
+    static void run_slice() { TTI_REPLAY(0, _exp_loadmacro_replay_len_(Layout::ops), 0, 0, 0, 0); }
+};
+
 #endif
+
+template <bool APPROXIMATION_MODE, sfpi::DataLayout LAYOUT>
+using ExpSrcsAlgo = ExpAlgo<APPROXIMATION_MODE, LAYOUT == sfpi::DataLayout::F32>;
+
+/**
+ * @brief SrcS EXP op for @ref llk_sfpu_srcs_unary: math per @ref ExpAlgo, issue per ISSUE.
+ *
+ * @tparam APPROXIMATION_MODE: Forwarded to @ref ExpAlgo; only F32 with false runs the accurate path.
+ * @tparam LAYOUT: Load and store layout, values = <F16a/F16b/F32>; unpack destination and pack
+ *         source formats must match.
+ * @tparam ISSUE: Issue mechanism, values = <Sfpi/LoadMacro>. LoadMacro needs the lookup-table path
+ *         (APPROXIMATION_MODE or a 16-bit layout) and falls back to Sfpi without SFPLOADMACRO.
+ */
+template <bool APPROXIMATION_MODE, sfpi::DataLayout LAYOUT, SfpuIssue ISSUE = SfpuIssue::Sfpi>
+using ExpSrcs = SrcsUnaryOp<
+    ExpSrcsAlgo<APPROXIMATION_MODE, LAYOUT>,
+    LAYOUT,
+    resolve_sfpu_issue<ISSUE, std::is_same_v<ExpSrcsAlgo<APPROXIMATION_MODE, LAYOUT>, ExpHwLut>>()>;
 
 }  // namespace sfpu
 }  // namespace ckernel

@@ -510,13 +510,11 @@ class ApproximationMode(Enum):
         return str(self.value).lower()
 
 
-class SfpuSrcsImpl(Enum):
-    LoadMacro = True
-    Sfpi = False
+class SfpuIssue(Enum):
+    """How an SFPU op's instructions are issued (ckernel::sfpu::SfpuIssue); never changes the math."""
 
-    @property
-    def cpp_enum_value(self):
-        return str(self.value).lower()
+    Sfpi = "Sfpi"
+    LoadMacro = "LoadMacro"
 
 
 class DstRoundingMode(Enum):

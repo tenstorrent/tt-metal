@@ -23,8 +23,8 @@
 // per slice (auto-loop cannot alternate descriptors, tt-llk #1635) so it bakes both ids into a MOP.
 // Either way this is one UNP_S engine with two table rows, not UNP_A+UNP_B.
 //
-// TODO(#52522): integrate the SFPLOADMACRO fast path (merged on main) into the wrapper. Only
-// per-slice ops are supported for now.
+// The Op overloads take an op type (e.g. ExpSrcs, a SrcsUnaryOp) that selects its own issue
+// mechanism; SFPLOADMACRO ops clear the SrcS valids themselves (Op::hw_clears_valids).
 
 // Allocates and programs the PACK1 buffer descriptor viewing the L1 output as SrcS slices.
 // Internal helper for llk_sfpu_srcs_{unary,binary}_init. Do not call standalone.
@@ -86,6 +86,36 @@ inline void llk_sfpu_srcs_unary_init(
 }
 
 /**
+ * @brief Configure the unary SrcS SFPU pipeline, then the op type's own state (Op::init()).
+ *
+ * Same parameters as the overload above. Op::init() runs last, after the SFPU init, so state the
+ * op programs (e.g. SFPLOADMACRO sequences and the replay buffer) is not reset by it.
+ *
+ * @tparam Op: SrcS op type, e.g. ExpSrcs (see SrcsUnaryOp in ckernel_sfpu_srcs.h).
+ * @tparam INSTRN_COUNT: Pack instructions per SrcS auto-loop (see llk_srcs.h).
+ * @note Run @ref llk_sfpu_srcs_unary with the same Op and INSTRN_COUNT after this function.
+ */
+template <class Op, std::uint8_t INSTRN_COUNT = 1>
+inline void llk_sfpu_srcs_unary_init(
+    const std::uint32_t l1_in_addr_16B,
+    const DataFormat unpack_S_src_format,
+    const DataFormat unpack_S_dst_format,
+    const std::uint32_t l1_out_addr_16B,
+    const DataFormat pack_S_src_format,
+    const DataFormat pack_S_dst_format,
+    const bool implied_math_format) {
+    llk_sfpu_srcs_unary_init<INSTRN_COUNT>(
+        l1_in_addr_16B,
+        unpack_S_src_format,
+        unpack_S_dst_format,
+        l1_out_addr_16B,
+        pack_S_src_format,
+        pack_S_dst_format,
+        implied_math_format);
+    Op::init();
+}
+
+/**
  * @brief Configure the binary SrcS SFPU pipeline: unpack (UNP_S), pack (PACK1) and SFPU.
  *
  * Like llk_sfpu_srcs_unary_init, for ops with two inputs sharing formats. Both inputs use the
@@ -134,6 +164,32 @@ inline void llk_sfpu_srcs_binary_init(
     _llk_math_eltwise_sfpu_init_();
 }
 
+// Per tile: unpack to SrcS, pack from SrcS, then per slice run run_slice() and, unless the op
+// hands the banks back itself, clear the SrcS valids. Internal helper for llk_sfpu_srcs_unary.
+template <std::uint8_t INSTRN_COUNT, bool CLEAR_VALIDS, typename RunSlice>
+inline void llk_sfpu_srcs_unary_impl(
+    const std::uint32_t num_tiles, const DataFormat unpack_S_dst_format, RunSlice&& run_slice) {
+    const bool srcs_32bit_mode = ckernel::trisc::_is_srcs_32bit_mode_(unpack_S_dst_format);
+    const std::uint32_t slice_count = ckernel::trisc::srcs_dims::slice_count(srcs_32bit_mode);
+
+    const std::uint8_t bfd_unpack = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp2_Slice0>();
+    const std::uint8_t bfd_pack = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack1>();
+
+    for (std::uint32_t i = 0; i < num_tiles; ++i) {
+        _llk_unpack_srcs_<INSTRN_COUNT>(bfd_unpack, i * slice_count);  // Sets dvalid for SFPU to read
+
+        // Pack before SFPU: the SFPU loop clogs the instruction buffer and hangs if pack comes after.
+        _llk_pack_srcs_<INSTRN_COUNT>(bfd_pack, i * slice_count);  // Sets dvalid for SFPU to write
+
+        for (std::uint32_t slice = 0; slice < slice_count; slice++) {
+            run_slice();
+            if constexpr (CLEAR_VALIDS) {
+                _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();  // Clears dvalid for SFPU read and write
+            }
+        }
+    }
+}
+
 /**
  * @brief Run a unary SFPU op over num_tiles tiles on the SrcS path.
  *
@@ -149,28 +205,32 @@ inline void llk_sfpu_srcs_binary_init(
  */
 template <std::uint8_t INSTRN_COUNT = 1, typename SfpuOp>
 inline void llk_sfpu_srcs_unary(const std::uint32_t num_tiles, const DataFormat unpack_S_dst_format, SfpuOp&& sfpu_op) {
-    const bool srcs_32bit_mode = ckernel::trisc::_is_srcs_32bit_mode_(unpack_S_dst_format);
-    const std::uint32_t ydim = ckernel::trisc::srcs_dims::ydim(srcs_32bit_mode);
-    const std::uint32_t slice_count = ckernel::trisc::srcs_dims::slice_count(srcs_32bit_mode);
-
+    const std::uint32_t ydim =
+        ckernel::trisc::srcs_dims::ydim(ckernel::trisc::_is_srcs_32bit_mode_(unpack_S_dst_format));
     const int num_sfpu_iterations = static_cast<int>(ydim >> 1);  // SFP_ROWS == 2
     const int load_base_addr = ckernel::math::SFPU_SRCS_BASE_ADDR;
     const int store_base_addr = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * static_cast<int>(ydim);
 
-    const std::uint8_t bfd_unpack = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp2_Slice0>();
-    const std::uint8_t bfd_pack = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack1>();
+    llk_sfpu_srcs_unary_impl<INSTRN_COUNT, true>(
+        num_tiles, unpack_S_dst_format, [&] { sfpu_op(load_base_addr, store_base_addr, num_sfpu_iterations); });
+}
 
-    for (std::uint32_t i = 0; i < num_tiles; ++i) {
-        _llk_unpack_srcs_<INSTRN_COUNT>(bfd_unpack, i * slice_count);  // Sets dvalid for SFPU to read
-
-        // Pack before SFPU: the SFPU loop clogs the instruction buffer and hangs if pack comes after.
-        _llk_pack_srcs_<INSTRN_COUNT>(bfd_pack, i * slice_count);  // Sets dvalid for SFPU to write
-
-        for (std::uint32_t slice = 0; slice < slice_count; slice++) {
-            sfpu_op(load_base_addr, store_base_addr, num_sfpu_iterations);
-            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();  // Clears dvalid for SFPU read and write
-        }
-    }
+/**
+ * @brief Run a unary SrcS op type over num_tiles tiles.
+ *
+ * Like the callable overload, but the op type owns its issue mechanism: per slice it runs
+ * Op::run_slice(), and the SrcS valids are cleared here only when Op::hw_clears_valids is false.
+ *
+ * @tparam Op: SrcS op type, e.g. ExpSrcs (see SrcsUnaryOp in ckernel_sfpu_srcs.h).
+ * @tparam INSTRN_COUNT: Must match the value passed to llk_sfpu_srcs_unary_init.
+ * @param num_tiles: Number of 32x32 tiles to process.
+ * @param unpack_S_dst_format: SrcS format used to derive geometry; must match Op's layout.
+ * @note Call @ref llk_sfpu_srcs_unary_init with the same Op before this function.
+ */
+template <class Op, std::uint8_t INSTRN_COUNT = 1>
+inline void llk_sfpu_srcs_unary(const std::uint32_t num_tiles, const DataFormat unpack_S_dst_format) {
+    llk_sfpu_srcs_unary_impl<INSTRN_COUNT, !Op::hw_clears_valids>(
+        num_tiles, unpack_S_dst_format, [] { Op::run_slice(); });
 }
 
 /**

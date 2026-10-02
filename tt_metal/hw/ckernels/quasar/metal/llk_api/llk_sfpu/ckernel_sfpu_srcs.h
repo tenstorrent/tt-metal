@@ -4,10 +4,15 @@
 
 #pragma once
 
+#include <cstdint>
+
+#include "ckernel_instr_params.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_operand.h"
+#include "sfpu_issue.h"
 
 namespace ckernel::sfpu {
 
@@ -34,6 +39,53 @@ struct SrcsLayout {
     static constexpr int in0 = 0;
     static constexpr int in1 = ops;
     static constexpr int out = 2 * ops;
+
+    // SFPLOAD/SFPSTORE format code for this layout, for raw-instruction and SFPLOADMACRO paths.
+    static constexpr std::uint32_t sfpmem = LAYOUT == sfpi::DataLayout::F32    ? p_sfpu::sfpmem::FP32
+                                            : LAYOUT == sfpi::DataLayout::F16a ? p_sfpu::sfpmem::FP16A
+                                                                               : p_sfpu::sfpmem::FP16B;
+};
+
+/**
+ * @brief One unary SFPU op over one SrcS slice, run by llk_sfpu_srcs_unary<Op>.
+ *
+ * MATH is the math policy (static vFloat apply(vFloat)); ISSUE selects how it is issued. Each
+ * supported (MATH, ISSUE) pair is a specialization exposing:
+ *   - init(): one-time setup of state the op owns (macros, replay buffer);
+ *   - run_slice(): reads the in0 slot and writes the out slot of the current slice
+ *     (@ref SrcsLayout);
+ *   - hw_clears_valids: true when run_slice() hands the SrcS banks back itself, so the caller
+ *     must not clear the valids again.
+ * The Sfpi specialization below serves every MATH; LoadMacro versions are defined per op.
+ *
+ * @tparam MATH: Math policy, e.g. @ref ExpHwLut.
+ * @tparam LAYOUT: Load and store layout, values = <F16a/F16b/F32>; unpack destination and pack
+ *         source formats must match.
+ * @tparam ISSUE: Issue mechanism, values = <Sfpi/LoadMacro>; resolve it with
+ *         @ref resolve_sfpu_issue.
+ * @note Call @ref llk_sfpu_srcs_unary_init with this type before @ref llk_sfpu_srcs_unary.
+ */
+template <class MATH, sfpi::DataLayout LAYOUT, SfpuIssue ISSUE>
+struct SrcsUnaryOp {
+    static_assert(sizeof(MATH) == 0, "This SFPU op has no SrcS implementation for the requested SfpuIssue");
+};
+
+template <class MATH, sfpi::DataLayout LAYOUT>
+struct SrcsUnaryOp<MATH, LAYOUT, SfpuIssue::Sfpi> {
+    static constexpr bool hw_clears_valids = false;
+
+    static void init() {}
+
+    sfpi_inline static void run_slice() {
+        using Layout = SrcsLayout<LAYOUT>;
+        using Operand = SfpuOperand<SfpuReg::SrcS, SfpiFormat<LAYOUT, sfpi::vFloat>>;
+        const Operand input{Layout::in0};
+        const Operand output{Layout::out};
+#pragma GCC unroll 8
+        for (int d = 0; d < Layout::ops; d++) {
+            output.store(d, MATH::apply(input.load(d)));
+        }
+    }
 };
 
 /**
