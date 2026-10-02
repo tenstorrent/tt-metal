@@ -598,7 +598,7 @@ TEST(SlidingWindowWorkPlan, HaloExchangesReachEveryPredecessorOnce) {
                     continue;
                 }
                 for (const bool linear : {true, false}) {
-                    for (const auto [allow_multicast, slots] :
+                    for (const auto& [allow_multicast, slots] :
                          {std::pair{true, 1u}, std::pair{false, 1u}, std::pair{true, 2u}}) {
                         const bool multicast = allow_multicast && slots == 1;
                         ChunkedSlidingHaloLayout layout;
