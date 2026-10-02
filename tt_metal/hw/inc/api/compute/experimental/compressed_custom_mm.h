@@ -66,7 +66,7 @@ ALWI void compressed_custom_mm_block_init(
     // NOTE: split_acc is accepted for call-site compatibility but NOT forwarded — the LLK always
     // runs with split_acc=false. Carried verbatim from both parent trees (deepseek_v3_b1 demo and
     // tt-blaze); all existing consumers were validated against this behavior.
-    MATH((llk_math_compressed_custom_mm_init<transpose, false /*split_acc*/, dense_packing>(in0_cb_id, in1_cb_id)));
+    MATH((llk_math_compressed_custom_mm_init<transpose, false /* split_acc */, dense_packing>(in0_cb_id, in1_cb_id)));
 
     PACK((llk_pack_dest_init<fp32_dest_acc_en, PackMode::Default>(out_cb_id)));
     PACK((llk_pack_hw_configure<fp32_dest_acc_en>(out_cb_id)));
@@ -108,7 +108,7 @@ ALWI void compressed_custom_mm_block_init_short(
     UNPACK((llk_unpack_AB_compressed_custom_mm_init<transpose, clear_src>(in0_cb_id, in1_cb_id)));
 
     // NOTE: split_acc is accepted but NOT forwarded (see compressed_custom_mm_block_init).
-    MATH((llk_math_compressed_custom_mm_init<transpose, false /*split_acc*/, dense_packing>(in0_cb_id, in1_cb_id)));
+    MATH((llk_math_compressed_custom_mm_init<transpose, false /* split_acc */, dense_packing>(in0_cb_id, in1_cb_id)));
 
     PACK((_llk_pack_custom_mm_init_<dense_packing>()));
 }
@@ -156,7 +156,7 @@ ALWI void compressed_custom_mm_block(
     // NOTE: finalize is accepted for call-site compatibility but NOT forwarded — the LLK always
     // runs with finalize=false. Carried verbatim from both parent trees; all existing consumers
     // were validated against this behavior.
-    MATH((llk_math_compressed_custom_mm<false /*finalize*/>(
+    MATH((llk_math_compressed_custom_mm<false /* finalize */>(
         in0_cb_id, in1_cb_id, base_address_meta, dst_index, kt_dim, ct_dim)));
 }
 
@@ -235,7 +235,7 @@ ALWI void compressed_custom_mm_block_math(
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1) {
     // NOTE: finalize is accepted but NOT forwarded (see compressed_custom_mm_block).
-    MATH((llk_math_compressed_custom_mm<false /*finalize*/>(
+    MATH((llk_math_compressed_custom_mm<false /* finalize */>(
         in0_cb_id, in1_cb_id, base_address_meta, dst_index, kt_dim, ct_dim)));
 }
 

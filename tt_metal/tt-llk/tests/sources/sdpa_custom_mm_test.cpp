@@ -194,8 +194,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
         formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, true);
 
-    _llk_pack_init_<PackMode::Default, false /*zero_output*/, false /*skip_addrmod_config*/, true /*skip_packer_strides*/>(
-        formats.pack_src, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, 1 /*num_tiles*/, false /*skip_bh_tilize_workaround*/);
+    _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
+        formats.pack_src, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
 
     // sdpa_custom_mm_block_init_pack_short(): Z-stride = FACE_C_DIM * 8 * 2,
     // W-stride = (TILE_NUM_FACES / 2) * FACE_C_DIM * 8 * 2. Both are spelled here exactly
