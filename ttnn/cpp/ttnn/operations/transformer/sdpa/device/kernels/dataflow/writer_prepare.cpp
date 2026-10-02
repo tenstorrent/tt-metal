@@ -1,15 +1,21 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 #include "api/dataflow/dataflow_api.h"
+#include "../prepare_split.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 void kernel_main() {
     constexpr uint32_t batch = get_compile_time_arg_val(0);
     constexpr auto accessor_args = TensorAccessorArgs<1>();
-    auto dst = TensorAccessor(accessor_args, get_arg_val<uint32_t>(0));
-    const uint32_t start = get_arg_val<uint32_t>(1);
-    const uint32_t count = get_arg_val<uint32_t>(2);
+    auto dst = TensorAccessor(accessor_args, get_common_arg_val<uint32_t>(0));
+    const auto [start, count] = prepare_range(
+        get_absolute_logical_x(),
+        get_absolute_logical_y(),
+        get_common_arg_val<uint32_t>(1),
+        get_common_arg_val<uint32_t>(2),
+        get_common_arg_val<uint32_t>(3),
+        batch);
     const uint32_t bytes = get_tile_size(16);
     Noc noc;
     DataflowBuffer cb(16);

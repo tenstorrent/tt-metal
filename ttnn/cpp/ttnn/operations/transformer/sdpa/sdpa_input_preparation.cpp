@@ -5,8 +5,8 @@
 
 #include <algorithm>
 #include <limits>
-#include <set>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/generic/generic_op.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -42,15 +42,11 @@ Tensor prepare_sdpa_input(const Tensor& input, bool is_query, DataType dtype) {
     const uint32_t batch = tiles % 4 == 0 ? 4 : tiles % 2 == 0 ? 2 : 1;
     TT_FATAL(tiles > 0, "SDPA preparation requires at least one tile");
     const auto hardware = input.device()->compute_with_storage_grid_size();
-    const uint32_t cores = std::min<uint32_t>(tiles / batch, hardware.x * hardware.y);
-    std::vector<CoreCoord> coordinates;
-    std::set<CoreRange> ranges;
-    for (uint32_t i = 0; i < cores; ++i) {
-        const CoreCoord core(i % hardware.x, i / hardware.x);
-        coordinates.push_back(core);
-        ranges.emplace(core, core);
-    }
-    const CoreRangeSet grid(ranges);
+    const uint32_t batches = tiles / batch;
+    const uint32_t cores = std::min<uint32_t>(batches, hardware.x * hardware.y);
+    // Cores fill rows of the compute grid; each kernel derives its tile range from its logical core
+    // (device/kernels/prepare_split.hpp), so the program carries only common runtime args.
+    const CoreRangeSet grid = num_cores_to_corerangeset(cores, hardware, /*row_wise=*/true);
     TensorSpec spec(input.logical_shape(), TensorLayout(dtype, PageConfig(Layout::TILE), DRAM_MEMORY_CONFIG));
     auto output = create_device_tensor(spec, input.device());
     const uint32_t bytes = dtype == DataType::BFLOAT16 ? 2048 : dtype == DataType::BFLOAT8_B ? 1088 : 576;
@@ -90,17 +86,10 @@ Tensor prepare_sdpa_input(const Tensor& input, bool is_query, DataType dtype) {
             .math_fidelity = MathFidelity::LoFi,
             .fp32_dest_acc_en = dtype != DataType::BFLOAT4_B,
             .math_approx_mode = false}};
-    uint32_t offset = 0;
-    for (uint32_t i = 0; i < cores; ++i) {
-        const auto core = coordinates[i];
-        const uint32_t count = (tiles / batch / cores + (i < tiles / batch % cores)) * batch;
-        reader.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{input.buffer()->address(), offset, count});
-        writer.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{output.buffer()->address(), offset, count});
-        compute.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{count});
-        offset += count;
-    }
+    const auto grid_x = static_cast<uint32_t>(hardware.x);
+    reader.common_runtime_args = {input.buffer()->address(), grid_x, batches, cores};
+    writer.common_runtime_args = {output.buffer()->address(), grid_x, batches, cores};
+    compute.common_runtime_args = {grid_x, batches, cores};
     program.kernels = {std::move(reader), std::move(writer), std::move(compute)};
     return ttnn::generic_op({input, output}, program);
 }
