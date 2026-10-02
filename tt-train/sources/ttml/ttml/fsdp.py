@@ -725,7 +725,8 @@ def fully_shard(
             sharded by another mesh axis (e.g. TP).
             Parameters with no usable dim, or whose chosen dim isn't divisible by the
             axis size, stay replicated with a warning. Parameters whose shards aren't
-            whole tiles are still sharded, with a warning once per shape.
+            whole tiles are still sharded, with one warning per shape, shard dim
+            and axis size.
         mesh_axis: Name of the mesh axis to shard across. Defaults to ``"fsdp"``
         reshard_after_forward: If ``True`` (default), the module's weights
             are resharded between forward and backward (after forward) to keep peak memory
