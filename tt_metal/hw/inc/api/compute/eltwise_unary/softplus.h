@@ -67,46 +67,4 @@ ALWI void softplus_tile_pack(uint32_t idst, uint32_t beta, uint32_t beta_recipro
 ALWI void softplus_tile_init_pack() { PACK(SFPU_UNARY_INIT(softplus)); }
 #endif  // !ARCH_QUASAR
 
-#if !defined(TT_POLY_LLK_DISABLE) && ((defined(TT_POLY_SOFTPLUS_BF16_AVAILABLE)) && \
-                                      defined(TT_METAL_SFPU_SINGLE_TILE_DST) && TT_METAL_SFPU_SINGLE_TILE_DST == 1)
-#define TT_POLY_SOFTPLUS_BF16_ROUTE_ACTIVE 1
-#else
-#define TT_POLY_SOFTPLUS_BF16_ROUTE_ACTIVE 0
-#endif
-
-/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void softplus_tt_poly_bf16_tile(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
-#if !TT_POLY_SOFTPLUS_BF16_ROUTE_ACTIVE
-    softplus_tile<is_fp32_dest_acc_en>(idst, beta, beta_reciprocal, threshold);
-#else
-    if constexpr (is_fp32_dest_acc_en) {
-        softplus_tile<is_fp32_dest_acc_en>(idst, beta, beta_reciprocal, threshold);
-    } else {
-        if (beta != 0x3f800000u || beta_reciprocal != 0x3f800000u || threshold != 0x41a00000u) {
-            softplus_tile_init();
-            softplus_tile<is_fp32_dest_acc_en>(idst, beta, beta_reciprocal, threshold);
-            return;
-        }
-        if (idst != 0) {
-            softplus_tile_init();
-            softplus_tile<is_fp32_dest_acc_en>(idst, beta, beta_reciprocal, threshold);
-            return;
-        }
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            is_fp32_dest_acc_en,
-            calculate_softplus_tt_poly_bf16,
-            (32 /* ITERATIONS */),
-            idst,
-            VectorMode::None));
-    }
-#endif
-}
-
-/** Initialize the internal BF16 typed-compiler route. */
-ALWI void softplus_tt_poly_bf16_tile_init() { softplus_tile_init(); }
-
-#undef TT_POLY_SOFTPLUS_BF16_ROUTE_ACTIVE
-
 }  // namespace ckernel

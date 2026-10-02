@@ -127,13 +127,6 @@ tt::tt_metal::ProgramDescriptor GeluBwProgramFactory::create_descriptor(
             "kernels/compute/eltwise_bw_gelu_poly.cpp";
     }
     std::map<std::string, std::string> compute_defines;
-#if !defined(TT_POLY_LLK_DISABLE)
-    if (args.variant == operations::unary::GeluVariant::ACCURATE && input.dtype() == DataType::BFLOAT16 &&
-        grad_output.dtype() == DataType::BFLOAT16 && output.dtype() == DataType::BFLOAT16 &&
-        (device->arch() == tt::ARCH::BLACKHOLE || device->arch() == tt::ARCH::WORMHOLE_B0)) {
-        compute_defines["TT_POLY_GELU_BACKWARD_CONTEXT"] = "1";
-    }
-#endif
     if (fp32_dest_acc_en) {
         compute_defines["COPY_DEST_DATA_FORMAT"] = "DataFormat::Float32";
     } else {

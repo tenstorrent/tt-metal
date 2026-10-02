@@ -13,7 +13,7 @@
 
 #pragma once
 
-#include "meta/registers/overlay_reg.h"
+#include "registers/overlay_reg.h"
 #include "rocc_instructions.hpp"
 
 #define LLK_REG_SIZE TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_REG_MAP_SIZE

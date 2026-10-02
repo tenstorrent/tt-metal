@@ -29,24 +29,3 @@ void init_softsign() {
 }
 
 }  // namespace ckernel::sfpu
-
-#if (defined(TRISC_MATH) || defined(LLK_TRISC_MATH) || defined(TRISC_PACK) || defined(LLK_TRISC_PACK)) && \
-    !defined(TT_POLY_LLK_DISABLE)
-#include "ckernel_sfpu_softsign_bf16.h"
-#define TT_POLY_SOFTSIGN_BF16_AVAILABLE 1
-#endif
-
-namespace ckernel::sfpu {
-
-#if (defined(TRISC_MATH) || defined(LLK_TRISC_MATH)) && !defined(TT_POLY_LLK_DISABLE)
-template <int ITERATIONS = 8>
-inline void calculate_softsign_tt_poly_bf16() {
-    ckernel::sfpu::ttpoly::calculate_abs_denominator<ttpoly_generated::SoftsignBf16Config, ITERATIONS>();
-}
-template <auto...>
-inline void init_softsign_tt_poly_bf16() {
-    ckernel::sfpu::ttpoly::init_abs_denominator<ttpoly_generated::SoftsignBf16Config>();
-}
-#endif
-
-}  // namespace ckernel::sfpu

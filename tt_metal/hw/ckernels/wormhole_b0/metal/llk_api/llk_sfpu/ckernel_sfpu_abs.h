@@ -39,21 +39,3 @@ inline void calculate_abs_int32() {
 }
 }  // namespace sfpu
 }  // namespace ckernel
-
-#if (defined(TRISC_MATH) || defined(LLK_TRISC_MATH) || defined(TRISC_PACK) || defined(LLK_TRISC_PACK)) && \
-    !defined(TT_POLY_LLK_DISABLE)
-#include "ckernel_sfpu_abs_bf16.h"
-#define TT_POLY_ABS_BF16_AVAILABLE 1
-#endif
-
-namespace ckernel::sfpu {
-
-#if (defined(TRISC_MATH) || defined(LLK_TRISC_MATH)) && !defined(TT_POLY_LLK_DISABLE)
-template <int ITERATIONS = 8>
-inline void calculate_abs_tt_poly_bf16() {
-    ckernel::sfpu::ttpoly::calculate_abs_value<ttpoly_generated::AbsBf16Config, ITERATIONS>();
-}
-inline void init_abs_tt_poly_bf16() { ckernel::sfpu::ttpoly::init_abs_value<ttpoly_generated::AbsBf16Config>(); }
-#endif
-
-}  // namespace ckernel::sfpu

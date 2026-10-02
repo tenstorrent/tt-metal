@@ -172,8 +172,9 @@ class TtK3KdaAttention(LightweightModule):
             topology=self._tp_topology,
         )
         # `[1, 1, T, d]` -> `[1, T, d]`: ttKDA takes three dimensions, and the leading one is batch.
+        # The squeeze is a view over `gathered`'s buffer, so `gathered` must stay allocated until the
+        # forward is done; the `ttnn.deallocate(hidden)` below frees it.
         hidden = ttnn.squeeze(gathered, dim=0)
-        ttnn.deallocate(gathered)
 
         if self._states is None:
             raise ValueError(

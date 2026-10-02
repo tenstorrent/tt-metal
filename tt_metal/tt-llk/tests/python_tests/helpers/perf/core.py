@@ -437,11 +437,11 @@ def _run_id() -> str:
     return tag if attempt == "1" else f"{tag}-{attempt}"
 
 
-VALID_PIPELINES = ("pr", "nightly", "baseline")
+VALID_PIPELINES = ("pr", "nightly", "baseline", "merge_baseline")
 
 
 def _pipeline(event: str) -> str:
-    """Which pipeline produced this run: ``pr``, ``nightly`` or ``baseline``.
+    """Which pipeline produced this run: one of ``VALID_PIPELINES``.
 
     Read from PIPELINE when the workflow says so; otherwise inferred from the
     GitHub event, which can only tell a PR from everything else.
@@ -819,6 +819,7 @@ class PerfConfig(TestConfig):
         l1_acc=L1Accumulation.No,
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
+        requires_vector_ext: bool = False,
     ):
 
         # Initialize passed templates and runtimes here so we don't get variant hash issues
@@ -853,6 +854,7 @@ class PerfConfig(TestConfig):
             l1_acc,
             skip_build_header,
             compile_time_formats,
+            requires_vector_ext=requires_vector_ext,
         )
 
     @staticmethod

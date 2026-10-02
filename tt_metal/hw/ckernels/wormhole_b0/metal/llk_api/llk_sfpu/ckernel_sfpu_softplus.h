@@ -173,20 +173,3 @@ inline void calculate_softplus(std::uint32_t param0, std::uint32_t param1, std::
 }
 
 }  // namespace ckernel::sfpu
-
-#if (defined(TRISC_MATH) || defined(LLK_TRISC_MATH) || defined(TRISC_PACK) || defined(LLK_TRISC_PACK)) && \
-    !defined(TT_POLY_LLK_DISABLE)
-#include "ckernel_sfpu_softplus_bf16.h"
-#define TT_POLY_SOFTPLUS_BF16_AVAILABLE 1
-#endif
-
-namespace ckernel::sfpu {
-
-#if (defined(TRISC_MATH) || defined(LLK_TRISC_MATH)) && !defined(TT_POLY_LLK_DISABLE)
-template <int ITERATIONS = 8>
-inline void calculate_softplus_tt_poly_bf16() {
-    ckernel::sfpu::ttpoly::calculate_abs_exp_correction<ttpoly_generated::SoftplusBf16Config, ITERATIONS>();
-}
-#endif
-
-}  // namespace ckernel::sfpu

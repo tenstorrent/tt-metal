@@ -250,7 +250,24 @@ tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
                     tensor_args.input.padded_shape(),
                     padded_out_shape);
             } else {
-                shard_spec_opt = generate_output_shard_spec(tensor_args.input, padded_out_shape, memory_layout);
+                // typecast can pick a different output dtype (e.g. bf16→uint8); use output dtype for RM page alignment.
+                const auto output_element_size_bytes = [&]() -> uint32_t {
+                    switch (args.output_dtype) {
+                        case DataType::BFLOAT16: return sizeof(bfloat16);
+                        case DataType::FLOAT32: return sizeof(float);
+                        case DataType::INT32: return sizeof(int32_t);
+                        case DataType::UINT32: return sizeof(uint32_t);
+                        case DataType::UINT16: return sizeof(uint16_t);
+                        case DataType::FP8_E4M3: return sizeof(float8_e4m3);
+                        case DataType::UINT8: return sizeof(uint8_t);
+                        case DataType::INT8: return sizeof(int8_t);
+                        case DataType::BFLOAT8_B:
+                        case DataType::BFLOAT4_B: return sizeof(std::byte);
+                        default: TT_THROW("Unary: unsupported output dtype");
+                    }
+                }();
+                shard_spec_opt = generate_output_shard_spec(
+                    tensor_args.input, padded_out_shape, memory_layout, output_element_size_bytes);
             }
         }
 

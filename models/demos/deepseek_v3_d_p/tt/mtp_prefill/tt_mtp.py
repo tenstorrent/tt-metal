@@ -2,10 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""TTNN modules for GLM-5.2 multi-token prediction during prefill.
+"""TTNN modules for GLM-5.3 multi-token prediction during prefill.
 
 Each level projects the shifted embedding and the previous level's hidden state through one decoder
-layer, then normalizes the output to seed the next level. CPU reference in reference/glm_5_2/mtp.py.
+layer, then normalizes the output to seed the next level. CPU reference in reference/glm_5_3/mtp.py.
 """
 
 from __future__ import annotations

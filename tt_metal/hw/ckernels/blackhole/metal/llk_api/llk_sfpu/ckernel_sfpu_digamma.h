@@ -110,23 +110,3 @@ void digamma_init() {
 }
 
 }  // namespace ckernel::sfpu
-
-#if (defined(TRISC_MATH) || defined(LLK_TRISC_MATH) || defined(TRISC_PACK) || defined(LLK_TRISC_PACK)) && \
-    !defined(TT_POLY_LLK_DISABLE)
-#include "ckernel_sfpu_digamma_bf16.h"
-#define TT_POLY_DIGAMMA_BF16_AVAILABLE 1
-#endif
-
-namespace ckernel::sfpu {
-
-#if (defined(TRISC_MATH) || defined(LLK_TRISC_MATH)) && !defined(TT_POLY_LLK_DISABLE)
-template <int ITERATIONS = 8>
-inline void calculate_digamma_tt_poly_bf16() {
-    ckernel::sfpu::ttpoly::calculate_exponent_bucket<ttpoly_generated::DigammaBf16Config, ITERATIONS>();
-}
-inline void init_digamma_tt_poly_bf16() {
-    ckernel::sfpu::ttpoly::init_exponent_bucket<ttpoly_generated::DigammaBf16Config>();
-}
-#endif
-
-}  // namespace ckernel::sfpu

@@ -262,24 +262,3 @@ inline void tanh_init() {
 }
 
 }  // namespace ckernel::sfpu
-
-#if (defined(TRISC_MATH) || defined(LLK_TRISC_MATH) || defined(TRISC_PACK) || defined(LLK_TRISC_PACK)) && \
-    !defined(TT_POLY_LLK_DISABLE)
-#include "ckernel_sfpu_tanh_bf16.h"
-#define TT_POLY_TANH_BF16_AVAILABLE 1
-#endif
-
-namespace ckernel::sfpu {
-
-#if (defined(TRISC_MATH) || defined(LLK_TRISC_MATH)) && !defined(TT_POLY_LLK_DISABLE)
-template <int ITERATIONS = 8>
-inline void calculate_tanh_tt_poly_bf16() {
-    ckernel::sfpu::ttpoly::calculate_signed_abs_terminal<ttpoly_generated::TanhBf16Config, ITERATIONS>();
-}
-template <auto...>
-inline void init_tanh_tt_poly_bf16() {
-    ckernel::sfpu::ttpoly::init_signed_abs<ttpoly_generated::TanhBf16Config>();
-}
-#endif
-
-}  // namespace ckernel::sfpu

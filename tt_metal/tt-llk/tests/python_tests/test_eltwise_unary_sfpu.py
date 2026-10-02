@@ -3,6 +3,7 @@
 
 
 import os
+import struct
 from itertools import chain, product
 
 import pytest
@@ -53,6 +54,7 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    SFPU_RELU_MAX_THRESHOLD,
     SFPU_RELU_MIN_INT_THRESHOLD,
     SFPU_SHIFT_AMOUNT,
     TILE_COUNT,
@@ -873,6 +875,116 @@ def test_eltwise_unary_sfpu_relu_min_int_threshold(
     )
 
 
+# Cat F: relu_max's threshold, which SFPU_RELU_MAX_THRESHOLD makes reachable, probed where the
+# kernel's two SFPSWAP folds (max(min(x, t), 0)) meet the values a sign-magnitude total order
+# ranks differently from IEEE: both NaN signs, both zeros, the infinities, the subnormal extremes,
+# and the threshold itself with its two fp neighbours. The thresholds are the ones production
+# passes -- relu6's 6.0 -- plus the two the sweep's fixed 5.0 cannot reach: zero, where the
+# relu clamp alone decides, and a negative one, where every lane must come out +0.0.
+#
+# The gate is exact bits, not the op's tolerance: relu_max's result is always one of its input,
+# the threshold or +0.0, so there is no rounding to allow for, and a tolerance would pass a -0.0
+# for a +0.0 and a flushed subnormal for the subnormal.
+_RELU_MAX_THRESHOLDS = [6.0, 0.0, -1.0, -0.0]
+
+_FP32_MIN_SUBNORMAL = struct.unpack("<f", struct.pack("<I", 0x00000001))[0]
+_FP32_MAX_SUBNORMAL = struct.unpack("<f", struct.pack("<I", 0x007FFFFF))[0]
+_NEGATIVE_NAN = struct.unpack("<f", struct.pack("<I", 0xFFC00000))[0]
+
+
+def _relu_max_probe_spec(threshold, formats, dest_acc):
+    """The probe values for one (threshold, pipeline), as a per-face custom spec.
+
+    Each group is added only where the pipeline delivers it intact, on the same rules the
+    edge sweep uses: specials_safe() for the non-finites and negative_zero_delivered() for
+    -0.0. The subnormals go in on the unpack-to-dest path (32-bit input, dest_acc=Yes) only;
+    measured on Blackhole they read back as +0.0 there too (both signs, both extremes), and
+    the golden's FTZ model (_flush_subnormals_of_dtype) says the same, so what the probe pins
+    is that the flush is unchanged, not that a subnormal survives.
+    """
+    torch_format = format_dict[formats.input_format]
+    t = torch.tensor([threshold], dtype=torch_format)
+    above = torch.nextafter(t, torch.tensor([float("inf")], dtype=torch_format)).item()
+    below = torch.nextafter(t, torch.tensor([float("-inf")], dtype=torch_format)).item()
+
+    values = [
+        threshold,
+        above,
+        below,
+        -threshold,
+        2.0 * threshold,
+        0.0,
+        1.0,
+        -1.0,
+        3.0,
+        -3.0,
+    ]
+    if specials_safe(formats.input_format, formats.output_format, dest_acc):
+        values += [float("inf"), float("-inf"), float("nan"), _NEGATIVE_NAN]
+    if negative_zero_delivered(formats.input_format, dest_acc):
+        values.append(-0.0)
+    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes:
+        values += [
+            _FP32_MIN_SUBNORMAL,
+            -_FP32_MIN_SUBNORMAL,
+            _FP32_MAX_SUBNORMAL,
+            -_FP32_MAX_SUBNORMAL,
+        ]
+    return StimuliSpec.custom(values=values, seed=0)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    threshold=_RELU_MAX_THRESHOLDS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_relu_max_threshold(
+    formats: list[InputOutputFormat],
+    threshold: float,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    """relu_max against production's thresholds, checked bit for bit on the probe table.
+
+    The golden is sfpu_relu_max: min under the SFPU's total order, then the relu clamp, so
+    it pins the order of the two folds as well as the values -- a kernel that clamped first
+    would return the threshold for a negative threshold and keep a -NaN, and fail here.
+    """
+    _skip_coverage_unsupported(MathOperation.ReluMax)
+    _skip_bh_unless_fp32(formats, dest_acc)
+
+    res_tensor, golden_tensor = eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        MathOperation.ReluMax,
+        FastMode.No,
+        input_dimensions,
+        spec_A=_relu_max_probe_spec(threshold, formats, dest_acc),
+        relu_max_threshold=threshold,
+    )
+
+    torch_format = format_dict[formats.output_format]
+    int_format = torch.int32 if torch_format == torch.float32 else torch.int16
+    res_bits = res_tensor.to(torch_format).contiguous().view(int_format)
+    golden_bits = (
+        golden_tensor.to(torch_format).contiguous().view(int_format)
+        if isinstance(golden_tensor, torch.Tensor)
+        else torch.tensor(golden_tensor, dtype=torch_format).view(int_format)
+    )
+    mismatch = torch.nonzero(res_bits != golden_bits).flatten()
+    mask = 0xFFFFFFFF if int_format == torch.int32 else 0xFFFF
+    assert mismatch.numel() == 0, (
+        f"{mismatch.numel()} lane(s) differ from sfpu_relu_max bit for bit; first: "
+        + ", ".join(
+            f"[{i}] got {int(res_bits[i]) & mask:#x} want {int(golden_bits[i]) & mask:#x}"
+            for i in mismatch[:8].tolist()
+        )
+    )
+
+
 # Cat E: the shift amount itself, which SFPU_SHIFT_AMOUNT makes reachable. The amounts are
 # shared with the binary shift sweep through sfpu_domains.SHIFT_EDGE_AMOUNTS.
 _UNARY_SHIFT_OPS = [MathOperation.LeftShift, MathOperation.RightShift]
@@ -1136,9 +1248,8 @@ def eltwise_unary_sfpu(
     spec_A=None,
     shift_amount=None,
     relu_min_int_threshold=None,
+    relu_max_threshold=None,
     twos_complement=False,
-    extra_templates=(),
-    declared_golden=None,
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
@@ -1167,24 +1278,26 @@ def eltwise_unary_sfpu(
         spec_A=spec_A,
     )
 
-    if declared_golden is None:
-        generate_golden = get_golden_generator(UnarySFPUGolden)
-        golden_tensor = generate_golden(
-            mathop,
-            src_A,
-            formats.output_format,
-            dest_acc,
-            formats.input_format,
-            input_dimensions,
-            **({} if shift_amount is None else {"shift_amount": shift_amount}),
-            **(
-                {}
-                if relu_min_int_threshold is None
-                else {"relu_min_int_threshold": relu_min_int_threshold}
-            ),
-        )
-    else:
-        golden_tensor = declared_golden(src_A).to(format_dict[formats.output_format])
+    generate_golden = get_golden_generator(UnarySFPUGolden)
+    golden_tensor = generate_golden(
+        mathop,
+        src_A,
+        formats.output_format,
+        dest_acc,
+        formats.input_format,
+        input_dimensions,
+        **({} if shift_amount is None else {"shift_amount": shift_amount}),
+        **(
+            {}
+            if relu_min_int_threshold is None
+            else {"relu_min_int_threshold": relu_min_int_threshold}
+        ),
+        **(
+            {}
+            if relu_max_threshold is None
+            else {"relu_max_threshold": relu_max_threshold}
+        ),
+    )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
@@ -1203,8 +1316,7 @@ def eltwise_unary_sfpu(
             APPROX_MODE(approx_mode),
             FAST_MODE(fast_mode),
             CLAMP_NEGATIVE(True),
-            *((MATH_OP(mathop=mathop),) if not extra_templates else ()),
-            *extra_templates,
+            MATH_OP(mathop=mathop),
             # Only emitted when swept: sfpu_operations.h keys off #ifdef, and every other
             # unary test has to keep compiling without the macro.
             *([] if shift_amount is None else [SFPU_SHIFT_AMOUNT(shift_amount)]),
@@ -1212,6 +1324,11 @@ def eltwise_unary_sfpu(
                 []
                 if relu_min_int_threshold is None
                 else [SFPU_RELU_MIN_INT_THRESHOLD(relu_min_int_threshold)]
+            ),
+            *(
+                []
+                if relu_max_threshold is None
+                else [SFPU_RELU_MAX_THRESHOLD(relu_max_threshold)]
             ),
         ],
         runtimes=[
@@ -1270,6 +1387,10 @@ def eltwise_unary_sfpu(
         formats.output_format,
         **contract.tolerance_kwargs(),
     ), "Assert against golden failed"
+
+    # For callers that want a stricter gate than the op's tolerance (an exact-bits check on
+    # a probe table, say); the sweeps above ignore it.
+    return res_tensor, golden_tensor
 
 
 # Test exponential with APPROX_MODE=true, FAST_MODE=true, and CLAMP_NEGATIVE=true/false
@@ -1370,1169 +1491,118 @@ def test_exponential_clamp_negative(clamp_negative: bool):
     ), f"Test failed: {(~is_valid).sum()} elements outside tolerance (atol={atol}, rtol={rtol})"
 
 
-_TT_POLY_PACK_CONFIGS = {
-    "relu": ("ckernel_sfpu_relu_bf16.h", "ttpoly_generated::ReluBf16Config"),
-    "relu6": ("ckernel_sfpu_relu6_bf16.h", "ttpoly_generated::Relu6Bf16Config"),
-    "relu_max": ("ckernel_sfpu_relu_max_bf16.h", "ttpoly_generated::ReluMaxBf16Config"),
-    "relu_min": ("ckernel_sfpu_relu_min_bf16.h", "ttpoly_generated::ReluMinBf16Config"),
-}
-_TT_POLY_NATIVE_CALLS = {
-    "relu": (
-        "relu_min",
-        "SFPU_UNARY_CALL( DST_SYNC, is_fp32_dest_acc_en, _relu_min_, (sfpi::vFloat , APPROX_MODE , 8 , std::uint32_t ), block_tile, VectorMode::RC, 0 );",
-    )
-}
-_TT_POLY_FP32_DEST = {
-    "abs": (),
-    "acos": (),
-    "acosh": ("blackhole", "wormhole"),
-    "asinh": (),
-    "atan": (),
-    "atanh": (),
-    "cbrt": (),
-    "celu": (),
-    "digamma": (),
-    "elu": (),
-    "erf": (),
-    "erfc": (),
-    "erfinv": (),
-    "exp": (),
-    "exp2": (),
-    "expm1": (),
-    "gelu": (),
-    "hardmish": (),
-    "hardshrink": (),
-    "hardsigmoid": (),
-    "hardswish": (),
-    "hardtanh": (),
-    "i1": (),
-    "leaky_relu": (),
-    "lgamma": (),
-    "log10": (),
-    "log2": (),
-    "logit": (),
-    "logsigmoid": (),
-    "multigammaln": ("blackhole", "wormhole"),
-    "polygamma": (),
-    "prelu": (),
-    "relu": (),
-    "relu6": (),
-    "relu_max": (),
-    "relu_min": (),
-    "selu": (),
-    "sigmoid": (),
-    "softplus": (),
-    "softshrink": (),
-    "softsign": (),
-    "sqrt": (),
-    "tanh": (),
-    "tanhshrink": (),
-    "multigammaln_p4": ("blackhole", "wormhole"),
-}
-_TT_POLY_COPY_REBASE = {}
-_TT_POLY_PRECISION_SPLIT = ("erfinv",)
-_TT_POLY_ADAPTER_OPERATIONS = {
-    "asinh": "asinh",
-    "atan": "atan",
-    "exp": "exp",
-    "gelu": "gelu",
-    "hardmish": "hardmish",
-    "hardswish": "hardswish",
-    "i1": "i1",
-    "leaky_relu": "leaky_relu",
-    "lgamma": "lgamma",
-    "log10": "log10",
-    "logit": "logit",
-    "logsigmoid": "logsigmoid",
-    "multigammaln": "tt_poly_aggregate_multigammaln",
-    "prelu": "prelu",
-    "relu6": "relu6",
-    "relu_max": "relu_max",
-    "relu_min": "relu_min",
-    "softplus": "softplus",
-    "softshrink": "softshrink",
-    "multigammaln_p4": "tt_poly_aggregate_multigammaln",
-}
-_TT_POLY_NATIVE_ARCHITECTURES = {}
-
-
-from dataclasses import dataclass
-
-from helpers.test_variant_parameters import TemplateParameter
-
-
-@dataclass
-class _TTPolyGeneratedBF16(TemplateParameter):
-    generated_unary_op: str
-    initialize: bool
-    replace_init: bool
-    generated_unary_iterations: int
-    generated_unary_vector_mode: str
-    header: str
-    disabled: bool = False
-    native_enum: str = ""
-
-    def convert_to_cpp(self) -> str:
-        callback = _TT_POLY_ADAPTER_OPERATIONS.get(
-            self.generated_unary_op, self.generated_unary_op
-        )
-        native_enum, native_call = _TT_POLY_NATIVE_CALLS.get(
-            self.generated_unary_op, (self.native_enum or self.generated_unary_op, None)
-        )
-        result = f"constexpr auto SFPU_UNARY_OPERATION = SfpuType::{native_enum};\n"
-        native = (
-            self.generated_unary_op in _TT_POLY_NATIVE_ARCHITECTURES
-            and str(TestConfig.CHIP_ARCH)
-            in _TT_POLY_NATIVE_ARCHITECTURES[self.generated_unary_op]
-        )
-        if self.disabled or native:
-            if self.disabled:
-                result += "#define TT_POLY_LLK_DISABLE\n"
-            else:
-                result += f'#define TT_POLY_LLK_TEST_HEADER "llk_sfpu/{self.header}"\n'
-            if native_call:
-                result += f"#define TT_POLY_LLK_TEST_STOCK_CALL {native_call}\n"
-            return result
-        result += f'#define TT_POLY_LLK_TEST_HEADER "llk_sfpu/{self.header}"\n'
-        if self.generated_unary_vector_mode == "None":
-            result += "#define TT_POLY_LLK_TEST_SINGLE_TILE\n"
-        if native_enum == "unused":
-            result += "#define TT_POLY_LLK_TEST_NO_STOCK_INIT\n"
-        if self.generated_unary_op in _TT_POLY_PRECISION_SPLIT:
-            return result + (
-                "#define TT_POLY_LLK_TEST_PRECISION_SPLIT\n"
-                "#define TT_POLY_LLK_TEST_REPLACE_INIT\n"
-                f"#define TT_POLY_LLK_TEST_INIT {self.generated_unary_op}_init\n"
-                f"#define TT_POLY_LLK_TEST_CALC calculate_{self.generated_unary_op}\n"
-                "#define TT_POLY_LLK_TEST_ITERATIONS APPROX_MODE, true\n"
-                f"#define TT_POLY_LLK_TEST_VECTOR_MODE {self.generated_unary_vector_mode}\n"
-            )
-        if self.generated_unary_op in _TT_POLY_PACK_CONFIGS:
-            header, config = _TT_POLY_PACK_CONFIGS[self.generated_unary_op]
-            result += f'#define TT_POLY_LLK_TEST_PACK_HEADER "llk_sfpu/{header}"\n'
-            result += f"#define TT_POLY_LLK_TEST_PACK_CONFIG {config}\n"
-        if self.initialize:
-            result += f"#define TT_POLY_LLK_TEST_INIT init_{callback}_tt_poly_bf16\n"
-        if self.replace_init:
-            result += "#define TT_POLY_LLK_TEST_REPLACE_INIT\n"
-        if (
-            self.generated_unary_op in _TT_POLY_COPY_REBASE
-            and str(TestConfig.CHIP_ARCH)
-            in _TT_POLY_COPY_REBASE[self.generated_unary_op]
-        ):
-            result += "#define TT_POLY_LLK_TEST_COPY_REBASE\n"
-        return result + (
-            f"#define TT_POLY_LLK_TEST_CALC calculate_{callback}_tt_poly_bf16\n"
-            f"#define TT_POLY_LLK_TEST_ITERATIONS {self.generated_unary_iterations}\n"
-            f"#define TT_POLY_LLK_TEST_VECTOR_MODE {self.generated_unary_vector_mode}\n"
-        )
-
-
-_GENERATED_UNARY_CASES = [
-    (MathOperation.Abs, "abs", True, False, 32, "None", "ckernel_sfpu_abs.h"),
-    (
-        MathOperation.Acos,
-        "acos",
-        False,
-        False,
-        32,
-        "None",
-        "ckernel_sfpu_trigonometry.h",
-    ),
-    (
-        MathOperation.Acosh,
-        "acosh",
-        True,
-        False,
-        32,
-        "None",
-        "ckernel_sfpu_trigonometry.h",
-    ),
-    (
-        MathOperation.Asinh,
-        "asinh",
-        False,
-        False,
-        32,
-        "None",
-        "ckernel_sfpu_trigonometry.h",
-    ),
-    (MathOperation.Atan, "atan", True, True, 32, "None", "ckernel_sfpu_trigonometry.h"),
-    (
-        MathOperation.Atanh,
-        "atanh",
-        False,
-        False,
-        32,
-        "None",
-        "ckernel_sfpu_trigonometry.h",
-    ),
-    (MathOperation.Cbrt, "cbrt", True, True, 8, "RC", "ckernel_sfpu_cbrt.h"),
-    (MathOperation.Celu, "celu", False, False, 32, "None", "ckernel_sfpu_celu.h"),
-    (
-        MathOperation.Digamma,
-        "digamma",
-        True,
-        False,
-        32,
-        "None",
-        "ckernel_sfpu_digamma.h",
-    ),
-    (MathOperation.Elu, "elu", False, False, 32, "None", "ckernel_sfpu_elu.h"),
-    (MathOperation.Erf, "erf", True, True, 32, "None", "ckernel_sfpu_erf.h"),
-    (MathOperation.Erfc, "erfc", True, True, 32, "None", "ckernel_sfpu_erfc.h"),
-    (MathOperation.Erfinv, "erfinv", True, True, 8, "RC", "ckernel_sfpu_erfinv.h"),
-    (MathOperation.Exp, "exp", True, True, 32, "None", "ckernel_sfpu_exp.h"),
-    (MathOperation.Exp2, "exp2", True, True, 32, "None", "ckernel_sfpu_exp2.h"),
-    (MathOperation.Expm1, "expm1", False, False, 32, "None", "ckernel_sfpu_expm1.h"),
-    (MathOperation.Gelu, "gelu", False, False, 32, "None", "ckernel_sfpu_gelu.h"),
-    (
-        MathOperation.Hardmish,
-        "hardmish",
-        True,
-        False,
-        8,
-        "RC",
-        "ckernel_sfpu_hardmish.h",
-    ),
-    (
-        MathOperation.Hardshrink,
-        "hardshrink",
-        True,
-        False,
-        32,
-        "None",
-        "ckernel_sfpu_hardshrink.h",
-    ),
-    (
-        MathOperation.Hardsigmoid,
-        "hardsigmoid",
-        True,
-        False,
-        32,
-        "None",
-        "ckernel_sfpu_activations.h",
-    ),
-    (None, "hardswish", True, False, 32, "None", "ckernel_sfpu_hardswish_bf16.h"),
-    (
-        MathOperation.Hardtanh,
-        "hardtanh",
-        True,
-        False,
-        32,
-        "None",
-        "ckernel_sfpu_hardtanh.h",
-    ),
-    (MathOperation.I1, "i1", False, False, 32, "None", "ckernel_sfpu_i1.h"),
-    (None, "leaky_relu", True, False, 32, "None", "ckernel_sfpu_relu.h"),
-    (
-        MathOperation.Lgamma,
-        "lgamma",
-        False,
-        False,
-        32,
-        "None",
-        "ckernel_sfpu_lgamma_bf16.h",
-    ),
-    (None, "log10", True, True, 32, "None", "ckernel_sfpu_log.h"),
-    (MathOperation.LogWithBase, "log2", True, True, 32, "None", "ckernel_sfpu_log.h"),
-    (None, "logit", False, False, 32, "None", "ckernel_sfpu_logit_bf16.h"),
-    (None, "logsigmoid", False, False, 32, "None", "ckernel_sfpu_logsigmoid_bf16.h"),
-    (None, "multigammaln", True, False, 32, "None", "ckernel_sfpu_multigammaln_bf16.h"),
-    (
-        None,
-        "multigammaln_p4",
-        True,
-        False,
-        32,
-        "None",
-        "ckernel_sfpu_multigammaln_bf16.h",
-    ),
-    (
-        MathOperation.Polygamma,
-        "polygamma",
-        False,
-        False,
-        32,
-        "None",
-        "ckernel_sfpu_polygamma.h",
-    ),
-    (MathOperation.Prelu, "prelu", True, False, 32, "None", "ckernel_sfpu_prelu.h"),
-    (MathOperation.Relu, "relu", True, False, 8, "RC", "ckernel_sfpu_relu.h"),
-    (None, "relu6", True, False, 8, "RC", "ckernel_sfpu_relu.h"),
-    (MathOperation.ReluMax, "relu_max", True, False, 8, "RC", "ckernel_sfpu_relu.h"),
-    (MathOperation.ReluMin, "relu_min", True, False, 8, "RC", "ckernel_sfpu_relu.h"),
-    (MathOperation.Selu, "selu", False, False, 32, "None", "ckernel_sfpu_selu.h"),
-    (MathOperation.Sigmoid, "sigmoid", True, True, 8, "RC", "ckernel_sfpu_sigmoid.h"),
-    (
-        MathOperation.Softplus,
-        "softplus",
-        False,
-        False,
-        32,
-        "None",
-        "ckernel_sfpu_softplus.h",
-    ),
-    (
-        MathOperation.Softshrink,
-        "softshrink",
-        True,
-        False,
-        32,
-        "None",
-        "ckernel_sfpu_softshrink.h",
-    ),
-    (
-        MathOperation.Softsign,
-        "softsign",
-        True,
-        True,
-        32,
-        "None",
-        "ckernel_sfpu_softsign.h",
-    ),
-    (MathOperation.Sqrt, "sqrt", True, True, 32, "None", "ckernel_sfpu_sqrt.h"),
-    (MathOperation.Tanh, "tanh", True, True, 32, "None", "ckernel_sfpu_tanh.h"),
-    (
-        MathOperation.Tanhshrink,
-        "tanhshrink",
-        True,
-        True,
-        8,
-        "RC",
-        "ckernel_sfpu_tanhshrink.h",
-    ),
+# Every finite BF16 value through the BF16 kernel (FP32 DEST off), in the approximation
+# mode whose instance the BF16 kernel replaces. Subnormal inputs and NaN lanes are
+# outside a step count (see helpers/ulp_sweep.py); finite/non-finite disagreements on
+# normal inputs are failures in their own right. The step metric ranks -0 with +0, so
+# the specials are judged apart, by output class and sign. max_ulp is 0 for an exact fit.
+_BF16_EXHAUSTIVE_OPS = [
+    (MathOperation.Atan, ApproximationMode.No, 1),
 ]
-
-
-@pytest.mark.memory_layout("debug")
-@pytest.mark.parametrize(
-    "mathop,op,initialize,replace_init,iterations,vector_mode,header",
-    _GENERATED_UNARY_CASES,
-)
-def test_tt_poly_generated_bf16_llk(
-    mathop,
-    op,
-    initialize,
-    replace_init,
-    iterations,
-    vector_mode,
-    header,
-    disabled=False,
-):
-    # Native targets retain the public route's stock primitive and traversal.
-    native = str(TestConfig.CHIP_ARCH) in _TT_POLY_NATIVE_ARCHITECTURES.get(op, ())
-    dest_acc = (
-        DestAccumulation.Yes
-        if not (disabled or native)
-        and str(TestConfig.CHIP_ARCH) in _TT_POLY_FP32_DEST.get(op, ())
-        else DestAccumulation.No
-    )
-    eltwise_unary_sfpu(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
-        dest_acc,
-        ApproximationMode.No,
-        mathop,
-        FastMode.No,
-        [32, 32],
-        **({} if native else _tt_poly_forward_arguments(op)),
-        extra_templates=(
-            _TTPolyGeneratedBF16(
-                op,
-                initialize,
-                replace_init,
-                iterations,
-                vector_mode,
-                header,
-                disabled,
-                mathop.cpp_enum_value if mathop is not None else "unused",
-            ),
-        ),
-    )
-
-
-import importlib
-
-import numpy as np
-
-
-def _bf16_round_ftz(values):
-    rounded = torch.from_numpy(values).to(torch.bfloat16).to(torch.float64).numpy()
-    subnormal = (np.abs(rounded) < 2.0**-126) & (rounded != 0.0)
-    return np.where(subnormal, np.copysign(0.0, rounded), rounded)
-
-
-def _ulp_spacing(values):
-    words = (np.abs(values).astype(np.float32).view(np.uint32) >> 16).astype(np.uint32)
-    upper = (np.minimum(words + 1, 0x7F80) << 16).view(np.float32)
-    lower = (words << 16).view(np.float32)
-    spacing = (upper - lower).astype(np.float64)
-    return np.where(np.isinf(upper), np.float64(2.0**120), spacing)
-
-
-def _apply_finite_constants(golden, coordinate, domain_rows):
-    resolved = np.zeros(coordinate.shape, dtype=bool)
-    for direction, bound, inclusive, kind, value in domain_rows:
-        if direction == "below":
-            owned = coordinate <= bound if inclusive else coordinate < bound
-        else:
-            owned = coordinate >= bound if inclusive else coordinate > bound
-        owned &= np.isfinite(coordinate) & ~resolved
-        resolved |= owned
-        if kind == "constant":
-            golden[owned] = _bf16_round_ftz(
-                np.full(np.count_nonzero(owned), value, dtype=np.float64)
-            )
-    return golden
-
-
-def _tt_poly_reference_asinh(x):
-    return getattr(importlib.import_module("torch"), "asinh")(x.double(), **{})
-
-
-def _tt_poly_reference_atan(x):
-    return getattr(importlib.import_module("torch"), "atan")(x.double(), **{})
-
-
-def _tt_poly_reference_erfinv(x):
-    return getattr(importlib.import_module("torch"), "erfinv")(x.double(), **{})
-
-
-def _tt_poly_reference_exp(x):
-    return getattr(importlib.import_module("torch"), "exp")(x.double(), **{})
-
-
-def _tt_poly_reference_gelu(x):
-    def _declared_piece_0(x):
-        import math
-
-        erfc = np.vectorize(math.erfc, otypes=[np.float64])
-        sqrt = np.sqrt
-        return np.broadcast_to(
-            np.asarray(0.5 * x * erfc(-x / sqrt(2)), dtype=np.float64), x.shape
-        )
-
-    def _declared_forward(x):
-        result = np.full(x.shape, np.nan)
-        finite = np.isfinite(x)
-        bins = np.searchsorted((), x, side="right")
-        active = finite & (bins == 0)
-        result[active] = _declared_piece_0(x[active])
-        return result
-
-    return torch.from_numpy(_declared_forward(x.double().numpy()))
-
-
-def _tt_poly_reference_hardmish(x):
-    def _declared_piece_0(x):
-        return np.broadcast_to(np.asarray(x * 0, dtype=np.float64), x.shape)
-
-    def _declared_piece_1(x):
-        return np.broadcast_to(np.asarray(x * (x + 2) / 2, dtype=np.float64), x.shape)
-
-    def _declared_piece_2(x):
-        return np.broadcast_to(np.asarray(x, dtype=np.float64), x.shape)
-
-    def _declared_forward(x):
-        result = np.full(x.shape, np.nan)
-        finite = np.isfinite(x)
-        bins = np.searchsorted((-2.0, 0.0), x, side="right")
-        active = finite & (bins == 0)
-        result[active] = _declared_piece_0(x[active])
-        active = finite & (bins == 1)
-        result[active] = _declared_piece_1(x[active])
-        active = finite & (bins == 2)
-        result[active] = _declared_piece_2(x[active])
-        return result
-
-    return torch.from_numpy(_declared_forward(x.double().numpy()))
-
-
-def _tt_poly_reference_hardswish(x):
-    def _declared_piece_0(x):
-        return np.broadcast_to(np.asarray(0, dtype=np.float64), x.shape)
-
-    def _declared_piece_1(x):
-        return np.broadcast_to(np.asarray(x * (x / 6 + 0.5), dtype=np.float64), x.shape)
-
-    def _declared_piece_2(x):
-        return np.broadcast_to(np.asarray(x, dtype=np.float64), x.shape)
-
-    def _declared_forward(x):
-        result = np.full(x.shape, np.nan)
-        finite = np.isfinite(x)
-        bins = np.searchsorted((-3.0, 3.0), x, side="right")
-        active = finite & (bins == 0)
-        result[active] = _declared_piece_0(x[active])
-        active = finite & (bins == 1)
-        result[active] = _declared_piece_1(x[active])
-        active = finite & (bins == 2)
-        result[active] = _declared_piece_2(x[active])
-        return result
-
-    return torch.from_numpy(_declared_forward(x.double().numpy()))
-
-
-def _tt_poly_reference_i1(x):
-    return getattr(importlib.import_module("torch.special"), "i1")(x.double(), **{})
-
-
-def _tt_poly_reference_leaky_relu(x):
-    def _declared_piece_0(x):
-        return np.broadcast_to(np.asarray(0.01 * x, dtype=np.float64), x.shape)
-
-    def _declared_piece_1(x):
-        return np.broadcast_to(np.asarray(x, dtype=np.float64), x.shape)
-
-    def _declared_forward(x):
-        result = np.full(x.shape, np.nan)
-        finite = np.isfinite(x)
-        bins = np.searchsorted((0.0,), x, side="right")
-        active = finite & (bins == 0)
-        result[active] = _declared_piece_0(x[active])
-        active = finite & (bins == 1)
-        result[active] = _declared_piece_1(x[active])
-        return result
-
-    return torch.from_numpy(_declared_forward(x.double().numpy()))
-
-
-def _tt_poly_reference_lgamma(x):
-    return getattr(importlib.import_module("torch"), "lgamma")(x.double(), **{})
-
-
-def _tt_poly_reference_log10(x):
-    return getattr(importlib.import_module("torch"), "log10")(x.double(), **{})
-
-
-def _tt_poly_reference_logit(x):
-    return getattr(importlib.import_module("torch"), "logit")(x.double(), **{})
-
-
-def _tt_poly_reference_logsigmoid(x):
-    return getattr(importlib.import_module("torch.nn.functional"), "logsigmoid")(
-        x.double(), **{}
-    )
-
-
-def _tt_poly_reference_multigammaln(x):
-    return getattr(importlib.import_module("torch.special"), "multigammaln")(
-        x.double(), **{"p": 4}
-    )
-
-
-def _tt_poly_reference_multigammaln_p4(x):
-    return getattr(importlib.import_module("torch.special"), "multigammaln")(
-        x.double(), **{"p": 4}
-    )
-
-
-def _tt_poly_reference_prelu(x):
-    def _declared_piece_0(x):
-        return np.broadcast_to(np.asarray(0.25 * x, dtype=np.float64), x.shape)
-
-    def _declared_piece_1(x):
-        return np.broadcast_to(np.asarray(x, dtype=np.float64), x.shape)
-
-    def _declared_forward(x):
-        result = np.full(x.shape, np.nan)
-        finite = np.isfinite(x)
-        bins = np.searchsorted((0.0,), x, side="right")
-        active = finite & (bins == 0)
-        result[active] = _declared_piece_0(x[active])
-        active = finite & (bins == 1)
-        result[active] = _declared_piece_1(x[active])
-        return result
-
-    return torch.from_numpy(_declared_forward(x.double().numpy()))
-
-
-def _tt_poly_reference_relu6(x):
-    def _declared_piece_0(x):
-        return np.broadcast_to(np.asarray(0, dtype=np.float64), x.shape)
-
-    def _declared_piece_1(x):
-        return np.broadcast_to(np.asarray(x, dtype=np.float64), x.shape)
-
-    def _declared_piece_2(x):
-        return np.broadcast_to(np.asarray(6, dtype=np.float64), x.shape)
-
-    def _declared_forward(x):
-        result = np.full(x.shape, np.nan)
-        finite = np.isfinite(x)
-        bins = np.searchsorted((0.0, 6.0), x, side="right")
-        active = finite & (bins == 0)
-        result[active] = _declared_piece_0(x[active])
-        active = finite & (bins == 1)
-        result[active] = _declared_piece_1(x[active])
-        active = finite & (bins == 2)
-        result[active] = _declared_piece_2(x[active])
-        return result
-
-    return torch.from_numpy(_declared_forward(x.double().numpy()))
-
-
-def _tt_poly_reference_relu_max(x):
-    def _declared_piece_0(x):
-        return np.broadcast_to(np.asarray(0, dtype=np.float64), x.shape)
-
-    def _declared_piece_1(x):
-        return np.broadcast_to(np.asarray(x, dtype=np.float64), x.shape)
-
-    def _declared_piece_2(x):
-        return np.broadcast_to(np.asarray(6, dtype=np.float64), x.shape)
-
-    def _declared_forward(x):
-        result = np.full(x.shape, np.nan)
-        finite = np.isfinite(x)
-        bins = np.searchsorted((0.0, 6.0), x, side="right")
-        active = finite & (bins == 0)
-        result[active] = _declared_piece_0(x[active])
-        active = finite & (bins == 1)
-        result[active] = _declared_piece_1(x[active])
-        active = finite & (bins == 2)
-        result[active] = _declared_piece_2(x[active])
-        return result
-
-    return torch.from_numpy(_declared_forward(x.double().numpy()))
-
-
-def _tt_poly_reference_relu_min(x):
-    def _declared_piece_0(x):
-        return np.broadcast_to(np.asarray(0, dtype=np.float64), x.shape)
-
-    def _declared_piece_1(x):
-        return np.broadcast_to(np.asarray(x, dtype=np.float64), x.shape)
-
-    def _declared_forward(x):
-        result = np.full(x.shape, np.nan)
-        finite = np.isfinite(x)
-        bins = np.searchsorted((0.0,), x, side="right")
-        active = finite & (bins == 0)
-        result[active] = _declared_piece_0(x[active])
-        active = finite & (bins == 1)
-        result[active] = _declared_piece_1(x[active])
-        return result
-
-    return torch.from_numpy(_declared_forward(x.double().numpy()))
-
-
-def _tt_poly_reference_softplus(x):
-    return getattr(importlib.import_module("torch.nn.functional"), "softplus")(
-        x.double(), **{"beta": 1.0, "threshold": 20.0}
-    )
-
-
-def _tt_poly_reference_softshrink(x):
-    def _declared_piece_0(x):
-        return np.broadcast_to(np.asarray(x + 0.5, dtype=np.float64), x.shape)
-
-    def _declared_piece_1(x):
-        return np.broadcast_to(np.asarray(0, dtype=np.float64), x.shape)
-
-    def _declared_piece_2(x):
-        return np.broadcast_to(np.asarray(x - 0.5, dtype=np.float64), x.shape)
-
-    def _declared_forward(x):
-        result = np.full(x.shape, np.nan)
-        finite = np.isfinite(x)
-        bins = np.searchsorted((-0.5, 0.5), x, side="right")
-        active = finite & (bins == 0)
-        result[active] = _declared_piece_0(x[active])
-        active = finite & (bins == 1)
-        result[active] = _declared_piece_1(x[active])
-        active = finite & (bins == 2)
-        result[active] = _declared_piece_2(x[active])
-        return result
-
-    return torch.from_numpy(_declared_forward(x.double().numpy()))
-
-
-_TT_POLY_FORWARD_REFERENCES = {
-    "asinh": (
-        _tt_poly_reference_asinh,
-        ((0, 1), (128, 32640), (32768, 32769), (32896, 65408)),
-        (),
-        (),
-    ),
-    "atan": (
-        _tt_poly_reference_atan,
-        ((0, 1), (128, 32640), (32768, 32769), (32896, 65408)),
-        (17251, 17252, 17253, 50019, 50020, 50021),
-        (
-            ("below", -228.0, True, "constant", -1.5703125),
-            ("above", 228.0, True, "constant", 1.5703125),
-        ),
-    ),
-    "erfinv": (
-        _tt_poly_reference_erfinv,
-        ((0, 1), (128, 16256), (32768, 32769), (32896, 49024)),
-        (16255, 49023),
-        (),
-    ),
-    "exp": (
-        _tt_poly_reference_exp,
-        ((0, 1), (128, 17074), (32768, 32769), (32896, 65408)),
-        (17073, 49838, 49839, 49840),
-        (),
-    ),
-    "gelu": (
-        _tt_poly_reference_gelu,
-        ((0, 1), (128, 32640), (32768, 32769), (32896, 65408)),
-        (16432, 16433, 16434, 49490, 49491, 49492),
-        (
-            ("below", -13.1875, True, "constant", 0.0),
-            ("above", 2.765625, False, "identity", None),
-        ),
-    ),
-    "hardmish": (
-        _tt_poly_reference_hardmish,
-        ((0, 1), (128, 32640), (32768, 32769), (32896, 65408)),
-        (0, 49151, 49152, 49153),
-        (),
-    ),
-    "hardswish": (
-        _tt_poly_reference_hardswish,
-        ((0, 1), (128, 32640), (32768, 32769), (32896, 65408)),
-        (16447, 16448, 16449, 49215, 49216, 49217),
-        (),
-    ),
-    "i1": (
-        _tt_poly_reference_i1,
-        ((0, 1), (128, 32640), (32768, 32769), (32896, 65408)),
-        (17072, 17073, 17074, 49840, 49841, 49842),
-        (
-            ("below", -88.5, True, "constant", -1.1547668213381457e37),
-            ("above", 88.5, True, "constant", 1.1547668213381457e37),
-        ),
-    ),
-    "leaky_relu": (
-        _tt_poly_reference_leaky_relu,
-        ((0, 1), (128, 32640), (32768, 32769), (32896, 65408)),
-        (0,),
-        (),
-    ),
-    "lgamma": (
-        _tt_poly_reference_lgamma,
-        ((0, 1), (128, 31813), (32768, 32769), (32896, 65408)),
-        (31812,),
-        (),
-    ),
-    "log10": (_tt_poly_reference_log10, ((128, 32640),), (), ()),
-    "logit": (_tt_poly_reference_logit, ((128, 16256),), (16255,), ()),
-    "logsigmoid": (
-        _tt_poly_reference_logsigmoid,
-        ((0, 1), (128, 32640), (32768, 32769), (32896, 65408)),
-        (17081, 17082, 17083, 32638, 32639, 49439, 49440, 49441),
-        (
-            ("above", 3.3895313892515355e38, False, "return_class", "pos_zero"),
-            ("below", -10.0, False, "identity", None),
-            ("above", 93.0, True, "constant", 0.0),
-        ),
-    ),
-    "multigammaln": (
-        _tt_poly_reference_multigammaln,
-        ((16321, 31560),),
-        (16321, 31559),
-        (),
-    ),
-    "multigammaln_p4": (
-        _tt_poly_reference_multigammaln_p4,
-        ((16321, 31560),),
-        (16321, 31559),
-        (),
-    ),
-    "prelu": (
-        _tt_poly_reference_prelu,
-        ((0, 1), (128, 32640), (32768, 32769), (32896, 65408)),
-        (0,),
-        (),
-    ),
-    "relu6": (
-        _tt_poly_reference_relu6,
-        ((0, 1), (128, 32640), (32768, 32769), (32896, 65408)),
-        (0, 16575, 16576, 16577),
-        (),
-    ),
-    "relu_max": (
-        _tt_poly_reference_relu_max,
-        ((0, 1), (128, 32640), (32768, 32769), (32896, 65408)),
-        (0, 16575, 16576, 16577),
-        (),
-    ),
-    "relu_min": (
-        _tt_poly_reference_relu_min,
-        ((0, 1), (128, 32640), (32768, 32769), (32896, 65408)),
-        (0,),
-        (),
-    ),
-    "softplus": (
-        _tt_poly_reference_softplus,
-        ((0, 1), (128, 32640), (32768, 32769), (32896, 65408)),
-        (16515, 16516, 16517, 49838, 49839, 49840),
-        (
-            ("below", -87.5, True, "constant", 0.0),
-            ("above", 4.125, False, "identity", None),
-        ),
-    ),
-    "softshrink": (
-        _tt_poly_reference_softshrink,
-        ((0, 1), (128, 32640), (32768, 32769), (32896, 65408)),
-        (16127, 16128, 16129, 48895, 48896, 48897),
-        (),
-    ),
+# Boards where the op keeps its stock kernel, which this sweep does not test.
+_BF16_STOCK_BOARDS = {
+    MathOperation.Atan: (ChipArchitecture.WORMHOLE,),
 }
 
 
-def _tt_poly_forward_arguments(op):
-    if op not in _TT_POLY_FORWARD_REFERENCES:
-        return {}
-    reference, intervals, boundaries, domain_rows = _TT_POLY_FORWARD_REFERENCES[op]
+@pytest.mark.nightly
+@pytest.mark.parametrize("mathop,approx_mode,max_ulp", _BF16_EXHAUSTIVE_OPS)
+def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode, max_ulp):
+    if TestConfig.CHIP_ARCH in _BF16_STOCK_BOARDS.get(mathop, ()):
+        pytest.skip(f"{mathop.name} keeps the stock kernel on {TestConfig.CHIP_ARCH}")
+    from helpers.ulp import ulp_distance
+    from helpers.ulp_sweep import measurable_mask, nonfinite_failures, sweep_spec
 
-    def golden_for(inputs):
-        golden = reference(inputs).double().numpy()
-        golden = _apply_finite_constants(golden, inputs.double().numpy(), domain_rows)
-        return torch.from_numpy(golden).to(torch.bfloat16)
-
-    raw = np.concatenate(
-        [np.arange(first, stop, dtype=np.uint32) for first, stop in intervals]
-    )
-    values = torch.from_numpy((raw << 16).view(np.float32))
-    with np.errstate(all="ignore"):
-        golden = golden_for(values)
-    finite = torch.isfinite(golden).numpy()
-    raw, values = raw[finite], values[finite]
-    assert len(raw), "declared reference has no finite BF16 LLK probes"
-    boundary_values = values[np.isin(raw, boundaries)]
-
-    def distribution(size, dtype, generator):
-        indices = np.linspace(0, len(raw) - 1, size, dtype=np.int64)
-        samples = values[indices].clone()
-        samples[: len(boundary_values)] = boundary_values
-        return samples.to(dtype)
-
-    return {
-        "spec_A": StimuliSpec(distribution=distribution, seed=0),
-        "declared_golden": golden_for,
-    }
-
-
-@pytest.mark.memory_layout("debug")
-@pytest.mark.parametrize(
-    "arguments",
-    [
-        (MathOperation.Relu, "relu", True, False, 8, "RC", "ckernel_sfpu_relu.h"),
-    ],
-)
-def test_tt_poly_generated_bf16_llk_disabled(arguments):
-    test_tt_poly_generated_bf16_llk(*arguments, disabled=True)
-
-
-_TT_POLY_PERF_OPERATIONS = (
-    "abs",
-    "acos",
-    "acosh",
-    "asinh",
-    "atan",
-    "atanh",
-    "cbrt",
-    "celu",
-    "digamma",
-    "elu",
-    "erf",
-    "erfc",
-    "erfinv",
-    "exp",
-    "exp2",
-    "expm1",
-    "gelu",
-    "hardmish",
-    "hardshrink",
-    "hardsigmoid",
-    "hardswish",
-    "hardtanh",
-    "i1",
-    "log10",
-    "log2",
-    "logit",
-    "logsigmoid",
-    "multigammaln",
-    "multigammaln_p4",
-    "polygamma",
-    "prelu",
-    "relu",
-    "relu6",
-    "selu",
-    "sigmoid",
-    "softplus",
-    "softshrink",
-    "softsign",
-    "sqrt",
-    "tanh",
-    "tanhshrink",
-)
-
-_TT_POLY_SCALAR_PERF_ALIASES = {"sigmoid_accurate": "sigmoid"}
-
-
-class _TTPolyPerfMath(MATH_OP):
-    # Retain MATH_OP's dataclass fields: upstream pairs performance rows by
-    # these columns, so callback details must not become new sweep dimensions.
-    def __init__(self, mathop, binding):
-        super().__init__(mathop=mathop)
-        self._binding = binding
-
-    def convert_to_cpp(self):
-        return self._binding.convert_to_cpp()
-
-
-def _tt_poly_perf_templates(
-    mathop, formats, dest_acc, approx_mode, fast_mode, public_operation=None
-):
-    if public_operation is not None:
-        binding = _tt_poly_scalar_perf_binding(public_operation, dest_acc)
-        return (_TTPolyPerfMath(public_operation, binding),)
-    if approx_mode != ApproximationMode.No or fast_mode != FastMode.No:
-        return (MATH_OP(mathop=mathop),)
-    if (
-        formats.input_format != DataFormat.Float16_b
-        or formats.output_format != DataFormat.Float16_b
-    ):
-        return (MATH_OP(mathop=mathop),)
-    for (
-        native,
-        op,
-        initialize,
-        replace_init,
-        iterations,
-        vector_mode,
-        header,
-    ) in _GENERATED_UNARY_CASES:
-        if (
-            op not in _TT_POLY_PERF_OPERATIONS
-            or native != mathop
-            or str(TestConfig.CHIP_ARCH) in _TT_POLY_NATIVE_ARCHITECTURES.get(op, ())
-        ):
-            continue
-        required = (
-            DestAccumulation.Yes
-            if str(TestConfig.CHIP_ARCH) in _TT_POLY_FP32_DEST.get(op, ())
-            else DestAccumulation.No
-        )
-        if dest_acc != required:
-            continue
-        binding = _TTPolyGeneratedBF16(
-            op,
-            initialize,
-            replace_init,
-            iterations,
-            vector_mode,
-            header,
-            native_enum=mathop.cpp_enum_value,
-        )
-        return (_TTPolyPerfMath(mathop, binding),)
-    return (MATH_OP(mathop=mathop),)
-
-
-def _tt_poly_perf_readback(configuration, formats, dimensions, mathop, approx_mode):
-    # Exercise the same performance driver and callback before profiling it.
-    # Reuse the correctness suite's domain and oracle; timings remain untouched.
-    binding = next(
-        (
-            getattr(item, "_binding", None)
-            for item in configuration.passed_templates
-            if hasattr(item, "_binding")
-        ),
-        None,
-    )
-    if not hasattr(binding, "generated_unary_op"):
-        return
-    from helpers.llk_params import PerfRunType
-    from helpers.perf.core import create_test_or_perf_config
-    from helpers.test_config import BuildMode
-
-    operation = binding.generated_unary_op
-    reference = globals().get("_tt_poly_forward_arguments", lambda op: {})(operation)
-    spec = reference.get("spec_A")
-    if spec is None:
-        spec = exclude_undefined(
-            mathop,
-            for_op_pipeline(
-                mathop,
-                formats.input_format,
-                formats.output_format,
-                approx_mode=approx_mode,
-            ).spec_A,
-        )
-    src, count, other, other_count = generate_stimuli(
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    dest_acc = DestAccumulation.No
+    dimensions = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * 64]
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=dimensions,
-        spec_A=spec,
+        spec_A=sweep_spec(),
     )
-    golden = reference.get("declared_golden")
-    expected = (
-        golden(src)
-        if golden is not None
-        else get_golden_generator(UnarySFPUGolden)(
-            mathop,
-            src,
-            formats.output_format,
-            configuration.dest_acc,
+    # The sweep pads with +0 and drops -0. The specials go in that padding, under the
+    # edge sweep's gates for what the golden defines and the pipeline delivers.
+    specials = [0.0]
+    if negative_zero_delivered(formats.input_format, dest_acc):
+        specials.append(-0.0)
+    nonfinite = mathop in SPECIALS_READY_OPS and specials_safe(
+        formats.input_format, formats.output_format, dest_acc
+    )
+    if _gate_unspecified_nan_sign(mathop, formats, dest_acc, nonfinite):
+        specials += [float("inf"), float("-inf"), float("nan"), _NEGATIVE_NAN]
+    # Through the bit pattern: a float-to-bfloat16 cast drops a NaN's sign.
+    bits = torch.tensor(specials, dtype=torch.float32).view(torch.int32) >> 16
+    src_A[-len(specials) :] = bits.to(torch.int16).view(torch.bfloat16).to(src_A.dtype)
+    golden = get_golden_generator(UnarySFPUGolden)(
+        mathop, src_A, formats.output_format, dest_acc, formats.input_format, dimensions
+    )
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+    configuration = TestConfig(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(dimensions, dimensions),
+            APPROX_MODE(approx_mode),
+            FAST_MODE(FastMode.No),
+            CLAMP_NEGATIVE(True),
+            MATH_OP(mathop=mathop),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt_A),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
             formats.input_format,
-            dimensions,
-        )
-    )
-    functional = create_test_or_perf_config(
-        is_perf=False,
-        run_types=[PerfRunType.L1_TO_L1],
-        test_config_kwargs=dict(
-            test_name=configuration.test_name,
-            formats=formats,
-            templates=configuration.passed_templates,
-            runtimes=configuration.passed_runtimes,
-            variant_stimuli=StimuliConfig(
-                src,
-                formats.input_format,
-                other,
-                formats.input_format,
-                formats.output_format,
-                tile_count_A=count,
-                tile_count_B=other_count,
-                tile_count_res=count,
-            ),
-            dest_acc=configuration.dest_acc,
-            unpack_to_dest=configuration.unpack_to_dest,
-            compile_time_formats=configuration.compile_time_formats,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
         ),
+        dest_acc=dest_acc,
+        unpack_to_dest=False,
     )
-    functional.prepare()
-    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
-        return
     result = torch.tensor(
-        functional.run().result, dtype=format_dict[formats.output_format]
+        configuration.run().result, dtype=format_dict[formats.output_format]
     )
-    assert result.numel() == expected.numel()
-    assert passed_test(expected, result, formats.output_format)
+    failures = nonfinite_failures(src_A, golden, result, formats.input_format)
+    assert (
+        not failures.any()
+    ), f"{mathop.name}: {int(failures.sum())} lanes disagree on finiteness"
 
-
-class _TTPolyStockScalar:
-    def __init__(self, operation):
-        self.operation = operation
-
-    def convert_to_cpp(self):
-        operation = self.operation
-        if operation == "sigmoid_accurate":
-            return MATH_OP(mathop=MathOperation.Sigmoid).convert_to_cpp()
-        if operation == "log10":
-            return (
-                "constexpr auto SFPU_UNARY_OPERATION = SfpuType::log_with_base;\n"
-                "#define TT_POLY_LLK_TEST_STOCK_CALL SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_log, "
-                "(APPROX_MODE, FAST_MODE, true, is_fp32_dest_acc_en, 8, false), block_tile, VectorMode::RC, 0x3ede5bd9u);\n"
-            )
-        if operation == "leaky_relu":
-            initializer, callback, scalar = (
-                "lrelu_init",
-                "calculate_lrelu",
-                "0x3c23d70au",
-            )
-            arguments = "APPROX_MODE"
-        elif operation in ("relu", "relu_min"):
-            initializer, callback, scalar = "relu_min_init", "_relu_min_", "0u"
-            arguments = "sfpi::vFloat, APPROX_MODE, 8, std::uint32_t"
-        else:
-            initializer, callback, scalar = "relu_max_init", "_relu_max_", "0x40c00000u"
-            arguments = "sfpi::vFloat, APPROX_MODE, 8, std::uint32_t"
-        return (
-            "constexpr auto SFPU_UNARY_OPERATION = SfpuType::unused;\n"
-            '#define TT_POLY_LLK_TEST_HEADER "llk_sfpu/ckernel_sfpu_relu.h"\n'
-            "#define TT_POLY_LLK_TEST_NO_STOCK_INIT\n"
-            f"#define TT_POLY_LLK_TEST_INIT {initializer}\n"
-            f"#define TT_POLY_LLK_TEST_STOCK_CALL SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, {callback}, "
-            f"({arguments}), block_tile, VectorMode::RC, {scalar});\n"
+    def output_class(values):
+        values = values.float()
+        return torch.stack(
+            [
+                values.isnan(),
+                values.isinf(),
+                values == 0,
+                values.signbit() & ~values.isnan(),
+            ]
         )
 
-
-def _tt_poly_scalar_perf_binding(operation, dest_acc):
-    selected = _TT_POLY_SCALAR_PERF_ALIASES.get(operation, operation)
-    if (
-        operation in _TT_POLY_SCALAR_PERF_OPERATIONS
-        or selected in _TT_POLY_SCALAR_PERF_OPERATIONS
-    ):
-        for (
-            native,
-            op,
-            initialize,
-            replace_init,
-            iterations,
-            vector_mode,
-            header,
-        ) in _GENERATED_UNARY_CASES:
-            if op == selected:
-                required = (
-                    DestAccumulation.Yes
-                    if str(TestConfig.CHIP_ARCH) in _TT_POLY_FP32_DEST.get(op, ())
-                    else DestAccumulation.No
-                )
-                if dest_acc != required:
-                    break
-                return _TTPolyGeneratedBF16(
-                    op,
-                    initialize,
-                    replace_init,
-                    iterations,
-                    vector_mode,
-                    header,
-                    native_enum=(
-                        native.cpp_enum_value if native is not None else "unused"
-                    ),
-                )
-    return _TTPolyStockScalar(operation)
-
-
-_TT_POLY_SCALAR_PERF_OPERATIONS = (
-    "abs",
-    "acos",
-    "acosh",
-    "asinh",
-    "atan",
-    "atanh",
-    "cbrt",
-    "celu",
-    "digamma",
-    "elu",
-    "erf",
-    "erfc",
-    "erfinv",
-    "exp",
-    "exp2",
-    "expm1",
-    "gelu",
-    "hardmish",
-    "hardshrink",
-    "hardsigmoid",
-    "hardswish",
-    "hardtanh",
-    "i1",
-    "leaky_relu",
-    "lgamma",
-    "log10",
-    "log2",
-    "logit",
-    "logsigmoid",
-    "multigammaln",
-    "multigammaln_p4",
-    "polygamma",
-    "relu",
-    "relu6",
-    "relu_max",
-    "relu_min",
-    "selu",
-    "sigmoid",
-    "softsign",
-    "sqrt",
-    "tanh",
-    "tanhshrink",
-)
+    wrong = (
+        output_class(golden[-len(specials) :]) != output_class(result[-len(specials) :])
+    ).any(0)
+    assert not wrong.any(), (
+        f"{mathop.name}: {int(wrong.sum())} of {len(specials)} special inputs "
+        f"{specials} change output class or sign"
+    )
+    mask = measurable_mask(src_A, golden, result, formats.input_format)
+    over = int(((ulp_distance(golden.to(result.dtype), result) > max_ulp) & mask).sum())
+    assert passed_test(
+        golden, result, formats.output_format, max_ulp=max_ulp, mask=mask
+    ), f"{mathop.name}: {over} lanes over the {max_ulp}-ULP budget"
