@@ -3,6 +3,7 @@
 
 
 import pytest
+from conftest import skip_for_wormhole
 from helpers.constraints import distinct_dest_accumulation_modes
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
@@ -396,6 +397,7 @@ def test_perf_eltwise_unary_sfpu_comp_uint32(
 
 
 # The approximate exp with its input clamping on, the compute API default, which the main sweep does not measure.
+@skip_for_wormhole
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b], same=True),

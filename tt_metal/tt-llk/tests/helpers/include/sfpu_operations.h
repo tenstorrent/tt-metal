@@ -860,7 +860,22 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_exp2, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
     }
-    // Single call: calculate_exponential handles 8 or 32 iterations internally, clamped or not.
+#ifndef ARCH_BLACKHOLE
+    // VectorMode::RC: params drives 4 face iterations with 2×SETRWC between each —
+    // the lambda processes 8 rows per face, giving 32 total.
+    else if constexpr (OPERATION == SfpuType::exponential && APPROX_MODE && CLAMP_NEGATIVE)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_exponential,
+            (APPROX_MODE, is_fp32_dest_acc_en, false /* scale_en */, 8, CLAMP_NEGATIVE),
+            dst_index,
+            VectorMode::RC,
+            p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
+    }
+#endif
+    // Single call (else branch): calculate_exponential handles 8 or 32 iterations internally.
     else if constexpr (OPERATION == SfpuType::exponential)
     {
         SFPU_UNARY_CALL(
