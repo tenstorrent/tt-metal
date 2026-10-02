@@ -101,7 +101,8 @@ gate runs it: a component step name, or `adapter` for K.1) and the frozen tests 
 
 The runner tests are fed by tt-d-gen's real engine (`testing/dgen_prefill_driver.py`, its own Python 3.12 process,
 found by `testing/dgen_engine.py` under `serving.server_repo` or `/localdev/$USER/tt-d-gen`). Without a build they
-fail (`serving.require_engine: true`); `false` lets tt-metal's `prefill_producer` stand in, and `BRINGUP_DGEN=0|1`
+fail (`serving.require_engine: true`, asked at intake); `false`, for boxes tt-d-gen does not run on (QuietBox), lets
+tt-metal's `prefill_producer` stand in, and `BRINGUP_DGEN=0|1`
 forces either for a diagnostic. The build comes from the `dgen-build` agent (`agents/dgen-build.md`), which `/bringup`
 starts in the background during the spec review; by hand: start it from a session with `REPO=<path>`.
 
