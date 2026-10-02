@@ -16,9 +16,6 @@
 namespace ckernel::trisc
 {
 
-// Num of words in buffer descriptor struct
-constexpr static std::uint32_t BD_NUM_WORDS = 3;
-
 // Number of entries in the buffer descriptor table (physically partitioned per TRISC; ids are 0..31).
 constexpr std::uint32_t BD_TABLE_NUM_ENTRIES = 32;
 
@@ -75,7 +72,7 @@ inline std::uint16_t compute_square_of_min(std::uint8_t input1, std::uint8_t inp
     32x32: x=16, y=16, z=4
  * @param x_dim: Face column dimension
  * @param y_dim: Face row dimension after applying the L1 access mode
- * @param z_dim: Face count after applying the L1 access mode
+ * @param z_dim: Faces per HW tile (4 for a 2x2 face grid, else 1); forced to 1 for Strided mode
  * @tparam MODE: L1 access mode the descriptor was built for. Strided ops (PACR/UNPACR_STRIDE
  *        tiny-tiles) must be programmed with y_dim = 1 to index L1 rows as tiles.
  */
@@ -99,7 +96,7 @@ inline void validate_buffer_desc(const std::uint8_t x_dim, const std::uint8_t y_
  * @brief Populates buffer table entry for TDMA engines
  * @param buf_desc_id: Buffer descriptor id into the buffer descriptor table
  * @param word0: Encoded L1 base address and data format
- * @param word1: Encoded LMT base address and X dimension
+ * @param word1: Encoded L1 limit address (left 0 by construct_buf_desc) and X dimension
  * @param word2: Encoded Y and Z dimensions
  */
 inline void _configure_buf_desc_table_(const std::uint32_t buf_desc_id, const std::uint32_t word0, const std::uint32_t word1, const std::uint32_t word2)
