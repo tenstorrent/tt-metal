@@ -43,7 +43,8 @@ uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 // chunks cost more per row). Per variant, fitted to matched-chunk trace timings (single P150b,
 // 10 heads, 8192 x 8192, D128, full grid):
 // `c` from Q256/K512, `ck` from Q256/K256 (it also predicts Q320/K256 within 2%), `bw` from
-// Q128/K512.
+// Q128/K512. STANDARD and LOW_PRECISION refit 2026-10-02 on the reference-max state kernels (one Blackhole
+// Galaxy chip, same shapes; BFP4 stays compute-bound at Q128/K512, so its bw is kept).
 //
 // A core's makespan adds pipeline fill/drain the block roofline does not see (block_overhead): the
 // first Q chunk is read before any compute and the last output chunk is written after it (per core,
@@ -65,14 +66,14 @@ struct BlockCostModel {
 BlockCostModel block_cost_model(const PrecisionPolicy& policy) {
     switch (policy.selection.recipe) {
         case Recipe::A: return {1.000, 1.49, 5.99};
-        case Recipe::B: return {1.216, 5.28, 7.35};
+        case Recipe::B: return {1.044, 2.65, 6.07};
         case Recipe::C: return {1.878, 3.58, 9.46};
         case Recipe::D: return {2.436, 3.14, 11.75};
         case Recipe::E:
             switch (policy.selection.kv_storage) {
-                case KVStorage::BF16: return {1.040, 7.19, 7.75};
-                case KVStorage::BFP8: return {1.036, 7.02, 6.03};
-                case KVStorage::BFP4: return {1.028, 7.96, 3.50};
+                case KVStorage::BF16: return {0.864, 2.72, 5.97};
+                case KVStorage::BFP8: return {0.802, 3.83, 4.06};
+                case KVStorage::BFP4: return {0.811, 3.48, 3.50};
             }
     }
     TT_THROW("Unknown SDPA precision recipe");
