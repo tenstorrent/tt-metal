@@ -537,6 +537,36 @@ def nonfinite_failures(
     )
 
 
+def nonfinite_reason(
+    overflowed: torch.Tensor,
+    src: torch.Tensor,
+    golden: torch.Tensor,
+    result: torch.Tensor,
+    stats: Dict,
+    lanes: int,
+    named_lanes: int = 4,
+) -> str:
+    """The verdict a cell with non-finite disagreements is written with.
+
+    Two numbers, because two readers want them. The lane count is what makes the cell
+    unmeasurable, and the headroom report fails a run in which it grows. The maximum
+    over the *measurable* lanes -- the rest of the cell, usually tens of thousands of
+    them -- is what the demotion used to throw away: without it, I1's finite half of
+    the format (|x| below ~90 on every one of its cells) was held to nothing. It is
+    written as ``max N ULP``, the same shape a measured row's figure has, so the same
+    reader finds it. *named_lanes* bounds how many offending inputs are spelled out.
+    """
+    named = "; ".join(
+        f"x={float(src[i]):g}: {float(golden[i]):g} -> {float(result[i]):g}"
+        for i in overflowed.nonzero().flatten()[:named_lanes].tolist()
+    )
+    return (
+        f"{int(overflowed.sum())} lane(s) disagreeing with the golden about being "
+        f"finite (golden -> result: {named}); max {int(stats['max'])} ULP over the "
+        f"{lanes} measurable lanes"
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Folding a sweep back into the table
 # ─────────────────────────────────────────────────────────────────────────────

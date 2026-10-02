@@ -694,6 +694,35 @@ def test_the_claim_is_the_singularity_not_the_sampling_guard_band(op, inside, ou
         ), value
 
 
+def test_a_not_measurable_verdict_keeps_the_measurable_lanes_maximum():
+    """Demoting a cell for a few non-finite lanes used to drop what the other ~64,000
+    lanes measured, and the headroom report (#57527) then held them to nothing. The
+    note carries both figures, each where its reader looks: the lane count right after
+    ``not measurable:`` and the maximum as ``max N ULP``, the shape every measured row
+    already has."""
+    from helpers.ulp import ulp_distance, ulp_stats
+    from helpers.ulp_sweep import nonfinite_reason
+
+    src = torch.tensor([1.0, 2.0, 3.0, 4.0], dtype=torch.bfloat16)
+    golden = torch.tensor([1.0, 2.0, 3.0, 4.0], dtype=torch.bfloat16)
+    result = torch.tensor([1.0, float("inf"), 3.015625, 4.0], dtype=torch.bfloat16)
+    overflowed = torch.tensor([False, True, False, False])
+    mask = ~overflowed
+    stats = ulp_stats(ulp_distance(golden, result), mask)
+    note = "not measurable: " + nonfinite_reason(
+        overflowed, src, golden, result, stats, int(mask.sum())
+    )
+    # The two readers' own patterns (ulp_budget_diff._RECORDED_NONFINITE / _RECORDED_MAX
+    # from #57527 on); spelled out here so this PR pins the shape they will read.
+    lanes = re.search(
+        r"not measurable: (\d+) lane\(s\) disagreeing with the golden", note
+    )
+    assert lanes and lanes.group(1) == "1", note
+    worst = re.search(r"\bmax (\d+) ULP", note)
+    assert worst and worst.group(1) == "1", note  # 3.0 -> 3.015625 is one bf16 step
+    assert "x=2: 2 -> inf" in note and "over the 3 measurable lanes" in note
+
+
 def test_an_unmeasurable_cell_is_written_as_its_own_verdict(table):
     """Left out, the cell's old row is dropped with nothing replacing it; recorded, it
     becomes a tolerance row that says why."""

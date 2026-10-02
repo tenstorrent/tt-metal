@@ -1031,6 +1031,58 @@ def _acknowledges(key, cell) -> bool:
     return all(k is None or k == c for k, c in zip(key, cell))
 
 
+#: Swept cells of an enrolled unary op that resolve to no row of the op's own, with why.
+#: Empty: every enrolled op covers every cell the sweep drives. The emitter writes whole
+#: grids, so a hole can only open where it keeps a block verbatim (a floor row) and the
+#: sweep's format set then grows -- the cell is measured, resolves to the global default,
+#: and nothing holds it. A cell listed here is a decision, with its reason, not a gap.
+_UNRESOLVED_SWEPT_CELLS: dict = {}
+
+
+def test_every_swept_cell_of_an_enrolled_op_resolves_to_a_row_of_its_own():
+    """The sweep gates a ULP row and the headroom report judges a tolerance row; a
+    swept cell that resolves to ``TOLERANCE_CONTRACT`` -- no row of the op covers it --
+    is measured and judged by nothing, and reads in the table exactly like a cell nobody
+    ever enrolled. ``test_every_swept_cell_of_an_exact_op_is_gated_or_waived`` asks this
+    of the exact ops; this asks it of every enrolled op."""
+    from helpers.sfpu_domains import sfpu_unary_ops
+    from helpers.ulp_sweep import sweep_cells
+
+    unary = sfpu_unary_ops()
+    unresolved, resolved = [], []
+    for op in enrolled_ops():
+        if op not in unary:
+            continue
+        table = _SFPU_ACCURACY_BUDGET[op]
+        for in_fmt, out_fmt, approx, dest in sweep_cells(MEASURED_ARCH):
+            query = BudgetKey(
+                input_format=in_fmt,
+                output_format=out_fmt,
+                approx_mode=approx,
+                dest_acc=dest,
+                arch=MEASURED_ARCH,
+            )
+            cell = (op, in_fmt, out_fmt, approx, dest)
+            if resolve_contract(table, query, label=op.name) is TOLERANCE_CONTRACT:
+                if cell not in _UNRESOLVED_SWEPT_CELLS:
+                    unresolved.append(cell)
+            elif cell in _UNRESOLVED_SWEPT_CELLS:
+                resolved.append(cell)
+
+    def _name(cell):
+        op, i, o, a, d = cell
+        return f"{op.name} {i.name}->{o.name} approx={a.name} dest={d.name}"
+
+    assert not unresolved, (
+        "swept cells no row of the op covers (measured by the sweep, judged by "
+        "nothing): give them a row, or list them in _UNRESOLVED_SWEPT_CELLS with why:\n"
+        + "\n".join(f"  {_name(c)}" for c in unresolved)
+    )
+    assert not resolved, "listed as unresolved but a row covers them now: " + ", ".join(
+        _name(c) for c in resolved
+    )
+
+
 def test_a_not_measurable_verdict_on_a_gateable_cell_is_acknowledged():
     cells = _not_measurable_cells()
     unacknowledged = [

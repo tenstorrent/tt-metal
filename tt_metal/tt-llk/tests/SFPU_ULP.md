@@ -172,7 +172,9 @@ Four verdicts:
   input, so neither number is enrollable.
 - **`metric: tolerance`, "not measurable: …"** — the cell had no lane a step count could
   describe, or answered inf/NaN where the op claims a finite result. No budget buys that;
-  the row says why instead of leaving a hole the next emit would paper over. On a
+  the row says why instead of leaving a hole the next emit would paper over, and it still
+  records `max N ULP` over the lanes that *were* measurable, so the rest of the cell is
+  not thrown away with the demotion. On a
   gateable output such a row must also be acknowledged, with its cause, in
   `test_sfpu_accuracy_budget._UNMEASURABLE_CELLS_ACKNOWLEDGED` — and if the cause is a
   tracked defect on a handful of inputs, it belongs in `_KNOWN_NONFINITE_LANES` instead,

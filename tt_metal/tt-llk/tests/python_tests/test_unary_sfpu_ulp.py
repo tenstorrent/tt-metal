@@ -63,6 +63,7 @@ from helpers.ulp import ulp_distance, ulp_stats
 from helpers.ulp_sweep import (
     measurable_mask,
     nonfinite_failures,
+    nonfinite_reason,
     stimuli_format_for,
     sweep_cells,
     sweep_spec,
@@ -272,13 +273,8 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         reason = "no lane a step count can describe"
         unmeasurable = reason
     elif overflowed.any():
-        named = "; ".join(
-            f"x={float(src[i]):g}: {float(golden[i]):g} -> {float(result[i]):g}"
-            for i in overflowed.nonzero().flatten()[:_MAX_LANES_IN_MESSAGE].tolist()
-        )
-        reason = (
-            f"{int(overflowed.sum())} lane(s) disagreeing with the golden about being "
-            f"finite (golden -> result: {named})"
+        reason = nonfinite_reason(
+            overflowed, src, golden, result, stats, lanes, _MAX_LANES_IN_MESSAGE
         )
         unmeasurable = (
             f"{reason}. No budget buys an overflow, and a step count cannot describe "
