@@ -565,6 +565,15 @@ separately instrumented (22 TT helper tests pass). Disposable control container
 is removed; reports are retained. Combined CI is unchanged and monitored.
 Resumed active time~267min, cumulative~9h20m; no new human intervention.
 
+10:11 UTC: TTI4fcfdcfb adds opt-in disconnect propagation (58 host tests).
+Actual20/25-second smokes eliminate late saved actions and abandoned completed
+responses; the25-second control interrupts217 partial decode tokens. Native
+post-abort replay matches the prior parsed response exactly,15.146s. This is
+measurement/wasted-work repair, not a reward gain or12-second end-to-end win:
+verification overlapped the abandoned work. An old-BFP8/original-T1 repeat-
+advisory probe is prepared, with trustworthy cancellation, while the unchanged
+combined CI remains monitored. Resumed active time~280min, cumulative~9h33m.
+
 - TTFT: `doc/ttft_optimization/`.
 - Remote benchmarks/evals:
   `readiness_vllm/ttft_optimization_remote/README.md`.

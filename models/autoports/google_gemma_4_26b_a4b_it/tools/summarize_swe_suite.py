@@ -122,6 +122,7 @@ def summarize(root):
             proxy_request_s=sum(event["elapsed_s"] for event in responses),
             metrics_collection_s=sum(event.get("collection_s", 0) for event in trial_events),
             submission_normalizations=sum(event["event"] == "submission_marker_normalized" for event in trial_events),
+            upstream_abort_requests=sum(event["event"] == "upstream_abort_requested" for event in trial_events),
             server=counter_delta(trial_events, responses),
             completed_response_server=completed_response_counters(trial_events, responses),
             deadline_audit=deadline_audit(trial_events, epoch(result["agent_execution"]["finished_at"])),

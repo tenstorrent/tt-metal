@@ -34,6 +34,7 @@ def main():
     parser.add_argument("--server", default="http://127.0.0.1:8000")
     parser.add_argument("--seconds", type=int, default=900)
     parser.add_argument("--owned-command-cleanup", action="store_true", help="Opt-in container cancellation guard")
+    parser.add_argument("--abort-on-client-disconnect", action="store_true", help="Cancel abandoned proxy requests")
     parser.add_argument("--temperature", type=float, help="Explicit sampling-policy control; not a serving speedup")
     parser.add_argument("--repetition-detection", type=json.loads)
     parser.add_argument("--disable-thinking", action="store_true", help="Separate, explicit agent-policy experiment")
@@ -95,6 +96,7 @@ def main():
         reasoning_history_limit=args.reasoning_history_limit,
         submission_review_once=args.submission_review_once,
         owned_command_cleanup=args.owned_command_cleanup,
+        abort_on_client_disconnect=args.abort_on_client_disconnect,
         agent_env={"OPENAI_API_KEY": "local-diagnostic"},
         venv_python=args.harbor_python,
     )
@@ -113,6 +115,7 @@ def main():
                 "reasoning_history_limit": args.reasoning_history_limit,
                 "submission_review_once": args.submission_review_once,
                 "owned_command_cleanup": args.owned_command_cleanup,
+                "abort_on_client_disconnect": args.abort_on_client_disconnect,
                 "repetition_detection_override": args.repetition_detection,
                 "source_config_sha256": hashlib.sha256(args.source_config.read_bytes()).hexdigest(),
                 "system_template_override_sha256": (
