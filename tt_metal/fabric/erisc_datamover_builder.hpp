@@ -478,6 +478,11 @@ public:
     void set_wait_for_host_signal(bool wait_for_host_signal);
 
     bool is_first_level_ack_enabled() const { return this->enable_first_level_ack; }
+    
+    // The channel trimming profile entry that turned off this router's unused channels, if one was applied.
+    const std::optional<ChannelTrimmingOverrides>& get_channel_trimming_overrides() const {
+        return channel_trimming_overrides_;
+    }
 
     //    protected:
     const FabricContext& fabric_context_;
