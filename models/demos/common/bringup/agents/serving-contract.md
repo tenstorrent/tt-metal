@@ -81,10 +81,27 @@ Two kinds, both run with `scripts/run_safe_pytest.sh` on the box's mesh (FABRIC_
 - **A layout test** (CPU-side, from the allocated cache and the exported table): the cache's memory config is the
   ND shard spec above; every table entry's offset is 64-byte aligned, its range stays inside its bank's allocation,
   and no two entries in the same bank and device group overlap.
-- **One runner test**, through the adapter only, modelled on Gemma's: the real runner and producer, mock migration,
+- **One runner test**, through the adapter only, modelled on Gemma's: the real runner, mock migration,
   device-to-host acks, at least two slots interleaved, multi-turn and mid-chunk ends on, one prompt near max seq; KV
   read back through the table the model exports and compared with the golden; the table checked with the server's
   `tables.py` rules and `kv_dump_compare.py`.
+
+The runner tests (this one and the runner smoke) are fed by tt-d-gen's own engine, not by a stand-in. Look for a build
+first: the repo is spec `serving.server_repo`, else `/localdev/$USER/tt-d-gen`, and it counts as built when
+`bindings/python/tt_engine/_tt_engine*.so` exists and a tt-d-gen Python (3.12) imports `tt_engine`.
+`testing/dgen_engine.find_build` does this lookup. ttnn and `tt_engine` cannot share a process, so the engine runs as
+its own subprocess, `testing/dgen_prefill_driver.py`, under tt-d-gen's Python and environment. It runs `BackendRuntime`
+in the PREFILL role on `device_prefill_pipeline(<runner's H2D service id>, "/tt_prefill_layer_acks_<id>", chunk,
+layers per chunk, timeout, SP)`. The driver admits the requests and pumps the engine until each one's PREFILL_DONE. The
+engine picks the slots, chunks, prefix reuse and interleave, and the test checks what it did against the server rules.
+The engine never sends the runner's shutdown sentinel, so `dgen_engine.driver_shell` sends it afterwards from our
+Python. Use tt-metal's `prefill_producer` only as a fallback, when no build is found (`BRINGUP_DGEN=1` turns that case
+into a failure, `BRINGUP_DGEN=0` forces the fallback). The test output and the runner smoke's recorded answer
+(`feeder`) name the path that ran. Before writing the test, check the three things the two sides share against the
+tt-d-gen commit: the H2D stream service, the ack channel name and the 12-byte header `{slot, start, end}`. The real
+engine's prefix index matches across slots: while another slot holds a longer prefix of the same tokens, a follow-up
+goes cold instead of remounting. Pick requests whose outcome is deterministic, and try them first on
+`te.mock_prefill_pipeline` (`"mock": true` in the driver plan, host only).
 
 Pass limits come from the server's own checks where it has them (e.g. `kv_dump_compare`: exact bytes for the prefix,
 PCC for the last block); otherwise from the bring-up's spec thresholds. Never loosen a limit to make a test easier.
