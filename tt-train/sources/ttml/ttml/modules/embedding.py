@@ -69,9 +69,8 @@ class VocabParallelEmbedding(AbstractModuleBase):
         tensor satisfies this for any TP-divisible ``V``; a ``weight_init`` that
         allocates per-device instead may tile-pad the shard, so those callers
         need ``num_embeddings`` to be a multiple of ``32 * tp_size``. The
-        embedding *backward* kernel additionally requires ``seq_len`` and
-        ``embedding_dim`` to be multiples of 32, so for training callers must
-        tile-align the sequence length (the model forward paths already pad it).
+        embedding *backward* kernel requires tile-aligned inputs; TTML pads
+        non-tile-aligned sequence lengths internally before invoking it.
     """
 
     def __init__(
@@ -212,8 +211,8 @@ class FeatureParallelEmbedding(AbstractModuleBase):
     Note:
         The shard must be tile-width aligned: ``embedding_dim`` divisible by
         ``tp_size`` and ``embedding_dim // tp_size`` a multiple of 32 (the
-        embedding kernel's last-dim requirement). Backward also needs ``seq_len``
-        tile-aligned.
+        embedding kernel's last-dim requirement). TTML pads non-tile-aligned
+        sequence lengths internally before invoking backward.
     """
 
     def __init__(
