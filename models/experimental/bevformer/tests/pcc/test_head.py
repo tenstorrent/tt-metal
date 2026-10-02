@@ -127,9 +127,9 @@ def test_head_detections(device, reset_seeds):
     tt_scores, tt_labels, tt_query_index, tt_boxes = (
         ttnn.to_torch(t) for t in TtNMSFreeCoder().topk(tt_cls_scores[-1], tt_bbox_preds[-1])
     )
-    # The largest error over all num_query * num_classes pairs of the scores topk ranks, the
-    # device sigmoid of the head's logits.
-    tt_all_scores = ttnn.to_torch(ttnn.sigmoid(tt_cls_scores[-1])).float()
+    # The largest score error over all num_query * num_classes pairs. topk ranks the head's
+    # logits exactly, which order as their exact sigmoid does.
+    tt_all_scores = ttnn.to_torch(tt_cls_scores[-1]).float().sigmoid()
     score_error = (cls_scores[-1].sigmoid() - tt_all_scores).abs().amax((1, 2))
     for i in range(batch_size):
         labels, query_index = tt_labels[i].long(), tt_query_index[i, :, 0].long()
