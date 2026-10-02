@@ -337,16 +337,6 @@ ReducePlan make_reduce_plan(
     const ReduceHardwareConfig& hardware,
     compute_kernel_lib::ReduceInputPolicy input_policy = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
 
-inline ReducePlan make_reduce_plan(
-    const ReduceBlockSpec& block,
-    tt::tt_metal::ReduceOpMath reduce_math,
-    tt::tt_metal::ReduceOpDim reduce_dim,
-    ReduceFp32Mode fp32_mode,
-    const ReduceHardwareConfig& hardware,
-    compute_kernel_lib::ReduceInputPolicy input_policy = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile) {
-    return make_reduce_plan(block, reduce_math, reduce_dim, std::nullopt, fp32_mode, hardware, input_policy);
-}
-
 // Plan a kernel-ordered sequence of reductions whose results are accumulated
 // together. The returned call vector has exactly the same order and length as
 // `reductions`; callers decide when to issue each reduce() call. Input CB IDs

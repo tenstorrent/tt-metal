@@ -406,14 +406,7 @@ void bind_reduce_planner(nb::module_& mod) {
 
     planner.def(
         "make_reduce_plan",
-        nb::overload_cast<
-            const host::ReduceBlockSpec&,
-            tt::tt_metal::ReduceOpMath,
-            tt::tt_metal::ReduceOpDim,
-            std::optional<float>,
-            ReduceFp32Mode,
-            const host::ReduceHardwareConfig&,
-            compute_kernel_lib::ReduceInputPolicy>(&host::make_reduce_plan),
+        &host::make_reduce_plan,
         nb::arg("block"),
         nb::arg("reduce_math"),
         nb::arg("reduce_dim"),
@@ -422,22 +415,6 @@ void bind_reduce_planner(nb::module_& mod) {
         nb::arg("hardware"),
         nb::arg("input_policy") = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
         "Plan one reduction. An explicit scalar overrides normalization; None derives AVG scaling from geometry.");
-    planner.def(
-        "make_reduce_plan",
-        nb::overload_cast<
-            const host::ReduceBlockSpec&,
-            tt::tt_metal::ReduceOpMath,
-            tt::tt_metal::ReduceOpDim,
-            ReduceFp32Mode,
-            const host::ReduceHardwareConfig&,
-            compute_kernel_lib::ReduceInputPolicy>(&host::make_reduce_plan),
-        nb::arg("block"),
-        nb::arg("reduce_math"),
-        nb::arg("reduce_dim"),
-        nb::arg("fp32_mode"),
-        nb::arg("hardware"),
-        nb::arg("input_policy") = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-        "Plan one reduction with geometry-derived AVG normalization, or unit scaling for other operations.");
     planner.def(
         "make_reduce_sequence_plan",
         nb::overload_cast<

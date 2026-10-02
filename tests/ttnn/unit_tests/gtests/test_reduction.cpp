@@ -117,7 +117,13 @@ TEST(ReduceHostPlanner, FidelitySelectsArchitectureAdditiveCrossover) {
                     // Fidelity must not override the additive path's eligibility restrictions.
                     EXPECT_EQ(
                         make_reduce_plan(
-                            block, ReduceOpMath::MAX, dims[d], ReduceFp32Mode::Fast, hardware, Policy::BulkWaitBulkPop)
+                            block,
+                            ReduceOpMath::MAX,
+                            dims[d],
+                            std::nullopt,
+                            ReduceFp32Mode::Fast,
+                            hardware,
+                            Policy::BulkWaitBulkPop)
                             .algorithm,
                         Algorithm::ReduceTile);
                 }
@@ -182,6 +188,7 @@ TEST(ReduceHostPlanner, StreamingCapacityDependsOnAlgorithm) {
         ReduceBlockSpec::tiled(32, 256, DataType::BFLOAT16, DataType::FLOAT32),
         ReduceOpMath::MAX,
         ReduceOpDim::W,
+        std::nullopt,
         ReduceFp32Mode::Fast,
         hardware,
         Policy::WaitAndPopPerTile);
@@ -332,7 +339,8 @@ TEST(ReduceHostPlanner, DefaultPolicyDoesNotDependOnResidentAllocation) {
         if (resident) {
             block.resident_input_tiles = 64;
         }
-        const auto plan = make_reduce_plan(block, ReduceOpMath::SUM, ReduceOpDim::H, ReduceFp32Mode::Fast, hardware);
+        const auto plan =
+            make_reduce_plan(block, ReduceOpMath::SUM, ReduceOpDim::H, std::nullopt, ReduceFp32Mode::Fast, hardware);
         EXPECT_EQ(plan.input_policy, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
         EXPECT_EQ(plan.algorithm, compute_kernel_lib::ReduceAlgorithm::ReduceTile);
         EXPECT_EQ(plan.find_cb(ReduceCbRole::Input)->page_count, resident ? 64U : 1U);
@@ -428,6 +436,7 @@ TEST(ReduceHostPlanner, AlignedTailNeedsNoEdgeMasks) {
         block,
         ReduceOpMath::AVG,
         ReduceOpDim::W,
+        std::nullopt,
         ReduceFp32Mode::Fast,
         hardware,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
@@ -529,7 +538,13 @@ TEST(ReduceHostPlanner, OmittedScalarUsesValidGeometryOnlyForAverage) {
                 .input_policy = compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop};
             EXPECT_FALSE(config.scalar.has_value());
             const auto plan = make_reduce_plan(
-                block, math, dim, ReduceFp32Mode::Fast, hardware, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
+                block,
+                math,
+                dim,
+                std::nullopt,
+                ReduceFp32Mode::Fast,
+                hardware,
+                compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
             if (plan.algorithm == compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd) {
                 EXPECT_EQ(plan.reduce_factor, math == ReduceOpMath::AVG ? extent : 1U);
                 EXPECT_FLOAT_EQ(plan.post_scale, 1.0F);
@@ -722,9 +737,11 @@ TEST(ReduceHostPlanner, TailAuxiliaryRequirementsAreReportedWithoutBudgeting) {
     using namespace ttnn::kernel_lib::host;
     const ReduceHardwareConfig hardware{.arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true};
     auto block = ReduceBlockSpec::tiled(64, 64, DataType::BFLOAT16, DataType::BFLOAT16);
-    const auto full = make_reduce_plan(block, ReduceOpMath::MAX, ReduceOpDim::W, ReduceFp32Mode::Fast, hardware);
+    const auto full =
+        make_reduce_plan(block, ReduceOpMath::MAX, ReduceOpDim::W, std::nullopt, ReduceFp32Mode::Fast, hardware);
     block.tail = ReduceTailConfig{{63, 63, 1}};
-    const auto tail = make_reduce_plan(block, ReduceOpMath::MAX, ReduceOpDim::W, ReduceFp32Mode::Fast, hardware);
+    const auto tail =
+        make_reduce_plan(block, ReduceOpMath::MAX, ReduceOpDim::W, std::nullopt, ReduceFp32Mode::Fast, hardware);
     EXPECT_GT(tail.find_cb(ReduceCbRole::Auxiliary)->page_count, full.find_cb(ReduceCbRole::Auxiliary)->page_count);
     EXPECT_GT(tail.total_owned_l1_bytes, full.total_owned_l1_bytes);
 }
@@ -770,6 +787,7 @@ TEST(ReduceHostPlanner, ResidentWholeRowHWTailsUseTheirOwnNormalization) {
         block,
         ReduceOpMath::AVG,
         ReduceOpDim::HW,
+        std::nullopt,
         ReduceFp32Mode::Fast,
         hardware,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop));
@@ -778,6 +796,7 @@ TEST(ReduceHostPlanner, ResidentWholeRowHWTailsUseTheirOwnNormalization) {
         block,
         ReduceOpMath::AVG,
         ReduceOpDim::HW,
+        std::nullopt,
         ReduceFp32Mode::Fast,
         hardware,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop));
@@ -788,6 +807,7 @@ TEST(ReduceHostPlanner, ResidentWholeRowHWTailsUseTheirOwnNormalization) {
         block,
         ReduceOpMath::AVG,
         ReduceOpDim::HW,
+        std::nullopt,
         ReduceFp32Mode::Fast,
         hardware,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop));
@@ -797,6 +817,7 @@ TEST(ReduceHostPlanner, ResidentWholeRowHWTailsUseTheirOwnNormalization) {
         block,
         ReduceOpMath::AVG,
         ReduceOpDim::HW,
+        std::nullopt,
         ReduceFp32Mode::Fast,
         hardware,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop));
@@ -868,6 +889,7 @@ TEST(ReduceHostPlanner, LargeBulkRequirementsAreNotRejectedForL1Capacity) {
         block,
         ReduceOpMath::SUM,
         ReduceOpDim::W,
+        std::nullopt,
         ReduceFp32Mode::Fast,
         hardware,
         compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop);
@@ -886,7 +908,8 @@ TEST(ReduceHostPlanner, FullAndTailShareResolvedInputPolicy) {
              {Policy::NoWaitNoPop, Policy::WaitUpfrontNoPop, Policy::BulkWaitBulkPop, Policy::WaitAndPopPerTile}) {
             auto block = ReduceBlockSpec::tiled(256, 256, DataType::BFLOAT16, DataType::FLOAT32);
             block.tail = ReduceTailConfig{{135, 135, 1}};
-            const auto plan = make_reduce_plan(block, ReduceOpMath::AVG, dim, ReduceFp32Mode::Fast, hardware, policy);
+            const auto plan =
+                make_reduce_plan(block, ReduceOpMath::AVG, dim, std::nullopt, ReduceFp32Mode::Fast, hardware, policy);
             const auto resolved = policy;
             EXPECT_EQ(plan.input_policy, resolved);
             ASSERT_NE(plan.tail_plan, nullptr);
