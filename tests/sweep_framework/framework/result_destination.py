@@ -387,7 +387,7 @@ class FileResultDestination(ResultDestination):
                 github_job_id=run_context.get("github_job_id", None),
                 full_test_name=header.get("sweep_name"),
                 test_start_ts=raw.get("start_time_ts"),
-                test_end_ts=raw.get("end_time_ts"),
+                test_end_ts=raw.get("end_time_ts") or dt.datetime.now(dt.timezone.utc),  # fallback: end_time_ts may be None when a result exits via an abort path before _stamp_result_footer runs, refs #52399
                 test_case_name=header.get("suite_name"),
                 filepath=header.get("sweep_name"),
                 success=is_success,
