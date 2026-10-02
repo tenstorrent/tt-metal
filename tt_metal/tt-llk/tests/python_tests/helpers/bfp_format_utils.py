@@ -24,6 +24,10 @@ def _bf16_sign_exp_mantissa(flat: torch.Tensor):
     signs = bf16_bits >> 15
     exps = (bf16_bits >> 7) & 0xFF
     mants = ((bf16_bits & 0x7F) >> 1) | 0x40
+    # A zero or subnormal (exponent 0) has no implicit 1. Encoding it as magnitude 0x40
+    # made an all-zero block dequantize to 2^-127 per element on the host while the
+    # device, like tt-metal's convert_u32_to_bfp, reads it as 0. Same rule as pack.py.
+    mants = torch.where(exps == 0, torch.zeros_like(mants), mants)
     return signs, exps, mants
 
 
@@ -53,7 +57,10 @@ def _finalize_bfp_quantized(
     # scale arithmetic with very small shared exponents) is applied once,
     # centrally, at the end of the consuming golden's __call__ — so the
     # same FTZ pass covers FP outputs as well. Do not FTZ here.
-    values = torch.where(signs_blocks.bool(), -values, values)
+    # The packer drops the sign of a datum whose magnitude rounds to zero (pack.py keeps
+    # a sign-only mantissa out of L1), so the device sees +0.0 where the host would
+    # otherwise model -0.0. Keep the sign on non-zero magnitudes only.
+    values = torch.where(signs_blocks.bool() & (values != 0), -values, values)
     out = values.flatten()[:n].to(torch.bfloat16)
     if dimensions is not None:
         out = untilize_block(

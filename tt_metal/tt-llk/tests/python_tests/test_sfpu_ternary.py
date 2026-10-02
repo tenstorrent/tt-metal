@@ -114,6 +114,7 @@ def _run_sfpu_ternary(
         src_C,
         _SCALAR_VALUE_BITS,
         formats.output_format,
+        input_format=formats.input_format,
     )
 
     configuration = TestConfig(

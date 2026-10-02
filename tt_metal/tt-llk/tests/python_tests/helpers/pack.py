@@ -164,7 +164,10 @@ def float_to_bfp8_block(block):
         signs.append(int(sign, 2))
         exponent = int(binary_str[1:9], 2)
         mantissa = binary_str[9:-1]  # remove last
-        mantissa = "1" + mantissa  ## add 1
+        # Only a normal number carries the implicit 1. A zero or subnormal (exponent 0)
+        # is datum 0, as in tt-metal's convert_u32_to_bfp; with the 1 forced in, an
+        # all-zero block decoded to 2^-127 per element on the host side of the golden.
+        mantissa = ("1" if exponent != 0 else "0") + mantissa
         exponents.append(exponent)
         mantissas.append(mantissa)
         max_exponent = max(max_exponent, exponent)
