@@ -548,7 +548,8 @@ constexpr bool is_single_thread_runtype(PerfRunType run_type)
 // whole measured window. A span needs every thread stopped before the read, so those keep the barrier.
 constexpr bool exit_barrier_for(PerfRunType run_type)
 {
-    return !is_single_thread_runtype(run_type);
+    (void)run_type; // experiment: peers wait quietly until the measured thread is done
+    return true;
 }
 
 constexpr bool is_measured_thread(PerfRunType run_type)
