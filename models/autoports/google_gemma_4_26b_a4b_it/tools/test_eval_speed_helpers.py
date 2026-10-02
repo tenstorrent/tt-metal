@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from measure_context_dedup import canonical, common_prefix_blocks
-from probe_context_dedup import compact
+from probe_context_dedup import compact, compact_warning_blocks
 from probe_loop_recovery import wall_deadline
 from probe_native_eval_action import request_messages
 from replay_eval_requests import post
@@ -44,6 +44,47 @@ class DiagnosticSamplingTests(unittest.TestCase):
 
 
 class OfflineContextTests(unittest.TestCase):
+    def test_warning_compaction_preserves_first_and_nonwarning_evidence(self):
+        warning = "/testbed/module.py:12: DeprecationWarning: " + "deprecated interface " * 10 + "\n  import old\n"
+        messages = [
+            {"role": "tool", "tool_call_id": "call1", "content": warning + "test PASS\n"},
+            {"role": "tool", "tool_call_id": "call2", "content": warning + "test FAIL\nTraceback: problem\n"},
+            {"role": "assistant", "content": warning, "reasoning": "retain this"},
+        ]
+        original = copy.deepcopy(messages)
+        candidate, changes = compact_warning_blocks(messages)
+        self.assertEqual(messages, original)
+        self.assertEqual(candidate[0], original[0])
+        self.assertEqual(candidate[2], original[2])
+        self.assertIn("call1", candidate[1]["content"])
+        self.assertTrue(candidate[1]["content"].endswith("test FAIL\nTraceback: problem\n"))
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(candidate[1]["tool_call_id"], "call2")
+
+    def test_changed_or_unidentified_warning_is_not_compacted(self):
+        warning = "/module.py:12: DeprecationWarning: " + "deprecated " * 20 + "\n"
+        messages = [
+            {"role": "tool", "tool_call_id": "a", "content": warning},
+            {"role": "tool", "tool_call_id": "b", "content": warning.replace(":12:", ":13:")},
+            {"role": "tool", "content": warning},
+        ]
+        self.assertEqual(compact_warning_blocks(messages), (messages, []))
+
+    def test_harbor_json_output_wrapper_preserves_return_code_and_fields(self):
+        warning = "/module.py:12: DeprecationWarning: " + "deprecated " * 20 + "\n"
+        payload = {"returncode": 1, "output": warning + "FAIL\n", "extra": "retain"}
+        messages = [
+            {"role": "tool", "tool_call_id": "a", "content": json.dumps(payload)},
+            {"role": "tool", "tool_call_id": "b", "content": json.dumps(payload)},
+        ]
+        candidate, changes = compact_warning_blocks(messages)
+        self.assertEqual(candidate[0], messages[0])
+        edited = json.loads(candidate[1]["content"])
+        self.assertEqual(edited["returncode"], 1)
+        self.assertEqual(edited["extra"], "retain")
+        self.assertTrue(edited["output"].endswith("FAIL\n"))
+        self.assertEqual(len(changes), 1)
+
     def test_canonical_preserves_reasoning_and_does_not_mutate_history(self):
         history = [
             {

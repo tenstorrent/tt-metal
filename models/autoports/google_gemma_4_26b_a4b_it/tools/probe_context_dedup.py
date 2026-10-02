@@ -11,9 +11,51 @@ import argparse
 import copy
 import hashlib
 import json
+import re
 from pathlib import Path
 
 from replay_eval_requests import TOOLS, post
+
+WARNING_BLOCK = re.compile(
+    r"(?m)^/[^\n]+:\d+: (?:DeprecationWarning|PendingDeprecationWarning):[^\n]*\n(?:[ \t]+[^\n]*\n)?"
+)
+
+
+def compact_warning_blocks(messages):
+    """Offline candidate: retain the first exact warning, reference repetitions."""
+    result, seen, changes = copy.deepcopy(messages), {}, []
+    for index, message in enumerate(result):
+        content, call_id = message.get("content"), message.get("tool_call_id")
+        if message["role"] != "tool" or not call_id or not isinstance(content, str):
+            continue
+        try:
+            wrapper = json.loads(content)
+        except (ValueError, TypeError):
+            wrapper = None
+        if isinstance(wrapper, dict) and isinstance(wrapper.get("output"), str):
+            output = wrapper["output"]
+        else:
+            wrapper, output = None, content
+
+        def replacement(match):
+            block = match.group(0)
+            if block not in seen:
+                seen[block] = call_id
+                return block
+            text = f"[Identical warning retained in tool call {seen[block]}.]\n"
+            if len(text) >= len(block):
+                return block
+            changes.append({"message_index": index, "original_chars": len(block), "retained_call_id": seen[block]})
+            return text
+
+        edited = WARNING_BLOCK.sub(replacement, output)
+        if edited != output:
+            if wrapper is not None:
+                wrapper["output"] = edited
+                message["content"] = json.dumps(wrapper, indent=2)
+            else:
+                message["content"] = edited
+    return result, changes
 
 
 def compact(messages, minimum_chars=256):
