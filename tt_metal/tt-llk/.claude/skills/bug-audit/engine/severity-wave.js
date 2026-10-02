@@ -53,4 +53,4 @@ const results = await pipeline(inputs, (p) =>
 const good = results.filter(Boolean)
 const all = good.flatMap((r) => r.ratings)
 log(`rated ${all.length}: high ${all.filter((r) => r.severity === 'high').length}, medium ${all.filter((r) => r.severity === 'medium').length}, low ${all.filter((r) => r.severity === 'low').length}`)
-return { ratings: all, missing: inputs.filter((p, i) => !results[i]) }
+return { ratings: all, missing: inputs.filter((p, i) => !results[i]), input_dir: A.input_dir }

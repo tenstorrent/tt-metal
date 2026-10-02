@@ -10,7 +10,8 @@ it is. `prepare` writes the canonical confirmed findings (merged-in duplicates a
 entry) in batches for severity-wave.js and prints its args. Findings that already carry a severity override are
 skipped unless --all is given. `persist` records each rating as a disposition severity override with its one-line
 reason, keeping the disposition's state; consolidate.py then shows the rated severity, and the hunter's as
-`severity_audit`.
+`severity_audit`. It records only one valid rating per prepared item (high, medium or low, with a reason), names
+every skipped, duplicated or invalid one, and exits non-zero until all are rated.
 """
 import datetime
 import json
@@ -29,6 +30,15 @@ DISP = os.path.join(out, "dispositions.json")
 
 def opt(flag, default=None):
     return argv[argv.index(flag) + 1] if flag in argv else default
+
+
+def confirming_reasons(f):
+    """Why the finding stands confirmed: the recheck's reasons when the recheck confirmed it (the wave's were
+    unsettled), else the wave verifiers'."""
+    rc = f.get("recheck") or {}
+    if rc.get("outcome") == "confirmed" and rc.get("reasons"):
+        return rc["reasons"]
+    return f.get("reasons") or []
 
 
 def other_sites(f):
@@ -88,7 +98,7 @@ if argv[0] == "prepare":
                 "claim": f["summary"],
                 "failure_scenario": f["failure_scenario"],
                 "evidence": f.get("evidence", ""),
-                "reasons": (f.get("reasons") or [])[:2],
+                "reasons": confirming_reasons(f)[:2],
                 # the rating replaces the whole entry's severity, so the rater sees each site it covers
                 "other_sites": other_sites(f),
             }
@@ -111,22 +121,51 @@ elif argv[0] == "persist":
     known = {key_of(f) for f in load(os.path.join(out, "CONFIRMED.json"), [])}
     disp = load(DISP, {})
     now = datetime.datetime.now().strftime("%F %T")
-    done, unknown = 0, []
+    # an agent can skip an item, rate one twice, or write a value outside the rubric: record only one clean rating
+    # per key, and name everything else
+    by_key, bad = {}, []
     for r in raw.get("ratings", []):
-        if r["key"] not in known:
-            unknown.append(r["key"])
-            continue
-        e = disp.setdefault(r["key"], {})
-        e["severity_override"] = r["severity"]
-        e["severity_note"] = "re-rated (rubric): " + r["why"]
+        k = r.get("key")
+        if k not in known:
+            bad.append(f"{k}: not a confirmed finding")
+        elif r.get("severity") not in ("high", "medium", "low"):
+            bad.append(f"{k}: severity {r.get('severity')!r} is not high/medium/low")
+        elif not str(r.get("why") or "").strip():
+            bad.append(f"{k}: no reason given")
+        else:
+            by_key.setdefault(k, []).append(r)
+    for k, rs in list(by_key.items()):
+        if len({r["severity"] for r in rs}) > 1:
+            bad.append(f"{k}: rated {len(rs)} times, differently")
+            del by_key[k]
+    asked = set()
+    if raw.get("input_dir") and os.path.isdir(raw["input_dir"]):
+        for fn in os.listdir(raw["input_dir"]):
+            if fn.startswith("b") and fn.endswith(".json"):
+                asked |= {
+                    i["key"] for i in load(os.path.join(raw["input_dir"], fn))["items"]
+                }
+    rated_bad = {b.split(": ", 1)[0] for b in bad}
+    omitted = sorted(asked - set(by_key) - rated_bad)
+    for k, rs in by_key.items():
+        e = disp.setdefault(k, {})
+        e["severity_override"] = rs[0]["severity"]
+        e["severity_note"] = "re-rated (rubric): " + rs[0]["why"]
         e["updated"] = now
-        done += 1
     save(DISP, disp)
-    print(
-        f"recorded {done} rating(s); unknown keys {len(unknown)}; batches missing {raw.get('missing') or []}"
-    )
-    if unknown or raw.get("missing"):
-        sys.exit(1)
+    print(f"recorded {len(by_key)} rating(s)")
+    for b in bad:
+        print(f"  NOT RECORDED {b}")
+    for k in omitted:
+        print(f"  NOT RATED {k}: the rater skipped it")
+    if raw.get("missing"):
+        print(f"  batches whose rater died: {raw['missing']}")
+    if not raw.get("input_dir"):
+        print("  (no input_dir in the output: skipped items could not be checked)")
+    if bad or omitted or raw.get("missing"):
+        sys.exit(
+            "re-run severity.py prepare (rated findings are skipped) and severity-wave.js for the rest"
+        )
     print("next: consolidate.py")
 else:
     sys.exit(__doc__)

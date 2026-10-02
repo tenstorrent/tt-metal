@@ -1671,6 +1671,100 @@ def _recheck_all(rundir, tmp_path, outcome_of):
     return items
 
 
+def test_severity_rater_sees_the_recheck_reasons_that_confirmed_a_finding(
+    rundir, tmp_path
+):
+    lead = finding("q.cpp", 4, status="uncertain", summary="promoted by the recheck")
+    lead["reasons"] = ["[uncertain] wave could not settle it"]
+    write(str(rundir / "verdicts" / "B-0000.json"), {"findings": [lead]})
+    code, out, err = run(os.path.join(ENGINE, "recheck.py"), "--run", rundir, "queue")
+    (it,) = json.loads(out.splitlines()[0])["items"]
+    write(
+        str(tmp_path / "o.json"),
+        {
+            "items": [
+                {
+                    "finding": it["finding"],
+                    "why": it["why"],
+                    "outcome": "confirmed",
+                    "votes": {"confirmed": 3},
+                    "reasons": ["[confirmed] the trace reaches it from matmul"],
+                }
+            ]
+        },
+    )
+    run(
+        os.path.join(ENGINE, "recheck.py"),
+        "--run",
+        rundir,
+        "persist",
+        tmp_path / "o.json",
+    )
+    assert run(os.path.join(ENGINE, "consolidate.py"), "--run", rundir)[0] == 0
+    code, out, err = run(
+        os.path.join(ENGINE, "severity.py"),
+        "--run",
+        rundir,
+        "prepare",
+        "--to-dir",
+        tmp_path / "sev",
+    )
+    (item,) = json.load(open(tmp_path / "sev" / "b0000.json"))["items"]
+    assert item["reasons"] == ["[confirmed] the trace reaches it from matmul"], item
+
+
+def test_severity_persist_records_only_valid_ratings_and_names_the_rest(
+    rundir, tmp_path
+):
+    files = ["a.cpp", "b.cpp", "c.cpp", "d.cpp", "e.cpp"]
+    write(
+        str(rundir / "verdicts" / "B-0000.json"),
+        {"findings": [finding(f, 1) for f in files]},
+    )
+    assert run(os.path.join(ENGINE, "consolidate.py"), "--run", rundir)[0] == 0
+    sev = tmp_path / "sev"
+    code, out, err = run(
+        os.path.join(ENGINE, "severity.py"), "--run", rundir, "prepare", "--to-dir", sev
+    )
+    assert code == 0, out + err
+    ratings = [
+        {"key": "a.cpp:1", "severity": "low", "why": "debug only"},  # good
+        {"key": "b.cpp:1", "severity": "High", "why": "x"},  # not a rubric value
+        {"key": "c.cpp:1", "severity": "high"},  # no reason
+        {"key": "d.cpp:1", "severity": "high", "why": "x"},  # rated twice, differently
+        {"key": "d.cpp:1", "severity": "low", "why": "y"},
+    ]  # e.cpp:1 is omitted
+    write(
+        str(tmp_path / "o.json"),
+        {"result": {"ratings": ratings, "missing": [], "input_dir": str(sev)}},
+    )
+    code, out, err = run(
+        os.path.join(ENGINE, "severity.py"),
+        "--run",
+        rundir,
+        "persist",
+        tmp_path / "o.json",
+    )
+    assert code != 0, out + err
+    for k in ("b.cpp:1", "c.cpp:1", "d.cpp:1", "e.cpp:1"):
+        assert k in out + err, (k, out + err)
+    disp = json.load(open(rundir / "dispositions.json"))
+    assert {k for k, v in disp.items() if v.get("severity_override")} == {
+        "a.cpp:1"
+    }, disp
+    # re-running prepare hands out exactly the ones still unrated
+    code, out, err = run(
+        os.path.join(ENGINE, "severity.py"), "--run", rundir, "prepare", "--to-dir", sev
+    )
+    keys = sorted(
+        i["key"]
+        for b in os.listdir(sev)
+        if b.startswith("b")
+        for i in json.load(open(sev / b))["items"]
+    )
+    assert keys == ["b.cpp:1", "c.cpp:1", "d.cpp:1", "e.cpp:1"], keys
+
+
 def test_a_recheck_verdict_applies_only_to_the_finding_it_judged(rundir, tmp_path):
     refuted = finding(
         "z.cpp", 9, "high", status="refuted", summary="hunt claim, refuted"
