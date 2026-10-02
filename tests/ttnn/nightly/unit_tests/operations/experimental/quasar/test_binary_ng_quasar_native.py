@@ -17,6 +17,7 @@ process per state -- see the run commands in debug/run_targeted_matrix.sh.
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import time
@@ -70,8 +71,8 @@ def bound_kernel_sources():
 
 def _run_benchmark_add(device):
     # The shared helper, so this test inherits the same golden, PCC floor and constant-output guard as
-    # the rest of the suite rather than rolling its own weaker check. bf16 add on the phase-1 slice is
-    # in fact bit-exact against torch; Task 3's oracle asserts that stronger property.
+    # the rest of the suite rather than rolling its own weaker check. bf16 add on the native slice is in
+    # fact bit-exact against torch; test_native_output_is_bit_exact asserts that stronger property.
     return _run(device, "add", ttnn.DRAM_MEMORY_CONFIG, ttnn.bfloat16, _INTERLEAVED_SHAPE)
 
 
@@ -127,7 +128,7 @@ def test_fallback_factory_is_engaged(device):
     assert len([s for s in sources if "kernels_dfb/" in s]) == 3, f"expected 3 kernels_dfb sources, got {sources}"
 
 
-# --- F1 / Milestone 1.1: uneven tile counts -------------------------------------------------------
+# --- Uneven tile counts ---------------------------------------------------------------------------
 #
 # The native path once required total_tiles % (num_cores * lcm(R,C,W)) == 0. That gate is gone: each
 # kernel derives its own share from thread_id and num_threads, so a remainder gives the low thread ids
@@ -192,7 +193,7 @@ import torch, ttnn
 R, C, W = json.loads(os.environ["ARM_RCW"])
 TILE_COUNTS = json.loads(os.environ["ARM_TILE_COUNTS"])
 
-failures = []
+mismatches, failures = [], []
 device = ttnn.open_device(device_id=0)
 try:
     for tiles in TILE_COUNTS:
@@ -206,7 +207,7 @@ try:
         golden = (ttnn.to_torch(ta).float() + ttnn.to_torch(tb).float()).to(torch.bfloat16)
         got = ttnn.to_torch(out)
         if not torch.equal(got.contiguous().view(torch.int16), golden.contiguous().view(torch.int16)):
-            failures.append("{} tiles: {} of {} elements differ".format(
+            mismatches.append("{} tiles: {} of {} elements differ".format(
                 tiles, int((got != golden).sum().item()), golden.numel()))
 finally:
     ttnn.close_device(device)
@@ -220,11 +221,12 @@ if [s for s in sources if "kernels_dfb/" in s]:
 if not [s for s in sources if "kernels_qsr/" in s]:
     failures.append("bound no kernels_qsr sources")
 
-if failures:
+if failures or mismatches:
     print("FAIL R={} C={} W={}".format(R, C, W))
-    for f in failures:
+    for f in failures + mismatches:
         print("  " + f)
-    sys.exit(1)
+    # 2 means only the output is wrong: every op ran and routed as expected.
+    sys.exit(1 if failures else 2)
 print("OK R={} C={} W={} over {} shapes".format(R, C, W, len(TILE_COUNTS)))
 """
 
@@ -248,6 +250,37 @@ def _run_arm(rcw, tile_counts, knobs, timeout):
         }
     )
     return subprocess.run([sys.executable, "-c", _ARM_SRC], env=env, capture_output=True, text=True, timeout=timeout)
+
+
+class _WrongOutput(Exception):
+    """An arm ran to completion on the expected factory, and its output differs from the bf16 oracle."""
+
+
+def _check_arm(p, what, expect_wrong=None):
+    """Pass on exit 0, raise _WrongOutput on exit 2, and fail the test on anything else.
+
+    The arm scripts exit 2 only when every op completed and routed as expected and the output is wrong.
+    An expected-failure marker restricted to _WrongOutput therefore cannot hide a crash, a hang, a
+    refusal or a fallback. expect_wrong maps each shape's label to the fraction of elements that a known
+    defect leaves wrong. With it, only that signature raises _WrongOutput, so a new defect fails the test.
+    """
+    if p.returncode == 2:
+        if expect_wrong is not None:
+            measured = {
+                m.group(1): int(m.group(2)) / int(m.group(3))
+                for m in re.finditer(r"^\s+(.+): (\d+) of (\d+) elements differ$", p.stdout, re.MULTILINE)
+            }
+            off = {
+                label: (measured.get(label), expected)
+                for label, expected in expect_wrong.items()
+                if label not in measured or abs(measured[label] - expected) > 0.01
+            }
+            assert not off and measured.keys() == expect_wrong.keys(), (
+                f"{what}: the output is wrong, but not with the known defect's signature "
+                f"(label: (measured, expected)) {off}\n{p.stdout}"
+            )
+        raise _WrongOutput(f"{what}: output differs from the bf16 oracle\n{p.stdout}")
+    assert p.returncode == 0, f"{what} failed:\n{p.stdout}\n{p.stderr[-2000:]}"
 
 
 def _add_bit_exact(device, tiles, seed):
@@ -307,7 +340,7 @@ def test_native_even_and_uneven_share_a_process(device):
 @pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
 @pytest.mark.parametrize("rcw", _NATIVE_ARMS, ids=lambda t: "R{}C{}W{}".format(*t))
 def test_native_uneven_tile_counts_multithread(rcw):
-    """The whole point of F1 only exists above one thread, so run the ragged sweep on real arms.
+    """Uneven tile counts only matter above one thread, so run the ragged sweep on real arms.
 
     Every test above this one runs at whatever thread counts the invocation happens to carry, and the
     default is 1,1,1 -- where my_tiles == num_tiles, every strided loop has stride 1, and no thread can
@@ -317,7 +350,7 @@ def test_native_uneven_tile_counts_multithread(rcw):
     Requests no `device` fixture on purpose: each arm opens its own device inside its own process.
     """
     p = _run_arm(rcw, _RAGGED_TILE_COUNTS, knobs={}, timeout=3600)
-    assert p.returncode == 0, f"arm R={rcw[0]} C={rcw[1]} W={rcw[2]} failed:\n{p.stdout}\n{p.stderr[-2000:]}"
+    _check_arm(p, f"arm R={rcw[0]} C={rcw[1]} W={rcw[2]}")
 
 
 # --- Dataflow batching above one tile counter per role ---------------------------------------------
@@ -359,17 +392,18 @@ def test_native_dm_batch_above_one_counter_is_bit_exact(rcw):
         knobs={"TTNN_QSR_DM_BATCH": "8", "TTNN_QSR_ENTRIES_PER_THREAD": "16"},
         timeout=600,
     )
-    assert p.returncode == 0, f"dm_batch=8 arm R={rcw[0]} C={rcw[1]} W={rcw[2]} failed:\n{p.stdout}\n{p.stderr[-2000:]}"
+    _check_arm(p, f"dm_batch=8 arm R={rcw[0]} C={rcw[1]} W={rcw[2]}")
 
 
 # --- Compute batching --------------------------------------------------------------------------------
 #
 # TTNN_QSR_TILES_PER_CYCLE=8 batches eight tiles per tile_regs_acquire. The pack path spaces a batch by
-# one entry rather than by the ring stride, so the factory admits it only at ring stride 1 -- R = C = W
-# = 1 -- until the pack path applies the stride per tile. Per-cluster tile counts on the 32-cluster
-# grid: 1 runs a single short batch and no full one; 9 runs one full batch of 8 then a tail of 1; 64
-# runs eight full batches, wrapping the 16-deep ring three times, and no tail; 65 adds a tail of 1 that
-# starts exactly on a wrap boundary.
+# one entry rather than by the ring stride, so the output is right only at ring stride 1 -- R = C = W =
+# 1 -- until the pack path applies the stride per tile. The factory runs any stride; the tests above
+# stride 1 expect the wrong output. Per-cluster tile counts on the 32-cluster grid: 1 runs a single
+# short batch and no full one; 9 runs one full batch of 8 then a tail of 1; 64 runs eight full batches,
+# wrapping the 16-deep ring three times, and no tail; 65 adds a tail of 1 that starts exactly on a wrap
+# boundary.
 _TILES_PER_CYCLE_TILE_COUNTS = [32, 288, 2048, 2080]
 
 
@@ -392,13 +426,64 @@ def test_native_tiles_per_cycle_is_bit_exact(dm_batch):
         },
         timeout=600,
     )
-    assert p.returncode == 0, f"tiles_per_cycle=8 dm_batch={dm_batch} failed:\n{p.stdout}\n{p.stderr[-2000:]}"
+    _check_arm(p, f"tiles_per_cycle=8 dm_batch={dm_batch}")
+
+
+# Above ring stride 1 compute batching runs but loses most of each batch, because the pack path spaces
+# the tiles of a batch by one entry rather than by the ring stride. strict=True: once the pack path is
+# fixed these tests pass, and the run fails until the marker is removed.
+_PACK_STRIDE_XFAIL = pytest.mark.xfail(
+    raises=_WrongOutput,
+    strict=True,
+    reason="compute batching above ring stride 1: the pack path does not apply the ring stride per tile",
+)
+
+
+def _pack_stride_wrong_fraction(tiles_per_cluster, compute_threads, batch, stride):
+    """The fraction of a cluster's output tiles that the pack-stride defect leaves wrong.
+
+    A batch of n tiles at ring stride s lands only ceil(n/s) of them. Each compute thread's share runs in
+    full batches and one tail, and thread t takes one extra tile while t < tiles % threads. On craq-sim
+    this matched every measured shape to within 0.1 percentage points.
+    """
+    landed = 0
+    for thread in range(compute_threads):
+        share = tiles_per_cluster // compute_threads + (thread < tiles_per_cluster % compute_threads)
+        full, tail = divmod(share, batch)
+        landed += full * -(-batch // stride) - (-tail // stride)
+    return 1 - landed / tiles_per_cluster
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@_PACK_STRIDE_XFAIL
+def test_native_tiles_per_cycle_above_stride_one():
+    """4,4,2 with both batch knobs at 8 runs natively, and its output is wrong until the pack is fixed.
+
+    The ring stride is 4 on every DFB. 288 tiles give each compute thread two or three tiles, one short
+    batch; 2080 give it sixteen or seventeen, two full batches of 8 and a tail. A refusal, a hang, a
+    fallback or wrong output without the pack defect's signature fails this test instead of passing as
+    an expected failure.
+    """
+    tile_counts = [288, 2080]
+    p = _run_arm(
+        (4, 4, 2),
+        tile_counts,
+        knobs={
+            "TTNN_QSR_TILES_PER_CYCLE": "8",
+            "TTNN_QSR_DM_BATCH": "8",
+            "TTNN_QSR_ENTRIES_PER_THREAD": "16",
+        },
+        timeout=900,
+    )
+    # The linear split gives each of the 32 clusters an equal share of these counts.
+    expect_wrong = {f"{t} tiles": _pack_stride_wrong_fraction(t // 32, 4, 8, 4) for t in tile_counts}
+    _check_arm(p, "4,4,2 with both batch knobs at 8", expect_wrong=expect_wrong)
 
 
 # Each batching guard, the knob values that trip it, and the text its TT_FATAL carries. A batch needs a
 # ring at least twice as deep (double buffering) and a depth that is a multiple of the batch (a batch
 # occupies consecutive slots and the ring wraps only after it). Compute batching above ring stride 1 is
-# refused until the pack path applies the stride per tile.
+# not refused; test_native_tiles_per_cycle_above_stride_one checks what it produces.
 _GUARD_ARMS = [
     (
         "tiles_per_cycle-depth",
@@ -424,12 +509,6 @@ _GUARD_ARMS = [
         {"TTNN_QSR_DM_BATCH": "8", "TTNN_QSR_ENTRIES_PER_THREAD": "20"},
         "TTNN_QSR_DM_BATCH=8 must divide TTNN_QSR_ENTRIES_PER_THREAD=20",
     ),
-    (
-        "tiles_per_cycle-stride",
-        (2, 2, 2),
-        {"TTNN_QSR_TILES_PER_CYCLE": "8", "TTNN_QSR_ENTRIES_PER_THREAD": "16"},
-        "requires stride 1 on EVERY DFB",
-    ),
 ]
 
 
@@ -445,3 +524,302 @@ def test_native_batching_guards_refuse(arm):
     p = _run_arm(rcw, [32], knobs=knobs, timeout=300)
     assert p.returncode != 0, f"{arm[0]}: the factory ran instead of refusing:\n{p.stdout}"
     assert message in p.stdout + p.stderr, f"{arm[0]}: refused for another reason:\n{p.stdout}\n{p.stderr[-2000:]}"
+
+
+# --- Borrowed L1 shards ------------------------------------------------------------------------------
+#
+# With all three operands L1-sharded with one memory config the factory borrows the resident shards: each
+# DFB is the shard itself, the reader publishes credits, the writer has nothing to do, and no byte moves
+# over the NoC. A shard below is (name, strategy, shard shape in elements, inclusive core range (x0, y0, x1,
+# y1), tensor shape[, options]). Every grid fits the simulator's 8x4 worker grid.
+#
+# Per-core tile counts: 16 divides by the ring stride of every arm below (1,4,1 and 4,4,2 both have
+# stride 4 on each DFB); 12 leaves a remainder of 4 after one full compute chunk of 8 at 1,1,1.
+# height16_again repeats height16's spec while height16's tensors are still alive, so it hits the
+# program cache and passes only if the cached program rebinds the borrowed shards to the new buffers.
+# height16_in_place adds b into a with add_, so the output DFB and the a DFB borrow one shard.
+# height256 puts 256 tiles on each core, past the 255-entry limit of the derived NoC rings, which a
+# borrowed ring does not have; its cores hold none of the other shards.
+_BORROWED_SHARDS = [
+    ("height16", "height", [4 * 32, 4 * 32], (0, 0, 0, 3), (4 * 4 * 32, 4 * 32)),
+    ("block16", "block", [4 * 32, 4 * 32], (0, 0, 1, 1), (2 * 4 * 32, 2 * 4 * 32)),
+    ("width16", "width", [4 * 32, 4 * 32], (0, 0, 3, 0), (4 * 32, 4 * 4 * 32)),
+    ("block12", "block", [3 * 32, 4 * 32], (0, 0, 1, 1), (2 * 3 * 32, 2 * 4 * 32)),
+    ("height16_again", "height", [4 * 32, 4 * 32], (0, 0, 0, 3), (4 * 4 * 32, 4 * 32)),
+    ("height16_in_place", "height", [4 * 32, 4 * 32], (0, 0, 0, 3), (4 * 4 * 32, 4 * 32), {"in_place": True}),
+    ("height256", "height", [256 * 32, 32], (4, 0, 4, 1), (2 * 256 * 32, 32)),
+]
+
+# Tensors that do not divide into whole shards, so the last clusters hold fewer real tiles than the
+# others. Every cluster still processes its full shard: the buffer allocates it on every cluster, and
+# the pad tiles of the output are never read back. The shard tile count, 4 or 16, divides by the ring
+# stride of every borrowed arm.
+_UNEVEN_SHARDS = [
+    ("height_last_1_of_4", "height", [4 * 32, 32], (0, 0, 0, 1), (5 * 32, 32)),
+    ("width_last_1_of_4", "width", [32, 4 * 32], (0, 0, 1, 0), (32, 5 * 32)),
+    ("block_corner_1_of_4", "block", [2 * 32, 2 * 32], (0, 0, 1, 1), (3 * 32, 3 * 32)),
+    ("block_corner_1_of_16", "block", [4 * 32, 4 * 32], (0, 0, 2, 2), (9 * 32, 9 * 32)),
+]
+
+# Shards whose tile count does not divide by 4. Every shard runs on all four Neos: the borrowed part keeps
+# the largest multiple of 4, and the 1-3 tiles past it go through small owned rings, one entry per compute
+# thread. A shard of 1-3 tiles has no borrowed part, so all of it goes through the rings.
+# height1 is one tile per core. uneven2 is a column three tiles tall over shards of two, so the boundary
+# core holds a partial shard and processes its full rounded-up count anyway. idle_clusters spreads the
+# same column over four clusters, so two of them hold no real tile at all and compute only padding.
+# width_10_uneven leaves the second cluster 5 real tiles of 10. 5, 6, 7, 9, 10 and 67 tiles leave 1, 2, 3,
+# 1, 2 and 3 tiles for the rings. block_6_in_place adds into a, so a's shard receives the copied-out
+# tail; block_6_again repeats block_6's spec while its tensors are alive, a cache hit that must rebind.
+_SMALL_SHARDS = [
+    ("height1", "height", [32, 32], (0, 0, 0, 3), (4 * 32, 32)),
+    ("uneven2", "height", [2 * 32, 32], (0, 0, 0, 1), (3 * 32, 32)),
+    ("idle_clusters", "height", [2 * 32, 32], (0, 0, 0, 3), (3 * 32, 32)),
+    ("block_6", "block", [2 * 32, 3 * 32], (0, 0, 1, 1), (2 * 2 * 32, 2 * 3 * 32)),
+    ("height_9", "height", [9 * 32, 32], (0, 0, 0, 1), (2 * 9 * 32, 32)),
+    ("width_10_uneven", "width", [32, 10 * 32], (0, 0, 1, 0), (32, 15 * 32)),
+    ("height_3", "height", [3 * 32, 32], (0, 0, 0, 1), (2 * 3 * 32, 32)),
+    ("height_5", "height", [5 * 32, 32], (0, 0, 0, 1), (2 * 5 * 32, 32)),
+    ("height_7", "height", [7 * 32, 32], (0, 0, 0, 1), (2 * 7 * 32, 32)),
+    ("height_67", "height", [67 * 32, 32], (5, 0, 5, 1), (2 * 67 * 32, 32)),
+    ("block_6_in_place", "block", [2 * 32, 3 * 32], (0, 0, 1, 1), (2 * 2 * 32, 2 * 3 * 32), {"in_place": True}),
+    ("block_6_again", "block", [2 * 32, 3 * 32], (0, 0, 1, 1), (2 * 2 * 32, 2 * 3 * 32)),
+]
+
+# One shard per child: the profiler CSV has no dispatch key, so two ops in one process would blend per core.
+_FOUR_NEO_SHARDS = [
+    s for s in _SMALL_SHARDS if s[0] in ("height1", "uneven2", "height_3", "block_6", "height_7", "height_67")
+]
+
+# Inputs and output sharded on the same grid but with different shard specs: the height shards of core
+# i and the width shard of core i cover different tiles, so borrowing in place would add the wrong
+# rows into every column. The "out" option is the output's own (strategy, shard shape, core range).
+_MISMATCHED_SHARDS = [
+    (
+        "height_in_width_out",
+        "height",
+        [32, 4 * 32],
+        (0, 0, 0, 3),
+        (4 * 32, 4 * 32),
+        {"out": ("width", [4 * 32, 32], (0, 0, 0, 3))},
+    ),
+]
+
+# Tuned thread counts. On the borrowed path the factory runs one reader and one writer thread whatever
+# is tuned, since they copy only the tail tiles there. 1,1,1 takes the default compute batch of
+# min(8, shard tiles) and stride 1. 1,4,1 puts the reader and the writer on four counters each, and 4,4,2
+# checks that the factory maps its tuned counts to that same program. So the DM side never outnumbers
+# the Tensix side here, a case that some craq-sim builds corrupt.
+_BORROWED_ARMS = [(1, 1, 1), (1, 4, 1), (4, 4, 2)]
+
+# Same shape as _ARM_SRC: a fixed child script, parameters as JSON in the environment. ARM_EXPECT names
+# the factory every op in the child must have bound: "qsr" for native, "dfb" for the fallback. A shard
+# entry may carry a sixth element, a dict of options: "out" gives the output its own sharding (otherwise
+# it takes the inputs'), and "in_place" adds b into a with add_. Every tensor stays alive to the end, so
+# an entry that repeats an earlier spec lands at new addresses and must hit the program cache. With
+# ARM_EXPECT_NEOS (and the device profiler on), every core must show that many Neos running the compute.
+_SHARD_ARM_SRC = """
+import collections, csv, json, os, pathlib, sys
+import torch, ttnn
+
+R, C, W = json.loads(os.environ["ARM_RCW"])
+SHARDS = json.loads(os.environ["ARM_SHARDS"])
+EXPECT = os.environ["ARM_EXPECT"]
+EXPECT_NEOS = int(os.environ.get("ARM_EXPECT_NEOS", "0"))
+STRATEGY = {"height": ttnn.ShardStrategy.HEIGHT, "block": ttnn.ShardStrategy.BLOCK,
+            "width": ttnn.ShardStrategy.WIDTH}
+root = pathlib.Path(os.environ.get("TT_METAL_LOGS_PATH") or os.environ.get("TT_METAL_HOME") or os.getcwd())
+profile_csv = root / "generated" / "profiler" / ".logs" / "profile_log_device.csv"
+if EXPECT_NEOS and profile_csv.exists():
+    profile_csv.unlink()
+
+
+def sharded(strategy, shard_shape, rng):
+    x0, y0, x1, y1 = rng
+    return ttnn.create_sharded_memory_config(
+        shard_shape,
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((x0, y0), (x1, y1))}),
+        strategy=STRATEGY[strategy],
+        use_height_and_width_as_shard_shape=True,
+    )
+
+
+mismatches, failures = [], []
+keep, seen = [], set()
+device = ttnn.open_device(device_id=0)
+try:
+    for i, entry in enumerate(SHARDS):
+        name, strategy, shard_shape, rng, shape = entry[:5]
+        opts = entry[5] if len(entry) > 5 else {}
+        torch.manual_seed(i)
+        mem = sharded(strategy, shard_shape, rng)
+        out_mem = sharded(*opts["out"]) if "out" in opts else mem
+        cfg = dict(dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mem)
+        ta = ttnn.from_torch(torch.randn(shape, dtype=torch.float32), **cfg)
+        tb = ttnn.from_torch(torch.randn(shape, dtype=torch.float32), **cfg)
+        golden = (ttnn.to_torch(ta).float() + ttnn.to_torch(tb).float()).to(torch.bfloat16)
+        cached = device.num_program_cache_entries()
+        if opts.get("in_place"):
+            out = ttnn.experimental.quasar.add_(ta, tb)
+        else:
+            out = ttnn.experimental.quasar.add(ta, tb, memory_config=out_mem, dtype=ttnn.bfloat16)
+        spec = json.dumps(entry[1:])
+        if spec in seen and device.num_program_cache_entries() != cached:
+            failures.append("{}: repeats an earlier spec but missed the program cache".format(name))
+        seen.add(spec)
+        keep.extend([ta, tb, out])
+        got = ttnn.to_torch(out)
+        if not torch.equal(got.contiguous().view(torch.int16), golden.contiguous().view(torch.int16)):
+            mismatches.append("{}: {} of {} elements differ".format(
+                name, int((got != golden).sum().item()), golden.numel()))
+finally:
+    ttnn.close_device(device)
+
+sources = [ln.split("source:", 1)[1].strip()
+           for ln in (root / "generated" / "inspector" / "kernels.yaml").read_text().splitlines()
+           if "source:" in ln]
+qsr = [s for s in sources if "kernels_qsr/" in s]
+dfb = [s for s in sources if "kernels_dfb/" in s]
+if EXPECT == "qsr" and (dfb or not qsr):
+    failures.append("expected every op on kernels_qsr, bound qsr={} dfb={}".format(len(qsr), len(dfb)))
+if EXPECT == "dfb" and (qsr or not dfb):
+    failures.append("expected every op on kernels_dfb, bound qsr={} dfb={}".format(len(qsr), len(dfb)))
+if EXPECT_NEOS:
+    # A Neo ran the compute on a core when one of its TRISCs recorded a kernel zone there.
+    lines = profile_csv.read_text().splitlines() if profile_csv.exists() else []
+    neos = collections.defaultdict(set)
+    for row in csv.DictReader(lines[1:], skipinitialspace=True):
+        risc = row["RISC processor type"].strip()
+        if "KERNEL" in row["zone name"] and risc.startswith("QUASAR_NEO"):
+            neos[(row["core_x"].strip(), row["core_y"].strip())].add(risc.split("_")[1])
+    counts = sorted({len(v) for v in neos.values()})
+    if counts != [EXPECT_NEOS]:
+        failures.append("expected {} Neos on every core, the profiler shows {}".format(EXPECT_NEOS, counts))
+
+if failures or mismatches:
+    print("FAIL R={} C={} W={}".format(R, C, W))
+    for f in failures + mismatches:
+        print("  " + f)
+    # 2 means only the output is wrong: every op ran and routed as expected.
+    sys.exit(1 if failures else 2)
+print("OK R={} C={} W={} over {} shards".format(R, C, W, len(SHARDS)))
+"""
+
+
+def _run_shard_arm(rcw, shards, expect, timeout, knobs=None):
+    """Run one (R, C, W) arm of _SHARD_ARM_SRC in its own process.
+
+    Inherited TTNN_QSR_* variables are stripped, as in _run_arm; `knobs` adds settings on top. With the
+    device profiler on, inherited DPRINT and streaming-profiler variables are stripped too, because the
+    runtime refuses to start with either of them next to it. A build without Tracy skips the test.
+    """
+    profiling = (knobs or {}).get("TT_METAL_DEVICE_PROFILER") == "1"
+    stripped = ("TTNN_QSR_", "TT_METAL_DPRINT_", "TT_METAL_STREAMING_PROFILER") if profiling else ("TTNN_QSR_",)
+    env = {k: v for k, v in os.environ.items() if not k.startswith(stripped)}
+    env.update(
+        {
+            "TTNN_QSR_NATIVE": "1",
+            "TTNN_QSR_READER_THREADS": str(rcw[0]),
+            "TTNN_QSR_COMPUTE_THREADS": str(rcw[1]),
+            "TTNN_QSR_WRITER_THREADS": str(rcw[2]),
+            "ARM_RCW": json.dumps(list(rcw)),
+            "ARM_SHARDS": json.dumps(list(shards)),
+            "ARM_EXPECT": expect,
+            **(knobs or {}),
+        }
+    )
+    p = subprocess.run([sys.executable, "-c", _SHARD_ARM_SRC], env=env, capture_output=True, text=True, timeout=timeout)
+    if profiling and "requires a Tracy-enabled build" in p.stdout + p.stderr:
+        pytest.skip("the device profiler needs a Tracy-enabled build of tt-metal")
+    return p
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.parametrize("rcw", _BORROWED_ARMS, ids=lambda t: "R{}C{}W{}".format(*t))
+def test_native_borrowed_shards_are_bit_exact(rcw):
+    """Height, block and width shards must run native and bit-exact at every borrowed arm.
+
+    A wrong credit count hangs into the timeout, credits on the wrong counter fail the bit comparison,
+    and a cached program that keeps the first call's shard addresses fails the repeat.
+    """
+    p = _run_shard_arm(rcw, _BORROWED_SHARDS, expect="qsr", timeout=900)
+    _check_arm(p, f"borrowed arm R={rcw[0]} C={rcw[1]} W={rcw[2]}")
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.parametrize("rcw", _BORROWED_ARMS, ids=lambda t: "R{}C{}W{}".format(*t))
+def test_native_borrowed_uneven_shards_are_bit_exact(rcw):
+    """Shards whose last clusters hold fewer real tiles must run native and bit-exact at every arm.
+
+    Every role processes the full shard's tile count. Roles that disagree on a boundary cluster's count
+    hang into the timeout.
+    """
+    p = _run_shard_arm(rcw, _UNEVEN_SHARDS, expect="qsr", timeout=900)
+    _check_arm(p, f"uneven shards R={rcw[0]} C={rcw[1]} W={rcw[2]}")
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.parametrize("rcw", _BORROWED_ARMS + [(1, 2, 1)], ids=lambda t: "R{}C{}W{}".format(*t))
+def test_native_borrowed_indivisible_shards_stay_native(rcw):
+    """A shard whose tile count does not divide by the tuned compute count must stay native and bit-exact.
+
+    A borrowed ring sized to the whole shard dies on the DFB host assertion, and a tail copied from the
+    wrong address or packed into the wrong ring fails the bit comparison. 1,2,1 runs two-entry tail rings.
+    At 1,1,1 every shard divides, and 9 and 10 tiles leave a remainder after one compute batch of 8.
+    """
+    p = _run_shard_arm(rcw, _SMALL_SHARDS, expect="qsr", timeout=900)
+    _check_arm(p, f"indivisible shards R={rcw[0]} C={rcw[1]} W={rcw[2]}")
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.parametrize("shard", _FOUR_NEO_SHARDS, ids=[s[0] for s in _FOUR_NEO_SHARDS])
+def test_native_borrowed_indivisible_shards_use_every_compute_thread(shard):
+    """A borrowed shard must run on all four Neos when 4 does not divide it, however few tiles it has.
+
+    The borrowed part keeps the largest multiple of 4, which is none below 4 tiles, and the leftover tiles
+    go through owned rings of one entry per compute thread. A factory that drops to fewer compute threads
+    instead fails the Neo count, which the child reads from the device profiler; wrong output or a fallback
+    fails as usual.
+    """
+    p = _run_shard_arm(
+        (1, 4, 1),
+        [shard],
+        expect="qsr",
+        timeout=900,
+        knobs={"TT_METAL_DEVICE_PROFILER": "1", "ARM_EXPECT_NEOS": "4"},
+    )
+    _check_arm(p, f"{shard[0]} on four Neos")
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+def test_native_borrowed_mismatched_shard_specs_fall_back():
+    """Inputs and output on one grid with different shard specs must not be borrowed, and must be right.
+
+    A predicate that compares grids alone borrows the shards in place and fails the bit comparison. The
+    fallback reshards over the NoC, so both checks hold only when the predicate compares the full spec.
+    """
+    p = _run_shard_arm((1, 1, 1), _MISMATCHED_SHARDS, expect="dfb", timeout=900)
+    _check_arm(p, "mismatched shard specs")
+
+
+# 64 tiles per core: at 1,4,1 each compute thread takes 16, two full batches of 8 at ring stride 4.
+_BATCHED_BORROWED_SHARDS = [
+    ("block64", "block", [8 * 32, 8 * 32], (0, 0, 1, 1), (2 * 8 * 32, 2 * 8 * 32)),
+]
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@_PACK_STRIDE_XFAIL
+def test_native_borrowed_tiles_per_cycle_above_stride_one():
+    """Borrowed 1,4,1 at N=8 runs natively, and its output is wrong until the pack path is fixed.
+
+    1,4,1 is the borrowed configuration and N=8 its batch once the pack path applies the ring stride,
+    so this is the test that becomes a plain pass when that fix lands.
+    """
+    p = _run_shard_arm(
+        (1, 4, 1),
+        _BATCHED_BORROWED_SHARDS,
+        expect="qsr",
+        timeout=900,
+        knobs={"TTNN_QSR_TILES_PER_CYCLE": "8"},
+    )
+    _check_arm(p, "borrowed 1,4,1 at N=8", expect_wrong={"block64": _pack_stride_wrong_fraction(64, 4, 8, 4)})

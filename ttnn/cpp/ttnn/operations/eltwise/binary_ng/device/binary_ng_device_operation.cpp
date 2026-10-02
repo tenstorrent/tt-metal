@@ -295,7 +295,9 @@ ttsl::hash::hash_t BinaryNgDeviceOperation::tensor_args_t::to_hash() const {
                                    : std::nullopt,
         input_tensor_b.has_value() ? std::optional{input_tensor_b->tensor_spec().tile()} : std::nullopt,
         sharded_tensor_shape_in_pages(input_tensor_a),
-        input_tensor_b.has_value() ? sharded_tensor_shape_in_pages(*input_tensor_b) : std::nullopt);
+        input_tensor_b.has_value() ? sharded_tensor_shape_in_pages(*input_tensor_b) : std::nullopt,
+        // Output dtype can change the program (fp32 DEST). Falls back to a's dtype so in-place calls still share.
+        output_tensor.has_value() ? output_tensor->dtype() : input_tensor_a.dtype());
 }
 
 void BinaryNgDeviceOperation::validate_on_program_cache_miss(

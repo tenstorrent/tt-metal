@@ -193,15 +193,17 @@ shield:
     wh_n300_civ2: 10
     bh_p150: 60
   demo:
-    bh_sc4: 360
-    bh_sc1: 330
+    bh_sc4: 60
+    bh_sc4_high_power: 300
+    bh_sc1: 120
+    bh_sc1_high_power: 210
 
 scaleout:
   merge_gate:
     cpu_medium: 10
     wh_n300_civ2: 10
   unit:
-    cpu_medium: 280
+    cpu_medium: 275
     wh_llmbox: 60
     wh_galaxy: 75
     wh_n300_civ2: 15
