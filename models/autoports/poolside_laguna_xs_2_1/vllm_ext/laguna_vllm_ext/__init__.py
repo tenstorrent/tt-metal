@@ -96,6 +96,12 @@ def register() -> None:
         if os.environ.get("TT_LAGUNA_PREFIX_CACHE", "0") == "1" or os.environ.get("TT_LAGUNA_HYBRID_KV", "0") == "1":
             raise
 
+    if os.environ.get("TT_LAGUNA_DFLASH", "0") == "1":
+        # A DFlash round writes KV for 16 rows; without look-ahead blocks it falls back to one row per token.
+        from .dflash_lookahead import install_dflash_lookahead_patch
+
+        install_dflash_lookahead_patch()
+
     try:
         from .lifecycle import install_worker_lifecycle_patch
 

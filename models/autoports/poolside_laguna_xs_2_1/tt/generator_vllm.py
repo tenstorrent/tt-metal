@@ -45,6 +45,7 @@ import torch
 import ttnn
 
 try:
+    from .dflash_reference import DFLASH_TARGET_LAYER_IDS, DFlashTargetAuxCapture
     from .generator import LagunaGenerator, _replicate
     from .host_sampling import penalties_active, sample_penalized
     from .model_spec import DFLASH_SPEC, MODEL_ID, MODEL_MAX_CONTEXT, check_hf_config
@@ -57,6 +58,10 @@ try:
         streaming_prefill_capacity,
     )
 except ImportError:  # loaded as a standalone module by some tooling
+    from models.autoports.poolside_laguna_xs_2_1.tt.dflash_reference import (
+        DFLASH_TARGET_LAYER_IDS,
+        DFlashTargetAuxCapture,
+    )
     from models.autoports.poolside_laguna_xs_2_1.tt.generator import LagunaGenerator, _replicate
     from models.autoports.poolside_laguna_xs_2_1.tt.host_sampling import penalties_active, sample_penalized
     from models.autoports.poolside_laguna_xs_2_1.tt.model_spec import (
@@ -161,6 +166,9 @@ class LagunaForCausalLM:
     # cannot coexist with prefix, hybrid KV, or the ngram speculative controller.  It is scoped to one
     # streaming topology per checkpoint: XS on p150x2 (D=2), S on p150x4 (D=4).
     _DFLASH_SERVING_ENABLED = os.environ.get("TT_LAGUNA_DFLASH", "0") == "1"
+    # TT_LAGUNA_DFLASH_TRACE=0 keeps the eager 16-row target verify (A/B and bisection).
+    _DFLASH_VERIFY_TRACE = _DFLASH_SERVING_ENABLED and os.environ.get("TT_LAGUNA_DFLASH_TRACE", "1") == "1"
+    _DFLASH_VERIFY_ROWS = 16
     _DFLASH_DEVICE_COUNT = int(DFLASH_SPEC.serving_device_count)
     _DFLASH_PROFILE = DFLASH_SPEC.serving_profile
     model_capabilities = {
@@ -354,6 +362,10 @@ class LagunaForCausalLM:
             enable_experimental=True,
         )
         cache = core.allocate_proposal_cache(enable_experimental=True)
+        if self._DFLASH_VERIFY_TRACE:
+            # The traced verify keeps one trace resident for the whole server; the rolling target context
+            # must then live at a fixed address allocated before capture (dflash_tt.enable_fixed_context).
+            cache.enable_fixed_context()
         self._dflash_core = core
         self._dflash_cache = cache
         try:
@@ -2090,11 +2102,12 @@ class LagunaForCausalLM:
             "kv_cache": kv_cache,
             "page_tables_per_layer": None,
         }
-        # vLLM allocates the block containing the current input, but does not
-        # reserve the next block for fixed speculative look-ahead.  At residues
-        # 49..63, a 16-row verify would cross that ownership boundary.  Advance
-        # with one exact target+aux row until the next block is allocated.
-        target_only = not pending and position % 64 > 48
+        # Without scheduler look-ahead vLLM allocates only the block containing the current input, so at
+        # residues 49..63 a 16-row verify would cross that ownership boundary: advance with one exact
+        # target+aux row until the next block is allocated. laguna_vllm_ext.dflash_lookahead raises the TT
+        # scheduler's look-ahead to cover the whole 16-row round; when it applied in this process, every
+        # residue runs a full round.
+        target_only = not pending and position % 64 > 48 and self._dflash_lookahead_tokens() < proposal_rows
         serve = self._dflash_controller.serve_target_token if target_only else self._dflash_controller.serve_token
         token_id = serve(
             known_bonus=known_bonus,
@@ -2108,6 +2121,15 @@ class LagunaForCausalLM:
         if read_from_device:
             return self._read_tokens_host(self._dflash_tok, 1)
         return [self._dflash_tok]
+
+    @staticmethod
+    def _dflash_lookahead_tokens() -> int:
+        """KV look-ahead the TT scheduler applied in this process (0 when the extension is absent)."""
+        try:
+            from laguna_vllm_ext.dflash_lookahead import applied_lookahead_tokens
+        except ImportError:
+            return 0
+        return applied_lookahead_tokens()
 
     def _spec_serve(
         self, tokens, pos, page_table, kv_cache, page_tables_per_layer, reset_batch, kwargs, read_from_device
@@ -2286,6 +2308,9 @@ class LagunaForCausalLM:
         if pt_host.dim() != 2 or int(pt_host.shape[0]) < 1:
             raise ValueError("DFlash target verify requires one uniform page-table row")
         pt_host = pt_host[:1].repeat(B, 1) if B > 1 else pt_host[:1]
+        traced = self._dflash_verify_replay(token_ids, pos, pt_host)
+        if traced is not None:
+            return traced
         pt = self._page_table_to_device(pt_host)
         tok_tt = self.gen._rep(token_ids.reshape(1, B).to(torch.int32), ttnn.uint32)
         cur = self.gen._rep(pos, ttnn.int32)
@@ -2305,6 +2330,143 @@ class LagunaForCausalLM:
         logits = self.model.logits_to_host(shards).reshape(B, int(self.vocab))
         greedy = torch.argmax(logits, dim=-1).to(torch.int32).tolist()
         return greedy, capture
+
+    def _dflash_verify_alloc(self, kv_cache, num_blocks):
+        """Allocate and compile the 16-row DFlash target verify (embed -> 48 layers with the six auxiliary
+        hidden states -> LM-head shards) over persistent input buffers. No trace is resident yet."""
+        R = self._DFLASH_VERIFY_ROWS
+        g = self.gen
+        tok = g._rep(torch.zeros([1, 1, 1, R], dtype=torch.int32), ttnn.uint32)
+        cur = g._rep(torch.zeros([R], dtype=torch.int32), ttnn.int32)
+        ridx = g._rep(torch.zeros([1, R], dtype=torch.int32), ttnn.uint32)
+        pt_host = torch.zeros((R, int(num_blocks)), dtype=torch.int32)
+        pt = self._page_table_to_device(pt_host)
+        pos = torch.arange(64, 64 + R, dtype=torch.int32)
+        ttnn.copy_host_to_device_tensor(self._host_rank4_tok_batch(torch.zeros(R, dtype=torch.int64), R), tok)
+        ttnn.copy_host_to_device_tensor(self._host_pos_batch(pos), cur)
+        ttnn.copy_host_to_device_tensor(self._host_ridx_batch(pos), ridx)
+        st = dict(tid=None, tok=tok, cur=cur, ridx=ridx, pt=pt, rows=R, pt_shape=tuple(pt_host.shape), last_pt_host=None)
+
+        def step():
+            hidden = self.model.embed_decode(ttnn.reshape(tok, (1, R)))
+            hidden, capture = self.model.decode_layers_with_dflash_aux(
+                hidden,
+                cur,
+                ridx,
+                pt,
+                kv_cache,
+                absolute_position=0,
+                sequential_kv_write=True,
+                enable_experimental=True,
+            )
+            st["logits"] = self.model.lm_head_shards_decode(hidden)
+            st["aux"] = capture.hidden_states
+
+        step()  # compile; no trace resident, so these allocations are safe
+        ttnn.synchronize_device(self.mesh_device)
+        st["_step"] = step
+        return st
+
+    def _dflash_prewarm_eager(self, kv_cache, num_blocks):
+        """Run the eager DFlash pieces at every shape serving can reach: the draft proposal for each
+        tile-padded context size (32..544 rows) and the one-row target+aux verify."""
+        core, cache = self._dflash_core, self._dflash_cache
+        # Prefill warmup leaves its dummy request open; close it through the controller so the controller
+        # and the cache agree that no request is active.
+        if self._dflash_controller is not None and self._dflash_controller.active:
+            self._dflash_controller.end_request()
+        config = core.config
+        width = int(config.num_aux_hidden_states) * int(config.hidden_size)
+        query_rows = int(config.block_size)
+        max_rows = int(cache.max_context_rows)
+        sizes = []
+        padded = 32
+        while True:
+            rows = min(max_rows, padded - query_rows)
+            if rows >= 1:
+                sizes.append(rows)
+            if rows == max_rows or padded > cache.capacity:
+                break
+            padded += 32
+        for rows in sizes:
+            hidden = ttnn.from_torch(
+                torch.zeros((1, rows, width), dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=_replicate(self.mesh_device),
+            )
+            cache.begin_request("laguna-dflash-warmup")
+            try:
+                cache.update_target_capture(
+                    DFlashTargetAuxCapture(hidden_states=hidden, start_position=0, row_count=rows), replace=True
+                )
+                proposal = core.proposal_round(
+                    cache, target_model=self.model, bonus_token_id=0, enable_experimental=True
+                )
+                self._dflash_draft_argmax(proposal)
+            finally:
+                cache.end_request("laguna-dflash-warmup")
+            ttnn.deallocate(hidden)
+        # A round commits 1..16 verified rows; the fixed cache combines only those rows.
+        for rows in range(1, query_rows + 1):
+            hidden = ttnn.from_torch(
+                torch.zeros((1, rows, width), dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=_replicate(self.mesh_device),
+            )
+            ttnn.deallocate(core.combine_aux_hidden_states(hidden))
+            ttnn.deallocate(hidden)
+        pt_row = torch.zeros((1, int(num_blocks)), dtype=torch.int32)
+        self.verify_greedy_decode_with_dflash_aux(
+            torch.zeros(1, dtype=torch.int64), torch.tensor([64], dtype=torch.int32), page_table=pt_row, kv_cache=kv_cache
+        )
+        ttnn.synchronize_device(self.mesh_device)
+        print(
+            f"[laguna dflash] warmup: eager draft context sizes {sizes}, combine 1..{query_rows} rows "
+            "and the 1-row verify compiled",
+            flush=True,
+        )
+
+    def _dflash_verify_capture(self, st):
+        ttnn.synchronize_device(self.mesh_device)
+        tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        st["_step"]()
+        ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
+        ttnn.synchronize_device(self.mesh_device)
+        st["tid"] = tid
+        st.pop("_step", None)
+        self._verify_dec["dflash"] = st
+        return st
+
+    def _dflash_verify_replay(self, token_ids, pos, pt_host):
+        """Replay the captured 16-row verify; None when this round cannot use it (other row count or
+        page-table width), in which case the caller runs the eager verify."""
+        st = getattr(self, "_verify_dec", {}).get("dflash") if self._DFLASH_VERIFY_TRACE else None
+        B = int(token_ids.shape[0])
+        if st is None or st.get("tid") is None or B != st["rows"] or tuple(pt_host.shape) != st["pt_shape"]:
+            return None
+        ttnn.copy_host_to_device_tensor(self._host_rank4_tok_batch(token_ids.reshape(B, 1), B), st["tok"])
+        ttnn.copy_host_to_device_tensor(self._host_pos_batch(pos), st["cur"])
+        ttnn.copy_host_to_device_tensor(self._host_ridx_batch(pos), st["ridx"])
+        if st["last_pt_host"] is None or not torch.equal(pt_host, st["last_pt_host"]):
+            ttnn.copy_host_to_device_tensor(self._page_table_to_device_host(pt_host), st["pt"])
+            st["last_pt_host"] = pt_host.clone()
+        ttnn.execute_trace(self.mesh_device, st["tid"], cq_id=0, blocking=False)
+        logits = self.model.logits_to_host(st["logits"]).reshape(B, int(self.vocab))
+        greedy = torch.argmax(logits, dim=-1).to(torch.int32).tolist()
+        # st["aux"] is the trace's output buffer: valid until the next replay. The controller copies the
+        # committed rows into the fixed context before that.
+        return greedy, DFlashTargetAuxCapture(
+            hidden_states=st["aux"],
+            start_position=int(pos[0]),
+            row_count=B,
+            layer_ids=tuple(DFLASH_TARGET_LAYER_IDS),
+        )
 
     def _alloc_verify_decode(self, K1, kv_cache, tokens, pos, pt_host):
         """Phase 1 of verify-trace warmup: allocate ALL persistent device buffers for one K1 and warm
@@ -3090,12 +3252,23 @@ class LagunaForCausalLM:
         if self._DFLASH_SERVING_ENABLED:
             if B != 1:
                 raise RuntimeError(f"DFlash decode warmup requires max_batch_size=1, got {B}")
-            # The first serving tranche uses eager draft + target verification.
-            # Keeping a normal CCL decode trace resident would make its dynamic
-            # proposal allocations unsafe, so no trace is captured in this mode.
+            # The normal decode trace is not captured: the draft proposal allocates short-lived tensors
+            # every round. With TT_LAGUNA_DFLASH_TRACE=1 (default) the one resident trace is the 16-row
+            # target verify; every long-lived DFlash buffer (draft KV, the fixed target context) was
+            # allocated before it, and per-round temporaries are released before the next replay.
+            if self._DFLASH_VERIFY_TRACE and "dflash" not in self._verify_dec:
+                width = int(num_blocks or self._max_blocks)
+                staged = self._dflash_verify_alloc(kv_cache, width)
+                # Everything that runs eagerly next to the resident trace must have run once BEFORE capture:
+                # its first call compiles programs and sets up collective (all_reduce) resources, and
+                # anything first allocated after capture can be overwritten by a replay (a 2nd draft round
+                # hung in its logits read on 2026-10-02 06:47 without this).
+                self._dflash_prewarm_eager(kv_cache, width)
+                self._dflash_verify_capture(staged)
             print(
                 "[laguna dflash] warmup: normal decode trace OMITTED; "
-                f"batch-1 eager {DFLASH_SPEC.num_draft_layers}-layer proposal + target verify selected",
+                f"batch-1 eager {DFLASH_SPEC.num_draft_layers}-layer proposal + "
+                f"{'TRACED 16-row' if self._DFLASH_VERIFY_TRACE else 'eager'} target verify selected",
                 flush=True,
             )
             self._report_dram("dflash_ready", enforce=True)

@@ -377,6 +377,102 @@ class DFlashTTProposalCache:
         self._context_start = None
         self._context_rows = 0
         self._closed = False
+        # Fixed-address context (enable_fixed_context): the COMBINED target context (combine_aux_hidden_states
+        # output, [1, rows, hidden]) in one buffer allocated before any trace is captured. Each update combines
+        # only the new rows, copies into the buffer and frees its temporaries, so no long-lived buffer is
+        # allocated while a trace is resident (a later replay may overwrite such a buffer), and the combine
+        # kernels see at most 16 new rows per round instead of every retained row.
+        self._fixed = None
+
+    @property
+    def fixed_combined(self) -> bool:
+        return getattr(self, "_fixed", None) is not None
+
+    def enable_fixed_context(self) -> None:
+        """Allocate the fixed combined-context buffer. Call before capturing any trace."""
+
+        self._require_open()
+        if self._fixed is not None:
+            return
+        if self._request_id is not None:
+            raise RuntimeError("enable_fixed_context must run before any DFlash request")
+        rows = math.ceil(self.max_context_rows / 32) * 32
+        self._fixed = ttnn.from_torch(
+            torch.zeros((1, rows, self.core.config.hidden_size), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.core.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.core.mesh_device),
+        )
+
+    def _fixed_rows(self, rows: int):
+        return ttnn.slice(self._fixed, [0, 0, 0], [1, int(rows), self.core.config.hidden_size])
+
+    def context_bounds(self) -> tuple[int, int]:
+        """(start position, row count) of the retained target context."""
+
+        self._require_open()
+        has_context = self._context_rows > 0 if self.fixed_combined else self._context is not None
+        if self._request_id is None or not has_context:
+            raise RuntimeError("DFlash proposal cache has no active target context")
+        return int(self._context_start), int(self._context_rows)
+
+    def combined_context(self):
+        """[1, rows, hidden] combined target context (fixed mode only); a temporary slice of the buffer."""
+
+        if not self.fixed_combined:
+            raise RuntimeError("combined_context requires enable_fixed_context")
+        _, rows = self.context_bounds()
+        return self._fixed_rows(rows)
+
+    def _update_fixed(self, capture: DFlashTargetAuxCapture, replace: bool) -> None:
+        width = self.core.config.hidden_size
+        new_rows = self.core.combine_aux_hidden_states(capture.hidden_states)
+        temporaries = [new_rows]
+        if replace or self._context_rows == 0:
+            source = new_rows
+            start = int(capture.start_position)
+            rows = int(capture.row_count)
+        else:
+            expected_start = int(self._context_start) + int(self._context_rows)
+            if int(capture.start_position) != expected_start:
+                raise ValueError(
+                    f"DFlash target capture is not adjacent: expected start {expected_start}, "
+                    f"got {capture.start_position}"
+                )
+            current = self._fixed_rows(self._context_rows)
+            source = ttnn.concat((current, new_rows), dim=1)
+            temporaries += [current, source]
+            start = int(self._context_start)
+            rows = int(self._context_rows) + int(capture.row_count)
+        if rows > self.max_context_rows:
+            drop = rows - self.max_context_rows
+            source = ttnn.slice(source, [0, drop, 0], [1, rows, width])
+            temporaries.append(source)
+            start += drop
+            rows = self.max_context_rows
+        if source.layout != ttnn.TILE_LAYOUT:
+            source = ttnn.to_layout(source, ttnn.TILE_LAYOUT)
+            temporaries.append(source)
+        if source.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+            source = ttnn.to_memory_config(source, ttnn.DRAM_MEMORY_CONFIG)
+            temporaries.append(source)
+        if source.dtype != ttnn.bfloat16:
+            source = ttnn.typecast(source, ttnn.bfloat16)
+            temporaries.append(source)
+        padded_rows = int(self._fixed.shape[1])
+        if rows < padded_rows:
+            source = ttnn.pad(source, [(0, 0), (0, padded_rows - rows), (0, 0)], value=0.0)
+            temporaries.append(source)
+        ttnn.copy(source, self._fixed)
+        released = set()
+        for tensor in temporaries:
+            if id(tensor) not in released:
+                released.add(id(tensor))
+                _deallocate_owned(tensor)
+        self._context_start = start
+        self._context_rows = rows
 
     @property
     def active_request_id(self):
@@ -391,6 +487,10 @@ class DFlashTTProposalCache:
             raise RuntimeError("DFlash proposal cache is closed")
 
     def _release_context(self) -> None:
+        if getattr(self, "_fixed", None) is not None:
+            self._context_start = None
+            self._context_rows = 0
+            return
         if self._context_owned:
             _deallocate_owned(self._context)
         self._context = None
@@ -415,6 +515,9 @@ class DFlashTTProposalCache:
         if not isinstance(capture, DFlashTargetAuxCapture):
             raise TypeError("DFlash target state must be a DFlashTargetAuxCapture")
         capture.validate(self.core.config)
+        if getattr(self, "_fixed", None) is not None:
+            self._update_fixed(capture, replace)
+            return
         if replace:
             self._release_context()
         if self._context is None:
@@ -453,6 +556,10 @@ class DFlashTTProposalCache:
 
     def target_capture(self) -> DFlashTargetAuxCapture:
         self._require_open()
+        if self.fixed_combined:
+            raise RuntimeError(
+                "a fixed-context DFlash cache keeps combined states only; use context_bounds()/combined_context()"
+            )
         if self._request_id is None or self._context is None:
             raise RuntimeError("DFlash proposal cache has no active target context")
         capture = DFlashTargetAuxCapture(
@@ -476,6 +583,8 @@ class DFlashTTProposalCache:
         if self._closed:
             return
         self._release_context()
+        _deallocate_owned(getattr(self, "_fixed", None))
+        self._fixed = None
         for kv in self.kv_cache.values():
             _deallocate_owned(kv["k"])
             _deallocate_owned(kv["v"])
@@ -839,8 +948,12 @@ class DFlashTTCore:
                 f"got {tuple(self.layers)}"
             )
         self._validate_target_owner(target_model)
-        capture = cache.target_capture()
-        last_valid_position = capture.end_position
+        if cache.fixed_combined:
+            context_start, context_rows = cache.context_bounds()
+        else:
+            capture = cache.target_capture()
+            context_start, context_rows = int(capture.start_position), int(capture.row_count)
+        last_valid_position = context_start + context_rows - 1
         block = build_proposal_block(
             self.config,
             bonus_token_id=int(bonus_token_id),
@@ -852,17 +965,16 @@ class DFlashTTCore:
                 "the qualified TT DFlash round requires exactly 15 sampled mask rows; " f"got {num_speculative_tokens}"
             )
 
-        context_rows = int(capture.row_count)
         logical_query_rows = int(block.input_ids.numel())
         padded_total = math.ceil((context_rows + logical_query_rows) / cache.block_size) * cache.block_size
         if padded_total > cache.capacity:
             raise RuntimeError(
                 f"DFlash proposal needs {padded_total} local rows but cache capacity is {cache.capacity}"
             )
-        absolute_end = int(capture.start_position) + padded_total
+        absolute_end = context_start + padded_total
         if absolute_end > self.max_seq_len:
             raise ValueError(
-                f"DFlash proposal RoPE interval [{capture.start_position}, {absolute_end}) exceeds "
+                f"DFlash proposal RoPE interval [{context_start}, {absolute_end}) exceeds "
                 f"the core horizon {self.max_seq_len}"
             )
 
@@ -885,14 +997,17 @@ class DFlashTTCore:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         query_hidden = target_model.embed_prefill(token_ids_tt)
-        context_hidden = self.combine_aux_hidden_states(capture.hidden_states)
+        if cache.fixed_combined:
+            context_hidden = cache.combined_context()
+        else:
+            context_hidden = self.combine_aux_hidden_states(capture.hidden_states)
 
         # All draft layers share the published theta/dimension and the same
         # absolute interval, so a single pair of RoPE tensors is exact.
         first_layer = self.layers[0]
         rope_mats = (
-            first_layer._rope_prefill(int(capture.start_position), padded_total),
-            first_layer._rope_prefill(int(capture.start_position), padded_total, sin=True),
+            first_layer._rope_prefill(context_start, padded_total),
+            first_layer._rope_prefill(context_start, padded_total, sin=True),
         )
         for layer_idx in range(self.config.num_hidden_layers):
             # Reset context to the fused target representation at every layer;

@@ -522,6 +522,18 @@ def test_vllm_dflash_output_buffer_and_runtime_guards(monkeypatch, expect_error)
         )
         assert calls[-1][0] == expected_path
 
+    # With the scheduler's 16-token KV look-ahead applied, every residue runs a full round.
+    monkeypatch.setattr(LagunaForCausalLM, "_dflash_lookahead_tokens", staticmethod(lambda: 16))
+    for position in (49, 63):
+        bridge._dflash_serve(
+            torch.tensor([[7]]), torch.tensor([position]), [[0]], [{"block_size": 64}], None, greedy, False
+        )
+        assert calls[-1][0] == "proposal"
+    monkeypatch.setattr(LagunaForCausalLM, "_dflash_lookahead_tokens", staticmethod(lambda: 15))
+    bridge._dflash_serve(torch.tensor([[7]]), torch.tensor([49]), [[0]], [{"block_size": 64}], None, greedy, False)
+    assert calls[-1][0] == "target"
+    monkeypatch.setattr(LagunaForCausalLM, "_dflash_lookahead_tokens", staticmethod(lambda: 0))
+
     # Buffered commits from a round that safely began at residue <=48 are
     # already verified and must drain even when the scheduler cursor is 49..63.
     bridge._dflash_controller.pending_tokens = (99,)

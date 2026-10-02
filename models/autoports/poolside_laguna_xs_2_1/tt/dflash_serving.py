@@ -145,23 +145,22 @@ class DFlashServedController:
             raise RuntimeError(
                 f"DFlash prefill request {request_id!r} does not match active request {self._request_id!r}"
             )
-        current = self.cache.target_capture()
+        current_end = self._context_end()
         # A full 511-row chunk supersedes all older state.  A short terminal
         # chunk is adjacent and must be appended to preserve the cross-chunk tail.
         replace = int(capture.row_count) == self.cache.max_context_rows
-        if replace and int(capture.end_position) <= int(current.end_position):
+        if replace and int(capture.end_position) <= current_end:
             raise ValueError(
                 f"full DFlash prefill tail ends at {capture.end_position}, "
-                f"not after retained end {current.end_position}"
+                f"not after retained end {current_end}"
             )
-        if not replace and int(capture.start_position) != current.end_position + 1:
+        if not replace and int(capture.start_position) != current_end + 1:
             raise ValueError(
                 f"short DFlash prefill capture starts at {capture.start_position}, "
-                f"expected {current.end_position + 1}"
+                f"expected {current_end + 1}"
             )
         self.cache.update_target_capture(capture, replace=replace)
-        retained = self.cache.target_capture()
-        self._expected_input_position = retained.end_position + 1
+        self._expected_input_position = self._context_end() + 1
         self._expected_input_token = None
 
     @staticmethod
@@ -179,6 +178,15 @@ class DFlashServedController:
                 accepted = index
                 break
         return accepted, drafts[:accepted] + [target[accepted]]
+
+    def _context_end(self) -> int:
+        """Last position of the retained target context (metadata only; no device work)."""
+
+        bounds = getattr(self.cache, "context_bounds", None)
+        if callable(bounds):
+            start, rows = bounds()
+            return int(start) + int(rows) - 1
+        return int(self.cache.target_capture().end_position)
 
     def expected_input(self) -> tuple[int | None, int | None]:
         """Position and token the next served decode step must carry (token None right after prefill)."""
@@ -256,11 +264,9 @@ class DFlashServedController:
         self._validate_input(known_bonus, position)
         if self._pending:
             raise RuntimeError("DFlash target-only fallback cannot bypass buffered committed tokens")
-        capture = self.cache.target_capture()
-        if capture.end_position + 1 != position:
-            raise RuntimeError(
-                f"DFlash auxiliary context ends at {capture.end_position}, but known bonus is at {position}"
-            )
+        context_end = self._context_end()
+        if context_end + 1 != position:
+            raise RuntimeError(f"DFlash auxiliary context ends at {context_end}, but known bonus is at {position}")
         verify_start = time.perf_counter()
         target_greedy, verify_capture = self._verify_contiguous(
             [known_bonus],
@@ -300,11 +306,9 @@ class DFlashServedController:
         if self._pending:
             return self._pop_committed(position)
 
-        capture = self.cache.target_capture()
-        if capture.end_position + 1 != position:
-            raise RuntimeError(
-                f"DFlash auxiliary context ends at {capture.end_position}, but known bonus is at {position}"
-            )
+        context_end = self._context_end()
+        if context_end + 1 != position:
+            raise RuntimeError(f"DFlash auxiliary context ends at {context_end}, but known bonus is at {position}")
         draft_start = time.perf_counter()
         proposal = self.core.proposal_round(
             self.cache,
