@@ -1,0 +1,60 @@
+1944 tests in both (1944 base, 1944 new)
+outcomes base: {'passed': 1585, 'skipped': 359}
+outcomes new:  {'passed': 1584, 'skipped': 359, 'failed': 1}
+
+1 outcome changes:
+   passed -> failed  tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_activation_with_sharded_input
+
+device time (base/new, >= 20 us): 892 tests, geomean 1.145, faster >5%: 162, slower >5%: 23, within 5%: 707
+
+Largest slowdowns:
+   0.67x      22.1 ->      32.9us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_reuse_config_sharded_tiny_tile[transpose_tile=True-in1_dtype=DataType.BFLOAT4_B-out_sharded=True-in1_sharded=True-in0_sharded=False-tile_w=32-tile_h=32-n=256-k=256-m=256-h=3-b=2]
+   0.73x      30.5 ->      41.6us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_reuse_config_sharded_tiny_tile[transpose_tile=True-in1_dtype=DataType.BFLOAT4_B-out_sharded=True-in1_sharded=True-in0_sharded=False-tile_w=32-tile_h=16-n=256-k=256-m=256-h=3-b=2]
+   0.79x      34.4 ->      43.6us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_reuse_config_sharded_tiny_tile[transpose_tile=False-in1_dtype=DataType.BFLOAT8_B-out_sharded=True-in1_sharded=False-in0_sharded=False-tile_w=16-tile_h=32-n=256-k=256-m=256-h=3-b=2]
+   0.79x      42.3 ->      53.5us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_reuse_config_sharded_tiny_tile[transpose_tile=False-in1_dtype=DataType.BFLOAT8_B-out_sharded=False-in1_sharded=False-in0_sharded=False-tile_w=32-tile_h=16-n=256-k=256-m=256-h=3-b=2]
+   0.80x      28.7 ->      35.7us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_reuse_config_sharded_tiny_tile[transpose_tile=False-in1_dtype=DataType.BFLOAT4_B-out_sharded=True-in1_sharded=False-in0_sharded=False-tile_w=32-tile_h=16-n=256-k=256-m=256-h=3-b=2]
+   0.81x      28.2 ->      34.9us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_reuse_config_sharded_tiny_tile[transpose_tile=True-in1_dtype=DataType.BFLOAT4_B-out_sharded=True-in1_sharded=False-in0_sharded=False-tile_w=32-tile_h=32-n=256-k=256-m=256-h=3-b=2]
+   0.86x      42.9 ->      50.1us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_reuse_config_sharded_tiny_tile[transpose_tile=False-in1_dtype=DataType.BFLOAT8_B-out_sharded=False-in1_sharded=True-in0_sharded=False-tile_w=16-tile_h=16-n=256-k=256-m=256-h=3-b=2]
+   0.86x      36.3 ->      42.2us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_reuse_config_sharded_tiny_tile[transpose_tile=False-in1_dtype=DataType.BFLOAT8_B-out_sharded=False-in1_sharded=True-in0_sharded=False-tile_w=32-tile_h=32-n=256-k=256-m=256-h=3-b=2]
+   0.86x      47.5 ->      55.3us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_reuse_config_sharded_tiny_tile[transpose_tile=False-in1_dtype=DataType.BFLOAT8_B-out_sharded=False-in1_sharded=False-in0_sharded=False-tile_w=16-tile_h=16-n=256-k=256-m=256-h=3-b=2]
+   0.87x     280.4 ->     322.2us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_matmul_batch_mismatch.py::test_matmul_batch_mismatch[batch=6-M=3000-K=256-N=256]
+   0.89x      34.1 ->      38.5us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_reuse_config_sharded_tiny_tile[transpose_tile=True-in1_dtype=DataType.BFLOAT8_B-out_sharded=False-in1_sharded=True-in0_sharded=False-tile_w=32-tile_h=32-n=256-k=256-m=256-h=3-b=2]
+   0.90x      49.5 ->      55.1us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_tutorial_matmul
+   0.90x      24.6 ->      27.2us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_reuse_config_sharded_tiny_tile[transpose_tile=True-in1_dtype=DataType.BFLOAT8_B-out_sharded=True-in1_sharded=False-in0_sharded=False-tile_w=32-tile_h=32-n=256-k=256-m=256-h=3-b=2]
+   0.91x      37.4 ->      40.9us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_reuse_config_sharded_tiny_tile[transpose_tile=False-in1_dtype=DataType.BFLOAT8_B-out_sharded=False-in1_sharded=False-in0_sharded=False-tile_w=16-tile_h=32-n=256-k=256-m=256-h=3-b=2]
+   0.91x      39.7 ->      43.4us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_reuse_config_sharded_tiny_tile[transpose_tile=True-in1_dtype=DataType.BFLOAT4_B-out_sharded=False-in1_sharded=False-in0_sharded=False-tile_w=32-tile_h=16-n=256-k=256-m=256-h=3-b=2]
+   0.92x      28.0 ->      30.6us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_reuse_config_sharded_tiny_tile[transpose_tile=True-in1_dtype=DataType.BFLOAT4_B-out_sharded=False-in1_sharded=True-in0_sharded=False-tile_w=32-tile_h=32-n=256-k=256-m=256-h=3-b=2]
+   0.92x      39.6 ->      43.0us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_reuse_config_sharded_tiny_tile[transpose_tile=False-in1_dtype=DataType.BFLOAT4_B-out_sharded=True-in1_sharded=True-in0_sharded=False-tile_w=32-tile_h=16-n=256-k=256-m=256-h=3-b=2]
+   0.92x      49.7 ->      53.9us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_reuse_config_sharded_tiny_tile[transpose_tile=False-in1_dtype=DataType.BFLOAT4_B-out_sharded=False-in1_sharded=False-in0_sharded=False-tile_w=16-tile_h=16-n=256-k=256-m=256-h=3-b=2]
+   0.93x      50.1 ->      54.1us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_reuse_config_sharded_tiny_tile[transpose_tile=False-in1_dtype=DataType.BFLOAT8_B-out_sharded=True-in1_sharded=True-in0_sharded=False-tile_w=16-tile_h=16-n=256-k=256-m=256-h=3-b=2]
+   0.93x      37.0 ->      39.6us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_reuse_config_sharded_tiny_tile[transpose_tile=False-in1_dtype=DataType.BFLOAT8_B-out_sharded=False-in1_sharded=False-in0_sharded=False-tile_w=32-tile_h=32-n=256-k=256-m=256-h=3-b=2]
+   0.94x      76.4 ->      81.1us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_tall_matmul_with_argument_for_core_grid_set_to_device_grid[n_size=32-k_size=2048-m_size=1024-batch_size=1]
+   0.95x      45.5 ->      48.2us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_reuse_config_sharded_tiny_tile[transpose_tile=True-in1_dtype=DataType.BFLOAT8_B-out_sharded=False-in1_sharded=True-in0_sharded=False-tile_w=32-tile_h=16-n=256-k=256-m=256-h=3-b=2]
+   0.95x      40.6 ->      43.0us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_reuse_config_sharded_tiny_tile[transpose_tile=False-in1_dtype=DataType.BFLOAT8_B-out_sharded=True-in1_sharded=True-in0_sharded=False-tile_w=16-tile_h=32-n=256-k=256-m=256-h=3-b=2]
+
+Largest speedups:
+  12.66x      51.2 ->       4.0us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_linear.py::test_vector_linear[shape_a=(32, 2, 32)-shape_b=(32, 32)-shape_bias=(1, 32)]
+  11.85x      50.8 ->       4.3us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_linear.py::test_vector_linear[shape_a=(32, 1, 32)-shape_b=(32, 32)-shape_bias=(1, 32)]
+   6.71x      46.0 ->       6.9us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_with_matched_width_height_4D[n_size=3-c=3-h=2-w=4]
+   6.70x      48.7 ->       7.3us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_with_matched_width_height_4D[n_size=3-c=3-h=4-w=2]
+   6.68x      46.1 ->       6.9us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_same_shape_and_valid[n_size=3-c=3-h=4-w=4]
+   5.27x     157.1 ->      29.8us (2->1p) tests/ttnn/unit_tests/operations/matmul/test_linear.py::test_linear_with_compound_activation[activation=relu-n_size=1024-k_size=1024-m_size=32-batch_size=8]
+   5.17x     157.3 ->      30.4us (2->1p) tests/ttnn/unit_tests/operations/matmul/test_linear.py::test_linear_with_compound_activation[activation=UnaryWithParam(op_type=UnaryOpType::RELU)-n_size=1024-k_size=1024-m_size=32-batch_size=8]
+   5.03x     202.4 ->      40.2us (2->1p) tests/ttnn/unit_tests/operations/matmul/test_linear.py::test_linear_with_compound_activation[activation=relu-n_size=1024-k_size=1024-m_size=64-batch_size=8]
+   5.01x     203.1 ->      40.6us (2->1p) tests/ttnn/unit_tests/operations/matmul/test_linear.py::test_linear_with_compound_activation[activation=UnaryWithParam(op_type=UnaryOpType::RELU)-n_size=1024-k_size=1024-m_size=64-batch_size=8]
+   4.96x     148.9 ->      30.0us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_linear.py::test_linear_with_compound_activation[activation=None-n_size=1024-k_size=1024-m_size=32-batch_size=8]
+   4.91x     158.0 ->      32.2us (2->1p) tests/ttnn/unit_tests/operations/matmul/test_linear.py::test_linear_with_compound_activation[activation=hardsigmoid-n_size=1024-k_size=1024-m_size=32-batch_size=8]
+   4.65x     188.5 ->      40.5us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_linear.py::test_linear_with_compound_activation[activation=None-n_size=1024-k_size=1024-m_size=64-batch_size=8]
+   4.61x     202.8 ->      44.0us (2->1p) tests/ttnn/unit_tests/operations/matmul/test_linear.py::test_linear_with_compound_activation[activation=hardsigmoid-n_size=1024-k_size=1024-m_size=64-batch_size=8]
+   4.55x     346.4 ->      76.2us (1->1p) tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_default_height_sharded[multi_core]
+   4.47x     160.0 ->      35.8us (2->1p) tests/ttnn/unit_tests/operations/matmul/test_linear.py::test_linear_with_compound_activation[activation=silu-n_size=1024-k_size=1024-m_size=32-batch_size=8]
+   4.42x     159.7 ->      36.1us (2->1p) tests/ttnn/unit_tests/operations/matmul/test_linear.py::test_linear_with_compound_activation[activation=sigmoid-n_size=1024-k_size=1024-m_size=32-batch_size=8]
+   4.37x     159.6 ->      36.5us (2->1p) tests/ttnn/unit_tests/operations/matmul/test_linear.py::test_linear_with_compound_activation[activation=UnaryWithParam(op_type=UnaryOpType::SILU)-n_size=1024-k_size=1024-m_size=32-batch_size=8]
+   4.21x     161.6 ->      38.4us (2->1p) tests/ttnn/unit_tests/operations/matmul/test_linear.py::test_linear_with_compound_activation[activation=UnaryWithParam(op_type=UnaryOpType::GELU_TANH)-n_size=1024-k_size=1024-m_size=32-batch_size=8]
+   4.06x     164.4 ->      40.5us (2->1p) tests/ttnn/unit_tests/operations/matmul/test_linear.py::test_linear_with_compound_activation[activation=gelu-n_size=1024-k_size=1024-m_size=32-batch_size=8]
+   3.91x     205.6 ->      52.5us (2->1p) tests/ttnn/unit_tests/operations/matmul/test_linear.py::test_linear_with_compound_activation[activation=silu-n_size=1024-k_size=1024-m_size=64-batch_size=8]
+   3.91x     205.9 ->      52.7us (2->1p) tests/ttnn/unit_tests/operations/matmul/test_linear.py::test_linear_with_compound_activation[activation=sigmoid-n_size=1024-k_size=1024-m_size=64-batch_size=8]
+   3.86x     205.4 ->      53.1us (2->1p) tests/ttnn/unit_tests/operations/matmul/test_linear.py::test_linear_with_compound_activation[activation=UnaryWithParam(op_type=UnaryOpType::SILU)-n_size=1024-k_size=1024-m_size=64-batch_size=8]
+   3.80x     161.6 ->      42.5us (2->2p) tests/ttnn/unit_tests/operations/matmul/test_linear.py::test_linear_with_compound_activation[activation=mish-n_size=1024-k_size=1024-m_size=32-batch_size=8]
+   3.63x     209.8 ->      57.7us (2->1p) tests/ttnn/unit_tests/operations/matmul/test_linear.py::test_linear_with_compound_activation[activation=UnaryWithParam(op_type=UnaryOpType::GELU_TANH)-n_size=1024-k_size=1024-m_size=64-batch_size=8]
+   3.46x     215.7 ->      62.3us (2->1p) tests/ttnn/unit_tests/operations/matmul/test_linear.py::test_linear_with_compound_activation[activation=gelu-n_size=1024-k_size=1024-m_size=64-batch_size=8]

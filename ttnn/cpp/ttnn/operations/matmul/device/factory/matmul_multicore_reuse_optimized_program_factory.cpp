@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_optimized_program_factory.hpp"
+#include "ttnn/operations/matmul/device/factory/matmul_buffers.hpp"
 
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -119,54 +120,15 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     uint32_t batch_scale_factor = per_core_M > M ? per_core_M / M : 1;
     uint32_t per_core_M_per_batch = per_core_M > M ? M : per_core_M;
     uint32_t num_blocks = (K / in0_block_w);
-    bool packer_l1_acc_en = packer_l1_acc && (num_blocks > 2);
-
-    tt::DataFormat interm0_data_format = packer_l1_acc_en
-                                             ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
-                                             : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
 
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
 
     auto output_tile = tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
-    uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
-    uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
-    uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
-    uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
     bool in0_is_sharded = in0_buffer.is_sharded();
     bool in1_is_sharded = in1_buffer.is_sharded();
     bool output_is_sharded = output.is_sharded();
-
-    // Tiles whose size is not a multiple of the DRAM alignment (e.g. bfp8 32x16 = 544B on Blackhole's
-    // 64B alignment) are padded to it in DRAM. The interleaved reader copies tiles at that padded
-    // stride, so the in0/in1 DFBs must hold entries at the aligned stride and the reader/unpacker walk
-    // tiles at the same stride. This is a no-op when the tile is already aligned (all bf16 tiles,
-    // 32-wide bfp8, and everything on Wormhole's 32B alignment) and replaces the staging-DFB workaround.
-    // Borrowed DFBs are backed by the tensor buffer and keep their natural entry size.
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
-    uint32_t in0_aligned_tile_size =
-        in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
-    uint32_t in1_aligned_tile_size =
-        in1_is_sharded ? in1_single_tile_size : tt::align(in1_single_tile_size, dram_alignment);
-
-    // DFB sizes
-    uint32_t in0_block_num_tiles = per_core_M_per_batch * in0_block_w;
-    uint32_t in0_DFB_tiles = in0_block_num_tiles;
-    if (in0_is_sharded) {
-        in0_DFB_tiles = per_core_M * K;
-    } else {
-        in0_DFB_tiles *= 2;
-    }
-    uint32_t in1_block_num_tiles = per_core_N * in0_block_w;
-    uint32_t in1_DFB_tiles = in1_block_num_tiles;
-    if (in1_is_sharded) {
-        in1_DFB_tiles *= num_blocks * batch_scale_factor;
-    } else {
-        in1_DFB_tiles *= 2;
-    }
-    uint32_t out_block_tiles = per_core_M * per_core_N;
-    uint32_t out_DFB_tiles = out_block_tiles;
 
     // Optional fused full-tile bias. The whole per-batch [M, N] bias block
     // is loaded once and reused across the core's batch iterations.
@@ -192,6 +154,30 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     }
     // Full [M, N] per-batch bias block
     uint32_t in3_block_tiles = per_core_M_per_batch * per_core_N;
+
+    uint32_t in0_block_num_tiles = per_core_M_per_batch * in0_block_w;
+    uint32_t in1_block_num_tiles = per_core_N * in0_block_w;
+    uint32_t out_block_tiles = per_core_M * per_core_N;
+
+    // Buffer sizes, shared with the program config selection
+    const auto buffers = operations::matmul::reuse_buffers(
+        operations::matmul::buffer_context(
+            in0_buffer,
+            in1_buffer,
+            output,
+            in0_tile,
+            in1_tile,
+            output_tile,
+            bias_single_tile_size,
+            /*bias_sharded=*/false,
+            fp32_dest_acc_en,
+            packer_l1_acc,
+            untilize_out,
+            M,
+            K),
+        {per_core_M, per_core_N, in0_block_w, per_core_M, per_core_N, out_subblock_h, out_subblock_w});
+    const bool packer_l1_acc_en = buffers.packer_l1_acc_en;
+    const tt::DataFormat interm0_data_format = buffers.interm0_format;
 
     // Compute kernel args
     uint32_t in0_num_subblocks = (per_core_M_per_batch / out_subblock_h);
@@ -290,23 +276,23 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     ////////////////////////////////////////////////////////////////////////////
     DataflowBufferSpec in0_dfb_spec{
         .unique_id = IN0_DFB,
-        .entry_size = in0_aligned_tile_size,
-        .num_entries = in0_DFB_tiles,
+        .entry_size = buffers.in0.entry_size,
+        .num_entries = buffers.in0.num_entries,
         .data_format_metadata = in0_data_format,
         .tile_format_metadata = in0_tile,
     };
-    if (in0_is_sharded) {
+    if (buffers.in0.borrowed) {
         in0_dfb_spec.borrowed_from = IN0;
     }
 
     DataflowBufferSpec in1_dfb_spec{
         .unique_id = IN1_DFB,
-        .entry_size = in1_aligned_tile_size,
-        .num_entries = in1_DFB_tiles,
+        .entry_size = buffers.in1.entry_size,
+        .num_entries = buffers.in1.num_entries,
         .data_format_metadata = in1_data_format,
         .tile_format_metadata = in1_tile,
     };
-    if (in1_is_sharded) {
+    if (buffers.in1.borrowed) {
         in1_dfb_spec.borrowed_from = IN1;
     }
 
@@ -314,20 +300,19 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     // isn't splitting the output across several W subblocks — the two occupy one L1 region, which
     // is expressed as two mutually-aliased buffers of identical total size. Otherwise they are
     // independent buffers with their own allocations.
-    const bool share_out_interm_buffer =
-        !((interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1)));
+    const bool share_out_interm_buffer = buffers.share_out_interm;
 
     DataflowBufferSpec out_dfb_spec{
         .unique_id = OUT_DFB,
-        .entry_size = output_single_tile_size,
-        .num_entries = out_DFB_tiles,
+        .entry_size = buffers.out.entry_size,
+        .num_entries = buffers.out.num_entries,
         .data_format_metadata = output_data_format,
         .tile_format_metadata = output_tile,
     };
     DataflowBufferSpec intermed0_dfb_spec{
         .unique_id = INTERMED0_DFB,
-        .entry_size = interm0_single_tile_size,
-        .num_entries = out_DFB_tiles,
+        .entry_size = buffers.interm0.entry_size,
+        .num_entries = buffers.interm0.num_entries,
         .data_format_metadata = interm0_data_format,
         .tile_format_metadata = output_tile,
     };
@@ -351,8 +336,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     if (bias.has_value()) {
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = BIAS_DFB,
-            .entry_size = bias_single_tile_size,
-            .num_entries = in3_block_tiles,
+            .entry_size = buffers.bias.entry_size,
+            .num_entries = buffers.bias.num_entries,
             .data_format_metadata = bias_data_format,
             .tile_format_metadata = bias_tile,
         });
@@ -362,8 +347,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
         // out of it.
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = IN0_TRANSPOSED_DFB,
-            .entry_size = in0_aligned_tile_size,
-            .num_entries = in0_DFB_tiles,
+            .entry_size = buffers.in0_transposed.entry_size,
+            .num_entries = buffers.in0_transposed.num_entries,
             .data_format_metadata = in0_data_format,
             .tile_format_metadata = in0_tile,
         });
@@ -415,6 +400,12 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
+    // A core's consecutive output blocks walk the M blocks of a batch, then move to the next batch
+    // (per_core_N == N, so a batch has no N blocks to walk).
+    const uint32_t m_blocks_per_batch = M / per_core_M_per_batch;
+    const uint32_t in0_m_block_stride = per_core_M_per_batch * (transpose_a ? 1 : K);
+    const uint32_t out_m_block_stride = per_core_M_per_batch * N;
+
     ////////////////////////////////////////////////////////////////////////////
     //                      Build KernelSpecs
     ////////////////////////////////////////////////////////////////////////////
@@ -453,10 +444,12 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
                 {"num_blocks", num_blocks},
                 {"bcast_B", static_cast<uint32_t>(bcast_batch)},
                 {"MtKt", M * K},
+                {"m_blocks_per_batch", m_blocks_per_batch},
+                {"in0_m_block_stride", in0_m_block_stride},
             },
         .runtime_arg_schema =
             {
-                .runtime_arg_names = {"in0_tensor_start_tile_id", "batch"},
+                .runtime_arg_names = {"in0_tensor_start_tile_id", "batch", "start_m_block"},
             },
         .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
@@ -513,10 +506,12 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
                 {"out_num_subblocks_w", out_num_subblocks_w},
                 {"out_num_subblocks_h", out_num_subblocks_h},
                 {"MtNt", M * N},
+                {"m_blocks_per_batch", m_blocks_per_batch},
+                {"out_m_block_stride", out_m_block_stride},
             },
         .runtime_arg_schema =
             {
-                .runtime_arg_names = {"in1_tensor_start_tile_id", "batch", "out_tensor_start_tile_id"},
+                .runtime_arg_names = {"in1_tensor_start_tile_id", "batch", "out_tensor_start_tile_id", "start_m_block"},
             },
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
@@ -652,12 +647,10 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     }
     const auto cores = corerange_to_cores(all_cores, num_cores, row_major);
 
-    uint32_t m_blocks_per_batch = M / per_core_M_per_batch;
     uint32_t n_blocks_per_batch = N / per_core_N;
     uint32_t blocks_per_batch = m_blocks_per_batch * n_blocks_per_batch;
     uint32_t in0_batch_stride = M * K;
     uint32_t in1_batch_stride = K * N;
-    uint32_t in0_m_block_stride = per_core_M_per_batch * (transpose_a ? 1 : K);
     uint32_t in1_n_block_stride = per_core_N * (transpose_b ? K : 1);
 
     KernelRunArgs reader_run_args{.kernel = READER};
@@ -680,7 +673,9 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
         AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values,
             core,
-            {{"in0_tensor_start_tile_id", in0_start_tile_id}, {"batch", num_output_blocks_per_core}});
+            {{"in0_tensor_start_tile_id", in0_start_tile_id},
+             {"batch", num_output_blocks_per_core},
+             {"start_m_block", start_m_block}});
 
         uint32_t out_start_tile_id =
             (start_batch * M * N) + (start_m_block * per_core_M_per_batch * N) + (start_n_block * per_core_N);
@@ -689,7 +684,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
             core,
             {{"in1_tensor_start_tile_id", in1_start_tile_id},
              {"batch", num_output_blocks_per_core},
-             {"out_tensor_start_tile_id", out_start_tile_id}});
+             {"out_tensor_start_tile_id", out_start_tile_id},
+             {"start_m_block", start_m_block}});
         if (bias.has_value()) {
             // Broadcast over batch, single block per element (start_m_block == start_n_block == 0
             // under the bias FATAL): the whole [M, N] bias starts at tile 0.

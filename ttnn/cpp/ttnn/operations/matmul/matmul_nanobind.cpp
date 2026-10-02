@@ -9,6 +9,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 #include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 
@@ -1262,6 +1263,21 @@ void py_module(nb::module_& mod) {
         &ttnn::prim::MatmulDeviceOperation::select_program_factory,
         nb::arg("operation_attributes"),
         nb::arg("tensor_args"));
+
+    mod.def(
+        "matmul_last_auto_program_config",
+        [](bool reset) -> std::optional<std::string> {
+            auto config = ttnn::operations::matmul::get_last_auto_program_config(reset);
+            return config ? std::optional(fmt::format("{}", *config)) : std::nullopt;
+        },
+        nb::arg("reset") = false,
+        R"doc(
+        Testing/benchmark only, not part of the public API.
+
+        Returns the program config most recently auto-selected on this thread by a matmul called without a
+        program_config, formatted as a string (None if there hasn't been one). After ttnn.matmul/ttnn.linear,
+        this is the config that ran. With reset=True the recorded config is cleared after it is read.
+    )doc");
 
     // Bind create_matmul_attributes helper
     mod.def(

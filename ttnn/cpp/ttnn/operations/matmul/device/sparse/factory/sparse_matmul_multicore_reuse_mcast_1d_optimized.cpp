@@ -53,7 +53,7 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
         tensor_args.input_tensors.at(1),
         /*transpose_a=*/false,
         /*transpose_b=*/false,
-        /*bias_single_tile_size=*/0,
+        /*bias=*/std::nullopt,
         matmul_attributes);
     operations::matmul::normalize_program_config(
         chosen_program_config, tensor_args.input_tensors.at(0).device()->compute_with_storage_grid_size());

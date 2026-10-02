@@ -175,12 +175,15 @@ inline In0TransposeStrides get_in0_transpose_strides(uint32_t M, uint32_t M_per_
  * @param transpose Whether to return the padded shape after transposing (swap height and width).
  * @return ttnn::Shape The padded shape of the tensor, possibly transposed.
  */
-inline ttnn::Shape get_matmul_tensor_padded_shape(const Tensor& input_tensor, bool transpose) {
-    auto padded_shape = input_tensor.padded_shape();
+inline ttnn::Shape get_matmul_tensor_padded_shape(const tt::tt_metal::TensorSpec& spec, bool transpose) {
+    auto padded_shape = spec.padded_shape();
     if (transpose) {
         std::swap(padded_shape[-2], padded_shape[-1]);
     }
     return padded_shape;
+}
+inline ttnn::Shape get_matmul_tensor_padded_shape(const Tensor& input_tensor, bool transpose) {
+    return get_matmul_tensor_padded_shape(input_tensor.tensor_spec(), transpose);
 }
 
 /**
@@ -193,6 +196,7 @@ inline ttnn::Shape get_matmul_tensor_padded_shape(const Tensor& input_tensor, bo
  * @param transpose Whether to return the tile shape after transposing (swap height and width).
  * @return tt::tt_metal::Tile The tile shape of the tensor, possibly transposed.
  */
+tt::tt_metal::Tile get_matmul_tile(const tt::tt_metal::TensorSpec& spec, bool transpose);
 tt::tt_metal::Tile get_matmul_tile(const Tensor& input_tensor, bool transpose);
 
 /**
@@ -204,15 +208,19 @@ tt::tt_metal::Tile get_matmul_tile(const Tensor& input_tensor, bool transpose);
  * @param transpose Whether to return the shape after transposing (swap height and width).
  * @return ttnn::Shape The shape of the tensor, possibly transposed.
  */
-inline ttnn::Shape get_matmul_tensor_logical_shape(const Tensor& input_tensor, bool transpose) {
-    auto shape = input_tensor.logical_shape();
+inline ttnn::Shape get_matmul_tensor_logical_shape(const tt::tt_metal::TensorSpec& spec, bool transpose) {
+    auto shape = spec.logical_shape();
     if (transpose) {
         std::swap(shape[-2], shape[-1]);
     }
     return shape;
 }
+inline ttnn::Shape get_matmul_tensor_logical_shape(const Tensor& input_tensor, bool transpose) {
+    return get_matmul_tensor_logical_shape(input_tensor.tensor_spec(), transpose);
+}
 
-inline KernelActivation get_activation_type(ttnn::operations::unary::UnaryOpType opType) {
+// Kernel activation for a fused (non-RELU) activation, or nullopt if the matmul kernels can't fuse it.
+inline std::optional<KernelActivation> find_activation_type(ttnn::operations::unary::UnaryOpType opType) {
     using ttnn::operations::unary::UnaryOpType;
     switch (opType) {
         case UnaryOpType::GELU: return KernelActivation::GELU;
@@ -225,8 +233,19 @@ inline KernelActivation get_activation_type(ttnn::operations::unary::UnaryOpType
         case UnaryOpType::HARDTANH: return KernelActivation::HARDTANH;
         case UnaryOpType::SELU: return KernelActivation::SELU;
         case UnaryOpType::SOFTPLUS: return KernelActivation::SOFTPLUS;
-        default: TT_THROW("Unsupported UnaryOpType for fused activation: {}", opType);
+        default: return std::nullopt;
     };
+}
+
+inline KernelActivation get_activation_type(ttnn::operations::unary::UnaryOpType opType) {
+    const auto type = find_activation_type(opType);
+    TT_FATAL(type.has_value(), "Unsupported UnaryOpType for fused activation: {}", opType);
+    return type.value();
+}
+
+// Whether the 1D/2D matmul kernels can apply `opType` as a fused activation (RELU is done by the packer).
+inline bool is_fusable_activation(ttnn::operations::unary::UnaryOpType opType) {
+    return opType == ttnn::operations::unary::UnaryOpType::RELU || find_activation_type(opType).has_value();
 }
 
 /**
@@ -356,17 +375,6 @@ inline ActivationParams get_activation_params(const ttnn::operations::unary::Una
     return result;
 }
 
-void validate_matmul_reuse_work_split(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const ttnn::Shape& a_shape_padded,
-    const ttnn::Shape& b_shape_padded,
-    const tt::tt_metal::Tile& in0_tile,
-    const tt::tt_metal::Tile& in1_tile,
-    const MatmulMultiCoreReuseProgramConfig& program_config,
-    const tt::tt_metal::MemoryConfig& output_mem_config,
-    const std::optional<tt::tt_metal::CoreRangeSet>& core_range_set = std::nullopt);
-
 }  // namespace ttnn::operations::matmul::utilities
 
 namespace ttnn::prim::dram_sharded_helpers {
@@ -376,6 +384,8 @@ struct DramBankReaderAssignment {
     uint32_t worker_index;
 };
 
+// The rule workers_per_bank breaks, or empty
+std::string num_workers_per_dram_bank_error(std::size_t workers_per_bank);
 void validate_num_workers_per_dram_bank(std::size_t workers_per_bank);
 
 // This type of access pattern cannot be copied.

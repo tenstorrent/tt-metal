@@ -11,6 +11,7 @@ import math
 import ttnn
 
 from models.common.utility_functions import (
+    comp_pcc,
     is_blackhole,
     skip_for_slow_dispatch,
 )
@@ -330,6 +331,48 @@ def test_matmul_reuse_config_sharded_fd_column(
         pcc_threshold=0.999,
         check_ulp=False,
     )
+
+
+@pytest.mark.parametrize(
+    "batch_shape, m, k, n, per_core_M",
+    [
+        ((5,), 256, 256, 64, 1),  # 40 blocks on 16 cores: runs of 2-3 blocks cross batch boundaries
+        ((64,), 256, 256, 64, 4),  # 128 blocks, 8 per core
+        ((4, 12), 1024, 1024, 64, 16),  # 96 blocks, 6 per core
+        ((48,), 256, 256, 64, 8),  # whole batch matrices (per_core_M == Mt)
+    ],
+)
+@pytest.mark.parametrize("transpose_a", [False, True])
+def test_matmul_reuse_config_partial_batch_blocks(device, batch_shape, m, k, n, per_core_M, transpose_a):
+    """MatmulMultiCoreReuseProgramConfig with per_core_M < Mt and several blocks per core (#57954).
+
+    A core's consecutive blocks must walk the M blocks of a batch before moving to the next batch. The output
+    starts out NaN so that any tile the kernels skip fails the comparison.
+    """
+    torch.manual_seed(0)
+    a_shape = (*batch_shape, k, m) if transpose_a else (*batch_shape, m, k)
+    torch_a = torch.randn(a_shape, dtype=torch.bfloat16)
+    torch_b = torch.randn((*batch_shape, k, n), dtype=torch.bfloat16)
+    torch_output = (torch_a.transpose(-1, -2) if transpose_a else torch_a).float() @ torch_b.float()
+
+    a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.from_torch(
+        torch.full((*batch_shape, m, n), float("nan"), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
+    )
+    program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=(4, 4),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=2,
+        per_core_M=per_core_M,
+        per_core_N=n // 32,
+    )
+    ttnn.matmul(a, b, transpose_a=transpose_a, program_config=program_config, optional_output_tensor=output)
+
+    output = ttnn.to_torch(output).float()
+    assert not torch.isnan(output).any(), "output tiles were not written"
+    assert_with_pcc(torch_output, output, 0.999)
 
 
 @pytest.mark.parametrize("b", [2])
@@ -3557,6 +3600,146 @@ def test_matmul_block_float_ktile_padding_fp32_dest_acc(device, fp32_dest_acc_en
     assert_with_pcc(torch_output, output, pcc=pcc)
 
 
+def _two_vs_four_k_blocks_config(family, in0_block_w):
+    if family == "2d":
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(4, 4),
+            in0_block_w=in0_block_w,
+            out_subblock_h=1,
+            out_subblock_w=2,
+            out_block_h=2,
+            out_block_w=2,
+            per_core_M=2,
+            per_core_N=2,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+    if family == "1d_in1":
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(8, 1),
+            in0_block_w=in0_block_w,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            out_block_h=1,
+            out_block_w=8,
+            per_core_M=1,
+            per_core_N=8,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        )
+    return ttnn.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, 1),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=4,
+        per_core_M=1,
+        per_core_N=8,
+    )
+
+
+@pytest.mark.parametrize("family", ["2d", "1d_in1", "reuse"])
+def test_matmul_packer_l1_acc_two_k_blocks(device, family):
+    """With packer_l1_acc requested, two K blocks must keep partial sums in the accumulation format like more
+    blocks do, instead of rounding them through the block-float output format: the same matmul split into two
+    and into four K blocks must be equally accurate. bfloat4_b makes the extra rounding unmistakable (it raised
+    the PCC error by ~40% before the fix, against noise of under 1%)."""
+    dtype = ttnn.bfloat4_b
+    torch.manual_seed(0)
+    M, K, N = 256, 512, 256
+    Kt = K // 32
+
+    torch_input_a = torch.randn(1, 1, M, K)
+    torch_input_b = torch.randn(1, 1, K, N)
+    torch_output = torch_input_a @ torch_input_b
+    ttnn_input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    ttnn_input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=False, packer_l1_acc=True
+    )
+
+    pcc = {}
+    for num_k_blocks in (2, 4):
+        output = ttnn.matmul(
+            ttnn_input_a,
+            ttnn_input_b,
+            program_config=_two_vs_four_k_blocks_config(family, Kt // num_k_blocks),
+            dtype=dtype,
+            compute_kernel_config=compute_kernel_config,
+        )
+        _, pcc[num_k_blocks] = comp_pcc(torch_output, ttnn.to_torch(output).float())
+    logger.info(f"{family}: PCC with 2 K blocks {pcc[2]:.5f}, with 4 K blocks {pcc[4]:.5f}")
+    assert 1 - pcc[2] <= 1.1 * (1 - pcc[4])
+
+
+@pytest.mark.parametrize("out_block_w", [4, 2, 1])
+def test_matmul_1d_in0_sharded_output_narrow_out_block(device, out_block_w):
+    """#58046: 1D in0-mcast with a width-sharded output and out_block_w < per_core_N (allowed when out_block_h
+    == 1) must match the interleaved output. The partials must not share the output shard in place when the
+    core computes more than one output block."""
+    torch.manual_seed(0)
+    grid = device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+    per_core_N = 4
+    M, K, N = 32, 1024, 32 * per_core_N * num_cores
+    torch_input_a = torch.randn(1, 1, M, K, dtype=torch.bfloat16)
+    torch_input_b = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+    torch_output = torch_input_a.float() @ torch_input_b.float()
+    ttnn_input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, device=device)
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=1,
+        out_block_w=out_block_w,
+        per_core_M=1,
+        per_core_N=per_core_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+    output = ttnn.matmul(
+        ttnn_input_a, ttnn_input_b, program_config=program_config, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+    )
+    assert_with_pcc(torch_output, ttnn.to_torch(output).float(), 0.999)
+
+
+@pytest.mark.parametrize("out_block_w", [4, 2, 1])
+def test_matmul_2d_sharded_output_narrow_out_block(device, out_block_w):
+    """#58046 for the 2D factory: a block-sharded output with out_block_w < per_core_N (out_block_h == 1)."""
+    torch.manual_seed(0)
+    grid_x, grid_y = 4, 4
+    per_core_M, per_core_N = 1, 4  # per_core_M == out_block_h: only the N split separates the blocks
+    M, K, N = 32 * per_core_M * grid_y, 512, 32 * per_core_N * grid_x
+    torch_input_a = torch.randn(1, 1, M, K, dtype=torch.bfloat16)
+    torch_input_b = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+    torch_output = torch_input_a.float() @ torch_input_b.float()
+    ttnn_input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, device=device)
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=1,
+        out_block_w=out_block_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=None,
+    )
+    output_memory_config = ttnn.create_sharded_memory_config(
+        (M, N),
+        core_grid=ttnn.CoreGrid(y=grid_y, x=grid_x),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    output = ttnn.matmul(ttnn_input_a, ttnn_input_b, program_config=program_config, memory_config=output_memory_config)
+    assert_with_pcc(torch_output, ttnn.to_torch(output).float(), 0.999)
+
+
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
 def test_matmul_ktile_padding_non_block_float(device, dtype):
     """Control: the Float32/Float16_b padding paths this change also touches must not regress."""
@@ -3858,8 +4041,18 @@ def test_matmul_activation_with_sharded_input(device):
     # 1. matmul gets called with activation="silu" and partial memory config
     # 2. matmul internally calls unary (silu) with the output tensor's memory config
     # 3. unary's compute_output_specs creates TensorLayout with the output tensor's full config
+    # Accumulate in fp32 for the 0.9999 PCC below: with bf16 accumulation the result depends on how K is blocked
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
+    )
     try:
-        output_tensor = ttnn.matmul(input_a, input_b, memory_config=output_mem_config, activation=activation)
+        output_tensor = ttnn.matmul(
+            input_a,
+            input_b,
+            memory_config=output_mem_config,
+            activation=activation,
+            compute_kernel_config=compute_kernel_config,
+        )
         output_tensor = ttnn.to_torch(output_tensor)
         assert_with_pcc(torch_output_tensor, output_tensor)
     except Exception as e:

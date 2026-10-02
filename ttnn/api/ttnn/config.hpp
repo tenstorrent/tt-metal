@@ -40,6 +40,9 @@ struct Config {
         float comparison_mode_pcc = 0.9999;
         std::filesystem::path root_report_path = "generated/ttnn/reports";
         std::optional<std::filesystem::path> report_name = std::nullopt;
+        // Experimental: choose matmul's default program config (no program_config passed) with the new
+        // selector in matmul/device/config/matmul_auto_config.cpp instead of the legacy heuristics (#57884).
+        bool matmul_auto_config_v2 = false;
     };
 
 private:

@@ -1,0 +1,17 @@
+arch=wormhole_b0 (n150, 8x8 compute grid) rev=64f6f185ae6
+Runs made with the harness in this directory (same stages as run_all.sh):
+  suite.csv.gz        run_suite.py --cases-csv cases.csv --modes oob v2
+  pytest_on.jsonl.gz  matmul pytest directory, matmul_auto_config_v2 on
+  pytest_off.jsonl.gz matmul pytest directory, matmul_auto_config_v2 off
+  gtests.log          unit_tests_ttnn --gtest_filter='MatmulAutoConfig.*'
+539 cases in both (539 oob, 539 v2)
+
+speedup = oob time / v2 time
+
+tier        n  geomean    min    p50     max  <0.95  >1.05
+issues     79    1.628   0.95   1.21   38.08      1     56
+models     48    1.150   0.98   1.08    2.36      0     28
+generic    90    1.619   0.93   1.07   26.36      1     48
+sharded    11    1.138   0.99   1.00    3.90      0      1
+traced    304    1.883   0.82   1.16   14.33      3    189
+ALL       532    1.700   0.82   1.13   38.08      5    322
