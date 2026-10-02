@@ -265,6 +265,43 @@ def test_moreh_nll_loss_backward(shape, ignore_index, reduction_mean, none_weigh
 
 
 @pytest.mark.parametrize(
+    "reduction_mean,with_divisor,expected_scale,should_raise",
+    [
+        (False, False, -1.0, False),
+        (False, True, -1.0, False),
+        (True, True, -1.0 / 32.0, False),
+        (True, False, None, True),
+    ],
+)
+def test_moreh_nll_loss_backward_reduction_divisor_contract(
+    reduction_mean, with_divisor, expected_scale, should_raise, device, expect_error
+):
+    shape = [32, 32]
+    tt_target = to_ttnn(torch.zeros([32], dtype=torch.int32), dtype=ttnn.int32, device=device)
+    tt_output_grad = to_ttnn(torch.tensor(1.0), device=device)
+    tt_input_grad = to_ttnn(torch.zeros(shape), device=device)
+    tt_divisor = to_ttnn(torch.tensor([32.0]), device=device) if with_divisor else None
+
+    kwargs = {
+        "target_tensor": tt_target,
+        "output_grad_tensor": tt_output_grad,
+        "reduction_mean": reduction_mean,
+        "input_grad_tensor": tt_input_grad,
+        "divisor_tensor": tt_divisor,
+        "ignore_index": -100,
+    }
+    if should_raise:
+        with expect_error(RuntimeError, "Divisor tensor must not be empty for mean reduction"):
+            ttnn.operations.moreh.nll_loss_backward(**kwargs)
+        return
+
+    actual = to_torch(ttnn.operations.moreh.nll_loss_backward(**kwargs), shape=shape)
+    expected = torch.zeros(shape)
+    expected[:, 0] = expected_scale
+    assert torch.allclose(actual, expected, rtol=0.0, atol=0.01)
+
+
+@pytest.mark.parametrize(
     "shape",
     [
         [2, 3],

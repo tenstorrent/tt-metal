@@ -112,13 +112,17 @@ moreh_nll_loss_backward(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     using OperationType = ttnn::operations::moreh::moreh_nll_loss_backward::MorehNllLossBackwardDeviceOperation;
+    TT_FATAL(!reduction_mean || divisor_tensor.has_value(), "Divisor tensor must not be empty for mean reduction");
+
+    // Match the forward operation's reduction contract: only mean consumes a divisor.
+    const std::optional<Tensor> effective_divisor_tensor = reduction_mean ? divisor_tensor : std::nullopt;
     auto operation_attributes = OperationType::operation_attributes_t{
         reduction_mean,
         ignore_index < 0 ? std::numeric_limits<uint32_t>::max() : static_cast<uint32_t>(ignore_index),
         memory_config.value_or(target_tensor.memory_config()),
         init_device_compute_kernel_config(target_tensor.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
-    auto tensor_args =
-        OperationType::tensor_args_t{target_tensor, output_grad_tensor, weight_tensor, divisor_tensor, input_grad_tensor};
+    auto tensor_args = OperationType::tensor_args_t{
+        target_tensor, output_grad_tensor, weight_tensor, effective_divisor_tensor, input_grad_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

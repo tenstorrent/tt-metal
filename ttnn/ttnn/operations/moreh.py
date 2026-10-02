@@ -674,7 +674,9 @@ def _nll_loss_backward_impl(
     grad.scatter_(1, clamped_target.unsqueeze(1), contrib.unsqueeze(1))
 
     if reduction_mean:
-        divisor = divisor_tensor.reshape(-1)[0] if divisor_tensor is not None else weights[clamped_target[valid]].sum()
+        if divisor_tensor is None:
+            raise RuntimeError("Divisor tensor must not be empty for mean reduction")
+        divisor = divisor_tensor.reshape(-1)[0]
         grad = grad / divisor
     return grad.reshape(input_grad_tensor.shape)
 
