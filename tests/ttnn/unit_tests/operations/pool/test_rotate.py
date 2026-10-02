@@ -327,6 +327,41 @@ def test_height_sharded_memory(device, interpolation_mode):
     assert comparison_passed, f"{interpolation_mode} height sharded memory test failed"
 
 
+@skip_for_blackhole("Incorrect result on BH github issue #36263")
+@pytest.mark.parametrize(
+    "interpolation_mode, input_shape, num_cores, shard_height",
+    [
+        ("nearest", (1, 7, 7, 64), 7, 8),
+        ("nearest", (1, 100, 1, 32), 4, 32),
+        ("bilinear", (1, 10, 10, 64), 2, 64),
+    ],
+)
+@pytest.mark.parametrize("angle", [0.0, 45.0])
+def test_uneven_height_sharded_memory(device, interpolation_mode, input_shape, num_cores, shard_height, angle):
+    """The last shard is only partly backed by real sticks; padding sticks must not be read or written."""
+    torch.manual_seed(0)
+
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))}),
+        (shard_height, input_shape[3]),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sharded_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn.rotate)
+    torch_output_nhwc = golden_function(torch_input_nhwc, angle=angle, interpolation_mode=interpolation_mode)
+
+    ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn_input_sharded = ttnn.to_memory_config(ttnn_input, sharded_memory_config)
+    ttnn_output = ttnn.rotate(ttnn_input_sharded, angle=angle, interpolation_mode=interpolation_mode)
+    ttnn_output_torch = ttnn.to_torch(ttnn_output)
+
+    atol, rtol = get_rotate_tolerances(input_shape, angle, interpolation_mode)
+    comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
+    assert comparison_passed, f"{interpolation_mode} uneven height sharded test failed"
+
+
 # ============================================================================
 # Data Type Tests
 # ============================================================================
