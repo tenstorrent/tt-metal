@@ -11,21 +11,20 @@ void kernel_main() {
     int i{0};
     const auto num_tiles = get_arg_val<uint32_t>(i++);
 
-    constexpr uint32_t dfb_x_id = 0;
-    constexpr uint32_t dfb_clip_coef_clamped_id = 1;  // clip_coef_clamped
-    constexpr uint32_t dfb_y_id = 16;
+    constexpr uint32_t cb_x = 0;
+    constexpr uint32_t cb_clip_coef_clamped = 1;  // clip_coef_clamped
+    constexpr uint32_t cb_y = 16;
 
-    compute_kernel_hw_startup(dfb_x_id, dfb_clip_coef_clamped_id, dfb_y_id);
+    compute_kernel_hw_startup(cb_x, cb_clip_coef_clamped, cb_y);
 
     ckl::mul<
-        ckl::input(dfb_x_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+        ckl::input(cb_x, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
         ckl::input(
-            dfb_clip_coef_clamped_id,
+            cb_clip_coef_clamped,
             ckl::BroadcastDim::Scalar,
             ckl::WaitPolicy::Upfront,
             ckl::PopPolicy::AtEnd,
             ckl::DataFormatReconfig::Disabled),
-        ckl::output(
-            dfb_y_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>(
+        ckl::output(cb_y, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>(
         ckl::IterationShape::tiles(num_tiles));
 }

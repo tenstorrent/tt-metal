@@ -111,7 +111,7 @@ void kernel_main() {
                         dfb::dycopy, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
 #ifdef BETA_GRAD_HAS_VALUE
-            // Compute dfb::dyadd.
+            // Compute dyadd
             if (inner_idx == 0) {
 #ifdef GAMMA_GRAD_HAS_VALUE
                 copy_tile_to_dfb<dfb::dycopy, dfb::dyadd>(0, 0);
@@ -157,12 +157,12 @@ void kernel_main() {
                 ckl::IterationShape::one_tile());
 
 #ifdef BETA_GRAD_HAS_VALUE
-            // Compute dfb::ydy.
+            // Compute ydy
             mul_tiles_to_dfb<dfb::y, dfb::dycopy, dfb::ydy>(0, 0, 1, 0);
 #else
             mul_tiles_to_dfb<dfb::y, dfb::dycopy, dfb::ydy>(0, 0, 1, 1);
 #endif
-            // Compute dfb::ydyadd.
+            // Compute ydyadd
             if (inner_idx == 0) {
                 copy_tile_to_dfb<dfb::ydy, dfb::ydyadd>();
             } else {
@@ -176,24 +176,24 @@ void kernel_main() {
         }  // inner_idx loop
 
 #ifdef GAMMA_GRAD_HAS_VALUE
-        // Compute dfb::dgamma.
+        // Compute dgamma
         if (is_lastdim_layernorm || is_groupnorm) {
-            // Sum[y * dy].
+            // Sum[y * dy]
             compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::ydyadd, dfb::scaler, dfb::dgamma>(
                 compute_kernel_lib::ReduceInputBlockShape::single());
         } else {
-            // Just copy.
+            // Just copy
             copy_tile_to_dfb<dfb::ydyadd, dfb::dgamma>();
         }
 #endif  // GAMMA_GRAD_HAS_VALUE
 #ifdef BETA_GRAD_HAS_VALUE
-        // Compute dfb::dbeta.
+        // Compute dbeta
         if (is_lastdim_layernorm || is_groupnorm) {
-            // Sum[dy].
+            // Sum[dy]
             compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::dyadd, dfb::scaler, dfb::dbeta>(
                 compute_kernel_lib::ReduceInputBlockShape::single());
         } else {
-            // Just copy.
+            // Just copy
             copy_tile_to_dfb<dfb::dyadd, dfb::dbeta>();
         }
 #endif  // BETA_GRAD_HAS_VALUE

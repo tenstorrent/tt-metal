@@ -110,14 +110,14 @@ void kernel_main() {
         dfb_mean_obj.wait_front(onetile);  // comes from the reader
         dfb_rstd_obj.wait_front(onetile);  // comes from the reader
 
-        // Compute dfb::y
+        // Compute y
         // y = (x - mean) * rstd
-        constexpr auto dfb_dyadd_id = dfb::tmp1;
-        constexpr auto dfb_ydyadd_id = dfb::tmp2;
+        constexpr auto dfb_dyadd = dfb::tmp1;
+        constexpr auto dfb_ydyadd = dfb::tmp2;
         for (uint32_t wt = 0; wt < Wt; wt++) {
-            // Compute dfb_xmm_id
+            // Compute xmm
             // x - mean
-            constexpr auto dfb_xmm_id = dfb::tmp3;
+            constexpr auto dfb_xmm = dfb::tmp3;
             ckl::sub<
                 ckl::input(dfb::x, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                 ckl::input(
@@ -126,16 +126,16 @@ void kernel_main() {
                     ckl::WaitPolicy::None,
                     ckl::PopPolicy::None,
                     kDataFormatReconfig),
-                ckl::output(dfb_xmm_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
+                ckl::output(dfb_xmm, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
                 ckl::IterationShape::one_tile());
 
-            // Compute dfb::y
+            // Compute y
             // (x - mean) * rstd and mask(optional)
             ckl::eltwise_chain(
                 ckl::IterationShape::one_tile(),
                 ckl::BinaryFpu<
                     ckl::BinaryFpuOp::Mul,
-                    ckl::input(dfb_xmm_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                    ckl::input(dfb_xmm, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                     ckl::input(
                         dfb::rstd,
                         is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar,
@@ -145,8 +145,8 @@ void kernel_main() {
                 MOREH_MASK_H(wt) MOREH_MASK_W(wt) ckl::PackTile<ckl::output(
                     dfb::y, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
-            // Copy dfb::dy to dfb::dycopy
-            // Compute dfb::dycopy
+            // Copy dy to dycopy
+            // Compute dycopy
             // dycopy = dy * gamma and mask(optional)
             ckl::eltwise_chain(
                 ckl::IterationShape::one_tile(),
@@ -154,62 +154,59 @@ void kernel_main() {
                 MOREH_MASK_H(wt) MOREH_MASK_W(wt) ckl::PackTile<ckl::output(
                     dfb::dycopy, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
-            // Compute dfb_dyadd_id
+            // Compute dyadd
             if (wt == 0) {
                 ckl::copy<
                     ckl::input(dfb::dycopy, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, kDataFormatReconfig),
-                    ckl::output(
-                        dfb_dyadd_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
+                    ckl::output(dfb_dyadd, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
                     ckl::IterationShape::one_tile());
             } else {
                 ckl::add<
-                    ckl::input(dfb_dyadd_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                    ckl::input(dfb_dyadd, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                     ckl::input(dfb::dycopy, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, kDataFormatReconfig),
-                    ckl::output(
-                        dfb_dyadd_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
+                    ckl::output(dfb_dyadd, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
                     ckl::IterationShape::one_tile());
             }
-            // We don't pop dfb::dycopy here.
+            // We don't pop dycopy here.
 
-            // Compute dfb_ydy_id and dfb_ydyadd_id
-            constexpr auto dfb_ydy_id = dfb::tmp3;
-            // Compute dfb_ydy_id
+            // Compute ydy and ydyadd
+            constexpr auto dfb_ydy = dfb::tmp3;
+            // Compute ydy
             ckl::mul<
                 ckl::input(dfb::y, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                 ckl::input(dfb::dycopy, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, kDataFormatReconfig),
-                ckl::output(dfb_ydy_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
+                ckl::output(dfb_ydy, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
                 ckl::IterationShape::one_tile());
 
-            // Compute dfb_ydyadd_id
+            // Compute ydyadd
             if (wt == 0) {
                 ckl::copy<
-                    ckl::input(dfb_ydy_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                    ckl::input(dfb_ydy, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                     ckl::output(
-                        dfb_ydyadd_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
+                        dfb_ydyadd, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
                     ckl::IterationShape::one_tile());
             } else {
                 ckl::add<
-                    ckl::input(dfb_ydyadd_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
-                    ckl::input(dfb_ydy_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                    ckl::input(dfb_ydyadd, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                    ckl::input(dfb_ydy, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                     ckl::output(
-                        dfb_ydyadd_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
+                        dfb_ydyadd, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
                     ckl::IterationShape::one_tile());
             }
         }  // Wt loop
 
-        // Compute dfb::dysum
+        // Compute dysum
         // Sum[dy]
-        ckl::reduce<REDUCE_OP, REDUCE_DIM, dfb_dyadd_id, dfb::scaler, dfb::dysum>(ckl::ReduceInputBlockShape::single());
+        ckl::reduce<REDUCE_OP, REDUCE_DIM, dfb_dyadd, dfb::scaler, dfb::dysum>(ckl::ReduceInputBlockShape::single());
 
-        // Compute dfb::ydysum
+        // Compute ydysum
         // Sum[y * dy]
-        ckl::reduce<REDUCE_OP, REDUCE_DIM, dfb_ydyadd_id, dfb::scaler, dfb::ydysum>(
-            ckl::ReduceInputBlockShape::single());
+        ckl::reduce<REDUCE_OP, REDUCE_DIM, dfb_ydyadd, dfb::scaler, dfb::ydysum>(ckl::ReduceInputBlockShape::single());
 
-        // Compute dfb_recip_nrstd_id
-        // rstd / n -> dfb::tmp3
-        constexpr auto dfb_recip_nrstd_id = dfb::tmp3;
-        DataflowBuffer dfb_recip_nrstd_obj(dfb_recip_nrstd_id);
+        // Compute recip_nrstd
+        // rstd / n -> tmp3
+        constexpr auto dfb_recip_nrstd = dfb::tmp3;
+        DataflowBuffer dfb_recip_nrstd_obj(dfb_recip_nrstd);
         ckl::eltwise_chain(
             ckl::IterationShape::one_tile(),
             ckl::BinaryFpu<
@@ -228,16 +225,16 @@ void kernel_main() {
                     ckl::PopPolicy::None,
                     kDataFormatReconfig)>{1u, 0u},
             ckl::PackTile<ckl::output(
-                dfb_recip_nrstd_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+                dfb_recip_nrstd, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
-        // Compute dfb::dx
+        // Compute dx
         // ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * (rstd / n)
         dfb_dysum_obj.wait_front(onetile);
         dfb_ydysum_obj.wait_front(onetile);
         dfb_recip_nrstd_obj.wait_front(onetile);
         for (uint32_t wt = 0; wt < Wt; wt++) {
-            // Copy dfb::dy to dfb::dycopy
-            // Compute dfb::dycopy
+            // Copy dy to dycopy
+            // Compute dycopy
             // dycopy = dy * gamma and mask(optional)
             ckl::eltwise_chain(
                 ckl::IterationShape::one_tile(),
@@ -245,33 +242,32 @@ void kernel_main() {
                 MOREH_MASK_H(wt) MOREH_MASK_W(wt) ckl::PackTile<ckl::output(
                     dfb::dycopy, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
-            // Compute dfb_ndy_id
+            // Compute ndy
             // n * dy
-            constexpr auto dfb_ndy_id = dfb::tmp1;
+            constexpr auto dfb_ndy = dfb::tmp1;
             ckl::mul<
                 ckl::input(dfb::n_recip_n, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
                 ckl::input(dfb::dycopy, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
-                ckl::output(dfb_ndy_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
+                ckl::output(dfb_ndy, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
                 ckl::IterationShape::one_tile());
 
-            // Compute dfb_ndymdysum_id
+            // Compute ndymdysum
             // n * dy - Sum[dy]
-            constexpr auto dfb_ndymdysum_id = dfb::tmp2;
+            constexpr auto dfb_ndymdysum = dfb::tmp2;
             ckl::sub<
-                ckl::input(dfb_ndy_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                ckl::input(dfb_ndy, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                 ckl::input(
                     dfb::dysum,
                     is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar,
                     ckl::WaitPolicy::None,
                     ckl::PopPolicy::None,
                     kDataFormatReconfig),
-                ckl::output(
-                    dfb_ndymdysum_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
+                ckl::output(dfb_ndymdysum, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
                 ckl::IterationShape::one_tile());
 
-            // Compute dfb_xmm_id
+            // Compute xmm
             // x - mean and mask(optional)
-            constexpr auto dfb_xmm_id = dfb::tmp1;
+            constexpr auto dfb_xmm = dfb::tmp1;
             ckl::eltwise_chain(
                 ckl::IterationShape::one_tile(),
                 ckl::BinaryFpu<
@@ -284,11 +280,11 @@ void kernel_main() {
                         ckl::PopPolicy::None,
                         kDataFormatReconfig)>{},
                 MOREH_MASK_H(wt) MOREH_MASK_W(wt) ckl::PackTile<ckl::output(
-                    dfb_xmm_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+                    dfb_xmm, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
-            // Compute dfb::y
+            // Compute y
             ckl::mul<
-                ckl::input(dfb_xmm_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                ckl::input(dfb_xmm, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                 ckl::input(
                     dfb::rstd,
                     is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar,
@@ -298,9 +294,9 @@ void kernel_main() {
                 ckl::output(dfb::y, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
                 ckl::IterationShape::one_tile());
 
-            // Compute dfb_yydysum_id
+            // Compute yydysum
             // y * Sum[y * dy]
-            constexpr auto dfb_yydysum_id = dfb::tmp1;
+            constexpr auto dfb_yydysum = dfb::tmp1;
             ckl::mul<
                 ckl::input(dfb::y, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                 ckl::input(
@@ -309,23 +305,22 @@ void kernel_main() {
                     ckl::WaitPolicy::None,
                     ckl::PopPolicy::None,
                     kDataFormatReconfig),
-                ckl::output(
-                    dfb_yydysum_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
+                ckl::output(dfb_yydysum, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
                 ckl::IterationShape::one_tile());
 
-            // Compute dfb_tmp4_id
+            // Compute tmp4
             // (n * dy - Sum[dy]) - (y * Sum[y * dy])
-            constexpr auto dfb_tmp4_id = dfb::y;
+            constexpr auto dfb_tmp4 = dfb::y;
             ckl::sub<
-                ckl::input(dfb_ndymdysum_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
-                ckl::input(dfb_yydysum_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
-                ckl::output(dfb_tmp4_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
+                ckl::input(dfb_ndymdysum, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                ckl::input(dfb_yydysum, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                ckl::output(dfb_tmp4, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
                 ckl::IterationShape::one_tile());
 
-            // Compute dfb::dx
+            // Compute dx
             ckl::mul<
-                ckl::input(dfb_tmp4_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
-                ckl::input(dfb_recip_nrstd_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
+                ckl::input(dfb_tmp4, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                ckl::input(dfb_recip_nrstd, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
                 ckl::output(dfb::dx, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
                 ckl::IterationShape::one_tile());
         }  // Wt loop
