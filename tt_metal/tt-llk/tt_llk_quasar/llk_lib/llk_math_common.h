@@ -8,6 +8,7 @@
 
 #include "cmath_common.h"
 #include "llk_defs.h"
+#include "llk_fp32_dest_acc.h"
 using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
@@ -246,6 +247,25 @@ inline void _configure_mov_ops_explicit_alu_data_format_state_(DataFormat srcA_f
         mov_srcA_format, mov_srcB_format, false /* en_int32_dest_format */, EN_32BIT_DEST ? DataFormat::Float32 : DataFormat::Invalid);
 
     data_format_config_set = DataFormatConfigSet::MOV_OPS_EXPLICIT_FMT;
+}
+
+/**
+ * @brief Math-thread half of a mid-kernel FP32 dest-acc reconfiguration.
+ *
+ * Runs the MATH side of @ref _llk_set_fp32_dest_acc_ (flips ALU_ACC_CTRL Fp32_enabled and
+ * SFPU_Fp32_enabled once Unpack and Pack have drained), then invalidates the ALU format latch. The
+ * MOV_OPS_EXPLICIT_FMT config set has more width-dependent fields than those two bits (Tf32 src
+ * formats, Dstacc override), and the INT8_math_enabled bit depends on width too, so the next math init
+ * must rewrite the whole ALU config with the new width instead of early-returning on the latch.
+ *
+ * @param enable: True to enable FP32 dest accumulation, false to disable.
+ * @note Pair with @ref _llk_set_fp32_dest_acc_ on the unpack (T0) and pack (T2) threads. Every math init
+ * after this call must be given the new EN_32BIT_DEST explicitly.
+ */
+inline void _llk_math_set_fp32_dest_acc_(const bool enable)
+{
+    _llk_set_fp32_dest_acc_<ThreadId::MathThreadId>(enable);
+    data_format_config_set = DataFormatConfigSet::UNCONFIGURED;
 }
 
 /**

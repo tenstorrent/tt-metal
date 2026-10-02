@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #include "sanitizer/api.h"
 #include "api/compute/src_order.h"
@@ -57,7 +58,7 @@ namespace ckernel {
  */
 // clang-format on
 template <SrcOrder src_order = SrcOrder::Regular>
-ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
+ALWI void compute_kernel_hw_startup(std::uint32_t icb0, std::uint32_t icb1, std::uint32_t ocb) {
     LLK_SAN_FUNCTION();
 
     // Map the operands onto the physical source registers. For SrcOrder::Reverse (matmul) in0 (icb0)
@@ -66,8 +67,8 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) 
     // resolved at compile time. Both UNPACK and MATH hw_configure are programmed with the same
     // (src_a_cb, src_b_cb) ordering so the unpacker tile descriptors and the math ALU format registers agree.
     constexpr bool reverse = (src_order == SrcOrder::Reverse);
-    const uint32_t src_a_cb = reverse ? icb1 : icb0;
-    const uint32_t src_b_cb = reverse ? icb0 : icb1;
+    const std::uint32_t src_a_cb = reverse ? icb1 : icb0;
+    const std::uint32_t src_b_cb = reverse ? icb0 : icb1;
 #ifndef ARCH_QUASAR
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(src_a_cb, src_b_cb)));
 
@@ -103,7 +104,7 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) 
  * | Function   | ocb   | The identifier of the output circular buffer (CB)                  | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) {
+ALWI void compute_kernel_hw_startup(std::uint32_t icb0, std::uint32_t ocb) {
     LLK_SAN_FUNCTION();
 
     compute_kernel_hw_startup(icb0, icb0, ocb);
@@ -127,18 +128,19 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) {
  * Must be paired with disable_fp32_dest_acc() when switching back to
  * BF16 accumulation mode within the same kernel.
  *
- * Only available on Wormhole and Blackhole. Not supported on Quasar (compile error)
+ * On Quasar the packer has no Read_32b_data bit (its dest read width follows the pack
+ * IN_DATA_FORMAT, which the caller must reprogram), the ALU format latch is reset so the
+ * next math init rewrites the ALU config, and the isolated-SFPU TRISC is not part of the
+ * handshake (kernels that drive the SFPU on dest from TRISC3 must not use this).
  *
  * Return value: None
  */
 // clang-format on
-#ifndef ARCH_QUASAR
 ALWI void enable_fp32_dest_acc() {
     UNPACK((llk_unpack_wait_fp32_dest_acc()));
     MATH((llk_math_set_fp32_dest_acc(true)));
     PACK((llk_pack_wait_fp32_dest_acc()));
 }
-#endif
 
 // clang-format off
 /**
@@ -156,18 +158,19 @@ ALWI void enable_fp32_dest_acc() {
  * All three TRISC threads must call this together. TRISC mailboxes must not
  * be in use.
  *
- * Only available on Wormhole and Blackhole. Not supported on Quasar (compile error)
+ * On Quasar the packer has no Read_32b_data bit (its dest read width follows the pack
+ * IN_DATA_FORMAT, which the caller must reprogram), the ALU format latch is reset so the
+ * next math init rewrites the ALU config, and the isolated-SFPU TRISC is not part of the
+ * handshake (kernels that drive the SFPU on dest from TRISC3 must not use this).
  *
  * Return value: None
  */
 // clang-format on
-#ifndef ARCH_QUASAR
 ALWI void disable_fp32_dest_acc() {
     UNPACK((llk_unpack_wait_fp32_dest_acc()));
     MATH((llk_math_set_fp32_dest_acc(false)));
     PACK((llk_pack_wait_fp32_dest_acc()));
 }
-#endif
 
 // clang-format off
 /**
@@ -183,7 +186,10 @@ ALWI void disable_fp32_dest_acc() {
  * (compute_kernel_hw_startup already programmed the requested mode).
  * Must be paired with restore_fp32_dest_acc<enable>() using the same flag.
  *
- * Only available on Wormhole and Blackhole. Not supported on Quasar (compile error)
+ * On Quasar the packer has no Read_32b_data bit (its dest read width follows the pack
+ * IN_DATA_FORMAT, which the caller must reprogram), the ALU format latch is reset so the
+ * next math init rewrites the ALU config, and the isolated-SFPU TRISC is not part of the
+ * handshake (kernels that drive the SFPU on dest from TRISC3 must not use this).
  *
  * Return value: None
  *
@@ -192,7 +198,6 @@ ALWI void disable_fp32_dest_acc() {
  * | Template   | enable | Dest-acc mode the enclosed section needs            | bool | true, false | True     |
  */
 // clang-format on
-#ifndef ARCH_QUASAR
 template <bool enable>
 ALWI void set_fp32_dest_acc() {
     if constexpr (enable != static_cast<bool>(DST_ACCUM_MODE)) {
@@ -203,7 +208,6 @@ ALWI void set_fp32_dest_acc() {
         }
     }
 }
-#endif
 
 // clang-format off
 /**
@@ -219,7 +223,10 @@ ALWI void set_fp32_dest_acc() {
  * No-op when `enable` already matches DST_ACCUM_MODE (the matching set
  * was also a no-op). Pass the same `enable` used at the set.
  *
- * Only available on Wormhole and Blackhole. Not supported on Quasar (compile error)
+ * On Quasar the packer has no Read_32b_data bit (its dest read width follows the pack
+ * IN_DATA_FORMAT, which the caller must reprogram), the ALU format latch is reset so the
+ * next math init rewrites the ALU config, and the isolated-SFPU TRISC is not part of the
+ * handshake (kernels that drive the SFPU on dest from TRISC3 must not use this).
  *
  * Return value: None
  *
@@ -228,7 +235,6 @@ ALWI void set_fp32_dest_acc() {
  * | Template   | enable | Same flag passed to the matching set_fp32_dest_acc  | bool | true, false | True     |
  */
 // clang-format on
-#ifndef ARCH_QUASAR
 template <bool enable>
 ALWI void restore_fp32_dest_acc() {
     if constexpr (enable != static_cast<bool>(DST_ACCUM_MODE)) {
@@ -239,6 +245,5 @@ ALWI void restore_fp32_dest_acc() {
         }
     }
 }
-#endif
 
 }  // namespace ckernel

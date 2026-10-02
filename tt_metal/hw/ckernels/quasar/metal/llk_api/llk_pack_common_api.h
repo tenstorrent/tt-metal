@@ -10,6 +10,7 @@
 #include "llk_pack_common.h"
 #include "llk_sync.h"
 #include "llk_defs.h"
+#include "llk_fp32_dest_acc.h"
 #include "api/dataflow/dataflow_buffer.h"
 
 namespace llk_pack_detail {
@@ -36,6 +37,16 @@ inline constexpr ckernel::trisc::BfdResource pack_bfd_resource =
  * @tparam MODE: L1 access mode for the descriptor; Strided collapses y/z dims to 1 for the
  * PACR_STRIDE untilize sequences.
  */
+/**
+ * Pack-thread half of a mid-kernel FP32 dest-acc reconfiguration.
+ *
+ * Drains the packer FIFO, waits for MATH to program dest-acc CFG, then STALLWAITs. Quasar has no
+ * Read_32b_data bit: the packer's dest read width follows IN_DATA_FORMAT, which this does not change.
+ *
+ * @note Must be called together with llk_math_set_fp32_dest_acc and llk_unpack_wait_fp32_dest_acc.
+ */
+inline void llk_pack_wait_fp32_dest_acc() { _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>(); }
+
 template <ckernel::trisc::L1AccessMode MODE = ckernel::trisc::L1AccessMode::Continuous>
 inline void llk_pack_program_bfd(const std::uint32_t output_id) {
     LLK_REINIT_GUARD_NOTE_PROGRAMMED(pack_bfd_resource, output_id);
