@@ -14,6 +14,7 @@
 #include "api/compute/common.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/dataflow/circular_buffer.h"
 #ifdef TRISC_UNPACK
 #include "llk_unpack_common_api.h"
@@ -316,6 +317,8 @@ inline void chain() {
 template <Form F = Form::HornerR, NSrc S = NSrc::Dst, bool STALL = false, uint32_t FMT = kFmtDefault>
 inline void tinv(uint32_t negN, uint32_t cb_eye, uint32_t out) {
     cb_reserve_back(out, 1);
+    reconfig_data_format_srca(cb_eye);  // the identity and negN copies read fp32 through SrcA
+    pack_reconfig_data_format(out);
     copy_init(cb_eye);
     tile_regs_acquire();
     copy_tile(cb_eye, 0, kTout);

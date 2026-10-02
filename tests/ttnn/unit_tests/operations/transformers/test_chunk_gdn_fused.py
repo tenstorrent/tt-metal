@@ -852,22 +852,25 @@ def test_fused_config_pinned_geometry_matches_free(device):
 
 
 # ---------------------------------------------------------------------------
-# WY-inverse methods (wy_inverse = ttnn.ChunkGdnWyInverse.AUTO | HORNER | FORWARD_SUBSTITUTION; AUTO = the solve on
-# Blackhole at chunk_size 32, Horner elsewhere). The SFPU forward-substitution solve changes the arithmetic
-# of T_inv, but the phased prep and the fused producer compile the same body for a given method, so
-# fused == phased stays bit-exact for every method. Every other test in this file runs AUTO, so the solve is
-# what they exercise; the tests below pin each method explicitly. The solver's own accuracy is tested on the
-# prep prim (test_chunk_gdn_prims.py).
+# WY-inverse methods (wy_inverse = ttnn.ChunkGdnWyInverse.AUTO | HORNER | FORWARD_SUBSTITUTION | FPU_HORNER;
+# AUTO = FPU_HORNER on Blackhole at chunk_size 32, Horner elsewhere). The SFPU solve and the DEST-chained FPU
+# inverse change the arithmetic of T_inv, but the phased prep and the fused producer compile the same body for a
+# given method, so fused == phased stays bit-exact for every method. Every other test in this file runs AUTO, so
+# FPU_HORNER is what they exercise; the tests below pin each method explicitly. The inverses' own accuracy is
+# tested on the prep prim (test_chunk_gdn_prims.py).
 # ---------------------------------------------------------------------------
 
-AUTO, HORNER, FORWARD_SUBSTITUTION = (
+AUTO, HORNER, FORWARD_SUBSTITUTION, FPU_HORNER = (
     ttnn.ChunkGdnWyInverse.AUTO,
     ttnn.ChunkGdnWyInverse.HORNER,
     ttnn.ChunkGdnWyInverse.FORWARD_SUBSTITUTION,
+    ttnn.ChunkGdnWyInverse.FPU_HORNER,
 )
 
 
-@pytest.mark.parametrize("method", [HORNER, FORWARD_SUBSTITUTION], ids=["horner", "forward_substitution"])
+@pytest.mark.parametrize(
+    "method", [HORNER, FORWARD_SUBSTITUTION, FPU_HORNER], ids=["horner", "forward_substitution", "fpu_horner"]
+)
 @pytest.mark.parametrize(
     "hk, hv, nv, np_producers, nc, placement",
     [
@@ -893,14 +896,14 @@ def test_fused_tinv_bit_exact_vs_phased(device, method, hk, hv, nv, np_producers
 
 def test_fused_tinv_vs_horner(device):
     """End to end at the 27B TP-4 shape (BH=12, T=2048, the model's default fused geometry): the default
-    WY-inverse (AUTO, the SFPU solve on this device) against pinned Horner, and against the torch golden. The
+    WY-inverse (AUTO, FPU_HORNER on this device) against pinned Horner, and against the torch golden. The
     T_inv difference is ~1e-3 (prims test); across the 64-chunk recurrence it must stay PCC-class."""
     hk, hv, nc = 4, 12, 64
     host, tensors, s0 = _make_inputs(device, 1, nc * CHUNK, hk, hv, True, seed=20261002)
     const_tiles = _const_tiles(device)
     o_h, fs_h = _run_op(device, tensors, const_tiles, s0, _fused(), HORNER)
     o_s, fs_s = _run_op(device, tensors, const_tiles, s0, _fused(), AUTO)
-    assert not torch.equal(o_s, o_h), "AUTO output identical to Horner — the SFPU solve did not run"
+    assert not torch.equal(o_s, o_h), "AUTO output identical to Horner — the DEST-chained inverse did not run"
     q, k, v, g, beta, s0_host = host
     o_ref, fs_ref = _golden_chunk_gdn(q.float(), k.float(), v.float(), g, beta, KDIM**-0.5, s0_host, CHUNK)
     for name, got, horner, ref in (("o", o_s, o_h, o_ref), ("final_state", fs_s, fs_h, fs_ref)):
@@ -913,36 +916,36 @@ def test_fused_tinv_vs_horner(device):
 
 
 def test_fused_tinv_cache_identity(device):
-    """Cache identity for wy_inverse on both prims: AUTO resolves to FORWARD_SUBSTITUTION on this device (the explicit form is the same
-    program and the same bits), HORNER compiles its own fused program and its own phased prep program (the
-    scan is unchanged, so phased compiles exactly one), and revisits are cache hits."""
+    """Cache identity for wy_inverse on both prims: AUTO resolves to FPU_HORNER on this device (the explicit
+    form is the same program and the same bits), HORNER and FORWARD_SUBSTITUTION each compile their own fused
+    program and their own phased prep program (the scan is unchanged, so phased compiles exactly one each), and
+    revisits are cache hits."""
     hk, hv = NP_BH_KV_HEADS
     _, tensors, s0 = _make_inputs(device, 1, T_SMALL, hk, hv, True, seed=20261003)
     const_tiles = _const_tiles(device)
     for cfg in (_fused(), _phased()):
         o_def, fs_def = _run_op(device, tensors, const_tiles, s0, cfg, AUTO)
         n = device.num_program_cache_entries()
-        o_exp, fs_exp = _run_op(device, tensors, const_tiles, s0, cfg, FORWARD_SUBSTITUTION)
+        o_exp, fs_exp = _run_op(device, tensors, const_tiles, s0, cfg, FPU_HORNER)
         assert (
             device.num_program_cache_entries() == n
-        ), f"{cfg}: explicit FORWARD_SUBSTITUTION compiled a new program — AUTO must resolve to it on this device"
-        assert torch.equal(o_def, o_exp) and torch.equal(
-            fs_def, fs_exp
-        ), f"{cfg}: AUTO != explicit FORWARD_SUBSTITUTION"
+        ), f"{cfg}: explicit FPU_HORNER compiled a new program — AUTO must resolve to it on this device"
+        assert torch.equal(o_def, o_exp) and torch.equal(fs_def, fs_exp), f"{cfg}: AUTO != explicit FPU_HORNER"
         _run_op(device, tensors, const_tiles, s0, cfg, HORNER)
+        _run_op(device, tensors, const_tiles, s0, cfg, FORWARD_SUBSTITUTION)
         n2 = device.num_program_cache_entries()
         assert (
-            n2 - n == 1
-        ), f"{cfg}: FORWARD_SUBSTITUTION->HORNER compiled {n2 - n} programs (expected 1: the method must be hashed)"
-        for method in (AUTO, FORWARD_SUBSTITUTION, HORNER):
+            n2 - n == 2
+        ), f"{cfg}: HORNER + FORWARD_SUBSTITUTION compiled {n2 - n} programs (expected 2: the method must be hashed)"
+        for method in (AUTO, FORWARD_SUBSTITUTION, HORNER, FPU_HORNER):
             _run_op(device, tensors, const_tiles, s0, cfg, method)
         assert device.num_program_cache_entries() == n2, f"{cfg}: revisiting the methods compiled new programs"
 
 
 def test_fused_tinv_chunk64(device, expect_error):
-    """The SFPU solve is a single-tile (chunk_size == 32) routine. At chunk_size 64 AUTO falls back to Horner
-    (the default is the solve wherever it is supported, and that program is the pinned-Horner one), but an
-    explicit FORWARD_SUBSTITUTION must be refused, not silently downgraded (which would make any A/B vacuous)."""
+    """The SFPU solve and the DEST-chained inverse are single-tile (chunk_size == 32) routines. At chunk_size 64
+    AUTO falls back to Horner (that program is the pinned-Horner one), but an explicit FORWARD_SUBSTITUTION or
+    FPU_HORNER must be refused, not silently downgraded (which would make any A/B vacuous)."""
     _, tensors, s0 = _make_inputs(device, 1, 256, 4, 12, True, seed=20261004)
     q, k, v, g, beta = tensors
     eye, tril, ones, masks = _const_tiles(device, chunk_size=64)
@@ -973,11 +976,13 @@ def test_fused_tinv_chunk64(device, expect_error):
     assert torch.equal(o_def, o_h) and torch.equal(fs_def, fs_h), "chunk 64: AUTO is not the Horner inverse"
     with expect_error(RuntimeError, "needs chunk_size == 32"):
         run(FORWARD_SUBSTITUTION)
+    with expect_error(RuntimeError, "needs chunk_size == 32"):
+        run(FPU_HORNER)
 
 
 def test_mono_tinv_horner_only(device, expect_error):
-    """The mono program has no forward-substitution solve: AUTO resolves to Horner there (bit-identical to an
-    explicit HORNER) and an explicit FORWARD_SUBSTITUTION is refused rather than silently downgraded."""
+    """The mono program has only the Horner inverse: AUTO resolves to it there (bit-identical to an explicit
+    HORNER) and an explicit FORWARD_SUBSTITUTION or FPU_HORNER is refused rather than silently downgraded."""
     hk, hv = NP_BH_KV_HEADS
     _, tensors, s0 = _make_inputs(device, 1, T_SMALL, hk, hv, True, seed=20261005)
     const_tiles = _const_tiles(device)
@@ -987,6 +992,8 @@ def test_mono_tinv_horner_only(device, expect_error):
     assert torch.equal(o_auto, o_h) and torch.equal(fs_auto, fs_h), "mono: AUTO is not the Horner inverse"
     with expect_error(RuntimeError, "Horner only"):
         _run_op(device, tensors, const_tiles, s0, mono, FORWARD_SUBSTITUTION)
+    with expect_error(RuntimeError, "Horner only"):
+        _run_op(device, tensors, const_tiles, s0, mono, FPU_HORNER)
 
 
 # ---------------------------------------------------------------------------

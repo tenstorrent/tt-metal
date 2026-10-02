@@ -58,9 +58,9 @@ namespace ttnn::transformer {
  * model's geometry when it fits this grid and is predicted to beat phased, else phased.
  *
  * wy_inverse: how each chunk's WY inverse T_inv = (I + N)^-1 is computed — ChunkGdnWyInverse::HORNER
- * (matrix engine, every architecture; the reference), FORWARD_SUBSTITUTION (one solve on the SFPU,
- * Blackhole and chunk_size == 32 only) or AUTO (FORWARD_SUBSTITUTION wherever supported, Horner elsewhere).
- * The mono program is Horner-only.
+ * (matrix engine through L1, every architecture; the reference), FPU_HORNER (the same inverse chained
+ * through DEST, Blackhole and chunk_size == 32 only), FORWARD_SUBSTITUTION (one solve on the SFPU, same
+ * support) or AUTO (FPU_HORNER wherever supported, Horner elsewhere). The mono program is Horner-only.
  *
  * output_head_major: the kernel natively produces o head-major ([BH,T,V]); the default
  * path permutes it to token-major [B,T,HV,V]. Callers that want head-major (e.g. the qwen36

@@ -764,12 +764,14 @@ std::vector<Tensor> chunk_gdn(
             attrs.placement = row_local ? 1u : 0u;
         }
     } else {
-        // The mono program has no forward-substitution solve: AUTO resolves to Horner (attrs.tinv's default)
-        // and an explicit request is refused rather than silently downgraded.
+        // The mono program has only the Horner inverse: AUTO resolves to it (attrs.tinv's default) and an
+        // explicit other method is refused rather than silently downgraded.
         TT_FATAL(
-            wy_inverse != ttnn::transformer::ChunkGdnWyInverse::FORWARD_SUBSTITUTION,
+            wy_inverse == ttnn::transformer::ChunkGdnWyInverse::HORNER ||
+                wy_inverse == ttnn::transformer::ChunkGdnWyInverse::AUTO,
             "chunk_gdn: the mono program computes the WY inverse with Horner only; "
-            "wy_inverse=FORWARD_SUBSTITUTION is not available on it (use HORNER or AUTO)");
+            "wy_inverse {} is not available on it (use HORNER or AUTO)",
+            static_cast<uint32_t>(wy_inverse));
     }
     auto tensor_args = ChunkGdnDeviceOperation::tensor_args_t{
         .q = q,
