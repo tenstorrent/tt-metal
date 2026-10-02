@@ -136,10 +136,10 @@ public:
     virtual std::string_view get_compiler_opt_level() const = 0;
     // Returns the linker optimization level
     virtual std::string_view get_linker_opt_level() const = 0;
-    // Returns true when this kernel opted into RISC-V Vector (Zve32f) code generation for its
-    // TRISC2 (pack) compile (ComputeConfig::enable_trisc2_rvv). Default off: the build recipe
-    // is byte-identical to a build without this knob.
-    virtual bool get_trisc2_rvv_enabled() const { return false; }
+    // Returns true when this kernel opted into RISC-V Vector code generation for the compile of
+    // the given compute processor. This is supported for TRISC2 on Blackhole and TRISC0 on Quasar.
+    // Default off: the build recipe is byte-identical to a build without this knob.
+    virtual bool get_rvv_enabled_for_compute_processor(uint32_t /*processor_id*/) const { return false; }
 
     // Called to process the user defines
     virtual void process_defines(std::function<void(const std::string& define, const std::string& value)>) const = 0;
