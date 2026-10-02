@@ -2088,7 +2088,8 @@ class TestConfig:
 
         # Wormhole and Blackhole kernels also signal completion in overlay registers, so the wait never reads their L1.
         signal_addrs = None
-        if self.CHIP_ARCH != ChipArchitecture.QUASAR:
+        # Experiment (bistability repro): REPRO_HOST_L1_POLL=1 polls the L1 mailboxes over the NoC again.
+        if self.CHIP_ARCH != ChipArchitecture.QUASAR and not os.environ.get("REPRO_HOST_L1_POLL"):
             # The TRISC at mailbox word n signals in slot n (trisc.cpp: mailbox_offset / 4).
             addrs = {
                 mailbox: device_module.host_signal_address(word_index[mailbox])
