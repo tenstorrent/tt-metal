@@ -441,6 +441,22 @@ one model's measurement is not evidence about LTX, Wan or Ideogram-4, which keep
 the video not at all (40-48 dB PSNR frame-to-frame, identical anchor and CLIP numbers), so this is
 conditioner fidelity rather than output quality.
 
+## adaLN modulation knobs
+
+The adaLN scale/shift reach the fused norms as a per-token dynamic weight and bias. Each block gathers them from
+its 6-row modulation table with one-hot matmuls (`MINIMAX_H3_ADALN_GATHER=matmul`, exact). On Blackhole the
+pipeline instead hands the norms a per-tile-row map built once per request (`tilerow`, also exact): the norm reads
+tile row `tile_map[r]` of a small expanded table, so the gather runs over the table's few rows rather than the whole
+packed sequence. A request with more boundary tiles than `MINIMAX_H3_ADALN_MIXED_TILES` slots uses the one-hot
+gathers and says so in the log. The norms' static weight is multiplied into the 6-row modulation table instead of
+the per-token weight (`MINIMAX_H3_FOLD_NORM_WEIGHT=0` restores). None of these change the numerics.
+
+| env | effect |
+|---|---|
+| `MINIMAX_H3_ADALN_GATHER=matmul\|tilerow` | how the modulation reaches the norms (default `matmul`; the pipeline defaults to `tilerow` on Blackhole) |
+| `MINIMAX_H3_ADALN_MIXED_TILES=N` | tile-row slots for tiles that straddle an adaLN run boundary (default 16) |
+| `MINIMAX_H3_FOLD_NORM_WEIGHT=0` | apply the norm's static weight per token again instead of folding it into the table |
+
 ## Audio decode precision
 
 The audio VAE constructs in **accurate mode by default**: `MiniMaxH3AudioDecoder` /

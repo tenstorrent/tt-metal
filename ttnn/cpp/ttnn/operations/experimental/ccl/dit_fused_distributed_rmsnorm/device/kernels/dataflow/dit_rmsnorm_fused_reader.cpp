@@ -102,6 +102,10 @@ void kernel_main() {
     constexpr auto rope_cos_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
     constexpr auto rope_sin_args = TensorAccessorArgs<rope_cos_args.next_compile_time_args_offset()>();
     constexpr auto recip_args = TensorAccessorArgs<rope_sin_args.next_compile_time_args_offset()>();
+#ifdef AFFINE_TILE_ROW_MAP
+    constexpr uint32_t tile_row_map_cb = get_compile_time_arg_val(recip_args.next_compile_time_args_offset());
+    constexpr auto tile_row_map_args = TensorAccessorArgs<recip_args.next_compile_time_args_offset() + 1>();
+#endif
 
     uint32_t arg_idx = 0;
     const uint32_t input_addr = get_common_arg_val<uint32_t>(0);
@@ -112,6 +116,9 @@ void kernel_main() {
     const uint32_t tile_row_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t tile_row_end = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t recip_addr = get_common_arg_val<uint32_t>(5);
+#ifdef AFFINE_TILE_ROW_MAP
+    const uint32_t tile_row_map_addr = get_common_arg_val<uint32_t>(6);
+#endif
 
     Noc noc;
 
@@ -156,6 +163,17 @@ void kernel_main() {
         noc.async_read_barrier();
         cb_recip_lut.push_back(1);
     }
+
+#ifdef AFFINE_TILE_ROW_MAP
+    const auto tile_row_map_accessor = TensorAccessor(tile_row_map_args, tile_row_map_addr);
+    CircularBuffer cb_tile_row_map(tile_row_map_cb);
+    if (tile_row_start < tile_row_end) {
+        noc.async_read(
+            tile_row_map_accessor, cb_tile_row_map, tile_row_map_accessor.get_aligned_page_size(), {.page_id = 0}, {});
+    }
+    volatile tt_l1_ptr uint32_t* tile_row_map =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_tile_row_map.get_write_ptr());
+#endif
 
     // Row-broadcast weight / bias live in a TILE-layout [1, H] tensor where
     // only the first face-row of each face carries data — the rest is zero.
@@ -240,6 +258,14 @@ void kernel_main() {
         // Per-token weight / bias: push this row's slice now, in block_size
         // tiles. Full-tile reads since per-token data isn't face-row sparse.
         // Compute kernel pops these per-row.
+#ifdef AFFINE_TILE_ROW_MAP
+        if (tile_row == tile_row_start) {
+            noc.async_read_barrier();
+        }
+        [[maybe_unused]] const uint32_t affine_tile_row = tile_row_map[tile_row];
+#else
+        [[maybe_unused]] const uint32_t affine_tile_row = tile_row;
+#endif
         if constexpr (per_token_weight != 0) {
             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                 const uint32_t tiles_in_block =
@@ -247,7 +273,7 @@ void kernel_main() {
                 cb_weight.reserve_back(tiles_in_block);
                 uint32_t weight_wr_ptr = cb_weight.get_write_ptr();
                 for (uint32_t i = 0; i < tiles_in_block; i++) {
-                    const uint32_t w_idx = tile_row * num_tile_cols + col_tile + i;
+                    const uint32_t w_idx = affine_tile_row * num_tile_cols + col_tile + i;
                     noc.async_read(
                         weight_accessor,
                         CoreLocalMem<uint32_t>(weight_wr_ptr),
@@ -267,7 +293,7 @@ void kernel_main() {
                 cb_bias.reserve_back(tiles_in_block);
                 uint32_t bias_wr_ptr = cb_bias.get_write_ptr();
                 for (uint32_t i = 0; i < tiles_in_block; i++) {
-                    const uint32_t b_idx = tile_row * num_tile_cols + col_tile + i;
+                    const uint32_t b_idx = affine_tile_row * num_tile_cols + col_tile + i;
                     noc.async_read(
                         bias_accessor, CoreLocalMem<uint32_t>(bias_wr_ptr), bias_page_bytes, {.page_id = b_idx}, {});
                     bias_wr_ptr += bias_tile_bytes;

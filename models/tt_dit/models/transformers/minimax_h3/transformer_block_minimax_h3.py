@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -15,6 +17,7 @@ from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.substate import rename_substate
+from ....utils.tensor import bf16_tensor
 from .agmm_config import agmm_block_size
 from .attention_minimax_h3 import MiniMaxH3Attention
 from .mmrs_config import has_mmrs_config, register_mmrs_config
@@ -141,6 +144,11 @@ class MiniMaxH3TransformerBlock(Module):
             packer_l1_acc=True,
         )
         self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and self.tp_factor > 1
+        self._adaln_gather = os.environ.get("MINIMAX_H3_ADALN_GATHER", "matmul")
+        if self._adaln_gather not in ("matmul", "tilerow"):
+            raise ValueError(f"MINIMAX_H3_ADALN_GATHER={self._adaln_gather!r}: expected 'matmul' or 'tilerow'")
+        self._fold_norm_weight = os.environ.get("MINIMAX_H3_FOLD_NORM_WEIGHT", "1") == "1"
+        self._eye_tables: dict[int, ttnn.Tensor] = {}
         # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
         self._ff1_kn = (hidden_size, 2 * ffn_dim // self.tp_factor)
 
@@ -209,16 +217,44 @@ class MiniMaxH3TransformerBlock(Module):
             # gather would cost one over the whole packed sequence, per scale, per block.
             if p in (_SCALE_MSA, _SCALE_MLP):
                 table = ttnn.add(table, 1.0)
+                if self._fold_norm_weight:
+                    norm = self.norm1 if p == _SCALE_MSA else self.norm2
+                    table = ttnn.multiply(table, norm.weight.data)
             # ttnn.embedding wants a 2D [num_embeddings, embedding_dim] weight.
             table = ttnn.to_layout(table, ttnn.ROW_MAJOR_LAYOUT)
             table = ttnn.reshape(table, (rows, self.hidden_local))
             tables.append(ttnn.to_layout(table, ttnn.TILE_LAYOUT))
         return tables
 
-    def _gather_rows(self, table: ttnn.Tensor, adaln_indices: ttnn.Tensor) -> ttnn.Tensor:
+    def _gather_rows(self, table: ttnn.Tensor, onehot: ttnn.Tensor) -> ttnn.Tensor:
         """Select one table row per row of the local packed sequence -> [1, 1, S_local, hidden_local]."""
-        out = ttnn.embedding(adaln_indices, table, layout=ttnn.TILE_LAYOUT)
+        return ttnn.matmul(onehot, table, compute_kernel_config=self.mm_compute_kernel_config)
+
+    def _onehot(self, adaln_indices: ttnn.Tensor, rows: int) -> ttnn.Tensor:
+        """[1, 1, S_local, rows] bf16 one-hot of the table row per token; exact when multiplied into a bf16 table."""
+        if rows not in self._eye_tables:
+            self._eye_tables[rows] = bf16_tensor(torch.eye(rows), device=self.mesh_device)
+        out = ttnn.embedding(adaln_indices, self._eye_tables[rows], layout=ttnn.TILE_LAYOUT)
         return ttnn.unsqueeze(out, 0)
+
+    @staticmethod
+    def _gather_indices(adaln_indices: ttnn.Tensor) -> ttnn.Tensor:
+        """The [batch, seq] uint32 form ttnn.embedding takes."""
+        indices = ttnn.reshape(adaln_indices, (1, adaln_indices.shape[-1]))
+        return indices if indices.dtype == ttnn.uint32 else ttnn.typecast(indices, ttnn.uint32)
+
+    def onehot_table(self, adaln_indices: ttnn.Tensor, num_timesteps: int) -> ttnn.Tensor:
+        """The one-hot gather matrix shared by every block of a forward."""
+        return self._onehot(self._gather_indices(adaln_indices), num_timesteps * MODALITY_NUM)
+
+    def tilerow_tables(
+        self, tile_map: ttnn.Tensor | None, expanded_indices: ttnn.Tensor | None, num_timesteps: int
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor] | None:
+        """`(tile_map, selector)` shared by every block of a forward under MINIMAX_H3_ADALN_GATHER=tilerow, else None;
+        `selector @ table` is the expanded table; its tile row `tile_map[r]` is tile row `r` of the gather."""
+        if self._adaln_gather != "tilerow" or tile_map is None or expanded_indices is None:
+            return None
+        return tile_map, self._onehot(self._gather_indices(expanded_indices), num_timesteps * MODALITY_NUM)
 
     # ------------------------------------------------------------------ forward
 
@@ -230,6 +266,8 @@ class MiniMaxH3TransformerBlock(Module):
         adaln_indices: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
+        onehot: ttnn.Tensor | None = None,
+        tilerow: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fractured hidden_size on TP
@@ -238,17 +276,23 @@ class MiniMaxH3TransformerBlock(Module):
         rope_cos/rope_sin: [1, 1, N_local, rotary_dim], fractured N on SP, replicated on TP
         logical_n: logical (unfractured) packed length as a [1, 1, 1, 1] uint32 device tensor.
 
+        onehot / tilerow: the shared one-hot gather matrix and the `(tile_map, selector)` pair from
+            `tilerow_tables`; each is built here when absent.
+
         Returns the block output, fractured N on SP and hidden_size on TP.
         """
         tables = self._modulation_tables(temb)
 
-        # ttnn.embedding takes [batch, seq] indices; uint32 is the dtype it expects.
-        indices = ttnn.reshape(adaln_indices, (1, adaln_indices.shape[-1]))
-        if indices.dtype != ttnn.uint32:
-            indices = ttnn.typecast(indices, ttnn.uint32)
+        if onehot is None:
+            onehot = self._onehot(self._gather_indices(adaln_indices), tables[0].shape[0])
 
         def modulation(param: int) -> ttnn.Tensor:
-            return self._gather_rows(tables[param], indices)
+            return self._gather_rows(tables[param], onehot)
+
+        tile_map = tilerow[0] if tilerow is not None else None
+
+        def norm_modulation(param: int) -> ttnn.Tensor:
+            return modulation(param) if tilerow is None else self._gather_rows(tables[param], tilerow[1])
 
         # 1. Modulated self-attention. The (1 + scale) and shift are handed to the norm as a per-token
         # dynamic weight and bias, so the fused norm op applies the modulation itself rather than the
@@ -257,8 +301,10 @@ class MiniMaxH3TransformerBlock(Module):
         residual = spatial_1BND
         normed = self.norm1(
             spatial_1BND,
-            dynamic_weight=modulation(_SCALE_MSA),
-            dynamic_bias=modulation(_SHIFT_MSA),
+            dynamic_weight=norm_modulation(_SCALE_MSA),
+            dynamic_bias=norm_modulation(_SHIFT_MSA),
+            dynamic_weight_includes_static=self._fold_norm_weight,
+            dynamic_tile_row_map=tile_map,
         )
         # The gated residual is fused into to_out's matmul epilogue, so `attn` returns
         # `residual + attn_out * gate` directly rather than the block adding it afterwards.
@@ -275,8 +321,10 @@ class MiniMaxH3TransformerBlock(Module):
         residual = spatial_1BND
         normed = self.norm2(
             spatial_1BND,
-            dynamic_weight=modulation(_SCALE_MLP),
-            dynamic_bias=modulation(_SHIFT_MLP),
+            dynamic_weight=norm_modulation(_SCALE_MLP),
+            dynamic_bias=norm_modulation(_SHIFT_MLP),
+            dynamic_weight_includes_static=self._fold_norm_weight,
+            dynamic_tile_row_map=tile_map,
         )
         # ff1 gathers the TP-fractured input inside its matmul (all_gather_minimal_matmul_async) when
         # parallel_config is passed; ff2 is row-parallel and reduce-scatters back to TP-fractured.
