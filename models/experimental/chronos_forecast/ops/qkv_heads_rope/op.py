@@ -23,6 +23,17 @@ _COS_SIN_L1_BYTES = 96 * 1024
 QK_CB, V_CB, COS_CB, SIN_CB, SCALAR_CB, OUT_CB, NEG_SIN_CB = 0, 1, 2, 3, 4, 16, 24
 
 
+def cos_sin_table_bytes(s_pad: int, head_dim: int, cos_dtype, sin_dtype) -> int:
+    """Per-core L1 bytes for the cos/sin table plus the pre-negated first-half sin tiles."""
+    seq_tiles, head_tiles = s_pad // common.TILE, head_dim // common.TILE
+    table_bytes = seq_tiles * head_tiles * (common.tile_bytes(cos_dtype) + common.tile_bytes(sin_dtype))
+    return table_bytes + seq_tiles * (head_tiles // 2) * common.tile_bytes(sin_dtype)
+
+
+def fits_l1(s_pad: int, head_dim: int, cos_dtype, sin_dtype) -> bool:
+    return cos_sin_table_bytes(s_pad, head_dim, cos_dtype, sin_dtype) <= _COS_SIN_L1_BYTES
+
+
 def qkv_heads_rope(
     xqkv: ttnn.Tensor,
     cos: ttnn.Tensor,
@@ -53,8 +64,7 @@ def qkv_heads_rope(
         if tp[-1] != head_dim or tp[-2] < s_pad:
             raise ValueError(f"{name} {tp} does not cover seq {s_pad} x head dim {head_dim}")
     cs_tiles = seq_tiles * head_tiles
-    table_bytes = cs_tiles * (common.tile_bytes(cos.dtype) + common.tile_bytes(sin.dtype))
-    table_bytes += seq_tiles * (head_tiles // 2) * common.tile_bytes(sin.dtype)
+    table_bytes = cos_sin_table_bytes(s_pad, head_dim, cos.dtype, sin.dtype)
     if table_bytes > _COS_SIN_L1_BYTES:
         raise ValueError(f"cos/sin table needs {table_bytes} B of L1 per core, over {_COS_SIN_L1_BYTES}")
 

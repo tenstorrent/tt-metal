@@ -121,10 +121,17 @@ class TtMhaCore:
         return (_weight(wqkv), _weight(weights.wo))
 
     @staticmethod
-    def _can_fuse_rope(cos, head_dim: int) -> bool:
-        """``ops.qkv_heads_rope`` needs batch-shared (1,1,S,Dh) cos/sin and a
-        rotate_half midpoint on a tile boundary."""
-        return cos.shape[0] == 1 and cos.shape[1] == 1 and head_dim % 64 == 0
+    def _can_fuse_rope(cos, sin, head_dim: int, s_pad: int) -> bool:
+        """``ops.qkv_heads_rope`` needs batch-shared (1,1,S,Dh) cos/sin, a
+        rotate_half midpoint on a tile boundary and a cos/sin table that fits in L1."""
+        from models.experimental.chronos_forecast.ops.qkv_heads_rope.op import fits_l1
+
+        return (
+            cos.shape[0] == 1
+            and cos.shape[1] == 1
+            and head_dim % 64 == 0
+            and fits_l1(s_pad, head_dim, cos.dtype, sin.dtype)
+        )
 
     @staticmethod
     def _rotate_half(x):
@@ -161,7 +168,7 @@ class TtMhaCore:
         )
         ttnn.deallocate(x_norm)
         rope = cos is not None and sin is not None
-        if rope and self._can_fuse_rope(cos, head_dim):
+        if rope and self._can_fuse_rope(cos, sin, head_dim, xqkv.padded_shape[-2]):
             from models.experimental.chronos_forecast import ops
 
             q, k, v = ops.qkv_heads_rope(xqkv, cos, sin, num_heads=num_heads, memory_config=mem)
