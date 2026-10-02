@@ -17,8 +17,9 @@
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 #include <internal/cluster_noc_helpers.hpp>
 
+#include <tt-metalium/experimental/sockets/hd_socket_descriptor.hpp>
+
 #include "tt_metal/distributed/hd_socket_connector_state.hpp"
-#include "tt_metal/distributed/hd_socket_descriptor.hpp"
 
 namespace tt::tt_metal::experimental {
 
