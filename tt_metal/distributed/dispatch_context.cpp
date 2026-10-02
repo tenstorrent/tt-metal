@@ -217,10 +217,11 @@ std::vector<FdL1Conflict> find_fd_l1_conflicts(
             }
         }
 
-        // The cores fast dispatch has claimed on this chip. They were assigned during
-        // init_command_queue_host(), before any firmware is written, and the dispatch core manager is
-        // asked for the whole set rather than for named roles, so every role, queue and split-dispatch
-        // placement the configuration uses is covered.
+        // The cores fast dispatch has claimed on this chip, asked of the dispatch core manager as one set
+        // rather than by named roles. Assignment is lazy, so this is what init_command_queue_host() has
+        // assigned by now, before any firmware is written. When every active device is MMIO-attached,
+        // that is every core dispatch uses. Otherwise the tunneled split-dispatch roles (prefetcher_d,
+        // fabric_mux) are assigned later, inside initialize_dispatch_firmware(), and are not covered here.
         for (const CoreCoord& core : dispatch_core_manager.get_assigned_dispatch_cores(device->id())) {
             // Per-core buffers are recorded in the chip's allocator; lockstep buffers in the allocator
             // of the mesh view that created them (the HYBRID mirror marks ranges but registers no
