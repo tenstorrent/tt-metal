@@ -674,8 +674,10 @@ def _compute_ltx_decoder_dims(
     if num_frames is None or height is None or width is None:
         return None
 
-    # H/W that don't divide the mesh factor are zero-padded up to the next multiple at
-    # runtime (conv_pad_height/width), per stage, so the per-device shard is ceil(full/factor).
+    # Per-device shard is ceil(full/factor) at every stage. That is the runtime shape with
+    # LTX_VAE_EXACT_SHARD=1. Without it the latent's mesh padding doubles at each upsample
+    # (1080p on 4x8: 18x16 per chip from s1 on, not 17x15), so the runtime shard is larger than
+    # these keys. The swept blockings are keyed on these exact dims.
     spatial_compression = 32
     full_H = height // spatial_compression
     full_W = width // spatial_compression
@@ -705,6 +707,37 @@ def _compute_ltx_decoder_dims(
 
     dims.append(k3_dims())  # conv_out
     return dims
+
+
+def _reshard_exact_hw(
+    x_BTHWC: ttnn.Tensor,
+    logical_h: int,
+    logical_w: int,
+    parallel_config: VaeHWParallelConfig,
+    ccl_manager: CCLManager,
+) -> ttnn.Tensor:
+    """Drop the tail mesh padding from the H/W shards once the logical dims divide the mesh.
+
+    The latent's mesh padding doubles at each upsample (1080p on 4x8: 18x16 per chip holding 17x15),
+    so every later op works on the dead rows/cols. Per axis: all_gather, crop to the logical extent,
+    re-partition. Axes that are already exact or still do not divide are left alone.
+    """
+    B, T, _, _, C = x_BTHWC.shape
+    for axis_config, dim, logical in (
+        (parallel_config.height_parallel, 2, logical_h),
+        (parallel_config.width_parallel, 3, logical_w),
+    ):
+        factor = axis_config.factor
+        if factor == 1 or logical <= 0 or logical % factor or x_BTHWC.shape[dim] * factor == logical:
+            continue
+        H, W = x_BTHWC.shape[2], x_BTHWC.shape[3]
+        # all_gather_async takes rank 4: fold B*T.
+        x = ttnn.reshape(x_BTHWC, (B * T, H, W, C))
+        x = ccl_manager.all_gather(x, dim=dim - 1, mesh_axis=axis_config.mesh_axis, use_hyperparams=False)
+        x = x[:, :logical, :, :] if dim == 2 else x[:, :, :logical, :]
+        x = ttnn.mesh_partition(x, dim=dim - 1, cluster_axis=axis_config.mesh_axis)
+        x_BTHWC = ttnn.reshape(x, (B, T, x.shape[1], x.shape[2], C))
+    return x_BTHWC
 
 
 def _decoder_conv_fidelity_from_env() -> ttnn.MathFidelity | None:
@@ -755,6 +788,7 @@ class LTXVideoDecoder(Module):
         self._yuv_output_tracer = None
         self.fuse_yuv_output = os.environ.get("LTX_FUSE_YUV_OUTPUT", "0") == "1"
         self.trace_yuv_output = os.environ.get("LTX_TRACE_YUV_OUTPUT", "0") == "1"
+        self.exact_shard = os.environ.get("LTX_VAE_EXACT_SHARD", "0") == "1"
         self._decode_logical_hw = (0, 0)
         out_channels_with_patch = out_channels * patch_size**2  # 3 * 16 = 48
 
@@ -915,6 +949,11 @@ class LTXVideoDecoder(Module):
                 sample_tt, logical_h, logical_w = up_block(
                     sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w
                 )
+                if self.exact_shard:
+                    # Exact shards make the convs' logical-pad masks no-ops from here on.
+                    sample_tt = _reshard_exact_hw(
+                        sample_tt, logical_h, logical_w, self.parallel_config, self.ccl_manager
+                    )
             else:
                 sample_tt = up_block(sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w)
 
