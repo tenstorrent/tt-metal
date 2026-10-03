@@ -442,6 +442,10 @@ void call_unary_sfpu_operation_init()
     else if constexpr (OPERATION == SfpuType::asin || OPERATION == SfpuType::acos)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION, is_fp32_dest_acc_en>();
+        if constexpr (OPERATION == SfpuType::asin && !is_fp32_dest_acc_en)
+        {
+            ckernel::sfpu::init_asin_bf16();
+        }
     }
     else if constexpr (OPERATION == SfpuType::sinh)
     {
