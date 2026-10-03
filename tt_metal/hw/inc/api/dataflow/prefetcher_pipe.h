@@ -742,8 +742,8 @@ public:
 
     private:
         friend class PrefetcherPipe;
-        FORCE_INLINE explicit RelayView(DataflowBuffer& dfb) : dfb_(dfb) {}
-        DataflowBuffer& dfb_;
+        FORCE_INLINE explicit RelayView(DataflowBufferAnyPattern& dfb) : dfb_(dfb) {}
+        DataflowBufferAnyPattern& dfb_;
     };
 
     // Open the relay DFB the host registered for this slot (DataflowBufferSpec::
@@ -862,7 +862,7 @@ private:
     uint32_t destination_offset_bytes_ = 0;
 
 #if !defined(COMPILE_FOR_TRISC)
-    std::optional<DataflowBuffer> relay_dfb_;
+    std::optional<DataflowBufferAnyPattern> relay_dfb_;
     // Relay pages per pipe entry, fixed at bind_relay() (see prefetcher_pipe_relay_pages_per_entry).
     uint16_t relay_pages_per_entry_ = 1;
 #ifndef ARCH_QUASAR

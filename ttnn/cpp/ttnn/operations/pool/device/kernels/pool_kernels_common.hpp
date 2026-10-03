@@ -41,8 +41,8 @@ ALWI bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val, bool unco
     return true;
 }
 
-template <uint32_t cb_id, uint32_t clear_value_cb_id>
-ALWI void clear_out_tiles(Noc noc, DataflowBuffer dfb, DataflowBuffer clear_dfb) {
+template <uint32_t cb_id, uint32_t clear_value_cb_id, typename DFB, typename ClearDFB>
+ALWI void clear_out_tiles(Noc noc, DFB dfb, ClearDFB clear_dfb) {
     constexpr uint32_t tile_size = get_tile_size(cb_id);
     const uint32_t num_pages = get_local_cb_interface(cb_id).fifo_num_pages;
     const uint32_t num_tiles = get_local_cb_interface(cb_id).fifo_page_size / tile_size;
@@ -56,8 +56,8 @@ ALWI void clear_out_tiles(Noc noc, DataflowBuffer dfb, DataflowBuffer clear_dfb)
     noc.async_read_barrier();
 }
 
-template <uint32_t clear_value_cb_id>
-ALWI void clear_out_tiles(Noc noc, DataflowBuffer dst_dfb, DataflowBuffer clear_value_dfb, uint32_t num_tiles) {
+template <uint32_t clear_value_cb_id, typename DstDFB, typename ClearDFB>
+ALWI void clear_out_tiles(Noc noc, DstDFB dst_dfb, ClearDFB clear_value_dfb, uint32_t num_tiles) {
     constexpr uint32_t tile_size = get_tile_size(clear_value_cb_id);
 
     UnicastEndpoint self_ep;
@@ -70,16 +70,21 @@ ALWI void clear_out_tiles(Noc noc, DataflowBuffer dst_dfb, DataflowBuffer clear_
 }
 
 // Zero out all tiles for a given circular buffer.
-template <uint32_t cb_id>
-ALWI void zero_out_tiles(Noc noc, DataflowBuffer dfb) {
+template <uint32_t cb_id, typename DFB>
+ALWI void zero_out_tiles(Noc noc, DFB dfb) {
     constexpr uint32_t tile_size = get_tile_size(cb_id);
     const uint32_t num_tiles = get_local_cb_interface(cb_id).fifo_num_pages;
     noc.async_write_zeros(dfb, tile_size * num_tiles);
     noc.write_zeros_l1_barrier();
 }
 
-template <uint32_t config_dram_addr, uint32_t config_page_size, uint32_t tensor_args_index, uint32_t cb_reader_index>
-ALWI void load_config_tensor_if_in_dram(Noc noc, DataflowBuffer reader_dfb, uint32_t core_index) {
+template <
+    uint32_t config_dram_addr,
+    uint32_t config_page_size,
+    uint32_t tensor_args_index,
+    uint32_t cb_reader_index,
+    typename DFB>
+ALWI void load_config_tensor_if_in_dram(Noc noc, DFB reader_dfb, uint32_t core_index) {
     constexpr auto config_tensor_args = TensorAccessorArgs<tensor_args_index>();
     const auto config_accessor = TensorAccessor(config_tensor_args, config_dram_addr);
 
@@ -93,9 +98,10 @@ template <
     uint32_t in_scalar_cb_id,
     uint32_t reader_nindices,
     bool split_reader,
-    uint32_t multi_buffering_factor>
+    uint32_t multi_buffering_factor,
+    typename DFB>
 ALWI void fill_scalar(
-    DataflowBuffer scalar_dfb,
+    DFB scalar_dfb,
     uint32_t& scalar_start,
     uint32_t& scalar_end,
     uint32_t& scalar_value,
@@ -125,7 +131,8 @@ ALWI void fill_scalar(
     scalar_dfb.push_back(1);
 }
 
-ALWI void zero_out_page(Noc noc, DataflowBuffer dfb) {
+template <typename DFB>
+ALWI void zero_out_page(Noc noc, DFB dfb) {
     const uint32_t page_size = get_local_cb_interface(dfb.get_id()).fifo_page_size;
     noc.async_write_zeros(dfb, page_size);
     noc.write_zeros_l1_barrier();

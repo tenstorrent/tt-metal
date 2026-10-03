@@ -21,8 +21,8 @@
 enum class ElementwiseOperation { ADD, SUBTRACT };
 enum class ChunkInputPolicy { RETAIN, CONSUME };
 
-template <uint32_t Mt, uint32_t Kt, uint32_t Nt>
-FORCE_INLINE void matrix_multiply(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& output) {
+template <uint32_t Mt, uint32_t Kt, uint32_t Nt, typename DFBA, typename DFBB, typename DFBOut>
+FORCE_INLINE void matrix_multiply(DFBA& a, DFBB& b, DFBOut& output) {
     constexpr uint32_t subblock_columns = kda::MatmulSubblock<Mt, Nt>::columns;
     constexpr uint32_t subblock_rows = kda::MatmulSubblock<Mt, Nt>::rows;
     const uint32_t a_id = a.get_id();
@@ -54,8 +54,14 @@ FORCE_INLINE void matrix_multiply(DataflowBuffer& a, DataflowBuffer& b, Dataflow
 }
 
 // Inputs remain resident; PacketTiles specifies output publication granularity.
-template <ElementwiseOperation Operation, uint32_t Count, uint32_t PacketTiles>
-FORCE_INLINE void elementwise(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& output) {
+template <
+    ElementwiseOperation Operation,
+    uint32_t Count,
+    uint32_t PacketTiles,
+    typename DFBA,
+    typename DFBB,
+    typename DFBOut>
+FORCE_INLINE void elementwise(DFBA& a, DFBB& b, DFBOut& output) {
     static_assert(PacketTiles > 0 && Count % PacketTiles == 0);
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
@@ -90,8 +96,8 @@ FORCE_INLINE void elementwise(DataflowBuffer& a, DataflowBuffer& b, DataflowBuff
     }
 }
 
-template <uint32_t Count, uint32_t PacketTiles>
-FORCE_INLINE void copy(DataflowBuffer& input, DataflowBuffer& output) {
+template <uint32_t Count, uint32_t PacketTiles, typename DFBIn, typename DFBOut>
+FORCE_INLINE void copy(DFBIn& input, DFBOut& output) {
     static_assert(PacketTiles > 0 && Count % PacketTiles == 0);
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
@@ -118,8 +124,9 @@ FORCE_INLINE void copy(DataflowBuffer& input, DataflowBuffer& output) {
     }
 }
 
+template <typename DFBState, typename DFBDecay, typename DFBOut>
 FORCE_INLINE void multiply_by_decay(
-    DataflowBuffer& state, DataflowBuffer& decay, DataflowBuffer& output, uint32_t key_tiles, uint32_t value_tiles) {
+    DFBState& state, DFBDecay& decay, DFBOut& output, uint32_t key_tiles, uint32_t value_tiles) {
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
     const uint32_t count = key_tiles * value_tiles;
@@ -150,15 +157,26 @@ FORCE_INLINE void multiply_by_decay(
     output.push_back(count);
 }
 
-template <ChunkInputPolicy InputPolicy, uint32_t Ct, uint32_t Kt, uint32_t Vt>
+template <
+    ChunkInputPolicy InputPolicy,
+    uint32_t Ct,
+    uint32_t Kt,
+    uint32_t Vt,
+    typename DFBState,
+    typename DFBKd,
+    typename DFBVBeta,
+    typename DFBTInv,
+    typename DFBProjection,
+    typename DFBDifference,
+    typename DFBCorrected>
 FORCE_INLINE void compute_value_new(
-    DataflowBuffer& current_state,
-    DataflowBuffer& kd,
-    DataflowBuffer& v_beta,
-    DataflowBuffer& t_inv,
-    DataflowBuffer& state_projection,
-    DataflowBuffer& difference,
-    DataflowBuffer& corrected_value) {
+    DFBState& current_state,
+    DFBKd& kd,
+    DFBVBeta& v_beta,
+    DFBTInv& t_inv,
+    DFBProjection& state_projection,
+    DFBDifference& difference,
+    DFBCorrected& corrected_value) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
     constexpr uint32_t chunk_chunk_tiles = Ct * Ct;
     constexpr uint32_t chunk_value_tiles = Ct * Vt;
@@ -194,15 +212,25 @@ FORCE_INLINE void compute_value_new(
     difference.pop_front(chunk_value_tiles);
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
+template <
+    uint32_t Ct,
+    uint32_t Kt,
+    uint32_t Vt,
+    typename DFBState,
+    typename DFBCorrected,
+    typename DFBQDecay,
+    typename DFBIntra,
+    typename DFBStateProjection,
+    typename DFBValueProjection,
+    typename DFBOut>
 FORCE_INLINE void compute_chunk_output(
-    DataflowBuffer& current_state,
-    DataflowBuffer& corrected_value,
-    DataflowBuffer& q_decay,
-    DataflowBuffer& intra,
-    DataflowBuffer& state_projection,
-    DataflowBuffer& value_projection,
-    DataflowBuffer& output) {
+    DFBState& current_state,
+    DFBCorrected& corrected_value,
+    DFBQDecay& q_decay,
+    DFBIntra& intra,
+    DFBStateProjection& state_projection,
+    DFBValueProjection& value_projection,
+    DFBOut& output) {
     constexpr uint32_t chunk_chunk_tiles = Ct * Ct;
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
     constexpr uint32_t chunk_value_tiles = Ct * Vt;
@@ -222,15 +250,26 @@ FORCE_INLINE void compute_chunk_output(
     value_projection.pop_front(chunk_value_tiles);
 }
 
-template <ChunkInputPolicy InputPolicy, uint32_t Ct, uint32_t Kt, uint32_t Vt>
+template <
+    ChunkInputPolicy InputPolicy,
+    uint32_t Ct,
+    uint32_t Kt,
+    uint32_t Vt,
+    typename DFBState,
+    typename DFBDestination,
+    typename DFBCorrected,
+    typename DFBKDecayT,
+    typename DFBFinalDecay,
+    typename DFBStateUpdate,
+    typename DFBStateTemporary>
 FORCE_INLINE void update_state(
-    DataflowBuffer& current_state,
-    DataflowBuffer& destination,
-    DataflowBuffer& corrected_value,
-    DataflowBuffer& k_decay_transposed,
-    DataflowBuffer& final_decay,
-    DataflowBuffer& state_update,
-    DataflowBuffer& state_temporary) {
+    DFBState& current_state,
+    DFBDestination& destination,
+    DFBCorrected& corrected_value,
+    DFBKDecayT& k_decay_transposed,
+    DFBFinalDecay& final_decay,
+    DFBStateUpdate& state_update,
+    DFBStateTemporary& state_temporary) {
     constexpr uint32_t chunk_value_tiles = Ct * Vt;
     constexpr uint32_t key_value_tiles = Kt * Vt;
     constexpr uint32_t key_chunk_tiles = Kt * Ct;
@@ -257,6 +296,21 @@ FORCE_INLINE void update_state(
     current_state.pop_front(key_value_tiles);
     state_temporary.pop_front(key_value_tiles);
     state_update.pop_front(key_value_tiles);
+}
+
+template <typename Seed, typename Ring, typename Terminal, typename Step>
+FORCE_INLINE void with_chunk_state(bool first, bool last, Seed& seed, Ring& ring, Terminal& terminal, Step&& step) {
+    if (first) {
+        if (last) {
+            step(seed, terminal);
+        } else {
+            step(seed, ring);
+        }
+    } else if (last) {
+        step(ring, terminal);
+    } else {
+        step(ring, ring);
+    }
 }
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
@@ -287,9 +341,14 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
     constexpr uint32_t key_chunk_tiles = Kt * Ct;
 
     pack_reconfig_data_format(dfb::state_update);
+    auto scan_chunk = [&](auto& current, auto& destination) {
+        compute_value_new<ChunkInputPolicy::RETAIN, Ct, Kt, Vt>(
+            current, kd, v_beta, t_inv, scratch, value_new, scratch);
+        update_state<ChunkInputPolicy::RETAIN, Ct, Kt, Vt>(
+            current, destination, scratch, k_decay_transposed, final_decay, state_update, state_temporary);
+    };
     for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
-        DataflowBuffer& current_b = chunk == 0 ? state : state_ring;
-        DataflowBuffer& current_ab = chunk == 0 ? summary_seed : summary_ring;
+        const bool first = chunk == 0;
         const bool last = chunk == num_chunks - 1;
 
         kd.wait_front(chunk_key_tiles);
@@ -297,26 +356,8 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
         t_inv.wait_front(chunk_chunk_tiles);
         k_decay_transposed.wait_front(key_chunk_tiles);
         final_decay.wait_front(Kt);
-        compute_value_new<ChunkInputPolicy::RETAIN, Ct, Kt, Vt>(
-            current_b, kd, v_beta, t_inv, scratch, value_new, scratch);
-        update_state<ChunkInputPolicy::RETAIN, Ct, Kt, Vt>(
-            current_b,
-            last ? final_state : state_ring,
-            scratch,
-            k_decay_transposed,
-            final_decay,
-            state_update,
-            state_temporary);
-        compute_value_new<ChunkInputPolicy::RETAIN, Ct, Kt, Vt>(
-            current_ab, kd, v_beta, t_inv, scratch, value_new, scratch);
-        update_state<ChunkInputPolicy::RETAIN, Ct, Kt, Vt>(
-            current_ab,
-            last ? summary_raw : summary_ring,
-            scratch,
-            k_decay_transposed,
-            final_decay,
-            state_update,
-            state_temporary);
+        with_chunk_state(first, last, state, state_ring, final_state, scan_chunk);
+        with_chunk_state(first, last, summary_seed, summary_ring, summary_raw, scan_chunk);
         if (split_chunk != 0 && chunk + 1 == split_chunk) {
             state_ring.wait_front(key_value_tiles);
             summary_ring.wait_front(key_value_tiles);
@@ -374,21 +415,7 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
     constexpr uint32_t key_value_tiles = Kt * Vt;
 
     pack_reconfig_data_format(dfb::scratch);
-    for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
-        // A chronological split restarts the causal stream mid-group. The recurrence is affine in
-        // the state, so no per-chunk term changes -- only where the carry comes
-        // from. reset_chunk 0 means never, which is exact rather than a sentinel:
-        // r == 0 means no group straddles, and chunk 0 always seeds from `state`.
-        DataflowBuffer& current_state = chunk == 0 ? state : state_ring;
-        if (reset_chunk != 0 && chunk == reset_chunk) {
-            state_ring.wait_front(key_value_tiles);
-            tail_entry_states.wait_front(key_value_tiles);
-            copy<key_value_tiles, key_value_tiles>(tail_entry_states, state_ring);
-            state_ring.pop_front(key_value_tiles);
-            tail_entry_states.pop_front(key_value_tiles);
-        }
-        DataflowBuffer& destination = chunk == num_chunks - 1 ? final_state : state_ring;
-
+    auto scan_chunk = [&](auto& current_state, auto& destination) {
         compute_value_new<ChunkInputPolicy::CONSUME, Ct, Kt, Vt>(
             current_state, kd, v_beta, t_inv, scratch, output_intermediate, value_new);
         compute_chunk_output<Ct, Kt, Vt>(
@@ -397,6 +424,20 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
         pack_reconfig_data_format(dfb::state_update);
         update_state<ChunkInputPolicy::CONSUME, Ct, Kt, Vt>(
             current_state, destination, value_new, k_decay_transposed, final_decay, state_update, state_temporary);
+    };
+    for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
+        // A chronological split restarts the causal stream mid-group. The recurrence is affine in
+        // the state, so no per-chunk term changes -- only where the carry comes
+        // from. reset_chunk 0 means never, which is exact rather than a sentinel:
+        // r == 0 means no group straddles, and chunk 0 always seeds from `state`.
+        if (reset_chunk != 0 && chunk == reset_chunk) {
+            state_ring.wait_front(key_value_tiles);
+            tail_entry_states.wait_front(key_value_tiles);
+            copy<key_value_tiles, key_value_tiles>(tail_entry_states, state_ring);
+            state_ring.pop_front(key_value_tiles);
+            tail_entry_states.pop_front(key_value_tiles);
+        }
+        with_chunk_state(chunk == 0, chunk == num_chunks - 1, state, state_ring, final_state, scan_chunk);
     }
 }
 

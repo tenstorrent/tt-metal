@@ -16,9 +16,9 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
-template <typename Accessor>
+template <typename Accessor, typename DFB>
 FORCE_INLINE void read_and_publish_contiguous_tiles(
-    const Accessor& accessor, DataflowBuffer& buffer, Noc& noc, uint32_t base, uint32_t count) {
+    const Accessor& accessor, DFB& buffer, Noc& noc, uint32_t base, uint32_t count) {
     buffer.reserve_back(count);
     const uint32_t entry_size = buffer.get_entry_size();
     uint32_t tile = 0;
@@ -32,14 +32,9 @@ FORCE_INLINE void read_and_publish_contiguous_tiles(
     buffer.push_back(count);
 }
 
-template <uint32_t Vt, uint32_t VtFull, typename Accessor>
+template <uint32_t Vt, uint32_t VtFull, typename Accessor, typename DFB>
 FORCE_INLINE void read_and_publish_value_slice(
-    const Accessor& accessor,
-    DataflowBuffer& buffer,
-    Noc& noc,
-    uint32_t row_base,
-    uint32_t rows,
-    uint32_t value_block) {
+    const Accessor& accessor, DFB& buffer, Noc& noc, uint32_t row_base, uint32_t rows, uint32_t value_block) {
     buffer.reserve_back(rows * Vt);
     const uint32_t entry_size = buffer.get_entry_size();
     for (uint32_t row = 0; row < rows; ++row) {
@@ -60,16 +55,16 @@ FORCE_INLINE void read_and_publish_value_slice(
     buffer.push_back(rows * Vt);
 }
 
-template <uint32_t Tiles>
-FORCE_INLINE void seed_zero(DataflowBuffer& state, Noc& noc) {
+template <uint32_t Tiles, typename DFB>
+FORCE_INLINE void seed_zero(DFB& state, Noc& noc) {
     state.reserve_back(Tiles);
     noc.async_write_zeros(state, Tiles * state.get_entry_size());
     noc.write_zeros_l1_barrier();
     state.push_back(Tiles);
 }
 
-template <uint32_t Kt, uint32_t Vt>
-FORCE_INLINE void seed_identity(DataflowBuffer& buffer, Noc& noc, uint32_t value_block) {
+template <uint32_t Kt, uint32_t Vt, typename DFB>
+FORCE_INLINE void seed_identity(DFB& buffer, Noc& noc, uint32_t value_block) {
     constexpr uint32_t one_fp32 = __builtin_bit_cast(uint32_t, 1.0F);
     constexpr uint32_t face_elements = tt::constants::FACE_HW;
     constexpr uint32_t tile_elements = tt::constants::TILE_HW;
@@ -80,7 +75,7 @@ FORCE_INLINE void seed_identity(DataflowBuffer& buffer, Noc& noc, uint32_t value
     noc.write_zeros_l1_barrier();
     {
         auto lock = buffer.scoped_write_lock(tile_count);
-        auto state_ptr = lock.get_ptr<volatile uint32_t>();
+        auto state_ptr = lock.template get_ptr<volatile uint32_t>();
         for (uint32_t local_col = 0; local_col < Vt; ++local_col) {
             const uint32_t global_col = value_block * Vt + local_col;
             if (global_col < Kt) {

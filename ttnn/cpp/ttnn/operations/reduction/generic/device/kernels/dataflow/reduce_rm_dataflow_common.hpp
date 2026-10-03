@@ -107,10 +107,10 @@ rm_compute_w_chunk_bytes(uint32_t wt_base, uint32_t wt_in_chunk, uint32_t valid_
 //
 // ClearTemplateSrc is the opaque return type of experimental::local_addr() — templated so callers
 // don't need to spell it out.
-template <typename ClearTemplateSrc>
+template <typename DFB, typename ClearTemplateSrc>
 RM_DF_ALWI void rm_fill_page_with_clear_template(
     Noc& noc,
-    DataflowBuffer& dfb_rm,
+    DFB& dfb_rm,
     uint32_t region_bytes,
     const ClearTemplateSrc& clear_template_src,
     uint32_t clear_template_bytes) {

@@ -26,7 +26,7 @@ inline void Noc::async_write_zeros(
     // Caller's pre-zeroed prefix must cover at least this many bytes.
     const uint32_t max_chunk =
         (size_bytes > (uint32_t)NOC_MAX_BURST_SIZE) ? (uint32_t)NOC_MAX_BURST_SIZE : size_bytes;
-    if constexpr (std::is_same_v<Scratch, DataflowBuffer>) {
+    if constexpr (is_dataflow_buffer_v<Scratch>) {
         // DFB exposes get_entry_size(); assert one reserved entry is big enough. Scratchpad also has
         // an extent, checked in the branch below. CircularBuffer, CoreLocalMem and
         // LocalTensorAccessor expose no size at all, so for those three scratch capacity stays the

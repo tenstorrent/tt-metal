@@ -39,12 +39,12 @@ FORCE_INLINE float perform_reduction(float input, uint16_t source_value, Scatter
 }
 
 // performs scatter on data loaded to dfb with load_to_dfb
-template <typename index_type>
+template <typename index_type, typename InputDFB, typename IndexDFB, typename SourceDFB, typename OutputDFB>
 FORCE_INLINE void scatter_along_chunk(
-    const DataflowBuffer& input_dfb,
-    const DataflowBuffer& index_dfb,
-    const DataflowBuffer& source_dfb,
-    const DataflowBuffer& output_dfb,
+    const InputDFB& input_dfb,
+    const IndexDFB& index_dfb,
+    const SourceDFB& source_dfb,
+    const OutputDFB& output_dfb,
     const Scratchpad<volatile float>& fp32_temp,
     const uint32_t& input_stick_size,
     const uint32_t& input_offset,
@@ -81,8 +81,9 @@ FORCE_INLINE void scatter_along_chunk(
 }
 
 // copies source stick to destination stick (first phase of scatter)
+template <typename DFB>
 FORCE_INLINE void copy_input_to_fp32_temp(
-    const DataflowBuffer& input_dfb, const Scratchpad<volatile float>& fp32_temp, uint32_t input_chunk_size) {
+    const DFB& input_dfb, const Scratchpad<volatile float>& fp32_temp, uint32_t input_chunk_size) {
     const uint32_t input_l1_read_addr = input_dfb.get_read_ptr();
     volatile tt_l1_ptr uint16_t* input_l1_read_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(input_l1_read_addr);
     for (uint32_t index_in_input_chunk = 0; index_in_input_chunk < input_chunk_size; ++index_in_input_chunk) {
@@ -90,8 +91,9 @@ FORCE_INLINE void copy_input_to_fp32_temp(
     }
 }
 
+template <typename DFB>
 FORCE_INLINE void copy_fp32_temp_to_output(
-    const Scratchpad<volatile float>& fp32_temp, const DataflowBuffer& output_dfb, uint32_t chunk_size) {
+    const Scratchpad<volatile float>& fp32_temp, const DFB& output_dfb, uint32_t chunk_size) {
     const uint32_t output_l1_write_addr = output_dfb.get_write_ptr();
     volatile tt_l1_ptr uint16_t* output_l1_write_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(output_l1_write_addr);

@@ -59,15 +59,18 @@ inline std::uint32_t get_output_tile_index(std::uint8_t output_id, std::uint32_t
     std::uint32_t l1_tile_index;
     LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(output_id);
     if constexpr (out_of_order_output) {
-        // Use the write tile index to track position within DFB
-        l1_tile_index = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx + output_tile_index;
+        // The kernel chooses the entry within its reserved share, consecutive
+        // entries of this producer are stride_size_tiles apart in the ring.
+        l1_tile_index = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx +
+                        output_tile_index * local_dfb_interface.stride_size_tiles;
     } else {
         if constexpr (untilize) {
             // TODO: uplift this option from BBE
         } else {
-            // In-order packing: use fifo_wr_tile_ptr as the incrementing tile offset
+            // The packer fills the producer's entries one after the other and keeps its own counter,
+            // wr_entry_ptr, of how many tiles it has packed so far in this operation.
             l1_tile_index = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx +
-                            local_dfb_interface.wr_entry_ptr;
+                            local_dfb_interface.wr_entry_ptr * local_dfb_interface.stride_size_tiles;
             local_dfb_interface.wr_entry_ptr++;
         }
     }
