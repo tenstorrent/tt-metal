@@ -232,7 +232,7 @@ public:
     }
 
 private:
-    static constexpr uint64_t CAPACITY = 1024;
+    static constexpr uint64_t CAPACITY = 65536;
     std::array<std::function<void()>, CAPACITY> slots_;
     alignas(64) std::atomic<uint64_t> head_ = 0;
     alignas(64) std::atomic<uint64_t> tail_ = 0;
