@@ -29,7 +29,8 @@ inline void calculate_sign(const uint /*exponent_size_8*/) {
         // disappear.
         sfpi::vFloat res = sfpi::copysgn(sfpi::vFloat(1.0f), v);
         // SFPSETCC is unspecified for -0.0 (VectorUnit.md), so a bare compare can miss it.
-        v_if(sfpi::abs(v) == 0.0F) { res = 0.0f; }
+        // NaN joins the zero arm: copysgn would otherwise stamp its sign bit onto 1.0.
+        v_if(sfpi::is_nan(v) || sfpi::abs(v) == 0.0F) { res = 0.0f; }
         v_endif;
         sfpi::dst_reg[0] = res;
         sfpi::dst_reg++;
