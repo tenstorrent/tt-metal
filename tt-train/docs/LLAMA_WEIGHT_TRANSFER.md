@@ -180,17 +180,18 @@ embedding `(V, H)` / gamma `(H,)` shapes from §2 exactly.
   `update_weights` does a per-key `ttnn.copy` into separate destination
   buffers and never aliases the source.
 
-- **K / V split.** ttml fuses K and V into a single `kv_linear/weight`
-  of shape `(1, 1, 2·n_kv·D, H)` with K rows first (rows
-  `[0, n_kv·D)`) and V rows second. The exporter splits these into
-  `k_proj.weight` and `v_proj.weight` via two `ttnn.slice` calls. These
-  slices are *newly allocated* tensors
-  (~`2·n_kv·D·H·sizeof(bf16)·L` bytes total; ~64 MB for
-  Llama-3.2-1B-Instruct) and can be freed immediately after
-  `update_weights` returns.
+- **Fused projections.** ttml stores Q, K and V as a single
+  `qkv_linear/weight` of shape `(1, 1, (n_h + 2·n_kv)·D, H)` with Q rows
+  first (`[0, n_h·D)`), then K, then V, and gate/up as a single
+  `w_gate_up/weight` of shape `(1, 1, 2·I, H)` with gate rows first. The
+  exporter splits these into `q_proj` / `k_proj` / `v_proj` and
+  `gate_proj` / `up_proj` via `ttnn.slice`. These slices are *newly
+  allocated* tensors (~`((n_h + 2·n_kv)·D + 2·I)·H·sizeof(bf16)·L` bytes
+  total; ~1.2 GB for Llama-3.2-1B-Instruct) and can be freed immediately
+  after `update_weights` returns.
 
 - **Q / K row order (RoPE convention).** ttml's
-  `GroupedQueryAttentionCompositeKV` applies RoPE on Meta-style
+  `GroupedQueryAttention` applies RoPE on Meta-style
   interleaved-pair rotary `(h_0, h_1), (h_2, h_3), …`;
   `safetensors_loader._unpermute_proj_rows` has already converted
   HF → Meta on load. tt-transformers' default for Llama-3.2-1B
@@ -202,11 +203,11 @@ embedding `(V, H)` / gamma `(H,)` shapes from §2 exactly.
   on host before re-uploading (the on-device HF ↔ Meta permutation in
   `Attention.update` currently raises `NotImplementedError`).
 
-- **Aliasing & lifetime.** Apart from the per-layer K / V slices, every
+- **Aliasing & lifetime.** Apart from the per-layer projection slices, every
   value in the dict is a *handle* into ttml's live parameter store. Do
   not mutate ttml's parameters between the call to `weights_ref_hf_dict`
   and the call to `update_weights`. After `update_weights` returns the
-  K / V slices may be deallocated; the rest are owned by ttml and stay
+  projection slices may be deallocated; the rest are owned by ttml and stay
   live as long as the ttml model lives.
 
 - **Replicated parameters only.** Every value in the dict must be
@@ -239,7 +240,7 @@ hf_dict = ttml_model.weights_ref_hf_dict()
 try:
     ttt_model.update_weights(hf_dict, hf_rope=False)
 finally:
-    del hf_dict  # frees the per-layer k_proj / v_proj slices
+    del hf_dict  # frees the per-layer projection slices
 ```
 
 Cross-rank, via the `WeightBridge` (one process per rank, separate
