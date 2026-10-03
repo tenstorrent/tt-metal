@@ -33,11 +33,40 @@
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
+#include <cstdlib>
+#include <string>
 
 #include "ttnn/operations/experimental/ccl/moe_compute/moe_core_placement.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+
+namespace {
+// DSV4.1-Flash tuning knobs (read from the environment; override the op arguments):
+// MOE_COMPUTE_FP32_ACC=1 accumulates the matmuls in fp32 DEST, MOE_COMPUTE_FIDELITY=LoFi|HiFi2|HiFi3|HiFi4,
+// MOE_COMPUTE_APPROX=0 disables approximate math, MOE_COMPUTE_BFP8_WEIGHTS=1 reads bfloat8_b instead of bfloat4_b weights.
+inline bool moe_compute_env_flag(const char* name, bool default_value) {
+    const char* v = std::getenv(name);
+    return v == nullptr ? default_value : std::string(v) != "0";
+}
+inline tt::tt_metal::MathFidelity moe_compute_env_fidelity(tt::tt_metal::MathFidelity default_value) {
+    const char* v = std::getenv("MOE_COMPUTE_FIDELITY");
+    if (v == nullptr) {
+        return default_value;
+    }
+    const std::string f(v);
+    if (f == "HiFi2") {
+        return tt::tt_metal::MathFidelity::HiFi2;
+    }
+    if (f == "HiFi3") {
+        return tt::tt_metal::MathFidelity::HiFi3;
+    }
+    if (f == "HiFi4") {
+        return tt::tt_metal::MathFidelity::HiFi4;
+    }
+    return tt::tt_metal::MathFidelity::LoFi;
+}
+}  // namespace
 
 namespace {
 
@@ -835,7 +864,7 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
         // whole blocks so the ring buffer wraps on a block boundary.
         {"cb_r2c_w0",
          tt::CBIndex::c_3,
-         tt::DataFormat::Bfp4_b,
+         moe_compute_env_flag("MOE_COMPUTE_BFP8_WEIGHTS", false) ? tt::DataFormat::Bfp8_b : tt::DataFormat::Bfp4_b,
          true,
          moe_ring::weight_cb_slots(weight_tiles_per_txn) * weight_tiles_per_block},
         {"cb_c2w_rdy", tt::CBIndex::c_4, tt::DataFormat::Float32, false, 1},
@@ -1441,11 +1470,11 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
         .named_compile_time_args = std::move(matmul_named_compile_time_args),
         .config =
             tt::tt_metal::ComputeConfigDescriptor{
-                .math_fidelity = args.math_fidelity,
-                .fp32_dest_acc_en = args.fp32_dest_acc_en,
+                .math_fidelity = moe_compute_env_fidelity(args.math_fidelity),
+                .fp32_dest_acc_en = moe_compute_env_flag("MOE_COMPUTE_FP32_ACC", args.fp32_dest_acc_en),
                 .dst_full_sync_en = false,
                 .bfp8_pack_precise = false,
-                .math_approx_mode = true,
+                .math_approx_mode = moe_compute_env_flag("MOE_COMPUTE_APPROX", true),
             },
     });
 

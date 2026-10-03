@@ -1,0 +1,166 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""DeepSeek-V4.1-Flash MoE block (router + 384 routed experts + 1 shared expert), decode only.
+
+A thin composition of the repo's generic modules:
+
+    x ──TTMoEGate──▶ (weights, indices) ──TTMoEDecode──▶ routed + shared expert output
+
+* EP=32: experts are sharded over every device on the expert dimension (12 per device), tokens are
+  dispatched along ``cluster_axis`` (mesh rows) and the output is reduce-scattered over the other axis,
+  so each device ends with ``[1, 1, tokens_per_device, hidden / mesh_cols]`` -- the same hidden-sharded
+  residual layout GPT-OSS uses.
+* The checkpoint's swiglu clamp is not applied (``moe_compute`` SILU has none); see moe_weights.py.
+"""
+
+from pathlib import Path
+
+import ttnn
+from models.common.modules.moe.tt_moe_decode import TTMoEDecode
+from models.common.modules.moe.tt_moe_decode_config import TTMoEDecodeConfig
+from models.common.modules.moe.tt_moe_gate_config import TTMoEGateConfig
+from models.demos.blackhole.deepseek_v41_flash.tt.router import DSV41Gate
+
+CONFIG_PATH = Path(__file__).resolve().parents[1] / "configs" / "deepseek_v41_flash.yaml"
+
+
+class DSV41MoEBlock:
+    def __init__(
+        self,
+        mesh_device,
+        weights: dict,
+        topology=ttnn.Topology.Linear,
+        batch_per_device: int = 4,
+        gate_bias_shift=0.0,
+        shared_in_moe: bool = False,
+        buffers=None,
+    ):
+        """``shared_in_moe=False`` (default) leaves the shared expert out of ``moe_compute`` (bfp4-only) -- the layer
+        adds it separately in higher precision, see shared_expert.py."""
+        text = CONFIG_PATH.read_text()
+        # the derived memory configs (dispatch input shards, ...) are computed from batch_per_device when the config is parsed,
+        # so the batch size has to be in the YAML text itself (updating the field afterwards leaves them sized for 4 users)
+        text = text.replace("batch_per_device: 4 ", f"batch_per_device: {batch_per_device} ", 1)
+        if not shared_in_moe:
+            text = text.replace("num_shared_experts: 1", "num_shared_experts: 0").replace(
+                "  shared_expert_ids_to_devices: fully_replicated\n", ""
+            )
+        mesh_shape = tuple(mesh_device.shape)
+        decode_cfg = TTMoEDecodeConfig.from_yaml(text, topology=topology)
+        if decode_cfg.mesh_shape != mesh_shape:
+            decode_cfg = decode_cfg.with_mesh_shape(mesh_shape)
+        if decode_cfg.batch_per_device != batch_per_device:
+            decode_cfg = decode_cfg.model_copy(update={"batch_per_device": batch_per_device})
+        if decode_cfg.num_fast_reduce_outputs == 1:
+            # Generic ttnn.reduce_scatter path (non-Ring topology): its CCL address generator rejects the
+            # ND_SHARDED L1 default of the fast-reduce output, so hand it interleaved DRAM instead.
+            decode_cfg = decode_cfg.model_copy(
+                update={
+                    "reduce": decode_cfg.reduce.model_copy(update={"output_memory_config": ttnn.DRAM_MEMORY_CONFIG})
+                }
+            )
+        gate_cfg = TTMoEGateConfig.from_yaml(text).model_copy(update={"batch_per_device": batch_per_device})
+
+        self.mesh_device = mesh_device
+        self.decode_config = decode_cfg
+        # bf16-exact selection bias + fp32 residual folded into the score (see router.py)
+        self.gate = DSV41Gate(
+            mesh_device,
+            gate_cfg,
+            torch_gate_weight=weights["gate_weight"],
+            torch_gate_bias=weights["gate_bias"],
+            bias_shift=gate_bias_shift,
+        )
+        self.decode = TTMoEDecode(
+            mesh_device=mesh_device,
+            config=decode_cfg,
+            torch_w0=weights["w0"],
+            torch_w1=weights["w1"],
+            torch_w2=weights["w2"],
+            shared_id_to_torch_w0=weights["shared_w0"] if shared_in_moe else None,
+            shared_id_to_torch_w1=weights["shared_w1"] if shared_in_moe else None,
+            shared_id_to_torch_w2=weights["shared_w2"] if shared_in_moe else None,
+            weight_cache_dir=weights.get("cache_dir"),
+            buffers=buffers,
+        )
+
+    def warmup(self):
+        """Compile the MoE programs once, steering where ``moe_compute``'s persistent semaphore lands in L1.
+
+        ``moe_compute`` creates a global semaphore (a 320 B/bank L1 allocation owned by its cached program) on its
+        first compile, AFTER its ~650 KB/bank L1 outputs were allocated. The L1 allocator is top-down first-fit, so
+        the semaphore lands just below those outputs, permanently capping the static circular-buffer region of every
+        other program at ~770 KB (SDPA decode at head_dim 512 then fails to launch). To put it at the top of L1
+        instead, leave a small free hole just under the persistent allocations before the first compile: the big
+        outputs cannot fit in it, the semaphore can.
+        """
+        md = self.mesh_device
+        nb = ttnn.get_memory_view(md, ttnn.BufferType.L1).num_banks
+        tile_row = lambda n_tiles_per_bank: ttnn.empty(
+            [1, 1, 32, 32 * nb * n_tiles_per_bank],
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=md,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        self._l1("warmup: start")
+        hole, fence = tile_row(1), tile_row(2)  # 2 KB then 4 KB per bank, adjacent below the persistent allocations
+        self._l1("warmup: hole+fence allocated")
+        ttnn.deallocate(hole)  # -> a 2 KB hole at the top of L1
+        self._l1("warmup: hole freed")
+        T = self.decode_config.batch_per_device
+        zeros = lambda shape, lay, dt: ttnn.from_torch(
+            __import__("torch").zeros(shape),
+            device=md,
+            dtype=dt,
+            layout=lay,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(md),
+        )
+        x_gate = zeros([1, 1, T, self.decode_config.hidden_size], ttnn.TILE_LAYOUT, ttnn.bfloat16)
+        x_tok = zeros([T, 1, 1, self.decode_config.hidden_size], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16)
+        out = self.forward(x_gate, x_tok)
+        ttnn.synchronize_device(md)
+        self._l1("warmup: after forward (out alive)")
+        ttnn.deallocate(out)
+        ttnn.deallocate(fence)
+        self._l1("warmup: end")
+
+    def forward(self, tt_x_gate: ttnn.Tensor, tt_x_tokens: ttnn.Tensor, forced_routing=None) -> ttnn.Tensor:
+        """tt_x_gate: [1, 1, tokens_per_device, hidden] tile layout (router input).
+        tt_x_tokens: [tokens_per_device, 1, 1, hidden] row-major bf16 DRAM (dispatch input).
+        Returns [1, 1, tokens_per_device, hidden / mesh_cols] per device."""
+        self._l1("start")
+        if (
+            forced_routing is not None
+        ):  # (scores bf16 RM [T,1,1,k], indices uint16 RM [T,1,1,k]) -- bypass the router (diagnostics)
+            tt_scores, tt_indices = forced_routing
+        else:
+            tt_scores, tt_indices = self.gate.forward(tt_x_gate)
+        self.last_routing = (tt_scores, tt_indices)  # for debugging / error-budget tests
+        self._l1("after gate")
+        if tt_indices.dtype != ttnn.uint16:
+            tt_indices = ttnn.typecast(tt_indices, ttnn.uint16)
+        if tt_indices.layout != ttnn.ROW_MAJOR_LAYOUT:
+            tt_indices = ttnn.to_layout(tt_indices, ttnn.ROW_MAJOR_LAYOUT)
+        if tt_scores.dtype != ttnn.bfloat16:
+            tt_scores = ttnn.typecast(tt_scores, ttnn.bfloat16)
+        if tt_scores.layout != ttnn.ROW_MAJOR_LAYOUT:
+            tt_scores = ttnn.to_layout(tt_scores, ttnn.ROW_MAJOR_LAYOUT)
+        self._l1("after typecasts")
+        out = self.decode.forward(tt_x=tt_x_tokens, tt_scores=tt_scores, tt_indices=tt_indices, layer_id=0)
+        self._l1("after decode")
+        return out
+
+    def _l1(self, tag):  # debug: DSV_L1_TRACE=<file> appends L1 allocator readings
+        import os
+
+        path = os.environ.get("DSV_L1_TRACE")
+        if path:
+            ttnn.synchronize_device(self.mesh_device)
+            mv = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.L1)
+            with open(path, "a") as f:
+                f.write(
+                    f"MOE {tag:16s} allocated/bank {mv.total_bytes_allocated_per_bank:7d} largest_free {mv.largest_contiguous_bytes_free_per_bank:8d}\n"
+                )
