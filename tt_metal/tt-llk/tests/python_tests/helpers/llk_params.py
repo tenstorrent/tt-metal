@@ -299,6 +299,7 @@ class MathOperation(Enum):
     SfpuMaskPosinf = OpSpec("MASK_POSINF", MathOpType.SFPU_BINARY)
     SfpuIntMask = OpSpec("INT_MASK", MathOpType.SFPU_BINARY)
     SfpuAtan2 = OpSpec("ATAN2", MathOpType.SFPU_BINARY)
+    SfpuHypot = OpSpec("HYPOT", MathOpType.SFPU_BINARY)
     SfpuCopyDest = OpSpec("COPY_DEST", MathOpType.SFPU_BINARY)
     SfpuMulInt32 = OpSpec("MUL_INT32", MathOpType.SFPU_BINARY)
     SfpuIsclose = OpSpec("ISCLOSE", MathOpType.SFPU_BINARY)

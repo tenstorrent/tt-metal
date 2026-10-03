@@ -71,8 +71,10 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case LOGADDEXP:
         case LOGADDEXP2: return a == b && (a == FLOAT32 || a == BFLOAT16 || a == BFLOAT8_B || a == BFLOAT4_B);
         case LDEXP:
-        case BIAS_GELU:
-        case HYPOT: return (a == FLOAT32 && b == FLOAT32);
+        case BIAS_GELU: return (a == FLOAT32 && b == FLOAT32);
+        // hypot has no FPU form any more, so every dtype its policy admits (float_only) routes
+        // here. Block-float operands are unpacked to DST like bfloat16 ones.
+        case HYPOT: return a == b && (a == FLOAT32 || a == BFLOAT16 || a == BFLOAT8_B || a == BFLOAT4_B);
         case EQ:
         case NE:
         case GT:
