@@ -12,8 +12,15 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
-#if defined(ARCH_BLACKHOLE) && defined(UCK_CHLKC_UNPACK) && defined(ELTWISE_DEST_REUSE_TYPE)
+// The dest-reuse dummy unpack must wait on the unpacker's own bank, not the matrix unit's. Guard the
+// encoding so the bit cannot be dropped silently: Blackhole spells it Stall_Clr_Cntrl (bit 5),
+// Wormhole spells it WaitLikeUnpacr inside the NoOp field (bit 4).
+#if (defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)) && defined(UCK_CHLKC_UNPACK) && defined(ELTWISE_DEST_REUSE_TYPE)
+#ifdef ARCH_BLACKHOLE
 constexpr std::uint32_t stall_clear_control_mask = 1U << 5;
+#else
+constexpr std::uint32_t stall_clear_control_mask = 1U << 4;
+#endif
 static_assert(
     (llk_unpack_a_detail::dest_reuse_dummy_unpack<ELTWISE_DEST_REUSE_TYPE>() & stall_clear_control_mask) != 0);
 #endif
