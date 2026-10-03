@@ -322,24 +322,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // restore cannot land while the final trial is still being sampled.
     mailbox_write(ThreadId::MathThreadId, PACK_READY);
 
-    res[0] = TRIALS;
-    res[1] = g_desync;
-    res[2] = plumbing;
-    res[3] = NUM_OCC;
+    std::uint32_t k = 0;
+    res[k++]        = TRIALS;
+    res[k++]        = g_desync;
+    res[k++]        = plumbing;
+    res[k++]        = NUM_OCC;
     for (std::uint32_t i = 0; i < NUM_OCC; i++)
     {
-        res[4 + 4 * i] = OCC_DEPTH[i];
-        res[5 + 4 * i] = shipped[i];
-        res[6 + 4 * i] = drainbefore[i];
-        res[7 + 4 * i] = drainafter[i];
+        res[k++] = OCC_DEPTH[i];
+        res[k++] = shipped[i];
+        res[k++] = drainbefore[i];
+        res[k++] = drainafter[i];
     }
 
-    std::uint32_t k = 4 + 4 * NUM_OCC;
-    res[k++]        = REAL_TRIALS;
-    res[k++]        = real_enabled_seen;
-    res[k++]        = real_disabled_seen;
-    res[k++]        = NUM_DIR;
-    res[k++]        = DIR_OCC;
+    res[k++] = REAL_TRIALS;
+    res[k++] = real_enabled_seen;
+    res[k++] = real_disabled_seen;
+    res[k++] = NUM_DIR;
+    res[k++] = DIR_OCC;
     for (std::uint32_t i = 0; i < NUM_DIR; i++)
     {
         res[k++] = DIR_NOPS[i];
