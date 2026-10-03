@@ -154,7 +154,7 @@ def test_prefill_model(mesh_device):
         ):  # the host hash history must see the prompt once: re-hash is idempotent for the same tokens
             pass
         t1 = time.perf_counter()
-        logits = model.run(prompt, chunk=CHUNK, hook=hook if (chain_pcc and rep == 0) else None)
+        logits = model.run_eager(prompt, chunk=CHUNK, hook=hook if (chain_pcc and rep == 0) else None)
         ttft = time.perf_counter() - t1
         res.append(ttft)
         log(

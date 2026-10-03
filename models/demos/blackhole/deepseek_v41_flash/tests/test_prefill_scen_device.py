@@ -259,7 +259,9 @@ def test_prefill_scenarios(mesh_device):
         for rep in range(REPS):
             t1 = time.perf_counter()
             try:
-                logits = model.run(prompt, chunk=CH, hook=hook if ("c" in flags and has_dump and rep == 0) else None)
+                logits = model.run_eager(
+                    prompt, chunk=CH, hook=hook if ("c" in flags and has_dump and rep == 0) else None
+                )
             except RuntimeError as e:
                 log(f"PREFILL {tag} FAILED: {str(e)[:300]}")
                 mem(md, f"{tag} after failure")
@@ -282,7 +284,7 @@ def test_prefill_scenarios(mesh_device):
         else:
             log(f"first tokens {tag}: {logits.argmax(-1).tolist()}  finite={bool(torch.isfinite(logits).all())}")
         if "w" in flags and CH:
-            lw = model.run(prompt, chunk=0)
+            lw = model.run_eager(prompt, chunk=0)
             log(
                 f"CONSISTENCY {tag}: chunked vs whole-prompt logits PCC {R.pcc(logits, lw):.5f}, argmax match {int((logits.argmax(-1) == lw.argmax(-1)).sum())}/{B}"
             )
