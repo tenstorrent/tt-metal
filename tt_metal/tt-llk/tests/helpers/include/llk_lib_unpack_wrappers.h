@@ -129,15 +129,14 @@ inline void _llk_unpack_tilizeA_B_init_wrapper_(
     const std::uint32_t num_faces  = 4,
     const std::uint32_t face_r_dim = ckernel::FACE_R_DIM)
 {
-    _llk_unpack_tilizeA_B_init_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(unpack_src_format, unpack_dst_format, ct_dim, num_faces, face_r_dim);
+    _llk_unpack_tilizeA_B_init_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
+        unpack_src_format, unpack_dst_format, ct_dim, num_faces, face_r_dim, face_r_dim);
 }
 
 inline void _llk_unpack_tilizeA_B_uninit_wrapper_(
-    const std::uint32_t unpack_dst_format,
-    [[maybe_unused]] const std::uint32_t num_faces  = 4,
-    [[maybe_unused]] const std::uint32_t face_r_dim = ckernel::FACE_R_DIM)
+    const std::uint32_t unpack_dst_format, const std::uint32_t num_faces = 4, const std::uint32_t face_r_dim = ckernel::FACE_R_DIM)
 {
-    _llk_unpack_tilizeA_B_uninit_(unpack_dst_format);
+    _llk_unpack_tilizeA_B_uninit_(unpack_dst_format, ckernel::tensor_shape_from_num_faces(face_r_dim, num_faces));
 }
 
 #else
