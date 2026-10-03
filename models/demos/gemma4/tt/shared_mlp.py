@@ -19,6 +19,7 @@ import os
 import torch
 
 import ttnn
+from models.demos.gemma4.tt import fp32_mode
 from models.demos.gemma4.tt.ccl import ccl_allreduce
 from models.demos.gemma4.tt.compute_config import gelu_variant
 from models.demos.gemma4.tt.dram_sharded import TILE_SIZE, DramShardedLinear, can_dram_shard
@@ -198,9 +199,9 @@ class SharedMLP:
                         x,
                         gate_up_proj,
                         program_config=_gu_decode_pc,
-                        compute_kernel_config=_gu_decode_ck,
+                        compute_kernel_config=fp32_mode.compute_config(_gu_decode_ck),
                     )
-                return ttnn.linear(x, gate_up_proj)
+                return ttnn.linear(x, gate_up_proj, compute_kernel_config=fp32_mode.compute_config())
 
             self.gate_up_proj = _gate_up
 
@@ -250,14 +251,14 @@ class SharedMLP:
                         x,
                         down_proj,
                         program_config=_down_decode_pc,
-                        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                        compute_kernel_config=fp32_mode.compute_config(ttnn.WormholeComputeKernelConfig(
                             math_fidelity=ttnn.MathFidelity.HiFi2,
                             math_approx_mode=False,
                             fp32_dest_acc_en=True,
                             packer_l1_acc=True,
-                        ),
+                        )),
                     )
-                return ttnn.linear(x, down_proj)
+                return ttnn.linear(x, down_proj, compute_kernel_config=fp32_mode.compute_config())
 
             self.down_proj = _down
 

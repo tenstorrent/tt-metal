@@ -22,6 +22,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.gemma4.tt import fp32_mode
 from models.common.sampling.generator import SamplingGenerator
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
@@ -135,22 +136,22 @@ def create_rope_caches(mesh_device, hf_config, max_seq_len):
         # Cast to bfloat16 on host so from_torch's requested dtype matches the
         # source: a dtype conversion inside from_torch queries tile metadata on
         # the row-major host intermediate and emits the #18536 warning.
-        cos = cos.to(torch.bfloat16)
-        sin = sin.to(torch.bfloat16)
+        cos = cos.to(torch.float32 if fp32_mode.ENABLED else torch.bfloat16)
+        sin = sin.to(torch.float32 if fp32_mode.ENABLED else torch.bfloat16)
 
         # 4D for prefill: [1, 1, max_seq_len, head_dim]
         cos_4d = ttnn.from_torch(
             cos.unsqueeze(0),
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
+            dtype=fp32_mode.act_dtype(),
             mesh_mapper=replicate,
         )
         sin_4d = ttnn.from_torch(
             sin.unsqueeze(0),
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
+            dtype=fp32_mode.act_dtype(),
             mesh_mapper=replicate,
         )
         caches_4d[layer_type] = (cos_4d, sin_4d)
@@ -162,20 +163,21 @@ def create_rope_caches(mesh_device, hf_config, max_seq_len):
         # ~25 us each). ROW_MAJOR storage drops that conversion entirely — the
         # embedding op gathers the position rows and tilizes only the small
         # [1, 32, head_dim] result.
-        cos_2d = ttnn.from_torch(
-            cos.squeeze(0),
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.bfloat16,
-            mesh_mapper=replicate,
-        )
-        sin_2d = ttnn.from_torch(
-            sin.squeeze(0),
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.bfloat16,
-            mesh_mapper=replicate,
-        )
+        def _table_2d(t):
+            if not fp32_mode.ENABLED:
+                return ttnn.from_torch(
+                    t, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate
+                )
+            # ttnn.embedding takes bf16 tables only: store hi + lo (see fp32_mode.SplitTable).
+            hi = t.to(torch.bfloat16)
+            lo = (t - hi.to(torch.float32)).to(torch.bfloat16)
+            mk = lambda x: ttnn.from_torch(
+                x, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate
+            )
+            return fp32_mode.SplitTable(mk(hi), mk(lo))
+
+        cos_2d = _table_2d(cos.squeeze(0))
+        sin_2d = _table_2d(sin.squeeze(0))
         caches_2d[layer_type] = (cos_2d, sin_2d)
 
     return caches_4d, caches_2d
@@ -546,7 +548,7 @@ class Gemma4Model:
                     max_batch_size=max_local_batch_size,
                     max_seq_len=max_seq_len,
                     paged_attention_config=paged_attention_config,
-                    cache_dtype=ttnn.bfloat16,
+                    cache_dtype=ttnn.bfloat16,  # sdpa_decode accepts bf16/bfp8/bfp4 only
                     max_num_blocks_override=max_num_blocks_override,
                 )
                 layer.self_attn.kv_cache = kv_cache
@@ -969,8 +971,8 @@ class Gemma4Model:
                 if lt not in self.rope_caches_2d:
                     continue
                 cos_2d, sin_2d = self.rope_caches_2d[lt]
-                cos_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, cos_2d, layout=ttnn.TILE_LAYOUT))
-                sin_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, sin_2d, layout=ttnn.TILE_LAYOUT))
+                cos_pos = ttnn.unsqueeze_to_4D(fp32_mode.rope_gather(position_idx, cos_2d))
+                sin_pos = ttnn.unsqueeze_to_4D(fp32_mode.rope_gather(position_idx, sin_2d))
                 decode_rope_presliced[lt] = (cos_pos, sin_pos)
 
         # copy-mode dFlash taps index buffers per forward
@@ -1256,7 +1258,7 @@ class Gemma4Model:
                 k=self.hidden_size,
                 n=self.lm_head_weight.shape[-1],
             )
-            logits = ttnn.linear(hidden_states, self.lm_head_weight, program_config=lm_head_pc)
+            logits = ttnn.linear(hidden_states, self.lm_head_weight, program_config=lm_head_pc, compute_kernel_config=fp32_mode.compute_config())
             # ``deallocate_input=False`` is required when the caller owns a
             # *persistent* buffer that outlives this call — notably the batched
             # prefill-sampling trace, whose input is written by
@@ -1294,6 +1296,7 @@ class Gemma4Model:
         if self.embedding_weight is None:
             raise RuntimeError("Embedding weights not loaded")
         embeds = ttnn.embedding(tokens, self.embedding_weight, dtype=ttnn.bfloat16)
+        embeds = fp32_mode.to_fp32(embeds)  # exact: the table holds bf16 values
         embeds = ttnn.mul(embeds, self.embed_scale)
 
         # All-gather sharded hidden dim back to full hidden
@@ -1464,8 +1467,8 @@ class Gemma4Model:
         # type — saves 2 embedding gathers per layer).
         rope_packed = {}
         for lt, (cos_2d, sin_2d) in self.rope_caches_2d.items():
-            cos_bp = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, cos_2d, layout=ttnn.TILE_LAYOUT))
-            sin_bp = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, sin_2d, layout=ttnn.TILE_LAYOUT))
+            cos_bp = ttnn.unsqueeze_to_4D(fp32_mode.rope_gather(position_idx, cos_2d))
+            sin_bp = ttnn.unsqueeze_to_4D(fp32_mode.rope_gather(position_idx, sin_2d))
             rope_packed[lt] = (cos_bp, sin_bp)
 
         packed = {

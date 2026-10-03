@@ -18,6 +18,7 @@ Handles:
 import os
 
 import ttnn
+from models.demos.gemma4.tt import fp32_mode
 from models.demos.gemma4.tt.ccl import ccl_allreduce
 from models.demos.gemma4.tt.dram_sharded import DramShardedLinear
 
@@ -116,9 +117,9 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config
             weights.wqkv,
             memory_config=memory_config,
             program_config=program_config,
-            compute_kernel_config=compute_kernel_config,
+            compute_kernel_config=fp32_mode.compute_config(compute_kernel_config),
         )
-    return ttnn.linear(hidden_states, weights.wqkv, memory_config=memory_config, program_config=program_config)
+    return ttnn.linear(hidden_states, weights.wqkv, memory_config=memory_config, program_config=program_config, compute_kernel_config=fp32_mode.compute_config())
 
 
 def split_qkv_heads_decode(xqkv_fused, config, is_global: bool, tp: int = 1, kv_replicated: bool = False):
@@ -211,14 +212,14 @@ def apply_per_head_norm(tensor, weight, eps, with_scale=True, memory_config=None
             weight=weight,
             epsilon=eps,
             memory_config=memory_config,
-            compute_kernel_config=compute_kernel_config,
+            compute_kernel_config=fp32_mode.compute_config(compute_kernel_config),
         )
     else:
         normed = ttnn.rms_norm(
             flat,
             epsilon=eps,
             memory_config=memory_config,
-            compute_kernel_config=compute_kernel_config,
+            compute_kernel_config=fp32_mode.compute_config(compute_kernel_config),
         )
 
     return ttnn.reshape(normed, orig_shape)
@@ -675,9 +676,9 @@ def apply_output_projection(tensor, weights: AttentionWeights):
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
             )
-            out = ttnn.linear(tensor, weights.o_proj, program_config=pc, compute_kernel_config=ckc)
+            out = ttnn.linear(tensor, weights.o_proj, program_config=pc, compute_kernel_config=fp32_mode.compute_config(ckc))
         else:
-            out = ttnn.linear(tensor, weights.o_proj)
+            out = ttnn.linear(tensor, weights.o_proj, compute_kernel_config=fp32_mode.compute_config())
     tensor.deallocate(True)
     return out
 

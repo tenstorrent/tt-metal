@@ -10,6 +10,7 @@ Uses HF-style ttnn.experimental.rotary_embedding (no transformation matrices).
 import os
 
 import ttnn
+from models.demos.gemma4.tt import fp32_mode
 from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
 
 from .operations import (
@@ -131,8 +132,8 @@ def decode_forward(
         else:
             # Gather position-specific cos/sin via ttnn.embedding (fully on-device, trace-safe)
             # position_idx: [1, 32] uint32 padded tensor for embedding lookup
-            cos_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, cos_cache, layout=ttnn.TILE_LAYOUT))
-            sin_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, sin_cache, layout=ttnn.TILE_LAYOUT))
+            cos_pos = ttnn.unsqueeze_to_4D(fp32_mode.rope_gather(position_idx, cos_cache))
+            sin_pos = ttnn.unsqueeze_to_4D(fp32_mode.rope_gather(position_idx, sin_cache))
         # RoPE. batch=1 uses the fused single-position rotary_embedding (one core
         # but cheap, no slice/tilize churn). batch>1 needs per-user positions,
         # which that op can't express, so fall back to the manual elementwise
@@ -174,6 +175,33 @@ def decode_forward(
     paged_modulo_kwargs = (
         {"cache_position_modulo": config.cache_position_modulo} if config.cache_position_modulo is not None else {}
     )
+    tt_q_fp32, tt_k_fp32, tt_v_fp32 = tt_q, tt_k, tt_v  # fp32 copies for fp32_mode.ATTENTION_FP32
+    if fp32_mode.ENABLED:
+        # sdpa_decode accepts bf16/bfp8/bfp4 Q/K/V only: round Q, K, V to bf16 here (the
+        # KV cache is bf16); SDPA itself runs HiFi4 + fp32 accumulation, output back to fp32.
+        tt_q = ttnn.typecast(tt_q, ttnn.bfloat16)
+        if not is_kv_shared:
+            tt_k = ttnn.typecast(tt_k, ttnn.bfloat16)
+            tt_v = ttnn.typecast(tt_v, ttnn.bfloat16)
+        q_sharded_mem = ttnn.create_sharded_memory_config(
+            shape=tuple(q_sharded_mem.shard_spec.shape),
+            core_grid=q_sharded_mem.shard_spec.grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=q_sharded_mem.shard_spec.orientation,
+            use_height_and_width_as_shard_shape=True,
+        )
+    if fp32_mode.ATTENTION_FP32 and kv_cache is not None and page_table is not None:
+        k_cache, v_cache = kv_cache
+        num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
+        update_kwargs = dict(block_size=effective_block_size(k_cache, config.head_dim, num_local_kv_heads), num_kv_heads=num_local_kv_heads, **paged_modulo_kwargs)
+        tt_sdpa = fp32_mode.fp32_attention_decode(
+            tt_q_fp32, tt_k_fp32, tt_v_fp32, k_cache, v_cache, cache_pos, page_table, q_sharded_mem, update_kwargs,
+            num_local_kv_heads, write_kv=not is_kv_shared,
+        )
+        num_local_heads = config.num_attention_heads // tp
+        tt_out = concat_heads(tt_sdpa, is_decode_mode=True, num_heads=num_local_heads, head_dim=config.head_dim, mesh_device=mesh_device)
+        tt_out = apply_output_projection(tt_out, weights)
+        return apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
     if kv_cache is not None:
         k_cache, v_cache = kv_cache
         if not is_kv_shared:
@@ -312,6 +340,7 @@ def decode_forward(
             sliding_window_size=sliding_window,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=sdpa_program_config,
+            compute_kernel_config=fp32_mode.sdpa_compute_config(),
             # Tell SDPA the layer's view of the cache when the buffer was allocated
             # for a different layer type under HMA cross-group sharing — same
             # rationale as the num_kv_heads override on paged_update_cache.
@@ -331,8 +360,10 @@ def decode_forward(
             sliding_window_size=sliding_window,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=sdpa_program_config,
+            compute_kernel_config=fp32_mode.sdpa_compute_config(),
         )
     tt_q.deallocate(True)
+    tt_sdpa = fp32_mode.to_fp32(tt_sdpa)
 
     # 7. Concat heads + output projection + allreduce
     num_local_heads = config.num_attention_heads // tp
@@ -681,8 +712,8 @@ def packed_decode_forward(
         cos_bp, sin_bp = rope_packed
         owns_rope = False
     else:
-        cos_bp = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, cos_cache, layout=ttnn.TILE_LAYOUT))
-        sin_bp = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, sin_cache, layout=ttnn.TILE_LAYOUT))
+        cos_bp = ttnn.unsqueeze_to_4D(fp32_mode.rope_gather(position_idx, cos_cache))
+        sin_bp = ttnn.unsqueeze_to_4D(fp32_mode.rope_gather(position_idx, sin_cache))
         owns_rope = True
     tt_q = apply_rope(tt_q, cos_bp, sin_bp, token_index=None, memory_config=l1)
     if not is_kv_shared:
