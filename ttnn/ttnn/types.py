@@ -120,3 +120,16 @@ FaceGeometry = ttnn._ttnn.program_descriptor.FaceGeometry
 compute_program_descriptor_hash = ttnn._ttnn.operations.generic.compute_program_descriptor_hash
 
 TensorAccessorArgs = ttnn._ttnn.tensor_accessor_args.TensorAccessorArgs
+
+# Host-side multicast helper (counterpart of kernel_lib/mcast/kernel/mcast_pipe).
+attach_absent_mcast = ttnn._ttnn.mcast_host.attach_absent_mcast
+TransferMode = ttnn._ttnn.mcast_host.TransferMode
+Mcast = ttnn._ttnn.mcast_host.Mcast
+McastCoreOrder = ttnn._ttnn.mcast_host.McastCoreOrder
+McastSenderPlacement = ttnn._ttnn.mcast_host.McastSenderPlacement
+McastFixedSenderConfig = ttnn._ttnn.mcast_host.McastFixedSenderConfig
+McastRotatingSenderConfig = ttnn._ttnn.mcast_host.McastRotatingSenderConfig
+McastSenderGridConfig = ttnn._ttnn.mcast_host.McastSenderGridConfig
+McastExplicitSenderConfig = ttnn._ttnn.mcast_host.McastExplicitSenderConfig
+McastConfig = ttnn._ttnn.mcast_host.McastConfig
+McastDataReady = ttnn._ttnn.mcast_host.McastDataReady

@@ -1,0 +1,483 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Shared host attachment and data checks for multicast integration tests."""
+
+from typing import NamedTuple
+
+import pytest
+import torch
+import ttnn
+
+KERNEL_DIR = "tests/ttnn/unit_tests/kernel_lib/kernels"
+TILE_BYTES = 2048
+
+
+class Group(NamedTuple):
+    receivers: list[tuple[int, int]]
+    senders: list[tuple[int, int]]
+
+
+def core_set(coords):
+    return ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in sorted(set(coords))]
+    )
+
+
+def _mcast_order(specs):
+    """Return the traversal that makes specs equal consecutive groups, if one exists."""
+    if not specs or any(len(receivers) != len(specs[0].receivers) for receivers, _ in specs):
+        return None
+    if any(len(senders) != len(specs[0].senders) for _, senders in specs):
+        return None
+    flattened = [core for receivers, _ in specs for core in receivers]
+    if len(set(flattened)) != len(flattened):
+        return None
+    if len(specs) == 1:
+        return ttnn.McastCoreOrder.RowMajor
+    expected_groups = [set(receivers) for receivers, _ in specs]
+    for order, key in (
+        (ttnn.McastCoreOrder.RowMajor, lambda core: (core[1], core[0])),
+        (ttnn.McastCoreOrder.ColumnMajor, lambda core: (core[0], core[1])),
+    ):
+        ordered = sorted(flattened, key=key)
+        size = len(specs[0].receivers)
+        if [set(ordered[i : i + size]) for i in range(0, len(ordered), size)] == expected_groups:
+            return order
+    return None
+
+
+def make_mcast(device, specs, config):
+    specs = [Group(*group) for group in specs]
+    order = _mcast_order(specs)
+    if order is None:
+        raise ValueError("Mcast requires equal consecutive receiver groups and equal sender counts")
+    receivers = core_set([core for group in specs for core in group.receivers])
+    sender_config = ttnn.McastExplicitSenderConfig(
+        [[ttnn.CoreCoord(*core) for core in group.senders] for group in specs]
+    )
+    return ttnn.Mcast(device, config, receivers, len(specs[0].receivers), sender_config, order)
+
+
+def make_cb(index, cores, *, pages=1, page_bytes=TILE_BYTES, dtype=ttnn.bfloat16):
+    return ttnn.CBDescriptor(
+        total_size=pages * page_bytes,
+        core_ranges=cores,
+        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page_bytes)],
+    )
+
+
+def tile_pattern(pages):
+    # Bounded integer values are exactly representable in bf16. Two element bands
+    # encode the page, so successive pages remain distinct beyond bf16's 256 limit.
+    page = torch.arange(pages, dtype=torch.int32).reshape(-1, 1)
+    element = torch.arange(1024, dtype=torch.int32).reshape(1, -1)
+    values = (element * 17 + page % 127 + (element // 512) * (page // 127)) % 127 - 63
+    return values.to(torch.bfloat16).reshape(pages, 1, 32, 32)
+
+
+def attach_for_inspection(mcast, cores, noc=ttnn.NOC.NOC_0):
+    kernel = ttnn.KernelDescriptor(
+        kernel_source="inspection-only.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=cores,
+        config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=noc),
+    )
+    descriptor = ttnn.ProgramDescriptor()
+    mcast.attach(descriptor, "mcast", [kernel], 0)
+    return descriptor, kernel
+
+
+def inspect_mcast_ct(kernel, prefix="mcast"):
+    """Independent decoder; literal bits and field order, not the C++ codec."""
+    named = dict(kernel.named_compile_time_args)
+    ct = kernel.compile_time_args[named[prefix + "_ct_offset"] :]
+    control = ct[0]
+    fields = dict(
+        flags=control & 31,
+        capacity=(control >> 9) & 3,
+        roles=0xFFFFFFFF if control & (1 << 13) else (control >> 11) & 3,
+        capabilities=(control >> 14) & 3,
+        encoding=(control >> 16) & 3,
+        remote=0,
+        span=0,
+        consumer_ready=0xFFFFFFFF,
+        signal_source=0xFFFFFFFF,
+    )
+    offset = 1
+
+    def take():
+        nonlocal offset
+        value = ct[offset]
+        offset += 1
+        return value
+
+    fields["data_ready"] = take()
+    if fields["flags"] & 1:
+        fields["consumer_ready"] = take()
+    if (fields["flags"] >> 3) & 3:
+        fields["signal_source"] = take()
+    if control & (1 << 18):
+        fields["remote"] = take()
+    ack_mode = (control >> 20) & 3
+    fields["ack"] = (
+        take() if ack_mode == 1 else fields["remote"] if ack_mode == 2 else 0xFFFFFFFF if ack_mode == 3 else 0
+    )
+    if control & (1 << 19):
+        fields["span"] = take()
+    if fields["encoding"]:
+        for name in ("columns", "rows", "x_ranges", "y_ranges"):
+            fields[name] = take()
+    fields["words"] = offset
+    return fields
+
+
+def inspect_mcast(kernel, core, prefix="mcast"):
+    """Test-owned decoder of role/count/coordinate fields."""
+    named = dict(kernel.named_compile_time_args)
+    ct = inspect_mcast_ct(kernel, prefix)
+    rt = kernel.runtime_args[core.x][core.y][named[prefix + "_rt_offset"] :]
+    offset = 0
+    roles = ct["roles"]
+    if roles == 0xFFFFFFFF:
+        roles = rt[offset]
+        offset += 1
+    if (ct["flags"] >> 3) & 3:
+        # Compact chains carry optional roles/coordinates, then five neighbor words.
+        # Sender phase and ACK count are implicit: a fixed sender waits only for its successor.
+        coordinates = []
+        if ct["capabilities"] & 2:
+            coordinates = list(rt[offset : offset + 2])
+            offset += 2
+        successor_x = rt[offset + 2]
+        return dict(
+            roles=roles,
+            phase=0 if roles & 1 else 0xFFFFFFFF,
+            rectangles=0,
+            ack=int(bool(roles & 1) and successor_x != 0xFFFFFFFF),
+            coordinates=coordinates,
+        )
+    phase = 0
+    if ct["span"] and ct["capabilities"] & 1:
+        phase = rt[offset]
+        offset += 1
+    rectangles = 1
+    if ct["capacity"] > 1 and ct["capabilities"] & 1:
+        rectangles = rt[offset]
+        offset += 1
+    ack = ct["ack"]
+    if ct["flags"] & 1 and ct["capabilities"] & 1 and ack == 0xFFFFFFFF:
+        ack = rt[offset]
+        offset += 1
+    coordinates = []
+    if ct["capabilities"] & 2:
+        count = ct["span"] or 1
+        if ct["encoding"] == 0:
+            coordinates = list(rt[offset : offset + 2 * count])
+        else:
+            xs, ys = [], []
+            for index in range(ct["x_ranges"] + ct["y_ranges"]):
+                start, end = rt[offset + 2 * index : offset + 2 * index + 2]
+                (xs if index < ct["x_ranges"] else ys).extend(range(start, end + 1))
+            for index in range(count):
+                x = index % ct["columns"] if ct["encoding"] == 1 else index // ct["rows"]
+                y = index // ct["columns"] if ct["encoding"] == 1 else index % ct["rows"]
+                coordinates.extend([xs[x], ys[y]])
+    return dict(roles=roles, phase=phase, rectangles=rectangles, ack=ack, coordinates=coordinates)
+
+
+def run_mcast_groups_case(
+    device,
+    specs,
+    *,
+    noc=0,
+    counter=False,
+    control=False,
+    caller_managed=False,
+    receiver_caller_managed=False,
+    dynamic=True,
+    handshake=True,
+    rounds=6,
+    chain_link=False,
+    large=False,
+    mixed_events=False,
+    delayed=False,
+    min_rectangles=None,
+):
+    """Build a unified multicast channel, then exercise its attached kernel arguments."""
+    specs = [Group(*group) for group in specs]
+    if _mcast_order(specs) is None:
+        # Arbitrary unequal groups are intentionally no longer public. Preserve
+        # device protocol coverage by exercising each representable group.
+        for spec in specs:
+            run_mcast_groups_case(
+                device,
+                [spec],
+                noc=noc,
+                counter=counter,
+                control=control,
+                caller_managed=caller_managed,
+                receiver_caller_managed=receiver_caller_managed,
+                dynamic=dynamic,
+                handshake=handshake,
+                rounds=rounds,
+                chain_link=chain_link,
+                large=large,
+                mixed_events=mixed_events,
+                delayed=delayed,
+                min_rectangles=min_rectangles,
+            )
+        return
+    chained = chain_link and any(
+        len(receivers)
+        != (max(x for x, _ in receivers) - min(x for x, _ in receivers) + 1)
+        * (max(y for _, y in receivers) - min(y for _, y in receivers) + 1)
+        for receivers, _ in specs
+    )
+    config = ttnn.McastConfig(
+        noc=ttnn.NOC.NOC_1 if noc else ttnn.NOC.NOC_0,
+        handshake=handshake,
+        data_ready=ttnn.McastDataReady.Counter if counter else ttnn.McastDataReady.Flag,
+        irregular_receiver_set_mode=(ttnn.TransferMode.ChainUnicast if chain_link else ttnn.TransferMode.Multicast),
+    )
+    mcast = make_mcast(device, specs, config)
+    _run_channel(
+        device,
+        mcast,
+        specs,
+        config,
+        rounds=rounds,
+        control=control,
+        caller_managed=caller_managed,
+        receiver_caller_managed=receiver_caller_managed,
+        dynamic=dynamic,
+        max_pages=20 if large else 2,
+        mixed_events=mixed_events,
+        delayed=delayed,
+        expected_chain=chained if chain_link else None,
+        min_rectangles=min_rectangles,
+    )
+
+
+def run_positional_mcast_case(
+    device,
+    *,
+    width,
+    senders,
+    rotating,
+    noc=0,
+    counter=False,
+    control=False,
+    alternating=True,
+    caller_managed=False,
+    handshake=True,
+    kind="rectangle",
+    rounds=None,
+    suppress_round_output=False,
+    stress_flag_source_lifetime=False,
+    delay_receiver_construction=False,
+):
+    """Use unified host assembly with the same payload checks as a mcast."""
+
+    def coords(indices):
+        return [(0, i) if kind == "column" else (i, 0) for i in indices]
+
+    group = Group(coords(range(width)), coords(senders))
+    size = device.compute_with_storage_grid_size()
+    if any(x >= size.x or y >= size.y for x, y in group.receivers + group.senders):
+        pytest.skip("requires a larger worker grid")
+    config = ttnn.McastConfig(
+        noc=ttnn.NOC.NOC_1 if noc else ttnn.NOC.NOC_0,
+        handshake=handshake,
+        data_ready=ttnn.McastDataReady.Counter if counter else ttnn.McastDataReady.Flag,
+    )
+    sender_config = ttnn.McastExplicitSenderConfig([[ttnn.CoreCoord(*sender) for sender in group.senders]])
+    helper = ttnn.Mcast(device, config, core_set(group.receivers), len(group.receivers), sender_config)
+    _run_channel(
+        device,
+        helper,
+        [group],
+        config,
+        rounds=rounds if rounds is not None else (4 if handshake else 1),
+        control=control,
+        caller_managed=caller_managed,
+        dynamic=False,
+        max_pages=1,
+        alternating=alternating,
+        round_only_receive=True,
+        control_value=1,
+        with_barrier=False,
+        suppress_round_output=suppress_round_output,
+        stress_flag_source_lifetime=stress_flag_source_lifetime,
+        delay_receiver_construction=delay_receiver_construction,
+    )
+
+
+def _run_channel(
+    device,
+    mcast,
+    specs,
+    config,
+    *,
+    rounds=6,
+    control=False,
+    caller_managed=False,
+    receiver_caller_managed=False,
+    dynamic=True,
+    max_pages=2,
+    mixed_events=False,
+    delayed=False,
+    expected_chain=None,
+    min_rectangles=None,
+    alternating=True,
+    round_only_receive=False,
+    control_value=7,
+    with_barrier=True,
+    suppress_round_output=False,
+    stress_flag_source_lifetime=False,
+    delay_receiver_construction=False,
+):
+    # The config getter uses the runtime NOC enum, while ttnn.NOC is the descriptor enum.
+    noc = config.noc.value
+    counter = config.data_ready == ttnn.McastDataReady.Counter
+    # specs are (exact logical receivers, ordered logical senders).
+    all_coords = {c for receivers, senders in specs for c in receivers + senders}
+    width = max(c[0] for c in all_coords) + (2 if with_barrier else 1)
+    height = max(c[1] for c in all_coords) + 1
+    size = device.compute_with_storage_grid_size()
+    if width > size.x or height > size.y:
+        pytest.skip("requires a larger worker grid")
+    dispatch = [(x, y) for y in range(height) for x in range(width)]
+    participants = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(width - 1, height - 1))])
+    payload_rounds = 1 if suppress_round_output and control else rounds
+    payload = tile_pattern(len(specs) * payload_rounds * max_pages)
+    input_tensor = ttnn.from_torch(payload, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    stride = 1 if suppress_round_output else rounds * max_pages + 1
+    output_tensor = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([len(dispatch) * stride, 1, 32, 32]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ct = [
+        rounds,
+        int(control),
+        int(caller_managed),
+        int(dynamic),
+        max_pages,
+        int(mixed_events),
+        int(delayed),
+        int(receiver_caller_managed),
+        int(alternating),
+        int(round_only_receive),
+        control_value,
+    ]
+    ct += list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    ct += list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    rt = ttnn.RuntimeArgs()
+    for index, (x, y) in enumerate(dispatch):
+        group_index = next((i for i, (rx, tx) in enumerate(specs) if (x, y) in rx + tx), None)
+        inside = group_index is not None and (x, y) in specs[group_index][0]
+        rt[x][y] = [
+            input_tensor.buffer_address(),
+            output_tensor.buffer_address(),
+            (group_index or 0) * rounds * max_pages,
+            index * stride,
+            int(inside),
+            int(group_index is None),
+        ]
+    defines = []
+    if suppress_round_output:
+        defines.append(("MCAST_TEST_SUPPRESS_ROUND_OUTPUT", "1"))
+    if stress_flag_source_lifetime:
+        defines.append(("MCAST_TEST_STRESS_FLAG_SOURCE_LIFETIME", "1"))
+    if delay_receiver_construction:
+        defines.append(("MCAST_TEST_DELAY_RECEIVER_CONSTRUCTION", "1"))
+    kernels = []
+    face_rt = ttnn.RuntimeArgs()
+    for x, y in dispatch:
+        face_rt[x][y] = list(rt[x][y])
+    kernels.append(
+        ttnn.KernelDescriptor(
+            kernel_source=f"{KERNEL_DIR}/pipe_mcast.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=core_set(dispatch),
+            compile_time_args=list(ct),
+            defines=defines,
+            runtime_args=face_rt,
+            config=ttnn.WriterConfigDescriptor() if noc else ttnn.ReaderConfigDescriptor(),
+        )
+    )
+    descriptor = ttnn.ProgramDescriptor()
+    mcast.attach(descriptor, "mcast", kernels, 0)
+    attached_ct = inspect_mcast_ct(kernels[0])
+    if expected_chain is not None:
+        assert (attached_ct["flags"] >> 3) & 3 == int(expected_chain)
+        if expected_chain:
+            assert attached_ct["capacity"] == 0 and attached_ct["signal_source"] == 2
+        for receivers, senders in specs:
+            sender = ttnn.CoreCoord(*senders[0])
+            fanout = len(receivers) - int(senders[0] in receivers)
+            assert inspect_mcast(kernels[0], sender)["ack"] == (int(fanout > 0) if expected_chain else fanout)
+    if min_rectangles is not None:
+        # Guard cases whose point is an irregular mapping: they must not degrade into dense sets on this grid.
+        # Chain arguments omit rectangles; inspect the same geometry in multicast mode.
+        geometry_mcast = make_mcast(device, specs, ttnn.McastConfig(noc=config.noc))
+        _, geometry_kernel = attach_for_inspection(geometry_mcast, participants, config.noc)
+        for _, senders in specs:
+            x, y = senders[0]
+            assert inspect_mcast(geometry_kernel, ttnn.CoreCoord(x, y))["rectangles"] >= min_rectangles
+    for kernel in kernels:
+        ttnn.attach_absent_mcast(kernel, "absent_mcast")
+    if with_barrier:
+        barrier = ttnn.Mcast(
+            device,
+            ttnn.McastConfig(noc=config.noc),
+            participants,
+            participants.num_cores(),
+            ttnn.McastExplicitSenderConfig([[ttnn.CoreCoord(0, 0)]]),
+        )
+        barrier.attach(descriptor, "barrier_mcast", kernels, mcast.next_semaphore_id())
+    else:
+        for kernel in kernels:
+            ttnn.attach_absent_mcast(kernel, "barrier_mcast")
+    descriptor.cbs = [make_cb(i, participants, pages=2 * max_pages) for i in (0, 1)]
+    descriptor.kernels = kernels
+    output = ttnn.generic_op(
+        [input_tensor, output_tensor],
+        descriptor,
+    )
+    actual = ttnn.to_torch(output).reshape(len(dispatch), stride, 1, 32, 32)
+    if suppress_round_output:
+        for index, coord in enumerate(dispatch):
+            if coord in all_coords:
+                if control:
+                    expected = rounds if counter else control_value
+                    assert actual[index, 0].contiguous().view(torch.int32).flatten()[0].item() == expected, coord
+                else:
+                    group_index = next(i for i, (receivers, _) in enumerate(specs) if coord in receivers)
+                    expected = payload[group_index * rounds * max_pages + (rounds - 1) * max_pages]
+                    assert torch.equal(actual[index, 0], expected), coord
+        return
+    for index, coord in enumerate(dispatch):
+        if with_barrier and coord not in all_coords:
+            assert torch.all(actual[index, -1].contiguous().view(torch.int32) == 0x5A5A5A5A), coord
+        for group_index, (receivers, _) in enumerate(specs):
+            if coord not in receivers:
+                continue
+            for r in range(rounds):
+                pages = (max_pages if r % 2 else 1) if dynamic else 1
+                if control or (mixed_events and r % 2):
+                    assert actual[index, max_pages * r].contiguous().view(torch.int32).flatten()[0].item() == (
+                        r + 1 if counter else control_value + (r % 3 if mixed_events else 0)
+                    )
+                else:
+                    for p in range(pages):
+                        assert torch.equal(
+                            actual[index, max_pages * r + p],
+                            payload[group_index * rounds * max_pages + max_pages * r + p],
+                        ), (
+                            coord,
+                            r,
+                            p,
+                        )
