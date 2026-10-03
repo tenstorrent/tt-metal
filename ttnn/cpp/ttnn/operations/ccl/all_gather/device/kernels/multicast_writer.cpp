@@ -53,6 +53,7 @@ void kernel_main() {
     const uint32_t num_output_chunks = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t device_idx = get_arg_val<uint32_t>(arg_idx++);
     const address_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
+    const address_t done_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t line_hops = get_arg_val<uint32_t>(arg_idx++);
@@ -233,12 +234,11 @@ void kernel_main() {
     // Reader fires sem increment forward, and also owns sem wait + decrement.
     // Writer fires sem increment backward, and exits immediately.
     if constexpr (enable_fabric) {
-        uint64_t barrier_sem_noc_addr_in_pkt =
-            safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
+        uint64_t done_sem_noc_addr_in_pkt = safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, done_sem, 0);
         fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
             fabric_connection,
             sem_route_id,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{done_sem_noc_addr_in_pkt, 0});
     }
 
     if constexpr (enable_fabric) {
