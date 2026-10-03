@@ -590,6 +590,45 @@ def test_repeat_all_ones_shortcut(input_layout, mc_factory, device):
     )
 
 
+# All-1 repeat vector with a spec-less sharded output, or a rank expansion on sharded input.
+@pytest.mark.parametrize(
+    "shape, repeat_shape, input_factory, output_factory",
+    [
+        pytest.param(
+            (1, 1, 64, 64),
+            (1, 1, 1, 1),
+            lambda d: L1_INTERLEAVED,
+            _sharded_no_spec(ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+            id="interleaved_to_height_nospec",
+        ),
+        pytest.param(
+            (1, 1, 64, 64),
+            (1, 1, 1, 1),
+            lambda d: _height_shard_config((1, 1, 64, 64), d),
+            _sharded_no_spec(ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+            id="height_to_width_nospec",
+        ),
+        pytest.param(
+            (1, 64, 64),
+            (1, 1, 1, 1),
+            lambda d: _height_shard_config((1, 1, 64, 64), d),
+            None,
+            id="height_rank_expand",
+        ),
+    ],
+)
+def test_repeat_all_ones_shortcut_sharded_output(shape, repeat_shape, input_factory, output_factory, device):
+    run_repeat_test(
+        shape,
+        repeat_shape,
+        device,
+        input_layout=ttnn.TILE_LAYOUT,
+        input_mem_config=input_factory(device),
+        output_mem_config=output_factory(device) if output_factory else None,
+        dtype=ttnn.bfloat16,
+    )
+
+
 # TILE universal-I/O matrix: essential input × output routing paths.
 @pytest.mark.parametrize(
     "dtype",
