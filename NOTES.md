@@ -25,6 +25,9 @@
   If blx03 reboots, the driver dies without a marker: relaunch with
   `tt-project/harness/templates/blx03-launch.sh t114 /var/tmp/fasth3/t114/src/tmp/blx03/t114/driver114.sh`
   (finished layers have results/<layer>_done and are skipped).
+- 08:29 UTC blx03 rebooted (broker host rung after the 08:07 tenant drop) while the driver was still waiting for
+  health; no job of ours had run. Relaunched 08:33 UTC (old log: driver.log.prev-reboot0829). First job: 484
+  (exact_s2_res).
 - Results: /var/tmp/fasth3/t114/results/*.json, per-layer log run114_<layer>.log.
 
 ## Next
