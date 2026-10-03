@@ -101,6 +101,10 @@ GroupReference moe_group_reference(
     std::vector<uint32_t> counts(E_local, 0);
     for (uint32_t e = 0; e < E_local; ++e) {
         const uint32_t leid = local_expert_ids[e];
+        if (std::find(local_expert_ids.cbegin(), local_expert_ids.cbegin() + e, leid) !=
+            local_expert_ids.cbegin() + e) {
+            continue;
+        }
         for (uint32_t t = 0; t < total_rows; ++t) {
             for (uint32_t ki = 0; ki < k; ++ki) {
                 const uint32_t md = metadata.flat(t * k + ki);
@@ -338,6 +342,25 @@ TEST_F(MoeGroupTest, ExpertZeroActive) {
     // local expert 5 is never present in metadata (E=4 → ids in [0,3]).
     const std::vector<uint16_t> leids = {0, 5};
     check_against_reference(make_inputs(D, B, S, H, E, K), leids, K);
+}
+
+TEST_F(MoeGroupTest, DuplicateLocalExpertIdsUseFirstOccurrenceOnCacheHit) {
+    constexpr uint32_t D = 1, B = 1, S = 1, H = 64;
+    constexpr uint32_t E = 1, K = 1;
+    auto* device = &ttml::autograd::ctx().get_device();
+    device->enable_program_cache();
+
+    const auto host = make_inputs(D, B, S, H, E, K);
+    check_against_reference(host, /*local_expert_ids=*/{0, 1}, K);
+    const auto entries_before_duplicate = device->num_program_cache_entries();
+
+    // The first expert owns the sole active row; the duplicate slot must have
+    // count zero and an empty [32, 32) interval. The old kernel instead
+    // returned counts=[1,1] and offsets=[0,32,64].
+    check_against_reference(host, /*local_expert_ids=*/{0, 0}, K);
+
+    EXPECT_EQ(device->num_program_cache_entries(), entries_before_duplicate)
+        << "duplicate local IDs compiled a value-specific program instead of reusing runtime arguments";
 }
 
 TEST_F(MoeGroupTest, AllTokensActiveForAllExperts) {
