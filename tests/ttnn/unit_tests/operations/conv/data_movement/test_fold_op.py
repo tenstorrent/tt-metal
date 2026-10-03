@@ -411,13 +411,15 @@ def test_fold(act_shape, stride_h, stride_w, device):
     torch.testing.assert_close(actual, expected)
 
 
-def run_fold_sharded_test(device, act_shape, stride_h, stride_w, padding, core_grid, layout=ttnn.ROW_MAJOR_LAYOUT):
+def run_fold_sharded_test(
+    device, act_shape, stride_h, stride_w, padding, core_grid, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
+):
     torch.manual_seed(0)
 
     N, H, W, C = act_shape
     shape = act_shape
     for run in range(2):
-        torch_input = torch.randn(shape, dtype=torch.bfloat16)
+        torch_input = torch.randn(shape, dtype=torch.float32 if dtype == ttnn.float32 else torch.bfloat16)
 
         expected = fold_torch(torch_input, stride_h, stride_w, padding=padding)
 
@@ -461,6 +463,7 @@ def run_fold_sharded_test(device, act_shape, stride_h, stride_w, padding, core_g
             device,
             layout,
             tt_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec),
+            tt_dtype=dtype,
         )
         tt_out = ttnn.fold(tt_input, stride_h=stride_h, stride_w=stride_w, padding=list(padding))
         actual = tt2torch_tensor(tt_out)
@@ -495,3 +498,9 @@ def test_fold_tile_partial_tile_width_rejected(device, expect_error):
     ttnn_in = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
     with expect_error(RuntimeError, "stride_w|logical W"):
         ttnn.fold(ttnn_in, 32, 32)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("act_shape", [(1, 16, 16, 3), (2, 8, 8, 3), (1, 16, 16, 5), (1, 16, 16, 8)])
+def test_fold_sharded_float32(device, act_shape):
+    run_fold_sharded_test(device, act_shape, 2, 2, (0, 0), None, dtype=ttnn.float32)
