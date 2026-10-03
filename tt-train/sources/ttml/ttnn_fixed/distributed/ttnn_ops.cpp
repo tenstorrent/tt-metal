@@ -195,8 +195,6 @@ ttnn::Tensor mesh_partition(const ttnn::Tensor& tensor, const int dim, const std
 ttnn::Tensor ring_shift(
     const ttnn::Tensor& tensor, const std::optional<uint32_t> cluster_axis, const RingShiftDirection direction) {
     auto& ctx = ttml::autograd::ctx();
-    auto& socket_manager = ctx.get_socket_manager();
-    auto distributed_ctx = ctx.get_distributed_context();
     auto mesh_device_ptr = ctx.get_device_ptr();
     const auto mesh_shape = mesh_device_ptr->shape();
 
@@ -208,13 +206,16 @@ ttnn::Tensor ring_shift(
         "cluster_axis must be either >= 0 and < {} for 2D mesh or nullopt for 1D mesh and linear topology",
         mesh_shape.dims());
 
-    const uint32_t cluster_axis_value = cluster_axis.has_value() ? cluster_axis.value() : 0;
+    const uint32_t cluster_axis_value = cluster_axis.value_or(0U);
     const uint32_t ring_size = mesh_shape[cluster_axis_value];
-    TT_FATAL(ring_size % 2 == 0, "ring_shift requires an even number of devices in the ring, got {}", ring_size);
 
     if (ring_size <= 1U) {
         return tensor;
     }
+    TT_FATAL(ring_size % 2 == 0, "ring_shift requires an even number of devices in the ring, got {}", ring_size);
+
+    auto& socket_manager = ctx.get_socket_manager();
+    auto distributed_ctx = ctx.get_distributed_context();
 
     auto output_tensor = ttnn::empty_like(tensor);
 
