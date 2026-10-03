@@ -134,6 +134,7 @@ class Model:
         self.dec.mesh_config, self.dec.ccl = self.mc, self.ccl
         self.prefill_model = GenPrefillModel(mesh_device, pls, embedding, self.head, dev_engram, self.host_rows, self.U)
         self.prefill_model.set_head_sampling(self.mc, self.ccl)
+        self.prefill_model.sink = self.sink
         self.engram_kin = {l: e.kin for l, e in dev_engram.items()}
         self.rows_cat = None
         self.trace_id = None
@@ -230,10 +231,62 @@ class Model:
             )
         return self.prefill_forward_legacy(tokens, prompt_lens, chunk, max_new_tokens, want_logits, hook)
 
+    def prepare_for_traces(self, lens):
+        """Allocate EVERY persistent device tensor and run every compile pass BEFORE the first trace capture: a persistent tensor created after a capture can
+        land on the (freed) intermediate buffers of a captured trace and is then clobbered by the next replay (or corrupts it). Creates the head's column-id
+        constant, the decode device-loop buffers (tokens / positions), the packed Engram-rows buffer, and compiles one decode step (state restored).
+        """
+        if getattr(self, "_warm", False):
+            return
+        head = self.head
+        if getattr(head, "_col_ids", None) is None:
+            head._col_ids = ttnn.from_torch(
+                torch.arange(head.cols, dtype=torch.float32).reshape(1, 1, 1, head.cols),
+                device=self.md,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.md),
+            )
+        zeros = torch.zeros(self.B, dtype=torch.long)
+        self._set_loop_state(zeros, torch.as_tensor(lens).long())
+        if self.engram_ids:
+            k = sum(self.engram_kin[l] for l in self.engram_ids)
+            host = ttnn.from_torch(
+                torch.zeros(self.B, 1, 1, k, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self._mp(),
+            )
+            self._upload_rows(host)
+        snaps = self.dec.snapshot_states()
+        self.last_logits = (
+            self.dec.forward()
+        )  # compile pass (writes pool rows at position = prompt length: rewritten by the prefill / first real step)
+        ttnn.synchronize_device(self.md)
+        self.dec.restore_states(snaps)
+        del snaps
+        self._set_loop_state(zeros, torch.as_tensor(lens).long())
+        self._warm = True
+
     def _post_chunk(self, s0, C):
-        pm = self.prefill_model
-        xs, pres = pm.dyn_out
-        self._res.update(pm.ragged_tail(xs, pres, s0, C, self._last_pos, self._want_logits))
+        """Host-only (no device allocation): read the ragged-head trace outputs of this chunk for the users whose last prompt token is inside it."""
+        pm, U, rows, cols = self.prefill_model, self.U, self.rows, self.cols
+        K = C // 32
+        for u in range(U):
+            lg, tk = pm.head_out[u]
+            todo = [
+                (r, (int(self._last_pos[r * U + u]) - s0) % 32, r * U + u)
+                for r in range(rows)
+                if s0 <= int(self._last_pos[r * U + u]) < s0 + C
+            ]
+            if not todo:
+                continue
+            devs = ttnn.get_device_tensors(ttnn.from_device(tk))
+            full = pm.head.gather_logits(lg).reshape(rows, 32, -1) if self._want_logits else None
+            for r, off, b in todo:
+                tok = int(ttnn.to_torch(devs[r * cols]).reshape(-1)[off])
+                self._res[b] = (tok, None if full is None else full[r, off].clone())
 
     def prefill_forward_dyn(self, tokens, prompt_lens, chunk, max_new_tokens, want_logits, enable_trace, s_pad_max):
         B = self.B
@@ -245,9 +298,16 @@ class Model:
         S = int(lens.max())
         C = chunk or -(-S // 128) * 128
         S_pad = max(-(-S // C) * C, s_pad_max or 0)
+        self.log(f"  prefill_dyn: admit users")
         self.admit_users(lens, max_new_tokens)
         self.sink.set_lengths(lens)
         self.sink.bind(C)
+        bis = os.environ.get("DSV41_BISECT", "")
+        if "nosink" in bis and not getattr(self, "_nosink_done", False):
+            for _, pl in self.prefill_model.layers:
+                pl.pa.state_sink = None
+            self._nosink_done = True
+        self.prepare_for_traces(lens)
         pm = self.prefill_model
         pm.timing = {}
         tp = torch.zeros(B, S_pad, dtype=torch.long)
@@ -261,8 +321,12 @@ class Model:
             pm.pre_replay_hooks.append(lambda s0, C_: self.sink.update(s0, C_))
             pm.post_replay_hooks.append(self._post_chunk)
             self._hooks_set = pm
+        if "nohead" in bis:
+            pm.post_replay_hooks[:] = [h for h in pm.post_replay_hooks if h != self._post_chunk]
+        self.log(f"  prefill_dyn: run chunks (trace={enable_trace}, C={C}, S_pad={S_pad}, bisect={bis!r})")
         if enable_trace:
             pm.run_traced_chunks(tp, C, hashes=hashes)
+            self.log("  prefill_dyn: chunks done")
         else:
             pm.setup_dyn(C, S_pad)
             for _, pl in pm.layers:

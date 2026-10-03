@@ -11,6 +11,7 @@
   mesh rows run the same program, so every row reads its own row index through the chunk that holds it) and greedy-samples on the device.
 """
 
+import os
 import time
 
 import torch
@@ -48,6 +49,10 @@ class PagedStateSink:
         lat = {s: torch.full((R, U * (C // P.SRC_RATIO[s])), SKIP, dtype=torch.int64) for s in P.SOURCES}
         idx = torch.zeros(R * U, 1, dtype=torch.int32)
         m = torch.zeros(R, 1, U, 1)
+        K = C // 32
+        hm = torch.zeros(
+            R * U * K, 1, 1, 1
+        )  # ragged-head selector: 1 at (user u, 32-token sub-chunk c) holding the user's last prompt token
         for r in range(R):
             for u in range(U):
                 b = r * U + u
@@ -67,13 +72,14 @@ class PagedStateSink:
                 if s0 <= p < s0 + C:
                     idx[b, 0] = u * C + (p - s0)
                     m[r, 0, u, 0] = 1.0
-        return ring, lat, idx, m
+                    hm[(r * U + u) * K + (p - s0) // 32] = 1.0
+        return ring, lat, idx, m, hm
 
     def bind(self, C):
         """Allocate the persistent index tensors of chunk length C (call before any trace capture)."""
         if C in self.bufs:
             return self.bufs[C]
-        ring, lat, idx, m = self._host_values(0, C)
+        ring, lat, idx, m, hm = self._host_values(0, C)
         up = lambda t, dt, lay=ttnn.ROW_MAJOR_LAYOUT: ttnn.from_torch(
             t.contiguous(),
             device=self.md,
@@ -87,13 +93,14 @@ class PagedStateSink:
             "lat": {s: up(v.reshape(self.rows, 1, -1).to(torch.int32), ttnn.uint32) for s, v in lat.items()},
             "idx": up(idx, ttnn.uint32),
             "mask": up(m, ttnn.float32, ttnn.TILE_LAYOUT),
+            "hmask": up(hm, ttnn.float32, ttnn.TILE_LAYOUT),
         }
         return self.bufs[C]
 
     def update(self, s0, C):
         """Refresh the persistent index tensors for the chunk of positions [s0, s0 + C) (host work + 6 small uploads; call before each chunk / replay)."""
         bufs = self.bind(C)
-        ring, lat, idx, m = self._host_values(s0, C)
+        ring, lat, idx, m, hm = self._host_values(s0, C)
         ttnn.copy_host_to_device_tensor(
             self._host(ring.reshape(self.rows, 1, -1).to(torch.int32), ttnn.uint32), bufs["ring"]
         )
@@ -103,16 +110,31 @@ class PagedStateSink:
             )
         ttnn.copy_host_to_device_tensor(self._host(idx, ttnn.uint32), bufs["idx"])
         ttnn.copy_host_to_device_tensor(self._host(m, ttnn.float32, ttnn.TILE_LAYOUT), bufs["mask"])
+        ttnn.copy_host_to_device_tensor(self._host(hm, ttnn.float32, ttnn.TILE_LAYOUT), bufs["hmask"])
 
     # ---- the sink (trace-safe: static shapes, persistent index tensors) --------------------------------------------------------------
     def write(self, attn, pa, kv, lat, cs, s0, C, h):
         pool, U = self.pool, self.U
         C = int(kv.shape[2])
         bufs = self.bufs[C]
+        if os.environ.get("DSV41_SINKDBG") == "1":
+            kk = ttnn.to_torch(ttnn.get_device_tensors(kv)[0]).float()
+            hh = ttnn.to_torch(ttnn.get_device_tensors(h)[0]).float()
+            print(
+                f"SINKDBG kv absmax {float(kk.abs().max()):.3f} nan {int(kk.isnan().sum())} h absmax {float(hh.abs().max()):.3f} nan {int(hh.isnan().sum())}",
+                flush=True,
+            )
+            print(
+                f"SINKDBG write ring_slot {attn.ring_slot} base {pool.ring_base(attn.ring_slot)} kv {tuple(kv.shape)} {kv.dtype} lat {None if lat is None else tuple(lat.shape)} cs {cs is not None}",
+                flush=True,
+            )
+        skip = os.environ.get("DSV41_SINKSKIP", "")
+        if "all" in skip:
+            return
         src = ttnn.to_layout(ttnn.reshape(kv, [1, 1, U * C, HEAD_DIM]), ttnn.ROW_MAJOR_LAYOUT)
         P.paged_scatter_rows(pool.pool, src, bufs["ring"], base_offset=pool.ring_base(attn.ring_slot))
         ttnn.deallocate(src)
-        if lat is not None:  # kv-source layer: its latents live in the shared pages
+        if lat is not None and "lat" not in skip:  # kv-source layer: its latents live in the shared pages
             Cc = C // attn.ratio
             src = ttnn.to_layout(ttnn.reshape(lat, [1, 1, U * Cc, HEAD_DIM]), ttnn.ROW_MAJOR_LAYOUT)
             P.paged_scatter_rows(pool.pool, src, bufs["lat"][attn.src_layer])
@@ -135,6 +157,42 @@ class PagedStateSink:
 
 class GenPrefillModel(DSV41PrefillModel):
     """``DSV41PrefillModel`` with ragged last-token extraction + on-device greedy sampling of the first token."""
+
+    def forward_device(self, bufs, S, s0, C, hook=None, profile=False, dyn=False):
+        """Dynamic-chunk forward + (dyn only) the RAGGED HEAD INSIDE the same trace: for every user the 32-token sub-chunk holding its last prompt token is
+        selected on the device with a per-(mesh row, user, sub-chunk) 0/1 mask (persistent tensor refreshed by ``PagedStateSink.update``), run through the
+        head and sampled greedily. The outputs (tokens [32,1], logits shard [1,1,32,vocab/cols] per user) are trace outputs read by ``Model._post_chunk``:
+        NO eager device op or allocation happens between replays (they hang / corrupt traced programs)."""
+        out = super().forward_device(bufs, S, s0, C, hook=hook, profile=profile, dyn=dyn)
+        if dyn:
+            self._ragged_head_traced(C)
+        return out
+
+    def _ragged_head_traced(self, C):
+        xs, pres = self.dyn_out
+        U, K = self.U, C // 32
+        hmask = self.sink.bufs[C]["hmask"]
+        self.head_out = (
+            []
+        )  # (the outputs of the eager compile pass are leaked on purpose: no deallocation inside a capture)
+        for u in range(U):
+            sel_x = sel_p = None
+            for c in range(K):
+                m = ttnn.slice(hmask, [u * K + c, 0, 0, 0], [u * K + c + 1, 1, 1, 1])
+                xc, pc = ttnn.multiply(xs[u * K + c], m), ttnn.multiply(pres[u * K + c], m)
+                sel_x = xc if sel_x is None else ttnn.add(sel_x, xc)
+                sel_p = pc if sel_p is None else ttnn.add(sel_p, pc)
+            lg = self.head.forward(sel_x, sel_p)
+            tk = self.head.sample_global(lg, self.mesh_config, self.ccl)
+            self.head_out.append((lg, tk))
+
+    def last_logits(self, xs, pres, S, s0, C):
+        """run_traced_chunks calls this after its replay loop with the LAST chunk's streams and the scalar max length: the ragged per-user head already ran in
+        the post-replay hooks (``Model._post_chunk``), so do nothing (and leave no tensors alive between replays)."""
+        return {}
+
+    def read_logits(self, lg):
+        return None
 
     def set_head_sampling(self, mesh_config, ccl):
         self.mesh_config, self.ccl = mesh_config, ccl
