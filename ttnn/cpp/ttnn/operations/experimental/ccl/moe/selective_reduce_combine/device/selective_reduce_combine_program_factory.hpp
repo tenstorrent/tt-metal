@@ -22,6 +22,32 @@ struct SelectiveReduceCombineWorkerLayout {
     uint32_t num_worker_cores = 0;
 };
 
+struct FusedSourceBufferLayout {
+    uint32_t rows_per_buffer = 0;             // token-segment rows per ring entry
+    uint32_t buffer_block_size_bytes = 0;     // rows_per_buffer * token_segment_size_bytes
+    uint32_t circular_buffer_size_bytes = 0;  // num_buffers * buffer_block_size_bytes == the shard
+};
+
+// Fused source: the producer (moe_compute dm1) and the combine writer alias one
+// height-sharded L1 tensor as a num_buffers-entry ring. Each core's shard is
+// [source_shard_height, source_shard_width] elements, but both sides address it in
+// rows of one token segment (token_segment_width = hidden_size / num_data_parallel_cores
+// elements, token_segment_size_bytes each): dm1's token_expert_row_offset and the
+// writer's block stride count token-segment rows, not shard rows. A ring entry holds
+// source_shard_height / num_buffers shard rows, each source_shard_width /
+// token_segment_width segments wide, so
+//   rows_per_buffer = source_shard_height / num_buffers * (source_shard_width / token_segment_width)
+// (equal to the shard height split when the shard is one segment wide). The shard
+// height must divide by num_buffers, the shard width by the segment width, and the
+// ring (== the shard's bytes) must fit the L1 bank (source_buffer_size_bytes).
+FusedSourceBufferLayout compute_fused_source_buffer_layout(
+    uint32_t source_shard_height,
+    uint32_t source_shard_width,
+    uint32_t token_segment_width,
+    uint32_t source_buffer_size_bytes,
+    uint32_t token_segment_size_bytes,
+    uint32_t num_buffers);
+
 SelectiveReduceCombineWorkerLayout compute_worker_layout(
     const Tensor& input_tensor,
     uint32_t hidden_size,
