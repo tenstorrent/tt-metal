@@ -274,8 +274,8 @@ def paged_kv_step(
     return ttnn.generic_op([kv, lat_t, pos, page_table, ids_t, pool, out], prog)
 
 
-def paged_scatter_rows(pool, src, row_ids, n_cores=16):
-    """In place: pool[row_ids[i]] = src[i]. src: bf16 ROW_MAJOR [N, 512] (per device), row_ids: uint32 ROW_MAJOR [1, N] (0xFFFFFFFF = skip). This is the
+def paged_scatter_rows(pool, src, row_ids, n_cores=16, base_offset=0):
+    """In place: pool[row_ids[i] + base_offset] = src[i] (``base_offset``: runtime constant, e.g. ``pool.ring_base(l)``, so one ids tensor serves all layers' rings). src: bf16 ROW_MAJOR [N, 512] (per device), row_ids: uint32 ROW_MAJOR [1, N] (0xFFFFFFFF = skip). This is the
     write path of prefill chunks and multi-row (spec decode) appends: the caller translates logical rows to physical pool rows with the page table
     (``PagedKVPool.phys_rows`` on the host, or ``paged_kv_step`` on the device for decode)."""
     md = pool.device()
@@ -300,7 +300,7 @@ def paged_scatter_rows(pool, src, row_ids, n_cores=16):
         core_ranges=core_set,
         compile_time_args=ct,
         runtime_args=rt,
-        common_runtime_args=[src.buffer_address(), row_ids.buffer_address(), pool.buffer_address()],
+        common_runtime_args=[src.buffer_address(), row_ids.buffer_address(), pool.buffer_address(), base_offset],
         config=ttnn.ReaderConfigDescriptor(),
     )
     prog = ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=[cb])
