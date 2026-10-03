@@ -430,18 +430,20 @@ def test_pipeline_distilled(
             # steady-state step time (not only the first replay after capture) is on the record.
             # LTX_E2E_AB_ENV="K=V K2=V2": set on the even extra gens (#2, #4, ...) and unset on the odd ones,
             # so one session A/Bs pipeline flags read at call time against interleaved baseline gens.
+            # LTX_E2E_AB_ENV_ONCE: extra flags for the first "on" gen only (e.g. a self-check kept off the timed gens).
             ab_env = dict(kv.split("=", 1) for kv in os.environ.get("LTX_E2E_AB_ENV", "").split())
+            ab_once = dict(kv.split("=", 1) for kv in os.environ.get("LTX_E2E_AB_ENV_ONCE", "").split())
             for extra in range(int(os.environ.get("LTX_E2E_EXTRA_REPLAYS", "0"))):
                 arm_on = extra % 2 == 0
-                for k, v in ab_env.items():
-                    if arm_on:
+                for k, v in {**ab_env, **ab_once}.items():
+                    if arm_on and (k in ab_env or extra == 0):
                         os.environ[k] = v
                     else:
                         os.environ.pop(k, None)
                 arm = f", ab={'on' if arm_on else 'off'}" if ab_env else ""
                 logger.info(f"=== traced steady-state pass (gen #{extra + 2}, pure replay{arm}) ===")
                 run(prompt=replay_prompt(extra + 2), number=extra + 2, seed=seed)
-            for k in ab_env:
+            for k in {**ab_env, **ab_once}:
                 os.environ.pop(k, None)
             # LTX_REF_FRAMES=<path>: one more replay that also writes the raw uint8 frames, kept out of
             # the timed gens because the dump forces the slower float readback instead of the yuv path.
