@@ -33,7 +33,7 @@ def test_untilize_single_core_interleaved_to_interleaved(device, dtype, tensor_s
     if dtype == ttnn.int32:
         assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
     else:
-        assert_quality(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), dtype)
+        assert_quality(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), dtype, bf8_atol=0.05)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])

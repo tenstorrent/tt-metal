@@ -91,7 +91,7 @@ dev env (`tt_metal/python_env/requirements-dev.txt`).
 > **`librosa==0.10.0` is load-bearing.** Its filterbank feeds every mel in the model, on both the
 > TTNN and the reference side, so a version bump moves every PCC number.
 
-`torchaudio==2.11.0+cpu` is required for UTMOS resampling — without it `test_tt_eval*` still runs
+`torchaudio==2.13.0+cpu` is required for UTMOS resampling — without it `test_tt_eval*` still runs
 and still reports CER and SECS, but logs `UTMOS skipped (ModuleNotFoundError: No module named
 'torchaudio')`. The default PyPI wheel links CUDA and fails to load against CPU torch; the
 requirements file pulls the CPU wheel via `--extra-index-url https://download.pytorch.org/whl/cpu`.
@@ -100,7 +100,7 @@ Equivalent standalone install:
 ```bash
 uv pip install \
   --extra-index-url https://download.pytorch.org/whl/cpu \
-  'torchaudio==2.11.0+cpu'
+  'torchaudio==2.13.0+cpu'
 ```
 
 ### Step 3 — Model weights
