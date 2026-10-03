@@ -123,7 +123,6 @@ void kernel_main() {
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_weight_tiled);
     constexpr uint32_t partials_tile_bytes = get_tile_size(cb_matmul_interm_tiled);
-    constexpr uint32_t bias_tile_bytes = use_bias ? get_tile_size(cb_bias_tiled) : 0;
     constexpr auto out_args = TensorAccessorArgs<28>();
     constexpr auto weight_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
@@ -271,12 +270,8 @@ void kernel_main() {
                         uint32_t bias_write_offset = 0;
                         for (uint32_t i = c_out_offset_t; i < c_out_offset_t + matmul_N_t; i++) {
                             noc.async_read(
-                                bias_reader,
-                                cb_bias,
-                                bias_tile_bytes,
-                                {.page_id = i},
-                                {.offset_bytes = bias_write_offset});
-                            bias_write_offset += bias_tile_bytes;
+                                bias_reader, cb_bias, tile_bytes, {.page_id = i}, {.offset_bytes = bias_write_offset});
+                            bias_write_offset += tile_bytes;
                         }
                         noc.async_read_barrier();
                         cb_bias.push_back(matmul_N_t);

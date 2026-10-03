@@ -35,3 +35,21 @@ Read driver.log, run84.log (decode min per arm), ab/summary.json (psnr_min >= 40
 Copy stills to g15blx02 under tt-project/state/runs/<run>/ for the report. Then write result.json.
 Cleanup on blx03 when done: git -C ~/fasth3/tt-metal worktree remove --force ~/fasth3/t84; rm -rf /var/tmp/fasth3/t84/build_Release; rm -rf ~/fasth3/t84drv
 ~/fasth3/t84-setup.* (keep /var/tmp/fasth3/t84/ab stills; yuv .pt files can go).
+
+## RESULT (blx03 job 354, 2x4 submesh from full mesh, 2026-10-03 00:55-00:58 UTC, no drop)
+544x960/145f real latent, 40 up-block convs, min of 3 warm decodes, PSNR/SSIM vs base (YUV, per frame):
+| arm      | decode s | delta    | PSNR min/mean | SSIM-Y min | max abs |
+| base     | 1.9672   | -        | inf           | 1.0        | 0       |
+| hifi2    | 1.9739   | +0.3%    | inf (bit-id)  | 1.0        | 0       |
+| lofi     | 1.7899   | -177 ms, -9.0% | 45.00 / 45.92 | 0.9951 | 32 |
+| bf8      | 1.9446   | -1.1%    | 10.0 / 10.4   | 0.022      | 221 (garbage) |
+| lofi_bf8 | 1.7920   | -8.9%    | 10.0 / 10.4   | 0.023      | 221 (garbage) |
+- base == hifi2: the production conv default for bf16 is already HiFi2 (HiFi4 only for fp32). The earlier
+  "base = HiFi4" note was wrong.
+- LoFi passes (min 45 dB >= 40); still/crop look the same as base, x16 diff is faint and edge-only.
+- bf8 output is noise: a bug in the bf8-weight conv3d path (not precision loss). Not worth debugging: at best
+  -23 ms, and nothing on top of LoFi. Removed the bf8 knob and reverted the conv3d C++ changes (commit after
+  f45ce450901). LTX_VAE_CONV_FIDELITY stays opt-in, default unchanged.
+- Stills: g15blx02 tt-project/state/runs/t84-ab/ (still_/crop_ base, lofi, diff16_lofi, still_bf8, summary.json,
+  run84.log). Full set on blx03 /var/tmp/fasth3/t84/ab.
+- Next: LoFi on by default needs a 4x8 E2E 5-seed check (VBench + visual), once 4x8 runs are allowed.

@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Decoder conv3d precision A/B (LTX_VAE_CONV_FIDELITY / LTX_VAE_CONV_WEIGHT_DTYPE) on a 2x4 submesh.
+"""Decoder conv3d precision A/B (LTX_VAE_CONV_FIDELITY) on a 2x4 submesh.
 
 Real checkpoint weights and a real latent at 544x960/145f (each chip's shard matches 1080p on 4x8). All
-arms run in one job, in AB_ARMS order (risky arms last); each arm builds a fresh decoder, does 1 warmup and
+arms run in one job, in AB_ARMS order; each arm builds a fresh decoder, does 1 warmup and
 3 timed yuv decodes, and saves its output to $AB_OUT_DIR/yuv_<arm>.pt right away. Quality is scored off
 device (compare_conv_precision_ab.py). No weight cache is read or written.
 AB_CHECKPOINT: LTX safetensors with the conv VAE (2.3 monolith). AB_LATENT: saved stage-2 latent.
@@ -22,13 +22,7 @@ import ttnn
 
 NF, H, W = 145, 544, 960
 TIMED_DECODES = 3
-ARMS = {
-    "base": ("", ""),  # production: HiFi4, bf16 weights
-    "hifi2": ("HiFi2", ""),
-    "lofi": ("LoFi", ""),
-    "bf8": ("", "bf8"),
-    "lofi_bf8": ("LoFi", "bf8"),
-}
+ARMS = {"base": "", "hifi2": "HiFi2", "lofi": "LoFi"}  # base = production default (HiFi2 for bf16)
 
 
 def _latent():
@@ -78,9 +72,7 @@ def test_vae_ltx_conv_precision_ab(mesh_device, device_params, monkeypatch):
     ccl = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=2)
     failed = []
     for arm in os.environ.get("AB_ARMS", ",".join(ARMS)).split(","):
-        fidelity, wdtype = ARMS[arm]
-        monkeypatch.setenv("LTX_VAE_CONV_FIDELITY", fidelity)
-        monkeypatch.setenv("LTX_VAE_CONV_WEIGHT_DTYPE", wdtype)
+        monkeypatch.setenv("LTX_VAE_CONV_FIDELITY", ARMS[arm])
         try:
             dec = LTXVideoDecoder(
                 decoder_blocks=cfg["decoder_blocks"],
@@ -94,9 +86,8 @@ def test_vae_ltx_conv_precision_ab(mesh_device, device_params, monkeypatch):
                 width=W,
             )
             convs = list(_walk_conv3d_modules(dec.up_blocks))
-            n_bf8 = sum(1 for c in convs if c.weight.dtype == ttnn.bfloat8_b)
             n_lofi = sum(1 for c in convs if c.compute_kernel_config.math_fidelity == ttnn.MathFidelity.LoFi)
-            print(f"AB arm={arm} up_convs={len(convs)} bf8={n_bf8} lofi={n_lofi}", flush=True)
+            print(f"AB arm={arm} up_convs={len(convs)} lofi={n_lofi}", flush=True)
             dec.load_torch_state_dict(state)
             out = dec(lat, output_type="yuv")  # warmup: kernel compile + program cache
             times = []

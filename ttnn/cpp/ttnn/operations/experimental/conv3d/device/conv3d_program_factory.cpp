@@ -75,8 +75,6 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     auto dtype_bytes = input_tensor.element_size();
     auto tile_size = tt::tile_size(data_format);
-    auto weight_data_format = tt::tt_metal::datatype_to_dataformat_converter(weight_tensor.dtype());
-    auto weight_tile_size = tt::tile_size(weight_data_format);
 
     bool use_bias = bias_tensor.has_value();
 
@@ -199,12 +197,12 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
 
     uint32_t cb_weight_tiled_id = next_cb_index++;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = matmul_K_t * matmul_N_t * weight_tile_size,
+        .total_size = matmul_K_t * matmul_N_t * tile_size,
         .core_ranges = CoreRangeSet(core_grid),
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(cb_weight_tiled_id),
-            .data_format = weight_data_format,
-            .page_size = weight_tile_size,
+            .data_format = data_format,
+            .page_size = tile_size,
         }}},
     });
 
@@ -311,8 +309,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         patch_size_bytes,
         vol2col_rm_pages);
     log_debug(tt::LogOp, "CB vol2col_tiled: page_size={} bytes, num_pages={}", tile_size, out_subblock_h * matmul_K_t);
-    log_debug(
-        tt::LogOp, "CB weight_tiled: page_size={} bytes, num_pages={}", weight_tile_size, matmul_K_t * matmul_N_t);
+    log_debug(tt::LogOp, "CB weight_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_K_t * matmul_N_t);
     log_debug(
         tt::LogOp, "CB matmul_interm_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_N_t);
     log_debug(tt::LogOp, "CB matmul_result_rm: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_N_t);
@@ -387,7 +384,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
 
     uint32_t other_cbs_bytes = (padded_patch_size_bytes * vol2col_rm_pages) +   // vol2col_rm
                                (tile_size * out_subblock_h * matmul_K_t) +      // vol2col_tiled
-                               (weight_tile_size * matmul_K_t * matmul_N_t) +   // weight_tiled
+                               (tile_size * matmul_K_t * matmul_N_t) +          // weight_tiled
                                (partial_tile_size * matmul_M_t * matmul_N_t) +  // matmul_interm (may be fp32)
                                (tile_size * matmul_M_t * matmul_N_t);           // matmul_result_rm
     if (enable_dram_read_staging) {
