@@ -702,6 +702,21 @@ void py_module_types(nb::module_& mod) {
         including source code, compilation options, runtime arguments, and configuration.
     )pbdoc");
 
+    // KernelDescriptor accepts an optional KernelBuildOptLevel, but the enum must
+    // be exposed as well or Python callers cannot construct a non-default value.
+    // Keep it nested beside SourceType because it is part of the descriptor's
+    // compilation contract rather than a device-wide runtime setting.
+    nb::enum_<tt::tt_metal::KernelBuildOptLevel>(kernel_descriptor_class, "BuildOptLevel", R"pbdoc(
+        Kernel compiler and linker optimization level.
+    )pbdoc")
+        .value("O0", tt::tt_metal::KernelBuildOptLevel::O0)
+        .value("O1", tt::tt_metal::KernelBuildOptLevel::O1)
+        .value("O2", tt::tt_metal::KernelBuildOptLevel::O2)
+        .value("O3", tt::tt_metal::KernelBuildOptLevel::O3)
+        .value("Os", tt::tt_metal::KernelBuildOptLevel::Os)
+        .value("Ofast", tt::tt_metal::KernelBuildOptLevel::Ofast)
+        .value("Oz", tt::tt_metal::KernelBuildOptLevel::Oz);
+
     // Bind SourceType as a nested enum within KernelDescriptor
     nb::enum_<tt::tt_metal::KernelDescriptor::SourceType>(kernel_descriptor_class, "SourceType", R"pbdoc(
         Source type for kernel source code.
@@ -848,6 +863,10 @@ void py_module_types(nb::module_& mod) {
             "common_runtime_args",
             &tt::tt_metal::KernelDescriptor::common_runtime_args,
             "Common runtime arguments shared across all cores")
+        .def_rw(
+            "opt_level",
+            &tt::tt_metal::KernelDescriptor::opt_level,
+            "Optional compiler and linker optimization level")
         ////////////////////////////////////////////////////////////
         // Blaze-only experimental named args
         // Removal is tracked by issue #50953
