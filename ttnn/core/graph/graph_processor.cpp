@@ -73,12 +73,18 @@ nlohmann::json to_json(const ttnn::graph::GraphProcessor::Vertex& data) {
     static const std::unordered_set<std::string> boolean_params = {
         ttnn::graph::kProgramCacheHit,
     };
+    // Params stored as serialized JSON (see ttsl::json::to_json); emitted as structured JSON, not a string.
+    static const std::unordered_set<std::string> json_params = {
+        ttnn::graph::kCoreRangeSet,
+    };
     nlohmann::json params_json;
     for (const auto& [key, value] : data.params) {
         if (integer_params.contains(key)) {
             params_json[key] = std::stoll(value);
         } else if (boolean_params.contains(key)) {
             params_json[key] = from_bool_param(value);
+        } else if (json_params.contains(key)) {
+            params_json[key] = nlohmann::json::parse(value);
         } else {
             params_json[key] = value;
         }
@@ -351,7 +357,7 @@ void GraphProcessor::track_allocate_cb(
     std::unordered_map<std::string, std::string> params = {
         {kSize, std::to_string(size)},
         {kAddress, std::to_string(addr)},
-        {kCoreRangeSet, core_range_set.str()},
+        {kCoreRangeSet, ttsl::json::to_json(core_range_set).dump()},
         {kGloballyAllocated, std::to_string(is_globally_allocated)},
         {kDeviceId, std::to_string(device->id())}};
     node_id counter = graph.size();
@@ -381,7 +387,7 @@ void GraphProcessor::track_allocate_dataflow_buffer(
     std::unordered_map<std::string, std::string> params = {
         {kSize, std::to_string(size)},
         {kAddress, std::to_string(addr)},
-        {kCoreRangeSet, core_range_set.str()},
+        {kCoreRangeSet, ttsl::json::to_json(core_range_set).dump()},
         {kBorrowsMemory, std::to_string(borrows_memory)},
         {kDeviceId, std::to_string(device->id())}};
     node_id counter = graph.size();
@@ -410,7 +416,7 @@ void GraphProcessor::track_allocate_scratchpad(
     std::unordered_map<std::string, std::string> params = {
         {kSize, std::to_string(size)},
         {kAddress, std::to_string(addr)},
-        {kCoreRangeSet, core_range_set.str()},
+        {kCoreRangeSet, ttsl::json::to_json(core_range_set).dump()},
         {kDeviceId, std::to_string(device->id())}};
     node_id counter = graph.size();
     int stacking_level = static_cast<int>(current_op_id.size()) - 1;
