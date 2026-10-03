@@ -66,8 +66,8 @@ struct ReconfigConfig {
     // Whether or not we want the result to be stored in DST in FP32 and/or
     // accumulated with previous DST value is controlled with this flag:
     bool fp32_dest_acc_en = false;
-    // Whether to test with copy_tile or copy_block_matmul_partials is contro-
-    // lled with this flag:
+    // Whether to test with copy_tile or copy_block is controlled with this
+    // flag:
     bool block_copy = true;
     // Whether or not to sync full/half DST between MATH and PACK:
     bool dst_full_sync_en = false;
