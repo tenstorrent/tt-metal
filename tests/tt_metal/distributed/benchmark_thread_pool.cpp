@@ -4,7 +4,6 @@
 
 #include <benchmark/benchmark.h>
 
-#include <sched.h>
 #include <sys/resource.h>
 
 #include <algorithm>
@@ -22,10 +21,10 @@
 #include "impl/context/context_types.hpp"
 
 // Fan-out latency of the host thread pools. Each iteration keeps the caller busy for gap_us, then times only the
-// submit and the join. Supported env variables:
+// submit and the join. Pin the caller with taskset to a CPU without a pool worker; the workers set their own
+// affinity. Supported env variables:
 //  * TT_POOL_BENCH_FULL=1 runs the full grid (false),
-//  * TT_POOL_BENCH_WORKERS sets the pool size (32),
-//  * TT_POOL_BENCH_CALLER_CPU pins the caller thread (unset).
+//  * TT_POOL_BENCH_WORKERS sets the pool size (32).
 namespace fan_out {
 
 using tt::tt_metal::ThreadPool;
@@ -67,20 +66,6 @@ double percentile(std::vector<double> v, double p) {
 }
 
 uint32_t max_workers() { return tt::parse_env("TT_POOL_BENCH_WORKERS", 32); }
-
-void pin_caller() {
-    static const bool pinned = [] {
-        int cpu = tt::parse_env("TT_POOL_BENCH_CALLER_CPU", -1);
-        if (cpu >= 0) {
-            cpu_set_t cpuset;
-            CPU_ZERO(&cpuset);
-            CPU_SET(cpu, &cpuset);
-            sched_setaffinity(0, sizeof(cpuset), &cpuset);
-        }
-        return true;
-    }();
-    (void)pinned;
-}
 
 struct DeviceBoundPool {
     static constexpr const char* name = "DeviceBound";
@@ -127,7 +112,6 @@ void BM_FanOut(benchmark::State& state) {
         state.SkipWithError("more workers requested than TT_POOL_BENCH_WORKERS");
         return;
     }
-    pin_caller();
     auto& pool = Pool::get();
     const uint32_t num_tasks = workers * tasks_per_worker;
     std::vector<TaskTimes> times(num_tasks);
