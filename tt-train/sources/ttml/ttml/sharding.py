@@ -20,40 +20,39 @@ def _mesh_device():
 class Sharding:
     """A tensor's mesh layout (placements + distribution shape), read from its live topology."""
 
-    def __init__(self, placements: list | None, dist_shape: list[int] | None) -> None:
+    def __init__(self, placements: list, dist_shape: list[int]) -> None:
         self._placements = placements
         self._dist_shape = dist_shape
 
     @classmethod
     def from_tensor(cls, tensor: ttml.autograd.Tensor) -> Sharding:
-        try:
-            # NATIVE: read topology without coercing precision (avoids a float32/bf16 typecast + cache).
-            topology = tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE).tensor_topology()
-            placements = list(topology.placements())
-            dist_shape = list(topology.distribution_shape())
-        except Exception:
-            placements, dist_shape = None, None  # no topology (unit mesh / older ttnn build)
-        return cls(placements, dist_shape)
+        """Read off the live topology. A unit mesh reads back as 1-D ``[Replicate]``.
+        NATIVE returns the stored slot as is; the default precision would typecast and cache a copy."""
+        topology = tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE).tensor_topology()
+        return cls(list(topology.placements()), list(topology.distribution_shape()))
 
     @property
-    def placements(self) -> list | None:
-        """Per-mesh-axis ttnn placements (``PlacementShard`` / ``PlacementReplicate``), or None on a unit mesh."""
+    def placements(self) -> list:
+        """Per-mesh-axis ttnn placements (``PlacementShard`` / ``PlacementReplicate``).
+
+        A mapper-placed tensor carries one entry per mesh axis. A tensor replicated by the default
+        topology may flatten to a single ``Replicate``, so check the length before indexing by axis.
+        """
         return self._placements
 
     @property
-    def dist_shape(self) -> list[int] | None:
-        """Distribution shape: the mesh extent the tensor is laid out over per axis, or None on a unit mesh."""
+    def dist_shape(self) -> list[int]:
+        """Mesh extent the tensor is laid out over per axis."""
         return self._dist_shape
 
     @property
     def is_fully_replicated(self) -> bool:
         """True if no mesh axis shards this tensor (single device, or replicated on every axis)."""
-        return self._placements is None or not any(isinstance(p, ttnn.PlacementShard) for p in self._placements)
+        return not any(isinstance(p, ttnn.PlacementShard) for p in self._placements)
 
     def _is_single_device(self) -> bool:
-        """True when the tensor isn't really distributed (no topology, or a 1-device distribution) → one
-        host buffer, readable/placeable without a composer/mapper."""
-        return self._dist_shape is None or prod(self._dist_shape) <= 1
+        """True for a 1-device distribution."""
+        return prod(self._dist_shape) <= 1
 
     def derive_mapper(self):
         """``TensorToMesh`` redistributing a host array onto the mesh exactly as the tensor was distributed,

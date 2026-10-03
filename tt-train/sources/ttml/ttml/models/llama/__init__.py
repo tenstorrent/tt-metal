@@ -4,8 +4,12 @@
 
 from __future__ import annotations
 
+import json
+import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from math import sqrt
+from pathlib import Path
 from typing import Optional
 
 import ttnn
@@ -33,6 +37,14 @@ class LlamaRopeScalingConfig:
     high_freq_factor: float = 4.0
     low_freq_factor: float = 1.0
     original_context_length: int = 0  # 0 means no scaling
+
+
+def _read_hf_config(path: str | os.PathLike) -> dict:
+    path = Path(path)
+    if path.is_dir():
+        path = path / "config.json"
+    with open(path) as f:
+        return json.load(f)
 
 
 @dataclass(frozen=True)
@@ -129,6 +141,51 @@ class LlamaConfig:
                     "Intermediate size must be divisible by TP size. "
                     f"intermediate_size={intermediate_size}, tp_size={tp_size}"
                 )
+
+    @classmethod
+    def from_hf(cls, hf_config: str | os.PathLike | Mapping, max_position_embeddings: int, **overrides) -> LlamaConfig:
+        """The architecture of a HuggingFace Llama checkpoint, read from its ``config.json``."""
+        if not isinstance(hf_config, Mapping):
+            hf_config = _read_hf_config(hf_config)
+        model_type = hf_config.get("model_type", "llama")
+        if model_type != "llama":
+            raise ValueError(f"model_type {model_type!r} is not a Llama checkpoint")
+        if hf_config.get("mlp_bias", False):
+            raise ValueError("mlp_bias=true is not supported")
+        hidden_size = hf_config["hidden_size"]
+        num_heads = hf_config["num_attention_heads"]
+        head_dim = hf_config.get("head_dim", hidden_size // num_heads)
+        if head_dim * num_heads != hidden_size:
+            raise ValueError(f"head_dim {head_dim} * num_attention_heads {num_heads} != hidden_size {hidden_size}")
+
+        rope_scaling = LlamaRopeScalingConfig()
+        if hf_rope_scaling := hf_config.get("rope_scaling"):
+            rope_type = hf_rope_scaling.get("rope_type", hf_rope_scaling.get("type"))
+            if rope_type != "llama3":
+                raise ValueError(f"rope_scaling type {rope_type!r} is not supported, only 'llama3'")
+            rope_scaling = LlamaRopeScalingConfig(
+                scaling_factor=hf_rope_scaling["factor"],
+                high_freq_factor=hf_rope_scaling["high_freq_factor"],
+                low_freq_factor=hf_rope_scaling["low_freq_factor"],
+                original_context_length=hf_rope_scaling["original_max_position_embeddings"],
+            )
+
+        architecture = dict(
+            hidden_size=hidden_size,
+            intermediate_size=hf_config["intermediate_size"],
+            num_hidden_layers=hf_config["num_hidden_layers"],
+            num_attention_heads=num_heads,
+            num_key_value_heads=hf_config.get("num_key_value_heads", num_heads),
+            vocab_size=hf_config["vocab_size"],
+            max_position_embeddings=max_position_embeddings,
+            rope_theta=hf_config.get("rope_theta", 10000.0),
+            attention_bias=hf_config.get("attention_bias", False),
+            weight_tying=(
+                WeightTyingType.Enabled if hf_config.get("tie_word_embeddings", False) else WeightTyingType.Disabled
+            ),
+            rope_scaling=rope_scaling,
+        )
+        return cls(**{**architecture, **overrides})
 
 
 class Llama(AbstractModuleBase):
