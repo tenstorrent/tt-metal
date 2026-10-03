@@ -8,9 +8,12 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstring>
+#include <memory>
 #include <string_view>
+#include <sys/mman.h>
 
 #include <tt_stl/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/tt_align.hpp>
 
 namespace ttnn {
@@ -75,6 +78,26 @@ void write_tensor_file(
     }
 
     TT_FATAL(fflush(file) == 0, "Failed to flush \"{}\": errno={} \"{}\"", file_name, errno, strerror(errno));
+}
+
+std::shared_ptr<void> map_tensor_file(int fd, size_t file_size, std::string_view file_name) {
+    void* mapping = mmap(nullptr, file_size, PROT_READ, MAP_SHARED, fd, 0);
+    if (mapping == MAP_FAILED) {
+        const int shared_errno = errno;
+        mapping = mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+        TT_FATAL(
+            mapping != MAP_FAILED,
+            "Failed to mmap file \"{}\": MAP_SHARED failed with \"{}\", MAP_PRIVATE with \"{}\"",
+            file_name,
+            strerror(shared_errno),
+            strerror(errno));
+        log_debug(
+            tt::LogMetal,
+            "Mapped \"{}\" MAP_PRIVATE because MAP_SHARED failed with \"{}\"; pinned uploads from it copy every page",
+            file_name,
+            strerror(shared_errno));
+    }
+    return std::shared_ptr<void>(mapping, [file_size](void* addr) { munmap(addr, file_size); });
 }
 
 }  // namespace ttnn

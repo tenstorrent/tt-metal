@@ -9,7 +9,6 @@
 #include <cstdio>
 #include <cerrno>
 #include <string>
-#include <sys/mman.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -87,13 +86,10 @@ Tensor load_tensor_flatbuffer(const std::string& file_name, tt::tt_metal::distri
     TT_FATAL(file_size >= sizeof(uint64_t), "Tensor file \"{}\" is too small to be valid", file_name);
 
     // Mmap the file to read tensor data lazily.
-    void* mmap_addr = mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
-    TT_FATAL(mmap_addr != MAP_FAILED, "Failed to mmap file \"{}\": {}", file_name, strerror(errno));
+    std::shared_ptr<void> mapping = map_tensor_file(fd, file_size, file_name);
+    MemoryPin memory_pin(mapping);
 
-    std::shared_ptr<void> mmap_ptr(mmap_addr, [file_size](void* addr) { munmap(addr, file_size); });
-    MemoryPin memory_pin(mmap_ptr);
-
-    auto* file_data = static_cast<std::byte*>(mmap_addr);
+    auto* file_data = static_cast<std::byte*>(mapping.get());
     uint64_t header_size = 0;
     std::memcpy(&header_size, file_data, sizeof(header_size));
     TT_FATAL(
