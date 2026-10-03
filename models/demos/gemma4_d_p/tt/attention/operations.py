@@ -22,6 +22,7 @@ from models.demos.gemma4_d_p.tt.matmul_config import (
     is_short_m,
     prefill_1d_matmul_program_config,
     prefill_matmul_program_config,
+    short_m_output_memcfg,
     to_l1_width_sharded,
 )
 
@@ -59,14 +60,17 @@ def projection_matmul_configs(hidden_states, weight):
     )
     if program_config is None:
         return None, None
-    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+    return program_config, _projection_compute_config(device, hidden_states.shape[-2])
+
+
+def _projection_compute_config(device, rows):
+    return ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=projection_math_fidelity(hidden_states.shape[-2]),
+        math_fidelity=projection_math_fidelity(rows),
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
-    return program_config, compute_kernel_config
 
 
 def project(hidden_states, weight, memory_config=None):
@@ -80,6 +84,42 @@ def project(hidden_states, weight, memory_config=None):
         memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
+    )
+    if x is not hidden_states:
+        x.deallocate(True)
+    return out
+
+
+# Most tile rows for which the output projection writes its result width-sharded into the reduce-scatter: chunk 4096
+# at CP8 (16 tile rows per device).
+_MAX_SHARDED_OUTPUT_M_TILES = 16
+
+
+def project_into_reduce_scatter(hidden_states, weight):
+    """hidden_states @ weight for a row-parallel projection whose only consumer is the TP reduce-scatter.
+
+    Up to _MAX_SHARDED_OUTPUT_M_TILES tile rows it runs the 1D config on the width-sharded activation and writes a
+    width-sharded L1 output (two columns per core), which the reduce-scatter reads as fast as an interleaved one. That
+    skips the interleaved DRAM write: ~0.7 ms per chunk at 2048 and ~0.3 ms at 4096 for the attention output
+    projection. Taller slabs, or shapes the 1D config does not take, use project().
+    """
+    if hidden_states.padded_shape[-2] // ttnn.TILE_SIZE > _MAX_SHARDED_OUTPUT_M_TILES:
+        return project(hidden_states, weight)
+    device = hidden_states.device()
+    x = to_l1_width_sharded(hidden_states)
+    program_config = prefill_1d_matmul_program_config(
+        x, weight, device.compute_with_storage_grid_size(), max_m_tiles=_MAX_SHARDED_OUTPUT_M_TILES
+    )
+    if program_config is None:
+        if x is not hidden_states:
+            x.deallocate(True)
+        return project(hidden_states, weight)
+    out = ttnn.linear(
+        x,
+        weight,
+        memory_config=short_m_output_memcfg(x, weight),
+        program_config=program_config,
+        compute_kernel_config=_projection_compute_config(device, hidden_states.shape[-2]),
     )
     if x is not hidden_states:
         x.deallocate(True)

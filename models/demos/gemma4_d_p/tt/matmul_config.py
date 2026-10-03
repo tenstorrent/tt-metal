@@ -45,8 +45,11 @@ def prefill_matmul_program_config(hidden_states, weight, grid_x, grid_y, fused_a
     )
 
 
-def prefill_1d_matmul_program_config(hidden_states, weight, grid, fused_activation=None, per_core_n=None):
-    """1D in0-multicast config for short-M prefill projections, or None when it does not apply.
+def prefill_1d_matmul_program_config(
+    hidden_states, weight, grid, fused_activation=None, per_core_n=None, max_m_tiles=None
+):
+    """1D in0-multicast config for short-M prefill projections, or None when it does not apply. max_m_tiles raises
+    the short-M limit for a caller whose output skips the interleaved write.
 
     With at most 8 tile rows of M, the 2D config uses only 8 of the grid's rows and reads each weight column
     block through one core. Here every core reads its own two weight columns from DRAM while the activations
@@ -58,7 +61,8 @@ def prefill_1d_matmul_program_config(hidden_states, weight, grid, fused_activati
     m_tiles = hidden_states.padded_shape[-2] // tile
     k_tiles = hidden_states.padded_shape[-1] // tile
     n_tiles = weight.padded_shape[-1] // tile
-    if not is_short_m(hidden_states) or n_tiles % per_core_n or n_tiles // per_core_n > grid.x * grid.y:
+    too_tall = m_tiles > (max_m_tiles or _MAX_SHORT_M_TILES)
+    if too_tall or n_tiles % per_core_n or n_tiles // per_core_n > grid.x * grid.y:
         return None
     # fp32 dest: at most 4 tiles (2 x 2) per output subblock.
     out_subblock_w = 2 if per_core_n % 2 == 0 else 1
