@@ -120,6 +120,15 @@ def test_prefill_sparse(mesh_device):
         if os.path.exists(f):
             sel[L] = torch.load(f, map_location="cpu")
     shard = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(rows, cols))
+    dyn = os.environ.get("DSV41_PS_DYN") == "1"
+    if dyn:  # traced-chunk mode driven eagerly: persistent per-chunk device tensors (tt/prefill_dyn.py)
+        from models.demos.blackhole.deepseek_v41_flash.tt.prefill_dyn import DynCtx
+
+        first = pas[layers[0]]
+        ctx = DynCtx(md, C, S, {pas[L].ratio for L in layers}, {True: first.a})
+        for L in layers:
+            pas[L].alloc_dyn(ctx)
+            pas[L].reset_dyn()
     passes = [False, True] if os.environ.get("DSV41_PS_BOTH") == "1" else [force]
     for force_pass in passes:
         for sp_ in sps.values():
@@ -127,6 +136,7 @@ def test_prefill_sparse(mesh_device):
         tag = "force" if force_pass else "auto"
         got = {L: torch.zeros(S, 5120) for L in layers}
         ids_dev = {L: torch.full((S, 512), -1, dtype=torch.long) for L in layers}
+        ids_dev1 = {L: torch.full((S, 512), -1, dtype=torch.long) for L in layers}
         times = {L: [] for L in layers}
         for s0 in range(0, S, C):
             for L in layers:
@@ -145,7 +155,13 @@ def test_prefill_sparse(mesh_device):
                 )
                 ttnn.synchronize_device(md)
                 t0 = time.perf_counter()
-                out = pas[L].forward(h, S, s0=s0)
+                if dyn:
+                    if L == layers[0]:
+                        ctx.update(s0)
+                        ctx.build_masks()
+                    out = pas[L].forward_dyn(h)
+                else:
+                    out = pas[L].forward(h, S, s0=s0)
                 ttnn.synchronize_device(md)
                 times[L].append(time.perf_counter() - t0)
                 o = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).float().reshape(U * C, 5120)
@@ -153,10 +169,14 @@ def test_prefill_sparse(mesh_device):
                 if L in sps:
                     sp = sps[L]
                     ids = sp.ids if sp.indexer is not None else (sp.idx_src.ids if sp.idx_src is not None else None)
-                    if ids is not None and sp.active(s0, C) and (s0 + C) // pas[L].ratio > 512:
+                    if ids is not None and (sp.dyn_on or sp.active(s0, C)) and (s0 + C) // pas[L].ratio > 512:
                         t = ttnn.to_torch(ttnn.get_device_tensors(ids)[0]).reshape(U, C, 512)[0].long()
                         t = torch.where(t == 0xFFFFFFFF, torch.full_like(t, -1), t)
+                        if dyn:  # FIFO slots -> entry ids
+                            t = torch.where(t >= 0, t - (ctx.L[pas[L].ratio] - (s0 + C) // pas[L].ratio), t)
                         ids_dev[L][s0 : s0 + C] = t
+                        t1 = ttnn.to_torch(ttnn.get_device_tensors(ids)[1]).reshape(U, C, 512)[0].long()
+                        ids_dev1[L][s0 : s0 + C] = torch.where(t1 == 0xFFFFFFFF, torch.full_like(t1, -1), t1)
                 ttnn.deallocate(h)
                 ttnn.deallocate(out)
             clear_chunk_caches()
@@ -179,6 +199,8 @@ def test_prefill_sparse(mesh_device):
                         agree.append(len(a_ & b_) / max(1, len(b_)))
                     cd = coverage(sl["P"], sl["pwin"], dv, nvis)
                     cr = coverage(sl["P"], sl["pwin"], ref_ids, nvis)
+                    c1 = coverage(sl["P"], sl["pwin"], ids_dev1[L], nvis)
+                    msg += f"\nPSPARSE   column 1 ids: mass coverage (compressed) {c1[0]:.4f}, total {c1[1]:.4f}"
                     msg += (
                         f"\nPSPARSE   selection layer {L}: queries with >512 visible {len(q)}, set agreement mean {sum(agree) / len(agree):.4f} min {min(agree):.4f}; "
                         f"mass coverage (compressed) device {cd[0]:.4f} vs reference {cr[0]:.4f}; total (window + compressed) device {cd[1]:.4f} vs reference {cr[1]:.4f}"

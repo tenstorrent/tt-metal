@@ -33,6 +33,7 @@ from models.demos.blackhole.deepseek_v41_flash.tt.indexer import TOPK, DSV41Deco
 SKIP = 0xFFFFFFFF
 PAD_HEADS = 32
 _CONST = {}
+_PERSIST = {}  # constants that a captured trace may hold (never freed by clear_sparse_caches)
 
 
 def clear_sparse_caches():
@@ -98,6 +99,13 @@ class PrefillKV:
         )
         if full is not kv:
             ttnn.deallocate(full)
+
+
+def zeros_rm(md, shape):
+    key = ("zrm", id(md), tuple(shape))
+    if key not in _PERSIST:
+        _PERSIST[key] = ttnn.zeros(list(shape), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=md)
+    return _PERSIST[key]
 
 
 def _itabs(pa, start, n, step):
@@ -202,7 +210,7 @@ class DSV41PrefillIndexer:
             ttnn.linear(qr, d.wq_b, compute_kernel_config=self.ckc), ttnn.ROW_MAJOR_LAYOUT
         )  # [1,1,R,4096]
         if r == 1:
-            ids = self._part(pa, q, w, C, s0, 1, s0, 0, 0, L_end)
+            ids = self._part(pa, q, w, C, s0, 1, L_end, "incl")
         else:
             n = C // 2
             qq = ttnn.reshape(q, [1, 1, R // 2, 2 * IHEADS * IDIM])
@@ -211,9 +219,8 @@ class DSV41PrefillIndexer:
             q_o = ttnn.slice(qq, [0, 0, 0, IHEADS * IDIM], [1, 1, R // 2, 2 * IHEADS * IDIM])
             w_e = ttnn.slice(ww, [0, 0, 0, 0], [1, 1, R // 2, IHEADS])
             w_o = ttnn.slice(ww, [0, 0, 0, IHEADS], [1, 1, R // 2, 2 * IHEADS])
-            assert s0 >= 64, "ratio-2 selection of the first chunk needs a first chunk of <= 1024 tokens (dense path)"
-            ids_o = self._part(pa, q_o, w_o, n, s0 + 1, 2, s0 // 2, 0, 0, L_end)
-            ids_e = self._part(pa, q_e, w_e, n, s0, 2, s0 // 2 - 32, 31, 1, L_end)
+            ids_o = self._part(pa, q_o, w_o, n, s0 + 1, 2, L_end, "incl")
+            ids_e = self._part(pa, q_e, w_e, n, s0, 2, L_end, "strict")
             # interleave: row 2m = even set m, row 2m+1 = odd set m
             e = ttnn.reshape(ids_e, [U * n, 1, TOPK])
             o = ttnn.reshape(ids_o, [U * n, 1, TOPK])
@@ -231,71 +238,52 @@ class DSV41PrefillIndexer:
             ttnn.deallocate(t)
         return ids
 
-    def _part(self, pa, q, w, n, rope_start, rope_step, cs, pad_front, pad_back, L_end):
-        """q RM [1,1,U*n,4096], w RM [1,1,U*n,32]: n query rows per user -> ids [U,1,n,512] (the pad rows are cut)."""
+    def _stair(self, n, kind):
+        """[1,1,n,n] additive causal mask of the CURRENT chunk's entries (row m sees entry c iff c <= m ('incl') / c < m ('strict')), 0 / -inf, bf16 tile."""
+        key = ("stair", id(self.md), n, kind)
+        if key not in _CONST:
+            m = torch.arange(n).view(-1, 1)
+            c = torch.arange(n).view(1, -1)
+            vis = (c <= m) if kind == "incl" else (c < m)
+            _CONST[key] = _rep(
+                self.md,
+                torch.where(vis, 0.0, float("-inf")).reshape(1, 1, n, n).to(torch.bfloat16),
+                ttnn.bfloat16,
+                ttnn.TILE_LAYOUT,
+            )
+        return _CONST[key]
+
+    def _part(self, pa, q, w, n, rope_start, rope_step, L_end, kind):
+        """q RM [1,1,U*n,4096], w RM [1,1,U*n,32]: n query rows per user -> ids [U,1,n,512].
+        ``indexer_score_dsa`` derives each device's causal offset from its mesh coordinate (chunk_start + linear device index * Sq): on a replicated mesh only device 0
+        would see the requested causality. So the op is told chunk_start = L_end - 32 (every earlier entry visible on every device, no per-device dependence for the
+        history) and the causality inside the current chunk's entries (the last n columns) is applied here with a constant staircase mask.
+        """
         d, U = self.dec, self.U
         tab = _itabs(pa, rope_start, n, rope_step)
         qh = ttnn.permute(ttnn.reshape(q, [U, n, IHEADS, IDIM]), (0, 2, 1, 3))  # [U,32,n,128] RM
-        # RoPE + fp4 on the real rows (tile layout), then pad
         qh = ttnn.to_layout(qh, ttnn.TILE_LAYOUT)
         qh = self._rope(qh, tab)
         if self.fp4_q:
             qh = self._fp4(qh)
-        if pad_front or pad_back:
-            qrm = ttnn.to_layout(qh, ttnn.ROW_MAJOR_LAYOUT)
-            seq = (
-                [
-                    ttnn.zeros(
-                        [U, IHEADS, pad_front, IDIM], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.md
-                    )
-                ]
-                if pad_front
-                else []
-            ) + [qrm]
-            seq += (
-                [
-                    ttnn.zeros(
-                        [U, IHEADS, pad_back, IDIM], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.md
-                    )
-                ]
-                if pad_back
-                else []
-            )
-            qh = ttnn.to_layout(ttnn.concat(seq, dim=2), ttnn.TILE_LAYOUT)
-        sq = n + pad_front + pad_back
-        wt = ttnn.reshape(w, [U, 1, n, IHEADS])
-        if pad_front or pad_back:
-            seq = (
-                [
-                    ttnn.zeros(
-                        [U, 1, pad_front, IHEADS], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.md
-                    )
-                ]
-                if pad_front
-                else []
-            ) + [wt]
-            seq += (
-                [
-                    ttnn.zeros(
-                        [U, 1, pad_back, IHEADS], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.md
-                    )
-                ]
-                if pad_back
-                else []
-            )
-            wt = ttnn.concat(seq, dim=2)
-        wt = ttnn.to_layout(wt, ttnn.TILE_LAYOUT)
+        wt = ttnn.to_layout(ttnn.reshape(w, [U, 1, n, IHEADS]), ttnn.TILE_LAYOUT)
+        j0 = L_end - n
+        stair = self._stair(n, kind)
         per_user = []
         for u in range(U):
-            qu = ttnn.slice(qh, [u, 0, 0, 0], [u + 1, IHEADS, sq, IDIM])
-            wu = ttnn.slice(wt, [u, 0, 0, 0], [u + 1, 1, sq, IHEADS])
+            qu = ttnn.slice(qh, [u, 0, 0, 0], [u + 1, IHEADS, n, IDIM])
+            wu = ttnn.slice(wt, [u, 0, 0, 0], [u + 1, 1, n, IHEADS])
             sc = ttnn.experimental.indexer_score_dsa(
-                qu, self.slab, wu, chunk_start_idx=cs, kv_len=L_end, program_config=self.cfg, cache_batch_idx=u
+                qu, self.slab, wu, chunk_start_idx=L_end - 32, kv_len=L_end, program_config=self.cfg, cache_batch_idx=u
             )
-            ids = ttnn.experimental.topk_large_indices(sc, k=TOPK, valid_length=L_end)  # [1,1,sq,512]
+            blk = ttnn.to_layout(
+                ttnn.add(ttnn.to_layout(ttnn.slice(sc, [0, 0, 0, j0], [1, 1, n, L_end]), ttnn.TILE_LAYOUT), stair),
+                ttnn.ROW_MAJOR_LAYOUT,
+            )
+            ttnn.experimental.slice_write(blk, sc, [0, 0, 0, j0], [1, 1, n, L_end], [1, 1, 1, 1])
+            ttnn.deallocate(blk)
+            ids = ttnn.experimental.topk_large_indices(sc, k=TOPK, valid_length=L_end)  # [1,1,n,512]
             ttnn.deallocate(sc)
-            if pad_front or pad_back:
-                ids = ttnn.slice(ids, [0, 0, pad_front, 0], [1, 1, pad_front + n, TOPK])
             per_user.append(ids)
             ttnn.deallocate(qu)
             ttnn.deallocate(wu)
@@ -303,6 +291,50 @@ class DSV41PrefillIndexer:
         ttnn.deallocate(qh)
         ttnn.deallocate(wt)
         return out
+
+    def add_keys_dyn(self, lat_pre, tab, Cc):
+        """FIFO variant of ``add_keys``: the keys of the chunk's entries are appended at the END of the slab (tab: (cos, sin, -sin) of the entry positions)."""
+        d, U = self.dec, self.U
+        x = ttnn.reshape(lat_pre, [1, 1, U * Cc, HEAD_DIM])
+        k = ttnn.linear(x, d.wk, compute_kernel_config=self.ckc)
+        k = ttnn.rms_norm(ttnn.typecast(k, ttnn.bfloat16), weight=d.k_norm_w, epsilon=d.k_eps)
+        k = ttnn.reshape(k, [U, 1, Cc, IDIM])
+        c = ttnn.slice(tab[0], [0, 0, 0, HEAD_DIM - IDIM], [1, 1, Cc, HEAD_DIM])
+        s_ = ttnn.slice(tab[1], [0, 0, 0, HEAD_DIM - IDIM], [1, 1, Cc, HEAD_DIM])
+        k = self._rope(k, (c, s_))
+        if self.fp4_k:
+            k = self._fp4(k)
+        L = self.KL
+        new = ttnn.concat([ttnn.slice(self.keys, [0, 0, Cc, 0], [U, 1, L, IDIM]), k], dim=2)
+        ttnn.copy(new, self.keys)
+        ttnn.deallocate(new)
+
+    def select_dyn(self, h, qr, tab, vis, C, L):
+        """ids [U,1,C,512] = FIFO slots of the top-512 entries of every query of the chunk (0xFFFFFFFF where fewer are visible)."""
+        d, U = self.dec, self.U
+        w = ttnn.to_layout(ttnn.linear(h, d.wproj, compute_kernel_config=self.ckc), ttnn.ROW_MAJOR_LAYOUT)
+        q = ttnn.to_layout(ttnn.linear(qr, d.wq_b, compute_kernel_config=self.ckc), ttnn.ROW_MAJOR_LAYOUT)
+        qh = ttnn.to_layout(ttnn.permute(ttnn.reshape(q, [U, C, IHEADS, IDIM]), (0, 2, 1, 3)), ttnn.TILE_LAYOUT)
+        c = ttnn.slice(tab[0], [0, 0, 0, HEAD_DIM - IDIM], [1, 1, C, HEAD_DIM])
+        s_ = ttnn.slice(tab[1], [0, 0, 0, HEAD_DIM - IDIM], [1, 1, C, HEAD_DIM])
+        qh = self._rope(qh, (c, s_))
+        if self.fp4_q:
+            qh = self._fp4(qh)
+        wt = ttnn.to_layout(ttnn.reshape(w, [U, 1, C, IHEADS]), ttnn.TILE_LAYOUT)
+        per_user = []
+        for u in range(U):
+            qu = ttnn.slice(qh, [u, 0, 0, 0], [u + 1, IHEADS, C, IDIM])
+            wu = ttnn.slice(wt, [u, 0, 0, 0], [u + 1, 1, C, IHEADS])
+            sc = ttnn.experimental.indexer_score_dsa(
+                qu, self.slab, wu, chunk_start_idx=L - 32, kv_len=L, program_config=self.cfg, cache_batch_idx=u
+            )
+            scm = ttnn.where(vis, ttnn.to_layout(sc, ttnn.TILE_LAYOUT), float("-inf"))
+            scm = ttnn.to_layout(scm, ttnn.ROW_MAJOR_LAYOUT)
+            per_user.append(ttnn.experimental.topk_large_indices(scm, k=TOPK, valid_length=L))
+            for t in (sc, scm, qu, wu):
+                ttnn.deallocate(t)
+        ttnn.deallocate(qh)
+        return per_user[0] if U == 1 else ttnn.concat(per_user, dim=0)
 
 
 class DSV41PrefillSparse:
@@ -436,40 +468,158 @@ class DSV41PrefillSparse:
         return out
 
     def _debug(self, qh, out, ids, win, s0, C):
-        """host golden of the sparse attention of user 0 / device 0 from the device's own q, kv table and index rows."""
+        """host golden of the sparse attention of user 0 on every column of mesh row 0, from the device's own q, kv table and index rows."""
         from models.demos.blackhole.deepseek_v41_flash.reference.ref_layer import pcc
 
-        d0 = lambda t: ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
-        q, o, kvt, wi = d0(qh)[0], d0(out)[0], d0(self.kvt.t)[0, 0], d0(win).reshape(C, -1).long()
-        ii = None if ids is None else ttnn.to_torch(ttnn.get_device_tensors(ids)[0]).reshape(self.U, C, TOPK)[0].long()
-        sink = ttnn.to_torch(ttnn.get_device_tensors(self.sink)[0]).float().reshape(-1)[:LOCAL_HEADS] * self.pa.a.scale
-        res = []
-        for i in (0, 5, C // 2, C - 1):
-            rows = wi[i].tolist() + ([] if ii is None else ii[i].tolist())
-            rows = [r for r in rows if r != 0xFFFFFFFF and r != -1 and 0 <= r < kvt.shape[0]]
-            K = kvt[rows]
-            sc = (q[:, i] @ K.T) * self.pa.a.scale
-            p = torch.softmax(torch.cat([sc, sink.view(-1, 1)], -1), -1)[:, :-1]
-            res.append(round(pcc(p @ K, o[:, i]), 5))
-        torch.save(
-            {"q": q.to(torch.bfloat16), "kvt": kvt.to(torch.bfloat16), "o": o.to(torch.bfloat16), "LAT": self.kvt.LAT},
-            f"/mnt/tt-data/ssinghal/dsv4-logs/h46x_dbg_{id(self.pa) % 100000}_{s0}.pt",
-        )
-        print(
-            f"PSDBG s0={s0} dbgfile h46x_dbg_{id(self.pa) % 100000}_{s0}.pt sparse_sdpa vs host golden from its own inputs (queries 0,5,mid,last): {res}; n_rows {len(rows)}",
-            flush=True,
-        )
+        cols = self.pa.a.cols
+        dv = lambda t, c: ttnn.to_torch(ttnn.get_device_tensors(t)[c]).float()
+        wi = dv(win, 0).reshape(C, -1).long()
+        for c in range(cols):
+            q, o, kvt = dv(qh, c)[0], dv(out, c)[0], dv(self.kvt.t, c)[0, 0]
+            ii = None if ids is None else dv(ids, c).reshape(self.U, C, TOPK)[0].long()
+            sink = dv(self.sink, c).reshape(-1)[:LOCAL_HEADS] * self.pa.a.scale
+            res = []
+            for i in (5, C - 1):
+                rows = wi[i].tolist() + ([] if ii is None else ii[i].tolist())
+                rows = [r for r in rows if r != 0xFFFFFFFF and r != -1 and 0 <= r < kvt.shape[0]]
+                K = kvt[rows]
+                sc = (q[:, i] @ K.T) * self.pa.a.scale
+                p = torch.softmax(torch.cat([sc, sink.view(-1, 1)], -1), -1)[:, :-1]
+                res.append(round(pcc(p @ K, o[:, i]), 5))
+            same_ids = None
+            if ii is not None:
+                i0 = dv(ids, 0).reshape(self.U, C, TOPK)[0].long()
+                ov = [len(set(ii[i].tolist()) & set(i0[i].tolist())) for i in range(0, C, 7)]
+                same_ids = f"mean overlap with col 0 {sum(ov) / len(ov):.1f}/512 min {min(ov)}; skips/row {float((ii == 0xFFFFFFFF).sum(1).float().mean()):.1f}"
+            print(f"PSDBG s0={s0} col {c}: sparse_sdpa vs golden {res}; ids equal to col 0: {same_ids}", flush=True)
+
+    # ---- traced-chunk mode (prefill_dyn.DynCtx): every per-chunk value is a persistent device tensor, all shapes are fixed -----------------------------------
+    # latents and index keys live in FIFOs of length L = S_pad / ratio (the newest chunk at the END, slot p holds entry p - off, off = L - (s0 + C) / r), the score op
+    # covers all L slots with chunk_start = L - 32 (nothing masked by the op), the causal / not-yet-written slots are masked with an additive -inf mask built on the
+    # device from ``ctx.lim`` / ``ctx.off`` (``ctx.vis[r]``), and the selected ids are FIFO slots = rows of the kv table, so no id translation is needed.
+    dyn_on = False
+
+    def alloc_dyn(self, ctx):
+        pa, r = self.pa, self.pa.ratio
+        L = ctx.L[r]
+        self.ctx, self.dyn_on = ctx, L >= TOPK + 32
+        if not self.dyn_on:
+            return
+        if self.owner:
+            self.kvt = PrefillKV(self.md, self.U, L, ctx.C)
+            if self.indexer is not None and self.indexer.key_owner is None:
+                ix = self.indexer
+                ttnn.deallocate(ix.keys)
+                ix.KL = L
+                ix.keys = ttnn.zeros([self.U, 1, L, IDIM], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.md)
+        else:
+            self.kvt = pa.a.source.prefill.sparse.kvt
+        if not hasattr(ctx, "sp_win"):
+            ctx.sp_win, ctx.sp_vis = {}, {}
+            ctx.upd_hooks.append(self._upd_hook)
+            ctx.build_hooks.append(self._build_hook)
+        if r not in ctx.sp_win:
+            ctx.sp_win[r] = _rep(
+                self.md, torch.zeros(1, 1, ctx.C, WINDOW, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+            )
+
+    @staticmethod
+    def _upd_hook(ctx, s0):
+        for r, dev in ctx.sp_win.items():
+            L, C = ctx.L[r], ctx.C
+            i = torch.arange(C).view(-1, 1)
+            c = torch.arange(WINDOW).view(1, -1)
+            if s0 == 0:
+                p = (i - (WINDOW - 1)).clamp(min=0) + c
+                rows = torch.where(p <= i, L + WINDOW + p, torch.full_like(p, SKIP))
+            else:
+                rows = (L + 1 + i + c).expand(C, WINDOW)
+            host = ttnn.from_torch(
+                rows.reshape(1, 1, C, WINDOW).to(torch.int64).to(torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ctx._rep,
+            )
+            ttnn.copy_host_to_device_tensor(host, dev)
+
+    @staticmethod
+    def _build_hook(ctx):
+        """once per chunk inside the trace: vis[r] [1,1,C,L] = 1 where 0 <= slot - off < lim[row]."""
+        for r in ctx.sp_win:
+            L, C = ctx.L[r], ctx.C
+            j = ttnn.subtract(ctx.pcol[r], ctx.off[r])
+            ge0 = ttnn.ge(j, 0.0)
+            lt = ttnn.lt(ttnn.repeat(j, [1, 1, C, 1]), ttnn.repeat(ctx.lim[r], [1, 1, 1, L]))
+            if r in ctx.sp_vis:
+                ttnn.deallocate(ctx.sp_vis[r])
+            ctx.sp_vis[r] = ttnn.typecast(ttnn.multiply(lt, ttnn.repeat(ge0, [1, 1, C, 1])), ttnn.bfloat16)
+
+    def attend_dyn(self, qh, kv, halo, lat, lat_pre, h, qr):
+        pa, ctx, U = self.pa, self.ctx, self.U
+        r, L, C = pa.ratio, ctx.L[pa.ratio], ctx.C
+        Cc = C // r
+        kt = self.kvt.t
+        if lat is not None:  # latent FIFO (kv table rows [0, L))
+            body = ttnn.slice(kt, [0, 0, Cc, 0], [U, 1, L, HEAD_DIM])
+            new = ttnn.concat([body, ttnn.to_layout(lat, ttnn.ROW_MAJOR_LAYOUT)], dim=2)
+            ttnn.experimental.slice_write(new, kt, [0, 0, 0, 0], [U, 1, L, HEAD_DIM], [1, 1, 1, 1])
+            ttnn.deallocate(body)
+            ttnn.deallocate(new)
+        ix = self.indexer
+        if ix is not None and ix.key_owner is None:  # key FIFO
+            tab = ctx.lat_tabs[r] if r > 1 else ctx.tabs[True]
+            ix.add_keys_dyn(lat_pre, tab, Cc)
+        full = ttnn.to_layout(ttnn.concat([halo, kv], dim=2), ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.experimental.slice_write(full, kt, [0, 0, L, 0], [U, 1, L + WINDOW + C, HEAD_DIM], [1, 1, 1, 1])
+        ttnn.deallocate(full)
+        if ix is not None:
+            self.ids = ix.select_dyn(h, qr, ctx.tabs[True], ctx.sp_vis[r], C, L)
+        ids = self.ids if ix is not None else self.idx_src.ids
+        win = ctx.sp_win[r]
+        zero_heads = zeros_rm(self.md, [1, PAD_HEADS - LOCAL_HEADS, C, HEAD_DIM])
+        outs = []
+        for u in range(U):
+            idx = ttnn.concat([win, ttnn.slice(ids, [u, 0, 0, 0], [u + 1, 1, C, TOPK])], dim=3)
+            qu = ttnn.to_layout(ttnn.slice(qh, [u, 0, 0, 0], [u + 1, LOCAL_HEADS, C, HEAD_DIM]), ttnn.ROW_MAJOR_LAYOUT)
+            qu = ttnn.concat([qu, zero_heads], dim=1)
+            o = ttnn.transformer.sparse_sdpa(
+                qu,
+                kt,
+                idx,
+                HEAD_DIM,
+                kv_format=ttnn.transformer.SparseKVFormat.BF16,
+                scale=pa.a.scale,
+                k_chunk_size=128,
+                compute_kernel_config=pa.ckc_sdpa,
+                attention_sink=self.sink,
+                cache_batch_idx=u,
+            )
+            ttnn.deallocate(qu)
+            ttnn.deallocate(idx)
+            outs.append(ttnn.to_layout(ttnn.slice(o, [0, 0, 0, 0], [1, LOCAL_HEADS, C, HEAD_DIM]), ttnn.TILE_LAYOUT))
+            ttnn.deallocate(o)
+        return outs[0] if U == 1 else ttnn.concat(outs, dim=0)
 
 
 def attach_prefill_sparse(
-    pas, idx_weights, users, max_tokens, c_max, attn_sinks, force=False, fp4_q=True, fp4_k=True, decode_indexers=None
+    pas,
+    idx_weights,
+    users,
+    max_tokens,
+    c_max,
+    attn_sinks,
+    force=False,
+    fp4_q=True,
+    fp4_k=True,
+    decode_indexers=None,
+    enable=False,
 ):
     """Attach the sparse path to the ``DSV41PrefillAttention`` objects ``pas`` {layer id: pa} of a model (compressed layers only).
     idx_weights {layer: {wq_b, weights_proj, [wk, k_norm]}} of the index-source layers (``loader.load_layer(..., with_indexer=True)['indexer']``);
     attn_sinks {layer: [64] host tensor}; max_tokens: longest prompt (padded); c_max: largest chunk. Returns {layer: DSV41PrefillSparse}.
     """
     if (
-        os.environ.get("DSV41_PF_SPARSE", "0") != "1"
+        not enable and os.environ.get("DSV41_PF_SPARSE", "0") != "1"
     ):  # env-gated, default OFF (dense prefill attention, exact up to 512 compressed entries)
         return {}
     out, kvts, idx_of = {}, {}, {}
