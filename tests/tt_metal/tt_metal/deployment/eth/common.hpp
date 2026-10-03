@@ -240,34 +240,24 @@ static void track_eth_progress_timeout_cores(std::span<struct core_setup> cores)
     }
 }
 
-template <typename FIXTURE>
+// The helpers below launch every program with the non-blocking `LaunchProgramAsync` and only wait afterwards, so all
+// programs are co-resident regardless of dispatch mode. This is why they need no per-device thread, unlike
+// `launch_on_eth_pair` in tests/tt_metal/tt_metal/eth/test_buffer_movement_kernels.cpp, which uses the blocking
+// `LaunchProgram` under slow dispatch.
 [[maybe_unused]]
 static void wait_to_finish_eth_timeout_cores(
-    FIXTURE* fixture,
     std::span<struct core_setup> cores,
     std::map<std::shared_ptr<distributed::MeshDevice>, std::shared_ptr<tt_metal::Program>>& programs) {
     /* ==================== */
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    std::map<std::shared_ptr<distributed::MeshDevice>, std::shared_ptr<distributed::MeshWorkload>> devices;
-
-    for (const auto& [dev, _] : programs) {
-        devices[dev] = std::make_shared<distributed::MeshWorkload>();
-    }
-
-    for (const auto& [dev, workload] : devices) {
-        programs[dev]->impl().compile(dev.get());
-        devices[dev]->add_program(device_range, std::move(*programs[dev]));
-    }
-
-    for (const auto& [dev, workload] : devices) {
-        fixture->RunProgram(dev, *workload, true);
+    std::map<std::shared_ptr<distributed::MeshDevice>, distributed::MeshWorkload> devices;
+    for (auto& [dev, program] : programs) {
+        devices[dev] = LaunchProgramAsync(*dev, std::move(*program));
     }
 
     track_eth_progress_timeout_cores(cores);
 
     for (const auto& [dev, _] : devices) {
-        fixture->FinishCommands(dev);
+        distributed::Finish(dev->mesh_command_queue());
     }
 }
 
@@ -334,10 +324,8 @@ static bool bandwidth_check(
     return pass;
 }
 
-template <typename FIXTURE>
 [[maybe_unused]]
 static void tensix_zero_dram(
-    FIXTURE* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t dram_start_addr,
     uint32_t dram_end_addr,
@@ -359,9 +347,6 @@ static void tensix_zero_dram(
     struct l1_allocator alloc = new_erisc_allocator();
     uint32_t buffer0 = l1_alloc(&alloc, transfer_size);
 
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    distributed::MeshWorkload workload;
     DataMovementConfig config = {
         .compile_args =
             {
@@ -404,17 +389,13 @@ static void tensix_zero_dram(
         }
     }
 
-    workload.add_program(device_range, std::move(zero_program));
-    fixture->RunProgram(mesh_device, workload, true);
-    fixture->FinishCommands(mesh_device);
+    LaunchProgram(*mesh_device, std::move(zero_program));
 
     // log_info(tt::LogTest, "      done zeroing bank {}", dram_bank_id);
 }
 
-template <typename FIXTURE>
 [[maybe_unused]]
 static void tensix_counter_dram(
-    FIXTURE* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t dram_start_addr,
     uint32_t dram_end_addr,
@@ -437,9 +418,6 @@ static void tensix_counter_dram(
     struct l1_allocator alloc = new_erisc_allocator();
     uint32_t buffer0 = l1_alloc(&alloc, transfer_size);
 
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    distributed::MeshWorkload workload;
     DataMovementConfig config = {
         .compile_args =
             {
@@ -482,17 +460,13 @@ static void tensix_counter_dram(
         }
     }
 
-    workload.add_program(device_range, std::move(zero_program));
-    fixture->RunProgram(mesh_device, workload, true);
-    fixture->FinishCommands(mesh_device);
+    LaunchProgram(*mesh_device, std::move(zero_program));
 
     // log_info(tt::LogTest, "      done zeroing bank {}", dram_bank_id);
 }
 
-template <typename FIXTURE>
 [[maybe_unused]]
 static bool tensix_compare_dram_banks(
-    FIXTURE* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t dram_start_addr,
     uint32_t dram_end_addr,
@@ -520,10 +494,6 @@ static bool tensix_compare_dram_banks(
     uint32_t last_error_addr = l1_alloc(&alloc, sizeof(uint32_t));
     uint32_t buffer0 = l1_alloc(&alloc, transfer_size + 64);
     uint32_t buffer1 = l1_alloc(&alloc, transfer_size + 64);
-
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    distributed::MeshWorkload workload;
 
     // log_info(tt::LogTest, "      bank0 {}, bank1 {}", dram_bank_id0, dram_bank_id1);
     // log_info(tt::LogTest, "      start {:8x}", dram_start_addr);
@@ -573,9 +543,7 @@ static bool tensix_compare_dram_banks(
         }
     }
 
-    workload.add_program(device_range, std::move(cmp_program));
-    fixture->RunProgram(mesh_device, workload, true);
-    fixture->FinishCommands(mesh_device);
+    LaunchProgram(*mesh_device, std::move(cmp_program));
 
     uint64_t total_errors = 0;
     uint32_t first_error = -1;
