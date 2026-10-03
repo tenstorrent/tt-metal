@@ -17,6 +17,7 @@ import pytest
 
 from ..chip_architecture import ChipArchitecture
 from ..counters import read_counters
+from ..device_io import write_words_to_device
 from ..device import BootMode
 from ..format_config import FormatConfig
 from ..llk_params import DestAccumulation, L1Accumulation, PerfRunType
@@ -803,6 +804,12 @@ def _selected_run_types(run_types):
     return [rt for rt in run_types if rt.name in names]
 
 
+# Wormhole L1_TO_L1: [repetitions, pack step | count << 16, unpack/math step | count << 16] (trisc.cpp).
+_DITHER_ADDR = 0x16AFE0
+_DITHER_WORDS = [8, 262146, 131088]
+_NO_DITHER = [0, 0, 0]
+
+
 class PerfConfig(TestConfig):
     # === STATIC VARIABLES ===
     TEST_COUNTER: ClassVar[int] = 0
@@ -1031,6 +1038,7 @@ class PerfConfig(TestConfig):
             for templates, runtimes, run_type in self.warmup_configs:
                 self._select_run_type(templates, runtimes, run_type)
                 self.write_runtimes_to_L1()
+                write_words_to_device(TestConfig.TENSIX_LOCATION, _DITHER_ADDR, _NO_DITHER)
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
 
@@ -1054,8 +1062,10 @@ class PerfConfig(TestConfig):
 
             variant_raw_data = []
             variant_counter_results = []
+            dither = run_type == PerfRunType.L1_TO_L1 and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
             for run_index in range(run_count):
                 self.write_runtimes_to_L1()
+                write_words_to_device(TestConfig.TENSIX_LOCATION, _DITHER_ADDR, _DITHER_WORDS if dither else _NO_DITHER)
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
                 # Counter config is written by BRISC from built-in array (local L1 write).
