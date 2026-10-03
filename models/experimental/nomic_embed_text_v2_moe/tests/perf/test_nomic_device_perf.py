@@ -20,11 +20,12 @@ from models.common.utility_functions import run_for_blackhole
 from models.experimental.nomic_embed_text_v2_moe.tests.perf.perf_common import HEADLINE_SHAPE
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 
-# Measured on a p300c with the matmul work of #57524 and the SDPA and GELU work of #58503: SDPA's
-# chunk sizes, its mask and the placement of its operands and rotary tables (tt/attention.py,
-# tt/common.py), the tanh GELU fused into fc1 and the expert w1 (tt/matmul_config.py), no trace,
-# one command queue. The unoptimized port measured 66.7, the matmul work alone 171.0.
-EXPECTED_SEQUENCES_PER_S = 294.1
+# Measured on a p300c with the matmul work of #57524, the SDPA and GELU work of #58503 (SDPA's
+# chunk sizes, its mask and the placement of its operands and rotary tables in tt/attention.py and
+# tt/common.py, the tanh GELU fused into fc1 and the expert w1 in tt/matmul_config.py), and the
+# layer-norm weights read as row-major rows from L1 at 8x512 (tt/common.py), no trace, one command
+# queue. The unoptimized port measured 66.7, the matmul work alone 171.0, with #58503 294.1.
+EXPECTED_SEQUENCES_PER_S = 300.0
 
 # Wide enough to absorb run-to-run kernel variation, tight enough to catch a real regression.
 MARGIN = 0.03
