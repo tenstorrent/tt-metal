@@ -219,7 +219,7 @@ void BM_FanOut(benchmark::State& state) {
     if (!Pool::runs_on_caller) {
         const double worker_cpu_s = (self_after.cpu_s - self_before.cpu_s) - (caller_after.cpu_s - caller_before.cpu_s);
         const double task_cpu_s = ((iters * num_tasks) - tasks_on_caller) * work_ns * 1e-9;
-        // Worker CPU beyond the task bodies, averaged over the run.
+        // CPU cores the workers keep busy beyond the task bodies, averaged over the run (2.3 = 230% in top).
         state.counters["worker_overhead_cores"] = (worker_cpu_s - task_cpu_s) / run_s;
         state.counters["worker_parks"] = ((self_after.voluntary_switches - self_before.voluntary_switches) -
                                           (caller_after.voluntary_switches - caller_before.voluntary_switches)) /
