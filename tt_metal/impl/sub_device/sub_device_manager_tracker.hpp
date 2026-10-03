@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
@@ -49,6 +50,7 @@ public:
 
     SubDeviceManager* find_sub_device_manager(SubDeviceManagerId sub_device_manager_id) const;
 
+    std::size_t num_traces() const;
     DeviceAddr get_max_trace_high_water_mark() const;
 
     // Used for caching program state by manager and buffers to check that the required manager is still active

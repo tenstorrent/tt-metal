@@ -169,6 +169,14 @@ SubDeviceManager* SubDeviceManagerTracker::find_sub_device_manager(SubDeviceMana
     return sub_device_manager == sub_device_managers_.end() ? nullptr : sub_device_manager->second.get();
 }
 
+std::size_t SubDeviceManagerTracker::num_traces() const {
+    std::size_t count = 0;
+    for (const auto& entry : sub_device_managers_) {
+        count += entry.second->num_traces();
+    }
+    return count;
+}
+
 DeviceAddr SubDeviceManagerTracker::get_max_trace_high_water_mark() const {
     DeviceAddr max_high_water_mark = 0;
     for (const auto& entry : sub_device_managers_) {
