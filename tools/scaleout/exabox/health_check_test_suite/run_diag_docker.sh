@@ -30,7 +30,11 @@ OUTPUT_DIR=""
 DIAG_PKG_REPO="${DEFAULT_DIAG_PKG_REPO}"
 DIAG_PKG_VERSION="${DEFAULT_DIAG_PKG_VERSION}"
 GH_TOKEN_VALUE="${GH_TOKEN:-}"
+BMC_IP_VALUE="${BMC_IP:-}"
+BMC_USER_VALUE="${BMC_USER:-}"
+BMC_PASSWORD_VALUE="${BMC_PASSWORD:-}"
 SKIP_QSFP=false
+SKIP_SYS_TRIAGE=false
 NEED_LSPCI=true
 
 FORWARD=()
@@ -65,18 +69,31 @@ Wrapper options:
                          one-offs such as --docker-arg --shm-size=4g
   -h, --help             This text
 
-QSFP package (tt-bh-glx-cluster-debug, needed by the QSFP phase):
+Syseng package (tt-bh-glx-cluster-debug and sys-triage, needed by the QSFP and
+sys-triage phases):
       --gh-token TOKEN   GitHub token with read access to the private release.
                          Forwarded to the container as GH_TOKEN via a 0600
                          --env-file, so it never appears in the process list.
                          Defaults to \$GH_TOKEN when that is set. Without a
-                         token the package is not installed and the QSFP phase
-                         reports SKIP; every other check still runs.
+                         token the package is not installed and the QSFP and
+                         sys-triage phases report SKIP; every other check
+                         still runs.
       --diag-pkg-repo REPO
                          Release repo (default: ${DEFAULT_DIAG_PKG_REPO})
       --diag-pkg-version TAG
                          Release tag (default: ${DEFAULT_DIAG_PKG_VERSION});
                          empty string skips the install
+
+BMC credentials (needed by the sys-triage phase, which runs on pre_reboot only
+and reports SKIP without all three). Forwarded to the container as BMC_IP /
+BMC_USER / BMC_PASSWORD via the same 0600 --env-file as the token, never on a
+command line:
+      --bmc-ip IP        BMC address (default: \$BMC_IP)
+      --bmc-user USER    BMC user (default: \$BMC_USER)
+      --bmc-password PASS
+                         BMC password (default: \$BMC_PASSWORD, which is
+                         preferred: a flag value is visible in this script's
+                         own process list)
 
 Forwarded to run_diag.sh (see its --help, and diag_runner.py --help, for detail):
       --dry-run              Print intended subprocess calls without executing
@@ -93,6 +110,8 @@ Forwarded to run_diag.sh (see its --help, and diag_runner.py --help, for detail)
                              read-only
       --qsfp-tool-path PATH  In-container path to the tt-bh-glx-cluster-debug
                              binary
+      --skip-sys-triage      Skip the sys-triage bundle
+      --sys-triage-path PATH In-container path to the sys-triage binary
       --input-snapshot PATH  Host tt-smi snapshot JSON; mounted read-only
       --tt-smi-path PATH     In-container tt-smi binary or repo path
       --snapshot-out PATH    In-container path for the raw tt-smi snapshot
@@ -106,8 +125,9 @@ Forwarded to run_diag.sh (see its --help, and diag_runner.py --help, for detail)
 
 Host requirements checked before starting:
   /dev/tenstorrent (required), /dev/ipmi0, /dev/hugepages, /dev/hugepages-1G,
-  /etc/udev/rules.d, /lib/modules, /sys/kernel/debug. A missing optional path is
-  reported with what it costs rather than failing the container outright.
+  /etc/udev/rules.d, /lib/modules, /sys/kernel/debug, and on pre_reboot
+  /var/log/journal, /run/log/journal, /etc/machine-id. A missing optional path
+  is reported with what it costs rather than failing the container outright.
 
 Examples:
   # Medium tier into a timestamped directory
@@ -157,6 +177,10 @@ while (( $# )); do
         --diag-pkg-repo)     require_value "$1" "${2:-}"; DIAG_PKG_REPO="$2"; shift 2 ;;
         --diag-pkg-version)  DIAG_PKG_VERSION="${2:-}"; shift 2 ;;
 
+        --bmc-ip)        require_value "$1" "${2:-}"; BMC_IP_VALUE="$2"; shift 2 ;;
+        --bmc-user)      require_value "$1" "${2:-}"; BMC_USER_VALUE="$2"; shift 2 ;;
+        --bmc-password)  require_value "$1" "${2:-}"; BMC_PASSWORD_VALUE="$2"; shift 2 ;;
+
         # Forwarded, no value.
         --dry-run)
             # A dry run executes nothing, so the lspci gate below would be
@@ -166,11 +190,13 @@ while (( $# )); do
             NEED_LSPCI=false; FORWARD+=("$1"); shift ;;
         --skip-qsfp-tests)
             SKIP_QSFP=true; FORWARD+=("$1"); shift ;;
+        --skip-sys-triage)
+            SKIP_SYS_TRIAGE=true; FORWARD+=("$1"); shift ;;
         --skip-tests|--skip-triage|--triage-gating|--qsfp-gating)
             FORWARD+=("$1"); shift ;;
 
         # Forwarded, in-container value.
-        --tt-smi-path|--qsfp-tool-path|--snapshot-out)
+        --tt-smi-path|--qsfp-tool-path|--sys-triage-path|--snapshot-out)
             require_value "$1" "${2:-}"; FORWARD+=("$1" "$2"); shift 2 ;;
 
         # Forwarded, host value that needs mounting.
@@ -188,6 +214,11 @@ while (( $# )); do
         *)  die "unknown option '$1'. Try --help" ;;
     esac
 done
+
+# The sys-triage phase runs on pre_reboot only. Every other tier gets exactly
+# the container it got before the phase existed: no extra mounts or packages.
+WANT_SYS_TRIAGE=false
+[[ ${TIER} == pre_reboot ]] && ! ${SKIP_SYS_TRIAGE} && WANT_SYS_TRIAGE=true
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Output directory. Bind-mounted at the same path inside the container so the
@@ -263,20 +294,32 @@ add_volume /lib/modules ro \
     "tt-kmd module metadata is not visible; triage cannot report the driver version"
 add_volume /sys/kernel/debug ro \
     "debugfs is unavailable; the triage device mappings section will be empty"
+# sys-triage records the kernel log twice: dmesg, which reaches the host ring
+# buffer through --cap-add SYSLOG, and journalctl -k, which reads the host
+# journal files and needs the host machine-id to find them. A host keeps them
+# under one of the two journal paths: /var/log when persistent, /run when not.
+if ${WANT_SYS_TRIAGE}; then
+    add_volume /var/log/journal ro \
+        "no persistent host journal; sys-triage's journalctl -k section reads /run/log/journal only"
+    add_volume /run/log/journal ro \
+        "no volatile host journal; sys-triage's journalctl -k section reads /var/log/journal only"
+    add_volume /etc/machine-id ro \
+        "the host machine-id is not visible; sys-triage's journalctl -k section will be empty"
+fi
 
 bind_mount "${OUTPUT_DIR}" "${OUTPUT_DIR}"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Staged temporary files: the virt stub and the token env-file. Both cleaned up
-# on exit; neither may outlive the run.
+# Staged temporary files: the virt stub and the secrets env-file. Both cleaned
+# up on exit; neither may outlive the run.
 # ─────────────────────────────────────────────────────────────────────────────
 
 VIRT_STUB=""
-TOKEN_ENV_FILE=""
+SECRETS_ENV_FILE=""
 
 cleanup() {
-    [[ -z ${VIRT_STUB} ]]      || rm -f "${VIRT_STUB}"
-    [[ -z ${TOKEN_ENV_FILE} ]] || rm -f "${TOKEN_ENV_FILE}"
+    [[ -z ${VIRT_STUB} ]]        || rm -f "${VIRT_STUB}"
+    [[ -z ${SECRETS_ENV_FILE} ]] || rm -f "${SECRETS_ENV_FILE}"
 }
 trap cleanup EXIT
 
@@ -298,13 +341,24 @@ if ! ${SKIP_QSFP}; then
     fi
 fi
 
-# The token goes in via --env-file rather than -e so it stays out of the process
-# list, matching the fleet launcher.
-if [[ -n ${GH_TOKEN_VALUE} ]]; then
-    TOKEN_ENV_FILE="$(mktemp)"
-    chmod 600 "${TOKEN_ENV_FILE}"
-    printf 'GH_TOKEN=%s\n' "${GH_TOKEN_VALUE}" > "${TOKEN_ENV_FILE}"
-    DOCKER_ARGS+=(--env-file "${TOKEN_ENV_FILE}")
+# The token and the BMC credentials go in via --env-file rather than -e so they
+# stay out of the process list, matching the fleet launcher. docker reads each
+# line verbatim up to the newline, so a value cannot carry one.
+SECRETS=()
+[[ -z ${GH_TOKEN_VALUE} ]] || SECRETS+=("GH_TOKEN=${GH_TOKEN_VALUE}")
+if ${WANT_SYS_TRIAGE}; then
+    [[ -z ${BMC_IP_VALUE} ]]       || SECRETS+=("BMC_IP=${BMC_IP_VALUE}")
+    [[ -z ${BMC_USER_VALUE} ]]     || SECRETS+=("BMC_USER=${BMC_USER_VALUE}")
+    [[ -z ${BMC_PASSWORD_VALUE} ]] || SECRETS+=("BMC_PASSWORD=${BMC_PASSWORD_VALUE}")
+fi
+if (( ${#SECRETS[@]} )); then
+    for entry in "${SECRETS[@]}"; do
+        [[ ${entry} != *$'\n'* ]] || die "${entry%%=*} contains a newline, which docker --env-file cannot carry"
+    done
+    SECRETS_ENV_FILE="$(mktemp)"
+    chmod 600 "${SECRETS_ENV_FILE}"
+    printf '%s\n' "${SECRETS[@]}" > "${SECRETS_ENV_FILE}"
+    DOCKER_ARGS+=(--env-file "${SECRETS_ENV_FILE}")
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -356,6 +410,8 @@ DOCKER_ARGS+=(
     -e "HC_DIAG_PKG_VERSION=${DIAG_PKG_VERSION}"
     -e "HC_NEED_LSPCI=${NEED_LSPCI}"
     -e "HC_SKIP_QSFP=${SKIP_QSFP}"
+    -e "HC_WANT_SYS_TRIAGE=${WANT_SYS_TRIAGE}"
+    -e "HC_VIRT_STUB=$([[ -n ${VIRT_STUB} ]] && echo true || echo false)"
     -e "HC_HOST_UID=$(id -u)"
     -e "HC_HOST_GID=$(id -g)"
 )
@@ -371,11 +427,45 @@ _warn() { printf "[wrap] WARNING: %s\n" "$*" >&2; }
 _need=""
 command -v lspci    >/dev/null 2>&1 || _need="${_need} pciutils"
 command -v ipmitool >/dev/null 2>&1 || _need="${_need} ipmitool"
+_apt_updated=false
+_apt_update() { ${_apt_updated} || { sudo apt-get update -qq && _apt_updated=true; }; }
 if [ -n "${_need}" ]; then
     _say "installing:${_need}"
-    if ! { sudo apt-get update -qq \
+    if ! { _apt_update \
         && sudo apt-get install -y -qq --no-install-recommends ${_need}; }; then
         _warn "apt-get failed; continuing with whatever is already present"
+    fi
+fi
+
+# What sys-triage shells out to beyond the above, on pre_reboot only. Each is
+# installed after the packages above and on its own, so that a failure here
+# costs one section of the bundle and nothing else:
+#   kmod (modinfo, lsmod)  the driver row of its FW table, where a missing
+#                          binary costs the whole table rather than the row
+#   curl                   its Redfish version reads
+#   systemd (journalctl)   its journalctl -k section; dmesg still records the
+#                          recent kernel log without it
+# The diversion keeps dpkg off /usr/bin/systemd-detect-virt, where the wrapper
+# has mounted a read-only stub that dpkg would fail to replace.
+if [ "${HC_WANT_SYS_TRIAGE}" = "true" ]; then
+    _st_need=""
+    command -v modinfo >/dev/null 2>&1 || _st_need="${_st_need} kmod"
+    command -v curl    >/dev/null 2>&1 || _st_need="${_st_need} curl"
+    if [ -n "${_st_need}" ]; then
+        _say "installing for sys-triage:${_st_need}"
+        { _apt_update && sudo apt-get install -y -qq --no-install-recommends ${_st_need}; } \
+            || _warn "could not install${_st_need}; the sys-triage bundle will lack the sections that need them"
+    fi
+    if ! command -v journalctl >/dev/null 2>&1; then
+        _say "installing for sys-triage: systemd (for journalctl)"
+        if ! { { [ "${HC_VIRT_STUB}" != "true" ] \
+                 || sudo dpkg-divert --quiet --local --no-rename \
+                      --divert /usr/bin/systemd-detect-virt.distrib \
+                      --add /usr/bin/systemd-detect-virt; } \
+               && _apt_update \
+               && sudo apt-get install -y -qq --no-install-recommends systemd; }; then
+            _warn "could not install systemd; the sys-triage journalctl -k section will be empty"
+        fi
     fi
 fi
 
@@ -404,28 +494,28 @@ fi
 command -v ipmitool >/dev/null 2>&1 \
     || _warn "ipmitool is missing: tt-smi -glx_reset and the host_fru_info check need it"
 
-# tt-syseng-diag ships tt-bh-glx-cluster-debug, which the QSFP phase needs. It
-# is a private release asset, so it cannot be baked into the upstream image and
-# is fetched per run with a token.
+# tt-syseng-diag ships tt-bh-glx-cluster-debug and sys-triage, which the QSFP
+# and sys-triage phases need. It is a private release asset, so it cannot be
+# baked into the upstream image and is fetched per run with a token.
 #
 # Nothing here is fatal. A run without a token performs every other check rather
 # than refusing to start, and a download, checksum or dpkg failure costs the
-# QSFP phase alone, which then reports SKIP. Each outcome says so explicitly:
-# this is the only place the package could have gone missing, and the suite
-# reports its absence only as a phase that did not run.
-if [ "${HC_SKIP_QSFP}" = "true" ]; then
-    _say "QSFP package: --skip-qsfp-tests given; not installing tt-syseng-diag"
+# QSFP and sys-triage phases alone, which then report SKIP. Each outcome says so
+# explicitly: this is the only place the package could have gone missing, and
+# the suite reports its absence only as a phase that did not run.
+if [ "${HC_SKIP_QSFP}" = "true" ] && [ "${HC_WANT_SYS_TRIAGE}" != "true" ]; then
+    _say "syseng package: neither the QSFP nor the sys-triage phase will run; not installing tt-syseng-diag"
 elif [ -z "${HC_DIAG_PKG_VERSION}" ]; then
-    _say "QSFP package: no version configured; skipping the install"
+    _say "syseng package: no version configured; skipping the install"
 elif [ -z "${GH_TOKEN:-}" ]; then
-    _say "QSFP package: no GitHub token supplied, so the private release cannot be"
-    _say "QSFP package: fetched. The QSFP phase will report SKIP; pass --gh-token"
-    _say "QSFP package: to enable it. Every other check is unaffected."
+    _say "syseng package: no GitHub token supplied, so the private release cannot be"
+    _say "syseng package: fetched. The QSFP and sys-triage phases will report SKIP;"
+    _say "syseng package: pass --gh-token to enable them. Every other check is unaffected."
 elif ! command -v gh >/dev/null 2>&1; then
-    _warn "QSFP package: gh is not present in this image, so ${HC_DIAG_PKG_REPO}" \
+    _warn "syseng package: gh is not present in this image, so ${HC_DIAG_PKG_REPO}" \
           "${HC_DIAG_PKG_VERSION} cannot be downloaded; skipping the install"
 elif ! _pkg_dir="$(mktemp -d 2>/dev/null)"; then
-    _warn "QSFP package: could not create a download directory; skipping the install"
+    _warn "syseng package: could not create a download directory; skipping the install"
 else
     if (
         cd "${_pkg_dir}" \
@@ -434,12 +524,12 @@ else
         && sha256sum -c tt-syseng-diag_*.deb.sha256 \
         && sudo dpkg -i tt-syseng-diag_*.deb
     ); then
-        _say "QSFP package: tt-syseng-diag ${HC_DIAG_PKG_VERSION} installed from" \
+        _say "syseng package: tt-syseng-diag ${HC_DIAG_PKG_VERSION} installed from" \
              "${HC_DIAG_PKG_REPO} (checksum verified)"
     else
-        _warn "QSFP package: could not install tt-syseng-diag ${HC_DIAG_PKG_VERSION}" \
+        _warn "syseng package: could not install tt-syseng-diag ${HC_DIAG_PKG_VERSION}" \
               "from ${HC_DIAG_PKG_REPO} — see the download, sha256sum and dpkg output" \
-              "above. The run continues; the QSFP phase will report SKIP."
+              "above. The run continues; the QSFP and sys-triage phases will report SKIP."
     fi
     rm -rf "${_pkg_dir}"
 fi
@@ -448,6 +538,24 @@ fi
     echo "ERROR: ${HC_RUN_DIAG} is not present in this image." >&2
     exit 1
 }
+
+# The suite is the copy baked into the image, which can predate the sys-triage
+# phase. Its argument parser would reject the phase flags and take the whole
+# run down with them, so against such a copy they are dropped and the phase is
+# simply absent from the report.
+if ! grep -q -e "--skip-sys-triage" "$(dirname "${HC_RUN_DIAG}")/diag_runner.py" 2>/dev/null; then
+    _kept=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --skip-sys-triage) shift ;;
+            --sys-triage-path) shift; [ $# -eq 0 ] || shift ;;
+            *) _kept+=("$1"); shift ;;
+        esac
+    done
+    set -- "${_kept[@]}"
+    [ "${HC_WANT_SYS_TRIAGE}" != "true" ] \
+        || _warn "the suite in this image predates the sys-triage phase; it will not run"
+fi
 
 # Everything the suite writes is owned by the image user (uid 1001) or, for the
 # steps that run under sudo, by root. Hand the output back to whoever launched
@@ -487,6 +595,13 @@ fi
 say "tier:       ${TIER}"
 say "image:      ${IMAGE}"
 say "output dir: ${OUTPUT_DIR}"
+if ${WANT_SYS_TRIAGE}; then
+    if [[ -n ${BMC_IP_VALUE} && -n ${BMC_USER_VALUE} && -n ${BMC_PASSWORD_VALUE} ]]; then
+        say "bmc:        ${BMC_USER_VALUE}@${BMC_IP_VALUE}"
+    else
+        say "bmc:        (incomplete — the sys-triage phase will report SKIP; see --bmc-*)"
+    fi
+fi
 say "forwarded:  ${FORWARD[*]:-(none)}"
 say ""
 
