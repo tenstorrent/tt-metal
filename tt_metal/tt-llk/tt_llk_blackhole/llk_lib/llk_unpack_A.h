@@ -60,10 +60,16 @@ inline void load_block_replay_half()
 }
 
 template <std::uint32_t num_faces>
-inline void load_block_replay()
+inline void load_block_replay(const std::uint32_t context)
 {
-    load_block_replay_half<THCON_SEC0_REG3_Base_address_ADDR32, 0, num_faces>();
-    load_block_replay_half<THCON_SEC0_REG3_Base_cntx1_address_ADDR32, block_replay_half_len(num_faces), num_faces>();
+    if (context == 0)
+    {
+        load_block_replay_half<THCON_SEC0_REG3_Base_address_ADDR32, 0, num_faces>();
+    }
+    else
+    {
+        load_block_replay_half<THCON_SEC0_REG3_Base_cntx1_address_ADDR32, block_replay_half_len(num_faces), num_faces>();
+    }
 }
 
 } // namespace llk_unpack_a_detail
@@ -350,7 +356,7 @@ inline void _llk_unpack_A_init_(
     _llk_unpack_A_mop_config_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
         transpose_of_faces > 0, tensor_shape, unpack_src_format, unpack_dst_format);
 
-    // The replay buffer holds no block body after an init: _llk_unpack_A_block_ records its own at its first call.
+    // The replay buffer holds no block body after an init: _llk_unpack_A_block_ records its own at the first call of each context.
     block_replay_body() = BlockReplayBody::None;
 }
 
@@ -459,7 +465,7 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
 
 /**
  * @brief Unpack a block of consecutive tiles (operand A) from L1 into SrcA with one context acquire: a per tile body, recorded in the
- *        replay buffer at the first call after an init, is replayed once per tile, the base address advanced by the tile stride in the instruction stream.
+ *        replay buffer at the first call of each context after an init, is replayed once per tile, the base address advanced by the stride in the stream.
  *
  * @tparam BType: Broadcast type, must be NONE.
  * @tparam acc_to_dest: Must be false.
@@ -504,24 +510,6 @@ inline void _llk_unpack_A_block_(
         return;
     }
 
-    // Record the body at the first block call after an init (every init clears the record), not in every kernel's init.
-    if (__builtin_expect(block_replay_body() != static_cast<BlockReplayBody>(num_faces), 0))
-    {
-        switch (num_faces)
-        {
-            case 1:
-                llk_unpack_a_detail::load_block_replay<1>();
-                break;
-            case 2:
-                llk_unpack_a_detail::load_block_replay<2>();
-                break;
-            default:
-                llk_unpack_a_detail::load_block_replay<4>();
-                break;
-        }
-        block_replay_body() = static_cast<BlockReplayBody>(num_faces);
-    }
-
     // Tile stride into SCRATCH_SEC0 from the instruction stream, so the write is ordered behind the CFGSHIFTMASKs of an earlier block
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_stride_16B), 0, LO_16(p_gpr_unpack::TMP0));
     TT_SETDMAREG(0, UPPER_HALFWORD(tile_stride_16B), 0, HI_16(p_gpr_unpack::TMP0));
@@ -534,6 +522,31 @@ inline void _llk_unpack_A_block_(
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
     std::uint32_t context                  = unp_cfg_context;
     const std::uint32_t upk0_reg           = (context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
+
+    // Each context replays its own half: record it at the first block call of that context after an init (every init clears the record).
+    const std::uint8_t record = static_cast<std::uint8_t>(block_replay_body());
+    if (__builtin_expect(record != num_faces, 0))
+    {
+        const std::uint8_t this_half = static_cast<std::uint8_t>(BLOCK_REPLAY_HALF_0 << context);
+        if (record != (num_faces | this_half))
+        {
+            switch (num_faces)
+            {
+                case 1:
+                    llk_unpack_a_detail::load_block_replay<1>(context);
+                    break;
+                case 2:
+                    llk_unpack_a_detail::load_block_replay<2>(context);
+                    break;
+                default:
+                    llk_unpack_a_detail::load_block_replay<4>(context);
+                    break;
+            }
+            const bool other_half_held = record == (num_faces | (this_half ^ (BLOCK_REPLAY_HALF_0 | BLOCK_REPLAY_HALF_1)));
+            block_replay_body()        = static_cast<BlockReplayBody>(other_half_held ? num_faces : (num_faces | this_half));
+        }
+    }
+
     while (contexts_in_use >= 2)
     {
         contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);

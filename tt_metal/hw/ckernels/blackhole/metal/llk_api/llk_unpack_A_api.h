@@ -145,9 +145,9 @@ inline void llk_unpack_A_block(
         StateDiscard<std::uint32_t>(start_tile_index),
         StateDiscard<std::uint32_t>(ntiles)));
 
-    // Plain SrcA path: one context acquire per block (the LLK falls back to one call per tile without a block body).
+    // Three or more tiles: one context acquire per block; one or two are cheaper per tile after a copy_init.
     if constexpr ((BType == BroadcastType::NONE) && !acc_to_dest && (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE)) {
-        if (ntiles > 0) {
+        if (ntiles > 2) {
             WAYPOINT("UPAW");
             _llk_unpack_A_block_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
                 address,
