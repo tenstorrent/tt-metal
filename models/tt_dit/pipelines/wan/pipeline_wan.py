@@ -22,9 +22,11 @@ from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConf
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.events import DenoiseStep, PipelineEventCallback, SectionEnd, SectionStart, null_callback
 from models.tt_dit.pipelines.pipeline_api import PipelineAPIMixin
+from models.tt_dit.pipelines.wan.dbcache import ExpertCacheRunner, WanDBCacheConfig
 from models.tt_dit.pipelines.wan.text_encoder import TextEncoder
 from models.tt_dit.solvers import solver_for_scheduler
 from models.tt_dit.utils import tensor
+from models.tt_dit.utils.dbcache import DBCacheConfig
 from models.tt_dit.utils.tensor import float32_tensor
 
 if TYPE_CHECKING:
@@ -129,6 +131,12 @@ class WanPipelineConfig:
 
     checkpoint_name: str
 
+    # DBCache (cache-dit style) step skipping, applied to every call unless the call passes its own
+    # `cache_config` (``None`` disables caching for that call). `WanPipelineConfig.default` fills
+    # this with `WanDBCacheConfig.default()`; pass ``cache_config=None`` there to build an uncached
+    # pipeline.
+    cache_config: WanDBCacheConfig | None = None
+
     @classmethod
     def default(
         cls,
@@ -153,9 +161,13 @@ class WanPipelineConfig:
         cfg_enabled: bool = True,
         max_sequence_length: int = 512,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
+        cache_config: WanDBCacheConfig | DBCacheConfig | None = _UNSET,
     ) -> WanPipelineConfig:
         preset_dict = _PRESETS_BH if ttnn.device.is_blackhole() else _PRESETS_WH
         preset = preset_dict.get(tuple(mesh_shape), {})
+
+        if cache_config is _UNSET:
+            cache_config = WanDBCacheConfig.default()
 
         if dit_parallel_config is None or vae_parallel_config is None or encoder_parallel_config is None:
             sp_axis = preset["sp_axis"]
@@ -200,6 +212,7 @@ class WanPipelineConfig:
             cfg_enabled=cfg_enabled,
             max_sequence_length=max_sequence_length,
             checkpoint_name=checkpoint_name,
+            cache_config=WanDBCacheConfig.coerce(cache_config) if cache_config is not None else None,
         )
 
 
@@ -210,6 +223,7 @@ class TransformerState:
     guidance_scale: float
     prompt_buffer: object = field(default=None)
     negative_prompt_buffer: object = field(default=None)
+    cache_runner: ExpertCacheRunner | None = field(default=None)
 
 
 class WanPipeline(PipelineAPIMixin):
@@ -422,7 +436,11 @@ class WanPipeline(PipelineAPIMixin):
 
         self._solver = solver_for_scheduler(
             scheduler
-            or UniPCMultistepScheduler.from_pretrained(self.checkpoint_name, subfolder="scheduler", flow_shift=12.0)
+            # flow_shift 5.0 (cache-dit's / vLLM's 720p setting) instead of the official Wan 2.2
+            # A14B T2V value of 12.0: it spreads the schedule toward low noise, which is what lets
+            # DBCache skip 15-16 of 40 steps instead of 8 (see models/tt_dit/models/Wan2_2.md).
+            # Per call: `pipeline(..., flow_shift=12.0)`.
+            or UniPCMultistepScheduler.from_pretrained(self.checkpoint_name, subfolder="scheduler", flow_shift=5.0)
         )
 
         # persistent latent buffers to enable safe tracing.
@@ -450,6 +468,7 @@ class WanPipeline(PipelineAPIMixin):
 
         self._boundary_ratio = config.boundary_ratio
         self._expand_timesteps = config.expand_timesteps
+        self._cache_config = config.cache_config
         self.vae_scale_factor_temporal = self._vae.config.scale_factor_temporal
         self.vae_scale_factor_spatial = self._vae.config.scale_factor_spatial
         self.video_processor = VideoProcessor(vae_scale_factor=self.vae_scale_factor_spatial)
@@ -499,28 +518,10 @@ class WanPipeline(PipelineAPIMixin):
         cfg_enabled: bool,
         traced: bool,
     ) -> ttnn.Tensor:
-        if self._expand_timesteps:
-            # seq_len: num_latent_frames * latent_height//2 * latent_width//2
-            temp_ts = (mask[0][0][:, ::2, ::2] * t).flatten()
-            # batch_size, seq_len
-            timestep = temp_ts.unsqueeze(0).expand(latents_batch_size, -1)
-        else:
-            timestep = torch.full((latents_batch_size,), t, dtype=torch.float32)
-
+        timestep, guidance_scale_tt = self._timestep_and_guidance(
+            t=t, ts=ts, mask=mask, latents_batch_size=latents_batch_size, traced=traced
+        )
         permuted_model_input = self.get_model_input(permuted_latent_tt, cond_latents)
-
-        assert timestep.ndim == 1, "Wan2.2-T2V/I2V requires a 1D timestep tensor"
-        timestep = float32_tensor(
-            timestep.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=(None if traced else self.mesh_device)
-        )
-
-        # guidance_scale is passed as a 1-element device tensor (broadcast via ttnn.lerp's
-        # tensor-weight overload) so it can be updated in place between traced executions,
-        # mirroring how `timestep` above is threaded through the captured trace.
-        guidance_scale_tt = float32_tensor(
-            torch.tensor(ts.guidance_scale, dtype=torch.float32).reshape(1, 1, 1, 1),
-            device=(None if traced else self.mesh_device),
-        )
 
         permuted_velocity_pred_tt = ts.model.combined_step(
             do_classifier_free_guidance=cfg_enabled,
@@ -540,6 +541,133 @@ class WanPipeline(PipelineAPIMixin):
             latent=permuted_latent_tt,
             velocity_pred=permuted_velocity_pred_tt,
         )
+
+    def _timestep_and_guidance(
+        self, *, t: float, ts: TransformerState, mask: torch.Tensor, latents_batch_size: int, traced: bool
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Shared by `_step` and `_step_cached`: the 1D timestep tensor and the guidance scalar.
+
+        Both are host tensors under tracing (the tracer copies them into its captured input slots)
+        and device tensors otherwise.
+        """
+        if self._expand_timesteps:
+            # seq_len: num_latent_frames * latent_height//2 * latent_width//2
+            temp_ts = (mask[0][0][:, ::2, ::2] * t).flatten()
+            # batch_size, seq_len
+            timestep = temp_ts.unsqueeze(0).expand(latents_batch_size, -1)
+        else:
+            timestep = torch.full((latents_batch_size,), t, dtype=torch.float32)
+
+        assert timestep.ndim == 1, "Wan2.2-T2V/I2V requires a 1D timestep tensor"
+        timestep = float32_tensor(
+            timestep.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=(None if traced else self.mesh_device)
+        )
+
+        # guidance_scale is passed as a 1-element device tensor (broadcast via ttnn.lerp's
+        # tensor-weight overload) so it can be updated in place between traced executions,
+        # mirroring how `timestep` above is threaded through the captured trace.
+        guidance_scale_tt = float32_tensor(
+            torch.tensor(ts.guidance_scale, dtype=torch.float32).reshape(1, 1, 1, 1),
+            device=(None if traced else self.mesh_device),
+        )
+        return timestep, guidance_scale_tt
+
+    def _step_cached(
+        self,
+        *,
+        step: int,
+        t: float,
+        ts: TransformerState,
+        permuted_latent_tt: ttnn.Tensor,
+        mask: torch.Tensor,
+        cond_latents: ttnn.Tensor | None,
+        rope_args: dict,
+        latents_sequence_length: int,
+        latents_batch_size: int,
+        cfg_enabled: bool,
+        traced: bool,
+    ) -> ttnn.Tensor:
+        """DBCache variant of `_step`: head -> (body | cached residual) -> tail per CFG branch."""
+        runner = ts.cache_runner
+        assert runner is not None
+
+        timestep, guidance_scale_tt = self._timestep_and_guidance(
+            t=t, ts=ts, mask=mask, latents_batch_size=latents_batch_size, traced=traced
+        )
+        permuted_model_input = self.get_model_input(permuted_latent_tt, cond_latents)
+
+        prompts = [ts.prompt_buffer, ts.negative_prompt_buffer] if cfg_enabled else [ts.prompt_buffer]
+        velocities = runner.run_step(
+            spatial_1BNI=permuted_model_input,
+            prompts_1BLP=prompts,
+            N=latents_sequence_length,
+            timestep=timestep,
+            traced=traced,
+            gather_output=False,
+            **rope_args,
+        )
+
+        if cfg_enabled:
+            if guidance_scale_tt.device() is None:
+                # The CFG lerp runs outside the traces here, so it needs a device tensor.
+                guidance_scale_tt = guidance_scale_tt.to(self.mesh_device)
+            cond, uncond = velocities
+            permuted_velocity_pred_tt = ttnn.lerp(uncond, cond, guidance_scale_tt)
+        else:
+            (permuted_velocity_pred_tt,) = velocities
+
+        return self._solver.step(
+            step=step,
+            latent=permuted_latent_tt,
+            velocity_pred=permuted_velocity_pred_tt,
+        )
+
+    def _cache_runners(self, cache_config: WanDBCacheConfig | DBCacheConfig | None) -> list[ExpertCacheRunner] | None:
+        """Get (or build) the per-expert cache runners for ``cache_config`` and reset their contexts.
+
+        Returns ``None`` when caching is disabled. Runners are kept on the `TransformerState`s and
+        rebuilt (releasing their traces) when the block split (Fn/Bn) or the TaylorSeer order
+        changes; other knobs are host-side and take effect immediately.
+        """
+        if cache_config is None:
+            return None
+        cache_config = WanDBCacheConfig.coerce(cache_config)
+
+        runners = []
+        for idx, ts in enumerate(self.transformer_states):
+            expert_cfg = cache_config.for_expert(idx)
+            runner = ts.cache_runner
+            if runner is not None and (
+                runner.config.Fn_compute_blocks != expert_cfg.Fn_compute_blocks
+                or runner.config.Bn_compute_blocks != expert_cfg.Bn_compute_blocks
+                or runner.config.taylorseer_order != expert_cfg.taylorseer_order
+            ):
+                runner.release_traces()
+                runner = None
+            if runner is None:
+                runner = ExpertCacheRunner(
+                    ts.model,
+                    config=expert_cfg,
+                    name=("high_noise", "low_noise")[idx],
+                )
+                ts.cache_runner = runner
+            else:
+                runner.config = expert_cfg
+                runner.context.config = expert_cfg
+            runner.reset()
+            runners.append(runner)
+        return runners
+
+    def cache_summary(self) -> list[dict[str, object]]:
+        """DBCache statistics (cached steps, residual diffs, optional profile) per expert for the most recent call."""
+        out = []
+        for ts in self.transformer_states:
+            if ts.cache_runner is None:
+                continue
+            summary = ts.cache_runner.context.summary()
+            summary["profile_ms"] = ts.cache_runner.profile_summary()
+            out.append(summary)
+        return out
 
     def get_model_input(self, latents: ttnn.Tensor, cond_latents: ttnn.Tensor | None) -> ttnn.Tensor:
         """Adapter function to enable I2V. For base T2V, just return the latents (cast to bf16)."""
@@ -605,8 +733,13 @@ class WanPipeline(PipelineAPIMixin):
         output_type: str | None = "uint8",
         traced: bool = False,
         on_event: PipelineEventCallback | None = None,
+        cache_config: WanDBCacheConfig | DBCacheConfig | None = _UNSET,
     ):
         on_event = on_event if on_event is not None else null_callback
+
+        # DBCache: resolve the per-request config (None disables caching for this call) and
+        # start fresh cache contexts for both experts.
+        cache_runners = self._cache_runners(self._cache_config if cache_config is _UNSET else cache_config)
 
         negative_prompts = (
             negative_prompts if negative_prompts is not None else [self.DEFAULT_NEGATIVE_PROMPT] * len(prompts)
@@ -765,7 +898,8 @@ class WanPipeline(PipelineAPIMixin):
                 else:
                     ttnn.copy(permuted_latent_tt, self.latent_buffer)
 
-                permuted_latent_tt = self._step(
+                step_fn = self._step_cached if cache_runners is not None else self._step
+                permuted_latent_tt = step_fn(
                     step=i,
                     t=t,
                     ts=ts,
@@ -839,3 +973,6 @@ class WanPipeline(PipelineAPIMixin):
             tracer = WanTransformer3DModel.combined_step._tracers.get(model)
             if tracer is not None:
                 tracer.release_trace()
+        for ts in self.transformer_states:
+            if ts.cache_runner is not None:
+                ts.cache_runner.release_traces()
