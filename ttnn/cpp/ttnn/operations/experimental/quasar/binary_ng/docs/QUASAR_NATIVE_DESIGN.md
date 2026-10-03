@@ -583,7 +583,7 @@ since per-core read count is `T/2` either way.
 |---|---|---|
 | ~~`total_tiles % (clusters * lcm(R,C,W)) == 0`~~ | ~~kernels use a strided share with no tail handling~~ | **LIFTED (F1, 2026-09-04)** — see below |
 | `num_entries <= 255` | unguarded `uint8_t` threshold (§4.4) | field width; cap the sweep |
-| `num_tiles_per_cycle == 1` unless every stride is 1 | chunk loop cannot express a batched strided reserve | still ours; unreachable while sharding is rejected |
+| ~~`num_tiles_per_cycle == 1` unless every stride is 1~~ | ~~chunk loop cannot express a batched strided reserve~~; the cause is the pack path, which does not apply the ring stride per tile (#56194) | **LIFTED 2026-09-22** to a warning with the same condition: the knob runs above stride 1 and the output is wrong; two strict expected-failure tests hold it |
 
 **F1 removed the divisibility rule entirely.** The premise — "no tail handling" — was only ever true of
 the *compute* kernel, whose `num_tiles / get_num_threads()` truncated; the reader and writer already
@@ -871,6 +871,8 @@ R≠C≠W (both `C ≥ W` and `C < W`), not only at equal thread counts.
 **other threads' slots** — silent corruption, no hang. It works today only because everything is
 single-threaded. `stride_in_entries` is computed **per DFB** from that DFB's own endpoints (`dataflow_buffer.cpp:1140`), so
 `out`'s stride is `max(C,W)` — the guard must therefore be **`n > 1 ⇒ max(R,C) == 1 AND max(C,W) == 1`**.
+(Lifted on 2026-09-22 to a warning with that same condition; the tests above stride 1 now expect wrong
+output.)
 Naming only `max(R,C)` admits `R=1, C=1, W=2, n=8`, which packs tiles 1..7 into writer-thread-1's slots; that
 is F3 (sharded, the phase that wants `n=8`) crossed with any `W>1`. Alternatively pass a `STRIDE_TILES` CTA
 and index `i * STRIDE_TILES` — but that requires the **`out_of_order_output = true`** pack template
@@ -1342,7 +1344,7 @@ conflate them.
 | **1.0** | — | **Phase-1 slice + thread sweep — DONE 2026-08-27** | no-bcast tensor-tensor, TILE 32x32, bf16, FPU `add`, DRAM-interleaved, no activations, even divisibility. Go/no-go threshold cleared; `R=4,C=4,W=2` is the optimum. |
 | 1.1 | F1 | **Uneven tile counts** | First follow-on now that the criterion is cleared — every later milestone inherits the restriction otherwise. **Explicitly out of Milestone 0 and phase 1.** Mechanism settled: `KernelSpec` has **no per-thread runtime args**, so per-thread counts must be computed in-kernel from `get_my_thread_id()` (available on DM *and* TRISC). |
 | 1.2 | F2 | **Rest of FPU op set** (subtract, multiply) | Gate widening. `multiply` is fidelity-dependent — copy the compute config verbatim or the §6.1 oracle breaks. |
-| 1.3 | F3 | **Sharded / borrowed operands** | Zero NoC ⇒ isolates the compute levers. **Note:** 4-Tensix and `num_tiles_per_cycle > 1` are mutually exclusive (§4.3) — pick one per experiment, or implement `STRIDE_TILES` first. High model relevance (ResNet residual add). |
+| 1.3 | F3 | **Sharded / borrowed operands — DONE 2026-09-22** | Borrowed all-or-nothing on the native path. The gate admits any borrowed shape, and the factory always runs the tuned compute count, puts the 1-3 tiles that do not divide into three owned tail rings of one entry per compute thread (interim, until the DFB supports a capacity per tile counter: tt-metal#57623), and runs one reader and one writer thread (the DFB host rule for a ring that IS the shard; a shard smaller than C goes through the rings whole); a multi-thread DM publishes one bulk push per tile counter, never one `push_back(S)` as the single-counter WH/BH reader does; the borrowed writer does no credit work, as on WH/BH. Measured `1,4,1` = `4,4,2` = 46.50 cyc/tile at `C=4`, compute batching 3.98x at stride 1, and `1,4,1` at N=8 11.69 with the output wrong until #56194 (status, week of 09-22). Zero NoC ⇒ isolates the compute levers. **Note:** 4-Tensix and `num_tiles_per_cycle > 1` are mutually exclusive (§4.3) — pick one per experiment, or implement `STRIDE_TILES` first. High model relevance (ResNet residual add, once the gate admits its fused RELU). |
 | 1.4 | F4 | **Mixed layouts** | Falls out of F3; existing kernels already parameterize per operand. |
 | 1.5 | F5 | **fp32 + SFPU ops (divide)** | SFPU compute kernel, `enable_32_bit_dest`, `UnpackToDest` (free on Gen2, inert before here). int32 excluded pending the DFB-compute bug. **The §6.1 oracle expires here.** |
 | 1.6 | F7 | **Activations (lhs/rhs/post)** | Compute-side self-loop DFBs, credit-balanced by construction. **New cost:** since #52762 (our branch point) `binary_tiles_init` inside `process_tiles` does 2 × `llk_unpack_program_bfd` per tile, burning 2 of 16 unpack partition ids per tile (wraps every 8). Re-measure; do not carry phase-1 cycles/tile over. |
