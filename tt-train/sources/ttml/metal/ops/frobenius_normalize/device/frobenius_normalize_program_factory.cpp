@@ -193,40 +193,27 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
     // -------------------------------------------------------------------------
     // 5) Set per-core runtime args
     // -------------------------------------------------------------------------
-    uint32_t tiles_written = 0;
-
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        uint32_t gx = i / num_cores_y;
-        uint32_t gy = i % num_cores_y;
-        tt::tt_metal::CoreCoord logical_core{gx, gy};
-
-        uint32_t tiles_this_core = core_group_1.contains(logical_core) ? tiles_per_core_g1 : tiles_per_core_g2;
-
-        // Reader runtime args
-        auto reader_handle = (logical_core == origin_core) ? reader_origin : reader_kernel;
-        SetRuntimeArgs(
-            program,
-            reader_handle,
-            logical_core,
-            {input_buffer->address(),
-             tiles_this_core,
-             tiles_written,
-             reduction_sem_id,
-             static_cast<uint32_t>(i),  // core_index
-             bcast_sem_id});
-
-        // Writer runtime args
-        SetRuntimeArgs(
-            program, writer_kernel, logical_core, {output_buffer->address(), tiles_this_core, tiles_written});
-
-        // Compute runtime args
-        auto compute_handle = (logical_core == origin_core)
-                                  ? compute_origin
-                                  : (core_group_1.contains(logical_core) ? compute_g1 : compute_g2);
-        SetRuntimeArgs(program, compute_handle, logical_core, {std::bit_cast<uint32_t>(args.epsilon)});
-
-        tiles_written += tiles_this_core;
-    }
+    for_each_core_with_work(
+        num_cores,
+        num_cores_y,
+        core_group_1,
+        core_group_2,
+        tiles_per_core_g1,
+        tiles_per_core_g2,
+        [&](const CoreWork& work) {
+            const auto& [logical_core, core_index, tiles_this_core, tiles_written, in_group_1] = work;
+            auto reader_handle = (logical_core == origin_core) ? reader_origin : reader_kernel;
+            SetRuntimeArgs(
+                program,
+                reader_handle,
+                logical_core,
+                {input_buffer->address(), tiles_this_core, tiles_written, reduction_sem_id, core_index, bcast_sem_id});
+            SetRuntimeArgs(
+                program, writer_kernel, logical_core, {output_buffer->address(), tiles_this_core, tiles_written});
+            auto compute_handle =
+                (logical_core == origin_core) ? compute_origin : (in_group_1 ? compute_g1 : compute_g2);
+            SetRuntimeArgs(program, compute_handle, logical_core, {std::bit_cast<uint32_t>(args.epsilon)});
+        });
 
     // -------------------------------------------------------------------------
     // 7) Return cached program
@@ -266,8 +253,7 @@ void FrobeniusNormalizeProgramFactory::override_runtime_arguments(
     const uint32_t epsilon_bits = std::bit_cast<uint32_t>(operation_attributes.epsilon);
     const tt::tt_metal::CoreCoord origin_core{0, 0};
 
-    for (uint32_t i = 0; i < shared.num_cores; ++i) {
-        tt::tt_metal::CoreCoord core{i / shared.num_cores_y, i % shared.num_cores_y};
+    for_each_core(shared.num_cores, shared.num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
         auto& rt = (core == origin_core) ? reader_origin_rt : reader_rt;
         rt[core.x][core.y][kReaderInputAddrIdx] = input_buffer->address();
         writer_rt[core.x][core.y][kWriterOutputAddrIdx] = output_buffer->address();
@@ -275,7 +261,7 @@ void FrobeniusNormalizeProgramFactory::override_runtime_arguments(
         auto& compute_rt = (core == origin_core) ? compute_origin_rt
                                                  : (shared.core_group_1.contains(core) ? compute_g1_rt : compute_g2_rt);
         compute_rt[core.x][core.y][0] = epsilon_bits;
-    }
+    });
 }
 
 }  // namespace ttml::metal::ops::frobenius_normalize::device

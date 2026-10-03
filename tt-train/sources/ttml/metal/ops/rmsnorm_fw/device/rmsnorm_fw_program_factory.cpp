@@ -72,54 +72,6 @@ struct RMSNormForwardKernels {
     tt::tt_metal::KernelHandle compute_group_2;
 };
 
-/**
- * Set up the runtime arguments for the 4 relevant kernels (reader, writer, compute G1, compute G2)
- *        for each core in the grid.
- */
-void assign_per_core_runtime_args(
-    tt::tt_metal::Program& program,
-    const RMSNormForwardKernels& kernels,
-    const tt::tt_metal::Buffer* input_buffer,
-    const tt::tt_metal::Buffer* gamma_buffer,
-    const tt::tt_metal::Buffer* output_buffer,
-    const tt::tt_metal::Buffer* rms_output_buffer,
-    uint32_t num_cores,
-    uint32_t num_cores_y,
-    uint32_t num_rows_per_core_group_1,
-    uint32_t num_rows_per_core_group_2,
-    const tt::tt_metal::CoreRangeSet& core_group_1,
-    const tt::tt_metal::CoreRangeSet& core_group_2) {
-    for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
-        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-        // Determine how many rows this core will process
-        uint32_t num_rows_per_core = 0;
-        if (core_group_1.contains(core)) {
-            num_rows_per_core = num_rows_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_rows_per_core = num_rows_per_core_group_2;
-        } else {
-            TT_FATAL(false, "Core not in specified core ranges");
-        }
-
-        // Reader kernel: (input_addr, gamma_addr, number_of_rows, offset_in_rows)
-        SetRuntimeArgs(
-            program,
-            kernels.reader,
-            core,
-            {input_buffer->address(), gamma_buffer->address(), num_rows_per_core, num_rows_written});
-
-        // Writer kernel: (dst_addr, dst_rms_addr number_of_rows, offset_in_rows)
-        SetRuntimeArgs(
-            program,
-            kernels.writer,
-            core,
-            {output_buffer->address(), rms_output_buffer->address(), num_rows_per_core, num_rows_written});
-
-        num_rows_written += num_rows_per_core;
-    }
-}
-
 RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     // -------------------------------------------------------------------------
@@ -336,19 +288,25 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     // -------------------------------------------------------------------------
     // 5) Assign runtime args for each core
     // -------------------------------------------------------------------------
-    assign_per_core_runtime_args(
-        program,
-        kernels,
-        input_buffer,
-        gamma_buffer,
-        output_buffer,
-        rms_output_buffer,
+    for_each_core_with_work(
         num_cores,
         num_cores_y,
+        core_group_1,
+        core_group_2,
         num_rows_per_core_group_1,
         num_rows_per_core_group_2,
-        core_group_1,
-        core_group_2);
+        [&](const CoreWork& work) {
+            const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
+            // Reader kernel: (input_addr, gamma_addr, number_of_rows, offset_in_rows)
+            SetRuntimeArgs(
+                program, kernels.reader, core, {input_buffer->address(), gamma_buffer->address(), num_rows, start_row});
+            // Writer kernel: (dst_addr, dst_rms_addr, number_of_rows, offset_in_rows)
+            SetRuntimeArgs(
+                program,
+                kernels.writer,
+                core,
+                {output_buffer->address(), rms_output_buffer->address(), num_rows, start_row});
+        });
 
     // -------------------------------------------------------------------------
     // 6) Return the fully configured program & relevant shared variables
@@ -399,9 +357,7 @@ void RMSNormForwardProgramFactory::override_runtime_arguments(
     [[maybe_unused]] auto& group_2_runtime_args =
         core_group_2.ranges().empty() ? group_1_runtime_args : GetRuntimeArgs(program, rmsnorm_fw_group_2_kernel);
 
-    for (uint32_t i = 0; i < num_cores; i++) {
-        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
+    for_each_core(num_cores, num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
         // Update input buffers for the reader kernel
         {
             auto& runtime_args = reader_runtime_args[core.x][core.y];
@@ -414,7 +370,7 @@ void RMSNormForwardProgramFactory::override_runtime_arguments(
             runtime_args[kOutputBufferIdx] = output_buffer->address();
             runtime_args[kRMSOutputBufferIdx] = rms_output_buffer->address();
         }
-    }
+    });
 }
 
 }  // namespace ttml::metal::ops::rmsnorm_fw::device
