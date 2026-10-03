@@ -40,6 +40,7 @@ UPR = int(
     os.environ.get("DSV41_UPR", os.environ.get("DSV41_U", "4"))
 )  # users per mesh row per prefill iteration (GPT-OSS: upr); U // UPR iterations
 LAYERS = os.environ.get("DSV41_LAYERS", "0-39")
+SPARSE = os.environ.get("DSV41_PF_SPARSE") == "1"
 REPS = int(os.environ.get("DSV41_REPS", "2"))
 BASE = "/mnt/tt-data/ssinghal/dsv4-prefill-s128"  # state seed / gate cutoff source
 
@@ -109,10 +110,13 @@ def test_prefill_scenarios(mesh_device):
     pool = ThreadPoolExecutor(max_workers=2)
     futs = {}
     max_rope = max(256, MAX_S + 64)
-    submit = lambda L: futs.setdefault(L, pool.submit(load_layer, L, True, max_rope)) if L in layer_ids else None
+    submit = (
+        lambda L: futs.setdefault(L, pool.submit(load_layer, L, True, max_rope, SPARSE)) if L in layer_ids else None
+    )
     for L in layer_ids[:2]:
         submit(L)
     pls, built, groups, first_moe = [], [], {}, None
+    idx_w, sinks = {}, {}
     t0 = time.time()
     for L in layer_ids:
         ref = torch.load(
@@ -121,6 +125,9 @@ def test_prefill_scenarios(mesh_device):
         meta = {"state": {k: v[:B] for k, v in ref["state"].items()}, "S": 1, "gate_cutoff": ref["gate_cutoff"]}
         submit(L + 1), submit(L + 2)
         w = futs.pop(L).result()
+        if SPARSE and "indexer" in w:
+            idx_w[L] = w["indexer"]
+        sinks[L] = w["attn"]["attn_sink"]
         layer, attn = chain.build_layer(L, meta, w)
         del w, ref
         ttnn.copy(ttnn.zeros_like(attn.cache), attn.cache)  # decode state: the prefill must write it
@@ -150,6 +157,13 @@ def test_prefill_scenarios(mesh_device):
     dev_engram = {l: DSV41DeviceEngram(md, l, sh, mesh_config=chain.mesh_config, ccl=chain.ccl) for l in engram_ids}
     embedding = DSV41DeviceEmbedding(md, sh.get("embed.weight"), users_per_row=U)
     head = DSV41DeviceHead(md, sh.get("norm.weight").float(), sh.get("head.weight"), norm_eps=R.model_args().norm_eps)
+    if SPARSE:  # indexer top-512 + sparse_sdpa once more than 512 compressed entries are visible (tt/prefill_sparse.py)
+        from models.demos.blackhole.deepseek_v41_flash.tt.prefill_sparse import attach_prefill_sparse
+
+        max_chunk = max([sc["chunk"] for sc in SCEN] + [128])
+        attach_prefill_sparse(
+            {L: pl.pa for L, pl in pls}, idx_w, UPR, -(-MAX_S // 128) * 128, max_chunk, sinks, force=False, enable=True
+        )
     model = DSV41PrefillModel(md, pls, embedding, head, dev_engram, host_rows, users_per_row=UPR)
     for _, pl in pls:
         pl.pa.U = UPR
@@ -209,6 +223,15 @@ def test_prefill_scenarios(mesh_device):
             }
             fin = None
         prompt = toks["prefill_tokens"]
+        if (
+            prompt.shape[0] == 1 and B > 1
+        ):  # single-prompt dump: every user runs the same prompt, compared with the one reference
+            prompt = prompt.expand(B, -1).contiguous()
+            if fin is not None:
+                fin = dict(fin)
+                for k in ("prefill_logits", "prefill_argmax"):
+                    if k in fin:
+                        fin[k] = fin[k].expand(B, *fin[k].shape[1:]).contiguous()
         assert prompt.shape == (B, S), (prompt.shape, B, S)
         Sp = pad_len(S)
 

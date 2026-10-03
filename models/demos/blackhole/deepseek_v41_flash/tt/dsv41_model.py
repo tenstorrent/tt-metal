@@ -114,6 +114,8 @@ class Model:
             gc.collect()
             if i % 5 == 0 or i == len(self.layer_ids) - 1:
                 log(f"built layer {L} ({time.time() - t0:.0f}s)")
+        if os.environ.get("DSV41_PF_SPARSE") == "1":
+            self.enable_prefill_sparse(c_max=int(os.environ.get("DSV41_PF_CMAX", "2048")))
         engram_ids = [l for l in (1, 14) if l in self.layer_ids]
         self.engram_ids = engram_ids
         self.host_rows = (
@@ -164,6 +166,28 @@ class Model:
         return DSV41PagedCompressedAttention(
             *a, meta["ratio"], None, self.pool, slot, meta["kv_source"], source=self.sources[meta["kv_source"]], **kw
         )
+
+    def enable_prefill_sparse(self, c_max=2048, max_tokens=None, enable=True):
+        """Prefill indexer top-512 + sparse_sdpa for the compressed layers (tt/prefill_sparse.py): exact CSA selection for prompts with > 512 compressed
+        entries. Also by env DSV41_PF_SPARSE=1 at model build. ``c_max``: largest prefill chunk. enable=False detaches (dense prefill attention).
+        """
+        from models.demos.blackhole.deepseek_v41_flash.tt.prefill_sparse import attach_prefill_sparse
+
+        pas = {L: self.attns[L].prefill for L in self.layer_ids}
+        if not enable:
+            for pa in pas.values():
+                pa.sparse = None
+            return {}
+        sh = _Shards()
+        idx_w = {}
+        for L in self.layer_ids:
+            if L in R.model_args().index_source_layers and L < 40:
+                idx_w[L] = load_layer(L, with_moe=False, max_seq_len=8, with_indexer=True)["indexer"]
+        sinks = {L: sh.get(f"layers.{L}.attn.attn_sink").float() for L in self.layer_ids}
+        self.prefill_sparse = attach_prefill_sparse(
+            pas, idx_w, self.U, max_tokens or self.max_ctx, c_max, sinks, enable=True
+        )
+        return self.prefill_sparse
 
     def dense_limit(self):
         """Longest context (tokens) whose compressed attention is exact WITHOUT the indexer: every compressed entry is selected while there are <= 512 of them
