@@ -12,8 +12,19 @@ namespace ckernel::sfpu {
 
 inline void hardshrink_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <int ITERATIONS>
+void calculate_hardshrink_bf16();
+void init_hardshrink_bf16();
+
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_hardshrink(uint32_t param0) {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (param0 == 0x3f000000u) {
+            init_hardshrink_bf16();
+            calculate_hardshrink_bf16<ITERATIONS>();
+            return;
+        }
+    }
     // Hardshrink(x, λ) = x if |x| > λ, else 0
     // Single comparison using abs: setsgn(v, 0) clears sign bit
     // param0 contains lambda as FP32 bits. For BF16 inputs, the host pre-rounds
@@ -33,3 +44,5 @@ inline void calculate_hardshrink(uint32_t param0) {
 }
 
 }  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_hardshrink_bf16.h"

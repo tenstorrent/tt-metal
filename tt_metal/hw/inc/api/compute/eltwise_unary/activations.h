@@ -160,11 +160,24 @@ ALWI void softshrink_tile_init() { MATH(SFPU_UNARY_INIT(softshrink)); }
 */
 // clang-format on
 ALWI void hardshrink_tile(uint32_t idst, uint32_t param0) {
+    if constexpr (!DST_ACCUM_MODE) {
+        if (param0 == 0x3f000000u) {
+            MATH(SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                calculate_hardshrink,
+                (APPROX, 32, DST_ACCUM_MODE),
+                idst,
+                VectorMode::None,
+                param0));
+            return;
+        }
+    }
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_hardshrink,
-        (APPROX, 8 /* ITERATIONS */),
+        (APPROX, 8 /* ITERATIONS */, DST_ACCUM_MODE),
         idst,
         VectorMode::RC,
         param0));
