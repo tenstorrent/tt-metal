@@ -151,3 +151,24 @@ def fp32_attention_decode(tt_q, tt_k, tt_v, k_cache, v_cache, cache_pos, page_ta
     probs = ttnn.softmax(scores, dim=-1, numeric_stable=True, compute_kernel_config=cfg)
     out = ttnn.matmul(probs, V, compute_kernel_config=cfg)  # [1, nkv, groups, hd]
     return ttnn.reshape(out, (1, 1, heads, hd))
+
+
+def paged_fill_cache(cache, kv, page_table, **kwargs):
+    """ttnn.experimental.paged_fill_cache; an fp32 ``kv`` (switch on) is written as bf16 hi
+    into ``cache`` and, with ATTENTION_FP32, bf16 lo into its lo cache (cache is bf16)."""
+    if kv.dtype == ttnn.float32 and cache.dtype != ttnn.float32:
+        hi, lo = _split_hi_lo(kv)
+        ttnn.experimental.paged_fill_cache(cache, hi, page_table, **kwargs)
+        if ATTENTION_FP32:
+            ttnn.experimental.paged_fill_cache(_lo_cache_for(cache), lo, page_table, **kwargs)
+        return
+    ttnn.experimental.paged_fill_cache(cache, kv, page_table, **kwargs)
+
+
+def prefill_sdpa(q, k, v, *args, **kwargs):
+    """ttnn.transformer.scaled_dot_product_attention with bf16 Q/K/V when they are fp32
+    (switch on); the output comes back as fp32."""
+    if q.dtype == ttnn.float32:
+        q, k, v = (ttnn.typecast(t, ttnn.bfloat16) for t in (q, k, v))
+        return ttnn.typecast(ttnn.transformer.scaled_dot_product_attention(q, k, v, *args, **kwargs), ttnn.float32)
+    return ttnn.transformer.scaled_dot_product_attention(q, k, v, *args, **kwargs)
