@@ -11,11 +11,13 @@ Add each winner JSON to ``_BLOCKINGS`` keyed ``(4, 8, C_in, C_out, kernel, T, H-
 (output dims!), then re-run ~/ltx-25fps-validate.sh to confirm ~7 s.
 """
 
+import os
+
 import pytest
 
 import ttnn
 
-from ..wan2_2.bruteforce_conv3d_sweep import TRACE_REGION_SIZE, run_sweep
+from ..wan2_2.bruteforce_conv3d_sweep import TRACE_REGION_SIZE, HaloSpec, run_sweep
 
 # LTX-2.3 1080p 153f, BH Galaxy 4x8 (h=tensor_parallel factor, w=sequence_parallel factor).
 # T is post-temporal-pad; H/W are per-device conv INPUT dims = _BLOCKINGS output-dim key + (kH-1, kW-1).
@@ -91,4 +93,59 @@ def test_bruteforce_sweep_ltx_1080p_153f(
         max_t_block=8,
         # Never None: unconstrained, the search balloons past 500 combos with minutes-long compiles.
         hw_product=_hw_product(kernel, H, W),
+    )
+
+
+# LTX-2.5 conv VAE decode, 544x960 / 145f on a 2x4 submesh: each chip holds the same shard as 1088x1920 on
+# the production 4x8, so the winners key as (4, 8, ...). Timed in halo mode (LTX_VAE_HALO_ONLY, the default
+# path): the conv reads the unpadded shard plus the neighbor halo and masks the logical edge.
+# T/H/W are the padded per-device input dims (unpadded shard + 2), key is the _BLOCKINGS (T, H_out, W_out),
+# logical_hw the global logical size on the 2x4 (the shards overhang it, so the edge chips mask).
+_SWEEP_LAYERS_LTX25_544P_145F_HALO = [
+    # (name,   C_in, C_out,  T,   H,  W,  key,            logical_hw)
+    ("s2_res", 512, 512, 75, 38, 34, (75, 34, 30), (68, 120)),
+    ("s3_res", 256, 256, 147, 38, 34, (147, 34, 30), (68, 120)),
+    ("s4_res", 128, 128, 147, 74, 66, (147, 68, 60), (136, 240)),
+    ("s1_up", 512, 4096, 39, 20, 18, (39, 17, 15), (34, 60)),
+    ("s3_chg", 256, 512, 147, 38, 34, (147, 34, 30), (68, 120)),
+]
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": TRACE_REGION_SIZE}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "layer_name, C_in, C_out, T, H, W, key, logical_hw",
+    _SWEEP_LAYERS_LTX25_544P_145F_HALO,
+    ids=[l[0] for l in _SWEEP_LAYERS_LTX25_544P_145F_HALO],
+)
+def test_bruteforce_sweep_ltx25_544p_145f_halo(
+    mesh_device, device_params, layer_name, C_in, C_out, T, H, W, key, logical_hw
+):
+    # A bare 2x4 on the galaxy fails fabric router sync, so open the system mesh and sweep on a 2x4 submesh.
+    device = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
+    kernel = (3, 3, 3)
+    out_dir = os.environ.get("SWEEP_OUT_DIR", "sweep_results_ltx25_544p_145f_halo")
+    run_sweep(
+        device,
+        C_in,
+        C_out,
+        kernel,
+        T,
+        H,
+        W,
+        f"{out_dir}/{layer_name}_{C_in}x{C_out}.json",
+        padding=(0, 0, 0),
+        h_factor=4,
+        w_factor=8,
+        max_combos=int(os.environ.get("SWEEP_MAX_COMBOS", "300")),
+        max_t_block=8,
+        hw_product=(16, 32, 64),
+        halo=HaloSpec(2, 4, *logical_hw),
+        table_key=key,
+        max_seconds=float(os.environ.get("SWEEP_MAX_SECONDS", "720")),
+        near_table=True,
     )

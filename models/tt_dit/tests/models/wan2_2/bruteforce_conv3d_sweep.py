@@ -20,6 +20,8 @@ Run via pytest:
 """
 
 import csv
+import dataclasses
+import hashlib
 import json
 import math
 import os
@@ -31,6 +33,7 @@ import torch
 
 import ttnn
 from models.tt_dit.utils.conv3d import _BLOCKINGS, _DEFAULT_BLOCKINGS, aligned_channels
+from models.tt_dit.utils.tensor import typed_tensor_2dshard
 
 from ....utils.test import line_params
 
@@ -183,9 +186,10 @@ def build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=120, max_t_
 
     max_t_block: if set, caps T_block candidates at this value.
                  BH 2x4 480p: use 7 (T=9+ causes device hangs on large spatial).
-    hw_product:  if set, only test combos where H_block*W_block == hw_product.
+    hw_product:  if set, only test combos where H_block*W_block == hw_product (an int or a tuple of ints).
                  BH 2x4 480p: use 32 (h*w=16/64 trigger hangs; 32 consistently wins).
     """
+    hw_products = (hw_product,) if isinstance(hw_product, int) else hw_product
     padded_cin = aligned_channels(C_in)
     padded_cout = aligned_channels(C_out)
     kT = kernel_size[0]
@@ -237,7 +241,7 @@ def build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=120, max_t_
                 continue
             for t_blk in t_blocks:
                 for h, w in hw:
-                    if hw_product is not None and h * w != hw_product:
+                    if hw_products is not None and h * w not in hw_products:
                         continue
                     if estimate_l1_bytes(cin, cout, t_blk, h, w, kernel_size, C_in) > L1_BUDGET:
                         skipped_l1 += 1
@@ -272,9 +276,11 @@ def build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=120, max_t_
 def _invoke(args):
     """Run conv3d once and return the (undeallocated) output tensor.
 
-    args = (device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, stride, padding, ckc)
+    args = (device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, stride, padding, ckc[, conv_kwargs])
+    conv_kwargs overrides padding_mode and carries the halo inputs (see HaloSpec).
     """
-    _device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, stride, padding, ckc = args
+    _device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, stride, padding, ckc, *rest = args
+    conv_kwargs = {"padding_mode": "zeros", **(rest[0] if rest else {})}
     return ttnn.experimental.conv3d(
         input_tensor=tt_input,
         weight_tensor=tt_weight,
@@ -284,9 +290,9 @@ def _invoke(args):
         kernel_size=kernel_size,
         stride=stride,
         padding=padding,
-        padding_mode="zeros",
         dtype=ttnn.bfloat16,
         compute_kernel_config=ckc,
+        **conv_kwargs,
     )
 
 
@@ -326,6 +332,98 @@ def _trace_us(args, n_iters=TRACE_ITERS, executes=TRACE_EXECUTES):
 
 
 # ---------------------------------------------------------------------------
+# Halo mode: the production H/W-sharded VAE path (LTX_VAE_HALO_ONLY)
+#
+# The conv reads the unpadded shard, takes its H/W border from a compact halo
+# buffer filled by neighbor_pad_halo, clamps T in-kernel (replicate) and masks
+# rows/columns past the logical size on the edge shards. Its reader does more
+# work than the pre-padded zeros path, so blockings must be timed this way.
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True)
+class HaloSpec:
+    """Mesh split and global logical H/W for a halo-mode sweep (0 = no mask on that axis)."""
+
+    h_factor: int
+    w_factor: int
+    logical_h: int = 0
+    logical_w: int = 0
+
+
+def halo_sticks(T, H, W, pad_h, pad_w):
+    """Stick count of the [Htop|Hbot|Wleft|Wright] halo buffer for an unpadded T x H x W shard.
+
+    Matches CCLManager.get_np_halo_buffer: W sections span H + 2*pad_h rows to carry the corners.
+    """
+    return T * (2 * pad_h * W + 2 * pad_w * (H + 2 * pad_h))
+
+
+def halo_masks(spec, H, W):
+    """(logical_h_mask, logical_w_mask) as vae_ltx passes them: set only when the shards overhang the logical size."""
+    h_mask = spec.logical_h if spec.logical_h and H * spec.h_factor > spec.logical_h else 0
+    w_mask = spec.logical_w if spec.logical_w and W * spec.w_factor > spec.logical_w else 0
+    return h_mask, w_mask
+
+
+def _halo_conv_inputs(device, spec, T, H, W, padded_cin, kernel_size, mesh_mapper):
+    """Unpadded input, conv padding and conv kwargs for a halo-mode conv on padded-input dims T x H x W."""
+    kT, kH, kW = kernel_size
+    pad = ((kT - 1) // 2, (kH - 1) // 2, (kW - 1) // 2)
+    T_u, H_u, W_u = T - 2 * pad[0], H - 2 * pad[1], W - 2 * pad[2]
+
+    def dram(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16):
+        return ttnn.from_torch(
+            x, device=device, dtype=dtype, layout=layout, memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=mesh_mapper
+        )
+
+    tt_input = dram(torch.randn(1, T_u, H_u, W_u, padded_cin, dtype=torch.float32))
+    halo_buffer = dram(torch.randn(halo_sticks(T_u, H_u, W_u, pad[1], pad[2]), padded_cin, dtype=torch.float32))
+    h_mask, w_mask = halo_masks(spec, H_u, W_u)
+    pad_offset = None
+    if h_mask or w_mask:
+        assert tuple(device.shape) == (spec.h_factor, spec.w_factor), "pad offsets need the HaloSpec mesh shape"
+        offsets = torch.zeros(spec.h_factor, spec.w_factor, 2, dtype=torch.int32)
+        offsets[:, :, 0] = torch.arange(spec.h_factor)[:, None] * H_u
+        offsets[:, :, 1] = torch.arange(spec.w_factor)[None, :] * W_u
+        pad_offset = typed_tensor_2dshard(
+            offsets, device, shard_mapping={0: 0, 1: 1}, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32
+        )
+    conv_kwargs = dict(
+        padding_mode="replicate",
+        halo_buffer=halo_buffer,
+        logical_h_mask=h_mask,
+        logical_w_mask=w_mask,
+        pad_offset_tensor=pad_offset,
+    )
+    return tt_input, pad, conv_kwargs
+
+
+def _edge_outputs(args):
+    """One conv run, as torch tensors of the first and last device (the last one is the masked edge shard)."""
+    o = _invoke(args)
+    try:
+        shards = ttnn.get_device_tensors(o)
+        return [ttnn.to_torch(shards[0]), ttnn.to_torch(shards[-1])]
+    finally:
+        ttnn.deallocate(o)
+
+
+def _compare_outputs(ref, new):
+    """md5 equality, max abs diff and PCC of `new` vs `ref` (lists of per-device tensors)."""
+    md5 = lambda ts: hashlib.md5(b"".join(t.contiguous().view(torch.int16).numpy().tobytes() for t in ts)).hexdigest()
+    r = torch.cat([t.flatten().float() for t in ref])
+    n = torch.cat([t.flatten().float() for t in new])
+    return {
+        "md5_ref": md5(ref),
+        "md5_new": md5(new),
+        "identical": md5(ref) == md5(new),
+        "max_abs_diff": (r - n).abs().max().item(),
+        "pcc": torch.corrcoef(torch.stack([r, n]))[0, 1].item(),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Main sweep
 #
 # For each blocking combo the loop does:
@@ -354,7 +452,21 @@ def run_sweep(
     max_t_block=None,
     hw_product=None,
     trace_iters=TRACE_ITERS,
+    halo=None,
+    table_key=None,
+    max_seconds=None,
+    near_table=False,
 ):
+    """Sweep conv3d blockings for one shape; T/H/W are the per-device padded input dims.
+
+    halo:        a HaloSpec to time the halo-only production path instead of a pre-padded zeros input.
+                 The table blocking is then also timed on the pre-padded input (table_padded_us), and the
+                 best blocking's output is compared against the table blocking's (output_check).
+    table_key:   (T, H_out, W_out) of the _BLOCKINGS key when it differs from the conv dims
+                 (vae_ltx keys on the logical per-device size, the shards can be larger).
+    max_seconds: stop starting new combos after this long.
+    near_table:  try the blockings closest to the table blocking (fewest differing fields) first.
+    """
     padded_cin = aligned_channels(C_in)
     _num_cores = grid_size.x * grid_size.y if grid_size else 120
     if grid_size is None:
@@ -363,6 +475,14 @@ def run_sweep(
     combos = build_all_blockings(
         C_in, C_out, kernel_size, H, W, T, num_cores=_num_cores, max_t_block=max_t_block, hw_product=hw_product
     )
+    kT, kH, kW = kernel_size
+    T_key, H_out_key, W_out_key = table_key or (T, H - (kH - 1), W - (kW - 1))
+    table_blk = _BLOCKINGS.get(
+        (h_factor, w_factor, C_in, C_out, kernel_size, T_key, H_out_key, W_out_key)
+    ) or _DEFAULT_BLOCKINGS.get((C_in, C_out, kernel_size))
+    if near_table and table_blk is not None:
+        # Stable sort: nearest neighbours of the table blocking first, build_all_blockings order within a distance.
+        combos.sort(key=lambda c: sum(a != b for a, b in zip(c, table_blk)))
     if max_combos and len(combos) > max_combos:
         print(f"Capping combos from {len(combos)} to {max_combos}")
         combos = combos[:max_combos]
@@ -382,14 +502,21 @@ def run_sweep(
     mesh_mapper = ttnn.ReplicateTensorToMesh(device) if is_mesh else None
 
     torch.manual_seed(42)
-    tt_input = ttnn.from_torch(
-        torch.randn(1, T, H, W, padded_cin, dtype=torch.float32),
-        device=device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=mesh_mapper,
-    )
+    conv_kwargs = {}
+    if halo is not None:
+        tt_input, padding, conv_kwargs = _halo_conv_inputs(device, halo, T, H, W, padded_cin, kernel_size, mesh_mapper)
+        print(
+            f"halo mode: input {tuple(tt_input.shape)} padding={padding} masks=(h={conv_kwargs['logical_h_mask']}, w={conv_kwargs['logical_w_mask']})"
+        )
+    else:
+        tt_input = ttnn.from_torch(
+            torch.randn(1, T, H, W, padded_cin, dtype=torch.float32),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
     w = torch.randn(C_out, padded_cin, *kernel_size, dtype=torch.float32)
     tt_bias = ttnn.from_torch(
         torch.randn(1, C_out, dtype=torch.float32),
@@ -436,17 +563,25 @@ def run_sweep(
     best_us = float("inf")
     t1_baseline: dict = {}  # (cin, cout, h, w) -> best T=1 time
 
-    kT, kH, kW = kernel_size
-    H_out_key = H - (kH - 1)
-    W_out_key = W - (kW - 1)
-    table_blk = _BLOCKINGS.get(
-        (h_factor, w_factor, C_in, C_out, kernel_size, T, H_out_key, W_out_key)
-    ) or _DEFAULT_BLOCKINGS.get((C_in, C_out, kernel_size))
     table_us = None  # HiFi2 time of the original (table) blocking — the per-shape seed
+    table_padded_us = None
+    tbl_args = None
     if table_blk is not None:
         cin, cout, t_blk, h_blk, w_blk = table_blk
         cfg_tbl = make_cfg(cin, cout, t_blk, h_blk, w_blk)
-        tbl_args = (device, tt_input, get_weight(cin), tt_bias, cfg_tbl, C_out, kernel_size, stride, padding, ckc)
+        tbl_args = (
+            device,
+            tt_input,
+            get_weight(cin),
+            tt_bias,
+            cfg_tbl,
+            C_out,
+            kernel_size,
+            stride,
+            padding,
+            ckc,
+            conv_kwargs,
+        )
         try:
             tbl_us = _trace_us(tbl_args, trace_iters)
             table_us = tbl_us
@@ -456,6 +591,36 @@ def run_sweep(
             print(f"Table blocking ({cin},{cout},{t_blk},{h_blk},{w_blk}) = {tbl_us:.0f}us (seeding best)")
         except Exception as e:
             print(f"Table blocking failed: {e}")
+        if halo is not None:
+            padded_input = ttnn.from_torch(
+                torch.randn(1, T, H, W, padded_cin, dtype=torch.float32),
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
+            try:
+                table_padded_us = _trace_us(
+                    (
+                        device,
+                        padded_input,
+                        get_weight(cin),
+                        tt_bias,
+                        cfg_tbl,
+                        C_out,
+                        kernel_size,
+                        stride,
+                        (0, 0, 0),
+                        ckc,
+                    ),
+                    trace_iters,
+                )
+                print(f"Table blocking on pre-padded zeros input = {table_padded_us:.0f}us")
+            except Exception as e:
+                print(f"Table blocking (pre-padded) failed: {e}")
+            finally:
+                ttnn.deallocate(padded_input)
 
     # -- Sweep --
     results = []
@@ -466,10 +631,13 @@ def run_sweep(
     PROBE_THRESHOLD = 1.5
 
     for i, (cin, cout, t_blk, h_blk, w_blk) in enumerate(combos):
+        if max_seconds is not None and time.time() - t_start > max_seconds:
+            print(f"Time budget {max_seconds}s reached after {i} of {len(combos)} combos", flush=True)
+            break
         try:
             tt_weight = get_weight(cin)
             cfg = make_cfg(cin, cout, t_blk, h_blk, w_blk)
-            args = (device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, stride, padding, ckc)
+            args = (device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, stride, padding, ckc, conv_kwargs)
 
             # Skip T>1 if the same spatial with T=1 was already way off best.
             if t_blk > 1 and best_us < float("inf"):
@@ -513,6 +681,25 @@ def run_sweep(
             print(f"  FAIL ({cin},{cout},{t_blk},{h_blk},{w_blk}): {e}", flush=True)
             results.append({"blocking": [cin, cout, t_blk, h_blk, w_blk], "us": None, "status": "fail"})
 
+    output_check = None
+    if halo is not None and best_blk is not None and tbl_args is not None:
+        cin, cout, t_blk, h_blk, w_blk = best_blk
+        best_args = (
+            device,
+            tt_input,
+            get_weight(cin),
+            tt_bias,
+            make_cfg(cin, cout, t_blk, h_blk, w_blk),
+            C_out,
+            kernel_size,
+            stride,
+            padding,
+            ckc,
+            conv_kwargs,
+        )
+        output_check = _compare_outputs(_edge_outputs(tbl_args), _edge_outputs(best_args))
+        print(f"Output check best vs table: {output_check}")
+
     # -- Report --
     elapsed = time.time() - t_start
     print(f"\nDone in {elapsed:.0f}s ({elapsed/60:.1f} min). {ok_count} ok, {fail_count} failed.")
@@ -541,6 +728,10 @@ def run_sweep(
                 "elapsed_s": elapsed,
                 "table_blocking": list(table_blk) if table_blk else None,
                 "table_us": table_us,
+                "halo": dataclasses.asdict(halo) if halo else None,
+                "table_key": [T_key, H_out_key, W_out_key],
+                "table_padded_us": table_padded_us,
+                "output_check": output_check,
                 "best_blocking": list(best_blk) if best_blk else None,
                 "best_us": best_us if best_us < float("inf") else None,
                 "top_20": ok_results[:20],
