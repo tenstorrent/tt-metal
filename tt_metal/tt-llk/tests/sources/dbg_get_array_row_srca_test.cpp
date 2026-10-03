@@ -18,6 +18,12 @@
 // SrcA is never unpacked into, so the row staged in step 2 is whatever SrcA happens to hold.
 // That is deliberate: the test asserts only that dest survives the borrow, which is the
 // contract the helper breaks when the two halves share a register.
+//
+// Step 2 is bracketed by dbg_thread_halt / dbg_thread_unhalt, as every in-tree caller does
+// (dbg_halt / dbg_unhalt, the DPRINT dest dump). The debug array read leaves the packer needing
+// the soft reset MATH's unhalt performs; without it the core is left wedged and the NEXT test
+// scheduled on it hangs in its boot-time ZEROACC -- a hang that lands on whatever test follows,
+// not on this one.
 
 #include <cstdint>
 
@@ -34,7 +40,8 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-    // idle
+    // Unpack's side of the debug rendezvous: idle until MATH's unhalt releases it.
+    ckernel::dbg_thread_halt<ckernel::UnpackThreadId>();
 }
 
 #endif
@@ -56,7 +63,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // The call under test. Its return data is not what is being checked -- the dest tile is.
     std::uint32_t srca_row[8] = {0};
+    dbg_thread_halt<MathThreadId>();
     dbg_get_array_row(dbg_array_id::SRCA, 0 /* row_addr */, srca_row);
+    dbg_thread_unhalt<MathThreadId>();
 
     dbg_copy_dest_tile<DbgDestTileOp::Read, MathThreadId>(l1_fmt, TILE_IDX, reinterpret_cast<void*>(params.buffer_Res[0]));
 }
