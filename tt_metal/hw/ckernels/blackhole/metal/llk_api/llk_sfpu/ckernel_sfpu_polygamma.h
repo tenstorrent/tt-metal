@@ -37,13 +37,14 @@ namespace ckernel::sfpu {
  *   n_packed:     order n (as float bits)
  *   scale_packed: precomputed (-1)^(n+1) * n! (as float bits)
  */
+bool bf16_dest_polygamma();
 template <int ITERATIONS>
 void calculate_polygamma_bf16();
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_packed) {
     if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
-        if (n_packed == 0x3f800000u && scale_packed == 0x3f800000u) {
+        if (bf16_dest_polygamma() && n_packed == 0x3f800000u && scale_packed == 0x3f800000u) {
             calculate_polygamma_bf16<ITERATIONS>();
             return;
         }
