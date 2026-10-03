@@ -201,6 +201,8 @@ class TransformerBlock(Module):
         spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
         prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
         skip_time_embed_activation_fn: bool = False,
+        spatial_time: ttnn.Tensor | None = None,
+        prompt_time: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
         """Run the model forward.
 
@@ -210,17 +212,22 @@ class TransformerBlock(Module):
             time_embed: Tensor with shape [batch_size, 1, query_dim].
             spatial_rope: Tuple of two tensors with shape [spatial_sequence_length / sp_factor, head_dim].
             prompt_rope: Tuple of two tensors with shape [prompt_sequence_length, head_dim] (sequence is not sharded!).
+            spatial_time, prompt_time: Optional precomputed outputs of ``norm1_linear`` /
+                ``norm1_context_linear`` (in their TP-sharded chunk layout). They depend only on the
+                timestep, so callers can compute them ahead of time; ``time_embed`` is then unused.
         """
         assert len(spatial.shape) == 3
         assert len(prompt.shape) == 3
 
         tp_axis = self.parallel_config.tensor_parallel.mesh_axis
 
-        if not skip_time_embed_activation_fn:
-            time_embed = ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        spatial_time = self.norm1_linear(time_embed)
-        prompt_time = self.norm1_context_linear(time_embed)
+        if spatial_time is None or prompt_time is None:
+            if not skip_time_embed_activation_fn:
+                time_embed = ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if spatial_time is None:
+                spatial_time = self.norm1_linear(time_embed)
+            if prompt_time is None:
+                prompt_time = self.norm1_context_linear(time_embed)
 
         (
             spatial_shift_attn,

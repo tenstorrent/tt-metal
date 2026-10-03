@@ -129,31 +129,38 @@ class _VisionFeatureCache:
 class _DenoiseBranch:
     """One CFG branch (cond or uncond) of the traced transformer.
 
-    ``launch`` writes the latents + timestep and enqueues the traced forward without blocking, so
-    branches on different submeshes execute concurrently; ``collect`` reads the result back.
+    ``launch`` writes the latents and this step's timestep modulation, then enqueues the traced
+    forward without blocking, so branches on different submeshes execute concurrently; ``collect``
+    reads the result back.
 
-    All trace inputs live in persistent device buffers that are written in place (host -> device)
-    and handed to the Tracer as-is, so it never copies them. A device tensor allocated after a trace
-    is captured can be overwritten when that trace replays, so with two traces on one mesh
-    (sequential CFG) every branch's buffers must be allocated before the first capture: callers run
+    All trace inputs (and the per-call modulation table they are refreshed from) live in persistent
+    device buffers that are written in place and handed to the Tracer as-is, so it never copies them.
+    A device tensor allocated after a trace is captured can be overwritten when that trace replays,
+    so with two traces on one mesh (sequential CFG) every branch's buffers must be allocated before
+    the first capture: callers run
     ``prepare`` on all branches before the first ``launch``, and on a signature change
     (``needs_reset``) ``reset`` all branches first.
     """
 
-    def __init__(self, *, tt_model: QwenImageTransformer, device: ttnn.MeshDevice, sp_axis: int, trace: bool) -> None:
+    def __init__(
+        self, *, tt_model: QwenImageTransformer, device: ttnn.MeshDevice, sp_axis: int, tp_axis: int, trace: bool
+    ) -> None:
         self._tt = tt_model
         self._device = device
         self._sp_axis = sp_axis
+        self._tp_axis = tp_axis
         self._trace = trace
         self._tracer: Tracer | None = None
         self._sig: tuple | None = None
         self._inputs: dict | None = None
+        self._mod_table: ttnn.Tensor | None = None
+        self._mod_key: tuple | None = None
         self._out: ttnn.Tensor | None = None
         self._pending: tuple[list[ttnn.Tensor], int] | None = None
 
     @staticmethod
-    def signature(*, prompt: torch.Tensor, img_shapes: list, combined_seq: int) -> tuple:
-        return (combined_seq, prompt.shape[1], repr(img_shapes))
+    def signature(*, prompt: torch.Tensor, img_shapes: list, combined_seq: int, num_steps: int) -> tuple:
+        return (combined_seq, prompt.shape[1], repr(img_shapes), num_steps)
 
     def needs_reset(self, sig: tuple) -> bool:
         return self._sig is not None and sig != self._sig
@@ -164,12 +171,25 @@ class _DenoiseBranch:
         self._tracer = None
         self._sig = None
         self._inputs = None
+        self._mod_table = None
+        self._mod_key = None
 
     def prepare(
-        self, *, pos_embed: object, prompt: torch.Tensor, img_shapes: list, combined_seq: int, in_channels: int
+        self,
+        *,
+        pos_embed: object,
+        prompt: torch.Tensor,
+        img_shapes: list,
+        combined_seq: int,
+        in_channels: int,
+        timesteps: torch.Tensor,
     ) -> None:
-        """Write the step-invariant inputs (prompt, RoPE) and allocate the per-step input buffers."""
-        sig = self.signature(prompt=prompt, img_shapes=img_shapes, combined_seq=combined_seq)
+        """Write the step-invariant inputs (prompt, RoPE, modulation table); allocate per-step buffers.
+
+        The timestep-only modulation of every step (``compute_modulation``) is computed in one
+        batched pass into a persistent device table; ``launch`` copies the step's row on device.
+        """
+        sig = self.signature(prompt=prompt, img_shapes=img_shapes, combined_seq=combined_seq, num_steps=len(timesteps))
         assert not self.needs_reset(sig), "reset() all branches before preparing a new signature"
         sp = self._sp_axis
         spatial_rope, prompt_rope = pos_embed.forward(img_shapes, [prompt.shape[1]], "cpu")
@@ -188,34 +208,50 @@ class _DenoiseBranch:
             self._sig = sig
             per_step = {
                 "spatial": self.convert_hidden_states(torch.zeros(1, combined_seq, in_channels)),
-                "timestep": self._host(torch.zeros(1, 1), dtype=ttnn.float32),
             }
+            width = self._tt.modulation_width
+            self._mod_table = self._zeros([1, len(timesteps), width])
+            self._mod_key = None
             self._inputs = {
                 **_tree_to_device({**host, **per_step}, self._device),
+                "modulation": self._zeros([1, 1, width]),
                 "spatial_sequence_length": combined_seq,
                 "prompt_sequence_length": prompt.shape[1],
             }
         else:
             _tree_write(host, self._inputs)
 
+        key = tuple(timesteps.tolist())
+        if key != self._mod_key:
+            table = self._tt.compute_modulation(
+                tensor.from_torch(timesteps.reshape(-1, 1), dtype=ttnn.float32, device=self._device)
+            )
+            ttnn.copy(table, self._mod_table)
+            ttnn.deallocate(table)
+            self._mod_key = key
+
+    def _zeros(self, shape: list[int]) -> ttnn.Tensor:
+        return ttnn.zeros(shape, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self._device)
+
     def _host(self, x: torch.Tensor, *, mesh_axes: list | None = None, dtype: ttnn.DataType = ttnn.bfloat16):
         return tensor.from_torch(
             x.to(torch.float32), device=self._device, mesh_axes=mesh_axes, dtype=dtype, on_host=True
         )
 
-    def launch(self, *, hidden_states: torch.Tensor, timestep: torch.Tensor) -> None:
-        """Write this step's latents + timestep and enqueue the forward (non-blocking when traced)."""
+    def launch(self, *, hidden_states: torch.Tensor, step: int) -> None:
+        """Write step ``step``'s latents + modulation row and enqueue the forward (non-blocking when traced)."""
         assert self._inputs is not None, "prepare() first"
         ttnn.copy_host_to_device_tensor(self.convert_hidden_states(hidden_states), self._inputs["spatial"])
-        ttnn.copy_host_to_device_tensor(
-            self._host(timestep.reshape(1, 1), dtype=ttnn.float32), self._inputs["timestep"]
-        )
+        # Device-to-device; the sliced temporary is consumed before the trace replays.
+        ttnn.copy(self._mod_table[:, step : step + 1, :], self._inputs["modulation"])
 
         if not self._trace:
             self._out = self._tt.forward(**self._inputs)
             return
         if self._tracer is None:
-            self._tracer = Tracer(self._tt.forward, device=self._device, prep_run=True)
+            # The forward never writes its inputs in place, so the compile run can use them directly
+            # instead of clones (the tile-padded modulation row alone is tens of MB).
+            self._tracer = Tracer(self._tt.forward, device=self._device, prep_run=True, clone_prep_inputs=False)
         self._out = self._tracer(**self._inputs, traced=True, tracer_blocking_execution=False)
 
     def convert_hidden_states(self, hidden_states: torch.Tensor) -> ttnn.Tensor:
@@ -366,7 +402,7 @@ class QwenImageEditPipeline:
         models = tt_models if self._cfg_parallel else tt_models * 2
         devices = self._submeshes if self._cfg_parallel else (device, device)
         self._branches = [
-            _DenoiseBranch(tt_model=m, device=d, sp_axis=sp.mesh_axis, trace=trace)
+            _DenoiseBranch(tt_model=m, device=d, sp_axis=sp.mesh_axis, tp_axis=tp.mesh_axis, trace=trace)
             for m, d in zip(models, devices, strict=True)
         ]
         self.forward_times: list[float] = []  # one entry per denoise step
@@ -513,8 +549,15 @@ class QwenImageEditPipeline:
         contexts = [prompt_embeds, negative_prompt_embeds] if do_true_cfg else [prompt_embeds]
         # All branches' trace inputs must be (re)allocated before any trace is captured, so a shape
         # change on either branch resets both (see _DenoiseBranch).
+        # Same rounding as the reference loop: timestep cast to the latents dtype, then / 1000; the TT
+        # time embedding takes the raw (x1000) scale.
+        tt_timesteps = (timesteps.to(latents.dtype) / 1000).to(torch.float32) * 1000.0
+
         sigs = [
-            _DenoiseBranch.signature(prompt=ctx, img_shapes=img_shapes, combined_seq=combined_seq) for ctx in contexts
+            _DenoiseBranch.signature(
+                prompt=ctx, img_shapes=img_shapes, combined_seq=combined_seq, num_steps=len(tt_timesteps)
+            )
+            for ctx in contexts
         ]
         if any(b.needs_reset(sig) for b, sig in zip(branches, sigs, strict=False)):
             for branch in self._branches:
@@ -526,19 +569,17 @@ class QwenImageEditPipeline:
                 img_shapes=img_shapes,
                 combined_seq=combined_seq,
                 in_channels=self._transformer_config.in_channels,
+                timesteps=tt_timesteps,
             )
 
         t = time.time()
         n_lat = latents.shape[1]
-        for step_t in timesteps:
+        for i, step_t in enumerate(timesteps):
             latent_model_input = torch.cat([latents, image_latents], dim=1)
-            # Same rounding as the reference loop: timestep cast to the latents dtype, then / 1000;
-            # the TT time embedding takes the raw (x1000) scale.
-            timestep = (step_t.expand(1).to(latents.dtype) / 1000).to(torch.float32) * 1000.0
 
             t0 = time.time()
             for branch in branches:
-                branch.launch(hidden_states=latent_model_input, timestep=timestep)
+                branch.launch(hidden_states=latent_model_input, step=i)
             for branch in branches:
                 branch.start_collect(n_lat)
             preds = [branch.collect().to(latents.dtype) for branch in branches]

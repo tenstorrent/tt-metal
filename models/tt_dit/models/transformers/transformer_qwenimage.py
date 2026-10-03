@@ -134,16 +134,68 @@ class QwenImageTransformer(Module):
     # We do not shard the last dimension of spatial, because its dimension is less than the tile
     # size for a device count of four or more. This requires padding, which is not currently
     # supported by `reduce_scatter_minimal_async`.
+    def compute_modulation(self, timesteps: ttnn.Tensor) -> ttnn.Tensor:
+        """Precompute every timestep-only modulation for a batch of timesteps in one pass.
+
+        The per-block ``img_mod``/``txt_mod`` linears and the final ``norm_out`` linear depend only
+        on the timestep (~1/3 of the parameters, run at M=1 every forward). Evaluating them for all
+        steps of a schedule at once costs about as much as one forward's worth.
+
+        Args:
+            timesteps: Tensor with shape [num_steps, 1] (same scale as ``forward``'s ``timestep``).
+
+        Returns:
+            Tensor with shape [1, num_steps, modulation_width] per device: for each block the
+            TP-local ``norm1_linear`` then ``norm1_context_linear`` outputs, then the replicated
+            ``time_embed_out`` output. Pass row ``i`` (shape [1, 1, modulation_width]) as
+            ``forward(modulation=...)``.
+        """
+        time_embed = self.time_text_embed(timestep=timesteps)
+        time_embed = ttnn.silu(time_embed)
+        time_embed = time_embed.reshape([1, time_embed.shape[-2], time_embed.shape[-1]])
+
+        parts = []
+        for block in self.transformer_blocks:
+            parts.append(block.norm1_linear(time_embed))
+            parts.append(block.norm1_context_linear(time_embed))
+        parts.append(self.time_embed_out(time_embed))
+        return ttnn.concat(parts, dim=-1)
+
+    @property
+    def modulation_width(self) -> int:
+        """Per-device width of a ``compute_modulation`` row."""
+        width = sum(
+            linear.out_features // linear._mesh_axis_size  # noqa: SLF001
+            for block in self.transformer_blocks
+            for linear in (block.norm1_linear, block.norm1_context_linear)
+        )
+        return width + self.time_embed_out.out_features
+
+    def _modulation_slices(self, modulation: ttnn.Tensor) -> tuple[list[tuple[ttnn.Tensor, ttnn.Tensor]], ttnn.Tensor]:
+        offset = 0
+        per_block = []
+        for block in self.transformer_blocks:
+            widths = []
+            for linear in (block.norm1_linear, block.norm1_context_linear):
+                width = linear.out_features // linear._mesh_axis_size  # noqa: SLF001
+                widths.append(modulation[:, :, offset : offset + width])
+                offset += width
+            per_block.append(tuple(widths))
+        out_width = self.time_embed_out.out_features
+        assert modulation.shape[-1] == self.modulation_width, "modulation layout does not match this model"
+        return per_block, modulation[:, :, offset : offset + out_width]
+
     def forward(
         self,
         *,
         spatial: ttnn.Tensor,
         prompt: ttnn.Tensor,
-        timestep: ttnn.Tensor,
+        timestep: ttnn.Tensor | None = None,
         spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor],
         prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor],
         spatial_sequence_length: int,
         prompt_sequence_length: int,
+        modulation: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Run the model forward.
 
@@ -154,17 +206,28 @@ class QwenImageTransformer(Module):
             timestep: Tensor with shape [batch_size, 1].
             spatial_rope: Tuple of two tensors with shape [spatial_sequence_length / sp_factor, head_dim].
             prompt_rope: Tuple of two tensors with shape [prompt_sequence_length, head_dim] (sequence is not sharded!).
+            modulation: Optional row of ``compute_modulation`` for this step, shape [1, 1, width];
+                replaces ``timestep`` (batch size 1 only).
         """
-        time_embed = self.time_text_embed(timestep=timestep)
-        ttnn.silu(time_embed, output_tensor=time_embed)
-        time_embed = time_embed.reshape([time_embed.shape[-2], 1, time_embed.shape[-1]])
+        if modulation is not None:
+            assert timestep is None, "pass either timestep or modulation"
+            block_modulation, spatial_time = self._modulation_slices(modulation)
+            time_embed = None
+        else:
+            time_embed = self.time_text_embed(timestep=timestep)
+            ttnn.silu(time_embed, output_tensor=time_embed)
+            time_embed = time_embed.reshape([time_embed.shape[-2], 1, time_embed.shape[-1]])
+            block_modulation = [(None, None)] * len(self.transformer_blocks)
+            spatial_time = None
 
         spatial = self.img_in(spatial)
 
         prompt = self.txt_norm(prompt)
         prompt = self.txt_in(prompt)
 
-        for i, block in enumerate(self.transformer_blocks, start=1):
+        for i, (block, (block_spatial_time, block_prompt_time)) in enumerate(
+            zip(self.transformer_blocks, block_modulation, strict=True), start=1
+        ):
             spatial, prompt = block.forward(
                 spatial=spatial,
                 prompt=prompt,
@@ -173,6 +236,8 @@ class QwenImageTransformer(Module):
                 prompt_rope=prompt_rope,
                 spatial_sequence_length=spatial_sequence_length,
                 skip_time_embed_activation_fn=True,
+                spatial_time=block_spatial_time,
+                prompt_time=block_prompt_time,
             )
 
             if i % 6 == 0:
@@ -181,7 +246,8 @@ class QwenImageTransformer(Module):
         # TODO: remove unsqueeze/squeeze when DistributedLayerNorm allows it
         spatial = ttnn.squeeze(self.norm_out(ttnn.unsqueeze(spatial, 0)), 0)
 
-        spatial_time = self.time_embed_out(time_embed)
+        if spatial_time is None:
+            spatial_time = self.time_embed_out(time_embed)
         [scale, shift] = _chunk_time3d(spatial_time, 2)
 
         spatial = self._ccl_manager.all_gather_persistent_buffer(

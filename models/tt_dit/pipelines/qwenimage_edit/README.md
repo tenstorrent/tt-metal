@@ -79,16 +79,18 @@ Measured on WH Galaxy, 1024^2, 50 steps, full device VAE:
 
 | Metric | CFG-parallel (first call / warm) | Sequential TP=8 |
 | --- | --- | --- |
-| Per step (cond + uncond) | 725 ms | 938 ms |
-| Denoise | 41.3 s / 36.3 s | 55.9 s |
-| VL encode (host) | 12.4 s / 8.5 s | 12.0 s |
-| Wall (end to end) | 55.2 s / 45.7 s | 70.2 s |
+| Per step (cond + uncond) | 676 ms | 912 ms |
+| Denoise | 40.4 s / 33.8 s | 54.5 s |
+| VL encode (host) | 12.2 s / 9.0 s | 12.5 s |
+| Wall (end to end) | 55.1 s / 43.4 s | 69.7 s |
 
 Optimizations: trace replay per CFG branch, CFG-parallel submeshes (both forwards in flight
-before either is read), readback of only the TP-rank-0 shards that hold the noise tokens
+before either is read), timestep-modulation precompute (every block's `img_mod`/`txt_mod` and the
+final `norm_out` linear depend only on the timestep: they run once per call for all steps into a
+device table, and each step copies its row into the trace, ~47 ms off every forward), readback of only the TP-rank-0 shards that hold the noise tokens
 (~78 ms -> ~2 ms per step), vision features shared between the prompt and negative-prompt encodes,
 and on-device VAE.
 
 Known headroom: the host VL encode (~8.5 s warm) -- the Qwen2.5-VL language model could run on
-the tt_dit device encoder with host-computed image embeddings; per-forward kernel time (706 ms at
-TP=4 x SP=4); fewer steps (20-30).
+the tt_dit device encoder with host-computed image embeddings; per-forward kernel time (659 ms at
+TP=4 x SP=4: ~50% matmul, ~17% ring SDPA, ~16% CCL); fewer steps (20-30).
