@@ -288,6 +288,8 @@ static const BroadcastCase kCrossRankCases[] = {
     {{2, 1, 1, 4}, {4}, "Rank4_vs_Rank1"},
     {{2, 1, 1, 4}, {1, 4}, "Rank4_vs_Rank2"},
     {{2, 1, 1, 4}, {1, 1, 4}, "Rank4_vs_Rank3"},
+    {{1, 1, 32, 32}, {32, 32}, "Rank4SingletonPrefix_vs_Rank2_NoReduction"},
+    {{32, 32}, {1, 1, 32, 32}, "Rank2_vs_Rank4SingletonPrefix_NoReduction"},
 };
 
 INSTANTIATE_TEST_SUITE_P(SameRank, AddBroadcastBackwardTest, ::testing::ValuesIn(kSameRankCases), BroadcastCaseName);
