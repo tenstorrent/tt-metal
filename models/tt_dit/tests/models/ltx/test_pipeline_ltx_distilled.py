@@ -610,8 +610,6 @@ FRESH_LTX_PROMPTS = (
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
         [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
-        # Same, carved out of the full BH galaxy mesh (shared boxes open the full mesh, then submesh).
-        [(4, 8), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
     ],
     ids=["bh_2x4sp1tp0"],
     indirect=["mesh_device", "device_params"],
@@ -770,8 +768,6 @@ _STANDALONE_I2V_COND_IMAGE = os.environ.get(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
         [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
-        # Same, carved out of the full BH galaxy mesh (shared boxes open the full mesh, then submesh).
-        [(4, 8), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
     ],
     ids=["bh_2x4sp1tp0"],
     indirect=["mesh_device", "device_params"],
@@ -873,8 +869,6 @@ def test_pipeline_distilled_i2v_standalone(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
         [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
-        # Same, carved out of the full BH galaxy mesh (shared boxes open the full mesh, then submesh).
-        [(4, 8), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
     ],
     ids=["bh_2x4sp1tp0"],
     indirect=["mesh_device", "device_params"],
@@ -986,8 +980,6 @@ def test_pipeline_distilled_i2v_two_images(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
         [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
-        # Same, carved out of the full BH galaxy mesh (shared boxes open the full mesh, then submesh).
-        [(4, 8), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
     ],
     ids=["bh_2x4sp1tp0"],
     indirect=["mesh_device", "device_params"],
@@ -1120,8 +1112,6 @@ def test_pipeline_distilled_i2v_arbitrary_frame(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
         [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
-        # Same, carved out of the full BH galaxy mesh (shared boxes open the full mesh, then submesh).
-        [(4, 8), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
         [(4, 8), (4, 8), 1, 0, 2, False, line_trace_params, ttnn.Topology.Linear, False],
     ],
     ids=["bh_2x4sp1tp0", "bh_4x8sp1tp0"],
@@ -1285,8 +1275,6 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
         [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
-        # Same, carved out of the full BH galaxy mesh (shared boxes open the full mesh, then submesh).
-        [(4, 8), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
     ],
     ids=["bh_2x4sp1tp0"],
     indirect=["mesh_device", "device_params"],
@@ -1421,8 +1409,6 @@ def test_pipeline_distilled_i2v_middle_keyframe(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
         [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
-        # Same, carved out of the full BH galaxy mesh (shared boxes open the full mesh, then submesh).
-        [(4, 8), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
     ],
     ids=["bh_2x4sp1tp0"],
     indirect=["mesh_device", "device_params"],
@@ -1670,8 +1656,6 @@ def _matrix_checkpoint(model):
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
         [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
-        # Same, carved out of the full BH galaxy mesh (shared boxes open the full mesh, then submesh).
-        [(4, 8), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
     ],
     ids=["bh_2x4sp1tp0"],
     indirect=["mesh_device", "device_params"],
