@@ -267,11 +267,19 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "rows (2 reserved for the MUX row and its spacer).",
             user_grid.x,
             user_grid.y);
-    } else {
+        // Factory needs 2 MUX-writer columns + 1 SDPA column.
         TT_FATAL(
-            user_grid.x >= 2,
-            "Program config grid ({}x{}) too narrow: needs at least 2 columns (the last column is "
-            "reserved for the fabric MUX kernels).",
+            user_grid.x >= 3,
+            "Program config grid ({}x{}) too narrow: needs at least 3 columns (2 MUX-writer columns "
+            "+ at least 1 pure SDPA column).",
+            user_grid.x,
+            user_grid.y);
+    } else {
+        // Factory needs 1 fabric MUX column + 2 MUX-writer columns + 1 SDPA column.
+        TT_FATAL(
+            user_grid.x >= 4,
+            "Program config grid ({}x{}) too narrow: needs at least 4 columns (1 fabric MUX column "
+            "+ 2 MUX-writer columns + at least 1 pure SDPA column).",
             user_grid.x,
             user_grid.y);
     }

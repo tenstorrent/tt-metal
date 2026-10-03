@@ -208,6 +208,7 @@ def run_flash_mla_decode_impl(
     block_size=ttnn.TILE_SIZE,
     reuse_k=False,
     max_cores_per_head_batch=16,
+    k_chunk_size=128,
 ):
     # Can't run too many iters, or run out of L1
     num_iters = 3
@@ -285,13 +286,13 @@ def run_flash_mla_decode_impl(
         )
 
     q_chunk_size = 0
-    k_chunk_size = 128
 
     scale = (kv_lora_rank + d_rope) ** -0.5
 
     max_start_idx = seq_len // 2
     start_indices = np.linspace(0, max_start_idx, batch, dtype=np.int32).tolist() if batch > 1 else [max_start_idx]
-    padded_layer_len = nearest_y(max_start_idx + 1, k_chunk_size)
+    # k_chunk_size=0 lets the kernel pick the chunk size at runtime (DYNAMIC_CHUNK_SIZE).
+    padded_layer_len = nearest_y(max_start_idx + 1, k_chunk_size or 128)
 
     sdpa_program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
