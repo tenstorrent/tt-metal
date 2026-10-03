@@ -29,17 +29,19 @@ run_job() {  # $1 name, $2 timeout, $3.. cmd; sets JOB, JRC; returns 9 on drop d
     out=$(cd $R && tmp/blx03/submit.sh $t "$@" 2>&1); src=$?
     [ $src = 75 ] && { sleep 60; continue; }; break
   done
-  T0=$(now)
+  T0=; T0S=$(now)
   log "$name submit rc=$src: $(echo "$out" | tr '\n' ' ' | cut -c1-300)"
   [ $src = 0 ] || return 7
   JOB=$(echo "$out" | tail -1); log "$name JOB=$JOB"
   while :; do
     st=$(tt-device-mcp status -j $JOB 2>&1)
     echo "$st" | grep -qiE "^Status: *(running|queued|pending)" || break
+    # Errors count against our job only from when it runs; a drop while it is queued is another tenant's.
+    [ -z "$T0" ] && echo "$st" | grep -qiE "^Status: *running" && { T0=$(now); log "$name running since $T0"; }
     [ "$(uptime -s)" = "$BOOT0" ] || return 9
     sleep 20
   done
-  T1=$(now); T0=${T0:-$T1}
+  T1=$(now); T0=${T0:-$T0S}   # never seen running: count from submit (conservative)
   log "$name status: $(echo "$st" | grep -iE '^(Status|Exit)' | tr '\n' ' ')"
   sleep 90   # let the broker's post-job gate land
   e=$(errors_since "$T0"; gate_fail_since "$T0")
@@ -48,6 +50,11 @@ run_job() {  # $1 name, $2 timeout, $3.. cmd; sets JOB, JRC; returns 9 on drop d
   T0=; return 0
 }
 log "start boot=$BOOT0"
+# The blx03 t48 build needs ce356b8815a's conv3d halo+replicate C++ (t48 tip defaults LTX_VAE_HALO_ONLY=1).
+B=/home/smarton/fasth3/t48
+(cd $B && bash build_metal.sh --release --cpm-source-cache $R/.cpmcache) > $V/build.log 2>&1; brc=$?
+log "build rc=$brc $(git -C $B log -1 --format=%h)"
+[ $brc = 0 ] || done_ build $brc
 run_job ab 1500 bash $S/tmp/blx03/t96/run96.sh; rc=$?
 [ $rc = 0 ] || done_ ab $rc
 csv=$(ls -t $V/prof/reports/*/ops_perf_results_*.csv 2>/dev/null | head -1)
