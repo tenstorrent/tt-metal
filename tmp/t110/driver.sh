@@ -25,6 +25,8 @@ wait_health() { for i in $(seq 120); do health && return 0; sleep 60; done; retu
 run_job() {  # $1 name, $2 timeout, $3.. cmd; sets JOB, JRC; returns 9 on drop during our job
   local name=$1 t=$2; shift 2
   wait_health || { log "$name: broker never healthy"; return 8; }
+  # one project device job at a time: wait for an empty broker queue (up to 2 h)
+  for i in $(seq 240); do tt-device-mcp status 2>&1 | awk '/^RUNNING/{r=1} /^RECENT/{r=0} r && /^ *[0-9]+ /{n++} END{exit n>0}' && break; sleep 30; done
   BOOT0=$(uptime -s)
   for i in $(seq 60); do
     out=$(cd $R && tmp/blx03/submit.sh $t "$@" 2>&1); src=$?
