@@ -199,6 +199,32 @@ class DSV41PrefillModel:
         sync("head", t0)
         return lg
 
+    def last_logits_traced(self, S, s0, C):
+        """First-token logits [B, vocab] with NO allocation between trace replays: the head is a second trace on persistent head_in / head_pre,
+        fed from per-user stashes (copied out before the first head replay: its temporaries may overlap the chunk trace's outputs).
+        """
+        xs, pres = self.dyn_out
+        rows, U = self.rows, self.U
+        out = torch.zeros(rows * U, 129280)
+        need = {}
+        for u in range(U):
+            c, off = divmod(u * C + S - 1 - s0, T)
+            need.setdefault(c, []).append((u, off))
+        for k, c in enumerate(need):
+            ttnn.copy(xs[c], self.head_stash[k][0])
+            ttnn.copy(pres[c], self.head_stash[k][1])
+        ttnn.synchronize_device(self.md)
+        for k, (c, users) in enumerate(need.items()):
+            ttnn.copy(self.head_stash[k][0], self.head_in)
+            ttnn.copy(self.head_stash[k][1], self.head_pre)
+            ttnn.execute_trace(self.md, self.head_trace, cq_id=0, blocking=False)
+            ttnn.synchronize_device(self.md)
+            g = self.head.gather_logits(self.head_out).reshape(rows, T, -1)
+            for u, off in users:
+                for r in range(rows):
+                    out[r * U + u] = g[r, off]
+        return out
+
     def last_logits(self, xs, pres, S, s0, C):
         """Head on the 32-token chunks that hold the last real token of each user -> {local user: logits shard of its last token}."""
         full, lg = {}, {}
@@ -324,7 +350,9 @@ class DSV41PrefillModel:
         """Release the chunk trace and the per-chunk buffers (a different chunk size / padded prompt length needs a new capture)."""
         if getattr(self, "dyn_trace", None) is not None:
             ttnn.release_trace(self.md, self.dyn_trace)
-        self.dyn_trace = None
+        if getattr(self, "head_trace", None) is not None:
+            ttnn.release_trace(self.md, self.head_trace)
+        self.dyn_trace = self.head_trace = None
         for _, pl in self.layers:
             pl.pa.dyn = pl.pa.halo = pl.pa.lat_buf = None
             if pl.pa.sparse is not None:
@@ -371,10 +399,26 @@ class DSV41PrefillModel:
             self.begin_chunk(0, C)
             self.forward_device(bufs, S, 0, C, dyn=True)
             ttnn.synchronize_device(self.md)
-            for x in self.dyn_out[0]:
+            own_head = (
+                type(self).last_logits is DSV41PrefillModel.last_logits
+            )  # subclasses with their own head (ragged hand-off) keep it
+            xs0, pres0 = self.dyn_out
+            if own_head:
+                # head trace FIRST: its persistent buffers must exist before the chunk trace is captured (nothing may be allocated between replays)
+                self.head_in, self.head_pre = ttnn.clone(xs0[0]), ttnn.clone(pres0[0])
+                # one stash per user: the head trace's temporaries may overlap the chunk trace's outputs, so every needed chunk of the stream
+                # is copied out before the first head replay
+                self.head_stash = [(ttnn.clone(xs0[0]), ttnn.clone(pres0[0])) for _ in range(self.U)]
+            for x in list(xs0) + list(pres0):
                 ttnn.deallocate(x)
+            if own_head:
+                self.head.forward(self.head_in, self.head_pre)  # compile
+                ttnn.synchronize_device(self.md)
+                self.head_trace = ttnn.begin_trace_capture(self.md, cq_id=0)
+                self.head_out = self.head.forward(self.head_in, self.head_pre)
+                ttnn.end_trace_capture(self.md, self.head_trace, cq_id=0)
             for _, pl in self.layers:
-                pl.pa.reset_dyn()
+                pl.pa.reset_dyn()  # before any capture only
             ttnn.synchronize_device(self.md)
             self.dyn_trace = ttnn.begin_trace_capture(self.md, cq_id=0)
             self.forward_device(bufs, S, 0, C, dyn=True)
@@ -382,8 +426,6 @@ class DSV41PrefillModel:
             ttnn.synchronize_device(self.md)
             self.timing["compile_and_capture"] = time.perf_counter() - t0
             fut = pool.submit(prep, 0)
-        for _, pl in self.layers:
-            pl.pa.reset_dyn()
         t_run = time.perf_counter()
         for ci in range(n):
             t0 = time.perf_counter()
@@ -408,9 +450,12 @@ class DSV41PrefillModel:
                 print(f"  traced chunk {ci + 1}/{n} done at {time.perf_counter() - t_run:.1f} s", flush=True)
         pool.shutdown()
         t0 = time.perf_counter()
-        xs, pres = self.dyn_out
-        lg = self.last_logits(xs, pres, S, (n - 1) * C, C)
-        out = self.read_logits(lg)
+        if type(self).last_logits is DSV41PrefillModel.last_logits:
+            out = self.last_logits_traced(S, (n - 1) * C, C)
+        else:
+            xs, pres = self.dyn_out
+            lg = self.last_logits(xs, pres, S, (n - 1) * C, C)
+            out = self.read_logits(lg)
         self.timing["head_readback"] = time.perf_counter() - t0
         self.timing["total_replay_loop"] = time.perf_counter() - t_run
         return out
