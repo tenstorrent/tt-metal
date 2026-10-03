@@ -1157,8 +1157,9 @@ Result conv2d_DRAM(
                 const auto& bias_shape = bias_tensor.value().logical_shape();
                 // Slice on-device only for a prepared device bias; a host bias (permitted with
                 // prepared device weights) takes the host unpad below -- ttnn::slice rejects
-                // host operands.
-                if (chunk_prepared_device_weights && bias_is_chunkable_device_bias) {
+                // host operands. A device bias reaching here was already validated chunkable
+                // by can_chunk_channels, so storage type alone decides the branch.
+                if (chunk_prepared_device_weights && ttnn::is_device_tensor(bias_tensor.value())) {
                     // Prepared depthwise bias is TILE with the channel range in the last dim
                     // ([1, 1, 32, C_padded]); TILE_WIDTH-aligned chunk ends slice it in TILE exactly
                     // like the weights above, with no host round-trip.
