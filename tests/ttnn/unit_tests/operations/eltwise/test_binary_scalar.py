@@ -817,6 +817,32 @@ def test_scalar_tensor_golden_matches_device(device, op_name, ttnn_dtype, torch_
         assert_with_ulp(expected_result=expected, actual_result=output, ulp_threshold=_SCALAR_FIRST_ULP_THRESHOLD)
 
 
+@pytest.mark.parametrize("ttnn_dtype, torch_dtype", ((ttnn.bfloat16, torch.bfloat16), (ttnn.int32, torch.int32)))
+def test_squared_difference_scalar_tensor_golden_matches_device(device, ttnn_dtype, torch_dtype):
+    """squared_difference's golden used to read input_tensor_a.dtype positionally, so a
+    scalar-first call (a Python number in operand a) raised AttributeError -- the same defect
+    #55722 fixed for add/subtract/multiply/divide. Confirms it now keys off the tensor operand
+    like its siblings."""
+    torch.manual_seed(0)
+    if torch_dtype == torch.int32:
+        torch_input = torch.randint(1, 100, (1, 1, 320, 384), dtype=torch_dtype)
+        scalar = 7
+    else:
+        torch_input = torch.rand((1, 1, 320, 384), dtype=torch_dtype) + 0.5
+        scalar = 3.14
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    golden = ttnn.get_golden_function(ttnn.squared_difference)
+    expected = golden(scalar, torch_input)
+    output = ttnn.to_torch(ttnn.squared_difference(scalar, input_tensor))
+
+    assert expected.dtype == output.dtype
+    if torch_dtype == torch.int32:
+        assert_equal(expected, output)
+    else:
+        assert_with_ulp(expected_result=expected, actual_result=output, ulp_threshold=_SCALAR_FIRST_ULP_THRESHOLD)
+
+
 @pytest.mark.parametrize(
     "op_name",
     (
