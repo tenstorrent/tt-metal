@@ -60,7 +60,7 @@ def dram_sharded_decode_cores_per_bank(m: int, k: int, n: int, num_cores: int, f
     """
     import os
 
-    if os.environ.get(DRAM_SHARDED_MULTICORE_ENV, "0") in ("", "0"):
+    if os.environ.get(DRAM_SHARDED_MULTICORE_ENV, "1") in ("", "0"):
         return 0
     if math.ceil(m / TILE_SIZE) != 1 or fused_activation is not None:
         return 0
