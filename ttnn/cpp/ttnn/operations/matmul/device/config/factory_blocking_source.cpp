@@ -5,6 +5,8 @@
 #include "ttnn/operations/matmul/device/config/factory_blocking_source.hpp"
 
 #include <algorithm>
+#include <cstdlib>
+#include <tuple>
 #include <utility>
 
 #include "ttnn/operations/matmul/device/config/auto_config_common.hpp"
@@ -84,26 +86,38 @@ std::optional<Blocking> block_2d(
     uint32_t per_core_N,
     bool fuse_batch,
     const BlockRules& rules) {
-    const auto k_options = divisors_desc(p.Kt);
-    std::optional<Blocking> best;
-    uint64_t best_product = 0;
-    uint64_t best_area = 0;
     const uint32_t min_k = params.tuned.k_depth_over_block_size ? std::min(params.limits.min_in0_block_w, p.Kt) : 1;
     auto deep_enough = [&](uint32_t k) { return rules.k_fixed != 0 || k >= min_k; };
+    // Blocks are ranked by this key, highest first; the first block found wins ties
+    struct Rank {
+        bool preferred;      // at the layout's preferred in0_block_w (each K block a whole shard column)
+        bool deep_enough;    // in0_block_w reaches the depth some architectures need before block size counts
+        uint64_t volume;     // in0_block_w * out_block_h * out_block_w: tiles of work per K block
+        uint64_t area;       // out_block_h * out_block_w: the reuse of each loaded A and B tile
+        int64_t squareness;  // minus |h - w|: a square block reuses the most for its area
+        auto tie() const { return std::tie(preferred, deep_enough, volume, area, squareness); }
+    };
+    auto rank_of = [&](uint32_t k, uint32_t h, uint32_t w) {
+        const uint64_t area = static_cast<uint64_t>(h) * w;
+        return Rank{rules.prefers(k), deep_enough(k), area * k, area, -std::abs(static_cast<int64_t>(h) - w)};
+    };
+    std::optional<Blocking> best;
+    std::optional<Rank> best_rank;
     for (uint32_t h : divisors_desc(per_core_M)) {
         for (uint32_t w : divisors_desc(per_core_N)) {
-            const uint64_t area = static_cast<uint64_t>(h) * w;
-            // K depth limit of this block size (larger blocks may go deeper); it only shrinks as w does
+            // K depth limit of this block size; it only shrinks as w does
             const uint32_t k_max =
                 rules.k_fixed != 0 ? rules.k_fixed : max_in0_block_w(params, p, Family::Mcast2D, h, w);
-            if (best && !rules.prefers_other(best->in0_block_w) && deep_enough(best->in0_block_w) &&
-                area * std::max(k_max, rules.k_preferred) < best_product) {
-                break;  // narrower blocks for this h can't win
+            // Narrower blocks for this h can't beat a best that already has the top two levels
+            if (best_rank && (best_rank->preferred || rules.k_preferred == 0) && best_rank->deep_enough &&
+                static_cast<uint64_t>(h) * w * std::max(k_max, rules.k_preferred) < best_rank->volume) {
+                break;
             }
             if (!block_allowed(rules, per_core_N, w)) {
                 continue;
             }
-            for (uint32_t k : k_options) {
+            // The largest fitting in0_block_w for this output block
+            for (uint32_t k : divisors_desc(p.Kt)) {
                 if ((k > k_max && !rules.prefers(k)) || !k_allowed(rules, k)) {
                     continue;
                 }
@@ -111,23 +125,12 @@ std::optional<Blocking> block_2d(
                 if (circular_buffer_bytes(p, hw, Family::Mcast2D, b, fuse_batch) > hw.l1_cb_budget) {
                     continue;
                 }
-                const uint64_t product = area * k;
-                const uint32_t skew = h > w ? h - w : w - h;
-                const uint32_t best_skew =
-                    best ? (best->out_block_h > best->out_block_w ? best->out_block_h - best->out_block_w
-                                                                  : best->out_block_w - best->out_block_h)
-                         : 0;
-                const bool preference = best && rules.prefers(k) != rules.prefers(best->in0_block_w);
-                const bool depth = best && deep_enough(k) != deep_enough(best->in0_block_w);
-                if (preference ? rules.prefers(k)
-                    : depth    ? deep_enough(k)
-                               : (product > best_product || (product == best_product && area > best_area) ||
-                               (product == best_product && area == best_area && skew < best_skew))) {
+                const Rank rank = rank_of(k, h, w);
+                if (!best_rank || rank.tie() > best_rank->tie()) {
                     best = b;
-                    best_product = product;
-                    best_area = area;
+                    best_rank = rank;
                 }
-                break;  // largest fitting k for this output block
+                break;
             }
         }
     }
@@ -215,32 +218,23 @@ std::optional<Blocking> block_1d(
     }
 
     // Single-tile K steps: shrink the multicast dimension too
-    auto unit_dims = [&](const Blocking& b) {
-        return (b.in0_block_w == 1) + (b.out_block_h == 1 && per_core_M > 1) + (b.out_block_w == 1 && per_core_N > 1);
-    };
-    auto skew = [](const Blocking& b) {
-        return b.out_block_h > b.out_block_w ? b.out_block_h - b.out_block_w : b.out_block_w - b.out_block_h;
+    // Ranked like 2D (work per K block, then area, then squareness), but avoiding one-tile dimensions before area:
+    // each one is a dimension that gets no reuse
+    auto rank_of = [&](const Blocking& b) {
+        const uint64_t area = area_of(b);
+        const int unit_dims =
+            (b.in0_block_w == 1) + (b.out_block_h == 1 && per_core_M > 1) + (b.out_block_w == 1 && per_core_N > 1);
+        return std::make_tuple(
+            area * b.in0_block_w,
+            -unit_dims,
+            area,
+            -std::abs(static_cast<int64_t>(b.out_block_h) - static_cast<int64_t>(b.out_block_w)));
     };
     std::optional<Blocking> alt;
     for (uint32_t fixed : divisors_desc(fixed_full)) {
         for (uint32_t cheap : divisors_desc(cheap_full)) {
             const auto b = fit(is_tall ? cheap : fixed, is_tall ? fixed : cheap);
-            if (!b) {
-                continue;
-            }
-            const uint64_t product = area_of(*b) * b->in0_block_w;
-            const uint64_t alt_product = alt ? area_of(*alt) * alt->in0_block_w : 0;
-            bool better = !alt || product > alt_product;
-            if (alt && product == alt_product) {
-                if (unit_dims(*b) != unit_dims(*alt)) {
-                    better = unit_dims(*b) < unit_dims(*alt);
-                } else if (area_of(*b) != area_of(*alt)) {
-                    better = area_of(*b) > area_of(*alt);
-                } else {
-                    better = skew(*b) < skew(*alt);
-                }
-            }
-            if (better) {
+            if (b && (!alt || rank_of(*b) > rank_of(*alt))) {
                 alt = b;
             }
         }
@@ -473,6 +467,27 @@ FactoryBlockingSource::FactoryBlockingSource(
     std::shared_ptr<const FamilyPolicy> family) :
     blocking_(std::move(blocking)), subblock_(std::move(subblock)), family_(std::move(family)) {}
 
+// With a batched A fused into M, a layout that splits only M (1D in1, or 2D with blocks one tile wide) gives each
+// core one tall block, whose output is written after its last K step. Looping over the batch instead gives each core
+// one shorter block per batch, whose output writes overlap the next one's compute, provided one batch still keeps as
+// many cores busy. Decided after the family, which the estimate compares with the batch fused.
+void FactoryBlockingSource::loop_over_batch_if_better(const MatmulDesc& p, const HardwareDesc& hw, Candidate& c) const {
+    const bool splits_only_m =
+        c.family == Family::Mcast1DIn1 || (c.family == Family::Mcast2D && c.blocking.per_core_N == 1);
+    if (!sharded_layout(p) && splits_only_m && c.fuse_batch && p.batch_a > 1) {
+        const uint32_t rows = c.family == Family::Mcast2D ? hw.grid.y : hw.grid.x * hw.grid.y;
+        if (auto looped = blocking_->block(p, hw, c.family, {div_up(p.Mt, rows), c.blocking.per_core_N, false}, {})) {
+            // Only when one batch still keeps as many cores busy as the fused batches did
+            const uint32_t looped_cores = div_up(p.Mt, looped->per_core_M) * div_up(p.Nt, looped->per_core_N);
+            if (looped_cores >= c.cores) {
+                c.blocking = subblock_->subblock(p, c.family, *looped);
+                c.fuse_batch = false;
+                c.cores = looped_cores;
+            }
+        }
+    }
+}
+
 std::vector<Candidate> FactoryBlockingSource::propose(const MatmulDesc& p, const HardwareDesc& hw) const {
     const auto all = candidates(p, hw);
     // A sharded layout fixes the family: its candidate is the only one
@@ -481,25 +496,7 @@ std::vector<Candidate> FactoryBlockingSource::propose(const MatmulDesc& p, const
     if (!chosen) {
         return {};
     }
-    // With a batched A fused into M, a layout that splits only M (1D in1, or 2D with blocks one tile wide) gives
-    // each core one tall block, whose output is written after its last K step. Looping over the batch instead gives
-    // each core one shorter block per batch, whose output writes overlap the next one's compute, provided one batch
-    // still keeps as many cores busy. Decided after the family, which the estimate compares with the batch fused.
-    const bool splits_only_m =
-        chosen->family == Family::Mcast1DIn1 || (chosen->family == Family::Mcast2D && chosen->blocking.per_core_N == 1);
-    if (!sharded_layout(p) && splits_only_m && chosen->fuse_batch && p.batch_a > 1) {
-        const uint32_t rows = chosen->family == Family::Mcast2D ? hw.grid.y : hw.grid.x * hw.grid.y;
-        if (auto looped =
-                blocking_->block(p, hw, chosen->family, {div_up(p.Mt, rows), chosen->blocking.per_core_N, false}, {})) {
-            // Only when one batch still keeps as many cores busy as the fused batches did
-            const uint32_t looped_cores = div_up(p.Mt, looped->per_core_M) * div_up(p.Nt, looped->per_core_N);
-            if (looped_cores >= chosen->cores) {
-                chosen->blocking = subblock_->subblock(p, chosen->family, *looped);
-                chosen->fuse_batch = false;
-                chosen->cores = looped_cores;
-            }
-        }
-    }
+    loop_over_batch_if_better(p, hw, *chosen);
     std::vector<Candidate> result = {*chosen};
     for (auto& n : k_depth_neighbours(p, hw, *chosen)) {
         result.push_back(std::move(n));

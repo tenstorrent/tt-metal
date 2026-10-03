@@ -200,6 +200,7 @@ public:
 private:
     std::vector<Candidate> sharded_candidates(const MatmulDesc& matmul, const HardwareDesc& hw) const;
     std::optional<Blocking> reuse_blocking(const MatmulDesc& matmul, const HardwareDesc& hw) const;
+    void loop_over_batch_if_better(const MatmulDesc& matmul, const HardwareDesc& hw, Candidate& candidate) const;
 
     std::shared_ptr<const BlockingPolicy> blocking_;
     std::shared_ptr<const SubblockPolicy> subblock_;
