@@ -344,7 +344,7 @@ class Gemma4Model:
         trace staging. Migration acknowledgements follow each layer's KV writes.
         """
         tp = self.mesh_config.tp_degree if self.mesh_config is not None else 1
-        seq_len = hidden_states.shape[2] * tp
+        seq_len = hidden_states.shape[2] * (1 if __import__("models.demos.gemma4_d_p.tt.ccl", fromlist=["no_sp"]).no_sp() else tp)
         if hidden_states.shape[0] != 1 or hidden_states.shape[1] != 1:
             raise ValueError("Ring prefill processes one user per call")
         if d2h_service is not None and metadata_msg is None:
@@ -409,7 +409,8 @@ class Gemma4Model:
         if hidden_states.is_sharded():
             # The layers keep the residual block-sharded between norms.
             hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
-        hidden_states = ccl_allgather(hidden_states, self.mesh_config, self.ccl_manager, dim=2)
+        if not __import__("models.demos.gemma4_d_p.tt.ccl", fromlist=["no_sp"]).no_sp():  # LOCAL knob
+            hidden_states = ccl_allgather(hidden_states, self.mesh_config, self.ccl_manager, dim=2)
         return hidden_states
 
     def embed_tokens(self, tokens):

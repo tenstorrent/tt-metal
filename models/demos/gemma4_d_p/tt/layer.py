@@ -97,6 +97,8 @@ class Gemma4DecoderLayer:
         )
 
     def _gather_rows(self, x):
+        if __import__("models.demos.gemma4_d_p.tt.ccl", fromlist=["no_sp"]).no_sp():  # LOCAL knob
+            return x
         """All-gather x's TP row split. Each block consumes the result. At short M it lands in L1 in the layout the
         projections read (matmul_config.short_m_gather_memcfg)."""
         return ccl_allgather(

@@ -304,9 +304,14 @@ def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):
     return gathered
 
 
+def no_sp():
+    """LOCAL experiment knob: no sequence-parallel residual (full rows, all-reduce instead of RS + AG)."""
+    return os.environ.get("G4X_NO_SP") == "1"
+
+
 def ccl_partition_rows(tensor, mesh_config):
     """Keep this TP device's 1/TP of the rows of a TP-replicated tensor."""
-    if mesh_config is None or mesh_config.tp_degree <= 1:
+    if mesh_config is None or mesh_config.tp_degree <= 1 or no_sp():
         return tensor
     return ttnn.mesh_partition(tensor, dim=2, cluster_axis=mesh_config.tp_axis)
 
@@ -332,6 +337,8 @@ def ccl_reduce_scatter_rows(tensor, mesh_config, ccl_manager, memory_config=None
         memory_config = (
             ttnn.L1_MEMORY_CONFIG if out_rows <= _MAX_L1_REDUCE_SCATTER_OUT_ROWS else ttnn.DRAM_MEMORY_CONFIG
         )
+    if no_sp():  # LOCAL knob
+        return ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=memory_config)
     if ccl_async_enabled():
         result = ttnn.experimental.reduce_scatter_minimal_async(
             tensor,
