@@ -352,10 +352,9 @@ MoEComputeMeshWorkloadFactory::create_at(
     const uint32_t tilize_num_cores = tilize_core_range_set.num_cores();
     const uint32_t matmul_num_cores = matmul_core_range_set.num_cores();
 
-    // a2a_cb_pages = IN2_TILES_PER_STEP = ceil(intermediate_tiles / matmul_num_cores), even-rounded
-    // and at least the W2 A2A matmul width.
-    // (formula-driven, replaces the pre-#43932 per-config table). The ring size is the live
-    // DRAM-bank count, so each ring core maps 1:1 to a DRAM bank and no cross-bank walk is needed.
+    // a2a_cb_pages = IN2_TILES_PER_STEP = moe_ring::a2a_exchange_tiles: the largest per-core gate/up column count
+    // (at least 2) for a compact shape, else the uniform even stride (at least the W2 A2A matmul width).
+    // The ring size is the live DRAM-bank count, so each ring core maps 1:1 to a DRAM bank.
     const uint32_t expected_matmul_n =
         mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default).size();
     TT_FATAL(
@@ -363,8 +362,13 @@ MoEComputeMeshWorkloadFactory::create_at(
         "moe_compute: expected matmul_num_cores={}, got {}",
         expected_matmul_n,
         matmul_num_cores);
-    const uint32_t a2a_cb_pages_raw = (intermediate_tiles + matmul_num_cores - 1) / matmul_num_cores;
-    const uint32_t a2a_cb_pages = moe_ring::even_stride_at_least_a2a_width(a2a_cb_pages_raw);
+    const uint32_t a2a_cb_pages = moe_ring::a2a_exchange_tiles(intermediate_tiles, matmul_num_cores);
+
+    // Per-shape DRAM transaction size of both weight streams (moe_ring::tiles_per_txn_for_shape: 14 tiles, or 20
+    // for the 2560/640 expert on the 8-bank ring), passed to the kernels as the "tiles_per_txn" compile arg.
+    const uint32_t weight_tiles_per_txn =
+        moe_ring::tiles_per_txn_for_shape(hidden_tiles, intermediate_tiles, args.has_bias, matmul_num_cores);
+    const uint32_t weight_tiles_per_block = moe_ring::W0_W1_TXNS_PER_BLOCK * weight_tiles_per_txn;
 
     const uint32_t tilize_bounding_box_num_cores = tilize_bounding_box.size();
     const uint32_t matmul_bounding_box_num_cores = matmul_bounding_box.size();
@@ -756,7 +760,8 @@ MoEComputeMeshWorkloadFactory::create_at(
         | Name           | CB Index     | Dtype     | Tile? | Tiles/CB  | DS  | GPT | Remarks                    |
         ----------------------------------------------------------------------------------------------------------
         | cb_s2c_in      | CBIndex::c_0 | Float16_b | true  | (shared)  | 448 | 180 | Shared output buf          |
-        | cb_r2c_w0      | CBIndex::c_3 | Bfp4_b    | true  | 14*6      |  84 |  84 | 3 triple-bufs W0/W1        |
+        | cb_r2c_w0      | CBIndex::c_3 | Bfp4_b    | true  | slots*2*t |  84 |  84 | 3 blocks W0/W1 + W2 (txn=  |
+        |                |              |           |       |           |     |     | 14 tiles; 20 -> 3 x 40)    |
         | cb_c2w_rdy     | CBIndex::c_4 | Float32   | false | 1         |   — |   — | Compute->writer ready      |
         | cb_w2c_rdy     | CBIndex::c_5 | Float32   | false | 1         |   — |   — | Writer->compute ready      |
         | cb_s2c_in2     | CBIndex::c_6 | Float16_b | true  | a2a*cores |  72 |  96 | Ring A2A activation        |
@@ -769,7 +774,13 @@ MoEComputeMeshWorkloadFactory::create_at(
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
     // Note: cb_s2c_in and cb_c2s_out are handled separately as it is allocated on Tilize, Matmul, and Combine cores
     std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> matmul_cb_specs0 = {
-        {"cb_r2c_w0", tt::CBIndex::c_3, tt::DataFormat::Bfp4_b, true, 14 * 6},
+        // dm0's slots of one block each (moe_ring::weight_cb_slots: 3 for 14- and 20-tile transactions);
+        // whole blocks so the ring buffer wraps on a block boundary.
+        {"cb_r2c_w0",
+         tt::CBIndex::c_3,
+         tt::DataFormat::Bfp4_b,
+         true,
+         moe_ring::weight_cb_slots(weight_tiles_per_txn) * weight_tiles_per_block},
         {"cb_c2w_rdy", tt::CBIndex::c_4, tt::DataFormat::Float32, false, 1},
         {"cb_w2c_rdy", tt::CBIndex::c_5, tt::DataFormat::Float32, false, 1},
         {"cb_s2c_in2", tt::CBIndex::c_6, tt::DataFormat::Float16_b, true, a2a_cb_pages * matmul_num_cores},
@@ -1178,18 +1189,59 @@ MoEComputeMeshWorkloadFactory::create_at(
     // Ring size equals the live bank count: 12 on WH (no DRAM-bank harvesting), 7/8 on BH.
     // Ring cores and banks are 1:1, so no cross-bank walk is needed.
     const uint32_t num_dram_banks = mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
-    // pages_per_ring_core_total / w2_pages_per_ring_core_total: number of tile-pages each
-    // ring core "owns" in the FLAT layout of the HEIGHT_SHARDED weight tensor. The flat
-    // layout is core-major (ring_core_0's tiles for all (layer, expert), then ring_core_1's,
-    // etc.), so this value equals total_pages / num_cores. The kernel uses it to derive the
-    // global page offset for each (ring_core, layer, expert).
+    // w2_pages_per_ring_core_total: number of tile-pages each ring core "owns" in the FLAT
+    // layout of the HEIGHT_SHARDED W2 tensor. The flat layout is core-major (ring_core_0's
+    // tiles for all (layer, expert), then ring_core_1's, etc.), so this value equals
+    // total_pages / num_cores. The kernel uses it to derive the global page offset for each
+    // (ring_core, layer, expert).
+    //
+    // W0/W1 uses the compact per-expert bank-balanced layout (moe_ring_common.h): every bank
+    // holds w0_w1_bank_blocks_per_expert whole blocks per (layer, expert). dm0 derives the
+    // geometry from the shape compile args; check here that the tensor was packed that way
+    // (a tensor packed with the old per-core stride has a different page count).
     const uint32_t w0_w1_total_pages_buf = static_cast<uint32_t>(matmul_w0_w1_tensor.buffer()->num_pages());
     const uint32_t w2_total_pages_buf = static_cast<uint32_t>(matmul_w2_tensor.buffer()->num_pages());
-    TT_FATAL(
-        w0_w1_total_pages_buf % matmul_num_cores == 0,
-        "moe_compute: w0_w1 total pages ({}) not divisible by num_cores ({})",
-        w0_w1_total_pages_buf,
-        matmul_num_cores);
+    {
+        const uint32_t w0_w1_layers = matmul_w0_w1_tensor.logical_shape()[1];
+        const uint32_t w0_w1_bank_blocks = moe_ring::w0_w1_bank_blocks_per_expert(
+            args.has_bias ? hidden_tiles + 1 : hidden_tiles,
+            intermediate_tiles,
+            matmul_num_cores,
+            num_dram_banks,
+            weight_tiles_per_txn);
+        const uint32_t w0_w1_expected_pages =
+            num_dram_banks * w0_w1_layers * experts_per_device * w0_w1_bank_blocks * weight_tiles_per_block;
+        TT_FATAL(
+            w0_w1_total_pages_buf == w0_w1_expected_pages,
+            "moe_compute: w0_w1 tensor has {} tile pages, the compact layout for {} layers x {} experts over {} banks "
+            "needs {} ({} blocks of {} tiles per bank per expert); pack it with prepare_w0_w1_tensor_for_moe_compute",
+            w0_w1_total_pages_buf,
+            w0_w1_layers,
+            experts_per_device,
+            num_dram_banks,
+            w0_w1_expected_pages,
+            w0_w1_bank_blocks,
+            weight_tiles_per_block);
+        const uint32_t w2_layers = matmul_w2_tensor.logical_shape()[1];
+        const uint32_t w2_core_blocks = moe_ring::w2_core_blocks_per_expert(
+            hidden_tiles,
+            args.has_bias ? intermediate_tiles + 1 : intermediate_tiles,
+            matmul_num_cores,
+            weight_tiles_per_txn);
+        const uint32_t w2_expected_pages =
+            matmul_num_cores * w2_layers * experts_per_device * w2_core_blocks * weight_tiles_per_block;
+        TT_FATAL(
+            w2_total_pages_buf == w2_expected_pages,
+            "moe_compute: w2 tensor has {} tile pages, the layout for {} layers x {} experts over {} ring cores needs "
+            "{} ({} blocks of {} tiles per core per expert); pack it with prepare_w2_tensor_for_moe_compute",
+            w2_total_pages_buf,
+            w2_layers,
+            experts_per_device,
+            matmul_num_cores,
+            w2_expected_pages,
+            w2_core_blocks,
+            weight_tiles_per_block);
+    }
     TT_FATAL(
         w2_total_pages_buf % matmul_num_cores == 0,
         "moe_compute: w2 total pages ({}) not divisible by num_cores ({})",
@@ -1205,7 +1257,6 @@ MoEComputeMeshWorkloadFactory::create_at(
         const auto& mesh_shape = mesh_device->get_view().shape();
         shared_expert_tp_factor = mesh_shape[1 - args.cluster_axis().value()];
     }
-    const uint32_t w0_w1_pages_per_ring_core_total = w0_w1_total_pages_buf / matmul_num_cores;
     const uint32_t w2_pages_per_ring_core_total = w2_total_pages_buf / matmul_num_cores;
     std::unordered_map<std::string, uint32_t> matmul_named_compile_time_args = {
         {"num_experts", experts_per_device},
@@ -1215,7 +1266,6 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"has_bias", args.has_bias ? 1u : 0u},
         {"num_cores", static_cast<uint32_t>(matmul_num_cores)},
         {"num_banks", num_dram_banks},
-        {"w0_w1_pages_per_ring_core_total", w0_w1_pages_per_ring_core_total},
         {"w2_pages_per_ring_core_total", w2_pages_per_ring_core_total},
         {"activation_function", static_cast<uint32_t>(activation_type)},
         {"metadata_ready_semaphore_id", metadata_ready_semaphore_id},
@@ -1234,6 +1284,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"height_shard_dim", output_height_shard_dim},
         {"width_shard_dim", combine_data_parallel_cores},
         {"hidden_tiles", hidden_tiles},
+        {"tiles_per_txn", weight_tiles_per_txn},
         {"intermediate_tiles", intermediate_tiles},
         {"noc_max_burst_bytes", noc_max_burst_bytes},
         // Matmul -> combine: dm1 increments this on combine cores when data is written
@@ -1380,11 +1431,6 @@ MoEComputeMeshWorkloadFactory::create_at(
             "moe_compute: w2 total pages ({}) must be divisible by num_banks ({})",
             w2_total_pages,
             num_dram_banks);
-        TT_FATAL(
-            w0_w1_total_pages % matmul_num_cores == 0,
-            "moe_compute: w0_w1 total pages ({}) must be divisible by num_cores ({})",
-            w0_w1_total_pages,
-            matmul_num_cores);
         TT_FATAL(
             w2_total_pages % matmul_num_cores == 0,
             "moe_compute: w2 total pages ({}) must be divisible by num_cores ({})",

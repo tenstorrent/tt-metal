@@ -708,6 +708,87 @@ def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape, compute_only, 
     )
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "trace_region_size": 500000,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("compute_only", [True, False], ids=["compute_only", "fused_local"])
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_single_card_flash_next(mesh_device, mesh_shape, compute_only):
+    """Single-card MoE compute on a 1x1 mesh, Qwen3.8-Flash-Next-shaped workload (hidden=2560, N=640, SILU).
+
+    512 routed experts over four devices = 128 experts per device. N=640 is 20 intermediate tiles, so on an
+    8-bank Blackhole ring the cores own 3 or 2 gate/up columns (odd and even counts on one ring), and on a
+    12-core Wormhole ring 2 or 1.
+    """
+    hidden_size = 2560
+    ring_n = effective_matmul_ring_size(mesh_device)
+    _run_moe_compute_single_card_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        experts_per_device=128,
+        tokens_per_device=32,
+        selected_experts_k=8,
+        N=640,
+        hidden_size=hidden_size,
+        output_height_shard_dim=4,
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+        dtype=ttnn.bfloat16,
+        activation_type=MoEActivationFunction.SILU,
+        has_bias=False,
+        compute_only=compute_only,
+    )
+
+
+# Other public MoE expert shapes, one per W0/W1 layout case on an 8-bank ring: compact (the busiest core owns fewer
+# columns than the uniform even stride) and uniform stride (6/5 and 8/7 columns), plus bias rows on the two shapes
+# whose cores own an odd column count (the half block-column path with the bias tile row; with bias every shape
+# stores 14-tile transactions, so the half-width W2 iteration is not reachable). name: (hidden, expert intermediate,
+# top-k, experts per device, activation, has_bias); 16-32 experts keep the BF4 weight preparation short.
+_MOE_OTHER_SHAPES = {
+    "qwen36_35b_a3b": (2048, 512, 8, 32, MoEActivationFunction.SILU, False),  # 2 columns per core: compact
+    "gemma4_26b_a4b": (2816, 704, 8, 32, MoEActivationFunction.GELU, False),  # 3/2 columns: compact
+    "gemma4_26b_a4b_bias": (2816, 704, 8, 32, MoEActivationFunction.GELU, True),  # 3/2 columns + bias tile row
+    "flash_next_bias": (2560, 640, 10, 16, MoEActivationFunction.SILU, True),  # 3/2 columns + bias (14-tile)
+    "glm45_air": (4096, 1408, 8, 32, MoEActivationFunction.SILU, False),  # 6/5 columns: uniform stride
+    "nemotron3_nano": (2688, 1856, 6, 16, MoEActivationFunction.SILU, False),  # 8/7 columns: uniform stride
+}
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 500000}],
+    indirect=True,
+)
+@pytest.mark.parametrize("shape", sorted(_MOE_OTHER_SHAPES))
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_single_card_other_shapes(mesh_device, mesh_shape, shape):
+    """Single-card MoE compute on a 1x1 mesh for other public expert shapes (compute_only)."""
+    hidden_size, intermediate, k, experts, activation, has_bias = _MOE_OTHER_SHAPES[shape]
+    ring_n = effective_matmul_ring_size(mesh_device)
+    _run_moe_compute_single_card_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        experts_per_device=experts,
+        tokens_per_device=32,
+        selected_experts_k=k,
+        N=intermediate,
+        hidden_size=hidden_size,
+        output_height_shard_dim=4,
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+        dtype=ttnn.bfloat16,
+        activation_type=activation,
+        has_bias=has_bias,
+        compute_only=True,
+    )
+
+
 # Regression sweep for tt-metal#50669 (correct output for non-tile-aligned token counts). Small hidden/N
 # keep bf4 weight-prep fast; configs vary tilize_num_cores (largest divisor of hidden/32 <= 4): 512->4,
 # 1344->3, 320->2, with activation/bias/k<E variety. Real model shapes are covered at tokens=32 above.
