@@ -2106,16 +2106,15 @@ class TestConfig:
         span = max(mailbox.value for mailbox in mailboxes) + 4 - base
         word_index = {mailbox: (mailbox.value - base) // 4 for mailbox in mailboxes}
 
-        # Wormhole and Blackhole kernels also signal completion in overlay registers, so the wait never reads their L1.
+        # Kernels also signal completion in registers outside L1 (host_signal in boot.h), so the wait never reads their L1.
+        # The TRISC at mailbox word n signals in slot n (trisc.cpp: mailbox_offset / 4).
         signal_addrs = None
-        if self.CHIP_ARCH != ChipArchitecture.QUASAR:
-            # The TRISC at mailbox word n signals in slot n (trisc.cpp: mailbox_offset / 4).
-            addrs = {
-                mailbox: device_module.host_signal_address(word_index[mailbox])
-                for mailbox in mailboxes
-            }
-            if all(addr is not None for addr in addrs.values()):
-                signal_addrs = addrs
+        addrs = {
+            mailbox: device_module.host_signal_address(word_index[mailbox])
+            for mailbox in mailboxes
+        }
+        if all(addr is not None for addr in addrs.values()):
+            signal_addrs = addrs
 
         completed = set()
         end_time = time.time() + timeout

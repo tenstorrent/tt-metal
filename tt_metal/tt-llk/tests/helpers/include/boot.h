@@ -85,6 +85,20 @@ TT_ALWAYS_INLINE void write([[maybe_unused]] std::uint32_t slot, [[maybe_unused]
 #endif
 }
 } // namespace host_signal
+#elif defined(ARCH_QUASAR)
+// Quasar has no overlay streams: TT_CLUSTER_CTRL_SCRATCH_28..31 (host readable, outside L1, unused elsewhere) carry the
+// TRISC completion flags in slots 0..3, so the host can wait on a kernel without reading its L1.
+namespace host_signal
+{
+constexpr std::uint32_t CLUSTER_CTRL_SCRATCH_28 = 0x030000B0;
+
+TT_ALWAYS_INLINE void write([[maybe_unused]] std::uint32_t slot, [[maybe_unused]] std::uint32_t value)
+{
+#if !defined(TT_METAL_TTSIM) // ttsim models no overlay registers; the host polls L1 there
+    *reinterpret_cast<volatile std::uint32_t*>(CLUSTER_CTRL_SCRATCH_28 + slot * 4) = value;
+#endif
+}
+} // namespace host_signal
 #endif
 
 __attribute__((no_profile_instrument_function)) TT_ALWAYS_INLINE void do_crt0()

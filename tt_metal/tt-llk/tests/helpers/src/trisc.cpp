@@ -69,8 +69,11 @@ int main(void)
     *(mailbox_base + 2)    = ckernel::RESET_VAL;
 #ifdef ARCH_QUASAR
     *(mailbox_base + 3) = ckernel::RESET_VAL;
-#endif
-#if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
+    for (std::uint32_t slot = 0; slot < 4; ++slot)
+    {
+        host_signal::write(slot, ckernel::RESET_VAL);
+    }
+#else
     for (std::uint32_t slot = 0; slot < 3; ++slot)
     {
         host_signal::write(slot, ckernel::RESET_VAL);
@@ -117,9 +120,10 @@ int main(void)
     llk_perf::read_last_zone();
 
     *mailbox = ckernel::KERNEL_COMPLETE;
-#if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
-    host_signal::write(mailbox_offset / sizeof(std::uint32_t), ckernel::KERNEL_COMPLETE);
+#if defined(ARCH_QUASAR)
+    asm volatile("fence" ::: "memory"); // the L1 results land before the flag the host polls
 #endif
+    host_signal::write(mailbox_offset / sizeof(std::uint32_t), ckernel::KERNEL_COMPLETE);
 #if defined(LLK_DBG_BARRIER) // the flag has landed before the last arrival, which ends BRISC's serving
     (void)ckernel::load_blocking(reinterpret_cast<volatile std::uint32_t*>(
         host_signal::NOC_OVERLAY_START_ADDR + (mailbox_offset / sizeof(std::uint32_t)) * host_signal::NOC_STREAM_REG_SPACE_SIZE +
