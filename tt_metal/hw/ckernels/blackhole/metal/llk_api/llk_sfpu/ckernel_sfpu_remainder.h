@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_binary_remainder.h"
+#include "ckernel_sfpu_fmod.h"
 #include "ckernel_sfpu_recip.h"
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
@@ -19,6 +20,7 @@ inline void init_remainder(const uint value, const uint recip) {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstFloatPrgm0 = Converter::as_float(value);
     sfpi::vConstFloatPrgm1 = Converter::as_float(recip);
+    sfpi::vConstFloatPrgm2 = FMOD_ROUND_MAGIC;
 }
 
 // Unary uint32 remainder mirrors the tensor-tensor kernel in ckernel_sfpu_binary_remainder.h.
@@ -85,50 +87,24 @@ inline void calculate_remainder_uint32_scalar(uint scalar) {
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_remainder() {
     // SFPU microcode
-    sfpi::vFloat value_tmp = sfpi::vConstFloatPrgm0;
-    sfpi::vFloat s = sfpi::abs(value_tmp);
-    sfpi::vFloat recip_val = sfpi::abs(sfpi::vConstFloatPrgm1);
+    const sfpi::vFloat value_tmp = sfpi::vConstFloatPrgm0;
+    const sfpi::vFloat s_abs = sfpi::abs(value_tmp);
+    const sfpi::vFloat s_hi = fmod_split_hi(s_abs);
+    const sfpi::vFloat s_lo = s_abs - s_hi;
 
-#pragma GCC unroll 0
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat val = sfpi::dst_reg[0];
-        vFloat v = sfpi::abs(val);
-
-        vFloat quotient;
-        vInt exp = sfpi::exexp(v * recip_val);
-        v_if(exp < 0) { quotient = 0.0f; }
-        // Since fp32 has 23 mantissa bits, the LSB represents the fractional part when exp < 23.
-        // We effectively round off the fractional bits to zero by right shifting using (exp - 23) and then left
-        // shifting it back using (0 - (exp - 23)).
-        v_elseif(exp < 23) {
-            quotient = sfpi::as<sfpi::vFloat>(
-                shft((shft(sfpi::as<sfpi::vUInt>(v * recip_val), (exp - 23))), (0 - (exp - 23))));
-        }
-        v_else { quotient = v * recip_val; }
-        v_endif
-
-        v_if(quotient > v * recip_val) {
-            quotient = quotient - 1;
-        }
-        v_endif;
-        v = v - quotient * s;
-
-        v_if(val < 0 && v != 0) { v = s - v; }
-        v_endif;
-
-        v_if(value_tmp < 0 && v != 0) { v = v + value_tmp; }
+        const sfpi::vFloat val = sfpi::dst_reg[0];
+        sfpi::vFloat v = calculate_fmod_magnitude(
+            sfpi::abs(val), s_abs, sfpi::abs(sfpi::vConstFloatPrgm1), s_hi, s_lo);
+        // torch.remainder: x - floor(x/s)*s takes the divisor's sign. Its magnitude is |x| mod |s|
+        // when x and s share a sign or the remainder is zero, and |s| - (|x| mod |s|) otherwise
+        // (exact: both are multiples of ulp(s) below |s|). The XOR of the raw bit patterns is
+        // negative exactly when the signs differ; the `!= 0` is a bitwise test, and v is +0 there.
+        const sfpi::vInt sign_diff = sfpi::as<sfpi::vInt>(val) ^ sfpi::as<sfpi::vInt>(value_tmp);
+        v_if(sign_diff < 0 && v != 0.0f) { v = s_abs - v; }
         v_endif;
         v = sfpi::copysgn(v, value_tmp);
-        v_if(s == 0) { v = std::numeric_limits<float>::quiet_NaN(); }
-        v_endif;
-
-        constexpr auto iter = 10;
-        for (int l = 0; l < iter; l++) {
-            v_if(v >= s) { v = v - s; }
-            v_endif;
-        }
-        v_if(sfpi::abs(v) - s == 0.0f) { v = 0.0f; }
-        v_endif;
         sfpi::dst_reg[0] = v;
         sfpi::dst_reg++;
     }
