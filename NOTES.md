@@ -1,5 +1,15 @@
 # t99 NOTES: fused RMSNorm + residual add (LTX_FUSE_NORM_ADD=1), blx03 2x4 A/B
 
+## RESULT (job 457, 2026-10-03 07:09-07:12 UTC, blx03 full mesh -> create_submesh(2,4), LTX_CONV3D_BLOCKING_MESH=4,8) — DONE
+- Unit RMSNorm+add (fused vs reference): all 7 shapes RS_OK, incl. (1,19,17,15,1024) W=15 and s2/s3/s4 (W=30/32/60/64/120/128).
+- Decode 544x960/145f, min of 3:   fuse0 eager 513.2 / traced 518.1 ms;  fuse1 eager 515.2 / traced 518.2 ms.
+  => no gain (delta within noise). Trace size 2.69 -> 2.42 MB (fewer ops), so the fused path ran.
+- Quality fused vs unfused: PSNR 51.58 dB, PCC 1.000000, max_abs 4/255 (not bit-identical).
+- AICLK clamped at 1150 MHz (same as #96/#97); A/B is same-job so the comparison holds. No drops/reboots.
+- Verdict: keep LTX_FUSE_NORM_ADD opt-in, default off. Not worth adding to the eval pack.
+- Cleanup done: blx03 ~/fasth3/t99 worktree+build removed; /var/tmp/fasth3/t99 kept logs only (472K).
+  Summary log: tmp/blx03/t99/results/job457_summary.log.
+
 Code: c6073fcc69e on ttp/t99-t93-4-fold-resnet-residual-add-into-next (Kevin's dual-output RMSNorm from f9cc61e24ad
 + row-major residual fix for W=15 + flat RM tile-row count + LTXUNetMidBlock3D wiring). Not compiled locally.
 Job scripts: tmp/blx03/t99/ (6afe1031681). Stage branch ttp/t99-stage = t99 + t96 trace harness (057e841c056,

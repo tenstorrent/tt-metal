@@ -1,0 +1,46 @@
+RS shape=(1, 19, 17, 15, 1024)
+RS_OK shape=(1, 19, 17, 15, 1024)
+RS shape=(1, 5, 34, 30, 512)
+RS_OK shape=(1, 5, 34, 30, 512)
+RS shape=(1, 5, 36, 32, 512)
+RS_OK shape=(1, 5, 36, 32, 512)
+RS shape=(1, 3, 68, 60, 256)
+RS_OK shape=(1, 3, 68, 60, 256)
+RS shape=(1, 3, 72, 64, 256)
+RS_OK shape=(1, 3, 72, 64, 256)
+RS shape=(1, 2, 136, 120, 128)
+RS_OK shape=(1, 2, 136, 120, 128)
+RS shape=(1, 2, 144, 128, 128)
+RS_OK shape=(1, 2, 144, 128, 128)
+PASSED
+PASSED tmp/blx03/t99/test_rs_2x4.py::test_rs_2x4[blackhole-mesh_device0-device_params0]
+============================== 1 passed in 43.30s ==============================
+T99_PART1_EXIT=0
+AB arm=eager decode_s=0.5132 0.5134 0.5174 min=0.5132
+AB trace_bytes=2686976 (2.7 MB) region=500000000 capture_s=1.2459
+AB arm=traced decode_s=0.7826 0.5181 0.5191 min=0.5181
+AB_CMP capture_vs_eager identical=True max_abs_diff=0 shape=(145, 816, 960) dtype=torch.uint8
+AB_CMP traced_vs_eager identical=True max_abs_diff=0 shape=(145, 816, 960) dtype=torch.uint8
+PASSED
+PASSED models/tt_dit/tests/models/ltx/test_vae_ltx_trace_ab.py::test_vae_ltx_trace_ab[blackhole-mesh_device0-device_params0]
+=================== 1 passed, 2 warnings in 60.69s (0:01:00) ===================
+T99_DECODE0_EXIT=0
+AB arm=eager decode_s=0.5152 0.5172 0.5164 min=0.5152
+AB trace_bytes=2424832 (2.4 MB) region=500000000 capture_s=0.9824
+AB arm=traced decode_s=0.5240 0.5182 0.5184 min=0.5182
+AB_CMP capture_vs_eager identical=True max_abs_diff=0 shape=(145, 816, 960) dtype=torch.uint8
+AB_CMP traced_vs_eager identical=True max_abs_diff=0 shape=(145, 816, 960) dtype=torch.uint8
+PASSED
+PASSED models/tt_dit/tests/models/ltx/test_vae_ltx_trace_ab.py::test_vae_ltx_trace_ab[blackhole-mesh_device0-device_params0]
+======================== 1 passed, 2 warnings in 31.93s ========================
+T99_DECODE1_EXIT=0
+[eager] CMP99 shape=(145, 816, 960) peak=255.0 psnr_db=51.58 pcc=1.000000 max_abs=4.0
+[traced] CMP99 shape=(145, 816, 960) peak=255.0 psnr_db=51.58 pcc=1.000000 max_abs=4.0
+T99_EXIT=0
+2026-10-03 07:07:09 start boot=2026-10-03 05:09:23
+2026-10-03 07:08:09 build rc=0 a6e02770e0
+2026-10-03 07:09:09 ab submit rc=0: Job 457 queued (position: 0) Log: /var/log/tt-device-broker/2026-10-03_070909_457.log 457
+2026-10-03 07:09:09 ab JOB=457
+2026-10-03 07:09:09 ab running since 2026-10-03 07:09:09
+2026-10-03 07:12:10 ab status: Status:  completed Exit:    0
+2026-10-03 07:13:40 T99_DRIVER_DONE ab 0
