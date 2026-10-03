@@ -3398,7 +3398,9 @@ class UnarySFPUGolden:
             return x
         if math.isinf(x):
             return math.copysign(self.handle_infinite_numbers(math.inf), x)
-        return self._torch_unary(x, torch.special.i1)
+        # In float64: torch's float32 I1 overflows from x = 89, but I1(89) = 1.89e37 and the
+        # true value only passes the float32 maximum near x = 91.9.
+        return self._torch_unary(x, lambda t: torch.special.i1(t.double()).float())
 
     def _sign(self, x):
         # Matches calculate_sign: -1 for x<0, 0 for x==0, +1 otherwise.
