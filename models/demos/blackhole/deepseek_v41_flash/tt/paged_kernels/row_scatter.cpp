@@ -68,6 +68,8 @@ void kernel_main() {
     const uint32_t core = get_arg_val<uint32_t>(0);
     const uint32_t a_src = get_common_arg_val<uint32_t>(0), a_ids = get_common_arg_val<uint32_t>(1),
                    a_pool = get_common_arg_val<uint32_t>(2);
+    const uint32_t base_off =
+        get_common_arg_val<uint32_t>(3);  // added to every (non-skipped) row id: one ids tensor serves all rings
     Noc noc;
     const auto src_acc = TensorAccessor(src_args, a_src, 1024);
     const auto ids_acc = TensorAccessor(ids_args, a_ids, N * 4);
@@ -96,7 +98,11 @@ void kernel_main() {
                     row_to_fp8(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + IDS_B + g * 1024));
                 }
                 noc.async_write(
-                    cb, pool_acc, ROW_B, {.offset_bytes = IDS_B + g * 1024}, {.page_id = ids[i], .offset_bytes = 0});
+                    cb,
+                    pool_acc,
+                    ROW_B,
+                    {.offset_bytes = IDS_B + g * 1024},
+                    {.page_id = ids[i] + base_off, .offset_bytes = 0});
             }
         }
         noc.async_write_barrier();
