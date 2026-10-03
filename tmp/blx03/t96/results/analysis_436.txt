@@ -1,0 +1,26 @@
+per-device total ms: {0.0: 484.1, 1.0: 486.3, 2.0: 486.0, 3.0: 480.2, 4.0: 482.2, 5.0: 484.3, 6.0: 483.7, 7.0: 480.2}
+
+slowest device 1.0: 486.3 ms, 161 ops
+                                                               ms      %  count
+cls
+conv3d                                                     359.70  73.96     42
+layout (tilize/untilize/permute/reshape/concat/slice/pad)   46.63   9.59     18
+norm (pixel/group/rms)                                      45.72   9.40     37
+eltwise                                                     22.56   4.64     21
+halo/neighbor-pad CCL                                        8.93   1.84     42
+other                                                        2.78   0.57      1
+
+                                                                                                    ms      %  count  mean_us
+OP CODE                              cls
+Conv3dDeviceOperation                conv3d                                                     359.70  73.96     42  8564.31
+LayerNormDeviceOperation             norm (pixel/group/rms)                                      45.72   9.40     37  1235.75
+PermuteDeviceOperation               layout (tilize/untilize/permute/reshape/concat/slice/pad)   28.80   5.92      5  5759.93
+BinaryNgDeviceOperation              eltwise                                                     21.49   4.42     20  1074.50
+ReshapeViewDeviceOperation           layout (tilize/untilize/permute/reshape/concat/slice/pad)   16.67   3.43      5  3334.28
+NpHaloDeviceOperation                halo/neighbor-pad CCL                                        8.93   1.84     42   212.71
+RgbToYuvDeviceOperation              other                                                        2.78   0.57      1  2778.86
+SliceDeviceOperation                 layout (tilize/untilize/permute/reshape/concat/slice/pad)    1.08   0.22      3   360.86
+UnaryDeviceOperation                 eltwise                                                      1.07   0.22      1  1066.16
+TilizeWithValPaddingDeviceOperation  layout (tilize/untilize/permute/reshape/concat/slice/pad)    0.04   0.01      2    19.79
+UntilizeWithUnpaddingDeviceOperation layout (tilize/untilize/permute/reshape/concat/slice/pad)    0.03   0.01      2    13.26
+TypecastDeviceOperation              layout (tilize/untilize/permute/reshape/concat/slice/pad)    0.01   0.00      1    12.64

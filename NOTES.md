@@ -45,3 +45,10 @@ Build on blx03: ~/fasth3/t48 @ b43f3ea63a (a613d669ee + ce356b8815a ttnn/ part),
 Read driver.log, run96.log (eager vs traced min, VAE_DECODE_SPLIT decode ms), analysis.txt (per-chip op table).
 Compare with t61/job 029 (828 ms device, conv3d 308) and the ~490 ms estimate. Copy logs/analysis here.
 Cleanup on blx03: rm -rf /var/tmp/fasth3/t96/{jit,prof,src,yuv_*.pt} (keep logs + analysis until copied).
+
+## Attempt 2b result (job 436, 04:19-04:21 UTC): DONE, no drop, exit 0
+- Profiled eager decode, per-chip device op sum 480-486 ms (slowest chip 486.3 ms, 161 ops). Table: tmp/blx03/t96/results/analysis_436.txt
+  conv3d 359.7 (74%, 42 ops) | layout 46.6 (permute 28.8, reshape 16.7) | norm 45.7 | eltwise 22.6 | halo NpHalo 8.9 | rgb2yuv 2.8
+- vs t61 job 029 (828 ms, 468 ops): halo 119 -> 9, layout 256 -> 47, eltwise 96 -> 23, norm flat; conv3d UP 308 -> 360 (+52 ms).
+- Profiler sum (486) > traced/eager wall decode (445): profiler-enabled kernels run slower; use 445 ms as the wall budget.
+- Cleanup done: blx03 /var/tmp/fasth3/t96 now 628K (logs, analysis, ops_perf.csv.gz, run96.p2.log.gz). ~/fasth3/t48 build kept (other tasks use it).
