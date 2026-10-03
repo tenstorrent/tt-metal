@@ -236,24 +236,41 @@ def assemble_clip_parts(parts: list[tuple], frame_overlap: int):
 
 
 def stitch_tiles(
-    tiles: list[list[torch.Tensor]], height_overlaps: list[int], width_overlaps: list[int]
+    tiles: list[list[torch.Tensor]],
+    height_overlaps: list[int],
+    width_overlaps: list[int],
 ) -> torch.Tensor:
-    """Blend a 2D grid of tiles back into one tensor (reference ``_stitch_tiles``)."""
-    result_rows = []
+    """Blend a 2D grid into one canvas, preserving reference ``_stitch_tiles`` arithmetic.
+
+    Write each cropped tile directly to its final position instead of concatenating
+    every row and then concatenating those rows, which copies retained pixels twice.
+    Both encoder and decoder supply a rectangular grid of same-dtype floating tiles.
+    """
+    row_heights = [row[0].shape[-2] - (height_overlaps[i] if i < len(tiles) - 1 else 0) for i, row in enumerate(tiles)]
+    column_widths = [
+        tile.shape[-1] - (width_overlaps[j] if j < len(tiles[0]) - 1 else 0) for j, tile in enumerate(tiles[0])
+    ]
+    sample = tiles[0][0]
+    result = torch.empty(
+        (*sample.shape[:-2], sum(row_heights), sum(column_widths)),
+        dtype=sample.dtype,
+        device=sample.device,
+    )
+    y = 0
     for i, row in enumerate(tiles):
-        result_row = []
+        x = 0
         for j, tile in enumerate(row):
+            # The reference blends against the original neighbours, not the canvas.
+            # Keep vertical before horizontal, including where the two seams meet.
             if i > 0:
                 tile = blend(tiles[i - 1][j], tile, height_overlaps[i - 1], dim=-2)
             if j > 0:
                 tile = blend(row[j - 1], tile, width_overlaps[j - 1], dim=-1)
-            if i < len(tiles) - 1:
-                tile = tile[..., : -height_overlaps[i], :]
-            if j < len(row) - 1:
-                tile = tile[..., :, : -width_overlaps[j]]
-            result_row.append(tile)
-        result_rows.append(torch.cat(result_row, dim=-1))
-    return torch.cat(result_rows, dim=-2)
+            height, width = row_heights[i], column_widths[j]
+            result[..., y : y + height, x : x + width].copy_(tile[..., :height, :width])
+            x += width
+        y += row_heights[i]
+    return result
 
 
 def prepare_encoder_state(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
