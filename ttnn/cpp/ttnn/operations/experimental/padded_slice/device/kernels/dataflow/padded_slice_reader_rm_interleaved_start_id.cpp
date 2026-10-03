@@ -149,11 +149,24 @@ void kernel_main() {
                         }
 
                     } else if (slot_states[slot] == SlotState::SCRATCH_READY) {
-                        // Start scratch->dest transfer
-                        noc_async_read_set_trid(active_trid);
-                        uint64_t scratch_noc_read_addr = get_noc_addr(scratch_write_addrs[slot] + misalignment);
-                        noc_async_read(scratch_noc_read_addr, dest_write_addrs[slot], unpadded_stick_size);
-                        slot_states[slot] = SlotState::SCRATCH_PENDING;
+                        if (misalignment % 16 == 0) {
+                            // Start scratch->dest transfer
+                            noc_async_read_set_trid(active_trid);
+                            uint64_t scratch_noc_read_addr = get_noc_addr(scratch_write_addrs[slot] + misalignment);
+                            noc_async_read(scratch_noc_read_addr, dest_write_addrs[slot], unpadded_stick_size);
+                            slot_states[slot] = SlotState::SCRATCH_PENDING;
+                        } else {
+                            // The NoC can't copy from a source that isn't 16 B aligned to this 16 B aligned
+                            // destination, so copy on the RISC, as slice's RM reader does for misaligned sticks.
+                            tt::data_movement::common::tt_memmove<false, false, false, 0>(
+                                noc,
+                                dest_write_addrs[slot],
+                                scratch_write_addrs[slot] + misalignment,
+                                unpadded_stick_size);
+                            slot_states[slot] = SlotState::IDLE;
+                            sticks_read++;
+                            sticks_completed++;
+                        }
 
                     } else if (slot_states[slot] == SlotState::SCRATCH_PENDING) {
                         // Check if scratch->dest transfer is complete
