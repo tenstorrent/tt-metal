@@ -360,9 +360,14 @@ class DSV41PrefillAttention:
                 lat, cs = self._compress_dyn(h, C)
                 Cc = C // r
                 buf = self.lat_buf
-                new = ttnn.concat([ttnn.slice(buf, [0, 0, Cc, 0], [U, 1, buf.shape[2], HEAD_DIM]), lat], dim=2)
-                ttnn.copy(new, buf)
-                ttnn.deallocate(new)
+                if (
+                    buf.shape[2] == Cc
+                ):  # single-chunk prompt (S_pad == C): the FIFO is just this chunk (a zero-length slice breaks the concat)
+                    ttnn.copy(lat, buf)
+                else:
+                    new = ttnn.concat([ttnn.slice(buf, [0, 0, Cc, 0], [U, 1, buf.shape[2], HEAD_DIM]), lat], dim=2)
+                    ttnn.copy(new, buf)
+                    ttnn.deallocate(new)
                 lat_buf = buf
             else:
                 lat_buf = a.source.prefill.lat_buf

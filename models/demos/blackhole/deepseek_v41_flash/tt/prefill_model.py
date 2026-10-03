@@ -234,6 +234,19 @@ class DSV41PrefillModel:
         return plan
 
     def run(self, tokens, chunk=None, hook=None, hashes=None):
+        """DEFAULT prefill: one trace of a chunk forward replayed for every chunk (``run_traced_chunks``). ``chunk`` = tokens per user per chunk
+        (multiple of 128; default ``default_chunk``). DSV41_PREFILL_EAGER=1 (or a per-layer ``hook``) selects the eager reference path.
+        """
+        if hook is not None or os.environ.get("DSV41_PREFILL_EAGER") == "1":
+            return self.run_eager(tokens, chunk=chunk, hook=hook, hashes=hashes)
+        return self.run_traced_chunks(tokens, chunk or self.default_chunk(tokens.shape[1]), hashes=hashes)
+
+    def default_chunk(self, S):
+        """Chunk size per user: the padded prompt, capped at DSV41_PREFILL_CHUNK_TOKENS (default 4096) tokens per mesh row / users per row."""
+        cap = max(128, int(os.environ.get("DSV41_PREFILL_CHUNK_TOKENS", "4096")) // self.U // 128 * 128)
+        return min(-(-S // 128) * 128, cap)
+
+    def run_eager(self, tokens, chunk=None, hook=None, hashes=None):
         """Eager: tokens [B, S] -> logits [B, vocab] (host fp32) of the LAST prompt token of every user, the decode state of every layer left on the
         device. ``chunk``: tokens per user per chunk (multiple of 128; None = the whole prompt at once). ``hook(layer_id, outs, pouts)`` is
         called after every layer of a single-chunk run (diagnostics)."""
