@@ -1222,6 +1222,80 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
     topk_replay_init = -1;
 }
 
+// One merge compare-exchange group: rows offset and offset + ld_dist of the slab and of its index tiles, relative to the dest counter.
+template <bool is_fp32_dest_acc_en, bool top_min, bool STABLE_SORT, bool FUSED, bool RANK_STAMPED, TopkTieOrder TIE_ORDER>
+inline void bitonic_topk_merge_group(const std::uint32_t offset, const std::uint32_t ld_dist, const bool first_in_block)
+{
+    bitonic_topk_load8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(offset, ld_dist);
+    if constexpr (RANK_STAMPED)
+    {
+        // Re-key both runs' value lo16 with fresh sign-conditioned local
+        // ranks so this merge AND the rebuild that follows it compare
+        // distinct keys whose tie order is the true index order. The
+        // true indices are live in LREG4/5 from the load above: from
+        // here to the swap, ALU-only writes to LREG0..3 (TEN-2932).
+        if (first_in_block)
+        {
+            // Fresh per-pair rank iota: rank = 4*ii + (j>>3) (each load
+            // covers 4 consecutive run positions per lane group;
+            // LTILEID = 2*j). Left-run base is 0 for every in-tree
+            // caller -- one merge call per tile pair.
+            TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG2, 0);
+            TTI_SFPSHFT((-4) & 0xFFF, 0, p_sfpu::LREG2, 1);
+        }
+        // largest = !top_min: complement the lanes whose sign matches the
+        // kept extreme, exactly as the fused-key conditioning does.
+        constexpr int stamp_cc = top_min ? sfpi::SFPSETCC_MOD1_LREG_LT0 : sfpi::SFPSETCC_MOD1_LREG_GTE0;
+        // Left run: global direction, lower rank range.
+        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG0, 0);
+        TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, stamp_cc);
+        TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
+        TOPK_SFPENCC_ALL_LANES_ON();
+        // Right run: mirror direction, upper range -- rank' = (2K-1) - rank,
+        // a single XOR because 2K is a power of two and rank < 2K.
+        TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);
+        TTI_SFPXOR(0, p_sfpu::LREG13, p_sfpu::LREG3, 0);
+        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG1, 0);
+        TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG1, 0);
+        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, stamp_cc);
+        TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);
+        TOPK_SFPENCC_ALL_LANES_ON();
+        // Advance to the next 4 run positions.
+        TTI_SFPIADD(4, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    }
+    if constexpr (STABLE_SORT)
+    {
+        // top_min selects the value operand order (which run receives the
+        // minima), exactly as in the unstable arm below. The tie-break polarity
+        // comes from TIE_ORDER -- the GLOBAL sort
+        // order. Anchoring the tie routing to
+        // the operand order (the index minimum rides with the value minimum or
+        // maximum per the global mode) makes every merge a comparator on ONE
+        // fixed total order [value, then index], so callers may issue merges
+        // with per-block alternating directions (ttnn.sort's bitonic merge
+        // network, which always binds top_min=false and routes the outputs
+        // afterwards) or in the global direction (the ttnn topk kernels, which
+        // bind top_min = !largest; the LLK/quasar test kernels, which bind
+        // TOPK_SORT_DIRECTION). For every global-direction caller this compiles
+        // to the pre-existing selection, since they program the runtime mode
+        // from the same flag they derive top_min from.
+        if constexpr (top_min)
+        {
+            topk_cmp_swap_stable_min_to_vd<p_sfpu::LREG1, p_sfpu::LREG0, p_sfpswap::ALL_ROWS_MAX, TIE_ORDER>();
+        }
+        else
+        {
+            topk_cmp_swap_stable_min_to_vd<p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX, TIE_ORDER>();
+        }
+    }
+    else
+    {
+        TTI_SFPSWAP(0, top_min ? p_sfpu::LREG1 : p_sfpu::LREG0, top_min ? p_sfpu::LREG0 : p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+    }
+    bitonic_topk_store8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(offset, ld_dist);
+}
+
 template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,
@@ -1276,90 +1350,57 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
             std::uint32_t dist            = (k_max << m_iter) > 32 ? 32 : (k_max << m_iter); // min(32, k*2^k)
             std::uint32_t ld_dist         = (dist < 16) ? dist : 2 * dist;                   // Accounts for face offsets within a tile
             std::uint32_t datums_compared = 0;
-            std::uint32_t dst_offset      = 0;
-            std::uint32_t dst_cr          = 0;
+            constexpr std::uint32_t group_words = FUSED ? 4 : 8;
 
-            while (datums_compared < total_datums_to_compare)
+            // At most 16 group words per quadrant (a group per 8 datums), the counter walk's increments cost more than they save.
+            if (((dist & 7) == 0) && (total_datums_to_compare * group_words > 128))
             {
-                for (std::uint32_t ii = 0; ii < inner_d; ii++)
+                // Blocks start on a face row: a block's group words are fixed and the dest counter walks its groups, 4 rows on
+                // (20 into the next face).
+                std::uint32_t blk_offset = 0;
+                while (datums_compared < total_datums_to_compare)
                 {
-                    bitonic_topk_load8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(dst_offset, ld_dist);
-                    if constexpr (RANK_STAMPED)
+                    if (blk_offset > 0)
                     {
-                        // Re-key both runs' value lo16 with fresh sign-conditioned local
-                        // ranks so this merge AND the rebuild that follows it compare
-                        // distinct keys whose tie order is the true index order. The
-                        // true indices are live in LREG4/5 from the load above: from
-                        // here to the swap, ALU-only writes to LREG0..3 (TEN-2932).
-                        if (ii == 0)
-                        {
-                            // Fresh per-pair rank iota: rank = 4*ii + (j>>3) (each load
-                            // covers 4 consecutive run positions per lane group;
-                            // LTILEID = 2*j). Left-run base is 0 for every in-tree
-                            // caller -- one merge call per tile pair.
-                            TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG2, 0);
-                            TTI_SFPSHFT((-4) & 0xFFF, 0, p_sfpu::LREG2, 1);
-                        }
-                        // largest = !top_min: complement the lanes whose sign matches the
-                        // kept extreme, exactly as the fused-key conditioning does.
-                        constexpr int stamp_cc = top_min ? sfpi::SFPSETCC_MOD1_LREG_LT0 : sfpi::SFPSETCC_MOD1_LREG_GTE0;
-                        // Left run: global direction, lower rank range.
-                        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG0, 0);
-                        TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-                        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, stamp_cc);
-                        TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
-                        TOPK_SFPENCC_ALL_LANES_ON();
-                        // Right run: mirror direction, upper range -- rank' = (2K-1) - rank,
-                        // a single XOR because 2K is a power of two and rank < 2K.
-                        TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);
-                        TTI_SFPXOR(0, p_sfpu::LREG13, p_sfpu::LREG3, 0);
-                        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG1, 0);
-                        TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG1, 0);
-                        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, stamp_cc);
-                        TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);
-                        TOPK_SFPENCC_ALL_LANES_ON();
-                        // Advance to the next 4 run positions.
-                        TTI_SFPIADD(4, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+                        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
                     }
-                    if constexpr (STABLE_SORT)
+#pragma GCC unroll 8
+                    for (std::uint32_t ii = 0; ii < inner_d; ii++)
                     {
-                        // top_min selects the value operand order (which run receives the
-                        // minima), exactly as in the unstable arm below. The tie-break polarity
-                        // comes from TIE_ORDER -- the GLOBAL sort
-                        // order. Anchoring the tie routing to
-                        // the operand order (the index minimum rides with the value minimum or
-                        // maximum per the global mode) makes every merge a comparator on ONE
-                        // fixed total order [value, then index], so callers may issue merges
-                        // with per-block alternating directions (ttnn.sort's bitonic merge
-                        // network, which always binds top_min=false and routes the outputs
-                        // afterwards) or in the global direction (the ttnn topk kernels, which
-                        // bind top_min = !largest; the LLK/quasar test kernels, which bind
-                        // TOPK_SORT_DIRECTION). For every global-direction caller this compiles
-                        // to the pre-existing selection, since they program the runtime mode
-                        // from the same flag they derive top_min from.
-                        if constexpr (top_min)
+                        if ((ii & 3) == 0 && ii > 0)
                         {
-                            topk_cmp_swap_stable_min_to_vd<p_sfpu::LREG1, p_sfpu::LREG0, p_sfpswap::ALL_ROWS_MAX, TIE_ORDER>();
+                            TTI_INCRWC(0, 10, 0, 0);
+                            TTI_INCRWC(0, 10, 0, 0);
+                        }
+                        else if (ii > 0)
+                        {
+                            TTI_INCRWC(0, 4, 0, 0);
+                        }
+                        bitonic_topk_merge_group<is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER>(blk_offset, ld_dist, ii == 0);
+                        datums_compared += 8;
+                    }
+                    blk_offset += 2 * dist;
+                }
+            }
+            else
+            {
+                std::uint32_t dst_offset = 0;
+                std::uint32_t dst_cr     = 0;
+                while (datums_compared < total_datums_to_compare)
+                {
+                    for (std::uint32_t ii = 0; ii < inner_d; ii++)
+                    {
+                        bitonic_topk_merge_group<is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER>(dst_offset, ld_dist, ii == 0);
+                        datums_compared += 8;
+                        if (ii == (inner_d - 1))
+                        {
+                            dst_cr += 2 * dist;
+                            dst_offset = dst_cr;
                         }
                         else
                         {
-                            topk_cmp_swap_stable_min_to_vd<p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX, TIE_ORDER>();
+                            dst_offset += 4;
                         }
-                    }
-                    else
-                    {
-                        TTI_SFPSWAP(0, top_min ? p_sfpu::LREG1 : p_sfpu::LREG0, top_min ? p_sfpu::LREG0 : p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-                    }
-                    bitonic_topk_store8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(dst_offset, ld_dist);
-                    datums_compared += 8;
-                    if (ii == (inner_d - 1))
-                    {
-                        dst_cr += 2 * dist;
-                        dst_offset = dst_cr;
-                    }
-                    else
-                    {
-                        dst_offset += 4;
                     }
                 }
             }
