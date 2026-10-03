@@ -934,3 +934,39 @@ def test_unary_chain_typecast_int8(tt_output_dtype, device):
 
     expected = ttnn.to_torch(ttnn.typecast(input_tensor, tt_output_dtype))
     assert_equal(expected, ttnn.to_torch(chained))
+
+
+@pytest.mark.parametrize("tt_input_dtype, pt_dtype", [(ttnn.float32, torch.float32), (ttnn.bfloat16, torch.bfloat16)])
+def test_typecast_fp_to_uint16_truncates_toward_zero(device, tt_input_dtype, pt_dtype):
+    """fp->uint16 must truncate toward zero like every other integer destination, the host
+    path and torch (#51655). Half-integers are the stimulus that separates truncation from
+    both round-to-nearest modes; no existing suite feeds them deterministically."""
+    vals = [k + 0.5 for k in range(12)] + [0.25, 0.75, 1.25, 127.5, 4095.5, 65534.5, 0.0, 1.0, 65535.0]
+    x = torch.zeros(1, 1, TILE_HEIGHT, TILE_WIDTH, dtype=pt_dtype)
+    flat = x.view(-1)
+    flat[: len(vals)] = torch.tensor(vals, dtype=pt_dtype)
+    torch_ref = torch.clamp(torch.trunc(x.to(torch.float32)).to(torch.int64), min=0, max=65535)
+
+    input_tensor = ttnn.from_torch(x, dtype=tt_input_dtype, layout=npu_layout, device=device)
+    out = ttnn.to_torch(ttnn.typecast(input_tensor, ttnn.uint16)).to(torch.int64)
+    assert torch.equal(out, torch_ref), f"device {out.flatten()[:len(vals)].tolist()} != torch {torch_ref.flatten()[:len(vals)].tolist()}"
+
+    # The device path must also agree with ttnn's own host conversion of the same data.
+    host = ttnn.to_torch(ttnn.from_torch(x, dtype=ttnn.uint16)).to(torch.int64)
+    assert torch.equal(out, host), f"device {out.flatten()[:len(vals)].tolist()} != host {host.flatten()[:len(vals)].tolist()}"
+
+
+def test_typecast_int32_to_uint16_exact_for_large_values(device):
+    """int32->uint16 clamps in the integer domain: negative -> 0, [0, 65535] -> identity,
+    >= 65536 -> 65535, exactly and for any magnitude (#51655). The previous kernel's fp32
+    round trip lost the low bits of |v| > 2^24; the observable results agree only because
+    everything at or above 65535 clamps anyway, and this test pins that contract."""
+    vals = [0, 1, 65534, 65535, 65536, 70000, 2**24 + 1, 2**25 + 3, 2**30 + 7, -1, -70000, -(2**30 + 7)]
+    x = torch.zeros(1, 1, TILE_HEIGHT, TILE_WIDTH, dtype=torch.int32)
+    flat = x.view(-1)
+    flat[: len(vals)] = torch.tensor(vals, dtype=torch.int32)
+    torch_ref = torch.clamp(x.to(torch.int64), min=0, max=65535)
+
+    input_tensor = ttnn.from_torch(x, dtype=ttnn.int32, layout=npu_layout, device=device)
+    out = ttnn.to_torch(ttnn.typecast(input_tensor, ttnn.uint16)).to(torch.int64)
+    assert torch.equal(out, torch_ref), f"device {out.flatten()[:len(vals)].tolist()} != torch {torch_ref.flatten()[:len(vals)].tolist()}"
