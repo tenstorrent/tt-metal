@@ -143,6 +143,12 @@ inline void _llk_unpack_tilize_block_wrapper_(
     const std::uint32_t num_faces                     = 4,
     const bool narrow_tile                            = false)
 {
+    // As llk_unpack_tilize_block: one tile takes the per tile call.
+    if (num_tiles == 1)
+    {
+        _llk_unpack_tilize_(base_address, first_tile_index, unpack_src_format, unpack_dst_format, face_r_dim, num_faces, narrow_tile);
+        return;
+    }
     _llk_unpack_tilize_block_(base_address, first_tile_index, num_tiles, unpack_src_format, unpack_dst_format, face_r_dim, num_faces, narrow_tile);
 }
 
