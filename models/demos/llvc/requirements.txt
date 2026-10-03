@@ -1,0 +1,6 @@
+# Extra Python deps for the LLVC TTNN demo (on top of tt-metal's own env).
+# torch / ttnn are provided by the tt-metal environment.
+# Audio file I/O uses soundfile (libsndfile); resampling is done with torch,
+# so torchaudio is not required.
+soundfile==0.12.1
+numpy==1.26.4
