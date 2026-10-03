@@ -139,7 +139,7 @@ inline void row_math(const std::uint32_t tile_cnt, const std::uint32_t batch_siz
     _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(tensor_shape, 0);
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::fill>();
     SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (false, BinaryOp::ADD));
-    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_x_<false, 8>, accumulator, VectorMode::RC, 0.0f);
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_x_<false, 2>, accumulator, VectorMode::RC_custom, 0.0f);
     for (std::uint32_t base = 0; base < tile_cnt; base += batch_size)
     {
         const std::uint32_t count = (tile_cnt - base < batch_size) ? (tile_cnt - base) : batch_size;
@@ -175,11 +175,11 @@ inline void row_math(const std::uint32_t tile_cnt, const std::uint32_t batch_siz
             DST_SYNC,
             is_fp32_dest_acc_en,
             calculate_sfpu_binary,
-            (false, BinaryOp::ADD, 8, is_fp32_dest_acc_en),
+            (false, BinaryOp::ADD, 1, is_fp32_dest_acc_en),
             accumulator,
             0,
             accumulator,
-            VectorMode::RC);
+            VectorMode::RC_custom);
     }
 }
 

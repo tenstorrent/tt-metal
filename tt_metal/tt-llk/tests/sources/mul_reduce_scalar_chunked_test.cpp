@@ -117,8 +117,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 
-    // fill_tile(accumulator, 0.0f)
-    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_<false /* APPROX */, 8 /* ITERATIONS */>, accumulator, VectorMode::RC, 0.0f);
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_<false /* APPROX */, 2 /* ITERATIONS */>, accumulator, VectorMode::RC_custom, 0.0f);
 
     for (std::uint32_t base = 0; base < tile_cnt; base += batch_size)
     {
@@ -156,16 +155,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_mul_reduce_scalar_<MATH_FIDELITY>();
         _llk_math_mul_reduce_scalar_clear_dvalid_();
 
-        // add_binary_tile(accumulator, 0, accumulator)
         SFPU_BINARY_CALL(
             DST_SYNC,
             is_fp32_dest_acc_en,
             calculate_sfpu_binary,
-            (false /* APPROX */, BinaryOp::ADD, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
+            (false /* APPROX */, BinaryOp::ADD, 1 /* ITERATIONS */, is_fp32_dest_acc_en),
             accumulator,
             0,
             accumulator,
-            VectorMode::RC);
+            VectorMode::RC_custom);
     }
 
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
