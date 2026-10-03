@@ -289,12 +289,18 @@ def test_prefill_long_context_traced(mesh_device, context_len, chunk_size, token
         cumulative_wall_ms = []
         stage_ms = 0.0
         t_run = time.time()
+        next_start = _stage(0)
+        stage_ms += (time.time() - t_run) * 1000
         for chunk_idx in range(n_chunks):
-            t_stage = time.time()
-            chunk_start = _stage(chunk_idx)
-            stage_ms += (time.time() - t_stage) * 1000
+            chunk_start = next_start
             t_c = time.time()
             ttnn.execute_trace(mesh_device, tid_ring, cq_id=0, blocking=False)
+            # Stage the next chunk while this one runs. CQ0 executes in order, so its uploads land after this trace
+            # has read the current inputs.
+            if chunk_idx + 1 < n_chunks:
+                t_stage = time.time()
+                next_start = _stage(chunk_idx + 1)
+                stage_ms += (time.time() - t_stage) * 1000
             ttnn.synchronize_device(mesh_device)
             per_chunk_ms.append((time.time() - t_c) * 1000)
             cumulative_wall_ms.append((time.time() - t_run) * 1000)
@@ -311,8 +317,8 @@ def test_prefill_long_context_traced(mesh_device, context_len, chunk_size, token
     device_ms = sum(per_chunk_ms)
     # Separate device execution from host-side staging in the wall time.
     #   device   — execute_trace + synchronize. What the hardware spends on prefill.
-    #   staging  — token upload, ring metadata, pinned RoPE refresh. Real work a
-    #              deployment also pays, though it should overlap rather than serialize.
+    #   staging  — token upload, ring metadata, pinned RoPE refresh. Host work a deployment also pays;
+    #              after the first chunk it overlaps the previous chunk's device time.
     logger.info(
         f"[traced_perf] DEVICE {context_len} tokens in {device_ms:.1f}ms "
         f"({context_len * 1000 / device_ms:.0f} tok/s) | staging {stage_ms:.1f}ms | wall {total_ms:.1f}ms"
