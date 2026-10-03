@@ -17,20 +17,17 @@ MATH(static_assert(!DST_ACCUM_MODE, "softshrink_bw_tile evaluates BF16 DEST"));
 // clang-format off
 /**
  * Computes the input gradient grad * f'(x) of softshrink over one tile, in BF16 DEST.
- * DEST tile idst holds x and tile idst + 1 holds grad; the result replaces x. The kernel
- * also uses tile idst + 2 as scratch.
+ * DEST tile idst holds x and tile idst + 1 holds grad; the result replaces x.
  *
  * Return value: None
  *
  * | Argument | Description                                   | Type     | Valid Range                                          | Required |
  * |----------|-----------------------------------------------|----------|------------------------------------------------------|----------|
- * | idst     | Index of the DST tile holding x; grad is next | uint32_t | idst + 2 must be less than the DST register capacity | True     |
+ * | idst     | Index of the DST tile holding x; grad is next | uint32_t | idst + 1 must be less than the DST register capacity | True     |
  */
 // clang-format on
 ALWI void softshrink_bw_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_softshrink_bw_bf16, (32), idst, VectorMode::None));
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_softshrink_bw_gradient_bf16, (32), idst, VectorMode::None));
 }
 
 /**
