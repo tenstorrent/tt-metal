@@ -7,6 +7,9 @@
 #include <bit>
 #include <cmath>
 #include <limits>
+#include <random>
+
+#include <tt_stl/assert.hpp>
 
 namespace {
 
@@ -122,6 +125,23 @@ std::vector<float8_e4m3> unpack_uint32_vec_into_float8_e4m3_vec(const std::vecto
         result.push_back(float8_e4m3::from_bits((word >> 8) & 0xFF));
         result.push_back(float8_e4m3::from_bits((word >> 16) & 0xFF));
         result.push_back(float8_e4m3::from_bits((word >> 24) & 0xFF));
+    }
+    return result;
+}
+
+std::vector<uint32_t> create_random_vector_of_float8_e4m3(
+    size_t num_bytes, int rand_max_float, int seed, float offset) {
+    TT_FATAL(num_bytes % 4 == 0, "num_bytes must be divisible by 4, got {}", num_bytes);
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<float> dist(0, rand_max_float);
+
+    std::vector<uint32_t> result(num_bytes / sizeof(uint32_t), 0);
+    for (uint32_t& word : result) {
+        float8_e4m3 a(dist(rng) + offset);
+        float8_e4m3 b(dist(rng) + offset);
+        float8_e4m3 c(dist(rng) + offset);
+        float8_e4m3 d(dist(rng) + offset);
+        word = pack_four_float8_e4m3_into_uint32(a, b, c, d);
     }
     return result;
 }
