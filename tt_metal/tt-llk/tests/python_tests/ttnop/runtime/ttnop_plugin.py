@@ -251,7 +251,8 @@ class Perturber:
             variant.filler_word,
         )
         if self.verbose:
-            print(f">> {variant.label()}", flush=True)
+            # xdist points worker stdout at /dev/null. stderr still reaches the terminal.
+            print(f">> {variant.label()}", file=sys.stderr, flush=True)
         # Rewind to the stimuli the baseline drew, so a difference in the output is
         # the delay and not the data.
         if self._rng_state is not None:
@@ -334,7 +335,11 @@ class Perturber:
         if not variants:
             return []
         if self.verbose:
-            print(f"\n>> {item.nodeid}: {len(variants)} variant(s)", flush=True)
+            print(
+                f"\n>> {item.nodeid}: {len(variants)} variant(s)",
+                file=sys.stderr,
+                flush=True,
+            )
 
         self._item = item
         self._kwargs = _test_kwargs(item)
@@ -435,14 +440,20 @@ def pytest_runtest_call(item):
     unwatch = perturber.watch_baseline()
     _hb().beat(item.nodeid)
     try:
-        with quiet_harness():
-            outcome = yield
+        outcome = yield
 
         # A test that was already red tells us nothing about timing.
         if outcome.excinfo is not None:
             error = outcome.excinfo[1]
             if isinstance(error, TimeoutError):
                 _hang_closes_case(item.nodeid, str(error))
+            elif not isinstance(error, _SKIPPED):
+                # Only a perturbation may fail the case.
+                outcome.force_exception(
+                    pytest.skip.Exception(
+                        f"ttnop skipped: clean run failed: {type(error).__name__}: {error}"
+                    )
+                )
             return
         # Reconfig tests can be swept without a result buffer because the body
         # checks TensixState.
