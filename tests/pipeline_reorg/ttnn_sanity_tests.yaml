@@ -306,7 +306,16 @@
   # once when MetalContext is first constructed, so it must be set before this process opens a
   # device. Exporting it here rather than relying on the directory conftest's fixture also makes
   # the requirement visible, and satisfies the requires_hybrid_allocator marker on those tests.
-  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/base_functionality tests/ttnn/unit_tests/benchmarks tests/ttnn/unit_tests/tensor -xv -m "not disable_fast_runtime_mode" && TT_METAL_ALLOCATOR_MODE_HYBRID=1 pytest --timeout 300 tests/ttnn/unit_tests/per_core_allocation -xv && TT_METAL_ALLOCATOR_MODE_HYBRID=1 pytest --timeout 300 tests/ttnn/unit_tests/range_lockstep_allocation -xv'
+  # run-pytest-group.sh keeps each invocation a separate process while forwarding flags the
+  # pipeline appends to the cmd (e.g. --deselect, -n 4) to EVERY invocation: an &&-chain lets
+  # them reach only the last one (see issue #44788).
+  cmd: >-
+    scripts/ci/run-pytest-group.sh
+    --spec 'pytest --timeout 300 tests/ttnn/unit_tests/base_functionality tests/ttnn/unit_tests/benchmarks
+    tests/ttnn/unit_tests/tensor -xv -m "not disable_fast_runtime_mode"'
+    --spec 'TT_METAL_ALLOCATOR_MODE_HYBRID=1 pytest --timeout 300 tests/ttnn/unit_tests/per_core_allocation -xv'
+    --spec 'TT_METAL_ALLOCATOR_MODE_HYBRID=1 pytest --timeout 300 tests/ttnn/unit_tests/range_lockstep_allocation -xv'
+    --
   ai_summary:
     authoritative_job_status: true
   skus:
