@@ -22,8 +22,26 @@
   Per-layer log run100_<layer>.log, results in /var/tmp/fasth3/t100/results/<layer>_*.json.
 - Re-launch for missing layers: `LAYERS="..."` env; finished layers have results/<layer>_done.
 
+## Sweep results (jobs 458/461/464/467, all clean; JSONs in tmp/t100/results/, not committed)
+| layer (calls) | table us | best (any) | best keeping table C_in_block |
+|---|---|---|---|
+| s2_res (9) | 15240 | table is best | - |
+| s3_res (12) | 6924 | table is best (6894) | - |
+| s4_res (8) | 8899 [128,64,6,2,16] | 7327 [64,128,6,4,8] -17.7%, PCC 0.99993, max_abs 2 | 8170 [128,64,6,4,8] -8.2% |
+| s1_up (1) | 22963 [128,64,5,4,8] | 20264 [64,256,1,2,16] -11.8%, PCC 1.0, max_abs 4 | 20915 [128,64,5,2,16] -8.9% |
+Expected decode gain: exact arm ~8 ms, best arm ~15 ms (per chip, 1150 MHz clamp).
+_HALO_LAST_KEYS/_FORCE_SPATIAL_KEYS in conv3d.py are not read anywhere; only _BLOCKINGS matters.
+
+## Decode A/B (job 469, launched 07:57 UTC blx03)
+- Stage branch ttp/t100-stage = this branch + t96 trace harness (057e841c056, 489e09bcd36; vae_ltx.py conflict
+  resolved by keeping both exact_shard and trace_decode). Staged at /var/tmp/fasth3/t100/src.
+- runab100.sh: arms table, exact, best, table2 via ab100.py (patches _BLOCKINGS in-process). Log
+  /var/tmp/fasth3/t100/runab100.log: grep "AB arm=traced\|T100AB_\|CMP100\|T100_ARM". Driver marker
+  "T100_DRIVER_DONE ab <rc>" in driver.log (old sweep log: driver.log.sweep). rc 9 = drop during our job -> stop all.
+
 ## Next
-1. Read the 4 JSONs. For each layer with best_us <= 0.97 * table_us, update _BLOCKINGS key (4,8,...) in
-   models/tt_dit/utils/conv3d.py. Check output_check (PCC ~1; md5 may differ when C_in_block changes).
-2. Then one short decode A/B on blx03 2x4 (t97 harness pattern, LTX_CONV3D_BLOCKING_MESH=4,8): wall time and YUV
-   md5/PSNR vs current table. Clean /var/tmp/fasth3/t100/src afterwards.
+1. Read runab100.log. Pick the arm: exact if traced min beats table/table2 and CMP100 identical=True; best only
+   if it beats exact by more than noise and PSNR vs table >= ~50 dB.
+2. Update _BLOCKINGS (4,8,...) entries for s4_res (line ~495) and s1_up (line ~490) in models/tt_dit/utils/conv3d.py,
+   comment with halo-mode us. Commit, push.
+3. Clean blx03: rm -rf /var/tmp/fasth3/t100/src /var/tmp/fasth3/t100/ab (keep logs + results).
