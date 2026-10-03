@@ -159,16 +159,16 @@ _BLOCKINGS = {
     (4, 8, 256, 256, (3, 3, 3), 155, 34, 30): (64, 256, 1, 16, 2),  # 4537us, 7.2x vs fallback
     (4, 8, 512, 4096, (3, 3, 3), 41, 17, 15): (128, 64, 5, 16, 2),  # 11489us, 23.5x vs fallback
     (4, 8, 512, 512, (3, 3, 3), 41, 17, 15): (64, 256, 1, 16, 2),  # 1301us, 23.2x vs fallback
-    (4, 8, 1024, 1024, (3, 3, 3), 22, 10, 8): (64, 256, 2, 8, 4),  # 1414us, 17.3x vs fallback
+    (4, 8, 1024, 1024, (3, 3, 3), 22, 10, 8): (128, 64, 5, 4, 8),  # T=21 winner; old one had no L1 prefetch shard
     (4, 8, 1024, 128, (3, 3, 3), 22, 10, 8): (128, 64, 3, 4, 8),  # 178us, 11.0x vs fallback
     (4, 8, 1024, 4096, (3, 3, 3), 22, 9, 8): (128, 64, 5, 4, 8),  # 3887us, 13.9x vs fallback
     (4, 8, 1024, 1024, (3, 3, 3), 22, 9, 8): (128, 64, 5, 4, 8),  # 1373us, 15.6x vs fallback
-    (4, 8, 1024, 1024, (3, 3, 3), 22, 5, 4): (128, 128, 5, 2, 2),  # 485us, 6.9x vs fallback, partial sweep 350/500
+    (4, 8, 1024, 1024, (3, 3, 3), 22, 5, 4): (128, 64, 7, 2, 4),  # T=21 winner; old one had no L1 prefetch shard
     # Unswept at 153f: carried from the 145f winners at identical spatial shape (T +1 only);
     # without them these sites hit the worst-case fallbacks. Re-sweep to replace.
     (4, 8, 1024, 4096, (1, 3, 3), 20, 5, 4): (256, 64, 1, 4, 4),  # ups_ups — 1235us @ T=19
     (4, 8, 128, 1024, (3, 3, 3), 22, 9, 8): (64, 128, 7, 8, 4),  # ltx_s0_conv_in — 237us @ T=21
-    (4, 8, 128, 1024, (3, 3, 3), 22, 5, 4): (128, 128, 3, 2, 4),  # ups_initial — 95us @ T=21
+    (4, 8, 128, 1024, (3, 3, 3), 22, 5, 4): (128, 128, 1, 2, 4),  # ups_initial — untimed; T_blk 3 had no prefetch shard
     # === end LTX-2.3 153f ===
     # ===================================================================
     # BH Galaxy 6U 4x32, 480p, 81 frames full-T (latent T=21)
@@ -450,10 +450,10 @@ _BLOCKINGS = {
     (2, 4, 128, 128, (3, 3, 3), 147, 136, 120): (
         64,
         128,
-        12,
+        10,
         4,
         8,
-    ),  # ltx_s4_res — fused halo_last 23.1ms (T_out_block 12: fewer larger matmuls; beats force_spatial -4.9%)
+    ),  # ltx_s4_res — untimed; T_out_block 12 had no L1 prefetch shard
     (2, 4, 128, 48, (3, 3, 3), 147, 136, 120): (128, 64, 6, 4, 8),  # ltx_s4_out — 13833us
     # LTX-2.3 spatial latent upsampler (x2), 2x4 BH-LB, 1080p.
     (2, 4, 128, 1024, (3, 3, 3), 21, 9, 8): (64, 256, 1, 2, 8),  # initial_conv
@@ -496,7 +496,7 @@ _BLOCKINGS = {
     (4, 8, 128, 48, (3, 3, 3), 147, 68, 60): (128, 64, 6, 2, 16),  # ltx_s4_out — 2914us
     # LTX-2.3 spatial latent upsampler (x2), BH Galaxy 4x8, 1080p.
     # Regenerate via bruteforce_conv3d_sweep.py -k "sweep_all and h4w8"
-    (4, 8, 128, 1024, (3, 3, 3), 21, 5, 4): (128, 128, 3, 2, 4),  # ups_initial — 95us
+    (4, 8, 128, 1024, (3, 3, 3), 21, 5, 4): (128, 128, 1, 2, 4),  # ups_initial — untimed; T_blk 3 had no prefetch shard
     (4, 8, 1024, 1024, (3, 3, 3), 21, 5, 4): (128, 64, 7, 2, 4),  # ups_pre_res — 791us
     (4, 8, 1024, 4096, (1, 3, 3), 19, 5, 4): (256, 64, 1, 4, 4),  # ups_ups (kT=1) — 1235us
     (4, 8, 1024, 1024, (3, 3, 3), 21, 10, 8): (128, 64, 5, 4, 8),  # ups_post_res — 2012us
