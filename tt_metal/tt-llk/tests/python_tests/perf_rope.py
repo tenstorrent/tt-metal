@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf of the Blackhole SFPU RoPE in its decode form (sources/rope_perf.cpp), PERF_STAGE 0 being the datacopies alone;
-unit: one 32x32 DEST tile."""
+"""Perf of the Blackhole SFPU RoPE (sources/rope_perf.cpp) in its decode form (one row per tile) and its tile form (8 to
+32 rows), PERF_STAGE 0 being the datacopies alone; unit: one 32x32 DEST tile."""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole
@@ -18,14 +18,22 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 BF16 = DataFormat.Float16_b
 
-# (rows, width tiles, stride, fused cos and sin, cos and sin per row, stage)
+# (rows, width tiles, stride, fused cos and sin, cos and sin per row, stage, rows per tile)
 VARIANTS = [
-    (1, 1, 64, True, False, 1),
-    (4, 1, 64, True, False, 1),
-    (2, 2, 32, True, False, 1),
-    (4, 1, 64, False, False, 1),
-    (1, 1, 64, True, True, 1),
-    (4, 1, 64, True, False, 0),
+    (1, 1, 64, True, False, 1, 1),
+    (4, 1, 64, True, False, 1, 1),
+    (2, 2, 32, True, False, 1, 1),
+    (4, 1, 64, False, False, 1, 1),
+    (1, 1, 64, True, True, 1, 1),
+    (4, 1, 64, True, False, 0, 1),
+    (1, 1, 64, True, False, 1, 8),
+    (1, 1, 64, True, True, 1, 8),
+    (1, 1, 64, True, False, 1, 16),
+    (1, 1, 32, True, False, 1, 16),
+    (1, 1, 64, True, False, 1, 32),
+    (1, 1, 64, True, True, 1, 32),
+    (1, 2, 64, True, False, 1, 32),
+    (2, 1, 64, True, False, 1, 32),
 ]
 
 
@@ -34,7 +42,7 @@ VARIANTS = [
 def test_perf_rope(perf_report, variant):
     if len(variant) == 1:  # parametrize hands a single axis as a one-element tuple
         (variant,) = variant
-    ht, wt, stride, fused, per_row, stage = variant
+    ht, wt, stride, fused, per_row, stage, tile_h = variant
     geometry = _geometry(ht, wt, stride)
     tiles = _dest_tiles(geometry)
     configuration = PerfConfig(
@@ -44,7 +52,7 @@ def test_perf_rope(perf_report, variant):
         templates=[
             ROPE(
                 fused_cos_sin=fused,
-                tile_h=1,
+                tile_h=tile_h,
                 cos_sin_per_row=per_row,
                 has_scale=False,
                 scale_fp32=0,
