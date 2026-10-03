@@ -372,6 +372,44 @@ class SFPU_SHIFT_AMOUNT(TemplateParameter):
         return f"#define SFPU_SHIFT_AMOUNT {self.shift_amount}u"
 
 
+# The eleven quant-family entry points of tt_metal/hw/inc/api/compute/quantization.h, by the
+# name of the compute-API init they mirror (minus the `_tile_init` suffix). Consumed by
+# sources/sfpu_quant_test.cpp and sources/sfpu_quant_perf.cpp, which dispatch on it with
+# `if constexpr` to the same {quant,requant,dequant}_init / calculate_* instantiations the
+# production wrappers use.
+QUANT_VARIANTS: tuple[str, ...] = (
+    "QUANT",
+    "QUANT_UINT8",
+    "QUANT_INT8",
+    "REQUANT",
+    "REQUANT_UINT8",
+    "REQUANT_INT8",
+    "REQUANT_INT8_IN",
+    "REQUANT_INT8_IN_UINT8_OUT",
+    "REQUANT_INT8_IN_INT8_OUT",
+    "DEQUANT",
+    "DEQUANT_INT8",
+)
+
+
+@dataclass
+class SFPU_QUANT_VARIANT(TemplateParameter):
+    """Which quant-family kernel the dedicated quant test/perf sources build.
+
+    Emitted as a macro so the sources can spell `QuantVariant::SFPU_QUANT_VARIANT` against an
+    enum they define themselves; params.h is included before that enum exists.
+    """
+
+    quant_variant: str = "QUANT"
+
+    def convert_to_cpp(self) -> str:
+        if self.quant_variant not in QUANT_VARIANTS:
+            raise ValueError(
+                f"unknown quant variant {self.quant_variant!r}; expected one of {QUANT_VARIANTS}"
+            )
+        return f"#define SFPU_QUANT_VARIANT {self.quant_variant}"
+
+
 @dataclass
 class DISABLE_SRC_ZERO_FLAG(TemplateParameter):
     disable_src_zero_flag: bool
