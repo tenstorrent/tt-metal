@@ -73,6 +73,58 @@ xt::xarray<float> moe_ffn_swiglu_reference(
     return out;
 }
 
+struct MoeFfnSwigluBackwardReference {
+    xt::xarray<float> d_grouped;  // [T_cap, H]
+    xt::xarray<float> d_w_gate;   // [E, I, H]
+    xt::xarray<float> d_w_up;     // [E, I, H]
+    xt::xarray<float> d_w_down;   // [E, H, I]
+};
+
+MoeFfnSwigluBackwardReference moe_ffn_swiglu_backward_reference(
+    const xt::xarray<float>& grouped,
+    const std::vector<uint32_t>& offsets,
+    const xt::xarray<float>& w_gate,
+    const xt::xarray<float>& w_up,
+    const xt::xarray<float>& w_down) {
+    auto d_grouped = xt::zeros_like(grouped);
+    auto d_w_gate = xt::zeros_like(w_gate);
+    auto d_w_up = xt::zeros_like(w_up);
+    auto d_w_down = xt::zeros_like(w_down);
+
+    for (std::size_t e = 0; e < w_gate.shape()[0]; ++e) {
+        const std::size_t row_lo = offsets[e];
+        const std::size_t row_hi = offsets[e + 1U];
+        const xt::xarray<float> x = xt::view(grouped, xt::range(row_lo, row_hi), xt::all());
+        const xt::xarray<float> wg = xt::view(w_gate, e, xt::all(), xt::all());
+        const xt::xarray<float> wu = xt::view(w_up, e, xt::all(), xt::all());
+        const xt::xarray<float> wd = xt::view(w_down, e, xt::all(), xt::all());
+
+        const xt::xarray<float> gate = xt::linalg::dot(x, xt::transpose(wg));
+        const xt::xarray<float> up = xt::linalg::dot(x, xt::transpose(wu));
+        const xt::xarray<float> sigmoid = 1.0F / (1.0F + xt::exp(-gate));
+        const xt::xarray<float> swished = gate * sigmoid;
+        const xt::xarray<float> activated = swished * up;
+        const xt::xarray<float> d_y = xt::ones<float>({row_hi - row_lo, wd.shape()[0]});
+        const xt::xarray<float> d_activated = xt::linalg::dot(d_y, wd);
+        const xt::xarray<float> d_up = d_activated * swished;
+        const xt::xarray<float> d_gate = d_activated * up * sigmoid * (1.0F + gate * (1.0F - sigmoid));
+
+        xt::view(d_grouped, xt::range(row_lo, row_hi), xt::all()) =
+            xt::linalg::dot(d_gate, wg) + xt::linalg::dot(d_up, wu);
+        xt::view(d_w_gate, e, xt::all(), xt::all()) = xt::linalg::dot(xt::transpose(d_gate), x);
+        xt::view(d_w_up, e, xt::all(), xt::all()) = xt::linalg::dot(xt::transpose(d_up), x);
+        xt::view(d_w_down, e, xt::all(), xt::all()) = xt::linalg::dot(xt::transpose(d_y), activated);
+    }
+
+    return {std::move(d_grouped), std::move(d_w_gate), std::move(d_w_up), std::move(d_w_down)};
+}
+
+float relative_l2(const xt::xarray<float>& actual, const xt::xarray<float>& expected) {
+    const float diff_l2 = std::sqrt(xt::sum(xt::square(actual - expected))());
+    const float expected_l2 = std::sqrt(xt::sum(xt::square(expected))());
+    return diff_l2 / (expected_l2 + 1e-12F);
+}
+
 struct FfnCase {
     uint32_t E;
     uint32_t H;
@@ -347,6 +399,93 @@ TEST_F(MoeFfnSwigluBackwardTest, NIGHTLY_EmptyExpert_dWZeroForEmpty) {
         check_nonzero_finite(t_wg, e, "dW_gate");
         check_nonzero_finite(t_wu, e, "dW_up");
         check_nonzero_finite(t_wd, e, "dW_down");
+    }
+
+    autograd::ctx().reset_graph();
+}
+
+TEST_F(MoeFfnSwigluBackwardTest, RetainGraphTwoBackwardsAccumulate) {
+    using namespace ttml;
+
+    constexpr uint32_t E = 2U;
+    constexpr uint32_t H = 64U;
+    constexpr uint32_t I = 128U;
+    constexpr uint32_t TCap = 64U;
+    const std::vector<uint32_t> offsets = {0U, 32U, TCap};
+    auto& rng = autograd::ctx().get_generator();
+
+    const auto grouped =
+        test_utils::make_uniform_xarray<float>(std::array<std::size_t, 2U>{TCap, H}, 0.0F, 1.0F, rng());
+    const auto w_gate = test_utils::make_uniform_xarray<float>(std::array<std::size_t, 3U>{E, I, H}, 0.0F, 1.0F, rng());
+    const auto w_up = test_utils::make_uniform_xarray<float>(std::array<std::size_t, 3U>{E, I, H}, 0.0F, 1.0F, rng());
+    const auto w_down = test_utils::make_uniform_xarray<float>(std::array<std::size_t, 3U>{E, H, I}, 0.0F, 1.0F, rng());
+    const auto ref = moe_ffn_swiglu_backward_reference(grouped, offsets, w_gate, w_up, w_down);
+
+    xt::xarray<float> grouped_4d = xt::xarray<float>::from_shape({1U, 1U, TCap, H});
+    std::copy(grouped.cbegin(), grouped.cend(), grouped_4d.begin());
+    auto* device = &autograd::ctx().get_device();
+    const auto t_grouped = autograd::create_tensor(core::from_xtensor(grouped_4d, device), /*requires_grad=*/true);
+    const auto t_offsets = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        offsets, ttnn::Shape({static_cast<uint32_t>(offsets.size())}), device, ttnn::Layout::ROW_MAJOR);
+    const auto t_wg = make_expert_weight_list(w_gate, device);
+    const auto t_wu = make_expert_weight_list(w_up, device);
+    const auto t_wd = make_expert_weight_list(w_down, device);
+    const auto out = ops::moe_ffn_swiglu_fw(t_grouped, t_offsets, t_wg, t_wu, t_wd);
+    out->set_grad(core::ones_like(out->get_value()));
+
+    out->backward(/*retain_graph=*/true);
+    const auto d_grouped_first = core::to_xtensor(t_grouped->get_grad());
+    auto read_weight_grads = [](const std::vector<autograd::TensorPtr>& weights) {
+        std::vector<xt::xarray<float>> grads;
+        grads.reserve(weights.size());
+        for (const auto& weight : weights) {
+            grads.push_back(core::to_xtensor(weight->get_grad()));
+        }
+        return grads;
+    };
+    const auto d_wg_first = read_weight_grads(t_wg);
+    const auto d_wu_first = read_weight_grads(t_wu);
+    const auto d_wd_first = read_weight_grads(t_wd);
+
+    out->backward(/*retain_graph=*/false);
+    const auto d_grouped_second = core::to_xtensor(t_grouped->get_grad());
+    const auto d_wg_second = read_weight_grads(t_wg);
+    const auto d_wu_second = read_weight_grads(t_wu);
+    const auto d_wd_second = read_weight_grads(t_wd);
+
+    constexpr float tol = 3e-2F;
+    auto check = [tol](
+                     const xt::xarray<float>& first,
+                     const xt::xarray<float>& second,
+                     const xt::xarray<float>& reference,
+                     const std::string& name) {
+        const xt::xarray<float> twice_reference = 2.0F * reference;
+        const xt::xarray<float> twice_first = 2.0F * first;
+        EXPECT_TRUE(xt::all(xt::isfinite(first))) << name << " first gradient is non-finite";
+        EXPECT_GT(xt::amax(xt::abs(first))(), 0.0F) << name << " first gradient is zero";
+        EXPECT_LT(relative_l2(first, reference), tol) << name << " first gradient mismatch";
+        EXPECT_LT(relative_l2(second, twice_reference), tol) << name << " accumulated gradient mismatch";
+        EXPECT_LT(relative_l2(second, twice_first), tol) << name << " second backward did not repeat the first";
+    };
+
+    const xt::xarray<float> d_grouped_first_2d = xt::reshape_view(d_grouped_first, {TCap, H});
+    const xt::xarray<float> d_grouped_second_2d = xt::reshape_view(d_grouped_second, {TCap, H});
+    check(d_grouped_first_2d, d_grouped_second_2d, ref.d_grouped, "d_grouped");
+    for (uint32_t e = 0; e < E; ++e) {
+        const xt::xarray<float> d_wg_first_e = xt::squeeze(d_wg_first[e], {0, 1});
+        const xt::xarray<float> d_wg_second_e = xt::squeeze(d_wg_second[e], {0, 1});
+        const xt::xarray<float> ref_d_wg_e = xt::view(ref.d_w_gate, e, xt::all(), xt::all());
+        check(d_wg_first_e, d_wg_second_e, ref_d_wg_e, "d_w_gate[" + std::to_string(e) + "]");
+
+        const xt::xarray<float> d_wu_first_e = xt::squeeze(d_wu_first[e], {0, 1});
+        const xt::xarray<float> d_wu_second_e = xt::squeeze(d_wu_second[e], {0, 1});
+        const xt::xarray<float> ref_d_wu_e = xt::view(ref.d_w_up, e, xt::all(), xt::all());
+        check(d_wu_first_e, d_wu_second_e, ref_d_wu_e, "d_w_up[" + std::to_string(e) + "]");
+
+        const xt::xarray<float> d_wd_first_e = xt::squeeze(d_wd_first[e], {0, 1});
+        const xt::xarray<float> d_wd_second_e = xt::squeeze(d_wd_second[e], {0, 1});
+        const xt::xarray<float> ref_d_wd_e = xt::view(ref.d_w_down, e, xt::all(), xt::all());
+        check(d_wd_first_e, d_wd_second_e, ref_d_wd_e, "d_w_down[" + std::to_string(e) + "]");
     }
 
     autograd::ctx().reset_graph();
