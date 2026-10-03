@@ -87,7 +87,7 @@ bool IsProgramMetadataRecordingEnabled(ContextId context_id) {
     return MetalContext::instance(context_id).data_collector()->IsProgramMetadataRecordingEnabled();
 }
 
-std::span<const std::string_view> GetKernelSourcesForRuntimeId(ContextId context_id, uint16_t runtime_id) {
+std::span<const std::string_view> GetKernelSourcesForRuntimeId(ContextId context_id, uint32_t runtime_id) {
     return MetalContext::instance(context_id).data_collector()->GetKernelSourcesForRuntimeId(runtime_id);
 }
 
