@@ -192,6 +192,27 @@ ttnn::Tensor mesh_partition(const ttnn::Tensor& tensor, const int dim, const std
     return ttnn::mesh_partition(tensor, dim, cluster_axis, /* memory_config */ std::nullopt);
 }
 
+uint32_t detail::resolve_ring_shift_cluster_axis(
+    const tt::tt_metal::distributed::MeshShape& mesh_shape, const std::optional<uint32_t> cluster_axis) {
+    if (cluster_axis.has_value()) {
+        TT_FATAL(
+            cluster_axis.value() < mesh_shape.dims(),
+            "cluster_axis {} must be less than mesh rank {}",
+            cluster_axis.value(),
+            mesh_shape.dims());
+        return cluster_axis.value();
+    }
+
+    TT_FATAL(
+        mesh_shape.is_line_topology(), "ring_shift requires an explicit cluster_axis for mesh shape {}", mesh_shape);
+    for (uint32_t axis = 0; axis < mesh_shape.dims(); ++axis) {
+        if (mesh_shape[axis] > 1U) {
+            return axis;
+        }
+    }
+    return 0U;
+}
+
 ttnn::Tensor ring_shift(
     const ttnn::Tensor& tensor, const std::optional<uint32_t> cluster_axis, const RingShiftDirection direction) {
     auto& ctx = ttml::autograd::ctx();
@@ -201,14 +222,11 @@ ttnn::Tensor ring_shift(
     const auto mesh_shape = mesh_device_ptr->shape();
 
     TT_FATAL(
-        (cluster_axis.has_value() && cluster_axis.value() < mesh_shape.dims() && cluster_axis.value() >= 0) ||
-            (!cluster_axis.has_value() &&
-             (tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_1D ||
-              tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_1D_RING)),
-        "cluster_axis must be either >= 0 and < {} for 2D mesh or nullopt for 1D mesh and linear topology",
-        mesh_shape.dims());
+        cluster_axis.has_value() || tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_1D ||
+            tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_1D_RING,
+        "cluster_axis may be omitted only for a 1D fabric");
 
-    const uint32_t cluster_axis_value = cluster_axis.has_value() ? cluster_axis.value() : 0;
+    const uint32_t cluster_axis_value = detail::resolve_ring_shift_cluster_axis(mesh_shape, cluster_axis);
     const uint32_t ring_size = mesh_shape[cluster_axis_value];
     TT_FATAL(ring_size % 2 == 0, "ring_shift requires an even number of devices in the ring, got {}", ring_size);
 
