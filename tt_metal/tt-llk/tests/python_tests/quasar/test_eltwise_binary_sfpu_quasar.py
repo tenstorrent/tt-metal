@@ -259,12 +259,13 @@ _INT_OPS = [
 
 
 @pytest.mark.quasar
-@pytest.mark.parametrize("tile_indices", _TILE_INDEX_VARIANTS)
-@pytest.mark.parametrize(
-    "binary_op, mathop, clamp_inputs", _INT_OPS, ids=[op for op, _, _ in _INT_OPS]
+@parametrize(
+    data_format=[DataFormat.Int32],
+    dest_acc=[DestAccumulation.Yes],
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 @pytest.mark.parametrize(
-    "data_format, dest_acc", [(DataFormat.Int32, DestAccumulation.Yes)]
+    "binary_op, mathop, clamp_inputs", _INT_OPS, ids=[op for op, _, _ in _INT_OPS]
 )
 def test_eltwise_binary_sfpu_int_quasar(
     data_format,
@@ -457,10 +458,11 @@ _BF16_ADD_SUB_OPS = [
 
 
 @pytest.mark.quasar
-@pytest.mark.parametrize(
-    "binary_op, mathop", _BF16_ADD_SUB_OPS, ids=[op for op, _ in _BF16_ADD_SUB_OPS]
+@parametrize(
+    binary_op=[op for op, _ in _BF16_ADD_SUB_OPS],
+    mathop=lambda binary_op: dict(_BF16_ADD_SUB_OPS)[binary_op],
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
-@pytest.mark.parametrize("tile_indices", _TILE_INDEX_VARIANTS)
 def test_eltwise_binary_sfpu_bf16_rne_quasar(
     tile_indices,
     binary_op,
@@ -504,9 +506,9 @@ _ADD_TOP_ROW_FORMATS = [DataFormat.Float32, DataFormat.Int32]
 
 
 @pytest.mark.quasar
-@pytest.mark.parametrize("tile_indices", _TILE_INDEX_VARIANTS)
-@pytest.mark.parametrize(
-    "data_format", _ADD_TOP_ROW_FORMATS, ids=[f.name for f in _ADD_TOP_ROW_FORMATS]
+@parametrize(
+    data_format=_ADD_TOP_ROW_FORMATS,
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_add_top_row_quasar(
     data_format,
