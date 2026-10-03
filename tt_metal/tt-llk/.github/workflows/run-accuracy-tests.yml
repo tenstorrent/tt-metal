@@ -1,0 +1,141 @@
+name: "🎯 SFPU Accuracy Gate"
+
+# Reusable: runs the SFPU accuracy sweep on one arch and compares the result
+# against the committed baseline (tests/python_tests/accuracy/baselines/<arch>.csv).
+# Fails on any regression; improvements pass and are listed in the report.
+# With update_baseline=true it rewrites the baseline from this run and uploads
+# it as an artifact instead of comparing (used to create/refresh bh.csv/wh.csv).
+# Spec: docs/superpowers/specs/2026-09-07-sfpu-accuracy-ci-gate-design.md
+
+on:
+  workflow_call:
+    inputs:
+      docker_image:
+        description: "The Docker image to use for the container"
+        required: true
+        type: string
+      runs_on:
+        description: "The runner to use for the job (n150 -> wormhole, p150 -> blackhole)"
+        required: true
+        type: string
+      update_baseline:
+        description: "Rewrite the baseline from this run and upload it, instead of comparing"
+        required: false
+        default: false
+        type: boolean
+      timeout_minutes:
+        description: "Timeout in minutes for the job"
+        required: false
+        default: 60
+        type: number
+
+permissions:
+  checks: write
+  contents: read
+
+jobs:
+  accuracy:
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    container:
+      image: ${{ inputs.docker_image }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    name: "🎯 Accuracy ${{ inputs.update_baseline && 'baseline refresh' || 'gate' }}"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install SFPI
+        shell: bash
+        run: |
+          cd tests
+          ./setup_testing_env.sh
+          cd ..
+
+      - name: Resolve CHIP_ARCH from runner
+        shell: bash
+        run: |
+          CHIP_ARCH=unknown
+          if [[ "${{ inputs.runs_on }}" =~ n150 ]]; then
+            CHIP_ARCH=wormhole
+          elif [[ "${{ inputs.runs_on }}" =~ p150 ]]; then
+            CHIP_ARCH=blackhole
+          fi
+          if [[ "$CHIP_ARCH" == "unknown" ]]; then
+            echo "Cannot resolve CHIP_ARCH from runs_on='${{ inputs.runs_on }}'" >&2
+            exit 1
+          fi
+          echo "CHIP_ARCH=$CHIP_ARCH" >> $GITHUB_ENV
+
+      # Two-phase like the rest of CI: compile every variant in parallel, then
+      # run on the card. --maxfail is high so one broken variant does not hide
+      # the rest of the report (the compare then flags it as a missing variant).
+      - name: Run accuracy sweep
+        shell: bash
+        run: |
+          cd tests/python_tests
+          pytest --compile-producer -n 10 -m "accuracy and not perf" \
+                accuracy/test_sfpu_accuracy.py --timeout=120 \
+                --junitxml=accuracy-report-${CHIP_ARCH}-compile.xml
+          pytest --compile-consumer -m "accuracy and not perf" \
+                accuracy/test_sfpu_accuracy.py --maxfail=5000 --timeout=120 \
+                --junitxml=accuracy-report-${CHIP_ARCH}-run.xml
+
+      - name: Compare against baseline
+        if: ${{ always() && !inputs.update_baseline }}
+        shell: bash
+        run: |
+          cd tests/python_tests
+          set +e
+          python3 -m accuracy.check_accuracy_baseline --arch "$CHIP_ARCH" \
+                --report accuracy_report_${CHIP_ARCH}.md
+          rc=$?
+          set -e
+          cat accuracy_report_${CHIP_ARCH}.md >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+      - name: Refresh baseline from this run
+        if: ${{ inputs.update_baseline }}
+        shell: bash
+        run: |
+          cd tests/python_tests
+          python3 -m accuracy.check_accuracy_baseline --arch "$CHIP_ARCH" --update-baseline
+          {
+            echo "## Baseline refreshed (${CHIP_ARCH})"
+            echo
+            echo "Download the \`accuracy-baseline-${CHIP_ARCH}\` artifact and commit it to"
+            echo "\`tests/python_tests/accuracy/baselines/\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload refreshed baseline
+        if: ${{ inputs.update_baseline }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: accuracy-baseline-${{ env.CHIP_ARCH }}
+          path: tests/python_tests/accuracy/baselines/*.csv
+          if-no-files-found: error
+
+      - name: Upload accuracy report
+        if: ${{ always() && !inputs.update_baseline && hashFiles('tests/python_tests/accuracy_report_*.md') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: accuracy-report-${{ env.CHIP_ARCH }}
+          path: tests/python_tests/accuracy_report_*.md
+
+      # The raw per-op Parquet is the full per-element data behind the summary.
+      # Handy for plotting a regression, and it is what a developer feeds to
+      # `--from-parquet` to refresh a baseline for an arch they have no card for.
+      - name: Upload accuracy data
+        if: ${{ always() && hashFiles('tests/python_tests/accuracy/_csv_output/**/*.parquet') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: accuracy-data-${{ env.CHIP_ARCH }}
+          path: tests/python_tests/accuracy/_csv_output/*/*.parquet
+          retention-days: 14
+
+      - name: Upload JUnit reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: accuracy-junit-${{ env.CHIP_ARCH }}
+          path: tests/python_tests/accuracy-report-*.xml
