@@ -25,6 +25,12 @@ Build on blx03: ~/fasth3/t48 @ b43f3ea63a (a613d669ee + ce356b8815a ttnn/ part),
 - Part 2 failed: conftest's pinning re-exec rebuilds argv as "python pytest", which breaks under tracy -m.
   Fix: LTX_PIN_CORES=0 for part 2; run96p2.sh runs part 2 only (log run96.p2.log); driver takes T96_RUN.
 
+## Attempt 2b (job 436, 2026-10-03 04:19 UTC): profiler pass only, running
+- Driver relaunched with T96_RUN=run96p2.sh; log /var/tmp/fasth3/t96/run96.p2.log; marker in driver.log.
+- Next: read analysis.txt, compare with tt-project/t61/analysis_029.txt (828 ms/chip: conv3d 308, layout 256,
+  halo 119, eltwise 96, norm 46) and the ~490 ms estimate. Copy analysis.txt into tmp/blx03/t96/results/.
+  Note: eager wall decode is 445 ms, so the device op sum should land near or below that.
+
 ## Running on blx03 (attempt 2, see driver.log for launch time)
 - overlay /var/tmp/fasth3/t96/src (stage96.sh), driver /var/tmp/fasth3/t96/driver.log, marker "T96_DRIVER_DONE <stage> <rc>"
 - broker job 375: run96.sh, log /var/tmp/fasth3/t96/run96.log
