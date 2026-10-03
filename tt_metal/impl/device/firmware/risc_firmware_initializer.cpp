@@ -486,7 +486,11 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
                 CoreCoord virtual_core =
                     cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
                 if (erisc_app_still_running(device_id, virtual_core)) {
-                    log_info(
+                    // Expected on every device init with many active ethernet cores (e.g. Galaxy): each core
+                    // still running from a prior session is exited individually here, so this can fire
+                    // hundreds of times per init on a healthy run. Not surprising/actionable at default
+                    // verbosity; keep at debug like the surrounding per-core init messages in this file.
+                    log_debug(
                         tt::LogMetal,
                         "While initializing device {}, active ethernet dispatch core {} detected as still "
                         "running, issuing exit signal.",
