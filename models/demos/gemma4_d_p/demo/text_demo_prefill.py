@@ -3,11 +3,14 @@
 
 """Gemma4 long-context prefill on a Blackhole Galaxy."""
 
+import contextlib
 import functools
+import gc
 import hashlib
 import os
 import pathlib
 import time
+from unittest import mock
 
 import pytest
 import torch
@@ -179,30 +182,9 @@ def _build_prefill_model(mesh_config, hf_model_id, chunk_size, context_len=None)
 # ── Traced long-context chunked prefill (production shape) ────────────────────
 
 
-@torch.no_grad()
-@parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
-@pytest.mark.parametrize("token_source", ["text"], ids=lambda t: t)
-@pytest.mark.parametrize("chunk_size", PREFILL_CHUNK_SIZES, ids=lambda c: f"chunk{c}")
-@pytest.mark.parametrize("context_len", [32768, 65536, 131072, 262144], ids=lambda c: f"ctx_{c // 1024}k")
-def test_prefill_long_context_traced(mesh_device, context_len, chunk_size, token_source, reset_seeds, request):
-    """Measure all prefill chunks using one replayed ring-attention trace."""
-
-    mesh_config = _mesh_config(mesh_device)
-    cp = mesh_config.cp_degree
-    if cp <= 1:
-        pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
-    if geometry_error := prefill_chunk_geometry_error(chunk_size, cp, context_len):
-        pytest.skip(geometry_error)
-
-    hf_model_id = _hf_model_id()
+def _measure_traced(mesh_device, mesh_config, model_args, model, hf_model_id, context_len, chunk_size, token_source):
+    """Compile, capture and replay one ring-attention trace over every chunk of ``context_len``."""
     n_chunks = context_len // chunk_size
-    model_args, model, kv_cache = _build_prefill_model(
-        mesh_config=mesh_config,
-        hf_model_id=hf_model_id,
-        chunk_size=chunk_size,
-        context_len=context_len,
-    )
-
     tokens_all = _get_prefill_tokens(hf_model_id, context_len, model_args.vocab_size, token_source)
 
     host_input_tokens = ttnn.from_torch(
@@ -341,6 +323,91 @@ def test_prefill_long_context_traced(mesh_device, context_len, chunk_size, token
         f"[traced_perf] context wall times (chunk_size={chunk_size}, 1k=1024 tokens; "
         "rounded up to whole chunks; N/A = context not reached):\n" + "\n".join(context_rows)
     )
+
+
+@torch.no_grad()
+@parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
+@pytest.mark.parametrize("token_source", ["text"], ids=lambda t: t)
+@pytest.mark.parametrize("chunk_size", PREFILL_CHUNK_SIZES, ids=lambda c: f"chunk{c}")
+@pytest.mark.parametrize("context_len", [32768, 65536, 131072, 262144], ids=lambda c: f"ctx_{c // 1024}k")
+def test_prefill_long_context_traced(mesh_device, context_len, chunk_size, token_source, reset_seeds, request):
+    """Measure all prefill chunks using one replayed ring-attention trace."""
+
+    mesh_config = _mesh_config(mesh_device)
+    cp = mesh_config.cp_degree
+    if cp <= 1:
+        pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
+    if geometry_error := prefill_chunk_geometry_error(chunk_size, cp, context_len):
+        pytest.skip(geometry_error)
+
+    hf_model_id = _hf_model_id()
+    model_args, model, _kv_cache = _build_prefill_model(
+        mesh_config=mesh_config,
+        hf_model_id=hf_model_id,
+        chunk_size=chunk_size,
+        context_len=context_len,
+    )
+
+    _measure_traced(mesh_device, mesh_config, model_args, model, hf_model_id, context_len, chunk_size, token_source)
+
+
+@contextlib.contextmanager
+def _shared_device_weights():
+    """Write each cached weight to the device once per process, however many models are built.
+
+    Weights do not depend on the chunk size, and the model never writes to or frees them. Keyed by
+    cache file, dtype, layout and memory config.
+    """
+    real_as_tensor = ttnn.as_tensor
+    memo = {}
+
+    def as_tensor(tensor, dtype=None, **kwargs):
+        if kwargs.get("device") is None or kwargs.get("cache_file_name") is None:
+            return real_as_tensor(tensor, dtype, **kwargs)
+        key = (kwargs["cache_file_name"], str(dtype), str(kwargs.get("layout")), str(kwargs.get("memory_config")))
+        if key not in memo:
+            memo[key] = real_as_tensor(tensor, dtype, **kwargs)
+        return memo[key]
+
+    with mock.patch.object(ttnn, "as_tensor", as_tensor):
+        yield
+
+
+@torch.no_grad()
+@parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
+@pytest.mark.parametrize("token_source", ["text"], ids=lambda t: t)
+@pytest.mark.parametrize("context_len", [32768, 65536, 131072, 262144], ids=lambda c: f"ctx_{c // 1024}k")
+def test_prefill_chunk_sweep_traced(mesh_device, context_len, token_source, reset_seeds, request):
+    """``test_prefill_long_context_traced`` for each chunk in GEMMA4_SWEEP_CHUNK_SIZES, in one process.
+
+    The mesh is opened and the weights are written once; each chunk size builds its own model and
+    compiles and captures its own trace.
+    """
+    mesh_config = _mesh_config(mesh_device)
+    if mesh_config.cp_degree <= 1:
+        pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={mesh_config.cp_degree}")
+    hf_model_id = _hf_model_id()
+    chunk_sizes = [int(c) for c in os.environ.get("GEMMA4_SWEEP_CHUNK_SIZES", "2048,4096,8192").split(",")]
+
+    with _shared_device_weights():
+        for chunk_size in chunk_sizes:
+            if geometry_error := prefill_chunk_geometry_error(chunk_size, mesh_config.cp_degree, context_len):
+                logger.warning(f"[sweep] skipping chunk {chunk_size}: {geometry_error}")
+                continue
+            logger.info(f"[sweep] ===== chunk_size={chunk_size} context_len={context_len} =====")
+            model_args, model, _kv_cache = _build_prefill_model(
+                mesh_config=mesh_config,
+                hf_model_id=hf_model_id,
+                chunk_size=chunk_size,
+                context_len=context_len,
+            )
+            _measure_traced(
+                mesh_device, mesh_config, model_args, model, hf_model_id, context_len, chunk_size, token_source
+            )
+            del model_args, model, _kv_cache
+            gc.collect()
+            # Cached programs hold op-allocated L1 semaphores that fragment L1 for the next model's circular buffers.
+            mesh_device.clear_program_cache()
 
 
 # ── Per-layer prefill timing ────────────────────────────────────────────────
