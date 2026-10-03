@@ -652,11 +652,9 @@ void validate_matmul_compute_grid_and_per_core_dims(
                 if constexpr (std::is_same_v<
                                   ProgramConfigType,
                                   operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
-                    dram_sharded_helpers::validate_num_workers_per_dram_bank(program_config.num_workers_per_dram_bank);
                     TT_FATAL(
-                        program_config.num_workers_per_dram_bank == 1 ||
-                            input_tensor_a.device()->arch() == tt::ARCH::BLACKHOLE,
-                        "{}: num_workers_per_dram_bank > 1 is currently supported only on Blackhole",
+                        program_config.num_workers_per_dram_bank >= 1,
+                        "{}: num_workers_per_dram_bank must be at least 1",
                         config_name);
                 }
             }
@@ -1405,61 +1403,12 @@ void validate_matmul_multicore_config(
         attributes.output_mem_config.memory_layout());
 }
 
-// DRAMSharded multi-core variant (cores_per_bank > 0): what the program builder supports.
-void validate_matmul_dram_sharded_multicore_config(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const MatmulParams& attributes,
-    const operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig& program_config) {
-    const auto config_name = ttsl::get_type_name(program_config);
-    TT_FATAL(
-        program_config.num_workers_per_dram_bank == 1,
-        "{}: cores_per_bank ({}) replaces num_workers_per_dram_bank, which must stay 1 (got {})",
-        config_name,
-        program_config.cores_per_bank,
-        program_config.num_workers_per_dram_bank);
-    TT_FATAL(
-        !program_config.fused_activation.has_value(),
-        "{}: cores_per_bank does not support a fused activation",
-        config_name);
-    TT_FATAL(!attributes.untilize_out, "{}: cores_per_bank does not support untilize_out", config_name);
-    const auto& out_mem = attributes.output_mem_config;
-    TT_FATAL(
-        out_mem.buffer_type() == BufferType::L1 && out_mem.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
-        "{}: cores_per_bank needs an L1 width-sharded output",
-        config_name);
-    TT_FATAL(
-        !out_mem.shard_spec().has_value() || out_mem.shard_spec()->orientation == ShardOrientation::ROW_MAJOR,
-        "{}: cores_per_bank needs a ROW_MAJOR output shard orientation",
-        config_name);
-    TT_FATAL(
-        input_tensor_a.memory_config().buffer_type() == BufferType::L1,
-        "{}: cores_per_bank needs input A in L1",
-        config_name);
-    TT_FATAL(
-        input_tensor_b.memory_config().buffer_type() == BufferType::DRAM,
-        "{}: cores_per_bank needs input B in DRAM",
-        config_name);
-    for (const auto* t : {&input_tensor_a, &input_tensor_b}) {
-        const auto& tile = t->tensor_spec().tile();
-        TT_FATAL(
-            tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH &&
-                !tile.get_transpose_within_face() && !tile.get_transpose_of_faces(),
-            "{}: cores_per_bank needs 32x32 untransposed tiles",
-            config_name);
-    }
-    TT_FATAL(
-        input_tensor_a.logical_shape()[-1] % tt::constants::TILE_WIDTH == 0,
-        "{}: cores_per_bank needs K ({}) to be a multiple of the tile width",
-        config_name,
-        input_tensor_a.logical_shape()[-1]);
-}
-
 // DRAMSharded config: in0 width-sharded in L1, in1 width-sharded in DRAM; height must
 // be a single tile (M == 1) and K/shard dims divide in0_block_w.
 void validate_matmul_dram_sharded_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
+    bool has_bias,
     const MatmulParams& attributes,
     const ttnn::Shape& a_shape_padded,
     const tt::tt_metal::Tile& in0_tile,
@@ -1508,11 +1457,34 @@ void validate_matmul_dram_sharded_config(
         config_name,
         per_core_M,
         (shard_shape[0] / in0_tile.get_height()));
-    if (program_config.cores_per_bank > 0) {
-        // The multi-core variant reads activation rows straight from their shards and takes a ragged
+    TT_FATAL(
+        program_config.num_workers_per_dram_bank >= 1,
+        "{}: num_workers_per_dram_bank must be at least 1, got {}",
+        config_name,
+        program_config.num_workers_per_dram_bank);
+    if (dram_sharded_helpers::use_dram_sharded_multicore(
+            program_config.num_workers_per_dram_bank,
+            has_bias,
+            program_config.fused_activation.has_value(),
+            attributes.untilize_out,
+            input_tensor_a.tensor_spec().tile(),
+            input_tensor_b.tensor_spec().tile(),
+            input_tensor_a.logical_shape()[-1],
+            input_tensor_a.memory_config().buffer_type(),
+            attributes.output_mem_config)) {
+        // The multi-core pipeline reads activation rows straight from their shards and takes a ragged
         // last K block, so neither divisibility rule below applies to it.
-        validate_matmul_dram_sharded_multicore_config(input_tensor_a, input_tensor_b, attributes, program_config);
+        TT_FATAL(
+            input_tensor_b.memory_config().buffer_type() == BufferType::DRAM,
+            "{}: input B must be in DRAM",
+            config_name);
     } else {
+        dram_sharded_helpers::validate_num_workers_per_dram_bank(program_config.num_workers_per_dram_bank);
+        TT_FATAL(
+            program_config.num_workers_per_dram_bank == 1 || input_tensor_a.device()->arch() == tt::ARCH::BLACKHOLE,
+            "{}: num_workers_per_dram_bank > 1 with a bias, a fused activation, untilize_out or 16-row tiles is "
+            "supported only on Blackhole",
+            config_name);
         TT_FATAL(
             K % program_config.in0_block_w == 0,
             "{}: K ({}) must be divisible by in0_block_w ({})",
@@ -2515,7 +2487,13 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                                      ProgramConfigType,
                                      operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
                 validate_matmul_dram_sharded_config(
-                    input_tensor_a, input_tensor_b, attributes, a_shape_padded, in0_tile, program_config);
+                    input_tensor_a,
+                    input_tensor_b,
+                    optional_input_tensors.at(0).has_value(),
+                    attributes,
+                    a_shape_padded,
+                    in0_tile,
+                    program_config);
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      operations::matmul::

@@ -1177,15 +1177,16 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     };
 }
 
-// Multi-core decode variant (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::cores_per_bank > 0).
+// Multi-core decode pipeline (num_workers_per_dram_bank >= 2 on a qualifying call, see
+// dram_sharded_helpers::use_dram_sharded_multicore).
 //
 // The single-reader program above runs one compute core per DRAM bank, issues its weight reads on one
 // NoC, and accumulates in0_block_w-wide blocks through L1. At M = one tile a core cannot retire tiles as
 // fast as its bank delivers them, so the op reads well below the DRAM peak even though one reader on
 // the bank-optimal worker can stream at it. This variant:
-//   - places cores_per_bank cores next to each bank's NOC_0-optimal worker and splits the bank's
+//   - places num_workers_per_dram_bank cores next to each bank's NOC_0-optimal worker and splits the bank's
 //     columns over them (Nbt * c / C .. Nbt * (c + 1) / C, so C need not divide the shard width);
-//     a cores_per_bank above the shard width adds row groups instead (CK > 1: the K range is split
+//     a count above the shard width adds row groups instead (CK > 1: the K range is split
 //     and the partial sums are reduce-scattered inside the group);
 //   - streams the weight on both data-movement RISCs on Blackhole (alternate K blocks, one per NoC,
 //     each with its own transaction-id ring), on one NOC_0 stream on Wormhole, where a second stream
@@ -1236,40 +1237,40 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
     const uint32_t Nbt = in1_shard_spec.shape[1] / in1_tile.get_tile_shape()[1];
     TT_FATAL(
         in1_shard_spec.shape[0] == Kt * in1_tile.get_tile_shape()[0],
-        "cores_per_bank: the weight shard must hold the whole K ({} rows), got {}",
+        "num_workers_per_dram_bank: the weight shard must hold the whole K ({} rows), got {}",
         Kt * in1_tile.get_tile_shape()[0],
         in1_shard_spec.shape[0]);
     const auto anchors = device.get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::NOC_0);
     const uint32_t num_dram_banks = anchors.size();
     TT_FATAL(
         in1_shard_spec.grid.num_cores() == num_dram_banks,
-        "cores_per_bank: the weight must be width-sharded over all {} DRAM banks, got {} shards",
+        "num_workers_per_dram_bank: the weight must be width-sharded over all {} DRAM banks, got {} shards",
         num_dram_banks,
         in1_shard_spec.grid.num_cores());
     const uint32_t num_banks = div_up(Nt, Nbt);  // banks holding real columns
     TT_FATAL(
         num_banks <= num_dram_banks,
-        "cores_per_bank: N ({} tiles) exceeds {} DRAM shards of {} tiles",
+        "num_workers_per_dram_bank: N ({} tiles) exceeds {} DRAM shards of {} tiles",
         Nt,
         num_dram_banks,
         Nbt);
 
     // Layout: CN column groups per bank, CK row groups per column group, P column passes per core. A
-    // cores_per_bank above the shard width is rounded down to a multiple of it (CN = Nbt, CK = N / Nbt).
+    // count above the shard width is rounded down to a multiple of it (CN = Nbt, CK = N / Nbt).
     const uint32_t CN = std::min(cores_per_bank, Nbt);
     const uint32_t CK = cores_per_bank > Nbt ? cores_per_bank / Nbt : 1;
     const uint32_t ncmax = div_up(Nbt, CN);
     const uint32_t P = div_up(ncmax, dst_tiles);
     const uint32_t ncp = div_up(ncmax, P);
-    TT_FATAL(CK == 1 || P == 1, "cores_per_bank: K row groups need a single column pass");
+    TT_FATAL(CK == 1 || P == 1, "num_workers_per_dram_bank: K row groups need a single column pass");
     // Every core needs work in every pass, or the pass waits on a weight block nobody streams.
     TT_FATAL(
         Nbt / CN >= P,
-        "cores_per_bank {}: {} columns per bank leave a core with fewer columns than its {} passes",
+        "num_workers_per_dram_bank {}: {} columns per bank leave a core with fewer columns than its {} passes",
         cores_per_bank,
         Nbt,
         P);
-    TT_FATAL(k_block >= 1, "cores_per_bank: in0_block_w must be at least 1");
+    TT_FATAL(k_block >= 1, "num_workers_per_dram_bank: in0_block_w must be at least 1");
     const uint32_t KB = std::min(k_block, div_up(Kt, CK));
     const uint32_t max_rows = div_up(Kt, CK);
     const uint32_t max_blocks = div_up(max_rows, KB);
@@ -1292,7 +1293,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
             }
         }
     }
-    TT_FATAL(work_cores.size() < 256, "cores_per_bank: {} work items exceed the one-byte role table", work_cores.size());
+    TT_FATAL(
+        work_cores.size() < 256,
+        "num_workers_per_dram_bank: {} work items exceed the one-byte role table",
+        work_cores.size());
     std::set<CoreRange> work_ranges;
     for (const auto& core : work_cores) {
         work_ranges.insert(CoreRange(core));
@@ -1326,7 +1330,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
     const uint32_t out_shard_w = out_shard_spec.shape[1] / output_tile.get_tile_shape()[1];
     TT_FATAL(
         x_shard_w * x_cores.size() >= Kt,
-        "cores_per_bank: the activation shards ({} x {} tiles) do not cover K ({} tiles)",
+        "num_workers_per_dram_bank: the activation shards ({} x {} tiles) do not cover K ({} tiles)",
         x_cores.size(),
         x_shard_w,
         Kt);
@@ -1713,8 +1717,16 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_program_artifacts
 
     const auto& output_mesh = output.mesh_tensor();
 
-    if (program_config.cores_per_bank > 0) {
-        TT_FATAL(!bias.has_value(), "cores_per_bank does not support a fused bias");
+    if (dram_sharded_helpers::use_dram_sharded_multicore(
+            workers_per_bank,
+            bias.has_value(),
+            fused_activation.has_value(),
+            untilize_out,
+            in0_tile,
+            in1_tile,
+            a.logical_shape()[-1],
+            a.memory_config().buffer_type(),
+            output.memory_config())) {
         return reuse_dram_sharded_optimized_helpers::create_program_dram_sharded_multicore_spec(
             *device,
             a_mesh,
@@ -1725,7 +1737,7 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_program_artifacts
             Kt,
             Nt,
             in0_block_w,
-            program_config.cores_per_bank,
+            workers_per_bank,
             in0_tile,
             in1_tile,
             output_tile,

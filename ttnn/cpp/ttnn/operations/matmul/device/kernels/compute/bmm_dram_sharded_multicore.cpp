@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Compute for the multi-core DRAM-sharded decode matmul (cores_per_bank > 0); the work decode and
+// Compute for the multi-core DRAM-sharded decode matmul (num_workers_per_dram_bank >= 2); the work decode and
 // the block order match reader_dram_sharded_multicore.cpp.
 //
 // fp32_dest_acc_en: the whole K of a column pass stays in fp32 Dest (full sync, at most 8 tiles), with

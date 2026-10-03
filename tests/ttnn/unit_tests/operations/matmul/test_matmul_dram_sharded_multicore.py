@@ -2,8 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""DRAM-sharded decode matmul, multi-core variant (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
-with cores_per_bank > 0).
+"""DRAM-sharded decode matmul, multi-core pipeline (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
+with num_workers_per_dram_bank >= 2 on a call without bias, fused activation or untilize_out).
 
 The served decode shapes come with the layouts the models give them (activation and output shard grids,
 dtypes, fidelity), recorded from tt_transformers on Blackhole (P150 and the per-chip shapes of P150x4 and
@@ -238,7 +238,8 @@ def _matmul(
         per_core_M=1,
         per_core_N=per_core_n,
         fused_activation=fused_activation,
-        cores_per_bank=cores_per_bank,
+        # cores_per_bank 0 is the single-reader program, which is num_workers_per_dram_bank 1
+        num_workers_per_dram_bank=max(cores_per_bank, 1),
     )
     compute = ttnn.init_device_compute_kernel_config(
         x.device().arch(),
@@ -416,11 +417,18 @@ def test_program_cache_reuses_the_program(device):
     _check(out0, ref0, "bf16")
 
 
-def test_rejects_unsupported(device, expect_error):
+def test_fused_activation_falls_back(device, expect_error):
+    """A fused activation is outside the multi-core pipeline: with 2 workers per bank the call runs the
+    single-reader program with 2 readers (Blackhole) and matches its 1-reader result; Wormhole has no
+    multi-reader program and rejects it."""
     case = _bank_case(device, 4096, 4096)
     x, w = _operands(device, 4096, 4096, "bfp8", "bf16", case[5], case[6])
     kw = dict(out_mc=_out(device, case[7], case[8]), out_dtype="bf16", per_core_n=case[8], fidelity="HiFi2")
-    with expect_error(RuntimeError, "fused activation"):
-        _matmul(
-            x, w, in0_block_w=2, cores_per_bank=2, fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU), **kw
-        )
+    silu = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
+    if not is_blackhole():
+        with expect_error(RuntimeError, "supported only on Blackhole"):
+            _matmul(x, w, in0_block_w=2, cores_per_bank=2, fused_activation=silu, **kw)
+        return
+    two = ttnn.to_torch(_matmul(x, w, in0_block_w=2, cores_per_bank=2, fused_activation=silu, **kw))
+    one = ttnn.to_torch(_matmul(x, w, in0_block_w=2, cores_per_bank=0, fused_activation=silu, **kw))
+    assert torch.equal(two, one)

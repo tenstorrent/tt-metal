@@ -466,6 +466,29 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
     return assignments;
 }
 
+bool use_dram_sharded_multicore(
+    std::size_t workers_per_bank,
+    bool has_bias,
+    bool has_fused_activation,
+    bool untilize_out,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    uint32_t k_logical,
+    tt::tt_metal::BufferType a_buffer_type,
+    const tt::tt_metal::MemoryConfig& output_mem_config) {
+    auto full_tile = [](const tt::tt_metal::Tile& t) {
+        return t.get_height() == tt::constants::TILE_HEIGHT && t.get_width() == tt::constants::TILE_WIDTH &&
+               !t.get_transpose_within_face() && !t.get_transpose_of_faces();
+    };
+    return workers_per_bank >= 2 && !has_bias && !has_fused_activation && !untilize_out && full_tile(in0_tile) &&
+           full_tile(in1_tile) && k_logical % tt::constants::TILE_WIDTH == 0 &&
+           a_buffer_type == tt::tt_metal::BufferType::L1 &&
+           output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1 &&
+           output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED &&
+           (!output_mem_config.shard_spec().has_value() ||
+            output_mem_config.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+}
+
 std::vector<std::vector<tt::tt_metal::CoreCoord>> get_dram_bank_adjacent_workers(
     tt::tt_metal::distributed::MeshDevice& device, tt::tt_metal::NOC noc, uint32_t cores_per_bank, uint32_t num_banks) {
     const auto anchors = device.get_optimal_dram_bank_to_logical_worker_assignment(noc);

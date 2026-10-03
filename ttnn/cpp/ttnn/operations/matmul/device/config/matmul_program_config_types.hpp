@@ -77,12 +77,10 @@ struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
     std::size_t per_core_M{};
     std::size_t per_core_N{};
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
+    // Compute cores per DRAM bank. 1: the single-reader program. N >= 2: the multi-core pipeline
+    // when the call qualifies (dram_sharded_helpers::use_dram_sharded_multicore), else the
+    // multi-reader single-reader program (Blackhole, N <= 3, shard width divisible by N).
     std::size_t num_workers_per_dram_bank = 1;
-    // 0 keeps the single-reader factory. N > 0 selects the multi-core decode variant (M = one tile):
-    // N cores next to each DRAM bank split that bank's weight columns, every core accumulates its
-    // whole K in Dest (fp32 when fp32_dest_acc_en), and in0_block_w becomes the K tiles per streamed
-    // weight block.
-    std::size_t cores_per_bank = 0;
 };
 
 struct MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig {
