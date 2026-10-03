@@ -376,10 +376,37 @@ void dequant_init(const uint zero_point) {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false>
+// Per-tensor (scalar scale) forms: the scale goes into LREG1 once at init, next to the zero point in LREG2, and the
+// calculate_* bodies with SCALAR_SCALE skip the per-row scale load. The replay bodies read LREG1 in both forms.
+template <
+    bool APPROXIMATION_MODE /*unused*/,
+    bool SIGN_MAGNITUDE_FORMAT = false,
+    DataFormat OUTPUT_FORMAT = DataFormat::Int32>
+void quant_init_scalar_scale(const uint zero_point, const uint scale) {
+    quant_init<APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT, OUTPUT_FORMAT>(zero_point);
+    _sfpu_load_imm32_(p_sfpu::LREG1, scale);
+}
+
+template <
+    bool APPROXIMATION_MODE /*unused*/,
+    bool SIGN_MAGNITUDE_FORMAT = false,
+    DataFormat OUTPUT_FORMAT = DataFormat::Int32,
+    bool INT8_INPUT = false>
+void requant_init_scalar_scale(const uint zero_point, const uint scale) {
+    requant_init<APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT, OUTPUT_FORMAT, INT8_INPUT>(zero_point);
+    _sfpu_load_imm32_(p_sfpu::LREG1, scale);
+}
+
+template <bool APPROXIMATION_MODE /*unused*/, bool SIGN_MAGNITUDE_FORMAT = false, bool INT8_INPUT = false>
+void dequant_init_scalar_scale(const uint zero_point, const uint scale) {
+    dequant_init<APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT, INT8_INPUT>(zero_point);
+    _sfpu_load_imm32_(p_sfpu::LREG1, scale);
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false, bool SCALAR_SCALE = false>
 inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Operand A is input (fp32).
-    // Operand B is scaling factor (fp32).
+    // Operand B is scaling factor (fp32); with SCALAR_SCALE it is the LREG1 constant from the init.
     // LREG2 holds the zero-point constant (fp32) loaded by _init_quant_int32_.
     // Output is int32 scaled to int8 range (sign-magnitude or 2's-complement).
     //
@@ -396,7 +423,7 @@ inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index
     constexpr std::uint32_t REPLAY_LEN = SIGN_MAGNITUDE_FORMAT ? QUANT_REPLAY_LEN_SIGN_MAGN : QUANT_REPLAY_LEN_2S_COMP;
 
     const std::uint32_t in0_off = dst_index_in0 * dst_tile_size;
-    const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
+    [[maybe_unused]] const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
     const std::uint32_t out_off = dst_index_out * dst_tile_size;
 
     // Per iteration: inline TT_SFPLOADs (variable addresses can't live inside
@@ -406,16 +433,24 @@ inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_7, in0_off);  // operand A (fp32)
-        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, in1_off);  // operand B (fp32 scaler)
+        if constexpr (!SCALAR_SCALE) {
+            TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, in1_off);  // operand B (fp32 scaler)
+        }
         lltt::replay(QUANT_REPLAY_SLOT, REPLAY_LEN);                              // MAD + STOCH_RND + (CAST + SETSGN)
         TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_6, out_off);  // store + dst_reg += 2
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false, bool INT8_INPUT = false>
+template <
+    bool APPROXIMATION_MODE,
+    int ITERATIONS = 8,
+    bool SIGN_MAGNITUDE_FORMAT = false,
+    bool INT8_INPUT = false,
+    bool SCALAR_SCALE = false>
 inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Operand A is input to requant (int32, sign-magnitude or 2's complement bits or UInt8-unpacked int8 byte in [0,
-    // 255]). Operand B is scaling factor (fp32). LREG2 holds the zero-point constant (fp32) loaded by
+    // 255]). Operand B is scaling factor (fp32; with SCALAR_SCALE the LREG1 constant from the init). LREG2 holds
+    // the zero-point constant (fp32) loaded by
     // _init_requant_int32_. Output is int32 scaled to int8 range (sign-magnitude or 2's-complement).
     //
     // The replay-buffer body at REQUANT_REPLAY_SLOT and ADDR_MOD_6's dest+=2
@@ -429,7 +464,7 @@ inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_ind
                    : (SIGN_MAGNITUDE_FORMAT ? REQUANT_REPLAY_LEN_SIGN_MAGN : REQUANT_REPLAY_LEN_2S_COMP);
 
     const std::uint32_t in0_off = dst_index_in0 * dst_tile_size;
-    const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
+    [[maybe_unused]] const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
     const std::uint32_t out_off = dst_index_out * dst_tile_size;
 
     // Per iteration: hoist both TT_SFPLOADs ahead of the recorded compute
@@ -439,7 +474,9 @@ inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_ind
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_7, in0_off);  // operand A (int32/byte)
-        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, in1_off);           // operand B (fp32 scaler)
+        if constexpr (!SCALAR_SCALE) {
+            TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, in1_off);  // operand B (fp32 scaler)
+        }
         if constexpr (INT8_INPUT) {
             _int8_input_unbias_();  // byte ^ 0x80
         }
@@ -448,30 +485,34 @@ inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_ind
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SCALAR_SCALE = false>
 inline void calculate_quant_int32_int8_pack(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Int8 output: MAD + offset-128 pack body is recorded once into QUANT_REPLAY_SLOT and replayed.
+    // With SCALAR_SCALE the scale is the LREG1 constant from the init.
     constexpr std::uint32_t dst_tile_size = 64;
     const std::uint32_t in0_off = dst_index_in0 * dst_tile_size;
-    const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
+    [[maybe_unused]] const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
     const std::uint32_t out_off = dst_index_out * dst_tile_size;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_7, in0_off);  // operand A (fp32)
-        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, in1_off);  // operand B (fp32 scaler)
+        if constexpr (!SCALAR_SCALE) {
+            TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, in1_off);  // operand B (fp32 scaler)
+        }
         lltt::replay(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN_INT8_OUT);               // MAD + offset-128 pack
         TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_6, out_off);
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool INT8_INPUT = false>
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool INT8_INPUT = false, bool SCALAR_SCALE = false>
 inline void calculate_requant_int32_int8_pack(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Int8 output: CAST + MAD + offset-128 pack body is recorded once into REQUANT_REPLAY_SLOT and replayed.
+    // With SCALAR_SCALE the scale is the LREG1 constant from the init.
     constexpr std::uint32_t dst_tile_size = 64;
     const std::uint32_t in0_off = dst_index_in0 * dst_tile_size;
-    const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
+    [[maybe_unused]] const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
     const std::uint32_t out_off = dst_index_out * dst_tile_size;
 
     constexpr std::uint32_t REPLAY_LEN =
@@ -480,7 +521,9 @@ inline void calculate_requant_int32_int8_pack(
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_7, in0_off);  // operand A (int32/byte)
-        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, in1_off);           // operand B (fp32 scaler)
+        if constexpr (!SCALAR_SCALE) {
+            TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, in1_off);  // operand B (fp32 scaler)
+        }
         if constexpr (INT8_INPUT) {
             _int8_input_unbias_();  // byte ^ 0x80 (int32 input is converted inside the recorded body)
         }
@@ -489,11 +532,16 @@ inline void calculate_requant_int32_int8_pack(
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false, bool INT8_INPUT = false>
+template <
+    bool APPROXIMATION_MODE,
+    int ITERATIONS = 8,
+    bool SIGN_MAGNITUDE_FORMAT = false,
+    bool INT8_INPUT = false,
+    bool SCALAR_SCALE = false>
 inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Operand A[LREG0] is input to dequant (int32, sign-magnitude or 2's complement bits;
     // or, when INT8_INPUT, a UInt8-unpacked int8 byte in [0, 255]).
-    // Operand B[LREG1] is scaling factor (fp32).
+    // Operand B[LREG1] is scaling factor (fp32); with SCALAR_SCALE it is the constant from the init.
     // LREG2 holds the (negated) zero-point constant loaded by _init_dequant_int32_;
     // i.e. the formula computed is (A + LREG2) * B, which is (A - zero_point) * B
     // when the caller passes -zero_point through the init.
@@ -508,7 +556,7 @@ inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_ind
         (SIGN_MAGNITUDE_FORMAT || INT8_INPUT) ? DEQUANT_REPLAY_LEN_SIGN_MAGN : DEQUANT_REPLAY_LEN_2S_COMP;
 
     const std::uint32_t in0_off = dst_index_in0 * dst_tile_size;
-    const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
+    [[maybe_unused]] const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
     const std::uint32_t out_off = dst_index_out * dst_tile_size;
 
     // Per iteration: hoist both TT_SFPLOADs ahead of the recorded compute,
@@ -517,7 +565,9 @@ inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_ind
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_7, in0_off);  // operand A (int32/byte)
-        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, in1_off);           // operand B (fp32 scaler)
+        if constexpr (!SCALAR_SCALE) {
+            TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, in1_off);  // operand B (fp32 scaler)
+        }
         if constexpr (INT8_INPUT) {
             _int8_input_unbias_();  // byte ^ 0x80
         }

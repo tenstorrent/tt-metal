@@ -54,10 +54,16 @@ inline void calculate_unary_max_min(uint value) {
 
     sfpi::l_reg[sfpi::LRegs::LReg0].in_use();
     sfpi::l_reg[sfpi::LRegs::LReg1].in_use();
+    // Two rows per trip so the macro word is a compile-time constant (TTI_) in every iteration count.
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        int a = d & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
-        TT_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6, offset | (a >> 2));
+    for (int d = 0; d + 1 < ITERATIONS; d += 2) {
+        TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG0 & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6, offset | (p_sfpu::LREG0 >> 2));
+        TTI_SFPNOP;
+        TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG1 & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6, offset | (p_sfpu::LREG1 >> 2));
+        TTI_SFPNOP;
+    }
+    if constexpr (ITERATIONS & 1) {
+        TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG0 & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6, offset | (p_sfpu::LREG0 >> 2));
         TTI_SFPNOP;
     }
     TTI_SFPNOP;
@@ -150,10 +156,16 @@ inline void calculate_unary_max_min_int32(uint value) {
 
         sfpi::l_reg[sfpi::LRegs::LReg0].in_use();
         sfpi::l_reg[sfpi::LRegs::LReg1].in_use();
+        // Two rows per trip so the macro word is a compile-time constant (see calculate_unary_max_min).
 #pragma GCC unroll 8
-        for (int d = 0; d < ITERATIONS; d++) {
-            int a = d & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
-            TT_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::INT32, ADDR_MOD_6, offset | (a >> 2));
+        for (int d = 0; d + 1 < ITERATIONS; d += 2) {
+            TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG0 & 3), InstrModLoadStore::INT32, ADDR_MOD_6, offset | (p_sfpu::LREG0 >> 2));
+            TTI_SFPNOP;
+            TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG1 & 3), InstrModLoadStore::INT32, ADDR_MOD_6, offset | (p_sfpu::LREG1 >> 2));
+            TTI_SFPNOP;
+        }
+        if constexpr (ITERATIONS & 1) {
+            TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG0 & 3), InstrModLoadStore::INT32, ADDR_MOD_6, offset | (p_sfpu::LREG0 >> 2));
             TTI_SFPNOP;
         }
     }

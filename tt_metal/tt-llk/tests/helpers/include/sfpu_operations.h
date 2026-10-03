@@ -204,7 +204,21 @@ void call_unary_typecast_operation_init()
     else if constexpr (
         (IN == DataFormat::Float32 || IN == DataFormat::Float16_b || IN == DataFormat::Bfp8_b || IN == DataFormat::Bfp4_b) && OUT == DataFormat::UInt16)
     {
+#if defined(ARCH_BLACKHOLE)
+        // The Blackhole init programs the macro's store for the Dest mode, as typecast_tile_init does.
+        SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_fp32_to_uint16, (APPROX_MODE, DST_ACCUM_MODE));
+#else
         SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_fp32_to_uint16, (APPROX_MODE));
+#endif
+    }
+    else if constexpr (
+        (IN == DataFormat::Float32 || IN == DataFormat::Float16_b || IN == DataFormat::Bfp8_b || IN == DataFormat::Bfp4_b) && OUT == DataFormat::Int32)
+    {
+#if defined(ARCH_BLACKHOLE)
+        SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_fp32_to_int32, (APPROX_MODE));
+#else
+        SFPU_UNARY_INIT(typecast);
+#endif
     }
     else if constexpr (
         (IN == DataFormat::Float32 || IN == DataFormat::Float16_b || IN == DataFormat::Bfp8_b || IN == DataFormat::Bfp4_b) && OUT == DataFormat::UInt8)

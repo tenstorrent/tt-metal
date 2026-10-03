@@ -372,4 +372,176 @@ ALWI void dequant_int8_tile_init(const uint32_t zero_point) {
     MATH((SFPU_BINARY_INIT_FN_ARGS(dequant_int32, sfpu::dequant_init, (APPROX, false, true), zero_point)));
 }
 
+#if defined(ARCH_BLACKHOLE)
+// clang-format off
+/**
+ * Per-tensor (scalar scale) forms of the quantization ops: the scale is given at init, together with the zero point,
+ * so the tile call has one DEST operand and no scale tile. Dest must be in 32 bit mode, as for the tile forms.
+ *
+ * | Argument       | Description                                                           | Type     | Valid Range                                           | Required |
+ * |----------------|-----------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst           | The index of the tile in DST register buffer to use as the operand    | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void quant_scalar_tile(uint32_t idst, uint32_t odst) {
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_quant_int32,
+        (APPROX, 8, false, true /* SCALAR_SCALE */),
+        idst,
+        idst,
+        odst,
+        VectorMode::RC)));
+}
+
+ALWI void quant_int8_scalar_tile(uint32_t idst, uint32_t odst) {
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_quant_int32_int8_pack,
+        (APPROX, 8, true /* SCALAR_SCALE */),
+        idst,
+        idst,
+        odst,
+        VectorMode::RC)));
+}
+
+ALWI void requant_scalar_tile(uint32_t idst, uint32_t odst) {
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_requant_int32,
+        (APPROX, 8, false, false, true /* SCALAR_SCALE */),
+        idst,
+        idst,
+        odst,
+        VectorMode::RC)));
+}
+
+ALWI void requant_int8_scalar_tile(uint32_t idst, uint32_t odst) {
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_requant_int32_int8_pack,
+        (APPROX, 8, false, true /* SCALAR_SCALE */),
+        idst,
+        idst,
+        odst,
+        VectorMode::RC)));
+}
+
+ALWI void requant_int8_in_scalar_tile(uint32_t idst, uint32_t odst) {
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_requant_int32,
+        (APPROX, 8, false, true, true /* SCALAR_SCALE */),
+        idst,
+        idst,
+        odst,
+        VectorMode::RC)));
+}
+
+ALWI void requant_int8_in_int8_out_scalar_tile(uint32_t idst, uint32_t odst) {
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_requant_int32_int8_pack,
+        (APPROX, 8, true, true /* SCALAR_SCALE */),
+        idst,
+        idst,
+        odst,
+        VectorMode::RC)));
+}
+
+ALWI void dequant_scalar_tile(uint32_t idst, uint32_t odst) {
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_dequant_int32,
+        (APPROX, 8, false, false, true /* SCALAR_SCALE */),
+        idst,
+        idst,
+        odst,
+        VectorMode::RC)));
+}
+
+ALWI void dequant_int8_scalar_tile(uint32_t idst, uint32_t odst) {
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_dequant_int32,
+        (APPROX, 8, false, true, true /* SCALAR_SCALE */),
+        idst,
+        idst,
+        odst,
+        VectorMode::RC)));
+}
+
+// clang-format off
+/**
+ * Inits of the per-tensor forms: the zero point and the scale of the Op, both as fp32 bits. To be called once at the
+ * beginning of a kernel; each pairs with the tile call of the same name.
+ *
+ * | Argument   | Description                                   | Data type | Valid range | Required |
+ * |------------|-----------------------------------------------|-----------|-------------|----------|
+ * | zero_point | The zero point of the Op (fp32 bits)          | uint32_t  | Any number  | Yes      |
+ * | scale      | The per-tensor scale of the Op (fp32 bits)    | uint32_t  | Any number  | Yes      |
+ * */
+// clang-format on
+ALWI void quant_scalar_tile_init(const uint32_t zero_point, const uint32_t scale) {
+    MATH((SFPU_BINARY_INIT_FN_ARGS(quant_int32, sfpu::quant_init_scalar_scale, (APPROX), zero_point, scale)));
+}
+
+ALWI void quant_uint8_scalar_tile_init(const uint32_t zero_point, const uint32_t scale) {
+    MATH((SFPU_BINARY_INIT_FN_ARGS(
+        quant_int32, sfpu::quant_init_scalar_scale, (APPROX, false, DataFormat::UInt8), zero_point, scale)));
+}
+
+ALWI void quant_int8_scalar_tile_init(const uint32_t zero_point, const uint32_t scale) {
+    MATH((SFPU_BINARY_INIT_FN_ARGS(
+        quant_int32, sfpu::quant_init_scalar_scale, (APPROX, false, DataFormat::Int8), zero_point, scale)));
+}
+
+ALWI void requant_scalar_tile_init(const uint32_t zero_point, const uint32_t scale) {
+    MATH((SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init_scalar_scale, (APPROX), zero_point, scale)));
+}
+
+ALWI void requant_uint8_scalar_tile_init(const uint32_t zero_point, const uint32_t scale) {
+    MATH((SFPU_BINARY_INIT_FN_ARGS(
+        requant_int32, sfpu::requant_init_scalar_scale, (APPROX, false, DataFormat::UInt8), zero_point, scale)));
+}
+
+ALWI void requant_int8_scalar_tile_init(const uint32_t zero_point, const uint32_t scale) {
+    MATH((SFPU_BINARY_INIT_FN_ARGS(
+        requant_int32, sfpu::requant_init_scalar_scale, (APPROX, false, DataFormat::Int8), zero_point, scale)));
+}
+
+ALWI void requant_int8_in_scalar_tile_init(const uint32_t zero_point, const uint32_t scale) {
+    MATH((SFPU_BINARY_INIT_FN_ARGS(
+        requant_int32, sfpu::requant_init_scalar_scale, (APPROX, false, DataFormat::Int32, true), zero_point, scale)));
+}
+
+ALWI void requant_int8_in_uint8_out_scalar_tile_init(const uint32_t zero_point, const uint32_t scale) {
+    MATH((SFPU_BINARY_INIT_FN_ARGS(
+        requant_int32, sfpu::requant_init_scalar_scale, (APPROX, false, DataFormat::UInt8, true), zero_point, scale)));
+}
+
+ALWI void requant_int8_in_int8_out_scalar_tile_init(const uint32_t zero_point, const uint32_t scale) {
+    MATH((SFPU_BINARY_INIT_FN_ARGS(
+        requant_int32, sfpu::requant_init_scalar_scale, (APPROX, false, DataFormat::Int8, true), zero_point, scale)));
+}
+
+ALWI void dequant_scalar_tile_init(const uint32_t zero_point, const uint32_t scale) {
+    MATH((SFPU_BINARY_INIT_FN_ARGS(dequant_int32, sfpu::dequant_init_scalar_scale, (APPROX), zero_point, scale)));
+}
+
+ALWI void dequant_int8_scalar_tile_init(const uint32_t zero_point, const uint32_t scale) {
+    MATH((SFPU_BINARY_INIT_FN_ARGS(
+        dequant_int32, sfpu::dequant_init_scalar_scale, (APPROX, false, true), zero_point, scale)));
+}
+#endif  // ARCH_BLACKHOLE
+
 }  // namespace ckernel
