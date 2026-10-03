@@ -41,7 +41,7 @@ def rope_freqs(layer_id: int, max_seq_len: int = 256):
     )
 
 
-def load_layer(layer_id: int, with_moe: bool = True, max_seq_len: int = 256):
+def load_layer(layer_id: int, with_moe: bool = True, max_seq_len: int = 256, with_indexer: bool = False):
     sh = _Shards()
     p = f"layers.{layer_id}."
     meta = layer_meta(layer_id)
@@ -81,6 +81,14 @@ def load_layer(layer_id: int, with_moe: bool = True, max_seq_len: int = 256):
             for n in ("attn", "ffn")
         },
     }
+    if with_indexer and layer_id in meta["args"].index_source_layers and layer_id < meta["args"].n_layers:
+        ip = p + "attn.indexer."
+        out["indexer"] = {
+            "wq_b": _fp8(sh, ip + "wq_b"),
+            "weights_proj": sh.get(ip + "weights_proj.weight").to(torch.bfloat16),
+        }
+        if meta["is_kv_source"]:  # index-key owners
+            out["indexer"].update(wk=sh.get(ip + "wk.weight").float(), k_norm=sh.get(ip + "k_norm.weight").float())
     if with_moe:
         out["moe"] = load_moe_layer(layer_id)
     return out

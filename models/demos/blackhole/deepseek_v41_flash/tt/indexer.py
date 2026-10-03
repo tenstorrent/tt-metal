@@ -52,6 +52,18 @@ def rope_rows(freqs_cis: torch.Tensor, positions: torch.Tensor):
     return C, S
 
 
+def default_backend(n_entries: int) -> str:
+    """Length-dependent backend: the batched matmul composite wins for short key caches (139 us at 2k, 205 us at 8k vs 466-509 us fused), the fused
+    ``indexer_score_dsa`` above ~64k entries (measured: matmul 440-770 us vs fused 629-872 us per index layer at 2k-32k entries, equal at 64k; env DSV41_IDX_BACKEND forces one, DSV41_IDX_SWITCH sets the length).
+    """
+    import os
+
+    forced = os.environ.get("DSV41_IDX_BACKEND")
+    if forced:
+        return forced
+    return "matmul" if n_entries <= int(os.environ.get("DSV41_IDX_SWITCH", "65536")) else "fused"
+
+
 class DSV41DecodeIndexer:
     def __init__(
         self,
@@ -161,20 +173,60 @@ class DSV41DecodeIndexer:
         return st
 
     # ---- stages --------------------------------------------------------------------------------------------------------------
-    def _fp4_sim(self, q):
-        """In-place-style fp4 (e2m1, per-32 e8m0 scale) quantise-dequantise of q [U,1,32,128] exactly like the reference ``fp4_act_quant``:
-        scale = 2**ceil(log2(amax / 6)) per block of 32, value = round-to-grid(x / scale) * scale. The e2m1 grid {0,.5,1,1.5,2,3,4,6} is a
+    @staticmethod
+    def _fp4_blocks(x):
+        """fp4 (e2m1, per-32 e8m0 scale) quantise-dequantise of float32 ``x`` [..., 32] (each last-dim row is one block), exactly like the reference
+        ``fp4_act_quant``: scale = 2**ceil(log2(amax / 6)), value = round-to-grid(x / scale) * scale. The e2m1 grid {0,.5,1,1.5,2,3,4,6} is a
         round-half-even rounding of |y| / step with step 0.5 (|y| < 2), 1 (< 4), 2 (>= 4)."""
-        U = self.T
-        x = ttnn.reshape(ttnn.typecast(q, ttnn.float32), (U, 1, HEADS * 4, 32))  # row = head * 4 + block
         amax = ttnn.max(ttnn.abs(x), dim=-1, keepdim=True)
         scale = ttnn.exp2(ttnn.ceil(ttnn.log2(ttnn.multiply(ttnn.clamp(amax, min=6 * 2.0**-126), 1.0 / 6.0))))
         y = ttnn.clamp(ttnn.divide(x, scale), min=-6.0, max=6.0)
         mag = ttnn.abs(y)
         step = ttnn.add(ttnn.multiply(ttnn.ge(mag, 2.0), 0.5), ttnn.add(ttnn.multiply(ttnn.ge(mag, 4.0), 1.0), 0.5))
         r = ttnn.floor(ttnn.add(ttnn.divide(mag, step), 0.5))
-        out = ttnn.multiply(ttnn.multiply(ttnn.multiply(r, step), ttnn.sign(y)), scale)
-        return ttnn.typecast(ttnn.reshape(out, (U, 1, HEADS, DIM)), ttnn.bfloat16)
+        return ttnn.multiply(ttnn.multiply(ttnn.multiply(r, step), ttnn.sign(y)), scale)
+
+    def _fp4_sim(self, q):
+        """fp4 simulation of q [U,1,32,128] (see ``_fp4_blocks``)."""
+        U = self.T
+        x = ttnn.reshape(ttnn.typecast(q, ttnn.float32), (U, 1, HEADS * 4, 32))  # row = head * 4 + block
+        return ttnn.typecast(ttnn.reshape(self._fp4_blocks(x), (U, 1, HEADS, DIM)), ttnn.bfloat16)
+
+    # ---- key append (owner layers: kv sources) -----------------------------------------------------------------------------------
+    def set_key_weights(self, wk, k_norm, eps=1e-20):
+        """wk [128, 512] (indexer.wk.weight), k_norm [128]: index key = k_norm(wk(latent_pre_rope)), RoPE'd on the last 64 dims, fp4-simulated."""
+        self.wk = self._up(wk.T.reshape(1, 1, -1, DIM).float())
+        self.k_norm_w = self._up(k_norm.reshape(1, 1, 1, DIM).float())
+        self.k_eps = eps
+        T = self.T
+        self._kcfg = ttnn.create_sharded_memory_config(
+            shape=(32, DIM),
+            core_grid=ttnn.num_cores_to_corerangeset(T, ttnn.CoreCoord(8, 8), row_wise=True),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+    def append_key(self, lat_pre, st):
+        """lat_pre [1,1,T,512] bf16 tile (this step's pooled latent BEFORE RoPE/quantisation) -> the key of entry ``st["ent"]`` ([T] int32 = pos // ratio)
+        is written into the key slab in place. The entry of an incomplete group is hidden by the valid length until the group completes.
+        """
+        T = self.T
+        k = ttnn.linear(lat_pre, self.wk, compute_kernel_config=self.ckc)  # [1,1,T,128]
+        k = ttnn.rms_norm(ttnn.typecast(k, ttnn.bfloat16), weight=self.k_norm_w, epsilon=self.k_eps)
+        k = ttnn.addcmul(
+            ttnn.multiply(k, st["iCg"]), ttnn.matmul(k, self.P, compute_kernel_config=self.ckc), st["iSg"]
+        )  # RoPE of position pos + 1 - ratio
+        k = ttnn.typecast(
+            self._fp4_blocks(ttnn.reshape(ttnn.typecast(k, ttnn.float32), (1, 1, T * 4, 32))), ttnn.bfloat16
+        )
+        k = ttnn.reshape(k, (1, 1, T, DIM))
+        k = ttnn.to_layout(
+            ttnn.reshape(ttnn.to_layout(k, ttnn.ROW_MAJOR_LAYOUT), (1, T, 1, DIM)), ttnn.TILE_LAYOUT
+        )  # one tile per user, key in row 0
+        k = ttnn.to_memory_config(k, self._kcfg)
+        ttnn.experimental.paged_update_cache(self.k_cache, k, update_idxs_tensor=st["ent"], page_table=None)
+        ttnn.deallocate(k)
 
     def project(self, x, qr, st):
         """x [1,1,U,5120], qr [1,1,U,1280] (bf16 tiles, replicated over the columns) -> (q [U,32,1,128], w [U,1,1,32])."""
