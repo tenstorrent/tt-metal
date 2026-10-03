@@ -195,7 +195,7 @@ class LoraRowParallelLinear(AbstractModuleBase):
         if not self.input_is_parallel:
             x = ttml.ops.distributed.scatter(x, 3, self.cluster_axis)
         base = ttml.ops.linear.linear(x, self.weight.tensor, None)
-        base = ttml.ops.distributed.all_reduce(base, self.input_is_parallel, self.cluster_axis)
+        base = ttml.ops.distributed.all_reduce(base, noop_backward=True, cluster_axis=self.cluster_axis)
         if self.bias is not None:
             base = ttml.ops.binary.add(base, self.bias.tensor)
         # lora_A is row-sharded (each device sees a slice of in_features), so
@@ -205,7 +205,7 @@ class LoraRowParallelLinear(AbstractModuleBase):
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
             lora_input = ttml.ops.dropout.dropout(x, self.dropout_prob)
         h = ttml.ops.linear.linear(lora_input, self.lora_A.tensor, None)
-        h = ttml.ops.distributed.all_reduce(h, self.input_is_parallel, self.cluster_axis)
+        h = ttml.ops.distributed.all_reduce(h, noop_backward=True, cluster_axis=self.cluster_axis)
         lora_update = ttml.ops.linear.linear(h, self.lora_B.tensor, None)
         return base + lora_update * self.scaling
 
