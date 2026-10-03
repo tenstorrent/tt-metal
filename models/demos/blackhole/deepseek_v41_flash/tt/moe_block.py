@@ -22,6 +22,61 @@ from models.common.modules.moe.tt_moe_decode_config import TTMoEDecodeConfig
 from models.common.modules.moe.tt_moe_gate_config import TTMoEGateConfig
 from models.demos.blackhole.deepseek_v41_flash.tt.router import DSV41Gate
 
+
+class _TailDecode(TTMoEDecode):
+    """TTMoEDecode whose tilize + fast_reduce tail is one fused program (moe_tail.py) when T < 32; set DSV41_MOE_TAIL=0 for the stock path."""
+
+    def forward(self, tt_x, tt_scores, tt_indices, layer_id: int = 0):
+        import os
+
+        cfg = self.config
+        if (
+            os.environ.get("DSV41_MOE_TAIL", "1") == "0"
+            or cfg.batch_per_device >= ttnn.TILE_SIZE
+            or cfg.num_fast_reduce_outputs != 1
+            or self._needs_fast_reduce_padding
+            or cfg.num_shared_experts != 0
+        ):
+            return super().forward(tt_x, tt_scores, tt_indices, layer_id)
+        from models.demos.blackhole.deepseek_v41_flash.tt.moe_tail import make_col_tensor, moe_tail
+
+        if not hasattr(self, "_col"):
+            self._col = make_col_tensor(self._mesh)
+        (x_t, d_x), (i_t, d_i), (s_t, d_s) = self._format_dispatch_inputs(tt_x, tt_indices, tt_scores)
+        sparse, o_idx, o_sc = ttnn.experimental.all_to_all_dispatch_metadata(
+            x_t,
+            i_t,
+            s_t,
+            self.expert_state.tt_expert_mapping,
+            **cfg.dispatch.model_dump(),
+            output_tensors=self.buffers.tt_dispatch_output_tensors,
+            cross_device_semaphore=self.buffers.dispatch_global_semaphore,
+        )
+        if d_x:
+            ttnn.deallocate(x_t)
+        if d_s:
+            ttnn.deallocate(s_t)
+        _, _, _, l1_out, _, combine = ttnn.experimental.moe_compute(
+            sparse,
+            o_idx,
+            o_sc,
+            self.expert_state.tt_expert_mapping,
+            self.expert_state.tt_w0_w1,
+            self.expert_state.tt_w2,
+            layer_id=layer_id,
+            **cfg.compute.model_dump(),
+            optional_output_tensor=self.buffers.tt_combine_output,
+            optional_cross_device_semaphore=self.buffers.combine_global_semaphore,
+        )
+        ttnn.deallocate(l1_out)
+        red = moe_tail(combine, tt_scores, tt_indices, self.expert_state.tt_expert_mapping, self._col)
+        if d_i:
+            ttnn.deallocate(i_t)
+        out = ttnn.reduce_scatter(red, **cfg.reduce_scatter.model_dump())
+        ttnn.deallocate(red)
+        return out
+
+
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "configs" / "deepseek_v41_flash.yaml"
 
 
@@ -72,7 +127,7 @@ class DSV41MoEBlock:
             torch_gate_bias=weights["gate_bias"],
             bias_shift=gate_bias_shift,
         )
-        self.decode = TTMoEDecode(
+        self.decode = _TailDecode(
             mesh_device=mesh_device,
             config=decode_cfg,
             torch_w0=weights["w0"],
@@ -84,6 +139,7 @@ class DSV41MoEBlock:
             weight_cache_dir=weights.get("cache_dir"),
             buffers=buffers,
         )
+        self.decode._mesh = mesh_device
 
     def warmup(self):
         """Compile the MoE programs once, steering where ``moe_compute``'s persistent semaphore lands in L1.
