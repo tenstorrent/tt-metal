@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <type_traits>
 
 #include "ckernel_addrmod.h"
 #include "ckernel_ops.h"
@@ -101,21 +102,61 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
     return _sfpu_exp_21f_bf16_unsafe_<is_fp32_dest_acc_en>(val, EXP_21F_BF16_C0, EXP_21F_BF16_C1, EXP_21F_BF16_C2);
 }
 
+// exp_21f constants. The one-argument _sfpu_exp_21f_bf16_(val) materialises them per call; callers that
+// evaluate exp inside a row loop pass them in through the five-argument overload instead, built once before
+// the loop (sfpi (through 7.84.0) never hoists an SFPLOADI literal out of a loop on its own, so each fp32 literal
+// otherwise costs an SFPLOADI pair per row). Same values either way: the two forms are bit-identical.
+constexpr float EXP_21F_ONE_LN2 = 1.4426950216293334961f;  // 0x3FB8AA3B
+constexpr float EXP_21F_C0 = EXP_21F_BF16_C0;
+constexpr float EXP_21F_C1 = EXP_21F_BF16_C1;
+constexpr float EXP_21F_C2 = EXP_21F_BF16_C2;
+
+// A loop constant a kernel keeps in an LReg when COND, and a plain float otherwise. Kernels whose arms
+// (bf16 / fp32 dest) hoist different constants declare all of them before the loop with the arm's condition,
+// so the arm that never reads one pays nothing: a float is folded away, an sfpi::vFloat is an SFPLOADI pair
+// per call. sfpi cannot spill, so each kernel hoists only what fits beside its live data -- one LReg too
+// many is a compile error ("too few lregs"), never a slowdown. Declare these non-const: a const vFloat
+// that lives across a partially unrolled loop makes sfpi (through 7.84.0) try to spill it ("cannot write SFPU
+// object to memory").
+template <bool COND>
+using HoistedIf = std::conditional_t<COND, sfpi::vFloat, float>;
+
+// Programs vConstFloatPrgm1 = 1/ln2 for the hoisted-constant exp callers (sigmoid, silu, mish), which read
+// it on every row. 1/ln2 is the same fp32 (0x3FB8AA3B) as the Juffa fp32 exp's log2(e),
+// so one register serves a kernel's bf16 and fp32 arms. Prgm0 is left alone (sfpu_reciprocal_init's 2.0f,
+// which those kernels' Newton step needs), and Prgm2 deliberately so: fused kernels run sigmoid/silu with
+// one init before a loop that interleaves other SFPU code, and the MoE gate kernels
+// (ckernel_sfpu_generalized_moe_gate_topk_single_face.h, ckernel_sfpu_generic_moe_gate_topk.h) write
+// LREG14 = Prgm2 there. So the contract those kernels already keep for Prgm0 extends to Prgm1 only.
+inline void _init_exp_hoisted_prgm_consts_() { sfpi::vConstFloatPrgm1 = EXP_21F_ONE_LN2; }
+
 /*
  * This function implements the exponential function using a polynomial approximation algorithm
  * based on "Simple Multiple Precision Algorithms for Exponential Functions [Tips & Tricks]"
  * by Moroz et al. 2022 (https://doi.org/10.1109/MSP.2022.3157460).
  * More specifically, it is the implementation of the `exp_21f` algorithm described in Section 5
  *
- * @param val The input value (sfpi::vFloat vector), can be any floating point number
+ * This overload takes the four constants from the caller (see EXP_21F_* above). Each may be a float
+ * (materialised by SFPLOADI where it is used, exactly as a literal would be) or an sfpi::vFloat /
+ * vConstFloatPrgmN the caller holds across its row loop. The arithmetic is identical either way; only the
+ * source of the constants differs. The constants are template-typed rather than plain sfpi::vFloat on
+ * purpose: a vFloat parameter is built before the call and stays live through the body, which reorders
+ * the SFPLOADIs of the non-hoisting callers (their codegen would no longer be identical) and costs an
+ * LReg per constant for the whole body.
+ *
+ * @param val     The input value (sfpi::vFloat vector), can be any floating point number
+ * @param one_ln2 1/ln(2) (EXP_21F_ONE_LN2)
+ * @param c0      Constant term of the 2**x_f refinement polynomial (EXP_21F_C0)
+ * @param c1      Linear coefficient of that polynomial (EXP_21F_C1)
+ * @param c2      Quadratic coefficient of that polynomial (EXP_21F_C2)
  *
  * @return sfpi::vFloat Result of exp(val)
  *
  * @see Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
  *      ( https://doi.org/10.1109/MSP.2022.3157460 )
  */
-template <bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
+template <bool is_fp32_dest_acc_en, typename K, typename C0, typename C1, typename C2>
+sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val, K one_ln2, C0 c0, C1 c1, C2 c2) {
     // This function computes exp(x) by leveraging mathematic properties of exp(x):
     // That is, exp(x) = 2**(x / ln2) = 2**(x_i) * 2**(x_f) where
     // - z_i = trunc(x / ln2) (integer part)
@@ -130,8 +171,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
     // This formula prepares for the computation of exp(x) = 2^(x/log(2))
     //
     // In our case, we will let the multiplication by 2^23 be done implicitly in _float_to_int32_exp21f_ function
-    constexpr float ONE_LN2 = 1.4426950216293334961f;
-    sfpi::vFloat xlog2 = (val * ONE_LN2 + 127.f);
+    sfpi::vFloat xlog2 = (val * one_ln2 + 127.f);
 
     // Intermediary values can overflow in xlog2 is outside of [0, 256[ which leads to invalid results instead of 0
     // (when input < -88.5) and +inf (when input > 88.5)
@@ -149,7 +189,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
 
     // To refine approximation of 2**(x_f), we use an approximation of 2**x on [0; 2^23]
     // This uses a 2nd degree polynomial adjustment of the fractional part
-    frac = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
+    frac = PolynomialEvaluator::eval(frac, c0, c1, c2);
 
     // Recombined exponent and mantissa: this is equivalent to 2**(x_i) * 2**(x_f)
     sfpi::vFloat y = sfpi::setexp(frac, exponential_part);
@@ -163,6 +203,22 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
     }
 
     return y;
+}
+
+// exp_21f with every constant a literal; see the five-argument overload above.
+// @param val The input value (sfpi::vFloat vector), can be any floating point number
+// @return sfpi::vFloat Result of exp(val)
+template <bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
+    return _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(val, EXP_21F_ONE_LN2, EXP_21F_C0, EXP_21F_C1, EXP_21F_C2);
+}
+
+// Row-loop form of _sfpu_exp_21f_bf16_: 1/ln2 from vConstFloatPrgm1 (the kernel's init must have run
+// _init_exp_hoisted_prgm_consts_()), c0..c2 from the caller -- each an sfpi::vFloat built once before the
+// loop, or a float literal where the caller's LRegs are all spoken for.
+template <bool is_fp32_dest_acc_en, typename C0, typename C1, typename C2>
+sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_prgm_(sfpi::vFloat val, C0 c0, C1 c1, C2 c2) {
+    return _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(val, sfpi::vConstFloatPrgm1, c0, c1, c2);
 }
 
 /*
@@ -356,29 +412,44 @@ sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vIn
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+// Juffa exp constants that the hoisted-constant overload below takes from its caller (see EXP_21F_*
+// for the rationale). LOG2E is the same fp32 as EXP_21F_ONE_LN2, so one Prgm register can serve both exps.
+constexpr float EXP_FP32_LOG2E = EXP_21F_ONE_LN2;  // log2(e) == 1/ln(2), 0x3FB8AA3B
+constexpr float EXP_FP32_NEG_LN2_HI = -6.93145752e-1f;
+constexpr float EXP_FP32_P0 = 1.37805939e-3f;
+constexpr float EXP_FP32_P1 = 8.37312452e-3f;  // 0x1.125edcp-7
+
 // Non-finite behaviour of the guarded form (unsafe = false), measured on Blackhole silicon:
 //   +-NaN (either sign, quiet or signalling) -> NaN    +Inf -> +Inf    -Inf -> +0
 // unsafe = true drops both guards and preserves none of this.
-template <bool unsafe = false>
-sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
+//
+// This overload takes log2(e), -ln2_hi and the two leading polynomial coefficients from the caller, each
+// either a float (materialised where used, as a literal is) or a vFloat / vConstFloatPrgmN held across a
+// row loop. They are template-typed rather than plain sfpi::vFloat for the reason given at
+// _sfpu_exp_21f_bf16_, and here it bit: vFloat parameters stay live through the body, which pushed
+// tanhshrink's fp32 path (this exp inside its large-|x| branch, with x, |x| and the result live) past the
+// eight LRegs ("too few lregs"). _sfpu_exp_fp32_accurate_(a) below passes the literals and is what
+// everything not hoisting reads.
+template <bool unsafe = false, typename K, typename H, typename P0, typename P1>
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a, K log2e, H neg_ln2_hi, P0 p0, P1 p1) {
     sfpi::vInt i, e;
     sfpi::vFloat f, r, j, y;
     sfpi::vSMag16 sm;
 
     // j = round(a / ln2)
     // interleaved with first coefficient of polynomial
-    j = 1.442695f * a;
-    r = 1.37805939e-3f;
+    j = log2e * a;
+    r = p0;
     sm = sfpi::convert<sfpi::vSMag16>(j, sfpi::RoundMode::Nearest);
     j = sfpi::convert<sfpi::vFloat>(sm, sfpi::RoundMode::Nearest);
 
     // f = a - i*j (two-part cody-waite)
-    f = j * -6.93145752e-1f + a;
+    f = j * neg_ln2_hi + a;
     f = j * -1.42860677e-6f + f;
 
     // approximate r = exp(f) on [-ln2/2, ln2/2]
     // interleaved with conversion of i from sign-mag to two's complement via abs and copysgn
-    r = r * f + 8.37312452e-3f;  // 0x1.125edcp-7
+    r = r * f + p1;
     r = r * f + 4.16695364e-2f;  // 0x1.555b5ap-5
     r = r * f + 1.66664720e-1f;  // 0x1.555450p-3
     r = r * f + 4.99999851e-1f;  // 0x1.fffff6p-2
@@ -410,6 +481,19 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     }
 
     return y;
+}
+
+template <bool unsafe = false>
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
+    return _sfpu_exp_fp32_accurate_<unsafe>(a, EXP_FP32_LOG2E, EXP_FP32_NEG_LN2_HI, EXP_FP32_P0, EXP_FP32_P1);
+}
+
+// Row-loop form of _sfpu_exp_fp32_accurate_: log2(e) from vConstFloatPrgm1 -- the same register and bit
+// pattern as exp_21f's 1/ln2, so one _init_exp_hoisted_prgm_consts_() serves a kernel's bf16 and fp32 arms --
+// and -ln2_hi, p0, p1 from the caller (sfpi::vFloat built before the loop, or a float literal).
+template <bool unsafe, typename H, typename P0, typename P1>
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_prgm_(sfpi::vFloat a, H neg_ln2_hi, P0 p0, P1 p1) {
+    return _sfpu_exp_fp32_accurate_<unsafe>(a, sfpi::vConstFloatPrgm1, neg_ln2_hi, p0, p1);
 }
 
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) {
