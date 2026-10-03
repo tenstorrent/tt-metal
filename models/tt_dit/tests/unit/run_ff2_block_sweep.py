@@ -13,7 +13,7 @@ overwhelm the profiler, so this driver breaks it up:
         run batch (1 M) x (all K blocks) x (second half of the N block range)   # reaches N end
         # then reset N to the first half and increment M
 
-Each batch is run as `python -m tracy -r -m pytest ...` (via the SWEEP_*_BLOCKS env the test
+Each batch is run as `python -m tracy --no-web-server -r -m pytest ...` (via the SWEEP_*_BLOCKS env the test
 reads). tracy prints a line like:
     OPs csv generated at: /home/.../ops_perf_results_YYYY_..._.csv
 We parse that path, run `tt-perf-report --ignore-signposts --csv <merged> <raw>` to get the
@@ -85,7 +85,7 @@ def run_batch(m_block, k_half, n_half, packet):
     env["SWEEP_K_BLOCKS"] = f"{k_half[0]}:{k_half[-1]}"
     # tracy re-shells the command, so the -k expression (which contains spaces) must be wrapped in
     # single quotes so it survives as one argument.
-    cmd = [PY, "-m", "tracy", "-r", "-m", "pytest", TEST_NODE, "-k", f"'{_k_expr(packet)}'"]
+    cmd = [PY, "-m", "tracy", "--no-web-server", "-r", "-m", "pytest", TEST_NODE, "-k", f"'{_k_expr(packet)}'"]
     print(
         f"  $ SWEEP_M_BLOCKS={m_block} SWEEP_K_BLOCKS={env['SWEEP_K_BLOCKS']} "
         f"SWEEP_N_BLOCKS={env['SWEEP_N_BLOCKS']} {' '.join(cmd)}",

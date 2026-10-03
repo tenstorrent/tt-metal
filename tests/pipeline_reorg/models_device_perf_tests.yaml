@@ -185,7 +185,7 @@
       local test_target="$3"
       local k_expr="$4"
       echo "--- Case: $name | Target: $test_target | Expr: $k_expr"
-      env "${perf_env_var}=1" python3 -m tracy -p -r \
+      env "${perf_env_var}=1" python3 -m tracy --no-web-server -p -r \
         -o "$PROFILER_DIR" \
         --check-exit-code \
         --op-support-count "$TRACY_OP_SUPPORT_COUNT" \

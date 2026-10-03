@@ -74,7 +74,7 @@ def profile_host_overhead(output_directory, output_csv, op_to_profile=""):
             continue
 
         op_id = f"{i:03d}"
-        command = f'python -m tracy -v -r -p -o {output_directory} -n {op_id}_{op_name} --no-device -m "pytest tests/ttnn/profiling/profile_host_overhead.py --input-method cli --cli-input {output_directory}::{op_name}"'
+        command = f'python -m tracy --no-web-server -v -r -p -o {output_directory} -n {op_id}_{op_name} --no-device -m "pytest tests/ttnn/profiling/profile_host_overhead.py --input-method cli --cli-input {output_directory}::{op_name}"'
         subprocess.run([command], shell=True, check=False, env=currentEnvs, timeout=3000)
         i += 1
 
