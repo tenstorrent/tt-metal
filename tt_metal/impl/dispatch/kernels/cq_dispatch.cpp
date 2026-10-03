@@ -1674,6 +1674,7 @@ void kernel_main() {
     rt_profiler_msg->realtime_profiler_core_noc_xy = 0;
     rt_profiler_msg->realtime_profiler_remote_state_addr = 0;
     rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
+    rt_profiler_msg->realtime_profiler_ack = 0;
 
     dispatch_cb_reader.init();
     cmd_ptr = dispatch_cb_base;

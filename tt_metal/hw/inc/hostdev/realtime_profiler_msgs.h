@@ -40,4 +40,8 @@ struct realtime_profiler_msg_t {
     volatile uint32_t program_id_fifo[32];
     volatile uint32_t program_id_fifo_start;
     volatile uint32_t program_id_fifo_end;
+    // Written by the profiler BRISC into the dispatch_s copy of this struct: the PUSH_A/PUSH_B state it just finished
+    // consuming. dispatch_s waits for it to equal its last signalled state before signalling again. Appended last so
+    // kernel_start_a/b keep their 16 B alignment (they are NOC read sources).
+    volatile uint32_t realtime_profiler_ack;
 };
