@@ -380,6 +380,7 @@ def _shared_device_weights():
 
 
 @torch.no_grad()
+@pytest.mark.timeout(3600)
 @parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
 @pytest.mark.parametrize("token_source", ["text"], ids=lambda t: t)
 @pytest.mark.parametrize("context_len", [32768, 65536, 131072, 262144], ids=lambda c: f"ctx_{c // 1024}k")
@@ -393,7 +394,9 @@ def test_prefill_chunk_sweep_traced(mesh_device, context_len, token_source, rese
     if mesh_config.cp_degree <= 1:
         pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={mesh_config.cp_degree}")
     hf_model_id = _hf_model_id()
-    chunk_sizes = [int(c) for c in os.environ.get("GEMMA4_SWEEP_CHUNK_SIZES", "2048,4096,8192").split(",")]
+    sizes = os.environ.get("GEMMA4_SWEEP_CHUNK_SIZES", "2048,4096,8192")
+    chunk_sizes = [int(c) for c in sizes.split(",") if c.strip()]
+    measured = 0
 
     with _shared_device_weights():
         for chunk_size in chunk_sizes:
@@ -414,6 +417,9 @@ def test_prefill_chunk_sweep_traced(mesh_device, context_len, token_source, rese
             gc.collect()
             # Cached programs hold op-allocated L1 semaphores that fragment L1 for the next model's circular buffers.
             mesh_device.clear_program_cache()
+            measured += 1
+    if not measured:
+        pytest.skip(f"no chunk size in {sizes!r} is valid for context {context_len}")
 
 
 # ── Per-layer prefill timing ────────────────────────────────────────────────
