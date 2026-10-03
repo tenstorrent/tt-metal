@@ -15,7 +15,7 @@ from .operations import (
     apply_per_head_norm,
     apply_qkv_projection,
     prefill_short_lived_memcfg,
-    project_into_reduce_scatter,
+    project,
     split_qkv_heads_prefill,
 )
 from .ring_prefill import (
@@ -303,7 +303,7 @@ class Gemma4Attention:
 
         # Concat heads + apply out proj + all_reduce
         tt_out = ttnn.experimental.nlp_concat_heads(tt_sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        projected = project_into_reduce_scatter(tt_out, self.weights.o_proj)
+        projected = project(tt_out, self.weights.o_proj, into_reduce_scatter=True)
         tt_out.deallocate(True)
         tt_out = ccl_reduce_scatter_rows(projected, self.mesh_config, self.ccl_manager)
 
