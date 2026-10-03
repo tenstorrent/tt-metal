@@ -54,11 +54,6 @@ class KdaStateCache:
         self._states: list[dict[int, KdaState]] = [
             {idx: layer.allocate_state(batch_size=1) for idx, layer in self._layers.items()} for _ in range(num_slots)
         ]
-        # Held for `reset`, so zeroing a slot is a copy rather than a reallocation. Reallocating
-        # would move the addresses a capture depends on.
-        self._zeros: dict[int, KdaState] = {
-            idx: layer.allocate_state(batch_size=1) for idx, layer in self._layers.items()
-        }
 
     @property
     def num_slots(self) -> int:
@@ -91,18 +86,13 @@ class KdaStateCache:
         previous one's. Call this outside a captured region — at `actual_start == 0` — since a trace
         replays every chunk and would re-zero each time.
         """
-        zeros = self._zeros
-        for layer_idx, state in self._states[slot].items():
-            ttnn.copy(zeros[layer_idx].recurrent, state.recurrent)
-            ttnn.copy(zeros[layer_idx].convolution, state.convolution)
+        for state in self._states[slot].values():
+            ttnn.fill(state.recurrent, 0, output_tensor=state.recurrent)
+            ttnn.fill(state.convolution, 0, output_tensor=state.convolution)
 
     def deallocate(self) -> None:
         for slot_states in self._states:
             for state in slot_states.values():
                 ttnn.deallocate(state.recurrent)
                 ttnn.deallocate(state.convolution)
-        for state in self._zeros.values():
-            ttnn.deallocate(state.recurrent)
-            ttnn.deallocate(state.convolution)
         self._states = []
-        self._zeros = {}
