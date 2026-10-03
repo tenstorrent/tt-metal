@@ -109,6 +109,7 @@ def _stub_runtime(patch):
                 {"release_persistent_capture": lambda self: self.__dict__.setdefault("base_releases", []).append(1)},
             ),
             "allocate_vllm_kv_cache": _unused,
+            "allocate_vllm_kv_cache_per_layer": _unused,
         },
         "models.demos.gemma4.tt.attention": {
             "_RING_HEADROOM_BLOCK": 64,
@@ -227,7 +228,6 @@ def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,)):
     model._spec_owner_slot = None
     model._spec_pending = None
     model._spec_pending_owner = None
-    model._spec_carry = []
     model._spec_first_step = True
     model._spec_decoder_bucket = None
     model._bounded_sliding_kv_cache = ring is not None

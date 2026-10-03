@@ -377,7 +377,7 @@ class TtIndexer:
         # forward(index_kv_cache=...) every call; the indexer never self-allocates it. write_k applies the
         # decode-compatible Hadamard transform and typecasts the key to the cache's dtype before the in-place
         # write, so the caller controls the dtype.
-        # GLM-5.2 cross-layer indexer reuse: the index key cache is allocated for full layers only, so this
+        # GLM-5.3 cross-layer indexer reuse: the index key cache is allocated for full layers only, so this
         # layer writes/reads its compacted rank among them and the folded (user-major) slot stride is the
         # cache's full-layer count, not its layer count. _index_cache_layers is that stride.
         # `first_layer_idx` declares this instance a pipeline stage owning global layers
@@ -632,7 +632,7 @@ class TtIndexer:
         return out
 
     def _cache_slot(self, cache_layer_idx: int) -> int:
-        """Slot this layer owns in the index key cache. A compacted cache (GLM-5.2 cross-layer reuse)
+        """Slot this layer owns in the index key cache. A compacted cache (GLM-5.3 cross-layer reuse)
         holds one slot per FULL layer, so the caller's per-layer KVPE slot does not address it; every
         entry point has to translate, not just forward()."""
         return self._index_layer_idx if self._is_index_compact else cache_layer_idx
@@ -706,15 +706,13 @@ class TtIndexer:
         k_h = ttnn.matmul(
             k,
             self._index_hadamard,
-            dtype=ttnn.bfloat16,
+            dtype=index_kbuf.dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.default_compute_kernel_config,
             **({"program_config": k_hadamard_cfg["program_config"]} if k_hadamard_cfg is not None else {}),
         )
         ttnn.deallocate(k)
         k = k_h
-        if k.dtype != index_kbuf.dtype:  # write dtype must match the cache (update_padded_kv_cache asserts)
-            k = ttnn.typecast(k, index_kbuf.dtype)
         if metadata is not None:
             # Trace-safe: slot_idx (metadata[0]) + kv_actual_global (metadata[1]) read on-device. num_layers
             # stays the compacted stride so the kernel recomposes the same (user, layer) slot as the scalar path.
@@ -798,7 +796,7 @@ class TtIndexer:
         )
         # Flat user-major slot into the shared [num_users*_index_cache_layers, 1, T, D_idx] cache — same
         # formula as ttMLA._cache_batch_idx for the KVPE cache (cache_layer_idx is the LOCAL per-rank cache
-        # slot, compacted to the full-layer rank above for GLM-5.2 cross-layer reuse). Written by write_k
+        # slot, compacted to the full-layer rank above for GLM-5.3 cross-layer reuse). Written by write_k
         # and selected in-kernel by the fused ring indexer.
         cache_batch_idx = cache_user_id * self._index_cache_layers + cache_layer_idx
         self.write_k(
@@ -1053,7 +1051,7 @@ class NullIndexer:
 
 
 class ReuseIndexer:
-    """GLM-5.2 ``shared`` DSA layer stand-in: owns no indexer weights and never computes. The layer is
+    """GLM-5.3 ``shared`` DSA layer stand-in: owns no indexer weights and never computes. The layer is
     still sparse (top-k SDPA) but reuses a prior ``full`` layer's top-k indices, injected at
     ttMLA.forward(indexer_indices=...). forward() is unreachable there (the injected indices short-
     circuit it); it raises if ever called, so a shared layer missing its reused indices fails loudly
@@ -1061,7 +1059,7 @@ class ReuseIndexer:
 
     def forward(self, *args, **kwargs):
         raise RuntimeError(
-            "ReuseIndexer.forward called: a GLM-5.2 shared DSA layer must receive reused top-k indices "
+            "ReuseIndexer.forward called: a GLM-5.3 shared DSA layer must receive reused top-k indices "
             "via MLA.forward(indexer_indices=...)."
         )
 
@@ -1096,9 +1094,9 @@ def resolve_has_indexer(config, state_dict=None, explicit=None, weight_cache_pat
 
 
 def indexer_layer_is_reused(config, layer_idx: int) -> bool:
-    """GLM-5.2 ``shared`` layer: sparse attention but owns NO indexer (it reuses a prior ``full`` layer's
-    top-k). True iff ``config.indexer_types[layer_idx] == "shared"``. Absent the map (v3.1 / v3.2 /
-    GLM-5.1) every layer is a full indexer owner -> current behavior. Single source of truth for the
+    """GLM-5.3 ``shared`` layer: sparse attention but owns NO indexer (it reuses a prior ``full`` layer's
+    top-k). True iff ``config.indexer_types[layer_idx] == "shared"``. Absent the map (v3.1 / v3.2)
+    every layer is a full indexer owner -> current behavior. Single source of truth for the
     device construction (ReuseIndexer binding) and the cache build (skip the indexer tensorbins)."""
     types = getattr(config, "indexer_types", None)
     return bool(types) and layer_idx < len(types) and types[layer_idx] == "shared"

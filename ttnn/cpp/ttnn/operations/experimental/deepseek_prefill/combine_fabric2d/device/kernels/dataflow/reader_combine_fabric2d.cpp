@@ -587,10 +587,14 @@ void kernel_main() {
     reader.untilized.reset_counters();
 #endif
 
-    // Back to zero for the next launch, which starts its own count at zero. The upstream sender cannot bump
-    // this again: its bumps sum to exactly the pages of our region and we consumed all of them, so the last
-    // one has already landed — and its drain targets a sink address rather than this semaphore.
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.fwd_sem_addr), 0);
-    // Do not exit with `filled` increments still in the NIU.
+    // Subtract what this launch consumed instead of zeroing: the upstream chip may already be bumping for the
+    // next launch, and zeroing would drop those bumps and hang it. The sender counts every forwarded page and
+    // always bumps on a chunk's last one, so this launch's bumps sum to exactly `consumed` and what is left
+    // belongs to the next launch. The NoC only has an atomic add, so this adds the two's complement.
+    //
+    // This keeps the count right, nothing more. The upstream chip never waits for us to read a page before
+    // writing that page again, so a chip far enough ahead can still overwrite pages we have not read.
+    noc_semaphore_inc(get_noc_addr(ct.fwd_sem_addr), 0u - reader.consumed);
+    // Do not exit with this or any `filled` increment still in flight.
     noc_async_atomic_barrier();
 }

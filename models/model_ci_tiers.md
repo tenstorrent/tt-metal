@@ -74,8 +74,8 @@ it is classified differently on different systems.
 | Flux.1-schnell | BH QuietBox 2 |
 | Flux.1-dev | BH QuietBox 2, BH Single Galaxy |
 | Flux.2-dev | BH QuietBox 2, BH Single Galaxy |
-| Wan2.2-T2V-A14B | WH Galaxy, BH SC4 |
-| Wan2.2-I2V-A14B | WH Galaxy, BH SC4 |
+| Wan2.2-T2V-A14B | WH Galaxy, BH QuietBox 2, BH SC1, BH SC4 |
+| Wan2.2-I2V-A14B | WH Galaxy, BH SC1, BH SC4 |
 | Z-Image-Turbo | BH QuietBox 2 |
 | TT-DiT (shared) | WH N150, BH QuietBox 2 |
 | TT-DiT encoders (shared) | WH LLMBox |
@@ -123,6 +123,7 @@ it is classified differently on different systems.
 | Qwen3-0.6B | WH N150, BH P150 |
 | Qwen3-1.7B | WH N150, BH P150 |
 | Gemma-4-E2B | WH N150, BH P150 |
+| PaddleOCR-VL-1.6 | BH P150 |
 | Gemma-4-E4B | BH P300, BH QuietBox 2 |
 | Mamba-2.8B | WH N150 |
 | Phi-3-mini | WH N150 |
@@ -149,6 +150,7 @@ it is classified differently on different systems.
 | VAD v2 | WH N150 |
 | OpenPDN-MNIST | WH N150 |
 | YuNet | WH N150 |
+| VibeVoice-1.5B | BH P150 |
 
 
 # Pipelines
