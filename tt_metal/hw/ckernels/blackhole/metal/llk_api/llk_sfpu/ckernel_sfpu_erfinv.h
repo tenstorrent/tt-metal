@@ -15,34 +15,45 @@
 namespace ckernel {
 namespace sfpu {
 
+// Giles (2012), "Approximating the erfinv function": piecewise rational fit.
+// Polynomial-only — evaluates on SFPU without erf primitives. Central branch
+// covers w < 5; two tail branches fold through wt = sqrt(w) - 3.
+
 template <bool APPROXIMATION_MODE>
 sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat x) {
-    // Algorithm based on "A handy approximation for the error function and its inverse" by Sergei Winitzki (2008)
-    // This approximation defines erfinv(x) as:
-    // erfinv(x) = sqrt( - 2/(pi*a) - log(1 - x^2)/2 + sqrt( ( 2/(pi*a) + log(1 - x^2)) ^2 - 1/a log(1 - x^2)) )
-    // Where a is a polynomial coefficient used in the approximation of the error function (and reused in inverse error
-    // function)
-
-    // Compute log(1 - x^2)
     sfpi::vFloat log_value = calculate_log_body<false, false, false>(1.0f - x * x, 0);
+    sfpi::vFloat w = -log_value;
 
-    // Paper sets a constant a = 0.147.
-    // This constant is used to compute two constant expressions:
-    constexpr float TwoPiA = -4.330746750799873f;   // -2 / (pi * a)
-    constexpr float OneDivA = 6.802721088435375f;  // 1/a
+    sfpi::vFloat p;
+    v_if(w < 5.0f);
+    {
+        sfpi::vFloat wc = w - 2.5f;
+        p =          2.81022636e-08f;
+        p = p * wc + 3.43273939e-07f;
+        p = p * wc - 3.5233877e-06f;
+        p = p * wc - 4.39150654e-06f;
+        p = p * wc + 2.1858087e-04f;
+        p = p * wc - 1.25372503e-03f;
+        p = p * wc - 4.17768164e-03f;
+        p = p * wc + 2.46640727e-01f;
+        p = p * wc + 1.50140941e+00f;
+    }
+    v_else;
+    {
+        sfpi::vFloat wt = sfpu_sqrt_custom<false>(w) - 3.0f;
+        p =         -2.00214257e-04f;
+        p = p * wt + 1.00950558e-04f;
+        p = p * wt + 1.34934322e-03f;
+        p = p * wt - 3.67342844e-03f;
+        p = p * wt + 5.73950773e-03f;
+        p = p * wt - 7.62246130e-03f;
+        p = p * wt + 9.43887047e-03f;
+        p = p * wt + 1.00167406e+00f;
+        p = p * wt + 2.83297682e+00f;
+    }
+    v_endif;
 
-    // tmp = -2 / (pi * a) - log(1 - x^2)/2
-    sfpi::vFloat tmp = TwoPiA + -0.5f * log_value;
-
-    // calculated_value = temp + sqrt( temp^2 - log_value / a)
-    sfpi::vFloat calculated_value = tmp * tmp - log_value * OneDivA;
-    sfpi::vFloat intermediate_result = sfpu_sqrt_custom<false>(calculated_value);
-    calculated_value = tmp + intermediate_result;
-
-    // result = sqrt(calculated_value)
-    sfpi::vFloat result = sfpu_sqrt_custom<false>(calculated_value);
-
-    return result;
+    return x * p;
 }
 
 template <bool APPROXIMATION_MODE>
@@ -50,7 +61,7 @@ inline void calculate_erfinv() {
     constexpr int ITERATIONS = 8;
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vFloat result = calculate_erfinv_body<false>(in);
+        sfpi::vFloat result = calculate_erfinv_body<APPROXIMATION_MODE>(in);
         in = sfpi::dst_reg[0];  // reload due to register pressure
         sfpi::dst_reg[0] = sfpi::copysgn(result, in);
         sfpi::dst_reg++;
