@@ -2097,7 +2097,9 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowMultiCore::c
                 {"number_of_available_cores", number_of_available_cores},
                 {"compute_with_storage_grid_size_x", static_cast<uint32_t>(compute_with_storage_grid_size.x)},
                 {"descending", static_cast<uint32_t>(attributes.descending)},
-                {"stable", static_cast<uint32_t>(attributes.stable)},
+                // #53326: real ±inf ties with the ±inf padding; index-aware ties keep pad indices (>= n)
+                // past the slice. A stable ordering is a valid unstable ordering.
+                {"stable", 1u},
                 {"log2Wt", log2Wt},
             },
         .hw_config = ComputeHardwareConfig{compute_hw_config},
