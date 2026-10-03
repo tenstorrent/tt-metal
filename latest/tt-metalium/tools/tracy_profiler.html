@@ -384,6 +384,12 @@ whose category is not selected compiles out.</p>
 <p>When the server starts, the <strong>console logs</strong> print the suggested <strong>HTTP URL</strong> (open in a browser).</p>
 <p>By default the HTTP server listens on <strong>8080</strong>. To use a different HTTP port, pass <code class="docutils literal notranslate"><span class="pre">--web-app-port</span> <span class="pre">&lt;port&gt;</span></code>.</p>
 <p>In addition to the HTTP port, a <strong>WebSocket</strong> is used for live refresh on port <em>P</em>+1 (one above the chosen HTTP port <em>P</em>).</p>
+<p>The web viewer is started as a <strong>daemon</strong>, so it keeps listening after the run that started it exits. For headless CI, or for measurement loops that only want the numbers, turn it off with <code class="docutils literal notranslate"><span class="pre">--no-web-server</span></code>:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>tracy<span class="w"> </span>--no-web-server<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>path/to/test.py
+</pre></div>
+</div>
+<p>The equivalent env var is <code class="docutils literal notranslate"><span class="pre">TRACY_NO_WEB_SERVER=1</span></code>, which is convenient for switching the UI off across a whole CI job without editing each command. With either one, no HTTP or WebSocket port is bound and no server process is left behind; the capture and any reports are unaffected.</p>
 </section>
 <section id="remote-host-ssh">
 <h3>Remote host (SSH)<a class="headerlink" href="#remote-host-ssh" title="Permalink to this heading"></a>
