@@ -197,6 +197,21 @@ ALL_TEST_PARAMS = list(
 )
 
 
+# Experiment (bistability repro, not for merge): tiny configs only.
+def _repro_tiny(_p):
+    _f, _c, _thr, _nb = _p
+    _td, _fl = _c.tile_dimensions, _c.face_layout_config
+    return (
+        _td.rt_dim == 1 and _td.ct_dim == 1 and _td.kt_dim == 1 and _nb == 1
+        and _thr == 0 and _fl.num_faces == 4 and not _fl.partial_face_math
+        and not _fl.partial_face_in0 and _td.in0_tile_r_dim == 32
+        and not _fl.unpack_transpose_faces.value
+    )
+
+
+ALL_TEST_PARAMS = [_p for _p in ALL_TEST_PARAMS if _repro_tiny(_p) and True]
+
+
 @pytest.mark.perf
 @pytest.mark.parametrize(
     "math_fidelity,matmul_config,throttle,num_blocks", ALL_TEST_PARAMS
