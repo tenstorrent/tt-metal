@@ -70,21 +70,24 @@ def test_paged_decode_steps(mesh_device):
     )  # >0: SYNTHETIC filled caches of this context length (timing; no reference), positions SYN..
     if SYN:
         S = SYN
-    N = int(os.environ.get("DSV41_STEPS", "6")) if SYN else min(ndec, int(os.environ.get("DSV41_STEPS", "99")))
+    N = (
+        int(os.environ["DSV41_STEPS"]) if "DSV41_STEPS" in os.environ else (6 if SYN else ndec)
+    )  # steps beyond the dump cycle its tokens (timing only)
     log = lambda m: print(m, flush=True)
     T_users = int(
         os.environ.get("DSV41_USERS_PER_ROW", "4")
     )  # 4 -> batch 16, 8 -> batch 32, 16 -> batch 64 (mHC kernels need <= 16)
     chain = DSV41DecodeChain(md, users_per_row=T_users, log=log)
     B = chain.B
+    ref_users = toks["prefill_tokens"].shape[0]
     reps = (
-        B // 16
-    )  # the reference chain has 16 users: user u of a bigger batch runs the state/tokens of reference user u % 16
-    assert B % 16 == 0
+        B // ref_users
+    )  # the reference chain has ref_users users (16, or 1 for the real 2048-token dump): user u of the batch runs the state/tokens of reference user u % ref_users
+    assert B % ref_users == 0
     if reps > 1:
         toks = {k: v.repeat(reps, 1) for k, v in toks.items()}
         dec_tok = toks["decode_tokens"]
-        log(f"batch {B}: tiling the 16-user reference state x{reps}")
+        log(f"batch {B}: tiling the {ref_users}-user reference state x{reps}")
     sh = _Shards()
     full = layer_ids[0] == 0 and layer_ids[-1] == 39
     fin = (
@@ -168,7 +171,9 @@ def test_paged_decode_steps(mesh_device):
         log(f"Engram tables loaded into process memory in {time.time() - t0:.0f}s")
     if host_rows is not None:
         host_rows.hashes(toks["prefill_tokens"], 0)
-        hashes = [host_rows.hashes(dec_tok[:, i : i + 1], S + i) for i in range(N)]  # sequential: the hash state rolls
+        hashes = [
+            host_rows.hashes(dec_tok[:, (i % ndec) : (i % ndec) + 1], S + i) for i in range(N)
+        ]  # sequential: the hash state rolls
     if SYN:  # timing only: random Engram rows
         g = torch.Generator().manual_seed(7)
         syn_rows = {

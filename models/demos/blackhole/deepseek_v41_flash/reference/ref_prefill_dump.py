@@ -124,6 +124,10 @@ def main():
             if ratio > 1:
                 state["kv_state"] = blk.attn.compressor.kv_state.clone()
                 state["score_state"] = blk.attn.compressor.score_state.clone()
+            if getattr(blk.attn, "indexer", None) is not None and blk.attn.indexer.owns_k:
+                state["index_k"] = (
+                    blk.attn.indexer.k_cache[:, : a.S // ratio].clone().float()
+                )  # index keys (RoPE'd, fp4-simulated) of the key owners
         prefill = {
             "h_in": h_in,
             "pm_in": pm_in,

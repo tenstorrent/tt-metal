@@ -246,7 +246,10 @@ class DSV41PagedStepState:
     (design doc section 2 lists the compact [P, 64] alternative for > 100k contexts). ``with_indexer``: also the indexer inputs (128-wide query / key
     rope rows, entry index of the key write, valid length)."""
 
-    def __init__(self, attn, max_pos=None, with_indexer=False):
+    def __init__(self, attn, max_pos=None, with_indexer=False, per_user_valid=False):
+        self.per_user_valid = (
+            per_user_valid  # ragged batches: every user has its own number of valid entries (own position)
+        )
         self.md, self.T, self.rows, self.cols = attn.mesh_device, attn.T, attn.rows, attn.cols
         self.ratio = getattr(attn, "ratio", 0)
         self.with_indexer = with_indexer and self.ratio > 0
@@ -299,10 +302,19 @@ class DSV41PagedStepState:
                 st["ent"] = ttnn.reshape(
                     col(ttnn.floor(ttnn.multiply(posf, 1.0 / r)), ttnn.int32), [T]
                 )  # entry of the group in progress
-                n0 = ttnn.floor(
-                    ttnn.multiply(ttnn.add(ttnn.slice(posf, [0, 0, 0, 0], [1, 1, 1, 1]), 1.0), 1.0 / r)
-                )  # valid entries (shared position: user 0)
+                nu = ttnn.floor(
+                    ttnn.multiply(ttnn.add(posf, 1.0), 1.0 / r)
+                )  # valid entries of EVERY user, [1,1,1,T] float32 tile
+                # topk_large_indices takes ONE valid length: the largest of the batch (>= 512); users with fewer entries are masked per user
+                # in ``DSV41DecodeIndexer.select`` (``st["nvalid"]``) and the index build drops ids >= the user's own N.
+                vmax = nu if T == 1 else ttnn.max(nu, dim=-1, keepdim=True)
                 st["valid"] = ttnn.to_layout(
-                    ttnn.typecast(ttnn.clamp(n0, min=512.0), ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT
+                    ttnn.typecast(ttnn.clamp(ttnn.slice(vmax, [0, 0, 0, 0], [1, 1, 1, 1]), min=512.0), ttnn.uint32),
+                    ttnn.ROW_MAJOR_LAYOUT,
                 )
+                if self.per_user_valid:
+                    nrm = ttnn.to_layout(nu, ttnn.ROW_MAJOR_LAYOUT)  # [1,1,1,T]
+                    st["nvalid"] = ttnn.to_layout(
+                        ttnn.reshape(nrm, [T, 1, 1, 1]), ttnn.TILE_LAYOUT
+                    )  # float32 [T,1,1,1] tile
         return st
