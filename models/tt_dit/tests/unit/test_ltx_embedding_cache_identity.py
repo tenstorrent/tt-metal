@@ -200,6 +200,35 @@ class EmbeddingCacheIdentityTest(unittest.TestCase):
         self.assertIs(method(pipe, ["prompt"], use_cache=False), result)
         self.assertEqual(calls, [["prompt"]])
 
+    def test_encoder_without_identity_encodes_uncached(self):
+        warnings = []
+        path_method = _load(
+            PIPELINE,
+            {"_device_embed_cache_path"},
+            {"os": os, "json": json, "hashlib": hashlib, "logger": SimpleNamespace(warning=warnings.append)},
+        )["_device_embed_cache_path"]
+        calls = []
+        result = object()
+        pipe = SimpleNamespace(
+            gemma_encoder_pair=SimpleNamespace(encode=lambda prompts: calls.append(prompts) or result)
+        )
+        pipe._device_embed_cache_path = MethodType(path_method, pipe)
+        self.assertIsNone(pipe._device_embed_cache_path(["prompt"]))
+        self.assertEqual(len(warnings), 1)
+        method = _load(
+            PIPELINE,
+            {"encode_prompts"},
+            {
+                "Watchdog": lambda _: nullcontext(),
+                "os": os,
+                "cache_module": SimpleNamespace(_kernel_capture_only=lambda: False),
+                "torch": SimpleNamespace(save=lambda *_: self.fail("uncached encode wrote a cache entry")),
+                "logger": SimpleNamespace(info=lambda *_: None),
+            },
+        )["encode_prompts"]
+        self.assertIs(method(pipe, ["prompt"], use_cache=True), result)
+        self.assertEqual(calls, [["prompt"]])
+
 
 if __name__ == "__main__":
     unittest.main()
