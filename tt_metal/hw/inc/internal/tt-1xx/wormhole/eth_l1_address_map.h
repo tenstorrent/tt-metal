@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
+#include "hostdev/fabric_telemetry_msgs.h"
 #include "noc/noc_parameters.h"
 #include "dev_mem_map.h"
 
@@ -95,6 +97,12 @@ struct address_map {
     static constexpr std::int32_t AERISC_FABRIC_POSTCODES_SIZE = MEM_AERISC_FABRIC_POSTCODES_SIZE;
     static constexpr std::int32_t AERISC_FABRIC_SCRATCH_BASE = MEM_AERISC_FABRIC_SCRATCH_BASE;
     static constexpr std::int32_t AERISC_FABRIC_SCRATCH_SIZE = MEM_AERISC_FABRIC_SCRATCH_SIZE;
+
+    static_assert(sizeof(FabricTelemetry) == MEM_AERISC_FABRIC_TELEMETRY_SIZE);
+    static_assert(AERISC_FABRIC_POSTCODES_BASE == AERISC_FABRIC_TELEMETRY_ADDR + offsetof(FabricTelemetry, postcode));
+    static_assert(AERISC_FABRIC_SCRATCH_BASE == AERISC_FABRIC_TELEMETRY_ADDR + offsetof(FabricTelemetry, scratch));
+    static_assert(AERISC_FABRIC_SCRATCH_SIZE == sizeof(FabricTelemetry::scratch));
+    static_assert(AERISC_FABRIC_SCRATCH_BASE + AERISC_FABRIC_SCRATCH_SIZE == MEM_AERISC_ROUTING_TABLE_BASE);
 
     static constexpr std::int32_t AERISC_ROUTING_TABLE_BASE = MEM_AERISC_ROUTING_TABLE_BASE;
     static constexpr std::uint32_t FABRIC_COMPRESSED_ROUTING_PATH_SIZE_1D = COMPRESSED_ROUTING_PATH_SIZE_1D;
