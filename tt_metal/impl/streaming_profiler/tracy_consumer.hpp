@@ -5,8 +5,8 @@
 #pragma once
 
 #include <array>
-#include <chrono>
 #include <cstdint>
+#include <deque>
 #include <span>
 #include <string>
 #include <string_view>
@@ -20,82 +20,57 @@
 
 namespace tt::tt_metal::streaming_profiler {
 
-class Service;
-
-// The built-in Tracy sink: registers for every record type and pushes each record onto Tracy's device timeline, one
-// context per (chip, core). Constructing it registers; destroying it unregisters. Everything after construction
-// runs on the callback's thread.
-class TracySink {
+#if defined(TRACY_ENABLE)
+// Called from one consumer thread only. Never destroyed (the Service holding it is indestructible), so its per-core
+// Tracy contexts are never torn down after Tracy's own shutdown.
+class TracyConsumer {
 public:
-    explicit TracySink(Service& service);
-    ~TracySink();
-    TracySink(const TracySink&) = delete;
-    TracySink& operator=(const TracySink&) = delete;
+    using Batch = experimental::streaming_profiler::Batch<experimental::streaming_profiler::RecordType::All>;
+
+    TracyConsumer();
+    TracyConsumer(const TracyConsumer&) = delete;
+    TracyConsumer& operator=(const TracyConsumer&) = delete;
+    void operator()(const Batch& batch);
 
 private:
-    using Batch = experimental::streaming_profiler::Batch<experimental::streaming_profiler::RecordType::All>;
     using Core = experimental::streaming_profiler::Core;
     struct Lane {
         TracyTTCtx ctx = nullptr;
         uint32_t thread = 0;
-        uint32_t risc = 0;
+        uint32_t processor = 0;
     };
-    // Each RISC's timeline row is created and named on first use.
     struct CoreEntry {
         TracyTTCtx ctx = nullptr;
-        std::array<uint32_t, 5> thread{};
+        std::array<uint32_t, kProcessorCount> thread{};
         uint8_t named = 0;
     };
     struct SrclocEntry {
         const char* name = nullptr;
         uint64_t key = 0;
-        const void* srcloc = nullptr;
+        const tracy::SourceLocationData* srcloc = nullptr;
     };
 
-    void on_batch(const Batch& batch, uint64_t capture);
-    // Records are placed by their steady_clock time through a continuous piecewise-linear map onto Tracy's timeline:
-    // a fresh segment per capture, then one per second whose slope is the two clocks' rate ratio measured over the
-    // whole baseline since construction. Continuity keeps order and containment exact across segments.
-    struct Probe {
-        int64_t steady_ns;
-        int64_t tracy_ns;
-    };
-    struct Segment {
-        int64_t steady_ns;  // from here on
-        int64_t tracy_ns;   // the map's value here
-        double slope;       // timeline ns per steady_clock ns
-    };
-    Probe probe() const;
-    double slope_since_base(const Probe& p) const;
-    void start_capture_map();
-    void refine_map();
-    int64_t to_timeline(int64_t steady_ns) const;
+    int64_t timeline_ns(int64_t tsc) const;
     Lane lane(const Core& core);
-    const void* srcloc(std::string_view name, uint32_t color, uint32_t risc);
-    const void* srcloc_slow(std::string_view name, uint32_t color, uint32_t risc);
-    void push_zone(const Core& core, std::string_view name, int64_t start_ns, int64_t end_ns, uint32_t color);
+    const tracy::SourceLocationData* srcloc(std::string_view name, uint32_t processor);
+    const tracy::SourceLocationData* srcloc_slow(std::string_view name, uint32_t processor);
+    void push_zone(const Core& core, std::string_view name, int64_t start_tsc, int64_t end_tsc);
     void push_marker(
-        const Core& core,
-        std::string_view name,
-        int64_t timestamp_ns,
-        uint32_t runtime_id,
-        std::span<const uint64_t> values);
+        const Core& core, std::string_view name, int64_t tsc, uint32_t runtime_id, std::span<const uint64_t> values);
 
-    Service& service_;
-    ConsumerHandle handle_ = 0;
-    uint64_t capture_ = 0;      // the capture the map holds for; a new one starts a new map
-    // Read only from the Tracy-enabled paths below, so it is unused in a build without Tracy.
-    [[maybe_unused]] int64_t anchor_tracy_ = 0;  // Tracy timer at construction; every context's cpuTime
-    Probe base_{};              // taken at construction; every slope is measured against it
-    std::vector<Segment> segments_;
-    int64_t next_refine_ns_ = 0;
+    int64_t anchor_tracy_ = 0;
     uint64_t lane_key_ = ~uint64_t{0};
     Lane lane_hit_;
     std::unordered_map<uint64_t, CoreEntry> cores_;
-    // Keyed by the name's address: a callback's name strings never move or die while it lives.
-    std::vector<SrclocEntry> srcloc_table_;  // open addressing, power-of-two size, at most half full
-    [[maybe_unused]] size_t srcloc_count_ = 0;  // ditto: only the Tracy-enabled srcloc path touches it
-    std::unordered_map<std::string, const void*> srclocs_;
+    // Keyed by the name's address, which a callback's name strings keep while it lives, and probed in place: a
+    // formatted-string map lookup per record was most of the sink's cost.
+    std::vector<SrclocEntry> srcloc_table_;
+    size_t srcloc_count_ = 0;
+    std::unordered_map<std::string, const tracy::SourceLocationData*> srclocs_;
+    // Tracy keeps the pointers for the rest of the process, and a deque never moves its elements.
+    std::deque<std::string> srcloc_names_;
+    std::deque<tracy::SourceLocationData> srcloc_data_;
 };
+#endif
 
 }  // namespace tt::tt_metal::streaming_profiler

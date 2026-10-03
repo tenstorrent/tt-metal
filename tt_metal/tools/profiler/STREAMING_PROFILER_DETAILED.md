@@ -35,6 +35,7 @@ harness and direct-push-plan notes.
   - [2.2 The relay](#22-the-relay)
   - [2.3 The host](#23-the-host)
   - [2.4 Sizing and where the numbers come from](#24-sizing-and-where-the-numbers-come-from)
+  - [2.5 The clock sync](#25-the-clock-sync)
 - [3. Design history (superseded designs)](#3-design-history-superseded-designs)
   - [3.1 Fillers + movers and the DRAM frame ring (2026-08-11; superseded 2026-08-25)](#31-fillers--movers-and-the-dram-frame-ring-2026-08-11-superseded-2026-08-25)
   - [3.2 Blackhole device/host hang runbook (2026-08-07 … 08-08)](#32-blackhole-devicehost-hang-runbook-2026-08-07--08-08)
@@ -143,8 +144,10 @@ harness and direct-push-plan notes.
 ## 1. Overview and usage
 
 The streaming profiler drains device zones to the host and hands decoded records to any callback you
-register. It is Blackhole only (it needs the DRAM cores' DRISCs), and it needs a Tracy-enabled build of
-tt-metal even when the Tracy sink itself is left off.
+register. It is Blackhole only, and it needs the DRAM cores' DRISCs, two idle eth cores per chip (three with
+`TT_METAL_STREAMING_PROFILER_SYNC_CHECK`) and, on a multi-chip mesh, a chain of eth links from every chip to the root
+chip. Too few idle eth cores is a `TT_FATAL` at bring-up, and a chip with no link chain is one at capture end. It needs
+a Tracy-enabled build of tt-metal even when the Tracy sink itself is left off.
 
 ### 1.1 Three device-profiler modes (mutually exclusive)
 
@@ -167,23 +170,35 @@ because the streaming wire resolves every marker's name from the ELF.
 
 ### 1.2 Environment variables
 
-Fourteen variables are new in `tt_metal/llrt/rtoptions.cpp`, all read once at `MetalContext` construction.
+Ten variables are new in `tt_metal/llrt/rtoptions.cpp`, all read once at `MetalContext` construction.
 Everything except `TT_METAL_STREAMING_PROFILER` itself applies in mode 3 only.
 
 **Mode switches**
 
 | variable | default | effect |
 |---|---|---|
-| `TT_METAL_STREAMING_PROFILER` | off | Boots the streaming profiler (resident DRISC relays + host receiver) at `MeshDevice` bring-up and compiles kernels with `-DPROFILE_STREAMING`. Does **not** set `profiler_enabled`, so nothing of the DRAM profiler is active, and the real-time profiler is disabled (it reads the same L1 rings). Fatal together with `TT_METAL_DEVICE_PROFILER`. |
+| `TT_METAL_STREAMING_PROFILER` | off | Measures each chip's tile clocks at device open, boots the streaming profiler at `MeshDevice` bring-up (the DRISC relays, the clock sync on two idle eth cores per chip (required, §1) and on the chip-to-chip links (with fabric on, the links it routes over), and the host receiver) and compiles kernels with `-DPROFILE_STREAMING`. Does **not** set `profiler_enabled`, so nothing of the DRAM profiler is active, and the real-time profiler is disabled (it reads the same L1 rings). Fatal together with `TT_METAL_DEVICE_PROFILER`. |
 
 **Streaming pipeline sizing**
 
 | variable | default | effect |
 |---|---|---|
 | `TT_METAL_STREAMING_PROFILER_DRAM_MB` | 128 | Per-relay GDDR spool ring, MiB. Non-zero makes each relay DMA frames into a ring in its own DRAM bank and forward them to the host FIFO from a non-blocking pump, so the service loop never touches the PCIe tile and host-side pressure lands in spool occupancy instead of in the sweep interval. **0 selects direct push.** Capped at 4095 (32-bit ring arithmetic). |
-| `TT_METAL_STREAMING_PROFILER_FIFO_MB` | 64 | Host FIFO per D2H socket, MiB, `[1, 3584]`. The pipeline's only elasticity in a direct-push run. Plain mmap + IOMMU host RAM reached by a full 64-bit NoC/PCIe address: costs no TLB window and has no channel cap. The 3.5 GiB cap is the socket's 32-bit byte size and the device's wrap-safe 32-bit credit arithmetic. |
-| `TT_METAL_STREAMING_PROFILER_RING_MB` | 512 | Host-side verbatim-frame ring the receiver thread fills and the decode threads drain, MiB. The capture's elastic buffer; at ~9.8 wire bytes per zone the default holds ~55 M zones per stream. |
-| `TT_METAL_STREAMING_PROFILER_DECODE_THREADS` | 2 | Decode threads per device, clamped by bring-up to the number of relay streams. |
+| `TT_METAL_STREAMING_PROFILER_FIFO_MB` | 128 | Host FIFO per D2H socket, MiB: a power of two, at most 2048. The pipeline's only elasticity in a direct-push run, and how far a slow callback can fall behind before it loses data. Plain mmap + IOMMU host RAM reached by a full 64-bit NoC/PCIe address: costs no TLB window and has no channel cap. |
+
+**What is captured**
+
+| variable | default | effect |
+|---|---|---|
+| `TT_METAL_STREAMING_PROFILER_SYNC_EVENTS` | off | Zones for synchronization events: CB reserve/wait/push/pop, semaphore set/wait. |
+| `TT_METAL_STREAMING_PROFILER_ETH` | off | Zones of ethernet-core kernels and firmware, the fabric routers among them. Without it their markers compile to nothing, which keeps every ethernet kernel at its unprofiled size; the clock sync runs either way. |
+
+**Diagnostics and code size**
+
+| variable | default | effect |
+|---|---|---|
+| `TT_METAL_STREAMING_PROFILER_SYNC_CHECK` | off | Measures the clock sync's chip-to-chip accuracy, logs it at each capture end and plots it in Tracy (§2.5). Takes a third idle eth core per chip and costs fabric bandwidth. |
+| `TT_METAL_STREAMING_PROFILER_INLINE_ENABLED` | on | Inlines the zone-marker emit path; `0` calls it out of line, for kernels whose zones would otherwise not fit the kernel-config ring. |
 
 **Consumers, all off unless set**
 
@@ -216,57 +231,56 @@ From `<tt-metalium/experimental/streaming_profiler.hpp>` (namespace
 `tt::tt_metal::experimental::streaming_profiler`):
 
 ```cpp
-auto h = RegisterCallback("my-tool", [](const Batch<RecordType::Zones>& b) { /* ... */ });
-// later: UnregisterCallback(h);
+Callback zones = RegisterCallback([](const Batch<RecordType::Zones>& batch) { /* ... */ }, "my-tool");
+// destroying `zones` unregisters the callback
 ```
 
 Register any time — before the device opens, mid-capture, or between captures; the callback
-persists until `UnregisterCallback`. It runs on its own thread; if you're slow you drop only your
-own records (`b.dropped_bytes()`), never anyone else's. A batch's spans and a `TimestampedData`'s
-`payload()` are valid only during the call; everything else about a record is the record's own, so
-copy the 48-byte values out and post-process them whenever you like. Callbacks live on the process-wide
+stays registered while its `Callback` lives. It runs on its own thread; if you're slow you drop only your
+own records (`batch.dropped_bytes()`), never anyone else's. A batch's spans are valid only during the call. A
+copied record owns everything it holds, its payload included, so copy the records out and post-process them
+whenever you like. Callbacks live on the process-wide
 `streaming_profiler::Service`; each capture's receiver attaches to it as a producer, so one callback
 sees every MeshDevice.
 
 ### 1.5 What you get
 
-Zones arrive **whole**: a zone is one record with a start and a duration. On the wire the device
-ships most zones atomically (one 3-word packet at scope close, carrying end + duration); the kinds
-that still ship as start/end pairs (the profiler-stall zone, the >3.2 s long-zone fallback, DRISC
-relay self-zones) are paired for you on the host. Either way you never see halves.
+Zones arrive **whole**: a zone is one record with a start and a duration. On the wire every zone ships as one packet
+at scope close, carrying its end and duration.
 
-Every record is a self-contained 48-byte value, exactly as the decoder wrote it: its device timestamps, the
-core, the running program, and the chip clock (frequency and host offset) in force when it was recorded,
-so host-time conversion needs nothing outside the record. The site name resolves through the process-wide
-zone-name registry, which lives as long as the process:
+Every record is a self-contained value (32 bytes for an event, 48 for a zone or for timestamped data, whose values sit
+in their own array): its device timestamps, their host times, the core and the running program. The site name resolves
+through the process-wide zone-name registry, which lives as long as the process:
 
 ```cpp
 class Record {  // what every kind carries
     const MarkerSite& site() const;   // name and source location
-    Core core() const;          // chip, logical and physical (NoC 0) coordinates, RISC
-    uint32_t runtime_id() const;  // host id of the program on the core, 0 = none yet
-    double frequency_ghz() const;
+    Core core() const;          // chip, logical and physical (NoC 0) coordinates, processor
+    uint32_t runtime_id() const;  // host runtime ID of the program on the core, 0 = none yet
 };
 class Zone : public Record {  // a closed DeviceZoneScopedN scope, or a stall (site().name == STALL_ZONE_NAME)
-    uint64_t start_timestamp() const;  // device ticks
-    uint64_t end_timestamp() const;
+    uint64_t start_device_cycles() const;
+    uint64_t end_device_cycles() const;
+    int64_t start_tsc() const;  // host time-stamp counter ticks; NsPerTscTick() converts
+    int64_t end_tsc() const;
     std::chrono::nanoseconds duration() const;
     std::chrono::steady_clock::time_point start_time() const;
     std::chrono::steady_clock::time_point end_time() const;
+    double frequency_ghz() const;  // average device clock frequency over the zone
 };
-class TimestampedData : public Record {  // a DeviceTimestampedData marker
-    uint64_t timestamp() const;
-    std::chrono::steady_clock::time_point time() const;
-    std::span<const uint64_t> payload() const;  // two 32-bit words per element, first word high; batch-scoped
-};
-class Event : public Record {  // a DeviceRecordEvent marker
-    uint64_t timestamp() const;
+class PointRecord : public Record {  // a record that marks one instant
+    uint64_t device_cycles() const;
+    int64_t tsc() const;
     std::chrono::steady_clock::time_point time() const;
 };
+class TimestampedData : public PointRecord {  // a DeviceTimestampedData marker
+    std::span<const uint64_t> payload() const;  // two 32-bit words per element, first word high
+};
+class Event : public PointRecord {};  // a DeviceRecordEvent marker
 ```
 
 Ordering: cross-lane interleaving is arbitrary — key any state you keep by `core()`. A zone is
-delivered when it **ends**, so under nesting `start_timestamp()` isn't monotonic within a lane;
+delivered when it **ends**, so under nesting `start_device_cycles()` isn't monotonic within a lane;
 start and end together are complete information either way.
 
 ### 1.6 The call pattern
@@ -276,9 +290,9 @@ reference.
 
 ```cpp
 void MyConsumer::operator()(const Batch<RecordType::Zones>& batch) {
-    for (const Zone& z : batch.zones()) {
-        // z.site().name, z.core() (chip, coordinate, RISC), z.runtime_id(); device ticks in
-        // z.start_timestamp() / z.end_timestamp(), host time via z.start_time() / z.duration()
+    for (const Zone& zone : batch.zones()) {
+        // zone.site().name, zone.core() (chip, coordinate, processor), zone.runtime_id(); device cycles in
+        // zone.start_device_cycles() / zone.end_device_cycles(), host time via zone.start_time() / zone.duration()
     }
 }
 ```
@@ -307,7 +321,8 @@ A built-in callback pushes zones to a Tracy timeline; enable it with
 
 ### 1.8 Two rules
 
-Don't register/unregister from inside a callback, and don't block in it.
+Don't register a callback from inside one, and don't block in it. A callback may destroy its own `Callback`, which
+stops its batches at once; destroying any other `Callback` from inside a callback is fatal.
 
 ## 2. Architecture (current design)
 
@@ -333,21 +348,21 @@ DRISC relay — one per DRAM view (≤ 8), resident on the bank's spare DRISC fr
                   touches the PCIe tile and host pressure lands in spool occupancy, not in the sweep
     release    posted head write-backs hand ring space back to the producers
     ▼
-D2H socket host FIFO, one per relay (FIFO_MB, default 64 MiB; plain pinned mmap, no TLB window)
+D2H socket host FIFO, one per relay (FIFO_MB, default 128 MiB; plain pinned mmap, no TLB window)
     ▼
-host receiver — one ingest thread per device: it walks each frame's header in place, publishes a handle (page
-    offset, page count) into the stream's `BroadcastRing<uint64_t>` and credits the pages back right after. It copies
-    nothing, and the device never waits on decode or on a consumer. The FIFO is the ring: a frame stays readable
-    until the device has lapped it.
+host receiver — one ingest thread per device: it walks each frame's header in place, publishes how far it has
+    walked and a frame boundary per 64 KiB of FIFO, and credits the pages back as it goes. It copies nothing, and
+    the device never waits on decode or on a consumer. The FIFO is the ring: a frame stays readable until the
+    device has lapped it.
     ▼
-consumers — every consumer thread reads handles, has the receiver fetch the frames' bytes out of the FIFO and decodes
-    them itself, 64 frames per delivery, into self-contained records for its callback: the registered callbacks
-    (§1.4), the Tracy sink (opt-in), ops / zone CSV. The fetch keeps only frames the device cannot have reached
-    since -- everything it has landed lies below `bytes_sent + SPSC_NOTIFY_CAP_BYTES`, the relay's notify cap --
-    so a lagging consumer loses whole frames, from the handle ring or from that check, and reports the bytes in
-    `dropped_bytes()`; every frame carries each lane's timer high word and runtime id in its control block, so the
-    decoder reseeds exactly at the next frame and drops only what it cannot place (ZONE_S until the lane's next
-    absolute zone), never a wrong record.
+consumers — every consumer thread copies frames out of the FIFO from its own cursor up to the walked mark, 64 per
+    delivery, and decodes them itself into self-contained records for its callback: the registered callbacks
+    (§1.4), the Tracy sink (opt-in), ops / zone CSV. A copy keeps only frames the device cannot have reached since
+    -- everything it has landed lies below `bytes_sent + SPSC_NOTIFY_CAP_BYTES`, the relay's notify cap -- so a
+    lagging consumer resumes at the first frame boundary an eighth of the FIFO past the overwrite horizon, losing
+    whole frames, and reports the bytes in `dropped_bytes()`; every frame carries each lane's timer high word and
+    runtime id in its control block, so the decoder reseeds exactly at the next frame and drops only what it cannot
+    place (ZONE_S until the lane's next absolute zone), never a wrong record.
 ```
 
 ### 2.2 The relay
@@ -364,9 +379,9 @@ bank and pumps them to the host FIFO over a D2H socket.
   views can resolve to the same NoC core, §N+40). The NIU has to be in stream mode to initiate NoC traffic
   at all, and that is boot state now: DRISC firmware puts every NIU that is no DRAM view's preferred
   endpoint into stream mode and nothing changes it afterwards (`hw/inc/experimental/drisc_mode.h`). So the
-  profiler sets no modes — it checks the ones it needs, and turns capture off for a device whose relay core
-  is some other view's endpoint, because firmware holds such an NIU in NOC2AXI where the relay's reads
-  would never issue. §N+32/§N+34's bring-up hangs came from the flip launches this replaced.
+  profiler sets no modes — it checks the ones it needs, and a relay core that is some other view's endpoint
+  is a `TT_FATAL`, because firmware holds such an NIU in NOC2AXI where the relay's reads would never issue.
+  §N+32/§N+34's bring-up hangs came from the flip launches this replaced.
 - **Launch.** `detail::LaunchProgram(..., force_slow_dispatch=true)`, outside the command queue: a
   DRAM-only program touches no fast-dispatch resource, so it stays resident across every workload, while
   going through the CQ would deadlock the first `Finish()`.
@@ -399,22 +414,17 @@ bank and pumps them to the host FIFO over a D2H socket.
 
 Host files live in `tt_metal/impl/streaming_profiler/`.
 
-- `device_programs.{hpp,cpp}` — control plane: one `StreamingProfiler` per
-  `MeshDevice`. Constructing it boots the relays on every eligible local Blackhole device and starts the
-  receiver; destroying it (or `stop()`) quiesces the relays, drains the receiver, verifies capture
-  completeness (every worker lane's tail against the receiver's consumed mirror) and leaves the resident
-  idle FW alone. It also owns the host↔device clock sync: a least-squares fit of 100 `(host_time,
-  device_cycles)` samples spaced 500 µs apart, one **origin per relay core measured on that core** (the
-  DRAM-tile and Tensix wall clocks share a zero at chip reset but not a duty cycle, so a worker anchor can be
-  minutes wrong for a DRAM core — §N+46) and **one shared frequency** for every context on the chip
-  (per-core slopes are biased and fan the rows apart — §N+47/§N+48). Residual measured with a common
-  trigger: 0.18 µs (§N+48); cross-domain offset constant to 0.1 ppm while both domains are active (§N+49).
-- `receiver.{hpp,cpp}` — ingest as in §2.1: the D2H FIFO is the ring. The ingest thread walks
-  each frame's header in place, publishes a `frame_handle` (page offset and length) into the stream's
-  `BroadcastRing<uint64_t>`, and returns the socket's credits at once; it copies nothing. A consumer reads handles and
-  has the receiver `fetch` the frames' bytes out of the FIFO, keeping only those the device cannot have reached since:
-  everything it has landed lies below `bytes_sent + SPSC_NOTIFY_CAP_BYTES`, the relay's notify cap, and a frame is
-  overwritten only by writes one FIFO past it. Both losses are whole frames, counted in `Batch::dropped_bytes()`.
+- `device_programs.{hpp,cpp}` — the device layer: one `DevicePrograms` per capture boots the resident kernels on
+  every local Blackhole device of the `MeshDevice` (the DRISC relays, the idle-eth clock tracker and its eth relay,
+  the link sync's resident ends) and owns their sockets; at teardown it quiesces them and verifies capture
+  completeness (every worker lane's tail against the receiver's consumed mirror). The clock sync is §2.5.
+- `receiver.{hpp,cpp}` — ingest as in §2.1: the D2H FIFO is the ring. The ingest thread walks each frame's header in
+  place, publishes how far it has walked and one frame boundary per `kMarkBytes`, and returns the socket's credits as
+  the walk earns them; it copies nothing. A consumer copies frames from its own cursor up to the walked mark
+  (`walk_frames`, `service.hpp`), keeping only those the device cannot have reached since: everything it has landed
+  lies below `bytes_sent + SPSC_NOTIFY_CAP_BYTES`, the relay's notify cap, and a frame is overwritten only by writes
+  one FIFO past it. A pass the device reached during the copy is discarded, so losses are whole frames, counted in
+  `Batch::dropped_bytes()`.
   Decode lives in the consumers (`decode.hpp`, one `StreamDecoder` per consumer per stream): it
   recovers from a gap by reseeding lane state from the frame's control words (the producer's per-RISC state
   slots, written after its tail so a frame never carries a value its words do not) and re-anchoring at the next
@@ -422,14 +432,11 @@ Host files live in `tt_metal/impl/streaming_profiler/`.
 - `spsc_marker_decode.hpp` (the decode single source of truth), `spsc_packet.h` (plain-C packet
   constants shared with the device's `ppfmt`), `hw/inc/hostdev/streaming_profiler_common.h` (span/frame
   geometry, pack-pad rule, `SPSC_SPAN_RAW_FLAG`).
-- Consumers: `service.{hpp,cpp}` (callbacks, one thread each, reading every attached
-  receiver's queues), `api.cpp` (the public `RegisterCallback`, the process-wide site table),
-  `capture_context.hpp` (the internal record contract),
-  `decode.hpp` (the frame decoder),
-  `ops_csv`, `zone_csv`,
-  `tracy_consumer` (the Tracy sink; per-relay
-  anchors, k-way merge of a context's lanes by timestamp so Tracy's 2^31-tick unwrap heuristic never fires —
-  §4.2).
+- Consumers: `service.{hpp,cpp}` (callbacks, one thread each, reading every attached receiver's FIFOs, and the
+  sync thread), `api.cpp` (the public `RegisterCallback`, the process-wide site table), `capture_context.hpp` (a
+  capture's devices, their cores and clock offsets, and its links), `decode.{hpp,cpp}` (the frame decoder),
+  `ops_csv`, `zone_csv`, `tracy_consumer.{hpp,cpp}` (the Tracy sink: one context per
+  core, every record already on the host timeline and placed against one process-wide anchor).
 - Device producer: `kernel_profiler_streaming.hpp`, selected by `-DPROFILE_STREAMING`. Zone ids are 27-bit
   structural ids resolved to names per ELF on the host; every RISC emits its own `STICKY_PROG` at launch so
   `rec.prog` is exact on every lane (§N+60).
@@ -440,18 +447,67 @@ Host files live in `tt_metal/impl/streaming_profiler/`.
 |---|---|---|---|
 | relays | one per DRAM view | the sweep is O(cores per relay); fewer cores per relay is the only lever on the device-side knee | §N+28, §N+40, §N+71 |
 | `kShipMinPct` (relay constant) | 25 | fewer, fuller frames; stall-free band ends at 30–35 | §N+65, §N+71 |
-| `FIFO_MB` | 64 | direct-push elasticity; 3 GiB holds a whole 150k-iteration capture and takes the host out of the knee | §N+71 |
+| `FIFO_MB` | 128 | direct-push elasticity; a large FIFO takes the host out of the knee | §N+71 |
 | `DRAM_MB` | 128 | spool runway per relay; a ring absorbs a running deficit, not bursts — it is runway, not headroom | §N+39, §N+65 |
-| `RING_MB` | 512 | ~55 M zones per stream; the host ring, not the device, is the first thing to lose data as volume grows | §N+39, §N+52 |
-| `DECODE_THREADS` | 2 | the pipeline knee at 2 threads is host-decode-bound (~90 % duty); 6 threads exposes the device-side knee | §N+53–§N+57, §N+71 |
 
-Headline measurements on the current shape (bh-lb-120, 150k iterations, 11×10 grid, single device):
-pipeline knee `--delay` **106** with 2 decode threads (count-exact at 957,000,550 records, 0 anomalies);
-device-side (filler) knee **75** with the host wall removed by FIFO or threads (§N+71, §N+72). End-to-end
-overhead on real models: ResNet-50 batch 16 +2 % to +6 %, batch 32 +2.64 %, DistilBERT +5.8 %, Mistral-7B
-decode +3.7 %, Llama-3.1-8B decode +2.5 % — a roughly fixed per-op cost that dilutes as the op grows
-(§N+44, §N+45, §N+50). Op-level agreement with the classic device profiler: medians within ~1 % on
-ResNet-50, +8–11 % on a zone-dense matmul microbenchmark (the per-zone scope cost) (§N+59–§N+63).
+The headline measurements below predate the relay and the per-callback threads: they were taken on the direct-push
+design of 2026-08-25 (§3) on bh-lb-120, 150k iterations, 11×10 grid, single device. Pipeline knee `--delay` **106** with
+2 decode threads (count-exact at 957,000,550 records, 0 anomalies); device-side (filler) knee **75** with the host wall
+removed by FIFO or threads (§N+71, §N+72). End-to-end overhead on real models: ResNet-50 batch 16 +2 % to +6 %, batch 32
++2.64 %, DistilBERT +5.8 %, Mistral-7B decode +3.7 %, Llama-3.1-8B decode +2.5 % — a roughly fixed per-op cost that
+dilutes as the op grows (§N+44, §N+45, §N+50). Op-level agreement with the classic device profiler: medians within ~1 %
+on ResNet-50, +8–11 % on a zone-dense matmul microbenchmark (the per-zone scope cost) (§N+59–§N+63).
+
+### 2.5 The clock sync
+
+Every record is placed on one timeline, the host TSC, through a chain of clock maps. It needs Blackhole's eth tiles:
+their free-running 50 MHz refclk and their IEEE-1588 frame stamping.
+
+- **Tile clocks** (`sync/tile_sync.cpp`, `kernels/tile_sync.cpp`). Every tile's wall clock counts the same AICLK, a
+  fixed number of ticks apart from every other tile's, so one measurement at bring-up, before the fabric and dispatch
+  firmware load, moves every Tensix, DRAM and eth record into the chip's eth wall-clock domain.
+- **Clock tracker, AICLK wall clock → refclk, per chip.** One idle eth core per chip for the whole capture: ERISC0
+  samples the wall clock against the refclk (`kernels/eth_clock_sampler.cpp`), ERISC1 fits the samples into
+  wall-clock-per-refclk segments that stay exact through DVFS, because AICLK only takes whole FBDIV steps
+  (`kernels/eth_clock_model.cpp`). A second idle eth core ships them to the host (`kernels/eth_relay.cpp`). Every
+  capture, sync check or not, plots each chip's AICLK in Tracy as `AICLK chipN (GHz)`.
+- **Link sync, refclk → refclk, per link.** `sync/link_sync.cpp` picks the links and the role of each end. The two ends
+  of each synced link (every eth link between two chips, or with fabric on every link both of whose ends are fabric
+  channels) exchange frames and keep their 1588 stamps (`kernels/link_sync.hpp`, over the hardware layer
+  `hw/inc/internal/ethernet/eth_ptp.hpp`). With fabric on, the routers run the ends: `RouterHook` in
+  `fabric_erisc_router.cpp` runs the end that the `LINK_SYNC_ROLE` compile arg (`fabric_erisc_router_ct_args.hpp`)
+  names. Before the routers start, the host zeroes every active eth core's link-end slots, control word and done word
+  (`link_sync::zero_link_end_l1`), so a router end never reads what an earlier process left there. Without fabric,
+  resident kernels run them (`kernels/link_sync.cpp`). Both sides of a link count refclk, so DVFS can't affect it. The
+  sync engine (`sync/engine.cpp`, fitting lines with `sync/least_squares.hpp`) solves every chip's refclk against the
+  root chip's by least squares over all the links. Each capture end logs the links' precision: the rounds' scatter about
+  each link's solved line, and that line's error at the centre of its solve window. It also logs how far apart parallel
+  links between the same two chips put the chips' offset. That difference comes from asymmetry between a link's two
+  directions, which the sync check can't see, since its reference is solved over the same links.
+- **Host sync, root refclk → host TSC** (`sync/host_sync.cpp`). Every 10 ms, a burst of PCIe reads of the root chip's
+  refclk counter, each bracketed by TSC reads; each burst also pairs the TSC with `CLOCK_MONOTONIC` for the
+  `steady_clock` view. Each burst refits a line over the last second of bursts and appends a node whose tangent reaches
+  that line 10 ms on. Records past the newest burst are placed on that tangent, so none waits for a later burst, and
+  host times never step back.
+
+The `ClockMap` (`sync/clock_map.cpp`) holds one series per chip, eth wall tick → root refclk, and the host series, root
+refclk → TSC; the consumer threads place every record through both without locking.
+
+**The sync check** (`sync/check.cpp`, `TT_METAL_STREAMING_PROFILER_SYNC_CHECK=1`) reports the accuracy. A ruler on a
+third idle eth core of each chip (`kernels/eth_clock_ruler.cpp`) reads the wall clock against the refclk, and the host
+places each reading through the chip's series. The link sync runs ten times as many rounds, and the rounds its solve
+doesn't use are the independent chip-to-chip reference. Each capture end logs the timeline's chip-to-chip error (p50,
+p99, p99.9 and max over every chip pair, and each chip against the reference) and each chip's AICLK over the capture
+(mean, spread, range, changes per second and the time spent in each 50 MHz bin), so a report shows how hard DVFS worked
+the clocks it measured. `test_streaming_profiler_sync_check` in `tests/ttnn/tracy/test_streaming_profiler_sync.py` gates
+it. In Tracy it plots `sync error bound (ns)` and `sync error bound chipN (ns)`. It is a debug mode: the extra rounds
+cost fabric bandwidth.
+
+With the sync check off, `test_streaming_profiler_fabric_overhead` measures what the profiler costs the fabric. Over 20
+runs on an 8-chip LoudBox (40,960 samples per test), the profiler raised the median test's p99 latency by 35 ns and the
+worst test's p99.9 by 316 ns. A test's bandwidth ratio, profiler on over profiler off, was 1.024 for the median test and
+0.998 for the worst. The gain comes from code layout (the routers' link sync start and stop code is laid out cold), not
+from the profiler, so the gate allows a 0.4 % loss on the median test and 1.1 % on the worst.
 
 ## 3. Design history (superseded designs)
 
@@ -475,13 +531,14 @@ Names in the historical text and what they are today:
 |---|---|
 | `drisc_profiler_drain.cpp` (the filler/mover kernel, role by `kRole` compile arg), `drisc_profiler_filler.cpp` | `tt_metal/impl/streaming_profiler/kernels/drisc_relay.cpp` |
 | `drisc_drain_common.hpp`, `test_kernels/misc/drisc_drain_frame.h`, the streaming constants that were in `profiler_common.h` | `tt_metal/hw/inc/hostdev/streaming_profiler_common.h` (the DRAM profiler keeps `profiler_common.h`) |
-| `perf_debug_profiler.{hpp,cpp}`, `PerfDebugProfiler` | `tt_metal/impl/streaming_profiler/device_programs.{hpp,cpp}`, `streaming_profiler::Devices` |
-| `PerfDebugTracyHandler`, `perf_debug_tracy_handler` | `TracySink`, `tracy_consumer.{hpp,cpp}` |
+| `perf_debug_profiler.{hpp,cpp}`, `PerfDebugProfiler` | `tt_metal/impl/streaming_profiler/device_programs.{hpp,cpp}`, `streaming_profiler::DevicePrograms` |
+| `PerfDebugTracyHandler`, `perf_debug_tracy_handler` | `TracyConsumer`, `tracy_consumer.{hpp,cpp}` |
 | the host "writer"/"decoder" threads, `D2HSocket::read()` memcpy path, receiver v2 | `receiver.{hpp,cpp}` |
-| host record ring of 24 B `Rec` (`BroadcastRing`, `RING_RECS`) | per-stream `BroadcastRing` of verbatim frames (`RING_MB`); records are decoded per consumer |
+| host record ring of 24 B `Rec` (`BroadcastRing`, `RING_RECS`) | none: consumers read frames straight out of the D2H FIFO, which the receiver walks in place; records are decoded per consumer |
 | `drisc_niu_mode.cpp` | gone: DRISC firmware sets each NIU's mode once per boot (`hw/inc/experimental/drisc_mode.h`) |
 | `test_perf_debug_zones` | `tt_metal/programming_examples/profiler/test_streaming_profiler_zones` |
 | `TT_METAL_PERF_DEBUG_*` | `TT_METAL_STREAMING_PROFILER_*` — full table at the top of §6 |
+| `TT_METAL_STREAMING_PROFILER_{RING_MB,DECODE_THREADS}` | removed: the D2H FIFO is the ring, and each consumer decodes for itself |
 | `TT_METAL_STREAMING_PROFILER_{DRISC_ZONES,ROLE_RING_MB,SHIP_REPEAT}` as they appear in §3.1 and §3.3 | mechanical renames of `TT_METAL_PERF_DEBUG_*` knobs of the fillers/movers kernel; removed with it, no current equivalent |
 | `ARCHITECTURE.md`, `HANGS.md`, `README.md`, `DIRECT_PUSH_PLAN.md`, `FINDINGS.md` | §3.1, §3.2, §3.3, §6.2, §6 of this document |
 | `tests/tt_metal/tt_metal/api/test_dram_kernels.cpp` (`DramKernelDRISCScatterFixture`, `*DRISC*` gtests), `test_kernels/misc/drisc_{rdrbench,adaptive_drain,service_workers}.cpp`, `misc/socket/drisc_{d2h_egress,drain_to_host}.cpp`, `profiler_zone_producer{,_compute}.cpp` | deleted 2026-09 with the streaming profiler landing; their measurements stay in §6 as history |
@@ -1072,7 +1129,6 @@ ELF-name-resolved on the host.
 | 3 | `ZONE_S` | 2 | `end_delta16 << 16 \| dur16` | end within 2^16 cycles (~48 µs @1.35 GHz) of the lane cursor and duration ≤ 2^16 cycles |
 | 2 | `ZONE_ATOMIC` ("M") | 3 | `end_lo32`, `dur32` | duration < 2^32 cycles (~3.2 s), any gap; **re-anchors the cursor** |
 | 4 | `ZONE_L` | 5 | `end_lo`, `end_hi`, `dur_lo`, `dur_hi` | anything — two full 64-bit values, self-contained |
-| 0/1 | `ZONE_START`/`END` pair | 2+2 | `timer_lo` each | no worker emits it; the decoder still accepts it |
 
 ##### The lane cursor
 
@@ -1085,7 +1141,7 @@ children's ends, so start deltas go negative; ends never do. Start is always rec
 
 - Only S and M move the cursor, identically on both sides. The M packet's absolute `end_lo` is the
   re-anchor (`cursor = sticky_hi << 32 | end_lo`).
-- L (and the paired form) leave the cursor alone — a stale cursor is merely conservative: the next
+- L leaves the cursor alone — a stale cursor is merely conservative: the next
   zone's delta overflows 16 bits and falls back to M, which re-anchors.
 - The producer invalidates its cursor (`hi = ~0`) at `init_profiler()` and on the idle-launch rewind,
   which makes the S class test fail arithmetically — the first zone after any launch is always an
@@ -1109,14 +1165,8 @@ stall is a wedged relay rather than a measurement, so saturating the duration lo
 
 ##### ZONE_L and the >3.2 s fallback
 
-A zone whose duration overflows 32 bits ships as one self-contained ZONE_L — no stickies, no cursor.
-The decoder normalizes it to a synthetic START/END pair for the delivery-side pairing stack (a 64-bit
-duration cannot ride the 32-bit dur argument); the in-the-past synthetic START trips the per-lane
-order-regression diagnostic once per nesting parent, which is kept as wedge visibility.
-
-The decoder **normalizes at the emit boundary** — S emits as wire-type ATOMIC with the cursor-resolved
-end, L as the synthetic pair — so the receiver, every consumer, and the stall classifier see only the
-types they always saw.
+A zone whose duration overflows 32 bits ships as one self-contained ZONE_L — no stickies, no cursor — and the
+decoder delivers it like any other zone, with its 64-bit duration.
 
 #### Measured behavior (Blackhole, 1.35 GHz)
 
@@ -1153,15 +1203,12 @@ record surplus equals the device L1 stall counter to the unit, one atomic stall 
 
 ##### Rendering long zones in Tracy
 
-Tracy's server carries an unwrap heuristic for wrapping GPU timestamp counters
-(`TracyWorker.cpp ProcessGpuTime`): a backwards jump > 2^31 ticks in one context's GpuTime stream is
-read as a counter wrap, and everything after it is shifted up by a power of two, cumulatively. So the
-timestamps pushed for one GPU context must be monotone: a sink that flushes lane by lane jumps back
-to capture start at every lane boundary, and any capture whose per-lane span exceeds **2^31 ticks
-(~1.6 s)** then staggers its RISCs by huge power-of-two offsets. Each lane's bracket sequence is
-already non-decreasing in ts, so merging a context's lanes by timestamp before pushing is a correct
-k-way merge and keeps the heuristic from firing. `tracy_ctx_inspect` (with `CTX_ALL_THREADS=1`)
-prints per-thread zone spans to check exactly this.
+Tracy's unwrap heuristic for wrapping GPU counters (`TracyWorker.cpp ProcessGpuTime`) acts only on `GpuTime` items.
+The sink pushes each zone as one `GpuZone` item (`TracyTTPushZone`) carrying absolute 64-bit start and end times,
+already on the host timeline in nanoseconds, so a zone of any length renders in place and a context's timestamps may
+step back by any amount. What the server does need is each (context, thread)'s zones in end order, which a lane's
+zones are (§1.5). For each batch the sink pushes the zones, then the timestamped data, then the events, into one
+calibrated context per core, with each RISC a thread in it.
 
 ## 5. Dev tools: reading a `.tracy` without the GUI
 
@@ -1173,7 +1220,7 @@ the headline (§N+43).
 
 | tool | what it reports | used for |
 |---|---|---|
-| `tracy_ctx_inspect` | every GPU (tt_device) context in the file with its zone count, thread count, calibration flag and name; `CTX_ALL_THREADS=1` adds per-thread zone spans | verifying device-context creation (one context per (chip, core)), context-index → core-name mapping, per-lane spans for the Tracy 2^31-tick unwrap check (§4.2). A correctly paired lane is depth ≤ 2; a lost END grows a deep staircase |
+| `tracy_ctx_inspect` | every GPU (tt_device) context in the file with its zone count, thread count, calibration flag and name; `CTX_ALL_THREADS=1` adds per-thread zone spans | verifying device-context creation (one context per (chip, core)), context-index → core-name mapping |
 | `tracy_zone_csv` | every device zone in pre-order as `ctx,tid,risc,seq,depth,name,start,end`, enough to rebuild the nesting tree offline (a row's parent is the nearest preceding row on the same `(ctx,tid)` with `depth-1`) | zone-window arithmetic, per-phase means, the counter cross-checks in §N+41, §N+47–§N+49 (compute the windows in Python — `awk` overflows INT32 on these nanosecond values) |
 | `tracy_plot_check` | the worker window and the drainer window (first/last device-zone time), then per plot: sample count, span, interval distribution (p50/max) and the fraction of samples inside the worker window | proving that decoded plot samples land on the device timebase, not at decode time (§N+43, §N+46). Plots only: it takes the zone windows from `tracy_zone_csv`, because walking `GetGpuData()` in-process for zones segfaults on three separate paths |
 

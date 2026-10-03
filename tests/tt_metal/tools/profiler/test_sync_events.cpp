@@ -27,7 +27,7 @@
 
 using namespace tt;
 using namespace tt::tt_metal;
-using Risc = tt::tt_metal::experimental::streaming_profiler::Risc;
+using tt::tt_metal::experimental::streaming_profiler::Processor;
 
 constexpr uint32_t DELAY_CYCLES = 10000;
 
@@ -37,16 +37,16 @@ void RunApiTest(
     int consumer_api_id,
     bool use_remote_core,
     const char* test_name,
-    Risc producer_risc = Risc::BRISC,
-    Risc consumer_risc = Risc::NCRISC) {
-    const char* risc_names[] = {"BRISC", "NCRISC", "TRISC0", "TRISC1", "TRISC2"};
+    Processor producer = Processor::BRISC,
+    Processor consumer = Processor::NCRISC) {
+    constexpr const char* kProcessorNames[] = {"BRISC", "NCRISC", "TRISC0", "TRISC1", "TRISC2", "ERISC0", "ERISC1"};
     fmt::print(
         "Running {} (producer api={} on {}, consumer api={} on {}{})...\n",
         test_name,
         producer_api_id,
-        risc_names[(int)producer_risc],
+        kProcessorNames[static_cast<size_t>(producer)],
         consumer_api_id,
-        risc_names[(int)consumer_risc],
+        kProcessorNames[static_cast<size_t>(consumer)],
         use_remote_core ? ", different core" : "");
 
     CoreCoord producer_core = {0, 0};
@@ -86,7 +86,7 @@ void RunApiTest(
     };
 
     // Create producer kernel
-    if (producer_risc == Risc::TRISC0) {
+    if (producer == Processor::TRISC0) {
         auto producer_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tools/profiler/kernels/sync_apis_compute.cpp",
@@ -99,9 +99,9 @@ void RunApiTest(
             "tests/tt_metal/tools/profiler/kernels/sync_apis_dm.cpp",
             producer_core,
             tt_metal::DataMovementConfig{
-                .processor = producer_risc == Risc::BRISC ? tt_metal::DataMovementProcessor::RISCV_0
+                .processor = producer == Processor::BRISC ? tt_metal::DataMovementProcessor::RISCV_0
                                                           : tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = producer_risc == Risc::BRISC ? tt_metal::NOC::RISCV_0_default : tt_metal::NOC::RISCV_1_default,
+                .noc = producer == Processor::BRISC ? tt_metal::NOC::RISCV_0_default : tt_metal::NOC::RISCV_1_default,
                 .defines = defines});
         SetRuntimeArgs(
             program,
@@ -116,7 +116,7 @@ void RunApiTest(
     }
 
     // Create consumer kernel
-    if (consumer_risc == Risc::TRISC0) {
+    if (consumer == Processor::TRISC0) {
         auto consumer_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tools/profiler/kernels/sync_apis_compute.cpp",
@@ -129,9 +129,9 @@ void RunApiTest(
             "tests/tt_metal/tools/profiler/kernels/sync_apis_dm.cpp",
             consumer_core,
             tt_metal::DataMovementConfig{
-                .processor = consumer_risc == Risc::NCRISC ? tt_metal::DataMovementProcessor::RISCV_1
+                .processor = consumer == Processor::NCRISC ? tt_metal::DataMovementProcessor::RISCV_1
                                                            : tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = consumer_risc == Risc::NCRISC ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default,
+                .noc = consumer == Processor::NCRISC ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default,
                 .defines = defines});
         SetRuntimeArgs(
             program,
@@ -161,14 +161,14 @@ int main(int argc, char* argv[]) {
             test_api = std::atoi(argv[1]);
         }
 
-        // Test configs: (producer_api, consumer_api, remote, name, producer_risc, consumer_risc, requires_quasar)
+        // Test configs: (producer_api, consumer_api, remote, name, producer, consumer, requires_quasar)
         struct TestConfig {
             int producer_api;
             int consumer_api;
             bool remote;
             const char* name;
-            Risc producer_risc;
-            Risc consumer_risc;
+            Processor producer;
+            Processor consumer;
             bool requires_quasar;
         };
 
@@ -177,39 +177,39 @@ int main(int argc, char* argv[]) {
 
         TestConfig tests[] = {
             // Raw CB APIs
-            {0, 1, false, "CB wait", Risc::BRISC, Risc::NCRISC, false},
-            {7, 8, false, "CB reserve", Risc::BRISC, Risc::NCRISC, false},
+            {0, 1, false, "CB wait", Processor::BRISC, Processor::NCRISC, false},
+            {7, 8, false, "CB reserve", Processor::BRISC, Processor::NCRISC, false},
 
             // Raw Semaphore APIs. The noc 1 cases are produced from NCRISC; every other case is noc 0.
-            {2, 3, false, "Raw: sem_set + sem_wait", Risc::BRISC, Risc::NCRISC, false},
-            {4, 5, true, "Raw: sem_inc remote", Risc::BRISC, Risc::NCRISC, false},
-            {2, 6, false, "Raw: sem_set + sem_wait_min", Risc::BRISC, Risc::NCRISC, false},
-            {11, 12, true, "Raw: sem_inc_multicast", Risc::BRISC, Risc::NCRISC, false},
-            {13, 14, true, "Raw: sem_set_multicast", Risc::BRISC, Risc::NCRISC, false},
-            {31, 5, true, "Raw: sem_set_remote", Risc::BRISC, Risc::NCRISC, false},
-            {33, 5, true, "Raw: sem_set_multicast_loopback_src", Risc::BRISC, Risc::NCRISC, false},
-            {4, 5, true, "Raw: sem_inc remote (noc 1)", Risc::NCRISC, Risc::BRISC, false},
-            {11, 12, true, "Raw: sem_inc_multicast (noc 1)", Risc::NCRISC, Risc::BRISC, false},
-            {13, 14, true, "Raw: sem_set_multicast (noc 1)", Risc::NCRISC, Risc::BRISC, false},
+            {2, 3, false, "Raw: sem_set + sem_wait", Processor::BRISC, Processor::NCRISC, false},
+            {4, 5, true, "Raw: sem_inc remote", Processor::BRISC, Processor::NCRISC, false},
+            {2, 6, false, "Raw: sem_set + sem_wait_min", Processor::BRISC, Processor::NCRISC, false},
+            {11, 12, true, "Raw: sem_inc_multicast", Processor::BRISC, Processor::NCRISC, false},
+            {13, 14, true, "Raw: sem_set_multicast", Processor::BRISC, Processor::NCRISC, false},
+            {31, 5, true, "Raw: sem_set_remote", Processor::BRISC, Processor::NCRISC, false},
+            {33, 5, true, "Raw: sem_set_multicast_loopback_src", Processor::BRISC, Processor::NCRISC, false},
+            {4, 5, true, "Raw: sem_inc remote (noc 1)", Processor::NCRISC, Processor::BRISC, false},
+            {11, 12, true, "Raw: sem_inc_multicast (noc 1)", Processor::NCRISC, Processor::BRISC, false},
+            {13, 14, true, "Raw: sem_set_multicast (noc 1)", Processor::NCRISC, Processor::BRISC, false},
 
             // Semaphore class APIs (dataflow)
-            {20, 21, false, "Class: set() + wait()", Risc::BRISC, Risc::NCRISC, false},
-            {22, 23, false, "Class: up() + wait_min()", Risc::BRISC, Risc::NCRISC, false},
-            {24, 25, true, "Class: up() remote", Risc::BRISC, Risc::NCRISC, false},
-            {20, 26, false, "Class: set() + down()", Risc::BRISC, Risc::NCRISC, false},
-            {27, 28, true, "Class: set_multicast()", Risc::BRISC, Risc::NCRISC, false},
-            {29, 30, true, "Class: inc_multicast()", Risc::BRISC, Risc::NCRISC, false},
+            {20, 21, false, "Class: set() + wait()", Processor::BRISC, Processor::NCRISC, false},
+            {22, 23, false, "Class: up() + wait_min()", Processor::BRISC, Processor::NCRISC, false},
+            {24, 25, true, "Class: up() remote", Processor::BRISC, Processor::NCRISC, false},
+            {20, 26, false, "Class: set() + down()", Processor::BRISC, Processor::NCRISC, false},
+            {27, 28, true, "Class: set_multicast()", Processor::BRISC, Processor::NCRISC, false},
+            {29, 30, true, "Class: inc_multicast()", Processor::BRISC, Processor::NCRISC, false},
 
             // Compute RISC (TRISC) CB APIs - all architectures
-            {0, 102, false, "Compute CB: BRISC push + TRISC wait+pop", Risc::BRISC, Risc::TRISC0, false},
-            {100, 1, false, "Compute CB: TRISC push + NCRISC wait", Risc::TRISC0, Risc::NCRISC, false},
+            {0, 102, false, "Compute CB: BRISC push + TRISC wait+pop", Processor::BRISC, Processor::TRISC0, false},
+            {100, 1, false, "Compute CB: TRISC push + NCRISC wait", Processor::TRISC0, Processor::NCRISC, false},
 
             // Compute RISC (TRISC) semaphore APIs - Quasar only (ckernel::Semaphore)
-            {2, 15, false, "Compute Sem: BRISC set + TRISC wait()", Risc::BRISC, Risc::TRISC0, true},
-            {2, 16, false, "Compute Sem: BRISC set + TRISC wait_min()", Risc::BRISC, Risc::TRISC0, true},
-            {2, 14, false, "Compute Sem: BRISC set + TRISC down()", Risc::BRISC, Risc::TRISC0, true},
-            {17, 3, false, "Compute Sem: TRISC set() + NCRISC wait", Risc::TRISC0, Risc::NCRISC, true},
-            {13, 3, false, "Compute Sem: TRISC up() + NCRISC wait", Risc::TRISC0, Risc::NCRISC, true},
+            {2, 15, false, "Compute Sem: BRISC set + TRISC wait()", Processor::BRISC, Processor::TRISC0, true},
+            {2, 16, false, "Compute Sem: BRISC set + TRISC wait_min()", Processor::BRISC, Processor::TRISC0, true},
+            {2, 14, false, "Compute Sem: BRISC set + TRISC down()", Processor::BRISC, Processor::TRISC0, true},
+            {17, 3, false, "Compute Sem: TRISC set() + NCRISC wait", Processor::TRISC0, Processor::NCRISC, true},
+            {13, 3, false, "Compute Sem: TRISC up() + NCRISC wait", Processor::TRISC0, Processor::NCRISC, true},
         };
 
         constexpr int num_tests = sizeof(tests) / sizeof(tests[0]);
@@ -218,8 +218,7 @@ int main(int argc, char* argv[]) {
             if (t.requires_quasar && !is_quasar) {
                 fmt::print("Skipping {} (requires Quasar)\n", t.name);
             } else {
-                RunApiTest(
-                    mesh_device, t.producer_api, t.consumer_api, t.remote, t.name, t.producer_risc, t.consumer_risc);
+                RunApiTest(mesh_device, t.producer_api, t.consumer_api, t.remote, t.name, t.producer, t.consumer);
             }
         } else {
             for (auto& t : tests) {
@@ -227,8 +226,7 @@ int main(int argc, char* argv[]) {
                     fmt::print("Skipping {} (requires Quasar)\n", t.name);
                     continue;
                 }
-                RunApiTest(
-                    mesh_device, t.producer_api, t.consumer_api, t.remote, t.name, t.producer_risc, t.consumer_risc);
+                RunApiTest(mesh_device, t.producer_api, t.consumer_api, t.remote, t.name, t.producer, t.consumer);
             }
         }
 

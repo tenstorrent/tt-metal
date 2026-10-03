@@ -469,6 +469,11 @@ constexpr PerfTelemetryRecorderType perf_telemetry_mode =
 
 constexpr size_t perf_telemetry_buffer_addr = NAMED_CT_ARG("PERF_TELEMETRY_BUFFER_ADDR");
 
+#if defined(PROFILE_STREAMING) && defined(ARCH_BLACKHOLE)
+constexpr uint32_t link_sync_role = NAMED_CT_ARG("LINK_SYNC_ROLE");
+constexpr uint32_t link_sync_l1_addr = NAMED_CT_ARG("LINK_SYNC_L1_ADDR");
+#endif
+
 // ============================================================================
 // Code Profiling
 // ============================================================================

@@ -97,6 +97,7 @@ run_streaming_profiler_test() {
     # Host-only unit tests first, then the on-device workload and Tracy capture.
     ./build/test/tt_metal/tools/profiler/test_streaming_profiler_decode
     ./build/test/tt_metal/tools/profiler/test_streaming_profiler_fetch
+    ./build/test/tt_metal/tools/profiler/test_streaming_profiler_sync_engine
     pytest tests/ttnn/tracy/test_streaming_profiler.py tests/ttnn/tracy/test_streaming_profiler_ops_csv.py
 }
 

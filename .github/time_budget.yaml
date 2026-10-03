@@ -286,6 +286,7 @@ runtime:
     wh_n300_civ2: 52
     bh_p100a_civ2_viommu: 60
     bh_p150b_civ2_viommu: 60
+    bh_loudbox: 20
   perf:
     wh_n300_civ2: 65
     bh_p150_perf: 50

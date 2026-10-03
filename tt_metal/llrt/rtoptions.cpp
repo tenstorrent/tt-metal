@@ -133,6 +133,8 @@ enum class EnvVarID {
     TT_METAL_STREAMING_PROFILER,                   // Enable the streaming device profiler (excludes the DRAM one)
     TT_METAL_STREAMING_PROFILER_TRACY,             // Enable Tracy output for the streaming profiler
     TT_METAL_STREAMING_PROFILER_SYNC_EVENTS,       // Enable sync events profiling
+    TT_METAL_STREAMING_PROFILER_ETH,               // Enable zone profiling on ethernet cores
+    TT_METAL_STREAMING_PROFILER_SYNC_CHECK,        // Measure the clock sync's chip-to-chip accuracy
     TT_METAL_STREAMING_PROFILER_INLINE_ENABLED,    // Enable zone markers inlining
     TT_METAL_STREAMING_PROFILER_DRAM_MB,           // Streaming profiler per-relay GDDR spool ring, MiB
     TT_METAL_STREAMING_PROFILER_FIFO_MB,           // Streaming profiler host FIFO per D2H socket, MiB
@@ -1009,7 +1011,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Boots the streaming profiler at MeshDevice bring-up. Records go to registered callbacks
         // (RegisterCallback and the TT_METAL_STREAMING_PROFILER_*_CSV writers); add
         // TT_METAL_STREAMING_PROFILER_TRACY=1 for the Tracy sink. Needs a Tracy-enabled build and
-        // TT_METAL_DEVICE_PROFILER off.
+        // TT_METAL_DEVICE_PROFILER off. Captures on Blackhole only.
 
         // Default: false
         // Usage: export TT_METAL_STREAMING_PROFILER=1
@@ -1032,8 +1034,25 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->streaming_profiler_sync_events_enabled = is_env_enabled(value);
             break;
 
+        // TT_METAL_STREAMING_PROFILER_ETH
+        // Enables the streaming profiler's device markers on Ethernet cores. Requires TT_METAL_STREAMING_PROFILER.
+        // Default: false
+        // Usage: export TT_METAL_STREAMING_PROFILER_ETH=1
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_ETH:
+            this->streaming_profiler_eth_enabled = is_env_enabled(value);
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_SYNC_CHECK
+        // Measures the chip-to-chip accuracy of the clock sync, logs it at each capture's end and plots it in Tracy.
+        // Uses a third idle Ethernet core per chip and costs fabric bandwidth. Requires TT_METAL_STREAMING_PROFILER.
+        // Default: false
+        // Usage: export TT_METAL_STREAMING_PROFILER_SYNC_CHECK=1
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_SYNC_CHECK:
+            this->streaming_profiler_sync_check_enabled = is_env_enabled(value);
+            break;
+
         // TT_METAL_STREAMING_PROFILER_INLINE_ENABLED
-        // This is enabled by default. Disabling inlining of kernel zone-marker emit path to
+        // This is enabled by default. Disable inlining of kernel zone-marker emit path to
         // reduce kernel size overhead from profiler instrumentation. This is useful for
         // kernels with many zones that would otherwise exceed the kernel-config ring and fail to launch at all.
         // Only works on the streaming profiler.

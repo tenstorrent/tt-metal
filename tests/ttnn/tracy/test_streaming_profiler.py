@@ -26,20 +26,7 @@ import pytest
 
 from tools.tracy.common import PROFILER_ARTIFACTS_DIR, PROFILER_BIN_DIR, TT_METAL_HOME
 
-
-def _workload_bin() -> Path:
-    """CI builds into ``build`` (build-artifact.yaml passes ``--build-dir build``); a local build_metal.sh run
-    leaves ``build`` as a symlink to ``build_Release``. Try both so one path works in either layout -- naming
-    only ``build_Release`` made this test silently skip in CI."""
-    rel = Path("programming_examples") / "test_streaming_profiler_zones"
-    for d in ("build", "build_Release"):
-        cand = Path(TT_METAL_HOME) / d / rel
-        if cand.exists():
-            return cand
-    return Path(TT_METAL_HOME) / "build" / rel
-
-
-WORKLOAD_BIN = _workload_bin()
+WORKLOAD_BIN = Path(TT_METAL_HOME) / "build/programming_examples/test_streaming_profiler_zones"
 
 # Every external program this module runs is named here, and commands are built from this table rather than
 # assembled from data: an unknown key raises instead of executing anything.
