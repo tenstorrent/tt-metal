@@ -21,6 +21,7 @@ from loguru import logger
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
 from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens, rotated_chunk_positions
+from models.demos.common.prefill.runners.h2d_replay import load_inject_log
 from models.demos.common.prefill.runners.migration import (
     is_per_host_storage,
     migration_table_path,
@@ -77,6 +78,8 @@ def _apply_manifest_env(manifest_path: str) -> dict:
     sd("PREFILL_PRODUCER_SEED", workload.get("seed"))
     sd_bool("PREFILL_PRODUCER_CHECK_PCC", workload.get("check_pcc"))
     sd("PREFILL_TRACE_DIR", workload.get("trace_dir"))
+    sd("PREFILL_PRODUCER_REPLAY_LOG", workload.get("replay_log"))
+    sd("PREFILL_PRODUCER_REPLAY_SPEED", workload.get("replay_speed"))
     slot_prompts = workload.get("slot_prompts")
     if slot_prompts is not None:
         sd("PREFILL_PRODUCER_SLOT_TRACES", slot_prompts if isinstance(slot_prompts, str) else ",".join(slot_prompts))
@@ -442,6 +445,8 @@ class ProducerConfig:
     interleave: str = "random"
     slot_lengths: dict = None
     multi_turn_prob: float = 0.0
+    replay_log: str = ""
+    replay_speed: float = 1.0
 
 
 def _config_from_env() -> ProducerConfig:
@@ -470,6 +475,8 @@ def _config_from_env() -> ProducerConfig:
         pcc_threshold=float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.93")),
         interleave=interleave,
         multi_turn_prob=float(os.environ.get("PREFILL_PRODUCER_MULTI_TURN_PROB", "0.0")),
+        replay_log=os.environ.get("PREFILL_PRODUCER_REPLAY_LOG", "").strip(),
+        replay_speed=float(os.environ.get("PREFILL_PRODUCER_REPLAY_SPEED", "1.0")),
     )
 
 
@@ -596,6 +603,50 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
     return RunStats(
         resident=resident, total_pushes=total_pushes, push_ms=push_ms, completed=completed, wall_s=now_fn() - start
     )
+
+
+def replay_schedule(records, *, push_fn, speed: float = 1.0, now_fn=time.perf_counter, sleep_fn=time.sleep):
+    """Push captured H2D inject records in order; the replay counterpart of run_schedule.
+
+    ``speed`` scales the recorded inter-push gaps: 1.0 replays them as captured, 2.0 twice as fast,
+    and 0 pushes back to back. Pushes are scheduled on the captured clock, not by gap from the previous
+    push: one that falls behind goes out immediately, so a slow push does not delay every later one.
+    """
+    timed = speed > 0 and all(r.t_s is not None for r in records)
+    resident: dict = {}
+    push_ms: list = []
+    completed = 0
+    start = now_fn()
+    for rec in records:
+        if timed:
+            delay = start + (rec.t_s - records[0].t_s) / speed - now_fn()
+            if delay > 0:
+                sleep_fn(delay)
+        push_ms.append(push_fn(rec.slot_id, rec.chunk_idx, rec.actual_start, rec.actual_end, rec.actual_isl))
+        resident[rec.slot_id] = _SlotFill(real_len=rec.actual_end)
+        if rec.actual_end == rec.actual_isl:
+            completed += 1
+    return RunStats(
+        resident=resident, total_pushes=len(records), push_ms=push_ms, completed=completed, wall_s=now_fn() - start
+    )
+
+
+def _load_replay_records(cfg: ProducerConfig):
+    if not cfg.replay_log:
+        return None
+    if cfg.verify:
+        raise ValueError(
+            "PREFILL_PRODUCER_REPLAY_LOG does not support PREFILL_PRODUCER_CHECK_PCC=1: the log carries no "
+            "tokens, so there is no golden for the replayed KV."
+        )
+    records = load_inject_log(cfg.replay_log, chunk_size=CHUNK_SIZE, max_seq_len=MAX_SEQ_LEN, num_slots=cfg.num_users)
+    timed = cfg.replay_speed > 0 and all(r.t_s is not None for r in records)
+    span_s = records[-1].t_s - records[0].t_s if timed else 0.0
+    logger.info(
+        f"[producer] replaying {len(records)} pushes over {len({r.slot_id for r in records})} slot(s) from "
+        f"{cfg.replay_log} ({f'{span_s:.1f}s captured, speed x{cfg.replay_speed}' if timed else 'back to back'})"
+    )
+    return records
 
 
 def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
@@ -1421,7 +1472,7 @@ def _resolve_slot_prompts(cfg: ProducerConfig):
     if not spec:
         trace = resolve_trace_dir(default)
         slot_traces = {s: trace for s in range(cfg.num_users)}
-        pool_tokens = MAX_SEQ_LEN if cfg.multi_turn_prob > 0 else cfg.chunks_max * CHUNK_SIZE
+        pool_tokens = MAX_SEQ_LEN if cfg.multi_turn_prob > 0 or cfg.replay_log else cfg.chunks_max * CHUNK_SIZE
         return slot_traces, None, {trace: _load_token_pool(trace, pool_tokens)}
 
     entries = [e.strip() for e in spec.split(",") if e.strip()]
@@ -1549,12 +1600,14 @@ def main() -> None:
         logger.error("[producer] multi-rank requires PREFILL_PRODUCER_CHECK_PCC=1 (all ranks verify).")
         sys.exit(1)
     _require_shared_table_path(world_size)
+    replay_records = _load_replay_records(cfg)
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
     timeout_s = int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60"))
     logger.info(
         f"[producer] service_id={service_id!r} users={cfg.num_users} chunks=[{cfg.chunks_min},{cfg.chunks_max}] "
         f"max_requests={cfg.max_requests} duration={cfg.duration_s}s p_gap={cfg.p_gap} p_burst={cfg.p_burst} "
-        f"mid_end={cfg.mid_chunk_end_prob} interleave={cfg.interleave} verify={cfg.verify} seed={cfg.seed}"
+        f"mid_end={cfg.mid_chunk_end_prob} interleave={cfg.interleave} verify={cfg.verify} seed={cfg.seed} "
+        f"replay_log={cfg.replay_log or None}"
     )
 
     service = ttnn.H2DStreamService.connect(service_id, timeout_ms=timeout_s * 1000)
@@ -1602,7 +1655,10 @@ def main() -> None:
             _drain_layer_acks(ack_channel, ack_layers * warmup_chunks)
         logger.info("[producer] warmup complete; starting the measured request")
 
-    stats = run_schedule(cfg, push_fn=push_chunk)
+    if replay_records is None:
+        stats = run_schedule(cfg, push_fn=push_chunk)
+    else:
+        stats = replay_schedule(replay_records, push_fn=push_chunk, speed=cfg.replay_speed)
     service.barrier()
 
     sorted_ms = sorted(stats.push_ms)
