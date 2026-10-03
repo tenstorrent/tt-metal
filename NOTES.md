@@ -8,8 +8,9 @@ Code (ttp/t111-denoise-host-overhead-cut-prompt-staging, pushed):
   LTX_E2E_AB_ENV / LTX_E2E_AB_ENV_ONCE A/B hooks. CPU: test_ltx_stage_prompts.py 8 pass.
 - ea85208b939: tmp/t111/run111.sh + driver.sh.
 
-Device run: blx03, attempt 2 (attempt 1 = job 459, collection error, fixed in e686d3c0cf0; logs in /var/tmp/fasth3/t111/attempt1). Job ID in driver.log (driver /var/tmp/fasth3/t111/driver.sh, log /var/tmp/fasth3/t111/driver.log,
-job log /var/tmp/fasth3/t111/run111.log). 544x960/145f traced, fresh prompts, gen0 capture,
+Device run: blx03, attempt 3 = job 465 (attempt 1 = job 459, collection error, fixed in e686d3c0cf0, logs in attempt1/;
+attempt 2 = job 462, 544x960 fails generate()'s H,W %64 assert, now 576x1024 in 42b431c02b3, logs in attempt2/). Job ID in driver.log (driver /var/tmp/fasth3/t111/driver.sh, log /var/tmp/fasth3/t111/driver.log,
+job log /var/tmp/fasth3/t111/run111.log). 576x1024/145f traced, fresh prompts, gen0 capture,
 gens 1,3 = baseline, gens 2,4 = HOST_COPY + LATENT_STATS=0 (gen 2 also runs the bit-identity check).
 
 Next step when T111_DRIVER_DONE appears:
