@@ -1,22 +1,18 @@
-# t48 notes: all LTX-2.5 wins on one branch
+# t99 NOTES: fused RMSNorm + residual add (LTX_FUSE_NORM_ADD=1), blx03 2x4 A/B
 
-Branch ttp/t48-ltx25-integrated (= ttp/t48-integrate-all-ltx-2-5-wins-on-one-branch), base t36 16ba9a383dc.
-Merged: t20+t40 (9e336c44b71, includes 0533827a419), t13 (eee3baf7c0d), t18 (63902277007),
-t44 tip (1968790b040 + its A/B harness), t8 ltx_eval harness. Python-only diff against t36.
+Code: c6073fcc69e on ttp/t99-t93-4-fold-resnet-residual-add-into-next (Kevin's dual-output RMSNorm from f9cc61e24ad
++ row-major residual fix for W=15 + flat RM tile-row count + LTXUNetMidBlock3D wiring). Not compiled locally.
+Job scripts: tmp/blx03/t99/ (6afe1031681). Stage branch ttp/t99-stage = t99 + t96 trace harness (057e841c056,
+489e09bcd36), staged to blx03:/var/tmp/fasth3/t99/src.
 
-Conflicts:
-- pipeline_ltx_distilled.py: t13 and t40 both capture the Gemma encode trace after gen #0. Kept t40's
-  open_trace_gate() + capture_trace() (guarded by _trace_captured). t13's open_trace_gate(capture_prompt=) was removed in t55 (no caller).
-- utils/video.py: t18's YuvVideoExport (worker-thread video encode) + t13's zero-copy frame wrap and start_encoding;
-  the AAC encode runs in finish() before joining the worker, so it overlaps the video encode as in t13.
-  test_yuv_export_encodes_audio_alongside_video now gates the video worker on the audio encode starting
-  (fails if finish() encodes audio after the join; checked).
-- test_ltx_export_latency.py: gemma -> gemma3 import path.
-
-CPU tests (python_env, PYTHONPATH=worktree): export/trace/eval/cache/ltx set (13 files) 78 passed, 8 skipped;
-13 pre-existing failures in test_ltx_euler_tail.py and test_ltx_embedding_cache_identity.py (they read
-models/tt_dit/encoders/gemma/, renamed to gemma3); same 13 fail on the t36 base tree.
-Fold CPU reference (--noconftest): 5 passed. The 78 include the ltx_eval harness (8) and the 13 export/trace tests.
-
-Device: not run (blx03 paused; full-mesh barred by the 22:10 rule). Ready job: tmp/READY_48.md, tmp/blx03/run48.sh.
-Next: when the user allows full-mesh runs on blx03, follow tmp/READY_48.md (setup, one job, timings, ltx_eval vs t20).
+## Running on blx03 (launched 2026-10-03 06:59 UTC)
+- driver: /var/tmp/fasth3/t99/driver.log, marker "T99_DRIVER_DONE <stage> <rc>"; build log /var/tmp/fasth3/t99/build.log
+  (worktree ~/fasth3/t99 at c6073fcc69e, own build). Job log /var/tmp/fasth3/t99/run99.log.
+- stages: build !=0 -> compile error, read build.log, fix, push, relaunch driver (T99_REV=<new>).
+  ab 9 = drop/ERROR/reboot during OUR job -> STOP ALL device work on every galaxy, report. ab 8 = broker never healthy.
+  ab 0 = done. ab other = test failure: grep T99_PART1_EXIT / T99_DECODE*_EXIT / RS_OK / AB / CMP99 in run99.log.
+- results: "AB arm=eager/traced ... min=" for fuse0 and fuse1 (t96 baseline traced 445 ms decode),
+  "CMP99 ... psnr_db pcc" fused vs unfused.
+- relaunch: ssh g14blx03 'cd /var/tmp/fasth3/t99 && T99_REV=<rev> setsid nohup bash src/tmp/blx03/t99/driver99.sh > driver.out 2>&1 < /dev/null &'
+  (re-stage first: bash tmp/blx03/t99/stage99.sh ttp/t99-stage)
+- cleanup when done: ~/fasth3/t99 worktree+build on blx03 (git -C ~/fasth3/tt-metal worktree remove --force), /var/tmp/fasth3/t99/jit, fuse*/ .pt
