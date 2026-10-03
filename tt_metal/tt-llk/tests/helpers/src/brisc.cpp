@@ -5,6 +5,9 @@
 #include <cstdint>
 #include <type_traits>
 
+// Ick! We have to tell ckernel_ops.h that we're using TTI_ macros.
+// This is just wrong and should be fixed. See #58141
+#define LLK_BOOT_BRISC 1
 #include "boot.h"
 #include "counters.h"
 
@@ -12,8 +15,11 @@
 #ifdef LLK_BOOT_MODE_BRISC
 
 // Mailbox addresses
-extern const volatile char __runtime_args_start[];
-static const mailbox_t mailboxes_arr = reinterpret_cast<mailbox_t>(reinterpret_cast<std::uintptr_t>(__runtime_args_start) - 0x48U);
+#ifdef COVERAGE
+static const mailbox_t mailboxes_arr = reinterpret_cast<mailbox_t>(0x6DFB8U);
+#else
+static const mailbox_t mailboxes_arr = reinterpret_cast<mailbox_t>(0x1FFB8U);
+#endif
 
 #ifdef ARCH_WORMHOLE
 #define ARCH_CYCLE_MICRO_SECOND 1000

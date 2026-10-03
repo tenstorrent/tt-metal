@@ -200,6 +200,38 @@
 #include "api/compute/eltwise_unary/mish.h"
 #endif
 
+#ifdef SFPU_OP_RDIV_INCLUDE
+#include "api/compute/eltwise_unary/rdiv.h"
+#endif
+
+#ifdef SFPU_OP_TANH_DERIVATIVE_INCLUDE
+#include "api/compute/eltwise_unary/tanh_derivative.h"
+#endif
+
+#ifdef SFPU_OP_INT_SUM_INCLUDE
+#include "api/compute/eltwise_unary/sfpu_int_sum.h"
+#endif
+
+#ifdef SFPU_OP_LERP_INCLUDE
+#include "api/compute/eltwise_unary/lerp.h"
+#endif
+
+#ifdef SFPU_OP_ADDCDIV_INCLUDE
+#include "api/compute/eltwise_unary/addcdiv.h"
+#endif
+
+#ifdef SFPU_OP_ADDCMUL_INCLUDE
+#include "api/compute/eltwise_unary/addcmul.h"
+#endif
+
+#ifdef SFPU_OP_SNAKE_BETA_INCLUDE
+#include "api/compute/eltwise_unary/snake_beta.h"
+#endif
+
+#ifdef SFPU_OP_MASK_INCLUDE
+#include "api/compute/mask.h"
+#endif
+
 #ifdef SFPU_OP_COMPUTE_KERNEL_API_INCLUDE
 #include "api/compute/compute_kernel_api.h"
 #endif
@@ -232,34 +264,38 @@
 #include "api/compute/copy_dest_values.h"
 #endif
 
-#if TT_POLY_BACKWARD_CELU_BW_INCLUDE
-#include "api/compute/eltwise_unary/celu_bw_tt_poly_bf16.h"
+#ifdef SFPU_OP_BINARY_ISCLOSE_INCLUDE
+#include "api/compute/isclose.h"
 #endif
 
-#if TT_POLY_BACKWARD_ELU_BW_INCLUDE
-#include "api/compute/eltwise_unary/elu_bw_tt_poly_bf16.h"
+#ifdef SFPU_OP_BINARY_FMOD_INCLUDE
+#include "api/compute/binary_fmod.h"
 #endif
 
-#if TT_POLY_BACKWARD_ERF_BW_INCLUDE
-#include "api/compute/eltwise_unary/erf_bw_tt_poly_bf16.h"
+#ifdef SFPU_OP_BINARY_REMAINDER_INCLUDE
+#include "api/compute/binary_remainder.h"
 #endif
 
-#if TT_POLY_FACTOR_HARDSHRINK_BW_INCLUDE
-#include "api/compute/eltwise_unary/hardshrink_bw_tt_poly_bf16.h"
+#ifdef SFPU_OP_BINARY_DIV_INT32_INCLUDE
+#include "api/compute/div_int32_sfpu.h"
 #endif
 
-#if TT_POLY_BACKWARD_HARDSIGMOID_BW_INCLUDE
-#include "api/compute/eltwise_unary/hardsigmoid_bw_tt_poly_bf16.h"
+#ifdef SFPU_OP_BINARY_DIV_INT32_FLOOR_INCLUDE
+#include "api/compute/div_int32_floor.h"
 #endif
 
-#if TT_POLY_BACKWARD_HARDSWISH_BW_INCLUDE
-#include "api/compute/eltwise_unary/hardswish_bw_tt_poly_bf16.h"
+#ifdef SFPU_OP_BINARY_BITWISE_INCLUDE
+#include "api/compute/binary_bitwise_sfpu.h"
 #endif
 
-#if TT_POLY_FACTOR_HARDTANH_BW_INCLUDE
-#include "api/compute/eltwise_unary/hardtanh_bw_tt_poly_bf16.h"
+#ifdef SFPU_OP_BINARY_SUB_INT_INCLUDE
+#include "api/compute/sub_int_sfpu.h"
 #endif
 
-#if TT_POLY_FACTOR_SOFTSHRINK_BW_INCLUDE
-#include "api/compute/eltwise_unary/softshrink_bw_tt_poly_bf16.h"
+#ifdef SFPU_OP_SITU_GLU_INCLUDE
+#include "api/compute/situ_glu.h"
+#endif
+
+#ifdef SFPU_OP_CLAMPED_SILU_GLU_INCLUDE
+#include "api/compute/clamped_silu_glu.h"
 #endif
