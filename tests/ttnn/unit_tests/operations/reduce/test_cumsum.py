@@ -363,3 +363,107 @@ def test_cumsum_disable_compensated_sum(device):
         "disable_compensated_sum=True did not change the result: the plain path stayed within the "
         "compensated bound, so the flag is not reaching the accumulation kernel"
     )
+
+
+def _assert_fp32_matches_torch_semantics(tt_out, torch_ref):
+    """Exact comparison against torch for inf/nan/int-valued data.
+
+    The values involved (0, +/-inf, NaN, small integers and their sums) are exact in
+    both fp32 and the double-accumulated torch reference, and inf/nan/sign semantics
+    of a sequential sum are exactly what the fix restores. NaN != NaN under ==, so
+    positions where both sides are NaN are matched explicitly."""
+    out = ttnn.to_torch(tt_out)
+    assert out.dtype == torch.float32
+    assert out.shape == torch_ref.shape
+    eq = (out == torch_ref) | (torch.isnan(out) & torch.isnan(torch_ref))
+    assert eq.all(), f"\nttnn: {out}\ntorch: {torch_ref}"
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        [1.0, float("inf"), 1.0, 1.0],  # the repro from the report: +inf mid-scan
+        [1.0, float("-inf"), 1.0, 1.0],  # -inf mid-scan
+        [float("inf"), 1.0, 2.0],  # inf first
+        [float("-inf"), 1.0, 2.0],
+        [1.0, float("nan"), 1.0, 1.0],  # NaN must propagate as NaN, from its position on
+        [float("inf"), float("-inf"), 1.0],  # inf + -inf = NaN, then NaN forever
+        [3e38, 3e38, 1.0, -5.0],  # finite-input overflow: total goes +inf and stays
+        [-3e38, -3e38, 1.0],  # finite-input overflow to -inf
+        [1.0, 2.0, 3.0, 4.0],  # plain finite case must stay exact
+    ],
+)
+def test_cumsum_fp32_inf_nan_semantics(values, device):
+    """FP32 cumsum must preserve IEEE/PyTorch sequential-sum semantics around
+    infinities and NaN (#58986). The compensated (Kahan) path used to leave
+    inf - inf = NaN in the compensation term after the total became non-finite,
+    turning every later output into NaN instead of carrying +/-inf forward."""
+    torch_input = torch.tensor([values], dtype=torch.float32)
+    torch_ref = torch.cumsum(torch_input, dim=-1)
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    output = ttnn.cumsum(input_tensor, dim=-1)
+    _assert_fp32_matches_torch_semantics(output, torch_ref)
+
+
+@pytest.mark.parametrize("dim", [-1, 1])
+def test_cumsum_fp32_long_scan_with_inf(dim, device):
+    """Multi-tile scan with an early infinity: nothing after the inf may be NaN
+    and every later output must be +inf, matching torch. Exercises the
+    compensation round-trip through the circular buffer across many tiles."""
+    n = 72192  # 2256 tiles along the scan, one core: the long-scan shape from #55542
+    torch.manual_seed(29112024)
+    along = torch.ones(n, dtype=torch.float32)
+    along[100] = float("inf")
+    if dim == 1:
+        torch_input = along.view(1, n, 1).expand(1, n, 9).contiguous()
+    else:
+        torch_input = along.view(1, 1, n).expand(1, 9, n).contiguous()
+    torch_ref = torch.cumsum(torch_input, dim=dim)
+
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    output = ttnn.cumsum(input_tensor, dim=dim)
+    _assert_fp32_matches_torch_semantics(output, torch_ref)
+
+
+def test_cumsum_fp32_independent_rows_inf(device):
+    """One row hits +inf early; every other row must stay exactly correct.
+    The sanitation is per lane, so a poisoned row must not disturb its
+    neighbours in the same tile."""
+    torch.manual_seed(29112024)
+    base = torch.arange(4 * 64, dtype=torch.float32).view(4, 64)
+    torch_input = base.clone()
+    torch_input[1, 10] = float("inf")  # second row poisoned mid-scan
+    torch_input[3, 63] = float("nan")  # last row poisoned at the very end
+    torch_ref = torch.cumsum(torch_input, dim=-1)
+
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    output = ttnn.cumsum(input_tensor, dim=-1)
+    _assert_fp32_matches_torch_semantics(output, torch_ref)
+
+
+def test_cumsum_fp32_random_data_pattern(device):
+    """Random fp32 data with an injected inf: inf/nan/sign pattern must match
+    torch exactly (values before the inf cannot be compared bitwise against a
+    double-accumulated reference, so only the pattern is checked there)."""
+    torch.manual_seed(29112024)
+    torch_input = torch.randn(2, 1, 3584, dtype=torch.float32)
+    torch_input[0, 0, 700] = float("inf")
+    torch_input[1, 0, 2000] = float("-inf")
+    torch_ref = torch.cumsum(torch_input, dim=-1)
+
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    output = ttnn.to_torch(ttnn.cumsum(input_tensor, dim=-1))
+
+    # From each row's non-finite point onward the outputs must match torch
+    # exactly (== is sign-sensitive on inf; NaN handled separately).
+    nonfinite_ref = torch.isinf(torch_ref) | torch.isnan(torch_ref)
+    exact_ok = (output == torch_ref) | (torch.isnan(output) & torch.isnan(torch_ref))
+    assert (exact_ok | ~nonfinite_ref).all(), f"\nttnn: {output}\ntorch: {torch_ref}"
+    # finite prefix (before each row's inf) must still be finite and accurate
+    prefix = ~torch.isinf(torch_ref) & ~torch.isnan(torch_ref)
+    ref64 = torch.cumsum(torch_input.to(torch.float64), dim=-1)
+    err = (output.to(torch.float64) - ref64).abs()
+    bound = 8.0 * 2.0**-23 * torch.cumsum(torch_input.to(torch.float64).abs(), dim=-1)
+    assert ((err <= bound) | ~prefix).all(), (
+        f"finite prefix accuracy regressed: {(err / bound.clamp(min=1e-300)).max().item():.1f}x bound"
+    )
