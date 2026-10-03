@@ -13,7 +13,8 @@ from transformers import CLIPTextModel, CLIPTextModelWithProjection
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_wormhole_b0, profiler
-from models.demos.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
+from models.demos.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager, resolve_lora_scales
+from models.demos.stable_diffusion_xl_base.lora.tt_te_lora_weights_manager import TtTextEncoderLoRAWeightsManager
 from models.demos.stable_diffusion_xl_base.refiner.tt.model_configs import load_refiner_model_optimisations
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
     batch_encode_prompt_on_device,
@@ -84,7 +85,11 @@ class TtSDXLPipeline(LightweightModule):
         self.pipeline_config = pipeline_config
         self._reset_num_inference_steps()
 
+        # Two managers, one per component: the UNet's fuses deltas onto weights it
+        # allocated itself, the text encoders' hands merged torch weights back through a
+        # reload hook. Neither drives the other's weights; this pipeline sequences them.
         self._lora_weights_manager = TtLoRAWeightsManager(self.ttnn_device, self.torch_pipeline)
+        self._te_lora_weights_manager = TtTextEncoderLoRAWeightsManager(self.torch_pipeline)
 
         # Validate config parameters once at initialization
         self.__validate_config()
@@ -188,18 +193,50 @@ class TtSDXLPipeline(LightweightModule):
         )
         return shape
 
-    def fuse_lora(self, lora_scale=1.0):
-        if self._lora_weights_manager.has_lora_adapter():
-            logger.info("Fusing LoRA weights on TT device...")
-            with ttnn.distribute(ttnn.ReplicateTensorToMesh(self.ttnn_device)):
-                self._lora_weights_manager.fuse_lora(lora_scale=lora_scale)
+    def fuse_lora(self, lora_scale=1.0, clip_scale=None):
+        """Fuse the loaded LoRA. ``clip_scale`` defaults to ``lora_scale``; 0.0 skips
+        the text encoders entirely."""
+        lora_scale, clip_scale = resolve_lora_scales(lora_scale, clip_scale)
+
+        if not (
+            self._lora_weights_manager.has_lora_adapter()
+            or self._lora_weights_manager.is_fused
+            or self._te_lora_weights_manager.is_fused
+        ):
+            logger.warning("No LoRA weights loaded. Please load LoRA weights with load_lora_weights() before fusing.")
+
+        # The UNet manager's from_torch calls pass no mesh_mapper, so the replicate
+        # context must be established here. The text-encoder bind uploads its factors the
+        # same way, so it belongs inside the context too.
+        with ttnn.distribute(ttnn.ReplicateTensorToMesh(self.ttnn_device)):
+            self._lora_weights_manager.fuse_lora(lora_scale)
+            self._te_lora_weights_manager.fuse(clip_scale)
 
     def load_lora_weights(self, lora_path):
         self._lora_weights_manager.load_lora_weights(lora_path)
+        # Read after the load so a rejected adapter (DoRA, unsupported ops), which the
+        # UNet manager unloads again, correctly leaves no text-encoder components.
+        self._te_lora_weights_manager.refresh_components()
+        if self._te_lora_weights_manager.affects_unsupported_ops():
+            logger.warning("LoRA weights affect unsupported text-encoder operations; TE LoRA not applied.")
+            self._te_lora_weights_manager.unload()
+            return
+        with ttnn.distribute(ttnn.ReplicateTensorToMesh(self.ttnn_device)):
+            self._te_lora_weights_manager.register_adapter()
 
     def unload_lora_weights(self):
         with ttnn.distribute(ttnn.ReplicateTensorToMesh(self.ttnn_device)):
             self._lora_weights_manager.unload_lora_weights()
+            self._te_lora_weights_manager.unload()
+
+    def get_lora_status(self):
+        """Report which components hold the currently-active LoRA (for the runner/server)."""
+        adapter_state = self._lora_weights_manager.adapter_state()
+        return {
+            "unet": bool(adapter_state["fused"]),
+            "text_encoder": bool(self._te_lora_weights_manager.is_fused),
+            "skipped_reason": adapter_state["skipped_reason"],
+        }
 
     def set_num_inference_steps(self, num_inference_steps: int):
         # When changing num_inference_steps, the timesteps and latents need to be recreated.
@@ -521,9 +558,11 @@ class TtSDXLPipeline(LightweightModule):
                             prompt_embeds[j : j + 1],  # Keep batch dimension
                             negative_prompt_embeds[j : j + 1] if negative_prompt_embeds is not None else None,
                             pooled_prompt_embeds[j : j + 1],
-                            negative_pooled_prompt_embeds[j : j + 1]
-                            if negative_pooled_prompt_embeds is not None
-                            else None,
+                            (
+                                negative_pooled_prompt_embeds[j : j + 1]
+                                if negative_pooled_prompt_embeds is not None
+                                else None
+                            ),
                         )
                     )
         else:
@@ -725,9 +764,10 @@ class TtSDXLPipeline(LightweightModule):
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("prepare_input_tensors")
 
-    def generate_images(self, return_latents=False):
+    def generate_images(self, return_latents=False, on_step=None):
         # SDXL inference run.
         # If return_latents=True, skip VAE decoding and return latents instead of images
+        # on_step: optional callback(step, total) invoked once per denoise iteration
         assert self.image_processing_compiled, "Image processing is not compiled"
         assert self.generated_input_tensors, "Input tensors are not re/generated"
 
@@ -758,6 +798,7 @@ class TtSDXLPipeline(LightweightModule):
             guidance_rescale=self.guidance_rescale,
             one_minus_guidance_rescale=self.one_minus_guidance_rescale,
             return_latents=return_latents,
+            on_step=on_step,
         )
         self._reset_num_inference_steps()
         return imgs
@@ -831,8 +872,19 @@ class TtSDXLPipeline(LightweightModule):
 
         # 4. Load encoders
         if pipeline_config.encoders_on_device:
+            # lora_enabled swaps in tt_dit's LoRA-capable linears so a text-encoder LoRA
+            # can be fused in place on device, the way the UNet already is.
             self.tt_text_encoder, self.tt_text_encoder_2 = create_tt_clip_text_encoders(
-                self.torch_pipeline, self.ttnn_device
+                self.torch_pipeline, self.ttnn_device, lora_enabled=True
+            )
+            # The manager cannot be handed these at construction: the encoders only
+            # exist here. Registering nothing (the host-encoder branch below) disables
+            # the TE LoRA path.
+            self._te_lora_weights_manager.register_encoders(
+                {
+                    "text_encoder": self.tt_text_encoder,
+                    "text_encoder_2": self.tt_text_encoder_2,
+                }
             )
         else:
             self.tt_text_encoder, self.tt_text_encoder_2 = None, None
