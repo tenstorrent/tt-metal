@@ -131,7 +131,7 @@ from .policy import (
 )
 from .references import encode_references, prepare_references, reference_condition_shapes, split_condition_blocks
 from .scheduler import MiniMaxH3Scheduler
-from .weights_minimax_h3 import resolve_weights_dir
+from .weights_minimax_h3 import LORA_PATH_ENV, resolve_weights_dir
 
 # ImageNet statistics; the video VAE emits normalized RGB and the pipeline reverts it. Imported from
 # `conditioning` rather than restated: the keyframe path normalizes *into* the VAE with these and the
@@ -145,7 +145,8 @@ MINIMAX_H3_PIXEL_STD = _MINIMAX_H3_PIXEL_STD
 # conditioning rows, which sit at max(t, 0.999). See `references.py`.
 MINIMAX_H3_AUDIO_CONDITION_TIMESTEP = 1.0
 
-# Read from the two scheduler_config.json files, which hold nothing else.
+# Read from the two scheduler_config.json files, which hold nothing else. A pipeline can be built
+# with other shifts: a distillation adapter is trained against one sigma grid and says so in its card.
 VIDEO_SHIFT = 12.0
 AUDIO_SHIFT = 3.0
 
@@ -448,6 +449,8 @@ class MiniMaxH3Pipeline:
         topology: ttnn.Topology | None = None,
         coresident: bool | None = None,
         task: str = "t2va",
+        video_shift: float | None = None,
+        audio_shift: float | None = None,
         audio_split_mode: str | None = None,
         audio_t_factor: int | None = None,
         audio_trace: bool | None = None,
@@ -462,6 +465,8 @@ class MiniMaxH3Pipeline:
     ) -> None:
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
+        self.video_shift = VIDEO_SHIFT if video_shift is None else float(video_shift)
+        self.audio_shift = AUDIO_SHIFT if audio_shift is None else float(audio_shift)
         supplied = (tp_axis, sp_axis, num_links, topology)
         preset = resolve_mesh_preset(tuple(mesh_device.shape), required=any(v is None for v in supplied))
         tp_axis = preset["tp_axis"] if tp_axis is None else tp_axis
@@ -650,6 +655,8 @@ class MiniMaxH3Pipeline:
         num_links: int | None = None,
         topology: ttnn.Topology | None = None,
         task: str = "t2va",
+        video_shift: float | None = None,
+        audio_shift: float | None = None,
         audio_split_mode: str | None = None,
         audio_t_factor: int | None = None,
         audio_trace: bool | None = None,
@@ -662,6 +669,7 @@ class MiniMaxH3Pipeline:
         adaln_slot_roles: tuple[str, ...] | None = None,
         warmup: bool = True,
         coresident: bool | None = None,
+        **subclass_kwargs,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
 
@@ -670,7 +678,19 @@ class MiniMaxH3Pipeline:
 
         `trace_denoise` defaults to the mesh preset; `bucket_ladder`, `arena_caps` and `adaln_slot_roles`
         default to the task's envelope.
+
+        A deployment that names an adapter through `MINIMAX_H3_LORA_PATH` gets the Turbo pipeline from
+        here: the serving runner builds from a mesh, a weights directory and an output type alone, so the
+        environment is the only way an adapter can reach it. `subclass_kwargs` go to the constructor of
+        whichever subclass is being built.
         """
+        if cls is MiniMaxH3Pipeline and os.environ.get(LORA_PATH_ENV):
+            # Nothing but the parameters is bound yet, so `locals()` is exactly the call to forward.
+            # The import comes after, since it would otherwise bind a name into this frame too.
+            forwarded = {k: v for k, v in locals().items() if k not in ("cls", "subclass_kwargs")}
+            from .pipeline_minimax_h3_turbo import MiniMaxH3TurboPipeline
+
+            return MiniMaxH3TurboPipeline.create_pipeline(**forwarded, **subclass_kwargs)
         transformer_subfolder = "transformer_ref" if task == "ref2va" else "transformer"
         weights_dir = resolve_weights_dir(
             transformer_subfolder,
@@ -687,6 +707,8 @@ class MiniMaxH3Pipeline:
             num_links=num_links,
             topology=topology,
             task=task,
+            video_shift=video_shift,
+            audio_shift=audio_shift,
             audio_split_mode=audio_split_mode,
             audio_trace=audio_trace,
             audio_t_factor=audio_t_factor,
@@ -699,6 +721,7 @@ class MiniMaxH3Pipeline:
             adaln_slot_roles=adaln_slot_roles,
             warmup=warmup,
             coresident=coresident,
+            **subclass_kwargs,
         )
 
     def _read_config(self, subfolder: str) -> dict:
@@ -1703,8 +1726,8 @@ class MiniMaxH3Pipeline:
         # Both schedules. Built here rather than after the layout because the keyframe step below needs
         # `scale_noise`, which takes its `t` at face value and works before `set_timesteps` -- but they
         # are set up fully so there is only one place that decides the schedule.
-        scheduler = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
-        audio_scheduler = MiniMaxH3Scheduler(shift=AUDIO_SHIFT)
+        scheduler = MiniMaxH3Scheduler(shift=self.video_shift)
+        audio_scheduler = MiniMaxH3Scheduler(shift=self.audio_shift)
         scheduler.set_timesteps(num_inference_steps)
         audio_scheduler.set_timesteps(num_inference_steps)
 
@@ -1836,8 +1859,8 @@ class MiniMaxH3Pipeline:
         with event_section(on_event, "encoder"):
             prompt_embeds, text_token_tags = self.encode_prompt(prompt, references=prepared)
 
-        scheduler = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
-        audio_scheduler = MiniMaxH3Scheduler(shift=AUDIO_SHIFT)
+        scheduler = MiniMaxH3Scheduler(shift=self.video_shift)
+        audio_scheduler = MiniMaxH3Scheduler(shift=self.audio_shift)
         scheduler.set_timesteps(num_inference_steps)
         audio_scheduler.set_timesteps(num_inference_steps)
 
