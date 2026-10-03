@@ -565,7 +565,8 @@ TernaryCorePartition compute_core_partition(
     // zero_start_grid is a flag to indicate that we are using a single rectangular grid that starts at (0, 0)
     // as well as having the sharded tensors (if any) start at (0, 0)
     const auto& all_device_cores = operation_attributes.worker_grid;
-    if (grid.size() == 1) {
+    // A multi-range worker grid would leave cores past its first range without args.
+    if (grid.size() == 1 && all_device_cores.size() == 1) {
         const auto& cr = *all_device_cores.ranges().begin();
         if (cr.start_coord.x == 0 && cr.start_coord.y == 0) {
             if (p.has_sharding) {
