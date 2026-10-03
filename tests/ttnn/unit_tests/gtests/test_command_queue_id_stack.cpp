@@ -83,6 +83,14 @@ TEST(CommandQueueIdStack, PopOnEmptyStackThrows) {
     EXPECT_EQ(get_current_command_queue_id_for_thread(), QueueId(0));
 }
 
+Tensor make_tile_tensor(MeshDevice* device) {
+    const tt::tt_metal::TensorLayout layout(
+        DataType::BFLOAT16,
+        tt::tt_metal::PageConfig(Layout::TILE),
+        MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM});
+    return ttnn::create_device_tensor(TensorSpec(Shape({1, 1, 32, 32}), layout), device);
+}
+
 using CommandQueueSelectionFixture = ttnn::MultiCommandQueueSingleDeviceFixture;
 
 // The central boundary of the design: Metal has no implicit queue state (no-arg mesh_command_queue() is always
@@ -135,11 +143,7 @@ TEST_F(CommandQueueSelectionFixture, GlobalSemaphoreResetFollowsSelectedQueue) {
     for (uint32_t i = 0; i < num_elements; i++) {
         host_data[i] = bfloat16(2.0f);
     }
-    const tt::tt_metal::TensorLayout layout(
-        DataType::BFLOAT16,
-        tt::tt_metal::PageConfig(Layout::TILE),
-        MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM});
-    auto input = ttnn::create_device_tensor(TensorSpec(Shape({1, 1, 32, 32}), layout), device);
+    auto input = make_tile_tensor(device);
     ttnn::write_buffer(QueueId(0), input, {host_data});
     ttnn::queue_synchronize(device->mesh_command_queue(0));
 
@@ -171,14 +175,6 @@ TEST_F(CommandQueueSelectionFixture, GlobalSemaphoreResetFollowsSelectedQueue) {
 }
 
 using SingleCommandQueueFixture = ttnn::TTNNFixtureWithDevice;
-
-Tensor make_tile_tensor(MeshDevice* device) {
-    const tt::tt_metal::TensorLayout layout(
-        DataType::BFLOAT16,
-        tt::tt_metal::PageConfig(Layout::TILE),
-        MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM});
-    return ttnn::create_device_tensor(TensorSpec(Shape({1, 1, 32, 32}), layout), device);
-}
 
 // Graph capture in NO_DISPATCH mode returns before the workload is enqueued, so the thread's queue is never looked up
 // and an op can be captured even under a queue id the device does not have.
