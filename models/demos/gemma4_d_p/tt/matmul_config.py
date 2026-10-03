@@ -48,8 +48,9 @@ def prefill_matmul_program_config(hidden_states, weight, grid_x, grid_y, fused_a
 def prefill_1d_matmul_program_config(
     hidden_states, weight, grid, fused_activation=None, per_core_n=None, max_m_tiles=None
 ):
-    """1D in0-multicast config for short-M prefill projections, or None when it does not apply. max_m_tiles raises
-    the short-M limit for a caller whose output skips the interleaved write.
+    """1D in0-multicast config for short-M prefill projections (up to max_m_tiles tile rows, by default
+    _MAX_SHORT_M_TILES), or None when it does not apply. A caller whose output skips the interleaved write may raise
+    the limit.
 
     With at most 8 tile rows of M, the 2D config uses only 8 of the grid's rows and reads each weight column
     block through one core. Here every core reads its own two weight columns from DRAM while the activations
