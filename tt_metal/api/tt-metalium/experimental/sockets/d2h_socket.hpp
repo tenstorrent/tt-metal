@@ -18,6 +18,7 @@ class IoWindow;
 
 namespace tt::tt_metal::experimental::detail {
 struct D2HSocketTryReadAccess;
+struct D2HSocketSenderCoordAccess;
 }  // namespace tt::tt_metal::experimental::detail
 
 namespace tt::tt_metal::distributed {
@@ -414,6 +415,7 @@ private:
     bool try_read_impl(void* data, uint32_t num_pages, bool notify_sender);
 
     friend struct tt::tt_metal::experimental::detail::D2HSocketTryReadAccess;
+    friend struct tt::tt_metal::experimental::detail::D2HSocketSenderCoordAccess;
 
     // Shared host-side init: pins host memory (or hugepage fallback), writes socket metadata
     // into `config_buffer_address_`, and configures the sender-side TLB. The caller must

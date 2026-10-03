@@ -50,6 +50,7 @@
 #include "device/device_manager.hpp"
 #include "dispatch/command_queue_common.hpp"
 #include "dispatch/dispatch_core_manager.hpp"
+#include "tt_metal/impl/buffers/d2h_socket_internal.hpp"
 #include "dispatch/dispatch_mem_map.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "llrt/hal.hpp"
@@ -998,7 +999,11 @@ uint64_t RealtimeProfilerManager::run_receiver_loop() {
     auto last_fifo_plot = std::chrono::steady_clock::now();
     while (!stop_.load(std::memory_order_acquire)) {
         const bool scan_sync_marker = finish_sync_busy_.load(std::memory_order_acquire);
-        const uint32_t num_pages = drain_all_devices(scan_sync_marker, page_buf, record_buf);
+        uint32_t num_pages = 0;
+        {
+            std::lock_guard<std::mutex> devices_lock(receiver_devices_mu_);
+            num_pages = drain_all_devices(scan_sync_marker, page_buf, record_buf);
+        }
         num_pages_received += num_pages;
         const auto now = std::chrono::steady_clock::now();
         if (now - last_fifo_plot >= kFifoPlotInterval) {
@@ -1039,6 +1044,33 @@ uint32_t RealtimeProfilerManager::drain_all_devices(
         ring_->writer().wake_readers();
     }
     return num_pages;
+}
+
+std::unique_lock<std::mutex> RealtimeProfilerManager::pause_receiver() {
+    return std::unique_lock<std::mutex>(receiver_devices_mu_);
+}
+
+void RealtimeProfilerManager::rebind_device_coordinates(
+    const MeshDeviceView& view, const std::unique_lock<std::mutex>& receiver_paused) {
+    TT_FATAL(
+        receiver_paused.owns_lock() && receiver_paused.mutex() == &receiver_devices_mu_,
+        "rebind_device_coordinates() requires the lock returned by pause_receiver()");
+    for (auto& dev_state : devices_) {
+        if (!dev_state.socket) {
+            continue;
+        }
+        try {
+            tt::tt_metal::experimental::detail::rebind_sender_device_coord(
+                *dev_state.socket, view.find_device(dev_state.chip_id));
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogMetal,
+                "[Real-time profiler] Device {} not found in the reshaped mesh view; its socket keeps the old "
+                "coordinate: {}",
+                dev_state.chip_id,
+                e.what());
+        }
+    }
 }
 
 uint64_t RealtimeProfilerManager::drain_receiver_on_shutdown() {
