@@ -146,6 +146,16 @@ constexpr auto TOPK_TIE_ORDER      = TOPK_LARGEST ? ckernel::sfpu::TopkTieOrder:
 constexpr std::uint32_t dst_index  = 0;
 constexpr VectorMode vector_mode   = VectorMode::RC_custom;
 
+inline std::uint32_t rebuild_direction()
+{
+    if constexpr (TOPK_PERF_RUNTIME_DIR)
+    {
+        volatile std::uint32_t dir = TOPK_SORT_DIRECTION; // opaque to the compiler, as a runtime argument is
+        return dir;
+    }
+    return TOPK_SORT_DIRECTION;
+}
+
 template <bool TILE0_SORTED>
 inline void issue_local_sort(const int end_phase)
 {
@@ -309,7 +319,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                         (APPROX, is_fp32_dest_acc_en, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED, TOPK_TIE_ORDER),
                                         dst_index,
                                         vector_mode,
-                                        TOPK_SORT_DIRECTION,
+                                        rebuild_direction(),
                                         it,
                                         TOPK_K,
                                         TOPK_LOGK,
@@ -341,7 +351,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                         (APPROX, is_fp32_dest_acc_en, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED, TOPK_TIE_ORDER),
                                         dst_index,
                                         vector_mode,
-                                        TOPK_SORT_DIRECTION,
+                                        rebuild_direction(),
                                         it,
                                         TOPK_K,
                                         TOPK_LOGK,

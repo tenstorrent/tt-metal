@@ -1044,11 +1044,13 @@ class ROPE(TemplateParameter):
 @dataclass
 class TOPK_PERF(TemplateParameter):
     """Knobs of the TopK pipeline perf kernel (sources/topk_perf.cpp): the network calls a step issues, whether
-    MATH_ISOLATE drops the datacopies, whether the local sort gets tile0_sorted."""
+    MATH_ISOLATE drops the datacopies, whether the local sort gets tile0_sorted, whether the rebuild gets its direction
+    at run time as the multi-core kernels pass it."""
 
     topk_phase: str = "full"
     topk_drop_copy: bool = False
     topk_tile0_sorted: bool = False
+    topk_runtime_dir: bool = False
 
     PHASES = {"full": 0, "sort": 1, "merge": 2, "rebuild": 3, "copy": 4, "fuse": 5}
 
@@ -1057,6 +1059,7 @@ class TOPK_PERF(TemplateParameter):
             f"constexpr int TOPK_PERF_PHASE = {self.PHASES[self.topk_phase]};",
             f"constexpr bool TOPK_PERF_DROP_COPY = {str(self.topk_drop_copy).lower()};",
             f"constexpr bool TOPK_PERF_TILE0_SORTED = {str(self.topk_tile0_sorted).lower()};",
+            f"constexpr bool TOPK_PERF_RUNTIME_DIR = {str(self.topk_runtime_dir).lower()};",
         ]
         return "\n".join(lines)
 

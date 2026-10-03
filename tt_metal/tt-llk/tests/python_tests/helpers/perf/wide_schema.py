@@ -138,6 +138,7 @@ DB_SCHEMA = [
     Column("topk_matrix_width", "int64", True, "configuration"),
     Column("topk_phase", "string", True, "configuration"),
     Column("topk_rank_stamped", "bool", True, "configuration"),
+    Column("topk_runtime_dir", "bool", True, "configuration"),
     Column("topk_sort_direction", "string", True, "configuration"),
     Column("topk_stable_sort", "bool", True, "configuration"),
     Column("topk_tag_bits", "int64", True, "configuration"),

@@ -25,45 +25,53 @@ pytestmark = [skip_for_quasar, skip_for_wormhole]
 DESC = TopKSortDirection.Descending
 RING_TILES = 16
 
-# (W, K, direction, sort mode, phase, drop_copy, tile0_sorted)
+# (W, K, direction, sort mode, phase, drop_copy, tile0_sorted, runtime_dir)
 PHASE_ROWS = (
     [
-        (4096, 32, DESC, "unstable", ph, True, False)
+        (4096, 32, DESC, "unstable", ph, True, False, False)
         for ph in ("full", "sort", "merge", "rebuild", "copy")
     ]
-    + [(4096, 32, DESC, "unstable", ph, False, False) for ph in ("full", "copy")]
+    + [(4096, 32, DESC, "unstable", ph, False, False, False) for ph in ("full", "copy")]
     + [
-        (4096, 64, DESC, "unstable", ph, True, False)
+        (4096, 64, DESC, "unstable", ph, True, False, False)
         for ph in ("full", "sort", "merge", "rebuild")
     ]
     + [
-        (4096, 32, DESC, "stable", ph, True, False)
+        (4096, 32, DESC, "stable", ph, True, False, False)
         for ph in ("sort", "merge", "rebuild")
     ]
     + [
-        (4096, 32, DESC, "fused", ph, True, False)
+        (4096, 32, DESC, "fused", ph, True, False, False)
         for ph in ("sort", "merge", "rebuild", "fuse")
     ]
     + [
-        (4096, 32, DESC, "rank_stamped", ph, True, False)
+        (4096, 32, DESC, "rank_stamped", ph, True, False, False)
         for ph in ("sort", "merge", "rebuild")
     ]
-    + [(4096, 64, DESC, m, "sort", True, False) for m in ("stable", "rank_stamped")]
     + [
-        (4096, 64, DESC, m, "sort", True, True)
+        (4096, 64, DESC, m, "sort", True, False, False)
+        for m in ("stable", "rank_stamped")
+    ]
+    + [
+        (4096, 64, DESC, m, "sort", True, True, False)
         for m in ("unstable", "stable", "rank_stamped")
     ]
+    + [
+        (4096, 64, DESC, m, "rebuild", True, False, False)
+        for m in ("stable", "fused", "rank_stamped")
+    ]
+    + [(4096, k, DESC, "unstable", "rebuild", True, False, True) for k in (32, 64)]
 )
 PHASE_IDS = [
-    f"w{w}-k{k}-{m}-{ph}{'-nocopy' if drop else ''}{'-tile0sorted' if t0 else ''}"
-    for w, k, d, m, ph, drop, t0 in PHASE_ROWS
+    f"w{w}-k{k}-{m}-{ph}{'-nocopy' if drop else ''}{'-tile0sorted' if t0 else ''}{'-rtdir' if rt else ''}"
+    for w, k, d, m, ph, drop, t0, rt in PHASE_ROWS
 ]
 
 
 @pytest.mark.perf
 @pytest.mark.parametrize("row", PHASE_ROWS, ids=PHASE_IDS)
 def test_perf_topk_phase(perf_report, row):
-    W, K, direction, sort_mode, phase, drop_copy, tile0_sorted = row
+    W, K, direction, sort_mode, phase, drop_copy, tile0_sorted, runtime_dir = row
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
     stable = sort_mode == "stable"
     fused = sort_mode == "fused"
@@ -87,6 +95,7 @@ def test_perf_topk_phase(perf_report, row):
                 topk_phase=phase,
                 topk_drop_copy=drop_copy,
                 topk_tile0_sorted=tile0_sorted,
+                topk_runtime_dir=runtime_dir,
             ),
         ],
         runtimes=[
