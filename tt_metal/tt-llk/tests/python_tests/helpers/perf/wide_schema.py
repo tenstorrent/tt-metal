@@ -132,6 +132,7 @@ DB_SCHEMA = [
     Column("ternary_scalar_bits", "int64", True, "configuration"),
     Column("throttle_level", "int64", True, "configuration"),
     Column("tilize", "string", True, "configuration"),
+    Column("top32_perf_kernel", "string", True, "configuration"),
     Column("unpack_transpose_faces", "string", True, "configuration"),
     Column("unpack_transpose_within_face", "string", True, "configuration"),
     Column("value_bits", "int64", True, "configuration"),

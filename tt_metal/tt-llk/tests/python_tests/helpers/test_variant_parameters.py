@@ -1191,6 +1191,30 @@ class TOP32_RM(TemplateParameter):
 
 
 @dataclass
+class TOP32_RM_PERF(TemplateParameter):
+    """Which top32_rm SFPU entry point ``top32_rm_perf.cpp`` times (see that file)."""
+
+    KERNELS = (
+        "phases_steps_desc",
+        "phases_steps_asc",
+        "merge_intra",
+        "merge_across",
+        "rebuild_desc_skip",
+        "rebuild_asc_skip",
+        "rebuild_desc_full",
+        "prep_desc",
+        "prep_asc",
+        "combine",
+        "final",
+    )
+
+    top32_perf_kernel: str = "phases_steps_desc"
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t TOP32_PERF_KERNEL = {self.KERNELS.index(self.top32_perf_kernel)}u;"
+
+
+@dataclass
 class ADD_TOP_ROW(TemplateParameter):
     add_top_row: bool
 
