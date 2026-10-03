@@ -34,6 +34,8 @@ VARIANTS = [
     (1, 1, 64, True, True, 1, 32),
     (1, 2, 64, True, False, 1, 32),
     (2, 1, 64, True, False, 1, 32),
+    (2, 2, 64, True, False, 1, 32),
+    (2, 2, 64, True, True, 1, 32),
 ]
 
 
