@@ -83,6 +83,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Width 1 fallback
     if (BLOCK_CT_DIM == 1)
     {
+        LLK_INIT_BEGIN
         {
             START_PERF_MEASURE("INIT")
             _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -96,6 +97,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 4 /* unpB_num_faces */);
             _llk_unpack_tilize_init_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false /* narrow_tile */);
         }
+        LLK_INIT_END;
         {
             START_PERF_MEASURE("TILE_LOOP")
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
@@ -111,6 +113,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         return;
     }
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         // Fast-tilize uses compat 16-bit DEST. When dest_acc=Yes, format inference
@@ -146,6 +149,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Base address is programmed per-call inside _llk_unpack_fast_tilize_block_
         // via _llk_unpack_configure_single_address_ (respects current cfg context).
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
@@ -210,6 +214,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Width 1 fallback
     if (BLOCK_CT_DIM == 1)
     {
+        LLK_INIT_BEGIN
         {
             START_PERF_MEASURE("INIT")
             _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
@@ -217,6 +222,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Tilize>(
                 4 /* num_faces */, formats.math);
         }
+        LLK_INIT_END;
         {
             START_PERF_MEASURE("TILE_LOOP")
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
@@ -233,12 +239,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         return;
     }
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_fast_tilize_init_<is_fp32_dest_acc_en>(formats.math);
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
@@ -319,6 +327,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Width 1 fallback
     if (BLOCK_CT_DIM == 1)
     {
+        LLK_INIT_BEGIN
         {
             START_PERF_MEASURE("INIT")
             _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
@@ -327,6 +336,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_pack_init_<ckernel::PackMode::Tilize, false /* zero_output */, false /* skip_addrmod_config */, false /* skip_packer_strides */>(
                 formats.pack_src, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
         }
+        LLK_INIT_END;
         {
             START_PERF_MEASURE("TILE_LOOP")
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
@@ -343,6 +353,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     else
     {
+        LLK_INIT_BEGIN
         {
             START_PERF_MEASURE("INIT")
             _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
@@ -351,6 +362,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_pack_fast_tilize_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>(
                 0 /* use_32bit_dest */, formats.pack_dst, unit_dims[0], 4 /* num_faces */, formats.pack_src);
         }
+        LLK_INIT_END;
         {
             START_PERF_MEASURE("TILE_LOOP")
             if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)

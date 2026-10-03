@@ -40,6 +40,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_tiles           = NUM_BLOCKS * NUM_TILES_IN_BLOCK;
     const std::uint32_t src_handshake_iters = LOOP_FACTOR * _perf_src_handshake_iters_(tilize_en, num_tiles, num_faces);
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         if constexpr (!tilize_en)
@@ -61,6 +62,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
@@ -112,10 +114,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-    if constexpr (tilize_en)
+    LLK_INIT_BEGIN
     {
-        _llk_unpack_tilize_uninit_wrapper_(formats.unpack_A_dst, num_faces);
+        if constexpr (tilize_en)
+        {
+            _llk_unpack_tilize_uninit_wrapper_(formats.unpack_A_dst, num_faces);
+        }
     }
+    LLK_INIT_END;
 }
 
 #endif
@@ -149,6 +155,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_tiles           = NUM_BLOCKS * NUM_TILES_IN_BLOCK;
     const std::uint32_t src_handshake_iters = LOOP_FACTOR * _perf_src_handshake_iters_(tilize_en, num_tiles, num_faces);
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_math_eltwise_unary_datacopy_init_wrapper_<
@@ -161,6 +168,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
@@ -265,6 +273,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int DST_INDEX                    = params.DST_INDEX;
     const Operand& buffer_Res              = params.buffer_Res;
 #endif
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<false, tilize_en>>(
@@ -273,6 +282,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
