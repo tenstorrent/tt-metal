@@ -772,6 +772,18 @@ class TILIZE(TemplateParameter):
 
 
 @dataclass
+class PER_FACE_HANDOFF(TemplateParameter):
+    """Blackhole eltwise binary: per-face hand-off, SrcDvalid::PerFace on both threads."""
+
+    per_face_handoff: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr bool per_face_handoff = {str(self.per_face_handoff).lower()};"
+        )
+
+
+@dataclass
 class IMPLIED_MATH_FORMAT(TemplateParameter):
     implied_math_format: ImpliedMathFormat = ImpliedMathFormat.No
 
