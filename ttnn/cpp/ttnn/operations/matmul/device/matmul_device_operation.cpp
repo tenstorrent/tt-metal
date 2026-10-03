@@ -652,11 +652,9 @@ void validate_matmul_compute_grid_and_per_core_dims(
                 if constexpr (std::is_same_v<
                                   ProgramConfigType,
                                   operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
-                    dram_sharded_helpers::validate_num_workers_per_dram_bank(program_config.num_workers_per_dram_bank);
                     TT_FATAL(
-                        program_config.num_workers_per_dram_bank == 1 ||
-                            input_tensor_a.device()->arch() == tt::ARCH::BLACKHOLE,
-                        "{}: num_workers_per_dram_bank > 1 is currently supported only on Blackhole",
+                        program_config.num_workers_per_dram_bank >= 1,
+                        "{}: num_workers_per_dram_bank must be at least 1",
                         config_name);
                 }
             }
@@ -1410,6 +1408,7 @@ void validate_matmul_multicore_config(
 void validate_matmul_dram_sharded_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
+    bool has_bias,
     const MatmulParams& attributes,
     const ttnn::Shape& a_shape_padded,
     const tt::tt_metal::Tile& in0_tile,
@@ -1459,20 +1458,49 @@ void validate_matmul_dram_sharded_config(
         per_core_M,
         (shard_shape[0] / in0_tile.get_height()));
     TT_FATAL(
-        K % program_config.in0_block_w == 0,
-        "{}: K ({}) must be divisible by in0_block_w ({})",
+        program_config.num_workers_per_dram_bank >= 1,
+        "{}: num_workers_per_dram_bank must be at least 1, got {}",
         config_name,
-        K,
-        program_config.in0_block_w);
-    // A block is either a fraction of one storage shard or a whole number of consecutive shards.
-    const uint32_t in0_shard_width_tiles = shard_shape[1] / in0_tile.get_width();
-    TT_FATAL(
-        in0_shard_width_tiles % program_config.in0_block_w == 0 ||
-            program_config.in0_block_w % in0_shard_width_tiles == 0,
-        "{}: shard_shape[1] / in0_tile.get_width() ({}) and in0_block_w ({}) must divide one another",
-        config_name,
-        in0_shard_width_tiles,
-        program_config.in0_block_w);
+        program_config.num_workers_per_dram_bank);
+    if (dram_sharded_helpers::use_dram_sharded_multicore(
+            program_config.num_workers_per_dram_bank,
+            has_bias,
+            program_config.fused_activation.has_value(),
+            attributes.untilize_out,
+            input_tensor_a.tensor_spec().tile(),
+            input_tensor_b.tensor_spec().tile(),
+            input_tensor_a.logical_shape()[-1],
+            input_tensor_a.memory_config().buffer_type(),
+            attributes.output_mem_config)) {
+        // The multi-core pipeline reads activation rows straight from their shards and takes a ragged
+        // last K block, so neither divisibility rule below applies to it.
+        TT_FATAL(
+            input_tensor_b.memory_config().buffer_type() == BufferType::DRAM,
+            "{}: input B must be in DRAM",
+            config_name);
+    } else {
+        dram_sharded_helpers::validate_num_workers_per_dram_bank(program_config.num_workers_per_dram_bank);
+        TT_FATAL(
+            program_config.num_workers_per_dram_bank == 1 || input_tensor_a.device()->arch() == tt::ARCH::BLACKHOLE,
+            "{}: num_workers_per_dram_bank > 1 with a bias, a fused activation, untilize_out or 16-row tiles is "
+            "supported only on Blackhole",
+            config_name);
+        TT_FATAL(
+            K % program_config.in0_block_w == 0,
+            "{}: K ({}) must be divisible by in0_block_w ({})",
+            config_name,
+            K,
+            program_config.in0_block_w);
+        // A block is either a fraction of one storage shard or a whole number of consecutive shards.
+        const uint32_t in0_shard_width_tiles = shard_shape[1] / in0_tile.get_width();
+        TT_FATAL(
+            in0_shard_width_tiles % program_config.in0_block_w == 0 ||
+                program_config.in0_block_w % in0_shard_width_tiles == 0,
+            "{}: shard_shape[1] / in0_tile.get_width() ({}) and in0_block_w ({}) must divide one another",
+            config_name,
+            in0_shard_width_tiles,
+            program_config.in0_block_w);
+    }
 
     // tensor in1
     TT_FATAL(
@@ -2459,7 +2487,13 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                                      ProgramConfigType,
                                      operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
                 validate_matmul_dram_sharded_config(
-                    input_tensor_a, input_tensor_b, attributes, a_shape_padded, in0_tile, program_config);
+                    input_tensor_a,
+                    input_tensor_b,
+                    optional_input_tensors.at(0).has_value(),
+                    attributes,
+                    a_shape_padded,
+                    in0_tile,
+                    program_config);
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      operations::matmul::
