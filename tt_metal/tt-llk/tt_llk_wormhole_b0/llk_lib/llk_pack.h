@@ -436,6 +436,11 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Wormhole B0: _llk_pack_ supports PackMode::Default and PackMode::Untilize only");
+    // Experiment: a real slowdown, 4 RISC-V nops for every packed tile.
+    asm volatile("nop");
+    asm volatile("nop");
+    asm volatile("nop");
+    asm volatile("nop");
 
     if constexpr (pack_mode != PackMode::Untilize)
     {
