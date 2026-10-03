@@ -35,6 +35,21 @@ uint32_t legacy_2d_shard_column_count(const ShardSpec& shard_spec, TensorMemoryL
     }
     return grid_cols;
 }
+
+// Product of every dim but the last. Equal to volume() / shape[-1] whenever the last dim is
+// non-zero, and still defined when it is zero -- which it is for a zero-volume output.
+uint32_t fused_height_of(const Shape& shape) {
+    uint32_t height = 1;
+    for (size_t index = 0; index + 1 < shape.rank(); ++index) {
+        height *= shape[index];
+    }
+    return height;
+}
+
+// A derived shard extent is 0 exactly when that axis of the output is empty, and no shard shape
+// can hold a 0 -- a zero-volume shard is rejected. Keep the base extent on such an axis.
+uint32_t shard_extent_or(uint32_t derived, uint32_t base) { return derived > 0 ? derived : base; }
+
 }  // namespace
 
 UntilizeWithUnpaddingDeviceOperation::program_factory_t UntilizeWithUnpaddingDeviceOperation::select_program_factory(
@@ -153,9 +168,10 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                             "BLOCK_SHARDED -> BLOCK_SHARDED output must be in L1; got buffer_type={}",
                             operation_attributes.output_mem_config.buffer_type());
                         TT_FATAL(
-                            input_tensor_a.physical_volume() /
-                                    (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
-                                1,
+                            input_tensor_a.logical_volume() == 0 ||
+                                input_tensor_a.physical_volume() /
+                                        (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
+                                    1,
                             "Can only write unbatched output for BLOCK_SHARDED -> BLOCK_SHARDED");
                     }
                     if (cross_to_width) {
@@ -195,9 +211,10 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                             output_width,
                             output_shard_width);
                         TT_FATAL(
-                            input_tensor_a.physical_volume() /
-                                    (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
-                                1,
+                            input_tensor_a.logical_volume() == 0 ||
+                                input_tensor_a.physical_volume() /
+                                        (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
+                                    1,
                             "Can only write unbatched output for BLOCK_SHARDED -> WIDTH_SHARDED");
                     }
                 } else {
@@ -206,9 +223,10 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                         "Output memory config layout must be INTERLEAVED for block sharded input but got {}",
                         operation_attributes.output_mem_config.memory_layout());
                     TT_FATAL(
-                        input_tensor_a.physical_volume() /
-                                (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
-                            1,
+                        input_tensor_a.logical_volume() == 0 ||
+                            input_tensor_a.physical_volume() /
+                                    (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
+                                1,
                         "Can only write unbatched output interleaved");
                 }
             } else if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -310,9 +328,10 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                             output_width,
                             output_shard_width);
                         TT_FATAL(
-                            input_tensor_a.physical_volume() /
-                                    (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
-                                1,
+                            input_tensor_a.logical_volume() == 0 ||
+                                input_tensor_a.physical_volume() /
+                                        (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
+                                    1,
                             "Can only write unbatched output for WIDTH_SHARDED -> BLOCK_SHARDED");
                     } else {
                         TT_FATAL(
@@ -330,9 +349,10 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                         "Output memory config layout must be INTERLEAVED but got {}",
                         operation_attributes.output_mem_config.memory_layout());
                     TT_FATAL(
-                        input_tensor_a.physical_volume() /
-                                (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
-                            1,
+                        input_tensor_a.logical_volume() == 0 ||
+                            input_tensor_a.physical_volume() /
+                                    (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
+                                1,
                         "Can only write unbatched output interleaved");
                     TT_FATAL(
                         input_tensor_a.padded_shape()[-1] - output_shape[-1] <
@@ -430,12 +450,15 @@ tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_sp
         // naive host-side-only relaxation (no kernel change) was hardware-tested and produced wrong
         // data; this is the real fix.
         ShardSpec shard_spec = operation_attributes.output_mem_config.shard_spec().value();
-        uint32_t fused_height = output_shape.volume() / output_shape[-1];
+        uint32_t fused_height = fused_height_of(output_shape);
         uint32_t tile_height = input_tensor_a.tensor_spec().tile().get_height();
         uint32_t tile_width = input_tensor_a.tensor_spec().tile().get_width();
         if (operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
             uint32_t num_cores = shard_spec.num_cores();
-            shard_spec.shape = {fused_height, tt::round_up(tt::div_up(output_shape[-1], num_cores), tile_width)};
+            shard_spec.shape = {
+                shard_extent_or(fused_height, shard_spec.shape[0]),
+                shard_extent_or(
+                    tt::round_up(tt::div_up(output_shape[-1], num_cores), tile_width), shard_spec.shape[1])};
         } else if (operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
             CoreRange bbox = shard_spec.grid.bounding_box();
             uint32_t grid_cols = bbox.end_coord.x - bbox.start_coord.x + 1;
@@ -444,11 +467,14 @@ tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_sp
                 std::swap(grid_cols, grid_rows);
             }
             shard_spec.shape = {
-                tt::round_up(tt::div_up(fused_height, grid_rows), tile_height),
-                tt::round_up(tt::div_up(output_shape[-1], grid_cols), tile_width)};
+                shard_extent_or(tt::round_up(tt::div_up(fused_height, grid_rows), tile_height), shard_spec.shape[0]),
+                shard_extent_or(
+                    tt::round_up(tt::div_up(output_shape[-1], grid_cols), tile_width), shard_spec.shape[1])};
         } else {
             uint32_t num_cores = shard_spec.num_cores();
-            shard_spec.shape = {tt::round_up(tt::div_up(fused_height, num_cores), tile_height), shard_spec.shape[1]};
+            shard_spec.shape = {
+                shard_extent_or(tt::round_up(tt::div_up(fused_height, num_cores), tile_height), shard_spec.shape[0]),
+                shard_spec.shape[1]};
         }
         auto mem_config = tt::tt_metal::MemoryConfig(
             operation_attributes.output_mem_config.memory_layout(),
@@ -470,7 +496,7 @@ tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_sp
     }
     if (input_tensor_a.memory_config().is_sharded() && operation_attributes.output_mem_config.is_sharded() &&
         input_tensor_a.shard_spec().has_value()) {
-        uint32_t fused_height = output_shape.volume() / output_shape[-1];
+        uint32_t fused_height = fused_height_of(output_shape);
         uint32_t num_cores = input_tensor_a.shard_spec().value().num_cores();
         std::array<uint32_t, 2> shard_shape{};
         ShardSpec shard_spec = input_tensor_a.shard_spec().value();
@@ -482,7 +508,7 @@ tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_sp
             uint32_t batch = std::max(
                 1u,
                 (shard_spec.shape[0] * shard_spec.shape[1]) /
-                    (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]));
+                    std::max<uint32_t>(1, input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]));
             uint32_t shard_idx0;
             if (batch > 1) {
                 // Each core holds `batch` full matrices and untilize strips the interior pad rows of
@@ -497,7 +523,9 @@ tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_sp
                 // shard height. See issue #16620.
                 shard_idx0 = tt::round_up(tt::div_up(fused_height, num_cores), tile_height);
             }
-            shard_shape = {shard_idx0, output_shape[-1]};
+            shard_shape = {
+                shard_extent_or(shard_idx0, shard_spec.shape[0]),
+                shard_extent_or(output_shape[-1], shard_spec.shape[1])};
         } else if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
             // BLOCK_SHARDED splits along both height and width, so both dims of the shard shrink
             // with unpadding, unlike WIDTH_SHARDED (whole, unsplit height) or HEIGHT_SHARDED (whole,
@@ -511,10 +539,12 @@ tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_sp
                 std::swap(grid_cols, grid_rows);
             }
             shard_shape = {
-                tt::round_up(tt::div_up(fused_height, grid_rows), tile.get_height()),
-                tt::round_up(tt::div_up(output_shape[-1], grid_cols), tile.get_width())};
+                shard_extent_or(
+                    tt::round_up(tt::div_up(fused_height, grid_rows), tile.get_height()), shard_spec.shape[0]),
+                shard_extent_or(
+                    tt::round_up(tt::div_up(output_shape[-1], grid_cols), tile.get_width()), shard_spec.shape[1])};
         } else {
-            shard_shape = {fused_height, shard_spec.shape[1]};
+            shard_shape = {shard_extent_or(fused_height, shard_spec.shape[0]), shard_spec.shape[1]};
         }
         shard_spec.shape = shard_shape;
         auto mem_config = tt::tt_metal::MemoryConfig(
