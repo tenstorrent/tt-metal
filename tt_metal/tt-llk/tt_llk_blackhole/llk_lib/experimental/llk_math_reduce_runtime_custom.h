@@ -388,6 +388,8 @@ inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_inde
 
             TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
             cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
+            // The raw writes above bypass the math state tracker; let the next configurator re-apply.
+            math::_invalidate_src_zero_flag_state_();
         }
         else
         {
@@ -411,6 +413,8 @@ inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_inde
     {
         TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
+        // The raw writes above bypass the math state tracker; let the next configurator re-apply.
+        math::_invalidate_src_zero_flag_state_();
     }
 }
 
