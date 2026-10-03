@@ -112,6 +112,30 @@ constexpr TensorShape tensor_shape_from_num_faces(const std::uint32_t face_r_dim
     return TensorShape {static_cast<std::uint8_t>(face_r_dim), MAX_FACE_C_DIM, num_faces_r_dim, num_faces_c_dim};
 }
 
+/**
+ * @brief Build a TensorShape for a tile made of full 16x16 faces from its row and column extent.
+ *
+ * Names the data being processed rather than a face-walking pattern, so it is the way to describe a
+ * partial-tile region to TensorShape-aware LLKs (e.g. a 16x32 row-vector tile or a 32x16 column-vector
+ * tile). Unlike @ref tensor_shape_from_num_faces it can express the narrow 32x16 tile.
+ *
+ *   - (32, 32) -> 2x2 faces
+ *   - (16, 32) -> 1x2 faces
+ *   - (32, 16) -> 2x1 faces
+ *   - (16, 16) -> 1x1 face
+ *
+ * Any extent other than 16 or 32 produces a zero face count, which consumers reject.
+ *
+ * @param tile_r_dim: Tile row extent, values = <16/32>
+ * @param tile_c_dim: Tile column extent, values = <16/32>
+ */
+constexpr TensorShape tensor_shape_from_tile_dims(const std::uint16_t tile_r_dim, const std::uint16_t tile_c_dim)
+{
+    const std::uint8_t num_faces_r_dim = (tile_r_dim == MAX_FACE_R_DIM) ? 1 : (tile_r_dim == MAX_TILE_R_DIM) ? MAX_NUM_FACES_R_DIM : 0;
+    const std::uint8_t num_faces_c_dim = (tile_c_dim == MAX_FACE_C_DIM) ? 1 : (tile_c_dim == MAX_TILE_C_DIM) ? MAX_NUM_FACES_C_DIM : 0;
+    return TensorShape {MAX_FACE_R_DIM, MAX_FACE_C_DIM, num_faces_r_dim, num_faces_c_dim};
+}
+
 constexpr bool is_valid_face_r_dim(const std::uint8_t face_r_dim)
 {
     return face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == MAX_FACE_R_DIM;
