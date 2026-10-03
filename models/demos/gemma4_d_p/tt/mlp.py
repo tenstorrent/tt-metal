@@ -21,6 +21,10 @@ from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
 _GATE_GELU = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH, 1.0)
 
 
+# Weight columns per core of the short-M down projection (the gate and up projections keep the 1D default of 2).
+_DOWN_PER_CORE_N = 4
+
+
 class MLP:
     def __init__(
         self, mesh_config, hf_config, state_dict, ccl_manager=None, dtype=ttnn.bfloat8_b, tensor_cache_path=None
@@ -161,8 +165,12 @@ class MLP:
         # outputs, that is ~0.9 ms per 2048 chunk faster than 2 columns and interleaved outputs. Its own output goes
         # width-sharded straight into the reduce-scatter, which reads it as fast as DRAM: another ~0.8 ms per chunk.
         # Taller slabs pack the output to DRAM.
-        down_mc = short_m_output_memcfg(hidden, self.down_proj, per_core_n=4) if short_m else ttnn.DRAM_MEMORY_CONFIG
-        output = self._project(hidden, self.down_proj, down_mc, per_core_n=4)
+        down_mc = (
+            short_m_output_memcfg(hidden, self.down_proj, per_core_n=_DOWN_PER_CORE_N)
+            if short_m
+            else ttnn.DRAM_MEMORY_CONFIG
+        )
+        output = self._project(hidden, self.down_proj, down_mc, per_core_n=_DOWN_PER_CORE_N)
         hidden.deallocate(True)
         output = ccl_reduce_scatter_rows(output, self.mesh_config, self.ccl_manager)
         return output
