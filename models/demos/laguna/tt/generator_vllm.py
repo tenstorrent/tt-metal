@@ -286,12 +286,8 @@ class LagunaForCausalLM:
         # ---- eager spec-decode (opt-in) — served in-adapter, B==1 greedy. Phase 2. ----
         # TT_LAGUNA_SPEC_DECODE: "" off | "probe" = run the one-shot feasibility probe (does eager verify
         # run under the resident decode trace without an alloc-under-trace hang?) | "1" = full buffered loop.
+        # Hybrid KV is supported: every verify (traced and eager fallback) takes the per-layer group tables.
         self._spec_mode = os.environ.get("TT_LAGUNA_SPEC_DECODE", "")
-        if self._HYBRID_KV_CACHE_GROUPS_ENABLED and self._spec_mode == "1":
-            raise RuntimeError(
-                "Laguna hybrid KV does not support traced speculative decode yet; "
-                "set TT_LAGUNA_SPEC_DECODE= or TT_LAGUNA_HYBRID_KV=0"
-            )
         self._spec_probed = False
         self._spec_buf: list = []  # pending committed token ids, returned one per vLLM step
         self._spec_hist: list = []  # running token history for the single served request (ngram source)
