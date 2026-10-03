@@ -379,6 +379,16 @@ void validate_optional_output(
     TT_FATAL(out.device() == input_tensor.device(), "repeat optional output must be on the same device");
     TT_FATAL(out.dtype() == input_tensor.dtype(), "repeat optional output dtype mismatch");
     TT_FATAL(out.layout() == input_tensor.layout(), "repeat optional output layout mismatch");
+    // Both routes copy input-tile pages verbatim: a different tile shape overruns the output's pages, and a
+    // different transpose reinterprets the datums. Tile::operator== ignores the transpose flags.
+    if (out.layout() == ttnn::TILE_LAYOUT) {
+        const auto& out_tile = out.tensor_spec().tile();
+        const auto& in_tile = input_tensor.tensor_spec().tile();
+        TT_FATAL(
+            out_tile == in_tile && out_tile.get_transpose_within_face() == in_tile.get_transpose_within_face() &&
+                out_tile.get_transpose_of_faces() == in_tile.get_transpose_of_faces(),
+            "repeat optional output tile must match the input's tile");
+    }
     TT_FATAL(out.logical_shape() == expected_logical_shape, "repeat optional output shape mismatch");
     // Direct-write kernels read the input while writing the output, so a shared buffer corrupts both.
     TT_FATAL(out.buffer() != input_tensor.buffer(), "repeat: optional_output_tensor must not alias the input buffer");

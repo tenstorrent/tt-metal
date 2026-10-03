@@ -1185,6 +1185,38 @@ def test_repeat_optional_output_mismatched_shard_spec_raises(device, expect_erro
         ttnn.repeat(input_tensor, list(repeat_shape), memory_config=other_mc, optional_output_tensor=optional_output)
 
 
+@pytest.mark.parametrize(
+    "out_tile",
+    [
+        pytest.param(ttnn.Tile([16, 16]), id="tile16x16"),
+        pytest.param(ttnn.Tile([32, 32], transpose_tile=True), id="tile32x32_transposed"),
+    ],
+)
+def test_repeat_optional_output_mismatched_tile_raises(device, expect_error, out_tile):
+    """A TILE prealloc's tile must equal the input's; the kernels write input-sized pages."""
+    shape = (1, 1, 32, 32)
+    repeat_shape = (1, 1, 1, 2)
+    out_shape = (1, 1, 32, 64)
+    input_tensor = ttnn.from_torch(
+        torch.randn(shape, dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        dtype=ttnn.bfloat16,
+        memory_config=L1_INTERLEAVED,
+    )
+    optional_output = ttnn.from_torch(
+        torch.zeros(out_shape, dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        tile=out_tile,
+        device=device,
+        dtype=ttnn.bfloat16,
+        memory_config=L1_INTERLEAVED,
+    )
+
+    with expect_error(RuntimeError, "tile must match the input's tile"):
+        ttnn.repeat(input_tensor, list(repeat_shape), optional_output_tensor=optional_output)
+
+
 # Specless sharded output must shrink CoreRangeSet to populated shard count.
 
 
