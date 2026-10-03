@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <atomic>
+#include <cstdint>
+
 #include "mesh_command_queue_base.hpp"
 
 namespace tt::tt_metal::distributed {
@@ -28,10 +31,10 @@ protected:
         void* dst,
         std::shared_ptr<experimental::PinnedMemory> pinned_memory,
         const std::optional<BufferRegion>& region,
-        std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
+        std::unordered_map<IDevice*, std::uint32_t>& num_txns_per_device,
         ttsl::Span<const SubDeviceId> sub_device_ids = {}) override;
     void submit_memcpy_request(
-        std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
+        std::unordered_map<IDevice*, std::uint32_t>& num_txns_per_device,
         bool blocking,
         std::vector<MemoryPin> memory_pins = {}) override;
     void finish_nolock(ttsl::Span<const SubDeviceId> sub_device_ids = {}) override;
@@ -42,14 +45,14 @@ protected:
 public:
     SDMeshCommandQueue(
         MeshDevice* mesh_device,
-        uint32_t id,
+        std::uint32_t id,
         std::function<std::lock_guard<std::mutex>()> lock_api_function,
         std::shared_ptr<distributed::multihost::DistributedContext> distributed_context);
     ~SDMeshCommandQueue() override = default;
 
     std::optional<MeshTraceId> trace_id() const override;
 
-    WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override;
+    WorkerConfigBufferMgr& get_config_buffer_mgr(std::uint32_t index) override;
     void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) override;
 
     MeshEvent enqueue_record_event(
@@ -61,16 +64,16 @@ public:
     void enqueue_wait_for_event(const MeshEvent& sync_event) override;
     void enqueue_write_dram_core_counter(
         ttsl::Span<const DeviceMemoryAddress> targets,
-        uint32_t value,
+        std::uint32_t value,
         bool blocking,
         ttsl::Span<const SubDeviceId> sub_device_ids = {}) override;
     void finish(ttsl::Span<const SubDeviceId> sub_device_ids = {}) override;
     void reset_worker_state(
         bool reset_launch_msg_state,
-        uint32_t num_sub_devices,
-        const vector_aligned<uint32_t>& go_signal_noc_data,
-        const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
-        ttsl::Span<const uint32_t> workers_per_sub_device) override;
+        std::uint32_t num_sub_devices,
+        const vector_aligned<std::uint32_t>& go_signal_noc_data,
+        const std::vector<std::pair<CoreRangeSet, std::uint32_t>>& core_go_message_mapping,
+        ttsl::Span<const std::uint32_t> workers_per_sub_device) override;
     void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) override;
     void record_end() override;
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking) override;
@@ -92,6 +95,8 @@ private:
 
     bool asynchronous_slow_dispatch_enabled_ = false;
     bool configure_only_ = false;
+    // Stamped into each recorded event, so a wait can tell whether this queue has moved past it
+    std::atomic<std::uint32_t> num_workloads_enqueued_{0};
 
     std::shared_ptr<ThreadPool> launch_thread_pool_;
     void dispatch_program(const MeshCoordinateRange& coord_range, Program& program, bool blocking);

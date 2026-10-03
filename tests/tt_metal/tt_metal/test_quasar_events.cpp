@@ -23,18 +23,22 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
+constexpr const char* SIMPLE_L1_WRITE_KERNEL =
+    OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp";
+
 distributed::MeshWorkload make_l1_write_workload(
     distributed::MeshDevice& mesh_device,
     const experimental::NodeCoord& node,
-    uint32_t address,
-    uint32_t value,
-    const std::string& kernel_id) {
+    std::uint32_t address,
+    std::uint32_t value,
+    const std::string& kernel_id,
+    const std::string& source = SIMPLE_L1_WRITE_KERNEL) {
     distributed::MeshWorkload wl;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device.shape());
     const experimental::KernelSpecName DM_KERNEL{kernel_id};
     experimental::KernelSpec dm_kernel_spec{
         .unique_id = DM_KERNEL,
-        .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
+        .source = source,
         .num_threads = 1,
         .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
         .hw_config = experimental::DataMovementHardwareConfig{},
@@ -54,16 +58,16 @@ distributed::MeshWorkload make_l1_write_workload(
     return wl;
 }
 
-void run_cross_cq_handoff(distributed::MeshDevice& mesh_device, uint8_t producer_cq, uint8_t consumer_cq) {
+void run_cross_cq_handoff(distributed::MeshDevice& mesh_device, std::uint8_t producer_cq, std::uint8_t consumer_cq) {
     const experimental::NodeCoord node{0, 0};
 
-    const uint32_t producer_address = MetalContext::instance().hal().get_dev_addr(
+    const std::uint32_t producer_address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
-    const uint32_t consumer_address = producer_address + sizeof(uint32_t);
-    const uint32_t producer_value = 0x2c000000u | producer_cq;
-    const uint32_t consumer_value = 0x2c110000u | consumer_cq;
+    const std::uint32_t consumer_address = producer_address + sizeof(std::uint32_t);
+    const std::uint32_t producer_value = 0x2c000000u | producer_cq;
+    const std::uint32_t consumer_value = 0x2c110000u | consumer_cq;
 
-    std::vector<uint32_t> zeros(2, 0);
+    std::vector<std::uint32_t> zeros(2, 0);
     slow_dispatch::WriteToL1(mesh_device, node, producer_address, zeros);
 
     distributed::MeshCommandQueue& producer = mesh_device.mesh_command_queue(producer_cq);
@@ -83,12 +87,12 @@ void run_cross_cq_handoff(distributed::MeshDevice& mesh_device, uint8_t producer
     distributed::Finish(producer);
     distributed::Finish(consumer);
 
-    std::vector<uint32_t> producer_out(1, 0);
-    slow_dispatch::ReadFromL1(mesh_device, node, producer_address, sizeof(uint32_t), producer_out);
+    std::vector<std::uint32_t> producer_out(1, 0);
+    slow_dispatch::ReadFromL1(mesh_device, node, producer_address, sizeof(std::uint32_t), producer_out);
     ASSERT_EQ(producer_out[0], producer_value);
 
-    std::vector<uint32_t> consumer_out(1, 0);
-    slow_dispatch::ReadFromL1(mesh_device, node, consumer_address, sizeof(uint32_t), consumer_out);
+    std::vector<std::uint32_t> consumer_out(1, 0);
+    slow_dispatch::ReadFromL1(mesh_device, node, consumer_address, sizeof(std::uint32_t), consumer_out);
     ASSERT_EQ(consumer_out[0], consumer_value);
 }
 
@@ -100,11 +104,11 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, EventSynchronize) {
 
     const experimental::NodeCoord node{0, 0};
 
-    const uint32_t address = MetalContext::instance().hal().get_dev_addr(
+    const std::uint32_t address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
-    const uint32_t value = 0x12abcd34;
+    const std::uint32_t value = 0x12abcd34;
 
-    std::vector<uint32_t> zeros(1, 0);
+    std::vector<std::uint32_t> zeros(1, 0);
     slow_dispatch::WriteToL1(this->device(), node, address, zeros);
 
     distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
@@ -115,8 +119,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, EventSynchronize) {
     // Block the host until the CQ has processed past the event point.
     distributed::EventSynchronize(event);
 
-    std::vector<uint32_t> outputs(1, 0);
-    slow_dispatch::ReadFromL1(this->device(), node, address, sizeof(uint32_t), outputs);
+    std::vector<std::uint32_t> outputs(1, 0);
+    slow_dispatch::ReadFromL1(this->device(), node, address, sizeof(std::uint32_t), outputs);
     ASSERT_EQ(outputs[0], value);
 }
 
@@ -144,13 +148,13 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, EventBetweenWorkloads) {
 
     const experimental::NodeCoord node{0, 0};
 
-    const uint32_t address_1 = MetalContext::instance().hal().get_dev_addr(
+    const std::uint32_t address_1 = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
-    const uint32_t address_2 = address_1 + sizeof(uint32_t);
-    const uint32_t value_1 = 0xaabb1122;
-    const uint32_t value_2 = 0xccdd3344;
+    const std::uint32_t address_2 = address_1 + sizeof(std::uint32_t);
+    const std::uint32_t value_1 = 0xaabb1122;
+    const std::uint32_t value_2 = 0xccdd3344;
 
-    std::vector<uint32_t> zeros(2, 0);
+    std::vector<std::uint32_t> zeros(2, 0);
     slow_dispatch::WriteToL1(this->device(), node, address_1, zeros);
 
     distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
@@ -166,15 +170,15 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, EventBetweenWorkloads) {
     // Synchronize on event_after_wl1 and verify wl1's result is present.
     distributed::EventSynchronize(event_after_wl1);
 
-    std::vector<uint32_t> out_1(1, 0);
-    slow_dispatch::ReadFromL1(this->device(), node, address_1, sizeof(uint32_t), out_1);
+    std::vector<std::uint32_t> out_1(1, 0);
+    slow_dispatch::ReadFromL1(this->device(), node, address_1, sizeof(std::uint32_t), out_1);
     ASSERT_EQ(out_1[0], value_1);
 
     // Drain the remaining wl2.
     distributed::Finish(cq);
 
-    std::vector<uint32_t> out_2(1, 0);
-    slow_dispatch::ReadFromL1(this->device(), node, address_2, sizeof(uint32_t), out_2);
+    std::vector<std::uint32_t> out_2(1, 0);
+    slow_dispatch::ReadFromL1(this->device(), node, address_2, sizeof(std::uint32_t), out_2);
     ASSERT_EQ(out_2[0], value_2);
 }
 
@@ -204,13 +208,13 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, RecordEventToHostFromBothCQs) {
 
     const experimental::NodeCoord node{0, 0};
 
-    const uint32_t address_0 = MetalContext::instance().hal().get_dev_addr(
+    const std::uint32_t address_0 = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
-    const uint32_t address_1 = address_0 + sizeof(uint32_t);
-    const uint32_t value_0 = 0x2c2c0000;
-    const uint32_t value_1 = 0x2c2c0001;
+    const std::uint32_t address_1 = address_0 + sizeof(std::uint32_t);
+    const std::uint32_t value_0 = 0x2c2c0000;
+    const std::uint32_t value_1 = 0x2c2c0001;
 
-    std::vector<uint32_t> zeros(2, 0);
+    std::vector<std::uint32_t> zeros(2, 0);
     slow_dispatch::WriteToL1(this->device(), node, address_0, zeros);
 
     distributed::MeshCommandQueue& cq0 = this->device().mesh_command_queue(0);
@@ -229,11 +233,59 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, RecordEventToHostFromBothCQs) {
     distributed::MeshEvent event_1 = cq1.enqueue_record_event_to_host();
     distributed::EventSynchronize(event_1);
 
-    std::vector<uint32_t> out_0(1, 0);
-    slow_dispatch::ReadFromL1(this->device(), node, address_0, sizeof(uint32_t), out_0);
+    std::vector<std::uint32_t> out_0(1, 0);
+    slow_dispatch::ReadFromL1(this->device(), node, address_0, sizeof(std::uint32_t), out_0);
     ASSERT_EQ(out_0[0], value_0);
 
-    std::vector<uint32_t> out_1(1, 0);
-    slow_dispatch::ReadFromL1(this->device(), node, address_1, sizeof(uint32_t), out_1);
+    std::vector<std::uint32_t> out_1(1, 0);
+    slow_dispatch::ReadFromL1(this->device(), node, address_1, sizeof(std::uint32_t), out_1);
     ASSERT_EQ(out_1[0], value_1);
+}
+
+// An event marks the recording queue's work up to the point it was recorded, so waiting on it must not wait for work
+// that queue takes on afterwards: here a workload that only finishes once the host releases it.
+TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, WaitOnEventIgnoresLaterWork) {
+    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
+        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
+                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
+    }
+
+    const experimental::NodeCoord node{0, 0};
+
+    const std::uint32_t written_address = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const std::uint32_t release_address = written_address + sizeof(std::uint32_t);
+    const std::uint32_t written_value = 0x2c3c0000;
+    const std::uint32_t release_value = 0x2c3c0001;
+
+    std::vector<std::uint32_t> zeros(2, 0);
+    slow_dispatch::WriteToL1(this->device(), node, written_address, zeros);
+
+    distributed::MeshCommandQueue& cq0 = this->device().mesh_command_queue(0);
+    distributed::MeshCommandQueue& cq1 = this->device().mesh_command_queue(1);
+
+    auto write_wl = make_l1_write_workload(this->device(), node, written_address, written_value, "write_kernel");
+    auto spin_wl = make_l1_write_workload(
+        this->device(),
+        node,
+        release_address,
+        release_value,
+        "spin_kernel",
+        OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_wait_for_value_2_0.cpp");
+
+    distributed::EnqueueMeshWorkload(cq0, write_wl, false);
+    distributed::MeshEvent event = cq0.enqueue_record_event();
+    distributed::EnqueueMeshWorkload(cq0, spin_wl, false);
+
+    // Returns without waiting for spin_wl, which would never finish before the release below
+    cq1.enqueue_wait_for_event(event);
+
+    std::vector<std::uint32_t> written(1, 0);
+    slow_dispatch::ReadFromL1(this->device(), node, written_address, sizeof(std::uint32_t), written);
+    ASSERT_EQ(written[0], written_value);
+
+    std::vector<std::uint32_t> release(1, release_value);
+    slow_dispatch::WriteToL1(this->device(), node, release_address, release);
+    distributed::Finish(cq0);
+    distributed::Finish(cq1);
 }
