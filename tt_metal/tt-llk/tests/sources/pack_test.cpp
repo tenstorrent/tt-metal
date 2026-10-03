@@ -38,6 +38,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int num_total_tiles               = NUM_TILES_IN_BLOCK * NUM_BLOCKS;
     const std::uint32_t src_handshake_iters = LOOP_FACTOR * num_total_tiles * num_faces;
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -50,6 +51,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_A_dst);
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
@@ -106,6 +108,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const std::uint32_t src_handshake_iters = LOOP_FACTOR * NUM_BLOCKS * NUM_TILES_IN_BLOCK * num_faces;
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en, PackMode::Default>(
@@ -114,6 +117,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
@@ -204,6 +208,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int RELU_CONFIG                  = params.RELU_CONFIG;
     const Operand& buffer_Res              = params.buffer_Res;
 #endif
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<false, tilize_en>>(
@@ -220,6 +225,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)

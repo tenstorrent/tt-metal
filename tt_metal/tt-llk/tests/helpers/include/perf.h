@@ -48,6 +48,16 @@ enum class PerfRunType
     SFPU_ISOLATE
 };
 
+// With the barrier, INIT and the code after the measured loop run out of line at the end of the kernel code (sections.ld)
+// on 512 B, so changes to them cannot move the loop; by value, so nothing the loop uses escapes, and noipa keeps them out.
+#if defined(LLK_DBG_BARRIER)
+#define LLK_INIT_BEGIN [=]() __attribute__((noipa, section(".llk_init_text"), aligned(512)))
+#define LLK_INIT_END   ()
+#else
+#define LLK_INIT_BEGIN
+#define LLK_INIT_END
+#endif
+
 // The run types whose source mock goes through the MOP expander: on Wormhole, MATH_ISOLATE's unpack mock and
 // UNPACK_ISOLATE's math mock. Every other caller (L1_CONGESTION, Blackhole, Quasar) keeps the RISC-V loop mocks below.
 template <PerfRunType RUN_TYPE>
