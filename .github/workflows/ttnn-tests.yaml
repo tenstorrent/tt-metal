@@ -1,0 +1,84 @@
+## ci: eliminate `&&`-chained pytest commands in `ttnn-tests.yaml` (flag-injection footgun)
+
+### Problem
+The `ttnn-tests.yaml` workflow builds pytest invocations by chaining commands with `&&`, e.g.:
+
+```yaml
+- name: Run ttnn tests
+  run: |
+    pytest tests/ttnn/unit_tests -x -q && pytest tests/ttnn/unit_tests/test_foo.py -k "bar" && ...
+```
+
+This is a footgun for two reasons:
+
+1. **Flag injection / silent misparse.** When test names, `-k` expressions, or file
+   paths are interpolated into a single shell line, a value containing whitespace or a
+   leading `-` can be reinterpreted as a *pytest flag* rather than a test selector. The
+   shell has no notion of argument boundaries across the `&&` join.
+2. **All-or-nothing failure semantics.** `&&` short-circuits: the first failing pytest
+   run aborts every subsequent run, so a single flaky test hides the status of every
+   later suite, and there is no per-suite reporting in the CI UI.
+
+### Fix
+Replace the `&&`-chained invocations with a **single pytest process** using a
+`pytest.ini`/`pyproject`-driven selection plus a small matrix, so each suite runs as an
+independent, correctly-quoted step. Argument boundaries are preserved by the YAML list
+form (no shell re-parsing), which removes the injection surface entirely.
+
+```yaml
+# .github/workflows/ttnn-tests.yaml
+name: ttnn tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  ttnn-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false          # report every suite, not just the first failure
+      matrix:
+        suite:
+          - tests/ttnn/unit_tests
+          - tests/ttnn/integration_tests
+          - tests/ttnn/distributed
+    name: ttnn / ${{ matrix.suite }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install deps
+        run: pip install -r requirements-dev.txt
+
+      # Each suite is its own step: no `&&`, no shell re-quoting, no flag injection.
+      # `--` terminates option parsing so the path can never be read as a pytest flag.
+      - name: Run ${{ matrix.suite }}
+        run: |
+          pytest -- "${{ matrix.suite }}" -q --junitxml=report-${{ strategy.job-index }}.xml
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ttnn-report-${{ strategy.job-index }}
+          path: report-*.xml
+```
+
+### Why this removes the footgun
+- **No `&&`.** Each suite is an independent step; a failure in one no longer masks the
+  others (`fail-fast: false`).
+- **No shell interpolation of selectors.** The suite path is a matrix value referenced as
+  a single quoted argument. The `--` separator guarantees pytest treats everything after
+  it as a path, never as a flag — even if a future path begins with `-`.
+- **Per-suite CI status.** The matrix gives each suite its own check in the GitHub UI and
+  its own JUnit artifact, which is what the original chained command was trying to fake.
+
+### Notes
+- If a suite must be split further, add entries to `matrix.suite` rather than chaining
+  more `&&` — the pattern scales without reintroducing the injection surface.
+- `strategy.job-index` is used only for artifact naming; it is stable within a run.
