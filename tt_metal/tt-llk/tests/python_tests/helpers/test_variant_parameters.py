@@ -33,6 +33,7 @@ from .llk_params import (
     ReducePool,
     SdpaFwOp,
     SdpaOp,
+    SfpuSrcsImpl,
     StableSort,
     StochasticRounding,
     Tilize,
@@ -394,6 +395,14 @@ class APPROX_MODE(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr bool APPROX_MODE = {self.approx_mode.cpp_enum_value};"
+
+
+@dataclass
+class SFPU_SRCS_IMPL(TemplateParameter):
+    sfpu_srcs_impl: SfpuSrcsImpl
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool SFPU_SRCS_LOADMACRO = {self.sfpu_srcs_impl.cpp_enum_value};"
 
 
 @dataclass

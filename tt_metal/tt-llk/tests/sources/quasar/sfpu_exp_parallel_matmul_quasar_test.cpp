@@ -151,15 +151,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_bfd_alloc.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_sfpu/ckernel_sfpu_exp.h"
+#include "llk_sfpu/ckernel_sfpu_srcs.h"
+#include "llk_sfpu_srcs_api.h"
 #include "llk_srcs.h"
 #include "params.h"
-#include "sfpu/ckernel_sfpu_exp.h"
 
 using namespace ckernel;
 using namespace ckernel::math;
 using namespace ckernel::sfpu;
 
-void run_kernel(RUNTIME_PARAMETERS params)
+#ifndef DISABLE_SFPLOADMACRO
+void run_exp_loadmacro(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
@@ -237,6 +240,68 @@ void run_kernel(RUNTIME_PARAMETERS params)
         wait_pack_idle();
         PROFILER_SYNC();
     }
+}
+#endif
+
+void run_exp_sfpi(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+    const std::uint32_t num_tiles   = params.TILE_CNT;
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const DataFormat srcs_format    = static_cast<DataFormat>(formats.unpack_S_dst);
+
+    {
+        ZONE_SCOPED("INIT")
+        LLK_ASSERT(srcs_format == static_cast<DataFormat>(formats.pack_S_src), "SrcS EXP requires matching unpack destination and pack source formats");
+        llk_sfpu_srcs_unary_init(
+            L1_ADDRESS(params.buffer_S[0]),
+            static_cast<DataFormat>(formats.unpack_S_src),
+            srcs_format,
+            L1_ADDRESS(params.buffer_Res[0]),
+            static_cast<DataFormat>(formats.pack_S_src),
+            static_cast<DataFormat>(formats.pack_S_dst),
+            IMPLIED_MATH_FORMAT);
+        PROFILER_SYNC();
+    }
+    {
+        ZONE_SCOPED("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
+        {
+            dispatch_sfpu_srcs_format(
+                srcs_format,
+                [&](auto layout)
+                {
+                    using Layout = decltype(layout);
+                    for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+                    {
+                        llk_sfpu_srcs_unary(num_tiles, srcs_format, [](int, int, int) { calculate_exponential_srcs<true, Layout::layout>(); });
+                    }
+                });
+        }
+        wait_unpack_idle();
+        wait_sfpu_idle();
+        wait_pack_idle();
+        PROFILER_SYNC();
+    }
+}
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+#ifdef DISABLE_SFPLOADMACRO
+    static_assert(!SFPU_SRCS_LOADMACRO, "SFPLOADMACRO is disabled; only the SFPI implementation can be built");
+    run_exp_sfpi(params);
+#else
+    if constexpr (SFPU_SRCS_LOADMACRO)
+    {
+        run_exp_loadmacro(params);
+    }
+    else
+    {
+        run_exp_sfpi(params);
+    }
+#endif
 }
 
 #endif
