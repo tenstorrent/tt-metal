@@ -1089,3 +1089,27 @@ def test_transpose_specless_sharded_output_grid_shrinks_block_col_major_non_squa
     ref = x.transpose(2, 3)
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
     assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
+
+
+# ──────────────────────────────────────────────────────────────
+# UINT8 regression (issue #58106): int-FPU reconstruct path in
+# transpose_wh / permute_rm_tiled silently returned all zeros for
+# UINT8 in 16-bit Dest. Bit-exact against torch.
+# ──────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "rm"])
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (32, 32),
+        (1, 1, 64, 128),
+        (2, 3, 96, 64),
+    ],
+)
+def test_transpose_dtype_uint8(device, shape, input_layout):
+    torch.manual_seed(0)
+    x = torch.randint(0, 256, shape, dtype=torch.uint8)
+    ttnn_in = ttnn.from_torch(x, dtype=ttnn.uint8, layout=input_layout, device=device)
+    got = ttnn.to_torch(ttnn.transpose(ttnn_in, -2, -1).cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert torch.equal(got, x.transpose(-2, -1))

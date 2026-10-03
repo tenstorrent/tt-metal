@@ -121,7 +121,7 @@ ProgramDescriptor UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdentica
         compute_kernel_defines.emplace_back("DST_ACCUM_MODE", "1");
     }
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    if (fp32_dest_acc_en) {
+    if (fp32_dest_acc_en && a.dtype() != DataType::UINT8) {
         unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     }
 

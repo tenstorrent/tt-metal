@@ -1163,3 +1163,42 @@ def test_sharded_concat_height_interleaves_leading_dims(device, strategy, shape,
         f"column 0 of each flattened row:\n  got     : {got_col0}\n  expected: {expected_col0}"
     )
     assert_equal(torch_out, ttnn_out)
+
+
+# UINT8 regression (issue #58106): the sharded last-dim path takes ConcatS2STiledProgramFactory,
+# whose compute kernel runs transpose_tile. In 16-bit Dest that silently returned all zeros for UINT8.
+@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "rm"])
+def test_concat_dtype_uint8_interleaved(device, input_layout):
+    torch.manual_seed(0)
+    x = torch.randint(0, 256, (1, 1, 64, 64), dtype=torch.uint8)
+    y = torch.randint(0, 256, (1, 1, 64, 64), dtype=torch.uint8)
+    tx = ttnn.from_torch(x, dtype=ttnn.uint8, layout=input_layout, device=device)
+    ty = ttnn.from_torch(y, dtype=ttnn.uint8, layout=input_layout, device=device)
+    got = ttnn.to_torch(ttnn.concat([tx, ty], -1).cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert torch.equal(got, torch.cat([x, y], -1))
+
+
+def test_concat_dtype_uint8_sharded_s2s_tiled(device):
+    """Last-dim concat, both inputs TILE + HEIGHT_SHARDED → ConcatS2STiledProgramFactory."""
+    torch.manual_seed(0)
+    shapes = [(1, 1, 128, 128), (1, 1, 128, 128)]
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))})
+    in_cfg = ttnn.create_sharded_memory_config(
+        (32, 128),
+        core_grid=shard_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=True,
+    )
+    out_cfg = ttnn.create_sharded_memory_config(
+        (32, 256),
+        core_grid=shard_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=True,
+    )
+    torch_inputs = [torch.randint(0, 256, s, dtype=torch.uint8) for s in shapes]
+    ttnn_inputs = [
+        ttnn.to_memory_config(ttnn.from_torch(t, dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device), in_cfg)
+        for t in torch_inputs
+    ]
+    got = ttnn.to_torch(ttnn.concat(ttnn_inputs, dim=3, memory_config=out_cfg).cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert torch.equal(got, torch.cat(torch_inputs, dim=3))

@@ -1782,3 +1782,14 @@ def test_to_layout_fp8_input_to_tile(device, shape, out_dtype, min_pcc):
     tt_out = ttnn.to_layout(tt_in, ttnn.TILE_LAYOUT, dtype=out_dtype)
     assert tt_out.layout == ttnn.TILE_LAYOUT and tt_out.dtype == out_dtype
     assert_with_pcc(golden, ttnn.to_torch(tt_out).float(), min_pcc)
+
+
+# UINT8 regression (issue #58106): to_layout(TILE→ROW_MAJOR) lowers to untilize which
+# ran a compute kernel through 16-bit Dest and silently returned all zeros for UINT8.
+@pytest.mark.parametrize("tensor_shape", [[1, 1, 64, 64], [2, 2, 128, 128]])
+def test_to_layout_dtype_uint8_tile_to_rm(device, tensor_shape):
+    torch.manual_seed(0)
+    x = torch.randint(0, 256, tensor_shape, dtype=torch.uint8)
+    t = ttnn.from_torch(x, dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device)
+    got = ttnn.to_torch(ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT))
+    assert torch.equal(got, x)

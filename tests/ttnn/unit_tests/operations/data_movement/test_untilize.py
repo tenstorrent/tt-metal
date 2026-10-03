@@ -3477,3 +3477,14 @@ def test_untilize_block_per_node_cb_size(device, tensor_shape, dtype):
             ), "untilize must reuse the cached program on a cache hit"
 
     device.disable_and_clear_program_cache()
+
+
+# UINT8 regression (issue #58106): the untilize compute path copies tiles through Dest.
+# In 16-bit Dest, UINT8 silently returned all zeros.
+@pytest.mark.parametrize("tensor_shape", [[1, 1, 64, 64], [2, 2, 128, 128]])
+def test_untilize_dtype_uint8(device, tensor_shape):
+    torch.manual_seed(0)
+    x = torch.randint(0, 256, tensor_shape, dtype=torch.uint8)
+    t = ttnn.from_torch(x, dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device)
+    got = ttnn.to_torch(ttnn.untilize(t))
+    assert torch.equal(got, x)

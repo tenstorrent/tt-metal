@@ -52,9 +52,10 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
 
     MeshDevice* device = input_tensor.device();
 
-    bool fp32_dest_acc_en = src0_dfb_data_format == tt::DataFormat::Float32 ||
-                            src0_dfb_data_format == tt::DataFormat::Int32 ||
-                            src0_dfb_data_format == tt::DataFormat::UInt32;
+    // UInt8 needs 32-bit Dest on WH/BH.
+    bool fp32_dest_acc_en =
+        src0_dfb_data_format == tt::DataFormat::Float32 || src0_dfb_data_format == tt::DataFormat::Int32 ||
+        src0_dfb_data_format == tt::DataFormat::UInt32 || src0_dfb_data_format == tt::DataFormat::UInt8;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
