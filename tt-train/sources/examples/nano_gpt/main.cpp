@@ -35,6 +35,7 @@
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "utils.hpp"
 #include "utils/memory_utils.hpp"
+#include "utils/training_utils.hpp"
 
 namespace {
 
@@ -470,7 +471,6 @@ int main(int argc, char **argv) {
 
     auto schedule_func = schedulers.at(training_config.scheduler_type);
 
-    fmt::print("Max steps {}\n", training_config.max_steps);
     fmt::print("Batch size {}\n", training_config.batch_size);
     fmt::print("Gradient accumulation steps {}\n", training_config.gradient_accumulation_steps);
     fmt::print("Total batch size {}\n", training_config.batch_size * training_config.gradient_accumulation_steps);
@@ -540,6 +540,19 @@ int main(int argc, char **argv) {
             training_config.data_path,
             sequence_length + 1));
     }
+
+    const double steps_per_epoch = ttml::utils::steps_per_epoch(
+        dataset.get_num_tokens(),
+        training_config.batch_size * training_config.gradient_accumulation_steps,
+        sequence_length);
+    const uint32_t effective_max_steps = ttml::utils::resolve_effective_max_steps(
+        training_config.max_steps, training_config.num_epochs, steps_per_epoch);
+    fmt::print("Steps per epoch {:.2f}\n", steps_per_epoch);
+    fmt::print(
+        "Effective max steps {} (max_steps {}, num_epochs {})\n",
+        effective_max_steps,
+        training_config.max_steps,
+        training_config.num_epochs);
 
     struct CachedHostData {
         std::vector<uint32_t> data;
@@ -734,7 +747,7 @@ int main(int argc, char **argv) {
         // TODO: Replace with print_stats() after #38756 is resolved
         fmt::print("    Learning rate: {}\n", optimizer->get_lr());
     }
-    auto scheduler = schedule_func(optimizer.get(), training_config.max_steps);
+    auto scheduler = schedule_func(optimizer.get(), effective_max_steps);
 
     if (is_three_tier_training(multihost_config)) {
         auto *optimizer_ptr = dynamic_cast<ttml::optimizers::RemoteOptimizer *>(optimizer.get());
@@ -786,7 +799,6 @@ int main(int argc, char **argv) {
         return loss_float / static_cast<float>(loss_xtensors.size());
     };
 
-    const uint32_t num_epochs = training_config.num_epochs;
     const uint32_t accumulation_steps = training_config.gradient_accumulation_steps;
     auto gradient_accumulator_helper = GradientAccumulator(accumulation_steps);
 
@@ -807,7 +819,8 @@ int main(int argc, char **argv) {
     const bool use_vocab_parallel_loss = device_config.enable_tp;
 
     // Training loop
-    for (uint32_t epoch = 0; num_epochs == 0 || epoch < num_epochs; ++epoch) {
+    uint32_t completed_epochs = ttml::utils::epochs_completed(optimizer->get_steps(), steps_per_epoch);
+    while (optimizer->get_steps() < effective_max_steps) {
         for (auto [features, target, masks] : train_dataloader) {
             ttml::autograd::ctx().get_profiler().read_results(device, "dataloader_step_done");
 
@@ -882,6 +895,14 @@ int main(int argc, char **argv) {
                         average_loss,
                         (double)duration / 1000,
                         device->num_program_cache_entries());
+                    const uint32_t epochs_now = ttml::utils::epochs_completed(global_step, steps_per_epoch);
+                    while (completed_epochs < epochs_now) {
+                        ++completed_epochs;
+                        if (multihost_config.enable_mpi) {
+                            fmt::print("[Rank {}] ", *ttml::autograd::ctx().get_distributed_context()->rank());
+                        }
+                        fmt::print("Epoch {} completed\n", completed_epochs);
+                    }
                 }
 
                 if (!multihost_config.enable_mpi) {
@@ -896,7 +917,7 @@ int main(int argc, char **argv) {
                 ttml::autograd::ctx().get_profiler().read_results(
                     device, fmt::format("iteration_{}", global_step), /* dump_results */ true);
 
-                if (global_step >= training_config.max_steps) {
+                if (global_step >= effective_max_steps) {
                     break;
                 }
 
@@ -913,9 +934,6 @@ int main(int argc, char **argv) {
                 }
             }
         }
-        if (optimizer->get_steps() >= training_config.max_steps) {
-            break;
-        }
     }
 
     if (!multihost_config.enable_mpi) {
@@ -930,7 +948,7 @@ int main(int argc, char **argv) {
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
     fmt::print(
         "{} Steps training time: {} s, cache entries: {}\n",
-        training_config.max_steps,
+        effective_max_steps,
         (double)duration / 1000000.,
         device->num_program_cache_entries());
 

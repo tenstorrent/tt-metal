@@ -10,6 +10,7 @@
 #include "datasets/utils.hpp"
 #include "models/gpt2.hpp"
 #include "tokenizers/char_tokenizer.hpp"
+#include "utils/training_utils.hpp"
 
 // namespace name can't start with a digit
 namespace three_tier_arch {
@@ -75,7 +76,7 @@ std::vector<int> get_workers_and_aggregator_ranks(uint32_t workers) {
     return ranks;
 }
 
-std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const TrainingConfig &config) {
+std::pair<uint32_t, uint32_t> get_effective_max_steps_and_vocab_size(const TrainingConfig &config) {
     auto sequence_length = std::visit(
         [&](auto &&arg) {
             if constexpr (requires { arg.max_sequence_length; }) {
@@ -126,18 +127,19 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
 
     auto [dataset, vocab_size] = create_dataset(text_or_tokens, sequence_length, config.tokenizer_type, config);
     fmt::print("Dataset size: {}\n", dataset.get_size());
-
-    auto dataset_size = dataset.get_size();
-    auto steps_per_dataset = dataset_size / (config.batch_size * config.gradient_accumulation_steps);
-    if (steps_per_dataset == 0) {
+    if (dataset.get_size() == 0) {
         throw std::runtime_error(fmt::format(
-            "Dataset of {} samples is smaller than one step of batch_size {} x gradient_accumulation_steps {}",
-            dataset_size,
-            config.batch_size,
-            config.gradient_accumulation_steps));
+            "Dataset is empty: {} holds fewer than sequence_length + 1 = {} tokens",
+            config.data_path,
+            sequence_length + 1));
     }
 
-    return {steps_per_dataset, vocab_size};
+    const double steps_per_epoch = ttml::utils::steps_per_epoch(
+        dataset.get_num_tokens(), config.batch_size * config.gradient_accumulation_steps, sequence_length);
+    const uint32_t effective_max_steps =
+        ttml::utils::resolve_effective_max_steps(config.max_steps, config.num_epochs, steps_per_epoch);
+
+    return {effective_max_steps, vocab_size};
 }
 
 std::string read_file_to_str(const std::string &file_path) {
