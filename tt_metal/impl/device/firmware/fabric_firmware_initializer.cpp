@@ -8,7 +8,9 @@
 #include <algorithm>
 #include <chrono>
 #include <optional>
+#include <string>
 #include <string_view>
+#include <unordered_set>
 
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/assert.hpp>
@@ -304,10 +306,11 @@ void FabricFirmwareInitializer::init(
     }
 
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
-        // Reject fabric launch on a single-host mesh with fewer than 2 opened chips.
-        // Multi-host meshes with 1 local chip per rank are unaffected: peers live on other ranks.
         const auto local_mesh_ids = control_plane_.get_local_mesh_id_bindings();
         const size_t num_hosts = control_plane_.get_mesh_graph().get_host_ranks(local_mesh_ids.front()).size();
+
+        // Reject fabric launch on a single-host mesh with fewer than 2 opened chips.
+        // Multi-host meshes with 1 local chip per rank are unaffected: peers live on other ranks.
         TT_FATAL(
             devices_.size() > 1 || num_hosts > 1,
             "Fabric config {} requires at least 2 participating chips, but the opened mesh has {} "
@@ -315,6 +318,51 @@ void FabricFirmwareInitializer::init(
             "devices) or call SetFabricConfig(FabricConfig::DISABLED) before opening a 1-chip mesh.",
             enchantum::to_string(fabric_config),
             devices_.size());
+
+        // Reject fabric launch on a single-host mesh that is a strict subset of the cabled fabric.
+        // Fabric router sync waits for every Ethernet neighbour of each opened chip to come up, so a
+        // neighbour left outside the opened set never syncs and the open hangs until the fabric
+        // timeout. This subsumes the 1-chip case above, and also catches a larger partial mesh such as
+        // a 2x2 or 8x1 submesh offset into a Galaxy. Multi-host meshes stay exempt: their neighbours
+        // are opened by other ranks.
+        if (num_hosts == 1) {
+            std::unordered_set<tt::tt_fabric::FabricNodeId> opened_fabric_node_ids;
+            opened_fabric_node_ids.reserve(devices_.size());
+            for (const auto* device : devices_) {
+                opened_fabric_node_ids.insert(control_plane_.get_fabric_node_id_from_physical_chip_id(device->id()));
+            }
+
+            std::string unopened_neighbours;
+            size_t num_unopened_neighbours = 0;
+            for (const auto* device : devices_) {
+                const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(device->id());
+                for (const auto& [eth_chan, eth_chan_direction] :
+                     control_plane_.get_active_fabric_eth_channels(fabric_node_id)) {
+                    const auto peer = control_plane_.try_get_connected_mesh_chip_chan_ids(fabric_node_id, eth_chan);
+                    if (!peer.has_value() || opened_fabric_node_ids.contains(peer->first)) {
+                        continue;
+                    }
+                    ++num_unopened_neighbours;
+                    // Bound the detail list: a large subset leaves hundreds of links dangling.
+                    if (num_unopened_neighbours <= 8) {
+                        if (!unopened_neighbours.empty()) {
+                            unopened_neighbours += ", ";
+                        }
+                        unopened_neighbours += fmt::format("{} -eth{}-> {}", fabric_node_id, eth_chan, peer->first);
+                    }
+                }
+            }
+
+            TT_FATAL(
+                num_unopened_neighbours == 0,
+                "Fabric config {} requires every Ethernet neighbour of the opened mesh to be opened too, "
+                "but {} neighbour link(s) lead outside it ({}). Fabric router sync waits on those links, "
+                "so the open would hang. Open the whole mesh, or call "
+                "SetFabricConfig(FabricConfig::DISABLED) before opening a subset.",
+                enchantum::to_string(fabric_config),
+                num_unopened_neighbours,
+                unopened_neighbours);
+        }
 
         log_info(tt::LogMetal, "Initializing Fabric");
 #if defined(TT_UMD_BUILD_SIMULATION)
