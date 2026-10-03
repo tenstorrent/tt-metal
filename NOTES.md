@@ -14,6 +14,17 @@ Build on blx03: ~/fasth3/t48 @ b43f3ea63a (a613d669ee + ce356b8815a ttnn/ part),
   it (build_metal.sh --release, incremental, log /var/tmp/fasth3/t96/build.log) before submitting.
 - Old log kept as /var/tmp/fasth3/t96/run96.375.log.
 
+## Attempt 2 (job 435, 2026-10-03 04:16 UTC): part 1 done, part 2 broke on a script bug
+- Pre-submit check: blx03 reboots at 01:21, 02:16, 02:58 UTC; drops at 01:04, 01:29 (queued, not ours), 02:00, 02:27,
+  02:32 all hit ltx-host jobs. Our only jobs: 354, 375 (01:32:51-01:33:32, all post-job gates OK). None lined up with ours.
+- Job 435 ran 04:16:07-04:17:01, post-job gates healthy, no drop.
+- Part 1 (2x4 submesh of full mesh, blocking 4,8, 544x960/145f, fused YUV): decode-only 445 ms eager and traced
+  (VAE_DECODE_SPLIT decode=444.8-445.8 eager, 444.9-446.1 traced); total incl upload+output min 0.5169 s eager,
+  0.5193 s traced. Trace capture 0.99 s, 2.7 MB. traced == eager bit-identical. Trace gives no gain.
+  First (cold) eager decode 10.6 s (kernel compile). Trimmed log: tmp/blx03/t96/results/run96.435.trim.log
+- Part 2 failed: conftest's pinning re-exec rebuilds argv as "python pytest", which breaks under tracy -m.
+  Fix: LTX_PIN_CORES=0 for part 2; run96p2.sh runs part 2 only (log run96.p2.log); driver takes T96_RUN.
+
 ## Running on blx03 (attempt 2, see driver.log for launch time)
 - overlay /var/tmp/fasth3/t96/src (stage96.sh), driver /var/tmp/fasth3/t96/driver.log, marker "T96_DRIVER_DONE <stage> <rc>"
 - broker job 375: run96.sh, log /var/tmp/fasth3/t96/run96.log
@@ -21,8 +32,8 @@ Build on blx03: ~/fasth3/t48 @ b43f3ea63a (a613d669ee + ce356b8815a ttnn/ part),
   part 2: tracy profile; analysis in /var/tmp/fasth3/t96/analysis.txt, csv copy ops_perf.csv
 - stages: build !=0 = rebuild failed (read build.log). ab 9 = drop/ERROR/reboot during OUR job -> STOP ALL device work on every galaxy, report.
   ab 8 = broker never healthy (relaunch driver). analysis 0 = done.
-- If driver gone without marker (reboot): relaunch
-  ssh g14blx03 'cd /var/tmp/fasth3/t96 && setsid nohup bash src/tmp/blx03/t96/driver96.sh > driver.out 2>&1 < /dev/null &' < /dev/null
+- If driver gone without marker (reboot): relaunch (part 2 only: prefix T96_RUN=run96p2.sh)
+  ssh g14blx03 'cd /var/tmp/fasth3/t96 && T96_RUN=run96p2.sh setsid nohup bash src/tmp/blx03/t96/driver96.sh > driver.out 2>&1 < /dev/null &' < /dev/null
 
 ## Next step
 Read driver.log, run96.log (eager vs traced min, VAE_DECODE_SPLIT decode ms), analysis.txt (per-chip op table).

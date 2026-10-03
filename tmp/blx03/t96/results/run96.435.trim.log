@@ -1,0 +1,598 @@
+[t96] build=b43f3ea63a src=92ba584e77d clock: hostfmax chip 31: exit=0 arb_max=1350 MHz (arbiter 7) aiclk=800
+[t96] part 1: traced vs eager
+2026-10-03 04:16:11.636 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/smarton/.cache/ttnn,model_cache_path=/home/smarton/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-10-03 04:16:12.745 | INFO     | models.tt_dit.tests.conftest:<module>:192 - Setting torch num_threads to 64
+2026-10-03 04:16:12.771 | INFO     | models.tt_dit.utils.host_affinity:reexec_pinned_before_torch:106 - host affinity: LTX tests (pytest_cmdline_main): re-exec pinned to 32 cores [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31] (was 64 CPUs); torch/ttnn will inherit this mask (LTX_PIN_CORES=0 disables)
+2026-10-03 04:16:15.199 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/smarton/.cache/ttnn,model_cache_path=/home/smarton/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-10-03 04:16:16.025 | INFO     | models.tt_dit.tests.conftest:<module>:192 - Setting torch num_threads to 64
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /home/smarton/fasth3/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /var/tmp/fasth3/t96/src
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, cov-7.0.0, benchmark-5.2.3, timeout-2.4.0, anyio-4.15.1, dash-2.15.0
+timeout: 860.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/tt_dit/tests/models/ltx/test_vae_ltx_trace_ab.py::test_vae_ltx_trace_ab[blackhole-mesh_device0-device_params0] 2026-10-03 04:16:16.272 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
+2026-10-03 04:16:16.272 | info     |             UMD | Cluster constructor started. (cluster.cpp:405)
+2026-10-03 04:16:16.286 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:131)
+2026-10-03 04:16:16.286 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:150)
+2026-10-03 04:16:16.419 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:654)
+2026-10-03 04:16:16.423 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:154)
+2026-10-03 04:16:16.480 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:172)
+2026-10-03 04:16:16.480 | info     |             UMD | IOMMU: disabled (cluster.cpp:146)
+2026-10-03 04:16:16.480 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:149)
+2026-10-03 04:16:16.480 | info     |             UMD | Cluster constructor completed. (cluster.cpp:719)
+2026-10-03 04:16:16.500 | info     |             UMD | Starting devices in cluster (cluster.cpp:1305)
+2026-10-03 04:16:22.932 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1314)
+2026-10-03 04:16:23.017 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:439)
+2026-10-03 04:16:23.017 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:501)
+2026-10-03 04:16:23.036 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3190)
+2026-10-03 04:16:23.036 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:3198)
+2026-10-03 04:16:23.038 | INFO     | conftest:mesh_device:638 - Keeping trace_region_size=500000000 from device_params (already set)
+2026-10-03 04:16:23.039 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:335)
+2026-10-03 04:16:23.039 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:439)
+2026-10-03 04:16:23.039 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:501)
+2026-10-03 04:16:23.052 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3190)
+2026-10-03 04:16:23.052 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:3198)
+2026-10-03 04:16:23.649 | warning  |           Metal | Failed to create shared memory /tt_device_6898423274646070636_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.649 | warning  |           Metal | Failed to create shared memory /tt_device_4948279223759195036_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.650 | warning  |           Metal | Failed to create shared memory /tt_device_718521759540170522_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.650 | warning  |           Metal | Failed to create shared memory /tt_device_7263315574096971837_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.650 | warning  |           Metal | Failed to create shared memory /tt_device_2815251777217867177_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.650 | warning  |           Metal | Failed to create shared memory /tt_device_4384976856915881079_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.650 | warning  |           Metal | Failed to create shared memory /tt_device_15413520364740198816_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.651 | warning  |           Metal | Failed to create shared memory /tt_device_616135877008316595_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.651 | warning  |           Metal | Failed to create shared memory /tt_device_7598109457067298398_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.651 | warning  |           Metal | Failed to create shared memory /tt_device_7042223796481434835_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.651 | warning  |           Metal | Failed to create shared memory /tt_device_2460078428677784725_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.651 | warning  |           Metal | Failed to create shared memory /tt_device_4542664979921105054_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.652 | warning  |           Metal | Failed to create shared memory /tt_device_17833187522280872786_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.652 | warning  |           Metal | Failed to create shared memory /tt_device_14761127530954652022_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.652 | warning  |           Metal | Failed to create shared memory /tt_device_163459103931854025_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.652 | warning  |           Metal | Failed to create shared memory /tt_device_15153254912429356010_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.652 | warning  |           Metal | Failed to create shared memory /tt_device_3155080127720316465_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.653 | warning  |           Metal | Failed to create shared memory /tt_device_4245648133233881126_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.653 | warning  |           Metal | Failed to create shared memory /tt_device_1556309432690904338_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.653 | warning  |           Metal | Failed to create shared memory /tt_device_8970911958828007852_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.653 | warning  |           Metal | Failed to create shared memory /tt_device_11692727933911004819_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.654 | warning  |           Metal | Failed to create shared memory /tt_device_5947959828024447211_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.654 | warning  |           Metal | Failed to create shared memory /tt_device_16372337465892325073_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.654 | warning  |           Metal | Failed to create shared memory /tt_device_5165525547194267655_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.655 | warning  |           Metal | Failed to create shared memory /tt_device_10824766524365793840_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.655 | warning  |           Metal | Failed to create shared memory /tt_device_3905637836772609181_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.656 | warning  |           Metal | Failed to create shared memory /tt_device_16911889084360629996_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.656 | warning  |           Metal | Failed to create shared memory /tt_device_3748449504587914508_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.656 | warning  |           Metal | Failed to create shared memory /tt_device_3745857022126494719_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.657 | warning  |           Metal | Failed to create shared memory /tt_device_980781543545773439_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.657 | warning  |           Metal | Failed to create shared memory /tt_device_4772547318268112299_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.658 | warning  |           Metal | Failed to create shared memory /tt_device_12093205412074732381_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-03 04:16:23.735 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:320)
+2026-10-03 04:16:24.046 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:467)
+2026-10-03 04:16:24.046 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:337)
+2026-10-03 04:16:24.258 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-10-03 04:16:33.017 | INFO     | models.tt_dit.layers.module:tick:62 - converting weights to device: 13/86 tensors (15%), 5s
+2026-10-03 04:16:37.052 | INFO     | models.tt_dit.layers.module:tick:62 - converting weights to device: 86/86 tensors (100%), 9s
+2026-10-03 04:16:37.052 | INFO     | models.tt_dit.utils.progress:__exit__:62 - convert LTXVideoDecoder: done in 9s
+2026-10-03 04:16:37.749 | info     |    BuildKernels | compiled writer/4155154867286248293/ in 557 ms (build.cpp:1113)
+2026-10-03 04:16:37.769 | info     |    BuildKernels | compiled reader_vol2col/16426171870711528852/ in 576 ms (build.cpp:1113)
+2026-10-03 04:16:37.886 | info     |    BuildKernels | compiled compute/13841120455225382204/ in 693 ms (build.cpp:1113)
+2026-10-03 04:16:37.952 | info     |    BuildKernels | compiled compute/13841120455225382204/ in 758 ms (build.cpp:1113)
+2026-10-03 04:16:38.000 | info     |    BuildKernels | compiled compute/13841120455225382204/ in 806 ms (build.cpp:1113)
+Building ncrisc, compile step:
+In file included from ../kernel_includes.hpp:2,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_phase2_w_reader.cpp: In function 'void kernel_main()':
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_phase2_w_reader.cpp:145:56: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  145 |                             noc_async_read(get_noc_addr(page, input_accessor), l1_addr, stick_size);
+      |                                            ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~
+In file included from /home/smarton/fasth3/t48/tt_metal/hw/inc/api/dataflow/dataflow_api.h:15,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_phase2_w_reader.cpp:155:56: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  155 |                             noc_async_read(get_noc_addr(halo_page, dst_accessor), l1_addr, stick_size);
+      |                                            ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_phase2_w_reader.cpp:234:48: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  234 |                     noc_async_read(get_noc_addr(page, input_accessor), dst_l1_addr, stick_size);
+      |                                    ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_phase2_w_reader.cpp:245:48: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  245 |                     noc_async_read(get_noc_addr(halo_page, dst_accessor), dst_l1_addr, stick_size);
+      |                                    ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_phase2_w_reader.cpp:270:48: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  270 |                     noc_async_read(get_noc_addr(page, input_accessor), dst_l1_addr, stick_size);
+      |                                    ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_phase2_w_reader.cpp:281:48: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  281 |                     noc_async_read(get_noc_addr(halo_page, dst_accessor), dst_l1_addr, stick_size);
+      |                                    ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+Building ncrisc, compile step:
+In file included from ../kernel_includes.hpp:2,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_reader.cpp: In function 'void kernel_main()':
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_reader.cpp:91:57: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+   91 |                     uint64_t src_noc_addr = get_noc_addr(src_stick_id, src_accessor);
+      |                                             ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /home/smarton/fasth3/t48/tt_metal/hw/inc/api/dataflow/dataflow_api.h:15,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_reader.cpp:125:45: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  125 |                                 get_noc_addr(src_stick_id + w, src_accessor),
+      |                                 ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_reader.cpp:133:61: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  133 |                         uint64_t src_noc_addr = get_noc_addr(src_stick_id + iter, src_accessor);
+      |                                                 ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+2026-10-03 04:16:38.309 | info     |    BuildKernels | compiled np_phase2_w_reader/130508964198355960/ in 268 ms (build.cpp:1113)
+2026-10-03 04:16:38.329 | info     |    BuildKernels | compiled np_h_reader/10860880877898815747/ in 287 ms (build.cpp:1113)
+Building brisc, compile step:
+In file included from ../kernel_includes.hpp:2,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:21:
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_w_mux_writer.cpp: In function 'void kernel_main()':
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_w_mux_writer.cpp:139:59: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  139 |                 const uint64_t dst_noc_addr = get_noc_addr(base + r, dst_accessor);
+      |                                               ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /home/smarton/fasth3/t48/tt_metal/hw/inc/api/dataflow/dataflow_api.h:15,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:16:
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+Building brisc, compile step:
+In file included from ../kernel_includes.hpp:2,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:21:
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_mux_writer.cpp: In function 'void kernel_main()':
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_mux_writer.cpp:129:45: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  129 |                             l1, get_noc_addr(frame_base + pad_id * num_sticks_per_halo_dim + col, dst_accessor),
+      |                                 ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /home/smarton/fasth3/t48/tt_metal/hw/inc/api/dataflow/dataflow_api.h:15,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:16:
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_mux_writer.cpp:141:45: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  141 |                             l1, get_noc_addr(frame_base + pad_id * num_sticks_per_halo_dim + col, dst_accessor),
+      |                                 ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_mux_writer.cpp:166:80: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  166 |                             tt::tt_fabric::NocUnicastCommandHeader{get_noc_addr(base_row + w, dst_accessor)},
+      |                                                                    ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+2026-10-03 04:16:38.614 | info     |    BuildKernels | compiled np_w_mux_writer/16374998682534441694/ in 573 ms (build.cpp:1113)
+2026-10-03 04:16:38.657 | info     |    BuildKernels | compiled np_h_mux_writer/6995443223319371507/ in 615 ms (build.cpp:1113)
+2026-10-03 04:16:39.108 | info     |    BuildKernels | compiled writer/729109389021791143/ in 444 ms (build.cpp:1113)
+2026-10-03 04:16:39.179 | info     |    BuildKernels | compiled reader_vol2col/10847466414620528261/ in 514 ms (build.cpp:1113)
+2026-10-03 04:16:39.327 | info     |    BuildKernels | compiled compute/10330721780148271428/ in 662 ms (build.cpp:1113)
+2026-10-03 04:16:39.390 | info     |    BuildKernels | compiled compute/10330721780148271428/ in 726 ms (build.cpp:1113)
+2026-10-03 04:16:39.411 | info     |    BuildKernels | compiled compute/10330721780148271428/ in 747 ms (build.cpp:1113)
+2026-10-03 04:16:39.879 | info     |    BuildKernels | compiled writer/10017049883278161718/ in 449 ms (build.cpp:1113)
+2026-10-03 04:16:39.969 | info     |    BuildKernels | compiled reader_vol2col/2064819146940972742/ in 538 ms (build.cpp:1113)
+2026-10-03 04:16:40.094 | info     |    BuildKernels | compiled compute/10304917118365687977/ in 663 ms (build.cpp:1113)
+2026-10-03 04:16:40.133 | info     |    BuildKernels | compiled compute/10304917118365687977/ in 703 ms (build.cpp:1113)
+2026-10-03 04:16:40.179 | info     |    BuildKernels | compiled compute/10304917118365687977/ in 748 ms (build.cpp:1113)
+Building ncrisc, compile step:
+In file included from ../kernel_includes.hpp:2,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_phase2_w_reader.cpp: In function 'void kernel_main()':
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_phase2_w_reader.cpp:145:56: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  145 |                             noc_async_read(get_noc_addr(page, input_accessor), l1_addr, stick_size);
+      |                                            ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~
+In file included from /home/smarton/fasth3/t48/tt_metal/hw/inc/api/dataflow/dataflow_api.h:15,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_phase2_w_reader.cpp:155:56: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  155 |                             noc_async_read(get_noc_addr(halo_page, dst_accessor), l1_addr, stick_size);
+      |                                            ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_phase2_w_reader.cpp:234:48: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  234 |                     noc_async_read(get_noc_addr(page, input_accessor), dst_l1_addr, stick_size);
+      |                                    ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_phase2_w_reader.cpp:245:48: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  245 |                     noc_async_read(get_noc_addr(halo_page, dst_accessor), dst_l1_addr, stick_size);
+      |                                    ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_phase2_w_reader.cpp:270:48: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  270 |                     noc_async_read(get_noc_addr(page, input_accessor), dst_l1_addr, stick_size);
+      |                                    ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_phase2_w_reader.cpp:281:48: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  281 |                     noc_async_read(get_noc_addr(halo_page, dst_accessor), dst_l1_addr, stick_size);
+      |                                    ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+Building ncrisc, compile step:
+In file included from ../kernel_includes.hpp:2,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_reader.cpp: In function 'void kernel_main()':
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_reader.cpp:91:57: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+   91 |                     uint64_t src_noc_addr = get_noc_addr(src_stick_id, src_accessor);
+      |                                             ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /home/smarton/fasth3/t48/tt_metal/hw/inc/api/dataflow/dataflow_api.h:15,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_reader.cpp:125:45: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  125 |                                 get_noc_addr(src_stick_id + w, src_accessor),
+      |                                 ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_reader.cpp:133:61: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  133 |                         uint64_t src_noc_addr = get_noc_addr(src_stick_id + iter, src_accessor);
+      |                                                 ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+2026-10-03 04:16:40.509 | info     |    BuildKernels | compiled np_phase2_w_reader/8467093681971100100/ in 270 ms (build.cpp:1113)
+2026-10-03 04:16:40.537 | info     |    BuildKernels | compiled np_h_reader/5439112854759035021/ in 298 ms (build.cpp:1113)
+Building brisc, compile step:
+In file included from ../kernel_includes.hpp:2,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:21:
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_mux_writer.cpp: In function 'void kernel_main()':
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_mux_writer.cpp:129:45: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  129 |                             l1, get_noc_addr(frame_base + pad_id * num_sticks_per_halo_dim + col, dst_accessor),
+      |                                 ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /home/smarton/fasth3/t48/tt_metal/hw/inc/api/dataflow/dataflow_api.h:15,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:16:
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_mux_writer.cpp:141:45: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  141 |                             l1, get_noc_addr(frame_base + pad_id * num_sticks_per_halo_dim + col, dst_accessor),
+      |                                 ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_mux_writer.cpp:166:80: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  166 |                             tt::tt_fabric::NocUnicastCommandHeader{get_noc_addr(base_row + w, dst_accessor)},
+      |                                                                    ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+Building brisc, compile step:
+In file included from ../kernel_includes.hpp:2,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:21:
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_w_mux_writer.cpp: In function 'void kernel_main()':
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_w_mux_writer.cpp:139:59: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  139 |                 const uint64_t dst_noc_addr = get_noc_addr(base + r, dst_accessor);
+      |                                               ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /home/smarton/fasth3/t48/tt_metal/hw/inc/api/dataflow/dataflow_api.h:15,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:16:
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+2026-10-03 04:16:40.801 | info     |    BuildKernels | compiled tt_fabric_mux/17720081509807177729/ in 562 ms (build.cpp:1113)
+2026-10-03 04:16:40.836 | info     |    BuildKernels | compiled np_w_mux_writer/15783785754717433141/ in 597 ms (build.cpp:1113)
+2026-10-03 04:16:40.868 | info     |    BuildKernels | compiled np_h_mux_writer/7626306158763917597/ in 629 ms (build.cpp:1113)
+2026-10-03 04:16:41.392 | info     |    BuildKernels | compiled writer/13007448035123307311/ in 510 ms (build.cpp:1113)
+2026-10-03 04:16:41.404 | info     |    BuildKernels | compiled reader_vol2col/18206101669953340932/ in 522 ms (build.cpp:1113)
+2026-10-03 04:16:41.550 | info     |    BuildKernels | compiled compute/9203264515354733986/ in 668 ms (build.cpp:1113)
+2026-10-03 04:16:41.610 | info     |    BuildKernels | compiled compute/9203264515354733986/ in 728 ms (build.cpp:1113)
+2026-10-03 04:16:41.624 | info     |    BuildKernels | compiled compute/9203264515354733986/ in 742 ms (build.cpp:1113)
+2026-10-03 04:16:42.083 | info     |    BuildKernels | compiled writer/17009514698138437270/ in 448 ms (build.cpp:1113)
+2026-10-03 04:16:42.152 | info     |    BuildKernels | compiled reader_vol2col/5846347433934358214/ in 517 ms (build.cpp:1113)
+2026-10-03 04:16:42.308 | info     |    BuildKernels | compiled compute/14878744874911299312/ in 672 ms (build.cpp:1113)
+2026-10-03 04:16:42.352 | info     |    BuildKernels | compiled compute/14878744874911299312/ in 716 ms (build.cpp:1113)
+2026-10-03 04:16:42.388 | info     |    BuildKernels | compiled compute/14878744874911299312/ in 753 ms (build.cpp:1113)
+2026-10-03 04:16:42.974 | info     |    BuildKernels | compiled reader_vol2col/1118612068690836984/ in 514 ms (build.cpp:1113)
+2026-10-03 04:16:42.984 | info     |    BuildKernels | compiled writer/1768539615142581575/ in 524 ms (build.cpp:1113)
+2026-10-03 04:16:43.124 | info     |    BuildKernels | compiled compute/10711728530315613885/ in 664 ms (build.cpp:1113)
+2026-10-03 04:16:43.190 | info     |    BuildKernels | compiled compute/10711728530315613885/ in 730 ms (build.cpp:1113)
+2026-10-03 04:16:43.206 | info     |    BuildKernels | compiled compute/10711728530315613885/ in 746 ms (build.cpp:1113)
+Building ncrisc, compile step:
+In file included from ../kernel_includes.hpp:2,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_phase2_w_reader.cpp: In function 'void kernel_main()':
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_phase2_w_reader.cpp:145:56: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  145 |                             noc_async_read(get_noc_addr(page, input_accessor), l1_addr, stick_size);
+      |                                            ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~
+In file included from /home/smarton/fasth3/t48/tt_metal/hw/inc/api/dataflow/dataflow_api.h:15,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_phase2_w_reader.cpp:155:56: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  155 |                             noc_async_read(get_noc_addr(halo_page, dst_accessor), l1_addr, stick_size);
+      |                                            ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_phase2_w_reader.cpp:234:48: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  234 |                     noc_async_read(get_noc_addr(page, input_accessor), dst_l1_addr, stick_size);
+      |                                    ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_phase2_w_reader.cpp:245:48: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  245 |                     noc_async_read(get_noc_addr(halo_page, dst_accessor), dst_l1_addr, stick_size);
+      |                                    ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_phase2_w_reader.cpp:270:48: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  270 |                     noc_async_read(get_noc_addr(page, input_accessor), dst_l1_addr, stick_size);
+      |                                    ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_phase2_w_reader.cpp:281:48: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  281 |                     noc_async_read(get_noc_addr(halo_page, dst_accessor), dst_l1_addr, stick_size);
+      |                                    ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+Building ncrisc, compile step:
+In file included from ../kernel_includes.hpp:2,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_reader.cpp: In function 'void kernel_main()':
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_reader.cpp:91:57: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+   91 |                     uint64_t src_noc_addr = get_noc_addr(src_stick_id, src_accessor);
+      |                                             ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /home/smarton/fasth3/t48/tt_metal/hw/inc/api/dataflow/dataflow_api.h:15,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_reader.cpp:125:45: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  125 |                                 get_noc_addr(src_stick_id + w, src_accessor),
+      |                                 ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_reader.cpp:133:61: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  133 |                         uint64_t src_noc_addr = get_noc_addr(src_stick_id + iter, src_accessor);
+      |                                                 ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+2026-10-03 04:16:43.655 | info     |    BuildKernels | compiled np_phase2_w_reader/4106522036363299769/ in 268 ms (build.cpp:1113)
+2026-10-03 04:16:43.675 | info     |    BuildKernels | compiled np_h_reader/4220446223072754577/ in 288 ms (build.cpp:1113)
+Building brisc, compile step:
+In file included from ../kernel_includes.hpp:2,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:21:
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_w_mux_writer.cpp: In function 'void kernel_main()':
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_w_mux_writer.cpp:139:59: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  139 |                 const uint64_t dst_noc_addr = get_noc_addr(base + r, dst_accessor);
+      |                                               ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /home/smarton/fasth3/t48/tt_metal/hw/inc/api/dataflow/dataflow_api.h:15,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:16:
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+Building brisc, compile step:
+In file included from ../kernel_includes.hpp:2,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:21:
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_mux_writer.cpp: In function 'void kernel_main()':
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_mux_writer.cpp:129:45: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  129 |                             l1, get_noc_addr(frame_base + pad_id * num_sticks_per_halo_dim + col, dst_accessor),
+      |                                 ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /home/smarton/fasth3/t48/tt_metal/hw/inc/api/dataflow/dataflow_api.h:15,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:16:
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_mux_writer.cpp:141:45: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  141 |                             l1, get_noc_addr(frame_base + pad_id * num_sticks_per_halo_dim + col, dst_accessor),
+      |                                 ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_mux_writer.cpp:166:80: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  166 |                             tt::tt_fabric::NocUnicastCommandHeader{get_noc_addr(base_row + w, dst_accessor)},
+      |                                                                    ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+2026-10-03 04:16:43.971 | info     |    BuildKernels | compiled np_w_mux_writer/2717563924496324860/ in 584 ms (build.cpp:1113)
+2026-10-03 04:16:44.005 | info     |    BuildKernels | compiled np_h_mux_writer/10400320617036388595/ in 618 ms (build.cpp:1113)
+2026-10-03 04:16:44.531 | info     |    BuildKernels | compiled writer/1688263769395323755/ in 514 ms (build.cpp:1113)
+2026-10-03 04:16:44.541 | info     |    BuildKernels | compiled reader_vol2col/8014955580738708094/ in 523 ms (build.cpp:1113)
+2026-10-03 04:16:44.701 | info     |    BuildKernels | compiled compute/5585179420813487960/ in 683 ms (build.cpp:1113)
+2026-10-03 04:16:44.746 | info     |    BuildKernels | compiled compute/5585179420813487960/ in 728 ms (build.cpp:1113)
+2026-10-03 04:16:44.762 | info     |    BuildKernels | compiled compute/5585179420813487960/ in 744 ms (build.cpp:1113)
+2026-10-03 04:16:45.278 | info     |    BuildKernels | compiled writer/13568178120480500845/ in 501 ms (build.cpp:1113)
+2026-10-03 04:16:45.299 | info     |    BuildKernels | compiled reader_vol2col/17515982986214038328/ in 522 ms (build.cpp:1113)
+2026-10-03 04:16:45.437 | info     |    BuildKernels | compiled compute/4804543313044385445/ in 659 ms (build.cpp:1113)
+2026-10-03 04:16:45.500 | info     |    BuildKernels | compiled compute/4804543313044385445/ in 722 ms (build.cpp:1113)
+2026-10-03 04:16:45.533 | info     |    BuildKernels | compiled compute/4804543313044385445/ in 754 ms (build.cpp:1113)
+Building brisc, compile step:
+In file included from ../kernel_includes.hpp:2,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:21:
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_w_mux_writer.cpp: In function 'void kernel_main()':
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_w_mux_writer.cpp:139:59: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  139 |                 const uint64_t dst_noc_addr = get_noc_addr(base + r, dst_accessor);
+      |                                               ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /home/smarton/fasth3/t48/tt_metal/hw/inc/api/dataflow/dataflow_api.h:15,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:16:
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+Building brisc, compile step:
+In file included from ../kernel_includes.hpp:2,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:21:
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_mux_writer.cpp: In function 'void kernel_main()':
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_mux_writer.cpp:129:45: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  129 |                             l1, get_noc_addr(frame_base + pad_id * num_sticks_per_halo_dim + col, dst_accessor),
+      |                                 ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /home/smarton/fasth3/t48/tt_metal/hw/inc/api/dataflow/dataflow_api.h:15,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /home/smarton/fasth3/t48/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:16:
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_mux_writer.cpp:141:45: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  141 |                             l1, get_noc_addr(frame_base + pad_id * num_sticks_per_halo_dim + col, dst_accessor),
+      |                                 ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+/home/smarton/fasth3/t48/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_h_mux_writer.cpp:166:80: warning: 'uint64_t get_noc_addr(uint32_t, const InterleavedAddrGen<DRAM>&, uint32_t, uint8_t) [with bool DRAM = true; uint64_t = long long unsigned int; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> get_noc_addr instead. [-Wdeprecated-declarations]
+  166 |                             tt::tt_fabric::NocUnicastCommandHeader{get_noc_addr(base_row + w, dst_accessor)},
+      |                                                                    ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/smarton/fasth3/t48/tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h:439:1: note: declared here
+  439 | get_noc_addr(const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t offset = 0, uint8_t noc = noc_index) {
+      | ^~~~~~~~~~~~
+2026-10-03 04:16:46.194 | info     |    BuildKernels | compiled np_w_mux_writer/4039843613130726982/ in 587 ms (build.cpp:1113)
+2026-10-03 04:16:46.243 | info     |    BuildKernels | compiled np_h_mux_writer/14694430297117357454/ in 635 ms (build.cpp:1113)
+2026-10-03 04:16:46.770 | info     |    BuildKernels | compiled writer/4471713802151831681/ in 513 ms (build.cpp:1113)
+2026-10-03 04:16:46.815 | info     |    BuildKernels | compiled reader_vol2col/8508478262981942380/ in 557 ms (build.cpp:1113)
+2026-10-03 04:16:46.892 | info     |    BuildKernels | compiled compute/13861147326807097986/ in 634 ms (build.cpp:1113)
+2026-10-03 04:16:46.964 | info     |    BuildKernels | compiled compute/13861147326807097986/ in 707 ms (build.cpp:1113)
+2026-10-03 04:16:46.995 | info     |    BuildKernels | compiled compute/13861147326807097986/ in 738 ms (build.cpp:1113)
+2026-10-03 04:16:47.512 | info     |    BuildKernels | compiled writer/4573345550853417076/ in 509 ms (build.cpp:1113)
+2026-10-03 04:16:47.568 | info     |    BuildKernels | compiled reader_vol2col/9131804443131812319/ in 565 ms (build.cpp:1113)
+2026-10-03 04:16:47.638 | info     |    BuildKernels | compiled compute/499676138662528793/ in 634 ms (build.cpp:1113)
+2026-10-03 04:16:47.724 | info     |    BuildKernels | compiled compute/499676138662528793/ in 720 ms (build.cpp:1113)
+2026-10-03 04:16:47.743 | info     |    BuildKernels | compiled compute/499676138662528793/ in 739 ms (build.cpp:1113)
+2026-10-03 04:16:47.834 | INFO     | models.tt_dit.models.vae.vae_ltx:forward:987 - VAE_DECODE_SPLIT traced=0 upload=51.7ms decode=10634.6ms output=82.0ms total=10768.3ms
+2026-10-03 04:16:48.351 | INFO     | models.tt_dit.models.vae.vae_ltx:forward:987 - VAE_DECODE_SPLIT traced=0 upload=5.8ms decode=445.8ms output=64.8ms total=516.3ms
+2026-10-03 04:16:48.870 | INFO     | models.tt_dit.models.vae.vae_ltx:forward:987 - VAE_DECODE_SPLIT traced=0 upload=9.7ms decode=444.8ms output=63.3ms total=517.9ms
+2026-10-03 04:16:49.390 | INFO     | models.tt_dit.models.vae.vae_ltx:forward:987 - VAE_DECODE_SPLIT traced=0 upload=9.2ms decode=445.6ms output=65.3ms total=520.2ms
+2026-10-03 04:16:49.430 | DEBUG    | models.tt_dit.utils.tracing:_capture:279 - capturing trace...
+2026-10-03 04:16:50.320 | warning  |           Metal | Allocating device buffers is potentially unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed if they are not released before then. Use the trace allocation tracker to verify. (allocator.cpp:140)
+2026-10-03 04:16:50.387 | INFO     | models.tt_dit.models.vae.vae_ltx:forward:987 - VAE_DECODE_SPLIT traced=1 upload=7.6ms decode=911.4ms output=67.3ms total=986.3ms
+2026-10-03 04:16:50.932 | INFO     | models.tt_dit.models.vae.vae_ltx:forward:987 - VAE_DECODE_SPLIT traced=1 upload=11.4ms decode=460.5ms output=63.9ms total=535.8ms
+2026-10-03 04:16:51.453 | INFO     | models.tt_dit.models.vae.vae_ltx:forward:987 - VAE_DECODE_SPLIT traced=1 upload=9.6ms decode=446.1ms output=64.2ms total=519.9ms
+2026-10-03 04:16:51.972 | INFO     | models.tt_dit.models.vae.vae_ltx:forward:987 - VAE_DECODE_SPLIT traced=1 upload=9.7ms decode=444.9ms output=64.0ms total=518.6ms
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[2mtest_vae_ltx_trace_ab.py[0m  [1mtest_vae_ltx_trace_ab[0m  [2m(blackhole, mesh_device0, device_params0)[0m
+
+AB arm=eager decode_s=0.5169 0.5183 0.5205 min=0.5169
+AB trace_bytes=2686976 (2.7 MB) region=500000000 capture_s=0.9868
+AB arm=traced decode_s=0.5366 0.5206 0.5193 min=0.5193
+AB_CMP capture_vs_eager identical=True max_abs_diff=0 shape=(145, 816, 960) dtype=torch.uint8
+AB_CMP traced_vs_eager identical=True max_abs_diff=0 shape=(145, 816, 960) dtype=torch.uint8
+PASSED
+==========================================================================
+WALL-TIME LEDGER · models/tt_dit/tests/models/ltx/test_vae_ltx_trace_ab.py::test_vae_ltx_trace_ab[blackhole-mesh_device0-device_params0]
+--------------------------------------------------------------------------
+category             seconds   %wall   count   notes
+untracked               28.4  100.0%
+--------------------------------------------------------------------------
+TOTAL (tracked)          0.0    0.0%
+TOTAL (wall)            28.4  100.0%
+
+ANOMALIES: none
+==========================================================================
+
+
+=============================== warnings summary ===============================
+models/tt_dit/tests/models/ltx/test_vae_ltx_trace_ab.py::test_vae_ltx_trace_ab[blackhole-mesh_device0-device_params0]
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+models/tt_dit/tests/models/ltx/test_vae_ltx_trace_ab.py::test_vae_ltx_trace_ab[blackhole-mesh_device0-device_params0]
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /var/tmp/fasth3/t96/src/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+28.41s call     models/tt_dit/tests/models/ltx/test_vae_ltx_trace_ab.py::test_vae_ltx_trace_ab[blackhole-mesh_device0-device_params0]
+8.14s setup    models/tt_dit/tests/models/ltx/test_vae_ltx_trace_ab.py::test_vae_ltx_trace_ab[blackhole-mesh_device0-device_params0]
+0.03s teardown models/tt_dit/tests/models/ltx/test_vae_ltx_trace_ab.py::test_vae_ltx_trace_ab[blackhole-mesh_device0-device_params0]
+=========================== short test summary info ============================
+PASSED models/tt_dit/tests/models/ltx/test_vae_ltx_trace_ab.py::test_vae_ltx_trace_ab[blackhole-mesh_device0-device_params0]
+======================== 1 passed, 2 warnings in 36.62s ========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-10-03 04:16:54.555 | info     |    BuildKernels | JIT cache stats: 339/404 hits (83.9%) [339 cached, 742 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:268)
+2026-10-03 04:16:54.555 | info     |    BuildKernels | JIT telemetry: 36 registered TelemetryTokens (build_cache_telemetry.cpp:325)
+2026-10-03 04:16:54.788 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:519)
+2026-10-03 04:16:54.788 | info     |             UMD | Closing devices in cluster (cluster.cpp:1319)
+2026-10-03 04:16:56.715 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1329)
+2026-10-03 04:16:56.715 | info     |             UMD | Cluster destructor started. (cluster.cpp:1050)
+2026-10-03 04:16:56.715 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1063)
+T96_PART1_EXIT=0
+[t96] part 2: profiled eager decode
+2026-10-03 04:16:57.871 | INFO     | __main__:main:212 - Setting profiler artifacts folder to /var/tmp/fasth3/t96/prof
+2026-10-03 04:16:57.873 | INFO     | __main__:main:364 - Using port 8086
+2026-10-03 04:16:57.873 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-10-03 04:16:57.876 | INFO     | tracy:run_report_setup:112 - Capture command: ('/home/smarton/fasth3/t48/build/tools/profiler/bin/tracy-capture -o /var/tmp/fasth3/t96/prof/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-10-03 04:16:57.889 | INFO     | __main__:run_workload:399 - Test process started
+2026-10-03 04:16:58.813 | INFO     | __main__:main:212 - Setting profiler artifacts folder to /var/tmp/fasth3/t96/prof
+2026-10-03 04:16:59.067 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/smarton/.cache/ttnn,model_cache_path=/home/smarton/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-10-03 04:17:01.193 | INFO     | models.tt_dit.tests.conftest:<module>:192 - Setting torch num_threads to 64
+2026-10-03 04:17:01.203 | INFO     | models.tt_dit.utils.host_affinity:reexec_pinned_before_torch:106 - host affinity: LTX tests (pytest_cmdline_main): re-exec pinned to 32 cores [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31] (was 64 CPUs); torch/ttnn will inherit this mask (LTX_PIN_CORES=0 disables)
+/home/smarton/fasth3/tt-metal/python_env/bin/python: can't open file '/var/tmp/fasth3/t96/src/pytest': [Errno 2] No such file or directory
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 2.36 s
+Zones: 1
+Elapsed time: 2.2 s
+Saving trace... done!
+Trace size 1413 bytes (25.13% ratio)
+2026-10-03 04:17:01.291 | INFO     | __main__:main:463 - Copying /var/tmp/fasth3/t96/prof/.logs/tracy_profile_log_host.tracy to /home/smarton/fasth3/t48/build/profiler/build_wasm/traces/test_vae_ltx_prof_2x4_2026_10_03_04_17_01.tracy
+2026-10-03 04:17:01.292 | INFO     | __main__:main:466 - Copied /var/tmp/fasth3/t96/prof/.logs/tracy_profile_log_host.tracy to /home/smarton/fasth3/t48/build/profiler/build_wasm/traces/test_vae_ltx_prof_2x4_2026_10_03_04_17_01.tracy
+2026-10-03 04:17:01.292 | INFO     | __main__:main:475 - embed.tracy -> traces/test_vae_ltx_prof_2x4_2026_10_03_04_17_01.tracy
+2026-10-03 04:17:01.292 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-10-03 04:17:01.292 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-10-03 04:17:01.306 | INFO     | tracy.serve_wasm:launch_server_subprocess:307 - Running command: /home/smarton/fasth3/tt-metal/python_env/bin/python /home/smarton/fasth3/t48/tools/tracy/serve_wasm.py --port 8080
+2026-10-03 04:17:01.306 | INFO     | tracy.serve_wasm:launch_server_subprocess:332 - Started server with PID 150817, logging to /var/tmp/fasth3/t96/prof/tracy_wasm_gui_server.log
+2026-10-03 04:17:01.321 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /var/tmp/fasth3/t96/prof/.logs/tracy_ops_times.csv
+2026-10-03 04:17:01.324 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /var/tmp/fasth3/t96/prof/.logs/tracy_ops_data.csv
+2026-10-03 04:17:01.324 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:463 - Importing ops logs
+2026-10-03 04:17:01.346 | INFO     | tracy.process_ops_logs:get_device_data_generate_report:1449 - Copying runtime artifacts
+2026-10-03 04:17:01.348 | INFO     | tracy.process_ops_logs:get_device_data_generate_report:1666 - No device logs found
+T96_PART2_EXIT=0
+T96_EXIT=0

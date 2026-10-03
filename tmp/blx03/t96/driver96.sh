@@ -55,7 +55,7 @@ B=/home/smarton/fasth3/t48
 (cd $B && bash build_metal.sh --release --cpm-source-cache $R/.cpmcache) > $V/build.log 2>&1; brc=$?
 log "build rc=$brc $(git -C $B log -1 --format=%h)"
 [ $brc = 0 ] || done_ build $brc
-run_job ab 1500 bash $S/tmp/blx03/t96/run96.sh; rc=$?
+run_job ab 1500 bash $S/tmp/blx03/t96/${T96_RUN:-run96.sh}; rc=$?
 [ $rc = 0 ] || done_ ab $rc
 csv=$(ls -t $V/prof/reports/*/ops_perf_results_*.csv 2>/dev/null | head -1)
 [ -n "$csv" ] || done_ nocsv 1
