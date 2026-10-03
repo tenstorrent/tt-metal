@@ -125,8 +125,8 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> groupe
     // this needs to be added to make sure that gradients for k and v are computed before we run backward for q
     // Only add sync nodes if out_q has a node (i.e., gradients are needed)
     if (q_node.has_value()) {
-        out_k->set_node(autograd::add_backward_node_always([]() {}, out_k, qs, kvs));
-        out_v->set_node(autograd::add_backward_node_always([]() {}, out_v, qs, kvs));
+        out_k->set_node(autograd::add_backward_node_always([]() {}, out_k, qs, kvs, out_q));
+        out_v->set_node(autograd::add_backward_node_always([]() {}, out_v, qs, kvs, out_q));
     }
     return {out_q, out_k, out_v};
 }
