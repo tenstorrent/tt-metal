@@ -142,6 +142,32 @@ ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t n
 
 // clang-format off
 /**
+ * Like `pack_block` (same arguments, same effect on the CB write pointer); on Blackhole a block of full 32x32 tiles in a
+ * plain format, one tile per CB page, is one packer program run. Other outputs and architectures take `pack_block`.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name      | Description                                       | Type     | Valid Range                                                | Required |
+ * |------------|-----------|---------------------------------------------------|----------|------------------------------------------------------------|----------|
+ * | Function   | ifrom_dst | The index of the first tile in the DEST register  | uint32_t | Must be less than the size of the DEST register (16)       | True     |
+ * | Function   | icb       | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31                                                    | True     |
+ * | Function   | ntiles    | The number of tiles to copy from DEST to CB       | uint32_t | ifrom_dst + ntiles within the acquired DEST tiles (8 or 16) | True     |
+ */
+// clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void pack_block_mop(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles) {
+    LLK_SAN_FUNCTION();
+#if defined(ARCH_BLACKHOLE)
+    PACK((llk_pack_block<is_fp32_dest_acc_en>(ifrom_dst, icb, ntiles)));
+#elif defined(ARCH_QUASAR)
+    PACK((llk_pack_block(ifrom_dst, icb, ntiles)));
+#else
+    PACK((llk_matmul_pack<is_fp32_dest_acc_en, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
+#endif
+}
+
+// clang-format off
+/**
  * Issues a single no-write packer op: it steps the packer engine only -- no DST is committed to L1 and it
  * does NOT push/advance the CB (the surrounding cb_push_back does that). Call it between cb_reserve_back
  * and cb_push_back when a CB is being pushed but its tile data is not needed.
