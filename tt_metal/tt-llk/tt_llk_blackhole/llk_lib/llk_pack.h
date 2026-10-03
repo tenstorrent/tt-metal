@@ -532,6 +532,8 @@ inline void _llk_pack_init_(
         "mutex_ADC is supported for PackMode::Default only: other modes issue ADC instructions from inside the MOP, "
         "which the mutex cannot cover");
 
+    // Experiment: 1 nop(s), a change that does no work.
+    asm volatile("nop");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     const DataFormat src_format = static_cast<DataFormat>(pack_src_format);
     if (src_format == DataFormat::Float32)
