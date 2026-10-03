@@ -27,6 +27,7 @@ from ...utils import cache as cache_module
 from ...utils.conv3d import (
     ConvDims,
     _ntuple,
+    _walk_conv3d_modules,
     aligned_channels,
     conv3d_blocking_hash,
     conv_pad_height,
@@ -192,6 +193,16 @@ class LTXCausalConv3d(Module):
 
         self._w_mask_cache: dict[tuple, ttnn.Tensor] = {}
         self._pad_offset_cache: dict[tuple, ttnn.Tensor] = {}
+
+    def set_math_fidelity(self, math_fidelity: ttnn.MathFidelity) -> None:
+        """Override the conv3d matmul fidelity."""
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=math_fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
 
     def _get_pad_offset(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
         """Per-device [h_start, w_start] of the local shard, which conv3d needs to place its logical-pad mask."""
@@ -696,6 +707,17 @@ def _compute_ltx_decoder_dims(
     return dims
 
 
+def _decoder_conv_fidelity_from_env() -> ttnn.MathFidelity | None:
+    """LTX_VAE_CONV_FIDELITY (LoFi|HiFi2|HiFi3|HiFi4); unset = default.
+
+    bf8 weights were tried too: conv3d gave garbage output (PSNR 10 dB) for ~1% speed, so they were dropped.
+    """
+    name = os.environ.get("LTX_VAE_CONV_FIDELITY", "")
+    if name and name not in ("LoFi", "HiFi2", "HiFi3", "HiFi4"):
+        raise ValueError(f"LTX_VAE_CONV_FIDELITY must be LoFi, HiFi2, HiFi3 or HiFi4 (got {name!r})")
+    return getattr(ttnn.MathFidelity, name) if name else None
+
+
 class LTXVideoDecoder(Module):
     """LTX-2 Video VAE decoder (TTNN): (B, 128, F', H', W') latent → (B, 3, F, H, W) pixels."""
 
@@ -818,6 +840,12 @@ class LTXVideoDecoder(Module):
                 # ch stays the same (in == out for mid block)
             else:
                 raise ValueError(f"Unknown decoder block: {block_name}")
+
+        # Opt-in lower fidelity for the up-block conv3d layers; conv_in/conv_out keep the defaults.
+        math_fidelity = _decoder_conv_fidelity_from_env()
+        if math_fidelity is not None:
+            for conv in _walk_conv3d_modules(self.up_blocks):
+                conv.set_math_fidelity(math_fidelity)
 
         # Output: RMSNorm+SiLU fused → conv_out
         self.norm_out_compute_kernel_config = ttnn.init_device_compute_kernel_config(
