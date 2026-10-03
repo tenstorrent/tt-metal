@@ -551,6 +551,47 @@ struct Reader {
         claimed--;  // hand the staging slot back; nothing was ever announced for it
     }
 
+    // Tokens the upstream chip on this stream writes straight into OUR output over the whole launch. Every
+    // one of them is a chunk whose destination is this chip, so it comes from origins 1 … m hops upstream,
+    // with the same share rule as everywhere else: the opposite chip's run split by stream, the rest by link.
+    // Sized from the same replicated tables the writers used, so it equals what the upstream sender counts.
+    uint32_t expected_final_writes() const {
+        const uint32_t extent = ct.dispatch_group_size;
+        const uint32_t m = extent / 2;
+        const bool is_cw = ct.my_stream % 2 == 0;
+        uint32_t total = 0;
+        for (uint32_t local_expert = 0; local_expert < ct.experts_per_chip; local_expert++) {
+            for (uint32_t hops = 1; hops <= m; hops++) {
+                const uint32_t origin =
+                    is_cw ? (ct.my_dg_index + extent - hops) % extent : (ct.my_dg_index + hops) % extent;
+                const cmbf2d::ChunkDescriptor desc{
+                    origin,
+                    ct.my_dg_index,
+                    hops == m ? ct.my_stream : ct.my_stream / 2,
+                    hops == m ? ct.local_split_count : ct.local_split_count / 2};
+                total += chunk_tokens(desc, local_expert);
+            }
+        }
+        return total;
+    }
+
+    // Block until every token the upstream sender wrote into our output has been counted. Without this the
+    // program on this chip can finish while a neighbour is still delivering, and the next op on this chip
+    // would read an output whose last tokens have not landed.
+    //
+    // The bump is a flushing atomic, so the far router has pushed the writes ahead of it before counting
+    // them. What is left is subtracted rather than zeroed, for the same reason as `fwd_arrived`: the upstream
+    // chip may already be counting the next launch's tokens.
+    void wait_for_final_writes() const {
+        const uint32_t expected = expected_final_writes();
+        volatile tt_l1_ptr uint32_t* final_arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.final_sem_addr);
+        invalidate_l1_cache();
+        while (*final_arrived < expected) {
+            invalidate_l1_cache();
+        }
+        noc_semaphore_inc(get_noc_addr(ct.final_sem_addr), 0u - expected);
+    }
+
     // End of stream. The sender cannot know the length up front, so it stops on this.
     void end_stream() {
         slot_metadata(claim_slot())->cmd = cmbf2d::CMD_END;
@@ -586,6 +627,9 @@ void kernel_main() {
 #if TILE
     reader.untilized.reset_counters();
 #endif
+    // After end_stream, so our own sender is already free to finish: the upstream sender we are waiting on
+    // only needs its own reader to have ended, never ours, so this cannot close a cycle around the ring.
+    reader.wait_for_final_writes();
 
     // Subtract what this launch consumed instead of zeroing: the upstream chip may already be bumping for the
     // next launch, and zeroing would drop those bumps and hang it. The sender counts every forwarded page and
