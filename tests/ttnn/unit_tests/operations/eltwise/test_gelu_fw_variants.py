@@ -290,3 +290,41 @@ def test_gelu_inf_nan_handling(device, variant_name, torch_dtype, tt_dtype):
     # want to flag if the kernel silently produced a usable finite-nonzero value.
     for name, val in [("gelu(-inf)", neg_inf), ("gelu(NaN)", nan_out)]:
         assert val == 0.0 or not math.isfinite(val), f"{variant_name}: {name} -> {val!r}, expected 0 or any non-finite"
+
+
+def test_gelu_tanh_fast_param_matches_tanh(device):
+    """GELU_TANH with param 1 (x / (1 + exp(-2u))) through the generic unary path, over every finite BF16 input,
+    against variant=Tanh: <= 1 BF16 ULP where |GELU| >= 1e-3. In the negative tail the accurate path cancels
+    (1 + tanh(u) with tanh(u) ~ -1) and the fast one does not, so there require a small absolute difference."""
+    input_bf16, finite = _all_inputs(torch.bfloat16)
+    tt_input = ttnn.from_torch(input_bf16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    tanh = ttnn.to_torch(ttnn.gelu(tt_input, variant=ttnn.GeluVariant.Tanh))
+    fast = ttnn.to_torch(ttnn.unary_chain(tt_input, [ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH, 1.0)]))
+    assert not torch.equal(tanh, fast), "param 1 produced the accurate kernel's bits: the param was not forwarded"
+
+    core = finite & (tanh.float().abs() >= 1e-3)
+    assert ulp_distance(fast[core], tanh[core]).max() <= 1
+    tail = finite & ~core
+    assert (fast[tail].float() - tanh[tail].float()).abs().max() <= 1e-5
+
+
+def test_gelu_tanh_fast_param_inf_nan_and_saturation(device):
+    """GELU_TANH param 1 at the non-finite inputs and the saturation ends: +inf and large positive x pass through
+    (exp(-2u) clamps to ~0), large negative x saturates to 0 (exp(-2u) clamps to 2^127 and its reciprocal flushes),
+    and -inf / NaN must not come out finite-nonzero (same contract as test_gelu_inf_nan_handling)."""
+    inputs = torch.zeros((32, 32), dtype=torch.bfloat16)
+    values = [float("inf"), float("-inf"), float("nan"), 1e30, -1e30, 3.0e38, -3.0e38]
+    for i, v in enumerate(values):
+        inputs[0, i] = v
+    tt_input = ttnn.from_torch(inputs, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.to_torch(ttnn.unary_chain(tt_input, [ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH, 1.0)]))
+    pos_inf, neg_inf, nan_out, big, neg_big, huge, neg_huge = (out[0, i].item() for i in range(len(values)))
+
+    assert pos_inf == float("inf"), f"gelu(+inf) -> {pos_inf!r}, expected +inf"
+    for name, val in [("gelu(-inf)", neg_inf), ("gelu(NaN)", nan_out)]:
+        assert val == 0.0 or not math.isfinite(val), f"{name} -> {val!r}, expected 0 or any non-finite"
+    for x, val in [(inputs[0, 3].item(), big), (inputs[0, 5].item(), huge)]:
+        assert val == x, f"gelu({x!r}) -> {val!r}, expected identity"
+    for x, val in [(-1e30, neg_big), (-3.0e38, neg_huge)]:
+        assert val == 0.0, f"gelu({x!r}) -> {val!r}, expected 0"
