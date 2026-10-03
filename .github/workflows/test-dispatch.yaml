@@ -53,6 +53,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      reuse-build-run-id:
+        required: false
+        type: string
+        default: ""
+        description: "Workflow run ID to reuse the build artifact from (skips the build)"
 
 run-name: ${{ inputs.description }}
 jobs:
@@ -65,6 +70,7 @@ jobs:
     if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      actions: read
       contents: read
       packages: write
     secrets: inherit
@@ -76,6 +82,7 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
+      use-artifacts-from-run: ${{ inputs.reuse-build-run-id }}
   test-dispatch:
     needs: [check-harbor, build-artifact]
     if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
