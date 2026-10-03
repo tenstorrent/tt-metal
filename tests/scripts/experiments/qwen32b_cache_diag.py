@@ -21,14 +21,15 @@ ROOTS = os.environ.get(
 ).split(",")
 print(f"host={socket.gethostname()} arch={ttnn.get_arch_name()}", flush=True)
 
+# Every layer-0 and lm_head file (the weights the unit tests and the e2e decode path load), uncapped.
 PATTERNS = (
-    "*layers.0.*prefetcher*",
-    "*layers.0.*sharded_2d*",
-    "*layers.0.*dram*",
+    "*layers.0.*",
     "*lm_head*",
     "*output*",
-    "*pb_rs*",
+    "*embed*",
+    "*norm*",
 )
+MAX_PER_PATTERN = int(os.environ.get("CACHE_DIAG_MAX_PER_PATTERN", "200"))
 
 for root, sub in [
     (r, s)
@@ -42,9 +43,15 @@ for root, sub in [
     files = sorted(glob.glob(os.path.join(d, "*.tensorbin")))
     days = Counter(time.strftime("%Y-%m-%d", time.gmtime(os.stat(f).st_mtime)) for f in files)
     print(f"== {d}: {len(files)} files; mtime days: {dict(sorted(days.items()))}", flush=True)
+    newest = sorted(files, key=lambda f: os.stat(f).st_mtime)[-15:]
+    for f in newest:
+        print(
+            f"   newest: {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(os.stat(f).st_mtime))} {os.path.basename(f)}",
+            flush=True,
+        )
     seen = set()
     for pat in PATTERNS:
-        for f in sorted(glob.glob(os.path.join(d, pat)))[:4]:
+        for f in sorted(glob.glob(os.path.join(d, pat)))[:MAX_PER_PATTERN]:
             if f in seen:
                 continue
             seen.add(f)
