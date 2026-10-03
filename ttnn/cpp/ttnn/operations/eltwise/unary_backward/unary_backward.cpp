@@ -587,6 +587,17 @@ std::vector<std::optional<Tensor>> fill_bw(
 
 std::vector<Tensor> hardsigmoid_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+    // One program for BF16 operands, whose gradient is the generated SFPU kernel; anything else
+    // keeps the composite below.
+    if (grad.dtype() == DataType::BFLOAT16 && input.dtype() == DataType::BFLOAT16) {
+        return {ttnn::operations::unary_backward::launch_unary_backward(
+            ttnn::operations::unary_backward::UnaryBackwardOpType::HARDSIGMOID_BW,
+            grad,
+            input,
+            input.dtype(),
+            output_mem_config.value_or(input.memory_config()))};
+    }
+
     std::vector<Tensor> grad_tensor;
     Tensor grad_a = ttnn::where(
         ttnn::logical_or(
