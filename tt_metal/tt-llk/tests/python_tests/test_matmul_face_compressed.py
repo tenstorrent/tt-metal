@@ -451,12 +451,15 @@ def test_matmul_face_compressed_deepseek(shape, switch_mult, seed):
 # DEST, every call repeating one face pattern (cycled over its faces in row-major order) with
 # its own meta buffer. The kernel holds math back before each call, so the unpacker reaches
 # the next call while math still holds the previous one's banks (see CUSTOM_MM_CALLS).
+#   calls  mixed formats: each call's activation block must start where its base address says
 #   race   one format, so nothing inside a call clears SrcA: a both-bank SrcB clear issued
 #          while math still holds the banks drops the SrcA writes it overlaps
 #   rearm  mixed formats with a -inf SrcA clear after every call, which the format switches'
 #          clears to 0 would otherwise mask
 MULTI_CALL_CASES = [
     # (id, M, K, N, per-call face pattern, rearm)
+    ("calls", 1, 1024, 64, ["bfp4", "bfp2"], False),
+    ("calls-m8-ct3", 8, 1024, 96, ["bfp2", "bfp4"], False),
     ("race-bfp4", 1, 1024, 64, ["bfp4"], False),
     ("race-bfp2", 1, 1024, 64, ["bfp2"], False),
     ("race-bfp4-m8", 8, 1024, 64, ["bfp4"], False),

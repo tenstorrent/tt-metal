@@ -447,10 +447,11 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
     reset_config_context();
 
     // Put the counters back the way init left them, ready for the next call: zero the Y counters the
-    // per-face SET_Y writes moved and the shared ZW pair, but not X, so init's CH1 X ends survive.
+    // per-face SET_Y writes and the activation loads moved and the shared ZW pair, but not X, so init's CH1 X ends survive.
     t6_mutex_acquire(mutex::THREAD2_ADC);
     TTI_SETADCXY_THREAD_OVERRIDE(p_setadc::UNP_AB, p_setadc::THREAD_OVRD_MATH, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
     TTI_SETADCXY_THREAD_OVERRIDE(p_setadc::UNP_AB, p_setadc::THREAD_OVRD_PACK, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
+    TTI_SETADCXY(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
     TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::ZW));
     t6_mutex_release(mutex::THREAD2_ADC);
 }
