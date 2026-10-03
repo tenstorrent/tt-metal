@@ -64,6 +64,10 @@ tt::tt_metal::IDevice* device_at(
     return device;
 }
 
+void require_initialized_mesh_device(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    TT_FATAL(mesh_device.is_initialized(), "MeshDevice is not initialized.");
+}
+
 }  // namespace
 
 // note from nanobind docs:
@@ -285,6 +289,43 @@ void py_module(nb::module_& mod) {
     auto nb_mesh_device = static_cast<nb::class_<MeshDevice>>(mod.attr("MeshDevice"));
     nb_mesh_device.def("get_num_devices", &MeshDevice::num_devices)
         .def("id", &MeshDevice::id)
+        .def(
+            "is_initialized",
+            &MeshDevice::is_initialized,
+            R"doc(
+                Return whether the mesh device is initialized.
+
+                A remote-only mesh is initialized even though it has no local devices.
+
+                Returns:
+                    bool: Whether the mesh device is initialized.
+            )doc")
+        .def(
+            "is_remote_only",
+            &MeshDevice::is_remote_only,
+            R"doc(
+                Return whether the initialized mesh has no local devices.
+
+                Returns:
+                    bool: Whether the mesh contains only remote devices; false after close.
+            )doc")
+        .def(
+            "num_hw_cqs",
+            [](const MeshDevice& mesh_device) {
+                require_initialized_mesh_device(mesh_device);
+                return mesh_device.num_hw_cqs();
+            },
+            R"doc(
+                Return the hardware command queue count on each local device.
+
+                A remote-only mesh has zero hardware command queues.
+
+                Returns:
+                    int: The hardware command queue count.
+
+                Raises:
+                    RuntimeError: If the mesh device is not initialized.
+            )doc")
         .def("get_device_ids", &MeshDevice::get_device_ids)
         .def(
             "get_device_id",
@@ -484,6 +525,36 @@ void py_module(nb::module_& mod) {
                Args:
                    sub_device_manager_id (SubDeviceManagerId): The ID of the sub-device manager to remove.
            )doc")
+        .def(
+            "get_sub_device_ids",
+            [](const MeshDevice& mesh_device) -> const std::vector<SubDeviceId>& {
+                require_initialized_mesh_device(mesh_device);
+                return mesh_device.get_sub_device_ids();
+            },
+            R"doc(
+                Return all sub-device IDs in the active manager, independent of its stall group.
+
+                Returns:
+                    List[SubDeviceId]: The active manager's sub-device IDs.
+
+                Raises:
+                    RuntimeError: If the mesh device is not initialized or has no local devices.
+            )doc")
+        .def(
+            "get_active_sub_device_manager_id",
+            [](const MeshDevice& mesh_device) {
+                require_initialized_mesh_device(mesh_device);
+                return mesh_device.get_active_sub_device_manager_id();
+            },
+            R"doc(
+                Return the active sub-device manager ID.
+
+                Returns:
+                    SubDeviceManagerId: The active manager's ID.
+
+                Raises:
+                    RuntimeError: If the mesh device is not initialized or has no local devices.
+            )doc")
         .def(
             "set_sub_device_stall_group",
             [](MeshDevice& self, const std::vector<SubDeviceId>& sub_device_ids) {
