@@ -178,6 +178,9 @@ volatile tt_l1_ptr realtime_profiler_msg_t* rt_profiler_msg =
     reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(REALTIME_PROFILER_MSG_ADDR);
 
 static bool rt_profiler_enabled = false;
+static_assert(REALTIME_PROFILER_STREAM_COUNT_MASK == (1u << MEM_WORD_ADDR_WIDTH) - 1);
+
+static uint64_t rt_done_time = 0;
 
 static uint32_t num_pages_acquired = 0;
 // Counts go signals handed over by dispatch_d, regardless of their transport.
@@ -442,13 +445,23 @@ void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
     while (stream_wrap_gt(wait_count, *worker_sem)) {
 #endif
         collect_worker_completions();
-        if (rt_profiler_enabled) {
-            record_realtime_timestamp(rt_profiler_msg, false);
-        }
 #if DEVICE_PRINT_DISPATCH_ENABLED
         device_print_dispatcher.execute();
 #endif
     }
+#ifndef ARCH_QUASAR
+    if (rt_profiler_enabled) {
+        // Bounded so the profiler never stalls dispatch.
+        volatile tt_l1_ptr realtime_profiler_stream_t* stream =
+            &rt_profiler_msg->streams[wait_stream - first_stream_used];
+        uint32_t spins = 0;
+        while (stream->done_count != (*worker_sem & REALTIME_PROFILER_STREAM_COUNT_MASK) && ++spins < 1000) {
+            invalidate_l1_cache();
+        }
+        rt_done_time = spins < 1000 ? (static_cast<uint64_t>(stream->done_time_hi) << 32) | stream->done_time_lo
+                                    : realtime_profiler_wall_clock();
+    }
+#endif
 
     WAYPOINT("WCD");
 }
@@ -612,6 +625,20 @@ FORCE_INLINE void wait_for_workers_and_send_go_signal(
 #endif
 
 FORCE_INLINE
+void publish_realtime_record(uint32_t stream_index) {
+    volatile tt_l1_ptr realtime_profiler_stream_t* stream = &rt_profiler_msg->streams[stream_index];
+    if (stream->open_id != REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID) {
+        write_realtime_record(
+            rt_profiler_msg,
+            stream->open_id,
+            (static_cast<uint64_t>(stream->open_start_hi) << 32) | stream->open_start_lo,
+            rt_done_time);
+        signal_realtime_profiler_and_switch(rt_profiler_msg);
+        stream->open_id = REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID;
+    }
+}
+
+FORCE_INLINE
 void process_go_signal_mcast_cmd() {
     volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
     uint32_t sync_index = load_aligned<uint32_t>(&cmd->mcast.wait_stream) - first_stream_used;
@@ -715,6 +742,17 @@ void process_go_signal_mcast_cmd() {
 #endif
 
     collect_worker_completions();
+    uint32_t program_id = REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID;
+    invalidate_l1_cache();
+    program_id_fifo_pop(rt_profiler_msg, &program_id);
+    if (rt_profiler_enabled) {
+        uint64_t go_time = realtime_profiler_wall_clock();
+        publish_realtime_record(sync_index);
+        rt_profiler_msg->streams[sync_index].open_id = program_id;
+        rt_profiler_msg->streams[sync_index].open_start_hi = static_cast<uint32_t>(go_time >> 32);
+        rt_profiler_msg->streams[sync_index].open_start_lo = static_cast<uint32_t>(go_time);
+    }
+
     update_worker_completion_count_on_dispatch_d();
     cmd_ptr += sizeof(CQDispatchCmd);
 }
@@ -845,6 +883,10 @@ void kernel_main() {
     // realtime_profiler_msg_t signalling + FIFO + kernel_* .id fields are zeroed on the host in
     // DispatchSKernel::ConfigureCore() before CQ kernels launch.
 
+    for (uint32_t i = 0; i < max_num_worker_sems; i++) {
+        rt_profiler_msg->streams[i].open_id = REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID;
+    }
+
     cmd_ptr = cb_base;
     bool done = false;
     uint32_t total_pages_acquired = 0;
@@ -866,17 +908,14 @@ void kernel_main() {
 #endif
     while (!done) {
         DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
-        rt_profiler_enabled = (rt_profiler_msg->realtime_profiler_core_noc_xy != 0);
-        uint32_t popped_pid = 0;
-        if (rt_profiler_enabled) {
-            record_realtime_timestamp(rt_profiler_msg, true);
-            popped_pid = pop_program_id(rt_profiler_msg);
-        }
 #if DEVICE_PRINT_DISPATCH_ENABLED
         device_print_dispatcher.execute();
 #endif
         cb_acquire_pages_dispatch_s<my_noc_xy, my_dispatch_cb_sem_id>(1);
         collect_worker_completions();
+        // May have blocked above since before the profiler was enabled.
+        invalidate_l1_cache();
+        rt_profiler_enabled = (rt_profiler_msg->realtime_profiler_core_noc_xy != 0);
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
         // Upstream relays this command by NoC write, which does not snoop, so the header must be dropped before
         // it is read cached. CPU reads past this window carry their own invalidate; payload handed to
@@ -885,13 +924,6 @@ void kernel_main() {
 #endif
         volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
         DeviceTimestampedData("process_cmd_d_dispatch_subordinate", (uint32_t)cmd->base.cmd_id);
-        if (rt_profiler_enabled) {
-            const bool is_profiled_cmd = cmd->base.cmd_id == CQ_DISPATCH_CMD_SEND_GO_SIGNAL ||
-                                         cmd->base.cmd_id == CQ_DISPATCH_CMD_RT_PROFILER_FLUSH;
-            write_buffer_id(
-                rt_profiler_msg,
-                is_profiled_cmd ? popped_pid : static_cast<uint32_t>(REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID));
-        }
         switch (cmd->base.cmd_id) {
             case CQ_DISPATCH_CMD_SEND_GO_SIGNAL:
                 DPRINT("CQ_DISPATCH_CMD_SEND_GO_SIGNAL\n");
@@ -918,17 +950,19 @@ void kernel_main() {
                 DPRINT("CQ_DISPATCH_CMD_WAIT\n");
                 process_dispatch_s_wait_cmd();
                 break;
-            case CQ_DISPATCH_CMD_RT_PROFILER_FLUSH:
+            case CQ_DISPATCH_CMD_RT_PROFILER_FLUSH: {
                 DPRINT("CQ_DISPATCH_CMD_RT_PROFILER_FLUSH\n");
-                wait_for_workers(
-                    load_aligned<uint32_t>(&cmd->rt_profiler_flush.wait_count),
-                    load_aligned<uint32_t>(&cmd->rt_profiler_flush.wait_stream));
+                uint32_t wait_stream = load_aligned<uint32_t>(&cmd->rt_profiler_flush.wait_stream);
+                wait_for_workers(load_aligned<uint32_t>(&cmd->rt_profiler_flush.wait_count), wait_stream);
+                if (rt_profiler_enabled) {
+                    publish_realtime_record(wait_stream - first_stream_used);
+                }
                 cmd_ptr += sizeof(CQDispatchCmd);
                 break;
+            }
             case CQ_DISPATCH_CMD_TERMINATE:
                 DPRINT("CQ_DISPATCH_CMD_TERMINATE\n");
                 if (rt_profiler_enabled) {
-                    signal_realtime_profiler_and_switch(rt_profiler_msg);
                     noc_async_writes_flushed();
                     for (volatile uint32_t delay = 0; delay < 5000; delay++) {
                     }
@@ -961,10 +995,6 @@ void kernel_main() {
             cmd_ptr = cb_base;
         }
         total_pages_acquired++;
-
-        if (!done && rt_profiler_enabled) {
-            signal_realtime_profiler_and_switch(rt_profiler_msg);
-        }
     }
     // Confirm expected number of pages, spinning here is a leak
     cb_wait_all_pages<my_dispatch_cb_sem_id>(total_pages_acquired);

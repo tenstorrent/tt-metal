@@ -46,8 +46,10 @@ dispatch_s            BRISC reader          NCRISC pusher          host
 
 ## Double-Buffer Protocol
 
-dispatch_s maintains two timestamp buffers in its own L1 (A/B). On each
-`CQ_DISPATCH_CMD_WAIT` completion it:
+dispatch_s keeps one open record per sub-device stream. A go signal opens it;
+the next wait on that stream (go signal or `CQ_DISPATCH_CMD_RT_PROFILER_FLUSH`)
+closes it with the stream's last completion time, stamped by the dispatch_s TRISC.
+Closing a record:
 
 1. Writes the program's start/end timestamps into the next buffer (alternating A/B)
 2. Sends a `PUSH_A` or `PUSH_B` state to the reserved profiler tensix via a NOC
