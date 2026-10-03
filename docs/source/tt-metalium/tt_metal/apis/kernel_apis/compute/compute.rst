@@ -26,6 +26,7 @@ Initialization
 .. toctree::
 
   init_functions
+  init_sfpu
   binary_op_init_funcs
 
 Compute (FPU/matrix engine)
