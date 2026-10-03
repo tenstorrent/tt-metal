@@ -31,11 +31,24 @@ inline uint32_t ring_extent(const CombineFabric2dParams& args) {
     return args.device->shape()[static_cast<int32_t>(args.axis)];
 }
 
-// One token's row of the embedding. Read off the tensor rather than taken as a parameter — and off its
-// SHAPE, not its page: a ROW_MAJOR dispatched buffer pages by exactly one token, a TILE one does not.
+// The format every token moves in, from the untilized rows through the ring and the fabric to the output, so
+// also the output's dtype. A BFLOAT8_B dispatched buffer is unpacked to it by the untilize, so only the tile
+// read from DRAM is bfp8.
+constexpr tt::tt_metal::DataType TOKEN_DTYPE = tt::tt_metal::DataType::BFLOAT16;
+
+inline tt::DataFormat token_data_format() { return tt::tt_metal::datatype_to_dataformat_converter(TOKEN_DTYPE); }
+
+// One token's row of the embedding. Its width is read off the tensor's SHAPE, not its page: a ROW_MAJOR
+// dispatched buffer pages by exactly one token, a TILE one does not. Its bytes are TOKEN_DTYPE's whatever the
+// dispatched dtype.
 inline uint32_t token_size_bytes(const CombineFabric2dInputs& tensor_args) {
     return static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]) *
-           tensor_args.dispatched_buffer.element_size();
+           tt::datum_size(token_data_format());
+}
+
+// The dispatched buffer's format as the untilize's input CB declares it: BFLOAT16 or BFLOAT8_B.
+inline tt::DataFormat dispatched_data_format(const CombineFabric2dInputs& tensor_args) {
+    return tt::tt_metal::datatype_to_dataformat_converter(tensor_args.dispatched_buffer.dtype());
 }
 
 inline bool dispatched_is_tiled(const CombineFabric2dInputs& tensor_args) {
@@ -48,14 +61,19 @@ inline uint32_t tiles_per_token_row(const CombineFabric2dInputs& tensor_args) {
            tensor_args.dispatched_buffer.tensor_spec().tile().get_width();
 }
 
+// One tile of the dispatched buffer as it sits in DRAM, which is also its page: a bfp8 tile carries its
+// shared exponents on top of the mantissas, so this is not tile_hw times any element size.
 inline uint32_t tile_size_bytes(const CombineFabric2dInputs& tensor_args) {
-    return static_cast<uint32_t>(tensor_args.dispatched_buffer.tensor_spec().tile().get_tile_hw()) *
-           tensor_args.dispatched_buffer.element_size();
+    return tensor_args.dispatched_buffer.tensor_spec().tile().get_tile_size(dispatched_data_format(tensor_args));
 }
+
+// The batch-count CB holds a single uint32, which the compute kernel reads as word 0 of a tile, so it is one
+// tile in the UInt32 format it is declared in.
+constexpr uint32_t BATCH_COUNT_CB_BYTES = tt::tile_size(tt::DataFormat::UInt32);
 
 // Tiles the untilize takes per pack call, and so the width of the input window: as wide as it can be, and a
 // divisor of the row so the blocks tile it exactly. Eight is what llk_pack_untilize asserts as its ceiling
-// off the dense path; a whole tile-row would not fit L1 on top of the output ring anyway, at 458 kB.
+// off the dense path.
 constexpr uint32_t UNTILIZE_MAX_BLOCK_TILES = 8;
 
 inline uint32_t untilize_block_tiles(const CombineFabric2dInputs& tensor_args) {

@@ -9,6 +9,9 @@ dispatched from, one fabric hop at a time. Each chip on the way stores the token
 forwarding buffer and forwards it. Where each token lands is fully determined by the routing, so the
 gate is byte-exact equality against a torch reference.
 
+The op takes BFLOAT16 ROW_MAJOR or TILE, or BFLOAT8_B TILE, and always outputs BFLOAT16. BFLOAT8_B
+rounds the tokens on upload, so its reference is the uploaded payload read back from the device.
+
 The input is laid out as dispatch_fabric2d leaves it: per local expert, tokens grouped by the chip
 they came from, starting at the page `expert_offsets` gives. Every page holds its own random token,
 so a token delivered to the wrong slot cannot match by accident.
@@ -199,7 +202,8 @@ def _payload_pool(H, G, capacity, emb_dim):
 
 
 class _Fixture:
-    """One routing draw laid out as dispatch leaves it, on device, plus its torch reference.
+    """One routing draw laid out as dispatch leaves it, on device, plus the tokens each upload of it should
+    deliver.
 
     `routing` is None for in-group picks, "production" for PRODUCTION_ROUTING, or a (G, H, seq, topk)
     index tensor. `capacity`
@@ -255,6 +259,7 @@ class _Fixture:
         ).to(torch.int32)
 
         self._tt_payload = {}
+        self._delivered = {ttnn.bfloat16: self.payload}
         self.tt_meta = self._shard(meta, (0, 1), ttnn.int32)
         # expert_offsets holds every origin chip's row, replicated along the dispatch axis: a forwarding
         # chip needs them to size what it forwards. Counts and region offsets are the same on every
@@ -273,15 +278,46 @@ class _Fixture:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def tt_payload(self, layout):
-        """The payload on device in `layout`, uploaded once. A TILE upload runs a tilize program."""
-        if layout not in self._tt_payload:
-            self._tt_payload[layout] = self._shard(self.payload, (0, 1), ttnn.bfloat16, layout=layout)
-        return self._tt_payload[layout]
+    def tt_payload(self, layout, dtype=ttnn.bfloat16):
+        """The payload on device in `layout` and `dtype`, uploaded once. A TILE upload runs a tilize program."""
+        if (layout, dtype) not in self._tt_payload:
+            tt_payload = self._shard(self.payload, (0, 1), dtype, layout=layout)
+            if dtype == ttnn.bfloat8_b and dtype not in self._delivered:
+                self._delivered[dtype] = self._read_back_rounded(tt_payload)
+            self._tt_payload[layout, dtype] = tt_payload
+        return self._tt_payload[layout, dtype]
 
-    def run(self, cluster_axis, num_links, layout=ttnn.ROW_MAJOR_LAYOUT):
+    def _read_back_rounded(self, tt_payload):
+        """A rounding upload's tokens, read back before any launch can touch them.
+
+        The untilize widens bfloat8_b back to bfloat16 exactly, so these are the bytes the op must deliver.
+        Reading them back keeps the reference independent of how the host rounds.
+        """
+        rounded = ttnn.to_torch(
+            tt_payload,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=(0, 1)
+            ),
+            dtype=torch.bfloat16,
+        )
+        assert (
+            rounded.shape == self.payload.shape
+        ), f"read back {tuple(rounded.shape)}, uploaded {tuple(self.payload.shape)}"
+        # A reference equal to the unrounded payload could not tell a bfloat8_b input from a bfloat16 one.
+        assert not torch.equal(rounded, self.payload), f"{tt_payload.dtype} upload did not round the payload"
+        sample = torch.stack([rounded.flatten()[: 1 << 20], self.payload.flatten()[: 1 << 20]]).float()
+        pcc = torch.corrcoef(sample)[0, 1].item()
+        assert pcc > 0.99, f"{tt_payload.dtype} upload is not the payload rounded: PCC {pcc:.5f}"
+        return rounded
+
+    def delivered_payload(self, dtype):
+        """The tokens the op should deliver from a `dtype` payload, which must have been uploaded."""
+        assert dtype in self._delivered, f"no {dtype} payload was uploaded, or combine does not take it"
+        return self._delivered[dtype]
+
+    def run(self, cluster_axis, num_links, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16):
         return ttnn.experimental.deepseek_prefill.combine_fabric2d(
-            self.tt_payload(layout),
+            self.tt_payload(layout, dtype),
             self.tt_meta,
             self.tt_counts,
             self.tt_region,
@@ -302,13 +338,15 @@ class _Fixture:
         distance = (self.routing.holder_pos - s) % self.H
         return [int((self.kept & (distance == d)).sum()) for d in range(self.H)]
 
-    def check(self, output, label):
-        """Every output slot a kept pick maps to, byte-exact against the page dispatch put it at.
+    def check(self, output, label, dtype=ttnn.bfloat16):
+        """Every output slot a kept pick maps to, byte-exact against the page dispatch put it at, from a
+        payload uploaded as `dtype`.
 
         Slots of picks routed to another group are not written and not compared: the op does not
         initialise its output.
         """
         r = self.routing
+        payload = self.delivered_payload(dtype)
         got_all = ttnn.get_device_tensors(output)  # row-major over the (H, G) mesh
         assert len(got_all) == self.H * self.G, f"{label}: {len(got_all)} device tensors for {self.H * self.G} chips"
         checked = 0
@@ -319,10 +357,11 @@ class _Fixture:
             if not mask.any():
                 continue
             got = ttnn.to_torch(got_all[dev]).reshape(self.seq_len_per_chip, self.topk, self.emb_dim)[mask]
-            want = self.payload[r.holder_pos[g, s][mask], g, r.page[g, s][mask]]
+            want = payload[r.holder_pos[g, s][mask], g, r.page[g, s][mask]]
             checked += int(mask.sum())
-            if not torch.equal(got, want):
-                wrong = (got != want).any(-1)
+            # Bit patterns rather than values, so a +0 delivered for a -0 counts as wrong.
+            if not torch.equal(got.view(torch.int16), want.view(torch.int16)):
+                wrong = (got.view(torch.int16) != want.view(torch.int16)).any(-1)
                 t, k = mask.nonzero()[wrong.nonzero()[0, 0]].tolist()
                 logger.error(
                     f"{label}: device {dev} (pos {s}, group {g}): {int(wrong.sum())}/{int(mask.sum())} slots differ, "
@@ -343,28 +382,26 @@ class _Fixture:
 # In-group gives every pick a chip to come back from. Production routes over all experts, so most picks
 # belong to other groups and the kept ones concentrate on a few chips.
 @pytest.mark.parametrize("routing", [None, "production"], ids=lambda r: r or "in-group")
-# The routed expert hands combine TILE tokens. Untilizer cores next to the senders turn them into rows,
-# so both layouts send the same bytes and share one reference.
+# The routed expert hands combine bfloat8_b TILE tokens. Untilizer cores next to the senders turn TILE
+# into bfloat16 rows, so the bfloat16 layouts send the same bytes and bfloat8_b sends its rounded tokens.
+# The formats share the draw but each shifts the payload differently: the op does not initialise its
+# output, so another format's leftover output could otherwise match.
 @pytest.mark.parametrize(
-    "input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=lambda ly: "tile" if ly == ttnn.TILE_LAYOUT else "rm"
+    "input_layout, input_dtype, payload_shift",
+    [
+        pytest.param(ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 0, id="rm"),
+        pytest.param(ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, id="tile"),
+        pytest.param(ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 2, id="tile_bfp8"),
+    ],
 )
 @pytest.mark.timeout(900)
-def test_combine_fabric2d(mesh_device, device_params, num_links, routing, input_layout):
+def test_combine_fabric2d(mesh_device, device_params, num_links, routing, input_layout, input_dtype, payload_shift):
     cfg = extract_mesh_config(mesh_device)
     assert cfg.sp_axis == 0, "this op runs on the dispatch axis, which extract_mesh_config puts at 0"
     H, G = cfg.dispatch_group_size, cfg.num_dispatch_groups
     if routing == "production" and G == 1:
         pytest.skip("production routing sends most picks to other dispatch groups; this mesh has only one")
-    # The layouts share the draw but not the payload: the op does not initialise its output, so the
-    # other layout's leftover output could otherwise match.
-    fx = _Fixture(
-        mesh_device,
-        H,
-        G,
-        seed=7,
-        routing=routing,
-        payload_shift=int(input_layout == ttnn.TILE_LAYOUT),
-    )
+    fx = _Fixture(mesh_device, H, G, seed=7, routing=routing, payload_shift=payload_shift)
     logger.info(
         f"combine_fabric2d: mesh={tuple(mesh_device.shape)} H={H} G={G} experts_per_chip={fx.experts_per_chip} "
         f"seq={fx.seq_len_per_chip} topk={fx.topk} capacity={fx.capacity}"
@@ -376,14 +413,15 @@ def test_combine_fabric2d(mesh_device, device_params, num_links, routing, input_
     missing = [d for d, n in enumerate(by_distance) if n == 0]
     assert not missing, f"no picks at ring distance {missing} (0 is the local copy); those routes go untested"
 
-    output = fx.run(cfg.sp_axis, num_links, layout=input_layout)
+    output = fx.run(cfg.sp_axis, num_links, layout=input_layout, dtype=input_dtype)
     assert tuple(output.shape)[-3:] == (fx.seq_len_per_chip, fx.topk, fx.emb_dim), output.shape
-    fx.check(output, "combine")
+    assert output.dtype == ttnn.bfloat16, output.dtype
+    fx.check(output, "combine", dtype=input_dtype)
 
 
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
-    _PRODUCTION_MESH,
+    _MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
 # 2880 (gpt_oss_120b) is 90 tiles, not a multiple of 8, so the untilizer falls back to 6-tile blocks.
@@ -391,33 +429,36 @@ def test_combine_fabric2d(mesh_device, device_params, num_links, routing, input_
 @pytest.mark.parametrize("emb_dim", [2880, 7168], ids=lambda e: f"emb{e}")
 @pytest.mark.timeout(1800)
 def test_combine_fabric2d_relaunch(mesh_device, device_params, num_links, emb_dim):
-    """Four launches on one device (row-major, tile, tile, row-major) to catch state leaking from one
-    launch into the next.
+    """Six launches on one device (row-major, tile, tile bfloat8_b, tile, tile bfloat8_b, row-major) to
+    catch state leaking from one launch into the next.
 
-    - Program cache: only TILE has untilizer cores, so a cache key missing the layout would reuse the
-      wrong program.
+    - Program cache: only TILE has untilizer cores, and their input CB is declared in the dispatched
+      buffer's dtype, so a cache key missing the layout or the dtype would reuse the wrong program.
     - Handshake counters: they outlive the launch and only the kernels zero them. A stale one makes the
       next launch read or overwrite slots early; a new draw per launch turns that into wrong slots.
     """
     cfg = extract_mesh_config(mesh_device)
     plan = [
-        ("row-major", ttnn.ROW_MAJOR_LAYOUT),
-        ("tile", ttnn.TILE_LAYOUT),
-        ("tile again", ttnn.TILE_LAYOUT),
-        ("row-major again", ttnn.ROW_MAJOR_LAYOUT),
+        ("row-major", ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+        ("tile", ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ("tile bfloat8_b", ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        ("tile again", ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ("tile bfloat8_b again", ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        ("row-major again", ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
     ]
     added = []
-    for seed, (label, layout) in enumerate(plan):
+    for seed, (label, layout, dtype) in enumerate(plan):
         fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, emb_dim=emb_dim, seed=20 + seed)
-        fx.tt_payload(layout)  # uploaded first, so its tilize program is not counted below
+        fx.tt_payload(layout, dtype)  # uploaded first, so its tilize program is not counted below
         before = mesh_device.num_program_cache_entries()
-        output = fx.run(cfg.sp_axis, num_links, layout=layout)
+        output = fx.run(cfg.sp_axis, num_links, layout=layout, dtype=dtype)
         added.append(mesh_device.num_program_cache_entries() - before)
         # Reading the output back keeps the launches apart; test_combine_fabric2d_back_to_back overlaps them.
-        fx.check(output, f"{label}, emb {emb_dim}")
-    # Each layout's first launch builds one program and the repeats must hit the cache. A key that is too
+        fx.check(output, f"{label}, emb {emb_dim}", dtype=dtype)
+    # Each format's first launch builds one program and the repeats must hit the cache. A key that is too
     # specific rebuilds every launch and still passes the byte-exact checks, but costs prefill perf.
-    assert added == [1, 1, 0, 0], f"programs the four launches added: {added}, expected [1, 1, 0, 0]"
+    expected = [1, 1, 1, 0, 0, 0]
+    assert added == expected, f"programs the six launches added: {added}, expected {expected}"
 
 
 @pytest.mark.parametrize(
@@ -427,8 +468,8 @@ def test_combine_fabric2d_relaunch(mesh_device, device_params, num_links, emb_di
 )
 @pytest.mark.timeout(900)
 def test_combine_fabric2d_partial_last_tile(mesh_device, device_params, num_links):
-    """A buffer sized exactly to the draw, so it ends part way into a tile, combines byte-exact in both
-    layouts.
+    """A buffer sized exactly to the draw, so it ends part way into a tile, combines byte-exact in every
+    input format.
 
     TILE untilizes that last tile whole, padding rows included; only real pages may reach the output.
     660 tokens per chip also makes seq_len_per_chip a non-multiple of 32.
@@ -436,9 +477,42 @@ def test_combine_fabric2d_partial_last_tile(mesh_device, device_params, num_link
     cfg = extract_mesh_config(mesh_device)
     fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seq_len_per_chip=660, capacity="exact")
     assert fx.capacity % ttnn.TILE_SIZE != 0, f"capacity {fx.capacity} is tile-aligned, so no tile is partial"
-    for layout, label in ((ttnn.ROW_MAJOR_LAYOUT, "row-major"), (ttnn.TILE_LAYOUT, "tile")):
-        output = fx.run(cfg.sp_axis, num_links, layout=layout)
-        fx.check(output, f"{label}, {fx.capacity} pages, 660 tokens per chip")
+    for layout, dtype, label in (
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, "row-major"),
+        (ttnn.TILE_LAYOUT, ttnn.bfloat16, "tile"),
+        (ttnn.TILE_LAYOUT, ttnn.bfloat8_b, "tile bfloat8_b"),
+    ):
+        output = fx.run(cfg.sp_axis, num_links, layout=layout, dtype=dtype)
+        fx.check(output, f"{label}, {fx.capacity} pages, 660 tokens per chip", dtype=dtype)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    _MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "input_layout, input_dtype",
+    [
+        pytest.param(ttnn.ROW_MAJOR_LAYOUT, ttnn.float32, id="float32-rm"),
+        pytest.param(ttnn.TILE_LAYOUT, ttnn.float32, id="float32-tile"),
+        pytest.param(ttnn.TILE_LAYOUT, ttnn.bfloat4_b, id="bfloat4_b-tile"),
+    ],
+)
+@pytest.mark.timeout(900)
+def test_combine_fabric2d_unsupported_dtype(
+    mesh_device, device_params, num_links, input_layout, input_dtype, expect_error
+):
+    """A dispatched buffer the op does not take is refused before launch, by its dtype.
+
+    Tokens are sized as BFLOAT16 whatever the input, so a float32 TILE buffer would otherwise pass every
+    size check and be moved as the wrong bytes.
+    """
+    cfg = extract_mesh_config(mesh_device)
+    fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups)
+    fx.tt_payload(input_layout, input_dtype)
+    with expect_error(RuntimeError, "dispatched_buffer must be BFLOAT16"):
+        fx.run(cfg.sp_axis, num_links, layout=input_layout, dtype=input_dtype)
 
 
 @pytest.mark.parametrize(
