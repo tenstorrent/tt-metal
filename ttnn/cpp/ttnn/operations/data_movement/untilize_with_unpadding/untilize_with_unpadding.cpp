@@ -103,27 +103,164 @@ Tensor untilize_with_unpadding(
     const DataType output_dtype = operations::data_movement::untilize_output_dtype(input_tensor.dtype());
 
     // Nothing to untilize. The factories split work by block count, which is 0 for an empty input,
-    // so split_blocks_for_tilize hands back empty core ranges and no WorkUnitSpec is emitted - while
-    // the dataflow buffers have already been declared. CollectSpecData then rejects the spec with
-    // "DFB '<name>' has no producer" (program_spec.cpp), which surfaces as a TT_FATAL out of
-    // to_layout(TILE -> ROW_MAJOR) on any zero-volume tensor. Allocate the empty output here rather
-    // than building a program that has nothing to run. output_tensor_end holds inclusive end
-    // indices, so the produced extent is end + 1 per dim; for an empty dim that end is the uint32
-    // wrap of 0 - 1, and + 1 returns it to 0.
+    // so no WorkUnitSpec is emitted while the dataflow buffers are already declared, and
+    // CollectSpecData rejects the spec ("DFB has no producer"). Allocate the output here instead.
+    //
+    // This stands in for the device operation's validate and compute_output_specs, so it repeats
+    // the checks they would have made and derives the output shard the way they would. The rule is:
+    // never accept a request the normal path rejects, and never try to support one it cannot do.
     if (input_tensor.logical_volume() == 0) {
+        // create_device_tensor dereferences the device, which is null for a host tensor.
+        TT_FATAL(
+            input_tensor.device() != nullptr, "untilize_with_unpadding: input tensor must be allocated on a device");
+        TT_FATAL(input_tensor.layout() == Layout::TILE, "Can only untilize tile major data");
+        TT_FATAL(
+            !input_tensor.is_sharded() || !sub_core_grids.has_value(),
+            "Sharded untilize does not support sub core grid specification");
+
+        // output_tensor_end holds inclusive end indices, so each extent is end + 1; for an empty
+        // dim that end is the uint32 wrap of 0 - 1, and + 1 returns it to 0. Built over the input's
+        // rank, since output_tensor_end may be longer and taking its rank would grow an axis.
         ttsl::SmallVector<uint32_t> empty_shape;
-        empty_shape.reserve(output_tensor_end.rank());
-        for (size_t index = 0; index < output_tensor_end.rank(); ++index) {
+        empty_shape.reserve(input_shape.rank());
+        for (size_t index = 0; index < input_shape.rank(); ++index) {
             empty_shape.push_back(output_tensor_end[index] + 1);
         }
         const ttnn::Shape output_shape(std::move(empty_shape));
-        // An empty input carries no element to unpad into a non-empty output. to_layout never asks
-        // for one, but a direct caller can, and this path skips the device operation's validation,
-        // so reject it here rather than manufacturing zeros.
         TT_FATAL(
             output_shape.volume() == 0,
             "untilize_with_unpadding: a zero-volume input requires a zero-volume output, got {}",
             output_shape);
+        // Unpadding only shrinks. Volume alone misses that: [0, 64] with ends [0, UINT32_MAX] is
+        // zero-volume but shaped [1, 0].
+        for (size_t index = 0; index < input_shape.rank(); ++index) {
+            TT_FATAL(
+                output_shape[index] <= input_tensor.padded_shape()[index],
+                "untilize_with_unpadding: output extent {} exceeds the padded input extent {} in "
+                "dimension {}",
+                output_shape[index],
+                input_tensor.padded_shape()[index],
+                index);
+        }
+
+        auto output_mem_config = memory_config.value_or(input_tensor.memory_config());
+        const auto input_layout = input_tensor.memory_config().memory_layout();
+        // The single-core implementation cannot write an output shard narrower than a tile.
+        if (!use_multicore && output_mem_config.is_sharded()) {
+            TT_FATAL(
+                output_mem_config.shard_spec().has_value() || output_mem_config.nd_shard_spec().has_value(),
+                "Output memory config is sharded but no shard spec or nd shard spec is provided");
+            const uint32_t output_shard_width = output_mem_config.shard_spec().has_value()
+                                                    ? output_mem_config.shard_spec().value().shape[1]
+                                                    : output_mem_config.nd_shard_spec().value().shard_shape[-1];
+            TT_FATAL(
+                output_shard_width % tt::constants::TILE_WIDTH == 0,
+                "Output shard width {} must be a multiple of tile width {} for single core implementation",
+                output_shard_width,
+                tt::constants::TILE_WIDTH);
+        }
+        const bool input_is_sharded = input_tensor.shard_spec().has_value();
+        // A caller may name a sharded layout without a spec (ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+        // and friends); the device operation fills it in from the input for a same-layout output.
+        if (input_is_sharded && output_mem_config.is_sharded() && !output_mem_config.shard_spec().has_value() &&
+            output_mem_config.memory_layout() == input_layout) {
+            output_mem_config = MemoryConfig(
+                output_mem_config.memory_layout(), output_mem_config.buffer_type(), input_tensor.shard_spec());
+        }
+
+        // Which sharded output each sharded input may produce. TensorSpec checks the output's own
+        // geometry, not whether the conversion is supported. A same-layout output binds the output
+        // buffer as a dynamic circular buffer, which only works in L1.
+        const bool same_layout = input_is_sharded && output_mem_config.memory_layout() == input_layout;
+        if (input_is_sharded && output_mem_config.is_sharded()) {
+            if (input_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+                TT_FATAL(
+                    same_layout,
+                    "Output memory config layout must be HEIGHT_SHARDED when output is sharded but got {}",
+                    output_mem_config.memory_layout());
+            } else if (input_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+                TT_FATAL(
+                    same_layout || output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
+                    "Output memory config layout ({}) must be BLOCK_SHARDED (or WIDTH_SHARDED with a "
+                    "matching column shard width) when input is BLOCK_SHARDED and output is sharded",
+                    output_mem_config.memory_layout());
+            } else if (input_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+                TT_FATAL(
+                    same_layout || output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
+                    "Output memory config layout ({}) must match input tensor memory layout ({}) (or be "
+                    "BLOCK_SHARDED with a matching column shard width)",
+                    output_mem_config.memory_layout(),
+                    input_layout);
+            }
+            if (same_layout) {
+                TT_FATAL(
+                    output_mem_config.buffer_type() == BufferType::L1,
+                    "{} -> {} output must be in L1; got buffer_type={}",
+                    input_layout,
+                    output_mem_config.memory_layout(),
+                    output_mem_config.buffer_type());
+            }
+            // The device operation's remaining same-type check is an unbatched-only assert that
+            // divides by padded_shape[-2] * padded_shape[-1]. That is 0 here, and "batch" has no
+            // meaning without elements, so it has no counterpart on this path.
+        }
+
+        // The output shard shape, derived as the device operation derives it. Its fused height is
+        // volume() / shape[-1], which is 0 / 0 for an empty output, so use the product of the
+        // leading dims - the same value whenever the width is non-zero. A derived extent of 0 means
+        // that axis is empty, and no shard shape can hold a 0, so the base extent is kept there.
+        if (output_mem_config.is_sharded() && output_mem_config.shard_spec().has_value()) {
+            uint32_t fused_height = 1;
+            for (size_t index = 0; index + 1 < output_shape.rank(); ++index) {
+                fused_height *= output_shape[index];
+            }
+            const auto tile = input_tensor.tensor_spec().tile();
+            // A same-layout output is reshaped from the input's shard, as the device operation does;
+            // a cross-layout one keeps the caller's verbatim, and an interleaved input has none to
+            // inherit, so its extents come from the grid.
+            ShardSpec output_shard_spec =
+                same_layout ? input_tensor.shard_spec().value() : output_mem_config.shard_spec().value();
+            const CoreRange bbox = output_shard_spec.grid.bounding_box();
+            uint32_t grid_cols = bbox.end_coord.x - bbox.start_coord.x + 1;
+            uint32_t grid_rows = bbox.end_coord.y - bbox.start_coord.y + 1;
+            if (output_shard_spec.orientation != ShardOrientation::ROW_MAJOR) {
+                std::swap(grid_cols, grid_rows);
+            }
+            const uint32_t num_cores = output_shard_spec.num_cores();
+            const uint32_t base_height = output_shard_spec.shape[0];
+            const uint32_t base_width = output_shard_spec.shape[1];
+            const auto or_base = [](uint32_t derived, uint32_t base) { return derived > 0 ? derived : base; };
+            const auto out_layout = output_mem_config.memory_layout();
+            if (!input_tensor.memory_config().is_sharded()) {
+                if (out_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+                    output_shard_spec.shape = {
+                        or_base(fused_height, base_height),
+                        or_base(tt::round_up(tt::div_up(output_shape[-1], num_cores), tile.get_width()), base_width)};
+                } else if (out_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+                    output_shard_spec.shape = {
+                        or_base(tt::round_up(tt::div_up(fused_height, grid_rows), tile.get_height()), base_height),
+                        or_base(tt::round_up(tt::div_up(output_shape[-1], grid_cols), tile.get_width()), base_width)};
+                } else {
+                    output_shard_spec.shape = {
+                        or_base(tt::round_up(tt::div_up(fused_height, num_cores), tile.get_height()), base_height),
+                        base_width};
+                }
+            } else if (same_layout) {
+                if (out_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+                    output_shard_spec.shape = {or_base(fused_height, base_height), base_width};
+                } else if (out_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+                    output_shard_spec.shape = {
+                        or_base(tt::round_up(tt::div_up(fused_height, grid_rows), tile.get_height()), base_height),
+                        or_base(tt::round_up(tt::div_up(output_shape[-1], grid_cols), tile.get_width()), base_width)};
+                } else {
+                    output_shard_spec.shape = {
+                        or_base(tt::round_up(tt::div_up(fused_height, num_cores), tile.get_height()), base_height),
+                        or_base(output_shape[-1], base_width)};
+                }
+            }
+            output_mem_config =
+                MemoryConfig(output_mem_config.memory_layout(), output_mem_config.buffer_type(), output_shard_spec);
+        }
         // Allocated rather than filled: there is no element to initialise, and going through a host
         // tensor would upload to the device, which fails outright inside trace capture and drops the
         // input's mesh topology on the way. Carry that topology across instead.
@@ -131,9 +268,7 @@ Tensor untilize_with_unpadding(
             tt::tt_metal::TensorSpec(
                 output_shape,
                 tt::tt_metal::TensorLayout(
-                    output_dtype,
-                    tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
-                    memory_config.value_or(input_tensor.memory_config()))),
+                    output_dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), output_mem_config)),
             input_tensor.device(),
             input_tensor.tensor_topology());
     }
