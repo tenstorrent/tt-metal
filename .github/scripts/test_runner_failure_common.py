@@ -62,6 +62,22 @@ def test_eth_heartbeat_timeout_signature() -> None:
     assert "ETH heartbeat timeout" in matching_signature_labels(log_text)
 
 
+def test_unrotatable_system_mesh_signature() -> None:
+    log_text = (
+        "TT_THROW @ /work/tt_metal/distributed/system_mesh.cpp:224: "
+        "Requested mesh is too big and is not rotatable: MeshShape([4, 8]) "
+        "and SystemMesh MeshShape([32, 1]), offset MeshCoordinate([0, 0])"
+    )
+
+    assert "Fabric link down (MGD topology)" in matching_signature_labels(log_text)
+
+
+def test_mgd_topology_signature() -> None:
+    log_text = "Graph specified in MGD could not fit in the discovered physical topology"
+
+    assert "Fabric link down (MGD topology)" in matching_signature_labels(log_text)
+
+
 def test_job_log_fetch_allows_escape_sequences(monkeypatch) -> None:
     captured_command: list[str] = []
 

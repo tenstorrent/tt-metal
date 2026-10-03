@@ -22,7 +22,7 @@ except ModuleNotFoundError:  # pragma: no cover - handled in load_config
     yaml = None
 
 
-SIGNATURE_VERSION = "runner-failure-signatures-2026-09-21-v1"
+SIGNATURE_VERSION = "runner-failure-signatures-2026-10-02-v1"
 UNKNOWN_RUNNER = "(unknown runner)"
 
 OSC_SEQUENCE_RE = re.compile(r"\x1b\].*?\x1b\\")
@@ -123,7 +123,12 @@ ERROR_SIGNATURES = (
     ErrorSignature(
         key="FABRIC_LINK_DOWN_MGD_TOPOLOGY_FOUND",
         label="Fabric link down (MGD topology)",
-        needle="Graph specified in MGD could not fit in the discovered physical topology",
+        pattern=(
+            r"(?:Graph\s+specified\s+in\s+MGD\s+could\s+not\s+fit\s+in\s+the\s+"
+            r"discovered\s+physical\s+topology|"
+            r"Requested\s+mesh\s+is\s+too\s+big\s+and\s+is\s+not\s+rotatable:\s*"
+            r"MeshShape\(\[[^\]]+\]\)\s+and\s+SystemMesh\s+MeshShape\(\[[^\]]+\]\))"
+        ),
         case_sensitive=False,
     ),
     ErrorSignature(
