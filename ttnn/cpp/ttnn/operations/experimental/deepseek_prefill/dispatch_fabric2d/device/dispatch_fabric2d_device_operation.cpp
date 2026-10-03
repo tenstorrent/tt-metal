@@ -15,6 +15,10 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 
 namespace {
 
+// The largest top-k the op is validated at. The routing index has no top-k limit of its own: its scratch grows
+// with top-k, and compute_l1_layout refuses a layout that no longer fits L1.
+constexpr uint32_t MAX_EXPERTS_PER_TOK = 16;
+
 // A page index computed on one chip addresses the same page on another chip. That holds only while every
 // chip's copy of a buffer starts at the same address, which interleaved DRAM allocation on a uniform mesh
 // gives.
@@ -203,6 +207,11 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         "dispatch_fabric2d: num_experts_per_tok {} must be in 1..num_routed_experts {}",
         args.num_experts_per_tok,
         args.num_routed_experts);
+    TT_FATAL(
+        args.num_experts_per_tok <= MAX_EXPERTS_PER_TOK,
+        "dispatch_fabric2d: num_experts_per_tok {} is above {}, the largest top-k this op is validated at",
+        args.num_experts_per_tok,
+        MAX_EXPERTS_PER_TOK);
 }
 
 void DispatchFabric2dDeviceOperation::validate_on_program_cache_hit(
