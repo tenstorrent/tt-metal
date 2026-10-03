@@ -36,5 +36,5 @@ def test_ltx25_halo_layers_key_into_table(name, C_in, C_out, T, H, W, key, logic
     assert blk is not None, f"{name}: no _BLOCKINGS entry for {key}"
     # The shard overhangs the logical size on both axes, as in production.
     assert halo_masks(HaloSpec(2, 4, *logical_hw), H - 2, W - 2) == logical_hw
-    combos = build_all_blockings(C_in, C_out, (3, 3, 3), H, W, T, max_t_block=8, hw_product=(16, 32, 64))
+    combos = build_all_blockings(C_in, C_out, (3, 3, 3), H, W, T, max_t_block=8, hw_product=32)
     assert tuple(blk) in combos

@@ -143,7 +143,8 @@ def test_bruteforce_sweep_ltx25_544p_145f_halo(
         w_factor=8,
         max_combos=int(os.environ.get("SWEEP_MAX_COMBOS", "300")),
         max_t_block=8,
-        hw_product=(16, 32, 64),
+        # 32 only: H_blk*W_blk of 16 or 64 hung conv3d in the wan2_2 2x4 sweeps, and every table winner here is 32.
+        hw_product=32,
         halo=HaloSpec(2, 4, *logical_hw),
         table_key=key,
         max_seconds=float(os.environ.get("SWEEP_MAX_SECONDS", "720")),
