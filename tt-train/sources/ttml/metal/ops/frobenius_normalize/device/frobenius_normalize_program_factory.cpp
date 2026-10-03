@@ -27,9 +27,9 @@ constexpr auto kComputeKernelPath =
 
 constexpr auto kCbInput = tt::CBIndex::c_0;
 constexpr auto kCbSqAcc = tt::CBIndex::c_1;
-
+constexpr auto kCbNormComputed = tt::CBIndex::c_2;
 constexpr auto kCbRecv = tt::CBIndex::c_3;
-constexpr auto kCbNorm = tt::CBIndex::c_4;
+constexpr auto kCbNormBroadcast = tt::CBIndex::c_4;
 constexpr auto kCbOutput = tt::CBIndex::c_5;
 constexpr auto kCbSqPartial = tt::CBIndex::c_7;
 
@@ -69,6 +69,10 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
 
     uint32_t block_size = std::min(4U, tiles_per_core_g1);
 
+    // Origin = core (0,0)
+    tt::tt_metal::CoreCoord origin_core{0, 0};
+    auto origin_set = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(origin_core));
+
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
@@ -80,11 +84,16 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
     [[maybe_unused]] auto cb_sq_acc =
         create_circular_buffer(program, all_cores, kCbSqAcc, fp32_format, fp32_tile_size, 1);
     [[maybe_unused]] auto cb_recv = create_circular_buffer(program, all_cores, kCbRecv, fp32_format, fp32_tile_size, 1);
-    [[maybe_unused]] auto cb_norm = create_circular_buffer(program, all_cores, kCbNorm, fp32_format, fp32_tile_size, 1);
+    [[maybe_unused]] auto cb_norm_broadcast =
+        create_circular_buffer(program, all_cores, kCbNormBroadcast, fp32_format, fp32_tile_size, 1);
     [[maybe_unused]] auto cb_output =
         create_circular_buffer(program, all_cores, kCbOutput, bf16_format, bf16_tile_size, output_buf_tiles);
     [[maybe_unused]] auto cb_sq_partial =
         create_circular_buffer(program, all_cores, kCbSqPartial, fp32_format, fp32_tile_size, 1);
+    // Keep the compute-to-reader handoff separate from the reader-to-compute broadcast.
+    // Allocate it last and only on origin so all-core CB addresses remain identical across workers.
+    [[maybe_unused]] auto cb_norm_computed =
+        create_circular_buffer(program, origin_set, kCbNormComputed, fp32_format, fp32_tile_size, 1);
 
     // -------------------------------------------------------------------------
     // 3) Create semaphores
@@ -120,9 +129,6 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
         "Output buffer must be in DRAM. Got {}",
         enchantum::to_string(output_buffer->buffer_type()));
 
-    // Origin = core (0,0)
-    tt::tt_metal::CoreCoord origin_core{0, 0};
-    auto origin_set = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(origin_core));
     auto non_origin_cores = all_cores.subtract(origin_set);
     std::map<std::string, std::string> defines;
     auto origin_defines = defines;
@@ -173,10 +179,7 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
     // Non-origin compute kernels (core_group_1/2 minus origin)
     auto non_origin_g1 = core_group_1.subtract(origin_set);
     auto compute_g1 = tt::tt_metal::CreateKernel(
-        program,
-        kComputeKernelPath,
-        non_origin_g1,
-        make_compute_config({tiles_per_core_g1, block_size}, defines));
+        program, kComputeKernelPath, non_origin_g1, make_compute_config({tiles_per_core_g1, block_size}, defines));
 
     tt::tt_metal::KernelHandle compute_g2{};
     if (!core_group_2.ranges().empty()) {
