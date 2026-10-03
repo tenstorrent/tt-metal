@@ -17,6 +17,7 @@ import pytest
 
 from ..chip_architecture import ChipArchitecture
 from ..counters import read_counters
+from ..device_io import write_words_to_device
 from ..device import BootMode
 from ..format_config import FormatConfig
 from ..llk_params import DestAccumulation, L1Accumulation, PerfRunType
@@ -803,6 +804,22 @@ def _selected_run_types(run_types):
     return [rt for rt in run_types if rt.name in names]
 
 
+# Wormhole L1_TO_L1: [repetitions, pack step | count << 16, unpack/math step | count << 16] (trisc.cpp).
+_DITHER_ADDR = 0x16AFE0
+_DITHER_WORDS = [8, 262146, 131088]
+_NO_DITHER = [0, 0, 0]
+
+
+def _repetition_index(df: pd.DataFrame) -> pd.Series:
+    """The device repetition of each profiler entry: the KERNEL zones that opened before it on its thread."""
+    rep = pd.Series(0, index=df.index, dtype="int64")
+    for _, rows in df.groupby("thread"):
+        kernel = rows[(rows["type"] == "ZONE_START") & (rows[MARKER] == "KERNEL")]
+        starts = kernel["timestamp"].astype("int64").sort_values().to_numpy()
+        rep.loc[rows.index] = starts.searchsorted(rows["timestamp"].astype("int64").to_numpy(), side="right") - 1
+    return rep.clip(lower=0)
+
+
 class PerfConfig(TestConfig):
     # === STATIC VARIABLES ===
     TEST_COUNTER: ClassVar[int] = 0
@@ -1031,6 +1048,7 @@ class PerfConfig(TestConfig):
             for templates, runtimes, run_type in self.warmup_configs:
                 self._select_run_type(templates, runtimes, run_type)
                 self.write_runtimes_to_L1()
+                write_words_to_device(TestConfig.TENSIX_LOCATION, _DITHER_ADDR, _NO_DITHER)
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
 
@@ -1054,8 +1072,10 @@ class PerfConfig(TestConfig):
 
             variant_raw_data = []
             variant_counter_results = []
+            dither = run_type == PerfRunType.L1_TO_L1 and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
             for run_index in range(run_count):
                 self.write_runtimes_to_L1()
+                write_words_to_device(TestConfig.TENSIX_LOCATION, _DITHER_ADDR, _DITHER_WORDS if dither else _NO_DITHER)
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
                 # Counter config is written by BRISC from built-in array (local L1 write).
@@ -1065,7 +1085,13 @@ class PerfConfig(TestConfig):
                 profiler_data = Profiler.get_data(
                     self.test_name, self.variant_id, TestConfig.TENSIX_LOCATION
                 )
-                assert_zones_dont_overlap(profiler_data)
+                if dither:
+                    # One launch holds _DITHER_WORDS[0] device repetitions of the same kernel. The L1_TO_L1
+                    # statistics pair them by position; the overlap check needs only the first one.
+                    first = _repetition_index(profiler_data.df) == 0
+                    assert_zones_dont_overlap(ProfilerData(profiler_data.df[first].reset_index(drop=True)))
+                else:
+                    assert_zones_dont_overlap(profiler_data)
 
                 if TestConfig.ENABLE_PERF_COUNTERS:
                     try:
