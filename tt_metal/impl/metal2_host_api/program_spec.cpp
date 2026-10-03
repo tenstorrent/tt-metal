@@ -1610,13 +1610,13 @@ void ValidateProgramSpec(
         }
     }
 
-    // Blackhole supports local semaphore bindings on UNPACK and PACK (SemScope::COMPUTE_ATOMIC).
-    // Wormhole has no compute implementation and Quasar compute remains out of scope.
+    // Blackhole and Quasar support local semaphore bindings on UNPACK and PACK (SemScope::COMPUTE_ATOMIC).
+    // Wormhole has no compute implementation.
     for (const auto& kernel : spec.kernels) {
         TT_FATAL(
-            !kernel.is_compute_kernel() || kernel.semaphore_bindings.empty() || hal.get_arch() == tt::ARCH::BLACKHOLE,
+            !kernel.is_compute_kernel() || kernel.semaphore_bindings.empty() || sem_solver::has_compute_semaphore(hal),
             "KernelSpec '{}' has semaphore bindings. "
-            "Semaphore bindings on compute kernels are supported only on Blackhole.",
+            "Semaphore bindings on compute kernels are supported only on Blackhole and Quasar.",
             kernel.unique_id);
     }
 
@@ -1639,12 +1639,12 @@ void ValidateProgramSpec(
                 "with a DM kernel; use separate semaphores for the compute and data-movement handoffs.",
                 name);
         }
-        // Every compute semaphore maps onto the single free Tensix hardware semaphore (index 3), so two in
+        // Every compute semaphore maps onto the one Tensix hardware semaphore reserved for it, so two in
         // one program would alias the same hardware state.
         TT_FATAL(
             sem_has_compute.size() <= 1,
             "{} semaphores are bound by compute kernels; a program may bind at most one compute semaphore "
-            "(Blackhole has a single free Tensix hardware semaphore).",
+            "(one Tensix hardware semaphore is reserved for compute).",
             sem_has_compute.size());
         // The compute semaphore lives in the Tensix Sync Unit, which the host cannot write; it is seeded
         // to 0 by compute_kernel_hw_startup() on the device, so no other initial value can be honored.
@@ -3526,6 +3526,29 @@ std::set<experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(Co
 
 namespace {
 
+// Bake the compute semaphore's capacity into the kernel (Semaphore::wait_not_full and the SEMINITs read
+// COMPUTE_SEMAPHORE_MAX). At most one compute semaphore per program (ValidateProgramSpec), so at most one
+// define. The host option is the source of truth and overrides any user-supplied define; max_value 0 means
+// the default (the 4-bit hardware ceiling, 15), which is what the kernel assumes when the define is absent.
+void BakeComputeSemaphoreMax(
+    std::map<std::string, std::string>& defines,
+    const KernelSpec& kernel_spec,
+    const ProgramSpec& spec,
+    const sem_solver::SemaphoreNameToScopeMap& scopes) {
+    for (const auto& binding : kernel_spec.semaphore_bindings) {
+        if (scopes.at(binding.semaphore_spec_name) != SemScope::COMPUTE_ATOMIC) {
+            continue;
+        }
+        const auto sem = std::find_if(spec.semaphores.begin(), spec.semaphores.end(), [&](const SemaphoreSpec& s) {
+            return s.unique_id == binding.semaphore_spec_name;
+        });
+        const uint32_t capacity = (sem != spec.semaphores.end() && sem->advanced_options.max_value != 0)
+                                      ? sem->advanced_options.max_value
+                                      : 15u;
+        defines["COMPUTE_SEMAPHORE_MAX"] = std::to_string(capacity);
+    }
+}
+
 // ----------------------------------------------------------------------------
 // ReservePrefetcherPipeSlots: PrefetcherPipeParameters -> Program slots
 // ----------------------------------------------------------------------------
@@ -3932,6 +3955,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
             } else {
                 auto config = MakeGen2ComputeConfig(kernel_spec, dfb_name_to_slot, hal);
                 config.compile_args = std::move(compile_args);
+                BakeComputeSemaphoreMax(config.defines, kernel_spec, spec, semaphore_name_to_scope);
                 auto processors = GetComputeProcessorSet(ComputeEngineMask{(uint8_t)(risc_mask >> 8)});
                 kernel = std::make_shared<experimental::quasar::QuasarComputeKernel>(
                     program_impl->get_context_id(),
@@ -3966,25 +3990,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
             } else {
                 auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_slot, hal);
                 config.compile_args = std::move(compile_args);
-                // Bake the compute semaphore's capacity into the kernel (Semaphore::wait_not_full and the
-                // SEMINITs read COMPUTE_SEMAPHORE_MAX). At most one compute semaphore per program
-                // (ValidateProgramSpec), so at most one define.
-                for (const auto& binding : kernel_spec.semaphore_bindings) {
-                    if (semaphore_name_to_scope.at(binding.semaphore_spec_name) != SemScope::COMPUTE_ATOMIC) {
-                        continue;
-                    }
-                    const auto sem =
-                        std::find_if(spec.semaphores.begin(), spec.semaphores.end(), [&](const SemaphoreSpec& s) {
-                            return s.unique_id == binding.semaphore_spec_name;
-                        });
-                    // The host option is the source of truth: always bake the resolved capacity, overriding
-                    // any user-supplied COMPUTE_SEMAPHORE_MAX define. max_value 0 means the default (the 4-bit
-                    // hardware ceiling, 15), which is what the kernel assumes when the define is absent.
-                    const uint32_t capacity = (sem != spec.semaphores.end() && sem->advanced_options.max_value != 0)
-                                                  ? sem->advanced_options.max_value
-                                                  : 15u;
-                    config.defines["COMPUTE_SEMAPHORE_MAX"] = std::to_string(capacity);
-                }
+                BakeComputeSemaphoreMax(config.defines, kernel_spec, spec, semaphore_name_to_scope);
                 kernel = std::make_shared<ComputeKernel>(
                     program_impl->get_context_id(),
                     kernel_src,
