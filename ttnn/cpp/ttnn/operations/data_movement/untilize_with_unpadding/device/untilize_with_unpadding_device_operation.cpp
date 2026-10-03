@@ -47,8 +47,12 @@ uint32_t fused_height_of(const Shape& shape) {
 }
 
 // A derived shard extent is 0 exactly when that axis of the output is empty, and no shard shape
-// can hold a 0 -- a zero-volume shard is rejected. Keep the base extent on such an axis.
-uint32_t shard_extent_or(uint32_t derived, uint32_t base) { return derived > 0 ? derived : base; }
+// can hold a 0 -- a zero-volume shard is rejected. Keep the base extent on such an axis, but only
+// for an empty input: a non-empty one asked to produce an empty sharded output must still be
+// rejected on the zero extent, as it was before this fallback existed.
+uint32_t shard_extent_or(uint32_t derived, uint32_t base, bool input_is_empty) {
+    return (input_is_empty && derived == 0) ? base : derived;
+}
 
 }  // namespace
 
@@ -439,6 +443,7 @@ tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_sp
     }
     Shape output_shape(std::move(out_shape));
     DataType output_dtype = ttnn::operations::data_movement::untilize_output_dtype(input_tensor_a.dtype());
+    const bool input_is_empty = input_tensor_a.logical_volume() == 0;
     if (!input_tensor_a.memory_config().is_sharded() && operation_attributes.output_mem_config.is_sharded()) {
         // Interleaved input has no shard spec to inherit a shape from, so derive one the same way
         // the sharded-input "single matrix split across cores" case does below: round per-core
@@ -459,9 +464,11 @@ tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_sp
         if (operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
             uint32_t num_cores = shard_spec.num_cores();
             shard_spec.shape = {
-                shard_extent_or(fused_height, shard_spec.shape[0]),
+                shard_extent_or(fused_height, shard_spec.shape[0], input_is_empty),
                 shard_extent_or(
-                    tt::round_up(tt::div_up(output_shape[-1], num_cores), tile_width), shard_spec.shape[1])};
+                    tt::round_up(tt::div_up(output_shape[-1], num_cores), tile_width),
+                    shard_spec.shape[1],
+                    input_is_empty)};
         } else if (operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
             CoreRange bbox = shard_spec.grid.bounding_box();
             uint32_t grid_cols = bbox.end_coord.x - bbox.start_coord.x + 1;
@@ -470,13 +477,21 @@ tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_sp
                 std::swap(grid_cols, grid_rows);
             }
             shard_spec.shape = {
-                shard_extent_or(tt::round_up(tt::div_up(fused_height, grid_rows), tile_height), shard_spec.shape[0]),
                 shard_extent_or(
-                    tt::round_up(tt::div_up(output_shape[-1], grid_cols), tile_width), shard_spec.shape[1])};
+                    tt::round_up(tt::div_up(fused_height, grid_rows), tile_height),
+                    shard_spec.shape[0],
+                    input_is_empty),
+                shard_extent_or(
+                    tt::round_up(tt::div_up(output_shape[-1], grid_cols), tile_width),
+                    shard_spec.shape[1],
+                    input_is_empty)};
         } else {
             uint32_t num_cores = shard_spec.num_cores();
             shard_spec.shape = {
-                shard_extent_or(tt::round_up(tt::div_up(fused_height, num_cores), tile_height), shard_spec.shape[0]),
+                shard_extent_or(
+                    tt::round_up(tt::div_up(fused_height, num_cores), tile_height),
+                    shard_spec.shape[0],
+                    input_is_empty),
                 shard_spec.shape[1]};
         }
         auto mem_config = tt::tt_metal::MemoryConfig(
@@ -527,8 +542,8 @@ tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_sp
                 shard_idx0 = tt::round_up(tt::div_up(fused_height, num_cores), tile_height);
             }
             shard_shape = {
-                shard_extent_or(shard_idx0, shard_spec.shape[0]),
-                shard_extent_or(output_shape[-1], shard_spec.shape[1])};
+                shard_extent_or(shard_idx0, shard_spec.shape[0], input_is_empty),
+                shard_extent_or(output_shape[-1], shard_spec.shape[1], input_is_empty)};
         } else if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
             // BLOCK_SHARDED splits along both height and width, so both dims of the shard shrink
             // with unpadding, unlike WIDTH_SHARDED (whole, unsplit height) or HEIGHT_SHARDED (whole,
@@ -543,11 +558,15 @@ tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_sp
             }
             shard_shape = {
                 shard_extent_or(
-                    tt::round_up(tt::div_up(fused_height, grid_rows), tile.get_height()), shard_spec.shape[0]),
+                    tt::round_up(tt::div_up(fused_height, grid_rows), tile.get_height()),
+                    shard_spec.shape[0],
+                    input_is_empty),
                 shard_extent_or(
-                    tt::round_up(tt::div_up(output_shape[-1], grid_cols), tile.get_width()), shard_spec.shape[1])};
+                    tt::round_up(tt::div_up(output_shape[-1], grid_cols), tile.get_width()),
+                    shard_spec.shape[1],
+                    input_is_empty)};
         } else {
-            shard_shape = {shard_extent_or(fused_height, shard_spec.shape[0]), shard_spec.shape[1]};
+            shard_shape = {shard_extent_or(fused_height, shard_spec.shape[0], input_is_empty), shard_spec.shape[1]};
         }
         shard_spec.shape = shard_shape;
         auto mem_config = tt::tt_metal::MemoryConfig(

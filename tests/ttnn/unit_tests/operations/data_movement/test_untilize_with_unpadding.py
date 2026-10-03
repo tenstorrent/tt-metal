@@ -1553,3 +1553,25 @@ def test_untilize_with_unpadding_rank_1_width_sharded(device, shape, end):
     output = ttnn.untilize_with_unpadding(tilized, ttnn.Shape([end]))
 
     assert list(output.shape) == list(shape)
+
+
+# The zero-extent fallback exists for empty inputs. A NON-empty input asked for an empty sharded
+# output must still be rejected on the zero shard extent, as it was before that fallback existed --
+# otherwise the spec is accepted and the writer targets storage that was never allocated.
+def test_untilize_with_unpadding_nonempty_input_rejects_empty_sharded_output(device, expect_error):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    height_sharded = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [32, 64], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    tilized = ttnn.from_torch(
+        torch.rand((32, 64), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=height_sharded,
+    )
+
+    with expect_error(RuntimeError, "greater than 0 in each sharded dim"):
+        ttnn.untilize_with_unpadding(tilized, ttnn.Shape([4294967295, 63]))
