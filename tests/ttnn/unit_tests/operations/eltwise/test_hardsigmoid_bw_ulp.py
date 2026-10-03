@@ -12,8 +12,6 @@ the operands with subnormals flushed, and an output may match either. The BF16 c
 path stores NaN as +inf and -0 as +0, so classes are compared as stored. Each output must have
 the reference's class and a pure ULP error, |reference - output| / ulp(rounded reference),
 below 1.
-At a NaN input the output is grad / 6, rounded once; the composite this program replaces returns
-grad × RN(1/6) = grad × 0.1669921875, rounded, and torch returns 0.
 """
 
 import pytest
@@ -37,7 +35,7 @@ def _grad_like(x, grad):
     return torch.full(x.shape, float(grad), dtype=torch.bfloat16)
 
 
-def _torch_reference(grad, x, flush):
+def _reference(grad, x, flush):
     with torch.enable_grad():
         x64, g = x.to(torch.float64), grad.to(torch.float64)
         if flush:
@@ -45,12 +43,6 @@ def _torch_reference(grad, x, flush):
         x64.requires_grad_(True)
         torch.nn.functional.hardsigmoid(x64).backward(g)
         return x64.grad.detach()
-
-
-def _reference(grad, x, flush):
-    """Torch, except at a NaN input, where the declared result is expected."""
-    g = _flush(grad.to(torch.float64)) if flush else grad.to(torch.float64)
-    return torch.where(torch.isnan(x.to(torch.float64)), g / 6, _torch_reference(grad, x, flush))
 
 
 def _round_to_bfloat16(t):
