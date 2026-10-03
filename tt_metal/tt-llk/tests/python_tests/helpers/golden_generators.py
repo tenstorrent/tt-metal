@@ -1925,8 +1925,9 @@ class TypecastGolden:
             if input_format.is_integer():
                 values = operand.to(torch.int64)
             else:
-                # int32/uint32 truncate; uint16/uint8 round. Whole-number
-                # stimuli make trunc == round, so trunc models both exactly.
+                # Every integer destination truncates toward zero (#51655): int32/uint32/uint8
+                # extract the mantissa and shift, and uint16 does too. Whole-number stimuli
+                # make trunc == round, so trunc models the previous uint16 rounding exactly.
                 values = torch.trunc(operand.float()).to(torch.int64)
             result = self._to_integer(values, output_format)
         elif output_format in self._BLOCK_FLOAT_FORMATS:
