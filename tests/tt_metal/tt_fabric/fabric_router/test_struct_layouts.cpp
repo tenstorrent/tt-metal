@@ -46,6 +46,17 @@ struct Outer {
     uint16_t counts[2];
 };
 
+struct ThreeBitTable {
+    static constexpr uint32_t BITS_PER_COMPRESSED_ENTRY = 3;
+    uint8_t packed[3];
+};
+
+struct WithTable {
+    uint32_t id;
+    ThreeBitTable table;
+    uint8_t tail;
+};
+
 }  // namespace tt::tt_fabric::layout_test
 
 namespace tt::tt_fabric {
@@ -63,6 +74,7 @@ namespace {
 using layout_test::HalvedWord;
 using layout_test::Outer;
 using layout_test::ThreeWords;
+using layout_test::WithTable;
 
 TEST(StructLayout, CoverageAcceptsEveryByteListedOnce) {
     EXPECT_TRUE(validate_struct_fields<ThreeWords>(std::array{
@@ -119,6 +131,21 @@ TEST(StructLayout, FieldTypesAndNames) {
     EXPECT_EQ(fields[3].offset, 6u);
     EXPECT_EQ(fields[3].size, 4u);
     EXPECT_EQ(fields[3].intra_field_element_count, 2u);
+}
+
+TEST(StructLayout, PackedTableCountsEntries) {
+    constexpr std::array fields = {
+        LAYOUT_FIELD(WithTable, id),
+        LAYOUT_PACKED(WithTable, table, "three_bit"),
+        LAYOUT_FIELD(WithTable, tail),
+    };
+    static_assert(validate_struct_fields<WithTable>(fields));
+
+    const FieldType expected = field::Packed{"three_bit", 3};
+    EXPECT_TRUE(fields[1].type == expected);
+    EXPECT_EQ(fields[1].offset, 4u);
+    EXPECT_EQ(fields[1].size, 3u);
+    EXPECT_EQ(fields[1].intra_field_element_count, 8u);
 }
 
 }  // namespace
