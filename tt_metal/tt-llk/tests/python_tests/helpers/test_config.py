@@ -2257,11 +2257,17 @@ class TestConfig:
             launch_done = device_module.launch_done_address()
 
         end_time = time.time() + timeout
-        while time.time() < end_time:
-            if brisc_launch and launch_done is not None:
-                # BRISC puts the cores in reset right after marking the launch done: read that only once it is marked.
-                done = (
-                    read_word_from_device(TestConfig.TENSIX_LOCATION, launch_done)
+        while True:
+            # The clock is read before the poll, so a host stall past the deadline still gets one last poll
+            expired = time.time() >= end_time
+            if signal_addrs is not None:
+                for mailbox in mailboxes - completed:
+                    value = np.frombuffer(
+                        read_from_device(
+                            TestConfig.TENSIX_LOCATION, launch_done, num_bytes=4
+                        ),
+                        dtype=np.uint32,
+                    )[0]
                     & device_module.HOST_SIGNAL_MASK
                     == KERNEL_COMPLETE
                     and soft_reset_bits(TestConfig.TENSIX_LOCATION) & brisc_done_mask
@@ -2290,6 +2296,8 @@ class TestConfig:
                         f"BRISC put the TRISCs in reset before {', '.join(m.name for m in mailboxes - completed_mailboxes())} finished"
                     )
                 return
+            if expired:
+                break
 
         handle_if_assert_hit(
             self.temp_elfs,
