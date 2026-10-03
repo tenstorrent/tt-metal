@@ -51,7 +51,10 @@ parameters = {
 
 
 # Only add model_traced suite if it has valid configurations
-if model_traced_params:
+# Skip model_traced on N300 (1x2 mesh) due to device timeout hang; refs #54506
+_mesh_shape_env = os.environ.get("MESH_DEVICE_SHAPE", "").strip().lower()
+_is_n300_mesh = _mesh_shape_env in ("1x2", "2x1")
+if model_traced_params and not _is_n300_mesh:
     parameters["model_traced"] = model_traced_params
 
 
