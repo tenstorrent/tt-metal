@@ -20,3 +20,6 @@ Fold CPU reference (--noconftest): 5 passed. The 78 include the ltx_eval harness
 
 Device: not run (blx03 paused; full-mesh barred by the 22:10 rule). Ready job: tmp/READY_48.md, tmp/blx03/run48.sh.
 Next: when the user allows full-mesh runs on blx03, follow tmp/READY_48.md (setup, one job, timings, ltx_eval vs t20).
+
+t113: folded t100 47aecb9bdd7 (halo sweep harness + CPU test) and 118ed6de1f4 (conv3d _BLOCKINGS (4,8):
+s4_res (128,64,6,4,8), s1_up (128,64,5,2,16); bit-identical, traced decode 519.7 -> 506.2 ms, blx03 job 469, 544x960/145f).

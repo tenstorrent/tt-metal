@@ -38,3 +38,17 @@ def test_ltx25_halo_layers_key_into_table(name, C_in, C_out, T, H, W, key, logic
     assert halo_masks(HaloSpec(2, 4, *logical_hw), H - 2, W - 2) == logical_hw
     combos = build_all_blockings(C_in, C_out, (3, 3, 3), H, W, T, max_t_block=8, hw_product=(16, 32, 64))
     assert tuple(blk) in combos
+
+
+# Halo-only reader winners (544x960/145f, mesh 4x8). C_in_block must stay 128: it sets the
+# reduction order, so keeping it is what keeps the decode bit-identical to the old blocking.
+@pytest.mark.parametrize(
+    "key, blocking",
+    [
+        ((4, 8, 128, 128, (3, 3, 3), 147, 68, 60), (128, 64, 6, 4, 8)),  # s4_res
+        ((4, 8, 512, 4096, (3, 3, 3), 39, 17, 15), (128, 64, 5, 2, 16)),  # s1_up
+    ],
+    ids=["s4_res", "s1_up"],
+)
+def test_ltx25_halo_winners_in_table(key, blocking):
+    assert _BLOCKINGS[key] == blocking
