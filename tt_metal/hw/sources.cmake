@@ -401,4 +401,19 @@ set(HW_JIT_API_HEADERS
     toolchain/erisc-b0-app-sections.ld
     toolchain/erisc-b0-memory.ld
     toolchain/erisc-b0-kernel.ld
+    ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_aggregate_stirling_core.inc
+    ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_domain_action_coordinate.inc
+    ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_domain_finalize.inc
+    ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_rational_interleaved_core.inc
+    ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_rational_scalar_tile.inc
+    ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_rational_segment_core.inc
+    ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_target_special_policy.inc
+    ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_aggregate_stirling_core.inc
+    ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_domain_action_coordinate.inc
+    ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_domain_finalize.inc
+    ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_rational_interleaved_core.inc
+    ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_rational_scalar_tile.inc
+    ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_rational_segment_core.inc
+    ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_target_special_policy.inc
+    inc/api/compute/eltwise_unary/multigammaln.h
 )
