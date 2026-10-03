@@ -34,7 +34,7 @@ inline void silu_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     // calculate_silu always uses the non-approx sigmoid path via _sfpu_sigmoid_, so we must
     // use non-approx sigmoid_init regardless of APPROXIMATION_MODE.
-    sigmoid_init<false>();
+    sigmoid_init<false, true>();
 }
 
 }  // namespace ckernel::sfpu
