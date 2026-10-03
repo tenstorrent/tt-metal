@@ -81,7 +81,7 @@ class DSV41PrefillLayer:
         self.L, self.pa, self.pmoe, self.T = layer, prefill_attn, pmoe, T
         self.debug = None  # set to a dict: per-chunk lists of a_c / hh / m / sh are kept (not freed) for diagnostics
 
-    def forward(self, xs, pres, S):
+    def forward(self, xs, pres, S, s0=0):
         """xs: list of n chunks [T,1,4,D] fp32 (the mesh row's R = n*T tokens, user-major), pres: list of [T,1,1,4] fp32.
         -> (list of new streams, list of ffn_pre)."""
         L, T = self.L, self.T
@@ -94,7 +94,7 @@ class DSV41PrefillLayer:
             _free("hs", t)
         if self.debug is not None:
             self.debug["hs"], self.debug["h"] = list(hs), h
-        a = self.pa.forward(h, S)
+        a = self.pa.forward_dyn(h) if self.pa.dyn is not None else self.pa.forward(h, S, s0=s0)
         _free("h", h)
         if self.debug is not None:
             ttnn.synchronize_device(L.mesh_device)
