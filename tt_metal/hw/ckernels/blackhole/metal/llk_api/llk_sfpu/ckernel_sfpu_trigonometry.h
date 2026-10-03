@@ -419,8 +419,18 @@ sfpi_inline sfpi::vFloat sfpu_atan_fp32(sfpi::vFloat x) {
     return r;
 }
 
+bool bf16_dest_atan();
+template <int ITERATIONS>
+void calculate_atan_bf16();
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_atan() {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (bf16_dest_atan()) {
+            calculate_atan_bf16<ITERATIONS>();
+            return;
+        }
+    }
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat result;
@@ -860,8 +870,16 @@ void sinh_init() {
     }
 }
 
+void init_atan_bf16();
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void atan_init() {
+    if constexpr (!is_fp32_dest_acc_en) {
+        if (bf16_dest_atan()) {
+            init_atan_bf16();
+            return;
+        }
+    }
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (is_fp32_dest_acc_en) {
         sfpi::vConstFloatPrgm1 = 0x1.999384p-3f;
@@ -1206,3 +1224,5 @@ void init_atanh() {
 }
 
 }  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_atan_bf16.h"
