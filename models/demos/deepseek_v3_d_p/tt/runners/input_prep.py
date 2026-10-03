@@ -14,14 +14,17 @@ KV-cache PCC validation + golden loaders live in
 diagnostics used only by tests live in ``tests/test_runner_utils.py``.
 """
 
+from typing import Optional
+
 import torch
 
 import ttnn
+from models.demos.common.prefill.runners.runner_utils import MTP_PAD_TOKEN_ID
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
+    mtp_lookahead_positions,
     reorder_tensor_chunks,
     rotated_chip_positions,
-    rotated_rows_are_contiguous,
 )
 
 
@@ -39,9 +42,9 @@ def prepare_prefill_input_tensor(
 
     An SP-sharded uint32 ROW_MAJOR DRAM tensor, ``[sp_factor, 1, len(token_ids) // sp_factor]``, from
     the chunk in natural position order at ``chunk_start``. Chip ``c``'s row carries the positions
-    chip ``c`` OWNS: a chunk resuming mid-slab is rotated across the chips, and the device derives
-    each row's rope angle and KV-cache slot the same way (``rotated_chip_positions``). A slab-aligned
-    ``chunk_start`` -- every caller but an MTP mid-slab resume -- takes the plain reshape the rotation
+    chip ``c`` OWNS: a chunk resuming off a chunk boundary is rotated across the chips, and the device derives
+    each row's rope angle and KV-cache slot the same way (``rotated_chip_positions``). A chunk-aligned
+    ``chunk_start`` -- every caller but an MTP mid-chunk resume -- takes the plain reshape the rotation
     degenerates to.
     """
     isl_per_chip = len(token_ids) // sp_factor
@@ -68,7 +71,7 @@ def prepare_prefill_input_tensor(
 
 
 def _rotation_index(chunk_start: int, sp_factor: int, isl_per_chip: int) -> torch.Tensor:
-    """Chip-major device row -> offset into the chunk's id list; ``arange`` when slab-aligned."""
+    """Chip-major device row -> offset into the chunk's id list; ``arange`` when chunk-aligned."""
     return torch.tensor(
         [p - chunk_start for row in rotated_chip_positions(chunk_start, sp_factor, isl_per_chip) for p in row],
         dtype=torch.long,
@@ -83,28 +86,25 @@ def prepare_prefill_mtp_tokens(
     sp_axis: int,
     *,
     num_mtp_tokens: int,
+    num_levels: int,
     chunk_start: int = 0,
+    chunk_end: Optional[int] = None,
 ) -> ttnn.Tensor:
-    """Upload the MTP lookahead ids: the ``num_mtp_tokens`` ids that follow each chip's trunk shard.
-
-    Chip ``c`` takes the ids past the LAST POSITION IT CARRIES, so concatenated onto its trunk row
-    every MTP level reads the same local slice. Block-cyclic only.
-    """
+    """Upload the MTP lookahead ids: the ``num_mtp_tokens`` ids that follow each chip's trunk shard
+    (``mtp_lookahead_positions``). ``token_ids`` is the chunk, then the ids after it, real up to ``chunk_end``
+    (default: the whole chunk). Every other slot is ``MTP_PAD_TOKEN_ID``. Block-cyclic only."""
     assert num_mtp_tokens > 0, f"num_mtp_tokens must be positive, got {num_mtp_tokens}"
     isl_per_chip = (len(token_ids) - num_mtp_tokens) // sp_factor
     assert len(token_ids) == sp_factor * isl_per_chip + num_mtp_tokens, (
         f"got {len(token_ids)} ids, expected sp_factor*L + num_mtp_tokens = "
         f"{sp_factor}*{isl_per_chip} + {num_mtp_tokens}"
     )
-    assert rotated_rows_are_contiguous(chunk_start, isl_per_chip), (
-        f"chunk_start={chunk_start} must be a multiple of the per-chip shard {isl_per_chip}: off that "
-        "boundary a chip's positions are discontiguous, so 'the ids following its shard' is not a run"
-    )
-    trunk_ends = [row[-1] for row in rotated_chip_positions(chunk_start, sp_factor, isl_per_chip)]
-    index = torch.tensor(
-        [end + 1 + k - chunk_start for end in trunk_ends for k in range(num_mtp_tokens)], dtype=torch.long
-    )
-    rows = torch.tensor(token_ids, dtype=torch.int64)[index].reshape(sp_factor, 1, num_mtp_tokens)
+    chunk_end = chunk_start + sp_factor * isl_per_chip if chunk_end is None else chunk_end
+    ids = torch.tensor(token_ids, dtype=torch.int64)
+    rows = torch.full((sp_factor, 1, num_mtp_tokens), MTP_PAD_TOKEN_ID, dtype=torch.int64)
+    for c, slots in enumerate(mtp_lookahead_positions(chunk_start, sp_factor, isl_per_chip, chunk_end, num_levels)):
+        assert len(slots) <= num_mtp_tokens, f"{len(slots)} lookahead slots do not fit in {num_mtp_tokens}"
+        rows[c, 0, : len(slots)] = ids[torch.tensor(slots) - chunk_start]
     return _upload_ids(rows, mesh_device, mesh_shape, sp_axis)
 
 
@@ -125,6 +125,7 @@ def mtp_generation_union_rows(
     chunk_size: int,
     *,
     num_mtp_tokens: int,
+    num_levels: int,
     chunk_start: int,
     actual_end: int,
     level: int,
@@ -133,20 +134,23 @@ def mtp_generation_union_rows(
 
     The geometry of last-chunk generation, stated once for both mask builders below. Adjacent chips'
     unions overlap, so a position can land on two chips and both get patched. Block-cyclic only, and
-    keyed off ``rotated_chip_positions``: a chunk resuming off a slab boundary is rotated, so chip
+    keyed off ``rotated_chip_positions``: a chunk resuming off a chunk boundary is rotated, so chip
     c's rows are NOT ``[chunk_start + c*isl_per_chip, ...)``.
     """
     assert num_mtp_tokens > 0, f"num_mtp_tokens must be positive, got {num_mtp_tokens}"
     assert chunk_size % sp_factor == 0, f"chunk {chunk_size} not divisible by sp_factor {sp_factor}"
     isl_per_chip = chunk_size // sp_factor
     global_pos = actual_end + level
+    lookahead = mtp_lookahead_positions(chunk_start, sp_factor, isl_per_chip, actual_end, num_levels)
     rows = []
-    for trunk in rotated_chip_positions(chunk_start, sp_factor, isl_per_chip):
+    for trunk, slots in zip(rotated_chip_positions(chunk_start, sp_factor, isl_per_chip), lookahead):
+        assert len(slots) <= num_mtp_tokens, f"{len(slots)} lookahead slots do not fit in {num_mtp_tokens}"
         if global_pos in trunk:
             rows.append(trunk.index(global_pos))
-            continue
-        past_shard = global_pos - trunk[-1] - 1
-        rows.append(isl_per_chip + past_shard if 0 <= past_shard < num_mtp_tokens else None)
+        elif global_pos in slots:
+            rows.append(isl_per_chip + slots.index(global_pos))
+        else:
+            rows.append(None)
     assert any(r is not None for r in rows), (
         f"no chip holds global position {actual_end + level}: chunk_start={chunk_start} "
         f"chunk_size={chunk_size} num_mtp_tokens={num_mtp_tokens} level={level}. MTP levels must be <= num_mtp_tokens."
@@ -163,6 +167,7 @@ def build_mtp_generation_keep_mask(
     *,
     emb_dim_per_chip: int,
     num_mtp_tokens: int,
+    num_levels: int,
     chunk_start: int,
     actual_end: int,
     levels,
@@ -184,6 +189,7 @@ def build_mtp_generation_keep_mask(
                 sp_factor,
                 chunk_size,
                 num_mtp_tokens=num_mtp_tokens,
+                num_levels=num_levels,
                 chunk_start=chunk_start,
                 actual_end=actual_end,
                 level=level,
@@ -203,6 +209,7 @@ def build_mtp_generation_select(
     sp_axis: int,
     *,
     num_mtp_tokens: int,
+    num_levels: int,
     chunk_start: int,
     actual_end: int,
     level: int,
@@ -222,6 +229,7 @@ def build_mtp_generation_select(
             sp_factor,
             chunk_size,
             num_mtp_tokens=num_mtp_tokens,
+            num_levels=num_levels,
             chunk_start=chunk_start,
             actual_end=actual_end,
             level=level,
@@ -230,6 +238,12 @@ def build_mtp_generation_select(
         if u is not None:
             select[c, 0, u, source_row] = 1.0
     return _upload_sp_sharded(select, mesh_device, mesh_shape, sp_axis, dtype)
+
+
+def build_sp_rank_tensor(mesh_device: ttnn.MeshDevice, sp_factor: int, mesh_shape: tuple, sp_axis: int) -> ttnn.Tensor:
+    """``[1, 1, 1, 1]`` bf16 per chip holding its SP rank. Built once; ``MTPSplitChipLookahead`` compares against it."""
+    ranks = torch.arange(sp_factor, dtype=torch.float32).view(sp_factor, 1, 1, 1)
+    return _upload_sp_sharded(ranks, mesh_device, mesh_shape, sp_axis, ttnn.bfloat16)
 
 
 def _upload_sp_sharded(
