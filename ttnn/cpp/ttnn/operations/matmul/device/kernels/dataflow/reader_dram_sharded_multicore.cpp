@@ -63,7 +63,7 @@ static_assert(XL >= 1 && XL <= 8, "at most 8 activation reads in flight (trids 8
 constexpr uint32_t kXCores[] = {DSMC_XC};
 constexpr uint32_t kOutCores[] = {DSMC_OC};
 #ifdef DSMC_REDUCE
-constexpr uint32_t PT = get_arg(args::PT);  // partial (fp32) tile bytes
+constexpr uint32_t PT = get_arg(args::PT);       // partial tile bytes (Dest precision)
 constexpr uint32_t kGroupCores[] = {DSMC_CORE};  // per work item
 #endif
 #endif

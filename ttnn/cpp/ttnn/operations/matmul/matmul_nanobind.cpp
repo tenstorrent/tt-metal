@@ -621,8 +621,8 @@ void py_module(nb::module_& mod) {
             (unevenly when N does not divide the shard width; when N exceeds the shard width it is
             rounded down to a multiple of it and the extra cores split K and reduce their partial
             sums). Every core reads the activation straight from its L1 shards and keeps its whole
-            K in fp32 Dest at full-sync capacity, whatever compute_kernel_config says about Dest
-            (fidelity and approximation modes are taken from it), and writes its output columns
+            K in Dest at full-sync capacity, in the precision compute_kernel_config asks for
+            (fp32_dest_acc_en: fp32, else 16-bit, as the single-reader path accumulates), and writes its output columns
             straight into the width-sharded output. On Blackhole both data-movement RISCs
             stream the weight (one per NoC); on Wormhole one NoC0 stream reads it. in0_block_w is
             the number of K tiles per streamed weight block. Requires per_core_M = 1,

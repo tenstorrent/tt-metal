@@ -1192,7 +1192,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
 //     lowers the bank's bandwidth;
 //   - reads the activation rows a core needs straight from their L1 shards with lookahead, instead of
 //     the semaphore-gated multicast chain;
-//   - keeps each column pass's whole K in fp32 Dest (full sync, <= 8 tiles, P passes);
+//   - keeps each column pass's whole K in fp32 Dest with fp32_dest_acc_en (full sync, <= 8 tiles,
+//     P passes); without it, accumulates 8 K tiles at a time in 16-bit Dest and adds them into a
+//     Float16_b accumulator in L1 with the packer, as the single-reader path does;
 //   - writes the output tiles straight into the caller's width-sharded output.
 // Everything per core derives from the work index, and the kernels run on the bounding rectangle of
 // the working cores with a one-byte role per logical core (a define): there are no per-core runtime
@@ -1218,7 +1220,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
     // Blackhole: both data-movement RISCs read the weight. Wormhole: one NOC_0 stream (a second stream
     // over NOC_1 from the same core lowers the bank's bandwidth there).
     const bool two_streams = arch == tt::ARCH::BLACKHOLE;
-    constexpr uint32_t dst_tiles = 8;           // fp32 Dest, full sync, on Wormhole and Blackhole
+    constexpr uint32_t dst_tiles = 8;  // tiles per column pass (full-sync Dest, fp32 or 16-bit)
+    // fp32_dest_acc_en: the pass keeps its whole K in fp32 Dest. Otherwise the pass accumulates
+    // l1acc_k_tiles K tiles at a time in 16-bit Dest and the packer adds them into a Float16_b
+    // accumulator in L1, as the single-reader path does with packer_l1_acc; K-group partials travel in
+    // the same format.
+    const bool fp32_dest = compute_hw.enable_32_bit_dest;
+    constexpr uint32_t l1acc_k_tiles = 8;
+    const tt::DataFormat part_format = fp32_dest ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const uint32_t depth = two_streams ? 3 : 5;  // weight blocks in flight per stream
     constexpr uint32_t x_lookahead = 6;          // activation blocks in flight ahead of the weight stream
 
@@ -1325,7 +1334,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
     const uint32_t x_tile_size = in0_tile.get_tile_size(in0_data_format);
     const uint32_t w_tile_size = tt::align(in1_tile.get_tile_size(in1_data_format), tt::tt_metal::hal::get_dram_alignment());
     const uint32_t out_tile_size = output_tile.get_tile_size(output_data_format);
-    const uint32_t part_tile_size = output_tile.get_tile_size(tt::DataFormat::Float32);
+    const uint32_t part_tile_size = output_tile.get_tile_size(part_format);
 
     const KernelSpecName STREAM0{"stream0"};
     const KernelSpecName STREAM1{"stream1"};
@@ -1336,6 +1345,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
     const DFBSpecName OUT_DFB{"out"};
     const DFBSpecName PART_DFB{"part"};
     const DFBSpecName RECV_DFB{"recv"};
+    const DFBSpecName ACC_DFB{"acc"};
     const SemaphoreSpecName REDUCE_SEM{"reduce"};
     const TensorParamName IN0{"in0"};
     const TensorParamName IN1{"in1"};
@@ -1365,19 +1375,28 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
         .data_format_metadata = output_data_format,
         .tile_format_metadata = output_tile,
     });
+    if (!fp32_dest && CK == 1) {
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = ACC_DFB,
+            .entry_size = part_tile_size,
+            .num_entries = max_own,
+            .data_format_metadata = part_format,
+            .tile_format_metadata = output_tile,
+        });
+    }
     if (CK > 1) {
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = PART_DFB,
             .entry_size = part_tile_size,
             .num_entries = ncp,
-            .data_format_metadata = tt::DataFormat::Float32,
+            .data_format_metadata = part_format,
             .tile_format_metadata = output_tile,
         });
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = RECV_DFB,
             .entry_size = part_tile_size,
             .num_entries = CK * max_own,
-            .data_format_metadata = tt::DataFormat::Float32,
+            .data_format_metadata = part_format,
             .tile_format_metadata = output_tile,
         });
     }
@@ -1468,9 +1487,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
         return k;
     };
 
-    // The design keeps the whole K in fp32 Dest at full-sync capacity, whatever the caller's
-    // compute kernel config says about Dest; fidelity and approximation modes are the caller's.
-    compute_hw.enable_32_bit_dest = true;
+    // Each column pass keeps its whole K in Dest at full-sync capacity. Dest precision, fidelity and
+    // approximation modes are the caller's: with fp32_dest_acc_en off the accumulation rounds to
+    // 16 bits per K tile like the single-reader path's Float16_b intermediates.
     compute_hw.double_buffer_dest = false;
     compute_hw.unpack_modes = {
         {X_DFB, UnpackMode::UnpackToSrc},
@@ -1481,6 +1500,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
     }
     if (CK > 1) {
         compute_hw.unpack_modes.insert({RECV_DFB, UnpackMode::UnpackToSrc});
+    }
+    if (!fp32_dest && CK == 1) {
+        compute_hw.unpack_modes.insert({ACC_DFB, UnpackMode::UnpackToSrc});
     }
     KernelSpec compute{
         .unique_id = COMPUTE,
@@ -1502,6 +1524,16 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
     }
     if (two_streams) {
         compute.compiler_options.defines["DSMC_TWO_STREAMS"] = "1";
+    }
+    if (!fp32_dest) {
+        compute.compiler_options.defines["DSMC_L1ACC"] = "1";
+        compute.compile_time_args.insert({"G", div_up(l1acc_k_tiles, KB)});
+        if (CK == 1) {
+            compute.dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = ACC_DFB, .accessor_name = "acc", .endpoint_type = DFBEndpointType::PRODUCER});
+            compute.dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = ACC_DFB, .accessor_name = "acc", .endpoint_type = DFBEndpointType::CONSUMER});
+        }
     }
     for (const auto& [arg, value] : layout_args) {
         compute.compile_time_args.insert({arg, value});

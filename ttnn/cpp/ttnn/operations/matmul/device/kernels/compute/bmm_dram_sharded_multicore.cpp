@@ -5,11 +5,13 @@
 // Compute for the multi-core DRAM-sharded decode matmul (cores_per_bank > 0); the work decode and
 // the block order match reader_dram_sharded_multicore.cpp.
 //
-// The whole K of a column pass stays in fp32 Dest (full sync, at most 8 tiles): there are no
-// partial sums in L1 and no in0_block_w spills. A core's columns are taken in P passes; the
-// activation is resident for all of them and each pass re-streams only its own weight columns.
-// With CK > 1 the core's partials go to L1 once, are exchanged inside the column group by the
-// stream-1 kernel, and the owner of each column range adds the CK slices.
+// fp32_dest_acc_en: the whole K of a column pass stays in fp32 Dest (full sync, at most 8 tiles), with
+// no partial sums in L1. Without it (DSMC_L1ACC) the pass accumulates G streamed blocks at a time in
+// 16-bit Dest and the packer adds each group into a Float16_b accumulator in L1, the numerics of the
+// single-reader path's packer L1 accumulation; the accumulator is copied into the output at the end. A core's columns
+// are taken in P passes; the activation is resident for all of them and each pass re-streams only its own weight
+// columns. With CK > 1 the core's partials go to L1 once, are exchanged inside the column group by the stream-1 kernel,
+// and the owner of each column range adds the CK slices.
 
 #include <cstdint>
 
@@ -39,7 +41,10 @@ constexpr uint32_t ROT = get_arg(args::ROT);
 constexpr uint32_t GX = get_arg(args::GX);
 constexpr uint32_t MAXOWN = get_arg(args::MAXOWN);
 constexpr uint32_t BT = KB * NCP;
-constexpr uint32_t DST_TILES = 8;  // fp32 Dest, full sync
+constexpr uint32_t DST_TILES = 8;  // full-sync Dest tiles used per pass
+#ifdef DSMC_L1ACC
+constexpr uint32_t G = get_arg(args::G);  // streamed blocks per packer L1 accumulation step
+#endif
 constexpr uint8_t kRole[] = {DSMC_ROLE};
 }  // namespace
 
@@ -64,13 +69,27 @@ void kernel_main() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::x, dfb::w0, dfb::out);
 
 #ifndef DSMC_REDUCE
+#ifdef DSMC_L1ACC
+    DataflowBuffer dfb_acc(dfb::acc);
+    constexpr uint32_t sink = dfb::acc;
+    dfb_acc.reserve_back(MAXOWN);
+#else
+    constexpr uint32_t sink = dfb::out;
     dfb_out.reserve_back(MAXOWN);
-    pack_reconfig_data_format(dfb::out);
+#endif
+    pack_reconfig_data_format(sink);
     for (uint32_t q = 0; q < P; q++) {
         const uint32_t qa = nc * q / P, ncq = nc * (q + 1) / P - qa;
         matmul_block_init(dfb::x, dfb::w0, false, ncq, 1, 1);
+#ifndef DSMC_L1ACC
         tile_regs_acquire();
+#endif
         for (uint32_t p = 0; p < nblk; p++) {
+#ifdef DSMC_L1ACC
+            if (p % G == 0) {
+                tile_regs_acquire();
+            }
+#endif
             const uint32_t j = (p + rot) % nblk, rb = (rows - j * KB) < KB ? (rows - j * KB) : KB;
             if (q == 0) {
                 dfb_x.wait_front((p + 1) * KB);
@@ -88,23 +107,69 @@ void kernel_main() {
                 matmul_block(dfb::x, w_id, p * KB + r, r * ncq, 0, false, ncq, 1, 1);
             }
             dfb_w.pop_front(BT);
+#ifdef DSMC_L1ACC
+            if ((p + 1) % G == 0 || p + 1 == nblk) {
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_reconfig_l1_acc(p >= G ? 1 : 0);
+                for (uint32_t jj = 0; jj < ncq; jj++) {
+                    pack_tile<true>(jj, dfb::acc, qa + jj);
+                }
+                tile_regs_release();
+            }
+#endif
         }
+#ifndef DSMC_L1ACC
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t jj = 0; jj < ncq; jj++) {
             pack_tile<true>(jj, dfb::out, qa + jj);
         }
         tile_regs_release();
+#endif
     }
+#ifdef DSMC_L1ACC
+    pack_reconfig_l1_acc(0);
+    dfb_acc.push_back(MAXOWN);
+    dfb_acc.wait_front(MAXOWN);
+    dfb_out.reserve_back(MAXOWN);
+    reconfig_data_format_srca(dfb::w0, dfb::acc);
+    reconfig_data_format_srcb(dfb::x, dfb::acc);
+    pack_reconfig_data_format(dfb::out);
+    copy_init(dfb::acc);
+    for (uint32_t j0 = 0; j0 < nc; j0 += DST_TILES) {
+        const uint32_t m = (nc - j0) < DST_TILES ? (nc - j0) : DST_TILES;
+        tile_regs_acquire();
+        for (uint32_t j = 0; j < m; j++) {
+            copy_tile(dfb::acc, j0 + j, j);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < m; j++) {
+            pack_tile<true>(j, dfb::out, j0 + j);
+        }
+        tile_regs_release();
+    }
+    dfb_acc.pop_front(MAXOWN);
+#endif
     dfb_out.push_back(MAXOWN);
 #else
     static_assert(P == 1, "column passes need CK == 1");
     DataflowBuffer dfb_part(dfb::part);
     DataflowBuffer dfb_recv(dfb::recv);
     matmul_block_init(dfb::x, dfb::w0, false, nc, 1, 1);
+    dfb_part.reserve_back(NCP);
+    pack_reconfig_data_format(dfb::part);
+#ifndef DSMC_L1ACC
     tile_regs_acquire();
+#endif
     for (uint32_t p = 0; p < nblk; p++) {
         const uint32_t j = (p + rot) % nblk, rb = (rows - j * KB) < KB ? (rows - j * KB) : KB;
+#ifdef DSMC_L1ACC
+        if (p % G == 0) {
+            tile_regs_acquire();
+        }
+#endif
         dfb_x.wait_front((p + 1) * KB);
 #ifdef DSMC_TWO_STREAMS
         const bool odd = (p & 1) != 0;
@@ -119,15 +184,28 @@ void kernel_main() {
             matmul_block(dfb::x, w_id, p * KB + r, r * nc, 0, false, nc, 1, 1);
         }
         dfb_w.pop_front(BT);
+#ifdef DSMC_L1ACC
+        if ((p + 1) % G == 0 || p + 1 == nblk) {
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_reconfig_l1_acc(p >= G ? 1 : 0);
+            for (uint32_t jj = 0; jj < nc; jj++) {
+                pack_tile<true>(jj, dfb::part, jj);
+            }
+            tile_regs_release();
+        }
+#endif
     }
+#ifdef DSMC_L1ACC
+    pack_reconfig_l1_acc(0);
+#else
     tile_regs_commit();
-    dfb_part.reserve_back(NCP);
     tile_regs_wait();
-    pack_reconfig_data_format(dfb::part);
     for (uint32_t jj = 0; jj < nc; jj++) {
         pack_tile<true>(jj, dfb::part, jj);
     }
     tile_regs_release();
+#endif
     dfb_part.push_back(NCP);
 
     // Owner: add the CK slices of its columns (slot q holds member q's partials of them).

@@ -9,8 +9,9 @@ The served decode shapes come with the layouts the models give them (activation 
 dtypes, fidelity), recorded from tt_transformers on Blackhole (P150 and the per-chip shapes of P150x4 and
 P300 meshes) and on Wormhole (N150, N300, N150x4, T3K). Each case is checked against a float64 matmul of
 the on-device operands (the quantized weight as stored), so the only error left is the op's own
-accumulation and output rounding; the variant keeps the whole K in fp32 Dest and must be at least as
-accurate as the single-reader path on the same call.
+accumulation and output rounding. The variant keeps each column pass's whole K in Dest, in the precision
+the compute config asks for; every served shape runs with fp32_dest_acc_en on and off, against the
+single-reader path on the same call and config.
 """
 
 import math
@@ -27,8 +28,8 @@ DTYPES = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}
 
 # Blackhole: (K, N, weight, activation, output dtype, activation shard grid, activation shard width (tiles),
 #             output shard grid, output shard width (tiles), fidelity, fp32 Dest, stock in0_block_w, cores_per_bank)
-# The compute config (fidelity, fp32 Dest) and in0_block_w are what the model passes; the stock path runs
-# with them as recorded. The multi-core variant takes the fidelity and always accumulates in fp32 Dest.
+# The fidelity and in0_block_w are what the model passes (the stock path runs with the recorded
+# in0_block_w); the recorded fp32 Dest flag is kept for reference, the tests run both settings on both paths.
 # A grid is ("rect", x, y) from (0, 0) or ("rm", n): n cores row-major over the worker grid.
 # fmt: off
 BH_SHAPES = [
@@ -267,21 +268,32 @@ def _rel_err(out, ref):
     return ((out.double() - ref).norm() / ref.norm()).item()
 
 
-def _check(out, ref, out_dtype):
-    passed, pcc = comp_pcc(ref, out.double(), 0.9999)
+def _check(out, ref, out_dtype, fp32=True):
+    passed, pcc = comp_pcc(ref, out.double(), 0.9999 if fp32 else 0.999)
     assert passed, pcc
     err = _rel_err(out, ref)
-    # bf16 output rounding alone is ~0.004 relative; bfloat8_b output (the LM-head splits) ~0.008.
-    assert err < (0.007 if out_dtype == "bf16" else 0.012), err
+    if fp32:
+        # bf16 output rounding alone is ~0.004 relative; bfloat8_b output (the LM-head splits) ~0.008.
+        assert err < (0.007 if out_dtype == "bf16" else 0.012), err
     return err
+
+
+def _no_worse_than_stock(err, stock_err, fp32):
+    # fp32 Dest: at least as accurate as the single-reader path. 16-bit Dest: both paths round the running
+    # sum to bfloat16 once per K tile, so the errors are of the same size, not bit-identical.
+    if fp32:
+        assert err <= stock_err + 5e-4, (err, stock_err)
+    else:
+        assert err <= 1.15 * stock_err + 5e-4, (err, stock_err)
 
 
 def _out(device, case_out_layout, out_shard_w):
     return _width_sharded_l1(_grid(device, case_out_layout), out_shard_w)
 
 
-def _bh_case(device, case, cores_per_bank, in0_block_w=2):
-    k, n, wd, xd, od, x_layout, x_sw, out_layout, out_sw, fid, fp32, stock_bw, _ = case
+def _bh_case(device, case, cores_per_bank, in0_block_w=2, fp32=None):
+    k, n, wd, xd, od, x_layout, x_sw, out_layout, out_sw, fid, recorded_fp32, stock_bw, _ = case
+    fp32 = recorded_fp32 if fp32 is None else fp32
     x, w = _operands(device, k, n, wd, xd, x_layout, x_sw)
     out_mc = _out(device, out_layout, out_sw)
     kw = dict(out_mc=out_mc, out_dtype=od, per_core_n=out_sw, fidelity=fid, fp32=fp32)
@@ -314,28 +326,33 @@ def _cases(shapes):
     return [pytest.param(c, id=_id(c), marks=() if _id(c) in _REPRESENTATIVE else pytest.mark.slow) for c in shapes]
 
 
+DEST = pytest.mark.parametrize("fp32", [True, False], ids=["fp32_dest", "bf16_dest"])
+
+
 @pytest.mark.skipif(not is_blackhole(), reason="Blackhole shapes (8 DRAM banks)")
 @pytest.mark.parametrize("case", _cases(BH_SHAPES))
-def test_served_shapes_blackhole(device, case):
-    x, w, kw, out, ref = _bh_case(device, case, case[-1])
-    err = _check(out, ref, case[4])
+@DEST
+def test_served_shapes_blackhole(device, case, fp32):
+    x, w, kw, out, ref = _bh_case(device, case, case[-1], fp32=fp32)
+    err = _check(out, ref, case[4], fp32)
     stock = _matmul(x, w, in0_block_w=case[11], cores_per_bank=0, **kw)
     stock_err = _rel_err(ttnn.to_torch(stock).reshape(32, -1)[:, : case[1]], ref)
-    assert err <= stock_err + 5e-4, (err, stock_err)
+    _no_worse_than_stock(err, stock_err, fp32)
 
 
 @pytest.mark.skipif(not is_wormhole_b0(), reason="Wormhole shapes (12 DRAM banks)")
 @pytest.mark.parametrize("case", _cases(WH_SHAPES))
-def test_served_shapes_wormhole(device, case):
-    k, n, wd, xd, od, x_layout, x_sw, pcn, fid, fp32, stock_bw, cores_per_bank = case
+@DEST
+def test_served_shapes_wormhole(device, case, fp32):
+    k, n, wd, xd, od, x_layout, x_sw, pcn, fid, _, stock_bw, cores_per_bank = case
     x, w = _operands(device, k, n, wd, xd, x_layout, x_sw)
     kw = dict(out_mc=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG, out_dtype=od, per_core_n=pcn, fidelity=fid, fp32=fp32)
     out = _matmul(x, w, in0_block_w=2, cores_per_bank=cores_per_bank, **kw)
     ref = _reference(x, w, n)
-    err = _check(ttnn.to_torch(out).reshape(32, -1)[:, :n], ref, od)
+    err = _check(ttnn.to_torch(out).reshape(32, -1)[:, :n], ref, od, fp32)
     stock = _matmul(x, w, in0_block_w=stock_bw, cores_per_bank=0, **kw)
     stock_err = _rel_err(ttnn.to_torch(stock).reshape(32, -1)[:, :n], ref)
-    assert err <= stock_err + 5e-4, (err, stock_err)
+    _no_worse_than_stock(err, stock_err, fp32)
 
 
 def _bank_case(device, k, n, wd="bfp8"):
@@ -363,7 +380,8 @@ def _bank_case(device, k, n, wd="bfp8"):
         (2048, 512, 6),
     ],
 )
-def test_cores_per_bank(device, k, n, cores_per_bank):
+@DEST
+def test_cores_per_bank(device, k, n, cores_per_bank, fp32):
     banks = device.dram_grid_size().x
     grid = device.compute_with_storage_grid_size()
     nbt = math.ceil(math.ceil(n / 32) / banks)
@@ -372,8 +390,8 @@ def test_cores_per_bank(device, k, n, cores_per_bank):
     if column_groups * row_groups * math.ceil(math.ceil(n / 32) / nbt) > grid.x * grid.y:
         pytest.skip("more cores than the worker grid")
     case = _bank_case(device, k, n)
-    *_, out, ref = _bh_case(device, case, cores_per_bank)
-    _check(out, ref, "bf16")
+    *_, out, ref = _bh_case(device, case, cores_per_bank, fp32=fp32)
+    _check(out, ref, "bf16", fp32)
 
 
 @pytest.mark.parametrize("in0_block_w", [1, 3, 5, 8])
