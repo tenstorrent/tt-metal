@@ -60,7 +60,17 @@ void kernel_main() {
 #endif
 #endif
 
+#ifdef ARCH_QUASAR
+    DPRINT_UNPACK("QSR tilize UNPACK: A pre-hw_startup\n");
+    DPRINT_PACK("QSR tilize PACK: A pre-hw_startup\n");
+#endif
+
     compute_kernel_hw_startup(dfb::in, dfb::out);
+
+#ifdef ARCH_QUASAR
+    DPRINT_UNPACK("QSR tilize UNPACK: B post-hw_startup, pre-tilize\n");
+    DPRINT_PACK("QSR tilize PACK: B post-hw_startup, pre-tilize\n");
+#endif
 
     // Use lossless tilize for fp32 inputs to preserve exact values (fast tilize truncates fp32 → tf32)
     constexpr auto fp32_mode = compute_kernel_lib::is_fp32_input_format<dfb::in>()
@@ -75,4 +85,9 @@ void kernel_main() {
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
         fp32_mode>(per_core_block_cnt);
+
+#ifdef ARCH_QUASAR
+    DPRINT_UNPACK("QSR tilize UNPACK: C post-tilize (done)\n");
+    DPRINT_PACK("QSR tilize PACK: C post-tilize (done)\n");
+#endif
 }
