@@ -14,8 +14,9 @@ namespace ckernel::sfpu {
 
 // SnakeBeta activation: y = x + sin²(α·x) / β.
 // Range-reduces α·x to (-π/2, π/2] then evaluates sin(a) via the calculate_sine() minimax
-// polynomial; sin² is even, so no quadrant sign-fix is needed. Valid for |α·x| < 32767·π
-// (≈1.03e5) before convert<vSMag16> saturates.
+// polynomial; sin² is even, so no quadrant sign-fix is needed. The reduction is a
+// four-stage Cody-Waite in fp32, so there is no saturation cliff; accuracy degrades
+// only as the fp32 spacing of α·x itself approaches a radian (#51116).
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS = 8>
 inline void calculate_snake_beta(uint dst_index_x, uint dst_index_alpha, uint dst_index_beta, uint dst_index_out) {
     static_assert(
@@ -24,7 +25,18 @@ inline void calculate_snake_beta(uint dst_index_x, uint dst_index_alpha, uint ds
 
     constexpr uint dst_tile_size_sfpi = 32;
     constexpr float one_over_pi = 0.318309886183791f;
-    constexpr float pi_f = 3.141592653589793f;
+
+    // Cody-Waite split of -π across four fp32 terms, so the reduction stays exact
+    // for large quotients: -π = P0 + P1 + P2 + P3. Same technique calculate_sine()
+    // uses, but with the tail terms as literals rather than vConstFloatPrgm0/1,
+    // which the reciprocal owns here.
+    constexpr float P0 = -0x1.92p+1f;    // representable as bf16
+    constexpr float P1 = -0x1.fbp-11f;   // representable as fp16
+    constexpr float P2 = -0x1.5110b4p-21f;
+    constexpr float P3 = -0x1.7fp-47f;
+    // Shifting by 1.5*2^23 lands the integer in the mantissa, giving round-to-nearest
+    // without a conversion that can saturate.
+    constexpr float rounding_bias = 0x1.8p23f;
 
     // sin(a) minimax coefficients on a ∈ (-π/2, π/2]; mirror calculate_sine().
     constexpr float fp32_C3 = 0x1.5dc908p-19f;
@@ -46,12 +58,22 @@ inline void calculate_snake_beta(uint dst_index_x, uint dst_index_alpha, uint ds
 
         sfpi::vFloat ax = alpha * x;
 
-        // a = (ax/π - round(ax/π)) * π, single-stage reduction; vConstFloatPrgm0/1/2 are
-        // reserved for the reciprocal estimate so convert<vSMag16> is used instead.
-        sfpi::vFloat ax_over_pi = ax * one_over_pi;
-        sfpi::vSMag16 k = sfpi::convert<sfpi::vSMag16>(ax_over_pi, sfpi::RoundMode::Nearest);
-        sfpi::vFloat k_f = sfpi::convert<sfpi::vFloat>(k, sfpi::RoundMode::Nearest);
-        sfpi::vFloat a = (ax_over_pi - k_f) * pi_f;
+        // a = ax - round(ax/π)*π, four-stage Cody-Waite (#51116).
+        //
+        // The previous single-stage form rounded through convert<vSMag16>, whose
+        // sign + 15-bit magnitude saturates at ±32767. Past |ax/π| > 32767 the
+        // subtraction stopped cancelling, so `a` left (-π/2, π/2] and the degree-7
+        // polynomial diverged like a⁷ — finite-but-wrong at |ax| ≈ 1.03e5, then inf.
+        //
+        // Rounding via the mantissa-shift bias keeps the quotient in fp32, which has
+        // no such cliff, and splitting π across four terms keeps the subtraction
+        // accurate once the quotient is large. Branch-free: no v_if on data.
+        sfpi::vFloat j = ax * one_over_pi + rounding_bias;
+        j = j - rounding_bias;
+        sfpi::vFloat a = ax + j * P0;
+        a = a + j * P1;
+        a = a + j * P2;
+        a = a + j * P3;
 
         // sin(a) = a + a·s·poly(s), s = a².  PolynomialEvaluator::eval expands to a Horner chain.
         sfpi::vFloat s = a * a;
