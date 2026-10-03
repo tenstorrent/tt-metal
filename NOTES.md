@@ -1,22 +1,14 @@
-# t48 notes: all LTX-2.5 wins on one branch
+# t97 notes (LTX_VAE_EXACT_SHARD)
 
-Branch ttp/t48-ltx25-integrated (= ttp/t48-integrate-all-ltx-2-5-wins-on-one-branch), base t36 16ba9a383dc.
-Merged: t20+t40 (9e336c44b71, includes 0533827a419), t13 (eee3baf7c0d), t18 (63902277007),
-t44 tip (1968790b040 + its A/B harness), t8 ltx_eval harness. Python-only diff against t36.
-
-Conflicts:
-- pipeline_ltx_distilled.py: t13 and t40 both capture the Gemma encode trace after gen #0. Kept t40's
-  open_trace_gate() + capture_trace() (guarded by _trace_captured). t13's open_trace_gate(capture_prompt=) was removed in t55 (no caller).
-- utils/video.py: t18's YuvVideoExport (worker-thread video encode) + t13's zero-copy frame wrap and start_encoding;
-  the AAC encode runs in finish() before joining the worker, so it overlaps the video encode as in t13.
-  test_yuv_export_encodes_audio_alongside_video now gates the video worker on the audio encode starting
-  (fails if finish() encodes audio after the join; checked).
-- test_ltx_export_latency.py: gemma -> gemma3 import path.
-
-CPU tests (python_env, PYTHONPATH=worktree): export/trace/eval/cache/ltx set (13 files) 78 passed, 8 skipped;
-13 pre-existing failures in test_ltx_euler_tail.py and test_ltx_embedding_cache_identity.py (they read
-models/tt_dit/encoders/gemma/, renamed to gemma3); same 13 fail on the t36 base tree.
-Fold CPU reference (--noconftest): 5 passed. The 78 include the ltx_eval harness (8) and the 13 export/trace tests.
-
-Device: not run (blx03 paused; full-mesh barred by the 22:10 rule). Ready job: tmp/READY_48.md, tmp/blx03/run48.sh.
-Next: when the user allows full-mesh runs on blx03, follow tmp/READY_48.md (setup, one job, timings, ltx_eval vs t20).
+- Code: d22cef25303 (opt-in `_reshard_exact_hw` after each depth-to-space; CPU test
+  test_vae_ltx_exact_shard_ref.py 8 passed). A/B harness: deb30e3191e + cdef9a014ea (driver health fix).
+- blx03 job 454 (submitted 2026-10-03 06:17 UTC): run97.sh -> test_vae_ltx_exact_shard_ab.py on a 2x4 submesh
+  of the full mesh, 544x960/145f, LTX_CONV3D_BLOCKING_MESH=4,8, fused YUV, eager. One warmup per arm, then
+  3 interleaved timed decodes per arm (pad, exact).
+- blx03 dropped at ~05:02-05:16 UTC during ltx-host job 438 (not ours); the broker recovered and verified
+  health at 05:16. Per the 07:38 rule I retried.
+- Logs on g14blx03: /var/tmp/fasth3/t97/driver.log (marker `T97_DRIVER_DONE <stage> <rc>`; rc 9 = drop
+  during OUR job -> stop all device work and report), /var/tmp/fasth3/t97/run97.log (`AB arm=` lines with
+  min and md5, `AB_CMP exact_vs_pad identical=... delta_min_ms=`), yuv_{pad,exact}.pt.
+- Next: read run97.log. Pass = identical=True and delta_min_ms < 0 (expected -40 to -50 ms vs 445 ms).
+  Then delete /var/tmp/fasth3/t97/{src,yuv_*.pt} on blx03, push the branch (no PR), write result.json.
