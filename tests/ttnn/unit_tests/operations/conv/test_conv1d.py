@@ -35,9 +35,8 @@ def run_conv(
     groups=1,
     auto_shard=False,
     shard_layout=None,
+    has_bias=False,
 ):
-    # has_bias = False
-    has_bias = False
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_length]
     conv_weight_shape = [output_channels, input_channels // groups, kernel_size]
@@ -1102,7 +1101,9 @@ def _run_conv1d_route(
     )
     weight_tt = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     bias_tt = (
-        ttnn.from_torch(torch_bias, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) if torch_bias is not None else None
+        ttnn.from_torch(torch_bias, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        if torch_bias is not None
+        else None
     )
     conv_config = ttnn.Conv1dConfig(
         weights_dtype=ttnn.bfloat16,
@@ -1237,4 +1238,58 @@ def test_conv1d_grouped_dram_channel_chunk_routes(
         slice_config=slice_config,
         has_bias=has_bias,
         prepared_weights=prepared_weights,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+def test_conv1d_depthwise_with_bias(device):
+    """1D depthwise conv1d with bias (groups == C): the depthwise factory adds the bias on the
+    last kernel tap, so bias no longer forces the grouped (non-depthwise) layout."""
+    run_conv(
+        device,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        activations_dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat16,
+        output_dtype=ttnn.bfloat16,
+        batch_size=1,
+        output_channels=256,
+        input_channels=256,
+        input_length=12,
+        kernel_size=4,
+        stride=1,
+        padding=3,
+        use_1d_systolic_array=True,
+        config_override=None,
+        groups=256,
+        has_bias=True,
+        fp32_accum=True,
+        packer_l1_acc=True,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+def test_conv1d_depthwise_with_bias_c10240_chunked(device):
+    """GDN decode shape with bias: C=10240, groups=10240, K=4, T=12, pad=3. Exceeds L1 even at
+    maximum spatial slicing, so the call runs through the DRAM channel-chunk path with a host
+    bias (the chunk bias is host-unpadded; on-device ttnn::slice is reserved for prepared
+    device biases)."""
+    run_conv(
+        device,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        activations_dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat16,
+        output_dtype=ttnn.bfloat16,
+        batch_size=1,
+        output_channels=10240,
+        input_channels=10240,
+        input_length=12,
+        kernel_size=4,
+        stride=1,
+        padding=3,
+        use_1d_systolic_array=True,
+        config_override=None,
+        groups=10240,
+        has_bias=True,
+        fp32_accum=True,
+        packer_l1_acc=True,
     )
