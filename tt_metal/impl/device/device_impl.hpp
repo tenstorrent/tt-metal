@@ -280,6 +280,10 @@ private:
     // Friend declaration for experimental API
     friend uint32_t experimental::Device::get_worker_noc_hop_distance(
         IDevice* device, const CoreCoord& logical_src, const CoreCoord& logical_dst, NOC noc);
+    friend CoreCoord experimental::Device::physical_worker_core_from_logical_core(
+        distributed::MeshDevice* mesh_device,
+        const distributed::MeshCoordinate& mesh_coord,
+        const CoreCoord& logical_core);
 
     friend class experimental::DispatchContext;
 };

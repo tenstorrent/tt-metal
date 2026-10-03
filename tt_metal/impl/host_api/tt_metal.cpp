@@ -350,6 +350,18 @@ bool ReadFromDeviceL1(
     }
     const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
     metal_ctx.get_cluster().l1_barrier(device->id());
+    return ReadFromDeviceL1NoBarrier(
+        device, logical_core, address, size, host_buffer, core_type);
+}
+
+bool ReadFromDeviceL1NoBarrier(
+    IDevice* device,
+    const CoreCoord& logical_core,
+    uint32_t address,
+    uint32_t size,
+    std::vector<uint32_t>& host_buffer,
+    CoreType core_type) {
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
     auto virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
     host_buffer = metal_ctx.get_cluster().read_core(device->id(), virtual_core, address, size);
     return true;
@@ -1050,6 +1062,11 @@ void WaitProgramDone(IDevice* device, Program& program, bool read_device_profile
 }
 
 CoreKernelConfig ReadKernelConfig(IDevice* device, const CoreCoord& logical_core) {
+    return ReadKernelConfig(device, logical_core, true);
+}
+
+CoreKernelConfig ReadKernelConfig(
+    IDevice* device, const CoreCoord& logical_core, bool barrier) {
     // Decode through the same generated view firmware compiles against, so the layout is
     // stated once (dev_msgs.h) rather than mirrored here.
     const auto& hal = MetalContext::instance().hal();
@@ -1058,13 +1075,14 @@ CoreKernelConfig ReadKernelConfig(IDevice* device, const CoreCoord& logical_core
     auto launch = factory.create<dev_msgs::launch_msg_t>();
 
     std::vector<uint32_t> raw;
-    ReadFromDeviceL1(
-        device,
-        logical_core,
+    const auto address =
         hal.get_dev_addr(core_type, HalL1MemAddrType::MAILBOX) +
-            factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::launch),
-        launch.size(),
-        raw);
+        factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::launch);
+    if (barrier) {
+        ReadFromDeviceL1(device, logical_core, address, launch.size(), raw);
+    } else {
+        ReadFromDeviceL1NoBarrier(device, logical_core, address, launch.size(), raw);
+    }
 
     auto view = factory.create_view<dev_msgs::launch_msg_t>(reinterpret_cast<const std::byte*>(raw.data()));
     auto kc = view.kernel_config();

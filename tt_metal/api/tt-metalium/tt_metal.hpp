@@ -392,6 +392,8 @@ struct CoreKernelConfig {
 };
 
 CoreKernelConfig ReadKernelConfig(IDevice* device, const CoreCoord& logical_core);
+CoreKernelConfig ReadKernelConfig(
+    IDevice* device, const CoreCoord& logical_core, bool barrier);
 
 /**
  * Copy data from an L1 buffer into a host buffer. Must be a buffer, and not a CB.
@@ -410,6 +412,15 @@ CoreKernelConfig ReadKernelConfig(IDevice* device, const CoreCoord& logical_core
  * fit L1 buffer                         | Yes      |
  */
 bool ReadFromDeviceL1(
+    IDevice* device,
+    const CoreCoord& logical_core,
+    uint32_t address,
+    uint32_t size,
+    std::vector<uint32_t>& host_buffer,
+    CoreType core_type = CoreType::WORKER);
+
+/** Read L1 after the caller has already issued the required device barrier. */
+bool ReadFromDeviceL1NoBarrier(
     IDevice* device,
     const CoreCoord& logical_core,
     uint32_t address,

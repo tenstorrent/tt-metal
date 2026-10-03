@@ -524,6 +524,21 @@ void py_module(nb::module_& mod) {
                     >>> print(f"Worker core: x={worker_core.x}, y={worker_core.y}")
             )doc")
         .def(
+            "physical_worker_core_from_logical_core_at",
+            [](MeshDevice* device, const MeshCoordinate& coord, const CoreCoord& logical_core) {
+                return tt::tt_metal::experimental::Device::physical_worker_core_from_logical_core(
+                    device, coord, logical_core);
+            },
+            nb::arg("coord"),
+            nb::arg("logical_core"),
+            R"doc(
+                Convert a logical worker coordinate to the physical NoC coordinate
+                used by one specific device in this mesh.
+
+                Fabric packet headers require this form because remote NoC injection
+                does not apply the target device's coordinate virtualization.
+            )doc")
+        .def(
             "dram_core_from_logical_core",
             [](MeshDevice* device, const CoreCoord& logical_core) {
                 return device->virtual_core_from_logical_core(logical_core, tt::CoreType::DRAM);
@@ -548,20 +563,25 @@ void py_module(nb::module_& mod) {
                const CoreCoord& logical_core,
                uint32_t address,
                uint32_t size,
-               const std::optional<MeshCoordinate>& coord) {
+               const std::optional<MeshCoordinate>& coord,
+               bool barrier) {
                 std::vector<uint32_t> data;
-                tt::tt_metal::detail::ReadFromDeviceL1(
-                    coord.has_value() ? device->get_device(*coord) : device->get_devices().at(0),
-                    logical_core,
-                    address,
-                    size,
-                    data);
+                auto* local_device =
+                    coord.has_value() ? device->get_device(*coord) : device->get_devices().at(0);
+                if (barrier) {
+                    tt::tt_metal::detail::ReadFromDeviceL1(
+                        local_device, logical_core, address, size, data);
+                } else {
+                    tt::tt_metal::detail::ReadFromDeviceL1NoBarrier(
+                        local_device, logical_core, address, size, data);
+                }
                 return data;
             },
             nb::arg("logical_core"),
             nb::arg("address"),
             nb::arg("size"),
             nb::arg("coord") = nb::none(),
+            nb::arg("barrier") = true,
             R"doc(
                 Read raw L1 words from one core.
 
@@ -611,9 +631,14 @@ void py_module(nb::module_& mod) {
             )doc")
         .def(
             "read_kernel_config",
-            [](MeshDevice* device, const CoreCoord& logical_core, const std::optional<MeshCoordinate>& coord) {
+            [](MeshDevice* device,
+               const CoreCoord& logical_core,
+               const std::optional<MeshCoordinate>& coord,
+               bool barrier) {
                 auto cfg = tt::tt_metal::detail::ReadKernelConfig(
-                    coord.has_value() ? device->get_device(*coord) : device->get_devices().at(0), logical_core);
+                    coord.has_value() ? device->get_device(*coord) : device->get_devices().at(0),
+                    logical_core,
+                    barrier);
                 std::map<std::string, std::vector<uint32_t>> out;
                 out["kernel_config_base"] = cfg.kernel_config_base;
                 out["kernel_text_offset"] = cfg.kernel_text_offset;
@@ -632,6 +657,7 @@ void py_module(nb::module_& mod) {
             },
             nb::arg("logical_core"),
             nb::arg("coord") = nb::none(),
+            nb::arg("barrier") = true,
             R"doc(
                 Read back the kernel config a core is running, field by field.
 

@@ -21,6 +21,15 @@ class MeshCoordinate;
 
 namespace tt::tt_metal::experimental::Device {
 
+// Convert a logical worker coordinate to the physical NoC coordinate used by
+// one device in a mesh.  Fabric packet headers need the target device's
+// physical coordinate because remote NoC injection does not apply that
+// device's virtual-coordinate mapping.
+CoreCoord physical_worker_core_from_logical_core(
+    distributed::MeshDevice* mesh_device,
+    const distributed::MeshCoordinate& mesh_coord,
+    const CoreCoord& logical_core);
+
 // Returns the hop distance between two logical worker coordinates on a given NOC
 // This API is experimental and may evolve into a stable Device API in the future
 uint32_t get_worker_noc_hop_distance(

@@ -11,6 +11,20 @@
 
 namespace tt::tt_metal::experimental::Device {
 
+CoreCoord physical_worker_core_from_logical_core(
+    distributed::MeshDevice* mesh_device,
+    const distributed::MeshCoordinate& mesh_coord,
+    const CoreCoord& logical_core) {
+    TT_FATAL(mesh_device != nullptr, "MeshDevice pointer cannot be null");
+    TT_FATAL(
+        mesh_device->impl().is_local(mesh_coord),
+        "physical_worker_core_from_logical_core requires a device local to this rank; coordinate {} is remote",
+        mesh_coord);
+    auto* device = dynamic_cast<tt::tt_metal::Device*>(mesh_device->impl().get_device(mesh_coord));
+    TT_FATAL(device != nullptr, "Mesh coordinate {} must resolve to a physical Device", mesh_coord);
+    return device->physical_worker_core_from_logical_core(logical_core);
+}
+
 uint32_t get_worker_noc_hop_distance(
     IDevice* device, const CoreCoord& logical_src, const CoreCoord& logical_dst, NOC noc) {
     TT_FATAL(device != nullptr, "Device pointer cannot be null");
