@@ -5,6 +5,7 @@ import pytest
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     DestAccumulation,
+    MathFidelity,
     MathOperation,
     PerfRunType,
     ReduceDimension,
@@ -18,6 +19,7 @@ from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
+    MATH_FIDELITY,
     MATH_OP,
     REDUCE_POOL_TYPE,
     TILE_COUNT,
@@ -28,6 +30,30 @@ REDUCE_MATHOP = {
     ReduceDimension.Column: MathOperation.ReduceColumn,
     ReduceDimension.Scalar: MathOperation.ReduceScalar,
 }
+
+# ttnn reduce accumulates in fp32 DEST by default, so same-format pairs are swept in both DEST modes.
+_DEST_ACC_FORMATS = {
+    (DataFormat.Float16_b, DataFormat.Float16_b),
+    (DataFormat.Float32, DataFormat.Float32),
+}
+
+
+def _dest_accs(formats):
+    if (formats.input_format, formats.output_format) in _DEST_ACC_FORMATS:
+        return [DestAccumulation.No, DestAccumulation.Yes]
+    return [DestAccumulation.No]
+
+
+def _fidelities(formats, pool_type):
+    """GMPOOL (MAX) has no fidelity phases; SUM and AVG sweep the fidelities on the bf16 pair only."""
+    if pool_type == ReducePool.Max:
+        return [MathFidelity.HiFi4]
+    if (
+        formats.input_format == DataFormat.Float16_b
+        and formats.output_format == DataFormat.Float16_b
+    ):
+        return [MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi4]
+    return [MathFidelity.HiFi4]
 
 
 @pytest.mark.perf
@@ -40,9 +66,10 @@ REDUCE_MATHOP = {
             DataFormat.Bfp8_b,
         ]
     ),
-    dest_acc=[DestAccumulation.No],
+    dest_acc=_dest_accs,
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type=[ReducePool.Max, ReducePool.Average, ReducePool.Sum],
+    math_fidelity=_fidelities,
 )
 def test_perf_reduce(
     perf_report,
@@ -50,6 +77,7 @@ def test_perf_reduce(
     dest_acc,
     reduce_dim,
     pool_type,
+    math_fidelity,
 ):
 
     tile_count = 16
@@ -66,6 +94,7 @@ def test_perf_reduce(
         templates=[
             MATH_OP(mathop=REDUCE_MATHOP[reduce_dim]),
             REDUCE_POOL_TYPE(pool_type),
+            MATH_FIDELITY(math_fidelity),
         ],
         runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR(64)],
         variant_stimuli=StimuliConfig(

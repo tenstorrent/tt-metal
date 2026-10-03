@@ -490,7 +490,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_pack_untilize": "perf_pack_untilize"},
     },
     "perf_reduce": {
-        "version": 3,
+        "version": 4,
         "columns": [
             "dest_acc",
             "formats.input_A",
@@ -502,6 +502,7 @@ PERF_TEST_SCHEMAS = {
             "formats.sfpu_dst",
             "loop_factor",
             "marker",
+            "math_fidelity",
             "mathop",
             "reduce_pool_type",
             "tile_cnt",
@@ -509,6 +510,26 @@ PERF_TEST_SCHEMAS = {
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
         "test_name_aliases": {"perf_reduce": "perf_reduce"},
+    },
+    "perf_reduce_block_max": {
+        "version": 1,
+        "columns": [
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_src",
+            "formats.sfpu_dst",
+            "loop_factor",
+            "marker",
+            "reduce_block_ct_dim",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {"perf_reduce_block_max": "perf_reduce_block_max"},
     },
     "perf_sfpu_binop_scalar": {
         "version": 3,
