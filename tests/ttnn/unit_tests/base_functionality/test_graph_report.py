@@ -31,6 +31,8 @@ import graph_report
 # Now import ttnn for device tests
 import ttnn
 
+from loguru import logger as loguru_logger
+
 from models.common.utility_functions import is_wormhole_b0, skip_for_slow_dispatch
 
 
@@ -87,6 +89,10 @@ _SQLITE_TABLES_WITH_RANK = (
     "devices",
     "operations",
     "operation_arguments",
+    "sub_device_managers",
+    "sub_devices",
+    "operation_executions",
+    "execution_sub_devices",
     "tensors",
     "device_tensors",
     "buffers",
@@ -115,6 +121,308 @@ def _assert_nonempty_tables_rank_equals(cursor, expected_rank: int) -> None:
             assert (
                 rmin == rmax == expected_rank
             ), f"table {table}: expected rank {expected_rank} on all {cnt} row(s), got min={rmin} max={rmax}"
+
+
+class TestSubDeviceExecutionImport:
+    # Sub-device 0 is declared by the manager but never runs an operation; only sub-device 1 does.
+    IDLE_SUB_DEVICE_RANGES = [{"start": {"x": 0, "y": 0}, "end": {"x": 3, "y": 3}}]
+    BUSY_SUB_DEVICE_RANGES = [{"start": {"x": 4, "y": 0}, "end": {"x": 4, "y": 4}}]
+
+    @classmethod
+    def _report_with_program_execution(cls):
+        graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.add"},
+                "connections": [2, 3],
+                "input_tensors": [],
+                "arguments": ["SubDeviceId(0)"],
+            },
+            {
+                "counter": 2,
+                "node_type": "sub_device_manager",
+                "params": {
+                    "device_id": 5,
+                    "sub_device_manager_id": 7,
+                    "sub_devices": json.dumps(
+                        [
+                            {"sub_device_id": 0, "worker_core_ranges": cls.IDLE_SUB_DEVICE_RANGES},
+                            {"sub_device_id": 1, "worker_core_ranges": cls.BUSY_SUB_DEVICE_RANGES},
+                        ]
+                    ),
+                },
+                "connections": [],
+            },
+            {
+                "counter": 3,
+                "node_type": "program_execution",
+                "params": {
+                    # device_id is the MeshDevice id, physical_device_id the chip it landed on.
+                    # Distinct values here so the importer's device-id remap is actually exercised.
+                    "device_id": 5,
+                    "physical_device_id": 17,
+                    "sub_device_manager_id": 7,
+                    "sub_device_id": 1,
+                    "worker_core_ranges": json.dumps(cls.BUSY_SUB_DEVICE_RANGES),
+                    "runtime_id": 3,
+                    "global_call_count": (3 << 10) | 17,
+                    "command_queue_id": 0,
+                },
+                "connections": [],
+            },
+            {
+                "counter": 4,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.add"},
+                "connections": [],
+                "duration_ns": 1000,
+            },
+            {"counter": 5, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        return _make_report(graph, devices=[{"device_id": 5}])
+
+    def test_imports_authoritative_program_execution_and_topology(self, tmp_path):
+        report = self._report_with_program_execution()
+        conn, cursor = _import_to_db(report, tmp_path)
+        try:
+            managers = cursor.execute(
+                "SELECT device_id, sub_device_manager_id, rank FROM sub_device_managers"
+            ).fetchall()
+            assert managers == [(0, 7, 0)]
+
+            # Both sub-devices are recorded, including sub-device 0, which ran no operation.
+            sub_devices = cursor.execute(
+                "SELECT device_id, sub_device_manager_id, sub_device_id, worker_core_ranges, rank "
+                "FROM sub_devices ORDER BY sub_device_id"
+            ).fetchall()
+            assert [row[:3] for row in sub_devices] == [(0, 7, 0), (0, 7, 1)]
+            assert json.loads(sub_devices[0][3]) == self.IDLE_SUB_DEVICE_RANGES
+            assert json.loads(sub_devices[1][3]) == self.BUSY_SUB_DEVICE_RANGES
+            assert {row[4] for row in sub_devices} == {0}
+
+            # Only the sub-device that ran is linked to an execution.
+            assert cursor.execute("SELECT sub_device_id FROM execution_sub_devices").fetchall() == [(1,)]
+
+            execution = cursor.execute(
+                "SELECT o.name, e.operation_id, e.device_id, e.physical_device_id, e.runtime_id, "
+                "e.global_call_count, e.command_queue_id, x.sub_device_manager_id, x.sub_device_id "
+                "FROM operation_executions e "
+                "JOIN operations o ON o.operation_id = e.operation_id AND o.rank = e.rank "
+                "JOIN execution_sub_devices x ON x.execution_id = e.execution_id AND x.rank = e.rank"
+            ).fetchone()
+            assert execution == ("ttnn.add", 1, 0, 17, 3, (3 << 10) | 17, 0, 7, 1)
+            assert cursor.execute("SELECT value FROM operation_arguments WHERE operation_id = 1").fetchone() == (
+                "SubDeviceId(0)",
+            )
+
+            # device_id is a remapped MeshDevice id, so it must resolve in the devices table.
+            # Emitting the physical chip id here instead would leave these rows dangling on any
+            # mesh whose chip ids differ from its mesh id.
+            assert (
+                cursor.execute(
+                    "SELECT COUNT(*) FROM operation_executions e "
+                    "LEFT JOIN devices d ON d.device_id = e.device_id AND d.rank = e.rank "
+                    "WHERE d.device_id IS NULL"
+                ).fetchone()[0]
+                == 0
+            )
+
+            # program_execution is a leaf: the op links to it, it links back to nothing. A back-edge
+            # would surface as an op <-> execution cycle in the edges table.
+            assert (
+                cursor.execute(
+                    "SELECT COUNT(*) FROM edges a JOIN edges b "
+                    "ON a.source_unique_id = b.sink_unique_id AND a.sink_unique_id = b.source_unique_id"
+                ).fetchone()[0]
+                == 0
+            )
+        finally:
+            conn.close()
+
+    def test_execution_ids_stay_unique_across_merged_files(self, tmp_path):
+        """Two same-rank files whose executions sit a full stride apart in graph node counters.
+
+        Deriving execution_id from the graph node counter collides here (node counters routinely
+        exceed the per-file operation id stride), and INSERT OR REPLACE would silently drop a row.
+        """
+        stride = graph_report._OPERATION_ID_STRIDE_PER_RANK_FILE
+
+        def graph_with_execution_at(counter_target, physical_device_id):
+            graph = [{"counter": 0, "node_type": "capture_start", "params": {}, "connections": []}]
+            counter = 1
+            while counter < counter_target - 1:
+                graph.append(
+                    {
+                        "counter": counter,
+                        "node_type": "circular_buffer_allocate",
+                        "params": {
+                            "size": "1",
+                            "address": "0",
+                            "core_range_set": "",
+                            "globally_allocated": "0",
+                            "device_id": "5",
+                        },
+                        "connections": [],
+                    }
+                )
+                counter += 1
+            graph.append(
+                {
+                    "counter": counter,
+                    "node_type": "function_start",
+                    "params": {"name": "ttnn.add"},
+                    "connections": [counter + 1],
+                    "input_tensors": [],
+                    "arguments": [],
+                }
+            )
+            graph.append(
+                {
+                    "counter": counter + 1,
+                    "node_type": "program_execution",
+                    "params": {
+                        "device_id": 5,
+                        "physical_device_id": physical_device_id,
+                        "sub_device_manager_id": 7,
+                        "sub_device_id": 1,
+                        "worker_core_ranges": "[]",
+                        "runtime_id": 3,
+                        "global_call_count": (3 << 10) | physical_device_id,
+                        "command_queue_id": 0,
+                    },
+                    "connections": [],
+                }
+            )
+            assert counter + 1 == counter_target
+            graph.append(
+                {
+                    "counter": counter + 2,
+                    "node_type": "function_end",
+                    "params": {"name": "ttnn.add"},
+                    "connections": [],
+                    "duration_ns": 1000,
+                }
+            )
+            graph.append({"counter": counter + 3, "node_type": "capture_end", "params": {}, "connections": []})
+            return graph
+
+        report_dir = tmp_path / "reports_in"
+        report_dir.mkdir()
+        for filename, counter_target, physical_device_id in (
+            ("a.json", stride + 2, 17),
+            ("b.json", 2, 18),
+        ):
+            report = _make_report(
+                graph_with_execution_at(counter_target, physical_device_id), devices=[{"device_id": 5}]
+            )
+            with open(report_dir / filename, "w") as f:
+                json.dump(report, f)
+
+        conn = sqlite3.connect(graph_report.import_report(report_dir, tmp_path / "output"))
+        try:
+            rows = conn.execute(
+                "SELECT execution_id, physical_device_id FROM operation_executions ORDER BY execution_id"
+            ).fetchall()
+            assert len(rows) == 2, f"an execution was dropped by an execution_id collision: {rows}"
+            assert len({execution_id for execution_id, _ in rows}) == 2, rows
+            assert {physical_device_id for _, physical_device_id in rows} == {17, 18}, rows
+        finally:
+            conn.close()
+
+    def test_execution_index_overflow_drops_remainder_with_warning(self, tmp_path):
+        """One operation with more executions than the stride allows keeps exactly a stride of them.
+
+        execution_id is operation_id * stride + index, so the index must stay below the stride or
+        the next operation's ids would be reused. The importer drops the remainder instead; this
+        pins that boundary, which the stride-collision test above does not reach.
+        """
+        stride = graph_report._EXECUTION_ID_STRIDE_PER_OPERATION
+        overflow = 5
+
+        graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.add"},
+                "connections": [],
+                "input_tensors": [],
+                "arguments": [],
+            },
+        ]
+        for index in range(stride + overflow):
+            graph.append(
+                {
+                    "counter": 2 + index,
+                    "node_type": "program_execution",
+                    "params": {
+                        "device_id": 5,
+                        "physical_device_id": index,
+                        "sub_device_manager_id": 7,
+                        "sub_device_id": 0,
+                        "worker_core_ranges": "[]",
+                        "runtime_id": 3,
+                        "global_call_count": (3 << 10) | index,
+                        "command_queue_id": 0,
+                    },
+                    "connections": [],
+                }
+            )
+        graph.append(
+            {
+                "counter": 2 + stride + overflow,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.add"},
+                "connections": [],
+                "duration_ns": 1000,
+            }
+        )
+        graph.append({"counter": 3 + stride + overflow, "node_type": "capture_end", "params": {}, "connections": []})
+
+        # graph_report logs through loguru, which does not propagate to pytest's caplog.
+        messages = []
+        sink_id = loguru_logger.add(messages.append, level="WARNING")
+        try:
+            conn, cursor = _import_to_db(_make_report(graph, devices=[{"device_id": 5}]), tmp_path)
+        finally:
+            loguru_logger.remove(sink_id)
+
+        try:
+            rows = cursor.execute(
+                "SELECT execution_id, operation_id FROM operation_executions ORDER BY execution_id"
+            ).fetchall()
+            assert len(rows) == stride, f"expected the remainder to be dropped, kept {len(rows)}"
+            operation_id = rows[0][1]
+            # The kept ids fill the operation's band exactly and stop short of the next one's.
+            assert [execution_id for execution_id, _ in rows] == [
+                operation_id * stride + index for index in range(stride)
+            ]
+            assert cursor.execute("SELECT COUNT(*) FROM execution_sub_devices").fetchone()[0] == stride
+        finally:
+            conn.close()
+
+        assert any(
+            f"has more than {stride} program executions" in message for message in messages
+        ), f"the drop must be logged, got: {messages}"
+
+    def test_old_report_without_execution_nodes_creates_empty_compatible_tables(self, tmp_path):
+        report = _make_report([{"counter": 0, "node_type": "capture_start", "params": {}, "connections": []}])
+        conn, cursor = _import_to_db(report, tmp_path)
+        try:
+            for table in (
+                "sub_device_managers",
+                "sub_devices",
+                "operation_executions",
+                "execution_sub_devices",
+            ):
+                assert cursor.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+            assert cursor.execute("SELECT value FROM report_metadata WHERE key = 'schema_version'").fetchone() == (
+                "3.4",
+            )
+        finally:
+            conn.close()
 
 
 class TestImportReportMultiFileOperationIds:
@@ -429,6 +737,109 @@ class TestTensorLifetime:
 
 class TestImportGraphUnit:
     """Pure unit tests for import_graph function - no device required."""
+
+    def test_unplaced_program_execution_is_still_recorded(self, tmp_path):
+        """A program_execution with no sub_device_id keeps its row, minus the sub-device link.
+
+        Capture omits sub_device_id when it cannot place a program (an eth-only op, say). Which
+        chip ran the operation is still worth reporting, so the execution must survive import; only
+        the execution_sub_devices link is dropped, so the placement reads as unknown rather than as
+        a spurious sub-device 0.
+        """
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn::all_gather", "inputs": "0"},
+                "connections": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "program_execution",
+                "params": {
+                    "device_id": 0,
+                    "physical_device_id": 3,
+                    "sub_device_manager_id": 77,
+                    "runtime_id": 5,
+                    "global_call_count": 5123,
+                    "command_queue_id": 0,
+                },
+                "connections": [],
+            },
+            {
+                "counter": 3,
+                "node_type": "function_end",
+                "params": {"name": "ttnn::all_gather"},
+                "connections": [],
+            },
+            {"counter": 4, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+
+        conn, cursor = _import_to_db(_make_report(mock_graph, devices=[{"device_id": 0}]), tmp_path)
+
+        cursor.execute("SELECT physical_device_id, global_call_count FROM operation_executions")
+        assert cursor.fetchall() == [(3, 5123)]
+        cursor.execute("SELECT COUNT(*) FROM execution_sub_devices")
+        assert cursor.fetchone()[0] == 0, "an unplaced execution must not claim a sub-device"
+        conn.close()
+
+    def test_placed_and_unplaced_executions_coexist_under_one_operation(self, tmp_path):
+        """Dropping one program's placement must not drop its siblings'."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn::add", "inputs": "0"},
+                "connections": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "program_execution",
+                "params": {
+                    "device_id": 0,
+                    "physical_device_id": 0,
+                    "sub_device_manager_id": 77,
+                    "sub_device_id": 1,
+                    "runtime_id": 5,
+                    "global_call_count": 5120,
+                    "command_queue_id": 0,
+                },
+                "connections": [],
+            },
+            {
+                "counter": 3,
+                "node_type": "program_execution",
+                "params": {
+                    "device_id": 0,
+                    "physical_device_id": 1,
+                    "sub_device_manager_id": 77,
+                    "runtime_id": 5,
+                    "global_call_count": 5121,
+                    "command_queue_id": 0,
+                },
+                "connections": [],
+            },
+            {
+                "counter": 4,
+                "node_type": "function_end",
+                "params": {"name": "ttnn::add"},
+                "connections": [],
+            },
+            {"counter": 5, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+
+        conn, cursor = _import_to_db(_make_report(mock_graph, devices=[{"device_id": 0}]), tmp_path)
+
+        cursor.execute("SELECT physical_device_id FROM operation_executions ORDER BY physical_device_id")
+        assert cursor.fetchall() == [(0,), (1,)]
+        cursor.execute(
+            "SELECT e.physical_device_id, x.sub_device_id FROM operation_executions e "
+            "JOIN execution_sub_devices x ON x.execution_id = e.execution_id AND x.rank = e.rank"
+        )
+        assert cursor.fetchall() == [(0, 1)], "only the placed execution should link to a sub-device"
+        conn.close()
 
     def test_output_tensors_extracted_from_function_end(self, tmp_path):
         """Test that output tensors are extracted from function_end connections."""
@@ -2669,6 +3080,292 @@ class TestGraphCaptureToFile:
         assert "version" in report
         assert report["graph"] == captured_graph
 
+    @skip_for_slow_dispatch()
+    def test_default_manager_execution_metadata_round_trip(self, device, tmp_report_dir):
+        report_path = tmp_report_dir / "default_manager_report.json"
+        db_dir = tmp_report_dir / "db"
+        torch_input = torch.rand((1, 1, 64, 64), dtype=torch.bfloat16)
+        lhs = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+        rhs = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+        with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config("enable_logging", True):
+            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            try:
+                _ = ttnn.add(lhs, rhs)
+                ttnn.synchronize_device(device)
+            finally:
+                captured_graph = ttnn.graph.end_graph_capture_to_file(report_path)
+
+        execution_nodes = [node for node in captured_graph if node.get("node_type") == "program_execution"]
+        assert len(execution_nodes) == 1
+        params = execution_nodes[0]["params"]
+        assert params["sub_device_id"] == 0
+        assert json.loads(params["worker_core_ranges"])
+        assert params["global_call_count"] == (params["runtime_id"] << 10) | params["physical_device_id"]
+        # device_id identifies the MeshDevice (joins the devices table); physical_device_id the chip.
+        assert params["device_id"] == device.id()
+        # Leaf node: no back-edge to the owning operation.
+        assert execution_nodes[0]["connections"] == []
+
+        manager_nodes = [node for node in captured_graph if node.get("node_type") == "sub_device_manager"]
+        assert len(manager_nodes) == 1, "the active manager's partition is snapshotted exactly once per capture"
+        manager_params = manager_nodes[0]["params"]
+        assert manager_params["device_id"] == device.id()
+        assert manager_params["sub_device_manager_id"] == params["sub_device_manager_id"]
+        assert [sub["sub_device_id"] for sub in json.loads(manager_params["sub_devices"])] == [0]
+
+        db_path = graph_report.import_report(report_path, db_dir)
+        with sqlite3.connect(db_path) as conn:
+            execution = conn.execute(
+                "SELECT e.physical_device_id, e.runtime_id, e.global_call_count, "
+                "x.sub_device_manager_id, x.sub_device_id, s.worker_core_ranges "
+                "FROM operation_executions e "
+                "JOIN execution_sub_devices x ON x.execution_id = e.execution_id AND x.rank = e.rank "
+                "JOIN sub_devices s ON s.device_id = x.device_id "
+                "AND s.sub_device_manager_id = x.sub_device_manager_id "
+                "AND s.sub_device_id = x.sub_device_id AND s.rank = x.rank"
+            ).fetchone()
+        assert execution[:5] == (
+            params["physical_device_id"],
+            params["runtime_id"],
+            params["global_call_count"],
+            params["sub_device_manager_id"],
+            0,
+        )
+        assert json.loads(execution[5]) == json.loads(params["worker_core_ranges"])
+
+    @skip_for_slow_dispatch()
+    @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_loudbox")], indirect=True)
+    def test_execution_fans_out_to_every_device_in_the_mesh(self, mesh_device, tmp_report_dir):
+        """One program_execution per physical device a single workload landed on.
+
+        On a single-device host the fan-out in track_mesh_workload_execution always yields
+        exactly one node, so nothing there distinguishes device_id from physical_device_id,
+        and one operation never produces enough executions to exercise execution_id's
+        per-operation stride. A replicated mesh workload covers both.
+        """
+        report_path = tmp_report_dir / "mesh_fanout_report.json"
+        db_dir = tmp_report_dir / "db"
+        num_devices = mesh_device.get_num_devices()
+        assert num_devices > 1, "fan-out is only observable on a multi-device mesh"
+
+        torch_input = torch.rand((1, 1, 64, 64), dtype=torch.bfloat16)
+        lhs, rhs = (
+            ttnn.from_torch(
+                torch_input,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            for _ in range(2)
+        )
+
+        with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config("enable_logging", True):
+            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            try:
+                _ = ttnn.add(lhs, rhs)
+                ttnn.synchronize_device(mesh_device)
+            finally:
+                captured_graph = ttnn.graph.end_graph_capture_to_file(report_path)
+
+        execution_nodes = [node for node in captured_graph if node.get("node_type") == "program_execution"]
+        assert len(execution_nodes) == num_devices
+        params = [node["params"] for node in execution_nodes]
+
+        # device_id names the MeshDevice and so repeats across the fan-out; physical_device_id
+        # names the chip and so must not.
+        assert {param["device_id"] for param in params} == {mesh_device.id()}
+        assert len({param["physical_device_id"] for param in params}) == num_devices
+        # global_call_count encodes the chip, which is what keeps per-device profiler rows apart.
+        for param in params:
+            assert param["global_call_count"] == (param["runtime_id"] << 10) | param["physical_device_id"]
+        assert len({param["global_call_count"] for param in params}) == num_devices
+
+        # The manager partitions the mesh uniformly, so it is snapshotted once for the mesh
+        # rather than once per chip in the fan-out.
+        manager_nodes = [node for node in captured_graph if node.get("node_type") == "sub_device_manager"]
+        assert len(manager_nodes) == 1
+        assert manager_nodes[0]["params"]["device_id"] == mesh_device.id()
+
+        db_path = graph_report.import_report(report_path, db_dir)
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute(
+                "SELECT e.execution_id, e.operation_id, e.physical_device_id, e.global_call_count, x.sub_device_id "
+                "FROM operation_executions e "
+                "JOIN execution_sub_devices x ON x.execution_id = e.execution_id AND x.rank = e.rank "
+                "ORDER BY e.physical_device_id"
+            ).fetchall()
+            # Executions carry the remapped mesh id, so every row must resolve against devices.
+            dangling = conn.execute(
+                "SELECT COUNT(*) FROM operation_executions e "
+                "LEFT JOIN devices d ON d.device_id = e.device_id AND d.rank = e.rank "
+                "WHERE d.device_id IS NULL"
+            ).fetchone()[0]
+
+        assert len(rows) == num_devices
+        assert dangling == 0
+        # All of them hang off the one ttnn.add, which is what puts execution_id's stride under
+        # load: ids are operation_id * stride + index, so a collision here would drop a row.
+        assert len({row[1] for row in rows}) == 1
+        assert len({row[0] for row in rows}) == num_devices
+        assert {row[2] for row in rows} == {param["physical_device_id"] for param in params}
+        assert {row[3] for row in rows} == {param["global_call_count"] for param in params}
+        assert {row[4] for row in rows} == {0}
+
+    @skip_for_slow_dispatch()
+    @pytest.mark.skipif(not is_wormhole_b0(), reason="Sub-device graph-report coverage targets Wormhole")
+    def test_sub_device_execution_metadata_round_trip(self, device, tmp_report_dir):
+        report_path = tmp_report_dir / "sub_device_report.json"
+        db_dir = tmp_report_dir / "db"
+        sub_device_0_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+        sub_device_1_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 4))})
+        manager = device.create_sub_device_manager(
+            [ttnn.SubDevice([sub_device_0_cores]), ttnn.SubDevice([sub_device_1_cores])],
+            3200,
+        )
+        device.load_sub_device_manager(manager)
+        device.set_sub_device_stall_group([ttnn.SubDeviceId(0), ttnn.SubDeviceId(1)])
+
+        try:
+            torch_input = torch.rand((1, 1, 64, 64), dtype=torch.bfloat16)
+            lhs = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+            rhs = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+            with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config("enable_logging", True):
+                ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+                try:
+                    _ = ttnn.add(lhs, rhs, sub_device_id=ttnn.SubDeviceId(1))
+                    ttnn.synchronize_device(device)
+                finally:
+                    captured_graph = ttnn.graph.end_graph_capture_to_file(report_path)
+        finally:
+            device.reset_sub_device_stall_group()
+            device.clear_loaded_sub_device_manager()
+            device.remove_sub_device_manager(manager)
+
+        execution_nodes = [node for node in captured_graph if node.get("node_type") == "program_execution"]
+        assert len(execution_nodes) == 1
+        params = execution_nodes[0]["params"]
+        assert params["sub_device_id"] == 1
+        assert json.loads(params["worker_core_ranges"]) == [{"start": {"x": 4, "y": 0}, "end": {"x": 4, "y": 4}}]
+        assert params["global_call_count"] == (params["runtime_id"] << 10) | params["physical_device_id"]
+        assert params["command_queue_id"] == 0
+        assert params["device_id"] == device.id()
+        assert execution_nodes[0]["connections"] == []
+
+        db_path = graph_report.import_report(report_path, db_dir)
+        with sqlite3.connect(db_path) as conn:
+            execution = conn.execute(
+                "SELECT e.physical_device_id, e.runtime_id, e.global_call_count, e.command_queue_id, "
+                "x.sub_device_manager_id, x.sub_device_id, s.worker_core_ranges "
+                "FROM operation_executions e "
+                "JOIN execution_sub_devices x ON x.execution_id = e.execution_id AND x.rank = e.rank "
+                "JOIN sub_devices s ON s.device_id = x.device_id "
+                "AND s.sub_device_manager_id = x.sub_device_manager_id "
+                "AND s.sub_device_id = x.sub_device_id AND s.rank = x.rank"
+            ).fetchone()
+        assert execution[:6] == (
+            params["physical_device_id"],
+            params["runtime_id"],
+            params["global_call_count"],
+            0,
+            params["sub_device_manager_id"],
+            1,
+        )
+        assert json.loads(execution[6]) == [{"start": {"x": 4, "y": 0}, "end": {"x": 4, "y": 4}}]
+
+        # Sub-device 0 never ran an operation, but the manager snapshot must still describe it, so
+        # the visualizer can draw the full partition of the grid.
+        with sqlite3.connect(db_path) as conn:
+            topology = conn.execute(
+                "SELECT sub_device_id, worker_core_ranges FROM sub_devices "
+                "WHERE sub_device_manager_id = ? ORDER BY sub_device_id",
+                (params["sub_device_manager_id"],),
+            ).fetchall()
+        assert [sub_device_id for sub_device_id, _ in topology] == [0, 1]
+        assert json.loads(topology[0][1]) == [{"start": {"x": 0, "y": 0}, "end": {"x": 3, "y": 3}}]
+        assert json.loads(topology[1][1]) == [{"start": {"x": 4, "y": 0}, "end": {"x": 4, "y": 4}}]
+
+    @skip_for_slow_dispatch()
+    def test_unplaced_execution_from_a_real_program_is_still_recorded(self, device, tmp_report_dir):
+        """A real program the resolver cannot place still gets its row, with no sub-device link.
+
+        resolve_program_placement uses circular buffers as a proxy for kernel groups, so a program
+        that allocates none cannot be placed. The import-path tests feed synthetic nodes with
+        sub_device_id already omitted; this drives the C++ resolver itself with a real program and
+        checks the contract it promises -- record the execution, drop only the placement.
+
+        The other unresolved branch, an eth-only program (a CCL op), needs more than one chip and
+        so is not reachable here.
+        """
+        report_path = tmp_report_dir / "unplaced_report.json"
+        db_dir = tmp_report_dir / "db"
+        sub_device_0_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+        sub_device_1_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 4))})
+        manager = device.create_sub_device_manager(
+            [ttnn.SubDevice([sub_device_0_cores]), ttnn.SubDevice([sub_device_1_cores])],
+            3200,
+        )
+        device.load_sub_device_manager(manager)
+        device.set_sub_device_stall_group([ttnn.SubDeviceId(0), ttnn.SubDeviceId(1)])
+
+        try:
+            torch_input = torch.rand((1, 1, 64, 64), dtype=torch.bfloat16)
+            operand = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+            with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config("enable_logging", True):
+                ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+                try:
+                    # ttnn.clone allocates no circular buffers, so the proxy has nothing to match.
+                    _ = ttnn.clone(operand)
+                    ttnn.synchronize_device(device)
+                finally:
+                    captured_graph = ttnn.graph.end_graph_capture_to_file(report_path)
+        finally:
+            device.reset_sub_device_stall_group()
+            device.clear_loaded_sub_device_manager()
+            device.remove_sub_device_manager(manager)
+
+        execution_nodes = [node for node in captured_graph if node.get("node_type") == "program_execution"]
+        assert execution_nodes, "the operation must still produce a program_execution node"
+        manager_nodes = [node for node in captured_graph if node.get("node_type") == "sub_device_manager"]
+        assert len(manager_nodes) == 1
+        manager_params = manager_nodes[0]["params"]
+        unplaced = [node for node in execution_nodes if "sub_device_id" not in node["params"]]
+        if not unplaced:
+            # Premise guard rather than a failure: if clone starts allocating circular buffers the
+            # resolver can place it, and this test needs repointing at another CB-less program.
+            pytest.skip("ttnn.clone now resolves to a sub-device, so it no longer covers this branch")
+
+        for node in unplaced:
+            params = node["params"]
+            # Everything except the placement is still recorded.
+            assert params["device_id"] == device.id()
+            assert params["global_call_count"] == (params["runtime_id"] << 10) | params["physical_device_id"]
+            # Placement is dropped whole: no sub-device, and no worker cores standing in for one.
+            assert "worker_core_ranges" not in params
+            # The manager the program ran under is still known, only the sub-device within it is not.
+            assert params["sub_device_manager_id"] == manager_params["sub_device_manager_id"]
+
+        db_path = graph_report.import_report(report_path, db_dir)
+        with sqlite3.connect(db_path) as conn:
+            recorded = conn.execute(
+                "SELECT COUNT(*) FROM operation_executions e "
+                "LEFT JOIN execution_sub_devices x ON x.execution_id = e.execution_id AND x.rank = e.rank "
+                "WHERE x.execution_id IS NULL"
+            ).fetchone()[0]
+            dangling = conn.execute(
+                "SELECT COUNT(*) FROM operation_executions e "
+                "LEFT JOIN devices d ON d.device_id = e.device_id AND d.rank = e.rank "
+                "WHERE d.device_id IS NULL"
+            ).fetchone()[0]
+            # The manager snapshot is independent of placement, so the partition is still described.
+            topology = conn.execute("SELECT sub_device_id FROM sub_devices ORDER BY sub_device_id").fetchall()
+
+        assert recorded == len(unplaced), "an unplaced execution must keep its operation_executions row"
+        assert dangling == 0
+        assert [sub_device_id for (sub_device_id,) in topology] == [0, 1]
+
     def test_report_contains_device_info(self, device, tmp_report_dir):
         """Test that report contains device information."""
         report_path = tmp_report_dir / "report.json"
@@ -2764,6 +3461,7 @@ class TestGraphReportImport:
         assert db_path.exists()
         assert db_path.name == "db.sqlite"
 
+    @skip_for_slow_dispatch()
     @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_loudbox")], indirect=True)
     def test_import_normalizes_buffer_chunk_device_ids_from_submesh_capture(self, mesh_device, tmp_report_dir):
         report_path = tmp_report_dir / "submesh_report.json"
