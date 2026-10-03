@@ -142,16 +142,125 @@ def test_scatter_rows(mesh_device):
     base = torch.randn(1, 1, R_, 512).to(torch.bfloat16)
     pool = dev(md, base, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
     src = torch.randn(N, 512).to(torch.bfloat16)
-    ids = torch.randperm(R_)[:N]
+    ids = torch.randperm(R_ - 64)[:N]  # leaves room for the base offset
     ids_skip = ids.clone()
     ids_skip[::7] = 0xFFFFFFFF
     P.paged_scatter_rows(
         pool,
         dev(md, src, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
         dev(md, ids_skip.to(torch.int32).reshape(1, N), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+        base_offset=7,
     )
     got = dev0(md, pool).reshape(R_, 512)
     exp = base.reshape(R_, 512).clone()
     keep = ids_skip != 0xFFFFFFFF
-    exp[ids_skip[keep]] = src[keep]
+    exp[ids_skip[keep] + 7] = src[keep]
     assert torch.equal(got, exp)
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("device_params", [pytest.param(DP, id="plain")], indirect=True)
+@pytest.mark.parametrize("backend", ["matmul", "fused"])
+@torch.no_grad()
+def test_indexer_ragged_valid_lengths(mesh_device, backend):
+    """Decode indexer with PER-USER valid entry counts (ragged batch): every selected id is < the user's own N and the selected score sum equals the
+    top-512 of that user's valid scores (computed from the device scores)."""
+    from models.demos.blackhole.deepseek_v41_flash.tt.indexer import DSV41DecodeIndexer
+
+    md = mesh_device
+    rows = md.shape[0]
+    U, n_alloc = 4, 2080
+    B = rows * U
+    gen = torch.Generator().manual_seed(3)
+    w = {
+        "wq_b": torch.randn(4096, 1280, generator=gen).to(torch.bfloat16) * 0.05,
+        "weights_proj": torch.randn(32, 5120, generator=gen).to(torch.bfloat16) * 0.05,
+    }
+    idx = DSV41DecodeIndexer(
+        md,
+        w,
+        torch.polar(torch.ones(4096, 32), torch.zeros(4096, 32)),
+        users_per_row=U,
+        n_alloc=n_alloc,
+        ratio=1,
+        backend=backend,
+    )
+    idx.load_keys(torch.randn(B, 2048, 128, generator=gen) * 0.7)
+    pos = torch.tensor([700, 1200, 1999, 2047])
+    n_valid = pos + 1  # ratio 1
+    rep = ttnn.ReplicateTensorToMesh(md)
+    up = lambda t, dt, lay: ttnn.from_torch(
+        t, device=md, dtype=dt, layout=lay, memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=rep
+    )
+    st = {
+        "C": up(torch.ones(U, 1, 1, 128).to(torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+        "S": up(torch.zeros(U, 1, 1, 128).to(torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+        "valid": up(
+            torch.full((1, 1, 1, 1), int(n_valid.max()), dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+        ),
+        "nvalid": up(n_valid.float().reshape(U, 1, 1, 1), ttnn.float32, ttnn.TILE_LAYOUT),
+    }
+    x = up((torch.randn(1, 1, U, 5120, generator=gen) * 0.5).to(torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT)
+    qr = up((torch.randn(1, 1, U, 1280, generator=gen)).to(torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT)
+    ids, scores = idx.forward(x, qr, st, return_scores=True)
+    got = ttnn.to_torch(ttnn.get_device_tensors(ids)[0]).reshape(U, -1).long()
+    if backend == "fused":
+        sc = torch.stack([ttnn.to_torch(ttnn.get_device_tensors(s_)[0]).reshape(32, -1)[0] for s_ in scores]).float()
+    else:
+        sc = ttnn.to_torch(ttnn.get_device_tensors(scores)[0]).reshape(U, -1).float()
+    for u in range(U):
+        n = int(n_valid[u])
+        sel = got[u][got[u] != 0xFFFFFFFF]
+        assert len(sel) == 512 and int(sel.max()) < n, f"user {u}: ids must be < {n} (max {int(sel.max())})"
+        gold = sc[u, :n].topk(512).values.sum()
+        assert (
+            abs(float(sc[u, sel].sum() - gold)) <= 1e-2 * abs(float(gold)) + 1e-3
+        ), f"user {u}: selection is not the top-512 of the valid scores"
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("device_params", [pytest.param(DP, id="plain")], indirect=True)
+@pytest.mark.parametrize("slab_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@torch.no_grad()
+def test_write_keys(mesh_device, slab_dtype):
+    """DSV41DecodeIndexer.write_keys: prefill write of index keys into the TILE slab (entry 0 via fill_cache, entry offset via slice_write)."""
+    from models.demos.blackhole.deepseek_v41_flash.tt.indexer import DSV41DecodeIndexer
+
+    md = mesh_device
+    rows = md.shape[0]
+    U, n_alloc = 4, 256
+    B = rows * U
+    gen = torch.Generator().manual_seed(5)
+    w = {"wq_b": torch.zeros(4096, 1280).to(torch.bfloat16), "weights_proj": torch.zeros(32, 5120).to(torch.bfloat16)}
+    idx = DSV41DecodeIndexer(
+        md,
+        w,
+        torch.polar(torch.ones(300, 32), torch.zeros(300, 32)),
+        users_per_row=U,
+        n_alloc=n_alloc,
+        ratio=2,
+        key_dtype=slab_dtype,
+    )
+    idx.load_keys(torch.zeros(B, 0, 128))
+    shard = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(rows, md.shape[1]))
+    mk = lambda t: ttnn.from_torch(
+        t,
+        device=md,
+        dtype=slab_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=shard,
+    )
+    k0 = (torch.randn(rows, 1, 64, 128, generator=gen)).to(torch.bfloat16)  # user 1 of every mesh row: entries 0..63
+    k1 = (torch.randn(rows, 1, 96, 128, generator=gen)).to(torch.bfloat16)  # user 1: entries 64..159 (a second chunk)
+    idx.write_keys(1, mk(k0), 0)
+    idx.write_keys(1, mk(k1), 64)
+    ttnn.synchronize_device(md)
+    got = ttnn.to_torch(ttnn.get_device_tensors(idx.k_cache)[0]).float().reshape(U, n_alloc, 128)  # mesh row 0
+    tol = 0.0 if slab_dtype == ttnn.bfloat16 else 0.1
+    exp = torch.cat([k0[0, 0], k1[0, 0]]).float()
+    err = (got[1, :160] - exp).abs().max()
+    assert float(err) <= tol + (0.0 if tol == 0 else 0.0), f"max abs error {float(err)}"
+    assert (
+        float(got[0].abs().max()) == 0 and float(got[1, 160:].abs().max()) == 0 and float(got[2].abs().max()) == 0
+    ), "write must not touch other rows / users"

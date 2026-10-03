@@ -3,7 +3,8 @@
 
 """Which SDPA is more accurate on REAL data? Layer 0 (window-only) at S=24 on the real attention inputs of a prefill dump: the device q (RoPE'd) and the device
 cache rows are read back and the attention is recomputed in fp32 on the CPU (golden). ``scaled_dot_product_attention_decode`` (the existing path) and
-``sparse_sdpa`` (the paged path) are both compared with that golden on IDENTICAL inputs. Env DSV41_REAL_DIR (dump dir), DSV41_PROBE_LAYER (default 0), DSV41_PROBE_S."""
+``sparse_sdpa`` (the paged path) are both compared with that golden on IDENTICAL inputs. Env DSV41_REAL_DIR (dump dir), DSV41_PROBE_LAYER (default 0), DSV41_PROBE_S.
+"""
 
 import os
 

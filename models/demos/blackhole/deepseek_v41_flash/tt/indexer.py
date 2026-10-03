@@ -140,6 +140,21 @@ class DSV41DecodeIndexer:
             mesh_mapper=ttnn.ShardTensor2dMesh(self.md, dims=(0, None), mesh_shape=(self.rows, self.cols)),
         )
 
+    def write_keys(self, user, keys, entry0=0):
+        """Write index keys of LOCAL user ``user`` (0..U-1 of every mesh row) into the key slab, in place (prefill / chunked prefill).
+        ``keys``: TILE tensor [1,1,N,128] per device (global [rows,1,N,128] sharded over the mesh rows with dims=(0, None), i.e. mesh row r carries the keys of
+        its own user ``user``), SAME dtype as the slab, N a multiple of 32; row n of ``keys`` becomes compressed entry ``entry0 + n`` (entry j = the key of
+        compressed group j, RoPE'd at position j * ratio, fp4-simulated; layout notes in paged_api.md). ``entry0`` must be a multiple of 32.
+        """
+        N = int(keys.shape[-2])
+        assert N % 32 == 0 and entry0 % 32 == 0 and entry0 + N <= self.n_alloc
+        if entry0 == 0:
+            ttnn.fill_cache(self.k_cache, keys, user)
+        else:
+            ttnn.experimental.slice_write(
+                keys, self.k_cache, [user, 0, entry0, 0], [user + 1, 1, entry0 + N, DIM], [1, 1, 1, 1]
+            )
+
     def step_inputs(self, positions: torch.Tensor, st=None):
         """positions [B] (decode position of every user, row-major). The valid length is shared: all users must have the same position."""
         p = int(positions[0])
@@ -283,10 +298,26 @@ class DSV41DecodeIndexer:
     def select(self, scores, st):
         """top-``topk`` entry ids: uint32 [U,1,1,topk] (descending score, 0xFFFFFFFF where fewer valid entries), ONE ``topk_large_indices`` call
         for all users (rows are ranked in parallel, so the cost is that of one user): fused backend concatenates row 0 (the query row) of every
-        user's score tile. ``st["valid"]``: valid length (device tensor)."""
+        user's score tile. ``st["valid"]``: valid length (device tensor, the batch maximum); ``st["nvalid"]`` (optional, float32 [U,1,1,1] tile): per-user valid entry counts -> per-user masking (ragged batches).
+        """
         if self.backend == "fused":
             rows = [ttnn.slice(s, [0, 0, 0, 0], [1, 1, 1, self.n_alloc]) for s in scores]
             scores = rows[0] if len(rows) == 1 else ttnn.concat(rows, dim=0)  # [U,1,1,T] row-major
+        if (
+            "nvalid" in st
+        ):  # ragged batch: entries >= the user's own valid count must never be ranked (the shared valid length is the batch maximum)
+            if getattr(self, "_arange", None) is None:
+                self._arange = ttnn.from_torch(
+                    torch.arange(self.n_alloc, dtype=torch.float32).reshape(1, 1, 1, -1),
+                    device=self.md,
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.md),
+                )
+            keep = ttnn.lt(self._arange, st["nvalid"])  # [U,1,1,n_alloc]
+            masked = ttnn.where(keep, ttnn.typecast(ttnn.to_layout(scores, ttnn.TILE_LAYOUT), ttnn.float32), -1e30)
+            scores = ttnn.to_layout(ttnn.typecast(masked, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT)
         return ttnn.experimental.topk_large_indices(scores, k=self.topk, valid_length_tensor=st["valid"])
 
     def forward(self, x, qr, st, return_scores=False):

@@ -212,7 +212,12 @@ class DSV41DecodeChain:
     def step_state(self, attn):
         """Per-kind step-input builder for the decoder (``ss.build(pos)``)."""
         if self.paged:
-            return DSV41PagedStepState(attn, max_pos=self.max_ctx + 64, with_indexer=self.use_indexer)
+            return DSV41PagedStepState(
+                attn,
+                max_pos=self.max_ctx + 64,
+                with_indexer=self.use_indexer,
+                per_user_valid=os.environ.get("DSV41_PAGED_RAGGED", "0") == "1",
+            )
         from models.demos.blackhole.deepseek_v41_flash.tt.step_state import DSV41StepState
 
         return DSV41StepState(attn)
