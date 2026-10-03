@@ -304,10 +304,14 @@ def commit_brisc_command(
     if counter_addr is None:
         counter_addr = Mailboxes.BriscCounter.value
     end_time = time.time() + timeout
-    while time.time() < end_time:
+    while True:
+        # The clock is read before the poll, so a host stall past the deadline still gets one last poll
+        expired = time.time() >= end_time
         temp_value = read_word_from_device(location, counter_addr, 0)
         if temp_value == common_counter & mask:
             return
+        if expired:
+            break
 
     logger.error(f"{command.name} -> {hex(Mailboxes.BriscCommand0.value)}")
 
@@ -330,12 +334,16 @@ def wait_brisc_boot_ready(location: str = "0,0", timeout: float = 1.0):
     first command.
     """
     end_time = time.time() + timeout
-    while time.time() < end_time:
+    while True:
+        # The clock is read before the poll, so a host stall past the deadline still gets one last poll
+        expired = time.time() >= end_time
         if (
             read_word_from_device(location, Mailboxes.BriscCounter.value, 0)
             == BRISC_BOOT_READY_SENTINEL
         ):
             return
+        if expired:
+            break
 
     last_value = read_word_from_device(location, Mailboxes.BriscCounter.value, 0)
     soft_reset = get_register_store(location, 0).read_register(
