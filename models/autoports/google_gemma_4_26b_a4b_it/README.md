@@ -17,6 +17,12 @@ Stage06 is complete; local checkpoint provenance is recorded in the work log.
 
 ## Post-pipeline work
 
+2026-10-03: the user accepts the combined **2/5 SWE** result (all five submitted,
+2h14m54s dispatch-to-finish) and requests actual release validation with benchmarks,
+GPQA10, TerminalBench5 and original SWE5. [Current release configuration/status](doc/tti_release/RUN_NOTES.md)
+records the accepted policy, immutable image, exact subsets and outstanding CI results.
+This is not a claim of full accuracy readiness.
+
 The section above is the unchanged pipeline artifact. Subsequent
 human-directed work continued from that result:
 
