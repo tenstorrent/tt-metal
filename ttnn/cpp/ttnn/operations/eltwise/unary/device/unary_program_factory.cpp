@@ -416,9 +416,23 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     DataFormat cb_data_format_for_input =
         (ops_chain[0].type() == unary::UnaryOpType::BITCAST) ? cb_data_format_output : cb_data_format;
 
+    // Interleaved tile and row-major. The reader ramps up to 8 pages in flight and the writer
+    // flushes 2 pages at a time. Each CB is two bursts deep so the next group can be posted
+    // while compute still holds the previous one. Native L1 shards keep the shard as the CB.
+    // A DRAM-sharded tensor still uses this interleaved reader. A read burst there piles
+    // consecutive pages onto one bank and the height-sharded case gets slower, so that path
+    // stays one page in flight.
+    const bool dram_sharded = (input.is_sharded() && input.memory_config().buffer_type() == BufferType::DRAM) ||
+                              (output.is_sharded() && output.memory_config().buffer_type() == BufferType::DRAM);
+    const uint32_t kReadBurst = dram_sharded ? 1 : 8;
+    const uint32_t kWriteBurst = dram_sharded ? 1 : 2;
+    const bool burst_interleaved = !src_sharded && !dst_sharded;
+    const uint32_t interleaved_input_tiles = burst_interleaved ? 2 * kReadBurst : 2;
+    const uint32_t interleaved_output_tiles = burst_interleaved ? 2 * kWriteBurst : 2;
+
     // --- Circular Buffers ---
     desc.cbs.push_back(CBDescriptor{
-        .total_size = input_cb_page_size * src_num_tiles_per_shard.value_or(2),
+        .total_size = input_cb_page_size * src_num_tiles_per_shard.value_or(interleaved_input_tiles),
         .core_ranges = all_device_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
@@ -442,7 +456,7 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
 
     const uint32_t output_cb_index = CBIndex::c_2;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = output_cb_page_size * dst_num_tiles_per_shard.value_or(2),
+        .total_size = output_cb_page_size * dst_num_tiles_per_shard.value_or(interleaved_output_tiles),
         .core_ranges = all_device_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(output_cb_index),
@@ -456,6 +470,7 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     std::map<std::string, std::string> reader_defines;
     reader_defines["SRC_SHARDED"] = src_sharded ? "1" : "0";
     reader_defines["RM_INTERLEAVED"] = rm_interleaved ? "1" : "0";
+    reader_defines["READ_BURST"] = std::to_string(kReadBurst);
 
     std::vector<uint32_t> reader_compile_time_args;
     std::vector<uint32_t> reader_common_runtime_args;
@@ -475,6 +490,7 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     std::map<std::string, std::string> writer_defines;
     writer_defines["DST_SHARDED"] = dst_sharded ? "1" : "0";
     writer_defines["RM_INTERLEAVED"] = rm_interleaved ? "1" : "0";
+    writer_defines["WRITE_BURST"] = std::to_string(kWriteBurst);
 
     std::vector<uint32_t> writer_compile_time_args;
     std::vector<uint32_t> writer_common_runtime_args;
