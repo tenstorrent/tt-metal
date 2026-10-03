@@ -2,12 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.utility_functions import is_blackhole, is_wormhole_b0
 import math
 import torch
 import pytest
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_ulp, assert_with_pcc, generate_all_bfloat16_bitpatterns
+from tests.ttnn.utils_for_testing import assert_with_ulp, assert_with_pcc
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     generate_bfloat16_bits,
     generate_bfloat16_bits_in_range,
@@ -17,7 +16,6 @@ from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     float_to_bf16_bits,
     SMALLEST_NORMAL_BF16,
     MAX_BF16,
-    assert_bfloat16_compiled_contract,
 )
 
 pytestmark = pytest.mark.use_module_device
@@ -68,9 +66,11 @@ refactor of those files doesn't silently delete coverage this one relies on):
     bfloat16 row was removed in favour of the sweep here.
 
 Golden-function quirks (see ttnn/ttnn/operations/unary.py):
-  - _golden_function_selu ignores its scale/alpha kwargs and always uses the
-    paper defaults, but the kernel does honour them, so this file computes
-    its own reference (_selu_reference) to actually exercise them.
+  - _golden_function_selu used to ignore its scale/alpha kwargs (#57116). It
+    now honours them (torch.nn.functional.selu for the full-precision
+    defaults, closed form otherwise); test_selu_scale_alpha_golden and
+    test_selu_default_golden_uses_torch pin that. test_selu_op still uses its
+    own float64 reference (_selu_reference), decoupled from the golden.
   - bitcast only supports same-bit-width dtype pairs; bfloat16 -> uint16 is
     the only valid target.
 
@@ -527,8 +527,8 @@ def test_round_op(device, decimals):
     assert_with_ulp(expected_result=golden[finite], actual_result=result[finite], ulp_threshold=1)
 
 
-# selu(x) = scale * (x if x > 0 else alpha * (exp(x) - 1)). The attached golden
-# ignores scale/alpha, so a scale/alpha-aware reference is computed here.
+# selu(x) = scale * (x if x > 0 else alpha * (exp(x) - 1)). Computed in float64
+# here rather than via the attached golden, to stay decoupled from it.
 def _selu_reference(x, scale, alpha):
     x64 = x.to(torch.float64)
     pos = x64
@@ -563,6 +563,46 @@ def test_selu_op(device, scale, alpha):
 
     keep = ~ftz
     assert_with_ulp(expected_result=golden[keep], actual_result=result[keep], ulp_threshold=1, allow_nonfinite=True)
+
+
+@pytest.mark.parametrize(
+    "scale, alpha",
+    [
+        (1.0507, 1.67326),  # ttnn.selu's kernel defaults (unary_nanobind.cpp); closed-form path
+        (3.0, 2.0),  # non-default: regression for #57116
+        (0.5, 0.1),
+    ],
+)
+def test_selu_scale_alpha_golden(scale, alpha):
+    # ttnn.selu's registered golden used to call torch.nn.functional.selu(input_tensor_a),
+    # which hardcodes the canonical SELU constants and silently ignores scale/alpha -- the
+    # golden was identical for every (scale, alpha) pair. Pin the golden itself (host-only,
+    # no device dependency) against the closed-form definition so a future regression back to
+    # the old torch.nn.functional.selu call fails here immediately.
+    torch.manual_seed(0)
+    x = torch.empty(64).uniform_(-5, 5)
+    expected = torch.where(x >= 0, scale * x, scale * alpha * (torch.exp(x) - 1))
+
+    golden_function = ttnn.get_golden_function(ttnn.selu)
+    golden = golden_function(x, scale=scale, alpha=alpha)
+
+    torch.testing.assert_close(golden, expected)
+
+
+def test_selu_default_golden_uses_torch():
+    # With default (canonical) scale/alpha the golden routes through torch.nn.functional.selu.
+    torch.manual_seed(0)
+    x = torch.empty(64).uniform_(-5, 5)
+    expected = torch.nn.functional.selu(x)
+
+    golden_function = ttnn.get_golden_function(ttnn.selu)
+    torch.testing.assert_close(golden_function(x), expected, rtol=0, atol=0)
+    torch.testing.assert_close(
+        golden_function(x, scale=1.0507009873554804934193349852946, alpha=1.6732632423543772848170429916717),
+        expected,
+        rtol=0,
+        atol=0,
+    )
 
 
 # Above this |x|, reciprocal(x) underflows and is flushed to zero before the
@@ -1098,260 +1138,3 @@ def test_tril_triu_rank_coverage(device, ttnn_op, shape, diagonal):
         f"{ttnn_op.__name__}(diagonal={diagonal}) on shape {tuple(shape)} diverged for "
         f"{int((result != golden).sum().item())} of {result.numel()} elements"
     )
-
-
-@pytest.mark.skipif(
-    not (is_blackhole() or is_wormhole_b0()), reason="compiler-generated BF16 kernel ships on Blackhole and Wormhole B0"
-)
-def test_sigmoid_bf16_compiled_contract(device):
-    import importlib
-    import numpy as np
-
-    _REFERENCE_MODULE = "torch"
-    _REFERENCE_FUNCTION = "sigmoid"
-    _RAW_TO_REFERENCE_INPUT = {
-        "pos_zero": "pos_zero",
-        "neg_zero": "pos_zero",
-        "pos_subnormal": "pos_zero",
-        "neg_subnormal": "pos_zero",
-        "finite_other": "finite_other",
-        "pos_inf": "pos_inf",
-        "neg_inf": "neg_inf",
-        "pos_nan": "pos_inf",
-        "neg_nan": "neg_inf",
-    }
-
-    def _reference(values):
-        module = importlib.import_module(_REFERENCE_MODULE)
-        if _REFERENCE_MODULE == "numpy":
-            result = getattr(module, _REFERENCE_FUNCTION)(values.numpy(), **{})
-            return torch.from_numpy(np.asarray(result, dtype=np.float64))
-        return getattr(module, _REFERENCE_FUNCTION)(input=values, **{})
-
-    def _real_domain_mask(values):
-        return np.ones(values.shape, dtype=bool)
-
-    host = generate_all_bfloat16_bitpatterns()
-    assert host.numel() == 65536
-    device_input = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    result = ttnn.to_torch(ttnn.sigmoid(device_input, **{"mode": ttnn.SigmoidMode.Accurate, "vector_mode": 4})).to(
-        torch.bfloat16
-    )
-    assert_bfloat16_compiled_contract(host, result, _reference, _real_domain_mask, _RAW_TO_REFERENCE_INPUT, ((), ()))
-
-
-@pytest.mark.skipif(
-    not (is_blackhole() or is_wormhole_b0()), reason="compiler-generated BF16 kernel ships on Blackhole and Wormhole B0"
-)
-def test_sigmoid_accurate_bf16_compiled_contract(device):
-    import importlib
-    import numpy as np
-
-    _REFERENCE_MODULE = "torch"
-    _REFERENCE_FUNCTION = "sigmoid"
-    _RAW_TO_REFERENCE_INPUT = {
-        "pos_zero": "pos_zero",
-        "neg_zero": "pos_zero",
-        "pos_subnormal": "pos_zero",
-        "neg_subnormal": "pos_zero",
-        "finite_other": "finite_other",
-        "pos_inf": "pos_inf",
-        "neg_inf": "neg_inf",
-        "pos_nan": "pos_inf",
-        "neg_nan": "neg_inf",
-    }
-
-    def _reference(values):
-        module = importlib.import_module(_REFERENCE_MODULE)
-        if _REFERENCE_MODULE == "numpy":
-            result = getattr(module, _REFERENCE_FUNCTION)(values.numpy(), **{})
-            return torch.from_numpy(np.asarray(result, dtype=np.float64))
-        return getattr(module, _REFERENCE_FUNCTION)(input=values, **{})
-
-    def _real_domain_mask(values):
-        return np.ones(values.shape, dtype=bool)
-
-    host = generate_all_bfloat16_bitpatterns()
-    assert host.numel() == 65536
-    device_input = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    result = ttnn.to_torch(ttnn.sigmoid_accurate(device_input, **{"fast_and_approximate_mode": False})).to(
-        torch.bfloat16
-    )
-    assert_bfloat16_compiled_contract(host, result, _reference, _real_domain_mask, _RAW_TO_REFERENCE_INPUT, ((), ()))
-
-
-@pytest.mark.skipif(
-    not (is_blackhole() or is_wormhole_b0()), reason="compiler-generated BF16 kernel ships on Blackhole and Wormhole B0"
-)
-def test_selu_bf16_compiled_contract(device):
-    import importlib
-    import numpy as np
-
-    _REFERENCE_MODULE = "torch.nn.functional"
-    _REFERENCE_FUNCTION = "selu"
-    _RAW_TO_REFERENCE_INPUT_BY_ARCH = {
-        "blackhole": {
-            "pos_zero": "pos_zero",
-            "neg_zero": "pos_zero",
-            "pos_subnormal": "pos_zero",
-            "neg_subnormal": "pos_zero",
-            "finite_other": "finite_other",
-            "pos_inf": "pos_inf",
-            "neg_inf": "neg_inf",
-            "pos_nan": "pos_inf",
-            "neg_nan": "pos_inf",
-        },
-        "wormhole_b0": {
-            "pos_zero": "pos_zero",
-            "neg_zero": "pos_zero",
-            "pos_subnormal": "pos_zero",
-            "neg_subnormal": "pos_zero",
-            "finite_other": "finite_other",
-            "pos_inf": "pos_inf",
-            "neg_inf": "neg_inf",
-            "pos_nan": "pos_inf",
-            "neg_nan": "neg_inf",
-        },
-    }
-    _NUMERIC_TERMINALS = (
-        (),
-        (("below", -10.0, False, "constant", -1.7578125), ("above", 10.0, False, "affine", (1.0507010221481323, 0.0))),
-    )
-
-    def _raw_to_reference_input():
-        if is_blackhole():
-            return _RAW_TO_REFERENCE_INPUT_BY_ARCH["blackhole"]
-        if is_wormhole_b0():
-            return _RAW_TO_REFERENCE_INPUT_BY_ARCH["wormhole_b0"]
-        raise AssertionError("no compiled ingress contract for current architecture")
-
-    def _reference(values):
-        module = importlib.import_module(_REFERENCE_MODULE)
-        if _REFERENCE_MODULE == "numpy":
-            result = getattr(module, _REFERENCE_FUNCTION)(values.numpy(), **{})
-            return torch.from_numpy(np.asarray(result, dtype=np.float64))
-        return getattr(module, _REFERENCE_FUNCTION)(input=values, **{})
-
-    def _real_domain_mask(values):
-        return np.ones(values.shape, dtype=bool)
-
-    host = generate_all_bfloat16_bitpatterns()
-    assert host.numel() == 65536
-    device_input = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    result = ttnn.to_torch(ttnn.selu(device_input, **{"alpha": 1.6732632423543772, "scale": 1.0507009873554805})).to(
-        torch.bfloat16
-    )
-    assert_bfloat16_compiled_contract(
-        host, result, _reference, _real_domain_mask, _raw_to_reference_input(), _NUMERIC_TERMINALS
-    )
-
-
-@pytest.mark.skipif(
-    not (is_blackhole() or is_wormhole_b0()), reason="compiler-generated BF16 kernel ships on Blackhole and Wormhole B0"
-)
-def test_hardtanh_bf16_compiled_contract(device):
-    import importlib
-    import numpy as np
-
-    _RAW_TO_REFERENCE_INPUT = {
-        "pos_zero": "pos_zero",
-        "neg_zero": "pos_zero",
-        "pos_subnormal": "pos_zero",
-        "neg_subnormal": "pos_zero",
-        "finite_other": "finite_other",
-        "pos_inf": "pos_inf",
-        "neg_inf": "neg_inf",
-        "pos_nan": "pos_inf",
-        "neg_nan": "neg_inf",
-    }
-
-    def _declared_piece_0(x):
-        return np.broadcast_to(np.asarray(-1, dtype=np.float64), x.shape)
-
-    def _declared_piece_1(x):
-        return np.broadcast_to(np.asarray(x, dtype=np.float64), x.shape)
-
-    def _declared_piece_2(x):
-        return np.broadcast_to(np.asarray(1, dtype=np.float64), x.shape)
-
-    def _declared_forward(x):
-        result = np.full(x.shape, np.nan)
-        finite = np.isfinite(x)
-        bins = np.searchsorted((-1.0, 1.0), x, side="right")
-        active = finite & (bins == 0)
-        result[active] = _declared_piece_0(x[active])
-        active = finite & (bins == 1)
-        result[active] = _declared_piece_1(x[active])
-        active = finite & (bins == 2)
-        result[active] = _declared_piece_2(x[active])
-        return result
-
-    def _reference(values):
-        return torch.from_numpy(_declared_forward(values.numpy()))
-
-    def _real_domain_mask(values):
-        return np.ones(values.shape, dtype=bool)
-
-    host = generate_all_bfloat16_bitpatterns()
-    assert host.numel() == 65536
-    device_input = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    result = ttnn.to_torch(ttnn.hardtanh(device_input, **{"min_val": -1.0, "max_val": 1.0})).to(torch.bfloat16)
-    assert_bfloat16_compiled_contract(host, result, _reference, _real_domain_mask, _RAW_TO_REFERENCE_INPUT, ((), ()))
-
-
-@pytest.mark.skipif(
-    not (is_blackhole() or is_wormhole_b0()), reason="compiler-generated BF16 kernel ships on Blackhole and Wormhole B0"
-)
-def test_polygamma_bf16_compiled_contract(device):
-    import importlib
-    import numpy as np
-
-    _REFERENCE_MODULE = "torch.special"
-    _REFERENCE_FUNCTION = "polygamma"
-    _RAW_TO_REFERENCE_INPUT_BY_ARCH = {
-        "blackhole": {
-            "pos_zero": "pos_zero",
-            "neg_zero": "pos_zero",
-            "pos_subnormal": "pos_zero",
-            "neg_subnormal": "pos_zero",
-            "finite_other": "finite_other",
-            "pos_inf": "pos_inf",
-            "neg_inf": "neg_inf",
-            "pos_nan": "pos_inf",
-            "neg_nan": "pos_inf",
-        },
-        "wormhole_b0": {
-            "pos_zero": "pos_zero",
-            "neg_zero": "neg_zero",
-            "pos_subnormal": "pos_zero",
-            "neg_subnormal": "neg_zero",
-            "finite_other": "finite_other",
-            "pos_inf": "pos_inf",
-            "neg_inf": "neg_inf",
-            "pos_nan": "nan",
-            "neg_nan": "nan",
-        },
-    }
-
-    def _raw_to_reference_input():
-        if is_blackhole():
-            return _RAW_TO_REFERENCE_INPUT_BY_ARCH["blackhole"]
-        if is_wormhole_b0():
-            return _RAW_TO_REFERENCE_INPUT_BY_ARCH["wormhole_b0"]
-        raise AssertionError("no compiled ingress contract for current architecture")
-
-    def _reference(values):
-        module = importlib.import_module(_REFERENCE_MODULE)
-        if _REFERENCE_MODULE == "numpy":
-            result = getattr(module, _REFERENCE_FUNCTION)(values.numpy(), **{"n": 1})
-            return torch.from_numpy(np.asarray(result, dtype=np.float64))
-        return getattr(module, _REFERENCE_FUNCTION)(input=values, **{"n": 1})
-
-    def _real_domain_mask(values):
-        return ~((values <= 0.0) & (values == np.trunc(values)))
-
-    host = generate_all_bfloat16_bitpatterns()
-    assert host.numel() == 65536
-    device_input = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    result = ttnn.to_torch(ttnn.polygamma(device_input, 1, **{})).to(torch.bfloat16)
-    assert_bfloat16_compiled_contract(host, result, _reference, _real_domain_mask, _raw_to_reference_input(), ((), ()))

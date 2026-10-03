@@ -53,10 +53,10 @@ constexpr uintptr_t llk_device_print_buffer_l1_base = LLK_DEVICE_PRINT_BUFFER_BA
 #else
 constexpr uintptr_t llk_device_print_buffer_l1_base = LLK_DEVICE_PRINT_BUFFER_BASE;
 #endif
-// Leave room for the mailbox immediately below RUNTIME_ARGS.
+// Check the footprint of the device print region against RUNTIME_ARGS, the next region.
 static_assert(
-    llk_device_print_buffer_l1_base + sizeof(DevicePrintMemoryLayout) <= LLK_RUNTIME_ARGS_START - 0x48,
-    "LLK device print buffer overlaps the mailbox; adjust TestConfig.DEVICE_PRINT_BUFFER_BASE/"
+    llk_device_print_buffer_l1_base + sizeof(DevicePrintMemoryLayout) <= LLK_RUNTIME_ARGS_START,
+    "LLK device print buffer overlaps RUNTIME_ARGS; adjust TestConfig.DEVICE_PRINT_BUFFER_BASE/"
     "DEVICE_PRINT_BUFFER_SIZE/DEVICE_PRINT_BUFFER_SIZE2 in tests/python_tests/helpers/test_config.py.");
 
 // A single #include "dprint.h" exposes every device print facility.

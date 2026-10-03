@@ -55,6 +55,17 @@
 #include "ckernel_sfpu_silu.h"
 #include "ckernel_sfpu_tanh.h"
 #include "ckernel_sfpu_square.h"
+// Ported SFPI kernels behind the log, sign, tiled_prod, power, exp2, heaviside, expm1,
+// add_top_row and alt_complex_rotate90 entry points below.
+#include "ckernel_sfpu_log.h"
+#include "ckernel_sfpu_sign.h"
+#include "ckernel_sfpu_tiled_prod.h"
+#include "ckernel_sfpu_unary_power.h"
+#include "ckernel_sfpu_exp2.h"
+#include "ckernel_sfpu_heaviside.h"
+#include "ckernel_sfpu_expm1.h"
+#include "ckernel_sfpu_add_top_row.h"
+#include "ckernel_sfpu_alt_complex_rotate90.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "ckernel_sfpu_binary.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
@@ -193,11 +204,7 @@ ALWI void silu_tile_init() {
  */
 template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tanh_tile_init() {
-#ifndef ARCH_QUASAR
     MATH(SFPU_UNARY_INIT_FN(tanh, sfpu::tanh_init, (fast_and_approx, is_fp32_dest_acc_en)));
-#else
-    MATH(SFPU_UNARY_INIT(tanh));
-#endif
 }
 
 // TODO: Move to trigonometry.h (https://github.com/tenstorrent/tt-metal/issues/47942)
@@ -287,6 +294,8 @@ ALWI void sigmoid_tile_pack(uint32_t idst) {
         vec_mode));
 }
 
+#endif  // !ARCH_QUASAR
+
 /**
  * Please refer to documentation for any_init.
  */
@@ -361,6 +370,7 @@ ALWI void log_with_base_tile(uint32_t idst, uint32_t base_scale) {
         base_scale));
 }
 
+#ifndef ARCH_QUASAR  // pack-thread SFPU, signbit and abs are BH/WH only
 template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tanh_tile_init_pack() {
     PACK(SFPU_UNARY_INIT_FN(tanh, sfpu::tanh_init, (fast_and_approx, is_fp32_dest_acc_en)));
@@ -471,6 +481,8 @@ ALWI void abs_tile_init() { MATH(SFPU_UNARY_INIT(abs)); }
 ALWI void abs_tile_int32(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs_int32, (APPROX), idst, VectorMode::RC));
 }
+
+#endif  // !ARCH_QUASAR
 
 // clang-format off
 /**
@@ -681,6 +693,7 @@ ALWI void expm1_tile_init() {
     MATH(SFPU_UNARY_INIT_FN(expm1, sfpu::expm1_init, (approx, is_fp32_dest_acc_en)));
 }
 
+#ifndef ARCH_QUASAR  // Quasar has no pack-thread SFPU
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void silu_tile_pack(uint32_t idst) {
     PACK(SFPU_UNARY_CALL(
@@ -838,7 +851,7 @@ ALWI void max_reduce_with_indices(uint32_t idst, uint32_t idst_idx, uint32_t chu
         idst,
         idst_idx,
         0 /* DST out unused, but required for _llk_math_eltwise_binary_sfpu_params_ */,
-        VectorMode::RC,
+        VectorMode::None,
         chunk)));
 }
 
@@ -851,11 +864,14 @@ ALWI void max_reduce_with_indices_init() {
         max_pool_with_indices, sfpu::init_max_pool_with_indices, (true /* APPROXIMATE */, layout))));
 }
 
+#endif  // !ARCH_QUASAR
+
 // clang-format off
 /**
  * Performs element-wise add_top_row operation between the top rows of two tiles in DST register.
- * Takes the top row of tile at dst_tile_0 and adds it with the top row of tile at dst_tile_1,
- * storing the result in the top row of tile at dst_tile_out.
+ * Adds the top four rows of the tile at dst_tile_0 (rows 0-3 of faces 0 and 1) to the top four rows
+ * of the tile at dst_tile_1, storing the result in the top four rows of the tile at dst_tile_out.
+ * The remaining rows of dst_tile_out are left unchanged.
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
  *
@@ -867,13 +883,13 @@ ALWI void max_reduce_with_indices_init() {
  * | dst_tile_0      | The index of the first tile in DST register                              | uint32_t  | Must be less than the size of the DST register buffer | True     |
  * | dst_tile_1      | The index of the second tile in DST register                             | uint32_t  | Must be less than the size of the DST register buffer | True     |
  * | dst_tile_out    | The index of the output tile in DST register                             | uint32_t  | Must be less than the size of the DST register buffer | True     |
- * | format          | The data format for the add_top_row operation                            | DataFormat| Float32, Int32, UInt32                                | True     |
+ * | format          | The data format for the add_top_row operation                            | DataFormat| Float32, Int32, UInt32 (where the arch has UInt32)    | True     |
  */
 // clang-format on
 template <DataFormat format>
 ALWI void sfpu_add_top_row(uint32_t dst_tile_0, uint32_t dst_tile_1, uint32_t dst_tile_out) {
     static_assert(
-        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32,
+        format == DataFormat::Float32 || format == DataFormat::Int32 || is_uint32_format(format),
         "Unsupported data format. Supported formats: Float32, Int32, UInt32");
 
     MATH((SFPU_BINARY_CALL(
@@ -892,6 +908,7 @@ ALWI void sfpu_add_top_row(uint32_t dst_tile_0, uint32_t dst_tile_1, uint32_t ds
  */
 ALWI void sfpu_add_top_row_init() { MATH((SFPU_BINARY_INIT_FN_NO_ARGS(add_top_row, sfpu::init_add_top_row))); }
 
+#ifndef ARCH_QUASAR  // BH/WH-only ops below
 /**
  * Pauses the cores so that the debug interface can be used to inspect the value of the registers.
  *
@@ -1030,6 +1047,8 @@ ALWI void unary_max_tile(uint32_t idst, uint32_t param0) {
  */
 ALWI void unary_max_tile_init() { MATH(SFPU_UNARY_INIT_FN(unary_max, sfpu::unary_max_min_init, (true /* IS_MAX */))); }
 
+#endif  // !ARCH_QUASAR
+
 // clang-format off
 /**
  * Treats pairs of numbers as complex numbers and rotates them 90 degrees
@@ -1054,6 +1073,8 @@ ALWI void alt_complex_rotate90_tile(uint32_t idst) {
  * Please refer to documentation for any_init.
  */
 ALWI void alt_complex_rotate90_tile_init() { MATH(SFPU_UNARY_INIT(alt_complex_rotate90)); }
+
+#ifndef ARCH_QUASAR  // BH/WH-only ops below
 
 // unary_min : if x < value --> x, else value
 // clang-format off
@@ -1180,199 +1201,5 @@ ALWI void clear_compute_special_value_flags() { MATH((llk_math_clear_compute_spe
 #endif
 
 #endif
-
-#if !defined(TT_POLY_LLK_DISABLE) &&                                                                                 \
-    ((defined(TT_POLY_EXP2_BF16_AVAILABLE)) && defined(TT_METAL_SFPU_SINGLE_TILE_DST) &&                             \
-     TT_METAL_SFPU_SINGLE_TILE_DST == 1 && defined(TT_POLY_BF16_UNARY_CONTEXT) && TT_POLY_BF16_UNARY_CONTEXT == 1 && \
-     defined(SFPU_OP_PROGRAM_INIT_0))
-#define TT_POLY_EXP2_BF16_ROUTE_ACTIVE 1
-#else
-#define TT_POLY_EXP2_BF16_ROUTE_ACTIVE 0
-#endif
-
-/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void exp2_tt_poly_bf16_tile(uint32_t idst) {
-#if !TT_POLY_EXP2_BF16_ROUTE_ACTIVE
-    exp2_tile<is_fp32_dest_acc_en>(idst);
-#else
-    if constexpr (is_fp32_dest_acc_en) {
-        exp2_tile<is_fp32_dest_acc_en>(idst);
-    } else {
-        if (idst != 0) {
-            exp2_tile_init<is_fp32_dest_acc_en>();
-            exp2_tile<is_fp32_dest_acc_en>(idst);
-            MATH(SFPU_UNARY_INIT_FN(exp2, sfpu::init_exp2_tt_poly_bf16, (true /*APPROXIMATE*/, is_fp32_dest_acc_en)));
-            return;
-        }
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            is_fp32_dest_acc_en,
-            calculate_exp2_tt_poly_bf16,
-            (32 /* ITERATIONS */),
-            idst,
-            VectorMode::None));
-    }
-#endif
-}
-
-/** Initialize the internal BF16 typed-compiler route. */
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void exp2_tt_poly_bf16_tile_init() {
-#if !TT_POLY_EXP2_BF16_ROUTE_ACTIVE
-    exp2_tile_init<is_fp32_dest_acc_en>();
-#else
-    if constexpr (is_fp32_dest_acc_en) {
-        exp2_tile_init<is_fp32_dest_acc_en>();
-    }
-#endif
-}
-
-/** Initialize the selected single-tile program once, before its tile loop. */
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void exp2_tt_poly_bf16_program_init() {
-#if TT_POLY_EXP2_BF16_ROUTE_ACTIVE
-    if constexpr (!(is_fp32_dest_acc_en)) {
-        MATH(SFPU_UNARY_INIT_FN(exp2, sfpu::init_exp2_tt_poly_bf16, (true /*APPROXIMATE*/, is_fp32_dest_acc_en)));
-    }
-#endif
-}
-
-#undef TT_POLY_EXP2_BF16_ROUTE_ACTIVE
-
-#if !defined(TT_POLY_LLK_DISABLE) && ((defined(TT_POLY_EXPM1_BF16_AVAILABLE)) && \
-                                      defined(TT_METAL_SFPU_SINGLE_TILE_DST) && TT_METAL_SFPU_SINGLE_TILE_DST == 1)
-#define TT_POLY_EXPM1_BF16_ROUTE_ACTIVE 1
-#else
-#define TT_POLY_EXPM1_BF16_ROUTE_ACTIVE 0
-#endif
-
-/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
-template <bool approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void expm1_tt_poly_bf16_tile(uint32_t idst) {
-#if !TT_POLY_EXPM1_BF16_ROUTE_ACTIVE
-    expm1_tile<approx, is_fp32_dest_acc_en>(idst);
-#else
-    if constexpr (is_fp32_dest_acc_en) {
-        expm1_tile<approx, is_fp32_dest_acc_en>(idst);
-    } else {
-        if (idst != 0) {
-            expm1_tile_init<approx, is_fp32_dest_acc_en>();
-            expm1_tile<approx, is_fp32_dest_acc_en>(idst);
-            return;
-        }
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            is_fp32_dest_acc_en,
-            calculate_expm1_tt_poly_bf16,
-            (32 /* ITERATIONS */),
-            idst,
-            VectorMode::None));
-    }
-#endif
-}
-
-/** Initialize the internal BF16 typed-compiler route. */
-template <bool approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void expm1_tt_poly_bf16_tile_init() {
-    expm1_tile_init<approx, is_fp32_dest_acc_en>();
-}
-
-#undef TT_POLY_EXPM1_BF16_ROUTE_ACTIVE
-
-#if !defined(TT_POLY_LLK_DISABLE) &&                                                                                 \
-    ((defined(TT_POLY_LOG2_BF16_AVAILABLE)) && defined(TT_METAL_SFPU_SINGLE_TILE_DST) &&                             \
-     TT_METAL_SFPU_SINGLE_TILE_DST == 1 && defined(TT_POLY_BF16_UNARY_CONTEXT) && TT_POLY_BF16_UNARY_CONTEXT == 1 && \
-     defined(SFPU_OP_PROGRAM_INIT_0))
-#define TT_POLY_LOG2_BF16_ROUTE_ACTIVE 1
-#else
-#define TT_POLY_LOG2_BF16_ROUTE_ACTIVE 0
-#endif
-
-/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
-ALWI void log2_tt_poly_bf16_tile(uint32_t idst) {
-#if !TT_POLY_LOG2_BF16_ROUTE_ACTIVE
-    log_with_base_tile<false, true>(idst, 0x3fb8aa3bu);
-#else
-    if constexpr (DST_ACCUM_MODE) {
-        log_with_base_tile<false, true>(idst, 0x3fb8aa3bu);
-    } else {
-        if (idst != 0) {
-            log_with_base_tile_init();
-            log_with_base_tile<false, true>(idst, 0x3fb8aa3bu);
-            // TODO(AP): move out init
-            MATH(SFPU_UNARY_INIT_FN(log_with_base, sfpu::init_log2_tt_poly_bf16, (APPROX, false, DST_ACCUM_MODE)));
-            return;
-        }
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_log2_tt_poly_bf16, (32 /* ITERATIONS */), idst, VectorMode::None));
-    }
-#endif
-}
-
-/** Initialize the internal BF16 typed-compiler route. */
-ALWI void log2_tt_poly_bf16_tile_init() {
-#if !TT_POLY_LOG2_BF16_ROUTE_ACTIVE
-    log_with_base_tile_init();
-#else
-    if constexpr (DST_ACCUM_MODE) {
-        log_with_base_tile_init();
-    }
-#endif
-}
-
-/** Initialize the selected single-tile program once, before its tile loop. */
-ALWI void log2_tt_poly_bf16_program_init() {
-#if TT_POLY_LOG2_BF16_ROUTE_ACTIVE
-    if constexpr (!(DST_ACCUM_MODE)) {
-        // TODO(AP): move out init
-        MATH(SFPU_UNARY_INIT_FN(log_with_base, sfpu::init_log2_tt_poly_bf16, (APPROX, false, DST_ACCUM_MODE)));
-    }
-#endif
-}
-
-#undef TT_POLY_LOG2_BF16_ROUTE_ACTIVE
-
-#if !defined(TT_POLY_LLK_DISABLE) && (defined(TT_POLY_SIGMOID_BF16_AVAILABLE))
-#define TT_POLY_SIGMOID_BF16_ROUTE_ACTIVE 1
-#else
-#define TT_POLY_SIGMOID_BF16_ROUTE_ACTIVE 0
-#endif
-
-/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
-template <VectorMode vec_mode = VectorMode::RC, bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void sigmoid_tt_poly_bf16_tile(uint32_t idst) {
-#if !TT_POLY_SIGMOID_BF16_ROUTE_ACTIVE
-    sigmoid_tile<vec_mode, fast_and_approx, is_fp32_dest_acc_en>(idst);
-#else
-    if constexpr (is_fp32_dest_acc_en) {
-        sigmoid_tile<vec_mode, fast_and_approx, is_fp32_dest_acc_en>(idst);
-    } else {
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_sigmoid_tt_poly_bf16, (8 /* ITERATIONS */), idst, vec_mode));
-    }
-#endif
-}
-
-/** Initialize the internal BF16 typed-compiler route. */
-template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void sigmoid_tt_poly_bf16_tile_init() {
-#if !TT_POLY_SIGMOID_BF16_ROUTE_ACTIVE
-    sigmoid_tile_init<fast_and_approx>();
-#else
-    if constexpr (is_fp32_dest_acc_en) {
-        sigmoid_tile_init<fast_and_approx>();
-    } else {
-
-#ifdef ARCH_QUASAR
-        MATH(SFPU_UNARY_INIT(sigmoid));
-#else
-        MATH(SFPU_UNARY_INIT_FN(sigmoid, sfpu::init_sigmoid_tt_poly_bf16, (fast_and_approx)));
-#endif
-    }
-#endif
-}
-
-#undef TT_POLY_SIGMOID_BF16_ROUTE_ACTIVE
 
 }  // namespace ckernel

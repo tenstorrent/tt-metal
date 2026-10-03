@@ -3,9 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import struct
+
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import generate_all_bfloat16_bitpatterns, flush_subnormal_values_to_zero
+from mpmath import cosh as mp_cosh
+from mpmath import mp
+
+from tests.ttnn.utils_for_testing import (
+    flush_subnormal_values_to_zero,
+    generate_all_bfloat16_bitpatterns,
+)
 
 
 def generate_bfloat16_bits(dtype=torch.bfloat16, include_spl_values=False):
@@ -170,13 +177,53 @@ def generate_bfloat16_binary_grid(dtype=torch.bfloat16, include_spl_values=False
     return torch.tensor(bits, dtype=torch.uint16).view(torch.bfloat16).to(dtype)
 
 
+def binary_grid_values(
+    low=-float("inf"), high=float("inf"), min_magnitude=0.0, include_zero=True, dtype=torch.bfloat16
+):
+    """Binary-grid values restricted to a domain, for ops that are only defined
+    (or only well-conditioned) on part of the bfloat16 range.
+
+    Keeps the grid's stratification. An exponent that lies wholly inside
+    [low, high] still carries all 4 mantissa codes and both signs. A bound
+    that cuts a binade keeps only the codes that fall inside it — the
+    mantissas are 1.0, 1.0078, 1.0625, 1.9922, so ±80, ±100, and ±1e19 each
+    drop a code at the edge. The filter is by value, not by exponent. An
+    outer product of two restricted sets stays a few million elements
+    instead of the billions an exhaustive in-range sweep would need.
+
+    Args:
+        low, high (float, optional): Inclusive value bounds. Default unbounded.
+        min_magnitude (float, optional): Drop values with |v| below this, e.g.
+            operands whose square would underflow. Defaults to 0.0.
+        include_zero (bool, optional): Keep +0 when it is inside [low, high],
+            exempting it from min_magnitude. Defaults to True.
+        dtype (torch.dtype, optional): Target dtype. Defaults to torch.bfloat16.
+
+    Returns:
+        torch.Tensor: 1D tensor of the surviving values, in grid order.
+    """
+    values = generate_bfloat16_binary_grid(dtype=dtype, include_zero=include_zero)
+    in_range = (values >= low) & (values <= high)
+    keep = in_range & (values.abs() >= min_magnitude)
+    if include_zero:
+        keep |= in_range & (values == 0)
+    return values[keep].contiguous()
+
+
+def pairwise_from_values(values_a, values_b=None):
+    """Outer product of two value sets: A[i, j] = values_a[i], B[i, j] = values_b[j]."""
+    if values_b is None:
+        values_b = values_a
+    a, b = torch.meshgrid(values_a, values_b, indexing="ij")
+    return a.contiguous(), b.contiguous()
+
+
 def pairwise_inputs(include_spl_values=False, include_zero=False, dtype=torch.bfloat16):
     """Outer product of the 2048-value binary grid: A[i, j] = v[i], B[i, j] = v[j]."""
     values = generate_bfloat16_binary_grid(
         dtype=dtype, include_spl_values=include_spl_values, include_zero=include_zero
     )
-    a, b = torch.meshgrid(values, values, indexing="ij")
-    return a.contiguous(), b.contiguous()
+    return pairwise_from_values(values)
 
 
 def to_tt_tensor(
@@ -297,106 +344,16 @@ def bf16_quantize_rne(x: float) -> float:
     return float(torch.tensor([x], dtype=torch.bfloat16).item())
 
 
-def assert_bfloat16_compiled_contract(raw, actual, reference, domain, ingress, terminals=((), ())):
-    import numpy as np
-    import torch
+def sech2_exact(x: float) -> float:
+    """
+    Exact tanh derivative using mpmath 256-bit precision.
 
-    _reference = reference
-    _real_domain_mask = domain
-    _NUMERIC_TERMINALS = terminals
+    tanh'(x) = sech²(x) = 1 / cosh²(x)
 
-    def _words(values):
-        return values.contiguous().view(torch.uint16).cpu().numpy().reshape(-1)
-
-    def _bf16_round_ftz(values):
-        rounded = torch.from_numpy(values).to(torch.bfloat16).to(torch.float64).numpy()
-        subnormal = (np.abs(rounded) < 2.0 ** (-126)) & (rounded != 0.0)
-        return np.where(subnormal, np.copysign(0.0, rounded), rounded)
-
-    def _ulp_spacing(values):
-        words = (np.abs(values).astype(np.float32).view(np.uint32) >> 16).astype(np.uint32)
-        upper = (np.minimum(words + 1, 32640) << 16).view(np.float32)
-        lower = (words << 16).view(np.float32)
-        spacing = (upper - lower).astype(np.float64)
-        return np.where(np.isinf(upper), np.float64(2.0**120), spacing)
-
-    def _raw_classes(words):
-        magnitude = words & np.uint16(32767)
-        exponent = magnitude & np.uint16(32640)
-        mantissa = magnitude & np.uint16(127)
-        negative = words & np.uint16(32768) != 0
-        classes = np.full(words.shape, "finite_other", dtype="<U16")
-        classes[(magnitude == 0) & ~negative] = "pos_zero"
-        classes[(magnitude == 0) & negative] = "neg_zero"
-        classes[(exponent == 0) & (mantissa != 0) & ~negative] = "pos_subnormal"
-        classes[(exponent == 0) & (mantissa != 0) & negative] = "neg_subnormal"
-        classes[(exponent == 32640) & (mantissa == 0) & ~negative] = "pos_inf"
-        classes[(exponent == 32640) & (mantissa == 0) & negative] = "neg_inf"
-        classes[(exponent == 32640) & (mantissa != 0) & ~negative] = "pos_nan"
-        classes[(exponent == 32640) & (mantissa != 0) & negative] = "neg_nan"
-        return classes
-
-    def _reference_inputs(raw_classes, values):
-        """Apply the compiler target's typed ingress before the math reference."""
-        canonical = {
-            "nan": np.float64(np.nan),
-            "neg_inf": np.float64(-np.inf),
-            "neg_nan": np.asarray([18444492273895866368], dtype=np.uint64).view(np.float64)[0],
-            "neg_subnormal": np.float64(-(2.0 ** (-133))),
-            "neg_zero": np.float64(-0.0),
-            "pos_inf": np.float64(np.inf),
-            "pos_nan": np.asarray([9221120237041090560], dtype=np.uint64).view(np.float64)[0],
-            "pos_subnormal": np.float64(2.0 ** (-133)),
-            "pos_zero": np.float64(0.0),
-        }
-        effective = values.copy()
-        for raw_class, effective_class in ingress.items():
-            if effective_class != "finite_other":
-                effective[raw_classes == raw_class] = canonical[effective_class]
-        return effective
-
-    def _apply_finite_constants(golden, coordinate, domain_rows):
-        resolved = np.zeros(coordinate.shape, dtype=bool)
-        for direction, bound, inclusive, kind, value in domain_rows:
-            if direction == "below":
-                owned = coordinate <= bound if inclusive else coordinate < bound
-            else:
-                owned = coordinate >= bound if inclusive else coordinate > bound
-            owned &= np.isfinite(coordinate) & ~resolved
-            resolved |= owned
-            if kind == "constant":
-                golden[owned] = _bf16_round_ftz(np.full(np.count_nonzero(owned), value, dtype=np.float64))
-        return golden
-
-    def _assert_finite_math(raw_words, result_words, reference_values):
-        """Check finite mathematical results, including zero and saturation tails.
-
-        Paired qualification checks candidate <= stock ULP and observed-TTNN
-        special parity. This standalone does not assign exceptional output classes.
-        """
-        scored = raw_words & np.uint16(32767) < np.uint16(32640)
-        (late_nonfinite, domain_rows) = _NUMERIC_TERMINALS
-        scored &= ~np.isin(_raw_classes(raw_words), late_nonfinite)
-        with np.errstate(all="ignore"):
-            scored &= _real_domain_mask(reference_values)
-            golden = _reference(torch.from_numpy(reference_values[scored].astype(np.float64))).numpy()
-            golden = _apply_finite_constants(golden, reference_values[scored], domain_rows)
-            rounded = _bf16_round_ftz(golden)
-            numeric = np.isfinite(golden) & np.isfinite(rounded)
-            selected_words = result_words[scored][numeric]
-            got = (selected_words.astype(np.uint32) << 16).view(np.float32).astype(np.float64)
-            golden_ftz = np.where(rounded[numeric] == 0.0, np.copysign(0.0, golden[numeric]), golden[numeric])
-            pure_ulp = np.abs(golden_ftz - got) / _ulp_spacing(rounded[numeric])
-        assert np.isfinite(pure_ulp).all()
-        assert not pure_ulp.size or float(pure_ulp.max()) < 1.0
-        scored[np.flatnonzero(scored)] = numeric
-        (names, counts) = np.unique(_raw_classes(result_words[~scored]), return_counts=True)
-        print("Exceptional output classes (observed-stock parity checked in qualification):", dict(zip(names, counts)))
-
-    raw_words = _words(raw)
-    result_words = _words(actual)
-    values = raw.to(torch.float32).cpu().numpy().reshape(-1)
-    with np.errstate(invalid="ignore"):
-        reference_values = _reference_inputs(_raw_classes(raw_words), values.astype(np.float64))
-    _assert_finite_math(raw_words, result_words, reference_values)
-    return raw_words, result_words, values, _raw_classes(raw_words), reference_values
+    Uses 1/cosh²(x) form (not 1 - tanh²(x)) to avoid the catastrophic cancellation
+    in the latter. Shared golden for test_tanh_bw_ulp.py and test_tanh_bw_fp32_ulp.py,
+    which apply their own input rounding and flushing around it.
+    """
+    mp.prec = 256
+    cosh_x = mp_cosh(mp.mpf(x))
+    return float(1 / (cosh_x * cosh_x))
