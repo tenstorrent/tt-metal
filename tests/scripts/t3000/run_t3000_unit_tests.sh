@@ -104,6 +104,9 @@ run_t3000_ttnn_tests() {
   # Runtime tensor (HostTensor/MeshTensor) tests migrated out of unit_tests_ttnn_tensor into the dedicated tt_metal unit_tests_tensor binary
   ./build/test/tt_metal/unit_tests_tensor
   ./build/test/ttnn/unit_tests_ttnn_ccl
+  # Device-level mesh_partition TensorTopology labels (1x2 / 1x8 / 2x4 via the mesh_device fixture); the host-only
+  # rule table behind them is MeshPartitionTopologyRules.* in unit_tests_ttnn_ccl above.
+  pytest tests/ttnn/unit_tests/operations/ccl/test_mesh_partition_topology.py ; fail+=$?
   ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor
   ./build/test/ttnn/unit_tests_ttnn_ccl_ops
   ./build/test/ttnn/unit_tests_ttnn_accessor
