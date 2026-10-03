@@ -1,22 +1,21 @@
-# t48 notes: all LTX-2.5 wins on one branch
+# t96 NOTES: conv VAE decode rebaseline, 2x4 submesh, LTX_CONV3D_BLOCKING_MESH=4,8
 
-Branch ttp/t48-ltx25-integrated (= ttp/t48-integrate-all-ltx-2-5-wins-on-one-branch), base t36 16ba9a383dc.
-Merged: t20+t40 (9e336c44b71, includes 0533827a419), t13 (eee3baf7c0d), t18 (63902277007),
-t44 tip (1968790b040 + its A/B harness), t8 ltx_eval harness. Python-only diff against t36.
+Branch ttp/t96-rebaseline-conv-vae-2x4 = t48 tip aa2b400c569 + t87 harness (7d877a1e498, test_vae_ltx_trace_ab.py)
++ t87 LTX_VIDEO_VAE_TRACE/LTX_TIME_STAGES hook (736a1c4d42d; t48 lacks it) + test_vae_ltx_prof_2x4.py + tmp/blx03/t96/.
+Build on blx03: ~/fasth3/t48 @ a613d669ee. Its only C++ gap vs t48 tip is conv3d halo "replicate" support (ce356b8815a);
+the decoder runs zeros padding, where old and new reader_vol2col behave the same.
 
-Conflicts:
-- pipeline_ltx_distilled.py: t13 and t40 both capture the Gemma encode trace after gen #0. Kept t40's
-  open_trace_gate() + capture_trace() (guarded by _trace_captured). t13's open_trace_gate(capture_prompt=) was removed in t55 (no caller).
-- utils/video.py: t18's YuvVideoExport (worker-thread video encode) + t13's zero-copy frame wrap and start_encoding;
-  the AAC encode runs in finish() before joining the worker, so it overlaps the video encode as in t13.
-  test_yuv_export_encodes_audio_alongside_video now gates the video worker on the audio encode starting
-  (fails if finish() encodes audio after the join; checked).
-- test_ltx_export_latency.py: gemma -> gemma3 import path.
+## Running on blx03 (launched 2026-10-03 01:27 UTC)
+- overlay /var/tmp/fasth3/t96/src (stage96.sh), driver /var/tmp/fasth3/t96/driver.log, marker "T96_DRIVER_DONE <stage> <rc>"
+- broker job 375: run96.sh, log /var/tmp/fasth3/t96/run96.log
+  part 1: "AB arm=eager/traced decode_s=... min=", VAE_DECODE_SPLIT lines, AB_CMP (traced vs eager identical)
+  part 2: tracy profile; analysis in /var/tmp/fasth3/t96/analysis.txt, csv copy ops_perf.csv
+- stages: ab 9 = drop/ERROR/reboot during OUR job -> STOP ALL device work on every galaxy, report.
+  ab 8 = broker never healthy (relaunch driver). analysis 0 = done.
+- If driver gone without marker (reboot): relaunch
+  ssh g14blx03 'cd /var/tmp/fasth3/t96 && setsid nohup bash src/tmp/blx03/t96/driver96.sh > driver.out 2>&1 < /dev/null &' < /dev/null
 
-CPU tests (python_env, PYTHONPATH=worktree): export/trace/eval/cache/ltx set (13 files) 78 passed, 8 skipped;
-13 pre-existing failures in test_ltx_euler_tail.py and test_ltx_embedding_cache_identity.py (they read
-models/tt_dit/encoders/gemma/, renamed to gemma3); same 13 fail on the t36 base tree.
-Fold CPU reference (--noconftest): 5 passed. The 78 include the ltx_eval harness (8) and the 13 export/trace tests.
-
-Device: not run (blx03 paused; full-mesh barred by the 22:10 rule). Ready job: tmp/READY_48.md, tmp/blx03/run48.sh.
-Next: when the user allows full-mesh runs on blx03, follow tmp/READY_48.md (setup, one job, timings, ltx_eval vs t20).
+## Next step
+Read driver.log, run96.log (eager vs traced min, VAE_DECODE_SPLIT decode ms), analysis.txt (per-chip op table).
+Compare with t61/job 029 (828 ms device, conv3d 308) and the ~490 ms estimate. Copy logs/analysis here.
+Cleanup on blx03: rm -rf /var/tmp/fasth3/t96/{jit,prof,src,yuv_*.pt} (keep logs + analysis until copied).
