@@ -5,6 +5,7 @@
 #include <internal/service/inter_process_counter_channel.hpp>
 
 #include "inter_process_counter_layout.hpp"
+#include "tt_metal/distributed/shm_resource_tracker.hpp"
 
 #include <tt-logger/tt-logger.hpp>
 
@@ -34,6 +35,14 @@ std::string posix_errno_str() { return std::strerror(errno); }
     throw std::runtime_error("InterProcessCounterChannel: " + op + " failed (" + detail + "): " + posix_errno_str());
 }
 
+// Creates the segment name exclusively. The tracker is touched first: its
+// construction (once per process) runs the stale scan, so a copy of this name
+// listed in a dead predecessor's manifest is unlinked before O_EXCL sees it.
+int open_fresh_counter_segment(const std::string& shm_path) {
+    ShmResourceTracker::instance();
+    return ::shm_open(shm_path.c_str(), O_CREAT | O_EXCL | O_RDWR, S_IRUSR | S_IWUSR);
+}
+
 }  // namespace
 
 // =============================================================================
@@ -43,17 +52,23 @@ std::string posix_errno_str() { return std::strerror(errno); }
 //   shm_open(O_CREAT|O_EXCL|O_RDWR)   ← fails if a stale segment exists
 //   ftruncate to sizeof(InterProcessCounterSegment)
 //   mmap PROT_READ|PROT_WRITE, MAP_SHARED
+//   register with ShmResourceTracker
+//
+// The registration is what ties the segment's lifetime to the owner
+// process: the tracker unlinks it on SIGINT/SIGTERM and at exit, and
+// lists it in this process's manifest so the next owner's stale scan
+// removes it if this process is killed outright (SIGKILL, OOM).
 //
 // On any failure mid-way, undo what was done so we don't leak a half-
 // initialised segment on /dev/shm.
 // =============================================================================
 InterProcessCounterChannel::InterProcessCounterChannel(const std::string& shm_name) :
-    shm_path_(shm_name),
-    role_(Role::Owner),
-    fd_(::shm_open(shm_path_.c_str(), O_CREAT | O_EXCL | O_RDWR, S_IRUSR | S_IWUSR)) {
+    shm_path_(shm_name), role_(Role::Owner), fd_(open_fresh_counter_segment(shm_path_)) {
     if (fd_ == -1) {
-        // EEXIST here means a previous run left a stale segment; the
-        // owner is responsible for unlinking it before re-creating.
+        // EEXIST here means a previous run left a segment the stale scan
+        // could not attribute to a dead process (e.g. its pid is in use
+        // again); the owner is responsible for unlinking it before
+        // re-creating.
         throw_posix("shm_open(O_CREAT|O_EXCL)", shm_path_);
     }
 
@@ -94,6 +109,8 @@ InterProcessCounterChannel::InterProcessCounterChannel(const std::string& shm_na
     // connector's `had_clean_prior_shutdown()` returns true — there
     // was no predecessor to have exited uncleanly.
     seg_->prior_clean_shutdown = 1;
+
+    ShmResourceTracker::instance().track_shm(shm_path_);
 }
 
 // =============================================================================
@@ -236,8 +253,8 @@ bool InterProcessCounterChannel::had_clean_prior_shutdown() const {
 // =============================================================================
 // shutdown() — idempotent, role-dispatched.
 //
-//   * Owner    : munmap → close(fd) → shm_unlink. Segment removed
-//                from /dev/shm; any still-attached connector's
+//   * Owner    : munmap → close(fd) → shm_unlink → untrack. Segment
+//                removed from /dev/shm; any still-attached connector's
 //                mapping survives until that connector itself unmaps
 //                (POSIX semantics), but no new connector can find
 //                the name.
@@ -273,6 +290,7 @@ void InterProcessCounterChannel::shutdown() {
         // fail — but we've already nulled seg_ / fd_ so the second
         // call is a no-op anyway via the exchange guard above.
         ::shm_unlink(shm_path_.c_str());
+        ShmResourceTracker::instance().untrack_shm(shm_path_);
     }
 }
 
