@@ -8,6 +8,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
@@ -77,6 +78,10 @@ int main() {
     tt_metal::CreateCircularBuffer(program, core, make_cb_config(CBIndex::c_0));
     tt_metal::CreateCircularBuffer(program, core, make_cb_config(CBIndex::c_1));
     tt_metal::CreateCircularBuffer(program, core, make_cb_config(CBIndex::c_16));
+
+    // Read by dump_semaphores: the writer kernel bumps the program semaphore twice, nothing touches the global one.
+    CreateSemaphore(program, core, 7);
+    auto global_semaphore = CreateGlobalSemaphore(*mesh_device, CoreRange(core), 3);
 
     // Create the reader, writer and compute kernels. The kernels do the following:
     // * Reader: Reads data from the DRAM buffer and pushes it into the circular buffer.
