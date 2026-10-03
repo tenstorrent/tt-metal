@@ -78,6 +78,23 @@
   team: models
   budget_type: unit
 
+- name: Command-R7B unit tests
+  cmd: |
+    export TT_METAL_WATCHER=30
+    export HF_MODEL=CohereLabs/c4ai-command-r7b-12-2024 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/CohereLabs/c4ai-command-r7b-12-2024
+    pytest --timeout 300 models/tt_transformers/tests/test_layernorm.py
+    pytest --timeout 600 models/tt_transformers/tests/test_cohere2_decoder.py
+    pytest --timeout 300 models/tt_transformers/tests/test_decoder.py -k 32-page_params  # batch 32 only
+    pytest --timeout 300 models/tt_transformers/tests/test_decoder_prefill.py -k 128-page_params  # 128 seqlen only
+  model: c4ai-command-r7b
+  model_family: Cohere
+  skus:
+    wh_n150:
+      timeout: 8
+      tier: 3
+  team: models
+  budget_type: unit
+
 - name: Llama 3.2-11B Vision unit tests
   cmd: |
     export TT_METAL_WATCHER=15

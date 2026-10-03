@@ -330,6 +330,22 @@
   team: models
   budget_type: e2e
 
+- name: Command-R7B e2e tests
+  cmd: |
+    export HF_MODEL=CohereLabs/c4ai-command-r7b-12-2024 HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/CohereLabs/c4ai-command-r7b-12-2024
+    pytest --timeout 1500 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-1"
+    pytest --timeout 1500 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+  model: c4ai-command-r7b
+  model_family: Cohere
+  skus:
+    bh_p150:
+      timeout: 15
+      tier: 3
+      release_ready: false
+  owner_id: TODO # Command-R7B bringup owner — replace with Slack member ID
+  team: models
+  budget_type: e2e
+
 - name: Qwen2.5-32B e2e tests
   cmd: |
     export HF_MODEL=Qwen/Qwen2.5-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-32B-Instruct

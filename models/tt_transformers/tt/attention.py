@@ -32,6 +32,11 @@ class Attention(LightweightModule):
         prefetcher=None,
     ):
         super().__init__()
+        if getattr(configuration, "model_type", None) == "cohere2" and configuration.use_hf_rope:
+            raise NotImplementedError(
+                "cohere2 does not support the use_hf_rope rotary path "
+                "(requires Meta-style rotary with skip_qkv_permute)"
+            )
         self.args = args
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
