@@ -19,8 +19,7 @@
 #   ./ci.sh --arch blackhole [--report-dir DIR] [--sample-per-test N] [--jobs N] [--timeout SECS]
 #           [--splits N --group G] [--chain-depth N] [--chains-per-machine N]
 #
-# Exit codes: 0 = no escapes, 1 = at least one escape found, 2 = the sweep itself errored out
-# (catalog discovery or a sweep phase crashed -- nothing meaningful was tested).
+# Exit codes: 0 = no escapes, 1 = at least one escape found, 2 = the sweep itself errored out.
 
 set -euo pipefail
 

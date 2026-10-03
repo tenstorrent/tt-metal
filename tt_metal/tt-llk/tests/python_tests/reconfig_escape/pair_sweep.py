@@ -26,7 +26,11 @@ import sys
 
 import discover_catalog
 
-PASS, FAIL, ENVERR = discover_catalog.PASS, discover_catalog.FAIL, discover_catalog.ENVERR
+PASS, FAIL, ENVERR = (
+    discover_catalog.PASS,
+    discover_catalog.FAIL,
+    discover_catalog.ENVERR,
+)
 HANG = "HANG"
 _CODE = {0: PASS, 1: FAIL, 5: HANG}
 reset = discover_catalog._reset_card
@@ -117,23 +121,25 @@ parse_junit = discover_catalog.parse_junit
 def verify_ground_truth(
     worktree, arch, polluter_nodeids, victim_nodeid, timeout, junit_path
 ):
-    """Reset, then run the real polluter(s) then the real victim, back to back, in ONE serial
-    pytest invocation (no -n, so they all pin to the same physical core as pytest-xdist's own
-    "master" worker) with no restore/plan-map machinery at all. Returns the victim's own verdict
-    from that real run. polluter_nodeids is a list: one element at depth 1, D elements for a
+    """Reset, then run the polluter(s) then the real victim on the same Tensix core. Returns
+    the victim's status. polluter_nodeids is a list: one element at depth 1, D elements for a
     depth-D chain.
     """
     reset()
-    cmd = [
-        sys.executable,
-        "-m",
-        "pytest",
-        "--compile-consumer",
-        f"--timeout={timeout}",
-        f"--junitxml={junit_path}",
-    ] + list(polluter_nodeids) + [
-        victim_nodeid,
-    ]
+    cmd = (
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--compile-consumer",
+            f"--timeout={timeout}",
+            f"--junitxml={junit_path}",
+        ]
+        + list(polluter_nodeids)
+        + [
+            victim_nodeid,
+        ]
+    )
     proc = subprocess.run(
         cmd,
         cwd=os.path.join(worktree, "tests", "python_tests"),
@@ -157,62 +163,49 @@ def main():
         "--jobs",
         type=int,
         default=8,
-        help="xdist worker count for each restore-mode round -- one physical Tensix "
-        "core per worker, matching discover_catalog.py's own -n 8",
+        help="xdist worker count, one per Tensix core",
     )
     p.add_argument("--port", type=int, default=5556)
     p.add_argument("--timeout", type=int, default=90)
     p.add_argument(
         "--skip-compile",
         action="store_true",
-        help="every victim is already compiled (e.g. discover_catalog.py just "
-        "compiled this same manifest's candidates in the same invocation) -- "
-        "skip the redundant producer recompile",
+        help="attempt to use precompiled ELFs",
     )
     p.add_argument(
         "--skip-verify",
         action="store_true",
-        help="report every restore-mode escape as-is, without the plain-pytest "
-        "ground-truth re-check. Useful for debugging the restore mechanism "
-        "itself; the default (verify) is what CI should use.",
+        help="don't check for false positives (only useful for debugging the tool)",
     )
     p.add_argument(
         "--splits",
         type=int,
         default=1,
-        help="shard the polluter loop across this many machines (paired with "
-        "--group). The victim set is never sharded -- every shard tests its "
-        "own slice of polluters against all victims in the manifest.",
+        help="shard the polluter loop across this many machines (paired with --group)",
     )
     p.add_argument(
         "--group",
         type=int,
         default=1,
-        help="1-indexed shard to run, in [1, --splits]",
+        help="what shard to run, in [1, --splits]",
     )
     p.add_argument(
         "--depth",
         type=int,
         default=1,
-        help="1 (default): today's exhaustive single-op pairs, unchanged. >1: switch to a "
-        "depth-D chain sweep -- sample --chains random D-op combos instead of every pair; "
-        "2 is the minimum that can find anything depth-1 structurally can't",
+        help="test with synthetic plausible hardware states",
     )
     p.add_argument(
         "--chains",
         type=int,
         default=80,
-        help="random chains to sample when --depth > 1. 80 is sized for a ~3-3.5h sweep "
-        "per machine at depth 2, -n 8 (measured ~128s/chain against a ~100-victim pool, "
-        "plus margin for verify-phase overhead and hardware timing variance)",
+        help="random chains to sample when --depth > 1",
     )
     p.add_argument(
         "--seed",
         type=int,
         default=None,
-        help="RNG seed for chain sampling (--depth > 1 only). Default derives from the "
-        "current ISO year+week (same convention as discover_catalog.py), so a weekly CI "
-        "run is reproducible within that week and samples different chains the next",
+        help="RNG seed for chain sampling (--depth > 1 only)",
     )
     args = p.parse_args()
     if not 1 <= args.group <= args.splits:
@@ -230,22 +223,30 @@ def main():
 
     if args.depth > 1:
         if args.depth > len(restore_x):
-            p.error(f"--depth {args.depth} > {len(restore_x)} usable polluters in the manifest")
+            p.error(
+                f"--depth {args.depth} > {len(restore_x)} usable polluters in the manifest"
+            )
         seed = (
             args.seed
             if args.seed is not None
             else int(datetime.date.today().strftime("%Y%V"))
         )
         print(
-            f"[pair_sweep] depth={args.depth} chains={args.chains} seed={seed}"
-            + (" (explicit)" if args.seed is not None else " (derived from ISO year+week)"),
+            f"pair_sweep: depth={args.depth} chains={args.chains} seed={seed}"
+            + (
+                " (explicit)"
+                if args.seed is not None
+                else " (derived from ISO year+week)"
+            ),
             file=sys.stderr,
         )
         rng = random.Random(seed)
         pristine_path = manifest["pristine_snapshot"]
         with open(pristine_path) as f:
             pristine = {a: v for s, a, v in json.load(f) if s == 0}
-        chains_dir = os.path.join(os.path.dirname(os.path.abspath(args.out)) or ".", "chains")
+        chains_dir = os.path.join(
+            os.path.dirname(os.path.abspath(args.out)) or ".", "chains"
+        )
         os.makedirs(chains_dir, exist_ok=True)
 
         chain_members = [rng.sample(restore_x, args.depth) for _ in range(args.chains)]
@@ -264,7 +265,7 @@ def main():
                     "members": [o["key"] for o in chain],
                 }
             )
-        fallback_x = []  # chain members are already gate-passed usable polluters
+        fallback_x = []
 
     if args.splits > 1:
         restore_x = restore_x[args.group - 1 :: args.splits]
@@ -272,7 +273,7 @@ def main():
 
     shard_note = f" (shard {args.group}/{args.splits})" if args.splits > 1 else ""
     print(
-        f"[pair_sweep] victims={len(victims)} restore-mode polluters={len(restore_x)} "
+        f"pair_sweep: victims={len(victims)} restore-mode polluters={len(restore_x)} "
         f"fallback polluters={len(fallback_x)}{shard_note}",
         file=sys.stderr,
     )
@@ -295,7 +296,7 @@ def main():
         if verdict != k_baseline:
             escapes.append(rec)
             print(
-                f"[pair_sweep] ESCAPE {x_key} -> {k_key}: {verdict} (baseline {k_baseline}) [{mode}]",
+                f"pair_sweep: ESCAPE {x_key} -> {k_key}: {verdict} (baseline {k_baseline}) [{mode}]",
                 file=sys.stderr,
             )
 
@@ -306,13 +307,13 @@ def main():
         os.makedirs(tmp_dir, exist_ok=True)
         if args.skip_compile:
             print(
-                f"[pair_sweep] --skip-compile: assuming all {len(nodeids)} victims are already "
+                f"pair_sweep: --skip-compile: assuming all {len(nodeids)} victims are already "
                 f"compiled",
                 file=sys.stderr,
             )
         else:
             print(
-                f"[pair_sweep] compiling {len(nodeids)} victims once (producer, -n {args.jobs})...",
+                f"pair_sweep: compiling {len(nodeids)} victims once (producer, -n {args.jobs})...",
                 file=sys.stderr,
             )
             cproc = compile_all(
@@ -320,7 +321,7 @@ def main():
             )
             if cproc.returncode != 0:
                 print(
-                    f"[pair_sweep] WARNING: compile-producer had failures (rc={cproc.returncode}); "
+                    f"pair_sweep: warning: compile step had failures (rc={cproc.returncode}); "
                     f"affected victims will show up as ENVERR in any round",
                     file=sys.stderr,
                 )
@@ -337,7 +338,7 @@ def main():
             round_nodeids = list(plan_map.keys())
 
             print(
-                f"[pair_sweep] restore-mode round {xi+1}/{len(restore_x)}: polluter {x['key']}, "
+                f"pair_sweep: restore-mode round {xi+1}/{len(restore_x)}: polluter {x['key']}, "
                 f"{len(round_nodeids)} victims across -n {args.jobs}...",
                 file=sys.stderr,
             )
@@ -359,7 +360,7 @@ def main():
             results = {}
             if not os.path.exists(junit_path):
                 print(
-                    f"[pair_sweep] WARNING: round {xi+1} for polluter {x['key']} produced no "
+                    f"pair_sweep: warning: round {xi+1} for polluter {x['key']} produced no "
                     f"junit report; every victim in it recorded as ENVERR",
                     file=sys.stderr,
                 )
@@ -381,7 +382,8 @@ def main():
                     extra={"members": x["members"]} if args.depth > 1 else None,
                 )
 
-    # --- Fallback phase: full reset per pair, for X's that failed their own restore-gate. ---
+    # Fallback phase: full reset per pair, for X's that failed their own restore-gate.
+    # TODO: measure in CI.
     for x in fallback_x:
         for k in victims:
             if x["key"] == k["key"] and not args.self_pairs:
@@ -458,9 +460,7 @@ def main():
 
     out_f.close()
 
-    # --- Verify phase: re-check every restore-mode escape with a plain-pytest ground-truth
-    #     reproduction (reset, real X, real K, same core, no restore machinery) before reporting
-    #     it. Fallback-mode escapes already ran that way, so they're trusted as-is. ---
+    # Verify phase: actually run the failure candidates
     candidates_path = os.path.splitext(args.out)[0] + ".candidates.json"
     if args.skip_verify:
         for e in escapes:
@@ -469,16 +469,13 @@ def main():
         verify_dir = os.path.dirname(os.path.abspath(args.out)) or "."
         to_verify = [e for e in escapes if e["mode"] == "restore"]
         print(
-            f"[pair_sweep] verifying {len(to_verify)} restore-mode escape(s) with plain "
-            f"pytest (reset, real polluter, real victim, same core, no restore machinery)...",
+            f"pair_sweep: verifying {len(to_verify)} restore-mode escape(s)...",
             file=sys.stderr,
         )
         verified_so_far = 0
         for i, e in enumerate(escapes):
             if e["mode"] != "restore":
-                e["verified"] = (
-                    True  # fullreset already ran real X then real K, no reset between
-                )
+                e["verified"] = True  # fullreset already ran this
                 continue
             verified_so_far += 1
             member_keys = e.get("members", [e["polluter"]])
@@ -489,9 +486,8 @@ def main():
                 e["verify_result"] = ENVERR
                 continue
 
-            # A chain escape only matters if it's NOT already visible to a depth-1 sweep: check
-            # whether any single member alone, via its own manifest restore_path, already breaks
-            # this victim.
+            # A chain escape only matters if it's not already visible to depth 1.
+            # Check whether any single member alone already breaks this victim.
             if len(member_keys) > 1:
                 subsumed_by = []
                 for mk in member_keys:
@@ -506,7 +502,12 @@ def main():
                     )
                     reset()
                     run_round(
-                        args.worktree, args.arch, [vk], single_plan_path, 1, args.timeout,
+                        args.worktree,
+                        args.arch,
+                        [vk],
+                        single_plan_path,
+                        1,
+                        args.timeout,
                         single_junit,
                     )
                     if os.path.exists(single_junit):
@@ -521,18 +522,15 @@ def main():
             )
             e["verify_result"] = result
             e["verified"] = result == FAIL
-            tag = "CONFIRMED" if e["verified"] else "NOT reproduced (noise)"
+            tag = "CONFIRMED" if e["verified"] else "not reproduced (noise)"
             if e["verified"] and e.get("subsumed_by_depth1"):
-                tag += f" but SUBSUMED by depth-1 member(s) {e['subsumed_by_depth1']}"
+                tag += f" but subsumed by depth-1 member(s) {e['subsumed_by_depth1']}"
             print(
                 f"    [{verified_so_far}/{len(to_verify)}] {e['polluter']} -> {e['victim']}: {tag}",
                 file=sys.stderr,
             )
 
-    # record() already flushed every trial to args.out as it ran, before this verify phase
-    # existed to judge them -- patch verified/verify_result/subsumed_by_depth1 back into the
-    # matching escape lines so report.py (which only reads args.out, not this candidates file)
-    # can tell a confirmed escape from noise that didn't reproduce.
+    # Patch the verify step results back into the escape lines so report.py is aware.
     escape_by_triple = {(e["mode"], e["polluter"], e["victim"]): e for e in escapes}
     if escape_by_triple:
         with open(args.out) as f:
@@ -553,12 +551,10 @@ def main():
     verified_escapes = [e for e in escapes if e.get("verified")]
     print(f"\n========== PAIR SWEEP RESULT ==========", file=sys.stderr)
     print(f"trials -> {args.out}", file=sys.stderr)
-    print(
-        f"all candidate escapes (verified + not) -> {candidates_path}", file=sys.stderr
-    )
+    print(f"all candidate escapes: {candidates_path}", file=sys.stderr)
     if args.skip_verify:
         print(
-            f"ESCAPES (UNVERIFIED, --skip-verify was passed): {len(escapes)}",
+            f"ESCAPES (unverified, --skip-verify was passed): {len(escapes)}",
             file=sys.stderr,
         )
         report_escapes = escapes

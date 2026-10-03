@@ -2,20 +2,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""pytest plugin: per-test-item LLK_CFG_RESTORE injection for xdist runs.
+"""pytest plugin that injects the LLK_CFG_RESTORE env var for parallel xdist runs.
+Bit of a hack to avoid threading this thing through all of testinfra.
 
-cfg_restore.maybe_restore_cfg_from_env reads its env var fresh on every call (no caching), so
-no shared infra needs to change to make it per-item: this plugin just sets the env var, in this
-worker process, immediately before each test item it knows about runs, then clears it after. Since
-each xdist worker runs its assigned items strictly one at a time, this is race-free even though
-os.environ is process-global.
-
---llk-plan-map=PATH points at a JSON {nodeid: restore_path}. A round's map only needs one entry
-per victim: every victim gets ONE fresh restore plan for that round, and R separate pytest
-invocations (one per trial round) is how repeated trials against the same victim happen, since
-pytest only collects a given nodeid once per invocation.
-
-Load with `-p xdist_plan_plugin`, with this file's directory (reconfig_escape/) on PYTHONPATH.
+Load with `-p xdist_plan_plugin`, make sure reconfig_escape/ is on PYTHONPATH.
 """
 
 import json

@@ -2,11 +2,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Render pair_sweep.py's JSONL trial log as report.md (escapes-first) and junit.xml.
-
-Built from the JSONL rather than pytest's own end-of-session XML, same reasoning as
-ttnop/junit.py: a wedge can kill the sweep mid-run, and the JSONL (appended one line per
-trial, flushed immediately) survives that where an end-of-session artifact would not.
+"""Render the sweep log as report.md and junit.xml.
 
 Usage:
   python3 report.py --jsonl /path/to/findings.jsonl --report-md /path/to/report.md \
@@ -43,9 +39,6 @@ def load(jsonl_path: Path) -> list:
 
 
 def _is_escape(r) -> bool:
-    """A restore-mode candidate pair_sweep.py's verify phase re-ran and could NOT reproduce
-    (verified: false) is noise, not a real escape. Anything else that mismatches baseline --
-    verified true/null, or no verify phase ran at all for this record -- counts."""
     return r["verdict"] != r["victim_baseline"] and r.get("verified") is not False
 
 
@@ -59,11 +52,8 @@ def _table(headers, rows) -> list:
 
 def render_markdown(records: list) -> str:
     escapes = [r for r in records if _is_escape(r)]
-    out = ["# Reconfig-escape pair-sweep findings", ""]
-    out.append(
-        f"{len(records)} trial(s), {len(escapes)} escape(s) "
-        f"(a real op X leaves CFG residue that breaks a real op K's own correctness check)."
-    )
+    out = ["# Reconfig sweep results", ""]
+    out.append(f"{len(records)} trial(s), {len(escapes)} escape(s)")
     if not records:
         return "\n".join(out) + "\n"
 
@@ -85,7 +75,7 @@ def render_markdown(records: list) -> str:
     else:
         out += [
             "",
-            "No escapes: every victim that PASSes standalone still PASSes after "
+            "No escapes: every victim that passes on its own still passes after "
             "every polluter in the catalog.",
         ]
 
@@ -94,10 +84,6 @@ def render_markdown(records: list) -> str:
         out += [
             "",
             "## Full-reset fallback rows",
-            "",
-            "These polluters failed their own restore-gate (discover_catalog.py), so their "
-            "row used a real `tt-smi -r` between every pair instead of in-kernel restore.",
-            "",
             *_table(
                 ("polluter (X)", "trials"),
                 sorted(
@@ -117,7 +103,6 @@ def write_markdown(records: list, path: Path) -> Path:
 
 
 def render_junit(records: list, path: Path) -> Path:
-    """One testcase per (polluter, victim) trial; failures are escapes."""
     cases = []
     failed = 0
     for r in records:
