@@ -3,14 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <iostream>
 
 // Stand-alone example demonstrating usage of native multi-device TT-Metalium APIs
 // for issuing a program dispatch across a mesh of devices.
 int main() {
     using namespace tt::tt_metal;
     using namespace tt::tt_metal::distributed;
+
+    constexpr size_t required_devices = 8;
+    if (tt::tt_metal::GetNumAvailableDevices() < required_devices) {
+        std::cout << "distributed_program_dispatch requires " << required_devices << " devices, skipping\n";
+        return 0;
+    }
 
     auto mesh_device = MeshDevice::create(MeshDeviceConfig(MeshShape(2, 4)));
     auto& cq = mesh_device->mesh_command_queue();
