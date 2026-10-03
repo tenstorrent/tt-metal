@@ -406,3 +406,30 @@ def test_perf_eltwise_unary_sfpu_erfinv_fp32(
     _extra_slice_config(
         formats, mathop, dest_acc, unpack_to_dest, input_dimensions
     ).run(perf_report)
+
+
+def _cumsum_dest_acc(formats):
+    # A Float32 input reaches the kernel through unpack to DEST, which needs a 32-bit DEST.
+    if formats.input_format.is_32_bit():
+        return [DestAccumulation.Yes]
+    return [DestAccumulation.No, DestAccumulation.Yes]
+
+
+# The column-wise cumulative sum is a whole-tile op (one call per tile, `first` true) that needs
+# a tilized stimulus, so it is not in the registry the main sweep reads and gets its own slice.
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    dest_acc=lambda formats: _cumsum_dest_acc(formats),
+    input_dimensions=_EXTRA_SLICE_DIMS,
+)
+def test_perf_eltwise_unary_sfpu_cumsum(
+    perf_report, formats, dest_acc, input_dimensions
+):
+    _extra_slice_config(
+        formats,
+        MathOperation.Cumsum,
+        dest_acc,
+        formats.input_format.is_32_bit(),
+        input_dimensions,
+    ).run(perf_report)

@@ -1,0 +1,120 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Exactness check of the no-table Welford reciprocal (_load_recip_of_idx_<0>): slab s of result tile t holds
+// 1 / (WELFORD_RECIP_BASE + 32 t + s + 1) in all 32 elements, packed as Float32 for the host to compare bit for bit.
+
+#include <array>
+#include <cstdint>
+
+#include "ckernel.h"
+#include "llk_defs.h"
+#include "params.h"
+
+// Globals
+std::uint32_t unp_cfg_context              = 0;
+std::uint32_t pack_sync_tile_dst_ptr       = 0;
+std::uint32_t math_sync_tile_dst_index     = 0;
+static constexpr ckernel::DstSync DST_SYNC = ckernel::DstSync::SyncHalf;
+
+static constexpr std::uint32_t RECIP_DST_INDEX = 0;
+
+#ifdef LLK_TRISC_UNPACK
+
+#include "llk_unpack_A.h"
+#include "llk_unpack_common.h"
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+    // Nothing is unpacked; the configuration keeps the thread consistent with the other two.
+    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
+}
+
+#endif
+
+#ifdef LLK_TRISC_MATH
+
+#include "ckernel_sfpu.h"
+#include "llk_lib_math_wrappers.h"
+#include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_math_welfords_sfpu.h"
+#include "llk_math_welfords_sfpu_params.h"
+
+using namespace ckernel;
+
+// Slab offsets of a 4-row group: even and odd columns of the left face, then of the right face.
+static constexpr std::uint32_t SLAB_OFFSET[4] = {0, 2, 16, 18};
+
+static const std::array<std::uint32_t, 0> no_lut {};
+
+// Wormhole's 2-bit SFPU address-mode field counts from base 4 (set by _llk_math_eltwise_sfpu_start_): 3 is ADDR_MOD_7.
+#ifdef ARCH_BLACKHOLE
+static constexpr std::uint32_t RECIP_STORE_ADDR_MOD = ckernel::ADDR_MOD_7;
+#else
+static constexpr std::uint32_t RECIP_STORE_ADDR_MOD = ckernel::ADDR_MOD_3;
+#endif
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+    _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
+
+    // Welford init: the SFPU configuration (the programmable constants the reciprocal uses) and ADDR_MOD_7.
+    _llk_math_welfords_sfpu_init_();
+
+    std::uint32_t idx = WELFORD_RECIP_BASE;
+    for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+    {
+        _llk_math_wait_for_dest_available_<DST_SYNC>();
+        _llk_math_eltwise_sfpu_start_(RECIP_DST_INDEX);
+        // Even slabs take the reload form of the reciprocal (lreg0_free false), odd slabs the LREG0 form.
+        for (std::uint32_t slab = 0; slab < 32; slab += 2)
+        {
+            // Slab s: face pair s / 16, 4-row group (s / 4) % 4, column half and face s % 4.
+            const std::uint32_t offset_even = 32 * (slab >> 4) + 4 * ((slab >> 2) & 3) + SLAB_OFFSET[slab & 3];
+            const std::uint32_t offset_odd  = 32 * (slab >> 4) + 4 * ((slab >> 2) & 3) + SLAB_OFFSET[(slab + 1) & 3];
+            _load_recip_of_idx_<0, false>(idx, no_lut);
+            TT_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, RECIP_STORE_ADDR_MOD, offset_even);
+            ++idx;
+            _load_recip_of_idx_<0, true>(idx, no_lut);
+            TT_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, RECIP_STORE_ADDR_MOD, offset_odd);
+            ++idx;
+        }
+        _llk_math_eltwise_sfpu_done_();
+        _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+    }
+}
+
+#endif
+
+#ifdef LLK_TRISC_PACK
+
+#include "llk_lib_pack_wrappers.h"
+#include "llk_pack_common.h"
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
+    _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
+
+    for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+    {
+        _llk_packer_wait_for_math_done_();
+        _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(RECIP_DST_INDEX, L1_ADDRESS(params.buffer_Res[tile]));
+        _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+    }
+}
+
+#endif

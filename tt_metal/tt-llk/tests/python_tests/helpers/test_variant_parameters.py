@@ -1864,6 +1864,54 @@ class EMA_ALPHA_BETA(TemplateParameter):
 
 
 @dataclass
+class EMA_INTERLEAVED_INIT(TemplateParameter):
+    """Whether sfpu_ema_test.cpp issues an eltwise binary init between the datacopy and
+    ``ema_tile`` in every DEST section, as a fused kernel would."""
+
+    binary_init_before_ema: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool EMA_BINARY_INIT_BEFORE_EMA = {str(self.binary_init_before_ema).lower()};"
+
+
+@dataclass
+class WELFORD_RECIP_SIZE(TemplateParameter):
+    """Size of the Welford reciprocal table (N entries of 1 / (i + 1) built on the math RISC);
+    0 selects the no-table form, which computes the reciprocal per row."""
+
+    welford_recip_size: int = 256
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr std::uint32_t WELFORD_RECIP_SIZE = {self.welford_recip_size}u;"
+        )
+
+
+@dataclass
+class WELFORD_RECIP_BASE(TemplateParameter):
+    """First index whose reciprocal sfpu_welford_recip_test.cpp computes: the run covers
+    1 / (idx + 1) for idx in [base, base + 32 * TILE_CNT)."""
+
+    welford_recip_base: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr std::uint32_t WELFORD_RECIP_BASE = {self.welford_recip_base}u;"
+        )
+
+
+@dataclass
+class CUMSUM_CHAIN(TemplateParameter):
+    """Whether sfpu_cumsum_test.cpp chains the tiles of a DEST block into one column scan
+    (``first`` true for the first tile only) or scans every tile on its own."""
+
+    cumsum_chain: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool CUMSUM_CHAIN = {str(self.cumsum_chain).lower()};"
+
+
+@dataclass
 class TILE_DST_CT_OFFSET(TemplateParameter):
     offset: int = 0
 
