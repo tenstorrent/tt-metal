@@ -1280,7 +1280,7 @@ inline void transpose_dest_face_32b()
 inline void enter_transpose_cfg_block()
 {
     TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 1);
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+    math::_configure_src_zero_flag_(true);
     if constexpr (!topk_xl_blaze_compat)
     {
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_dst_RMW>(1);
@@ -1290,14 +1290,11 @@ inline void enter_transpose_cfg_block()
 inline void leave_transpose_cfg_block()
 {
     TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
+    math::_configure_src_zero_flag_(false);
     if constexpr (!topk_xl_blaze_compat)
     {
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_dst_RMW>(0);
     }
-    // The raw Zero_Flag_disabled_src writes in this block bypass the math state tracker; let the next
-    // configurator re-apply.
-    math::_invalidate_src_zero_flag_state_();
 }
 
 // Transpose all 8 value faces (and, for the unfused path, all 8 index

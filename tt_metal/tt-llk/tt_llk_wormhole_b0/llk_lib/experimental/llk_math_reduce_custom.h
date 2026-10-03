@@ -312,7 +312,7 @@ inline void _llk_math_reduce_block_max_row_(const std::uint32_t dst_index, const
             // Tf32 that the pool wrote, so override SrcA to Tf32 (and disable the zero-flag source)
             // for the replayed transpose, exactly as the num_faces=4 path does below.
             cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
-            cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+            math::_configure_src_zero_flag_(true);
             cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Tf32));
 
             // Replay the 13 instructions (recorded slots 2-14) to transpose the single reduced
@@ -320,9 +320,7 @@ inline void _llk_math_reduce_block_max_row_(const std::uint32_t dst_index, const
             lltt::replay(2, 13);
 
             cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
-            cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
-            // The raw writes above bypass the math state tracker; let the next configurator re-apply.
-            math::_invalidate_src_zero_flag_state_();
+            math::_configure_src_zero_flag_(false);
         }
         else
         {
@@ -336,7 +334,7 @@ inline void _llk_math_reduce_block_max_row_(const std::uint32_t dst_index, const
     if constexpr (is_fp32_dest_acc_en)
     {
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+        math::_configure_src_zero_flag_(true);
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Tf32));
     }
 
@@ -346,8 +344,6 @@ inline void _llk_math_reduce_block_max_row_(const std::uint32_t dst_index, const
     if constexpr (is_fp32_dest_acc_en)
     {
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
-        // The raw writes above bypass the math state tracker; let the next configurator re-apply.
-        math::_invalidate_src_zero_flag_state_();
+        math::_configure_src_zero_flag_(false);
     }
 }
