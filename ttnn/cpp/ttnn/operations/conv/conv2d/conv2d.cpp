@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <utility>
@@ -217,9 +218,16 @@ Result conv2d_L1(
                 weight_tensor_on_device, in_channels, out_channels, conv_config.weights_dtype)) {
             log_debug(tt::LogOp, "conv2d: Using preprocessed weights from device.");
         } else {
-            log_warning(
-                tt::LogOp,
-                "conv2d: Device weights not properly prepared, pulling back to host and trying to reprocess.");
+            // Once per process: conv2d runs inside per-step model loops, and every call with
+            // device-resident, unprepared weights hits this same fallback (see #31591).
+            static std::once_flag weights_not_prepared_warned;
+            std::call_once(weights_not_prepared_warned, [] {
+                log_warning(
+                    tt::LogOp,
+                    "conv2d: Device weights not properly prepared, pulling back to host and trying to reprocess. "
+                    "Pass weights as a host tensor (torch.Tensor or host-side ttnn.Tensor) to avoid this fallback. "
+                    "This warning is emitted once per process.");
+            });
             // Pull weights back to host, prepare them, and push back to device
             ttnn::Tensor host_weight_tensor = ttnn::operations::core::from_device(weight_tensor_on_device);
             std::tie(weight_tensor_on_device, bias_tensor_on_device) =
@@ -239,8 +247,16 @@ Result conv2d_L1(
             if (is_valid_device_conv_bias(bias_tensor_on_device.value(), out_channels, conv_config.weights_dtype)) {
                 log_debug(tt::LogOp, "conv2d: Using preprocessed bias from device.");
             } else {
-                log_warning(
-                    tt::LogOp, "conv2d: Device bias not properly prepared, pulling back to host and reprocessing.");
+                // Once per process: conv2d runs inside per-step model loops, and every call with
+                // device-resident, unprepared bias hits this same fallback (see #31591).
+                static std::once_flag bias_not_prepared_warned;
+                std::call_once(bias_not_prepared_warned, [] {
+                    log_warning(
+                        tt::LogOp,
+                        "conv2d: Device bias not properly prepared, pulling back to host and reprocessing. "
+                        "Pass bias as a host tensor (torch.Tensor or host-side ttnn.Tensor) to avoid this fallback. "
+                        "This warning is emitted once per process.");
+                });
                 // Pull bias back to host, prepare it, and push back to device
                 ttnn::Tensor host_bias_tensor = ttnn::operations::core::from_device(bias_tensor_on_device.value());
                 bias_tensor_on_device = prepare_conv_bias_internal(
