@@ -8,7 +8,7 @@ import pytest
 from models.tt_dit.utils.conv3d import _BLOCKINGS
 
 from ..wan2_2.bruteforce_conv3d_sweep import HaloSpec, build_all_blockings, halo_masks, halo_sticks
-from .bruteforce_conv3d_sweep_ltx import _SWEEP_LAYERS_LTX25_544P_145F_HALO
+from .bruteforce_conv3d_sweep_ltx import _SWEEP_LAYERS_LTX25_544P_145F_HALO, _SWEEP_LAYERS_LTX25_544P_145F_HALO_EXACT
 
 
 @pytest.mark.parametrize(
@@ -38,6 +38,19 @@ def test_ltx25_halo_layers_key_into_table(name, C_in, C_out, T, H, W, key, logic
     assert halo_masks(HaloSpec(2, 4, *logical_hw), H - 2, W - 2) == logical_hw
     combos = build_all_blockings(C_in, C_out, (3, 3, 3), H, W, T, max_t_block=8, hw_product=(16, 32, 64))
     assert tuple(blk) in combos
+
+
+@pytest.mark.parametrize(
+    "name, C_in, C_out, T, H, W, key, logical_hw",
+    _SWEEP_LAYERS_LTX25_544P_145F_HALO_EXACT,
+    ids=[l[0] for l in _SWEEP_LAYERS_LTX25_544P_145F_HALO_EXACT],
+)
+def test_ltx25_halo_exact_layers(name, C_in, C_out, T, H, W, key, logical_hw):
+    assert (4, 8, C_in, C_out, (3, 3, 3), *key) in _BLOCKINGS, f"{name}: no _BLOCKINGS entry for {key}"
+    # Exact shards: the unpadded shard is the key's output dims and tiles the logical size, so no chip masks.
+    assert (T, H - 2, W - 2) == key
+    assert halo_masks(HaloSpec(2, 4, *logical_hw), H - 2, W - 2) == (0, 0)
+    assert build_all_blockings(C_in, C_out, (3, 3, 3), H, W, T, max_t_block=8, hw_product=(16, 32, 64))
 
 
 # Halo-only reader winners (544x960/145f, mesh 4x8). C_in_block must stay 128: it sets the

@@ -111,6 +111,17 @@ _SWEEP_LAYERS_LTX25_544P_145F_HALO = [
 ]
 
 
+# The same convs with LTX_VAE_EXACT_SHARD=1: from s1 on each chip holds exactly its share (17x15, 34x30,
+# 68x60 on 1080p 4x8), so the shards no longer overhang the logical size and no chip masks. Same table keys.
+_SWEEP_LAYERS_LTX25_544P_145F_HALO_EXACT = [
+    ("s2_res", 512, 512, 75, 36, 32, (75, 34, 30), (68, 120)),
+    ("s3_res", 256, 256, 147, 36, 32, (147, 34, 30), (68, 120)),
+    ("s4_res", 128, 128, 147, 70, 62, (147, 68, 60), (136, 240)),
+    ("s1_up", 512, 4096, 39, 19, 17, (39, 17, 15), (34, 60)),
+    ("s3_chg", 256, 512, 147, 36, 32, (147, 34, 30), (68, 120)),
+]
+
+
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": TRACE_REGION_SIZE}],
@@ -118,12 +129,14 @@ _SWEEP_LAYERS_LTX25_544P_145F_HALO = [
 )
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "layer_name, C_in, C_out, T, H, W, key, logical_hw",
-    _SWEEP_LAYERS_LTX25_544P_145F_HALO,
-    ids=[l[0] for l in _SWEEP_LAYERS_LTX25_544P_145F_HALO],
+    "layer_name, C_in, C_out, T, H, W, key, logical_hw, prefix",
+    [(*l, "") for l in _SWEEP_LAYERS_LTX25_544P_145F_HALO]
+    + [(*l, "exact_") for l in _SWEEP_LAYERS_LTX25_544P_145F_HALO_EXACT],
+    ids=[l[0] for l in _SWEEP_LAYERS_LTX25_544P_145F_HALO]
+    + [f"exact_{l[0]}" for l in _SWEEP_LAYERS_LTX25_544P_145F_HALO_EXACT],
 )
 def test_bruteforce_sweep_ltx25_544p_145f_halo(
-    mesh_device, device_params, layer_name, C_in, C_out, T, H, W, key, logical_hw
+    mesh_device, device_params, layer_name, C_in, C_out, T, H, W, key, logical_hw, prefix
 ):
     # A bare 2x4 on the galaxy fails fabric router sync, so open the system mesh and sweep on a 2x4 submesh.
     device = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
@@ -137,7 +150,7 @@ def test_bruteforce_sweep_ltx25_544p_145f_halo(
         T,
         H,
         W,
-        f"{out_dir}/{layer_name}_{C_in}x{C_out}.json",
+        f"{out_dir}/{prefix}{layer_name}_{C_in}x{C_out}.json",
         padding=(0, 0, 0),
         h_factor=4,
         w_factor=8,
