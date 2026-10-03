@@ -8,6 +8,9 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/eltwise_unary/isinf_isnan.h"
+#include "api/compute/binary_shift.h"
+#include "api/compute/binary_bitwise_sfpu.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
@@ -104,10 +107,6 @@ void kernel_main() {
             tile_regs_acquire();
             dfb_in_obj.wait_front(ONE_TILE);
 
-            reconfig_data_format(dfb::in, dfb::in);
-            copy_init(dfb::in);
-            copy_tile(dfb::in, 0, DST_IN);
-
             reconfig_data_format(dfb::acc, dfb::acc);
             copy_init(dfb::acc);
             copy_tile(dfb::acc, 0, DST_ACC);
@@ -116,6 +115,30 @@ void kernel_main() {
             reconfig_data_format(dfb::comp, dfb::comp);
             copy_init(dfb::comp);
             copy_tile(dfb::comp, 0, DST_COMP);
+
+            // Zero the compensation carried in from the previous step: the Kahan update
+            // below leaves NaN in c once the total is +/-inf (inf - inf) and +/-inf on a
+            // finite-input overflow, and that poison reaches the next y = in - c (#58986).
+            // With c = 0 the total follows plain IEEE semantics on its own: inf + finite
+            // stays inf, NaN propagates. Branch-free per lane, via bits only:
+            //   mask = isfinite(t) << 8 >>a 31   (all-ones when finite, 0 otherwise)
+            //   c   &= mask                       (finite c passes through bit-for-bit)
+            // DST_T still holds the previous total; DST_IN is scratch for the shift counts
+            // and is overwritten by the input copy right after.
+            fill_tile_init();
+            fill_tile_int<DataFormat::Int32>(DST_IN, 8u);
+            isfinite_tile_init();
+            isfinite_tile(DST_T);
+            binary_shift_tile_init();
+            binary_left_shift_tile<DataFormat::Int32>(DST_T, DST_IN, DST_T);
+            fill_tile_int<DataFormat::Int32>(DST_IN, 31u);
+            binary_right_shift_tile<DataFormat::Int32>(DST_T, DST_IN, DST_T);
+            binary_bitwise_tile_init();
+            bitwise_and_binary_tile(DST_COMP, DST_T, DST_COMP);
+
+            reconfig_data_format(dfb::in, dfb::in);
+            copy_init(dfb::in);
+            copy_tile(dfb::in, 0, DST_IN);
 
             // Compensated (Kahan) summation on the running total. The plain path computes
             // acc = acc + in and throws away the rounding error of every add, so over a long scan
@@ -133,6 +156,9 @@ void kernel_main() {
             constexpr uint32_t DST_RESULT = DST_T;
             dfb_comp_obj.pop_front(ONE_TILE);
 #else
+            reconfig_data_format(dfb::in, dfb::in);
+            copy_init(dfb::in);
+            copy_tile(dfb::in, 0, DST_IN);
             BINARY_OP(DST_IN, DST_ACC, DST_ACC);
             constexpr uint32_t DST_RESULT = DST_ACC;
 #endif
