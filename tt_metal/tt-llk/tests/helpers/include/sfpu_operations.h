@@ -476,7 +476,7 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::erfc)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(erfc_init<APPROX_MODE>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(erfc_init<APPROX_MODE, is_fp32_dest_acc_en>);
     }
     else if constexpr (OPERATION == SfpuType::expm1)
     {
@@ -1343,7 +1343,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::erfc)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfc, (ITERATIONS), dst_index, vector_mode);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfc, (ITERATIONS, DST_ACCUM_MODE), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::expm1)
     {

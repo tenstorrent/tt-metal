@@ -45,7 +45,9 @@ ALWI void erf_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void erfc_tile_init() { MATH(SFPU_UNARY_INIT_FN(erfc, sfpu::erfc_init, (true /*APPROXIMATION_MODE*/))); }
+ALWI void erfc_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(erfc, sfpu::erfc_init, (true /*APPROXIMATION_MODE*/, DST_ACCUM_MODE)));
+}
 
 // clang-format off
 /**
@@ -62,7 +64,14 @@ ALWI void erfc_tile_init() { MATH(SFPU_UNARY_INIT_FN(erfc, sfpu::erfc_init, (tru
  */
 // clang-format on
 ALWI void erfc_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfc, (), idst, VectorMode::RC));
+#if defined(ARCH_BLACKHOLE)
+    if constexpr (!DST_ACCUM_MODE) {
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfc, (32, DST_ACCUM_MODE), idst, VectorMode::None));
+        return;
+    }
+#endif
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfc, (8, DST_ACCUM_MODE), idst, VectorMode::RC));
 }
 
 }  // namespace ckernel
