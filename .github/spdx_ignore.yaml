@@ -22,3 +22,5 @@ ignore:
     - models/common/reference_rope.py
     - models/common/LICENSE-Llama-3.1
     - models/experimental/xtts_v2/reference/coqui/
+    - models/experimental/chronos_forecast/reference/chronos2/
+    - models/experimental/chronos_forecast/reference/chronos_bolt_ops.py

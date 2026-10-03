@@ -10,3 +10,6 @@
 	path = tt_metal/third_party/tt-cluster-descriptors
 	url = https://github.com/tenstorrent/tt-cluster-descriptors.git
 	branch = main
+[submodule "models/experimental/chronos_forecast/third_party/chronos-forecasting"]
+	path = models/experimental/chronos_forecast/third_party/chronos-forecasting
+	url = https://github.com/amazon-science/chronos-forecasting.git

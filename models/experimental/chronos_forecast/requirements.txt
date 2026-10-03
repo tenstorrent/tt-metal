@@ -1,0 +1,11 @@
+# Extra deps for the Amazon Chronos reference. ttnn comes from the tt-metal env
+# and must not be installed from PyPI.
+#
+# The Amazon package itself is the git submodule under third_party/. Either
+# rely on common/chronos_src.py (sys.path) or install it editable:
+#   pip install -e models/experimental/chronos_forecast/third_party/chronos-forecasting
+
+einops>=0.7.0,<1
+pandas>=2.0,<4
+accelerate>=1.1.0,<2
+transformers>=4.41,<6
