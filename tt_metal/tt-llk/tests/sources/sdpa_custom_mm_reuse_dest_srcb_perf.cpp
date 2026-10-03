@@ -64,7 +64,7 @@ inline void reuse_unpack(RUNTIME_PARAMETERS params)
     _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init_(NT_DIM, FACE_R_DIM, 4 /* unpA_num_faces */);
     _llk_unpack_A_sdpa_set_srcb_dummy_valid_();
     _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_(
-        L1_ADDRESS(params.buffer_A[0]), 0 /* tile_index_a */, params.TILE_SIZE_UNPACK_A, KT_DIM, NT_DIM, 1 /* in1_k_stride */);
+        L1_ADDRESS(params.buffer_A[0]), 0 /* tile_index_a */, params.TILE_SIZE_UNPACK_A, KT_DIM, NT_DIM, IN1_K_STRIDE);
 }
 
 void run_kernel(RUNTIME_PARAMETERS params)

@@ -109,6 +109,7 @@ DB_SCHEMA = [
     Column("in1_c_dim", "int64", True, "configuration"),
     Column("in1_face_c_dim", "int64", True, "configuration"),
     Column("in1_face_r_dim", "int64", True, "configuration"),
+    Column("in1_k_stride", "int64", True, "configuration"),
     Column("in1_r_dim", "int64", True, "configuration"),
     Column("input_format", "string", True, "configuration"),
     Column("input_num_blocks", "int64", True, "configuration"),

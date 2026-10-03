@@ -619,6 +619,7 @@ PERF_TEST_SCHEMAS = {
             "formats.register_B",
             "formats.sfpu_dst",
             "formats.sfpu_src",
+            "in1_k_stride",
             "kt_dim",
             "loop_factor",
             "marker",
