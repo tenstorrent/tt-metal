@@ -444,11 +444,13 @@ ttnn::Tensor repeat_native(
     if (std::all_of(
             working_repetition_vector.cbegin(), working_repetition_vector.cend(), [](auto x) { return x == 1; })) {
         // working_tensor holds the rank expansion from match_input_rank. input_tensor does not.
-        // A sharded config without a shard_spec can't be handed to to_memory_config: reuse the
-        // input's spec when it already has that layout (rank expansion leaves it valid), else
-        // synthesize one, else stay interleaved like the composite path.
+        // A sharded config with neither a shard_spec nor an nd_shard_spec can't be handed to
+        // to_memory_config: reuse the input's spec when it already has that layout (rank expansion
+        // leaves it valid), else synthesize one, else stay interleaved like the composite path.
+        // An ND config carries only nd_shard_spec and is passed through as requested.
         MemoryConfig all_ones_mc = output_mem_config;
-        if (all_ones_mc.is_sharded() && !all_ones_mc.shard_spec().has_value()) {
+        if (all_ones_mc.is_sharded() && !all_ones_mc.shard_spec().has_value() &&
+            !all_ones_mc.nd_shard_spec().has_value()) {
             const auto& input_mc = input_tensor.memory_config();
             if (input_mc.memory_layout() == all_ones_mc.memory_layout() &&
                 input_mc.buffer_type() == all_ones_mc.buffer_type()) {
