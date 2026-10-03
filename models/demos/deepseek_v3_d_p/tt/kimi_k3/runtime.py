@@ -31,7 +31,7 @@ class TtKimiK3Runtime(TtPrefillRuntime):
     MODEL_CLS = TtKimiK3Transformer
 
     def _build_model(self, state_dict: dict) -> None:
-        # The shared build starts GLM-5.2's MTP predictor before MODEL_CLS runs, so reject here.
+        # The shared build starts GLM-5.3's MTP predictor before MODEL_CLS runs, so reject here.
         if self.config.mtp_levels:
             raise ValueError(f"Kimi-K3 has no MTP predictor; got mtp_levels={self.config.mtp_levels}")
         super()._build_model(state_dict)
@@ -89,7 +89,7 @@ class TtKimiK3Runtime(TtPrefillRuntime):
             )
         if kv_caches.index is not None:
             raise RuntimeError("Kimi-K3 has no DSA index cache; a merged table here is unexpected")
-        return [KvCacheStage(self.kv_migration_base_address(kv_caches), first_slot, len(my_slots))]
+        return [KvCacheStage(self._kvpe_base_address(kv_caches), first_slot, len(my_slots))]
 
     def kv_table_layer_rows(self, stage_layouts):
         """Publish slab i at its model layer, so table rows stay on the layer axis.

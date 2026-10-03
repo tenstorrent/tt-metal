@@ -3,10 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#define TT_POLY_WHERE_CONDITION_FACTOR_CONTEXT 1
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#undef TT_POLY_WHERE_CONDITION_FACTOR_CONTEXT
-#include "eltwise_utils_sfpu.hpp"
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -22,20 +18,11 @@ constexpr bool kIsFloat = !kIsInt;
 
 constexpr DataFormat kWhereDF = DataFormat::WHERE_DATA_FORMAT;
 
-#if HAS_ACTIVATIONS(LHS)
-#if DST_ACCUM_MODE || !WHERE_TTS || HAS_ACTIVATIONS(RHS) || HAS_ACTIVATIONS(POST) || defined(TT_POLY_LLK_DISABLE)
-#error "Condition preprocessing requires enabled BF16 TTS with untouched gradient and no post chain"
-#endif
-#endif
-
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     const uint32_t scalar_value = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
-#if HAS_ACTIVATIONS(LHS)
-    static_assert(num_tiles_per_cycle == 1, "Selected condition factor owns destination tile zero");
-#endif
 
     constexpr auto dfb_cond_id = tt::CBIndex::c_0;
     constexpr auto dfb_tensor_id = tt::CBIndex::c_1;
@@ -55,40 +42,6 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb_cond_id, dfb_tensor_id, dfb_out_id);
 
-#if HAS_ACTIVATIONS(LHS)
-    for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        PREPROCESS(
-            LHS, CircularBuffer(tt::CBIndex::c_0), CircularBuffer(tt::CBIndex::c_3), CircularBuffer(dfb_out_id), 1);
-        ckl::eltwise_chain(
-            ckl::IterationShape::tiles(1).block_size(num_tiles_per_cycle),
-            // cond -> D0 (block read, init_short for dfb_cond_id).
-            ckl::CopyTile<
-                ckl::input(
-                    tt::CBIndex::c_3,
-                    ckl::WaitPolicy::PerBlockSize,
-                    ckl::PopPolicy::PerBlockSize,
-                    ckl::InputTileMapping::Block),
-                ckl::Dst::D0>{},
-            // tensor -> D1 (TTS) / D2 (TST) (block read, init_short for dfb_tensor_id).
-            ckl::CopyTile<
-                ckl::input(
-                    dfb_tensor_id,
-                    ckl::WaitPolicy::PerBlockSize,
-                    ckl::PopPolicy::PerBlockSize,
-                    ckl::InputTileMapping::Block),
-                kTensorSlot>{},
-            // scalar fill -> the other slot. Inactive flavor folds to a no-op.
-            ckl::Optional<kIsInt, ckl::FillInt<kWhereDF, kFillSlot>>{scalar_value},
-            ckl::Optional<kIsFloat, ckl::FillBitcast<kFillSlot>>{scalar_value},
-            // where(D0, D1, D2) -> D0.
-            ckl::Where<kWhereDF, ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0>{},
-            ckl::PackTile<ckl::output(
-                dfb_out_id,
-                ckl::ReservePolicy::PerBlockSize,
-                ckl::PushPolicy::PerBlockSize,
-                ckl::DataFormatReconfig::Disabled)>{});
-    }
-#else
     ckl::eltwise_chain(
         ckl::IterationShape::tiles(num_tiles).block_size(num_tiles_per_cycle),
         // cond -> D0 (block read, init_short for dfb_cond_id).
@@ -114,5 +67,4 @@ void kernel_main() {
             ckl::ReservePolicy::PerBlockSize,
             ckl::PushPolicy::PerBlockSize,
             ckl::DataFormatReconfig::Disabled)>{});
-#endif
 }

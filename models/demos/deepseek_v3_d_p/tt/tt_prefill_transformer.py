@@ -183,6 +183,7 @@ class TtPrefillTransformer(LightweightModule):
         overlap_shared_expert_with_dispatch: bool = True,
         lm_head_is_column_parallel: bool = True,
         mtp_predictor=None,
+        use_fused_rmsnorm: Optional[bool] = None,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -203,7 +204,7 @@ class TtPrefillTransformer(LightweightModule):
             "kv_only_last_layer requires is_last_rank: a non-last pipeline rank must hand its hidden state "
             "to the next rank, which a kv-only last layer does not produce"
         )
-        # GLM-5.2 indexer reuse: global per-layer full/shared map (None on models without it -> every
+        # GLM-5.3 indexer reuse: global per-layer full/shared map (None on models without it -> every
         # layer computes its own indexer, i.e. current behavior). first_layer_idx maps this rank's
         # local layer slice onto the global map.
         self.first_layer_idx = first_layer_idx
@@ -284,6 +285,7 @@ class TtPrefillTransformer(LightweightModule):
                 overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
                 first_layer_idx=first_layer_idx,
                 llama4_scale_cache=self._llama4_scale_cache,
+                use_fused_rmsnorm=use_fused_rmsnorm,
             )
             self.layers.append(layer)
 
@@ -534,7 +536,7 @@ class TtPrefillTransformer(LightweightModule):
         else:
             h = token_ids
 
-        # GLM-5.2 reuse: hold the most recent "full" layer's top-k indices and inject them into the
+        # GLM-5.3 reuse: hold the most recent "full" layer's top-k indices and inject them into the
         # following "shared" layers. reuse=False (no indexer_types) leaves the call + 2-tuple return
         # exactly as before.
         reuse = self.indexer_types is not None

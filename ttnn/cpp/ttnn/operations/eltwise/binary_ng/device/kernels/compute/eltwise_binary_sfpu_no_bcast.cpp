@@ -24,6 +24,8 @@
 #include "api/compute/xlogy.h"
 #include "api/compute/atan2.h"
 #include "api/compute/nextafter.h"
+#include "api/compute/logaddexp.h"
+#include "api/compute/logaddexp2.h"
 #include "api/compute/binary_comp.h"
 #include "api/compute/isclose.h"
 
@@ -54,18 +56,12 @@ FORCE_INLINE void process_sfpu_tiles(
 
     tile_regs_acquire();
     // Startup and preprocessing preserve the LHS-format SrcA invariant.
-#if !defined(TT_POLY_BINARY_GRADIENT_CONTEXT) || defined(TT_POLY_LLK_DISABLE) || DST_ACCUM_MODE || \
-    HAS_ACTIVATIONS(LHS) || HAS_ACTIVATIONS(RHS) || HAS_ACTIVATIONS(POST)
     copy_init(cb_post_lhs.get_cb_id());
-#endif
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(cb_post_lhs.get_cb_id(), i, i * 2);
     }
-#if !defined(TT_POLY_BINARY_GRADIENT_CONTEXT) || defined(TT_POLY_LLK_DISABLE) || DST_ACCUM_MODE || \
-    HAS_ACTIVATIONS(LHS) || HAS_ACTIVATIONS(RHS) || HAS_ACTIVATIONS(POST)
     reconfig_data_format_srca(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
     copy_init(cb_post_rhs.get_cb_id());
-#endif
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(cb_post_rhs.get_cb_id(), i, i * 2 + 1);
 #if HAS_ACTIVATIONS(POST)
@@ -78,10 +74,7 @@ FORCE_INLINE void process_sfpu_tiles(
 #endif
         PROCESS_POST_ACTIVATIONS(i * 2);
     }
-#if !defined(TT_POLY_BINARY_GRADIENT_CONTEXT) || defined(TT_POLY_LLK_DISABLE) || DST_ACCUM_MODE || \
-    HAS_ACTIVATIONS(LHS) || HAS_ACTIVATIONS(RHS) || HAS_ACTIVATIONS(POST)
     reconfig_data_format_srca(cb_post_rhs.get_cb_id(), cb_post_lhs.get_cb_id());
-#endif
     tile_regs_commit();
 
     tile_regs_wait();

@@ -1,4 +1,3 @@
-#include "api/compute/eltwise_unary/logit_tt_poly_bf16.h"
 // SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -16,20 +15,6 @@ namespace ckl = compute_kernel_lib;
 
 constexpr bool kDoClamp = get_compile_time_arg_val(0) == 1;
 
-#if defined(TT_POLY_BF16_UNARY_CONTEXT) && TT_POLY_BF16_UNARY_CONTEXT == 1 && !defined(TT_POLY_LLK_DISABLE) && \
-    (defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE))
-struct TTPolyGenerated : ckl::UnaryOp<TTPolyGenerated, ckl::Dst::D0> {
-    // The evaluator may use fixed destination rows beyond its input tile.
-    // Reserve the entire existing window so another lane cannot overlap them.
-    static constexpr uint32_t lane_width = ckl::DEST_AUTO_LIMIT;
-    static constexpr uint32_t max_dst() { return ckl::DEST_AUTO_LIMIT - 1; }
-    static ALWI void init() {
-        ckl::RsubUnary<ckl::Dst::D0>::init();
-        logit_tt_poly_bf16_tile_init();
-    }
-    static ALWI void exec_impl(uint32_t) { logit_tt_poly_bf16_tile(0); }
-};
-#endif
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     const uint32_t packed_scalar1 = get_arg_val<uint32_t>(1);
@@ -45,62 +30,37 @@ void kernel_main() {
 
     // The temporary DFB holds only two tiles, and this kernel is both its producer and consumer.
     // Produce and consume one tile at a time: separating the two stages deadlocks once the producer fills the DFB.
-#if defined(TT_POLY_BF16_UNARY_CONTEXT) && TT_POLY_BF16_UNARY_CONTEXT == 1 && !defined(TT_POLY_LLK_DISABLE) && \
-    (defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE))
-    if constexpr (!DST_ACCUM_MODE) {
-#if defined(ARCH_WORMHOLE) && defined(TRISC_MATH)
-        ckernel::math::clear_addr_mod_base();
-#endif
+    for (uint32_t tile = 0; tile < num_tiles; ++tile) {
         ckl::eltwise_chain(
-            ckl::IterationShape::tiles(num_tiles),
+            ckl::IterationShape::one_tile(),
             ckl::CopyTile<
                 ckl::input(
                     dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
                 ckl::Dst::D0>{},
-            TTPolyGenerated{},
+            ckl::Optional<kDoClamp, ckl::Clamp<ckl::Dst::D0>>{packed_scalar1, packed_scalar2},
+            ckl::PackTile<ckl::output(
+                dfb_tmp0_id,
+                ckl::ReservePolicy::PerTile,
+                ckl::PushPolicy::PerTile,
+                ckl::DataFormatReconfig::Disabled)>{});
+
+        ckl::eltwise_chain(
+            ckl::IterationShape::one_tile(),
+            ckl::CopyTile<
+                ckl::input(
+                    dfb_tmp0_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+                ckl::Dst::D0>{},
+            ckl::CopyTile<
+                ckl::input(
+                    dfb_tmp0_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+                ckl::Dst::D1>{},
+            ckl::RsubUnary<ckl::Dst::D0>{0x3F800000u},  // 1.0 - x
+            ckl::DivBinary<ckl::Dst::D1, ckl::Dst::D0, ckl::Dst::D0>{},
+            ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(
                 dfb_output_id,
                 ckl::ReservePolicy::PerTile,
                 ckl::PushPolicy::PerTile,
                 ckl::DataFormatReconfig::Disabled)>{});
-    } else
-#endif
-    {
-        for (uint32_t tile = 0; tile < num_tiles; ++tile) {
-            ckl::eltwise_chain(
-                ckl::IterationShape::one_tile(),
-                ckl::CopyTile<
-                    ckl::input(
-                        dfb_input_id,
-                        ckl::WaitPolicy::PerTile,
-                        ckl::PopPolicy::PerTile,
-                        ckl::DataFormatReconfig::Disabled),
-                    ckl::Dst::D0>{},
-                ckl::Optional<kDoClamp, ckl::Clamp<ckl::Dst::D0>>{packed_scalar1, packed_scalar2},
-                ckl::PackTile<ckl::output(
-                    dfb_tmp0_id,
-                    ckl::ReservePolicy::PerTile,
-                    ckl::PushPolicy::PerTile,
-                    ckl::DataFormatReconfig::Disabled)>{});
-
-            ckl::eltwise_chain(
-                ckl::IterationShape::one_tile(),
-                ckl::CopyTile<
-                    ckl::input(
-                        dfb_tmp0_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
-                    ckl::Dst::D0>{},
-                ckl::CopyTile<
-                    ckl::input(
-                        dfb_tmp0_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-                    ckl::Dst::D1>{},
-                ckl::RsubUnary<ckl::Dst::D0>{0x3F800000u},  // 1.0 - x
-                ckl::DivBinary<ckl::Dst::D1, ckl::Dst::D0, ckl::Dst::D0>{},
-                ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>{},
-                ckl::PackTile<ckl::output(
-                    dfb_output_id,
-                    ckl::ReservePolicy::PerTile,
-                    ckl::PushPolicy::PerTile,
-                    ckl::DataFormatReconfig::Disabled)>{});
-        }
     }
 }

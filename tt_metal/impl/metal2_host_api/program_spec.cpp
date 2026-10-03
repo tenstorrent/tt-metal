@@ -28,6 +28,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
 #include "impl/kernels/kernel.hpp"
+#include "impl/metal2_host_api/llk_metadata.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
@@ -913,7 +914,11 @@ bool DmKernelDisablesImplicitSync(const DataMovementHardwareConfig& dm_config, c
 //     and, when P > 1, divide the ring's entry count.
 // Rules per relay DFB:
 //  5. Not also borrowed_from. Every relayed pipe shares ring_size / entry_size; the DFB's
-//     entry_size equals it and entry_size * num_entries == ring_size (the DFB is exactly the ring).
+//     entry_size divides that entry_size (the relay may page one pipe entry as several pages, e.g.
+//     a K-block as tiles, or one entry per consumer; only with a single-threaded producer) and
+//     entry_size * num_entries is the pipe's
+//     whole entries: ring_size rounded down to a multiple of the pipe's entry_size (the DFB is
+//     exactly the ring the pipe uses; the pipe skips any trailing gap at the wrap).
 //  6. The relayed pipes' receiver sets are pairwise disjoint and their union equals the DFB's
 //     node set; every PRODUCER kernel binds exactly the relayed pipe set under one accessor (so
 //     it is those pipes' receiver kernel and can drive the protocol the relay depends on).
@@ -1135,26 +1140,46 @@ void ValidatePrefetcherPipeSpec(const ProgramSpec& spec, const CollectedSpecData
         }
 
         TT_FATAL(
-            dfb.entry_size == first->entry_size,
-            "DFB '{}' entry_size {} differs from relayed PrefetcherPipeParameter '{}' entry_size {}",
+            dfb.entry_size != 0 && first->entry_size % dfb.entry_size == 0,
+            "DFB '{}' entry_size {} must divide relayed PrefetcherPipeParameter '{}' entry_size {}: a relay DFB "
+            "pages each pipe entry as a whole number of its own entries",
             dfb.unique_id,
             dfb.entry_size,
             first->unique_id,
             first->entry_size);
+        if (dfb.entry_size != first->entry_size) {
+            // Credit lanes stripe whole pipe entries over the relay's producer threads; a relay paged
+            // finer than the pipe is only implemented for one producer thread.
+            for (const auto& rec : collected.dfb_endpoints.at(dfb.unique_id).producers) {
+                TT_FATAL(
+                    rec.kernel->num_threads == 1,
+                    "DFB '{}' pages relayed PrefetcherPipeParameter '{}' entry_size {} as entries of {} bytes, which "
+                    "needs a single-threaded relay producer, but kernel '{}' has {} threads",
+                    dfb.unique_id,
+                    first->unique_id,
+                    first->entry_size,
+                    dfb.entry_size,
+                    rec.kernel->unique_id,
+                    rec.kernel->num_threads);
+            }
+        }
+        const uint32_t usable_ring_size = first->ring_size - first->ring_size % first->entry_size;
         TT_FATAL(
-            static_cast<uint64_t>(dfb.entry_size) * dfb.num_entries == first->ring_size,
-            "DFB '{}' (entry_size {} * num_entries {} = {} bytes) must exactly cover relayed "
-            "PrefetcherPipeParameter '{}' ring_size {}",
+            static_cast<uint64_t>(dfb.entry_size) * dfb.num_entries == usable_ring_size,
+            "DFB '{}' (entry_size {} * num_entries {} = {} bytes) must exactly cover the {} bytes of whole entries in "
+            "relayed PrefetcherPipeParameter '{}' (ring_size {}, entry_size {})",
             dfb.unique_id,
             dfb.entry_size,
             dfb.num_entries,
             static_cast<uint64_t>(dfb.entry_size) * dfb.num_entries,
+            usable_ring_size,
             first->unique_id,
-            first->ring_size);
+            first->ring_size,
+            first->entry_size);
 
         const NodeRangeSet& dfb_nodes = collected.dfb_node_set.at(dfb.unique_id);
         TT_FATAL(
-            dfb_nodes == relayed_receivers,
+            same_node_set(dfb_nodes, relayed_receivers),
             "DFB '{}' relays PrefetcherPipe(s) whose receiver nodes do not match the DFB's node set (union of its "
             "bound kernels' WorkUnitSpec nodes). The relay must live on exactly the receiver nodes.",
             dfb.unique_id);
@@ -1188,6 +1213,35 @@ void ValidatePrefetcherPipeSpec(const ProgramSpec& spec, const CollectedSpecData
                 first->unique_id);
         }
     }
+}
+
+std::optional<LLKMetadata> LLKMetadataFromDfb(const DataflowBufferSpec& spec) {
+    if (!spec.data_format_metadata.has_value()) {
+        TT_FATAL(
+            !spec.tile_format_metadata.has_value(),
+            "DFB '{}' need to have a configured data_format_metadata for it's tile_format_metadata to be respected",
+            spec.unique_id);
+        return std::nullopt;
+    }
+    const Tile tile = spec.tile_format_metadata.value_or(Tile{});
+    return LLKMetadata{.format = *spec.data_format_metadata, .tile = tile};
+}
+
+std::optional<LLKMetadata> LLKMetadataFromScratchpad(const ScratchpadSpec& spec) {
+    if (!spec.data_format_metadata.has_value()) {
+        TT_FATAL(
+            !spec.tile_format_metadata.has_value(),
+            "Scratchpad '{}' need to have a configured data_format_metadata for it's tile_format_metadata to be "
+            "respected",
+            spec.unique_id);
+        return std::nullopt;
+    }
+    const Tile tile = spec.tile_format_metadata.value_or(Tile{});
+    return LLKMetadata{.format = *spec.data_format_metadata, .tile = tile};
+}
+
+LLKMetadata LLKMetadataFromTensorSpec(const TensorSpec& spec) {
+    return LLKMetadata{.format = datatype_to_dataformat_converter(spec.data_type()), .tile = spec.tile()};
 }
 
 // ValidateProgramSpec: Semantic validation
@@ -2234,6 +2288,23 @@ void ValidateProgramSpec(
         }
     }
 
+    for (const auto& scratchpad : spec.scratchpads) {
+        const bool has_format = scratchpad.data_format_metadata.has_value();
+        const bool has_tile = scratchpad.tile_format_metadata.has_value();
+        TT_FATAL(
+            has_format || !has_tile,
+            "ScratchpadSpec '{}' has tile_format_metadata but no data_format_metadata",
+            scratchpad.unique_id);
+        if (has_format) {
+            TT_FATAL(
+                tt::is_data_format_supported(scratchpad.data_format_metadata.value(), arch),
+                "ScratchpadSpec '{}' has data format '{}' which is not supported on architecture {}",
+                scratchpad.unique_id,
+                scratchpad.data_format_metadata.value(),
+                arch);
+        }
+    }
+
     //////////////////////////////////
     // Validate SemaphoreSpecs
     //////////////////////////////////
@@ -2786,6 +2857,10 @@ struct ResolvedTensorParameter {
     // For now, since there are only two mutually exclusive possibilities, it's sufficient to
     // distinguish them with a boolean.
     bool runtime_field_is_page_size = false;
+
+    // Compile-time LLK metadata derived from the TensorParameter's spec, baked onto the binding token.
+    // Always present: a tensor has a dtype and a tile.
+    LLKMetadata llk_metadata;
 };
 
 // Resolve a TensorParameter's static layout into a CTA payload + an extra CRTA word
@@ -2865,7 +2940,7 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
         aligned_page_size,
         std::numeric_limits<uint32_t>::max());
 
-    ResolvedTensorParameter result;
+    ResolvedTensorParameter result{.llk_metadata = LLKMetadataFromTensorSpec(spec)};
     std::vector<uint32_t>& cta_payload = result.cta_payload;
 
     // Common header (always emitted, sharded or not):
@@ -2910,7 +2985,13 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
     const size_t n_banks = bank_coords.size();
 
     cta_payload.push_back(static_cast<uint32_t>(rank));
-    cta_payload.push_back(static_cast<uint32_t>(n_banks));
+    TT_FATAL(
+        n_banks < tensor_accessor::ShardContiguousBit,
+        "TensorParameter '{}' has too many banks ({}) to pack the shard-contiguous flag",
+        tensor_parameter.unique_id,
+        n_banks);
+    cta_payload.push_back(tensor_accessor::pack_num_banks(
+        static_cast<uint32_t>(n_banks), bds.shard_distribution_strategy() == ShardDistributionStrategy::CONTIGUOUS_1D));
 
     if (!dyn_shape) {
         for (size_t i = 0; i < rank; ++i) {
@@ -2996,6 +3077,7 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
         handle.addr_crta_offset = static_cast<uint32_t>(crta_word_index * sizeof(uint32_t));
         handle.num_runtime_field_crta_words = resolved.extra_crta_words;
         handle.runtime_field_is_page_size = resolved.runtime_field_is_page_size;
+        handle.llk_metadata = resolved.llk_metadata;
 
         out.cta_words.insert(out.cta_words.end(), binding_ctas.begin(), binding_ctas.end());
         cta_word_offset += static_cast<uint32_t>(binding_ctas.size());
@@ -3039,6 +3121,7 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
         handle.accessor_name = binding.accessor_name;
         handle.size_bytes = scratchpad_spec->size_per_node;
         handle.addr_crta_word = static_cast<uint32_t>(crta_word_index);
+        handle.llk_metadata = LLKMetadataFromScratchpad(*scratchpad_spec);
         // handle.allocated_address stays 0 until allocate_scratchpads runs.
         out.handles.push_back(std::move(handle));
         crta_word_index += 1;  // one address word per scratchpad binding
@@ -3058,7 +3141,8 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     const KernelSpec& kernel_spec,
     const DFBNameToSlotMap& dfb_name_to_slot,
     const std::unordered_map<DFBSpecName, bool>& dfb_name_to_is_relay,
-    const std::unordered_map<DFBSpecName, uint8_t>& dfb_name_to_prefetcher_pipe_id) {
+    const std::unordered_map<DFBSpecName, uint8_t>& dfb_name_to_prefetcher_pipe_id,
+    const std::unordered_map<DFBSpecName, const DataflowBufferSpec*>& dfb_by_name) {
     tt::tt_metal::DataflowBufferBindingHandleMap out;
     out.reserve(kernel_spec.dfb_bindings.size());
     for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
@@ -3069,14 +3153,14 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
             kernel_spec.unique_id,
             dfb_binding.dfb_spec_name,
             slot);
-        const bool is_relay = dfb_name_to_is_relay.at(dfb_binding.dfb_spec_name);
-        const uint8_t prefetcher_pipe_id = dfb_name_to_prefetcher_pipe_id.at(dfb_binding.dfb_spec_name);
-        out.emplace(
-            dfb_binding.accessor_name,
-            tt::tt_metal::DataflowBufferBindingHandle{
-                .logical_dfb_id = static_cast<uint16_t>(slot),
-                .is_relay = is_relay,
-                .prefetcher_pipe_id = prefetcher_pipe_id});
+        tt::tt_metal::DataflowBufferBindingHandle handle;
+        handle.logical_dfb_id = static_cast<uint16_t>(slot);
+        handle.is_relay = dfb_name_to_is_relay.at(dfb_binding.dfb_spec_name);
+        handle.prefetcher_pipe_id = dfb_name_to_prefetcher_pipe_id.at(dfb_binding.dfb_spec_name);
+        if (!handle.is_relay) {
+            handle.llk_metadata = LLKMetadataFromDfb(*dfb_by_name.at(dfb_binding.dfb_spec_name));
+        }
+        out.emplace(dfb_binding.accessor_name, handle);
     }
     return out;
 }
@@ -3779,7 +3863,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
 
         // Make the local accessor name -> DFB device slot map for this kernel
         const tt::tt_metal::DataflowBufferBindingHandleMap dfb_handles = MakeDataflowBufferBindingHandles(
-            kernel_spec, dfb_name_to_slot, dfb_name_to_is_relay, dfb_name_to_prefetcher_pipe_id);
+            kernel_spec, dfb_name_to_slot, dfb_name_to_is_relay, dfb_name_to_prefetcher_pipe_id, collected.dfb_by_name);
         const tt::tt_metal::SemaphoreBindingHandleMap semaphore_handles =
             MakeSemaphoreBindingHandles(kernel_spec, semaphore_binders, semaphore_name_to_id, semaphore_name_to_scope);
 

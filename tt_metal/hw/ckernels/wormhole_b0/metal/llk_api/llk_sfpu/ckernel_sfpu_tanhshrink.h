@@ -96,24 +96,3 @@ inline void tanhshrink_init() {
 }
 
 }  // namespace ckernel::sfpu
-
-#if (defined(TRISC_MATH) || defined(LLK_TRISC_MATH) || defined(TRISC_PACK) || defined(LLK_TRISC_PACK)) && \
-    !defined(TT_POLY_LLK_DISABLE)
-#include "ckernel_sfpu_tanhshrink_bf16.h"
-#define TT_POLY_TANHSHRINK_BF16_AVAILABLE 1
-#endif
-
-namespace ckernel::sfpu {
-
-#if (defined(TRISC_MATH) || defined(LLK_TRISC_MATH)) && !defined(TT_POLY_LLK_DISABLE)
-template <int ITERATIONS = 8>
-inline void calculate_tanhshrink_tt_poly_bf16() {
-    ckernel::sfpu::ttpoly::calculate_signed_abs_affine<ttpoly_generated::TanhshrinkBf16Config, ITERATIONS>();
-}
-template <auto...>
-inline void init_tanhshrink_tt_poly_bf16() {
-    ckernel::sfpu::ttpoly::init_signed_abs_affine<ttpoly_generated::TanhshrinkBf16Config>();
-}
-#endif
-
-}  // namespace ckernel::sfpu
