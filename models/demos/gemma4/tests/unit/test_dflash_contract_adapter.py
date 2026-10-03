@@ -10,6 +10,7 @@ in the runner's order over a recording fused-decoder stub. What a replay
 computes on the device is not something a host test can attest.
 """
 
+import dataclasses
 import json
 
 import pytest
@@ -21,6 +22,7 @@ from models.demos.gemma4.tests.unit.dflash_contract_harness import (
     _ordinary,
     _prefill,
     _propose,
+    _sampling,
     _start_solo,
     _table,
     _tensor,
@@ -629,6 +631,145 @@ def test_release_logs_committed_tokens_per_step_for_the_session(model, adapter, 
     summary = [m for m in messages if "contract summary" in m]
     assert summary == ["Gemma4DFlash contract summary: 2 steps, 4 tokens, 2.00 tokens/step"]
     assert model._dflash_steps == 0 and model._dflash_committed == 0
+
+
+# -- rows that do not sample greedily ---------------------------------------------
+
+_NOT_GREEDY = [
+    {"temperature": 1.0},
+    {"presence_penalty": 0.5},
+    {"frequency_penalty": 0.5},
+    {"repetition_penalty": 1.2},
+]
+_NOT_GREEDY_IDS = ["temperature", "presence-penalty", "frequency-penalty", "repetition-penalty"]
+
+
+@pytest.mark.parametrize("values", _NOT_GREEDY, ids=_NOT_GREEDY_IDS)
+def test_a_solo_row_that_does_not_sample_greedily_runs_the_plain_decode(model, values):
+    """The session answers with the target's argmax ids. The plain decode draws
+    with the row's own parameters, so the row takes it and its taps are freed."""
+    _prefill(model, prompt_len=2, key=10)
+    taps = list(model._spec_pending[0])
+    out = _ordinary(model, [3], [2], [10], result="device", sampling_params=_sampling(1, **values))
+    assert out == "device"
+    assert _names(model, "decode") == [("decode", [3], [2])]
+    assert _names(model, "bootstrap") == [] and model._spec_decoder.replays == 0
+    assert model._spec_pending is None and all(tap.releases == 1 for tap in taps)
+
+
+def test_a_sampled_solo_row_is_never_proposed_for(model):
+    sampled = _sampling(1, temperature=1.0)
+    _prefill(model, prompt_len=2, key=10)
+    _ordinary(model, [3], [2], [10], result="device", sampling_params=sampled)
+    proposal = _propose(model, [[600, -1, -1, -1, -1, -1]], [[3, -1, -1, -1, -1, -1]])
+    assert proposal.num_valid.tolist() == [0]
+    out = _ordinary(model, [600], [3], [10], result="device", sampling_params=sampled)
+    assert out == "device"
+    assert model._spec_decoder.replays == 0 and not model._spec_active
+
+
+def test_a_greedy_row_with_top_k_and_top_p_still_speculates(model):
+    _prefill(model, prompt_len=2, key=10)
+    out = _ordinary(model, [3], [2], [10], sampling_params=_sampling(1, top_k=20, top_p=0.9))
+    assert out.tolist() == [150]
+    assert len(_names(model, "bootstrap")) == 1
+
+
+@pytest.mark.parametrize(
+    "temperature, bootstraps",
+    [([0.0, 1.0, 1.0, 1.0], True), ([1.0, 0.0, 0.0, 0.0], False)],
+    ids=["greedy-live-row", "sampled-live-row"],
+)
+def test_a_padded_step_reads_only_the_live_rows_sampling(model, temperature, bootstraps):
+    _prefill(model, prompt_len=2, key=10)
+    out = _ordinary(
+        model,
+        [3, 0, 0, 0],
+        [2, -1, -1, -1],
+        [10, 0, 0, 0],
+        result="device",
+        sampling_params=_sampling(4, temperature=temperature),
+    )
+    assert (len(_names(model, "bootstrap")) == 1) is bootstraps
+    if bootstraps:
+        assert out.tolist() == [150, 0, 0, 0]
+        assert model.results == ["device"]  # the plain decode never ran
+    else:
+        assert out == "device"
+
+
+def test_a_draftless_verify_of_a_greedy_solo_row_starts_the_session(model):
+    _prefill(model, prompt_len=2, key=10)
+    out = _verify(model, [[3, 0, 0, 0, 0, 0]], [list(range(2, 8))], [0], keys=[10])
+    assert out.argmax_ids[0].tolist() == [150, -1, -1, -1, -1, -1]
+    assert len(_names(model, "bootstrap")) == 1 and _names(model, "decode") == []
+
+
+@pytest.mark.parametrize("values", _NOT_GREEDY, ids=_NOT_GREEDY_IDS)
+def test_a_draftless_verify_of_a_solo_row_that_does_not_sample_greedily_takes_the_plain_decode(model, values):
+    """Column 0 is the plain decode's device draw for the row, not the session's argmax."""
+    _prefill(model, prompt_len=2, key=10)
+    taps = list(model._spec_pending[0])
+    out = _verify(
+        model,
+        [[3, 0, 0, 0, 0, 0]],
+        [list(range(2, 8))],
+        [0],
+        keys=[10],
+        result=DeviceResult(_tensor([600])),
+        sampling_params=_sampling(1, **values),
+    )
+    assert out.argmax_ids[0].tolist() == [600, -1, -1, -1, -1, -1]
+    assert _names(model, "decode") == [("decode", [3], [2])]
+    assert _names(model, "bootstrap") == [] and model._spec_decoder.replays == 0
+    assert model._spec_pending is None and all(tap.releases == 1 for tap in taps)
+
+
+@pytest.mark.parametrize("step", ["ordinary", "verify"])
+def test_a_sampled_row_leaves_another_requests_outstanding_proposal_alone(model, step):
+    """The owner is not in this step and its drafts come on its next step."""
+    _start_solo(model)
+    sampled = _sampling(2, temperature=[0.0, 1.0])
+    if step == "ordinary":
+        out = _ordinary(model, [0, 40], [-1, 9], [0, 20], result="device", sampling_params=sampled)
+        assert out == "device"
+    else:
+        out = _verify(
+            model,
+            [_PAD, [40, 0, 0, 0, 0, 0]],
+            [_PAD, [9, 10, 11, 12, 13, 14]],
+            [0, 0],
+            keys=[0, 20],
+            result=DeviceResult(_tensor([0, 600])),
+            sampling_params=sampled,
+        )
+        assert int(out.argmax_ids[1, 0]) == 600
+    assert model._spec_active and not model._dflash_retained.consumed
+    out = _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
+    assert out.argmax_ids.tolist() == [[250, 251, 252, 253, 254, 255]]
+
+
+def test_a_session_owner_seen_sampling_on_a_later_step_ends_its_session(model):
+    """A host-sampled verify carries no sampling parameters, so it can start a
+    session that the next device-sampled step shows to be for a sampled row."""
+    _start_solo(model)
+    out = _ordinary(model, [150], [3], [10], result="device", sampling_params=_sampling(1, temperature=1.0))
+    assert out == "device"
+    assert not model._spec_active and model._dflash_retained is None
+    assert ("release_decoder", False) in model.events
+    proposal = _propose(model, [[600, -1, -1, -1, -1, -1]], [[4, -1, -1, -1, -1, -1]])
+    assert proposal.num_valid.tolist() == [0]
+
+
+def test_greedy_check_reads_per_row_values_and_shared_scalars(adapter):
+    is_greedy = adapter.Gemma4DFlashContractForCausalLM._dflash_row_is_greedy
+    lists = _sampling(2, temperature=[0.0, 0.7])
+    assert is_greedy(lists, 0) and not is_greedy(lists, 1)
+    tensors = dataclasses.replace(lists, temperature=torch.zeros(2), repetition_penalty=torch.tensor([1.0, 1.1]))
+    assert is_greedy(tensors, 0) and not is_greedy(tensors, 1)
+    shared = dataclasses.replace(_sampling(1), presence_penalty=0.0, frequency_penalty=0.2)
+    assert not is_greedy(shared, 0)
+    assert is_greedy(dataclasses.replace(shared, frequency_penalty=0.0), 0)
 
 
 # -- identity and release --------------------------------------------------------
