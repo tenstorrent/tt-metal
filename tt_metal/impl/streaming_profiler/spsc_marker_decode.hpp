@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // The vector kernels of the host-side decode and the per-lane state they run against; the frame walk that drives
-// them is StreamDecoder::decode_frame (decode.hpp). A frame is a 16-word prefix (word 1 = payload
+// them is StreamDecoder::decode_frames (decode.cpp). A frame is the SPSC_SPAN_PREFIX_WORDS prefix (word 1 = payload
 // length), the SPSC_SPAN_WIRE_CTRL_WORDS control block, then each RISC's live ring window packed flat with congruence
 // pads and wraps resolved device-side. Packet formats: spsc_packet.h. The producer publishes its tail only on
 // packet boundaries, so a window never ends mid-packet.
@@ -12,10 +12,8 @@
 #include <algorithm>
 #include <array>
 #include <bit>
-#include <cstring>
 #include <cstdint>
-#include <span>
-#include <vector>
+#include <cstring>
 
 // SIMDe uses native AVX2 where available and supported host instructions otherwise.
 #include <simde/x86/avx2.h>
@@ -53,66 +51,28 @@ inline constexpr uint32_t kSpscMaxFrameWords = kernel_profiler::spsc_span_frame_
 inline constexpr uint32_t kSpscMaxFramePages = kSpscMaxFrameWords / kernel_profiler::SPSC_SPAN_PAGE_WORDS;
 static_assert(kSpscMaxFrameWords == 2656 && kSpscMaxFramePages == 166);
 
-// Packed NoC (y<<16)|x -> dense core index, direct-indexed so a frame's lookup is one load. 64x64 covers every
-// supported grid; a coordinate outside it is unknown.
-struct CoreTable {
-    static constexpr uint16_t kNone = 0xFFFF;
-    std::vector<uint16_t> slot = std::vector<uint16_t>(4096, kNone);
-    static uint32_t idx(uint32_t xy) { return (((xy >> 16) & 63u) << 6) | (xy & 63u); }
-    uint16_t& operator[](uint32_t xy) { return slot[idx(xy)]; }
-    uint32_t find(uint32_t xy) const { return (xy & 0xFFC0FFC0u) != 0 ? kNone : slot[idx(xy)]; }
-    void load(std::span<const uint32_t> core_xy) {
-        slot.assign(4096, kNone);
-        for (uint32_t core = 0; core < core_xy.size(); core++) {
-            (*this)[core_xy[core]] = static_cast<uint16_t>(core);
-        }
-    }
-};
-
-// One (core, RISC) lane of a socket's frame stream.
-struct SpscLane {
-    // The end of the last ZONE_S/ZONE_ATOMIC zone, the base a ZONE_S's 16-bit end delta counts from. The producer
-    // guarantees the first zone after a launch or rewind is an absolute ZONE_ATOMIC; a resync recovers at the next
-    // one.
-    uint64_t cursor = 0;
-    uint64_t last_ts = 0;  // the last record's timestamp; lanes emit in end order, so a step back is a torn read
-    // The last timestamped record, wherever it went; nullptr = none. A regression repairs that record in place, so it
-    // is only meaningful while last_rec_seq is the current batch, i.e. until its owner publishes it.
-    uint8_t* last_rec = nullptr;
-    uint64_t last_rec_seq = 0;
-    uint32_t last_rec_zone = 0;  // a zone's second qword is a duration a repair may move; a point's is not
-    uint32_t timer_hi = 0;  // sticky wall-clock high half
-    uint32_t prog = 0;      // sticky runtime host-id (every RISC emits its own at launch)
-    uint32_t head = 0;      // monotonic words-consumed mirror; head(N) == tail(N-1)
-    uint32_t seeded = 0;
-    // Set at the start and after every gap in the wire: the next frame's state slots reseed timer_hi and prog before
-    // any of its words are decoded on stale state.
-    uint32_t need_state = 1;
-    // Set until an absolute zone re-anchors the cursor; ZONE_S runs seen meanwhile are skipped.
-    uint32_t need_anchor = 1;
-};
-
-// Written only by the thread decoding that stream.
-struct SpanDecodeState {
-    std::vector<SpscLane> lanes;
-    CoreTable core_of_xy;
-
-    void reset(uint32_t num_cores) { lanes.assign(static_cast<size_t>(num_cores) * kSpscNRiscDecode, {}); }
-};
-
-// Every record a consumer sees is the public 48 B record (experimental::streaming_profiler::Record): 32 bytes
-// composed from the packet and the lane's constants, {start|ts, duration|payload, zone id, runtime id, coordinates},
-// then a 16-byte tail of lane constants, {chip, RISC, frequency, offset}, written straight into its
-// kind's region of the batch buffer; Data payload elements go to the batch's arena. Stores are cached, not NT: the
-// consumer reads the buffers immediately. Block kernels write their last quad whole, so a region needs
-// kSpscSinkSlackRecs of slack past cap.
-inline constexpr uint32_t kSpscRecBytes = 48;
+// Every record a consumer sees is a public record (experimental::streaming_profiler::Zone / Event /
+// TimestampedData), written straight into its kind's region of the batch buffer. Each starts with the kSpscSharedBytes
+// every kind shares, {start|ts, zone id | runtime id << 32, coordinates | chip | processor, the lane's tile offset},
+// one vector composed from the packet and the lane's constants. A zone follows it with its duration and an end_tsc_
+// slot the service fills, Data with its value count and a pointer to its values, which go to the batch's values region.
+// Stores are cached rather than NT because the consumer reads the buffers immediately. Block kernels write their last
+// quad whole, so a region needs kSpscSinkSlackRecs of slack past cap.
+inline constexpr uint32_t kSpscSharedBytes = 32;
+inline constexpr uint32_t kSpscEventBytes = kSpscSharedBytes;
+inline constexpr uint32_t kSpscDataBytes = 48;
+inline constexpr uint32_t kSpscZoneBytes = 48;
 inline constexpr uint32_t kSpscSinkSlackRecs = 8;
-// A lane's record constants in record byte order: dwords 6-7 (the coordinates) and the tail.
+inline constexpr uint32_t kSpscQwTimestamp = 0, kSpscQwIds = 1, kSpscQwTsc = 3, kSpscQwDuration = 4, kSpscQwEndTsc = 5;
+// A lane's record constants in record byte order: qword 2, its coordinates, chip and processor, then qword 3, its
+// tile offset.
 struct SpscRecConsts {
     uint32_t coords[2];
-    uint32_t tail[4];
+    uint64_t offset;
 };
+
+// A ZONE_L duration's high word when the zone's start read borrowed the next epoch.
+inline constexpr uint32_t kSpscBorrowedDurHi = 0xFFFFFFFFu;
 
 // What a block kernel reports: 16 bytes so it returns in registers; the caller knows the first record's timestamp
 // from the words. The flags say only that something needs the slow path; the caller finds where.
@@ -120,7 +80,7 @@ struct SpscBlockResult {
     uint64_t ts_last;  // ZONE_S: the lane cursor after the block
     uint32_t n;
     uint8_t regress;   // some record's timestamp precedes the one before it
-    uint8_t wrapped;   // ZONE_L only: some duration's high word is all ones (the start read borrowed the next epoch)
+    uint8_t wrapped;   // ZONE_L only: some duration's high word is kSpscBorrowedDurHi
     uint16_t stalls;   // records whose id is kSpscStallZoneId
 };
 
@@ -276,6 +236,7 @@ inline constexpr std::array<uint32_t, PP_TYPE_MASK + 1> kSpscDataMaskOfType = []
 
 constexpr bool spsc_is_point(Kind k) { return k == Kind::Point; }
 constexpr bool spsc_is_zone_or_sticky(Kind k) { return k == Kind::Zone || k == Kind::Sticky; }
+constexpr bool spsc_is_sticky(Kind k) { return k == Kind::Sticky; }
 
 // Runs handle.template operator()<F>() for the row of kFormats whose wire type is t and whose kind Pred accepts;
 // false when there is none. The chain unrolls in table order. always_inline, like the handlers it takes: a handler
@@ -318,49 +279,43 @@ inline uint64_t spsc_ts_at(const uint32_t* src, uint32_t k, uint64_t th_hi) {
     }
 }
 
-// Everything a lane's records share: the constant half of each record kind, {0, th, 0, 0, 0, prog, coords, coords}
-// (the 64-bit-timestamp kinds without th), the record tail, and the qword broadcasts the 2-word kernels compose from.
+// Everything a lane's records share: the constant part of the shared 32 bytes in dwords, {0, th, 0, prog, coords,
+// offset}, which `shared_ts64` holds without th for the 64-bit-timestamp kinds, and the broadcasts the 2-word kernels
+// compose from.
 // Built at lane entry; a STICKY_TIMER re-blends only the th lanes, a STICKY_PROG only the prog lanes.
 struct SpscLaneConsts {
     uint64_t th_hi;
-    simde__m256i tv, mv, coords_v;  // th << 32 / prog << 32 / the coordinates, per qword
-    simde__m256i zone_half, zone_half64, point_half, point_half64;
-    simde__m128i tail;
+    simde__m256i th_hi_v, prog_hi_v;
+    simde__m256i tail;    // {coords, offset} in each 128-bit half
+    simde__m256i shared, shared_ts64;
 };
 inline void spsc_lane_consts_th(SpscLaneConsts& c, uint32_t th) {
     c.th_hi = static_cast<uint64_t>(th) << 32;
-    c.tv = simde_mm256_set1_epi64x(static_cast<long long>(c.th_hi));
-    const simde__m256i thv = simde_mm256_set1_epi32(static_cast<int>(th));
-    c.zone_half = simde_mm256_blend_epi32(c.zone_half, thv, 0x02);
-    c.point_half = simde_mm256_blend_epi32(c.point_half, thv, 0x02);
+    c.th_hi_v = simde_mm256_set1_epi64x(static_cast<long long>(c.th_hi));
+    c.shared = simde_mm256_blend_epi32(c.shared, simde_mm256_set1_epi32(static_cast<int>(th)), 0x02);
 }
 inline void spsc_lane_consts_prog(SpscLaneConsts& c, uint32_t prog) {
-    c.mv = simde_mm256_set1_epi64x(static_cast<long long>(static_cast<uint64_t>(prog) << 32));
-    const simde__m256i pgv = simde_mm256_set1_epi32(static_cast<int>(prog));
-    for (simde__m256i* h : {&c.zone_half, &c.zone_half64, &c.point_half, &c.point_half64}) {
-        *h = simde_mm256_blend_epi32(*h, pgv, 0x20);
-    }
+    c.prog_hi_v = simde_mm256_set1_epi64x(static_cast<long long>(static_cast<uint64_t>(prog) << 32));
+    const simde__m256i prog_v = simde_mm256_set1_epi32(static_cast<int>(prog));
+    c.shared = simde_mm256_blend_epi32(c.shared, prog_v, 0x08);
+    c.shared_ts64 = simde_mm256_blend_epi32(c.shared_ts64, prog_v, 0x08);
 }
 inline void spsc_lane_consts(SpscLaneConsts& c, const SpscRecConsts& r, uint32_t th, uint32_t prog) {
-    const simde__m256i half =
-        simde_mm256_setr_epi32(0, 0, 0, 0, 0, 0, static_cast<int>(r.coords[0]), static_cast<int>(r.coords[1]));
-    c.zone_half = c.zone_half64 = c.point_half = c.point_half64 = half;
-    c.coords_v =
-        simde_mm256_set1_epi64x(static_cast<long long>(r.coords[0] | (static_cast<uint64_t>(r.coords[1]) << 32)));
-    c.tail = simde_mm_loadu_si128(reinterpret_cast<const simde__m128i*>(r.tail));
+    const long long coords = static_cast<long long>(r.coords[0] | (static_cast<uint64_t>(r.coords[1]) << 32));
+    const long long offset = static_cast<long long>(r.offset);
+    c.tail = simde_mm256_setr_epi64x(coords, offset, coords, offset);
+    c.shared = c.shared_ts64 = simde_mm256_setr_epi64x(0, 0, coords, offset);
     spsc_lane_consts_th(c, th);
     spsc_lane_consts_prog(c, prog);
 }
-// The constant half of an F record: its th lane is blended in only when the timestamp's high half comes from the
+// The constant part of an F record: its th lane is blended in only when the timestamp's high half comes from the
 // lane's sticky.
 template <PacketFormat F>
-inline simde__m256i spsc_half(const SpscLaneConsts& c) {
-    if constexpr (F.kind == Kind::Zone) {
-        return F.has_ts_hi() ? c.zone_half64 : c.zone_half;
-    } else {
-        return F.has_ts_hi() ? c.point_half64 : c.point_half;
-    }
+inline simde__m256i spsc_shared(const SpscLaneConsts& c) {
+    return F.has_ts_hi() ? c.shared_ts64 : c.shared;
 }
+template <PacketFormat F>
+inline constexpr uint32_t spsc_rec_bytes = F.kind == Kind::Zone ? kSpscZoneBytes : kSpscEventBytes;
 
 // The vector constants the kernels share; all fold to immediates once inlined.
 inline simde__m256i spsc_dw_type_mask() {
@@ -384,50 +339,63 @@ inline constexpr uint32_t spsc_recs_per_load = 8 / F.words;
 // -1 at word `w` of each whole packet in the load.
 template <PacketFormat F, uint8_t w>
 inline simde__m256i spsc_lanes_at() {
-    constexpr auto L = [](int k) { return (k % F.words == w && k / F.words < 8 / F.words) ? -1 : 0; };
-    return simde_mm256_setr_epi32(L(0), L(1), L(2), L(3), L(4), L(5), L(6), L(7));
+    constexpr auto lane = [](int index) {
+        return (index % F.words == w && index / F.words < static_cast<int>(spsc_recs_per_load<F>)) ? -1 : 0;
+    };
+    return simde_mm256_setr_epi32(lane(0), lane(1), lane(2), lane(3), lane(4), lane(5), lane(6), lane(7));
 }
 // Word 0 of each whole packet down to its 27-bit id, every other lane kept.
 template <PacketFormat F>
 inline simde__m256i spsc_w0_mask() {
-    constexpr auto L = [](int k) { return (k % F.words == 0 && k / F.words < 8 / F.words) ? 0x07FFFFFF : -1; };
-    return simde_mm256_setr_epi32(L(0), L(1), L(2), L(3), L(4), L(5), L(6), L(7));
+    constexpr auto lane = [](int index) {
+        return (index % F.words == 0 && index / F.words < static_cast<int>(spsc_recs_per_load<F>))
+                   ? static_cast<int>(PP_LOW27_MASK)
+                   : -1;
+    };
+    return simde_mm256_setr_epi32(lane(0), lane(1), lane(2), lane(3), lane(4), lane(5), lane(6), lane(7));
 }
-// The lanes of a composed record that come from the constant half rather than the packet: the prog and coordinate
-// lanes always, plus each field the format lacks.
+// The lanes of the shared 32 bytes that come from the constant part rather than the packet: prog, the coordinates and
+// the offset always, plus the timestamp's high half when the format lacks it.
 template <PacketFormat F>
 constexpr int spsc_blend_s() {
-    return 0xE0 | (F.has_ts_hi() ? 0 : 0x02) | (F.has_dur() ? 0 : 0x04) | (F.has_dur_hi() ? 0 : 0x08);
+    return 0xF8 | (F.has_ts_hi() ? 0 : 0x02);
 }
 template <PacketFormat F>
 constexpr int spsc_blend_d() {
     return 0xFC | (F.has_dur_hi() ? 0 : 0x02);
 }
 
-// Composes packet `r` of a masked load into the public record at o and returns the composed vector: a lane permute
-// puts {ts_lo, ts_hi, dur_lo, dur_hi, id} in place, a blend supplies the constant half, and subtracting
-// {dur, 0, ...} leaves {start, dur, id | prog << 32, coords} with the borrow in the high half; the lane's tail
-// follows.
-template <PacketFormat F, uint32_t r>
-inline simde__m256i spsc_compose(simde__m256i l, simde__m256i half, simde__m128i tail, uint8_t* o) {
-    constexpr int b = static_cast<int>(r * F.words);
-    constexpr auto at = [](uint8_t f) { return f == kAbsent ? 0 : b + f; };
-    const simde__m256i s = simde_mm256_blend_epi32(
-        simde_mm256_permutevar8x32_epi32(
-            l, simde_mm256_setr_epi32(at(F.ts_lo), at(F.ts_hi), at(F.dur_lo), at(F.dur_hi), b, 0, 0, 0)),
-        half,
+// A composed record's 64-bit end, which ordering compares, and its duration, zero for a point; each in lane 0.
+struct SpscComposed {
+    simde__m256i end, duration;
+};
+// Composes the load's `Packet`-th packet into the public record at `record`: a lane permute puts {ts_lo, ts_hi, id} in
+// place, a blend supplies the constant part, and subtracting the duration from lane 0 turns the end into the start; a
+// zone's duration follows.
+template <PacketFormat F, uint32_t Packet>
+inline SpscComposed spsc_compose(simde__m256i loaded, simde__m256i shared, uint8_t* record) {
+    constexpr int base = static_cast<int>(Packet * F.words);
+    constexpr auto at = [](uint8_t word) { return word == kAbsent ? 0 : base + word; };
+    const simde__m256i composed = simde_mm256_blend_epi32(
+        simde_mm256_permutevar8x32_epi32(loaded, simde_mm256_setr_epi32(at(F.ts_lo), at(F.ts_hi), base, 0, 0, 0, 0, 0)),
+        shared,
         spsc_blend_s<F>());
+    simde__m256i duration = simde_mm256_setzero_si256();
     if constexpr (F.has_dur()) {
-        const simde__m256i d = simde_mm256_blend_epi32(
-            simde_mm256_permutevar8x32_epi32(l, simde_mm256_setr_epi32(at(F.dur_lo), at(F.dur_hi), 0, 0, 0, 0, 0, 0)),
-            simde_mm256_setzero_si256(),
+        duration = simde_mm256_blend_epi32(
+            simde_mm256_permutevar8x32_epi32(
+                loaded, simde_mm256_setr_epi32(at(F.dur_lo), at(F.dur_hi), 0, 0, 0, 0, 0, 0)),
+            duration,
             spsc_blend_d<F>());
-        simde_mm256_storeu_si256(reinterpret_cast<simde__m256i*>(o), simde_mm256_sub_epi64(s, d));
+        simde_mm256_storeu_si256(reinterpret_cast<simde__m256i*>(record), simde_mm256_sub_epi64(composed, duration));
     } else {
-        simde_mm256_storeu_si256(reinterpret_cast<simde__m256i*>(o), s);
+        simde_mm256_storeu_si256(reinterpret_cast<simde__m256i*>(record), composed);
     }
-    simde_mm_storeu_si128(reinterpret_cast<simde__m128i*>(o + 32), tail);
-    return s;
+    if constexpr (F.kind == Kind::Zone) {
+        simde_mm_storel_epi64(
+            reinterpret_cast<simde__m128i*>(record + kSpscSharedBytes), simde_mm256_castsi256_si128(duration));
+    }
+    return {composed, duration};
 }
 
 // Eight words from p with the lanes past `readable` zero; a count of zero or less loads nothing. A record's words
@@ -439,15 +407,6 @@ inline simde__m256i spsc_words(const uint32_t* p, int32_t readable) {
     return simde_mm256_maskload_epi32(
         reinterpret_cast<const int*>(p), simde_mm256_cmpgt_epi32(simde_mm256_set1_epi32(readable), spsc_lane_idx()));
 }
-// Four qword records from p, whole records only: a trailing odd word is never one, so its lane reads as zero.
-inline simde__m256i spsc_qwords(const uint32_t* p, int32_t readable) {
-    if (readable >= 8) {
-        return simde_mm256_loadu_si256(reinterpret_cast<const simde__m256i*>(p));
-    }
-    return simde_mm256_maskload_epi64(
-        reinterpret_cast<const int64_t*>(p),
-        simde_mm256_cmpgt_epi64(simde_mm256_set1_epi64x(readable / 2), simde_mm256_setr_epi64x(0, 1, 2, 3)));
-}
 // Records of the type in a quad's compare result, counted from lane 0 to the first miss. A full quad is one test;
 // only a partial one extracts its mask.
 inline uint32_t spsc_quad_count(simde__m256i c) {
@@ -456,26 +415,30 @@ inline uint32_t spsc_quad_count(simde__m256i c) {
     }
     return std::countr_zero(~static_cast<uint32_t>(simde_mm256_movemask_pd(simde_mm256_castsi256_pd(c))) & 0x1Fu);
 }
-// Four records from per-qword-lane halves: {a, b} is a record's first 16 bytes (start|ts, duration), {m, coords}
-// its next 16 (id | prog << 32, the coordinates) and `tail` its last. Written whole; a partial quad's spare records
+// Four records' shared 32 bytes at stride `Stride` from per-qword-lane halves: {times, ids} is a record's first 16
+// bytes, start|ts and id | prog << 32, and the lane's `tail` its last 16. Written whole; a partial quad's spare records
 // land in the sink's slack.
-inline void spsc_store_quad(
-    uint8_t* o, simde__m256i a, simde__m256i b, simde__m256i m, simde__m256i coords, simde__m128i tail) {
-    const simde__m256i ab_lo = simde_mm256_unpacklo_epi64(a, b);
-    const simde__m256i ab_hi = simde_mm256_unpackhi_epi64(a, b);
-    const simde__m256i mc_lo = simde_mm256_unpacklo_epi64(m, coords);
-    const simde__m256i mc_hi = simde_mm256_unpackhi_epi64(m, coords);
-    constexpr uint32_t R = kSpscRecBytes;
-    simde_mm256_storeu_si256(reinterpret_cast<simde__m256i*>(o), simde_mm256_permute2x128_si256(ab_lo, mc_lo, 0x20));
+template <uint32_t Stride>
+inline void spsc_store_quad(uint8_t* out, simde__m256i times, simde__m256i ids, simde__m256i tail) {
+    const simde__m256i pairs_lo = simde_mm256_unpacklo_epi64(times, ids);
+    const simde__m256i pairs_hi = simde_mm256_unpackhi_epi64(times, ids);
     simde_mm256_storeu_si256(
-        reinterpret_cast<simde__m256i*>(o + R), simde_mm256_permute2x128_si256(ab_hi, mc_hi, 0x20));
+        reinterpret_cast<simde__m256i*>(out), simde_mm256_permute2x128_si256(pairs_lo, tail, 0x20));
     simde_mm256_storeu_si256(
-        reinterpret_cast<simde__m256i*>(o + 2 * R), simde_mm256_permute2x128_si256(ab_lo, mc_lo, 0x31));
+        reinterpret_cast<simde__m256i*>(out + Stride), simde_mm256_permute2x128_si256(pairs_hi, tail, 0x20));
     simde_mm256_storeu_si256(
-        reinterpret_cast<simde__m256i*>(o + 3 * R), simde_mm256_permute2x128_si256(ab_hi, mc_hi, 0x31));
-    for (uint32_t k = 0; k < 4; k++) {
-        simde_mm_storeu_si128(reinterpret_cast<simde__m128i*>(o + k * R + 32), tail);
-    }
+        reinterpret_cast<simde__m256i*>(out + 2 * Stride), simde_mm256_permute2x128_si256(pairs_lo, tail, 0x21));
+    simde_mm256_storeu_si256(
+        reinterpret_cast<simde__m256i*>(out + 3 * Stride), simde_mm256_permute2x128_si256(pairs_hi, tail, 0x21));
+}
+inline void spsc_store_durations(uint8_t* out, simde__m256i durations) {
+    constexpr uint32_t kStride = kSpscZoneBytes;
+    const simde__m128i lo = simde_mm256_castsi256_si128(durations);
+    const simde__m128i hi = simde_mm256_extracti128_si256(durations, 1);
+    simde_mm_storel_epi64(reinterpret_cast<simde__m128i*>(out + kSpscSharedBytes), lo);
+    simde_mm_storeh_pd(reinterpret_cast<double*>(out + kStride + kSpscSharedBytes), simde_mm_castsi128_pd(lo));
+    simde_mm_storel_epi64(reinterpret_cast<simde__m128i*>(out + 2 * kStride + kSpscSharedBytes), hi);
+    simde_mm_storeh_pd(reinterpret_cast<double*>(out + 3 * kStride + kSpscSharedBytes), simde_mm_castsi128_pd(hi));
 }
 
 // One F record from its words, reported like a run of one.
@@ -483,15 +446,14 @@ template <PacketFormat F>
 inline SpscBlockResult spsc_one(const uint32_t* p, uint32_t readable, const SpscLaneConsts& c, uint8_t* dst) {
     spsc_compose<F, 0>(
         simde_mm256_and_si256(spsc_words(p, static_cast<int32_t>(readable)), spsc_w0_mask<F>()),
-        spsc_half<F>(c),
-        c.tail,
+        spsc_shared<F>(c),
         dst);
     SpscBlockResult out{spsc_ts_at<F>(p, 0, c.th_hi), 1, 0, 0, 0};
     if constexpr (F.kind == Kind::Zone) {
-        out.stalls = (p[0] & 0x07FFFFFFu) == kSpscStallZoneId ? 1u : 0u;
+        out.stalls = (p[0] & PP_LOW27_MASK) == kSpscStallZoneId ? 1u : 0u;
     }
     if constexpr (F.has_dur_hi()) {
-        out.wrapped = p[F.dur_hi] == 0xFFFFFFFFu ? 1u : 0u;
+        out.wrapped = p[F.dur_hi] == kSpscBorrowedDurHi ? 1u : 0u;
     }
     return out;
 }
@@ -531,11 +493,11 @@ __attribute__((noinline)) inline SpscBlockResult spsc_block_strided(
     const simde__m256i ftype = spsc_dw_type(F.type);
     const simde__m256i lanes_w0 = spsc_lanes_at<F, 0>();
     const simde__m256i lane_0 = spsc_lane0();
-    const simde__m256i lane_3 = simde_mm256_setr_epi32(0, 0, 0, -1, 0, 0, 0, 0);
+    const simde__m256i lane_1 = simde_mm256_setr_epi32(0, -1, 0, 0, 0, 0, 0, 0);
     const simde__m256i w0_mask = spsc_w0_mask<F>();
-    const simde__m256i ones = simde_mm256_set1_epi32(-1);
-    const simde__m256i half = spsc_half<F>(c);
-    const simde__m128i tail = c.tail;
+    const simde__m256i borrowed = simde_mm256_set1_epi32(static_cast<int>(kSpscBorrowedDurHi));
+    const simde__m256i shared = spsc_shared<F>(c);
+    constexpr uint32_t kRec = spsc_rec_bytes<F>;
     const simde__m256i z = simde_mm256_setzero_si256();
     const uint64_t th_hi = c.th_hi;
     const uint32_t* const p0 = p;
@@ -568,27 +530,31 @@ __attribute__((noinline)) inline SpscBlockResult spsc_block_strided(
             break;
         }
         // Lane 0 of a composed record is its 64-bit end, so a signed 64-bit compare orders records, `prev` carrying
-        // across loads and blocks. Lane 3 is the duration's high word when the format has one.
+        // across loads and blocks. Dword 1 of its duration is the high word when the format has one.
         uint32_t i = 0;
         for (; (i + 1) * R <= n; i++) {
             const simde__m256i l = simde_mm256_and_si256(v[i], w0_mask);
-            uint8_t* const o = dst + kSpscRecBytes * R * i;
-            const simde__m256i s0 = spsc_compose<F, 0>(l, half, tail, o);
+            uint8_t* const record = dst + kRec * R * i;
+            const SpscComposed first = spsc_compose<F, 0>(l, shared, record);
             if constexpr (R == 2) {
-                const simde__m256i s1 = spsc_compose<F, 1>(l, half, tail, o + kSpscRecBytes);
+                const SpscComposed second = spsc_compose<F, 1>(l, shared, record + kRec);
                 back = simde_mm256_or_si256(
-                    back, simde_mm256_or_si256(simde_mm256_cmpgt_epi64(prev, s0), simde_mm256_cmpgt_epi64(s0, s1)));
-                prev = s1;
+                    back,
+                    simde_mm256_or_si256(
+                        simde_mm256_cmpgt_epi64(prev, first.end), simde_mm256_cmpgt_epi64(first.end, second.end)));
+                prev = second.end;
                 if constexpr (F.has_dur_hi()) {
                     wrap_hit = simde_mm256_or_si256(
                         wrap_hit,
-                        simde_mm256_or_si256(simde_mm256_cmpeq_epi32(s0, ones), simde_mm256_cmpeq_epi32(s1, ones)));
+                        simde_mm256_or_si256(
+                            simde_mm256_cmpeq_epi32(first.duration, borrowed),
+                            simde_mm256_cmpeq_epi32(second.duration, borrowed)));
                 }
             } else {
-                back = simde_mm256_or_si256(back, simde_mm256_cmpgt_epi64(prev, s0));
-                prev = s0;
+                back = simde_mm256_or_si256(back, simde_mm256_cmpgt_epi64(prev, first.end));
+                prev = first.end;
                 if constexpr (F.has_dur_hi()) {
-                    wrap_hit = simde_mm256_or_si256(wrap_hit, simde_mm256_cmpeq_epi32(s0, ones));
+                    wrap_hit = simde_mm256_or_si256(wrap_hit, simde_mm256_cmpeq_epi32(first.duration, borrowed));
                 }
             }
             stall_hit = simde_mm256_or_si256(stall_hit, simde_mm256_cmpeq_epi32(l, stall));
@@ -596,18 +562,18 @@ __attribute__((noinline)) inline SpscBlockResult spsc_block_strided(
         if constexpr (R == 2) {
             if (2 * i < n) {  // an odd last record: the load's second record is not ours
                 const simde__m256i l = simde_mm256_and_si256(v[i], w0_mask);
-                const simde__m256i s0 = spsc_compose<F, 0>(l, half, tail, dst + kSpscRecBytes * 2 * i);
-                back = simde_mm256_or_si256(back, simde_mm256_cmpgt_epi64(prev, s0));
-                prev = s0;
+                const SpscComposed last = spsc_compose<F, 0>(l, shared, dst + kRec * 2 * i);
+                back = simde_mm256_or_si256(back, simde_mm256_cmpgt_epi64(prev, last.end));
+                prev = last.end;
                 if constexpr (F.has_dur_hi()) {
-                    wrap_hit = simde_mm256_or_si256(wrap_hit, simde_mm256_cmpeq_epi32(s0, ones));
+                    wrap_hit = simde_mm256_or_si256(wrap_hit, simde_mm256_cmpeq_epi32(last.duration, borrowed));
                 }
                 stall_hit =
                     simde_mm256_or_si256(stall_hit, simde_mm256_and_si256(simde_mm256_cmpeq_epi32(l, stall), lane_0));
             }
         }
         total += n;
-        dst += kSpscRecBytes * n;
+        dst += kRec * n;
         if (n < kBlockRecs) {
             break;
         }
@@ -621,11 +587,11 @@ __attribute__((noinline)) inline SpscBlockResult spsc_block_strided(
     }
     out.regress = simde_mm256_testz_si256(back, lane_0) ? 0u : 1u;
     if constexpr (F.has_dur_hi()) {
-        out.wrapped = simde_mm256_testz_si256(wrap_hit, lane_3) ? 0u : 1u;
+        out.wrapped = simde_mm256_testz_si256(wrap_hit, lane_1) ? 0u : 1u;
     }
     if (__builtin_expect(!simde_mm256_testz_si256(stall_hit, lanes_w0), 0)) {
         for (uint32_t k = 0; k < total; k++) {
-            out.stalls += (p0[W * k] & 0x07FFFFFFu) == kSpscStallZoneId ? 1u : 0u;
+            out.stalls += (p0[W * k] & PP_LOW27_MASK) == kSpscStallZoneId ? 1u : 0u;
         }
     }
     return out;
@@ -648,10 +614,10 @@ __attribute__((noinline)) inline SpscBlockResult spsc_block_qword(
     const simde__m256i type_mask = spsc_qw_type_mask();
     const simde__m256i ftype = spsc_qw_type(F.type);
     const simde__m256i z = simde_mm256_setzero_si256();
-    const simde__m256i id_mask = simde_mm256_set1_epi64x(0x07FFFFFF);
+    const simde__m256i id_mask = simde_mm256_set1_epi64x(PP_LOW27_MASK);
     const simde__m256i dur_mask = simde_mm256_set1_epi64x(0xFFFF);
-    const simde__m256i mv = c.mv, coords = c.coords_v;
-    const simde__m128i tail = c.tail;
+    const simde__m256i prog_hi_v = c.prog_hi_v, tail = c.tail;
+    constexpr uint32_t kRec = spsc_rec_bytes<F>;
     // The cursor rides as a broadcast vector: the next block's starts need it as one, and the block total is already
     // a broadcast lane of the carry tree.
     simde__m256i cv = simde_mm256_set1_epi64x(static_cast<long long>(cursor));
@@ -722,15 +688,16 @@ __attribute__((noinline)) inline SpscBlockResult spsc_block_qword(
             if constexpr (kDelta) {
                 const simde__m256i d64 = simde_mm256_and_si256(simde_mm256_srli_epi64(v[i], 32), dur_mask);
                 const simde__m256i s64 = simde_mm256_sub_epi64(simde_mm256_add_epi64(cv, pfx[i]), d64);
-                const simde__m256i m64 = simde_mm256_or_si256(simde_mm256_and_si256(v[i], id_mask), mv);
-                spsc_store_quad(dst + 4 * kSpscRecBytes * i, s64, d64, m64, coords, tail);
+                const simde__m256i m64 = simde_mm256_or_si256(simde_mm256_and_si256(v[i], id_mask), prog_hi_v);
+                spsc_store_quad<kRec>(dst + 4 * kRec * i, s64, m64, tail);
+                spsc_store_durations(dst + 4 * kRec * i, d64);
             } else {
-                const simde__m256i ts64 = simde_mm256_or_si256(simde_mm256_srli_epi64(v[i], 32), c.tv);
-                const simde__m256i m64 = simde_mm256_or_si256(simde_mm256_and_si256(v[i], id_mask), mv);
-                spsc_store_quad(dst + 4 * kSpscRecBytes * i, ts64, z, m64, coords, tail);
+                const simde__m256i ts64 = simde_mm256_or_si256(simde_mm256_srli_epi64(v[i], 32), c.th_hi_v);
+                const simde__m256i m64 = simde_mm256_or_si256(simde_mm256_and_si256(v[i], id_mask), prog_hi_v);
+                spsc_store_quad<kRec>(dst + 4 * kRec * i, ts64, m64, tail);
             }
         }
-        dst += kSpscRecBytes * n;
+        dst += kRec * n;
         total += n;
         if constexpr (kDelta) {
             if (n < 16u) {
@@ -769,6 +736,30 @@ __attribute__((noinline)) inline SpscBlockResult spsc_block_qword(
     return out;
 }
 
+// The shortest delta16 run the block kernel takes: its setup costs more than the few records of a shorter one.
+inline constexpr uint32_t kSpscDelta16BlockRun = 4;
+// A shorter run of delta16 zones, one record at a time.
+template <PacketFormat F>
+inline SpscBlockResult spsc_delta16_short(
+    const uint32_t* words, uint32_t max_recs, uint64_t cursor, const SpscLaneConsts& consts, uint8_t* dst) {
+    static_assert(F.delta16 && F.words == 2);
+    const simde__m128i tail = simde_mm256_castsi256_si128(consts.tail);
+    const uint64_t prog = static_cast<uint64_t>(simde_mm_cvtsi128_si64(simde_mm256_castsi256_si128(consts.prog_hi_v)));
+    uint32_t count = 0;
+    for (; count < max_recs && count < kSpscDelta16BlockRun - 1 && pp_type(words[2 * count]) == F.type; count++) {
+        const uint32_t deltas = words[2 * count + 1];
+        cursor += deltas >> 16;
+        const uint64_t duration = deltas & 0xFFFFu;
+        const simde__m128i head = simde_mm_set_epi64x(
+            static_cast<long long>((words[2 * count] & PP_LOW27_MASK) | prog),
+            static_cast<long long>(cursor - duration));
+        uint8_t* const record = dst + kSpscZoneBytes * count;
+        simde_mm256_storeu_si256(reinterpret_cast<simde__m256i*>(record), simde_mm256_set_m128i(tail, head));
+        std::memcpy(record + kSpscSharedBytes, &duration, sizeof(duration));
+    }
+    return SpscBlockResult{.ts_last = cursor, .n = count};
+}
+
 // A run of F records through the layout its width selects. `cursor` is read by delta16 formats only.
 template <PacketFormat F>
 inline SpscBlockResult spsc_block(
@@ -780,18 +771,17 @@ inline SpscBlockResult spsc_block(
     }
 }
 
-// One point packet, a Point kind or the Data kind: the record {ts, value count, id | prog << 32, coords, tail} at
-// `dst`, and a Data packet's payload words right after it as values (word 2k << 32 | word 2k+1, the last
-// zero-padded), so the record is kSpscRecBytes + 8 * count long. `n` is the payload word count, 0 for a Point:
-// everything Data-only is masked by it, never selected by a branch, so random alternation costs no mispredicts; the
-// first four payload words are stored unconditionally (a Point's land past its record, in the slack the next record
-// overwrites) and only a payload beyond them takes the loop. Words past `readable` read as zero. Returns the values
-// written.
-inline uint32_t spsc_point(const uint32_t* p, uint32_t readable, uint32_t n, const SpscLaneConsts& c, uint8_t* dst) {
+// One point packet, a Point kind or the Data kind: the shared 32 bytes at `dst`, then for Data the value count and
+// `values`, where the payload words go as values, word 2k << 32 | word 2k+1 with the last zero-padded. `n` is the
+// payload word count, 0 for a Point. Everything Data-only is masked by `n`, never selected by a branch, so random
+// alternation costs no mispredicts; the count, the pointer and the first four payload words are stored unconditionally,
+// a Point's landing in slack the next record overwrites, and only a payload beyond them takes the loop. Words past
+// `readable` read as zero. Returns the values written.
+inline uint32_t spsc_point(
+    const uint32_t* p, uint32_t readable, uint32_t n, const SpscLaneConsts& c, uint8_t* dst, uint64_t* values) {
     constexpr int kTs = kSpscDataFormat.ts_lo;
     constexpr int kPayload = kSpscDataFormat.words;
     const uint32_t elems = (n + 1u) >> 1;
-    uint64_t* const pay = reinterpret_cast<uint64_t*>(dst + kSpscRecBytes);
     const simde__m256i lane_idx = spsc_lane_idx();
     // The head and payload words 0-4 of the packet, the payload lanes zeroed past the count and past readable.
     const uint32_t words = std::min(readable, static_cast<uint32_t>(kPayload) + n);
@@ -799,21 +789,21 @@ inline uint32_t spsc_point(const uint32_t* p, uint32_t readable, uint32_t n, con
         reinterpret_cast<const int*>(p),
         simde_mm256_cmpgt_epi32(simde_mm256_set1_epi32(static_cast<int>(words)), lane_idx));
     const simde__m256i head = simde_mm256_blend_epi32(
-        simde_mm256_blend_epi32(
-            simde_mm256_permutevar8x32_epi32(
-                simde_mm256_and_si256(l, simde_mm256_setr_epi32(0x07FFFFFF, -1, -1, -1, -1, -1, -1, -1)),
-                simde_mm256_setr_epi32(kTs, 0, 0, 0, 0, 0, 0, 0)),
-            c.point_half,
-            0xEE),
-        simde_mm256_set1_epi64x(static_cast<long long>(elems)),
-        0x0C);
-    simde_mm256_storeu_si256(reinterpret_cast<simde__m256i*>(dst), head);
-    simde_mm_storeu_si128(reinterpret_cast<simde__m128i*>(dst + 32), c.tail);
-    // Elements 0-1 from the packet's first four payload words, high word first.
-    simde_mm256_storeu_si256(
-        reinterpret_cast<simde__m256i*>(pay),
         simde_mm256_permutevar8x32_epi32(
-            l, simde_mm256_setr_epi32(kPayload + 1, kPayload, kPayload + 3, kPayload + 2, 0, 0, 0, 0)));
+            simde_mm256_and_si256(
+                l, simde_mm256_setr_epi32(static_cast<int>(PP_LOW27_MASK), -1, -1, -1, -1, -1, -1, -1)),
+            simde_mm256_setr_epi32(kTs, 0, 0, 0, 0, 0, 0, 0)),
+        c.shared,
+        0xFA);
+    simde_mm256_storeu_si256(reinterpret_cast<simde__m256i*>(dst), head);
+    simde_mm_storeu_si128(
+        reinterpret_cast<simde__m128i*>(dst + kSpscSharedBytes),
+        simde_mm_set_epi64x(reinterpret_cast<long long>(values), static_cast<long long>(elems)));
+    // Elements 0-1 from the packet's first four payload words, high word first.
+    simde_mm_storeu_si128(
+        reinterpret_cast<simde__m128i*>(values),
+        simde_mm256_castsi256_si128(simde_mm256_permutevar8x32_epi32(
+            l, simde_mm256_setr_epi32(kPayload + 1, kPayload, kPayload + 3, kPayload + 2, 0, 0, 0, 0))));
     if (__builtin_expect(n > 4u, 0)) {
         const uint32_t pw = readable > static_cast<uint32_t>(kPayload) ? std::min(readable - kPayload, n) : 0u;
         for (uint32_t k = 4; k < n; k += 8) {
@@ -822,7 +812,7 @@ inline uint32_t spsc_point(const uint32_t* p, uint32_t readable, uint32_t n, con
                 reinterpret_cast<const int*>(p + kPayload + k),
                 simde_mm256_cmpgt_epi32(simde_mm256_set1_epi32(static_cast<int>(left)), lane_idx));
             simde_mm256_storeu_si256(
-                reinterpret_cast<simde__m256i*>(pay + k / 2),
+                reinterpret_cast<simde__m256i*>(values + k / 2),
                 simde_mm256_permutevar8x32_epi32(pl, simde_mm256_setr_epi32(1, 0, 3, 2, 5, 4, 7, 6)));
         }
     }
