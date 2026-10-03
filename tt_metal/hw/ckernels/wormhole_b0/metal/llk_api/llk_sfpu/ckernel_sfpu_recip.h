@@ -20,7 +20,7 @@ namespace sfpu {
 // max_iter = 1: sufficient for bfloat16/float16 precision (≤0.5 ulps).
 // max_iter = 0: this has the same effect as max_iter=1 at the moment;
 //               it may be replaced with a cheaper approximation in future.
-template <int max_iter = 2>
+template <int max_iter = 2, bool round_to_bf16 = false>
 sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
     // Combines the sign and exponent of -1.0 with the mantissa of `in`.
     // Scale the input value to the range [1.0, 2.0), and make it negative.
@@ -38,10 +38,10 @@ sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
     // For efficiency and handling of x = ±0 and x = ±inf, we set scale.Exp = 255-in.Exp = ~in.Exp.
     // This is efficiently computed with a single SFPNOT, followed by SFPSETMAN to clear the mantissa at the next
     // opportunity.
-    // The sign doesn't matter as we set the output sign to match the input at the end.
+    // SFPNOT also flips the sign; multiplying by -0.5 below restores it.
     // Not only is 255-in.Exp more efficient via SFPNOT, but it also ensures
     // that in.Exp == 0 results in ±inf, and in.Exp == 255 results in ±0.
-    // See the scale factor adjustment via scale*0.5 below for further details.
+    // See the scale factor adjustment via scale*(-0.5) below for further details.
     sfpi::vUInt scale_bits = ~sfpi::as<sfpi::vUInt>(in);
 
     // Continue with quadratic estimate.
@@ -53,11 +53,11 @@ sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
     // First iteration of Newton-Raphson: t = 1.0 - x*y.
     sfpi::vFloat t = 1.0f + negative_x * y;
 
-    // Scale factor adjustment: scale = scale*0.5.
-    // If scale = ±inf, then scale*0.5 = ±inf and scale.Exp=255.
-    // If scale = ±0, then scale*0.5 = 0 and scale.Exp=0.
+    // Scale factor adjustment: halve the magnitude and restore the input sign.
+    // If scale = ±inf, then scale*(-0.5) = ∓inf and scale.Exp=255.
+    // If scale = ±0, then scale*(-0.5) = 0 and scale.Exp=0.
     // Otherwise, scale.Exp = scale.Exp-1 = 255-in.Exp-1 = 254-in.Exp.
-    scale *= 0.5f;
+    scale *= -0.5f;
 
     // Continue Newton-Raphson: y = y + y*t.
     y = y + y * t;
@@ -68,7 +68,16 @@ sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
         y = y + y * t;
     }
 
-    // Apply scaling factor, and set sign to match input.
+    if constexpr (round_to_bf16) {
+        // Round before scaling: for in == +/-2**126, an unrounded value
+        // just below 1 would otherwise underflow to zero instead of giving
+        // +/-2**-126. Power-of-two scaling preserves BF16 precision.
+        y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
+    }
+
+    // Apply scaling factor and restore the sign, including for zero results.
+    // Wormhole multiplication discards the sign of zero. Preserve it here
+    // even when a subsequent BF16 pack currently discards it again.
     y = y * scale;
     y = sfpi::copysgn(y, in);
 
@@ -87,8 +96,7 @@ inline void _calculate_reciprocal_internal_(const int iterations) {
         } else if constexpr (is_fp32_dest_acc_en) {
             out = sfpu_reciprocal_iter<2>(in);
         } else {
-            out = sfpu_reciprocal_iter<1>(in);
-            out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
+            out = sfpu_reciprocal_iter<1, true>(in);
         }
         sfpi::dst_reg[0] = out;
         sfpi::dst_reg++;
@@ -102,11 +110,13 @@ sfpi_inline vFloat sfpu_reciprocal(const vFloat in) {
 
 template <bool APPROXIMATE = false>
 sfpi_inline void sfpu_reciprocal_init() {
-    // The polynomial y = k2 - k1*x + k0*x**2 minimises the maximum
-    // relative error for 1/x over the interval [1,2), via Sollya.
-    sfpi::vConstFloatPrgm0 = 0.3232325017452239990234375f;
-    sfpi::vConstFloatPrgm1 = 1.4545459747314453125f;
-    sfpi::vConstFloatPrgm2 = 2.121212482452392578125f;
+    // Fit y = k2 - k1*x + k0*x**2 over [1,2), constraining the one-step
+    // Newton result to the correct BF16 rounding intervals. With Wormhole
+    // FMA semantics, all 128 normalized BF16 inputs round correctly after
+    // one step; two steps remain faithful for all FP32 mantissas (<0.890 ULP).
+    sfpi::vConstFloatPrgm0 = 0.32133400440216064453125f;
+    sfpi::vConstFloatPrgm1 = 1.4514148235321044921875f;
+    sfpi::vConstFloatPrgm2 = 2.1200883388519287109375f;
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
