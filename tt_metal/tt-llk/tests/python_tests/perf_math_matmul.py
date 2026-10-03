@@ -197,6 +197,10 @@ ALL_TEST_PARAMS = list(
 )
 
 
+# Experiment (not for merge): selected configs only.
+_SELECT = [237, 239, 267, 353, 474, 1100, 1346, 1355, 1422, 1440, 1790, 1978, 2312, 2390, 2724, 2860, 2924, 3468, 3632, 3636, 3784, 3928, 3992, 3998, 4054, 4091, 4114, 4176, 4724, 4812, 5206, 5238, 5344, 5403, 5596, 6129, 6147, 6452, 6472, 6604, 6606, 6972, 7841, 8088, 8598, 8974, 9091, 10138, 10338, 10776, 10976, 11213, 11439, 11442, 12507, 12708, 13065, 13107, 13320, 13736]
+ALL_TEST_PARAMS = [ALL_TEST_PARAMS[_i] for _i in _SELECT]
+
 @pytest.mark.perf
 @pytest.mark.parametrize(
     "math_fidelity,matmul_config,throttle,num_blocks", ALL_TEST_PARAMS
