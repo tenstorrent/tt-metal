@@ -19,6 +19,9 @@
 
 using namespace ckernel;
 
+// Reuse direction (ct_dim >= rt_dim) the math MOP was programmed for; written and read only under LLK asserts.
+inline bool math_matmul_init_reuse_a = true;
+
 /**
  * @brief Program the matmul address-mod slots for the given tile shapes, transpose, and fidelity.
  *
@@ -684,6 +687,7 @@ inline void _llk_math_matmul_init_(
     {
         matmul_configure_mop<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
+    LLK_ASSERT_BLOCK(math_matmul_init_reuse_a = (ct_dim >= rt_dim));
     math::reset_counters(p_setrwc::SET_ABD_F);
 
     // Matmul never sets the Src zero-substitution flag itself, so
@@ -738,6 +742,7 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
     const std::uint32_t t_dim    = reuse_a ? rt_dim : ct_dim;
     const std::uint32_t rut_dim  = reuse_a ? ct_dim : rt_dim; // reuse-dim
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
+    LLK_ASSERT(reuse_a == math_matmul_init_reuse_a, "matmul: ct_dim >= rt_dim differs from the init's; re-init for a block of the other reuse direction");
 
     for (std::uint32_t t = 0; t < t_dim; t++)
     {

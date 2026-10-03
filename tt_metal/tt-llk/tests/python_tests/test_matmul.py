@@ -4,11 +4,13 @@
 from typing import List
 
 import torch
+from conftest import skip_for_wormhole
 from helpers.device import BootMode
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.llk_params import (
     DestAccumulation,
+    DestSync,
     MathFidelity,
     PerfRunType,
     Transpose,
@@ -165,6 +167,107 @@ def test_matmul(
         ),
         dest_acc=dest_acc,
         boot_mode=boot_mode,
+    )
+
+    res_from_L1 = configuration.run().result
+
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golden tensor are not of the same length"
+
+    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+
+    assert passed_test(
+        golden_tensor, res_tensor, formats.output_format
+    ), "Assert against golden failed"
+
+
+# Full-sync DEST blocks with rows of more than 8 streamed tiles, run in both config contexts (kt_dim 2): the unpack
+# MOP's zmask must cover the whole row.
+FULL_SYNC_FORMATS = input_output_formats(
+    [DataFormat.Float16_b, DataFormat.Bfp8_b], same=True
+)
+FULL_SYNC_BLOCKS = [
+    ((rt * 32, kt * 32), (kt * 32, ct * 32))
+    for rt, ct, kt in [(1, 16, 2), (16, 1, 2), (2, 8, 2), (8, 2, 2), (4, 4, 2)]
+]
+
+
+# Wormhole's unpack AB matmul MOP zmask covers 8 tiles in config context 1, short of the 16-tile rows here.
+@skip_for_wormhole
+@parametrize(
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2],
+    formats=FULL_SYNC_FORMATS,
+    dims=FULL_SYNC_BLOCKS,
+)
+def test_matmul_full_sync(math_fidelity, formats, dims):
+    torch_format = format_dict[formats.output_format]
+    input_A_dimensions = list(dims[0])
+    input_B_dimensions = list(dims[1])
+
+    sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_A_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_B_dimensions,
+        spec_A=sfpu_false_spec,
+        spec_B=sfpu_false_spec,
+    )
+
+    matmul_dims = generate_tile_dims((input_A_dimensions, input_B_dimensions))
+
+    generate_golden = get_golden_generator(MatmulGolden)
+    golden_tensor = generate_golden(
+        src_A,
+        src_B,
+        formats.output_format,
+        math_fidelity,
+        input_A_dimensions=input_A_dimensions,
+        input_B_dimensions=input_B_dimensions,
+        tilize=True,
+        input_A_format=formats.input_format,
+        input_B_format=formats.input_format,
+    )
+
+    if formats.input_format != DataFormat.Bfp8_b:
+        tilized_A = tilize_block(
+            src_A, dimensions=input_A_dimensions, stimuli_format=formats.input_format
+        )
+        tilized_B = tilize_block(
+            src_B, dimensions=input_B_dimensions, stimuli_format=formats.input_format
+        )
+    else:
+        tilized_A = src_A
+        tilized_B = src_B
+
+    configuration = TestConfig(
+        "sources/matmul_test.cpp",
+        formats,
+        templates=[
+            MATH_FIDELITY(math_fidelity),
+            PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
+            DEST_SYNC(DestSync.Full),
+            THROTTLE_LEVEL(),
+        ],
+        runtimes=[
+            NUM_FACES(),
+            TILE_COUNT(matmul_dims.output_tile_cnt),
+            CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
+            LOOP_FACTOR(1),
+            UNPACK_TRANS_FACES(Transpose.No),
+        ],
+        variant_stimuli=StimuliConfig(
+            tilized_A.flatten(),
+            formats.input_format,
+            tilized_B.flatten(),
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=matmul_dims.output_tile_cnt,
+        ),
+        dest_acc=DestAccumulation.No,
     )
 
     res_from_L1 = configuration.run().result

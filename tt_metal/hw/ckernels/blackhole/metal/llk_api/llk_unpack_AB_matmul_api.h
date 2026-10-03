@@ -15,7 +15,9 @@
 // Unified cores, shared by the CB-id API below and the LLKOperand API (experimental/2_0/). Matmul unpack is
 // FORMAT-FREE at the op level (src/dst formats are programmed at compute_kernel_hw_startup<SrcOrder::Reverse>),
 // so the cores take only the already-resolved geometry (face_r_dim / num_faces / partial_face per src) +
-// runtime addresses + per-tile sizes. The role swap (in0 -> SrcB, in1 -> SrcA) is applied by the callers.
+// runtime addresses + per-tile sizes; the init core also takes stream_narrow, which the callers derive from the
+// operands' L1 formats with _llk_unpack_AB_matmul_stream_narrow_ (an 8-bit streamed operand is streamed at its
+// data rate). The role swap (in0 -> SrcB, in1 -> SrcA) is applied by the callers.
 inline void llk_unpack_AB_matmul_init_impl(
     const std::uint32_t transpose,
     const std::uint32_t ct_dim,
@@ -26,7 +28,8 @@ inline void llk_unpack_AB_matmul_init_impl(
     const std::uint32_t unpA_num_faces,
     const std::uint32_t unpB_num_faces,
     const bool partial_face_a,
-    const bool partial_face_b) {
+    const bool partial_face_b,
+    const bool stream_narrow) {
     _llk_unpack_AB_matmul_init_(
         transpose,
         ct_dim,
@@ -37,7 +40,8 @@ inline void llk_unpack_AB_matmul_init_impl(
         unpA_num_faces,
         unpB_num_faces,
         partial_face_a,
-        partial_face_b);
+        partial_face_b,
+        stream_narrow);
 }
 
 inline void llk_unpack_AB_matmul_impl(
@@ -134,7 +138,9 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         unpA_num_faces,
         unpB_num_faces,
         partial_face_a,
-        partial_face_b);
+        partial_face_b,
+        _llk_unpack_AB_matmul_stream_narrow_(
+            ct_dim, rt_dim, unpack_src_format[operandA_id], unpack_src_format[operandB_id]));
 }
 
 inline void llk_unpack_AB_matmul(

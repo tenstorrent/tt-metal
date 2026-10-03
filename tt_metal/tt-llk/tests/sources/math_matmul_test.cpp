@@ -52,6 +52,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_B           = params.buffer_B;
 #endif
 
+#ifdef ARCH_BLACKHOLE
+    // an 8-bit streamed operand is streamed at its data rate (Wormhole's init has no such argument)
+    const bool stream_narrow = _llk_unpack_AB_matmul_stream_narrow_(CT_DIM, RT_DIM, formats.unpack_A_src, formats.unpack_B_src);
+#define MATMUL_STREAM_NARROW_ARG(narrow) , narrow
+#else
+#define MATMUL_STREAM_NARROW_ARG(narrow)
+#endif
+
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -72,10 +80,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             KT_DIM,
             in1_tile_r_dim < FACE_R_DIM ? in1_tile_r_dim : FACE_R_DIM,
             in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM,
-            num_faces_B,     // in1
-            num_faces_A,     // in0
-            PARTIAL_FACE_B,  // in1
-            PARTIAL_FACE_A); // in0
+            num_faces_B,    // in1
+            num_faces_A,    // in0
+            PARTIAL_FACE_B, // in1
+            PARTIAL_FACE_A  // in0
+                MATMUL_STREAM_NARROW_ARG(stream_narrow));
         PROFILER_SYNC();
     }
     {
