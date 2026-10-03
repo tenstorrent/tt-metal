@@ -43,13 +43,19 @@ sfpi_inline sfpi::vInt _float_to_int32_for_exp_21f_(sfpi::vFloat val) {
 
 /*
  * Unsafe core of BF16 21f exp: skips the xlog2 clamp present in
- * _sfpu_exp_21f_bf16_. The caller MUST ensure `val * (1/ln2) + 127`
- * stays in [0, 256) (roughly val ∈ [-88.0, 88.7]) — otherwise the
- * implicit float→int conversion in _float_to_int32_for_exp_21f_ can
- * wrap and produce garbage.
+ * _sfpu_exp_21f_bf16_. The caller MUST ensure `val * (1/ln2) + 127 -
+ * EXP2_DOWNSCALE` stays in [0, 256) — otherwise the implicit float→int
+ * conversion in _float_to_int32_for_exp_21f_ can wrap and produce garbage.
+ * At the default EXP2_DOWNSCALE that is roughly val ∈ [-88.0, 88.7].
  *
- * Use this variant when the caller has already clamped its input (e.g. i1's
- * asymptotic path operates on |x| ∈ [10, 88.5]).
+ * EXP2_DOWNSCALE returns exp(val) / 2^EXP2_DOWNSCALE rather than exp(val). It
+ * folds into the bias constant, so it costs no instruction: it shifts the
+ * result's exponent and moves the admissible input range by the same amount.
+ * The smaller bias can round the add differently, so a result may move by one
+ * BF16 step (i1 at |x| = 14.5, towards the exact value). A caller whose final
+ * value fits FP32 but whose exp() intermediate would not uses it and multiplies
+ * the exact power of two back in at the end — see i1's asymptotic path, where
+ * exp(|x|) leaves FP32 3.16 of domain before i1 itself does.
  *
  * The overload taking c0, c1 and c2 is for a caller that evaluates it once per element
  * (e.g. logaddexp): it can load the fractional-part coefficients once, before its loop.
@@ -59,16 +65,16 @@ sfpi_inline sfpi::vInt _float_to_int32_for_exp_21f_(sfpi::vFloat val) {
  * passes floats, compiles exactly as it did before.
  *
  * @param val The input value, must be in the safe range described above.
- * @return sfpi::vFloat Result of exp(val), 21-bit accuracy (~3 FP32 ULP).
+ * @return sfpi::vFloat exp(val) / 2^EXP2_DOWNSCALE, 21-bit accuracy (~3 FP32 ULP).
  */
 constexpr float EXP_21F_BF16_C0 = 1.0017248f;
 constexpr float EXP_21F_BF16_C1 = 7.839635491371155e-08f;
 constexpr float EXP_21F_BF16_C2 = 4.791750143340323e-15f;
 
-template <bool is_fp32_dest_acc_en, typename C0, typename C1, typename C2>
+template <bool is_fp32_dest_acc_en, int EXP2_DOWNSCALE = 0, typename C0, typename C1, typename C2>
 sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val, C0 c0, C1 c1, C2 c2) {
     constexpr float ONE_LN2 = 1.4426950216293334961f;
-    sfpi::vFloat xlog2 = (val * ONE_LN2 + 127.f);
+    sfpi::vFloat xlog2 = (val * ONE_LN2 + (127.f - EXP2_DOWNSCALE));
 
     sfpi::vFloat z = sfpi::as<sfpi::vFloat>(_float_to_int32_for_exp_21f_(xlog2));
 
@@ -96,9 +102,10 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val, C0 c0, C1 
     return y;
 }
 
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, int EXP2_DOWNSCALE = 0>
 sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
-    return _sfpu_exp_21f_bf16_unsafe_<is_fp32_dest_acc_en>(val, EXP_21F_BF16_C0, EXP_21F_BF16_C1, EXP_21F_BF16_C2);
+    return _sfpu_exp_21f_bf16_unsafe_<is_fp32_dest_acc_en, EXP2_DOWNSCALE>(
+        val, EXP_21F_BF16_C0, EXP_21F_BF16_C1, EXP_21F_BF16_C2);
 }
 
 /*
@@ -359,8 +366,14 @@ sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vIn
 // Non-finite behaviour of the guarded form (unsafe = false), measured on Blackhole silicon:
 //   +-NaN (either sign, quiet or signalling) -> NaN    +Inf -> +Inf    -Inf -> +0
 // unsafe = true drops both guards and preserves none of this.
-template <bool unsafe = false>
+//
+// EXP2_DOWNSCALE returns exp(a) / 2^EXP2_DOWNSCALE. It is one integer add on the
+// exponent recombination below, so it is exact; see _sfpu_exp_21f_bf16_unsafe_
+// for why a caller wants it. Only the unsafe path takes it: the safe path's
+// overflow test is written against an unscaled exponent.
+template <bool unsafe = false, int EXP2_DOWNSCALE = 0>
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
+    static_assert(unsafe || EXP2_DOWNSCALE == 0, "EXP2_DOWNSCALE requires the unsafe path");
     sfpi::vInt i, e;
     sfpi::vFloat f, r, j, y;
     sfpi::vSMag16 sm;
@@ -388,8 +401,15 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     r = y * f + 1.0f;
 
     if constexpr (unsafe) {
-        // y = 2**i * r
+        // y = 2**(i - EXP2_DOWNSCALE) * r
         e = sfpi::exexp(r, sfpi::ExponentMode::Biased) + i;
+        // Guarded rather than written as `+ (i - EXP2_DOWNSCALE)`: at the default
+        // of 0 that spelling still perturbs codegen (measured: +32 bytes of .text
+        // in tanhshrink, the only other caller of the unsafe path), and the point
+        // of the default is to leave every existing caller byte-identical.
+        if constexpr (EXP2_DOWNSCALE != 0) {
+            e = e - EXP2_DOWNSCALE;
+        }
         y = sfpi::setexp(r, e);
     } else {
         // overflow: y = infinity or NaN
@@ -412,8 +432,9 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     return y;
 }
 
+template <int EXP2_DOWNSCALE = 0>
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) {
-    return _sfpu_exp_fp32_accurate_<true>(x);
+    return _sfpu_exp_fp32_accurate_<true, EXP2_DOWNSCALE>(x);
 }
 
 template <bool is_fp32_dest_acc_en>

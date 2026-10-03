@@ -480,9 +480,12 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.I0: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-3.75, high=3.75)
     ),
-    # i1: modified Bessel I1; poly path valid on |x| <= ~3.75 (asymptotic beyond)
+    # i1: two-region kernel (rational |x| <= 10, asymptotic beyond, +/-inf past 91.90626).
+    # A Float32 draw just below 91.90626 can round to inf on the device while the golden
+    # stays finite, so the draws stop at 91.5, the largest bfloat16 below that point, and
+    # the overflow is probed at fixed points in _OP_EDGE_POINTS instead.
     MathOperation.I1: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-3.75, high=3.75)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-91.5, high=91.5)
     ),
     # erf / erfc: span both tails and the transition through 0
     MathOperation.Erf: OperandSpecs(
@@ -1796,6 +1799,11 @@ _OP_EDGE_POINTS: Dict[MathOperation, Tuple[float, ...]] = {
     # rather than picking up the odd-integer sign flip; 2**0 is the matching positive
     # control. Crossed with Operand.B's zero encodings in _OP_OPERAND_EDGE_POINTS.
     MathOperation.SfpuElwpow: (-2.0, 2.0),
+    # i1 leaves FP32 at +/-91.90626 and the kernel clamps at +/-92, so the result must be
+    # +/-inf at the clamp and above it, and finite at +/-91.5, the largest bfloat16 below the
+    # overflow. Exact in bfloat16. +/-inf itself is a cat B special, which I1 cannot take
+    # while it is outside SPECIALS_READY_OPS.
+    MathOperation.I1: (-95.0, -92.0, -91.5, 91.5, 92.0, 95.0),
 }
 
 

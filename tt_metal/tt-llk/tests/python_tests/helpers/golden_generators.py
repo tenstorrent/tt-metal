@@ -3391,14 +3391,16 @@ class UnarySFPUGolden:
         )
 
     def _i1_bessel(self, x):
-        # Modified Bessel I1; the kernel poly approx is valid on |x| <= ~3.75. Same torch
-        # limitation as _i0, with the sign kept: I1 is odd, so I1(+/-inf) = +/-inf. I1 stays
-        # outside SPECIALS_READY_OPS because the kernel saturates a non-finite input.
+        # Modified Bessel I1; two-region kernel: rational |x| <= 10, asymptotic beyond. Same
+        # torch limitation as _i0, with the sign kept: I1 is odd, so I1(+/-inf) = +/-inf. I1
+        # stays outside SPECIALS_READY_OPS because the kernel returns +inf for a NaN input.
         if math.isnan(x):
             return x
         if math.isinf(x):
             return math.copysign(self.handle_infinite_numbers(math.inf), x)
-        return self._torch_unary(x, torch.special.i1)
+        # In float64: torch's float32 i1 overflows its exp() at |x| = 88.72, before i1
+        # leaves FP32 at 91.90626.
+        return self._torch_unary(x, lambda t: torch.special.i1(t.double()).float())
 
     def _sign(self, x):
         # Matches calculate_sign: -1 for x<0, 0 for x==0, +1 otherwise.
