@@ -179,6 +179,7 @@ def run_exp_ring_joint_sdpa_nightly(
     num_buffers_per_channel=32,
     max_payload_size=8192,
     mesh_device=None,
+    program_config_kwargs=None,
 ):
     """
     Run exp_ring_joint_scaled_dot_product_attention and verify accuracy or determinism.
@@ -373,6 +374,7 @@ def run_exp_ring_joint_sdpa_nightly(
             q_chunk_size=q_chunk_size,
             k_chunk_size=k_chunk_size,
             exp_approx_mode=False,
+            **(program_config_kwargs or {}),
         )
 
         compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -1001,3 +1003,22 @@ def test_exp_ring_joint_attention_perf_check(ring_size_expected, max_payload_siz
         f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
         f"(expected {expected_util:.2f}%, margin +/- {EXP_RING_JOINT_PERF_MARGIN*100:.1f}%)"
     )
+
+
+@pytest.mark.skipif(len(TEST_CONFIGS) == 0, reason="No valid device configuration detected")
+def test_exp_ring_joint_attention_rejects_phase_fidelity(expect_error):
+    """The exp ring kernel runs at the compute kernel config's fidelity, so SDPAProgramConfig's per-phase knobs are
+    refused instead of silently ignored."""
+    b, nh, total_seq, d, q_chunk_size, k_chunk_size = TEST_CONFIGS[0]
+    with expect_error(RuntimeError, "does not support qk_math_fidelity / pv_math_fidelity"):
+        run_exp_ring_joint_sdpa_nightly(
+            b,
+            nh,
+            total_seq,
+            d,
+            q_chunk_size,
+            k_chunk_size,
+            ttnn.bfloat16,
+            do_check=False,
+            program_config_kwargs={"pv_math_fidelity": ttnn.MathFidelity.LoFi},
+        )

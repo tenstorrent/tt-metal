@@ -93,6 +93,8 @@ void kernel_main() {
     // through cb_kv_pad_derived from the reader; the compile-time values are the placeholder's.
     constexpr bool has_logical_n_tensor = get_compile_time_arg_val(47) == 1;
     constexpr bool has_logical_l_tensor = get_compile_time_arg_val(48) == 1;
+    constexpr uint32_t matmul_fidelity =
+        get_compile_time_arg_val(49);  // per-phase matmul fidelity, compute_streaming.hpp
     constexpr bool has_logical_length_tensor = has_logical_n_tensor || has_logical_l_tensor;
     uint32_t logical_lt = logical_lt_compile;
     constexpr uint32_t v_cb_physical_width_t = v_shares_k_buffer ? DHt : vDHt;
@@ -175,9 +177,10 @@ void kernel_main() {
 
     // Compute fixed slot 39: trace-safe KV-pad derivation flag. Slots 40/41 are the sharded-joint scalars
     // (joint_is_sharded, logical_lt); the rank mapping (42-45), the bounded sliding KV slab count (46), and
-    // the logical-length transport flags (47-48) are declared above, so the CB block starts at 49.
+    // the logical-length transport flags (47-48) and the matmul fidelity (49) are declared above, so the CB block
+    // starts at 50.
     constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(39) == 1;
-    constexpr uint32_t cb_arg_offset = 49;
+    constexpr uint32_t cb_arg_offset = 50;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -596,7 +599,8 @@ void kernel_main() {
                 has_gathered_joint_k,
                 Lt_local,
                 rotated_q_split_enabled,
-                dense_causal_skip>(
+                dense_causal_skip,
+                matmul_fidelity>(
                 // Rotated: iterate [0, my_count) as POSITIONS, each mapped to its flat chunk id via
                 // the fixed base range or moving remainder ID. Static: [start, end) is already flat.
                 rotated_q_split_enabled ? 0u : global_q_start,

@@ -29,6 +29,10 @@ struct SDPAProgramConfig {
     // running sum spans the whole prefix. Ignored where K is split; the op refuses it when a core would hold several
     // Q chunks (raise q_chunk_size).
     bool segmented_accumulation = false;
+    // Streaming compute (SDPA and ring joint): the QK^T matmul's and the softmax @ V matmul's own fidelity; on the
+    // ring joint op each takes precedence over matmul_math_fidelity for its phase.
+    std::optional<tt::tt_metal::MathFidelity> qk_math_fidelity;
+    std::optional<tt::tt_metal::MathFidelity> pv_math_fidelity;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and

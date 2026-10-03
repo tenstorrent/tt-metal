@@ -20,6 +20,7 @@ from ....utils.mochi import get_rot_transformation_mat
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 from .agmm_config import agmm_block_size
+from .quant_config import math_fidelity_from_env
 
 
 def rope_channel_permutation(head_dim: int, rotary_dim: int) -> torch.Tensor:
@@ -201,9 +202,12 @@ class MiniMaxH3Attention(Module):
         )
         self._exp_sdpa_program_configs: dict[int, ttnn.SDPAProgramConfig | None] = {}
 
+        sdpa_fidelity = ttnn.MathFidelity.HiFi2
+        if self.use_ring:
+            sdpa_fidelity = math_fidelity_from_env("MINIMAX_H3_SDPA_FIDELITY") or sdpa_fidelity
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=sdpa_fidelity,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
         )
@@ -304,11 +308,26 @@ class MiniMaxH3Attention(Module):
             grid = (
                 ttnn.CoreCoord(*self.sdpa_worker_grid) if ring else ttnn.CoreCoord(self.full_grid.x, self.full_grid.y)
             )
+            phase_fidelity = {}
+            if ring:
+                for field, var in (
+                    ("qk_math_fidelity", "MINIMAX_H3_SDPA_QK_FIDELITY"),
+                    ("pv_math_fidelity", "MINIMAX_H3_SDPA_PV_FIDELITY"),
+                ):
+                    fidelity = math_fidelity_from_env(var)
+                    if fidelity is not None:
+                        phase_fidelity[field] = fidelity
+                if len(phase_fidelity) == 2:
+                    raise ValueError(
+                        "set at most one of MINIMAX_H3_SDPA_QK_FIDELITY and MINIMAX_H3_SDPA_PV_FIDELITY; "
+                        "MINIMAX_H3_SDPA_FIDELITY changes both phases"
+                    )
             self._sdpa_program_configs[key] = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=grid,
                 q_chunk_size=q_chunk,
                 k_chunk_size=k_chunk,
                 exp_approx_mode=False,  # NOTE: False is more correct
+                **phase_fidelity,
             )
         return self._sdpa_program_configs[key]
 
