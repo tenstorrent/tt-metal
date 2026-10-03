@@ -18,10 +18,15 @@ inline __attribute__((always_inline)) void fill_with_val_async(
     const uint32_t begin_addr_aligned,
     uint32_t size_nbytes,
     uint32_t chunk_nbytes,
-    uint16_t pad_value) {
+    uint32_t pad_value_packed) {
+    // The packed word holds a 32-bit element's own pattern or two copies of a 16-bit one. A 32-bit element
+    // starts 4-byte aligned, so each address takes the half that belongs there (little endian); for a
+    // 16-bit dtype both halves are the same value.
+    const uint16_t pad_value_lo = pad_value_packed & 0xFFFF;
+    const uint16_t pad_value_hi = pad_value_packed >> 16;
     uint32_t curr_addr = begin_addr;
     while (curr_addr < begin_addr_aligned && size_nbytes > 0) {
-        reinterpret_cast<uint16_t*>(curr_addr)[0] = pad_value;
+        reinterpret_cast<uint16_t*>(curr_addr)[0] = (curr_addr & 0x2) ? pad_value_hi : pad_value_lo;
         curr_addr += 2;
         size_nbytes -= 2;
     }
@@ -65,8 +70,6 @@ void kernel_main() {
 
     const auto s_const = TensorAccessor(tensor::pad_value);
 
-    uint16_t pad_value = pad_value_packed >> 16;
-
     uint32_t src_stick_id = start_src_stick_id;
     for (uint32_t w = 0; w < num_local_W; ++w) {
         for (uint32_t z = 0; z < num_total_Z; ++z) {
@@ -76,7 +79,13 @@ void kernel_main() {
                 if (y >= num_local_unpadded_Y || z >= num_unpadded_Z || w >= num_unpadded_W) {
                     // this is fully padding
                     fill_with_val_async(
-                        noc, s_const, l1_addr, l1_addr, padded_X_nbytes, pad_value_const_buffer_nbytes, pad_value);
+                        noc,
+                        s_const,
+                        l1_addr,
+                        l1_addr,
+                        padded_X_nbytes,
+                        pad_value_const_buffer_nbytes,
+                        pad_value_packed);
                 } else {
                     // this is a data row possibly with padding at end
                     CoreLocalMem<uint32_t> dst(l1_addr);
@@ -94,7 +103,7 @@ void kernel_main() {
                         l1_addr_partial + l1_addr_align_offset,
                         padded_X_diff_nbytes,
                         pad_value_const_buffer_nbytes,
-                        pad_value);
+                        pad_value_packed);
                     ++src_stick_id;
                 }
                 noc.async_read_barrier();
