@@ -793,13 +793,18 @@ std::vector<ComplexTensor> div_bw(
     const ComplexTensor& other,
     const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor_res;
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+    // Both zero tests run as operand activations of the logical_and, one dispatch instead of three.
+    const std::array is_zero = {EltwiseUnaryWithParam{UnaryOpType::EQZ}};
     Tensor condition_nan = ttnn::logical_and(
-        ttnn::eqz(other.real(), output_mem_config),
-        ttnn::eqz(other.imag(), output_mem_config),
-        std::nullopt,
-        output_mem_config);
-    ComplexTensor grad_a =
-        ttnn::operations::complex_binary::divide(grad_tensor, ttnn::conj(other, output_mem_config), output_mem_config);
+        other.real(), other.imag(), std::nullopt, output_mem_config, std::nullopt, {}, is_zero, is_zero);
+    // Complex divide is multiply-by-reciprocal, and all three divisions below divide by
+    // `other`. The reciprocal of a conjugate is the conjugate of the reciprocal -- the
+    // denominator a*a + b*b is the same either way -- so one reciprocal serves all three.
+    const ComplexTensor recip_other = ttnn::reciprocal(other, output_mem_config);
+    ComplexTensor grad_a = ttnn::operations::complex_binary::multiply(
+        grad_tensor, ttnn::conj(recip_other, output_mem_config), output_mem_config);
     Tensor grad_a_r = where(condition_nan, std::nanf(""), ttnn::real(grad_a, output_mem_config), output_mem_config);
     Tensor grad_a_i = where(condition_nan, std::nanf(""), ttnn::imag(grad_a, output_mem_config), output_mem_config);
     grad_a = ComplexTensor({grad_a_r, grad_a_i});
@@ -811,8 +816,10 @@ std::vector<ComplexTensor> div_bw(
     ComplexTensor grad_b = ttnn::operations::complex_binary::multiply(
         neg_grad,
         ttnn::conj(
-            ttnn::operations::complex_binary::divide(
-                ttnn::operations::complex_binary::divide(input_a, other, output_mem_config), other, output_mem_config),
+            ttnn::operations::complex_binary::multiply(
+                ttnn::operations::complex_binary::multiply(input_a, recip_other, output_mem_config),
+                recip_other,
+                output_mem_config),
             output_mem_config),
         output_mem_config);
     neg_grad.deallocate();
