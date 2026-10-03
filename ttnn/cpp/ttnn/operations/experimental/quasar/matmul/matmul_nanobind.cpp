@@ -655,7 +655,8 @@ void py_module(nb::module_& mod) {
         idle). Edge C slices are clipped on read and write, so any M / N works. Every operand is addressed
         through the tensor accessor, so interleaved, L1-sharded and DRAM-sharded inputs and outputs all take
         the same kernels. The 1D, 2D and DRAM-sharded strategies are particular choices of
-        (cores, C_slice_M_tiles, C_slice_N_tiles).
+        (cores, C_slice_M_tiles, C_slice_N_tiles). Within a core the C slice's subblocks are dealt
+        round-robin to the compute threads (Quasar NEOs), which share the resident A and B slices.
 
         Limits: no fused bias (applied as a separate add) or activation, no untilize, 32x32 tiles
         only; a sharded output needs batch 1 and exactly one C slice per core.
@@ -670,7 +671,8 @@ void py_module(nb::module_& mod) {
                 std::size_t,
                 std::size_t,
                 std::size_t,
-                tt::tt_metal::ShardOrientation>(),
+                tt::tt_metal::ShardOrientation,
+                std::size_t>(),
             nb::kw_only(),
             nb::arg("cores"),
             nb::arg("C_slice_M_tiles").noconvert() = 0,
@@ -678,7 +680,8 @@ void py_module(nb::module_& mod) {
             nb::arg("K_chunk_tiles").noconvert() = 0,
             nb::arg("subblock_M_tiles").noconvert() = 0,
             nb::arg("subblock_N_tiles").noconvert() = 0,
-            nb::arg("orientation") = tt::tt_metal::ShardOrientation::ROW_MAJOR)
+            nb::arg("orientation") = tt::tt_metal::ShardOrientation::ROW_MAJOR,
+            nb::arg("num_compute_threads").noconvert() = 0)
         .def_rw("cores", &MatmulUnifiedProgramConfig::cores, R"doc(
             Cores (clusters) that take part, as a CoreRangeSet.
         )doc")
@@ -711,17 +714,23 @@ void py_module(nb::module_& mod) {
             Order the cores are walked when handing out C slices: ROW_MAJOR is x fastest, COL_MAJOR is y
             fastest. A sharded C gets this shard orientation.
         )doc")
+        .def_rw("num_compute_threads", &MatmulUnifiedProgramConfig::num_compute_threads, R"doc(
+            Compute threads per core (Quasar NEOs running the compute kernel): 1, 2 or 4. The C slice's
+            subblocks are dealt round-robin to the threads, which share the resident A and B slices.
+            0 = auto: 4 on Quasar, 1 elsewhere (Wormhole / Blackhole have one compute engine per core).
+        )doc")
         .def("__repr__", [](const MatmulUnifiedProgramConfig& config) {
             return fmt::format(
                 "MatmulUnifiedProgramConfig(cores={}, C_slice_M_tiles={}, C_slice_N_tiles={}, K_chunk_tiles={}, "
-                "subblock_M_tiles={}, subblock_N_tiles={}, orientation={})",
+                "subblock_M_tiles={}, subblock_N_tiles={}, orientation={}, num_compute_threads={})",
                 config.cores.str(),
                 config.C_slice_M_tiles,
                 config.C_slice_N_tiles,
                 config.K_chunk_tiles,
                 config.subblock_M_tiles,
                 config.subblock_N_tiles,
-                config.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR ? "ROW_MAJOR" : "COL_MAJOR");
+                config.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR ? "ROW_MAJOR" : "COL_MAJOR",
+                config.num_compute_threads);
         });
 
     ttnn::bind_function<"matmul", "ttnn.experimental.quasar.">(

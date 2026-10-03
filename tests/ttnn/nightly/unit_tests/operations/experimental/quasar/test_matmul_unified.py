@@ -2,14 +2,21 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""MatmulUnifiedProgramConfig: one placement-first matmul factory (Quasar-native matmul, stage A).
+"""MatmulUnifiedProgramConfig: one placement-first matmul factory (Quasar-native matmul, stages A and B).
 
 Every test drives the same kernels through a different (cores, C_slice_M_tiles, C_slice_N_tiles) placement and
 memory layout. Correctness is checked with allclose against an fp32 golden of the bf16-rounded inputs
 (the device runs HiFi4 here), plus exact checks with structured inputs (identity / ones / zeros), which catch
 indexing and edge-clipping errors that a statistical check would not.
 
-Run on Wormhole / Blackhole silicon (one NEO per cluster, same as Quasar in stage A):
+Compute threads (stage B): on Quasar the compute kernel runs on all four NEOs of a cluster by default
+(num_compute_threads auto = 4); the C slice's subblocks are dealt round-robin to the threads. Wormhole /
+Blackhole have one compute engine per core, so there every test runs with one thread and an explicit
+num_compute_threads > 1 is rejected; the thread-deal tests below are written so that on Quasar they cover
+uneven rounds (fewer subblocks than threads, rounds with idle threads) and on silicon they degrade to the
+one-thread parity check.
+
+Run on Wormhole / Blackhole silicon:
     pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_matmul_unified.py
 
 Run on the Quasar simulator (one config per process; a sim-side hang ignores pytest --timeout):
@@ -17,10 +24,10 @@ Run on the Quasar simulator (one config per process; a sim-side hang ignores pyt
         TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_FORCE_JIT_COMPILE=1 \\
         pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_matmul_unified.py -k <case>
 
-    craq-sim (libttsim.so of 2026-08-26) hangs on every case with more than one K block (partials through
-    cb_intermed0), for this factory and for the legacy Metal 2.0 reuse factory alike, so on the simulator
-    pick single-K-block cases (Kt <= 8 with K_chunk_tiles auto, or K_chunk_tiles = Kt). K-spill is verified on
-    silicon; the emulator is the place to confirm it on Quasar.
+    A craq-sim built from the quasar branch of 2026-09-24 or later runs every case here, including K spill
+    (partials through C_partials); the libttsim.so of 2026-08-26 hangs on every K-spill case, for this
+    factory and for the legacy Metal 2.0 reuse factory alike. The emulator is the place to confirm timing
+    on Quasar.
 """
 
 import pytest
@@ -37,6 +44,15 @@ TILE = 32
 def _grid(device):
     g = device.compute_with_storage_grid_size()
     return g.x, g.y
+
+
+def _on_quasar(device):
+    return device.arch() == ttnn.device.Arch.QUASAR
+
+
+def _skip_unless_threads_supported(device, num_compute_threads):
+    if num_compute_threads > 1 and not _on_quasar(device):
+        pytest.skip("several compute threads per core need Quasar")
 
 
 def _rect(x0, y0, x1, y1):
@@ -156,7 +172,10 @@ def test_repr_and_fields():
     cfg = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 1, 1), C_slice_M_tiles=2, C_slice_N_tiles=3, K_chunk_tiles=4)
     assert cfg.C_slice_M_tiles == 2 and cfg.C_slice_N_tiles == 3 and cfg.K_chunk_tiles == 4
     assert cfg.subblock_M_tiles == 0 and cfg.subblock_N_tiles == 0 and cfg.orientation == ROW_MAJOR
-    assert "MatmulUnifiedProgramConfig(" in repr(cfg)
+    assert cfg.num_compute_threads == 0
+    assert "MatmulUnifiedProgramConfig(" in repr(cfg) and "num_compute_threads=0" in repr(cfg)
+    cfg.num_compute_threads = 2
+    assert cfg.num_compute_threads == 2
 
 
 AUTO_C_SLICE_GRIDS = [
@@ -230,8 +249,8 @@ def test_edges_and_blocking(device, M, K, N, C_slice_M_tiles, C_slice_N_tiles, K
 
 
 def test_single_tile(device):
-    """The smallest problem: one tile, one core, 1x1 C slice; the auto subblock pads it to 8 entries,
-    all but one of which are stale and must be clipped."""
+    """The smallest problem: one tile, one core, 1x1 C slice; with one compute thread the auto subblock pads
+    it to 8 entries, all but one of which are stale and must be clipped."""
     M = K = N = TILE
     torch.manual_seed(2)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
@@ -650,6 +669,110 @@ def test_ragged_batched_spill_all_at_once(device):
     )
     out = _run(device, a, b, config, packer_l1_acc=True)
     _check(out, _golden(a, b))
+
+
+# ----------------------------------------------------------------------------------------------------
+# Compute threads (stage B): a C slice's subblocks are dealt round-robin to the NEOs of a cluster
+# ----------------------------------------------------------------------------------------------------
+
+THREAD_DEALS = [
+    # name, C slice (M, N tiles), subblock (M, N tiles), K_tiles, K_chunk_tiles. With four threads the
+    # subblock count decides the rounds: fewer subblocks than threads, a last round with idle threads,
+    # full rounds, and subblock padding; the K-spill cases send the partials through C_partials.
+    ("one_subblock", (2, 2), (2, 2), 2, 0),
+    ("two_subblocks", (2, 4), (2, 2), 2, 0),
+    ("three_subblocks", (3, 2), (1, 2), 2, 0),
+    ("five_subblocks", (5, 2), (1, 2), 2, 0),
+    ("six_subblocks", (3, 4), (1, 2), 2, 0),
+    ("eight_subblocks", (4, 4), (1, 2), 2, 0),
+    ("padded_slice_four_subblocks", (3, 3), (2, 2), 2, 0),
+    ("three_subblocks_K_spill", (3, 2), (1, 2), 4, 2),
+    ("five_subblocks_K_spill", (5, 2), (1, 2), 4, 1),
+]
+
+
+@pytest.mark.parametrize("name,C_slice,subblock,K_tiles,K_chunk_tiles", THREAD_DEALS, ids=[d[0] for d in THREAD_DEALS])
+def test_compute_thread_deal(device, name, C_slice, subblock, K_tiles, K_chunk_tiles):
+    """Four C slices over two cores (two per core, so the per-core walk runs as well), with the auto thread
+    count: four on Quasar, one elsewhere."""
+    C_slice_M_tiles, C_slice_N_tiles = C_slice
+    M, K, N = 2 * C_slice_M_tiles * TILE, K_tiles * TILE, 2 * C_slice_N_tiles * TILE
+    torch.manual_seed(5)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=_rect(0, 0, 1, 0),
+        C_slice_M_tiles=C_slice_M_tiles,
+        C_slice_N_tiles=C_slice_N_tiles,
+        K_chunk_tiles=K_chunk_tiles,
+        subblock_M_tiles=subblock[0],
+        subblock_N_tiles=subblock[1],
+    )
+    out = _run(device, a, b, config)
+    _check(out, _golden(a, b))
+
+
+@pytest.mark.parametrize("num_compute_threads", [1, 2, 4])
+def test_explicit_compute_threads(device, num_compute_threads):
+    """Three subblocks per C slice: one round with an idle thread at four threads, two rounds (the second
+    with an idle thread) at two. Ones as input so every C tile must equal K exactly."""
+    _skip_unless_threads_supported(device, num_compute_threads)
+    M, K, N = 3 * TILE, 3 * TILE, 2 * TILE
+    a, b = torch.ones(1, 1, M, K, dtype=torch.bfloat16), torch.ones(1, 1, K, N, dtype=torch.bfloat16)
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=_rect(0, 0, 0, 0),
+        C_slice_M_tiles=3,
+        C_slice_N_tiles=2,
+        subblock_M_tiles=1,
+        subblock_N_tiles=2,
+        num_compute_threads=num_compute_threads,
+    )
+    out = _run(device, a, b, config)
+    assert torch.equal(out.to(torch.float32), torch.full((1, 1, M, N), float(K)))
+
+
+@pytest.mark.parametrize("num_compute_threads", [1, 2, 4])
+def test_K_spill_over_several_C_slices_per_core(device, num_compute_threads):
+    """Two C slices on one core with two K chunks: C_partials and C_slice do not share L1, so the last K
+    chunk only lands in C if the packer is pointed at C_slice (on Quasar it keeps the C_partials base
+    otherwise). Ones as input so every C tile must equal K exactly."""
+    _skip_unless_threads_supported(device, num_compute_threads)
+    M, K, N = 4 * TILE, 4 * TILE, 2 * TILE
+    a, b = torch.ones(1, 1, M, K, dtype=torch.bfloat16), torch.ones(1, 1, K, N, dtype=torch.bfloat16)
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=_rect(0, 0, 0, 0),
+        C_slice_M_tiles=2,
+        C_slice_N_tiles=2,
+        K_chunk_tiles=2,
+        subblock_M_tiles=1,
+        subblock_N_tiles=2,
+        num_compute_threads=num_compute_threads,
+    )
+    out = _run(device, a, b, config)
+    assert torch.equal(out.to(torch.float32), torch.full((1, 1, M, N), float(K)))
+
+
+def test_compute_threads_rejections(device, expect_error):
+    M = K = N = 4 * TILE
+    a_t = ttnn.from_torch(_randn(1, 1, M, K), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    b_t = ttnn.from_torch(_randn(1, 1, K, N), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+
+    def run(num_compute_threads):
+        ttnn.experimental.quasar.matmul(
+            a_t,
+            b_t,
+            program_config=qsr.MatmulUnifiedProgramConfig(
+                cores=_rect(0, 0, 0, 0), num_compute_threads=num_compute_threads
+            ),
+            compute_kernel_config=_hifi4(device),
+        )
+
+    with expect_error(RuntimeError, "1, 2 or 4"):
+        run(3)
+    with expect_error(RuntimeError, "1, 2 or 4"):
+        run(2**32 + 1)  # would narrow to 1
+    if not _on_quasar(device):
+        with expect_error(RuntimeError, "needs Quasar"):
+            run(2)
 
 
 # ----------------------------------------------------------------------------------------------------
