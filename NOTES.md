@@ -14,6 +14,14 @@ cpmcache entries (capnproto, protobuf, cadical, blake3 dirs dated 10-01 19:48); 
 (blx03 /home has 65 GB free, <150 GB rule); ~/fasth3/t84/build is a symlink to it. Driver submit retry raised to 300 min.
 Earlier logs: *.attempt{1,2,3}.log next to the current ones.
 
+## Attempt 3 (2026-10-03 00:48 UTC)
+Build finished OK on 10-02 18:47 (SETUP84_DONE rc=0, _ttnn.so links to /var/tmp build). The driver then waited for
+health and died with blx03's host power-cycle (up again 10-03 00:34). None of our jobs ran. Relaunched the driver
+(setup step is skipped since the marker exists); wait_health raised to 240 min. Old log: driver.attempt4.log.
+If the driver is gone without a T84_DRIVER_DONE marker (another reboot), just relaunch it:
+  cd /var/tmp/fasth3/t84 && setsid nohup bash ~/fasth3/t84drv/driver.sh > driver.out 2>&1 < /dev/null &
+(run it via `ssh g14blx03 '...' < /dev/null` with a timeout; ssh otherwise hangs on the backgrounded chain).
+
 ## Running on blx03 (launched 2026-10-01 19:48 UTC, relaunched 2026-10-02 18:45)
 - setup/build: ~/fasth3/t84-setup.log (marker SETUP84_DONE rc=N), worktree ~/fasth3/t84 (~3.3 GB with build)
 - driver: ~/fasth3/t84drv/driver.sh, log /var/tmp/fasth3/t84/driver.log, final marker "T84_DRIVER_DONE <stage> <rc>"
