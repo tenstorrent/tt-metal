@@ -118,9 +118,7 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) {
  * for 32-bit destination reads. UNPACK/PACK tensix_sync then notify MATH
  * and wait; MATH writes dest-acc CFG, drains until those writes have retired,
  * and only then releases them -- the release is a RISC store, so the drain is
- * what orders it behind the writes. UNPACK/PACK then STALLWAIT as a backstop:
- * on Blackhole on CFGEXU, which is core-wide; on Wormhole on TRISC_CFG, which
- * is per-thread and already met here. Safe to call mid-kernel without
+ * what orders it behind the writes. Safe to call mid-kernel without
  * re-running compute_kernel_hw_startup.
  *
  * All three TRISC threads must call this together. TRISC mailboxes must not
@@ -152,10 +150,8 @@ ALWI void enable_fp32_dest_acc() {
  * to disable 32-bit destination reads. UNPACK/PACK tensix_sync then notify
  * MATH and wait; MATH writes dest-acc CFG, drains until those writes have
  * retired, and only then releases them -- the release is a RISC store, so the
- * drain is what orders it behind the writes. UNPACK/PACK then STALLWAIT as a
- * backstop: on Blackhole on CFGEXU, which is core-wide; on Wormhole on
- * TRISC_CFG, which is per-thread and already met here. Safe to call mid-kernel
- * without re-running compute_kernel_hw_startup.
+ * drain is what orders it behind the writes. Safe to call mid-kernel without
+ * re-running compute_kernel_hw_startup.
  *
  * All three TRISC threads must call this together. TRISC mailboxes must not
  * be in use.
