@@ -315,6 +315,10 @@ def ccl_partition_rows(tensor, mesh_config):
     return ttnn.mesh_partition(tensor, dim=2, cluster_axis=mesh_config.tp_axis)
 
 
+# Tallest reduce-scatter output kept in L1: 256 rows per device (chunk 8192 at CP8 x TP4), the largest measured.
+_MAX_L1_REDUCE_SCATTER_ROWS = 256
+
+
 def ccl_reduce_scatter_rows(tensor, mesh_config, ccl_manager, memory_config=None):
     """Sum row-parallel projection partials across TP and keep this device's 1/TP of the rows.
 
@@ -323,7 +327,11 @@ def ccl_reduce_scatter_rows(tensor, mesh_config, ccl_manager, memory_config=None
     """
     if mesh_config is None or mesh_config.tp_degree <= 1:
         return tensor
-    memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
+    if memory_config is None:
+        # The norm after it reads the result straight from L1: ~1 ms per chunk at 8192, numerics unchanged. Taller
+        # outputs stay in DRAM, where they cannot clash with the next matmul's circular buffers.
+        out_rows = tensor.padded_shape[-2] // mesh_config.tp_degree
+        memory_config = ttnn.L1_MEMORY_CONFIG if out_rows <= _MAX_L1_REDUCE_SCATTER_ROWS else ttnn.DRAM_MEMORY_CONFIG
     if ccl_async_enabled():
         result = ttnn.experimental.reduce_scatter_minimal_async(
             tensor,
