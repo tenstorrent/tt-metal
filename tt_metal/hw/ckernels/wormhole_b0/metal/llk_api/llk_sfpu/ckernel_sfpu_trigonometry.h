@@ -1101,6 +1101,9 @@ inline void calculate_acosh() {
     }
 }
 
+template <int ITERATIONS>
+void calculate_asinh_bf16();
+
 // asinh(x) = sign(x) * log(|x| + sqrt(x^2 + 1)), reformulated to remove the
 // cancellation at x -> 0 and the x^2 overflow at large |x|. Regions in a = |x|:
 //   a < 0.75          -> a * P(a^2), degree-6 minimax polynomial (<=1 ulp)
@@ -1114,6 +1117,10 @@ inline void calculate_acosh() {
 // overflows (the old x^2 + 1 produced +inf at ~1.84e19).
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_asinh() {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        calculate_asinh_bf16<ITERATIONS>();
+        return;
+    }
     constexpr float LOG1P_LARGE = 0x1.0p28;
     constexpr float LN2 = 0.6931471805599453f;
     // SFPU microcode
@@ -1244,3 +1251,5 @@ void init_atanh() {
 }
 
 }  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_asinh_bf16.h"
