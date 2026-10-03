@@ -69,6 +69,10 @@ int main(void)
 #ifdef ARCH_QUASAR
     *(mailbox_base + 3) = ckernel::RESET_VAL;
 #endif
+    for (std::uint32_t slot = 0; slot < llk_barrier::NUM_THREADS; ++slot)
+    {
+        host_signal::write(slot, ckernel::RESET_VAL);
+    }
     device_setup();
 #if defined(ARCH_QUASAR)
     // No BRISC on Quasar: unpack resets the barrier and scrubs the debug features while the others are held in reset.
@@ -111,9 +115,10 @@ int main(void)
     llk_perf::read_last_zone();
 
     *mailbox = ckernel::KERNEL_COMPLETE;
-#if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
-    host_signal::write(mailbox_offset / sizeof(std::uint32_t), ckernel::KERNEL_COMPLETE);
+#if defined(ARCH_QUASAR)
+    asm volatile("fence" ::: "memory"); // the L1 results land before the flag the host polls
 #endif
+    host_signal::write(mailbox_offset / sizeof(std::uint32_t), ckernel::KERNEL_COMPLETE);
 }
 
 extern "C" __attribute__((section(".init"), naked, noreturn, no_profile_instrument_function)) std::uint32_t _start()
