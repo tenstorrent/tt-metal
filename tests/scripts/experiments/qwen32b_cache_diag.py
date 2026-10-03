@@ -15,8 +15,11 @@ from collections import Counter
 
 import ttnn
 
-root = os.path.join(os.environ.get("TT_CACHE_PATH", "/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B"), "TG")
-print(f"host={socket.gethostname()} arch={ttnn.get_arch_name()} root={root}", flush=True)
+ROOTS = os.environ.get(
+    "CACHE_DIAG_ROOTS",
+    "/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B/TG,/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct/TG",
+).split(",")
+print(f"host={socket.gethostname()} arch={ttnn.get_arch_name()}", flush=True)
 
 PATTERNS = (
     "*layers.0.*prefetcher*",
@@ -27,14 +30,18 @@ PATTERNS = (
     "*pb_rs*",
 )
 
-for sub in ("tensor_cache_bf16", "tensor_cache_bfp8", "tensor_cache_instruct_bf16", "tensor_cache_instruct_bfp8"):
+for root, sub in [
+    (r, s)
+    for r in ROOTS
+    for s in ("tensor_cache_bf16", "tensor_cache_bfp8", "tensor_cache_instruct_bf16", "tensor_cache_instruct_bfp8")
+]:
     d = os.path.join(root, sub)
     if not os.path.isdir(d):
-        print(f"== {sub}: missing", flush=True)
+        print(f"== {d}: missing", flush=True)
         continue
     files = sorted(glob.glob(os.path.join(d, "*.tensorbin")))
     days = Counter(time.strftime("%Y-%m-%d", time.gmtime(os.stat(f).st_mtime)) for f in files)
-    print(f"== {sub}: {len(files)} files; mtime days: {dict(sorted(days.items()))}", flush=True)
+    print(f"== {d}: {len(files)} files; mtime days: {dict(sorted(days.items()))}", flush=True)
     seen = set()
     for pat in PATTERNS:
         for f in sorted(glob.glob(os.path.join(d, pat)))[:4]:
