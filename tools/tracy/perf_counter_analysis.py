@@ -1428,12 +1428,12 @@ def compute_device_only_metrics(
     has_packer_busy = "value_PACKER_BUSY" in eff_pivot.columns and eff_pivot["value_PACKER_BUSY"].sum() > 0
     if has_packer_busy:
         eff_pivot["Packer Efficiency"] = eff_pivot.apply(
-            lambda x: safe_div(x.get("value_PACKER_DEST_READ_AVAILABLE", 0), x.get("value_PACKER_BUSY", 0)),
+            lambda x: safe_div(x.get("value_PACKER0_DEST_READ_REQ", 0), x.get("value_PACKER_BUSY", 0)),
             axis=1,
         )
     elif "value_DEST_READ_GRANTED_0" in eff_pivot.columns:
         eff_pivot["Packer Efficiency"] = eff_pivot.apply(
-            lambda x: safe_div(x.get("value_DEST_READ_GRANTED_0", 0), x.get("value_PACKER_DEST_READ_AVAILABLE", 0)),
+            lambda x: safe_div(x.get("value_DEST_READ_GRANTED_0", 0), x.get("value_PACKER0_DEST_READ_REQ", 0)),
             axis=1,
         )
 
@@ -1459,7 +1459,7 @@ def compute_device_only_metrics(
         )
     eff_pivot["Unpacker-to-Math Data Flow"] = eff_pivot.apply(
         lambda x: safe_div(
-            (x.get("value_SRCA_WRITE_AVAILABLE", 0) + x.get("value_SRCB_WRITE_AVAILABLE", 0)) / 2,
+            (x.get("value_SRCA_WRITE_REQ", 0) + x.get("value_SRCB_WRITE_REQ", 0)) / 2,
             (x.get("value_UNPACK0_BUSY_THREAD0", 0) + x.get("value_UNPACK1_BUSY_THREAD0", 0)) / 2,
         ),
         axis=1,
@@ -1710,27 +1710,27 @@ def compute_device_only_metrics(
     )
 
     eff_pivot["SrcA Write Port Blocked Rate"] = eff_pivot.apply(
-        safe_complement("value_SRCA_WRITE_NOT_BLOCKED_PORT", "value_SRCA_WRITE_AVAILABLE"),
+        safe_complement("value_SRCA_WRITE_NOT_BLOCKED_PORT", "value_SRCA_WRITE_REQ"),
         axis=1,
     )
     eff_pivot["SrcB Write Port Blocked Rate"] = eff_pivot.apply(
-        safe_complement("value_SRCB_WRITE_NOT_BLOCKED_PORT", "value_SRCB_WRITE_AVAILABLE"),
+        safe_complement("value_SRCB_WRITE_NOT_BLOCKED_PORT", "value_SRCB_WRITE_REQ"),
         axis=1,
     )
     eff_pivot["SrcA Write Overwrite Blocked Rate"] = eff_pivot.apply(
-        safe_complement("value_SRCA_WRITE_NOT_BLOCKED_OVR", "value_SRCA_WRITE_AVAILABLE"),
+        safe_complement("value_SRCA_WRITE_NOT_BLOCKED_OVR", "value_SRCA_WRITE_REQ"),
         axis=1,
     )
     eff_pivot["SrcB Write Overwrite Blocked Rate"] = eff_pivot.apply(
-        safe_complement("value_SRCB_WRITE_NOT_BLOCKED_OVR", "value_SRCB_WRITE_AVAILABLE"),
+        safe_complement("value_SRCB_WRITE_NOT_BLOCKED_OVR", "value_SRCB_WRITE_REQ"),
         axis=1,
     )
     eff_pivot["SrcA Write Actual Efficiency"] = eff_pivot.apply(
-        safe_ratio("value_SRCA_WRITE_NOT_BLOCKED_PORT", "value_SRCA_WRITE_AVAILABLE"),
+        safe_ratio("value_SRCA_WRITE_NOT_BLOCKED_PORT", "value_SRCA_WRITE_REQ"),
         axis=1,
     )
     eff_pivot["SrcB Write Actual Efficiency"] = eff_pivot.apply(
-        safe_ratio("value_SRCB_WRITE_NOT_BLOCKED_PORT", "value_SRCB_WRITE_AVAILABLE"),
+        safe_ratio("value_SRCB_WRITE_NOT_BLOCKED_PORT", "value_SRCB_WRITE_REQ"),
         axis=1,
     )
 
@@ -1743,7 +1743,7 @@ def compute_device_only_metrics(
         return fn
 
     eff_pivot["Dest Read Backpressure"] = eff_pivot.apply(
-        safe_bp_single("value_PACKER_DEST_READ_AVAILABLE", "value_DEST_READ_GRANTED_0"),
+        safe_bp_single("value_PACKER0_DEST_READ_REQ", "value_DEST_READ_GRANTED_0"),
         axis=1,
     )
     if (
