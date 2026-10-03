@@ -243,11 +243,15 @@ void register_fan_out(const Grid& grid, int64_t iterations) {
 
 template <typename Pool>
 void register_pool() {
+    // Parked workers: the dispatch pool's fan-outs are ~10 ms apart in those models.
+    const Grid parked = {{32}, {1}, {600}, {10000}};
     if (tt::parse_env("TT_POOL_BENCH_FULL", false)) {
         const Grid full = {{1, 8, 32}, {1, 4}, {0, 600, 1300, 2000, 10000}, {0, 5, 63, 144, 500}};
         register_fan_out<Pool, 0>(full, 2000);
         register_fan_out<Pool, 64>({{32}, {1}, {600}, {0, 63}}, 2000);
+        register_fan_out<Pool, 0>(parked, 300);
         register_fan_out<Pool, 0, ParallelFor>(full, 2000);
+        register_fan_out<Pool, 0, ParallelFor>(parked, 300);
         return;
     }
     // p50/p90 per-device write and host gap in GLM-5.2 and Kimi K2.7 prefill (#57586).
@@ -257,8 +261,6 @@ void register_pool() {
     register_fan_out<Pool, 0>({{32}, {4}, {600}, {0}}, 5000);
     // Capture larger than the callable's small buffer.
     register_fan_out<Pool, 64>({{32}, {1}, {600}, {0}}, 5000);
-    // Parked workers: the dispatch pool's fan-outs are ~10 ms apart in those models.
-    const Grid parked = {{32}, {1}, {600}, {10000}};
     register_fan_out<Pool, 0>(parked, 300);
     // The same fan-outs through parallel_for; the capture size does not apply.
     register_fan_out<Pool, 0, ParallelFor>(model_sized, 5000);
