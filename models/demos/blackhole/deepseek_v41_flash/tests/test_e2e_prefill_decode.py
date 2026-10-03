@@ -32,6 +32,7 @@ CHUNK = int(os.environ.get("DSV41_CHUNK", "0")) or None
 LENS = os.environ.get("DSV41_LENS")
 DIR = os.environ.get("DSV41_PREFILL_DIR", f"/mnt/tt-data/ssinghal/dsv4-prefill-s{S}" + ("" if U == 4 else f"b{4 * U}"))
 TRACE = os.environ.get("DSV41_TRACE", "1") == "1"
+PTRACE = os.environ.get("DSV41_PREFILL_TRACE", "1") == "1"
 
 
 def pool_rows(model, r):
@@ -82,7 +83,9 @@ def test_e2e_prefill_decode(mesh_device):
     # ---- prefill (twice: compile + measured) ------------------------------------------------------------------------------------------
     for rep in range(2):
         t = time.perf_counter()
-        logits = gen.prefill_forward_text(prompt, prompt_lens=lens, chunk=CHUNK, return_logits=True)
+        logits = gen.prefill_forward_text(
+            prompt, prompt_lens=lens, chunk=CHUNK, return_logits=True, enable_trace=PTRACE
+        )
         ttft = time.perf_counter() - t
         log(
             f"PREFILL run {rep}: {ttft:.2f} s for {B} users, lens {lens.tolist()} -> {int(lens.sum()) / ttft:.0f} tok/s; {model.timing}"
@@ -117,6 +120,10 @@ def test_e2e_prefill_decode(mesh_device):
                 if nent:
                     rows = pool.phys_rows(bb, L, torch.arange(nent))
                     cp.append(R.pcc(pools[r][rows], st["comp"][bb, :nent].float()))
+        g0 = pools[0][pool.ring_base(attn.ring_slot) : pool.ring_base(attn.ring_slot) + 128]
+        log(
+            f"RINGDBG layer {L} slot {attn.ring_slot} base {pool.ring_base(attn.ring_slot)} total_rows {pool.total_rows}: user0 nan {int(g0.isnan().sum())} absmax {float(g0.abs().nan_to_num().max()):.3f} nonzero rows {int((g0.abs().sum(-1) > 0).sum())}"
+        )
         msg = f"STATE layer {L:2d} ratio {getattr(attn, 'ratio', 0)}: ring PCC min {min(rp):.4f} mean {sum(rp) / len(rp):.4f}"
         if cp:
             msg += f" | latents PCC min {min(cp):.4f} mean {sum(cp) / len(cp):.4f}"
