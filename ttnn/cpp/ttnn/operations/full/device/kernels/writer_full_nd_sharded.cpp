@@ -52,6 +52,7 @@ void kernel_main() {
             ptr[i] = val.f;
         }
 #endif
+        drain_fill_stores(write_addr, page_size);
     }
 
     dfb.push_back(1);

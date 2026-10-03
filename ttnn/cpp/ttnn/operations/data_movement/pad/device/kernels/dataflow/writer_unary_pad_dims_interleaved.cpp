@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -10,6 +11,12 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#if !defined(ARCH_QUASAR)
+// ckernel::load_blocking (the store drain below) is WH/BH only: Quasar's ckernel.h has no load_blocking,
+// and from a data-movement build it #errors unless COMPILE_FOR_TRISC is defined. The Quasar branch uses a
+// plain volatile load instead. Same guard as data_movement/common/kernels/common.hpp.
+#include "ckernel.h"
+#endif
 
 void kernel_main() {
     const auto num_unpadded_W = get_arg(args::num_unpadded_W);
@@ -42,6 +49,17 @@ void kernel_main() {
     // from TL1 directly. Flush the filled tile so the NoC copies see the pad value. No-op on WH/BH. Matches
     // fill_rm_interleaved.cpp (#51763).
     flush_l2_cache_range(static_cast<uintptr_t>(pad_buffer_l1_addr), static_cast<size_t>(tile_size));
+#endif
+    // The fill above is baby-RISCV stores and pad_tiles() below hands this buffer to the NoC as the
+    // source of every pad-tile write. A store can retire before its write-request lands in L1, and the
+    // RISCV core and the NoC are different L1 clients with no program-order guarantee between them
+    // (WormholeB0/TensixTile/BabyRISCV/MemoryOrdering.md). Read back the last filled word so the fill
+    // is processed before the first NoC write is issued. Same construction as #50374.
+#if defined(ARCH_QUASAR)
+    // Quasar has no ckernel::load_blocking; a volatile load is the local ordering barrier there.
+    (void)*(pad_buffer + num_elems - 1);
+#else
+    (void)ckernel::load_blocking(pad_buffer + num_elems - 1);
 #endif
 
     uint32_t src_tile_id = 0;
