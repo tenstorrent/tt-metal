@@ -183,17 +183,17 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
         // Multi-Threaded writes supported for Replicated buffers.
         // Currently not supported when doing TT-Mesh Native sharding, since we
         // rely on TTNN to perform sharding and call enqueue_write_shards
-        auto dispatch_lambda = [this, &buffer, host_data, &region](const MeshCoordinate& coord) {
-            this->write_shard_to_device(buffer, coord, host_data, region, {}, nullptr);
-        };
+        std::vector<MeshCoordinate> coords;
+        std::vector<uint32_t> device_ids;
         for (const auto& coord : device_range) {
             if (mesh_device_->impl().is_local(coord)) {
-                dispatch_thread_pool_->enqueue(
-                    [&dispatch_lambda, coord]() { dispatch_lambda(coord); },
-                    mesh_device_->impl().get_device(coord)->id());
+                coords.push_back(coord);
+                device_ids.push_back(mesh_device_->impl().get_device(coord)->id());
             }
         }
-        dispatch_thread_pool_->wait();
+        dispatch_thread_pool_->parallel_for(device_ids, [this, &buffer, host_data, &region, &coords](size_t i) {
+            this->write_shard_to_device(buffer, coords[i], host_data, region, {}, nullptr);
+        });
     } else {
         this->write_sharded_buffer(buffer, host_data);
     }
@@ -254,15 +254,17 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
             }
         };
 
+    std::vector<uint32_t> local_shards;
+    std::vector<uint32_t> device_ids;
     for (std::size_t shard_idx = 0; shard_idx < shard_data_transfers.size(); shard_idx++) {
         auto shard_coord = shard_data_transfers[shard_idx].shard_coord();
         if (mesh_device_->impl().is_local(shard_coord)) {
-            dispatch_thread_pool_->enqueue(
-                [&dispatch_lambda, shard_idx]() { dispatch_lambda(shard_idx); },
-                mesh_device_->impl().get_device(shard_coord)->id());
+            local_shards.push_back(static_cast<uint32_t>(shard_idx));
+            device_ids.push_back(mesh_device_->impl().get_device(shard_coord)->id());
         }
     }
-    dispatch_thread_pool_->wait();
+    dispatch_thread_pool_->parallel_for(
+        device_ids, [&dispatch_lambda, &local_shards](size_t i) { dispatch_lambda(local_shards[i]); });
 
     if (any_pinned_used.load(std::memory_order_relaxed)) {
         this->invalidate_prefetcher_cache_after_pinned_write();
