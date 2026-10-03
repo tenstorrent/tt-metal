@@ -581,6 +581,54 @@ targets:
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
+  c4ai-command-r7b:
+    aliases: ["c4ai-command-r7b-12-2024", "CohereLabs/c4ai-command-r7b-12-2024"]
+    skus:
+      wh_n150:
+        entries:
+          # Seeded from local N150 bringup run (performance-batch-1, 128-token
+          # prefill, 200-token decode): TTFT 105.99ms, 25.7 tok/s/u.
+          - batch_size: 1
+            seq_len: 128
+            status: active
+            perf:
+              prefill_time_to_first_token: 106.0
+              decode_t/s: 25.7
+              decode_t/s/u: 25.7
+              tolerance: 0.2
+            accuracy: {}
+            owner_id: TODO 
+            team: models
+          - batch_size: 1
+            seq_len: 512
+            status: TODO
+            perf: {}
+            accuracy: {}
+            team: models
+      bh_p150:
+        entries:
+          # Seeded from P150 bringup run (ci-token-matching, 512-token prefill,
+          # 500 teacher-forced decodes): Top1 89.20%, Top5 98.80%.
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              top1: 89
+              top5: 99
+            team: models
+          # Seeded from P150 bringup run (performance-batch-1, 128-token
+          # prefill, 200-token decode): TTFT 50.22ms, 36.02 tok/s/u.
+          - batch_size: 1
+            seq_len: 128
+            status: active
+            perf:
+              prefill_time_to_first_token: 50.2
+              decode_t/s: 36.0
+              decode_t/s/u: 36.0
+              tolerance: 0.2
+            accuracy: {}
+            team: models
   llama3.1-70b:
     aliases: ["Llama-3.1-70B", "meta-llama/Llama-3.1-70B-Instruct"]
     skus:

@@ -17,6 +17,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.layernorm import LayerNorm
 from models.common.utility_functions import hf_cache_to_legacy, is_blackhole, is_wormhole_b0, nearest_32
 from models.common.weight_cache import WEIGHT_CACHE_FORMAT_VERSION as _WC_FORMAT_VERSION
 from models.common.weight_cache import WEIGHT_CACHE_MARKER as _WC_MARKER
@@ -673,6 +674,15 @@ class ModelArgs:
         # rope setup; use_global_nope neutralizes the global setup's cos/sin to identity.
         self.rope_scaling_local = None
         self.use_global_nope = False
+        # LayerNorm instead of RMSNorm, and a shared norm for both residual branches
+        # (out = x + attn(LN(x)) + mlp(LN(x))). Cohere2 only.
+        self.use_layernorm = False
+        self.use_parallel_residual = False
+        # Skip the HF->Meta q/k reverse_permute while keeping Meta rope. Cohere2's
+        # rotate_half already pairs (2i, 2i+1), so its q/k rows need no permuting.
+        self.skip_qkv_permute = False
+        # Overrides the per-model prefill chunk table; see _set_model_specific_params.
+        self.max_prefill_chunk_size_override = None
         # Text-only port of a multimodal checkpoint: keeps is_multimodal False so the
         # text pipeline (AutoModel class choice aside) is used end-to-end.
         self.force_text_only = False
@@ -682,6 +692,8 @@ class ModelArgs:
         # omitting attn softcap at inference has only minor effect. See final-logit
         # application in Transformer._apply_final_logit_softcapping.
         self.final_logit_softcapping = None
+        # Logit scaling (Cohere2). None => disabled.
+        self.logit_scale = None
         self.model_type = None
         # Decode-SDPA tuning. Architecture-specific overrides are applied once in
         # _set_model_specific_params(); these defaults preserve existing behaviour for
@@ -744,6 +756,12 @@ class ModelArgs:
             self.trust_remote_code_hf = True
 
         self._set_hf_params(self.CKPT_DIR)
+        # Unpermuted q/k weights differ from the default cache contents, so they need
+        # their own dir. skip_qkv_permute is only known after reading config.json.
+        if self.skip_qkv_permute:
+            self.CACHE_PATH = os.path.join(self.CACHE_PATH, "no_qkv_permute")
+            self.model_cache_path = Path(self.CACHE_PATH)
+            logger.info(f"Cache directory: {self.CACHE_PATH}")
 
         # Set the max number of tokens for each prefill chunk based on the model and device
         self.max_prefill_chunk_size = self.get_max_prefill_chunk_size()
@@ -2574,6 +2592,8 @@ class ModelArgs:
         # Set the max number of tokens for each prefill chunk based on the model and device
         max_prefill_chunk_size_div1024 = os.getenv("MAX_PREFILL_CHUNK_SIZE")
         if max_prefill_chunk_size_div1024 is None:
+            if self.max_prefill_chunk_size_override is not None:
+                return self.max_prefill_chunk_size_override
             # TODO Improve this to be more general to more devices and models
             MAX_PREFILL_CHUNK_SIZES_DIV1024 = {
                 "Llama-3.2-1B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
@@ -2890,6 +2910,15 @@ class ModelArgs:
             # itself drops mtp.* on load (_keys_to_ignore_on_load_unexpected).
             self.force_text_only = True
             self.is_multimodal = False
+        if self.model_type is not None and str(self.model_type).lower() == "cohere2":
+            self.use_layernorm = True
+            self.use_parallel_residual = True
+            self.skip_qkv_permute = True
+            self.rope_scaling_local = self.rope_scaling
+            self.rope_scaling = None
+            self.use_global_nope = True
+            # Sliding layers can't do chunked prefill and 3 of every 4 layers slide.
+            self.max_prefill_chunk_size_override = math.ceil((self.max_context_len or 8192) / 1024) * 1024
 
     def _set_params_from_dict(self, config):
         eos_token_id = config.get("eos_token_id", None)
@@ -3032,6 +3061,21 @@ class ModelArgs:
             self.layer_types = ["sliding_attention" if (i % 2 == 0) else "full_attention" for i in range(self.n_layers)]
             self.sliding_window_pattern = [lt == "sliding_attention" for lt in self.layer_types]
 
+        # Command-R7B checkpoints doesn't carry `layer_type` list. Replicate 
+        # huggingface Cohere2Config
+        if (
+            self.model_type is not None
+            and str(self.model_type).lower() == "cohere2"
+            and self.sliding_window is not None
+            and self.layer_types is None
+        ):
+            _sw_pattern = text_config.get("sliding_window_pattern", 4) or 4
+            self.layer_types = [
+                "sliding_attention" if bool((i + 1) % _sw_pattern) else "full_attention"
+                for i in range(self.n_layers)
+            ]
+            self.sliding_window_pattern = [lt == "sliding_attention" for lt in self.layer_types]
+
         # RoPE params (transformers 5.x nests these under `rope_parameters`)
         self.rope_theta = get_rope_theta(text_config)
         self.rope_theta_local = get_rope_local_base_freq(text_config)
@@ -3059,6 +3103,7 @@ class ModelArgs:
         # Attn-score softcapping is not applied (see __init__ comment); only the
         # final-logit cap is consumed, via Transformer._apply_final_logit_softcapping.
         self.final_logit_softcapping = text_config.get("final_logit_softcapping", None)
+        self.logit_scale = text_config.get("logit_scale", None)
 
         # Configurable MLP activation type
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
@@ -3585,7 +3630,7 @@ class ModelArgs:
         if self.is_multimodal:
             state_dict = standardize_hf_keys_multimodal(state_dict)
             if self.is_llama_vision():
-                if self.use_hf_rope:
+                if self.use_hf_rope or self.skip_qkv_permute:
                     # For HF-style RoPE: skip QKV format conversion
                     state_dict = convert_hf_to_meta_mllama_no_qkv_permute(state_dict, self.head_dim, self.hf_config)
                 else:
@@ -3610,8 +3655,9 @@ class ModelArgs:
             self.fuse_qkv = any(["qkv" in layer_name for layer_name in state_dict.keys()])
             self.fuse_mlp = any(["gate_up" in layer_name for layer_name in state_dict.keys()])
             state_dict = standardize_hf_keys(state_dict)
-            if self.use_hf_rope:
-                # For Attention: skip QKV format conversion
+            if self.use_hf_rope or self.skip_qkv_permute:
+                # For Attention: skip QKV format conversion (HF rope, or Cohere2
+                # interleaved-native Q/K which must not be reverse_permuted).
                 state_dict = convert_hf_to_meta_no_qkv_permute(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
             elif self.model_type == "cohere":
                 # Command-R rotates Q/K INTERLEAVED-native (HF modeling_cohere overrides
@@ -4317,7 +4363,13 @@ class ModelArgs:
             model.model = model.model.language_model
         model.model.layers = model.model.layers[: self.n_layers]
         if wrap:
-            wrapper = HfModelWrapper(model, self.head_dim, config=self.hf_config, use_hf_rope=self.use_hf_rope)
+            wrapper = HfModelWrapper(
+                model,
+                self.head_dim,
+                config=self.hf_config,
+                use_hf_rope=self.use_hf_rope,
+                skip_qkv_permute=self.skip_qkv_permute,
+            )
             return wrapper
         else:
             return model
@@ -4579,6 +4631,7 @@ class ModelArgs:
             model.model.rotary_emb if use_position_embeddings else None,
             rotary_emb_local,
             self.use_hf_rope,
+            skip_qkv_permute=self.skip_qkv_permute,
         )
         return wrapper
 
@@ -4591,6 +4644,7 @@ class ModelArgs:
             self.head_dim,
             model.model.rotary_emb if use_position_embeddings else None,
             use_hf_rope=self.use_hf_rope,
+            skip_qkv_permute=self.skip_qkv_permute,
         )
         return wrapper
 
@@ -4693,7 +4747,7 @@ class ModelArgs:
 
 
 class HfAttentionWrapper:
-    def __init__(self, attention, head_dim, rotary_emb, use_hf_rope=False, rope_layer_type=None):
+    def __init__(self, attention, head_dim, rotary_emb, use_hf_rope=False, rope_layer_type=None, skip_qkv_permute=False):
         from transformers import DynamicCache
 
         super().__init__()
@@ -4702,6 +4756,8 @@ class HfAttentionWrapper:
         self.head_dim = head_dim
         self.rotary_emb = rotary_emb
         self.use_hf_rope = use_hf_rope
+        # skip for cohere2 
+        self.skip_qkv_permute = skip_qkv_permute
         # transformers 5.x Gemma3 rotary picks `{layer_type}_inv_freq`. When the caller chose a
         # specific rope module (e.g. global vs local), pin the layer_type to match it instead of
         # the attention layer's own type; otherwise fall back to the attention's layer_type.
@@ -4763,7 +4819,7 @@ class HfAttentionWrapper:
             fuse_qkv = hasattr(self.attention, "qkv_proj")
         except:
             fuse_qkv = False
-        if self.use_hf_rope:
+        if self.use_hf_rope or self.skip_qkv_permute:
             return self.attention.load_state_dict(convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv))
         else:
             return self.attention.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv))
@@ -4773,7 +4829,7 @@ class HfAttentionWrapper:
         [(k, v)] = [(kk, vv) for (kk, vv) in hf_cache_to_legacy(self.past_key_value) if kk is not None]
         hf_k = k.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
-        if self.use_hf_rope:
+        if self.use_hf_rope or self.skip_qkv_permute:
             # No transformation needed for HF-style RoPE
             return hf_k
 
@@ -4798,7 +4854,7 @@ class HfAttentionWrapper:
 
 
 class HfDecoderWrapper:
-    def __init__(self, decoder, head_dim, rotary_emb, rotary_emb_local=None, use_hf_rope=False):
+    def __init__(self, decoder, head_dim, rotary_emb, rotary_emb_local=None, use_hf_rope=False, skip_qkv_permute=False):
         from transformers import DynamicCache
 
         self.decoder = decoder
@@ -4807,6 +4863,8 @@ class HfDecoderWrapper:
         self.rotary_emb_local = rotary_emb_local
         self.past_key_values = DynamicCache()
         self.use_hf_rope = use_hf_rope
+        # skip for cohere2
+        self.skip_qkv_permute = skip_qkv_permute
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
@@ -4884,7 +4942,7 @@ class HfDecoderWrapper:
             fuse_mlp = hasattr(self.decoder.mlp, "gate_up_proj")
         except:
             fuse_qkv, fuse_mlp = False, False
-        if self.use_hf_rope:
+        if self.use_hf_rope or self.skip_qkv_permute:
             return self.decoder.load_state_dict(convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv, fuse_mlp))
         else:
             return self.decoder.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp))
@@ -4894,7 +4952,7 @@ class HfDecoderWrapper:
         [(k, v)] = [(kk, vv) for (kk, vv) in hf_cache_to_legacy(self.past_key_values) if kk is not None]
         hf_k = k.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
-        if self.use_hf_rope:
+        if self.use_hf_rope or self.skip_qkv_permute:
             # No transformation needed for HF-style RoPE
             return hf_k
 
@@ -4919,7 +4977,7 @@ class HfDecoderWrapper:
 
 
 class HfModelWrapper:
-    def __init__(self, model, head_dim, config=None, use_hf_rope=False):
+    def __init__(self, model, head_dim, config=None, use_hf_rope=False, skip_qkv_permute=False):
         from transformers import DynamicCache
 
         self.model = model
@@ -4927,6 +4985,8 @@ class HfModelWrapper:
         self.config = config
         self.past_key_values = DynamicCache()
         self.use_hf_rope = use_hf_rope
+        # skip for cohere2
+        self.skip_qkv_permute = skip_qkv_permute
 
     def forward(self, inputs_embeds, start_pos, mode="decode"):
         position_ids = torch.tensor(
@@ -4968,7 +5028,7 @@ class HfModelWrapper:
             fuse_mlp = hasattr(self.model.model.layers[0].mlp, "gate_up_proj")
         except:
             fuse_qkv, fuse_mlp = False, False
-        if self.use_hf_rope:
+        if self.use_hf_rope or self.skip_qkv_permute:
             return self.model.load_state_dict(
                 convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv, fuse_mlp, self.config)
             )
@@ -4989,7 +5049,7 @@ class HfModelWrapper:
                 0, 2, 1, 3
             )  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
-            if self.use_hf_rope:
+            if self.use_hf_rope or self.skip_qkv_permute:
                 # No transformation needed for HF-style RoPE
                 meta_ks.append(hf_k)
                 continue

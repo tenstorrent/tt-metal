@@ -469,3 +469,117 @@ def tt_sharded_distributed_rmsnorm(
     tt_stats.deallocate(True)
 
     return tt_out
+
+
+def tt_distributed_layernorm(inp, epsilon, gamma, mesh_device, tt_ccl, compute_kernel_config, num_links=None):
+    """
+    Perform distributed Mean-centered Layer normalization across devices.
+
+    Args:
+        inp: Input tensor.
+        epsilon: Small value for numerical stability.
+        gamma: Scale parameter.
+        mesh_device: The mesh device.
+        tt_ccl: The TT_CCL instance for semaphore management.
+        compute_kernel_config: Compute kernel configuration.
+        num_links: Number of links to use. If None, uses max available for cluster_axis=1.
+
+    Returns:
+        The normalized tensor.
+    """
+    # Auto-detect num_links if not provided
+    if num_links is None:
+        num_links = tt_ccl.get_num_links(cluster_axis=1)
+
+    # Run distributed layernorm part 1
+    tt_stats = ttnn.layer_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
+    padded_shape = (1, 1, inp.shape[-2], 32)
+    tt_stats = ttnn.reshape(tt_stats, ttnn.Shape(padded_shape))  # TODO: Figure out why we need this
+    tt_stats_gathered = tt_all_gather(
+        tt_stats,
+        mesh_device=mesh_device,
+        tt_ccl=tt_ccl,
+        dim=3,
+        cluster_axis=1,
+        num_links=num_links,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    tt_stats.deallocate(True)
+
+    # Run distributed layernorm part 2
+    tt_out = ttnn.layer_norm_post_all_gather(
+        inp, tt_stats_gathered, epsilon=epsilon, weight=gamma, compute_kernel_config=compute_kernel_config
+    )
+
+    tt_stats_gathered.deallocate(True)
+    # inp.deallocate(True)
+
+    return tt_out
+
+
+def tt_sharded_distributed_layernorm(
+    inp,
+    epsilon,
+    gamma,
+    mesh_device,
+    tt_ccl,
+    ln_sharded_input_memcfg,
+    ln_sharded_progcfg,
+    ln_sharded_stats_memcfg,
+    num_links=None,
+):
+    """
+    Perform sharded distributed Layer normalization across devices.
+
+    Args:
+        inp: Input tensor.
+        epsilon: Small value for numerical stability.
+        gamma: Scale parameter.
+        mesh_device: The mesh device.
+        tt_ccl: The TT_CCL instance for semaphore management.
+        ln_sharded_input_memcfg: Memory config for sharded input.
+        ln_sharded_progcfg: Program config for sharded layernorm.
+        ln_sharded_stats_memcfg: Memory config for sharded stats.
+        num_links: Number of links to use. If None, uses max available for cluster_axis=1.
+
+    Returns:
+        The normalized tensor.
+    """
+    # Auto-detect num_links if not provided
+    cluster_axis = 1
+    if num_links is None:
+        num_links = tt_ccl.get_num_links(cluster_axis)
+
+    inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
+
+    # Run distributed layernorm part 1
+    tt_stats = ttnn.layer_norm_pre_all_gather(inp, program_config=ln_sharded_progcfg)
+
+    # All gather stats
+    tt_stats = ttnn.experimental.all_gather_async(
+        tt_stats,
+        persistent_output_buffer=None,
+        dim=3,
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+        num_links=num_links,
+        cluster_axis=cluster_axis,
+        topology=ttnn.Topology.Linear,
+        memory_config=ln_sharded_stats_memcfg,
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+        chunks_per_sync=10,
+        num_workers_per_link=2,
+        num_buffers_per_channel=2,
+    )
+
+    # Run distributed layernorm part 2
+    tt_out = ttnn.layer_norm_post_all_gather(
+        inp,
+        epsilon=epsilon,
+        weight=gamma,
+        program_config=ln_sharded_progcfg,
+        stats=tt_stats,
+    )
+    tt_stats.deallocate(True)
+
+    return tt_out

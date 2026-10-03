@@ -151,6 +151,7 @@ it is classified differently on different systems.
 | OpenPDN-MNIST | WH N150 |
 | YuNet | WH N150 |
 | VibeVoice-1.5B | BH P150 |
+| Command-R7B | BH P150 |
 
 
 # Pipelines
