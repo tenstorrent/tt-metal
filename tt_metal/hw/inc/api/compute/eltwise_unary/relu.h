@@ -29,6 +29,16 @@ ALWI void relu_tile_init() { MATH(SFPU_UNARY_INIT(relu_min)); }
  */
 // clang-format on
 ALWI void relu_tile(uint32_t idst) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _relu_min_,
+        (sfpi::vFloat /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 32 /*ITERATIONS*/, uint32_t /*T*/),
+        idst,
+        VectorMode::None,
+        0 /*threshold*/));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -37,6 +47,7 @@ ALWI void relu_tile(uint32_t idst) {
         idst,
         VectorMode::RC,
         0 /*threshold*/));
+#endif
 }
 
 // clang-format off
@@ -56,6 +67,16 @@ ALWI void relu_tile(uint32_t idst) {
  */
 // clang-format on
 ALWI void relu_min_tile(uint32_t idst, uint32_t param0) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _relu_min_,
+        (sfpi::vFloat /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 32 /*ITERATIONS*/, uint32_t /*T*/),
+        idst,
+        VectorMode::None,
+        param0 /*threshold*/));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -64,6 +85,7 @@ ALWI void relu_min_tile(uint32_t idst, uint32_t param0) {
         idst,
         VectorMode::RC,
         param0 /*threshold*/));
+#endif
 }
 
 ALWI void relu_min_tile_init() { MATH(SFPU_UNARY_INIT(relu_min)); }

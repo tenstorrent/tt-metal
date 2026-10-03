@@ -491,8 +491,13 @@ ALWI void abs_tile_int32(uint32_t idst) {
  */
 // clang-format on
 ALWI void sign_tile(uint32_t idst) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sign, (APPROX, 32), idst, VectorMode::None, 1 /* exponent_size_8 */));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sign, (APPROX), idst, VectorMode::RC, 1 /* exponent_size_8 */));
+#endif
 }
 
 /**
@@ -643,7 +648,12 @@ ALWI void exp2_tile_init() {
  */
 // clang-format on
 ALWI void heaviside_tile(uint32_t idst, uint32_t param0) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_heaviside, (APPROX, 32), idst, VectorMode::None, param0));
+#else
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_heaviside, (APPROX), idst, VectorMode::RC, param0));
+#endif
 }
 
 /**
