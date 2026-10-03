@@ -1575,3 +1575,32 @@ def test_untilize_with_unpadding_nonempty_input_rejects_empty_sharded_output(dev
 
     with expect_error(RuntimeError, "greater than 0 in each sharded dim"):
         ttnn.untilize_with_unpadding(tilized, ttnn.Shape([4294967295, 63]))
+
+
+# sub_core_grids untilize is restricted to tensors one tile row tall, because the writer would
+# otherwise deadlock. An empty input runs no kernel at all, so the restriction does not apply --
+# and rejecting it would mean a valid subgrid works for [32, 32] but not for [32, 0].
+@pytest.mark.parametrize("shape", [(32, 0), (0, 32)])
+def test_untilize_zero_volume_accepts_sub_core_grids(device, shape):
+    tilized = ttnn.from_torch(
+        torch.rand(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    output = ttnn.untilize(tilized, use_multicore=True, sub_core_grids=_two_cores())
+
+    assert list(output.shape) == list(shape)
+    assert output.layout == ttnn.ROW_MAJOR_LAYOUT
+
+
+# Rank > 4 reaches validate_on_program_cache_miss at its original rank, since the empty path builds
+# the end indices over the input's rank rather than the squeezed one.
+@pytest.mark.parametrize("shape, ends", [((2, 2, 3, 0, 4), [1, 1, 2, 4294967295, 3]), ((2, 2, 3, 0, 64), None)])
+def test_untilize_with_unpadding_rank_5_zero_volume(device, shape, ends):
+    tilized = ttnn.from_torch(
+        torch.rand(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    output = ttnn.untilize(tilized) if ends is None else ttnn.untilize_with_unpadding(tilized, ttnn.Shape(ends))
+
+    assert list(output.shape) == list(shape)
+    assert output.layout == ttnn.ROW_MAJOR_LAYOUT
