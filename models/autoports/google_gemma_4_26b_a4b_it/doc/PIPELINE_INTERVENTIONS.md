@@ -6,6 +6,20 @@ windows, not continuous compute time.
 
 ## What the pipeline did
 
+### Latest user-directed release continuation (2026-10-03)
+
+Human direction: accept the measured2/5 SWE score and carry the selected
+configuration into actual release CI with serving benchmarks, GPQA10,
+TerminalBench5 and original SWE5. This supersedes the all-five-correct objective.
+The agent audited and repaired a SWE-only catalog plus stale agentic routing,
+restored exact family counts, serialC1 agentic scheduling, and the historical
+23-row release matrix. The same immutable image/read-only precision overlay is
+reused; prompts and accepted generation budgets remain unchanged. Configuration
+audit/tests began2026-10-03; CI results and final agent-work elapsed time pending.
+See [release run notes](tti_release/RUN_NOTES.md) for exact provenance, forecast,
+validation and subsequent outcome. This intervention is not a new measured
+speedup or an accuracy waiver for unrelated release checks.
+
 The original 11-stage Gemma 4 pipeline started on 2026-09-25 at 17:17 UTC. It
 brought up the decoder, fused and optimized it, added multichip execution,
 assembled and optimized the full model, selected datatypes, and integrated and

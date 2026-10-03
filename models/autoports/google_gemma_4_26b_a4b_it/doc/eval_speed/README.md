@@ -7,6 +7,11 @@ not a claim that the five-task evaluation has been repaired.
 
 ## Current aggregate-suite continuation (2026-10-02)
 
+**2026-10-03 objective update:** the user accepts the measured2/5 SWE and requests
+the same candidate in actual release CI: benchmarks + GPQA10 + TerminalBench5 +
+original SWE5. The prior all-five-correct goal below is historical, not a blocker
+to this new run. See [release configuration and live handoff](../tti_release/RUN_NOTES.md).
+
 The user requests the measured **original five tasks together**, then aggregate
 optimization. As of **10:42 UTC**, the actual combined baseline has completed:
 [CI36983437902](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/36983437902),
