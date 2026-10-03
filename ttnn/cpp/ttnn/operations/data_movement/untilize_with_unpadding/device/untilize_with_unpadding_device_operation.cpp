@@ -263,7 +263,10 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                 // What else?
             } else if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
                 auto output_shape = compute_output_specs(operation_attributes, input).padded_shape();
-                for (uint32_t i = 0; i < output_shape.rank() - 2; i++) {
+                // Batch dims only, so nothing to check below rank 3. Written as i + 2 < rank
+                // rather than rank - 2: the rank is unsigned, and rank 1 wrapped to 4294967295
+                // and compared the height against dim 0.
+                for (uint32_t i = 0; i + 2 < output_shape.rank(); i++) {
                     TT_FATAL(
                         input_tensor_a.padded_shape()[i] == output_shape[i],
                         "Input tensor padded shape[{}] ({}) must equal output shape[{}] ({})",
