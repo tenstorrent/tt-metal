@@ -6,12 +6,17 @@
 
 #include <array>
 #include <tuple>
+#include <vector>
 
 #include <hostdevcommon/fabric_common.h>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake_types.hpp"
 #include "tt_metal/fabric/manifest/struct_layout.hpp"
+
+namespace tt::tt_metal {
+class Hal;
+}  // namespace tt::tt_metal
 
 namespace tt::tt_fabric {
 
@@ -196,5 +201,12 @@ using DescribedStructs = std::tuple<
     DynamicInfo,
     StaticInfo,
     FabricTelemetry>;
+
+// ============ Go message ============
+
+// The layout of go_msg_t on the active Ethernet core, built at run time from the HAL's generated accessors. The host
+// cannot name the raw go_msg_t (dev_msgs.h is compiled only inside the HAL's per-arch files), so this layout is not
+// in DescribedStructs, and instead a gtest checks its coverage for each arch.
+std::vector<FieldLayout> go_msg_layout(const tt::tt_metal::Hal& hal);
 
 }  // namespace tt::tt_fabric

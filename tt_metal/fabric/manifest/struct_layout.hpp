@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string_view>
 #include <type_traits>
 #include <variant>
@@ -106,10 +107,9 @@ constexpr FieldType field_type() {
     }
 }
 
-// Ensures that every byte of struct T belongs to exactly one field, listed in T's declaration order,
-// where each field starts where the previous one ended, and the last one ends at sizeof(T).
-template <typename T, std::size_t N>
-constexpr bool validate_struct_fields(const std::array<FieldLayout, N>& fields) {
+// Ensures that every byte of a struct of `size` bytes belongs to exactly one field, listed in declaration order,
+// where each field starts where the previous one ended, and the last one ends at `size`.
+constexpr bool validate_fields(std::span<const FieldLayout> fields, std::size_t size) {
     uint32_t expected_offset = 0;
     for (const auto& field : fields) {
         if (field.offset != expected_offset) {
@@ -117,7 +117,13 @@ constexpr bool validate_struct_fields(const std::array<FieldLayout, N>& fields) 
         }
         expected_offset += field.size;
     }
-    return expected_offset == sizeof(T);
+    return expected_offset == size;
+}
+
+// validate_fields against sizeof(T), for a field list known at compile time.
+template <typename T, std::size_t N>
+constexpr bool validate_struct_fields(const std::array<FieldLayout, N>& fields) {
+    return validate_fields(fields, sizeof(T));
 }
 
 }  // namespace tt::tt_fabric
