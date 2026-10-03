@@ -132,12 +132,14 @@ def generate_qsr_pack_combinations(
             continue
 
         # Threshold ReLU modes are not supported for integer pack_src formats
-        # (mirroring the pytest.skip guard in the test body).
-        relu_types = (
-            [PackerReluType.NoRelu, PackerReluType.ZeroRelu]
-            if in_fmt.is_integer()
-            else all_relu_types
-        )
+        # (mirroring the pytest.skip guard in the test body), and the packer
+        # passes Int16 through with no ReLU of any kind applied.
+        if in_fmt == DataFormat.Int16:
+            relu_types = [PackerReluType.NoRelu]
+        elif in_fmt.is_integer():
+            relu_types = [PackerReluType.NoRelu, PackerReluType.ZeroRelu]
+        else:
+            relu_types = all_relu_types
         for dest_acc in get_dest_acc_modes(in_fmt):
             if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
                 tile_sizes = (

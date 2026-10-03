@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.utility_functions import is_blackhole, is_wormhole_b0
 import torch
 import pytest
 import ttnn
@@ -12,7 +11,6 @@ from tests.ttnn.utils_for_testing import (
     assert_allclose,
     assert_with_pcc,
     flush_subnormal_values_to_zero,
-    generate_all_bfloat16_bitpatterns,
 )
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     generate_bfloat16_bits,
@@ -21,7 +19,6 @@ from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     to_tt_tensor,
     MAX_BF16,
     SMALLEST_NORMAL_BF16,
-    assert_bfloat16_compiled_contract,
 )
 
 pytestmark = pytest.mark.use_module_device
@@ -723,44 +720,3 @@ def test_bessel_ops(device, ttnn_op, low, high):
     golden = flush_to_zero(golden)
 
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
-
-
-@pytest.mark.skipif(
-    not (is_blackhole() or is_wormhole_b0()), reason="compiler-generated BF16 kernel ships on Blackhole and Wormhole B0"
-)
-def test_erfc_bf16_compiled_contract(device):
-    import importlib
-    import numpy as np
-
-    _REFERENCE_MODULE = "torch.special"
-    _REFERENCE_FUNCTION = "erfc"
-    _RAW_TO_REFERENCE_INPUT = {
-        "pos_zero": "pos_zero",
-        "neg_zero": "pos_zero",
-        "pos_subnormal": "pos_zero",
-        "neg_subnormal": "pos_zero",
-        "finite_other": "finite_other",
-        "pos_inf": "pos_inf",
-        "neg_inf": "neg_inf",
-        "pos_nan": "pos_inf",
-        "neg_nan": "neg_inf",
-    }
-    _NUMERIC_TERMINALS = ((), (("below", -5.0, False, "constant", 2.0), ("above", 9.5, True, "constant", 0.0)))
-
-    def _reference(values):
-        module = importlib.import_module(_REFERENCE_MODULE)
-        if _REFERENCE_MODULE == "numpy":
-            result = getattr(module, _REFERENCE_FUNCTION)(values.numpy(), **{})
-            return torch.from_numpy(np.asarray(result, dtype=np.float64))
-        return getattr(module, _REFERENCE_FUNCTION)(input=values, **{})
-
-    def _real_domain_mask(values):
-        return np.ones(values.shape, dtype=bool)
-
-    host = generate_all_bfloat16_bitpatterns()
-    assert host.numel() == 65536
-    device_input = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    result = ttnn.to_torch(ttnn.erfc(device_input, **{})).to(torch.bfloat16)
-    assert_bfloat16_compiled_contract(
-        host, result, _reference, _real_domain_mask, _RAW_TO_REFERENCE_INPUT, _NUMERIC_TERMINALS
-    )

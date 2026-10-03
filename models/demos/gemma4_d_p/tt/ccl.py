@@ -120,29 +120,14 @@ class CCLManager:
         self._ring_gather_buffers = {}
 
     def get_ring_gather_buffer(self, key, n_kv_local, seq, head_dim, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG):
-        """Persistent ring-gather scratch for ``ring_joint`` SDPA.
+        """Return persistent ring-attention receive storage.
 
-        Allocated once and reused across every layer and chunk. The op treats it as
-        scratch: it fills the gathered region and masks the invalid tail via
-        ``kv_actual_isl``, so reuse without re-zeroing is safe.
-
-        ``seq`` must be the FULL cache capacity (max_seq_len), not the current
-        ``logical_n``. ring_joint gathers the entire per-device cache shard
-        (seq_local = max_seq_len/cp, times cp around the ring), independent of how
-        much of it is valid. Sizing to logical_n happens to work when the final
-        chunk's logical_n == max_seq_len — i.e. a 2-chunk run — and fails beyond
-        that with "gather dim 2 too small" (minimax_m3 hit this at 11 chunks).
-
-        ``key`` separates buffers live in the same call ("k" vs "v"); shape and dtype
-        key the rest. Heads shard on the TP columns, sequence replicated across the
-        CP rows — the layout the ring op reconstructs into.
-
-        ``n_kv_local`` is the per-device head count. The buffer is built at the global
-        size ``n_kv_local * tp_degree`` and sharded across the TP columns so each device
-        ends up with its own ``n_kv_local`` heads. Passing the local count straight to
-        the sharder fails ("number of chunks N to match the mesh dimension size"), and
-        it also has to work for kv-replicated layers where the model's global KV head
-        count is smaller than the TP width.
+        Distinct ``key`` values isolate receive buffers. ``seq`` is the full cache
+        capacity for dense attention and the halo size for sliding attention.
+        ``n_kv_local`` is the per-device head count; allocation uses
+        ``n_kv_local * tp_degree`` heads, sharded across TP columns and replicated
+        across CP rows. The op overwrites valid entries and masks invalid ones,
+        so the scratch buffer needs no re-zeroing.
         """
         mesh_config = self.mesh_config
         n_kv_global = n_kv_local * mesh_config.tp_degree
@@ -321,3 +306,41 @@ def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):
         )
         tensor.deallocate(True)
     return gathered
+
+
+def ccl_partition_rows(tensor, mesh_config):
+    """Keep this TP device's 1/TP of the rows of a TP-replicated tensor."""
+    if mesh_config is None or mesh_config.tp_degree <= 1:
+        return tensor
+    return ttnn.mesh_partition(tensor, dim=2, cluster_axis=mesh_config.tp_axis)
+
+
+def ccl_reduce_scatter_rows(tensor, mesh_config, ccl_manager, memory_config=None):
+    """Sum row-parallel projection partials across TP and keep this device's 1/TP of the rows.
+
+    With ccl_allgather(dim=2) this is an all-reduce split around the norms and residual adds, which then run on
+    1/TP of the rows.
+    """
+    if mesh_config is None or mesh_config.tp_degree <= 1:
+        return tensor
+    memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
+    if ccl_async_enabled():
+        result = ttnn.experimental.reduce_scatter_minimal_async(
+            tensor,
+            persistent_output_buffers=None,
+            dim=2,
+            multi_device_global_semaphore=ccl_manager.get_rs_semaphore(),
+            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+            num_links=ccl_manager.num_links,
+            cluster_axis=mesh_config.tp_axis,
+            memory_config=memory_config,
+            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ccl_manager.topology,
+            chunks_per_sync=ccl_chunks_per_sync(),
+            num_workers_per_link=ccl_num_workers_per_link(),
+            num_buffers_per_channel=ccl_num_buffers_per_channel(),
+        )
+    else:
+        result = ttnn.reduce_scatter(tensor, dim=2, cluster_axis=mesh_config.tp_axis, memory_config=memory_config)
+    tensor.deallocate(True)
+    return result
