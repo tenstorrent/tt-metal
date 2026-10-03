@@ -2133,6 +2133,15 @@ class TestConfig:
                 if words[word_index[mailbox]] == KERNEL_COMPLETE
             }
 
+        # Quasar kernels also signal completion in registers outside L1 (host_signal in boot.h), so the wait never
+        # reads their L1. The TRISC at mailbox word n signals in slot n (trisc.cpp: mailbox_offset / 4).
+        signal_addrs = {
+            mailbox: device_module.host_signal_address(word_index[mailbox])
+            for mailbox in mailboxes
+        }
+        if not all(addr is not None for addr in signal_addrs.values()):
+            signal_addrs = None
+
         # BRISC boot: BRISC puts itself and the TRISCs back in soft reset once every TRISC is done (brisc.cpp), so the
         # wait polls that register and never reads L1 while a kernel runs.
         brisc_launch = self.resolved_boot_mode() == BootMode.BRISC
@@ -2164,6 +2173,15 @@ class TestConfig:
                 done = (
                     soft_reset_bits(TestConfig.TENSIX_LOCATION) & brisc_done_mask
                     == brisc_done_mask
+                )
+            elif signal_addrs is not None:
+                done = all(
+                    np.frombuffer(
+                        read_from_device(TestConfig.TENSIX_LOCATION, addr, num_bytes=4),
+                        dtype=np.uint32,
+                    )[0]
+                    == KERNEL_COMPLETE
+                    for addr in signal_addrs.values()
                 )
             else:
                 done = completed_mailboxes() == mailboxes

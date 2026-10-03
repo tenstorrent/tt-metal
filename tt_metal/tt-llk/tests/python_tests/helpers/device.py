@@ -255,6 +255,11 @@ def soft_reset_bits(location: str = "0,0") -> int:
     return get_register_store(location, 0).read_register("RISCV_DEBUG_REG_SOFT_RESET_0")
 
 
+# Quasar kernels mirror their completion flags into cluster control scratch registers (host_signal in boot.h), so
+# waiting on a kernel never reads its L1. ttsim keeps the L1 path.
+_QUASAR_HOST_SIGNAL_BASE = 0x030000B0  # TT_CLUSTER_CTRL_SCRATCH_28
+
+
 # boot.h host_signal on Wormhole and Blackhole: STREAM_SCRATCH_0 of overlay stream 0, where BRISC marks a launch done.
 _NOC_OVERLAY_START_ADDR = 0xFFB40000
 _HOST_SIGNAL_SCRATCH_INDEX = {
@@ -271,6 +276,22 @@ def launch_done_address() -> int | None:
     if index is None or (target is not None and target.run_simulator):
         return None
     return _NOC_OVERLAY_START_ADDR + index * 4
+
+
+def host_signal_address(slot: int) -> int | None:
+    """Address of host signal slot, or None when this target signals through L1 only."""
+    if get_chip_architecture() != ChipArchitecture.QUASAR:
+        return None
+    # The emulator models the cluster control registers; ttsim (a shared library) does not
+    target = TestTargetConfig._instance
+    sim = (
+        os.environ.get("TT_METAL_SIMULATOR")
+        or os.environ.get("TT_UMD_SIMULATOR_PATH")
+        or ""
+    )
+    if target is not None and target.run_simulator and sim.endswith(".so"):
+        return None
+    return _QUASAR_HOST_SIGNAL_BASE + slot * 4
 
 
 def assert_if_all_in_reset(location: str = "0,0", place: str = ""):
@@ -384,6 +405,12 @@ def reset_mailboxes(location: str = "0,0"):
             addr=MAILBOX_START_BLOCK,
             data=[0xA3] * len(Mailboxes),  # All 4 TRISC mailboxes on Quasar
         )
+        for slot in range(4):
+            addr = host_signal_address(slot)
+            if addr is not None:
+                write_words_to_device(
+                    location=location, addr=addr, data=[0xA3], safe_mode=False
+                )
     else:
         write_words_to_device(
             location=location,
