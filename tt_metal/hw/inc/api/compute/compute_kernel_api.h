@@ -617,6 +617,16 @@ ALWI void power_iterative_tile_init() { MATH(SFPU_UNARY_INIT(power)); }
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void exp2_tile(uint32_t idst) {
+    if constexpr (!is_fp32_dest_acc_en) {
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_exp2,
+            (true /* APPROXIMATE */, is_fp32_dest_acc_en, 32),
+            idst,
+            VectorMode::None));
+        return;
+    }
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
