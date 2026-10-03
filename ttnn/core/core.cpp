@@ -6,9 +6,17 @@
 #include <tt_stl/caseless_comparison.hpp>
 #include <enchantum/enchantum.hpp>
 
-#include <tt-metalium/host_api.hpp>
+#include <tt_stl/assert.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 namespace ttnn::core {
+
+namespace {
+
+// Not tied to a device or MetalContext, so it works before a device is opened and never creates a context.
+thread_local std::vector<QueueId> current_command_queue_id_stack;
+
+}  // namespace
 
 bool has_storage_type_of(const ttnn::Tensor& tensor, const ttnn::StorageType& storage_type) {
     return tensor.storage_type() == storage_type;
@@ -39,15 +47,30 @@ void dump_stack_trace_on_segfault() {
     }
 }
 
-QueueId get_current_command_queue_id_for_thread() { return QueueId(tt::tt_metal::GetCurrentCommandQueueIdForThread()); }
-void push_current_command_queue_id_for_thread(QueueId cq_id) {
-    tt::tt_metal::PushCurrentCommandQueueIdForThread(cq_id.get());
+QueueId get_current_command_queue_id_for_thread() {
+    if (current_command_queue_id_stack.empty()) {
+        return QueueId(0);
+    }
+    return current_command_queue_id_stack.back();
 }
-QueueId pop_current_command_queue_id_for_thread() { return QueueId(tt::tt_metal::PopCurrentCommandQueueIdForThread()); }
+
+void push_current_command_queue_id_for_thread(QueueId cq_id) { current_command_queue_id_stack.push_back(cq_id); }
+
+QueueId pop_current_command_queue_id_for_thread() {
+    TT_FATAL(!current_command_queue_id_stack.empty(), "Current command queue id stack is empty!");
+    const QueueId cq_id = current_command_queue_id_stack.back();
+    current_command_queue_id_stack.pop_back();
+    return cq_id;
+}
 
 ScopeGuard with_command_queue_id(QueueId cq_id) {
     push_current_command_queue_id_for_thread(cq_id);
     return make_guard([cq_id]() { pop_current_command_queue_id_for_thread(); });
+}
+
+tt::tt_metal::distributed::MeshCommandQueue& current_mesh_command_queue(
+    tt::tt_metal::distributed::MeshDevice& mesh_device, std::optional<QueueId> cq_id) {
+    return mesh_device.mesh_command_queue(cq_id.value_or(get_current_command_queue_id_for_thread()).get());
 }
 
 }  // namespace ttnn::core

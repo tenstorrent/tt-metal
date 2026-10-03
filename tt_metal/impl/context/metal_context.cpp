@@ -759,17 +759,6 @@ void MetalContext::init_risc_fw_context_descriptor(int num_hw_cqs, size_t worker
         rtoptions().get_mock_cluster_desc_path());
 }
 
-// ─── Command queue id stack ──────────────────────────────────────────────────
-
-thread_local MetalContext::CommandQueueIdStack MetalContext::command_queue_id_stack_for_thread_;
-
-MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() {
-    return MetalContext::command_queue_id_stack_for_thread_;
-}
-const MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() const {
-    return MetalContext::command_queue_id_stack_for_thread_;
-}
-
 bool MetalContext::is_coord_in_range(CoreCoord coord, CoreType core_type) {
     ChipId id = *get_cluster().all_chip_ids().begin();
     if (core_type == CoreType::ACTIVE_ETH || core_type == CoreType::IDLE_ETH) {

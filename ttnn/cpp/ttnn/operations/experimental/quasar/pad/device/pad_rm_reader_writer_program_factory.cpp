@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pad_rm_reader_writer_program_factory.hpp"
+#include "ttnn/core.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -45,7 +46,7 @@ MeshTensor build_pad_value_const_mesh_tensor(const PadInputs& tensor_args, float
         ttnn::Shape({1, 1, 1, pad_value_const_buffer_size}),
         DataType::BFLOAT16,
         Layout::ROW_MAJOR);
-    auto& cq = device->mesh_command_queue();
+    auto& cq = ttnn::core::current_mesh_command_queue(*device);
     // NOTE: The const buffer is always in L1 (mirrors the legacy factory).
     const MemoryConfig mem_cfg{TensorMemoryLayout::INTERLEAVED, BufferType::L1};
     return cq.enqueue_write_tensor(host_pad.host_tensor(), mem_cfg);

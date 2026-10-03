@@ -791,12 +791,12 @@ bool ShouldCaptureTensorSpecs() {
 }
 
 std::optional<tt::tt_metal::distributed::MeshTraceId> GetCurrentMeshTraceId(
-    tt::tt_metal::distributed::MeshDevice* mesh_device) {
+    tt::tt_metal::distributed::MeshDevice* mesh_device, std::optional<uint8_t> cq_id) {
     // mesh_command_queue().trace_id() is only supported in fast dispatch and would throw otherwise.
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         return std::nullopt;
     }
-    return mesh_device->mesh_command_queue().trace_id();
+    return mesh_device->mesh_command_queue(cq_id).trace_id();
 }
 
 void EmitMeshWorkloadDebugEntry(

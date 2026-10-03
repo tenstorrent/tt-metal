@@ -16,6 +16,12 @@
 #include "ttnn/config.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/common/guard.hpp"
+#include "ttnn/common/queue_id.hpp"
+
+namespace tt::tt_metal::distributed {
+class MeshCommandQueue;
+class MeshDevice;
+}  // namespace tt::tt_metal::distributed
 
 namespace ttnn {
 
@@ -41,6 +47,13 @@ void segfault_handler(int sig);
 
 void dump_stack_trace_on_segfault();
 
+// Thread-local "current command queue id" selection.
+//
+// TTNN owns this per-thread stack; Metal has no implicit queue state (MeshDevice::mesh_command_queue() with no
+// argument always means cq 0). TTNN entry points that take an optional cq_id resolve a missing value through
+// current_mesh_command_queue() below, which is what makes `with_command_queue_id` / `ttnn.command_queue` work.
+// The stack is not tied to a device or MetalContext: get returns 0 when nothing has been pushed, and
+// push/pop never create a context. pop on an empty stack is a fatal error.
 QueueId get_current_command_queue_id_for_thread();
 void push_current_command_queue_id_for_thread(QueueId cq_id);
 QueueId pop_current_command_queue_id_for_thread();
@@ -53,8 +66,15 @@ void with_command_queue_id(QueueId cq_id, T&& func) {
     std::forward<T>(func)();
 }
 
+// Returns the mesh command queue TTNN should dispatch to: `cq_id` if provided, otherwise the thread's current
+// command queue id (cq 0 when none has been selected). Use this instead of calling
+// `mesh_device.mesh_command_queue()` without an explicit id.
+tt::tt_metal::distributed::MeshCommandQueue& current_mesh_command_queue(
+    tt::tt_metal::distributed::MeshDevice& mesh_device, std::optional<QueueId> cq_id = std::nullopt);
+
 }  // namespace core
 
+using core::current_mesh_command_queue;
 using core::get_current_command_queue_id_for_thread;
 using core::get_memory_config;
 using core::has_storage_type_of;

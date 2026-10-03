@@ -214,11 +214,6 @@ public:
 
     tt_fabric::FabricManagerMode get_fabric_manager() const;
 
-    // This is used to track the current thread's command queue id stack
-    using CommandQueueIdStack = std::vector<uint8_t>;
-    CommandQueueIdStack& get_command_queue_id_stack_for_thread();
-    const CommandQueueIdStack& get_command_queue_id_stack_for_thread() const;
-
     // Utilities
     bool is_coord_in_range(CoreCoord coord, CoreType core_type);
 
@@ -292,11 +287,6 @@ private:
     std::unordered_set<InitializerKey> risc_fw_init_done_;
 
     std::unique_ptr<DispatchMemMap> dispatch_mem_map_;
-
-    // We are using a thread_local to allow each thread to have its own command queue id stack.
-    // This not only allows consumers to set active command queue for a thread
-    // but to also easily push/pop ids to temporarily change the current cq id.
-    static thread_local CommandQueueIdStack command_queue_id_stack_for_thread_;
 };
 
 }  // namespace tt::tt_metal
