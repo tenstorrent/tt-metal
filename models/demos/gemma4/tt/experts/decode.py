@@ -11,6 +11,7 @@ sparse_matmul output is 6D: [batch_dims..., num_experts, seq_tiles, n_dim].
 import math
 
 import ttnn
+from models.demos.gemma4.tt import fp32_mode
 from models.demos.gemma4.tt.ccl import ccl_allreduce
 
 from .operations import apply_geglu
@@ -80,6 +81,8 @@ def decode_forward(
 
     # Prepare sparsity pattern (must be ROW_MAJOR bfloat16)
     sparsity = ttnn.to_layout(routing_weights, ttnn.ROW_MAJOR_LAYOUT)
+    if sparsity.dtype != ttnn.bfloat16:  # fp32 mode: the sparsity mask must stay bf16
+        sparsity = ttnn.typecast(sparsity, ttnn.bfloat16)
     output_tile = ttnn.Tile([32, 32])
 
     _k_tiles = int(math.ceil(config.hidden_size / 32))
@@ -128,8 +131,8 @@ def decode_forward(
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
         program_config=gate_up_config,
-        compute_kernel_config=_gu_ckc,
-        dtype=ttnn.bfloat16,
+        compute_kernel_config=fp32_mode.compute_config(_gu_ckc),
+        dtype=fp32_mode.act_dtype(),
     )
     # sparse_matmul output uses logical intermediate dim (may differ from padded weight size)
     sm_intermediate = gate.shape[-1]
@@ -147,8 +150,8 @@ def decode_forward(
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
         program_config=gate_up_config,
-        compute_kernel_config=_gu_ckc,
-        dtype=ttnn.bfloat16,
+        compute_kernel_config=fp32_mode.compute_config(_gu_ckc),
+        dtype=fp32_mode.act_dtype(),
     )
     up = ttnn.reshape(up, (batch_size, num_experts, 1, sm_intermediate))
     up = ttnn.transpose(up, 1, 2)
@@ -171,7 +174,8 @@ def decode_forward(
         output_tile=output_tile,
         program_config=down_config,
         is_input_a_sparse=True,
-        dtype=ttnn.bfloat16,
+        dtype=fp32_mode.act_dtype(),
+        compute_kernel_config=fp32_mode.compute_config(),
     )
 
     # down shape: [1, E, S, H] — permute to [1, S, E, H]
@@ -185,10 +189,12 @@ def decode_forward(
     next_states = ttnn.matmul(
         routing_3d,
         next_states,
-        compute_kernel_config=ttnn.init_device_compute_kernel_config(
-            next_states.device().arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            fp32_dest_acc_en=True,
+        compute_kernel_config=fp32_mode.compute_config(
+            ttnn.init_device_compute_kernel_config(
+                next_states.device().arch(),
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                fp32_dest_acc_en=True,
+            )
         ),
         program_config=ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(7, 7),
@@ -203,7 +209,7 @@ def decode_forward(
             fused_activation=None,
             mcast_in0=True,
         ),
-        dtype=ttnn.bfloat16,
+        dtype=fp32_mode.act_dtype(),
     )
     next_states = ttnn.reshape(next_states, (batch_size, config.hidden_size))
     next_states = ttnn.unsqueeze_to_4D(next_states)

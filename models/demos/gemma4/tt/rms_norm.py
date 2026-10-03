@@ -4,6 +4,7 @@
 from torch import nn
 
 import ttnn
+from models.demos.gemma4.tt import fp32_mode
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
@@ -105,6 +106,7 @@ class RMSNorm(nn.Module):
             weight=self.tt_weight,
             epsilon=self.eps,
             program_config=self._sharded_cfg[1],
+            compute_kernel_config=fp32_mode.compute_config(),
         )
         if x_sh is not x:
             x_sh.deallocate(True)
@@ -188,10 +190,12 @@ class RMSNorm(nn.Module):
                     x,
                     weight=self.tt_weight,
                     epsilon=self.eps,
+                    compute_kernel_config=fp32_mode.compute_config(),
                 )
             else:
                 tt_output = ttnn.rms_norm(
                     x,
                     epsilon=self.eps,
+                    compute_kernel_config=fp32_mode.compute_config(),
                 )
             return tt_output

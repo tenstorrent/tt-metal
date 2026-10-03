@@ -11,6 +11,7 @@ top-k weights linearly (NOT a second softmax — that would diverge from HF).
 
 
 import ttnn
+from models.demos.gemma4.tt import fp32_mode
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
@@ -127,38 +128,58 @@ class Gemma4Router:
                     fused_activation=None,
                     fuse_batch=True,
                 ),
-                compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                compute_kernel_config=fp32_mode.compute_config(ttnn.WormholeComputeKernelConfig(
                     math_fidelity=ttnn.MathFidelity.HiFi2,
                     math_approx_mode=False,
                     fp32_dest_acc_en=True,
                     packer_l1_acc=True,
-                ),
+                )),
             )
         else:
-            expert_scores = ttnn.linear(scaled, self.proj_weight)
+            expert_scores = ttnn.linear(scaled, self.proj_weight, compute_kernel_config=fp32_mode.compute_config())
         scaled.deallocate(True)
 
-        # 4. Softmax over all experts — on device
-        router_probs = ttnn.softmax(expert_scores, dim=-1)
-        expert_scores.deallocate(True)
+        if fp32_mode.ROUTER_TOPK_ON_SCORES:
+            # 4-6. Top-k on the raw scores (softmax preserves order), then the weights as
+            # exp(s - s_max) normalized over the k chosen experts: identical to HF's
+            # top-k(softmax) / sum, without the all-expert softmax's rounding.
+            top_k_scores, top_k_indices = ttnn.topk(expert_scores, k=self.top_k, dim=-1)
+            s_max = ttnn.max(top_k_scores, dim=-1, keepdim=True)
+            e = ttnn.exp(ttnn.sub(top_k_scores, s_max), fast_and_approximate_mode=False)
+            top_k_values = ttnn.div(e, ttnn.sum(e, dim=-1, keepdim=True))
+            router_probs = expert_scores  # shape/dtype template for the dense scatter below
+        else:
+            # 4. Softmax over all experts — on device
+            router_probs = ttnn.softmax(expert_scores, dim=-1)
+            expert_scores.deallocate(True)
 
-        # 5. TopK — on device → values [1,1,S,k], indices [1,1,S,k]
-        top_k_values, top_k_indices = ttnn.topk(router_probs, k=self.top_k, dim=-1)
+            # 5. TopK — on device → values [1,1,S,k], indices [1,1,S,k]
+            top_k_values, top_k_indices = ttnn.topk(router_probs, k=self.top_k, dim=-1)
 
-        # 6. Sum-normalize top-k weights so they sum to 1 per token. HF Gemma4
-        # divides by the sum here; a second softmax would compress the
-        # distribution nonlinearly and diverge from the reference.
-        top_k_sum = ttnn.sum(top_k_values, dim=-1, keepdim=True)
-        top_k_values = ttnn.div(top_k_values, top_k_sum)
-        top_k_sum.deallocate(True)
+            # 6. Sum-normalize top-k weights so they sum to 1 per token. HF Gemma4
+            # divides by the sum here; a second softmax would compress the
+            # distribution nonlinearly and diverge from the reference.
+            top_k_sum = ttnn.sum(top_k_values, dim=-1, keepdim=True)
+            top_k_values = ttnn.div(top_k_values, top_k_sum)
+            top_k_sum.deallocate(True)
 
         # 7. Scatter into dense [1,1,S,E] — fully on device
-        dense_routing = ttnn.scatter(
-            ttnn.zeros_like(router_probs),
-            dim=-1,
-            index=top_k_indices,
-            src=top_k_values,
-        )
+        if fp32_mode.ENABLED and router_probs.dtype == ttnn.float32:
+            # ttnn.scatter rejects fp32 TILE tensors: scatter in ROW_MAJOR, then back to TILE.
+            dense_routing = ttnn.scatter(
+                ttnn.to_layout(ttnn.zeros_like(router_probs), ttnn.ROW_MAJOR_LAYOUT),
+                dim=-1,
+                index=ttnn.to_layout(top_k_indices, ttnn.ROW_MAJOR_LAYOUT),
+                src=ttnn.to_layout(top_k_values, ttnn.ROW_MAJOR_LAYOUT),
+            )
+            dense_routing = ttnn.to_layout(dense_routing, ttnn.TILE_LAYOUT)
+        else:
+            dense_routing = ttnn.scatter(
+                ttnn.zeros_like(router_probs),
+                dim=-1,
+                index=top_k_indices,
+                src=top_k_values,
+            )
         router_probs.deallocate(True)
         top_k_values.deallocate(True)
         top_k_indices.deallocate(True)
