@@ -110,6 +110,9 @@ int main(void)
         ckernel::fence_compiler();
 
         ckernel::tensix_sync();
+#if defined(LLK_DBG_BARRIER) // a thread that finishes first waits halted, so no code outside run_kernel runs in another zone
+        llk_barrier::detail::park();
+#endif
     }
 
     llk_perf::read_last_zone();
@@ -122,6 +125,11 @@ int main(void)
     *mailbox = ckernel::KERNEL_COMPLETE; // kept in L1 too: ttsim's only signal, and what trisc_hangs and llk_triage.py read
     asm volatile("fence" ::: "memory"); // the L1 results land before the flag the host polls
     host_signal::write(mailbox_offset / sizeof(std::uint32_t), ckernel::KERNEL_COMPLETE);
+#if defined(LLK_DBG_BARRIER) // the flag has landed before the last arrival, which ends BRISC's serving
+    (void)ckernel::load_blocking(reinterpret_cast<volatile std::uint32_t*>(
+        host_signal::NOC_OVERLAY_START_ADDR + (mailbox_offset / sizeof(std::uint32_t)) * host_signal::NOC_STREAM_REG_SPACE_SIZE +
+        host_signal::STREAM_SCRATCH_REG_INDEX * 4));
+    (void)ckernel::load_blocking(&ckernel::pc_buf_base[0]);
 #endif
 }
 

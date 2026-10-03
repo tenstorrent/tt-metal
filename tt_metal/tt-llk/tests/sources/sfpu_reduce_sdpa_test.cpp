@@ -40,6 +40,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
     const Operand& buffer_A         = params.buffer_A;
 #endif
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -59,6 +60,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_A_dst);
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
@@ -98,6 +100,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const std::uint32_t num_tiles_in_block = BLOCK_RT_DIM * BLOCK_CT_DIM;
     const std::uint32_t num_blocks         = TILE_CNT / num_tiles_in_block;
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
@@ -111,6 +114,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
@@ -163,6 +167,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const std::uint32_t num_tiles_in_block = BLOCK_RT_DIM * BLOCK_CT_DIM;
     const std::uint32_t num_blocks         = TILE_CNT / num_tiles_in_block;
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
@@ -173,6 +178,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ckernel::sfpu::_init_reduce_max_col_subblock_4x2_<DataFormat::Float16_b>();
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)

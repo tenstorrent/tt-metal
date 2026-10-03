@@ -1312,6 +1312,14 @@ class TestConfig:
             return ""
         return '#include "barrier.h"\n'
 
+    def _wormhole_perf_barrier(self) -> bool:
+        """Wormhole perf builds on hardware: compiled with LLK_DBG_BARRIER and started with the barrier commands."""
+        return (
+            self.profiler_build == ProfilerBuild.Yes
+            and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
+            and not TestConfig.TEST_TARGET.run_simulator
+        )
+
     def _kernel_placement_include(self) -> str:
         """C++ snippet that pins run_kernel at a fixed address (kernel_placement.h) in profiler builds, the only
         ones that are timed; the alignment would cost the other kernels code space. The fuser writes its own.
@@ -1502,6 +1510,10 @@ class TestConfig:
             llk_roots = {TestConfig.LLK_ROOT, TestConfig.LLK_ROOT.resolve()}
             for root in sorted(llk_roots):
                 OPTIONS_COMPILE += f"{shlex.quote(f'-fmacro-prefix-map={root}/=')} "
+        if self._wormhole_perf_barrier():
+            # BRISC restarts the TRISCs at every rendezvous from 512 B aligned points and INIT runs out of line,
+            # so a code change outside the measured code cannot move it (see barrier.h)
+            OPTIONS_COMPILE += "-DLLK_DBG_BARRIER "
 
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
@@ -2156,25 +2168,32 @@ class TestConfig:
                         verify_write=False,
                     )
 
-            TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR
-
-        if TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE:
-            # The TRISCs clear their start addresses after reading them, so every launch writes them again.
-            write_words_to_device(
-                TestConfig.TENSIX_LOCATION,
-                TestConfig.TRISC_START_ADDRS[0],
-                TestConfig.TRISC_START_VALUES,
-            )
+            if (
+                boot_mode == BootMode.BRISC
+                and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
+            ):
+                commit_brisc_command(
+                    TestConfig.TENSIX_LOCATION,
+                    (
+                        BriscCmd.UPDATE_START_ADDR_CACHE_AND_START_DBG_BARRIER
+                        if self._wormhole_perf_barrier()
+                        else BriscCmd.UPDATE_START_ADDR_CACHE_AND_START
+                    ),
+                    timeout=brisc_cmd_timeout,
+                )
+                return
 
         match boot_mode:
             case BootMode.BRISC:
-                launch_done = device_module.launch_done_address()
-                if launch_done is not None:
-                    write_words_to_device(
-                        TestConfig.TENSIX_LOCATION, launch_done, [0], safe_mode=False
-                    )
-                # Not a committed write: a short kernel can be done and back in reset before a readback.
-                set_tensix_soft_reset(0, [RiscCore.BRISC], TestConfig.TENSIX_LOCATION)
+                commit_brisc_command(
+                    TestConfig.TENSIX_LOCATION,
+                    (
+                        BriscCmd.START_TRISCS_DBG_BARRIER
+                        if self._wormhole_perf_barrier()
+                        else BriscCmd.START_TRISCS
+                    ),
+                    timeout=brisc_cmd_timeout,
+                )
             case BootMode.TRISC:
                 reset_mailboxes(TestConfig.TENSIX_LOCATION)
                 set_tensix_soft_reset(0, [RiscCore.TRISC0], TestConfig.TENSIX_LOCATION)

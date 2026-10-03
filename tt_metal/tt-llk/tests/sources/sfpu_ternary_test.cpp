@@ -77,6 +77,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_C = params.buffer_C;
 #endif
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -96,6 +97,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_A_dst);
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
@@ -161,6 +163,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Math represents Float32 as Tf32, while the SFPU dispatch asserts the logical format.
     constexpr DataFormat MATH_FORMAT_ENUM  = (MATH_FORMAT_RAW == DataFormat::Tf32) ? DataFormat::Float32 : MATH_FORMAT_RAW;
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_math_eltwise_unary_datacopy_init_<data_copy_type, is_fp32_dest_acc_en>(
@@ -170,6 +173,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         test_utils::call_ternary_sfpu_operation_init<SFPU_TERNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
@@ -312,6 +316,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifndef SPEED_OF_LIGHT
     const Operand& buffer_Res = params.buffer_Res;
 #endif
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
@@ -320,6 +325,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
