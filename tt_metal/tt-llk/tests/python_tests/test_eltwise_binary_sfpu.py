@@ -456,9 +456,6 @@ def sfpu_binary(
     twos_complement=False,
     input_dimensions=None,
     unspecified_nonfinite_sign=False,
-    extra_templates=(),
-    lhs_factor_golden=None,
-    lhs_boundary_samples=(),
 ):
     """*unspecified_nonfinite_sign* compares a non-finite result by magnitude only.
 
@@ -517,11 +514,6 @@ def sfpu_binary(
     # quantization, so a registry domain or an override would leave the device seeing
     # quantized operands while the golden sees the unrounded originals. Quantize the golden's
     # copy only: src_A keeps the unrounded values, since the packer rounds on the way to L1.
-    if lhs_boundary_samples:
-        for offset in range(0, src_A.numel(), 2 * 32 * 32):
-            src_A[offset : offset + len(lhs_boundary_samples)] = torch.tensor(
-                lhs_boundary_samples, dtype=src_A.dtype
-            )
     golden_src = src_A
     if formats.input_format == DataFormat.Bfp8_b:
         golden_src = quantize_input_to_unpack_format(golden_src, DataFormat.Bfp8_b)
@@ -547,11 +539,6 @@ def sfpu_binary(
     ):
         dest_acc = DestAccumulation.Yes
 
-    if lhs_factor_golden is not None:
-        golden_src = golden_src.clone()
-        for offset in range(0, golden_src.numel(), 2 * 32 * 32):
-            lhs = golden_src[offset : offset + 32 * 32]
-            golden_src[offset : offset + 32 * 32] = lhs_factor_golden(lhs)
     generate_golden = get_golden_generator(BinarySFPUGolden)
     golden_format = (
         DataFormat.Float16_b
@@ -589,19 +576,12 @@ def sfpu_binary(
         DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
     )
 
-    if lhs_factor_golden is not None:
-        # Selected callbacks own one input/gradient pair and may park
-        # coefficients above it. Preserve all input tiles across blocks.
-        num_tiles_in_block = 2
-        num_blocks = tile_cnt_A // num_tiles_in_block
-
     configuration = TestConfig(
         "sources/sfpu_binary_test.cpp",
         formats,
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
             MATH_OP(mathop=mathop),
-            *extra_templates,
             APPROX_MODE(),
             BROADCAST_TYPE(bcast),
         ],
@@ -1828,204 +1808,3 @@ def test_eltwise_binary_sfpu_bcast(
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
-
-
-from dataclasses import dataclass
-
-import numpy as np
-from helpers.test_variant_parameters import TemplateParameter
-
-
-def _tt_poly_backward_factor(x, declared_reference):
-    # Reuse the typed mathematical derivative. The paired driver rounds the
-    # factor to BF16 before its existing multiply-and-pack golden.
-    with np.errstate(all="ignore"):
-        return torch.tensor(
-            declared_reference(x.detach().double().numpy()), dtype=torch.float64
-        )
-
-
-@dataclass
-class _TTPolyBackwardFactor(TemplateParameter):
-    generated_backward_op: str
-    mask_only: bool = False
-
-    def convert_to_cpp(self) -> str:
-        op = self.generated_backward_op
-        config = op.title().replace("_", "") + "Bf16Config"
-        source = (
-            f'#define TT_POLY_LLK_TEST_FACTOR_HEADER "llk_sfpu/ckernel_sfpu_{op}_bf16.h"\n'
-            f"#define TT_POLY_LLK_TEST_FACTOR_CALC calculate_{op}_tt_poly_bf16\n"
-        )
-        if self.mask_only:
-            return source
-        return source + (
-            f"#define TT_POLY_LLK_TEST_FACTOR_INIT init_{op}_tt_poly_bf16\n"
-            f"#define TT_POLY_LLK_TEST_FACTOR_CALC_2 calculate_{op}_gradient_tt_poly_bf16\n"
-            f"#define TT_POLY_LLK_TEST_FACTOR_FINISH_IF ttpoly_generated::{config}::needs_gradient\n"
-        )
-
-
-def _tt_poly_declared_celu_bw(x):
-    def _declared_derivative(x):
-        abs = np.abs
-        exp = np.exp
-        return np.broadcast_to(
-            np.asarray(exp((x - abs(x)) / 2), dtype=np.float64), x.shape
-        )
-
-    return _declared_derivative(x)
-
-
-def _tt_poly_declared_elu_bw(x):
-    def _declared_derivative(x):
-        abs = np.abs
-        exp = np.exp
-        return np.broadcast_to(
-            np.asarray(exp((x - abs(x)) / 2), dtype=np.float64), x.shape
-        )
-
-    return _declared_derivative(x)
-
-
-def _tt_poly_declared_erf_bw(x):
-    def _declared_derivative(x):
-        exp = np.exp
-        pi = np.pi
-        sqrt = np.sqrt
-        return np.broadcast_to(
-            np.asarray(2 * exp(-(x**2)) / sqrt(pi), dtype=np.float64), x.shape
-        )
-
-    return _declared_derivative(x)
-
-
-def _tt_poly_declared_hardshrink_bw(x):
-    raw = np.asarray(x, dtype=np.float32).view(np.uint32) >> 16
-    result = np.zeros(raw.shape, dtype=bool)
-    for first, stop in ((16129, 32768), (48897, 65536)):
-        result |= (raw >= first) & (raw < stop)
-    return result.astype(np.float64) * 1.0
-
-
-def _tt_poly_declared_hardsigmoid_bw(x):
-    raw = np.asarray(x, dtype=np.float32).view(np.uint32) >> 16
-    result = np.zeros(raw.shape, dtype=bool)
-    for first, stop in ((0, 16448), (32641, 49216), (65409, 65536)):
-        result |= (raw >= first) & (raw < stop)
-    return result.astype(np.float64) * 0.1666666716337204
-
-
-def _tt_poly_declared_hardswish_bw(x):
-    def _declared_piece_0(x):
-        return np.broadcast_to(np.asarray(0, dtype=np.float64), x.shape)
-
-    def _declared_piece_1(x):
-        return np.broadcast_to(np.asarray(x / 3 + 1 / 2, dtype=np.float64), x.shape)
-
-    def _declared_piece_2(x):
-        return np.broadcast_to(np.asarray(x / 3 + 1 / 2, dtype=np.float64), x.shape)
-
-    def _declared_piece_3(x):
-        return np.broadcast_to(np.asarray(1, dtype=np.float64), x.shape)
-
-    def _declared_derivative(x):
-        result = np.full(x.shape, np.nan)
-        finite = np.isfinite(x)
-        bins = np.searchsorted((-3.0, -1.5, 3.0), x, side="right")
-        bins[finite & (x == 3.0)] = 2
-        active = finite & (bins == 0)
-        result[active] = _declared_piece_0(x[active])
-        active = finite & (bins == 1)
-        result[active] = _declared_piece_1(x[active])
-        active = finite & (bins == 2)
-        result[active] = _declared_piece_2(x[active])
-        active = finite & (bins == 3)
-        result[active] = _declared_piece_3(x[active])
-        result[np.isnan(x)] = 1.0
-        result[np.isneginf(x)] = 0.0
-        result[np.isposinf(x)] = 1.0
-        return result
-
-    return _declared_derivative(x)
-
-
-def _tt_poly_declared_hardtanh_bw(x):
-    raw = np.asarray(x, dtype=np.float32).view(np.uint32) >> 16
-    result = np.zeros(raw.shape, dtype=bool)
-    for first, stop in ((0, 16256), (32641, 49024), (65409, 65536)):
-        result |= (raw >= first) & (raw < stop)
-    return result.astype(np.float64) * 1.0
-
-
-def _tt_poly_declared_log_sigmoid_bw(x):
-    def _declared_derivative(x):
-        exp = np.exp
-        return np.broadcast_to(np.asarray(1 / (1 + exp(x)), dtype=np.float64), x.shape)
-
-    return _declared_derivative(x)
-
-
-def _tt_poly_declared_softplus_bw(x):
-    def _declared_derivative(x):
-        exp = np.exp
-        return np.broadcast_to(np.asarray(1 / (1 + exp(-x)), dtype=np.float64), x.shape)
-
-    return _declared_derivative(x)
-
-
-def _tt_poly_declared_softshrink_bw(x):
-    raw = np.asarray(x, dtype=np.float32).view(np.uint32) >> 16
-    result = np.zeros(raw.shape, dtype=bool)
-    for first, stop in ((16129, 32641), (48897, 65409)):
-        result |= (raw >= first) & (raw < stop)
-    return result.astype(np.float64) * 1.0
-
-
-def _tt_poly_declared_softsign_bw(x):
-    def _declared_derivative(x):
-        abs = np.abs
-        return np.broadcast_to(
-            np.asarray(1 / (1 + abs(x)) ** 2, dtype=np.float64), x.shape
-        )
-
-    return _declared_derivative(x)
-
-
-@pytest.mark.memory_layout("debug")
-@pytest.mark.parametrize(
-    "op,mask_only,declared_reference,boundaries",
-    [
-        ("celu_bw", False, _tt_poly_declared_celu_bw, ()),
-        ("elu_bw", False, _tt_poly_declared_elu_bw, ()),
-        ("erf_bw", False, _tt_poly_declared_erf_bw, ()),
-        ("hardshrink_bw", True, _tt_poly_declared_hardshrink_bw, ()),
-        ("hardsigmoid_bw", False, _tt_poly_declared_hardsigmoid_bw, ()),
-        ("hardswish_bw", False, _tt_poly_declared_hardswish_bw, (-3.0, -1.5, 3.0)),
-        ("hardtanh_bw", True, _tt_poly_declared_hardtanh_bw, ()),
-        ("log_sigmoid_bw", False, _tt_poly_declared_log_sigmoid_bw, ()),
-        ("softplus_bw", False, _tt_poly_declared_softplus_bw, ()),
-        ("softshrink_bw", True, _tt_poly_declared_softshrink_bw, ()),
-        ("softsign_bw", False, _tt_poly_declared_softsign_bw, ()),
-    ],
-)
-def test_tt_poly_generated_backward_bf16_llk(
-    op, mask_only, declared_reference, boundaries
-):
-    override = None
-    if mask_only:
-        # Sample finite BF16 encodings across both signs, including mask
-        # boundaries. Unit RHS makes BinarySFPUGolden compare the factor itself;
-        # WHERE selection remains production composition.
-        inputs = (torch.arange(1024, dtype=torch.int32) << 22).view(torch.float32)
-        inputs = torch.where(torch.isfinite(inputs), inputs, torch.zeros_like(inputs))
-        override = torch.cat((inputs, torch.ones_like(inputs)))
-    sfpu_binary(
-        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
-        DestAccumulation.No,
-        MathOperation.SfpuElwmul,
-        extra_templates=(_TTPolyBackwardFactor(op, mask_only),),
-        lhs_factor_golden=lambda x: _tt_poly_backward_factor(x, declared_reference),
-        lhs_boundary_samples=boundaries,
-        src_A_override=override,
-    )

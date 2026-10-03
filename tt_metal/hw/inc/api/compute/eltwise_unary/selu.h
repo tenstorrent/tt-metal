@@ -6,15 +6,12 @@
 
 #include "api/compute/common_globals.h"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
-#ifndef ARCH_QUASAR
 #include "ckernel_sfpu_selu.h"
-#endif
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
 
-#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * Performs element-wise computation of selu = scale * (max(0,x) + min(0, alpha * (exp(x)-1))), where x is each
@@ -63,48 +60,5 @@ ALWI void selu_tile_pack(uint32_t idst, uint32_t scale, uint32_t alpha) {
 ALWI void selu_tile_init() { MATH(SFPU_UNARY_INIT(selu)); }
 
 ALWI void selu_tile_init_pack() { PACK(SFPU_UNARY_INIT(selu)); }
-#endif  // !ARCH_QUASAR
-
-#if !defined(TT_POLY_LLK_DISABLE) && ((defined(TT_POLY_SELU_BF16_AVAILABLE)) && \
-                                      defined(TT_METAL_SFPU_SINGLE_TILE_DST) && TT_METAL_SFPU_SINGLE_TILE_DST == 1)
-#define TT_POLY_SELU_BF16_ROUTE_ACTIVE 1
-#else
-#define TT_POLY_SELU_BF16_ROUTE_ACTIVE 0
-#endif
-
-/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void selu_tt_poly_bf16_tile(uint32_t idst, uint32_t scale, uint32_t alpha) {
-#if !TT_POLY_SELU_BF16_ROUTE_ACTIVE
-    selu_tile<is_fp32_dest_acc_en>(idst, scale, alpha);
-#else
-    if constexpr (is_fp32_dest_acc_en) {
-        selu_tile<is_fp32_dest_acc_en>(idst, scale, alpha);
-    } else {
-        if (scale != 0x3f867d5fu || alpha != 0x3fd62d7du) {
-            selu_tile_init();
-            selu_tile<is_fp32_dest_acc_en>(idst, scale, alpha);
-            return;
-        }
-        if (idst != 0) {
-            selu_tile_init();
-            selu_tile<is_fp32_dest_acc_en>(idst, scale, alpha);
-            return;
-        }
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            is_fp32_dest_acc_en,
-            calculate_selu_tt_poly_bf16,
-            (32 /* ITERATIONS */),
-            idst,
-            VectorMode::None));
-    }
-#endif
-}
-
-/** Initialize the internal BF16 typed-compiler route. */
-ALWI void selu_tt_poly_bf16_tile_init() { selu_tile_init(); }
-
-#undef TT_POLY_SELU_BF16_ROUTE_ACTIVE
 
 }  // namespace ckernel

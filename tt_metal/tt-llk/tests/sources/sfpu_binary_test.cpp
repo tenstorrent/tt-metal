@@ -46,10 +46,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_binary_sfpu.h"
 #include "params.h"
 #include "sfpu_operations.h"
-#ifdef TT_POLY_LLK_TEST_FACTOR_HEADER
-#include "llk_math_eltwise_unary_sfpu_macros.h"
-#include TT_POLY_LLK_TEST_FACTOR_HEADER
-#endif
 
 using namespace ckernel::sfpu;
 
@@ -74,28 +70,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_eltwise_unary_datacopy_uninit_<BROADCAST_TYPE, unpack_to_dest>();
 
         test_utils::call_binary_sfpu_operation_init<APPROX_MODE, is_fp32_dest_acc_en, SFPU_BINARY_OPERATION, 32 /* iterations */, formats.math>();
-#ifdef TT_POLY_LLK_TEST_FACTOR_HEADER
-        ckernel::llk_math_eltwise_unary_sfpu_init<SfpuType::unused, is_fp32_dest_acc_en>();
-#ifdef TT_POLY_LLK_TEST_FACTOR_INIT
-        ckernel::sfpu::TT_POLY_LLK_TEST_FACTOR_INIT();
-#endif
-#endif
 
         for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; tile += 2)
         {
-#ifdef TT_POLY_LLK_TEST_FACTOR_CALC
-            SFPU_UNARY_CALL(DstSync::SyncHalf, is_fp32_dest_acc_en, TT_POLY_LLK_TEST_FACTOR_CALC, (32), tile, VectorMode::None);
-#ifdef TT_POLY_LLK_TEST_FACTOR_CALC_2
-            if constexpr (TT_POLY_LLK_TEST_FACTOR_FINISH_IF)
-            {
-                SFPU_UNARY_CALL(DstSync::SyncHalf, is_fp32_dest_acc_en, TT_POLY_LLK_TEST_FACTOR_CALC_2, (32), tile, VectorMode::None);
-            }
-#endif
-#else
             test_utils::
                 call_binary_sfpu_operation<DstSync::SyncHalf, is_fp32_dest_acc_en, APPROX_MODE, SFPU_BINARY_OPERATION, 32 /* iterations */, formats.math>(
                     tile, tile + 1, tile);
-#endif
         }
         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     }

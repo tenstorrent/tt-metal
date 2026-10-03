@@ -53,9 +53,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpu_operations.h"
-#ifdef TT_POLY_LLK_TEST_HEADER
-#include TT_POLY_LLK_TEST_HEADER
-#endif
 
 using namespace ckernel;
 using namespace ckernel::sfpu;
@@ -73,9 +70,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
-#if defined(TT_POLY_LLK_TEST_NO_STOCK_INIT) && !defined(TT_POLY_LLK_TEST_REPLACE_INIT)
-    ckernel::llk_math_eltwise_unary_sfpu_init<SfpuType::unused, is_fp32_dest_acc_en>();
-#elif !defined(TT_POLY_LLK_TEST_REPLACE_INIT)
     test_utils::call_unary_sfpu_operation_init<
         SFPU_UNARY_OPERATION,
         APPROX_MODE,
@@ -84,18 +78,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         FAST_MODE,
         false /* STABLE_SORT */,
         CLAMP_NEGATIVE>();
-#endif
-#ifdef TT_POLY_LLK_TEST_INIT
-#ifdef TT_POLY_LLK_TEST_REPLACE_INIT
-#ifdef TT_POLY_LLK_TEST_PRECISION_SPLIT
-    ckernel::llk_math_eltwise_unary_sfpu_init<SFPU_UNARY_OPERATION>(ckernel::sfpu::TT_POLY_LLK_TEST_INIT<APPROX_MODE, true>);
-#else
-    ckernel::llk_math_eltwise_unary_sfpu_init<SFPU_UNARY_OPERATION>(ckernel::sfpu::TT_POLY_LLK_TEST_INIT<>);
-#endif
-#else
-    ckernel::sfpu::TT_POLY_LLK_TEST_INIT();
-#endif
-#endif
 
     LLK_ASSERT(
         (params.NUM_TILES_IN_BLOCK <= get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
@@ -112,12 +94,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // calculation of sfpu operation on dest
             // calling sfpu function from ckernel
             // this part is where parametrization of operation takes part
-#ifdef TT_POLY_LLK_TEST_CALC
-            SFPU_UNARY_CALL(
-                DST_SYNC, is_fp32_dest_acc_en, TT_POLY_LLK_TEST_CALC, (TT_POLY_LLK_TEST_ITERATIONS), block_tile, VectorMode::TT_POLY_LLK_TEST_VECTOR_MODE);
-#elif defined(TT_POLY_LLK_TEST_STOCK_CALL)
-            TT_POLY_LLK_TEST_STOCK_CALL
-#else
             test_utils::call_unary_sfpu_operation<
                 DST_SYNC,
                 is_fp32_dest_acc_en,
@@ -128,7 +104,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 FAST_MODE,
                 false /* STABLE_SORT */,
                 CLAMP_NEGATIVE>(block_tile, formats.math);
-#endif
         }
 
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
@@ -141,9 +116,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
-#ifdef TT_POLY_LLK_TEST_PACK_HEADER
-#include TT_POLY_LLK_TEST_PACK_HEADER
-#endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -153,20 +125,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
     _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
-#ifdef TT_POLY_LLK_TEST_PACK_CONFIG
-    using GeneratedPackConfig = TT_POLY_LLK_TEST_PACK_CONFIG;
-    if constexpr (!is_fp32_dest_acc_en && GeneratedPackConfig::kRoute == 4u)
-    {
-        if constexpr (GeneratedPackConfig::kHasUpper)
-        {
-            _llk_pack_relu_config_(ckernel::ReluConfig::max_threshold(GeneratedPackConfig::kPackReluThresholdBits));
-        }
-        else
-        {
-            _llk_pack_relu_config_(ckernel::ReluConfig::zero());
-        }
-    }
-#endif
     LLK_ASSERT(
         (params.NUM_TILES_IN_BLOCK <= get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
         "NUM_TILES_IN_BLOCK exceeds max dest tiles");
@@ -181,12 +139,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
     }
-#ifdef TT_POLY_LLK_TEST_PACK_CONFIG
-    if constexpr (!is_fp32_dest_acc_en && GeneratedPackConfig::kRoute == 4u)
-    {
-        _llk_pack_relu_config_(ckernel::ReluConfig::none());
-    }
-#endif
 }
 
 #endif
