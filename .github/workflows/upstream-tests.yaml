@@ -40,6 +40,15 @@ on:
         description: >-
           Update :latest tags when running from a non-main branch.
           Ignored on main; scheduled runs on main always update :latest.
+      tt-metal-dev-version:
+        required: false
+        type: string
+        default: "latest"
+        description: >-
+          Tag of tt-metalium/ubuntu-22.04-dev-amd64 to build the upstream test
+          images FROM. Defaults to 'latest', which only moves on a push to main,
+          so pre-merge branches need an explicit tag here to pick up base-image
+          changes (e.g. an OpenMPI bump) that have not landed on main yet.
   schedule:
     - cron: "0 12 * * *"
 
@@ -242,7 +251,7 @@ jobs:
           sudo apt install -y gettext
           export TEST_COMMAND=${{ matrix.image-config.test-command }}
           export HW_TOPOLOGY=${{ matrix.image-config.hw-topology }}
-          export TT_METAL_DEV_VERSION=latest
+          export TT_METAL_DEV_VERSION=${{ inputs.tt-metal-dev-version || 'latest' }}
           export TT_METAL_COMMIT_SHA=${{ github.sha }}
           envsubst < dockerfile/upstream_test_images/Dockerfile.template \
             > dockerfile/upstream_test_images/Dockerfile-generated
