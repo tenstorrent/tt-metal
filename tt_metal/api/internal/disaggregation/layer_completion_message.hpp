@@ -11,7 +11,10 @@
 
 #pragma once
 
+#include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 namespace tt::tt_metal::internal {
 
@@ -39,6 +42,54 @@ struct LayerCompletionMessage {
 };
 
 static_assert(sizeof(LayerCompletionMessage) == 24, "LayerCompletionMessage wire size changed");
+static_assert(alignof(LayerCompletionMessage) == 8, "LayerCompletionMessage alignment changed");
+static_assert(std::is_trivially_copyable_v<LayerCompletionMessage>);
+static_assert(std::is_standard_layout_v<LayerCompletionMessage>);
+static_assert(offsetof(LayerCompletionMessage, seq) == 0);
+static_assert(offsetof(LayerCompletionMessage, source_rank) == 8);
+static_assert(offsetof(LayerCompletionMessage, layer_idx) == 12);
+static_assert(offsetof(LayerCompletionMessage, request_id) == 16);
+static_assert(offsetof(LayerCompletionMessage, reserved) == 20);
+static_assert(
+    offsetof(LayerCompletionMessage, reserved) + sizeof(uint32_t) == sizeof(LayerCompletionMessage),
+    "LayerCompletionMessage grew tail padding");
+
+struct LayerCompletionMessageV2 {
+    uint64_t seq = 0;
+    uint32_t source_rank = 0;
+    uint32_t request_id = 0;
+    uint32_t slot_id = 0;
+    uint32_t pos_start = 0;
+    uint32_t pos_end = 0;
+    uint32_t layer_start = 0;
+    uint32_t layer_end = 0;
+    uint32_t flags = 0;
+    uint64_t host_ts_ns = 0;
+};
+
+static_assert(sizeof(LayerCompletionMessageV2) == 48, "LayerCompletionMessageV2 wire size changed");
+static_assert(alignof(LayerCompletionMessageV2) == 8, "LayerCompletionMessageV2 alignment changed");
+static_assert(std::is_trivially_copyable_v<LayerCompletionMessageV2>);
+static_assert(std::is_standard_layout_v<LayerCompletionMessageV2>);
+static_assert(offsetof(LayerCompletionMessageV2, seq) == 0);
+static_assert(offsetof(LayerCompletionMessageV2, source_rank) == 8);
+static_assert(offsetof(LayerCompletionMessageV2, request_id) == 12);
+static_assert(offsetof(LayerCompletionMessageV2, slot_id) == 16);
+static_assert(offsetof(LayerCompletionMessageV2, pos_start) == 20);
+static_assert(offsetof(LayerCompletionMessageV2, pos_end) == 24);
+static_assert(offsetof(LayerCompletionMessageV2, layer_start) == 28);
+static_assert(offsetof(LayerCompletionMessageV2, layer_end) == 32);
+static_assert(offsetof(LayerCompletionMessageV2, flags) == 36);
+static_assert(offsetof(LayerCompletionMessageV2, host_ts_ns) == 40);
+static_assert(
+    offsetof(LayerCompletionMessageV2, host_ts_ns) + sizeof(uint64_t) == sizeof(LayerCompletionMessageV2),
+    "LayerCompletionMessageV2 has tail padding");
+
+inline uint64_t layer_completion_host_ts_ns() noexcept {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch())
+            .count());
+}
 
 // A message whose `reserved` field equals this is an end-of-stream SENTINEL, not a real completion:
 // a subordinate router sends exactly one as its final message at teardown so the master knows no more
@@ -48,6 +99,29 @@ inline constexpr uint32_t kLayerCompletionSentinel = 0xFFFFFFFFu;
 
 inline bool is_layer_completion_sentinel(const LayerCompletionMessage& m) noexcept {
     return m.reserved == kLayerCompletionSentinel;
+}
+
+inline bool is_layer_completion_sentinel(const LayerCompletionMessageV2& m) noexcept {
+    return m.flags == kLayerCompletionSentinel;
+}
+
+template <typename MsgT>
+MsgT layer_completion_sentinel(uint32_t source_rank);
+
+template <>
+inline LayerCompletionMessage layer_completion_sentinel<LayerCompletionMessage>(uint32_t source_rank) {
+    LayerCompletionMessage m{};
+    m.source_rank = source_rank;
+    m.reserved = kLayerCompletionSentinel;
+    return m;
+}
+
+template <>
+inline LayerCompletionMessageV2 layer_completion_sentinel<LayerCompletionMessageV2>(uint32_t source_rank) {
+    LayerCompletionMessageV2 m{};
+    m.source_rank = source_rank;
+    m.flags = kLayerCompletionSentinel;
+    return m;
 }
 
 }  // namespace tt::tt_metal::internal

@@ -171,11 +171,13 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         """Register the per-layer completion sink. Required at any rank count, unless the runner runs
         with PREFILL_LAYER_ACK_D2H=1 and takes completions off the device instead.
 
-        Call `sink(layer_idx, request_id)` once per layer, where `request_id` is the one
-        `prefill_chunk` was given -- bind it per call rather than reading mutable state, since the
+        Call `sink.layers_completed(layer_start, layer_end, request_id, slot_id, actual_start,
+        actual_end)` for each finished half-open layer span -- once per layer mid-forward, or once
+        for the whole slice after a trace replay. The identity arguments are the ones
+        `prefill_chunk` was given -- bind them per call rather than reading mutable state, since the
         callback fires synchronously mid-forward.
 
-        `layer_idx` MUST be the layer's GLOBAL index. The sink keys on
+        Layer indices MUST be GLOBAL. The count protocol keys on
         seq = request_id * num_layers + layer_idx, so a rank-local index makes every rank's local
         layer k collide on one seq and all but one completion is dropped -- silently, since the
         router just sees a duplicate. If your model enumerates only its own slice, add

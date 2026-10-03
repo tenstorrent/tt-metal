@@ -6,9 +6,11 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/vector.h>
 
 #include "ttnn/services/d2h_socket_service.hpp"
 #include "ttnn/services/layer_ack_service.hpp"
@@ -21,7 +23,16 @@ void py_module_types(nb::module_& mod) {
 
     nb::class_<LayerAckService>(mod, "LayerAckService")
         .def(
-            nb::init<D2HStreamService&, const std::string&, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>(),
+            nb::init<
+                D2HStreamService&,
+                const std::string&,
+                uint32_t,
+                uint32_t,
+                uint32_t,
+                uint32_t,
+                uint32_t,
+                std::vector<uint32_t>,
+                uint32_t>(),
             nb::arg("d2h_service"),
             nb::arg("ring_shm_name"),
             nb::arg("source_rank"),
@@ -29,6 +40,8 @@ void py_module_types(nb::module_& mod) {
             nb::arg("first_layer_idx"),
             nb::arg("local_layers"),
             nb::arg("connect_timeout_ms") = 30'000u,
+            nb::arg("ack_layer_ids") = std::vector<uint32_t>{},
+            nb::arg("protocol") = 1u,
             // LayerAckService holds a bare reference to d2h_service and must not
             // outlive it. Tie its Python lifetime to this object so it can't be
             // GC'd while the reader thread is still dereferencing it. The ring is
@@ -54,12 +67,21 @@ void py_module_types(nb::module_& mod) {
                         ring to connect to (leading '/', no other slashes). The
                         LayerCompletionRouter must be constructed first.
                     source_rank (int): This host's world rank (stamped on each message).
-                    num_layers (int): Global total layer count — the seq stride.
-                    first_layer_idx (int): This rank's slice offset into the global
-                        layer range (from compute_layer_split).
-                    local_layers (int): Layers this rank owns; must equal the number
-                        of D2H records this rank emits per chunk.
+                    num_layers (int): Global total ACK-record count — the seq stride.
+                    first_layer_idx (int): This rank's ACK-space slice offset (the number
+                        of ACK records all lower ranks emit per chunk).
+                    local_layers (int): ACK records this rank emits per chunk. On a hybrid
+                        stack that acks only on KV-writing layers this is the KV-slab
+                        count, not the layer count.
                     connect_timeout_ms (int): Max time start() polls for the ring.
+                    ack_layer_ids (list[int]): GLOBAL layer index of each of this rank's
+                        ACK records, in emission order. Empty (default) = dense model,
+                        where the ack index already IS the global layer. Supplying it is
+                        what keeps `layer_idx` on the wire meaning the same thing as it
+                        does on the host-callback transport.
+                    protocol (int): 1 = v1 count protocol; 2 = v2 structured protocol,
+                        which carries the record's real {slot_id, actual_start,
+                        actual_end} instead of discarding it. Must match the router.
             )doc")
         .def(
             "start",

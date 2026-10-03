@@ -31,51 +31,66 @@ namespace tt::tt_metal::internal {
 
 using tt::tt_metal::distributed::NamedShm;  // tt-metalium/experimental/sockets/named_shm.hpp
 
-struct LayerCompletionRingHeader;  // fwd — defined in layer_completion_ring_layout.hpp
-struct LayerCompletionCell;        // fwd — defined in layer_completion_ring_layout.hpp
+struct LayerCompletionRingHeader;
+template <typename MsgT>
+struct LayerCompletionCellT;
 
-class LayerCompletionQueue {
+class LayerCompletionQueueBase {
+public:
+    virtual ~LayerCompletionQueueBase() = default;
+    virtual void shutdown() = 0;
+    virtual const std::string& shm_name() const = 0;
+};
+
+template <typename MsgT>
+class LayerCompletionQueueT : public LayerCompletionQueueBase {
 public:
     // Owner: shm_open(O_CREAT|O_EXCL) the segment at /dev/shm/<shm_name>,
     // initialise the ring header + cell sequences, mmap. Throws
     // std::runtime_error if the segment already exists (caller unlinks a
     // stale segment first). shm_name: leading '/', no other slashes.
-    static std::unique_ptr<LayerCompletionQueue> create(const std::string& shm_name);
+    static std::unique_ptr<LayerCompletionQueueT> create(const std::string& shm_name);
 
     // Connector: poll for /dev/shm/<shm_name> up to connect_timeout_ms,
     // mmap, validate magic + capacity. Throws on timeout / mismatch.
-    static std::unique_ptr<LayerCompletionQueue> connect(
+    static std::unique_ptr<LayerCompletionQueueT> connect(
         const std::string& shm_name, uint32_t connect_timeout_ms = 30'000);
 
-    ~LayerCompletionQueue();
-    LayerCompletionQueue(const LayerCompletionQueue&) = delete;
-    LayerCompletionQueue& operator=(const LayerCompletionQueue&) = delete;
-    LayerCompletionQueue(LayerCompletionQueue&&) = delete;
-    LayerCompletionQueue& operator=(LayerCompletionQueue&&) = delete;
+    ~LayerCompletionQueueT() override;
+    LayerCompletionQueueT(const LayerCompletionQueueT&) = delete;
+    LayerCompletionQueueT& operator=(const LayerCompletionQueueT&) = delete;
+    LayerCompletionQueueT(LayerCompletionQueueT&&) = delete;
+    LayerCompletionQueueT& operator=(LayerCompletionQueueT&&) = delete;
 
     // Producer. Returns false (no write) when the ring is full.
-    bool try_push(const LayerCompletionMessage& msg);
+    bool try_push(const MsgT& msg);
 
     // Consumer. Returns false (out untouched) when the ring is empty.
-    bool try_pop(LayerCompletionMessage& out);
+    bool try_pop(MsgT& out);
 
     // Idempotent. Owner: munmap + shm_unlink. Connector: munmap only.
-    void shutdown();
+    void shutdown() override;
 
-    const std::string& shm_name() const noexcept { return shm_name_; }
+    const std::string& shm_name() const noexcept override { return shm_name_; }
     static constexpr uint32_t capacity() noexcept { return kLayerCompletionRingCapacity; }
 
 private:
     enum class Role : uint8_t { Owner, Connector };
-    LayerCompletionQueue(std::unique_ptr<NamedShm> shm, std::string shm_name, Role role);
+    LayerCompletionQueueT(std::unique_ptr<NamedShm> shm, std::string shm_name, Role role);
 
     LayerCompletionRingHeader* header() const noexcept;
-    LayerCompletionCell* cells() const noexcept;
+    LayerCompletionCellT<MsgT>* cells() const noexcept;
 
     std::unique_ptr<NamedShm> shm_;
     std::string shm_name_;
     Role role_;
     std::atomic<bool> shutdown_called_{false};
 };
+
+using LayerCompletionQueue = LayerCompletionQueueT<LayerCompletionMessage>;
+using LayerCompletionQueueV2 = LayerCompletionQueueT<LayerCompletionMessageV2>;
+
+extern template class LayerCompletionQueueT<LayerCompletionMessage>;
+extern template class LayerCompletionQueueT<LayerCompletionMessageV2>;
 
 }  // namespace tt::tt_metal::internal

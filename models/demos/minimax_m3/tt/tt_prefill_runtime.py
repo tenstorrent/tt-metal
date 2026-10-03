@@ -423,10 +423,8 @@ class TtPrefillRuntime:
             sink = self._layer_completion_sink
 
             def on_layer_complete(layer_idx: int) -> None:
-                # The model reports a rank-local index; the sink's seq = request_id * total_layers +
-                # layer_idx needs the GLOBAL index, else every rank's local layer k collides at one seq
-                # and all but the first rank's completion is dropped.
-                sink(self.config.first_layer_idx + layer_idx, request_id)
+                global_layer = self.config.first_layer_idx + layer_idx
+                sink.layers_completed(global_layer, global_layer + 1, request_id, slot_id, actual_start, actual_end)
 
         else:
             on_layer_complete = self._on_layer_complete
@@ -456,11 +454,6 @@ class TtPrefillRuntime:
         return out  # logits [1,1,chunk_local,vocab_shard], SP-sharded on seq / TP-sharded on vocab
 
     def set_layer_completion_sink(self, sink) -> None:
-        """Register a per-layer completion sink for pipelined (multi-rank) prefill. ``sink`` is called once
-        per layer as ``sink(layer_idx, request_id)`` — the global layer index plus the current request/chunk
-        id (bound per ``prefill_chunk`` call, so the sink reads no mutable runtime state). Replaces the
-        single-host ack-counter inject: the runner pushes a full completion into the host-local
-        LayerCompletionQueue and the LayerCompletionRouter re-emits it in seq order to the scheduler channel."""
         assert self.compiled, "Call compile() before set_layer_completion_sink()"
         self._layer_completion_sink = sink
 
