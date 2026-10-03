@@ -21,22 +21,43 @@ void kernel_main() {
     constexpr auto per_core_block_tile_cnt = get_arg(args::per_core_block_tile_cnt);
 
 #ifdef ARCH_QUASAR
-    // DPRINT_UNPACK/_PACK (not plain DPRINT): g_dfb_interface is defined ONLY on the UNPACK/PACK
-    // TRISCs (guarded UCK_CHLKC_UNPACK||UCK_CHLKC_PACK in trisc.cc) — a plain DPRINT compiles the
-    // symbol reference on the MATH TRISC too and fails to link. On Quasar TRISC2 == PACK
-    // (build.cpp:1130); the cross-test hang faults there (MEM_READ_NO_RESPONSE), so we also print the
-    // pack's view. g_dfb_config_base_addr is the per-RISC base the BD programming reads config from —
-    // a stale value (freed test_add region) is a prime MEM_READ_NO_RESPONSE suspect.
-    DPRINT_UNPACK(
-        "QSR tilize UNPACK base: in={} out={} cfg={}\n",
-        get_local_dfb_interface(static_cast<uint32_t>(dfb::in)).tc_slots[0].base_addr,
-        get_local_dfb_interface(static_cast<uint32_t>(dfb::out)).tc_slots[0].base_addr,
-        static_cast<uint32_t>(g_dfb_config_base_addr));
-    DPRINT_PACK(
-        "QSR tilize PACK base: in={} out={} cfg={}\n",
-        get_local_dfb_interface(static_cast<uint32_t>(dfb::in)).tc_slots[0].base_addr,
-        get_local_dfb_interface(static_cast<uint32_t>(dfb::out)).tc_slots[0].base_addr,
-        static_cast<uint32_t>(g_dfb_config_base_addr));
+    // Base/config pointers were already proven IDENTICAL across runs (not the leak). The real suspect
+    // is the LIVE HW tile-counter: setup_local_dfb_interfaces resets counters role-split (DM via
+    // overlay::fast_llk_intf_reset; PACK via ckernel::trisc::tile_counters[tc].f.reset; UNPACK/MATH
+    // NOT at all). If after the poisoning test the pack's OUT counter shows posted!=acked / nonzero
+    // occupancy at kernel entry (vs 0 standalone), the reset isn't taking on the FPGA emulator and the
+    // pack blocks on a full ring → the MEM_READ_NO_RESPONSE hang. Read via the PACK's native register
+    // view (ckernel::trisc::tile_counters), the same interface its own reset writes.
+    // Each block is role-guarded so g_dfb_interface / ckernel::trisc are only referenced where defined.
+#if defined(UCK_CHLKC_PACK)
+    {
+        const uint8_t out_ptc =
+            get_local_dfb_interface(static_cast<uint32_t>(dfb::out)).tc_slots[0].packed_tile_counter;
+        const uint32_t out_tc = dfb::get_counter_id(out_ptc);
+        volatile ckernel::trisc::tile_counter_u* tcs = &ckernel::trisc::tile_counters[out_tc];
+        DPRINT(
+            "QSR tilize PACK base={} out-TC tc={} posted={} acked={} cap={}\n",
+            get_local_dfb_interface(static_cast<uint32_t>(dfb::out)).tc_slots[0].base_addr,
+            out_tc,
+            static_cast<uint32_t>(tcs->f.posted),
+            static_cast<uint32_t>(tcs->f.acked),
+            static_cast<uint32_t>(tcs->f.buf_capacity));
+    }
+#endif
+#if defined(UCK_CHLKC_UNPACK)
+    {
+        const uint8_t in_ptc = get_local_dfb_interface(static_cast<uint32_t>(dfb::in)).tc_slots[0].packed_tile_counter;
+        const uint32_t in_tc = dfb::get_counter_id(in_ptc);
+        volatile ckernel::trisc::tile_counter_u* tcs = &ckernel::trisc::tile_counters[in_tc];
+        DPRINT(
+            "QSR tilize UNPACK base={} in-TC tc={} posted={} acked={} cap={}\n",
+            get_local_dfb_interface(static_cast<uint32_t>(dfb::in)).tc_slots[0].base_addr,
+            in_tc,
+            static_cast<uint32_t>(tcs->f.posted),
+            static_cast<uint32_t>(tcs->f.acked),
+            static_cast<uint32_t>(tcs->f.buf_capacity));
+    }
+#endif
 #endif
 
     compute_kernel_hw_startup(dfb::in, dfb::out);
