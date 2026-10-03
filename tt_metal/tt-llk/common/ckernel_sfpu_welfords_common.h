@@ -146,7 +146,7 @@ sfpi_inline void _welfords_load_block_()
  * - input_lreg: Input value (new sample x_{N+1}) (Either LREG0, LREG1, LREG2, or LREG3)
  * - LREG4: Mean of previous samples (mean_{N})
  * - LREG5: Running sum of squared differences from the current mean (M2_{N})
- * - LREG6: Placeholder for the new mean (mean_{N+1})
+ * - LREG6: Placeholder for the new mean (mean_{N+1}); with WELFORD_SFPU_IN_PLACE_MEAN_ROW it holds x_{N+1} - mean_{N}
  * - LREG7: Reciprocal of sample count (1/(N+1))
  *
  * The computation proceeds as:
@@ -161,6 +161,17 @@ sfpi_inline void _welfords_load_block_()
 template <std::uint32_t input_lreg>
 sfpi_inline void _compute_welfords_row_()
 {
+#ifdef WELFORD_SFPU_IN_PLACE_MEAN_ROW
+    // Each multiply-add takes the operands of its counterpart in the six-instruction form below, so the bits are the same.
+    // LREG6 = α = x_{N+1} - mean_{N}
+    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /*-1*/, ckernel::p_sfpu::LREG4, input_lreg, ckernel::p_sfpu::LREG6, 0);
+    // LREG4 = mean_{N+1} = α * (1/(N+1)) + mean_{N}
+    TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG4, 0);
+    // input_lreg = β = x_{N+1} - mean_{N+1}
+    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /*-1*/, ckernel::p_sfpu::LREG4, input_lreg, input_lreg, 0);
+    // LREG5 = M2_{N+1} = α * β + M2_{N}
+    TTI_SFPMAD(ckernel::p_sfpu::LREG6, input_lreg, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG5, 0);
+#else
     // mean calculation
     // ----------------
     // mean_{N_+1} = mean_{N} + ((1/N+1) * (x_{N+1} - mean_{N}))
@@ -199,6 +210,7 @@ sfpi_inline void _compute_welfords_row_()
 
     // Moves mean to LREG4 from LREG6 since it now is considered the past mean
     TTI_SFPMOV(0, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG4, 0);
+#endif
 }
 
 /**
