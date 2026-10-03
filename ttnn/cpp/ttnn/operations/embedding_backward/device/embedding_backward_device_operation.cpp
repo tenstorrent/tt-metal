@@ -43,8 +43,12 @@ void EmbeddingBackwardDeviceOperation::validate_on_program_cache_miss(
         grad_tensor.dtype() == DataType::BFLOAT16 or grad_tensor.dtype() == DataType::BFLOAT8_B,
         "Output gradient tensor must be BFLOAT16 or BFLOAT8_B");
     TT_FATAL(
-        grad_tensor.dtype() == operation_attributes.output_dtype,
-        "Output and input gradient tensors must have the same dtype");
+        grad_tensor.dtype() == operation_attributes.output_dtype or
+            operation_attributes.output_dtype == DataType::FLOAT32,
+        "Invalid output dtype {}: must match the input gradient dtype {}, or be FLOAT32 for internal "
+        "accumulation.",
+        operation_attributes.output_dtype,
+        grad_tensor.dtype());
 
     TT_FATAL(
         grad_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED or
