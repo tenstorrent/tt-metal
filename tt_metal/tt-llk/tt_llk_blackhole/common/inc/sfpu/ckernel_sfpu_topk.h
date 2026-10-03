@@ -1371,6 +1371,45 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
     }
 }
 
+// One rebuild step (N to 5) over the quadrant's 64 datums at a fixed distance and start direction, so it compiles straight-line.
+template <bool is_fp32_dest_acc_en, bool STABLE_SORT, bool FUSED, bool RANK_STAMPED, TopkTieOrder TIE_ORDER, std::uint32_t DIST, bool DIR>
+inline void bitonic_topk_rebuild_step(const std::uint32_t sorted_seq_length)
+{
+    constexpr std::uint32_t inner_d    = DIST >> 3;
+    constexpr std::uint32_t num_blocks = 64 / (16 * inner_d);
+    bool dir                           = DIR;
+    std::uint32_t dst_offset           = 0;
+#pragma GCC unroll 4
+    for (std::uint32_t blk = 0; blk < num_blocks; blk++)
+    {
+#pragma GCC unroll 4
+        for (std::uint32_t ii = 0; ii < inner_d; ii++)
+        {
+            bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, 2 * DIST);
+            bitonic_topk_step_N<STABLE_SORT, TIE_ORDER>(dir);
+            bitonic_topk_store16<is_fp32_dest_acc_en, false, FUSED, RANK_STAMPED>(4, 2 * DIST);
+            dst_offset += 8;
+            if (ii == (inner_d - 1))
+            {
+                dst_offset = 2 * DIST;
+                if (blk < (num_blocks - 1)) // the step's last increment would be reset by the next SETRWC
+                {
+                    bitonic_topk_inc_x8_dest(4 * DIST, true);
+                }
+            }
+            else if (dst_offset == 16)
+            {
+                bitonic_topk_inc_x8_dest(32, true);
+            }
+            else
+            {
+                bitonic_topk_inc_x8_dest(8, false);
+            }
+        }
+        dir = ((blk + 1) * 16 * inner_d == sorted_seq_length) ? !dir : dir;
+    }
+}
+
 template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,
@@ -1598,47 +1637,29 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                     break;
                 default:
                     std::uint32_t num_steps               = ph + 1;
-                    std::uint32_t start_step              = num_steps;
-                    std::uint32_t end_step                = 4;
                     std::uint32_t sorted_seq_length       = 1 << num_steps;
                     std::uint32_t total_datums_to_compare = 64;
-                    for (std::uint32_t ss = start_step; ss > end_step; ss--)
+                    // Steps N to 6 at distance 32, step 5 at distance 16; the direction is chosen once per step
+                    for (std::uint32_t ss = num_steps; ss > 5; ss--)
                     {
-                        // Steps N to 5
                         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-                        dir                      = idir;
-                        datums_compared          = 0;
-                        std::uint32_t dist       = (ss == 5) ? 16 : 32;
-                        std::uint32_t inner_d    = dist >> 3; // How many loops to sort the sequence of length (2^ss / 16). Each loop sorts 16
-                        std::uint32_t dst_offset = 0;
-                        while (datums_compared < total_datums_to_compare)
+                        if (idir)
                         {
-                            for (std::uint32_t ii = 0; ii < inner_d; ii++)
-                            {
-                                bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(
-                                    4, 2 * dist); // load/store with offset of face 1 (in row major face layout)
-                                bitonic_topk_step_N<STABLE_SORT, TIE_ORDER>(dir);
-                                bitonic_topk_store16<is_fp32_dest_acc_en, false, FUSED, RANK_STAMPED>(
-                                    4, 2 * dist); // load/store with offset of face 1 (in row major face layout)
-                                std::uint32_t dst_inc = 8;
-                                dst_offset += dst_inc;
-                                bool dst_cr = false;
-                                if (ii == (inner_d - 1))
-                                {
-                                    dst_cr     = true;
-                                    dst_inc    = 4 * dist;
-                                    dst_offset = 2 * dist;
-                                }
-                                else if (dst_offset == 16)
-                                {
-                                    dst_cr  = true;
-                                    dst_inc = 32;
-                                }
-                                bitonic_topk_inc_x8_dest(dst_inc, dst_cr);
-                                datums_compared += 16;
-                            }
-                            dir = (datums_compared == sorted_seq_length) ? !dir : dir; // total_sorted = total_loops * 16; if total_sorted == sorted_seq_length
+                            bitonic_topk_rebuild_step<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 32, true>(sorted_seq_length);
                         }
+                        else
+                        {
+                            bitonic_topk_rebuild_step<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 32, false>(sorted_seq_length);
+                        }
+                    }
+                    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+                    if (idir)
+                    {
+                        bitonic_topk_rebuild_step<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 16, true>(sorted_seq_length);
+                    }
+                    else
+                    {
+                        bitonic_topk_rebuild_step<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 16, false>(sorted_seq_length);
                     }
                     // steps 4 to 1
                     dir             = idir;
