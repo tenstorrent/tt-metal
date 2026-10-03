@@ -13,6 +13,7 @@ import ttnn
 from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
 
 from .operations import (
+    _paged_fill_cache,
     apply_allreduce,
     apply_output_projection,
     apply_per_head_norm,
@@ -574,7 +575,7 @@ def _packed_fill_kv_loopfree_embed(cache, staging, new_seq, embed_idx, hot_pt):
 
     # ② persist updated hot blocks for next step, then ③ one fill launch.
     ttnn.assign(merged, staging)
-    ttnn.experimental.paged_fill_cache(cache, merged, hot_pt, batch_idx=0)
+    _paged_fill_cache(cache, merged, hot_pt, batch_idx=0)
     ttnn.deallocate(merged)
 
 
