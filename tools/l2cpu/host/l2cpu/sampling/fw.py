@@ -8,6 +8,9 @@ per-user parameters, requests, tokens, timing records and counters. Offsets: lay
     fw.set_logits_desc(local_desc(S.L2S_DTYPE_BF16, 151936))
     fw.set_ctrl(1, 151936); fw.set_params([(0.7, 50, 0.9, 1234)])
     fw.write(S.L2S_OFF_LOGITS, row.tobytes()); fw.issue(); fw.wait_done(); fw.next_tokens(1)
+
+    fws, regions = boot_tiles(device, [0, 1, 2, 3])  # one firmware per L2CPU tile, released together
+    split_users(32, 4) -> [(0, 8), (8, 8), (16, 8), (24, 8)]   # (user_base, batch) of each tile
 """
 from __future__ import annotations
 
@@ -148,7 +151,10 @@ class SamplingFw:
         )
         self.write(S.L2S_OFF_PARAMS, data)
 
-    def set_ctrl(self, batch, vocab, vocab_padded=None, flags=0, step_seq_base=None):
+    def set_ctrl(self, batch, vocab, vocab_padded=None, flags=0, step_seq_base=None, user_base=0):
+        """user_base: global index of this firmware's user 0 when several tiles split one batch (the draw and a
+        remote token use user_base + u; params, next_tokens and the ring stay indexed by the local u)."""
+        self.w32(S.L2S_OFF_USER_BASE, user_base)
         self.w32(S.L2S_OFF_BATCH, batch)
         self.w32(S.L2S_OFF_VOCAB, vocab)
         self.w32(S.L2S_OFF_VOCAB_PADDED, vocab_padded or vocab)
@@ -237,6 +243,50 @@ def allocate_region(device):
         device,
         ttnn.DRAM_MEMORY_CONFIG,
     )
+
+
+def split_users(batch, ntiles):
+    """Contiguous blocks: tile i serves users [base_i, base_i + n_i) (the larger blocks first). Contiguous blocks keep
+    each tile's rows in the plain per-tile order the firmware's per-hart split and the stream order assume."""
+    q, r = divmod(batch, ntiles)
+    out, b = [], 0
+    for i in range(ntiles):
+        n = q + (1 if i < r else 0)
+        out.append((b, n))
+        b += n
+    return out
+
+
+def boot_tiles(device, tiles=(0,), image_path=DEFAULT_IMAGE, mhz=1750, log=print, regions=None):
+    """Fresh chip reset + ttnn device open: one sampling firmware per L2CPU tile in `tiles`, all released by ONE
+    L2CPU_RESET write. Region of tile t = the page of an interleaved region buffer in the tile's local bank (5, 6, 7,
+    7); tiles 2 and 3 share bank 7, so tile 3 gets a second buffer. Returns (list of SamplingFw in `tiles` order,
+    list of region tensors (keep alive), start infos)."""
+    from ..bringup import region_base_pa
+    from ..ctl import start_tiles
+    from ..hw import L2cpuHw, TtnnClusterBackend
+    from ..monitor import install_lock
+
+    tiles = list(tiles)
+    if regions is None:
+        regions = [allocate_region(device)]
+        if 2 in tiles and 3 in tiles:
+            regions.append(allocate_region(device))
+    backend = TtnnClusterBackend(0)
+    install_lock(type("H", (), {"b": backend})())  # one lock for every tile's accesses (shared ttnn cluster)
+    ctls = []
+    for t in tiles:
+        reg = regions[1] if (t == 3 and len(regions) > 1) else regions[0]
+        ctls.append(
+            L2cpuCtl(
+                L2cpuHw(backend, tile=t, guard=True, log=None), region_base_pa(reg.buffer_address()), log=log, mhz=mhz
+            )
+        )
+    t0 = time.time()
+    infos = start_tiles(ctls, open(image_path, "rb").read(), log=log or (lambda *a: None))
+    for i in infos:
+        i["boot_s"] = time.time() - t0
+    return [SamplingFw(c).sync() for c in ctls], regions, infos
 
 
 def boot(device, image_path=DEFAULT_IMAGE, region=None, mhz=1750, log=print):

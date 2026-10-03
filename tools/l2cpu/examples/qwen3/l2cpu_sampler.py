@@ -33,12 +33,20 @@ CORE_MHZ = 1750.0
 _SESSION = {}
 
 
-def l2cpu_bootstrap(device, image=None, log=print):
-    """Allocate the arena, boot the firmware, create the device ops. Call before any trace capture."""
-    from l2cpu.sampling.fw import DEFAULT_IMAGE, boot as boot_firmware
+def l2cpu_bootstrap(device, image=None, log=print, tiles=1):
+    """Allocate the arena, boot the firmware, create the device ops. Call before any trace capture.
+    tiles > 1: one firmware per L2CPU tile 0 .. tiles-1, released together (l2cpu.sampling.fw.boot_tiles); the session then
+    also holds "fws" and "regions" (Plan B splits a batch over them; Plan A and batch 1 use tile 0)."""
+    from l2cpu.sampling.fw import DEFAULT_IMAGE, boot as boot_firmware, boot_tiles
     from l2cpu_ops import L2cpuOps
 
-    fw, arena, info = boot_firmware(device, image or DEFAULT_IMAGE, log=log)
+    if tiles > 1:
+        fws, regions, infos = boot_tiles(device, range(tiles), image or DEFAULT_IMAGE, log=None)
+        fw, arena, info = fws[0], regions[0], infos[0]
+        _SESSION.update(fws=fws, regions=regions)
+        log("x280 firmware READY on tiles %s: arena PAs %s" % (list(range(tiles)), [hex(f.base) for f in fws]))
+    else:
+        fw, arena, info = boot_firmware(device, image or DEFAULT_IMAGE, log=log)
     ops = L2cpuOps(device, arena)
     _SESSION.update(fw=fw, arena=arena, ops=ops, info=info)
     log(

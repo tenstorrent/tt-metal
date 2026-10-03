@@ -19,6 +19,9 @@ bring-up component in `tools/l2cpu`); `responder/` is a minimal test responder.
 | Local GDDR through the DRAM tile | DRAM bank (for CPUs 0-3: bank 5 = D5) | `offset` | no |
 | MSI catcher (doorbell) | (8,3) | `0x2006_0000` | n/a |
 
+Tiles 1-3 (CPUs 4-15) are the same at NoC (8,9) / (8,5) / (8,7) with local DRAM banks 6 / 7 / 7 (`ops.L2CPU_TILES`;
+tiles 2 and 3 share bank 7). `ops.Link(..., xy=ops.L2CPU_TILES[t])` makes every program of a link address tile t.
+
 The NoC address at the L2CPU tile equals the x280 physical address. Offset 0 of the local GDDR is offset 0 of the
 DRAM bank, so a ttnn interleaved DRAM buffer's bank-5 page at `buffer_address()` is visible to the x280 at
 `0x4000_3000_0000 + buffer_address()` (Blackhole bank base offset 0).
@@ -51,18 +54,45 @@ A channel is a region of L2CPU memory with one 64-byte line per shared word: `re
 4. Every wait is bounded (table below); a dead responder never hangs the device.
 
 Kernels: `l2cpu_notify.cpp`, `l2cpu_wait.cpp` (optionally copies the reply line into an output page),
+`l2cpu_wait_all.cpp` (several channels, one bound),
 `l2cpu_push.cpp` (ROW_MAJOR interleaved DRAM pages -> L2CPU memory through either alias; optional streamed mode:
 doorbell first, then rows in a fixed order, each followed by a write barrier and a `landed` count),
-`l2cpu_link_stress.cpp`. Python program builders: `ops.py` (`Link`), all trace-safe (per-step state lives in the
+`l2cpu_link_stress.cpp`. Python program builders: `ops.py` (`Link`; for several tiles `push_split_program`,
+`notify_all_program`, `wait_all_program`), all trace-safe (per-step state lives in the
 channel, runtime arguments are constant). generic_op's program cache ignores runtime-argument values, so `ops.py`
 adds a `L2CPU_ARGS_ID` define per argument set; the push kernel reads its source table from the channel so that
 an eager warm-up and a trace capture share one program even when the source tensor moved.
+
+### Several tiles
+
+A batch can be split over the tiles, one channel per tile (each in its tile's local DRAM). `push_split_program(links,
+blocks, ...)` is one program with one core per channel: core i pushes source rows `blocks[i] = (src_row0, n)` to
+local rows 0..n-1 of channel i (push kernel argument `src_row0`), streamed or not; every channel needs the source
+table. `notify_all_program` rings every tile (one core each). The wait for all tiles is either one kernel
+(`wait_all_program`: reads every req_seq, then polls the done_seq words round-robin under ONE bound; at the bound
+each channel that is not done gets its own wait status word) or one `wait_program` per tile (each with its own
+bound). Measured (`tests/test_link_multitile.py`, test responder on tiles 0-3, 303,872 B rows, uncached alias,
+trace-timed):
+
+| Tiles | push of 32 rows (contiguous blocks, one core per tile) | notify + wait, one kernel | notify + wait, one program per tile |
+|---|---|---|---|
+| 1 | 0.527 ms (18.4 GB/s) | 5.6 us | 5.5 us |
+| 2 | 0.442 ms (22.0 GB/s) | 6.7 us | 7.6 us |
+| 4 | 0.415 ms (23.4 GB/s) | 8.9 us | 11.8 us |
+
+A tile's inbound port limits one push to ~19 GB/s; two tiles take two ports, beyond that the source side (DRAM / NoC)
+limits it at ~25 GB/s. Contiguous blocks make the cores read the same DRAM bank at the same time (rows r and
+r + 16 live in one bank): interleaved rows (tile = r % 2) push 2 x 16 rows in 0.323 ms instead of 0.442 (4 x 8:
+0.399 vs 0.415); the firmware's per-hart split and stream order need contiguous users per tile, so the blocks stay
+contiguous. One dead tile (its responder stopped, 20 ms bound): every step ends at the bound in both wait forms, only
+that tile's wait status word is set, the other tiles' done_seq keep advancing.
 
 ### Waits and their bounds
 
 | Where | Waits for | Bound | At the bound | How the host sees it |
 |---|---|---|---|---|
 | `l2cpu_link_wait` (wait kernel, stress kernel) | `done_seq == req_seq` | `timeout_us` of wall clock, default 50 ms (`ops.WAIT_TIMEOUT_US`), runtime argument, <= 3 s; ticks = us x `L2CPU_WAIT_TICKS_PER_US` (1350, the measured AI clock; a lower AI clock only lengthens it). One poll is one 64 B NoC read (~1 us) | writes `0xDEAD0000 \| (req & 0xFFFF)` to `wait_status`, returns without copying the reply; the program ends normally, later programs in the trace run | read `LINK_OFF_WAIT_STATUS` (non-zero = timeout of request `low 16 bits`); a monitor thread polls it |
+| `l2cpu_wait_all.cpp` | every channel's `done_seq == req_seq` | one `timeout_us` for all channels (same clock and limits as above) | writes `0xDEAD0000 \| (req & 0xFFFF)` into the wait status word of each channel that is not done, returns | each tile's `LINK_OFF_WAIT_STATUS` |
 | `l2cpu_link_stress.cpp` | each round's wait | same per round | stops at the first timeout; `timeouts` = 1 in the DIAG result line | `test_link_stress.py` fails |
 | `l2cpu_push.cpp`, `l2cpu_notify.cpp` | NoC write/read acks only (`noc_async_*_barrier`) | none in software: a NoC transaction to a live tile completes; to a clock-gated L2CPU tile it never does (chip hang, `tt-smi -r`) | n/a | keep the device open (clock on) for the whole session |
 | host: `link_setup.open_link` | responder ready (status magic) | 5 s (`bringup_ttnn` ready_timeout) | exception | test fails |
@@ -96,8 +126,8 @@ memory.
 
 ## Limits
 
-- Verified on one P300 board, chip 0 (PCIe 0), L2CPU tile 0 (CPUs 0-3, NoC (8,3)) only. Tiles 1-3 have other
-  coordinates and DRAM banks (tiles 2 and 3 share D7).
+- Verified on one P300 board, chip 0 (PCIe 0): tile 0 for every test, tiles 0-3 together in
+  `test_link_multitile.py`.
 - Run with the watcher off: its device-side sanitizer classifies (8,3) as a Tensix tile and does not know the
   47-bit Memory Port addresses or the MSI catcher, so it flags (or stalls on) these accesses.
 - Coordinates: kernels use translated coordinates; (8,3) is the same in raw and translated space on Blackhole.
@@ -114,3 +144,4 @@ memory.
     tools/l2cpu/scripts/l2cpu_run.sh "link trace" $PY tools/l2cpu/tensix/tests/test_link_trace.py [--iters 10000]
     tools/l2cpu/scripts/l2cpu_run.sh "link timeout" $PY tools/l2cpu/tensix/tests/test_link_timeout.py [--iters 20 --timeout-us 50000]
     tools/l2cpu/scripts/l2cpu_run.sh "push bench" $PY tools/l2cpu/tensix/tests/bench_push.py
+    tools/l2cpu/scripts/l2cpu_run.sh "multi-tile" $PY tools/l2cpu/tensix/tests/test_link_multitile.py

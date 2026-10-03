@@ -98,8 +98,9 @@ def harness_args(a):
         max_new_tokens=a.output_tokens,
         clear_kv=1,
         hash_rows=0,
-        x280=a.arm.startswith("x280"),
-    )  # x280 arms: harness boots arena + firmware before capture
+        x280=a.arm.startswith("x280"),  # x280 arms: harness boots arena + firmware before capture
+        x280_tiles=a.tiles,
+    )
 
 
 def prompts_for_run(all_prompts, B, r):
@@ -137,7 +138,10 @@ def arm_harness(a, sampler_or_planb, planb=False):
             d["x280"]["host_round_trip_us"] = 1e6 * float(np.median([q for _, q, _ in st[1:]]))
             d["x280"]["wake_and_host_us"] = d["x280"]["host_round_trip_us"] - d["x280"]["total_us"]
         if planb and g.get("timing"):
-            d["x280"] = x280_split(g["timing"][1:])
+            d["x280"] = x280_split(g["timing"][1:])  # several tiles: per step the slowest tile's record
+            if g.get("timing_tiles"):
+                d["x280_tiles"] = [x280_split(t[1:]) for t in g["timing_tiles"]]
+                log("   x280 split per tile (us):", [{k_: round(v, 1) for k_, v in x.items()} for x in d["x280_tiles"]])
             if g.get("diag"):
                 cnt, gsum, gmax, esum = g["diag"][:4]
                 if cnt:
@@ -335,6 +339,13 @@ def main():
     ap.add_argument("--planb", help="x280-planB: module:callable (see docstring)")
     ap.add_argument("--no-token-read", action="store_true", help="tensix arm: no per-step token read")
     ap.add_argument("--planb-diag", action="store_true", help="x280-planB: capture notify/wait with device timestamps")
+    ap.add_argument(
+        "--tiles",
+        type=int,
+        default=1,
+        choices=[1, 2, 4],
+        help="x280 arms: L2CPU tiles started; x280-planB at batch > 1 splits the batch over them",
+    )
     ap.add_argument("--model", default="Qwen/Qwen3-8B")
     ap.add_argument("--input-tokens", type=int, default=128)
     ap.add_argument("--output-tokens", type=int, default=256)
@@ -383,6 +394,8 @@ def main():
     image = fw_image() if a.arm.startswith("x280") else None
     if image:
         variant = "%s img=%s" % (variant, image["label"]) + (" diag" if a.planb_diag else "")
+        if a.tiles > 1:
+            variant = variant.replace(" img=", " tiles=%d img=" % a.tiles)
     name = "%s_b%d_%s_%s%s" % (
         a.arm,
         a.batch,
@@ -439,6 +452,12 @@ def main():
     xs = [r_["x280"] for r_ in meas if r_.get("x280")]
     if xs:
         res["x280_split_median_of_runs_us"] = {k_: float(np.median([x[k_] for x in xs if k_ in x])) for k_ in xs[0]}
+    xt = [r_["x280_tiles"] for r_ in meas if r_.get("x280_tiles")]
+    if xt:
+        res["x280_split_per_tile_median_of_runs_us"] = [
+            {k_: float(np.median([x[t][k_] for x in xt])) for k_ in xt[0][t]} for t in range(len(xt[0]))
+        ]
+    res["tiles"] = a.tiles
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, "w") as f:
         json.dump(res, f, indent=1, default=str)

@@ -9,6 +9,9 @@ One chip epoch (fresh reset; the sampling image is started here):
     source tools/l2cpu/scripts/l2cpu_env.sh
     tools/l2cpu/scripts/l2cpu_run.sh "replay" $PY tools/l2cpu/sampling/scripts/replay_on_chip.py ROWS.npy \
         --rows 1000 --b32 100 --restart-b1 500 --restart-b32 50
+    # batch 32 split over 1, 2 and 4 L2CPU tiles (all four started by one release; tile 0 also runs the above)
+    tools/l2cpu/scripts/l2cpu_run.sh "replay split" $PY tools/l2cpu/sampling/scripts/replay_on_chip.py ROWS.npy \
+        --tiles 4 --rows 0 --b32 0 --split 50 --b32-modes mix,bench
 
 ROWS.npy: uint16 bfloat16 bits [N, 151936] (Qwen3 vocabulary; record one with the qwen3 example's decode harness,
 or make a synthetic one with tools/l2cpu/sampling/lib/replay.py --make-synthetic). Prints the per-request x280 time
@@ -27,9 +30,16 @@ sys.path.insert(0, os.path.join(L2CPU_DIR, "host"))
 import numpy as np  # noqa: E402
 
 from l2cpu import layout as L  # noqa: E402
-from l2cpu.sampling import boot  # noqa: E402
+from l2cpu.sampling import boot, boot_tiles  # noqa: E402
 from l2cpu.sampling.fw import DEFAULT_IMAGE  # noqa: E402
-from l2cpu.sampling.replay import format_split, host_library, replay_b1, replay_b32, stream_after_hang  # noqa: E402
+from l2cpu.sampling.replay import (
+    format_split,
+    host_library,
+    replay_b1,
+    replay_b32,
+    replay_split,  # noqa: E402
+    stream_after_hang,
+)
 
 
 def main():
@@ -48,6 +58,14 @@ def main():
         help="first: streamed batch 32, hart 0 hung (WFIPARK), recovery by WARM restart (L1 attempt, then "
         "RNMI), the next streamed requests must be served within 50 ms",
     )
+    ap.add_argument(
+        "--tiles",
+        type=int,
+        default=1,
+        choices=[1, 2, 4],
+        help="L2CPU tiles to start (one release); the batch-1 / batch-32 replays run on tile 0",
+    )
+    ap.add_argument("--split", type=int, default=0, help="batch-32 requests split over 1, 2, ... --tiles tiles")
     ap.add_argument("--json", default=None)
     a = ap.parse_args()
     import ttnn
@@ -61,7 +79,17 @@ def main():
     dev = ttnn.open_device(device_id=0)
     try:
         t0 = time.time()
-        fw, region, info = boot(dev, a.image, log=None)
+        if a.tiles == 1:
+            fw, region, info = boot(dev, a.image, log=None)
+            fws = [fw]
+        else:
+            fws, regions, infos = boot_tiles(dev, range(a.tiles), a.image, log=None)
+            fw = fws[0]
+            print(
+                f"tiles {list(range(a.tiles))} READY, regions {[hex(f.base) for f in fws]}, L2CPU_RESET "
+                f"0x{infos[0]['reset']:08x}",
+                flush=True,
+            )
         out["boot_s"] = time.time() - t0
         print(
             f"sampling image READY at region 0x{fw.base:x} in {out['boot_s']:.2f} s (app flags "
@@ -116,6 +144,21 @@ def main():
             for s in b32["split"]:
                 print(format_split(s), "| workers", [round(x, 1) for x in s["worker_us"]], flush=True)
             ok &= b32["ok"]
+        for mode in [m for m in a.b32_modes.split(",") if m] if a.split else []:
+            nt = 1
+            while nt <= a.tiles:
+                sp = replay_split(fws, lib, rows, a.split, rows.shape[0], nt, mode=mode)
+                out[f"split_{mode}_{nt}"] = sp
+                print(
+                    f"SPLIT REPLAY ({mode}, {nt} tile(s) x {32 // nt} users): {sp['identical']}/{sp['total']} identical "
+                    f"(global user index), x280 step median {sp['step_us']:.1f} us (p90 {sp['step_p90_us']:.1f}), "
+                    f"per tile {[round(x, 1) for x in sp['tile_us']]}",
+                    flush=True,
+                )
+                ok &= sp["ok"]
+                nt *= 2
+        out["tile_errors"] = [f.error() for f in fws[1:]]
+        ok &= not any(out["tile_errors"])
         out["error"] = fw.error()
         out["counters"] = [fw.counters(h) for h in range(4)]
         out["restart_count"] = fw.r32(L.L2CPU_OFF_RESTART_COUNT)

@@ -7,8 +7,9 @@ SPDX-License-Identifier: Apache-2.0
 # l2cpu/sampling: token sampling on the Blackhole L2CPU
 
 An application of the L2CPU firmware runtime (`tools/l2cpu`, see its README) that turns rows of logits into next
-tokens on the four x280 harts of L2CPU tile 0: greedy, temperature, top-k, top-p and a seeded draw, batch 1 to 32,
-bit-exact with a host build of the same library. Logits arrive in the L2CPU's local DRAM (pushed there by the
+tokens on the four x280 harts of an L2CPU tile: greedy, temperature, top-k, top-p and a seeded draw, batch 1 to 32,
+bit-exact with a host build of the same library. Several tiles can split one batch, each running this firmware on
+its own region (`user_base` below). Logits arrive in the L2CPU's local DRAM (pushed there by the
 Tensix link kernels of `tools/l2cpu/tensix`, or written by the host), tokens go back to the region and, optionally,
 into a ttnn DRAM tensor through a TLB window.
 
@@ -42,7 +43,7 @@ The region (64 MiB, `L2S_REGION_SIZE`) follows `include/l2cpu_sampling.h`:
 | Offset | Content |
 |---|---|
 | 0x0001000 | link block (`l2cpu_link.h`): `req_seq`, `done_seq`, `wait_status`, `landed`, diag, push source table; the Tensix kernels' channel base |
-| 0x0002000 | control: batch, vocab, vocab_padded, step_seq_base, flags, ring_wr, timing_count, seq_skips, stream config, ring geometry, work_timeout_us, logits and tokens descriptors, 32 per-user params, 32 `next_tokens` |
+| 0x0002000 | control: batch, vocab, vocab_padded, step_seq_base, flags, ring_wr, timing_count, seq_skips, stream config, ring geometry, work_timeout_us, user_base, logits and tokens descriptors, 32 per-user params, 32 `next_tokens` |
 | 0x0008000 | timing ring (one 64 B record per published request) |
 | 0x0020000 | output ring (2048 slots of 32 tokens) |
 | 0x1000000 | coherent logits zone (Memory Port alias; the x280 reads rows in place) |
@@ -52,13 +53,22 @@ The region (64 MiB, `L2S_REGION_SIZE`) follows `include/l2cpu_sampling.h`:
    windows; tokens: optional `NOC` tensor), per-user params, batch, vocab, flags.
 2. Producer: write the rows, write barrier, `req_seq + 1`, doorbell (MSI catcher). The Tensix notify / push
    kernels do this; the host can too (`SamplingFw.issue`).
-3. Hart 0 sees `req_seq` move, snapshots the control block, validates it when it changed, gives users 8h..8h+7 to
-   hart h, samples users 0..7, waits for the workers, writes the ring slot and the timing record, then `done_seq`.
-   Step of user u = `req_seq - step_seq_base`; tokens always go to `next_tokens[u]`.
+3. Hart 0 sees `req_seq` move, snapshots the control block, validates it when it changed, gives users
+   uph*h .. uph*h + uph - 1 to hart h (uph = ceil(batch / 4): 8 at batch 32, 2 at batch 8), samples its own,
+   waits for the workers, writes the ring slot and the timing record, then `done_seq`. Step of user u =
+   `req_seq - step_seq_base`; tokens always go to `next_tokens[u]`.
 4. Consumer: wait for `done_seq == req_seq` (the Tensix wait kernel or the host), read the tokens.
 
 Streamed requests (`FLAG_STREAMED`): the producer publishes `req_seq` first and then `landed = (req & 0xFFFF) << 16 |
-count` after each row (in the push kernel's order with 4 groups of 8); each hart starts on its rows as they land. A restart is transparent to requests: a WARM restart keeps the
+count` after each row (in the push kernel's order with 4 groups of uph rows); each hart starts on its rows as they
+land.
+
+Split batch (`ctrl.user_base`, layout version 2): a tile that serves the global users user_base .. user_base +
+batch - 1 holds them as its local users 0 .. batch - 1 (rows, params, `next_tokens`, ring slot), but draws with
+the global index user_base + u and writes a remote token to element user_base + u, so its tokens are those of a
+one-tile run of the whole batch. `user_base = 0` is the one-tile request (unchanged). Host:
+`set_ctrl(batch, ..., user_base=b)`, `boot_tiles(device, [0, 1, 2, 3])` (one firmware per tile, one release),
+`split_users(32, 4)` = contiguous blocks. A restart is transparent to requests: a WARM restart keeps the
 sequence words and rings, and a request published while the harts were parked is served after it.
 
 ## Measured x280 time per request
@@ -74,6 +84,18 @@ per-user settings cycling over the four ("mix"). x280 time = hart 0 from seeing 
 | b1 T1.0 k0 p1.0 | 0 | 591.2 | - | 596.1 | 632.2 |
 | b1 T0.6 k20 p0.95 | 0 | 72.9 | - | 78.0 | 78.3 |
 | b32 mix (hart 0's 8 users) | 699.8 | 1339.5 | 128.8 | 2180.5 | 2246.2 |
+
+Batch 32 split over tiles (`replay_on_chip.py --tiles 4 --split 50`, recorded rows, uncached zone, not streamed;
+x280 step = max over the tiles of wake -> publish, median us; every token identical to the host library with the
+global user index):
+
+| Setting | 1 tile x 32 users | 2 tiles x 16 | 4 tiles x 8 | identical |
+|---|---|---|---|---|
+| all T0.7 k50 p0.9 | 1139.6 | 603.4 | 344.0 | 4800/4800 |
+| mix (u % 4) | 2249.1 | 1144.9 | 880.5 | 4800/4800 |
+
+Each tile keeps its own two uncached reader slots, so 8 users per tile read their rows on 2 harts in parallel with the
+other tiles. In the 4-tile mix row one hart holds a T1.0/k0 user (~630 us), which bounds the step.
 
 Wake-up (host doorbell write to hart 0 seeing the request) 5.6 us at batch 1, 8.0 us at batch 32; host round trip
 (host `req_seq` write to `done_seq` read) 43 / 101 / 606 / 88 us at batch 1 and 2194 us at batch 32. The rv64gcv
@@ -115,8 +137,8 @@ accesses on the targets, and everything on the clock holder (tools/l2cpu README)
     make -C tools/l2cpu/fw image PLATFORM=bh NOTIFY=irq APP=sampling [SAMPLING_FAST=0] [ZB=0]
 
 `test` = mirror test (host gcc, rv64, rv32 JIT compiler), library host tests (43) + RISC-V build + `nm` check +
-QEMU corpus (scalar VLEN 512, RVV VLEN 128 / 512 / 1024), and the firmware QEMU suites (irq, poll): 15 request
-cases (batch 1 / 4 / 9 / 13 / 32, coherent / uncached / NoC zones, row-major and TILE, fp32 and bf16, remote tokens,
+QEMU corpus (scalar VLEN 512, RVV VLEN 128 / 512 / 1024), and the firmware QEMU suites (irq, poll): 18 request
+cases (batch 1 / 4 / 5 / 8 / 13 / 16 / 32, three of them a tile's share of a split batch with `user_base`, coherent / uncached / NoC zones, row-major and TILE, fp32 and bf16, remote tokens,
 no ring), ordering stress (20000 batch-1 and 1000 batch-32 round trips), 5 stream cases (fast, slow and
 stress producers), the restart suite, trap isolation, and the forced bounds above.
 
@@ -131,6 +153,8 @@ the tree: record one with the decode harness of the Qwen3 example (`tools/l2cpu/
     source tools/l2cpu/scripts/l2cpu_env.sh
     tools/l2cpu/scripts/l2cpu_run.sh "replay" $PY tools/l2cpu/sampling/scripts/replay_on_chip.py ROWS.npy \
         --rows 1000 --b32 100 --restart-b1 500 --restart-b32 50 --json replay.json
+    tools/l2cpu/scripts/l2cpu_run.sh "replay split" $PY tools/l2cpu/sampling/scripts/replay_on_chip.py ROWS.npy \
+        --tiles 4 --rows 0 --b32 0 --split 50 --b32-modes mix,bench
 
 From Python (fresh chip reset, ttnn device open): `fw, region, info = l2cpu.sampling.boot(device)`; keep `region`
 alive for the whole session and allocate it before any trace capture.
@@ -139,11 +163,12 @@ alive for the whole session and allocate it before any trace capture.
 
 - `top_k = 0` (or > 1024) costs about 5x top-k 50: up to `K_MAX` = 1024 candidates are sorted and exponentiated
   in scalar code (an exact vector `expf` would need its own bit-exactness proof).
-- At most 2 harts read the uncached zone at a time (3 or more collapse 20x): batch 32 is bound by about 1.1 ms of
-  row copies. ROWS streaming hides the push behind that bound but cannot go below it.
+- At most 2 harts per tile read the uncached zone at a time (3 or more collapse 20x): batch 32 on one tile is bound
+  by about 1.1 ms of row copies. ROWS streaming hides the push behind that bound but cannot go below it; splitting
+  the batch over tiles multiplies the reader slots (2 per tile).
 - TILE-layout logits on the chip and a bfloat8_b direct path are not done (TILE is tested in QEMU only).
 - Streamed requests and NoC (`LOC_NOC`) logits are tested in QEMU only in this tree; host-written rows were
   replayed on the chip.
-- Verified on one P300 chip, L2CPU tile 0, single-chip open.
+- Verified on one P300 chip, single-chip open: tile 0, and tiles 0-3 for the split batch.
 
 Hardware: P300

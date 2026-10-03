@@ -118,7 +118,7 @@ class DecodeHarness:
         if a.x280:  # arena + firmware BEFORE any trace capture (fresh chip reset first)
             from l2cpu_sampler import l2cpu_bootstrap
 
-            l2cpu_bootstrap(self.mesh, log=log)
+            l2cpu_bootstrap(self.mesh, log=log, tiles=a.x280_tiles or 1)
         self.page_params = {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024}
         pac = PagedAttentionConfig(block_size=32, max_num_blocks=1024)
         t0 = time.time()

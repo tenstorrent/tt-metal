@@ -262,12 +262,21 @@ static void set_params(int mode, uint32_t batch) {
     }
 }
 
+/* user u of the next request: its (tile-local) params, drawn with the global index user_base + u */
 static int32_t ref_sample(const uint8_t* row, uint32_t dtype, uint32_t vocab, uint32_t u) {
     x280s_params_t p;
     memcpy(&p, &C->params[u], sizeof p);
     x280s_stats_t st;
     return x280s_sample_row(
-        row, dtype, vocab, 1, &p, u, (uint64_t)(uint32_t)(req + 1 - C->step_seq_base.v), &dwork, &st);
+        row,
+        dtype,
+        vocab,
+        1,
+        &p,
+        rd32(&C->user_base.v) + u,
+        (uint64_t)(uint32_t)(req + 1 - C->step_seq_base.v),
+        &dwork,
+        &st);
 }
 
 /* ---- request protocol (what the notify / wait kernels do) ------------------------------------------------------ */
@@ -350,6 +359,7 @@ typedef struct {
     uint32_t loc; /* L2S_LOC_REGION / REGION_UC: rows pushed into a zone; L2S_LOC_NOC: fake DRAM banks */
     uint32_t batch, vocab, vpad, dtype, layout, page_size, nb, first, steps, mode, flags;
     uint32_t tok_cols, tok_page, tok_nb;
+    uint32_t user_base; /* global index of user 0 (a tile's share of a split batch); remote tokens land there */
 } case_t;
 
 static void run_case(const case_t* c) {
@@ -385,6 +395,7 @@ static void run_case(const case_t* c) {
     memcpy(&C->tokens, &T, sizeof T);
     set_params((int)c->mode, c->batch);
     set_ctrl(c->batch, c->vocab, c->vpad, c->flags);
+    wr32(&C->user_base.v, c->user_base);
     wr32(&C->step_seq_base.v, req);
     for (uint32_t u = 0; u < 32; u++) {
         *token_ptr(&T, u) = 0xDEADBEEFu;
@@ -425,7 +436,7 @@ static void run_case(const case_t* c) {
             r32(L2S_OFF_DONE_SEQ));
         fw_ticks += plat_mtime() - ts;
         for (uint32_t u = 0; u < 32; u++) {
-            uint32_t got = *token_ptr(&T, u), loc = C->next_tokens[u].v;
+            uint32_t got = *token_ptr(&T, u), loc = C->next_tokens[u].v, l = u - c->user_base; /* tensor element u */
             if (u < c->batch) {
                 CHECK(
                     loc == (uint32_t)exp[u],
@@ -438,14 +449,15 @@ static void run_case(const case_t* c) {
             } else {
                 CHECK(loc == 0xDEADBEEFu, "%s: next_tokens[%u] written (0x%x)", c->name, u, loc);
             }
-            if (u < c->batch && (c->flags & L2S_FLAG_TOKENS_REMOTE)) {
-                CHECK(got == (uint32_t)exp[u], "%s step %u user %u: token %u expected %d", c->name, s, u, got, exp[u]);
+            if (u >= c->user_base && l < c->batch && (c->flags & L2S_FLAG_TOKENS_REMOTE)) {
+                CHECK(got == (uint32_t)exp[l], "%s step %u user %u: token %u expected %d", c->name, s, u, got, exp[l]);
             } else {
                 CHECK(got == 0xDEADBEEFu, "%s: token slot %u was written (0x%x)", c->name, u, got);
             }
         }
         check_ring_and_timing(c->batch, exp, !(c->flags & L2S_FLAG_NO_RING));
     }
+    wr32(&C->user_base.v, 0);
     tprintf(
         "PASS %-40s b%-2u V %6u %s %s %s steps %3u (round trip avg %lu us, total %lu ms)\n",
         c->name,
@@ -583,8 +595,8 @@ static void run_stream_case(
         }
         issue(); /* req_seq + doorbell FIRST, data afterwards */
         uint32_t n = 0;
-        for (uint32_t pp = 0; pp < 32; pp++) {
-            uint32_t r = l2s_stream_row(pp);
+        for (uint32_t pp = 0; pp < L2S_NHARTS * l2s_users_per_hart(batch); pp++) {
+            uint32_t r = l2s_stream_row(pp, l2s_users_per_hart(batch));
             if (r >= batch) {
                 continue;
             }
@@ -738,6 +750,7 @@ static const case_t c32_after = {
     L2S_FLAG_TOKENS_REMOTE,
     0,
     0,
+    0,
     0};
 
 static void restart_suite(void) {
@@ -826,14 +839,14 @@ static void trap_tests(void) {
     spin_us(30000);
     CHECK(hb(0) > before[0] && hb(1) > before[1] && hb(3) > before[3] && hb(2) == before[2], "heartbeats");
     tprintf("PASS trap: hart 2 illegal instruction -> error TRAP, resident error park; harts 0,1,3 alive\n");
-    /* batch 1 and batch 9 (harts 0 and 1) are still served */
+    /* batch 1 and batch 2 (harts 0 and 1: one user each) are still served */
     case_t c1 = {
-        "after trap: batch 1", L2S_LOC_REGION, 1, 1000, 1024, L2S_DTYPE_BF16, 0, 0, 0, 0, 10, P_MIXED, 0, 0, 0, 0};
+        "after trap: batch 1", L2S_LOC_REGION, 1, 1000, 1024, L2S_DTYPE_BF16, 0, 0, 0, 0, 10, P_MIXED, 0, 0, 0, 0, 0};
     run_case(&c1);
     case_t c9 = {
-        "after trap: batch 9 (harts 0,1)",
+        "after trap: batch 2 (harts 0,1)",
         L2S_LOC_NOC,
-        9,
+        2,
         1000,
         1024,
         L2S_DTYPE_FP32,
@@ -843,6 +856,7 @@ static void trap_tests(void) {
         0,
         5,
         P_MIXED,
+        0,
         0,
         0,
         0,
@@ -873,9 +887,9 @@ static void trap_tests(void) {
 }
 
 /* ---- forced bounds of the request path ------------------------------------------------------------------------- */
-/* landed wait: batch 16 streamed; row 15 (hart 1's last) never lands -> hart 1 parks with STREAM_TIMEOUT after the
- * stream timeout, hart 0 does not publish (WORKER_DEAD) and stays alive; the producer finishes late and a WARM
- * restart serves the request. */
+/* landed wait: batch 16 streamed (4 users per hart); row 15 (hart 3's last) never lands -> hart 3 parks with
+ * STREAM_TIMEOUT after the stream timeout, hart 0 does not publish (WORKER_DEAD) and stays alive; the producer
+ * finishes late and a WARM restart serves the request. */
 static void bound_stalled_producer(void) {
     static l2s_tensor_desc_t L;
     uint64_t r[7];
@@ -889,23 +903,37 @@ static void bound_stalled_producer(void) {
     issue();
     uint64_t t0 = plat_mtime();
     uint32_t n = 0;
-    for (uint32_t pp = 0; pp < 32; pp++) {
-        uint32_t row = l2s_stream_row(pp);
+    for (uint32_t pp = 0; pp < L2S_NHARTS * l2s_users_per_hart(16); pp++) {
+        uint32_t row = l2s_stream_row(pp, l2s_users_per_hart(16));
         if (row >= 16 || row == 15) {
             continue;
         }
         land(++n);
     }
     uint64_t deadline = plat_mtime() + ticks_ms(3000);
-    while (H->hart_state[1].status != L2CPU_HART_PARKED) {
-        CHECK(plat_mtime() < deadline, "hart 1 not parked");
+    const uint32_t sh = 15 / l2s_users_per_hart(16); /* the hart that owns row 15 */
+    while (H->hart_state[sh].status != L2CPU_HART_PARKED) {
+        CHECK(
+            plat_mtime() < deadline,
+            "hart %u not parked (states %u %u %u %u, errors %u %u %u %u, landed 0x%x)",
+            sh,
+            H->hart_state[0].status,
+            H->hart_state[1].status,
+            H->hart_state[2].status,
+            H->hart_state[3].status,
+            H->hart_state[0].error,
+            H->hart_state[1].error,
+            H->hart_state[2].error,
+            H->hart_state[3].error,
+            r32(L2S_OFF_LANDED));
     }
     uint64_t dt = plat_mtime() - t0;
     CHECK(
-        H->hart_state[1].error == L2S_ERR_STREAM_TIMEOUT && H->hart_state[1].error_arg == 16,
-        "hart 1 error %u arg %lu",
-        H->hart_state[1].error,
-        H->hart_state[1].error_arg);
+        H->hart_state[sh].error == L2S_ERR_STREAM_TIMEOUT && H->hart_state[sh].error_arg == 16,
+        "hart %u error %u arg %lu",
+        sh,
+        H->hart_state[sh].error,
+        H->hart_state[sh].error_arg);
     CHECK(wait_done(100) != 0 && r32(L2S_OFF_DONE_SEQ) == done_before, "stalled request published");
     while (H->hart_state[0].error != L2CPU_ERR_WORKER_DEAD) {
         CHECK(plat_mtime() < deadline, "no WORKER_DEAD");
@@ -917,8 +945,9 @@ static void bound_stalled_producer(void) {
     resync();
     C->stream.timeout_us = 0;
     tprintf(
-        "PASS bound landed wait: stalled producer -> hart 1 STREAM_TIMEOUT(need 16) after %lu ms (bound 5 ms), not "
+        "PASS bound landed wait: stalled producer -> hart %u STREAM_TIMEOUT(need 16) after %lu ms (bound 5 ms), not "
         "published, hart 0 alive; served after producer + WARM restart\n",
+        sh,
         dt / ticks_ms(1));
 }
 
@@ -1076,7 +1105,23 @@ void test_driver_main(void) {
 
     static const case_t cases[] = {
         /* logits pushed into a region zone (Qwen3: bf16, 151936, stride 303872) */
-        {"push b1 Qwen greedy", L2S_LOC_REGION, 1, 151936, 151936, L2S_DTYPE_BF16, 0, 0, 0, 0, 3, P_GREEDY, 0, 0, 0, 0},
+        {"push b1 Qwen greedy",
+         L2S_LOC_REGION,
+         1,
+         151936,
+         151936,
+         L2S_DTYPE_BF16,
+         0,
+         0,
+         0,
+         0,
+         3,
+         P_GREEDY,
+         0,
+         0,
+         0,
+         0,
+         0},
         {"push b1 Qwen sampled + remote tokens",
          L2S_LOC_REGION,
          1,
@@ -1090,6 +1135,7 @@ void test_driver_main(void) {
          3,
          P_MIXED,
          L2S_FLAG_TOKENS_REMOTE,
+         0,
          0,
          0,
          0},
@@ -1108,6 +1154,7 @@ void test_driver_main(void) {
          L2S_FLAG_TOKENS_REMOTE,
          0,
          0,
+         0,
          0},
         {"push uc b32 Qwen mixed + remote tokens",
          L2S_LOC_REGION_UC,
@@ -1122,6 +1169,7 @@ void test_driver_main(void) {
          2,
          P_MIXED,
          L2S_FLAG_TOKENS_REMOTE,
+         0,
          0,
          0,
          0},
@@ -1140,6 +1188,7 @@ void test_driver_main(void) {
          L2S_FLAG_TOKENS_REMOTE,
          0,
          0,
+         0,
          0},
         {"push uc b1 fp32 greedy",
          L2S_LOC_REGION_UC,
@@ -1153,6 +1202,7 @@ void test_driver_main(void) {
          0,
          10,
          P_GREEDY,
+         0,
          0,
          0,
          0,
@@ -1172,6 +1222,7 @@ void test_driver_main(void) {
          0,
          0,
          0,
+         0,
          0},
         {"push b1 fp32 greedy padded",
          L2S_LOC_REGION,
@@ -1186,6 +1237,7 @@ void test_driver_main(void) {
          50,
          P_GREEDY,
          L2S_FLAG_TOKENS_REMOTE,
+         0,
          0,
          0,
          0},
@@ -1205,6 +1257,7 @@ void test_driver_main(void) {
          L2S_FLAG_TOKENS_REMOTE,
          0,
          0,
+         0,
          0},
         {"noc b1 bf16 RM Qwen vocab sampled",
          L2S_LOC_NOC,
@@ -1219,6 +1272,7 @@ void test_driver_main(void) {
          2,
          P_MIXED,
          L2S_FLAG_TOKENS_REMOTE,
+         0,
          0,
          0,
          0},
@@ -1237,6 +1291,7 @@ void test_driver_main(void) {
          L2S_FLAG_TOKENS_REMOTE,
          0,
          0,
+         0,
          0},
         {"noc b32 fp32 RM Qwen vocab mixed",
          L2S_LOC_NOC,
@@ -1251,6 +1306,7 @@ void test_driver_main(void) {
          1,
          P_MIXED,
          L2S_FLAG_TOKENS_REMOTE,
+         0,
          0,
          0,
          0},
@@ -1269,8 +1325,9 @@ void test_driver_main(void) {
          L2S_FLAG_TOKENS_REMOTE,
          8,
          32,
-         3},
-        {"noc b13 fp32 RM mixed (2 harts)",
+         3,
+         0},
+        {"noc b13 fp32 RM mixed (4 harts)",
          L2S_LOC_NOC,
          13,
          500,
@@ -1283,6 +1340,7 @@ void test_driver_main(void) {
          10,
          P_MIXED,
          L2S_FLAG_TOKENS_REMOTE,
+         0,
          0,
          0,
          0},
@@ -1301,7 +1359,60 @@ void test_driver_main(void) {
          L2S_FLAG_NO_RING,
          0,
          0,
+         0,
          0},
+        /* one tile's share of a split batch: global user index user_base + u (draw and remote token) */
+        {"split uc b8 Qwen users 24-31 + remote",
+         L2S_LOC_REGION_UC,
+         8,
+         151936,
+         151936,
+         L2S_DTYPE_BF16,
+         0,
+         0,
+         0,
+         0,
+         2,
+         P_MIXED,
+         L2S_FLAG_TOKENS_REMOTE,
+         0,
+         0,
+         0,
+         24},
+        {"split uc b16 users 16-31 + remote",
+         L2S_LOC_REGION_UC,
+         16,
+         3000,
+         3008,
+         L2S_DTYPE_BF16,
+         0,
+         0,
+         0,
+         0,
+         20,
+         P_MIXED,
+         L2S_FLAG_TOKENS_REMOTE,
+         0,
+         0,
+         0,
+         16},
+        {"split noc b5 users 7-11 + remote",
+         L2S_LOC_NOC,
+         5,
+         500,
+         512,
+         L2S_DTYPE_FP32,
+         L2S_LAYOUT_ROW_MAJOR,
+         2048,
+         3,
+         0,
+         10,
+         P_MIXED,
+         L2S_FLAG_TOKENS_REMOTE,
+         0,
+         0,
+         0,
+         7},
     };
     for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; i++) {
         run_case(&cases[i]);

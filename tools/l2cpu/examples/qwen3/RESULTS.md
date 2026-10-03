@@ -24,6 +24,18 @@ same driver and protocol on the same chip with the tt-metal base of this tree.
 | 1 | T1.0/k0/p1.0 (K 1024) | 28.00 (35.7) | not served (k <= 32) | - | **26.62 (37.6)** |
 | 32 | T1.0/k0/p1.0 (K 1024) | **33.11 (30.2)**, 8 threads | not served (k <= 32) | - | 34.84 (28.7), streamed |
 
+### Batch 32 split over L2CPU tiles (`bench_row.sh ... --tiles N`, device loop, streamed)
+| Setting | 1 tile | 2 tiles | 4 tiles | Stock Tensix sampling |
+|---|---|---|---|---|
+| T0.7/k50/p0.9 | 30.94 (32.3) | 30.28 (33.0) | **30.20 (33.1)** | 30.51 (32.8), k32 |
+| greedy | 30.91 (32.4) | 30.27 (33.0) | **30.14 (33.2)** | 30.40 (32.9) |
+| T1.0/k0/p1.0 (K 1024) | 34.84 (28.7) | - | **31.20 (32.1)** | not served (k <= 32); host C, 8 threads: 33.11 (30.2) |
+x280 wake -> publish per step (median us; streamed: includes waiting for the rows to land), per tile:
+T0.7/k50/p0.9 1350 (1 tile), 700 / 696 (2), 617 / 570 / 508 / 479 (4); greedy 1322, 665 / 676, 560 / 515 / 454 / 428.
+Tile 0 is last because its rows land last in the split push. Wait for all tiles as one kernel or one program per tile:
+30.20 vs 30.21 ms/token (4 tiles, T0.7/k50/p0.9). Run-0 tokens of every split row equal the 1-tile row (32/32 users).
+Batch 1 (tile 0 only) unchanged: 26.10 ms/token.
+
 Batch 1: the device loop is the fastest path (0.7 ms/token ahead of stock Tensix sampling, 1.4 ahead of host
 sampling). Batch 32: 0.4-0.5 ms/token behind stock Tensix sampling, 1.1-1.2 ahead of host sampling; the remaining
 cost is the uncached read of 32 logits rows on the x280 (two reader slots).
@@ -33,7 +45,7 @@ within run-to-run noise of stock Tensix sampling. The rows that stock Tensix sam
 32, here top-k 0 = the 1024-candidate cap, plain multinomial) show the cost of a full top-k on one tile: 0.5 ms per
 step at batch 1 (ahead of the host C reference by 1.4 ms) and 3.9 ms at batch 32, where the host C reference on
 eight Zen 5 threads is 1.7 ms ahead of one tile (four harts at 1750 MHz). Splitting the batch over the four tiles
-(the multi-tile change that follows this PR) brings that row to 31.20 ms/token.
+(next table) brings that row to 31.20 ms/token.
 
 ## x280 time per step (firmware timestamps, median / p99, us; device loop not streamed)
 | Case | Wake-up | Logits read | Sampling | Write-back | Wait workers | Publish/other | Wake -> publish |
@@ -61,6 +73,9 @@ settings, seeds and step indices.
 | host-mediated loop, batch 1, 5 x 256, T0.7 k50 p0.9: x280 vs host C library | 1280/1280 identical (compare:x280,hostref) |
 | demo, batch 1 / batch 32 mixed | coherent text; 26.05 / 31.62 ms/token |
 | host activity during decode | one `execute_trace` per step + asynchronous ring polls |
+| batch 32 mixed, split over 2 / 4 tiles (8 users per tile at 4), streamed | 8224/8224 identical to the same host reference, both (30.50 / 30.36 ms/token) |
+| negative control, 4 tiles: user 25 (tile 3) seed + 1 on the x280 side only | exactly user 25 diverges (decode step 13), 31 identical |
+| demo, batch 32 mixed, 4 tiles | coherent text; 30.36 ms/token |
 | soak (development tree, same kernels and firmware protocol): batch 32 mixed, 20 x 256 tokens in one process | 164,480/164,480 identical, 0 wait timeouts, 0 firmware errors |
 
 ## One timeout: warm restart and retry (`--retry-on-timeout 16 --inject-timeout-at 100`, batch 32 mixed)
@@ -73,7 +88,10 @@ firmware and re-issues the failed step with its step index.
 | Qwen3-8B | 32/32 users, 8224/8224 identical | same pattern: 200.9 ms + 0.7 ms restarts | run 41.10 vs 31.62 ms/token: +2.4 s for 256 steps |
 The cost is dominated by the queued steps that run into the 50 ms wait bound (the rest of the failed chunk and the
 retried chunk): about chunk x (step time + 50 ms) per failed chunk, plus 0.2 s for the RNMI restart. Smaller chunks
-or a shorter wait bound reduce it. Open: why the first request after the RNMI-path restart is not served within the
+or a shorter wait bound reduce it. 4 tiles, hart 0 of tile 1 hung at step 100 (Qwen3-8B, `--tiles 4 --inject-tile 1`):
+only tile 1's wait status word was set, the other tiles published every step of the chunk; all four tiles were
+warm-restarted (tile 1 via RNMI 200.9 ms, tiles 0/2/3 cooperative 0.7-0.8 ms), one recovery sufficed, 8224/8224
+identical, 34.90 vs 30.36 ms/token (+1.2 s for 256 steps). Open: why the first request after the RNMI-path restart is not served within the
 bound (a second, cooperative restart always fixed it).
 
 ## Deviations of the comparison
@@ -83,4 +101,4 @@ bound (a second, cooperative restart always fixed it).
 
 ## Limits
 Batch 1 and 32 only (the firmware's QEMU suite covers 4, 9, 13); Qwen3-8B and Qwen3-0.6B; <= 256 generated
-tokens; no stop conditions; one chip, one L2CPU tile.
+tokens; no stop conditions; one chip; L2CPU tile 0, tiles 0-3 for the split batch.

@@ -31,11 +31,11 @@
 #include "l2cpu_link.h"
 
 /* ---- identity and geometry ------------------------------------------------------------------------------- */
-#define L2S_APP_ID 2u /* ident.app_id (examples/heartbeat is 1) */
-#define L2S_LAYOUT_VERSION 1u
+#define L2S_APP_ID 2u         /* ident.app_id (examples/heartbeat is 1) */
+#define L2S_LAYOUT_VERSION 2u /* 2: ctrl.user_base, users per hart = ceil(batch / 4) */
 #define L2S_NHARTS 4u
 #define L2S_MAX_USERS 32u
-#define L2S_USERS_PER_HART 8u
+#define L2S_USERS_PER_HART 8u /* at most; a request gives ceil(batch / 4) users to each hart */
 #define L2S_MAX_BANKS 24u
 #define L2S_RING_SLOTS 2048u
 #define L2S_TIMING_SLOTS 1024u
@@ -111,8 +111,8 @@
  * Stream protocol. The producer (the Tensix push kernel in streamed mode) publishes req_seq + doorbell at the START of
  * the push, then after each increment of data has fully landed (write barrier) writes landed = L2S_LANDED(req_seq,
  * count) as one aligned 32-bit store; count only grows within a request.
- *   ROWS: count = rows complete, in the order l2s_stream_row(0..) restricted to rows < batch (= the push kernel's
- *         streamed order with groups = 4, group_rows = 8).
+ *   ROWS: count = rows complete, in the order l2s_stream_row(0.., uph) restricted to rows < batch, uph =
+ *         l2s_users_per_hart(batch) (= the push kernel's streamed order with groups = 4, group_rows = uph).
  *   stream.timeout_us: a consumer parks with L2S_ERR_STREAM_TIMEOUT if count stops advancing that long (0 -> 100 ms).
  */
 #define L2S_STREAM_ROWS 1u
@@ -191,7 +191,10 @@ typedef struct {
     l2s_stream_cfg_t stream;        /* 0x200 host, before streamed requests */
     l2s_ring_desc_t ring;           /* 0x240 firmware */
     l2cpu_line32_t work_timeout_us; /* 0x280 host: hart 0's bound on its workers (0 -> L2S_WORK_TIMEOUT_US) */
-    uint8_t _pad0[0x400 - 0x2C0];
+    l2cpu_line32_t user_base;       /* 0x2C0 host: global index of user 0 of this request (several tiles split a
+                                       batch): the draw uses user_base + u, a remote token goes to element
+                                       user_base + u; params, next_tokens and the ring stay tile-local (index u) */
+    uint8_t _pad0[0x400 - 0x300];
     l2s_tensor_desc_t logits;                  /* 0x400 */
     l2s_tensor_desc_t tokens;                  /* 0x600 next-input token tensor (uint32/int32), FLAG_TOKENS_REMOTE */
     l2s_user_params_t params[L2S_MAX_USERS];   /* 0x800 */
@@ -238,6 +241,7 @@ L2CPU_STATIC_ASSERT(sizeof(l2s_ring_slot_t) == 256, "ring slot");
 #define L2S_OFF_STREAM_TIMEOUT_US (L2S_OFF_CTRL + 0x204u)
 #define L2S_OFF_RING_DESC (L2S_OFF_CTRL + 0x240u)
 #define L2S_OFF_WORK_TIMEOUT_US (L2S_OFF_CTRL + 0x280u)
+#define L2S_OFF_USER_BASE (L2S_OFF_CTRL + 0x2C0u)
 #define L2S_OFF_LOGITS_DESC (L2S_OFF_CTRL + 0x400u)
 #define L2S_OFF_TOKENS_DESC (L2S_OFF_CTRL + 0x600u)
 #define L2S_OFF_PARAMS (L2S_OFF_CTRL + 0x800u)       /* + 64*u */
@@ -308,6 +312,7 @@ L2CPU_STATIC_ASSERT(offsetof(l2s_ctrl_t, stream.mode) + L2S_OFF_CTRL == L2S_OFF_
 L2CPU_STATIC_ASSERT(offsetof(l2s_ctrl_t, stream.timeout_us) + L2S_OFF_CTRL == L2S_OFF_STREAM_TIMEOUT_US, "stream to");
 L2CPU_STATIC_ASSERT(offsetof(l2s_ctrl_t, ring) + L2S_OFF_CTRL == L2S_OFF_RING_DESC, "ring desc");
 L2CPU_STATIC_ASSERT(offsetof(l2s_ctrl_t, work_timeout_us) + L2S_OFF_CTRL == L2S_OFF_WORK_TIMEOUT_US, "work to");
+L2CPU_STATIC_ASSERT(offsetof(l2s_ctrl_t, user_base) + L2S_OFF_CTRL == L2S_OFF_USER_BASE, "user base");
 L2CPU_STATIC_ASSERT(offsetof(l2s_ctrl_t, logits) + L2S_OFF_CTRL == L2S_OFF_LOGITS_DESC, "logits");
 L2CPU_STATIC_ASSERT(offsetof(l2s_ctrl_t, tokens) + L2S_OFF_CTRL == L2S_OFF_TOKENS_DESC, "tokens");
 L2CPU_STATIC_ASSERT(offsetof(l2s_ctrl_t, params) + L2S_OFF_CTRL == L2S_OFF_PARAMS, "params");
@@ -395,13 +400,17 @@ static inline uint32_t l2s_run_length(const l2s_tensor_desc_t* d, uint32_t row, 
     return left_page < left_row ? left_page : left_row;
 }
 
-/* ROWS stream order: the p-th row completed is (p % 4) * 8 + p / 4 (every hart's first row early); the inverse
+/* Users per hart of a request: hart h samples users h * uph .. h * uph + uph - 1 (< batch). Batch 32 -> 8, batch 8 ->
+ * 2 (a tile that serves a quarter of a batch-32 step still uses all four harts), batch 1 -> 1. */
+static inline uint32_t l2s_users_per_hart(uint32_t batch) { return (batch + L2S_NHARTS - 1u) / L2S_NHARTS; }
+
+/* ROWS stream order: the p-th row completed is (p % 4) * uph + p / 4 (every hart's first row early); the inverse
  * gives row u's position among the rows < batch. */
-static inline uint32_t l2s_stream_row(uint32_t p) { return (p % 4u) * 8u + p / 4u; }
+static inline uint32_t l2s_stream_row(uint32_t p, uint32_t uph) { return (p % L2S_NHARTS) * uph + p / L2S_NHARTS; }
 static inline uint32_t l2s_stream_pos(uint32_t u, uint32_t batch) {
-    uint32_t pos = 0;
-    for (uint32_t p = 0; p < L2S_MAX_USERS; p++) {
-        uint32_t r = l2s_stream_row(p);
+    uint32_t pos = 0, uph = l2s_users_per_hart(batch);
+    for (uint32_t p = 0; p < L2S_NHARTS * uph; p++) {
+        uint32_t r = l2s_stream_row(p, uph);
         if (r == u) {
             return pos;
         }

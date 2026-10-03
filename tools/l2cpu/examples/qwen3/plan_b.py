@@ -14,6 +14,12 @@ The wait is LAST: iteration k consumes the token tensor (host-written before ite
 when iteration k ends the next token is already in place, so the first iteration needs no special request and the
 last one leaves no request in flight (req_seq == done_seq at the end of every iteration).
 The x280 side is the sampling firmware (tools/l2cpu sampling firmware, stream-capable build).
+
+Several L2CPU tiles (session from l2cpu_sampler.l2cpu_bootstrap(tiles=N), batch > 1): tile i serves the contiguous
+users split_users(B, N)[i] with its own firmware, region and link block (ctrl.user_base = its first user, so the
+draw and the token write use the global user index). The trace's push is one program with one core per tile
+(streamed: each core rings its own tile first), the wait covers every tile (X280_PLANB_WAIT=all: one kernel
+polling every done_seq under one bound, default; each: one wait program per tile). Batch 1 always uses tile 0 only.
 """
 from __future__ import annotations
 
@@ -27,7 +33,7 @@ sys.path.insert(0, HERE)
 import deps  # noqa: E402,F401  (bindings to the other l2cpu components, see deps.py)
 
 from l2cpu.sampling import layout as _S  # noqa: E402
-from l2cpu_ops import LINK_BLOCK_OFF, L2cpuOps  # noqa: E402
+from l2cpu_ops import LINK_BLOCK_OFF, L2cpuMultiOps, L2cpuOps  # noqa: E402
 from tensix import ops as link_ops  # noqa: E402  (link block offsets, kernels/l2cpu_link.h)
 
 ROW = 303_872  # Qwen3 vocab 151,936 x bf16
@@ -73,10 +79,15 @@ class PlanB:
             from l2cpu.sampling.fw import DEFAULT_IMAGE, boot as boot_firmware
 
             fw, arena, _ = boot_firmware(mesh, DEFAULT_IMAGE, log=log)
+            session = {}
         else:
             fw, arena = session["fw"], session["arena"]
         self.ttnn, self.mesh, self.log = ttnn, mesh, log
         self.fw, self.hw, self.arena, self.A = fw, fw.hw, arena, fw.base
+        self.fws = session.get("fws") or [fw]  # one sampling firmware per L2CPU tile (tile 0 first)
+        self.regions = session.get("regions") or [arena]
+        self.active, self.blocks, self.mops = [fw], [(0, 1)], None  # set by configure()
+        self.wait_mode = os.environ.get("X280_PLANB_WAIT", "all")  # several tiles: "all" (one kernel) or "each"
         self.ops = L2cpuOps(mesh, arena)
         self.ops.hw = self.hw
         self.wait_timeout_us = int(os.environ.get("L2CPU_WAIT_TIMEOUT_US", "50000"))  # bound of every wait op
@@ -108,11 +119,16 @@ class PlanB:
         from l2cpu.sampling import layout as A
         from l2cpu.sampling.fw import local_desc
 
+        from l2cpu.sampling import split_users
+
         fw = self.fw
         self.wait_idle()
-        fw.set_logits_desc(local_desc(A.L2S_DTYPE_BF16, vpad, rows=32, uncached=self.uncached, row_stride=ROW))
-        fw.set_tokens_desc(self.tokens_desc(tokens))
-        fw.set_params([(p["temperature"], p["top_k"], p["top_p"], sd) for p, sd in zip(params, seeds)])
+        blocks = [b for b in split_users(batch, len(self.fws)) if b[1] > 0] if batch > 1 else [(0, batch)]
+        if len(blocks) > 1:
+            if self.mops is None or self.mops.blocks != blocks:
+                assert getattr(self, "tid", None) is None, "cannot change the tile split after the trace was captured"
+                self.mops = L2cpuMultiOps(self.mesh, self.fws[: len(blocks)], self.regions, blocks)
+        self.blocks, self.active = blocks, self.fws[: len(blocks)]
         flags = A.L2S_FLAG_TOKENS_REMOTE
         if self.streamed:
             bf = fw.build_flags()
@@ -124,34 +140,59 @@ class PlanB:
                 self.streamed = False
                 assert getattr(self, "tid", None) is None, "cannot switch the stream mode after the trace was captured"
         if self.streamed:
-            fw.set_stream(A.L2S_STREAM_ROWS, self.stream_timeout_us)
             flags |= A.L2S_FLAG_STREAMED
-        fw.set_ctrl(batch, vocab, vpad, flags=flags)
+        for t, (base, n) in zip(self.active, blocks):
+            t.set_logits_desc(local_desc(A.L2S_DTYPE_BF16, vpad, rows=32, uncached=self.uncached, row_stride=ROW))
+            t.set_tokens_desc(self.tokens_desc(tokens))  # one token tensor: tile t writes elements base .. base+n-1
+            t.set_params(
+                [
+                    (p["temperature"], p["top_k"], p["top_p"], sd)
+                    for p, sd in zip(params[base : base + n], seeds[base : base + n])
+                ]
+            )
+            if self.streamed:
+                t.set_stream(A.L2S_STREAM_ROWS, self.stream_timeout_us)
+            t.set_ctrl(n, vocab, vpad, flags=flags, user_base=base)
         if not getattr(self, "_mode_logged", False):
             self.log(
                 f"Plan B mode: batch {batch}, streamed={'on' if self.streamed else 'off'}, "
-                f"zone={'uncached' if self.uncached else 'coherent'}"
+                f"zone={'uncached' if self.uncached else 'coherent'}, tiles {[t.hw.tile for t in self.active]} "
+                f"users {blocks}" + (f", wait {self.wait_mode}" if len(blocks) > 1 else "")
             )
             self._mode_logged = True
 
     def wait_idle(self, timeout=10.0):
         t0 = time.time()
-        while self.rd(OFF_REQ) != self.rd(OFF_DONE):
-            if time.time() - t0 > timeout:
-                raise RuntimeError(
-                    f"request in flight: req {self.rd(OFF_REQ)} done {self.rd(OFF_DONE)} error {getattr(self, 'fw', None) and self.fw.error()}"
-                )
+        for fw in self.fws:
+            while fw.r32(OFF_REQ) != fw.r32(OFF_DONE):
+                if time.time() - t0 > timeout:
+                    raise RuntimeError(
+                        f"tile {fw.hw.tile}: request in flight: req {fw.r32(OFF_REQ)} done {fw.r32(OFF_DONE)} "
+                        f"error {fw.error()}"
+                    )
 
     def check_fw(self):
-        err = self.fw.error()
-        if err:
-            raise RuntimeError(f"firmware error {err}\n{self.fw.ctl.log_text()[0][-4000:]}")
+        for fw in self.active:
+            err = fw.error()
+            if err:
+                raise RuntimeError(f"tile {fw.hw.tile}: firmware error {err}\n{fw.ctl.log_text()[0][-4000:]}")
+
+    def wait_status(self):
+        """Wait status word of every active tile (non-zero: a wait op hit its bound for that tile)."""
+        return [fw.r32(OFF_WAIT_STATUS) for fw in self.active]
 
     def timing(self, n):
-        """Firmware timing entries of the last n published requests (cycles at 1750 MHz, mtime at 50 MHz)."""
+        """Per step, the timing record of the slowest active tile (largest wake -> publish) of the last n requests;
+        one tile: that tile's records (cycles at 1750 MHz, mtime at 50 MHz). timing_tiles(n): every tile's."""
+        per = self.timing_tiles(n)
+        return [max(recs, key=lambda r: r["cyc_total"]) for recs in zip(*per)]
+
+    def timing_tiles(self, n):
+        return [self._timing(fw, n) for fw in self.active]
+
+    def _timing(self, fw, n):
         from l2cpu.sampling import layout as A
 
-        fw = self.fw
         cnt = fw.r32(A.L2S_OFF_TIMING_COUNT)
         out = []
         for i in range(cnt - n, cnt):
@@ -176,25 +217,41 @@ class PlanB:
         return struct.unpack("<6I", self.hw.pa_read(self.A + OFF_DIAG + 64, 24))
 
     def clear_diag(self):
-        self.hw.pa_write(self.A + OFF_DIAG, bytes(128))
+        for fw in self.active:
+            fw.write(OFF_DIAG, bytes(128))
 
     def rd(self, off):
         self.counts["arena_polls"] += 1
         return self.hw.pa_read32(self.A + off)
 
-    def set_step_base(self):
-        """Steps are numbered from the current req_seq (host write, before the decode loop only)."""
+    def set_step_base(self, step=0):
+        """Steps are numbered from each tile's current req_seq (host write, before the decode loop only): the next
+        request of every tile samples with step `step` + 1."""
         self.wait_idle()
-        r = self.rd(OFF_REQ)
-        self.hw.pa_write32(
-            self.A + OFF_STEP_BASE, r
-        )  # decode step s -> req r+s+1 -> firmware step s+1 (prefill = step 0)
-        return r
+        out = []
+        for fw in self.active:
+            r = fw.r32(OFF_REQ)
+            fw.w32(
+                OFF_STEP_BASE, (r - step) & 0xFFFFFFFF
+            )  # decode step s -> req r+s+1 -> firmware step s+1 (prefill = 0)
+            out.append(r)
+        return out[0]
 
     def step_ops(self, fwd, batch, tokens, capture=False, diag=False):
         """Ops of one decode step. fwd() returns TILE logits; returns (tile, rm)."""
         ttnn = self.ttnn
         tile = fwd()
+        if len(self.active) > 1:  # several tiles: split push (+ notify per tile), wait for every tile
+            m = self.mops
+            rm = ttnn.untilize(tile, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if not capture:
+                m.set_push_source(rm)
+            m.run(m.push_program(uncached=self.uncached, streamed=self.streamed, diag=diag))
+            if not self.streamed:
+                m.run(m.notify_program(diag=diag))
+            for w in m.wait_programs(timeout_us=self.wait_timeout_us, diag=diag, mode=self.wait_mode):
+                m.run(w, out=tokens)
+            return tile, rm
         if self.streamed:
             rm = ttnn.untilize(tile, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             if not capture:
@@ -224,15 +281,24 @@ class PlanB:
         tid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
         tile, rm = self.step_ops(fwd, batch, tokens, capture=True, diag=diag)
         ttnn.end_trace_capture(self.mesh, tid, cq_id=0)
-        self.ops.set_push_source(rm)  # the captured logits buffer (address may differ from the eager one)
+        if len(self.active) > 1:
+            self.mops.set_push_source(rm)  # every tile's link block
+        else:
+            self.ops.set_push_source(rm)  # the captured logits buffer (address may differ from the eager one)
         self.tid, self.tile, self.rm = tid, tile, rm
         return tid
 
     def run(self, n, poll=True, poll_sleep=0.0, poll_cb=None):
         """Enqueue n replays back to back (no host device access in between), then wait for the ring."""
         ttnn = self.ttnn
-        w0 = self.rd(OFF_RING_WR)
-        self.last_w0 = w0
+        w0s = [fw.r32(OFF_RING_WR) for fw in self.active]
+        self.last_w0s = w0s
+        self.last_w0 = w0s[0]
+
+        def published():  # steps every active tile has published
+            self.counts["arena_polls"] += len(self.active)
+            return min(fw.r32(OFF_RING_WR) - w for fw, w in zip(self.active, w0s))
+
         t0 = time.perf_counter()
         for _ in range(n):
             ttnn.execute_trace(self.mesh, self.tid, cq_id=0, blocking=False)
@@ -243,10 +309,10 @@ class PlanB:
             # returns at its bound). Past that the device itself is stuck: raise instead of polling forever.
             deadline = time.perf_counter() + n * (self.max_step_ms * 1e-3 + self.wait_timeout_us * 1e-6) + 5.0
             while True:
-                done = self.rd(OFF_RING_WR) - w0
+                done = published()
                 if done >= n:
                     break
-                if self.rd(OFF_WAIT_STATUS):  # a wait op hit its bound
+                if any(self.wait_status()):  # a wait op hit its bound (some tile)
                     break
                 if poll_cb is not None:
                     poll_cb(done)
@@ -256,24 +322,28 @@ class PlanB:
                     raise StepTimeout(f"ring stuck at {done}/{n} past the {deadline - t0:.1f} s bound")
         ttnn.synchronize_device(self.mesh)  # bounded by the device-side wait bounds
         dt = time.perf_counter() - t0
-        return dt, t_enq, self.rd(OFF_RING_WR) - w0
+        return dt, t_enq, published()
+
+    def _ring(self, fw, i0, i1, n):
+        out = []
+        for i in range(i0, i1):
+            s = fw.read(OFF_RING + RING_SLOT * (i % _S.L2S_RING_SLOTS), RS_TOK + 4 * n)
+            out.append(list(struct.unpack(f"<{n}I", s[RS_TOK : RS_TOK + 4 * n])))
+        return out
 
     def ring_tokens_range(self, i0, i1, batch):
-        """Ring slots of steps i0..i1-1 of the current/last run (relative to its start)."""
-        out = []
-        for i in range(self.last_w0 + i0, self.last_w0 + i1):
-            s = self.hw.pa_read(self.A + OFF_RING + RING_SLOT * (i % _S.L2S_RING_SLOTS), RS_TOK + 4 * batch)
-            out.append(list(struct.unpack(f"<{batch}I", s[RS_TOK : RS_TOK + 4 * batch])))
-        return out
+        """Ring slots of steps i0..i1-1 of the current/last run (relative to its start), every tile's users joined
+        in global user order."""
+        per = [self._ring(fw, w + i0, w + i1, n) for fw, w, (_, n) in zip(self.active, self.last_w0s, self.blocks)]
+        return [sum(rows, []) for rows in zip(*per)]
 
     def ring_tokens(self, n, batch):
-        """Drain the output ring (slots written during the last run of n steps)."""
-        w = self.rd(OFF_RING_WR)
-        out = []
-        for i in range(w - n, w):
-            s = self.hw.pa_read(self.A + OFF_RING + RING_SLOT * (i % _S.L2S_RING_SLOTS), RS_TOK + 4 * batch)
-            out.append(list(struct.unpack(f"<{batch}I", s[RS_TOK : RS_TOK + 4 * batch])))
-        return out
+        """Drain the output ring (slots written during the last run of n steps), users in global order."""
+        per = []
+        for fw, (_, nu) in zip(self.active, self.blocks):
+            w = fw.r32(OFF_RING_WR)
+            per.append(self._ring(fw, w - n, w, nu))
+        return [sum(rows, []) for rows in zip(*per)]
 
 
 # ---------------------------------------------------------------- decode-loop driver (accept + bench)
@@ -342,6 +412,8 @@ def run_group_planb(h, pb, prompts, params, seeds, n, poll=True, diag=False, x28
         "arena_reads": c1["arena_polls"] - c0["arena_polls"],
     }
     res["timing"] = pb.timing(n)
+    if len(pb.active) > 1:
+        res["timing_tiles"] = pb.timing_tiles(n)
     if diag:
         res["diag"] = pb.diag()
     return res
@@ -358,6 +430,7 @@ def run_group_planb_retry(
     ctl=None,
     inject_at=None,
     inject_hart=0,
+    inject_tile=0,
     diag=False,
     x280_seeds=None,
     log=print,
@@ -368,12 +441,14 @@ def run_group_planb_retry(
       2. the completed steps' tokens are kept (ring);
       3. done_seq := req_seq (nothing in flight), wait status cleared, firmware WARM-restarted through the bring-up
          component's control (`ctl.restart(warm=True)`: L1 mailbox park, then L2 RNMI; the arena and the
-         configuration survive);
+         configuration survive); with several tiles EVERY active tile is restarted (a healthy tile costs one
+         cooperative restart, ~1 ms) and the kept steps are those every tile published;
       4. inputs rewritten for the first failed step (last good token, its position) and step_seq_base set so that the
          next request is sampled with the same step index: the retried step reproduces the same token;
       5. continue. Positions after the failed step were overwritten with stale tokens; re-running them rewrites
          their KV entries before they are read (attention never reads ahead).
-    inject_at: test hook, trap `inject_hart` through the firmware mailbox when the run reaches that step.
+    inject_at: test hook, hang `inject_hart` of tile `inject_tile` (index into the active tiles) through the firmware
+    mailbox when the run reaches that step.
     Returns the run_group_planb result plus "retries": [{step, recover_s, restart_s}]."""
     import torch
 
@@ -394,45 +469,63 @@ def run_group_planb_retry(
 
                 # the hart stops in wfi with interrupts off (a hung hart): its request is never published, the wait op
                 # hits its bound, and recovery needs the restart's RNMI path
-                st, _ = pb.fw.ctl.inject(inject_hart, L.L2CPU_INJECT_WFIPARK)
+                st, _ = pb.active[inject_tile].ctl.inject(inject_hart, L.L2CPU_INJECT_WFIPARK)
                 log(
-                    f"test hook: hart {inject_hart} hung (wfi, interrupts off) at decode step {s + done}, mailbox status {st}"
+                    f"test hook: tile {pb.active[inject_tile].hw.tile} hart {inject_hart} hung (wfi, interrupts off) at "
+                    f"decode step {s + done}, mailbox status {st}"
                 )
 
         try:
             pb.run(k, poll=True, poll_cb=cb)
         except StepTimeout as e:
             log(f"step bound exceeded: {e}")
-        c = pb.rd(OFF_RING_WR) - pb.last_w0
-        ws, err = pb.rd(OFF_WAIT_STATUS), pb.fw.error()
+        cs = [fw.r32(OFF_RING_WR) - w for fw, w in zip(pb.active, pb.last_w0s)]
+        c = min(cs)  # steps every tile published
+        wss, errs = pb.wait_status(), [fw.error() for fw in pb.active]
+        ws, err = (wss[0], errs[0]) if len(pb.active) == 1 else (wss, errs)
         if injected and inject_at is not None and s <= inject_at < s + k:
-            log(f"chunk at step {s}: {c}/{k} steps published, wait status 0x{ws:08x}, firmware error {err}")
+            log(
+                f"chunk at step {s}: {cs}/{k} steps published per tile, wait status {[hex(x) for x in wss]}, "
+                f"firmware error {errs}"
+            )
         rows = pb.ring_tokens_range(0, min(c, k), B)
         for row in rows:
             for b in range(B):
                 toks[b].append(row[b])
-        if c >= k and not ws and not err:
+        if c >= k and not any(wss) and not any(errs):
             s += k
             continue
         s += min(c, k)
         t0 = time.perf_counter()
         pb.ttnn.synchronize_device(pb.mesh)  # the rest of the chunk drains (bounded waits)
-        ctl = ctl or pb.fw.ctl
-        if ctl is None:
-            raise StepTimeout(f"step {s}: wait status 0x{ws:08x}, firmware error {err}; no restart control given")
-        req = pb.rd(OFF_REQ)
-        pb.hw.pa_write32(pb.A + OFF_DONE, req)  # nothing in flight: the restarted firmware must not serve stale rows
+        ctls = [ctl] if (ctl is not None and len(pb.active) == 1) else [fw.ctl for fw in pb.active]
+        if any(c_ is None for c_ in ctls):
+            raise StepTimeout(f"step {s}: wait status {wss}, firmware error {errs}; no restart control given")
+        for fw in pb.active:  # nothing in flight: a restarted firmware must not serve stale rows
+            fw.w32(OFF_DONE, fw.r32(OFF_REQ))
         t1 = time.perf_counter()
-        ctl.restart(None, warm=True)
-        pb.fw.sync()  # picks up req_seq again (WARM keeps the region)
+        rt = []
+        for fw, c_ in zip(pb.active, ctls):
+            ta = time.perf_counter()
+            c_.restart(None, warm=True)
+            fw.sync()  # picks up req_seq again (WARM keeps the region)
+            rt.append(round((time.perf_counter() - ta) * 1e3, 2))
         t2 = time.perf_counter()
-        pb.hw.pa_write32(pb.A + OFF_WAIT_STATUS, 0)
+        for fw in pb.active:
+            fw.w32(OFF_WAIT_STATUS, 0)
         last = [toks[b][-1] for b in range(B)]
         h.write_inputs(torch.tensor(last, dtype=torch.int64), torch.tensor([l + s for l in lens], dtype=torch.int64))
         pb.ttnn.synchronize_device(pb.mesh)
-        pb.hw.pa_write32(pb.A + OFF_STEP_BASE, (pb.rd(OFF_REQ) - s) & 0xFFFFFFFF)  # next request -> step s + 1
+        pb.set_step_base(s)  # the next request of every tile -> step s + 1
         retries.append(
-            dict(step=s, recover_s=time.perf_counter() - t0, restart_s=t2 - t1, error=str(err), wait_status=ws)
+            dict(
+                step=s,
+                recover_s=time.perf_counter() - t0,
+                restart_s=t2 - t1,
+                restart_tiles_ms=rt,
+                error=str(err),
+                wait_status=hex(ws) if isinstance(ws, int) else [hex(x) for x in ws],
+            )
         )
         log(
             f"recovered at decode step {s}: warm restart {retries[-1]['restart_s'] * 1e3:.1f} ms, "

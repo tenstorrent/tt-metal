@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Bring-up, stop, restart and status of the x280 harts of one L2CPU tile, WITHOUT a chip reset.
 
-    ctl = L2cpuCtl(L2cpuHw(backend), region_pa)
+    ctl = L2cpuCtl(L2cpuHw(backend, tile=t), region_pa)   # tile t (default 0); region in the tile's local DRAM
     ctl.start(image)                      # cold: fresh chip epoch only (a tile is released once per chip reset)
+    start_tiles([ctl0, ctl1, ...], image) # several tiles of the chip, released by one L2CPU_RESET write
     ctl.stop()                            # every hart parked in the resident page -> per-hart records
     ctl.restart(image=None, warm=True, slot=None)
     ctl.status(); ctl.is_alive(); ctl.log_text(); ctl.ensure_clock()
@@ -209,14 +210,7 @@ class L2cpuCtl:
         return out.decode("latin1"), wr
 
     # ---- API ----
-    def start(self, image: bytes, slot=A.L2CPU_SLOT_A, ready_timeout=5.0, pre_release_probe=None):
-        """Cold bring-up in a fresh chip epoch (tile not yet released): image, resident page, RNMI handler addresses,
-        release. Returns a dict incl. the reset values of the RNMI registers seen before they were written."""
-        from .bringup import bringup
-
-        entry = self.base + slot
-        probe = {}
-
+    def _pre_release(self, entry, probe):
         def pre(hw):
             probe["trigger_reset_value"] = self.trigger()
             probe["handlers_reset_value"] = self.handler_addrs()
@@ -226,10 +220,18 @@ class L2cpuCtl:
             probe["handlers_ok"] = got == want
             if not probe["handlers_ok"]:
                 raise L2cpuCtlError(f"RNMI handler addresses read back {got} != {want}")
-            if pre_release_probe:
-                probe.update(pre_release_probe(self) or {})
             return probe
 
+        return pre
+
+    def start(self, image: bytes, slot=A.L2CPU_SLOT_A, ready_timeout=5.0):
+        """Cold bring-up in a fresh chip epoch (tile not yet released): image, resident page, RNMI handler addresses,
+        release. Returns a dict incl. the reset values of the RNMI registers seen before they were written."""
+        from .bringup import bringup
+
+        entry = self.base + slot
+        probe = {}
+        pre = self._pre_release(entry, probe)
         info = bringup(
             image,
             entry,
@@ -350,3 +352,33 @@ class L2cpuCtl:
         time.sleep(window)
         b = self.heartbeats()
         return all(b[h] > a[h] for h in range(4) if recs[h]["state"] != A.L2CPU_STATE_PARKED)
+
+
+def start_tiles(ctls, image, slot=A.L2CPU_SLOT_A, ready_timeout=5.0, mhz=None, log=print):
+    """Cold bring-up of several tiles of one chip in a fresh chip epoch: per tile (its own L2cpuCtl, hw.tile and
+    region) image, resident page and RNMI handler addresses, then ONE L2CPU_RESET write releasing all of them, then
+    each tile's READY. image: bytes for every tile, or {tile: bytes}. Returns one info dict per ctl."""
+    from .bringup import bringup_tiles
+
+    specs, probes = [], []
+    for c in ctls:
+        probe = {}
+        entry = c.base + slot
+        img = image[c.hw.tile] if isinstance(image, dict) else image
+        specs.append(
+            dict(
+                hw=c.hw,
+                image=img,
+                load_pa=entry,
+                region_pa=c.base,
+                pre_release=c._pre_release(entry, probe),
+                ready=lambda hw, c=c: c.ready(1),
+            )
+        )
+        probes.append(probe)
+    infos = bringup_tiles(specs, high_mhz=mhz or ctls[0].mhz, ready_timeout=ready_timeout, log=log)
+    for c, info, probe in zip(ctls, infos, probes):
+        c.mbreq = c.r32(c.base + A.L2CPU_OFF_MB_ACK)
+        info["probe"] = probe
+        info["tile"] = c.hw.tile
+    return infos

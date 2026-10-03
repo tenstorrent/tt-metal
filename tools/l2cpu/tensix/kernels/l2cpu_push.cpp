@@ -17,9 +17,12 @@
 //                          (rows >= n_rows skipped; groups = 1 is plain order; e.g. 4 x 8 when 4 consumer harts
 //                          own 8 rows each and should all start early); after each row a write barrier and
 //                          landed = (req & 0xFFFF) << 16 | rows_complete (one 4-byte write, coherent alias).
-// This core handles every row_step-th row starting at first_row (non-streamed mode; streamed mode is 1 core).
+// This core handles every row_step-th row starting at first_row (non-streamed mode; streamed mode is 1 core per
+// channel).
 // Runtime args: l2_x, l2_y, base_hi, base_lo, dst_hi, dst_lo, n_rows, first_row, row_step, notify_first, groups,
-//               group_rows, diag (streamed: wall clock after the doorbell into DIAG line 0, as l2cpu_notify.cpp).
+//               group_rows, diag (streamed: wall clock after the doorbell into DIAG line 0, as l2cpu_notify.cpp),
+//               src_row0: row r of this push is source row src_row0 + r (a batch split over several L2CPU tiles:
+//               one core per tile, each with its own channel and its block of rows; 0 = the whole batch).
 //               The alias (coherent or uncached zone) is the caller's choice of dst.
 // CB 0: 2 * row_bytes + 2 KiB.
 #include "api/dataflow/dataflow_api.h"
@@ -45,6 +48,7 @@ void kernel_main() {
     uint32_t n_rows = get_arg_val<uint32_t>(6), first = get_arg_val<uint32_t>(7), step = get_arg_val<uint32_t>(8);
     uint32_t streamed = get_arg_val<uint32_t>(9), groups = get_arg_val<uint32_t>(10),
              group_rows = get_arg_val<uint32_t>(11);
+    uint32_t src0 = get_arg_val<uint32_t>(13);
     if (groups == 0) {
         groups = 1;
     }
@@ -73,13 +77,13 @@ void kernel_main() {
     }
     volatile tt_l1_ptr uint32_t* lv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(c.l1 + 64 * 6);
     if (n) {
-        read_row(order[0], t, buf[0]);
+        read_row(src0 + order[0], t, buf[0]);
     }
     for (uint32_t k = 0; k < n; k++) {
         noc_async_read_barrier();  // row k is in buf[k & 1]
         if (k + 1 < n) {
-            noc_async_writes_flushed();                   // buf[(k+1) & 1] has left L1
-            read_row(order[k + 1], t, buf[(k + 1) & 1]);  // overlaps this row's write
+            noc_async_writes_flushed();                          // buf[(k+1) & 1] has left L1
+            read_row(src0 + order[k + 1], t, buf[(k + 1) & 1]);  // overlaps this row's write
         }
         l2cpu_noc_write_bulk(c.noc, buf[k & 1], c.x, c.y, dst + (uint64_t)order[k] * row_bytes, row_bytes);
         if (streamed) {

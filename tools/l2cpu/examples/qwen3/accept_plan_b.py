@@ -8,6 +8,8 @@
 
     tools/l2cpu/scripts/l2cpu_run.sh "accept" $PY tools/l2cpu/examples/qwen3/accept_plan_b.py --model Qwen/Qwen3-8B --batch 1 --prompts 5 --steps 256
 batch 32: per-user mixed settings from sampling_mix.py (user u: setting u % 4, seed 1234 + u), one group of 32 prompts.
+--tiles 2 / 4: the batch split over L2CPU tiles (contiguous user blocks); the reference is the same host C library
+run (global user index), so a split run must be identical to it.
 Same model, prompts, prefill, per-user params, seeds and step convention in both paths (plan_b.run_group_planb).
 """
 from __future__ import annotations
@@ -48,9 +50,14 @@ def main():
         help="perturb ONLY the x280 side: seed + 1 of user 1 (batch 32) / user 0 (batch 1); pass iff exactly that user diverges",
     )
     ap.add_argument(
+        "--neg-user", type=int, default=None, help="--negative-control: the user to perturb (default 1 / 0)"
+    )
+    ap.add_argument(
         "--repeat", type=int, default=1, help="Plan B runs per group (soak), each compared to the one reference"
     )
     ap.add_argument("--no-monitor", action="store_true")
+    ap.add_argument("--tiles", type=int, default=1, choices=[1, 2, 4], help="L2CPU tiles serving the batch (batch > 1)")
+    ap.add_argument("--inject-tile", type=int, default=0, help="tile index (into the started tiles) for the test hooks")
     ap.add_argument(
         "--inject-trap", type=int, default=None, help="hart: firmware trap test during the first Plan B run"
     )
@@ -110,15 +117,20 @@ def main():
         max_new_tokens=N,
         hash_rows=0,
         x280=True,
+        x280_tiles=a.tiles,
     )
     h = dh.DecodeHarness(ns)  # x280=True: arena + firmware boot before any capture
     pb = PlanB(h.mesh, session=session(), uncached=B > 1, log=dh.log)
-    mon = (
-        None
+    fws = session().get("fws") or [session()["fw"]]
+    mons = (
+        []
         if a.no_monitor
-        else SamplingMonitor(
-            session()["fw"], log=lambda *x: dh.log("[monitor]", *x), exit_on_fail=not a.retry_on_timeout
-        )
+        else [
+            SamplingMonitor(
+                f, log=lambda *x, t=f.hw.tile: dh.log(f"[monitor tile {t}]", *x), exit_on_fail=not a.retry_on_timeout
+            )
+            for f in fws
+        ]
     )
     allp = dh.load_prompts(home, 32)
     if B == 1:
@@ -151,7 +163,7 @@ def main():
             g = h.run_group(gi, prompts, make_sampler("hostref", "full"), params, seeds, None)
             refs[(name, gi)] = [u["tokens"] for u in g["users"]]
     say(f"reference done ({len(refs)} groups)")
-    neg_user = (1 if B > 1 else 0) if a.negative_control else None
+    neg_user = (a.neg_user if a.neg_user is not None else (1 if B > 1 else 0)) if a.negative_control else None
     inject = {"done": a.inject_trap is None}
     rst = {"next": a.restart_every, "n": 0, "ms": [], "levels": {}, "ctl": None, "last": -1}
 
@@ -173,13 +185,13 @@ def main():
             rst["next"] = done + a.restart_every
         if not inject["done"] and done >= a.inject_at:
             inject["done"] = True
-            st, rep = session()["fw"].ctl.inject(a.inject_trap)  # illegal instruction on that hart
+            st, rep = fws[a.inject_tile].ctl.inject(a.inject_trap)  # illegal instruction on that hart
             say(
                 f"injected a trap on hart {a.inject_trap} at decode step {done} (mailbox status {st}); t={time.time():.3f}"
             )
 
-    if mon is not None:
-        mon.start()
+    for m in mons:
+        m.start()
     neg_ok = []
     # 2) Plan B on the firmware
     for name, params, seeds in cases:
@@ -202,8 +214,9 @@ def main():
                     seeds,
                     N,
                     chunk=a.retry_on_timeout,
-                    ctl=rst["ctl"],
+                    ctl=rst["ctl"] if len(fws) == 1 else None,
                     inject_at=a.inject_timeout_at,
+                    inject_tile=a.inject_tile,
                     x280_seeds=x_seeds,
                     log=say,
                 )
@@ -211,7 +224,8 @@ def main():
                 for x in r["retries"]:
                     say(
                         f"  retry at step {x['step']}: recovery {x['recover_s'] * 1e3:.1f} ms (warm restart "
-                        f"{x['restart_s'] * 1e3:.1f} ms), wait status 0x{x['wait_status']:08x}, firmware error {x['error']}"
+                        f"{x['restart_s'] * 1e3:.1f} ms, per tile {x.get('restart_tiles_ms')}), wait status "
+                        f"{x['wait_status']}, firmware error {x['error']}"
                     )
             else:
                 r = run_group_planb(
@@ -262,6 +276,15 @@ def main():
             f"{statistics.median(ms):.3f} (per group {[round(x, 3) for x in ms]}); host device ops during decode: "
             f"{enq} enqueues for {N * len(groups) * a.repeat} steps + {reads} arena polls; x280 per-step us (median) {split}"
         )
+        if r.get("timing_tiles"):
+            per_tile = [
+                {
+                    k: round(us(statistics.median(t[k] for t in recs)), 1)
+                    for k in ("cyc_total", "cyc_read", "cyc_sample", "cyc_wait")
+                }
+                for recs in r["timing_tiles"]
+            ]
+            line += f"; x280 per tile (last group, us) {per_tile}"
         if diags:
             cnt = sum(d[0] for d in diags)
             line += (
@@ -287,8 +310,8 @@ def main():
                 enqueues=enq,
             )
         )
-    if mon is not None:
-        say(f"monitor: {mon.stop()}")
+    if mons:
+        say(f"monitor: {[m.stop() for m in mons]}")
     rc = 0
     if neg_user is not None:
         rc = 0 if neg_ok and all(neg_ok) else 1

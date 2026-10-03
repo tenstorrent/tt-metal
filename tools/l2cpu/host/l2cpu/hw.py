@@ -19,6 +19,9 @@ import time
 from . import layout as A
 
 L2CPU_TILES = {0: (8, 3), 1: (8, 9), 2: (8, 5), 3: (8, 7)}
+# Local DRAM of each tile = tt-metal DRAM bank (and telemetry enabled_gddr bit). Tiles 2 and 3 share D7: their
+# regions must not overlap (take them from two different buffers).
+L2CPU_TILE_BANK = {0: 5, 1: 6, 2: 7, 3: 7}
 ARC = (8, 0)
 
 # ARC tile registers (NoC addresses inside the ARC tile)
@@ -305,14 +308,17 @@ class L2cpuHw:
             (self.pa_read32(L2PF1_BASE + 0x2000 * h), self.pa_read32(L2PF1_BASE + 0x2000 * h + 4)) for h in range(4)
         ]
 
-    def release(self, low_mhz=200, high_mhz=1750):
-        """tt-bh-linux boot.py reset_x280: PLL to low, set bit (4+tile) RMW, read back, PLL to high.
-        Refuses if the tile is already released (harts can leave reset only once per chip reset)."""
+    def release(self, low_mhz=200, high_mhz=1750, tiles=None):
+        """tt-bh-linux boot.py reset_x280: PLL to low, set bit (4+tile) of every tile in `tiles` (default: this
+        tile) in ONE read-modify-write, read back, PLL to high (one PLL clocks all four tiles).
+        Refuses if any of them is already released (harts can leave reset only once per chip reset)."""
+        tiles = [self.tile] if tiles is None else list(tiles)
         r = self.read_l2cpu_reset()
-        bit = 1 << (4 + self.tile)
+        bit = sum(1 << (4 + t) for t in tiles)
         if r & bit:
             raise RuntimeError(
-                f"L2CPU_RESET=0x{r:08x}: tile {self.tile} already released in this reset epoch; reset the chip (tt-smi -r)"
+                f"L2CPU_RESET=0x{r:08x}: tile(s) {[t for t in tiles if r >> (4 + t) & 1]} already released "
+                "in this reset epoch; reset the chip (tt-smi -r)"
             )
         c1, c5 = self.read_pll()
         orig = (c1 >> 16, list(struct.pack("<I", c5)))

@@ -11,6 +11,7 @@ wait op's status word and exits nonzero (17) on trouble.
 
     tools/l2cpu/scripts/l2cpu_run.sh "demo" $PY tools/l2cpu/examples/qwen3/run_plan_b.py --model Qwen/Qwen3-8B --batch 1 --max-new-tokens 256 --temperature 0.7 --top-k 50 --top-p 0.9 --seed 1234
     ... --batch 32 --per-user-mix            # sampling_mix.py settings per user
+    ... --batch 32 --per-user-mix --tiles 4  # the batch split over L2CPU tiles 0-3 (8 users each)
 """
 from __future__ import annotations
 
@@ -43,6 +44,7 @@ def main():
     )
     ap.add_argument("--input-tokens", type=int, default=None, help="force every prompt to exactly this many tokens")
     ap.add_argument("--quiet", action="store_true", help="no streaming, only the final texts")
+    ap.add_argument("--tiles", type=int, default=1, choices=[1, 2, 4], help="L2CPU tiles serving the batch (batch > 1)")
     a = ap.parse_args()
     import decode_harness as dh
 
@@ -79,10 +81,13 @@ def main():
             max_new_tokens=N,
             hash_rows=0,
             x280=True,
+            x280_tiles=a.tiles,
         )
     )
-    fw = session()["fw"]
-    mon = SamplingMonitor(fw, log=lambda *x: dh.log("[monitor]", *x)).start()
+    mons = [
+        SamplingMonitor(f, log=lambda *x, t=f.hw.tile: dh.log(f"[monitor tile {t}]", *x)).start()
+        for f in session().get("fws") or [session()["fw"]]
+    ]
     pb = PlanB(h.mesh, session=session(), uncached=B > 1, log=dh.log)
     if a.prompts_file:
         prompts = [d["prompt"] if isinstance(d, dict) else str(d) for d in json.load(open(a.prompts_file))]
@@ -144,7 +149,8 @@ def main():
     ms = dt / N * 1e3
     print(
         f"\nPlan B: {N} tokens per user x {B} users in {dt:.2f} s: {ms:.2f} ms/token, {1e3 / ms:.2f} tokens/s/user, "
-        f"{B * 1e3 / ms:.0f} tokens/s total; host device ops during decode: {N} enqueues + ring polls; monitor {mon.stop()}"
+        f"{B * 1e3 / ms:.0f} tokens/s total; host device ops during decode: {N} enqueues + ring polls; tiles "
+        f"{[f.hw.tile for f in pb.active]}; monitor {[m.stop() for m in mons]}"
     )
     h.ttnn.close_mesh_device(h.mesh)
     return 0

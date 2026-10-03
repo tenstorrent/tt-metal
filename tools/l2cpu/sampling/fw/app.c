@@ -7,9 +7,11 @@
  * app.c: the sampling application of the L2CPU firmware runtime (fw/app.h hooks).
  *
  * One request = sample `batch` user rows of logits, write the tokens, publish done_seq. Hart 0 (app_poll) sees
- * req_seq move, snapshots the control block, validates it (only when it changed), hands users 8h..8h+7 to worker
- * h with fw_dispatch(), samples users 0..7 itself, waits (bounded) for the workers, writes the output ring slot and
- * the timing record, fences and publishes done_seq. Layout: include/l2cpu_sampling.h.
+ * req_seq move, snapshots the control block, validates it (only when it changed), hands users uph*h .. uph*h+uph-1
+ * (uph = ceil(batch / 4)) to worker h with fw_dispatch(), samples users 0..uph-1 itself, waits (bounded) for the
+ * workers, writes the output ring slot and the timing record, fences and publishes done_seq. Several tiles can split
+ * one batch: each serves its rows with ctrl.user_base = the global index of its user 0 (the draw and the remote token
+ * use the global index). Layout: include/l2cpu_sampling.h.
  */
 #include "app.h"
 #include "fw.h"
@@ -38,7 +40,7 @@ _Static_assert(sizeof(x280s_work_t) <= PREP_OFF && PREP_OFF + sizeof(x280s_prep_
 void copy_from_window(void* dst, const void* src, size_t n); /* copy_rvv.c */
 
 typedef struct {
-    uint32_t seq, batch, vocab, vpad, step_base, flags, ring_slot, nharts;
+    uint32_t seq, batch, vocab, vpad, step_base, flags, ring_slot, nharts, uph, user_base;
     uint32_t stream_mode, timeout_us, work_timeout_us;
     l2s_tensor_desc_t logits, tokens;
     l2s_user_params_t params[L2S_MAX_USERS];
@@ -155,7 +157,7 @@ static uint32_t check_local(const l2s_tensor_desc_t* d) {
 }
 
 static uint32_t validate(const job_t* j) {
-    if (j->batch == 0 || j->batch > L2S_MAX_USERS) {
+    if (j->batch == 0 || j->batch > L2S_MAX_USERS || j->user_base > 0xFFFFu) {
         return L2S_BAD_BATCH;
     }
     if (j->vocab == 0 || j->vocab > j->vpad || j->vpad > j->logits.cols) {
@@ -219,11 +221,11 @@ static uint32_t validate(const job_t* j) {
         if (r) {
             return r;
         }
-        if ((uint64_t)T->rows * T->cols < j->batch) {
+        if ((uint64_t)T->rows * T->cols < (uint64_t)j->user_base + j->batch) {
             return L2S_BAD_SHAPE;
         }
-        for (uint32_t u = 0; u < j->batch; u++) {
-            r = check_pages(T, u / T->cols, u % T->cols, 1);
+        for (uint32_t g = j->user_base; g < j->user_base + j->batch; g++) {
+            r = check_pages(T, g / T->cols, g % T->cols, 1);
             if (r) {
                 return r;
             }
@@ -233,8 +235,9 @@ static uint32_t validate(const job_t* j) {
 }
 
 static int same_config(const job_t* a, const job_t* b) {
-    return a->batch == b->batch && a->vocab == b->vocab && a->vpad == b->vpad && a->flags == b->flags &&
-           a->stream_mode == b->stream_mode && memcmp(&a->logits, &b->logits, sizeof a->logits) == 0 &&
+    return a->batch == b->batch && a->user_base == b->user_base && a->vocab == b->vocab && a->vpad == b->vpad &&
+           a->flags == b->flags && a->stream_mode == b->stream_mode &&
+           memcmp(&a->logits, &b->logits, sizeof a->logits) == 0 &&
            memcmp(&a->tokens, &b->tokens, sizeof a->tokens) == 0;
 }
 
@@ -330,7 +333,7 @@ static void gate_exit(void) { __atomic_fetch_sub(&l2s_uc_gate, 1u, __ATOMIC_RELE
 static const void* logits_row(uint32_t hart, uint32_t row, uint8_t* rowbuf, x280s_prep_t* prep) {
     const l2s_tensor_desc_t* d = &job.logits;
     if (job.flags & L2S_FLAG_STREAMED) {
-        stream_wait(l2s_stream_pos(row, job.batch) + 1u); /* ROWS: this row landed */
+        stream_wait(l2s_stream_pos(row, job.batch) + 1u); /* ROWS: this row landed (order of l2s_stream_row, uph) */
     }
     if (d->location == L2S_LOC_REGION) {
         return g_region + d->local_off + (uint64_t)row * d->row_stride;
@@ -372,6 +375,7 @@ static void do_users(uint32_t hart, uint32_t u0, uint32_t u1, phase_t* ph) {
             fw_error_park(L2S_ERR_BAD_DESC, L2S_BAD_UNMAPPABLE, job.seq);
         }
         uint64_t c1 = rdcycle64();
+        uint32_t g = job.user_base + u; /* global user index: the draw and the remote token */
         x280s_params_t p;
         p.temperature = job.params[u].temperature;
         p.top_k = job.params[u].top_k;
@@ -380,8 +384,8 @@ static void do_users(uint32_t hart, uint32_t u0, uint32_t u1, phase_t* ph) {
         p.seed = job.params[u].seed;
         x280s_stats_t st;
         int32_t tok = prep && prep->valid
-                          ? x280s_sample_row_prep(row, job.logits.dtype, job.vocab, &p, u, step, work, prep, &st)
-                          : x280s_sample_row(row, job.logits.dtype, job.vocab, 1, &p, u, step, work, &st);
+                          ? x280s_sample_row_prep(row, job.logits.dtype, job.vocab, &p, g, step, work, prep, &st)
+                          : x280s_sample_row(row, job.logits.dtype, job.vocab, 1, &p, g, step, work, &st);
         uint64_t c2 = rdcycle64();
         if (tok < 0) {
             fw_error_park(L2S_ERR_SAMPLE, (uint64_t)(int64_t)tok, job.seq);
@@ -390,10 +394,10 @@ static void do_users(uint32_t hart, uint32_t u0, uint32_t u1, phase_t* ph) {
         caps += st.cap_applied;
         if (st.cap_applied && caps_logged[hart] < 4) { /* rate-limited; the counter has the total */
             caps_logged[hart]++;
-            fw_log("seq %u user %u: K_MAX cap applied (k_eff %u)", job.seq, u, st.k_eff);
+            fw_log("seq %u user %u: K_MAX cap applied (k_eff %u)", job.seq, g, st.k_eff);
         }
         wr32(&c->next_tokens[u].v, (uint32_t)tok);
-        if ((job.flags & L2S_FLAG_TOKENS_REMOTE) && write_token(hart, &job.tokens, u, (uint32_t)tok)) {
+        if ((job.flags & L2S_FLAG_TOKENS_REMOTE) && write_token(hart, &job.tokens, g, (uint32_t)tok)) {
             fw_error_park(L2S_ERR_BAD_DESC, L2S_BAD_UNMAPPABLE, job.seq);
         }
         if (!(job.flags & L2S_FLAG_NO_RING)) {
@@ -423,7 +427,7 @@ static void __attribute__((noinline)) work(uint32_t hart, uint32_t seq) {
         fw_log("work item %u but job.seq %u", seq, job.seq);
         fw_error_park(L2S_ERR_SEQ, seq, job.seq);
     }
-    uint32_t u0 = hart * L2S_USERS_PER_HART, u1 = u0 + L2S_USERS_PER_HART;
+    uint32_t u0 = hart * job.uph, u1 = u0 + job.uph;
     if (u1 > job.batch) {
         u1 = job.batch;
     }
@@ -450,6 +454,7 @@ static int serve(uint32_t seq, uint64_t mtime_wake, uint64_t cyc_wake) {
     job.vpad = rd32(&c->vocab_padded.v);
     job.step_base = rd32(&c->step_seq_base.v);
     job.flags = rd32(&c->flags.v);
+    job.user_base = rd32(&c->user_base.v);
     memcpy(&job.logits, &c->logits, sizeof job.logits);
     memcpy(&job.tokens, &c->tokens, sizeof job.tokens);
     memcpy(job.params, c->params, sizeof job.params);
@@ -467,7 +472,8 @@ static int serve(uint32_t seq, uint64_t mtime_wake, uint64_t cyc_wake) {
         memcpy(&validated, &job, sizeof job);
         validated_ok = 1;
     }
-    job.nharts = (job.batch + L2S_USERS_PER_HART - 1) / L2S_USERS_PER_HART;
+    job.uph = l2s_users_per_hart(job.batch); /* batch 32: 8 (as before); a tile's share of a split batch: fewer */
+    job.nharts = (job.batch + job.uph - 1) / job.uph;
     uint32_t mask = 0;
     for (uint32_t h = 1; h < job.nharts; h++) {
         if (rd32(&g_hdr->hart_state[h].status) == L2CPU_HART_PARKED) {
@@ -483,7 +489,7 @@ static int serve(uint32_t seq, uint64_t mtime_wake, uint64_t cyc_wake) {
     }
     fw_dispatch(mask, seq); /* fence, job data before each worker's sequence word, IPI */
 
-    uint32_t u1 = job.batch < L2S_USERS_PER_HART ? job.batch : L2S_USERS_PER_HART;
+    uint32_t u1 = job.batch < job.uph ? job.batch : job.uph;
     do_users(0, 0, u1, &ph);
 
     uint64_t cw = rdcycle64();

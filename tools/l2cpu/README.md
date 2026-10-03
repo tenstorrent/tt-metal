@@ -7,9 +7,10 @@ SPDX-License-Identifier: Apache-2.0
 # l2cpu: bring-up, restart and control of the Blackhole L2CPU (x280) tile
 
 A Blackhole chip has four L2CPU tiles, each with four SiFive x280 RISC-V cores (RV64GCV, VLEN 512) that share an L3
-cache and a directly attached DRAM channel. This directory brings the harts of one tile (tile 0: CPUs 0-3, NoC0
-(8,3), local DRAM channel D5 = tt-metal DRAM bank 5) from a fresh chip reset to a running bare-metal firmware, and
-then stops, reloads and restarts that firmware **without another chip reset**. It provides:
+cache and a directly attached DRAM channel. This directory brings the harts of one or several tiles (tile 0: CPUs
+0-3, NoC0 (8,3), local DRAM channel D5 = tt-metal DRAM bank 5; tiles 1-3 below) from a fresh chip reset to a running
+bare-metal firmware, and then stops, reloads and restarts that firmware **without another chip reset**. It
+provides:
 
 - a small bare-metal firmware runtime (M-mode, no OS, no libc): boot, per-hart idle loops in `wfi`, heartbeats, a
   host mailbox for debug commands, trap records, a log ring, a work-dispatch service for applications, and park /
@@ -47,7 +48,11 @@ documentation (`tt-isa-documentation`, `BlackholeA0/L2CPUTile`) or in tt-bh-linu
 | CSR 0x7c1 (feature disable) must be written 0 by each hart; the L3 is configured to 2 MiB cache (CCACHE0_WAYENABLE = 15) and the L2 prefetchers to the SiFive values. `cflush.d.l1` is an illegal instruction; `CCACHE0_FLUSH64` (PA 0x0201_0200) works. | measured |
 | Caches: L1I 32 KiB and L1D 32 KiB per hart, L2 128 KiB per hart, L3 2 MiB shared, 64 B lines; L1D handles one outstanding miss at a time. | expected (ISA) |
 | TLB windows (224 x 2 MiB, 32 x 128 GiB) map any NoC tile into the x280 address space; they take raw NoC0 coordinates (DRAM bank 0 = (0,11)). | measured |
-| tile 1-3, other boards (P150), multi-chip opens | not established |
+| **Tiles 1-3.** Tile t is at NoC0 (8,3) / (8,9) / (8,5) / (8,7) for t = 0..3 (NIU node id and `NOC_ENDPOINT_ID` 0x0901_0000 + t read back); its local DRAM is tt-metal bank 5 / 6 / 7 / 7, at the same PAs as tile 0 (Memory Port 0x4000_3000_0000 + bank address, System Port 0x3000_0000 + bank address). **Tiles 2 and 3 share D7**: their regions must not overlap (take them from two buffers). Reset vectors, scratch, RNMI registers, status word, MSI catcher (0x2006_0000 at the tile's own (x,y), PLIC source 6 of its hart 0), WAYENABLE and L2 prefetchers are per tile at the same addresses. | measured (chip 0, all four tiles) |
+| **Several tiles, one release.** `L2CPU_RESET` reads 0x0f after a chip reset (no tile harvested); one read-modify-write setting bits 4..7 inside one PLL 200 -> 1750 MHz dance releases all four tiles (READY within 1 ms of the release); one PLL clocks all four tiles (each runs at 1750 MHz). The once-per-reset rule holds per tile bit. | measured |
+| **Reader slots are per tile.** The uncached-read collapse (3+ harts reading at once) is per tile; two harts on each of the four tiles read concurrently at 69-71 us per 303,872 B row (tiles 2 and 3, sharing D7, ~2 % slower): 8 reader slots per chip, 33.9 GB/s. | measured |
+| `mcycle` does not advance while a hart sleeps in `wfi`; use `mtime` for wall clock. | measured |
+| other boards (P150), multi-chip opens | not established |
 
 Read speed of one 303,872 B buffer (one Qwen3 logits row), one hart unless noted:
 
@@ -98,9 +103,10 @@ its own reset. Keep the clock holder alive for as long as the firmware should ru
 ## API (`host/l2cpu`)
 
     from l2cpu import L2cpuHw, L2cpuCtl, L2cpuMonitor, TtnnClusterBackend, make_backend, layout
-    hw = L2cpuHw(TtnnClusterBackend(0), guard=True)      # or make_backend("umd") without a tt-metal device
+    hw = L2cpuHw(TtnnClusterBackend(0), tile=0, guard=True)   # or make_backend("umd") without a tt-metal device
     ctl = L2cpuCtl(hw, region_pa)
     ctl.start(image)                 # fresh chip reset only; writes image, resident page, RNMI handlers, releases
+    start_tiles([ctl0, ctl1, ...], image)   # several tiles (one L2CPU_RESET write); then one ctl per tile as above
     ctl.stop()                       # L1 (mailbox PARK), then L2 (RNMI) for harts that did not park -> records
     ctl.restart(image=None, warm=True, slot=None)   # stop, (load), go; ~0.6-1.2 ms
     ctl.rnmi(mask, mode)             # raw RNMI: COUNT (resume) or PARK
@@ -109,7 +115,9 @@ its own reset. Keep the clock holder alive for as long as the firmware should ru
     ctl.ensure_clock()               # re-apply the target clock after a power-state change
     L2cpuMonitor(ctl).start()        # heartbeat / error watch thread
 
-`bringup.region_base_pa(buffer_address)` turns a ttnn interleaved buffer into a region (its bank-5 slice).
+`bringup.region_base_pa(buffer_address)` turns a ttnn interleaved buffer into a region: its page in the tile's local
+bank (5 for tile 0, 6 / 7 / 7 for tiles 1 / 2 / 3), the same PA for every tile. The CLI takes `--tile` (and lists:
+`--tile 0,1 --region PA0,PA1 start IMAGE` releases both with one write).
 
 ## Region layout and boot record
 
@@ -193,9 +201,9 @@ worker -> `WORKER_DEAD`, resident error park, WARM restart revives it.
 
 ## Limits
 
-- Verified on one P300 chip, L2CPU tile 0 only, opened as a single chip. Tiles 1-3 (their own trigger, handler and
-  status registers; tiles 2 and 3 share DRAM channel D7), P150, multi-chip opens and other kernel-driver / firmware
-  versions are not established.
+- Verified on one P300 chip opened as a single chip: tile 0 throughout, tiles 1-3 with the bring-up, the link and
+  the sampling firmware (one release for all four). P150, multi-chip opens and other kernel-driver / firmware
+  versions are not established. Which PLL4 postdivider feeds which tile is not established (all four are set equal).
 - No PMP: a wild x280 access is not trapped by the core (planned as a separate change).
 - A restart needs a live clock holder and a cooperative or RNMI-reachable hart; a hart stalled inside a NoC access
   that never completes needs a chip reset.

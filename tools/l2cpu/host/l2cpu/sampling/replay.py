@@ -9,6 +9,9 @@ tokens are needed: the expectation is generated at run time.
               seed fixed, user 0, step = row index.
     batch 32: R requests of 32 different rows written into the UNCACHED zone, per-user settings cycling over the
               4 settings ("mix") or all T0.7/k50/p0.9 ("bench"), per-user seeds, step = request index; 4 harts.
+    split   : the batch-32 requests of `batch 32` split over several L2CPU tiles (contiguous user blocks, each tile's
+              firmware with user_base = its first global user): every token must equal the host library called with
+              the GLOBAL user index, so a split run is identical to the one-tile run.
 A restart can be injected after a given request (L1 mailbox park or L2 RNMI park + WARM restart through L2cpuCtl);
 the replay must stay identical across it.
 """
@@ -186,6 +189,60 @@ def replay_b32(fw, lib, rows, nreq, n_rows, mode="mix", restart_at=None, restart
                     log(f"MISMATCH b32 request {r} user {u}: x280 {toks[u]} host library {refs[u]}")
     return dict(
         ok=bad == 0, identical=n - bad, total=n, wall_s=time.time() - t0, restart=rst, split=[split.row(f"b32 {mode}")]
+    )
+
+
+def replay_split(fws, lib, rows, nreq, n_rows, ntiles, mode="mix", log=print, mhz=1750.0):
+    """nreq batch-32 requests split over fws[:ntiles] (users split_users(32, ntiles)), uncached zone, not streamed;
+    rows and params exactly as replay_b32 (user g: row (r * 32 + g) % n_rows, params[g], user index g, step r).
+    x280 step of a request = max over the tiles of the firmware's wake-to-publish time."""
+    from .fw import split_users
+
+    params = [(*SETTINGS[1 if mode == "bench" else u % 4][1:], 1000 + 7 * u) for u in range(32)]
+    use = list(zip(fws[:ntiles], split_users(32, ntiles)))
+    for fw, (base, n) in use:
+        fw.set_logits_desc(local_desc(S.L2S_DTYPE_BF16, V_QWEN, uncached=True))
+        fw.set_ctrl(n, V_QWEN, V_QWEN, flags=0, user_base=base)
+        fw.set_params(params[base : base + n])
+    bad, total, steps, per_tile = 0, 0, [], [[] for _ in use]
+    t0 = time.time()
+    for r in range(nreq):
+        idx = [(r * 32 + g) % n_rows for g in range(32)]
+        for fw, (base, n) in use:
+            fw.write_uncached(S.L2S_OFF_LOGITS_UC, np.ascontiguousarray(rows[idx[base : base + n]]).tobytes())
+            fw.set_step(r)
+        refs = [lib.sample(np.ascontiguousarray(rows[idx[g]]), *params[g], user=g, step=r)[0] for g in range(32)]
+        for fw, _ in use:
+            fw.issue()
+        for fw, _ in use:
+            fw.wait_done(timeout=10)
+        tot = []
+        for i, (fw, (base, n)) in enumerate(use):
+            tm = fw.timing_last()
+            per_tile[i].append(tm["cyc_total"] / mhz)
+            tot.append(tm["cyc_total"] / mhz)
+            toks = fw.next_tokens(n)
+            for l, g in enumerate(range(base, base + n)):
+                total += 1
+                if toks[l] != refs[g]:
+                    bad += 1
+                    if bad <= 5:
+                        log(
+                            f"MISMATCH split {ntiles} tiles request {r} user {g}: x280 {toks[l]} host library {refs[g]}"
+                        )
+        steps.append(max(tot))
+    for fw, _ in use:
+        fw.w32(S.L2S_OFF_USER_BASE, 0)
+    return dict(
+        ok=bad == 0,
+        identical=total - bad,
+        total=total,
+        ntiles=ntiles,
+        mode=mode,
+        wall_s=time.time() - t0,
+        step_us=statistics.median(steps),
+        step_p90_us=sorted(steps)[int(0.9 * len(steps))],
+        tile_us=[statistics.median(t) for t in per_tile],
     )
 
 
