@@ -10,6 +10,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -21,7 +22,6 @@
 namespace tt::tt_metal {
 
 namespace distributed {
-class MeshCommandQueue;
 class MeshDevice;
 }  // namespace distributed
 
@@ -49,21 +49,15 @@ namespace experimental {
 //
 // MeshDevice-only: the arena that backs this GCB's pages_sent allocation lives on
 // MeshDeviceImpl, so a bare IDevice cannot construct one.
+//
+// `cq_id` is the command queue used for the config write (cq 0 if not provided).
 GlobalCircularBuffer CreateGlobalCircularBufferForTensorPrefetcher(
     distributed::MeshDevice& mesh_device,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
     BufferType buffer_type = BufferType::L1,
-    bool support_multi_receiver_shards = false);
-
-// Same as above, but the config write is issued on `mesh_cq` (a command queue of `mesh_device`).
-GlobalCircularBuffer CreateGlobalCircularBufferForTensorPrefetcher(
-    distributed::MeshDevice& mesh_device,
-    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
-    uint32_t size,
-    BufferType buffer_type,
-    bool support_multi_receiver_shards,
-    distributed::MeshCommandQueue& mesh_cq);
+    bool support_multi_receiver_shards = false,
+    std::optional<uint8_t> cq_id = std::nullopt);
 
 // Sender domain of a GlobalCircularBuffer. Returns SenderCoreType::Worker for GCBs created
 // via the worker-sender path, SenderCoreType::Dram for those from

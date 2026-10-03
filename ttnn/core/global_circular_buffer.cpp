@@ -28,7 +28,11 @@ GlobalCircularBuffer create_global_circular_buffer(
     BufferType buffer_type) {
     auto guard = tt::tt_metal::make_allocation_context_guard("ttnn.create_global_circular_buffer");
     return tt::tt_metal::experimental::GlobalCircularBuffer(
-        *device, sender_receiver_core_mapping, size, ttnn::core::current_mesh_command_queue(*device), buffer_type);
+        *device,
+        sender_receiver_core_mapping,
+        size,
+        buffer_type,
+        ttnn::core::get_current_command_queue_id_for_thread().get());
 }
 
 GlobalCircularBuffer create_global_circular_buffer_for_tensor_prefetcher(
@@ -43,7 +47,7 @@ GlobalCircularBuffer create_global_circular_buffer_for_tensor_prefetcher(
         size,
         buffer_type,
         support_multi_receiver_shards,
-        ttnn::core::current_mesh_command_queue(*mesh_device));
+        ttnn::core::get_current_command_queue_id_for_thread().get());
 }
 
 namespace {
@@ -541,7 +545,7 @@ static GlobalCircularBuffer build_matmul_1d_gcb_krow_major(
         size,
         buffer_type,
         /*support_multi_receiver_shards=*/true,
-        ttnn::core::current_mesh_command_queue(*mesh_device));
+        ttnn::core::get_current_command_queue_id_for_thread().get());
 }
 
 // Builds the GCB for a receiver-contiguous (NdShardSpec) weight: num_shards == ring_size, each shard
@@ -590,7 +594,7 @@ static GlobalCircularBuffer build_matmul_1d_gcb_recv_contig(
         size,
         buffer_type,
         support_multi_receiver_shards,
-        ttnn::core::current_mesh_command_queue(*mesh_device));
+        ttnn::core::get_current_command_queue_id_for_thread().get());
 }
 
 GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d(

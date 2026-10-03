@@ -204,7 +204,7 @@ void enqueue_mesh_workload(
 
     // The queue this workload is dispatched to: the thread's current command queue (see ttnn::with_command_queue_id /
     // ttnn.command_queue), cq 0 by default.
-    auto& mesh_cq = ttnn::core::current_mesh_command_queue(*mesh_device);
+    const auto cq_id = ttnn::core::get_current_command_queue_id_for_thread();
 
     // Inspector: emit debug entry with tensor parameters
     if (tt::tt_metal::experimental::inspector::IsEnabled()) {
@@ -219,7 +219,7 @@ void enqueue_mesh_workload(
                 [&](const Tensor& t) { spec_copies.emplace_back(t.tensor_spec()); }, tensor_args);
         }
 
-        auto trace_id = tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(mesh_cq);
+        auto trace_id = tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(mesh_device, cq_id.get());
         tt::tt_metal::experimental::inspector::EmitMeshWorkloadDebugEntry(
             workload, runtime_id, operation_name, std::move(spec_copies), trace_id);
     }
@@ -228,7 +228,8 @@ void enqueue_mesh_workload(
         return;
     }
 
-    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_cq, workload, false);
+    tt::tt_metal::distributed::EnqueueMeshWorkload(
+        ttnn::core::current_mesh_command_queue(*mesh_device, cq_id), workload, false);
 
     TracyOpMeshWorkload(
         mesh_device,

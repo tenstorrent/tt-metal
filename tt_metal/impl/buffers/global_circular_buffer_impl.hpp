@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -36,12 +37,13 @@ struct GlobalCircularBufferDramSenderInternals;
 // go through GlobalCircularBuffer::impl().
 class GlobalCircularBufferImpl {
 public:
+    // `cq_id` is the queue for the config write (cq 0 if not provided).
     GlobalCircularBufferImpl(
         distributed::MeshDevice& device,
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
         uint32_t size,
         BufferType buffer_type,
-        distributed::MeshCommandQueue* mesh_cq = nullptr);
+        std::optional<uint8_t> cq_id = std::nullopt);
 
     GlobalCircularBufferImpl(const GlobalCircularBufferImpl&) = default;
     GlobalCircularBufferImpl& operator=(const GlobalCircularBufferImpl&) = default;
@@ -66,9 +68,7 @@ public:
     }
 
 private:
-    // The config write goes to `mesh_cq`, or to cq 0 when null.
-    void setup_cb_buffers(
-        BufferType buffer_type, uint32_t max_num_receivers_per_sender, distributed::MeshCommandQueue* mesh_cq);
+    void setup_cb_buffers(BufferType buffer_type, uint32_t max_num_receivers_per_sender, std::optional<uint8_t> cq_id);
     // Allocates and writes the per-GCB sender state block in DRISC L1. DRAM-sender flavour only.
     void initialize_dram_sender_state_block(uint32_t max_num_receivers_per_sender);
 
@@ -82,7 +82,7 @@ private:
         uint32_t size,
         BufferType buffer_type,
         DramSenderTag,
-        distributed::MeshCommandQueue* mesh_cq = nullptr);
+        std::optional<uint8_t> cq_id = std::nullopt);
 
     // GlobalCircularBufferImpl is implemented as a wrapper around a sharded buffer
     // This can be updated in the future to be its own container with optimized dispatch functions

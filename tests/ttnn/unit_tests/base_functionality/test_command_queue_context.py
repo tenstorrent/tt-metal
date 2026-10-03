@@ -15,6 +15,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import skip_for_slow_dispatch
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -171,6 +172,7 @@ def _single_core(x, y):
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y))})
 
 
+@skip_for_slow_dispatch("slow dispatch writes global semaphores without a command queue")
 def test_selected_queue_out_of_range_raises_and_restores(device, expect_error):
     """On a single-CQ device, selecting cq 1 makes TTNN entry points fail cleanly, and the stack is restored."""
     shape = (1, 1, 32, 32)

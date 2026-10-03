@@ -18,7 +18,6 @@
 
 #include "global_semaphore_impl.hpp"
 #include "impl/dispatch/host_device_transfer.hpp"
-#include "mesh_command_queue.hpp"
 #include "mesh_device.hpp"
 #include <tt_stl/reflection.hpp>
 #include "impl/context/metal_context.hpp"
@@ -32,21 +31,10 @@ GlobalSemaphoreImpl::GlobalSemaphoreImpl(
     distributed::MeshDevice& device,
     CoreRangeSet cores,
     std::optional<uint32_t> initial_value,
-    BufferType buffer_type) :
-    device_{&device}, cores_{std::move(cores)} {
-    this->setup_buffer(initial_value, buffer_type, std::nullopt);
-}
-
-GlobalSemaphoreImpl::GlobalSemaphoreImpl(
-    distributed::MeshDevice& device,
-    CoreRangeSet cores,
-    uint32_t initial_value,
     BufferType buffer_type,
-    distributed::MeshCommandQueue& mesh_cq) :
+    std::optional<uint8_t> cq_id) :
     device_{&device}, cores_{std::move(cores)} {
-    TT_FATAL(
-        mesh_cq.device() == &device, "MeshCommandQueue belongs to a different MeshDevice than the GlobalSemaphore");
-    this->setup_buffer(initial_value, buffer_type, std::nullopt, &mesh_cq);
+    this->setup_buffer(initial_value, buffer_type, std::nullopt, cq_id);
 }
 
 GlobalSemaphoreImpl::GlobalSemaphoreImpl(
@@ -67,17 +55,7 @@ BufferType GlobalSemaphoreImpl::buffer_type() const { return buffer_->device_loc
 
 DeviceAddr GlobalSemaphoreImpl::address() const { return buffer_->address(); }
 
-void GlobalSemaphoreImpl::reset_semaphore_value(uint32_t reset_value) const {
-    this->reset_semaphore_value(reset_value, /*mesh_cq=*/nullptr);
-}
-
-void GlobalSemaphoreImpl::reset_semaphore_value(uint32_t reset_value, distributed::MeshCommandQueue& mesh_cq) const {
-    TT_FATAL(
-        mesh_cq.device() == &device(), "MeshCommandQueue belongs to a different MeshDevice than the GlobalSemaphore");
-    this->reset_semaphore_value(reset_value, &mesh_cq);
-}
-
-void GlobalSemaphoreImpl::reset_semaphore_value(uint32_t reset_value, distributed::MeshCommandQueue* mesh_cq) const {
+void GlobalSemaphoreImpl::reset_semaphore_value(uint32_t reset_value, std::optional<uint8_t> cq_id) const {
     // Blocking write here to ensure that Global Semaphore reset value lands on
     // each physical device before the next program runs.
     // This is to ensure that cross-chip writes to the Global Semaphore are not
@@ -88,9 +66,7 @@ void GlobalSemaphoreImpl::reset_semaphore_value(uint32_t reset_value, distribute
     bool using_fast_dispatch = rtoptions.get_fast_dispatch();
     bool using_simulator = rtoptions.get_simulator_enabled();
     if (using_fast_dispatch && !using_simulator) {
-        // No queue given: use cq 0. Metal has no implicit (thread-local) queue selection.
-        distributed::MeshCommandQueue& cq = mesh_cq != nullptr ? *mesh_cq : mesh_device.mesh_command_queue();
-        cq.enqueue_write_mesh_buffer(buffer_, host_buffer.data(), /*blocking=*/true);
+        mesh_device.mesh_command_queue(cq_id).enqueue_write_mesh_buffer(buffer_, host_buffer.data(), /*blocking=*/true);
     } else {
         for (const auto& coord : distributed::MeshCoordinateRange(mesh_device.shape())) {
             if (!mesh_device.is_local(coord)) {
@@ -106,7 +82,7 @@ void GlobalSemaphoreImpl::setup_buffer(
     std::optional<uint32_t> initial_value,
     BufferType buffer_type,
     std::optional<uint64_t> address,
-    distributed::MeshCommandQueue* mesh_cq) {
+    std::optional<uint8_t> cq_id) {
     TT_FATAL(
         buffer_type == BufferType::L1 or buffer_type == BufferType::L1_SMALL,
         "Global semaphore can only be created for L1 buffer types");
@@ -125,7 +101,7 @@ void GlobalSemaphoreImpl::setup_buffer(
     Inspector::global_semaphore_created(buffer_.get(), cores_);
 
     if (initial_value.has_value()) {
-        this->reset_semaphore_value(initial_value.value(), mesh_cq);
+        this->reset_semaphore_value(initial_value.value(), cq_id);
     }
 }
 
@@ -144,16 +120,12 @@ GlobalSemaphore CreateGlobalSemaphore(
 // GlobalSemaphore implementation
 
 GlobalSemaphore::GlobalSemaphore(
-    distributed::MeshDevice& device, CoreRangeSet cores, uint32_t initial_value, BufferType buffer_type) :
-    GlobalSemaphore{GlobalSemaphoreImpl{device, std::move(cores), initial_value, buffer_type}} {}
-
-GlobalSemaphore::GlobalSemaphore(
     distributed::MeshDevice& device,
     CoreRangeSet cores,
     uint32_t initial_value,
-    distributed::MeshCommandQueue& mesh_cq,
-    BufferType buffer_type) :
-    GlobalSemaphore{GlobalSemaphoreImpl{device, std::move(cores), initial_value, buffer_type, mesh_cq}} {}
+    BufferType buffer_type,
+    std::optional<uint8_t> cq_id) :
+    GlobalSemaphore{GlobalSemaphoreImpl{device, std::move(cores), initial_value, buffer_type, cq_id}} {}
 
 GlobalSemaphore::GlobalSemaphore(GlobalSemaphoreImpl impl) :
     impl_(std::make_unique<GlobalSemaphoreImpl>(std::move(impl))) {}
@@ -188,10 +160,8 @@ const GlobalSemaphoreImpl& GlobalSemaphore::impl() const {
 
 DeviceAddr GlobalSemaphore::address() const { return impl().address(); }
 
-void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const { impl().reset_semaphore_value(reset_value); }
-
-void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value, distributed::MeshCommandQueue& mesh_cq) const {
-    impl().reset_semaphore_value(reset_value, mesh_cq);
+void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value, std::optional<uint8_t> cq_id) const {
+    impl().reset_semaphore_value(reset_value, cq_id);
 }
 
 std::tuple<CoreRangeSet, BufferType> GlobalSemaphore::attribute_values() const {
