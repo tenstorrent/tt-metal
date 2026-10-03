@@ -308,6 +308,8 @@ class DSV41PrefillAttention:
         self.halo = z([U, 1, WINDOW, HEAD_DIM])
         self.lat_buf = z([U, 1, ctx.L[self.ratio], HEAD_DIM]) if (self.compressed and a.source is None) else None
         del rows
+        if self.sparse is not None:
+            self.sparse.alloc_dyn(ctx)
 
     def reset_dyn(self):
         """Zero the carried state before a new prompt (masked anyway, but NaN garbage must not sit in the buffers)."""
@@ -331,7 +333,10 @@ class DSV41PrefillAttention:
         )
         ttnn.deallocate(y)
         q = ttnn.linear(qr, a.wq_b, compute_kernel_config=a.ckc)
-        ttnn.deallocate(qr)
+        sp = self.sparse
+        dyn_sp = sp is not None and sp.dyn_on
+        if not (dyn_sp and sp.indexer is not None):
+            ttnn.deallocate(qr)
         q = ttnn.reshape(q, [U, 1, C, LOCAL_HEADS * HEAD_DIM])
         qh, _, _ = ttnn.experimental.nlp_create_qkv_heads(
             q, num_heads=LOCAL_HEADS, num_kv_heads=0, transpose_k_heads=False
@@ -340,6 +345,14 @@ class DSV41PrefillAttention:
         qh = self._rope(qh, tabs)
         kv = self._rope(ttnn.reshape(kvn, [U, 1, C, HEAD_DIM]), tabs)
         lat = cs = None
+        if dyn_sp:  # indexer top-512 + sparse_sdpa (tt/prefill_sparse.py), all per-chunk values are device tensors
+            if a.source is None:
+                lat, cs = self._compress_dyn(h, C)
+            o = sp.attend_dyn(qh, kv, self.halo, lat, self._lat_pre, h, qr)
+            if sp.indexer is not None:
+                ttnn.deallocate(qr)
+            ttnn.deallocate(qh)
+            return self._finish_dyn(o, kv, lat, cs, h, tabs, a, U, C, R)
         keys = ttnn.concat([self.halo, kv], dim=2)  # [U,1,128+C,512]
         if self.compressed:
             r = self.ratio
@@ -374,6 +387,9 @@ class DSV41PrefillAttention:
         )
         ttnn.deallocate(qh)
         ttnn.deallocate(keys)
+        return self._finish_dyn(o, kv, lat, cs, h, tabs, a, U, C, R)
+
+    def _finish_dyn(self, o, kv, lat, cs, h, tabs, a, U, C, R):
         if self.state_sink is not None:
             self.state_sink(self, kv, lat, cs, 0, C, h)
         new_halo = ttnn.slice(ttnn.concat([self.halo, kv], dim=2), [0, 0, C, 0], [U, 1, WINDOW + C, HEAD_DIM])

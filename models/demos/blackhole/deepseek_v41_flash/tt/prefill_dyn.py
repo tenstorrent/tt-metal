@@ -71,6 +71,10 @@ class DynCtx:
             )
             for r in self.ratios
         }
+        self.upd_hooks, self.build_hooks = (
+            [],
+            [],
+        )  # extra per-chunk host updates (``hook(ctx, s0)``) / in-trace builders (``hook(ctx)``): tt/prefill_sparse.py
         self.masks = {}  # ratio -> full mask [1,1,C,128+C+L] built inside the traced forward by ``build_masks``
 
     def _host(self, t, dtype):
@@ -102,6 +106,8 @@ class DynCtx:
         for r in self.ratios:
             up(self._host(((pos + 1) // r).float().reshape(1, 1, C, 1), ttnn.float32), self.lim[r])
             up(self._host(torch.full((1, 1, 1, 1), float(self.L[r] - (s0 + C) // r)), ttnn.float32), self.off[r])
+        for hk in self.upd_hooks:
+            hk(self, s0)
 
     def build_masks(self):
         """Inside the traced forward, once per chunk: the full additive masks [1,1,C,128+C+L] of every ratio."""
@@ -109,3 +115,5 @@ class DynCtx:
             lm = latent_mask(self.pcol[r], self.off[r], self.lim[r], self.C, self.L[r])
             self.masks[r] = ttnn.concat([self.win_mask, lm], dim=3)
             ttnn.deallocate(lm)
+        for hk in self.build_hooks:
+            hk(self)
