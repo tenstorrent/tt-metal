@@ -331,6 +331,7 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         0,      // arg 19: k_partial_col — non-streaming, no partial mask emitted
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 20
         0,  // arg 21: use_windowed_mask — ring never uses windowed (block-diagonal) attention
+        0,  // arg 22: out_concat_heads — ring writes the per-head layout
     };
     // out accessor, then the cu_window and Q-offset accessors chained right after it (mirrors the regular
     // factory so the writer's accessor offset chain stays intact). Ring is never windowed → placeholders.

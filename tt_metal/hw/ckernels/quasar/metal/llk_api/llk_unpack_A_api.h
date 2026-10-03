@@ -234,15 +234,14 @@ inline void llk_unpack_A_block(
  * whose data is not needed. Unlike the WH/BH version -- a debug-only SrcA flush with no ordering role --
  * this is a required Quasar primitive: the UNPACR_NOP is a real unpacker TDMA that orders the POP_TILES
  * after its WAIT_TILES on dfb_id (TEN-4746 / #48552). Because it reads nothing, PACKER_L1_ACC is
- * undisturbed. The STALLWAIT ensures SrcA is free before the clear, so it cannot clobber a SrcA bank
- * still owned by an in-flight op; SrcA is cleared only (the next op re-unpacks it).
+ * undisturbed. The NOP is a pure delay and leaves SrcA alone; nothing here clears it.
  *
  * @param dfb_id  The dataflow buffer whose WAIT/POP this orders. Disarms the TEN-4746 tile-counter guard
  *                that llk_wait_tiles armed for it (llk_pop_tiles asserts the buffer was disarmed).
  */
 inline void llk_unpack_dummy(const std::uint32_t dfb_id) {
     TTI_STALLWAIT(p_stall::STALL_UNPACK, 0, 0, p_stall::SRCA_CLR);
-    TTI_UNPACR_NOP(p_unpacr::UNP_A, 0, 0, 0, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC);
+    TTI_UNPACR_NOP(p_unpacr::UNP_A, 0, 0, 0, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_NOP);
     LLK_TDMA_GUARD_NOTE_TDMA(dfb_id);  // TEN-4746: UNPACR_NOP orders POP after WAIT -> disarm this dfb
 }
 

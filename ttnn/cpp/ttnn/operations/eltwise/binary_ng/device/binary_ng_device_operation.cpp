@@ -295,7 +295,9 @@ ttsl::hash::hash_t BinaryNgDeviceOperation::tensor_args_t::to_hash() const {
                                    : std::nullopt,
         input_tensor_b.has_value() ? std::optional{input_tensor_b->tensor_spec().tile()} : std::nullopt,
         sharded_tensor_shape_in_pages(input_tensor_a),
-        input_tensor_b.has_value() ? sharded_tensor_shape_in_pages(*input_tensor_b) : std::nullopt);
+        input_tensor_b.has_value() ? sharded_tensor_shape_in_pages(*input_tensor_b) : std::nullopt,
+        // Output dtype can change the program (fp32 DEST). Falls back to a's dtype so in-place calls still share.
+        output_tensor.has_value() ? output_tensor->dtype() : input_tensor_a.dtype());
 }
 
 void BinaryNgDeviceOperation::validate_on_program_cache_miss(
@@ -724,6 +726,11 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         std::nullopt,
         std::nullopt};
 
+    if (binary_op_type == ttnn::operations::binary_ng::BinaryOpType::BIAS_GELU) {
+        operation_attributes.op_params =
+            ttnn::operations::binary::BiasGeluParams{.fast_and_approximate = fast_and_approximate_mode.value_or(false)};
+    }
+
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b, output_tensor};
     const auto output_spec = OperationType::compute_output_specs(operation_attributes, tensor_args);
     const auto shard_volumes = ttnn::operations::binary_ng::get_shard_volumes(
@@ -822,6 +829,11 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         std::nullopt,
         std::nullopt,
         std::nullopt};
+
+    if (binary_op_type == ttnn::operations::binary_ng::BinaryOpType::BIAS_GELU) {
+        operation_attributes.op_params =
+            ttnn::operations::binary::BiasGeluParams{.fast_and_approximate = fast_and_approximate_mode.value_or(false)};
+    }
 
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, std::nullopt, output_tensor};
     // Skip the output-spec computation on the interleaved fast path. output_tensor is tested separately:

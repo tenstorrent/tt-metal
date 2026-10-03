@@ -106,6 +106,7 @@ jobs:
             const isCopilotActor = (login) => /^copilot/i.test(login || '');
             const READY_MARKER = '<!-- copilot-flow-ready -->';
             const FAILED_MARKER_PREFIX = '<!-- copilot-flow-session-failed:';
+            const ZERO_DIFF_MARKER_PREFIX = '<!-- copilot-flow-zero-diff:';
             // Every open Copilot PR is a candidate; the search API caps at 1000 and tt-metal
             // has never had more than a handful open at once (3 on 2026-09-28).
             const MAX_CANDIDATES = 100;
@@ -114,8 +115,17 @@ jobs:
             const rows = [];
             const note = (n, what) => { rows.push(`| #${n} | ${what} |`); core.info(`#${n}: ${what}`); };
 
-            // 1. Candidates: open PRs authored by the Copilot coding agent.
+            // 1. Candidates: open PRs authored by the Copilot coding agent. The search API
+            //    already returns `draft` and `labels` on each item (verified live), so a
+            //    snapshot of those is kept to skip the per-PR `pulls.get` below for PRs that
+            //    are already done (ready + labeled) -- the common steady state once a PR has
+            //    been flipped, and previously the majority of this workflow's REST calls at
+            //    144 ticks/day. Worst case on a stale snapshot is a PR converted back to draft
+            //    moments before this run gets re-checked on the NEXT tick (10 min later), which
+            //    is fine: this bridge only ever adds a label or flips ready, never removes
+            //    anything, so there is nothing unsafe about deferring by one tick.
             let candidates = [];
+            const searchSnapshot = new Map(); // number -> { draft, labels: Set<string> }
             if (process.env.ONLY_PR) {
               const n = parseInt(process.env.ONLY_PR, 10);
               if (!Number.isInteger(n) || n <= 0) {
@@ -127,16 +137,25 @@ jobs:
                 note(n, 'skipped: not an open Copilot-authored PR');
               } else {
                 candidates = [pr.number];
+                searchSnapshot.set(pr.number, { draft: !!pr.draft, labels: new Set((pr.labels || []).map(l => l.name)) });
               }
             } else {
               const q = `repo:${owner}/${repo} is:pr is:open author:app/copilot-swe-agent`;
               const res = await github.rest.search.issuesAndPullRequests({ q, per_page: MAX_CANDIDATES, sort: 'updated', order: 'desc' });
               candidates = res.data.items.map(i => i.number);
+              for (const item of res.data.items) {
+                searchSnapshot.set(item.number, { draft: !!item.draft, labels: new Set((item.labels || []).map(l => (typeof l === 'string' ? l : l.name))) });
+              }
               core.info(`Open Copilot PRs: ${candidates.length}`);
             }
 
             for (const number of candidates) {
               try {
+                const snap = searchSnapshot.get(number);
+                if (snap && !snap.draft && snap.labels.has(FLOW_LABEL)) {
+                  note(number, 'nothing to do: labeled and already ready for review (from search snapshot, no PR fetch needed)');
+                  continue;
+                }
                 // 2. Current PR state (REST: draft flag, labels, head repo/branch, node id).
                 const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: number });
                 if (pr.state !== 'open') { note(number, 'skipped: no longer open'); continue; }
@@ -190,10 +209,10 @@ jobs:
                   ...(prNode?.closingIssuesReferences?.nodes || []),
                   ...((prNode?.timelineItems?.nodes || []).map(e => e?.subject).filter(s => s && s.number))
                 ];
-                const qualifying = linked.filter(issue =>
+                const qualifying = [...new Set(linked.filter(issue =>
                   (issue.labels?.nodes || []).some(l => l.name === PICKUP_LABEL) ||
                   (issue.timelineItems?.nodes || []).some(e => e?.label?.name === PICKUP_LABEL)
-                ).map(i => i.number);
+                ).map(i => i.number))];
                 const qualifies = qualifying.length > 0;
                 if (!qualifies) {
                   note(number, `skipped: linked issues [${[...new Set(linked.map(i => i.number))].join(', ') || 'none'}] never carried ${PICKUP_LABEL}`);
@@ -234,14 +253,25 @@ jobs:
                   continue;
                 }
 
-                // 5. Existing bridge comments, for idempotency of the failure notice.
+                // 5. Existing bridge comments, for idempotency of the failure / zero-diff notices.
                 const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: number, per_page: 100 });
                 const failedNoticeExists = workAt && comments.some(c => (c.body || '').includes(`${FAILED_MARKER_PREFIX}${workAt} -->`));
+                const zeroDiffNoticeExists = workAt && comments.some(c => (c.body || '').includes(`${ZERO_DIFF_MARKER_PREFIX}${workAt} -->`));
 
                 const todo = [];
                 if (!hasFlowLabel) todo.push({ type: 'label' });
                 if (pr.draft && workState === 'copilot_work_finished' && finishIsFresh) {
-                  todo.push({ type: 'ready', node_id: pr.node_id, finished_at: workAt });
+                  // Safety check (2026-09-29): a session can report `copilot_work_finished`
+                  // and still have written nothing -- a real, observed failure mode (PR
+                  // #58341's second session: ran 15 min, zero commits, write-back errors). A
+                  // zero-diff PR flipped ready burns pr-gate, the review bot and a CODEOWNERS
+                  // request on a PR with nothing to look at. `changed_files` is on the REST
+                  // response already fetched above; no extra call needed.
+                  if (pr.changed_files === 0) {
+                    if (!zeroDiffNoticeExists) todo.push({ type: 'zero_diff_notice', finished_at: workAt });
+                  } else {
+                    todo.push({ type: 'ready', node_id: pr.node_id, finished_at: workAt });
+                  }
                 } else if (pr.draft && workState === 'copilot_work_finished_failure' && !failedNoticeExists) {
                   todo.push({ type: 'failed_notice', failed_at: workAt });
                 }
@@ -303,30 +333,39 @@ jobs:
                     // coding-agent session, which is pr-sous-chef's job, not this one's.
                     const body = [
                       '<!-- copilot-flow-ready -->',
-                      `🤖 **Copilot flow** — the Copilot coding agent reported that it finished this task (\`copilot_work_finished\` at ${t.finished_at}), so this PR has been marked **ready for review** automatically.`,
+                      `🤖 **Copilot flow** — Copilot finished (\`copilot_work_finished\` at ${t.finished_at}); marked **ready for review**.`,
                       '',
-                      'Copilot cannot leave draft state on its own, and on tt-metal nothing runs on a draft: pr-gate/merge-gate skip drafts, the Copilot code-review ruleset ignores drafts, and CODEOWNERS review requests only fire on `ready_for_review`. This flip is what starts all three.',
+                      `Linked \`${PICKUP_LABEL}\` issue(s): ${issues.map(n => `#${n}`).join(', ')} · label \`${FLOW_LABEL}\` keeps PR Sous Chef nudging this PR — remove it to opt out.`,
                       '',
-                      `- Linked \`${PICKUP_LABEL}\` issue(s): ${issues.map(n => `#${n}`).join(', ')}`,
-                      `- Label \`${FLOW_LABEL}\` marks this PR as managed by the Copilot flow: the scheduled **PR Sous Chef** workflow will now nudge Copilot about failed checks, merge conflicts and unresolved review threads until the PR is mergeable. Remove the label to opt out — the removal is respected (this bridge will not add it back); re-add it to opt back in.`,
-                      '- If Copilot pushes again, its runs may show **Approve and run workflows** — that is GitHub\'s Copilot approval gate (Settings → Copilot → Cloud agent), and a maintainer must click it; this automation deliberately does not.',
-                      '',
-                      `> Applied by [Copilot flow: ready-for-review bridge](${RUN_URL}); a human still reviews and merges.`
+                      `> [Copilot flow: ready-for-review bridge](${RUN_URL})`
                     ].join('\n');
                     await github.rest.issues.createComment({ owner, repo, issue_number: number, body });
                   } else if (t.type === 'failed_notice') {
                     const body = [
                       `<!-- copilot-flow-session-failed:${t.failed_at} -->`,
-                      `🤖 **Copilot flow** — the Copilot coding agent's session on this PR ended in **failure** (\`copilot_work_finished_failure\` at ${t.failed_at}). The PR was left as a draft on purpose: CI, code review and reviewer requests have not been started for work Copilot itself did not report as finished.`,
+                      `🤖 **Copilot flow** — Copilot's session ended in **failure** (\`copilot_work_finished_failure\` at ${t.failed_at}); left as draft, no CI/review started.`,
                       '',
-                      'A maintainer decides what happens next:',
-                      '- post a comment that at-mentions Copilot with guidance — a later *successful* session is picked up by this bridge automatically; or',
-                      `- close the PR. Issue Monster counts closed-unmerged Copilot PRs per topic and blocks automatic re-dispatch after two (\`copilot-retry-blocked\`), so the linked issue (${issues.map(n => `#${n}`).join(', ')}) will not be retried indefinitely.`,
+                      `To retry: @-mention Copilot with guidance (a later successful session is picked up automatically). To stop: close the PR — linked issue(s) ${issues.map(n => `#${n}`).join(', ')} won't retry indefinitely.`,
                       '',
-                      `> Posted once per failed session by [Copilot flow: ready-for-review bridge](${RUN_URL}).`
+                      `> [Copilot flow: ready-for-review bridge](${RUN_URL})`
                     ].join('\n');
                     await github.rest.issues.createComment({ owner, repo, issue_number: number, body });
                     core.info(`#${number}: posted failed-session notice`);
+                  } else if (t.type === 'zero_diff_notice') {
+                    // Literal marker, not the ZERO_DIFF_MARKER_PREFIX constant: each
+                    // actions/github-script step is a separate Node.js scope (that constant
+                    // is only defined in the scan step above), same as failed_notice's literal
+                    // marker string just above.
+                    const body = [
+                      `<!-- copilot-flow-zero-diff:${t.finished_at} -->`,
+                      `🤖 **Copilot flow** — Copilot finished (\`copilot_work_finished\` at ${t.finished_at}) but the PR has zero changed files; left as draft rather than flipped ready — there is nothing for reviewers or CI to look at yet.`,
+                      '',
+                      'A maintainer decides what happens next: @-mention Copilot with guidance, or close the PR.',
+                      '',
+                      `> [Copilot flow: ready-for-review bridge](${RUN_URL})`
+                    ].join('\n');
+                    await github.rest.issues.createComment({ owner, repo, issue_number: number, body });
+                    core.info(`#${number}: posted zero-diff notice`);
                   }
                 } catch (error) {
                   // "already ready" (a human beat us to it between scan and apply) is benign.

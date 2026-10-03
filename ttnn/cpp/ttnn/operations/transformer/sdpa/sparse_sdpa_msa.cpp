@@ -50,6 +50,13 @@ ttnn::Tensor sparse_sdpa_msa(
             q_isl,
             q_isl * tp);
         block_cyclic = ttnn::prim::BlockCyclicLayout{sp, chunk_local};
+        // The causal query positions are derived from the rank along cluster_axis against the cache's block-cyclic
+        // SP striping, so the two must name the same mesh axis.
+        TT_FATAL(
+            !chunk_start_idx.has_value() || !cluster_axis.has_value() || cluster_axis.value() == sp_axis,
+            "sparse_sdpa_msa: causal cluster_axis ({}) must equal block_cyclic_sp_axis ({})",
+            cluster_axis.value_or(0),
+            sp_axis);
     }
 
     // fp8 Q needs 32-bit DEST for tilize; bf16 Q uses the default DEST width.
