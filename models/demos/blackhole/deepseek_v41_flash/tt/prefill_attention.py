@@ -34,6 +34,9 @@ _TABS = {}  # shared by all layers of one rope kind: (id(md), compressed?, start
 
 def clear_chunk_caches():
     """Free the per-chunk constants (masks, rope tables); the driver calls this when it moves on to the next chunk."""
+    from models.demos.blackhole.deepseek_v41_flash.tt.prefill_sparse import clear_sparse_caches
+
+    clear_sparse_caches()
     for d in (_MASKS, _TABS):  # _ZEROS stays: a captured trace may hold them
         for v in d.values():
             for t in v if isinstance(v, tuple) else (v,):
@@ -82,6 +85,8 @@ class DSV41PrefillAttention:
         self.dyn = None  # DynCtx: traced-chunk mode (forward_dyn)
         self.lat_buf = None  # [U,1,Lmax,512] FIFO of latents (kv-source layers, traced-chunk mode)
         self.state_sink = None  # optional callable(self, kv, lat, cs, s0, C, h) called once per chunk; replaces the dense decode-cache write
+        self.sparse = None  # tt/prefill_sparse.py ``DSV41PrefillSparse`` (env DSV41_PF_SPARSE=1): indexer top-512 + sparse_sdpa once more than 512 compressed entries are visible
+        self._lat_pre = None  # pooled latents of the chunk before RoPE (the indexer keys derive from them)
         self.tap = None  # dict -> keeps intermediates (qh, kv, o_raw, c, part) for diagnostics
 
     # ---- constants ----------------------------------------------------------------------------------------
@@ -166,6 +171,7 @@ class DSV41PrefillAttention:
             pooled = ttnn.addcmul(sl(gb, 0), sl(d, 0), sl(ttnn.sigmoid(d), HEAD_DIM))
             lat = ttnn.rms_norm(ttnn.typecast(pooled, ttnn.bfloat16), weight=a.c_norm, epsilon=a.eps)
         lat = ttnn.reshape(lat, [U, 1, Cc, HEAD_DIM])
+        self._lat_pre = lat if self.sparse is not None and self.sparse.indexer is not None else None
         lat = self._rope(lat, self.rope_tabs(s0, Cc, r))
         return lat, cs
 
@@ -190,7 +196,12 @@ class DSV41PrefillAttention:
         )
         ttnn.deallocate(y)
         q = ttnn.linear(qr, a.wq_b, compute_kernel_config=a.ckc)  # [1,1,R,8*512]
-        ttnn.deallocate(qr)
+        sp = self.sparse
+        keep_qr = (
+            sp is not None and sp.indexer is not None and sp.active(s0, C)
+        )  # the indexer scores with the normed q-lora
+        if not keep_qr:
+            ttnn.deallocate(qr)
         q = ttnn.reshape(q, [U, 1, C, LOCAL_HEADS * HEAD_DIM])
         qh, _, _ = ttnn.experimental.nlp_create_qkv_heads(
             q, num_heads=LOCAL_HEADS, num_kv_heads=0, transpose_k_heads=False
@@ -202,34 +213,46 @@ class DSV41PrefillAttention:
             self.tap.update(qh=qh, kv=kv)
 
         lat = cs = None
+        use_sparse = sp is not None and sp.active(s0, C)
         if self.compressed:
             if a.source is None:
                 lat, cs = self._compress(h, s0, C)
-                self.lat_all = lat if self.lat_all is None else ttnn.concat([self.lat_all, lat], dim=2)
-            lat_all = self.lat_all if a.source is None else a.source.prefill.lat_all
-        keys = kv if s0 == 0 else ttnn.concat([self.halo, kv], dim=2)  # [U,1,H+C,512]
-        if self.compressed:
-            keys = ttnn.concat([keys, lat_all], dim=2)
-            kw = dict(is_causal=False, attn_mask=self.mask(S, C, s0, lat_all.shape[2]))
-        elif s0 == 0:
-            kw = dict(is_causal=True, sliding_window_size=WINDOW)
+                if (
+                    not use_sparse
+                ):  # the sparse path keeps the latents in its kv table instead of a growing dense tensor
+                    self.lat_all = lat if self.lat_all is None else ttnn.concat([self.lat_all, lat], dim=2)
+            if sp is not None:
+                sp.ingest(lat, self._lat_pre, s0)
+            lat_all = None if use_sparse else (self.lat_all if a.source is None else a.source.prefill.lat_all)
+        if use_sparse:
+            o = sp.attend(qh, kv, self.halo, h, qr if keep_qr else None, s0, C)
+            keys = kv
         else:
-            kw = dict(is_causal=False, attn_mask=self.window_mask(C, s0))
-        o = ttnn.transformer.scaled_dot_product_attention(
-            qh,
-            keys,
-            keys,
-            scale=a.scale,
-            attention_sink=self.sink,
-            compute_kernel_config=self.ckc_sdpa,
-            program_config=ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=self.md.compute_with_storage_grid_size(),
-                q_chunk_size=self.q_chunk,
-                k_chunk_size=self.k_chunk,
-                exp_approx_mode=False,
-            ),
-            **kw,
-        )
+            keys = kv if s0 == 0 else ttnn.concat([self.halo, kv], dim=2)  # [U,1,H+C,512]
+            if self.compressed:
+                keys = ttnn.concat([keys, lat_all], dim=2)
+                kw = dict(is_causal=False, attn_mask=self.mask(S, C, s0, lat_all.shape[2]))
+            elif s0 == 0:
+                kw = dict(is_causal=True, sliding_window_size=WINDOW)
+            else:
+                kw = dict(is_causal=False, attn_mask=self.window_mask(C, s0))
+            o = ttnn.transformer.scaled_dot_product_attention(
+                qh,
+                keys,
+                keys,
+                scale=a.scale,
+                attention_sink=self.sink,
+                compute_kernel_config=self.ckc_sdpa,
+                program_config=ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=self.md.compute_with_storage_grid_size(),
+                    q_chunk_size=self.q_chunk,
+                    k_chunk_size=self.k_chunk,
+                    exp_approx_mode=False,
+                ),
+                **kw,
+            )
+        if keep_qr:
+            ttnn.deallocate(qr)
         if self.tap is None:
             ttnn.deallocate(qh)
         else:
