@@ -14,6 +14,9 @@ https://claude.ai/artifact/L5rXDnJoEpjsEL33s3wmSC. This file is the how-to.
 - A clone of tt-d-gen at `/localdev/$USER/tt-d-gen` (the serving-contract step reads it at its latest commit) and
   its engine build (the runner tests drive the model with it); the `dgen-build` agent makes both.
   Optional: `github.com/AleksKnezevic/disagg_lb` next to it, for the settings proven on LoudBoxes.
+- Running someone else's bring-up whose spec names their paths: `BRINGUP_HF=<checkpoint dir>` and
+  `BRINGUP_SERVER_REPO=<tt-d-gen checkout>` override `paths.hf` and `serving.server_repo` without editing the
+  approved spec.
 - Large files go under `/localdev/$USER/bringup/<model>/` (checkpoint, goldens, weight cache, runs). If your home
   quota is small, run the orchestrator with `TT_METAL_CACHE=/localdev/$USER` so JIT builds land there too.
 - To use the skill as `/bringup`, link `skill/bringup` into `~/.claude/skills/`; link the files in `agents/` into
