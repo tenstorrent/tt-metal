@@ -16,9 +16,10 @@ Branch: `ttp/t86-off-device-5-seed-4x8-eval-pack-for-non-` (t48 a613d669eef + 3 
 | expapprox | LTX_SDPA_EXP_APPROX=1 | approx exp in every SDPA (pre-#57180 behaviour) |
 | vaetrace | LTX_VIDEO_VAE_TRACE=1 | traced conv VAE decode (new, see below) |
 | export_veryfast | LTX_EXPORT_PRESET=veryfast | old export (veryfast/crf23): settles the ultrafast default |
+| lofi | LTX_VAE_CONV_FIDELITY=LoFi | LoFi up-block conv3d: -177 ms decode on 2x4 (job 354), PSNR min 45 dB; needs 5-seed VBench + visual before default |
 | all | gate + adaln + expapprox + vaetrace | combined |
 
-No VAE precision flags exist on t48, so none are in the pack.
+The lofi arm needs t48 at or after the LTX_VAE_CONV_FIDELITY commit (ttp/t94-land-ltx-vae-conv-fidelity-on-t48-opt-in).
 
 Finding: the production conv VAE decode ran EAGER. `pipeline_ltx_distilled.py` sets
 `vae_decoder._vae_traced=True`, but only DiffVAE read it. So memory #80's "traced VAE ~0.45 s" was
@@ -94,7 +95,7 @@ Then it writes `pack_summary.json` and `pack_summary.md`, one row per config:
 Device:
 - load ~12 min
 - gens: gen#0 ~50 s, plus 8 replays at ~10-20 s each
-- ~15-18 min per config, 7 configs ≈ 2 h of 4x8 device time (7 separate short-ish jobs)
+- ~15-18 min per config, 8 configs ≈ 2.3 h of 4x8 device time (8 separate short-ish jobs)
 
 Eval on g15blx02: VBench ~3 min/clip, about 5-10 min per config, ~1 h total.
 
