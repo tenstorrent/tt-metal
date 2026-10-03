@@ -142,8 +142,8 @@ using tt::test_utils::is_close_vectors;
 // fp8_e4m3 -> Float16_b. Widening: every fp8 value is exactly representable in BF16 -> lossless.
 static void case_fp8_to_bf16(distributed::MeshDevice& md, const std::string& kernel) {
     constexpr std::uint32_t num_tiles = 64;
-    auto src_vec = create_random_vector_of_float8_e4m3(
-        tt::tile_size(tt::DataFormat::Fp8_e4m3) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto src_vec = tt::test_utils::create_random_packed_float8_e4m3(
+        tt::tile_size(tt::DataFormat::Fp8_e4m3) * num_tiles, /*rand_max=*/20.0f, /*seed=*/42, /*offset=*/-10.0f);
     auto result_vec = run_fp8_typecast(
         md, tt::DataFormat::Fp8_e4m3, tt::DataFormat::Float16_b, src_vec, num_tiles, /*fp32_dest_acc_en=*/true, kernel);
     auto src_floats = fp8_to_floats(src_vec);
@@ -170,8 +170,8 @@ static void case_bf16_to_fp8(distributed::MeshDevice& md, const std::string& ker
 // fp8_e4m3 -> Bfp8_b. Widening into a shared-exponent block format.
 static void case_fp8_to_bfp8(distributed::MeshDevice& md, const std::string& kernel) {
     constexpr std::uint32_t num_tiles = 64;
-    auto src_vec = create_random_vector_of_float8_e4m3(
-        tt::tile_size(tt::DataFormat::Fp8_e4m3) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto src_vec = tt::test_utils::create_random_packed_float8_e4m3(
+        tt::tile_size(tt::DataFormat::Fp8_e4m3) * num_tiles, /*rand_max=*/20.0f, /*seed=*/42, /*offset=*/-10.0f);
     auto result_vec = run_fp8_typecast(
         md, tt::DataFormat::Fp8_e4m3, tt::DataFormat::Bfp8_b, src_vec, num_tiles, /*fp32_dest_acc_en=*/true, kernel);
     auto src_floats = fp8_to_floats(src_vec);
@@ -220,8 +220,8 @@ static void case_bfp8_to_bfp8(distributed::MeshDevice& md, const std::string& ke
 // fp8_e4m3 -> fp8_e4m3 identity. Lossless round-trip.
 static void case_fp8_to_fp8(distributed::MeshDevice& md, const std::string& kernel) {
     constexpr std::uint32_t num_tiles = 64;
-    auto src_vec = create_random_vector_of_float8_e4m3(
-        tt::tile_size(tt::DataFormat::Fp8_e4m3) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto src_vec = tt::test_utils::create_random_packed_float8_e4m3(
+        tt::tile_size(tt::DataFormat::Fp8_e4m3) * num_tiles, /*rand_max=*/20.0f, /*seed=*/42, /*offset=*/-10.0f);
     auto result_vec = run_fp8_typecast(
         md, tt::DataFormat::Fp8_e4m3, tt::DataFormat::Fp8_e4m3, src_vec, num_tiles, /*fp32_dest_acc_en=*/true, kernel);
     auto src_floats = fp8_to_floats(src_vec);
