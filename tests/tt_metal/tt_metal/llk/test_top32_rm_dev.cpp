@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <random>
@@ -35,32 +36,32 @@ using namespace tt::test_utils;
 
 namespace unit_tests::compute::top32_rm_dev {
 
-constexpr uint32_t kOutputTiles = 1;
+constexpr std::uint32_t kOutputTiles = 1;
 
-uint32_t num_input_tiles_for_row(uint32_t row_elements) { return (row_elements + 1023) / 1024; }
+std::uint32_t num_input_tiles_for_row(std::uint32_t row_elements) { return (row_elements + 1023) / 1024; }
 
-constexpr uint32_t kTopK = 32;
+constexpr std::uint32_t kTopK = 32;
 
 // Build row-major DRAM: consecutive groups of kTopK (32) scores are monotonically decreasing;
 // indices[i] = i (original index at row-major position i).
 struct ShuffledInputs {
-    std::vector<uint32_t> packed_scores;
-    std::vector<uint32_t> indices_u32;
+    std::vector<std::uint32_t> packed_scores;
+    std::vector<std::uint32_t> indices_u32;
 };
 
-ShuffledInputs make_shuffled_inputs_row_major(uint32_t row_elements, [[maybe_unused]] uint32_t seed) {
-    const uint32_t nt = num_input_tiles_for_row(row_elements);
-    const uint32_t total_bf16 = nt * 1024;
-    const uint32_t n_el = nt * 1024;
+ShuffledInputs make_shuffled_inputs_row_major(std::uint32_t row_elements, [[maybe_unused]] std::uint32_t seed) {
+    const std::uint32_t nt = num_input_tiles_for_row(row_elements);
+    const std::uint32_t total_bf16 = nt * 1024;
+    const std::uint32_t n_el = nt * 1024;
 
     std::vector<bfloat16> scores(total_bf16, bfloat16(0.0f));
-    std::vector<uint32_t> indices(n_el, 0u);
-    for (uint32_t i = 0; i < row_elements; i++) {
+    std::vector<std::uint32_t> indices(n_el, 0u);
+    for (std::uint32_t i = 0; i < row_elements; i++) {
         std::random_device rd;
         std::mt19937 gen(rd());
         // for pre-sorted
         // Add to j a random value in range 0 to 1
-        const uint32_t j = kTopK - (i % kTopK);
+        const std::uint32_t j = kTopK - (i % kTopK);
         std::uniform_real_distribution<> dis(0.0, 16.0);
         float rand0_1 = dis(gen);  // random value in [0,1]
         const float val = static_cast<float>(j << 4) + rand0_1 - 256.0f;
@@ -71,18 +72,18 @@ ShuffledInputs make_shuffled_inputs_row_major(uint32_t row_elements, [[maybe_unu
         scores[i] = bfloat16(val);
         indices[i] = i;
     }
-    return {pack_vector<uint32_t, bfloat16>(scores), std::move(indices)};
+    return {pack_vector<std::uint32_t, bfloat16>(scores), std::move(indices)};
 }
 
 // Reference: unpack input scores, sort by value descending with input indices, top-k must match device output.
 bool verify_top32_outputs(
-    const std::vector<uint32_t>& packed_scores_in,
-    const std::vector<uint32_t>& indices_in,
-    const std::vector<uint32_t>& packed_scores_out,
-    const std::vector<uint32_t>& indices_out,
-    uint32_t row_elements) {
-    auto in_scores = unpack_vector<bfloat16, uint32_t>(packed_scores_in);
-    auto out_scores = unpack_vector<bfloat16, uint32_t>(packed_scores_out);
+    const std::vector<std::uint32_t>& packed_scores_in,
+    const std::vector<std::uint32_t>& indices_in,
+    const std::vector<std::uint32_t>& packed_scores_out,
+    const std::vector<std::uint32_t>& indices_out,
+    std::uint32_t row_elements) {
+    auto in_scores = unpack_vector<bfloat16, std::uint32_t>(packed_scores_in);
+    auto out_scores = unpack_vector<bfloat16, std::uint32_t>(packed_scores_out);
     if (in_scores.size() < row_elements || indices_in.size() < row_elements) {
         log_error(
             LogTest,
@@ -104,11 +105,11 @@ bool verify_top32_outputs(
 
     struct ScoredIdx {
         bfloat16 score;
-        uint32_t orig_idx;
+        std::uint32_t orig_idx;
     };
     std::vector<ScoredIdx> ranked;
     ranked.reserve(row_elements);
-    for (uint32_t i = 0; i < row_elements; i++) {
+    for (std::uint32_t i = 0; i < row_elements; i++) {
         ranked.push_back({in_scores[i], indices_in[i]});
     }
     std::sort(ranked.begin(), ranked.end(), [](const ScoredIdx& a, const ScoredIdx& b) {
@@ -136,11 +137,11 @@ bool verify_top32_outputs(
     table += fmt::format("{:-^86}\n", "");
 
     bool all_ok = true;
-    for (uint32_t k = 0; k < kTopK; k++) {
+    for (std::uint32_t k = 0; k < kTopK; k++) {
         const bfloat16 want_score = ranked[k].score;
-        const uint32_t want_idx = ranked[k].orig_idx;
+        const std::uint32_t want_idx = ranked[k].orig_idx;
         const bfloat16 got_score = out_scores[k];
-        const uint32_t got_idx = indices_out[k];
+        const std::uint32_t got_idx = indices_out[k];
         const bool s_ok = (want_score == got_score);
         const bool i_ok = (want_idx == got_idx);
         all_ok &= s_ok;  // can ignore i_ok because sorting is not stable
@@ -162,8 +163,14 @@ bool verify_top32_outputs(
     return all_ok;
 }
 
+// Reuse one workload after a warmup enqueue so timing excludes cold JIT compilation
+// and the initial binary upload. The min/median still include host enqueue and
+// synchronization overhead; use device profiling to measure the LLK itself.
 bool run_top32_rm_dev(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t row_elements, uint32_t seed) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    std::uint32_t row_elements,
+    std::uint32_t seed,
+    bool overwrite_replay = false) {
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -172,14 +179,14 @@ bool run_top32_rm_dev(
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
-    const uint32_t num_in_tiles = num_input_tiles_for_row(row_elements);
-    const uint32_t tile_bf16 = tt::tile_size(DataFormat::Float16_b);
-    const uint32_t tile_u32 = tt::tile_size(DataFormat::UInt32);
+    const std::uint32_t num_in_tiles = num_input_tiles_for_row(row_elements);
+    const std::uint32_t tile_bf16 = tt::tile_size(DataFormat::Float16_b);
+    const std::uint32_t tile_u32 = tt::tile_size(DataFormat::UInt32);
 
-    const uint32_t in0_bytes = num_in_tiles * tile_bf16;
-    const uint32_t in1_bytes = num_in_tiles * tile_u32;
-    const uint32_t out0_bytes = kOutputTiles * tile_bf16;
-    const uint32_t out1_bytes = kOutputTiles * tile_u32;
+    const std::uint32_t in0_bytes = num_in_tiles * tile_bf16;
+    const std::uint32_t in1_bytes = num_in_tiles * tile_u32;
+    const std::uint32_t out0_bytes = kOutputTiles * tile_bf16;
+    const std::uint32_t out1_bytes = kOutputTiles * tile_u32;
 
     auto buf_in0 = distributed::MeshBuffer::create(
         distributed::ReplicatedBufferConfig{.size = in0_bytes},
@@ -201,7 +208,7 @@ bool run_top32_rm_dev(
     CoreCoord core{0, 0};
     CoreRangeSet crs({CoreRange(core)});
 
-    const uint32_t cb_depth = std::max(2u, num_in_tiles);
+    const std::uint32_t cb_depth = std::max(2u, num_in_tiles);
     CreateCircularBuffer(
         program_,
         core,
@@ -235,7 +242,7 @@ bool run_top32_rm_dev(
         crs,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    std::vector<uint32_t> compute_compile_args = {row_elements, num_in_tiles, kOutputTiles};
+    std::vector<std::uint32_t> compute_compile_args = {row_elements, num_in_tiles, kOutputTiles, overwrite_replay};
     // The v2 kernel handles >= 1024 elements (whole 1024-chunk pre-sort path), while the original
     // kernel handles < 1024 elements (64-elements-at-a-time path).
     const char* compute_kernel = (row_elements >= 1024)
@@ -252,14 +259,46 @@ bool run_top32_rm_dev(
     distributed::EnqueueWriteMeshBuffer(cq, buf_in0, in.packed_scores, /*blocking=*/true);
     distributed::EnqueueWriteMeshBuffer(cq, buf_in1, in.indices_u32, /*blocking=*/true);
 
+    // Warm up the same workload used by every timed sample below.
     EnqueueMeshWorkload(cq, workload, false);
     Finish(cq);
 
-    std::vector<uint32_t> out0;
-    std::vector<uint32_t> out1;
-    distributed::EnqueueReadMeshBuffer(cq, out0, buf_out0, /*blocking=*/true);
-    distributed::EnqueueReadMeshBuffer(cq, out1, buf_out1, /*blocking=*/true);
-    return verify_top32_outputs(in.packed_scores, in.indices_u32, out0, out1, row_elements);
+    const auto verify_output = [&]() {
+        std::vector<std::uint32_t> out0;
+        std::vector<std::uint32_t> out1;
+        distributed::EnqueueReadMeshBuffer(cq, out0, buf_out0, /*blocking=*/true);
+        distributed::EnqueueReadMeshBuffer(cq, out1, buf_out1, /*blocking=*/true);
+        return verify_top32_outputs(in.packed_scores, in.indices_u32, out0, out1, row_elements);
+    };
+    if (!verify_output()) {
+        return false;
+    }
+    if (overwrite_replay) {
+        return true;
+    }
+
+    constexpr std::uint32_t timing_samples = 5;
+    std::vector<double> host_dispatch_us;
+    host_dispatch_us.reserve(timing_samples);
+    for (std::uint32_t sample = 0; sample < timing_samples; ++sample) {
+        const auto dispatch_start = std::chrono::steady_clock::now();
+        EnqueueMeshWorkload(cq, workload, false);
+        Finish(cq);
+        host_dispatch_us.push_back(
+            std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - dispatch_start).count());
+        if (!verify_output()) {
+            return false;
+        }
+    }
+    std::sort(host_dispatch_us.begin(), host_dispatch_us.end());
+    log_info(
+        LogTest,
+        "Top32 RM dev row_elements={} warmed host dispatch: samples={} min_us={:.2f} median_us={:.2f}",
+        row_elements,
+        timing_samples,
+        host_dispatch_us.front(),
+        host_dispatch_us[timing_samples / 2]);
+    return true;
 }
 
 }  // namespace unit_tests::compute::top32_rm_dev
@@ -269,9 +308,23 @@ TEST_F(MeshDeviceFixture, Top32RmDevPipelineCompletes) {
     if (this->arch_ != tt::ARCH::BLACKHOLE) {
         GTEST_SKIP() << "top32_rm_dev kernels are only supported on Blackhole";
     }
-    for (uint32_t row : {64u, 128u, 160u, 3232u}) {
+    for (std::uint32_t row : {64u, 128u, 160u, 3232u}) {
         log_info(LogTest, "Top32 RM dev row_elements={}", row);
-        EXPECT_TRUE(unit_tests::compute::top32_rm_dev::run_top32_rm_dev(this->devices_.at(0), row, 12345u));
+        EXPECT_TRUE(unit_tests::compute::top32_rm_dev::run_top32_rm_dev(this->devices_.at(0), row, 12345u /*seed*/));
+    }
+}
+
+// Overwrite SFPU replay slots between top32 LLK calls within one kernel launch,
+// as other SFPU operations do in the persistent sampling pipeline. Exercise both
+// the local-top-k path and the >=1024-element merge path.
+TEST_F(MeshDeviceFixture, Top32RmDevReplayBufferOverwrite) {
+    if (this->arch_ != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "top32_rm_dev kernels are only supported on Blackhole";
+    }
+    for (std::uint32_t row : {160u, 3232u}) {
+        const bool ok = unit_tests::compute::top32_rm_dev::run_top32_rm_dev(
+            this->devices_.at(0), row, 12345u /*seed*/, true /*overwrite_replay*/);
+        EXPECT_TRUE(ok);
     }
 }
 
