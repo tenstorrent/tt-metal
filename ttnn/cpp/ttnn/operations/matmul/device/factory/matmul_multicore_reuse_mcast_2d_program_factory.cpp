@@ -403,7 +403,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     uint32_t bias_aligned_tile_size = tt::align(bias_single_tile_size, dram_alignment);
 
     operations::matmul::utilities::validate_block_sharded_output_batch(output_is_sharded, B, per_core_M, per_core_N);
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // A sharded output can share its region with the partials only when the core computes a single output
+    // block: spill and reload advance the region's pointers by one block, which only wraps back to the start
+    // when the region holds exactly one block (#58046).
+    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h || per_core_N != out_block_w);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -2033,7 +2036,10 @@ create_program_mcast_in0_in1(
     const bool output_is_sharded = out_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
     operations::matmul::utilities::validate_block_sharded_output_batch(output_is_sharded, B, per_core_M, per_core_N);
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // A sharded output can share its region with the partials only when the core computes a single output
+    // block: spill and reload advance the region's pointers by one block, which only wraps back to the start
+    // when the region holds exactly one block (#58046).
+    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h || per_core_N != out_block_w);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
