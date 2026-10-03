@@ -520,9 +520,9 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Hardmish: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-4.0, high=4.0)
     ),
-    # lgamma: single-tile Stirling kernel is accurate for x >= ~0.5; avoid the poles at x<=0
+    # lgamma: Chebyshev polynomial bridge covers [0.5, 2.0] and Stirling covers x >= 2.0; avoid the poles at x<=0
     MathOperation.Lgamma: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=1.0, high=15.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.2, high=15.0)
     ),
     # digamma: LUT fit on [0.01, 102]; keep positive to avoid the poles at x<=0
     MathOperation.Digamma: OperandSpecs(
