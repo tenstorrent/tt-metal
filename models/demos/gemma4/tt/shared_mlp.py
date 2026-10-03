@@ -176,7 +176,7 @@ class SharedMLP:
                 compute_with_storage_grid_size=(7, 1),
                 in0_block_w=2,
                 out_subblock_h=1,
-                out_subblock_w=5,
+                out_subblock_w=1 if fp32_mode.ENABLED else 5,  # fp32 dest acc: dest holds 4 tiles; 5 has no divisor 2..4
                 out_block_h=1,
                 out_block_w=5,
                 per_core_M=1,
