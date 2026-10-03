@@ -127,6 +127,25 @@ def test_padded_slice_rm_last_dim_pads_sliced_row(device, begins, ends, shard_sh
     assert passed, message
 
 
+# Last-dim start that isn't a multiple of the DRAM alignment (64 B on Blackhole, 32 B on Wormhole),
+# including starts that aren't 16 B aligned either.
+@pytest.mark.parametrize(
+    "begins, ends, shard_shape",
+    (
+        ([0, 0, 0, 1], [1, 1, 64, 57], (8, 56)),
+        ([0, 0, 0, 4], [1, 1, 64, 64], (8, 64)),
+        ([0, 0, 0, 8], [1, 1, 64, 64], (8, 64)),
+        ([0, 0, 0, 24], [1, 1, 64, 64], (8, 48)),
+    ),
+)
+def test_padded_slice_rm_last_dim_unaligned_start(device, begins, ends, shard_shape):
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+    tt_input, output_mem_config, expected = _last_dim_padded_slice_setup(device, begins, ends, shard_shape, core_grid)
+    actual = ttnn.experimental.padded_slice(tt_input, begins, ends, [1, 1, 1, 1], memory_config=output_mem_config)
+    passed, message = assert_equal(expected, ttnn.to_torch(actual))
+    assert passed, message
+
+
 # Last-dim offset, shard width == sliced width: Quasar read bound without the pad writer.
 def test_quasar_padded_slice_rm_last_dim_no_pad(device):
     core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})

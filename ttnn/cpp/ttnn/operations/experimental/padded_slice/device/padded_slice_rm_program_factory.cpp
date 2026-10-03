@@ -53,12 +53,9 @@ uint32_t padded_slice_rm_reader_address(
     const bool is_width_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
     const uint32_t output_row_size_bytes = output_shard_spec.shape[1] * input_tensor.element_size();
 
-    const auto src_buffer_alignment =
-        input_buffer->buffer_type() == BufferType::DRAM ? hal::get_dram_alignment() : hal::get_l1_alignment();
     const auto dst_buffer_alignment =
         output_buffer->buffer_type() == BufferType::DRAM ? hal::get_dram_alignment() : hal::get_l1_alignment();
     const uint32_t begins_bytes = output_tensor_start[-1] * input_tensor.element_size();
-    const uint32_t misalignment = begins_bytes % src_buffer_alignment;
     const uint32_t output_row_size_bytes_offset = tt::round_up(output_row_size_bytes, dst_buffer_alignment);
 
     uint32_t core_w_index = 0;
@@ -68,8 +65,9 @@ uint32_t padded_slice_rm_reader_address(
         core_w_index = core_index;
     }
     const int width_offset = static_cast<int>(core_w_index * output_row_size_bytes_offset);
-    // read from nearest aligned address
-    uint32_t read_address = input_buffer->address() + begins_bytes - misalignment;
+    // Pass the exact start. When it isn't aligned to the source buffer, create_descriptor enables the
+    // reader's non-aligned path, which reads from the aligned address below it and skips the difference.
+    uint32_t read_address = input_buffer->address() + begins_bytes;
     read_address += static_cast<uint32_t>(width_offset);
     return read_address;
 }
@@ -305,8 +303,11 @@ ProgramDescriptor PaddedSliceRMProgramFactory::create_descriptor(
         dst_buffer_alignment);
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
 
+    // A start that isn't aligned to the source buffer needs the non-aligned path too: the reader gets the
+    // exact start address and skips the bytes between the aligned address below it and the start.
+    const uint32_t begins_bytes = output_tensor_start[-1] * a.element_size();
     auto is_non_aligned = false;
-    if (output_row_size_bytes % alignment) {
+    if (output_row_size_bytes % alignment || begins_bytes % src_buffer_alignment) {
         is_non_aligned = true;
     }
 
