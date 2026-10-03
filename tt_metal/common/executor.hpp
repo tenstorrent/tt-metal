@@ -27,7 +27,23 @@
 #include <thread>
 
 namespace tt::tt_metal::detail {
-inline static const size_t EXECUTOR_NTHREADS = std::thread::hardware_concurrency() ? std::thread::hardware_concurrency() : 1;
+// Executor width defaults to every online core. On hosts running several ranks
+// (e.g. 4 MPI ranks per scaleout host), a cold-cache JIT build then spawns
+// ranks-per-host * ncores concurrent compile/link jobs, which can starve the MPI
+// runtime's liveness machinery long enough that the launcher declares a healthy
+// rank dead ("Socket closed" aborts with no culprit error; see issue #55009).
+// TT_METAL_EXECUTOR_NTHREADS bounds the pool per process for such deployments.
+inline size_t get_executor_nthreads() {
+    if (const char* env = std::getenv("TT_METAL_EXECUTOR_NTHREADS")) {
+        char* end = nullptr;
+        const unsigned long n = std::strtoul(env, &end, 10);
+        if (end != env && n >= 1) {
+            return static_cast<size_t>(n);
+        }
+    }
+    return std::thread::hardware_concurrency() ? std::thread::hardware_concurrency() : 1;
+}
+inline static const size_t EXECUTOR_NTHREADS = get_executor_nthreads();
 
 using Executor = tf::Executor;
 using ExecTask = tf::Task;
