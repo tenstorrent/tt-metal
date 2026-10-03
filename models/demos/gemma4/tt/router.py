@@ -107,7 +107,7 @@ class Gemma4Router:
         normed = self.norm.forward(hidden_states)
 
         # 2. Scale — on device
-        scaled = ttnn.mul(normed, self.scale, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        scaled = ttnn.mul(normed, self.scale, dtype=fp32_mode.act_dtype(), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         normed.deallocate(True)
 
         # 3. Linear projection → [1, 1, seq_len, num_experts] — on device
