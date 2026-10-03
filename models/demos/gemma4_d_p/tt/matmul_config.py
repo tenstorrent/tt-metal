@@ -64,9 +64,10 @@ def prefill_1d_matmul_program_config(
     too_tall = m_tiles > (max_m_tiles or _MAX_SHORT_M_TILES)
     if too_tall or n_tiles % per_core_n or n_tiles // per_core_n > grid.x * grid.y:
         return None
-    # fp32 dest: at most 4 tiles (2 x 2) per output subblock.
-    out_subblock_w = 2 if per_core_n % 2 == 0 else 1
-    out_subblock_h = 2 if m_tiles % 2 == 0 else 1
+    # fp32 dest: at most 4 tiles per output subblock. A subblock as wide as the core's columns keeps the output valid
+    # for a width-sharded layout (which needs out_subblock_w == per_core_N or out_subblock_h == 1).
+    out_subblock_w = per_core_n if per_core_n <= 4 else (2 if per_core_n % 2 == 0 else 1)
+    out_subblock_h = 2 if out_subblock_w <= 2 and m_tiles % 2 == 0 else 1
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(grid.x, grid.y),
         in0_block_w=(
