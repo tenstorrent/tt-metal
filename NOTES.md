@@ -1,3 +1,29 @@
+# t115 notes (off-device triage of the job 484 hang, branch ttp/t115-conv3d-hang-triage)
+
+- Suspect: 143 (64,128,6,8,8) and 144 (64,128,6,16,4). They are the only combos in 141-150 whose L1 prefetch
+  shard does not fit (shard 102400/110592 B, only 91136 B left after the other CBs), so the factory falls back
+  to the direct reader. They are also the first fallbacks with T_out_block>1, with the largest output block
+  (12x4 tiles, fp32 partials). Code reading only; no combo has run on its own.
+- Separate bug: halo mode plus that fallback drops the halo without any error (the direct reader never reads
+  halo_buffer). Guard 5bce3778127: TT_FATAL in conv3d_program_factory.cpp (not compiled, disk rule) +
+  prefetch_shard_fits() in the sweep harness; halo sweeps drop non-fitting blockings before launch.
+- 5 LTX _BLOCKINGS entries have no shard and would hit the TT_FATAL. Re-pick them before folding the guard
+  into t48: (4,8,1024,1024,(3,3,3),22,10,8), (4,8,1024,1024,(3,3,3),22,5,4), (4,8,128,1024,(3,3,3),22,5,4),
+  (4,8,128,1024,(3,3,3),21,5,4), (2,4,128,128,(3,3,3),147,136,120). See test_ltx_table_blockings_without_prefetch_shard.
+- Bug draft: tt-project/t114/BUG.md.
+
+## Bisect (only once the user clears device work)
+1. `bash tmp/blx03/t115/stage115.sh` (git archive of this branch to g14blx03:/var/tmp/fasth3/t115/src).
+   It runs on blx03's ~/fasth3/t48 build (no guard; the harness filter alone keeps 143/144 out).
+2. `tt-project/harness/templates/blx03-launch.sh t115 /var/tmp/fasth3/t115/src/tmp/blx03/t115/driver115.sh`
+   and use the retry_when it prints. Plan check without side effects: `DRY_RUN=1 bash tmp/blx03/t115/driver115.sh`.
+3. One broker job per blocking (141,142,145-150), full mesh then create_submesh(2,4). Marker
+   `T115_DRIVER_DONE` in g14blx03:/var/tmp/fasth3/t115/driver.log. rc 9 = drop during our job: stop ALL
+   device work, report. rc 6 = hung job: that blocking is the culprit; stop and report.
+4. All 8 pass -> 143/144 are implicated; do not run them on purpose.
+
+---
+
 # t114 notes (conv3d blockings for the 1080p 4x8 per-chip shapes)
 
 ## Finding before any device work
@@ -30,7 +56,7 @@
   (exact_s2_res).
 - Results: /var/tmp/fasth3/t114/results/*.json, per-layer log run114_<layer>.log.
 
-- 2026-10-03 08:33-08:42 UTC: job 484 (exact_s2_res, OUR job) HUNG. Combos 1-140 ran (table 13608 us; best so far
+- 2026-10-03 08:33-08:42 UTC: job 484 (exact_s2_res, OUR job) HUNG. Combos 1-140 ran (table 13597 us; best so far
   (64,256,1,8,8) 13464 us, -1.1%, under the 3% bar). After [140/300] no output for 300 s; broker killed it (exit
   130). Post-job health gate: active-eth core heartbeat FROZEN (incident
   /var/lib/tt-device-broker/health/incidents/20261003T084256Z_unhealthy_484 on blx03). Broker held the device,
