@@ -460,14 +460,53 @@ void device_module(nb::module_& m_device) {
             >>> ttnn.device.ClearKernelCache()
     )doc");
     m_device.def(
-        "initialize_fast_dispatch",
-        [](MeshDevice* device) { tt::tt_metal::experimental::DispatchContext::get().initialize_fast_dispatch(device); },
+        "get_dispatch_core_axis",
+        [](MeshDevice* device) {
+            return tt::tt_metal::experimental::DispatchContext::get().get_dispatch_core_axis(device);
+        },
         nb::arg("device").noconvert(),
+        R"doc(
+        Return the axis (ROW or COL) of the device's live dispatch-core configuration.
+
+        COL means dispatch sits on the last column of the worker grid (the Blackhole default); ROW means
+        the last row (Blackhole with fabric tensix enabled, or Wormhole). tt-blaze's two-phase upload uses
+        it to find that edge: cargo shards off the edge are written under Fast Dispatch, and shards on it
+        are written under Slow Dispatch after the session, because dispatch firmware occupies those cores
+        during it.
+
+        Args:
+            device (ttnn.Device): The mesh device to query.
+
+        Returns:
+            ttnn.device.DispatchCoreAxis: ROW or COL.
+    )doc");
+    m_device.def(
+        "initialize_fast_dispatch",
+        [](MeshDevice* device, bool allow_destructive) {
+            tt::tt_metal::experimental::FastDispatchSetupOptions options;
+            options.allow_destructive = allow_destructive;
+            tt::tt_metal::experimental::DispatchContext::get().initialize_fast_dispatch(device, options);
+        },
+        nb::arg("device").noconvert(),
+        nb::arg("allow_destructive") = false,
         R"doc(
         Dynamically enable Fast Dispatch on a MeshDevice that was opened in Slow Dispatch mode.
 
+        Refuses, before any firmware is written, if an L1 allocation is resident on a core that Fast
+        Dispatch will claim; dispatch cores may not hold L1 allocations while Fast Dispatch is active.
+
+        Limitations:
+            - Any interleaved L1 buffer resident when the session opens is refused, whatever its size:
+              its pages are spread over every L1 bank.
+            - A non-default sub-device manager still loaded on any view over an active chip is refused,
+              even with allow_destructive: the check sees only the default manager's allocations.
+              Sub-device managers aren't supported with manual Fast Dispatch.
+            - Every active device must be MMIO-attached; otherwise this raises before Fast Dispatch is
+              enabled.
+
         Args:
             device (ttnn.Device): The mesh device to enable Fast Dispatch on.
+            allow_destructive (bool): Warn and proceed instead of refusing. The resident L1 may be corrupted.
     )doc");
     m_device.def(
         "terminate_fast_dispatch",
