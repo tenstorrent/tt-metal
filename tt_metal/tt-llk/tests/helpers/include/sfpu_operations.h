@@ -2081,11 +2081,10 @@ void call_binary_sfpu_operation(
         // int32 truncating division (rounds toward zero). calculate_div_int32_trunc writes a
         // true int32 quotient; the legacy calculate_div_int32 stored an fp32 result, which the
         // Int32 pack path reinterpreted as garbage bit patterns.
-        SFPU_BINARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_div_int32_trunc,
-            (APPROXIMATION_MODE, PER_FACE_ITERATIONS),
+        ckernel::_sfpu_binary_check_<DST_SYNC_MODE>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+        _llk_math_eltwise_binary_sfpu_params_(
+            [](std::uint32_t in0, std::uint32_t in1, std::uint32_t out)
+            { ckernel::sfpu::calculate_div_int32_trunc<APPROXIMATION_MODE, PER_FACE_ITERATIONS>(in0, in1, out); },
             dst_index_in0,
             dst_index_in1,
             dst_index_out,
@@ -2094,11 +2093,10 @@ void call_binary_sfpu_operation(
     else if constexpr (BINOP == BinaryOp::DIV_INT32_FLOOR)
     {
         // int32 floor division (rounds toward -inf).
-        SFPU_BINARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_div_int32_floor,
-            (APPROXIMATION_MODE, PER_FACE_ITERATIONS),
+        ckernel::_sfpu_binary_check_<DST_SYNC_MODE>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+        _llk_math_eltwise_binary_sfpu_params_(
+            [](std::uint32_t in0, std::uint32_t in1, std::uint32_t out)
+            { ckernel::sfpu::calculate_div_int32_floor<APPROXIMATION_MODE, PER_FACE_ITERATIONS>(in0, in1, out); },
             dst_index_in0,
             dst_index_in1,
             dst_index_out,
