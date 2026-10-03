@@ -105,6 +105,7 @@
 
 #include "ckernel.h"
 #include "ckernel_template.h"
+#include "cmath_common.h"
 #include "lltt.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
@@ -1294,6 +1295,9 @@ inline void leave_transpose_cfg_block()
     {
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_dst_RMW>(0);
     }
+    // The raw Zero_Flag_disabled_src writes in this block bypass the math state tracker; let the next
+    // configurator re-apply.
+    math::_invalidate_src_zero_flag_state_();
 }
 
 // Transpose all 8 value faces (and, for the unfused path, all 8 index
