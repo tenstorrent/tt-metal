@@ -17,7 +17,7 @@
 #include "sfpu/ckernel_sfpu_load_config.h"
 #include "ckernel_sfpu_erf.h"  // ERF_LUT, ERF_NUM_DEGREE, ERF_DEN_DEGREE (INP_FLOAT32 branch for FP32 path)
 #include "ckernel_sfpu_piecewise_rational.h"
-#include "ckernel_sfpu_tanh.h"  // _sfpu_tanh_fp32_accurate_ for gelu_tanh
+#include "ckernel_sfpu_sigmoid.h"  // _sfpu_sigmoid_ for gelu_tanh cancellation-free logistic form
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -341,8 +341,13 @@ inline void calculate_gelu() {
 }
 
 // =============================================================================
-// GELU tanh approximation in FP32:
-//   0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+// GELU tanh approximation:
+//   0.5 * x * (1 + tanh(u)) == x * sigmoid(2u)
+//   where u = sqrt(2/pi) * (x + 0.044715 * x^3)
+//
+// The logistic form x * sigmoid(2u) avoids the catastrophic cancellation in
+// 1 + tanh(u) for negative x (u < -8), where tanh(u) rounds to -1.0 in FP32
+// and the subtraction loses all precision, collapsing prematurely to 0.
 // =============================================================================
 
 template <bool is_fp32_dest_acc_en, int ITERATIONS = 8>
@@ -358,14 +363,11 @@ inline void calculate_gelu_tanh() {
         sfpi::vFloat p = GELU_TANH_K * x2 + 1.0f;
         sfpi::vFloat q = x * p;
         sfpi::vFloat u = SQRT_2_OVER_PI * q;
-        sfpi::vFloat t = _sfpu_tanh_fp32_accurate_(u);
+        sfpi::vFloat sig = _sfpu_sigmoid_<true>(2.0f * u);
 
         // reload due to register pressure
         x = sfpi::dst_reg[0];
-        sfpi::vFloat result = sfpi::copysgn(sfpi::vFloat(0.0f), x);
-
-        sfpi::vFloat half_x = 0.5f * x;
-        result = half_x * t + half_x;
+        sfpi::vFloat result = x * sig;
 
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
@@ -377,8 +379,8 @@ inline void calculate_gelu_tanh() {
 
 inline void gelu_tanh_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    // initialise constants for _sfpu_tanh_fp32_accurate_
-    tanh_init<false, true>();
+    // Logistic form needs reciprocal constants (mirrors Blackhole sigmoid_init; setup shared by per-op init wrapper)
+    sfpu_reciprocal_init<false>();
 }
 
 // =============================================================================

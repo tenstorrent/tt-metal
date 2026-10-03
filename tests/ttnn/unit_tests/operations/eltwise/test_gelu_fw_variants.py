@@ -32,14 +32,14 @@ _VARIANTS = {
 #   tolerated_inputs = specific input values where +1 ULP above the bound is allowed.
 #
 # Tanh FP32 (400):
-#   The kernel uses `0.5 * x * (1 + tanh(scaled))`, which is torch's
-#   CPU FP32 implementation. The `(1 + tanh)` step is a `1 - tiny` cancellation
-#   that loses ~9-10 bits of FP32 precision: the result inherits the absolute
-#   precision of tanh at magnitude 1.0 (~1 FP32 ULP = 6e-8) regardless of how
-#   small `(1 + tanh)` actually is. For inputs like x = -3.117 the
-#   `(1 + tanh) ~ 1.6e-3`, where the ULP is 1.9e-10, so 6e-8 absolute = ~300
-#   FP32 ULPs. Computing via the sigmoid identity `x * sigmoid(2*scaled)`
-#   avoids cancellation but diverges from torch by a similar magnitude.
+#   The kernel uses the cancellation-free logistic identity `x * sigmoid(2*scaled)`
+#   to avoid the catastrophic `1 + tanh` cancellation that plagues `0.5 * x * (1 + tanh(scaled))`
+#   in the negative tail. In torch's CPU FP32 implementation, the `(1 + tanh)` step is
+#   a `1 - tiny` cancellation that loses ~9-10 bits of FP32 precision: torch's result inherits
+#   the absolute precision of tanh at magnitude 1.0 (~1 FP32 ULP = 6e-8) regardless of how
+#   small `(1 + tanh)` actually is. For inputs like x = -3.117 the `(1 + tanh) ~ 1.6e-3`,
+#   where the ULP is 1.9e-10, so 6e-8 absolute = ~300 FP32 ULPs divergence from our
+#   cancellation-free kernel.
 #
 # Tanh tiny negative tail:
 #   For outputs near zero, tiny absolute differences in the tanh residual
@@ -290,3 +290,26 @@ def test_gelu_inf_nan_handling(device, variant_name, torch_dtype, tt_dtype):
     # want to flag if the kernel silently produced a usable finite-nonzero value.
     for name, val in [("gelu(-inf)", neg_inf), ("gelu(NaN)", nan_out)]:
         assert val == 0.0 or not math.isfinite(val), f"{variant_name}: {name} -> {val!r}, expected 0 or any non-finite"
+
+
+def test_gelu_tanh_negative_tail_non_zero(device):
+    """Regression test for issue #56517: verify that variant=Tanh does not prematurely
+    collapse to 0 in the negative tail [-7.0, -4.5] due to 1 + tanh(u) cancellation."""
+    # FP32: check multiple points in [-6.5, -4.5] where reference is non-zero
+    fp32_inputs = torch.zeros((32, 32), dtype=torch.float32)
+    test_vals_fp32 = [-4.5, -5.0, -5.5, -6.0, -6.5]
+    for idx, v in enumerate(test_vals_fp32):
+        fp32_inputs[0, idx] = v
+    tt_in_fp32 = ttnn.from_torch(fp32_inputs, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out_fp32 = ttnn.to_torch(ttnn.gelu(tt_in_fp32, variant=ttnn.GeluVariant.Tanh))
+    for idx, v in enumerate(test_vals_fp32):
+        val = tt_out_fp32[0, idx].item()
+        assert val < 0.0, f"FP32 gelu_tanh({v}) was {val}, expected negative non-zero"
+
+    # BF16: check x = -5.5 where old kernel collapsed to zero but true result is negative non-zero
+    bf16_inputs = torch.zeros((32, 32), dtype=torch.bfloat16)
+    bf16_inputs[0, 0] = -5.5
+    tt_in_bf16 = ttnn.from_torch(bf16_inputs, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out_bf16 = ttnn.to_torch(ttnn.gelu(tt_in_bf16, variant=ttnn.GeluVariant.Tanh))
+    val_bf16 = tt_out_bf16[0, 0].item()
+    assert val_bf16 < 0.0, f"BF16 gelu_tanh(-5.5) was {val_bf16}, expected negative non-zero"
