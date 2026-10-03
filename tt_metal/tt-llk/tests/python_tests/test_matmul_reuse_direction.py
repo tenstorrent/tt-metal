@@ -30,15 +30,15 @@ KT_DIM = 2
 
 @dataclass
 class MATMUL_INIT_BLOCK(TemplateParameter):
-    rt_dim: int
-    ct_dim: int
+    init_rt_dim: int
+    init_ct_dim: int
     pack_result: bool = True
 
     def convert_to_cpp(self) -> str:
         return "\n".join(
             [
-                f"constexpr std::uint32_t INIT_RT_DIM = {self.rt_dim};",
-                f"constexpr std::uint32_t INIT_CT_DIM = {self.ct_dim};",
+                f"constexpr std::uint32_t INIT_RT_DIM = {self.init_rt_dim};",
+                f"constexpr std::uint32_t INIT_CT_DIM = {self.init_ct_dim};",
                 f"constexpr bool PACK_RESULT = {str(self.pack_result).lower()};",
             ]
         )
