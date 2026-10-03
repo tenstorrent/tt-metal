@@ -89,6 +89,13 @@ void CsaStatePreparationDeviceOperation::validate_on_program_cache_miss(
     validate_states(args.base_kv_state, args.base_score_state, args.kv);
 }
 
+// seq_len_actual and first_token_position only reach runtime args, which the factories' overrides
+// re-derive on every hit, so one program serves every chunk.
+ttsl::hash::hash_t CsaStatePreparationDeviceOperation::compute_program_hash(
+    const operation_attributes_t& params, const tensor_args_t& args) {
+    return ttsl::hash::hash_objects_with_default_seed(params.cluster_axis, args);
+}
+
 CsaStatePreparationDeviceOperation::spec_return_value_t CsaStatePreparationDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& args) {
     return {args.base_kv_state.tensor_spec(), args.base_score_state.tensor_spec()};
@@ -109,6 +116,11 @@ void CsaCompressionDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& params, const tensor_args_t& args) {
     validate_common(params, args);
     validate_states(args.predecessor_kv_state, args.predecessor_score_state, args.kv);
+}
+
+ttsl::hash::hash_t CsaCompressionDeviceOperation::compute_program_hash(
+    const operation_attributes_t& params, const tensor_args_t& args) {
+    return ttsl::hash::hash_objects_with_default_seed(params.cluster_axis, args);
 }
 
 CsaCompressionDeviceOperation::spec_return_value_t CsaCompressionDeviceOperation::compute_output_specs(
