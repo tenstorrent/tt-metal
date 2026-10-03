@@ -63,10 +63,10 @@ case "${MODEL}" in
     # 93 layers do not fit one galaxy -- MLA's static CBs become unplaceable past ~36 layers on a
     # rank (#54876) and a 48-layer single rank OOMs at 2 users. 24 fits, ends on an MLA layer, and
     # is the deepest depth the golden's decoder-output stream covers, so sc1 is a real accuracy gate
-    # rather than a smaller copy of sc4. The context is the same on both: K3's whole window is the
-    # golden's 11 chunks, so there is nothing to shrink.
+    # rather than a smaller copy of sc4. sc1 keeps the default 256k context, so its perf probes are
+    # the 5k..250k ones GLM-5.3 reports and sc4's 1M request adds 510k and 1M on top. Not a
+    # baseline for sc4 -- 24 layers against 93 -- which is why the summary job reports sc4 alone.
     SC1_NUM_LAYERS=24
-    SC1_MAX_SEQ_LEN=56320
     RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized;"
     # PREFILL_TRACE_DIR is the one K3 path still on NFS, deliberately. The sc4 93-layer leg's KV PCC
     # collapsed to ~0 past layer ~24 on run 36717057668 with the Weka trace (it reads 0.900..0.994 on
