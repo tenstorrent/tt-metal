@@ -109,6 +109,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::TANHSHRINK: return "SFPU_OP_TANHSHRINK_INCLUDE";
         case UnaryOpType::POLYGAMMA: return "SFPU_OP_POLYGAMMA_INCLUDE";
         case UnaryOpType::MISH: return "SFPU_OP_MISH_INCLUDE";
+        case UnaryOpType::LOGIT: return "SFPU_OP_LOGIT_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -1171,6 +1172,36 @@ std::map<std::string, std::string> get_block_defines(
     }
     block_defines[fmt::format("SFPU_OP_CHAIN_{}", block_id)] = block_define;
     return block_defines;
+}
+
+std::optional<std::map<std::string, std::string>> get_bf16_kernel_defines(
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
+    DataType input_dtype,
+    DataType output_dtype,
+    bool fp32_dest_acc_en) {
+    // The generated kernels are fitted for BF16 data in a 16-bit DEST.
+    if (op_chain.size() != 1 || input_dtype != DataType::BFLOAT16 || output_dtype != DataType::BFLOAT16 ||
+        fp32_dest_acc_en) {
+        return std::nullopt;
+    }
+    const auto& op = op_chain[0];
+    std::string op_name;
+    switch (op.type()) {
+        case UnaryOpType::LOGIT:
+            // The kernel is fitted for the default parameters.
+            if (op.get_param_if<float>(0) != -1.0f) {
+                return std::nullopt;
+            }
+            op_name = "logit";
+            break;
+        default: return std::nullopt;
+    }
+    return std::map<std::string, std::string>{
+        {"SFPU_OP_CHAIN_0", "SFPU_OP_CHAIN_0_INIT_0 SFPU_OP_CHAIN_0_FUNC_0"},
+        {"SFPU_OP_CHAIN_0_INIT_0", fmt::format("{}_tile_init();", op_name)},
+        {"SFPU_OP_CHAIN_0_FUNC_0", fmt::format("{}_tile(0);", op_name)},
+        {get_macro_definition(op.type()), "1"},
+    };
 }
 
 // update split eltwise ops include macros

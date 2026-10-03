@@ -5,6 +5,7 @@
 #pragma once
 
 #include <map>
+#include <optional>
 #include <string>
 #include <span>
 
@@ -108,6 +109,14 @@ bool is_parametrized_type(T val) {
 }
 
 void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string>& defines);
+
+// The SFPU chain defines of a lone op that a generated kernel computes in one pass over BF16
+// DEST, or none when the op runs its own kernel.
+std::optional<std::map<std::string, std::string>> get_bf16_kernel_defines(
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
+    DataType input_dtype,
+    DataType output_dtype,
+    bool fp32_dest_acc_en);
 
 // INP_FLOAT32 / INP_INT32 / INP_UINT32 / INP_FLOAT: the SFPU kernels select their algorithm on these. Exactly one
 // is set after the call; float32 wins over the bf16-class default when both operands of a fused op contribute.
