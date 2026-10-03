@@ -910,7 +910,7 @@ DeviceAddr ShardSpecBuffer::num_pages() const {
 namespace ttsl::json {
 tt::tt_metal::ShardSpec from_json_t<tt::tt_metal::ShardSpec>::operator()(const nlohmann::json& json_object) const {
     return tt::tt_metal::ShardSpec{
-        from_json<CoreRangeSet>(json_object.at("grid")),
+        from_json<tt::tt_metal::CoreRangeSet>(json_object.at("grid")),
         from_json<std::array<uint32_t, 2>>(json_object.at("shape")),
         from_json<tt::tt_metal::ShardOrientation>(json_object.at("orientation")),
     };
