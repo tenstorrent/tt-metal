@@ -34,8 +34,14 @@ struct ResetLink {
 // Consolidated helpers (should be arch agnostic)
 // ============================================================================
 
-void send_port_down_msg_to_links(const std::vector<ResetLink>& links_to_reset);
+// Stops any Metal kernel left on the links' ERISC0s (e.g. fabric routers from a killed workload) and returns the
+// cores to base firmware. Blackhole only.
+void return_links_to_base_firmware(const std::vector<ResetLink>& links);
 
-void send_reset_msg_to_links(const std::vector<ResetLink>& links_to_reset);
+// Returns the links whose ethernet firmware did not process the port-down message in time.
+std::vector<ResetLink> send_port_down_msg_to_links(const std::vector<ResetLink>& links_to_reset);
+
+// Returns false if the ethernet firmware on any link did not process a reset message in time.
+bool send_reset_msg_to_links(const std::vector<ResetLink>& links_to_reset);
 
 }  // namespace tt::scaleout_tools
