@@ -2948,6 +2948,7 @@ __attribute__((optimize("Os"))) void teardown(
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Update here when enabling dynamic noc mode");
     noc_async_write_barrier();
     noc_async_atomic_barrier();
+    noc_clear_packet_tags(NOC_INDEX);
 
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
