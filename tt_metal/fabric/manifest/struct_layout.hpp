@@ -42,15 +42,23 @@ struct Struct {
 struct Bytes {
     constexpr bool operator==(const Bytes&) const = default;
 };
-// Paddng.
+// Padding.
 struct Pad {
     constexpr bool operator==(const Pad&) const = default;
+};
+// A table of entries packed below byte granularity, least significant bit first.
+struct Packed {
+    // The key decode looks up to find the binding function that reads the entries, such as "direction_table"
+    std::string_view table;
+    uint32_t bits_per_element;
+    constexpr bool operator==(const Packed&) const = default;
 };
 
 }  // namespace field
 
 // The type of a field.
-using FieldType = std::variant<field::Uint, field::Int, field::Enum, field::Struct, field::Bytes, field::Pad>;
+using FieldType =
+    std::variant<field::Uint, field::Int, field::Enum, field::Struct, field::Bytes, field::Pad, field::Packed>;
 
 // Representation of a field in a struct. Examples:
 // - uint16_t counts[2] at offset 6:
@@ -64,7 +72,7 @@ struct FieldLayout {
     uint32_t offset;
     // Size of the whole field in bytes. For an array, one element is size / intra_field_element_count
     uint32_t size;
-    // 0 for a scalar, N for T[N]. An array's element type is the field's type
+    // 0 for a scalar, N for T[N] or a packed table of N entries. An array's element type is the field's type
     uint32_t intra_field_element_count;
     FieldType type;
 };
@@ -130,6 +138,21 @@ constexpr bool validate_struct_fields(const std::array<FieldLayout, N>& fields) 
     ::tt::tt_fabric::FieldLayout {                                                         \
         #member, offsetof(T, member), sizeof(T::member), 0, ::tt::tt_fabric::field::Pad {} \
     }
+
+// Layout of a packed table member, whose type states its entry width as BITS_PER_COMPRESSED_ENTRY. `table` names the
+// format, which is used as a key by decode to find the binding function that reads the entries.
+#define LAYOUT_PACKED(T, member, table)                                                               \
+    [] {                                                                                              \
+        using M = decltype(T::member);                                                                \
+        constexpr uint32_t bits = M::BITS_PER_COMPRESSED_ENTRY;                                       \
+        static_assert(sizeof(M) * 8 % bits == 0, "packed table must hold a whole number of entries"); \
+        return ::tt::tt_fabric::FieldLayout{                                                          \
+            #member,                                                                                  \
+            offsetof(T, member),                                                                      \
+            sizeof(M),                                                                                \
+            static_cast<uint32_t>(sizeof(M) * 8 / bits),                                              \
+            ::tt::tt_fabric::field::Packed{table, bits}};                                             \
+    }()
 
 // Layout of a member decode shows as raw bytes without interpreting them, such as a table not yet described.
 #define LAYOUT_BYTES(T, member)                                                              \
