@@ -113,6 +113,9 @@ public:
 
     void clear();
 
+    std::optional<DeviceAddr> lowest_occupied_address_excluding(
+        uint32_t bank_id, const std::unordered_set<DeviceAddr>& ignored_addresses) const;
+
     std::optional<DeviceAddr> lowest_occupied_address(
         uint32_t bank_id,
         AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0}) const;

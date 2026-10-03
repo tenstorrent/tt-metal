@@ -316,10 +316,43 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
     return address;
 }
 
+void AllocatorImpl::suspend_l1_buffer(Buffer* buffer) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    TT_FATAL(config_->allocator_mode == AllocatorMode::LOCKSTEP, "L1 suspension requires lockstep allocation");
+    TT_FATAL(
+        buffer->buffer_type() == BufferType::L1 && allocated_buffers_.contains(buffer), "Expected an owned L1 buffer");
+    if (suspended_l1_buffers_.contains(buffer)) {
+        return;
+    }
+    const auto address = buffer->address();
+    suspended_l1_buffers_.emplace(buffer, std::make_pair(address, address + buffer->aligned_size_per_bank()));
+    if (tracking_enabled_) {
+        record_deallocation(buffer->unique_id());
+    }
+}
+
+void AllocatorImpl::resume_l1_buffer(Buffer* buffer) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = suspended_l1_buffers_.find(buffer);
+    if (it == suspended_l1_buffers_.end()) {
+        return;
+    }
+    suspended_l1_buffers_.erase(it);
+    if (tracking_enabled_) {
+        record_allocation_if_unsafe(buffer);
+    }
+}
+
+bool AllocatorImpl::is_l1_buffer_suspended(const Buffer* buffer) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return suspended_l1_buffers_.contains(buffer);
+}
+
 void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto address = buffer->address();
     auto buffer_type = buffer->buffer_type();
+    suspended_l1_buffers_.erase(buffer);
 
     // Per-core deallocation path
     if (buffer->impl().per_core_allocation_) {
@@ -355,6 +388,7 @@ void AllocatorImpl::deallocate_buffers() {
     std::lock_guard<std::mutex> lock(mutex_);
     dram_manager_->deallocate_all();
     l1_manager_->deallocate_all();
+    suspended_l1_buffers_.clear();
     l1_small_manager_->deallocate_all();
     trace_buffer_manager_->deallocate_all();
     if (tracking_enabled_ && !unsafe_allocation_contexts_.empty()) [[unlikely]] {
@@ -579,11 +613,19 @@ void AllocatorImpl::dump_memory_blocks(const BufferType& buffer_type, std::ostre
     }
 }
 
-std::optional<DeviceAddr> AllocatorImpl::get_lowest_occupied_l1_address(uint32_t bank_id) const {
+std::optional<DeviceAddr> AllocatorImpl::get_lowest_occupied_l1_address(
+    uint32_t bank_id, bool include_suspended) const {
     std::lock_guard<std::mutex> lock(mutex_);
     // l1_manager always sits below l1_small_manager in the address space, so there is no need to check l1_small_manager
     using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
     auto lowest = l1_manager_->lowest_occupied_address(bank_id, AllocatorID{0});
+    if (!include_suspended && !suspended_l1_buffers_.empty()) {
+        std::unordered_set<DeviceAddr> borrowed_addresses;
+        for (const auto& [buffer, range] : suspended_l1_buffers_) {
+            borrowed_addresses.insert(range.first);
+        }
+        lowest = l1_manager_->lowest_occupied_address_excluding(bank_id, borrowed_addresses);
+    }
     // In HYBRID mode, also check this bank's per-core allocator (AllocatorID{bank_id + 1}), since it may
     // have occupied a lower address range in this bank.
     if (config_->allocator_mode == AllocatorMode::HYBRID) {
@@ -650,6 +692,7 @@ void AllocatorImpl::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     dram_manager_->clear();
     l1_manager_->clear();
+    suspended_l1_buffers_.clear();
     l1_small_manager_->clear();
     trace_buffer_manager_->clear();
     if (tracking_enabled_ && !unsafe_allocation_contexts_.empty()) [[unlikely]] {
@@ -680,6 +723,7 @@ AllocatorImpl::~AllocatorImpl() {
 
     dram_manager_->clear();
     l1_manager_->clear();
+    suspended_l1_buffers_.clear();
     l1_small_manager_->clear();
     trace_buffer_manager_->clear();
     allocated_buffers_.clear();
@@ -687,6 +731,7 @@ AllocatorImpl::~AllocatorImpl() {
 
 AllocatorState AllocatorImpl::extract_state() const {
     std::lock_guard<std::mutex> lock(mutex_);
+    TT_FATAL(suspended_l1_buffers_.empty(), "Cannot snapshot the allocator while L1 storage is lent to static CBs");
     for (auto* buf : allocated_buffers_) {
         TT_FATAL(!buf->impl().per_core_allocation_, "extract_state does not yet support per-core L1 allocations");
     }
@@ -720,6 +765,7 @@ AllocatorState AllocatorImpl::extract_state() const {
 
 void AllocatorImpl::override_state(const AllocatorState& state) {
     std::lock_guard<std::mutex> lock(mutex_);
+    TT_FATAL(suspended_l1_buffers_.empty(), "Cannot replace the allocator while L1 storage is lent to static CBs");
     for (auto* buf : allocated_buffers_) {
         TT_FATAL(!buf->impl().per_core_allocation_, "override_state does not yet support per-core L1 allocations");
     }

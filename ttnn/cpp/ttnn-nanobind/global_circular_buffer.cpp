@@ -19,6 +19,23 @@ namespace ttnn::global_circular_buffer {
 void py_module_types(nb::module_& mod) {
     nb::class_<GlobalCircularBuffer>(mod, "global_circular_buffer")
         .def("size", &GlobalCircularBuffer::size)
+        .def("suspend", &GlobalCircularBuffer::suspend)
+        .def("resume", &GlobalCircularBuffer::resume)
+        .def("is_suspended", &GlobalCircularBuffer::is_suspended)
+        .def("buffer_address", &GlobalCircularBuffer::buffer_address)
+        .def("config_address", &GlobalCircularBuffer::config_address)
+        .def("buffer_type", [](const GlobalCircularBuffer& gcb) { return std::get<2>(gcb.attribute_values()); })
+        .def("sender_receiver_core_mapping", &GlobalCircularBuffer::sender_receiver_core_mapping, nb::rv_policy::copy)
+        .def(
+            "acknowledge_restored_trace",
+            &GlobalCircularBuffer::acknowledge_restored_trace,
+            nb::arg("trace_id"),
+            R"doc(Acknowledge this GCB's allocations for one trace under the active sub-device manager.
+
+The caller must verify that the data address, configuration address, size, buffer type, and
+sender/receiver mapping match capture time before calling this method. Other traces retain
+their allocation checks. This does not reserve addresses or make an incompatible replay safe.
+)doc")
         .def("sender_cores", &GlobalCircularBuffer::sender_cores, nb::rv_policy::reference_internal)
         .def("receiver_cores", &GlobalCircularBuffer::receiver_cores, nb::rv_policy::reference_internal)
         .def("sender_core_type", [](const GlobalCircularBuffer& gcb) {

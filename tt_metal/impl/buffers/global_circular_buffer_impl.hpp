@@ -54,6 +54,10 @@ public:
     const CoreRangeSet& all_cores() const;
     DeviceAddr buffer_address() const;
     DeviceAddr config_address() const;
+    void suspend();
+    void resume();
+    bool is_suspended() const;
+    void acknowledge_restored_trace(const distributed::MeshTraceId& trace_id) const;
     uint32_t size() const;
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping() const;
     IDevice* get_device() const { return this->device_; }
@@ -66,6 +70,7 @@ public:
 
 private:
     void setup_cb_buffers(BufferType buffer_type, uint32_t max_num_receivers_per_sender);
+    void write_config(uint32_t max_num_receivers_per_sender, bool blocking = false);
     // Allocates and writes the per-GCB sender state block in DRISC L1. DRAM-sender flavour only.
     void initialize_dram_sender_state_block(uint32_t max_num_receivers_per_sender);
 

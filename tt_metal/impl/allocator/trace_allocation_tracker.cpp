@@ -253,6 +253,22 @@ void AllocatorImpl::remove_unsafe_tracked_id(size_t buffer_unique_id) {
     this->record_deallocation(buffer_unique_id);
 }
 
+void AllocatorImpl::remove_unsafe_tracked_id(
+    SubDeviceManagerId manager_id, const distributed::MeshTraceId& trace_id, size_t buffer_unique_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto manager_it = unsafe_tracked_ids_by_manager_and_trace_.find(manager_id);
+    if (manager_it == unsafe_tracked_ids_by_manager_and_trace_.end()) {
+        return;
+    }
+    auto trace_it = manager_it->second.find(trace_id);
+    if (trace_it == manager_it->second.end()) {
+        return;
+    }
+    trace_it->second.erase(buffer_unique_id);
+    // Other traces, including those in another manager, must retain their checks and diagnostics.
+    this->retire_buffer_if_unreferenced(buffer_unique_id);
+}
+
 std::vector<size_t> drain_pending_traceback_ids() {
     std::vector<size_t> result;
     result.swap(pending_traceback_ids);
