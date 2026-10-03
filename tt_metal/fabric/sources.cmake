@@ -43,6 +43,7 @@ set(FABRIC_SOURCES
     builder/static_sized_channel_connection_writer_adapter.cpp
     builder/connection_registry.cpp
     builder/router_wiring_rules.cpp
+    manifest/fabric_struct_layouts.cpp
     channel_trimming_export.cpp
     channel_trimming_import.cpp
     channel_trimming_io.cpp
