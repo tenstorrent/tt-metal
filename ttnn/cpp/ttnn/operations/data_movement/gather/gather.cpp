@@ -279,6 +279,11 @@ Tensor gather_dispatch(
         const auto tile_out =
             gather_native(tile_input, dim, tile_index, sparse_grad, l1_interleaved, std::nullopt, sub_core_grids);
         auto rm_out = ttnn::to_layout(tile_out, tt::tt_metal::Layout::ROW_MAJOR);
+        // Like the native op, `out` takes precedence over memory_config: write straight into it.
+        if (optional_output_tensor.has_value()) {
+            return ttnn::to_memory_config(
+                rm_out, optional_output_tensor->memory_config(), std::nullopt, optional_output_tensor);
+        }
         // Sharded-no-spec requested_mc: synthesize a shard_spec via the same helper compute_output_specs
         // uses, since to_memory_config does not derive a spec for the actual allocation call.
         if (requested_mc.is_sharded() && !requested_mc.shard_spec().has_value()) {
