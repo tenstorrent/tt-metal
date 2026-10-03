@@ -5,6 +5,7 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
+from models.common.layernorm import LayerNorm
 from models.tt_transformers.tt.attention import Attention as DefaultAttention
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
@@ -123,10 +124,15 @@ class TransformerBlock(LightweightModule):
         # attention_norm slot degenerates to its gather role (norm=None), keeping
         # the fractured->replicated all-gather the norm normally provides.
         self.use_post_norm = getattr(args, "use_post_norm", False)
+        self.use_parallel_residual = getattr(args, "use_parallel_residual", False)
+        assert not (
+            self.use_parallel_residual and self.use_post_norm
+        ), "use_parallel_residual and use_post_norm are mutually exclusive residual topologies"
+        NormClass = LayerNorm if getattr(args, "use_layernorm", False) else RMSNorm
         self.attention_norm = DistributedNorm(
             None
             if self.use_post_norm
-            else RMSNorm(
+            else NormClass(
                 device=mesh_device,
                 dim=args.dim,
                 eps=args.norm_eps,
@@ -147,28 +153,32 @@ class TransformerBlock(LightweightModule):
             TG=args.is_galaxy,
             ag_config_key="ATTN_LN_AG_CONFIG",
         )
-        self.ff_norm = DistributedNorm(
-            RMSNorm(
-                device=mesh_device,
-                dim=args.dim,
-                eps=args.norm_eps,
-                state_dict=state_dict,
-                state_dict_prefix=args.get_state_dict_prefix("", layer_num),
-                weight_cache_path=None if args.dummy_weights else weight_cache_path,
-                weight_dtype=ttnn.bfloat16,
-                weight_key="ffn_norm",
-                is_distributed=self.args.is_distributed_norm,
-                add_unit_offset=self.args.rms_norm_add_unit_offset,
-                ccl_topology=self.args.ccl_topology(),
+        if self.use_parallel_residual:
+            # one norm per layer, shared by both branches.
+            self.ff_norm = None
+        else:
+            self.ff_norm = DistributedNorm(
+                NormClass(
+                    device=mesh_device,
+                    dim=args.dim,
+                    eps=args.norm_eps,
+                    state_dict=state_dict,
+                    state_dict_prefix=args.get_state_dict_prefix("", layer_num),
+                    weight_cache_path=None if args.dummy_weights else weight_cache_path,
+                    weight_dtype=ttnn.bfloat16,
+                    weight_key="ffn_norm",
+                    is_distributed=self.args.is_distributed_norm,
+                    add_unit_offset=self.args.rms_norm_add_unit_offset,
+                    ccl_topology=self.args.ccl_topology(),
+                    tt_ccl=self.tt_ccl,
+                    **extra_rmsnorm_kwargs,
+                ),
+                args,
                 tt_ccl=self.tt_ccl,
-                **extra_rmsnorm_kwargs,
-            ),
-            args,
-            tt_ccl=self.tt_ccl,
-            prefetcher=self.prefetcher,
-            TG=args.is_galaxy,
-            ag_config_key="FFN_LN_AG_CONFIG",
-        )
+                prefetcher=self.prefetcher,
+                TG=args.is_galaxy,
+                ag_config_key="FFN_LN_AG_CONFIG",
+            )
         if f"layers.{layer_num}.pre_feedforward_layernorm.weight" in state_dict:
             self.pre_ff_norm = DistributedNorm(  # pre_feedforward_layernorm
                 RMSNorm(
@@ -278,7 +288,8 @@ class TransformerBlock(LightweightModule):
             down_proj=consume("mlp.down_proj.weight"),
         )
         self.attention_norm.update(weight=consume("input_layernorm.weight"))
-        self.ff_norm.update(weight=consume("post_attention_layernorm.weight"))
+        if not self.use_parallel_residual:
+            self.ff_norm.update(weight=consume("post_attention_layernorm.weight"))
 
         if unconsumed:
             sample = sorted(unconsumed)[:10]
@@ -323,6 +334,10 @@ class TransformerBlock(LightweightModule):
         attn_norm_config = self.args.get_norm_config("attn", mode, self.prefetcher)
         attn_in = self.attention_norm(x, mode, norm_config=attn_norm_config)
 
+        if self.use_parallel_residual:
+            # attention deallocates its input, create a copy for mlp.
+            mlp_in = ttnn.clone(attn_in)
+
         # Reshape to [B, 1, S_per_user, H] so attention infers batch_size from shape[0]
         if batch_size > 1:
             attn_in = ttnn.reshape(attn_in, [batch_size, 1, attn_in.shape[-2] // batch_size, -1])
@@ -346,6 +361,35 @@ class TransformerBlock(LightweightModule):
             residual = ttnn.reshape(residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[0], -1])
         # TODO: create correct memory config in RopeSetup (issue is in ttnn.add op because of different shape in memory config for residual and rot_mats)
         attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
+
+        if self.use_parallel_residual:
+            # out = x + attn(LN(x)) + mlp(LN(x)); no intermediate h = x + attn(...)
+            activation_dtype = self.args.decoders_optimizations.get_tensor_dtype(
+                decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
+            )
+            residual = ttnn.add(
+                residual,
+                attn_out,
+                memory_config=skip_mem_cfg,
+                dtype=self.args.ccl_dtype
+                if TG and not self.args.is_distributed_norm(mode)
+                else activation_dtype or ttnn.bfloat16,
+            )
+            ttnn.deallocate(attn_out)
+            if mode == "prefill":
+                x.deallocate(True)
+            if TG and mode == "decode":
+                mlp_in = ttnn.to_memory_config(mlp_in, memory_config=self.args.get_mlp_act_mem_config(mode))
+            mlp_out = self.feed_forward.forward(mlp_in, mode)
+            out = ttnn.add(
+                residual,
+                mlp_out,
+                memory_config=skip_mem_cfg,
+                dtype=self.args.ccl_dtype
+                if TG and not self.args.is_distributed_norm(mode)
+                else activation_dtype or ttnn.bfloat16,
+            )
+            return out  # fractured across devices
 
         if self.pre_ff_norm is None:
             hidden_states = ttnn.add(
