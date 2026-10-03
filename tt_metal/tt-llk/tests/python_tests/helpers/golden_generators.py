@@ -2895,7 +2895,21 @@ class UnarySFPUGolden:
         return math.tanh(x)
 
     def _tanhshrink(self, x):
-        # tanhshrink(x) = x - tanh(x)
+        # x - tanh(x) cancels completely for |x| < ~1e-8 in double; use the series near 0.
+        if abs(x) < 0.1:
+            x2 = x * x
+            return (
+                x
+                * x2
+                * (
+                    1 / 3
+                    + x2
+                    * (
+                        -2 / 15
+                        + x2 * (17 / 315 + x2 * (-62 / 2835 + x2 * (1382 / 155925)))
+                    )
+                )
+            )
         return x - math.tanh(x)
 
     def _floor(self, x):
