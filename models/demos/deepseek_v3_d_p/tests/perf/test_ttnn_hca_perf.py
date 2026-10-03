@@ -31,7 +31,7 @@ from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged
 
 _CHUNK = PREFILL_CHUNK_TOKENS
-_CHUNKS = 2
+_CHUNKS = 6
 _MAX_SEQ = 56_320  # the demo context, 11 chunks of 5120
 _MARGIN = 0.05
 
@@ -84,6 +84,9 @@ def test_hca_block_perf_galaxy(mesh_device, device_params, topology, variant, mo
         chunk_ns = sum(entry["duration_ns"] for entry in per_program.values())
         total_ns += chunk_ns
         logger.info(f"  chunk {it}: {chunk_ns / 1e6:.3f} ms over {len(per_program)} programs")
+        for seq, entry in enumerate(per_program.values()):
+            kernels = ",".join(sorted({source.rsplit("/", 1)[-1] for source in entry["kernel_sources"]}))
+            logger.info(f"HCA_PROG chunk{it} seq{seq} {entry['duration_ns']:.0f} {kernels}")
 
     lower, upper = expected_ns * (1 - _MARGIN), expected_ns * (1 + _MARGIN)
     logger.info(
