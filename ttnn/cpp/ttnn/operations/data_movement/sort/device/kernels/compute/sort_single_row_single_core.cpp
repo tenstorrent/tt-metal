@@ -85,7 +85,15 @@ void kernel_main() {
     constexpr bool stable = get_arg(args::stable);
 
     DataflowBuffer input_tensor_dfb(dfb::input_tensor);
+#if INDEX_TILES_ON_COMPUTE
+    // No index DFB: the sort helper builds the index tiles in DEST. The alias only satisfies the
+    // helper's signature and the format-init calls below.
+    constexpr auto index_operand = dfb::input_tensor;
+    DataflowBuffer& index_tensor_dfb = input_tensor_dfb;
+#else
+    constexpr auto index_operand = dfb::index_tensor;
     DataflowBuffer index_tensor_dfb(dfb::index_tensor);
+#endif
     DataflowBuffer input_tensor_transposed_dfb(dfb::input_tensor_transposed);
     DataflowBuffer index_tensor_transposed_dfb(dfb::index_tensor_transposed);
     DataflowBuffer synchronization_dfb(dfb::synchronization);
@@ -122,7 +130,7 @@ void kernel_main() {
     // internal llk_math_wait_for_dest_available() does not spin forever.
     // Without this call the kernel deadlocks on the first tilize_block invocation.
 #ifdef IS_ROW_MAJOR
-    compute_kernel_hw_startup(dfb::rm_input, dfb::index_tensor, dfb::input_tensor);
+    compute_kernel_hw_startup(dfb::rm_input, index_operand, dfb::input_tensor);
 #else
     compute_kernel_hw_startup(dfb::input_tensor, dfb::input_tensor_transposed);
     ckernel::topk_tile_init();
@@ -173,7 +181,7 @@ void kernel_main() {
             // is documented call-once; correcting this re-init pattern is out of scope
             // for the init-cleanup rename and left to the sort kernel owners.
             // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-            compute_kernel_hw_startup(dfb::input_tensor, dfb::index_tensor, dfb::input_tensor_transposed);
+            compute_kernel_hw_startup(dfb::input_tensor, index_operand, dfb::input_tensor_transposed);
             ckernel::topk_tile_init();
             transpose_init(dfb::input_tensor);
         }
@@ -333,7 +341,7 @@ void kernel_main() {
 
             // Untilize values: Wt tiles → TILE_HEIGHT RM pages in rm_value_output_dfb.
             // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-            compute_kernel_hw_startup(dfb::input_tensor, dfb::index_tensor, dfb::rm_value_output);
+            compute_kernel_hw_startup(dfb::input_tensor, index_operand, dfb::rm_value_output);
             pack_untilize_init<SUB_BLOCK_DIM, Wt>(dfb::input_tensor, dfb::rm_value_output);
             input_tensor_dfb.wait_front(Wt);
             rm_value_output_dfb.reserve_back(TILE_H);
