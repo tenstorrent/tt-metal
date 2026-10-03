@@ -53,14 +53,15 @@ inline void mul_and_accumulate_block(
     DataflowBuffer dst_dfb = is_last_tap ? out_dfb : scratch_dfb;
     const uint32_t dst_cb_id = dst_dfb.get_id();
 
+    if (fuse_bias && is_last_tap) {
+        // All in0_block_w channel tiles are needed by this block; the bias CB is never popped,
+        // so one wait ahead of the tile loop covers every tile below.
+        bias_dfb.wait_front(in0_block_w);
+    }
+
     for (uint32_t i = 0; i < block_num_tiles; i++) {
         in1_dfb.wait_front(1);
         in0_dfb.wait_front(1);
-        if (fuse_bias && is_last_tap) {
-            // All in0_block_w channel tiles are needed by this block; the bias CB is never popped,
-            // so this single wait covers every tile below.
-            bias_dfb.wait_front(in0_block_w);
-        }
 
         tile_regs_acquire();
         // mul: srcA = in0 (bf16), srcB = in1 (bf8/bf16) -> dst[0]
