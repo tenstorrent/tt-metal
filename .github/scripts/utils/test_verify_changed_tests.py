@@ -11,6 +11,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+import yaml
 
 SCRIPT = Path(__file__).resolve().parent / "verify_changed_tests.py"
 
@@ -183,13 +184,17 @@ def test_removed_entry_needs_no_hardware(repo: Repo):
     assert payload["status"] == "no_op"
 
 
-def test_declared_non_matrix_yaml_is_skipped(repo: Repo):
-    """ttsim-skip-list.yaml is a per-arch mapping, not a list of test entries."""
-    repo.write("tests/pipeline_reorg/ttsim-skip-list.yaml", "wormhole_b0:\n  - some::test\n")
-    code, payload, _ = repo.scope()
+@pytest.mark.parametrize("filename", ["ttsim-skip-list.yaml", "models_trace_config.yaml"])
+def test_declared_non_matrix_yaml_is_skipped(repo: Repo, filename):
+    """Use the workflow's policy and real configuration files, not a second exemption list."""
+    root = SCRIPT.parents[3]
+    workflow = yaml.safe_load((root / ".github/workflows/verify-changed-tests.yaml").read_text())
+    relative = f"tests/pipeline_reorg/{filename}"
+    repo.write(relative, (root / relative).read_text())
+    code, payload, _ = repo.scope(non_matrix_files=workflow["env"]["NON_MATRIX_YAMLS"])
     assert code == 0
     assert payload["status"] == "no_op"
-    assert payload["skipped_files"] == ["tests/pipeline_reorg/ttsim-skip-list.yaml"]
+    assert payload["skipped_files"] == [relative]
 
 
 def test_undeclared_non_list_yaml_fails_closed(repo: Repo):
