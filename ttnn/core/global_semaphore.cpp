@@ -16,7 +16,8 @@ namespace ttnn::global_semaphore {
 GlobalSemaphore create_global_semaphore(
     MeshDevice* mesh_device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) {
     auto guard = tt::tt_metal::make_allocation_context_guard("ttnn.create_global_semaphore");
-    return GlobalSemaphore(*mesh_device, cores, initial_value, buffer_type);
+    return GlobalSemaphore(
+        *mesh_device, cores, initial_value, ttnn::core::current_mesh_command_queue(*mesh_device), buffer_type);
 }
 
 tt::tt_metal::DeviceAddr get_global_semaphore_address(const GlobalSemaphore& global_semaphore) {

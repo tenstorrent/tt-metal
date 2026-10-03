@@ -42,6 +42,23 @@ public:
         uint32_t initial_value,
         BufferType buffer_type = BufferType::L1);
 
+    /**
+     * @brief Allocates a global semaphore in L1 on the mesh device, writing `initial_value` on `mesh_cq` when fast
+     * dispatch is enabled. The queue is ignored on slow dispatch / simulator.
+     *
+     * @param device Mesh device to create the semaphore on.
+     * @param cores Range of Tensix coordinates using the semaphore.
+     * @param initial_value Initial value of the semaphore.
+     * @param mesh_cq Command queue of `device` used for the initial-value write.
+     * @param buffer_type Buffer type to store the semaphore. Can only be an L1 buffer type.
+     */
+    GlobalSemaphore(
+        distributed::MeshDevice& device,
+        CoreRangeSet cores,
+        uint32_t initial_value,
+        distributed::MeshCommandQueue& mesh_cq,
+        BufferType buffer_type = BufferType::L1);
+
     explicit GlobalSemaphore(GlobalSemaphoreImpl impl);
     GlobalSemaphore(const GlobalSemaphore& other);
     GlobalSemaphore& operator=(const GlobalSemaphore& other);

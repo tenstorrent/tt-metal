@@ -22,6 +22,7 @@ class Program;
 class IDevice;
 
 namespace distributed {
+class MeshCommandQueue;
 class MeshDevice;
 }  // namespace distributed
 
@@ -47,6 +48,14 @@ public:
         distributed::MeshDevice& device,
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
         uint32_t size,
+        BufferType buffer_type = BufferType::L1);
+
+    // Same as above, but the config write is issued on `mesh_cq` (a command queue of `device`).
+    GlobalCircularBuffer(
+        distributed::MeshDevice& device,
+        const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
+        uint32_t size,
+        distributed::MeshCommandQueue& mesh_cq,
         BufferType buffer_type = BufferType::L1);
 
     GlobalCircularBuffer(const GlobalCircularBuffer& other);

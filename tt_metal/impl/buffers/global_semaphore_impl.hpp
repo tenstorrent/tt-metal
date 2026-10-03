@@ -30,6 +30,14 @@ public:
         std::optional<uint32_t> initial_value,
         BufferType buffer_type);
 
+    // Writes `initial_value` via `mesh_cq` when using fast dispatch.
+    GlobalSemaphoreImpl(
+        distributed::MeshDevice& device,
+        CoreRangeSet cores,
+        uint32_t initial_value,
+        BufferType buffer_type,
+        distributed::MeshCommandQueue& mesh_cq);
+
     // Dedicated constructor for creating a global semaphore **without allocation**.
     // The instantiation of GlobalSemphore will be emplaced onto the address specified.
     GlobalSemaphoreImpl(
@@ -62,7 +70,10 @@ private:
     void reset_semaphore_value(uint32_t reset_value, distributed::MeshCommandQueue* mesh_cq) const;
 
     void setup_buffer(
-        std::optional<uint32_t> initial_value, BufferType buffer_type, std::optional<uint64_t> address);
+        std::optional<uint32_t> initial_value,
+        BufferType buffer_type,
+        std::optional<uint64_t> address,
+        distributed::MeshCommandQueue* mesh_cq = nullptr);
 
     std::shared_ptr<distributed::MeshBuffer> buffer_;
     distributed::MeshDevice* device_;

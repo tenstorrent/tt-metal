@@ -40,6 +40,18 @@ GlobalSemaphoreImpl::GlobalSemaphoreImpl(
 GlobalSemaphoreImpl::GlobalSemaphoreImpl(
     distributed::MeshDevice& device,
     CoreRangeSet cores,
+    uint32_t initial_value,
+    BufferType buffer_type,
+    distributed::MeshCommandQueue& mesh_cq) :
+    device_{&device}, cores_{std::move(cores)} {
+    TT_FATAL(
+        mesh_cq.device() == &device, "MeshCommandQueue belongs to a different MeshDevice than the GlobalSemaphore");
+    this->setup_buffer(initial_value, buffer_type, std::nullopt, &mesh_cq);
+}
+
+GlobalSemaphoreImpl::GlobalSemaphoreImpl(
+    distributed::MeshDevice& device,
+    CoreRangeSet cores,
     std::optional<uint32_t> initial_value,
     BufferType buffer_type,
     uint64_t address) :
@@ -91,7 +103,10 @@ void GlobalSemaphoreImpl::reset_semaphore_value(uint32_t reset_value, distribute
 }
 
 void GlobalSemaphoreImpl::setup_buffer(
-    std::optional<uint32_t> initial_value, BufferType buffer_type, std::optional<uint64_t> address) {
+    std::optional<uint32_t> initial_value,
+    BufferType buffer_type,
+    std::optional<uint64_t> address,
+    distributed::MeshCommandQueue* mesh_cq) {
     TT_FATAL(
         buffer_type == BufferType::L1 or buffer_type == BufferType::L1_SMALL,
         "Global semaphore can only be created for L1 buffer types");
@@ -110,7 +125,7 @@ void GlobalSemaphoreImpl::setup_buffer(
     Inspector::global_semaphore_created(buffer_.get(), cores_);
 
     if (initial_value.has_value()) {
-        this->reset_semaphore_value(initial_value.value());
+        this->reset_semaphore_value(initial_value.value(), mesh_cq);
     }
 }
 
@@ -131,6 +146,14 @@ GlobalSemaphore CreateGlobalSemaphore(
 GlobalSemaphore::GlobalSemaphore(
     distributed::MeshDevice& device, CoreRangeSet cores, uint32_t initial_value, BufferType buffer_type) :
     GlobalSemaphore{GlobalSemaphoreImpl{device, std::move(cores), initial_value, buffer_type}} {}
+
+GlobalSemaphore::GlobalSemaphore(
+    distributed::MeshDevice& device,
+    CoreRangeSet cores,
+    uint32_t initial_value,
+    distributed::MeshCommandQueue& mesh_cq,
+    BufferType buffer_type) :
+    GlobalSemaphore{GlobalSemaphoreImpl{device, std::move(cores), initial_value, buffer_type, mesh_cq}} {}
 
 GlobalSemaphore::GlobalSemaphore(GlobalSemaphoreImpl impl) :
     impl_(std::make_unique<GlobalSemaphoreImpl>(std::move(impl))) {}

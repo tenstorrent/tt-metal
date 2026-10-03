@@ -16,6 +16,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -81,8 +82,8 @@ TEST(CommandQueueIdStack, PopOnEmptyStackThrows) {
     EXPECT_EQ(get_current_command_queue_id_for_thread(), QueueId(0));
 }
 
-// Runs without hardware on a 2-chip mock cluster: the explicit-queue reset overload must reject a queue that
-// belongs to a different mesh than the semaphore.
+// Runs without hardware on a 2-chip mock cluster: the explicit-queue overloads must reject a queue that belongs to a
+// different mesh than the semaphore / global circular buffer.
 class GlobalSemaphoreMockMeshTest : public ::testing::Test {
 protected:
     void TearDown() override { tt::tt_metal::experimental::disable_mock_mode(); }
@@ -99,6 +100,30 @@ TEST_F(GlobalSemaphoreMockMeshTest, ExplicitQueueResetRejectsQueueFromAnotherMes
         auto semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_a.get(), cores, /*initial_value=*/0);
         EXPECT_NO_THROW(semaphore.reset_semaphore_value(1, mesh_a->mesh_command_queue()));
         EXPECT_ANY_THROW(semaphore.reset_semaphore_value(1, mesh_b->mesh_command_queue()));
+    }
+    for (auto& [_, mesh] : meshes) {
+        mesh->close();
+    }
+}
+
+TEST_F(GlobalSemaphoreMockMeshTest, ExplicitQueueConstructorsRejectQueueFromAnotherMesh) {
+    tt::tt_metal::experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 2);
+    auto meshes = tt::tt_metal::distributed::MeshDevice::create_unit_meshes({0, 1});
+    ASSERT_EQ(meshes.size(), 2u);
+    auto& mesh_a = meshes.at(0);
+    auto& mesh_b = meshes.at(1);
+    {
+        const CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{0, 0}));
+        const std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {
+            {CoreCoord{0, 0}, CoreRangeSet(CoreRange(CoreCoord{0, 1}, CoreCoord{0, 1}))}};
+
+        EXPECT_NO_THROW(tt::tt_metal::GlobalSemaphore(*mesh_a, cores, 0, mesh_a->mesh_command_queue()));
+        EXPECT_ANY_THROW(tt::tt_metal::GlobalSemaphore(*mesh_a, cores, 0, mesh_b->mesh_command_queue()));
+
+        EXPECT_NO_THROW(
+            tt::tt_metal::experimental::GlobalCircularBuffer(*mesh_a, mapping, 2048, mesh_a->mesh_command_queue()));
+        EXPECT_ANY_THROW(
+            tt::tt_metal::experimental::GlobalCircularBuffer(*mesh_a, mapping, 2048, mesh_b->mesh_command_queue()));
     }
     for (auto& [_, mesh] : meshes) {
         mesh->close();

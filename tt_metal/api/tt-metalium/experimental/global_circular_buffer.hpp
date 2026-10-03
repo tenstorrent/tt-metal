@@ -21,6 +21,7 @@
 namespace tt::tt_metal {
 
 namespace distributed {
+class MeshCommandQueue;
 class MeshDevice;
 }  // namespace distributed
 
@@ -54,6 +55,15 @@ GlobalCircularBuffer CreateGlobalCircularBufferForTensorPrefetcher(
     uint32_t size,
     BufferType buffer_type = BufferType::L1,
     bool support_multi_receiver_shards = false);
+
+// Same as above, but the config write is issued on `mesh_cq` (a command queue of `mesh_device`).
+GlobalCircularBuffer CreateGlobalCircularBufferForTensorPrefetcher(
+    distributed::MeshDevice& mesh_device,
+    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
+    uint32_t size,
+    BufferType buffer_type,
+    bool support_multi_receiver_shards,
+    distributed::MeshCommandQueue& mesh_cq);
 
 // Sender domain of a GlobalCircularBuffer. Returns SenderCoreType::Worker for GCBs created
 // via the worker-sender path, SenderCoreType::Dram for those from

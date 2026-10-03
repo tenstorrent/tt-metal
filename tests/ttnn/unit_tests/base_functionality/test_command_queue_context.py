@@ -165,3 +165,107 @@ def test_explicit_queue_id_overrides_context(device):
 
     ttnn.release_trace(device, tid)
     assert _current_cq() == 0
+
+
+def _single_core(x, y):
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y))})
+
+
+def test_selected_queue_out_of_range_raises_and_restores(device, expect_error):
+    """On a single-CQ device, selecting cq 1 makes TTNN entry points fail cleanly, and the stack is restored."""
+    shape = (1, 1, 32, 32)
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+    input_dev = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+    with expect_error(RuntimeError, "cq_id 1 is out of range"):
+        with ttnn.command_queue(1):
+            ttnn.neg(input_dev)
+    assert _current_cq() == 0
+
+    with expect_error(RuntimeError, "cq_id 1 is out of range"):
+        with ttnn.command_queue(1):
+            ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    assert _current_cq() == 0
+
+    with expect_error(RuntimeError, "cq_id 1 is out of range"):
+        ttnn.neg(input_dev, queue_id=1)
+    assert _current_cq() == 0
+
+    with expect_error(RuntimeError, "cq_id 1 is out of range"):
+        with ttnn.command_queue(1):
+            ttnn.create_global_semaphore(device, _single_core(0, 0), 5)
+    with expect_error(RuntimeError, "cq_id 1 is out of range"):
+        with ttnn.command_queue(1):
+            ttnn.create_global_circular_buffer(
+                device, [(ttnn.CoreCoord(0, 0), _single_core(0, 1))], 2048, ttnn.BufferType.L1
+            )
+    assert _current_cq() == 0
+    ttnn.create_global_semaphore(device, _single_core(0, 0), 5)
+    ttnn.create_global_circular_buffer(device, [(ttnn.CoreCoord(0, 0), _single_core(0, 1))], 2048, ttnn.BufferType.L1)
+
+    assert_with_pcc(-torch_input, ttnn.to_torch(ttnn.neg(input_dev)), 0.9999)
+
+
+@pytest.mark.parametrize("device_params", [{"num_command_queues": 2}], indirect=True)
+def test_io_on_cq1_compute_on_cq0_pipeline(device):
+    """The usual two-queue pattern (I/O on cq 1, compute on cq 0, events in between) driven by the context."""
+    shape = (1, 1, 64, 64)
+    input_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+    op_event = ttnn.record_event(device, 0)
+
+    for i in range(8):
+        torch_input = torch.rand(shape, dtype=torch.bfloat16)
+        with ttnn.command_queue(1):
+            ttnn.wait_for_event(mesh_event=op_event)
+            ttnn.copy_host_to_device_tensor(ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT), input_dev)
+            write_event = ttnn.record_event(device)
+
+        ttnn.wait_for_event(0, write_event)
+        output = ttnn.add(input_dev, i / 8)
+        op_event = ttnn.record_event(device, 0)
+
+        with ttnn.command_queue(1):
+            ttnn.wait_for_event(mesh_event=op_event)
+            result = ttnn.to_torch(output)
+        assert_with_pcc(torch_input + i / 8, result, 0.999)
+
+    ttnn.synchronize_device(device)
+    assert _current_cq() == 0
+
+
+@pytest.mark.parametrize("device_params", [{"num_command_queues": 2}], indirect=True)
+def test_concurrent_threads_on_different_queues(device):
+    """A worker thread doing I/O under `ttnn.command_queue(1)` runs concurrently with compute + I/O on cq 0 in the
+    main thread; each thread's selection stays private and every result is correct."""
+    shape = (1, 1, 64, 64)
+    iterations = 16
+    worker_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+    main_input = torch.rand(shape, dtype=torch.bfloat16)
+    main_dev = ttnn.from_torch(main_input, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn.synchronize_device(device)
+
+    errors = []
+
+    def worker():
+        try:
+            with ttnn.command_queue(1):
+                for _ in range(iterations):
+                    assert _current_cq() == 1
+                    data = torch.rand(shape, dtype=torch.bfloat16)
+                    ttnn.copy_host_to_device_tensor(ttnn.from_torch(data, layout=ttnn.TILE_LAYOUT), worker_dev)
+                    assert torch.equal(ttnn.to_torch(worker_dev), data)
+            assert _current_cq() == 0
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    for i in range(iterations):
+        assert _current_cq() == 0
+        result = ttnn.to_torch(ttnn.add(main_dev, i / iterations))
+        assert_with_pcc(main_input + i / iterations, result, 0.999)
+    thread.join()
+    ttnn.synchronize_device(device)
+
+    assert not errors, errors
+    assert _current_cq() == 0
