@@ -5,12 +5,13 @@
 
 """
 Usage:
-    callstack_provider [--full-callstack] [--gdb-callstack] [--active-eth]
+    callstack_provider [--full-callstack] [--gdb-callstack] [--active-eth] [--callstack-distance-threshold=<float>]
 
 Options:
-    --full-callstack   Dump full callstack with all frames. Defaults to dumping only the top frame.
-    --gdb-callstack    Dump callstack using GDB client instead of built-in methods.
-    --active-eth       Override default behaviour of not dumping callstack for active eth cores if full callstack or gdb callstack is used.
+    --full-callstack                        Dump full callstack with all frames. Defaults to dumping only the top frame.
+    --gdb-callstack                         Dump callstack using GDB client instead of built-in methods.
+    --active-eth                            Override default behaviour of not dumping callstack for active eth cores if full callstack or gdb callstack is used.
+    --callstack-distance-threshold=<float>  Threshold for callstack distance comparison. [default: 0.06]
 
 Description:
     Provides callstack extraction functionality for RISC cores on devices.
@@ -193,6 +194,9 @@ class CallstacksData:
         "Kernel Callstack", format_callstack_with_message
     )
 
+    # Buckets for storing callstacks
+    bucket: int | None = triage_field("Bucket")
+
 
 class CallstackProvider:
     def __init__(
@@ -202,6 +206,7 @@ class CallstackProvider:
         full_callstack: bool,
         gdb_callstack: bool,
         gdb_server: GdbServer | None,
+        callstack_distance_threshold: float,
         force_active_eth: bool = False,
     ):
         self.dispatcher_data = dispatcher_data
@@ -211,6 +216,8 @@ class CallstackProvider:
         self.gdb_server = gdb_server
         self.force_active_eth = force_active_eth
         self._callstack_cache: dict[tuple, CallstacksData] = {}
+        self._callstack_buckets: list[list[CallstackEntry]] = []
+        self._callstack_distance_threshold = callstack_distance_threshold
         self.lock = threading.Lock()  # For thread-safe cache access
 
     def __del__(self):
@@ -271,6 +278,7 @@ class CallstackProvider:
                 dispatcher_core_data=dispatcher_core_data,
                 pc=None,
                 kernel_callstack_with_message=KernelCallstackWithMessage(callstack=[], message="Core is in reset"),
+                bucket=None,
             )
 
         if dispatcher_core_data.block_type == "active_eth" and not self.force_active_eth:
@@ -364,7 +372,59 @@ class CallstackProvider:
             if len(callstack_with_message.callstack) > 0
             else risc_debug.get_pc(),
             kernel_callstack_with_message=callstack_with_message,
+            bucket=self._get_bucket(callstack_with_message),
         )
+
+    @staticmethod
+    def _callstack_distance(callstack1: list[CallstackEntry], callstack2: list[CallstackEntry]) -> float:
+        import math
+
+        c = 0.04
+        o = 0.13
+        len1 = len(callstack1)
+        len2 = len(callstack2)
+
+        M = [[0.0] * (len2 + 1) for _ in range(len1 + 1)]
+
+        for i in range(1, len1 + 1):
+            c1 = callstack1[i - 1]
+            for j in range(1, len2 + 1):
+                c2 = callstack2[j - 1]
+                x = 0.0
+
+                if c1.function_name == c2.function_name:
+                    file1 = c1.file_info.file if c1.file_info else None
+                    file2 = c2.file_info.file if c2.file_info else None
+                    if file1 == file2:
+                        x = math.exp(-c * min(i - 1, j - 1)) * math.exp(-o * abs(i - j))
+
+                M[i][j] = max(
+                    M[i - 1][j - 1] + x,
+                    M[i - 1][j],
+                    M[i][j - 1],
+                )
+
+        sig = 0.0
+        for i in range(min(len1, len2)):
+            sig += math.exp(-c * i)
+
+        sim = M[len1][len2] / sig
+        return 1.0 - sim
+
+    def _get_bucket(self, callstack_with_message: KernelCallstackWithMessage) -> int | None:
+        if len(callstack_with_message.callstack) == 0:
+            return None
+
+        with self.lock:
+            # Traverse through all buckets and see if there is one that maches current callstack
+            for i, bucket_callstack in enumerate(self._callstack_buckets):
+                distance = self._callstack_distance(bucket_callstack, callstack_with_message.callstack)
+                if distance < self._callstack_distance_threshold:
+                    return i
+
+            # If no matching bucket is found, add a new one
+            self._callstack_buckets.append(callstack_with_message.callstack)
+            return len(self._callstack_buckets) - 1
 
 
 # Global lock for thread-safe port finding
@@ -407,17 +467,8 @@ def run(args, context: Context):
     full_callstack: bool = args["--full-callstack"]
     gdb_callstack: bool = args["--gdb-callstack"]
     active_eth: bool = args["--active-eth"]
+    callstack_distance_threshold = float(args["--callstack-distance-threshold"])
     force_active_eth = (full_callstack or gdb_callstack) and active_eth
-
-    if context.devices[0].is_blackhole():
-        if full_callstack:
-            log_warning(
-                "Full callstack is currently disabled for blackhole devices due to https://github.com/tenstorrent/tt-exalens/issues/902"
-            )
-        if gdb_callstack:
-            log_warning(
-                "GDB callstack is currently disabled for blackhole devices due to https://github.com/tenstorrent/tt-exalens/issues/902"
-            )
 
     if force_active_eth:
         WARN(
@@ -440,6 +491,7 @@ def run(args, context: Context):
         full_callstack,
         gdb_callstack,
         gdb_server,
+        callstack_distance_threshold,
         force_active_eth,
     )
 
