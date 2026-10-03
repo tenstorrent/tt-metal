@@ -56,11 +56,13 @@ dense is used with num_faces == 2 and even block_ct_dim, where two 16x32 (or sma
  *
  * Programs a MOP that walks face rows in the outer loop and tiles within the block in the inner loop,
  * using DST_STRIDED_MODE so each PACR packs a row from each tile. The PACR address modes step the tile (Z),
- * the face-row (Y) and the L1 output row (channel 1 Y), so a row is block_ct_dim PACRs and nothing else.
+ * the face-row (Y) and the L1 output row (channel 1 Y), so a row is block_ct_dim PACRs, plus the CFGSHIFTMASK row
+ * step when l1_row_step_by_cfg and the fillers when paced.
  *
  * @tparam block_ct_dim: Number of input tiles per block.
  * @tparam narrow_row: True when faces occupy only the first column of the tile (single packer interface).
  * @tparam dense: True to pack two tiles into one 32x32 dest region using all interfaces; requires num_faces == 2 and even block_ct_dim.
+ * @tparam pace: True to issue a filler before every PACR and around every row.
  * @param face_r_dim: Number of rows per face.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @param row_ends_stream: True to close every row with Last (rows not contiguous in L1, or 32-bit Dest reads).
@@ -68,12 +70,9 @@ dense is used with num_faces == 2 and even block_ct_dim, where two 16x32 (or sma
  *        the channel 1 Y stride field cannot hold.
  * @note @ref _llk_pack_untilize_configure_addrmod_ must have programmed the ADDR_MOD slots.
  */
-template <std::uint32_t block_ct_dim, bool narrow_row = false, bool dense = false>
+template <std::uint32_t block_ct_dim, bool narrow_row = false, bool dense = false, bool pace = false>
 inline void _llk_pack_untilize_mop_config_(
-    const std::uint32_t face_r_dim = FACE_R_DIM,
-    const std::uint32_t num_faces  = 4,
-    const bool row_ends_stream     = true,
-    const bool l1_row_step_by_cfg  = false)
+    const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4, const bool row_ends_stream = true, const bool l1_row_step_by_cfg = false)
 {
     static_assert(!dense || (block_ct_dim % 2 == 0), "block_ct_dim must be even when dense");
     static_assert(!dense || (!narrow_row), "narrow_row must be false when dense");
@@ -104,14 +103,28 @@ inline void _llk_pack_untilize_mop_config_(
     tile block_ct_dim-1: row 64*(block_ct_dim-1), row 64*(block_ct_dim-1)+16
     This processes is repeated for each row of the block in dest.
     */
-    ckernel::ckernel_template tmp(
-        MOP_OUTER_LOOP,
-        MOP_INNER_LOOP,
-        TT_OP_PACR(
+    const std::uint32_t pacr_op = TT_OP_PACR(
+        p_pacr::CFG_CTXT_0,
+        p_pacr::NO_ROW_PAD_ZERO,
+        p_pacr::DST_ACCESS_STRIDED_MODE,
+        ADDR_MOD_0,
+        p_pacr::ADDR_CNT_CTXT_0,
+        0,
+        PACK_INTF_SEL,
+        0,
+        0,
+        p_pacr::NO_CTXT_CTRL,
+        0,
+        0);
+    auto program_mop = [&](ckernel::ckernel_template& tmp)
+    {
+        // A PACR with Last makes the next one start at a fresh L1 address.
+        const std::uint32_t row_close_addr_mod = row_ends_stream ? ADDR_MOD_1 : ADDR_MOD_2;
+        const std::uint32_t row_close_op       = TT_OP_PACR(
             p_pacr::CFG_CTXT_0,
             p_pacr::NO_ROW_PAD_ZERO,
             p_pacr::DST_ACCESS_STRIDED_MODE,
-            ADDR_MOD_0,
+            row_close_addr_mod,
             p_pacr::ADDR_CNT_CTXT_0,
             0,
             PACK_INTF_SEL,
@@ -119,56 +132,59 @@ inline void _llk_pack_untilize_mop_config_(
             0,
             p_pacr::NO_CTXT_CTRL,
             0,
-            0));
+            row_ends_stream ? 1 : 0);
+        const std::uint32_t pass_close_op = TT_OP_PACR(
+            p_pacr::CFG_CTXT_0,
+            p_pacr::NO_ROW_PAD_ZERO,
+            p_pacr::DST_ACCESS_STRIDED_MODE,
+            row_close_addr_mod,
+            p_pacr::ADDR_CNT_CTXT_0,
+            0,
+            PACK_INTF_SEL,
+            0,
+            0,
+            p_pacr::NO_CTXT_CTRL,
+            0,
+            1);
 
-    // A PACR with Last makes the next one start at a fresh L1 address.
-    const std::uint32_t row_close_addr_mod = row_ends_stream ? ADDR_MOD_1 : ADDR_MOD_2;
-    const std::uint32_t row_close_op       = TT_OP_PACR(
-        p_pacr::CFG_CTXT_0,
-        p_pacr::NO_ROW_PAD_ZERO,
-        p_pacr::DST_ACCESS_STRIDED_MODE,
-        row_close_addr_mod,
-        p_pacr::ADDR_CNT_CTXT_0,
-        0,
-        PACK_INTF_SEL,
-        0,
-        0,
-        p_pacr::NO_CTXT_CTRL,
-        0,
-        row_ends_stream ? 1 : 0);
-    const std::uint32_t pass_close_op = TT_OP_PACR(
-        p_pacr::CFG_CTXT_0,
-        p_pacr::NO_ROW_PAD_ZERO,
-        p_pacr::DST_ACCESS_STRIDED_MODE,
-        row_close_addr_mod,
-        p_pacr::ADDR_CNT_CTXT_0,
-        0,
-        PACK_INTF_SEL,
-        0,
-        0,
-        p_pacr::NO_CTXT_CTRL,
-        0,
-        1);
+        tmp.set_last_inner_loop_instr(row_close_op);
+        tmp.set_last_outer_loop_instr(pass_close_op);
 
-    tmp.set_last_inner_loop_instr(row_close_op);
-    tmp.set_last_outer_loop_instr(pass_close_op);
+        if (l1_row_step_by_cfg)
+        {
+            const std::uint32_t replay_buf_len = 2;
+            load_replay_buf(
+                ckernel::packer::replay_buf_offset,
+                replay_buf_len,
+                []
+                {
+                    // THCON_SEC0_REG1_L1_Dest_addr += SCRATCH_SEC[CurrentThread].val, the L1 row stride.
+                    TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+                    TTI_NOP;
+                });
+            tmp.set_end_op(lltt::replay_insn(ckernel::packer::replay_buf_offset, replay_buf_len));
+        }
+        else if constexpr (pace)
+        {
+            tmp.set_end_ops(TT_OP_DMANOP, TT_OP_DMANOP);
+        }
+        if constexpr (pace)
+        {
+            tmp.set_start_op(TT_OP_DMANOP);
+        }
 
-    if (l1_row_step_by_cfg)
+        tmp.program();
+    };
+    if constexpr (pace)
     {
-        const std::uint32_t replay_buf_len = 2;
-        load_replay_buf(
-            ckernel::packer::replay_buf_offset,
-            replay_buf_len,
-            []
-            {
-                // THCON_SEC0_REG1_L1_Dest_addr += SCRATCH_SEC[CurrentThread].val, the L1 row stride.
-                TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
-                TTI_NOP;
-            });
-        tmp.set_end_op(lltt::replay_insn(ckernel::packer::replay_buf_offset, replay_buf_len));
+        ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_DMANOP, pacr_op);
+        program_mop(tmp);
     }
-
-    tmp.program();
+    else
+    {
+        ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, pacr_op);
+        program_mop(tmp);
+    }
 }
 
 /**
@@ -227,13 +243,31 @@ inline void _llk_pack_untilize_init_(
     const bool row_ends_stream        = !l1_rows_contiguous || (datum_size_in_bytes(pack_src_format) == 4);
     // The channel 1 Y stride field is 16 bits, and the packer keeps the channel 1 offset only within 256 KiB.
     const std::uint32_t rows_per_call = face_r_dim * ((num_faces > 2) ? 2 : 1);
+    // 32-bit rows of three tiles are paced, and in the block form step L1 by CFGSHIFTMASK: packed back to back they
+    // cost an unpacker writing Dest more L1 cycles than they save.
+    const bool pace = (datum_size_in_bytes(pack_src_format) == 4) && (block_ct_dim == 3);
     const bool l1_row_step_by_cfg =
-        row_ends_stream && ((output_addr_offset > (PCK0_ADDR_CTRL_XY_REG_1_Ystride_MASK >> PCK0_ADDR_CTRL_XY_REG_1_Ystride_SHAMT)) ||
-                            (rows_per_call * output_addr_offset > 256 * 1024));
+        row_ends_stream &&
+        ((pace && !l1_rows_contiguous) || (output_addr_offset > (PCK0_ADDR_CTRL_XY_REG_1_Ystride_MASK >> PCK0_ADDR_CTRL_XY_REG_1_Ystride_SHAMT)) ||
+         (rows_per_call * output_addr_offset > 256 * 1024));
 
     _llk_pack_untilize_configure_addrmod_();
 
-    _llk_pack_untilize_mop_config_<block_ct_dim, narrow_row, dense>(face_r_dim, num_faces, row_ends_stream, l1_row_step_by_cfg);
+    if constexpr (block_ct_dim == 3)
+    {
+        if (pace)
+        {
+            _llk_pack_untilize_mop_config_<block_ct_dim, narrow_row, dense, true>(face_r_dim, num_faces, row_ends_stream, l1_row_step_by_cfg);
+        }
+        else
+        {
+            _llk_pack_untilize_mop_config_<block_ct_dim, narrow_row, dense>(face_r_dim, num_faces, row_ends_stream, l1_row_step_by_cfg);
+        }
+    }
+    else
+    {
+        _llk_pack_untilize_mop_config_<block_ct_dim, narrow_row, dense>(face_r_dim, num_faces, row_ends_stream, l1_row_step_by_cfg);
+    }
 
     const std::uint32_t z_stride = TILE_NUM_FACES * FACE_R_DIM * FACE_C_DIM * datum_size_in_bytes(pack_src_format);
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(z_stride);
