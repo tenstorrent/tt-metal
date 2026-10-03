@@ -7,15 +7,26 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <vector>
 
 #include "impl/streaming_profiler/decode.hpp"
 
 using namespace tt::tt_metal;
 namespace kp = kernel_profiler;
+namespace api = experimental::streaming_profiler;
+
+using ZoneBatch = api::Batch<api::RecordType::Zones>;
+static_assert(api::BatchCallable<decltype([](const ZoneBatch&) {})>);
+static_assert(api::BatchCallable<decltype([](ZoneBatch) {})>);
+static_assert(api::BatchCallable<std::reference_wrapper<decltype([](const ZoneBatch&) {})>>);
+static_assert(!api::BatchCallable<decltype([](const auto&) {})>);
+static_assert(!api::BatchCallable<decltype([](int) {})>);
+static_assert(!api::BatchCallable<decltype([owned = std::unique_ptr<int>()](const ZoneBatch&) {})>);
 
 constexpr uint64_t M = 1ull << 32;
 constexpr uint32_t kNear = 0xfffffff0u;  // a low word just below the wrap
+constexpr uint32_t kTileXy = 0x30002;
 
 uint32_t word(uint32_t t, uint32_t id = 1) { return (t << PP_TYPE_SHIFT) | id; }
 uint32_t sticky(uint32_t hi) { return word(PP_STICKY_TIMER, hi); }
@@ -27,15 +38,24 @@ void check(bool v, const char* why) {
     }
 }
 
-struct Harness {
-    profiler::SpanDecodeState st;
-    // One buffer per record kind; the frames of one batch append to them.
-    std::vector<uint64_t> zbuf = std::vector<uint64_t>(64 * 1024), ebuf = zbuf, dbuf = zbuf;
-    size_t zones = 0, events = 0, data_bytes = 0;
-    streaming_profiler::StreamDecoder dec;
-    uint32_t head = 0;
+streaming_profiler::CaptureContext::Device one_tile_device() {
+    streaming_profiler::CaptureContext::Device dev{
+        .lanes = std::vector<api::Core>(profiler::kSpscNRiscDecode), .tiles = {{.xy = kTileXy}}};
+    dev.core_of_xy[kTileXy] = 0;
+    return dev;
+}
 
-    static constexpr profiler::SpscRecConsts kLanes[5]{};
+struct Harness {
+    // One buffer per record kind; the frames of one batch append to them.
+    std::vector<uint64_t> zbuf = std::vector<uint64_t>(64 * 1024), ebuf = zbuf, dbuf = zbuf, vbuf = zbuf;
+    size_t zones = 0, events = 0, data_records = 0, value_count = 0;
+    uint64_t order_regressions = 0;
+    int64_t newest_ticks = 0;  // the last feed's
+    uint32_t parked = 0;       // feeds decoded and not yet delivered
+    streaming_profiler::CaptureContext::Device dev = one_tile_device();
+    streaming_profiler::StreamDecoder dec{dev};
+    uint32_t head = 0;
+    const api::TimestampedData* first_data = nullptr;
 
     // The state slots a frame carries for lane 0.
     uint32_t slot_timer = 0, slot_prog = 0;
@@ -43,13 +63,8 @@ struct Harness {
     // `warm` feeds one frame holding a zero timer sticky, so a test's own frames find the lane seeded and decode as
     // the wire would after a capture's first frame.
     explicit Harness(bool warm = true) {
-        st.reset(1);
-        st.core_of_xy[0x30002] = 0;
-        dec.st = &st;
-        dec.lanes = kLanes;
         if (warm) {
             feed({word(PP_STICKY_TIMER, 0)});
-            dec.stats = {};
         }
     }
     // One frame carrying `w` as lane 0's new words.
@@ -57,7 +72,7 @@ struct Harness {
         std::vector<uint32_t> f(profiler::kSpscMaxFrameWords);
         f[0] = kp::spsc_span_w0();
         uint32_t* c = f.data() + kp::SPSC_SPAN_PREFIX_WORDS;
-        f[kp::SPSC_PREFIX_XY] = 0x30002;
+        f[kp::SPSC_PREFIX_XY] = kTileXy;
         f[kp::SPSC_PREFIX_HEAD_0] = head;
         c[kp::SPSC_WIRE_TAIL_0] = head + w.size();
         c[kp::SPSC_WIRE_TIMER_0] = slot_timer;
@@ -66,29 +81,51 @@ struct Harness {
         off += kp::spsc_span_pack_pad(head, off);
         std::copy(w.begin(), w.end(), f.begin() + off);
         f[1] = off + w.size() - kp::SPSC_SPAN_PREFIX_WORDS;
-        const auto p = dec.decode_frame(
+        const uint32_t frame_words = kp::spsc_span_frame_words(f[1]);
+        const auto decoded = dec.decode_frames(
             f.data(),
-            kp::spsc_span_frame_words(f[1]),
-            {reinterpret_cast<uint8_t*>(zbuf.data()) + zones * profiler::kSpscRecBytes,
-             reinterpret_cast<uint8_t*>(ebuf.data()) + events * profiler::kSpscRecBytes,
-             reinterpret_cast<uint8_t*>(dbuf.data()) + data_bytes});
-        zones += p.zones;
-        events += p.events;
-        data_bytes += p.data_bytes;
+            {&frame_words, 1},
+            {reinterpret_cast<uint8_t*>(zbuf.data()) + zones * profiler::kSpscZoneBytes,
+             reinterpret_cast<uint8_t*>(ebuf.data()) + events * profiler::kSpscEventBytes,
+             reinterpret_cast<uint8_t*>(dbuf.data()) + data_records * profiler::kSpscDataBytes,
+             reinterpret_cast<uint8_t*>(vbuf.data() + value_count)});
+        zones += decoded.zones;
+        events += decoded.events;
+        data_records += decoded.data;
+        value_count += decoded.values;
+        order_regressions += decoded.order_regressions;
+        newest_ticks = decoded.newest_ticks;
         head += w.size();
+        parked++;
     }
-    // The batch so far is delivered: the next one starts over in the buffers.
-    void new_batch() {
+    // Each feed is a batch the service parks; it delivers the oldest once the cover passes it.
+    void deliver_oldest() {
         dec.commit();
-        zones = events = data_bytes = 0;
+        parked--;
     }
-    static constexpr size_t kQ = profiler::kSpscRecBytes / 8;                                 // qwords per record
-    uint64_t zs(size_t k) const { return zbuf[kQ * k]; }                                      // zone k: start, duration
-    uint32_t zprog(size_t k) const { return static_cast<uint32_t>(zbuf[kQ * k + 2] >> 32); }  // zone k: runtime id
-    uint64_t zd(size_t k) const { return zbuf[kQ * k + 1]; }
-    uint64_t ev(size_t k) const { return ebuf[kQ * k]; }  // event k: timestamp
-    uint64_t dt(size_t k) const { return dbuf[kQ * k]; }  // the first data record's timestamp (k = 0 only)
-    uint64_t pl(size_t k) const { return dbuf[kQ + k]; }  // the first data record's value k
+    // Every feed so far is delivered: the next one starts over in the buffers.
+    void new_batch() {
+        while (parked != 0) {
+            deliver_oldest();
+        }
+        zones = events = data_records = value_count = 0;
+        first_data = nullptr;
+    }
+    const api::Zone& zone(size_t k) const { return reinterpret_cast<const api::Zone*>(zbuf.data())[k]; }
+    uint64_t zs(size_t k) const { return zone(k).start_device_cycles(); }
+    uint32_t zprog(size_t k) const { return zone(k).runtime_id(); }
+    uint64_t zd(size_t k) const { return zone(k).end_device_cycles() - zone(k).start_device_cycles(); }
+    uint64_t ev(size_t k) const { return reinterpret_cast<const api::Event*>(ebuf.data())[k].device_cycles(); }
+    // Built once, as the service does at delivery: a later feed may still repair the decoder's bytes before then.
+    const api::TimestampedData& data() {
+        if (first_data == nullptr) {
+            streaming_profiler::construct_timestamped_data(reinterpret_cast<uint8_t*>(dbuf.data()), 0);
+            first_data = std::launder(reinterpret_cast<const api::TimestampedData*>(dbuf.data()));
+        }
+        return *first_data;
+    }
+    uint64_t dt() { return data().device_cycles(); }
+    uint64_t pl(size_t k) { return data().payload()[k]; }
 };
 
 int main() {
@@ -134,7 +171,7 @@ int main() {
     {
         Harness h;
         h.feed({sticky(1), word(PP_EVENT), kNear, word(PP_EVENT), 4});
-        check(h.dec.stats.epoch_fixes == 1 && h.ev(0) == M - 16 && h.ev(1) == M + 4, "torn EVENT, EVENT witness");
+        check(h.ev(0) == M - 16 && h.ev(1) == M + 4, "torn EVENT, EVENT witness");
     }
     {
         Harness h;
@@ -150,8 +187,19 @@ int main() {
              word(PP_ZONE_ATOMIC),
              4,
              2});
-        check(h.dec.stats.epoch_fixes == 1 && h.dt(0) == M - 16, "torn DATA, zone witness");
+        check(h.dt() == M - 16, "torn DATA, zone witness");
         check(h.pl(0) == (0x11ull << 32 | 0x22) && h.pl(1) == (0x33ull << 32 | 0x44), "payload untouched");
+    }
+    {
+        Harness h;
+        h.feed({sticky(1), word(PP_DATA), 4, 10u << PP_DATA_SIZE_SHIFT, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10});
+        const api::TimestampedData kept = h.data();
+        std::ranges::fill(h.dbuf, 0);
+        std::ranges::fill(h.vbuf, 0);
+        check(
+            kept.device_cycles() == M + 4 && kept.payload().size() == 5 && kept.payload()[0] == (1ull << 32 | 2) &&
+                kept.payload()[4] == (9ull << 32 | 10),
+            "a copy keeps its values past the batch");
     }
     {
         Harness h;
@@ -166,40 +214,40 @@ int main() {
              2u << PP_DATA_SIZE_SHIFT,
              0x11,
              0x22});
-        check(h.dec.stats.epoch_fixes == 1 && h.zs(0) == M - 24 && h.zd(0) == 8, "torn zone, DATA witness");
+        check(h.zs(0) == M - 24 && h.zd(0) == 8, "torn zone, DATA witness");
     }
     {
         Harness h;
         h.feed({sticky(1), word(PP_EVENT), 100, word(PP_EVENT), 200});
-        check(h.dec.stats.epoch_fixes == 0 && h.ev(0) == M + 100, "ordered events untouched");
+        check(h.ev(0) == M + 100, "ordered events untouched");
     }
     {
         Harness h;
         h.feed({sticky(1), word(PP_EVENT), 0x10000000u, word(PP_EVENT), 4});
-        check(h.dec.stats.epoch_fixes == 1 && h.ev(0) == 0x10000000u, "regression far from the wrap still repairs");
+        check(h.ev(0) == 0x10000000u, "regression far from the wrap still repairs");
     }
     {
         Harness h;
         h.feed({sticky(1), word(PP_EVENT), kNear, word(PP_STICKY_PROG, 2), sticky(1), word(PP_EVENT), 4});
-        check(h.dec.stats.epoch_fixes == 1 && h.ev(0) == M - 16, "metadata between point and witness");
+        check(h.ev(0) == M - 16, "metadata between point and witness");
     }
     {
         Harness h;
         h.feed({sticky(1), word(PP_EVENT), kNear});
         h.feed({word(PP_ZONE_ATOMIC), 4, 8});
-        check(h.dec.stats.epoch_fixes == 1 && h.ev(0) == M - 16, "witness in a later frame of the same batch");
+        check(h.ev(0) == M - 16, "witness in a later frame of the same batch");
     }
     {
         Harness h;
         h.feed({sticky(3), word(PP_EVENT), kNear});
         const uint64_t dur = M + 100;
         h.feed({word(PP_ZONE_L), 4, 3, uint32_t(dur), uint32_t(dur >> 32)});
-        check(h.dec.stats.epoch_fixes == 1 && h.ev(0) == 3 * M - 16, "a ZONE_L witnesses a torn point");
+        check(h.ev(0) == 3 * M - 16, "a ZONE_L witnesses a torn point");
     }
     {
         Harness h;
         h.feed({sticky(1), word(PP_EVENT), kNear});
-        check(h.dec.stats.epoch_fixes == 0 && h.ev(0) == 2 * M - 16, "uncovered: final point with no witness");
+        check(h.ev(0) == 2 * M - 16, "uncovered: final point with no witness");
     }
     {
         Harness h;
@@ -207,7 +255,7 @@ int main() {
         h.new_batch();
         h.feed({word(PP_ZONE_ATOMIC), 4, 0});
         check(
-            h.dec.stats.epoch_fixes == 0 && h.dec.stats.order_regressions == 1 && h.zs(0) == M + 4,
+            h.order_regressions == 1 && h.zs(0) == M + 4,
             "uncovered: target already delivered counts a regression, touches nothing");
     }
     {
@@ -216,79 +264,74 @@ int main() {
         h.new_batch();
         h.feed({word(PP_ZONE_ATOMIC), 4, 2});
         h.feed({word(PP_ZONE_ATOMIC), 8, 2});
+        check(h.order_regressions == 1 && h.zs(0) == M + 2, "a failed repair does not retarget the next record");
+    }
+    {
+        Harness h;
+        h.feed({word(PP_EVENT), 100});
+        h.feed({sticky(1), word(PP_EVENT), kNear});
+        h.deliver_oldest();
+        h.deliver_oldest();
+        h.feed({word(PP_ZONE_ATOMIC), 4, 0});
         check(
-            h.dec.stats.epoch_fixes == 0 && h.dec.stats.order_regressions == 1 && h.zs(0) == M + 2,
-            "a failed repair does not retarget the next record");
+            h.order_regressions == 0 && h.ev(0) == 100 && h.ev(1) == M - 16,
+            "a repair lands in a batch still parked behind delivered ones");
+    }
+    {
+        Harness h;
+        h.feed({sticky(1), word(PP_EVENT), 100});
+        check(h.newest_ticks == static_cast<int64_t>(M + 100), "a lane's first record counts toward the cover");
+        h.feed({sticky(2), word(PP_EVENT), kNear});
+        check(
+            h.newest_ticks == static_cast<int64_t>(2 * M - 16),
+            "a torn last record holds its batch to the time it would repair to");
     }
     {
         Harness h;
         h.feed({sticky(2), word(PP_ZONE_ATOMIC), 16, 32});
-        check(h.dec.stats.epoch_fixes == 0 && h.zs(0) == 2 * M - 16, "uncovered: torn start with no later record");
+        check(h.zs(0) == 2 * M - 16, "uncovered: torn start with no later record");
     }
     {
         Harness h;
         const uint64_t dur = uint64_t(20) - M;
         h.feed({word(PP_ZONE_L), 4, 1, uint32_t(dur), uint32_t(dur >> 32)});
-        check(
-            h.dec.stats.epoch_fixes == 1 && h.zs(0) == M - 16 && h.zd(0) == 20, "ZONE_L torn start: negative elapsed");
+        check(h.zs(0) == M - 16 && h.zd(0) == 20, "ZONE_L torn start: negative elapsed");
     }
     {
         Harness h;
         const uint64_t dur = uint64_t(0) - 2 * M;
         h.feed({word(PP_ZONE_L), 4, 3, uint32_t(dur), uint32_t(dur >> 32)});
-        check(h.dec.stats.epoch_fixes == 0 && h.zd(0) == dur, "an elapsed time below -2^32 is not a tear");
+        check(h.zd(0) == dur, "an elapsed time below -2^32 is not a tear");
     }
     {
         Harness h;
         const uint64_t dur = uint64_t(0) - 20;
         h.feed({word(PP_ZONE_L), 4, 0, uint32_t(dur), uint32_t(dur >> 32)});
-        check(
-            h.dec.stats.epoch_fixes == 0 && h.dec.stats.order_regressions == 1,
-            "a repair cannot place a start before zero");
+        check(h.order_regressions == 1 && h.zs(0) == 24 && h.zd(0) == dur, "a repair cannot place a start before zero");
     }
     {
         Harness h;
         const uint64_t dur = M + 100;
         h.feed({sticky(3), word(PP_ZONE_L), kNear, 3, uint32_t(dur), uint32_t(dur >> 32), word(PP_ZONE_ATOMIC), 4, 8});
         check(
-            h.dec.stats.epoch_fixes == 1 && h.zd(0) == 100 && h.zs(0) == 3 * M - 116,
-            "ZONE_L torn end: the inflated duration moves, the start stays");
-    }
-    {
-        Harness h;
-        const uint64_t dur = M + 100;
-        h.feed(
-            {sticky(3),
-             word(PP_ZONE_ATOMIC, profiler::kSpscStallZoneId),
-             kNear,
-             8,
-             word(PP_ZONE_L),
-             kNear - 32,
-             3,
-             uint32_t(dur),
-             uint32_t(dur >> 32)});
-        check(
-            h.dec.stats.epoch_fixes == 0 && h.dec.stats.order_regressions == 1 && h.zs(0) == 4 * M - 24,
-            "a ZONE_L behind a later stall zone is ordering, not a tear");
+            h.zd(0) == 100 && h.zs(0) == 3 * M - 116, "ZONE_L torn end: the inflated duration moves, the start stays");
     }
     {
         Harness h;
         h.feed({sticky(3), word(PP_ZONE_ATOMIC, 1), kNear, 8, word(PP_ZONE_L), kNear + 8, 2, 100, 0});
-        check(
-            h.dec.stats.epoch_fixes == 1 && h.dec.stats.order_regressions == 0 && h.zs(0) == 3 * M - 24,
-            "a ZONE_L behind a torn ordinary zone repairs it");
+        check(h.order_regressions == 0 && h.zs(0) == 3 * M - 24, "a ZONE_L behind a torn ordinary zone repairs it");
     }
     {
         Harness h;
         h.feed({sticky(2), word(PP_ZONE_ATOMIC), kNear, 0xffffffffu, word(PP_ZONE_ATOMIC), 4, 8});
-        check(h.dec.stats.epoch_fixes == 1 && h.zs(0) == M - 15 && h.zd(0) == 0xffffffffu, "saturated stall, torn end");
+        check(h.zs(0) == M - 15 && h.zd(0) == 0xffffffffu, "saturated stall, torn end");
     }
     {
         Harness h;
         h.feed({sticky(2), word(PP_ZONE_ATOMIC), 32, 8});
         h.feed({sticky(3), word(PP_EVENT), kNear, word(PP_ZONE_S), (1u << 16) | 1u});
         check(
-            h.dec.stats.epoch_fixes == 0 && h.dec.stats.order_regressions == 1,
+            h.order_regressions == 1 && h.ev(0) == 4 * M - 16 && h.zs(1) == 2 * M + 32 && h.zd(1) == 1,
             "a regression beyond one epoch is not a tear");
     }
     {
@@ -300,7 +343,7 @@ int main() {
             w.push_back(8);
         }
         h.feed(w);
-        check(h.dec.stats.epoch_fixes == 1 && h.zs(7) == 3 * M - 16, "in-block tear across the wrap repairs");
+        check(h.zs(7) == 3 * M - 16, "in-block tear across the wrap repairs");
     }
     std::puts("PASS");
 }
