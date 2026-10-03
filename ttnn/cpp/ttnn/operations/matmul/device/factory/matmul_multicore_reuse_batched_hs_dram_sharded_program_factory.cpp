@@ -59,7 +59,7 @@ using dram_sharded_helpers::get_optimal_dram_bank_to_reader_assignment;
 // For batched matmul: [1, B, M, K] x [1, B, K, N] = [1, B, M, N]
 // Sharded by batch dimension - each worker handles B/num_workers complete matmuls
 static ttnn::device_operation::ProgramArtifacts create_program_batch_sharded_spec(
-    tt::tt_metal::distributed::MeshDevice& device,
+    const tt::tt_metal::distributed::MeshDevice& device,
     const CoreRangeSet& input_all_storage_cores,
     const CoreRangeSet& output_all_storage_cores,
     ComputeHardwareConfig compute_hw,
@@ -700,7 +700,7 @@ MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create_program_artifacts
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    tt::tt_metal::distributed::MeshDevice& device = a.mutable_device();
+    const tt::tt_metal::distributed::MeshDevice& device = a.device();
 
     TT_FATAL(
         a.shard_spec().has_value() && output.shard_spec().has_value(), "Both input A and output must have shard specs");

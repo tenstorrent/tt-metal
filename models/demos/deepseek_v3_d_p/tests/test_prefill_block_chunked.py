@@ -1138,7 +1138,7 @@ def test_kimi_prefill_block_chunked_padded(
 # from the chunked_group_a_v1 indexer-kcache vLLM trace (PREFILL_TRACE_DIR). The PCC here (teacher-forced,
 # expected ~1.0) isolates the per-layer op accuracy; contrast it with the chained transformer's per-layer
 # PCC (which accumulates) to confirm the deep-layer sag is accumulation, not an indexer bug. The indexer_k
-# golden is captured only for the DSA full-indexer layers (glm_5_1: all; glm_5_3: 0-2 + every 4th).
+# golden is captured only for the DSA full-indexer layers (glm_5_3: 0-2 + every 4th).
 
 
 def run_chunked_block_glm_indexer(
@@ -1147,7 +1147,7 @@ def run_chunked_block_glm_indexer(
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
     if not resolve_has_indexer(config):
-        pytest.skip("indexer-K teacher-forced test is DSA-only (glm_5_1 / glm_5_3)")
+        pytest.skip("indexer-K teacher-forced test is DSA-only (glm_5_3)")
     trace_dir = _resolve_trace_dir(variant)
     if not trace_dir.exists():
         pytest.skip(f"golden trace not found: {trace_dir}")
@@ -1278,8 +1278,8 @@ def run_chunked_block_glm_indexer(
         logger.info(f"  chunk {c} done (kv_actual={kv_actual})")
 
     p = blockcyclic_positions(sp, CHUNK, SEQ_CACHE)
-    # Index cache is compact (GLM-5.3 reuse): this full layer wrote its full-indexer rank slot (== layer_idx
-    # for glm_5_1). KVPE is per-layer and the block owns one slot (0).
+    # Index cache is compact (GLM-5.3 reuse): this full layer wrote its full-indexer rank slot.
+    # KVPE is per-layer and the block owns one slot (0).
     dev_idx = unrotate_cache_layer(
         gather_cache_tp0(tt_index_kv_cache, mesh_device)[full_indexer_rank(config, layer_idx)], p, total_len
     )
