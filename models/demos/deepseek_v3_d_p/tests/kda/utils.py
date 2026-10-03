@@ -289,9 +289,15 @@ def make_kimi_k3_test_case(checkpoint_dir: Path, *, sequence: int) -> KimiK3Test
     )
 
 
-def make_synthetic_kimi_k3_test_case(*, sequence: int) -> KimiK3TestCase:
-    """Build deterministic production-dimension Kimi-K3 inputs without a checkpoint."""
+def make_synthetic_kimi_k3_test_case(*, sequence: int, num_heads: int | None = None) -> KimiK3TestCase:
+    """Build deterministic production-dimension Kimi-K3 inputs without a checkpoint.
+
+    ``num_heads`` overrides the global head count, e.g. to give a TP=1 mesh the TP-local head
+    count of a larger tensor-parallel deployment.
+    """
     config = _kda_config_from_kimi_k3_constants()
+    if num_heads is not None:
+        config = replace(config, num_heads=num_heads)
     state_dict = random_weights(config)
     hidden = torch.randn(
         1,
