@@ -5,8 +5,6 @@
 
 from dataclasses import dataclass, field
 
-import torch
-
 import ttnn
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig as Model
 from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import DEFAULT_MAX_SEQ_LEN, DEFAULT_NUM_USERS
@@ -16,6 +14,25 @@ from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PrefillGeometry, v
 SUPPORTED_CACHE_DTYPES = (ttnn.bfloat16, ttnn.bfloat8_b)
 # What tt_metal's bank manager says when a buffer does not fit (tt_metal/impl/allocator/bank_manager.cpp).
 _OOM_MESSAGE = "out of memory"
+# bfloat8_b is block-float: a 32x32 tile carries 1024 mantissa bytes plus one shared exponent per
+# 16 datums, so 1088 bytes per tile rather than 1024.
+_BYTES_PER_ELEMENT = {ttnn.bfloat16: 2.0, ttnn.bfloat8_b: 1.0625}
+# DRAM held back from the cache so a chunk can still run in it: activations, the vocabulary logits,
+# and slack for the allocator to place two multi-GiB buffers in banks the weights have fragmented.
+# A chunk is a fixed 1024 tokens whatever the capacity, so this is a constant rather than a function
+# of max_seq_len. Measured on a 4x8 Blackhole galaxy by squeezing free DRAM with ballast until a
+# chunk stopped completing: chunks still ran with 0.45 GiB/chip free, the smallest figure probed.
+# The margin over that is for placement, which is what actually fails first -- see
+# docs/kv-slot-capacity.md.
+DEFAULT_RUN_RESERVE_BYTES = 1024**3
+# Slots a migrating deployment needs per live sequence. The shared prefill migration driver sends
+# slot ``src`` to ``src + dst_slot_offset`` and defaults that offset to the producer's live-user
+# count (models/demos/common/prefill/runners/migration_driver.py), so a loopback migration wants a
+# table twice the live set: [0, n) hold sequences and [n, 2n) receive them. MiniMax M3 and GPT-OSS
+# both encode this as a 4-slot runner table against a 2-user producer. It matters here because a count taken from all
+# of DRAM puts every destination out of range, and the driver's advice at that point -- "Grow
+# PREFILL_NUM_USERS" -- is the one thing such a deployment cannot do.
+MIGRATION_SLOTS_PER_USER = 2
 
 
 @dataclass
@@ -91,6 +108,60 @@ def _cache_memory_config(mesh_device):
     )
 
 
+def slot_bytes_per_chip(max_seq_len=DEFAULT_MAX_SEQ_LEN, cache_dtype=ttnn.bfloat8_b):
+    """DRAM one slot costs on every chip, counting both caches.
+
+    The caches are replicated, not sharded, across the mesh, so every chip pays the full shape and
+    this is the per-chip cost rather than a mesh total. It reduces to 2176 bytes per token of
+    capacity at bfloat8_b: 32 layers x max_seq_len/4 local rows x 128 head_dim x 2 caches.
+    """
+    if cache_dtype not in SUPPORTED_CACHE_DTYPES:
+        raise ValueError(f"Llama KV cache dtype must be bfloat16 or bfloat8_b, got {cache_dtype}")
+    elements = Model.NUM_LAYERS * PrefillGeometry(max_seq_len).local_cache_sequence * Model.HEAD_DIM
+    return int(2 * elements * _BYTES_PER_ELEMENT[cache_dtype])
+
+
+def max_user_slots(
+    mesh_device,
+    *,
+    max_seq_len=DEFAULT_MAX_SEQ_LEN,
+    cache_dtype=ttnn.bfloat8_b,
+    reserve_bytes=DEFAULT_RUN_RESERVE_BYTES,
+    slots_per_user=1,
+):
+    """How many slots fit in the DRAM that is free *right now*, with room left to run.
+
+    Call this after the weights are resident: the answer is a measurement of the current allocator
+    state, not a property of the hardware, and weights are the largest thing competing for it.
+
+    Two corrections are applied to the naive division. Free space is capped by the largest
+    contiguous block per bank, because each cache is a single buffer that has to land in one run per
+    bank and weights leave the banks slightly fragmented; and ``reserve_bytes`` is withheld for the
+    activations a chunk allocates after the cache exists, since a cache that fits but leaves no room
+    to run is not useful.
+
+    ``slots_per_user`` rounds the answer down to a multiple of itself, so the caller gets a count it
+    can divide evenly. Pass :data:`MIGRATION_SLOTS_PER_USER` for a deployment that migrates: the live
+    set is then half the returned slots and the other half are their destinations. That costs exactly
+    what doubling the context would -- two slots either way -- so the migratable count at a capacity
+    is the plain count at twice it.
+    """
+    if type(slots_per_user) is not int or slots_per_user < 1:
+        raise ValueError(f"slots_per_user must be a positive int, got {slots_per_user!r}")
+    # A float here would divide silently and hand back a count nothing rejects; a negative one would
+    # hand back more slots than there is DRAM, which only shows up as an allocation failure later.
+    if type(reserve_bytes) is not int or reserve_bytes < 0:
+        raise ValueError(f"reserve_bytes must be a nonnegative int, got {reserve_bytes!r}")
+    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+    banks = mesh_device.dram_grid_size().x
+    usable_per_bank = min(view.total_bytes_free_per_bank, view.largest_contiguous_bytes_free_per_bank)
+    budget = usable_per_bank * banks - reserve_bytes
+    if budget <= 0:
+        return 0
+    slots = int(budget // slot_bytes_per_chip(max_seq_len, cache_dtype))
+    return slots - slots % slots_per_user
+
+
 def allocate_kv_cache(
     mesh_device,
     mesh_config,
@@ -99,13 +170,46 @@ def allocate_kv_cache(
     num_layers=Model.NUM_LAYERS,
     max_seq_len=DEFAULT_MAX_SEQ_LEN,
     cache_dtype=ttnn.bfloat8_b,
+    reserve_bytes=DEFAULT_RUN_RESERVE_BYTES,
+    slots_per_user=1,
 ):
     """Allocate zeroed K/V caches in the packed, block-cyclic SP4/TP8 layout.
 
     ``num_users`` is how many sequences the caches can hold at once. Each slot is an independent
     ``num_layers``-plane K/V region addressed by ``slot_idx``, so the footprint is linear in the slot
-    count: one slot of a 128K-token context is ~285 MB per chip per cache at bfloat8_b.
+    count: one slot of a 128K-token context is ~272 MiB per chip across both caches at bfloat8_b.
+
+    Pass ``num_users="max"`` to take everything DRAM allows at this capacity, which is what a serving
+    front end wants when it would rather admit more sequences than choose a number by hand. The count
+    is then derived from free DRAM at call time via :func:`max_user_slots`, so it must be called with
+    the weights already loaded, ``reserve_bytes`` is what stays free for the chunk to run in, and
+    ``slots_per_user`` is how many slots each sequence needs -- :data:`MIGRATION_SLOTS_PER_USER` if
+    its KV has to have somewhere to migrate to.
     """
+    if slots_per_user != 1 and num_users != "max":
+        raise ValueError(f'slots_per_user only applies to num_users="max", got num_users={num_users!r}')
+    if num_users == "max":
+        num_users = max_user_slots(
+            mesh_device,
+            max_seq_len=max_seq_len,
+            cache_dtype=cache_dtype,
+            reserve_bytes=reserve_bytes,
+            slots_per_user=slots_per_user,
+        )
+        if num_users < 1:
+            # Report the figure the count was actually derived from. Quoting the free total instead
+            # would overstate it in exactly the contiguity-limited case docs/kv-slot-capacity.md
+            # describes, telling someone more DRAM is usable than the allocator can place into.
+            view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+            usable_per_bank = min(view.total_bytes_free_per_bank, view.largest_contiguous_bytes_free_per_bank)
+            free = usable_per_bank * mesh_device.dram_grid_size().x
+            want = "no KV slot fits" if slots_per_user == 1 else f"fewer than {slots_per_user} KV slots fit"
+            raise RuntimeError(
+                f"{want}: a slot at max_seq_len={max_seq_len} costs "
+                f"{slot_bytes_per_chip(max_seq_len, cache_dtype) / 2**20:.1f} MiB per chip, and only "
+                f"{free / 2**30:.2f} GiB per chip is placeable before the {reserve_bytes / 2**30:.2f} GiB "
+                f"run reserve. Lower max_seq_len or free device memory."
+            )
     _validate_target(
         mesh_device,
         mesh_config,
@@ -118,14 +222,18 @@ def allocate_kv_cache(
     geometry = PrefillGeometry(max_seq_len, num_users)
 
     def allocate_one():
-        return ttnn.from_torch(
-            torch.zeros(geometry.cache_shape),
-            device=mesh_device,
-            dtype=cache_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=memory_config,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
+        # Allocate on the device, then zero it in place. ttnn.zeros would stage the whole cache on
+        # the host first: for bfloat8_b it fills a std::vector<float> of shape.volume() and converts
+        # (ttnn/cpp/ttnn/operations/creation/creation.cpp), so the host pays 4 B/element for what the
+        # device holds at 1.0625 -- 52.5 GiB to place a 14.0 GiB buffer at 1,681 slots of 8K, and it
+        # does not shrink as capacity rises, because slots x capacity is what DRAM fixes. The host,
+        # not DRAM, would cap every auto-sized deployment. ttnn.empty costs no host bytes and the
+        # fill writes through the existing buffer, so nothing is staged and nothing is copied.
+        cache = ttnn.empty(geometry.cache_shape, cache_dtype, ttnn.TILE_LAYOUT, mesh_device, memory_config)
+        # ttnn.empty is uninitialised and callers are promised zeros: tests read a fresh cache, and
+        # attention admits any row below the populated end, so leftover bytes would read as KV.
+        ttnn.fill(cache, 0.0, output_tensor=cache)
+        return cache
 
     allocated = []
     try:
