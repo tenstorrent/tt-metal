@@ -61,4 +61,9 @@ for L in ${LAYERS:-s2_res s3_res s4_res s1_up}; do
   [ $rc = 9 ] && done_ $L 9
   [ $rc = 0 ] && touch $V/results/${L}_done
 done
+# AB=1: one decode A/B job (runab100.sh) after the sweeps.
+if [ -n "$AB" ]; then
+  run_job ab 1300 bash $S/tmp/blx03/t100/runab100.sh; rc=$?
+  log "ab rc=$rc"; done_ ab $rc
+fi
 done_ all 0
