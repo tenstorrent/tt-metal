@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <array>
 #include <type_traits>
 #include <vector>
 
@@ -86,7 +87,33 @@ std::optional<NodeId> add_backward_node(GradFunction&& grad_function, const Tens
 
     // Get links and add node normally
     auto links = detail::get_links(std::forward<Tensors>(tensors)...);
-    return ctx().add_backward_node(std::move(grad_function), links);
+    const std::array outputs{output};
+    return ctx().add_backward_node(std::move(grad_function), links, outputs);
+}
+
+/**
+ * @brief Add one backward node whose closure consumes a group of output gradients.
+ *
+ * Multi-output operations attach the real closure to one primary output and use
+ * sync-only nodes for its siblings. Recording the complete group on the primary
+ * node lets retained traversals clear even siblings that are not graph-reachable
+ * from the output used as the next backward root.
+ */
+template <typename... Tensors>
+std::optional<NodeId> add_backward_node_for_outputs(
+    GradFunction&& grad_function, const std::vector<TensorPtr>& outputs, Tensors&&... tensors) {
+    static_assert(core::are_same_type<Tensors...>(), "All nodes must have the same type!");
+
+    bool needs_grad = any_requires_grad(std::forward<Tensors>(tensors)...);
+    for (const auto& output : outputs) {
+        output->set_requires_grad(needs_grad);
+    }
+    if (!needs_grad) {
+        return std::nullopt;
+    }
+
+    auto links = detail::get_links(std::forward<Tensors>(tensors)...);
+    return ctx().add_backward_node(std::move(grad_function), links, outputs);
 }
 
 /**
@@ -121,7 +148,8 @@ inline std::optional<NodeId> add_backward_node(
             links.push_back(node.value());
         }
     }
-    return ctx().add_backward_node(std::move(grad_function), links);
+    const std::array outputs{output};
+    return ctx().add_backward_node(std::move(grad_function), links, outputs);
 }
 
 /**
@@ -142,7 +170,8 @@ std::optional<NodeId> add_backward_node_always(
 
     // Get links and add node normally
     auto links = detail::get_links(std::forward<Tensors>(tensors)...);
-    return ctx().add_backward_node(std::move(grad_function), links);
+    const std::array outputs{output};
+    return ctx().add_backward_node(std::move(grad_function), links, outputs);
 }
 
 }  // namespace ttml::autograd

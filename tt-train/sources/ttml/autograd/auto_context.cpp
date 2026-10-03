@@ -47,11 +47,12 @@ AutoContext& AutoContext::get_instance() {
     static ttsl::Indestructible<AutoContext> instance{};
     return instance.get();
 }
-std::optional<NodeId> AutoContext::add_backward_node(GradFunction&& grad_function, std::span<NodeId> links) {
+std::optional<NodeId> AutoContext::add_backward_node(
+    GradFunction&& grad_function, std::span<NodeId> links, std::span<const std::shared_ptr<Tensor>> outputs) {
     if (m_grads_mode == GradMode::DISABLED) {
         return std::nullopt;
     }
-    return m_graph.add_node(std::move(grad_function), links);
+    return m_graph.add_node(std::move(grad_function), links, outputs);
 }
 void AutoContext::set_gradient_mode(GradMode mode) {
     m_grads_mode = mode;
