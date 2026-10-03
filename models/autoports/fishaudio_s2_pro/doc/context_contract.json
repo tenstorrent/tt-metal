@@ -1,0 +1,3 @@
+{"model": "fishaudio/s2-pro", "hf_advertised_context": 32768, "current_supported_context": 32768,
+ "served_default_max_seq_len": 4096, "units": "slow-tower tokens (1 token = 1 audio frame = 46.4 ms, plus prompt text)",
+ "notes": "KV cache bf8 at 32768 = 2.36 GB; weights ~5.3 GB / TP. Served default is a per-request bound (max_new_tokens), not a capacity limit."}
