@@ -128,6 +128,16 @@ class Attention(LightweightModule):
         self.li_qkv_decode_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_QKV_DECODE, configuration=configuration
         )
+        # QKV decode matmul: bf16 dest accumulation (fp32_dest_acc_en off) doubles dest capacity
+        # and halves pack traffic for the DRAM-sharded decode matmul; K-accumulation stays in L1 via packer_l1_acc.
+        if self.li_qkv_decode_compute_kernel_cfg is not None:
+            _qkv_cfg = self.li_qkv_decode_compute_kernel_cfg
+            self.li_qkv_decode_compute_kernel_cfg = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=_qkv_cfg.math_fidelity,
+                math_approx_mode=_qkv_cfg.math_approx_mode,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=_qkv_cfg.packer_l1_acc,
+            )
         self.sdpa_decode_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.SDPA_DECODE, configuration=configuration
         )
@@ -451,11 +461,11 @@ class Attention(LightweightModule):
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                cache_file_name=(
-                    f"{weight_cache_path}/kvcache_{k_or_v.shape}"
-                    if weight_cache_path and not configuration.dummy_weights
-                    else None
-                ),
+                # Not cached: loading this tensor from a cache file onto the device
+                # hangs on this build (load_tensor_flatbuffer with a device, a
+                # 1024x8x32x256 BFLOAT8_B KV cache), while building the zeros on the
+                # host and moving them takes well under a second.
+                cache_file_name=None,
             )
             for k_or_v in [cache_k, cache_v]
         ]
@@ -989,7 +999,7 @@ class Attention(LightweightModule):
                 core_grid=ttnn.CoreGrid(y=4, x=8) if self.TG else None,
                 program_config=self.args.get_attn_wo_program_config(Mode.DECODE, 1, self.prefetcher),
                 memory_config=self.args.get_attn_wo_output_mem_config(Mode.DECODE, self.prefetcher),
-                dtype=ttnn.bfloat8_b if self.TG else None,
+                dtype=ttnn.bfloat8_b,
                 compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
                 global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
                 sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
