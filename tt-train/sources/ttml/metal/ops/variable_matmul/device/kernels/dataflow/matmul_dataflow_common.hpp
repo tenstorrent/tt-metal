@@ -298,9 +298,9 @@ void write_block_sync_granular(
                 out_read_ptr += tile_size_bytes;
             }
         }
+        noc.async_writes_flushed();
         cb_out.pop_front(N_block_tiles);
     }
-    noc.async_writes_flushed();
 }
 
 /**
