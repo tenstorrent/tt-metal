@@ -2323,9 +2323,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 # rank-2; ttnn.sampling requires a rank-4 preallocated output),
                 # so those models opt out and sampling allocates its own output.
                 tt_out_tok = self._decode_token_feedback_buffer(self.model[i], device_inputs[i])
-                # skip_precompile=True in both cases: either _prepare_decode_trace_text pre-compiled the
-                # sampling pipeline (before any trace was live), or the caller passed skip_precompile and
-                # is asserting the program cache is already warm for this variant.
+                # Do not run capture_trace's eager compile pass here. Sampling programs were compiled
+                # before any trace became live, either by _prepare_decode_trace_text or by the caller.
+                # If warmup missed this variant, let capture fail on the program-cache miss. A late eager
+                # compile could instead leave persistent program-cache buffers exposed to an older trace.
                 sampling_module.capture_trace(logits=tt_out_trace[i], tt_out_tok=tt_out_tok, skip_precompile=True)
         logger.info("Done Capturing Decode Trace")
 

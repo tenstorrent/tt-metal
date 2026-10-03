@@ -104,6 +104,10 @@
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886
     pytest --timeout 600 models/common/tests/test_tt_sampling.py
+    # Run the multi-trace regression in a fresh process with allocation tracking enabled. Keep
+    # program-cache allocations visible so a missed precompile fails the replay.
+    TT_METAL_TRACE_ALLOC_TRACKING=1 pytest --timeout 600 models/common/tests/test_tt_sampling.py \
+      -k "test_trace_reuses_greedy_and_regular_sampling_slots_with_tracker"
     # Complements the above: SeedManager slot/salt state machine, params broadcast/scatter,
     # host-level trace bookkeeping. -k drops the log-probs tests, the only ones needing >1 device.
     pytest --timeout 600 models/common/tests/test_sampling.py -k "not log_probs and not logprobs"
