@@ -89,7 +89,10 @@ class DFlashServedController:
         self._closed = False
         self.rounds: list[DFlashServingRound] = []
         # TT_LAGUNA_DFLASH_STATS=1 prints one line per round (draft/verify wall time, accepted drafts).
-        self._stats = os.environ.get("TT_LAGUNA_DFLASH_STATS") == "1"
+        # TT_LAGUNA_DFLASH_STATS=2 also waits for the device at each stage boundary (diagnostic only; slower) and
+        # prints the time spent finishing work queued before the round and the time of the context update.
+        self._stats = os.environ.get("TT_LAGUNA_DFLASH_STATS") in ("1", "2")
+        self._stats_sync = os.environ.get("TT_LAGUNA_DFLASH_STATS") == "2"
 
     def _log_round(self, served: DFlashServingRound) -> None:
         if self._stats:
@@ -305,6 +308,14 @@ class DFlashServedController:
         context_end = self._context_end()
         if context_end + 1 != position:
             raise RuntimeError(f"DFlash auxiliary context ends at {context_end}, but known bonus is at {position}")
+        pending_ms = update_ms = 0.0
+        if self._stats_sync:
+            import ttnn
+
+            sync_start = time.perf_counter()
+            ttnn.synchronize_device(self.core.mesh_device)
+            pending_ms = (time.perf_counter() - sync_start) * 1000.0
+            entries_before = self.core.mesh_device.num_program_cache_entries()
         draft_start = time.perf_counter()
         proposal = self.core.proposal_round(
             self.cache,
@@ -317,6 +328,8 @@ class DFlashServedController:
         if len(drafts) != expected_drafts:
             raise ValueError(f"DFlash drafter returned {len(drafts)} tokens, expected {expected_drafts}")
         verify_tokens = [known_bonus, *drafts]
+        if self._stats_sync:
+            entries_after_draft = self.core.mesh_device.num_program_cache_entries()
         verify_start = time.perf_counter()
         target_greedy, verify_capture = self._verify_contiguous(
             verify_tokens,
@@ -330,8 +343,22 @@ class DFlashServedController:
         # Commit auxiliary states only for rows that are now authoritative:
         # known bonus + accepted drafts.  The trailing target bonus has not been
         # executed yet and becomes the known bonus of the next round.
+        update_start = time.perf_counter()
         committed_capture = self.core.capture_prefix(verify_capture, 1 + accepted)
         self.cache.update_target_capture(committed_capture)
+        if self._stats_sync:
+            import ttnn
+
+            ttnn.synchronize_device(self.core.mesh_device)
+            update_ms = (time.perf_counter() - update_start) * 1000.0
+            entries_after = self.core.mesh_device.num_program_cache_entries()
+            print(
+                f"[laguna dflash] sync position={position} pending_ms={pending_ms:.2f} draft_ms={draft_ms:.2f} "
+                f"verify_ms={verify_ms:.2f} update_ms={update_ms:.2f} accepted={accepted} "
+                f"new_programs_draft={entries_after_draft - entries_before} "
+                f"new_programs_verify_update={entries_after - entries_after_draft} programs={entries_after}",
+                flush=True,
+            )
         self._pending = list(committed)
         self.rounds.append(
             DFlashServingRound(

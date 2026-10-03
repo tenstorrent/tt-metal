@@ -2443,6 +2443,39 @@ class LagunaForCausalLM:
             )
             ttnn.deallocate(core.combine_aux_hidden_states(hidden))
             ttnn.deallocate(hidden)
+        # Steady-state context updates: once the window holds max_context_rows, each round appends the
+        # 1..16 committed rows and drops as many old ones; those programs depend only on the row count.
+        # Build all of them here (no trace resident yet) instead of mid-request (~60 ms per new count).
+        def _aux(rows):
+            return ttnn.from_torch(
+                torch.zeros((1, rows, width), dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=_replicate(self.mesh_device),
+            )
+
+        full = _aux(max_rows)
+        verify_rows = _aux(query_rows)
+        cache.begin_request("laguna-dflash-warmup-update")
+        try:
+            cache.update_target_capture(
+                DFlashTargetAuxCapture(hidden_states=full, start_position=0, row_count=max_rows), replace=True
+            )
+            for rows in range(1, query_rows + 1):
+                start, held = cache.context_bounds() if cache.fixed_combined else (
+                    cache.target_capture().start_position,
+                    cache.target_capture().row_count,
+                )
+                verify = DFlashTargetAuxCapture(
+                    hidden_states=verify_rows, start_position=int(start) + int(held), row_count=query_rows
+                )
+                cache.update_target_capture(core.capture_prefix(verify, rows))
+        finally:
+            cache.end_request("laguna-dflash-warmup-update")
+        ttnn.deallocate(full)
+        ttnn.deallocate(verify_rows)
         pt_row = torch.zeros((1, int(num_blocks)), dtype=torch.int32)
         hybrid_rows = [pt_row.clone() for _ in kv_cache] if self._kv_cache_is_hybrid(kv_cache) else None
         self.verify_greedy_decode_with_dflash_aux(

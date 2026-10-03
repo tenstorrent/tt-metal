@@ -348,10 +348,6 @@ def test_one_round_driver_resets_context_and_carries_only_query(monkeypatch, exp
             self.index = index
             self.context_seen = []
 
-        def _rope_prefill(self, start, seq, sin=False):
-            assert (start, seq) == (100, 32)
-            return ("sin" if sin else "cos", start, seq)
-
         def prefill_forward(self, value, kv, page_table, **kwargs):
             self.context_seen.append(value[:, :context_rows].clone())
             result = value.clone()
@@ -364,6 +360,12 @@ def test_one_round_driver_resets_context_and_carries_only_query(monkeypatch, exp
     core.layers = {index: FakeLayer(index) for index in range(_LAYERS)}
     core.mesh_device = mesh
     core.max_seq_len = 1024
+
+    def rope_window(start, rows):
+        assert (start, rows) == (100, 32)
+        return ("cos", start, rows), ("sin", start, rows)
+
+    core.rope_window = rope_window
     fused_context = flattened.reshape(1, context_rows, _NUM_AUX, h).mean(dim=2)
     core.combine_aux_hidden_states = lambda value: fused_context.clone()
     core.apply_final_norm = lambda value: value * 2
@@ -423,6 +425,78 @@ def test_one_round_driver_resets_context_and_carries_only_query(monkeypatch, exp
     accumulated = sum(range(1, _LAYERS + 1))
     expected = (result.block.input_ids[1:16].to(torch.float32).unsqueeze(-1).expand(-1, h) / 100 + accumulated) * 2
     torch.testing.assert_close(result.sampled_hidden_states[0], expected)
+
+
+def test_rope_window_matches_full_table_slice(monkeypatch):
+    """The per-round host-built RoPE window is bit-identical to slicing the full-horizon table (the device
+    slice it replaces built a new program for every new start offset)."""
+
+    config = _published_config()
+    core = object.__new__(DFlashTTCore)
+    core.config = config
+    core.mesh_device = object()
+    core.max_seq_len = config.max_position_embeddings
+    half = config.head_dim // 2
+    core._rope_inv_freq = 1.0 / (config.rope_theta ** (torch.arange(half, dtype=torch.float32) * 2.0 / config.head_dim))
+    monkeypatch.setattr(ttnn, "from_torch", lambda value, **kwargs: value)
+    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda value: object())
+    for start, rows in ((0, 32), (65, 544), (5460, 544), (config.max_position_embeddings - 544, 544)):
+        cos, sin = core.rope_window(start, rows)
+        table_cos, table_sin = build_dflash_rope_tables(config, start + rows, dtype=torch.bfloat16)
+        assert torch.equal(cos.reshape(rows, -1), table_cos[start:])
+        assert torch.equal(sin.reshape(rows, -1), table_sin[start:])
+
+
+def test_fixed_context_append_matches_rolling_window(monkeypatch):
+    """Constant-shape append (0/1 shift and placement matmuls) keeps exactly the last 511 committed rows at the
+    front of the fixed buffer, zeros after them, and the right start position, across the window boundary."""
+
+    config = _published_config()
+    h = config.hidden_size
+    core = object.__new__(DFlashTTCore)
+    core.config = config
+    core.mesh_device = object()
+    core.combine_aux_hidden_states = lambda value: value[..., :h].clone()
+    core.exact_matmul = lambda a, b: torch.matmul(a.float(), b.float()).to(torch.bfloat16)
+    monkeypatch.setattr(ttnn, "from_torch", lambda value, **kwargs: value)
+    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda value: object())
+    monkeypatch.setattr(
+        ttnn, "pad", lambda tensor, padding, value=0.0: torch.nn.functional.pad(tensor, (0, 0, 0, padding[1][1]))
+    )
+    monkeypatch.setattr(ttnn, "add", lambda a, b: a + b)
+    monkeypatch.setattr(ttnn, "copy", lambda src, dst: dst.copy_(src))
+    monkeypatch.setattr(ttnn, "deallocate", lambda value: None)
+    monkeypatch.setattr(ttnn, "slice", lambda value, starts, ends: value[starts[0] : ends[0], starts[1] : ends[1], starts[2] : ends[2]])
+
+    cache = object.__new__(DFlashTTProposalCache)
+    cache.core = core
+    cache.max_context_rows = 511
+    cache.capacity = 544
+    cache._closed = False
+    cache._request_id = "r"
+    cache._fixed = torch.zeros((1, 544, h), dtype=torch.bfloat16)
+    cache._context_start = None
+    cache._context_rows = 0
+
+    def rows_of(start, count):
+        # Row for absolute position p carries value p + 1 in every column (exact in bf16 up to 256; use p % 251 + 1).
+        values = torch.tensor([(p % 251) + 1 for p in range(start, start + count)], dtype=torch.float32)
+        return values.reshape(1, count, 1).expand(1, count, _NUM_AUX * h).to(torch.bfloat16).contiguous()
+
+    prompt = 60
+    cache._fixed[:, :prompt] = rows_of(0, prompt)[..., :h]  # the prefill window, as the replace path leaves it
+    cache._context_start, cache._context_rows = 0, prompt
+    position = prompt
+    generator = torch.Generator().manual_seed(0)
+    while position < 900:
+        count = int(torch.randint(1, 17, (1,), generator=generator))
+        cache._update_fixed(DFlashTargetAuxCapture(rows_of(position, count), start_position=position, row_count=count), False)
+        position += count
+        start, held = cache.context_bounds()
+        assert held == min(position, 511) and start == position - held
+        expected = rows_of(start, held)[..., :h]
+        torch.testing.assert_close(cache._fixed[:, :held], expected, rtol=0, atol=0)
+        assert not bool(cache._fixed[:, held:].any())
 
 
 def test_proposal_cache_lifetime_and_contiguous_511_row_retention(monkeypatch, expect_error):

@@ -396,7 +396,9 @@ class DFlashTTProposalCache:
             return
         if self._request_id is not None:
             raise RuntimeError("enable_fixed_context must run before any DFlash request")
-        rows = math.ceil(self.max_context_rows / 32) * 32
+        # Full proposal capacity (context + query, tile-aligned): rows after the context stay zero, so a draft
+        # round can read any padded_total-row prefix (see DFlashTTCore._proposal_round_fixed).
+        rows = self.capacity
         self._fixed = ttnn.from_torch(
             torch.zeros((1, rows, self.core.config.hidden_size), dtype=torch.bfloat16),
             dtype=ttnn.bfloat16,
@@ -408,6 +410,16 @@ class DFlashTTProposalCache:
 
     def _fixed_rows(self, rows: int):
         return ttnn.slice(self._fixed, [0, 0, 0], [1, int(rows), self.core.config.hidden_size])
+
+    def buffer_rows(self, rows: int):
+        """First ``rows`` rows of the fixed buffer (context, then zeros); fixed mode only."""
+
+        if not self.fixed_combined:
+            raise RuntimeError("buffer_rows requires enable_fixed_context")
+        rows = int(rows)
+        if rows == int(self._fixed.shape[1]):
+            return self._fixed
+        return self._fixed_rows(rows)
 
     def context_bounds(self) -> tuple[int, int]:
         """(start position, row count) of the retained target context."""
@@ -426,7 +438,62 @@ class DFlashTTProposalCache:
         _, rows = self.context_bounds()
         return self._fixed_rows(rows)
 
+    def _append_fixed(self, capture: DFlashTargetAuxCapture) -> None:
+        """Append 1..32 committed rows with device programs whose shapes do not depend on the context length.
+
+        The buffer keeps rows ``[0, rows)`` and zeros after them. With ``drop`` = rows that fall out of the
+        window, the new buffer is ``S @ buffer + P @ new`` where ``S`` moves rows ``drop..rows-1`` to ``0..`` and
+        ``P`` places the new rows right after them; both are 0/1 matrices built on the host. Concatenating and
+        slicing at the current row count instead compiled new programs in every round while the context grew."""
+
+        core = self.core
+        count = int(capture.row_count)
+        expected_start = int(self._context_start) + int(self._context_rows)
+        if int(capture.start_position) != expected_start:
+            raise ValueError(
+                f"DFlash target capture is not adjacent: expected start {expected_start}, got {capture.start_position}"
+            )
+        total_rows = int(self._fixed.shape[1])
+        new_rows = core.combine_aux_hidden_states(capture.hidden_states)
+        temporaries = [new_rows]
+        if count < 32:
+            new_rows = ttnn.pad(new_rows, [(0, 0), (0, 32 - count), (0, 0)], value=0.0)
+            temporaries.append(new_rows)
+        drop = max(0, int(self._context_rows) + count - int(self.max_context_rows))
+        kept = int(self._context_rows) - drop
+        if drop:
+            shift = torch.zeros((total_rows, total_rows), dtype=torch.bfloat16)
+            index = torch.arange(kept)
+            shift[index, index + drop] = 1.0
+            shift_tt = ttnn.from_torch(
+                shift.unsqueeze(0),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=core.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(core.mesh_device),
+            )
+            base = core.exact_matmul(shift_tt, self._fixed)
+            temporaries += [shift_tt, base]
+        else:
+            base = self._fixed
+        place = core.placement(total_rows, kept, count)
+        placed = core.exact_matmul(place, new_rows)
+        updated = ttnn.add(base, placed)
+        temporaries += [place, placed, updated]
+        ttnn.copy(updated, self._fixed)
+        released = set()
+        for tensor in temporaries:
+            if id(tensor) not in released:
+                released.add(id(tensor))
+                _deallocate_owned(tensor)
+        self._context_start = int(self._context_start) + drop
+        self._context_rows = kept + count
+
     def _update_fixed(self, capture: DFlashTargetAuxCapture, replace: bool) -> None:
+        if not replace and self._context_rows > 0 and int(capture.row_count) <= 32:
+            self._append_fixed(capture)
+            return
         width = self.core.config.hidden_size
         new_rows = self.core.combine_aux_hidden_states(capture.hidden_states)
         temporaries = [new_rows]
@@ -703,6 +770,35 @@ class DFlashTTCore:
         self.max_seq_len = max_seq_len
         self.rope_tables = rope_tables
         self.cache_namespace = cache_namespace
+        half = config.head_dim // 2
+        self._rope_inv_freq = 1.0 / (
+            config.rope_theta ** (torch.arange(half, dtype=torch.float32) * 2.0 / config.head_dim)
+        )
+
+    def rope_window(self, start: int, rows: int):
+        """(cos, sin) TILE ``[1, 1, rows, head_dim]`` for absolute positions ``[start, start + rows)``.
+
+        Bit-identical to slicing the build_dflash_rope_tables tables, but computed on the host and uploaded:
+        a device slice of the table at a new start offset builds a new device program, and the draft's start
+        advances every round, so slicing compiled a program per round while serving (~50 ms each)."""
+
+        start, rows = int(start), int(rows)
+        if start < 0 or start + rows > int(self.max_seq_len):
+            raise ValueError(f"DFlash RoPE window [{start}, {start + rows}) is outside the horizon {self.max_seq_len}")
+        phase = torch.outer(torch.arange(start, start + rows, dtype=torch.float32), self._rope_inv_freq)
+        phase = torch.cat((phase, phase), dim=-1)
+        replicate = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        return tuple(
+            ttnn.from_torch(
+                table.to(torch.bfloat16).reshape(1, 1, rows, self.config.head_dim),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=replicate,
+            )
+            for table in (phase.cos(), phase.sin())
+        )
 
     @classmethod
     def from_checkpoint(
@@ -978,6 +1074,11 @@ class DFlashTTCore:
                 f"the core horizon {self.max_seq_len}"
             )
 
+        if cache.fixed_combined:
+            return self._proposal_round_fixed(
+                cache, target_model, block, context_start, context_rows, logical_query_rows, padded_total
+            )
+
         # Extend the 16 semantic query rows only at the end.  These later rows
         # are causally invisible to the anchor/mask block and exist solely to
         # make the complete context+query sequence tile-aligned.
@@ -1004,11 +1105,7 @@ class DFlashTTCore:
 
         # All draft layers share the published theta/dimension and the same
         # absolute interval, so a single pair of RoPE tensors is exact.
-        first_layer = self.layers[0]
-        rope_mats = (
-            first_layer._rope_prefill(context_start, padded_total),
-            first_layer._rope_prefill(context_start, padded_total, sin=True),
-        )
+        rope_mats = self.rope_window(context_start, padded_total)
         for layer_idx in range(self.config.num_hidden_layers):
             # Reset context to the fused target representation at every layer;
             # carry only query hidden state through the draft stack.
@@ -1044,6 +1141,75 @@ class DFlashTTCore:
             logits_shards=logits_shards,
             sampled_hidden_states=sampled_hidden,
         )
+
+    def placement(self, rows: int, offset: int, count: int, *, transpose: bool = False):
+        """0/1 matrix ``[1, rows, 32]`` with ``M[offset + i, i] = 1`` for ``i < count`` (``[1, 32, rows]`` when
+        ``transpose``). ``M @ X`` puts the first ``count`` rows of a 32-row ``X`` at rows ``offset..``; the transpose
+        reads them back. Built on the host as data, so a new offset runs the same device program."""
+
+        rows, offset, count = int(rows), int(offset), int(count)
+        if not (0 <= offset and 0 <= count <= 32 and offset + count <= rows):
+            raise ValueError(f"DFlash placement of {count} rows at {offset} does not fit {rows} rows")
+        matrix = torch.zeros((rows, 32), dtype=torch.bfloat16)
+        index = torch.arange(count)
+        matrix[offset + index, index] = 1.0
+        if transpose:
+            matrix = matrix.transpose(0, 1).contiguous()
+        return ttnn.from_torch(
+            matrix.unsqueeze(0),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+    def exact_matmul(self, a, b):
+        """Row-selection matmul (one 1.0 per output row): HiFi4 with fp32 accumulation reproduces bf16 exactly."""
+
+        return ttnn.matmul(a, b, compute_kernel_config=next(iter(self.layers.values()))._ck_hifi4)
+
+    def _proposal_round_fixed(self, cache, target_model, block, context_start, context_rows, query_rows, padded_total):
+        """proposal_round over the fixed context buffer with shapes that depend only on ``padded_total``.
+
+        The buffer holds the context in rows ``[0, context_rows)`` and zeros after it. Each layer's input is the
+        first ``padded_total`` buffer rows plus the 16 query rows placed at ``context_rows`` by a 0/1 matmul, and the
+        query rows are read back with the transposed matrix. The pad rows after the query are zero instead of
+        carried mask-token states; they are causally invisible to the 16 query rows, so the draft output is
+        unchanged. Slicing and concatenating at ``context_rows`` instead built new device programs every round
+        while the context grew (one per row count)."""
+
+        width = self.config.hidden_size
+        token_ids = torch.full((1, 32), self.config.mask_token_id, dtype=torch.int32)
+        token_ids[0, :query_rows] = block.input_ids.to(dtype=torch.int32)
+        token_ids_tt = ttnn.from_torch(
+            token_ids,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        query_hidden = target_model.embed_prefill(token_ids_tt)  # [1, 32, width]
+        context_hidden = cache.buffer_rows(padded_total)  # [1, padded_total, width]; zeros from context_rows on
+        place = self.placement(padded_total, context_rows, query_rows)
+        take = self.placement(padded_total, context_rows, query_rows, transpose=True)
+        rope_mats = self.rope_window(context_start, padded_total)
+        for layer_idx in range(self.config.num_hidden_layers):
+            layer_input = ttnn.add(context_hidden, self.exact_matmul(place, query_hidden))
+            layer_output = self.layers[layer_idx].prefill_forward(
+                layer_input,
+                cache.kv_cache[layer_idx],
+                cache.page_tables[layer_idx],
+                user_id=0,
+                start_pos=0,
+                rope_mats=rope_mats,
+            )
+            query_hidden = self.exact_matmul(take, layer_output)  # [1, 32, width]: 16 query rows, then zeros
+        query_hidden = self.apply_final_norm(query_hidden)
+        sampled_hidden = ttnn.slice(query_hidden, [0, 1, 0], [1, 1 + self.config.max_speculative_tokens, width])
+        logits_shards = target_model.lm_head_shards_dflash(sampled_hidden, enable_experimental=True)
+        return DFlashTTProposalRound(block=block, logits_shards=logits_shards, sampled_hidden_states=sampled_hidden)
 
 
 __all__ = [
