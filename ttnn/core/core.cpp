@@ -17,7 +17,7 @@ namespace {
 // Metal has no implicit queue state: this stack is only consulted by TTNN (see
 // current_mesh_command_queue). It is deliberately not tied to any MetalContext/device, so it can be used
 // before a device is opened and never creates a context as a side effect. An empty stack means cq 0.
-thread_local std::vector<uint8_t> current_command_queue_id_stack;
+thread_local std::vector<QueueId> current_command_queue_id_stack;
 
 }  // namespace
 
@@ -54,14 +54,14 @@ QueueId get_current_command_queue_id_for_thread() {
     if (current_command_queue_id_stack.empty()) {
         return QueueId(0);
     }
-    return QueueId(current_command_queue_id_stack.back());
+    return current_command_queue_id_stack.back();
 }
 
-void push_current_command_queue_id_for_thread(QueueId cq_id) { current_command_queue_id_stack.push_back(cq_id.get()); }
+void push_current_command_queue_id_for_thread(QueueId cq_id) { current_command_queue_id_stack.push_back(cq_id); }
 
 QueueId pop_current_command_queue_id_for_thread() {
     TT_FATAL(!current_command_queue_id_stack.empty(), "Current command queue id stack is empty!");
-    QueueId cq_id(current_command_queue_id_stack.back());
+    const QueueId cq_id = current_command_queue_id_stack.back();
     current_command_queue_id_stack.pop_back();
     return cq_id;
 }
