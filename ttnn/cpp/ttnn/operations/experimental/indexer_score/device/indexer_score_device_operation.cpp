@@ -129,6 +129,13 @@ void validate_runtime_values(const operation_attributes_t& attrs, const tensor_a
                 "splitting a block drops the boundary block's score)",
                 kv_len,
                 attrs.block_size);
+            TT_FATAL(
+                kv_len % attrs.program_config.k_chunk_size == 0,
+                "indexer_score kv_len {} must be a multiple of k_chunk_size {} when block-max-pooling: the pooled "
+                "writer emits blocks_per_unit block-scores per work unit, so a runtime prefix ending mid-work-unit "
+                "makes the per-row output a non-16 B-aligned run (violates the blocks_per_unit % 8 == 0 invariant)",
+                kv_len,
+                attrs.program_config.k_chunk_size);
         }
     }
 }

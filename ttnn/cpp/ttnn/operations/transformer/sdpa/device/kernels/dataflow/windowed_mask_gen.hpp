@@ -138,7 +138,7 @@ inline void generate_windowed_mask_for_q_chunk(
                 if (q_start_idx >= window_low_idx && q_end_idx <= window_high_idx && k_start_idx >= window_low_idx &&
                     k_end_idx <= window_high_idx) {
                     if (zero_tile_idx == -1) {
-                        fill_tile_zeros<mask_tile_bytes, false>(noc, cb_mask_in, in_mask_tile_id);
+                        fill_tile_zeros<mask_tile_bytes>(noc, cb_mask_in, in_mask_tile_id);
                     } else {
                         copy_tile<mask_tile_bytes>(
                             noc, mask_write_ptr_base, mask_write_ptr_base, zero_tile_idx, in_mask_tile_id);
