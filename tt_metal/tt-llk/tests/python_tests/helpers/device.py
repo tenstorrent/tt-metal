@@ -257,20 +257,32 @@ def commit_tensix_soft_reset(
 
 common_counter = 0
 
-# The test firmware mirrors the completion flags and the BRISC counter into overlay registers (host_signal in boot.h),
-# so waiting on a kernel never reads its L1. Simulator targets keep the L1 path.
+# The test firmware mirrors the completion flags and the BRISC counter into registers outside L1 (host_signal in boot.h),
+# so waiting on a kernel never reads its L1. Simulator targets keep the L1 path, except the Quasar RTL emulator.
 HOST_SIGNAL_BRISC_COUNTER_SLOT = 3
 HOST_SIGNAL_MASK = 0xFFFFFF
 _HOST_SIGNAL_SCRATCH_INDEX = {
     ChipArchitecture.WORMHOLE: 248,
     ChipArchitecture.BLACKHOLE: 36,
 }
+_QUASAR_HOST_SIGNAL_BASE = 0x030000B0  # TT_CLUSTER_CTRL_SCRATCH_28
 
 
 def host_signal_address(slot: int) -> int | None:
     """Address of host signal slot, or None when this target signals through L1 only."""
-    index = _HOST_SIGNAL_SCRATCH_INDEX.get(get_chip_architecture())
+    arch = get_chip_architecture()
     target = TestTargetConfig._instance
+    if arch == ChipArchitecture.QUASAR:
+        # The emulator models the cluster control registers; ttsim (a shared library) does not
+        sim = (
+            os.environ.get("TT_METAL_SIMULATOR")
+            or os.environ.get("TT_UMD_SIMULATOR_PATH")
+            or ""
+        )
+        if target is not None and target.run_simulator and sim.endswith(".so"):
+            return None
+        return _QUASAR_HOST_SIGNAL_BASE + slot * 4
+    index = _HOST_SIGNAL_SCRATCH_INDEX.get(arch)
     if index is None or (target is not None and target.run_simulator):
         return None
     return 0xFFB40000 + slot * 0x1000 + index * 4
@@ -446,6 +458,12 @@ def reset_mailboxes(location: str = "0,0"):
             addr=MAILBOX_START_BLOCK,
             data=[0xA3] * len(Mailboxes),  # All 4 TRISC mailboxes on Quasar
         )
+        for slot in range(4):
+            addr = host_signal_address(slot)
+            if addr is not None:
+                write_words_to_device(
+                    location=location, addr=addr, data=[0xA3], safe_mode=False
+                )
     else:
         write_words_to_device(
             location=location,
