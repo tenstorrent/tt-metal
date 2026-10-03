@@ -115,6 +115,28 @@ def is_format_combination_outlier(
     )
 
 
+def promote_dest_accumulation(
+    input_format: DataFormat,
+    output_format: DataFormat,
+    dest_acc: DestAccumulation,
+    chip_arch: ChipArchitecture,
+) -> DestAccumulation:
+    """The dest_acc a variant is actually built with: *dest_acc*, or Yes for an outlier
+    format combination on every architecture but Quasar.
+
+    The one place the promotion is decided. TestConfig applies it to the build, and
+    constraints.effective_dest_accumulation / distinct_dest_accumulation_modes apply it
+    to the goldens and the parametrize builders, so the three cannot drift: a golden
+    computed for the requested Dest while the kernel runs on the promoted one would
+    model a 16-bit Dest the hardware is not using.
+    """
+    if chip_arch == ChipArchitecture.QUASAR:
+        return dest_acc
+    if is_format_combination_outlier(input_format, output_format, dest_acc):
+        return DestAccumulation.Yes
+    return dest_acc
+
+
 _SRCAB_ONLY_FORMATS = {
     DataFormat.MxFp4_2x_A: ChipArchitecture.QUASAR,
     DataFormat.MxFp4_2x_B: ChipArchitecture.QUASAR,

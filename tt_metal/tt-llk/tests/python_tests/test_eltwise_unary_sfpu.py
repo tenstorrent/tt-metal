@@ -9,6 +9,10 @@ from itertools import chain, product
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture
+from helpers.constraints import (
+    distinct_dest_accumulation_modes,
+    effective_dest_accumulation,
+)
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -204,31 +208,39 @@ def _sweep_params(formats, mathops, approx_modes, input_dimensions):
     """Build (formats, approx_mode, mathop, fast_mode, dest_acc, input_dimensions) tuples.
 
     Fast-mode-capable ops are swept with FastMode.No and FastMode.Yes; every other op
-    runs with FastMode.No only. dest_acc always sweeps both values.
+    runs with FastMode.No only. dest_acc sweeps both values, minus the one TestConfig
+    would promote onto the other: an expB input into a Float16 output is built with a
+    32-bit Dest whichever value is asked for, so its dest_acc=No cell would be the
+    dest_acc=Yes kernel run a second time against a golden modelling the wrong Dest.
     """
-    dest_accs = [DestAccumulation.No, DestAccumulation.Yes]
     fast_ops = [op for op in mathops if op in SUPPORTED_FAST_MODE_OPS]
     non_fast_ops = [op for op in mathops if op not in SUPPORTED_FAST_MODE_OPS]
-    return list(
-        chain(
-            product(
-                formats,
-                approx_modes,
-                fast_ops,
-                [FastMode.No, FastMode.Yes],
-                dest_accs,
-                input_dimensions,
-            ),
-            product(
-                formats,
-                approx_modes,
-                non_fast_ops,
-                [FastMode.No],
-                dest_accs,
-                input_dimensions,
-            ),
+    params = []
+    for fmt in formats:
+        dest_accs = distinct_dest_accumulation_modes(
+            fmt, [DestAccumulation.No, DestAccumulation.Yes]
         )
-    )
+        params.extend(
+            chain(
+                product(
+                    [fmt],
+                    approx_modes,
+                    fast_ops,
+                    [FastMode.No, FastMode.Yes],
+                    dest_accs,
+                    input_dimensions,
+                ),
+                product(
+                    [fmt],
+                    approx_modes,
+                    non_fast_ops,
+                    [FastMode.No],
+                    dest_accs,
+                    input_dimensions,
+                ),
+            )
+        )
+    return params
 
 
 def _assert_broad_profile_valid():
@@ -387,8 +399,40 @@ def test_eltwise_unary_sfpu(
 # what varies is whether specials can be injected, which specials_safe() decides per
 # (input, output, dest_acc).
 
+_EDGE_FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
+
+
+def _has_edge_on_some_cell(op):
+    """edge_spec() returns a spec for *op* on at least one (formats, dest_acc) cell.
+
+    Evaluated without the Wormhole NaN-sign gate, so the answer is the same on every
+    arch: an op this rejects has no domain boundary, no knee, and no carryable special
+    anywhere on the format axis, and collecting it would only ever skip. The gate is
+    still applied per cell at run time, where it can withdraw the specials of an op
+    that this check keeps.
+    """
+    return any(
+        edge_spec(
+            op,
+            fmt.input_format,
+            fmt.output_format,
+            specials=op in SPECIALS_READY_OPS
+            and specials_safe(fmt.input_format, fmt.output_format, dest_acc),
+            dest_acc=dest_acc,
+        )
+        is not None
+        for fmt in _EDGE_FORMATS
+        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+    )
+
+
 _EDGE_SWEEP_OPS = sorted(
-    sfpu_unary_ops() - set(_UNARY_OPS_NOT_SWEPT), key=lambda o: o.name
+    (
+        op
+        for op in sfpu_unary_ops() - set(_UNARY_OPS_NOT_SWEPT)
+        if _has_edge_on_some_cell(op)
+    ),
+    key=lambda o: o.name,
 )
 
 # What the cat-A/cat-D probes found on Wormhole, recorded as non-strict xfails so each case
@@ -464,7 +508,7 @@ _assert_signed_zero_partition_valid()
 
 @pytest.mark.nightly
 @parametrize(
-    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    formats=_EDGE_FORMATS,
     mathop=_EDGE_SWEEP_OPS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     input_dimensions=[[64, 64]],
@@ -541,6 +585,7 @@ def test_eltwise_unary_sfpu_edges(
 # The -inf half pins the NEGATIVE_INFINITY_SAFE instantiation, which calculate_sqrt_custom opts
 # into and nothing in production does. erfinv, asin and acos take the default and still get
 # -inf; that is deliberate and unreachable for them, and priced in ckernel_sfpu_sqrt_custom.h.
+@pytest.mark.sfpu_op(MathOperation.SqrtCustom)
 @pytest.mark.nightly
 def test_sqrt_custom_infinity_regression(request):
     formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
@@ -840,6 +885,7 @@ def _relu_min_int_stimuli_spec(threshold: int) -> StimuliSpec:
     return StimuliSpec.custom(values=[float(v) for v in values], seed=0)
 
 
+@pytest.mark.sfpu_op(MathOperation.ReluMin)
 @parametrize(
     threshold=_RELU_MIN_INT_THRESHOLDS,
     dest_acc=[DestAccumulation.Yes],
@@ -933,6 +979,7 @@ def _relu_max_probe_spec(threshold, formats, dest_acc):
     return StimuliSpec.custom(values=values, seed=0)
 
 
+@pytest.mark.sfpu_op(MathOperation.ReluMax)
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
     threshold=_RELU_MAX_THRESHOLDS,
@@ -1051,6 +1098,7 @@ def test_eltwise_unary_sfpu_int_shift(
     )
 
 
+@pytest.mark.sfpu_op(MathOperation.Signbit)
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
     approx_mode=[ApproximationMode.No],
@@ -1141,7 +1189,7 @@ def test_eltwise_unary_sfpu_isinf_isnan(
     # +inf, which only the three predicates below can see; the rest are swept here.
     # See _ISINF_ISNAN_BF16_DEST_UNSUPPORTED.
     if (
-        formats.input_format == DataFormat.Float16_b
+        not formats.input_format.is_32_bit()
         and dest_acc == DestAccumulation.Yes
         and mathop in _ISINF_ISNAN_BF16_DEST_UNSUPPORTED
     ):
@@ -1278,6 +1326,10 @@ def eltwise_unary_sfpu(
         spec_A=spec_A,
     )
 
+    # TestConfig promotes an outlier pair to dest_acc=Yes; the golden has to model the
+    # Dest the kernel is actually built with.
+    dest_acc = effective_dest_accumulation(formats, dest_acc)
+
     generate_golden = get_golden_generator(UnarySFPUGolden)
     golden_tensor = generate_golden(
         mathop,
@@ -1394,6 +1446,7 @@ def eltwise_unary_sfpu(
 
 
 # Test exponential with APPROX_MODE=true, FAST_MODE=true, and CLAMP_NEGATIVE=true/false
+@pytest.mark.sfpu_op(MathOperation.Exp)
 @pytest.mark.parametrize("clamp_negative", [True, False])
 def test_exponential_clamp_negative(clamp_negative: bool):
     torch.manual_seed(0)
