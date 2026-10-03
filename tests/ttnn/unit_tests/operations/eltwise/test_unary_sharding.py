@@ -644,3 +644,103 @@ def test_unary_specless_sharded_output_grid_shrinks_block(device):
     expected = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
     assert grid == expected, f"Expected rectangular BLOCK grid {expected}, got {grid}"
     assert torch.equal(ttnn.to_torch(result), torch.abs(x))
+
+
+# Block-sharded [64, 64] with shard [32, 64] on a 2x2 grid occupies 1 x 2 cores, (0,0) and (0,1). Viewed
+# as [32, 128] the same shard spec resolves to 2 x 1 cores, (0,0) and (1,0). The squeezed shapes
+# agree. Only the bank list differs.
+def _skip_if_grid_below_2x2(device):
+    grid = device.compute_with_storage_grid_size()
+    if grid.x < 2 or grid.y < 2:
+        pytest.skip("Device grid too small for a 2x2 shard grid")
+
+
+@pytest.mark.parametrize("cache_warm", [False, True])
+def test_unary_sharded_view_with_divergent_buffer_geometry_rejected(device, cache_warm, expect_error):
+    """Sharded input (interleaved output) view with buffer geometry that differs from its spec is rejected on both cache
+    miss and hit. The cache-hit case first populates the entry with a fresh tensor (valid) having the same
+    spec, then verifies that the cached program remains correct after the rejection."""
+    _skip_if_grid_below_2x2(device)
+    mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+            [32, 64],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    torch.manual_seed(0)
+    valid = torch.randn(1, 1, 32, 128, dtype=torch.bfloat16)
+    valid_tt = ttnn.from_torch(
+        valid,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem,
+    )
+    if cache_warm:
+        assert torch.equal(ttnn.to_torch(ttnn.relu(valid_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)), torch.relu(valid))
+
+    parent = ttnn.from_torch(
+        torch.randn(1, 1, 64, 64, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem
+    )
+    view = ttnn.experimental.view(parent, [1, 1, 32, 128])
+    assert view.spec == valid_tt.spec
+    with expect_error(RuntimeError, "differs from its TensorSpec distribution"):
+        ttnn.relu(view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    assert torch.equal(ttnn.to_torch(ttnn.relu(valid_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)), torch.relu(valid))
+
+
+def test_unary_preallocated_sharded_output_view_with_divergent_buffer_geometry_rejected(device, expect_error):
+    """Interleaved input with a preallocated sharded output takes the accessor path for the output; a
+    divergent view there would be written at the wrong pages, so it is rejected."""
+    _skip_if_grid_below_2x2(device)
+    torch.manual_seed(0)
+    inp = ttnn.from_torch(
+        torch.randn(1, 1, 32, 128, dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    out_parent = ttnn.from_torch(
+        torch.zeros(1, 1, 64, 64, dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+                [32, 64],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        ),
+    )
+    out_view = ttnn.experimental.view(out_parent, [1, 1, 32, 128])
+    with expect_error(RuntimeError, "differs from its TensorSpec distribution"):
+        ttnn.relu(inp, output_tensor=out_view)
+
+
+@pytest.mark.parametrize(
+    "strategy, shard_shape, core_grid",
+    [
+        (ttnn.ShardStrategy.HEIGHT, [32, 64], ttnn.CoreGrid(y=1, x=4)),
+        (ttnn.ShardStrategy.BLOCK, [64, 32], ttnn.CoreGrid(y=2, x=2)),
+    ],
+)
+def test_unary_sharded_reshape_view_on_accessor_path(device, strategy, shard_shape, core_grid):
+    torch.manual_seed(0)
+    base = torch.randn(1, 1, 128, 64, dtype=torch.bfloat16)
+    mem = ttnn.create_sharded_memory_config(
+        shard_shape,
+        core_grid=core_grid,
+        strategy=strategy,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    t = ttnn.from_torch(base, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
+    view = ttnn.reshape(t, [1, 4, 32, 64])
+    assert view.memory_config().is_sharded()
+    out = ttnn.relu(view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    assert torch.equal(ttnn.to_torch(out), torch.relu(base.reshape(1, 4, 32, 64)))
