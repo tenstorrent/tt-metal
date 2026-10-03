@@ -29,15 +29,20 @@ struct SenderCtArgs {
     uint32_t fwd_sem_noc_x;
     uint32_t fwd_sem_noc_y;
     uint32_t fwd_sem_addr;
+    uint32_t credit_noc_x;  // the downstream chip's stream core that sends back to this chip
+    uint32_t credit_noc_y;
+    uint32_t launch_credit_addr;
 
 #ifndef KERNEL_BUILD
     // `downstream` is the worker serving this stream on the next chip: the sender bumps its
-    // forwarded-token-count semaphore through the fabric packet header, which is why every worker placement
-    // on the mesh is decided before any kernel is built.
+    // forwarded-token-count semaphore through the fabric packet header. `returning` is the worker on that chip
+    // whose sender writes back to this chip: the sender grants it the launch credit. That is why every worker
+    // placement on the mesh is decided before any kernel is built.
     SenderCtArgs(
         const op::CombineFabric2dInputs& tensor_args,
         const op::StreamPlacement& self,
         const op::StreamPlacement& downstream,
+        const op::StreamPlacement& returning,
         const op::L1Layout& l1,
         const op::KernelPlan& plan) :
         num_l1_slots(NUM_L1_SLOTS),
@@ -54,7 +59,10 @@ struct SenderCtArgs {
         freed_addr(plan.ring_freed_addr),
         fwd_sem_noc_x(static_cast<uint32_t>(downstream.worker_virtual.x)),
         fwd_sem_noc_y(static_cast<uint32_t>(downstream.worker_virtual.y)),
-        fwd_sem_addr(plan.fwd_arrived_addr) {}
+        fwd_sem_addr(plan.fwd_arrived_addr),
+        credit_noc_x(static_cast<uint32_t>(returning.worker_virtual.x)),
+        credit_noc_y(static_cast<uint32_t>(returning.worker_virtual.y)),
+        launch_credit_addr(plan.launch_credit_addr) {}
 
     std::vector<uint32_t> to_ct_word_arr() const {
         return {
@@ -72,7 +80,10 @@ struct SenderCtArgs {
             freed_addr,
             fwd_sem_noc_x,
             fwd_sem_noc_y,
-            fwd_sem_addr};
+            fwd_sem_addr,
+            credit_noc_x,
+            credit_noc_y,
+            launch_credit_addr};
     }
 #else
     constexpr SenderCtArgs() :
@@ -90,7 +101,10 @@ struct SenderCtArgs {
         freed_addr(get_compile_time_arg_val(11)),
         fwd_sem_noc_x(get_compile_time_arg_val(12)),
         fwd_sem_noc_y(get_compile_time_arg_val(13)),
-        fwd_sem_addr(get_compile_time_arg_val(14)) {}
+        fwd_sem_addr(get_compile_time_arg_val(14)),
+        credit_noc_x(get_compile_time_arg_val(15)),
+        credit_noc_y(get_compile_time_arg_val(16)),
+        launch_credit_addr(get_compile_time_arg_val(17)) {}
 #endif
 
     constexpr uint32_t slot_stride() const { return token_size_bytes + forwarding_metadata_size; }
