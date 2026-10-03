@@ -92,8 +92,9 @@ def test_1d_matmul_config_reads_sharded_activation_one_shard_per_k_block():
         _tensor(256, 5376, shard_cols=256), _tensor(5376, 5376), GRID, per_core_n=4
     )
     assert (config.in0_block_w, config.per_core_N) == (8, 4)
-    # fp32 dest: at most 4 tiles per output subblock.
+    # fp32 dest: at most 4 tiles per output subblock, shaped so the output can be width-sharded.
     assert config.out_subblock_h * config.out_subblock_w <= 4
+    assert config.out_subblock_w == config.per_core_N or config.out_subblock_h == 1
 
 
 @pytest.mark.parametrize(
