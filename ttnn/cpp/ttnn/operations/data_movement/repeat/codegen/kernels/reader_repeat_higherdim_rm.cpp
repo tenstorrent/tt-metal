@@ -4,10 +4,9 @@
 
 // Repeat-local reader for HIGHER-DIM replication on RM interleaved tensors.
 //
-// This mirrors the shared reader_repeat_higherdim_rm.cpp mapping, with
-// compile-time shortcuts for size-1 repeated dimensions. Tiny repeat cases often
-// broadcast a singleton dim; avoiding the full generic div/mod map keeps those
-// cases from losing to TTNN's collapsed RM path.
+// The page map is SEQ_REPEAT's from sequencers.h, with the repeat geometry as
+// compile-time args so its per-stick div/mod strength-reduces; a stick transfer is
+// short enough that software divides would dominate it.
 //
 // CT args: xfer_size, l1_stride, TensorAccessorArgs(in_t),
 //          cb_id, NUM_REPEATS, LOWER_PAGES, REP_DIM_PAGES, BATCH
@@ -15,6 +14,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/operations/data_movement/common/kernels/codegen/sequencers.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -35,10 +35,7 @@ void kernel_main() {
     Noc noc;
     CircularBuffer cb_in(cb_id);
 
-    constexpr uint32_t SRC_LOWER = REP_DIM_PAGES * LOWER_PAGES;
-    constexpr uint32_t DST_LOWER = NUM_REPEATS * SRC_LOWER;
-
-    uint32_t out_page = out_start_page;
+    SeqRepeatState seq = seq_repeat_init(out_start_page, NUM_REPEATS, LOWER_PAGES, REP_DIM_PAGES);
     uint32_t pages_left = num_out_pages;
 
     while (pages_left > 0) {
@@ -47,24 +44,9 @@ void kernel_main() {
         uint32_t l1_offset = 0;
 
         for (uint32_t t = 0; t < batch; t++) {
-            uint32_t src_page;
-
-            if constexpr (REP_DIM_PAGES == 1 && LOWER_PAGES == 1) {
-                src_page = out_page / NUM_REPEATS;
-            } else if constexpr (REP_DIM_PAGES == 1) {
-                uint32_t block = out_page / (NUM_REPEATS * LOWER_PAGES);
-                uint32_t within = out_page % (NUM_REPEATS * LOWER_PAGES);
-                src_page = block * LOWER_PAGES + (within % LOWER_PAGES);
-            } else {
-                uint32_t block = out_page / DST_LOWER;
-                uint32_t within = out_page % DST_LOWER;
-                uint32_t lower_in_rep = within % SRC_LOWER;
-                src_page = block * SRC_LOWER + lower_in_rep;
-            }
-
+            const uint32_t src_page = seq_repeat_next(seq);
             noc.async_read(s, cb_in, xfer_size, {.page_id = src_page, .offset_bytes = 0}, {.offset_bytes = l1_offset});
             l1_offset += l1_stride;
-            out_page++;
         }
         noc.async_read_barrier();
         cb_in.push_back(batch);

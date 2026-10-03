@@ -127,12 +127,10 @@ def test_pc_repeat(device, layout, shape, repeat_shape):
 # repeat_force.hpp). These duplicate the correctness / program-cache checks above but pin the
 # codegen path so the suite exercises it regardless of the gate's verdict.
 #
-# The codegen path supports only a subset of cases (see repeat_codegen_supported.cpp): interleaved
-# input/output (no sharding), rank 2-4, at least one repeated dim, and per-dim rules -- ROW_MAJOR
-# rejects bfloat8_b and needs last-dim width >= 2; TILE requires the repeated H/W axis to be
-# tile-aligned. Every shape below is hand-picked to satisfy that gate, so the forced entry resolves
-# instead of raising. random inputs (not arange) keep bf16 comparisons exact -- repeat copies values
-# verbatim, so a lossless round-trip means assert_equal holds.
+# The codegen path supports only a subset of cases (see repeat_codegen_supported.cpp). Every shape below
+# is hand-picked to satisfy that gate, so the forced entry resolves instead of raising. random inputs
+# (not arange) keep bf16 comparisons exact -- repeat copies values verbatim, so a lossless round-trip
+# means assert_equal holds.
 codegen_supported_cases = [
     # (shape, repeat_shape, layout) -- TILE
     ((1, 1, 32, 32), (2, 1, 1, 1), ttnn.TILE_LAYOUT),  # N (batch) repeat

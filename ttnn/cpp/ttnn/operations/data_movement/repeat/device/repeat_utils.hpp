@@ -5,9 +5,11 @@
 
 #include <cstdint>
 #include <optional>
+#include <utility>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
+#include <tt_stl/small_vector.hpp>
 
 namespace ttnn::operations::data_movement::repeat {
 
@@ -39,5 +41,36 @@ std::optional<tt::tt_metal::ShardSpec> generate_repeat_shard_spec(
     const ttnn::Shape& padded_out_shape,
     tt::tt_metal::TensorMemoryLayout memory_layout,
     std::optional<tt::tt_metal::ShardOrientation> orientation_hint = std::nullopt);
+
+// The (dim, count) of the only repeated axis; nullopt when zero or several axes repeat.
+inline std::optional<std::pair<int32_t, uint32_t>> single_repeated_dim(const ttsl::SmallVector<uint32_t>& repeat_dims) {
+    std::optional<std::pair<int32_t, uint32_t>> found;
+    for (size_t i = 0; i < repeat_dims.size(); ++i) {
+        if (repeat_dims[i] == 1) {
+            continue;
+        }
+        if (found.has_value()) {
+            return std::nullopt;
+        }
+        found = std::pair{static_cast<int32_t>(i), repeat_dims[i]};
+    }
+    return found;
+}
+
+inline tt::tt_metal::MemoryConfig interleaved_in(tt::tt_metal::BufferType buffer_type) {
+    return tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, buffer_type};
+}
+
+// The spec of a buffer of `shape`/`layout` at `memory_config`, with `ref`'s dtype and tile.
+inline tt::tt_metal::TensorSpec spec_like(
+    const Tensor& ref,
+    const ttnn::Shape& shape,
+    tt::tt_metal::Layout layout,
+    const tt::tt_metal::MemoryConfig& memory_config) {
+    const tt::tt_metal::PageConfig page_config = layout == tt::tt_metal::Layout::TILE
+                                                     ? tt::tt_metal::PageConfig(layout, ref.tensor_spec().tile())
+                                                     : tt::tt_metal::PageConfig(layout);
+    return tt::tt_metal::TensorSpec(shape, tt::tt_metal::TensorLayout(ref.dtype(), page_config, memory_config));
+}
 
 }  // namespace ttnn::operations::data_movement::repeat
