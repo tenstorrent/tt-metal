@@ -40,8 +40,18 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
     return result;
 }
 
+bool bf16_dest_sigmoid();
+template <int ITERATIONS>
+void calculate_sigmoid_bf16();
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_sigmoid() {
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
+        if (bf16_dest_sigmoid()) {
+            calculate_sigmoid_bf16<ITERATIONS>();
+            return;
+        }
+    }
     if constexpr (!APPROXIMATION_MODE) {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
@@ -59,8 +69,16 @@ inline void calculate_sigmoid() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+void init_sigmoid_bf16();
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void sigmoid_init() {
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
+        if (bf16_dest_sigmoid()) {
+            init_sigmoid_bf16();
+            return;
+        }
+    }
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (!APPROXIMATION_MODE) {
         sfpu_reciprocal_init<false>();
@@ -71,3 +89,5 @@ inline void sigmoid_init() {
 
 }  // namespace sfpu
 }  // namespace ckernel
+
+#include "ckernel_sfpu_sigmoid_bf16.h"
