@@ -486,4 +486,15 @@ void kernel_main() {
     sentinel_plan->entry_count = 0;
     sentinel_entries[0].flags = PLAN_FLAG_END;
     cb_push_back(cb_plan_id, 1);
+
+    // Drain the atomic queue before returning.  The baton hand-off at the bottom of the
+    // batch loop (next_turn_sem.up(...)) is a non-posted atomic, and its guard is on
+    // *global* batch order, not this core's loop -- so every core except the one holding
+    // the globally-last batch issues its final increment and then falls straight through
+    // to this teardown.  The only other barrier on that path is a write barrier, which
+    // drains NIU_MST_WR_ACK_RECEIVED and not the NIU_MST_ATOMIC_RESP_RECEIVED counter the
+    // increment acks on.  Without this, the increment can land after the host re-zeros the
+    // turn semaphore for the next launch, handing a core an extra baton credit so it takes
+    // the baton out of turn and reads the shared offsets[] mid-write.
+    noc.async_atomic_barrier();
 }
