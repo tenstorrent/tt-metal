@@ -14,6 +14,7 @@ from models.tt_transformers.tt.common import rope_scaling_model_factory
 from models.tt_transformers.tt.rope import RotarySetup
 
 from .layer import DecoderLayer
+from .moe import shared_overlap
 from .parallel_embedding import TtParallelEmbedding, cache_name_for, embed_shard_2d
 from .residual import norm_mode, use_sharded_residual
 from .rms_norm import RMSNorm
@@ -334,6 +335,12 @@ class Model:
         args.sampling_dp = self.sampling_dp
         args.use_topk_logprobs = True
         return args
+
+    def release_sub_device_managers(self):
+        """Remove the MoE overlap sub-device manager (tt/moe/shared_overlap.py). Call before closing the
+        mesh: a manager left registered at close can segfault the teardown. Idempotent; a later forward
+        re-creates it."""
+        shared_overlap.release(self.mesh_device)
 
     def _forward_layers_and_head(
         self,

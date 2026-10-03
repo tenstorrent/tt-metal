@@ -227,6 +227,15 @@ class TtPrefillRuntime:
         self.model.ccl_manager.release_scratch_buffers()
         self.compiled = False
 
+    def release_sub_device_managers(self) -> None:
+        """Remove the MoE overlap sub-device manager before the mesh is closed. Idempotent."""
+        if self.model_built:
+            self.model.release_sub_device_managers()
+
+    def release_trace(self) -> None:
+        """The prefill runner's pre-close hook. M3 has no trace; this releases the sub-device managers."""
+        self.release_sub_device_managers()
+
     def make_placeholder_activation(self) -> ttnn.Tensor:
         """Zero hidden-state activation matching the decoder-layer-boundary residual and the D2D receiver
         backing: global ``[1, 1, chunk_size, hidden_size]`` bf16 TILE DRAM, sequence sharded across the SP
