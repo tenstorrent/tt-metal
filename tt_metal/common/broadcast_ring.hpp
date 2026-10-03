@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <bit>
+#include <cerrno>
 #include <cstring>
 #include <cstddef>
 #include <cstdint>
@@ -17,11 +18,23 @@
 #include <span>
 #include <type_traits>
 #include <utility>
+#include <sys/mman.h>
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/tt_pause.hpp>
 
 namespace tt::tt_metal {
+
+/** @brief When a BroadcastRing's slots take memory. */
+enum class SlotBacking {
+    /** Every slot takes memory when the ring is constructed. */
+    Upfront,
+    /**
+     * In a ring whose slots total 2 MB or more, each page of slots takes memory when the writer first publishes into
+     * it, so a large ring costs memory only as it fills. Requires a trivially copyable T.
+     */
+    OnFirstWrite,
+};
 
 /**
  * @brief Single-producer, multi-consumer broadcast ring buffer.
@@ -30,6 +43,9 @@ namespace tt::tt_metal {
  * order, starting from the point at which the reader is created. The writer never blocks on a reader: a
  * reader that cannot keep up loses its oldest unread items (tracked by Reader::dropped()).
  *
+ * Published items also take consecutive positions from 0, and any thread can copy an item the ring still
+ * holds by its position with read_at(), without a reader.
+ *
  * If the compile-time constant `is_always_lock_free` is true, then the ring is guaranteed to be lock-free.
  * In particular, all publish and read operations are wait-free in this case.
  *
@@ -37,8 +53,9 @@ namespace tt::tt_metal {
  * Readers are single-threaded, and all readers must be destroyed before the ring.
  *
  * @tparam T Element type.
+ * @tparam Backing When the slots take memory.
  */
-template <typename T>
+template <typename T, SlotBacking Backing = SlotBacking::Upfront>
 class BroadcastRing {
     static constexpr bool kTriviallyCopyable = std::is_trivially_copyable_v<T>;
 #if defined(__cpp_lib_atomic_lock_free_type_aliases)
@@ -47,6 +64,9 @@ class BroadcastRing {
     using WakeTokenAtomic = std::atomic<uint32_t>;
 #endif
     static constexpr size_t kFalseSharingSize = 128;
+    static_assert(
+        Backing == SlotBacking::Upfront || kTriviallyCopyable,
+        "SlotBacking::OnFirstWrite needs a trivially copyable T");
     struct SlotsView;
     struct SharedState;
 
@@ -63,9 +83,7 @@ public:
      * @param capacity Requested slot count; gets rounded up to the next power of two.
      */
     explicit BroadcastRing(size_t capacity) :
-        capacity_(capacity ? std::bit_ceil(capacity) : 1),
-        slots_(std::make_unique<Slot[]>(capacity_)),
-        writer_(&shared_state_, view()) {}
+        capacity_(capacity ? std::bit_ceil(capacity) : 1), storage_(capacity_), writer_(&shared_state_, view()) {}
 
     ~BroadcastRing() {
         TT_FATAL(
@@ -74,6 +92,35 @@ public:
     }
 
     [[nodiscard]] size_t capacity() const noexcept { return capacity_; }
+
+    /** @brief Number of items published so far; the next item takes this position. */
+    [[nodiscard]] uint64_t published() const noexcept { return shared_state_.head.load(std::memory_order_acquire); }
+
+    /** @brief Position of the oldest item the ring holds; items before it have been overwritten. */
+    [[nodiscard]] uint64_t oldest() const noexcept {
+        const uint64_t head = published();
+        return head > capacity_ ? head - capacity_ : 0;
+    }
+
+    /** @brief Number of items the ring holds: published() - oldest(). */
+    [[nodiscard]] size_t size() const noexcept { return std::min<uint64_t>(published(), capacity_); }
+
+    /**
+     * @brief Copies the item at @p position into @p out; callable from any thread.
+     * @return True when @p out holds the item; false when @p position is not yet published or was overwritten
+     *         before or during the copy.
+     */
+    [[nodiscard]] bool read_at(uint64_t position, T& out) const noexcept(kLoadNoexcept) {
+        const uint64_t head = published();
+        if (position >= head || head - position > capacity_) {
+            return false;
+        }
+        view().slot_at(position).load(out);
+        // As in Reader::read_batch, a publish that overwrote the slot during the copy has raised claim past
+        // position + capacity.
+        std::atomic_thread_fence(std::memory_order_acquire);
+        return shared_state_.claim.load(std::memory_order_relaxed) - position <= capacity_;
+    }
 
     class alignas(kFalseSharingSize) Writer {
     public:
@@ -384,6 +431,49 @@ private:
         Slot& slot_at(uint64_t position) const noexcept { return slots[position & (capacity - 1)]; }
     };
 
+    // Below a huge page the slots come from the heap. From a huge page up they're mapped, aligned to one, since
+    // transparent huge pages back only 2 MB-aligned ranges. OnFirstWrite leaves the slots unconstructed, since that
+    // would touch every page, and no slot is read before the writer publishes into it.
+    struct Storage {
+        static constexpr size_t kHugePageBytes = size_t{2} << 20;
+        explicit Storage(size_t capacity) : count(capacity) {
+            const size_t bytes = count * sizeof(Slot);
+            if (bytes < kHugePageBytes) {
+                heap = std::make_unique<Slot[]>(count);
+                slots = heap.get();
+                return;
+            }
+            mapped_bytes = bytes + kHugePageBytes;
+            mapping =
+                mmap(nullptr, mapped_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+            TT_FATAL(
+                mapping != MAP_FAILED, "BroadcastRing: cannot map {} bytes: {}", mapped_bytes, std::strerror(errno));
+            slots = reinterpret_cast<Slot*>(
+                (reinterpret_cast<uintptr_t>(mapping) + kHugePageBytes - 1) & ~(kHugePageBytes - 1));
+            madvise(slots, bytes, MADV_HUGEPAGE);
+            if constexpr (Backing == SlotBacking::Upfront) {
+                std::uninitialized_value_construct_n(slots, count);
+            }
+        }
+        ~Storage() {
+            if (heap) {
+                return;
+            }
+            if constexpr (Backing == SlotBacking::Upfront) {
+                std::destroy_n(slots, count);
+            }
+            munmap(mapping, mapped_bytes);
+        }
+        Storage(const Storage&) = delete;
+        Storage& operator=(const Storage&) = delete;
+
+        size_t count;
+        std::unique_ptr<Slot[]> heap;
+        void* mapping = nullptr;
+        size_t mapped_bytes = 0;
+        Slot* slots = nullptr;
+    };
+
     // head/claim are accessed together so they share a cache line; wake_token is on its own line so a
     // reader spin-waiting on it in wait() can't steal the head/claim line from the writer
     struct SharedState {
@@ -392,10 +482,10 @@ private:
         alignas(kFalseSharingSize) WakeTokenAtomic wake_token{0};
     };
 
-    SlotsView view() const noexcept { return {slots_.get(), capacity_}; }
+    SlotsView view() const noexcept { return {storage_.slots, capacity_}; }
 
     const size_t capacity_;
-    const std::unique_ptr<Slot[]> slots_;
+    const Storage storage_;
     SharedState shared_state_;
     mutable std::atomic<uint32_t> active_readers_{0};
     Writer writer_;

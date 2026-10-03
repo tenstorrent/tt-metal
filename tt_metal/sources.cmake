@@ -190,10 +190,17 @@ set(TT_METAL_SOURCES
     impl/experimental/offline_compile/offline_kernel_compile.cpp
     impl/graph/graph_tracking.cpp
     impl/streaming_profiler/api.cpp
+    impl/streaming_profiler/decode.cpp
     impl/streaming_profiler/device_programs.cpp
     impl/streaming_profiler/ops_csv.cpp
     impl/streaming_profiler/receiver.cpp
     impl/streaming_profiler/service.cpp
+    impl/streaming_profiler/sync/check.cpp
+    impl/streaming_profiler/sync/clock_map.cpp
+    impl/streaming_profiler/sync/engine.cpp
+    impl/streaming_profiler/sync/host_sync.cpp
+    impl/streaming_profiler/sync/link_sync.cpp
+    impl/streaming_profiler/sync/tile_sync.cpp
     impl/streaming_profiler/tracy_consumer.cpp
     impl/streaming_profiler/zone_csv.cpp
     hal.cpp
@@ -249,7 +256,7 @@ set(JITAPI_FILES
     tools/profiler/noc_debugging_profiler.hpp
     tools/profiler/noc_debugging_metadata.hpp
     tools/profiler/cpp_device_analyses.json
-    impl/streaming_profiler/kernels/drisc_relay.cpp
+    tools/profiler/kernel_profiler_streaming.hpp
     impl/dispatch/kernels/cq_dispatch.cpp
     impl/dispatch/kernels/cq_dispatch_subordinate.cpp
     impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp
@@ -257,6 +264,16 @@ set(JITAPI_FILES
     impl/dispatch/kernels/cq_realtime_profiler.cpp
     impl/dispatch/kernels/cq_realtime_profiler_push.cpp
     impl/dispatch/kernels/device_print_dispatch.h
+    impl/streaming_profiler/kernels/drisc_relay.cpp
+    impl/streaming_profiler/kernels/eth_clock.hpp
+    impl/streaming_profiler/kernels/eth_clock_model.cpp
+    impl/streaming_profiler/kernels/eth_clock_ruler.cpp
+    impl/streaming_profiler/kernels/eth_clock_sampler.cpp
+    impl/streaming_profiler/kernels/eth_relay.cpp
+    impl/streaming_profiler/kernels/link_sync.cpp
+    impl/streaming_profiler/kernels/link_sync.hpp
+    impl/streaming_profiler/kernels/relay_common.hpp
+    impl/streaming_profiler/kernels/tile_sync.cpp
     fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
     fabric/impl/kernels/edm_fabric/fabric_router_mux_extension.cpp
     fabric/impl/kernels/edm_fabric/fabric_router_relay_extension.cpp

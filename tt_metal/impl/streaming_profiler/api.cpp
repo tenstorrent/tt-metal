@@ -4,22 +4,23 @@
 
 #include <tt-metalium/experimental/streaming_profiler.hpp>
 
-#include <algorithm>
 #include <atomic>
 #include <deque>
 #include <functional>
 #include <map>
-#include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include <tt_stl/assert.hpp>
 #include <tt_stl/indestructible.hpp>
 
 #include "hostdev/profiler_zone_id.h"
-#include "impl/streaming_profiler/capture_context.hpp"
+#include "impl/streaming_profiler/sync/clock_map.hpp"
+#include "impl/streaming_profiler/sync/host_sync.hpp"
 #include "impl/streaming_profiler/service.hpp"
 #include "llrt/zone_meta.hpp"
 
@@ -29,7 +30,7 @@ namespace tt::tt_metal::experimental::streaming_profiler::detail {
 static_assert(ZONE_ID_BITS == TT_ZONE_ID_BITS);
 static_assert(ZONE_LOCAL_BITS == TT_ZONE_LOCAL_BITS);
 static_assert(ZONE_TU_COUNT == TT_ZONE_TU_COUNT);
-std::atomic<const SiteTu*> SiteRegistry::tus[ZONE_TU_COUNT];
+std::atomic<const SiteTu*> site_tus[ZONE_TU_COUNT];
 }  // namespace tt::tt_metal::experimental::streaming_profiler::detail
 
 namespace tt::tt_metal::streaming_profiler {
@@ -42,8 +43,8 @@ constexpr api::MarkerSite kStallSite{.name = api::STALL_ZONE_NAME};
 constexpr const api::MarkerSite* kStallSites[1] = {&kStallSite};
 constexpr api::detail::SiteTu kStallTu{kStallSites};
 
-// Builds the tables behind api::detail::site_of from the zone-name registry as ELFs load. Nothing is ever freed: a
-// record may hold a site's address for the life of the process, and a reader may still be walking a replaced table.
+// Nothing is ever freed: a record can hold a site's address for the life of the process, and a reader may still be
+// walking a table that's been replaced.
 class SiteTables {
 public:
     void add(std::span<const tt::llrt::ZoneMetaEntry* const> entries) {
@@ -53,8 +54,7 @@ public:
             const uint32_t tu = TT_ZONE_TU_OF(e->zone_id), local = TT_ZONE_LOCAL_OF(e->zone_id);
             auto [it, fresh] = grown.try_emplace(tu);
             if (fresh) {
-                if (const api::detail::SiteTu* cur =
-                        api::detail::SiteRegistry::tus[tu].load(std::memory_order_relaxed)) {
+                if (const api::detail::SiteTu* cur = api::detail::site_tus[tu].load(std::memory_order_relaxed)) {
                     it->second.assign(cur->sites.begin(), cur->sites.end());
                 }
             }
@@ -67,33 +67,29 @@ public:
             }
         }
         for (auto& [tu, v] : grown) {
-            auto arr = std::make_unique<const api::MarkerSite*[]>(v.size());
-            std::copy(v.begin(), v.end(), arr.get());
-            auto t = std::make_unique<api::detail::SiteTu>(
-                api::detail::SiteTu{std::span<const api::MarkerSite* const>(arr.get(), v.size())});
-            api::detail::SiteRegistry::tus[tu].store(t.get(), std::memory_order_release);
-            arrays_.push_back(std::move(arr));
-            tus_.push_back(std::move(t));
+            Tu& table = tus_.emplace_back(Tu{.sites = std::move(v)});
+            table.view.sites = table.sites;
+            api::detail::site_tus[tu].store(&table.view, std::memory_order_release);
         }
     }
 
 private:
+    struct Tu {
+        std::vector<const api::MarkerSite*> sites;
+        api::detail::SiteTu view;
+    };
     std::mutex mu_;
     std::deque<api::MarkerSite> sites_;
-    std::vector<std::unique_ptr<const api::MarkerSite*[]>> arrays_;
-    std::vector<std::unique_ptr<api::detail::SiteTu>> tus_;
+    std::deque<Tu> tus_;
 };
 
 }  // namespace
 
 void init_site_registry() {
-    static std::once_flag once;
-    std::call_once(once, [] {
-        api::detail::SiteRegistry::tus[TT_ZONE_RESERVED_TU].store(&kStallTu, std::memory_order_release);
-        static ttsl::Indestructible<SiteTables> tables;
-        tt::llrt::ZoneMetaRegistry::instance().set_listener(
-            [](std::span<const tt::llrt::ZoneMetaEntry* const> entries) { tables.get().add(entries); });
-    });
+    api::detail::site_tus[TT_ZONE_RESERVED_TU].store(&kStallTu, std::memory_order_release);
+    static ttsl::Indestructible<SiteTables> tables;
+    tt::llrt::ZoneMetaRegistry::instance().set_listener(
+        [](std::span<const tt::llrt::ZoneMetaEntry* const> entries) { tables.get().add(entries); });
 }
 
 }  // namespace tt::tt_metal::streaming_profiler
@@ -102,20 +98,30 @@ namespace tt::tt_metal::experimental::streaming_profiler {
 
 namespace internal = tt::tt_metal::streaming_profiler;
 
-CallbackHandle detail::register_callback(
-    std::string name, std::function<void(const Batch<RecordType::All>&)> callback) {
+detail::CallbackId detail::register_callback(std::string name, std::function<void(const BatchData&)> callback) {
     static std::atomic<uint32_t> anonymous{0};
     if (name.empty()) {
         name = "callback-" + std::to_string(++anonymous);
     }
-    return static_cast<CallbackHandle>(internal::service().add_consumer(
-        std::move(name), [cb = std::move(callback)](const Batch<RecordType::All>& b, uint64_t) { cb(b); }));
+    return internal::service().add_consumer(std::move(name), std::move(callback));
 }
 
-void UnregisterCallback(CallbackHandle handle) {
-    internal::service().remove_consumer(static_cast<internal::ConsumerHandle>(handle));
+void Callback::reset() noexcept {
+    if (id_ != detail::CallbackId{}) {
+        internal::service().remove_consumer(std::exchange(id_, detail::CallbackId{}));
+    }
 }
 
 bool IsActive() { return internal::service().is_active(); }
+
+double NsPerTscTick() noexcept { return 1.0 / internal::tsc_ticks_per_ns(); }
+
+namespace detail {
+std::chrono::steady_clock::time_point tsc_to_steady(int64_t tsc) {
+    const std::optional<int64_t> ns = internal::service().steady().ns(tsc);
+    TT_FATAL(ns, "streaming profiler: no steady_clock pair yet, before any capture");
+    return std::chrono::steady_clock::time_point(std::chrono::nanoseconds(*ns));
+}
+}  // namespace detail
 
 }  // namespace tt::tt_metal::experimental::streaming_profiler
