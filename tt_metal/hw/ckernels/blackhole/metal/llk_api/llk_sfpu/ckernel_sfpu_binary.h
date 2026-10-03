@@ -173,10 +173,10 @@ inline void calculate_sfpu_binary(
             // the sign first is what brings -0.0 into the guard.
             sfpi::vFloat mag_a = sfpi::setsgn(in0, 0);
             sfpi::vFloat mag_b = sfpi::setsgn(in1, 0);
-            sfpi::vFloat tiny = sfpi::as<sfpi::vFloat>(sfpi::vInt(kUlpStep));
-            v_if(mag_a == 0.0f && in1 > 0.0f) { result = tiny; }
+            // vConstFloatPrgm2 holds the bit pattern kUlpStep, programmed by sfpu_binary_init.
+            v_if(mag_a == 0.0f && in1 > 0.0f) { result = sfpi::vConstFloatPrgm2; }
             v_endif;
-            v_if(mag_a == 0.0f && in1 < 0.0f) { result = -tiny; }
+            v_if(mag_a == 0.0f && in1 < 0.0f) { result = -sfpi::vFloat(sfpi::vConstFloatPrgm2); }
             v_endif;
             // Equal operands return the target, so two zeros return in1's zero, which is not
             // always in0's: nextafter(+0, -0) is -0. This runs after the two guards above because
@@ -191,11 +191,10 @@ inline void calculate_sfpu_binary(
             // reason ckernel_sfpu_isclose.h reads bit patterns for its own Inf/NaN lanes. A
             // widened bfloat16 NaN has that exponent and a non-zero mantissa too, so this serves
             // both entry points unchanged. Last, so it wins over the direction and zero arms.
-            constexpr int32_t kInfBits = 0x7F800000;
-            constexpr int32_t kAbsMask = 0x7FFFFFFF;
-            v_if((bits & kAbsMask) > kInfBits) { result = nan; }
+            // vConstIntPrgm0 = 0x7FFFFFFF and vConstIntPrgm1 = 0x7F800000, programmed by sfpu_binary_init.
+            v_if((bits & sfpi::vConstIntPrgm0) > sfpi::vConstIntPrgm1) { result = nan; }
             v_endif;
-            v_if((sfpi::as<sfpi::vInt>(in1) & kAbsMask) > kInfBits) { result = nan; }
+            v_if((sfpi::as<sfpi::vInt>(in1) & sfpi::vConstIntPrgm0) > sfpi::vConstIntPrgm1) { result = nan; }
             v_endif;
         }
 
@@ -299,6 +298,10 @@ inline void sfpu_binary_init() {
         sfpu_reciprocal_init<false>();
     } else if constexpr (BINOP == BinaryOp::XLOGY) {
         _init_log_<APPROXIMATION_MODE>();
+    } else if constexpr (BINOP == BinaryOp::NEXTAFTER || BINOP == BinaryOp::NEXTAFTER_BF16) {
+        sfpi::vConstIntPrgm0 = 0x7FFFFFFF;
+        sfpi::vConstIntPrgm1 = 0x7F800000;
+        sfpi::vConstIntPrgm2 = (BINOP == BinaryOp::NEXTAFTER_BF16) ? 0x10000 : 1;
     }
 }
 
