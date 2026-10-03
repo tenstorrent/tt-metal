@@ -853,6 +853,15 @@ class TopKXLIndexOp(Enum):
     RemoveMsb = 2
 
 
+class TopKXLSplit(Enum):
+    """Index split timed by perf_topk_xl_split.py (sources/topk_xl_split_perf.cpp)."""
+
+    RowMajor = 0  # _topk_xl_separate_indices_row_major_<K>
+    Global = 1  # _topk_xl_separate_indices_row_major_global_<K>
+    GlobalBase = 2  # _topk_xl_separate_indices_row_major_global_base_<K>
+    Separate = 3  # _topk_xl_separate_indices_<K, gid>
+
+
 class TopKXLChunkBaseMode(Enum):
     Static = 0
     UpperStatic = 1

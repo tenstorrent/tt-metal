@@ -40,6 +40,7 @@ from .llk_params import (
     TopKXLChunkBaseMode,
     TopKXLIndexOp,
     TopKXLSortMode,
+    TopKXLSplit,
     Transpose,
     UnpackerEngine,
     VectorMode,
@@ -1125,6 +1126,22 @@ class TOPK_XL(TemplateParameter):
         if self.blaze_compat:
             lines.append("#define TOPK_XL_BLAZE_COMPAT 1")
         return "\n".join(lines)
+
+
+@dataclass
+class TOPK_XL_SPLIT(TemplateParameter):
+    """Compile-time knobs for ``topk_xl_split_perf.cpp``: K and which index split to time."""
+
+    topk_xl_k: int = 2048
+    topk_split: TopKXLSplit = TopKXLSplit.RowMajor
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr std::uint32_t TOPK_XL_K = {self.topk_xl_k};",
+                f"constexpr std::uint32_t TOPK_XL_SPLIT = {self.topk_split.value};",
+            ]
+        )
 
 
 @dataclass
