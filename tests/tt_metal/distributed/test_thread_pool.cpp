@@ -59,6 +59,26 @@ TEST(ThreadPoolTest, Exception) {
     EXPECT_THROW(thread_pool->wait(), std::exception);
 }
 
+// Two threads can wait on the pool at the same time; both return once the tasks have finished.
+TEST(ThreadPoolTest, ConcurrentWait) {
+    const uint32_t num_threads = MetalContext::instance().get_cluster().number_of_user_devices();
+    auto thread_pool = create_device_bound_thread_pool(DEFAULT_CONTEXT_ID, num_threads);
+    std::atomic<uint64_t> counter = 0;
+    for (int iter = 0; iter < 200; iter++) {
+        // Long enough that both waiters park.
+        for (uint32_t i = 0; i < num_threads; i++) {
+            thread_pool->enqueue([&counter]() {
+                std::this_thread::sleep_for(std::chrono::microseconds(200));
+                counter++;
+            });
+        }
+        std::thread other([&] { thread_pool->wait(); });
+        thread_pool->wait();
+        other.join();
+        EXPECT_EQ(counter.load(), (iter + 1) * num_threads);
+    }
+}
+
 std::shared_ptr<ThreadPool> create_pool_per_device() {
     return create_device_bound_thread_pool(
         DEFAULT_CONTEXT_ID, MetalContext::instance(DEFAULT_CONTEXT_ID).get_cluster().number_of_user_devices());
