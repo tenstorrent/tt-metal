@@ -80,6 +80,44 @@ TINY_TILES_MATMUL_COMBINATIONS = sweep_tiny_tiles_matmul(
 )
 
 
+def representative_tiny_tile_combinations():
+    """One tiny-tile config per distinct set of inputs the throttle dispatch can see.
+
+    _llk_math_matmul_init_ picks between the throttled and the unthrottled MOP on tile geometry
+    alone, and on the fallback it issues the same matmul_configure_mop call the level-0 branch
+    issues, then takes the same execute path. Every rt_dim/ct_dim shape is therefore already
+    covered by the throttle-0 sweep below; repeating all of them at a throttled level only
+    re-tests the same dispatch decision. Keep one config per (geometry, formats, dest mode).
+    """
+    representatives = {}
+    for config in TINY_TILES_MATMUL_COMBINATIONS:
+        tile_dims = config.tile_dimensions
+        dispatch_key = (
+            tile_dims.in0_tile_r_dim,
+            tile_dims.in0_tile_c_dim,
+            tile_dims.in1_tile_r_dim,
+            tile_dims.in1_tile_c_dim,
+            config.formats.input_format,
+            config.formats.output_format,
+            config.dest_acc,
+            config.dest_sync,
+        )
+        representatives.setdefault(dispatch_key, config)
+    return list(representatives.values())
+
+
+TINY_TILES_THROTTLE_COMBINATIONS = representative_tiny_tile_combinations()
+
+# Throttle level standing in for 1-3, where _llk_math_matmul_init_ takes the unthrottled
+# fallback regardless of fidelity.
+TINY_TILE_LOW_THROTTLE = 1
+# Throttle level standing in for 4-5, where the fallback is taken only at LoFi: above level 3
+# the execute path runs the MOP once per fidelity phase, which the unthrottled MOP already
+# does internally, so the LLK keeps high-fidelity matmuls on the throttled path. MM_THROTTLE_MAX
+# in tt_metal/hw/inc/api/compute/matmul.h is 5, so cover 5 rather than 4.
+TINY_TILE_HIGH_THROTTLE = 5
+
+
 ALL_TEST_PARAMS = list(
     chain(
         # Regular matmul with all throttle levels
@@ -89,12 +127,30 @@ ALL_TEST_PARAMS = list(
                 MATH_FIDELITIES, MATMUL_COMBINATIONS, [1, 2, 3, 4, 5]
             )
         ),
-        # Tiny tiles matmul with throttle level 0 only
+        # Tiny tiles at throttle 0: the full sweep, unchanged.
         (
             (fidelity, combinations, 0)
             for fidelity, combinations in product(
                 MATH_FIDELITIES, TINY_TILES_MATMUL_COMBINATIONS
             )
+        ),
+        # Tiny tiles at a throttled level <= 3: the fallback to the unthrottled MOP is taken
+        # at every fidelity.
+        (
+            (fidelity, combinations, TINY_TILE_LOW_THROTTLE)
+            for fidelity, combinations in product(
+                MATH_FIDELITIES, TINY_TILES_THROTTLE_COMBINATIONS
+            )
+        ),
+        # Tiny tiles above level 3, LoFi only: the one case where the fallback depends on
+        # fidelity as well as geometry. HiFi is deliberately absent -- there the LLK keeps the
+        # throttled path, which the geometry cannot serve. Measured on Blackhole: HiFi4 at
+        # throttle 5 on a tiny tile wedges the math thread, with asserts on (some geometries hit
+        # the LLK assert, others time out first) and with asserts off. Adding it here would wedge
+        # the board rather than fail the case.
+        (
+            (MathFidelity.LoFi, combinations, TINY_TILE_HIGH_THROTTLE)
+            for combinations in TINY_TILES_THROTTLE_COMBINATIONS
         ),
     )
 )
