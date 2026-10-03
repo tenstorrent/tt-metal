@@ -818,6 +818,16 @@ class PACK_UNTILIZE_INIT(TemplateParameter):
 
 
 @dataclass
+class SEMAPHORE_RING(TemplateParameter):
+    """Credits seeded in the compute semaphore ring of a perf kernel; 0 runs the pipeline without the semaphore."""
+
+    ring_depth: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint8_t RING_DEPTH = {self.ring_depth};"
+
+
+@dataclass
 class PERF_RUN_TYPE(TemplateParameter):
     perf_run_type: PerfRunType
 

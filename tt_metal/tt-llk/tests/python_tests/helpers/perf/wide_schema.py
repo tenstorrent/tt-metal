@@ -156,6 +156,7 @@ DB_SCHEMA = [
     Column("r_dimm", "int64", True, "configuration"),
     Column("reduce_pool_type", "string", True, "configuration"),
     Column("relu_config", "int64", True, "configuration"),
+    Column("ring_depth", "int64", True, "configuration"),
     Column("rmsnorm_num_faces", "int64", True, "configuration"),
     Column("rmsnorm_num_tiles", "int64", True, "configuration"),
     Column("scale_bits", "int64", True, "configuration"),
