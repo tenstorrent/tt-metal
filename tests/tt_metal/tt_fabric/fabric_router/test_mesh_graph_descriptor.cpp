@@ -892,24 +892,26 @@ TEST(MeshGraphDescriptorTests, TestIntraMeshConnections) {
     // Check intra mesh connections
     const auto& all_connections = desc.connections_by_type("MESH");
 
-    ASSERT_EQ(all_connections.size(), 24);
+    // The RING is on the extent-2 axis, which has no distinct wrap edge, so N/S stay ordinary LINE links:
+    // 7 grid edges x 2 directions + 2 express connections x 2 directions.
+    ASSERT_EQ(all_connections.size(), 18);
 
-    // Layout should look like this with wrapping in x direction and express connections
+    // Layout (no wrap on the 2-row axis) with express connections
     // 0 1 2
     // 3 4 5
     auto device_0 = desc.instances_by_name("D0")[0];
     auto connections = desc.connections_by_source_device_id(device_0);
-    ASSERT_EQ(connections.size(), 4);
+    ASSERT_EQ(connections.size(), 3);
     check_connections(desc, connections, {1, 3, 5}, 1u, mesh_ids[0], {"D1", "D3", "D5"});
 
     auto device_1 = desc.instances_by_name("D1")[0];
     connections = desc.connections_by_source_device_id(device_1);
-    ASSERT_EQ(connections.size(), 5);
+    ASSERT_EQ(connections.size(), 4);
     check_connections(desc, connections, {2, 4, 0, 5}, 1u, mesh_ids[0], {"D0", "D2", "D4", "D5"});
 
     auto device_2 = desc.instances_by_name("D2")[0];
     connections = desc.connections_by_source_device_id(device_2);
-    ASSERT_EQ(connections.size(), 3);
+    ASSERT_EQ(connections.size(), 2);
     check_connections(desc, connections, {1, 5}, 1u, mesh_ids[0], {"D1", "D5"});
 
     // Test all_names() returns unique names (as unordered_set)
@@ -2858,5 +2860,31 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 }
 
 TEST(MeshGraphDescriptorTests, MergeEmptyDescriptorsThrows) { EXPECT_ANY_THROW(MeshGraphDescriptor::merge({})); }
+
+// A RING on an axis of extent <= 2 has no distinct wrap edge. Wrapping it anyway makes N == S, so each chip
+// lists its single row neighbor twice and the topology mapper demands 2x the channels a 2x4 BH Loudbox has
+// between its rows, failing FABRIC_2D_TORUS_XY under STRICT validation.
+TEST(MeshGraphDescriptorTests, RingOnShortAxisDoesNotDuplicateNeighbors) {
+    const auto desc = MeshGraphDescriptor::generate_mesh_graph_descriptor_of_shape(
+        tt::tt_metal::distributed::MeshShape(2, 4),
+        FabricType::TORUS_XY,
+        FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+        tt::ARCH::BLACKHOLE,
+        /*num_connections_per_direction=*/2);
+
+    const auto mesh_ids = desc.instances_by_type("MESH");
+    ASSERT_EQ(mesh_ids.size(), 1u);
+    const auto& mesh_inst = desc.get_instance(mesh_ids[0]);
+    for (const auto& [local_id, global_id] : mesh_inst.sub_instances_local_id_to_global_id) {
+        std::multiset<GlobalNodeId> destinations;
+        for (const auto connection_id : desc.connections_by_source_device_id(global_id)) {
+            destinations.insert(desc.get_connection(connection_id).nodes[1]);
+        }
+        // One row neighbor (no wrap on the extent-2 axis) plus two distinct ring neighbors on the extent-4 axis.
+        EXPECT_EQ(destinations.size(), 3u) << "device " << local_id;
+        EXPECT_EQ(std::set<GlobalNodeId>(destinations.begin(), destinations.end()).size(), destinations.size())
+            << "device " << local_id << " lists a neighbor more than once";
+    }
+}
 
 }  // namespace tt::tt_fabric::fabric_router_tests
