@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <climits>
 #include <cstdint>
 #include <cstddef>
 #include <future>
@@ -144,6 +145,10 @@ void futex_wake_one(std::atomic<uint32_t>& word) {
     syscall(SYS_futex, reinterpret_cast<uint32_t*>(&word), FUTEX_WAKE_PRIVATE, 1, nullptr, nullptr, 0);
 }
 
+void futex_wake_all(std::atomic<uint32_t>& word) {
+    syscall(SYS_futex, reinterpret_cast<uint32_t*>(&word), FUTEX_WAKE_PRIVATE, INT_MAX, nullptr, nullptr, 0);
+}
+
 // Spins like std::atomic::wait before it parks (after 100 polls), so that callers can park on their own futex.
 template <typename Ready>
 bool spin_until(Ready ready) {
@@ -168,10 +173,10 @@ public:
     void add() { pending_.fetch_add(1, std::memory_order_relaxed); }
 
     void done() {
-        // A worker wakes the joining thread only if it is parked, and only when the count reaches zero.
+        // A worker wakes the joining threads only if one is parked, and only when the count reaches zero.
         if (pending_.fetch_sub(1, std::memory_order_seq_cst) == 1 &&
             waiter_parked_.exchange(0, std::memory_order_seq_cst) != 0) {
-            futex_wake_one(waiter_parked_);
+            futex_wake_all(waiter_parked_);
         }
     }
 
@@ -189,10 +194,10 @@ public:
             return;
         }
         while (true) {
-            // seq_cst pairs with done(): either done() sees the waiter parked, or the waiter sees zero.
+            // seq_cst pairs with done(): either done() sees the waiter parked, or the waiter sees zero. Only done()
+            // clears the flag, so that a returning waiter can't hide another one that is parked.
             waiter_parked_.store(1, std::memory_order_seq_cst);
             if (pending_.load(std::memory_order_seq_cst) == 0) {
-                waiter_parked_.store(0, std::memory_order_relaxed);
                 return;
             }
             futex_wait(waiter_parked_, 1);
