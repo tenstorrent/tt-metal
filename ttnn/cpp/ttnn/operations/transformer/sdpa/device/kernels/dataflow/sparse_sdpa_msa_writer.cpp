@@ -13,6 +13,9 @@
 #include "sparse_sdpa_msa_gather.hpp"  // per-NoC trid-ring (K_TRID_RING knob)
 #include "dataflow_common.hpp"         // fill_neginf_tile (persistent causal -inf mask tile)
 #include "block_cyclic_remap.hpp"      // tt::block_cyclic::logical_to_physical_page (block-cyclic cache remap)
+#include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_msa_common.hpp"  // kreq record
+
+namespace kreq = sparse_sdpa_msa::kreq;
 
 constexpr uint32_t one_bf16_packed = 0x3F803F80u;  // bf16(1.0) double-packed; generate_bcast_col_scalar uses >>16
 
@@ -27,7 +30,7 @@ void kernel_main() {
     constexpr uint32_t k_half = get_compile_time_arg_val(7);
     constexpr uint32_t v_half = get_compile_time_arg_val(8);
 
-    // CB ids match the factory's writer compile-arg block.
+    // CB ids match the factory's writer compile-arg block (meanings: SparseSDPAMsaOperation::Cb).
     constexpr uint32_t cb_out_rm = get_compile_time_arg_val(9);
     constexpr uint32_t cb_scale = get_compile_time_arg_val(10);
     constexpr uint32_t cb_col_identity = get_compile_time_arg_val(11);
@@ -47,7 +50,12 @@ void kernel_main() {
     constexpr uint32_t bc_sp = get_compile_time_arg_val(22);
     constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(23);
     constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(24);
-    constexpr auto out_args = TensorAccessorArgs<25, 0>();
+    // Per-core K/V block cache: when on, the writer fills the lower tile halves of each missed block into the
+    // reader's victim slot (cb_k_cache/cb_v_cache) instead of cb_k_in/cb_v_in; hits never reach it.
+    constexpr uint32_t KV_CACHE_SLOTS = get_compile_time_arg_val(25);
+    constexpr uint32_t cb_k_cache = get_compile_time_arg_val(26);
+    constexpr uint32_t cb_v_cache = get_compile_time_arg_val(27);
+    constexpr auto out_args = TensorAccessorArgs<sparse_sdpa_msa::WRITER_CT_ARGS, 0>();
     // K/V use RuntimeTensorShape so T can vary without recompilation.
     constexpr auto k_args =
         TensorAccessorArgs<out_args.next_compile_time_args_offset(), out_args.next_common_runtime_args_offset()>();
@@ -69,7 +77,9 @@ void kernel_main() {
     }
 
     Noc noc;
+    // A CB handle is free to construct, so every build names all of them and uses only its own.
     experimental::CB out_cb(cb_out_rm), k_cb(cb_k_in), v_cb(cb_v_in), kreq_cb(cb_kreq), kack_cb(cb_kack);
+    experimental::CB k_cache_cb(cb_k_cache), v_cache_cb(cb_v_cache);
     const auto out = TensorAccessor(out_args, out_addr);
     const auto k = TensorAccessor(k_args, k_addr);
     const auto v = TensorAccessor(v_args, v_addr);
@@ -95,21 +105,11 @@ void kernel_main() {
         kv_group = work_start / S;
         tok = work_start - kv_group * S;
     }
-    for (uint32_t work = 0; work < work_count; ++work) {
-        // Co-gather lower K/V tile halves for each selected block, then ack the reader.
-        bool last = false;
-        while (!last) {
-            kreq_cb.wait_front(1);
-            uint32_t block_id;
-            {
-                volatile tt_l1_ptr uint32_t* rq =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_read_ptr());
-                block_id = rq[0];
-                last = rq[1] != 0;
-            }
-            kreq_cb.pop_front(1);
-            // Block-cyclic cache: remap the logical block id (from the reader) to its physical block (invP).
-            // Identity for a natural-order cache (block_cyclic false).
+    // Lower K/V tile halves of one block: DRAM tiles [k_tile0, k_tile0 + k_half) -> L1 at k_dst + i * tile.
+    // Block-cyclic cache: the logical block id (from the reader) is remapped to its physical block (invP);
+    // identity for a natural-order cache (block_cyclic false).
+    auto gather_lower_halves =
+        [&](uint32_t block_id, experimental::CB& k_dst_cb, experimental::CB& v_dst_cb, uint32_t k_dst, uint32_t v_dst) {
             const uint32_t phys_block = tt::block_cyclic::
                 logical_to_physical_page<block_cyclic, bc_chunk_local, bc_sp, bc_shard_stride_gap, bc_slab_stride_gap>(
                     block_id);
@@ -121,14 +121,44 @@ void kernel_main() {
             }
             sparse_sdpa_msa::TridRing ring{noc};  // K/V lower halves share one ring.
             for (uint32_t i = 0; i < k_half; ++i) {
-                ring.read(k, k_cb, k_tile_bytes, k_tile0 + i, i * k_tile_bytes);
+                ring.read(k, k_dst_cb, k_tile_bytes, k_tile0 + i, k_dst + i * k_tile_bytes);
             }
             for (uint32_t i = 0; i < v_half; ++i) {
-                ring.read(v, v_cb, v_tile_bytes, v_tile0 + i, i * v_tile_bytes);
+                ring.read(v, v_dst_cb, v_tile_bytes, v_tile0 + i, v_dst + i * v_tile_bytes);
             }
             ring.drain();
             kack_cb.reserve_back(1);
             kack_cb.push_back(1);
+        };
+
+    for (uint32_t work = 0; work < work_count; ++work) {
+        // Serve the reader's gather requests for this token until its LAST, fetching the lower K/V tile halves of
+        // every block flagged FETCH into the streamed block buffer or the named cache slot.
+        bool last = false;
+        while (!last) {
+            kreq_cb.wait_front(1);
+            uint32_t block_id, flags, slot;
+            {
+                volatile tt_l1_ptr uint32_t* rq =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_read_ptr());
+                block_id = rq[kreq::BLOCK_ID];
+                flags = rq[kreq::FLAGS];
+                slot = rq[kreq::SLOT];
+            }
+            kreq_cb.pop_front(1);
+            last = (flags & kreq::LAST) != 0;
+            if (flags & kreq::FETCH) {
+                if constexpr (KV_CACHE_SLOTS == 0) {
+                    gather_lower_halves(block_id, k_cb, v_cb, 0, 0);
+                } else {
+                    gather_lower_halves(
+                        block_id,
+                        k_cache_cb,
+                        v_cache_cb,
+                        slot * k_tiles_per_block * k_tile_bytes,
+                        slot * v_tiles_per_block * v_tile_bytes);
+                }
+            }
         }
 
         out_cb.wait_front(block_tiles);  // one untilized [H, v_dim] block
