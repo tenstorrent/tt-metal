@@ -129,6 +129,9 @@ def test_bruteforce_sweep_ltx25_544p_145f_halo(
     device = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
     kernel = (3, 3, 3)
     out_dir = os.environ.get("SWEEP_OUT_DIR", "sweep_results_ltx25_544p_145f_halo")
+    # SWEEP_ONLY_BLOCKINGS="64,64,3,8,8;64,128,6,8,8" times just those blockings (hang bisects).
+    only = os.environ.get("SWEEP_ONLY_BLOCKINGS")
+    only_blockings = [tuple(int(v) for v in b.split(",")) for b in only.split(";")] if only else None
     run_sweep(
         device,
         C_in,
@@ -148,4 +151,5 @@ def test_bruteforce_sweep_ltx25_544p_145f_halo(
         table_key=key,
         max_seconds=float(os.environ.get("SWEEP_MAX_SECONDS", "720")),
         near_table=True,
+        only_blockings=only_blockings,
     )

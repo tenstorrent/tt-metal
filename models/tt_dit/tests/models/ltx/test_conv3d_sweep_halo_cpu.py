@@ -7,7 +7,7 @@ import pytest
 
 from models.tt_dit.utils.conv3d import _BLOCKINGS
 
-from ..wan2_2.bruteforce_conv3d_sweep import HaloSpec, build_all_blockings, halo_masks, halo_sticks
+from ..wan2_2.bruteforce_conv3d_sweep import HaloSpec, build_all_blockings, halo_masks, halo_sticks, prefetch_shard_fits
 from .bruteforce_conv3d_sweep_ltx import _SWEEP_LAYERS_LTX25_544P_145F_HALO
 
 
@@ -52,3 +52,30 @@ def test_ltx25_halo_layers_key_into_table(name, C_in, C_out, T, H, W, key, logic
 )
 def test_ltx25_halo_winners_in_table(key, blocking):
     assert _BLOCKINGS[key] == blocking
+
+
+@pytest.mark.parametrize(
+    "blocking, fits",
+    # exact_s2_res (C_in=512) blockings from blx03 job 484 that the factory budget puts on either side.
+    [
+        ((64, 256, 1, 8, 4), True),
+        ((64, 128, 6, 8, 2), True),
+        ((64, 64, 3, 8, 8), True),
+        ((64, 128, 7, 8, 2), True),
+        ((64, 128, 6, 8, 8), False),
+        ((64, 128, 6, 16, 4), False),
+        ((64, 128, 7, 8, 8), False),
+    ],
+)
+def test_prefetch_shard_fits_matches_factory_budget(blocking, fits):
+    assert prefetch_shard_fits(*blocking, (3, 3, 3), 512) == fits
+
+
+def test_ltx_table_blockings_without_prefetch_shard():
+    # In halo mode conv3d rejects a blocking without an L1 prefetch shard (the direct reader drops the halo).
+    no_shard = {
+        k
+        for k, v in _BLOCKINGS.items()
+        if k[2] in (128, 256, 512, 1024) and k[4] == (3, 3, 3) and not prefetch_shard_fits(*v, k[4], k[2])
+    }
+    assert no_shard == set()

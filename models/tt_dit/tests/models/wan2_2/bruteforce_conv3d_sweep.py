@@ -143,6 +143,58 @@ def estimate_l1_bytes(cin_block, cout_block, t_blk, h_blk, w_blk, kernel_size, C
     )
 
 
+# hal::get_max_worker_l1_unreserved_size() on BH; the factory keeps 200 KB of it for kernel code.
+BH_L1_UNRESERVED = 1_461_248
+L1_PREFETCH_HARD_CAP = 500 * 1024
+DRAM_READ_ALIGNMENT = 64
+
+
+def prefetch_shard_fits(
+    cin_block,
+    cout_block,
+    t_blk,
+    h_blk,
+    w_blk,
+    kernel_size,
+    C_in,
+    use_bias=True,
+    fp32_dest_acc_en=True,
+    l1_unreserved=BH_L1_UNRESERVED,
+    dtype_bytes=2,
+):
+    """True when conv3d_program_factory gives this blocking the L1 prefetch shard (stride 1, no dilation).
+
+    Mirrors the factory budget exactly; estimate_l1_bytes is looser. Without the shard the factory falls
+    back to the direct reader, which halo mode rejects.
+    """
+    kT, kH, kW = kernel_size
+    C_in_num_blocks = aligned_channels(C_in) // cin_block
+    num_patches = t_blk * h_blk * w_blk
+    patch_size = kT * kH * kW * cin_block
+    padded_patch_bytes = math.ceil(patch_size / 32) * 32 * dtype_bytes
+    M_t = math.ceil(num_patches / TILE_HEIGHT)
+    K_t = math.ceil(patch_size / 32)
+    N_t = math.ceil(cout_block / 32)
+    partial_tile = FP32_TILE_SIZE if (fp32_dest_acc_en and C_in_num_blocks > 1) else TILE_SIZE
+
+    vol2col_rm_pages = min(num_patches, TILE_HEIGHT if num_patches % TILE_HEIGHT == 0 else 2 * TILE_HEIGHT)
+    other = padded_patch_bytes * vol2col_rm_pages + TILE_SIZE * K_t + TILE_SIZE * K_t * N_t
+    other += partial_tile * M_t * N_t + TILE_SIZE * M_t * N_t
+    cin_bytes = cin_block * dtype_bytes
+    if cin_bytes % DRAM_READ_ALIGNMENT:
+        other += math.ceil((cin_bytes + DRAM_READ_ALIGNMENT - 1) / DRAM_READ_ALIGNMENT) * DRAM_READ_ALIGNMENT
+        other += DRAM_READ_ALIGNMENT
+    if C_in_num_blocks > 1:
+        other += partial_tile * M_t * N_t + TILE_SIZE
+    if use_bias:
+        other += TILE_SIZE * N_t
+
+    usable = l1_unreserved - 200 * 1024
+    prefetch_max = min(usable - other, L1_PREFETCH_HARD_CAP) if other < usable else 0
+    shard_bytes = (t_blk - 1 + kT) * (h_blk - 1 + kH) * (w_blk - 1 + kW) * cin_bytes
+    return shard_bytes <= prefetch_max
+
+
 # ---------------------------------------------------------------------------
 # Parallelism estimation
 # ---------------------------------------------------------------------------
@@ -456,6 +508,7 @@ def run_sweep(
     table_key=None,
     max_seconds=None,
     near_table=False,
+    only_blockings=None,
 ):
     """Sweep conv3d blockings for one shape; T/H/W are the per-device padded input dims.
 
@@ -466,6 +519,7 @@ def run_sweep(
                  (vae_ltx keys on the logical per-device size, the shards can be larger).
     max_seconds: stop starting new combos after this long.
     near_table:  try the blockings closest to the table blocking (fewest differing fields) first.
+    only_blockings: time exactly these blockings, in order, logging each one before its launch (hang bisects).
     """
     padded_cin = aligned_channels(C_in)
     _num_cores = grid_size.x * grid_size.y if grid_size else 120
@@ -483,6 +537,13 @@ def run_sweep(
     if near_table and table_blk is not None:
         # Stable sort: nearest neighbours of the table blocking first, build_all_blockings order within a distance.
         combos.sort(key=lambda c: sum(a != b for a, b in zip(c, table_blk)))
+    if only_blockings is not None:
+        combos = [tuple(b) for b in only_blockings]
+    if halo is not None:
+        no_shard = [c for c in combos if not prefetch_shard_fits(*c, kernel_size, C_in)]
+        if no_shard:
+            print(f"Dropping {len(no_shard)} blockings without an L1 prefetch shard (halo mode needs it): {no_shard}")
+            combos = [c for c in combos if c not in no_shard]
     if max_combos and len(combos) > max_combos:
         print(f"Capping combos from {len(combos)} to {max_combos}")
         combos = combos[:max_combos]
@@ -631,6 +692,8 @@ def run_sweep(
     PROBE_THRESHOLD = 1.5
 
     for i, (cin, cout, t_blk, h_blk, w_blk) in enumerate(combos):
+        if only_blockings is not None:
+            print(f"  launching ({cin},{cout},{t_blk},{h_blk},{w_blk})", flush=True)
         if max_seconds is not None and time.time() - t_start > max_seconds:
             print(f"Time budget {max_seconds}s reached after {i} of {len(combos)} combos", flush=True)
             break
