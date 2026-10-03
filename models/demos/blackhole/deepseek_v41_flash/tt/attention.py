@@ -317,6 +317,7 @@ class DSV41Attention:
         T = self.T
         y = self._lin(x, self.wqkv, "QKV")  # [1,1,T,1792] = [wq_a | wkv]
         qr = ttnn.rms_norm(ttnn.slice(y, [0, 0, 0, 0], [1, 1, T, Q_LORA]), weight=self.q_norm, epsilon=self.eps)
+        self._last_qr = qr  # the indexer of index-source layers consumes it (paged path)
         q = self._lin(qr, self.wq_b, "QB")
         kv = ttnn.rms_norm(
             ttnn.slice(y, [0, 0, 0, Q_LORA], [1, 1, T, Q_LORA + HEAD_DIM]), weight=self.kv_norm, epsilon=self.eps
