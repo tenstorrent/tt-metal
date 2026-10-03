@@ -1156,7 +1156,13 @@ class LTXPipeline:
         except OSError as e:
             logger.warning(f"prompt-embedding cache unavailable ({e}); encoding without it")
             return None
-        identity = {"prompts": prompts, "encoder": self.gemma_encoder_pair.embedding_cache_identity()}
+        identity_of = getattr(self.gemma_encoder_pair, "embedding_cache_identity", None)
+        if identity_of is None:
+            # An encoder that cannot name its sources (the Gemma-4 pair) gets no cache rather than a
+            # prompt-only key that would serve another model's embeddings.
+            logger.warning(f"{type(self.gemma_encoder_pair).__name__} has no cache identity; encoding without it")
+            return None
+        identity = {"prompts": prompts, "encoder": identity_of()}
         key = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         return os.path.join(embed_cache_dir, f"{key}.device.pt")
 
@@ -1167,6 +1173,7 @@ class LTXPipeline:
         cache (orchestration kept here). A cache hit returns saved embeddings without running
         the encoder; ``use_cache=False`` forces a real encode (used by warmup)."""
         cache_path = self._device_embed_cache_path(prompts) if use_cache else None
+        use_cache = use_cache and cache_path is not None
         if use_cache and os.path.exists(cache_path):
             logger.info(f"Loading cached device embeddings from {cache_path}")
             return torch.load(cache_path, weights_only=False)
