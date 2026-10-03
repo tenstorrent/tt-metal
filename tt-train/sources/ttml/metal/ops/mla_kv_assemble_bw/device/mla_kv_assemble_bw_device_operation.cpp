@@ -37,6 +37,28 @@ void MLAKVAssembleBwDeviceOperation::validate_on_program_cache_miss(
             "MLAKVAssembleBw requires {} memory layout to be INTERLEAVED. Got: {}",
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
+        const auto logical_shape = tensor.logical_shape();
+        TT_FATAL(
+            logical_shape.rank() == 4U, "MLAKVAssembleBw: {} must be rank-4. Got rank {}", name, logical_shape.rank());
+        const auto tile = tensor.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == TILE_HEIGHT && tile.get_width() == TILE_WIDTH,
+            "MLAKVAssembleBw: {} must use the default {}x{} tile. Got {}x{}",
+            name,
+            TILE_HEIGHT,
+            TILE_WIDTH,
+            tile.get_height(),
+            tile.get_width());
+        auto expected_padded = logical_shape;
+        expected_padded[-2] = tt::round_up(expected_padded[-2], TILE_HEIGHT);
+        expected_padded[-1] = tt::round_up(expected_padded[-1], TILE_WIDTH);
+        TT_FATAL(
+            tensor.padded_shape() == expected_padded,
+            "MLAKVAssembleBw: {} padded shape {} must be the minimally tile-padded logical shape {}. Custom "
+            "alignments are not supported.",
+            name,
+            tensor.padded_shape(),
+            expected_padded);
     };
 
     const auto& dK = tensor_args.dK;
@@ -46,11 +68,8 @@ void MLAKVAssembleBwDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(dK.device() == dV.device(), "MLAKVAssembleBw: dK and dV must be on the same device.");
 
-    const auto dK_shape = dK.padded_shape();
-    const auto dV_shape = dV.padded_shape();
-
-    TT_FATAL(dK_shape.rank() == 4U, "MLAKVAssembleBw: dK must be rank-4");
-    TT_FATAL(dV_shape.rank() == 4U, "MLAKVAssembleBw: dV must be rank-4");
+    const auto dK_shape = dK.logical_shape();
+    const auto dV_shape = dV.logical_shape();
 
     TT_FATAL(
         dK_shape[0] == dV_shape[0],
