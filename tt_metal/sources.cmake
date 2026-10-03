@@ -110,6 +110,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp
     api/tt-metalium/experimental/distributed_tensor/topology/distributed_tensor_configs.hpp
     api/tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp
+    api/tt-metalium/experimental/bfloat8.hpp
     api/tt-metalium/experimental/byte_based_tensor_transfers.hpp
     api/tt-metalium/experimental/tensor_apis_with_pad_values.hpp
     api/tt-metalium/experimental/tensor_host_pad_apis.hpp

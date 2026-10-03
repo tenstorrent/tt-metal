@@ -13,8 +13,11 @@
 #include <tt-metalium/bfloat2.hpp>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/experimental/bfloat8.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/tilize_utils.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
 
 namespace ttnn::bfp_utils {
@@ -59,6 +62,29 @@ static nb::ndarray<nb::numpy, float, nb::ndim<1>> unpack_impl(
     return nb::ndarray<nb::numpy, float, nb::ndim<1>>(result, 1, shape, std::move(owner));
 }
 
+template <typename T>
+static nb::ndarray<nb::numpy, T, nb::ndim<2>> untilize_impl(
+    const nb::ndarray<nb::array_api, const T, nb::ndim<1>, nb::c_contig, nb::device::cpu>& input,
+    uint32_t rows,
+    uint32_t cols) {
+    TT_FATAL(
+        input.size() == static_cast<size_t>(rows) * cols,
+        "untilize input has {} values, expected {} x {}",
+        input.size(),
+        rows,
+        cols);
+    ttsl::Span<const T> data_span(input.data(), input.size());
+    auto untilized = convert_layout(
+        data_span, PhysicalSize{rows, cols}, TensorLayoutType::TILED_NFACES, TensorLayoutType::LIN_ROW_MAJOR);
+
+    auto* result = new T[untilized.size()];
+    std::copy(untilized.begin(), untilized.end(), result);
+
+    nb::capsule owner(result, [](void* p) noexcept { delete[] static_cast<T*>(p); });
+    size_t shape[] = {rows, cols};
+    return nb::ndarray<nb::numpy, T, nb::ndim<2>>(result, 2, shape, std::move(owner));
+}
+
 void py_module(nb::module_& mod) {
     mod.def(
         "pack_bfp8",
@@ -96,11 +122,40 @@ void py_module(nb::module_& mod) {
         "unpack_bfp8",
         [](const nb::ndarray<nb::array_api, const uint32_t, nb::ndim<1>, nb::c_contig, nb::device::cpu>& input,
            bool row_major_output,
-           bool is_exp_a) { return unpack_impl(unpack_bfp8_tiles_into_float_vec, input, row_major_output, is_exp_a); },
+           bool is_exp_a,
+           std::optional<uint32_t> l1_alignment) {
+            if (!l1_alignment.has_value()) {
+                return unpack_impl(unpack_bfp8_tiles_into_float_vec, input, row_major_output, is_exp_a);
+            }
+            auto unpack = [alignment = *l1_alignment](
+                              ttsl::Span<const uint32_t> data, bool row_major, bool exp_a, std::nullopt_t) {
+                return tt::tt_metal::experimental::unpack_bfp8_tiles_into_float_vec(data, row_major, exp_a, alignment);
+            };
+            return unpack_impl(unpack, input, row_major_output, is_exp_a);
+        },
         nb::arg("input"),
         nb::arg("row_major_output") = false,
         nb::arg("is_exp_a") = false,
-        R"doc(Unpack raw BFP8 tile data back to float32.)doc");
+        nb::arg("l1_alignment") = nb::none(),
+        R"doc(Unpack raw BFP8 tile data back to float32.
+
+Without ``l1_alignment`` the exponent padding comes from the HAL, which opens the device cluster.
+Pass ``l1_alignment`` (16 on Wormhole, Blackhole and Quasar) to decode without a device.)doc");
+
+    mod.def(
+        "untilize",
+        &untilize_impl<float>,
+        nb::arg("input"),
+        nb::arg("rows"),
+        nb::arg("cols"),
+        R"doc(Reorder 32x32 face-ordered tiles into a row-major [rows, cols] array. Does not use a device.)doc");
+    mod.def(
+        "untilize",
+        &untilize_impl<uint16_t>,
+        nb::arg("input"),
+        nb::arg("rows"),
+        nb::arg("cols"),
+        R"doc(Reorder 32x32 face-ordered tiles of 16-bit values, e.g. bfloat16 bit patterns, into [rows, cols].)doc");
 
     mod.def(
         "unpack_bfp4",
