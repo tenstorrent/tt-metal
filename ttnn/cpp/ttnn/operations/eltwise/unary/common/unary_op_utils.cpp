@@ -17,7 +17,6 @@ namespace {
 
 std::string get_macro_definition(UnaryOpType op_type) {
     switch (op_type) {
-        case UnaryOpType::TT_POLY_BACKWARD_ERF_BW: return "TT_POLY_BACKWARD_ERF_BW_INCLUDE";
         case UnaryOpType::EXP: return "SFPU_OP_EXP_INCLUDE";
         case UnaryOpType::GELU:
         case UnaryOpType::GELU_TANH: return "SFPU_OP_GELU_INCLUDE";
@@ -378,21 +377,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("sigmoid_tile<{}, {}u>({});", vec_mode_sym, param1, idst)};
         }
         case UnaryOpType::ERF:
-#if !defined(TT_POLY_LLK_DISABLE)
-            if (input_dtype == DataType::BFLOAT16 && params.size() == 1 && param0 == 0.0f) {
-                return {"erf_tt_poly_bf16_tile_init<false>();", fmt::format("erf_tt_poly_bf16_tile<false>({});", idst)};
-            }
-#endif
             return {
                 fmt::format("erf_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("erf_tile<{1}u>({0});", idst, (uint32_t)param0)};
-        case UnaryOpType::ERFC:
-#if !defined(TT_POLY_LLK_DISABLE)
-            if (input_dtype == DataType::BFLOAT16) {
-                return {"erfc_tt_poly_bf16_tile_init();", fmt::format("erfc_tt_poly_bf16_tile({});", idst)};
-            }
-#endif
-            return {"erfc_tile_init();", fmt::format("erfc_tile({0});", idst)};
+        case UnaryOpType::ERFC: return {"erfc_tile_init();", fmt::format("erfc_tile({0});", idst)};
         case UnaryOpType::RDIV: {
             TT_FATAL(params.size() == 2, "Expected rdiv to take 2 parameters (divisor, rounding mode)");
             static constexpr const char* rounding_mode_strs[] = {
@@ -763,8 +751,6 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
 std::pair<std::string, std::string> get_op_init_and_func_default(
     UnaryOpType op_type, std::string idst, std::optional<DataType> input_dtype) {
     switch (op_type) {
-        case UnaryOpType::TT_POLY_BACKWARD_ERF_BW:
-            TT_THROW("Complete backward marker requires the selected binary factory");
         case UnaryOpType::BITWISE_NOT: return {"bitwise_not_tile_init();", fmt::format("bitwise_not_tile({});", idst)};
         case UnaryOpType::RECIP: return {"recip_tile_init();", fmt::format("recip_tile({});", idst)};
         case UnaryOpType::GELU: return {"gelu_tile_init();", fmt::format("gelu_tile({});", idst)};
@@ -773,11 +759,6 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::LOG1P: return {"log1p_tile_init();", fmt::format("log1p_tile({});", idst)};
         case UnaryOpType::TANH: return {"tanh_tile_init();", fmt::format("tanh_tile({});", idst)};
         case UnaryOpType::RELU:
-#if !defined(TT_POLY_LLK_DISABLE)
-            if (input_dtype == DataType::BFLOAT16) {
-                return {"relu_tt_poly_bf16_tile_init();", fmt::format("relu_tt_poly_bf16_tile({});", idst)};
-            }
-#endif
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             // For unsigned inputs, relu is the identity. Emit an empty op so the tile is just copied.
@@ -827,20 +808,8 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::I1: return {"i1_tile_init();", fmt::format("i1_tile({});", idst)};
         case UnaryOpType::EXP: return {"exp_tile_init();", fmt::format("exp_tile({});", idst)};
         case UnaryOpType::SIGMOID: return {"sigmoid_tile_init();", fmt::format("sigmoid_tile({});", idst)};
-        case UnaryOpType::ERF:
-#if !defined(TT_POLY_LLK_DISABLE)
-            if (input_dtype == DataType::BFLOAT16) {
-                return {"erf_tt_poly_bf16_tile_init();", fmt::format("erf_tt_poly_bf16_tile({});", idst)};
-            }
-#endif
-            return {"erf_tile_init();", fmt::format("erf_tile({0});", idst)};
-        case UnaryOpType::ERFC:
-#if !defined(TT_POLY_LLK_DISABLE)
-            if (input_dtype == DataType::BFLOAT16) {
-                return {"erfc_tt_poly_bf16_tile_init();", fmt::format("erfc_tt_poly_bf16_tile({});", idst)};
-            }
-#endif
-            return {"erfc_tile_init();", fmt::format("erfc_tile({});", idst)};
+        case UnaryOpType::ERF: return {"erf_tile_init();", fmt::format("erf_tile({0});", idst)};
+        case UnaryOpType::ERFC: return {"erfc_tile_init();", fmt::format("erfc_tile({});", idst)};
         case UnaryOpType::ERFINV: return {"erfinv_tile_init();", fmt::format("erfinv_tile({});", idst)};
         case UnaryOpType::LOG10:
             // log10[x] = log[x]/log[10] = log[x]*0.4342944819032518; FP32@U32 0x3ede5bd9; FP16@U16 0x36f3;
@@ -936,44 +905,14 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::SQRT: return {"sqrt_tile_init();", fmt::format("sqrt_tile({});", idst)};
         case UnaryOpType::RSQRT: return {"rsqrt_tile_init();", fmt::format("rsqrt_tile({});", idst)};
         case UnaryOpType::CBRT: return {"cbrt_tile_init();", fmt::format("cbrt_tile({});", idst)};
-        case UnaryOpType::EXP2:
-#if !defined(TT_POLY_LLK_DISABLE)
-            if (input_dtype == DataType::BFLOAT16) {
-                return {"exp2_tt_poly_bf16_tile_init();", fmt::format("exp2_tt_poly_bf16_tile({});", idst)};
-            }
-#endif
-            return {"exp2_tile_init();", fmt::format("exp2_tile({});", idst)};
-        case UnaryOpType::EXPM1:
-#if !defined(TT_POLY_LLK_DISABLE)
-            if (input_dtype == DataType::BFLOAT16) {
-                return {"expm1_tt_poly_bf16_tile_init();", fmt::format("expm1_tt_poly_bf16_tile({});", idst)};
-            }
-#endif
-            return {"expm1_tile_init();", fmt::format("expm1_tile({});", idst)};
+        case UnaryOpType::EXP2: return {"exp2_tile_init();", fmt::format("exp2_tile({});", idst)};
+        case UnaryOpType::EXPM1: return {"expm1_tile_init();", fmt::format("expm1_tile({});", idst)};
         case UnaryOpType::ASIN: return {"asin_tile_init();", fmt::format("asin_tile({});", idst)};
         case UnaryOpType::ASINH: return {"asinh_tile_init();", fmt::format("asinh_tile({});", idst)};
-        case UnaryOpType::ACOS:
-#if !defined(TT_POLY_LLK_DISABLE)
-            if (input_dtype == DataType::BFLOAT16) {
-                return {"acos_tt_poly_bf16_tile_init();", fmt::format("acos_tt_poly_bf16_tile({});", idst)};
-            }
-#endif
-            return {"acos_tile_init();", fmt::format("acos_tile({});", idst)};
-        case UnaryOpType::ACOSH:
-#if !defined(TT_POLY_LLK_DISABLE)
-            if (input_dtype == DataType::BFLOAT16) {
-                return {"acosh_tt_poly_bf16_tile_init();", fmt::format("acosh_tt_poly_bf16_tile({});", idst)};
-            }
-#endif
-            return {"acosh_tile_init();", fmt::format("acosh_tile({});", idst)};
+        case UnaryOpType::ACOS: return {"acos_tile_init();", fmt::format("acos_tile({});", idst)};
+        case UnaryOpType::ACOSH: return {"acosh_tile_init();", fmt::format("acosh_tile({});", idst)};
         case UnaryOpType::ATAN: return {"atan_tile_init();", fmt::format("atan_tile({});", idst)};
-        case UnaryOpType::ATANH:
-#if !defined(TT_POLY_LLK_DISABLE)
-            if (input_dtype == DataType::BFLOAT16) {
-                return {"atanh_tt_poly_bf16_tile_init();", fmt::format("atanh_tt_poly_bf16_tile({});", idst)};
-            }
-#endif
-            return {"atanh_tile_init();", fmt::format("atanh_tile({});", idst)};
+        case UnaryOpType::ATANH: return {"atanh_tile_init();", fmt::format("atanh_tile({});", idst)};
         case UnaryOpType::TAN: return {"tan_tile_init();", fmt::format("tan_tile({});", idst)};
         case UnaryOpType::SILU: return {"silu_tile_init();", fmt::format("silu_tile({});", idst)};
         case UnaryOpType::FLOOR:
@@ -1232,6 +1171,39 @@ std::map<std::string, std::string> get_block_defines(
     }
     block_defines[fmt::format("SFPU_OP_CHAIN_{}", block_id)] = block_define;
     return block_defines;
+}
+
+std::optional<std::string> get_pack_relu_config(
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
+    DataType input_dtype,
+    DataType output_dtype,
+    bool fp32_dest_acc_en) {
+    // The packer compares BF16 bit patterns as it writes a 16-bit DEST tile out.
+    if (op_chain.size() != 1 || input_dtype != DataType::BFLOAT16 || output_dtype != DataType::BFLOAT16 ||
+        fp32_dest_acc_en) {
+        return std::nullopt;
+    }
+    const auto& op = op_chain[0];
+    switch (op.type()) {
+        case UnaryOpType::RELU: return "ReluConfig::zero()";
+        case UnaryOpType::RELU_MIN:
+            if (op.get_param_if<float>(0) == 0.0f) {
+                return "ReluConfig::zero()";
+            }
+            return std::nullopt;
+        case UnaryOpType::THRESHOLD:
+            if (op.get_param_if<float>(0) == 0.0f && op.get_param_if<float>(1) == 0.0f) {
+                return "ReluConfig::zero()";
+            }
+            return std::nullopt;
+        case UnaryOpType::RELU6: return "ReluConfig::max_threshold(0x40c0)";
+        case UnaryOpType::RELU_MAX:
+            if (op.get_param_if<float>(0) == 6.0f) {
+                return "ReluConfig::max_threshold(0x40c0)";
+            }
+            return std::nullopt;
+        default: return std::nullopt;
+    }
 }
 
 // update split eltwise ops include macros

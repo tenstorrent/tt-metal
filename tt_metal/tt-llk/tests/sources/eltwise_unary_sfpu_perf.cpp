@@ -20,12 +20,7 @@
 std::uint32_t unp_cfg_context                          = 0;
 std::uint32_t pack_sync_tile_dst_ptr                   = 0;
 std::uint32_t math_sync_tile_dst_index                 = 0;
-static constexpr std::uint32_t MAX_TILES_DEST =
-#ifdef TT_POLY_LLK_TEST_SINGLE_TILE
-    1;
-#else
-    is_fp32_dest_acc_en ? 4 : 8;
-#endif
+static constexpr std::uint32_t MAX_TILES_DEST          = is_fp32_dest_acc_en ? 4 : 8;
 static constexpr ckernel::DstSync DST_SYNC_MODE        = ckernel::DstSync::SyncHalf;
 static constexpr ckernel::BroadcastType BROADCAST_TYPE = ckernel::BroadcastType::NONE;
 
@@ -114,9 +109,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpu_operations.h"
-#ifdef TT_POLY_LLK_TEST_HEADER
-#include TT_POLY_LLK_TEST_HEADER
-#endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -142,29 +134,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // approx exp it selects the clamped approx-exp branch in sfpu_operations.
         // Omitting it defaulted to false -> a different approx path -> mismatch.
         // TopK rows: the init runs the topk init (fused variant when FUSED_SORT).
-#if defined(TT_POLY_LLK_TEST_NO_STOCK_INIT) && !defined(TT_POLY_LLK_TEST_REPLACE_INIT)
-        ckernel::llk_math_eltwise_unary_sfpu_init<SfpuType::unused, is_fp32_dest_acc_en>();
-#elif !defined(TT_POLY_LLK_TEST_REPLACE_INIT)
         test_utils::call_unary_sfpu_operation_init<
             SFPU_UNARY_OPERATION,
             APPROX_MODE,
             is_fp32_dest_acc_en,
             ITERATIONS,
             FAST_MODE,
-            false /* STABLE_SORT */,
-            CLAMP_NEGATIVE>();
-#endif
-#ifdef TT_POLY_LLK_TEST_INIT
-#ifdef TT_POLY_LLK_TEST_REPLACE_INIT
-#ifdef TT_POLY_LLK_TEST_PRECISION_SPLIT
-        ckernel::llk_math_eltwise_unary_sfpu_init<SFPU_UNARY_OPERATION>(ckernel::sfpu::TT_POLY_LLK_TEST_INIT<APPROX_MODE, true>);
-#else
-        ckernel::llk_math_eltwise_unary_sfpu_init<SFPU_UNARY_OPERATION>(ckernel::sfpu::TT_POLY_LLK_TEST_INIT<>);
-#endif
-#else
-        ckernel::sfpu::TT_POLY_LLK_TEST_INIT();
-#endif
-#endif
+            STABLE_SORT,
+            CLAMP_NEGATIVE,
+            DataFormat::Invalid /* TYPECAST_IN */,
+            DataFormat::Invalid /* TYPECAST_OUT */,
+            FUSED_SORT>();
         PROFILER_SYNC();
     }
     {
@@ -213,14 +193,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             // "consumed" and can be overwritten with new data.
                             // Due to the fact that BROADCAST_TYPE is always NONE in the test and combination of unpack_to_dest and 32b data is always set,
                             // this method will perform synchronization only and no actual data copy.
-#ifdef TT_POLY_LLK_TEST_COPY_REBASE
-                            _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
-                                1, formats.math, formats.math);
-                            TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
-#else
                             _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
                                 block_tile, formats.math, formats.math);
-#endif
                         }
                         else
                         {
@@ -251,27 +225,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             LLK_ASSERT(
                                 (block_tile < get_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                                 "block_tile exceeds max dest tiles");
-#ifdef TT_POLY_LLK_TEST_COPY_REBASE
-                            _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
-                                1, formats.math, formats.math);
-                            TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
-#else
                             _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
                                 block_tile, formats.math, formats.math);
-#endif
                         }
 
-#ifdef TT_POLY_LLK_TEST_CALC
-                        SFPU_UNARY_CALL(
-                            DST_SYNC_MODE,
-                            is_fp32_dest_acc_en,
-                            TT_POLY_LLK_TEST_CALC,
-                            (TT_POLY_LLK_TEST_ITERATIONS),
-                            block_tile,
-                            VectorMode::TT_POLY_LLK_TEST_VECTOR_MODE);
-#elif defined(TT_POLY_LLK_TEST_STOCK_CALL)
-                        TT_POLY_LLK_TEST_STOCK_CALL
-#else
                         test_utils::call_unary_sfpu_operation<
                             DST_SYNC_MODE,
                             is_fp32_dest_acc_en,
@@ -280,9 +237,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             is_fp32_dest_acc_en,
                             ITERATIONS,
                             FAST_MODE,
-                            false /* STABLE_SORT */,
-                            CLAMP_NEGATIVE>(block_tile, formats.math);
-#endif
+                            STABLE_SORT,
+                            CLAMP_NEGATIVE,
+                            DataFormat::Invalid /* TYPECAST_IN */,
+                            DataFormat::Invalid /* TYPECAST_OUT */,
+                            FUSED_SORT>(block_tile, formats.math);
                     }
                 }
             }
@@ -304,27 +263,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             (block_tile < get_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "block_tile exceeds max dest tiles");
 
-#ifdef TT_POLY_LLK_TEST_COPY_REBASE
-                        _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
-                            1, formats.math, formats.math);
-                        TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
-#else
                         _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
                             block_tile, formats.math, formats.math);
-#endif
 
-// Start SFPU operation
-#ifdef TT_POLY_LLK_TEST_CALC
-                        SFPU_UNARY_CALL(
-                            DST_SYNC_MODE,
-                            is_fp32_dest_acc_en,
-                            TT_POLY_LLK_TEST_CALC,
-                            (TT_POLY_LLK_TEST_ITERATIONS),
-                            block_tile,
-                            VectorMode::TT_POLY_LLK_TEST_VECTOR_MODE);
-#elif defined(TT_POLY_LLK_TEST_STOCK_CALL)
-                        TT_POLY_LLK_TEST_STOCK_CALL
-#else
+                        // Start SFPU operation
                         test_utils::call_unary_sfpu_operation<
                             DST_SYNC_MODE,
                             is_fp32_dest_acc_en,
@@ -333,9 +275,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             is_fp32_dest_acc_en,
                             ITERATIONS,
                             FAST_MODE,
-                            false /* STABLE_SORT */,
-                            CLAMP_NEGATIVE>(block_tile, formats.math);
-#endif
+                            STABLE_SORT,
+                            CLAMP_NEGATIVE,
+                            DataFormat::Invalid /* TYPECAST_IN */,
+                            DataFormat::Invalid /* TYPECAST_OUT */,
+                            FUSED_SORT>(block_tile, formats.math);
                     }
 
                     _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
@@ -352,10 +296,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
-#ifdef TT_POLY_LLK_TEST_PACK_HEADER
-#include TT_POLY_LLK_TEST_PACK_HEADER
-using GeneratedPackConfig = TT_POLY_LLK_TEST_PACK_CONFIG;
-#endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -378,19 +318,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces);
         // Initialize destination for packing
         _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
-#ifdef TT_POLY_LLK_TEST_PACK_CONFIG
-        if constexpr (!is_fp32_dest_acc_en && GeneratedPackConfig::kRoute == 4u)
-        {
-            if constexpr (GeneratedPackConfig::kHasUpper)
-            {
-                _llk_pack_relu_config_(ckernel::ReluConfig::max_threshold(GeneratedPackConfig::kPackReluThresholdBits));
-            }
-            else
-            {
-                _llk_pack_relu_config_(ckernel::ReluConfig::zero());
-            }
-        }
-#endif
 
         PROFILER_SYNC();
     }
@@ -438,12 +365,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 
-#ifdef TT_POLY_LLK_TEST_PACK_CONFIG
-        if constexpr (!is_fp32_dest_acc_en && GeneratedPackConfig::kRoute == 4u)
-        {
-            _llk_pack_relu_config_(ckernel::ReluConfig::none());
-        }
-#endif
         PROFILER_SYNC();
     }
 }

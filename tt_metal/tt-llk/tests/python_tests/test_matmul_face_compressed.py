@@ -16,7 +16,6 @@ from helpers.compressed_utils import (
 )
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
 from helpers.tile_constants import FACE_C_DIM
 
 
@@ -142,7 +141,7 @@ def encode_meta(assignment, ct, kt, chunk_info):
     # is kt//2 (= K//32) 32x32 Float16_b tiles of 2048 B each.
     buf_a_addr = (
         StimuliConfig.STIMULI_L1_ADDRESS_DEBUG
-        if TestConfig.uses_debug_memory_layout()
+        if StimuliConfig.WITH_COVERAGE
         else StimuliConfig.STIMULI_L1_ADDRESS_PERF
     )
     buf_b_words = (buf_a_addr + 2048 * (kt // 2)) // 16 - 1

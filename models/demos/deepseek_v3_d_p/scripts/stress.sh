@@ -52,21 +52,26 @@ for i in $(seq 1 "$LOOP"); do
   tt-smi -glx_reset 2>&1 | tail -3
 
   cd "$TT_METAL_HOME"
+  # A reused log dir must not carry an earlier hang's triage into this iteration.
+  rm -f "$(triage_out "$LOG_DIR" "$i")"
+
   # `tee -a "$LOG"` on the exit line, not a bare echo: the status code has to land
   # INSIDE the per-iteration log, because that is the only thing watch.sh reads. A
   # signal kill (SIGBUS/SIGSEGV) prints no pytest summary line at all, so without
   # this the scan can only guess from a log that stopped growing — which is how the
   # 2026-08-12 SIGBUS crashes all displayed as HANG?.
-  bash -c "$ENV_VARS pytest -vs \"$PYTEST_TARGET\" |& tee \"$LOG\"; rc=\${PIPESTATUS[0]}; echo \"TEST_DONE_EXIT=\$rc\" | tee -a \"$LOG\""
+  bash -c "$ENV_VARS $(triage_env "$LOG_DIR" "$i")pytest -vs \"$PYTEST_TARGET\" |& tee \"$LOG\"; rc=\${PIPESTATUS[0]}; echo \"TEST_DONE_EXIT=\$rc\" | tee -a \"$LOG\""
 
   # Post-mortem BEFORE the pkill/reset below, while the host state is still the
   # state that failed. This is the only crash forensics available here: dmesg is
   # root-only on these nodes (dmesg_restrict=1), so the driver's own message —
   # e.g. "pin_user_pages_longterm failed: -14" — cannot be captured from a run.
   RC=$(grep -oE 'TEST_DONE_EXIT=[0-9]+' "$LOG" 2>/dev/null | tail -1 | cut -d= -f2)
-  if [ -n "$RC" ] && [ "$RC" -ne 0 ]; then
+  if [ -s "$(triage_out "$LOG_DIR" "$i")" ]; then
+    echo "### hang triaged -> $(triage_out "$LOG_DIR" "$i")"
+  elif [ -n "$RC" ] && [ "$RC" -ne 0 ]; then
     crash_snapshot "$LOG_DIR" "$i" "$RC" "$LOG"
-    echo "### non-zero exit $RC ($(sig_name "$RC")) — snapshot: $(printf '%s/crash_%02d.txt' "$LOG_DIR" "$i")"
+    echo "### non-zero exit $RC ($(sig_name "$RC")) — $(phase_split "$LOG" "$(stat -c %Y "$LOG")") — snapshot: $(printf '%s/crash_%02d.txt' "$LOG_DIR" "$i")"
   fi
 
   pkill -9 -f pytest 2>/dev/null || true

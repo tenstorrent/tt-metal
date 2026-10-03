@@ -218,10 +218,7 @@ class StimuliConfig:
         )
 
         self.buf_a_addr = 0
-        # Imported here to avoid the TestConfig/StimuliConfig module cycle.
-        from .test_config import TestConfig
-
-        if TestConfig.uses_debug_memory_layout():
+        if StimuliConfig.WITH_COVERAGE:
             self.buf_a_addr = StimuliConfig.STIMULI_L1_ADDRESS_DEBUG
         else:
             self.buf_a_addr = StimuliConfig.STIMULI_L1_ADDRESS_PERF

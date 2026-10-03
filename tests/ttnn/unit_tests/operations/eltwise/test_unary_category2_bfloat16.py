@@ -2,22 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.utility_functions import is_blackhole, is_wormhole_b0
 import torch
 import pytest
 import ttnn
-from tests.ttnn.utils_for_testing import (
-    assert_equal,
-    assert_with_ulp,
-    assert_with_pcc,
-    generate_all_bfloat16_bitpatterns,
-)
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp, assert_with_pcc
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     generate_bfloat16_bits,
     generate_bfloat16_bits_in_range,
     to_tt_tensor,
     SMALLEST_NORMAL_BF16,
-    assert_bfloat16_compiled_contract,
 )
 
 pytestmark = pytest.mark.use_module_device
@@ -343,51 +336,3 @@ def test_tanhshrink(device):
 
     assert_with_ulp(expected_result=golden[remaining], actual_result=result[remaining], ulp_threshold=2)
     assert_with_pcc(golden[cancellation_band], result[cancellation_band], pcc=0.999)
-
-
-@pytest.mark.skipif(
-    not (is_blackhole() or is_wormhole_b0()), reason="compiler-generated BF16 kernel ships on Blackhole and Wormhole B0"
-)
-def test_relu_bf16_compiled_contract(device):
-    import importlib
-    import numpy as np
-
-    _RAW_TO_REFERENCE_INPUT = {
-        "pos_zero": "pos_zero",
-        "neg_zero": "pos_zero",
-        "pos_subnormal": "pos_zero",
-        "neg_subnormal": "pos_zero",
-        "finite_other": "finite_other",
-        "pos_inf": "pos_inf",
-        "neg_inf": "neg_inf",
-        "pos_nan": "pos_inf",
-        "neg_nan": "neg_inf",
-    }
-
-    def _declared_piece_0(x):
-        return np.broadcast_to(np.asarray(0, dtype=np.float64), x.shape)
-
-    def _declared_piece_1(x):
-        return np.broadcast_to(np.asarray(x, dtype=np.float64), x.shape)
-
-    def _declared_forward(x):
-        result = np.full(x.shape, np.nan)
-        finite = np.isfinite(x)
-        bins = np.searchsorted((0.0,), x, side="right")
-        active = finite & (bins == 0)
-        result[active] = _declared_piece_0(x[active])
-        active = finite & (bins == 1)
-        result[active] = _declared_piece_1(x[active])
-        return result
-
-    def _reference(values):
-        return torch.from_numpy(_declared_forward(values.numpy()))
-
-    def _real_domain_mask(values):
-        return np.ones(values.shape, dtype=bool)
-
-    host = generate_all_bfloat16_bitpatterns()
-    assert host.numel() == 65536
-    device_input = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    result = ttnn.to_torch(ttnn.relu(device_input, **{})).to(torch.bfloat16)
-    assert_bfloat16_compiled_contract(host, result, _reference, _real_domain_mask, _RAW_TO_REFERENCE_INPUT, ((), ()))

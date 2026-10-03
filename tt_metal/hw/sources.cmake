@@ -153,10 +153,12 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/generic_moe_gate.h
     inc/api/compute/experimental/hadamard.h
     inc/api/compute/experimental/indexer_mul_custom.h
+    inc/api/compute/experimental/layernorm.h
     inc/api/compute/experimental/matmul_custom.h
     inc/api/compute/experimental/mul_reduce_scalar.h
     inc/api/compute/experimental/pack_block.h
     inc/api/compute/experimental/pack_rows_to_addr.h
+    inc/api/compute/experimental/reg_api.h
     inc/api/compute/experimental/rmsnorm.h
     inc/api/compute/experimental/rope_sfpu.h
     inc/api/compute/experimental/sdpa.h
@@ -230,7 +232,6 @@ set(HW_JIT_API_HEADERS
     inc/hostdev/dev_msgs.h
     inc/hostdev/device_print_common.h
     inc/hostdev/device_print_structures.h
-    inc/hostdev/fabric_telemetry_msgs.h
     inc/hostdev/profiler_common.h
     inc/hostdev/profiler_zone_id.h
     inc/hostdev/realtime_profiler_msgs.h
@@ -317,6 +318,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/quasar/noc/att/att_config.h
     inc/internal/tt-2xx/quasar/noc/att/noc_address_backend_att.h
     inc/internal/tt-2xx/quasar/noc/att/configs/grendel_qsr1_att_config.h
+    inc/internal/tt-2xx/quasar/noc/att/configs/horizon_2x3_att_config.h
     inc/internal/tt-2xx/quasar/noc/att/configs/quasar_aether_2x3_att_config.h
     inc/internal/tt-2xx/quasar/noc/att/temporary_programming/att_program.h
     inc/internal/tt-2xx/quasar/noc/att/temporary_programming/att_program_data.h
@@ -333,6 +335,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/quasar/noc_nonblocking_api_v1.h
     inc/internal/tt-2xx/quasar/noc_nonblocking_api_v2.h
     inc/internal/tt-2xx/quasar/noc_nonblocking_api_v3.h
+    inc/internal/tt-2xx/quasar/semaphore_cached_pool.h
     inc/internal/tt-2xx/tt-2.0.0/meta/fds_registers/tt_fds_dispatch_reg.h
     inc/internal/tt-2xx/tt-2.0.0/meta/fds_registers/tt_fds_tensixneo_reg.h
     inc/internal/tt-2xx/tt-2.0.0/meta/registers/overlay_reg.h
@@ -357,6 +360,18 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/tt-2.0.1/meta/registers/tt_cluster_plic_reg.h
     inc/internal/tt-2xx/tt-2.0.1/meta/registers/tt_overlay_llk_tile_counters_reg.h
     inc/internal/tt-2xx/tt-2.0.1/meta/registers/tt_rocc_accel_reg.h
+    inc/internal/tt-2xx/tt-2.0.2/meta/fds_registers/tt_fds_dispatch_reg.h
+    inc/internal/tt-2xx/tt-2.0.2/meta/fds_registers/tt_fds_tensixneo_reg.h
+    inc/internal/tt-2xx/tt-2.0.2/meta/registers/overlay_reg.h
+    inc/internal/tt-2xx/tt-2.0.2/meta/registers/memory_port_cacheable_reg.h
+    inc/internal/tt-2xx/tt-2.0.2/meta/registers/memory_port_noncacheable_reg.h
+    inc/internal/tt-2xx/tt-2.0.2/meta/registers/tt_cache_controller_reg.h
+    inc/internal/tt-2xx/tt-2.0.2/meta/registers/tt_cluster_clint_reg.h
+    inc/internal/tt-2xx/tt-2.0.2/meta/registers/tt_cluster_ctrl_reg.h
+    inc/internal/tt-2xx/tt-2.0.2/meta/registers/tt_cluster_ctrl_t6_l1_csr_reg.h
+    inc/internal/tt-2xx/tt-2.0.2/meta/registers/tt_cluster_plic_reg.h
+    inc/internal/tt-2xx/tt-2.0.2/meta/registers/tt_overlay_llk_tile_counters_reg.h
+    inc/internal/tt-2xx/tt-2.0.2/meta/registers/tt_rocc_accel_reg.h
     inc/internal/tt-2xx/quasar/overlay/overlay_addresses.h
     inc/internal/tt-2xx/quasar/stream_interface.h
     inc/internal/tt-2xx/quasar/stream_io_map.h
@@ -386,46 +401,4 @@ set(HW_JIT_API_HEADERS
     toolchain/erisc-b0-app-sections.ld
     toolchain/erisc-b0-memory.ld
     toolchain/erisc-b0-kernel.ld
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_horner.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_mirrored_terminals.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_sqrt_factored.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_sqrt_factored_core.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_core_bridge_exponent.inc
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_core_bridge_rational.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_min_max.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_dst_core.inc
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_interleaved_core.inc
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_scalar_tile.inc
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_segment_core.inc
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_parity.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_parity_core.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_cascade_signed_abs.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_asymptotic_exp.inc
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_asymptotic_factor.inc
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_config_tile.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_domain_action_coordinate.inc
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_domain_finalize.inc
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_domain_prepare.inc
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_domain_symmetric_constant.inc
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_encoded_domain_finalize.inc
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_gradient_finalization_owner.inc
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_gradient_finalize.inc
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_polynomial_dual_tile.inc
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_raw_class_policy.inc
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_selected_core_total.inc
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_selected_reciprocal_init.inc
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_target_special_policy.inc
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_tti_replay.h
-    inc/api/compute/eltwise_unary/erf_bw_tt_poly_bf16.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_abs_exp_correction.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_abs_exp_correction_core.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_finite_reciprocal.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_exp2_bf16.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_exp2.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_exp2_paired.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_expm1_bf16.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_factored_cw_expm1.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_factored_cw_expm1_core.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_relu_bf16.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_clamped_affine.h
 )
