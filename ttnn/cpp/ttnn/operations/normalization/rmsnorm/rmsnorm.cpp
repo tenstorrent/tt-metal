@@ -42,9 +42,23 @@ Tensor rms_norm(
 
     // For 0D tensors
     if (rank == 0) [[unlikely]] {
-        auto result = ttnn::divide(
-            input_tensor,
-            ttnn::abs(input_tensor, output_memory_config),
+        auto actual_input = input_tensor;
+        if (residual_input_tensor.has_value()) {
+            actual_input = ttnn::add(actual_input, residual_input_tensor.value(), /*output_dtype=*/std::nullopt, output_memory_config);
+        }
+        auto x_squared = ttnn::square(actual_input, output_memory_config);
+        auto variance_plus_eps = ttnn::add(
+            x_squared,
+            epsilon,
+            /*output_dtype=*/std::nullopt,
+            output_memory_config);
+        auto inv_rms = ttnn::rsqrt(
+            variance_plus_eps,
+            /*fast_and_approximate_mode=*/false,
+            output_memory_config);
+        auto result = ttnn::multiply(
+            actual_input,
+            inv_rms,
             /*output_dtype=*/std::nullopt,
             output_memory_config);
 
