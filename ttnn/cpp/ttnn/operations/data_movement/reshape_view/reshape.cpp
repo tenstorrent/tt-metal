@@ -176,28 +176,29 @@ MemoryConfig recompute_shard_spec_for_output(
         output_mem_config = output_shape.block_sharded(CoreRange{start, new_end}, orientation).memory_config();
     } else if (layout == TensorMemoryLayout::HEIGHT_SHARDED || layout == TensorMemoryLayout::WIDTH_SHARDED) {
         const bool is_height = (layout == TensorMemoryLayout::HEIGHT_SHARDED);
-        const uint32_t num_cores = source_shard_spec.grid.num_cores();
         const uint32_t phys_dim = is_height ? phys_h : phys_w;
 
-        // Preserve the input grid; height/width_sharded() rounds the per-core shape up
-        // to tile alignment without changing the grid itself.
+        // Seed from the input grid; height/width_sharded() rounds the per-core shape up
+        // to tile alignment and keeps only as many cores as that shape yields shards, so
+        // the grid shrinks when the output needs fewer shards than the input had cores.
         output_mem_config = is_height ? output_shape.height_sharded(source_shard_spec.grid, orientation).memory_config()
                                       : output_shape.width_sharded(source_shard_spec.grid, orientation).memory_config();
 
-        // Warn when each core's shard slot is much larger than the data slice it actually backs.
-        // 4x threshold skips the benign 2x case (e.g. 16-row data in a 32-row tile slot) and
-        // only flags genuinely over-padded shards (e.g. UFLD V2's ~6.4x case).
+        // Warn when the data under-fills the tile-aligned shard slot on the cores that hold it.
+        // The grid is already trimmed to the shards that exist, so the remaining waste is
+        // per-core tile padding; 4x threshold skips the benign sub-2x cases.
         constexpr uint32_t kOverpadWarnThreshold = 4;
         if (output_mem_config.shard_spec().has_value()) {
-            const auto& out_shape = output_mem_config.shard_spec().value().shape;
-            const uint32_t shard_dim = is_height ? out_shape[0] : out_shape[1];
-            const uint32_t data_per_core = (phys_dim + num_cores - 1) / num_cores;
+            const auto& out_spec = output_mem_config.shard_spec().value();
+            const uint32_t shard_dim = is_height ? out_spec.shape[0] : out_spec.shape[1];
+            const uint32_t out_cores = out_spec.grid.num_cores();
+            const uint32_t data_per_core = (phys_dim + out_cores - 1) / out_cores;
             if (data_per_core > 0 && shard_dim / data_per_core >= kOverpadWarnThreshold) {
                 log_warning(
                     tt::LogOp,
                     "ttnn.reshape: {} output per-core shard ({} {}) is {}x its per-core data "
                     "slice ({} {}) for phys_{}={} on {} cores. Per-core L1 is dominated by "
-                    "padding; consider a smaller core grid or INTERLEAVED.",
+                    "padding; consider INTERLEAVED.",
                     layout,
                     shard_dim,
                     is_height ? "rows" : "cols",
@@ -206,7 +207,7 @@ MemoryConfig recompute_shard_spec_for_output(
                     is_height ? "rows" : "cols",
                     is_height ? 'h' : 'w',
                     phys_dim,
-                    num_cores);
+                    out_cores);
             }
         }
     } else {
