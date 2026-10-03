@@ -660,6 +660,7 @@ class LlamaForCausalLM(Generator):
         "supports_prefix_caching": True,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        "supports_device_grammar": True,
         "max_device_top_k": 32,
         # prefill_forward_single_user_text already routes a nonzero start_pos to
         # the chunked SDPA, and the generator floors the offset to what that op
@@ -754,6 +755,7 @@ class QwenForCausalLM(Generator):
         "supports_prefix_caching": True,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        "supports_device_grammar": True,
         "max_device_top_k": 32,
         # prefill_forward_single_user_text already routes a nonzero start_pos to
         # the chunked SDPA, and the generator floors the offset to what that op
@@ -849,6 +851,7 @@ class CohereForCausalLM(Generator):
         "supports_prefix_caching": True,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        "max_device_top_k": 32,
     }
 
     def __init__(self, *args, **kwargs):
@@ -901,6 +904,7 @@ class MistralForCausalLM(Generator):
         "supports_prefix_caching": True,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        "supports_device_grammar": True,
         "max_device_top_k": 32,
         # prefill_forward_single_user_text already routes a nonzero start_pos to
         # the chunked SDPA, and the generator floors the offset to what that op
@@ -1150,6 +1154,7 @@ class Exaone4_5_ForConditionalGeneration(HybridAttentionForCausalLM):
         "supports_prefix_caching": False,  # Sliding window => no prefix caching
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        "max_device_top_k": 32,
     }
 
     # One prefill chunk on P150x8 (MAX_PREFILL_CHUNK_SIZES["EXAONE-4.5-33B"]).

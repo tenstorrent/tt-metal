@@ -1282,7 +1282,7 @@ class ChunkedPrefillPageTableGuardMixin:
                 orig_sample = sampling_module.sample
 
                 def _make_sample(orig, fb):
-                    def _sample(logits, *, enable_trace=True, tt_out_tok=None, skip_precompile=False):
+                    def _sample(logits, *, enable_trace=True, tt_out_tok=None, **kwargs):
                         nonlocal wrote_feedback
                         if tt_out_tok is None:
                             tt_out_tok = fb
@@ -1292,7 +1292,7 @@ class ChunkedPrefillPageTableGuardMixin:
                             logits,
                             enable_trace=enable_trace,
                             tt_out_tok=tt_out_tok,
-                            skip_precompile=skip_precompile,
+                            **kwargs,
                         )
 
                     return _sample
