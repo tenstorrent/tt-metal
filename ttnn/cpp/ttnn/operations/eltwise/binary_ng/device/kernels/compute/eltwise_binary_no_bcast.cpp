@@ -5,8 +5,8 @@
 #include <cstdint>
 
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
-// One tile per DEST section (compile-time arg 0 == 1, the interleaved layout) keeps the per-face hand-off on Blackhole.
-#define ELTWISE_BINARY_PER_FACE_HANDOFF (get_compile_time_arg_val(0) == 1)
+// Blackhole: add and sub keep the per-face hand-off; ELWMUL, which binary_ng runs at HiFi4, takes the per-tile one.
+#define ELTWISE_BINARY_PER_FACE_HANDOFF (BINARY_OP_TYPE != EltwiseBinaryType::ELWMUL)
 #include "api/compute/eltwise_binary.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils.hpp"
