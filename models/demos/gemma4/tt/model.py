@@ -563,6 +563,7 @@ class Gemma4Model:
                 self.tt_kv_cache.append(self.layers[source_idx].self_attn.kv_cache)
             else:
                 self.tt_kv_cache.append(layer.self_attn.kv_cache)
+        fp32_mode.prepare_kv_caches(self.tt_kv_cache, mesh_device)
 
         # Last layer index of each attention type — these are the layers whose
         # KV the Gemma4 *it-assistant* drafter cross-attends into (HF

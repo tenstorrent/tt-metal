@@ -172,3 +172,27 @@ def prefill_sdpa(q, k, v, *args, **kwargs):
         q, k, v = (ttnn.typecast(t, ttnn.bfloat16) for t in (q, k, v))
         return ttnn.typecast(ttnn.transformer.scaled_dot_product_attention(q, k, v, *args, **kwargs), ttnn.float32)
     return ttnn.transformer.scaled_dot_product_attention(q, k, v, *args, **kwargs)
+
+
+def prepare_kv_caches(kv_caches, mesh_device):
+    """Allocate the lo caches and position tables up front (ATTENTION_FP32), so nothing is
+    allocated inside a trace capture."""
+    if not ATTENTION_FP32:
+        return
+    import torch
+
+    for kv in kv_caches:
+        if kv is None:
+            continue
+        for cache in (kv[0], kv[1]):
+            _lo_cache_for(cache)
+            nb, _, bs, _ = cache.shape
+            S = nb * bs
+            if S not in _ARANGE:
+                _ARANGE[S] = ttnn.from_torch(
+                    torch.arange(S, dtype=torch.float32).reshape(1, 1, 1, S),
+                    device=mesh_device,
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
