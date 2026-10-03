@@ -1962,13 +1962,13 @@ SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
         MathOperation.I0,  # +/-inf -> +inf (even, unbounded); torch.special.i0 gives NaN there
         MathOperation.Hardshrink,  # NaN -> NaN, not shrunk to zero
         # The comparison family answers on the SFPU's total order, not IEEE's unordered compare:
-        # +NaN ranks above every finite value, so a clamp lands on its upper bound rather than
-        # propagating. sfpu_total_order_key models that. UnaryLt/Le/Max sit in the block above,
-        # since there the two orders agree at a +NaN.
+        # +NaN ranks above every finite value. sfpu_total_order_key models that. UnaryLt/Le/Max
+        # sit in the block above, since there the two orders agree at a +NaN.
         MathOperation.UnaryGt,  # NaN > 0.5 is true under the total order, false under IEEE
         MathOperation.UnaryGe,  # as UnaryGt
-        MathOperation.UnaryMin,  # min(x, 0.0): +NaN is the maximum, so the other operand wins
-        MathOperation.Clamp,  # calculate_clamp: max-then-min folds, so a +NaN lands on max
+        # The min/max kernels skip a NaN lane and leave x in Dst, so these propagate NaN.
+        MathOperation.UnaryMin,  # min(x, 0.0): NaN -> NaN
+        MathOperation.Clamp,  # calculate_clamp: NaN -> NaN, where the bare fold lands on a bound
         MathOperation.Hardtanh,  # sfpi::clamp, the same composition as Clamp, so one golden
         MathOperation.ReluMax,  # _relu_max_body_ swaps a NaN for the threshold before the clamp
         # ReluMin rests on the +NaN result alone: FLOAT_SPECIALS carries no -NaN, and one

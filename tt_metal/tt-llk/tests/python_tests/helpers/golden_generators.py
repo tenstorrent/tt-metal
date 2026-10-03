@@ -361,10 +361,12 @@ def sfpu_clamp(value: float, low: float, high: float) -> float:
     """clamp under the SFPU's total order, in the kernel's order of operations.
 
     Metal `calculate_clamp` and `calculate_hardtanh` (`sfpi::clamp`) are both this same
-    max-then-min composition of SFPSWAP min/max, so one golden models both. A +NaN
-    outranks every value: the max leaves it in place and the min lands it on *high*,
-    where torch.clamp would keep IEEE semantics and return NaN.
+    max-then-min composition of SFPSWAP min/max, so one golden models both. Both skip a NaN
+    lane and leave it in Dst, as torch.clamp returns a NaN input unchanged; the bare
+    composition would land a +NaN on *high* and a -NaN on *low*.
     """
+    if math.isnan(value):
+        return value
     return sfpu_min(sfpu_max(value, low), high)
 
 
@@ -3520,11 +3522,17 @@ class UnarySFPUGolden:
         return 1.0 if x == self._UNARY_COMP_THRESHOLD else 0.0
 
     def _unary_max(self, x):
+        # calculate_unary_max_min skips a NaN lane, leaving x in Dst whatever its sign; the
+        # bare SFPSWAP would return the scalar for a -NaN.
+        if math.isnan(x):
+            return x
         return sfpu_max(x, self._UNARY_MAX_MIN_VALUE)
 
     def _unary_min(self, x):
-        # Under the total order a +NaN is the maximum, so min() returns the *other* operand
-        # -- which is why this diverged from a Python min() and _unary_max did not.
+        # As _unary_max; the bare SFPSWAP would return the scalar for a +NaN, the maximum
+        # under the total order.
+        if math.isnan(x):
+            return x
         return sfpu_min(x, self._UNARY_MAX_MIN_VALUE)
 
     def _polygamma(self, x):
@@ -4439,19 +4447,23 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         )
 
     def _max(self, t1, t2):
-        # torch.maximum agrees with the total order for a *positive* NaN by coincidence and
-        # disagrees for a negative one, where -NaN is the order's smallest value and torch
-        # propagates it -- so a one-sided NaN probe would certify torch.maximum as correct.
+        # calculate_binary_max_min swaps under the total order, then keeps the discarded
+        # operand where that one is NaN. So a NaN in either operand propagates, and the NaN
+        # returned is the selected operand's, sign included: the minimum under the total
+        # order when both are NaN.
         if self._is_float(t1):
-            return sfpu_max_elementwise(t1, t2).to(t1.dtype)
+            lo = sfpu_min_elementwise(t1, t2)
+            hi = sfpu_max_elementwise(t1, t2)
+            return torch.where(torch.isnan(lo), lo, hi).to(t1.dtype)
         wide = self._wide_dtype(t1)
         return torch.maximum(t1.to(wide), t2.to(wide)).to(t1.dtype)
 
     def _min(self, t1, t2):
-        # torch.minimum propagates a NaN; the total order makes +NaN the largest value, so a
-        # min against it returns the *other* operand. This one diverges on a positive NaN too.
+        # As _max, mirrored: the maximum under the total order when both are NaN.
         if self._is_float(t1):
-            return sfpu_min_elementwise(t1, t2).to(t1.dtype)
+            lo = sfpu_min_elementwise(t1, t2)
+            hi = sfpu_max_elementwise(t1, t2)
+            return torch.where(torch.isnan(hi), hi, lo).to(t1.dtype)
         wide = self._wide_dtype(t1)
         return torch.minimum(t1.to(wide), t2.to(wide)).to(t1.dtype)
 
