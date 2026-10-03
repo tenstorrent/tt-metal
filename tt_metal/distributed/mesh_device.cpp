@@ -10,6 +10,7 @@
 #include <mesh_device.hpp>
 #include <mesh_device_view.hpp>
 #include "distributed/mesh_device_impl.hpp"
+#include "distributed/host_region.hpp"
 #include <tt_stl/small_vector.hpp>
 #include <sub_device.hpp>
 #include "impl/sub_device/sub_device_impl.hpp"
@@ -1072,6 +1073,14 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         mesh_command_queues_.clear();
     }
 
+    // Release the pinned host region first: it names pages the NIC was told about, and
+    // unpinning must happen while the cluster is still live. release() runs ahead of the
+    // overlays being unmapped, which is why this cannot wait for the destructor.
+    if (host_region_) {
+        host_region_->release();
+        host_region_.reset();
+    }
+
     // Tear down RT profiler after the CQ has shut down (so dispatch_s has already issued
     // the final TERMINATE) but before the rest of the device teardown.
     if (realtime_profiler_) {
@@ -1771,6 +1780,13 @@ TensorPrefetcherManager& MeshDeviceImpl::tensor_prefetcher(MeshDevice* mesh_devi
             std::make_unique<TensorPrefetcherManager>(mesh_device, std::bind(&MeshDeviceImpl::lock_api, this));
     }
     return *tensor_prefetcher_;
+}
+
+experimental::HostRegion& MeshDeviceImpl::host_region() {
+    if (!host_region_) {
+        host_region_ = std::make_unique<experimental::HostRegion>();
+    }
+    return *host_region_;
 }
 
 CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(const IDevice* device, uint32_t bank_id) const {
