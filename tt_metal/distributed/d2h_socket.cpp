@@ -974,4 +974,9 @@ bool D2HSocketTryReadAccess::try_read(
     return socket.try_read_impl(data, num_pages, notify_sender);
 }
 
+void D2HSocketSenderCoordAccess::rebind_sender_device_coord(
+    distributed::D2HSocket& socket, const distributed::MeshCoordinate& device_coord) {
+    socket.sender_core_ = distributed::MeshCoreCoord(device_coord, socket.sender_core_.core_coord);
+}
+
 }  // namespace tt::tt_metal::experimental::detail

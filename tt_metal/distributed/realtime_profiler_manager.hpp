@@ -35,6 +35,7 @@ namespace distributed {
 
 class D2HSocket;
 class MeshDevice;
+class MeshDeviceView;
 
 // L1 carve-out addresses (ring buffer + D2H socket config) for the reserved RT-profiler tensix, anchored past
 // UNRESERVED to bypass the user-space allocator.
@@ -63,6 +64,13 @@ public:
     // Requests the receiver to run a finish-path sync and blocks until it completes or times out; throttled to one
     // request per 60s and a no-op when no devices are active.
     void trigger_sync_check();
+
+    // MeshDevice::reshape() support. Each D2H socket is bound to its sender device's coordinate in the view it
+    // was created under, and the receiver thread resolves that coordinate on every drain. A reshape replaces
+    // the view, so the caller holds the receiver off for the swap (pause_receiver) and then re-points every
+    // socket at its device's coordinate in the new view (rebind_device_coordinates) before releasing it.
+    [[nodiscard]] std::unique_lock<std::mutex> pause_receiver();
+    void rebind_device_coordinates(const MeshDeviceView& view, const std::unique_lock<std::mutex>& receiver_paused);
 
     // RT-profiler diagnostics
     uint32_t peak_fifo_pages() const { return peak_fifo_pages_.load(std::memory_order_relaxed); }
@@ -179,6 +187,8 @@ private:
     std::vector<DeviceState> devices_;
     std::thread receiver_thread_;
     std::atomic<bool> stop_{false};
+    // Held by the receiver thread while it drains devices_; pause_receiver() takes it to swap the mesh view.
+    std::mutex receiver_devices_mu_;
     std::atomic<bool> finish_sync_requested_{false};
     std::atomic<bool> finish_sync_busy_{false};
     std::atomic<std::chrono::steady_clock::rep> last_sync_request_at_{0};

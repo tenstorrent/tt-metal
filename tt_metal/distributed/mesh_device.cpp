@@ -24,6 +24,7 @@
 #include <cstddef>
 #include <iterator>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <source_location>
 #include <utility>
@@ -999,9 +1000,18 @@ void MeshDeviceImpl::reshape(const MeshShape& new_shape) {
         new_fabric_node_ids = std::move(new_mapped_devices.fabric_node_ids);
     }
     auto new_view = std::make_unique<MeshDeviceView>(new_shape, new_device_order, new_fabric_node_ids);
+    // The real-time profiler's D2H sockets resolve their sender device through the view on every drain, so
+    // hold its receiver off while the view is swapped and re-point the sockets at the new coordinates.
+    std::unique_lock<std::mutex> realtime_profiler_paused;
+    if (realtime_profiler_) {
+        realtime_profiler_paused = realtime_profiler_->pause_receiver();
+    }
     view_ = std::move(new_view);
     local_devices_by_range_.clear();
     establish_device_property_caches();
+    if (realtime_profiler_) {
+        realtime_profiler_->rebind_device_coordinates(*view_, realtime_profiler_paused);
+    }
 }
 
 bool MeshDeviceImpl::close() {
