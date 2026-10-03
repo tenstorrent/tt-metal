@@ -404,7 +404,14 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     }
 
     const bool math_approx_mode = false;
-    std::map<std::string, std::string> unary_defines = get_block_defines(ops_chain, "0", "0", input.dtype());
+    std::map<std::string, std::string> unary_defines;
+    if (const auto relu_config =
+            get_pack_relu_config(ops_chain, input.dtype(), output.dtype(), operation_attributes.fp32_dest_acc_en)) {
+        // The packer applies the op as it writes each tile out, which leaves the SFPU no work.
+        unary_defines["PACK_RELU_CONFIG"] = *relu_config;
+    } else {
+        unary_defines = get_block_defines(ops_chain, "0", "0", input.dtype());
+    }
     add_input_dtype_defines(input.dtype(), unary_defines);
     const bool logit_clamp_enabled =
         CMAKE_UNIQUE_NAMESPACE::pack_first_op_scalars(ops_chain[0], input.dtype(), packed_scalar1, packed_scalar2);

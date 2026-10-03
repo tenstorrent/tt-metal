@@ -1173,6 +1173,39 @@ std::map<std::string, std::string> get_block_defines(
     return block_defines;
 }
 
+std::optional<std::string> get_pack_relu_config(
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
+    DataType input_dtype,
+    DataType output_dtype,
+    bool fp32_dest_acc_en) {
+    // The packer compares BF16 bit patterns as it writes a 16-bit DEST tile out.
+    if (op_chain.size() != 1 || input_dtype != DataType::BFLOAT16 || output_dtype != DataType::BFLOAT16 ||
+        fp32_dest_acc_en) {
+        return std::nullopt;
+    }
+    const auto& op = op_chain[0];
+    switch (op.type()) {
+        case UnaryOpType::RELU: return "ReluConfig::zero()";
+        case UnaryOpType::RELU_MIN:
+            if (op.get_param_if<float>(0) == 0.0f) {
+                return "ReluConfig::zero()";
+            }
+            return std::nullopt;
+        case UnaryOpType::THRESHOLD:
+            if (op.get_param_if<float>(0) == 0.0f && op.get_param_if<float>(1) == 0.0f) {
+                return "ReluConfig::zero()";
+            }
+            return std::nullopt;
+        case UnaryOpType::RELU6: return "ReluConfig::max_threshold(0x40c0)";
+        case UnaryOpType::RELU_MAX:
+            if (op.get_param_if<float>(0) == 6.0f) {
+                return "ReluConfig::max_threshold(0x40c0)";
+            }
+            return std::nullopt;
+        default: return std::nullopt;
+    }
+}
+
 // update split eltwise ops include macros
 void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string>& defines) {
     defines[get_macro_definition(op_type)] = "1";
