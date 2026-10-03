@@ -302,6 +302,10 @@ int __attribute__((noinline)) main(void) {
             DeviceZoneScopedMainN("ERISC-FW");
             uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
+#if defined(PROFILE_STREAMING)
+            // A PROFILER_VALIDATES_ZONE RISC publishes nothing until this call.
+            DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
+#endif
 
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
 

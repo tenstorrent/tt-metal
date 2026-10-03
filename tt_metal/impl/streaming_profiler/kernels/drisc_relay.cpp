@@ -18,60 +18,15 @@
 #include "internal/tt-1xx/risc_common.h"
 
 #include "experimental/gddr_dma.h"
+#include "tt_metal/impl/streaming_profiler/kernels/relay_common.hpp"
 
 // DRISC firmware doesn't define cb_interface (no CB infra on DRAM cores).
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
-// write_cmd_buf is programmed once at init; nothing else on this core touches it.
-inline void write_to_host(uint32_t pcie_xy_enc, uint32_t src_l1, uint64_t dst_pcie, uint32_t size) {
-    noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
-        NOC_INDEX, src_l1, pcie_xy_enc, dst_pcie, size, 1);
-}
-
-// socket_push_pages only wraps the pointer, so a piece crossing the FIFO wrap splits here; fifo_size is whole
-// pages, so the pads' NoC congruence survives the split.
-inline void push_fifo(const SocketSenderInterface& sender, uint32_t src, uint32_t dst, uint32_t len) {
-    const uint32_t fifo_size = sender.downstream_fifo_curr_size;
-    if (dst >= fifo_size) {
-        dst -= fifo_size;
-    }
-    const uint64_t base = (static_cast<uint64_t>(sender.d2h.data_addr_hi) << 32) | sender.downstream_fifo_addr;
-    const uint32_t first = (dst + len > fifo_size) ? fifo_size - dst : len;
-    write_to_host(sender.d2h.pcie_xy_enc, src, base + dst, first);
-    if (first < len) {
-        write_to_host(sender.d2h.pcie_xy_enc, src + first, base, len - first);
-    }
-}
-
-// Blackhole stores can reach SRAM out of order, and the NIU and the DMA engine read the words the scalar core
-// staged.
-FORCE_INLINE void staged_store_fence() { asm volatile("fence" ::: "memory"); }
-
-// Not socket_notify_receiver: it re-inits write_cmd_buf onto another VC, and the bytes_sent word can then
-// overtake the data it announces. Same VC is not enough either: the PCIe tile turns each NoC write into its own
-// AXI and PCIe transactions and keeps no order between packets on the way to host memory (a 4 B notify has been
-// seen landing ahead of the 15 KB pushed before it), so bytes_sent goes out only once the tile has acknowledged
-// every push.
-inline void notify_bytes_sent(const SocketSenderInterface& sender) {
-    while (!ncrisc_noc_nonposted_writes_flushed(NOC_INDEX)) {
-    }
-    volatile tt_l1_ptr sender_socket_md* cfg =
-        reinterpret_cast<volatile tt_l1_ptr sender_socket_md*>(sender.config_addr);
-    cfg->bytes_sent = sender.bytes_sent;
-    staged_store_fence();
-    write_to_host(
-        sender.d2h.pcie_xy_enc,
-        sender.config_addr,
-        (static_cast<uint64_t>(sender.d2h.bytes_sent_addr_hi) << 32) | sender.downstream_bytes_sent_addr,
-        4u);
-}
-
 constexpr uint32_t kStageBase = get_named_compile_time_arg_val("stage_base");
 constexpr uint32_t kNStage = get_named_compile_time_arg_val("n_stage");
 constexpr uint32_t kCoreRecords = get_named_compile_time_arg_val("core_records");
-constexpr uint32_t kDoneAddr = get_named_compile_time_arg_val("done_addr");
-// Nonzero = quiesce: drain everything with every wait still holding, then exit.
-constexpr uint32_t kStopAddr = get_named_compile_time_arg_val("stop_addr");
+constexpr uint32_t kCtrlAddr = get_named_compile_time_arg_val("ctrl");
 constexpr uint32_t kSocketConfigAddr = get_named_compile_time_arg_val("socket_config_addr");
 constexpr uint32_t kMaxCores = get_named_compile_time_arg_val("max_cores");
 static_assert(kMaxCores <= 256, "the core lists index cores as bytes");
@@ -86,21 +41,17 @@ constexpr uint32_t kSpoolBytes = get_named_compile_time_arg_val("spool_bytes");
 
 constexpr uint32_t kNumRisc = kernel_profiler::PROFILER_SPSC_TENSIX_RISC;
 static_assert(kNumRisc == 5, "the control scans are unrolled for exactly five RISCs");
-constexpr uint32_t kRingWords = kernel_profiler::PROFILER_L1_VECTOR_SIZE;
 constexpr uint32_t kCtrlWords = kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE;
 constexpr uint32_t kSpanWords = kCtrlWords + kNumRisc * kRingWords;
-constexpr uint32_t kPrefix = kernel_profiler::SPSC_SPAN_PREFIX_WORDS;
 // Slots hold a full span: a sub-span cap defers whole lanes at speed and starves their producers.
 constexpr uint32_t kSlotWords = kernel_profiler::spsc_span_slot_words(kNumRisc);
 constexpr uint32_t kSlotBytes = kSlotWords * 4u;
-constexpr uint32_t kWireCtrl = kernel_profiler::SPSC_SPAN_WIRE_CTRL_WORDS;
 constexpr uint32_t kPayloadCapWords = kSlotWords - kPrefix - kWireCtrl;
 // The lane walk has no room gate: a frame of five full rings and their pads always fits the slot.
 static_assert(
     kNumRisc * (kRingWords + kernel_profiler::SPSC_SPAN_PACK_ALIGN_WORDS - 1u) <= kPayloadCapWords,
     "a full span no longer fits a slot");
 constexpr uint32_t kPageWords = kernel_profiler::SPSC_SPAN_PAGE_WORDS;
-constexpr uint32_t kPageBytes = kPageWords * 4u;
 // Reads take the NoC the writes do not: NOC_INDEX carries egress, the other NoC carries gathers.
 constexpr uint8_t kReadNoc = NOC_INDEX == 0 ? 1 : 0;
 constexpr bool kSpool = kSpoolBytes != 0;
@@ -117,10 +68,8 @@ static_assert(kNStage >= kNBounce + kNGens * kGenSlots, "the staging arena must 
 // in flight, and each bounce holds at most one drain read.
 static_assert(kNGens * 4 < experimental::kMaxOutstandingWrites, "the ship stream could fill and drop an issue");
 static_assert(kNBounce < experimental::kMaxOutstandingReads, "the drain stream could fill and drop an issue");
-// 112 B per core: control-vector words 12..31 at +0 (the lanes' state slots then their tails, in that address
-// order so one read observes a slot no later than its tail), the head mirror at +80, the wire XY word behind the
-// heads so the head write is 20 bytes.
-constexpr uint32_t kCvBaseWord = 16;
+// The lanes' state slots then their tails, in that address order so one read observes a slot no later than its tail.
+constexpr uint32_t kCvBaseWord = kernel_profiler::SPSC_WIRE_CV_BASE;
 constexpr uint32_t kCvReadBytes = 64;
 constexpr uint32_t kCvReadSrcOff = kCvBaseWord * 4u;
 constexpr uint32_t kRecordBytes = 128;
@@ -149,18 +98,13 @@ static_assert(
     "bounces must fit inside the mapped staging arena");
 static_assert(!kSpool || kSpoolBytes % kPageBytes == 0, "spool wraps on pages");
 constexpr uint32_t kLaneShipWords = (kRingWords * kShipMinPct) / 100u;
-// A probe below the ship gate waits at most this many sweeps (~5-10 ms at the idle gap), so a lane that trickles
-// still reaches the host, and a sparse grid's frame headers are bounded to one frame per core per that long.
-constexpr uint32_t kMaxDeferSweeps = 2048;
-constexpr uint64_t kCyclesPerUs = 1350;  // DRISC wall clock at the 1.35 GHz AICLK
-// Idle backoff ceiling, waited as a 32-bit low-word delta: a 64-bit wall-clock read on Blackhole can return the next
-// epoch's high half with a pre-wrap low word (+2^32), which once parked a relay for 3.2 s. 20 us exceeded a lane's
-// fill time at high rates.
-constexpr uint32_t kCvIdleGapMax = 5 * kCyclesPerUs;
-constexpr uint32_t kCvIdleGapMinInc = 256;
 // Below the first band the host is otherwise fed nothing until the spool fills that far; one pass every this many
 // sweeps keeps it busy at a bounce per stride, and bounds host staleness to the stride.
 constexpr uint32_t kIdlePumpStride = 8;
+
+FORCE_INLINE volatile tt_l1_ptr kernel_profiler::ResidentCtrl* relay_ctrl() {
+    return reinterpret_cast<volatile tt_l1_ptr kernel_profiler::ResidentCtrl*>(kCtrlAddr);
+}
 
 static_assert(kSpanWords * 4u <= NOC_MAX_BURST_SIZE, "a span read must fit one NoC burst");
 static_assert(kRingWords * 4u <= NOC_MAX_BURST_SIZE, "a whole-ring gather must fit one NoC burst");
@@ -471,28 +415,10 @@ FORCE_INLINE void post_heads(uint32_t c) {
         kReadNoc, heads(c), core_coord[c], 0);
 }
 
-// A frame occupies whole socket pages on the wire.
-FORCE_INLINE uint32_t page_round(uint32_t bytes) { return (bytes + kPageBytes - 1u) & ~(kPageBytes - 1u); }
-
-// Prefix word 1 is the payload length in words.
-constexpr uint32_t kLenWord = 1;
 FORCE_INLINE uint32_t frame_bytes(uint32_t slot) {
-    return (reinterpret_cast<const tt_l1_ptr uint32_t*>(slot)[kLenWord] + kPrefix) * 4u;
+    return (reinterpret_cast<const tt_l1_ptr uint32_t*>(slot)[kernel_profiler::SPSC_PREFIX_PAYLOAD_WORDS] + kPrefix) *
+           4u;
 }
-
-// The wrap-image rule as one subtraction on the take already in hand (spsc_span_wrap_image's form costs two
-// more instructions per wrapping lane); the check pins it to the shared rule.
-constexpr uint32_t kImageMinTake = kRingWords - kernel_profiler::SPSC_SPAN_WRAP_IMAGE_MAX_PAD_WORDS;
-constexpr bool image_rule_matches() {
-    for (uint32_t take = 1; take < 2 * kRingWords; take++) {
-        const bool mine = take - kImageMinTake <= kernel_profiler::SPSC_SPAN_WRAP_IMAGE_MAX_PAD_WORDS;
-        if (mine != kernel_profiler::spsc_span_wrap_image(kRingWords - 1u, take, kRingWords)) {
-            return false;
-        }
-    }
-    return true;
-}
-static_assert(image_rule_matches(), "the inline image test drifted from spsc_span_wrap_image");
 
 // The record's first 64 B are the frame's control block, state slots and tails, in the frame's own layout: one
 // loopback read per frame, issued where the sweep waits on the gathers so the same barrier covers it and no
@@ -541,40 +467,21 @@ __attribute__((noinline)) uint32_t issue_batch(const uint8_t* cores, uint32_t n,
                 continue;
             }
             const uint32_t ring_src = rb + r * (kRingWords * 4u);
-            const uint32_t hm = start & (kRingWords - 1u);
             // Lane 0's first read needs no poll: the buffer was polled before the coordinate write above and
             // nothing has been sent since. Every later read follows a send.
             const bool poll = r != 0;
-            if (hm + take <= kRingWords) {
-                off += kernel_profiler::spsc_span_pack_pad(start, off);
-                gather_read(g, poll, ring_src + hm * 4u, slot + off * 4u, take * 4u);
-                off += take;
-            } else if (take - kImageMinTake <= kernel_profiler::SPSC_SPAN_WRAP_IMAGE_MAX_PAD_WORDS) {
-                // A near-full wrapping run ships as its whole ring image in one read (the decoder linearises by head).
-                // Coalescing adjacent images into one read starves the producer's L1 port ~70x.
-                off += kernel_profiler::spsc_span_pack_pad(0u, off);
-                gather_read(g, poll, ring_src, slot + off * 4u, kRingWords * 4u);
-                off += kRingWords;
-            } else {
-                // A small wrapping run ships as two byte-exact pieces: its dead remainder would be most of the ring.
-                off += kernel_profiler::spsc_span_pack_pad(start, off);
-                const uint32_t first = kRingWords - hm;
-                uint32_t dst = slot + off * 4u;
-                const uint32_t first_bytes = first * 4u;
-                gather_read(g, poll, ring_src + hm * 4u, dst, first_bytes);
-                // The second piece's operands are derived only after the first send: the poll that follows must
-                // trail the send by at least this much work, or it lands before the NIU has assigned the VC and
-                // costs a full extra spin per command.
-                uint32_t rest = take;
-                asm volatile("" : "+r"(dst), "+r"(rest), "+r"(off));
-                off += rest;
-                rest -= first;
-                gather_read(g, true, ring_src, dst + first_bytes, rest * 4u);
-            }
+            off = place_run(
+                start,
+                take,
+                off,
+                slot,
+                [&](uint32_t src, uint32_t dst, uint32_t bytes, bool first_piece) __attribute__((always_inline)) {
+                    gather_read(g, first_piece ? poll : true, ring_src + src, dst, bytes);
+                });
         }
         frame[kernel_profiler::SPSC_PREFIX_XY] = rec[kXyWord];
         // frame[0] is staged once at init; only the payload word varies.
-        frame[kLenWord] = off - kPrefix;
+        frame[kernel_profiler::SPSC_PREFIX_PAYLOAD_WORDS] = off - kPrefix;
         rec[kPeakWord] = peak;
         if (peak < min_peak) {
             min_peak = peak;
@@ -670,7 +577,7 @@ static FORCE_INLINE void finish(SpoolPump& pump, SocketSenderInterface& sender) 
         }
     }
     pump.notify();
-    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr) = kernel_profiler::kRelayDrainedWord;
+    relay_ctrl()->done = kernel_profiler::kResidentAwaitingAcksWord;
     socket_barrier(sender);
     while (!ncrisc_noc_nonposted_writes_flushed(NOC_INDEX)) {
     }
@@ -679,7 +586,7 @@ static FORCE_INLINE void finish(SpoolPump& pump, SocketSenderInterface& sender) 
     }
     update_socket_config(sender);
     // After the socket barrier, so the host only sees `done` once every page is out.
-    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr) = kernel_profiler::kRelayDoneWord;
+    relay_ctrl()->done = kernel_profiler::kResidentDoneWord;
 }
 
 // Every core is on exactly one list. The ship list persists across sweeps and is gathered in order off the
@@ -822,8 +729,8 @@ void kernel_main() {
     const uint32_t cv_src = get_arg_val<uint32_t>(1);  // profiler_msg_t base on every worker
     volatile tt_l1_ptr uint32_t* coords = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_addr(2));
     for (uint32_t i = 0; i < num_cores; i++) {
-        const uint32_t xy = coords[i];
-        const uint64_t noc_addr = get_noc_addr(xy & 0xFFFFu, xy >> 16, cv_src);
+        const auto xy = kernel_profiler::word_as<kernel_profiler::NocXy>(coords[i]);
+        const uint64_t noc_addr = get_noc_addr(xy.x, xy.y, cv_src);
         core_coord[i] = static_cast<uint32_t>(noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK;
     }
     // The NoC counter mirrors persist across launches on this never-reset core; a previous run's unacked
@@ -836,12 +743,11 @@ void kernel_main() {
     SocketSenderInterface sender = create_sender_socket_interface(kSocketConfigAddr);
     set_sender_socket_page_size(sender, kPageBytes);
 
-    volatile tt_l1_ptr uint32_t* stop = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStopAddr);
-    *stop = 0;
+    // Nonzero = quiesce: drain everything with every wait still holding, then exit.
+    volatile tt_l1_ptr uint32_t* stop = &relay_ctrl()->stop;
     // The host's launch check polls this; a DRISC that never leaves reset would otherwise wedge every producer
     // silently.
-    volatile tt_l1_ptr uint32_t* hb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 4);
-    *hb = 0;
+    volatile tt_l1_ptr uint32_t* hb = &relay_ctrl()->heartbeat;
 
     zero_stage_prefixes();
 
@@ -1059,25 +965,12 @@ void kernel_main() {
             refresh_first_batch();
         }
 
-        // Collapse on work, creep toward the ceiling only when nothing is live: a lane waiting below the ship gate is
-        // work too, since a head only reaches a producer on a ship.
-        if (relieved != relieved_at_sweep_start || sweep_live) {
-            gap = 0;
-        } else {
-            uint32_t inc = gap >> 1;
-            if (inc < kCvIdleGapMinInc) {
-                inc = kCvIdleGapMinInc;
+        // A lane waiting below the ship gate is work too, since a head only reaches a producer on a ship.
+        idle_wait(gap, relieved != relieved_at_sweep_start || sweep_live, [&] {
+            if constexpr (kSpool) {
+                pump.pass_cold();
             }
-            gap = (gap + inc > kCvIdleGapMax) ? kCvIdleGapMax : gap + inc;
-        }
-        if (gap != 0) {
-            const uint32_t t0 = get_timestamp_32b();
-            while (get_timestamp_32b() - t0 < gap) {
-                if constexpr (kSpool) {
-                    pump.pass_cold();
-                }
-            }
-        }
+        });
     }
 
     finish(pump, sender);

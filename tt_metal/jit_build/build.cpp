@@ -337,6 +337,12 @@ void JitBuildEnv::init(
             "TT_METAL_STREAMING_PROFILER is not supported on Quasar: the streaming profiler needs a DRISC "
             "drainer, which Quasar does not have. Use TT_METAL_DEVICE_PROFILER instead.");
         this->defines_ += "-DPROFILE_KERNEL=1 -DPROFILE_STREAMING=1 ";
+        if (rtoptions.get_streaming_profiler_eth_enabled()) {
+            this->defines_ += "-DPROFILE_STREAMING_ETH=1 ";
+        }
+        if (rtoptions.get_streaming_profiler_sync_check_enabled()) {
+            this->defines_ += "-DPROFILE_STREAMING_SYNC_CHECK=1 ";
+        }
         if (rtoptions.get_streaming_profiler_sync_events_enabled()) {
             // Enable synchronization-event instrumentation (tools/profiler/synchronization_event_profiler.hpp)
             // Note: only enabled with streaming profiler.
