@@ -37,6 +37,9 @@ using namespace ckernel::packer;
  * tile lives in the MOP template (last_inner / last_outer) so it can
  * carry the Last=1 bit on the final tile.
  *
+ * For a full 32x32 tile the end ops are not programmed: the face step of
+ * the tile's last PACR already lands on face 0 of the next DEST slot.
+ *
  * Precondition: _llk_pack_init_ or _llk_pack_configure_addrmod_ +
  * set_packer_strides must have been called to establish the normal
  * pack ADDR_MOD_0/1/2 and strides. This function only replaces the MOP.
@@ -170,9 +173,14 @@ inline void _llk_pack_block_contiguous_mop_config_(const std::uint32_t face_r_di
 
     // END_OP0: advance W to next Tile32x32 DEST slot
     // END_OP1: reset Z for next tile's face traversal
-    tmp.set_end_ops(
-        TT_OP_INCADCZW(p_setadc::PAC, 0, 0, 1, 0),          // ch0_w += 1
-        TT_OP_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0001)); // ch0_z = 0
+    // Not needed for a full 32x32 tile: its last PACR's face step already lands on face 0 of the next slot.
+    const bool full_tile = (face_r_dim == FACE_R_DIM) && (num_faces == 4);
+    if (!full_tile)
+    {
+        tmp.set_end_ops(
+            TT_OP_INCADCZW(p_setadc::PAC, 0, 0, 1, 0),          // ch0_w += 1
+            TT_OP_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0001)); // ch0_z = 0
+    }
 
     tmp.program();
 }

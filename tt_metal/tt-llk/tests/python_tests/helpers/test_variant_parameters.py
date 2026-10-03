@@ -814,6 +814,48 @@ class VECTOR_MODE(TemplateParameter):
 
 
 @dataclass
+class PERF_STAGE(TemplateParameter):
+    """How much of a perf kernel's iteration runs; 0 is the frame alone, to subtract from the other stages."""
+
+    perf_stage: int = 1
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int PERF_STAGE = {self.perf_stage};"
+
+
+@dataclass
+class PACK_BLOCK_CONTIGUOUS(TemplateParameter):
+    """True packs a block with one _llk_pack_block_contiguous_ call, False with one standard _llk_pack_ per tile."""
+
+    pack_block_contiguous: bool = True
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool PACK_BLOCK_CONTIGUOUS = {'true' if self.pack_block_contiguous else 'false'};"
+
+
+@dataclass
+class PACK_UNTILIZE_INIT(TemplateParameter):
+    """Where the pack untilize init runs: "once" before the loop, or per block as "standard" (pack_untilize_dest_init)
+    or "custom" (custom_pack_untilize_dest_init)."""
+
+    pack_untilize_init: str = "once"
+
+    def convert_to_cpp(self) -> str:
+        form = ("once", "standard", "custom").index(self.pack_untilize_init)
+        return f"constexpr int PACK_UNTILIZE_INIT = {form};"
+
+
+@dataclass
+class SEMAPHORE_RING(TemplateParameter):
+    """Credits seeded in the compute semaphore ring of a perf kernel; 0 runs the pipeline without the semaphore."""
+
+    ring_depth: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint8_t RING_DEPTH = {self.ring_depth};"
+
+
+@dataclass
 class PERF_RUN_TYPE(TemplateParameter):
     perf_run_type: PerfRunType
 
@@ -2097,4 +2139,28 @@ class CLAMPED_SILU_PARAMS(TemplateParameter):
             f"#define CLAMPED_SILU_OP_{self.clamped_silu_op}\n"
             f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {self._fp32_bits(self.scalar0)}u;\n"
             f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {self._fp32_bits(self.scalar1)}u;"
+        )
+
+
+@dataclass
+class GENERALIZED_MOE_GATE_PERF_PATH(TemplateParameter):
+    """The gate path the generalized MoE gate perf kernel runs, ``ungrouped`` (the ttnn op) or ``grouped`` (the
+    DeepSeek gate); the token geometry is fixed and emitted here."""
+
+    gmg_path: str = "ungrouped"
+
+    def convert_to_cpp(self) -> str:
+        grouped = self.gmg_path == "grouped"
+        return "\n".join(
+            [
+                f"constexpr bool GMG_GROUPED = {str(grouped).lower()};",
+                "constexpr std::uint32_t GMG_TOPK = 8;",
+                "constexpr bool GMG_SOFTMAX = false;",
+                "constexpr bool GMG_RELOAD = false;",
+                "constexpr std::uint32_t GMG_EPS = 0x3f000000;  // 0.5f",
+                "constexpr std::uint32_t GMG_SCALE = 0x40200000;  // 2.5f",
+                "constexpr bool GMG_TRANSPOSE_OF_FACES = true;",
+                "constexpr std::uint32_t GMG_OUTPUT_TILES = 3;",
+                "constexpr bool ACC_TO_DEST = false;",
+            ]
         )

@@ -4,32 +4,15 @@
 """
 Chunked fused multiply + reduce-to-scalar LLK test (experimental, Blackhole only).
 
-This is a legacy standalone chunked driver for the experimental ``mul_reduce_scalar``
-LLKs. The non-chunked
-``mul_reduce_scalar_tile`` caps ``num_tiles`` at the DEST half-sync capacity
-(8 bf16 / 4 fp32) because every multiply product must be resident in DEST before
-the reduce phase consumes it. The chunked driver processes the tile stream in
-fixed-size chunks (each <= DEST capacity), reduces each chunk to a scalar, and
-accumulates the chunk scalars into a running total held in DEST[0] between reduces:
+The kernel expands ``mul_reduce_scalar_chunked_tile`` (``api/compute/experimental/rmsnorm.h``)
+into its LLK calls. ``CHUNK_SIZE`` is the API's ``dst_capacity``: DEST slot ``CHUNK_SIZE - 1``
+holds the running scalar and the other slots stage the products of a batch of
+``CHUNK_SIZE - 1`` input tiles, each cleared before its multiply, with the unpack and
+math re-initialised between batches. The API takes rows longer than ``dst_capacity``.
 
-    result = sum_over_all_tiles_and_elements(A * B)
-
-stored in element ``[0]`` of the output tile. Chunking only changes the *order*
-of accumulation, so the golden is identical to the non-chunked op. Only element
-``[0]`` is defined (REDUCE_SCALAR pack mask); every other lane is unspecified, so
-the test validates the reduced scalar alone.
-
-Kernel B is held at 1.0 (matching the on-silicon gtest and
-``fuser_config/fpu_reduce_scalar.yaml``), so A * B == A and the fused op reduces
-to ``sum(A)`` over all tiles/elements.
-
-XFAIL: this standalone loop does not call the corrected compute-API
-``mul_reduce_scalar_chunked_tile`` in ``api/compute/experimental/rmsnorm.h``.
-That implementation clears reused product tiles while preserving a separate
-accumulator and restores initialization between chunks. This driver has not been
-updated to use that sequence and remains expected to fail numerically.
-The compute-API fix is covered by ``test_rmsnorm_chunked.cpp``; the targeted clear
-is also covered by ``test_rmsnorm_clear_product_tile.py``.
+B is held at 1.0 (matching the on-silicon gtest and ``fuser_config/fpu_reduce_scalar.yaml``),
+so the op reduces to ``sum(A)`` over all tiles and elements, stored in element ``[0]`` of
+the accumulator tile; every other lane is unspecified (REDUCE_SCALAR pack mask).
 """
 
 import pytest
@@ -61,11 +44,6 @@ FORMATS = [
 # face). The reduce collapses every element to [0] regardless of tile geometry.
 TILE_DIMENSIONS = [[32, 32], [16, 32], [16, 16]]
 
-# Chunk size drives the whole point of this driver: it must fit the DEST slot
-# budget (<= 8 bf16 / <= 4 fp32). Fixed at 4 so it is valid for both bf16 and
-# native-fp32 DEST while still forcing multiple chunks for the larger tile counts.
-CHUNK_SIZE = 4
-
 
 def _dest_acc(output_format):
     """Native fp32 DEST is required whenever the output is Float32."""
@@ -76,30 +54,27 @@ def _dest_acc(output_format):
     )
 
 
-def _num_tiles_for_format(formats):
-    """Tile-stream lengths that span more than one chunk (CHUNK_SIZE=4), so the
-    chunked driver's between-chunk accumulation is actually exercised. fp32 DEST
-    holds only 4 slots per chunk; the counts here are total stream lengths, not
-    per-chunk, so both formats use the same set."""
-    return [4, 5, 8]
+def _chunk_sizes_for_format(formats):
+    """The API's dst_capacity: up to the DEST half-sync capacity (8 bf16 / 4 fp32 tiles)."""
+    return [4] if _dest_acc(formats.output_format) == DestAccumulation.Yes else [4, 8]
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Legacy standalone chunk loop does not use the corrected compute-API "
-        "mul_reduce_scalar_chunked_tile sequence (targeted product clears, "
-        "separate accumulator, and per-chunk reinitialization). The compute-API "
-        "fix is covered by test_rmsnorm_chunked.cpp; this driver remains unfixed."
-    ),
-    strict=False,
-)
+def _num_tiles_for_chunk(chunk_size):
+    """Rows longer than dst_capacity: two batches, a trailing one-tile batch, and four batches."""
+    batch = chunk_size - 1
+    return [batch + 2, 2 * batch + 1, 4 * batch]
+
+
 @parametrize(
     formats=FORMATS,
     math_fidelity=[MathFidelity.HiFi2, MathFidelity.HiFi4],
-    num_tiles=_num_tiles_for_format,
+    chunk_size=_chunk_sizes_for_format,
+    num_tiles=_num_tiles_for_chunk,
     tile_dimensions=TILE_DIMENSIONS,
 )
-def test_mul_reduce_scalar_chunked(formats, math_fidelity, num_tiles, tile_dimensions):
+def test_mul_reduce_scalar_chunked(
+    formats, math_fidelity, chunk_size, num_tiles, tile_dimensions
+):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("mul_reduce_scalar is a Blackhole-only experimental LLK")
 
@@ -140,7 +115,7 @@ def test_mul_reduce_scalar_chunked(formats, math_fidelity, num_tiles, tile_dimen
         ],
         runtimes=[
             TILE_COUNT(num_tiles),
-            MUL_REDUCE_SCALAR_CHUNK_SIZE(CHUNK_SIZE),
+            MUL_REDUCE_SCALAR_CHUNK_SIZE(chunk_size),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim, tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim, tile_shape.num_faces_c_dim),
         ],
@@ -175,6 +150,6 @@ def test_mul_reduce_scalar_chunked(formats, math_fidelity, num_tiles, tile_dimen
         golden_scalar
     ), (
         f"mul_reduce_scalar_chunked mismatch: device={device_scalar} golden={golden_scalar} "
-        f"(num_tiles={num_tiles}, chunk={CHUNK_SIZE}, tile={tile_dimensions}, "
+        f"(num_tiles={num_tiles}, chunk={chunk_size}, tile={tile_dimensions}, "
         f"fidelity={math_fidelity.name})"
     )
