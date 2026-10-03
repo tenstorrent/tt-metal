@@ -9,6 +9,7 @@ import ttnn
 Topology = ttnn._ttnn.operations.ccl.Topology
 
 get_usable_topology = ttnn._ttnn.operations.ccl.get_usable_topology
+get_num_links = ttnn._ttnn.operations.ccl.get_num_links
 
 # Experimental CCL enums for all_to_all_dispatch_metadata operation
 DispatchAlgorithm = ttnn._ttnn.operations.experimental.ccl_experimental.DispatchAlgorithm
@@ -672,6 +673,7 @@ ttnn.attach_golden_function(
 __all__ = [
     "Topology",
     "get_usable_topology",
+    "get_num_links",
     "DispatchAlgorithm",
     "WorkerMode",
     "MoEActivationFunction",

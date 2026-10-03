@@ -525,6 +525,7 @@ from ttnn.operations.reduction import (
 from ttnn.operations.ccl import (
     Topology,
     get_usable_topology,
+    get_num_links,
     DispatchAlgorithm,
     WorkerMode,
     MMSignalAggregatorMode,
