@@ -50,6 +50,13 @@ class Sharding:
         """True if no mesh axis shards this tensor (single device, or replicated on every axis)."""
         return self._placements is None or not any(isinstance(p, ttnn.PlacementShard) for p in self._placements)
 
+    def describe(self) -> str:
+        """The layout as a short string for messages, e.g. ``[Replicate, Shard(3)] over mesh [1, 2]``."""
+        if self._placements is None:
+            return "no topology (single device)"
+        names = [f"Shard({p.dim})" if isinstance(p, ttnn.PlacementShard) else "Replicate" for p in self._placements]
+        return f"[{', '.join(names)}] over mesh {list(self._dist_shape)}"
+
     def _is_single_device(self) -> bool:
         """True when the tensor isn't really distributed (no topology, or a 1-device distribution) → one
         host buffer, readable/placeable without a composer/mapper."""
