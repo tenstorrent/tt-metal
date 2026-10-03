@@ -629,6 +629,32 @@ def test_repeat_all_ones_shortcut_sharded_output(shape, repeat_shape, input_fact
     )
 
 
+# All-1 repeat vector with an explicit ND-sharded output: the caller's nd_shard_spec is honored.
+@pytest.mark.parametrize(
+    "input_shard_shape",
+    [
+        pytest.param(None, id="interleaved_to_nd"),
+        pytest.param((1, 1, 32, 64), id="nd_to_nd"),
+    ],
+)
+def test_repeat_all_ones_shortcut_nd_sharded_output(input_shard_shape, device):
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
+
+    def nd_config(shard_shape):
+        return ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape(shard_shape), grid))
+
+    torch.manual_seed(12345)
+    x = torch.rand((1, 1, 64, 64), dtype=torch.bfloat16)
+    input_mem_config = L1_INTERLEAVED if input_shard_shape is None else nd_config(input_shard_shape)
+    output_mem_config = nd_config((1, 1, 64, 32))
+    ttnn_input = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_mem_config)
+
+    result = ttnn.repeat(ttnn_input, [1, 1, 1, 1], memory_config=output_mem_config)
+
+    assert result.memory_config().nd_shard_spec == output_mem_config.nd_shard_spec
+    assert_equal(x, ttnn.to_torch(result))
+
+
 # TILE universal-I/O matrix: essential input × output routing paths.
 @pytest.mark.parametrize(
     "dtype",
