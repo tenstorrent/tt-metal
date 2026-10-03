@@ -252,6 +252,11 @@ void kernel_main() {
         if constexpr (!is_avg_pool || !is_large_kernel) {
             clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), DataflowBuffer(in_cb_id), clear_value_dfb);
         }
+        // Reader 0 fills and pushes the tile; reader 1 is its consumer, so reader 1 releases it
+        // once the clearing above has read it.
+        if constexpr (reader_id == 1) {
+            clear_value_dfb.pop_front(1);
+        }
     }
 
     // initialize the scalar CB
@@ -361,6 +366,20 @@ void kernel_main() {
             if (use_split_reader && ind == end) {
                 first_row_value = false;
             }
+        }
+    }
+
+    // Both config buffers are read through a raw pointer throughout the kernel rather than
+    // through the buffer object, so they are waited once up front and released here. Each pop
+    // carries the same conditions as its wait.
+    if constexpr (config_in_dram) {
+        if (reader_id != 0) {
+            reader_indices_dfb.pop_front(1);
+        }
+    }
+    if constexpr (!one_scalar_per_core && config_in_dram) {
+        if (reader_id != 0) {
+            config_dfb.pop_front(1);
         }
     }
 }  // kernel_main()

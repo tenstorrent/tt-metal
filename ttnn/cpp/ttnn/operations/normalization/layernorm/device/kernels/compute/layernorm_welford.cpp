@@ -574,4 +574,24 @@ void kernel_main() {
         }
 
     }  // NCHt loop
+
+    // The epsilon tile is pushed once by the reader and read on every NCHt iteration, so it is
+    // waited once up front rather than per iteration. Pop it here to balance the buffer.
+    dfb_eps_obj.pop_front(1);
+
+    // Gamma and beta are each one row of Wt tiles pushed once by the reader and read by tile offset
+    // on every block of every NCHt row. Their chain inputs wait Upfront with PopPolicy::None, so the
+    // chain waits block.start() + block.size() tiles and never pops. Blocks clamp their end to Wt,
+    // so that sum never exceeds Wt and reaches Wt on the last block of a row. Pop Wt once here
+    // rather than per block.
+#ifdef FUSE_GAMMA
+    if constexpr (do_gamma) {
+        DataflowBuffer(dfb_gamma).pop_front(Wt);
+    }
+#endif
+#ifdef FUSE_BETA
+    if constexpr (do_beta) {
+        DataflowBuffer(dfb_beta).pop_front(Wt);
+    }
+#endif
 }

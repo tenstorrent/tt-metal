@@ -607,4 +607,13 @@ void kernel_main() {
             bias_block_offset += in1_block_w;
         }
     }  // for in1_num_blocks_w
+    if constexpr (fuse_bias) {
+        // The bias row is pushed once by the reader and re-waited by every output block that folds
+        // it in, so it is popped once here rather than per block. Cores that skip compute leave the
+        // block loop before the wait above and no bias is pushed to them, so they must not pop
+        // it either.
+        if (!skip_compute) {
+            dfb_bias.pop_front(bias_ntiles_w);
+        }
+    }
 }  // void kernel_main()
