@@ -19,8 +19,14 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Dict, FrozenSet, List, Optional, Tuple, Union
 
+from .chip_architecture import ChipArchitecture, get_chip_architecture
+from .data_format_inference import (
+    infer_pack_in,
+    infer_unpack_out,
+    is_format_combination_outlier,
+)
 from .format_config import MX_FORMAT_MAX_NORMAL, DataFormat
-from .llk_params import MathOperation
+from .llk_params import DestAccumulation, MathOperation
 from .sfpu_dispatch_constants import (
     CLAMP_MAX,
     CLAMP_MIN,
@@ -2082,44 +2088,107 @@ def negative_zero_delivered(
     return input_format.is_32_bit() and _dest_acc_flag(dest_acc)
 
 
-def nan_survives_to_l1(
+def _dest_is_32_bit(
+    input_format: DataFormat, output_format: DataFormat, acc: DestAccumulation
+) -> bool:
+    """dest_acc, or the 8-bit-exponent to Float16 combination the harness widens to 32 bits."""
+    return acc == DestAccumulation.Yes or is_format_combination_outlier(
+        input_format, output_format, acc
+    )
+
+
+def pack_keeps_nan(
     input_format: DataFormat,
     output_format: DataFormat,
     dest_acc: Optional[Union[bool, Enum]],
+    chip_arch: Optional[ChipArchitecture] = None,
 ) -> bool:
-    """Does a NaN the kernel produces reach L1 still a NaN, or as a signed infinity?
+    """Does the pack carry a NaN that is in Dest to L1 as a NaN?
 
-    Keyed on (dst_format, output) so it mirrors UnarySFPUGolden's own preservation rule rather
-    than restating its result: the golden keeps a NaN for {(Float16, Float16),
-    (Float32, Float16), (Float32, Float32)} and routes everything else through
-    convert_nan_to_inf, which rewrites exponent and mantissa and leaves the sign bit alone. So
-    wherever this is False, a NaN arrives at the comparator as +/-inf and its sign is suddenly
-    load-bearing. The hardware does the same on both arches: a narrowing store converts a NaN
-    to an infinity.
-
-    This asks about the *output* leg where negative_zero_delivered() asks about the input leg:
-    of the triples specials_safe() accepts on the {Float16_b, Float32} matrix, only
-    Float32->Float32 at dest_acc=Yes carries a NaN the whole way.
+    Two ways through. A 32-bit Dest carries it into a Float16 or Float32 output; a 16-bit Dest
+    carries it only through an identity pack, where the pack source is already the output
+    format (Float16 or Float16_b) and the packer's identity path converts nothing. Everything
+    else converts, and a narrowing conversion turns a NaN into an infinity of its own sign.
+    Asked of the harness's own format inference, so this cannot drift from what the test
+    programs. A kernel that rounds its own result to bfloat16 on the SFPU loses the NaN before
+    the pack; that is the golden's business, not this function's.
 
     dest_acc=None means the caller does not know the pipeline, so keep the assertion.
     """
     if dest_acc is None:
         return True
 
-    # The Dest format the golden derives from the same two inputs. Block-float and MX are
-    # not reachable here -- specials_safe() rejects them on both legs before this is asked.
-    if _dest_acc_flag(dest_acc):
-        dst_format = DataFormat.Float32
-    elif DataFormat.Float16 in (input_format, output_format):
-        dst_format = DataFormat.Float16
-    else:
-        dst_format = DataFormat.Float16_b
+    acc = DestAccumulation.Yes if _dest_acc_flag(dest_acc) else DestAccumulation.No
+    if _dest_is_32_bit(input_format, output_format, acc):
+        return output_format in (DataFormat.Float16, DataFormat.Float32)
 
-    return (dst_format, output_format) in {
-        (DataFormat.Float16, DataFormat.Float16),
-        (DataFormat.Float32, DataFormat.Float16),
-        (DataFormat.Float32, DataFormat.Float32),
-    }
+    pack_in = infer_pack_in(
+        input_format,
+        output_format,
+        infer_unpack_out(input_format, output_format, acc),
+        acc,
+        chip_arch=chip_arch,
+    )
+    return pack_in == output_format and output_format in (
+        DataFormat.Float16,
+        DataFormat.Float16_b,
+    )
+
+
+def wormhole_store_may_narrow_nan(
+    input_format: DataFormat,
+    output_format: DataFormat,
+    dest_acc: Optional[Union[bool, Enum]],
+    chip_arch: ChipArchitecture,
+) -> bool:
+    """Where a golden NaN may come back from Wormhole as a NaN or as an infinity.
+
+    On Wormhole an SFPU store into a 16-bit Dest keeps a NaN on some kernel paths and turns it
+    into an infinity on others (measured on n300: neg, abs, min/max, the comparisons and div's
+    explicit 0/0 keep it; exp, sin, add1 and the SFPMAD-invented results of add, mul and xlogy
+    do not), where Blackhole always keeps it. That only shows once the pack keeps a NaN, so
+    this is the 16-bit identity-pack cells on Wormhole and nothing else.
+    """
+    if chip_arch != ChipArchitecture.WORMHOLE or dest_acc is None:
+        return False
+    acc = DestAccumulation.Yes if _dest_acc_flag(dest_acc) else DestAccumulation.No
+    return not _dest_is_32_bit(input_format, output_format, acc) and pack_keeps_nan(
+        input_format, output_format, acc, chip_arch
+    )
+
+
+def accept_wormhole_narrowed_nan(golden, result, may_narrow: bool):
+    """*result* with an infinity counted as the NaN the golden has, where *may_narrow*."""
+    if not may_narrow:
+        return result
+    import torch
+
+    narrowed = torch.isnan(golden) & torch.isinf(result)
+    return torch.where(narrowed, golden, result)
+
+
+def nan_survives_to_l1(
+    input_format: DataFormat,
+    output_format: DataFormat,
+    dest_acc: Optional[Union[bool, Enum]],
+    chip_arch: Optional[ChipArchitecture] = None,
+) -> bool:
+    """Does a NaN the kernel produces reach L1 still a NaN, or as a signed infinity?
+
+    pack_keeps_nan(), less the Wormhole cells where the SFPU store may already have narrowed
+    it (wormhole_store_may_narrow_nan). This is the question the NaN-sign gate asks: wherever
+    it is False, a NaN may arrive at the comparator as +/-inf and its sign becomes load-bearing.
+    *chip_arch* defaults to the device the harness is configured for.
+
+    This asks about the *output* leg where negative_zero_delivered() asks about the input leg.
+    """
+    if chip_arch is None:
+        chip_arch = get_chip_architecture()
+    return pack_keeps_nan(
+        input_format, output_format, dest_acc, chip_arch
+    ) and not wormhole_store_may_narrow_nan(
+        input_format, output_format, dest_acc, chip_arch
+    )
 
 
 # The ops whose NaN result is one the kernel *invents*, not one it forwards.
@@ -2157,6 +2226,7 @@ def nan_sign_is_unspecified(
     input_format: DataFormat,
     output_format: DataFormat,
     dest_acc: Optional[Union[bool, Enum]],
+    chip_arch: Optional[ChipArchitecture] = None,
 ) -> bool:
     """Would this variant assert the sign of a NaN that the ISA leaves unspecified?
 
@@ -2166,7 +2236,7 @@ def nan_sign_is_unspecified(
     NaN and the assertion is sound there.
     """
     return mathop in GENERATED_NAN_SIGN_OPS and not nan_survives_to_l1(
-        input_format, output_format, dest_acc
+        input_format, output_format, dest_acc, chip_arch
     )
 
 
@@ -2186,8 +2256,8 @@ def specials_after_nan_sign_gate(
     that tensor with it (Hardmish's (-2.0, 0.0) knee, Rsqrt's 0.0 pole). Callers still skip
     when the narrowed spec comes back None, i.e. ops with nothing but cat B to drive.
 
-    *on_wormhole* is passed rather than read here so this module stays free of the device
-    imports ChipArchitecture pulls in; both edge sweeps share this one rule.
+    *on_wormhole* is passed rather than read from the harness configuration, so both edge
+    sweeps share this one rule and decide the architecture in one place.
 
     Not an xfail: the sign may be either, so the same hardware could satisfy or break that
     claim run to run. There is nothing to assert until the golden accepts both
@@ -2197,7 +2267,9 @@ def specials_after_nan_sign_gate(
     if (
         specials
         and on_wormhole
-        and nan_sign_is_unspecified(mathop, input_format, output_format, dest_acc)
+        and nan_sign_is_unspecified(
+            mathop, input_format, output_format, dest_acc, ChipArchitecture.WORMHOLE
+        )
     ):
         return False
     return specials
@@ -2295,7 +2367,9 @@ def generated_nan_sign_is_asserted(
     Where this is True there is nothing sound to assert *yet*. The assertion to restore is "an
     infinity of either sign", which is a change to the comparator rather than to this gate.
     """
-    return on_wormhole and not nan_survives_to_l1(input_format, output_format, dest_acc)
+    return on_wormhole and not nan_survives_to_l1(
+        input_format, output_format, dest_acc, ChipArchitecture.WORMHOLE
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

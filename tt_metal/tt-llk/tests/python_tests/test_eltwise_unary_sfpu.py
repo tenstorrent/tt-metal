@@ -34,6 +34,7 @@ from helpers.sfpu_domains import (
     _UNARY_OPS_NOT_SWEPT,
     SHIFT_EDGE_AMOUNTS,
     SPECIALS_READY_OPS,
+    accept_wormhole_narrowed_nan,
     edge_spec,
     exclude_undefined,
     for_op_pipeline,
@@ -43,6 +44,7 @@ from helpers.sfpu_domains import (
     sfpu_unary_ops,
     specials_after_nan_sign_gate,
     specials_safe,
+    wormhole_store_may_narrow_nan,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -1380,6 +1382,15 @@ def eltwise_unary_sfpu(
         approx_mode=approx_mode,
         dest_acc=dest_acc,
         arch=TestConfig.CHIP_ARCH,
+    )
+    # On Wormhole a 16-bit SFPU store may narrow a NaN to an infinity on some kernel paths even
+    # where the pack keeps it, so there a golden NaN accepts either (see sfpu_domains).
+    res_tensor = accept_wormhole_narrowed_nan(
+        golden_tensor,
+        res_tensor,
+        wormhole_store_may_narrow_nan(
+            formats.input_format, formats.output_format, dest_acc, TestConfig.CHIP_ARCH
+        ),
     )
     assert passed_test(
         golden_tensor,

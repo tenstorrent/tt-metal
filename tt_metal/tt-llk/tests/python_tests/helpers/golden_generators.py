@@ -10,6 +10,7 @@ from typing import ClassVar, Optional
 
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.data_format_inference import is_format_combination_outlier
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     BroadcastType,
@@ -56,7 +57,7 @@ from helpers.sfpu_dispatch_constants import (
     UNARY_COMP_THRESHOLD,
     UNARY_MAX_MIN_VALUE,
 )
-from helpers.sfpu_domains import dest_truncation_mask, nan_survives_to_l1
+from helpers.sfpu_domains import dest_truncation_mask, pack_keeps_nan
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.unpack import (
     unpack_mxfp4,
@@ -2681,7 +2682,17 @@ class UnarySFPUGolden:
 
         match (dst_format, data_format):
             # in the following cases, nans are preserved
-            case (DataFormat.Float16, DataFormat.Float16):
+            # The two identity pairs take the packer's identity path, which performs no
+            # conversion; the 32-bit pairs have nothing to narrow. Whether a 16-bit pair really
+            # is an identity pack depends on the pack source, which pack_keeps_nan asks of
+            # the harness's format inference: a block-float input can still pack from itself.
+            case (DataFormat.Float16, DataFormat.Float16) if pack_keeps_nan(
+                input_format, data_format, self.dest_acc
+            ):
+                pass
+            case (DataFormat.Float16_b, DataFormat.Float16_b) if pack_keeps_nan(
+                input_format, data_format, self.dest_acc
+            ):
                 pass
             case (DataFormat.Float32, DataFormat.Float16):
                 pass
@@ -3608,7 +3619,7 @@ class UnarySFPUGolden:
         result = cast_to_dest_dtype(
             reduced.to(torch.float32), format_dict[dst_format]
         ).float()
-        if not nan_survives_to_l1(input_format, output_format, dest_acc):
+        if not pack_keeps_nan(input_format, output_format, dest_acc):
             result = convert_nan_to_inf(result)
         return result.reshape(reduced.shape)
 
@@ -4270,7 +4281,21 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 tile_dimensions=tile_dimensions,
             ).flatten()
 
-        if model_dest and not nan_survives_to_l1(data_format, output_format, dest_acc):
+        # The format in L1 decides the pack source, so ask with it when the caller has one: a
+        # Bfp8_b input is modelled here as Float16_b but still packs from a block-float source.
+        # Some kernels round their result to bfloat16 on the SFPU before the store when Dest is
+        # 16-bit (convert<vFloat16b>, i.e. SFP_STOCH_RND), and that conversion turns a NaN into an
+        # infinity of its sign before the packer ever sees it, identity pack or not.
+        pack_leg = input_format if input_format is not None else data_format
+        rounds_nan_away = (
+            model_dest
+            and operation in self._SFPU_BF16_ROUNDING_OPS
+            and dest_acc != DestAccumulation.Yes
+            and not is_format_combination_outlier(pack_leg, output_format, dest_acc)
+        )
+        if rounds_nan_away or (
+            model_dest and not pack_keeps_nan(pack_leg, output_format, dest_acc)
+        ):
             # The packer cannot write a NaN through this pipeline, so it substitutes an infinity
             # of the NaN's own sign (SFPSTORE: "NaN is also converted to infinity"). Asked of
             # sfpu_domains rather than restated here, so this golden and the gate that decides
@@ -4319,6 +4344,12 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         emitted = torch.isnan(result_row)
         return torch.where(emitted, result_row.abs(), result_row), emitted
 
+    # Binary ops whose 16-bit-Dest path ends in convert<vFloat16b>(result, RoundMode::Nearest)
+    # (ckernel_sfpu_binary_fmod.h, ckernel_sfpu_binary_remainder.h).
+    _SFPU_BF16_ROUNDING_OPS = frozenset(
+        {MathOperation.SfpuBinaryFmod, MathOperation.SfpuBinaryRemainder}
+    )
+
     @staticmethod
     def _dest_format(
         data_format: DataFormat,
@@ -4327,7 +4358,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
     ) -> DataFormat:
         """The format Dest holds, which is what the SFPU's precision actually follows.
 
-        Same derivation as UnarySFPUGolden.__call__ and the one nan_survives_to_l1() applies
+        Same derivation as UnarySFPUGolden.__call__ and the one pack_keeps_nan() applies
         internally; test_sfpu_domains pins the three to each other so a change to any one fails
         rather than drifting.
         """
@@ -5730,12 +5761,13 @@ class ScalarBinopGolden:
         else:
             raise ValueError(f"Unsupported scalar binop operation: {operation}")
 
-        # Dest, then the pack path -- the same two steps UnarySFPUGolden models. dest_acc
-        # decides the Dest width: Yes gives a 32-bit Dest that holds a NaN, No a 16-bit one
-        # that does not, and the packer then substitutes an infinity of the NaN's own sign.
+        # Dest, then the pack path -- the same two steps UnarySFPUGolden models, and the same
+        # preservation rule: a 32-bit pipeline and a 16-bit identity pack carry a NaN through,
+        # any other pack substitutes an infinity of the NaN's own sign. The input and output
+        # formats of this op are the same, so data_format is both legs.
         # cast_to_dest_dtype rather than .to(), so torch's cast does not decide that sign.
         result = cast_to_dest_dtype(result, format_dict[data_format]).flatten()
-        if dest_acc == DestAccumulation.No:
+        if not pack_keeps_nan(data_format, data_format, dest_acc):
             result = convert_nan_to_inf(result)
         return result
 

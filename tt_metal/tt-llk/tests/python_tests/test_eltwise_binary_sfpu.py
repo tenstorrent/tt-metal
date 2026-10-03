@@ -33,6 +33,7 @@ from helpers.sfpu_domains import (
     _SFPU_BINARY_OPS,
     BINARY_SPECIALS_READY_OPS,
     SHIFT_EDGE_AMOUNTS,
+    accept_wormhole_narrowed_nan,
     edge_pair_values,
     exclude_undefined_pair,
     for_op,
@@ -40,6 +41,7 @@ from helpers.sfpu_domains import (
     integer_specials,
     ops_with_singularity,
     specials_safe,
+    wormhole_store_may_narrow_nan,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
@@ -558,6 +560,7 @@ def sfpu_binary(
             32,
             [64, 32],
             golden_format,
+            input_format=formats.input_format,
             dest_acc=dest_acc,
             output_format=formats.output_format,
             collect_generated_nan=unspecified_nonfinite_sign,
@@ -630,6 +633,16 @@ def sfpu_binary(
         )
         golden_tensor = torch.where(unspecified, golden_tensor.abs(), golden_tensor)
         res_tensor = torch.where(unspecified, res_tensor.abs(), res_tensor)
+
+    # On Wormhole a 16-bit SFPU store may narrow a NaN to an infinity on some kernel paths even
+    # where the pack keeps it, so there a golden NaN accepts either (see sfpu_domains).
+    res_tensor = accept_wormhole_narrowed_nan(
+        golden_tensor,
+        res_tensor,
+        wormhole_store_may_narrow_nan(
+            formats.input_format, formats.output_format, dest_acc, TestConfig.CHIP_ARCH
+        ),
+    )
 
     assert passed_test(
         golden_tensor,

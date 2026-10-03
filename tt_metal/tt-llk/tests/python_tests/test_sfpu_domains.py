@@ -19,6 +19,7 @@ import math
 import struct
 
 import pytest
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
@@ -138,24 +139,34 @@ _EDGE_SWEEP_CELLS = [
 ]
 
 
-def test_nan_survives_only_into_a_32_bit_dest_and_a_32_bit_pack():
-    """Both legs have to stay 32-bit, and on this matrix exactly one cell manages it.
+def test_nan_survives_an_identity_pack_or_a_32_bit_pipeline():
+    """A NaN reaches L1 intact either because nothing converts it, or because nothing narrows it.
 
-    Pinned because the gate's whole scope follows from it: five of the six triples
-    specials_safe() accepts narrow a NaN somewhere, and those five are precisely where a
-    generated NaN's sign becomes an observable +/-inf.
+    Pinned because the gate's whole scope follows from it. On Blackhole two of the six triples
+    specials_safe() accepts are identity packs, since a Float16_b output at dest_acc=No makes
+    the pack source Float16_b whichever format the input had, and the third is Float32->Float32
+    at dest_acc=Yes, where nothing narrows. On Wormhole the SFPU store into a 16-bit Dest
+    already turns the NaN into an infinity, so only the 32-bit pipeline carries it.
     """
     carrying = [c for c in _EDGE_SWEEP_CELLS if specials_safe(*c)]
     assert len(carrying) == 6, "specials_safe's verdict on this matrix moved"
 
-    survives = [c for c in carrying if nan_survives_to_l1(*c)]
-    assert survives == [
-        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes)
-    ], (
-        "Float32->Float32 at dest_acc=Yes is the only cell on this matrix that carries a "
-        f"NaN to L1 as a NaN; got {[(i.name, o.name, str(d)) for i, o, d in survives]}. "
-        "If this moved, the Wormhole NaN-sign skip's scope moved with it."
-    )
+    expected = {
+        ChipArchitecture.BLACKHOLE: [
+            (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
+            (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.No),
+            (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
+        ],
+        ChipArchitecture.WORMHOLE: [
+            (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
+        ],
+    }
+    for arch, cells in expected.items():
+        survives = [c for c in carrying if nan_survives_to_l1(*c, arch)]
+        assert survives == cells, (
+            f"{arch.name}: got {[(i.name, o.name, str(d)) for i, o, d in survives]}. "
+            "If this moved, the Wormhole NaN-sign skip's scope moved with it."
+        )
 
 
 # The two suites do not share a format axis, so the gate's reach is counted per suite.
@@ -182,7 +193,8 @@ def test_nan_sign_gate_matches_the_measured_wormhole_failures():
         (op, cell)
         for op in _UNARY_NAN_SIGN_OPS
         for cell in _EDGE_SWEEP_CELLS
-        if specials_safe(*cell) and nan_sign_is_unspecified(op, *cell)
+        if specials_safe(*cell)
+        and nan_sign_is_unspecified(op, *cell, ChipArchitecture.WORMHOLE)
     ]
     assert len(_UNARY_NAN_SIGN_OPS) == 10
     assert (
@@ -193,7 +205,8 @@ def test_nan_sign_gate_matches_the_measured_wormhole_failures():
         (op, cell)
         for op in _SCALAR_NAN_SIGN_OPS
         for cell in _SCALAR_SUITE_CELLS
-        if specials_safe(*cell) and nan_sign_is_unspecified(op, *cell)
+        if specials_safe(*cell)
+        and nan_sign_is_unspecified(op, *cell, ChipArchitecture.WORMHOLE)
     ]
     assert scalar_gated == [
         (MathOperation.ScalarRsub, _SCALAR_SUITE_CELLS[0])
@@ -218,7 +231,7 @@ def test_generated_nan_sign_gate_is_the_narrowing_cells_on_wormhole_only():
     for cell in _EDGE_SWEEP_CELLS:
         if not specials_safe(*cell):
             continue
-        narrows = not nan_survives_to_l1(*cell)
+        narrows = not nan_survives_to_l1(*cell, ChipArchitecture.WORMHOLE)
         assert generated_nan_sign_is_asserted(*cell, on_wormhole=True) == narrows, (
             f"{cell} disagrees with nan_survives_to_l1 on Wormhole -- the gate must be "
             "exactly the narrowing cells"
@@ -243,10 +256,15 @@ def test_binary_golden_dest_format_matches_the_domains_rule():
         dst = BinarySFPUGolden._dest_format(input_format, output_format, dest_acc)
         preserves = (dst, output_format) in {
             (DataFormat.Float16, DataFormat.Float16),
+            (DataFormat.Float16_b, DataFormat.Float16_b),
             (DataFormat.Float32, DataFormat.Float16),
             (DataFormat.Float32, DataFormat.Float32),
         }
-        assert preserves == nan_survives_to_l1(input_format, output_format, dest_acc), (
+        # Blackhole, where the Dest the golden derives is the only thing in the way; Wormhole's
+        # 16-bit SFPU store narrows first, which test_nan_survives_... pins separately.
+        assert preserves == nan_survives_to_l1(
+            input_format, output_format, dest_acc, ChipArchitecture.BLACKHOLE
+        ), (
             f"{input_format.name}->{output_format.name} dest_acc={dest_acc}: the golden "
             f"derives Dest={dst.name}, which disagrees with nan_survives_to_l1"
         )
