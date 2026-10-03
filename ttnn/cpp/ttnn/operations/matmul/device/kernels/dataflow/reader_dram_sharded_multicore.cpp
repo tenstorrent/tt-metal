@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Data movement for the multi-core DRAM-sharded decode matmul (cores_per_bank > 0; the DSMC_ defines
+// Data movement for the multi-core DRAM-sharded decode matmul (num_workers_per_dram_bank >= 2; the DSMC_ defines
 // are this variant's). The same source
 // is built twice:
 //   stream 0 (NOC_0): streams weight blocks into dfb::w.
