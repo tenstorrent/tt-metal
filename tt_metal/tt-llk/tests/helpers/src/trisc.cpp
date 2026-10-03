@@ -68,6 +68,10 @@ int main(void)
     *(mailbox_base + 2)    = ckernel::RESET_VAL;
 #ifdef ARCH_QUASAR
     *(mailbox_base + 3) = ckernel::RESET_VAL;
+    for (std::uint32_t slot = 0; slot < llk_barrier::NUM_THREADS; ++slot)
+    {
+        host_signal::write(slot, ckernel::RESET_VAL);
+    }
 #endif
     device_setup();
 #if defined(ARCH_QUASAR)
@@ -114,6 +118,8 @@ int main(void)
     ckernel::store_blocking(mailbox, ckernel::KERNEL_COMPLETE); // landed before BRISC can reset this core (_start)
 #else
     *mailbox = ckernel::KERNEL_COMPLETE;
+    asm volatile("fence" ::: "memory"); // the L1 results land before the flag the host polls
+    host_signal::write(mailbox_offset / sizeof(std::uint32_t), ckernel::KERNEL_COMPLETE);
 #endif
 }
 
