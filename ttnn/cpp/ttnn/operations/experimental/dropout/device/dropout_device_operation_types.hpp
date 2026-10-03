@@ -15,7 +15,7 @@ struct DropoutParams {
     const tt::tt_metal::MemoryConfig output_memory_config;
 
     // Specifies the seed for the dropout operation.
-    // If `use_per_device_seed` is true, the seed is offset by device ID across devices in a mesh.
+    // If `use_per_device_seed` is true, the seed is domain-separated by device ID across devices in a mesh.
     uint32_t seed = 0;
     bool use_per_device_seed = false;
 
