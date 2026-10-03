@@ -3,7 +3,7 @@
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_FACE,
     FACES_PER_TILE,
@@ -25,6 +25,7 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
     TILE_COUNT,
+    UNPACK_BLOCK,
     generate_input_dim,
 )
 from helpers.utils import passed_test
@@ -109,12 +110,63 @@ def test_unpack_tilize_int8(
     )
 
 
+# The whole-tile SrcA path, the 8-bit path and the unpack-to-dest path (the latter two fall back to one call per tile).
+@parametrize(
+    formats=input_output_formats(
+        [DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32], same=True
+    )
+    + [
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp8_b),
+        InputOutputFormat(DataFormat.Fp8_e4m3, DataFormat.Float16_b),
+    ],
+    num_faces=[2, 4],
+)
+def test_unpack_tilize_block(
+    formats,
+    num_faces,
+):
+    if (
+        formats.input_format == DataFormat.Fp8_e4m3
+        and get_chip_architecture() != ChipArchitecture.BLACKHOLE
+    ):
+        pytest.skip(
+            "Unpack Tilize does not support Fp8_e4m3 format on non-BLACKHOLE architectures"
+        )
+
+    if formats.output_format == DataFormat.Bfp8_b and num_faces != FACES_PER_TILE:
+        pytest.skip("Bfp8_b output format only works with num_faces=4")
+
+    unpack_tilize(formats, num_faces=num_faces, unpack_block=True)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float32], same=True),
+    dest_acc=[DestAccumulation.Yes],
+    num_faces=[2, 4],
+)
+def test_unpack_tilize_float32_lossless_block(
+    formats,
+    dest_acc,
+    num_faces,
+):
+    unpack_tilize(
+        formats,
+        unpack_to_dest=True,
+        validate_lossless=True,
+        dest_acc=dest_acc,
+        num_faces=num_faces,
+        unpack_block=True,
+    )
+
+
 def unpack_tilize(
     formats,
     unpack_to_dest=False,
     validate_lossless=False,
     dest_acc=None,
     num_faces=4,
+    unpack_block=False,
 ):
     input_dimensions = [64, 64]
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -139,7 +191,7 @@ def unpack_tilize(
     configuration = TestConfig(
         "sources/unpack_tilize_test.cpp",
         formats,
-        templates=[],
+        templates=[UNPACK_BLOCK(True)] if unpack_block else [],
         runtimes=[
             generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt_A),

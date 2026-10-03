@@ -145,6 +145,22 @@ inline void llk_unpack_A_block(
         StateDiscard<std::uint32_t>(start_tile_index),
         StateDiscard<std::uint32_t>(ntiles)));
 
+    // Three or more tiles: one context acquire per block; one or two are cheaper per tile after a copy_init.
+    if constexpr ((BType == BroadcastType::NONE) && !acc_to_dest && (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE)) {
+        if (ntiles > 2) {
+            WAYPOINT("UPAW");
+            _llk_unpack_A_block_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
+                address,
+                ntiles,
+                offset_address,
+                unpack_src_format[operand_id],
+                unpack_dst_format[operand_id],
+                get_operand_num_faces(operand_id));
+            WAYPOINT("UPAD");
+            return;
+        }
+    }
+
     for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         WAYPOINT("UPAW");
         _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(

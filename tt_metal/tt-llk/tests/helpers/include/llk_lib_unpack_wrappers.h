@@ -50,6 +50,25 @@ inline void _llk_unpack_tilize_wrapper_(
     _llk_unpack_tilize_(base_address, tile_index, unpack_src_format, unpack_dst_format, block_ct_dim, face_r_dim, num_faces, narrow_tile);
 }
 
+inline void _llk_unpack_tilize_block_wrapper_(
+    const std::uint32_t base_address,
+    const std::uint32_t first_tile_index,
+    const std::uint32_t num_tiles,
+    const std::uint32_t unpack_src_format = 0,
+    const std::uint32_t unpack_dst_format = 0,
+    const std::uint32_t block_ct_dim      = 0,
+    const std::uint32_t face_r_dim        = FACE_R_DIM,
+    const std::uint32_t num_faces         = 4,
+    const bool narrow_tile                = false)
+{
+    // Wormhole has no block form of the tilize unpack: one call per tile.
+    for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
+    {
+        _llk_unpack_tilize_(
+            base_address, first_tile_index + tile, unpack_src_format, unpack_dst_format, block_ct_dim, face_r_dim, num_faces, narrow_tile);
+    }
+}
+
 inline void _llk_unpack_tilize_uninit_wrapper_(
     const std::uint32_t unpack_dst_format, const std::uint32_t num_faces = 4, const std::uint32_t face_r_dim = FACE_R_DIM)
 {
@@ -111,6 +130,26 @@ inline void _llk_unpack_tilize_wrapper_(
     const bool narrow_tile                            = false)
 {
     _llk_unpack_tilize_(base_address, tile_index, unpack_src_format, unpack_dst_format, face_r_dim, num_faces, narrow_tile);
+}
+
+inline void _llk_unpack_tilize_block_wrapper_(
+    const std::uint32_t base_address,
+    const std::uint32_t first_tile_index,
+    const std::uint32_t num_tiles,
+    const std::uint32_t unpack_src_format             = 0,
+    const std::uint32_t unpack_dst_format             = 0,
+    [[maybe_unused]] const std::uint32_t block_ct_dim = 0,
+    const std::uint32_t face_r_dim                    = ckernel::FACE_R_DIM,
+    const std::uint32_t num_faces                     = 4,
+    const bool narrow_tile                            = false)
+{
+    // As llk_unpack_tilize_block: one tile takes the per tile call.
+    if (num_tiles == 1)
+    {
+        _llk_unpack_tilize_(base_address, first_tile_index, unpack_src_format, unpack_dst_format, face_r_dim, num_faces, narrow_tile);
+        return;
+    }
+    _llk_unpack_tilize_block_(base_address, first_tile_index, num_tiles, unpack_src_format, unpack_dst_format, face_r_dim, num_faces, narrow_tile);
 }
 
 inline void _llk_unpack_tilize_uninit_wrapper_(

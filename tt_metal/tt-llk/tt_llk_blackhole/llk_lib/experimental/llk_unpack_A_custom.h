@@ -20,6 +20,9 @@ using namespace ckernel::unpacker;
 inline void _llk_unpack_A_custom_(const std::uint32_t address)
 {
     LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
+    // Poll first: the read's latency overlaps the counter reset (see _llk_unpack_A_)
+    std::uint32_t contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
+
     // Clear z/w start counters
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
 
@@ -29,10 +32,15 @@ inline void _llk_unpack_A_custom_(const std::uint32_t address)
     // Program srcA base address
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
-    // Wait for free context
-    wait_for_next_context(2);
+    const std::uint32_t context = unp_cfg_context;
 
-    const std::uint32_t upk0_reg = (unp_cfg_context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
+    // Wait for free context
+    while (contexts_in_use >= 2)
+    {
+        contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
+    }
+
+    const std::uint32_t upk0_reg = (context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
     cfg[upk0_reg]                = address;
 
     // Trisc::SEMPOST for context acquire
@@ -46,5 +54,5 @@ inline void _llk_unpack_A_custom_(const std::uint32_t address)
     t6_semaphore_get(semaphore::UNPACK_SYNC);
 
     // Switch unpacker config context
-    switch_config_context(unp_cfg_context);
+    switch_config_context_from(context);
 }
