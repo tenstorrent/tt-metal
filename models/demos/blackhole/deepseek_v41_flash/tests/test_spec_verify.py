@@ -4,7 +4,8 @@
 """M1: verify blocks of n = 1 + k tokens per user in ONE layer call (paged cache, causal inside the block), layer by layer, teacher-forced on
 the reference chain (dsv4-chain-m: S=9 prefill, 6 decode steps, 16 users). Per layer: PCC of every block token's output vs the reference
 decode output of that step, for consecutive blocks (state carried: caches, ratio-2 prev_cs via commit()).
-Env: DSV41_LAYERS (default 0-3), DSV41_K (default 1), DSV41_CHAIN, DSV41_BLOCKS (default all that fit in the saved steps)."""
+Env: DSV41_LAYERS (default 0-3), DSV41_K (default 1), DSV41_CHAIN, DSV41_BLOCKS (default all that fit in the saved steps).
+"""
 
 import os
 import time

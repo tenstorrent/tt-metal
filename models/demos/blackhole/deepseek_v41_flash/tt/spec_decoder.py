@@ -110,6 +110,7 @@ class SpecDecoder(SpecVerifier):
         self.noise = c(torch.full((4 * U, 1), 128799, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
         self.arange_n = c(torch.arange(n, dtype=torch.float32).reshape(1, n), ttnn.float32, ttnn.TILE_LAYOUT)
         self.zero_tok = None
+        self.stop_after = None  # None | 'verify' | 'accept': truncate the traced round (timing breakdown)
         # runtime override of the accept count (prompt feeding / teacher forcing): m = force if force >= 0 else the computed one
         self.force = c(torch.full((U, 1), -1.0), ttnn.float32, ttnn.TILE_LAYOUT)
 
@@ -150,6 +151,8 @@ class SpecDecoder(SpecVerifier):
         self._dbg_done = True
         logits = self.head.forward(x, pre)
         a = self.head.sample_global(logits, self.mesh_config, self.ccl)  # [T,1] uint32 RM: argmax of every row
+        if self.stop_after == "verify":  # timing breakdown only
+            return a
         # ---- accept ----
         rm = ttnn.ROW_MAJOR_LAYOUT
         f32 = lambda t, shape: ttnn.to_layout(ttnn.typecast(ttnn.reshape(t, shape), ttnn.float32), ttnn.TILE_LAYOUT)
@@ -173,6 +176,8 @@ class SpecDecoder(SpecVerifier):
         pos2 = ttnn.typecast(ttnn.reshape(self.pos, [U, n]), ttnn.float32)
         base = col(pos2, 0)
         f_next = ttnn.add(base, mcount)  # frontier = position of the input row whose argmax is the new bonus token
+        if self.stop_after == "accept":
+            return t_next
         # ---- commit compressor state, write main_kv of the n rows, draft ----
         oh3 = ttnn.reshape(ttnn.to_layout(onehot, rm), [U, n, 1])
         self.commit(oh3)

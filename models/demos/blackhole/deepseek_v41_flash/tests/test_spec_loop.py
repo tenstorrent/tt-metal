@@ -7,7 +7,8 @@ main_kv rings and the Engram hash state are all produced by the device (the CPU 
 the CPU greedy stream, so seeding from it is inconsistent). Greedy acceptance: the output must equal plain greedy decoding (DSV41_K=0 run).
 
 Env: DSV41_K (verified drafts k = 1..5; 0 = plain greedy baseline on the same code, writes greedy_dev_g.pt), DSV41_LAYERS (default 0-39), DSV41_GEN (tokens per
-user, default 40; positions must stay < 128: ratio-1 layers hold compress_len <= 128), DSV41_CHAIN, DSV41_REPLAYS (device-only timing)."""
+user, default 40; positions must stay < 128: ratio-1 layers hold compress_len <= 128), DSV41_CHAIN, DSV41_REPLAYS (device-only timing).
+"""
 
 import os
 import time
@@ -245,14 +246,23 @@ def test_spec_loop(mesh_device):
     done = torch.zeros(B, dtype=torch.bool)
     rounds, walls, emitted, ms = 0, [], [], []
     per_pos = torch.zeros(BLOCK + 1)
+    gap_l = [[] for _ in range(B)]  # gap_l[b][i] = top1-top2 logit gap of the argmax that produced generated token i+1
     while not bool(done.all()):
         t = time.perf_counter()
         a, m, d = run_round(X, base)
         walls.append((time.perf_counter() - t) * 1e3)
+        if (
+            os.environ.get("DSV41_GAP", "1") == "1"
+        ):  # top-1/top-2 logit gap of every verified row (outside the timed region): near-tie evidence for exactness analysis
+            lgv = head.gather_logits(dec.logits)[:Tn].reshape(B, n, -1).float()
+            t2 = lgv.topk(2, dim=-1).values
+            gaps_r = t2[..., 0] - t2[..., 1]  # [B, n]
         for b in range(B):
             if done[b]:
                 continue
             mb = int(m[b])
+            if os.environ.get("DSV41_GAP", "1") == "1":
+                gap_l[b] += [float(x) for x in gaps_r[b, : mb + 1]]
             gen[b] += [int(x) for x in a[b, : mb + 1]]
             emitted.append(mb + 1)
             ms.append(mb)
@@ -276,7 +286,9 @@ def test_spec_loop(mesh_device):
     stream = torch.full((B, G + 1), -1, dtype=torch.long)
     for b in range(B):
         stream[b, : lens[b]] = torch.tensor(gen[b][: lens[b]])
-    torch.save({"stream": stream, "k": k, "S": S}, GREEDY if k == 0 else GREEDY.replace(".pt", f"_k{k}.pt"))
+    torch.save(
+        {"stream": stream, "k": k, "S": S, "gap": gap_l}, GREEDY if k == 0 else GREEDY.replace(".pt", f"_k{k}.pt")
+    )
     if k > 0 and os.path.exists(GREEDY):
         base_stream = torch.load(GREEDY)["stream"]
         ident, first_div = 0, []
@@ -288,6 +300,15 @@ def test_spec_loop(mesh_device):
         log(
             f"EXACTNESS vs device plain greedy: {ident}/{B} users identical over the compared length; first divergence index per user {first_div}"
         )
+        base_gap = torch.load(GREEDY).get("gap")
+        for b in range(B):
+            i = first_div[b]
+            if i > 0 and base_gap is not None and len(base_gap[b]) >= i and len(gap_l[b]) >= i:
+                # stream[b, i] was produced by the argmax of the row that emitted generated token i (gap list index i-1)
+                log(
+                    f"DIVERGENCE user {b} token {i}: plain tok {int(base_stream[b, i])} (top1-top2 gap in plain {base_gap[b][i - 1]:.3f}), spec tok {int(stream[b, i])} (gap in spec {gap_l[b][i - 1]:.3f}), "
+                    f"CPU ref tok {int(ref_all[b, S + i])}"
+                )
     ref_stream = ref_all[:, S : S + G + 1]
     agree = [(stream[b, : lens[b]] == ref_stream[b, : lens[b]]).float().mean().item() for b in range(B)]
     log(f"agreement with the CPU reference greedy stream (informational): mean {sum(agree) / B:.3f}")
@@ -303,3 +324,21 @@ def test_spec_loop(mesh_device):
         ttnn.execute_trace(md, tid, cq_id=0, blocking=False)
     ttnn.synchronize_device(md)
     log(f"DEVICE_ROUND k={k}: pure device replay {(time.perf_counter() - t) / nrep * 1e3:.1f} ms")
+    if k > 0:  # time breakdown of one round: verify (40 layers + head + argmax) / + accept / full round
+        res_t = {}
+        for mode in ("verify", "accept", None):
+            dec.stop_after = mode
+            tid2 = ttnn.begin_trace_capture(md, cq_id=0)
+            dec.forward()
+            ttnn.end_trace_capture(md, tid2, cq_id=0)
+            ttnn.synchronize_device(md)
+            t = time.perf_counter()
+            for _ in range(nrep):
+                ttnn.execute_trace(md, tid2, cq_id=0, blocking=False)
+            ttnn.synchronize_device(md)
+            res_t[mode] = (time.perf_counter() - t) / nrep * 1e3
+            ttnn.release_trace(md, tid2)
+        log(
+            f"ROUND_BREAKDOWN k={k}: verify {res_t['verify']:.1f} ms, + accept {res_t['accept'] - res_t['verify']:.1f} ms, + commit/write_main/draft {res_t[None] - res_t['accept']:.1f} ms "
+            f"= device round {res_t[None]:.1f} ms; host (wall - device) {wall - res_t[None]:.1f} ms"
+        )
