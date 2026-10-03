@@ -15,6 +15,8 @@
 
 namespace tt::tt_fabric {
 
+// ============ Sender channels ============
+
 template <>
 struct StructLayout<WorkerXY> {
     static constexpr std::array fields = {
@@ -48,6 +50,19 @@ struct StructLayout<EDMChannelWorkerLocationInfo> {
 static_assert(validate_struct_fields<EDMChannelWorkerLocationInfo>(StructLayout<EDMChannelWorkerLocationInfo>::fields));
 
 template <>
+struct StructLayout<SenderChannelProducerCursor> {
+    static constexpr std::array fields = {
+        LAYOUT_FIELD(SenderChannelProducerCursor, write_counter),
+        LAYOUT_FIELD(SenderChannelProducerCursor, write_index),
+        LAYOUT_PAD(SenderChannelProducerCursor, align_pad_0),
+        LAYOUT_PAD(SenderChannelProducerCursor, align_pad_1),
+    };
+};
+static_assert(validate_struct_fields<SenderChannelProducerCursor>(StructLayout<SenderChannelProducerCursor>::fields));
+
+// ============ Handshake ============
+
+template <>
 struct StructLayout<erisc::datamover::handshake::handshake_info_t> {
     using T = erisc::datamover::handshake::handshake_info_t;
     static constexpr std::array fields = {
@@ -62,16 +77,7 @@ struct StructLayout<erisc::datamover::handshake::handshake_info_t> {
 static_assert(validate_struct_fields<erisc::datamover::handshake::handshake_info_t>(
     StructLayout<erisc::datamover::handshake::handshake_info_t>::fields));
 
-template <>
-struct StructLayout<SenderChannelProducerCursor> {
-    static constexpr std::array fields = {
-        LAYOUT_FIELD(SenderChannelProducerCursor, write_counter),
-        LAYOUT_FIELD(SenderChannelProducerCursor, write_index),
-        LAYOUT_PAD(SenderChannelProducerCursor, align_pad_0),
-        LAYOUT_PAD(SenderChannelProducerCursor, align_pad_1),
-    };
-};
-static_assert(validate_struct_fields<SenderChannelProducerCursor>(StructLayout<SenderChannelProducerCursor>::fields));
+// ============ Routing table ============
 
 template <>
 struct StructLayout<RouterStateManager> {
@@ -104,14 +110,91 @@ struct StructLayout<routing_l1_info_t> {
 };
 static_assert(validate_struct_fields<routing_l1_info_t>(StructLayout<routing_l1_info_t>::fields));
 
+// ============ Fabric telemetry ============
+
+template <>
+struct StructLayout<RiscTimestampV2> {
+    static constexpr std::array fields = {
+        // Union member that spans the whole struct
+        LAYOUT_FIELD(RiscTimestampV2, full),
+    };
+};
+static_assert(validate_struct_fields<RiscTimestampV2>(StructLayout<RiscTimestampV2>::fields));
+
+template <>
+struct StructLayout<BandwidthTelemetry> {
+    static constexpr std::array fields = {
+        LAYOUT_FIELD(BandwidthTelemetry, elapsed_active_cycles),
+        LAYOUT_FIELD(BandwidthTelemetry, elapsed_cycles),
+        LAYOUT_FIELD(BandwidthTelemetry, num_words_sent),
+        LAYOUT_FIELD(BandwidthTelemetry, num_packets_sent),
+    };
+};
+static_assert(validate_struct_fields<BandwidthTelemetry>(StructLayout<BandwidthTelemetry>::fields));
+
+template <>
+struct StructLayout<EriscDynamicEntry> {
+    static constexpr std::array fields = {
+        LAYOUT_FIELD(EriscDynamicEntry, router_state),
+        LAYOUT_PAD(EriscDynamicEntry, padding0),
+        LAYOUT_FIELD(EriscDynamicEntry, tx_heartbeat),
+        LAYOUT_FIELD(EriscDynamicEntry, rx_heartbeat),
+    };
+};
+static_assert(validate_struct_fields<EriscDynamicEntry>(StructLayout<EriscDynamicEntry>::fields));
+
+template <>
+struct StructLayout<DynamicInfo> {
+    static constexpr std::array fields = {
+        LAYOUT_FIELD(DynamicInfo, tx_bandwidth),
+        LAYOUT_FIELD(DynamicInfo, rx_bandwidth),
+        LAYOUT_FIELD(DynamicInfo, erisc),
+    };
+};
+static_assert(validate_struct_fields<DynamicInfo>(StructLayout<DynamicInfo>::fields));
+
+template <>
+struct StructLayout<StaticInfo> {
+    static constexpr std::array fields = {
+        LAYOUT_FIELD(StaticInfo, version),
+        LAYOUT_FIELD(StaticInfo, mesh_id),
+        LAYOUT_FIELD(StaticInfo, neighbor_mesh_id),
+        LAYOUT_FIELD(StaticInfo, device_id),
+        LAYOUT_FIELD(StaticInfo, neighbor_device_id),
+        LAYOUT_FIELD(StaticInfo, direction),
+        LAYOUT_FIELD(StaticInfo, supported_stats),
+        LAYOUT_FIELD(StaticInfo, fabric_config),
+    };
+};
+static_assert(validate_struct_fields<StaticInfo>(StructLayout<StaticInfo>::fields));
+
+template <>
+struct StructLayout<FabricTelemetry> {
+    static constexpr std::array fields = {
+        LAYOUT_FIELD(FabricTelemetry, static_info),
+        LAYOUT_FIELD(FabricTelemetry, dynamic_info),
+        LAYOUT_FIELD(FabricTelemetry, postcode),
+        LAYOUT_FIELD(FabricTelemetry, scratch),
+    };
+};
+static_assert(validate_struct_fields<FabricTelemetry>(StructLayout<FabricTelemetry>::fields));
+
+// ============ All described structs ============
+
 // Every struct described at compile time. The manifest writes one type entry per element, which describes the
 // struct's fields.
 using DescribedStructs = std::tuple<
     WorkerXY,
     EDMChannelWorkerLocationInfo,
-    erisc::datamover::handshake::handshake_info_t,
     SenderChannelProducerCursor,
+    erisc::datamover::handshake::handshake_info_t,
     RouterStateManager,
-    routing_l1_info_t>;
+    routing_l1_info_t,
+    RiscTimestampV2,
+    BandwidthTelemetry,
+    EriscDynamicEntry,
+    DynamicInfo,
+    StaticInfo,
+    FabricTelemetry>;
 
 }  // namespace tt::tt_fabric
