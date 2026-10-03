@@ -18,7 +18,9 @@ struct affine_coefficients {
 
 template <typename Config>
 inline void init_signed_abs_affine() {
-    sfpi::vConstIntPrgm0 = static_cast<int32_t>(0x807f0000u);
+    if constexpr (Config::kNegativeNanTerminal) {
+        sfpi::vConstIntPrgm0 = static_cast<int32_t>(0x807f0000u);
+    }
 }
 
 // The copysign source: raw's sign, but positive for a NaN of either sign. A DEST
@@ -42,8 +44,13 @@ inline void calculate_signed_abs_affine() {
         sfpi::eval_polynomial_dual<Config::kDegree>(affine_coefficients<Config>{}, x0, x1, y0, y1);
         sfpi::signed_abs_affine_tail<Config>(x0, y0);
         sfpi::signed_abs_affine_tail<Config>(x1, y1);
-        y0 = sfpi::copysgn(y0, nan_positive_sign(raw0, x0));
-        y1 = sfpi::copysgn(y1, nan_positive_sign(raw1, x1));
+        if constexpr (Config::kNegativeNanTerminal) {
+            y0 = sfpi::copysgn(y0, nan_positive_sign(raw0, x0));
+            y1 = sfpi::copysgn(y1, nan_positive_sign(raw1, x1));
+        } else {
+            y0 = sfpi::copysgn(y0, raw0);
+            y1 = sfpi::copysgn(y1, raw1);
+        }
         y0 = sfpi::convert<sfpi::vFloat16b>(y0, sfpi::RoundMode::Nearest);
         y1 = sfpi::convert<sfpi::vFloat16b>(y1, sfpi::RoundMode::Nearest);
         sfpi::dst_reg[0] = y0;
