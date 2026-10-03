@@ -197,15 +197,59 @@ ALL_TEST_PARAMS = list(
 )
 
 
+# Experiment (not for merge): selected configs only.
+_SELECT = [504, 779, 1174, 2040, 2042, 2049, 2297, 2314, 2321, 2328, 2465, 2732, 3584, 3586, 3593, 3595, 3634, 3841, 3858, 3865, 3872, 4040, 4042, 4049, 4289, 4556, 5401, 5857, 6112, 6137, 6139, 6313, 6315, 6393, 6448, 6561, 6592, 6600, 6601, 6603]
+ALL_TEST_PARAMS = [ALL_TEST_PARAMS[_i] for _i in _SELECT]
+
+from dataclasses import dataclass as _dataclass
+
+from helpers.test_variant_parameters import TemplateParameter as _TemplateParameter
+
+
+@_dataclass
+class REPRO_KNOB(_TemplateParameter):
+    repro_pad: int = 0
+    repro_delay: int = 0
+    repro_tail: int = 0
+    repro_tail_u: int = 0
+    repro_tail_m: int = 0
+    repro_tail_ma: int = 0
+    repro_inj: int = 0
+    repro_inj_at: int = 0
+    repro_reset: int = 0
+    repro_unp_at: int = 0
+    repro_udelay: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr int REPRO_PAD = {self.repro_pad};\n"
+            f"constexpr int REPRO_DELAY = {self.repro_delay};\n"
+            f"constexpr int REPRO_TAIL = {self.repro_tail};\n"
+            f"constexpr int REPRO_TAIL_U = {self.repro_tail_u};\n"
+            f"constexpr int REPRO_TAIL_M = {self.repro_tail_m};\n"
+            f"constexpr int REPRO_TAIL_MA = {self.repro_tail_ma};\n"
+            f"constexpr int REPRO_INJ = {self.repro_inj};\n"
+            f"constexpr int REPRO_INJ_AT = {self.repro_inj_at};\n"
+            f"constexpr int REPRO_RESET = {self.repro_reset};\n"
+            f"constexpr int REPRO_UNP_AT = {self.repro_unp_at};\n"
+            f"constexpr int REPRO_UDELAY = {self.repro_udelay};"
+        )
+
+
+REPRO_KNOBS = [(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4), (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8), (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12), (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16), (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 20), (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 24), (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 28), (0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0), (0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 4), (0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 8), (0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 12), (0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 16), (0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 20), (0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 24), (0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 28), (0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0), (0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 4), (0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 8), (0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 12), (0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 16), (0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 20), (0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 24), (0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 28), (0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0), (0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 4), (0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 8), (0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 12), (0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 16), (0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 20), (0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 24), (0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 28), (0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0), (0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 4), (0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 8), (0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 12), (0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 16), (0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 20), (0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 24), (0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 28), (0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0), (0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 4), (0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 8), (0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 12), (0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 16), (0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 20), (0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 24), (0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 28), (0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0), (0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 4), (0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 8), (0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 12), (0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 16), (0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 20), (0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 24), (0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 28), (0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0), (0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 4), (0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 8), (0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 12), (0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 16), (0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 20), (0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 24), (0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 28)]
+
+
 @pytest.mark.perf
 @pytest.mark.parametrize(
     "math_fidelity,matmul_config,throttle,num_blocks", ALL_TEST_PARAMS
 )
+@pytest.mark.parametrize("repro_knob", REPRO_KNOBS)
 def test_perf_math_matmul(
     math_fidelity,
     matmul_config,
     throttle,
     num_blocks,
+    repro_knob,
     perf_report,
 ):
     """
@@ -256,6 +300,7 @@ def test_perf_math_matmul(
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(matmul_config.dest_sync),
             THROTTLE_LEVEL(throttle),
+            REPRO_KNOB(*repro_knob),
         ],
         runtimes=[
             DEST_INDEX(matmul_config.dst_index),
