@@ -18,11 +18,12 @@ namespace ckernel::sfpu {
 //
 // Two-region implementation, exploiting that i1 is odd: i1(-x) = -i1(x).
 //   |x| ≤ 10:  rational p(t)/q(t) on t = x², result = x · p(t)/q(t)
-//              BF16: 4 numer + 4 denom coeffs in t (= n7/d6 in x) → 0.02 BF16 ULP analytical
+//              BF16: 4 numer + 4 denom coeffs in t (= n7/d6 in x), refit onto the fp16/bf16 grid
 //              FP32: 7 numer + 8 denom coeffs in t (= n13/d14 in x) → <0.001 FP32 ULP analytical
 //   |x| > 10:  asymptotic expansion
 //                i1(x) = sign(x) · exp(|x|) / sqrt(|x|) · P(1/|x|)
-//              degree-5 minimax fit (6 coeffs), max rel err ~1e-9 over [10, 88.5].
+//              FP32: degree-5 minimax fit (6 coeffs), max rel err ~1e-9 over [10, 88.5].
+//              BF16: degree-2 fit on the one-SFPLOADI grid (the bf16 exp_21f limits accuracy there).
 //
 // Code shape (chosen to relieve SFPI LRA budget):
 //   1. Compute polynomial result unconditionally and store to DST.
@@ -67,6 +68,7 @@ inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfp
     // 1/|x| = (1/√|x|)² — reuses the refined rsqrt instead of a fresh reciprocal.
     const sfpi::vFloat inv_abs_x = rsqrt_y * rsqrt_y;
 
+#ifdef INP_FLOAT32
     // P(y), degree-5 minimax fit on y ∈ [1/88.5, 0.1]; max rel err ~1e-9.
     // This outlined function does not stress the main loop's LRA, so full precision is safe.
     const sfpi::vFloat correction = PolynomialEvaluator::eval(
@@ -77,10 +79,29 @@ inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfp
         -4.3674591560e-02f,
         -1.9748322314e-02f,
         -3.3467922914e-01f);
+#else
+    // BF16: degree-2 P(y) on the one-SFPLOADI grid, grid-searched against every bf16 input in (10, 88.5] for the
+    // end-to-end result (exp_21f and the rsqrt included), so it is more accurate after bf16 rounding than the ~1e-9
+    // degree-5 fit, whose precision the bf16 exp cannot use.
+    const sfpi::vFloat correction = PolynomialEvaluator::eval(inv_abs_x, 0x1.988p-2f, -0x1.354p-3f, -0x1.cep-5f);
+#endif
 
     // i1 is odd: copy sign of original x onto positive magnitude.
     return sfpi::copysgn(exp_abs * rsqrt_y * correction, x_signed);
 }
+
+#ifndef INP_FLOAT32
+// BF16 rational p(t)/q(t), t = x², for |x| <= 10. N0 and D1 are full fp32 constants (vConstFloatPrgm1/2); the rest
+// are on the one-SFPLOADI fp16/bf16 grid, grid-searched against every bf16 input with |x| <= 10 so that max and mean
+// ULP vs float64 do not regress.
+constexpr float I1_BF16_N0 = 0x1.ffecf6p-2f;  // vConstFloatPrgm1
+constexpr float I1_BF16_N1 = 0x1.be8p-5f;
+constexpr float I1_BF16_N2 = 0x1.a6cp-10f;
+constexpr float I1_BF16_N3 = 0x1.54p-16f;
+constexpr float I1_BF16_D1 = -0x1.0a078p-6f;  // vConstFloatPrgm2
+constexpr float I1_BF16_D2 = 0x1.b18p-14f;
+constexpr float I1_BF16_D3 = -0x1.0ep-22f;
+#endif
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_i1() {
@@ -123,10 +144,10 @@ inline void calculate_i1() {
                 -3.0635529988e-16f,
                 7.4301498523e-19f);
 #else
-            sfpi::vFloat numer = PolynomialEvaluator::eval(
-                t, 4.9992737740e-01f, 5.4503594600e-02f, 1.6126291630e-03f, 2.0223499130e-05f);
-            sfpi::vFloat denom =
-                PolynomialEvaluator::eval(t, 1.0f, -1.6242591070e-02f, 1.0333660750e-04f, -2.5076132990e-07f);
+            // N0 and D1 come from vConstFloatPrgm1/2 (programmed by i1_init) instead of two SFPLOADI per row each.
+            sfpi::vFloat numer =
+                PolynomialEvaluator::eval(t, sfpi::vConstFloatPrgm1, I1_BF16_N1, I1_BF16_N2, I1_BF16_N3);
+            sfpi::vFloat denom = PolynomialEvaluator::eval(t, 1.0f, sfpi::vConstFloatPrgm2, I1_BF16_D2, I1_BF16_D3);
 #endif
             val = numer * x * sfpu_reciprocal<APPROXIMATION_MODE>(denom);
         }
@@ -147,6 +168,10 @@ template <bool APPROXIMATION_MODE>
 void i1_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
+#ifndef INP_FLOAT32
+    sfpi::vConstFloatPrgm1 = I1_BF16_N0;
+    sfpi::vConstFloatPrgm2 = I1_BF16_D1;
+#endif
 }
 
 }  // namespace ckernel::sfpu
