@@ -1,0 +1,20 @@
+[t110] tree=83c11ee2b3 dirty=0
+2026-10-03 07:07:56.641 | INFO     | var.tmp.fasth3.t110.test_gate_adaln_ab:_arm:122 - T110_BLOCK arm=base ms_per_block=14.006 laps=[14.001, 14.006, 14.006] replays=10
+2026-10-03 07:07:58.019 | INFO     | var.tmp.fasth3.t110.test_gate_adaln_ab:test_gate_adaln_ab:167 - T110_FOLD S1 adaln=0 folded=6/6
+2026-10-03 07:08:02.371 | INFO     | var.tmp.fasth3.t110.test_gate_adaln_ab:_arm:122 - T110_BLOCK arm=gate ms_per_block=14.015 laps=[14.015, 13.982, 14.016] replays=10
+2026-10-03 07:08:08.595 | INFO     | var.tmp.fasth3.t110.test_gate_adaln_ab:_arm:122 - T110_BLOCK arm=adaln ms_per_block=13.738 laps=[13.72, 13.738, 13.756] replays=10
+2026-10-03 07:08:08.658 | INFO     | var.tmp.fasth3.t110.test_gate_adaln_ab:test_gate_adaln_ab:167 - T110_FOLD S1 adaln=1 folded=6/6
+2026-10-03 07:08:09.967 | INFO     | var.tmp.fasth3.t110.test_gate_adaln_ab:_arm:122 - T110_BLOCK arm=both ms_per_block=13.895 laps=[13.692, 13.895, 14.04] replays=10
+2026-10-03 07:08:10.516 | INFO     | var.tmp.fasth3.t110.test_gate_adaln_ab:test_gate_adaln_ab:182 - T110_AB S1 arm=gate base_ms=14.006 ms=14.015 delta_ms=+0.009 (+0.07%) pcc_v=0.9999993 pcc_a=0.9999946 bit_identical=False maxabs_v=6 maxabs_a=2
+2026-10-03 07:08:10.867 | INFO     | var.tmp.fasth3.t110.test_gate_adaln_ab:test_gate_adaln_ab:182 - T110_AB S1 arm=adaln base_ms=14.006 ms=13.738 delta_ms=-0.267 (-1.91%) pcc_v=0.9999632 pcc_a=0.9999820 bit_identical=False maxabs_v=20 maxabs_a=3
+2026-10-03 07:08:11.215 | INFO     | var.tmp.fasth3.t110.test_gate_adaln_ab:test_gate_adaln_ab:182 - T110_AB S1 arm=both base_ms=14.006 ms=13.895 delta_ms=-0.111 (-0.79%) pcc_v=0.9999633 pcc_a=0.9999821 bit_identical=False maxabs_v=20 maxabs_a=4
+2026-10-03 07:08:22.220 | INFO     | var.tmp.fasth3.t110.test_gate_adaln_ab:_arm:122 - T110_BLOCK arm=base ms_per_block=60.002 laps=[59.805, 60.002, 60.201] replays=10
+2026-10-03 07:08:22.421 | INFO     | var.tmp.fasth3.t110.test_gate_adaln_ab:test_gate_adaln_ab:167 - T110_FOLD S2 adaln=0 folded=6/6
+2026-10-03 07:08:28.831 | INFO     | var.tmp.fasth3.t110.test_gate_adaln_ab:_arm:122 - T110_BLOCK arm=gate ms_per_block=59.972 laps=[59.455, 60.105, 59.972] replays=10
+2026-10-03 07:08:40.331 | INFO     | var.tmp.fasth3.t110.test_gate_adaln_ab:_arm:122 - T110_BLOCK arm=adaln ms_per_block=59.317 laps=[58.954, 59.45, 59.317] replays=10
+2026-10-03 07:08:40.520 | INFO     | var.tmp.fasth3.t110.test_gate_adaln_ab:test_gate_adaln_ab:167 - T110_FOLD S2 adaln=1 folded=6/6
+2026-10-03 07:08:45.283 | INFO     | var.tmp.fasth3.t110.test_gate_adaln_ab:_arm:122 - T110_BLOCK arm=both ms_per_block=59.009 laps=[58.698, 59.009, 59.081] replays=10
+2026-10-03 07:08:46.876 | INFO     | var.tmp.fasth3.t110.test_gate_adaln_ab:test_gate_adaln_ab:182 - T110_AB S2 arm=gate base_ms=60.002 ms=59.972 delta_ms=-0.029 (-0.05%) pcc_v=1.0000000 pcc_a=0.9999999 bit_identical=False maxabs_v=8 maxabs_a=2
+2026-10-03 07:08:48.141 | INFO     | var.tmp.fasth3.t110.test_gate_adaln_ab:test_gate_adaln_ab:182 - T110_AB S2 arm=adaln base_ms=60.002 ms=59.317 delta_ms=-0.685 (-1.14%) pcc_v=0.9999834 pcc_a=0.9999688 bit_identical=False maxabs_v=24 maxabs_a=14
+2026-10-03 07:08:49.407 | INFO     | var.tmp.fasth3.t110.test_gate_adaln_ab:test_gate_adaln_ab:182 - T110_AB S2 arm=both base_ms=60.002 ms=59.009 delta_ms=-0.993 (-1.66%) pcc_v=0.9999834 pcc_a=0.9999688 bit_identical=False maxabs_v=24 maxabs_a=14
+T110_EXIT=0
