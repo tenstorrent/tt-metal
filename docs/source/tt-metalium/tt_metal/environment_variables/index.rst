@@ -73,3 +73,48 @@ The library uses the following fallback order to locate runtime artifacts:
 
      export TT_METAL_RUNTIME_ROOT=/opt/tt-metalium-runtime
      /usr/local/bin/my_cpp_app
+
+TT_METAL_BFP_HOST_TILIZER_THREADS
+---------------------------------
+
+**Optional:** Tuning and debugging only.
+
+**Description:**
+
+``TT_METAL_BFP_HOST_TILIZER_THREADS`` controls how many worker threads the host uses when converting tensors to the BFP8, BFP4 and BFP2 block float formats. When unset, the thread count is chosen automatically from the input size and the number of available CPU cores, and small conversions stay on a single thread. Set it to ``0`` to force single threaded conversion, or to a positive number to pin the thread count (capped by the number of tiles being converted).
+
+**Usage:**
+
+.. code-block:: bash
+
+   export TT_METAL_BFP_HOST_TILIZER_THREADS=8
+
+TT_METAL_BFP_HOST_TILIZER_DISABLE_SIMD
+--------------------------------------
+
+**Optional:** Tuning and debugging only.
+
+**Description:**
+
+``TT_METAL_BFP_HOST_TILIZER_DISABLE_SIMD`` disables the AVX2 (SIMD) fast path used by the host when converting tensors to the BFP8 block float format, and forces the scalar fallback instead. Both paths produce identical output; this is intended for benchmarking and debugging. Set it to ``1`` to disable SIMD. Default: SIMD enabled where applicable.
+
+**Usage:**
+
+.. code-block:: bash
+
+   export TT_METAL_BFP_HOST_TILIZER_DISABLE_SIMD=1
+
+TT_METAL_BFP_HOST_TILIZER_USE_OPENMP
+------------------------------------
+
+**Optional:** Tuning and debugging only.
+
+**Description:**
+
+``TT_METAL_BFP_HOST_TILIZER_USE_OPENMP`` makes the host BFP block float conversion dispatch its work through OpenMP instead of ``std::thread``. It only takes effect when tt-metal was built with the CMake option ``TT_BFP_HOST_TILIZER_OPENMP=ON`` (off by default); otherwise it is ignored. Set it to ``1`` to enable. Default: ``std::thread`` dispatch.
+
+**Usage:**
+
+.. code-block:: bash
+
+   export TT_METAL_BFP_HOST_TILIZER_USE_OPENMP=1
