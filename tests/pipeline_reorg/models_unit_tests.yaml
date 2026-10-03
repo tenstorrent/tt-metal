@@ -1881,7 +1881,7 @@
   cmd: |
     export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
-    pytest --tb=short --ignore=models/common/tests/modules models/common/tests
+    pytest --tb=short --ignore=models/common/tests/moe models/common/tests
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -1892,220 +1892,238 @@
   team: models
   budget_type: unit
 
-- name: TT-Transformers MLP module unit tests
-  cmd: |
-    export TT_METAL_WATCHER=15
-    export HF_HOME=/mnt/MLPerf/huggingface
-    HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-    TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/mlp_1d \
-    pytest models/common/tests/modules/mlp/test_mlp_1d.py \
-      -m "not slow" \
-      --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.mlp.mlp_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
-  model: tt-transformers-common
-  model_family: TTTv2
-  skus:
-    wh_llmbox:
-      timeout: 6
-      tier: 1
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-  budget_type: unit
+# TODO(#57807): models/common/tests/modules/mlp/ left tt-metal with TTTv2 and this leg has no other
+# command. Parked, not deleted — the tests now live in tt-transformers tests/modules/mlp/.
+# - name: TT-Transformers MLP module unit tests
+#   cmd: |
+#     export TT_METAL_WATCHER=15
+#     export HF_HOME=/mnt/MLPerf/huggingface
+#     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
+#     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/mlp_1d \
+#     pytest models/common/tests/modules/mlp/test_mlp_1d.py \
+#       -m "not slow" \
+#       --tb=short \
+#       --durations=10 \
+#       --cov=models.common.modules.mlp.mlp_1d \
+#       --cov-report=term-missing \
+#       --cov-config=models/common/tests/setup.cfg
+#   model: tt-transformers-common
+#   model_family: TTTv2
+#   skus:
+#     wh_llmbox:
+#       timeout: 6
+#       tier: 1
+#   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+#   team: models
+#   budget_type: unit
 
-- name: TT-Transformers RMSNorm module unit tests
-  cmd: |
-    export TT_METAL_WATCHER=15
-    export HF_HOME=/mnt/MLPerf/huggingface
-    HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-    TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/rmsnorm_1d \
-    pytest models/common/tests/modules/rmsnorm/test_rmsnorm_1d.py \
-      -m "not slow" \
-      --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.rmsnorm.rmsnorm_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
-  model: tt-transformers-common
-  model_family: TTTv2
-  skus:
-    wh_llmbox:
-      timeout: 3
-      tier: 1
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-  budget_type: unit
+# TODO(#57807): models/common/tests/modules/rmsnorm/ left tt-metal with TTTv2 and this leg has no other
+# command. Parked, not deleted — the tests now live in tt-transformers tests/modules/rmsnorm/.
+# - name: TT-Transformers RMSNorm module unit tests
+#   cmd: |
+#     export TT_METAL_WATCHER=15
+#     export HF_HOME=/mnt/MLPerf/huggingface
+#     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
+#     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/rmsnorm_1d \
+#     pytest models/common/tests/modules/rmsnorm/test_rmsnorm_1d.py \
+#       -m "not slow" \
+#       --tb=short \
+#       --durations=10 \
+#       --cov=models.common.modules.rmsnorm.rmsnorm_1d \
+#       --cov-report=term-missing \
+#       --cov-config=models/common/tests/setup.cfg
+#   model: tt-transformers-common
+#   model_family: TTTv2
+#   skus:
+#     wh_llmbox:
+#       timeout: 3
+#       tier: 1
+#   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+#   team: models
+#   budget_type: unit
 
-- name: TT-Transformers RoPE module unit tests
-  cmd: |
-    export TT_METAL_WATCHER=15
-    export HF_HOME=/mnt/MLPerf/huggingface
-    HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-    TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/rope_1d \
-    pytest models/common/tests/modules/rope/test_rope_1d.py \
-      -m "not slow" \
-      --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.rope.rope_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
-  model: tt-transformers-common
-  model_family: TTTv2
-  skus:
-    wh_llmbox:
-      timeout: 2
-      tier: 1
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-  budget_type: unit
+# TODO(#57807): models/common/tests/modules/rope/ left tt-metal with TTTv2 and this leg has no other
+# command. Parked, not deleted — the tests now live in tt-transformers tests/modules/rope/.
+# - name: TT-Transformers RoPE module unit tests
+#   cmd: |
+#     export TT_METAL_WATCHER=15
+#     export HF_HOME=/mnt/MLPerf/huggingface
+#     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
+#     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/rope_1d \
+#     pytest models/common/tests/modules/rope/test_rope_1d.py \
+#       -m "not slow" \
+#       --tb=short \
+#       --durations=10 \
+#       --cov=models.common.modules.rope.rope_1d \
+#       --cov-report=term-missing \
+#       --cov-config=models/common/tests/setup.cfg
+#   model: tt-transformers-common
+#   model_family: TTTv2
+#   skus:
+#     wh_llmbox:
+#       timeout: 2
+#       tier: 1
+#   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+#   team: models
+#   budget_type: unit
 
-- name: TT-Transformers LM head module unit tests
-  cmd: |
-    export TT_METAL_WATCHER=15
-    export HF_HOME=/mnt/MLPerf/huggingface
-    HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-    TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/lm_head_1d \
-    pytest models/common/tests/modules/lm_head/test_lm_head_1d.py \
-      -m "not slow" \
-      --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.lm_head.lm_head_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
-  model: tt-transformers-common
-  model_family: TTTv2
-  skus:
-    wh_llmbox:
-      timeout: 4
-      tier: 1
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-  budget_type: unit
+# TODO(#57807): models/common/tests/modules/lm_head/ left tt-metal with TTTv2 and this leg has no other
+# command. Parked, not deleted — the tests now live in tt-transformers tests/modules/lm_head/.
+# - name: TT-Transformers LM head module unit tests
+#   cmd: |
+#     export TT_METAL_WATCHER=15
+#     export HF_HOME=/mnt/MLPerf/huggingface
+#     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
+#     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/lm_head_1d \
+#     pytest models/common/tests/modules/lm_head/test_lm_head_1d.py \
+#       -m "not slow" \
+#       --tb=short \
+#       --durations=10 \
+#       --cov=models.common.modules.lm_head.lm_head_1d \
+#       --cov-report=term-missing \
+#       --cov-config=models/common/tests/setup.cfg
+#   model: tt-transformers-common
+#   model_family: TTTv2
+#   skus:
+#     wh_llmbox:
+#       timeout: 4
+#       tier: 1
+#   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+#   team: models
+#   budget_type: unit
 
-- name: TT-Transformers attention module unit tests
-  cmd: |
-    export TT_METAL_WATCHER=30
-    export HF_HOME=/mnt/MLPerf/huggingface
-    TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/attention_1d \
-    pytest models/common/tests/modules/attention/test_attention_1d.py \
-      -m "not slow" \
-      --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.attention.attention_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
-  model: tt-transformers-common
-  model_family: TTTv2
-  skus:
-    wh_llmbox:
-      timeout: 6
-      tier: 1
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-  budget_type: unit
+# TODO(#57807): models/common/tests/modules/attention/ left tt-metal with TTTv2 and this leg has no other
+# command. Parked, not deleted — the tests now live in tt-transformers tests/modules/attention/.
+# - name: TT-Transformers attention module unit tests
+#   cmd: |
+#     export TT_METAL_WATCHER=30
+#     export HF_HOME=/mnt/MLPerf/huggingface
+#     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/attention_1d \
+#     pytest models/common/tests/modules/attention/test_attention_1d.py \
+#       -m "not slow" \
+#       --tb=short \
+#       --durations=10 \
+#       --cov=models.common.modules.attention.attention_1d \
+#       --cov-report=term-missing \
+#       --cov-config=models/common/tests/setup.cfg
+#   model: tt-transformers-common
+#   model_family: TTTv2
+#   skus:
+#     wh_llmbox:
+#       timeout: 6
+#       tier: 1
+#   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+#   team: models
+#   budget_type: unit
 
-- name: TT-Transformers embedding module unit tests
-  cmd: |
-    export TT_METAL_WATCHER=15
-    export HF_HOME=/mnt/MLPerf/huggingface
-    HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-    TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/embedding_1d \
-    pytest models/common/tests/modules/embedding/test_embedding_1d.py \
-      -m "not slow" \
-      --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.embedding.embedding_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
-  model: tt-transformers-common
-  model_family: TTTv2
-  skus:
-    wh_llmbox:
-      timeout: 5
-      tier: 1
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-  budget_type: unit
+# TODO(#57807): models/common/tests/modules/embedding/ left tt-metal with TTTv2 and this leg has no other
+# command. Parked, not deleted — the tests now live in tt-transformers tests/modules/embedding/.
+# - name: TT-Transformers embedding module unit tests
+#   cmd: |
+#     export TT_METAL_WATCHER=15
+#     export HF_HOME=/mnt/MLPerf/huggingface
+#     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
+#     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/embedding_1d \
+#     pytest models/common/tests/modules/embedding/test_embedding_1d.py \
+#       -m "not slow" \
+#       --tb=short \
+#       --durations=10 \
+#       --cov=models.common.modules.embedding.embedding_1d \
+#       --cov-report=term-missing \
+#       --cov-config=models/common/tests/setup.cfg
+#   model: tt-transformers-common
+#   model_family: TTTv2
+#   skus:
+#     wh_llmbox:
+#       timeout: 5
+#       tier: 1
+#   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+#   team: models
+#   budget_type: unit
 
-- name: TT-Transformers sampling module unit tests
-  cmd: |
-    export TT_METAL_WATCHER=30
-    export HF_HOME=/mnt/MLPerf/huggingface
-    # Stop at the first failed command: the devices are not reset between commands (#57706).
-    pytest models/common/tests/modules/sampling/test_penalties_1d.py \
-      -m "not slow" \
-      --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.sampling.penalties_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg || exit $?
-    pytest models/common/tests/modules/sampling/test_params.py \
-      -m "not slow" \
-      --tb=short \
-      --durations=10 \
-      --deselect "models/common/tests/modules/sampling/test_params.py::test_legacy_device_sampling_capabilities_declare_the_exact_limit[models/tt_transformers/tt/generator_vllm.py]" || exit $?
-    pytest models/common/tests/modules/sampling/test_sampling_1d.py \
-      -m "not slow" \
-      --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.sampling.sampling_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg || exit $?
-  model: tt-transformers-common
-  model_family: TTTv2
-  skus:
-    wh_llmbox:
-      timeout: 6
-      tier: 1
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-  budget_type: unit
+# TODO(#57807): models/common/tests/modules/sampling/ left tt-metal with TTTv2 and this leg has no other
+# command. Parked, not deleted — the tests now live in tt-transformers tests/modules/sampling/.
+# - name: TT-Transformers sampling module unit tests
+#   cmd: |
+#     export TT_METAL_WATCHER=30
+#     export HF_HOME=/mnt/MLPerf/huggingface
+#     # Stop at the first failed command: the devices are not reset between commands (#57706).
+#     pytest models/common/tests/modules/sampling/test_penalties_1d.py \
+#       -m "not slow" \
+#       --tb=short \
+#       --durations=10 \
+#       --cov=models.common.modules.sampling.penalties_1d \
+#       --cov-report=term-missing \
+#       --cov-config=models/common/tests/setup.cfg || exit $?
+#     pytest models/common/tests/modules/sampling/test_params.py \
+#       -m "not slow" \
+#       --tb=short \
+#       --durations=10 \
+#       --deselect "models/common/tests/modules/sampling/test_params.py::test_legacy_device_sampling_capabilities_declare_the_exact_limit[models/tt_transformers/tt/generator_vllm.py]" || exit $?
+#     pytest models/common/tests/modules/sampling/test_sampling_1d.py \
+#       -m "not slow" \
+#       --tb=short \
+#       --durations=10 \
+#       --cov=models.common.modules.sampling.sampling_1d \
+#       --cov-report=term-missing \
+#       --cov-config=models/common/tests/setup.cfg || exit $?
+#   model: tt-transformers-common
+#   model_family: TTTv2
+#   skus:
+#     wh_llmbox:
+#       timeout: 6
+#       tier: 1
+#   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+#   team: models
+#   budget_type: unit
 
-- name: TT-Transformers RMSNorm 2D module unit tests
-  cmd: |
-    export TT_METAL_WATCHER=15
-    export HF_HOME=/mnt/MLPerf/huggingface
-    HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-    pytest models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py \
-      -m "not slow" \
-      --tb=short \
-      --durations-min=3.0 \
-      --cov=models.common.modules.rmsnorm.rmsnorm_2d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
-  model: tt-transformers-common
-  model_family: TTTv2
-  skus:
-    wh_galaxy_perf:
-      timeout: 5
-      tier: 1
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-  budget_type: unit
+# TODO(#57807): models/common/tests/modules/rmsnorm/ left tt-metal with TTTv2 and this leg has no other
+# command. Parked, not deleted — the tests now live in tt-transformers tests/modules/rmsnorm/.
+# - name: TT-Transformers RMSNorm 2D module unit tests
+#   cmd: |
+#     export TT_METAL_WATCHER=15
+#     export HF_HOME=/mnt/MLPerf/huggingface
+#     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
+#     pytest models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py \
+#       -m "not slow" \
+#       --tb=short \
+#       --durations-min=3.0 \
+#       --cov=models.common.modules.rmsnorm.rmsnorm_2d \
+#       --cov-report=term-missing \
+#       --cov-config=models/common/tests/setup.cfg
+#   model: tt-transformers-common
+#   model_family: TTTv2
+#   skus:
+#     wh_galaxy_perf:
+#       timeout: 5
+#       tier: 1
+#   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+#   team: models
+#   budget_type: unit
 
-- name: TT-Transformers MLP 2D module unit tests
-  cmd: |
-    export TT_METAL_WATCHER=15
-    export HF_HOME=/mnt/MLPerf/huggingface
-    HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-    pytest models/common/tests/modules/mlp/test_mlp_2d.py \
-      -m "not slow" \
-      --tb=short \
-      --durations-min=3.0 \
-      --cov=models.common.modules.mlp.mlp_2d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
-  model: tt-transformers-common
-  model_family: TTTv2
-  skus:
-    wh_galaxy_perf:
-      timeout: 5
-      tier: 1
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-  budget_type: unit
+# TODO(#57807): models/common/tests/modules/mlp/ left tt-metal with TTTv2 and this leg has no other
+# command. Parked, not deleted — the tests now live in tt-transformers tests/modules/mlp/.
+# - name: TT-Transformers MLP 2D module unit tests
+#   cmd: |
+#     export TT_METAL_WATCHER=15
+#     export HF_HOME=/mnt/MLPerf/huggingface
+#     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
+#     pytest models/common/tests/modules/mlp/test_mlp_2d.py \
+#       -m "not slow" \
+#       --tb=short \
+#       --durations-min=3.0 \
+#       --cov=models.common.modules.mlp.mlp_2d \
+#       --cov-report=term-missing \
+#       --cov-config=models/common/tests/setup.cfg
+#   model: tt-transformers-common
+#   model_family: TTTv2
+#   skus:
+#     wh_galaxy_perf:
+#       timeout: 5
+#       tier: 1
+#   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+#   team: models
+#   budget_type: unit
 
 - name: TT-Transformers auto-compose 2D unit tests
   cmd: |

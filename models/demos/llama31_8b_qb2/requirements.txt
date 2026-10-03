@@ -1,0 +1,6 @@
+# LMHead1D lives in tt-transformers now that models/common/modules/ is gone.
+# Pinned to a commit because tt-transformers is not published to an index yet;
+# replace with a version specifier when it is.
+# Install with --no-deps: tt-transformers depends on ttnn, and a resolving
+# install would replace tt-metal's own ttnn build.
+tt-transformers @ git+https://github.com/tenstorrent/tt-transformers.git@b7d1ab5257da73c588a61720fcfafec246c6fa4f

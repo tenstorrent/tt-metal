@@ -8,8 +8,8 @@ from dataclasses import dataclass, replace
 from ttnn.device import is_blackhole as ttnn_is_blackhole
 
 import ttnn
+from models.common.lazy_weight import LazyWeight, resolve_lazy_weight
 from models.common.lightweightmodule import LightweightModule
-from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
 from models.demos.wormhole.bge_m3.tt.grid import P150_GRID_COLUMNS, is_galaxy_grid
 
 # SDPA chunk selection constants
