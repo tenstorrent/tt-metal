@@ -105,6 +105,7 @@
 
 #include "ckernel.h"
 #include "ckernel_template.h"
+#include "cmath_common.h"
 #include "lltt.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
@@ -1279,7 +1280,7 @@ inline void transpose_dest_face_32b()
 inline void enter_transpose_cfg_block()
 {
     TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 1);
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+    math::_configure_src_zero_flag_(true);
     if constexpr (!topk_xl_blaze_compat)
     {
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_dst_RMW>(1);
@@ -1289,7 +1290,7 @@ inline void enter_transpose_cfg_block()
 inline void leave_transpose_cfg_block()
 {
     TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
+    math::_configure_src_zero_flag_(false);
     if constexpr (!topk_xl_blaze_compat)
     {
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_dst_RMW>(0);
