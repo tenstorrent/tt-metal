@@ -685,10 +685,11 @@ class MiniMaxH3Pipeline:
         whichever subclass is being built.
         """
         if cls is MiniMaxH3Pipeline and os.environ.get(LORA_PATH_ENV):
+            # Nothing but the parameters is bound yet, so `locals()` is exactly the call to forward.
+            # The import comes after, since it would otherwise bind a name into this frame too.
+            forwarded = {k: v for k, v in locals().items() if k not in ("cls", "subclass_kwargs")}
             from .pipeline_minimax_h3_turbo import MiniMaxH3TurboPipeline
 
-            # Nothing but the parameters is bound yet, so `locals()` is exactly the call to forward.
-            forwarded = {k: v for k, v in locals().items() if k not in ("cls", "subclass_kwargs")}
             return MiniMaxH3TurboPipeline.create_pipeline(**forwarded, **subclass_kwargs)
         transformer_subfolder = "transformer_ref" if task == "ref2va" else "transformer"
         weights_dir = resolve_weights_dir(
