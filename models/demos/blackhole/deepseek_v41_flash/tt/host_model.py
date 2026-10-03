@@ -14,6 +14,8 @@ Run on the CPU with torch, using the checkpoint's own code from ``inference/mode
 import os
 
 import torch
+
+_RD = torch.float32 if os.environ.get("REF_DTYPE", "bf16") == "fp32" else torch.bfloat16
 from safetensors import safe_open
 
 from models.demos.blackhole.deepseek_v41_flash.reference import ref_layer as R
@@ -29,7 +31,7 @@ class HostEmbedding:
 
     def __call__(self, token_ids: torch.Tensor):
         mod = R.load_model_module()
-        h = self.weight[token_ids].to(torch.bfloat16).unsqueeze(2).repeat(1, 1, 4, 1)
+        h = self.weight[token_ids].to(_RD).unsqueeze(2).repeat(1, 1, 4, 1)
         return h, mod.make_identity_pre_mix(h, 4)
 
 
@@ -102,7 +104,7 @@ class HostHead:
     @torch.no_grad()
     def __call__(self, h, pre_mix):
         """h [B, 1, 4, D] streams after the last layer, pre_mix [B, 1, 4] (the last layer's ffn `pre`) -> logits [B, vocab]."""
-        y = torch.sum(pre_mix.float().unsqueeze(-1) * h.float(), dim=2).to(torch.bfloat16)  # hc_pre -> [B,1,D]
+        y = torch.sum(pre_mix.float().unsqueeze(-1) * h.float(), dim=2).to(_RD)  # hc_pre -> [B,1,D]
         x = y.float()
-        x = (self.norm_w * (x * torch.rsqrt(x.square().mean(-1, keepdim=True) + self.eps))).to(torch.bfloat16)
+        x = (self.norm_w * (x * torch.rsqrt(x.square().mean(-1, keepdim=True) + self.eps))).to(_RD)
         return torch.nn.functional.linear(x[:, -1].float(), self.head_w)

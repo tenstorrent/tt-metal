@@ -27,6 +27,12 @@ from models.demos.blackhole.deepseek_v41_flash.tt.shared_expert_v2 import (
     DSV41SharedExpertV2 as DSV41SharedExpert,  # 155 -> 112 us/layer (tuned 1D mcast configs)
 )
 
+_STREAM_BF16 = os.environ.get("DSV41_STREAM_BF16") == "1"
+
+
+def _rnd_bf16(t):
+    return ttnn.typecast(ttnn.typecast(t, ttnn.bfloat16), ttnn.float32)
+
 
 class DSV41Layer:
     def __init__(
@@ -72,9 +78,22 @@ class DSV41Layer:
         _d("after moe warmup")
         self._bt("moe warmup (compile pass)")
         sid = next(iter(moe_weights["shared_w0"]))
-        self.shared = DSV41SharedExpert(
-            mesh_device, moe_weights["shared_w0"][sid], moe_weights["shared_w1"][sid], moe_weights["shared_w2"][sid]
-        )
+        if (
+            os.environ.get("DSV41_SHARED", "v2") == "v1"
+        ):  # accuracy study: the simple v1 shared expert, optionally bf16 weights
+            from models.demos.blackhole.deepseek_v41_flash.tt.shared_expert import DSV41SharedExpert as _V1
+
+            self.shared = _V1(
+                mesh_device,
+                moe_weights["shared_w0"][sid],
+                moe_weights["shared_w1"][sid],
+                moe_weights["shared_w2"][sid],
+                dtype=ttnn.bfloat16 if os.environ.get("DSV41_SHARED_DT", "bfp8") == "bf16" else ttnn.bfloat8_b,
+            )
+        else:
+            self.shared = DSV41SharedExpert(
+                mesh_device, moe_weights["shared_w0"][sid], moe_weights["shared_w1"][sid], moe_weights["shared_w2"][sid]
+            )
         up = lambda t: ttnn.from_torch(
             t.reshape(1, 1, 1, -1).float(),
             device=mesh_device,
@@ -153,7 +172,15 @@ class DSV41Layer:
         a = self.attention.forward(h, st)  # [1,1,T,D] bf16, replicated
         mark("attention")
         # a: bf16 [1,1,T,D], consumed as is; expand + the FFN-side mixes are one program with DSV41_MHC_EP=1
-        x2, (ffn_pre, ffn_post, ffn_comb) = self.mhc_attn.expand_mixes(a, x, attn_post, attn_comb, None, self.mhc_ffn)
+        if (
+            _STREAM_BF16
+        ):  # accuracy study: round the stream to bf16 at every hc_post like the bf16 reference / GPU model
+            x2 = _rnd_bf16(self.mhc_attn.expand(a, x, attn_post, attn_comb, None))
+            ffn_pre, ffn_post, ffn_comb = self.mhc_ffn.mixes(x2)
+        else:
+            x2, (ffn_pre, ffn_post, ffn_comb) = self.mhc_attn.expand_mixes(
+                a, x, attn_post, attn_comb, None, self.mhc_ffn
+            )
         mark("mhc_attn_expand+ffn_mixes")
         h, h_tok = self.mhc_ffn.collapse_norm_rm(
             x2, attn_pre, self.ffn_norm_w, self.eps
@@ -172,6 +199,8 @@ class DSV41Layer:
         x3 = self.mhc_ffn.expand(
             m, x2, ffn_post, ffn_comb, sh
         )  # post * (routed + shared) + comb^T x, summed inside the kernel
+        if _STREAM_BF16:
+            x3 = _rnd_bf16(x3)
         mark("mhc_ffn_expand")
         # hand DRAM-resident tensors to the caller (the next layer): an L1-sharded `ffn_pre` kept alive across
         # calls overlaps the static buffers of the next norm kernel.

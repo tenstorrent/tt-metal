@@ -105,6 +105,7 @@ def main():
         cap = {}
         hook = blk.ffn.register_forward_hook(lambda m, i, o: cap.setdefault("x", i[0].detach()))
         gate_out = {}  # the decode step's routing (set below; the hook is replaced between prefill and decode)
+        route_steps = []
         enter("pre")
         h_pre, pm_pre = blk(h_pre, 0, pm_pre, None)  # prefill (fills this layer's caches)
         leave("pre")
@@ -124,9 +125,13 @@ def main():
                 state["score_state"] = blk.attn.compressor.score_state.clone()
         dec_in, pre_in = h_decs[0].clone(), pm_decs[0].clone()
         steps_in = [(h.clone(), p.clone()) for h, p in zip(h_decs, pm_decs)]
-        ghook = blk.ffn.gate.register_forward_hook(
-            lambda m, i, o: gate_out.update(w=o[0].detach().clone(), idx=o[1].detach().clone())
-        )
+
+        def _gh(m, i, o):
+            route_steps.append((o[0].detach().clone(), o[1].detach().clone()))
+            gate_out.setdefault("w", o[0].detach().clone())
+            gate_out.setdefault("idx", o[1].detach().clone())
+
+        ghook = blk.ffn.gate.register_forward_hook(_gh)
         steps_out = []
         for i in range(
             a.steps
@@ -135,8 +140,7 @@ def main():
             h_decs[i], pm_decs[i] = blk(h_decs[i], a.S + i, pm_decs[i], None)
             leave(("dec", i))
             steps_out.append((h_decs[i].clone(), pm_decs[i].clone()))
-            if i == 0:
-                ghook.remove()
+        ghook.remove()
         h_dec, pm_dec = h_decs[0], pm_decs[0]
         torch.save(
             {
@@ -150,6 +154,7 @@ def main():
                 "gate_cutoff": K,
                 "routing_idx": gate_out["idx"].reshape(a.B, -1),
                 "routing_wt": gate_out["w"].reshape(a.B, -1),
+                "routing_steps": [(w_.reshape(a.B, -1), i_.reshape(a.B, -1)) for w_, i_ in route_steps],
                 "ratio": ratio,
                 "is_kv_source": bool(ratio and blk.attn.is_kv_source),
             },
