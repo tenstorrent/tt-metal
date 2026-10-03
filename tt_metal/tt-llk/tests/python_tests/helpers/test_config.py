@@ -1391,6 +1391,10 @@ class TestConfig:
 
         if self.profiler_build == ProfilerBuild.Yes:
             OPTIONS_COMPILE += "-DLLK_PROFILER "
+            # Marker ids hash __FILE__; strip the checkout location so they do not depend on it.
+            llk_roots = {TestConfig.LLK_ROOT, TestConfig.LLK_ROOT.resolve()}
+            for root in sorted(llk_roots):
+                OPTIONS_COMPILE += f"{shlex.quote(f'-fmacro-prefix-map={root}/=')} "
 
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "

@@ -10,7 +10,7 @@ from pathlib import Path
 
 from cave import DEFAULT_MAX_DELAY, filler_choices
 
-HERE = Path(__file__).resolve().parent
+TTNOP_DIR = Path(__file__).resolve().parents[1]
 # Every count up to the cave's capacity. A race often only opens inside a narrow
 # band of delays, so sampling powers of two walks straight past it.
 DEFAULT_DELAYS = f"1-{DEFAULT_MAX_DELAY}"
@@ -88,7 +88,7 @@ class Config:
     # but leaves nothing to compare against.
     drift: bool = True
     arch: str = "wormhole"
-    report_dir: Path = field(default_factory=lambda: HERE / "reports")
+    report_dir: Path = field(default_factory=lambda: TTNOP_DIR / "reports")
 
     @classmethod
     def from_env(cls):
@@ -114,7 +114,7 @@ class Config:
             drift=os.environ.get("TTNOP_DRIFT", "1").strip() not in ("", "0"),
             arch=os.environ.get("CHIP_ARCH", "wormhole").strip().lower(),
             report_dir=Path(
-                os.environ.get("TTNOP_REPORT_DIR", str(HERE / "reports"))
+                os.environ.get("TTNOP_REPORT_DIR", str(TTNOP_DIR / "reports"))
             ).resolve(),
         )
         if config.site_mode not in ("sync", "all"):

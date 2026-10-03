@@ -483,3 +483,73 @@ def fast_device_to_host_yuv(
     )
 
     return out
+
+
+def replicated_to_host_yuv(
+    tt_video_BCTHW: ttnn.Tensor,
+    mesh_device: ttnn.MeshDevice,
+    *,
+    coefficients=None,
+    pool: ThreadPoolExecutor | None = None,
+) -> np.ndarray:
+    """YUV 4:2:0 readback of a video every device already holds in full.
+
+    ``fast_device_to_host_yuv`` takes a sharded frame and, on multi-host, gathers across
+    hosts so each host can read a whole frame. A replicated input needs no collective:
+    each device slices out the slab it would have ended up with after that gather. The
+    spatial dim on the inter-host mesh axis is repeated once per host before that axis is
+    partitioned, so local index ``j`` on every host holds slab ``j`` of the full frame --
+    the layout ``_yuv_planar_d2h`` assembles, byte for byte the same as the gather path
+    produces. Like the gather path, this assumes each host owns a contiguous block of the
+    inter-host axis.
+
+    Args:
+        tt_video_BCTHW: ``(1, 3, T, H, W)`` bfloat16 ROW_MAJOR, replicated on every device,
+            values in ``[-1, 1]``.
+        mesh_device: The mesh device.
+        coefficients: ``ttnn.experimental.YUVCoefficients``; defaults to BT.601 limited range.
+        pool: Optional ``ThreadPoolExecutor`` for the host-side reassembly.
+
+    Returns:
+        ``np.ndarray`` of shape ``(T, H*W + 2*(H/2 * W/2))``, dtype uint8, planar yuv420p.
+    """
+    if coefficients is None:
+        coefficients = _bt601_yuv_coefficients()
+
+    B, C, T, H, W = tt_video_BCTHW.shape
+    assert B == 1, f"replicated_to_host_yuv requires B=1, got {B}"
+    assert C == 3, f"replicated_to_host_yuv requires C=3 (RGB), got {C}"
+    # A tiled input would make `ttnn.repeat` wrap itself in an untilize/retilize.
+    assert tt_video_BCTHW.layout == ttnn.ROW_MAJOR_LAYOUT, "replicated_to_host_yuv requires ROW_MAJOR input"
+
+    mesh_shape = tuple(mesh_device.shape)
+    distributed = ttnn.using_distributed_env()
+    n_hosts = int(ttnn.distributed_context_get_size()) if distributed else 1
+    view = mesh_device.get_view() if distributed else None
+    inter_host_axis = _get_inter_host_axis(mesh_device, view, mesh_shape) if n_hosts > 1 else None
+
+    # Mesh axis 0 splits H (dim 3), axis 1 splits W (dim 4).
+    spatial = [H, W]
+    repeats = [n_hosts if axis == inter_host_axis else 1 for axis in (0, 1)]
+    assert all(
+        (spatial[a] * repeats[a]) % mesh_shape[a] == 0 for a in (0, 1)
+    ), f"({H}, {W}) does not split over mesh {mesh_shape}"
+    h_per, w_per = (spatial[a] * repeats[a] // mesh_shape[a] for a in (0, 1))
+    assert (
+        h_per % 2 == 0 and w_per % 2 == 0
+    ), f"per-device H and W must be even for 4:2:0 (got h_per={h_per}, w_per={w_per})"
+
+    # Host-local axis first, so the repeat only copies that axis's slab rather than the full canvas.
+    tt_video = tt_video_BCTHW
+    for axis in sorted((0, 1), key=lambda a: a == inter_host_axis):
+        if repeats[axis] > 1:
+            repeat_dims = [1] * 5
+            repeat_dims[3 + axis] = repeats[axis]
+            tt_video = ttnn.repeat(tt_video, repeat_dims)
+        tt_video = ttnn.mesh_partition(tt_video, dim=3 + axis, cluster_axis=axis)
+
+    tt_BCHWT = ttnn.permute(tt_video, (0, 1, 3, 4, 2))
+    tt_CHWT = ttnn.reshape(tt_BCHWT, (C, h_per, w_per, T))
+    tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients)
+
+    return _yuv_planar_d2h(tt_Y, tt_Cb, tt_Cr, mesh_device, H, W, T, view=view, pool=pool)
