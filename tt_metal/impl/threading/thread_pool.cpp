@@ -144,8 +144,7 @@ void futex_wake_one(std::atomic<uint32_t>& word) {
     syscall(SYS_futex, reinterpret_cast<uint32_t*>(&word), FUTEX_WAKE_PRIVATE, 1, nullptr, nullptr, 0);
 }
 
-// Polls `ready` for the same window the pool spun before it parked on std::atomic::wait:
-// 100 polls, then libstdc++'s 12 pause and 4 yield iterations. Returns whether `ready` became true.
+// Polls `ready` 100 times, then for 12 pause and 4 yield iterations. Returns whether `ready` became true.
 template <typename Ready>
 bool spin_until(Ready ready) {
     constexpr uint32_t POLLS = 100, PAUSES = 12, YIELDS = 4;
