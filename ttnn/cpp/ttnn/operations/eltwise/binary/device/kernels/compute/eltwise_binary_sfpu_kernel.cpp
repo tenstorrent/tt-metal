@@ -23,6 +23,7 @@
 #include "api/compute/xlogy.h"
 #include "api/compute/atan2.h"
 #include "api/compute/nextafter.h"
+#include "api/compute/prelu_binary.h"
 #include "api/compute/gcd.h"
 #include "api/compute/lcm.h"
 #include "api/compute/binary_comp.h"

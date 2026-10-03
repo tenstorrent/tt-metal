@@ -217,6 +217,7 @@ _REGISTRY_DOMAIN_OPS = frozenset(
         MathOperation.SfpuXlogy,
         MathOperation.SfpuLogaddexp,
         MathOperation.SfpuLogaddexp2,
+        MathOperation.SfpuBinaryPrelu,
     }
 )
 
@@ -669,6 +670,7 @@ def sfpu_binary(
         MathOperation.SfpuXlogy,
         MathOperation.SfpuLogaddexp,
         MathOperation.SfpuLogaddexp2,
+        MathOperation.SfpuBinaryPrelu,
         # Eq/Ne and Lt/Gt/Le/Ge are excluded from this *random* sweep: independent draws
         # are never equal (the Eq/Ne golden collapses to a constant) and near-ties that
         # the kernel and the total-order golden round differently read as failures. They

@@ -78,6 +78,7 @@
 #include "llk_sfpu/ckernel_sfpu_negative.h"
 #include "llk_sfpu/ckernel_sfpu_polygamma.h"
 #include "llk_sfpu/ckernel_sfpu_prelu.h"
+#include "llk_sfpu/ckernel_sfpu_prelu_binary.h"
 #include "llk_sfpu/ckernel_sfpu_rdiv.h"
 #include "llk_sfpu/ckernel_sfpu_recip.h"
 #include "llk_sfpu/ckernel_sfpu_remainder.h"
@@ -1693,6 +1694,12 @@ void call_binary_sfpu_operation_init()
         // kernel, not here, so this loads exactly the constants log1p expects.
         SFPU_BINARY_INIT_FN(add1, sfpu::calculate_sfpu_logaddexp2_init, (DST_ACCUM_MODE));
     }
+    else if constexpr (BINOP == BinaryOp::PRELU)
+    {
+        // prelu's init loads nothing of its own; baseline (add1) addrmod setup. Mirrors
+        // prelu_binary_tile_init().
+        SFPU_BINARY_INIT_FN(add1, sfpu::calculate_sfpu_prelu_binary_init, (APPROXIMATION_MODE, DST_ACCUM_MODE));
+    }
     else if constexpr (BINOP == BinaryOp::REMAINDER)
     {
         // remainder_binary_init loads the reciprocal polynomial (Wormhole) or
@@ -1890,6 +1897,20 @@ void call_binary_sfpu_operation(
             DST_ACCUM_MODE,
             calculate_sfpu_logaddexp2,
             (APPROXIMATION_MODE, DST_ACCUM_MODE, PER_FACE_ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::PRELU)
+    {
+        // a < 0 ? a * w : a, with the weight w read from the second tile. DST_ACCUM_MODE
+        // selects the explicit bf16 round before the store. Mirrors prelu_binary_tile().
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_sfpu_prelu_binary,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, DST_ACCUM_MODE),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,

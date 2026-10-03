@@ -801,6 +801,12 @@ _OP_DOMAIN_REGISTRY: Dict[
             distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
         ),
     ),
+    # prelu with a tensor weight, a < 0 ? a * w : a: A spans both signs so both branches
+    # run, and so does the weight, which is a learned parameter and can go negative.
+    MathOperation.SfpuBinaryPrelu: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0),
+        spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-1.0, high=1.0),
+    ),
     MathOperation.SfpuAddTopRow: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-1.0, high=1.0)
     ),
@@ -1085,6 +1091,7 @@ _SFPU_BINARY_OPS: FrozenSet[MathOperation] = frozenset(
         MathOperation.SfpuXlogy,
         MathOperation.SfpuLogaddexp,
         MathOperation.SfpuLogaddexp2,
+        MathOperation.SfpuBinaryPrelu,
         MathOperation.SfpuElwLeftShift,
         MathOperation.SfpuElwRightShift,
         MathOperation.SfpuElwLogicalRightShift,
@@ -2265,6 +2272,9 @@ _BINARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset(
         # Effectively unary: the kernel reads operand B only on its x > 4 branch and the golden
         # ignores it, so a cat-B probe in B asserts nothing.
         MathOperation.SfpuLogsigmoid,
+        # With a 16-bit Dest, prelu's product follows multiply (x * 0 = 0) and a NaN weight
+        # reaches the SFPU as inf, where the golden's product is NaN. The 32-bit Dest cells agree.
+        MathOperation.SfpuBinaryPrelu,
     }
 )
 

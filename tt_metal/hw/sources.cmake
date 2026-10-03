@@ -187,6 +187,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/nextafter.h
     inc/api/compute/pack.h
     inc/api/compute/pack_untilize.h
+    inc/api/compute/prelu_binary.h
     inc/api/compute/quantization.h
     inc/api/compute/reconfig_data_format.h
     inc/api/compute/reduce.h

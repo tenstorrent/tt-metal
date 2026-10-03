@@ -262,6 +262,7 @@ class MathOperation(Enum):
     SfpuElwpow = OpSpec("POW", MathOpType.SFPU_BINARY)
     SfpuLogaddexp = OpSpec("LOGADDEXP", MathOpType.SFPU_BINARY)
     SfpuLogaddexp2 = OpSpec("LOGADDEXP2", MathOpType.SFPU_BINARY)
+    SfpuBinaryPrelu = OpSpec("PRELU", MathOpType.SFPU_BINARY)
     SfpuElwmulInt = OpSpec("MUL", MathOpType.SFPU_BINARY_INT)
     SfpuGtInt = OpSpec("GT_INT", MathOpType.SFPU_BINARY_INT)
     SfpuLtInt = OpSpec("LT_INT", MathOpType.SFPU_BINARY_INT)

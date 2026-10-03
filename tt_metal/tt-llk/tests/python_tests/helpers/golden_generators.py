@@ -4014,6 +4014,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuXlogy: self._xlogy,
                 MathOperation.SfpuLogaddexp: self._logaddexp,
                 MathOperation.SfpuLogaddexp2: self._logaddexp2,
+                MathOperation.SfpuBinaryPrelu: self._prelu_binary,
                 MathOperation.SfpuElwrsub: self._rsub,
                 MathOperation.SfpuElwpow: self._pow,
                 MathOperation.SfpuElwRightShift: self._right_shift,
@@ -4368,6 +4369,13 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         # form, which never overflows an intermediate.
         wide = self._wide_dtype(t1)
         return torch.logaddexp2(t1.to(wide), t2.to(wide)).to(t1.dtype)
+
+    def _prelu_binary(self, t1, t2):
+        # prelu(a, w) = a < 0 ? a * w : a, with the weight per element. The product is
+        # formed in fp32, as in the kernel, and rounded once to the output format.
+        wide = self._wide_dtype(t1)
+        a, w = t1.to(wide), t2.to(wide)
+        return torch.where(a < 0, a * w, a).to(t1.dtype)
 
     def _rsub(self, t1, t2):
         # rsub(a, b) = b - a. The kernel computes in1 - in0, i.e. src2 - src1.

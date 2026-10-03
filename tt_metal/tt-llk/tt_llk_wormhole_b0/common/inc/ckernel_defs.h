@@ -347,11 +347,12 @@ enum class BinaryOp : std::uint8_t
     // register, so it needs its own variant.
     NEXTAFTER      = 43,
     NEXTAFTER_BF16 = 44,
-    // LOGADDEXP and LOGADDEXP2 are the exception to the 1:1 mapping above: neither has
+    // LOGADDEXP, LOGADDEXP2 and PRELU are the exception to the 1:1 mapping above: none has
     // an SfpuType counterpart, so their inits pass a placeholder instead -- `add1` in the
     // tt-llk test helpers (sfpu_operations.h), `unused` in the tt-metal Compute API.
     LOGADDEXP  = 45,
     LOGADDEXP2 = 46,
+    PRELU      = 47,
 };
 
 enum class PackMode : std::uint8_t
