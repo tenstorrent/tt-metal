@@ -13,10 +13,7 @@ namespace ttnn::core {
 
 namespace {
 
-// TTNN-owned per-thread stack of "current command queue id".
-// Metal has no implicit queue state: this stack is only consulted by TTNN (see
-// current_mesh_command_queue). It is deliberately not tied to any MetalContext/device, so it can be used
-// before a device is opened and never creates a context as a side effect. An empty stack means cq 0.
+// Not tied to a device or MetalContext, so it works before a device is opened and never creates a context.
 thread_local std::vector<QueueId> current_command_queue_id_stack;
 
 }  // namespace

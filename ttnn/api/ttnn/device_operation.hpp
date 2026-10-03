@@ -202,8 +202,6 @@ void enqueue_mesh_workload(
         program.set_runtime_id(runtime_id);
     }
 
-    // The queue this workload is dispatched to: the thread's current command queue (see ttnn::with_command_queue_id /
-    // ttnn.command_queue), cq 0 by default.
     const auto cq_id = ttnn::core::get_current_command_queue_id_for_thread();
 
     // Inspector: emit debug entry with tensor parameters
@@ -228,6 +226,8 @@ void enqueue_mesh_workload(
         return;
     }
 
+    // Resolve the queue only after the graph-capture early return: NO_DISPATCH capture must work even when the
+    // selected queue id does not exist on this device.
     tt::tt_metal::distributed::EnqueueMeshWorkload(
         ttnn::core::current_mesh_command_queue(*mesh_device, cq_id), workload, false);
 
