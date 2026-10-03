@@ -5,6 +5,10 @@ Code: c6073fcc69e on ttp/t99-t93-4-fold-resnet-residual-add-into-next (Kevin's d
 Job scripts: tmp/blx03/t99/ (6afe1031681). Stage branch ttp/t99-stage = t99 + t96 trace harness (057e841c056,
 489e09bcd36), staged to blx03:/var/tmp/fasth3/t99/src.
 
+## Run 2 (2026-10-03 07:07 UTC): build of a6e02770e0e OK, broker job 457 running at 07:09
+Run 1 (c6073fcc69e) failed to compile: tt::tt_metal::create_device_tensor not visible (fixed in a6e02770e0e).
+Old logs kept as driver.log.1 / build.log.1. Relaunch from ssh must not background a chain holding the ssh channel.
+
 ## Running on blx03 (launched 2026-10-03 06:59 UTC)
 - driver: /var/tmp/fasth3/t99/driver.log, marker "T99_DRIVER_DONE <stage> <rc>"; build log /var/tmp/fasth3/t99/build.log
   (worktree ~/fasth3/t99 at c6073fcc69e, own build). Job log /var/tmp/fasth3/t99/run99.log.
