@@ -34,6 +34,7 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
 )
+from test_eltwise_unary_sfpu import _tt_poly_perf_readback, _tt_poly_perf_templates
 
 _OPS_WITHOUT_DEST_ACC = {
     MathOperation.Abs,
@@ -199,6 +200,7 @@ def test_perf_eltwise_unary_sfpu(
     stable_sort,
     fused_sort,
     input_dimensions,
+    public_operation=None,
 ):
     if fused_sort == FusedSort.Yes and (
         stable_sort == StableSort.Yes
@@ -229,7 +231,9 @@ def test_perf_eltwise_unary_sfpu(
         formats,
         run_types=ALL_PERF_RUN_TYPES,
         templates=[
-            MATH_OP(mathop=mathop),
+            *_tt_poly_perf_templates(
+                mathop, formats, dest_acc, approx_mode, fast_mode, public_operation
+            ),
             APPROX_MODE(approx_mode),
             ITERATIONS(iterations),
             FAST_MODE(fast_mode),
@@ -258,6 +262,9 @@ def test_perf_eltwise_unary_sfpu(
         dest_acc=dest_acc,
     )
 
+    _tt_poly_perf_readback(
+        configuration, formats, input_dimensions, mathop, approx_mode
+    )
     configuration.run(perf_report)
 
 
@@ -406,3 +413,46 @@ def test_perf_eltwise_unary_sfpu_erfinv_fp32(
     _extra_slice_config(
         formats, mathop, dest_acc, unpack_to_dest, input_dimensions
     ).run(perf_report)
+
+
+@pytest.mark.perf
+@pytest.mark.parametrize(
+    "public_operation",
+    [
+        "log10",
+        "leaky_relu",
+        "relu",
+        "relu6",
+        "relu_max",
+        "relu_min",
+        "sigmoid_accurate",
+    ],
+)
+@pytest.mark.parametrize("dest_acc", [DestAccumulation.No, DestAccumulation.Yes])
+def test_perf_public_scalar_unary_sfpu(perf_report, public_operation, dest_acc):
+    # Reuse the upstream shape, loop, transport and profiling driver. These
+    # fixed public signatures are separate rows from its scalar-5 sweeps.
+    formats = _REPRESENTATIVE_FORMAT_PAIRS[0]
+    native = {
+        "log10": MathOperation.LogWithBase,
+        "leaky_relu": MathOperation.Prelu,
+        "relu6": MathOperation.ReluMax,
+        "relu_max": MathOperation.ReluMax,
+        "relu": MathOperation.Relu,
+        "relu_min": MathOperation.ReluMin,
+        "sigmoid_accurate": MathOperation.Sigmoid,
+    }[public_operation]
+    test_perf_eltwise_unary_sfpu(
+        perf_report,
+        formats,
+        native,
+        ApproximationMode.No,
+        dest_acc,
+        16,
+        32,
+        FastMode.No,
+        StableSort.No,
+        FusedSort.No,
+        [128, 64],
+        public_operation=public_operation,
+    )
