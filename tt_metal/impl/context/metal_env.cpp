@@ -418,7 +418,7 @@ void MetalEnvImpl::initialize_control_plane_impl() {
         this->construct_control_plane(mesh_graph_desc_path);
         return;
     }
-    log_info(tt::LogDistributed, "Using auto discovery to generate mesh graph.");
+    log_debug(tt::LogDistributed, "Using auto discovery to generate mesh graph.");
 
     if (*distributed_context_->size() == 1) {
         this->construct_control_plane();
@@ -480,7 +480,7 @@ void MetalEnvImpl::construct_control_plane() {
             "Mapping will be ignored. Please provide a custom mesh graph descriptor path for custom logical to "
             "physical mapping.");
     }
-    log_info(tt::LogDistributed, "Constructing control plane using auto-discovery (no mesh graph descriptor).");
+    log_debug(tt::LogDistributed, "Constructing control plane using auto-discovery (no mesh graph descriptor).");
     control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
         get_cluster(),
         *rtoptions_,
