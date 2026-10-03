@@ -18,7 +18,7 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
 
             U_n     = t_inv_n @ (v_beta_n - kd_n @ S_n)
             Y_n     = q_decay_n @ S_n + intra_n @ U_n
-            S_{n+1} = final_decay_n * S_n + k_dec_t_n @ U_n
+            S_{n+1} = S_n + final_decay_n * S_n + k_dec_t_n @ U_n
 
         If the chronological head/tail split falls inside a group, the running
         state is replaced with ``tail_entry_states`` before the first tail chunk.
@@ -40,7 +40,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 ``[B*H*G, N, 32, 32]`` in FLOAT32.
             k_dec_t (ttnn.Tensor): Prepared transposed key term
                 ``[B*H*G, N, K, 32]``.
-            final_decay (ttnn.Tensor): End-of-chunk state decay
+            final_decay (ttnn.Tensor): End-of-chunk state decay in complement form,
+                ``expm1(G_last) = exp(G_last) - 1``,
                 ``[B*H*G, N, K, 1]``.
             t_inv (ttnn.Tensor): Triangular correction inverse
                 ``[B*H*G, N, 32, 32]`` in FLOAT32.
@@ -140,7 +141,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 ``[B*H*G, N, 32, 32]`` in FLOAT32.
             k_dec_t (ttnn.Tensor): Prepared transposed key term
                 ``[B*H*G, N, K, 32]``.
-            final_decay (ttnn.Tensor): End-of-chunk state decay
+            final_decay (ttnn.Tensor): End-of-chunk state decay in complement form,
+                ``expm1(G_last) = exp(G_last) - 1``,
                 ``[B*H*G, N, K, 1]``.
             t_inv (ttnn.Tensor): Triangular correction inverse
                 ``[B*H*G, N, 32, 32]`` in FLOAT32.

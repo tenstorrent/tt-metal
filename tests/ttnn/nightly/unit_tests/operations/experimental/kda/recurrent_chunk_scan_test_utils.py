@@ -39,7 +39,8 @@ def host_protocol(
     q_decay = 0.06 * torch.randn(*base, CHUNK_SIZE, key_dim, generator=generator)
     intra = torch.tril(0.025 * torch.randn(*base, CHUNK_SIZE, CHUNK_SIZE, generator=generator))
     k_dec_t = 0.025 * torch.randn(*base, key_dim, CHUNK_SIZE, generator=generator)
-    final_decay = 0.86 + 0.08 * torch.rand(*base, key_dim, 1, generator=generator)
+    # Complement form, exp(G_last) - 1: a per-chunk decay in [0.86, 0.94].
+    final_decay = -0.14 + 0.08 * torch.rand(*base, key_dim, 1, generator=generator)
     strict_lower = torch.tril(0.015 * torch.randn(*base, CHUNK_SIZE, CHUNK_SIZE, generator=generator), diagonal=-1)
     identity = torch.eye(CHUNK_SIZE).reshape(1, 1, CHUNK_SIZE, CHUNK_SIZE)
     t_inv = torch.linalg.inv(identity + strict_lower)
@@ -60,7 +61,7 @@ def _scan_state(protocol: Sequence[torch.Tensor], state: torch.Tensor) -> torch.
     state = state.float().clone()
     for chunk in range(v_beta.shape[1]):
         value_new = torch.matmul(t_inv[:, chunk], v_beta[:, chunk] - torch.matmul(kd[:, chunk], state))
-        state = state * final_decay[:, chunk] + torch.matmul(k_dec_t[:, chunk], value_new)
+        state = state + state * final_decay[:, chunk] + torch.matmul(k_dec_t[:, chunk], value_new)
     return state
 
 
@@ -72,7 +73,7 @@ def recurrent_oracle(protocol: Sequence[torch.Tensor], state: torch.Tensor) -> t
         value_new = torch.matmul(t_inv[:, chunk], v_beta[:, chunk] - torch.matmul(kd[:, chunk], state))
         output = torch.matmul(q_decay[:, chunk], state) + torch.matmul(intra[:, chunk], value_new)
         chunks.append(output)
-        state = state * final_decay[:, chunk] + torch.matmul(k_dec_t[:, chunk], value_new)
+        state = state + state * final_decay[:, chunk] + torch.matmul(k_dec_t[:, chunk], value_new)
     return torch.stack(chunks, dim=1).to(torch.bfloat16), state.float()
 
 

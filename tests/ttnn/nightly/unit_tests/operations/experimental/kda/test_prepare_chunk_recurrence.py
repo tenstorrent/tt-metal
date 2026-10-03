@@ -198,7 +198,7 @@ def _oracle(
     kd = beta * k * decay
     q_decay = q * decay
     k_dec_t = (k * torch.exp(final_g.unsqueeze(2) - cumulative_g)).transpose(-1, -2)
-    final_decay = torch.exp(final_g).unsqueeze(-1)
+    final_decay = torch.expm1(final_g).unsqueeze(-1)  # complement form: exp(G_last) - 1
     k_fp64 = k.double()
     cumulative_g_fp64 = cumulative_g.double()
     anchor_g = cumulative_g_fp64[:, :, -1:].mul(0.5)
