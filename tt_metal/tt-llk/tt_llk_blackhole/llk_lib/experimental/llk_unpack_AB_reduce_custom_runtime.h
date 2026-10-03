@@ -67,10 +67,6 @@ inline void _llk_unpack_AB_reduce_block_max_row_init_runtime_(std::uint32_t bloc
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
-    // ALU_ACC_CTRL_Zero_Flag_disabled_src belongs to MATH: only Matrix Unit instructions read it, and
-    // _llk_math_reduce_block_max_row_* sets it around the fp32 hi16/lo16 MOVB2D transpose. A write from
-    // this thread would race MATH's writes, so the cross-thread config check rejects one here.
-
     // REDUCE_ROW requires transpose itself; additionally, within_face_16x16_transpose flag could require transpose;
     // if we have the flag set with REDUCE_ROW, we don't need to do anything
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(1);
