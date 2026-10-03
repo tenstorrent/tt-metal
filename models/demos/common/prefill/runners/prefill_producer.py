@@ -623,16 +623,16 @@ def _num_model_configs(table) -> int:
     return sum(1 for name in _config_names(table) if name.isdigit())
 
 
-def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_dim, decode):
+def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_dim, decode, *, start=0):
     from models.demos.minimax_m3.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
 
     rows = []
-    for pos in range(0, read_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+    for pos in range(start, read_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
         loc = table.lookup(layer, pos, slot_id, config_id)
         unique_id = _resolve_unique_id(table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
         raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
         rows.append(decode(raw, head_dim))
-    return torch.cat(rows, dim=0)[:read_len]
+    return torch.cat(rows, dim=0)[: read_len - start]
 
 
 def _golden_pe_as_device(golden_pe, layout: str):
@@ -663,8 +663,15 @@ def _mtp_golden_source(trunk_trace_dir):
 
 
 def _check_mtp_kv_slots(
-    table, device_map: dict, slot_id: int, real_len: int, read_len: int, head_dim: int, kv_lora: int, trace_dir
+    table, device_map: dict, slot_id: int, window, read_end: int, head_dim: int, kv_lora: int, trace_dir
 ):
+    """Each MTP level's KV slot, over the same window the trunk layers are scored on.
+
+    The levels share the trunk's cache and its block-cyclic layout, so a window that is valid there
+    is valid here; scoring them over a different span would put two token ranges behind one verdict.
+    """
+    first_pos, skip_rows, cmp_len, golden_offset = window
+    span = f"[{first_pos + skip_rows},{first_pos + skip_rows + cmp_len})"
     from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import _load_golden_kv_post, kvpe_golden_present
 
     declared = table.config(0).num_layers
@@ -681,10 +688,12 @@ def _check_mtp_kv_slots(
             _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
         except KeyError:
             continue
-        kv = _read_kv_slice(table, device_map, 0, layer, slot_id, read_len, head_dim, _decode_kv_chunk)[:real_len]
+        kv = _read_kv_slice(
+            table, device_map, 0, layer, slot_id, read_end, head_dim, _decode_kv_chunk, start=first_pos
+        )[skip_rows : skip_rows + cmp_len]
         assert torch.isfinite(kv).all(), f"MTP level {k} KV (layer {layer}) has non-finite entries"
         assert kv.abs().max() > 0, (
-            f"MTP level {k} KV slot (layer {layer}) is all zeros over [0,{real_len}): the level never "
+            f"MTP level {k} KV slot (layer {layer}) is all zeros over {span}: the level never "
             f"wrote it (cache slot never reached, or the level did not run)."
         )
         logger.info(f"[producer] slot {slot_id} MTP level {k} (layer {layer:>2}) KV max|.|={kv.abs().max():.4f}")
@@ -693,7 +702,7 @@ def _check_mtp_kv_slots(
         for j in range(i + 1, len(per_level)):
             (a, ka), (b, kb) = per_level[i], per_level[j]
             assert not torch.equal(ka, kb), (
-                f"MTP levels {a} and {b} wrote IDENTICAL KV over [0,{real_len}): they are sharing one "
+                f"MTP levels {a} and {b} wrote IDENTICAL KV over {span}: they are sharing one "
                 f"cache slot (level k must write slot NUM_LAYERS+k)."
             )
     logger.info(
@@ -721,7 +730,7 @@ def _check_mtp_kv_slots(
     min_pcc = 1.0
     for k, kv in per_level:
         layer = NUM_LAYERS + k
-        golden = _load_golden_kv_post(golden_dir, layer, real_len)
+        golden = _load_golden_kv_post(golden_dir, layer, cmp_len, start=golden_offset)
         pcc_nope, pcc_pe = _kvpe_pcc_vs_golden(golden, kv, kv_lora, pe_layout)
         min_pcc = min(min_pcc, pcc_nope, pcc_pe)
         _, pe_rejected = comp_pcc(_golden_pe_as_device(golden[:, kv_lora:], rejected), kv[:, kv_lora:])
@@ -730,7 +739,7 @@ def _check_mtp_kv_slots(
             f"nope={pcc_nope:.5f} pe={pcc_pe:.5f} (pe as {rejected}: {pe_rejected:.5f})"
         )
     logger.info(
-        f"[producer] slot {slot_id} MTP KV PCC over [0,{real_len}) across {len(per_level)}/{MTP_LEVELS} "
+        f"[producer] slot {slot_id} MTP KV PCC over {span} across {len(per_level)}/{MTP_LEVELS} "
         f"levels -> {min_pcc:.6f}"
     )
     return min_pcc
@@ -986,6 +995,70 @@ def _full_indexer_layer_indices(num_layers: int):
     return [layer for layer in range(num_layers) if not indexer_layer_is_reused(hf_config, layer)]
 
 
+def _resolve_pcc_window(trace_dir, real_len: int, tokens_per_block: int) -> tuple:
+    """``(first_pos, skip_rows, cmp_len, golden_offset)`` for one slot's KV-cache compare.
+
+    ``first_pos`` is the position the device read starts at (block-aligned, because the cache is
+    block-cyclic and a read cannot begin mid-block), ``skip_rows`` drops the over-read at its front,
+    ``cmp_len`` is how many positions are scored, and ``golden_offset`` is the golden row the first
+    scored position lives at.
+
+    By default the window comes from the trace: a golden whose ``capture_rows`` says it holds a
+    slice of a longer prefill is scored over exactly that slice, from golden row 0. Such a golden is
+    the only reference a 1M capture can ship, and it is also the better gate -- the deepest chunk is
+    where a context-length bug surfaces, and the whole prefix has to have been right to reach it --
+    while the read shrinks from a million positions to the captured window.
+
+    The env overrides are for a golden whose metadata does not describe its own window:
+    PREFILL_PCC_WINDOW_START/END score an explicit ``[START, END)``, PREFILL_PCC_TAIL_WINDOW=W the
+    last W positions. Both move the device read only, so both require PREFILL_PCC_GOLDEN_OFFSET to
+    name the golden row that window begins at: moving one read without the other scores unrelated
+    positions, and every layer then lands near zero, which reads as a broken model rather than as a
+    misconfiguration. There is no safe value to infer (a head+tail capture wants the head length, a
+    full-length capture wants the window start itself), so it must be stated, and 0 states it.
+    """
+    from models.demos.common.prefill.runners.runner_utils import load_trace_golden_span
+
+    tail_window = int(os.environ.get("PREFILL_PCC_TAIL_WINDOW", "0"))
+    win_start = int(os.environ.get("PREFILL_PCC_WINDOW_START", "0"))
+    win_end = int(os.environ.get("PREFILL_PCC_WINDOW_END", "0"))
+    if (win_end or tail_window) and "PREFILL_PCC_GOLDEN_OFFSET" not in os.environ:
+        raise ValueError(
+            "a PCC window is set (PREFILL_PCC_WINDOW_END or PREFILL_PCC_TAIL_WINDOW) but "
+            "PREFILL_PCC_GOLDEN_OFFSET is not; set it to the golden row the window starts at "
+            "(0 is valid and must be passed explicitly)."
+        )
+    golden_offset = int(os.environ.get("PREFILL_PCC_GOLDEN_OFFSET", "0"))
+    if win_end:
+        for name, value in (("PREFILL_PCC_WINDOW_START", win_start), ("PREFILL_PCC_WINDOW_END", win_end)):
+            if value % tokens_per_block:
+                raise ValueError(f"{name}={value} must be a multiple of {tokens_per_block} (the DRAM block)")
+        return win_start, 0, min(win_end, real_len) - win_start, golden_offset
+    if tail_window:
+        cmp_len = min(tail_window, real_len)
+        first_pos = ((real_len - cmp_len) // tokens_per_block) * tokens_per_block
+        return first_pos, (real_len - cmp_len) - first_pos, cmp_len, golden_offset
+
+    gold_start, gold_end = load_trace_golden_span(trace_dir)
+    if not gold_start:
+        return 0, 0, real_len, golden_offset
+    if os.environ.get("PREFILL_PCC_GOLDEN_LEN"):
+        raise ValueError(
+            f"PREFILL_PCC_GOLDEN_LEN caps the compare at a length, but {trace_dir} is a windowed "
+            f"golden covering positions [{gold_start},{gold_end}); a length means nothing against it. "
+            f"Drop the cap, or state the window with PREFILL_PCC_WINDOW_START/END + "
+            f"PREFILL_PCC_GOLDEN_OFFSET."
+        )
+    if real_len <= gold_start:
+        raise ValueError(
+            f"{trace_dir} covers positions [{gold_start},{gold_end}) but this slot holds only "
+            f"{real_len}; the prompt never reaches the captured window. Push the full prompt the "
+            f"trace was captured from, or point PREFILL_TRACE_DIR at a golden that starts at 0."
+        )
+    first_pos = (gold_start // tokens_per_block) * tokens_per_block
+    return first_pos, gold_start - first_pos, min(gold_end, real_len) - gold_start, 0
+
+
 def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
     from models.demos.deepseek_v3_d_p.tt.mla.indexer import normalized_hadamard_matrix
     from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import (
@@ -1008,48 +1081,8 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     KV_LORA = ADAPTER.model_config.KV_LORA_RANK
     HEAD_DIM = KV_LORA + ADAPTER.model_config.QK_ROPE_HEAD_DIM
     tokens_per_block = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-    read_len = ((real_len + tokens_per_block - 1) // tokens_per_block) * tokens_per_block
-
-    # PREFILL_PCC_TAIL_WINDOW=W scores the LAST W tokens instead of the first real_len. A head+tail
-    # capture holds only two windows of a long prompt, so at 1M context the golden has no rows for
-    # the middle and [0,real_len) cannot be scored at all -- but the tail is exactly the interesting
-    # part, since it is the only evidence the model is still correct at full context depth. The
-    # device holds every position, so only the read has to move; PREFILL_PCC_GOLDEN_OFFSET says
-    # where the golden's tail window starts (the head length, not the prompt position).
-    tail_window = int(os.environ.get("PREFILL_PCC_TAIL_WINDOW", "0"))
-    golden_offset = int(os.environ.get("PREFILL_PCC_GOLDEN_OFFSET", "0"))
-    # An explicit [START, END) beats the "last W tokens" form, because the interesting window does
-    # not always end at real_len. At 1M with 5120-token chunks it must not: 1,048,576 = 204*5120 +
-    # 4096, so the final chunk carries 1024 padding tokens, and a window ending at real_len scores
-    # KV that was produced in a padded chunk. Scoring only whole, fully-real chunks means
-    # [993280, 1044480) -- chunks 194..203 -- which also drops chunk 193, of which just 1024 tokens
-    # fall inside the tail.
-    win_start = int(os.environ.get("PREFILL_PCC_WINDOW_START", "0"))
-    win_end = int(os.environ.get("PREFILL_PCC_WINDOW_END", "0"))
-    # Moving the device read without moving the golden read scores unrelated positions, and the
-    # result looks exactly like a broken model rather than a misconfiguration: every layer lands
-    # near zero. There is no safe default to infer -- a head+tail capture wants the head length,
-    # a full-length capture wants the window start itself -- so require it to be stated.
-    if (win_end or tail_window) and "PREFILL_PCC_GOLDEN_OFFSET" not in os.environ:
-        raise ValueError(
-            "a PCC window is set (PREFILL_PCC_WINDOW_END or PREFILL_PCC_TAIL_WINDOW) but "
-            "PREFILL_PCC_GOLDEN_OFFSET is not; set it to the golden row the window starts at "
-            "(0 is valid and must be passed explicitly)."
-        )
-    if win_end:
-        for name, v in (("PREFILL_PCC_WINDOW_START", win_start), ("PREFILL_PCC_WINDOW_END", win_end)):
-            if v % tokens_per_block:
-                raise ValueError(f"{name}={v} must be a multiple of {tokens_per_block} (the DRAM block)")
-        first_pos, last_pos = win_start, min(win_end, real_len)
-        cmp_len, skip_rows = last_pos - first_pos, 0
-    elif tail_window:
-        cmp_len = min(tail_window, real_len)
-        first_pos = ((real_len - cmp_len) // tokens_per_block) * tokens_per_block
-        last_pos = real_len
-        skip_rows = (real_len - cmp_len) - first_pos
-    else:
-        cmp_len, first_pos, skip_rows, last_pos = real_len, 0, 0, real_len
-    read_end = ((last_pos + tokens_per_block - 1) // tokens_per_block) * tokens_per_block
+    first_pos, skip_rows, cmp_len, golden_offset = _resolve_pcc_window(trace_dir, real_len, tokens_per_block)
+    read_end = ((first_pos + skip_rows + cmp_len + tokens_per_block - 1) // tokens_per_block) * tokens_per_block
 
     # Which layers own a KV slab according to the MODEL, not according to what happens to be on
     # disk. A hybrid stack legitimately has goldens for only some layers, but a mispointed or partial
@@ -1134,7 +1167,16 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         raise RuntimeError(f"slot {slot_id}: no local layers resolved against the device map (nothing verified)")
 
     mtp_min = (
-        _check_mtp_kv_slots(table, device_map, slot_id, real_len, read_len, HEAD_DIM, KV_LORA, trace_dir)
+        _check_mtp_kv_slots(
+            table,
+            device_map,
+            slot_id,
+            (first_pos, skip_rows, cmp_len, golden_offset),
+            read_end,
+            HEAD_DIM,
+            KV_LORA,
+            trace_dir,
+        )
         if MTP_LEVELS
         else None
     )
@@ -1143,16 +1185,6 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     if mtp_min is not None:
         mins["mtp"] = mtp_min
     if _num_model_configs(table) > 1:
-        if first_pos + skip_rows != 0 or cmp_len != real_len:
-            # The window flags move the KVPE read only; the loop below still walks from 0 and asks
-            # the golden for [0,real_len). Half-windowing one gate is worse than refusing: both
-            # halves fold into the same `mins`, so the verdict would mix two token ranges.
-            raise RuntimeError(
-                f"a PCC window ([{first_pos + skip_rows},{first_pos + skip_rows + cmp_len}) of "
-                f"[0,{real_len})) is set on a table that also carries an index config, but the "
-                f"indexer-key half is not windowed. Score the index cache unwindowed, or extend "
-                f"the window to it."
-            )
         index_head_dim = ADAPTER.model_config.INDEX_HEAD_DIM
         index_hadamard = normalized_hadamard_matrix(index_head_dim).float()
         n_index_layers = table.config(1).num_layers
@@ -1202,25 +1234,31 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
                 continue
 
             decoded_rows = []
-            for pos in range(0, read_len, tokens_per_block):
+            for pos in range(first_pos, read_end, tokens_per_block):
                 loc = table.lookup(layer, pos, slot_id, 1)
                 unique_id = _resolve_unique_id(
                     table.get_device_group(loc.device_group_index).fabric_node_ids, device_map
                 )
                 raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
                 decoded_rows.append(_decode_kv_chunk(raw, index_head_dim))
-            dev_ik = torch.cat(decoded_rows, dim=0)[:real_len]
+            dev_ik = torch.cat(decoded_rows, dim=0)[skip_rows : skip_rows + cmp_len]
 
             is_mtp_row = layer == mtp_index_layer
             golden_ik = _load_golden_index_k(
-                golden_dir, layer, real_len, rope_layout=mtp_index_layout if is_mtp_row else "interleaved"
+                golden_dir,
+                layer,
+                cmp_len,
+                start=golden_offset,
+                rope_layout=mtp_index_layout if is_mtp_row else "interleaved",
             )
             dev_ik = (dev_ik.float() @ index_hadamard).to(torch.bfloat16)
             _, pcc_index = comp_pcc(golden_ik, dev_ik)
             if is_mtp_row:
                 mtp_index_pcc = pcc_index
                 if mtp_index_layout != "interleaved":
-                    _, pcc_stored = comp_pcc(_load_golden_index_k(golden_dir, layer, real_len), dev_ik)
+                    _, pcc_stored = comp_pcc(
+                        _load_golden_index_k(golden_dir, layer, cmp_len, start=golden_offset), dev_ik
+                    )
                     logger.info(
                         f"[producer]   mtp_index golden as-stored ({mtp_index_layout}) {pcc_stored:.6f} -> "
                         f"re-based onto the device's rope pairing {pcc_index:.6f}"
@@ -1232,7 +1270,9 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
 
         if checked_index:
             logger.info(
-                f"[producer] slot {slot_id} index PCC over [0,{real_len}) across "
+                f"[producer] slot {slot_id} index PCC over "
+                f"[{first_pos + skip_rows},{first_pos + skip_rows + cmp_len}) vs golden "
+                f"[{golden_offset},{golden_offset + cmp_len}) across "
                 f"{checked_index}/{n_trunk_rows} local layers -> {min_index:.6f}"
             )
             mins["index"] = min_index
