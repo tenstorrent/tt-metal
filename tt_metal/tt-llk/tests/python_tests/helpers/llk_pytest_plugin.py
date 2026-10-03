@@ -214,6 +214,17 @@ def pytest_addoption(parser):
     )
 
     parser.addoption(
+        "--ulp-measure",
+        default=None,
+        metavar="PATH",
+        help="Append a JSON row (test, variant, measured max ULP and lane counts) to "
+        "PATH for each comparison made right after exactly one accuracy_contract "
+        "lookup in the same test, on a variant that ran with the dest_acc it names. "
+        "The exhaustive sweep skips tolerance cells before comparing, and under "
+        "--ulp-emit does not compare at all, so those record nothing. PATH is created "
+        "and truncated at session start. Reporting only: it cannot change a verdict.",
+    )
+    parser.addoption(
         "--ulp-emit",
         action="store_true",
         help="Re-measure rather than gate: the exhaustive unary sweep records what it "
@@ -480,9 +491,18 @@ def pytest_configure(config):
         ulp_sweep.EMIT = True
     if config.getoption("--ulp-report"):
         utils_module._ULP_REPORT = True
+    if config.getoption("--ulp-measure"):
+        # Set in the workers too; only the file preparation below is master-only.
+        utils_module._ULP_MEASURE_PATH = config.getoption("--ulp-measure")
 
     log_file = "pytest_errors.log"
     if not hasattr(config, "workerinput"):  # executed only by master pytest runner
+        if utils_module._ULP_MEASURE_PATH:
+            # Create the parent so `passed_test` can never raise FileNotFoundError, and
+            # truncate so a second run does not fold its rows in with the first's.
+            measure_path = Path(utils_module._ULP_MEASURE_PATH)
+            measure_path.parent.mkdir(parents=True, exist_ok=True)
+            measure_path.write_text("", encoding="utf-8")
         # Refresh order folder with setup_files function
         order_processing.setup_files(TestConfig.ARTEFACTS_DIR / "order_records", True)
         if os.path.exists(log_file):
