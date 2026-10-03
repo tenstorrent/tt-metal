@@ -207,7 +207,7 @@ void register_fan_out(const Grid& grid, int64_t iterations) {
 
 template <typename Pool>
 void register_pool() {
-    // Parked workers: the dispatch pool's fan-outs are ~10 ms apart in those models.
+    // Parked workers: ~10 ms between fan-outs, as in the dispatch pool during GLM-5.2 and Kimi K2.7 prefill (#57586).
     const Grid parked = {{32}, {1}, {600}, {10000}};
     if (tt::parse_env("TT_POOL_BENCH_FULL", false)) {
         register_fan_out<Pool, 0>({{1, 8, 32}, {1, 4}, {0, 600, 1300, 2000, 10000}, {0, 5, 63, 144, 500}}, 2000);
