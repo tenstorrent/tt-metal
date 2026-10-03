@@ -1,362 +1,308 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
 //
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include <cstdint>
 
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/bcast.h"
-#include "api/compute/softmax.h"
-#include "api/compute/reduce.h"
-#include "api/dataflow/dataflow_buffer.h"
-#include "experimental/kernel_args.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"
+#include "kernel_math.hpp"
+#include "kernels/attention/compute/attention_util.hpp"
+#include "kernels/misc/print.hpp"
+#include "kernels/data_format_convert.hpp"
+#include "kernels/general/common.hpp"
+#include "kernels/dataflow/end_queue_signal_writer.hpp"
+#include "kernels/attention/compute/softmax_util.hpp"
 
-namespace ckl = compute_kernel_lib;
+#include <kernel_api/common.hpp>
+#include <kernel_api/aloc.hpp>
+#include <kernel_api/dataflow/api.h>
+#include <kernel_api/tiling_utils.hpp>
+#include <kernel_api/untilize.hh>
+#include <kernel_api/local_buffer.hpp>
+#include <kernel_api/inter_tile_matmul.hpp>
+#include <kernel_api/fp_math.hpp>
+#include <kernel_api/binary_reductions.hpp>
+#include <kernel_api/block_wise_softmax.hpp>
+#include <kernel_api/tile_util.hpp>
 
-// for scale+mask+softmax:
-// bcast HW (mul by 1 tile)  example: (  [2,1,1024,64] * [1,1,32,32]  )
-// bcast add H               example: ( [2,1,1024,64] + [2,1,32,64] ) (bcast W -> H)
-// Note that the attention mask will not fit in L1 for the entire tensor
-// The buffer for the att mask is currently sized as (1t,Wt) so we only reuse it for one HtWt-sized batch of x
-// then read another Wt tiles of mask for the next batch
+using namespace tt::tt_metal;
 
-template <std::uint32_t dfb_in, std::uint32_t dfb_max_scaler, std::uint32_t dfb_max, std::uint32_t dfb_out>
-void calc_numeric_stable(std::uint32_t Wt, std::uint32_t ndst) {
-    DataflowBuffer dfb_out_obj(dfb_out);
+namespace {
 
-    // calculate max val per row
-    compute_kernel_lib::reduce<
-        PoolType::MAX,
-        ReduceDim::REDUCE_ROW,
-        dfb_in,
-        dfb_max_scaler,
-        dfb_max,
-        compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop,
-        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+enum softmax_mode {
+    SCALE,
+    LOGSUMEXP,
+};
 
-    // calculate x-max(x)
-    ckl::eltwise_chain(
-        ckl::IterationShape::tiles(Wt).block_size(ndst),
-        ckl::BinaryFpu<
-            ckl::BinaryFpuOp::Sub,
-            ckl::input(
-                dfb_in,
-                ckl::WaitPolicy::Upfront,
-                ckl::PopPolicy::AtEnd,
-                ckl::InputTileMapping::Block,
-                ckl::DataFormatReconfig::Disabled),
-            ckl::input(dfb_max, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd)>{},
-        ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>{},
-        // reuse the exps buffer again, this time in a circular manner
-        ckl::PackTile<ckl::output(
-            dfb_out,
-            ckl::ReservePolicy::PerBlockSize,
-            ckl::PushPolicy::PerBlockSize,
-            ckl::DataFormatReconfig::Disabled)>{});
-    dfb_out_obj.wait_front(static_cast<uint16_t>(Wt));
-}
-
-// CB consumers cannot wrap mid-fifo: pops in one cycle must land exactly on fifo_limit.
-// After a partial row (Wt not a multiple of the CB capacity), rd/wr sit at that offset.
-// Push/pop `pad` tiles to complete the cycle and return pointers to the CB base.
-// Kept identical to the copy in softmax_large_tensor.cpp.
-ALWI void cycle_dfb_pad(std::uint32_t dfb_id, std::uint32_t pad) {
-    if (pad == 0) {
-        return;
+static inline void apply_softmax_scale(
+    local_tensor<float>& in, local_tensor<float>& out, float scale) {
+    constexpr auto TILE_H = tile_h<float>();
+    constexpr auto TILE_W = tile_w<float>();
+    for (int r = 0; r < TILE_H; r++) {
+        for (int c = 0; c < TILE_W; c++) {
+            out[r][c] = in[r][c] * scale;
+        }
     }
-    DataflowBuffer dfb(static_cast<uint16_t>(dfb_id));
-    dfb.reserve_back(static_cast<uint16_t>(pad));
-    dfb.push_back(static_cast<uint16_t>(pad));
-    dfb.wait_front(static_cast<uint16_t>(pad));
-    dfb.pop_front(static_cast<uint16_t>(pad));
 }
 
-// Same, for CBs whose padding tiles the reader already pushed: only consume them.
-ALWI void drain_dfb_pad(std::uint32_t dfb_id, std::uint32_t pad) {
-    if (pad == 0) {
-        return;
+static inline void fill_with_minus_inf(local_tensor<float>& t) {
+    constexpr auto TILE_H = tile_h<float>();
+    constexpr auto TILE_W = tile_w<float>();
+    for (int r = 0; r < TILE_H; r++) {
+        for (int c = 0; c < TILE_W; c++) {
+            t[r][c] = -INFINITY;
+        }
     }
-    DataflowBuffer dfb(static_cast<uint16_t>(dfb_id));
-    dfb.wait_front(static_cast<uint16_t>(pad));
-    dfb.pop_front(static_cast<uint16_t>(pad));
 }
 
-void kernel_main() {
-    const std::uint32_t NCHt = get_arg(args::num_rows);
-    const std::uint32_t Ht = get_arg(args::Ht);
-    const std::uint32_t Wt = get_arg(args::Wt);
-    const std::uint32_t ndst = get_arg(args::blk);
-    const std::uint32_t start_ht = get_arg(args::start_ht);
-    // The pad-mask data (W > W_unpadded) is host-known; it is carried as the MASK_PADDED_DATA compile-time
-    // define (not a runtime arg), which lets the c_5 pad-mask DFB and the c_10 intermediate be bound only
-    // on the paths that use them.
-    constexpr std::uint32_t in0_t = get_arg(args::in0_t);          // in0 DFB tile capacity
-    const std::uint32_t out0_t = ndst * 2;                         // matches factory out0_t = block_size * 2
-    const std::uint32_t exps_t = ((Wt + ndst - 1) / ndst) * ndst;  // dfb_exps/dfb_x capacity, rounded to ndst
-    // Every CB capacity is a multiple of ndst, so when ndst divides Wt the blocks tile each fifo
-    // exactly: a row already ends on the base and no pad is needed. Zero guards keep the modulo safe.
-    const bool pad_to_fifo_base = Wt > 0 && ndst > 0 && (Wt % ndst) != 0;
-    // Tiles needed after Wt to finish each CB's cycle, named for the capacity they align.
-    const std::uint32_t in0_pad = pad_to_fifo_base ? ((in0_t - (Wt % in0_t)) % in0_t) : 0;
-    const std::uint32_t out0_pad = pad_to_fifo_base ? ((out0_t - (Wt % out0_t)) % out0_t) : 0;
-    const std::uint32_t exps_pad = pad_to_fifo_base ? (exps_t - Wt) : 0;
-    const std::uint32_t attn_pad = exps_pad;  // in4_t is also round_up(Wt, ndst); reader pushes the pad
-    const std::uint32_t scale_mask_pad = pad_to_fifo_base ? (exps_pad + ndst) : 0;  // im3_t = exps_t + ndst
-
-    constexpr std::uint32_t onetile = 1;
-    // reserve one tile for zeros on dfb_in2
-    // We only do the reserve for the intermediates once and use pack_tile
-    // So effectively these are used as pre-allocated arrays
-    // Note that the entire W dimension must fit in the intermed0 CB for this kernel to be correct
-    constexpr auto dfb_max_scaler = dfb::max_scaler;
-    constexpr auto dfb_sum_scaler = dfb::sum_scaler;
-    constexpr auto dfb_exps = dfb::exps;
-    constexpr auto dfb_recipsumexps = dfb::recip_sum_exps;
-    constexpr auto dfb_in0 = dfb::in0;
-    constexpr auto dfb_out0 = dfb::out0;
-#ifdef FUSED_SCALE_MASK
-    constexpr auto dfb_fused_scale = dfb::fused_scale;
-#endif
-#ifdef FUSED_SCALE_MASK
-    constexpr auto dfb_fused_attn = dfb::fused_attn;
-#endif
-#ifdef FUSED_SCALE_MASK
-    constexpr auto dfb_scale_mask = dfb::scale_mask;
-#endif
-#ifdef MASK_PADDED_DATA
-    constexpr auto dfb_mask_padded = dfb::mask_padded;
-#endif
-#ifdef NUMERIC_STABLE
-    constexpr auto dfb_max = dfb::max;
-#endif
-    DataflowBuffer dfb_max_scaler_obj(dfb_max_scaler);
-    DataflowBuffer dfb_sum_scaler_obj(dfb_sum_scaler);
-    DataflowBuffer dfb_out0_obj(dfb_out0);
-#ifdef FUSED_SCALE_MASK
-    // fused_scale/fused_attn/scale_mask are bound only on the fused scale-mask path.
-    DataflowBuffer dfb_fused_scale_obj(dfb_fused_scale);
-    DataflowBuffer dfb_fused_attn_obj(dfb_fused_attn);
-#endif
-    compute_kernel_hw_startup(dfb_in0, dfb_max_scaler, dfb_exps);
-#ifdef NUMERIC_STABLE
-#if defined(FUSED_SCALE_MASK) || defined(MASK_PADDED_DATA)
-    // dfb_x is a distinct intermediate (c_10) only on the numeric-stable paths that post-process a masked
-    // buffer; otherwise the reads go straight from dfb_in0 (see the calc_numeric_stable<dfb_in0,...> call).
-    constexpr auto dfb_x = dfb::x;
-#endif
-#else
-    // Without numeric_stable, dfb_x aliases dfb_exps (Same-FIFO reuse) so exp results circulate in one buffer.
-    constexpr auto dfb_x = dfb_exps;
-#endif
-
-    dfb_max_scaler_obj.wait_front(1);  // comes from the reader
-    dfb_sum_scaler_obj.wait_front(1);  // comes from the reader
-
-#ifdef FUSED_SCALE_MASK
-    dfb_fused_scale_obj.wait_front(1);
-#endif
-
-    constexpr int dst0 = 0;
-    std::uint32_t ht = start_ht;
-    bool wait_mask = true;
-#ifdef CAUSAL_MASK
-    [[maybe_unused]] constexpr bool causal_mask = true;
-#else
-    [[maybe_unused]] constexpr bool causal_mask = false;
-#endif
-#ifdef NUMERIC_STABLE
-    [[maybe_unused]] constexpr bool numeric_stable = true;
-#else
-    [[maybe_unused]] constexpr bool numeric_stable = false;
-#endif
-    for (std::uint32_t ncht = 0; ncht < NCHt; ncht++) {
-#ifdef FUSED_SCALE_MASK
-        // apply fused scale [*= 1/sqrt(...)]
-        ckl::mul<
-            ckl::input(
-                dfb_in0, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
-            ckl::input(dfb_fused_scale, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-            // reuse exps buffer
-            ckl::output(dfb_scale_mask, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
-            ckl::IterationShape::tiles(Wt).block_size(ndst));
-#ifndef CAUSAL_MASK
-        if (wait_mask) {
-            dfb_fused_attn_obj.wait_front(Wt);
+// Helper to check if a row is fully masked
+static inline bool is_row_fully_masked(const uint8_t* mask_tile, int tile_w, int row, int col_from, int col_to) {
+    int count = 0;
+    for (int c = col_from; c < col_to; c++) {
+        if (mask_tile[row * tile_w + c] == 0) {
+            count++;
         }
-#endif
-        constexpr auto mask_bcast = causal_mask ? ckl::BroadcastDim::None : ckl::BroadcastDim::Row;
-        constexpr auto attn_wait = causal_mask ? ckl::WaitPolicy::Cumulative : ckl::WaitPolicy::None;
-        ckl::eltwise_chain(
-            ckl::IterationShape::tiles(Wt).block_size(ndst),
-            ckl::BinaryFpu<
-                ckl::BinaryFpuOp::Add,
-                ckl::input(
-                    dfb_scale_mask,
-                    ckl::WaitPolicy::PerBlockSize,
-                    ckl::PopPolicy::PerBlockSize,
-                    ckl::InputTileMapping::Block),
-                ckl::input(
-                    dfb_fused_attn, mask_bcast, attn_wait, ckl::PopPolicy::None, ckl::InputTileMapping::Block)>{},
-            ckl::Optional<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
-            // reuse the exps buffer again, this time in a circular manner
-            ckl::PackTile<ckl::output(
-                dfb_x,
-                ckl::ReservePolicy::PerBlockSize,
-                ckl::PushPolicy::PerBlockSize,
-                ckl::DataFormatReconfig::Disabled)>{});
+    }
+    return count == (col_to - col_from);
+}
 
-// add numeric_stable
-// fuse exp with sub tiles
-#ifdef NUMERIC_STABLE
-        calc_numeric_stable<dfb_x, dfb_max_scaler, dfb_max, dfb_exps>(Wt, ndst);
-#endif
+// Helper to compute softmax denominator with masked values
+static inline float softmax_denom(
+    local_tensor<float>& logits,
+    const uint8_t* mask_tile,
+    int valid_cols,
+    int tile_w,
+    int row,
+    int mask_valid_cols,
+    bool use_causal_mask) {
+    float max_val = -INFINITY;
+    float sum = 0.0f;
 
-#ifdef CAUSAL_MASK
-        dfb_fused_attn_obj.pop_front(Wt);
-        drain_dfb_pad(dfb_fused_attn, attn_pad);
-#else
-        if (wait_mask) {
-            wait_mask = false;
-        }
-        ht++;
-        if (ht == Ht) {
-            dfb_fused_attn_obj.pop_front(Wt);
-            drain_dfb_pad(dfb_fused_attn, attn_pad);
-            ht = 0;
-            wait_mask = true;
-        }
-#endif  // CAUSAL_MASK
+    // Find max over valid columns
+    for (int c = 0; c < valid_cols; c++) {
+        max_val = fmaxf(max_val, logits[row][c]);
+    }
+    // Also consider masked columns that might have higher values but should be -inf
+    // If there's padding (valid_cols < TILE_W), padded columns contribute -inf
 
-        reconfig_data_format(dfb_exps, dfb_sum_scaler);
-#else
-        reconfig_data_format(dfb_in0, dfb_in0);
-        pack_reconfig_data_format(dfb_exps);
-        copy_init(dfb_in0);  // need to copy from CB to DST to be able to run sfpu math
-#ifndef NUMERIC_STABLE
-        exp_tile_init<EXP_APPROX>();
-#endif
-#ifdef MASK_PADDED_DATA
-        {
-            if (Wt > 1) {
-                ckl::eltwise_chain(
-                    ckl::IterationShape::tiles(Wt - 1).block_size(ndst),
-                    ckl::CopyTile<ckl::input(
-                        dfb_in0,
-                        ckl::WaitPolicy::PerBlockSize,
-                        ckl::PopPolicy::PerBlockSize,
-                        ckl::InputTileMapping::Block)>{},
-                    ckl::Optional<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
-                    ckl::PackTile<ckl::output(
-                        dfb_x,
-                        ckl::ReservePolicy::PerBlockSize,
-                        ckl::PushPolicy::PerBlockSize,
-                        ckl::DataFormatReconfig::Disabled)>{});
+    for (int c = 0; c < valid_cols; c++) {
+        float val = logits[row][c];
+        if (mask_tile != nullptr) {
+            // Apply mask: if masked, value becomes -inf
+            bool masked = (mask_tile[row * tile_w + c] == 0);
+            if (masked) {
+                val = -INFINITY;
             }
-
-            // last tile of the row gets the -inf padding mask
-            ckl::eltwise_chain(
-                ckl::IterationShape::one_tile(),
-                ckl::BinaryFpu<
-                    ckl::BinaryFpuOp::Add,
-                    ckl::input(dfb_in0),
-                    ckl::input(
-                        dfb_mask_padded,
-                        ckl::BroadcastDim::Row,
-                        ckl::WaitPolicy::Upfront,
-                        ckl::PopPolicy::None)>{},  // dfb_mask_padded: held scalar, chain waits(1), no
-                                                   // pop
-                ckl::Optional<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
-                ckl::PackTile<ckl::output(
-                    dfb_x,
-                    ckl::ReservePolicy::PerTile,
-                    ckl::PushPolicy::PerTile,
-                    ckl::DataFormatReconfig::Disabled)>{});
-
-// add numeric_stable
-// fuse exp with sub tiles
-#ifdef NUMERIC_STABLE
-            calc_numeric_stable<dfb_x, dfb_max_scaler, dfb_max, dfb_exps>(Wt, ndst);
-#endif
         }
-#else
-        {
-// add numeric_stable
-// fuse exp with sub tiles
-#ifdef NUMERIC_STABLE
-            calc_numeric_stable<dfb_in0, dfb_max_scaler, dfb_max, dfb_exps>(Wt, ndst);
-#else
-            ckl::unary<
-                ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>,
-                ckl::input(
-                    dfb_in0, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
-                ckl::output(
-                    dfb_exps,
-                    ckl::ReservePolicy::PerBlockSize,
-                    ckl::PushPolicy::PerBlockSize,
-                    ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::tiles(Wt).block_size(ndst));
-#endif
-        }
-#endif  // MASK_PADDED_DATA
-#endif  // FUSED_SCALE_MASK
+        sum += expf(val - max_val);
+    }
 
-        // SUM reduce with reciprocal post-processing (1/sum)
-        compute_kernel_lib::reduce<
-            PoolType::SUM,
-            ReduceDim::REDUCE_ROW,
-            dfb_exps,
-            dfb_sum_scaler,
-            dfb_recipsumexps,
-            compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
-            compute_kernel_lib::ReduceInputBlockShape::row(Wt),
-            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::NoAccumulation{},
-            [](std::uint32_t) {
-                // Preserve the FP32 row sum's precision in its reciprocal, independently of exp approximation.
-                if constexpr (DST_ACCUM_MODE) {
-                    recip_tile_init<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>();
-                    recip_tile<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>(0);
+    // Padded columns contribute -inf (i.e., 0 to the sum)
+    return max_val, sum;
+}
+
+static inline std::pair<float, float> compute_softmax_stats(
+    local_tensor<float>& logits,
+    const uint8_t* mask_tile,
+    int valid_cols,
+    int tile_w,
+    int row,
+    bool use_causal_mask) {
+    float max_val = -INFINITY;
+    float sum = 0.0f;
+
+    // Find max over valid columns
+    for (int c = 0; c < valid_cols; c++) {
+        max_val = fmaxf(max_val, logits[row][c]);
+    }
+
+    for (int c = 0; c < valid_cols; c++) {
+        float val = logits[row][c];
+        if (mask_tile != nullptr) {
+            // Apply mask: if masked, value becomes -inf
+            bool masked = (mask_tile[row * tile_w + c] == 0);
+            if (masked) {
+                val = -INFINITY;
+            }
+        }
+        sum += expf(val - max_val);
+    }
+
+    return {max_val, sum};
+}
+
+static inline void apply_softmax(
+    local_tensor<float>& logits,
+    local_tensor<float>& out,
+    const uint8_t* mask_tile,
+    int valid_cols,
+    int tile_w,
+    bool use_causal_mask) {
+    constexpr auto TILE_H = tile_h<float>();
+
+    for (int r = 0; r < TILE_H; r++) {
+        auto [max_val, sum] = compute_softmax_stats(
+            logits, mask_tile, valid_cols, tile_w, r, use_causal_mask);
+
+        // If sum is 0 (all -inf), set all outputs to 0
+        if (sum == 0.0f || sum != sum) {  // sum is NaN or 0
+            for (int c = 0; c < valid_cols; c++) {
+                out[r][c] = 0.0f;
+            }
+        } else {
+            for (int c = 0; c < valid_cols; c++) {
+                float val = logits[r][c];
+                if (mask_tile != nullptr) {
+                    bool masked = (mask_tile[r * tile_w + c] == 0);
+                    if (masked) {
+                        out[r][c] = 0.0f;
+                    } else {
+                        out[r][c] = expf(val - max_val) / sum;
+                    }
                 } else {
-                    recip_tile_init();
-                    recip_tile(0);
+                    out[r][c] = expf(val - max_val) / sum;
                 }
-            });
-
-        // tile *= 1/(sum(exp(x)))
-        ckl::mul<
-            ckl::input(dfb_exps, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
-            ckl::input(dfb_recipsumexps, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
-            ckl::output(dfb_out0, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
-            ckl::IterationShape::tiles(Wt).block_size(ndst));
-
-        // Realign CBs before the next row when Wt does not fill them exactly.
-        drain_dfb_pad(dfb_in0, in0_pad);
-        cycle_dfb_pad(dfb_exps, exps_pad);
-#ifdef FUSED_SCALE_MASK
-        cycle_dfb_pad(dfb_scale_mask, scale_mask_pad);
-#ifdef NUMERIC_STABLE
-        // Without NUMERIC_STABLE, dfb_x aliases dfb_exps; cycling it again would drift it per row.
-        cycle_dfb_pad(dfb_x, exps_pad);
-#endif
-#elif defined(NUMERIC_STABLE) && defined(MASK_PADDED_DATA)
-        // dfb_x is a distinct buffer only here; without NUMERIC_STABLE it aliases dfb_exps (already cycled).
-        cycle_dfb_pad(dfb_x, exps_pad);
-#endif
-        if (out0_pad > 0) {
-            dfb_out0_obj.reserve_back(static_cast<uint16_t>(out0_pad));
-            dfb_out0_obj.push_back(static_cast<uint16_t>(out0_pad));  // writer drains, does not write to DRAM
+            }
         }
-    }  // NCHt loop
-    // The scaler tiles are each waited once and reused across the whole NCHt loop; pop them at
-    // the end so the CBs are left balanced.
-    dfb_max_scaler_obj.pop_front(1);
-    dfb_sum_scaler_obj.pop_front(1);
-#ifdef FUSED_SCALE_MASK
-    dfb_fused_scale_obj.pop_front(1);
-#endif
+    }
+}
+
+}  // namespace
+
+// ============================================================================
+// Softmax kernel for 2D tensors (standard path)
+// ============================================================================
+void softmax_2d(
+    uint32_t input_l1_address,
+    uint32_t output_l1_address,
+    uint32_t scale,
+    uint32_t reduction_axes_bitmask,
+    uint32_t keep_dims) {
+    const auto in_addr = reinterpret_cast<float*>(input_l1_address);
+    const auto out_addr = reinterpret_cast<float*>(output_l1_address);
+
+    constexpr auto TILE_H = tile_h<float>();
+    constexpr auto TILE_W = tile_w<float>();
+    constexpr uint32_t NUM_TILES = get_noc_multicore_dest_args_dest_idx(get_write_tile_params());
+
+    for (uint32_t t = 0; t < NUM_TILES; ++t) {
+        noc_async_read_tile(0, in_addr, t);
+        noc_async_read_tile(1, in_addr, t);
+        noc_async_read_barrier();
+
+        local_tensor<float> in_0 = noc_async_read_tile_get_local_buffer<0>(t);
+        local_tensor<float> in_1 = noc_async_read_tile_get_local_buffer<1>(t);
+
+        // Determine which axis to reduce over
+        bool reduce_rows = (reduction_axes_bitmask & 0x1) != 0;
+        bool reduce_cols = (reduction_axes_bitmask & 0x2) != 0;
+
+        if (reduce_rows && !reduce_cols) {
+            // Reduce over rows - compute softmax across tiles in the row
+            local_tensor<float> out = noc_async_read_tile_get_local_buffer<0>(t);
+            for (int r = 0; r < TILE_H; r++) {
+                for (int c = 0; c < TILE_W; c++) {
+                    out[r][c] = in_0[r][c];
+                }
+            }
+            // TODO: implement row reduction
+        } else if (!reduce_rows && reduce_cols) {
+            // Reduce over columns - apply softmax within each tile
+            local_tensor<float> out = noc_async_read_tile_get_local_buffer<0>(t);
+            apply_softmax(in_0, out, nullptr, TILE_W, TILE_W, false);
+            noc_async_write_tile(0, out_addr, t);
+        } else {
+            // Default: apply softmax over columns
+            local_tensor<float> out = noc_async_read_tile_get_local_buffer<0>(t);
+            apply_softmax(in_0, out, nullptr, TILE_W, TILE_W, false);
+            noc_async_write_tile(0, out_addr, t);
+        }
+
+        noc_async_write_barrier();
+    }
+}
+
+// ============================================================================
+// Softmax kernel for attention (with masking support)
+// ============================================================================
+void softmax_attention(
+    uint32_t logits_l1_address,
+    uint32_t output_l1_address,
+    uint32_t mask_l1_address,
+    uint32_t scale,
+    uint32_t num_heads,
+    uint32_t head_dim,
+    uint32_t seq_len,
+    uint32_t use_causal_mask,
+    uint32_t mask_pad_padded_data) {
+    const auto logits_addr = reinterpret_cast<float*>(logits_l1_address);
+    const auto output_addr = reinterpret_cast<float*>(output_l1_address);
+    const auto mask_addr = (mask_l1_address != 0) ? reinterpret_cast<uint8_t*>(mask_l1_address) : nullptr;
+
+    constexpr auto TILE_H = tile_h<float>();
+    constexpr auto TILE_W = tile_w<float>();
+    constexpr uint32_t NUM_TILES = get_noc_multicore_dest_args_dest_idx(get_write_tile_params());
+
+    for (uint32_t t = 0; t < NUM_TILES; ++t) {
+        noc_async_read_tile(0, logits_addr, t);
+        if (mask_addr != nullptr) {
+            noc_async_read_tile(1, mask_addr, t);
+        }
+        noc_async_read_barrier();
+
+        local_tensor<float> logits = noc_async_read_tile_get_local_buffer<0>(t);
+        local_tensor<uint8_t> mask = (mask_addr != nullptr) ?
+            noc_async_read_tile_get_local_buffer<1>(t) : local_tensor<uint8_t>();
+
+        local_tensor<float> out = noc_async_read_tile_get_local_buffer<0>(t);
+
+        // Copy logits to output initially
+        for (int r = 0; r < TILE_H; r++) {
+            for (int c = 0; c < TILE_W; c++) {
+                out[r][c] = logits[r][c];
+            }
+        }
+
+        // Apply scale
+        if (scale != 1.0f) {
+            apply_softmax_scale(out, out, scale);
+        }
+
+        int valid_cols = TILE_W;
+        bool use_mask = (mask_addr != nullptr) || (mask_pad_padded_data != 0);
+
+        // Handle tile padding: if mask_pad_padded_data is set, apply -inf to padded columns
+        if (mask_pad_padded_data != 0) {
+            // Compute how many columns are padding based on seq_len
+            int tile_idx = t % (seq_len / TILE_W + (seq_len % TILE_W != 0 ? 1 : 0));
+            int offset_in_seq = tile_idx * TILE_W;
+            int remaining = seq_len - offset_in_seq;
+            valid_cols = (remaining < TILE_W) ? remaining : TILE_W;
+
+            // Apply -inf to padded columns
+            for (int c = valid_cols; c < TILE_W; c++) {
+                for (int r = 0; r < TILE_H; r++) {
+                    out[r][c] = -INFINITY;
+                }
+            }
+        }
+
+        // Apply mask if present
+        if (mask_addr != nullptr && mask.data() != nullptr) {
+            for (int r = 0; r < TILE_H; r++) {
+                for (int c = 0; c < valid_cols; c++) {
+                    bool masked = (mask[r * TILE_W + c] == 0);
+                    if (masked) {
+                        out[r][c] = -INFINITY;
+                    }
+                }
+            }
+        }
+
+        // Apply softmax
+        apply_softmax(out, out, (mask_addr != nullptr && mask.data() != nullptr) ?
+            reinterpret_cast<uint8_t*>(mask.data()) : nullptr, valid_cols, TILE_W, use_causal_mask != 0);
+
+        noc_async_write_tile(0, output_addr, t);
+        noc_async_write_barrier();
+    }
 }
