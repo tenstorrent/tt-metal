@@ -64,13 +64,14 @@ class DSV41Decoder:
         self.device_loop = True
 
     device_loop = False
+    rows_shard = False  # Engram rows uploaded column-sharded (8x fewer host bytes) and all-gathered over the mesh columns inside the trace
     engram_rows_fn = None  # callable(tokens_u32[T,1], pos_i32[T]) -> {layer_id: rows [T,1,1,Kin] tile bf16}, built from the device Engram table
 
     def enable_sampling(self, mesh_config, ccl):
         """Add greedy sampling to the traced step (``forward`` then also fills ``self.sampled``)."""
         self.mesh_config, self.ccl = mesh_config, ccl
 
-    def prepare_packed_inputs(self, token_ids, engram_rows, positions):
+    def prepare_packed_inputs(self, token_ids, engram_rows, positions, with_ctrl=True):
         """Host half of ``set_packed_inputs`` (torch -> host tensors); safe to run on a worker thread while the device replays."""
         import torch
 
@@ -79,13 +80,18 @@ class DSV41Decoder:
         mp = ttnn.ShardTensor2dMesh(self.md, dims=(0, None), mesh_shape=(rows, cols))
         ctrl = torch.zeros(B, 32, dtype=torch.int32)
         ctrl[:, 0], ctrl[:, 1] = token_ids.reshape(-1).to(torch.int32), positions.reshape(-1).to(torch.int32)
-        host_c = ttnn.from_torch(ctrl, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mp)
+        host_c = (
+            ttnn.from_torch(ctrl, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mp) if with_ctrl else None
+        )
         order = sorted(engram_rows)
         host_r = None
         if order:
             cat = torch.cat([engram_rows[l].reshape(B, 1, 1, -1) for l in order], dim=-1).to(torch.bfloat16)
+            mpr = (
+                ttnn.ShardTensor2dMesh(self.md, dims=(0, 3), mesh_shape=(rows, cols)) if self.rows_shard else mp
+            )  # rows_shard: each column uploads 1/8 (gathered on device)
             host_r = ttnn.from_torch(
-                cat, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mp
+                cat, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mpr
             )  # row-major: a tile layout would pad each user's row to 32 rows (32x the bytes)
         return order, host_c, host_r
 
@@ -101,6 +107,14 @@ class DSV41Decoder:
             ttnn.copy_host_to_device_tensor(host_c, self.ctrl)
             if host_r is not None:
                 ttnn.copy_host_to_device_tensor(host_r, self.rows_cat)
+
+    def upload_rows_only(self, prepared):
+        """Device-loop mode: tokens / positions live on the device, only the Engram rows of the new token are uploaded."""
+        self.engram_order, _, host_r = prepared
+        if self.rows_cat is None:
+            self.rows_cat = ttnn.to_device(host_r, self.md, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            ttnn.copy_host_to_device_tensor(host_r, self.rows_cat)
 
     def set_packed_inputs(self, token_ids, engram_rows, positions):
         """Two uploads per step instead of four: tokens + positions in one int32 tensor, all Engram rows in one bf16 tensor."""
@@ -160,6 +174,24 @@ class DSV41Decoder:
             flush=True,
         )
 
+    def _rows_from_cat(self, T):
+        kin = {l: e.kin for l, e in self.engram.items()}
+        rows, off = {}, 0
+        v2 = os.environ.get("DSV41_ENGRAM_V2") != "0"
+        cat = self.rows_cat
+        if self.rows_shard:
+            cat = self.mesh_config.allgather(cat, self.ccl, axis=1, dim=3)
+        rc = ttnn.reshape(cat, [1, 1, T, cat.shape[-1]]) if v2 else cat  # v2: one [T,Kin] tile block (M=T matmul)
+        for l in self.engram_order:
+            sl = (
+                ttnn.slice(rc, [0, 0, 0, off], [1, 1, T, off + kin[l]])
+                if v2
+                else ttnn.slice(rc, [0, 0, 0, off], [T, 1, 1, off + kin[l]])
+            )
+            rows[l] = ttnn.to_layout(sl, ttnn.TILE_LAYOUT)
+            off += kin[l]
+        return rows
+
     def forward(self):
         """-> logits shard [1,1,T,vocab/cols] fp32 (see ``DSV41DeviceHead``)."""
 
@@ -169,25 +201,19 @@ class DSV41Decoder:
         packed = self.ctrl is not None
         if self.device_loop:
             tokens, self.pos = self.tok_dev, self.pos_dev
-            self.rows = self.engram_rows_fn(tokens, self.pos) if self.engram_rows_fn is not None else {}
+            if self.engram_rows_fn is not None:
+                self.rows = self.engram_rows_fn(tokens, self.pos)
+            elif (
+                self.rows_cat is not None
+            ):  # token fed back on the device, Engram rows of the new token uploaded by the host
+                self.rows = self._rows_from_cat(self.rows_cat.shape[0])
+            else:
+                self.rows = {}
         elif packed:  # tokens / positions / Engram rows arrive in two packed buffers (set_packed_inputs)
             T = self.ctrl.shape[0]
             tokens = ttnn.typecast(ttnn.slice(self.ctrl, [0, 0], [T, 1]), ttnn.uint32)
             self.pos = ttnn.reshape(ttnn.slice(self.ctrl, [0, 1], [T, 2]), [T])
-            kin = {l: e.kin for l, e in self.engram.items()}
-            self.rows, off = {}, 0
-            v2 = os.environ.get("DSV41_ENGRAM_V2") != "0"
-            rc = (
-                ttnn.reshape(self.rows_cat, [1, 1, T, self.rows_cat.shape[-1]]) if v2 else self.rows_cat
-            )  # v2: one [T,Kin] tile block (M=T matmul)
-            for l in self.engram_order:
-                sl = (
-                    ttnn.slice(rc, [0, 0, 0, off], [1, 1, T, off + kin[l]])
-                    if v2
-                    else ttnn.slice(rc, [0, 0, 0, off], [T, 1, 1, off + kin[l]])
-                )
-                self.rows[l] = ttnn.to_layout(sl, ttnn.TILE_LAYOUT)
-                off += kin[l]
+            self.rows = self._rows_from_cat(T)
         else:
             tokens = self.tokens
         x, pre = self.embedding.forward(tokens)
