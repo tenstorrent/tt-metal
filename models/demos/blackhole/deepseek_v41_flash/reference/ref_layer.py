@@ -26,6 +26,8 @@ from models.demos.blackhole.deepseek_v41_flash.reference import ref_kernels
 CKPT_DIR = os.environ.get("DSV41_CKPT", "/mnt/tt-data/ssinghal/deepseek-v41-flash")
 
 _model_module = None
+# REF_DTYPE=fp32: the whole reference (weights, activations, 4-stream residual) in float32 instead of the checkpoint's bf16 (noise-floor study)
+REF_DTYPE = torch.float32 if os.environ.get("REF_DTYPE", "bf16") == "fp32" else torch.bfloat16
 
 
 def load_model_module():
@@ -63,7 +65,7 @@ def _shard_for(index: dict, key: str) -> str:
 def build_layer(layer_id: int, max_batch_size: int = 4, max_seq_len: int = 2048):
     """Construct Block(layer_id) and fill it from the checkpoint. Returns the module in eval mode."""
     mod = load_model_module()
-    torch.set_default_dtype(torch.bfloat16)
+    torch.set_default_dtype(REF_DTYPE)
     args = model_args(max_batch_size, max_seq_len)
     # Block.__init__ reads module-level globals that Transformer would normally set.
     block = mod.Block(layer_id, args, engram_layout=None)
@@ -103,6 +105,10 @@ def build_layer(layer_id: int, max_batch_size: int = 4, max_seq_len: int = 2048)
     # bias_vl only matters for image tokens; absent from some layers' shards is fine
     unexpected = [m for m in missing if not m.endswith("bias_vl")]
     assert not unexpected, f"{len(unexpected)} tensors missing from checkpoint, e.g. {unexpected[:5]}"
+    if REF_DTYPE != torch.bfloat16:  # params the module declares bf16 explicitly (wo_a, ...) follow the reference dtype
+        for p_ in block.parameters():
+            if p_.dtype == torch.bfloat16:
+                p_.data = p_.data.to(REF_DTYPE)
     block.eval()
     block.loaded_tensors = loaded
     return block
@@ -117,7 +123,7 @@ def embed_tokens(token_ids: torch.Tensor) -> torch.Tensor:
     index = json.load(open(os.path.join(CKPT_DIR, "model.safetensors.index.json")))["weight_map"]
     with safe_open(_shard_for(index, "embed.weight"), "pt") as f:
         w = f.get_tensor("embed.weight")
-    h = w[token_ids].to(torch.bfloat16)
+    h = w[token_ids].to(REF_DTYPE)
     h = h.unsqueeze(2).repeat(1, 1, 4, 1)
     return h, mod.make_identity_pre_mix(h, 4)
 
