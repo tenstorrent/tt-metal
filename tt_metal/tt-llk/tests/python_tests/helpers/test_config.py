@@ -2137,7 +2137,9 @@ class TestConfig:
 
         completed = set()
         end_time = time.time() + timeout
-        while time.time() < end_time:
+        while True:
+            # The clock is read before the poll, so a host stall past the deadline still gets one last poll
+            expired = time.time() >= end_time
             if signal_addrs is not None:
                 for mailbox in mailboxes - completed:
                     value = np.frombuffer(
@@ -2164,6 +2166,8 @@ class TestConfig:
 
             if completed == mailboxes:
                 return
+            if expired:
+                break
 
         handle_if_assert_hit(
             self.temp_elfs,
