@@ -38,6 +38,8 @@ void bind_moreh_clip_grad_norm_operation(nb::module_& mod) {
                 inputs (List[ttnn.Tensor]): Input tensors containing gradients to be clipped. All tensors must be on the same device.
                 max_norm (float): Maximum norm value to clip gradients.
                 norm_type (float, optional): Type of the norm (e.g., 2.0 for L2 norm). Defaults to 2.0.
+                    ``inf``, ``-inf`` and ``0`` follow ``torch.nn.utils.clip_grad_norm_``: the per-tensor
+                    norms (max, min and nonzero count) are combined with the same order.
                 error_if_nonfinite (bool, optional): If True, throws error when total norm is non-finite (NaN or Inf). Defaults to False.
 
             Keyword Args:
