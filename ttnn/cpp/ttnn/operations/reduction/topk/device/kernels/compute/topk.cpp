@@ -402,8 +402,11 @@ void kernel_main() {
                         ckernel::topk_canonicalize_negzero_values(0);
                     }
                 }
+                // From the second sort on, dest reg 0 holds a tile sorted in the same direction, so the stable sorts
+                // (whose order is unique) skip phases 0 to 4 on it.
+                const bool tile0_sorted = stable_sort && !first_sort_from_transposed;
                 ckernel::topk_local_sort<network_stable, DST_ACCUM_MODE, /*fused=*/false, rank_stamped, tie_order>(
-                    0, (int)!largest, end_phase);
+                    0, (int)!largest, end_phase, 0, 0, 0, tile0_sorted);
 
                 // Pack sorted results: dest reg 0 -> result buffer, dest reg 1 -> secondary buffer
                 tile_regs_commit();
