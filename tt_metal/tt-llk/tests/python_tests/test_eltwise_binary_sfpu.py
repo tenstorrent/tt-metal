@@ -10,6 +10,7 @@ from typing import Dict
 import pytest
 import torch
 from conftest import skip_for_quasar
+from helpers.bf16_ties import BF16_FRAC_BITS, BF16_SIG_ONE, assert_is_bf16_tie
 from helpers.chip_architecture import ChipArchitecture
 from helpers.data_format_inference import is_format_combination_outlier
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -21,7 +22,13 @@ from helpers.golden_generators import (
     quantize_input_to_unpack_format,
 )
 from helpers.llk_params import BroadcastType as LlkBroadcastType
-from helpers.llk_params import DestAccumulation, DestSync, MathOperation, format_dict
+from helpers.llk_params import (
+    DestAccumulation,
+    DestSync,
+    DstRoundingMode,
+    MathOperation,
+    format_dict,
+)
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
@@ -50,6 +57,7 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    SFPU_DST_ROUNDING_MODE,
     TILE_COUNT,
     TemplateParameter,
     generate_input_dim,
@@ -456,6 +464,8 @@ def sfpu_binary(
     twos_complement=False,
     input_dimensions=None,
     unspecified_nonfinite_sign=False,
+    dst_rounding_mode=DstRoundingMode.Default,
+    exact=False,
 ):
     """*unspecified_nonfinite_sign* compares a non-finite result by magnitude only.
 
@@ -463,6 +473,15 @@ def sfpu_binary(
     packed as a signed infinity through a pipeline too narrow to hold it, on Wormhole. The
     magnitude, the finiteness and every finite lane stay checked. Scoped per lane, because one
     tensor can hold both a non-finite whose sign the ISA leaves open and one it specifies.
+
+    *dst_rounding_mode* reaches the kernel as add_binary_tile<DstRoundingMode::...>() would:
+    how a float ADD/SUB/RSUB result is narrowed into a bf16 Dest. Other ops ignore it.
+
+    *exact* compares bit for bit instead of within tolerance; a tolerance cannot tell a
+    round-to-even lane from a round-half-away one. Only meaningful where the kernel narrows
+    with round-to-nearest-even, as the golden's final cast does: MUL and DIV always on a bf16
+    Dest, ADD/SUB/RSUB only in NearestEven mode. Default ADD/SUB/RSUB truncate into a bf16
+    Dest and are rejected, since they could never match.
     """
 
     # Seed the draw so the stimuli are identical run to run; an unseeded redraw makes a
@@ -539,6 +558,20 @@ def sfpu_binary(
     ):
         dest_acc = DestAccumulation.Yes
 
+    # Argument check, ahead of the device run (and of --compile-producer, which skips it).
+    if (
+        exact
+        and dest_acc == DestAccumulation.No
+        and format_dict[formats.output_format] == torch.bfloat16
+        and mathop not in (MathOperation.SfpuElwmul, MathOperation.SfpuElwdiv)
+        and dst_rounding_mode != DstRoundingMode.NearestEven
+    ):
+        raise ValueError(
+            f"exact=True: {mathop.name} in {dst_rounding_mode.name} mode truncates into "
+            "a bf16 Dest while the golden rounds to nearest even; a bit-for-bit compare "
+            "cannot pass there. Use DstRoundingMode.NearestEven or dest_acc=Yes."
+        )
+
     generate_golden = get_golden_generator(BinarySFPUGolden)
     golden_format = (
         DataFormat.Float16_b
@@ -584,6 +617,7 @@ def sfpu_binary(
             MATH_OP(mathop=mathop),
             APPROX_MODE(),
             BROADCAST_TYPE(bcast),
+            SFPU_DST_ROUNDING_MODE(dst_rounding_mode),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),
@@ -613,6 +647,13 @@ def sfpu_binary(
     assert len(res_tensor) == len(
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"
+
+    if exact:
+        # max_ulp=0 is the bit-exact gate: zero representable steps between result and golden.
+        assert passed_test(
+            golden_tensor, res_tensor, formats.output_format, max_ulp=0
+        ), "Result is not bit-identical to the golden"
+        return
 
     # Per-op tolerances, for the two ops whose error is a property of the op's own
     # composition rather than of the stimuli, and per output format where the error splits by
@@ -1391,7 +1432,9 @@ assert _BINARY_EDGE_OPS, (
 # torch.isclose, which cannot see a zero's sign in the first place. The indeterminate forms
 # are asserted too, now that the golden models the packer substituting an infinity for a NaN
 # the pipeline was too narrow to hold; what remains of them on Wormhole is that infinity's
-# sign, handled per lane by generated_nan_sign_is_asserted() rather than by an xfail.
+# sign, handled per lane by generated_nan_sign_is_asserted() rather than by an xfail. The one
+# xfail left, on both archs, is MUL's 0 * {inf, NaN} on a bf16 Dest (#58445), scoped to those
+# lanes below.
 
 
 @pytest.mark.nightly
@@ -1412,6 +1455,64 @@ def test_eltwise_binary_sfpu_edges(formats, dest_acc, mathop, edge_class):
     _skip_fp32_no_dest_acc(formats, dest_acc)
     _skip_bh_float16_no_dest_acc(formats, dest_acc)
 
+    if (
+        mathop == MathOperation.SfpuElwmul
+        and dest_acc == DestAccumulation.No
+        and edge_class == _EDGE_CLASS_SPECIALS_IN
+        and TestConfig.BUILD_MODE != BuildMode.PRODUCE
+    ):
+        # calculate_sfpu_binary_mul forces 0 * x = 0 on a bf16 Dest, so 0 * inf and 0 * NaN
+        # come back 0 where IEEE and this golden say NaN (#58445; a kernel question, not a
+        # golden one). Every other non-finite pair is asserted as usual; only those lanes are a
+        # strict expected failure, so a pass there means the kernel changed and this block goes.
+        _sfpu_binary_edges(
+            formats,
+            dest_acc,
+            mathop,
+            edge_class,
+            pair_filter=lambda a, b: not _is_zero_times_nonfinite(a, b),
+        )
+        try:
+            _sfpu_binary_edges(
+                formats,
+                dest_acc,
+                mathop,
+                edge_class,
+                pair_filter=_is_zero_times_nonfinite,
+            )
+        except AssertionError as exc:
+            if "Assert against golden failed" not in str(exc):
+                raise
+            pytest.xfail(
+                "https://github.com/tenstorrent/tt-metal/issues/58445: calculate_sfpu_binary_mul "
+                "(ckernel_sfpu_binary.h) forces 0 * inf = 0 * NaN = 0 on a bf16 Dest"
+            )
+        pytest.fail(
+            "MUL bf16 now matches the IEEE golden on 0 * inf / 0 * NaN: the divergence was fixed in "
+            "the kernel (#58445), remove this xfail block"
+        )
+
+    _sfpu_binary_edges(formats, dest_acc, mathop, edge_class)
+
+
+def _is_zero_times_nonfinite(a, b):
+    """True for a (0, inf/NaN) or (inf/NaN, 0) operand pair, either zero sign."""
+    return (a == 0.0 and not math.isfinite(b)) or (b == 0.0 and not math.isfinite(a))
+
+
+def _sfpu_binary_edges(
+    formats,
+    dest_acc,
+    mathop,
+    edge_class,
+    dst_rounding_mode=DstRoundingMode.Default,
+    pair_filter=None,
+):
+    """One class of *mathop*'s registered poles through sfpu_binary(), in *dst_rounding_mode*.
+
+    *pair_filter(a, b)*, when given, keeps only the matching pairs of the class (consumer pass
+    only; the compile-producer pass builds the same ELF either way).
+    """
     # Cat B. Two independent gates, both must pass: BINARY_SPECIALS_READY_OPS says the golden
     # defines an answer for a non-finite operand, specials_safe() says the pipeline delivers one
     # intact. dest_acc as passed, which is conservative on Blackhole, where it is promoted later.
@@ -1422,6 +1523,8 @@ def test_eltwise_binary_sfpu_edges(formats, dest_acc, mathop, edge_class):
     pairs = _edge_pairs_for_class(
         mathop, formats, edge_class, dest_acc, specials=specials
     )
+    if pair_filter is not None:
+        pairs = [pair for pair in pairs if pair_filter(*pair)]
 
     if not pairs and TestConfig.BUILD_MODE == BuildMode.PRODUCE:
         # The compile-producer pass must not skip on a runtime-only axis: one item per compile
@@ -1461,6 +1564,138 @@ def test_eltwise_binary_sfpu_edges(formats, dest_acc, mathop, edge_class):
         mathop,
         src_A_override=_build_paired_tile_override(pairs, dtype),
         unspecified_nonfinite_sign=unspecified_sign,
+        dst_rounding_mode=dst_rounding_mode,
+    )
+
+
+# =============================================================================
+# bf16 round-to-nearest-even narrowing. binary_ng asks for DstRoundingMode::NearestEven on every
+# bf16 ADD/SUB/RSUB it sends to the SFPU; the sweeps above run the truncating Default, so the RNE
+# arm gets its own domain sweep, edge classes and exact ties. MUL always rounds on a bf16 Dest.
+# =============================================================================
+
+_BF16_RNE_OPS = [
+    MathOperation.SfpuElwadd,
+    MathOperation.SfpuElwsub,
+    MathOperation.SfpuElwrsub,
+]
+_BF16_RNE_FORMATS = input_output_formats([DataFormat.Float16_b], same=True)
+
+
+@parametrize(formats=_BF16_RNE_FORMATS, mathop=_BF16_RNE_OPS)
+def test_eltwise_binary_sfpu_float_rne(formats, mathop):
+    """Registered-domain sweep of the NearestEven arm; bf16 Dest only, where it applies."""
+    sfpu_binary(
+        formats,
+        DestAccumulation.No,
+        mathop,
+        broadcast_type=LlkBroadcastType.None_,
+        dst_rounding_mode=DstRoundingMode.NearestEven,
+    )
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=_BF16_RNE_FORMATS,
+    mathop=_BF16_RNE_OPS,
+    edge_class=runtime(list(_EDGE_CLASSES)),
+)
+def test_eltwise_binary_sfpu_rne_edges(formats, mathop, edge_class):
+    """The registered poles (zeros, infinities, NaNs) through the NearestEven arm."""
+    _sfpu_binary_edges(
+        formats,
+        DestAccumulation.No,
+        mathop,
+        edge_class,
+        dst_rounding_mode=DstRoundingMode.NearestEven,
+    )
+
+
+def _bf16_tie_pairs(mathop, count, seed=0):
+    """*count* (a, b) bf16 pairs whose exact result lies halfway between two bf16 values.
+
+    ADD/SUB/RSUB: b is half a bf16 ULP of a, and a's mantissa is non-zero so both neighbours of
+    the sum share a's exponent. MUL: the 8x8-bit significand product has the bit below the bf16
+    LSB set and nothing under it. Random signs and exponents put about half the ties on an even
+    LSB, the only lanes where round-to-nearest-even and round-half-away disagree.
+    """
+    # Seeded torch draws: the same pairs every run, so a failure is reproducible.
+    gen = torch.Generator().manual_seed(seed)
+
+    def draw(low, high):
+        return torch.randint(low, high + 1, (count,), generator=gen).tolist()
+
+    def signs():
+        return (torch.randint(0, 2, (count,), generator=gen) * 2 - 1).tolist()
+
+    pairs = []
+    if mathop == MathOperation.SfpuElwmul:
+        tie_significands = []
+        for ma in range(BF16_SIG_ONE, 2 * BF16_SIG_ONE):
+            for mb in range(BF16_SIG_ONE, 2 * BF16_SIG_ONE):
+                p = ma * mb
+                # The product (15 or 16 bits) keeps its top BF16_FRAC_BITS + 1 bits as the bf16
+                # significand; a tie has the first dropped bit set and nothing below it.
+                dropped = p.bit_length() - (BF16_FRAC_BITS + 1)
+                if p & ((1 << dropped) - 1) == 1 << (dropped - 1):
+                    tie_significands.append((ma, mb))
+        for idx, ea, eb, sa, sb in zip(
+            draw(0, len(tie_significands) - 1),
+            draw(-10, 10),
+            draw(-10, 10),
+            signs(),
+            signs(),
+        ):
+            ma, mb = tie_significands[idx]
+            a = sa * math.ldexp(ma, ea - BF16_FRAC_BITS)
+            b = sb * math.ldexp(mb, eb - BF16_FRAC_BITS)
+            pairs.append((a, b))
+    else:
+        for exp, m, sa, sb in zip(
+            draw(-20, 20), draw(1, BF16_SIG_ONE - 1), signs(), signs()
+        ):
+            # a = +/-(1 + m / 128) * 2^exp with m >= 1; b = half of a's bf16 ULP, 2^(exp - 8).
+            a = sa * math.ldexp(BF16_SIG_ONE + m, exp - BF16_FRAC_BITS)
+            b = sb * math.ldexp(1.0, exp - (BF16_FRAC_BITS + 1))
+            pairs.append((a, b))
+
+    # Self-check on the host: every pair must be an exact fp32 tie, else the test proves nothing.
+    op = BinarySFPUGolden().ops[mathop]
+    for a, b in pairs:
+        exact = float(
+            op(
+                torch.tensor(a, dtype=torch.float32),
+                torch.tensor(b, dtype=torch.float32),
+            )
+        )
+        assert_is_bf16_tie(exact, f"({a}, {b}) for {mathop.name}")
+    return pairs
+
+
+@parametrize(
+    formats=_BF16_RNE_FORMATS,
+    mathop=_BF16_RNE_OPS + [MathOperation.SfpuElwmul],
+)
+def test_eltwise_binary_sfpu_bf16_rne_ties(formats, mathop):
+    """Exact bf16 ties must round to even, bit for bit against torch.
+
+    Guards against swapping the software narrowing for SFPSTOCHRND, which on Blackhole silicon
+    rounds ties away from zero, NaN -> +/-inf and denormal -> +0.
+    """
+    rounding = (
+        DstRoundingMode.Default  # MUL narrows with RNE unconditionally on a bf16 Dest
+        if mathop == MathOperation.SfpuElwmul
+        else DstRoundingMode.NearestEven
+    )
+    sfpu_binary(
+        formats,
+        DestAccumulation.No,
+        mathop,
+        src_A_override=_build_paired_tile_override(
+            _bf16_tie_pairs(mathop, _ELEMENTS_PER_TILE), torch.float32
+        ),
+        dst_rounding_mode=rounding,
+        exact=True,
     )
 
 
@@ -1598,6 +1833,7 @@ def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop):
         "sources/sfpu_binary_test.cpp",
         formats,
         templates=[
+            SFPU_DST_ROUNDING_MODE(),
             generate_input_dim(input_dimensions, input_dimensions),
             MATH_OP(mathop=mathop),
             APPROX_MODE(),

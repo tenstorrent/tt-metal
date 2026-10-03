@@ -1,10 +1,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import struct
+import math
 
 import pytest
 import torch
+from helpers.bf16_ties import (
+    BF16_FRAC_BITS,
+    BF16_SIG_ONE,
+    assert_is_bf16_tie,
+    fp32_bits,
+)
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TernarySFPUGolden,
@@ -37,10 +43,15 @@ from helpers.test_variant_parameters import (
     SFPU_TERNARY_OP,
     SFPU_TERNARY_SCALAR,
 )
+from helpers.tile_constants import (
+    DEFAULT_TILE_C_DIM,
+    DEFAULT_TILE_R_DIM,
+    MAX_TILE_ELEMENTS,
+)
 from helpers.utils import passed_test
 
 _SCALAR_VALUE = 2.0
-_SCALAR_VALUE_BITS = struct.unpack("<I", struct.pack("<f", _SCALAR_VALUE))[0]
+_SCALAR_VALUE_BITS = fp32_bits(_SCALAR_VALUE)
 
 
 # Helper check function
@@ -77,7 +88,15 @@ def _run_sfpu_ternary(
     spec_A=None,
     spec_B=None,
     spec_C=None,
+    operands=None,
+    exact=False,
 ):
+    """Drive one ternary variant.
+
+    *operands* = (a, b, c) replaces the generated stimuli with explicit tensors of
+    *input_dimensions* elements each; *exact* then compares bit for bit instead of within
+    tolerance, which only a kernel that narrows with round-to-nearest-even can pass.
+    """
     # The specs below carry no seed; seed here so a near-tolerance variant cannot pass by luck.
     torch.manual_seed(0)
 
@@ -105,6 +124,15 @@ def _run_sfpu_ternary(
         spec_A=spec_c,
         spec_B=spec_c,
     )
+
+    if operands is not None:
+        explicit = []
+        for generated, given in zip((src_A, src_B, src_C), operands):
+            assert (
+                given.numel() == generated.numel()
+            ), "each explicit operand must fill the whole buffer"
+            explicit.append(given.to(generated.dtype).reshape(generated.shape))
+        src_A, src_B, src_C = explicit
 
     generate_golden = get_golden_generator(TernarySFPUGolden)
     golden = generate_golden(
@@ -155,6 +183,13 @@ def _run_sfpu_ternary(
     torch_format = format_dict[formats.output_format]
     golden_tensor = torch.tensor(golden, dtype=torch_format).flatten()
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
+
+    if exact:
+        # max_ulp=0 is the bit-exact gate: zero representable steps between result and golden.
+        assert passed_test(
+            golden_tensor, res_tensor, formats.output_format, max_ulp=0
+        ), "Result is not bit-identical to the golden"
+        return
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
@@ -254,6 +289,110 @@ def test_sfpu_ternary_edges(formats, dest_acc, mathop):
         spec_A=_TERNARY_NONZERO_A if nonzero else None,
         spec_B=_TERNARY_NONZERO_B if nonzero else None,
         spec_C=spec_C,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# bf16 round-to-nearest-even narrowing. lerp and addcdiv round their fp32 result into a bf16
+# Dest with RNE; the default tolerance (0.05) cannot tell RNE from truncation or from a miswired
+# rounding bias, so both are pinned bit for bit on exact ties. addcdiv's divisor goes through
+# the reciprocal iteration, which only a power-of-two divisor survives exactly; with c = 1.0
+# and the module's value of 2.0, value * b / c stays an exact power of two and a tie can be
+# formed. A non-power-of-two divisor rules one out.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_LERP_TIE_WEIGHT = 0.5
+# addcdiv: c = 1.0 so sfpu_reciprocal_iter<2>(c) is exactly 1.0 (Newton on 1.0 is a fixed
+# point under SFPMAD's round-to-nearest-even), and b = 2^-9 so value * b / c = 2^-8, half a
+# bf16 ULP of [1, 2).
+_ADDCDIV_TIE_DIVISOR = 1.0
+_ADDCDIV_TIE_ADDEND = math.ldexp(1.0, -(BF16_FRAC_BITS + 2))
+
+
+def _lerp_tie_operands(count, seed=0):
+    """(a, b, c) bf16 tensors of *count* lanes with a + c * (b - a) an exact fp32 tie.
+
+    b is a's upper bf16 neighbour and c = 0.5, so the exact result is a + ULP/2: b - a and the
+    product are powers of two and the sum needs nine significand bits, all exact in fp32 for
+    the kernel's SFPMAD and for torch alike. Random signs and exponents put about half the
+    lanes on an even LSB, the only ones where round-to-even and round-half-away disagree.
+    """
+    # Seeded torch draws: the same lanes every run, so a failure is reproducible.
+    gen = torch.Generator().manual_seed(seed)
+    exps = torch.randint(-20, 21, (count,), generator=gen).tolist()
+    sigs = torch.randint(0, BF16_SIG_ONE, (count,), generator=gen).tolist()
+    signs = (torch.randint(0, 2, (count,), generator=gen) * 2 - 1).tolist()
+    a, b = [], []
+    for exp, sig, sign in zip(exps, sigs, signs):
+        sig += BF16_SIG_ONE
+        a.append(sign * math.ldexp(sig, exp - BF16_FRAC_BITS))
+        b.append(sign * math.ldexp(sig + 1, exp - BF16_FRAC_BITS))
+    # Self-check on the host: every lane must be an exact tie, else the test proves nothing.
+    for x, y in zip(a, b):
+        assert_is_bf16_tie(x + _LERP_TIE_WEIGHT * (y - x), f"lerp({x}, {y}, 0.5)")
+    return (
+        torch.tensor(a, dtype=torch.bfloat16),
+        torch.tensor(b, dtype=torch.bfloat16),
+        torch.full((count,), _LERP_TIE_WEIGHT, dtype=torch.bfloat16),
+    )
+
+
+def _addcdiv_tie_operands(count):
+    """(a, b, c) bf16 tensors of *count* lanes with a + value * b / c an exact fp32 tie.
+
+    a = +/-(1 + m / 128) for every m, b = +/-2^-9 with a's sign and c = 1.0, so with the
+    module's value of 2.0 the exact result is a +/- half a bf16 ULP of [1, 2): the reciprocal
+    of 1.0 is exact, the product is a power of two and the sum needs nine significand bits,
+    all exact in fp32 for the kernel's SFPMAD chain and for torch alike. Both parities of the
+    bf16 LSB occur; m = 127 is the carry case and rounds to +/-2.0.
+    """
+    assert _SCALAR_VALUE == 2.0, "the addend is sized for value = 2.0"
+    lanes = [
+        (sign * (1.0 + m / BF16_SIG_ONE), sign * _ADDCDIV_TIE_ADDEND)
+        for sign in (1.0, -1.0)
+        for m in range(BF16_SIG_ONE)
+    ]
+    # Self-check on the host: every lane must be an exact tie, else the test proves nothing.
+    for x, y in lanes:
+        assert_is_bf16_tie(
+            x + _SCALAR_VALUE * y / _ADDCDIV_TIE_DIVISOR,
+            f"addcdiv({x}, {y}, {_ADDCDIV_TIE_DIVISOR})",
+        )
+    return (
+        torch.tensor(
+            [lanes[i % len(lanes)][0] for i in range(count)], dtype=torch.bfloat16
+        ),
+        torch.tensor(
+            [lanes[i % len(lanes)][1] for i in range(count)], dtype=torch.bfloat16
+        ),
+        torch.full((count,), _ADDCDIV_TIE_DIVISOR, dtype=torch.bfloat16),
+    )
+
+
+_TIE_OPERANDS = {
+    MathOperation.SfpuLerp: _lerp_tie_operands,
+    MathOperation.SfpuAddcdiv: _addcdiv_tie_operands,
+}
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    mathop=list(_TIE_OPERANDS),
+)
+def test_sfpu_ternary_bf16_rne_ties(formats, mathop):
+    """Exact bf16 ties through lerp's and addcdiv's narrowing must round to even, bit for bit.
+
+    Guards the RNE helper the kernels share with the binary and scalar SFPU ops: a truncating
+    store or SFPSTOCHRND (ties away from zero on Blackhole) fails half the lanes. For addcdiv
+    it also pins sfpu_reciprocal_iter<2>(1.0) == 1.0: anything else breaks every tie.
+    """
+    _run_sfpu_ternary(
+        formats,
+        DestAccumulation.No,
+        mathop,
+        input_dimensions=[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],
+        operands=_TIE_OPERANDS[mathop](MAX_TILE_ELEMENTS),
+        exact=True,
     )
 
 

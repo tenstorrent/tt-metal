@@ -1,10 +1,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import struct
+import math
 
 import pytest
 import torch
+from helpers.bf16_ties import (
+    BF16_FRAC_BITS,
+    BF16_SIG_ONE,
+    assert_is_bf16_tie,
+    fp32_bits,
+)
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import ScalarBinopGolden, get_golden_generator
@@ -29,12 +35,8 @@ from helpers.test_variant_parameters import (
     SFPU_BINOP_MODE,
     SFPU_UNARY_SCALAR,
 )
+from helpers.tile_constants import MAX_TILE_ELEMENTS
 from helpers.utils import passed_test
-
-
-def _bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
-
 
 # The scalar is a swept axis: zero, unity, a sign flip, a large multiplier, and a value
 # small enough to matter against the tolerance. Kept deliberately small -- inputs are
@@ -61,8 +63,8 @@ _ZERO_DIVISOR_UNREACHABLE = (
 def _scalar_bits_for(mathop, scalar):
     """The 32-bit pattern the kernel is given for *mathop* at *scalar*."""
     if mathop == MathOperation.ScalarDiv:
-        return _bits(1.0 / scalar)
-    return _bits(scalar)
+        return fp32_bits(1.0 / scalar)
+    return fp32_bits(scalar)
 
 
 # Keep inputs small and bounded so the bf16 result stays accurate across all five scalar
@@ -77,25 +79,36 @@ def _run_sfpu_binop_scalar(
     scalar=_PRESUBMIT_SCALAR,
     input_dimensions=[32, 32],
     spec_A=None,
+    src_A=None,
+    exact=False,
 ):
     """Drive one scalar binop variant.
 
     *spec_A* overrides the tensor operand. The scalar axis has been swept since the
     presubmit/nightly split, but the tensor operand had no knob at all and was pinned to
     the default above, so the only way to reach an edge on it was to edit this function.
+
+    *src_A* replaces the tensor operand with explicit values (one tile, *input_dimensions*
+    elements); *exact* then compares bit for bit instead of within tolerance, which only a
+    kernel that narrows with round-to-nearest-even can pass.
     """
     torch.manual_seed(0)
     scalar_bits = _scalar_bits_for(mathop, scalar)
 
     spec_a = _DEFAULT_TENSOR_SPEC if spec_A is None else spec_A
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    generated_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
         spec_A=spec_a,
     )
+    if src_A is None:
+        src_A = generated_A
+    else:
+        assert src_A.numel() == generated_A.numel(), "src_A must fill the whole operand"
+        src_A = src_A.to(generated_A.dtype).reshape(generated_A.shape)
 
     generate_golden = get_golden_generator(ScalarBinopGolden)
     golden = generate_golden(
@@ -136,6 +149,13 @@ def _run_sfpu_binop_scalar(
     torch_format = format_dict[formats.output_format]
     golden_tensor = torch.tensor(golden, dtype=torch_format).flatten()
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
+
+    if exact:
+        # max_ulp=0 is the bit-exact gate: zero representable steps between result and golden.
+        assert passed_test(
+            golden_tensor, res_tensor, formats.output_format, max_ulp=0
+        ), "Result is not bit-identical to the golden"
+        return
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
@@ -254,4 +274,53 @@ def test_sfpu_binop_scalar_edges(formats, dest_acc, mathop):
 
     _run_sfpu_binop_scalar(
         formats, dest_acc, mathop, scalar=_PRESUBMIT_SCALAR, spec_A=spec_A
+    )
+
+
+# =============================================================================
+# bf16 round-to-nearest-even narrowing. ScalarRsub is the one scalar op that rounds its fp32
+# result into a bf16 Dest with RNE (the others truncate), and the default bf16 tolerance cannot
+# tell RNE from truncation or from a miswired rounding bias, so its ties are pinned bit for bit.
+# =============================================================================
+
+# Half a bf16 ULP of [1, 2): s - x lands exactly between two bf16 neighbours for every
+# x = +/-(1 + m / 128) whose result stays in that binade.
+_RSUB_TIE_SCALAR = math.ldexp(1.0, -(BF16_FRAC_BITS + 1))
+
+
+def _rsub_tie_tensor(count):
+    """*count* bf16 values x for which s - x is an exact fp32 tie, s = _RSUB_TIE_SCALAR.
+
+    x = -(1 + m/128) gives 1 + m/128 + s in [1, 2) for every m; x = +(1 + m/128) gives
+    1 + m/128 - s, in [1, 2) for m >= 1 (m = 0 lands in [0.5, 1), where s is a whole ULP and
+    the result is exact). Both parities of the bf16 LSB occur, which is where round-to-even and
+    round-half-away differ.
+    """
+    values = [-(1.0 + m / BF16_SIG_ONE) for m in range(BF16_SIG_ONE)]
+    values += [1.0 + m / BF16_SIG_ONE for m in range(1, BF16_SIG_ONE)]
+    # Self-check on the host: every lane must be an exact tie, else the test proves nothing.
+    for x in values:
+        assert_is_bf16_tie(_RSUB_TIE_SCALAR - x, f"s - x for x = {x}")
+    return torch.tensor(
+        [values[i % len(values)] for i in range(count)], dtype=torch.bfloat16
+    )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    mathop=[MathOperation.ScalarRsub],
+)
+def test_sfpu_binop_scalar_bf16_rne_ties(formats, mathop):
+    """Exact bf16 ties through ScalarRsub's narrowing must round to even, bit for bit.
+
+    Guards the RNE helper the kernel shares with the binary and ternary SFPU ops: a truncating
+    store or SFPSTOCHRND (ties away from zero on Blackhole) fails half the lanes.
+    """
+    _run_sfpu_binop_scalar(
+        formats,
+        DestAccumulation.No,
+        mathop,
+        scalar=_RSUB_TIE_SCALAR,
+        src_A=_rsub_tie_tensor(MAX_TILE_ELEMENTS),  # one tile, the runner's default
+        exact=True,
     )

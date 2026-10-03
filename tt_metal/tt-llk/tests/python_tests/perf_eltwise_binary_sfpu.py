@@ -22,6 +22,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_OP,
     NUM_FACES,
+    SFPU_DST_ROUNDING_MODE,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
@@ -98,6 +99,7 @@ def test_perf_eltwise_binary_sfpu_float(
             MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
             ITERATIONS(iterations),
+            SFPU_DST_ROUNDING_MODE(),
         ],
         runtimes=[
             TILE_COUNT(tile_count),
@@ -179,6 +181,7 @@ def test_perf_eltwise_binary_sfpu_int(
             MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
             ITERATIONS(iterations),
+            SFPU_DST_ROUNDING_MODE(),
         ],
         runtimes=[
             TILE_COUNT(tile_count),
@@ -270,6 +273,7 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
             MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
             ITERATIONS(iterations),
+            SFPU_DST_ROUNDING_MODE(),
         ],
         runtimes=[
             TILE_COUNT(tile_count),

@@ -91,6 +91,38 @@ PERF_TEST_SCHEMAS = {
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
         "test_name_aliases": {"perf_eltwise_binary_sfpu": "perf_eltwise_binary_sfpu"},
     },
+    # ADD/SUB/RSUB with DstRoundingMode::NearestEven. Its own module so the
+    # dst_rounding column does not re-key every point of perf_eltwise_binary_sfpu.
+    "perf_eltwise_binary_sfpu_rne": {
+        "version": 1,
+        "columns": [
+            "approx_mode",
+            "dest_acc",
+            "dst_rounding",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_src",
+            "formats.sfpu_dst",
+            "iterations",
+            "loop_factor",
+            "marker",
+            "mathop",
+            "num_faces",
+            "num_faces_A",
+            "num_faces_B",
+            "tile_cnt",
+            "unpack_to_dest",
+            "unpack_transpose_faces",
+            "unpack_transpose_within_face",
+        ],
+        "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {
+            "perf_eltwise_binary_sfpu_rne": "perf_eltwise_binary_sfpu_rne"
+        },
+    },
     "perf_eltwise_unary_datacopy": {
         "version": 2,
         "columns": [
