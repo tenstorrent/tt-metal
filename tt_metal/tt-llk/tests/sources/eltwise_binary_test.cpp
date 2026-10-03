@@ -124,6 +124,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_total_tiles = INPUT_NUM_TILES_IN_BLOCK * INPUT_NUM_BLOCKS;
 #endif
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -143,6 +144,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_AB_init_<BROADCAST_TYPE>(tensor_shape, transpose);
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
@@ -214,6 +216,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t tiles_per_accumulation = input_tiles_in_block / output_tiles_in_block;
 #endif
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
@@ -224,6 +227,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
 
     {
         START_PERF_MEASURE("TILE_LOOP")
@@ -377,6 +381,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t output_num_blocks     = OUTPUT_NUM_BLOCKS;
 #endif
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
@@ -388,6 +393,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>(tensor_shape.face_r_dim, narrow_tile);
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)

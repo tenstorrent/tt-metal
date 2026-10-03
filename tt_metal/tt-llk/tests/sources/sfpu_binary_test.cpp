@@ -48,6 +48,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Mocks post the same src dvalids per tile as _llk_unpack_A_.
     const std::uint32_t tile_iters = LOOP_FACTOR * TILE_CNT;
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -60,6 +61,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_A_dst);
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
@@ -126,7 +128,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-    _llk_unpack_A_uninit_<BROADCAST_TYPE>();
+    LLK_INIT_BEGIN
+    {
+        _llk_unpack_A_uninit_<BROADCAST_TYPE>();
+    }
+    LLK_INIT_END;
 }
 
 #endif
@@ -176,6 +182,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en>(formats.unpack_A_dst);
     };
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
@@ -186,6 +193,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             ZERO_POINT);
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
@@ -309,7 +317,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-    _llk_math_eltwise_unary_datacopy_uninit_<BROADCAST_TYPE, unpack_to_dest>();
+    LLK_INIT_BEGIN
+    {
+        _llk_math_eltwise_unary_datacopy_uninit_<BROADCAST_TYPE, unpack_to_dest>();
+    }
+    LLK_INIT_END;
 }
 
 #endif
@@ -331,6 +343,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
     const Operand& buffer_Res              = params.buffer_Res;
 #endif
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, 16 * 16 /* tile_size */);
@@ -338,6 +351,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>();
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
