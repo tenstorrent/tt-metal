@@ -573,3 +573,24 @@ TEST(BufferDistributionSpecContiguous, CPU_ShardContiguousRequiresUniformShardsP
         tensor_in_pages, shard_in_pages, grid, ShardOrientation::ROW_MAJOR, ShardDistributionStrategy::CONTIGUOUS_1D);
     EXPECT_ANY_THROW((void)shard_contiguous.compute_page_mapping());
 }
+
+// Shape-only; the grid is arbitrary.
+TEST(BufferDistributionSpecContiguousPages, CPU_NumContiguousPages) {
+    const CoreRangeSet grid(CoreRange({0, 0}, {1, 0}));
+    auto make_spec = [&grid](std::initializer_list<uint32_t> tensor, std::initializer_list<uint32_t> shard) {
+        return BufferDistributionSpec(
+            tt::tt_metal::Shape(tensor), tt::tt_metal::Shape(shard), grid, ShardOrientation::ROW_MAJOR);
+    };
+
+    const auto padded = make_spec({3, 5}, {2, 2});
+    EXPECT_ANY_THROW((void)padded.num_contiguous_pages(15));
+    EXPECT_ANY_THROW((void)padded.num_contiguous_pages(0, 16));
+
+    const auto one_page_wide = make_spec({4, 6}, {4, 1});
+    EXPECT_EQ(one_page_wide.contiguous_page_stride(), 6u);
+    EXPECT_EQ(one_page_wide.num_contiguous_pages(0), 4u);
+    EXPECT_EQ(one_page_wide.num_contiguous_pages(0, 13), 3u);
+
+    const auto single_page_shard = make_spec({8, 1}, {1, 1});
+    EXPECT_EQ(single_page_shard.contiguous_page_stride(), 1u);
+}

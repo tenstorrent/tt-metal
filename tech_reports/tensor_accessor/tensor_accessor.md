@@ -174,6 +174,23 @@ bool is_local = tensor_accessor.is_local_shard(shard_id);
 
 Note: In case containers size is compile-time, then shapes, strides, coords are `std::array<uint32_t, rank/num_banks>`, otherwise `Span<uint32_t>`
 
+### Contiguous pages
+
+`num_contiguous_pages(page_id, end_page_id)` returns how many pages from `page_id` (inclusive) are contiguous in memory: page ids `page_id + k * contiguous_page_stride()` for `k` in `[0, pages)`, `get_aligned_page_size()` bytes apart. One transfer can then replace a run of per-page ones.
+
+```c++
+// end_page_id defaults to tensor_volume() for sharded accessors; it is required for interleaved ones.
+uint32_t pages = tensor_accessor.num_contiguous_pages(page_id, end_page_id);
+pages = std::min(pages, dst_capacity_pages);
+noc_async_read(tensor_accessor.get_noc_addr(page_id), l1_write_addr, pages * tensor_accessor.get_aligned_page_size());
+```
+
+- `contiguous_page_stride()` depends only on the shapes, so read it once. It is the number of banks for interleaved tensors and `1` for most sharded tensors; for a shard one page wide in the trailing dims, it is the product of those tensor dims. With a stride > 1, a run's pages land in stride order, not page-id order.
+- `end_page_id` is an exclusive page id, not a count.
+- A bulk transfer includes any padding between pages. Interleaved pages are the page size rounded up to the allocator alignment apart. That equals `get_aligned_page_size()` for the default page size from `TensorAccessorArgs`, but not for an explicit unaligned one (e.g. a row-major stick size).
+- A sharded run stops at a shard edge, even when the next shard follows in the same bank, and at the tensor edge. Starting at a shard's first page, it covers the whole shard only if the shard's page ids form one arithmetic sequence (e.g. height sharding, or a one-page-wide shard); for a multi-page-wide tile block shard it covers one shard row. Use [`shard_pages()`](./tensor_accessor_iterator.md) to walk whole shards.
+- `BufferDistributionSpec::contiguous_page_stride()` and `num_contiguous_pages()` are host twins with the same semantics.
+
 ## Tensor Accessor iterators
 You can use TensorAccessor iterators to speed up and/or simplify iteration over pages in a tensor.
 [Tensor Accessor iterators documentation.](./tensor_accessor_iterator.md)
