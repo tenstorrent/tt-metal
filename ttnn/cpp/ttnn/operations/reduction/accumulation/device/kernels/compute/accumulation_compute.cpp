@@ -7,6 +7,8 @@
 #include "api/compute/mul_int_sfpu.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/isinf_isnan.h"
+#include "api/compute/eltwise_unary/where.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
@@ -130,6 +132,28 @@ void kernel_main() {
             add_binary_tile(DST_ACC, DST_IN, DST_T);      // t = acc + y
             sub_binary_tile(DST_T, DST_ACC, DST_COMP);    // (t - acc)
             sub_binary_tile(DST_COMP, DST_IN, DST_COMP);  // c = (t - acc) - y
+            // Fix for #58986: when the running total t becomes non-finite (+inf, -inf, or NaN),
+            // the compensation term c = (t - acc) - y evaluates to NaN (inf - inf), which then
+            // poisons all subsequent elements in the scan. The compensation is meaningless once
+            // the total is non-finite (you cannot compensate infinity), so we zero it out.
+            // This preserves IEEE/PyTorch behavior: [1.0, inf, 1.0, 1.0] -> [1.0, inf, inf, inf]
+            // instead of [1.0, inf, nan, nan].
+            //
+            // Implementation: c = where(isfinite(t), c, 0)
+            // - DST_ACC (stale old acc) reused as temp for the mask
+            // - DST_IN (stale y) reused as temp for the zero constant
+            // - t-t trick: t-t is 0.0 if t finite, NaN if t is inf/NaN; isfinite() of that
+            //   gives the mask without needing a DEST-to-DEST copy of t.
+            // Note: NaN * 0 = NaN in IEEE 754, so a multiply-based mask would NOT clear a
+            // NaN compensation; the where/select is required.
+            sub_binary_tile(DST_T, DST_T, DST_ACC);       // DST_ACC = t - t (0.0 if finite, NaN if inf/NaN)
+            isfinite_tile_init();
+            isfinite_tile(DST_ACC);                       // DST_ACC = isfinite(t) ? 1.0 : 0.0
+            fill_tile_init();
+            FILL_TILE(DST_IN, 0u);                        // DST_IN = +0.0f
+            where_tile_init();
+            where_tile<DataFormat::Float32>(DST_ACC, DST_COMP, DST_IN, DST_COMP); // c = where(mask, c, 0)
+            BINARY_OP_INIT();                             // re-init for next iteration's Kahan step
             constexpr uint32_t DST_RESULT = DST_T;
             dfb_comp_obj.pop_front(ONE_TILE);
 #else
