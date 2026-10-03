@@ -629,6 +629,20 @@ def test_repeat_all_ones_shortcut_sharded_output(shape, repeat_shape, input_fact
     )
 
 
+def _nd_shard_config(shard_shape, num_cores=2, buffer_type=ttnn.BufferType.L1):
+    """ND-sharded MemoryConfig: only nd_shard_spec is set, the legacy shard_spec is empty."""
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))])
+    return ttnn.MemoryConfig(buffer_type, ttnn.NdShardSpec(ttnn.Shape(shard_shape), grid))
+
+
+def _assert_nd_output(result, output_mem_config):
+    actual = result.memory_config()
+    assert actual.nd_shard_spec == output_mem_config.nd_shard_spec, (
+        f"Expected output nd_shard_spec {output_mem_config.nd_shard_spec}, got {actual.nd_shard_spec} "
+        f"(output memory_config: {actual})"
+    )
+
+
 # All-1 repeat vector with an explicit ND-sharded output: the caller's nd_shard_spec is honored.
 @pytest.mark.parametrize(
     "input_shard_shape",
@@ -638,25 +652,100 @@ def test_repeat_all_ones_shortcut_sharded_output(shape, repeat_shape, input_fact
     ],
 )
 def test_repeat_all_ones_shortcut_nd_sharded_output(input_shard_shape, device):
-    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
-
-    def nd_config(shard_shape):
-        return ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape(shard_shape), grid))
-
     torch.manual_seed(12345)
     x = torch.rand((1, 1, 64, 64), dtype=torch.bfloat16)
-    input_mem_config = L1_INTERLEAVED if input_shard_shape is None else nd_config(input_shard_shape)
-    output_mem_config = nd_config((1, 1, 64, 32))
+    input_mem_config = L1_INTERLEAVED if input_shard_shape is None else _nd_shard_config(input_shard_shape)
+    output_mem_config = _nd_shard_config((1, 1, 64, 32))
     ttnn_input = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_mem_config)
 
     result = ttnn.repeat(ttnn_input, [1, 1, 1, 1], memory_config=output_mem_config)
 
-    actual = result.memory_config()
-    assert actual.nd_shard_spec == output_mem_config.nd_shard_spec, (
-        f"Expected output nd_shard_spec {output_mem_config.nd_shard_spec}, got {actual.nd_shard_spec} "
-        f"(output memory_config: {actual})"
-    )
+    _assert_nd_output(result, output_mem_config)
     assert_equal(x, ttnn.to_torch(result))
+
+
+# Repeat with an explicit ND-sharded output: the caller's nd_shard_spec is honored, not dropped to interleaved.
+@pytest.mark.parametrize(
+    "shape, repeat_shape, layout, input_factory, output_factory",
+    [
+        pytest.param(
+            (1, 1, 64, 64),
+            (1, 1, 1, 2),
+            ttnn.TILE_LAYOUT,
+            lambda: L1_INTERLEAVED,
+            lambda: _nd_shard_config((1, 1, 64, 64)),
+            id="interleaved_to_nd_last_dim",
+        ),
+        pytest.param(
+            (1, 1, 64, 64),
+            (1, 1, 2, 1),
+            ttnn.TILE_LAYOUT,
+            lambda: L1_INTERLEAVED,
+            lambda: _nd_shard_config((1, 1, 64, 64)),
+            id="interleaved_to_nd_height",
+        ),
+        pytest.param(
+            (1, 1, 64, 64),
+            (1, 1, 1, 2),
+            ttnn.TILE_LAYOUT,
+            lambda: _nd_shard_config((1, 1, 32, 64)),
+            lambda: _nd_shard_config((1, 1, 64, 64)),
+            id="nd_to_nd_last_dim",
+        ),
+        pytest.param(
+            (1, 2, 64, 64),
+            (1, 2, 1, 1),
+            ttnn.TILE_LAYOUT,
+            lambda: L1_INTERLEAVED,
+            lambda: _nd_shard_config((1, 1, 32, 64), num_cores=4),
+            id="interleaved_to_nd_round_robin",
+        ),
+        pytest.param(
+            (1, 1, 64, 64),
+            (1, 1, 1, 2),
+            ttnn.ROW_MAJOR_LAYOUT,
+            lambda: L1_INTERLEAVED,
+            lambda: _nd_shard_config((1, 1, 16, 128), num_cores=4),
+            id="rm_interleaved_to_nd",
+        ),
+        pytest.param(
+            (1, 1, 64, 64),
+            (1, 1, 2, 1),
+            ttnn.TILE_LAYOUT,
+            lambda: L1_INTERLEAVED,
+            lambda: _nd_shard_config((1, 1, 64, 64), buffer_type=ttnn.BufferType.DRAM),
+            id="interleaved_to_nd_dram",
+        ),
+    ],
+)
+def test_repeat_nd_sharded_output(shape, repeat_shape, layout, input_factory, output_factory, device):
+    torch.manual_seed(12345)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    output_mem_config = output_factory()
+    ttnn_input = ttnn.from_torch(x, layout=layout, device=device, memory_config=input_factory())
+
+    result = ttnn.repeat(ttnn_input, list(repeat_shape), memory_config=output_mem_config)
+
+    _assert_nd_output(result, output_mem_config)
+    assert_equal(x.repeat(*repeat_shape), ttnn.to_torch(result))
+
+
+def test_repeat_nd_sharded_preallocated_output(device):
+    torch.manual_seed(12345)
+    x = torch.rand((1, 1, 64, 64), dtype=torch.bfloat16)
+    output_mem_config = _nd_shard_config((1, 1, 64, 32), num_cores=4)
+    ttnn_input = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device, memory_config=L1_INTERLEAVED)
+    out = ttnn.from_torch(
+        torch.zeros((1, 1, 64, 128), dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=output_mem_config,
+    )
+
+    result = ttnn.repeat(ttnn_input, [1, 1, 1, 2], optional_output_tensor=out)
+
+    _assert_nd_output(result, output_mem_config)
+    assert_equal(x.repeat(1, 1, 1, 2), ttnn.to_torch(out))
 
 
 # TILE universal-I/O matrix: essential input × output routing paths.
