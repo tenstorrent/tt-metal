@@ -108,6 +108,43 @@ def zeros_rm(md, shape):
     return _PERSIST[key]
 
 
+_SORT_OK = [True]
+
+
+def perm_table(first, n=WINDOW, k=WINDOW + TOPK):
+    """[1,1,n,k] int32 gather indices that move the valid window rows of the first chunk (positions >= 0: n_w = min(i + 1, 128) of them) in FRONT of the selected ids:
+    out[k'] = in[k'] for k' < n_w, in[128 + k' - n_w] for n_w <= k' < n_w + 512, in[127] (a sentinel when n_w < 128) after. Identity for every later chunk.
+    """
+    i = torch.arange(n).view(-1, 1)
+    c = torch.arange(k).view(1, -1)
+    if not first:
+        return c.expand(n, k).reshape(1, 1, n, k).to(torch.int32).contiguous()
+    nw = (i + 1).clamp(max=WINDOW)
+    p = torch.where(c < nw, c, torch.where(c < nw + TOPK, WINDOW + c - nw, torch.full_like(c.expand(n, k), WINDOW - 1)))
+    return p.reshape(1, 1, n, k).to(torch.int32).contiguous()
+
+
+def compact_rows(idx, perm):
+    """sparse_sdpa wants the sentinels of an index row as a contiguous TAIL (the reader binary-searches the first sentinel). The first rows of the first chunk have a
+    partly invalid window in front of the selected ids: gather the first 128 rows with ``perm`` (``perm_table``). idx [1,1,C,640] uint32 RM; perm [1,1,128,640] uint32.
+    """
+    C = idx.shape[2]
+    n = min(WINDOW, C)
+    if not _SORT_OK[0]:
+        return idx
+    try:
+        head = ttnn.slice(idx, [0, 0, 0, 0], [1, 1, n, idx.shape[3]])
+        g = ttnn.gather(head, 3, perm)
+    except Exception as e:  # noqa: BLE001
+        print(
+            f"WARNING prefill_sparse.compact_rows: ttnn.gather failed ({str(e)[:300]}); first-chunk rows keep sentinels in the middle (wrong for queries < 128)",
+            flush=True,
+        )
+        _SORT_OK[0] = False
+        return idx
+    return g if n == C else ttnn.concat([g, ttnn.slice(idx, [0, 0, n, 0], [1, 1, C, idx.shape[3]])], dim=2)
+
+
 def _itabs(pa, start, n, step):
     """(cos, sin) [1,1,n,128] tables of the indexer (last 128 columns of the attention's 512-wide tables: 1 / 0 outside the rotated dims)."""
     key = ("itab", id(pa.md), start, n, step)
@@ -389,6 +426,12 @@ class DSV41PrefillSparse:
             )
         return _CONST[key]
 
+    def _perm(self):
+        key = ("perm", id(self.md))
+        if key not in _CONST:
+            _CONST[key] = _rep(self.md, perm_table(True), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+        return _CONST[key]
+
     def _small_idx(self, s0, C):
         """ids of all visible entries (<= 512 of them) per query, valid first."""
         r = self.pa.ratio
@@ -444,6 +487,8 @@ class DSV41PrefillSparse:
                 idx = ttnn.concat([win, small], dim=3)
             else:
                 idx = ttnn.concat([win, ttnn.slice(ids, [u, 0, 0, 0], [u + 1, 1, C, TOPK])], dim=3)
+            if s0 == 0:
+                idx = compact_rows(idx, self._perm())
             qu = ttnn.to_layout(ttnn.slice(qh, [u, 0, 0, 0], [u + 1, LOCAL_HEADS, C, HEAD_DIM]), ttnn.ROW_MAJOR_LAYOUT)
             qu = ttnn.concat([qu, zero_heads], dim=1)  # [1,32,C,512]
             o = ttnn.transformer.sparse_sdpa(
@@ -518,6 +563,8 @@ class DSV41PrefillSparse:
             ctx.sp_win, ctx.sp_vis = {}, {}
             ctx.upd_hooks.append(self._upd_hook)
             ctx.build_hooks.append(self._build_hook)
+        if not hasattr(ctx, "sp_perm"):
+            ctx.sp_perm = _rep(self.md, perm_table(True), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
         if r not in ctx.sp_win:
             ctx.sp_win[r] = _rep(
                 self.md, torch.zeros(1, 1, ctx.C, WINDOW, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
@@ -525,6 +572,10 @@ class DSV41PrefillSparse:
 
     @staticmethod
     def _upd_hook(ctx, s0):
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(perm_table(s0 == 0), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ctx._rep),
+            ctx.sp_perm,
+        )
         for r, dev in ctx.sp_win.items():
             L, C = ctx.L[r], ctx.C
             i = torch.arange(C).view(-1, 1)
@@ -579,7 +630,9 @@ class DSV41PrefillSparse:
         zero_heads = zeros_rm(self.md, [1, PAD_HEADS - LOCAL_HEADS, C, HEAD_DIM])
         outs = []
         for u in range(U):
-            idx = ttnn.concat([win, ttnn.slice(ids, [u, 0, 0, 0], [u + 1, 1, C, TOPK])], dim=3)
+            idx = compact_rows(
+                ttnn.concat([win, ttnn.slice(ids, [u, 0, 0, 0], [u + 1, 1, C, TOPK])], dim=3), ctx.sp_perm
+            )
             qu = ttnn.to_layout(ttnn.slice(qh, [u, 0, 0, 0], [u + 1, LOCAL_HEADS, C, HEAD_DIM]), ttnn.ROW_MAJOR_LAYOUT)
             qu = ttnn.concat([qu, zero_heads], dim=1)
             o = ttnn.transformer.sparse_sdpa(
