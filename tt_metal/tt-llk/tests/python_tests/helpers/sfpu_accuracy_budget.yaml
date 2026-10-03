@@ -35,3 +35,9 @@ SigmoidAppx:
 
 GeluAppx:
   - *coarse_lut_tolerance
+
+# erfc decays to 0, so the default atol=0.05 passes any tail it is given, including one
+# pinned at a constant 2.4e-12 by an input clamp (#51137). The floor is a few times
+# FP32's smallest normal, below which the SFPU flushes a result that underflows anyway.
+Erfc:
+  - {metric: tolerance, atol: 1.0e-37}
