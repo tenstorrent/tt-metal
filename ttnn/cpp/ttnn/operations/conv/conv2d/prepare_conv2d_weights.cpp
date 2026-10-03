@@ -1742,6 +1742,7 @@ std::optional<ttnn::Tensor> prepare_conv_bias_internal(
             is_1d_depthwise_conv(params.groups, out_channels, out_channels, 1, params.input_height, true);
         const uint32_t bias_width_padded = round_up(out_channels_padded, params.weight_block_w_ntiles * 32);
         if (conv_is_1d_depthwise) {
+            validate_host_conv_bias(bias_tensor_);
             bias_tensor_ = convert_conv_bias_tensor_to_depthwise_tiled_layout(bias_tensor_, bias_width_padded);
         } else {
             // Inline the operations from conv_bias_layout_convert

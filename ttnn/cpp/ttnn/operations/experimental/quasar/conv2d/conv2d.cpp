@@ -496,8 +496,10 @@ Result conv2d_L1(
     const uint32_t in_channels_padded = tt::round_up(
         in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
 
+    // has_bias=false: the Quasar depthwise factory does not support bias (it throws), so biased
+    // 1D depthwise convs must not be claimed here; they fall back to the stock conv2d path.
     const bool conv_is_1d_depthwise =
-        is_1d_depthwise_conv(groups, in_channels, out_channels, kernel_size[0], input_height, bias_tensor.has_value());
+        is_1d_depthwise_conv(groups, in_channels, out_channels, kernel_size[0], input_height, false);
     const bool coalesce_1d_depthwise_kw_reads = should_coalesce_1d_depthwise_conv_reads(
         conv_is_1d_depthwise,
         parallel_config.shard_scheme,
