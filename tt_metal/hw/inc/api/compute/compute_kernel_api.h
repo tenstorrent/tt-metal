@@ -360,6 +360,19 @@ ALWI void log_with_base_tile_init() {
 // clang-format on
 template <bool fast_and_approx = false, bool base_is_two = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void log_with_base_tile(uint32_t idst, uint32_t base_scale) {
+    if constexpr (!is_fp32_dest_acc_en && !fast_and_approx && base_is_two == true) {
+        if (base_scale == 0x3fb8aa3bu) {
+            MATH(SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                is_fp32_dest_acc_en,
+                calculate_log,
+                (APPROX, fast_and_approx, true /* HAS_BASE_SCALING */, is_fp32_dest_acc_en, 32, base_is_two),
+                idst,
+                VectorMode::None,
+                base_scale));
+            return;
+        }
+    }
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
