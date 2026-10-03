@@ -59,16 +59,21 @@ inline std::uint32_t get_output_tile_index(std::uint8_t output_id, std::uint32_t
     std::uint32_t l1_tile_index;
     LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(output_id);
     if constexpr (out_of_order_output) {
-        // Use the write tile index to track position within DFB
-        l1_tile_index = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx + output_tile_index;
+        // Use the write tile index to track position within DFB. dfb_slot_cursor_offset_units()
+        // (dataflow_buffer_interface.h) divides the entry-index delta by stride_size_tiles to get the
+        // byte offset, so the per-tile step here must be a full stride_size_tiles, not 1, or tiles
+        // within a batch collapse onto the same L1 offset when stride_size_tiles > 1 (#56194).
+        l1_tile_index = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx +
+                        output_tile_index * static_cast<std::uint32_t>(local_dfb_interface.stride_size_tiles);
     } else {
         if constexpr (untilize) {
             // TODO: uplift this option from BBE
         } else {
-            // In-order packing: use fifo_wr_tile_ptr as the incrementing tile offset
+            // In-order packing: use fifo_wr_tile_ptr as the incrementing tile offset. Same stride
+            // requirement as above applies here (#56194).
             l1_tile_index = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx +
                             local_dfb_interface.wr_entry_ptr;
-            local_dfb_interface.wr_entry_ptr++;
+            local_dfb_interface.wr_entry_ptr += static_cast<std::uint32_t>(local_dfb_interface.stride_size_tiles);
         }
     }
     return l1_tile_index;
