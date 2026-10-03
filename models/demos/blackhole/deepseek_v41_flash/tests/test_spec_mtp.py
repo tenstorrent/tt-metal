@@ -4,7 +4,8 @@
 """M2: DSpark drafter on the device vs the CPU reference (reference/ref_spec_mtp.py -> mtp_ref.pt, built from the GSM8K greedy run of ref_spec_accept).
 Per round: ``write_main`` for a block of n verify positions (hidden states of the 3 target layers) then ``draft`` -> 5 draft tokens, markov-biased logits and
 confidence vs the reference; then a traced timing of (write_main + draft).
-Env: DSV41_TILE (users = 8 * TILE, default 1 -> 2 users/row, 2 -> 4 users/row), DSV41_NV (verify rows per user n, default 1)."""
+Env: DSV41_TILE (users = 8 * TILE, default 1 -> 2 users/row, 2 -> 4 users/row), DSV41_NV (verify rows per user n, default 1).
+"""
 
 import os
 import time

@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """M1: spec attention (paged, blocks of n rows per user) vs the ORIGINAL single-token attention classes on the device, same weights, same state,
-random unit-rms inputs: block outputs vs the original attention run step by step. Env: DSV41_N (default 2), DSV41_LAYERS ("0,2,3")."""
+random unit-rms inputs: block outputs vs the original attention run step by step. Env: DSV41_N (default 2), DSV41_LAYERS ("0,2,3").
+"""
 
 import os
 
