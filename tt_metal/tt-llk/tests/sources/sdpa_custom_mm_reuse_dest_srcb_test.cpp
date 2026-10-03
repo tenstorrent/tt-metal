@@ -64,6 +64,7 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "params.h"
 
 // Globals required by the test framework.
 std::uint32_t unp_cfg_context          = 0;
@@ -86,10 +87,15 @@ static constexpr ckernel::DstSync DST_SYNC = ckernel::DstSync::SyncHalf;
 // packing all of DEST and finding the O accumulator at physical tile 2 (a
 // tile-0 preload of P plus a tile-2 O accumulator, non-overlapping). Confirm the
 // 64-datum offset unit on a BH p100a before trusting the exact placement.
-constexpr std::uint32_t SRC_INDEX = 0;      // P DEST_TARGET offset (SrcB source) -> tile 0
-constexpr std::uint32_t SRC_TILE  = 0;      // P tile base for datacopy preload
-constexpr std::uint32_t DST_INDEX = 64 * 2; // O DEST_TARGET offset -> physical tile 2
-constexpr std::uint32_t DST_TILE  = 2;      // O tile base for pack (= DST_INDEX / 64)
+// DST_FIRST swaps the two: O at tile 0 and P at tile 2, the placement compute_sdpa_chunk uses.
+#ifndef DST_FIRST
+#define DST_FIRST false
+#endif
+constexpr std::uint32_t SRC_INDEX = DST_FIRST ? 64 * 2 : 0; // P DEST_TARGET offset (SrcB source)
+constexpr std::uint32_t SRC_TILE  = DST_FIRST ? 2 : 0;      // P tile base for datacopy preload
+constexpr std::uint32_t DST_INDEX = DST_FIRST ? 0 : 64 * 2; // O DEST_TARGET offset
+constexpr std::uint32_t DST_TILE  = DST_FIRST ? 0 : 2;      // O tile base for pack (= DST_INDEX / 64)
+static_assert(!DST_FIRST || (KT_DIM + 1) / 2 + SRC_TILE <= 8, "P tiles above O must stay inside the DEST half");
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -97,7 +103,6 @@ constexpr std::uint32_t DST_TILE  = 2;      // O tile base for pack (= DST_INDEX
 #include "experimental/llk_unpack_A_sdpa.h"
 #include "llk_unpack_A.h"
 #include "llk_unpack_common.h"
-#include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -158,7 +163,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
-#include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -198,7 +202,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
-#include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {

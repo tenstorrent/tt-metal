@@ -48,7 +48,7 @@ from conftest import blackhole_only, skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import MatmulGolden
 from helpers.llk_params import DestAccumulation, MathFidelity
-from helpers.pack import pack_bfp4_b, pack_bfp8_b, pack_bfp16, pack_fp32
+from helpers.pack import pack_bfp2_b, pack_bfp4_b, pack_bfp8_b, pack_bfp16, pack_fp32
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
@@ -60,7 +60,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM, FACE_C_DIM
 from helpers.tilize_untilize import tilize, untilize
-from helpers.unpack import unpack_bfp4_b, unpack_bfp8_b
+from helpers.unpack import unpack_bfp2_b, unpack_bfp4_b, unpack_bfp8_b
 from helpers.utils import passed_test
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
@@ -77,11 +77,13 @@ _PACKERS = {
     DataFormat.Float32: pack_fp32,
     DataFormat.Bfp8_b: lambda tensor: bytes(pack_bfp8_b(tensor)),
     DataFormat.Bfp4_b: lambda tensor: bytes(pack_bfp4_b(tensor)),
+    DataFormat.Bfp2_b: lambda tensor: bytes(pack_bfp2_b(tensor)),
 }
 
 _BFP_UNPACKERS = {
     DataFormat.Bfp8_b: unpack_bfp8_b,
     DataFormat.Bfp4_b: unpack_bfp4_b,
+    DataFormat.Bfp2_b: unpack_bfp2_b,
 }
 
 
@@ -121,6 +123,10 @@ def _run_custom_mm(M, kt, ct, formats, dest_acc, calls=CUSTOM_MM_CALLS()):
     in0_format = formats.input_format
     in1_format = formats.input_format_B
     out_format = formats.output_format
+    if in1_format == DataFormat.Bfp2_b:
+        raise ValueError(
+            "Bfp2_b weights are not supported on the plain custom_mm path; compressed_custom_mm takes Bfp2_b tiles"
+        )
     in0_packer = _PACKERS[in0_format]
     in1_packer = _PACKERS[in1_format]
 
@@ -342,3 +348,52 @@ def test_custom_mm_multi_call(M, kt, ct, num_calls, in1_format):
     _run_custom_mm(
         M, kt, ct, formats, DestAccumulation.No, CUSTOM_MM_CALLS(num_calls=num_calls)
     )
+
+
+BFP2_CASES = [
+    pytest.param(
+        8,
+        4,
+        4,
+        InputOutputFormat(
+            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp2_b
+        ),
+        id="M8-k4-ct4-bfp2",
+    ),
+    pytest.param(
+        8,
+        4,
+        8,
+        InputOutputFormat(
+            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp2_b
+        ),
+        id="M8-k4-ct8-bfp2",
+    ),
+    pytest.param(
+        8,
+        2,
+        1,
+        InputOutputFormat(
+            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp2_b
+        ),
+        id="M8-k2-ct1-bfp2",
+    ),
+    pytest.param(
+        1,
+        2,
+        2,
+        InputOutputFormat(
+            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp2_b
+        ),
+        id="M1-k2-ct2-bfp2",
+    ),
+]
+
+
+@pytest.mark.parametrize("M,kt,ct,formats", BFP2_CASES)
+def test_custom_mm_rejects_bfp2_in1(formats, M, kt, ct):
+    """The driver refuses Bfp2_b weights on the plain path, as the unpack init asserts; no hardware needed."""
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="Bfp2_b weights are not supported"
+    ):
+        _run_custom_mm(M, kt, ct, formats, DestAccumulation.No)

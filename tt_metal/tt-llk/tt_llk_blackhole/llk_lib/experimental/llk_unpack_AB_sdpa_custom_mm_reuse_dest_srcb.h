@@ -162,9 +162,8 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_(
 
     t6_semaphore_get(semaphore::UNPACK_SYNC);
 
-    // Wait for all contexts to be free
-    wait_for_next_context(1);
-    reset_config_context();
+    // No second context poll here: the next call polls before it writes its configuration.
+    switch_config_context(unp_cfg_context);
 
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);

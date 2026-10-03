@@ -56,6 +56,7 @@ ALWI void sdpa_custom_mm_block_init_short(
 
 // configure_mask_extent supports masks spanning ct_dim*2 SrcB rows and restores
 // the Q operand's face height before the subsequent matmul unpack.
+// ct_dim / signal_granularity FPU->SFPU posts per call must fit the 4-bit Tensix semaphore (at most 15).
 template <bool read_transposed = false, std::uint32_t signal_granularity = 1, bool configure_mask_extent = false>
 ALWI void sdpa_custom_mm_block(
     const std::uint32_t in0_cb_id,

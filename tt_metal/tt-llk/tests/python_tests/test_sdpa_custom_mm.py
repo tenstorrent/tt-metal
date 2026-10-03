@@ -70,6 +70,9 @@ from ttexalens.tt_exalens_lib import write_to_device
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
 
+# Depth of a Tensix semaphore (ckernel_structs.h: SEMAPHORE_BIT_COUNT 4).
+SEMAPHORE_MAX_VALUE = 15
+
 # ttsim functional gap (NOT a golden/driver defect).
 #
 # sdpa_custom_mm drives the L1 -> SrcB counter-overflow walk in the promoted header
@@ -206,6 +209,11 @@ def _run(M, K, N, signal_granularity, read_transposed, mm_transpose):
     assert (
         ct % signal_granularity == 0
     ), "ct_dim must be divisible by signal_granularity"
+    if ct // signal_granularity > SEMAPHORE_MAX_VALUE:
+        raise ValueError(
+            f"ct_dim / signal_granularity = {ct // signal_granularity} FPU->SFPU posts per call exceed the "
+            f"4-bit Tensix semaphore ({SEMAPHORE_MAX_VALUE}); the core would hang"
+        )
 
     torch.manual_seed(0)
     torch_a = torch.randn((M, K), dtype=torch.bfloat16)
@@ -359,6 +367,19 @@ def test_sdpa_custom_mm_signal_granularity(request, shape_sg):
     )
     M, K, N = shape
     _run(M, K, N, signal_granularity=sg, read_transposed=False, mm_transpose=False)
+
+
+def test_sdpa_custom_mm_rejects_semaphore_overflow():
+    """The driver refuses more FPU_SFPU posts per call than the 4-bit semaphore holds; no hardware needed."""
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="posts per call exceed"
+    ):
+        _run(
+            8, 256, 512, signal_granularity=1, read_transposed=False, mm_transpose=False
+        )
+    assert 16 // 16 <= SEMAPHORE_MAX_VALUE
+    assert 15 // 1 <= SEMAPHORE_MAX_VALUE
+    assert 16 // 1 > SEMAPHORE_MAX_VALUE
 
 
 @dataclass

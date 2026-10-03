@@ -87,6 +87,8 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
  *   false (default): Normal operation without signaling
  *   true: Signal SFPU semaphore for pipelining with subsequent operations
  *
+ * With signal_output, nt_dim / output_granularity FPU->SFPU posts per call must fit the 4-bit Tensix semaphore (15).
+ *
  * Usage pattern for partial K:
  *   for (k = 0; k < num_k_subblocks - 1; k++) {
  *     sdpa_custom_mm_reuse_dest_srcb_block(..., false);  // Accumulate without signaling

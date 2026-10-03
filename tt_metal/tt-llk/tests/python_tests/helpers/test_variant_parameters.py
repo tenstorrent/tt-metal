@@ -2016,6 +2016,16 @@ class SDPA_CUSTOM_MM_REUSE_DEST(TemplateParameter):
 
 
 @dataclass
+class SDPA_REUSE_DEST_LAYOUT(TemplateParameter):
+    """DEST placement of the sdpa_custom_mm_reuse_dest_srcb kernels: dst_first puts O at tile 0 and P above it."""
+
+    dst_first: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"#define DST_FIRST {str(self.dst_first).lower()}"
+
+
+@dataclass
 class SDPA_REDUCE_ROW_POOL(TemplateParameter):
     """Select MAX vs SUM for the experimental sdpa_reduce_row op.
 

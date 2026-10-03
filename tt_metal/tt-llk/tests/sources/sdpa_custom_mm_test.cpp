@@ -81,6 +81,11 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #endif
 constexpr std::uint32_t SDPA_PASSES = SDPA_MASK_REENTRY ? 2 : 1;
 
+// PACK takes its FPU_SFPU tokens only after the matmul, so every post of a call must fit the semaphore.
+static_assert(
+    CT_DIM / SIGNAL_GRANULARITY <= ckernel::semaphore::SEMAPHORE_MAX_VALUE,
+    "CT_DIM / SIGNAL_GRANULARITY FPU->SFPU posts per call must fit the 4-bit Tensix semaphore (at most 15)");
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "experimental/llk_unpack_AB_sdpa_custom_mm.h"
