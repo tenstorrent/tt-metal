@@ -67,6 +67,12 @@ inline uint32_t untilize_block_tiles(const CombineFabric2dInputs& tensor_args) {
     return 1;
 }
 
+// Token slots in the dispatched buffer, which dispatch_fabric2d sizes as max_dispatch_buffer_token_size and drops
+// tokens past. Validation pins every dim before these two to 1, so the slot index is the whole of the page index.
+inline uint32_t dispatch_capacity(const CombineFabric2dInputs& tensor_args) {
+    return static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-2]);
+}
+
 inline uint32_t num_routed_experts(const CombineFabric2dInputs& tensor_args) {
     return static_cast<uint32_t>(tensor_args.expert_token_counts.logical_shape()[-1]);
 }

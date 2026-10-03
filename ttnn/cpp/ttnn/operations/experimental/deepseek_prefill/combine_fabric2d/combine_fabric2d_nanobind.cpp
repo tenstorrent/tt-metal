@@ -32,6 +32,13 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
                                   Must be REPLICATED along the dispatch-group axis, since every chip
                                   needs every origin chip's boundaries for the experts it hosts.
 
+        dispatched_buffer and dispatched_metadata are 1 in every dim before the last two, as dispatch
+        leaves them, so their second-to-last dim is dispatch's max_dispatch_buffer_token_size. A token
+        dispatch dropped for want of room, one whose page falls past it, is skipped. Its output slot,
+        like that of a pick routed to another dispatch group, is not written and keeps whatever the
+        output buffer held: unlike `combine`, the output is never zeroed, so mask those picks before
+        reducing over top-k.
+
         Returns the combined output, (1, 1, seq_len_per_chip, num_experts_per_tok, emb_dim) BFLOAT16
         ROW_MAJOR per device.
 
