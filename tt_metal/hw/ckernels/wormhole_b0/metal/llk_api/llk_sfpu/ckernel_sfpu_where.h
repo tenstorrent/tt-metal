@@ -8,25 +8,29 @@
 #include <cstdint>
 
 #include "llk_defs.h"
+#include "llk_math_eltwise_ternary_sfpu_params.h"
 #include "lltt.h"
 #include "sfpi.h"
 
-namespace ckernel::sfpu
-{
+namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, DataFormat data_format, int ITERATIONS>
-inline void _calculate_where_(
-    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_in2, const std::uint32_t dst_index_out)
-{
+inline void calculate_where(
+    const std::uint32_t dst_index_in0,
+    const std::uint32_t dst_index_in1,
+    const std::uint32_t dst_index_in2,
+    const std::uint32_t dst_index_out) {
     static_assert(
-        data_format == DataFormat::Float32 || data_format == DataFormat::Float16_b || data_format == DataFormat::Int32 || data_format == DataFormat::UInt32,
-        "Unsupported data format for _calculate_where_(). Only Float32, Int32, UInt32, and Float16_b are allowed.");
+        data_format == DataFormat::Float32 || data_format == DataFormat::Float16_b ||
+            data_format == DataFormat::Int32 || data_format == DataFormat::UInt32,
+        "Unsupported data format for calculate_where(). Only Float32, Int32, UInt32, and Float16_b are allowed.");
 
     int offset0 = (dst_index_in0 * 32) << 1;
     int offset1 = (dst_index_in1 * 32) << 1;
     int offset2 = (dst_index_in2 * 32) << 1;
 
-    constexpr InstrModLoadStore mod0 = data_format == DataFormat::Float16_b ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
+    constexpr InstrModLoadStore mod0 =
+        data_format == DataFormat::Float16_b ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
 
 #ifdef DISABLE_SFPLOADMACRO
     int offset3 = (dst_index_out * 32) << 1;
@@ -40,13 +44,11 @@ inline void _calculate_where_(
     TT_SFPSTORE(p_sfpu::LREG1, mod0, ADDR_MOD_2, offset3);
 
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++)
-    {
+    for (int d = 0; d < ITERATIONS; d++) {
         lltt::replay(0, 6);
     }
 #else
-    if (dst_index_out == dst_index_in0)
-    {
+    if (dst_index_out == dst_index_in0) {
         // We use macros 0 and 2 to schedule the following, which achieves 3 cycles per input row of 32 values:
 
         // Load Unit               | Simple Unit                    | Store Unit
@@ -61,13 +63,10 @@ inline void _calculate_where_(
         TT_SFPLOAD(0, mod0, ADDR_MOD_2, offset2);
 
 #pragma GCC unroll 8
-        for (int d = 0; d < ITERATIONS; d++)
-        {
+        for (int d = 0; d < ITERATIONS; d++) {
             lltt::replay(0, 3);
         }
-    }
-    else
-    {
+    } else {
         // We use macros 1 and 2 to schedule the following, which achieves 4 cycles per input row of 32 values:
 
         // Load Unit               | Simple Unit                    | Store Unit
@@ -86,8 +85,7 @@ inline void _calculate_where_(
         TT_SFPSTORE(0, mod0, ADDR_MOD_2, offset3);
 
 #pragma GCC unroll 8
-        for (int d = 0; d < ITERATIONS; d++)
-        {
+        for (int d = 0; d < ITERATIONS; d++) {
             lltt::replay(0, 4);
         }
     }
@@ -95,11 +93,19 @@ inline void _calculate_where_(
 }
 
 template <bool APPROXIMATION_MODE>
-inline void _init_where_()
-{
+inline void where_init() {
+    // Program ADDR_MOD_6 (dest increment 2) here rather than relying on the SfpuType-selected
+    // LLK init: this kernel stores through ADDR_MOD_2, which addr_mod_base maps to hardware slot 6.
+    addr_mod_t{
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 2},
+    }
+        .set(ADDR_MOD_6);
+
 #ifndef DISABLE_SFPLOADMACRO
     // InstructionTemplate[0]
-    TTI_SFPSETCC(0, 0, 12, 6); // SFPSETCC_MOD1_LREG_EQ0
+    TTI_SFPSETCC(0, 0, 12, 6);  // SFPSETCC_MOD1_LREG_EQ0
 
     // InstructionTemplate[1]
     TTI_SFPENCC(0, 0, 13, 0);
@@ -107,9 +113,9 @@ inline void _init_where_()
     // Macro 0: special case handling for where(a, b, c, a), i.e. write the output to the first input.
     {
         constexpr std::uint32_t simple_bits = 0x00 | 0x00 | (0 << 3) | 4;
-        constexpr std::uint32_t mad_bits    = 0;
-        constexpr std::uint32_t round_bits  = 0;
-        constexpr std::uint32_t store_bits  = 0x00 | 0x00 | (2 << 3) | 3;
+        constexpr std::uint32_t mad_bits = 0;
+        constexpr std::uint32_t round_bits = 0;
+        constexpr std::uint32_t store_bits = 0x00 | 0x00 | (2 << 3) | 3;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
@@ -119,7 +125,7 @@ inline void _init_where_()
     // Macro 1: otherwise, handle where(a, b, c, d).
     {
         constexpr std::uint32_t simple_bits = 0x00 | 0x00 | (0 << 3) | 4;
-        constexpr std::uint32_t mad_bits    = 0;
+        constexpr std::uint32_t mad_bits = 0;
 
         TTI_SFPCONFIG((mad_bits << 8) | simple_bits, 4 + 1, 1);
     }
@@ -127,7 +133,7 @@ inline void _init_where_()
     // Macro 2:
     {
         constexpr std::uint32_t simple_bits = 0x00 | 0x00 | (0 << 3) | 5;
-        constexpr std::uint32_t mad_bits    = 0;
+        constexpr std::uint32_t mad_bits = 0;
 
         TTI_SFPCONFIG((mad_bits << 8) | simple_bits, 4 + 2, 1);
     }
@@ -137,4 +143,25 @@ inline void _init_where_()
 #endif
 }
 
-} // namespace ckernel::sfpu
+/**
+ * @brief Op class for where(condition, true_value, false_value) on tiles in Dest.
+ *
+ * @tparam APPROXIMATION_MODE: Approximation mode, unused by this op
+ * @tparam data_format: Format of the tiles in Dest, values = <Float32/Float16_b/Int32/UInt32>; only run() needs it
+ * @tparam ITERATIONS: Rows of 32 datums processed per face, default = 8
+ */
+template <bool APPROXIMATION_MODE, DataFormat data_format = DataFormat::Invalid, int ITERATIONS = 8>
+struct Where : SfpuTernaryOp<Where<APPROXIMATION_MODE, data_format, ITERATIONS>> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0,
+        const std::uint32_t dst_index_in1,
+        const std::uint32_t dst_index_in2,
+        const std::uint32_t dst_index_out) {
+        calculate_where<APPROXIMATION_MODE, data_format, ITERATIONS>(
+            dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out);
+    }
+
+    static inline __attribute__((always_inline)) void init_op() { where_init<APPROXIMATION_MODE>(); }
+};
+
+}  // namespace ckernel::sfpu

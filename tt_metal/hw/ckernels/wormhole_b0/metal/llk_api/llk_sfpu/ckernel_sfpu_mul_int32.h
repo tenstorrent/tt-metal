@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
@@ -12,10 +13,11 @@
 namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+inline void mul_int32(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        constexpr uint dst_tile_size = 64;
+        constexpr std::uint32_t dst_tile_size = 64;
 
         // Split the 32-bit input values into 11-bit chunks:
         //
@@ -109,6 +111,10 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
 
 template <bool APPROXIMATION_MODE>
 inline void mul_int32_init() {
+    // Program ADDR_MOD_6 (dest increment 2) here rather than relying on the SfpuType-selected
+    // LLK init: this kernel stores through ADDR_MOD_2, which addr_mod_base maps to hardware slot 6.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+
     sfpi::vConstIntPrgm0 = 0x7ff;
     sfpi::vConstIntPrgm1 = -11;
     sfpi::vConstFloatPrgm2 = 8388608.0f;  // 2**23
