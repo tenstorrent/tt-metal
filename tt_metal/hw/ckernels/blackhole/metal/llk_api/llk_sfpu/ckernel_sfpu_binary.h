@@ -251,6 +251,15 @@ inline void calculate_sfpu_binary_div(
             // If in0*r = +/-inf, then the residual e = in0 - (+/-inf)*in1 = -/+inf and
             // result + e*r = inf + (-inf) = NaN, which would corrupt IEEE overflow behavior.
             v_if(sfpi::is_finite(result)) {
+                // The residual cannot be formed for an infinite divisor either, and that case
+                // reaches here because the quotient is finite: r = 1/inf = 0, result = in0 * 0
+                // = 0, and result * in1 is 0 * inf, so the residual is NaN and the refinement
+                // destroys a correct zero. A NaN divisor is left to refine, which is how its
+                // NaN reaches the result.
+                // One integer compare: `&& !sfpi::is_inf(in1)` in the v_if does not compile.
+                v_and(
+                    sfpi::as<sfpi::vInt>(sfpi::setsgn(in1, 0)) !=
+                    sfpi::as<sfpi::vInt>(sfpi::vFloat(std::numeric_limits<float>::infinity())));
                 // Residual (Markstein) refinement removes the double-rounding of in0 * round(1/in1).
                 // The residual subtraction is exact under Sterbenz's lemma.
                 sfpi::vFloat e = in0 - result * in1;
