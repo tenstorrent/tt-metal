@@ -21,7 +21,8 @@
 
 void kernel_main() {
     const auto NCHt = get_arg(args::NCHt);                // Number of NCH tiles
-    const auto Wt = get_arg(args::Wt);                    // Width in tiles
+    const auto Wt = get_arg(args::Wt);                    // Width in tiles (local, per core)
+    const auto Wt_full = get_arg(args::Wt_full);          // Full global row width in tiles
     const auto tile_offset = get_arg(args::tile_offset);  // Tile offset for this core
     const bool is_merge_core = get_arg(args::is_merge_core);
     const auto reduce_core_noc_x = get_arg(args::reduce_core_noc_x);
@@ -65,6 +66,16 @@ void kernel_main() {
     }
 
     uint32_t inp_tile_idx = tile_offset;
+    // 2D core grid row stride: tiles to skip past the other column-cores' segments at each
+    // local-row boundary, landing on this core's column-segment of the next global row.
+    // In the 1D path Wt_full == Wt, so this is a no-op and the walk stays bit-identical.
+    const uint32_t row_jump = Wt_full - Wt;
+
+    // Partial statistics use the intermediate format (Float32 with fp32_dest_acc_en).
+    // Loop-invariant shipment state, hoisted out of the per-row loop below.
+    const uint32_t o_write_size = dfb_out_buf.get_tile_size();
+    const uint32_t worker_offset = o_write_size * y;
+    UnicastEndpoint reduce_ep;
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // read input tiles
@@ -99,38 +110,33 @@ void kernel_main() {
 #endif
 
         }  // wt loop
+        inp_tile_idx += row_jump;
 
+        // Per-row (not once after the loop): each row's partial must be shipped independently,
+        // otherwise rows beyond the first are never merged for NCHt > 1.
+        dfb_out_buf.wait_front(onetile);
+
+        noc.async_write(
+            dfb_out_buf,
+            reduce_ep,
+            o_write_size,
+            {.offset_bytes = 0},
+            {.noc_x = reduce_core_noc_x,
+             .noc_y = reduce_core_noc_y,
+             // The gather buffer is laid out identically on every core in the column, so this core's own
+             // write pointer gives the same base address the merge core's instance has. The write itself
+             // lands on the remote core, not here.
+             .addr = dfb_x2_merge_buf.get_write_ptr() + worker_offset});
+        noc.async_write_barrier();
+        dfb_out_buf.pop_front(onetile);
+
+        reducer_sem.up(noc, reduce_core_noc_x, reduce_core_noc_y, 1);
+        noc.async_atomic_barrier();
+
+        if (is_merge_core) {
+            reducer_sem.wait(num_cores_to_wait);
+            dfb_x2_merge_buf.push_back(num_cores_to_wait);
+            reducer_sem.set(0);
+        }
     }  // ncht loop
-
-    // wait on the partial output and then write it to the merge core over the NoC
-    dfb_out_buf.wait_front(onetile);
-
-    // Partial statistics use the intermediate format, which is Float32 with fp32_dest_acc_en.
-    uint32_t o_write_size = dfb_out_buf.get_tile_size();
-    uint32_t worker_offset = o_write_size * y;
-
-    UnicastEndpoint reduce_ep;
-    noc.async_write(
-        dfb_out_buf,
-        reduce_ep,
-        o_write_size,
-        {.offset_bytes = 0},
-        {.noc_x = reduce_core_noc_x,
-         .noc_y = reduce_core_noc_y,
-         // The gather buffer is laid out identically on every core in the column, so this core's own
-         // write pointer gives the same base address the merge core's instance has. The write itself
-         // lands on the remote core, not here.
-         .addr = dfb_x2_merge_buf.get_write_ptr() + worker_offset});
-    noc.async_write_barrier();
-    dfb_out_buf.pop_front(onetile);
-
-    // increase semaphore
-    reducer_sem.up(noc, reduce_core_noc_x, reduce_core_noc_y, 1);
-    noc.async_atomic_barrier();
-
-    if (is_merge_core) {
-        reducer_sem.wait(num_cores_to_wait);
-        dfb_x2_merge_buf.push_back(num_cores_to_wait);
-        reducer_sem.set(0);
-    }
 }

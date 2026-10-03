@@ -77,6 +77,8 @@ void kernel_main() {
     constexpr auto beta_is_row_major = get_arg(args::beta_is_row_major);
     constexpr auto dfb_length = get_arg(args::dfb_length);
     constexpr auto Wt = get_arg(args::Wt);  // Width in tiles
+    // Full global row width in tiles; equals Wt in the 1D path, larger in the 2D core grid path.
+    constexpr auto Wt_full = get_arg(args::Wt_full);
     constexpr auto reduce_factor = get_arg(args::reduce_factor);
 
     const auto src_a = TensorAccessor(tensor::src);
@@ -207,5 +209,8 @@ void kernel_main() {
 #endif
 #endif
         }
+        // 2D core grid: advance from the end of this core's local row to the start of
+        // its next local row. No-op in the 1D path, where Wt_full == Wt.
+        inp_tile_idx += Wt_full - Wt;
     }  // ncht loop
 }

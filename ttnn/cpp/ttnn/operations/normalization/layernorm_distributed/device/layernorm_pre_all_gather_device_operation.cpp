@@ -65,7 +65,9 @@ void LayerNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
         }
     }
 
-    // Additional validation for 2D core grid - it doesn't support Welford
+    // Additional validation for 2D core grid - it doesn't support Welford, and its compute kernel
+    // currently emits rmsnorm-only (1-wide) statistics, so LayerNorm - which needs E(x) as well -
+    // is rejected loudly rather than silently producing wrong results downstream.
     if (args.use_2d_core_grid.has_value() && args.use_2d_core_grid.value()) {
         if (std::holds_alternative<LayerNormDefaultProgramConfig>(args.program_config)) {
             const auto& program_config = std::get<LayerNormDefaultProgramConfig>(args.program_config);
@@ -73,6 +75,10 @@ void LayerNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
                 TT_FATAL(false, "Welford layernorm variation does not support 2D core grid.");
             }
         }
+        TT_FATAL(
+            args.norm_type == LayerNormDistributedType::RMSNORM,
+            "2D core grid pre_all_gather currently supports RMSNorm statistics only; LayerNorm requires "
+            "E(x) in addition to E(x^2), which the 2D compute kernel does not emit.");
     }
 }
 

@@ -274,7 +274,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
         .dfb_bindings = {m2::DFBBinding{
             .dfb_spec_name = PRE1D_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = PRE1D_OUTPUT_T, .accessor_name = "dst"}},
-        .compile_time_args = {{"blk", writer_block_size}},
+        // Wt == Wt_full: the shared writer's row stride is a no-op here, preserving the old flat write order.
+        .compile_time_args = {{"blk", writer_block_size}, {"Wt", out0_tiles}, {"Wt_full", out0_tiles}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
@@ -589,7 +590,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
         .compile_time_args = {{"blk", block_size}, {"num_cores_to_wait", cores_y}},
         .runtime_arg_schema =
             {.runtime_arg_names =
-                 {"NCHt", "Wt", "tile_offset", "is_merge_core", "reduce_core_noc_x", "reduce_core_noc_y", "y"}},
+                 {"NCHt", "Wt", "tile_offset", "is_merge_core", "reduce_core_noc_x", "reduce_core_noc_y", "y", "Wt_full"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
     if (fuse_pre_add) {
@@ -605,7 +606,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
         .dfb_bindings = {m2::DFBBinding{
             .dfb_spec_name = PRE2D_OUT_FINAL, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = PRE2D_OUTPUT_T, .accessor_name = "dst"}},
-        .compile_time_args = {{"blk", writer_block_size}},
+        // Wt == Wt_full: the shared writer's row stride is a no-op here, preserving the old flat write order.
+        .compile_time_args = {{"blk", writer_block_size}, {"Wt", out0_tiles}, {"Wt_full", out0_tiles}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
@@ -736,8 +738,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
 
             uint32_t num_tile_rows_per_core = tiles_per_core_x;
 
-            uint32_t in_tile_offset = (x * Wt) + (y * tiles_per_core_y);
-            uint32_t out_tile_offset = x * out0_tiles;
+            // Core (x, y) owns global rows [x * tiles_per_core_x, (x + 1) * tiles_per_core_x):
+            // the x index is a core index, not a row index, so it must be scaled by the rows
+            // per core. Without the tiles_per_core_x factor the cores' row ranges overlap and
+            // tail rows are never read or written when tiles_per_core_x > 1.
+            uint32_t in_tile_offset = (x * tiles_per_core_x * Wt) + (y * tiles_per_core_y);
+            uint32_t out_tile_offset = x * tiles_per_core_x * out0_tiles;
 
             m2::AddRuntimeArgsForNode(
                 reader_run.runtime_arg_values,
@@ -748,7 +754,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
                  {"is_merge_core", static_cast<uint32_t>(is_merge_core)},
                  {"reduce_core_noc_x", static_cast<uint32_t>(merge_core.x)},
                  {"reduce_core_noc_y", static_cast<uint32_t>(merge_core.y)},
-                 {"y", y}});
+                 {"y", y},
+                 // The factory's Wt is the full global row width in tiles; the reader's Wt arg
+                 // above is the local (per-core) width, so the reader needs both for its stride.
+                 {"Wt_full", Wt}});
             if (is_merge_core) {
                 m2::AddRuntimeArgsForNode(
                     writer_run.runtime_arg_values,
