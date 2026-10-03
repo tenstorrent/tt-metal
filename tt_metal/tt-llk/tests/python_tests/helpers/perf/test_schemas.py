@@ -768,6 +768,30 @@ PERF_TEST_SCHEMAS = {
             "perf_sfpu_generic_moe_gate_topk": "perf_sfpu_generic_moe_gate_topk"
         },
     },
+    "perf_sum_reduce_scalar": {
+        "version": 1,
+        "columns": [
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "loop_factor",
+            "marker",
+            "math_fidelity",
+            "num_faces_c_dim_A",
+            "num_faces_c_dim_B",
+            "num_faces_r_dim_A",
+            "num_faces_r_dim_B",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {"perf_sum_reduce_scalar": "perf_sum_reduce_scalar"},
+    },
     "perf_transpose_dest": {
         "version": 4,
         "columns": [
