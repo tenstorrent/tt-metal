@@ -61,7 +61,7 @@ inline void calculate_sigmoid() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void sigmoid_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (!APPROXIMATION_MODE) {
