@@ -61,8 +61,24 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
     }
 
     const auto& wg0_shape = w_gate[0]->get_value().logical_shape();
-    if (wg0_shape[-1] != hidden_dim) {
-        throw std::runtime_error("moe_ffn_swiglu_fw: w_gate[0] inner dim must equal grouped's hidden_dim.");
+    if (wg0_shape.rank() != 4U || wg0_shape[0] != 1U || wg0_shape[1] != 1U || wg0_shape[-1] != hidden_dim) {
+        throw std::runtime_error("moe_ffn_swiglu_fw: w_gate[0] must have shape [1, 1, intermediate_dim, hidden_dim].");
+    }
+    const uint32_t intermediate_dim = wg0_shape[-2];
+    for (uint32_t e = 0; e < num_experts; ++e) {
+        const auto& gate_shape = w_gate[e]->get_value().logical_shape();
+        const auto& up_shape = w_up[e]->get_value().logical_shape();
+        const auto& down_shape = w_down[e]->get_value().logical_shape();
+        const bool gate_matches = gate_shape.rank() == 4U && gate_shape[0] == 1U && gate_shape[1] == 1U &&
+                                  gate_shape[-2] == intermediate_dim && gate_shape[-1] == hidden_dim;
+        const bool up_matches = up_shape.rank() == 4U && up_shape[0] == 1U && up_shape[1] == 1U &&
+                                up_shape[-2] == intermediate_dim && up_shape[-1] == hidden_dim;
+        const bool down_matches = down_shape.rank() == 4U && down_shape[0] == 1U && down_shape[1] == 1U &&
+                                  down_shape[-2] == hidden_dim && down_shape[-1] == intermediate_dim;
+        if (!gate_matches || !up_matches || !down_matches) {
+            throw std::runtime_error(
+                "moe_ffn_swiglu_fw: every expert must use w_gate/w_up [1, 1, I, H] and w_down [1, 1, H, I].");
+        }
     }
 
     const uint32_t t_cap_tiles = std::max(1U, (token_capacity + 31U) / 32U);
@@ -95,7 +111,6 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
     // activated and then into d_gate_proj/d_up_proj's slack rows, but those slack rows are
     // never read by the bwd matmuls (dW_* slice K to expert offsets, dX_via_* write only
     // expert slots). So skip the zero for those two and leave them uninitialized.
-    const uint32_t intermediate_dim = wg0_shape[-2];
     auto* device = &ttml::autograd::ctx().get_device();
     const auto cfg = make_var_mm_config(device);
     const auto dtype = grouped_value.dtype();
