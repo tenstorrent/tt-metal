@@ -1500,9 +1500,28 @@ _BF16_EXHAUSTIVE_OPS = [
     (MathOperation.Sigmoid, ApproximationMode.No, 1),
 ]
 # Boards where the op keeps its stock kernel, which this sweep does not test.
-_BF16_STOCK_BOARDS = {
-    MathOperation.Sigmoid: (ChipArchitecture.WORMHOLE,),
+_BF16_STOCK_BOARDS = {}
+# Special input classes where the kernel returns its stock kernel's class instead of torch's.
+_BF16_STOCK_SPECIALS = {
+    MathOperation.Sigmoid: {
+        ChipArchitecture.BLACKHOLE: (
+            "neg_nan",
+            "pos_nan",
+        ),
+        ChipArchitecture.WORMHOLE: (
+            "neg_nan",
+            "pos_nan",
+        ),
+    },
 }
+
+
+def _special_class(value):
+    sign = "neg" if struct.unpack("<I", struct.pack("<f", value))[0] >> 31 else "pos"
+    kind = (
+        "nan" if value != value else ("inf" if abs(value) == float("inf") else "zero")
+    )
+    return f"{sign}_{kind}"
 
 
 @pytest.mark.nightly
@@ -1533,6 +1552,8 @@ def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode, max_ulp):
     )
     if _gate_unspecified_nan_sign(mathop, formats, dest_acc, nonfinite):
         specials += [float("inf"), float("-inf"), float("nan"), _NEGATIVE_NAN]
+    kept = _BF16_STOCK_SPECIALS.get(mathop, {}).get(TestConfig.CHIP_ARCH, ())
+    specials = [value for value in specials if _special_class(value) not in kept]
     # Through the bit pattern: a float-to-bfloat16 cast drops a NaN's sign.
     bits = torch.tensor(specials, dtype=torch.float32).view(torch.int32) >> 16
     src_A[-len(specials) :] = bits.to(torch.int16).view(torch.bfloat16).to(src_A.dtype)

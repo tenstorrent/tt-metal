@@ -146,7 +146,6 @@ ALWI void sigmoid_tile(uint32_t idst) {
 #ifdef ARCH_QUASAR
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_sigmoid, (8 /*ITERATIONS*/), idst, vec_mode));
 #else
-#if defined(ARCH_BLACKHOLE)
     if constexpr (!is_fp32_dest_acc_en && !fast_and_approx && vec_mode == VectorMode::RC) {
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
@@ -157,7 +156,6 @@ ALWI void sigmoid_tile(uint32_t idst) {
             VectorMode::None));
         return;
     }
-#endif
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
