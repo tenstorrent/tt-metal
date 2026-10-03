@@ -5,6 +5,7 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
@@ -13,6 +14,7 @@
 #include "ttnn/operations/core/core.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 #include <tt-metalium/hal.hpp>
 
 namespace ttnn {
@@ -149,7 +151,11 @@ ttnn::Tensor slice(
     auto resolve_mc = [&](const ttnn::Tensor& source,
                           std::optional<tt::tt_metal::ShardOrientation> orientation_hint = std::nullopt) {
         auto resolved_mc = output_memory_config;
-        if (resolved_mc.is_sharded() && !resolved_mc.shard_spec().has_value()) {
+        // A populated nd_shard_spec (true ND sharding, e.g. CONTIGUOUS_1D) is already fully specified;
+        // only synthesize a fresh legacy spec below for configs with neither shard_spec nor
+        // nd_shard_spec, so we don't clobber an already-correct ND result.
+        if (resolved_mc.is_sharded() && !resolved_mc.shard_spec().has_value() &&
+            !resolved_mc.nd_shard_spec().has_value()) {
             const auto& in_mc = source.memory_config();
             if (in_mc.is_sharded() && in_mc.memory_layout() == resolved_mc.memory_layout() &&
                 in_mc.shard_spec().has_value()) {
@@ -240,12 +246,11 @@ ttnn::Tensor slice(
     // output doesn't reuse the input's (oversized) spec. Covers HEIGHT/WIDTH/BLOCK. (Issue #38016)
     // Runs before the composite decision below so both that decision and the composite path's own
     // resolve_mc see the final spec — rescaling can turn an aligned shard row into a sub-aligned one.
-    if (!memory_config_arg.has_value() && !optional_output_tensor.has_value() && input_tensor.is_sharded() &&
-        input_rank >= 2) {
+    if (!memory_config_arg.has_value() && !optional_output_tensor.has_value() && input_tensor.is_sharded()) {
         const auto& mem_layout = output_memory_config.memory_layout();
-        if (mem_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
-            mem_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED ||
-            mem_layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
+        if (input_rank >= 2 && (mem_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
+                                mem_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED ||
+                                mem_layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED)) {
             const auto& shard_spec_val = output_memory_config.shard_spec().value();
 
             // Compute output dimensions, tile-aligned if using TILE path
@@ -307,6 +312,43 @@ ttnn::Tensor slice(
                     tt::tt_metal::ShardSpec(shard_spec_val.grid, new_shard_shape, shard_spec_val.orientation);
                 output_memory_config = MemoryConfig(
                     output_memory_config.memory_layout(), output_memory_config.buffer_type(), new_shard_spec);
+            }
+        } else if (
+            mem_layout == tt::tt_metal::TensorMemoryLayout::ND_SHARDED &&
+            output_memory_config.nd_shard_spec().has_value()) {
+            // True ND sharding (e.g. CONTIGUOUS_1D) has no legacy 2D equivalent, so the HEIGHT/WIDTH/
+            // BLOCK rescale above can't apply; rescale the ND shard shape to the sliced output dims
+            // instead, preserving the caller's grid/distribution strategy. (Issue #46954)
+            const auto& nd_shard_spec_val = output_memory_config.nd_shard_spec().value();
+            const auto& input_padded_shape = input_tensor.padded_shape();
+            if (nd_shard_spec_val.shard_shape.rank() <= input_rank && input_padded_shape.rank() == input_rank) {
+                ttsl::SmallVector<uint32_t> output_dims(input_rank);
+                for (size_t i = 0; i < input_rank; i++) {
+                    output_dims[i] = output_dim_i(i, modified_ends);
+                }
+                if (!rm_only) {
+                    output_dims[input_rank - 2] =
+                        std::max(tt::round_up(output_dims[input_rank - 2], tile_shape[0]), tile_shape[0]);
+                    output_dims[input_rank - 1] =
+                        std::max(tt::round_up(output_dims[input_rank - 1], tile_shape[1]), tile_shape[1]);
+                }
+
+                auto new_nd_spec = ttnn::operations::data_movement::common::rescale_nd_shard_spec_for_output(
+                    nd_shard_spec_val,
+                    input_padded_shape,
+                    ttnn::Shape(output_dims),
+                    input_tensor.dtype(),
+                    PageConfig(rm_only ? Layout::ROW_MAJOR : Layout::TILE, input_tensor.tensor_spec().tile()),
+                    output_memory_config.buffer_type());
+
+                if (new_nd_spec != nd_shard_spec_val) {
+                    const bool was_range_lockstep =
+                        tt::tt_metal::experimental::range_lockstep_allocation::is_range_lockstep_allocation(
+                            output_memory_config);
+                    output_memory_config = MemoryConfig(output_memory_config.buffer_type(), new_nd_spec);
+                    tt::tt_metal::experimental::range_lockstep_allocation::set_range_lockstep_allocation(
+                        output_memory_config, was_range_lockstep);
+                }
             }
         }
     }
@@ -510,6 +552,9 @@ ttnn::Tensor slice(
         std::optional<Tensor> start_opt = output_tensor_start;
         std::optional<Tensor> end_opt = output_tensor_end;
 
+        // No caller-supplied memory_config / output tensor: the config is inherited from the input, so
+        // the device op may rescale an ND shard shape to the sliced output (Issue #46954).
+        const bool output_mem_config_inherited = !memory_config_arg.has_value() && !optional_output_tensor.has_value();
         auto res = ttnn::prim::slice(
             input_tensor,
             dummy_start,
@@ -522,7 +567,8 @@ ttnn::Tensor slice(
             slice_dim,
             num_devices,
             sub_core_grids,
-            optional_output_tensor);
+            optional_output_tensor,
+            output_mem_config_inherited);
         return res;
     }  // convert the Tensor to Vector
     std::vector<T> output_tensor_start_vector = output_tensor_start.to_vector<T>();
