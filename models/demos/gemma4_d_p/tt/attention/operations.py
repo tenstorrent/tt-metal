@@ -109,8 +109,19 @@ def project(hidden_states, weight, memory_config=None, into_reduce_scatter=False
     return out
 
 
+# Most tile rows whose QKV projection output goes to L1: chunk 4096 at CP8 (16 tile rows per device).
+_MAX_L1_QKV_M_TILES = 16
+
+
 def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None, kv_tied: bool = False):
-    """Project to QKV, or QK when kv_tied selects the narrow tied weight."""
+    """Project to QKV, or QK when kv_tied selects the narrow tied weight.
+
+    Up to _MAX_L1_QKV_M_TILES tile rows the output goes to L1 rather than DRAM: the matmul's writer otherwise finishes
+    ~12 us after its math, ~0.7 ms per chunk at 2048 and ~0.8 ms at 4096. The caller frees it after the head split,
+    before attention allocates its circular buffers.
+    """
+    if memory_config is None and hidden_states.padded_shape[-2] // ttnn.TILE_SIZE <= _MAX_L1_QKV_M_TILES:
+        memory_config = ttnn.L1_MEMORY_CONFIG
     return project(hidden_states, weights.wqk if kv_tied else weights.wqkv, memory_config=memory_config)
 
 
