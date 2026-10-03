@@ -37,6 +37,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
 #endif
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         // Configure unpacker for Float16_b format
@@ -53,6 +54,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
@@ -104,6 +106,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const std::uint32_t block_height = BLOCK_RT_DIM;
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         // Initialize datacopy from srcA to dest
@@ -124,6 +127,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
@@ -213,6 +217,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
 #endif
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         // Configure packer hardware
@@ -224,6 +229,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>();
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)

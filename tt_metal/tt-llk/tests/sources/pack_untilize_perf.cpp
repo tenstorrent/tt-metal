@@ -46,6 +46,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
 #endif
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
@@ -61,6 +62,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             4 /* num_faces */);
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
 
     {
         START_PERF_MEASURE("TILE_LOOP")
@@ -101,6 +103,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     constexpr bool is_int_fpu_en = false;
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
 
@@ -111,6 +114,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_reconfig_remap_wrapper_(true);
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
 
     {
         START_PERF_MEASURE("TILE_LOOP")
@@ -187,6 +191,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     constexpr bool UNTILIZE = true;
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
 
@@ -196,6 +201,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_untilize_init_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(formats.pack_src, formats.pack_dst, FACE_R_DIM, 4 /* num_faces */);
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
 
     {
         START_PERF_MEASURE("TILE_LOOP")
@@ -227,8 +233,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-
-    _llk_pack_untilize_uninit_wrapper_(formats.pack_src, FACE_R_DIM);
+    LLK_INIT_BEGIN
+    {
+        _llk_pack_untilize_uninit_wrapper_(formats.pack_src, FACE_R_DIM);
+    }
+    LLK_INIT_END;
 }
 
 #endif

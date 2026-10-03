@@ -48,6 +48,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     LLK_ASSERT(FULL_RT_DIM * FULL_CT_DIM == TILE_CNT, "FULL_RT_DIM * FULL_CT_DIM must be equal to TILE_CNT");
     constexpr std::uint32_t src = 0x65000;
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -62,6 +63,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false /* narrow_tile */);
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
 
     {
         START_PERF_MEASURE("TILE_LOOP")
@@ -89,7 +91,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-    _llk_unpack_tilize_uninit_wrapper_(formats.unpack_A_dst);
+    LLK_INIT_BEGIN
+    {
+        _llk_unpack_tilize_uninit_wrapper_(formats.unpack_A_dst);
+    }
+    LLK_INIT_END;
 }
 
 #endif
@@ -113,6 +119,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const bool is_int_fpu_en = false;
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
@@ -127,6 +134,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
 
     {
         START_PERF_MEASURE("TILE_LOOP")
@@ -208,6 +216,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     static constexpr bool UNTILIZE = false;
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         const bool skip_bh_tilize_workaround = _llk_pack_skip_bh_tilize_workaround_wrapper_(formats.unpack_A_src);
@@ -235,6 +244,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
 

@@ -77,6 +77,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // would make the 32-bit-input + dest_acc=Yes typecasts uncompilable.
     const bool UNPACK_ACC_TO_DEST = false;
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
 
@@ -91,6 +92,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_A_dst);
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
 
@@ -147,6 +149,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const DataCopyType data_copy_type = DataCopyType::A2D;
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
 
@@ -171,6 +174,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             TYPECAST_OUT_FORMAT>();
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
 
@@ -331,6 +335,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces   = params.num_faces;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
 #endif
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
 
@@ -343,6 +348,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
 

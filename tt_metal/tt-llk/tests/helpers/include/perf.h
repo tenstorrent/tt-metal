@@ -55,6 +55,16 @@ inline void _perf_pack_section_end()
 #endif
 }
 
+// With the barrier, INIT and the code after the measured loop run out of line at the end of the kernel code (sections.ld)
+// on 512 B, so changes to them cannot move the loop; by value, so nothing the loop uses escapes, and noipa keeps them out.
+#if defined(LLK_DBG_BARRIER)
+#define LLK_INIT_BEGIN [=]() __attribute__((noipa, section(".llk_init_text"), aligned(512)))
+#define LLK_INIT_END   ()
+#else
+#define LLK_INIT_BEGIN
+#define LLK_INIT_END
+#endif
+
 inline void _perf_unpack_set_valid(std::uint32_t source)
 {
     std::uint32_t set_a = source == ckernel::SrcA ? 1 : 0;

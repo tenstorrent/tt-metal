@@ -195,7 +195,13 @@ public:
         if (is_opened)
         {
             const std::uint64_t end_timestamp = ckernel::read_wall_clock();
+#if defined(LLK_DBG_BARRIER) // the id hashes the source line: a fixed lui + addi keeps its size from moving the code after it
+            std::uint32_t id;
+            asm volatile("lui %0, %%hi(%1)\n\taddi %0, %0, %%lo(%1)" : "=r"(id) : "i"(id16));
+            zone_record(static_cast<std::uint16_t>(id), start_timestamp, end_timestamp);
+#else
             zone_record(id16, start_timestamp, end_timestamp);
+#endif
         }
         ckernel::fence_compiler();
     }

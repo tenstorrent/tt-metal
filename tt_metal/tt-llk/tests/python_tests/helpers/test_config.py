@@ -1219,6 +1219,14 @@ class TestConfig:
             return ""
         return '#include "barrier.h"\n'
 
+    def _wormhole_perf_barrier(self) -> bool:
+        """Wormhole perf builds on hardware: compiled with LLK_DBG_BARRIER and started with the barrier commands."""
+        return (
+            self.profiler_build == ProfilerBuild.Yes
+            and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
+            and not TestConfig.TEST_TARGET.run_simulator
+        )
+
     def _kernel_placement_include(self) -> str:
         """C++ snippet that pins run_kernel at a fixed address (kernel_placement.h) in profiler builds, the only
         ones that are timed; the alignment would cost the other kernels code space. The fuser writes its own.
@@ -1400,6 +1408,10 @@ class TestConfig:
 
         if self.profiler_build == ProfilerBuild.Yes:
             OPTIONS_COMPILE += "-DLLK_PROFILER "
+        if self._wormhole_perf_barrier():
+            # BRISC restarts the TRISCs at every rendezvous from 512 B aligned points and INIT runs out of line,
+            # so a code change outside the measured code cannot move it (see barrier.h)
+            OPTIONS_COMPILE += "-DLLK_DBG_BARRIER "
 
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
@@ -2032,7 +2044,11 @@ class TestConfig:
             ):
                 commit_brisc_command(
                     TestConfig.TENSIX_LOCATION,
-                    BriscCmd.UPDATE_START_ADDR_CACHE_AND_START,
+                    (
+                        BriscCmd.UPDATE_START_ADDR_CACHE_AND_START_DBG_BARRIER
+                        if self._wormhole_perf_barrier()
+                        else BriscCmd.UPDATE_START_ADDR_CACHE_AND_START
+                    ),
                     timeout=brisc_cmd_timeout,
                 )
                 return
@@ -2041,7 +2057,11 @@ class TestConfig:
             case BootMode.BRISC:
                 commit_brisc_command(
                     TestConfig.TENSIX_LOCATION,
-                    BriscCmd.START_TRISCS,
+                    (
+                        BriscCmd.START_TRISCS_DBG_BARRIER
+                        if self._wormhole_perf_barrier()
+                        else BriscCmd.START_TRISCS
+                    ),
                     timeout=brisc_cmd_timeout,
                 )
             case BootMode.TRISC:

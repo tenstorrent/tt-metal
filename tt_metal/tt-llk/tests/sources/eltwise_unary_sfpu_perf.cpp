@@ -48,6 +48,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const EltwiseBinaryReuseDestType reuse_dest_type = EltwiseBinaryReuseDestType::NONE;
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
 
@@ -64,6 +65,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_A_dst);
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
 
@@ -123,6 +125,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const DataCopyType data_copy_type = DataCopyType::A2D;
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
 
@@ -147,6 +150,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             FUSED_SORT>();
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
 
@@ -309,6 +313,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
     const auto& buffer_Res          = params.buffer_Res;
 #endif
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
 
@@ -321,6 +326,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
 

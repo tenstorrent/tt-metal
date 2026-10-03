@@ -52,6 +52,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A         = params.buffer_A;
 #endif
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -60,6 +61,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_A_src, formats.unpack_A_dst, FAST_UNTILIZE_BFP_B_INPUT ? 1 : FAST_UNTILIZE_FIRST_UNIT_DIM);
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
@@ -124,10 +126,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
+    LLK_INIT_BEGIN
     {
         ZONE_SCOPED("UNINIT")
         ckernel::_llk_unpack_fast_untilize_uninit_();
     }
+    LLK_INIT_END;
 }
 
 #endif
@@ -143,6 +147,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
 #endif
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<FAST_UNTILIZE_INTERNAL_DEST_SYNC, is_fp32_dest_acc_en>();
@@ -150,6 +155,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         llk_math_fast_untilize_init();
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
@@ -203,12 +209,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-
+    LLK_INIT_BEGIN
     {
         // Keep this zone on a distinct line to avoid 16-bit profiler hash collisions.
         ZONE_SCOPED("UNINIT")
         llk_math_fast_untilize_uninit();
     }
+    LLK_INIT_END;
 }
 
 #endif
@@ -246,6 +253,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
     }
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_dest_init_<FAST_UNTILIZE_INTERNAL_DEST_SYNC, is_fp32_dest_acc_en>();
@@ -254,6 +262,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ckernel::_llk_pack_fast_untilize_init_<ckernel::FAST_UNTILIZE_MAX_UNIT_DIM, FULL_CT_DIM>(formats.pack_src, formats.pack_dst);
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -326,34 +335,38 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
+    LLK_INIT_BEGIN
     {
-        ZONE_SCOPED("UNINIT")
-        ckernel::_llk_pack_fast_untilize_uninit_<ckernel::FAST_UNTILIZE_MAX_UNIT_DIM, FULL_CT_DIM>(formats.pack_src);
-    }
-
-    if (NUM_GUARD > 1)
-    {
-        volatile std::uint16_t* result_tile = reinterpret_cast<volatile std::uint16_t*>(buffer_Res[total_tiles + NUM_GUARD - 1]);
-        for (std::uint32_t i = 0; i < tile_bytes / 2; i++)
         {
-            result_tile[i] = 0;
+            ZONE_SCOPED("UNINIT")
+            ckernel::_llk_pack_fast_untilize_uninit_<ckernel::FAST_UNTILIZE_MAX_UNIT_DIM, FULL_CT_DIM>(formats.pack_src);
         }
-        result_tile[0] = 0x4680;
 
-        for (std::uint32_t g = 0; g < NUM_GUARD - 1; g++)
+        if (NUM_GUARD > 1)
         {
-            volatile std::uint16_t* guard = reinterpret_cast<volatile std::uint16_t*>(buffer_Res[total_tiles + g]);
-            std::uint32_t corrupted       = 0;
+            volatile std::uint16_t* result_tile = reinterpret_cast<volatile std::uint16_t*>(buffer_Res[total_tiles + NUM_GUARD - 1]);
             for (std::uint32_t i = 0; i < tile_bytes / 2; i++)
             {
-                if (guard[i] != 0xACAF)
-                {
-                    corrupted++;
-                }
+                result_tile[i] = 0;
             }
-            result_tile[g + 1] = static_cast<std::uint16_t>(corrupted);
+            result_tile[0] = 0x4680;
+
+            for (std::uint32_t g = 0; g < NUM_GUARD - 1; g++)
+            {
+                volatile std::uint16_t* guard = reinterpret_cast<volatile std::uint16_t*>(buffer_Res[total_tiles + g]);
+                std::uint32_t corrupted       = 0;
+                for (std::uint32_t i = 0; i < tile_bytes / 2; i++)
+                {
+                    if (guard[i] != 0xACAF)
+                    {
+                        corrupted++;
+                    }
+                }
+                result_tile[g + 1] = static_cast<std::uint16_t>(corrupted);
+            }
         }
     }
+    LLK_INIT_END;
 }
 
 #endif
