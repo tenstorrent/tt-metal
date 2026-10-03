@@ -142,4 +142,34 @@ Read-only30-second monitor evidence:
 Results, artifact IDs, exact runtime provenance and final elapsed agent-work window
 remain pending. Monitor dispatched CI through completion; retry only infrastructure/
 configuration failures, not low reward under the accepted policy.
+
+### GPQA inference milestone — 14:08 UTC
+
+The live counters show10 normal completions, zero inference errors, aborts,
+repetition stops or GPQA output-cap stops. The sole earlier `length` finish is
+the4-token readiness request. Summed completed-request server duration minus
+readiness is **1986.425698s (33m06.426s)**; this is not yet the complete harness
+duration or a correctness score. Accuracy remains pending saved result artifacts.
+The first128-input benchmark request is active on the same server. Readiness
+itself took99.630708s, TTFT99.563694s; do not replace it with the prior runner's
+2.931s warm-cache measurement. Startup and per-shape TTFT are included honestly.
+
+Workflow source is QB2main `2994334344d9dbee435502bb8b0d06f28342deb4`;
+referenced tt-shield workflows resolve to `ba2f03318608be52c5cb2085469598a89dcfa0fc`.
+Synthetic serving uses pinned vLLM0.13.0's default greedy streamed chat requests,
+without the agentic seed/guard. This preserves the historical benchmark policy.
+
+Exact dispatch (same immutable image value shown in provenance):
+
+```sh
+gh workflow run 342177897 --repo tenstorrent/tt-agentic-bringup-qb2 --ref main \
+  -f model=gemma-4-26B-A4B-it -f runner-label=bh-qb-ge -f device-type=p300x2 \
+  -f workflow=release \
+  -f docker-image=ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:ad58effd178b9d8c7689a392159532d30aea0c1fe24bec82c06dbc0d3ebf4bbd \
+  -f tt-metal-git-ref=c9ec3469f1b875e7e5e505660c4421e5126e8dad \
+  -f inference-server-git-ref=c2d737f215201dbda02880c85f2a529ec70a0e11 \
+  -f vllm-git-ref=c9cfebcf0490066ff85e1e3fba2c7d456ce5ce42 \
+  -f impl-of-model=gemma4-autoport -f run-full-evals=false \
+  -f run-ai-summary=false -f create-issue-comment=false
+```
 Keep large logs/CSV/Tracy outside git under `/home/mvasiljevic/gemma4-eval-speed-evidence`.
