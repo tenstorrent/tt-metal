@@ -122,7 +122,7 @@ Results from Wormhole (single chip, DP=1), comparing torch CPU vs TTNN.
 
 **Memory config strategy:**
 - **Gated Attention:** DRAM everywhere (L1 provides zero benefit; see [analysis](#l1-memory-configuration-analysis))
-- **Gated DeltaNet:** Conditional — `L1_MEMORY_CONFIG` for T ≤ 256, DRAM for T > 256 (`_L1_SEQ_THRESHOLD = 256` in `ttnn_gated_deltanet.py`)
+- **Gated DeltaNet:** L1 for single-token recurrent decode; DRAM for multi-token chunked execution so the sequential scan kernel owns the L1 space reserved for its static circular buffers
 
 **Column key:** T = sequence length, B = batch size, PCC = Pearson Correlation Coefficient (1.0 = perfect match).
 
@@ -157,8 +157,10 @@ TTNN uses `ttnn.transformer.scaled_dot_product_attention` (fused FlashAttention-
 
 - **H** — attention heads, **K** — key/query head dim, **V** — value head dim, **chunk_size** — tokens processed in parallel per chunk
 - Recurrent state per head is a K×V = 128×256 matrix (fixed size, independent of T)
-- T < chunk_size: automatic fallback to recurrent mode
-- Memory: L1 for T ≤ 256 (layer ops), DRAM for T > 256 (avoids OOM)
+- 1 < T < chunk_size: padding to a full chunk before sequential-scan execution
+- Memory: L1 for single-token recurrent decode; DRAM for multi-token chunked execution
+
+The timing table below predates both the current short-sequence routing and the multi-token DRAM policy. Its mode labels and rows marked `chunk/L1` record the behavior used for those measurements.
 
 
 | T     | Torch (ms) | TTNN (ms) | Speedup | PCC    | Mode      |
