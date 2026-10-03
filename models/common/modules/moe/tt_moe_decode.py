@@ -31,6 +31,8 @@ keep weight/mapping init and per-iteration scratch separated from the forward lo
 
 from __future__ import annotations
 
+import os
+
 import torch
 from loguru import logger
 from ttnn.experimental.moe_compute_utils import (
@@ -41,6 +43,13 @@ from ttnn.experimental.moe_compute_utils import (
 
 import ttnn
 from models.common.modules.moe.tt_moe_decode_config import TTMoEDecodeConfig
+
+
+def _expert_weight_dtype():
+    """bfloat4_b by default; MOE_COMPUTE_BFP8_WEIGHTS=1 selects bfloat8_b (must match the program factory's CB format)."""
+    import os
+
+    return ttnn.bfloat8_b if os.environ.get("MOE_COMPUTE_BFP8_WEIGHTS", "0") != "0" else ttnn.bfloat4_b
 
 
 def _tt_to_torch_dtype(tt_dtype):
@@ -301,8 +310,14 @@ class _TTMoEDecodeExpertState:
         torch_b0: "torch.Tensor" | None = None,
         torch_b1: "torch.Tensor" | None = None,
         torch_b2: "torch.Tensor" | None = None,
+        weight_cache_dir: str | None = None,
     ):
         """Prepare and upload all expert state to the mesh.
+
+        ``weight_cache_dir``: directory for the packed + quantized host weight tensors (same scheme as GPT-OSS's
+        ``moe_compute`` cache: ``ttnn.dump_tensor`` after ``quantize_weights_via_host``, ``ttnn.load_tensor`` on a
+        warm run). On a hit the ``torch_w*`` arguments may be None and the host reorder / pack / quantize is skipped.
+        Routed-only (no shared experts, no bias).
 
         Pipeline: argsort-permute routed weights on host to match the device assignment
         (`_device_reorder_weights`), upload them to the mesh sharded on the experts dim
@@ -320,6 +335,27 @@ class _TTMoEDecodeExpertState:
         for `b0/b1`, `[L, num_routed, H]` for `b2`). Shared experts + bias is not yet
         supported because the shared splice doesn't carry bias rows — would need a parallel API.
         """
+        cache_files = self._cache_files(weight_cache_dir, shared_expert_ids_to_devices, has_bias)
+        if cache_files is not None and all(os.path.exists(f) for f in cache_files.values()):
+            import json
+
+            meta = json.load(open(cache_files["meta"]))
+            self.tt_expert_mapping = self._init_expert_mapping(
+                torch.tensor(expert_mapping, dtype=torch.int), None, mesh_device, mesh_shape, cluster_axis
+            )
+            wmc = ttnn.experimental.get_weight_mem_configs(
+                mesh_device,
+                num_layers=meta["L"],
+                experts_per_device=meta["E"],
+                hidden_size=meta["K"],
+                intermediate_size=meta["N"],
+                has_bias=False,
+            )
+            self.tt_w0_w1 = ttnn.to_device(ttnn.load_tensor(cache_files["w0_w1"]), mesh_device, memory_config=wmc.w0_w1)
+            self.tt_w2 = ttnn.to_device(ttnn.load_tensor(cache_files["w2"]), mesh_device, memory_config=wmc.w2)
+            logger.info(f"Loaded cached expert weights from {weight_cache_dir}")
+            return
+
         self._validate(
             torch_w0,
             torch_w1,
@@ -447,7 +483,19 @@ class _TTMoEDecodeExpertState:
             tt_b0,
             tt_b1,
             tt_b2,
+            cache_files=cache_files,
         )
+
+    @staticmethod
+    def _cache_files(weight_cache_dir, shared_expert_ids_to_devices, has_bias):
+        if not weight_cache_dir or shared_expert_ids_to_devices or has_bias:
+            return None
+        tag = "bfp8" if _expert_weight_dtype() == ttnn.bfloat8_b else "bfp4"
+        return {
+            "w0_w1": os.path.join(weight_cache_dir, f"moe_w0_w1_{tag}.tensorbin"),
+            "w2": os.path.join(weight_cache_dir, f"moe_w2_{tag}.tensorbin"),
+            "meta": os.path.join(weight_cache_dir, f"moe_meta_{tag}.json"),
+        }
 
     @staticmethod
     def _arrange_shared(
@@ -484,6 +532,7 @@ class _TTMoEDecodeExpertState:
         tt_b0: ttnn.Tensor | None = None,
         tt_b1: ttnn.Tensor | None = None,
         tt_b2: ttnn.Tensor | None = None,
+        cache_files: dict | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Pack and quantize the combined routed+shared weight device tensors to `bfloat4_b`.
 
@@ -534,12 +583,35 @@ class _TTMoEDecodeExpertState:
             has_bias=has_bias,
         )
 
+        if cache_files is not None:  # quantize to host, cache, then land under the kernel's DRAM-sharded config
+            import json
+
+            os.makedirs(os.path.dirname(cache_files["w0_w1"]), exist_ok=True)
+            w0_w1_host = ttnn.experimental.quantize_weights_via_host(
+                tt_w0_w1_prepped, dtype=_expert_weight_dtype(), memory_config=None
+            )
+            w2_host = ttnn.experimental.quantize_weights_via_host(
+                tt_w2_prepped, dtype=_expert_weight_dtype(), memory_config=None
+            )
+            ttnn.dump_tensor(cache_files["w0_w1"], w0_w1_host)
+            ttnn.dump_tensor(cache_files["w2"], w2_host)
+            json.dump(
+                dict(L=num_layers, E=experts_per_device, K=hidden_size, N=intermediate_size),
+                open(cache_files["meta"], "w"),
+            )
+            ttnn.deallocate(tt_w0_w1_prepped)
+            ttnn.deallocate(tt_w2_prepped)
+            return (
+                ttnn.to_device(w0_w1_host, mesh_device, memory_config=weight_mem_configs.w0_w1),
+                ttnn.to_device(w2_host, mesh_device, memory_config=weight_mem_configs.w2),
+            )
+
         tt_w0_w1 = ttnn.experimental.quantize_weights_via_host(
-            tt_w0_w1_prepped, dtype=ttnn.bfloat4_b, memory_config=weight_mem_configs.w0_w1
+            tt_w0_w1_prepped, dtype=_expert_weight_dtype(), memory_config=weight_mem_configs.w0_w1
         )
         ttnn.deallocate(tt_w0_w1_prepped)
         tt_w2 = ttnn.experimental.quantize_weights_via_host(
-            tt_w2_prepped, dtype=ttnn.bfloat4_b, memory_config=weight_mem_configs.w2
+            tt_w2_prepped, dtype=_expert_weight_dtype(), memory_config=weight_mem_configs.w2
         )
         ttnn.deallocate(tt_w2_prepped)
         logger.info("Prepared and quantized w0/w1 and w2 to bfloat4_b on mesh")
@@ -698,8 +770,17 @@ class TTMoEDecode:
         torch_b0: torch.Tensor | None = None,
         torch_b1: torch.Tensor | None = None,
         torch_b2: torch.Tensor | None = None,
+        weight_cache_dir: str | None = None,
+        buffers: "_TTMoEDecodeBuffers | None" = None,
     ):
         """Upload weights / biases / shared experts to the mesh and allocate scratch buffers.
+
+        ``buffers``: reuse the persistent scratch buffers / semaphores of another ``TTMoEDecode`` built from an identical
+        config. They are only live inside one ``forward``, so layers that run one after another can share one set; each
+        set costs ~13 KB of L1 per bank for the rest of the run, which at 40 layers (~535 KB) no longer fits next to
+        other programs' static circular buffers.
+
+        ``weight_cache_dir``: see ``_TTMoEDecodeExpertState`` (routed-only; weights may be None on a cache hit).
 
         Routed weight shapes: `w0/w1 = [L, num_routed_experts, hidden_size, intermediate_size]`,
         `w2 = [L, num_routed_experts, intermediate_size, hidden_size]`. Shared weights are
@@ -723,8 +804,12 @@ class TTMoEDecode:
             torch_b0=torch_b0,
             torch_b1=torch_b1,
             torch_b2=torch_b2,
+            weight_cache_dir=weight_cache_dir,
         )
         buffers_dict = config.buffers.model_dump()
+        if buffers is not None:
+            self.buffers = buffers
+            return
         if buffers_dict.get("compute_tilize_drain_core") is None:
             matmul_ring_size = effective_matmul_ring_size(mesh_device)
             buffers_dict["compute_tilize_drain_core"] = ttnn.experimental.get_moe_tilize_drain_core(

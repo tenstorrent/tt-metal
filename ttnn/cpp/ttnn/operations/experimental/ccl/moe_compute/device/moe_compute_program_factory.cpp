@@ -30,6 +30,32 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/experimental/ccl/moe_compute/moe_core_placement.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include <cstdlib>
+#include <string>
+
+namespace {
+inline bool moe_compute_env_flag(const char* name, bool default_value) {
+    const char* v = std::getenv(name);
+    return v == nullptr ? default_value : std::string(v) != "0";
+}
+inline tt::tt_metal::MathFidelity moe_compute_env_fidelity() {
+    const char* v = std::getenv("MOE_COMPUTE_FIDELITY");
+    if (v == nullptr) {
+        return tt::tt_metal::MathFidelity::LoFi;
+    }
+    const std::string f(v);
+    if (f == "HiFi2") {
+        return tt::tt_metal::MathFidelity::HiFi2;
+    }
+    if (f == "HiFi3") {
+        return tt::tt_metal::MathFidelity::HiFi3;
+    }
+    if (f == "HiFi4") {
+        return tt::tt_metal::MathFidelity::HiFi4;
+    }
+    return tt::tt_metal::MathFidelity::LoFi;
+}
+}  // namespace
 
 namespace {
 
@@ -769,7 +795,12 @@ MoEComputeMeshWorkloadFactory::create_at(
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
     // Note: cb_s2c_in and cb_c2s_out are handled separately as it is allocated on Tilize, Matmul, and Combine cores
     std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> matmul_cb_specs0 = {
-        {"cb_r2c_w0", tt::CBIndex::c_3, tt::DataFormat::Bfp4_b, true, 14 * 6},
+        // MOE_COMPUTE_BFP8_WEIGHTS=1: weights (w0/w1 and the aliased w2) are bfloat8_b instead of bfloat4_b.
+        {"cb_r2c_w0",
+         tt::CBIndex::c_3,
+         moe_compute_env_flag("MOE_COMPUTE_BFP8_WEIGHTS", false) ? tt::DataFormat::Bfp8_b : tt::DataFormat::Bfp4_b,
+         true,
+         14 * 6},
         {"cb_c2w_rdy", tt::CBIndex::c_4, tt::DataFormat::Float32, false, 1},
         {"cb_w2c_rdy", tt::CBIndex::c_5, tt::DataFormat::Float32, false, 1},
         {"cb_s2c_in2", tt::CBIndex::c_6, tt::DataFormat::Float16_b, true, a2a_cb_pages * matmul_num_cores},
@@ -1272,11 +1303,14 @@ MoEComputeMeshWorkloadFactory::create_at(
         "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/compute.cpp",
         matmul_core_range_set,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = tt::tt_metal::MathFidelity::LoFi,
-            .fp32_dest_acc_en = false,
+            // Accuracy knobs (experiment/tuning): MOE_COMPUTE_FP32_ACC=1 accumulates the three matmuls in fp32 DEST
+            // (bf16 DEST accumulation has a systematic +5% gain per matmul -> ~1.14x on the expert output),
+            // MOE_COMPUTE_FIDELITY=LoFi|HiFi2|HiFi4, MOE_COMPUTE_APPROX=0 disables approximate math.
+            .math_fidelity = moe_compute_env_fidelity(),
+            .fp32_dest_acc_en = moe_compute_env_flag("MOE_COMPUTE_FP32_ACC", false),
             .dst_full_sync_en = false,
             .bfp8_pack_precise = false,
-            .math_approx_mode = true,
+            .math_approx_mode = moe_compute_env_flag("MOE_COMPUTE_APPROX", true),
             .compile_args = matmul_compile_time_args,
             .named_compile_args = matmul_named_compile_time_args});
 

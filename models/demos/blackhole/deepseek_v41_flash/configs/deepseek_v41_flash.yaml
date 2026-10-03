@@ -1,0 +1,28 @@
+# deepseek_v41_flash (DeepSeek-V4.1-Flash, 40 backbone layers, all MoE) on a 4x8 Blackhole Galaxy.
+# NOT the same model as models/common/modules/moe/configs/deepseek_v4_flash.yaml (hidden 4096, 256 experts).
+# Source of truth: /mnt/tt-data/ssinghal/deepseek-v41-flash/inference/config.json + model.py.
+mesh_shape: [4, 8]
+cluster_axis: 0
+batch_per_device: 4      # 4 users per row at batch 16 (tp_heads); 8 for dp_users
+hidden_size: 5120
+select_experts_k: 6
+num_routed_experts: 384
+num_shared_experts: 1
+has_bias: false
+
+# Gate: ungrouped top-6, sqrtsoftplus, selection-only correction bias, linear renorm, x1.5.
+n_group: 1
+score_func: sqrtsoftplus
+routed_scaling_factor: 1.5
+score_correction_bias: true
+
+compute:
+  intermediate_size: 2304
+  activation_type: SILU   # model.py also clamps: up in [-10, 10], gate <= 10 (swiglu_limit); shared expert clamps too
+
+reduce:
+  shared_expert_scale: 1.0
+
+experts:
+  expert_mapping: sequential
+  shared_expert_ids_to_devices: fully_replicated
