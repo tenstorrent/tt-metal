@@ -651,7 +651,11 @@ def test_repeat_all_ones_shortcut_nd_sharded_output(input_shard_shape, device):
 
     result = ttnn.repeat(ttnn_input, [1, 1, 1, 1], memory_config=output_mem_config)
 
-    assert result.memory_config().nd_shard_spec == output_mem_config.nd_shard_spec
+    actual = result.memory_config()
+    assert actual.nd_shard_spec == output_mem_config.nd_shard_spec, (
+        f"Expected output nd_shard_spec {output_mem_config.nd_shard_spec}, got {actual.nd_shard_spec} "
+        f"(output memory_config: {actual})"
+    )
     assert_equal(x, ttnn.to_torch(result))
 
 
