@@ -48,6 +48,7 @@ static constexpr std::uint32_t EMA_OUTPUT_DST_INDEX = 1;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
 
@@ -63,6 +64,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
 
@@ -108,6 +110,7 @@ using namespace ckernel;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
 
@@ -129,6 +132,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
 
@@ -205,6 +209,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
 
@@ -214,6 +219,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
 
