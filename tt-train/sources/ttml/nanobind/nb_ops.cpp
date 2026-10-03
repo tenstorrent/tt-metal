@@ -647,6 +647,20 @@ void py_module(nb::module_& m) {
             "output in moe_group's grouped layout; plan/offsets/grouped_scores\n"
             "are direct outputs of moe_group (grouped_scores already encodes\n"
             "scores[plan[i], k_slot] per row). Returns ungrouped [D,B,S,H].");
+        py_metal.def(
+            "moe_ungroup_checked",
+            &ttml::metal::moe_ungroup_checked,
+            nb::arg("expert_out"),
+            nb::arg("plan"),
+            nb::arg("offsets"),
+            nb::arg("grouped_scores"),
+            nb::arg("e_local"),
+            nb::arg("d"),
+            nb::arg("b"),
+            nb::arg("s"),
+            "Ungroup expert outputs and return (ungrouped, offsets_status).\n"
+            "offsets_status is a device UINT32 bitmask; invalid offsets fail\n"
+            "closed with a zero output and no offset-derived source traffic.");
     }
 }
 

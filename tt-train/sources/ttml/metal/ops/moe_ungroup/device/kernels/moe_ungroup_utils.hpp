@@ -7,7 +7,36 @@
 #include <algorithm>
 #include <cstdint>
 
+#include "tt-train/sources/ttml/metal/ops/moe_ungroup/moe_ungroup_status.hpp"
+
 namespace ttml::metal::moe_ungroup {
+
+template <typename Uint32Ptr>
+inline uint32_t validate_offsets(Uint32Ptr offsets, uint32_t e_local, uint32_t t_cap, uint32_t tile_h) {
+    uint32_t status = 0U;
+    uint32_t previous = offsets[0];
+    if (previous != 0U) {
+        status |= moe_ungroup_validation::kOffsetsNonzeroStart;
+    }
+    if (previous % tile_h != 0U) {
+        status |= moe_ungroup_validation::kOffsetsMisaligned;
+    }
+
+    for (uint32_t i = 1U; i <= e_local; ++i) {
+        const uint32_t current = offsets[i];
+        if (current % tile_h != 0U) {
+            status |= moe_ungroup_validation::kOffsetsMisaligned;
+        }
+        if (current < previous) {
+            status |= moe_ungroup_validation::kOffsetsDecreasing;
+        }
+        previous = current;
+    }
+    if (previous > t_cap) {
+        status |= moe_ungroup_validation::kOffsetsExceedCapacity;
+    }
+    return status;
+}
 
 // Per-core contiguous slice of `total` items across `num_cores` cores.
 // Returns this core's [start, start+count). Cores whose start lands past
