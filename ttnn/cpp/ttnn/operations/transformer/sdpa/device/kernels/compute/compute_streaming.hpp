@@ -184,11 +184,16 @@ constexpr uint32_t MIN_BLOCKED_PACK_TILES = 8;
 #endif
 ALWI bool should_use_blocked_pack_width(uint32_t pack_width) { return pack_width >= MIN_BLOCKED_PACK_TILES; }
 
+// A CB index past the format tables is an inactive CB (the ring joint factory passes UINT32_MAX for an unused
+// mask CB); it never needs a reconfig, and indexing the tables with it does not compile.
 template <uint32_t old_cb, uint32_t new_cb>
 ALWI void sdpa_maybe_pack_reconfig_data_format() {
 #ifdef TRISC_PACK
-    if constexpr (pack_dst_format[old_cb] != pack_dst_format[new_cb]) {
-        pack_reconfig_data_format(old_cb, new_cb);
+    constexpr uint32_t num_cbs = sizeof(pack_dst_format) / sizeof(pack_dst_format[0]);
+    if constexpr (old_cb < num_cbs && new_cb < num_cbs) {
+        if constexpr (pack_dst_format[old_cb] != pack_dst_format[new_cb]) {
+            pack_reconfig_data_format(old_cb, new_cb);
+        }
     }
 #endif
 }
@@ -196,10 +201,15 @@ ALWI void sdpa_maybe_pack_reconfig_data_format() {
 template <uint32_t old_cb, uint32_t new_cb>
 constexpr bool sdpa_unpack_format_changed() {
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
-    return unpack_src_format[old_cb] != unpack_src_format[new_cb] ||
-           unpack_dst_format[old_cb] != unpack_dst_format[new_cb] ||
-           unpack_tile_face_r_dim[old_cb] != unpack_tile_face_r_dim[new_cb] ||
-           unpack_tile_num_faces[old_cb] != unpack_tile_num_faces[new_cb];
+    constexpr uint32_t num_cbs = sizeof(unpack_src_format) / sizeof(unpack_src_format[0]);
+    if constexpr (old_cb >= num_cbs || new_cb >= num_cbs) {
+        return false;
+    } else {
+        return unpack_src_format[old_cb] != unpack_src_format[new_cb] ||
+               unpack_dst_format[old_cb] != unpack_dst_format[new_cb] ||
+               unpack_tile_face_r_dim[old_cb] != unpack_tile_face_r_dim[new_cb] ||
+               unpack_tile_num_faces[old_cb] != unpack_tile_num_faces[new_cb];
+    }
 #else
     return false;
 #endif
