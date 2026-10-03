@@ -100,6 +100,8 @@ line_trace_params = {**line_params, "trace_region_size": _LTX_TRACE_REGION, "l1_
         # BH on 2x4. trace_params (not bare line_params): LTX_TRACED needs the trace region, and the
         # native conv1d audio taps need the L1_SMALL pool (bare line_params leaves it 0 -> vocoder OOM).
         [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
+        # Same, carved out of the full BH galaxy mesh (shared boxes open the full mesh, then submesh).
+        [(4, 8), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
         # WH (ring) on 4x8. Requires increased worker_l1_size to avoid code-size error in RingAttention.
         [(4, 8), (4, 8), 1, 0, 4, True, {"worker_l1_size": 1344544, **ring_params}, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
@@ -112,6 +114,7 @@ line_trace_params = {**line_params, "trace_region_size": _LTX_TRACE_REGION, "l1_
         "2x2sp0tp1",
         "2x4sp0tp1",
         "bh_2x4sp1tp0",
+        "bh_4x8sub2x4sp1tp0",
         "wh_4x8sp1tp0",
         "bh_4x8sp1tp0_linear",
         "bh_4x8sp1tp0_ring",
@@ -429,10 +432,22 @@ def test_pipeline_distilled(
                 check_output_with_vbench(replay_prompt(gen), gen)
             # LTX_E2E_EXTRA_REPLAYS=N: N more pure replays of the same gen, so a served queue's
             # steady-state step time (not only the first replay after capture) is on the record.
+            # LTX_E2E_AB_ENV="K=V K2=V2": set on the even extra gens (#2, #4, ...) and unset on the odd ones,
+            # so one session A/Bs pipeline flags read at call time against interleaved baseline gens.
+            ab_env = dict(kv.split("=", 1) for kv in os.environ.get("LTX_E2E_AB_ENV", "").split())
             for extra in range(int(os.environ.get("LTX_E2E_EXTRA_REPLAYS", "0"))):
                 gen = len(replay_seeds) + extra + 1
-                logger.info(f"=== traced steady-state pass (gen #{gen}, pure replay) ===")
+                arm_on = extra % 2 == 0
+                for k, v in ab_env.items():
+                    if arm_on:
+                        os.environ[k] = v
+                    else:
+                        os.environ.pop(k, None)
+                arm = f", ab={'on' if arm_on else 'off'}" if ab_env else ""
+                logger.info(f"=== traced steady-state pass (gen #{gen}, pure replay{arm}) ===")
                 run(prompt=replay_prompt(gen), number=gen, seed=seed)
+            for k in ab_env:
+                os.environ.pop(k, None)
             # LTX_REF_FRAMES=<path>: one more replay that also writes the raw uint8 frames, kept out of
             # the timed gens because the dump forces the slower float readback instead of the yuv path.
             ref_frames = os.environ.get("LTX_REF_FRAMES")
@@ -598,6 +613,8 @@ FRESH_LTX_PROMPTS = (
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
         [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
+        # Same, carved out of the full BH galaxy mesh (shared boxes open the full mesh, then submesh).
+        [(4, 8), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
     ],
     ids=["bh_2x4sp1tp0"],
     indirect=["mesh_device", "device_params"],
@@ -756,6 +773,8 @@ _STANDALONE_I2V_COND_IMAGE = os.environ.get(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
         [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
+        # Same, carved out of the full BH galaxy mesh (shared boxes open the full mesh, then submesh).
+        [(4, 8), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
     ],
     ids=["bh_2x4sp1tp0"],
     indirect=["mesh_device", "device_params"],
@@ -857,6 +876,8 @@ def test_pipeline_distilled_i2v_standalone(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
         [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
+        # Same, carved out of the full BH galaxy mesh (shared boxes open the full mesh, then submesh).
+        [(4, 8), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
     ],
     ids=["bh_2x4sp1tp0"],
     indirect=["mesh_device", "device_params"],
@@ -968,6 +989,8 @@ def test_pipeline_distilled_i2v_two_images(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
         [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
+        # Same, carved out of the full BH galaxy mesh (shared boxes open the full mesh, then submesh).
+        [(4, 8), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
     ],
     ids=["bh_2x4sp1tp0"],
     indirect=["mesh_device", "device_params"],
@@ -1100,6 +1123,8 @@ def test_pipeline_distilled_i2v_arbitrary_frame(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
         [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
+        # Same, carved out of the full BH galaxy mesh (shared boxes open the full mesh, then submesh).
+        [(4, 8), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
         [(4, 8), (4, 8), 1, 0, 2, False, line_trace_params, ttnn.Topology.Linear, False],
     ],
     ids=["bh_2x4sp1tp0", "bh_4x8sp1tp0"],
@@ -1263,6 +1288,8 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
         [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
+        # Same, carved out of the full BH galaxy mesh (shared boxes open the full mesh, then submesh).
+        [(4, 8), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
     ],
     ids=["bh_2x4sp1tp0"],
     indirect=["mesh_device", "device_params"],
@@ -1397,6 +1424,8 @@ def test_pipeline_distilled_i2v_middle_keyframe(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
         [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
+        # Same, carved out of the full BH galaxy mesh (shared boxes open the full mesh, then submesh).
+        [(4, 8), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
     ],
     ids=["bh_2x4sp1tp0"],
     indirect=["mesh_device", "device_params"],
@@ -1644,6 +1673,8 @@ def _matrix_checkpoint(model):
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
         [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
+        # Same, carved out of the full BH galaxy mesh (shared boxes open the full mesh, then submesh).
+        [(4, 8), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
     ],
     ids=["bh_2x4sp1tp0"],
     indirect=["mesh_device", "device_params"],

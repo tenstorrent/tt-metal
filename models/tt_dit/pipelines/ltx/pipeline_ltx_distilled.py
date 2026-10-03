@@ -43,6 +43,11 @@ _DEFAULT_S2_SIGMAS = [0.909375, 0.725, 0.421875, 0.0]
 _LATENT_DUMP_N = 0
 
 
+def _env_on(name: str, default: str = "0") -> bool:
+    """Read at call time, so a serving process (or an A/B harness) can flip it between gens."""
+    return os.environ.get(name, default).strip() in ("1", "true", "True")
+
+
 def _sigma_override(env_name: str, default: list[float]) -> list[float]:
     raw = os.environ.get(env_name, "").strip()
     if not raw:
@@ -1059,6 +1064,8 @@ class LTXDistilledPipeline(LTXPipeline):
         if reuse_prompt:
             assert traced and self._prompt_v.value is not None and self._prompt_a.value is not None
             return self._prompt_v.value, self._prompt_a.value
+        if traced and _env_on("LTX_PROMPT_HOST_COPY") and self._write_prompts_in_place(v_embeds, a_embeds):
+            return self._prompt_v.value, self._prompt_a.value
         prompt_v = self._prepare_prompt(v_embeds)
         prompt_a = bf16_tensor(a_embeds.unsqueeze(0), device=self.mesh_device)
         # Traced persists the shared prompt (baked address); untraced keeps locals to avoid
@@ -1068,6 +1075,53 @@ class LTXDistilledPipeline(LTXPipeline):
             self._prompt_a.update(prompt_a, traced)
             return self._prompt_v.value, self._prompt_a.value
         return prompt_v, prompt_a
+
+    @staticmethod
+    def _prompt_host_bf16(embeds: torch.Tensor, width: int) -> torch.Tensor:
+        """Host twin of _prepare_prompt: same shape and padding, already bf16.
+
+        Same values as the fp32 -> bf16 cast ttnn.from_torch does: the encoder output is bf16, so
+        the fp32 copy is bf16-exact and the cast is lossless either way.
+        """
+        prompt = embeds.unsqueeze(0)
+        if prompt.shape[-1] < width:
+            prompt = torch.nn.functional.pad(prompt, (0, width - prompt.shape[-1]))
+        elif prompt.shape[-1] > width:
+            prompt = prompt[..., :width]
+        return prompt.to(torch.bfloat16).contiguous()
+
+    def _write_prompts_in_place(self, v_embeds, a_embeds) -> bool:
+        """Tilize the prompts on host and write them straight into the persistent buffers.
+
+        Skips the fresh device allocation and the device-side copy into the address-baked buffer that
+        the default path pays per new prompt. Returns False (caller takes the default path) until the
+        buffers exist with matching shapes, i.e. on the capture gen.
+        """
+        buffers = (self._prompt_v.value, self._prompt_a.value)
+        if any(b is None for b in buffers):
+            return False
+        hosts = (
+            self._prompt_host_bf16(v_embeds, self.cross_attention_dim),
+            self._prompt_host_bf16(a_embeds, a_embeds.shape[-1]),
+        )
+        if any(tuple(h.shape) != tuple(b.shape) for h, b in zip(hosts, buffers)):
+            return False
+        for host, buf in zip(hosts, buffers):
+            ttnn.copy_host_to_device_tensor(ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), buf)
+        if _env_on("LTX_PROMPT_STAGING_CHECK"):
+            self._check_prompt_staging(v_embeds, a_embeds)
+        return True
+
+    def _check_prompt_staging(self, v_embeds, a_embeds) -> None:
+        """Assert the in-place write matches the default upload bit for bit, on every device."""
+        refs = (self._prepare_prompt(v_embeds), bf16_tensor(a_embeds.unsqueeze(0), device=self.mesh_device))
+        for name, ref, buf in zip(("video", "audio"), refs, (self._prompt_v.value, self._prompt_a.value)):
+            want = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(ref)]
+            got = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(buf)]
+            same = all(torch.equal(w, g) for w, g in zip(want, got))
+            logger.info(f"LTX_PROMPT_STAGING_CHECK {name}: {len(got)} devices, bit-identical={same}")
+            assert same, f"in-place prompt staging differs from the default upload ({name})"
+            ttnn.deallocate(ref)
 
     def _denoise_no_guidance(
         self,
@@ -1725,6 +1779,10 @@ class LTXDistilledPipeline(LTXPipeline):
         Good and bad generations are otherwise indistinguishable in the log -- same steps,
         same sigmas, same timings -- so without this a noise report has nothing to correlate.
         """
+        if not _env_on("LTX_LATENT_STATS", "1"):
+            # Serving opt-out: the fingerprints are host reductions over the whole latent (~7 ms at
+            # S1, ~10 ms at S2 for 1080p/145f) on the critical path between stages.
+            return
         for name, tensor in (("video", video), ("audio", audio)):
             if tensor is None:
                 continue
