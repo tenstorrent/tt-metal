@@ -57,6 +57,11 @@ void kernel_main() {
 
     Noc noc;
     DataflowBuffer dfb_out_rm(dfb::out_rm);
+#ifdef OUTPUT_RESIDUAL_SUM
+    // Compute untilizes each row's a + b before its normed output, so drain it first.
+    const auto sum_dst = TensorAccessor(tensor::sum_dst);
+    DataflowBuffer dfb_sum_rm(dfb::sum_rm);
+#endif
 
     constexpr uint32_t block_row_stride_bytes = block_size * TILE_W * elem_size_bytes;
     constexpr uint32_t tile_width_bytes = TILE_W * elem_size_bytes;
@@ -73,6 +78,20 @@ void kernel_main() {
             num_valid_rows = H_logical - abs_row_base;
         }
 
+#ifdef OUTPUT_RESIDUAL_SUM
+        for (auto block : generic::blocks(Wt, block_size)) {
+            layernorm_dataflow_utils::
+                write_row_major_block_from_dfb<decltype(sum_dst), decltype(block), TILE_W, TILE_H>(
+                    noc,
+                    dfb_sum_rm,
+                    sum_dst,
+                    abs_row_base,
+                    num_valid_rows,
+                    tile_width_bytes,
+                    block_row_stride_bytes,
+                    block);
+        }
+#endif
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::write_row_major_block_from_dfb<decltype(dst_a), decltype(block), TILE_W, TILE_H>(
                 noc, dfb_out_rm, dst_a, abs_row_base, num_valid_rows, tile_width_bytes, block_row_stride_bytes, block);

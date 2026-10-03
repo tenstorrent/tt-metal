@@ -125,6 +125,10 @@ void kernel_main() {
     constexpr auto dfb_in_rm_id = dfb::in_rm;
     DataflowBuffer dfb_in_rm(dfb_in_rm_id);
 #endif
+#ifdef RESIDUAL_RM
+    DataflowBuffer dfb_inb_rm(dfb::inb_rm);
+    DataflowBuffer dfb_inb(dfb_inb_id);
+#endif
 
     constexpr int onetile = 1;
     constexpr int dst0 = 0;
@@ -176,6 +180,9 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #ifdef TILIZE_IN
         tilize_all_blocks_to_dfb<block_size>(dfb_in_rm, dfb_in, Wt);
+#ifdef RESIDUAL_RM
+        tilize_all_blocks_to_dfb<block_size>(dfb_inb_rm, dfb_inb, Wt);
+#endif
         // Re-init binary ops after tilize hardware reconfiguration.
         // TODO(#52395): replace this mid-kernel re-init with a targeted DST re-arm.
 #ifdef FUSE_PRE_ADD
@@ -394,7 +401,16 @@ void kernel_main() {
 #endif
         }
         dfb_ex2pe.pop_front(1);
+#ifdef OUTPUT_RESIDUAL_SUM
+        // dfb_xmm still holds x = a + b for the whole row; untilizing it drains it, and the writer
+        // emits it as the second output.
+        DataflowBuffer dfb_sum_rm(dfb::sum_rm);
+        pack_reconfig_data_format(dfb_sum_rm.get_id());
+        untilize_all_blocks_from_dfb<block_size>(dfb_xmm, dfb_sum_rm, Wt);
+        pack_reconfig_data_format(dfb_out_id);
+#else
         dfb_xmm.pop_front(total_buffer_size);
+#endif
 
 #ifdef UNTILIZE_OUT
         constexpr auto dfb_out_rm_id = dfb::out_rm;

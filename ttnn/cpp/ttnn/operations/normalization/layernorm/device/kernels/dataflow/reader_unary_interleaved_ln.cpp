@@ -61,7 +61,7 @@ void kernel_main() {
 #if defined(WELFORD_FP32_ALIAS) && !defined(FUSE_PRE_ADD)
     DataflowBuffer dfb_x_welford(dfb::x_welford);
 #endif
-#ifdef FUSE_PRE_ADD
+#if defined(FUSE_PRE_ADD) && !defined(RESIDUAL_RM)
     DataflowBuffer dfb_in1(dfb::inb);
 #endif
 #ifdef FUSE_GAMMA
@@ -84,6 +84,9 @@ void kernel_main() {
 
     constexpr uint32_t rm_row_stride_bytes = block_size * TILE_W * elem_size_bytes;
     DataflowBuffer dfb_in_rm(dfb::in_rm);
+#ifdef RESIDUAL_RM
+    DataflowBuffer dfb_inb_rm(dfb::inb_rm);
+#endif
 
     const uint32_t src0_page_bytes = W * elem_size_bytes;
 #else
@@ -102,7 +105,9 @@ void kernel_main() {
     const auto addrb = TensorAccessor(tensor::beta);
 #endif
 #ifdef FUSE_PRE_ADD
+#ifndef RESIDUAL_RM
     const uint32_t src1_tile_bytes = dfb_in1.get_tile_size();
+#endif
     const auto src_b = TensorAccessor(tensor::src_b);
 #endif
 
@@ -143,7 +148,11 @@ void kernel_main() {
         layernorm_dataflow_utils::push_row_major_blocks_to_dfb<decltype(src_a), TILE_W, TILE_H>(
             noc, dfb_in_rm, src_a, Wt, block_size, curr_tile_row, elem_size_bytes, rm_row_stride_bytes, H_logical);
 
-#ifdef FUSE_PRE_ADD
+#if defined(RESIDUAL_RM)
+        // b has a's layout and shape, so it streams through the same flat stick walk.
+        layernorm_dataflow_utils::push_row_major_blocks_to_dfb<decltype(src_b), TILE_W, TILE_H>(
+            noc, dfb_inb_rm, src_b, Wt, block_size, curr_tile_row, elem_size_bytes, rm_row_stride_bytes, H_logical);
+#elif defined(FUSE_PRE_ADD)
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_dfb(
                 noc, dfb_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);

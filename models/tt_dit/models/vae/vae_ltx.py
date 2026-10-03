@@ -487,18 +487,28 @@ class LTXResnetBlock3D(Module):
         for k in keys_to_remove:
             del state[k]
 
-    def forward(
+    def _resnet_halves(
         self,
-        x_BTHWC: ttnn.Tensor,
-        causal: bool = True,
-        logical_h: int = 0,
-        logical_w: int = 0,
-    ) -> ttnn.Tensor:
-        residual = x_BTHWC
+        x_or_h: ttnn.Tensor,
+        residual_in: ttnn.Tensor | None,
+        causal: bool,
+        logical_h: int,
+        logical_w: int,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """The block's two pre-add halves (h, residual); the block output is residual + h.
+
+        With residual_in None, x_or_h is the block input. Otherwise the block input is
+        x_or_h + residual_in, which norm1 adds itself and also returns as the new residual."""
+        if residual_in is None:
+            h = self.norm1(x_or_h, compute_kernel_config=self.norm_compute_kernel_config)
+            residual = x_or_h
+        else:
+            h, residual = self.norm1.forward_residual_sum(
+                x_or_h, residual_in, compute_kernel_config=self.norm_compute_kernel_config
+            )
 
         # Main path: (norm+silu fused) → conv → (norm+silu fused) → conv. The fused norm tilizes and
         # untilizes in-kernel, so ROW_MAJOR in gives ROW_MAJOR out and these to_layout calls are no-ops.
-        h = self.norm1(x_BTHWC, compute_kernel_config=self.norm_compute_kernel_config)
         h = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT)
         h = self.conv1(h, causal=causal, logical_h=logical_h, logical_w=logical_w)
 
@@ -516,7 +526,28 @@ class LTXResnetBlock3D(Module):
             )
             residual = self.conv_shortcut(residual, causal=causal, logical_h=logical_h, logical_w=logical_w)
 
+        return h, residual
+
+    def forward(
+        self,
+        x_BTHWC: ttnn.Tensor,
+        causal: bool = True,
+        logical_h: int = 0,
+        logical_w: int = 0,
+    ) -> ttnn.Tensor:
+        h, residual = self._resnet_halves(x_BTHWC, None, causal, logical_h, logical_w)
         return ttnn.add(residual, h)
+
+    def forward_deferred(
+        self,
+        x_or_h: ttnn.Tensor,
+        residual_in: ttnn.Tensor | None,
+        causal: bool = True,
+        logical_h: int = 0,
+        logical_w: int = 0,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Returns (h, residual) and leaves the closing residual + h to the next block's norm1."""
+        return self._resnet_halves(x_or_h, residual_in, causal, logical_h, logical_w)
 
 
 class LTXUNetMidBlock3D(Module):
@@ -534,6 +565,9 @@ class LTXUNetMidBlock3D(Module):
         conv_dims: ConvDims | None = None,
     ) -> None:
         super().__init__()
+        # Fold each block's closing residual add into the next block's norm1, so a chain of
+        # num_layers blocks materializes only its last add.
+        self.fuse_norm_add = os.environ.get("LTX_FUSE_NORM_ADD", "0") == "1"
         self.res_blocks = ModuleList()
         for _ in range(num_layers):
             self.res_blocks.append(
@@ -555,9 +589,15 @@ class LTXUNetMidBlock3D(Module):
         logical_h: int = 0,
         logical_w: int = 0,
     ) -> ttnn.Tensor:
+        if not self.fuse_norm_add or len(self.res_blocks) == 1:
+            for block in self.res_blocks:
+                x_BTHWC = block(x_BTHWC, causal=causal, logical_h=logical_h, logical_w=logical_w)
+            return x_BTHWC
+
+        h, residual = x_BTHWC, None
         for block in self.res_blocks:
-            x_BTHWC = block(x_BTHWC, causal=causal, logical_h=logical_h, logical_w=logical_w)
-        return x_BTHWC
+            h, residual = block.forward_deferred(h, residual, causal=causal, logical_h=logical_h, logical_w=logical_w)
+        return ttnn.add(residual, h)
 
 
 class LTXDepthToSpaceUpsample(Module):

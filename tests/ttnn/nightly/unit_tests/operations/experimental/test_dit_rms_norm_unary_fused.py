@@ -281,3 +281,75 @@ def test_dit_rms_norm_unary_fused_sharded_weight_bias(
     assert (
         check_result["relative_rmse"] < 0.03
     ), f"[sharded/w={use_weight},b={use_bias}] Relative RMSE too high: {check_result['relative_rmse']}"
+
+
+def run_residual_sum_test(device, shape, epsilon=1e-6, fp32_dest_acc_en=True, seed=0):
+    """RMSNorm(a + b) with SiLU plus the a + b sum, on row-major bf16 a and b, against torch.
+
+    `device` may be a single device or a mesh; tensors are replicated and the first copy is checked.
+    """
+    torch.manual_seed(seed)
+    c = shape[-1]
+    torch_a = torch.randn(shape).bfloat16().float()
+    torch_b = torch.randn(shape).bfloat16().float()
+    torch_weight = (torch.rand(c) + 0.5).bfloat16().float()
+    torch_sum = (torch_a + torch_b).bfloat16().float()
+    torch_expected = rms_norm_golden(torch_a + torch_b, epsilon, torch_weight, None, "silu")
+
+    is_mesh = isinstance(device, ttnn.MeshDevice) and device.get_num_devices() > 1
+    mapper = ttnn.ReplicateTensorToMesh(device) if is_mesh else None
+
+    def to_tt(t, layout):
+        return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=layout, device=device, mesh_mapper=mapper)
+
+    def to_torch(t):
+        if is_mesh:
+            return ttnn.to_torch(ttnn.get_device_tensors(t)[0])
+        return ttnn.to_torch(t)
+
+    tt_a = to_tt(torch_a, ttnn.ROW_MAJOR_LAYOUT)
+    tt_b = to_tt(torch_b, ttnn.ROW_MAJOR_LAYOUT)
+    tt_weight = to_tt(torch_weight.unsqueeze(0), ttnn.TILE_LAYOUT)
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=fp32_dest_acc_en
+    )
+
+    tt_normed, tt_sum = ttnn.experimental.dit_rms_norm_unary_fused_residual_sum(
+        tt_a, tt_b, epsilon=epsilon, weight=tt_weight, compute_kernel_config=compute_config, activation="silu"
+    )
+    assert tt_normed.layout == ttnn.ROW_MAJOR_LAYOUT and tt_sum.layout == ttnn.ROW_MAJOR_LAYOUT
+
+    # The unfused sequence it replaces: add, then the row-major fused norm.
+    tt_ref = ttnn.experimental.dit_rms_norm_unary_fused(
+        ttnn.add(tt_a, tt_b), epsilon=epsilon, weight=tt_weight, compute_kernel_config=compute_config, activation="silu"
+    )
+
+    normed, total, ref = to_torch(tt_normed).float(), to_torch(tt_sum).float(), to_torch(tt_ref).float()
+    return {
+        "normed": measure_quality(torch_expected, normed),
+        "sum": measure_quality(torch_sum, total),
+        "unfused": measure_quality(torch_expected, ref),
+        "sum_max_abs_err": (total - torch_sum).abs().max().item(),
+    }
+
+
+# The LTX VAE decoder's per-chip resnet tensors: the s1 mid block after the exact-shard rebalance
+# (W=15), then the s2/s3/s4 widths at both tile-aligned and odd row counts (T shortened).
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (1, 19, 17, 15, 1024),
+        (1, 5, 34, 30, 512),
+        (1, 5, 36, 32, 512),
+        (1, 3, 68, 60, 256),
+        (1, 3, 72, 64, 256),
+        (1, 2, 136, 120, 128),
+        (1, 2, 144, 128, 128),
+    ],
+    ids=["s1_w15", "s2_w30", "s2_w32", "s3_w60", "s3_w64", "s4_w120", "s4_w128"],
+)
+def test_dit_rms_norm_unary_fused_residual_sum_rm(device, shape):
+    result = run_residual_sum_test(device, shape)
+    assert result["normed"]["pcc"] > 0.9999, result
+    assert result["unfused"]["pcc"] > 0.9999, result
+    assert result["sum"]["pcc"] > 0.99999, result

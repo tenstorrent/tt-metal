@@ -98,6 +98,8 @@ const m2::DFBSpecName RECIPROCALS{"reciprocals"};  // pre-computed reciprocal LU
 const m2::DFBSpecName ACCUMULATE{"accumulate"};    // large-tensor variance accumulator
 const m2::DFBSpecName IN_RM{"in_rm"};              // row-major input staging for in-flight tilize
 const m2::DFBSpecName OUT_RM{"out_rm"};            // row-major output staging for the RM writer
+const m2::DFBSpecName INB_RM{"inb_rm"};            // row-major residual staging for in-flight tilize
+const m2::DFBSpecName SUM_RM{"sum_rm"};            // row-major a + b staging for the RM writer
 
 // Welford fp32 aliases. Each shares its primary buffer's SRAM under a second index so the
 // Welford section can read it with UnpackToDest (full fp32) while the surrounding FPU work keeps
@@ -113,6 +115,7 @@ const m2::TensorParamName RESIDUAL{"residual"};
 const m2::TensorParamName GAMMA_T{"weight"};
 const m2::TensorParamName BETA_T{"bias"};
 const m2::TensorParamName OUTPUT{"output"};
+const m2::TensorParamName SUM_OUTPUT{"sum_output"};
 // Backing store for the RECIPROCALS buffer. No kernel binds an accessor to it: the Welford
 // compute kernels reach the LUT through the borrowed buffer's base pointer, so the tensor exists
 // in the spec purely to resolve that buffer's address at each enqueue.
@@ -274,6 +277,16 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     }
 
     uint32_t num_tile_rows = NC * Ht;
+    // The row-major reader and writer walk the input as one flat stream of H_logical sticks, so
+    // NC * Ht over-counts whenever [-2] is not tile-aligned; the extra tile-rows hold no data.
+    const bool rm_gamma_or_beta = (gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR) ||
+                                  (beta.has_value() && beta.value().layout() == Layout::ROW_MAJOR);
+    const bool flat_rm_rows = input_is_row_major && !(use_welford && !rms_norm) && !rm_gamma_or_beta;
+    if (flat_rm_rows) {
+        num_tile_rows = tt::div_up(H_logical, TILE_HEIGHT);
+    }
+    const bool residual_is_row_major = b.has_value() && b.value().layout() == Layout::ROW_MAJOR;
+    const bool output_residual_sum = operation_attributes.output_residual_sum;
 
     // The caller may restrict the program to a subset of the grid; otherwise take the whole of it.
     CoreRangeSet requested_cores = core_range_set.has_value() ? core_range_set.value() : default_core_range(*device);
@@ -305,7 +318,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     uint32_t Wt_next_block_up = tt::round_up(Wt, block_size);
     uint32_t in0_t =
         Wt_next_block_up;  // dfb_x for no pre-add variant, x=a+b for fused pre-add, extra space for some buffering
-    uint32_t in1_t = block_size * 2;  // buffer for fused pre-add b tensor
+    // A row-major b is tilized a full row at a time, like a.
+    uint32_t in1_t = residual_is_row_major ? Wt_next_block_up : block_size * 2;  // fused pre-add b tensor
     uint32_t out0_t = input_is_row_major ? Wt_next_block_up : block_size * 2;
     uint32_t im0_t = Wt_next_block_up;  // buffer for saving xmm
     uint32_t im3_t = Wt_next_block_up;  // buffer for xmm^2
@@ -353,6 +367,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     // next block into the buffer, hiding DRAM write latency. Only allocated when input_is_row_major.
     const uint32_t out_rm_tiles = input_is_row_major ? 2 * block_size : 0;
     const uint32_t out_rm_size = out_rm_tiles * out_single_tile_size;
+    const uint32_t inb_rm_tiles = residual_is_row_major ? 2 * block_size : 0;
+    const uint32_t sum_rm_tiles = output_residual_sum ? 2 * block_size : 0;
 
     bool buffers_fit_in_L1 = buffers_can_fit_in_L1(
         in0_t * in_single_tile_size,
@@ -370,7 +386,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         in3_t * bfloat16_tile_size,
         im2_t * single_tile_size,
         reciprocal_buffer_size_bytes,
-        in_rm_size + out_rm_size,
+        in_rm_size + out_rm_size + inb_rm_tiles * inb_single_tile_size + sum_rm_tiles * inb_single_tile_size,
         a.device()->l1_size_per_core());
     // For input_is_row_major we also allow large_tensor_needed (same L1 logic applies).
     // use_row_major_kernel (row-major gamma/beta) still skips large_tensor check as before.
@@ -551,6 +567,17 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     }
 
     // gamma/beta streaming intermediate.
+    if (residual_is_row_major) {
+        TT_FATAL(
+            flat_rm_rows && !large_tensor_needed && !use_welford,
+            "ROW_MAJOR residual is only supported on the single-pass non-Welford layernorm path");
+        add_dfb(INB_RM, inb_rm_tiles, inb_single_tile_size, inb_data_format);
+    }
+    if (output_residual_sum) {
+        TT_FATAL(residual_is_row_major && rms_norm, "output_residual_sum requires RMSNorm with a ROW_MAJOR residual");
+        add_dfb(SUM_RM, sum_rm_tiles, inb_single_tile_size, inb_data_format);
+    }
+
     if (gamma.has_value() || beta.has_value()) {
         add_dfb(FUSION, im5_t, single_tile_size, interm_data_format);
     }
@@ -605,6 +632,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     ////////////////////////////////////////////////////////////////////////////
     spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = INPUT, .spec = a.tensor_spec()});
     spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()});
+    if (output_residual_sum) {
+        spec.tensor_parameters.push_back(
+            m2::TensorParameter{.unique_id = SUM_OUTPUT, .spec = tensor_args.residual_output_tensor->tensor_spec()});
+    }
     if (b) {
         spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = RESIDUAL, .spec = b.value().tensor_spec()});
     }
@@ -686,7 +717,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (!use_welford) {
         bind_dfb(reader, SCALER, "scaler", m2::DFBEndpointType::PRODUCER);
     }
-    if (fuse_pre_add) {
+    if (residual_is_row_major) {
+        bind_dfb(reader, INB_RM, "inb_rm", m2::DFBEndpointType::PRODUCER);
+        reader.compiler_options.defines.emplace("RESIDUAL_RM", "1");
+    } else if (fuse_pre_add) {
         bind_dfb(reader, INB, "inb", m2::DFBEndpointType::PRODUCER);
     }
     if (gamma.has_value()) {
@@ -733,6 +767,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         writer.compile_time_args.emplace("elem_size_bytes", static_cast<uint32_t>(output.element_size()));
         writer.runtime_arg_schema.runtime_arg_names.push_back("H_logical");
         bind_dfb(writer, OUT_RM, "out_rm", m2::DFBEndpointType::CONSUMER);
+        if (output_residual_sum) {
+            bind_dfb(writer, SUM_RM, "sum_rm", m2::DFBEndpointType::CONSUMER);
+            bind_tensor(writer, SUM_OUTPUT, "sum_dst");
+            writer.compiler_options.defines.emplace("OUTPUT_RESIDUAL_SUM", "1");
+        }
     } else {
         bind_dfb(writer, OUT, "out", m2::DFBEndpointType::CONSUMER);
     }
@@ -801,6 +840,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (input_is_row_major) {
         compute.compiler_options.defines.emplace("TILIZE_IN", "1");
         compute.compiler_options.defines.emplace("UNTILIZE_OUT", "1");
+        if (residual_is_row_major) {
+            compute.compiler_options.defines.emplace("RESIDUAL_RM", "1");
+        }
+        if (output_residual_sum) {
+            compute.compiler_options.defines.emplace("OUTPUT_RESIDUAL_SUM", "1");
+        }
     }
     if (welford_fp32_alias) {
         compute.compiler_options.defines.emplace("WELFORD_FP32_ALIAS", "1");
@@ -834,8 +879,14 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     bind_dfb(compute, EPS, "eps", m2::DFBEndpointType::CONSUMER);
     bind_self_loop(compute, EX2, "ex2");
     bind_self_loop(compute, EX2PE, "ex2pe");
-    if (fuse_pre_add) {
+    if (residual_is_row_major) {
+        bind_dfb(compute, INB_RM, "inb_rm", m2::DFBEndpointType::CONSUMER);
+        bind_self_loop(compute, INB, "inb");
+    } else if (fuse_pre_add) {
         bind_dfb(compute, INB, "inb", m2::DFBEndpointType::CONSUMER);
+    }
+    if (output_residual_sum) {
+        bind_dfb(compute, SUM_RM, "sum_rm", m2::DFBEndpointType::PRODUCER);
     }
     if (!use_welford) {
         bind_dfb(compute, SCALER, "scaler", m2::DFBEndpointType::CONSUMER);
@@ -994,6 +1045,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args), std::move(compute_run_args)};
     run_args.tensor_args.emplace(INPUT, a.mesh_tensor());
     run_args.tensor_args.emplace(OUTPUT, output.mesh_tensor());
+    if (output_residual_sum) {
+        run_args.tensor_args.emplace(SUM_OUTPUT, tensor_args.residual_output_tensor->mesh_tensor());
+    }
     if (b) {
         run_args.tensor_args.emplace(RESIDUAL, b.value().mesh_tensor());
     }
