@@ -4,7 +4,7 @@ Status: ready to launch. NOT launched. It needs full 4x8 (32-chip) runs, which t
 on both boxes. Launch only after the user allows 4x8 runs. Box: blx03 (g14blx03) or g15blx02,
 through that box's own tt-device-mcp broker, one project job at a time.
 
-Branch: `ttp/t95-eval-pack-launchable` (t48 7606e48a8bf + this pack). expapprox (rejected, #81) and vaetrace (rejected, #87) were dropped; the LTX_VIDEO_VAE_TRACE code is not on t48.
+Branch: `ttp/t95-eval-pack-launchable` (t48 7606e48a8bf + LTX_VAE_EXACT_SHARD commit d22cef25303 + this pack). expapprox (rejected, #81) and vaetrace (rejected, #87) were dropped; the LTX_VIDEO_VAE_TRACE code is not on t48.
 
 ## What it settles
 
@@ -15,6 +15,7 @@ Branch: `ttp/t95-eval-pack-launchable` (t48 7606e48a8bf + this pack). expapprox 
 | adaln | LTX_FUSE_NORM_ADALN=1 | -1.9 %/block |
 | export_veryfast | LTX_EXPORT_PRESET=veryfast | old export (veryfast/crf23): settles the ultrafast default |
 | lofi | LTX_VAE_CONV_FIDELITY=LoFi | LoFi up-block conv3d: -177 ms decode on 2x4 (job 354), PSNR min 45 dB; needs 5-seed VBench + visual before default |
+| exact_shard | LTX_VAE_EXACT_SHARD=1 | exact-shard rebalance after upsample: -51.9 ms decode, bit-identical on 2x4 (job 454); 4x8 1080p split unchecked on device; expect PCC 1.0 vs baseline |
 | all | gate + adaln + lofi | combined |
 
 t48 7606e48a8bf has the LTX_VAE_CONV_FIDELITY commit the lofi arm needs.
