@@ -147,7 +147,10 @@ class Spec:
 
     @property
     def hf_dir(self) -> Path:
-        return self._shared("hf", "hf")
+        """The checkpoint dir. BRINGUP_HF overrides the spec (paths.hf, else the prior's, else $ART/<model>/hf) without
+        editing it, e.g. a checkout of an approved spec whose paths.hf names another user's /localdev."""
+        env = os.environ.get("BRINGUP_HF")
+        return Path(_expand(env)) if env else self._shared("hf", "hf")
 
     @property
     def golden_root(self) -> Path:
