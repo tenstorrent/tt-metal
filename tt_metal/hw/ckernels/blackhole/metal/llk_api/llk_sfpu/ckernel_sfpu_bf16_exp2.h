@@ -18,6 +18,7 @@ inline void init_exp2() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
 }
 
+template <typename Config>
 inline void exp2_clamp_pins() {
     // Clamp operands are destroyed by SWAP; SFPLOADI must execute per replay.
     TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
@@ -34,7 +35,7 @@ inline void calculate_exp2() {
     TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0x42fe);
     TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, last >> 16);
     TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, last & 0xffffu);
-    exp2_clamp_pins();
+    exp2_clamp_pins<Config>();
     TTI_REPLAY(0, replay_slots, 1, 1);
     sfpi::exp2_paired_body<Config::kDegree, true, kExpHold>();
     // The complete primitive already owns the target special classes.
@@ -42,7 +43,7 @@ inline void calculate_exp2() {
     TTI_SFPSTORE(p_sfpu::LREG3, 0, kExpAdvance, 2);
 #pragma GCC unroll 4
     for (int pair = 1; pair < Iterations / 2; ++pair) {
-        exp2_clamp_pins();
+        exp2_clamp_pins<Config>();
         TTI_REPLAY(0, replay_slots, 0, 0);
     }
 }

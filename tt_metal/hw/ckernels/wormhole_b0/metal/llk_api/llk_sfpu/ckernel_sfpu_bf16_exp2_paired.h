@@ -71,4 +71,10 @@ inline void exp2_paired_reduce() {
         ckernel::p_sfpu::LREG3,
         sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
 }
+
+template <uint32_t Degree, bool Clamp, uint32_t Hold>
+inline void exp2_paired_body() {
+    exp2_paired_scale<Hold>();
+    exp2_paired_reduce<Degree, Clamp>();
+}
 }  // namespace sfpi
