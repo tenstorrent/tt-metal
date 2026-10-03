@@ -89,6 +89,8 @@ def _stub_runtime(patch):
             "SDPA_CHUNK_ALIGN": 128,
             "ChunkedPrefillPageTableGuardMixin": type("ChunkedPrefillPageTableGuardMixin", (), {}),
             "align_num_cached_tokens_to_sdpa": _align_down,
+            # Pass-through: the stubbed prefill carries no stale page-table columns.
+            "mask_page_table_columns_past_allocation": lambda tables, prompt_lens, block_sizes: (tables, 0),
             "max_batched_prefill_users": _unused,
             "resolve_batched_prefill_chunk_users": _unused,
         },
