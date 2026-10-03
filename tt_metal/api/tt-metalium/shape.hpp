@@ -4,17 +4,20 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <ostream>
 #include <string>
+#include <string_view>
 #include <tuple>
 
-#include <fmt/core.h>
+#include <fmt/base.h>
 
 #include <tt-metalium/shape_base.hpp>
 #include <tt_stl/small_vector.hpp>
+#include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {
 

@@ -4,6 +4,12 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+#include <tuple>
+#include <utility>
+#include <vector>
+
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/shape.hpp>

@@ -6,10 +6,13 @@
 
 #include <tt-metalium/core_coord.hpp>
 
-#include <vector>
+#include <cstddef>
+#include <cstdint>
+#include <iterator>
+#include <limits>
 #include <optional>
 #include <unordered_map>
-#include <array>
+#include <vector>
 
 namespace tt::tt_metal {
 

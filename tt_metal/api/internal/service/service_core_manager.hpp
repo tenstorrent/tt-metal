@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+
 #include <memory>
-#include <stddef.h>
 #include <unordered_set>
 #include <vector>
 

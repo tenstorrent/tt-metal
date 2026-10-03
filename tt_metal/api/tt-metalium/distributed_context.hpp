@@ -4,8 +4,11 @@
 
 #pragma once
 
+#include <exception>
 #include <memory>
 #include <optional>
+#include <string>
+#include <type_traits>
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/span.hpp>
 #include <cstddef>
