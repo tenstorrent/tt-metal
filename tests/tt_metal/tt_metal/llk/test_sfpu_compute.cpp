@@ -84,6 +84,7 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
        "softplus_tile_init(); softplus_tile(0, /* beta */ 0x3F800000u, /* recip */0x3F800000u, /* threshold */ "
        "0x41A00000u);"}}},
     {"clamp", {{"SFPU_OP_CHAIN_0", "clamp_tile_init(); clamp_tile(0, 0xBF800000u, 0x3F800000u);"}}},  // [-1.0f, 1.0f]
+    {"softsign", {{"SFPU_OP_CHAIN_0", "softsign_tile_init(); softsign_tile(0);"}}},
     // Comparison-to-zero family (unary): result = 1.0f if predicate(x, 0) else 0.0f.
     {"eqz", {{"SFPU_OP_CHAIN_0", "eqz_tile_init(); eqz_tile(0);"}}},
     {"nez", {{"SFPU_OP_CHAIN_0", "nez_tile_init(); nez_tile(0);"}}},
@@ -630,6 +631,9 @@ float sfpu_function(const std::string& op_name, float input) {
     if (op_name == "sigmoid") {
         return 1 / (1 + std::exp(-input));
     }
+    if (op_name == "softsign") {
+        return input / (1.0f + std::fabs(input));
+    }
     if (op_name == "silu") {
         return input / (1 + std::exp(-input));
     }
@@ -1140,6 +1144,26 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
     }
     if (op_name == "clamp") {
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-2.0f, 2.0f, numel, seed);
+    }
+    if (op_name == "softsign") {
+        // Magnitudes up to the bf16 maximum: 1 / (1 + |x|) underflows for the largest ones, where softsign is +/-1.
+        auto possible_values = vector<bfloat16>(
+            {-3.0e38f,
+             -1.0e38f,
+             -1.0e30f,
+             -1.0e8f,
+             -100.0f,
+             -2.0f,
+             -0.5f,
+             0.0f,
+             0.5f,
+             2.0f,
+             100.0f,
+             1.0e8f,
+             1.0e30f,
+             1.0e38f,
+             3.0e38f});
+        return generate_packed_random_vector_from_vector<uint32_t, bfloat16>(possible_values, numel, seed);
     }
     if ((op_name == "relu_min") || (op_name == "relu_max")) {
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-2.0f, 10.0f, numel, seed);
@@ -1850,6 +1874,7 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
     sfpu_defines["SFPU_OP_ELU_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_NEG_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_SOFTPLUS_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_ACTIVATIONS_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_CLAMP_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_ROUND_FAMILY_INCLUDE"] = "1";
@@ -2563,6 +2588,8 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "negative"),
         std::make_tuple(1, "softplus"),
         std::make_tuple(4, "softplus"),
+        std::make_tuple(1, "softsign"),
+        std::make_tuple(4, "softsign"),
         std::make_tuple(1, "clamp"),
         std::make_tuple(4, "clamp"),
         std::make_tuple(1, "relu"),
@@ -2685,6 +2712,8 @@ INSTANTIATE_TEST_SUITE_P(
     SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture,
     ::testing::Values(
         std::make_tuple(1, "relu"),
+        std::make_tuple(1, "softsign"),
+        std::make_tuple(4, "softsign"),
         std::make_tuple(1, "relu_min"),
         std::make_tuple(1, "relu_max"),
         std::make_tuple(1, "exponential"),
@@ -2812,6 +2841,8 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "negative"),
         std::make_tuple(1, "softplus"),
         std::make_tuple(4, "softplus"),
+        std::make_tuple(1, "softsign"),
+        std::make_tuple(4, "softsign"),
         std::make_tuple(1, "clamp"),
         std::make_tuple(4, "clamp"),
         std::make_tuple(1, "relu"),
