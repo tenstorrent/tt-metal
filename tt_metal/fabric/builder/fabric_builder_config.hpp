@@ -49,64 +49,70 @@ static constexpr std::size_t num_sender_channels_with_tensix_config = 1;
 // num sender channels based on more accurate topology
 static constexpr std::size_t num_sender_channels_1d_neighbor_exchange = 1;
 static constexpr std::size_t num_sender_channels_1d_linear = 2;
+// Frozen non-express VC0 width used by the tensix/L1 path. router_wiring_rules.hpp asserts that its
+// wiring-side derivation matches this value.
 static constexpr std::size_t num_sender_channels_2d_mesh = 4;
 
-// Z router channel counts
-// VC0: 5 sender channels (mesh→Z: 0=Worker, 1-4=E/W/N/S mesh directions) + 1 receiver
-// VC1: 4 sender channels (Z→mesh, one per direction: 0=E, 1=W, 2=N, 3=S) + 0 receiver (skipped)
-static constexpr std::size_t num_sender_channels_z_router_vc0 = 5;
-static constexpr std::size_t num_sender_channels_z_router_vc1 = 4;
+// Wider family counts are derived from the wiring rules. Express and Z-boundary families both
+// reach 5 VC0 / 4 VC1 senders through different wiring.
+
 // VC2: 1 sender channel (worker-type, neighbour exchange) + 1 receiver (non-Z only)
 static constexpr std::size_t num_sender_channels_vc2 = 1;
 static constexpr std::size_t num_receiver_channels_vc2 = 1;
-static constexpr std::size_t num_sender_channels_z_router_vc2 = 1;
-// Aggregate without VC2 — VC2 channels are added dynamically by channel mapping when requires_vc2 is true
-static constexpr std::size_t num_sender_channels_z_router =
-    num_sender_channels_z_router_vc0 + num_sender_channels_z_router_vc1;
-// Max including VC2 — used only for array sizing
-static constexpr std::size_t num_sender_channels_z_router_with_vc2 =
-    num_sender_channels_z_router + num_sender_channels_z_router_vc2;
-static constexpr std::size_t num_receiver_channels_z_router = 2;  // 1 for VC0, 1 for VC1
 
 static constexpr std::size_t num_sender_channels_1d = 2;
-// VC0: Worker + 3 of [N/E/S/W] = 4 channels
-// VC1: Up to 3 of [N/E/S/W] for inter-mesh = 3 channels, 1 for Z→mesh
-// Total 2D without VC2: 4 + 3 + 1 = 8 channels (VC2 added dynamically)
-static constexpr std::size_t num_sender_channels_2d = 8;
-// Max including VC2 — used only for array sizing
+// Widest 2D family: 5 VC0 + 4 VC1 senders. VC1 includes Z because a carrier that crossed a mesh
+// boundary remains on VC1 and can still decode a Z action. VC2 adds one sender dynamically.
+static constexpr std::size_t num_sender_channels_2d = 9;
+// Max including VC2 -- used only for array sizing.
 static constexpr std::size_t num_sender_channels_2d_with_vc2 = num_sender_channels_2d + num_sender_channels_vc2;
-// Without VC2 — used for firmware CT args and L1 layout when VC2 is disabled
+// Without VC2 -- used for firmware CT args and L1 layout when VC2 is disabled.
 static constexpr std::size_t num_max_sender_channels_without_vc2 =
-    std::max({num_sender_channels_1d, num_sender_channels_2d, num_sender_channels_z_router});
-// = max(2, 8, 9) = 9
-// Absolute maximum — used for host-side array sizing (always big enough for any config)
+    std::max({num_sender_channels_1d, num_sender_channels_2d});
+// Absolute maximum -- used for host-side array sizing.
 static constexpr std::size_t num_max_sender_channels =
-    std::max({num_sender_channels_1d, num_sender_channels_2d_with_vc2, num_sender_channels_z_router_with_vc2});
-// = max(2, 9, 10) = 10
+    std::max({num_sender_channels_1d, num_sender_channels_2d_with_vc2});
 static constexpr std::size_t num_receiver_channels_1d = 1;
-// Without VC2 — VC2 receiver added dynamically
+// Without VC2 -- VC2 receiver is added dynamically.
 static constexpr std::size_t num_receiver_channels_2d = 2;  // VC0(1) + VC1(1)
-// Max including VC2 — used only for array sizing
+// Max including VC2 -- used only for array sizing.
 static constexpr std::size_t num_receiver_channels_2d_with_vc2 = num_receiver_channels_2d + num_receiver_channels_vc2;
-// Without VC2 — used for firmware CT args and L1 layout when VC2 is disabled
+// Without VC2 -- used for firmware CT args and L1 layout when VC2 is disabled.
 static constexpr std::size_t num_max_receiver_channels_without_vc2 =
-    std::max({num_receiver_channels_1d, num_receiver_channels_2d, num_receiver_channels_z_router});
-// = max(1, 2, 2) = 2
-// Absolute maximum — used for host-side array sizing (always big enough for any config)
+    std::max({num_receiver_channels_1d, num_receiver_channels_2d});
+// Absolute maximum -- used for host-side array sizing.
 static constexpr std::size_t num_max_receiver_channels =
-    std::max({num_receiver_channels_1d, num_receiver_channels_2d_with_vc2, num_receiver_channels_z_router});
-// = max(1, 3, 2) = 3
+    std::max({num_receiver_channels_1d, num_receiver_channels_2d_with_vc2});
 
 static constexpr std::size_t num_downstream_edms_vc0 = 1;
 static constexpr std::size_t num_downstream_edms_2d_vc0 = 3;
+// Express Y-facing VC0 can continue cardinally, take Z, or turn onto either X direction. The fourth
+// downstream stream register is already reserved.
+static constexpr std::size_t num_downstream_edms_2d_vc0_express = 4;
 static constexpr std::size_t num_downstream_edms_2d_vc1 = 3;  // XY intermesh: 3 mesh directions
-static constexpr std::size_t num_downstream_edms_2d_vc1_with_z = 4;  // Z intermesh: 3 mesh + Z
+static constexpr std::size_t num_downstream_edms_2d_vc1_wide =
+    4;  // widest VC1 fanout: 3 mesh + Z (Z-intermesh boundary or express)
 static constexpr std::size_t num_downstream_edms_1d = num_downstream_edms_vc0;
 static constexpr std::size_t num_downstream_edms_2d = num_downstream_edms_2d_vc0 + num_downstream_edms_2d_vc1;
 static constexpr std::size_t max_downstream_edms = 8;
 
 // 2D mesh directions (N, E, S, W)
 static constexpr uint32_t num_mesh_directions_2d = 4;
+
+// The Z-facing intermesh boundary family's channel counts (5 VC0 / 4 VC1, family max) are derived
+// in builder/router_wiring_rules.* (boundary_vc0/vc1_sender_count) from this direction count, not
+// stated here.
+
+// Bubble injection requires at least two downstream slots. Must match
+// BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS and fabric_router_mux_extension.cpp;
+// the host cannot include the device constant.
+static constexpr uint32_t bubble_flow_control_protected_receiver_min_slots = 2;
+
+// Only VC0 uses bubble flow control. VC1's intermesh dependency graph has no bubble proof for
+// arbitrary cross-mesh patterns, so its senders remain unguarded. Injection flags and protected-slot
+// validation must share this predicate. First-level ACK is independent; VC1 ACK paths do not fit in
+// the ACTIVE_ETH kernel config window (see ENABLE_FIRST_LEVEL_ACK_VC1 in erisc_datamover_builder.cpp).
+constexpr bool bubble_flow_control_enabled_on_vc(uint32_t vc) { return vc == 0; }
 
 uint32_t get_sender_channel_count(bool is_2D_routing);
 
@@ -118,9 +124,9 @@ uint32_t get_num_tensix_sender_channels(Topology topology, tt::tt_fabric::Fabric
 
 uint32_t get_downstream_edm_count(bool is_2D_routing);
 
-uint32_t get_vc0_downstream_edm_count(bool is_2D_routing);
+uint32_t get_vc0_downstream_edm_count(bool is_2D_routing, bool express_routing_enabled = false);
 
-uint32_t get_vc1_downstream_edm_count(bool is_2D_routing);
+uint32_t get_vc1_downstream_edm_count(bool is_2D_routing, bool express_routing_enabled = false);
 
 }  // namespace builder_config
 
