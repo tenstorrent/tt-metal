@@ -1,0 +1,14 @@
+{
+  "llm_dtype": "bfp8",
+  "depth_dtype": "bfp8",
+  "depth_fidelity": "hifi2",
+  "dit_dtype": "bf16",
+  "dit_fidelity": "hifi2",
+  "source": "stage 07 dtype sweep",
+  "thresholds": {
+    "c0_top1": 0.9,
+    "c0_top5": 0.98,
+    "depth_top1": 0.9,
+    "depth_top5": 0.98
+  }
+}
