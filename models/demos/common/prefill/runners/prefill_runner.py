@@ -16,10 +16,16 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
 from models.demos.common.prefill.runners.migration import (
+    allgather_kv_stage_layouts,
+    deliver_device_map_and_gather_stage_layouts,
+    export_device_map_file_and_gather_stage_layouts,
     is_per_host_storage,
+    migration_device_map_file_path,
     migration_file_export_enabled,
     migration_table_path,
     migration_table_path_is_explicit,
+    publish_serialized_table_and_wait_ready,
+    rank_scoped_device_map_path,
     remove_stale_device_map_sidecars,
     serialize_device_map,
 )
@@ -529,7 +535,6 @@ def _print_config() -> None:
         ("PREFILL_H2D_SERVICE_ID", os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")),
         ("PREFILL_TRACE_DIR", os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default)),
         ("PREFILL_ENABLE_MIGRATION", os.environ.get("PREFILL_ENABLE_MIGRATION", "0")),
-        ("PREFILL_MOCK_MIGRATION", os.environ.get("PREFILL_MOCK_MIGRATION", "0")),
         ("PREFILL_MIGRATION_TABLE_PATH", migration_table_path()),
         ("PREFILL_MIGRATION_WAIT_READY_MS", os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000")),
         ("PREFILL_MIGRATION_EXPORT_TO_FILE", os.environ.get("PREFILL_MIGRATION_EXPORT_TO_FILE", "0")),
@@ -559,6 +564,7 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
         "num_users": NUM_USERS,
         "mesh_shape": GLOBAL_MESH_SHAPE,
         "mtp_levels": MTP_LEVELS,
+        "PREFILL_ENABLE_MIGRATION": os.environ.get("PREFILL_ENABLE_MIGRATION", "0"),
         "PREFILL_MIGRATION_EXPORT_TO_FILE": migration_file_export_enabled(),
     }
     fingerprint = "|".join(f"{k}={v}" for k, v in fields.items())
@@ -646,7 +652,6 @@ def main() -> None:
 
 
 def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
-    single_rank = num_ranks == 1
     d2d_activation_rows = d2d_rows_for(CHUNK_SIZE, sp_factor=GLOBAL_MESH_SHAPE[0], mtp_levels=MTP_LEVELS)
     d2d_activation_width = d2d_width(hf_config.hidden_size, dflash=DFLASH_ENABLED)
     # Planes on dim 1 of the D2D payload, evaluated at BOTH edges of this rank's slice: what it
@@ -812,142 +817,82 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     )
 
     migration_endpoint = None
-    _mock_migration = os.environ.get("PREFILL_MOCK_MIGRATION", "0") == "1"
-    _migration_enabled = os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1"
+    _publish_to_worker = os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1"
     _file_export = migration_file_export_enabled()
 
-    if _mock_migration and not _migration_enabled:
-        _mock_table_path = migration_table_path()
-        _mock_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
-        runtime.build_kv_chunk_table(kv_caches, path=_mock_table_path)
-        remove_stale_device_map_sidecars(_mock_map_path)
-        serialize_device_map(mesh_device, _mock_map_path)
-        logger.info(
-            f"[mock-migration] KV chunk table -> {_mock_table_path}, device map -> {_mock_map_path} "
-            f"(no migration worker); prefill_producer can import them"
-        )
+    table_path = migration_table_path()
+    wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
+    device_map_json_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
 
-    if _migration_enabled:
-        from models.demos.common.prefill.runners.migration import (
-            allgather_kv_stage_layouts,
-            deliver_device_map_and_gather_stage_layouts,
-            export_device_map_file_and_gather_stage_layouts,
-            migration_device_map_file_path,
-            publish_serialized_table_and_wait_ready,
-            rank_scoped_device_map_path,
-        )
-
-        table_path = migration_table_path()
-        wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
-
-        if num_ranks > 1 and is_per_host_storage(table_path):
-            if migration_table_path_is_explicit():
-                raise ValueError(
-                    f"PREFILL_MIGRATION_TABLE_PATH={os.path.abspath(table_path)} is on per-host storage; "
-                    f"with num_ranks={num_ranks} the table rank 0 writes is invisible to the other hosts' "
-                    "readers. Point it at shared/NFS storage (e.g. /data/...)."
-                )
-            logger.warning(
-                f"[migration] KV chunk table defaults to per-host {table_path} at num_ranks={num_ranks}; "
-                "readers on other hosts cannot see it. Set PREFILL_MIGRATION_TABLE_PATH to shared storage "
-                "if one is expected."
-            )
-
-        if is_first_rank and os.path.exists(table_path):
-            logger.warning(f"[migration] removing stale KV chunk table {table_path} from a prior run")
-            os.remove(table_path)
-
-        if not _file_export:
-            remove_stale_device_map_sidecars(
-                os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
-            )
-
-        if not hasattr(runtime, "kv_migration_stages"):
-            raise RuntimeError(
-                f"migration enabled but runtime {type(runtime).__name__} does not implement "
-                "kv_migration_stages, so its KV cache layout cannot be described "
-                "(see docs/ADDING_A_PREFILL_MODEL.md §2)."
-            )
-        kv_stages = runtime.kv_migration_stages(kv_caches, first_layer_idx, num_my_layers)
-        _mock_migration = os.environ.get("PREFILL_MOCK_MIGRATION", "0") == "1"
-        if _mock_migration:
-            stage_layouts = allgather_kv_stage_layouts(mesh_device, kv_stages, GLOBAL_MESH_SHAPE)
-        elif _file_export:
-            stage_layouts = export_device_map_file_and_gather_stage_layouts(
-                mesh_device, kv_stages, GLOBAL_MESH_SHAPE, migration_device_map_file_path()
-            )
-        else:
-            stage_layouts = deliver_device_map_and_gather_stage_layouts(mesh_device, kv_stages, GLOBAL_MESH_SHAPE, rank)
-
-        if _mock_migration:
-            device_map_path = rank_scoped_device_map_path(
-                os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json"),
-                rank,
-                num_ranks,
-            )
-            serialize_device_map(mesh_device, device_map_path)
-            if is_first_rank:
-                table_path = runtime.build_kv_chunk_table(
-                    kv_caches,
-                    table_path,
-                    first_layer_idx=first_layer_idx,
-                    num_my_layers=num_my_layers,
-                    stage_layouts=stage_layouts,
-                )
-                logger.info(f"[mock-migration] merged KV chunk table -> {table_path} (no migration worker)")
-            logger.info(f"[mock-migration] rank {rank}: local device map -> {device_map_path}")
-        elif _file_export:
-            if is_first_rank:
-                table_path = runtime.build_kv_chunk_table(
-                    kv_caches,
-                    table_path,
-                    first_layer_idx=first_layer_idx,
-                    num_my_layers=num_my_layers,
-                    stage_layouts=stage_layouts,
-                )
-                logger.info(f"[migration] merged KV chunk table -> {table_path} (file export; no worker handshake)")
-            logger.info(f"[migration] rank {rank}: exported local device map -> {migration_device_map_file_path()}")
-        else:
-            device_map_path = rank_scoped_device_map_path(
-                os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json"),
-                rank,
-                num_ranks,
-            )
-            serialize_device_map(mesh_device, device_map_path)
-            logger.info(f"[migration] rank {rank}: local device map -> {device_map_path}")
-
-            if is_first_rank:
-                table_path = runtime.build_kv_chunk_table(
-                    kv_caches,
-                    table_path,
-                    first_layer_idx=first_layer_idx,
-                    num_my_layers=num_my_layers,
-                    stage_layouts=stage_layouts,
-                )
-                migration_endpoint = publish_serialized_table_and_wait_ready(
-                    table_path=table_path,
-                    wait_ready_timeout_ms=wait_ready_ms,
-                )
-            else:
-                logger.info(
-                    f"[migration] rank {rank}: delivered local device map + contributed stage "
-                    f"(first_layer={first_layer_idx}, count={num_my_layers}); rank 0 sends the merged table."
-                )
-
-    elif os.environ.get("PREFILL_MOCK_MIGRATION", "0") == "1":
-        if not single_rank:
+    if num_ranks > 1 and is_per_host_storage(table_path):
+        if migration_table_path_is_explicit():
             raise ValueError(
-                f"PREFILL_MOCK_MIGRATION=1 is unsupported for num_ranks={num_ranks} (each rank would "
-                "publish a table covering only its own layer slice; a merged mock table is not "
-                "implemented); run single-rank or unset PREFILL_MOCK_MIGRATION."
+                f"PREFILL_MIGRATION_TABLE_PATH={os.path.abspath(table_path)} is on per-host storage; "
+                f"with num_ranks={num_ranks} the table rank 0 writes is invisible to the other hosts' "
+                "readers. Point it at shared/NFS storage (e.g. /data/...)."
             )
-        table_path = migration_table_path()
-        runtime.build_kv_chunk_table(kv_caches, path=table_path)
-        device_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
+        logger.warning(
+            f"[migration] KV chunk table defaults to per-host {table_path} at num_ranks={num_ranks}; "
+            "readers on other hosts cannot see it. Set PREFILL_MIGRATION_TABLE_PATH to shared storage "
+            "if one is expected."
+        )
+
+    if is_first_rank and os.path.exists(table_path):
+        logger.warning(f"[migration] removing stale KV chunk table {table_path} from a prior run")
+        os.remove(table_path)
+
+    if not _file_export:
+        remove_stale_device_map_sidecars(device_map_json_path)
+
+    if not hasattr(runtime, "kv_migration_stages"):
+        raise RuntimeError(
+            f"runtime {type(runtime).__name__} does not implement kv_migration_stages, so its KV cache "
+            "layout cannot be described and no chunk table can be built (see docs/ADDING_A_PREFILL_MODEL.md §2)."
+        )
+    kv_stages = runtime.kv_migration_stages(kv_caches, first_layer_idx, num_my_layers)
+
+    if _file_export:
+        stage_layouts = export_device_map_file_and_gather_stage_layouts(
+            mesh_device, kv_stages, GLOBAL_MESH_SHAPE, migration_device_map_file_path()
+        )
+    elif _publish_to_worker:
+        stage_layouts = deliver_device_map_and_gather_stage_layouts(mesh_device, kv_stages, GLOBAL_MESH_SHAPE, rank)
+    else:
+        stage_layouts = allgather_kv_stage_layouts(mesh_device, kv_stages, GLOBAL_MESH_SHAPE)
+
+    if _file_export:
+        logger.info(f"[migration] rank {rank}: exported local device map -> {migration_device_map_file_path()}")
+    else:
+        device_map_path = rank_scoped_device_map_path(device_map_json_path, rank, num_ranks)
         serialize_device_map(mesh_device, device_map_path)
+        logger.info(f"[migration] rank {rank}: local device map -> {device_map_path}")
+
+    if not stage_layouts:
+        logger.warning(
+            f"[migration] rank {rank}: {type(runtime).__name__} reported no KV cache stage, so there is "
+            "no cache layout to describe and no chunk table is built. A hybrid stack does this when a "
+            "rank owns no KV-writing layer, and GPT-OSS does it for a bounded sliding cache; migration of "
+            "this rank's cache is not possible."
+        )
+    elif is_first_rank:
+        table_path = runtime.build_kv_chunk_table(
+            kv_caches,
+            table_path,
+            first_layer_idx=first_layer_idx,
+            num_my_layers=num_my_layers,
+            stage_layouts=stage_layouts,
+        )
+        if _publish_to_worker:
+            migration_endpoint = publish_serialized_table_and_wait_ready(
+                table_path=table_path,
+                wait_ready_timeout_ms=wait_ready_ms,
+            )
+        else:
+            logger.info(f"[migration] merged KV chunk table -> {table_path} (no worker handshake)")
+    else:
         logger.info(
-            f"[mock-migration] KV chunk table -> {table_path}, device map -> {device_map_path} "
-            f"(no migration worker); prefill_producer can import them"
+            f"[migration] rank {rank}: contributed stage (first_layer={first_layer_idx}, "
+            f"count={num_my_layers}); rank 0 owns the merged table."
         )
 
     if getattr(runtime, "capture_trace", None) and runtime.config.use_trace:

@@ -87,7 +87,7 @@ fi
 # context even within double quotes, and the script fails to parse rather than to run.
 HOSTS="${PREFILL_HOSTS:?PREFILL_HOSTS must list the rank hosts, rank 0 first (e.g. hostA,hostB)}"
 
-# sc1 is single-galaxy. It takes the same STAGED code path as sc4 -- PREFILL_MOCK_MIGRATION all-gathers
+# sc1 is single-galaxy. It takes the same STAGED code path as sc4 -- the runner all-gathers
 # the stage layouts at any rank count -- so what it does not cover is the remote HOST, not the branch: one
 # rank builds the table over its own DRAM and the producer reads it back over local PCIe. The rank count
 # itself comes from the mesh-graph descriptor below, so this only validates the key.
@@ -212,8 +212,7 @@ python3 "${TTRUN_PY}" \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
     ${RUNNER_NUM_USERS_EXPORT}\
     export PREFILL_TIMING_DIR='${TIMING_DIR}'; \
-    export PREFILL_ENABLE_MIGRATION=1; \
-    export PREFILL_MOCK_MIGRATION=1; \
+    export PREFILL_ENABLE_MIGRATION=0; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
     export PREFILL_MIGRATION_DEVICE_MAP_PATH=/tmp/dflash_kv_device_map.json; \
     export PREFILL_SYNC_PER_CHUNK=1; \

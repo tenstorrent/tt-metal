@@ -401,11 +401,15 @@ class TtPrefillRuntime:
         """One ``KvCacheStage`` anchored on K, for the runner's device-map / stage-layout gather.
 
         Single-rank, so ``build_kv_chunk_table`` ignores the gathered layouts and resolves each K/V
-        config's own ``buffer_address()``; this one stage only satisfies the runner's gather."""
+        config's own ``buffer_address()``; this one stage only satisfies the runner's gather.
+
+        A bounded sliding cache has no chunk-table layout yet, so it reports no stage and the runner
+        serves without a table."""
         from models.demos.common.prefill.runners.migration import KvCacheStage
 
         kv = self._resolve_kv(kv_caches)
-        assert not kv.bounded_sliding, "bounded_sliding_kv_cache is incompatible with KV migration"
+        if kv.bounded_sliding:
+            return []
         first_layer_idx = self.config.first_layer_idx if first_layer_idx is None else int(first_layer_idx)
         num_my_layers = self.config.num_layers if num_my_layers is None else int(num_my_layers)
         return [KvCacheStage(int(kv.k.buffer_address()), first_layer_idx, num_my_layers)]
