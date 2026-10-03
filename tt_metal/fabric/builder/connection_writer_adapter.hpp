@@ -73,6 +73,17 @@ public:
     // Get the connection mask for a specific VC
     virtual uint32_t get_downstream_edm_mask_for_vc(uint32_t vc_idx) const = 0;
 
+    // Pack destination routers' absolute sender channel IDs by compact 2D downstream slot.
+    virtual uint32_t get_packed_downstream_sender_channel_ids(uint32_t vc_idx) const = 0;
+
+    // Every downstream connection of a VC represented as downstream router's (direction, NoC x/y), in the
+    // order they were added.
+    virtual const std::vector<std::pair<eth_chan_directions, tt::tt_metal::CoreCoord>>& get_downstream_connections(
+        uint32_t vc_idx) const = 0;
+
+    // The absolute sender channel id for the channel connected to a particular vc and slot.
+    virtual std::optional<size_t> get_downstream_sender_channel_id(uint32_t vc_idx, size_t slot) const = 0;
+
 protected:
     ~ChannelConnectionWriterAdapter() = default;
 
@@ -124,6 +135,17 @@ public:
         return downstream_edms_connected_by_vc_mask.at(vc_idx);
     }
 
+    uint32_t get_packed_downstream_sender_channel_ids(uint32_t vc_idx) const override;
+
+    const std::vector<std::pair<eth_chan_directions, tt::tt_metal::CoreCoord>>& get_downstream_connections(
+        uint32_t vc_idx) const override {
+        return downstream_edms_connected_by_vc.at(vc_idx);
+    }
+
+    std::optional<size_t> get_downstream_sender_channel_id(uint32_t vc_idx, size_t slot) const override {
+        return downstream_sender_channel_ids.at(vc_idx).at(slot);
+    }
+
     // Get buffer index semaphore address for a specific VC and compact index
     std::optional<size_t> get_buffer_index_semaphore_address(uint32_t vc_idx, size_t compact_idx) const {
         return downstream_edm_buffer_index_semaphore_addresses.at(vc_idx).at(compact_idx);
@@ -162,6 +184,12 @@ private:
 
     // Per-VC connection mask: bitmask indicating which downstream EDMs are connected for each VC
     std::array<uint32_t, builder_config::num_max_receiver_channels> downstream_edms_connected_by_vc_mask = {};
+
+    // Destination router's absolute sender channel for each compact downstream slot.
+    std::array<
+        std::array<std::optional<size_t>, builder_config::max_downstream_edms>,
+        builder_config::num_max_receiver_channels>
+        downstream_sender_channel_ids = {};
 
     std::array<
         std::array<std::optional<size_t>, builder_config::max_downstream_edms>,

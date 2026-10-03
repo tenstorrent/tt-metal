@@ -93,5 +93,65 @@ TEST(FabricStaticSizedChannelsAllocatorTest, RingKeepsUniformChannelDepth) {
     EXPECT_EQ(allocator.get_receiver_channel_number_of_slots(0, 0), 8);
 }
 
+TEST(FabricStaticSizedChannelsAllocatorTest, ChannelBuffersEndAfterTheLastReceiver) {
+    constexpr size_t region_start = 0x10000;
+
+    // The allocator lays out every sender, VC by VC, then every receiver, so the last buffer is the last receiver.
+    // It sizes channels from a hardcodedtable of options, deepest first, taking the first whose total fits the space.
+
+    // Mesh: 4 VC0 senders (worker + 3 forwarding), 3 VC1 senders (all forwarding), one receiver per VC. The space holds
+    // 360800 / 14432 = 25 slots. The VC0+VC1 mesh options, as (VC0 sender, VC0 receiver, VC1 sender, VC1 receiver), using
+    // the depth options from the allocator:
+    //   (4, 8, 2, 4): 4*4 + 8 + 3*2 + 4 = 34 slots, too many
+    //   (4, 8, 2, 2): 4*4 + 8 + 3*2 + 2 = 32 slots, too many
+    //   (2, 4, 2, 2): 4*2 + 4 + 3*2 + 2 = 20 slots, fits
+    // A mesh then gives the 5 spare slots to the worker channel (2 + 5 = 7), so all 25 are used: the buffers end
+    // at the end of the space, after VC1's receiver.
+    {
+        constexpr size_t channel_buffer_size = 14432;
+        constexpr size_t available_space = 360800;
+        const FabricStaticSizedChannelsAllocator allocator(
+            Topology::Mesh,
+            FabricEriscDatamoverOptions{},
+            {4, 3, 0},
+            {1, 1, 0},
+            channel_buffer_size,
+            available_space,
+            {{region_start, available_space}});
+
+        EXPECT_EQ(
+            allocator.get_channel_buffers_end_address(),
+            allocator.get_receiver_channel_base_address(1, 0) +
+                allocator.get_receiver_channel_number_of_slots(1, 0) * channel_buffer_size);
+        EXPECT_EQ(allocator.get_channel_buffers_end_address(), region_start + available_space);
+    }
+
+    // Ring: VC0 only, 2 senders (worker + the one neighbour it forwards for) and 1 receiver. The space holds
+    // 366656 / 14384 = 25 slots, rounded down. The ring options, as (sender, receiver), after Blackhole's deeper
+    // (32, 32) and (16, 32), which are also too many, using the depth options from the allocator:
+    //   (16, 16): 2*16 + 16 = 48 slots, too many
+    //   (8, 16):  2*8 + 16 = 32 slots, too many
+    //   (8, 8):   2*8 + 8 = 24 slots, fits
+    // Only a mesh or torus hands out spare slots, so the buffers end 24 slots in, short of the space.
+    {
+        constexpr size_t channel_buffer_size = 14384;
+        constexpr size_t available_space = 366656;
+        const FabricStaticSizedChannelsAllocator allocator(
+            Topology::Ring,
+            FabricEriscDatamoverOptions{},
+            {2, 0, 0},
+            {1, 0, 0},
+            channel_buffer_size,
+            available_space,
+            {{region_start, available_space}});
+
+        EXPECT_EQ(
+            allocator.get_channel_buffers_end_address(),
+            allocator.get_receiver_channel_base_address(0, 0) +
+                allocator.get_receiver_channel_number_of_slots(0, 0) * channel_buffer_size);
+        EXPECT_EQ(allocator.get_channel_buffers_end_address(), region_start + (2 * 8 + 8) * channel_buffer_size);
+    }
+}
+
 }  // namespace
 }  // namespace tt::tt_fabric
