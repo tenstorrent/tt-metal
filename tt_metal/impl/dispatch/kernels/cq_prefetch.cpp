@@ -182,6 +182,8 @@ FORCE_INLINE uint32_t prefetch_q_read_slot(volatile tt_l1_ptr prefetch_q_entry_t
 //      read issue (after includes consume), in-flight bookkeeping after an issue, and retire bookkeeping, with
 //      HPM deltas
 //   5: the read issue alone, with HPM deltas
+//   6: the three NoC issue paths, each preceded by a region that only loads the firmware NoC counter and bank
+//      table lines that path uses, to see whether those lines are what misses, with HPM deltas
 #if defined(PREFETCH_Q_STATS)
 struct PrefetchQStats {
     uint64_t start_cycle;
@@ -200,7 +202,7 @@ inline __attribute__((always_inline)) uint64_t prefetch_q_cycle_now() {
 
 constexpr uint32_t pq_group = PREFETCH_Q_STATS;
 // Group 1 probes also read minstret and the four HPM counters, so each region gets its own event counts.
-constexpr bool pq_full = pq_group == 1 || pq_group == 4 || pq_group == 5;
+constexpr bool pq_full = pq_group == 1 || pq_group == 3 || pq_group == 4 || pq_group == 5 || pq_group == 6;
 constexpr uint32_t PQ_NUM_COUNTERS = 6;  // mcycle, minstret, mhpmcounter3..6
 
 // Rocket HPM event selectors: bits [7:0] pick the event set, higher bits select events within it. D$ blocked and
@@ -230,13 +232,21 @@ enum PqRegion : uint32_t {
     PQ_PCIE_POST,
     PQ_ISSUE_POST,
     PQ_RETIRE_POST,
+    PQ_TOUCH_READ,
+    PQ_TOUCH_WRITE,
+    PQ_TOUCH_ATOMIC,
     PQ_NUM_REGIONS
 };
 constexpr uint32_t pq_region_group(uint32_t region) {
-    return region <= PQ_PROCESS ? 1U : region <= PQ_READ_WAIT ? 2U : region <= PQ_RELEASE ? 3U : 4U;
+    return region <= PQ_PROCESS       ? 1U
+           : region <= PQ_READ_WAIT   ? 2U
+           : region <= PQ_RELEASE     ? 3U
+           : region <= PQ_RETIRE_POST ? 4U
+                                      : 6U;
 }
 constexpr bool pq_active(uint32_t region) {
-    return pq_region_group(region) == pq_group || (pq_group == 5 && region == PQ_READ_ISSUE);
+    return pq_region_group(region) == pq_group || (pq_group == 5 && region == PQ_READ_ISSUE) ||
+           (pq_group == 6 && (region == PQ_READ_ISSUE || region == PQ_RELAY_WRITE || region == PQ_RELEASE));
 }
 
 struct PqSnap {
@@ -303,7 +313,14 @@ inline __attribute__((always_inline)) void pq_record(const PqSnap& start, const 
     if constexpr (pq_active(region)) {                          \
         pq_record<region>(var, pq_read_after<pq_full>(loaded)); \
     }
+// Loads one word through the cache and waits for it, so a miss on that line lands in the enclosing region.
+#define PQ_TOUCH(region, var, word)                                                         \
+    if constexpr (pq_active(region)) {                                                      \
+        PqSnap var = pq_read<pq_full>();                                                    \
+        pq_record<region>(var, pq_read_after<pq_full>(*(volatile const uint32_t*)&(word))); \
+    }
 #else
+#define PQ_TOUCH(region, var, word)
 #define PQ_START(region, var)
 #define PQ_STOP(region, var)
 #define PQ_STOP_AFTER(region, var, loaded)
@@ -713,6 +730,8 @@ FORCE_INLINE uint32_t read_from_pcie(
         size);
 #endif
     PQ_STOP(PQ_PCIE_PRE, pq_pcie_pre);
+    PQ_TOUCH(PQ_TOUCH_READ, pq_touch_reads, noc_reads_num_issued[noc_index]);
+    PQ_TOUCH(PQ_TOUCH_READ, pq_touch_bank, dram_bank_to_noc_xy[noc_index][0]);
     PQ_START(PQ_READ_ISSUE, pq_read_issue);
     noc_async_read_set_trid(trid);
     noc_async_read(host_src_addr, dst_addr, size);
@@ -1102,6 +1121,8 @@ static uint32_t process_relay_inline_cmd(uintptr_t cmd_ptr, uint32_t& local_down
     RelayInlineState::cb_writer.acquire_pages(npages);
     PQ_STOP(PQ_CREDIT_WAIT, pq_credit_wait);
 
+    PQ_TOUCH(PQ_TOUCH_WRITE, pq_touch_writes, noc_nonposted_writes_num_issued[noc_index]);
+    PQ_TOUCH(PQ_TOUCH_WRITE, pq_touch_acks, noc_nonposted_writes_acked[noc_index]);
     PQ_START(PQ_RELAY_WRITE, pq_relay_write);
     uint32_t remaining = cmddat_q_end - data_ptr;
     if (cmddat_wrap_enable && length > remaining) {
@@ -1128,6 +1149,7 @@ static uint32_t process_relay_inline_cmd(uintptr_t cmd_ptr, uint32_t& local_down
     PQ_START(PQ_FLUSH_WAIT, pq_flush_wait);
     noc_async_writes_flushed();
     PQ_STOP(PQ_FLUSH_WAIT, pq_flush_wait);
+    PQ_TOUCH(PQ_TOUCH_ATOMIC, pq_touch_atomics, noc_nonposted_atomics_acked[noc_index]);
     PQ_START(PQ_RELEASE, pq_release);
     RelayInlineState::cb_writer.release_pages(npages, local_downstream_data_ptr);
     PQ_STOP(PQ_RELEASE, pq_release);
