@@ -65,6 +65,14 @@ constexpr std::uint32_t PERF_COUNTERS_LAYOUT_END        = PERF_COUNTERS_VALID_CO
 
 // A literal because BRISC has no llk_profiler namespace; the LLK_PROFILER section asserts it symbolically.
 static_assert(PERF_COUNTERS_LAYOUT_END <= 0x16AFF0u, "Perf counter L1 layout overflows into the profiler region");
+constexpr std::uint32_t PERF_START_OFFSET_ADDR = 0x16AFE0; // host-written start offsets (Wormhole L1_TO_L1 dithering)
+static_assert(PERF_COUNTERS_LAYOUT_END <= PERF_START_OFFSET_ADDR, "start offset word overlaps the counter layout");
+// PERF_START_OFFSET_ADDR: [0] repetitions, [1] pack step | count << 16, [2] unpack/math step | count << 16.
+namespace detail
+{
+// The start offset of the current repetition: low half pack, high half unpack and math.
+inline std::uint32_t start_offset_word = 0;
+} // namespace detail
 
 // On-wire bank IDs are llk::perf::Bank; the order is a contract with the host.
 constexpr std::uint32_t COUNTER_BANK_COUNT = llk::perf::NUM_BANKS;
@@ -548,7 +556,10 @@ constexpr bool is_single_thread_runtype(PerfRunType run_type)
 // whole measured window. A span needs every thread stopped before the read, so those keep the barrier.
 constexpr bool exit_barrier_for(PerfRunType run_type)
 {
-    return !is_single_thread_runtype(run_type);
+    // Peers of a single-thread run type wait in the exit barrier too: spinning there touches no L1, but
+    // ending their zone and kernel during the measured window moves the Wormhole packers' phase.
+    (void)run_type;
+    return true;
 }
 
 constexpr bool is_measured_thread(PerfRunType run_type)
@@ -621,7 +632,7 @@ struct perf_counter_scoped
     inline __attribute__((always_inline)) explicit perf_counter_scoped(std::uint32_t zid) : zone_id(zid)
     {
         ckernel::fence_compiler();
-        if constexpr (is_reader_thread(RUN_TYPE))
+        if constexpr (is_reader_thread(RUN_TYPE) && !exit_barrier_for(RUN_TYPE))
         {
             detail::reader_here = true;
         }
@@ -637,6 +648,27 @@ struct perf_counter_scoped
                 }
                 arm_all_counters();
             });
+        // Let the peers settle into their exit barrier before the measured zone opens.
+        if constexpr (is_single_thread_runtype(RUN_TYPE) && is_measured_thread(RUN_TYPE))
+        {
+            std::uint32_t settle;
+            asm volatile("li %0, 256\n1:\n\taddi %0, %0, -1\n\tbnez %0, 1b" : "=&r"(settle));
+        }
+        // Wormhole L1_TO_L1: each thread waits its start offset (host-written, low half pack, high half
+        // unpack and math) before its zone opens, so successive executions sample different packer phases.
+        if constexpr (RUN_TYPE == PerfRunType::L1_TO_L1)
+        {
+            const std::uint32_t word = detail::start_offset_word;
+#if defined(LLK_TRISC_PACK)
+            std::uint32_t spin = word & 0xFFFFu;
+#else
+            std::uint32_t spin = word >> 16;
+#endif
+            if (spin != 0)
+            {
+                asm volatile("1:\n\taddi %0, %0, -1\n\tbnez %0, 1b" : "+r"(spin));
+            }
+        }
         ckernel::fence_compiler();
     }
 
@@ -689,7 +721,8 @@ inline void read_last_zone()
 
 // One measured scope: NC activates timing only, WC both. Without the profiler there is no zone to open.
 #if defined(LLK_PROFILER)
-#define START_PERF_MEASURE(zone_name) \
+#define START_PERF_MEASURE(zone_name)    \
+    asm volatile(".p2align 6");      \
     MEASURE_PERF_COUNTERS(zone_name)  \
     ZONE_SCOPED(zone_name)
 #else
