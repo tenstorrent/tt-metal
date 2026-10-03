@@ -1530,3 +1530,26 @@ def test_untilize_with_unpadding_zero_volume_same_layout_output_follows_input_sh
 
     assert list(output.shape) == [0, 64]
     assert output.memory_config().shard_spec.shape == [32, 64]
+
+
+# The validator's batch-dimension loop used `rank() - 2` on an unsigned rank, so a rank-1 input
+# wrapped to 4294967295 and compared the padded height against dim 0. Both of these failed.
+@pytest.mark.parametrize("shape, end", [((0,), 4294967295), ((32,), 31)])
+def test_untilize_with_unpadding_rank_1_width_sharded(device, shape, end):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    width_sharded = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [32, 32], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    tilized = ttnn.from_torch(
+        torch.rand(shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=width_sharded,
+    )
+
+    output = ttnn.untilize_with_unpadding(tilized, ttnn.Shape([end]))
+
+    assert list(output.shape) == list(shape)
