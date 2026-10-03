@@ -22,7 +22,6 @@
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
-#include "gelu_bw/device/gelu_bw_device_operation.hpp"
 #include "device/unary_backward_device_operation.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
@@ -1603,7 +1602,11 @@ std::vector<std::optional<ttnn::Tensor>> gelu_bw(
     auto output_memory_config =
         input_grad.has_value() ? input_grad->memory_config() : output_mem_config.value_or(input.memory_config());
 
-    return {ttnn::prim::gelu_bw(grad, input, variant, input.dtype(), output_memory_config, input_grad)};
+    const auto op_type = variant == operations::unary::GeluVariant::TANH
+                             ? ttnn::operations::unary_backward::UnaryBackwardOpType::GELU_TANH_BW
+                             : ttnn::operations::unary_backward::UnaryBackwardOpType::GELU_BW;
+    return {ttnn::operations::unary_backward::launch_unary_backward(
+        op_type, grad, input, input.dtype(), output_memory_config, input_grad)};
 }
 
 std::vector<Tensor> repeat_bw(
