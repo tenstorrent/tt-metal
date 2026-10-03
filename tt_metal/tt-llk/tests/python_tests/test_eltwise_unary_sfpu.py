@@ -734,6 +734,133 @@ def test_sqrt_family_negative_zero_regression(
     )
 
 
+# The float comparison-to-zero kernels (calculate_comp in llk_sfpu/ckernel_sfpu_comp.h), read
+# back as raw bit patterns on every IEEE class. The sweeps above send +/-0, +/-inf and one
+# +NaN; they never send a denormal, a signalling NaN or a negative NaN, and passed_test()
+# treats -0.0 and +0.0 as equal. Float32 -> Float32 at dest_acc=Yes is the only pipeline that
+# delivers every one of these classes to the LREG intact (negative_zero_delivered /
+# specials_safe), and a 32-bit output returns the 0.0 / 1.0 lanes bit-exactly.
+#
+# Expected values are IEEE: -0.0 is not < 0 but is >= 0 and <= 0, denormals order like the
+# non-zero values they are, and every NaN compares false on the ordered predicates, so
+# ltz/gtz/gez/lez give 0 and nez gives 1. Each probe is repeated across the tile so every
+# face and every lane position sees every class.
+_COMP_ZERO_OPS = [
+    MathOperation.EqualZero,
+    MathOperation.NotEqualZero,
+    MathOperation.LessThanZero,
+    MathOperation.GreaterThanZero,
+    MathOperation.LessThanEqualZero,
+    MathOperation.GreaterThanEqualZero,
+]
+
+# fmt: off
+_COMP_ZERO_PROBES = (
+    ("+0",          0x00000000), ("-0",          0x80000000),
+    ("+denorm_min", 0x00000001), ("-denorm_min", 0x80000001),
+    ("+denorm_max", 0x007FFFFF), ("-denorm_max", 0x807FFFFF),
+    ("+FLT_MIN",    0x00800000), ("-FLT_MIN",    0x80800000),
+    ("+1",          0x3F800000), ("-1",          0xBF800000),
+    ("+FLT_MAX",    0x7F7FFFFF), ("-FLT_MAX",    0xFF7FFFFF),
+    ("+inf",        0x7F800000), ("-inf",        0xFF800000),
+    ("+qNaN",       0x7FC00000), ("-qNaN",       0xFFC00000),
+    ("+sNaN",       0x7F800001), ("-sNaN",       0xFF800001),
+    ("+NaN_full",   0x7FFFFFFF), ("-NaN_full",   0xFFFFFFFF),
+)
+# fmt: on
+
+_COMP_ZERO_PREDICATE = {
+    MathOperation.EqualZero: lambda x: x == 0.0,
+    MathOperation.NotEqualZero: lambda x: x != 0.0,
+    MathOperation.LessThanZero: lambda x: x < 0.0,
+    MathOperation.GreaterThanZero: lambda x: x > 0.0,
+    MathOperation.LessThanEqualZero: lambda x: x <= 0.0,
+    MathOperation.GreaterThanEqualZero: lambda x: x >= 0.0,
+}
+
+
+def _bits_to_f32(bits: int) -> torch.Tensor:
+    signed = bits - (1 << 32) if bits & 0x80000000 else bits
+    return torch.tensor([signed], dtype=torch.int32).view(torch.float32)
+
+
+@pytest.mark.nightly
+@pytest.mark.parametrize("mathop", _COMP_ZERO_OPS, ids=lambda op: op.name)
+def test_eltwise_unary_sfpu_comp_zero_ieee_classes(mathop):
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    dest_acc = DestAccumulation.Yes
+    input_dimensions = [32, 32]
+
+    assert negative_zero_delivered(formats.input_format, dest_acc), (
+        "Float32 at dest_acc=Yes no longer delivers a real -0.0 to the LREG; re-derive the "
+        "combination this test runs on before editing it."
+    )
+
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    probe_bits = [bits for _, bits in _COMP_ZERO_PROBES]
+    src_A = torch.cat(
+        [_bits_to_f32(probe_bits[i % len(probe_bits)]) for i in range(num_elements)]
+    )
+    src_B = torch.zeros(num_elements, dtype=torch.float32)
+    tile_cnt = 1
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    configuration = TestConfig(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(ApproximationMode.No),
+            FAST_MODE(FastMode.No),
+            CLAMP_NEGATIVE(True),
+            MATH_OP(mathop=mathop),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=tile_cnt,
+            tile_count_res=tile_cnt,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=True,
+    )
+
+    res = torch.tensor(configuration.run().result, dtype=torch.float32)
+    got_bits = res.view(torch.int32).tolist()
+
+    predicate = _COMP_ZERO_PREDICATE[mathop]
+    mismatches = []
+    for i, got in enumerate(got_bits):
+        name, bits = _COMP_ZERO_PROBES[i % len(_COMP_ZERO_PROBES)]
+        expected = 0x3F800000 if predicate(_bits_to_f32(bits).item()) else 0x00000000
+        if (got & 0xFFFFFFFF) != expected:
+            mismatches.append(
+                f"lane {i} {name} (0x{bits:08X}): got 0x{got & 0xFFFFFFFF:08X}, "
+                f"expected 0x{expected:08X}"
+            )
+    assert not mismatches, (
+        f"{mathop.name}: {len(mismatches)} lane(s) disagree with the IEEE predicate:\n"
+        + "\n".join(mismatches[:24])
+    )
+
+
 # Integer unary SFPU ops. Each has a dedicated integer kernel and runs through the
 # shared driver with the input unpacked straight to DST (dest_acc=Yes is required for
 # the 32-bit int path). Golden is exact (no PCC/tolerance).
