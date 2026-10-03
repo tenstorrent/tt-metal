@@ -28,7 +28,8 @@ TILES_PER_SECTION = 8
 @pytest.mark.perf
 @parametrize(num_tiles=[8, 32])
 def test_perf_eltwise_unary_datacopy_custom(perf_report, num_tiles):
-    if isinstance(num_tiles, tuple):  # parametrize hands a single axis as a one-element tuple
+    # parametrize hands a single axis as a one-element tuple
+    if isinstance(num_tiles, tuple):
         (num_tiles,) = num_tiles
     configuration = PerfConfig(
         "sources/eltwise_unary_datacopy_custom_perf.cpp",

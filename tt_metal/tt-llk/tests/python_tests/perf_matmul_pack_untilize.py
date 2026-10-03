@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Perf of the Blackhole pack untilize init forms after a one-tile matmul (sources/matmul_pack_untilize_perf.cpp): the
-init once, pack_untilize_dest_init per block, custom_pack_untilize_dest_init per block; unit: one block of one tile."""
+init once, pack_untilize_dest_init per block, custom_pack_untilize_dest_init per block; unit: one block of one tile.
+"""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole
@@ -29,7 +30,8 @@ BLOCKS = 8
 @pytest.mark.perf
 @parametrize(init=["once", "standard", "custom"])
 def test_perf_matmul_pack_untilize(perf_report, init):
-    if isinstance(init, tuple):  # parametrize hands a single axis as a one-element tuple
+    # parametrize hands a single axis as a one-element tuple
+    if isinstance(init, tuple):
         (init,) = init
     configuration = PerfConfig(
         "sources/matmul_pack_untilize_perf.cpp",

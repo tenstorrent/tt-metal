@@ -44,6 +44,7 @@ FORMATS = [
 # face). The reduce collapses every element to [0] regardless of tile geometry.
 TILE_DIMENSIONS = [[32, 32], [16, 32], [16, 16]]
 
+
 def _dest_acc(output_format):
     """Native fp32 DEST is required whenever the output is Float32."""
     return (

@@ -206,7 +206,9 @@ PERF_TEST_SCHEMAS = {
             "unpack_to_dest",
         ],
         "aliases": {},
-        "test_name_aliases": {"perf_eltwise_unary_datacopy_custom": "perf_eltwise_unary_datacopy_custom"},
+        "test_name_aliases": {
+            "perf_eltwise_unary_datacopy_custom": "perf_eltwise_unary_datacopy_custom"
+        },
     },
     "perf_eltwise_unary_typecast": {
         "version": 4,
@@ -556,7 +558,9 @@ PERF_TEST_SCHEMAS = {
             "unpack_to_dest",
         ],
         "aliases": {},
-        "test_name_aliases": {"perf_mul_reduce_scalar_chunked": "perf_mul_reduce_scalar_chunked"},
+        "test_name_aliases": {
+            "perf_mul_reduce_scalar_chunked": "perf_mul_reduce_scalar_chunked"
+        },
     },
     "perf_pack_block_contiguous": {
         "version": 1,

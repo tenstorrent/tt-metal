@@ -141,8 +141,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         _llk_math_mul_reduce_scalar_init_<is_fp32_dest_acc_en, MATH_FIDELITY, false /* enforce_fp32_accumulation */>();
         _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0);
-        _llk_math_eltwise_unary_sfpu_params_(
-            ckernel::sfpu::_calculate_fill_<false /* APPROX */, 2 /* ITERATIONS */>, 0, VectorMode::RC_custom, REDUCE_SCALER);
+        _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_<false /* APPROX */, 2 /* ITERATIONS */>, 0, VectorMode::RC_custom, REDUCE_SCALER);
         _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0);
         _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_<false /* APPROX */, 2 /* ITERATIONS */>, 0, VectorMode::RC_custom, 0.0f);
 
