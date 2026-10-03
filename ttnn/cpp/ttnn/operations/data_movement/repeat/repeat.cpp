@@ -574,7 +574,9 @@ ttnn::Tensor repeat_native(
     // Composite-only re-shard; native path already wrote sharded output.
     if (!native_sharded && output_mem_config.is_sharded()) {
         MemoryConfig final_mc = output_mem_config;
-        if (!final_mc.shard_spec().has_value()) {
+        // Synthesize only for a config with no spec at all. A config built from an NdShardSpec carries
+        // only nd_shard_spec and is placed as requested.
+        if (!final_mc.shard_spec().has_value() && !final_mc.nd_shard_spec().has_value()) {
             auto synth = synthesize_sharded_mem_config(working_tensor, final_mc, input_orientation_hint);
             if (!synth.has_value()) {
                 // No valid spec; keep interleaved.
@@ -583,8 +585,13 @@ ttnn::Tensor repeat_native(
             final_mc = *synth;
         }
         auto i2s_out = optional_output_tensor.has_value() ? optional_output_tensor : std::nullopt;
-        working_tensor = ttnn::interleaved_to_sharded(
-            working_tensor, final_mc, /*data_type_arg=*/std::nullopt, /*keep_l1_aligned=*/std::nullopt, i2s_out);
+        if (final_mc.shard_spec().has_value()) {
+            working_tensor = ttnn::interleaved_to_sharded(
+                working_tensor, final_mc, /*data_type_arg=*/std::nullopt, /*keep_l1_aligned=*/std::nullopt, i2s_out);
+        } else {
+            // ND-only spec: interleaved_to_sharded rejects distributions the legacy 2D spec can't express.
+            working_tensor = ttnn::to_memory_config(working_tensor, final_mc, std::nullopt, i2s_out);
+        }
     }
 
     return finalize_into_preallocated(working_tensor, optional_output_tensor);
