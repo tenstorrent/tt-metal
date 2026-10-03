@@ -2,66 +2,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Pair-trial phase for the weekly reconfig-escape CI job.
+"""Sweep phase for the weekly reconfig CI job.
 
-Consumes the manifest from discover_catalog.py (or snapshot_build.py -- same shape) and sweeps
-every (X, K) ordered pair in the catalog, checking whether K still passes after X's residue.
-Two modes, chosen per X:
+Consumes the manifest from discover_catalog.py and sweeps every (X, K) pair in the catalog,
+and checks whether K still passes after X's residue. If X passed the self-consistency check,
+replay X's captured config residue before K's launch. Otherwise, tt-smi -r -> run X -> run K.
 
-  restore  (X passed its self-consistency gate): replay X's captured post-execution CFG
-           snapshot in-kernel immediately before K's launch. No card reset between trials.
-  fullreset (X failed the gate): fall back to the historical ground-truth recipe
-           (tt-smi -r -> real X -> real K, no reset in between) for every pair in that row.
-
-The restore-mode phase is parallelized across pytest-xdist, one round PER POLLUTER (not per
-pair, and not per victim): compile every victim once (--compile-producer), then for each
-polluter X run one `--compile-consumer -n jobs` round with every other victim K as a separate
-item, each pinned to X's restore plan via xdist_plan_plugin.py. That turns N**2 serial trials
-into N rounds of up to N-1 parallel trials.
-
-A physical core accumulates persistent hardware state across every no-reset launch, regardless
-of which op runs. This doesn't reduce to a fixed launch count: it's composition-dependent, not
-purely count-dependent, so a single reset per polluter round is not enough on its own. The only
-launch count confirmed clean in isolation is 12.
-
-This residue survives a fresh pytest subprocess restart, so it isn't a host-side leak, and only
-a real reset clears it. `tt-smi -r` resets the whole chip, not one core, so it can only be
-inserted at a round/batch boundary where every worker is synced, never mid-batch. Each
-polluter's victims are therefore split into small sub-batches sized to stay under that floor,
-with a reset before every sub-batch instead of once per (potentially much larger) round.
-
-A pair is an escape when K's baseline is PASS but K after X is FAIL or HANG. A K-side flake
-(K itself sometimes flaky at baseline) is out of scope here: only PASS-baseline ops are used
-as victims at all, so any post-X divergence is attributable to X, not to K's own instability.
-
-Restore mode replants a *captured snapshot* of X's residue rather than running X for real, so a
-restore-mode escape can be a snapshot/replant-fidelity artifact of the harness rather than a real
-hardware effect. Every restore-mode escape is therefore re-checked with a plain-pytest
-ground-truth reproduction before it is reported: reset, then one serial (no `-n`, single-core)
-pytest invocation running X's real test then K's real test back to back, with no restore
-machinery and no plan-map.
-
-Only escapes that reproduce this way are reported. Unverified candidates are still written to
-the JSONL (`verified: false`) so nothing is silently dropped, but they're excluded from the
-final escape count/summary. Fallback-mode escapes already ran real X then real K with no reset
-in between (see the fallback phase below), so they're ground truth already and skip
-re-verification. This still isn't an absolute guarantee: a single hardware run can still be
-flaky. But it is far stronger evidence than an unverified restore-mode hit.
-
---splits/--group shard the polluter loop across machines; each machine needs its own --out.
-Every shard still sweeps against the full victim set, so a shard's own escapes are already
-ground truth for that (polluter, victim) pair. No merge step is needed beyond concatenating
-each shard's report, same as every other sharded suite in this repo.
-
---depth > 1 switches from exhaustive single-op pairs to a depth-D CHAIN sweep: D real ops'
-write footprints are composed into one restore plan (most-recent-writer-per-field, via
-discover_catalog.build_chain_entries), and --chains random chains are swept against every
-victim the same way a single op's restore_path is swept at depth 1. This targets what depth-1
-structurally can't see: residue an op left several kernels back, untouched by everything since,
-still live when a victim launches (B U (A \\ B) for two ops, generalized to D). Every chain
-escape is additionally checked for whether any single member alone already reproduces it via
-that member's own depth-1 restore_path -- an escape only a chain finds, not subsumed by any
-depth-1 pair, is the novel signal depth-D sweeping is for.
+If --depth > 1, synthetic reachable hardware states are generated from the manifest.
 
 Usage:
   python3 pair_sweep.py --worktree DIR --arch blackhole --manifest /path/to/manifest.json \
@@ -378,10 +325,6 @@ def main():
                     file=sys.stderr,
                 )
 
-        # See module docstring for the no-reset-accumulation finding. 10, not the confirmed-clean
-        # 12, to leave margin since a round's own launch count per worker isn't otherwise bounded.
-        SAFE_LAUNCHES_PER_WORKER = 10
-
         for xi, x in enumerate(restore_x):
             x_members = set(x.get("members", [x["key"]]))
             plan_map = {}
@@ -392,48 +335,38 @@ def main():
             if not plan_map:
                 continue
             round_nodeids = list(plan_map.keys())
-            batch_size = SAFE_LAUNCHES_PER_WORKER * args.jobs
-            batches = list(discover_catalog._chunks(round_nodeids, batch_size))
 
             print(
                 f"[pair_sweep] restore-mode round {xi+1}/{len(restore_x)}: polluter {x['key']}, "
-                f"{len(round_nodeids)} victims across -n {args.jobs}, {len(batches)} sub-batch(es) "
-                f"of <={batch_size}...",
+                f"{len(round_nodeids)} victims across -n {args.jobs}...",
                 file=sys.stderr,
             )
-            results = {}
-            for bi, batch_nodeids in enumerate(batches):
-                batch_plan_map = {n: plan_map[n] for n in batch_nodeids}
-                plan_map_path = os.path.join(
-                    tmp_dir, f"pairsweep_round{xi}_batch{bi}.map.json"
-                )
-                with open(plan_map_path, "w") as f:
-                    json.dump(batch_plan_map, f)
-                junit_path = os.path.join(
-                    tmp_dir, f"pairsweep_round{xi}_batch{bi}.junit.xml"
-                )
+            plan_map_path = os.path.join(tmp_dir, f"pairsweep_round{xi}.map.json")
+            with open(plan_map_path, "w") as f:
+                json.dump(plan_map, f)
+            junit_path = os.path.join(tmp_dir, f"pairsweep_round{xi}.junit.xml")
 
-                reset()
-                rproc = run_round(
-                    args.worktree,
-                    args.arch,
-                    batch_nodeids,
-                    plan_map_path,
-                    args.jobs,
-                    args.timeout,
-                    junit_path,
+            reset()
+            rproc = run_round(
+                args.worktree,
+                args.arch,
+                round_nodeids,
+                plan_map_path,
+                args.jobs,
+                args.timeout,
+                junit_path,
+            )
+            results = {}
+            if not os.path.exists(junit_path):
+                print(
+                    f"[pair_sweep] WARNING: round {xi+1} for polluter {x['key']} produced no "
+                    f"junit report; every victim in it recorded as ENVERR",
+                    file=sys.stderr,
                 )
-                if not os.path.exists(junit_path):
-                    print(
-                        f"[pair_sweep] WARNING: sub-batch {bi+1}/{len(batches)} for polluter "
-                        f"{x['key']} produced no junit report; every victim in it recorded as "
-                        f"ENVERR",
-                        file=sys.stderr,
-                    )
-                    print(rproc.stdout[-2000:], file=sys.stderr)
-                    print(rproc.stderr[-2000:], file=sys.stderr)
-                else:
-                    results.update(parse_junit(junit_path))
+                print(rproc.stdout[-2000:], file=sys.stderr)
+                print(rproc.stderr[-2000:], file=sys.stderr)
+            else:
+                results.update(parse_junit(junit_path))
 
             for k, nodeid in zip(victims, nodeids):
                 if nodeid not in plan_map:
@@ -595,6 +528,24 @@ def main():
                 f"    [{verified_so_far}/{len(to_verify)}] {e['polluter']} -> {e['victim']}: {tag}",
                 file=sys.stderr,
             )
+
+    # record() already flushed every trial to args.out as it ran, before this verify phase
+    # existed to judge them -- patch verified/verify_result/subsumed_by_depth1 back into the
+    # matching escape lines so report.py (which only reads args.out, not this candidates file)
+    # can tell a confirmed escape from noise that didn't reproduce.
+    escape_by_triple = {(e["mode"], e["polluter"], e["victim"]): e for e in escapes}
+    if escape_by_triple:
+        with open(args.out) as f:
+            records = [json.loads(line) for line in f if line.strip()]
+        for rec in records:
+            match = escape_by_triple.get((rec["mode"], rec["polluter"], rec["victim"]))
+            if match:
+                for field in ("verified", "verify_result", "subsumed_by_depth1"):
+                    if field in match:
+                        rec[field] = match[field]
+        with open(args.out, "w") as f:
+            for rec in records:
+                f.write(json.dumps(rec) + "\n")
 
     with open(candidates_path, "w") as f:
         json.dump(escapes, f, indent=2)

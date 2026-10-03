@@ -42,6 +42,13 @@ def load(jsonl_path: Path) -> list:
     return records
 
 
+def _is_escape(r) -> bool:
+    """A restore-mode candidate pair_sweep.py's verify phase re-ran and could NOT reproduce
+    (verified: false) is noise, not a real escape. Anything else that mismatches baseline --
+    verified true/null, or no verify phase ran at all for this record -- counts."""
+    return r["verdict"] != r["victim_baseline"] and r.get("verified") is not False
+
+
 def _table(headers, rows) -> list:
     return [
         f"| {' | '.join(headers)} |",
@@ -51,7 +58,7 @@ def _table(headers, rows) -> list:
 
 
 def render_markdown(records: list) -> str:
-    escapes = [r for r in records if r["verdict"] != r["victim_baseline"]]
+    escapes = [r for r in records if _is_escape(r)]
     out = ["# Reconfig-escape pair-sweep findings", ""]
     out.append(
         f"{len(records)} trial(s), {len(escapes)} escape(s) "
@@ -118,7 +125,7 @@ def render_junit(records: list, path: Path) -> Path:
         element = ElementTree.Element(
             "testcase", classname="reconfig_escape.pair_sweep", name=_clean(name)
         )
-        if r["verdict"] != r["victim_baseline"]:
+        if _is_escape(r):
             failed += 1
             failure = ElementTree.SubElement(
                 element,
@@ -158,7 +165,7 @@ def main():
     records = load(Path(args.jsonl))
     write_markdown(records, Path(args.report_md))
     render_junit(records, Path(args.junit))
-    escapes = sum(1 for r in records if r["verdict"] != r["victim_baseline"])
+    escapes = sum(1 for r in records if _is_escape(r))
     print(f"{len(records)} trials, {escapes} escapes -> {args.report_md}, {args.junit}")
     raise SystemExit(1 if escapes else 0)
 
