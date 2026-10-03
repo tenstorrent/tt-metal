@@ -51,18 +51,14 @@ def gemma4_env_flag(name, default="0"):
     return os.environ.get(name, default).lower() in ("1", "true", "yes")
 
 
-# Generator prefill chunk that pairs with CP prefill: 6144 rows per column
-# fill the SDPA grid (U-shaped sweep, 16K and 32K both slower).
+# Generator prefill chunk used with CP prefill: 6144 rows per column fill the SDPA grid.
 GEMMA4_CP_PREFILL_CHUNK = 24576
 
 
 def gemma4_cp_prefill_engaged(mesh_device):
-    """True only when create_tt_model will actually set mesh_config.cp_prefill.
+    """True only when ``create_tt_model`` will actually set ``mesh_config.cp_prefill``.
 
-    Mirrors the fracture gate: CP env AND fracture env AND a true 2D mesh, and
-    not lanes (which forces cp_prefill off). The prefill-chunk default sites
-    use this so a stray GEMMA4_CP_PREFILL=1 on a non-fracture run cannot select
-    the large chunk that regresses without CP.
+    Prefill-chunk defaults use this so GEMMA4_CP_PREFILL=1 without fracture cannot select the large chunk.
     """
     shape = getattr(mesh_device, "shape", None)
     try:
@@ -118,15 +114,8 @@ def create_tt_model(
         _fracture = gemma4_env_flag("GEMMA4_GALAXY_FRACTURE")
         _lanes = gemma4_env_flag("GEMMA4_GALAXY_LANES")
         if is_mesh and num_devices > 1 and _fracture and mesh_device.shape[0] > 1 and mesh_device.shape[1] > 1:
-            # Galaxy one-instance: heads/TP over axis 0, weights 2D-fractured
-            # (SharedMLP over rows*cols; attention replicated across columns).
-            # GEMMA4_GALAXY_LANES=1 additionally lane-shards the batch: one
-            # lane per column with its own KV contents/page tables (slice 3b);
-            # callers then pass lane-major global batches of lanes x 32.
-            # TP (heads) rides the size-8 axis whichever way the mesh is
-            # oriented — (8,4) and (4,8) are both valid TPxCP layouts and the
-            # physical link mapping differs per box, so the orientation is an
-            # A/B knob (MESH_DEVICE), not an assumption.
+            # Galaxy one-instance: 2D-fractured weights with TP (heads) on the size-8 axis; (8,4) and (4,8)
+            # are both valid, so orientation stays a MESH_DEVICE knob. GEMMA4_GALAXY_LANES=1 lane-shards the batch.
             _shape = tuple(mesh_device.shape)
             _tp_axis = 0 if _shape[0] == 8 else (1 if _shape[1] == 8 else 0)
             mesh_config = MeshConfig(
@@ -138,11 +127,8 @@ def create_tt_model(
             mesh_config.lane_sharded = _lanes
             mesh_config.cp_prefill = gemma4_env_flag("GEMMA4_CP_PREFILL")
             if mesh_config.lane_sharded and mesh_config.cp_prefill:
-                # Incompatible: lane prefill hands the real page table only to
-                # the owner column, while CP partitions Q across EVERY column —
-                # the non-owner quarters would attend a scratch-block prefix.
-                # CP-under-lanes needs a cross-lane KV gather to the owner
-                # first; until then lanes win and CP is dropped.
+                # Lane prefill hands the real page table only to the owner column, while CP partitions Q
+                # across every column; lanes win until CP gathers KV to the owner lane first.
                 logger.warning("GEMMA4_CP_PREFILL ignored: incompatible with GEMMA4_GALAXY_LANES (owner-lane KV)")
                 mesh_config.cp_prefill = False
         elif is_mesh and num_devices > 1:

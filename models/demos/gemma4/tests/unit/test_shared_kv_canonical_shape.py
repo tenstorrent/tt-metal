@@ -1,13 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared-KV allocation shapes (hybrid HMA tensor sharing).
-
-A buffer shared by sliding (kv=2 x head_dim=256) and full-attention
-(kv=1 x head_dim=512) layers takes the FIRST layer's view — the sliding view
-in layer order — which is the layout the paged kernels reinterpret correctly
-for the fewer-heads layer. The buffer is sized by the larger num_blocks of
-its views, and views with different per-block element counts raise."""
+"""Shared-KV buffers take the first layer's view (the sliding layout, which the paged kernels reinterpret
+for the fewer-heads layer), are sized by the largest num_blocks, and reject mismatched per-block sizes."""
 
 import pytest
 import torch

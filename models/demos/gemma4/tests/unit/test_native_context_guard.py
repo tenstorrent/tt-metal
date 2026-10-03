@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Native-context ceiling guard: the serving templates waive vLLM's own
-max_model_len check (VLLM_ALLOW_LONG_MAX_MODEL_LEN), so gemma4 must refuse a
-max_seq_len past max_position_embeddings itself -- at boot, not at runtime."""
+"""Native-context guard: the serving templates waive vLLM's max_model_len check, so gemma4 must refuse a
+max_seq_len past max_position_embeddings itself at boot."""
+
 from types import SimpleNamespace
 
 import pytest

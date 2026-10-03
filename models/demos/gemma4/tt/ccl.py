@@ -250,9 +250,7 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None, axis=Non
     reduce_scatter_minimal_async + all_gather_async (tt_transformers composite
     pattern) on ``ccl_manager.topology`` (Ring on P150x8).
 
-    ``axis``/``group_size`` generalize the collective to either mesh axis
-    (galaxy one-instance completions); the defaults keep the historical
-    tp-axis behavior for every existing caller.
+    ``axis``/``group_size`` select another mesh axis; the defaults keep the tp-axis behavior.
     """
     if mesh_config is None or (axis is None and mesh_config.tp <= 1):
         return tensor
@@ -317,13 +315,9 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None, axis=Non
 
 
 def ccl_allreduce_fractured(tensor, mesh_config, ccl_manager, memory_config=None):
-    """Complete partial sums under 2D weight fracture (galaxy one-instance).
+    """All-reduce along both mesh axes to complete 2D weight-fractured partial sums.
 
-    With ``mesh_config.weight_fracture`` the down/output projections split
-    their K dim over BOTH mesh axes, so every chip holds a partial of the full
-    output. Summing along each mesh axis in turn completes it: sync
-    ``ttnn.all_reduce`` per axis, or the async RS+AG composite per axis when
-    ``GEMMA4_CCL_ASYNC=1`` and a ``ccl_manager`` is given.
+    Uses sync ``ttnn.all_reduce`` per axis, or the async RS+AG composite when ``GEMMA4_CCL_ASYNC=1``.
     """
     if mesh_config is None or not getattr(mesh_config, "weight_fracture", False):
         raise ValueError("ccl_allreduce_fractured needs mesh_config.weight_fracture; use ccl_allreduce")
@@ -350,12 +344,7 @@ def ccl_allreduce_fractured(tensor, mesh_config, ccl_manager, memory_config=None
 
 
 def ccl_lane_gather_rows(tensor, mesh_config, memory_config=None):
-    """All-gather the row (batch/seq) dim across lanes (slice-3 choreography).
-
-    Before a weight-fractured matmul, each lane holds only its own rows;
-    gathering along the non-tp axis gives every chip all rows so its weight
-    chunk sees the full batch. Sync path (perf CCLs with the ring pass).
-    """
+    """All-gather the row dim across lanes so each chip's fractured weight chunk sees every lane's rows."""
     if mesh_config is None or not getattr(mesh_config, "lane_sharded", False):
         return tensor
     memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
@@ -365,12 +354,9 @@ def ccl_lane_gather_rows(tensor, mesh_config, memory_config=None):
 
 
 def ccl_lane_scatter_rows(tensor, mesh_config, memory_config=None):
-    """Complete a fractured matmul under lane sharding.
+    """Complete a lane-sharded fractured matmul: reduce_scatter rows to their lanes, then all-reduce over tp.
 
-    The down/output projection leaves every chip with a partial over its
-    weight K-chunk for ALL rows. reduce_scatter along the lane axis sums the
-    cross-lane chunks AND re-shards rows back to the owning lane; the tp-axis
-    all-reduce then sums the within-column chunks.
+    reduce_scatter sums the cross-lane K-chunks; the tp-axis all-reduce sums the within-column chunks.
     """
     if mesh_config is None or not getattr(mesh_config, "lane_sharded", False):
         return tensor

@@ -78,11 +78,8 @@ class SharedMLP:
         self.intermediate_size = resolve_shared_mlp_intermediate_size(hf_config, state_dict, layer_idx)
 
         tp = mesh_config.tp if mesh_config else 1
-        # 2D weight fracture (galaxy one-instance): the projections split their
-        # sharded dim over rows*cols chips instead of tp, so the mesh holds ONE
-        # weight copy. The residual stays replicated: gate_up keeps K full (no
-        # activation redistribution), and down's partial outputs are completed
-        # by ccl_allreduce_fractured (one all-reduce per mesh axis).
+        # 2D weight fracture: shard the projections over rows*cols chips (one weight copy on the mesh);
+        # the residual stays replicated and ccl_allreduce_fractured completes down_proj.
         fractured = bool(mesh_config and getattr(mesh_config, "weight_fracture", False))
         ways = mesh_config.fracture_ways if fractured else tp
         if fractured:
@@ -100,10 +97,8 @@ class SharedMLP:
         dtype_suffix = f"_{_dtype_str}"
 
         if fractured:
-            # Host reshapes below expose the mesh-row factor as tensor dim 1,
-            # so the two mesh axes shard different dims (mapper requires it):
-            # gate_up [1, rows, K, cols*2n] dims=(1,3); down [1, rows, cols*k, H]
-            # dims=(1,2). Per-chip shapes match the plain-TP layout exactly.
+            # Host reshapes expose the mesh-row factor as dim 1 so each mesh axis shards a different dim
+            # (the mapper requires it); per-chip shapes match plain TP.
             col_mapper = mesh_config.shard_mapper(mesh_device, mesh_dims=(1, 3))
             row_mapper = mesh_config.shard_mapper(mesh_device, mesh_dims=(1, 2))
         elif tp > 1:

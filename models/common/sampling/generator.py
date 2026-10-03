@@ -345,9 +345,8 @@ class SamplingGenerator:
             and is_default_value(sampling_params.repetition_penalty, self._DEFAULT_PENALTIES["repetition"])
         )
         if self._penalties_active and not getattr(self.tt_sampling, "_allow_penalties_sampling", True):
-            # Rails that skip compiling the penalties program (precompile loop
-            # below) cannot execute it either, and silently dropping the
-            # penalties would change the caller's output without telling it.
+            # Meshes that opt out of the penalties program cannot run it; fail loudly
+            # rather than silently dropping the caller's penalties.
             raise ValueError(
                 "sampling penalties (presence/frequency/repetition) are not supported on this "
                 "mesh (_allow_penalties_sampling=False); send default penalty values"
@@ -477,8 +476,7 @@ class SamplingGenerator:
                 if penalties_on and not getattr(self.tt_sampling, "_allow_penalties_sampling", True):
                     continue
                 # Same opt-out for the top-k/top-p program, whose global-index
-                # reconstruction broadcasts assume a (1,N) mesh; a model that
-                # forces argmax skips compiling it instead of failing at precompile.
+                # reconstruction assumes a (1,N) mesh.
                 if (not force_argmax) and not getattr(self.tt_sampling, "_allow_topk_sampling", True):
                     continue
                 self._penalties_active = penalties_on

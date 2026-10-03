@@ -134,10 +134,8 @@ def load_attention_weights(
         q_norm_w = None
         k_norm_w = None
 
-    # Mesh mappers. Under weight_fracture (galaxy one-instance) attention
-    # stays heads-over-tp_axis and REPLICATES across the other axis: the
-    # tp_axis-aware column/row mappers express that directly, per-chip
-    # mechanics match plain TP, and no extra completion CCLs are needed.
+    # Mesh mappers. Under weight_fracture attention still shards heads over tp_axis
+    # and replicates across the other axis, so the plain-TP mappers apply.
     if tp > 1 or fractured:
         col_mapper = mesh_config.column_parallel(mesh_device)
         row_mapper = mesh_config.row_parallel(mesh_device)

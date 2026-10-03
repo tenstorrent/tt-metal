@@ -283,10 +283,8 @@ class Gemma4Model:
         )
         self.hf_config = hf_config
         self.mesh_config = mesh_config
-        # Lane-sharded serving folds all lanes' users into ONE model's batch;
-        # the shared prefill loop otherwise rewrites user_id -> 0 whenever a
-        # page table is present, which would send every user's KV to lane 0.
-        # users_row_sharded makes it forward the real slot as global_user_id.
+        # Lanes fold every lane's users into one batch; users_row_sharded makes the shared prefill
+        # loop forward the real slot as global_user_id instead of rewriting user_id to 0.
         if mesh_config is not None and getattr(mesh_config, "lane_sharded", False):
             self.users_row_sharded = True
         self.hidden_size = hf_config.hidden_size
@@ -553,10 +551,7 @@ class Gemma4Model:
                     max_batch_size=max_local_batch_size,
                     max_seq_len=max_seq_len,
                     paged_attention_config=paged_attention_config,
-                    # GEMMA4_KV_BFP8=1: bfp8_b paged KV halves both the
-                    # pool DRAM (the serving 32K-rung rim OOM) and decode's
-                    # KV-read bytes (roofline L1: ~43 -> ~20 ms/step at full
-                    # ladder occupancy). Default off until needle-gated.
+                    # GEMMA4_KV_BFP8=1: bfp8_b paged KV halves pool DRAM and decode KV-read bytes; off by default.
                     cache_dtype=(ttnn.bfloat8_b if gemma4_kv_bfp8_enabled() else ttnn.bfloat16),
                     max_num_blocks_override=max_num_blocks_override,
                 )
@@ -603,9 +598,8 @@ class Gemma4Model:
         #
         # tt_transformers' Generator reads this attribute via _get_sampling_contract.
         _fractured = bool(mesh_config is not None and getattr(mesh_config, "weight_fracture", False))
-        # One-instance fracture: rows are the vocab/TP axis, not sampling groups
-        # — EXCEPT under lanes, where each lane column samples its own 32 rows
-        # independently (the row-sharded sampling_dp contract, lane-major).
+        # Fractured: mesh rows are the vocab/TP axis, not sampling groups, unless lanes make each
+        # lane column its own sampling group.
         _lanes_on = bool(mesh_config is not None and getattr(mesh_config, "lane_sharded", False))
         if _fractured:
             self.sampling_dp = mesh_config.lanes if _lanes_on else 1
@@ -651,11 +645,8 @@ class Gemma4Model:
                 )
                 _apply_gemma4_single_untilize_override(self.sampling.tt_sampling)
                 if bool(self.mesh_config is not None and getattr(self.mesh_config, "weight_fracture", False)):
-                    # Penalty and top-k programs are not fracture-aware (per-chip
-                    # vocab sharding over the tp axis breaks their eltwise
-                    # shapes): the sampler skips compiling them and rejects
-                    # requests that set penalties, so the one-instance mesh
-                    # samples greedy / penalty-free only.
+                    # Penalty and top-k programs are not fracture-aware (per-chip vocab sharding breaks
+                    # their eltwise shapes); skipping them makes the sampler reject such requests.
                     self.sampling.tt_sampling._allow_penalties_sampling = False
                     self.sampling.tt_sampling._allow_topk_sampling = False
                 topo = getattr(self.sampling.tt_sampling, "ag_topology", None)
@@ -1605,10 +1596,9 @@ class Gemma4Model:
         return None
 
     def _lane_scratch_block_for(self, layer_idx):
-        """Block non-owner lanes write a single-user prefill through.
+        """Block that non-owner lanes write a single-user prefill through.
 
-        Full-attention layers use vLLM's null block 0; bounded sliding layers use
-        the extra block their pool reserves, because block 0 is slot 0's live ring.
+        Full layers use null block 0; bounded sliding layers use their reserved block, since block 0 is live.
         """
         if layer_idx is None:
             return 0
@@ -1618,15 +1608,10 @@ class Gemma4Model:
         return int(getattr(self, "_lane_scratch_block", 0) or 0)
 
     def _page_table_host_layout(self, page_table_torch, target_w=None, layer_idx=None):
-        """Host layout + mesh mapper for a per-layer page table.
+        """Host layout and mesh mapper for a per-layer page table.
 
-        Non-lanes: replicate as-is. Lanes: a full-batch table carries GLOBAL
-        slot rows — shard dim 0 over the lane axis so each column sees its own
-        [lane_slots, w] slice (short batches pad with dead rows first); a
-        single-row prefill table goes to its OWNER lane
-        (``_g4_active_owner_lane``, set by the prefill wrapper from
-        global_user_id) with scratch rows elsewhere (``_lane_scratch_block_for``)
-        so non-owner columns never write a live block.
+        Lanes shard dim 0 over the lane axis (otherwise replicate): full tables pad to the global frame,
+        a single-row prefill table lands on its owner lane with scratch rows elsewhere.
         """
         pt = page_table_torch if page_table_torch.dim() > 1 else page_table_torch.unsqueeze(0)
         pt = pt.to(dtype=torch.int32)
@@ -1728,9 +1713,8 @@ class Gemma4Model:
                 except (TypeError, IndexError, AttributeError):
                     continue
                 if self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False):
-                    # Device shapes are PER COLUMN under lanes: an owner-stacked
-                    # single-row table shards to 1 row per column, anything
-                    # else pads to the frame and shards to lane_slots rows.
+                    # Device shapes are per column under lanes: a single-row table shards to 1 row,
+                    # anything else pads to the frame and shards to lane_slots rows.
                     host_b = 1 if host_b == 1 else self._lane_slots
                 if host_b > dev_b or host_w > dev_w:
                     needs_grow = True
@@ -1880,13 +1864,8 @@ class Gemma4Model:
 
         tokens_torch = tokens.to(torch.long)
         if lane_parallel:
-            # Lane-parallel prefill: row i of ``tokens`` is lane i's
-            # user; sharding rows over the lane axis lets each column embed and
-            # prefill its OWN user with batch_size=1 semantics. Attention is
-            # already per-column (own KV, tp-axis-only o_proj reduce) and the
-            # lane MLP gather/scatter sums fractured K-chunks across lanes for
-            # whatever rows the columns carry, so the rest of the forward
-            # needs no mode flag.
+            # Lane-parallel prefill: row i of ``tokens`` is lane i's user; sharding rows over the lane
+            # axis lets each column prefill its own user with batch_size=1 semantics; nothing downstream changes.
             assert getattr(self.mesh_config, "lane_sharded", False), "lane_parallel requires GEMMA4_GALAXY_LANES"
             assert batch_size == 1, "lane_parallel runs single-user semantics per column"
             assert not trace_enabled, "lane_parallel prefill is eager-only"
@@ -1917,29 +1896,21 @@ class Gemma4Model:
             mesh_mapper=tok_mapper,
         )
 
-        # Lane-sharded prefill (galaxy one-instance): every column
-        # computes the same prefill, but only the OWNER lane's column may write
-        # real KV. Callers keep passing the per-user [rows, blocks] table plus
-        # ``user_id`` (lane-major global id); this stacks it [lanes, rows,
-        # blocks] with the owner lane's real rows and SCRATCH rows (block 0,
-        # reserved by the lane page-table convention) everywhere else, then
-        # shards dim 0 over the lane axis so each column sees only its view.
+        # Lane-sharded prefill: every column runs the same prefill, but only the owner lane may write
+        # real KV, so the page table is stacked per lane (owner rows real, scratch elsewhere) and lane-sharded.
         lane_sharded = self._lane_sharded
 
         def _lane_stack(table):
             lanes = self.mesh_config.lanes
             gid = global_user_id if global_user_id is not None else user_id
-            # Block convention, matching the decode reshape [global] ->
-            # [lanes, local]: global slot s lives on lane s // lane_slots at
-            # per-lane row s % lane_slots (row = slot identity for callers).
+            # Matches the decode reshape [global] -> [lanes, local]: global slot s lives on lane
+            # s // lane_slots at per-lane row s % lane_slots.
             slots = self._lane_slots
             owner = 0 if gid is None else (int(gid) // slots) % lanes
             stacked = torch.zeros((lanes,) + tuple(table.shape), dtype=table.dtype)
             stacked[owner] = table
-            # Flatten to [lanes*rows, blocks]: dim-0 sharding then hands each
-            # column a 2-D [rows, blocks] table. A 3-D per-column view makes
-            # paged_fill read shape[1]=1 as "one block per seq", which only
-            # holds for prompts within a single effective block.
+            # Flatten to [lanes*rows, blocks] so dim-0 sharding hands each column a 2-D [rows, blocks]
+            # table; a 3-D per-column view makes paged_fill read shape[1]=1 as "one block per seq".
             return stacked.reshape(-1, stacked.shape[-1])
 
         def _lane_table(table):
@@ -2123,9 +2094,8 @@ class Gemma4Model:
         """Read prefill logits to host and slice to the last token's vocab row.
 
         Under TP, Gemma4 all-gathers logits inside the model so a single
-        device tensor already holds the full vocab. Under lanes only the owner
-        lane's column prefilled against the request's real page tables (the
-        others attended scratch history), so read that lane's chip.
+        device tensor already holds the full vocab. Under lanes only the owner lane's
+        column prefilled against the real page tables, so read that lane's chip.
         """
         if self._lane_sharded:
             owner = int(getattr(self, "_g4_active_owner_lane", 0) or 0) % self.mesh_config.lanes
@@ -2342,11 +2312,8 @@ class Gemma4Model:
         pos_flat = current_pos.reshape(-1)
         batch = tok_flat.shape[0]
 
-        # Lane-sharded decode (galaxy one-instance): callers pass the
-        # GLOBAL batch — lanes x 32, lane-major, with vLLM-style pad rows
-        # (pos -1). Each control tensor shards its batch dim over the lane
-        # axis, so every chip receives its own lane's slice at exactly the
-        # per-chip shapes the ops already expect; nothing downstream changes.
+        # Lane-sharded decode: callers pass the global lane-major batch (lanes x lane_slots, pad rows at
+        # pos -1); each control tensor shards its batch dim over the lane axis, so nothing downstream changes.
         lane_sharded = self._lane_sharded
         if lane_sharded:
             lanes = self.mesh_config.lanes
@@ -2355,10 +2322,8 @@ class Gemma4Model:
             if batch > full:
                 raise ValueError(f"lane-sharded decode batch {batch} exceeds the slot space {full}")
             if batch < full:
-                # Pad up to the lane-major frame (rows 0..batch-1 keep their
-                # global-slot identity; pads are vLLM-style dead rows). Runtime
-                # lane steps arrive full-width; this covers B<full callers such
-                # as the decode warmup's small buckets.
+                # Pad to the lane-major frame with vLLM-style dead rows; covers B<full callers such as
+                # the decode warmup's small buckets.
                 pad = full - batch
                 tok_flat = torch.cat([tok_flat, torch.zeros(pad, dtype=tok_flat.dtype)])
                 pos_flat = torch.cat([pos_flat, torch.full((pad,), -1, dtype=pos_flat.dtype)])
@@ -2618,9 +2583,8 @@ class Gemma4Model:
 
         if is_tokens or is_log_probs:
             if lane_sharded:
-                # Each column's sample row is padded to the feedback width;
-                # keep only its lane_slots real entries or the concat's global
-                # truncation hands later lanes the first lane's padding.
+                # Each column's sample row is padded to the feedback width; keep only its lane_slots real
+                # entries so the concat does not hand later lanes the first lane's padding.
                 _ls = self._lane_slots
                 torch_out = torch.cat([t.reshape(-1)[:_ls] for t in _lane_shards()], dim=0)
             elif self.mesh_config is not None and self.mesh_config.tp > 1:
@@ -2642,10 +2606,7 @@ class Gemma4Model:
 def _decode_logits_rows(logits, B, S=1):
     """``[1, 1, rows, vocab]`` host logits as ``[B, S, vocab]``.
 
-    Nearest-bucket decode runs fewer rows than the max batch the caller
-    indexes by, so pad the missing rows instead of viewing: ``view(B, S, -1)``
-    on a narrower tensor folds the vocab axis into the row axis, and row 0
-    then holds only the first ``vocab * rows / B`` logits of user 0."""
+    Pads when nearest-bucket decode ran fewer rows than ``B``; ``view`` would fold the vocab axis into rows."""
     rows = int(logits.shape[-2])
     if rows < B:
         logits = torch.nn.functional.pad(logits, (0, 0, 0, B - rows))

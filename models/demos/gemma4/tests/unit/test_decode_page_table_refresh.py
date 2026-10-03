@@ -1,11 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prefill and decode share the persistent per-layer page-table buffers keyed
-by row count. Decode re-uploads them on the plugin's reload command, which
-only tracks the residents' tables; after a prefill step wrote the same buffers
-the decode side must re-upload regardless, or its trace replays against the
-last prefilled user's block ids."""
+"""Decode must re-upload a per-layer page-table bucket after prefill wrote the same persistent buffers,
+or its trace replays against the last prefilled user's block ids."""
 
 import torch
 

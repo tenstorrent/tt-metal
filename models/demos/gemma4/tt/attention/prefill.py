@@ -242,20 +242,9 @@ def _clone_sliding_prefill_tail(tt_k, tt_v, hist, head_dim, valid_seq_len=None, 
 def _read_sliding_tail_from_paged_cache(
     k_cache, v_cache, page_table, user_id, chunk_offset, sliding_window, head_dim, out_dtype, kv_local
 ):
-    """Reconstruct the prior-window K/V tail from the paged cache.
+    """Rebuild the prior-window K/V tail from the paged cache (APC cache-hit resumes carry no stash).
 
-    vLLM APC cache-hit resumes (and scheduler-chunk continuations whose stash
-    chain broke) arrive without ``sliding_tail_in``, yet on the unbounded
-    substrate the prior tokens' K/V already sit in the paged pool — written by
-    this request's earlier chunks or by the prefix-cache donor request. Gather
-    the last ``min(sliding_window, chunk_offset)`` tokens by physical block.
-
-    ``chunk_offset`` is SDPA_CHUNK_ALIGN-floored and gemma4's window divides
-    it in the aligned cases, so the range covers whole blocks; any
-    misalignment returns None and the caller keeps its no-tail warning.
-    Eager-only (per-block ttnn.slice + concat + host page-table read); the
-    serving router already runs resumed prefills serially, so this cost is
-    per-resume, not per-token.
+    Returns the last ``min(sliding_window, chunk_offset)`` tokens, or None when the range is not block-aligned.
     """
     if page_table is None or chunk_offset is None or chunk_offset <= 0:
         return None
@@ -552,15 +541,8 @@ def _prefill_forward_single(
         fill_page_table = page_table
     else:
         fill_page_table = chunk_page_table if is_chunked else page_table
-    # Under vLLM hybrid kv-cache groups every layer receives the ONE
-    # ``chunk_page_table`` the generator sliced from the full-attention
-    # group's table, but a sliding layer's blocks live in its own group's
-    # table (``page_table`` here, per-layer): filling chunk >= 2 through the
-    # full-attention slice wrote sliding K/V into full-attention blocks
-    # (single-chunk prompts coherent, two-chunk prompts garbage, measured
-    # 2026-10-02). Slice this layer's own table at the chunk's block range
-    # instead; for a legacy single broadcast table the slice equals the
-    # passed one. Eager only — the traced path carries device offsets.
+    # Hybrid kv-cache groups: ``chunk_page_table`` is sliced from the full-attention group's table, but a
+    # sliding layer's blocks live in its own ``page_table``; slice that at the chunk's block range (eager only).
     _own_chunk_slice = None
     if (
         is_chunked
@@ -827,12 +809,8 @@ def _prefill_forward_single(
         )
         hist = ((sliding_window + 31) // 32) * 32
         use_persistent_tail = isinstance(chunk_start_idx, ttnn.Tensor)
-        # No in-memory stash on an APC cache-hit resume (the donor request
-        # wrote the KV, not this one) or when a prior scheduler chunk failed
-        # to stash. On the unbounded substrate (no cache_position_modulo) the
-        # prior window sits in the paged pool at absolute blocks — rebuild the
-        # tail from there instead of silently dropping it. Eager path only;
-        # traced replay keeps its persistent ring.
+        # No stash on an APC cache-hit resume (or after a failed stash); on the unbounded substrate the prior
+        # window still sits in the paged pool, so rebuild the tail from there. Eager path only.
         if (
             sliding_tail_in is None
             and not use_persistent_tail
@@ -841,9 +819,7 @@ def _prefill_forward_single(
             and config.cache_position_modulo is None
             and kv_cache is not None
         ):
-            # Unpack kv_cache directly: for KV-shared layers it already points
-            # at the source layer's filled cache (k_cache/v_cache locals are
-            # only bound on the non-shared fill path above).
+            # Use kv_cache directly: for KV-shared layers it already points at the source layer's filled cache.
             _paged_k, _paged_v = kv_cache
             sliding_tail_in = _read_sliding_tail_from_paged_cache(
                 _paged_k,
@@ -915,11 +891,8 @@ def _prefill_forward_single(
             sdpa_full.deallocate(True)
         else:
             # No in-memory tail. Correct for the first chunk (chunk_offset==0).
-            # A continuation reaching here means the paged-cache tail
-            # reconstruction above was inapplicable (bounded ring, traced
-            # replay, no kv_cache/page_table) or failed; windowed SDPA then
-            # runs without the prior window, which measurably garbles the
-            # tokens whose window spans the boundary.
+            # A continuation reaching here could not rebuild the tail from the paged cache; windowed SDPA then
+            # misses the prior window for tokens spanning the chunk boundary.
             if chunk_offset is not None and chunk_offset > 0:
                 logger.warning(
                     "Gemma4 sliding prefill: chunk_start={} without sliding_tail_in "

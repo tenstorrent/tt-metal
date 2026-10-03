@@ -20,9 +20,8 @@ def test_activate_sequential_per_layer_row_refreshes_persistent_device_tables():
     """Sequential users must H2D-refresh B=1 persistent page tables.
 
     Host `_active` is sliced per user, but device buffers are keyed by batch=1
-    and reused without content update unless ``update_persistent…`` runs. The
-    shared loop walks users in the tables' row order, so the row is selected by
-    position and the legacy slice only has to confirm it.
+    and reused without content update unless ``update_persistent…`` runs.
+    Rows are selected by position; the legacy slice only confirms them.
     """
     generator = object.__new__(ChunkedPrefillPageTableGuardMixin)
     full = torch.tensor([[10, 11, 12], [20, 21, 22], [30, 31, 32]], dtype=torch.int32)

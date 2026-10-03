@@ -1,14 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Full dense decoder layer under 2D weight fracture (galaxy one-instance).
-
-(8,4) mesh: SharedMLP fully fractured (inter/32 per chip, slice 1), attention
-heads/8 over axis0 replicated across columns (slice 2), norms replicated.
-Prefill PCC vs the HF dense layer, plus cross-mesh replication of the output.
-
-    pytest models/demos/gemma4/tests/unit/test_layer_fracture.py -k 8x4
-"""
+"""Dense decoder layer under 2D weight fracture (galaxy one-instance): prefill PCC vs the HF layer plus
+cross-mesh replication of the output, with the MLP fractured 32-way and attention heads over axis 0."""
 
 import pytest
 import torch

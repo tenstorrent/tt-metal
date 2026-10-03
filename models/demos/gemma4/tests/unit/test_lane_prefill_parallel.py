@@ -1,16 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Lane-parallel prefill (galaxy slice 4): 4 users prefill in ONE forward.
-
-Correctness: each lane's last-token logits from the single lane-parallel
-forward must match that user's serial single-user prefill (argmax equal,
-PCC high). Timing: 4 serial prefills vs one lane-parallel forward at the
-largest single-chunk ISL, reported (not asserted).
-
-    GEMMA4_GALAXY_FRACTURE=1 GEMMA4_GALAXY_LANES=1 HF_MODEL=google/gemma-4-31B-it \
-    pytest models/demos/gemma4/tests/unit/test_lane_prefill_parallel.py -k 8x4 -s
-"""
+"""Lane-parallel prefill (galaxy lanes): four users in one forward must match their serial single-user
+prefills in last-token logits (equal argmax, high PCC), else the lanes mix or misroute users."""
 
 import os
 
@@ -105,7 +97,7 @@ def test_lane_prefill_parallel(mesh_device, reset_seeds, request):
         tables = block_ids.reshape(1, 1, -1).repeat(lanes, 1, 1).clone()
         return generator.prefill_forward_lanes(tokens4, tables, tt_kv_cache, plens)
 
-    # ── Phase A: correctness on the real chat prompts ─────────────────────
+    # ── Correctness on the real chat prompts ──────────────────────────────
     plens = [int(t.shape[-1]) for t in prompts_tok]
     assert len({(p - 1) // 32 for p in plens}) == 1, "test prompts must share a last tile"
     padded = 1 << max(int(max(plens) - 1).bit_length(), 7)

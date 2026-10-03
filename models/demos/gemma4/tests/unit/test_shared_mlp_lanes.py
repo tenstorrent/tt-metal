@@ -1,15 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""SharedMLP with lane-sharded activations (galaxy one-instance, slice 3).
-
-(8,4) mesh, one fractured weight copy: each of the 4 lanes (columns) holds
-DIFFERENT rows. The forward gathers rows across lanes, runs the fractured
-GeGLU, and reduce_scatters rows back — every chip must end with exactly its
-lane's rows, matching the HF reference slice.
-
-    pytest models/demos/gemma4/tests/unit/test_shared_mlp_lanes.py -k 8x4
-"""
+"""SharedMLP with lane-sharded activations: each lane holds different rows, the forward gathers them,
+runs the fractured GeGLU and reduce-scatters back, so every chip must end with exactly its lane's rows."""
 
 import torch
 

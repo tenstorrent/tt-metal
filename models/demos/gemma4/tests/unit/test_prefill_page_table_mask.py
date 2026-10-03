@@ -1,13 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The plugin hands prefill vLLM's persistent block-table rows. vLLM tracks only
-how many entries of a row are live; the columns past that keep the block ids of
-the requests that occupied the row before (condense/move leave them), and those
-are usually live residents' blocks. The traced single-chunk prefill cannot cap
-its K/V fill on the host, so its padded rows follow those stale ids into other
-requests' K/V. Prefill therefore zeroes every column past a request's own
-allocation (vLLM's null block absorbs the pad writes)."""
+"""Prefill zeroes page-table columns past each request's allocation: vLLM leaves stale block ids there,
+and the traced single-chunk prefill cannot cap its K/V fill on the host, so pad rows would write into them."""
 
 import pytest
 import torch
@@ -71,8 +66,7 @@ def test_non_tensor_entries_and_missing_inputs_are_left_alone():
 
 
 def test_block_sizes_resolve_from_the_plugins_nested_kv_cache_list():
-    """The plugin passes ``kv_caches`` as [submesh][layer][k, v]; a silent
-    fallback here left every stale column unmasked in the first validation run."""
+    """The plugin passes ``kv_caches`` as [submesh][layer][k, v]; both nestings must resolve block sizes."""
     from types import SimpleNamespace
 
     pytest.importorskip("vllm")

@@ -1,14 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""SharedMLP under 2D weight fracture (galaxy one-instance) vs HF GeGLU.
-
-The (8,4) mesh holds ONE weight copy: gate_up/down shard their inter dim over
-rows*cols=32 chips (shard_mapper over both mesh axes), the residual stays replicated, and the
-down partials are completed by one all-reduce per mesh axis.
-
-    pytest models/demos/gemma4/tests/unit/test_shared_mlp_fracture.py -k 8x4
-"""
+"""SharedMLP under 2D weight fracture vs HF GeGLU: one weight copy with the inter dim sharded over all 32
+chips and the down partials completed by one all-reduce per mesh axis."""
 
 import torch
 

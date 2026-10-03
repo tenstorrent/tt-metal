@@ -1,19 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""CP prefill regression (galaxy one-instance): engagement + coherence + fallback.
-
-CP splits each prefill chunk's Q rows across the lane (sp) axis while every
-column attends the full replicated prefix via a per-column offset. This test
-proves three things on hardware: (1) the CP branch actually ENGAGES for an
-aligned long prompt (the op's log-once flag); (2) the answer to a
-question buried behind ~8K tokens of filler survives chunked CP prefill and
-greedy decode — any offset/gather bug destroys it; (3) a short prompt whose
-padded chunk cannot split lane-aligned takes the fallback and still answers.
-
-    GEMMA4_GALAXY_FRACTURE=1 GEMMA4_CP_PREFILL=1 HF_MODEL=google/gemma-4-31B-it \
-    pytest models/demos/gemma4/tests/unit/test_cp_prefill.py -k 8x4 -s
-"""
+"""CP prefill (galaxy one-instance): engagement, needle retrieval through multi-chunk prefill, and the
+short-prompt fallback; a per-column offset or gather bug across the lanes loses the needle."""
 
 import os
 
@@ -100,12 +89,8 @@ def test_cp_prefill(mesh_device, reset_seeds, request):
         "CP-paired chunk default did not resolve: " f"{generator.model_args[0].max_prefill_chunk_size}"
     )
 
-    # (1)+(2): needle retrieval through MULTI-CHUNK CP prefill at the
-    # production pairing (chunk 24576): ~26K tokens -> a full 24576 chunk plus
-    # a remainder, each split across the lanes. The needle sits in the FIRST
-    # chunk while the question sits in the second, so a per-column offset or
-    # gather bug (wrong prefix visibility) loses the needle. Varied filler
-    # avoids pattern-continuation pressure on the greedy decode.
+    # ~26K tokens -> two CP chunks; the needle sits in the first and the question in the second,
+    # so a per-column offset or gather bug (wrong prefix visibility) loses the needle.
     filler = " ".join(f"Entry {i}: shipment {i} arrived at dock {i % 40} on day {i % 28}." for i in range(1150))
     needle_pos = len(filler) // 4
     long_content = (
@@ -119,5 +104,5 @@ def test_cp_prefill(mesh_device, reset_seeds, request):
         attn_ops.chunked_prefill_sdpa, "_cp_logged", False
     ), "CP branch never engaged on the aligned long prompt"
 
-    # (3): a short prompt stays single-chunk and must still answer correctly.
+    # A short prompt stays single-chunk and must still answer correctly.
     ask("What is the opposite of hot? Answer in one word.", "cold")

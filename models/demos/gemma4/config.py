@@ -51,27 +51,17 @@ class MeshConfig:
 
         self.total_devices = mesh_shape[0] * mesh_shape[1]
 
-        # 2D weight fracture (galaxy one-instance): weight matrices shard one
-        # dim over BOTH mesh axes (ways = rows*cols), so the box holds a single
-        # weight copy. Partial matmul outputs are completed by an all-reduce
-        # along each axis in turn (see ccl.ccl_allreduce_fractured). Orthogonal
-        # to the MoE ep/sp fields, which keep their meanings.
+        # 2D weight fracture: shard one weight dim over both mesh axes (ways = rows*cols) so the box
+        # holds a single weight copy; partial matmuls are completed by ccl_allreduce_fractured per axis.
         self.weight_fracture = weight_fracture
         self.fracture_ways = self.total_devices if weight_fracture else decode.tp
 
-        # Lane-sharded activations (galaxy one-instance): the batch is split
-        # into ``lanes`` groups along the non-tp mesh axis (one lane per
-        # column), each with its own KV pool contents / page tables /
-        # positions. Weight-fractured matmuls then need the llama70b staged
-        # choreography: all-gather rows across lanes before a fractured matmul
-        # and reduce-scatter rows back after (see SharedMLP). Attention stays
-        # lane-local (weights replicated across lanes). Off by default; the
-        # replicated-residual regime keeps working unchanged.
+        # Lane sharding: the batch splits into one lane per non-tp column, each with its own KV contents,
+        # page tables and positions; fractured matmuls gather/scatter rows across lanes (see SharedMLP).
         self.lane_sharded = False
         self.lanes = self.mesh_shape[self.sp_axis]
-        # CP prefill: split each prefill chunk's Q rows across the sp axis;
-        # per-column chunk_start offsets keep causality against the replicated
-        # paged cache. Set by ``create_tt_model``.
+        # CP prefill: split each chunk's Q rows across the sp axis (per-column chunk_start offsets keep
+        # causality against the replicated paged cache). Set by ``create_tt_model``.
         self.cp_prefill = False
 
         self.decode = decode
@@ -106,12 +96,9 @@ class MeshConfig:
         return ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=mesh_dims)
 
     def lane_shard_mapper(self, mesh_device, tensor_dim):
-        """Mapper for lane-major control tensors (slice 3b).
+        """Shard ``tensor_dim`` (the lane-major global batch) over the lane axis, replicating over tp.
 
-        Control tensors carry the GLOBAL batch (lanes x 32, lane-major, with
-        vLLM-style pad rows) in one dim; sharding that dim over the lane (sp)
-        axis and replicating over tp gives every chip its own lane's slice at
-        exactly the per-chip shapes the decode ops already expect.
+        Each chip then sees its own lane's slice at the per-chip shapes the decode ops already expect.
         """
         dims = (None, tensor_dim) if self.tp_axis == 0 else (tensor_dim, None)
         return ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=dims)

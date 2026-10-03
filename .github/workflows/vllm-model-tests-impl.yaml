@@ -567,15 +567,8 @@ jobs:
         if: ${{ matrix.test-group.prefix-caching-test }}
         timeout-minutes: 15
         run: |
-          # Automatic prefix caching: a request sharing a long prefix with a
-          # completed one resumes from the cached blocks. The benchmark and the
-          # echo guard never exercise that path (unique random prompts, one
-          # short request). This gate sends a cold request carrying a ~24K-token
-          # synthetic document with a planted passphrase, then a second request
-          # with the same document and a different question. Both must answer
-          # with the passphrase -- a resume that attends the wrong window tail or
-          # another request's blocks answers wrongly -- and the resume's TTFT
-          # must be under half the cold one, or the cache is not engaged.
+          # Prefix-caching gate: a second request sharing a ~24K-token document with a completed one must
+          # answer from the cached blocks correctly and show the engine's prefix-cache counters engaged.
           python3 - <<'EOF' 2>&1 | tee "${FILE_PREFIX_CACHING_LOG}"
           import json, sys, time, urllib.request
 
@@ -638,9 +631,8 @@ jobs:
               print("❌ cold request did not recall the passphrase"); ok = False
           if secret not in warm:
               print("❌ cache-hit resume did not recall the passphrase (wrong prefix or window tail)"); ok = False
-          # The documents are identical up to the question, so the resume should find
-          # (almost) its whole prompt in the cache. Gate on the engine's own counters,
-          # not on wall time: TTFT also carries queueing and the model's resume cost.
+          # The prompts are identical up to the question, so nearly all of the resume should hit the cache.
+          # Gate on the engine's counters, not TTFT, which also carries queueing and the resume cost.
           if queried <= 0 or hits < 0.8 * queried:
               print(f"❌ prefix cache not engaged for the resume: {hits:.0f} of {queried:.0f} queried tokens were cache hits"); ok = False
           if ok:

@@ -1,11 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sequential per-user prefill selects each request's per-layer page-table row
-by its position in the batch, not by matching the legacy slice's content:
-under lane-sharded bounded rings the sliding table repeats every lane_slots
-slots, so two requests can carry identical sliding rows while their
-full-attention rows differ."""
+"""Sequential prefill picks each request's per-layer page-table row by batch position, not by matching
+the legacy slice: under lane-sharded bounded rings two requests can carry identical sliding rows."""
 
 import torch
 

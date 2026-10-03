@@ -1,17 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Lane-sharded one-instance e2e (galaxy slice 3b): 4 users, one per lane.
-
-Each lane's column serves a DIFFERENT user with its own KV: per-user prefill
-lands on the owner column (scratch block 0 elsewhere), decode runs one
-lane-major global batch (lanes x 32 with pad rows), and the host reassembles
-per-lane logits. Greedy continuations must answer each user's own question —
-any cross-lane KV or logit mixing breaks the oracle immediately.
-
-    GEMMA4_GALAXY_FRACTURE=1 GEMMA4_GALAXY_LANES=1 HF_MODEL=google/gemma-4-31B-it \
-    pytest models/demos/gemma4/tests/unit/test_lanes_e2e.py -k 8x4 -s
-"""
+"""Lane-sharded e2e: one user per lane with its own KV, prefilled per user and decoded as one lane-major
+global batch; each lane must answer its own question, so cross-lane KV or logit mixing fails."""
 
 import os
 
@@ -57,8 +48,7 @@ def test_lanes_e2e(mesh_device, reset_seeds, request):
     assert lanes == 4
     B_g = lanes * SLOTS_PER_LANE
 
-    # Encode with the chat template (raw completions on instruct models look
-    # degenerate by construction — see gemma4-probe-coherence-correctly).
+    # Encode with the chat template; raw completions on instruct models look degenerate by construction.
     prompts_tok = []
     for q, _ in USERS:
         text = tokenizer.apply_chat_template(

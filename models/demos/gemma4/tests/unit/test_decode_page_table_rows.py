@@ -1,11 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Decode-side per-layer page-table row handling under vLLM hybrid kv-cache groups.
-
-The plugin pads per-layer tables to max_num_seqs rows while each decode trace
-binds the persistent buffers of its own bucket, so the refresh must slice to
-the step's batch."""
+"""Decode per-layer page tables are sliced to the step's bucket rows: the plugin pads them to
+max_num_seqs while each decode trace binds the persistent buffers of its own bucket."""
 
 import pytest
 import torch

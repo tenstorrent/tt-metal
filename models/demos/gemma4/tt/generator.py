@@ -134,23 +134,8 @@ def resolve_batched_prefill_chunk_users(padded_batch: int, prefill_seq_len: int)
 def mask_page_table_columns_past_allocation(page_tables, prompt_lens, block_sizes):
     """Zero every page-table column past each request's own allocation.
 
-    The vLLM plugin hands prefill the persistent block-table rows of its input
-    batch. vLLM tracks only how many entries of a row are live; the columns past
-    that still hold the block ids of whichever requests occupied the row before
-    (the batch's condense/move leave them in place), and those blocks are
-    usually live residents' blocks. The model's K/V fill writes whole padded
-    rows -- the traced single-chunk prefill cannot cap on the host, and
-    ``paged_fill_cache`` only caps bounded rings in-kernel -- so a 157-token
-    chunk padded to 1024 followed those stale ids and overwrote another
-    request's K/V (one-token glitches in a concurrent long-context burst).
-    Column 0 is vLLM's null block, never allocated, so zero absorbs such
-    writes harmlessly.
-
-    ``block_sizes[i]`` is layer ``i``'s tokens-per-column. Entries that are not
-    host tensors (device tables, ``None``) and rows without a prompt length pass
-    through. Returns ``(tables, zeroed_columns)``; a table that needed masking
-    comes back as a new tensor (a shared object stays shared), the inputs are
-    left untouched.
+    Plugin rows keep earlier occupants' block ids past the live prefix and the padded K/V fill follows them,
+    so route those writes to vLLM's null block 0. Returns ``(tables, zeroed_columns)``; inputs are not mutated.
     """
     if page_tables is None or prompt_lens is None:
         return page_tables, 0
@@ -359,10 +344,8 @@ class ChunkedPrefillPageTableGuardMixin:
     def _activate_sequential_per_layer_row(self, page_table) -> None:
         """Slice the multi-row hybrid page-table stash to the active sequential user.
 
-        The shared tt_transformers loop prefills users in the per-layer tables'
-        row order with ``user_id=0`` and a 1-row legacy ``page_table`` slice, so
-        the request is identified by position; the slice only confirms it (its
-        content is not unique: lane rings repeat every ``lane_slots`` slots).
+        The shared loop prefills users in row order with ``user_id=0``, so the row cursor identifies the request
+        and the 1-row slice only confirms it (slice contents are not unique under lane rings).
         """
         if page_table is None or not isinstance(page_table, torch.Tensor):
             return
@@ -429,18 +412,9 @@ class ChunkedPrefillPageTableGuardMixin:
 
     @classmethod
     def _install_per_layer_page_tables(cls, model, page_tables_per_layer, *, writer):
-        """H2D the per-layer tables into the persistent buffers keyed by their
-        row count and record who wrote them.
+        """H2D the per-layer tables into the persistent buffers for their row count and record the writer.
 
-        Prefill and decode share those buffers: a decode trace for bucket B
-        replays against the B-row buffers, and a prefill step writes the same
-        buffers whenever its batch (or the 1-row sequential slice) has B rows.
-        Decode only re-uploads on the plugin's explicit reload command, which
-        tracks the residents' own tables, so without this record a decoder whose
-        tables were stable kept replaying against the last prefilled user's
-        block ids: it read that user's KV and wrote its new token into that
-        user's blocks (garbage after a few tokens at the first lone decoder of a
-        concurrent long-context burst; the prefilling user's context damaged).
+        Prefill and decode share those buffers; decode must re-upload before replaying after a prefill write.
         """
         if not hasattr(model, "update_persistent_per_layer_page_tables"):
             return
@@ -491,9 +465,8 @@ class ChunkedPrefillPageTableGuardMixin:
             cache = kv_cache[i][0]
             cache_hd = int(cache.shape[-1])
             if cache_hd != int(cfg.head_dim) and cache_hd > 0:
-                # HMA-shared buffer allocated at another layer's view: tokens per
-                # block in THIS layer's view follow the per-block byte invariant,
-                # kv-head factor included.
+                # HMA-shared buffer allocated at another layer's view: derive this layer's tokens per block
+                # from the per-block byte invariant, kv-head factor included.
                 tp = int(getattr(getattr(attn, "mesh_config", None), "tp", 1) or 1)
                 weights = getattr(attn, "weights", None)
                 kv_local = 1 if getattr(weights, "kv_replicated", False) else max(1, int(cfg.num_key_value_heads) // tp)
@@ -921,10 +894,8 @@ class ChunkedPrefillPageTableGuardMixin:
     def prefill_forward_single_user_text(
         self, tokens, page_table=None, *, kv_cache=None, num_cached_tokens=0, **kwargs
     ):
-        # Lane-sharded per-layer page tables owner-stack on the request's lane
-        # (see _page_table_host_layout); bind it before any per-layer staging
-        # in this forward. The shared loop forwards the global slot as
-        # global_user_id whenever users_row_sharded is set.
+        # Lane-sharded page tables are stacked on the request's owner lane (_page_table_host_layout);
+        # bind it from global_user_id before any per-layer staging in this forward.
         _gid = kwargs.get("global_user_id", None)
         for _m in self.model:
             _mc = getattr(_m, "mesh_config", None)
@@ -951,26 +922,12 @@ class ChunkedPrefillPageTableGuardMixin:
                 # slot 0 legitimately starts at block id 0, and a falsy key
                 # would silently bypass the pool for that request.
                 req_key = int(pt2d[0, 0]) + 1
-        # Slot source: global_user_id is only forwarded on lane-sharded paths
-        # (measured None here on the baseline serving path); the plain per-call
-        # slot arrives as the user_id kwarg. Batched prefill passes a list —
-        # leave those on the legacy key (batched requires num_cached==0, where
-        # the cold-start reset already isolates requests).
+        # Slot source: global_user_id (lane-sharded paths) or the per-call user_id kwarg. Batched prefill
+        # passes a list and stays on the legacy key (it requires num_cached==0, so cold-start reset isolates it).
         _slot_src = _gid if isinstance(_gid, int) else kwargs.get("user_id")
         if req_key is not None and isinstance(_slot_src, int):
-            # Prefix caching makes first-block ids COLLIDE across requests
-            # sharing a cached prefix, and a cache-hit resume starts at
-            # chunk_start>0 so the cold-start stash reset never runs: the
-            # resume then consumed the previous same-prefix request's final
-            # window tail (cross-request contamination, apc_gate3 garbles).
-            # Bind identity to the slot plus a per-slot generation instead:
-            # a call whose start offset is not the slot's expected
-            # continuation offset begins a new generation, so its stash
-            # lookup misses and the sliding path rebuilds the tail from the
-            # paged pool. Scheduler-grant continuations (start == expected)
-            # keep their generation and their exact bf16 stash. A new request
-            # landing exactly on the previous occupant's expected offset is
-            # the residual collision window; slot release isn't visible here.
+            # Prefix caching lets first-block ids collide across requests, so key the stash on the slot plus a
+            # per-slot generation; a start offset other than the slot's expected continuation begins a new one.
             _slot = int(_slot_src)
             _start = int(num_cached_tokens or 0)
             _gens = getattr(self, "_g4_slot_tail_gen", None)
@@ -980,9 +937,8 @@ class ChunkedPrefillPageTableGuardMixin:
             _gen, _expected = _gens.get(_slot, (0, None))
             if _start == 0 or _expected is None or _start != _expected:
                 if _gen:
-                    # Free the previous generation's pool slot / spill clone on
-                    # every layer, or dead keys exhaust the 33-slot pool and
-                    # grow the spill dict unboundedly (one key per request).
+                    # Release the previous generation's tail on every layer, or dead keys exhaust the pool
+                    # and grow the spill dict without bound.
                     self._release_all_sliding_prefill_tails(req_key=((_slot + 1) << 24) + _gen)
                 _gen += 1
             _gens[_slot] = (_gen, _start + int(tokens.shape[-1]))
@@ -1035,11 +991,8 @@ class ChunkedPrefillPageTableGuardMixin:
             # after lm_head. A captured chunk has get_last_token=-1 and cannot
             # perform the host-side boundary merge safely after the trace.
             and not self._uses_bounded_sliding_kv(model_id)
-            # Lane-sharded KV routes each chunk's page table to the OWNER
-            # column via host-side stacking on global_user_id; the traced
-            # replay's persistent chunk-table refresh has no such per-lane
-            # restage, so chunked prompts stay on the eager path under lanes
-            # (which forwards global_user_id through **kwargs end to end).
+            # Lane-sharded KV stacks each chunk's page table on the owner column host-side; the traced replay's
+            # chunk-table refresh cannot, so chunked prompts stay eager under lanes.
             and not bool(getattr(getattr(self.model[model_id], "mesh_config", None), "lane_sharded", False))
         )
         if not use_traced_chunks:
@@ -1128,26 +1081,10 @@ class ChunkedPrefillPageTableGuardMixin:
         raise RuntimeError("Traced multi-chunk prefill produced no last-chunk logits")
 
     def prefill_forward_lanes(self, tokens, page_tables, kv_cache, prompt_lens, slot_ids=None):
-        """Lane-parallel prefill: one user per lane column, one forward pass.
+        """Lane-parallel prefill, one user per lane column; returns host logits [lanes, vocab].
 
-        ``tokens`` is [lanes, S] (row i = lane i's user, right-padded to a
-        common S); ``page_tables`` is [lanes, 1, blocks] with each lane's own
-        single-user table; ``prompt_lens`` must be equal across lanes (the KV
-        fill runs with one shared valid length).
-        Each column runs the proven batch_size=1 prefill on its OWN tokens and
-        KV (attention reduces over tp only; the lane MLP gather/scatter sums
-        fractured K-chunks across lanes for whatever rows the columns carry).
-
-        Long prompts run the eager chunk loop lane-parallel: every chunk step
-        prefills all four lanes' chunks at once (per-column KV fill via each
-        lane's own chunk table, one shared chunk_start since S is common), so
-        four long prompts cost ~one prompt's chunk sequence — the multi-pipe
-        prefill the capacity ladder needs. Every lane's last token must fall in
-        the same 32-token tile (the tail slice is a device-replicated scalar),
-        which also puts them in the same final chunk; callers bucket prompts by
-        padded length so this holds, and prefill serially otherwise.
-
-        Returns host logits [lanes, vocab], each row at its lane's last token.
+        ``tokens`` is [lanes, S], ``page_tables`` is [lanes, 1, blocks]; ``prompt_lens`` must be equal across
+        lanes because the KV fill and the last-token slice are shared by every column.
         """
         model = self.model[0]
         mesh_cfg = model.mesh_config
@@ -1181,12 +1118,8 @@ class ChunkedPrefillPageTableGuardMixin:
             )
             page_tables = torch.cat([page_tables, pad], dim=-1)
 
-        # Bounded sliding pools are PER-LAYER ring tensors addressed by
-        # RING-LOCAL block ids (slot s owns rows [s*rb, (s+1)*rb)); the global
-        # table's pool ids would index far past them — decode then reads
-        # never-written blocks and instantly garbles (the metal twin of the
-        # server's hybrid per-layer route). Feed per-layer tables: ring-local
-        # for sliding layers, the lane's global table for full-attention.
+        # Bounded sliding pools are per-layer rings addressed by ring-local block ids (slot s owns rows
+        # [s*rb, (s+1)*rb)), so feed sliding layers ring-local tables and full-attention layers the global one.
         if slot_ids is not None:
             slots_l = [int(slot_ids)] * lanes if isinstance(slot_ids, int) else [int(x) for x in slot_ids]
             g_host = page_tables.reshape(lanes, -1).to(torch.int32)
@@ -1228,16 +1161,8 @@ class ChunkedPrefillPageTableGuardMixin:
             )
             last_in_chunk = last_idx
         else:
-            # ── Lane-parallel eager chunk loop (mirrors the single-user eager
-            # path, with every per-chunk input carrying all lanes' rows) ──
-            # Bind a request key for this ROUND so the bounded sliding
-            # cross-chunk tail stash engages (key None deliberately bypasses
-            # it, which severs every lane's window at each chunk boundary —
-            # the ladder's first corruption). The stash tensors are per-column
-            # mesh tensors, so one key serves all four lanes' own tails.
-            # Call-unique key: block ids repeat across rungs/requests (slot 0
-            # always starts at block 1), and a colliding key would hand one
-            # request's boundary tail to the next (stale cross-chunk window).
+            # Lane-parallel eager chunk loop. Bind a call-unique request key so the bounded sliding cross-chunk
+            # tail stash engages (key None bypasses it) without colliding with other requests' block ids.
             self._g4_lane_prefill_calls = int(getattr(self, "_g4_lane_prefill_calls", 0)) + 1
             req_key = (self._g4_lane_prefill_calls << 20) + int(page_tables[0, 0, 0]) + 1
             self._bind_sliding_tail_key(req_key)
@@ -2166,12 +2091,8 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
             paged_attention_config=paged_attention_config,
             bounded_sliding_kv_cache=bounded_sliding_kv_cache,
         )
-        # Lane-sharded serving (galaxy one-instance): the generator-visible
-        # batch is the GLOBAL slot space (lanes x per-column batch) with row =
-        # slot identity, while the model/KV stay sized per column. The model
-        # derives the owner lane of a slot from lane_slots (block convention:
-        # lane = slot // lane_slots), matching the decode reshape
-        # [global] -> [lanes, local].
+        # Lane-sharded serving: the generator sees the global slot space (lanes x per-column batch) while the
+        # model/KV stay sized per column; lane_slots gives the owner lane as slot // lane_slots.
         _lanes = getattr(getattr(model, "mesh_config", None), "lane_sharded", False) and model.mesh_config.lanes
         generator_batch = max_batch_size * _lanes if _lanes else max_batch_size
         if _lanes:

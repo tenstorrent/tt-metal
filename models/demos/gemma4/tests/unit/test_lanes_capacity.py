@@ -1,17 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Lane capacity reference (galaxy slice 4b): 128 users on one weight copy.
-
-Fills every slot (32 per lane x 4 lanes) via lane-parallel prefill, then
-decodes the full 128-row global batch. Every user asks one of four known
-questions; every row's greedy continuation must contain ITS answer, so any
-page-table collision or cross-lane mixing fails loudly. Reports aggregate
-prefill throughput and decode steps/s at capacity.
-
-    GEMMA4_GALAXY_FRACTURE=1 GEMMA4_GALAXY_LANES=1 HF_MODEL=google/gemma-4-31B-it \
-    pytest models/demos/gemma4/tests/unit/test_lanes_capacity.py -k 8x4 -s
-"""
+"""Lane capacity: fill all 128 slots (32 per lane x 4 lanes) by lane-parallel prefill and decode the full
+global batch; every row must answer its own question, so page-table collisions or cross-lane mixing fail."""
 
 import os
 import time
@@ -72,9 +63,8 @@ def test_lanes_capacity(mesh_device, reset_seeds, request):
     plens_qa = [int(t.shape[-1]) for t in toks]
     padded = 1 << max(int(max(plens_qa) - 1).bit_length(), 7)
 
-    # Block convention: global slot u IS the decode row; lane = u // 32,
-    # per-lane slot = u % 32. Question u % 4, so each lane's slots cycle all
-    # four answers.
+    # Block convention: global slot u is the decode row, lane = u // 32, per-lane slot = u % 32.
+    # User u asks question u % 4, so each lane's slots cycle all four answers.
     def lane_of(u):
         return u // SLOTS_PER_LANE
 

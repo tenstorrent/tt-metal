@@ -41,15 +41,7 @@ from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs,
 def _canonical_shared_kv_shapes(per_layer_specs) -> dict:
     """Resolve one allocation shape per shared KV buffer (``tensor_idx``).
 
-    vLLM's kv-cache tensor sharing can place layers with different
-    ``(num_kv_heads, block_size, head_dim)`` views on one buffer. The buffer
-    is allocated at the view of the first layer that uses it (layer order);
-    the other layers address it through their own effective block size, which
-    the paged kernels support only in that direction. The largest
-    ``num_blocks`` among the views sizes the buffer, so a layer whose spec was
-    shrunk cannot undersize a buffer another layer reads in full. Views that
-    disagree on per-block element counts cannot share a buffer at all and
-    raise.
+    First sharing layer's view, sized by the largest ``num_blocks``; differing per-block element counts raise.
     """
     canonical: dict = {}
     for kv_cache_shape, _dtype, tensor_idx in per_layer_specs:

@@ -393,12 +393,8 @@ def chunked_prefill_sdpa(
         user_pt = page_table
         owns_user_pt = False
 
-    # CP prefill v1 (galaxy one-instance): split this Q chunk's rows across the
-    # lane (sp) axis — the paged cache is replicated per column and already
-    # holds the FULL chunk (fill precedes SDPA), so each column attends the
-    # complete prefix for its quarter via a per-column start offset, and the
-    # output rows are gathered back. Remnant chunks whose length does not
-    # split into lane-aligned q_chunks fall back to the replicated path.
+    # CP prefill: partition this Q chunk's rows across lanes (the paged cache already holds the
+    # full chunk per column) and all-gather the outputs; unaligned remnants use the replicated path.
     cp = bool(mesh_config is not None and getattr(mesh_config, "cp_prefill", False))
     cp_lanes = mesh_config.lanes if cp else 1
     if cp and (seq_len % (cp_lanes * q_chunk_size) != 0):
@@ -691,19 +687,15 @@ def apply_output_projection(tensor, weights: AttentionWeights):
 def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
     """Apply tensor-parallel allreduce if TP > 1.
 
-    Galaxy one-instance note: attention weights shard heads over tp_axis and
-    replicate across the other axis, so this ordinary tp-axis all-reduce also
-    completes the fractured-mesh o_proj (columns hold identical partial sums).
+    Also sufficient under weight_fracture: attention replicates across the other axis.
     """
     return ccl_allreduce(tensor, mesh_config, ccl_manager)
 
 
 def _paged_fill_cache(cache, x, *args, **kwargs):
-    """paged_fill_cache requires input dtype == cache dtype; cast when they differ.
+    """paged_fill_cache requires input dtype == cache dtype; typecast when they differ.
 
-    Unlike paged_update_cache, the fill op does not repack (bfp8_b KV under
-    GEMMA4_KV_BFP8 hits its dtype TT_FATAL). The cast copy is freed after the
-    fill so callers' own deallocation of ``x`` stays balanced.
+    The temporary cast copy is freed after the fill; the caller still owns ``x``.
     """
     if x.dtype == cache.dtype:
         return ttnn.experimental.paged_fill_cache(cache, x, *args, **kwargs)
