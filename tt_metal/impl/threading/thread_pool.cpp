@@ -18,10 +18,10 @@
 #include <vector>
 
 #include <linux/futex.h>
-#include <sched.h>  // Needed for setting process priorities
+#include <sched.h>
 #include <sys/syscall.h>
 #include <unistd.h>
-#include <sys/resource.h>  // Needed for setting process priorities
+#include <sys/resource.h>
 #include <numa.h>
 #include <tt-metalium/device.hpp>
 #include <tt_stl/tt_pause.hpp>
@@ -194,7 +194,6 @@ void futex_wake_one(std::atomic<uint32_t>& word) {
 }
 
 // Spins like std::atomic::wait before it parks (after 100 polls), so that callers can park on their own futex.
-// Returns whether `ready` became true.
 template <typename Ready>
 bool spin_until(Ready ready) {
     constexpr uint32_t POLLS = 100, PAUSES = 12, YIELDS = 4;
@@ -213,7 +212,6 @@ bool spin_until(Ready ready) {
 }
 
 // Tasks in flight across all workers of a pool, so that joining waits on one counter.
-// A worker wakes the joining thread only if it is parked, and only when the count reaches zero.
 class Completion {
 public:
     void add(int64_t n = 1) { pending_.fetch_add(n, std::memory_order_relaxed); }
@@ -221,6 +219,7 @@ public:
     bool finished() const { return pending_.load(std::memory_order_acquire) == 0; }
 
     void done(int64_t n = 1) {
+        // A worker wakes the joining thread only if it is parked, and only when the count reaches zero.
         if (pending_.fetch_sub(n, std::memory_order_seq_cst) == n &&
             waiter_parked_.exchange(0, std::memory_order_seq_cst) != 0) {
             futex_wake_one(waiter_parked_);
