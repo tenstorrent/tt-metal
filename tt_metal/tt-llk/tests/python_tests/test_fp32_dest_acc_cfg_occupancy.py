@@ -66,21 +66,14 @@ def test_fp32_dest_acc_cfg_occupancy():
             tile_count_res=tile_cnt_A,
         ),
     )
-    vals = [int(v) for v in configuration.run().result]
+    # Read in the order the kernel writes, so only the field order has to match.
+    vals = iter(int(v) for v in configuration.run().result)
 
-    trials, desync, plumbing, num_occ = vals[0], vals[1], vals[2], vals[3]
-    sweep = [
-        (vals[4 + 4 * i], vals[5 + 4 * i], vals[6 + 4 * i], vals[7 + 4 * i])
-        for i in range(num_occ)
-    ]
-    k = 4 + 4 * num_occ
-    real_trials, real_enabled, real_disabled = vals[k], vals[k + 1], vals[k + 2]
-    num_dir, dir_occ = vals[k + 3], vals[k + 4]
-    k += 5
-    direction = [
-        (vals[k + 3 * i], vals[k + 3 * i + 1], vals[k + 3 * i + 2])
-        for i in range(num_dir)
-    ]
+    trials, desync, plumbing, num_occ = (next(vals) for _ in range(4))
+    sweep = [tuple(next(vals) for _ in range(4)) for _ in range(num_occ)]
+    real_trials, real_enabled, real_disabled = (next(vals) for _ in range(3))
+    num_dir, dir_occ = next(vals), next(vals)
+    direction = [tuple(next(vals) for _ in range(3)) for _ in range(num_dir)]
 
     assert (
         desync == 0
