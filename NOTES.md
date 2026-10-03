@@ -39,9 +39,16 @@ _HALO_LAST_KEYS/_FORCE_SPATIAL_KEYS in conv3d.py are not read anywhere; only _BL
   /var/tmp/fasth3/t100/runab100.log: grep "AB arm=traced\|T100AB_\|CMP100\|T100_ARM". Driver marker
   "T100_DRIVER_DONE ab <rc>" in driver.log (old sweep log: driver.log.sweep). rc 9 = drop during our job -> stop all.
 
-## Next
-1. Read runab100.log. Pick the arm: exact if traced min beats table/table2 and CMP100 identical=True; best only
-   if it beats exact by more than noise and PSNR vs table >= ~50 dB.
-2. Update _BLOCKINGS (4,8,...) entries for s4_res (line ~495) and s1_up (line ~490) in models/tt_dit/utils/conv3d.py,
-   comment with halo-mode us. Commit, push.
-3. Clean blx03: rm -rf /var/tmp/fasth3/t100/src /var/tmp/fasth3/t100/ab (keep logs + results).
+## Decode A/B result (job 469, clean, traced 544x960/145f, 2x4 submesh, mesh key 4,8)
+| arm | traced decode s (3 runs) | min | vs table |
+|---|---|---|---|
+| table | 0.5367 0.5197 0.5209 | 0.5197 | - |
+| exact (s4 [128,64,6,4,8], s1_up [128,64,5,2,16]) | 0.5218 0.5109 0.5062 | 0.5062 | -13.5 ms (-2.6%), md5 identical |
+| best (s4 [64,128,6,4,8], s1_up [64,256,1,2,16]) | 0.5262 0.5107 0.5118 | 0.5107 | -9 ms, PSNR 52.6 dB, not identical |
+| table2 | 0.5210 0.5226 0.5218 | 0.5210 | md5 identical to table |
+Picked exact: bit-identical, and best is no faster. _BLOCKINGS updated for s4_res and s1_up (4,8 keys).
+s2_res/s3_res unchanged (table already fastest in halo mode).
+
+## Done
+Branch has the _BLOCKINGS change + CPU test. blx03 staging (src, ab) removed; logs/results kept in
+g14blx03:/var/tmp/fasth3/t100.
