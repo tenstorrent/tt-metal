@@ -62,6 +62,18 @@ sfpi_inline sfpi::vFloat softplus_exp_negative(sfpi::vFloat x) {
     constexpr float LN2_HI = -0.6931152343750000f;
     constexpr float LN2_LO = -3.19461832987e-05f;
 
+    // exp(x) underflows to zero below x = ln(2^-126) = -87.3365, so clamping the argument
+    // does not change any representable result.  It is required for correctness: the range
+    // reduction below uses _sfpu_round_to_nearest_int32_, whose 2^23 + 2^22 magic constant
+    // is only valid while |z| <= 2^22 (z = x * INV_LN2).  Past that, k_int comes back a large
+    // POSITIVE integer, so the `new_exp > 0` flush-to-zero guard no longer fires and setexp
+    // writes garbage into the exponent field, returning Inf/NaN/up to FLT_MAX where the true
+    // result is 0.  Every other caller of that helper clamps for the same reason
+    // (ckernel_sfpu_xielu.h, ckernel_sfpu_unary_power.h, ckernel_sfpu_binary_pow.h).
+    // At the clamp the reduced exponent is already <= 0, so the guard returns 0 as it should.
+    constexpr float EXP_UNDERFLOW_LIMIT = -88.0f;
+    x = sfpi::max(x, EXP_UNDERFLOW_LIMIT);
+
     // Range reduction: x = k*ln(2) + r
     sfpi::vFloat z = x * INV_LN2;
     sfpi::vInt k_int;
