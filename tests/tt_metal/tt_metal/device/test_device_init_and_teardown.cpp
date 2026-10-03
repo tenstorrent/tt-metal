@@ -27,6 +27,7 @@
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/system_mesh.hpp>
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
 
@@ -185,6 +186,41 @@ TEST(DeviceInitFabric, RejectsSingleHost1ChipMesh) {
             mesh_device->close();
         },
         ThrowsMessage<std::runtime_error>(HasSubstr("requires at least 2 participating chips")));
+}
+
+// FabricFirmwareInitializer rejects a single-host open whose mesh does not cover the cabled fabric.
+// Every chip of a proper subset has at least one Ethernet neighbour outside it, and fabric router
+// sync waits on that neighbour, so such an open used to hang until the fabric timeout and could
+// leave stale dispatch cores behind. This covers the >1-chip case the size guard above misses: a
+// 2x2 submesh offset into a Galaxy satisfies `devices_.size() > 1` and still does not cover the mesh.
+TEST(DeviceInitFabric, RejectsSingleHostPartialMeshSubset) {
+    if (get_physical_architecture() == tt::ARCH::Invalid) {
+        GTEST_SKIP() << "No TT hardware detected";
+    }
+
+    const auto& cluster = MetalContext::instance().get_cluster();
+    if (cluster.is_mock_or_emulated()) {
+        GTEST_SKIP() << "Mock/emule skips the fabric launch guard";
+    }
+    if (*MetalContext::instance().global_distributed_context().size() > 1) {
+        GTEST_SKIP() << "Multi-host meshes leave neighbours to other ranks";
+    }
+
+    const size_t local_mesh_size = MetalContext::instance().get_system_mesh().local_shape().mesh_size();
+    if (local_mesh_size <= 4) {
+        GTEST_SKIP() << "Needs a mesh strictly larger than the 2x2 subset opened here, but the local shape has "
+                     << local_mesh_size << " chip(s)";
+    }
+
+    ScopedFabricConfig fabric(tt::tt_fabric::FabricConfig::FABRIC_2D);
+    EXPECT_THAT(
+        [] {
+            auto mesh_device = distributed::MeshDevice::create(distributed::MeshDeviceConfig(
+                distributed::MeshShape{2, 2}, distributed::MeshCoordinate{0, 0}));
+            mesh_device->close();
+        },
+        ThrowsMessage<std::runtime_error>(
+            HasSubstr("requires every Ethernet neighbour of the opened mesh to be opened too")));
 }
 
 constexpr const char* kTdpLimitEnvVar = "TT_METAL_TDP_LIMIT_WATTS";
