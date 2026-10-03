@@ -72,6 +72,11 @@ void MorehAdamW::step() {
 
         auto gradients = tensor_ptr->get_grad();
 
+        // By value: moreh_adamw hands the parameter and moments back as its outputs and relabels them with the
+        // union of all its inputs, gradient included (see core::with_tensor_topology). Restore the parameter's
+        // label on the parameter and on every moment, which must follow the parameter's distribution.
+        const auto topology = tensor_ptr->get_value(autograd::PreferredPrecision::HALF).tensor_topology();
+
         auto output_tensor = tensor_ptr->get_value(autograd::PreferredPrecision::HALF);
         ttnn::moreh_adamw(
             tensor_ptr->get_value(autograd::PreferredPrecision::HALF),
@@ -92,9 +97,9 @@ void MorehAdamW::step() {
             /* max_exp_avg_sq_out */ std::nullopt,
             /* memory_config */ std::nullopt,
             /* compute_kernel_config */ core::ComputeKernelConfig::precise());
-        tensor_ptr->set_value(output_tensor);
-        first_moment_ptr->set_value(first_moment);
-        second_moment_ptr->set_value(second_moment);
+        tensor_ptr->set_value(core::with_tensor_topology(output_tensor, topology));
+        first_moment_ptr->set_value(core::with_tensor_topology(first_moment, topology));
+        second_moment_ptr->set_value(core::with_tensor_topology(second_moment, topology));
     }
 }
 
@@ -190,10 +195,17 @@ void AdamWComposite::step() {
 
         auto gradients = tensor_ptr->get_grad();
 
+        // By value, before any update: each ttnn::add/subtract below relabels its output with the union of its
+        // inputs, so the gradient's label would otherwise reach the parameter and its state through set_value
+        // (see core::with_tensor_topology). Every set_value that survives the step is pinned to this label.
+        const auto topology = tensor_ptr->get_value(autograd::PreferredPrecision::HALF).tensor_topology();
+
         if (m_config.weight_decay != 0.0F) {
             auto weight_decay_update = ttnn::multiply(
                 tensor_ptr->get_value(autograd::PreferredPrecision::HALF), m_config.weight_decay * m_config.lr);
             // weights -= weight_decay * lr * weights
+            // Intentionally not pinned: both inputs carry the parameter's label, and the final parameter
+            // set_value below overwrites this intermediate value with a pinned one.
             tensor_ptr->set_value(
                 ttnn::subtract(tensor_ptr->get_value(autograd::PreferredPrecision::HALF), weight_decay_update));
         }
@@ -209,8 +221,8 @@ void AdamWComposite::step() {
         auto first_moment_hat =
             ttnn::multiply(first_moment, static_cast<float>(1.F / (1.F - std::pow(m_config.beta1, m_steps))));
 
-        first_moment_ptr->set_value(first_moment);
-        second_moment_ptr->set_value(second_moment);
+        first_moment_ptr->set_value(core::with_tensor_topology(first_moment, topology));
+        second_moment_ptr->set_value(core::with_tensor_topology(second_moment, topology));
 
         // For amsgrad, use the maximum of all past second_moment values
         ttnn::Tensor denom_tensor;
@@ -219,7 +231,7 @@ void AdamWComposite::step() {
             auto max_exp_avg_sq = max_exp_avg_sq_ptr->get_value(autograd::PreferredPrecision::HALF);
             // max_exp_avg_sq = max(max_exp_avg_sq, second_moment)
             max_exp_avg_sq = ttnn::maximum(max_exp_avg_sq, second_moment);
-            max_exp_avg_sq_ptr->set_value(max_exp_avg_sq);
+            max_exp_avg_sq_ptr->set_value(core::with_tensor_topology(max_exp_avg_sq, topology));
             // Apply bias correction after taking max
             auto max_exp_avg_sq_hat =
                 ttnn::multiply(max_exp_avg_sq, static_cast<float>(1.0f / (1.0f - std::pow(m_config.beta2, m_steps))));
@@ -235,7 +247,8 @@ void AdamWComposite::step() {
         auto update_tensor = ttnn_fixed::divide(ttnn::multiply(first_moment_hat, -m_config.lr), denom_tensor);
 
         if (!m_config.kahan_summation) {
-            tensor_ptr->set_value(ttnn::add(tensor_ptr->get_value(autograd::PreferredPrecision::HALF), update_tensor));
+            tensor_ptr->set_value(core::with_tensor_topology(
+                ttnn::add(tensor_ptr->get_value(autograd::PreferredPrecision::HALF), update_tensor), topology));
         } else {
             auto value_tensor = tensor_ptr->get_value(autograd::PreferredPrecision::HALF);
 
@@ -250,8 +263,8 @@ void AdamWComposite::step() {
             // subtracting adjusted_update recovers negative (low part of adjusted_update)
             compensation_tensor = ttnn::subtract(ttnn::subtract(result, value_tensor), adjusted_update);
 
-            tensor_ptr->set_value(result);
-            kahan_compensation_ptr->set_value(compensation_tensor);
+            tensor_ptr->set_value(core::with_tensor_topology(result, topology));
+            kahan_compensation_ptr->set_value(core::with_tensor_topology(compensation_tensor, topology));
         }
     }
 }

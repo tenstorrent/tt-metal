@@ -11,6 +11,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "optimizer_topology_test_utils.hpp"
 #include "test_utils/random_data.hpp"
 
 namespace {
@@ -134,3 +135,24 @@ static const MuonTestCase kMuonCases[] = {
 INSTANTIATE_TEST_SUITE_P(MuonCorrectness, MuonCorrectnessTest, ::testing::ValuesIn(kMuonCases), [](const auto& info) {
     return info.param.name;
 });
+
+// ====================================================================
+// Mesh topology: a step against a mislabelled gradient must not relabel the
+// parameter, the optimizer state (the checkpointer gathers by that label) or
+// the gradient.
+// ====================================================================
+
+using ttml::test_utils::optimizer_topology::expect_step_keeps_topology;
+
+class MuonCompositeMeshTopologyTest : public ttml::test_utils::optimizer_topology::MeshTopologyTest {};
+
+TEST_F(MuonCompositeMeshTopologyTest, MuonCompositeStepKeepsNDParameterTopology) {
+    // Step 0 seeds the momentum buffer from the gradient; step 1 takes the momentum branch.
+    ttml::optimizers::MuonConfig config{.lr = 1e-2F, .momentum = 0.95F, .ns_steps = 5};
+    expect_step_keeps_topology<ttml::optimizers::MuonComposite>(config, /* collapsed_1d_label */ false);
+}
+
+TEST_F(MuonCompositeMeshTopologyTest, MuonCompositeStepKeeps1DParameterTopology) {
+    ttml::optimizers::MuonConfig config{.lr = 1e-2F, .momentum = 0.95F, .ns_steps = 5};
+    expect_step_keeps_topology<ttml::optimizers::MuonComposite>(config, /* collapsed_1d_label */ true);
+}
