@@ -9,7 +9,7 @@ TerminalBench5 and the original SWE5**. This supersedes the earlier objective
 of making all five SWE tasks correct. It does not turn 2/5 into 5/5 or waive
 other missing/failed execution, accuracy or API rows. No new quality-policy
 experiments are part of this run. Configuration audit began 2026-10-03;
-dispatch/results are pending. Starting documentation TT checkpoint95d6e17caa,
+dispatch/results are tracked below. Starting documentation TT checkpoint95d6e17caa,
 TTIed5cd392. No local hardware or inference process is started.
 
 ## Exact serving provenance
@@ -119,5 +119,27 @@ are separate. No all-five-correct claim is required by the updated user contract
 Before dispatch:207 host tests pass across eval config, request adapter, agentic
 driver, telemetry, cancellation, release routing and standard eval command;
 131 additional benchmark/overlay/startup/config checks pass (overlapping subsets).
-Final distinct test count, TTI commit, CI URLs/jobs/artifacts and results pending.
+Final combined host suite: **311 passed** in8.44s, one pre-existing pytest
+collection warning. TTI **c2d737f215201dbda02880c85f2a529ec70a0e11**, initial
+plan/docs TT **db4eb3cfa4**, both pushed.
+
+### Live CI checkpoint — 13:28 UTC
+
+[Actual release37126247213](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/37126247213),
+[hardware job111212039304](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/37126247213/job/111212039304),
+runner`120-qb2-p04t07`, dispatched**2026-10-03T13:27:35Z**. Builds are skipped;
+runner setup is in progress. `workflow=release`, `run-full-evals=false`
+(ci-nightly exact10/5/5), AI summary and issue-comment publication disabled.
+All git inputs use the full native TT/plugin/TTI SHAs above; immutable image override.
+
+Initial dispatch37126220935 accidentally used abbreviated TTIc2d737f2 and was
+cancelled immediately before a hardware job was created. It reached terminal
+`cancelled` at13:27:54; replacement above uses the full40-character SHA. This
+is an orchestration correction, not an eval rerun or failed model result.
+
+Read-only30-second monitor evidence:
+`/home/mvasiljevic/gemma4-eval-speed-evidence/release_20261003_37126247213/live_metrics.jsonl`.
+Results, artifact IDs, exact runtime provenance and final elapsed agent-work window
+remain pending. Monitor dispatched CI through completion; retry only infrastructure/
+configuration failures, not low reward under the accepted policy.
 Keep large logs/CSV/Tracy outside git under `/home/mvasiljevic/gemma4-eval-speed-evidence`.
