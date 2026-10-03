@@ -26,6 +26,8 @@ struct D2H2H2DSocket::Impl {
     // Stamped at publish, popped when the device reports that page drained. A DEQUE per core,
     // not one stamp: at ring_pages > 1 several are outstanding and drained() reports in order.
     std::vector<std::deque<std::chrono::steady_clock::time_point>> published;
+    uint64_t d2h_w = 0;  // ring write cursors, once the sample caps are reached
+    uint64_t h2d_w = 0;
     HostRegion* region = nullptr;
 
     // Declaration order is teardown order and is load-bearing: the window must go before
@@ -59,6 +61,11 @@ std::unique_ptr<D2H2H2DSocket> D2H2H2DSocket::create(
     im.cfg = cfg;
     if (cfg.collect_timing) {
         im.published.resize(cfg.cores);
+        // Reserved so the push_backs below never realloc inside poll(), and so reset_timing()
+        // at the warmup boundary does not hand the measured window a fresh empty vector.
+        im.timing.d2h_issue_cycles.reserve(1u << 20);
+        im.timing.d2h_stall_cycles.reserve(1u << 20);
+        im.timing.h2d_publish_to_drained_ns.reserve(1u << 20);
     }
     const uint32_t page = tt_uva_frame_page_size(cfg.payload_bytes);
 
@@ -166,41 +173,83 @@ std::unique_ptr<D2H2H2DSocket> D2H2H2DSocket::create(
 
 // The whole pipeline. Each leg is non-blocking and refuses rather than waits, so a full
 // queue anywhere propagates back to the device as an unacked FIFO page.
+namespace {
+// Only read when collect_timing is set: poll() is the spin loop, and two clock reads per
+// leg would otherwise be charged to runs that asked for no timing.
+inline uint64_t ns_since(std::chrono::steady_clock::time_point t0) {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count());
+}
+}  // namespace
+
 uint32_t D2H2H2DSocket::poll() {
     Impl& im = *impl_;
     uint32_t progress = 0;
+    const bool t = im.cfg.collect_timing;
+    const auto zero = std::chrono::steady_clock::time_point{};
+    if (t) {
+        ++im.timing.poll_calls;
+    }
 
+    const auto d2h_t0 = t ? std::chrono::steady_clock::now() : zero;
     progress += im.d2h->poll([&](const SendTask& t) {
         if (!im.h2h->submit(t)) {
             return false;
         }
         ++im.counters.sent;
         if (im.cfg.collect_timing) {
+            // Overwrite oldest past the cap: keeping the head reported the ramp while
+            // throughput reported the steady tail. A percentile ignores order.
+            const uint64_t iss = tt_uva_frame_elapsed_issue(t.elapsed);
+            const uint64_t stl = tt_uva_frame_elapsed_stall(t.elapsed);
             if (im.timing.d2h_issue_cycles.size() < kMaxTimingSamples) {
-                im.timing.d2h_issue_cycles.push_back(tt_uva_frame_elapsed_issue(t.elapsed));
-                im.timing.d2h_stall_cycles.push_back(tt_uva_frame_elapsed_stall(t.elapsed));
+                im.timing.d2h_issue_cycles.push_back(iss);
+                im.timing.d2h_stall_cycles.push_back(stl);
+            } else {
+                const size_t w = im.d2h_w++ % kMaxTimingSamples;
+                im.timing.d2h_issue_cycles[w] = iss;
+                im.timing.d2h_stall_cycles[w] = stl;
             }
         }
         return true;
     });
+    if (t) {
+        im.timing.d2h_poll_ns += ns_since(d2h_t0);
+    }
 
+    const auto h2h_t0 = t ? std::chrono::steady_clock::now() : zero;
     progress += im.h2h->poll(
         [&](uint32_t core, uint32_t pages) {
+            const auto cb0 = t ? std::chrono::steady_clock::now() : zero;
             im.d2h->retire(core, pages);
             im.counters.retired += pages;
+            if (t) {
+                im.timing.h2h_cb_ns += ns_since(cb0);
+            }
         },
-        [&](const DeliverTask& t) {
-            if (!im.h2d->publish(t)) {
+        [&](const DeliverTask& dt) {
+            const auto cb0 = t ? std::chrono::steady_clock::now() : zero;
+            if (!im.h2d->publish(dt)) {
+                if (t) {
+                    im.timing.h2h_cb_ns += ns_since(cb0);
+                }
                 return false;
             }
             ++im.counters.received;
-            if (im.cfg.collect_timing && t.core < im.published.size()) {
-                im.published[t.core].push_back(std::chrono::steady_clock::now());
+            if (im.cfg.collect_timing && dt.core < im.published.size()) {
+                im.published[dt.core].push_back(std::chrono::steady_clock::now());
+            }
+            if (t) {
+                im.timing.h2h_cb_ns += ns_since(cb0);
             }
             return true;
         });
+    if (t) {
+        im.timing.h2h_poll_ns += ns_since(h2h_t0);
+    }
 
     // A drained page is what frees the peer's slot, so the credit follows the device.
+    const auto h2d_t0 = t ? std::chrono::steady_clock::now() : zero;
     for (uint32_t c = 0; c < im.cfg.cores; ++c) {
         if (const uint32_t pages = im.h2d->drained(c); pages != 0) {
             im.h2h->consumed(c, pages);
@@ -212,18 +261,50 @@ uint32_t D2H2H2DSocket::poll() {
                 for (uint32_t k = 0; k < pages && !im.published[c].empty(); ++k) {
                     const auto d = now - im.published[c].front();
                     im.published[c].pop_front();
-                    if (im.timing.h2d_publish_to_drained_ns.size() >= kMaxTimingSamples) {
-                        continue;
+                    const uint64_t ns =
+                        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count());
+                    if (im.timing.h2d_publish_to_drained_ns.size() < kMaxTimingSamples) {
+                        im.timing.h2d_publish_to_drained_ns.push_back(ns);
+                    } else {
+                        im.timing.h2d_publish_to_drained_ns[im.h2d_w++ % kMaxTimingSamples] = ns;
                     }
-                    im.timing.h2d_publish_to_drained_ns.push_back(
-                        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count()));
                 }
             }
         }
         // Publish the inbound credit to our own sender, so tt_uva_sync() can see it.
         im.d2h->credit(c, im.h2h->credit_total(c));
     }
+    // After the whole loop, so one put covers every core that freed a slot this pass.
+    (void)im.h2h->publish_credits();
+    if (t) {
+        im.timing.h2d_drain_ns += ns_since(h2d_t0);
+    }
     return progress;
+}
+
+void D2H2H2DSocket::reset_timing() {
+    Impl& im = *impl_;
+    // clear(), not Timing{}: assigning a fresh struct frees the reserves above and the
+    // vectors would then double-and-copy inside poll() across the measured window.
+    im.timing.d2h_issue_cycles.clear();
+    im.timing.d2h_stall_cycles.clear();
+    im.timing.h2h_put_to_credit_ns.clear();
+    im.timing.h2d_publish_to_drained_ns.clear();
+    im.timing.poll_calls = 0;
+    im.timing.d2h_poll_ns = 0;
+    im.timing.h2h_poll_ns = 0;
+    im.timing.h2d_drain_ns = 0;
+    im.timing.h2h_cb_ns = 0;
+    im.d2h_w = 0;
+    im.h2d_w = 0;
+    // The pending publish stamps go too: a frame published before the boundary and drained
+    // after it belongs to neither window, so its sample is dropped rather than misdated.
+    for (auto& q : im.published) {
+        q.clear();
+    }
+    if (im.h2h) {
+        im.h2h->reset_stats();
+    }
 }
 
 const L1MapUVA& D2H2H2DSocket::l1() const { return impl_->l1; }
