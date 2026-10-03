@@ -11,12 +11,25 @@ using namespace tt::tt_metal;
 
 namespace ttnn {
 
+namespace {
+void validate_shard_shape(const std::array<uint32_t, 2>& shard_shape) {
+    TT_FATAL(
+        shard_shape[0] > 0 && shard_shape[1] > 0,
+        "shard_shape must be greater than 0 in both dims, got [{}, {}]",
+        shard_shape[0],
+        shard_shape[1]);
+}
+}  // namespace
+
 ttnn::Tensor interleaved_to_sharded(
     const ttnn::Tensor& input_tensor,
     const MemoryConfig& sharded_memory_config,
     const std::optional<DataType>& data_type_arg,
     const std::optional<bool>& keep_l1_aligned,
     const std::optional<Tensor>& preallocated_output) {
+    if (sharded_memory_config.shard_spec().has_value()) {
+        validate_shard_shape(sharded_memory_config.shard_spec()->shape);
+    }
     return ttnn::prim::interleaved_to_sharded(
         input_tensor,
         sharded_memory_config,
@@ -33,6 +46,7 @@ ttnn::Tensor interleaved_to_sharded(
     const ShardOrientation shard_orientation,
     const std::optional<DataType>& data_type_arg,
     const std::optional<bool>& keep_l1_aligned) {
+    validate_shard_shape(shard_shape);
     bool row_wise = shard_orientation == ShardOrientation::ROW_MAJOR;
     CoreCoord grid_size;
     CoreRangeSet grid_set;

@@ -125,6 +125,7 @@ ttnn::Tensor slice(
         "Step {} must have the same size as start {} and end",
         step.size(),
         begins.size());
+    TT_FATAL(std::ranges::all_of(step, [](T s) { return s > 0; }), "Slice step must be greater than 0 in every dim");
 
     bool no_step = std::ranges::all_of(step, [](uint32_t s) { return s == 1; });
     bool starts_zero = std::ranges::all_of(begins, [](uint32_t s) { return s == 0; });
