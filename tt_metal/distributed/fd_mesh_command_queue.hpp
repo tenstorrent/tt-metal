@@ -6,6 +6,8 @@
 
 #include "mesh_command_queue_base.hpp"
 
+#include <array>
+#include <chrono>
 #include <unordered_map>
 
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
@@ -54,9 +56,12 @@ private:
         ttsl::Span<const SubDeviceId> sub_device_ids,
         bool notify_host,
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
-    void write_program_commands_to_devices(
-        const std::vector<IDevice*>& devices,
+    // Writes one program's command sequence to one device, as a single fetch of `one_shot_size` bytes when it fits
+    // in one.
+    void write_program_commands_to_device(
+        IDevice* device,
         ProgramCommandSequence& program_cmd_seq,
+        uint32_t one_shot_size,
         bool stall_first,
         bool stall_before_program);
     // For a given MeshWorkload, a subgrid is unused if no programs are run on it. Dispatch sequences
@@ -170,6 +175,75 @@ private:
     std::unique_ptr<RingbufferCacheManager> prefetcher_cache_manager_;
     // The backup prefetcher cache manager is used to stash away the prefetcher cache state during trace recording.
     std::unique_ptr<RingbufferCacheManager> dummy_prefetcher_cache_manager_;
+
+    // Per-call state of enqueue_mesh_workload, kept to reuse the allocations.
+    struct DeviceProgramWrite {
+        IDevice* device;
+        ProgramCommandSequence* program_cmd_seq;
+        uint32_t one_shot_size;
+    };
+    std::vector<DeviceProgramWrite> device_program_writes_;
+    std::vector<uint32_t> device_program_write_ids_;
+    // Unique to each enqueue_mesh_workload call in the process, so that a thread's packed copy of a program is not
+    // reused by a later enqueue, including one on a queue or program that was allocated at the same address.
+    uint64_t enqueue_generation_ = 0;
+    // How long dispatch pool workers keep polling after a task (TT_METAL_DISPATCH_POOL_ACTIVE_SPIN_US).
+    const std::chrono::microseconds dispatch_pool_active_spin_;
+    // Whether enqueue_mesh_workload may fan the device writes out across the dispatch thread pool. Only when its
+    // workers stay awake between fan-outs: waking a parked worker takes longer than a model-sized op's writes.
+    const bool fan_out_program_writes_;
+    // Whether this queue's multi-device enqueues currently fan out. Awake workers slow the calling thread outside
+    // the writes too, and slow every workload on the queue, so the queue times whole enqueues: a block written
+    // serially, then a block fanned out. Workloads differ, so it compares each workload with itself across the two
+    // blocks and weights the result by how often the workload ran. It fans out only if that is clearly faster.
+    struct FanOutChoice {
+        static constexpr uint32_t BLOCK_SAMPLES = 32;
+        // The fanned-out block runs until BLOCK_SAMPLES of its samples come from workloads the serial block timed, so
+        // that a long cycle of distinct workloads comes round again, but for at most this many samples.
+        static constexpr uint32_t MAX_FAN_OUT_BLOCK_SAMPLES = 512;
+        // A block pair with fewer than half of BLOCK_SAMPLES matched is extended by another pair, up to this many,
+        // before deciding on what matched.
+        static constexpr uint32_t MAX_PROBE_ROUNDS = 4;
+        // Fanning out must be at least this much faster, so that a near tie does not flip the choice. A probe that
+        // would switch, or the first after the queue starts or the mix changes, is followed by a second probe, which
+        // decides: a new mix's first probe runs cold and leans towards fanning out.
+        static constexpr double MARGIN = 0.9;
+        // Enqueues between probes: doubles each time a probe confirms the choice, resets when it changes, and is at
+        // least this many times the enqueues the last probe took, so that probing stays a small share of them.
+        static constexpr uint32_t MIN_STEADY_ENQUEUES = 1024;
+        static constexpr uint32_t MAX_STEADY_ENQUEUES = 16384;
+        static constexpr uint32_t STEADY_ENQUEUES_PER_PROBE_ENQUEUE = 16;
+        // Probe again early if, within a window of this many enqueues, the share from workloads the last probe saw
+        // falls below half the share it saw in both blocks: the mix of work has changed.
+        static constexpr uint32_t FAMILIARITY_WINDOW = 128;
+        enum class Phase : uint8_t { ProbeSerial, ProbeFanOut, Steady };
+        struct Times {
+            std::array<int64_t, 2> ns{};  // [0] serial, [1] fanned out
+            std::array<uint32_t, 2> count{};
+            uint32_t warm_block = 0;  // the last block that enqueued this workload
+        };
+        Phase phase = Phase::ProbeSerial;
+        bool phase_started = false;
+        std::chrono::steady_clock::time_point phase_start;
+        uint32_t block = 0;
+        uint32_t block_samples = 0;
+        uint32_t block_matched = 0;
+        uint32_t probe_rounds = 0;
+        uint32_t probe_enqueues = 0;
+        bool new_mix = true;
+        bool confirming = false;
+        uint32_t steady_left = 0;
+        uint32_t steady_length = MIN_STEADY_ENQUEUES;
+        std::unordered_map<uint64_t, Times> times;  // by workload id; kept after a decision to recognize the mix
+        uint32_t window_enqueues = 0;
+        uint32_t window_unfamiliar = 0;
+        uint32_t max_unfamiliar = FAMILIARITY_WINDOW / 2;
+        bool fan_out = false;
+        bool fans_out() const { return phase == Phase::Steady ? fan_out : phase == Phase::ProbeFanOut; }
+    };
+    FanOutChoice fan_out_choice_;
+    void update_fan_out_choice(
+        uint64_t workload_id, bool first_enqueue, std::chrono::steady_clock::time_point enqueue_start, bool fanned_out);
 
     // Used to define when the exception should be handled.
     // The goal is to not throw exceptions in loop and do it just once

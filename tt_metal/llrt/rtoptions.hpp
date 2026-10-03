@@ -290,6 +290,8 @@ class RunTimeOptions {
 
     bool validate_kernel_binaries = false;
     unsigned num_hw_cqs = 1;
+    uint32_t dispatch_pool_active_spin_us = 0;
+    uint32_t thread_pool_reserved_cores = 0;
 
     bool using_slow_dispatch = false;
 
@@ -793,6 +795,8 @@ public:
     void set_riscv_debug_info_enabled(bool enable) { riscv_debug_info_enabled = enable; }
 
     unsigned get_num_hw_cqs() const { return num_hw_cqs; }
+    uint32_t get_dispatch_pool_active_spin_us() const { return dispatch_pool_active_spin_us; }
+    uint32_t get_thread_pool_reserved_cores() const { return thread_pool_reserved_cores; }
     void set_num_hw_cqs(unsigned num) { num_hw_cqs = num; }
 
     uint32_t get_watcher_debug_delay() const { return watcher_debug_delay; }

@@ -6,6 +6,8 @@
 #include <tt_stl/fmt.hpp>
 #include "fd_mesh_command_queue.hpp"
 
+#include <chrono>
+
 #include <tracy/Tracy.hpp>
 
 #include <mesh_device.hpp>
@@ -212,6 +214,9 @@ FDMeshCommandQueue::FDMeshCommandQueue(
         prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)),
     dummy_prefetcher_cache_manager_(std::make_unique<RingbufferCacheManager>(
         prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)),
+    dispatch_pool_active_spin_(
+        MetalContext::instance(mesh_device->impl().get_context_id()).rtoptions().get_dispatch_pool_active_spin_us()),
+    fan_out_program_writes_(dispatch_pool_active_spin_.count() > 0),
     active_distributed_context_(std::move(distributed_context)) {
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
         MetalContext::instance(mesh_device_->impl().get_context_id()).hal(),
@@ -407,6 +412,11 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
     ZoneScopedN("EnqueueProgram");
     auto lock = lock_api_function_();
+    // Called directly rather than through EnqueueMeshWorkload, the time starts here.
+    auto enqueue_start = std::exchange(mesh_workload.impl().enqueue_start_, {});
+    if (fan_out_program_writes_ && enqueue_start == std::chrono::steady_clock::time_point{}) {
+        enqueue_start = std::chrono::steady_clock::now();
+    }
     in_use_ = true;
     // The active sub-device manager id doubles as the key for per-program cached command sequences.
     const uint64_t active_sub_device_manager_id = *mesh_device_->get_active_sub_device_manager_id();
@@ -549,9 +559,13 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     const bool tag_tracy_zones = !tt::tt_metal::getDeviceProfilerState();
 #endif
 
-    // Iterate over all programs. Update dispatch commands per program to reflect
-    // current device state. Write the finalized program command sequence to each
-    // physical device tied to the program.
+    // Update dispatch commands per program to reflect current device state, then write each local device's
+    // program to it, in one fan-out when enabled. Programs cover disjoint device ranges, so each device gets one
+    // program.
+    device_program_writes_.clear();
+    device_program_write_ids_.clear();
+    static std::atomic<uint64_t> next_enqueue_generation = 1;
+    enqueue_generation_ = next_enqueue_generation.fetch_add(1, std::memory_order_relaxed);
     for (auto& [device_range, program] : mesh_workload.get_programs()) {
         auto& program_cmd_seq =
             mesh_workload.impl().get_dispatch_cmds_for_program(program, active_sub_device_manager_id);
@@ -575,8 +589,12 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
         const auto& local_devices = mesh_device_->impl().get_local_devices(device_range);
         sub_device_recorder.record(local_devices, program.get_runtime_id(), sub_device_id);
-        this->write_program_commands_to_devices(
-            local_devices, program_cmd_seq, dispatch_metadata.stall_first, dispatch_metadata.stall_before_program);
+        const uint32_t one_shot_size = program_cmd_seq.get_one_shot_fetch_size(
+            dispatch_metadata.stall_first, dispatch_metadata.stall_before_program, true);
+        for (auto* device : local_devices) {
+            device_program_writes_.push_back({device, &program_cmd_seq, one_shot_size});
+            device_program_write_ids_.push_back(device->id());
+        }
         if (!covers_entire_mesh) {
             for (const auto* device : local_devices) {
                 chip_ids_in_workload.insert(device->id());
@@ -591,6 +609,29 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             TracyMessage(msg.c_str(), msg.size());
         }
 #endif
+    }
+
+    const bool choose_fan_out = fan_out_program_writes_ && device_program_writes_.size() > 1;
+    const bool fan_out = choose_fan_out && fan_out_choice_.fans_out();
+    if (fan_out) {
+        dispatch_thread_pool_->parallel_for(device_program_write_ids_, [this, &dispatch_metadata](size_t i) {
+            const auto& write = device_program_writes_[i];
+            this->write_program_commands_to_device(
+                write.device,
+                *write.program_cmd_seq,
+                write.one_shot_size,
+                dispatch_metadata.stall_first,
+                dispatch_metadata.stall_before_program);
+        });
+    } else {
+        for (const auto& write : device_program_writes_) {
+            this->write_program_commands_to_device(
+                write.device,
+                *write.program_cmd_seq,
+                write.one_shot_size,
+                dispatch_metadata.stall_first,
+                dispatch_metadata.stall_before_program);
+        }
     }
 
     // Remember when this CrossNode launch will complete so a later re-enqueue of the
@@ -620,9 +661,121 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     mesh_workload.impl().set_program_binary_status(mesh_device_id, ProgramBinaryStatus::Committed);
     mesh_workload.set_last_used_command_queue_for_testing(this);
 
+    if (choose_fan_out) {
+        // A workload's first enqueue also writes its binaries, so it is not a sample.
+        this->update_fan_out_choice(
+            mesh_workload.impl().get_id(),
+            program_binary_status != ProgramBinaryStatus::Committed,
+            enqueue_start,
+            fan_out);
+    }
+
     if (blocking) {
         this->finish_nolock({{sub_device_id}});
     }
+}
+
+void FDMeshCommandQueue::update_fan_out_choice(
+    uint64_t workload_id, bool first_enqueue, std::chrono::steady_clock::time_point enqueue_start, bool fanned_out) {
+    using Phase = FanOutChoice::Phase;
+    auto& choice = fan_out_choice_;
+    if (choice.phase == Phase::Steady) {
+        choice.window_unfamiliar += choice.times.contains(workload_id) ? 0 : 1;
+        const bool mix_changed = choice.window_unfamiliar > choice.max_unfamiliar;
+        if (++choice.window_enqueues == FanOutChoice::FAMILIARITY_WINDOW) {
+            choice.window_enqueues = 0;
+            choice.window_unfamiliar = 0;
+        }
+        if (--choice.steady_left == 0 || mix_changed) {
+            choice.phase = Phase::ProbeSerial;
+            choice.phase_started = false;
+            choice.probe_rounds = 0;
+            choice.probe_enqueues = 0;
+            choice.times.clear();
+            choice.new_mix = mix_changed;
+            if (mix_changed) {
+                choice.steady_length = FanOutChoice::MIN_STEADY_ENQUEUES;
+            }
+        }
+        return;
+    }
+    choice.probe_enqueues++;
+    // Skip the start of each block until the workers have had time to park (serial) or to settle awake (fanned
+    // out), and skip each workload's first enqueue in a block: the threads that write it change, and their caches start
+    // cold. Otherwise one block's state leaks into the other's samples.
+    if (!choice.phase_started) {
+        choice.phase_start = enqueue_start;
+        choice.phase_started = true;
+        choice.block++;
+        choice.block_samples = 0;
+        choice.block_matched = 0;
+    }
+    auto& times = choice.times[workload_id];
+    const bool warm = std::exchange(times.warm_block, choice.block) == choice.block;
+    if (warm && !first_enqueue && enqueue_start - choice.phase_start >= 2 * dispatch_pool_active_spin_) {
+        const size_t mode = fanned_out ? 1 : 0;
+        times.ns[mode] +=
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - enqueue_start)
+                .count();
+        times.count[mode]++;
+        choice.block_samples++;
+        choice.block_matched += fanned_out && times.count[0] > 0 ? 1 : 0;
+    }
+    const bool block_done = choice.phase == Phase::ProbeSerial
+                                ? choice.block_samples >= FanOutChoice::BLOCK_SAMPLES
+                                : choice.block_matched >= FanOutChoice::BLOCK_SAMPLES ||
+                                      choice.block_samples >= FanOutChoice::MAX_FAN_OUT_BLOCK_SAMPLES;
+    if (!block_done) {
+        return;
+    }
+    choice.phase_started = false;
+    if (choice.phase == Phase::ProbeSerial) {
+        choice.phase = Phase::ProbeFanOut;
+        return;
+    }
+    // Compare each workload with itself, weighted by how often it ran in the two blocks.
+    double serial = 0;
+    double fanned = 0;
+    double matched = 0;
+    double total = 0;
+    for (const auto& [id, times] : choice.times) {
+        const double runs = times.count[0] + times.count[1];
+        total += runs;
+        if (times.count[0] > 0 && times.count[1] > 0) {
+            serial += runs * static_cast<double>(times.ns[0]) / times.count[0];
+            fanned += runs * static_cast<double>(times.ns[1]) / times.count[1];
+            matched += runs;
+        }
+    }
+    if (2 * choice.block_matched < FanOutChoice::BLOCK_SAMPLES &&
+        ++choice.probe_rounds < FanOutChoice::MAX_PROBE_ROUNDS) {
+        choice.phase = Phase::ProbeSerial;
+        return;
+    }
+    if (matched > 0) {
+        const bool fan_out = fanned < FanOutChoice::MARGIN * serial;
+        if ((fan_out != choice.fan_out || choice.new_mix) && !choice.confirming) {
+            choice.confirming = true;
+            choice.phase = Phase::ProbeSerial;
+            choice.probe_rounds = 0;
+            choice.probe_enqueues = 0;
+            choice.times.clear();
+            return;
+        }
+        choice.steady_length = fan_out == choice.fan_out
+                                   ? std::min(2 * choice.steady_length, FanOutChoice::MAX_STEADY_ENQUEUES)
+                                   : FanOutChoice::MIN_STEADY_ENQUEUES;
+        choice.fan_out = fan_out;
+    }
+    choice.new_mix = false;
+    choice.confirming = false;
+    const double familiar_share = total > 0 ? matched / total : 1;
+    choice.max_unfamiliar = static_cast<uint32_t>(FanOutChoice::FAMILIARITY_WINDOW * (1 - familiar_share / 2));
+    choice.phase = Phase::Steady;
+    choice.steady_left =
+        std::max(choice.steady_length, FanOutChoice::STEADY_ENQUEUES_PER_PROBE_ENQUEUE * choice.probe_enqueues);
+    choice.window_enqueues = 0;
+    choice.window_unfamiliar = 0;
 }
 
 void FDMeshCommandQueue::enqueue_write_shard_to_core(
@@ -1287,33 +1440,41 @@ void FDMeshCommandQueue::reset_worker_state(
     }
 }
 
-void FDMeshCommandQueue::write_program_commands_to_devices(
-    const std::vector<IDevice*>& devices,
+void FDMeshCommandQueue::write_program_commands_to_device(
+    IDevice* device,
     ProgramCommandSequence& program_cmd_seq,
+    uint32_t one_shot_size,
     bool stall_first,
     bool stall_before_program) {
-    if (devices.size() > 1) {
-        const auto size = program_cmd_seq.get_one_shot_fetch_size(stall_first, stall_before_program, true);
-        if (size <= program_cmd_seq.ctx->dispatch_mem_map().max_prefetch_command_size()) {
-            // Every local device receives the same bytes. Pack the fragments once before the device copies.
-            static thread_local vector_aligned<uint32_t> packed;
-            program_dispatch::pack_program_command_sequence(
-                program_cmd_seq, stall_first, stall_before_program, true, packed);
-            for (auto* device : devices) {
-                auto& manager = device->sysmem_manager();
-                manager.issue_queue_reserve(size, id_);
-                manager.cq_write(packed.data(), size, manager.get_issue_queue_write_ptr(id_));
-                manager.issue_queue_push_back(size, id_);
-                manager.fetch_queue_reserve_back(id_);
-                manager.fetch_queue_write(size, id_);
-            }
-            return;
-        }
-    }
-    for (auto* device : devices) {
+    const uint32_t size = one_shot_size;
+    if (size > program_cmd_seq.ctx->dispatch_mem_map().max_prefetch_command_size()) {
         program_dispatch::write_program_command_sequence(
             program_cmd_seq, device->sysmem_manager(), id_, stall_first, stall_before_program);
+        return;
     }
+    // Pack the fragments into one fetch on the thread that writes it, once per program per enqueue. A copy packed
+    // by the calling thread and read by a worker would make the next enqueue's pack wait for those cache lines.
+    struct PackedProgram {
+        const FDMeshCommandQueue* queue = nullptr;
+        const ProgramCommandSequence* program_cmd_seq = nullptr;
+        uint64_t generation = 0;
+        vector_aligned<uint32_t> data;
+    };
+    static thread_local PackedProgram packed;
+    if (packed.queue != this || packed.program_cmd_seq != &program_cmd_seq ||
+        packed.generation != enqueue_generation_) {
+        program_dispatch::pack_program_command_sequence(
+            program_cmd_seq, stall_first, stall_before_program, true, packed.data);
+        packed.queue = this;
+        packed.program_cmd_seq = &program_cmd_seq;
+        packed.generation = enqueue_generation_;
+    }
+    auto& manager = device->sysmem_manager();
+    manager.issue_queue_reserve(size, id_);
+    manager.cq_write(packed.data.data(), size, manager.get_issue_queue_write_ptr(id_));
+    manager.issue_queue_push_back(size, id_);
+    manager.fetch_queue_reserve_back(id_);
+    manager.fetch_queue_write(size, id_);
 }
 
 void FDMeshCommandQueue::write_go_signal_sequences_to_unused_sub_grids(

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <optional>
 
 #include <tt-metalium/distributed.hpp>
@@ -95,6 +96,9 @@ private:
     // the claimed-core set (worker cores never become service cores, and service workloads are only
     // re-enqueued onto still-claimed cores - which the dispatch path re-checks).
     std::optional<bool> is_service_workload_;
+    // Set by EnqueueMeshWorkload before it compiles and generates commands, so that the command queue can time the
+    // whole call. The queue clears it.
+    std::chrono::steady_clock::time_point enqueue_start_;
 
     friend uint32_t program_dispatch::program_base_addr_on_core(
         MeshWorkloadImpl&, ::tt::tt_metal::distributed::MeshDevice*, HalProgrammableCoreType);

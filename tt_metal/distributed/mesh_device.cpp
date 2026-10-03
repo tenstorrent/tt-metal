@@ -96,12 +96,12 @@ int generate_unique_mesh_id() {
 
 // All physical devices must belong to the same context ID.
 std::shared_ptr<ThreadPool> create_default_thread_pool(
-    ContextId context_id, const std::vector<IDevice*>& physical_devices) {
+    ContextId context_id, const std::vector<IDevice*>& physical_devices, std::chrono::microseconds active_spin = {}) {
     // Bind the thread-pool to the physical devices being used.
     if (tt::parse_env("TT_MESH_PASS_THROUGH_THREAD_POOL", false) || physical_devices.size() == 1) {
         return create_passthrough_thread_pool(context_id);
     }
-    return create_device_bound_thread_pool(context_id, physical_devices);
+    return create_device_bound_thread_pool(context_id, physical_devices, active_spin);
 }
 
 // Helper function to verify all devices in the MeshDevice have the same value
@@ -368,7 +368,10 @@ MeshDeviceImpl::MeshDeviceImpl(
     mesh_id_(generate_unique_mesh_id()),
     view_(std::move(mesh_device_view)),
     parent_mesh_(std::move(parent_mesh)),
-    dispatch_thread_pool_(create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()))),
+    dispatch_thread_pool_(create_default_thread_pool(
+        context_id_,
+        extract_locals(scoped_devices_->root_devices()),
+        std::chrono::microseconds(MetalContext::instance(context_id_).rtoptions().get_dispatch_pool_active_spin_us()))),
     reader_thread_pool_(create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()))),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()) {
     const auto& mpi_context = metal_env().get_control_plane().get_distributed_context(view_->mesh_id());
@@ -1572,8 +1575,7 @@ void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) 
 
     // Register the trace on any exit, including thrown exceptions, so subsequent allocations are treated
     // conservatively until the trace is released.
-    auto register_trace_on_exit =
-        ttsl::make_cleanup([this, trace_id]() { this->register_active_trace(trace_id); });
+    auto register_trace_on_exit = ttsl::make_cleanup([this, trace_id]() { this->register_active_trace(trace_id); });
 
     TT_FATAL(
         this->mesh_command_queues_[cq_id]->trace_id() == trace_id,
