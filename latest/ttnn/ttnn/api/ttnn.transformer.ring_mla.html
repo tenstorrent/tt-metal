@@ -256,7 +256,6 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.concatenate_heads.html">ttnn.transformer.concatenate_heads</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.flash_mla_prefill.html">ttnn.transformer.flash_mla_prefill</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.flash_multi_latent_attention_decode.html">ttnn.transformer.flash_multi_latent_attention_decode</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.fused_recurrent_gated_delta_rule.html">ttnn.transformer.fused_recurrent_gated_delta_rule</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.gated_delta_attn_seq.html">ttnn.transformer.gated_delta_attn_seq</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.joint_scaled_dot_product_attention.html">ttnn.transformer.joint_scaled_dot_product_attention</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.paged_flash_multi_latent_attention_decode.html">ttnn.transformer.paged_flash_multi_latent_attention_decode</a></li>
@@ -398,8 +397,8 @@ Must be a one-element UINT32 ROW_MAJOR DRAM tensor on the same mesh device as Q.
 Must be supplied together with kv_actual_isl_tensor. Defaults to None.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>kv_actual_isl_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Prior valid global KV length read on-device
 during trace replay. Has the same one-element UINT32 ROW_MAJOR DRAM contract as slot_id
-and must be supplied together with it. Its value must be tile-aligned and below cache
-capacity. Padded Q rows beyond the cache boundary are ignored. Defaults to None.</span></p></li>
+and must be supplied together with it. Its value must be tile-aligned and leave enough
+cache capacity for the current chunk. Defaults to None.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>kv_cache_num_layers</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Number of layers packed into each cache-user slot.
 None uses 1. The selected cache batch is
 slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx.</span></p></li>
