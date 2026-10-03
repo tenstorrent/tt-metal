@@ -61,8 +61,15 @@ constexpr std::array<float, ERF_LUT_SIZE> ERF_LUT = {
 
 #endif
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <int ITERATIONS>
+void calculate_erf_bf16();
+
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en>
 inline void calculate_erf() {
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
+        calculate_erf_bf16<ITERATIONS>();
+        return;
+    }
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         // Clamp |x| to 10.0 before evaluation (erf is odd, rational is exact at boundary)
@@ -83,10 +90,18 @@ inline void calculate_erf() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+void init_erf_bf16();
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void erf_init() {
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
+        init_erf_bf16();
+        return;
+    }
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
 
 }  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_erf_bf16.h"
