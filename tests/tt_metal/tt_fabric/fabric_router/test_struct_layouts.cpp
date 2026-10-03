@@ -2,14 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Verifies the struct layout helper: the coverage check, how member types are classified and named, and the
-// field lists of the described fabric structs.
+// Verifies the struct layout helper (the coverage check, and how member types are classified and named) and the
+// go_msg_t layout built from the HAL.
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
+#include <bit>
 #include <cstdint>
 #include <string_view>
+
+#include <llrt/hal.hpp>
+#include <umd/device/types/arch.hpp>
 
 #include "tt_metal/fabric/manifest/fabric_struct_layouts.hpp"
 #include "tt_metal/fabric/manifest/struct_layout.hpp"
@@ -146,6 +151,31 @@ TEST(StructLayout, PackedTableCountsEntries) {
     EXPECT_EQ(fields[1].offset, 4u);
     EXPECT_EQ(fields[1].size, 3u);
     EXPECT_EQ(fields[1].intra_field_element_count, 8u);
+}
+
+// go_msg_layout is built at run time, so this is where a change to go_msg_t fails, for each arch, with no device.
+TEST(StructLayout, GoMsgLayoutFromHal) {
+    for (const auto arch : {tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE}) {
+        SCOPED_TRACE(tt::arch_to_str(arch));
+        const tt::tt_metal::Hal hal(arch, false, false, 0, false);
+        const auto fields = go_msg_layout(hal);
+        const auto size = hal.get_dev_msgs_factory(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH)
+                              .size_of<tt::tt_metal::dev_msgs::go_msg_t>();
+        EXPECT_TRUE(validate_fields(fields, size));
+
+        // Each field's offset is where make_go_msg_u32, which packs the message into one word, puts its value.
+        ASSERT_EQ(size, sizeof(uint32_t));
+        const auto bytes = std::bit_cast<std::array<uint8_t, 4>>(hal.make_go_msg_u32(0xAB, 0x01, 0x02, 0x03));
+        const auto byte_at = [&](std::string_view name) {
+            const auto it = std::find_if(fields.begin(), fields.end(), [&](const auto& f) { return f.name == name; });
+            EXPECT_NE(it, fields.end()) << name;
+            return it == fields.end() ? 0 : bytes.at(it->offset);
+        };
+        EXPECT_EQ(byte_at("signal"), 0xAB);
+        EXPECT_EQ(byte_at("master_x"), 0x01);
+        EXPECT_EQ(byte_at("master_y"), 0x02);
+        EXPECT_EQ(byte_at("dispatch_message_offset"), 0x03);
+    }
 }
 
 }  // namespace
