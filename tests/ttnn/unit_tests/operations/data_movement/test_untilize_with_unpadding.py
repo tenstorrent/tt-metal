@@ -1342,7 +1342,7 @@ def test_untilize_with_unpadding_zero_volume_zero_width_interleaved(device):
 # The shortcuts run ahead of the device operation, so they also have to repeat its checks on the
 # ARGUMENTS, not just on the shape. Each case below was measured against its non-empty twin: before
 # the fix the empty input and the non-empty one disagreed, and now they raise the same error.
-def _one_core():
+def _two_cores():
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
 
 
@@ -1361,7 +1361,7 @@ def test_untilize_zero_volume_rejects_sub_core_grids_without_multicore(device, e
     )
 
     with expect_error(RuntimeError, "use_multicore"):
-        ttnn.untilize(tilized, use_multicore=False, sub_core_grids=_one_core())
+        ttnn.untilize(tilized, use_multicore=False, sub_core_grids=_two_cores())
 
 
 def test_untilize_with_unpadding_zero_volume_rejects_sub_core_grids_when_sharded(device, expect_error):
@@ -1374,7 +1374,7 @@ def test_untilize_with_unpadding_zero_volume_rejects_sub_core_grids_when_sharded
     )
 
     with expect_error(RuntimeError, "does not support sub core grid"):
-        ttnn.untilize_with_unpadding(tilized, ttnn.Shape([4294967295, 63]), sub_core_grids=_one_core())
+        ttnn.untilize_with_unpadding(tilized, ttnn.Shape([4294967295, 63]), sub_core_grids=_two_cores())
 
 
 # A sharded memory config that names a layout but carries no shard spec. The device operation fills
@@ -1408,7 +1408,7 @@ def test_untilize_with_unpadding_zero_volume_rejects_incompatible_sharded_output
     block_sharded = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ttnn.BufferType.L1,
-        ttnn.ShardSpec(_one_core(), [32, 32], ttnn.ShardOrientation.ROW_MAJOR),
+        ttnn.ShardSpec(_two_cores(), [32, 32], ttnn.ShardOrientation.ROW_MAJOR),
     )
 
     with expect_error(RuntimeError, "must be HEIGHT_SHARDED"):
