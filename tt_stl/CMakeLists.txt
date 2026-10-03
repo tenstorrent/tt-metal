@@ -19,6 +19,7 @@ target_sources(
             tt_stl/concepts.hpp
             tt_stl/fmt.hpp
             tt_stl/indestructible.hpp
+            tt_stl/move_only_function.hpp
             tt_stl/optional_reference.hpp
             tt_stl/overloaded.hpp
             tt_stl/reflection.hpp
@@ -40,6 +41,7 @@ target_link_libraries(
     tt_stl
     INTERFACE
         Reflect::Reflect
+        Zoo::Zoo
         enchantum::enchantum
         nlohmann_json::nlohmann_json
         fmt::fmt-header-only

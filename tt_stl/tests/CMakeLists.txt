@@ -10,6 +10,7 @@ target_sources(
         test_fmt.cpp
         test_hash.cpp
         test_indestructible.cpp
+        test_move_only_function.cpp
         test_optional_reference.cpp
         test_reflection.cpp
         test_span.cpp
