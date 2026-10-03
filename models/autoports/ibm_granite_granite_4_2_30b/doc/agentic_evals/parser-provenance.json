@@ -1,0 +1,24 @@
+[
+  {
+    "url": "https://huggingface.co/ibm-granite/granite-4.2-30b/resolve/9e668ce1c538387ef24d3644e9b0606647762636/granite_thinking_parser.py",
+    "status": 200,
+    "sha256": "cd5eef99f559f33dc402e0475174a97dcb43724d7e810149c702e9bbc473048a",
+    "matches_delivered": false,
+    "delivered_sha256": "3896ddeb308fae5e9802f71937be1dec20e43ce2e89448e5191573b8472e7d68",
+    "transformation": "Repository pre-commit Black formatting only; Python AST identical to publisher; measured server loaded original byte-identical source."
+  },
+  {
+    "url": "https://huggingface.co/ibm-granite/granite-4.2-30b/resolve/9e668ce1c538387ef24d3644e9b0606647762636/LICENSE",
+    "status": 404,
+    "sha256": "f36668ddf22403a332f978057d527cf285b01468bc3431b04094a7bafa6aba59"
+  },
+  {
+    "model_card_url": "https://huggingface.co/ibm-granite/granite-4.2-30b/raw/9e668ce1c538387ef24d3644e9b0606647762636/README.md",
+    "status": 200,
+    "license_metadata": [
+      "license: apache-2.0"
+    ],
+    "sha256": "10d0e2b083c888814dc92a6308ca34d1c6fe01f344b54ff54905a8cbe5a80b06",
+    "attribution": "IBM Granite; publisher source with repository Black formatting only"
+  }
+]

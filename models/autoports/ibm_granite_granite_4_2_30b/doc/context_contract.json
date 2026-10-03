@@ -1,0 +1,258 @@
+{
+  "model": "ibm-granite/granite-4.2-30b",
+  "revision": "9e668ce1c538387ef24d3644e9b0606647762636",
+  "hf_advertised_context": 131072,
+  "target_supported_context": 131072,
+  "supported_context": 131072,
+  "largest_tested_prefill": 131072,
+  "largest_passing_decode_context": 131072,
+  "capability_reduction": null,
+  "status": "full-model passed; independent stage review clean-pass",
+  "cache": "TP4 BFP8 paged KV, page size32, full64-layer pool4563402752bytes/device; BF16 decode update input",
+  "layer_kinds": [
+    "dense_full_attention"
+  ],
+  "largest_tested_decode_position": 131071,
+  "near_context_nonaligned_prefill": 131071,
+  "evidence": [
+    "functional_decoder/logs/prepared_full_context.log",
+    "functional_decoder/logs/prepared_context_tail.log",
+    "full_model/acceptance.json",
+    "full_model/full_performance.json"
+  ],
+  "stage_review": "full_model/STAGE_REVIEW_FINAL.md",
+  "fused_decoder": {
+    "supported_context": 131072,
+    "kv_cache_unchanged": true,
+    "bulk_residual_ones_bytes": 8388608,
+    "capability_reduction": null,
+    "evidence": [
+      "fused_decoder/logs/delivered_context_131072.log",
+      "fused_decoder/logs/delivered_context_131071.log"
+    ],
+    "stage_review": "fused_decoder/STAGE_REVIEW_FINAL.md"
+  },
+  "optimized_decoder": {
+    "supported_context": 131072,
+    "capability_reduction": null,
+    "cache_dtype": "BFLOAT8_B",
+    "page_size": 32,
+    "batch1_full_context_kv_bytes": 285212672,
+    "weight_policy": "QKV/O/gate/up BFP4 LoFi; down BFP8 LoFi; BF16 activations/norm/residual; SDPA LoFi BF16 accumulation",
+    "interleaved_prefill_weights_bytes": 317194240,
+    "dram_sharded_decode_weights_bytes": 317194240,
+    "prefill_physical_buckets": [
+      128,
+      256,
+      512,
+      1024
+    ],
+    "token_fringe_supported": true,
+    "status": "passed; independent stage review clean-pass",
+    "largest_tested_prefill": 131072,
+    "largest_tested_decode_position": 131071,
+    "near_context_nonaligned_prefill": 131071,
+    "evidence": [
+      "optimized_decoder/logs/delivered_context_131072.log",
+      "optimized_decoder/logs/delivered_context_131071.log"
+    ],
+    "stage_review": "optimized_decoder/STAGE_REVIEW_FINAL.md"
+  },
+  "multichip_decoder": {
+    "target_mesh": [
+      1,
+      4
+    ],
+    "hardware": "four Blackhole p300c; logical device order [3,2,1,0]",
+    "supported_context": 131072,
+    "capability_reduction": null,
+    "status": "passed; independent stage review clean-pass",
+    "cache_dtype": "BFLOAT8_B",
+    "page_size": 32,
+    "local_query_heads": 8,
+    "local_kv_heads": 2,
+    "per_layer_per_device_kv_bytes": 71303168,
+    "full_stack_per_device_kv_bytes": 4563402752,
+    "interleaved_per_layer_weight_bytes": 79298560,
+    "dram_sharded_per_layer_weight_bytes": 80478208,
+    "full_stack_per_device_weight_bytes": 10225713152,
+    "reserved_trace_activation_ccl_bytes": 4294967296,
+    "reserved_embedding_head_bytes": 1073741824,
+    "estimated_total_per_device_bytes": 20157825024,
+    "physical_dram_per_device_bytes": 34359738368,
+    "largest_tested_prefill": 131072,
+    "largest_tested_decode_position": 131071,
+    "evidence": [
+      "multichip_decoder/result_final_context_131072.json",
+      "multichip_decoder/result_final_tail_131071.json",
+      "multichip_decoder/result_final_stack_1025.json",
+      "multichip_decoder/memory_capacity_plan.json"
+    ],
+    "near_context_nonaligned_prefill": 131071,
+    "collective_buffer_ownership": "One shared CollectiveResources pool for the sequential stack, stable before capture; one command queue",
+    "stage_review": "multichip_decoder/STAGE_REVIEW_FINAL.md"
+  },
+  "optimized_multichip_decoder": {
+    "status": "passed; independent stage review clean-pass",
+    "target_mesh": [
+      1,
+      4
+    ],
+    "supported_context": 131072,
+    "capability_reduction": null,
+    "cache_dtype": "BFLOAT8_B",
+    "per_layer_per_device_kv_bytes": 71303168,
+    "weight_policy": "QKV/O/gate/up BFP4 LoFi; down BFP8 LoFi; BF16 activations/norm/residual",
+    "decode_collective": "native width-sharded all_reduce_async, ring axis1, two links, BF16",
+    "inter_layer_residual": "replicated BF16 [1,1,B,4096], L1 width-sharded64 cores, shard[32,64]; no wrapper collective or reshard",
+    "collective_buffer_ownership": "one shared CollectiveResources pool per sequential command queue, two staging slots; pool outlives all traces",
+    "shared_decode_ccl_staging_bytes_per_device": 2097152,
+    "reserved_trace_activation_ccl_bytes": 4294967296,
+    "estimated_total_per_device_bytes": 20082327552,
+    "physical_dram_per_device_bytes": 34359738368,
+    "capacity_note": "Existing conservative DRAM reserve retained; 2MiB CCL staging is shared L1,32768 bytes/core across64 cores. Current runtime confirms QKV bank shard[4096,192], not historical conservative[4096,256]; corrected weight accounting saves75497472 bytes/device across64 layers. KV/context unchanged.",
+    "interleaved_per_layer_weight_bytes": 79298560,
+    "dram_sharded_per_layer_weight_bytes": 79298560,
+    "full_stack_per_device_weight_bytes": 10150215680,
+    "largest_tested_prefill": 131072,
+    "largest_tested_decode_position": 131071,
+    "near_context_nonaligned_prefill": 131071,
+    "evidence": [
+      "optimized_multichip_decoder/result_final_long_131072.json",
+      "optimized_multichip_decoder/result_final_tail_131071.json",
+      "optimized_multichip_decoder/result_final_tracking_stack_1025.json",
+      "optimized_multichip_decoder/result_final_pool_guard_stack_1025.json"
+    ],
+    "stage_review": "optimized_multichip_decoder/STAGE_REVIEW.md"
+  },
+  "full_model": {
+    "status": "passed; independent stage review clean-pass",
+    "target_mesh": [
+      1,
+      4
+    ],
+    "supported_context": 131072,
+    "capability_reduction": null,
+    "configured_layers": 64,
+    "cache_dtype": "BFLOAT8_B",
+    "page_size": 32,
+    "local_kv_heads": 2,
+    "physical_dram_per_device_bytes": 34359738368,
+    "per_device_bytes": {
+      "decoder_weight_copies": 10150215680,
+      "embedding": 822083584,
+      "terminal_head": 205520896,
+      "rope_tables": 67633152,
+      "kv_cache": 4563402752,
+      "trace_region": 100000000,
+      "page_tables": 409600,
+      "prefill_entry_buffers": 15728640,
+      "decode_logits_buffers": 4816896,
+      "activation_and_other_persistent_reserve": 4294967296,
+      "decode_terminal_head": 205520896,
+      "prefill_slot_logits": 25690112
+    },
+    "estimated_total_per_device_bytes": 20455989504,
+    "embedding_policy": "replicated BF16 row-major, setup-owned",
+    "terminal_head_policy": "vocab-sharded BF16 HiFi2 FP32 accumulation; final gamma/logits scaling folded at setup; interleaved prefill copy and DRAM width-sharded decode copy",
+    "shared_ccl_l1_bytes_per_device": 2097152,
+    "batch_contract": "physical 1/8/16, shared paged pool; context capacity shared across simultaneous requests; external fixed cache supported",
+    "validation": "64-layer acceptance: full and nonaligned context; final decode position131071; trace allocation tracking includes program cache",
+    "largest_tested_prefill": 131072,
+    "largest_tested_decode_position": 131071,
+    "near_context_nonaligned_prefill": 131071,
+    "evidence": [
+      "full_model/acceptance.json",
+      "full_model/logs/acceptance_validated.log",
+      "full_model/full_performance.json",
+      "full_model/performance_provenance.json",
+      "full_model/external_cache.json"
+    ],
+    "stage_review": "full_model/STAGE_REVIEW_FINAL.md"
+  },
+  "optimized_full_model": {
+    "supported_context": 131072,
+    "capability_reduction": null,
+    "token_history_dtype": "UINT32",
+    "token_history_buckets": [
+      1,
+      8,
+      16
+    ],
+    "token_history_logical_bytes_per_device": 13107200,
+    "token_history_reserved_bytes_per_device": 25167360,
+    "note": "Blackhole DRAM alignment 64 bytes, eight banks. Each history: 8*ceil(131072/8)*64 = 8388608 bytes; each cursor: 8*ceil(1/8)*64 = 512 bytes. Three histories+cursors: 25167360 bytes. Formula: Buffer::aligned_size_per_bank / calculate_bank_size_spread. Compiled TensorAccessorArgs confirms aligned page size 64. No capability reduction or additional trace signatures.",
+    "total_reserved_bytes_per_device": 20481156864,
+    "physical_dram_bytes_per_device": 34359738368,
+    "status": "passed; independent stage review clean-pass",
+    "target_mesh": [
+      1,
+      4
+    ],
+    "configured_layers": 64,
+    "largest_tested_prefill": 131072,
+    "largest_tested_decode_position": 131071,
+    "near_context_nonaligned_prefill": 131071,
+    "evidence": [
+      "optimized_full_model/acceptance.json",
+      "optimized_full_model/runtime_probe.json",
+      "optimized_full_model/final_performance.json",
+      "optimized_full_model/tracy/provenance.json"
+    ],
+    "stage_review": "optimized_full_model/STAGE_REVIEW.md"
+  },
+  "datatype_sweep": {
+    "supported_context": 131072,
+    "kv_cache_dtype": "bfloat8_b",
+    "decoder_weight_copies_bytes": 8002732032,
+    "kv_cache_bytes": 4563402752,
+    "terminal_weight_copies_bytes": 218365952,
+    "fixed_and_conservative_reserve_bytes": 5356496640,
+    "total_reserved_bytes": 18140997376,
+    "physical_dram_bytes": 34359738368,
+    "fits": true,
+    "capability_reduction": null,
+    "calculation": "32x32 tile: BFP4=576 BFP8=1088 BF16=2048 bytes; TP4 two local KV heads; 4096 pages;64layers; two projection/head storage copies; inherited conservative persistent reserve",
+    "status": "selected default passed full context, nonaligned and trace-allocation validation; independent stage review clean-pass",
+    "config_id": "combined_k8_head8_lofi",
+    "precision_config": "datatype_sweep/selected_precision_config.json",
+    "candidate_memory_calculations": "datatype_sweep/context_capacity_candidates.json",
+    "evidence": [
+      "datatype_sweep/selected_contract.json",
+      "datatype_sweep/logs/selected_contract.log",
+      "datatype_sweep/continuation_64.json"
+    ],
+    "target_mesh": [
+      1,
+      4
+    ],
+    "configured_layers": 64,
+    "page_size": 32,
+    "local_kv_heads": 2,
+    "largest_previously_tested_prefill": 131072,
+    "near_context_nonaligned_prefill": 131071,
+    "largest_tested_prefill": 131072,
+    "largest_tested_decode_position": 131071,
+    "stage_review": "datatype_sweep/STAGE_REVIEW.md"
+  },
+  "optimized_vllm": {
+    "status": "serving, trace, sampling, context and performance gates passed; independent final review recorded in optimized_vllm/stage_review.md",
+    "supported_context": 131072,
+    "capability_reduction": null,
+    "prefill_trace_buckets": [
+      128,
+      256,
+      512,
+      1024
+    ],
+    "prefill_output_logical_bytes_per_device": 50176,
+    "prefill_output_reserved_bytes_per_device": 1605632,
+    "note": "Serving opts into four prefill traces and one persistent vocab-sharded BF16 output. Existing standalone generator default remains unchanged. Trace134217728bytes fits all signatures;100000000 failed at124624896bytes before final sampling captures. Context/cache unchanged; total conservative reserve stays below34359738368bytes/device.",
+    "trace_region_size": 134217728,
+    "prior_trace_region_size": 100000000,
+    "additional_reserved_bytes_per_device": 35823360,
+    "total_reserved_bytes_per_device": 18194646528,
+    "vllm_cache_pages": 4112,
+    "vllm_extra_kv_bytes_per_device": 17825792
+  }
+}
