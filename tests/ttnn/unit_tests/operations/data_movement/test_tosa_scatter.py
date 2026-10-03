@@ -57,3 +57,19 @@ def test_tosa_scatter_normal(N, K, W, C, input_dtype, index_dtype, input_layout,
         assert ttnn_output.shape == ttnn_input.shape
         assert ttnn_output.dtype == ttnn_input.dtype
         assert_allclose(ttnn.to_torch(ttnn_output), torch_output, rtol=1e-3)
+
+
+@pytest.mark.parametrize(
+    "index_shape, source_shape, message",
+    [
+        ([20, 10, 1, 1], [20, 10, 10], "index tensor must be of rank 2, it is 4 instead"),
+        ([20, 10], [20, 10], "source tensor must be of rank 3, it is 2 instead"),
+        ([21, 10], [20, 10, 10], "different dimension N than index shape"),
+    ],
+)
+def test_tosa_scatter_validation_messages(index_shape, source_shape, message, device, expect_error):
+    ttnn_input = ttnn.from_torch(torch.randn([20, 10, 10]), dtype=ttnn.float32, device=device)
+    ttnn_index = ttnn.from_torch(torch.zeros(index_shape, dtype=torch.int32), dtype=ttnn.uint32, device=device)
+    ttnn_source = ttnn.from_torch(torch.randn(source_shape), dtype=ttnn.float32, device=device)
+    with expect_error(RuntimeError, message):
+        ttnn.tosa_scatter(ttnn_input, ttnn_index, ttnn_source)

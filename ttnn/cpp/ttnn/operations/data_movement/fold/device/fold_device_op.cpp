@@ -49,6 +49,14 @@ void validate_fold(const std::vector<Tensor>& input_tensors, uint32_t stride_h, 
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Fold: Expect input tensor to be stored on device.");
     TT_FATAL(input_tensor.buffer() != nullptr, "Fold: Expect input tensor to be allocated on a device buffer.");
+    // Row-major fold copies raw bytes into an output declared as BFLOAT16 unless the input is FLOAT32/UINT16, so any
+    // other dtype would be written at the wrong element size.
+    const auto dtype = input_tensor.dtype();
+    TT_FATAL(
+        input_tensor.layout() != Layout::ROW_MAJOR || dtype == tt::tt_metal::DataType::BFLOAT16 ||
+            dtype == tt::tt_metal::DataType::FLOAT32 || dtype == tt::tt_metal::DataType::UINT16,
+        "Fold: row-major input must be BFLOAT16, FLOAT32 or UINT16, got {}.",
+        dtype);
 
     // Reject zero strides before any modulo/div; guards both fast + composite paths and compute_output_specs.
     TT_FATAL(stride_h > 0 && stride_w > 0, "Fold: stride_h ({}) and stride_w ({}) must be > 0.", stride_h, stride_w);
