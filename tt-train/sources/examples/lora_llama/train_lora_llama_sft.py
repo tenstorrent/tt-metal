@@ -27,6 +27,7 @@ from ttml.models.llama import (
     LlamaRopeScalingConfig,
     load_from_safetensors,
 )
+from ttml.parallel import TPStrategy
 from ttml.modules import LoraConfig
 from ttml.trainers import SFTConfig, SFTTrainer, TrainerCallback
 
@@ -119,7 +120,7 @@ def llama_config_from_yaml(yaml_config: dict, vocab_size: int, use_tp: bool = Fa
         rope_theta=tc.get("theta", 10000.0),
         weight_tying=weight_tying,
         rope_scaling=rope_scaling,
-        use_tp=use_tp,
+        tp_strategy=TPStrategy.from_flags(use_tp),
         **runtime_from_yaml(yaml_config),
     )
 
@@ -297,7 +298,7 @@ def main():
         # The checkpoint decides the architecture; the YAML only contributes training-time knobs.
         llama_cfg = LlamaConfig.from_hf(
             pretrained_path,
-            use_tp=use_tp,
+            tp_strategy=TPStrategy.from_flags(use_tp),
             embedding_placement=EmbeddingPlacement.VocabParallel if use_tp else EmbeddingPlacement.Replicated,
             **runtime_from_yaml(yaml_config or {}),
         )
@@ -316,7 +317,7 @@ def main():
                 vocab_size=vocab_size,
                 max_position_embeddings=256,
                 rope_theta=500000.0,
-                use_tp=use_tp,
+                tp_strategy=TPStrategy.from_flags(use_tp),
             )
 
     seq_len = llama_cfg.max_position_embeddings

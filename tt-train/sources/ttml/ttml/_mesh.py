@@ -6,6 +6,7 @@ import functools, operator, os, re
 from typing import Iterable
 import ttnn
 import ttml
+from .parallel import is_sequence_parallel
 
 
 def prod(x: Iterable[int]) -> int:
@@ -231,20 +232,18 @@ def mesh() -> Mesh:
     return _mesh
 
 
-def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",)):
+def sync_gradients(parameters):
+    """Turn each device's local gradient into the global one; call once per step."""
+    average_gradients(parameters, axis_names=("dp", "fsdp"))
+    sum_sp_gradients(parameters, axis_name="tp")
+
+
+def average_gradients(parameters, axis_names: tuple[str, ...]):
     """Average parameter gradients across one or more mesh axes.
 
-    For each parameter with an initialized gradient, the grad is all-reduced
-    (summed) across every axis in ``axis_names`` and then divided by the
-    product of those axis sizes, leaving each device with the mean grad.
-
     Axes listed in ``axis_names`` but not present on the active mesh are
-    silently skipped — if none are present (or ``axis_names`` is empty, or
-    no mesh is open), the function is a no-op. The default ``("dp",)``
-    matches the common DDP case. TP is intentionally excluded: sharded
-    parameters already hold per-shard-correct grads, and replicated
-    parameters see identical inputs on every TP rank so their grads match
-    without a reduce.
+    silently skipped. If none are present (or ``axis_names`` is empty, or
+    no mesh is open), the function is a no-op.
 
     FSDP interaction: parameters sharded by ``ttml.fsdp.fully_shard`` on a
     mesh axis listed in ``axis_names`` are skipped for that axis — the FSDP
@@ -288,3 +287,21 @@ def _param_is_fsdp_sharded(param, axis_index: int) -> bool:
     if getattr(param, "_fsdp_managed", False) and getattr(param, "_fsdp_axis", None) == axis_index:
         return True
     return False
+
+
+def sum_sp_gradients(parameters, axis_name: str):
+    """Sum the gradients of sequence-parallel parameters across the tensor-parallel axis.
+    No-op when ``axis_name`` is absent or has size 1.
+
+    Args:
+        parameters: A ``NamedParameters`` mapping (e.g. ``model.parameters()``).
+        axis_name: The tensor-parallel mesh axis name.
+    """
+    m = maybe_mesh()
+    if m is None or not m.has_axis(axis_name) or m.axis_size(axis_name) == 1:
+        return
+    axis = m.axis_index(axis_name)
+
+    for _, param in parameters.items():
+        if is_sequence_parallel(param) and param.is_grad_initialized():
+            param.set_grad(ttml.core.distributed.all_reduce(param.get_grad(), cluster_axis=axis))

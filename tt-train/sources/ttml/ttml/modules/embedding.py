@@ -12,13 +12,14 @@ import numpy as np
 
 import ttnn
 import ttml
+from ttml.parallel import SEQUENCE_DIM
 
 from .module_base import AbstractModuleBase
 from .parameter import Parameter
 
 
 class Embedding(AbstractModuleBase):
-    """Embedding layer implemented in Python using ttml operations."""
+    """Embedding layer."""
 
     def __init__(self, num_embeddings: int, embedding_dim: int, weight_init=None) -> None:
         """Initialize embedding layer.
@@ -55,11 +56,16 @@ class VocabParallelEmbedding(AbstractModuleBase):
     looks up the ids that fall in its slice, zeroes the rest, and an all-reduce
     then sums the per-device contributions — each token is owned by exactly one
     device, so the sum reconstructs the full, replicated embedding.
+    With ``sequence_parallel`` the all-reduce becomes a reduce-scatter along the
+    sequence, so the first block receives a sequence-sharded residual.
 
     Args:
         num_embeddings: Vocabulary size. Must be divisible by ``tp_size``.
         embedding_dim: Dimension of embeddings.
         weight_init: Initializer for the weight tensor. Defaults to normal(0, 0.02).
+        sequence_parallel: If ``True`` (Megatron sequence parallelism) the cross-TP sum
+            is a reduce-scatter along the sequence, so the output is
+            ``[batch, 1, seq/tp, embedding_dim]`` instead of a replicated full sequence.
         axis_name: Mesh axis used for tensor parallelism.
 
     Note:
@@ -79,6 +85,7 @@ class VocabParallelEmbedding(AbstractModuleBase):
         num_embeddings: int,
         embedding_dim: int,
         weight_init: Optional[Callable] = None,
+        sequence_parallel: bool = False,
         axis_name: str = "tp",
     ) -> None:
         super().__init__()
@@ -87,6 +94,7 @@ class VocabParallelEmbedding(AbstractModuleBase):
         self.axis_name = axis_name
         self.cluster_axis = mesh.axis_index(axis_name)
         self.tp_size = mesh.axis_size(axis_name)
+        self.sequence_parallel = sequence_parallel
 
         if num_embeddings % self.tp_size != 0:
             raise ValueError(
@@ -112,8 +120,9 @@ class VocabParallelEmbedding(AbstractModuleBase):
         # per-device (rather than sharding a global tensor) may round the shard up
         # to a tile boundary, which silently shifts every rank after the first by
         # the difference -- so check the tensor we actually got.
-        local_rows = self.weight.tensor.shape()[2]
-        if local_rows != self.num_embeddings_per_partition:
+        # A lazy weight is sharded from its global shape at materialization, so only an eager one can differ.
+        local_rows = None if self.weight.is_lazy else self.weight.tensor.shape()[2]
+        if local_rows is not None and local_rows != self.num_embeddings_per_partition:
             raise ValueError(
                 f"VocabParallelEmbedding weight has {local_rows} rows per device but ownership "
                 f"offsets assume {self.num_embeddings_per_partition} "
@@ -155,8 +164,9 @@ class VocabParallelEmbedding(AbstractModuleBase):
                 row-major), replicated across the TP axis.
 
         Returns:
-            Embeddings ``[batch_size, 1, seq_len, embedding_dim]``, replicated
-            across the TP axis.
+            Embeddings ``[batch_size, 1, seq_len, embedding_dim]`` replicated across the TP
+            axis, or ``[batch_size, 1, seq_len / tp_size, embedding_dim]`` sequence-sharded
+            across it under ``sequence_parallel``.
         """
         self._check_tp_replicated(x)
 
@@ -186,6 +196,10 @@ class VocabParallelEmbedding(AbstractModuleBase):
         mask = ttnn.transpose(ttnn.to_layout(ttnn.typecast(in_range, ttnn.DataType.FLOAT32), ttnn.Layout.TILE), 2, 3)
         emb = ttml.ops.binary.mul(emb, ttml.autograd.create_tensor(mask, requires_grad=False))
 
+        # Each token is nonzero on exactly one device, so summing across TP reconstructs it.
+        if self.sequence_parallel:
+            # Same sum, landing sequence-sharded for the first block.
+            return ttml.ops.distributed.reduce_scatter(emb, SEQUENCE_DIM, self.cluster_axis)
         return ttml.ops.distributed.all_reduce(emb, noop_backward=True, cluster_axis=self.cluster_axis)
 
 
