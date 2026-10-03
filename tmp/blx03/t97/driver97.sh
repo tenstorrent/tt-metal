@@ -11,13 +11,15 @@ now() { date -u '+%F %T'; }
 errors_since() { awk -v s="$1" 'substr($0,1,19) > s && /\| ERROR \|/' $SL; }
 # A line is healthy if it carries an OK marker and no ERROR/ESCALATE/RECOVER; bad if it has one of those
 # or is a HEALTH-GATE without an OK marker. Heartbeat/no-reset lines are healthy events, not alarms.
-OKRE=': OK|device healthy; no reset needed|heartbeat: HEALTHY'
+# A broker recovery that ends in "reset complete + health verified" is logged at ERROR level but is healthy.
+OKRE=': OK|device healthy; no reset needed|heartbeat: HEALTHY|reset complete \+ health verified'
 BADRE='[|] ERROR [|]|ESCALATE|RECOVER'
 gate_fail_since() { awk -v s="$1" -v ok="$OKRE" -v bad="$BADRE" 'substr($0,1,19) > s && ($0 ~ bad || (/HEALTH-GATE/ && $0 !~ ok))' $SL; }
 health() {  # pre-submit: broker up and answering, last health/recovery event is healthy
   systemctl is-active -q tt-device-broker || { log "health: broker inactive"; return 1; }
   tt-device-mcp status 1 > /dev/null 2>&1 || { log "health: status failed"; return 1; }
   last=$(grep -E "HEALTH-GATE|$OKRE|ESCALATE|RECOVER|[|] ERROR [|]" $SL | tail -1)
+  echo "$last" | grep -q "reset complete + health verified" && return 0
   if echo "$last" | grep -qE "$OKRE" && ! echo "$last" | grep -qE "$BADRE"; then return 0; fi
   log "health: last event not healthy: ${last:0:200}"; return 1
 }
