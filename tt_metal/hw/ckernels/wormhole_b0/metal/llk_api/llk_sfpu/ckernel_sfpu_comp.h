@@ -191,13 +191,18 @@ inline void calculate_comp_int() {
 
         // a[i] > 0
         if constexpr (COMP_MODE == SfpuType::greater_than_zero) {
-            v_if(v > zero) { res = 1; }
+            // Not `v > zero`: sfpi lowers it to (0 - v) < 0, which overflows for INT32_MIN.
+            // Sign and equality tests are exact for every int32 value.
+            v_if((v >= zero) && (v != zero)) { res = 1; }
             v_endif;
         }
 
         // a[i] <= 0
         if constexpr (COMP_MODE == SfpuType::less_than_equal_zero) {
-            v_if(v <= zero) { res = 1; }
+            // Not `v <= zero`: sfpi lowers it to (0 - v) >= 0, which overflows for INT32_MIN.
+            // Complement of gtz with the arms swapped (same shape as nez), exact for every int32.
+            res = 1;
+            v_if((v >= zero) && (v != zero)) { res = zero; }
             v_endif;
         }
 
