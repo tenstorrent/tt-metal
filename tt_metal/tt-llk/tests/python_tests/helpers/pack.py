@@ -8,6 +8,7 @@ import numpy as np
 import torch
 
 from .format_config import (
+    FOUR_BIT_INTEGER_RANGE,
     MX_FORMAT_BLOCK_SIZE,
     MX_FORMAT_MAX_NORMAL,
     DataFormat,
@@ -95,6 +96,45 @@ def pack_int8(torch_tensor, twos_complement=False):
 
 def pack_uint8(torch_tensor):
     return torch_tensor.cpu().numpy().astype(np.uint8).tobytes()
+
+
+def _pack_4bit_integer_datums(
+    datums: np.ndarray, face_r_dim: int | None = None
+) -> bytes:
+    """Pack 4-bit integer datums two per byte: even index in the low nibble, odd index in the high nibble.
+
+    With ``face_r_dim``, each face is padded to a 16 B L1 boundary: tiles other than 32x32 use a
+    z=1 buffer-descriptor shape, so every face is addressed as its own 16 B-aligned unit and a
+    1x16 face (8 B) is followed by 8 B of padding.
+    """
+    datums = datums.flatten().astype(np.uint8)
+    if datums.size % 2:
+        raise ValueError(f"4-bit packing needs an even datum count, got {datums.size}")
+    packed = (((datums[1::2] & 0x0F) << 4) | (datums[0::2] & 0x0F)).tobytes()
+    if face_r_dim is None:
+        return packed
+    face_bytes = face_r_dim * FACE_C_DIM // 2
+    padding = bytes(l1_align(face_bytes) - face_bytes)
+    return b"".join(
+        packed[start : start + face_bytes] + padding
+        for start in range(0, len(packed), face_bytes)
+    )
+
+
+def pack_int4(torch_tensor, num_faces=None, face_r_dim=None):
+    # INT4 uses sign-magnitude format in hardware: bit 3 = sign, bits 2:0 = magnitude
+    array = np.clip(
+        torch_tensor.cpu().numpy(), *FOUR_BIT_INTEGER_RANGE[DataFormat.Int4]
+    ).astype(np.int8)
+    sign = (array < 0).astype(np.uint8) << 3
+    return _pack_4bit_integer_datums(sign | np.abs(array).astype(np.uint8), face_r_dim)
+
+
+def pack_uint4(torch_tensor, num_faces=None, face_r_dim=None):
+    array = np.clip(
+        torch_tensor.cpu().numpy(), *FOUR_BIT_INTEGER_RANGE[DataFormat.UInt4]
+    ).astype(np.uint8)
+    return _pack_4bit_integer_datums(array, face_r_dim)
 
 
 # ============================================================================

@@ -10,7 +10,7 @@ from typing import ClassVar, Optional
 
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.format_config import DataFormat
+from helpers.format_config import FOUR_BIT_INTEGER_RANGE, DataFormat
 from helpers.llk_params import (
     BroadcastType,
     DestAccumulation,
@@ -154,13 +154,16 @@ def wrap_int32(value: int) -> int:
     return (int(value) + 2**31) % 2**32 - 2**31
 
 
-def saturate_integer(result: torch.Tensor, data_format, torch_format) -> torch.Tensor:
+def saturate_integer(result: torch.Tensor, data_format: DataFormat) -> torch.Tensor:
     """Apply integer saturation during format conversion.
 
     Hardware saturates (clamps) values instead of wrapping on overflow.
     This handles downsizing (Int32->Int8), signed/unsigned conversions (UInt8->Int8),
     and any case where source values might exceed destination range.
+
+    For a UInt8 destination, the packer drops the sign and keeps the magnitude.
     """
+    torch_format = format_dict[data_format]
     iinfo = torch.iinfo(torch_format)
     is_unsigned = str(data_format).startswith("U")
     if is_unsigned:
@@ -175,6 +178,8 @@ def saturate_integer(result: torch.Tensor, data_format, torch_format) -> torch.T
         torch.int64 if result.dtype in (torch.uint32, torch.int64) else torch.int32
     )
     result = result.to(intermediate_type)
+    if data_format == DataFormat.UInt8:
+        result = torch.abs(result)
     result = torch.clamp(result, min_val, max_val)
     return result.to(torch_format)
 
@@ -206,7 +211,7 @@ def apply_l1_accumulation(
     for partial in partials[1:]:
         if needs_saturation:
             wide = accumulated.to(torch.int64) + partial.to(torch.int64)
-            accumulated = saturate_integer(wide, data_format, format_dict[data_format])
+            accumulated = saturate_integer(wide, data_format)
         else:
             accumulated += partial
     return accumulated
@@ -736,8 +741,15 @@ def quantize_input_to_unpack_format(
     """
     Quantize input stimuli to match the values visible after hardware unpack.
 
-    Model Bfp2_b, Bfp4_b, Bfp8_b, and all MX input formats; pass other formats through.
+    Model Bfp2_b, Bfp4_b, Bfp8_b, Int8, Int4, UInt4, and all MX input formats; pass other formats through.
     """
+    if input_format == DataFormat.Int8:
+        # Sign-magnitude Int8 cannot represent -128; pack_int8 writes it to L1 as -127.
+        return torch.clamp(torch.as_tensor(operand), min=-127)
+    if input_format is not None and input_format.is_4bit_integer():
+        return torch.clamp(
+            torch.as_tensor(operand), *FOUR_BIT_INTEGER_RANGE[input_format]
+        )
     if input_format == DataFormat.Bfp2_b:
         return _bfp2b_to_float16b(operand)
     if input_format == DataFormat.Bfp4_b:
@@ -1071,6 +1083,15 @@ class TransposeGolden:
     def __init__(self):
         pass
 
+    def _to_format(self, operand, data_format):
+        """Convert to data_format, saturating integers like the packer does instead of wrapping."""
+        if operand.dtype == torch.int8:
+            # Sign-magnitude Int8 cannot represent -128; pack_int8 writes it to L1 as -127.
+            operand = torch.clamp(operand, min=-127)
+        if data_format.is_integer() and operand.dtype != format_dict[data_format]:
+            return saturate_integer(operand, data_format)
+        return to_tensor(operand, data_format)
+
     def _quantize_transpose_input(self, operand, data_format):
         """Quantize input before transposing to match hardware unpack behavior.
 
@@ -1104,7 +1125,7 @@ class TransposeGolden:
         if num_faces not in [1, 2, 4]:
             raise ValueError(f"num_faces must be 1, 2, or 4, got {num_faces}")
 
-        tensor = to_tensor(operand, data_format)
+        tensor = self._to_format(operand, data_format)
         tensor = self._quantize_transpose_input(tensor, data_format)
         torch_format = format_dict[data_format]
 
@@ -1155,7 +1176,7 @@ class TransposeGolden:
             raise ValueError(f"num_faces must be 1, 2, or 4, got {num_faces}")
 
         torch_format = format_dict[data_format]
-        tensor = to_tensor(operand, data_format)
+        tensor = self._to_format(operand, data_format)
         tensor = self._quantize_transpose_input(tensor, data_format)
 
         total_elements = ELEMENTS_PER_FACE * num_faces
@@ -1209,7 +1230,7 @@ class TransposeGolden:
             raise ValueError("operation_func must be callable")
 
         # Convert and prepare tensor
-        tensor = to_tensor(operand, data_format)
+        tensor = self._to_format(operand, data_format)
 
         # Apply tilization if requested
         if tilize:
@@ -1470,8 +1491,6 @@ class MatmulGolden(FidelityMasking):
         input_A_format: DataFormat = None,
         input_B_format: DataFormat = None,
     ):
-        torch_format = format_dict[data_format]
-
         M, K1, K2, N, _ = self._resolve_matmul_dimensions(
             input_A_dimensions, input_B_dimensions
         )
@@ -1482,7 +1501,6 @@ class MatmulGolden(FidelityMasking):
         res = saturate_integer(
             torch.matmul(t1.to(torch.int64), t2.to(torch.int64)).view(M * N),
             data_format,
-            torch_format,
         )
 
         if tilize:
@@ -1851,7 +1869,7 @@ class DataCopyGolden:
         # Ensure result is in correct format if not already
         if result.dtype != torch_format:
             if data_format.is_integer():
-                result = saturate_integer(result, data_format, torch_format)
+                result = saturate_integer(result, data_format)
             else:
                 result = result.to(torch_format)
 
@@ -1951,7 +1969,7 @@ class TypecastGolden:
         if output_format == DataFormat.Int32:
             # +1 on the min: hardware uses sign-magnitude representation.
             return torch.clamp(values, -(2**31 - 1), 2**31 - 1).to(out_torch)
-        return saturate_integer(values, output_format, out_torch)
+        return saturate_integer(values, output_format)
 
     @staticmethod
     def _to_float(values: torch.Tensor, output_format: DataFormat) -> torch.Tensor:
@@ -2020,7 +2038,7 @@ class PackGolden:
 
         if result.dtype != torch_format:
             if data_format.is_integer():
-                result = saturate_integer(result, data_format, torch_format)
+                result = saturate_integer(result, data_format)
             else:
                 result = result.to(torch_format)
 
@@ -3942,8 +3960,7 @@ class EltwiseBinaryGolden(FidelityMasking):
             result = quantize_mx_tensor_chunked(result, data_format)
         else:
             if data_format.is_integer():
-                torch_format = format_dict[data_format]
-                result = saturate_integer(result, data_format, torch_format)
+                result = saturate_integer(result, data_format)
             else:
                 result = to_tensor(result, data_format)
 
@@ -4754,7 +4771,7 @@ class ReduceGolden:
         elif data_format.is_mx_format():
             return quantize_mx_tensor_chunked(tensor.to(torch.bfloat16), data_format)
         elif data_format.is_integer():
-            return saturate_integer(tensor, data_format, format_dict[data_format])
+            return saturate_integer(tensor, data_format)
         else:
             return to_tensor(tensor, data_format)
 
@@ -5177,7 +5194,6 @@ class ReduceGapoolGolden(FidelityMasking):
         self, face_results, src_b, data_format, reduce_dim
     ):
         """Place pooled integer results in the output tile"""
-        torch_format = format_dict[data_format]
         face_shape = (FACE_DIM, FACE_DIM)
         f0, f1, f2, f3 = face_results
         result = torch.zeros(ELEMENTS_PER_TILE, dtype=torch.int64)
@@ -5202,7 +5218,7 @@ class ReduceGapoolGolden(FidelityMasking):
             pool_result = self._compute_gapool_integer(all_faces, src_b, num_faces=1)
             result[0] = pool_result[0][0]
 
-        return saturate_integer(result, data_format, torch_format)
+        return saturate_integer(result, data_format)
 
 
 @register_golden

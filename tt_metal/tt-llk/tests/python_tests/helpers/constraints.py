@@ -211,7 +211,8 @@ def is_valid_data_format_conversion(fmt: InputOutputFormat) -> bool:
         - Cannot convert between integer and float formats
 
     Constraints (Quasar only):
-        - Int16 input can only output to Int16
+        - Int16 input can only output to Int16, and Int16 output needs Int16 input
+        - Int4/UInt4 are L1 input-only formats; the packer cannot output them
     """
     chip_arch = get_chip_architecture()
     in_fmt, out_fmt = fmt.input_format, fmt.output_format
@@ -220,7 +221,9 @@ def is_valid_data_format_conversion(fmt: InputOutputFormat) -> bool:
         return False
 
     if chip_arch == ChipArchitecture.QUASAR:
-        if in_fmt == DataFormat.Int16 and out_fmt != DataFormat.Int16:
+        if (in_fmt == DataFormat.Int16) ^ (out_fmt == DataFormat.Int16):
+            return False
+        if out_fmt.is_4bit_integer():
             return False
 
     return True
@@ -267,6 +270,8 @@ _QUASAR_UNPACK_TO_DEST_FORMATS = {
     DataFormat.Int16: {DataFormat.Int16},
     DataFormat.Int8: {DataFormat.Int8},
     DataFormat.UInt8: {DataFormat.UInt8},
+    DataFormat.Int4: {DataFormat.Int8},
+    DataFormat.UInt4: {DataFormat.Int8, DataFormat.UInt8},
 }
 
 # SrcA/B additionally permit a TF32 result for narrow floating-point inputs.

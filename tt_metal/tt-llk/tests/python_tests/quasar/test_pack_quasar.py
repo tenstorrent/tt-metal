@@ -5,6 +5,7 @@ from typing import List
 
 import pytest
 import torch
+from helpers.constraints import is_valid_data_format_conversion
 from helpers.data_format_inference import infer_data_formats
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
@@ -12,6 +13,7 @@ from helpers.golden_generators import (
     PackGolden,
     get_golden_generator,
     quantize_mx_tensor_chunked,
+    saturate_integer,
 )
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
@@ -78,16 +80,6 @@ def generate_qsr_pack_combinations(
         tile_dimensions) tuples.
     """
 
-    def is_supported_format_conversion(in_fmt, out_fmt):
-        """Check if the format conversion is supported by packer. These format conversions are NOT dependent on the dest register mode."""
-        # Skip if mixing integer and non-integer formats
-        if in_fmt.is_integer() ^ out_fmt.is_integer():
-            return False
-        # If input format is Int16, output format must also be Int16, and vice versa
-        if (in_fmt == DataFormat.Int16) ^ (out_fmt == DataFormat.Int16):
-            return False
-        return True
-
     def get_dest_acc_modes(in_fmt):
         """Determine valid dest register modes depending on the input format."""
         # Having Int16 in src registers and Int32 in the dest register is not supported
@@ -106,11 +98,15 @@ def generate_qsr_pack_combinations(
             and dest_acc == DestAccumulation.No
         ):
             return False
-        # Int8<->UInt8 conversion requires dest_acc enabled
+        # Int8<->UInt8 conversion requires dest_acc enabled. Int4/UInt4 are unpacked as Int8/UInt8.
+        src_reg_fmt = {
+            DataFormat.Int4: DataFormat.Int8,
+            DataFormat.UInt4: DataFormat.UInt8,
+        }.get(in_fmt, in_fmt)
         if (
             dest_acc == DestAccumulation.No
-            and in_fmt in (DataFormat.Int8, DataFormat.UInt8)
-            and in_fmt != out_fmt
+            and src_reg_fmt in (DataFormat.Int8, DataFormat.UInt8)
+            and src_reg_fmt != out_fmt
         ):
             return False
         return True
@@ -128,7 +124,7 @@ def generate_qsr_pack_combinations(
     for fmt in formats_list:
         in_fmt, out_fmt = fmt.input_format, fmt.output_format
 
-        if not is_supported_format_conversion(in_fmt, out_fmt):
+        if not is_valid_data_format_conversion(fmt):
             continue
 
         # Threshold ReLU modes are not supported for integer pack_src formats
@@ -193,6 +189,8 @@ PACK_FORMATS = input_output_formats(
         DataFormat.Int8,
         DataFormat.UInt8,
         DataFormat.Int16,
+        DataFormat.Int4,
+        DataFormat.UInt4,
         DataFormat.MxFp8R,
         DataFormat.MxFp8P,
         DataFormat.MxFp4,
@@ -276,12 +274,18 @@ def test_pack_quasar(
         # divergence from HW that grows with threshold-relu (most visible for
         # MxFp4 -> MxInt4 + MaxThresholdRelu). For MX outputs we route through
         # pack_src instead and apply the single output MX quantization ourselves
-        # after relu. Non-MX outputs keep the existing path (saturate_integer etc.).
+        # after relu. Signed integer -> UInt8 outputs also route through pack_src and
+        # apply the UInt8 conversion after relu, which runs before the packer format
+        # conversion.
 
         generate_golden = get_golden_generator(DataCopyGolden)
+        signed_integer_to_uint8 = (
+            formats.output_format == DataFormat.UInt8
+            and data_formats.pack_src in (DataFormat.Int8, DataFormat.Int32)
+        )
         datacopy_out_format = (
             data_formats.pack_src
-            if formats.output_format.is_mx_format()
+            if formats.output_format.is_mx_format() or signed_integer_to_uint8
             else formats.output_format
         )
         golden_tensor = generate_golden(
@@ -312,6 +316,9 @@ def test_pack_quasar(
             relu_config,
             data_formats.pack_src,
         )
+
+        if signed_integer_to_uint8:
+            golden_tensor = saturate_integer(golden_tensor, formats.output_format)
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")

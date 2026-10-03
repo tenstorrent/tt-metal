@@ -93,6 +93,8 @@ tolerances = {
     DataFormat.UInt16: Tolerance(atol=0, rtol=0),
     DataFormat.Int8: Tolerance(atol=0, rtol=0),
     DataFormat.UInt8: Tolerance(atol=0, rtol=0),
+    DataFormat.Int4: Tolerance(atol=0, rtol=0),
+    DataFormat.UInt4: Tolerance(atol=0, rtol=0),
     DataFormat.Bfp8_b: Tolerance(atol=0.1, rtol=0.2),
     DataFormat.Bfp4_b: Tolerance(atol=0.125, rtol=0.3),
     DataFormat.Bfp2_b: Tolerance(atol=0.5, rtol=0.4),
