@@ -90,6 +90,16 @@ def run(
     device,
     **kwargs,
 ) -> list:
+    # Skip on Wormhole Galaxy (1x32 mesh, col dispatch) due to recurring device hang
+    # (NOC writes to invalid location / brisc noc id mailbox corruption). refs #52397
+    import os as _os
+
+    _rl = _os.environ.get("RUNNER_LABEL", "").lower()
+    _mesh = _os.environ.get("MESH_DEVICE_SHAPE", "").strip()
+    _is_galaxy = "6u" in _rl or "galaxy" in _rl or "glx" in _rl or _mesh == "1x32"
+    if _is_galaxy:
+        return [(True, "Skipped on Galaxy/1x32 mesh: recurring device hang (NOC mailbox corruption), refs #52397"), None]
+
     torch.manual_seed(0)
 
     # Extract placement information from kwargs
