@@ -27,6 +27,7 @@ void kernel_main() {
     const auto reduce_core_noc_x = get_arg(args::reduce_core_noc_x);
     const auto reduce_core_noc_y = get_arg(args::reduce_core_noc_y);
     const auto y = get_arg(args::y);
+    const auto Wt_full = get_arg(args::Wt_full);  // global width in tiles (for the per-row stride)
 
     const uint32_t onetile = 1;
 
@@ -64,9 +65,10 @@ void kernel_main() {
         dataflow_kernel_lib::prepare_zero_tile<dfb::zero>();
     }
 
-    uint32_t inp_tile_idx = tile_offset;
-
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
+        // Each global row is Wt_full tiles apart; a core owning >1 row-tile must jump the full-width
+        // stride between rows instead of advancing linearly (bounty #56908).
+        uint32_t inp_tile_idx = tile_offset + ncht * Wt_full;
         // read input tiles
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             dfb_inp_buf.reserve_back(blk);

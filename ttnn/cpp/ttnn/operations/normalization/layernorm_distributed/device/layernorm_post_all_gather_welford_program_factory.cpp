@@ -55,6 +55,9 @@ constexpr const char* POSTWF_READER_KERNEL =
 constexpr const char* POSTWF_WRITER_KERNEL =
     "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
     "writer_unary_interleaved_start_id_blocked.cpp";
+constexpr const char* POSTWF_WRITER_2D_KERNEL =
+    "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
+    "writer_ln_post_2d.cpp";  // #56908: 2D-core-grid strided writer
 
 }  // namespace
 
@@ -111,6 +114,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
 
     uint32_t block_size =
         fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
+    // #56908: on the 2D-core-grid path each core owns tiles_per_core_y of the width, not the full Wt.
+    // Reader width and writer/compute block size must be derived from the LOCAL slice, with global Wt
+    // retained only as the per-row stride (Wt_full). Assigned after the 2D grid is chosen (see below).
+    uint32_t reader_Wt = Wt;
+    uint32_t local_block_size = block_size;
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats.dtype());
@@ -247,6 +255,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
             cores_y--;
         }
         tiles_per_core_y = Wt / cores_y;
+        reader_Wt = tiles_per_core_y;  // #56908: reader consumes only this core's column slice
+        local_block_size =
+            fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(tiles_per_core_y, 4)
+                             : tt::tt_metal::find_max_divisor(tiles_per_core_y, 8);  // #56908: blk divides local slice
 
         CoreRange all_cores_range({0, 0}, {cores_x - 1, cores_y - 1});
         all_cores = CoreRangeSet(std::vector{all_cores_range});
@@ -381,14 +393,15 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
                 m2::TensorBinding{.tensor_parameter_name = POSTWF_STATS_T, .accessor_name = "stats_src"},
             },
         .compile_time_args =
-            {{"blk", block_size},
+            {{"blk", local_block_size},
              {"stats_tiles_cols", stats_tiles_cols},
              {"gamma_is_row_major", gamma_is_row_major},
              {"beta_is_row_major", beta_is_row_major},
              {"dfb_length", cb_length},
-             {"Wt", Wt},
+             {"Wt", reader_Wt},  // #56908: local column-slice width (global Wt carried as Wt_full stride)
              {"reduce_factor", reduce_factor}},
-        .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset", "Wt_full"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
     // The shared reader always fills a reduce-scalar tile, but the Welford compute kernel derives
@@ -396,14 +409,18 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
     // both endpoint roles.
     bind_self_loop(reader, POSTWF_REDUCE, "reduce");
     if (gamma.has_value()) {
-        reader.dfb_bindings.push_back(m2::DFBBinding{
-            .dfb_spec_name = POSTWF_GAMMA, .accessor_name = "gamma", .endpoint_type = m2::DFBEndpointType::PRODUCER});
+        reader.dfb_bindings.push_back(
+            m2::DFBBinding{
+                .dfb_spec_name = POSTWF_GAMMA,
+                .accessor_name = "gamma",
+                .endpoint_type = m2::DFBEndpointType::PRODUCER});
         reader.tensor_bindings.push_back(
             m2::TensorBinding{.tensor_parameter_name = POSTWF_GAMMA_T, .accessor_name = "gamma_src"});
     }
     if (beta.has_value()) {
-        reader.dfb_bindings.push_back(m2::DFBBinding{
-            .dfb_spec_name = POSTWF_BETA, .accessor_name = "beta", .endpoint_type = m2::DFBEndpointType::PRODUCER});
+        reader.dfb_bindings.push_back(
+            m2::DFBBinding{
+                .dfb_spec_name = POSTWF_BETA, .accessor_name = "beta", .endpoint_type = m2::DFBEndpointType::PRODUCER});
         reader.tensor_bindings.push_back(
             m2::TensorBinding{.tensor_parameter_name = POSTWF_BETA_T, .accessor_name = "beta_src"});
     }
@@ -414,10 +431,15 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
         .dfb_bindings = {m2::DFBBinding{
             .dfb_spec_name = POSTWF_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = POSTWF_OUTPUT_T, .accessor_name = "dst"}},
-        .compile_time_args = {{"blk", block_size}},
+        .compile_time_args = {{"blk", local_block_size}},  // #56908: block size from local slice
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
+    if (use_2d_kernel) {
+        // #56908: the 2D output is column-split, so rows are strided; use the strided writer.
+        writer.source = POSTWF_WRITER_2D_KERNEL;
+        writer.runtime_arg_schema.runtime_arg_names = {"num_tiles", "tile_offset", "Wt_full", "cols_per_row"};
+    }
 
     // Welford preserves the math fidelity selection and FP32 dst-acc setting from compute_kernel_config.
     m2::KernelSpec compute{
@@ -446,7 +468,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
         .compile_time_args =
             {{"Wt", tiles_per_core_y},
              {"W", W},
-             {"blk", block_size},
+             {"blk", local_block_size},
              {"stats_tiles_cols", stats_tiles_cols},
              {"fp32_dtype", static_cast<uint32_t>(fp32_dest_acc_en)},
              {"dfb_length", cb_length}},
@@ -465,12 +487,16 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
         bind_self_loop(compute, POSTWF_TIMES_GAMMA_OUT, "times_gamma_out");
     }
     if (gamma.has_value()) {
-        compute.dfb_bindings.push_back(m2::DFBBinding{
-            .dfb_spec_name = POSTWF_GAMMA, .accessor_name = "gamma", .endpoint_type = m2::DFBEndpointType::CONSUMER});
+        compute.dfb_bindings.push_back(
+            m2::DFBBinding{
+                .dfb_spec_name = POSTWF_GAMMA,
+                .accessor_name = "gamma",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER});
     }
     if (beta.has_value()) {
-        compute.dfb_bindings.push_back(m2::DFBBinding{
-            .dfb_spec_name = POSTWF_BETA, .accessor_name = "beta", .endpoint_type = m2::DFBEndpointType::CONSUMER});
+        compute.dfb_bindings.push_back(
+            m2::DFBBinding{
+                .dfb_spec_name = POSTWF_BETA, .accessor_name = "beta", .endpoint_type = m2::DFBEndpointType::CONSUMER});
     }
 
     auto& compute_gen1 = gen1_compute_config(device->arch(), std::get<m2::ComputeHardwareConfig>(compute.hw_config));
@@ -552,8 +578,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
             for (uint32_t y = 0; y < cores_y; ++y) {
                 CoreCoord core = {x, y};
 
-                uint32_t tile_offset = (x * Wt) + (y * tiles_per_core_y);
-                uint32_t stats_offset = x * stats_tiles_cols;
+                uint32_t tile_offset = (x * tiles_per_core_x * Wt) +
+                                       (y * tiles_per_core_y);  // #56908: core-row x owns tiles_per_core_x rows
+                uint32_t stats_offset =
+                    x * tiles_per_core_x * stats_tiles_cols;  // #56908: core-row x owns tiles_per_core_x rows
 
                 log_debug(
                     tt::LogOp,
@@ -568,12 +596,16 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
                      {"tile_offset", tile_offset},
                      {"stats_tile_offset", stats_offset},
                      {"eps", eps},
-                     {"y_offset", y * tiles_per_core_y}});
+                     {"y_offset", y * tiles_per_core_y},
+                     {"Wt_full", Wt}});
                 m2::AddRuntimeArgsForNode(compute_run.runtime_arg_values, core, {{"NCHt", tiles_per_core_x}});
                 m2::AddRuntimeArgsForNode(
                     writer_run.runtime_arg_values,
                     core,
-                    {{"num_tiles", tiles_per_core_x * tiles_per_core_y}, {"tile_offset", tile_offset}});
+                    {{"num_tiles", tiles_per_core_x * tiles_per_core_y},
+                     {"tile_offset", tile_offset},
+                     {"Wt_full", Wt},
+                     {"cols_per_row", tiles_per_core_y}});
             }
         }
     } else {
@@ -601,7 +633,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
                  {"tile_offset", tile_offset},
                  {"stats_tile_offset", stats_offset},
                  {"eps", eps},
-                 {"y_offset", y_offset}});
+                 {"y_offset", y_offset},
+                 {"Wt_full", Wt}});
             m2::AddRuntimeArgsForNode(compute_run.runtime_arg_values, core, {{"NCHt", num_tile_rows_per_core}});
             m2::AddRuntimeArgsForNode(
                 writer_run.runtime_arg_values,
