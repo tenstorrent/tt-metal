@@ -187,3 +187,17 @@
   team: ttnn
   budget_type: merge_gate
   owner_id: U084B1CES7M # Borys Bradel
+
+# CI only for #58923, not for merge: full DRAM-sharded matmul coverage, including the new multi-core variant.
+- name: "ttnn DRAM-sharded matmul (PR 58923)"
+  cmd: >-
+    pytest --timeout 600 -v
+    tests/ttnn/unit_tests/operations/matmul -k "dram_sharded"
+  skus:
+    wh_n150_civ2:
+      timeout: 90
+    bh_p150b_civ2_viommu:
+      timeout: 90
+  team: ttnn
+  budget_type: merge_gate
+  owner_id: U084B1CES7M # Borys Bradel
