@@ -228,6 +228,19 @@ class DataFormat(Enum):
 # Bare in mind that MX formats can have multiple contiguous scales with corresponding values after.
 MX_FORMAT_BLOCK_SIZE = 32
 
+#: E8M0 block-scale encoding, shared by every MX format: an 8-bit exponent with
+#: bias 127 and two reserved codes, 0xFF for a NaN block and 0xFE for a block
+#: that saturated to infinity.
+#:
+#: Use these names only for MX block scales. 127 is also the fp32 exponent bias
+#: and the BFP shared-exponent bias, and -127/128 also appear as a destination
+#: register's exponent floor and ceiling -- four different quantities that
+#: happen to share a number, which is why substituting the literal blindly is
+#: wrong.
+E8M0_BIAS = 127
+E8M0_NAN_CODE = 0xFF
+E8M0_INF_CODE = 0xFE
+
 # Map of MX formats to their maximum normal values
 # Per OCP MX Specification:
 # - E5M2 (MxFp8R): Max normal = ± 2^15 × 1.75 = ± 57,344
