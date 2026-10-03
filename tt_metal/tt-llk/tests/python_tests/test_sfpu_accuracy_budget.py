@@ -230,6 +230,12 @@ _TRANSLATIONS = [
 def test_a_contract_translates_to_passed_test_arguments(contract, by_ulp, by_tolerance):
     assert contract.passed_test_kwargs() == by_ulp
     assert contract.tolerance_kwargs() == by_tolerance
+    # The flush request reaches only the ULP arm: passed_test refuses it without a budget.
+    flushed = contract.passed_test_kwargs(flush_subnormals=True)
+    if contract.metric is Metric.ULP:
+        assert flushed == {**by_ulp, "flush_subnormals": True}
+    else:
+        assert flushed == by_ulp
 
 
 @pytest.mark.parametrize("method", ["passed_test_kwargs", "tolerance_kwargs"])
@@ -616,20 +622,55 @@ def test_enrolled_ops_is_sorted_and_stable():
     assert len(set(ops)) == len(ops)
 
 
-#: Enrolled ops with no step budget anywhere: the 3-segment LUT pair and two binaries
-#: whose per-format tolerances moved into the table.
+#: Enrolled ops with no step budget anywhere: the 3-segment LUT pair, two binaries
+#: whose per-format tolerances moved into the table, and SfpuElwmul, past the usable
+#: ceiling on every float column (measurements on its YAML rows). GeluTanh and
+#: Tanhshrink are not here since their Float16 cells measured inside it with the fp16
+#: subnormal band flushed. Sign and Heaviside
+#: are not here: they carry step budgets on the cells their rows name, and only their
+#: op-wide row is tolerance.
 ONLY_EVER_TOLERANCE = frozenset(
     {
         MathOperation.SigmoidAppx,
         MathOperation.GeluAppx,
         MathOperation.SfpuElwpow,
         MathOperation.SfpuXlogy,
+        MathOperation.SfpuElwmul,
+    }
+)
+
+
+#: Enrolled ops whose every row keys on the output format alone: the binary and ternary
+#: ops, whose drivers pair each output with one input, and the op-wide LUT tolerance.
+#: Every other enrolled op keys on its input too, so an enrolment has to land in one
+#: set or the other deliberately.
+OUT_KEYED_ONLY = frozenset(
+    {
+        MathOperation.GeluAppx,
+        MathOperation.SfpuAddcdiv,
+        MathOperation.SfpuAddcmul,
+        MathOperation.SfpuAtan2,
+        MathOperation.SfpuBinaryFmod,
+        MathOperation.SfpuBinaryMax,
+        MathOperation.SfpuBinaryMin,
+        MathOperation.SfpuBinaryRemainder,
+        MathOperation.SfpuElwadd,
+        MathOperation.SfpuElwdiv,
+        MathOperation.SfpuElwmul,
+        MathOperation.SfpuElwpow,
+        MathOperation.SfpuElwrsub,
+        MathOperation.SfpuElwsub,
+        MathOperation.SfpuLerp,
+        MathOperation.SfpuLogsigmoid,
+        MathOperation.SfpuSnakeBeta,
+        MathOperation.SfpuXlogy,
+        MathOperation.SigmoidAppx,
     }
 )
 
 
 def test_every_enrolled_op_reaches_its_step_budget():
-    """The sweep must reach the ULP branch for every enrolled op but the four above.
+    """The sweep must reach the ULP branch for every enrolled op but the ones above.
 
     The input-keyed ops are pinned separately: a sweep that left ``input_format`` unset
     sent every one of them to ``TOLERANCE_CONTRACT`` while this still passed for the rest.
@@ -639,14 +680,13 @@ def test_every_enrolled_op_reaches_its_step_budget():
         for op, table in _SFPU_ACCURACY_BUDGET.items()
         if any(key.input_format is not None for key in table)
     }
-    # Every enrolled op but the tolerance-only ones keys on its input format.
-    assert input_keyed == set(enrolled_ops()) - ONLY_EVER_TOLERANCE, sorted(
-        op.name for op in input_keyed
+    assert input_keyed == set(enrolled_ops()) - OUT_KEYED_ONLY, sorted(
+        op.name for op in input_keyed ^ (set(enrolled_ops()) - OUT_KEYED_ONLY)
     )
     with_budget = {op for op, _, _, _ in _live_step_budgets()}
     missing = set(enrolled_ops()) - with_budget
     assert missing == ONLY_EVER_TOLERANCE, sorted(op.name for op in missing)
-    assert input_keyed <= with_budget
+    assert input_keyed - ONLY_EVER_TOLERANCE <= with_budget
 
 
 #: Ops exact by construction: a sign-bit change, a copy, or an integer-valued result.
@@ -662,8 +702,50 @@ EXACT_BY_CONSTRUCTION = (
 #: The subset writing an integer, which survives any pack that can represent it.
 INTEGER_VALUED = (MathOperation.Floor, MathOperation.Ceil, MathOperation.Trunc)
 
-#: What the output pack may cost an exact op: a measured 1 step, written as 2 by the
-#: emitter's headroom.
+#: Ops whose correct result is the *only* result: an integer, a predicate's 1.0/0.0, a
+#: pass-through-or-zero selection, a constant, a clamp, or a single IEEE add. One step
+#: here is the contract breaking, not the pack path. Listed by what the op computes, not
+#: read back from the table, which would agree with it by construction.
+EXACT_ZERO_BY_CONSTRUCTION = (
+    *INTEGER_VALUED,
+    MathOperation.Fill,
+    MathOperation.Threshold,
+    MathOperation.Isfinite,
+    MathOperation.Isinf,
+    MathOperation.Isnan,
+    MathOperation.Isneginf,
+    MathOperation.Isposinf,
+    MathOperation.LogicalNot,
+    MathOperation.Signbit,
+    MathOperation.UnaryEq,
+    MathOperation.UnaryNe,
+    MathOperation.SfpuElwEq,
+    MathOperation.SfpuElwNe,
+    MathOperation.SfpuElwGt,
+    MathOperation.SfpuElwGe,
+    MathOperation.SfpuElwLt,
+    MathOperation.SfpuElwLe,
+    MathOperation.SfpuIsclose,
+    MathOperation.SfpuMask,
+    MathOperation.SfpuAddTopRow,
+)
+
+#: The subset whose every result is exact in every format -- a predicate's 1.0/0.0 or a
+#: constant -- so even a narrowing cell has nothing for the pack to round.
+EXACT_IN_EVERY_FORMAT = tuple(
+    op
+    for op in EXACT_ZERO_BY_CONSTRUCTION
+    if op
+    not in (
+        *INTEGER_VALUED,
+        MathOperation.Threshold,
+        MathOperation.SfpuMask,
+        MathOperation.SfpuAddTopRow,
+    )
+)
+
+#: What the output pack may cost an exact op on a cell that converts: a measured 1 step,
+#: written as 2 by the emitter's headroom.
 _PACK_PATH_STEPS = 2
 
 
@@ -676,8 +758,13 @@ def _exact_allowance(op, input_format, output_format):
     """``(steps, reason)``: the slack an exact op may carry on one cell -- the cost of
     the output pack, and only where there is one."""
     if output_format in _ULP_PROXY_DTYPES:
+        # Rows measured at 2-3 steps into Bfp8_b are parked on the tolerance metric, so
+        # a Bfp8_b ULP row is the 0-step enrolment; otherwise only the 25.6-step usable
+        # ceiling would bound it.
         return 0, "a Bfp8_b ULP row here is the 0-step enrolment or nothing"
-    if op not in INTEGER_VALUED:
+    if op in EXACT_IN_EVERY_FORMAT:
+        return 0, "a 1.0/0.0 or a constant is exact in every format, so no pack rounds"
+    if op not in EXACT_ZERO_BY_CONSTRUCTION:
         return (
             _PACK_PATH_STEPS,
             "the value passes through an fp32 Dest and is packed back",
@@ -693,13 +780,24 @@ def _exact_allowance(op, input_format, output_format):
     return 0, "the output can represent every value this op produces from that input"
 
 
-@pytest.mark.parametrize("op", EXACT_BY_CONSTRUCTION, ids=lambda op: op.name)
+@pytest.mark.parametrize(
+    "op",
+    sorted(
+        set(EXACT_BY_CONSTRUCTION) | set(EXACT_ZERO_BY_CONSTRUCTION),
+        key=lambda op: op.name,
+    ),
+    ids=lambda op: op.name,
+)
 def test_an_exact_op_never_carries_a_wide_budget(op):
     """These are the canaries: a budget past the pack path means the number was fitted
-    to a failure."""
+    to a failure. For the exactly rounded ops "any drift is a regression" is the whole
+    claim, so each must also *have* a step budget somewhere: the provenance guard lets a
+    measured 0 be written as 1, and a dropped row would read as a passing op."""
+    seen = False
     for budget_op, in_fmt, fmt, contract in _live_step_budgets():
         if budget_op is not op:
             continue
+        seen = True
         allowance, why = _exact_allowance(op, in_fmt, fmt)
         assert contract.max_ulp <= allowance, (
             f"{op.name} on {in_fmt and in_fmt.name}->{fmt.name} carries "
@@ -707,21 +805,40 @@ def test_an_exact_op_never_carries_a_wide_budget(op):
             f"{why}. The op is exact by construction; investigate the datapath or the "
             "golden rather than widening the budget."
         )
+    if op in EXACT_ZERO_BY_CONSTRUCTION:
+        assert (
+            seen
+        ), f"{op.name} resolves to no ULP contract at all; the row was dropped"
 
 
 #: Swept cells of an exact-by-construction op that the table holds on the tolerance
 #: metric, with what was measured there. Each would be a real deviation on an op that
 #: should be exact, with no cause established yet; the test below keeps the list from
 #: growing unnoticed, and fails when an entry is no longer needed. Empty today. The
-#: two classes it used to hold were the sweep's, not the ops': Abs/Neg/Identity's
-#: 512-step Float16 cells were the metric keeping fp16 subnormals the pack does not
-#: reproduce, and Floor's 16,129-step Bfp8_b cells were the one -0.0 lane the block
-#: quantizer turns into -2**-127 for the golden (``ulp_sweep.flushed_inputs``). Both
-#: cells measure 0 now.
+#: classes it used to hold were the sweep's, not the ops': Abs/Neg/Identity's 512-step
+#: Float16 cells were the metric keeping fp16 subnormals the pack does not reproduce,
+#: and Floor's and Signbit's 14,337/16,129-step Bfp8_b cells were the one -0.0 lane the
+#: block quantizer turns into -2**-127 for the golden, so floor read -1 and signbit read
+#: 1 against silicon's flushed 0 (``ulp_sweep.flushed_inputs``). All of them measure 0.
 _EXACT_OP_DEMOTIONS: dict = {}
 
 
-@pytest.mark.parametrize("op", EXACT_BY_CONSTRUCTION, ids=lambda op: op.name)
+def _swept_exact_ops():
+    """The exact ops the exhaustive sweep drives: every sign-bit/copy/integer op, and
+    the unary members of EXACT_ZERO_BY_CONSTRUCTION it has a domain for. The predicates
+    it has none for (Isinf, UnaryEq, ...) are gated on their hand-built sweeps instead.
+    """
+    from helpers.sfpu_domains import _UNARY_OPS_NOT_SWEPT, sfpu_unary_ops
+
+    swept = set(sfpu_unary_ops()) - set(_UNARY_OPS_NOT_SWEPT)
+    return sorted(
+        set(EXACT_BY_CONSTRUCTION)
+        | {op for op in EXACT_ZERO_BY_CONSTRUCTION if op in swept},
+        key=lambda op: op.name,
+    )
+
+
+@pytest.mark.parametrize("op", _swept_exact_ops(), ids=lambda op: op.name)
 def test_every_swept_cell_of_an_exact_op_is_gated_or_waived(op):
     """`test_an_exact_op_never_carries_a_wide_budget` reads only ULP rows, so a cell the
     emitter demoted to tolerance is invisible to it -- and the sweep does not gate
@@ -847,24 +964,50 @@ def test_no_integer_only_op_is_enrolled():
     assert not enrolled_integer, sorted(op.name for op in enrolled_integer)
 
 
+#: Ops measured on the hand-built sweep that drives them, under ``--ulp-report`` on
+#: Wormhole, 2026-09-18; the counts are in the YAML row comments. Those sweeps gate on
+#: the whole contract (``gate_on_step_budget``), so these rows are what they enforce:
+#: none of these ops has a registered domain, so the exhaustive sweep never drives them.
+MEASURED_ON_SWEEP = {
+    "signbit": {MathOperation.Signbit},
+    "isinf_isnan": {
+        MathOperation.Isinf,
+        MathOperation.Isposinf,
+        MathOperation.Isneginf,
+        MathOperation.Isnan,
+        MathOperation.Isfinite,
+    },
+    "threshold": {
+        MathOperation.LogicalNot,
+        MathOperation.UnaryEq,
+        MathOperation.UnaryNe,
+        MathOperation.ReluMin,
+        MathOperation.ReluMax,
+    },
+}
+
+
 def test_no_enrolled_op_is_driven_by_a_sweep_that_was_never_measured():
-    """The signbit, isinf/isnan and threshold sweeps use hand-built stimuli that no
-    recorded measurement covers, yet a budget would bind on them too."""
+    """The signbit, isinf/isnan and threshold sweeps use hand-built stimuli and gate on
+    the step budget, so an op they drive must have been measured there."""
     from test_eltwise_unary_sfpu import _THRESHOLD_OPS, ISINF_ISNAN_MATHOPS
 
-    unmeasured = {
+    hand_built = {
         "signbit": {MathOperation.Signbit},  # not parametrised; drives this one op
         "isinf_isnan": set(ISINF_ISNAN_MATHOPS),
         "threshold": set(_THRESHOLD_OPS),
     }
-    assert all(unmeasured.values()), "a sweep set went empty; the derivation has broken"
+    assert all(hand_built.values()), "a sweep set went empty; the derivation has broken"
     enrolled = set(enrolled_ops())
-    for sweep, ops in sorted(unmeasured.items()):
-        overlap = sorted(op.name for op in enrolled & ops)
-        assert not overlap, (
-            f"{', '.join(overlap)} carries a budget but is driven by the {sweep} sweep, "
-            "whose hand-built stimulus no recorded measurement covers. Measure it there "
-            "before enrolling, or key the budget away from the formats it reaches."
+    for sweep, ops in sorted(hand_built.items()):
+        unrecorded = sorted(
+            op.name for op in (enrolled & ops) - MEASURED_ON_SWEEP[sweep]
+        )
+        assert not unrecorded, (
+            f"{', '.join(unrecorded)} carries a budget but is driven by the {sweep} "
+            "sweep, whose hand-built stimulus no recorded measurement covers. Measure it "
+            "there and add it to MEASURED_ON_SWEEP, or key the budget away from the "
+            "formats it reaches."
         )
 
 
