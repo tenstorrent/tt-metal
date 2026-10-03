@@ -10,6 +10,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/unary/device/pow_int_device_operation.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/hal.hpp>
@@ -1068,6 +1069,14 @@ Tensor pow(
     std::int32_t exponent,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor) {
+    const bool is_integer_input =
+        input.dtype() == DataType::INT32 || input.dtype() == DataType::UINT32 || input.dtype() == DataType::UINT16;
+    if (is_integer_input) {
+        TT_FATAL(exponent >= 0, "pow: integers to negative integer powers are not allowed, got {}", exponent);
+        const MemoryConfig memory_config = output_mem_config.value_or(
+            output_tensor.has_value() ? output_tensor->memory_config() : input.memory_config());
+        return ttnn::prim::pow_int(input, static_cast<std::uint32_t>(exponent), memory_config, output_tensor);
+    }
     // For exponents 0, 1, 2, 3: use iterative approach
     if (exponent == 0 || exponent == 1 || exponent == 2 || exponent == 3) {
         std::uint32_t exp = exponent;
