@@ -961,6 +961,17 @@ std::vector<Tensor> selu_bw(
 // result: torch.where(input < -3,0.0,torch.where(input <= 3, grad * ((input / 3) + 0.5), grad),)
 std::vector<Tensor> hardswish_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+    // One program for BF16 operands, whose gradient is the generated SFPU kernel; anything else
+    // keeps the composite below.
+    if (grad.dtype() == DataType::BFLOAT16 && input.dtype() == DataType::BFLOAT16) {
+        return {ttnn::operations::unary_backward::launch_unary_backward(
+            ttnn::operations::unary_backward::UnaryBackwardOpType::HARDSWISH_BW,
+            grad,
+            input,
+            input.dtype(),
+            output_mem_config.value_or(input.memory_config()))};
+    }
+
     std::vector<Tensor> grad_tensor;
     Tensor grad_result = where(
         ttnn::lt(input, -3.0f, std::nullopt, output_mem_config),
