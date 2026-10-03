@@ -27,6 +27,7 @@ void kernel_main() {
     const auto reduce_core_noc_x = get_arg(args::reduce_core_noc_x);
     const auto reduce_core_noc_y = get_arg(args::reduce_core_noc_y);
     const auto y = get_arg(args::y);
+    const auto row_stride = get_arg(args::row_stride);
 
     const uint32_t onetile = 1;
 
@@ -99,6 +100,10 @@ void kernel_main() {
 #endif
 
         }  // wt loop
+        // Advance to the next global row owned by this core. A local row is
+        // tiles_per_core_y wide while global rows are Wt_full wide, so jump
+        // the difference (row_stride); 0 when the core owns full rows.
+        inp_tile_idx += row_stride;
 
     }  // ncht loop
 

@@ -29,6 +29,7 @@ using namespace ttnn::prim::layernorm_distributed_metal2;
 
 const m2::KernelSpecName POST_READER{"post_reader"};
 const m2::KernelSpecName POST_WRITER{"post_writer"};
+const m2::KernelSpecName POST_STRIDED_WRITER{"post_strided_writer"};
 const m2::KernelSpecName POST_COMPUTE{"post_compute"};
 
 const m2::DFBSpecName POST_INPUT{"post_input"};
@@ -58,6 +59,9 @@ constexpr const char* POST_READER_KERNEL =
 constexpr const char* POST_WRITER_KERNEL =
     "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
     "writer_unary_interleaved_start_id_blocked.cpp";
+constexpr const char* POST_STRIDED_WRITER_KERNEL =
+    "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
+    "writer_unary_interleaved_start_id_strided.cpp";
 
 }  // namespace
 
@@ -383,7 +387,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
              {"dfb_length", cb_length},
              {"Wt", tiles_per_core_y},
              {"reduce_factor", reduce_factor}},
-        .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset", "row_stride"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
     if (gamma.has_value()) {
@@ -407,6 +411,17 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = POST_OUTPUT_T, .accessor_name = "dst"}},
         .compile_time_args = {{"blk", block_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
+        .hw_config = ttnn::create_writer_datamovement_config(),
+    };
+
+    m2::KernelSpec strided_writer{
+        .unique_id = POST_STRIDED_WRITER,
+        .source = POST_STRIDED_WRITER_KERNEL,
+        .dfb_bindings = {m2::DFBBinding{
+            .dfb_spec_name = POST_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = POST_OUTPUT_T, .accessor_name = "dst"}},
+        .compile_time_args = {{"blk", block_size}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset", "row_width", "row_stride"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
@@ -526,15 +541,22 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
     ////////////////////////////////////////////////////////////////////////////
     m2::KernelRunArgs reader_run{.kernel = POST_READER};
     m2::KernelRunArgs writer_run{.kernel = POST_WRITER};
+    m2::KernelRunArgs strided_writer_run{.kernel = POST_STRIDED_WRITER};
     m2::KernelRunArgs compute_run{.kernel = POST_COMPUTE};
 
     if (use_2d_kernel) {
+        const uint32_t row_stride = Wt - tiles_per_core_y;
         for (uint32_t x = 0; x < cores_x; ++x) {
             for (uint32_t y = 0; y < cores_y; ++y) {
                 CoreCoord core = {x, y};
 
-                uint32_t tile_offset = (x * Wt) + (y * tiles_per_core_y);
-                uint32_t stats_offset = x * stats_tiles_cols;
+                // Core (x, y) owns global rows [x * tiles_per_core_x, ...) and,
+                // within each row, tiles [y * tiles_per_core_y, ...). The reader
+                // walks one local row flat, then jumps row_stride to the next
+                // owned global row. Stats rows are full-width per row, so the
+                // stats base only needs the row-group correction.
+                uint32_t tile_offset = (x * tiles_per_core_x * Wt) + (y * tiles_per_core_y);
+                uint32_t stats_offset = x * tiles_per_core_x * stats_tiles_cols;
 
                 log_debug(
                     tt::LogOp,
@@ -549,12 +571,16 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
                      {"tile_offset", tile_offset},
                      {"stats_tile_offset", stats_offset},
                      {"eps", eps_u},
-                     {"y_offset", y * tiles_per_core_y}});
+                     {"y_offset", y * tiles_per_core_y},
+                     {"row_stride", row_stride}});
                 m2::AddRuntimeArgsForNode(compute_run.runtime_arg_values, core, {{"NCHt", tiles_per_core_x}});
                 m2::AddRuntimeArgsForNode(
-                    writer_run.runtime_arg_values,
+                    strided_writer_run.runtime_arg_values,
                     core,
-                    {{"num_tiles", tiles_per_core_x * tiles_per_core_y}, {"tile_offset", tile_offset}});
+                    {{"num_tiles", tiles_per_core_x * tiles_per_core_y},
+                     {"tile_offset", tile_offset},
+                     {"row_width", tiles_per_core_y},
+                     {"row_stride", row_stride}});
             }
         }
     } else {
@@ -582,7 +608,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
                  {"tile_offset", tile_offset},
                  {"stats_tile_offset", stats_offset},
                  {"eps", eps_u},
-                 {"y_offset", y_offset}});
+                 {"y_offset", y_offset},
+                 {"row_stride", 0}});
             m2::AddRuntimeArgsForNode(compute_run.runtime_arg_values, core, {{"NCHt", num_tile_rows_per_core}});
             m2::AddRuntimeArgsForNode(
                 writer_run.runtime_arg_values,
@@ -597,15 +624,18 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
     ////////////////////////////////////////////////////////////////////////////
     m2::ProgramSpec spec{
         .name = "layernorm_post_all_gather",
-        .kernels = {std::move(reader), std::move(writer), std::move(compute)},
+        .kernels = {std::move(reader), std::move(writer), std::move(strided_writer), std::move(compute)},
         .dataflow_buffers = std::move(dfbs),
         .tensor_parameters = std::move(tensor_parameters),
         .work_units = {m2::WorkUnitSpec{
-            .name = "main", .kernels = {POST_READER, POST_WRITER, POST_COMPUTE}, .target_nodes = all_cores}},
+            .name = "main",
+            .kernels = {POST_READER, POST_WRITER, POST_STRIDED_WRITER, POST_COMPUTE},
+            .target_nodes = all_cores}},
     };
 
     m2::ProgramRunArgs run_args;
-    run_args.kernel_run_args = {std::move(reader_run), std::move(writer_run), std::move(compute_run)};
+    run_args.kernel_run_args = {
+        std::move(reader_run), std::move(writer_run), std::move(strided_writer_run), std::move(compute_run)};
     run_args.tensor_args.emplace(POST_INPUT_T, input_mesh);
     run_args.tensor_args.emplace(POST_STATS_T, stats_mesh);
     run_args.tensor_args.emplace(POST_OUTPUT_T, output_mesh);

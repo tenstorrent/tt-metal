@@ -70,6 +70,7 @@ void kernel_main() {
     // E(x^2) in the left most columns per tile.
     const auto stats_tile_offset = get_arg(args::stats_tile_offset);
     const auto y_offset = get_arg(args::y_offset);
+    const auto row_stride = get_arg(args::row_stride);
 
     constexpr auto blk = get_arg(args::blk);
     constexpr auto stats_tiles_cols = get_arg(args::stats_tiles_cols);
@@ -207,5 +208,10 @@ void kernel_main() {
 #endif
 #endif
         }
+        // Advance to the next global row owned by this core. Each local row is
+        // Wt tiles wide while global rows are Wt_full wide (row_stride is the
+        // difference, 0 for full-row ownership). Stats reads are full-width
+        // per row and need no stride.
+        inp_tile_idx += row_stride;
     }  // ncht loop
 }
