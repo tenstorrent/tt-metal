@@ -50,6 +50,11 @@ using namespace tt::tt_metal;
 
 namespace basic_tests::circular_buffer {
 
+class CircularBufferMeshDeviceFixtureWithL1Small : public MeshDeviceFixture {
+public:
+    CircularBufferMeshDeviceFixtureWithL1Small() : MeshDeviceFixture(24 * 1024) {}
+};
+
 void validate_cb_address(
     distributed::MeshWorkload& workload,
     std::shared_ptr<distributed::MeshDevice>& mesh_device,
@@ -255,6 +260,42 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBuffersAndL1BuffersCollision) {
         }
 
         EXPECT_ANY_THROW(distributed::EnqueueMeshWorkload(cq, workload, false));
+    }
+}
+
+TEST_F(CircularBufferMeshDeviceFixtureWithL1Small, TensixTestCircularBuffersRespectL1SmallBoundary) {
+    for (auto& mesh_device : this->devices_) {
+        const DeviceAddr l1_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        const DeviceAddr l1_small_base =
+            mesh_device->l1_size_per_core() - mesh_device->allocator()->get_bank_size(BufferType::L1_SMALL);
+        const auto l1_ceiling = mesh_device->lowest_occupied_compute_l1_address();
+        ASSERT_TRUE(l1_ceiling.has_value());
+        EXPECT_EQ(*l1_ceiling, l1_small_base);
+
+        const auto core = mesh_device->allocator()->get_logical_core_from_bank_id(0);
+        const CoreRangeSet core_set({CoreRange(core, core)});
+        const DeviceAddr available_size = l1_small_base - l1_base;
+        const uint32_t alignment = mesh_device->allocator()->get_alignment(BufferType::L1);
+        uint32_t page_size = alignment;
+        while (available_size % page_size != 0 || available_size / page_size > UINT16_MAX) {
+            page_size += alignment;
+        }
+
+        auto enqueue_with_cb_size = [&](DeviceAddr cb_size) {
+            distributed::MeshWorkload workload;
+            const auto zero_coord = distributed::MeshCoordinate(0, 0);
+            const auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+            workload.add_program(device_range, Program{});
+            auto& program = workload.get_programs().at(device_range);
+            const auto config =
+                CircularBufferConfig(cb_size, {{0, tt::DataFormat::Float16_b}}).set_page_size(0, page_size);
+            CreateCircularBuffer(program, core, config);
+            initialize_program(program, core_set);
+            distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        };
+
+        EXPECT_NO_THROW(enqueue_with_cb_size(available_size));
+        EXPECT_ANY_THROW(enqueue_with_cb_size(available_size + page_size));
     }
 }
 
