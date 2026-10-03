@@ -1,26 +1,39 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Generated architecture configuration; shared primitives live in common/.
 #pragma once
 #include <cstdint>
-namespace ttpoly_generated {
+namespace ckernel::sfpu {
 struct SigmoidBf16Config {
-    static constexpr uint32_t kDegree = 2u;
+    // Fit: minimax degree-2 polynomial on [0, 1], 1 segment, max pure (continuous) ULP 0.788.
     static constexpr uint32_t kCoefficientBits[] = {0x3f803884u, 0x3f285adeu, 0x3eaca410u};
     static constexpr uint32_t kMultiplierBits = 0xbfb8aa3bu;
     static constexpr uint32_t kBias = 127u;
     static constexpr uint32_t kLowerClampBits = 0x00000000u;
     static constexpr uint32_t kUpperClampBits = 0x437f0000u;
-    static constexpr uint32_t kFinitePopulation = 65280u;
-    static constexpr uint32_t kRawClassOutput[] = {5u, 5u, 5u, 5u, 5u, 5u, 3u, 3u, 3u};
-    static constexpr bool kPositiveNanZero = true;
-    static constexpr bool kInputDaz = true;
-    static constexpr bool kOutputFtz = true;
+    static constexpr bool kNanTerminal = true;
 };
-}  // namespace ttpoly_generated
-#include "../../../../common/llk_sfpu/ckernel_sfpu_tt_poly_exp2_reciprocal.h"
-#ifndef TT_POLY_LLK_EXP2_RECIPROCAL_BF16_V2
-#error "typed exponent-ALU reciprocal runtime required"
+}  // namespace ckernel::sfpu
+#include "ckernel_sfpu_bf16_exp2_reciprocal.h"
+
+namespace ckernel::sfpu {
+
+// The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format.
+inline bool bf16_dest_sigmoid() {
+#if defined(TRISC_MATH) || defined(LLK_TRISC_MATH)
+    return ckernel::math::src_zero_flag_srcb_fmt == static_cast<std::uint32_t>(DataFormat::Float16_b);
+#else
+    return false;
 #endif
-#define TT_POLY_SIGMOID_BF16_AVAILABLE 1
+}
+template <int ITERATIONS = 8>
+inline void calculate_sigmoid_bf16() {
+    ckernel::sfpu::bf16::calculate_exp2_reciprocal<ckernel::sfpu::SigmoidBf16Config, ITERATIONS>();
+}
+inline void init_sigmoid_bf16() {
+    if (bf16_dest_sigmoid()) {
+        ckernel::sfpu::bf16::init_exp2_reciprocal<ckernel::sfpu::SigmoidBf16Config>();
+    }
+}
+
+}  // namespace ckernel::sfpu

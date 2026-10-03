@@ -130,6 +130,9 @@ class TestConfig:
     ARCH_DEFINE: ClassVar[str]
     ARCH_LLK_ROOT: ClassVar[str]
     ARCH: ClassVar[str]
+    QUASAR_VECTOR_MARCH: ClassVar[str] = (
+        "-march=rv32im_zmmul_zaamo_zve32x_zvl128b_xtttensixqsr_xttzbkb"
+    )
     CHIP_ARCH: ClassVar[ChipArchitecture]
     DATA_FORMAT_ENUM: ClassVar[dict]
 
@@ -260,9 +263,15 @@ class TestConfig:
     # Size of one full zone block (data + sync/pad)
     PERF_COUNTERS_ZONE_SIZE: ClassVar[int] = _PERF_COUNTERS_ZONE_DATA_BYTES + 40
 
-    # Device print buffer, below runtime arguments. setup_build adjusts this
-    # region to the selected memory layout.
+    # Device print buffer. It sits above loaders, and under RUNTIME_ARGS_START.
+    # Coverage builds extend TRISC sections past this address; device print
+    # is disabled under coverage so the conflict doesn't matter.
     DEVICE_PRINT_BUFFER_BASE: ClassVar[int] = 0x15000
+    # Matches RUNTIME_ARGS_START in the non-coverage linker scripts
+    # (memory.{wormhole,blackhole,quasar}.ld). Passed to the build as
+    # -DLLK_RUNTIME_ARGS_START so dprint.h can static_assert that the
+    # device print buffer doesn't overlap RUNTIME_ARGS.
+    DEVICE_PRINT_RUNTIME_ARGS_START: ClassVar[int] = 0x20000
     PROCESSOR_COUNT: ClassVar[int] = 0
     DEVICE_PRINT_BUFFER_SIZE: ClassVar[int] = 0x4000  # WH/BH/Quasar TRISC
     DEVICE_PRINT_BUFFER_SIZE2: ClassVar[int] = 0x2000  # Quasar DM
@@ -372,46 +381,6 @@ class TestConfig:
         return TestConfig.DEFAULT_ARTEFACTS_PATH
 
     @staticmethod
-    def memory_layout() -> Path:
-        """Return the selected linker script, defaulting to debug for coverage."""
-        return TestConfig._resolve_memory_layout(
-            TestConfig.LINKER_SCRIPTS,
-            TestConfig.MEMORY_LAYOUT_LD_SCRIPT,
-            TestConfig.WITH_COVERAGE,
-        )
-
-    @staticmethod
-    def _resolve_memory_layout(linker_scripts, selected, with_coverage) -> Path:
-        suffix = ".debug" if with_coverage else ""
-        default = linker_scripts / f"memory.{TestConfig.ARCH.value}{suffix}.ld"
-        layout = Path(selected or default).resolve()
-        supported = {
-            (linker_scripts / f"memory.{TestConfig.ARCH.value}{part}.ld").resolve()
-            for part in ("", ".debug")
-        }
-        if (
-            layout not in supported
-            or not layout.is_file()
-            or (with_coverage and not layout.name.endswith(".debug.ld"))
-        ):
-            raise ValueError(
-                "memory layout must match the target and support coverage when enabled"
-            )
-        return layout
-
-    @staticmethod
-    def uses_debug_memory_layout() -> bool:
-        return TestConfig.memory_layout().name.endswith(".debug.ld")
-
-    @staticmethod
-    def runtime_address() -> int:
-        return (
-            TestConfig.RUNTIME_ADDRESS_COVERAGE
-            if TestConfig.uses_debug_memory_layout()
-            else TestConfig.RUNTIME_ADDRESS_NON_COVERAGE
-        )
-
-    @staticmethod
     def setup_paths(sources_path: Path):
         TestConfig.ARTEFACTS_DIR = TestConfig.resolve_artefacts_path()
 
@@ -439,25 +408,15 @@ class TestConfig:
             (TestConfig.TOOL_PATH / "riscv-tt-elf-gcov-tool").absolute()
         )
 
-        # Layout changes also change BRISC's linked addresses. Never reuse
-        # normal-layout shared firmware for an uninstrumented debug layout.
-        # Quasar IP variants likewise need separate shared objects.
+        # A Quasar IP variant compiles the shared objects differently, so it gets its own directory.
         variant_suffix = TestConfig._quasar_variant_suffix()
-        if TestConfig.uses_debug_memory_layout():
-            layout_key = TestConfig.memory_layout().name
-            shared_key = (
-                f"shared{variant_suffix}-{layout_key}-"
-                f"{'coverage' if TestConfig.WITH_COVERAGE else 'plain'}"
-            )
-            profiler_key = shared_key + "-profiler"
-        else:
-            shared_key = f"shared{variant_suffix}"
-            profiler_key = f"shared-profiler{variant_suffix}"
-        TestConfig.SHARED_DIR = TestConfig.ARTEFACTS_DIR / shared_key
+        TestConfig.SHARED_DIR = TestConfig.ARTEFACTS_DIR / f"shared{variant_suffix}"
         TestConfig.SHARED_OBJ_DIR = TestConfig.SHARED_DIR / "obj"
         TestConfig.SHARED_ELF_DIR = TestConfig.SHARED_DIR / "elf"
         # Profiler builds need separate shared artefacts (trisc.cpp compiles differently with -DLLK_PROFILER)
-        TestConfig.PROFILER_SHARED_DIR = TestConfig.ARTEFACTS_DIR / profiler_key
+        TestConfig.PROFILER_SHARED_DIR = (
+            TestConfig.ARTEFACTS_DIR / f"shared-profiler{variant_suffix}"
+        )
         TestConfig.PROFILER_SHARED_OBJ_DIR = TestConfig.PROFILER_SHARED_DIR / "obj"
         TestConfig.PROFILER_SHARED_ELF_DIR = TestConfig.PROFILER_SHARED_DIR / "elf"
         TestConfig.COVERAGE_INFO_DIR = TestConfig.ARTEFACTS_DIR / "coverage_info"
@@ -854,57 +813,16 @@ class TestConfig:
         detailed_artefacts: bool = False,
         no_debug_symbols: bool = False,
         speed_of_light: bool = False,
-        memory_layout: str | None = None,
     ):
         TestConfig.setup_arch()
-        if memory_layout not in (None, "normal", "debug"):
-            raise ValueError("memory layout must be normal or debug")
-        selected_layout = (
-            sources_path
-            / "tests/helpers/ld"
-            / f"memory.{TestConfig.ARCH.value}{'.debug' if memory_layout == 'debug' else ''}.ld"
-            if memory_layout is not None
-            else None
-        )
-        TestConfig._resolve_memory_layout(
-            sources_path / "tests/helpers/ld", selected_layout, with_coverage
-        )
-        TestConfig.MEMORY_LAYOUT_LD_SCRIPT = selected_layout
-        TestConfig.WITH_COVERAGE = with_coverage
         TestConfig.setup_paths(sources_path)
-        # Without coverage instrumentation, the debug layout leaves this
-        # 8 KiB slot unused: WH's final GCOV region, and BH's final L1 gap.
-        # Keep it below the mailbox at runtime_address() - 0x48.
-        TestConfig.DEVICE_PRINT_BUFFER_BASE = (
-            0x6A000 if TestConfig.uses_debug_memory_layout() else 0x15000
-        )
-        TestConfig.DEVICE_PRINT_BUFFER_SIZE = (
-            0x2000 if TestConfig.uses_debug_memory_layout() else 0x4000
-        )
-        # Reconfiguration must not reuse firmware or device state from a
-        # different layout. On-disk shared markers still avoid duplicate builds.
-        TestConfig.SHARED_ARTEFACTS_AVAILABLE = False
-        TestConfig.PROFILER_SHARED_ARTEFACTS_AVAILABLE = False
-        TestConfig._BUILD_DIRS_CREATED = False
-        TestConfig.BRISC_ELF_LOADED = False
-        device_module.common_counter = 0
-        TestConfig.LAST_LOADED_ELFS = Path()
-        TestConfig.CURRENT_LOADED_CONFIG = "uninitialised"
         TestConfig.setup_compilation_options(
             with_coverage, detailed_artefacts, no_debug_symbols, speed_of_light
         )
         device_module.Mailboxes = (
-            (
-                MailboxesCoverageQuasar
-                if TestConfig.uses_debug_memory_layout()
-                else MailboxesQuasar
-            )
+            (MailboxesCoverageQuasar if with_coverage else MailboxesQuasar)
             if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR
-            else (
-                MailboxesCoverage
-                if TestConfig.uses_debug_memory_layout()
-                else Mailboxes
-            )
+            else (MailboxesCoverage if with_coverage else Mailboxes)
         )
 
     @staticmethod
@@ -1012,6 +930,7 @@ class TestConfig:
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
         requires_device_print: bool = False,
+        requires_vector_ext: bool = False,
         expected_nondeterministic: bool = False,
         include_dirs: list = None,
         src_include_dirs: list = None,
@@ -1067,6 +986,7 @@ class TestConfig:
         self.compile_time_formats = compile_time_formats
         self.dest_acc = dest_acc
         self.requires_device_print = requires_device_print
+        self.requires_vector_ext = requires_vector_ext
         self.expected_nondeterministic = expected_nondeterministic
         # Per-variant header ``-I`` dirs land in ``local_options_compile`` (last
         # ``-I`` group), so they win over ``add_include_dirs`` and in-tree
@@ -1180,6 +1100,11 @@ class TestConfig:
                 "You can't build profiler and coverage build at the same time, profiling tests will fail."
             )
 
+        if self.requires_vector_ext and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
+            raise RuntimeError(
+                "requires_vector_ext=True is currently supported for Quasar-only"
+            )
+
     def generate_runtime_args_struct(self):
         # Generate runtime parameter struct
         lines = [
@@ -1270,11 +1195,18 @@ class TestConfig:
         serialised_data = struct.pack(self.runtime_format, *argument_data)
 
         if len(serialised_data) != 0:
-            write_to_device(
-                TestConfig.TENSIX_LOCATION,
-                TestConfig.runtime_address(),
-                serialised_data,
-            )
+            if TestConfig.WITH_COVERAGE:
+                write_to_device(
+                    TestConfig.TENSIX_LOCATION,
+                    TestConfig.RUNTIME_ADDRESS_COVERAGE,
+                    serialised_data,
+                )
+            else:
+                write_to_device(
+                    TestConfig.TENSIX_LOCATION,
+                    TestConfig.RUNTIME_ADDRESS_NON_COVERAGE,
+                    serialised_data,
+                )
 
     def collect_hash(self):
         lock_file = TEMP_DIR / "tt-llk-build-print.lock"
@@ -1393,14 +1325,7 @@ class TestConfig:
         ]
 
         self.variant_id = sha256(
-            str(
-                " | ".join(
-                    temp_str
-                    + ["<<search-dirs>>"]
-                    + search_dirs
-                    + ["<<memory-layout>>", str(TestConfig.memory_layout())]
-                )
-            ).encode()
+            str(" | ".join(temp_str + ["<<search-dirs>>"] + search_dirs)).encode()
         ).hexdigest()
 
     def resolve_shared_compile_options(self) -> tuple[str, str, str]:
@@ -1430,17 +1355,20 @@ class TestConfig:
         return self._compose_compile_options(self._header_include_tokens())
 
     def _compose_compile_options(self, include_tokens: list) -> tuple[str, str, str]:
-        MEMORY_LAYOUT_LD_SCRIPT = str(TestConfig.memory_layout())
         if (
             TestConfig.OPTIONS_COMPILE is not None
+            and TestConfig.MEMORY_LAYOUT_LD_SCRIPT is not None
             and TestConfig.NON_COVERAGE_OPTIONS_COMPILE is not None
         ):
             return (
                 TestConfig.OPTIONS_COMPILE,
                 MEMORY_LAYOUT_LD_SCRIPT,
-                TestConfig.NON_COVERAGE_OPTIONS_COMPILE,
+                NON_COVERAGE_OPTIONS_COMPILE,
             )
 
+        MEMORY_LAYOUT_LD_SCRIPT = (
+            f"{TestConfig.LINKER_SCRIPTS}/memory.{TestConfig.ARCH.value}.ld"
+        )
         include_flags = " ".join(shlex.quote(flag) for flag in include_tokens)
         OPTIONS_COMPILE = f"{include_flags} {TestConfig.INITIAL_OPTIONS_COMPILE} "
 
@@ -1457,9 +1385,16 @@ class TestConfig:
             OPTIONS_COMPILE += (
                 "-fprofile-arcs -ftest-coverage -fprofile-info-section -DCOVERAGE "
             )
+            MEMORY_LAYOUT_LD_SCRIPT = (
+                f"{TestConfig.LINKER_SCRIPTS}/memory.{TestConfig.ARCH.value}.debug.ld"
+            )
 
         if self.profiler_build == ProfilerBuild.Yes:
             OPTIONS_COMPILE += "-DLLK_PROFILER "
+            # Marker ids hash __FILE__; strip the checkout location so they do not depend on it.
+            llk_roots = {TestConfig.LLK_ROOT, TestConfig.LLK_ROOT.resolve()}
+            for root in sorted(llk_roots):
+                OPTIONS_COMPILE += f"{shlex.quote(f'-fmacro-prefix-map={root}/=')} "
 
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
@@ -1808,6 +1743,11 @@ class TestConfig:
                 if not self.compile_time_formats:
                     optional_kernel_flags += " -DRUNTIME_FORMATS"
 
+                # Only TRISC0 has the vector unit on Quasar. The flag is after
+                # ARCH_COMPUTE so it overrides the march implied by -mcpu.
+                if self.requires_vector_ext and name == "unpack":
+                    optional_kernel_flags += f" {TestConfig.QUASAR_VECTOR_MARCH}"
+
                 # EXPERIMENT: enable -DPERF_COUNTERS_COMPILED on TRISC.
                 # Quasar is intentionally excluded: it adds a 4th compute thread
                 # (SFPU) and the entry/exit barrier in `counters.h` posts a fixed
@@ -1843,7 +1783,7 @@ class TestConfig:
                     device_print_flags = (
                         "-DDEBUG_PRINT_ENABLED "
                         f"-DLLK_DEVICE_PRINT_BUFFER_BASE={kernel_buffer_base:#x} "
-                        f"-DLLK_RUNTIME_ARGS_START={TestConfig.runtime_address():#x} "
+                        f"-DLLK_RUNTIME_ARGS_START={TestConfig.DEVICE_PRINT_RUNTIME_ARGS_START:#x} "
                         f"-DDEVICE_PRINT_BUFFER_SIZE={TestConfig.DEVICE_PRINT_BUFFER_SIZE} "
                         f"-DDEVICE_PRINT_BUFFER_SIZE2={TestConfig.DEVICE_PRINT_BUFFER_SIZE2} "
                         f"-DPROCESSOR_INDEX={risc_id} "

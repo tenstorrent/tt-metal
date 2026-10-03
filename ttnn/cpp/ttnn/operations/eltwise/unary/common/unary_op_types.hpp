@@ -137,7 +137,6 @@ enum class UnaryOpType {
     DIGAMMA,
     POLYGAMMA,
     SOFTCAP,
-    TT_POLY_BACKWARD_ERF_BW,
 };
 
 enum class VecMode {
