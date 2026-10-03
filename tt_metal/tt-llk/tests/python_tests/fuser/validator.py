@@ -410,6 +410,74 @@ class UnarySfpuMathSchema(BaseModel):
         return None
 
 
+class TopKSfpuMathSchema(BaseModel):
+    """Four-tile TopK network with independent value and index payloads."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    _sfpu_cls: ClassVar = None
+
+    type: Literal["TopKSfpu"]
+    operation: MathOperation
+    k: Literal[4, 8, 16, 32, 64] = 32
+    descending: bool = True
+    m_iter: int = Field(default=0, ge=0, le=9)
+    skip_second: bool = False
+    indexes: Optional[Union[str, IndexesSchema]] = None
+    block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 128]
+
+    @field_validator("operation", mode="before")
+    @classmethod
+    def parse_operation(cls, value):
+        return parse_sfpu_operation(
+            value,
+            {
+                MathOperation.TopKLocalSort,
+                MathOperation.TopKMerge,
+                MathOperation.TopKRebuild,
+            },
+            "TopK",
+        )
+
+    @field_validator("block_size")
+    @classmethod
+    def validate_block_size(cls, value):
+        if value != [32, 128]:
+            raise ValueError(
+                "TopKSfpu requires block_size [32, 128] (four contiguous tiles)"
+            )
+        return value
+
+    @staticmethod
+    def validate_bank(planned_nodes, bank, topk_nodes):
+        written = set()
+        for planned in planned_nodes:
+            if planned.node in topk_nodes:
+                if any(call.dest != 0 for call in planned.loop.calls(bank)):
+                    raise ValueError(
+                        "TopKSfpu requires every resolved dest origin to be 0"
+                    )
+                missing = {0, 1, 2, 3} - written
+                if missing:
+                    raise ValueError(
+                        "TopKSfpu requires dest tiles 0-3 to be initialized in each bank "
+                        f"before execution; missing tiles: {sorted(missing)}"
+                    )
+            elif planned.role in ("math", "sfpu"):
+                written.update(planned.dest_tiles((bank,), ("dest",)))
+
+    def to_node(self, operands):
+        return SfpuNode(
+            type(self)._sfpu_cls(
+                self.operation, self.k, self.descending, self.m_iter, self.skip_second
+            ),
+            index_spec=self.indexes,
+        )
+
+    def get_output_dimensions(self, operands):
+        return None
+
+
 class BinarySfpuMathSchema(BaseModel):
     """Base schema for binary SFPU math nodes (type="BinarySfpu").
 
@@ -725,6 +793,11 @@ class OperationSchemaBase(BaseModel):
 
     def to_l1_operation(self, operands, dest_acc=False):
         tile_shape = self._resolve_output_tile_shape(operands)
+        if any(
+            isinstance(s, TopKSfpuMathSchema) for s in list(self.math) + list(self.pack)
+        ):
+            if tile_shape.tile_dims != (32, 32):
+                raise ValueError("TopKSfpu requires full 32x32 tiles")
 
         tile_r = tile_shape.total_row_dim()
         tile_c = tile_shape.total_col_dim()
@@ -802,7 +875,17 @@ class OperationSchemaBase(BaseModel):
             max_output_dimensions=max_out_dims,
             **kwargs,
         )
-        plan_pipeline(operation, dest_acc)
+        blocks = plan_pipeline(operation, dest_acc)
+        topk_nodes = {
+            node
+            for schema, node in zip(all_schemas, math_ops + pack_nodes)
+            if isinstance(schema, TopKSfpuMathSchema)
+        }
+        if not topk_nodes:
+            return operation
+        for block in blocks:
+            for bank in block.bank.bank_assignments():
+                TopKSfpuMathSchema.validate_bank(block.nodes, bank, topk_nodes)
         return operation
 
     def _calculate_max_output_dimensions(self, operands) -> Tuple[int, int]:
