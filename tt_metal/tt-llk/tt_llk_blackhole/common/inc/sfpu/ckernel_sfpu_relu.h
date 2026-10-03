@@ -71,6 +71,7 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _relu_max_float_impl_(const int iterations, const float threshold)
 {
     sfpi::vConstFloatPrgm1 = threshold;
+#pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
         sfpi::vFloat v   = sfpi::dst_reg[0];
@@ -220,6 +221,7 @@ inline void _relu_min_impl_(const int iterations, VecType threshold, const Thres
     }
     else
     {
+#pragma GCC unroll 8
         for (int d = 0; d < iterations; d++)
         {
             VecType a = sfpi::dst_reg[0];

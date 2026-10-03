@@ -28,6 +28,17 @@ namespace ckernel {
 */
 // clang-format on
 ALWI void clamp_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_clamp,
+        (APPROX, 32 /* ITERATIONS */),
+        idst,
+        VectorMode::None,
+        param0,
+        param1));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -37,6 +48,7 @@ ALWI void clamp_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
         VectorMode::RC,
         param0,
         param1));
+#endif
 }
 
 #ifndef ARCH_QUASAR

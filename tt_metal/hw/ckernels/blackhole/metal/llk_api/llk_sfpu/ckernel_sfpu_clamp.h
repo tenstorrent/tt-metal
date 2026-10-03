@@ -19,6 +19,7 @@ inline void clamp_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_clamp(uint min_val, uint max_val) {
     // SFPU microcode
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         load_value_param_float(min_val);
         calculate_unary_max_min_float_body<Max>();

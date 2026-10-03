@@ -69,7 +69,7 @@ inline void _calculate_reciprocal_fast_7b_(const int iterations) {
 #endif
 }
 
-// BF16 reciprocal using a Newton correction on the BF16 LSB.
+// BF16 reciprocal using a Newton correction on the BF16 LSB. `iterations` is even (8 or 32).
 inline void _calculate_reciprocal_fast_8b_3c_(const int iterations) {
 #ifdef DISABLE_SFPLOADMACRO
     TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_USHORT, 0x8000);
@@ -86,17 +86,20 @@ inline void _calculate_reciprocal_fast_8b_3c_(const int iterations) {
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
     }
 #else
-    constexpr int y = p_sfpu::LREG0;
-    constexpr int x = p_sfpu::LREG1;
+    // Two vectors in flight, a in LREG0 and LREG1, b in LREG2 and LREG3, interleaved so that no instruction reads
+    // the result of the one issued just before it.
+    constexpr int ya = p_sfpu::LREG0;
+    constexpr int xa = p_sfpu::LREG1;
+    constexpr int yb = p_sfpu::LREG2;
+    constexpr int xb = p_sfpu::LREG3;
 
-    // Macro template 0 uses SFPMAD_MOD1_INDIRECT_VD, so LREG7 selects where
-    // the source x copy lands.
-    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, x);
+    // Macro template 0 uses SFPMAD_MOD1_INDIRECT_VD, so LREG7 selects where the copy of the loaded value lands.
+    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, p_sfpu::LREG6);
 
-    // Pseudocode for the BF16 correction:
+    // Pseudocode for the BF16 correction of one vector:
     //
     // y = load()
-    // x = y
+    // x = load()
     // y = arecip(y)
     // y[15:0] = 0x8000
     // e = x * y - 1
@@ -104,42 +107,25 @@ inline void _calculate_reciprocal_fast_8b_3c_(const int iterations) {
     // y += t          # integer add, not FP32 add
     // store(y)
 #pragma GCC unroll 8
-    for (int d = 0; d < iterations; d++) {
-        TT_SFPLOADMACRO(
-            /*lreg_ind*/ (0 << 2) | y,
-            /*instr_mod0*/ InstrModLoadStore::DEFAULT,
-            /*sfpu_addr_mode*/ ADDR_MOD_7,
-            /*dest_reg_addr*/ 0);
-        // Macro 0 schedules y = arecip(y) and x = y for the next SFPU issue.
-        // Wait before writing y's low 16 bits directly.
-        TTI_SFPNOP;
+    for (int d = 0; d < iterations; d += 2) {
+        TTI_SFPLOADMACRO((0 << 2) | ya, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+        // arecip(a) and the copy execute at this issue; the load of x_a takes the third write port.
+        TTI_SFPLOAD(xa, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+        TTI_SFPLOADMACRO((0 << 2) | yb, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 2);
+        TTI_SFPLOAD(xb, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 2);
         // Keep the patch and correction in LReg space; macro store/reload
         // scheduling can read a just-written Dst block too soon on Blackhole.
-        TTI_SFPLOADI(
-            /*lreg_ind*/ y,
-            /*instr_mod0*/ sfpi::SFPLOADI_MOD0_LOWER,
-            /*imm16*/ 0x8000);
-        TTI_SFPMAD(
-            /*lreg_src_a*/ x,
-            /*lreg_src_b*/ y,
-            /*lreg_src_c*/ p_sfpu::LCONST_neg1,
-            /*lreg_dest*/ x,
-            /*instr_mod1*/ 0);
-        TTI_SFPSHFT(
-            /*imm12_math*/ (-16) & 0xFFF,
-            /*lreg_c*/ x,
-            /*lreg_dest*/ x,
-            /*instr_mod1*/ 5);
-        TTI_SFPIADD(
-            /*imm12_math*/ 0,
-            /*lreg_c*/ x,
-            /*lreg_dest*/ y,
-            /*instr_mod1*/ sfpi::SFPIADD_MOD1_CC_NONE);
-        TTI_SFPSTORE(
-            /*lreg_ind*/ y,
-            /*instr_mod0*/ InstrModLoadStore::DEFAULT,
-            /*sfpu_addr_mode*/ ADDR_MOD_6,
-            /*dest_reg_addr*/ 0);
+        TTI_SFPLOADI(ya, sfpi::SFPLOADI_MOD0_LOWER, 0x8000);
+        TTI_SFPLOADI(yb, sfpi::SFPLOADI_MOD0_LOWER, 0x8000);
+        TTI_SFPMAD(xa, ya, p_sfpu::LCONST_neg1, xa, 0);
+        TTI_SFPMAD(xb, yb, p_sfpu::LCONST_neg1, xb, 0);
+        TTI_SFPSHFT((-16) & 0xFFF, xa, xa, 5);
+        TTI_SFPSHFT((-16) & 0xFFF, xb, xb, 5);
+        TTI_SFPIADD(0, xa, ya, sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPIADD(0, xb, yb, sfpi::SFPIADD_MOD1_CC_NONE);
+        // ADDR_MOD_6 advances DEST by one vector per store.
+        TTI_SFPSTORE(ya, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
+        TTI_SFPSTORE(yb, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
     }
 
     TTI_SFPNOP;
