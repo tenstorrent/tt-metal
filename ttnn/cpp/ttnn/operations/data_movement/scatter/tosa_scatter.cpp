@@ -130,6 +130,14 @@ Tensor tosa_scatter(
 
     operations::data_movement::CMAKE_UNIQUE_NAMESPACE::validate_tensors(input_shape, index_shape, source_shape);
 
+    // Same empty-operand bail-out as ttnn::scatter, repeated because this entry point builds the
+    // device op itself and so never passes through that guard. Source is not checked: validate_tensors
+    // above pins it to (N, W, C) with N and C from input and W from index, so an empty source always
+    // implies an empty input or an empty index. See #56881.
+    if (input_tensor.logical_volume() == 0 || index_tensor.logical_volume() == 0) {
+        return input_tensor;
+    }
+
     const uint32_t N = input_shape[0];
     const uint32_t W = index_shape[1];
     const uint32_t C = input_shape[2];

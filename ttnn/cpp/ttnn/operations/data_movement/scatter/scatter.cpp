@@ -272,7 +272,15 @@ Tensor scatter(
     validate_inputs(input_tensor, index_tensor, source_tensor, normalized_dim, opt_reduction_string);
 
     const auto& original_index_tensor_lshape = index_tensor.logical_shape();
-    if (original_input_tensor_lshape == ttnn::Shape{} || original_index_tensor_lshape == ttnn::Shape{}) {
+    // Empty operand: nothing to scatter, and the device op cannot be built for it either way;
+    // torch returns the input unchanged. See #56881. The scatter axis is transposed to last before
+    // the factories divide by it, so the extent that matters is shape[dim], not shape[-1]. Do not
+    // widen the index test to logical_volume() == 0: an index empty on a non-scatter axis already
+    // works and returns a fresh tensor. An empty source implies an empty index. Returned as-is,
+    // not copied: clone() and to_memory_config() crash on a zero-volume tensor too, so a requested
+    // memory_config is not applied here, as on the rank-0 path above.
+    if (original_input_tensor_lshape == ttnn::Shape{} || original_index_tensor_lshape == ttnn::Shape{} ||
+        input_tensor.logical_volume() == 0 || original_index_tensor_lshape[normalized_dim] == 0) {
         return input_tensor;
     }
     const auto original_layout = input_tensor.layout();
