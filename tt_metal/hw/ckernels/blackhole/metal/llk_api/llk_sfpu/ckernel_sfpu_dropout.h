@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "ckernel_addrmod.h"
 #include "ckernel_ops.h"
 #include "cmath_common.h"
 #include "sfpi.h"
@@ -23,13 +24,14 @@ inline void calculate_dropout(uint probability, uint scale) {
     TT_SFPLOADI(p_sfpu::LREG1, 8, scale >> 16);
     TT_SFPLOADI(p_sfpu::LREG2, 10, probability & 0xFFFF);
     TT_SFPLOADI(p_sfpu::LREG2, 8, probability >> 16);
-#pragma GCC unroll 0
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         ////////////////////////
         // Scale samples
         // dst_reg[0] = dst_reg[0] * sFloat16b(scale);
         ///////////////////////
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, 3, 0);
+        // ADDR_MOD_7 is the record the SFPU inits program (zero DEST step); record 3 belongs to the FPU inits.
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
         TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
 
         ////////////////////////
@@ -49,7 +51,7 @@ inline void calculate_dropout(uint probability, uint scale) {
         TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG3, 10);
         TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
         TTI_SFPENCC(0, 0, 0, 0);
-        TTI_SFPSTORE(0, InstrModLoadStore::DEFAULT, 3, 0);
+        TTI_SFPSTORE(0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
 
         sfpi::dst_reg++;
     }
