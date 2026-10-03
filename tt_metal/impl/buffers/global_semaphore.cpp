@@ -18,6 +18,7 @@
 
 #include "global_semaphore_impl.hpp"
 #include "impl/dispatch/host_device_transfer.hpp"
+#include "mesh_command_queue.hpp"
 #include "mesh_device.hpp"
 #include <tt_stl/reflection.hpp>
 #include "impl/context/metal_context.hpp"
@@ -59,6 +60,8 @@ void GlobalSemaphoreImpl::reset_semaphore_value(uint32_t reset_value) const {
 }
 
 void GlobalSemaphoreImpl::reset_semaphore_value(uint32_t reset_value, distributed::MeshCommandQueue& mesh_cq) const {
+    TT_FATAL(
+        mesh_cq.device() == &device(), "MeshCommandQueue belongs to a different MeshDevice than the GlobalSemaphore");
     this->reset_semaphore_value(reset_value, &mesh_cq);
 }
 
