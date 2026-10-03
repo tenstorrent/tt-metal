@@ -19,9 +19,8 @@
 //  - BlockingPolicy: K depth (in0_block_w) and output blocks within the split, inside the L1 budget;
 //  - SubblockPolicy: the output subblock within a block;
 //  - FamilyPolicy: which family's candidate to propose.
-// The proposal is the chosen candidate and, for interleaved problems, its legal K-depth neighbours, for the
-// estimators to rank. Sharded tensors constrain the choice rather than change the rules: a sharded A fixes the
-// family, grid and per-core sizes (width -> 1D in0-mcast, height -> 1D in1-mcast or Reuse for batched B,
+// The proposal is the chosen candidate. Sharded tensors constrain the choice rather than change the rules: a sharded A
+// fixes the family, grid and per-core sizes (width -> 1D in0-mcast, height -> 1D in1-mcast or Reuse for batched B,
 // block -> 2D), a sharded output (with interleaved inputs) fixes the family (and with a shard spec, the grid
 // and per-core sizes), and the policies choose what remains within the layout's BlockRules.
 namespace ttnn::operations::matmul::auto_config {
@@ -75,9 +74,9 @@ public:
 };
 
 // Issue #57884's block-size heuristics with one K block depth rule:
-//  - 2D: the largest in0_block_w * out_block_h * out_block_w that fits L1; ties go to the larger output block,
-//    then the squarer one. Where K blocks are costly (packer L1 accumulation off or a block-float input),
-//    interleaved 2D may use K blocks up to Kt / max_costly_k_blocks deep;
+//  - 2D: the largest in0_block_w * out_block_h * out_block_w that fits L1; ties go to the block that moves the
+//    fewest input tiles (and, where K blocks are costly, partials) per K block. Where K blocks are costly (packer L1
+//    accumulation off or a block-float input), interleaved 2D may use K blocks up to Kt / max_costly_k_blocks deep;
 //  - 1D: the full per-core extent along the multicast dimension, the other one shrunk only if needed, unless
 //    that forces single-tile K steps; 1D in0-mcast splits a wide output block into subblock-wide blocks;
 //  - Reuse: the deepest in0_block_w within the K depth rule that fits.
@@ -95,8 +94,7 @@ public:
     struct Tuned {
         // K block depth, for every family: in0_block_w is at most this. Deeper K blocks stop paying for
         // themselves, and in 2D the block-size heuristic would otherwise trade output-block size (the only source
-        // of data reuse) for K depth. The mcast families also keep at least two K blocks, since with a single
-        // block they single-buffer the inputs. Basis: 8 against 16 on the Wormhole OOB suite; range not measured.
+        // of data reuse) for K depth. Basis: 8 against 16 on the Wormhole OOB suite; range not measured.
         uint32_t max_in0_block_w = 8;
         // With packer L1 accumulation off or a block-float input, each 2D K block's fixed cost (packing, and
         // without accumulation reloading, the whole output block's partials) dominates, and K is split into at most
@@ -111,10 +109,12 @@ public:
         // suite); 12 on Blackhole, the smallest value giving t_matmul_53dd and 4e7d (3 tiles per K step) K 4 in a BH
         // probe, while 1D layouts reading 5 or more tiles per step keep K 2.
         uint32_t max_self_read_tiles_per_k_step = 8;
-        // 2D blocks that fit with in0_block_w at least Limits::min_in0_block_w win over larger blocks that only
-        // fit below it (see block_2d): every K block ends with a pack of the whole output block, which on an
-        // architecture that moves data fast relative to compute doesn't hide behind the reads. Basis: off on
-        // Wormhole (i29716_dit wants large 2D blocks at K 1), on for Blackhole (BH probe of g_4096).
+        // Every K block ends with a pack of the whole output block, which on an architecture that moves data fast
+        // relative to compute doesn't hide behind the reads. When on, 2D blocks that fit with in0_block_w at least
+        // Limits::min_in0_block_w win over larger blocks that only fit below it, and the 2D tie-break counts the
+        // packed partials for every block, not only where K blocks are costly (see block_2d). Basis: off on
+        // Wormhole (i29716_dit wants large 2D blocks at K 1, and large bf16 blocks over deeper K at equal work),
+        // on for Blackhole (BH probe of g_4096; equal-work 2D ties go 5-8% faster deeper on BH bf16 shapes).
         bool k_depth_over_block_size = false;
     };
     struct Params {
@@ -191,7 +191,7 @@ public:
 
     std::string_view name() const override { return "factory_blocking"; }
 
-    // The family policy's choice, then (interleaved problems) its K-depth neighbours
+    // The family policy's choice
     std::vector<Candidate> propose(const MatmulDesc& matmul, const HardwareDesc& hw) const override;
 
     // The blocked candidate of each family that can run the problem and fits L1, in family order
@@ -206,10 +206,5 @@ private:
     std::shared_ptr<const SubblockPolicy> subblock_;
     std::shared_ptr<const FamilyPolicy> family_;
 };
-
-// A candidate's K-depth neighbours: the same candidate at the next deeper and the next shallower in0_block_w
-// dividing K within the factory limits (factory_limit_error; select() then checks every proposal in full).
-// Interleaved problems only (a sharded layout constrains K depth); empty otherwise.
-std::vector<Candidate> k_depth_neighbours(const MatmulDesc& matmul, const HardwareDesc& hw, const Candidate& candidate);
 
 }  // namespace ttnn::operations::matmul::auto_config

@@ -730,9 +730,8 @@ TEST(MatmulAutoConfig, ShardedEdgeLayouts) {
     }
 }
 
-// Every candidate the heuristics produce for interleaved problems is legal, and so is every K-depth neighbour,
-// which differs from its candidate only in in0_block_w
-TEST(MatmulAutoConfig, CandidatesAndNeighboursPassCheck) {
+// Every candidate the heuristics produce for interleaved problems is legal
+TEST(MatmulAutoConfig, CandidatesPassCheck) {
     for (const auto& arch : kArchs) {
         const auto hw = HardwareDesc::for_arch(arch.arch, arch.grid, kL1Budget);
         for (const auto& s : shapes()) {
@@ -751,16 +750,6 @@ TEST(MatmulAutoConfig, CandidatesAndNeighboursPassCheck) {
                         fp32_acc);
                     for (const auto& c : candidates(p, hw)) {
                         EXPECT_EQ(check_config(p, hw, to_program_config(p, c)), "") << label;
-                        for (const auto& n : k_depth_neighbours(p, hw, c)) {
-                            EXPECT_EQ(check_config(p, hw, to_program_config(p, n)), "") << label;
-                            EXPECT_NE(n.blocking.in0_block_w, c.blocking.in0_block_w) << label;
-                            auto same = n;
-                            same.blocking.in0_block_w = c.blocking.in0_block_w;
-                            EXPECT_EQ(
-                                fmt::format("{}", to_program_config(p, same)),
-                                fmt::format("{}", to_program_config(p, c)))
-                                << label;
-                        }
                     }
                 }
             }
@@ -768,33 +757,21 @@ TEST(MatmulAutoConfig, CandidatesAndNeighboursPassCheck) {
     }
 }
 
-// With the default estimators (the roofline, which doesn't depend on K depth) the refinement keeps the
-// heuristics' choice everywhere
-TEST(MatmulAutoConfig, DefaultEstimatorsKeepHeuristicChoice) {
-    for (const auto& arch : kArchs) {
-        const auto hw = HardwareDesc::for_arch(arch.arch, arch.grid, kL1Budget);
-        for (const auto& s : shapes()) {
-            for (auto in1 : {tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp4_b}) {
-                for (bool fp32_acc : {false, true}) {
-                    const auto p = make_matmul(s.batch_a, s.batch_b, s.M, s.K, s.N, in1, fp32_acc);
-                    const auto heuristic = choose(p, hw, heuristics_only());
-                    const auto chosen = choose(p, hw);
-                    ASSERT_EQ(heuristic.has_value(), chosen.has_value());
-                    if (chosen) {
-                        EXPECT_EQ(
-                            fmt::format("{}", to_program_config(p, *chosen)),
-                            fmt::format("{}", to_program_config(p, *heuristic)))
-                            << arch.name << " M=" << s.M << " K=" << s.K << " N=" << s.N;
-                    }
-                }
+// Estimators rank the sources' proposals: with several, the most confident estimate picks, and a less confident
+// one doesn't override it. Here a source proposes the heuristic choice and the same candidate at half its K depth.
+TEST(MatmulAutoConfig, EstimatorsRankProposals) {
+    struct HalfKToo final : CandidateSource {
+        std::string_view name() const override { return "half_k_too"; }
+        std::vector<Candidate> propose(const MatmulDesc& p, const HardwareDesc& hw) const override {
+            auto result = FactoryBlockingSource().propose(p, hw);
+            if (!result.empty() && result.front().blocking.in0_block_w % 2 == 0) {
+                auto half = result.front();
+                half.blocking.in0_block_w /= 2;
+                result.push_back(half);
             }
+            return result;
         }
-    }
-}
-
-// The roofline doesn't depend on K depth, so with the default estimators the K-depth refinement keeps the
-// heuristics' choice; a K-aware estimator moves it, and a less confident one doesn't
-TEST(MatmulAutoConfig, EstimatorsRefineKDepth) {
+    };
     struct PreferShallow final : Estimator {
         double confidence;
         explicit PreferShallow(double c) : confidence(c) {}
@@ -807,29 +784,23 @@ TEST(MatmulAutoConfig, EstimatorsRefineKDepth) {
     const auto p = make_matmul(1, 1, 1024, 8192, 1024);
     const auto seed = choose(p, hw, heuristics_only());
     ASSERT_TRUE(seed.has_value());
-    const auto neighbours = k_depth_neighbours(p, hw, *seed);
-    ASSERT_FALSE(neighbours.empty());
-    uint32_t shallowest = seed->blocking.in0_block_w;
-    for (const auto& n : neighbours) {
-        shallowest = std::min(shallowest, n.blocking.in0_block_w);
-    }
-    ASSERT_LT(shallowest, seed->blocking.in0_block_w);
+    ASSERT_EQ(seed->blocking.in0_block_w % 2, 0u);
 
-    const auto by_default = choose(p, hw);
-    ASSERT_TRUE(by_default.has_value());
-    EXPECT_EQ(by_default->blocking.in0_block_w, seed->blocking.in0_block_w);
-
+    const auto source = std::make_shared<HalfKToo>();
     const auto roofline_estimator = std::make_shared<RooflineEstimator>();
-    const Selector confident_first{
-        .sources = default_selector().sources,
-        .estimators = {roofline_estimator, std::make_shared<PreferShallow>(1.0)}};
-    const auto refined = choose(p, hw, confident_first);
+    // The roofline doesn't depend on K depth: ties keep the earlier proposal
+    const auto by_roofline = choose(p, hw, Selector{.sources = {source}, .estimators = {roofline_estimator}});
+    ASSERT_TRUE(by_roofline.has_value());
+    EXPECT_EQ(by_roofline->blocking.in0_block_w, seed->blocking.in0_block_w);
+
+    const auto refined = choose(
+        p, hw, Selector{.sources = {source}, .estimators = {roofline_estimator, std::make_shared<PreferShallow>(1.0)}});
     ASSERT_TRUE(refined.has_value());
-    EXPECT_EQ(refined->blocking.in0_block_w, shallowest);
-    const Selector doubtful_first{
-        .sources = default_selector().sources,
-        .estimators = {roofline_estimator, std::make_shared<PreferShallow>(-1.0)}};
-    const auto kept = choose(p, hw, doubtful_first);
+    EXPECT_EQ(refined->blocking.in0_block_w, seed->blocking.in0_block_w / 2);
+    const auto kept = choose(
+        p,
+        hw,
+        Selector{.sources = {source}, .estimators = {roofline_estimator, std::make_shared<PreferShallow>(-1.0)}});
     ASSERT_TRUE(kept.has_value());
     EXPECT_EQ(kept->blocking.in0_block_w, seed->blocking.in0_block_w);
 }

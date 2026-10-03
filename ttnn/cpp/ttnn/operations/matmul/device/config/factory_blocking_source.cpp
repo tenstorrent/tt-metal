@@ -20,9 +20,17 @@ using namespace detail;
 
 namespace {
 
-// Largest in0_block_w (see HeuristicBlocking::Params). With a single K block the mcast factories single-buffer
-// the inputs, so reading the next block can't overlap math on the current one: keep two blocks when K allows it.
-// The reuse factory always double-buffers.
+// Whether each K block's fixed cost (a handshake, and a pack of the whole output block's partials, which without
+// packer L1 accumulation the next block reloads) dominates: with a block-float input (a K block moves few input bytes
+// for it) or, for a block at least 2 tiles on each side, with L1 accumulation off (the pack and reload grow with the
+// block; a one-tile-tall or -wide block pays little). With accumulation on and 16-bit inputs the cost hides.
+bool costly_k_blocks(const MatmulDesc& p, uint32_t out_block_h, uint32_t out_block_w) {
+    const bool block_float = is_block_float(p.in0_format) || is_block_float(p.in1_format);
+    const bool reloads_partials = !p.packer_l1_acc && std::min(out_block_h, out_block_w) >= 2;
+    return block_float || reloads_partials;
+}
+
+// Largest in0_block_w (see HeuristicBlocking::Params).
 // Precision is the compute config's call: with packer L1 accumulation off (or when the factory doesn't use it),
 // partial sums go through the output format between K blocks, and the blocking doesn't try to avoid that.
 uint32_t max_in0_block_w(
@@ -32,7 +40,6 @@ uint32_t max_in0_block_w(
     uint32_t out_block_h,
     uint32_t out_block_w) {
     const uint32_t Kt = p.Kt;
-    const uint32_t two_blocks = (family != Family::Reuse && Kt >= 2) ? Kt / 2 : Kt;
     // Tiles per K step of the operand(s) each core reads itself rather than receiving by multicast
     uint32_t self_read = 0;
     switch (family) {
@@ -42,16 +49,9 @@ uint32_t max_in0_block_w(
         case Family::Reuse: self_read = out_block_h + out_block_w; break;
     }
     uint32_t depth = params.tuned.max_in0_block_w;
-    // Interleaved 2D where K blocks are costly. Every K block ends with a fixed cost: a handshake, and a pack of the
-    // whole output block's partials, which without packer L1 accumulation the next block reloads. It dominates
-    // with a block-float input (a K block moves few input bytes for it) or, for a block at least 2 tiles on each
-    // side, with L1 accumulation off (the pack and reload grow with the block; a one-tile-tall or -wide block pays
-    // little and deeper K would only lengthen its fill). Then K may be split into as few as Tuned::max_costly_k_blocks
-    // blocks, and the block search trades output block size against that depth. With accumulation on and 16-bit
-    // inputs the cost hides, and the depth cap stays max_in0_block_w.
-    const bool block_float = is_block_float(p.in0_format) || is_block_float(p.in1_format);
-    const bool reloads_partials = !p.packer_l1_acc && std::min(out_block_h, out_block_w) >= 2;
-    if (family == Family::Mcast2D && (block_float || reloads_partials) && !sharded_layout(p) &&
+    // Interleaved 2D where K blocks are costly (costly_k_blocks): K may be split into as few as
+    // Tuned::max_costly_k_blocks blocks, and the block search trades output block size against that depth.
+    if (family == Family::Mcast2D && costly_k_blocks(p, out_block_h, out_block_w) && !sharded_layout(p) &&
         params.tuned.max_costly_k_blocks != 0) {
         depth = std::max(depth, div_up(Kt, params.tuned.max_costly_k_blocks));
     }
@@ -59,7 +59,7 @@ uint32_t max_in0_block_w(
         self_read == 0
             ? depth
             : std::max(params.limits.min_in0_block_w, params.tuned.max_self_read_tiles_per_k_step / self_read);
-    return std::min({depth, two_blocks, self_read_limit});
+    return std::min({depth, Kt, self_read_limit});
 }
 
 bool k_allowed(const BlockRules& rules, uint32_t k) {
@@ -75,9 +75,8 @@ bool block_allowed(const BlockRules& rules, uint32_t per_core_N, uint32_t out_bl
 // 2D mcast (issue #57884 heuristic 1): largest in0_block_w * out_block_h * out_block_w that fits L1 (among
 // blocks at the layout's preferred in0_block_w, if any fit, then among blocks that fit with in0_block_w at least
 // Limits::min_in0_block_w when Tuned::k_depth_over_block_size is on: every K block ends with a pack of the whole
-// output block, which on some architectures doesn't hide behind data movement); ties go to the larger output block,
-// then the squarer one (each loaded A and B tile is reused across the block's width and height, so a square block
-// reuses the most for its area).
+// output block, which on some architectures doesn't hide behind data movement); ties go to the block that moves the
+// fewest tiles per K block (the most reuse for its work).
 std::optional<Blocking> block_2d(
     const HeuristicBlocking::Params& params,
     const MatmulDesc& p,
@@ -93,13 +92,18 @@ std::optional<Blocking> block_2d(
         bool preferred;      // at the layout's preferred in0_block_w (each K block a whole shard column)
         bool deep_enough;    // in0_block_w reaches the depth some architectures need before block size counts
         uint64_t volume;     // in0_block_w * out_block_h * out_block_w: tiles of work per K block
-        uint64_t area;       // out_block_h * out_block_w: the reuse of each loaded A and B tile
-        int64_t squareness;  // minus |h - w|: a square block reuses the most for its area
-        auto tie() const { return std::tie(preferred, deep_enough, volume, area, squareness); }
+        // Minus the tiles a K block moves for that work: k * h of A and k * w of B, plus the output block's h * w
+        // partials, packed after every K block, where that costs (costly_k_blocks, or always with
+        // Tuned::k_depth_over_block_size). At equal work, a squarer block (and, where partials count, a deeper
+        // one) moves less.
+        int64_t traffic;
+        auto tie() const { return std::tie(preferred, deep_enough, volume, traffic); }
     };
     auto rank_of = [&](uint32_t k, uint32_t h, uint32_t w) {
         const uint64_t area = static_cast<uint64_t>(h) * w;
-        return Rank{rules.prefers(k), deep_enough(k), area * k, area, -std::abs(static_cast<int64_t>(h) - w)};
+        const bool count_partials = params.tuned.k_depth_over_block_size || costly_k_blocks(p, h, w);
+        const int64_t traffic = static_cast<int64_t>(k) * (h + w) + (count_partials ? static_cast<int64_t>(area) : 0);
+        return Rank{rules.prefers(k), deep_enough(k), area * k, -traffic};
     };
     std::optional<Blocking> best;
     std::optional<Rank> best_rank;
@@ -497,11 +501,7 @@ std::vector<Candidate> FactoryBlockingSource::propose(const MatmulDesc& p, const
         return {};
     }
     loop_over_batch_if_better(p, hw, *chosen);
-    std::vector<Candidate> result = {*chosen};
-    for (auto& n : k_depth_neighbours(p, hw, *chosen)) {
-        result.push_back(std::move(n));
-    }
-    return result;
+    return {*chosen};
 }
 
 std::vector<Candidate> FactoryBlockingSource::candidates(const MatmulDesc& p, const HardwareDesc& hw) const {
@@ -762,40 +762,6 @@ std::vector<Candidate> FactoryBlockingSource::sharded_candidates(const MatmulDes
             hw.grid,
             pinned_workers(hw),
             false);
-    }
-    return result;
-}
-
-std::vector<Candidate> k_depth_neighbours(const MatmulDesc& p, const HardwareDesc& hw, const Candidate& c) {
-    std::vector<Candidate> result;
-    if (sharded_layout(p)) {
-        return result;
-    }
-    auto divisors = divisors_desc(p.Kt);  // largest first
-    auto legal_at = [&](uint32_t k) -> std::optional<Candidate> {
-        Candidate n = c;
-        n.blocking.in0_block_w = k;
-        if (factory_limit_error(p, hw, to_program_config(p, n)).empty()) {
-            return n;
-        }
-        return std::nullopt;
-    };
-    const auto here = std::find(divisors.begin(), divisors.end(), c.blocking.in0_block_w);
-    if (here == divisors.end()) {
-        return result;
-    }
-    // Deeper: the divisors before `here`, nearest first; shallower: those after it
-    for (auto it = std::make_reverse_iterator(here); it != divisors.rend(); ++it) {
-        if (auto n = legal_at(*it)) {
-            result.push_back(*n);
-            break;
-        }
-    }
-    for (auto it = std::next(here); it != divisors.end(); ++it) {
-        if (auto n = legal_at(*it)) {
-            result.push_back(*n);
-            break;
-        }
     }
     return result;
 }
