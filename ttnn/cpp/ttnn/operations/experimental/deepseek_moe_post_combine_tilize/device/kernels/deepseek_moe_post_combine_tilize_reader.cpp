@@ -6,31 +6,28 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 #include "tt-metalium/constants.hpp"
 
 void kernel_main() {
     Noc noc;
 
-    constexpr uint32_t cb_tilize_input_id = get_named_compile_time_arg_val("tilize_input_cb_id");
-    constexpr uint32_t bytes_to_read_per_row = get_named_compile_time_arg_val("bytes_to_read_per_row");
+    constexpr uint32_t bytes_to_read_per_row = get_arg(args::bytes_to_read_per_row);
 
-    uint32_t rt_args_idx = 0;
-    const uint32_t intra_row_byte_offset = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t row_page_offset = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t intra_row_byte_offset = get_arg(args::intra_row_byte_offset);
+    const uint32_t row_page_offset = get_arg(args::row_page_offset);
 
-    constexpr auto input_tensor_accessor_args = TensorAccessorArgs<0>();
-    const auto input_tensor_accessor = TensorAccessor(input_tensor_accessor_args, input_tensor_address);
+    const auto input_tensor_accessor = TensorAccessor(tensor::input);
 
     constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
 
-    CircularBuffer cb_tilize_input(cb_tilize_input_id);
+    DataflowBuffer dfb_tilize_input(dfb::tilize_input);
 
-    cb_tilize_input.reserve_back(tile_height);
-    uint32_t l1_write_addr = cb_tilize_input.get_write_ptr();
+    dfb_tilize_input.reserve_back(tile_height);
+    uint32_t l1_write_addr = dfb_tilize_input.get_write_ptr();
 
     uint32_t page_id = row_page_offset;
     for (uint32_t row = 0; row < tile_height; ++row) {
@@ -46,5 +43,5 @@ void kernel_main() {
     }
 
     noc.async_read_barrier();
-    cb_tilize_input.push_back(tile_height);
+    dfb_tilize_input.push_back(tile_height);
 }
