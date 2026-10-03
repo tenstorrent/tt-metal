@@ -1,22 +1,29 @@
-# t48 notes: all LTX-2.5 wins on one branch
+# t100 notes (halo-mode conv3d re-sweep)
 
-Branch ttp/t48-ltx25-integrated (= ttp/t48-integrate-all-ltx-2-5-wins-on-one-branch), base t36 16ba9a383dc.
-Merged: t20+t40 (9e336c44b71, includes 0533827a419), t13 (eee3baf7c0d), t18 (63902277007),
-t44 tip (1968790b040 + its A/B harness), t8 ltx_eval harness. Python-only diff against t36.
+## Why conv3d rose 308 -> 360 ms (t61 job 029 vs t96)
+- Same blockings, same 1150 MHz clamp. 029 ran conv3d on a pre-padded zeros input (NeighborPad 119 ms + T concat
+  38 ms outside the conv). t96 runs the halo-only reader (unpadded shard, T replicate, halo buffer, H/W logical masks,
+  pad_offset). That moves ~52 ms into conv3d while removing ~150 ms elsewhere. 029's per-op CSV is gone.
+- t96 per-layer conv3d (ms, 8-chip max): s2_res 138.5 (9x15.39), s3_res 83.3 (12x6.95), s4_res 71.3 (8x8.92),
+  s1_up 23.1, s3_chg 13.6, s1_res 10.5, s0_res 9.1, s0_up 6.4, s4_out 4.5.
+- Job 458 confirms per layer: s2_res table blocking 15240 us halo vs 13376 us pre-padded (+14%).
 
-Conflicts:
-- pipeline_ltx_distilled.py: t13 and t40 both capture the Gemma encode trace after gen #0. Kept t40's
-  open_trace_gate() + capture_trace() (guarded by _trace_captured). t13's open_trace_gate(capture_prompt=) was removed in t55 (no caller).
-- utils/video.py: t18's YuvVideoExport (worker-thread video encode) + t13's zero-copy frame wrap and start_encoding;
-  the AAC encode runs in finish() before joining the worker, so it overlaps the video encode as in t13.
-  test_yuv_export_encodes_audio_alongside_video now gates the video worker on the audio encode starting
-  (fails if finish() encodes audio after the join; checked).
-- test_ltx_export_latency.py: gemma -> gemma3 import path.
+## Harness (47aecb9bdd7, 82f0ee930dd)
+- run_sweep(halo=HaloSpec(...), table_key=..., max_seconds=..., near_table=True). LTX list + device test in
+  models/tt_dit/tests/models/ltx/bruteforce_conv3d_sweep_ltx.py (opens (4,8), create_submesh(2,4)). CPU test
+  test_conv3d_sweep_halo_cpu.py: 8 pass. hw_product=32 only (16/64 hung in wan 2x4 sweeps), max_t_block 8.
+- JSON per layer: table_us (halo), table_padded_us, best_blocking/best_us, top_20, output_check
+  (md5/max_abs_diff/PCC of best vs table on first and last device).
 
-CPU tests (python_env, PYTHONPATH=worktree): export/trace/eval/cache/ltx set (13 files) 78 passed, 8 skipped;
-13 pre-existing failures in test_ltx_euler_tail.py and test_ltx_embedding_cache_identity.py (they read
-models/tt_dit/encoders/gemma/, renamed to gemma3); same 13 fail on the t36 base tree.
-Fold CPU reference (--noconftest): 5 passed. The 78 include the ltx_eval harness (8) and the 13 export/trace tests.
+## Device run (blx03)
+- Driver: /var/tmp/fasth3/t100/src/tmp/blx03/t100/driver100.sh, launched 2026-10-03 07:18 UTC. One broker job per
+  layer, in order s2_res s3_res s4_res s1_up (first job 458). Marker `T100_DRIVER_DONE <stage> <rc>` in
+  g14blx03:/var/tmp/fasth3/t100/driver.log; rc 9 = drop/reboot during OUR job -> stop ALL device work, report.
+  Per-layer log run100_<layer>.log, results in /var/tmp/fasth3/t100/results/<layer>_*.json.
+- Re-launch for missing layers: `LAYERS="..."` env; finished layers have results/<layer>_done.
 
-Device: not run (blx03 paused; full-mesh barred by the 22:10 rule). Ready job: tmp/READY_48.md, tmp/blx03/run48.sh.
-Next: when the user allows full-mesh runs on blx03, follow tmp/READY_48.md (setup, one job, timings, ltx_eval vs t20).
+## Next
+1. Read the 4 JSONs. For each layer with best_us <= 0.97 * table_us, update _BLOCKINGS key (4,8,...) in
+   models/tt_dit/utils/conv3d.py. Check output_check (PCC ~1; md5 may differ when C_in_block changes).
+2. Then one short decode A/B on blx03 2x4 (t97 harness pattern, LTX_CONV3D_BLOCKING_MESH=4,8): wall time and YUV
+   md5/PSNR vs current table. Clean /var/tmp/fasth3/t100/src afterwards.
