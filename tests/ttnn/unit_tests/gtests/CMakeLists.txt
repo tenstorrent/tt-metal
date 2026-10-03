@@ -107,6 +107,7 @@ target_link_libraries(
         test_common_libs
         test_common_utils
         TTNN::CPP
+        TTNN::Ops::Wavelet
 )
 tt_reuse_precompile_headers(unit_tests_ttnn_basic TTNN::TestPCH)
 
