@@ -54,9 +54,10 @@ static inline TopKCoreDistribution cores_utilized(
     const std::uint32_t l1_size,
     const std::uint32_t value_tile_size,
     const std::uint32_t index_tile_size,
+    bool tree_merge,
     std::uint32_t tile_width = 32) {
     const auto config_opt = find_topk_core_config(
-        width, min_dim, max_dim, k, core_range, l1_size, value_tile_size, index_tile_size, tile_width);
+        width, min_dim, max_dim, k, core_range, l1_size, value_tile_size, index_tile_size, tree_merge, tile_width);
     // select_program_factory only picks the multi-core factory after verify_multi_core_cost
     // succeeded with the same arguments, so a valid config must exist here. The old fallback
     // fabricated a config with selected_x/selected_y = 0 (and an unsigned-underflow-prone core
@@ -150,6 +151,9 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
 
     const auto& device = input_tensor.device();
 
+    // The tree merge of the local results was measured on Blackhole; other archs keep main's merge on the final core.
+    const bool tree_merge = device.arch() == tt::ARCH::BLACKHOLE;
+
     const auto input_shape = input_tensor.padded_shape();
     const std::uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
     const std::uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
@@ -165,6 +169,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         device.l1_size_per_core(),  // L1 memory per core
         value_tile_size,            // Value tile memory footprint
         index_tile_size,            // Index tile memory footprint
+        tree_merge,
         tile_width);
 
     constexpr bool select_cores_row_wise = false;
@@ -197,9 +202,24 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
 
     // Calculate processing dimensions in tile units
     const std::uint32_t Wt_local = local_topk_input_size / tile_width;  // Width tiles per local core
-    const std::uint32_t Wt_final = final_topk_input_size / tile_width;  // Total width tiles for final core
     const std::uint32_t Kt =
         args.k % tile_width == 0 ? args.k / tile_width : (args.k / tile_width) + 1;  // TopK in tiles
+
+    // In round r core i (i % 2^(r+1) == 0) merges its Kt tiles with those of core i + 2^r; after log2(n) rounds
+    // the final core only passes core 0's tiles through.
+    const std::uint32_t num_local_cores = num_cores - 1;
+    TT_FATAL(
+        !tree_merge || (num_local_cores >= 2 && (num_local_cores & (num_local_cores - 1)) == 0),
+        "TopK multi-core tree merge requires a power-of-two number of local cores, got {}",
+        num_local_cores);
+    TT_FATAL(
+        final_topk_input_size / tile_width == num_local_cores * Kt,
+        "TopK multi-core gather width {} tiles does not match {} local cores x Kt {}",
+        final_topk_input_size / tile_width,
+        num_local_cores,
+        Kt);
+    const std::uint32_t tree_rounds = tree_merge ? static_cast<std::uint32_t>(std::log2(num_local_cores)) : 0;
+    const std::uint32_t Wt_final = (num_local_cores >> tree_rounds) * Kt;  // Width tiles the final core merges
 
     const std::uint32_t num_cb_unit = 2;                // Base buffering unit
     const std::uint32_t cb_in_units = 2 * num_cb_unit;  // 4 units total for double-buffered input
@@ -327,6 +347,58 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         });
     }
 
+    constexpr std::uint32_t landing_values_cb_index = tt::CBIndex::c_10;
+    constexpr std::uint32_t landing_indices_cb_index = tt::CBIndex::c_11;
+    constexpr std::uint32_t merge_values_cb_index = tt::CBIndex::c_12;
+    constexpr std::uint32_t merge_indices_cb_index = tt::CBIndex::c_13;
+    if (tree_merge) {
+        // Landing slot: own Kt tiles in the first half, the partner's in the second, one slot so its address is fixed.
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = 2 * Kt * interm_value_tile_size,
+            .core_ranges = local_cores_range_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<std::uint8_t>(landing_values_cb_index),
+                .data_format = interm_value_cb_data_format,
+                .page_size = interm_value_tile_size,
+            }}},
+        });
+
+        if (!fused_stable_keys) {
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = 2 * Kt * index_tile_size,
+                .core_ranges = local_cores_range_set,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<std::uint8_t>(landing_indices_cb_index),
+                    .data_format = index_cb_data_format,
+                    .page_size = index_tile_size,
+                }}},
+            });
+        }
+
+        // Tree-merge workspace: the one in-place bitonic merge step per round runs on these 2*Kt tiles.
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = 2 * Kt * interm_value_tile_size,
+            .core_ranges = local_cores_range_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<std::uint8_t>(merge_values_cb_index),
+                .data_format = interm_value_cb_data_format,
+                .page_size = interm_value_tile_size,
+            }}},
+        });
+
+        if (!fused_stable_keys) {
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = 2 * Kt * index_tile_size,
+                .core_ranges = local_cores_range_set,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<std::uint8_t>(merge_indices_cb_index),
+                    .data_format = index_cb_data_format,
+                    .page_size = index_tile_size,
+                }}},
+            });
+        }
+    }
+
     // Local TopK values output — split format between local and final cores.
     //
     // Local cores (bf16): the sorted Kt tile in transposed layout has rows of the form
@@ -390,6 +462,8 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     // Semaphore-based flow control for coordinating data transfer between local and final cores
     const std::uint32_t sender_semaphore_id = 0;    // Tracks data transmission completion
     const std::uint32_t receiver_semaphore_id = 1;  // Signals readiness to receive data
+    const std::uint32_t credit_semaphore_id = 2;    // Tree merge: parent freed its landing slot for the child
+    const std::uint32_t data_semaphore_id = 3;      // Tree merge: child landed its tiles in the parent's slot
     desc.semaphores.push_back(SemaphoreDescriptor{
         .id = sender_semaphore_id,
         .core_type = tt::CoreType::WORKER,
@@ -402,6 +476,16 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         .core_ranges = all_cores_range_set,
         .initial_value = INVALID,
     });
+    if (tree_merge) {
+        for (const std::uint32_t id : {credit_semaphore_id, data_semaphore_id}) {
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = id,
+                .core_type = tt::CoreType::WORKER,
+                .core_ranges = local_cores_range_set,
+                .initial_value = 0,
+            });
+        }
+    }
 
     // Local reader - Data Input and Index Generation/Reading
     // Responsibility: Stream input tensor data from DRAM to local cores
@@ -467,10 +551,9 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     reader_final_desc.config = ReaderConfigDescriptor{};
 
     // Local writer - Local TopK Results Transmission
-    // Responsibility: Send local TopK results from each core to final aggregation core
-    // Implements sender side of semaphore-based synchronization protocol
+    // Sends the local results to the final core; with the tree merge the survivors of the handshake go there.
     const CoreCoord final_cores_physical = device.worker_core_from_logical_core(final_core);
-    const std::vector<std::uint32_t> writer_local_compile_time_args = {
+    std::vector<std::uint32_t> writer_local_compile_time_args = {
         static_cast<std::uint32_t>(receiver_semaphore_id),   // Semaphore to check final core readiness
         static_cast<std::uint32_t>(sender_semaphore_id),     // Semaphore to signal transmission completion
         static_cast<std::uint32_t>(final_cores_physical.x),  // Target final core NoC coordinates
@@ -482,10 +565,20 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         output_ind_cb_index,         // Local TopK indices source
         gathered_values_cb_index,    // Final TopK values destination
         gathered_indices_cb_index};  // Final TopK indices destination
+    if (tree_merge) {
+        writer_local_compile_time_args.insert(
+            writer_local_compile_time_args.end(),
+            {landing_values_cb_index,                          // Tree-merge landing slot (values)
+             landing_indices_cb_index,                         // Tree-merge landing slot (indices)
+             static_cast<std::uint32_t>(credit_semaphore_id),  // Parent -> child: landing slot is free
+             static_cast<std::uint32_t>(data_semaphore_id),    // Child -> parent: tiles landed
+             tree_rounds});                                    // Tree merge rounds
+    }
 
     KernelDescriptor writer_local_desc;
     writer_local_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_local_topk.cpp";
+        tree_merge ? "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_local_topk_tree_merge.cpp"
+                   : "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_local_topk.cpp";
     writer_local_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_local_desc.core_ranges = local_cores_range_set;  // Runs on all local processing cores
     writer_local_desc.compile_time_args = writer_local_compile_time_args;
@@ -515,7 +608,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     // Local compute - Local Width Chunk Bitonic Sorting
     // Responsibility: Perform bitonic sort on assigned width chunk to extract local TopK
     // Uses iterative divide-and-conquer with log(Wt_local) merge phases
-    const std::vector<std::uint32_t> compute_args = {
+    std::vector<std::uint32_t> compute_args = {
         input_cb_index,                                   // CB0: Input values stream
         index_cb_index,                                   // CB1: Input indices stream
         input_transposed_cb_index,                        // CB24: Transposed values workspace
@@ -533,6 +626,14 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         static_cast<std::uint32_t>(args.stable),          // Stable sort: ties keep the lowest index
         static_cast<std::uint32_t>(fused_stable_keys),    // Fused packed [bf16|u16] keys sorted unstably
     };
+    if (tree_merge) {
+        compute_args.insert(
+            compute_args.end(),
+            {landing_values_cb_index,   // Tree-merge landing slot (values)
+             landing_indices_cb_index,  // Tree-merge landing slot (indices)
+             merge_values_cb_index,     // Tree-merge workspace (values)
+             merge_indices_cb_index});  // Tree-merge workspace (indices)
+    }
 
     // fp32: unpack the value-holding CBs straight to fp32 dest (fp32 dest acc) so the sort's
     // default SFPLOAD mode resolves to FP32 and reads full-precision values.
@@ -547,9 +648,15 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         // 16-bit source registers and truncates 32-bit datums.
         unpack_local[input_transposed_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
+    if (tree_merge && (has_fp32_values || fused_stable_keys)) {
+        unpack_local[landing_values_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_local[merge_values_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
 
     KernelDescriptor compute_local_desc;
-    compute_local_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_local.cpp";
+    compute_local_desc.kernel_source =
+        tree_merge ? "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_local_tree_merge.cpp"
+                   : "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_local.cpp";
     compute_local_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_local_desc.core_ranges = local_cores_range_set;  // Runs on all local processing cores
     compute_local_desc.compile_time_args = compute_args;
@@ -632,18 +739,58 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
                                                                                                   // provided)
             });
 
-        // Local writer
-        writer_local_desc.runtime_args.emplace_back(
-            core,
-            KernelDescriptor::CoreRuntimeArgs{
-                core_id,  // Width position for placement in final aggregation buffer
-            });
+        if (!tree_merge) {
+            writer_local_desc.runtime_args.emplace_back(
+                core,
+                KernelDescriptor::CoreRuntimeArgs{
+                    core_id,  // Width position for placement in final aggregation buffer
+                });
+            compute_local_desc.runtime_args.emplace_back(
+                core,
+                KernelDescriptor::CoreRuntimeArgs{
+                    static_cast<std::uint32_t>(ascending),  // Sort direction for bitonic properties
+                });
+            core_id++;
+            ascending = !ascending;
+            continue;
+        }
+
+        // Core i receives in rounds r < ctz(i) from core i + 2^r and then sends to core i - 2^ctz(i).
+        std::uint32_t num_recv_rounds = 0;
+        while (num_recv_rounds < tree_rounds && ((core_id >> num_recv_rounds) & 1u) == 0) {
+            ++num_recv_rounds;
+        }
+        const bool sends_to_final = num_recv_rounds == tree_rounds;
+        const CoreCoord dest_physical =
+            sends_to_final ? final_cores_physical
+                           : device.worker_core_from_logical_core(local_cores.at(core_id - (1u << num_recv_rounds)));
+        const CoreCoord self_physical = device.worker_core_from_logical_core(core);
+        KernelDescriptor::CoreRuntimeArgs writer_args = {
+            core_id >> tree_rounds,                       // Slot in the final core's gather buffer
+            num_recv_rounds,                              // Rounds in which this core receives
+            static_cast<std::uint32_t>(sends_to_final),   // Survivor of the tree
+            static_cast<std::uint32_t>(dest_physical.x),  // Parent (or final core) NoC coordinates
+            static_cast<std::uint32_t>(dest_physical.y),
+            static_cast<std::uint32_t>(self_physical.x),  // Own NoC coordinates for the landing-slot copy
+            static_cast<std::uint32_t>(self_physical.y),
+        };
+        for (std::uint32_t r = 0; r < tree_rounds; ++r) {
+            // Child of round r; (0, 0) for the rounds this core does not receive in
+            const CoreCoord child_physical =
+                r < num_recv_rounds ? device.worker_core_from_logical_core(local_cores.at(core_id + (1u << r)))
+                                    : CoreCoord{0, 0};
+            writer_args.push_back(static_cast<std::uint32_t>(child_physical.x));
+            writer_args.push_back(static_cast<std::uint32_t>(child_physical.y));
+        }
+        writer_local_desc.runtime_args.emplace_back(core, std::move(writer_args));
 
         // Local compute
         compute_local_desc.runtime_args.emplace_back(
             core,
             KernelDescriptor::CoreRuntimeArgs{
                 static_cast<std::uint32_t>(ascending),  // Sort direction for bitonic properties
+                core_id,                                // Index among the local cores (tree position)
+                num_recv_rounds,                        // Rounds in which this core receives
             });
 
         core_id++;               // Advance to next width chunk

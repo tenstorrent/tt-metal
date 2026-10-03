@@ -829,6 +829,57 @@ def test_topk_multicore_values_beyond_first_tile_row(num_rows, largest, device):
     ), f"values fabricated past first tile row: max_diff={(got_s - ref_s).abs().max():.4f}"
 
 
+def _tree_merge_sub_core_grid(device, local_x, local_y):
+    # find_topk_core_config keeps one spare column and two spare rows (the final core lives below the local
+    # rectangle) and at W=16384 its makespan model takes the most cores the grid allows, so a
+    # (local_x + 1) x (local_y + 2) sub grid pins the split at exactly local_x * local_y local cores.
+    grid = device.compute_with_storage_grid_size()
+    if grid.x < local_x + 1 or grid.y < local_y + 2:
+        pytest.skip(f"device grid {grid.x}x{grid.y} cannot host {local_x}x{local_y} local cores plus the final core")
+    return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(local_x, local_y + 1))])
+
+
+@pytest.mark.parametrize("local_x, local_y", ((2, 1), (4, 1), (4, 2), (8, 4)), ids=["n2", "n4", "n8", "n32"])
+@pytest.mark.parametrize("k", (32, 64))
+@pytest.mark.parametrize("largest", (True, False))
+@pytest.mark.parametrize("stable", (False, True))
+def test_topk_multicore_tree_merge(local_x, local_y, k, largest, stable, device):
+    """
+    Tree merge across the multi-core factory's local cores (issue #56797): with n local cores the local
+    top-k tiles are merged pairwise over log2(n) rounds on the local cores and only core 0 sends to the
+    final core. n is pinned through sub_core_grids (see _tree_merge_sub_core_grid); H=64 gives two tile
+    rows so the per-row credit/data handshake is exercised across rows. stable=True takes the fused-key
+    engine (packed [bf16|u16] keys, no index stream) through the same tree and must keep the torch-stable
+    tie order.
+    """
+    torch.manual_seed(2007)
+    W = 16384
+    sub_core_grids = _tree_merge_sub_core_grid(device, local_x, local_y)
+    t = torch.randn((1, 1, 64, W), dtype=torch.bfloat16)
+    x = ttnn.from_torch(t, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    v, i = ttnn.topk(x, k, dim=-1, largest=largest, sorted=True, stable=stable, sub_core_grids=sub_core_grids)
+    ttnn.synchronize_device(device)
+
+    got_v = ttnn.to_torch(v).float()
+    got_i = ttnn.to_torch(i, dtype=torch.int64)
+    ref_v, _ = torch.topk(t.float(), k, dim=-1, largest=largest, sorted=True)
+
+    # Order-insensitive top-k value set per row (bf16 ties may be permuted when not stable).
+    got_s = got_v.sort(dim=-1, descending=True).values
+    ref_s = ref_v.sort(dim=-1, descending=True).values
+    assert torch.allclose(
+        got_s, ref_s, atol=1e-2
+    ), f"tree-merge topk values mismatch: max_diff={(got_s - ref_s).abs().max():.4f}"
+
+    # Indices must address the returned values exactly (both come from the input untouched).
+    gathered = torch.gather(t.float(), -1, got_i)
+    assert torch.equal(gathered, got_v), "tree-merge topk indices do not point at returned values"
+
+    if stable:
+        _, order = _stable_topk_golden(t, k, largest)
+        assert_equal(order, got_i)
+
+
 # ---------------------------------------------------------------------------
 # Large-k Blackhole routing: ttnn.topk with bf16, dim=-1, largest=True,
 # stable=False and 64 < k <= 2048 is routed at the composite level through

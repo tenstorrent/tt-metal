@@ -38,8 +38,8 @@ void validate_static_args(const operation_attributes_t& attrs, const tensor_args
 void validate_runtime_args(const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input_tensor;
 
-    // Shape is intentionally omitted from the program hash and patched through runtime args, so keep
-    // these checks on both cache miss and cache hit.
+    // Shape reaches the program hash only through the compute body mode and is otherwise patched through
+    // runtime args, so keep these checks on both cache miss and cache hit.
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "topk_large_indices input must be on device");
     TT_FATAL(input.buffer() != nullptr, "topk_large_indices input must have an allocated buffer");
 
@@ -190,7 +190,11 @@ ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
         input.layout(),
         input.memory_config().memory_layout(),
         input.memory_config().buffer_type(),
-        static_cast<uint32_t>(program::compute_body_mode(attrs.k, input.logical_shape()[-1])));
+        static_cast<uint32_t>(program::compute_body_mode(
+            attrs.k,
+            flattened_rows_excluding_last_dim(input.logical_shape()),
+            input.logical_shape()[-1],
+            attrs.resolved_worker_core_grid.num_cores())));
 }
 
 spec_return_value_t TopkLargeIndicesDeviceOperation::compute_output_specs(

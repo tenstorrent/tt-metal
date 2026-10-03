@@ -43,6 +43,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
+#include <algorithm>
 #include <limits>
 
 using namespace tt::constants;
@@ -82,11 +83,12 @@ struct FinishWorkSplit {
     uint32_t row_tiles_per_batch = 0;  // logits R_p / 32
     uint32_t k_tiles = 0;              // div_up(k_rounded, 32)
     uint32_t k_rounded = 0;
-    uint32_t total_units = 0;  // total_tile_rows * k_tiles * 2 (two face-pair halves per tile)
+    uint32_t units_per_tile = 2;  // 2 face-pair halves, or 4 single faces when units are scarce
+    uint32_t total_units = 0;     // total_tile_rows * k_tiles * units_per_tile
     bool index_is_u32 = false;
 };
 
-FinishWorkSplit compute_work_split(const Tensor& input, const Tensor& indices) {
+FinishWorkSplit compute_work_split(const Tensor& input, const Tensor& indices, uint32_t num_cores) {
     FinishWorkSplit split;
     const auto& padded = input.padded_shape();
     split.width_tiles = padded[-1] / TILE_WIDTH;
@@ -94,7 +96,8 @@ FinishWorkSplit compute_work_split(const Tensor& input, const Tensor& indices) {
     split.row_tiles_per_batch = padded[-2] / TILE_HEIGHT;
     split.k_rounded = indices.logical_shape()[-1];
     split.k_tiles = tt::div_up(split.k_rounded, TILE_WIDTH);
-    split.total_units = split.total_tile_rows * split.k_tiles * 2;
+    split.units_per_tile = finish_units_per_tile(input, indices, num_cores);
+    split.total_units = split.total_tile_rows * split.k_tiles * split.units_per_tile;
     split.index_is_u32 = padded[-1] > std::numeric_limits<uint16_t>::max();
     return split;
 }
@@ -110,8 +113,8 @@ void set_runtime_args(
     const Tensor& indices,
     const Tensor& values_out,
     const Tensor& indices_out) {
-    const auto split = compute_work_split(input, indices);
     const auto grid = input.device()->compute_with_storage_grid_size();
+    const auto split = compute_work_split(input, indices, grid.x * grid.y);
     const auto unit_split = ttnn::split_blocks_for_tilize(CoreCoord(grid.x, grid.y), split.total_units);
 
     const uint32_t logical_rows = input.logical_shape()[-2];
@@ -154,6 +157,22 @@ void set_runtime_args(
 
 }  // namespace
 
+uint32_t finish_units_per_tile(const Tensor& input, const Tensor& indices, uint32_t num_cores) {
+    const auto& padded = input.padded_shape();
+    const uint32_t total_tile_rows = (input.physical_volume() / padded[-1]) / TILE_HEIGHT;
+    const uint32_t k_rounded = indices.logical_shape()[-1];
+    const uint32_t half_units = total_tile_rows * tt::div_up(k_rounded, TILE_WIDTH) * 2;
+    // The reader gathers rows r % 16 < 8 of each tile row and the writer the others, each on its own NoC.
+    const uint32_t rows = input.logical_shape()[-2];
+    const uint32_t reader_rows = rows / 16 * 8 + std::min(rows % 16, 8u);
+    const uint32_t batches = input.physical_volume() / (padded[-2] * padded[-1]);
+    const uint32_t noc_gathers = batches * std::max(reader_rows, rows - reader_rows) * k_rounded;
+    // Single faces halve each core's gather latency, but past 6144 gathers on the busier NoC that NoC sets the time:
+    // there the half tile units are faster on up to 39 cores and the face units from 40 half units on (p100a).
+    const bool faces_fit = 2 * half_units <= num_cores;
+    return faces_fit && (noc_gathers <= 6144 || half_units >= 40) ? 4 : 2;
+}
+
 TopkRouteFinishProgramFactory::cached_program_t TopkRouteFinishProgramFactory::create(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
@@ -165,8 +184,8 @@ TopkRouteFinishProgramFactory::cached_program_t TopkRouteFinishProgramFactory::c
 
     auto program = tt::tt_metal::CreateProgram();
 
-    const auto split = compute_work_split(input, indices);
     const auto grid = input.device()->compute_with_storage_grid_size();
+    const auto split = compute_work_split(input, indices, grid.x * grid.y);
     const auto unit_split = ttnn::split_blocks_for_tilize(CoreCoord(grid.x, grid.y), split.total_units);
     const auto& all_cores = unit_split.all_cores;
 
@@ -217,11 +236,18 @@ TopkRouteFinishProgramFactory::cached_program_t TopkRouteFinishProgramFactory::c
         values_cb_index,
         indices_cb_index,
         split.index_is_u32 ? 1u : 0u};
+    // Single face units run their own kernels; the half tile units keep the original ones.
+    const bool faces = split.units_per_tile == 4;
+    if (faces) {
+        reader_compile_args.push_back(split.units_per_tile);
+    }
     tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(*indices.buffer()).append_to(reader_compile_args);
     auto reader_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_topk_route_finish_gather.cpp",
+        faces ? "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/"
+                "reader_topk_route_finish_gather_faces.cpp"
+              : "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_topk_route_finish_gather.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
 
@@ -235,13 +261,18 @@ TopkRouteFinishProgramFactory::cached_program_t TopkRouteFinishProgramFactory::c
         value_half_bytes,
         idx_half_bytes,
         split.index_is_u32 ? 1u : 0u};
+    if (faces) {
+        writer_compile_args.push_back(split.units_per_tile);
+    }
     tt::tt_metal::TensorAccessorArgs(*values_out.buffer()).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(*indices_out.buffer()).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(*indices.buffer()).append_to(writer_compile_args);
     auto writer_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_topk_route_finish_tiles.cpp",
+        faces
+            ? "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_topk_route_finish_tiles_faces.cpp"
+            : "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_topk_route_finish_tiles.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
 
