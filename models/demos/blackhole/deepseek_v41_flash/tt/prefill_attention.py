@@ -28,6 +28,24 @@ from models.demos.blackhole.deepseek_v41_flash.tt.attention import (
 NEG = -1e9
 AR_ROWS = int(os.environ.get("DSV41_PF_AR_ROWS", "128"))
 _MASKS = {}
+_ZEROS = {}  # zero tensors (ttnn.zeros uploads from the host: not allowed inside a trace capture, so they are cached)
+_TABS = {}  # shared by all layers of one rope kind: (id(md), compressed?, start, n, step) -> (C, S, -S) device tables
+
+
+def clear_chunk_caches():
+    """Free the per-chunk constants (masks, rope tables); the driver calls this when it moves on to the next chunk."""
+    for d in (_MASKS, _TABS):  # _ZEROS stays: a captured trace may hold them
+        for v in d.values():
+            for t in v if isinstance(v, tuple) else (v,):
+                ttnn.deallocate(t)
+        d.clear()
+
+
+def zeros(md, shape, dtype=ttnn.bfloat16):
+    key = (id(md), tuple(shape), dtype)
+    if key not in _ZEROS:
+        _ZEROS[key] = ttnn.zeros(list(shape), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=md)
+    return _ZEROS[key]
 
 
 def pad_len(S, mult=64):
@@ -58,8 +76,12 @@ class DSV41PrefillAttention:
         self.last_lat = (
             None  # [U,1,Sc_pad,512] latents of the last prefill (owner layers; readers use ``source.pre.last_lat``)
         )
-        self._tabs = {}
+        self.halo = None  # [U,1,128,512] kv rows (post RoPE) of the 128 positions before the next chunk (None before the first chunk)
+        self.lat_all = None  # owner layers: [U,1,L,512] latents of every group closed so far (RoPE'd)
         self.ckc_sdpa = attn.ckc_sdpa
+        self.dyn = None  # DynCtx: traced-chunk mode (forward_dyn)
+        self.lat_buf = None  # [U,1,Lmax,512] FIFO of latents (kv-source layers, traced-chunk mode)
+        self.state_sink = None  # optional callable(self, kv, lat, cs, s0, C, h) called once per chunk; replaces the dense decode-cache write
         self.tap = None  # dict -> keeps intermediates (qh, kv, o_raw, c, part) for diagnostics
 
     # ---- constants ----------------------------------------------------------------------------------------
@@ -73,28 +95,39 @@ class DSV41PrefillAttention:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.md),
         )
 
-    def rope_tabs(self, positions: torch.Tensor):
-        """Full-width tables for the given positions -> (C, S, -S) device tensors [1,1,n,512]."""
-        key = tuple(positions.tolist())
-        if key not in self._tabs:
-            c, s = self.a._rope_inputs(positions)
-            n = positions.shape[0]
-            self._tabs[key] = tuple(self._up(t.reshape(1, 1, n, HEAD_DIM)) for t in (c, s, -s))
-        return self._tabs[key]
+    def rope_tabs(self, start, n, step=1):
+        """Full-width tables for positions start + step * arange(n) -> (C, S, -S) device tensors [1,1,n,512] (shared by the layers of one rope kind)."""
+        key = (id(self.md), self.compressed, start, n, step)
+        if key not in _TABS:
+            c, s = self.a._rope_inputs(start + step * torch.arange(n))
+            _TABS[key] = tuple(self._up(t.reshape(1, 1, n, HEAD_DIM)) for t in (c, s, -s))
+        return _TABS[key]
 
-    def mask(self, S, Sp):
-        """Additive mask [1,1,Sp,Sp+Scp] over keys [kv | latents] for a compressed layer (cached per (S, Sp, ratio))."""
-        key = (S, Sp, self.ratio, id(self.md))
+    def begin(self):
+        """Forget the carried state of the previous prompt (halo, latents)."""
+        self.halo = self.lat_all = None
+
+    def mask(self, S, C, s0, Lc):
+        """Additive mask [1,1,C,H+C+Lc] for the chunk of positions [s0, s0+C) over keys [halo (H=128 if s0>0) | chunk kv | latents 0..Lc)]
+        of a compressed layer (cached per (S, C, s0, ratio))."""
+        key = (C, s0, self.ratio, id(self.md))  # the mask of a real query never depends on the prompt length S
         if key not in _MASKS:
-            r = self.ratio
-            Scp = Sp // r
-            i = torch.arange(Sp).view(-1, 1)
-            j = torch.arange(Sp).view(1, -1)
-            m = torch.where((j <= i) & (j > i - WINDOW), 0.0, NEG)
-            jc = torch.arange(Scp).view(1, -1)
-            mc = torch.where((jc < (i + 1) // r) & (jc < S // r), 0.0, NEG)
-            full = torch.cat([m, mc], dim=1).reshape(1, 1, Sp, Sp + Scp)
-            _MASKS[key] = self._up(full)
+            r, H = self.ratio, (WINDOW if s0 > 0 else 0)
+            t = s0 + torch.arange(C).view(-1, 1)  # absolute query positions
+            kp = torch.cat([s0 - H + torch.arange(H), s0 + torch.arange(C)]).view(1, -1)  # absolute key positions
+            m = torch.where((kp <= t) & (kp > t - WINDOW) & (kp >= 0), 0.0, NEG)
+            jc = torch.arange(Lc).view(1, -1)
+            mc = torch.where(jc < (t + 1) // r, 0.0, NEG)
+            _MASKS[key] = self._up(torch.cat([m, mc], dim=1).reshape(1, 1, C, -1))
+        return _MASKS[key]
+
+    def window_mask(self, C, s0):
+        """Band mask [1,1,C,128+C] for a window-only layer of a chunk that has a halo (s0 > 0): same for every such chunk."""
+        key = ("w", C, id(self.md))
+        if key not in _MASKS:
+            t = torch.arange(C).view(-1, 1) + WINDOW
+            kp = torch.arange(WINDOW + C).view(1, -1)
+            _MASKS[key] = self._up(torch.where((kp <= t) & (kp > t - WINDOW), 0.0, NEG).reshape(1, 1, C, WINDOW + C))
         return _MASKS[key]
 
     # ---- helpers ------------------------------------------------------------------------------------------
@@ -110,11 +143,11 @@ class DSV41PrefillAttention:
             ttnn.multiply(x, c), ttnn.multiply(ttnn.matmul(x, self.a.Pf, compute_kernel_config=self.a.ckc), ns)
         )
 
-    def _compress(self, h, S, Sp):
-        """-> (lat [U,1,Scp,512] bf16 RoPE'd latents, cs [1,1,R,1024] fp32 or None). Only complete groups (j < S // ratio) are valid."""
+    def _compress(self, h, s0, C):
+        """-> (lat [U,1,C/ratio,512] bf16 RoPE'd latents of the groups of this chunk, cs [1,1,R,1024] fp32 or None)."""
         a, U, r = self.a, self.U, self.ratio
-        R = U * Sp
-        Scp = Sp // r
+        R = U * C
+        Cc = C // r
         cs = None
         if r == 1:
             lat = ttnn.rms_norm(ttnn.linear(h, a.c_wkv, compute_kernel_config=a.ckc), weight=a.c_norm, epsilon=a.eps)
@@ -132,19 +165,24 @@ class DSV41PrefillAttention:
             sl = lambda t, lo: ttnn.slice(t, [0, 0, 0, lo], [1, 1, R // 2, lo + HEAD_DIM])
             pooled = ttnn.addcmul(sl(gb, 0), sl(d, 0), sl(ttnn.sigmoid(d), HEAD_DIM))
             lat = ttnn.rms_norm(ttnn.typecast(pooled, ttnn.bfloat16), weight=a.c_norm, epsilon=a.eps)
-        lat = ttnn.reshape(lat, [U, 1, Scp, HEAD_DIM])
-        lat = self._rope(lat, self.rope_tabs(torch.arange(Scp) * r))
+        lat = ttnn.reshape(lat, [U, 1, Cc, HEAD_DIM])
+        lat = self._rope(lat, self.rope_tabs(s0, Cc, r))
         return lat, cs
 
     # ---- forward ------------------------------------------------------------------------------------------
-    def forward(self, h, S, write_state=True):
-        """h [1,1,U*Sp,D] bf16 tile (normed attention input, user-major) -> [1,1,U*Sp,D] bf16 replicated over columns.
-        S = real prompt length (<= Sp). Writes the decode state of this layer when ``write_state``."""
+    def forward(self, h, S, write_state=True, s0=0):
+        """h [1,1,U*C,D] bf16 tile (normed attention input of the chunk of positions [s0, s0+C), user-major) -> [1,1,U*C,D] bf16 replicated
+        over columns. S = real prompt length (the chunk holds real tokens for positions < S). The carried state (kv halo of the previous 128
+        positions, latents of the closed groups) is kept on this object; the decode state of the layer is written when the chunk contains the
+        last real token (``write_state``). Single-chunk prompts are s0 = 0 and C = Sp."""
         a, U = self.a, self.U
         R = h.shape[2]
-        Sp = R // U
-        assert Sp % 64 == 0 and S <= Sp
-        tabs = self.rope_tabs(torch.arange(Sp))
+        C = R // U
+        assert C % 64 == 0 and s0 % 64 == 0 and 0 <= S - s0
+        last = s0 + C >= S
+        if s0 == 0:
+            self.begin()
+        tabs = self.rope_tabs(s0, C)
         y = ttnn.linear(h, a.wqkv, compute_kernel_config=a.ckc)  # [1,1,R,1792]
         qr = ttnn.rms_norm(ttnn.slice(y, [0, 0, 0, 0], [1, 1, R, Q_LORA]), weight=a.q_norm, epsilon=a.eps)
         kvn = ttnn.rms_norm(
@@ -153,29 +191,30 @@ class DSV41PrefillAttention:
         ttnn.deallocate(y)
         q = ttnn.linear(qr, a.wq_b, compute_kernel_config=a.ckc)  # [1,1,R,8*512]
         ttnn.deallocate(qr)
-        q = ttnn.reshape(q, [U, 1, Sp, LOCAL_HEADS * HEAD_DIM])
+        q = ttnn.reshape(q, [U, 1, C, LOCAL_HEADS * HEAD_DIM])
         qh, _, _ = ttnn.experimental.nlp_create_qkv_heads(
             q, num_heads=LOCAL_HEADS, num_kv_heads=0, transpose_k_heads=False
         )
         ttnn.deallocate(q)
         qh = self._rope(qh, tabs)
-        kv = self._rope(ttnn.reshape(kvn, [U, 1, Sp, HEAD_DIM]), tabs)  # [U,1,Sp,512]
+        kv = self._rope(ttnn.reshape(kvn, [U, 1, C, HEAD_DIM]), tabs)  # [U,1,C,512]
         if self.tap is not None:
             self.tap.update(qh=qh, kv=kv)
 
-        kw = {}
-        keys = kv
         lat = cs = None
         if self.compressed:
             if a.source is None:
-                lat, cs = self._compress(h, S, Sp)
-                self.last_lat = lat
-            else:
-                lat = a.source.prefill.last_lat
-            keys = ttnn.concat([kv, lat], dim=2)
-            kw = dict(is_causal=False, attn_mask=self.mask(S, Sp))
-        else:
+                lat, cs = self._compress(h, s0, C)
+                self.lat_all = lat if self.lat_all is None else ttnn.concat([self.lat_all, lat], dim=2)
+            lat_all = self.lat_all if a.source is None else a.source.prefill.lat_all
+        keys = kv if s0 == 0 else ttnn.concat([self.halo, kv], dim=2)  # [U,1,H+C,512]
+        if self.compressed:
+            keys = ttnn.concat([keys, lat_all], dim=2)
+            kw = dict(is_causal=False, attn_mask=self.mask(S, C, s0, lat_all.shape[2]))
+        elif s0 == 0:
             kw = dict(is_causal=True, sliding_window_size=WINDOW)
+        else:
+            kw = dict(is_causal=False, attn_mask=self.window_mask(C, s0))
         o = ttnn.transformer.scaled_dot_product_attention(
             qh,
             keys,
@@ -195,24 +234,147 @@ class DSV41PrefillAttention:
             ttnn.deallocate(qh)
         else:
             self.tap["o_raw"] = o
-        if self.compressed:
+        if keys is not kv:
             ttnn.deallocate(keys)
-        if write_state:
-            self._write_state(kv, lat if (self.compressed and a.source is None) else None, cs, h, S, Sp)
+        if (
+            self.state_sink is not None
+        ):  # paged / external state writer: sees every chunk's kv, latents and compressor state
+            lat_out = lat if (self.compressed and a.source is None) else None
+            self.state_sink(self, kv, lat_out, cs, s0, C, h)
+        elif write_state and last:
+            self._write_state(kv, cs, h, S, s0, C)
+        if not last:  # carry the last 128 kv rows into the next chunk
+            assert C % WINDOW == 0, "chunks of a multi-chunk prompt must be multiples of 128"
+            full = kv if s0 == 0 else ttnn.concat([self.halo, kv], dim=2)
+            new_halo = ttnn.clone(
+                ttnn.slice(full, [0, 0, full.shape[2] - WINDOW, 0], [U, 1, full.shape[2], HEAD_DIM])
+            )  # clone: a full-range slice may alias kv
+            if self.halo is not None:
+                ttnn.deallocate(self.halo)
+            if full is not kv:
+                ttnn.deallocate(full)
+            self.halo = new_halo
         if self.tap is None:
             ttnn.deallocate(kv)
         o = self._rope_inv(o, tabs)
-        c = ttnn.experimental.nlp_concat_heads(o)  # [U,1,Sp,8*512]
+        c = ttnn.experimental.nlp_concat_heads(o)  # [U,1,C,8*512]
         if self.tap is None:
             ttnn.deallocate(o)
-        zero = ttnn.zeros(
-            [U, 1, Sp, HEAD_DIM], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.md
-        )  # decode wo_a has 512 zero rows in front
+        zero = zeros(self.md, [U, 1, C, HEAD_DIM])  # decode wo_a has 512 zero rows in front
         c = ttnn.reshape(ttnn.concat([zero, c], dim=3), [1, 1, R, (LOCAL_HEADS + 1) * HEAD_DIM])
         part = ttnn.linear(ttnn.linear(c, a.wo_a, compute_kernel_config=a.ckc), a.wo_b, compute_kernel_config=a.ckc)
         if self.tap is not None:
             self.tap.update(c=c, part=ttnn.clone(part))
         return self._allreduce(part)
+
+    # ---- traced-chunk mode ---------------------------------------------------------------------------------
+    def alloc_dyn(self, ctx):
+        """Attach the per-chunk context and allocate this layer's persistent halo (+ latent FIFO for kv-source layers)."""
+        self.dyn = ctx
+        a, U = self.a, self.U
+        z = lambda shape: ttnn.from_torch(
+            torch.zeros(*shape),
+            device=self.md,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.md),
+        )
+        rows = tuple(self.md.shape)[0]
+        # users differ per mesh row but the content starts as zeros: replicate then it is overwritten SPMD by the first chunk
+        self.halo = z([U, 1, WINDOW, HEAD_DIM])
+        self.lat_buf = z([U, 1, ctx.L[self.ratio], HEAD_DIM]) if (self.compressed and a.source is None) else None
+        del rows
+
+    def reset_dyn(self):
+        """Zero the carried state before a new prompt (masked anyway, but NaN garbage must not sit in the buffers)."""
+        for t in (self.halo, self.lat_buf):
+            if t is not None:
+                ttnn.copy(ttnn.zeros_like(t), t)
+
+    def forward_dyn(self, h):
+        """Same maths as ``forward`` for one chunk, but every per-chunk quantity is a persistent device tensor of ``self.dyn`` (RoPE tables,
+        masks, latent offsets): the captured program is identical for every chunk. h [1,1,U*C,D] bf16 -> [1,1,U*C,D] bf16.
+        """
+        a, U, ctx = self.a, self.U, self.dyn
+        R = h.shape[2]
+        C = R // U
+        assert C == ctx.C
+        tabs = ctx.tabs[self.compressed]
+        y = ttnn.linear(h, a.wqkv, compute_kernel_config=a.ckc)
+        qr = ttnn.rms_norm(ttnn.slice(y, [0, 0, 0, 0], [1, 1, R, Q_LORA]), weight=a.q_norm, epsilon=a.eps)
+        kvn = ttnn.rms_norm(
+            ttnn.slice(y, [0, 0, 0, Q_LORA], [1, 1, R, Q_LORA + HEAD_DIM]), weight=a.kv_norm, epsilon=a.eps
+        )
+        ttnn.deallocate(y)
+        q = ttnn.linear(qr, a.wq_b, compute_kernel_config=a.ckc)
+        ttnn.deallocate(qr)
+        q = ttnn.reshape(q, [U, 1, C, LOCAL_HEADS * HEAD_DIM])
+        qh, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            q, num_heads=LOCAL_HEADS, num_kv_heads=0, transpose_k_heads=False
+        )
+        ttnn.deallocate(q)
+        qh = self._rope(qh, tabs)
+        kv = self._rope(ttnn.reshape(kvn, [U, 1, C, HEAD_DIM]), tabs)
+        lat = cs = None
+        keys = ttnn.concat([self.halo, kv], dim=2)  # [U,1,128+C,512]
+        if self.compressed:
+            r = self.ratio
+            if a.source is None:
+                lat, cs = self._compress_dyn(h, C)
+                Cc = C // r
+                buf = self.lat_buf
+                new = ttnn.concat([ttnn.slice(buf, [0, 0, Cc, 0], [U, 1, buf.shape[2], HEAD_DIM]), lat], dim=2)
+                ttnn.copy(new, buf)
+                ttnn.deallocate(new)
+                lat_buf = buf
+            else:
+                lat_buf = a.source.prefill.lat_buf
+            full = ttnn.concat([keys, lat_buf], dim=2)
+            ttnn.deallocate(keys)
+            keys = full
+        kw = dict(is_causal=False, attn_mask=ctx.masks[self.ratio] if self.compressed else ctx.win_mask)
+        o = ttnn.transformer.scaled_dot_product_attention(
+            qh,
+            keys,
+            keys,
+            scale=a.scale,
+            attention_sink=self.sink,
+            compute_kernel_config=self.ckc_sdpa,
+            program_config=ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.md.compute_with_storage_grid_size(),
+                q_chunk_size=self.q_chunk,
+                k_chunk_size=self.k_chunk,
+                exp_approx_mode=False,
+            ),
+            **kw,
+        )
+        ttnn.deallocate(qh)
+        ttnn.deallocate(keys)
+        if self.state_sink is not None:
+            self.state_sink(self, kv, lat, cs, 0, C, h)
+        new_halo = ttnn.slice(ttnn.concat([self.halo, kv], dim=2), [0, 0, C, 0], [U, 1, WINDOW + C, HEAD_DIM])
+        ttnn.copy(new_halo, self.halo)
+        ttnn.deallocate(new_halo)
+        ttnn.deallocate(kv)
+        o = self._rope_inv(o, tabs)
+        c = ttnn.experimental.nlp_concat_heads(o)
+        ttnn.deallocate(o)
+        zero = zeros(self.md, [U, 1, C, HEAD_DIM])
+        c = ttnn.reshape(ttnn.concat([zero, c], dim=3), [1, 1, R, (LOCAL_HEADS + 1) * HEAD_DIM])
+        part = ttnn.linear(ttnn.linear(c, a.wo_a, compute_kernel_config=a.ckc), a.wo_b, compute_kernel_config=a.ckc)
+        return self._allreduce(part)
+
+    def _compress_dyn(self, h, C):
+        """``_compress`` with the latent RoPE tables taken from the per-chunk context."""
+        r = self.ratio
+        tabs = self.dyn.lat_tabs[r] if r > 1 else self.dyn.tabs[True]
+        saved = self.rope_tabs
+        self.rope_tabs = lambda start, n, step=1: tabs  # noqa: E731  (``_compress`` asks for the latent positions)
+        try:
+            return self._compress(h, 0, C)
+        finally:
+            self.rope_tabs = saved
 
     def _allreduce(self, part):
         """All-reduce over the 8 mesh columns in pieces of <= AR_ROWS rows. A single reduce_scatter + all_gather of [1,1,512,5120] bf16
@@ -234,20 +396,38 @@ class DSV41PrefillAttention:
         return out
 
     # ---- decode state -------------------------------------------------------------------------------------
-    def _write_state(self, kv, lat, cs, h, S, Sp):
-        """Window ring (+ compressed latents, prev_cs) into the decode cache. Supports S <= WINDOW (ring slot p = p) for now."""
+    def _ring(self, kv, S, s0):
+        """Window ring [U,1,128,512] (position p at slot p % 128) after the prompt, from the last chunk's kv (+ the halo of the chunk before)."""
+        U = self.U
+        pre = zeros(self.md, [U, 1, WINDOW, HEAD_DIM], kv.dtype) if s0 == 0 else self.halo
+        cat = ttnn.to_layout(ttnn.concat([pre, kv], dim=2), ttnn.ROW_MAJOR_LAYOUT)
+        n = S - s0  # real tokens of this chunk
+        tail = ttnn.slice(cat, [0, 0, n, 0], [U, 1, n + WINDOW, HEAD_DIM])  # positions S-128 .. S-1
+        sft = S % WINDOW
+        ring = (
+            ttnn.concat(
+                [
+                    ttnn.slice(tail, [0, 0, WINDOW - sft, 0], [U, 1, WINDOW, HEAD_DIM]),
+                    ttnn.slice(tail, [0, 0, 0, 0], [U, 1, WINDOW - sft, HEAD_DIM]),
+                ],
+                dim=2,
+            )
+            if sft
+            else tail
+        )
+        return ttnn.to_layout(ring, ttnn.TILE_LAYOUT)
+
+    def _write_state(self, kv, cs, h, S, s0, C):
+        """Window ring (+ compressed latents, prev_cs) into the decode cache (the last chunk of the prompt calls this)."""
         a, U = self.a, self.U
-        assert S <= WINDOW, "S > 128 needs the ring rotation (not implemented yet)"
-        ring = ttnn.slice(kv, [0, 0, 0, 0], [U, 1, min(Sp, WINDOW), HEAD_DIM])
-        if ring.shape[2] < WINDOW:
-            ring = ttnn.pad(ring, [(0, 0), (0, 0), (0, WINDOW - ring.shape[2]), (0, 0)], 0.0)
+        ring = self._ring(kv, S, s0)
         if not self.compressed:
             full = ring
             if a.cache.shape[2] > WINDOW:
                 full = ttnn.pad(ring, [(0, 0), (0, 0), (0, a.cache.shape[2] - WINDOW), (0, 0)], 0.0)
         else:
             src = a if a.source is None else a.source
-            comp = src.prefill.last_lat
+            comp = src.prefill.lat_all
             Scp = comp.shape[2]
             if Scp >= a.max_comp:
                 comp = ttnn.slice(comp, [0, 0, 0, 0], [U, 1, a.max_comp, HEAD_DIM])
@@ -256,8 +436,9 @@ class DSV41PrefillAttention:
             full = ttnn.concat([ring, comp], dim=2)
         ttnn.copy(ttnn.typecast(full, a.cache.dtype) if full.dtype != a.cache.dtype else full, a.cache)
         if cs is not None:  # ratio 2: the compressor's "previous token" state = [kv | score] of the last prompt token
-            R = cs.shape[2]
-            last = ttnn.slice(ttnn.reshape(cs, [U, 1, Sp, 2 * HEAD_DIM]), [0, 0, S - 1, 0], [U, 1, S, 2 * HEAD_DIM])
+            last = ttnn.slice(
+                ttnn.reshape(cs, [U, 1, C, 2 * HEAD_DIM]), [0, 0, S - 1 - s0, 0], [U, 1, S - s0, 2 * HEAD_DIM]
+            )
             last = ttnn.reshape(last, [1, 1, U, 2 * HEAD_DIM])
             if a.prev_cs is None:
                 a.prev_cs = ttnn.clone(last)

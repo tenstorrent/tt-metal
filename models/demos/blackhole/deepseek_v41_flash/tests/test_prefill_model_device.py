@@ -6,7 +6,8 @@ existing traced DECODE loop continues from the state the prefill left (teacher-f
 
 Env: DSV41_S (prompt length, default 128), DSV41_LAYERS (default 0-39), DSV41_STEPS (decode steps, default 0 = prefill only),
 DSV41_CHAIN_PCC=1 (per-layer hidden PCC vs the dump), DSV41_PREFILL_DIR (default /mnt/tt-data/ssinghal/dsv4-prefill-s{S}).
-The decode state of every layer is ZEROED after the build (which seeds it from the dump) so only the prefill can have produced it."""
+The decode state of every layer is ZEROED after the build (which seeds it from the dump) so only the prefill can have produced it.
+"""
 
 import gc
 import os
@@ -32,7 +33,17 @@ from models.demos.blackhole.deepseek_v41_flash.tt.step_state import DSV41StepSta
 S = int(os.environ.get("DSV41_S", "128"))
 LAYERS = os.environ.get("DSV41_LAYERS", "0-39")
 STEPS = int(os.environ.get("DSV41_STEPS", "0"))
-DIR = os.environ.get("DSV41_PREFILL_DIR", f"/mnt/tt-data/ssinghal/dsv4-prefill-s{S}")
+U = int(os.environ.get("DSV41_U", "4"))  # users per mesh row (batch = 4 U)
+CHUNK = int(
+    os.environ.get("DSV41_CHUNK", "0")
+)  # prompt tokens per chunk (multiple of 128), 0 = whole prompt in one chunk
+ZERO = (
+    os.environ.get("DSV41_ZERO_STATE") == "1"
+)  # no reference dump of this S: random tokens, state/cutoff from the S=128 dump (throughput / consistency runs)
+_d = f"/mnt/tt-data/ssinghal/dsv4-prefill-s{S}" + ("" if U == 4 else f"b{4 * U}")
+DIR = os.environ.get("DSV41_PREFILL_DIR", _d)
+BASE = "/mnt/tt-data/ssinghal/dsv4-prefill-s128"  # state seed / gate cutoff source for ZERO runs
+MAX_ROPE = max(256, S + 64)
 
 
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
@@ -58,24 +69,37 @@ def test_prefill_model(mesh_device):
     a, _, b = LAYERS.partition("-")
     layer_ids = list(range(int(a), int(b or a) + 1))
     log = lambda m: print(m, flush=True)
-    toks = torch.load(os.path.join(DIR, "tokens.pt"))
-    prompt = toks["prefill_tokens"]  # [16, S]
-    assert prompt.shape[1] == S
-    fin = torch.load(os.path.join(DIR, "final.pt")) if os.path.exists(os.path.join(DIR, "final.pt")) else None
-    chain = DSV41DecodeChain(md, users_per_row=4, max_comp=256, log=log)
+    if ZERO:
+        g = torch.Generator().manual_seed(0)
+        toks = {
+            "prefill_tokens": torch.randint(1000, 100000, (4 * U, S), generator=g),
+            "decode_tokens": torch.zeros(4 * U, 0, dtype=torch.long),
+        }
+        fin = None
+    else:
+        toks = torch.load(os.path.join(DIR, "tokens.pt"))
+        fin = torch.load(os.path.join(DIR, "final.pt")) if os.path.exists(os.path.join(DIR, "final.pt")) else None
+    prompt = toks["prefill_tokens"]  # [4U, S]
+    assert prompt.shape == (4 * U, S)
+    chain = DSV41DecodeChain(md, users_per_row=U, max_comp=256, log=log)
     B = chain.B
     sh = _Shards()
 
     pool = ThreadPoolExecutor(max_workers=2)
     futs = {}
-    submit = lambda L: futs.setdefault(L, pool.submit(load_layer, L)) if L in layer_ids else None
+    submit = lambda L: futs.setdefault(L, pool.submit(load_layer, L, True, MAX_ROPE)) if L in layer_ids else None
     for L in layer_ids[:2]:
         submit(L)
     pls, built, groups, first_moe = [], [], {}, None
     t0 = time.time()
     for L in layer_ids:
-        ref = torch.load(os.path.join(DIR, f"layer_{L}.pt"), mmap=True)
-        meta = {"state": ref["state"], "S": S, "gate_cutoff": ref["gate_cutoff"]}
+        if ZERO:  # decode state is zeroed below anyway: any [B, ...]-shaped seed works
+            ref = torch.load(os.path.join(BASE, f"layer_{L}.pt"), mmap=True)
+            st0 = {k: v[: 4 * U] for k, v in ref["state"].items()}
+            meta = {"state": st0, "S": 1, "gate_cutoff": ref["gate_cutoff"]}
+        else:
+            ref = torch.load(os.path.join(DIR, f"layer_{L}.pt"), mmap=True)
+            meta = {"state": ref["state"], "S": S, "gate_cutoff": ref["gate_cutoff"]}
         submit(L + 1), submit(L + 2)
         w = futs.pop(L).result()
         layer, attn = chain.build_layer(L, meta, w)
@@ -90,7 +114,7 @@ def test_prefill_model(mesh_device):
         first_moe = first_moe or pmoe
         pls.append((L, DSV41PrefillLayer(layer, attn.prefill, pmoe, T=T)))
         key = getattr(attn, "ratio", 0)
-        if key not in groups:
+        if STEPS and key not in groups:
             groups[key] = DSV41StepState(attn)
         built.append((L, layer, key))
         gc.collect()
@@ -107,9 +131,9 @@ def test_prefill_model(mesh_device):
         host_rows.load_ram()
         log(f"Engram tables in RAM {time.time() - t1:.0f}s")
     dev_engram = {l: DSV41DeviceEngram(md, l, sh, mesh_config=chain.mesh_config, ccl=chain.ccl) for l in engram_ids}
-    embedding = DSV41DeviceEmbedding(md, sh.get("embed.weight"), users_per_row=4)
+    embedding = DSV41DeviceEmbedding(md, sh.get("embed.weight"), users_per_row=U)
     head = DSV41DeviceHead(md, sh.get("norm.weight").float(), sh.get("head.weight"), norm_eps=R.model_args().norm_eps)
-    model = DSV41PrefillModel(md, pls, embedding, head, dev_engram, host_rows, users_per_row=4)
+    model = DSV41PrefillModel(md, pls, embedding, head, dev_engram, host_rows, users_per_row=U)
 
     Sp = pad_len(S)
     chain_pcc = os.environ.get("DSV41_CHAIN_PCC") == "1"
@@ -117,25 +141,27 @@ def test_prefill_model(mesh_device):
 
     def hook(lid, xs, pres):
         ref = torch.load(os.path.join(DIR, f"layer_{lid}.pt"), mmap=True)["prefill"]
-        got = from_chunks([rd(x) for x in xs], rows, 4, Sp, S, (4, 5120))
+        got = from_chunks([rd(x) for x in xs], rows, U, Sp, S, (4, 5120))
         log(
             f"CHAIN layer {lid:2d}: hidden PCC {R.pcc(got, ref['h_out'].float()):.5f}  last-token {R.pcc(got[:, -1], ref['h_out'][:, -1].float()):.5f}"
         )
 
     res = []
-    for rep in range(2):
+    for rep in range(int(os.environ.get("DSV41_REPS", "2"))):
         hashes = None
         if (
             host_rows is not None and rep == 1
         ):  # the host hash history must see the prompt once: re-hash is idempotent for the same tokens
             pass
         t1 = time.perf_counter()
-        logits = model.run(prompt, hook=hook if (chain_pcc and rep == 0) else None)
+        logits = model.run(prompt, chunk=CHUNK, hook=hook if (chain_pcc and rep == 0) else None)
         ttft = time.perf_counter() - t1
         res.append(ttft)
         log(
-            f"PREFILL run {rep}: TTFT {ttft:.2f} s for {B} users x {S} tokens ({B * S / ttft:.0f} tok/s)  breakdown {{{', '.join(f'{k}: {v:.2f}' for k, v in model.timing.items())}}}"
+            f"PREFILL run {rep} chunk {CHUNK or 'whole'}: TTFT {ttft:.2f} s for {B} users x {S} tokens ({B * S / ttft:.0f} tok/s)  breakdown {{{', '.join(f'{k}: {v:.2f}' for k, v in model.timing.items())}}}"
         )
+    if os.environ.get("DSV41_SAVE_LOGITS"):
+        torch.save(logits, os.environ["DSV41_SAVE_LOGITS"])
     if fin is not None and "prefill_logits" in fin:
         p = R.pcc(logits, fin["prefill_logits"])
         am = logits.argmax(-1)
@@ -143,7 +169,7 @@ def test_prefill_model(mesh_device):
     else:
         log(f"first tokens {logits.argmax(-1).tolist()}")
     if os.environ.get("DSV41_TRACE") == "1":
-        model.capture_trace()
+        model.capture_trace(S)
         log("prefill trace captured")
         for rep in range(3):
             t1 = time.perf_counter()

@@ -9,12 +9,14 @@ the mesh row's R = U*Sp tokens are processed in chunks of T = 32 (user-major) by
 Engram), attention runs over all R tokens of the row (``DSV41PrefillAttention``).
 """
 
+import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import torch
 
 import ttnn
-from models.demos.blackhole.deepseek_v41_flash.tt.prefill_attention import pad_len
+from models.demos.blackhole.deepseek_v41_flash.tt.prefill_attention import clear_chunk_caches, pad_len
 
 T = 32
 
@@ -50,6 +52,10 @@ class DSV41PrefillModel:
             mesh_mapper=ttnn.ReplicateTensorToMesh(md),
         )
         self.timing = {}
+        self._bufs = {}
+        self.pre_replay_hooks, self.post_replay_hooks = [], []
+        self.dyn = self.dyn_trace = None
+        self.fake_rows, self._fake = False, {}
 
     def _up(self, t, dtype, layout):
         return ttnn.from_torch(
@@ -65,72 +71,110 @@ class DSV41PrefillModel:
         ttnn.synchronize_device(self.md)
         self.timing[name] = self.timing.get(name, 0.0) + time.perf_counter() - t0
 
-    # ---- device-input staging (persistent buffers: the whole forward can be captured as ONE trace) ----------------------
-    def alloc_inputs(self, S):
-        """Persistent device buffers for the token chunks and the Engram rows of a prompt length ``S`` (filled by ``write_inputs``)."""
-        Sp = pad_len(S)
-        n = self.U * Sp // T
+    # ---- device-input staging (persistent buffers per chunk length: a single-chunk forward can be captured as ONE trace) --------
+    def alloc_inputs(self, C):
+        """Persistent device buffers for ONE prompt chunk of ``C`` tokens per user: tokens [R,1] (one per mesh row, R = U*C) and, per Engram layer,
+        the rows [1,1,R,Kin] (token = tile row); the 32-token slices are taken on the device. One upload per tensor instead of one per 32 tokens.
+        """
+        if C in self._bufs:
+            return self._bufs[C]
+        R = self.U * C
         rows = self.rows
-        self.n_chunks, self.S, self.Sp = n, S, Sp
-        self.tok_dev = [
-            self._up(torch.zeros(rows * T, 1, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT) for _ in range(n)
-        ]
-        self.erows_dev = {
-            lid: [
-                self._up(torch.zeros(rows * T, 1, 1, e.kin, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT)
-                for _ in range(n)
-            ]
+        tok = self._up(torch.zeros(rows * R, 1, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+        er = {
+            lid: self._up(torch.zeros(rows, 1, R, e.kin, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT)
             for lid, e in self.engram.items()
         }
+        self._bufs[C] = (tok, er)
+        return self._bufs[C]
 
     def _host(self, t, dtype, layout):
         return ttnn.from_torch(t.contiguous(), dtype=dtype, layout=layout, mesh_mapper=self.shard)
 
-    def write_inputs(self, tokens, hashes=None):
-        """Host work of a prefill: pad + chunk the tokens, hash the prompt (the host Engram history must see it once), gather the Engram
-        rows and copy everything into the persistent device buffers."""
-        B, S = tokens.shape
-        assert S == self.S
-        rows, U, Sp = self.rows, self.U, self.Sp
-        t0 = time.perf_counter()
-        for c, dev in zip(to_chunks(tokens, rows, U, Sp, S, (1,)), self.tok_dev):
-            ttnn.copy_host_to_device_tensor(self._host(c.to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT), dev)
-        if self.engram:
-            if hashes is None:
-                hashes = self.host_rows.hashes(tokens, 0)
-            self.timing["engram_host_hash"] = time.perf_counter() - t0
-            for lid, devs in self.erows_dev.items():
-                r = self.host_rows.rows(lid, hashes)  # [B, S, Kin] bf16
-                for c, dev in zip(to_chunks(r, rows, U, Sp, S, (1, 1, r.shape[-1])), devs):
-                    ttnn.copy_host_to_device_tensor(
-                        self._host(c.to(torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT), dev
-                    )
-        self.timing["host_inputs"] = time.perf_counter() - t0
+    def prep_inputs(self, tokens, hashes=None):
+        """CPU part of a chunk's inputs (safe to run in a worker thread): tokens [B, C] (padded) and the Engram row gather -> host tensors."""
+        B, C = tokens.shape
+        rows, R = self.rows, self.U * C
+        out = {"tok": tokens.reshape(rows * R, 1).to(torch.int32)}
+        for lid in self.engram:
+            t1 = time.perf_counter()
+            if (
+                self.fake_rows
+            ):  # throughput runs on hosts without the RAM tables: constant synthetic rows (the gather cost is measured separately)
+                fr = self._fake.setdefault(lid, torch.randn(1, 1, self.engram[lid].kin).to(torch.bfloat16))
+                out[lid] = fr.expand(rows, 1, R, fr.shape[-1]).contiguous()
+                continue
+            r = self.host_rows.rows(lid, hashes)  # [B, C, Kin] bf16, user-major: table gather + fp8 -> bf16 dequant
+            t2 = time.perf_counter()
+            out[lid] = r.reshape(rows, 1, R, r.shape[-1]).to(torch.bfloat16)
+            self.timing["host_rows_gather_dequant"] = self.timing.get("host_rows_gather_dequant", 0.0) + t2 - t1
+        return out
 
-    def forward_device(self, hook=None, profile=False):
-        """Embedding -> layers (+Engram) -> head on the chunks holding the last real token of each user. Only enqueues device ops
-        (traceable when ``hook`` / ``profile`` are off). Returns {local user: logits shard [1,1,1,vocab/cols] of its last token}.
-        """
-        S, Sp = self.S, self.Sp
+    def upload_inputs(self, prepped, bufs):
+        t0 = time.perf_counter()
+        tok, er = bufs
+        ttnn.copy_host_to_device_tensor(self._host(prepped["tok"], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT), tok)
+        for lid, dev in er.items():
+            t1 = time.perf_counter()
+            h = self._host(prepped[lid], ttnn.bfloat16, ttnn.TILE_LAYOUT)  # host tilize + shard
+            t2 = time.perf_counter()
+            ttnn.copy_host_to_device_tensor(h, dev)
+            t3 = time.perf_counter()
+            self.timing["host_tilize"] = self.timing.get("host_tilize", 0.0) + t2 - t1
+            self.timing["h2d_copy"] = self.timing.get("h2d_copy", 0.0) + t3 - t2
+            self.h2d_bytes = (
+                self.h2d_bytes + prepped[lid].numel() * 2 * self.cols
+                if hasattr(self, "h2d_bytes")
+                else prepped[lid].numel() * 2 * self.cols
+            )
+        self.timing["host_upload"] = self.timing.get("host_upload", 0.0) + time.perf_counter() - t0
+
+    def write_inputs(self, tokens, hashes=None, bufs=None):
+        t0 = time.perf_counter()
+        pre = self.prep_inputs(tokens, hashes)
+        self.timing["host_gather"] = self.timing.get("host_gather", 0.0) + time.perf_counter() - t0
+        self.upload_inputs(pre, bufs or self.alloc_inputs(tokens.shape[1]))
+
+    def forward_device(self, bufs, S, s0, C, hook=None, profile=False, dyn=False):
+        """One prompt chunk (positions [s0, s0+C) of every user): embedding -> layers (+Engram) -> (last chunk only) head on the chunks holding the
+        last real token of each user. Only enqueues device ops (traceable when ``hook`` / ``profile`` are off). Returns {local user: logits shard
+        [1,1,1,vocab/cols] of its last token} for the last chunk, else None."""
+        tok_dev, erows_dev = bufs
+        last = s0 + C >= S
+        if (
+            dyn
+        ):  # traced-chunk mode: the masks are built on the device from the per-chunk tensors, the outputs stay in ``self.dyn_out``
+            self.dyn.build_masks()
 
         def sync(name, t0):
             if profile:
                 self.sync(name, t0)
 
         t0 = time.perf_counter()
-        xs = [self.embedding.forward(tt)[0] for tt in self.tok_dev]
+        n32 = self.U * C // T
+        xs = [self.embedding.forward(ttnn.slice(tok_dev, [c * T, 0], [(c + 1) * T, 1]))[0] for c in range(n32)]
         pres = [self.pre32 for _ in xs]
         sync("embedding", t0)
         for lid, pl in self.layers:
             if lid in self.engram:
                 t0 = time.perf_counter()
-                new = [self.engram[lid].forward(x, rt) for x, rt in zip(xs, self.erows_dev[lid])]
+                fe = (
+                    self.engram[lid].forward
+                    if os.environ.get("DSV41_ENGRAM_V2") == "0"
+                    else self.engram[lid].forward_v2
+                )
+                kin = erows_dev[lid].shape[3]
+                sl = lambda c: ttnn.slice(erows_dev[lid], [0, 0, c * T, 0], [1, 1, (c + 1) * T, kin])
+                new = [
+                    fe(x, sl(c) if fe.__name__ == "forward_v2" else ttnn.reshape(sl(c), [T, 1, 1, kin]))
+                    for c, x in enumerate(xs)
+                ]
                 for x in xs:
                     ttnn.deallocate(x)
                 xs = new
                 sync("engram_dev", t0)
             t0 = time.perf_counter()
-            outs, pouts = pl.forward(xs, pres, S)
+            outs, pouts = pl.forward(xs, pres, S, s0=s0)
             if xs[0] is not outs[0]:
                 for x in xs:
                     ttnn.deallocate(x)
@@ -141,21 +185,35 @@ class DSV41PrefillModel:
             sync("layers", t0)
             if hook is not None:
                 hook(lid, xs, pres)
+        if dyn:
+            self.dyn_out = (xs, pres)
+            return None
+        if not last:
+            for x in xs:
+                ttnn.deallocate(x)
+            for p in pres:
+                ttnn.deallocate(p)
+            return None
         t0 = time.perf_counter()
+        lg = self.last_logits(xs, pres, S, s0, C)
+        sync("head", t0)
+        return lg
+
+    def last_logits(self, xs, pres, S, s0, C):
+        """Head on the 32-token chunks that hold the last real token of each user -> {local user: logits shard of its last token}."""
         full, lg = {}, {}
         for u in range(self.U):
-            c, off = divmod(u * Sp + S - 1, T)
+            c, off = divmod(u * C + S - 1 - s0, T)
             if c not in full:
                 full[c] = self.head.forward(xs[c], pres[c])
             lg[u] = ttnn.slice(
                 full[c], [0, 0, off, 0], [1, 1, off + 1, full[c].shape[3]]
             )  # only the row of the last real token is read back
-        sync("head", t0)
         return lg
 
     def read_logits(self, lg):
         """Host [B, vocab] logits of the last prompt token of every user from ``forward_device``'s outputs."""
-        rows, U, S, Sp = self.rows, self.U, self.S, self.Sp
+        rows, U = self.rows, self.U
         out = torch.zeros(rows * U, 129280)
         for u in range(U):
             g = self.head.gather_logits(lg[u]).reshape(rows, -1)  # [rows, vocab]
@@ -163,32 +221,206 @@ class DSV41PrefillModel:
                 out[r * U + u] = g[r]
         return out
 
-    def run(self, tokens, hook=None, hashes=None):
-        """Eager convenience wrapper: tokens [B, S] -> logits [B, vocab] (host fp32) of the LAST prompt token of every user.
-        ``hook(layer_id, outs, pouts)`` is called after every layer (diagnostics)."""
+    def chunk_plan(self, S, chunk=None):
+        """[(s0, C)] covering the prompt: chunks of ``chunk`` tokens (multiple of 128), the last one padded up to a multiple of 64."""
+        Sp = pad_len(S)
+        if not chunk or chunk >= Sp:
+            return [(0, Sp)]
+        assert chunk % 128 == 0
+        plan, s0 = [], 0
+        while s0 < S:
+            plan.append((s0, chunk if S - s0 > chunk else pad_len(S - s0)))
+            s0 += chunk
+        return plan
+
+    def run(self, tokens, chunk=None, hook=None, hashes=None):
+        """Eager: tokens [B, S] -> logits [B, vocab] (host fp32) of the LAST prompt token of every user, the decode state of every layer left on the
+        device. ``chunk``: tokens per user per chunk (multiple of 128; None = the whole prompt at once). ``hook(layer_id, outs, pouts)`` is
+        called after every layer of a single-chunk run (diagnostics)."""
         B, S = tokens.shape
         assert B == self.rows * self.U
+        if getattr(self, "dyn", None) is not None:
+            self.teardown_dyn()  # the static eager path and the traced-chunk mode keep different carried state
         self.timing = {}
-        if getattr(self, "S", None) != S:
-            self.alloc_inputs(S)
-        self.write_inputs(tokens, hashes)
-        lg = self.forward_device(hook=hook, profile=True)
+        self.S = S
+        plan = self.chunk_plan(S, chunk)
+        self.plan = plan
+        if self.engram and hashes is None:
+            t0 = time.perf_counter()
+            hashes = self.host_rows.hashes(tokens, 0)  # [B, S, ...]; the host history must see the prompt once
+            self.timing["engram_host_hash"] = time.perf_counter() - t0
+        for _, pl in self.layers:
+            pl.pa.begin()
+        lg = None
+
+        def prep(
+            ci,
+        ):  # CPU gather of chunk ci (runs in a worker thread, overlapped with the device work of the previous chunk)
+            s0, C = plan[ci]
+            n = min(C, S - s0)
+            tk = tokens[:, s0 : s0 + n]
+            hs = None if hashes is None else hashes[:, s0 : s0 + n]
+            if n < C:  # pad with the last real token (hash)
+                tk = torch.cat([tk, tk[:, -1:].expand(B, C - n)], dim=1)
+                if hs is not None:
+                    hs = torch.cat([hs, hs[:, -1:].expand(B, C - n, *hs.shape[2:])], dim=1)
+            return self.prep_inputs(tk, hs)
+
+        t_run = time.perf_counter()
+        pool = ThreadPoolExecutor(1)
+        fut = pool.submit(prep, 0)
+        for ci, (s0, C) in enumerate(plan):
+            t0 = time.perf_counter()
+            pre = fut.result()
+            self.timing["host_gather_wait"] = self.timing.get("host_gather_wait", 0.0) + time.perf_counter() - t0
+            if ci + 1 < len(plan):
+                fut = pool.submit(prep, ci + 1)
+            bufs = self.alloc_inputs(C)
+            self.upload_inputs(pre, bufs)
+            lg = self.forward_device(bufs, S, s0, C, hook=hook if len(plan) == 1 else None, profile=True)
+            if len(plan) > 1:
+                ttnn.synchronize_device(self.md)
+                print(
+                    f"  prefill chunk {ci + 1}/{len(plan)} (s0={s0}, C={C}) done at {time.perf_counter() - t_run:.1f} s",
+                    flush=True,
+                )
+            if len(plan) > 1:  # single chunk: keep the constants, a trace capture cannot upload
+                clear_chunk_caches()
+        pool.shutdown()
         t0 = time.perf_counter()
         out = self.read_logits(lg)
         self.timing["readback"] = time.perf_counter() - t0
         return out
 
-    def capture_trace(self):
-        """Capture the whole prefill (embedding .. head) as ONE trace; call after an eager ``run`` warmed every program."""
+    # ---- traced chunks: ONE trace of the chunk forward, replayed for every chunk of the prompt -------------------------------
+    def setup_dyn(self, C, S_pad):
+        from models.demos.blackhole.deepseek_v41_flash.tt.prefill_dyn import DynCtx
+
+        ratios, rope_src = set(), {}
+        for _, pl in self.layers:
+            ratios.add(pl.pa.ratio)
+            rope_src.setdefault(pl.pa.compressed, pl.pa.a)
+        self.dyn = DynCtx(self.md, C, S_pad, ratios, rope_src)
+        for _, pl in self.layers:
+            pl.pa.alloc_dyn(self.dyn)
+        self.dyn_trace = None
+        self.pre_replay_hooks = getattr(self, "pre_replay_hooks", [])
+        self.post_replay_hooks = getattr(self, "post_replay_hooks", [])
+
+    def teardown_dyn(self):
+        """Release the chunk trace and the per-chunk buffers (a different chunk size / padded prompt length needs a new capture)."""
+        if getattr(self, "dyn_trace", None) is not None:
+            ttnn.release_trace(self.md, self.dyn_trace)
+        self.dyn_trace = None
+        for _, pl in self.layers:
+            pl.pa.dyn = pl.pa.halo = pl.pa.lat_buf = None
+        self.dyn = None
+
+    def begin_chunk(self, s0, C):
+        """Host side of a chunk: refresh every per-chunk persistent tensor (RoPE tables, masks, latent offsets) and call the registered hooks
+        (e.g. the paged-state sink's own uploads) right before the replay."""
+        self.dyn.update(s0)
+        for h in self.pre_replay_hooks:
+            h(s0, C)
+
+    def run_traced_chunks(self, tokens, chunk, hashes=None, S_pad_max=None):
+        """tokens [B, S] -> logits [B, vocab] of the last prompt token. One trace of the chunk forward (C = ``chunk`` tokens per user, multiple of
+        128), replayed for every chunk; the last partial chunk is padded. The first call compiles + captures (``self.timing['compile']``).
+        """
+        B, S = tokens.shape
+        C = chunk
+        assert C % 128 == 0 and B == self.rows * self.U
+        n = -(-S // C)
+        S_pad = n * C
+        self.timing = {}
+        self.S, self.plan = S, [(c * C, C) for c in range(n)]
+        if self.engram and hashes is None:
+            hashes = self.host_rows.hashes(tokens, 0)
+        want = S_pad_max or S_pad
+        if getattr(self, "dyn", None) is None or self.dyn.C != C or self.dyn.S_pad != want:
+            self.teardown_dyn()
+            self.setup_dyn(C, want)
+        pad = lambda t: torch.cat([t, t[:, -1:].expand(B, S_pad - S, *t.shape[2:])], dim=1) if S_pad > S else t
+        tk, hs = pad(tokens), None if hashes is None else pad(hashes)
+        bufs = self.alloc_inputs(C)
+
+        def prep(ci):
+            return self.prep_inputs(tk[:, ci * C : (ci + 1) * C], None if hs is None else hs[:, ci * C : (ci + 1) * C])
+
+        pool = ThreadPoolExecutor(1)
+        fut = pool.submit(prep, 0)
+        if self.dyn_trace is None:  # compile pass (eager, chunk 0), then capture
+            t0 = time.perf_counter()
+            self.upload_inputs(fut.result(), bufs)
+            fut = pool.submit(prep, 1) if n > 1 else None
+            self.begin_chunk(0, C)
+            self.forward_device(bufs, S, 0, C, dyn=True)
+            ttnn.synchronize_device(self.md)
+            for x in self.dyn_out[0]:
+                ttnn.deallocate(x)
+            for _, pl in self.layers:
+                pl.pa.reset_dyn()
+            ttnn.synchronize_device(self.md)
+            self.dyn_trace = ttnn.begin_trace_capture(self.md, cq_id=0)
+            self.forward_device(bufs, S, 0, C, dyn=True)
+            ttnn.end_trace_capture(self.md, self.dyn_trace, cq_id=0)
+            ttnn.synchronize_device(self.md)
+            self.timing["compile_and_capture"] = time.perf_counter() - t0
+            fut = pool.submit(prep, 0)
+        for _, pl in self.layers:
+            pl.pa.reset_dyn()
+        t_run = time.perf_counter()
+        for ci in range(n):
+            t0 = time.perf_counter()
+            pre = fut.result()
+            if ci + 1 < n:
+                fut = pool.submit(prep, ci + 1)
+            self.upload_inputs(pre, bufs)
+            self.begin_chunk(ci * C, C)
+            t1 = time.perf_counter()
+            ttnn.execute_trace(self.md, self.dyn_trace, cq_id=0, blocking=False)
+            ttnn.synchronize_device(self.md)
+            t2 = time.perf_counter()
+            for (
+                hk
+            ) in (
+                self.post_replay_hooks
+            ):  # e.g. the ragged last-token head: dyn_out = (xs, pres) is valid for THIS chunk only
+                hk(ci * C, C)
+            self.timing["host_per_chunk"] = self.timing.get("host_per_chunk", 0.0) + t1 - t0
+            self.timing["replay_per_chunk"] = self.timing.get("replay_per_chunk", 0.0) + t2 - t1
+            if n > 4 and (ci + 1) % 8 == 0:
+                print(f"  traced chunk {ci + 1}/{n} done at {time.perf_counter() - t_run:.1f} s", flush=True)
+        pool.shutdown()
+        t0 = time.perf_counter()
+        xs, pres = self.dyn_out
+        lg = self.last_logits(xs, pres, S, (n - 1) * C, C)
+        out = self.read_logits(lg)
+        self.timing["head_readback"] = time.perf_counter() - t0
+        self.timing["total_replay_loop"] = time.perf_counter() - t_run
+        return out
+
+    def capture_trace(self, S):
+        """Capture the whole single-chunk prefill (embedding .. head) as ONE trace; call after an eager ``run`` warmed every program."""
+        ((s0, C),) = self.chunk_plan(S)
+        self._tr = (self.alloc_inputs(C), S, C)
+        for _, pl in self.layers:
+            pl.pa.begin()
         ttnn.synchronize_device(self.md)
         self.trace_id = ttnn.begin_trace_capture(self.md, cq_id=0)
-        self.trace_out = self.forward_device()
+        self.trace_out = self.forward_device(self._tr[0], S, 0, C)
         ttnn.end_trace_capture(self.md, self.trace_id, cq_id=0)
         ttnn.synchronize_device(self.md)
 
     def run_traced(self, tokens, hashes=None):
         self.timing = {}
-        self.write_inputs(tokens, hashes)
+        bufs, S, C = self._tr
+        B = tokens.shape[0]
+        tk = torch.cat([tokens, tokens[:, -1:].expand(B, C - S)], dim=1)
+        if self.engram and hashes is None:
+            hashes = self.host_rows.hashes(tokens, 0)
+        hs = None if hashes is None else torch.cat([hashes, hashes[:, -1:].expand(B, C - S, *hashes.shape[2:])], dim=1)
+        self.write_inputs(tk, hs, bufs)
         t0 = time.perf_counter()
         ttnn.execute_trace(self.md, self.trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(self.md)
