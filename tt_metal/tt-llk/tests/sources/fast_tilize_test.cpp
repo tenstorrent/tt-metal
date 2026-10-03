@@ -67,6 +67,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A          = params.buffer_A;
 #endif
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -81,6 +82,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_fast_tilize_init_(formats.unpack_A_dst, BLOCK_CT_DIM);
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         for (std::uint32_t loop = 0; loop < static_cast<std::uint32_t>(LOOP_FACTOR); loop++)
@@ -142,8 +144,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-
-    _llk_unpack_fast_tilize_uninit_<is_fp32_dest_acc_en>();
+    LLK_INIT_BEGIN
+    {
+        _llk_unpack_fast_tilize_uninit_<is_fp32_dest_acc_en>();
+    }
+    LLK_INIT_END;
 }
 
 #endif
@@ -163,6 +168,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t BLOCK_RT_DIM = params.BLOCK_RT_DIM;
 #endif
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
@@ -170,6 +176,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_fast_tilize_init_(formats.math, BLOCK_CT_DIM == 1 ? 1 : 2);
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         for (std::uint32_t loop = 0; loop < static_cast<std::uint32_t>(LOOP_FACTOR); loop++)
@@ -231,8 +238,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-
-    _llk_math_fast_tilize_uninit_<is_fp32_dest_acc_en>(formats.math);
+    LLK_INIT_BEGIN
+    {
+        _llk_math_fast_tilize_uninit_<is_fp32_dest_acc_en>(formats.math);
+    }
+    LLK_INIT_END;
 }
 
 #endif
@@ -254,6 +264,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     std::uint32_t use_32bit_dest = formats.unpack_A_dst == ckernel::to_underlying(DataFormat::Tf32);
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>();
@@ -262,6 +273,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_fast_tilize_init_<DstSync::SyncHalf>(use_32bit_dest, formats.pack_dst, BLOCK_CT_DIM == 1 ? 1 : 2, num_faces);
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         for (std::uint32_t loop = 0; loop < static_cast<std::uint32_t>(LOOP_FACTOR); loop++)
@@ -326,8 +338,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-
-    _llk_pack_fast_tilize_uninit_<DstSync::SyncHalf, is_fp32_dest_acc_en>(formats.pack_dst, FACE_R_DIM, num_faces);
+    LLK_INIT_BEGIN
+    {
+        _llk_pack_fast_tilize_uninit_<DstSync::SyncHalf, is_fp32_dest_acc_en>(formats.pack_dst, FACE_R_DIM, num_faces);
+    }
+    LLK_INIT_END;
 }
 
 #endif
