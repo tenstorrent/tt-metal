@@ -95,26 +95,50 @@ static void assign_rows_to_cores(
 
 namespace ttml::metal::ops::softmax_backward::device {
 
-struct KernelMode {
-    uint32_t buffering_multiplier;
-    uint32_t required_memory_bytes;
-    uint32_t tiles_per_block;
-};
-
-static constexpr uint32_t memory_estimator(uint32_t width_tiles, uint32_t tile_size) {
-    return (width_tiles * tile_size) * 3U + (1U * tile_size) * 3U;  // src0, src1, out; sum_reduce, ones, partial
+static constexpr uint64_t memory_estimator(uint32_t width_tiles, uint32_t tile_size, uint32_t buffering_multiplier) {
+    // src0, src1, and out are block-buffered; sum_reduce, ones, and partial are single tiles.
+    return (3ULL * buffering_multiplier * width_tiles + 3ULL) * tile_size;
 }
 
 static KernelMode get_kernel_mode(uint32_t width_tiles, uint32_t tile_size, const tt::tt_metal::IDevice* device) {
-    const uint32_t available_L1_in_bytes =
-        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const uint32_t full_row_memory_needed = memory_estimator(width_tiles, tile_size);
-    const uint32_t tiles_per_block = (full_row_memory_needed < available_L1_in_bytes) ? width_tiles : 4U;
-    const uint32_t new_estimation_memory_needed = memory_estimator(tiles_per_block, tile_size);
-    // Double buffering when total L1 with 2x fits: for streaming (small blocks) and for short rows (e.g. 6000x5).
-    // Long full rows (e.g. 127 tiles) get 1x so we stay under L1.
-    const uint32_t buffering_multiplier = (new_estimation_memory_needed * 2U <= available_L1_in_bytes) ? 2U : 1U;
-    return {buffering_multiplier, new_estimation_memory_needed, tiles_per_block};
+    const uint64_t allocator_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    uint64_t live_ceiling = device->l1_size_per_core();
+    if (const auto lowest_occupied = device->lowest_occupied_compute_l1_address(); lowest_occupied.has_value()) {
+        live_ceiling = std::min(live_ceiling, static_cast<uint64_t>(*lowest_occupied));
+    }
+    const uint64_t available_l1 = live_ceiling > allocator_base ? live_ceiling - allocator_base : 0ULL;
+
+    const auto fits = [&](uint32_t tiles_per_block, uint32_t buffering_multiplier) {
+        return memory_estimator(tiles_per_block, tile_size, buffering_multiplier) <= available_l1;
+    };
+    if (fits(width_tiles, 2U)) {
+        return {2U, memory_estimator(width_tiles, tile_size, 2U), width_tiles};
+    }
+    if (fits(width_tiles, 1U)) {
+        return {1U, memory_estimator(width_tiles, tile_size, 1U), width_tiles};
+    }
+
+    const uint32_t streaming_tiles = std::min(width_tiles, 4U);
+    if (fits(streaming_tiles, 2U)) {
+        return {2U, memory_estimator(streaming_tiles, tile_size, 2U), streaming_tiles};
+    }
+    TT_FATAL(
+        fits(streaming_tiles, 1U),
+        "SoftmaxBackward: minimum {}-tile streaming plan needs {} bytes of contiguous per-core L1, but only {} "
+        "bytes are currently available",
+        streaming_tiles,
+        memory_estimator(streaming_tiles, tile_size, 1U),
+        available_l1);
+    return {1U, memory_estimator(streaming_tiles, tile_size, 1U), streaming_tiles};
+}
+
+KernelMode plan_kernel_mode(
+    const SoftmaxBackwardParams& /*operation_attributes*/, const SoftmaxBackwardInputs& tensor_args) {
+    const auto& softmax_output = tensor_args.softmax_output;
+    const auto tile = softmax_output.tensor_spec().tile();
+    const uint32_t width_tiles = softmax_output.padded_shape()[-1] / tile.get_width();
+    const uint32_t intermed_tile_size = tile_size(datatype_to_dataformat_converter(softmax_output.dtype()));
+    return get_kernel_mode(width_tiles, intermed_tile_size, softmax_output.device());
 }
 
 static void get_tensor_properties(
@@ -198,7 +222,7 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
         tensor_return_value);
 
     const auto [buffering_multiplier, required_memory_bytes, tiles_per_block] =
-        get_kernel_mode(width_tiles, intermed_tile_size, device);
+        plan_kernel_mode(operation_attributes, tensor_args);
 
     log_debug(
         tt::LogOp,
