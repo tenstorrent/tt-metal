@@ -6,6 +6,7 @@
 #include "tensor/tensor_ops.hpp"
 
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/core.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -142,7 +143,7 @@ Tensor to_device(
         GraphTracker::instance().track_function_end(input_tensor);
         return input_tensor;
     }
-    auto& cq = mesh_device->mesh_command_queue(raw_optional(cq_id));
+    auto& cq = ttnn::core::current_mesh_command_queue(*mesh_device, cq_id);
     Tensor device_tensor;
     if (is_uniform_write(input_tensor.host_tensor(), *mesh_device)) {
         if (mem_config) {
@@ -175,7 +176,7 @@ namespace ttnn {
 
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<QueueId> cq_id) {
     GraphTracker::instance().track_function_start("tt::tt_metal::copy_to_device", host_tensor, device_tensor, cq_id);
-    auto& cq = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
+    auto& cq = ttnn::core::current_mesh_command_queue(*device_tensor.device(), cq_id);
     if (is_uniform_write(host_tensor.host_tensor(), *device_tensor.device())) {
         cq.enqueue_write_tensor(host_tensor.host_tensor(), device_tensor.device_storage().get_mesh_tensor());
     } else {
@@ -212,7 +213,7 @@ void copy_to_host(
 void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blocking, std::optional<QueueId> cq_id) {
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::copy_to_host", device_tensor, host_tensor, blocking, cq_id);
-    auto& cq = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
+    auto& cq = ttnn::core::current_mesh_command_queue(*device_tensor.device(), cq_id);
     if (device_tensor.device_storage().is_uniform_storage()) {
         cq.enqueue_read_tensor(device_tensor.mesh_tensor(), host_tensor.host_storage().host_tensor(), blocking);
     } else {
@@ -230,7 +231,7 @@ Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_
 
     GraphTracker::instance().track_function_start("Tensor::cpu", input_tensor, blocking);
 
-    auto& cq = input_tensor.device()->mesh_command_queue(raw_optional(cq_id));
+    auto& cq = ttnn::core::current_mesh_command_queue(*input_tensor.device(), cq_id);
     Tensor output;
     if (input_tensor.device_storage().is_uniform_storage()) {
         output = Tensor(cq.enqueue_read_tensor(input_tensor.mesh_tensor(), blocking));

@@ -55,6 +55,14 @@ BufferType GlobalSemaphoreImpl::buffer_type() const { return buffer_->device_loc
 DeviceAddr GlobalSemaphoreImpl::address() const { return buffer_->address(); }
 
 void GlobalSemaphoreImpl::reset_semaphore_value(uint32_t reset_value) const {
+    this->reset_semaphore_value(reset_value, /*mesh_cq=*/nullptr);
+}
+
+void GlobalSemaphoreImpl::reset_semaphore_value(uint32_t reset_value, distributed::MeshCommandQueue& mesh_cq) const {
+    this->reset_semaphore_value(reset_value, &mesh_cq);
+}
+
+void GlobalSemaphoreImpl::reset_semaphore_value(uint32_t reset_value, distributed::MeshCommandQueue* mesh_cq) const {
     // Blocking write here to ensure that Global Semaphore reset value lands on
     // each physical device before the next program runs.
     // This is to ensure that cross-chip writes to the Global Semaphore are not
@@ -65,7 +73,9 @@ void GlobalSemaphoreImpl::reset_semaphore_value(uint32_t reset_value) const {
     bool using_fast_dispatch = rtoptions.get_fast_dispatch();
     bool using_simulator = rtoptions.get_simulator_enabled();
     if (using_fast_dispatch && !using_simulator) {
-        mesh_device.mesh_command_queue().enqueue_write_mesh_buffer(buffer_, host_buffer.data(), /*blocking=*/true);
+        // No queue given: use cq 0. Metal has no implicit (thread-local) queue selection.
+        distributed::MeshCommandQueue& cq = mesh_cq != nullptr ? *mesh_cq : mesh_device.mesh_command_queue();
+        cq.enqueue_write_mesh_buffer(buffer_, host_buffer.data(), /*blocking=*/true);
     } else {
         for (const auto& coord : distributed::MeshCoordinateRange(mesh_device.shape())) {
             if (!mesh_device.is_local(coord)) {
@@ -153,6 +163,10 @@ const GlobalSemaphoreImpl& GlobalSemaphore::impl() const {
 DeviceAddr GlobalSemaphore::address() const { return impl().address(); }
 
 void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const { impl().reset_semaphore_value(reset_value); }
+
+void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value, distributed::MeshCommandQueue& mesh_cq) const {
+    impl().reset_semaphore_value(reset_value, mesh_cq);
+}
 
 std::tuple<CoreRangeSet, BufferType> GlobalSemaphore::attribute_values() const {
     return std::make_tuple(impl().cores(), impl().buffer_type());

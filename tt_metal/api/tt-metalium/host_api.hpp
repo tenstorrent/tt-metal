@@ -620,31 +620,4 @@ void ReadMeshDeviceProfilerResults(
     ProfilerReadState state = ProfilerReadState::NORMAL,
     const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
-// clang-format off
-/**
- * Push the current command queue id to the stack.
- * Return value: void
- * | Argument     | Description                                                                       | Type                          | Valid Range                        | Required |
- * |--------------|-----------------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | cq_id        | The command queue id to push.                                                     | uint8_t                       |                                    | Yes      |
- */
-// clang-format on
-void PushCurrentCommandQueueIdForThread(uint8_t cq_id);
-
-// clang-format off
-/**
- * Pop the current command queue id from the stack.
- * Return value: uint8_t
- */
-// clang-format on
-uint8_t PopCurrentCommandQueueIdForThread();
-
-// clang-format off
-/**
- * Get the current command queue id.
- * Return value: uint8_t
- */
-// clang-format on
-uint8_t GetCurrentCommandQueueIdForThread();
-
 }  // namespace tt::tt_metal

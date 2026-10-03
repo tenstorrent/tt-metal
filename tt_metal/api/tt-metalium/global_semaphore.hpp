@@ -19,6 +19,7 @@ namespace tt::tt_metal {
 class IDevice;
 class GlobalSemaphoreImpl;
 namespace distributed {
+class MeshCommandQueue;
 class MeshDevice;
 }  // namespace distributed
 }  // namespace tt::tt_metal
@@ -54,7 +55,19 @@ public:
 
     DeviceAddr address() const;
 
+    /**
+     * @brief Resets the semaphore on every local device to `reset_value` (blocking).
+     *
+     * With fast dispatch the write is issued on command queue 0. Use the overload taking a MeshCommandQueue to
+     * order the reset against work on a different queue.
+     */
     void reset_semaphore_value(uint32_t reset_value) const;
+
+    /**
+     * @brief Resets the semaphore on every local device to `reset_value` (blocking), issuing the write on
+     * `mesh_cq` when fast dispatch is enabled. The queue is ignored on slow dispatch / simulator.
+     */
+    void reset_semaphore_value(uint32_t reset_value, distributed::MeshCommandQueue& mesh_cq) const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("cores", "buffer_type");
     std::tuple<CoreRangeSet, BufferType> attribute_values() const;

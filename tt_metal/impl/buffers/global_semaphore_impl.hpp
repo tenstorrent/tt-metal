@@ -16,6 +16,7 @@ namespace tt::tt_metal {
 
 class GlobalSemaphore;
 namespace distributed {
+class MeshCommandQueue;
 class MeshDevice;
 }  // namespace distributed
 
@@ -52,9 +53,14 @@ public:
 
     DeviceAddr address() const;
 
+    // Resets via command queue 0 when using fast dispatch.
     void reset_semaphore_value(uint32_t reset_value) const;
+    // Resets via `mesh_cq` when using fast dispatch (the queue is ignored on slow dispatch / simulator).
+    void reset_semaphore_value(uint32_t reset_value, distributed::MeshCommandQueue& mesh_cq) const;
 
 private:
+    void reset_semaphore_value(uint32_t reset_value, distributed::MeshCommandQueue* mesh_cq) const;
+
     void setup_buffer(
         std::optional<uint32_t> initial_value, BufferType buffer_type, std::optional<uint64_t> address);
 

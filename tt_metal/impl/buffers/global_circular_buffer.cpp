@@ -396,9 +396,11 @@ void GlobalCircularBufferImpl::setup_cb_buffers(BufferType buffer_type, uint32_t
         device_->mesh_command_queue().enqueue_write_shards(cb_config_buffer_, shard_data_transfers, /*blocking=*/true);
     } else {
         // Every device gets the same config page, so one broadcast write covers the mesh.
+        // The write goes out on cq 0 (Metal has no implicit queue selection) and is blocking so that programs
+        // using this CB on any queue see the config regardless of which queue they are enqueued to.
         std::vector<uint32_t> cb_config_host_buffer = make_config_host_buffer(device_);
         distributed::EnqueueWriteMeshBuffer(
-            device_->mesh_command_queue(), cb_config_buffer_, cb_config_host_buffer, false);
+            device_->mesh_command_queue(), cb_config_buffer_, cb_config_host_buffer, /*blocking=*/true);
     }
 }
 
