@@ -145,15 +145,20 @@ def test_agmm_k2048_lookup(monkeypatch):
 @pytest.mark.parametrize("env, expected", [(None, "True"), ("0", "False")])
 def test_v2a_skip_default_on(env, expected):
     import os
+    import pathlib
     import subprocess
     import sys
 
     e = {k: v for k, v in os.environ.items() if k != "LTX_V2A_SKIP_PAD_MUL"}
     if env is not None:
         e["LTX_V2A_SKIP_PAD_MUL"] = env
+    # Import from this tree, not whatever checkout the venv's .pth points at.
+    root = str(pathlib.Path(tl.__file__).resolve().parents[5])
+    e["PYTHONPATH"] = os.pathsep.join(p for p in (root, e.get("PYTHONPATH")) if p)
     out = subprocess.run(
         [sys.executable, "-c", f"import {tl.__name__} as m; print(m.LTX_V2A_SKIP_PAD_MUL)"],
         env=e,
+        cwd=root,
         capture_output=True,
         text=True,
         check=True,
