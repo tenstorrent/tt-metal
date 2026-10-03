@@ -18,6 +18,9 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
+// Reuse direction (ct_dim >= rt_dim) the unpack MOP was programmed for; written and read only under LLK asserts.
+inline bool unpack_matmul_init_reuse_a = true;
+
 /**
  * @brief Set the SrcA address step used to stream matmul in1 columns.
  *
@@ -164,6 +167,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(
 
     const bool reuse_a             = ct_dim >= rt_dim;
     const bool stream_partial_face = reuse_a ? unpA_partial_face : unpB_partial_face;
+    LLK_ASSERT_BLOCK(unpack_matmul_init_reuse_a = reuse_a);
     // two copies of the streamed tile body, one per config context: the UNPACR group (4 instructions for a partial face,
     // 1 otherwise), the address advance (2 instructions for a narrow format, 4 otherwise) and the NOP
     const std::uint32_t replay_buf_run_len  = (stream_partial_face ? 4 : 1) + (stream_narrow ? 2 : 4) + 1;
@@ -357,6 +361,7 @@ inline void _llk_unpack_AB_matmul_(
 
     const bool reuse_a        = ct_dim >= rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
+    LLK_ASSERT(reuse_a == unpack_matmul_init_reuse_a, "matmul: ct_dim >= rt_dim differs from the init's; re-init for a block of the other reuse direction");
 
     if (!reuse_a)
     {
