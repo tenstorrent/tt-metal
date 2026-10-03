@@ -140,3 +140,22 @@ def test_agmm_k2048_lookup(monkeypatch):
     assert cfg is not None
     # Only the A2V to_out shape is redirected.
     assert attn_mod._to_out_fabric_agmm_config(4480, 2048, 512, grid) is None
+
+
+@pytest.mark.parametrize("env, expected", [(None, "True"), ("0", "False")])
+def test_v2a_skip_default_on(env, expected):
+    import os
+    import subprocess
+    import sys
+
+    e = {k: v for k, v in os.environ.items() if k != "LTX_V2A_SKIP_PAD_MUL"}
+    if env is not None:
+        e["LTX_V2A_SKIP_PAD_MUL"] = env
+    out = subprocess.run(
+        [sys.executable, "-c", f"import {tl.__name__} as m; print(m.LTX_V2A_SKIP_PAD_MUL)"],
+        env=e,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    assert out[-1] == expected

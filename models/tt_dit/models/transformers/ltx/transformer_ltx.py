@@ -48,7 +48,8 @@ LTX_PROBE_ADDCMUL_SPLIT = os.environ.get("LTX_PROBE_ADDCMUL_SPLIT", "0") in ("1"
 # Skip the V->A video pad-mask multiply when the ring cross SDPA already drops those rows. Exact only
 # when the mask's real region is >= kv_logical_n, which holds for the distilled pipeline (it builds
 # the mask from kv_logical_n). The non-distilled pipeline passes no kv_logical_n and keeps the multiply.
-LTX_V2A_SKIP_PAD_MUL = os.environ.get("LTX_V2A_SKIP_PAD_MUL", "0") in ("1", "true", "True")
+# On by default; =0 restores the multiply.
+LTX_V2A_SKIP_PAD_MUL = os.environ.get("LTX_V2A_SKIP_PAD_MUL", "1") in ("1", "true", "True")
 
 # Add each AdaLN table kind to its timestep embedding once per step for all blocks (one broadcast
 # add over a (num_blocks, coeff, 1, D) stack) instead of six small adds inside every block.
