@@ -3,10 +3,10 @@
 # LTX_TIME_STAGES=1, mp4 + still frame per config. Derived from t95's tmp/t86/run_eval.sh.
 # Both configs run in ONE broker job (submit.sh timeout 600); each pytest gets its own process so the
 # config's env flags apply at import. Budget per config: PER_CFG_S (default 280).
-# Usage (via submit.sh): bash /home/smarton/fasth3/t104/tmp/t104/run_smoke.sh
+# Usage (via submit.sh): W=<t48 tree on blx03> bash <copy of this script>
 # DRY_RUN=1 prints each config's env and pytest command (no device). DRY_RUN=import also imports the test module.
 set -o pipefail
-W=${W:-/home/smarton/fasth3/t104}
+W=${W:-/home/smarton/fasth3/t48}  # tree at the t48 tip, with its build
 BASE=${BASE:-/home/smarton/fasth3/tt-metal}
 OUT=${OUT:-$([ -n "$DRY_RUN" ] && echo /tmp/smoke104_dry || echo /var/tmp/fasth3/smoke104)}
 PER_CFG_S=${PER_CFG_S:-280}
