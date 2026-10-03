@@ -173,8 +173,7 @@ void BM_FanOut(benchmark::State& state) {
 
     state.counters["wall_p50_us"] = percentile(wall_us, 0.5);
     state.counters["wall_p99_us"] = percentile(wall_us, 0.99);
-    // For the pass-through pool the submit time includes running the tasks.
-    state.counters["submit_per_task_us"] = percentile(submit_us, 0.5);
+    state.counters["submit_per_task_us"] = percentile(submit_us, 0.5);  // PassThrough: includes running the tasks.
     state.counters["first_start_p50_us"] = percentile(first_start_us, 0.5);
     state.counters["first_start_p99_us"] = percentile(first_start_us, 0.99);
     state.counters["last_start_p50_us"] = percentile(last_start_us, 0.5);
