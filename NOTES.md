@@ -30,6 +30,22 @@
   (exact_s2_res).
 - Results: /var/tmp/fasth3/t114/results/*.json, per-layer log run114_<layer>.log.
 
+- 2026-10-03 08:33-08:42 UTC: job 484 (exact_s2_res, OUR job) HUNG. Combos 1-140 ran (table 13608 us; best so far
+  (64,256,1,8,8) 13464 us, -1.1%, under the 3% bar). After [140/300] no output for 300 s; broker killed it (exit
+  130). Post-job health gate: active-eth core heartbeat FROZEN (incident
+  /var/lib/tt-device-broker/health/incidents/20261003T084256Z_unhealthy_484 on blx03). Broker held the device,
+  glx_reset (job 486), fabric-check OK (488), device back for tenants at 08:44 UTC. Driver exited rc 9
+  (T114_DRIVER_DONE exact_s2_res 9). Per the rules: ALL device work stopped, reported, waiting for the user.
+- The hang is in combos 141-150 (CPU-reproduced order, tmp script in the handoff): (64,64,3,8,8) (64,64,3,16,4)
+  (64,128,6,8,8) (64,128,6,16,4) (64,32,3,4,4) (64,32,3,8,2) (64,128,5,4,4) (64,128,5,8,2) (64,128,7,4,4)
+  (64,128,7,8,2) on C_in=C_out=512, halo input (1,73,34,30,512), no masks. Fields are (Cin,Cout,T,H,W) blocks.
+- No layer finished; results/ is empty. /var/tmp/fasth3/t114 on blx03 is 133 MB (src copy + logs), kept for a resume.
+
+## Resume (only once the user clears device work again)
+- Do not rerun the same combo list blind: first bisect 141-150 with one short job that times them one by one with
+  a per-combo print before each launch (or exclude them), so a hang names the exact blocking.
+- Consider SWEEP_MAX_COMBOS=140 for exact_s2_res: 1-140 already cover the near-table neighbours.
+
 ## Next
 1. Read the JSONs. Accept a winner only if C_in_block == the table's (keeps the decode bit-identical) and
    best_us <= 0.97 * table_us; check output_check.
