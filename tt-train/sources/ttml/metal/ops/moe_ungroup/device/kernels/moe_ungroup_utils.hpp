@@ -9,6 +9,14 @@
 
 namespace ttml::metal::moe_ungroup {
 
+constexpr uint32_t kPlanSentinel = 0xFFFFFFFFU;
+
+// Plan rows index the dense [D, B, S, H] output directly. Treat malformed
+// rows like padding so they cannot reach the RMW address generator.
+constexpr uint32_t sanitize_plan_row(uint32_t row, uint32_t total_rows) {
+    return row < total_rows ? row : kPlanSentinel;
+}
+
 // Per-core contiguous slice of `total` items across `num_cores` cores.
 // Returns this core's [start, start+count). Cores whose start lands past
 // `total` get an empty slice (count = 0). Used both for the writer's
