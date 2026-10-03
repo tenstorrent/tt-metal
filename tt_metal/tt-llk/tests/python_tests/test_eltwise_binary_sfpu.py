@@ -213,6 +213,7 @@ _REGISTRY_DOMAIN_OPS = frozenset(
         MathOperation.SfpuElwmul,
         MathOperation.SfpuElwrsub,
         MathOperation.SfpuElwdiv,
+        MathOperation.SfpuDivNoNan,
         MathOperation.SfpuElwpow,
         MathOperation.SfpuXlogy,
         MathOperation.SfpuLogaddexp,
@@ -738,6 +739,62 @@ def test_eltwise_binary_sfpu_div(formats, dest_acc):
         dest_acc,
         MathOperation.SfpuElwdiv,
         broadcast_type=LlkBroadcastType.None_,
+    )
+
+
+@parametrize(
+    formats=input_output_formats(
+        [
+            DataFormat.Float32,
+            DataFormat.Float16,
+            DataFormat.Float16_b,
+        ]
+    ),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_div_no_nan(formats, dest_acc):
+    # The divide kernel with its zero-divisor arm. Away from zero it must match div; the zero
+    # divisor itself is driven below and by the edge sweep.
+    _skip_fp32_no_dest_acc(formats, dest_acc)
+    _skip_bh_float16_no_dest_acc(formats, dest_acc)
+
+    sfpu_binary(
+        formats,
+        dest_acc,
+        MathOperation.SfpuDivNoNan,
+        broadcast_type=LlkBroadcastType.None_,
+    )
+
+
+# Finite dividends over both signed zeros. The edge sweep pairs B = 0 only with a zero
+# dividend, so the case that defines div_no_nan, a finite x over +/-0, is driven here. Every
+# value is exact in bfloat16 so each format sees the same pairs.
+_DIV_NO_NAN_ZERO_DIVISOR_PAIRS = [
+    (a, b)
+    for a in (0.0, -0.0, 1.0, -1.0, 3.5, -0.75, 2.0**-126, -(2.0**100), 2.0**127)
+    for b in (0.0, -0.0)
+]
+
+
+@parametrize(
+    formats=input_output_formats(
+        [
+            DataFormat.Float32,
+            DataFormat.Float16_b,
+        ]
+    ),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_div_no_nan_zero_divisor(formats, dest_acc):
+    _skip_fp32_no_dest_acc(formats, dest_acc)
+
+    sfpu_binary(
+        formats,
+        dest_acc,
+        MathOperation.SfpuDivNoNan,
+        src_A_override=_build_paired_tile_override(
+            _DIV_NO_NAN_ZERO_DIVISOR_PAIRS, torch.float32
+        ),
     )
 
 

@@ -749,6 +749,7 @@ def test_binary_nan_sign_is_relaxed_only_where_sfpmad_emits_it():
         MathOperation.SfpuElwmul,
         MathOperation.SfpuElwrsub,
         MathOperation.SfpuElwdiv,
+        MathOperation.SfpuDivNoNan,
         MathOperation.SfpuBinaryFmod,
         MathOperation.SfpuBinaryRemainder,
         MathOperation.SfpuXlogy,

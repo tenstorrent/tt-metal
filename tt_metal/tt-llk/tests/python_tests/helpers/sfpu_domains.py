@@ -746,6 +746,14 @@ _OP_DOMAIN_REGISTRY: Dict[
             intervals=[(-10.0, -0.1), (0.1, 10.0)],
         ),
     ),
+    # div_no_nan: div's draw. A zero divisor is the one place it differs from div, and the
+    # edge sweep drives it through the B = 0 entry in _OP_SINGULARITIES.
+    MathOperation.SfpuDivNoNan: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0),
+        spec_B=StimuliSpec.uniform(
+            intervals=[(-10.0, -0.1), (0.1, 10.0)],
+        ),
+    ),
     MathOperation.SfpuElwrsub: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-1.0, high=1.0)
     ),
@@ -1080,6 +1088,7 @@ _SFPU_BINARY_OPS: FrozenSet[MathOperation] = frozenset(
         MathOperation.SfpuElwsub,
         MathOperation.SfpuElwmul,
         MathOperation.SfpuElwdiv,
+        MathOperation.SfpuDivNoNan,
         MathOperation.SfpuElwpow,
         MathOperation.SfpuElwrsub,
         MathOperation.SfpuXlogy,
@@ -1463,6 +1472,8 @@ _OP_SINGULARITIES: Dict[
     MathOperation.Acosh: {Operand.A: ((1.0, _ABOVE),)},
     # Binary: the singularity sits on one specific operand.
     MathOperation.SfpuElwdiv: {Operand.B: ((0.0, _BOTH),)},
+    # Not a pole for div_no_nan, but the jump to 0 there is what defines it.
+    MathOperation.SfpuDivNoNan: {Operand.B: ((0.0, _BOTH),)},
     MathOperation.SfpuXlogy: {Operand.B: ((0.0, _ABOVE),)},
     MathOperation.SfpuElwpow: {Operand.A: ((0.0, _ABOVE),)},
     # fmod / remainder divide by B, so B = 0 is their pole. Neither has an entry in
@@ -2246,8 +2257,9 @@ _BINARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset(
         # Composition through a reciprocal / log / exp. Each builds its result from a primitive
         # the ISA specifies only inside a stated finite range, so what the composition does with
         # a non-finite input is an LLK decision rather than an ISA one, and one answer decides
-        # all eight.
+        # all nine.
         MathOperation.SfpuElwdiv,  # reciprocal + Newton-Raphson
+        MathOperation.SfpuDivNoNan,  # the divide with its zero-divisor arm, so as SfpuElwdiv
         MathOperation.SfpuXlogy,  # x * log(y)
         MathOperation.SfpuElwpow,  # exp(b * ln a)
         MathOperation.SfpuBinaryFmod,  # quotient via reciprocal

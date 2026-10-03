@@ -251,6 +251,15 @@ inline void calculate_sfpu_binary_div(
             // If in0*r = +/-inf, then the residual e = in0 - (+/-inf)*in1 = -/+inf and
             // result + e*r = inf + (-inf) = NaN, which would corrupt IEEE overflow behavior.
             v_if(sfpi::is_finite(result)) {
+                // The residual cannot be formed for an infinite divisor either, and that case
+                // reaches here because the quotient is finite: r = 1/inf = 0, result = in0 * 0
+                // = 0, and result * in1 is 0 * inf, so the residual is NaN and the refinement
+                // destroys a correct zero. A NaN divisor is left to refine, which is how its
+                // NaN reaches the result.
+                // One integer compare: `&& !sfpi::is_inf(in1)` in the v_if does not compile.
+                v_and(
+                    sfpi::as<sfpi::vInt>(sfpi::setsgn(in1, 0)) !=
+                    sfpi::as<sfpi::vInt>(sfpi::vFloat(std::numeric_limits<float>::infinity())));
                 // Residual (Markstein) refinement removes the double-rounding of in0 * round(1/in1).
                 // The residual subtraction is exact under Sterbenz's lemma.
                 sfpi::vFloat e = in0 - result * in1;
@@ -259,15 +268,24 @@ inline void calculate_sfpu_binary_div(
             v_endif;
         }
 
-        v_if(in1 == 0) {
-            v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
-            v_else {
-                result = std::numeric_limits<float>::infinity();
-                result = sfpi::copysgn(result, in0);
+        if constexpr (BINOP == BinaryOp::DIV_NO_NAN) {
+            // div_no_nan is defined by this arm: a zero divisor of either sign yields zero,
+            // for a zero or NaN dividend too. Everything above it is the ordinary quotient,
+            // which is why the two share one kernel. The magnitude is tested because the
+            // SFPU compare does not read -0.0 as equal to 0.0.
+            v_if(sfpi::setsgn(in1, 0) == 0.0f) { result = 0.0f; }
+            v_endif;
+        } else {
+            v_if(in1 == 0) {
+                v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
+                v_else {
+                    result = std::numeric_limits<float>::infinity();
+                    result = sfpi::copysgn(result, in0);
+                }
+                v_endif;
             }
             v_endif;
         }
-        v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
             // software RNE approach:

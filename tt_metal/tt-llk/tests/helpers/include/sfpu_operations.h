@@ -1632,8 +1632,8 @@ template <bool APPROXIMATION_MODE, bool DST_ACCUM_MODE, BinaryOp BINOP, int ITER
 void call_binary_sfpu_operation_init()
 {
     if constexpr (
-        BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::DIV || BINOP == BinaryOp::RSUB ||
-        BINOP == BinaryOp::XLOGY)
+        BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::DIV || BINOP == BinaryOp::DIV_NO_NAN ||
+        BINOP == BinaryOp::RSUB || BINOP == BinaryOp::XLOGY)
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
         SFPU_BINARY_INIT_FN(add1, sfpu_binary_init, (APPROXIMATION_MODE, BINOP));
@@ -1846,12 +1846,14 @@ void call_binary_sfpu_operation(
     // dispatches into _calculate_sfpu_binary_ / _calculate_*_shift_.
     static_assert(ITERATIONS == 8 || ITERATIONS == 32, "Binary SFPU tests support legacy 8/32 iteration values; execution uses 8 rows per face.");
     constexpr int PER_FACE_ITERATIONS = 8;
-    if constexpr (BINOP == BinaryOp::DIV)
+    if constexpr (BINOP == BinaryOp::DIV || BINOP == BinaryOp::DIV_NO_NAN)
     {
         // Route DIV to the dedicated production kernel (calculate_sfpu_binary_div),
         // matching what div_binary_tile() dispatches. The generic calculate_sfpu_binary
         // DIV path is a legacy variant that production never uses, so isolating the real
         // kernel here lets the perf/functional harness measure and guard it directly.
+        // DIV_NO_NAN is the same kernel with its zero-divisor arm, as
+        // div_no_nan_binary_tile() dispatches it.
         // is_fp32_dest_acc_en = DST_ACCUM_MODE selects the fp32 residual + bf16 rounding.
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,

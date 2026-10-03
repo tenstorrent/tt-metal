@@ -3983,6 +3983,12 @@ class EltwiseBinaryGolden(FidelityMasking):
         # results the SFPU helper branches on (0/0 -> NaN, x/0 -> +/-inf, x/x -> 1.0).
         return (t1.to(torch.float32) / t2.to(torch.float32)).to(t1.dtype)
 
+    def _div_no_nan(self, t1, t2):
+        # _div with a zero divisor of either sign yielding +0, whatever the dividend:
+        # where(b == 0, 0, a / b), so 0/0, inf/0 and NaN/0 are all 0.
+        q = t1.to(torch.float32) / t2.to(torch.float32)
+        return torch.where(t2 == 0, torch.zeros_like(q), q).to(t1.dtype)
+
     def _gt_int(self, t1, t2):
         return (t1 > t2).to(torch.int32)
 
@@ -4006,6 +4012,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuElwsub: self._sub,
                 MathOperation.SfpuElwmul: self._mul,
                 MathOperation.SfpuElwdiv: self._div,
+                MathOperation.SfpuDivNoNan: self._div_no_nan,
                 MathOperation.SfpuElwmulInt: self._mul,
                 MathOperation.SfpuGtInt: self._gt_int,
                 MathOperation.SfpuLtInt: self._lt_int,
