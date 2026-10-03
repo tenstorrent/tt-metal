@@ -176,14 +176,22 @@ FORCE_INLINE
     switch (noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
             const auto dest_address = header.command_fields.unicast_write.noc_address;
-            noc_async_write_one_packet_with_trid<update_counter, false>(
-                payload_start_address,
-                dest_address,
-                payload_size_bytes,
-                transaction_id,
-                tt::tt_fabric::local_chip_data_cmd_buf,
-                tt::tt_fabric::edm_to_local_chip_noc,
-                tt::tt_fabric::forward_and_local_write_noc_vc);
+            // [#45872 T2 probe] tag 0xC0DE: entering NOC_UNICAST_WRITE in execute_chip_unicast_to_local_chip_impl
+            WATCHER_RING_BUFFER_PUSH(0xC0DE0000u | (uint32_t)rx_channel_id);
+            WATCHER_RING_BUFFER_PUSH((uint32_t)payload_size_bytes);
+            WATCHER_RING_BUFFER_PUSH((uint32_t)(dest_address & 0xFFFFFFFFu));
+            WATCHER_RING_BUFFER_PUSH((uint32_t)(dest_address >> 32u));
+            if (payload_size_bytes > 0)
+                [[likely]] {  // [#45872] guard: 0-byte NOC_UNICAST_WRITE is invalid (garbled packet)
+                noc_async_write_one_packet_with_trid<update_counter, false>(
+                    payload_start_address,
+                    dest_address,
+                    payload_size_bytes,
+                    transaction_id,
+                    tt::tt_fabric::local_chip_data_cmd_buf,
+                    tt::tt_fabric::edm_to_local_chip_noc,
+                    tt::tt_fabric::forward_and_local_write_noc_vc);
+            }
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {

@@ -850,6 +850,12 @@ FORCE_INLINE void receiver_forward_packet(
         false;
 #endif
     router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();  // Make sure we have the latest packet header in L1
+    // Unconditional probe: fires for every receiver_forward_packet call, after cache re-read.
+    // Tag 0xF0D0 | channel. Logs payload_size_bytes from fresh L1 read (both RoutingFields paths).
+    WATCHER_RING_BUFFER_PUSH(0xF0D00000u | (uint32_t)rx_channel_id);
+    WATCHER_RING_BUFFER_PUSH((uint32_t)packet_start->payload_size_bytes);
+    WATCHER_RING_BUFFER_PUSH((uint32_t)cached_routing_fields.value);
+    WATCHER_RING_BUFFER_PUSH((uint32_t)reinterpret_cast<uintptr_t>(packet_start));
     if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::RoutingFields>) {
         // If the packet is a terminal packet, then we can just deliver it locally
         bool start_distance_is_terminal_value =
