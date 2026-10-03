@@ -87,31 +87,49 @@ int main(void)
     struct RuntimeParams temp_args;
     copy_runtimes_from_L1(&temp_args);
 
-    std::fill(ckernel::regfile, ckernel::regfile + 64, 0);
+#if defined(LLK_PROFILER)
+    llk_profiler::reset();
+#endif
+
+    // Wormhole L1_TO_L1 dithering: the host asks for several repetitions of the kernel in one launch, each at
+    // its own start offset, so one launch samples several packer phases at the cost of one.
+    const volatile std::uint32_t* dither = reinterpret_cast<volatile std::uint32_t*>(llk_perf::PERF_START_OFFSET_ADDR);
+    const std::uint32_t repetitions      = dither[0] != 0 ? dither[0] : 1;
+    const std::uint32_t pack_grid        = dither[1];
+    const std::uint32_t other_grid       = dither[2];
+    const std::uint32_t pack_count       = (pack_grid >> 16) != 0 ? (pack_grid >> 16) : 1;
+    const std::uint32_t other_count      = (other_grid >> 16) != 0 ? (other_grid >> 16) : 1;
+
+    for (std::uint32_t repetition = 0; repetition < repetitions; ++repetition)
+    {
+        llk_perf::detail::start_offset_word = ((repetition % pack_count) * (pack_grid & 0xFFFFu)) |
+                                              ((((repetition / pack_count) % other_count) * (other_grid & 0xFFFFu)) << 16);
+
+        std::fill(ckernel::regfile, ckernel::regfile + 64, 0);
 
 #ifndef ARCH_QUASAR
-    ckernel::reset_cfg_state_id();
-    ckernel::reset_dest_offset_id();
+        ckernel::reset_cfg_state_id();
+        ckernel::reset_dest_offset_id();
 #endif
 
 #if defined(LLK_PROFILER)
-    llk_profiler::reset();
-    llk_profiler::sync_threads();
+        llk_profiler::sync_threads();
 #endif
 
-    {
-        ZONE_SCOPED("KERNEL")
+        {
+            ZONE_SCOPED("KERNEL")
 
-        ckernel::fence_compiler();
+            ckernel::fence_compiler();
 
-        run_kernel(temp_args);
+            run_kernel(temp_args);
 
-        ckernel::fence_compiler();
+            ckernel::fence_compiler();
 
-        ckernel::tensix_sync();
+            ckernel::tensix_sync();
+        }
+
+        llk_perf::read_last_zone();
     }
-
-    llk_perf::read_last_zone();
 
     *mailbox = ckernel::KERNEL_COMPLETE;
 #if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
