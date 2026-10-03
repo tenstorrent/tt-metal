@@ -67,7 +67,8 @@ inline void calculate_where(
         sfpi::vFloat true_val = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
         sfpi::vFloat result = sfpi::dst_reg[dst_index_in2 * dst_tile_size_sfpi];  // load false_val into result reg
 
-        v_if(cond != 0) { result = true_val; }
+        // Compare on |cond| so that IEEE-754 signed zero (-0.0) matches 0.0 and evaluates to false
+        v_if(sfpi::abs(cond) != 0.0f) { result = true_val; }
         v_endif;
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
