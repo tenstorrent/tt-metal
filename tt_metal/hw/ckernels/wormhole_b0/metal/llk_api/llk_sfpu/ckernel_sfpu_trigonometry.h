@@ -661,8 +661,15 @@ inline void acos_init() {
     asin_acos_init<is_fp32_dest_acc_en>();
 }
 
+template <int ITERATIONS>
+void calculate_acos_bf16();
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_acos() {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        calculate_acos_bf16<ITERATIONS>();
+        return;
+    }
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat result;
@@ -1244,3 +1251,5 @@ void init_atanh() {
 }
 
 }  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_acos_bf16.h"
