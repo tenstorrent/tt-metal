@@ -142,6 +142,36 @@ MeshPartitionTopology compute_mesh_partition_topology(
             {shard_placement},
             input_topology.mesh_coords()));
     };
+    // The program factory never reads the label: it picks each device's chunk from the device's own mesh coordinate
+    // (coord[a] along a cluster axis, the row-major linearised index for the whole mesh). An emitted label is honest
+    // only if its coordinates agree, which the mappers guarantee (SUBMESH mode writes an axis-aligned block, ROW_MAJOR
+    // mode the mesh's row-major enumeration) and a label assembled by hand with update_tensor_topology need not.
+    const auto& coords = input_topology.mesh_coords();
+    // Every grid point's device sits, on mesh axis `mesh_axis`, at the point's own row-major index along `grid_axis`.
+    const auto coords_follow_axis =
+        [&](const tt::tt_metal::distributed::MeshShape& grid, size_t grid_axis, size_t mesh_axis) {
+            if (grid_axis >= grid.dims() || coords.size() != grid.mesh_size()) {
+                return false;
+            }
+            for (size_t flat = 0; flat < coords.size(); ++flat) {
+                const auto grid_index = (flat / grid.get_stride(grid_axis)) % grid[static_cast<int>(grid_axis)];
+                if (coords[flat].dims() <= mesh_axis || coords[flat][static_cast<int32_t>(mesh_axis)] != grid_index) {
+                    return false;
+                }
+            }
+            return true;
+        };
+    // The coordinates are the mesh's row-major enumeration, the order get_linearized_index partitions in.
+    const auto coords_are_mesh_row_major = [&]() {
+        for (size_t axis = 0; axis < mesh_shape.dims(); ++axis) {
+            if (!coords_follow_axis(mesh_shape, axis, axis)) {
+                return false;
+            }
+        }
+        return true;
+    };
+    constexpr const char* kCoordsOffAxis =
+        "the label's coordinates do not follow the cluster axis the op partitions by (not a mapper's block)";
 
     if (input_placements.empty()) {
         return fallback(nullptr);
@@ -182,6 +212,9 @@ MeshPartitionTopology compute_mesh_partition_topology(
                 return fallback("a whole-mesh partition of a tensor sharded on another dim is not expressible");
             }
         }
+        if (!coords_are_mesh_row_major()) {
+            return fallback("the label's coordinates are not the mesh's row-major order the op partitions by");
+        }
         return collapsed_label();
     }
     const size_t partitioned_axis = *cluster_axis;
@@ -190,6 +223,9 @@ MeshPartitionTopology compute_mesh_partition_topology(
     if (input_placements.size() > 1) {
         if (partitioned_axis >= input_placements.size()) {
             return fallback(nullptr);  // validation rejects this cluster_axis right after the hook
+        }
+        if (!coords_follow_axis(distribution_shape, partitioned_axis, partitioned_axis)) {
+            return fallback(kCoordsOffAxis);
         }
         auto output_placements = input_placements;
         output_placements[partitioned_axis] = shard_placement;
@@ -224,10 +260,16 @@ MeshPartitionTopology compute_mesh_partition_topology(
         partitioned_axis < mesh_shape.dims() ? mesh_shape[static_cast<int>(partitioned_axis)] : 0;
     // Rule 3.
     if (distribution_shape.mesh_size() == cluster_axis_size) {
+        if (!coords_follow_axis(distribution_shape, 0, partitioned_axis)) {
+            return fallback(kCoordsOffAxis);
+        }
         return label(tt::tt_metal::TensorTopology(distribution_shape, {shard_placement}, input_topology.mesh_coords()));
     }
     // Rule 4.
     if (partitioned_axis < mesh_shape.dims() && std::holds_alternative<Replicate>(input_placements[0])) {
+        if (!coords_follow_axis(mesh_shape, partitioned_axis, partitioned_axis)) {
+            return fallback(kCoordsOffAxis);
+        }
         ttsl::SmallVector<Placement> output_placements(mesh_shape.dims(), Replicate{});
         output_placements[partitioned_axis] = shard_placement;
         return label(

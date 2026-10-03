@@ -131,6 +131,14 @@ uint32_t get_cluster_axis_size(const ttnn::Tensor& input_tensor, const std::opti
 // every slice, and what the axis held before is not recoverable from the output in either label form. The fallbacks
 // are the cases where the output's own layout has no spelling, so the stale input label plus a warning is the honest
 // option left; every fallback warns, once per distinct case, because the hook runs on every launch.
+//
+// Every rule that emits a label also checks the label's coordinates, which the program factory never reads: it picks
+// each device's chunk from the device's own mesh coordinate (coord[a] along a cluster axis, the row-major linearised
+// index for the whole mesh). The emitted label is honest only if the grid point stored at each coordinate has that
+// same index along the partitioned axis (rules 1, 3, 4), or the coordinates are the mesh's row-major enumeration
+// (rule 2). The mappers guarantee this (SUBMESH mode writes an axis-aligned block, ROW_MAJOR mode the row-major
+// enumeration); a label assembled by hand with update_tensor_topology need not, and falls back (warn) rather than
+// stating chunks the devices do not hold.
 struct MeshPartitionTopology {
     std::optional<tt::tt_metal::TensorTopology> topology;
     const char* fallback_reason = nullptr;

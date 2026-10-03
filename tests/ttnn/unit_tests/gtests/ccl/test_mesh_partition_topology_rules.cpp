@@ -8,7 +8,9 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <optional>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -277,6 +279,51 @@ TEST(MeshPartitionTopologyRules, RowMajorReshapeOfTheMeshPartitionsAsAWholeOnly)
         TensorTopology(MeshShape(4, 2), {Replicate{}, Replicate{}}, row_major_coords(mesh)), mesh, kDim, 1, kRank);
     EXPECT_FALSE(transposed.topology.has_value());
     EXPECT_NE(transposed.fallback_reason, nullptr);
+}
+
+// Every emitted label depends on the coordinates agreeing with the partition: the factory picks chunks from the
+// device's own coordinate, not from the label. The mappers always write agreeing coordinates (SUBMESH: an axis-aligned
+// block; ROW_MAJOR: the mesh's row-major enumeration); a label put together by hand with update_tensor_topology need
+// not, and must fall back rather than state chunks the devices do not hold. The check is per axis: a disagreement
+// along one mesh axis leaves partitions along the other axis labelled.
+TEST(MeshPartitionTopologyRules, LabelWhoseCoordinatesDisagreeWithThePartitionFallsBack) {
+    const MeshShape mesh(2, 4);
+    // A block SHAPE over a ROW of devices passes rule 0's per-axis guard (2 == 2 on axis 0), yet every device has
+    // global row 0 and takes chunk 0; rule 1 would have labelled tensor row 1 as holding chunk 1.
+    const std::vector<MeshCoordinate> row{
+        MeshCoordinate(0, 0), MeshCoordinate(0, 1), MeshCoordinate(0, 2), MeshCoordinate(0, 3)};
+    const auto block_shape_over_row = compute_mesh_partition_topology(
+        TensorTopology(MeshShape(2, 2), {Replicate{}, Replicate{}}, row), mesh, kDim, 0, kRank);
+    EXPECT_FALSE(block_shape_over_row.topology.has_value());
+    EXPECT_NE(block_shape_over_row.fallback_reason, nullptr);
+
+    // A full-mesh N-D label with two coordinates swapped across rows: rule 0 does not look at it (the shape is the
+    // mesh's) and rule 1 would carry the coordinates through. Both swapped devices keep column 1, so partitions
+    // along axis 1 are still labelled.
+    auto swapped = row_major_coords(mesh);
+    std::swap(swapped[1], swapped[5]);  // (0,1) <-> (1,1)
+    const TensorTopology permuted_nd(mesh, {Replicate{}, Replicate{}}, swapped);
+    const auto nd_rows = compute_mesh_partition_topology(permuted_nd, mesh, kDim, 0, kRank);
+    EXPECT_FALSE(nd_rows.topology.has_value());
+    EXPECT_NE(nd_rows.fallback_reason, nullptr);
+    const auto nd_whole = compute_mesh_partition_topology(permuted_nd, mesh, kDim, kWholeMesh, kRank);
+    EXPECT_FALSE(nd_whole.topology.has_value());
+    EXPECT_NE(nd_whole.fallback_reason, nullptr);
+    EXPECT_TRUE(compute_mesh_partition_topology(permuted_nd, mesh, kDim, 1, kRank).topology.has_value());
+
+    // Collapsed labels: rule 3 on a line with reversed coordinates, rule 4 on the 2x4 with the swap above.
+    const MeshShape line(1, 8);
+    auto reversed = row_major_coords(line);
+    std::reverse(reversed.begin(), reversed.end());
+    const auto rule3 =
+        compute_mesh_partition_topology(TensorTopology(MeshShape(8), {Replicate{}}, reversed), line, kDim, 1, kRank);
+    EXPECT_FALSE(rule3.topology.has_value());
+    EXPECT_NE(rule3.fallback_reason, nullptr);
+    const TensorTopology permuted_collapsed(MeshShape(8), {Replicate{}}, swapped);
+    const auto rule4 = compute_mesh_partition_topology(permuted_collapsed, mesh, kDim, 0, kRank);
+    EXPECT_FALSE(rule4.topology.has_value());
+    EXPECT_NE(rule4.fallback_reason, nullptr);
+    EXPECT_TRUE(compute_mesh_partition_topology(permuted_collapsed, mesh, kDim, 1, kRank).topology.has_value());
 }
 
 // Inputs validation rejects right after the hook, or that carry no placements, leave the union default in place
