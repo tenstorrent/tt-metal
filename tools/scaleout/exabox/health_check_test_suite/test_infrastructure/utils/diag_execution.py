@@ -27,6 +27,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -47,7 +48,7 @@ def default_run_diag_script() -> Path:
     return Path(__file__).resolve().parents[2] / "run_diag.sh"
 
 
-def _kill_process_group(proc: subprocess.Popen) -> None:
+def _kill_process_group(proc: subprocess.Popen, grace_seconds: float = _TERM_GRACE_SECONDS) -> None:
     """SIGTERM then SIGKILL the child's process group (gtest / tt-smi children)."""
     try:
         pgid = os.getpgid(proc.pid)
@@ -59,10 +60,27 @@ def _kill_process_group(proc: subprocess.Popen) -> None:
         except ProcessLookupError:
             return
         try:
-            proc.wait(timeout=_TERM_GRACE_SECONDS)
+            proc.wait(timeout=grace_seconds)
             return
         except subprocess.TimeoutExpired:
             continue
+
+
+# Tracked so a cancelled run can kill it: Slurm's proctrack/pgid doesn't reach
+# the suite's own session.
+_active_diag: subprocess.Popen | None = None
+_active_diag_lock = threading.Lock()
+
+
+def kill_active_diag(grace_seconds: float = _TERM_GRACE_SECONDS) -> bool:
+    """Kill the running diag suite, if any. Returns whether one was running."""
+    with _active_diag_lock:
+        proc = _active_diag
+    if proc is None or proc.poll() is not None:
+        return False
+    log.warning("Killing diag suite (pid %d)", proc.pid)
+    _kill_process_group(proc, grace_seconds=grace_seconds)
+    return True
 
 
 def _diag_env(tt_metal_path: Path | None) -> dict:
@@ -150,6 +168,10 @@ def _execute(cmd: list[str], env: dict, timeout_seconds: int, results_dir: Path)
         log.error("Failed to start diag suite: %s", exc)
         return 1, f"Failed to start diag suite: {exc}", None
 
+    global _active_diag
+    with _active_diag_lock:
+        _active_diag = proc
+
     try:
         output, _ = proc.communicate(timeout=timeout_seconds)
         exit_code = proc.returncode
@@ -167,6 +189,9 @@ def _execute(cmd: list[str], env: dict, timeout_seconds: int, results_dir: Path)
         except subprocess.TimeoutExpired:
             output = ""
         exit_code = 137
+    finally:
+        with _active_diag_lock:
+            _active_diag = None
 
     return exit_code, output or "", results_dir
 
