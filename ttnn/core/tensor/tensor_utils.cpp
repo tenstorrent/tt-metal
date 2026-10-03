@@ -4,6 +4,9 @@
 
 #include "ttnn/tensor/tensor_utils.hpp"
 
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
+
 #include <tt_stl/overloaded.hpp>
 
 #include "ttnn/tensor/types.hpp"
@@ -46,10 +49,24 @@ CBDescriptor cb_descriptor_from_sharded_tensor(
         "Address offset + total size exceeds buffer size");
 
     uint32_t effective_total_size = (total_size != 0) ? total_size : tensor.buffer()->aligned_size_per_bank();
+    const CoreRangeSet cb_core_ranges = core_ranges.value_or(tensor.shard_spec()->grid);
+
+    // The descriptor carries only the reference device's buffer, so a CB built from it gets that device's address
+    // on every device it runs on, and a per-core tensor must sit at one address across devices on each of these
+    // cores. This checks one core at a time: whether the cores agree with each other is checked when the CB is built
+    // (or by get_cb_address), so a descriptor over several cores can still be made and then split per core.
+    if (tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(*tensor.buffer())) {
+        for (const auto& core_range : cb_core_ranges.ranges()) {
+            for (const auto& core : core_range) {
+                tt::tt_metal::experimental::per_core_allocation::get_uniform_per_core_address(
+                    tensor.mesh_buffer(), CoreRangeSet(CoreRange(core, core)));
+            }
+        }
+    }
 
     return CBDescriptor{
         .total_size = effective_total_size,
-        .core_ranges = core_ranges.value_or(tensor.shard_spec()->grid),
+        .core_ranges = cb_core_ranges,
         .format_descriptors = {CBFormatDescriptor{
             .buffer_index = cb_index,
             .data_format = datatype_to_dataformat_converter(tensor.tensor_spec().tensor_layout().get_data_type()),
@@ -58,6 +75,27 @@ CBDescriptor cb_descriptor_from_sharded_tensor(
         .buffer = tensor.buffer(),
         .address_offset = address_offset,
         .global_circular_buffer = nullptr};
+}
+
+uint32_t get_cb_address(const CBDescriptor& desc) {
+    namespace per_core_allocation = tt::tt_metal::experimental::per_core_allocation;
+    const auto addr_offset = desc.address_offset;
+    const tt::tt_metal::Buffer* buffer = desc.buffer;
+    const tt::tt_metal::distributed::MeshBuffer* mesh_buffer = nullptr;
+    if (buffer == nullptr && desc.tensor != nullptr) {
+        mesh_buffer = &desc.tensor->mesh_buffer();
+        buffer = mesh_buffer->get_reference_buffer();
+    }
+    if (buffer == nullptr) {
+        return addr_offset;
+    }
+    if (!per_core_allocation::is_per_core_allocation(*buffer) || desc.core_ranges.empty()) {
+        return buffer->address() + addr_offset;
+    }
+    const auto base = mesh_buffer != nullptr
+                          ? per_core_allocation::get_uniform_per_core_address(*mesh_buffer, desc.core_ranges)
+                          : per_core_allocation::get_uniform_per_core_address(*buffer, desc.core_ranges);
+    return base + addr_offset;
 }
 
 std::vector<CoreCoord> get_optimal_worker_cores_for_sharded_tensor(const Tensor& tensor, NOC noc) {

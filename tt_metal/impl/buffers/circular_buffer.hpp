@@ -11,6 +11,10 @@
 
 namespace tt::tt_metal {
 
+namespace distributed {
+class MeshBuffer;
+}  // namespace distributed
+
 class CircularBufferImpl {
 public:
     CircularBufferImpl(const CoreRangeSet& core_range_set, const CircularBufferConfig& config);
@@ -30,6 +34,7 @@ public:
     void set_total_size(uint32_t total_size);
     void set_page_size(uint8_t buffer_index, uint32_t page_size);
     void set_global_buffer(const Buffer& buffer, uint32_t total_size, uint32_t address_offset);
+    void set_global_buffer(const MeshTensor& tensor, uint32_t total_size, uint32_t address_offset);
 
     const std::unordered_set<uint8_t>& buffer_indices() const { return config_.buffer_indices(); }
     const std::unordered_set<uint8_t>& local_buffer_indices() const { return config_.local_buffer_indices(); }
@@ -86,6 +91,10 @@ private:
     uint64_t config_generation_ = 0;
     DeviceAddr global_circular_buffer_config_address_{};
     const experimental::GlobalCircularBuffer* shadow_global_circular_buffer_ = nullptr;
+    // Set while the backing came from a MeshTensor. The CB is programmed from the config's reference-device buffer
+    // on every device, so a per-core buffer is checked to sit at one address across devices. Kept here rather than
+    // in CircularBufferConfig so that public class keeps its layout.
+    const distributed::MeshBuffer* global_mesh_buffer_ = nullptr;
     // add a callback to invalidate circular buffer allocation
 };
 
