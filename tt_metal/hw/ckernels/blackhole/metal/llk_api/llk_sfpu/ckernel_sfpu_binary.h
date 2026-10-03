@@ -114,8 +114,8 @@ inline void calculate_sfpu_binary(
         log_c = LogPoly::C;
         log_d = LogPoly::D;
     }
-    // SFPU microcode
-    for (int d = 0; d < ITERATIONS; d++) {
+    // SFPU microcode, one row of a face
+    auto row = [&]() __attribute__((always_inline)) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
         constexpr std::uint32_t dst_tile_size_sfpi = 32;
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
@@ -173,10 +173,10 @@ inline void calculate_sfpu_binary(
             // the sign first is what brings -0.0 into the guard.
             sfpi::vFloat mag_a = sfpi::setsgn(in0, 0);
             sfpi::vFloat mag_b = sfpi::setsgn(in1, 0);
-            sfpi::vFloat tiny = sfpi::as<sfpi::vFloat>(sfpi::vInt(kUlpStep));
-            v_if(mag_a == 0.0f && in1 > 0.0f) { result = tiny; }
+            // vConstFloatPrgm2 holds the bit pattern kUlpStep, programmed by sfpu_binary_init.
+            v_if(mag_a == 0.0f && in1 > 0.0f) { result = sfpi::vConstFloatPrgm2; }
             v_endif;
-            v_if(mag_a == 0.0f && in1 < 0.0f) { result = -tiny; }
+            v_if(mag_a == 0.0f && in1 < 0.0f) { result = -sfpi::vFloat(sfpi::vConstFloatPrgm2); }
             v_endif;
             // Equal operands return the target, so two zeros return in1's zero, which is not
             // always in0's: nextafter(+0, -0) is -0. This runs after the two guards above because
@@ -191,11 +191,10 @@ inline void calculate_sfpu_binary(
             // reason ckernel_sfpu_isclose.h reads bit patterns for its own Inf/NaN lanes. A
             // widened bfloat16 NaN has that exponent and a non-zero mantissa too, so this serves
             // both entry points unchanged. Last, so it wins over the direction and zero arms.
-            constexpr int32_t kInfBits = 0x7F800000;
-            constexpr int32_t kAbsMask = 0x7FFFFFFF;
-            v_if((bits & kAbsMask) > kInfBits) { result = nan; }
+            // vConstIntPrgm0 = 0x7FFFFFFF and vConstIntPrgm1 = 0x7F800000, programmed by sfpu_binary_init.
+            v_if((bits & sfpi::vConstIntPrgm0) > sfpi::vConstIntPrgm1) { result = nan; }
             v_endif;
-            v_if((sfpi::as<sfpi::vInt>(in1) & kAbsMask) > kInfBits) { result = nan; }
+            v_if((sfpi::as<sfpi::vInt>(in1) & sfpi::vConstIntPrgm0) > sfpi::vConstIntPrgm1) { result = nan; }
             v_endif;
         }
 
@@ -207,6 +206,18 @@ inline void calculate_sfpu_binary(
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
         sfpi::dst_reg++;
+    };
+
+    if constexpr (BINOP == BinaryOp::POW) {
+        // Not unrolled: the long pow body is slower unrolled.
+        for (int d = 0; d < ITERATIONS; d++) {
+            row();
+        }
+    } else {
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {
+            row();
+        }
     }
 }
 
@@ -215,6 +226,7 @@ inline void calculate_sfpu_binary_mul(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
@@ -224,10 +236,6 @@ inline void calculate_sfpu_binary_mul(
         if constexpr (!is_fp32_dest_acc_en) {
             // software RNE approach:
             result = float32_to_bf16_rne(result);
-
-            // To match FPU behaviour for bfloat16 multiplication, 0 * x = 0 and x * 0 = 0
-            v_if(in0 == 0 || in1 == 0) { result = 0.0f; }
-            v_endif;
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
@@ -240,6 +248,7 @@ inline void calculate_sfpu_binary_div(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
@@ -259,12 +268,10 @@ inline void calculate_sfpu_binary_div(
             v_endif;
         }
 
+        // Zero divisor: vConstFloatPrgm1 = inf and vConstFloatPrgm2 = NaN, loaded by sfpu_binary_init<DIV>.
         v_if(in1 == 0) {
-            v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
-            v_else {
-                result = std::numeric_limits<float>::infinity();
-                result = sfpi::copysgn(result, in0);
-            }
+            result = sfpi::copysgn(sfpi::vFloat(sfpi::vConstFloatPrgm1), in0);
+            v_if(in0 == 0) { result = sfpi::vConstFloatPrgm2; }
             v_endif;
         }
         v_endif;
@@ -281,11 +288,20 @@ inline void calculate_sfpu_binary_div(
 
 template <bool APPROXIMATION_MODE /*unused*/, BinaryOp BINOP>
 inline void sfpu_binary_init() {
-    if constexpr (BINOP == BinaryOp::DIV || BINOP == BinaryOp::POW) {
-        // Initialisation for use of sfpu_reciprocal_iter<2> in DIV or POW.
+    if constexpr (BINOP == BinaryOp::DIV) {
+        // Initialisation for sfpu_reciprocal_iter<2> in DIV and the zero-divisor constants of the div arm.
+        sfpu_reciprocal_init<false>();
+        sfpi::vConstFloatPrgm1 = std::numeric_limits<float>::infinity();
+        sfpi::vConstFloatPrgm2 = std::numeric_limits<float>::quiet_NaN();
+    } else if constexpr (BINOP == BinaryOp::POW) {
+        // Initialisation for use of sfpu_reciprocal_iter<2> in POW.
         sfpu_reciprocal_init<false>();
     } else if constexpr (BINOP == BinaryOp::XLOGY) {
         _init_log_<APPROXIMATION_MODE>();
+    } else if constexpr (BINOP == BinaryOp::NEXTAFTER || BINOP == BinaryOp::NEXTAFTER_BF16) {
+        sfpi::vConstIntPrgm0 = 0x7FFFFFFF;
+        sfpi::vConstIntPrgm1 = 0x7F800000;
+        sfpi::vConstIntPrgm2 = (BINOP == BinaryOp::NEXTAFTER_BF16) ? 0x10000 : 1;
     }
 }
 
