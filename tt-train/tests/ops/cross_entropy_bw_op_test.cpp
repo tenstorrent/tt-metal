@@ -89,6 +89,30 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Small_Backward) {
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
 }
 
+TEST_F(CrossEntropyBackwardTest, TargetUpdateRoundsBfloat16TieToEven) {
+    using namespace ttml;
+
+    // Equal logits produce an exact 0.5 probability. After the BF16 compute
+    // pack, subtracting this scaler gives -0.4990234375, exactly halfway
+    // between BF16 values 0xbeff and 0xbf00. RNE selects even 0xbf00 (-0.5);
+    // the old writer-side truncation selected 0xbeff (-0.498046875).
+    xt::xarray<float> input_tensor = xt::zeros<float>({1U, 1U, 1U, 2U});
+    xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({1U, 1U});
+    xt::xarray<float> grad_tensor = xt::ones<float>({1U, 1U, 1U, 1U});
+
+    auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
+    auto target = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
+        target_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
+    auto grad = core::from_xtensor(grad_tensor, &autograd::ctx().get_device());
+
+    constexpr float scaler = 1.0F - 1.0F / 1024.0F;
+    const auto result = metal::cross_entropy_bw(input, target, grad, scaler);
+    const auto result_xtensor = core::to_xtensor(result);
+
+    EXPECT_FLOAT_EQ(result_xtensor(0, 0, 0, 0), -0.5F);
+    EXPECT_FLOAT_EQ(result_xtensor(0, 0, 0, 1), 0.5F);
+}
+
 TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Batch) {
     using namespace ttml;
 
