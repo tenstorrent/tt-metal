@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <future>
+#include <mutex>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -386,21 +387,25 @@ public:
         // based on the internally stored thread_idx. Tasks will get round-robined across threads,
         // when relying on the thread_idx.
         // If the device id is specified, use the thread tied to the device.
-        uint32_t thread_id =
-            device_idx.has_value() ? phys_device_to_thread_id_[device_idx.value()] : ((thread_idx_++) % num_workers_);
+        uint32_t thread_id = device_idx.has_value()
+                                 ? phys_device_to_thread_id_[device_idx.value()]
+                                 : (thread_idx_.fetch_add(1, std::memory_order_relaxed) % num_workers_);
         completion_.add();
         workers_[thread_id]->enqueue(std::move(f));
     }
 
     void wait() override {
-        thread_idx_ = 0;  // Reset thread_idx for next call without Device ID specified.
+        thread_idx_.store(0, std::memory_order_relaxed);  // Reset thread_idx for next call without Device ID specified.
         completion_.wait();
-        // Rethrow the first exception in the calling thread.
+        // Rethrow the first exception in the calling thread. Several threads may wait at once.
         std::exception_ptr exception;
-        for (auto& worker : workers_) {
-            auto temp_exception = worker->take_exception();
-            if (!exception && temp_exception) {
-                exception = temp_exception;
+        {
+            std::lock_guard lock(exception_mutex_);
+            for (auto& worker : workers_) {
+                auto temp_exception = worker->take_exception();
+                if (!exception && temp_exception) {
+                    exception = temp_exception;
+                }
             }
         }
         if (exception) {
@@ -414,7 +419,8 @@ private:
     // Executors backing this pool.
     std::vector<std::unique_ptr<NumaAwareExecutor>> workers_;
     // Used to pick threads when device_idx is not specified in the enqueue API
-    uint32_t thread_idx_ = 0;
+    std::atomic<uint32_t> thread_idx_ = 0;
+    std::mutex exception_mutex_;
     // Store the number of workers to repeated lookups
     uint32_t num_workers_ = 0;
     // Mapping between the physical device id and its associated thread
