@@ -140,6 +140,18 @@ int main()
 
                 reset_state(counter);
                 commit_store(brisc_bread0, counter);
+#if !defined(TT_METAL_TTSIM)
+                // Experiment: stay off L1 while the TRISCs run; wait on their overlay completion signals.
+                for (std::uint32_t slot = 0; slot < 3; ++slot)
+                {
+                    volatile std::uint32_t* sig = reinterpret_cast<volatile std::uint32_t*>(
+                        host_signal::NOC_OVERLAY_START_ADDR + slot * host_signal::NOC_STREAM_REG_SPACE_SIZE + host_signal::STREAM_SCRATCH_REG_INDEX * 4);
+                    while (*sig != ckernel::KERNEL_COMPLETE)
+                    {
+                        asm volatile("nop");
+                    }
+                }
+#endif
                 break;
 
             case BriscCommandState::RESET_TRISCS:
