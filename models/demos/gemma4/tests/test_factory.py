@@ -235,6 +235,124 @@ def skip_if_config_only_checkpoint():
         pytest.skip(_CONFIG_ONLY_SKIP_REASON)
 
 
+def _assistant_repo_id():
+    """Hub repo id for the it-assistant drafter matching the target ``HF_MODEL``."""
+    model_path = _get_model_path()
+    if model_path.endswith("-assistant"):
+        return model_path if "/" in model_path else f"google/{model_path}"
+    basename = os.path.basename(model_path.rstrip("/"))
+    if basename.endswith("-it"):
+        return f"google/{basename}-assistant"
+    return f"{model_path}-assistant"
+
+
+def _assistant_dir_has_weights(path):
+    """True if ``path`` has assistant weights, not just a config stub."""
+    if not path or not os.path.isdir(path):
+        return False
+    try:
+        names = os.listdir(path)
+    except OSError:
+        return False
+    if any(name.endswith(".safetensors") for name in names):
+        return True
+    return os.path.isfile(os.path.join(path, "model.safetensors.index.json"))
+
+
+def _assistant_dir_ready(path):
+    return bool(path) and os.path.isfile(os.path.join(path, "config.json")) and _assistant_dir_has_weights(path)
+
+
+def _assistant_hub_snapshot(repo_id):
+    hf_home = os.environ.get("HF_HOME", "/mnt/MLPerf/huggingface")
+    hub_cache = os.environ.get("HF_HUB_CACHE", os.path.join(hf_home, "hub"))
+    snapshots_root = os.path.join(hub_cache, f"models--{repo_id.replace('/', '--')}", "snapshots")
+    if not os.path.isdir(snapshots_root):
+        return None
+    for name in sorted(os.listdir(snapshots_root)):
+        snap = os.path.join(snapshots_root, name)
+        if _assistant_dir_ready(snap):
+            return snap
+    return None
+
+
+def resolve_assistant_model_path(*, allow_download=None):
+    """Resolve ``GEMMA4_ASSISTANT_MODEL`` to a local dir with config + weights.
+
+    Search order: existing local dir → HF hub snapshot → ``GEMMA4_ASSISTANT_CACHE`` /
+    ``/tmp/<repo>``. When ``allow_download`` is true (default in CI only), fetch
+    the assistant snapshot from the Hub into the cache dir. Config-only dirs
+    are rejected so ``create_assistant_model(..., dummy_weights=False)`` does
+    not fall through to a hub fetch mid-test.
+    """
+    existing = os.environ.get("GEMMA4_ASSISTANT_MODEL")
+    if _assistant_dir_ready(existing):
+        return existing
+
+    repo_id = _assistant_repo_id()
+    if existing and ("/" in existing or existing.endswith("-assistant")):
+        repo_id = existing if "/" in existing else f"google/{existing}"
+
+    snap = _assistant_hub_snapshot(repo_id)
+    if snap:
+        os.environ["GEMMA4_ASSISTANT_MODEL"] = snap
+        return snap
+
+    repo_tail = repo_id.split("/")[-1]
+    cache_dir = os.environ.get("GEMMA4_ASSISTANT_CACHE", f"/tmp/{repo_tail}")
+    if _assistant_dir_ready(cache_dir):
+        os.environ["GEMMA4_ASSISTANT_MODEL"] = cache_dir
+        return cache_dir
+
+    if allow_download is None:
+        allow_download = os.environ.get("CI") == "true"
+    if not allow_download:
+        return None
+
+    from huggingface_hub import snapshot_download
+
+    prev_offline = os.environ.get("HF_HUB_OFFLINE")
+    os.environ["HF_HUB_OFFLINE"] = "0"
+    try:
+        snapshot_download(repo_id, local_dir=cache_dir)
+    finally:
+        if prev_offline is None:
+            os.environ.pop("HF_HUB_OFFLINE", None)
+        else:
+            os.environ["HF_HUB_OFFLINE"] = prev_offline
+
+    if not _assistant_dir_ready(cache_dir):
+        return None
+    os.environ["GEMMA4_ASSISTANT_MODEL"] = cache_dir
+    return cache_dir
+
+
+def configure_spec_decode_smoke_env():
+    """CI hook for the dedicated 31B spec-decode pytest only.
+
+    Points the config stub at real 31B weights and keeps at least one
+    full_attention layer (index 5, so GEMMA4_NUM_LAYERS=6). Callers must not
+    invoke this from the shared unit suite: it rewrites HF_MODEL.
+    """
+    if os.environ.get("GEMMA4_SPEC_DECODE_ENV_READY") == "1":
+        return os.environ.get("GEMMA4_ASSISTANT_MODEL")
+
+    if os.environ.get("CI") == "true":
+        os.environ.setdefault("HF_HOME", "/mnt/MLPerf/huggingface")
+        os.environ.setdefault("HF_HUB_CACHE", os.path.join(os.environ["HF_HOME"], "hub"))
+        if uses_ci_config_only_checkpoint():
+            os.environ["HF_MODEL"] = "google/gemma-4-31B-it"
+        os.environ.setdefault("TT_CACHE_PATH", "/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it")
+        # Drafter's last layer is full_attention and cross-attends that KV.
+        # Truncating 31B below layer index 5 drops it (KeyError).
+        os.environ.setdefault("GEMMA4_NUM_LAYERS", "6")
+
+    path = resolve_assistant_model_path()
+    if path:
+        os.environ["GEMMA4_SPEC_DECODE_ENV_READY"] = "1"
+    return path
+
+
 class TestFactory:
     """Common test setup for Gemma4 unit tests."""
 
