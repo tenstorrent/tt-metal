@@ -26,31 +26,28 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
-    const std::uint32_t TILE_CNT           = params.TILE_CNT;
-    const std::uint32_t NUM_BLOCKS         = params.NUM_BLOCKS;
-    const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
-    const std::uint32_t TEST_FACE_R_DIM    = params.TEST_FACE_R_DIM;
-    const std::uint32_t num_faces          = params.num_faces;
-    const Operand& buffer_A                = params.buffer_A;
-    const Operand& buffer_B                = params.buffer_B;
+    const std::uint32_t LOOP_FACTOR              = params.LOOP_FACTOR;
+    const std::uint32_t INPUT_TILE_CNT           = params.INPUT_TILE_CNT;
+    const std::uint32_t NUM_BLOCKS               = params.NUM_BLOCKS;
+    const std::uint32_t INPUT_NUM_TILES_IN_BLOCK = params.INPUT_NUM_TILES_IN_BLOCK;
+    const Operand& buffer_A                      = params.buffer_A;
+    const Operand& buffer_B                      = params.buffer_B;
 #endif
-    const std::uint32_t num_blocks     = static_cast<std::uint32_t>(NUM_BLOCKS);
-    const std::uint32_t tiles_in_block = static_cast<std::uint32_t>(NUM_TILES_IN_BLOCK);
+    const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
+    const std::uint32_t num_faces           = tensor_shape.total_num_faces();
 
     {
         ZONE_SCOPED("INIT")
         set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
 
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
-            ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(
-            ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
         _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
             static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
-
         _llk_unpack_binary_broadcast_operands_init_<BROADCAST_TYPE>(
-            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(), tiles_in_block);
+            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
+            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
+            INPUT_NUM_TILES_IN_BLOCK);
         PROFILER_SYNC();
     }
     {
@@ -63,7 +60,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             const std::uint32_t srcb_dvalids_per_tile = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1u : num_faces;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
+                for (std::uint32_t tile = 0; tile < INPUT_TILE_CNT; tile++)
                 {
                     // Real broadcast unpack emits SrcA once, then SrcB once
                     // per broadcast face. Combining these handshakes blocks
@@ -77,9 +74,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t block = 0; block < num_blocks; block++)
+                for (std::uint32_t block = 0; block < NUM_BLOCKS; block++)
                 {
-                    const std::uint32_t start_l1_tile_idx = block * tiles_in_block;
+                    const std::uint32_t start_l1_tile_idx = block * INPUT_NUM_TILES_IN_BLOCK;
                     _llk_unpack_binary_broadcast_operands_(start_l1_tile_idx /*start_l1_tile_idx_0*/, start_l1_tile_idx /*start_l1_tile_idx_1*/);
                 }
             }
@@ -104,15 +101,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
-    const std::uint32_t TILE_CNT           = params.TILE_CNT;
-    const std::uint32_t NUM_BLOCKS         = params.NUM_BLOCKS;
-    const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
-    const std::uint32_t num_faces          = params.num_faces;
+    const std::uint32_t LOOP_FACTOR               = params.LOOP_FACTOR;
+    const std::uint32_t INPUT_TILE_CNT            = params.INPUT_TILE_CNT;
+    const std::uint32_t NUM_BLOCKS                = params.NUM_BLOCKS;
+    const std::uint32_t INPUT_NUM_TILES_IN_BLOCK  = params.INPUT_NUM_TILES_IN_BLOCK;
+    const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
 #endif
-    const std::uint32_t num_blocks     = static_cast<std::uint32_t>(NUM_BLOCKS);
-    const std::uint32_t tiles_in_block = static_cast<std::uint32_t>(NUM_TILES_IN_BLOCK);
-
+    const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
+    const std::uint32_t num_faces           = tensor_shape.total_num_faces();
     {
         ZONE_SCOPED("INIT")
         // End-to-end and math-isolate runs require FPU destination ownership.
@@ -138,7 +134,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
         }
 
-        _llk_math_eltwise_binary_broadcast_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY>(DEFAULT_TENSOR_SHAPE);
+        _llk_math_eltwise_binary_broadcast_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY>(tensor_shape);
         PROFILER_SYNC();
     }
     {
@@ -151,7 +147,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             const std::uint32_t srcb_only_clears = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 0u : num_faces - 1u;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
+                for (std::uint32_t tile = 0; tile < INPUT_TILE_CNT; tile++)
                 {
                     // ROW/COL math clears SrcB after each non-final face,
                     // then clears SrcA and the final SrcB together.
@@ -160,30 +156,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
             }
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
-        {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
-            {
-                for (std::uint32_t block = 0; block < num_blocks; block++)
-                {
-                    for (std::uint32_t i = 0; i < tiles_in_block; ++i)
-                    {
-                        _llk_math_eltwise_binary_broadcast_(i);
-                    }
-                }
-            }
-        }
         else
         {
+            // acc_to_dest folds num_tiles_per_accum input tiles into one dest tile.
+            // Blocks that overflow dest switch banks between sections.
+            const std::uint32_t num_tiles_per_accum = INPUT_NUM_TILES_IN_BLOCK / OUTPUT_NUM_TILES_IN_BLOCK;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t block = 0; block < num_blocks; block++)
+                for (std::uint32_t block = 0; block < NUM_BLOCKS; block++)
                 {
-                    for (std::uint32_t i = 0; i < tiles_in_block; ++i)
+                    for (std::uint32_t dest_idx = 0; dest_idx < OUTPUT_NUM_TILES_IN_BLOCK; ++dest_idx)
                     {
-                        _llk_math_eltwise_binary_broadcast_(i);
+                        for (std::uint32_t tile = 0; tile < num_tiles_per_accum; ++tile)
+                        {
+                            _llk_math_eltwise_binary_broadcast_(dest_idx);
+                        }
                     }
-                    _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                    if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE)
+                    {
+                        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                    }
                 }
             }
         }
@@ -206,15 +198,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
-    const std::uint32_t NUM_BLOCKS         = params.NUM_BLOCKS;
-    const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
-    const std::uint32_t TEST_FACE_R_DIM    = params.TEST_FACE_R_DIM;
-    const std::uint32_t num_faces          = params.num_faces;
-    const Operand& buffer_Res              = params.buffer_Res;
+    const std::uint32_t LOOP_FACTOR               = params.LOOP_FACTOR;
+    const std::uint32_t NUM_BLOCKS                = params.NUM_BLOCKS;
+    const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
+    const Operand& buffer_Res                     = params.buffer_Res;
 #endif
-    const std::uint32_t num_blocks     = static_cast<std::uint32_t>(NUM_BLOCKS);
-    const std::uint32_t tiles_in_block = static_cast<std::uint32_t>(NUM_TILES_IN_BLOCK);
+    const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
     {
         ZONE_SCOPED("INIT")
@@ -229,10 +218,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
         }
 
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
-            ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, tiles_in_block);
+        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape, OUTPUT_NUM_TILES_IN_BLOCK);
         PROFILER_SYNC();
     }
     {
@@ -246,9 +234,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t block = 0; block < num_blocks; block++)
+                for (std::uint32_t block = 0; block < NUM_BLOCKS; block++)
                 {
-                    _llk_pack_(0 /*start_math_dest_tile_idx*/, block * tiles_in_block /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+                    _llk_pack_(0 /*start_math_dest_tile_idx*/, block * OUTPUT_NUM_TILES_IN_BLOCK /*start_l1_tile_idx*/, tensor_shape);
                 }
             }
         }
@@ -256,9 +244,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t block = 0; block < num_blocks; block++)
+                for (std::uint32_t block = 0; block < NUM_BLOCKS; block++)
                 {
-                    _llk_pack_(0 /*start_math_dest_tile_idx*/, block * tiles_in_block /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+                    _llk_pack_(0 /*start_math_dest_tile_idx*/, block * OUTPUT_NUM_TILES_IN_BLOCK /*start_l1_tile_idx*/, tensor_shape);
                     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }
             }
