@@ -9,6 +9,7 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     data_gen_with_range,
     compare_pcc,
 )
+from tests.ttnn.utils_for_testing import assert_with_ulp
 
 
 @pytest.mark.parametrize(
@@ -247,6 +248,32 @@ def test_bw_unary_pow_edge_case_exponents(device, input_shapes, exponent, high1,
 
     status = compare_pcc(output_tensor, golden_tensor, pcc=0.99)
     assert status
+
+
+@pytest.mark.parametrize("input_shapes", ((torch.Size([1, 1, 32, 32])),))
+@pytest.mark.parametrize("exponent", [1.0, 2.0, 3.0])
+def test_bw_pow_zero_input_finite_gradient(input_shapes, exponent, device):
+    """Regression for #56383: input == 0 must use the golden's `input < 0` mask, not `input <= 0`.
+
+    The golden (`unary_backward.py::_golden_function` for `pow_bw`) only substitutes `+inf`
+    where `input < 0`; `input == 0` keeps the ordinary finite gradient
+    (`d/dx[x^exponent] = exponent * x^(exponent-1)`, which is 0 for exponent >= 2 and 1 for
+    exponent == 1). The device kernel previously used `ttnn::lez(input)` (`input <= 0`), so
+    `input == 0` was silently overwritten with `+inf` instead.
+    """
+    in_data = torch.zeros(input_shapes)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, 10, device, seed=1)
+
+    tt_output_tensor_on_device = ttnn.pow_bw(grad_tensor, input_tensor, exponent)
+
+    golden_function = ttnn.get_golden_function(ttnn.pow_bw)
+    golden_tensor = golden_function(grad_data, in_data, exponent)
+
+    assert torch.isfinite(golden_tensor[0]).all(), "golden itself should be finite at input == 0"
+    # The golden gradient at input == 0 is an exact value (0 for exponent >= 2, 1 for exponent == 1),
+    # so a tight ULP check catches a regression to +inf far more precisely than a PCC threshold would.
+    assert_with_ulp(expected_result=golden_tensor[0], actual_result=tt_output_tensor_on_device[0], ulp_threshold=2)
 
 
 @pytest.mark.parametrize("input_shapes", ((torch.Size([1, 1, 32, 32])),))
