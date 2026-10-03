@@ -31,12 +31,8 @@ constexpr std::uint32_t MATH_DONE    = 0x46504110; // 'FPA' | 0x10
  *      those writes have retired, and only then releases UNPACK/PACK. The release is a RISC store,
  *      so the drain -- not a stall mask -- is what orders it behind the writes, and it is what makes
  *      the writes visible to the released threads.
- *   3. UNPACK/PACK STALLWAIT on TRISC_CFG, holding unpacker / packer / FPU / SFPU behind their own
- *      pending RISC MMIO config writes. Inert on this path -- the condition is per-thread and
- *      neither thread issues a config write here, so it is already met on arrival. Wormhole has no
- *      core-wide Configuration-Unit-idle condition to widen it to (Blackhole uses CFGEXU), so the
- *      drain in step 2 is the whole guarantee. A MATH-owned field added here needs that drain, not
- *      this stall.
+ *   3. UNPACK/PACK need no stall of their own: the drain in step 2 returns only once the writes
+ *      have landed, so they are in effect before either thread is released.
  *
  * @tparam thread_id: TRISC thread compiling this specialization, values = <UnpackThreadId/MathThreadId/PackThreadId>
  * @param enable: MATH only. True to enable FP32 dest accumulation, false to disable.
@@ -49,8 +45,6 @@ inline void _llk_set_fp32_dest_acc_(bool enable = false)
         (thread_id == ThreadId::MathThreadId) || (thread_id == ThreadId::UnpackThreadId) || (thread_id == ThreadId::PackThreadId),
         "_llk_set_fp32_dest_acc_ requires a TRISC thread");
 
-    constexpr std::uint32_t dest_acc_stall = p_stall::STALL_UNPACK | p_stall::STALL_PACK | p_stall::STALL_MATH | p_stall::STALL_SFPU;
-
     tensix_sync();
 
     if constexpr (thread_id == ThreadId::UnpackThreadId)
@@ -58,14 +52,12 @@ inline void _llk_set_fp32_dest_acc_(bool enable = false)
         mailbox_write(ThreadId::MathThreadId, fp32_dest_acc::UNPACK_READY);
         const std::uint32_t math_done = mailbox_read(ThreadId::MathThreadId);
         LLK_ASSERT(math_done == fp32_dest_acc::MATH_DONE, "Unexpected dest-acc message from math thread.");
-        TTI_STALLWAIT(dest_acc_stall, p_stall::TRISC_CFG);
     }
     else if constexpr (thread_id == ThreadId::PackThreadId)
     {
         mailbox_write(ThreadId::MathThreadId, fp32_dest_acc::PACK_READY);
         const std::uint32_t math_done = mailbox_read(ThreadId::MathThreadId);
         LLK_ASSERT(math_done == fp32_dest_acc::MATH_DONE, "Unexpected dest-acc message from math thread.");
-        TTI_STALLWAIT(dest_acc_stall, p_stall::TRISC_CFG);
     }
     else
     {

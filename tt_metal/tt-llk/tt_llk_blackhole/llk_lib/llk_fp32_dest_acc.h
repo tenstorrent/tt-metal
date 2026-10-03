@@ -30,8 +30,8 @@ constexpr std::uint32_t MATH_DONE    = 0x46504110; // 'FPA' | 0x10
  *   2. MATH tensix_syncs, waits for both, programs ALU_ACC_CTRL and PCK_DEST_RD_CTRL, drains until
  *      those writes have retired, and only then releases UNPACK/PACK. The release is a RISC store,
  *      so the drain -- not a stall mask -- is what orders it behind the writes.
- *   3. UNPACK/PACK STALLWAIT on CFGEXU, holding unpacker / packer / FPU / SFPU behind any
- *      Configuration Unit work still in flight. A backstop only -- step 2 is the guarantee.
+ *   3. UNPACK/PACK need no stall of their own: the drain in step 2 returns only once the writes
+ *      have landed, so they are in effect before either thread is released.
  *
  * @tparam thread_id: TRISC thread compiling this specialization, values = <UnpackThreadId/MathThreadId/PackThreadId>
  * @param enable: MATH only. True to enable FP32 dest accumulation, false to disable.
@@ -42,8 +42,6 @@ inline void _llk_set_fp32_dest_acc_(bool enable = false)
 {
     static_assert(IS_TRISC_THREAD<thread_id>, "_llk_set_fp32_dest_acc_ requires a TRISC thread");
 
-    constexpr std::uint32_t dest_acc_stall = p_stall::STALL_UNPACK | p_stall::STALL_PACK | p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_CFG;
-
     tensix_sync();
 
     if constexpr (thread_id == ThreadId::UnpackThreadId)
@@ -51,20 +49,12 @@ inline void _llk_set_fp32_dest_acc_(bool enable = false)
         mailbox_write(ThreadId::MathThreadId, fp32_dest_acc::UNPACK_READY);
         const std::uint32_t math_done = mailbox_read(ThreadId::MathThreadId);
         LLK_ASSERT(math_done == fp32_dest_acc::MATH_DONE, "Unexpected dest-acc message from math thread.");
-        // Backstop behind the drain in step 2. CFGEXU is Configuration-Unit-idle and core-wide, so
-        // unlike the per-thread TRISC_CFG it can observe MATH's writes; being core-wide it is also
-        // satisfied by unrelated traffic draining, which over-waits but never under-waits.
-        TTI_STALLWAIT(dest_acc_stall, p_stall::CFGEXU);
     }
     else if constexpr (thread_id == ThreadId::PackThreadId)
     {
         mailbox_write(ThreadId::MathThreadId, fp32_dest_acc::PACK_READY);
         const std::uint32_t math_done = mailbox_read(ThreadId::MathThreadId);
         LLK_ASSERT(math_done == fp32_dest_acc::MATH_DONE, "Unexpected dest-acc message from math thread.");
-        // Backstop behind the drain in step 2. CFGEXU is Configuration-Unit-idle and core-wide, so
-        // unlike the per-thread TRISC_CFG it can observe MATH's writes; being core-wide it is also
-        // satisfied by unrelated traffic draining, which over-waits but never under-waits.
-        TTI_STALLWAIT(dest_acc_stall, p_stall::CFGEXU);
     }
     else
     {
