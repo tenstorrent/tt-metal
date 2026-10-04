@@ -27,6 +27,23 @@ RUN_TYPE_PRESETS = {
 }
 
 
+# A real slowdown also shows in a thread's isolate run type; a Wormhole packer-phase step (#55169) does not.
+ISOLATE_RUN_TYPES = RUN_TYPE_PRESETS["ALL_ISOLATION_MODES"]
+
+
+def _confirm_spec(spec):
+    """``L1_TO_L1`` -> {L1_TO_L1: isolate run types}; ``A:B+C`` names them."""
+    out = {}
+    for item in filter(None, (s.strip() for s in (spec or "").split(","))):
+        run_type, _, confirmers = item.partition(":")
+        out[run_type] = (
+            tuple(c for c in confirmers.split("+") if c)
+            if confirmers
+            else ISOLATE_RUN_TYPES
+        )
+    return out
+
+
 def _module_thresholds(spec):
     """``perf_matmul=0.25,perf_math_matmul=0.25`` -> {module: threshold}."""
     out = {}
@@ -147,6 +164,10 @@ def compare_runs(
     min_cycles=DEFAULT_MIN_CYCLES,
     run_types=None,
     module_thresholds=None,
+    confirm=None,
+    confirm_threshold=DEFAULT_THRESHOLD,
+    backstop=None,
+    confirm_missing="fire",
 ):
     """Median-vs-median comparison.
 
@@ -161,9 +182,11 @@ def compare_runs(
 
     If ``run_types`` is specified (comma-separated, e.g. "L1_TO_L1,MATH_ISOLATE"),
     only compare metrics for those run types.
+    ``confirm`` keeps a regression only if a confirming run type of the point is slower too, or it exceeds ``backstop``.
     """
     cur = _medians(_read_frames(current_csvs))
     base = _medians(_read_frames(baseline_csvs))
+    cur_all, base_all = cur, base
 
     if run_types:
         allowed = set()
@@ -207,12 +230,42 @@ def compare_runs(
             regressions.append(record)
         elif record["improvement"]:
             improvements.append(record)
+    unconfirmed = []
+    if confirm:
+        kept = []
+        for r in regressions:
+            confirmers = confirm.get(r["run_type"])
+            if confirmers is None:
+                kept.append(r)
+                continue
+            key = (r["marker"], r["config"])
+            deltas = {}
+            for rt in confirmers:
+                c = cur_all.get((key, f"mean({rt})"))
+                b = base_all.get((key, f"mean({rt})"))
+                if c is not None and b:
+                    deltas[rt] = (c - b) / b
+            r["confirming_delta"] = max(deltas.values()) if deltas else None
+            if deltas and r["confirming_delta"] > confirm_threshold:
+                r["confirmation"] = "confirmed"
+            elif backstop is not None and r["delta"] > backstop:
+                r["confirmation"] = "backstop"
+            elif not deltas and confirm_missing == "fire":
+                r["confirmation"] = "no confirming data"
+            else:
+                r["confirmation"] = "unconfirmed" if deltas else "no confirming data"
+                r["regression"] = False
+                unconfirmed.append(r)
+                continue
+            kept.append(r)
+        regressions = kept
     return {
         "records": records,
         "regressions": regressions,
         "improvements": improvements,
         "new_points": new_points,
         "noise_filtered": noise_filtered,
+        "unconfirmed": unconfirmed,
     }
 
 
@@ -319,6 +372,13 @@ def render_report(
             "(INIT, UNINIT) are a few hundred cycles, where a handful of cycles of "
             "jitter looks like a large percentage."
         )
+    unconfirmed = result.get("unconfirmed", [])
+    if unconfirmed:
+        lines.append(
+            f"- {len(unconfirmed)} point(s) passed the rule above but are not counted: "
+            "no isolate run type of the same point is slower, so the move is the "
+            "Wormhole packer phase (#55169), not a slower thread."
+        )
     lines.append("")
     for groups, what, where, companion in (
         (reg_groups, "regression", "slower", ".regressions.csv"),
@@ -409,6 +469,30 @@ def main(argv=None):
         default="",
         help="per-module thresholds, e.g. perf_matmul=0.25,perf_math_matmul=0.25",
     )
+    ap.add_argument(
+        "--confirm",
+        default="",
+        help="run types whose regressions need confirmation, e.g. L1_TO_L1 (by the "
+        "isolate run types of the same point) or L1_TO_L1:PACK_ISOLATE+MATH_ISOLATE",
+    )
+    ap.add_argument(
+        "--confirm-threshold",
+        type=float,
+        default=DEFAULT_THRESHOLD,
+        help="slowdown of a confirming run type that confirms a regression",
+    )
+    ap.add_argument(
+        "--backstop",
+        type=float,
+        default=None,
+        help="a regression larger than this needs no confirmation",
+    )
+    ap.add_argument(
+        "--confirm-missing",
+        choices=("fire", "drop"),
+        default="fire",
+        help="what to do with a regression that has no confirming data",
+    )
     ap.add_argument("--report", default="regression_report.md")
     ap.add_argument("--test", default="?")
     ap.add_argument("--baseline-sha", default="?")
@@ -439,6 +523,10 @@ def main(argv=None):
         min_cycles=a.min_cycles,
         run_types=a.run_types,
         module_thresholds=_module_thresholds(a.module_threshold),
+        confirm=_confirm_spec(a.confirm),
+        confirm_threshold=a.confirm_threshold,
+        backstop=a.backstop,
+        confirm_missing=a.confirm_missing,
     )
 
     # Fail if zero points were compared (e.g., all-new configs, run-type filter mismatch)
@@ -471,6 +559,8 @@ def main(argv=None):
         written.append(f"{stem}.points.csv")
     if _write_points_csv(result["regressions"], f"{stem}.regressions.csv"):
         written.append(f"{stem}.regressions.csv")
+    if _write_points_csv(result["unconfirmed"], f"{stem}.unconfirmed.csv"):
+        written.append(f"{stem}.unconfirmed.csv")
 
     print(report)
     print("\n(wrote " + " + ".join(written) + ")")
