@@ -3,6 +3,7 @@
 
 import pytest
 import torch
+from conftest import skip_for_wormhole
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.data_format_inference import infer_data_formats
@@ -60,6 +61,71 @@ def test_pack_untilize(
     input_dimensions,
     dest_sync,
     tile_dst_ct_offset,
+):
+    _check_pack_untilize(
+        formats, dest_acc, input_dimensions, dest_sync, tile_dst_ct_offset
+    )
+
+
+# One-tile rows, full three-tile and eight-tile rows, and rows split into several blocks (one-tile blocks included),
+# whose output rows are not contiguous in L1; the 68-tile row exceeds the packer's output offset window for 32-bit data.
+# block_ct_dim 0 takes the block size the other test derives.
+@skip_for_wormhole
+@parametrize(
+    formats=input_output_formats(
+        [
+            DataFormat.Float16_b,
+            DataFormat.Float16,
+            DataFormat.Float32,
+            DataFormat.Int32,
+            DataFormat.Bfp8_b,
+            DataFormat.Fp8_e4m3,
+        ]
+    ),
+    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
+    input_dimensions=[
+        [32, 32],
+        [64, 32],
+        [32, 96],
+        [32, 256],
+        [32, 512],
+        [32, 64],
+        [32, 192],
+        [64, 128],
+        [32, 2176],
+    ],
+    block_ct_dim=lambda input_dimensions: [
+        {32: 1, 96: 0, 256: 0, 512: 0, 64: 1, 192: 3, 128: 2, 2176: 4}[
+            input_dimensions[1]
+        ]
+    ],
+)
+def test_pack_untilize_rows(
+    formats,
+    dest_acc,
+    input_dimensions,
+    block_ct_dim,
+):
+    if (
+        formats.output_format == DataFormat.Fp8_e4m3
+        and block_ct_dim % 2
+        and block_ct_dim * 32 < input_dimensions[1]
+    ):
+        pytest.skip(
+            "Fp8_e4m3 block rows of an odd tile count clobber the next 32 bytes, #59140"
+        )
+    _check_pack_untilize(
+        formats, dest_acc, input_dimensions, DestSync.Half, 0, block_ct_dim or None
+    )
+
+
+def _check_pack_untilize(
+    formats,
+    dest_acc,
+    input_dimensions,
+    dest_sync,
+    tile_dst_ct_offset,
+    block_ct_dim=None,
 ):
     if TestConfig.WITH_COVERAGE and input_dimensions == [64, 512]:
         pytest.skip(
@@ -130,14 +196,15 @@ def test_pack_untilize(
 
     # _llk_pack_untilize_init_ has a static_assert that checks if block_ct_dim is less or equal to 8.
     # TODO: Update this logic to accept more than 8 tiles per block if the static_assert changes in the future.
-    _, block_ct_dim = get_num_blocks_and_num_tiles_in_block(
-        dest_sync,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Untilize,
-    )
+    if block_ct_dim is None:
+        _, block_ct_dim = get_num_blocks_and_num_tiles_in_block(
+            dest_sync,
+            dest_acc,
+            formats,
+            input_dimensions,
+            TILE_DIMENSIONS,
+            BlocksCalculationAlgorithm.Untilize,
+        )
 
     configuration = TestConfig(
         "sources/pack_untilize_test.cpp",
