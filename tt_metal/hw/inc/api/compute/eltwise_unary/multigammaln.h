@@ -7,7 +7,7 @@
 #include "api/compute/common_globals.h"
 
 // Blackhole and Wormhole only: ckernel_sfpu_multigammaln_bf16.h exists under those ckernel trees.
-// Quasar keeps the composite; the generated kernel is not built there.
+// Quasar keeps the composite.
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 
 #ifdef TRISC_MATH

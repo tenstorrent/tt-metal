@@ -11,8 +11,4 @@ inline void finalize_raw_domain_actions(vFloat x_raw, vFloat& result) {
     apply_selected_core_aggregate_stirling(x_raw, result);
     (void)x_raw;
     (void)result;
-    // Ordered finite/domain return_class actions own their lanes first.  The
-    // effective special policy then has final class authority; target rounding
-    // and FTZ happen in the evaluator's existing conversion/store epilogue.
-    apply_target_special_policy(x_effective, result);
 }

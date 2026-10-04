@@ -13,10 +13,6 @@ namespace sfpi {
 #endif
 #pragma push_macro("TT_TARGET_BH_BF16_SPECIAL_COMPARE_COUNT")
 #undef TT_TARGET_BH_BF16_SPECIAL_COMPARE_COUNT
-#pragma push_macro("TT_SPECIAL_NEG_INF")
-#undef TT_SPECIAL_NEG_INF
-#pragma push_macro("TT_SPECIAL_POS_ZERO")
-#undef TT_SPECIAL_POS_ZERO
 namespace ckernel::sfpu::MultigammalnBf16Config_source {
 using namespace sfpi;
 constexpr uint32_t NUM_DEGREE = 6, DEN_DEGREE = 4;
@@ -71,12 +67,38 @@ constexpr std::array<float, 13> TT_SELECTED_STIRLING_CORRECTION = {
      6.6526548714307410e-09f,
      1.2773651580921808e-10f,
      4.3693662576949066e-10f}};
+constexpr uint32_t TT_SELECTED_STIRLING_REFLECTION_ORIGIN_BITS = 0x40200000u;
+constexpr uint32_t TT_SELECTED_STIRLING_REFLECTION_CONSTANT_BITS = 0x414d5666u;
+constexpr uint32_t TT_SELECTED_STIRLING_REFLECTION_SHIFT = 7u;
+constexpr uint32_t TT_SELECTED_STIRLING_REFLECTION_LOG_SCALE_BITS = 0x3f800000u;
+constexpr std::array<float, 12> TT_SELECTED_STIRLING_REFLECTION_SQUARED_OFFSETS = {
+    {-5.0000000000000000e-01f,
+     0.0000000000000000e+00f,
+     5.0000000000000000e-01f,
+     1.0000000000000000e+00f,
+     1.5000000000000000e+00f,
+     2.0000000000000000e+00f,
+     2.5000000000000000e+00f,
+     3.0000000000000000e+00f,
+     3.5000000000000000e+00f,
+     4.0000000000000000e+00f,
+     4.5000000000000000e+00f,
+     5.0000000000000000e+00f}};
+constexpr std::array<float, 4> TT_SELECTED_STIRLING_REFLECTION_SINGLE_OFFSETS = {
+    {-1.5000000000000000e+00f, -1.0000000000000000e+00f, 5.5000000000000000e+00f, 6.0000000000000000e+00f}};
+constexpr std::array<float, 7> TT_SELECTED_STIRLING_LOG_SINE_RATIO = {
+    {2.2894597053527832e+00f,
+     -3.2898662090301514e+00f,
+     -1.0824505090713501e+00f,
+     -6.7527395486831665e-01f,
+     -5.3421139717102051e-01f,
+     -2.2606460750102997e-01f,
+     -7.6610094308853149e-01f}};
+constexpr std::array<uint32_t, 2> TT_SELECTED_STIRLING_REFLECTION_STOCK_WINDOW_BITS = {{0xbb600000u, 0x3b200000u}};
 
 // Declared special-value policy from the typed activation specification.
 // 0=NaN 1=+Inf 2=-Inf 3=+0 4=-0 5=finite_other(pass through)
 #define TT_TARGET_BH_BF16_SPECIAL_COMPARE_COUNT 2
-#define TT_SPECIAL_NEG_INF 0
-#define TT_SPECIAL_POS_ZERO 0
 
 #include "ckernel_sfpu_bf16_aggregate_stirling_core.inc"
 #include "ckernel_sfpu_bf16_rational_interleaved_core.inc"
@@ -103,8 +125,6 @@ struct MultigammalnBf16Config {
     static inline void tile() { MultigammalnBf16Config_source::tile(); }
 };
 }  // namespace ckernel::sfpu
-#pragma pop_macro("TT_SPECIAL_POS_ZERO")
-#pragma pop_macro("TT_SPECIAL_NEG_INF")
 #pragma pop_macro("TT_TARGET_BH_BF16_SPECIAL_COMPARE_COUNT")
 
 namespace ckernel::sfpu {

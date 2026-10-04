@@ -414,6 +414,5 @@ set(HW_JIT_API_HEADERS
     ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_rational_interleaved_core.inc
     ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_rational_scalar_tile.inc
     ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_rational_segment_core.inc
-    ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_target_special_policy.inc
     inc/api/compute/eltwise_unary/multigammaln.h
 )

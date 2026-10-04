@@ -5,7 +5,7 @@
 """
 Exhaustive BF16 accuracy of ttnn.multigammaln.
 
-Every BF16 bit pattern is an input. The reference is torch.special.multigammaln(x, 4) in float64, on its real domain x > 1.5 and NaN elsewhere,
+Every BF16 bit pattern is an input. The reference is torch.special.multigammaln(x, 4) in float64,
 rounded once to BF16 with subnormal results flushed to zero. The SFPU may read a subnormal input
 as zero, so torch is evaluated both at the input and at the input with subnormals flushed, and an
 output may match either. The BF16 pack stores NaN as +inf and -0 as +0, so classes are compared as
@@ -28,11 +28,17 @@ CLASS_CODES = {"inf": 0, "-inf": 1, "zero": 2, "finite": 3}
 # with subnormals as zero, and the class their outputs are stored as).
 DECLARED = {
     "blackhole": [
-        ("torch.isfinite(daz) & (daz <= 1.5)", "inf"),  # finite x <= 1.5
+        (
+            "torch.isfinite(daz) & (daz > -0.00341796875) & (daz < 0.00244140625)",
+            "inf",
+        ),  # -0.003417969 < finite x < 0.002441406
         ("torch.isfinite(daz) & (daz >= 1.0384593717069655e+36)", "inf"),  # finite x >= 1.038459e+36
     ],
     "wormhole_b0": [
-        ("torch.isfinite(daz) & (daz <= 1.5)", "inf"),  # finite x <= 1.5
+        (
+            "torch.isfinite(daz) & (daz > -0.00341796875) & (daz < 0.00244140625)",
+            "inf",
+        ),  # -0.003417969 < finite x < 0.002441406
         ("torch.isfinite(daz) & (daz >= 1.0384593717069655e+36)", "inf"),  # finite x >= 1.038459e+36
     ],
 }
@@ -43,10 +49,7 @@ def _flush(t):
 
 
 def _reference(x):
-    domain = x > 1.5
-    result = torch.full_like(x, float("nan"))
-    result[domain] = torch.special.multigammaln(x[domain], 4)
-    return result
+    return torch.special.multigammaln(x, 4)
 
 
 def _round_to_bfloat16(t):
