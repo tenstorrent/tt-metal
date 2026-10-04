@@ -113,7 +113,7 @@ def validate_args(args: argparse.Namespace) -> None:
 
 def is_failed_job(job: RecentJob) -> bool:
     conclusion = job.conclusion.lower()
-    return bool(conclusion) and conclusion not in NON_FAILED_CONCLUSIONS
+    return job.status.casefold() == "completed" and bool(conclusion) and conclusion not in NON_FAILED_CONCLUSIONS
 
 
 def empty_state() -> dict[str, Any]:
@@ -219,11 +219,12 @@ def mark_job_checked(state: dict[str, Any], result: JobScanResult) -> None:
 def log_download_counts(
     jobs_to_scan: list[RecentJob],
     scan_results: list[JobScanResult],
-) -> tuple[int, int, int]:
-    attempts = len(jobs_to_scan)
+) -> tuple[int, int, int, int]:
+    unavailable = sum(1 for result in scan_results if result.log_unavailable and not result.log_checked)
+    attempts = max(len(jobs_to_scan) - unavailable, 0)
     successes = sum(1 for result in scan_results if result.log_checked)
     failures = max(attempts - successes, 0)
-    return attempts, successes, failures
+    return attempts, successes, failures, unavailable
 
 
 def build_markdown_report(
@@ -238,7 +239,9 @@ def build_markdown_report(
     scan_results: list[JobScanResult],
 ) -> str:
     failures = [result for result in scan_results if result.signature_labels]
-    download_attempts, download_successes, download_failures = log_download_counts(jobs_to_scan, scan_results)
+    download_attempts, download_successes, download_failures, unavailable_logs = log_download_counts(
+        jobs_to_scan, scan_results
+    )
     download_failure_rate = download_failures / download_attempts if download_attempts else 0.0
     lines = [
         "# Runner Failure Scan",
@@ -251,9 +254,20 @@ def build_markdown_report(
         f"- Jobs selected for scanning: `{len(jobs_to_scan)}`",
         f"- Log downloads: `{download_successes}/{download_attempts}` succeeded",
         f"- Log download failures: `{download_failures}` (`{download_failure_rate:.1%}`)",
+        f"- Logs unavailable (excluded from download health): `{unavailable_logs}`; eligible for retry",
         f"- Runner-failure jobs: `{len(failures)}`",
         "",
     ]
+
+    if unavailable_logs:
+        lines.extend(["## Unavailable Logs", "", "| Job | Reason |", "| --- | --- |"])
+        for result in scan_results:
+            if result.log_unavailable:
+                lines.append(
+                    f"| {markdown_link(result.job.job_id, result.job.html_url)} | "
+                    f"{markdown_escape(result.log_status)} |"
+                )
+        lines.append("")
 
     if not failures:
         lines.append("No runner-failure signatures found in scanned jobs.")
@@ -313,7 +327,9 @@ def build_json_report(
     runner_log_table_results: list[JobScanResult],
 ) -> dict[str, Any]:
     failures = [result for result in scan_results if result.signature_labels]
-    download_attempts, download_successes, download_failures = log_download_counts(jobs_to_scan, scan_results)
+    download_attempts, download_successes, download_failures, unavailable_logs = log_download_counts(
+        jobs_to_scan, scan_results
+    )
     download_failure_rate = download_failures / download_attempts if download_attempts else 0.0
     return {
         "generated_at": format_utc(generated_at),
@@ -337,6 +353,7 @@ def build_json_report(
             "log_download_attempts": download_attempts,
             "log_download_successes": download_successes,
             "log_download_failures": download_failures,
+            "log_download_unavailable": unavailable_logs,
             "log_download_failure_rate": download_failure_rate,
             "runner_log_table_jobs": len(runner_log_table_results),
             "runner_failure_jobs": len(failures),

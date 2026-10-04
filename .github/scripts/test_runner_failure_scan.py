@@ -1,5 +1,7 @@
+from dataclasses import replace
+
 from runner_failure_common import JobScanResult, RecentJob
-from runner_failure_scan import log_download_counts
+from runner_failure_scan import is_failed_job, log_download_counts
 
 
 def make_job(job_id: str) -> RecentJob:
@@ -33,11 +35,30 @@ def make_result(job: RecentJob, *, log_checked: bool) -> JobScanResult:
 
 
 def test_log_download_counts_handles_no_attempts() -> None:
-    assert log_download_counts([], []) == (0, 0, 0)
+    assert log_download_counts([], []) == (0, 0, 0, 0)
 
 
 def test_log_download_counts_includes_failed_and_missing_results() -> None:
     jobs = [make_job("1"), make_job("2"), make_job("3")]
     results = [make_result(jobs[0], log_checked=True), make_result(jobs[1], log_checked=False)]
 
-    assert log_download_counts(jobs, results) == (3, 1, 2)
+    assert log_download_counts(jobs, results) == (3, 1, 2, 0)
+
+
+def test_unavailable_logs_are_excluded_from_health() -> None:
+    jobs = [make_job("1"), make_job("2"), make_job("3")]
+    results = [
+        make_result(jobs[0], log_checked=True),
+        replace(make_result(jobs[1], log_checked=False), log_unavailable=True),
+        make_result(jobs[2], log_checked=False),
+    ]
+
+    assert log_download_counts(jobs, results) == (2, 1, 1, 1)
+
+
+def test_incomplete_jobs_are_not_selected_as_failures() -> None:
+    job = make_job("1")
+
+    assert is_failed_job(job)
+    assert not is_failed_job(replace(job, status="in_progress"))
+    assert not is_failed_job(replace(job, status="queued"))

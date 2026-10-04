@@ -24,6 +24,7 @@ except ModuleNotFoundError:  # pragma: no cover - handled in load_config
 
 SIGNATURE_VERSION = "runner-failure-signatures-2026-10-02-v1"
 UNKNOWN_RUNNER = "(unknown runner)"
+ACTIVE_JOB_STATUSES = {"queued", "in_progress", "waiting", "pending", "requested"}
 
 OSC_SEQUENCE_RE = re.compile(r"\x1b\].*?\x1b\\")
 CSI_SEQUENCE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -89,6 +90,7 @@ class RecentJob:
 class LogLookupResult:
     log_text: str | None
     status: str
+    unavailable: bool = False
 
 
 @dataclass(frozen=True)
@@ -98,6 +100,7 @@ class JobScanResult:
     log_checked: bool
     signature_labels: tuple[str, ...]
     fabric_missing_links: str
+    log_unavailable: bool = False
 
 
 ERROR_SIGNATURES = (
@@ -570,7 +573,37 @@ def combine_signature_labels(*label_groups: list[str]) -> list[str]:
     return [signature.label for signature in ERROR_SIGNATURES if signature.label in labels_by_name]
 
 
+def unavailable_job_log_reason(job: RecentJob, timeout: int) -> str:
+    try:
+        payload = gh_api_json(f"repos/{job.owner_repo}/actions/jobs/{job.job_id}", timeout=timeout)
+        if not isinstance(payload, dict):
+            return ""
+        status = str(payload.get("status") or "").casefold()
+        if status in ACTIVE_JOB_STATUSES:
+            return f"job is {status}"
+
+        check_path = urlparse(str(payload.get("check_run_url") or "")).path
+        expected_prefix = f"/repos/{job.owner_repo}/check-runs/"
+        if not check_path.startswith(expected_prefix) or not check_path.removeprefix(expected_prefix).isdigit():
+            return ""
+        annotations = gh_api_json(f"{check_path.lstrip('/')}/annotations?per_page=100", paginate=True, timeout=timeout)
+    except (json.JSONDecodeError, OSError, RuntimeError, subprocess.TimeoutExpired):
+        return ""
+
+    for page in annotations if isinstance(annotations, list) else []:
+        for annotation in page if isinstance(page, list) else [page]:
+            if (
+                isinstance(annotation, dict)
+                and "self-hosted runner lost communication" in str(annotation.get("message") or "").casefold()
+            ):
+                return "runner lost communication with GitHub"
+    return ""
+
+
 def fetch_github_job_log(job: RecentJob, timeout: int) -> LogLookupResult:
+    if job.status.casefold() in ACTIVE_JOB_STATUSES:
+        return LogLookupResult(log_text=None, status=f"not available: job is {job.status}", unavailable=True)
+
     endpoint = f"repos/{job.owner_repo}/actions/jobs/{job.job_id}/logs"
     try:
         # Logs stay in captured memory for signature matching and are never printed
@@ -590,6 +623,11 @@ def fetch_github_job_log(job: RecentJob, timeout: int) -> LogLookupResult:
 
     if result.returncode != 0:
         details = " ".join((result.stderr or result.stdout or "unknown gh api error").split())
+        if re.search(r"\bHTTP 404\b", details):
+            # GitHub can close a disconnected runner's job without publishing its logs.
+            reason = unavailable_job_log_reason(job, timeout=timeout)
+            if reason:
+                return LogLookupResult(log_text=None, status=f"not available: {reason} (HTTP 404)", unavailable=True)
         return LogLookupResult(log_text=None, status=f"gh api failed: {details}")
 
     return LogLookupResult(log_text=result.stdout, status="fetched")
@@ -631,6 +669,7 @@ def scan_job(job: RecentJob, timeout: int) -> JobScanResult:
             log_checked=False,
             signature_labels=tuple(metadata_signature_labels),
             fabric_missing_links="",
+            log_unavailable=log_result.unavailable,
         )
 
     signature_labels = combine_signature_labels(
@@ -665,7 +704,9 @@ def scan_jobs(jobs: list[RecentJob], *, gh_timeout: int, log_workers: int) -> li
                 print(f"warning: job scan failed: {exc}", file=sys.stderr)
                 continue
             results.append(result)
-            if not result.log_checked:
+            if result.log_unavailable:
+                print(f"Log unavailable for {result.job.html_url}: {result.log_status}; eligible for retry.")
+            elif not result.log_checked:
                 print(
                     f"warning: could not check {result.job.html_url}: " f"{result.log_status}",
                     file=sys.stderr,
@@ -707,6 +748,7 @@ def result_to_dict(result: JobScanResult) -> dict[str, Any]:
             "log_status": result.log_status,
             "signatures": list(result.signature_labels),
             "fabric_missing_links": result.fabric_missing_links,
+            "log_unavailable": result.log_unavailable,
         }
     )
     return value
@@ -743,6 +785,7 @@ def scan_result_from_dict(value: dict[str, Any]) -> JobScanResult:
         log_checked=bool(value.get("log_checked")),
         signature_labels=signatures,
         fabric_missing_links=str(value.get("fabric_missing_links") or ""),
+        log_unavailable=bool(value.get("log_unavailable")),
     )
 
 
