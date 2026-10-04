@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import stat
 import subprocess
@@ -54,6 +55,20 @@ SNAPSHOT_ASSETS = {
         "blob": "82e9d31979e92ab929cd544440f129d9ecd797b69e327f80f17e1c50d5551b55",
         "bytes": 2183982,
         "shared": "c0/c0fff81447bf4ba4dbf0a427469a7e1f7e48a32b365aeaceea7d4760a619a3d7",
+    },
+}
+
+
+# Optional official repository assets at the same pinned revision. They are
+# checked only for contained layout/size, never selected, hashed, copied or mounted.
+IGNORED_SNAPSHOT_ASSETS = {
+    ".gitattributes": {"blob": "a6344aac8c09253b3b630fb776ae94478aa0275b", "bytes": 1519},
+    "LICENSE": {"blob": "a7c3ca16cee30425ed6ad841a809590f2bcbf290", "bytes": 7627},
+    "README.md": {"blob": "bbd5630a05b65c1a8b25141bd11ec44844107d58", "bytes": 44044},
+    "USE_POLICY.md": {"blob": "81ebb55902285e8dd5804ccf423d17ffb2a622ee", "bytes": 4691},
+    "original/consolidated.00.pth": {
+        "blob": "ab33d910f405204e5d388bc3521503584800461dc96808e287821dd451c1edac",
+        "bytes": 16060617592,
     },
 }
 
@@ -237,6 +252,57 @@ def snapshot_sha(name, path, checkpoint=lambda: None):
     return digest.hexdigest()
 
 
+def snapshot_layout(path):
+    """Model-relative metadata only, saved before selection can refuse a layout."""
+    canonical = path.resolve(strict=True)
+    hub = HF_HUB.resolve(strict=True)
+    assert canonical.name == SNAPSHOT and canonical.parent.name == "snapshots"
+    assert canonical.parent.parent == hub / MODEL_REPO and hub.is_relative_to(HF_ROOT.resolve(strict=True))
+    entries = []
+    paths = sorted(canonical.iterdir())
+    original = canonical / "original"
+    if original in paths and stat.S_ISDIR(original.lstat().st_mode):
+        paths.extend(sorted(original.iterdir()))  # Never follow an unknown directory or link.
+    for p in paths:
+        info = p.lstat()
+        row = {"name": p.relative_to(canonical).as_posix(), "kind": "special"}
+        if stat.S_ISDIR(info.st_mode):
+            row["kind"] = "directory"
+        elif stat.S_ISREG(info.st_mode):
+            row["kind"] = "regular"
+        elif stat.S_ISLNK(info.st_mode):
+            row["kind"] = "symlink"
+            link = os.readlink(p)
+            target = Path(os.path.normpath(str(p.parent / link)))
+            canonical_link = (
+                not os.path.isabs(link)
+                and target.parent == canonical.parent.parent / "blobs"
+                and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", target.name) is not None
+            )
+            row["canonical_repository_link"] = canonical_link
+            if canonical_link:
+                row["link"] = link
+            else:
+                row["noncanonical_link_sha256"] = hashlib.sha256(link.encode()).hexdigest()
+        row["selection"] = (
+            "required"
+            if row["name"] in SNAPSHOT_ASSETS
+            else "ignored_official"
+            if row["name"] in IGNORED_SNAPSHOT_ASSETS
+            else "directory"
+            if row["name"] == "original"
+            else "unknown"
+        )
+        entries.append(row)
+    return {
+        "revision": SNAPSHOT,
+        "metadata_only": True,
+        "entries": entries,
+        "selected_assets": sorted(SNAPSHOT_ASSETS),
+        "ignored_official_present": sorted(row["name"] for row in entries if row["selection"] == "ignored_official"),
+    }
+
+
 def snapshot_files(path):
     canonical = path.resolve(strict=True)
     assert canonical.name == SNAPSHOT and canonical.parent.name == "snapshots"
@@ -248,27 +314,32 @@ def snapshot_files(path):
     for root, dirs, names in os.walk(canonical, followlinks=False):
         for name in dirs:
             p = Path(root) / name
-            assert not p.is_symlink(), "Snapshot directory link is not admitted"
-            directories.add(p.relative_to(canonical).as_posix())
+            relative = p.relative_to(canonical).as_posix()
+            assert relative == "original" and not p.is_symlink(), "Unlisted/linked snapshot directory: " + relative
+            directories.add(relative)
         for name in names:
             p = Path(root) / name
             relative = p.relative_to(canonical).as_posix()
-            assert relative in SNAPSHOT_ASSETS, "Unlisted snapshot asset"
-            asset = SNAPSHOT_ASSETS[relative]
+            assert relative in SNAPSHOT_ASSETS or relative in IGNORED_SNAPSHOT_ASSETS, (
+                "Unlisted snapshot asset: " + relative
+            )
+            asset = SNAPSHOT_ASSETS[relative] if relative in SNAPSHOT_ASSETS else IGNORED_SNAPSHOT_ASSETS[relative]
             blob = repo / "blobs" / asset["blob"]
-            assert p.is_symlink() and os.readlink(p) == os.path.relpath(
-                blob, p.parent
-            ), "Snapshot link escapes/replaces frozen asset"
+            assert p.is_symlink() and os.readlink(p) == os.path.relpath(blob, p.parent), (
+                "Snapshot link escapes/replaces frozen asset: " + relative
+            )
             # CI's supported HF_HUB_CACHE is a standard one-hop repository
             # cache. Refuse shared-pool guesses or links beyond this exact blob.
-            assert stat.S_ISREG(blob.lstat().st_mode), "CI repo blob replacement/special file"
+            assert stat.S_ISREG(blob.lstat().st_mode), "CI repo blob replacement/special file: " + relative
             target, second = blob, None
-            assert target.resolve(strict=True) == target and stat.S_ISREG(
-                target.lstat().st_mode
-            ), "Target replacement/special file"
-            assert (
-                p.resolve(strict=True) == target and target.stat().st_size == asset["bytes"]
-            ), "Frozen asset identity/size differs"
+            assert target.resolve(strict=True) == target and stat.S_ISREG(target.lstat().st_mode), (
+                "Target replacement/special file: " + relative
+            )
+            assert p.resolve(strict=True) == target and target.stat().st_size == asset["bytes"], (
+                "Frozen asset identity/size differs: " + relative
+            )
+            if relative in IGNORED_SNAPSHOT_ASSETS:
+                continue  # Only the required twelve enter seals/copy plans/the closed local namespace.
             rows[relative] = {
                 "target": target,
                 "stamp": file_stamp(target),

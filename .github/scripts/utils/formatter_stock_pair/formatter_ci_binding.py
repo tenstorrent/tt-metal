@@ -193,6 +193,7 @@ def host(workspace):
     protocol = json.loads((capsule / "control/.github/scripts/utils/formatter_pair_manifest.json").read_text())[
         "protocols"
     ]["chunked"]
+    owned.save(evidence / "ci-hf-snapshot-layout.json", checks.snapshot_layout(SNAPSHOT))
     storage = prepare_storage(SNAPSHOT, seals, protocol)
     admission = workspace / "storage-admission.json"
     owned.save(admission, storage)

@@ -12,8 +12,8 @@ import owned_seed_copy as owned
 
 POINTS = ("initial-quiet", "pre-topology-quiet", "post-topology-quiet", "preflight", "post-cleanup")
 PHASES = ("producer", "baseline", "candidate")
-CHECKS_SHA = "a5d4cd04210c0df621f1d73fc49b60bbe50a10855605d7f83d7e937e618355a2"
-HELPER_SHA = "951df2ae6dd63cffd54c66f26e9477c96d9d06492ec01e6a749156ce444a06af"
+CHECKS_SHA = "59a6e7bc3eb779129244cf1d8b0c6925315dd6c322777417f5049d36e48825ba"
+HELPER_SHA = "1f2676ea91090990a71244b1a19c1a56d93b600ae1e8401dc6ebabfa78e169b4"
 
 
 def read(path, uid):
