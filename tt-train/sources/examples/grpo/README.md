@@ -50,8 +50,9 @@ Notes:
 
 - The model family comes from `model_type` in the config's model yaml
   (`"llama"` or `"qwen3"`), and the runner (gradient checkpointing or not)
-  from its `runner_type`. Both drive `TTMLRolloutSampler`; for Qwen3 FSDP see
-  [FSDP](../../../docs/GRPO_TRAINER.md#fsdp) in the trainer doc.
+  from its `runner_type`. The configs set `rollout_source: "ttml"` in
+  `grpo_config`, so `GRPOTrainer` builds a `TTMLRolloutSampler` for that model;
+  for Qwen3 FSDP see [FSDP](../../../docs/GRPO_TRAINER.md#fsdp) in the trainer doc.
 - `model_source` in the training config selects the HuggingFace ID or local
   path (default: `meta-llama/Llama-3.2-1B-Instruct`).
 - **WandB logging**: set `report_to: wandb` (and optionally `run_name`) in
@@ -82,7 +83,7 @@ per-step CSV from `GRPOMonitor` into a training curve.
 
 ## Device Config
 
-`TTMLRolloutSampler` opens the trainer's
+`TTMLRolloutSampler` (built by `GRPOTrainer`) opens the trainer's
 device mesh from the `device_config:` block of the training YAML,
 wrapped in a `DeviceConfig` object (defined in
 [`ttml/common/config.py`](../../ttml/ttml/common/config.py)):

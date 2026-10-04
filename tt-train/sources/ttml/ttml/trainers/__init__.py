@@ -11,4 +11,5 @@ from .grpo_trainer import (
     GRPOTrainer,
     get_grpo_config,
 )
+from .rollout import RolloutBatch, RolloutSampler, build_rollout_sampler
 from ttml.modules.lora import LoraConfig
