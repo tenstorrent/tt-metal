@@ -1,0 +1,38 @@
+# Config fields whose value outlives the op that writes it. Read by check_sticky_cfg_restore.py.
+#
+# policy: restore -- hardware-configure sets the field once (from the kernel's configuration),
+#   and later ops assume that value. An op that writes a fixed value must put the field back:
+#   later in the same function, in its matching _uninit_, or by a site named under `sites:`.
+# policy: tracked -- the math thread caches the field's value in a software tracker and each op
+#   sets what it needs through it. A raw write that bypasses the tracker's writer must call the
+#   invalidate function afterwards (in the same function, or in a same-file caller), or the cache
+#   goes stale.
+#
+# Every field must exist in each listed arch's cfg_defines.h. Unknown keys are an error.
+
+fields:
+  ALU_ACC_CTRL_Fp32_enabled:
+    arches: [wormhole_b0, blackhole]
+    policy: restore
+    # _llk_math_hw_configure_ writes is_fp32_dest_acc_en; ops that need 16-bit Dest views
+    # (datacopy, transpose_dest, fast_tilize) clear it and set it back.
+    configured_by: [is_fp32_dest_acc_en]
+    # Set the configured value; they are not departures from it.
+    configuring_functions: [_llk_math_hw_configure_, _llk_set_fp32_dest_acc_]
+  ALU_ACC_CTRL_SFPU_Fp32_enabled:
+    arches: [wormhole_b0, blackhole]
+    policy: restore
+    # Written alongside Fp32_enabled at hw_configure; SFPLOAD/SFPSTORE MOD0_FMT_SRCB read it.
+    configured_by: [is_fp32_dest_acc_en]
+    configuring_functions: [_llk_math_hw_configure_, _llk_set_fp32_dest_acc_]
+  ALU_ACC_CTRL_Zero_Flag_disabled_src:
+    arches: [wormhole_b0, blackhole]
+    policy: tracked
+    # cmath_common.h: math::_apply_src_zero_flag_ is the one writer; a raw write must call
+    # math::_invalidate_src_zero_flag_state_ so the next _configure_ re-applies.
+    tracker_writer: _apply_src_zero_flag_
+    invalidate: _invalidate_src_zero_flag_state_
+
+# Writes that are put back somewhere this check cannot see. Each needs a reason.
+# Keys: path (repo-relative), function, field, restored_by, reason.
+sites: []
