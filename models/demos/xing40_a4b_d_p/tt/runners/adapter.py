@@ -132,6 +132,9 @@ class XingPrefillRuntime:
         self._ttnn = ttnn
         self._sink = None
         self._prepared = None
+        # Opt-in (serve/runner.py): called as hidden_sink(h, slot, start, end) with the last layer's output of every
+        # served chunk, after its acks, before h is freed. None (default) for the runner tests.
+        self.hidden_sink = None
 
     def set_layer_completion_sink(self, sink) -> None:
         self._sink = sink
@@ -194,6 +197,8 @@ class XingPrefillRuntime:
                 # The ack promises the layer's KV is in DRAM (the KV Manager reads it out of band): wait for it.
                 ttnn.event_synchronize(ttnn.record_event(mesh, 0))
                 sink(blk.i, request_id)
+        if acks and self.hidden_sink is not None:
+            self.hidden_sink(h, slot, start, end)
         ttnn.deallocate(h)
 
     def compile(self, kv_cache: XingKvCaches) -> None:
