@@ -11,6 +11,9 @@
 #include "ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "ckernel_sfpu_bf16_tti_replay.h"
+#if defined(TRISC_MATH)
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#endif
 #pragma push_macro("WH_SQUARED_ABS_DENOMINATOR_TTI_CANDIDATE")
 #undef WH_SQUARED_ABS_DENOMINATOR_TTI_CANDIDATE
 
@@ -61,23 +64,11 @@ struct SoftsignBwBf16Config {
 
 namespace ckernel::sfpu {
 
-// The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format.
-inline bool bf16_dest_softsign_bw() {
-#if defined(TRISC_MATH) || defined(LLK_TRISC_MATH)
-    return ckernel::math::src_zero_flag_srcb_fmt == static_cast<std::uint32_t>(DataFormat::Float16_b);
-#else
-    return false;
-#endif
-}
 template <int ITERATIONS = 8>
 inline void calculate_softsign_bw_bf16() {
     ckernel::sfpu::bf16::calculate_config_tile<ckernel::sfpu::SoftsignBwBf16Config, ITERATIONS>();
 }
-inline void init_softsign_bw_bf16() {
-    if (bf16_dest_softsign_bw()) {
-        ckernel::sfpu::bf16::init_config_tile<ckernel::sfpu::SoftsignBwBf16Config>();
-    }
-}
+inline void init_softsign_bw_bf16() { ckernel::sfpu::bf16::init_config_tile<ckernel::sfpu::SoftsignBwBf16Config>(); }
 template <int ITERATIONS = 32>
 inline void calculate_softsign_bw_gradient_bf16() {
     ckernel::sfpu::bf16::calculate_config_tile<ckernel::sfpu::SoftsignBwBf16Config::Gradient, ITERATIONS>();
