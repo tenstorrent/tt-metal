@@ -59,6 +59,7 @@ CircularBufferImpl::CircularBufferImpl(const CoreRangeSet& core_range_set, const
         // buffer's address is right (or rejected) from construction, not only once a Program adds the CB.
         // Without the buffer (e.g. a config rebuilt from a trace), keep the address the config stores.
         if (config_.shadow_global_buffer != nullptr) {
+            global_mesh_buffer_ = config_.shadow_global_mesh_buffer;
             this->assign_global_address();
         } else {
             globally_allocated_address_ = config_.globally_allocated_address().value();
@@ -100,9 +101,7 @@ CircularBufferImpl::CircularBufferImpl(const CBDescriptor& descriptor) :
         this->set_global_circular_buffer(*descriptor.global_circular_buffer);
     } else {
         if (globally_allocated()) {
-            if (descriptor.tensor != nullptr) {
-                global_mesh_buffer_ = &descriptor.tensor->mesh_buffer();
-            }
+            global_mesh_buffer_ = config_.shadow_global_mesh_buffer;
             // As above: resolve a per-core buffer's address against this CB's cores at construction.
             if (config_.shadow_global_buffer != nullptr) {
                 this->assign_global_address();

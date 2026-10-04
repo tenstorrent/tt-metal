@@ -199,7 +199,10 @@ ResolvedBindings resolve_bindings(
                 auto it = std::find(tensor_buffers.begin(), tensor_buffers.end(), cb_buffer);
                 if (it != tensor_buffers.end()) {
                     result.cbs.push_back(
-                        {program_cbs[ci]->id(), static_cast<uint32_t>(it - tensor_buffers.begin()), cb_desc.address_offset});
+                        {program_cbs[ci]->id(),
+                         static_cast<uint32_t>(it - tensor_buffers.begin()),
+                         cb_desc.address_offset,
+                         cb_desc.tensor != nullptr});
                 }
                 // else: stable, non-tensor buffer; pegged at create time, no patching needed.
             }
@@ -233,7 +236,10 @@ ResolvedBindings resolve_bindings(
 }
 
 void apply_resolved_bindings(
-    Program& program, const ResolvedBindings& bindings, std::span<Buffer* const> current_buffers) {
+    Program& program,
+    const ResolvedBindings& bindings,
+    std::span<Buffer* const> current_buffers,
+    std::span<const MeshTensor* const> current_mesh_tensors) {
     // bindings.rt_args is sorted by (is_common, kernel_idx, core, arg_idx) at resolve
     // time, so consecutive entries share the same RuntimeArgsData reference whenever
     // they target the same (is_common, kernel_idx, core).  Cache the live reference
@@ -262,8 +268,18 @@ void apply_resolved_bindings(
         (*current_data)[b.arg_idx] = current_buffers[b.tensor_buffer_idx]->address();
     }
     for (const auto& cb : bindings.cbs) {
-        UpdateDynamicCircularBufferAddress(
-            program, cb.cb_id, *current_buffers[cb.tensor_buffer_idx], cb.address_offset);
+        if (cb.requires_mesh_tensor) {
+            TT_FATAL(
+                cb.tensor_buffer_idx < current_mesh_tensors.size() && current_mesh_tensors[cb.tensor_buffer_idx],
+                "MeshTensor-backed CB binding at tensor slot {} requires the current MeshTensor",
+                cb.tensor_buffer_idx);
+            auto circular_buffer = program.impl().get_circular_buffer(cb.cb_id);
+            circular_buffer->set_global_buffer(
+                *current_mesh_tensors[cb.tensor_buffer_idx], circular_buffer->size(), cb.address_offset);
+        } else {
+            UpdateDynamicCircularBufferAddress(
+                program, cb.cb_id, *current_buffers[cb.tensor_buffer_idx], cb.address_offset);
+        }
     }
 }
 

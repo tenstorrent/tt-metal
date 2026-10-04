@@ -67,7 +67,11 @@ template <>
 struct extract_tensor_buffers_t<ttnn::Tensor, void> {
     template <typename Out>
     static void call(const ttnn::Tensor& t, Out& out) {
-        out.push_back(t.buffer());
+        if constexpr (requires { out.push_tensor(t); }) {
+            out.push_tensor(t);
+        } else {
+            out.push_back(t.buffer());
+        }
     }
 };
 
@@ -404,7 +408,18 @@ public:
         // within the inputs (e.g. matmul(X, X)).
         struct CollectedTensorBuffers {
             ttsl::SmallVector<tt::tt_metal::Buffer*, 16> buffers;
+            ttsl::SmallVector<const tt::tt_metal::MeshTensor*, 16> mesh_tensors;
             size_t num_input_buffers = 0;
+
+            void push_tensor(const ttnn::Tensor& tensor) {
+                buffers.push_back(tensor.buffer());
+                mesh_tensors.push_back(&tensor.mesh_tensor());
+            }
+
+            void push_back(tt::tt_metal::Buffer* buffer) {
+                buffers.push_back(buffer);
+                mesh_tensors.push_back(nullptr);
+            }
         };
 
         static CollectedTensorBuffers collect_tensor_buffers(
@@ -412,12 +427,11 @@ public:
             const tensor_return_value_t& tensor_return_value,
             const tt::tt_metal::WorkloadDescriptor& workload_descriptor) {
             CollectedTensorBuffers collected;
-            auto& buffers = collected.buffers;
-            extract_tensor_buffers_into(tensor_args, buffers);
-            collected.num_input_buffers = buffers.size();
-            extract_tensor_buffers_into(tensor_return_value, buffers);
+            extract_tensor_buffers_into(tensor_args, collected);
+            collected.num_input_buffers = collected.buffers.size();
+            extract_tensor_buffers_into(tensor_return_value, collected);
             for (const auto& wb : workload_descriptor.buffers) {
-                buffers.push_back(wb.buffer);
+                collected.push_back(wb.buffer);
             }
             return collected;
         }
@@ -660,7 +674,8 @@ public:
                     if (!sv.resolved_bindings.empty()) {
                         auto collected =
                             collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
-                        tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, collected.buffers);
+                        tt::tt_metal::apply_resolved_bindings(
+                            program, sv.resolved_bindings, collected.buffers, collected.mesh_tensors);
                     }
                     // Cache hit never rebuilds; re-apply hash-excluded args via the override hook.
                     if constexpr (has_override_runtime_arguments()) {
@@ -737,7 +752,8 @@ public:
                         (!dynamic_args.empty() && !sv.resolved_bindings.empty())) {
                         auto collected =
                             collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
-                        tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, collected.buffers);
+                        tt::tt_metal::apply_resolved_bindings(
+                            program, sv.resolved_bindings, collected.buffers, collected.mesh_tensors);
                         tt::tt_metal::apply_dynamic_runtime_args(program, dynamic_args);
 #ifdef TT_DESCRIPTOR_PATCHING_PARITY_CHECK
                         // Regression net: assert the fast path reproduced a full rebuild exactly (rt-args

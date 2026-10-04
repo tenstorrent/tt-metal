@@ -92,8 +92,7 @@ private:
     DeviceAddr global_circular_buffer_config_address_{};
     const experimental::GlobalCircularBuffer* shadow_global_circular_buffer_ = nullptr;
     // Set while the backing came from a MeshTensor. The CB is programmed from the config's reference-device buffer
-    // on every device, so a per-core buffer is checked to sit at one address across devices. Kept here rather than
-    // in CircularBufferConfig so that public class keeps its layout.
+    // on every device, so a per-core buffer is checked to sit at one address across devices.
     const distributed::MeshBuffer* global_mesh_buffer_ = nullptr;
     // add a callback to invalidate circular buffer allocation
 };

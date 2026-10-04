@@ -75,13 +75,12 @@ CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : tot
         !(descriptor.buffer && descriptor.tensor),
         "CBDescriptor cannot specify both buffer and tensor as the globally-allocated backing storage");
 
-    const Buffer* backing_buffer = descriptor.buffer;
-    if (!backing_buffer && descriptor.tensor) {
-        backing_buffer = descriptor.tensor->mesh_buffer().get_reference_buffer();
-    }
-    if (backing_buffer) {
+    if (descriptor.tensor) {
+        this->set_globally_allocated_address_and_total_size(*descriptor.tensor, descriptor.total_size);
+        this->set_address_offset(descriptor.address_offset);
+    } else if (descriptor.buffer) {
         this->set_globally_allocated_address_and_total_size(
-            *backing_buffer, descriptor.total_size, descriptor.address_offset);
+            *descriptor.buffer, descriptor.total_size, descriptor.address_offset);
     }
 
     auto process_format_descriptor = [this](const CBFormatDescriptor& format_descriptor) {
@@ -191,12 +190,14 @@ CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address(const
 }
 
 CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address(const MeshTensor& tensor) {
-    return set_globally_allocated_address(*tensor.mesh_buffer().get_reference_buffer());
+    return set_globally_allocated_address_and_total_size(tensor, this->total_size_);
 }
 
 CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_total_size(
     const MeshTensor& tensor, uint32_t total_size) {
-    return set_globally_allocated_address_and_total_size(*tensor.mesh_buffer().get_reference_buffer(), total_size);
+    set_globally_allocated_address_and_total_size(*tensor.mesh_buffer().get_reference_buffer(), total_size);
+    this->shadow_global_mesh_buffer = &tensor.mesh_buffer();
+    return *this;
 }
 
 CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_total_size(
@@ -234,6 +235,7 @@ CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_t
     this->max_size_ = max_size;
     this->buffer_size_ = buffer.aligned_size();
     this->shadow_global_buffer = &buffer;
+    this->shadow_global_mesh_buffer = nullptr;
     this->total_size_ = total_size;
     return *this;
 }
@@ -299,7 +301,9 @@ uint32_t CircularBufferConfig::address_offset() const { return this->address_off
 
 void CircularBufferConfig::set_address_offset(uint32_t offset) {
     if (shadow_global_buffer != nullptr) {
+        const auto* mesh_buffer = shadow_global_mesh_buffer;
         set_globally_allocated_address_and_total_size(*shadow_global_buffer, total_size_, offset);
+        shadow_global_mesh_buffer = mesh_buffer;
     } else {
         address_offset_ = offset;
     }
@@ -378,7 +382,8 @@ bool operator==(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs
            lhs.globally_allocated_address() == rhs.globally_allocated_address() &&
            lhs.data_formats() == rhs.data_formats() && lhs.page_sizes() == rhs.page_sizes() &&
            lhs.tiles() == rhs.tiles() && lhs.unpack_face_geometry() == rhs.unpack_face_geometry() &&
-           lhs.shadow_global_buffer == rhs.shadow_global_buffer;
+           lhs.shadow_global_buffer == rhs.shadow_global_buffer &&
+           lhs.shadow_global_mesh_buffer == rhs.shadow_global_mesh_buffer;
 }
 
 bool operator!=(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs) { return !(lhs == rhs); }

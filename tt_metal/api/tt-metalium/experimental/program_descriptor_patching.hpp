@@ -48,6 +48,7 @@
 namespace tt::tt_metal {
 
 class Program;
+class MeshTensor;
 struct ProgramDescriptor;
 
 // ---------------------------------------------------------------------------
@@ -72,6 +73,7 @@ struct ResolvedCbBinding {
     uintptr_t cb_id = 0;
     uint32_t tensor_buffer_idx = 0;
     uint32_t address_offset = 0;
+    bool requires_mesh_tensor = false;
 };
 
 // All resolved bindings for one cached program. Non-empty when the factory
@@ -134,14 +136,19 @@ ResolvedBindings resolve_bindings(
     bool allow_inplace_output_tensor_alias = false);
 
 // Apply resolved bindings to the cached program on a cache hit.
-// current_buffers must be the output of collect_tensor_buffers() for the
-// current call's tensors — same enumeration order as at resolve time.
+// current_buffers and current_mesh_tensors must be the output of
+// collect_tensor_buffers() for the current call's tensors — same enumeration
+// order as at resolve time. MeshTensor-backed CB bindings require the matching
+// current_mesh_tensors entry so per-device address validation is preserved.
 //
 // Uses GetRuntimeArgs / GetCommonRuntimeArgs to obtain the live RuntimeArgsData
 // reference on each call, so the write targets the correct storage (pre- or
 // post-first-enqueue) without any cross-call pointer state.
 void apply_resolved_bindings(
-    Program& program, const ResolvedBindings& bindings, std::span<Buffer* const> current_buffers);
+    Program& program,
+    const ResolvedBindings& bindings,
+    std::span<Buffer* const> current_buffers,
+    std::span<const MeshTensor* const> current_mesh_tensors = {});
 
 // ---------------------------------------------------------------------------
 // Dynamic (non-Buffer) runtime args

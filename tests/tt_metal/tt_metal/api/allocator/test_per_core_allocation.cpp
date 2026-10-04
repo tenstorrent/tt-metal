@@ -24,6 +24,7 @@
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
@@ -379,8 +380,37 @@ TEST_F(PerCoreAllocationTwoDeviceTest, CircularBufferRejectsPerCoreTensorAtDiffe
     EXPECT_ANY_THROW(UpdateDynamicCircularBufferAddressAndTotalSize(program, handle, skewed, PAGE_SIZE));
     EXPECT_EQ(program.impl().get_circular_buffer(handle)->address(), uniform_address);
 
-    // So is creating a CB on it from a descriptor that names the tensor. (A CircularBufferConfig only keeps the
-    // reference device's buffer, so a CB created from one cannot be checked across devices.)
+    // CircularBufferConfig's MeshTensor setters must not discard the mesh before checking it. Otherwise
+    // CreateCircularBuffer sees only the reference device's Buffer and accepts an address that is wrong on device 1.
+    Program config_program = CreateProgram();
+    CircularBufferConfig skewed_config(PAGE_SIZE, {{0, tt::DataFormat::Float16_b}});
+    skewed_config.set_page_size(0, PAGE_SIZE);
+    EXPECT_ANY_THROW({
+        skewed_config.set_globally_allocated_address(skewed);
+        CreateCircularBuffer(config_program, core, skewed_config);
+    });
+
+    // The resolved-binding cache-hit path must retain the MeshTensor too. Applying a skewed replacement through only
+    // the reference Buffer would otherwise bypass the cross-device check.
+    CBDescriptor cached_descriptor;
+    cached_descriptor.total_size = PAGE_SIZE;
+    cached_descriptor.core_ranges = cores;
+    cached_descriptor.format_descriptors.push_back(
+        CBFormatDescriptor{.buffer_index = 0, .data_format = tt::DataFormat::Float16_b, .page_size = PAGE_SIZE});
+    cached_descriptor.tensor = &uniform;
+    ProgramDescriptor program_descriptor;
+    program_descriptor.cbs.push_back(cached_descriptor);
+    auto resolved = resolve_bindings(
+        program, program_descriptor, std::vector<Buffer*>{uniform.mesh_buffer().get_reference_buffer()});
+    ASSERT_EQ(resolved.cbs.size(), 1U);
+    EXPECT_ANY_THROW(apply_resolved_bindings(
+        program,
+        resolved,
+        std::vector<Buffer*>{skewed.mesh_buffer().get_reference_buffer()},
+        std::vector<const MeshTensor*>{&skewed}));
+    EXPECT_EQ(program.impl().get_circular_buffer(handle)->address(), uniform_address);
+
+    // Creating a CB from a descriptor that names the tensor already preserves enough information for the check.
     CBDescriptor descriptor;
     descriptor.total_size = PAGE_SIZE;
     descriptor.core_ranges = cores;

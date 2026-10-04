@@ -25,6 +25,9 @@ namespace tt_metal {
 class Buffer;
 class MeshTensor;
 enum class DataType;
+namespace distributed {
+class MeshBuffer;
+}  // namespace distributed
 }  // namespace tt_metal
 }  // namespace tt
 
@@ -111,6 +114,8 @@ public:
     void set_address_offset(uint32_t offset);
 
     const Buffer* shadow_global_buffer{nullptr};
+    // Retains mesh identity while shadow_global_buffer supplies the reference-device address.
+    const distributed::MeshBuffer* shadow_global_mesh_buffer{nullptr};
 
     class Builder {
     public:

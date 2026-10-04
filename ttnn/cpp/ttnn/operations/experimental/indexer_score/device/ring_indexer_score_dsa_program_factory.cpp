@@ -795,7 +795,8 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         const auto& bindings = cached.shared_variables.at(range).descriptor.resolved_bindings;
         if (!bindings.cbs.empty()) {
             // Retain the general implementation for any future CB binding variant.
-            tt::tt_metal::apply_resolved_bindings(program, bindings, collected.buffers);
+            tt::tt_metal::apply_resolved_bindings(
+                program, bindings, collected.buffers, collected.mesh_tensors);
             continue;
         }
         std::vector<std::vector<tt::tt_metal::RuntimeArgsData>>* kernel_args = nullptr;
