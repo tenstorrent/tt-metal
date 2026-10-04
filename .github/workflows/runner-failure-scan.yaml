@@ -61,6 +61,46 @@ env:
         include_prefixes:
           - "models-e2e-tests /"
 
+      - name: models-t1-unit-tests
+        workflow_id: models-t1-unit-tests.yaml
+        include_prefixes:
+          - "models-unit-tests /"
+
+      - name: models-t2-unit-tests
+        workflow_id: models-t2-unit-tests.yaml
+        include_prefixes:
+          - "models-unit-tests /"
+
+      - name: models-t3-unit-tests
+        workflow_id: models-t3-unit-tests.yaml
+        include_prefixes:
+          - "models-unit-tests /"
+
+      - name: models-t2-e2e-tests
+        workflow_id: models-t2-e2e-tests.yaml
+        include_prefixes:
+          - "models-e2e-tests /"
+
+      - name: models-t3-e2e-tests
+        workflow_id: models-t3-e2e-tests.yaml
+        include_prefixes:
+          - "models-e2e-tests /"
+
+      - name: models-t1-sweep-tests
+        workflow_id: models-t1-sweep-tests.yaml
+        include_prefixes:
+          - "models-sweep-tests /"
+
+      - name: models-t2-sweep-tests
+        workflow_id: models-t2-sweep-tests.yaml
+        include_prefixes:
+          - "models-sweep-tests /"
+
+      - name: models-t1-device-perf-tests
+        workflow_id: models-t1-device-perf-tests.yaml
+        include_prefixes:
+          - "models-device-perf-tests /"
+
 jobs:
   scan:
     runs-on: ubuntu-latest
