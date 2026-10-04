@@ -1,25 +1,19 @@
-# t48 notes: all LTX-2.5 wins on one branch
+# t119 — re-time re-picked conv3d blockings (2x4 submesh, blx03)
 
-Branch ttp/t48-ltx25-integrated (= ttp/t48-integrate-all-ltx-2-5-wins-on-one-branch), base t36 16ba9a383dc.
-Merged: t20+t40 (9e336c44b71, includes 0533827a419), t13 (eee3baf7c0d), t18 (63902277007),
-t44 tip (1968790b040 + its A/B harness), t8 ltx_eval harness. Python-only diff against t36.
+## Status 2026-10-04 18:17 UTC: STOPPED, chip drop during our job
+- Driver: /var/tmp/fasth3/t119/src/tmp/blx03/t119/driver119.sh (staged from a4c75dc718f), log /var/tmp/fasth3/t119/driver.log on g14blx03.
+- First step ref544 = broker job 978 (submitted 18:14:54, after ~23 h of idle device; no pre-job gate ran).
+  hostfmax 1150 ran (exit 0), then the mesh open hit `MMIO per-op timeout` on chip 12 (PCIe 0000:45:00.0) in
+  LocalChip::start_device at 18:15:04. No kernel ever ran. Job exit 1 after 13 s.
+- Broker post-job gate: chip 12 FELL OFF THE PCIe BUS (tray 2); BMC tray sweep then showed trays 1/3/4 down too.
+  Incident: /var/lib/tt-device-broker/health/incidents/20261004T181509Z_unhealthy_none (kernel AER NonFatalErr on root port 40:01.5 at 18:15:06).
+- Per the stop rule, the driver stopped (rc 9) and nothing else was submitted. No reference was recorded; no arm was timed.
 
-Conflicts:
-- pipeline_ltx_distilled.py: t13 and t40 both capture the Gemma encode trace after gen #0. Kept t40's
-  open_trace_gate() + capture_trace() (guarded by _trace_captured). t13's open_trace_gate(capture_prompt=) was removed in t55 (no caller).
-- utils/video.py: t18's YuvVideoExport (worker-thread video encode) + t13's zero-copy frame wrap and start_encoding;
-  the AAC encode runs in finish() before joining the worker, so it overlaps the video encode as in t13.
-  test_yuv_export_encodes_audio_alongside_video now gates the video worker on the audio encode starting
-  (fails if finish() encodes audio after the join; checked).
-- test_ltx_export_latency.py: gemma -> gemma3 import path.
-
-CPU tests (python_env, PYTHONPATH=worktree): export/trace/eval/cache/ltx set (13 files) 78 passed, 8 skipped;
-13 pre-existing failures in test_ltx_euler_tail.py and test_ltx_embedding_cache_identity.py (they read
-models/tt_dit/encoders/gemma/, renamed to gemma3); same 13 fail on the t36 base tree.
-Fold CPU reference (--noconftest): 5 passed. The 78 include the ltx_eval harness (8) and the 13 export/trace tests.
-
-Device: not run (blx03 paused; full-mesh barred by the 22:10 rule). Ready job: tmp/READY_48.md, tmp/blx03/run48.sh.
-Next: when the user allows full-mesh runs on blx03, follow tmp/READY_48.md (setup, one job, timings, ltx_eval vs t20).
-
-t113: folded t100 47aecb9bdd7 (halo sweep harness + CPU test) and 118ed6de1f4 (conv3d _BLOCKINGS (4,8):
-s4_res (128,64,6,4,8), s1_up (128,64,5,2,16); bit-identical, traced decode 519.7 -> 506.2 ms, blx03 job 469, 544x960/145f).
+## Resume (only after the user clears device work)
+1. `bash tmp/blx03/t119/stage119.sh` (from this worktree), then from the project root:
+   `tt-project/harness/templates/blx03-launch.sh t119 /var/tmp/fasth3/t119/src/tmp/blx03/t119/driver119.sh`
+   (move the old driver.log aside first; the retry_when greps `_DRIVER_DONE`).
+2. Steps (one broker job each): ref544, the 4 s0ups arms (+ a baseline repeat), ref1080, the 3 s4res arms.
+3. Read `T119_CONV`/`T119_HIT` (was the key hit?), `VAE_REF` (gate: >=40 dB overall, >=35 dB seams), and traced times from
+   /var/tmp/fasth3/t119/run_*.log. Compare against #100's 506.2 ms (1150 MHz clamp). Commit winners to t48.
+- Possibly worth dropping the hostfmax clamp on the resume run, or running it as a separate job: it is the only thing that touched every chip just before the open. Not proven to be the cause.
