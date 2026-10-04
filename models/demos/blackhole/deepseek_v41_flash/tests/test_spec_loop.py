@@ -173,6 +173,9 @@ def test_spec_loop(mesh_device):
 
     # ---- compile pass + trace (inputs of the first prompt block; the compile pass writes the same positions the real first round rewrites) ----
     snaps = dec.snapshot_states()
+    snaps2 = (
+        dec.snapshot_states()
+    )  # allocated BEFORE the trace capture: device buffers allocated while a trace exists can overlap the trace's intermediates (corruption / CCL hang)
     X = ref_all[:, :n].clone()
     base = torch.zeros(B, dtype=torch.long)
     feed(X, base)
@@ -210,14 +213,16 @@ def test_spec_loop(mesh_device):
     X = torch.zeros(B, n, dtype=torch.long)
     X[:, 0] = first
     if k > 0:
-        X[:, 1:] = d[:, :k]
+        X[:, 1 : 1 + min(k, BLOCK)] = d[:, : min(k, BLOCK)]  # rows beyond the 5 drafts (padded block) stay 0
         dec.set_force(-1)
     log(
         f"device first token vs CPU reference stream t_S: match {(first == ref_all[:, S]).float().mean():.2f}; first-token distinct values {sorted(set(first.tolist()))[:6]}"
     )
     base = torch.full((B,), S, dtype=torch.long)
     if k > 0:
-        snaps2 = dec.snapshot_states()
+        for a_, s_ in snaps2:  # refresh in place (no allocation after the trace capture)
+            if s_ is not None:
+                ttnn.copy(a_.prev_cs, s_)
         # ---- diagnostics: teacher-forced blocks (CPU reference stream tokens, every block accepted): device argmax accuracy vs the reference and the drafter's
         # match with the reference stream, fed with the DEVICE hidden states ----
         dec.set_force(n - 1)
@@ -249,13 +254,16 @@ def test_spec_loop(mesh_device):
     gap_l = [[] for _ in range(B)]  # gap_l[b][i] = top1-top2 logit gap of the argmax that produced generated token i+1
     while not bool(done.all()):
         t = time.perf_counter()
+        log(f"ROUND {rounds} start base {base[:4].tolist()}...")
         a, m, d = run_round(X, base)
         walls.append((time.perf_counter() - t) * 1e3)
         if (
             os.environ.get("DSV41_GAP", "1") == "1"
         ):  # top-1/top-2 logit gap of every verified row (outside the timed region): near-tie evidence for exactness analysis
-            lgv = head.gather_logits(dec.logits)[:Tn].reshape(B, n, -1).float()
-            t2 = lgv.topk(2, dim=-1).values
+            v2 = torch.cat(
+                [ttnn.to_torch(ttnn.get_device_tensors(dec.top2)[r * cols]).reshape(U * n, -1) for r in range(rows)]
+            ).float()  # [Tn, 2*cols]
+            t2 = v2.topk(2, dim=-1).values.reshape(B, n, 2)
             gaps_r = t2[..., 0] - t2[..., 1]  # [B, n]
         for b in range(B):
             if done[b]:
@@ -269,9 +277,12 @@ def test_spec_loop(mesh_device):
             base[b] += mb + 1
             X[b, 0] = a[b, mb]
             if k > 0:
-                X[b, 1:] = d[b, :k]
+                X[b, 1 : 1 + min(k, BLOCK)] = d[b, : min(k, BLOCK)]
             if len(gen[b]) >= G + 1 or int(base[b]) + n - 1 > MAXPOS:
                 done[b] = True
+                base[b] = min(
+                    int(base[b]), MAXPOS - n + 1
+                )  # finished users keep running in the batch: keep their positions inside the cache (> 127 hangs the MoE dispatch)
         rounds += 1
     wall = sum(walls) / len(walls)
     mean_tok = sum(emitted) / len(emitted)
@@ -342,3 +353,19 @@ def test_spec_loop(mesh_device):
             f"ROUND_BREAKDOWN k={k}: verify {res_t['verify']:.1f} ms, + accept {res_t['accept'] - res_t['verify']:.1f} ms, + commit/write_main/draft {res_t[None] - res_t['accept']:.1f} ms "
             f"= device round {res_t[None]:.1f} ms; host (wall - device) {wall - res_t[None]:.1f} ms"
         )
+    if (
+        os.environ.get("DSV41_PROFILE", "0") == "1"
+    ):  # eager round with a device sync around every layer section (aggregated over the 40 verify layers + 3 draft stages)
+        dec.stop_after = "verify"
+        dec.forward()  # warm (programs compiled)
+        ttnn.synchronize_device(md)
+        dec.profile = {}
+        dec.forward()
+        ttnn.synchronize_device(md)
+        prof = {kk: v * 1e3 for kk, v in dec.profile.items() if not kk.startswith("_")}
+        log(
+            f"PROFILE k={k} n={n} T={U * n} (verify layers only, ms summed over {len(dec.layers)} layers, eager+sync): "
+            + ", ".join(f"{kk} {v:.1f}" for kk, v in sorted(prof.items(), key=lambda kv: -kv[1]))
+            + f" | total {sum(prof.values()):.1f}"
+        )
+        dec.profile = None

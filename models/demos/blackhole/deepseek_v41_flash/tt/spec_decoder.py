@@ -55,13 +55,17 @@ class SpecVerifier(DSV41Decoder):
                 x = self._engram_fwd(lid, x)
                 if dbg:
                     self._dbg(f"engram {lid}", x)
-            x, pre = layer.forward(x, pre, states[st])
+            x, pre = layer.forward(x, pre, states[st], profile=getattr(self, "profile", None))
             if dbg:
                 self._dbg(f"layer {lid}", x)
         self._dbg_done = True
         logits = self.head.forward(x, pre)
         if self.mesh_config is not None:
             self.sampled = self.head.sample(logits, self.mesh_config, self.ccl)
+            t2 = ttnn.topk(logits, k=2, dim=-1, largest=True, sorted=True)[0]
+            self.top2 = self.mesh_config.allgather(
+                t2, self.ccl, axis=1, dim=3
+            )  # near-tie evidence (see SpecDecoder.forward)
         self.commit()
         self.logits = logits
         return logits
@@ -110,6 +114,9 @@ class SpecDecoder(SpecVerifier):
         self.noise = c(torch.full((4 * U, 1), 128799, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
         self.arange_n = c(torch.arange(n, dtype=torch.float32).reshape(1, n), ttnn.float32, ttnn.TILE_LAYOUT)
         self.zero_tok = None
+        self.keff = (
+            int(os.environ.get("DSV41_KEFF", "0")) or None
+        )  # valid drafts per block when the block is padded (n = 1 + k rows, k > keff)
         self.stop_after = None  # None | 'verify' | 'accept': truncate the traced round (timing breakdown)
         # runtime override of the accept count (prompt feeding / teacher forcing): m = force if force >= 0 else the computed one
         self.force = c(torch.full((U, 1), -1.0), ttnn.float32, ttnn.TILE_LAYOUT)
@@ -145,12 +152,15 @@ class SpecDecoder(SpecVerifier):
                     self._dbg(f"engram {lid}", x)
             if lid in TAP_LAYERS:
                 taps.append(self._tap(x))
-            x, pre = layer.forward(x, pre, states[st])
+            x, pre = layer.forward(x, pre, states[st], profile=getattr(self, "profile", None))
             if dbg:
                 self._dbg(f"layer {lid}", x)
         self._dbg_done = True
         logits = self.head.forward(x, pre)
         a = self.head.sample_global(logits, self.mesh_config, self.ccl)  # [T,1] uint32 RM: argmax of every row
+        # top-2 logits of every row (per column shard, all-gathered): near-tie evidence for exactness analysis, read only on request
+        t2 = ttnn.topk(logits, k=2, dim=-1, largest=True, sorted=True)[0]  # [1,1,T,2] fp32 per column shard
+        self.top2 = self.mesh_config.allgather(t2, self.ccl, axis=1, dim=3)  # [1,1,T,2*cols]
         if self.stop_after == "verify":  # timing breakdown only
             return a
         # ---- accept ----
@@ -166,6 +176,10 @@ class SpecDecoder(SpecVerifier):
             mcount = c if mcount is None else ttnn.add(mcount, c)
         if mcount is None:
             mcount = ttnn.multiply(col(a2, 0), 0.0)
+        if (
+            self.keff is not None
+        ):  # padded verify block (rows beyond keff are filler on the T=16/32 fast paths): never accept more than keff drafts
+            mcount = ttnn.minimum(mcount, float(self.keff))
         mcount = ttnn.where(ttnn.ge(self.force, 0.0), self.force, mcount)
         onehot = ttnn.eq(
             ttnn.repeat(mcount, [1, n]), ttnn.repeat(self.arange_n, [U, 1])

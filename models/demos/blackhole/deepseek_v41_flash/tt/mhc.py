@@ -138,6 +138,11 @@ class DSV41MHC:
         """x [T,1,n,C] fp32 -> (pre [T,1,1,n], post [T,1,n,1], comb [T,1,n,n]) fp32."""
         T = x.shape[0]
         if _flag("DSV41_MHC_MIXES_V2", "1"):
+            if T % 8 and T > 8:  # T=12/20 give wrong mixes in the packed kernel: pad the token dim to a multiple of 8
+                Tp = -(-T // 8) * 8
+                xp = ttnn.pad(x, [(0, Tp - T), (0, 0), (0, 0), (0, 0)], 0.0)
+                outs = self.mixes(xp)
+                return tuple(ttnn.slice(o, [0, 0, 0, 0], [T, o.shape[1], o.shape[2], o.shape[3]]) for o in outs)
             plan = proj_plan(T, self.dim, self.device)
             part = mhc_proj2(x, self._wt(plan), self.mix_col, plan)
             return mhc_post2(part, self.consts9, plan, self._w.iters, self._w.eps, self.sq_eps, self.post_fidelity)
