@@ -187,6 +187,17 @@ repos:
           tt_metal/tt-llk/infra/check_instr_encoding_args\.py|
           tt_metal/tt-llk/infra/check_mutex_balance\.py
         )$
+    - id: llk-dest-to-src-wait
+      name: "llk: MOVD2A/MOVD2B source-bank wait (warning only)"
+      entry: python3 tt_metal/tt-llk/infra/check_dest_to_src_wait.py
+      language: system
+      # Advisory: the script always exits 0. A wait can sit in a caller or before a MOP/replay
+      # run, which a lexical check cannot see, so a finding must never block a commit. Output is
+      # shown even when it passes, so the warnings are seen rather than swallowed.
+      verbose: true
+      # All three architectures: each one's STALLWAIT names SRCA_VLD / SRCB_VLD, whatever the
+      # argument layout.
+      files: ^tt_metal/tt-llk/tt_llk_.*\.(h|hpp)$
     - id: llk-xthread-cfg-wormhole
       name: "llk: cross-thread config write (wormhole)"
       entry: python3 tt_metal/tt-llk/infra/check_cross_thread_cfg.py
