@@ -7,7 +7,7 @@
 #include "api/compute/common_globals.h"
 
 // Blackhole and Wormhole only: ckernel_sfpu_logit_bf16.h exists under those ckernel trees.
-// Quasar keeps the op's own kernel; the generated kernel is not built there.
+// Quasar keeps the op's own kernel.
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 
 #ifdef TRISC_MATH
@@ -39,7 +39,10 @@ ALWI void logit_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void logit_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
+ALWI void logit_tile_init() {
+    MATH(SFPU_UNARY_INIT(unused));
+    MATH(sfpu::init_logit_bf16());
+}
 
 }  // namespace ckernel
 

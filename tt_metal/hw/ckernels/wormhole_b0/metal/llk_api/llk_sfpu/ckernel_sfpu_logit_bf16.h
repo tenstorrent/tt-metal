@@ -34,5 +34,6 @@ template <int ITERATIONS = 8>
 inline void calculate_logit_bf16() {
     ckernel::sfpu::bf16::calculate_normalized_log_odds<ckernel::sfpu::LogitBf16Config, ITERATIONS>();
 }
+inline void init_logit_bf16() { ckernel::sfpu::bf16::init_normalized_log_odds<ckernel::sfpu::LogitBf16Config>(); }
 
 }  // namespace ckernel::sfpu

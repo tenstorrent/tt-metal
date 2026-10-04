@@ -41,10 +41,9 @@ inline void normalized_log_odds_tile(const std::array<float, LUT_SIZE>& lut, Pre
 #pragma GCC unroll 8
     for (int d = 0; d < 32; d++) {
         vFloat x = prepare(dst_reg[d]);
-        // q=min(x,1-x), with q born from the computed complement so it cannot
-        // alias the DST-backed x carrier.  The tempting centered identity
-        // 0.5-abs(x-0.5) loses x below the fp32 half-ULP of 0.5 (2^-25), so
-        // the predicate is required to preserve every bottom-binade normal.
+        // q = min(x, 1 - x), taken from the computed complement so that it
+        // cannot alias the DST-backed x. The form 0.5 - |x - 0.5| would lose
+        // every x below the FP32 half-ULP of 0.5 (2^-25).
         vFloat complement = vFloat(1.0f) - x;
         vFloat q = complement;
         v_if(x < 0.5f) { q = x; }
@@ -56,34 +55,28 @@ inline void normalized_log_odds_tile(const std::array<float, LUT_SIZE>& lut, Pre
         vFloat r = m - vFloat(1.0f);
         vFloat u = q - 0.5f;
 
-        // CSV layout: C0,C1,L0,L1,L2.  Both chains are ordinary low-to-high
-        // fitted coefficients; no activation identity participates.
+        // Coefficients follow the two boundaries: C0, C1, then L0, L1, L2,
+        // each polynomial from low to high degree.
         vFloat correction = sfpu_mad(lut[kCoeff + 1], u, lut[kCoeff + 0]);
         vFloat log_ratio = sfpu_mad(lut[kCoeff + 4], r, lut[kCoeff + 3]);
         log_ratio = sfpu_mad(log_ratio, r, lut[kCoeff + 2]);
         vFloat log_q = normalized_log_expand<0x3f317218u>(r * log_ratio, exponent);
         constexpr float kLn2 = 0.69314718055994530942f;
         vFloat log_one_minus_q = sfpu_mad(u, correction, -kLn2);
-        // Reconstruction is complete.  Reload the decoded and encoded source
-        // coordinates from DST now, after the arithmetic temporaries retire.
-        // Keeping either classifier live across log reduction exceeds the
-        // eight-LREG Blackhole budget and corrupts endpoint/raw predicates.
+        // Reload x from DST for the classification below: keeping it live
+        // across the log reduction exceeds Blackhole's eight LREGs.
         vFloat x_effective = prepare(dst_reg[d]);
-        // The magnitude is positive on both halves of the unit interval.
-        // Restore the lower-half sign with the freshly reloaded coordinate;
-        // this keeps the sign carrier out of reduction/Horner liveness while
-        // preserving the exact anonymous basis semantics.
+        // The magnitude is positive on both halves of the unit interval; the
+        // lower half takes the negative sign.
         vFloat result = log_one_minus_q - log_q;
         v_if(x_effective < 0.5f) { result = -result; }
         v_endif;
 
-        // Close the unit interval in the decoded coordinate. NaNs already
-        // flow through the log arithmetic to +Inf. The remaining encoded
-        // distinction shared by both profiles is exponent-zero: Blackhole's raw
-        // BF16 ingress can expose negative subnormal payloads as nonzero SFPU
-        // values even though the declared input policy is DAZ.  A late masked
-        // equality closes that whole zero/subnormal class without a raw sign,
-        // mantissa, NaN, or exterior classifier.
+        // Inputs below 0 or from 1 up return +inf: logit(1) is +inf, and the
+        // BF16 pack stores NaN as +inf. NaN inputs reach +inf through the log
+        // arithmetic. Zero and subnormal inputs return -inf; they are found by
+        // the raw BF16 exponent field because Blackhole can read a negative
+        // subnormal as a nonzero value.
         v_if(x_effective < 0.0f) { result = std::numeric_limits<float>::infinity(); }
         v_endif;
         v_if(x_effective >= 1.0f) { result = std::numeric_limits<float>::infinity(); }
@@ -91,10 +84,9 @@ inline void normalized_log_odds_tile(const std::array<float, LUT_SIZE>& lut, Pre
         vUInt raw_u16 = dst_reg[d].mode<DataLayout::U16>();
         vUInt raw_exponent = raw_u16 & vUInt(0x00ffu);
         if constexpr (Config::kIntervalCount != 0) {
-            // S55 exhaustively evaluates the declared rounded target graph and
-            // proves that its differing exterior class is one sign-mirrored raw
-            // interval ending at exponent-FF. S60 emits those derived endpoints;
-            // this anonymous lowering consumes the quotient, not the source graph.
+            // TT-NN's logit stores -inf for finite inputs of magnitude at least
+            // kPositiveFirst; this kernel keeps that class, one interval of BF16
+            // words mirrored by sign that ends where the exponent field is all ones.
             static_assert(Config::kIntervalCount == 2u);
             static_assert(
                 Config::kPositiveEnd == 0x7f80u && Config::kNegativeFirst == (Config::kPositiveFirst | 0x8000u) &&
@@ -103,8 +95,7 @@ inline void normalized_log_odds_tile(const std::array<float, LUT_SIZE>& lut, Pre
             constexpr float target_phase_lower = __builtin_bit_cast(float, Config::kPositiveFirst << 16);
             vFloat magnitude = setsgn(x_effective, 0);
             v_if(magnitude >= target_phase_lower) {
-                // Exponent-FF begins exactly at the interval's exclusive end.
-                // Reject it in encoded space so NaN/Inf retain the declared +Inf.
+                // Infinite and NaN inputs, just past the interval, keep +inf.
                 v_if(raw_exponent != 0xffu) { result = -std::numeric_limits<float>::infinity(); }
                 v_endif;
             }
