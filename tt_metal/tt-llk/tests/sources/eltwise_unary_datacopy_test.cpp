@@ -25,6 +25,11 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_common.h"
 #include "params.h"
 
+// UNPACK_BLOCK (driver template): one _llk_unpack_A_block_ call per DEST block instead of one _llk_unpack_A_ per tile (Blackhole only)
+#ifndef UNPACK_BLOCK
+#define UNPACK_BLOCK 0
+#endif
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -83,11 +88,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 if constexpr (!tilize_en)
                 {
+#if UNPACK_BLOCK && defined(ARCH_BLACKHOLE)
+                    const std::uint32_t tile_stride_16B = (buffer_A[1] - buffer_A[0]) >> 4;
+                    for (int block_num = 0; block_num < NUM_BLOCKS; ++block_num)
+                    {
+                        _llk_unpack_A_block_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                            L1_ADDRESS(buffer_A[block_num * NUM_TILES_IN_BLOCK]),
+                            NUM_TILES_IN_BLOCK,
+                            tile_stride_16B,
+                            formats.unpack_A_src,
+                            formats.unpack_A_dst,
+                            num_faces);
+                    }
+#else
                     for (std::uint32_t i = 0; i < num_tiles; ++i)
                     {
                         _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
                             L1_ADDRESS(buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
                     }
+#endif
                 }
                 else
                 {

@@ -3,7 +3,7 @@
 
 import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import PerfRunType
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf.core import PerfConfig
@@ -11,6 +11,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     TILE_COUNT,
+    UNPACK_BLOCK,
     generate_input_dim,
 )
 
@@ -74,11 +75,32 @@ def test_perf_unpack_tilize_int(
     )
 
 
+# Float32 to Float32 unpacks to dest and stays per tile inside the block call: the check that the fallback costs nothing.
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float16], same=True)
+    + [
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+    ],
+    rt_dim=[1, 4],
+    ct_dim=[1, 2, 3, 4, 5, 6, 7, 8],
+)
+def test_perf_unpack_tilize_block(
+    perf_report,
+    formats,
+    rt_dim,
+    ct_dim,
+):
+    _perf_unpack_tilize(perf_report, formats, rt_dim, ct_dim, unpack_block=True)
+
+
 def _perf_unpack_tilize(
     perf_report,
     formats,
     rt_dim,
     ct_dim,
+    unpack_block=False,
 ):
     tile_count = rt_dim * ct_dim
     dimensions = [rt_dim * 32, ct_dim * 32]
@@ -92,7 +114,7 @@ def _perf_unpack_tilize(
             PerfRunType.PACK_ISOLATE,
             PerfRunType.L1_CONGESTION,
         ],
-        templates=[],
+        templates=[UNPACK_BLOCK(unpack_block)],  # always present: one report schema
         runtimes=[
             generate_input_dim(dimensions, dimensions),
             TILE_COUNT(tile_count),
