@@ -175,3 +175,26 @@ def test_spec_mtp(mesh_device):
     assert (
         min(sum(r[1][i] for r in results) / len(results) for i in range(BLOCK)) > 0.95
     ), results  # mean over steps per draft position (one near-tie flip lowers a single step)
+
+    # breakdown (cumulative, traced): write_main alone, then draft truncated after each part
+    def timed(fn):
+        fn()
+        ttnn.synchronize_device(md)
+        tid2 = ttnn.begin_trace_capture(md, cq_id=0)
+        fn()
+        ttnn.end_trace_capture(md, tid2, cq_id=0)
+        ttnn.synchronize_device(md)
+        t0 = time.perf_counter()
+        for _ in range(N):
+            ttnn.execute_trace(md, tid2, cq_id=0, blocking=False)
+        ttnn.synchronize_device(md)
+        r = (time.perf_counter() - t0) / N * 1e3
+        ttnn.release_trace(md, tid2)
+        return r
+
+    res_b = {"write_main": timed(lambda: dr.write_main(hid_d, dr.state.build_verify(posv_d)))}
+    for stop in ("embed", "stage0", "stage1", "stage2", "head", None):
+        dr.stop = stop
+        res_b[f"draft<={stop}"] = timed(lambda: dr.draft(tok_d, f_d))
+    dr.stop = None
+    log("MTP_BREAKDOWN (cumulative ms) " + ", ".join(f"{k_} {v:.2f}" for k_, v in res_b.items()))
