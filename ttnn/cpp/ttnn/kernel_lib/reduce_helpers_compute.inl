@@ -582,7 +582,9 @@ ALWI void reduce(
         const uint32_t stride = (input_memory_layout.row_stride > 0) ? input_memory_layout.row_stride : Wt;
         const uint32_t tiles_per_bulk = Ht * stride;
         const uint32_t total_input_tiles = tiles_per_bulk * num_batches;
-        UNPACK((assert_input_dfb_size<input_policy>(input_dfb_id, Ht * chunk_size, total_input_tiles)));
+        // The largest bulk wait is one chunk, and a chunk holds at most Wt columns.
+        UNPACK((assert_input_dfb_size<input_policy>(
+            input_dfb_id, Ht * ((Wt < chunk_size) ? Wt : chunk_size), total_input_tiles)));
         PACK((assert_output_dfb_size(output_dfb_id)));
 
         // PersistentPolicy: wait for all tiles upfront
