@@ -49,8 +49,8 @@
       "sha256": "600729c1c127bd71bb185032eff6e0f033db9df348d3dc455279a66eaa1750e5"
     },
     "slurm_pair_launcher.py": {
-      "bytes": 41057,
-      "sha256": "6b05e7c1b0b22ccb8697d9acfe86f1c53e7ce48595bad377b7e954539b7321aa"
+      "bytes": 42873,
+      "sha256": "32367add5d6641940e5591068965e623430aaa72dd1f1b507e49b7d79b1a81c8"
     }
   },
   "hf_logical_bytes": 16071906850,

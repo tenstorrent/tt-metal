@@ -228,11 +228,50 @@ class Controller:
         owned.save(self.evidence / "created-containers.json", self.created)
 
     def inspect(self, item):
-        result = subprocess.run(
-            ["docker", "inspect", item["id"] or item["name"]], capture_output=True, text=True, timeout=15
-        )
+        reference = item["id"] or item["name"]
+        argv = ["docker", "container", "inspect", reference]
+
+        def failure_receipt(returncode, stdout, stderr, missing=False, timed_out=False):
+            stdout = stdout.decode("utf-8", "replace") if isinstance(stdout, bytes) else stdout or ""
+            stderr = stderr.decode("utf-8", "replace") if isinstance(stderr, bytes) else stderr or ""
+            owned.save(
+                self.evidence / ("container-inspect-failure-" + uuid.uuid4().hex + ".json"),
+                {
+                    "argv": argv,
+                    "returncode": returncode,
+                    "stdout": stdout[:4096],
+                    "stderr": stderr[:4096],
+                    "stdout_truncated": len(stdout) > 4096,
+                    "stderr_truncated": len(stderr) > 4096,
+                    "timeout_seconds": 15,
+                    "timed_out": timed_out,
+                    "exact_object_missing": missing,
+                },
+            )
+
+        try:
+            result = subprocess.run(argv, capture_output=True, text=True, timeout=15)
+        except subprocess.TimeoutExpired as error:
+            failure_receipt(None, error.stdout, error.stderr, timed_out=True)
+            raise
         if result.returncode:
-            assert "No such" in result.stderr, "Cannot establish exact container identity"
+            prefix, separator, missing_reference = result.stderr.strip().rpartition(": ")
+            missing = (
+                result.returncode == 1
+                and len(result.stdout) <= 4096
+                and len(result.stderr) <= 4096
+                and result.stdout.strip() in {"", "[]"}
+                and bool(separator)
+                and missing_reference == reference
+                and prefix.casefold()
+                in {
+                    "error: no such object",
+                    "error: no such container",
+                    "error response from daemon: no such container",
+                }
+            )
+            failure_receipt(result.returncode, result.stdout, result.stderr, missing=missing)
+            assert missing, "Cannot establish exact container identity"
             return None
         rows = json.loads(result.stdout)
         assert len(rows) == 1
