@@ -23,7 +23,8 @@
 // size-optimized on every thread.
 #if defined(WATCHER_ENABLED)
 #pragma GCC optimize("Os")
-#elif defined(TRISC_MATH)
+#elif defined(TRISC_MATH) || defined(SDPA_RECIPE_FUSED)
+// Fused LOW_PRECISION chunks add enough code that -O3 unpack/pack overflows the kernel config buffer.
 #pragma GCC optimize("O2")
 #else
 #pragma GCC optimize("O3")
