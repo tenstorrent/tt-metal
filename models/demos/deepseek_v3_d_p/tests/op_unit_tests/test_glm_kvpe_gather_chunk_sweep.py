@@ -26,13 +26,18 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, MlaKvCacheGeometry, init_mla_kv_cache
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged
 
 SP, TP = 8, 4
 RING = SP * TP
 KV_LORA_RANK, QK_ROPE_HEAD_DIM = 512, 64
-ROW_BYTES = (KV_LORA_RANK + QK_ROPE_HEAD_DIM) * 2  # bf16 row, 1152 B
+# GLM_KV_FORMAT selects the KVPE encoding. sparse_sdpa_format accepts only these two, so they are
+# the whole choice for the sparse path: bf16_rm is 576 x 2 = 1152 B/row; scaled_fp8 packs fp8 latent,
+# fp32 scales and bf16 rope into 656 B/row, 43% fewer bytes over the same fabric.
+KV_GEOMETRY = MlaKvCacheGeometry(latent_dim=KV_LORA_RANK, rope_dim=QK_ROPE_HEAD_DIM)
+KV_FORMAT = MlaKvCacheFormat(os.environ.get("GLM_KV_FORMAT", "bf16_rm"))
+ROW_BYTES = KV_GEOMETRY.packed_row_bytes if KV_FORMAT is MlaKvCacheFormat.SCALED_FP8 else KV_GEOMETRY.logical_width * 2
 MAX_CONTEXT = GLM52Config.MAX_POSITION_EMBEDDINGS
 TARGET_PREFIX = 51200
 TRACE_REGION_SIZE = 16 * 1024 * 1024
@@ -106,7 +111,7 @@ def _run_gather(mesh_device, chunk, prefix):
     capacity = min(MAX_CONTEXT // chunk * chunk, extent + chunk)
 
     cache = init_mla_kv_cache(
-        cache_format=MlaKvCacheFormat.BF16_RM,
+        cache_format=KV_FORMAT,
         hf_config=SimpleNamespace(kv_lora_rank=KV_LORA_RANK, qk_rope_head_dim=QK_ROPE_HEAD_DIM),
         mesh_device=mesh_device,
         seq_len=capacity,
@@ -117,8 +122,13 @@ def _run_gather(mesh_device, chunk, prefix):
         tp_axis=KV_TP_AXIS,
     )
     storage = cache.storage
-    out_buf = ttnn.zeros(
-        [1, 1, capacity, KV_LORA_RANK + QK_ROPE_HEAD_DIM],
+    # Take the width from the cache itself: scaled_fp8 stores a packed 656-byte row, not the 576
+    # logical elements, so a hardcoded width is wrong for every format but bf16_rm.
+    # ttnn.zeros goes through full_impl, which rejects FP8_E4M3 outright ("output-only dtype, host-side
+    # construction via fill is not supported"). ttnn.empty just allocates, and is what the model's own
+    # get_mla_high_bw_all_gather_buffer uses. The gather overwrites every row it reads anyway.
+    out_buf = ttnn.empty(
+        [1, 1, capacity, int(storage.shape[-1])],
         dtype=storage.dtype,
         layout=storage.layout,
         device=mesh_device,
@@ -172,6 +182,8 @@ def _run_gather(mesh_device, chunk, prefix):
     row = {
         "chunk": chunk,
         "prefix": prefix,
+        "kv_format": KV_FORMAT.value,
+        "row_bytes": ROW_BYTES,
         "extent": extent,
         "capacity": capacity,
         "local_mb": round(local_bytes / 1e6, 3),

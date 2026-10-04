@@ -5,8 +5,9 @@
 
 Mirrors ``ttMLA._sparse_mla`` after the head->sequence reshard: per device q ``[1, 64, chunk/32, 576]``
 bf16 RM, top-k indices ``[1, 1, chunk/32, 2048]`` uint32 RM (logical positions, 0xFFFFFFFF tail),
-replicated BF16_RM KVPE buffer ``[1, 1, T, 576]`` in block-cyclic order (tp-sharded, 32 stripes),
-v_dim=512, scale=256**-0.5, k_chunk_size=128, default kernel config (HiFi2), full 12x10 grid.
+replicated KVPE buffer ``[1, 1, T, W]`` in block-cyclic order (tp-sharded, 32 stripes), v_dim=512,
+scale=256**-0.5, k_chunk_size=128, default kernel config (HiFi2), full 12x10 grid. W is 576 bf16
+elements or, under ``GLM_KV_FORMAT=scaled_fp8``, a 656-byte packed row.
 
 The op splits query rows (tokens) over the 120 cores; each core runs all 64 heads of its tokens
 and gathers each selected key row from DRAM by index. Row r gets nv = min(pos + 1, 2048) keys; every
@@ -29,11 +30,18 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat, MlaKvCacheGeometry
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged
 
 SP, TP = 8, 4
 NUM_HEADS = 64
 KVPE_DIM = 576
+# GLM_KV_FORMAT selects the KVPE encoding; sparse_sdpa accepts exactly bf16_rm and scaled_fp8.
+# Both build the same replicated full-capacity buffer, so the two differ only in the row encoding:
+# 576 bf16 elements against a 656-byte packed (fp8 latent || fp32 scales || bf16 rope) row.
+KV_FORMAT = MlaKvCacheFormat(os.environ.get("GLM_KV_FORMAT", "bf16_rm"))
+_GEOM = MlaKvCacheGeometry(latent_dim=512, rope_dim=64)
+KV_ROW_BYTES = _GEOM.packed_row_bytes if KV_FORMAT is MlaKvCacheFormat.SCALED_FP8 else _GEOM.logical_width * 2
 V_DIM = 512
 TOPK = 2048
 SCALE = 256**-0.5  # GLM-5.2 qk_head_dim = 192 + 64; rope factor 1.0 -> no mscale
@@ -83,6 +91,31 @@ def _replicated(mesh_device, torch_tensor, dtype):
     )
 
 
+def _packed_fp8_kv(mesh_device, capacity):
+    """Replicated SCALED_FP8 KVPE rows, encoded by the model's own packer.
+
+    ttnn builds no fp8_e4m3 tensor from host, so the latent and RoPE halves go up as replicated bf16
+    and ``MlaKvCache.pack`` does the per-token cast and the mixed-format pack on device. The result
+    keeps the bf16 branch's shape and replication; only the row encoding changes.
+    """
+    # pack() reads only the format and geometry for scaled FP8, so a one-row allocation stands in for
+    # the cache under construction and satisfies the dataclass's dtype/layout/width contract.
+    contract = ttnn.empty(
+        [1, 1, 1, _GEOM.packed_row_bytes],
+        dtype=KV_FORMAT.storage_dtype,
+        layout=KV_FORMAT.storage_layout,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    cache = MlaKvCache(format=KV_FORMAT, storage=contract, geometry=_GEOM)
+    latent = _replicated(mesh_device, torch.randn(1, 1, capacity, _GEOM.latent_dim), ttnn.bfloat16)
+    rope = _replicated(mesh_device, torch.randn(1, 1, capacity, _GEOM.rope_dim), ttnn.bfloat16)
+    packed = cache.pack(latent, rope)
+    for t in (latent, rope, contract):
+        ttnn.deallocate(t)
+    return packed
+
+
 def _make_indices(rows, chunk, prefix):
     """Top-k-like indices for the last stripe's rows: nv = min(pos+1, TOPK) distinct causal keys."""
     idx = torch.full((1, 1, rows, TOPK), SENTINEL, dtype=torch.int64)
@@ -120,7 +153,10 @@ def _run_sparse_sdpa(mesh_device, chunk, prefix, k_chunk):
     num_cores = grid.x * grid.y
 
     tt_q = _replicated(mesh_device, torch.randn(1, NUM_HEADS, rows, KVPE_DIM), ttnn.bfloat16)
-    tt_kv = _replicated(mesh_device, torch.randn(1, 1, capacity, KVPE_DIM), ttnn.bfloat16)
+    if KV_FORMAT is MlaKvCacheFormat.SCALED_FP8:
+        tt_kv = _packed_fp8_kv(mesh_device, capacity)
+    else:
+        tt_kv = _replicated(mesh_device, torch.randn(1, 1, capacity, KVPE_DIM), ttnn.bfloat16)
     indices, nvs = _make_indices(rows, chunk, prefix)
     tt_idx = _replicated(mesh_device, indices, ttnn.uint32)
 
@@ -130,7 +166,7 @@ def _run_sparse_sdpa(mesh_device, chunk, prefix, k_chunk):
             tt_kv,
             tt_idx,
             v_dim=V_DIM,
-            kv_format=ttnn.transformer.SparseKVFormat.BF16,
+            kv_format=KV_FORMAT.sparse_sdpa_format,
             scale=SCALE,
             k_chunk_size=k_chunk,
             block_cyclic_sp_axis=0,
@@ -190,7 +226,8 @@ def _run_sparse_sdpa(mesh_device, chunk, prefix, k_chunk):
         "math_util_pct": round(util, 2),
         # Critical core's cost per (token, 128-key chunk): flat when the op scales cleanly.
         "ns_per_token_chunk": round(median_ns / crit_chunks, 1),
-        "kv_gather_gbps": round(sum(nvs) * KVPE_DIM * 2 / median_ns, 2),
+        "kv_format": KV_FORMAT.value,
+        "kv_gather_gbps": round(sum(nvs) * KV_ROW_BYTES / median_ns, 2),
     }
     logger.info(f"glm sparse_sdpa sweep: {row}")
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
