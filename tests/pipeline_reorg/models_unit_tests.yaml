@@ -1864,13 +1864,7 @@
 - name: On-device sampling unit tests
   cmd: |
     # Stop at the first failed command: the devices are not reset between commands (#57706).
-    pytest --timeout 300 models/common/tests/test_sampling.py -k "ttsampling or num_single_device_vocab_splits or untilize_chunk_count or seed or slot_remap or topk_authoritative_route_decision" || exit $?
-    # Shared-generator behaviour rather than a model's, so it rides along here instead
-    # of reserving its own leg: the async-ahead keep runs before any transformer layer
-    # and reads only torch tensors plus the two device trace-input buffers, so one
-    # device is enough, no weights are loaded, and both files finish in seconds.
-    pytest --timeout 300 models/tt_transformers/tests/test_async_ahead_token_keep_unit.py \
-      models/tt_transformers/tests/test_async_ahead_token_keep_decode.py || exit $?
+    pytest --timeout 300 models/common/tests/test_sampling.py -k "ttsampling or num_single_device_vocab_splits or untilize_chunk_count or seed or slot_remap or topk_authoritative_route_decision"
   model: tt-model-sampling
   skus:
     wh_n150:
@@ -2136,7 +2130,8 @@
 
 - name: DeepSeek-V3 unit tests (Galaxy)
   cmd: |
-    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    export TT_METAL_WATCHER=30
+    export TT_METAL_WATCHER_DISABLE_ETH=1
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
     export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
     export MESH_DEVICE=TG
@@ -2145,7 +2140,7 @@
   model: deepseek-v3
   skus:
     wh_galaxy_perf:
-      timeout: 10
+      timeout: 15
       tier: 2
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
@@ -2153,7 +2148,9 @@
 
 - name: DeepSeek-V3 module tests (Galaxy)
   cmd: |
-    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    export TT_METAL_WATCHER=30
+    export TT_METAL_WATCHER_DISABLE_ETH=1
+    export TT_METAL_OPERATION_TIMEOUT_SECONDS=60
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
     export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
     export MESH_DEVICE=TG

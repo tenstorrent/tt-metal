@@ -422,6 +422,8 @@ sfpi_inline sfpi::vFloat sfpu_atan_fp32(sfpi::vFloat x) {
 bool bf16_dest_atan();
 template <int ITERATIONS>
 void calculate_atan_bf16();
+// Whether BF16 DEST runs the generated atan kernel as one call over the whole tile.
+inline constexpr bool atan_bf16_whole_tile = true;
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_atan() {

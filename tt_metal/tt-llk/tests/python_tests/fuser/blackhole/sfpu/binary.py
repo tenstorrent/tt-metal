@@ -50,13 +50,6 @@ class BinarySfpu(Sfpu):
             return "0"
         return config.sentinel.sfpu_format
 
-    @staticmethod
-    def _vector_mode(operation: L1Operation) -> str:
-        tile_dims = operation.tile_shape.tile_dims
-        if tile_dims in ((16, 32), (32, 16)):
-            return "ckernel::VectorMode::R"
-        return "ckernel::VectorMode::RC"
-
     def init(
         self,
         operation: L1Operation,
