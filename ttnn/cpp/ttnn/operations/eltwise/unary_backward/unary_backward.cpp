@@ -123,9 +123,11 @@ std::vector<Tensor> hardtanh_bw(
     float max,
     const std::optional<MemoryConfig>& output_mem_config) {
     // One program for BF16 operands at the fitted scalar values, whose gradient is the
-    // generated SFPU kernel; anything else keeps the composite below.
-    if (grad.dtype() == DataType::BFLOAT16 && input.dtype() == DataType::BFLOAT16 &&
-        std::bit_cast<uint32_t>(min) == 0xbf800000u && std::bit_cast<uint32_t>(max) == 0x3f800000u) {
+    // generated SFPU kernel; anything else, and Quasar, which has no generated kernel, keeps
+    // the composite below.
+    if (input.device()->arch() != tt::ARCH::QUASAR && grad.dtype() == DataType::BFLOAT16 &&
+        input.dtype() == DataType::BFLOAT16 && std::bit_cast<uint32_t>(min) == 0xbf800000u &&
+        std::bit_cast<uint32_t>(max) == 0x3f800000u) {
         return {ttnn::operations::unary_backward::launch_unary_backward(
             ttnn::operations::unary_backward::UnaryBackwardOpType::HARDTANH_BW,
             grad,

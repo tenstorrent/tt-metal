@@ -18,6 +18,7 @@ import pytest
 import torch
 import ttnn
 
+from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 from tests.ttnn.utils_for_testing import generate_all_bfloat16_bitpatterns
 
 GRADS = ["1", "-1", "0.5", "3", "random0", "random1"]
@@ -81,6 +82,7 @@ def _pure_ulp(reference, actual):
     return torch.where(same_class, ulp, torch.full_like(ulp, float("inf")))
 
 
+@run_for_wormhole_b0_or_blackhole("the generated kernel exists for Blackhole and Wormhole only")
 @pytest.mark.parametrize("grad", GRADS)
 def test_hardtanh_bw_exhaustive_bfloat16(grad, device):
     x = generate_all_bfloat16_bitpatterns(torch.bfloat16)
