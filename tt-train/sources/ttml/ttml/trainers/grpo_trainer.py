@@ -27,6 +27,7 @@ from ttml.common.utils import build_causal_mask, create_optimizer, round_up_to_t
 from ttml.modules import RunMode
 
 from .callback import TrainerCallback
+from .rollout import ROLLOUT_SOURCES, RolloutBatch, RolloutSampler, build_rollout_sampler
 
 try:
     import wandb as _wandb  # type: ignore
@@ -95,40 +96,6 @@ class GRPOCompleter(ABC):
 
 
 @dataclass
-class RolloutBatch:
-    """Describes multiple rollout samples (not a specific count).
-
-    Fields:
-        batch_id: Monotonic counter picked by the producer.
-        weight_version: Which theta version produced this batch. The trainer
-            can use it to detect / down-weight stale samples.
-        prompts: B ragged prompt token IDs.
-        completions: B ragged completion token IDs (one per prompt in
-            single-generation mode; per prompt-completion pair otherwise).
-        logprobs: [B, max_completion_length] float32. Per-generated-token
-            log pi_old(a_t | s_t). Padding positions are don't-care; the
-            trainer masks them out.
-    """
-
-    batch_id: int
-    weight_version: int
-    prompts: List[List[int]]
-    completions: List[List[int]]
-    logprobs: np.ndarray
-
-
-class RolloutSampler(ABC):
-    """Abstract base for producers of :class:`RolloutBatch`."""
-
-    @abstractmethod
-    def generate(self, prompts: List[List[int]]) -> RolloutBatch:
-        """Generate completions for a batch of tokenised prompts and return them
-        packaged (with per-token log pi_old and producer metadata) as a
-        :class:`RolloutBatch`.
-        """
-
-
-@dataclass
 class GRPOConfig:
     epsilon: float
     # Number of completions resident on a single device within one micro-batch.
@@ -156,6 +123,9 @@ class GRPOConfig:
     max_completion_length: int
     num_generations: int
     warmup_steps: int
+    # Which RolloutSampler the trainer builds (see ttml.trainers.rollout.ROLLOUT_SOURCES).
+    # "ttml": in-process TTMLRolloutSampler that also owns the policy model.
+    rollout_source: str
     # LR schedule shape AFTER warmup. Names match HuggingFace transformers / TRL
     # so users familiar with those configs can map yamls directly:
     #   "constant" -> flat at base_lr; ``min_lr_rate`` is ignored.
@@ -236,6 +206,17 @@ class GRPOConfig:
             raise ValueError(
                 f"grpo_config: 'clip_grad_norm_max_norm' must be > 0 when 'use_clip_grad_norm' is True "
                 f"(got {self.clip_grad_norm_max_norm})."
+            )
+
+        if not isinstance(self.rollout_source, str):
+            raise TypeError(
+                f"grpo_config: 'rollout_source' must be a str, got {type(self.rollout_source).__name__}. "
+                f"Supported values: {list(ROLLOUT_SOURCES)}."
+            )
+        if self.rollout_source not in ROLLOUT_SOURCES:
+            raise ValueError(
+                f"grpo_config: 'rollout_source' must be one of {list(ROLLOUT_SOURCES)} "
+                f"(got {self.rollout_source!r})."
             )
 
         # ``report_to`` is intentionally a plain string in this framework
@@ -943,27 +924,30 @@ def _build_lr_factor_fn(
 class GRPOTrainer:
     def __init__(
         self,
-        model: Any,
-        tokenizer: Any,
-        rollout_sampler: RolloutSampler,
+        transformer_config: Any,
+        device_config: Any,
+        model_source: str,
         dataset: Any,
         config: GRPOConfig,
         reward_func: Optional[Callable[..., List[float]]] = None,
         optimizer_dict: Optional[dict] = None,
         callbacks: Optional[List[Any]] = None,
-        model_source: Optional[str] = None,
         reward_funcs: Optional[List[Callable[..., List[float]]]] = None,
     ) -> None:
         """
         Args:
-            model: The ttml policy model to optimize. The trainer runs its own
-                forward pass with gradients on it; it never changes the model's
-                run mode.
-            tokenizer: Tokenizer used to encode dataset prompts and decode
-                completions for the reward functions.
-            rollout_sampler: Produces a :class:`RolloutBatch` (completions plus
-                per-token ``log pi_old``) for each generation batch. A colocated
-                sampler that shares ``model`` must leave it in train mode.
+            transformer_config: Model config; ``model_type`` selects the model
+                family for the rollout sampler.
+            device_config: Device mesh config the rollout sampler opens.
+            model_source: HuggingFace model ID or local checkpoint directory
+                the rollout sampler loads, and whose HF config is saved with
+                checkpoints.
+
+        The trainer builds its :class:`RolloutSampler` from
+        ``config.rollout_source`` and exposes it as ``self.rollout_sampler``.
+        For ``"ttml"`` the sampler also owns the policy model and tokenizer
+        (``self.model`` / ``self.tokenizer``); the trainer runs its own forward
+        pass with gradients on that model and never changes its run mode.
         """
         if optimizer_dict is None:
             raise ValueError("GRPOTrainer: 'optimizer_dict' is required.")
@@ -971,14 +955,23 @@ class GRPOTrainer:
         self._init_rewards(reward_func, reward_funcs)
 
         # Constructor inputs (immutable during ``train``).
-        self.model = model
-        self.tokenizer = tokenizer
-        self.rollout_sampler = rollout_sampler
         self.dataset = dataset
         self.config = config
         self.optimizer_dict = optimizer_dict
         self.callbacks: List[Any] = list(callbacks or [])
         self.model_source = model_source
+
+        self.rollout_sampler: RolloutSampler = build_rollout_sampler(
+            config.rollout_source,
+            transformer_config=transformer_config,
+            device_config=device_config,
+            model_source=model_source,
+            max_completion_length=config.max_completion_length,
+            temperature=config.temperature,
+            completions_per_prompt=config.num_generations,
+        )
+        self.model: Any = self.rollout_sampler.model
+        self.tokenizer: Any = self.rollout_sampler.tokenizer
 
         # Per-step accumulator rebuilt every optimizer step by
         # ``_reset_step_metrics``. Callbacks can inject additional keys here

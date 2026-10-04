@@ -17,13 +17,8 @@ import logging
 import os
 import random
 import re
-import sys
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
-from pathlib import Path
-
-# The `grpo` package lives two levels up, in the examples directory.
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import numpy as np
 import torch
@@ -32,7 +27,6 @@ from transformers import AutoTokenizer
 from ttml.common.config import DeviceConfig, TrainingConfig, get_model_config, load_config
 from ttml.common.utils import get_tt_metal_runtime_root
 from ttml.trainers import GRPOTrainer, TrainerCallback, get_grpo_config
-from grpo.utils.ttml_rollout_sampler import TTMLRolloutSampler
 
 MODEL_SOURCE = "PrimeIntellect/Qwen3-0.6B-Reverse-Text-SFT"
 DATASET = "PrimeIntellect/Reverse-Text-RL"
@@ -107,7 +101,7 @@ def similarity_reward(completions, answer, **kwargs):
 class EvalCallback(TrainerCallback):
     """Greedy eval on the held-out split, before training and after every step.
 
-    Generation parameters live on the shared rollout sampler, so greedy
+    Generation parameters live on the trainer's rollout sampler, so greedy
     decoding is a temporary change of its ``temperature`` and
     ``completions_per_prompt``: ``temperature == 0.0`` takes the pure-argmax
     path in ``ttnn_fixed::sample``.
@@ -117,24 +111,23 @@ class EvalCallback(TrainerCallback):
     picks them up as CSV columns in the same step's row.
     """
 
-    def __init__(self, sampler, dataset, num_examples):
+    def __init__(self, dataset, num_examples):
         rows = dataset.select(range(min(num_examples, len(dataset))))
-        self.sampler = sampler
         self.prompts = list(rows["prompt"])
         self.answers = list(rows["answer"])
         self.latest: dict[str, float] = {}
 
     def on_train_begin(self, trainer):
-        self._evaluate(0)
+        self._evaluate(trainer, 0)
         trainer.metrics.update(self.latest)
 
     def on_step_end(self, trainer, step, **kwargs):
-        self._evaluate(step)
+        self._evaluate(trainer, step)
         trainer.metrics.update(self.latest)
 
-    def _evaluate(self, step):
-        sampler = self.sampler
-        tokenizer = sampler.tokenizer
+    def _evaluate(self, trainer, step):
+        sampler = trainer.rollout_sampler
+        tokenizer = trainer.tokenizer
         saved = (sampler.temperature, sampler.completions_per_prompt)
         sampler.temperature, sampler.completions_per_prompt = 0.0, 1
         try:
@@ -243,26 +236,15 @@ if __name__ == "__main__":
         grpo_config.gradient_accumulation_steps,
     )
 
-    sampler = TTMLRolloutSampler(
-        model_kind=transformer_config.model_type,
+    grpo_trainer = GRPOTrainer(
         transformer_config=transformer_config,
         device_config=device_config,
         model_source=model_source,
-        max_completion_length=grpo_config.max_completion_length,
-        temperature=grpo_config.temperature,
-        completions_per_prompt=grpo_config.num_generations,
-    )
-
-    grpo_trainer = GRPOTrainer(
-        model=sampler.model,
-        tokenizer=sampler.tokenizer,
-        rollout_sampler=sampler,
         dataset=train_dataset,
         config=grpo_config,
         reward_func=similarity_reward,
         optimizer_dict=optimizer_dict,
-        callbacks=[EvalCallback(sampler, eval_dataset, args.eval_examples)],
-        model_source=model_source,
+        callbacks=[EvalCallback(eval_dataset, args.eval_examples)],
     )
     grpo_trainer.train()
     logging.info("REVERSE TEXT GRPO TRAINING COMPLETE")

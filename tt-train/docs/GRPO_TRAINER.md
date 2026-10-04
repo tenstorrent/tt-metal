@@ -11,21 +11,14 @@ conventions where possible so that users familiar with TRL face minimal friction
 
 ```python
 from datasets import load_dataset
+from ttml.common.config import DeviceConfig, get_model_config
 from ttml.trainers import GRPOConfig, GRPOTrainer
-from grpo.utils.ttml_rollout_sampler import TTMLRolloutSampler
 
-# 1. A RolloutSampler generates completions together with their per-token
-#    log pi_old. TTMLRolloutSampler builds the ttml model and tokenizer and
-#    generates in-process. See "RolloutSampler" below for the contract.
-sampler = TTMLRolloutSampler(
-    model_kind="llama",                  # or "qwen3"
-    transformer_config=transformer_config,
-    device_config=device_config,
-    model_source="...",
-    max_completion_length=256,
-    temperature=1.0,
-    completions_per_prompt=8,            # = GRPOConfig.num_generations
-)
+# 1. Model and device configs. The trainer builds its rollout sampler from
+#    GRPOConfig.rollout_source; for "ttml" the sampler opens the device and
+#    loads the model named by transformer_config.model_type from model_source.
+transformer_config = get_model_config("tt-train/configs/model_configs/llama3_2_1B.yaml")
+device_config = DeviceConfig({"device_config": {"enable_ddp": False, "mesh_shape": [1, 1]}})
 
 # 2. Dataset must have a "prompt" column. All other columns are
 #    forwarded by name to the reward function.
@@ -40,11 +33,12 @@ def my_reward(completions, answer, **kwargs):
 # 4. Train — the trainer auto-appends a `GRPOMonitor` from `GRPOConfig`, so
 #    `output_dir/grpo_metrics.csv` and per-step console lines come for free.
 trainer = GRPOTrainer(
-    model=sampler.model,
-    tokenizer=sampler.tokenizer,
-    rollout_sampler=sampler,
+    transformer_config=transformer_config,
+    device_config=device_config,
+    model_source="...",                  # HF ID or local checkpoint dir; also saved with checkpoints
     dataset=dataset,
     config=GRPOConfig(
+        rollout_source="ttml",           # in yaml: grpo_config.rollout_source
         epsilon=0.2,
         per_device_train_batch_size=8,
         num_iterations=1,
@@ -60,15 +54,15 @@ trainer = GRPOTrainer(
     reward_func=my_reward,
     optimizer_dict={"type": "MorehAdamW", "lr": 5.0e-6},
     callbacks=[],                        # optional; see "Callbacks" below
-    model_source="...",                  # used only for HF config in checkpoints
 )
 trainer.train()
 ```
 
-`GRPOTrainer` is agnostic to model architecture, device topology, and
-rank count. It calls `rollout_sampler.generate(...)` for completions and
-their `log pi_old`, runs its own teacher-forced forward pass on `model`
-for `log pi`, and fires the standard `TrainerCallback` hooks.
+`GRPOTrainer`'s training loop is agnostic to model architecture, device
+topology, and rank count. It calls `trainer.rollout_sampler.generate(...)`
+for completions and their `log pi_old`, runs its own teacher-forced forward
+pass on `trainer.model` for `log pi`, and fires the standard
+`TrainerCallback` hooks.
 
 ---
 
@@ -82,6 +76,10 @@ GRPO training is split into two components:
   owns model loading and device setup for the in-process case.
 - **`GRPOTrainer`** — model-agnostic training loop that drives reward computation,
   advantage estimation, and policy gradient updates.
+
+The trainer builds its sampler in the constructor from `GRPOConfig.rollout_source`
+(see [RolloutSampler](#rolloutsampler)) and exposes it as `trainer.rollout_sampler`,
+with the policy model and tokenizer as `trainer.model` / `trainer.tokenizer`.
 
 Per generation batch the data flows as follows:
 
@@ -107,8 +105,16 @@ mode afterwards — `ttml.common.utils.run_mode` does exactly that.
 ## RolloutSampler
 
 ```python
-from ttml.trainers.grpo_trainer import RolloutBatch, RolloutSampler
+from ttml.trainers import RolloutBatch, RolloutSampler, build_rollout_sampler
 ```
+
+`GRPOTrainer` calls `build_rollout_sampler(config.rollout_source, ...)` with its
+`transformer_config`, `device_config`, `model_source`, and the config's
+`max_completion_length`, `temperature` and `num_generations`. Supported values:
+
+| `rollout_source` | Sampler |
+|------------------|---------|
+| `"ttml"` | [`TTMLRolloutSampler`](#ttmlrolloutsampler): in-process generation on the trainer's own model and mesh. |
 
 ### RolloutBatch
 
@@ -132,30 +138,16 @@ calls it with the new step number after every optimizer step.
 ### TTMLRolloutSampler
 
 ```python
-from grpo.utils.ttml_rollout_sampler import TTMLRolloutSampler
+from ttml.trainers.rollout.ttml_rollout_sampler import TTMLRolloutSampler
 ```
 
 In-process sampler for the ttml Llama and Qwen3 models
-([`sources/examples/grpo/utils/ttml_rollout_sampler.py`](../sources/examples/grpo/utils/ttml_rollout_sampler.py)).
-It opens the device, builds the model and tokenizer from `model_source`
-(exposed as `sampler.model` / `sampler.tokenizer`), and runs a KV-cached,
-right-padded prefill + decode loop that captures `log pi_old` on device.
-
-```python
-from ttml.common.config import DeviceConfig
-
-sampler = TTMLRolloutSampler(
-    model_kind="qwen3",
-    transformer_config=transformer_config,   # Qwen3: max_sequence_length + runner_type only
-    device_config=DeviceConfig(
-        {"device_config": {"enable_fsdp": True, "mesh_shape": [32, 1]}}
-    ),
-    model_source="Qwen/Qwen3-32B",
-    max_completion_length=256,
-    temperature=1.0,
-    completions_per_prompt=8,
-)
-```
+([`ttml/trainers/rollout/ttml_rollout_sampler.py`](../sources/ttml/ttml/trainers/rollout/ttml_rollout_sampler.py)),
+selected with `rollout_source: "ttml"`. It opens the device, builds the model
+and tokenizer for `transformer_config.model_type` (`"llama"` or `"qwen3"`) from
+`model_source`, and runs a KV-cached, right-padded prefill + decode loop that
+captures `log pi_old` on device. Its `temperature` and `completions_per_prompt`
+properties can be changed between `generate()` calls (e.g. for a greedy eval).
 
 For Llama the architecture comes from `transformer_config`. For Qwen3 it is read
 from the HuggingFace config of `model_source`, and only `max_sequence_length` and
@@ -206,6 +198,7 @@ from ttml.trainers import GRPOConfig
 | `prompts_to_train` | `int` | — | *(use `max_steps`)* | Total number of prompts to train on. Unlike TRL which uses `max_steps`, this directly specifies the data budget. Equivalent to `max_steps * (per_device_train_batch_size * num_devices * gradient_accumulation_steps / num_generations)`. **Currently, `prompts_to_train` must be divisible by the generation batch size in prompts (`per_device_train_batch_size * num_devices * gradient_accumulation_steps / num_generations`) to avoid a ragged final batch.** |
 | `temperature` | `float` | — | `temperature` | Sampling temperature for completion generation. |
 | `warmup_steps` | `int` | — | `warmup_steps` | Number of linear learning rate warmup steps. |
+| `rollout_source` | `str` | — | *(no direct equivalent)* | Which rollout sampler the trainer builds; see [RolloutSampler](#rolloutsampler). Required in `grpo_config`. Only `"ttml"` (in-process `TTMLRolloutSampler`) is accepted today. |
 | `output_dir` | `str` | — | `output_dir` | Directory for logs, metrics CSV, and checkpoints. |
 | `checkpointing` | `bool` | — | *(use `save_steps`)* | Whether to save checkpoints during training. |
 | `checkpoint_interval` | `int` | — | *(use `save_steps`)* | Save a checkpoint every *N* optimizer steps (when `checkpointing=True`). |
@@ -228,29 +221,31 @@ from ttml.trainers import GRPOTrainer
 
 ```python
 GRPOTrainer(
-    model,
-    tokenizer,
-    rollout_sampler,
+    transformer_config,
+    device_config,
+    model_source,
     dataset,
     config,
     reward_func,
     optimizer_dict,
     callbacks=None,
-    model_source=None,
 )
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `model` | ttml module | The policy to optimize. The trainer runs its own forward pass with gradients on it and never changes its run mode. For `TTMLRolloutSampler`, pass `sampler.model`. |
-| `tokenizer` | HF tokenizer | Encodes dataset prompts and decodes completions for the reward functions. For `TTMLRolloutSampler`, pass `sampler.tokenizer`. |
-| `rollout_sampler` | `RolloutSampler` | Produces a `RolloutBatch` (completions + per-token `log pi_old`) per generation batch; see [RolloutSampler](#rolloutsampler). |
+| `transformer_config` | `TransformerConfig` | Model config (see [Transformer Config](#transformer-config)); `model_type` selects the model family. |
+| `device_config` | `DeviceConfig` | Device mesh the rollout sampler opens (see [Device Config](#device-config)). |
+| `model_source` | `str` | HuggingFace model ID or local checkpoint directory the sampler loads. Its HF config is also saved with checkpoints. |
 | `dataset` | `Dataset` | HuggingFace `datasets.Dataset` with at least a `"prompt"` column. All other columns are passed to the reward function. |
-| `config` | `GRPOConfig` | Training configuration (see above). |
+| `config` | `GRPOConfig` | Training configuration (see above); `rollout_source` selects the sampler. |
 | `reward_func` | `Callable` | Reward function. Receives decoded completions and any dataset columns (see [Reward Functions](#reward-functions)). |
 | `optimizer_dict` | `dict` | Optimizer config dict passed to the [ttml optimizer registry](TTML_ONBOARDING.md). Must include a `"type"` key. |
 | `callbacks` | `list[TrainerCallback] \| None` | Hooks into the training loop (see [Callbacks](#callbacks)). |
-| `model_source` | `str \| None` | HuggingFace model ID or local path. Used only for saving HF config in checkpoints. |
+
+The constructor builds the rollout sampler (which opens the device and loads
+the model), so `trainer.rollout_sampler`, `trainer.model` and `trainer.tokenizer`
+are available before `train()` — e.g. to callbacks in `on_train_begin`.
 
 ### Methods
 
@@ -504,17 +499,17 @@ device_config:
   enable_ddp: true
 ```
 
-`TTMLRolloutSampler` accepts a `DeviceConfig` object (see
-[`ttml/common/config.py`](../sources/ttml/ttml/common/config.py))
-and opens the mesh itself inside `setup_device`. The entrypoint
-just constructs it from the loaded YAML dict:
+The trainer passes its `DeviceConfig` (see
+[`ttml/common/config.py`](../sources/ttml/ttml/common/config.py)) to the
+rollout sampler, and `TTMLRolloutSampler` opens the mesh inside `setup_device`.
+The entrypoint just constructs it from the loaded YAML dict:
 
 ```python
 from ttml.common.config import DeviceConfig
 
 raw = load_config(config_path)
 device_config = DeviceConfig(raw)
-sampler = TTMLRolloutSampler(..., device_config=device_config)
+trainer = GRPOTrainer(..., device_config=device_config)
 ```
 
 ### FSDP
@@ -612,7 +607,7 @@ dataset = load_dataset("google/boolq", split="train").map(format_fn)
 
 | Aspect | TRL `GRPOTrainer` | ttml `GRPOTrainer` |
 |--------|-------------------|---------------------|
-| **Model** | Passed as a `transformers` model object | A ttml model, typically built by `TTMLRolloutSampler` from a HF ID or local path and passed as `sampler.model` |
+| **Model** | Passed as a `transformers` model object | Built by the rollout sampler (`rollout_source: "ttml"`) from `transformer_config` and a HF ID or local path |
 | **Reward functions** | List of functions (`reward_funcs=[f1, f2]`), summed | Single function (`reward_func=f`) |
 | **Training budget** | `max_steps` (optimizer steps) | `prompts_to_train` (total prompts) |
 | **Optimizer** | String name (`optim="adamw_bnb_8bit"`) | Config dict (`{"type": "MorehAdamW", ...}`) |
@@ -634,9 +629,9 @@ same `GRPOTrainer`; they differ in where token generation runs.
 - [`tt-train/sources/examples/grpo/`](../sources/examples/grpo/)
   — **Single-process, ttml-only.** Both the training forward/backward
   and the rollout token generation run inside the same ttml process on
-  one device mesh. `TTMLRolloutSampler` (under
-  [`utils/`](../sources/examples/grpo/utils/)) builds the ttml policy
-  model, which the trainer shares, and drives generation itself. Entry point:
+  one device mesh. The configs set `rollout_source: "ttml"`, so the trainer
+  builds a `TTMLRolloutSampler`, which loads the ttml policy model (shared with
+  the trainer) and drives generation itself. Entry point:
   [`boolq_training_example.py`](../sources/examples/grpo/boolq_training_example.py)
   (optional `--config <yaml>`; the model family comes from the config's
   model yaml).
@@ -645,8 +640,7 @@ same `GRPOTrainer`; they differ in where token generation runs.
   and a plotting helper
   ([`boolq_plot_example.py`](../sources/examples/grpo/boolq_plot_example.py)).
 
-Each task lives in its own subdirectory; the rollout sampler in
-[`utils/`](utils/) is shared between them.
+Each task lives in its own subdirectory.
 
 #### BoolQ Training
 
@@ -719,10 +713,10 @@ python3 reverse_text/reverse_text_plot_example.py
   runs the ttml policy and `GRPOTrainer`; rank 1 runs generation
   workers.
 
-The single-process examples plug into `GRPOTrainer` through
-`TTMLRolloutSampler`. The two-rank example still constructs the trainer
-with a `GRPOCompleter` and does not run with the current `GRPOTrainer`
-until a remote `RolloutSampler` exists.
+The single-process examples use `rollout_source: "ttml"`. The two-rank
+example still constructs the trainer with a `GRPOCompleter` and does not
+run with the current `GRPOTrainer` until a remote `RolloutSampler` exists
+and is registered as a `rollout_source`.
 
 ---
 

@@ -13,7 +13,7 @@ Speed strategy:
   * Tiny random-init Llama (1 layer, hidden=64, head_dim=32).
   * Skip the HuggingFace weight download by monkey-patching
     ``snapshot_download`` and ``load_from_safetensors`` in
-    ``grpo.utils.ttml_rollout_sampler`` to no-ops; the model keeps its random init.
+    ``ttml.trainers.rollout.ttml_rollout_sampler`` to no-ops; the model keeps its random init.
   * ``max_completion_length=4`` so autoregressive generation is cheap.
   * Exactly one optimizer step (``gradient_accumulation_steps=1``,
     ``num_iterations=1``, ``prompts_to_train=2``). On this single device
@@ -42,16 +42,18 @@ import pytest
 import ttml
 import ttnn
 from datasets import Dataset
+from transformers import AutoTokenizer
 
 from ttml.common.config import DeviceConfig, TransformerConfig
 from ttml.modules import RunMode
-from ttml.trainers import GRPOConfig, GRPOTrainer, TrainerCallback
+from ttml.trainers import GRPOConfig, GRPOTrainer, TrainerCallback, get_grpo_config
 from ttml.trainers.grpo_trainer import layout_microbatch, place_old_nlog_probs
+from ttml.trainers.rollout.ttml_rollout_sampler import TTMLRolloutSampler
 
 
-# ``TTMLRolloutSampler`` and the ``LlamaGRPOCompleter`` reference implementation
-# live under the examples tree, not under ``ttml`` proper. Surface their package
-# on the import path so this test can use them.
+# The ``LlamaGRPOCompleter`` reference implementation lives under the examples
+# tree, not under ``ttml`` proper. Surface its package on the import path so
+# this test can use it.
 _EXAMPLES_DIR = os.path.join(
     os.environ.get("TT_METAL_HOME", os.path.join(os.path.dirname(__file__), "..", "..", "..")),
     "tt-train",
@@ -62,7 +64,6 @@ if _EXAMPLES_DIR not in sys.path:
     sys.path.insert(0, _EXAMPLES_DIR)
 
 from grpo.utils.llama_completer import LlamaCompletionCtx, LlamaGRPOCompleter  # noqa: E402
-from grpo.utils.ttml_rollout_sampler import TTMLRolloutSampler  # noqa: E402
 
 
 HF_MODEL_ID = "unsloth/Llama-3.2-1B-Instruct"  # not gated
@@ -184,7 +185,7 @@ def patch_llama_weight_loading(monkeypatch):
     The sampler module binds both names with ``from ... import``, so they must be
     patched on that module, not on ``huggingface_hub`` / ``ttml.models.llama``.
     """
-    from grpo.utils import ttml_rollout_sampler
+    from ttml.trainers.rollout import ttml_rollout_sampler
 
     monkeypatch.setattr(ttml_rollout_sampler, "snapshot_download", lambda *args, **kwargs: "/tmp/unused")
     monkeypatch.setattr(ttml_rollout_sampler, "load_from_safetensors", lambda *args, **kwargs: None)
@@ -198,22 +199,6 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
     and actually mutates model weights via ``optimizer.step``.
     """
     np.random.seed(0)
-
-    sampler = TTMLRolloutSampler(
-        model_kind="llama",
-        transformer_config=TINY_TRANSFORMER_CONFIG,
-        device_config=DEVICE_CONFIG,
-        model_source=HF_MODEL_ID,
-        max_completion_length=4,
-        temperature=1.0,
-        completions_per_prompt=2,
-    )
-
-    # Snapshot a single parameter so we can prove training mutated it.
-    params = sampler.model.parameters()
-    assert params, "tiny model should expose at least one parameter"
-    snapshot_name, snapshot_param = next(iter(params.items()))
-    before = snapshot_param.to_numpy(ttnn.DataType.FLOAT32).copy()
 
     grpo_cfg = GRPOConfig(
         epsilon=0.2,
@@ -229,9 +214,10 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
         max_completion_length=4,
         num_generations=2,
         warmup_steps=0,
+        rollout_source="ttml",
     )
 
-    tokenizer = sampler.tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(HF_MODEL_ID)
     user_prompts = ["What is 1+1?", "Name a color."]
     dataset = Dataset.from_dict(
         {
@@ -268,18 +254,29 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
     }
 
     recorder = _RecordingCallback()
-    GRPOTrainer(
-        model=sampler.model,
-        tokenizer=sampler.tokenizer,
-        rollout_sampler=sampler,
+    trainer = GRPOTrainer(
+        transformer_config=TINY_TRANSFORMER_CONFIG,
+        device_config=DEVICE_CONFIG,
+        model_source=HF_MODEL_ID,
         dataset=dataset,
         config=grpo_cfg,
         reward_func=reward_func,
         optimizer_dict=optimizer_dict,
         callbacks=[recorder],
-    ).train()
+    )
+    sampler = trainer.rollout_sampler
+    assert isinstance(sampler, TTMLRolloutSampler)
+    assert trainer.model is sampler.model and trainer.tokenizer is sampler.tokenizer
 
-    assert sampler.model.get_run_mode() == RunMode.TRAIN, "the sampler must leave the shared model in train mode"
+    # Snapshot a single parameter so we can prove training mutated it.
+    params = trainer.model.parameters()
+    assert params, "tiny model should expose at least one parameter"
+    snapshot_name, snapshot_param = next(iter(params.items()))
+    before = snapshot_param.to_numpy(ttnn.DataType.FLOAT32).copy()
+
+    trainer.train()
+
+    assert trainer.model.get_run_mode() == RunMode.TRAIN, "the sampler must leave the shared model in train mode"
     assert sampler.weight_version == 1, "trainer should publish the new weight version after the optimizer step"
 
     assert recorder.train_begin == 1, "on_train_begin should fire exactly once"
@@ -313,7 +310,7 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
     step_time_s = float(rows[0]["step_time_s"])
     assert np.isfinite(step_time_s) and step_time_s > 0.0, f"step_time_s is not a positive duration: {step_time_s}"
 
-    after = sampler.model.parameters()[snapshot_name].to_numpy(ttnn.DataType.FLOAT32)
+    after = trainer.model.parameters()[snapshot_name].to_numpy(ttnn.DataType.FLOAT32)
     assert before.shape == after.shape
     assert not np.array_equal(before, after), (
         f"parameter {snapshot_name!r} was unchanged after one optimizer step; "
@@ -353,6 +350,38 @@ def test_layout_microbatch_aligns_old_logprobs_mask_and_targets():
         np.testing.assert_array_equal(old[r, cols], -logprobs[r, : len(c)])
         assert np.all(old[r, cols] > 0.0)
         assert np.all(np.delete(old[r], cols) == 0.0)
+
+
+_GRPO_CONFIG_FIELDS = dict(
+    epsilon=0.2,
+    per_device_train_batch_size=4,
+    num_iterations=1,
+    gradient_accumulation_steps=1,
+    logging_steps=1,
+    output_dir="",
+    checkpointing=False,
+    checkpoint_interval=1,
+    prompts_to_train=2,
+    temperature=1.0,
+    max_completion_length=4,
+    num_generations=2,
+    warmup_steps=0,
+)
+
+
+def test_grpo_config_requires_rollout_source(expect_error):
+    with expect_error(TypeError, "rollout_source"):
+        GRPOConfig(**_GRPO_CONFIG_FIELDS)
+
+
+def test_grpo_config_rejects_unknown_rollout_source(expect_error):
+    with expect_error(ValueError, "'rollout_source' must be one of"):
+        GRPOConfig(**_GRPO_CONFIG_FIELDS, rollout_source="vllm")
+
+
+def test_get_grpo_config_reads_rollout_source():
+    cfg = get_grpo_config({"training_config": {"grpo_config": {**_GRPO_CONFIG_FIELDS, "rollout_source": "ttml"}}})
+    assert cfg.rollout_source == "ttml"
 
 
 def test_layout_microbatch_rejects_short_prompt(expect_error):
