@@ -84,8 +84,8 @@ def project(hidden_states, weight, memory_config=None, into_reduce_scatter=False
 
     into_reduce_scatter marks a row-parallel projection whose only consumer is the TP reduce-scatter. Up to
     _MAX_SHARDED_OUTPUT_M_TILES tile rows it then runs the 1D config on the width-sharded activation and writes a
-    width-sharded L1 output, which the reduce-scatter reads as fast as an interleaved one. That skips the interleaved
-    DRAM write: ~0.7 ms per chunk at 2048 and ~0.3 ms at 4096 for the attention output projection.
+    width-sharded L1 output, which the reduce-scatter reads as fast as an interleaved one, and skips the interleaved
+    DRAM write.
     """
     sharded_output = (
         into_reduce_scatter and hidden_states.padded_shape[-2] // ttnn.TILE_SIZE <= _MAX_SHARDED_OUTPUT_M_TILES
@@ -115,9 +115,8 @@ _MAX_L1_QKV_M_TILES = 32
 def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None, kv_tied: bool = False):
     """Project to QKV, or QK when kv_tied selects the narrow tied weight.
 
-    Up to _MAX_L1_QKV_M_TILES tile rows the output goes to L1 rather than DRAM: the matmul's writer otherwise finishes
-    ~12 us after its math, ~0.7 ms per chunk at 2048, ~0.8 ms at 4096 and ~1.9 ms at 8192. The caller frees it after the
-    head split, before attention allocates its circular buffers.
+    Up to _MAX_L1_QKV_M_TILES tile rows the output goes to L1 rather than DRAM, so the matmul's writer doesn't trail
+    its math. The caller frees it after the head split, before attention allocates its circular buffers.
     """
     if memory_config is None and hidden_states.padded_shape[-2] // ttnn.TILE_SIZE <= _MAX_L1_QKV_M_TILES:
         memory_config = ttnn.L1_MEMORY_CONFIG

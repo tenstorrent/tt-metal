@@ -161,10 +161,8 @@ class MLP:
             sharded = to_l1_width_sharded(hidden)
             hidden.deallocate(True)
             hidden = sharded
-        # Short M: down runs 4 columns per core (the 1D config only applies there). With gate and up writing sharded
-        # outputs, that is ~0.9 ms per 2048 chunk faster than 2 columns and interleaved outputs. Its own output goes
-        # width-sharded straight into the reduce-scatter, which reads it as fast as DRAM: another ~0.8 ms per chunk.
-        # Taller slabs pack the output to DRAM.
+        # Short M: down runs 4 columns per core (the 1D config only applies there) and writes its output width-sharded
+        # straight into the reduce-scatter, which reads it as fast as DRAM. Taller slabs write the output to DRAM.
         down_mc = (
             short_m_output_memcfg(hidden, self.down_proj, per_core_n=_DOWN_PER_CORE_N)
             if short_m
