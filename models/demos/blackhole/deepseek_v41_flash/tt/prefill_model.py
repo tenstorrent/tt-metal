@@ -17,6 +17,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_attention import clear_chunk_caches, pad_len
+from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import COLSPLIT
 
 T = 32
 
@@ -43,6 +44,9 @@ class DSV41PrefillModel:
         self.rows, self.cols = tuple(md.shape)
         self.U = users_per_row
         self.shard = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(self.rows, self.cols))
+        self.shard_rc = ttnn.ShardTensor2dMesh(
+            md, dims=(0, 1), mesh_shape=(self.rows, self.cols)
+        )  # column-split: row r, column c
         self.pre32 = ttnn.from_torch(
             torch.tensor([1.0, 0.0, 0.0, 0.0]).repeat(T, 1, 1, 1),
             device=md,
@@ -80,7 +84,17 @@ class DSV41PrefillModel:
             return self._bufs[C]
         R = self.U * C
         rows = self.rows
-        tok = self._up(torch.zeros(rows * R, 1, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+        if COLSPLIT:  # per device [R/8, 1]: the tokens of the 32-token chunks this column owns
+            tok = ttnn.from_torch(
+                torch.zeros(rows * (R // self.cols), self.cols, dtype=torch.int32),
+                device=self.md,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=self.shard_rc,
+            )
+        else:
+            tok = self._up(torch.zeros(rows * R, 1, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
         er = {
             lid: self._up(torch.zeros(rows, 1, R, e.kin, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT)
             for lid, e in self.engram.items()
@@ -113,7 +127,17 @@ class DSV41PrefillModel:
     def upload_inputs(self, prepped, bufs):
         t0 = time.perf_counter()
         tok, er = bufs
-        ttnn.copy_host_to_device_tensor(self._host(prepped["tok"], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT), tok)
+        if COLSPLIT:  # chunk i (32 tokens) of a row goes to column i % 8: [rows*R,1] -> [rows*(R/8), cols]
+            tk = prepped["tok"].reshape(self.rows, -1, self.cols, T).permute(0, 1, 3, 2)  # [rows, n8, T, cols]
+            htok = ttnn.from_torch(
+                tk.reshape(self.rows * tk.shape[1] * T, self.cols).contiguous(),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self.shard_rc,
+            )
+            ttnn.copy_host_to_device_tensor(htok, tok)
+        else:
+            ttnn.copy_host_to_device_tensor(self._host(prepped["tok"], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT), tok)
         for lid, dev in er.items():
             t1 = time.perf_counter()
             h = self._host(prepped[lid], ttnn.bfloat16, ttnn.TILE_LAYOUT)  # host tilize + shard
@@ -151,7 +175,7 @@ class DSV41PrefillModel:
                 self.sync(name, t0)
 
         t0 = time.perf_counter()
-        n32 = self.U * C // T
+        n32 = self.U * C // T // (self.cols if COLSPLIT else 1)
         xs = [self.embedding.forward(ttnn.slice(tok_dev, [c * T, 0], [(c + 1) * T, 1]))[0] for c in range(n32)]
         pres = [self.pre32 for _ in xs]
         sync("embedding", t0)
@@ -165,10 +189,39 @@ class DSV41PrefillModel:
                 )
                 kin = erows_dev[lid].shape[3]
                 sl = lambda c: ttnn.slice(erows_dev[lid], [0, 0, c * T, 0], [1, 1, (c + 1) * T, kin])
-                new = [
-                    fe(x, sl(c) if fe.__name__ == "forward_v2" else ttnn.reshape(sl(c), [T, 1, 1, kin]))
-                    for c, x in enumerate(xs)
-                ]
+                if (
+                    COLSPLIT
+                ):  # own-token chunks -> replicated 8-chunk groups -> Engram -> back (reduce_scatter of 8 identical copies, x1/8 exact)
+                    mc, cc = pl.L.mesh_config, pl.L.ccl
+                    new = []
+                    for g, x in enumerate(xs):
+                        xg = mc.allgather(x, cc, axis=1, dim=0)  # [8T,1,4,D]: chunk 8g + j at rows jT..
+                        outs8 = []
+                        for j in range(self.cols):
+                            xj = ttnn.slice(xg, [j * T, 0, 0, 0], [(j + 1) * T, 1, xg.shape[2], xg.shape[3]])
+                            rj = sl(g * self.cols + j)
+                            outs8.append(
+                                fe(xj, rj if fe.__name__ == "forward_v2" else ttnn.reshape(rj, [T, 1, 1, kin]))
+                            )
+                        cat8 = ttnn.concat(outs8, dim=0)
+                        rs8 = ttnn.experimental.reduce_scatter_minimal_async(
+                            cat8,
+                            dim=0,
+                            multi_device_global_semaphore=cc.get_rs_ping_pong_semaphore(),
+                            num_links=cc.num_links,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                            topology=cc.topology,
+                            cluster_axis=1,
+                            barrier_semaphore=cc.get_barrier_semaphore(),
+                        )
+                        new.append(ttnn.multiply(rs8, 1.0 / self.cols))
+                        for t_ in (xg, cat8, rs8, *outs8):
+                            ttnn.deallocate(t_)
+                else:
+                    new = [
+                        fe(x, sl(c) if fe.__name__ == "forward_v2" else ttnn.reshape(sl(c), [T, 1, 1, kin]))
+                        for c, x in enumerate(xs)
+                    ]
                 for x in xs:
                     ttnn.deallocate(x)
                 xs = new
@@ -199,9 +252,24 @@ class DSV41PrefillModel:
         sync("head", t0)
         return lg
 
+    def _head_body(self, key):
+        """Head on the persistent ``head_in`` / ``head_pre``. Column split: the owner column ``key`` of the 8 holds the chunk, so gather first."""
+        if not COLSPLIT:
+            return self.head.forward(self.head_in, self.head_pre)
+        L = self.layers[0][1].L
+        xg = L.mesh_config.allgather(self.head_in, L.ccl, axis=1, dim=0)
+        pg = L.mesh_config.allgather(self.head_pre, L.ccl, axis=1, dim=0)
+        xo = ttnn.slice(xg, [key * T, 0, 0, 0], [(key + 1) * T, 1, xg.shape[2], xg.shape[3]])
+        po = ttnn.slice(pg, [key * T, 0, 0, 0], [(key + 1) * T, 1, pg.shape[2], pg.shape[3]])
+        out = self.head.forward(xo, po)
+        for t in (xg, pg, xo, po):
+            ttnn.deallocate(t)
+        return out
+
     def last_logits_traced(self, S, s0, C):
         """First-token logits [B, vocab] with NO allocation between trace replays: the head is a second trace on persistent head_in / head_pre,
-        fed from per-user stashes (copied out before the first head replay: its temporaries may overlap the chunk trace's outputs).
+        fed from per-chunk stashes (copied out before the first head replay: its temporaries may overlap the chunk trace's outputs).
+        Column split: chunk c of a row lives in column c % 8 (list element c // 8); one head trace per owner column gathers it first.
         """
         xs, pres = self.dyn_out
         rows, U = self.rows, self.U
@@ -210,16 +278,18 @@ class DSV41PrefillModel:
         for u in range(U):
             c, off = divmod(u * C + S - 1 - s0, T)
             need.setdefault(c, []).append((u, off))
+        src = lambda c: c // self.cols if COLSPLIT else c
         for k, c in enumerate(need):
-            ttnn.copy(xs[c], self.head_stash[k][0])
-            ttnn.copy(pres[c], self.head_stash[k][1])
+            ttnn.copy(xs[src(c)], self.head_stash[k][0])
+            ttnn.copy(pres[src(c)], self.head_stash[k][1])
         ttnn.synchronize_device(self.md)
         for k, (c, users) in enumerate(need.items()):
             ttnn.copy(self.head_stash[k][0], self.head_in)
             ttnn.copy(self.head_stash[k][1], self.head_pre)
-            ttnn.execute_trace(self.md, self.head_trace, cq_id=0, blocking=False)
+            tid, head_out = self.head_traces[c % self.cols if COLSPLIT else None]
+            ttnn.execute_trace(self.md, tid, cq_id=0, blocking=False)
             ttnn.synchronize_device(self.md)
-            g = self.head.gather_logits(self.head_out).reshape(rows, T, -1)
+            g = self.head.gather_logits(head_out).reshape(rows, T, -1)
             for u, off in users:
                 for r in range(rows):
                     out[r * U + u] = g[r, off]
@@ -231,7 +301,18 @@ class DSV41PrefillModel:
         for u in range(self.U):
             c, off = divmod(u * C + S - 1 - s0, T)
             if c not in full:
-                full[c] = self.head.forward(xs[c], pres[c])
+                if (
+                    COLSPLIT
+                ):  # chunk c is owned by column c % 8 (list element c // 8): gather over the columns, take the owner's block
+                    mc, cc = self.layers[0][1].L.mesh_config, self.layers[0][1].L.ccl
+                    g, o = divmod(c, self.cols)
+                    xg = mc.allgather(xs[g], cc, axis=1, dim=0)
+                    pg = mc.allgather(pres[g], cc, axis=1, dim=0)
+                    xo = ttnn.slice(xg, [o * T, 0, 0, 0], [(o + 1) * T, 1, xg.shape[2], xg.shape[3]])
+                    po = ttnn.slice(pg, [o * T, 0, 0, 0], [(o + 1) * T, 1, pg.shape[2], pg.shape[3]])
+                    full[c] = self.head.forward(xo, po)
+                else:
+                    full[c] = self.head.forward(xs[c], pres[c])
             lg[u] = ttnn.slice(
                 full[c], [0, 0, off, 0], [1, 1, off + 1, full[c].shape[3]]
             )  # only the row of the last real token is read back
@@ -350,9 +431,10 @@ class DSV41PrefillModel:
         """Release the chunk trace and the per-chunk buffers (a different chunk size / padded prompt length needs a new capture)."""
         if getattr(self, "dyn_trace", None) is not None:
             ttnn.release_trace(self.md, self.dyn_trace)
-        if getattr(self, "head_trace", None) is not None:
-            ttnn.release_trace(self.md, self.head_trace)
-        self.dyn_trace = self.head_trace = None
+        for tid, _ in getattr(self, "head_traces", {}).values():
+            ttnn.release_trace(self.md, tid)
+        self.head_traces = {}
+        self.dyn_trace = None
         for _, pl in self.layers:
             pl.pa.dyn = pl.pa.halo = pl.pa.lat_buf = None
             if pl.pa.sparse is not None:
@@ -412,11 +494,14 @@ class DSV41PrefillModel:
             for x in list(xs0) + list(pres0):
                 ttnn.deallocate(x)
             if own_head:
-                self.head.forward(self.head_in, self.head_pre)  # compile
-                ttnn.synchronize_device(self.md)
-                self.head_trace = ttnn.begin_trace_capture(self.md, cq_id=0)
-                self.head_out = self.head.forward(self.head_in, self.head_pre)
-                ttnn.end_trace_capture(self.md, self.head_trace, cq_id=0)
+                self.head_traces = {}
+                for key in range(self.cols) if COLSPLIT else [None]:
+                    self._head_body(key)  # compile
+                    ttnn.synchronize_device(self.md)
+                    tid = ttnn.begin_trace_capture(self.md, cq_id=0)
+                    out_t = self._head_body(key)
+                    ttnn.end_trace_capture(self.md, tid, cq_id=0)
+                    self.head_traces[key] = (tid, out_t)
             for _, pl in self.layers:
                 pl.pa.reset_dyn()  # before any capture only
             ttnn.synchronize_device(self.md)

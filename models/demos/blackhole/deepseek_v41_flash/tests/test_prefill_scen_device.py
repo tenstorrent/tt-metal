@@ -110,8 +110,8 @@ def test_prefill_scenarios(mesh_device):
     pool = ThreadPoolExecutor(max_workers=2)
     futs = {}
     max_rope = max(256, MAX_S + 64)
-    submit = (
-        lambda L: futs.setdefault(L, pool.submit(load_layer, L, True, max_rope, SPARSE)) if L in layer_ids else None
+    submit = lambda L: (
+        futs.setdefault(L, pool.submit(load_layer, L, True, max_rope, SPARSE)) if L in layer_ids else None
     )
     for L in layer_ids[:2]:
         submit(L)
@@ -270,6 +270,8 @@ def test_prefill_scenarios(mesh_device):
                     f"{n_ch} chunks of {CH} x {UPR} users/row per iteration: replay/chunk {tm['replay_per_chunk'] / n_all:.3f} s, host/chunk "
                     f"{tm['host_per_chunk'] / n_all:.3f} s, head+readback {tm['head_readback']:.2f} s"
                 )
+            if os.environ.get("DSV41_SAVE_LOGITS"):
+                torch.save(lg_d, f"{os.environ['DSV41_SAVE_LOGITS']}_{S}_{CH}.pt")
             if fin is not None and "prefill_logits" in fin:
                 log(
                     f"TRACED FIRST TOKEN {tag}: logits PCC {R.pcc(lg_d, fin['prefill_logits']):.5f}, argmax match {int((lg_d.argmax(-1) == fin['prefill_argmax']).sum())}/{B}"
@@ -299,6 +301,8 @@ def test_prefill_scenarios(mesh_device):
         if logits is None:
             continue  # this scenario failed (e.g. DRAM OOM): go on with the next one
         mem(md, f"{tag} after prefill")
+        if os.environ.get("DSV41_SAVE_LOGITS"):
+            torch.save(logits, f"{os.environ['DSV41_SAVE_LOGITS']}_eager_{S}_{CH}.pt")
         if fin is not None and "prefill_logits" in fin:
             p = R.pcc(logits, fin["prefill_logits"])
             log(

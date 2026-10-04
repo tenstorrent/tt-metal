@@ -18,7 +18,31 @@ import ttnn
 from models.common.modules.moe.tt_moe_decode import TTMoEDecode, _TTMoEDecodeBuffers
 from models.common.modules.moe.tt_moe_decode_config import TTMoEDecodeConfig
 
+_PROF_EVERY = int(
+    os.environ.get("DSV41_PROF_EVERY", "0")
+)  # >0: drain the device profiler every k chunk groups (op-table profiling)
+_MARKS = (
+    []
+)  # (phase, device-operation id at its end); written to $DSV41_PROF_MARKS at the end of every layer forward (profiling only)
+
+
+def _mark(tag):
+    if _PROF_EVERY:
+        from ttnn import _ttnn
+
+        _MARKS.append((tag, int(_ttnn.get_device_operation_id())))
+
+
+COLSPLIT = (
+    os.environ.get("DSV41_COLSPLIT", "0") == "1"
+)  # split the token-wise work over the 8 mesh columns (forward_cols)
 _FREE = set(os.environ.get("DSV41_PF_FREE", "a,a_c,h,hh,h_tok,m,sh,x2,hs").split(","))
+
+
+def _drain(L, i, every=3):
+    if _PROF_EVERY and i % every == every - 1:
+        ttnn.synchronize_device(L.mesh_device)
+        ttnn.ReadDeviceProfiler(L.mesh_device)
 
 
 def _free(tag, t, keep=False):
@@ -29,11 +53,36 @@ def _free(tag, t, keep=False):
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "configs" / "deepseek_v41_flash.yaml"
 
 
+def with_height_shard(cfg, T):
+    """moe_compute holds at most 32 * output_height_shard_dim * num_data_parallel_cores tokens per call (4 dispatch devices x T): raise
+    output_height_shard_dim for T > 128 (env DSV41_OHSD overrides). No-op for T <= 128."""
+    d = int(os.environ.get("DSV41_OHSD", "0")) or (4 if T <= 128 else 4 * (T // 128))
+    if d == cfg.compute.output_height_shard_dim:
+        return cfg
+    return cfg.model_copy(update={"compute": cfg.compute.model_copy(update={"output_height_shard_dim": d})})
+
+
+def big_batch_scores_config(T, k=6):
+    """dispatch_input_expert_scores_memory_config for T > 96 tokens/device (stock: one token per core, T=128 needs 16x8 cores > 120)."""
+    if os.environ.get("DSV41_SCORES_CFG", "l1") == "l1":
+        return ttnn.L1_MEMORY_CONFIG
+    sh = T // 64
+    spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+        [sh, k],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, spec)
+
+
 class DSV41PrefillMoE:
     """``DSV41MoEBlock.forward`` at batch_per_device = T over the expert weights of an existing decode MoE block."""
 
     def __init__(self, moe_block, T=32, buffers=None):
         md = moe_block.mesh_device
+        T = T * int(
+            os.environ.get("DSV41_MOE_G", "1")
+        )  # G consecutive 32-token chunks per moe_compute call (default 1 = unchanged)
         text = CONFIG_PATH.read_text()
         text = text.replace("batch_per_device: 4 ", f"batch_per_device: {T} ", 1)
         text = text.replace("num_shared_experts: 1", "num_shared_experts: 0").replace(
@@ -42,6 +91,9 @@ class DSV41PrefillMoE:
         cfg = TTMoEDecodeConfig.from_yaml(text, topology=ttnn.Topology.Linear)
         if cfg.mesh_shape != tuple(md.shape):
             cfg = cfg.with_mesh_shape(tuple(md.shape))
+        cfg = with_height_shard(cfg, T)
+        if T > 96:
+            cfg = cfg.model_copy(update={"dispatch_input_expert_scores_memory_config": big_batch_scores_config(T)})
         if cfg.num_fast_reduce_outputs == 1:
             cfg = cfg.model_copy(
                 update={"reduce": cfg.reduce.model_copy(update={"output_memory_config": ttnn.DRAM_MEMORY_CONFIG})}
@@ -64,7 +116,18 @@ class DSV41PrefillMoE:
         self.decode = dec
 
     def forward(self, tt_x_gate, tt_x_tokens):
-        scores, indices = self.gate.forward(tt_x_gate)
+        n = tt_x_gate.shape[2] // 32
+        if (
+            n > 1
+        ):  # the router kernels take <= 32 tokens: run them per 32-token slice, concatenate the [T,1,1,k] results
+            parts = [
+                self.gate.forward(ttnn.slice(tt_x_gate, [0, 0, 32 * i, 0], [1, 1, 32 * (i + 1), tt_x_gate.shape[3]]))
+                for i in range(n)
+            ]
+            scores = ttnn.concat([p[0] for p in parts], dim=0)
+            indices = ttnn.concat([p[1] for p in parts], dim=0)
+        else:
+            scores, indices = self.gate.forward(tt_x_gate)
         if indices.dtype != ttnn.uint16:
             indices = ttnn.typecast(indices, ttnn.uint16)
         if indices.layout != ttnn.ROW_MAJOR_LAYOUT:
@@ -76,25 +139,152 @@ class DSV41PrefillMoE:
         return self.decode.forward(tt_x=tt_x_tokens, tt_scores=scores, tt_indices=indices, layer_id=0)
 
 
+def shared_big(sh, h):
+    """Shared expert on M = G*32 tokens in one go (the tuned DSV41SharedExpertV2 configs are per_core_M = 1, i.e. 32 tokens, and re-read the
+    35 MB of weights per call): same maths / dtypes (bfp8 weights, HiFi4 fp32 accumulate, bf16 gate/up, fp32 out), automatic matmul configs.
+    h [1,1,M,D] bf16 -> [1,1,M,D] fp32."""
+    gu = ttnn.linear(
+        h,
+        sh.w01,
+        dtype=sh.mid_dtype,
+        compute_kernel_config=sh.ckc,
+        core_grid=ttnn.CoreGrid(y=8, x=8),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    g, u = gu[:, :, :, : sh.inter], gu[:, :, :, sh.inter :]
+    act = ttnn.multiply(
+        g,
+        u,
+        input_tensor_a_activations=sh.act_a,
+        input_tensor_b_activations=sh.act_b,
+        dtype=sh.mid_dtype,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ttnn.deallocate(gu)
+    out = ttnn.linear(
+        act,
+        sh.w2,
+        dtype=ttnn.float32,
+        compute_kernel_config=sh.ckc,
+        core_grid=ttnn.CoreGrid(y=8, x=8),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ttnn.deallocate(act)
+    return out
+
+
 class DSV41PrefillLayer:
     def __init__(self, layer, prefill_attn, pmoe, T=32):
         self.L, self.pa, self.pmoe, self.T = layer, prefill_attn, pmoe, T
         self.debug = None  # set to a dict: per-chunk lists of a_c / hh / m / sh are kept (not freed) for diagnostics
 
     def forward(self, xs, pres, S, s0=0):
+        if COLSPLIT:
+            return self.forward_cols(xs, pres, S, s0)
+        return self.forward_full(xs, pres, S, s0)
+
+    def forward_cols(self, xs, pres, S, s0=0):
+        """Column-split layer: xs / pres hold only the 32-token chunks THIS column owns (chunk i of the row belongs to column i % 8, so list
+        element g = chunk 8g + column); the 8 columns no longer repeat the token-wise work (mHC, router input, shared expert, expand).
+        Per group g of 8 chunks (256 consecutive tokens): all_gather of the attention input / MoE input over the columns, reduce_scatter
+        of the attention output over tokens, all_to_all of the MoE output (hidden shard -> own tokens). Needs DSV41_MOE_G=8.
+        """
+        L, T = self.L, self.T
+        n8 = len(xs)
+        assert self.pmoe.T == 8 * T, "column split needs DSV41_MOE_G=8"
+        mc, cc = L.mesh_config, L.ccl
+        eps = L.eps
+        _mark("start")
+        mix, hg = [], []
+        for i_, (x, p) in enumerate(zip(xs, pres)):
+            _drain(L, i_)
+            mix.append(L.mhc_attn.mixes(x))
+            h_own = L.mhc_attn.collapse_norm(x, p, L.attn_norm_w, eps)
+            hg.append(mc.allgather(h_own, cc, axis=1, dim=2))  # [1,1,256,D] consecutive tokens of group g
+            _free("hs", h_own)
+        _mark("mhc_attn")
+        h = ttnn.concat(hg, dim=2) if n8 > 1 else hg[0]
+        for t in hg:
+            ttnn.deallocate(t)
+        pa = self.pa
+        pa.rs_tokens = True
+        a = pa.forward_dyn(h) if pa.dyn is not None else pa.forward(h, S, s0=s0)  # [1,1,n8*32,D] own chunks
+        pa.rs_tokens = False
+        _free("h", h)
+        _mark("attention")
+        st = []
+        for g in range(n8):
+            _drain(L, g)
+            a_c = ttnn.slice(a, [0, 0, g * T, 0], [1, 1, (g + 1) * T, a.shape[3]])
+            x2 = L.mhc_attn.expand(a_c, xs[g], mix[g][1], mix[g][2])
+            _free("a_c", a_c)
+            f_pre, f_post, f_comb = L.mhc_ffn.mixes(x2)
+            hh = L.mhc_ffn.collapse_norm(x2, mix[g][0], L.ffn_norm_w, eps)
+            st.append((x2, f_pre, f_post, f_comb, hh))
+        _free("a", a)
+        _mark("mhc_expand_collapse")
+        ms = []
+        for g in range(n8):
+            _drain(L, g, 2)
+            hh_g = mc.allgather(st[g][4], cc, axis=1, dim=2)  # [1,1,256,D]
+            tok_g = ttnn.reshape(ttnn.to_layout(hh_g, ttnn.ROW_MAJOR_LAYOUT), [8 * T, 1, 1, hh_g.shape[3]])
+            mg = self.pmoe.forward(hh_g, tok_g)  # [1,1,256,D/8]
+            ttnn.deallocate(hh_g)
+            ttnn.deallocate(tok_g)
+            m_own = ttnn.experimental.all_to_all_async_generic(
+                mg, in_dim=3, out_dim=2, num_links=cc.num_links, topology=ttnn.Topology.Ring, cluster_axis=1
+            )
+            ttnn.deallocate(mg)
+            ms.append(m_own)
+        _mark("moe+allgather")
+        hh_all = ttnn.concat([e[4] for e in st], dim=2) if n8 > 1 else st[0][4]
+        sh_all = shared_big(L.shared, hh_all)
+        _mark("shared")
+        outs, pres_out = [], []
+        for g in range(n8):
+            _drain(L, g)
+            x2, f_pre, f_post, f_comb, hh = st[g]
+            sh = ttnn.slice(sh_all, [0, 0, g * T, 0], [1, 1, (g + 1) * T, sh_all.shape[3]])
+            x3 = L.mhc_ffn.expand(ms[g], x2, f_post, f_comb, sh)
+            outs.append(ttnn.to_memory_config(x3, ttnn.DRAM_MEMORY_CONFIG))
+            pres_out.append(ttnn.to_memory_config(f_pre, ttnn.DRAM_MEMORY_CONFIG))
+            for tag, t in (("x2", x2), ("hh", hh), ("m", ms[g]), ("sh", sh)):
+                _free(tag, t)
+        ttnn.deallocate(sh_all)
+        if n8 > 1:
+            ttnn.deallocate(hh_all)
+        _mark("expand_out")
+        if _PROF_EVERY and os.environ.get("DSV41_PROF_MARKS"):
+            import json
+
+            json.dump(_MARKS, open(os.environ["DSV41_PROF_MARKS"], "w"))
+        return outs, pres_out
+
+    def forward_full(self, xs, pres, S, s0=0):
         """xs: list of n chunks [T,1,4,D] fp32 (the mesh row's R = n*T tokens, user-major), pres: list of [T,1,1,4] fp32.
         -> (list of new streams, list of ffn_pre)."""
         L, T = self.L, self.T
         n = len(xs)
         eps = L.eps
-        mix = [L.mhc_attn.mixes(x) for x in xs]  # (pre, post, comb)
-        hs = [L.mhc_attn.collapse_norm(x, p, L.attn_norm_w, eps) for x, p in zip(xs, pres)]
+        _mark("start")
+        mix, hs = [], []
+        for i, (x, p) in enumerate(zip(xs, pres)):
+            mix.append(L.mhc_attn.mixes(x))  # (pre, post, comb)
+            hs.append(L.mhc_attn.collapse_norm(x, p, L.attn_norm_w, eps))
+            if _PROF_EVERY and i % (4 * _PROF_EVERY) == 4 * _PROF_EVERY - 1:
+                ttnn.synchronize_device(L.mesh_device)
+                ttnn.ReadDeviceProfiler(L.mesh_device)
+        if _PROF_EVERY:
+            ttnn.synchronize_device(L.mesh_device)
+            ttnn.ReadDeviceProfiler(L.mesh_device)
         h = ttnn.concat(hs, dim=2) if n > 1 else hs[0]
         for t in hs:
             _free("hs", t)
         if self.debug is not None:
             self.debug["hs"], self.debug["h"] = list(hs), h
+        _mark("mhc_attn")
         a = self.pa.forward_dyn(h) if self.pa.dyn is not None else self.pa.forward(h, S, s0=s0)
+        _mark("attention")
         _free("h", h)
         if self.debug is not None:
             ttnn.synchronize_device(L.mesh_device)
@@ -104,31 +294,70 @@ class DSV41PrefillLayer:
                 ttnn.to_torch(ttnn.get_device_tensors(a)[r * cols]).float().reshape(-1, a.shape[3])
                 for r in range(tuple(L.mesh_device.shape)[0])
             ]
+        if _PROF_EVERY:
+            ttnn.synchronize_device(L.mesh_device)
+            ttnn.ReadDeviceProfiler(L.mesh_device)
         outs, pres_out = [], []
-        for c in range(n):
-            a_c = ttnn.slice(a, [0, 0, c * T, 0], [1, 1, (c + 1) * T, a.shape[3]])
-            if self.debug is not None:
-                self.debug.setdefault("a", []).append(a_c)
-            x2 = L.mhc_attn.expand(a_c, xs[c], mix[c][1], mix[c][2])
-            _free("a_c", a_c)
-            f_pre, f_post, f_comb = L.mhc_ffn.mixes(x2)
-            hh, h_tok = L.mhc_ffn.collapse_norm_rm(x2, mix[c][0], L.ffn_norm_w, eps)
-            m = self.pmoe.forward(hh, h_tok)
-            m = L.mesh_config.allgather(m, L.ccl, axis=1, dim=3)
-            sh = L.shared.forward(hh)
-            if self.debug is not None:
-                for k_, v_ in (("hh", hh), ("m", m), ("sh", sh), ("x2", x2)):
-                    self.debug.setdefault(k_, []).append(v_)
-            x3 = L.mhc_ffn.expand(m, x2, f_post, f_comb, sh)
-            outs.append(ttnn.to_memory_config(x3, ttnn.DRAM_MEMORY_CONFIG))
-            pres_out.append(ttnn.to_memory_config(f_pre, ttnn.DRAM_MEMORY_CONFIG))
-            for tag, t in (
-                ("x2", x2),
-                ("hh", hh),
-                ("h_tok", h_tok),
-                ("m", m),
-                ("sh", sh),
-            ):  # x3 / f_pre may alias the outputs: left to the caller
-                _free(tag, t)
+        G = max(
+            1, getattr(self.pmoe, "T", T) // T
+        )  # MoE call covers G chunks of T tokens per device (moe_compute at T*G tokens/device)
+        for g0 in range(0, n, G):
+            cs = list(range(g0, min(n, g0 + G)))
+            if len(cs) < G:  # tail group smaller than the MoE batch: run its chunks one by one through a G=1 front-end
+                raise RuntimeError(f"chunk count {n} is not a multiple of the MoE group {G}")
+            st = []
+            for c in cs:
+                a_c = ttnn.slice(a, [0, 0, c * T, 0], [1, 1, (c + 1) * T, a.shape[3]])
+                if self.debug is not None:
+                    self.debug.setdefault("a", []).append(a_c)
+                x2 = L.mhc_attn.expand(a_c, xs[c], mix[c][1], mix[c][2])
+                _free("a_c", a_c)
+                f_pre, f_post, f_comb = L.mhc_ffn.mixes(x2)
+                hh, h_tok = L.mhc_ffn.collapse_norm_rm(x2, mix[c][0], L.ffn_norm_w, eps)
+                st.append((x2, f_pre, f_post, f_comb, hh, h_tok))
+            _mark("mhc_expand_collapse")
+            if G == 1:
+                hh_g, tok_g = st[0][4], st[0][5]
+            else:
+                hh_g = ttnn.concat([e[4] for e in st], dim=2)
+                tok_g = ttnn.concat([e[5] for e in st], dim=0)
+            mg = self.pmoe.forward(hh_g, tok_g)
+            mg = L.mesh_config.allgather(mg, L.ccl, axis=1, dim=3)
+            _mark("moe+allgather")
+            big = (
+                G > 1
+                and os.environ.get("DSV41_SHARED_BIG", "1") == "1"
+                and hasattr(L.shared, "w01")
+                and hasattr(L.shared, "act_a")
+            )
+            sh_g = shared_big(L.shared, hh_g) if big else None
+            for j, (x2, f_pre, f_post, f_comb, hh, h_tok) in enumerate(st):
+                m = mg if G == 1 else ttnn.slice(mg, [0, 0, j * T, 0], [1, 1, (j + 1) * T, mg.shape[3]])
+                _mark("slice")
+                sh = (
+                    ttnn.slice(sh_g, [0, 0, j * T, 0], [1, 1, (j + 1) * T, sh_g.shape[3]])
+                    if big
+                    else L.shared.forward(hh)
+                )
+                _mark("shared")
+                if self.debug is not None:
+                    for k_, v_ in (("hh", hh), ("m", m), ("sh", sh), ("x2", x2)):
+                        self.debug.setdefault(k_, []).append(v_)
+                x3 = L.mhc_ffn.expand(m, x2, f_post, f_comb, sh)
+                outs.append(ttnn.to_memory_config(x3, ttnn.DRAM_MEMORY_CONFIG))
+                pres_out.append(ttnn.to_memory_config(f_pre, ttnn.DRAM_MEMORY_CONFIG))
+                _mark("expand_out")
+                for tag, t in (("x2", x2), ("hh", hh), ("h_tok", h_tok), ("m", m), ("sh", sh)):
+                    _free(tag, t)
+            if _PROF_EVERY and (g0 // G) % _PROF_EVERY == _PROF_EVERY - 1:
+                ttnn.synchronize_device(L.mesh_device)
+                ttnn.ReadDeviceProfiler(L.mesh_device)
+            if G > 1:
+                for t in (hh_g, tok_g, mg) + ((sh_g,) if big else ()):
+                    ttnn.deallocate(t)
         _free("a", a)
+        if _PROF_EVERY and os.environ.get("DSV41_PROF_MARKS"):
+            import json
+
+            json.dump(_MARKS, open(os.environ["DSV41_PROF_MARKS"], "w"))
         return outs, pres_out

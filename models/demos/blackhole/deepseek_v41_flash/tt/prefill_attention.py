@@ -79,6 +79,7 @@ class DSV41PrefillAttention:
         self.last_lat = (
             None  # [U,1,Sc_pad,512] latents of the last prefill (owner layers; readers use ``source.pre.last_lat``)
         )
+        self.rs_tokens = False  # column-split mode (DSV41PrefillLayer.forward_cols): the attention output is reduce-scattered over tokens
         self.halo = None  # [U,1,128,512] kv rows (post RoPE) of the 128 positions before the next chunk (None before the first chunk)
         self.lat_all = None  # owner layers: [U,1,L,512] latents of every group closed so far (RoPE'd)
         self.ckc_sdpa = attn.ckc_sdpa
@@ -420,11 +421,43 @@ class DSV41PrefillAttention:
         finally:
             self.rope_tabs = saved
 
+    def _reduce_scatter_tokens(self, part):
+        """[1,1,R,D] partial sums (per column) -> [1,1,R/8,D]: chunk g of the result is this column's 32 rows of rows [256g, 256g+256) summed over
+        the columns (the owner of 32-token chunk i of the row is column i % 8)."""
+        a, R = self.a, part.shape[2]
+        cc = a.ccl
+        outs = []
+        for i in range(0, R, 256):
+            piece = ttnn.slice(part, [0, 0, i, 0], [1, 1, i + 256, part.shape[3]])
+            outs.append(
+                ttnn.experimental.reduce_scatter_minimal_async(
+                    piece,
+                    dim=2,
+                    multi_device_global_semaphore=cc.get_rs_ping_pong_semaphore(),
+                    num_links=cc.num_links,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    topology=cc.topology,
+                    cluster_axis=1,
+                    barrier_semaphore=cc.get_barrier_semaphore(),
+                )
+            )
+            ttnn.deallocate(piece)
+        ttnn.deallocate(part)
+        out = ttnn.concat(outs, dim=2) if len(outs) > 1 else outs[0]
+        if len(outs) > 1:
+            for o in outs:
+                ttnn.deallocate(o)
+        return out
+
     def _allreduce(self, part):
         """All-reduce over the 8 mesh columns in pieces of <= AR_ROWS rows. A single reduce_scatter + all_gather of [1,1,512,5120] bf16
         silently corrupts one tile-row block (sometimes NaN) on this build (tests/test_prefill_attn_debug.py); pieces of 256 rows or
         less are exact."""
         a, R = self.a, part.shape[2]
+        if (
+            self.rs_tokens
+        ):  # column-split mode: reduce-scatter over the TOKEN dim in pieces of 256 rows -> own 32-row chunk of every group of 8
+            return self._reduce_scatter_tokens(part)
         if R <= AR_ROWS:
             return a.mesh_config.allreduce(part, a.ccl, axis=1)
         pieces = [
