@@ -316,18 +316,16 @@ ALWI void cosh_tile_init() { MATH(SFPU_UNARY_INIT_FN(cosh, ckernel::sfpu::cosh_i
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void cosh_tile(uint32_t idst) {
-#if defined(ARCH_BLACKHOLE)
-    if constexpr (!is_fp32_dest_acc_en) {
-        MATH(SFPU_UNARY_CALL(
+    MATH(if constexpr (ckernel::sfpu::cosh_bf16_whole_tile && !is_fp32_dest_acc_en) {
+        SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             is_fp32_dest_acc_en,
             calculate_cosh,
             (APPROX, is_fp32_dest_acc_en, 32),
             idst,
-            VectorMode::None));
+            VectorMode::None);
         return;
-    }
-#endif
+    });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
