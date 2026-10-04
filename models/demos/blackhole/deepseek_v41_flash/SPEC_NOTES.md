@@ -117,3 +117,34 @@ changes.diff (= changes_stage1.diff, `git apply --check` OK). Opt-in: `DSV41_SPE
 ## Not verified / next
 * ISL > 512 for ratio-1 layers and > 1024 for ratio 2 needs the indexer (stage 2), ring 160 in pool/handoff (stage 3: today `SpecPagedChain` builds its own pool with ring_rows = 160 and starts from an empty cache, the prompt is replayed through the device).
 * Pool is bf16 (fp8 pool untested with spec). Engram / drafter rings unchanged.
+
+
+## Stages 2 and 3 (multi-query indexer, ring 160, drafter seeding)
+# Paged spec verify: user-3 outlier, stage 2 (multi-query indexer, ISL 2k), stage 3 (ring 160, drafter seeding) — against main f06259db6f4
+
+changes.diff (`git apply --check` OK): `tt/spec_paged.py` (SpecIndexer + indexer wiring in the chain/attention), `tests/test_spec_loop.py` (long prompts, teacher-forced replay of the plain stream, tail-replay check), `tt/dsv41_model.py` (one line: `ring_rows` from `DSV41_RING_ROWS`, default 128 = unchanged).
+
+## 0. User-3 token-165 outlier (bounded investigation)
+Teacher-forced replay of the paged PLAIN stream through the k=3 verify step (`DSV41_TEACHER_FULL=1`: every verify row sees exactly the plain history; 8 distinct prompts x 200 positions = 1600 rows, spec4/spec7_tf_k3b.log):
+14 argmax mismatches (0.9%). 13 are near-ties (plain top1-top2 gap 0.002-0.5, spec gap 0.03-0.58). User 3, position 244 (block row 0): plain gap 2.134, spec argmax differs with spec gap 0.819, and user 3 mismatches again at position 262 (gap 0.265 / 0.075).
+It reproduces under teacher forcing, so it is not trajectory drift; it is not at a ring wrap (slot 84) or a ratio-2 group boundary (even position, block row 0). Layer-level paged-attention PCC vs the original is 0.996+ out to position 180, the paged_kv_step edit is exercised by every other row. Most likely a MoE routing near-tie flip
+(1-row vs 4-row gate numerics change an expert -> ~1-2 logit shift) but not isolated (needs per-layer routing capture of the two paths at that position). Not a systematic attention error: 99.1% of rows agree.
+
+## 1. Stage 2: multi-query indexer (ISL 2k)
+`SpecIndexer(DSV41DecodeIndexer)` (matmul backend): the n rows of a user are stacked on the head axis ([U,1,32n,128] @ K_u^T), per-row head weights, selection with per-ROW valid counts (causal inside the block); keys of group-completing rows are written
+first (one `paged_update_cache` per block index, others -1); ratio-2 keys only from odd positions. Index-source layers 2/8/14/20 own key slabs (bfp8, [U,1,n_alloc,128]), 24/28/32/36 score against layer 20's slab, other layers reuse `st["topk_ids"]`.
+Enabled automatically when `DSV41_CTX > 512`. `tests/test_spec_loop.py DSV41_PROMPT_DIR=/mnt/tt-data/ssinghal/dsv4-prefill-s2048b1f` feeds the REAL 2048-token prompt through the device (tiled over 16 users) and checks the first token against the CPU reference.
+Results (4 users/mesh row, 16 users, .46):
+* plain (k=0, n=1 = the indexer at n=1): prompt replay 2048 tokens in 102 s, **first token 223 == CPU reference**, 50.2 ms/token wall, 19.9 tok/s/user at ISL 2048 (spec7_isl2k_k0.log).
+* k=3: prompt replay 512 blocks in 41 s, **first token == CPU reference**, 22 rounds: 2.045 accepted/round (P(m>=1,2,3) = 0.955/0.545/0.545), 3.05 tokens/round, round wall 79.8 ms = verify 61.6 + draft/commit 10.4 + host 7.7 => **38.1 tok/s/user (1.9x plain)** (spec7_isl2k_k3b.log).
+* Exactness vs plain at ISL 2k: first 25 generated tokens identical for all users, then a tie (plain top1-top2 gap 0.001 vs spec 0.266).
+Not verified: acceptance statistics at ISL 2k over many prompts (one real prompt, 22 rounds), ISL > 2k, fp8 pool, the per-row indexer top-512 vs a host top-512 reference (only end-to-end first token + stream equality).
+
+## 2. Stage 3
+* Ring 160 in the pool / hand-off: `PagedStateSink` and the decode attention take `ring_rows` from the pool (already parametrised); the generator's pool now reads `DSV41_RING_ROWS` (default 128). Full device prefill -> paged hand-off -> decode e2e test at S=128 with `DSV41_RING_ROWS=160` PASSES with numbers identical to the ring-128 baseline
+  (first token PCC 0.97198, argmax 14/16; teacher-forced steps 0.9833/0.9753/0.9796; ring PCC min 0.928; spec8_e2e_ring160.log vs h47i_full_s128.log): ring 160 is a numerical no-op for non-spec decode. Cost: 40 layers x 4 users x 32 extra rows x 1 KiB = 5 MiB/chip.
+* Drafter seeding at hand-off WITHOUT touching prefill ("tail replay"): after prefill the pool / compressor state is complete but the drafter's three main_kv rings are empty and `prev_cs` is only valid for the last prompt token. Replay the LAST 128 prompt tokens through the verify step from an EVEN start position
+  p0 = ((S-128)//2)*2 with the accept count forced (the rewrite of the already-written positions is idempotent, even rows write no latent so `prev_cs` at the start is never read). Verified emulation at ISL 2048 (`DSV41_TAIL_CHECK=1`: after the full replay, prev_cs of all ratio-2 owners is ZEROED, then [1920, 2048) is replayed in 32 blocks):
+  **first token identical**; drafts d1,d2 identical, d3..d5 differ (0.40 of entries equal; the verify/MoE path is not bit-reproducible run to run, plain-vs-plain streams already differ across builds) and the loop after the tail replay behaves normally (2.71 accepted/round, 47.2 tok/s/user over 7 rounds, spec8_tail_2k.log).
+  Cost ~2.6 s per batch (32 blocks x 80 ms). Not verified: seeding after a REAL device prefill + hand-off (this container of tests starts from the replay path), ragged per-user prompt lengths (the verify step takes per-user positions, so per-user p0 works in principle).
+* Direct tapping of layers 37-39 hidden inside the prefill chunks would avoid the 2.6 s but changes prefill_model (not done).

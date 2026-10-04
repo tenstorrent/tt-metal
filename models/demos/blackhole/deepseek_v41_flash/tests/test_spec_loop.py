@@ -30,7 +30,10 @@ from models.demos.blackhole.deepseek_v41_flash.tt.spec_decoder import SpecDecode
 from models.demos.blackhole.deepseek_v41_flash.tt.spec_paged import SpecPagedChain
 from models.demos.blackhole.deepseek_v41_flash.tt.spec_state import SpecStepState
 
-CHAIN = os.environ.get("DSV41_CHAIN", "/mnt/tt-data/ssinghal/dsv4-chain-g")
+PROMPT_DIR = os.environ.get(
+    "DSV41_PROMPT_DIR"
+)  # e.g. /mnt/tt-data/ssinghal/dsv4-prefill-s2048b1f: ONE real long prompt (tiled over the users) + the CPU reference first token
+CHAIN = PROMPT_DIR or os.environ.get("DSV41_CHAIN", "/mnt/tt-data/ssinghal/dsv4-chain-g")
 MTP_REF = os.environ.get("DSV41_MTP_REF", "/mnt/tt-data/ssinghal/dsv4-spec-accept/mtp_ref.pt")
 TAG = os.environ.get("DSV41_TAG", "")  # distinguishes partial-layer runs
 GREEDY_NP = f"/mnt/tt-data/ssinghal/dsv4-spec-accept/greedy_dev_g{TAG}.pt"  # non-paged plain greedy (reference of the paged runs)
@@ -96,10 +99,19 @@ def test_spec_loop(mesh_device):
     B = rows * U
     reps = B // B0
     prompt = toks["prefill_tokens"].repeat(reps, 1)
-    res = torch.load("/mnt/tt-data/ssinghal/dsv4-spec-accept/results_snapshot.pt")
-    ref_all = res["stream"][:B0].repeat(
-        reps, 1
-    )  # CPU greedy stream (prompt + 64 tokens): informational reference + tokens padding the last prompt block
+    if (
+        PROMPT_DIR
+    ):  # long-prompt mode: reference = prompt + the CPU reference first token (+ its decode tokens); padded so block slicing works
+        fin = torch.load(os.path.join(PROMPT_DIR, "final.pt"))
+        tail = torch.cat([fin["prefill_argmax"].reshape(B0, 1), toks["decode_tokens"].reshape(B0, -1)], dim=1)
+        ref_all = torch.cat([toks["prefill_tokens"], tail, torch.zeros(B0, 16, dtype=torch.long)], dim=1).repeat(
+            reps, 1
+        )
+    else:
+        res = torch.load("/mnt/tt-data/ssinghal/dsv4-spec-accept/results_snapshot.pt")
+        ref_all = res["stream"][:B0].repeat(
+            reps, 1
+        )  # CPU greedy stream (prompt + 64 tokens): informational reference + tokens padding the last prompt block
     chain = (
         SpecPagedChain(md, users_per_row=U, n=n, ctx=CTX, log=log)
         if PAGED
@@ -110,7 +122,9 @@ def test_spec_loop(mesh_device):
     pool = ThreadPoolExecutor(max_workers=2)
     futs = {}
     submit = lambda L: (
-        futs.setdefault(L, pool.submit(load_layer, L, max_seq_len=CTX + 64 if PAGED else 256))
+        futs.setdefault(
+            L, pool.submit(load_layer, L, max_seq_len=CTX + 64 if PAGED else 256, with_indexer=PAGED and CTX > 512)
+        )
         if L in layer_ids
         else None
     )
@@ -133,7 +147,11 @@ def test_spec_loop(mesh_device):
         layer, attn = chain.build_layer(L, ref, futs.pop(L).result())
         key = getattr(attn, "ratio", 0)
         if key not in groups:
-            groups[key] = DSV41PagedStepState(attn, max_pos=CTX + 64) if PAGED else SpecStepState(attn)
+            groups[key] = (
+                DSV41PagedStepState(attn, max_pos=CTX + 64, with_indexer=CTX > 512, per_user_valid=True)
+                if PAGED
+                else SpecStepState(attn)
+            )
         built.append((L, layer, key))
     log(f"built {len(layer_ids)} layers in {time.time() - t0:.0f}s")
     engram_ids = [l for l in (1, 14) if l in layer_ids]
@@ -236,7 +254,29 @@ def test_spec_loop(mesh_device):
                 f"DEBUG block {r}: logits finite {float(torch.isfinite(lg).float().mean()):.3f} absmax {float(torch.nan_to_num(lg).abs().max()):.1f} argmax tokens user0 {a[0].tolist()}"
             )
     log(f"prompt phase: {nb} blocks of {n} through the device in {time.time() - t0:.1f}s")
-    last = (S - 1) - (nb - 1) * n  # block index of position S-1 in the last prompt block
+    last_start = (nb - 1) * n  # first position of the last fed block
+    if os.environ.get("DSV41_TAIL_CHECK") == "1":
+        # ---- hand-off emulation: after a real PREFILL the pool / compressor state is complete but (a) the drafter rings are empty and (b) ``prev_cs`` is only valid for the
+        # last prompt token. The drafter is seeded by replaying the LAST 128 prompt tokens through the verify step from an EVEN start position (even rows write no latent, so
+        # ``prev_cs`` at the start is never read). Check: corrupt prev_cs, replay [p0, S), the first token and the 5 drafts must equal the full-replay ones. ----
+        first0, d0 = a[:, (S - 1) - (nb - 1) * n].clone(), d.clone()
+        for _, layer, _ in dec.layers:
+            pc = getattr(layer.attention, "prev_cs", None)
+            if pc is not None:
+                ttnn.copy(ttnn.zeros_like(pc), pc)
+        p0 = max(0, ((S - 128) // 2) * 2)
+        nb2 = -(-(S - p0) // n)
+        for r in range(nb2):
+            b0 = p0 + r * n
+            base = torch.full((B,), b0, dtype=torch.long)
+            dec.set_force((S - 1 - b0) if r == nb2 - 1 else n - 1)
+            a, m, d = run_round(ref_all[:, b0 : b0 + n].clone(), base)
+        first1 = a[:, (S - 1) - (p0 + (nb2 - 1) * n)]
+        log(
+            f"TAIL_REPLAY start {p0} ({nb2} blocks): first token equal {bool((first1 == first0).all())}; drafts d1..d5 equal in {float((d[:, :BLOCK] == d0[:, :BLOCK]).float().mean()):.3f} of entries"
+        )
+        last_start = p0 + (nb2 - 1) * n
+    last = (S - 1) - last_start  # block index of position S-1 in the last prompt block
     first = a[:, last].clone()  # device greedy t_S
     X = torch.zeros(B, n, dtype=torch.long)
     X[:, 0] = first
@@ -247,7 +287,7 @@ def test_spec_loop(mesh_device):
         f"device first token vs CPU reference stream t_S: match {(first == ref_all[:, S]).float().mean():.2f}; first-token distinct values {sorted(set(first.tolist()))[:6]}"
     )
     base = torch.full((B,), S, dtype=torch.long)
-    if k > 0:
+    if k > 0 and os.environ.get("DSV41_TEACHER", "1") == "1" and not PROMPT_DIR:
         for a_, s_ in snaps2:  # refresh in place (no allocation after the trace capture)
             if s_ is not None:
                 ttnn.copy(a_.prev_cs, s_)
@@ -274,6 +314,49 @@ def test_spec_loop(mesh_device):
         )
         dec.set_force(-1)
         dec.restore_states(snaps2)
+
+    if k > 0 and os.environ.get("DSV41_TEACHER_FULL") == "1":
+        # ---- teacher-forced replay of the PLAIN stream (same mode, k = 0 run): at every position the verify row sees exactly the plain history, so any argmax
+        # difference is numerics of the 1+k-row path (or a bug), not trajectory drift. Reports mismatches with the top1-top2 gaps of both paths. ----
+        pl = torch.load(GREEDY)
+        ps, pgap = (
+            pl["stream"],
+            pl["gap"],
+        )  # ps[b, i] = generated token i (position S + i); pgap[b][i - 1] = gap of the argmax that produced token i
+        dec.set_force(n - 1)
+        base_t = torch.full((B,), S, dtype=torch.long)
+        mism, total = [], 0
+        for r in range((ps.shape[1] - 1) // n):
+            if int(base_t[0]) + n - 1 > MAXPOS:
+                break
+            Xt = ps[:, r * n : r * n + n].clone()
+            if bool((Xt < 0).any()):
+                break
+            a_t, _, _ = run_round(Xt, base_t)
+            v2 = torch.cat(
+                [ttnn.to_torch(ttnn.get_device_tensors(dec.top2)[q * cols]).reshape(U * n, -1) for q in range(rows)]
+            ).float()
+            t2 = v2.topk(2, dim=-1).values.reshape(B, n, 2)
+            for j in range(n):
+                t = r * n + j + 1  # generated index predicted by row j
+                if t >= ps.shape[1] or int((ps[:, t] < 0).sum()) == B:
+                    continue
+                for b in range(B0):  # the B0 distinct prompts (user b + B0 repeats b)
+                    if int(ps[b, t]) < 0 or len(pgap[b]) < t:
+                        continue
+                    total += 1
+                    if int(a_t[b, j]) != int(ps[b, t]):
+                        mism.append((b, int(base_t[b]) + j, t, float(pgap[b][t - 1]), float(t2[b, j, 0] - t2[b, j, 1])))
+            base_t += n
+        log(
+            f"TEACHER_FULL k={k}: {len(mism)} argmax mismatches of {total} rows vs the plain stream (distinct prompts 0..{B0 - 1})"
+        )
+        for b, pos_, t, gp, gs in mism:
+            log(
+                f"  TF_MISMATCH user {b} position {pos_} (gen token {t}, block row {(pos_ - S) % n}): plain gap {gp:.3f}, spec gap {gs:.3f}"
+            )
+        dec.set_force(-1)
+        return
 
     gen = [[int(first[b])] for b in range(B)]
     done = torch.zeros(B, dtype=torch.bool)

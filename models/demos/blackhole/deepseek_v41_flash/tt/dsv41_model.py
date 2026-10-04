@@ -73,6 +73,9 @@ class Model:
             self.num_pages,
             len(self.layer_ids),
             max_ctx + 128,
+            ring_rows=int(
+                os.environ.get("DSV41_RING_ROWS", "128")
+            ),  # 160 = window + speculative-decoding slack (tt/spec_paged.py RING_SPEC)
             dtype=kv_dtype,
         )
         self.sink = PagedStateSink(mesh_device, self.pool, self.U)
