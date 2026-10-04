@@ -120,7 +120,7 @@ def cap_dump(original, root, receipt, memory=available_memory):
     return bounded
 
 
-def profile(result, groups):
+def profile(result, groups, protocol):
     models, arguments = result
     assert len(models) == len(arguments) == 1
     args = arguments[0]
@@ -146,15 +146,15 @@ def profile(result, groups):
         "tensor_dtypes": dtypes,
         "dummy_weights": args.dummy_weights,
     }
-    validate_profile(row)
+    validate_profile(row, protocol)
     return row
 
 
-def validate_profile(row):
+def validate_profile(row, protocol):
     assert row["kind"] == "stock-vllm-profile-v1" and row["model_name"] == MODEL and row["n_layers"] == 32
     assert (
         row["mesh_shape"] == [1, 8]
-        and row["max_seq_len"] == 32768
+        and row["max_seq_len"] == {"chunked": 32768, "structured": 131072}[protocol]
         and row["instruct"] is True
         and row["dummy_weights"] is False
     )
@@ -182,7 +182,7 @@ def observe(original, target, groups, source, phase):
 
     def observed(*args, **kwargs):
         result = original(*args, **kwargs)
-        row = profile(result, groups)
+        row = profile(result, groups, os.environ["FORMATTER_PAIR_PROTOCOL"])
         with Path(target).open("x") as stream:
             stream.write(
                 json.dumps(

@@ -20,16 +20,20 @@ def input_gate(storage, protocol, snapshot):
     return storage
 
 
-def completed(status, phase, native, payload_hash):
-    assert status["complete"] and status["all_three_assertions_completed"] and status["exit_code"] in (0, 1)
+def completed(status, phase, native, payload_hash, protocol):
+    assert status["complete"] and status["protocol"] == protocol and status["exit_code"] in (0, 1)
+    if protocol == "chunked":
+        assert status["all_three_assertions_completed"] and status["payloads_sha256"] == payload_hash
+    else:
+        assert protocol == "structured" and status["structured_scope"]["completed"] == 32
     assert status["source"] == (profiles.CANDIDATE if phase == "candidate" else profiles.BASELINE)
-    assert status["phase"] == phase and status["native_members"] == native and status["payloads_sha256"] == payload_hash
+    assert status["phase"] == phase and status["native_members"] == native
     assert status["cache_production_declared"] == (phase == "producer")
-    return profiles.validate_profile(status["profile"])
+    return profiles.validate_profile(status["profile"], protocol)
 
 
 def seal(seed, producer_status, checkpoint=lambda: None):
-    profile = profiles.validate_profile(producer_status["profile"])
+    profile = profiles.validate_profile(producer_status["profile"], producer_status["protocol"])
     before = owned.inventory(seed)
     assert before and all(
         name.endswith(".tensorbin") for name in before
@@ -51,6 +55,7 @@ def seal(seed, producer_status, checkpoint=lambda: None):
         "schema": 2,
         "kind": "declared-stock-baseline-seed",
         "profile": profile,
+        "protocol": producer_status["protocol"],
         "producer_status": producer_status,
         "files": files,
         "producer_canonical_path": str(seed.resolve()),
@@ -60,7 +65,9 @@ def seal(seed, producer_status, checkpoint=lambda: None):
 
 def verify(seed, seal, expected_profile, checkpoint=lambda: None):
     assert seal["schema"] == 2 and seal["kind"] == "declared-stock-baseline-seed" and seal["full_byte_seal"]
-    assert profiles.validate_profile(seal["profile"]) == profiles.validate_profile(expected_profile)
+    assert profiles.validate_profile(seal["profile"], seal["protocol"]) == profiles.validate_profile(
+        expected_profile, seal["protocol"]
+    )
     inventory = owned.inventory(seed)
     assert set(inventory) == set(seal["files"]), "Seed membership differs"
     for name, stamp in inventory.items():

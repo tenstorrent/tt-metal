@@ -166,7 +166,8 @@ def prepare_storage(snapshot, seals, protocol):
 
 
 def host(workspace):
-    assert os.environ["PAIR_PROTOCOL"] == "chunked", "Only frozen chunked 8+3 protocol"
+    protocol_name = os.environ["PAIR_PROTOCOL"]
+    assert protocol_name in ("chunked", "structured"), "Only the two frozen protocol rows"
     assignment = live_assignment()
     evidence = workspace / "evidence"
     evidence.mkdir(exist_ok=True)
@@ -192,7 +193,7 @@ def host(workspace):
     seals = json.loads((source / "adapter-seals.json").read_text())
     protocol = json.loads((capsule / "control/.github/scripts/utils/formatter_pair_manifest.json").read_text())[
         "protocols"
-    ]["chunked"]
+    ][protocol_name]
     owned.save(evidence / "ci-hf-snapshot-layout.json", checks.snapshot_layout(SNAPSHOT))
     storage = prepare_storage(SNAPSHOT, seals, protocol)
     admission = workspace / "storage-admission.json"
@@ -207,6 +208,7 @@ def host(workspace):
         },
     )
     args = SimpleNamespace(
+        protocol=protocol_name,
         capsule=capsule,
         capsule_sha256=digest,
         storage_admission=admission,

@@ -20,6 +20,7 @@ import owned_seed_copy as owned
 import slurm_pair_checks as checks
 import producer_profile as profiles
 import seed_storage
+import structured_scope
 import host_fd_probe
 import hf_local_stage
 import inner_host_quiet
@@ -155,6 +156,7 @@ def validate_payload(capsule, manifest, digest, checkpoint=lambda: None):
         "inner_host_quiet.py",
         "producer_profile.py",
         "seed_storage.py",
+        "structured_scope.py",
         "owned_stock.py",
         "runtime_guard/sitecustomize.py",
     ):
@@ -332,6 +334,8 @@ class Controller:
             "--cap-add=SYS_PTRACE",
             "-e",
             "PYTHONDONTWRITEBYTECODE=1",
+            "-e",
+            "FORMATTER_PAIR_PROTOCOL=" + self.assignment["protocol"],
         ]
         if devices:
             for row in self.drivers:
@@ -473,9 +477,25 @@ def completed_scope(payload, scope, phase, code):
         payload / "control/.github/scripts/utils/formatter_serial_control.py"
     )
     assert json.loads((output / "phase-0.json").read_text())["exit_code"] == 0
-    assert json.loads((output / "phase-1.json").read_text())["exit_code"] == code
-    original.completed_assertions(code, output, manifest["assertion_payload_proof"])
-    for operation in ("install", "topology", "phase-0", "phase-1", "server"):
+    protocol = status["protocol"]
+    if protocol == "chunked":
+        assert json.loads((output / "phase-1.json").read_text())["exit_code"] == code
+        original.completed_assertions(code, output, manifest["assertion_payload_proof"])
+    else:
+        assert protocol == "structured"
+        fixtures = (scope.parent if phase == "producer" else scope) / "fixtures"
+        receipt = structured_scope.completed(
+            output,
+            fixtures,
+            payload / "vllm-source/benchmarks/benchmark_serving_structured_output.py",
+            manifest["structured_source_sha256"],
+            code,
+        )
+        assert receipt == status["structured_scope"]
+    operations = ["install", "topology", "phase-0", "phase-1", "server"]
+    if protocol == "structured" and status["structured_scope"]["sampling"] is not None:
+        operations.append("phase-2")
+    for operation in operations:
         ownership = json.loads((output / (operation + "-ownership.json")).read_text())
         closed = json.loads((output / (operation + "-cleanup.json")).read_text())
         assert ownership["released"] is True and ownership["owned"]["pid"] > 0
@@ -498,7 +518,9 @@ def admit_leg_status(payload, evidence, name, code):
     status = completed_scope(payload, evidence, name, code)
     manifest = json.loads((payload / "control/.github/scripts/utils/formatter_pair_manifest.json").read_text())
     assert status["exit_code"] == code
-    seed_storage.completed(status, name, MEMBERS, manifest["assertion_payload_proof"]["payloads_sha256"])
+    seed_storage.completed(
+        status, name, MEMBERS, manifest["assertion_payload_proof"]["payloads_sha256"], status["protocol"]
+    )
     return status
 
 
@@ -527,6 +549,8 @@ def unchanged_tracked_source(payload, name):
 def launch(args):
     capsule = args.capsule.resolve(strict=True)
     assignment = live_assignment()
+    assert args.protocol in ("chunked", "structured")
+    assignment["protocol"] = args.protocol
     drivers = checks.driver_nodes()
     parent = args.work_parent.resolve(strict=True)
     assert parent.is_dir() and parent.stat().st_uid == os.getuid()
@@ -563,7 +587,7 @@ def launch(args):
         storage = checked_json(args.storage_admission, args.storage_sha256, controller.checkpoint)
         assert capsule_manifest["schema"] == 1
         manifest = json.loads((capsule / "control/.github/scripts/utils/formatter_pair_manifest.json").read_text())
-        seed_storage.input_gate(storage, manifest["protocols"]["chunked"], args.snapshot)
+        seed_storage.input_gate(storage, manifest["protocols"][args.protocol], args.snapshot)
         expected_payload, payload_inventory = validate_payload(
             capsule, capsule_manifest, args.capsule_sha256, controller.checkpoint
         )
@@ -770,7 +794,7 @@ def launch(args):
         producer_status = completed_scope(payload, producer_evidence, "producer", code)
         assert producer_status["exit_code"] == code
         seed_storage.completed(
-            producer_status, "producer", MEMBERS, manifest["assertion_payload_proof"]["payloads_sha256"]
+            producer_status, "producer", MEMBERS, manifest["assertion_payload_proof"]["payloads_sha256"], args.protocol
         )
         assert git(producer_source, "rev-parse", "HEAD") == BASELINE and not git(
             producer_source, "diff", "HEAD", "--name-only", "--", "models", "ttnn", "tt_metal"
@@ -913,6 +937,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, interrupt)
     signal.signal(signal.SIGINT, interrupt)
     p = argparse.ArgumentParser()
+    p.add_argument("--protocol", choices=["chunked", "structured"], default="chunked")
     p.add_argument("--capsule", type=Path, required=True)
     p.add_argument("--capsule-sha256", required=True)
     p.add_argument("--storage-admission", type=Path, required=True)

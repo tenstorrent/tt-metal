@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Adapter around the preserved AE leg. No changes to the frozen8+3 protocol."""
+"""Adapter around the preserved stock leg and its two frozen protocols."""
 import importlib.util
 import json
 import os
@@ -10,14 +10,25 @@ import sys
 import slurm_pair_checks as checks
 import producer_profile as profiles
 import inner_host_quiet
+import structured_scope
 from owned_stock import StockProcesses
 
 
-def admit_completed_leg(original, output, manifest, code, producer=False):
+def admit_completed_leg(original, output, manifest, code, producer, protocol):
     assert json.loads((output / "phase-0.json").read_text())["exit_code"] == 0
     phase = json.loads((output / "phase-1.json").read_text())["exit_code"]
-    original.completed_assertions(phase, output, manifest["assertion_payload_proof"])
-    assert code == phase and code in (0, 1)
+    if protocol == "chunked":
+        original.completed_assertions(phase, output, manifest["assertion_payload_proof"])
+    else:
+        assert protocol == "structured"
+        structured_scope.completed(
+            output,
+            output.parent / "fixtures",
+            Path("/pair/vllm-source/benchmarks/benchmark_serving_structured_output.py"),
+            manifest["structured_source_sha256"],
+            code,
+        )
+    assert code in (0, 1) and (protocol == "structured" or code == phase)
     assert not (output / "cache-generation-prohibited").exists()
     assert (output / ("cache-cap.jsonl" if producer else "cache-guard.jsonl")).is_file()
     assert not json.loads((output / "server-cleanup.json").read_text())["escalated"]
@@ -31,6 +42,8 @@ def run_leg(name):
     output = base / "evidence" / stock_name
     output.mkdir(parents=True, exist_ok=True)
     assignment = json.loads((base / "evidence/slurm-assignment.json").read_text())
+    protocol = os.environ["FORMATTER_PAIR_PROTOCOL"]
+    assert protocol == assignment["protocol"] and protocol in ("chunked", "structured")
     spec = importlib.util.spec_from_file_location(
         "preserved_formatter_control", base / "control/.github/scripts/utils/formatter_serial_control.py"
     )
@@ -52,9 +65,12 @@ def run_leg(name):
             # Client-only processes do not import TTNN or change server instrumentation.
             for key in ("FORMATTER_CACHE_GUARD", "FORMATTER_PROFILE_RECORD", "FORMATTER_CACHE_PRODUCER"):
                 phase_env.pop(key, None)
-        if not producer and log.name == "phase-0.log":
+        if not producer and (log.name == "phase-0.log" or protocol == "structured" and log.name == "phase-1.log"):
             # Both scored arms use the frozen observer's existing replay branch.
             phase_env["FORMATTER_PAIR_LEG"] = "candidate"
+        if protocol == "structured" and log.name == "phase-2.log":
+            assert command[0] == "pytest"
+            command = [sys.executable, "/pair/adapter/structured_scope.py", "sampling", str(output), *command[1:]]
         code = preserved_run(command, log, phase_env, cwd, seconds)
         if log.name == "install.log" and code == 0:
             # UMD topology discovery default leaves6u retraining disabled; it does not
@@ -100,11 +116,11 @@ def run_leg(name):
 
     original.quiet = quiet
     original.run = admitted_run
-    code = original.leg("chunked", stock_name)
+    code = original.leg(protocol, stock_name)
     manifest = json.loads((base / "control/.github/scripts/utils/formatter_pair_manifest.json").read_text())
-    admit_completed_leg(original, output, manifest, code, producer)
+    admit_completed_leg(original, output, manifest, code, producer, protocol)
     profile_receipt = json.loads((output / "model-profile.json").read_text())
-    profiles.validate_profile(profile_receipt["profile"])
+    profiles.validate_profile(profile_receipt["profile"], protocol)
     assert profile_receipt["phase"] == name and profile_receipt["source"] == env_source(stock_name)
     original.write(
         output / "leg-status.json",
@@ -113,12 +129,27 @@ def run_leg(name):
             "exit_code": code,
             "source": env_source(stock_name),
             "phase": name,
+            "protocol": protocol,
             "profile": profile_receipt["profile"],
             "cache_production_declared": producer,
             "control_reference_sha256": checks.sha(base / "control/.github/scripts/utils/formatter_serial_control.py"),
             "native_members": manifest["native_members"],
-            "all_three_assertions_completed": True,
-            "payloads_sha256": manifest["assertion_payload_proof"]["payloads_sha256"],
+            **(
+                {
+                    "all_three_assertions_completed": True,
+                    "payloads_sha256": manifest["assertion_payload_proof"]["payloads_sha256"],
+                }
+                if protocol == "chunked"
+                else {
+                    "structured_scope": structured_scope.completed(
+                        output,
+                        base / "evidence/fixtures",
+                        base / "vllm-source/benchmarks/benchmark_serving_structured_output.py",
+                        manifest["structured_source_sha256"],
+                        code,
+                    )
+                }
+            ),
             "diagnostic_only": True,
             "timing_qualified": False,
         },

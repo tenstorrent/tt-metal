@@ -1,8 +1,8 @@
 {
   "files": {
     "formatter_ci_binding.py": {
-      "bytes": 15906,
-      "sha256": "d4d1717aba5a6375b1522c749c29f9881c522faf261b7217aa48e3f99fac5512"
+      "bytes": 15993,
+      "sha256": "32581aaf247db9c56056860c63ff48328181ee81484e1c73cdf1e2f798140eee"
     },
     "hf_local_stage.py": {
       "bytes": 9116,
@@ -29,28 +29,32 @@
       "sha256": "5d255124d50284c04c94b4924a6a549d7051d10cea8b1f38123132a78b8fcebb"
     },
     "producer_profile.py": {
-      "bytes": 9162,
-      "sha256": "e255fa9644a5362287c3106a7a62af84510d0278477ff2215e5227de6a45082a"
+      "bytes": 9276,
+      "sha256": "28b2f8b623f0844417929c77fc45a4af29630a2f1f1dc1844d757db9f69b8de8"
     },
     "runtime_guard/sitecustomize.py": {
       "bytes": 2085,
       "sha256": "d97d83addc72ba4af8cc191f0f233cd0067a947a96b7d5bef2a70899b2480eaf"
     },
     "seed_storage.py": {
-      "bytes": 3620,
-      "sha256": "8b439e79cde8a65d169cd4130917e0ac51a281f65a1ed069a5c9e2576ea63d42"
+      "bytes": 3944,
+      "sha256": "08582b9d380b5be6d6214fde69204accdbebbb50f874be770fb6480e3d41861c"
     },
     "slurm_leg.py": {
-      "bytes": 6660,
-      "sha256": "2c42ad94152cdded86f1dc8991a260f5269731342f3dd82d985659df9a450146"
+      "bytes": 8064,
+      "sha256": "2a231c99402c128d803c612bf290167741d593382c9593e14e3e975492aab730"
     },
     "slurm_pair_checks.py": {
       "bytes": 21516,
       "sha256": "600729c1c127bd71bb185032eff6e0f033db9df348d3dc455279a66eaa1750e5"
     },
     "slurm_pair_launcher.py": {
-      "bytes": 42873,
-      "sha256": "32367add5d6641940e5591068965e623430aaa72dd1f1b507e49b7d79b1a81c8"
+      "bytes": 43915,
+      "sha256": "6310790250bdcfce9da6e0560cf1a46c111db1360c6e281018391a00308188a6"
+    },
+    "structured_scope.py": {
+      "bytes": 6393,
+      "sha256": "ad6db7c77514d94de2890c0a58705229259a2bf06a0502b93e182786844f687d"
     }
   },
   "hf_logical_bytes": 16071906850,

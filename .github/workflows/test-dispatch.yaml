@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       protocol:
-        description: "Diagnostic only: stock producer, original chunked 8-request/3-test pair"
+        description: "Diagnostic only: stock producer and the frozen chunked or structured pair"
         type: choice
         required: true
         default: chunked
-        options: [chunked]
+        options: [chunked, structured]
 
 permissions:
   contents: read
