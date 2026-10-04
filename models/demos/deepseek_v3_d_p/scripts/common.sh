@@ -22,7 +22,12 @@ LOG_NAME="${1:-deepseek_v3_d_p_log}"
 LOOP="${LOOP:-${2:-20}}"
 
 # Per-run logs: one log_NN under here per outer iteration.
-LOG_DIR="/data/$USER/$LOG_NAME"
+LOG_DIR="${LOG_ROOT:-/data/$USER}/$LOG_NAME"
+RESET_BETWEEN_RUNS="${RESET_BETWEEN_RUNS:-1}"
+case "$RESET_BETWEEN_RUNS" in
+  0|1) ;;
+  *) echo "ERROR: RESET_BETWEEN_RUNS must be 0 or 1" >&2; return 1 2>/dev/null || exit 1 ;;
+esac
 
 # Test selection — single source of truth. All models run the same chunked no-PCC file; MODEL picks
 # the test function, the parametrize ids, and the model's env vars (each adapter uses its own env var
@@ -30,7 +35,11 @@ LOG_DIR="/data/$USER/$LOG_NAME"
 TEST_FILE="$TT_METAL_HOME/models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py"
 
 # Shared parametrize ids — same for every model, override per run if you want a different point.
-MESH_ID="${MESH_ID:-torus-xy-8x4}"
+if [ "${MODEL:-}" = GEMMA4 ]; then
+  MESH_ID="${MESH_ID:-8x4}"
+else
+  MESH_ID="${MESH_ID:-torus-xy-8x4}"
+fi
 PRELOAD_ID="${PRELOAD_ID:-preload0}"
 CHUNKS_ID="${CHUNKS_ID:-chunks20}"
 ITERS_ID="${ITERS_ID:-iters20}"
@@ -59,8 +68,28 @@ case "${MODEL:-}" in
     VARIANT_ID="glm53"; LAYERS_ID="L78"; NODE_SUFFIX="-$TRACE_ID"
     ENV_VARS='GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4 TT_GLM53_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k'
     ;;
+  GEMMA4)
+    TEST_FILE="$TT_METAL_HOME/models/demos/gemma4_d_p/tests/test_prefill_stress.py"
+    TEST_FUNC="test_prefill_stress"
+    if [ "$TRACE_ID" != traced ] || [ "$PRELOAD_ID" != preload0 ] || [ "$MESH_ID" != 8x4 ]; then
+      echo "ERROR: Gemma4 stress requires TRACE_ID=traced PRELOAD_ID=preload0 MESH_ID=8x4" >&2
+      return 1 2>/dev/null || exit 1
+    fi
+    ENV_VARS=""
+    for setting in \
+      "HF_MODEL=${HF_MODEL:-google/gemma-4-31B-it}" \
+      "HF_HOME=${HF_HOME:-/mnt/models/huggingface}" \
+      "HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1}" \
+      "TT_CACHE_PATH=${TT_CACHE_PATH:-/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it}" \
+      "PREFILL_TTNN_CACHE=${TT_CACHE_PATH:-/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it}" \
+      "PREFILL_TRACE_DIR=${PREFILL_TRACE_DIR:-/mnt/models/huggingface/gpu_traces/gemma4_d_p/gutenberg-135}" \
+      "GEMMA4_STRESS_OUTPUT_DIR=$LOG_DIR"; do
+      printf -v quoted '%q' "$setting"
+      ENV_VARS+="$quoted "
+    done
+    ;;
   *)
-    echo "ERROR: set MODEL to one of: KIMI_K2_7 | GLM5_3  (got '${MODEL:-<unset>}')" >&2
+    echo "ERROR: set MODEL to one of: KIMI_K2_7 | GLM5_3 | GEMMA4  (got '${MODEL:-<unset>}')" >&2
     echo "  e.g.  export MODEL=KIMI_K2_7" >&2
     # Sourced, so return; the || exit covers the case where this file is executed directly.
     return 1 2>/dev/null || exit 1
@@ -77,7 +106,11 @@ ENV_VARS="LOGURU_LEVEL=${LOGURU_LEVEL:-INFO} ${DS_PERF_IGNORE_POWER:+DS_PERF_IGN
 # Exact pytest node id. Preferred over -k, which cannot pin one point of a sweep this wide: a -k
 # expression loose enough to type selects several rows and runs them all per iteration.
 # "blackhole-" comes from the root conftest's silicon_arch_name param.
-PYTEST_TARGET="$TEST_FILE::$TEST_FUNC[blackhole-$VARIANT_ID-$MESH_ID-$LAYERS_ID-$PRELOAD_ID-$CHUNKS_ID-$ITERS_ID$NODE_SUFFIX]"
+if [ "$MODEL" = GEMMA4 ]; then
+  PYTEST_TARGET="$TEST_FILE::$TEST_FUNC[blackhole-$CHUNKS_ID-$ITERS_ID-8x4]"
+else
+  PYTEST_TARGET="$TEST_FILE::$TEST_FUNC[blackhole-$VARIANT_ID-$MESH_ID-$LAYERS_ID-$PRELOAD_ID-$CHUNKS_ID-$ITERS_ID$NODE_SUFFIX]"
+fi
 
 # Inner-iteration count, derived from the num_iters id above (two of the ids spell the count out).
 case "$ITERS_ID" in
@@ -132,9 +165,9 @@ dur() {
 # actually tracks the thing under test. Everything before forward_layer_0_start is still load.
 phase_split() {
   local start fwd
-  start=$(log_ts "$1" 'Building TtPrefillTransformer')
+  start=$(log_ts "$1" 'Building TtPrefillTransformer\|Building Gemma4PrefillRuntime')
   [ -z "$start" ] && return
-  fwd=$(log_ts "$1" 'forward_layer_0_start')
+  fwd=$(log_ts "$1" 'forward_layer_0_start\|Gemma4 stress forward loop')
   if [ -z "$fwd" ]; then
     printf 'load %s' "$(dur $(($2 - start)))"
   else
@@ -194,7 +227,7 @@ crash_snapshot() {
     echo
     echo "--- processes still holding the devices"
     pgrep -af 'pytest|test_prefill' 2>/dev/null || echo "(none)"
-    for p in $(pgrep -f 'pytest.*test_prefill_transformer_chunked' 2>/dev/null); do
+    for p in $(pgrep -f 'pytest.*test_prefill_(transformer_chunked|stress)' 2>/dev/null); do
       echo "pid $p:"
       grep -E '^(VmRSS|VmLck|VmPin):' "/proc/$p/status" 2>/dev/null
       grep -E 'Max locked memory|Max open files' "/proc/$p/limits" 2>/dev/null
@@ -229,7 +262,7 @@ scan_log_dir() {
     if [ -s "$(triage_out "$dir" "$i")" ]; then
       details+=("  $N: HANG   triaged -> $(basename "$(triage_out "$dir" "$i")")  $split")
       ((hang++))
-    elif grep -qE 'smoke test passed|Chunked prefill no-PCC run done|^=+.*1 passed' "$f" 2>/dev/null; then
+    elif grep -qE '^TEST_DONE_EXIT=0$' "$f" 2>/dev/null; then
       elapsed=$(grep -oE '[0-9]+\.[0-9]+s \([0-9:]+\)' "$f" | tail -1)
       details+=("  $N: PASS  $elapsed  $split")
       ((pass++))
@@ -264,6 +297,9 @@ scan_log_dir() {
         [ -n "$progress" ] && progress="loading ${progress#Building }"
       else
         progress="$layer"
+      fi
+      if [ "$MODEL" = GEMMA4 ]; then
+        progress=$(grep -oE '\[chunk timing\] iter=[0-9]+ slot=[0-9]+ chunk=[0-9]+/[0-9]+' "$f" | tail -1)
       fi
 
       if [ -f "$next" ]; then

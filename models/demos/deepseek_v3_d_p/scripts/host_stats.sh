@@ -47,7 +47,7 @@ declare -A prev_rx prev_tx
 LOG_NAME="${1:-}"
 SNAP_FILE=""
 if [ -n "$LOG_NAME" ]; then
-  SNAP_DIR="/data/$USER/$LOG_NAME"
+  SNAP_DIR="${LOG_ROOT:-/data/$USER}/$LOG_NAME"
   mkdir -p "$SNAP_DIR" 2>/dev/null
   SNAP_FILE="$SNAP_DIR/host_stats.tsv"
 fi
@@ -95,7 +95,7 @@ gib_b() { awk -v b="$1" 'BEGIN{printf "%.1f", b/1073741824}'; }   # from bytes
 # for the whole run — the wrapper's numbers, not the model's.
 find_pytest() {
   local p
-  for p in $(pgrep -f 'pytest.*test_prefill_transformer_chunked' 2>/dev/null); do
+  for p in $(pgrep -f 'pytest.*test_prefill_(transformer_chunked|stress)' 2>/dev/null); do
     case "$(cat "/proc/$p/comm" 2>/dev/null)" in
       bash | sh | dash | tee | timeout | pgrep) continue ;;
     esac
