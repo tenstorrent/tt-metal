@@ -34,7 +34,7 @@ except ModuleNotFoundError:
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 MODEL_DTYPE = ttnn.bfloat16
-PREFILL_CHUNK_SIZES = (2048, 4096, 8192, 12288, 16384, 32768)
+PREFILL_CHUNK_SIZES = (2048, 3328, 4096, 5120, 8192, 12288, 16384, 32768)
 LAYER_PERF_CONTEXT_LENGTHS = (262144,)
 TRACE_REGION_SIZE = int(os.environ.get("GEMMA4_PREFILL_TRACE_REGION_SIZE", 256_000_000))
 
@@ -335,7 +335,9 @@ def _measure_traced(mesh_device, mesh_config, model_args, model, hf_model_id, co
 @parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
 @pytest.mark.parametrize("token_source", ["text"], ids=lambda t: t)
 @pytest.mark.parametrize("chunk_size", PREFILL_CHUNK_SIZES, ids=lambda c: f"chunk{c}")
-@pytest.mark.parametrize("context_len", [32768, 65536, 131072, 258048, 262144], ids=lambda c: f"ctx_{c // 1024}k")
+@pytest.mark.parametrize(
+    "context_len", [32768, 65536, 131072, 258048, 259584, 261120, 262144], ids=lambda c: f"ctx_{c // 1024}k"
+)
 def test_prefill_long_context_traced(mesh_device, context_len, chunk_size, token_source, reset_seeds, request):
     """Measure all prefill chunks using one replayed ring-attention trace."""
 
@@ -383,7 +385,9 @@ def _shared_device_weights():
 @pytest.mark.timeout(3600)
 @parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
 @pytest.mark.parametrize("token_source", ["text"], ids=lambda t: t)
-@pytest.mark.parametrize("context_len", [32768, 65536, 131072, 258048, 262144], ids=lambda c: f"ctx_{c // 1024}k")
+@pytest.mark.parametrize(
+    "context_len", [32768, 65536, 131072, 258048, 259584, 261120, 262144], ids=lambda c: f"ctx_{c // 1024}k"
+)
 def test_prefill_chunk_sweep_traced(mesh_device, context_len, token_source, reset_seeds, request):
     """``test_prefill_long_context_traced`` for each chunk in GEMMA4_SWEEP_CHUNK_SIZES, in one process.
 
@@ -400,7 +404,9 @@ def test_prefill_chunk_sweep_traced(mesh_device, context_len, token_source, rese
 
     with _shared_device_weights():
         for chunk_size in chunk_sizes:
-            if geometry_error := prefill_chunk_geometry_error(chunk_size, mesh_config.cp_degree, context_len, tp_degree=mesh_config.tp_degree):
+            if geometry_error := prefill_chunk_geometry_error(
+                chunk_size, mesh_config.cp_degree, context_len, tp_degree=mesh_config.tp_degree
+            ):
                 logger.warning(f"[sweep] skipping chunk {chunk_size}: {geometry_error}")
                 continue
             logger.info(f"[sweep] ===== chunk_size={chunk_size} context_len={context_len} =====")

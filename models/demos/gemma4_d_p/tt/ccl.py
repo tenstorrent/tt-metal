@@ -317,7 +317,7 @@ def ccl_partition_rows(tensor, mesh_config):
 
 
 # Tallest reduce-scatter input (rows per device) on the tuned transport: chunk 4096 at CP8.
-_MAX_TUNED_REDUCE_SCATTER_IN_ROWS = 512
+_MAX_TUNED_REDUCE_SCATTER_IN_ROWS = int(os.environ.get("G4X_RS_TUNED_ROWS", "512"))  # LOCAL knob
 # Tallest reduce-scatter output kept in L1: 256 rows per device (chunk 8192 at CP8 x TP4), the largest measured.
 _MAX_L1_REDUCE_SCATTER_OUT_ROWS = 256
 

@@ -76,7 +76,7 @@ def _projection_compute_config(device, rows):
 
 # Most tile rows for which a projection feeding the reduce-scatter writes its output width-sharded: chunk 4096 at CP8
 # (16 tile rows per device).
-_MAX_SHARDED_OUTPUT_M_TILES = 16
+_MAX_SHARDED_OUTPUT_M_TILES = int(__import__("os").environ.get("G4X_OPROJ_SHARD_TILES", "16"))  # LOCAL knob
 
 
 def project(hidden_states, weight, memory_config=None, into_reduce_scatter=False):
