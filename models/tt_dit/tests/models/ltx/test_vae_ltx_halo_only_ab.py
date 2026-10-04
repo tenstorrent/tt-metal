@@ -5,7 +5,7 @@
 On 2x4 this gives each chip the same shard as 1088x1920/145f on the production 4x8. One run per arm; the
 arm is set by LTX_VAE_HALO_ONLY (0: neighbor_pad full-pad copy, 1: neighbor_pad_halo + conv3d halo_buffer).
 Each run saves its yuv output to $AB_OUT_DIR/yuv_h<0|1>.pt and prints AB timing lines; both arms' outputs
-must be identical.
+must be identical. Each arm must also match the stored reference decode (tools/vae_ref_check.py).
 """
 
 import os
@@ -15,6 +15,7 @@ import pytest
 import torch
 
 import ttnn
+from models.tt_dit.tests.models.ltx.tools.vae_ref_check import check_against_reference
 
 NF, H, W = 145, 544, 960
 TIMED_DECODES = 3
@@ -111,3 +112,14 @@ def test_vae_ltx_halo_only_ab(mesh_device, device_params):
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
         torch.save(torch.as_tensor(out), os.path.join(out_dir, f"yuv_{arm}.pt"))
+
+    check_against_reference(
+        out,
+        arm,
+        latent=lat,
+        num_frames=NF,
+        height=H,
+        width=W,
+        mesh_shape=(2, 4),
+        exact_shard=getattr(dec, "exact_shard", False),
+    )
