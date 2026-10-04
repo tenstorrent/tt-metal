@@ -1502,7 +1502,12 @@ _BF16_EXHAUSTIVE_OPS = [
 # Boards where the op keeps its stock kernel, which this sweep does not test.
 _BF16_STOCK_BOARDS = {}
 # Special input classes where the kernel returns its stock kernel's class instead of torch's.
-_BF16_STOCK_SPECIALS = {}
+_BF16_STOCK_SPECIALS = {
+    MathOperation.Abs: {
+        ChipArchitecture.BLACKHOLE: ("neg_nan",),
+        ChipArchitecture.WORMHOLE: ("neg_nan",),
+    },
+}
 
 
 def _special_class(value):
