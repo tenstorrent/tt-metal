@@ -30,10 +30,9 @@ using namespace ckernel::unpacker;
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param transpose_of_faces: Whether to transpose faces (reorder faces 0,2,1,3)
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
- * @param tile_dvalid: One UNPACR and one data valid per operand per tile instead of per face (see @ref unpack_AB_tile_dvalid)
  */
 template <BroadcastType BType = BroadcastType::NONE>
-inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const ckernel::TensorShape tensor_shape, const bool tile_dvalid = false)
+inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const ckernel::TensorShape tensor_shape)
 {
     const std::uint32_t num_faces_r_dim = tensor_shape.num_faces_r_dim;
     const std::uint32_t num_faces_c_dim = tensor_shape.num_faces_c_dim;
@@ -137,14 +136,6 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
             tmp.set_end_op(srca_set_z);
             tmp.program();
         }
-        else if (tile_dvalid)
-        {
-            // One UNPACR per operand reads every face (datum count set by the init) into one source bank and publishes it once
-            static constexpr std::uint32_t unpack_srca_tile = TT_OP_UNPACR(SrcA, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-            static constexpr std::uint32_t unpack_srcb_tile = TT_OP_UNPACR(SrcB, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-            ckernel_template tmp(1, 1, unpack_srca_tile, unpack_srcb_tile);
-            tmp.program();
-        }
         else
         {
             ckernel_template tmp(num_faces_r_dim, num_faces_c_dim, unpack_srca, unpack_srcb);
@@ -154,14 +145,22 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
 }
 
 /**
- * @brief Whether the two-operand unpack hands each operand over as one source bank holding the whole tile: SrcDvalid::PerTile, no
- *        broadcast, no transpose, full 16-row faces. The math init (@ref _llk_math_eltwise_binary_init_) applies the same rule.
+ * @brief Whether the two-operand unpack can hand each operand over as one source bank holding the whole tile: SrcDvalid::PerTile and no
+ *        broadcast; it does without transpose and with full 16-row faces. The math init (@ref _llk_math_eltwise_binary_init_) applies the same rule.
  */
 template <BroadcastType BType, SrcDvalid src_dvalid>
-inline constexpr bool unpack_AB_tile_dvalid(const ckernel::TensorShape tensor_shape, const ckernel::Transpose transpose)
+inline constexpr bool unpack_AB_tile_dvalid = src_dvalid == SrcDvalid::PerTile && BType == BroadcastType::NONE;
+
+/**
+ * @brief Configure the MOP that hands each operand over as one source bank (see @ref unpack_AB_tile_dvalid): one UNPACR per operand reads
+ *        every face (datum count set by the init) and publishes it once.
+ */
+inline void _llk_unpack_AB_mop_config_tile_()
 {
-    return src_dvalid == SrcDvalid::PerTile && BType == BroadcastType::NONE && transpose == ckernel::Transpose::None &&
-           tensor_shape.face_r_dim == FACE_R_DIM;
+    static constexpr std::uint32_t unpack_srca_tile = TT_OP_UNPACR(SrcA, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr std::uint32_t unpack_srcb_tile = TT_OP_UNPACR(SrcB, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    ckernel_template tmp(1, 1, unpack_srca_tile, unpack_srcb_tile);
+    tmp.program();
 }
 
 /**
@@ -183,25 +182,26 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
 {
     // TODO: Remove this assert after testing >4 num_faces because there is no reason to limit this for non-broadcast versions
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_init_", tensor_shape);
-    LLK_ASSERT(
-        src_dvalid == SrcDvalid::PerFace || transpose == ckernel::Transpose::None,
-        "SrcDvalid::PerTile publishes per face for a transposed operand; pair a transposed unpack with SrcDvalid::PerFace on both threads");
     const bool within_face_16x16_transpose = transpose == ckernel::Transpose::IntraFace || transpose == ckernel::Transpose::Both;
     const bool transpose_of_faces          = transpose == ckernel::Transpose::InterFace || transpose == ckernel::Transpose::Both;
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose); // transpose within the face
 
-    const bool tile_dvalid = unpack_AB_tile_dvalid<BType, src_dvalid>(tensor_shape, transpose);
-    if (tile_dvalid)
+    if constexpr (unpack_AB_tile_dvalid<BType, src_dvalid>)
     {
-        const std::uint32_t x_end = tensor_shape.total_num_faces() * FACE_R_DIM * FACE_C_DIM - 1;
-        TT_SETADCXX(p_setadc::UNP_AB, x_end, 0x0);
-    }
-    else
-    {
-        config_unpacker_x_end<p_setadc::UNP_AB>(tensor_shape.face_r_dim);
+        LLK_ASSERT(
+            transpose == ckernel::Transpose::None,
+            "SrcDvalid::PerTile publishes per face for a transposed operand; pair a transposed unpack with SrcDvalid::PerFace on both threads");
+        if (transpose == ckernel::Transpose::None && tensor_shape.face_r_dim == FACE_R_DIM)
+        {
+            TT_SETADCXX(p_setadc::UNP_AB, tensor_shape.total_num_faces() * FACE_R_DIM * FACE_C_DIM - 1, 0x0);
+            _llk_unpack_AB_mop_config_tile_();
+            return;
+        }
     }
 
-    _llk_unpack_AB_mop_config_<BType>(transpose_of_faces, tensor_shape, tile_dvalid); // transpose of faces 0,2,1,3
+    config_unpacker_x_end<p_setadc::UNP_AB>(tensor_shape.face_r_dim);
+
+    _llk_unpack_AB_mop_config_<BType>(transpose_of_faces, tensor_shape); // transpose of faces 0,2,1,3
 }
 
 /**
