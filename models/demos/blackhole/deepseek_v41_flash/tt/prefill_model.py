@@ -356,7 +356,7 @@ class DSV41PrefillModel:
         for _, pl in self.layers:
             pl.pa.dyn = pl.pa.halo = pl.pa.lat_buf = None
             if pl.pa.sparse is not None:
-                pl.pa.sparse.dyn_on = False
+                pl.pa.sparse.free_dyn()
         self.dyn = None
 
     def begin_chunk(self, s0, C):

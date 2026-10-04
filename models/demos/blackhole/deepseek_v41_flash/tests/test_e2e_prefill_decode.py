@@ -47,7 +47,7 @@ def pool_rows(model, r):
             {
                 "l1_small_size": 16384,
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "trace_region_size": 700_000_000,
+                "trace_region_size": 1_600_000_000,
             },
             id="ring",
         )
@@ -63,8 +63,10 @@ def test_e2e_prefill_decode(mesh_device):
     layer_ids = list(range(int(a), int(b or a) + 1))
     toks = torch.load(os.path.join(DIR, "tokens.pt"))
     prompt, dec_tok = toks["prefill_tokens"], toks["decode_tokens"]
-    B = prompt.shape[0]
-    assert B == 4 * U and prompt.shape[1] == S
+    Bref = prompt.shape[0]  # dumps with fewer users than the batch (e.g. s2048b1): the batch tiles the dump users
+    B = 4 * U
+    assert B % Bref == 0 and prompt.shape[1] == S
+    prompt, dec_tok = prompt.repeat(B // Bref, 1), dec_tok.repeat(B // Bref, 1)
     lens = torch.tensor([int(x) for x in LENS.split(",")]) if LENS else torch.full((B,), S)
     assert lens.shape[0] == B and int(lens.max()) <= S
     pp = default_page_params(S + STEPS + CLOSED + 64, U)
@@ -108,7 +110,7 @@ def test_e2e_prefill_decode(mesh_device):
             m = min(n, 128)
             base = pool.ring_base(attn.ring_slot) + u * pool.ring_rows
             got = pools[r][base : base + 128]
-            exp = st["window"][bb]
+            exp = st["window"][bb % Bref]
             slots = [(p % 128) for p in range(max(0, n - 128), n)]
             if n == S:
                 rp.append(R.pcc(got[slots], exp[slots].float()))
@@ -119,7 +121,7 @@ def test_e2e_prefill_decode(mesh_device):
                 nent = n // attn.ratio
                 if nent:
                     rows = pool.phys_rows(bb, L, torch.arange(nent))
-                    cp.append(R.pcc(pools[r][rows], st["comp"][bb, :nent].float()))
+                    cp.append(R.pcc(pools[r][rows], st["comp"][bb % Bref, :nent].float()))
         g0 = pools[0][pool.ring_base(attn.ring_slot) : pool.ring_base(attn.ring_slot) + 128]
         log(
             f"RINGDBG layer {L} slot {attn.ring_slot} base {pool.ring_base(attn.ring_slot)} total_rows {pool.total_rows}: user0 nan {int(g0.isnan().sum())} absmax {float(g0.abs().nan_to_num().max()):.3f} nonzero rows {int((g0.abs().sum(-1) > 0).sum())}"
@@ -138,7 +140,7 @@ def test_e2e_prefill_decode(mesh_device):
             ok = []
             for bb in range(B):
                 n = int(lens[bb])
-                x = xin[bb, n - 1].float()
+                x = xin[bb % Bref, n - 1].float()
                 exp = torch.cat([cw["wkv"].float() @ x, cw["wgate"].float() @ x])
                 ok.append(R.pcc(got[bb], exp))
             msg += f" | prev_cs PCC min {min(ok):.4f} mean {sum(ok) / len(ok):.4f}"
@@ -168,6 +170,42 @@ def test_e2e_prefill_decode(mesh_device):
             pcs.append(R.pcc(logits[bb : bb + 1], lg))
             am += int(lg.argmax(-1).item() == int(first[bb]))
         log(f"FIRST TOKEN (ragged): logits PCC min {min(pcs):.4f} mean {sum(pcs) / B:.4f}, argmax match {am}/{B}")
+
+    if os.environ.get("DSV41_LAYERCHECK") == "1":
+        # per-layer decode check: feed the reference decode-step input streams of every layer (dump ``dec_in`` / ``pre_in``) to the device layer, whose KV /
+        # index state comes only from the prefill, and compare its output with the dump's ``dec_out`` (isolates attention + indexer from chain error growth)
+        model._set_loop_state(torch.zeros(B, dtype=torch.long), lens.clone())
+        shard = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(model.rows, model.cols))
+        up = lambda x, shp: ttnn.from_torch(
+            x.float().reshape(*shp),
+            device=md,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=shard,
+        )
+        prev_key = None
+        for L, layer, key in model.built:
+            ref = torch.load(os.path.join(DIR, f"layer_{L}.pt"), mmap=True)
+            idx = torch.arange(B) % Bref
+            xin, pin = ref["dec_in"][idx], ref["pre_in"][idx]
+            if (
+                key != prev_key
+            ):  # one ``st`` per run of layers of the same kind (index sources publish ``topk_ids`` into it for their readers), as in DSV41Decoder
+                st = model.step_groups[key].build(model.dec.pos_dev)
+                prev_key = key
+            xo, po = layer.forward(up(xin, (B, 1, 4, 5120)), up(pin, (B, 1, 1, 4)), st)
+            ttnn.synchronize_device(md)
+            got = torch.cat(
+                [
+                    ttnn.to_torch(ttnn.get_device_tensors(xo)[r * model.cols]).reshape(-1, 4 * 5120)
+                    for r in range(model.rows)
+                ]
+            ).float()
+            exp = ref["dec_out"][idx].float().reshape(B, -1)
+            log(
+                f"LAYERCHECK decode layer {L:2d} ratio {getattr(model.attns[L], 'ratio', 0)}: out PCC min {min(R.pcc(got[b], exp[b]) for b in range(B)):.5f}"
+            )
 
     # ---- decode: teacher forced against the reference, then closed loop ---------------------------------------------------------
     if STEPS and fin is not None and bool((lens == S).all()) and "logits_steps" in fin:

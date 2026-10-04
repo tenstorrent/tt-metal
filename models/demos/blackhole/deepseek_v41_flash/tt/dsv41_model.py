@@ -54,6 +54,13 @@ class Model:
         self.max_ctx = max_ctx
         self.layer_ids = list(args.layer_ids)
         self.timing = {}
+        ratios = {R.model_args().compress_ratios[L] for L in self.layer_ids}
+        dl = 512 if 1 in ratios else 1024 if 2 in ratios else 1 << 30
+        ui = os.environ.get("DSV41_INDEXER", "auto")
+        self.use_indexer = (
+            (max_ctx > dl) if ui == "auto" else ui == "1"
+        )  # indexer top-512 (decode) + sparse prefill: needed beyond 512 compressed entries
+        self.dec_idx, self.index_owner = {}, {}
         pages_per_user = -(-(max_ctx + 128) // PAGE_TOKENS)
         self.num_pages = num_pages or self.U * pages_per_user
         t0 = time.time()
@@ -74,7 +81,7 @@ class Model:
         pool = ThreadPoolExecutor(max_workers=2)
         futs = {}
         submit = (
-            lambda L: futs.setdefault(L, pool.submit(load_layer, L, True, max_ctx + 128))
+            lambda L: futs.setdefault(L, pool.submit(load_layer, L, True, max_ctx + 128, self.use_indexer))
             if L in self.layer_ids
             else None
         )
@@ -107,14 +114,14 @@ class Model:
             pls.append((L, DSV41PrefillLayer(layer, pa, pmoe, T=T)))
             key = getattr(attn, "ratio", 0)
             if key not in self.step_groups:
-                self.step_groups[key] = DSV41StepState_paged(attn, max_ctx + 64)
+                self.step_groups[key] = DSV41StepState_paged(attn, max_ctx + 64, self.use_indexer)
             self.built.append((L, layer, key))
             self.attns[L] = attn
             del w
             gc.collect()
             if i % 5 == 0 or i == len(self.layer_ids) - 1:
                 log(f"built layer {L} ({time.time() - t0:.0f}s)")
-        if os.environ.get("DSV41_PF_SPARSE") == "1":
+        if os.environ.get("DSV41_PF_SPARSE") == "1" or self.use_indexer:
             self.enable_prefill_sparse(c_max=int(os.environ.get("DSV41_PF_CMAX", "2048")))
         engram_ids = [l for l in (1, 14) if l in self.layer_ids]
         self.engram_ids = engram_ids
@@ -153,8 +160,11 @@ class Model:
         a = (self.md, self.mc, self.ccl, w["attn"], w["freqs_cis"])
         if meta["ratio"] == 0:
             return DSV41PagedAttention(*a, self.pool, slot, **kw)
+        idx = self._build_indexer(L, meta, w)
         if meta["is_kv_source"]:
-            attn = DSV41PagedCompressedAttention(*a, meta["ratio"], w["compressor"], self.pool, slot, L, **kw)
+            attn = DSV41PagedCompressedAttention(
+                *a, meta["ratio"], w["compressor"], self.pool, slot, L, indexer=idx, **kw
+            )
             self.sources[L] = attn
             if (
                 meta["ratio"] > 1
@@ -164,8 +174,45 @@ class Model:
                 )
             return attn
         return DSV41PagedCompressedAttention(
-            *a, meta["ratio"], None, self.pool, slot, meta["kv_source"], source=self.sources[meta["kv_source"]], **kw
+            *a,
+            meta["ratio"],
+            None,
+            self.pool,
+            slot,
+            meta["kv_source"],
+            source=self.sources[meta["kv_source"]],
+            indexer=idx,
+            **kw,
         )
+
+    def _build_indexer(self, L, meta, w):
+        """Decode indexer of an index-source layer (same construction as DSV41DecodeChain's paged builder); key owners get the key slab, the other index
+        sources alias the slab of their kv source."""
+        if not (self.use_indexer and "indexer" in w):
+            return None
+        from models.demos.blackhole.deepseek_v41_flash.tt.indexer import DSV41DecodeIndexer, default_backend
+
+        iw = w["indexer"]
+        n_alloc = -(-(self.max_ctx // meta["ratio"] + 32) // 32) * 32
+        idx = DSV41DecodeIndexer(
+            self.md,
+            iw,
+            w["freqs_cis"],
+            users_per_row=self.U,
+            n_alloc=n_alloc,
+            ratio=meta["ratio"],
+            key_dtype=ttnn.bfloat8_b,
+            fp4_q=True,
+            backend=default_backend(self.max_ctx // meta["ratio"]),
+        )
+        if meta["is_kv_source"]:
+            idx.set_key_weights(iw["wk"], iw["k_norm"])
+            idx.load_keys(torch.zeros(self.B, 0, 128))
+            self.index_owner[L] = idx
+        else:
+            idx.k_cache = self.index_owner[meta["kv_source"]].k_cache
+        self.dec_idx[L] = idx
+        return idx
 
     def enable_prefill_sparse(self, c_max=2048, max_tokens=None, enable=True):
         """Prefill indexer top-512 + sparse_sdpa for the compressed layers (tt/prefill_sparse.py): exact CSA selection for prompts with > 512 compressed
@@ -185,7 +232,7 @@ class Model:
                 idx_w[L] = load_layer(L, with_moe=False, max_seq_len=8, with_indexer=True)["indexer"]
         sinks = {L: sh.get(f"layers.{L}.attn.attn_sink").float() for L in self.layer_ids}
         self.prefill_sparse = attach_prefill_sparse(
-            pas, idx_w, self.U, max_tokens or self.max_ctx, c_max, sinks, enable=True
+            pas, idx_w, self.U, max_tokens or self.max_ctx, c_max, sinks, decode_indexers=self.dec_idx, enable=True
         )
         return self.prefill_sparse
 
@@ -196,7 +243,7 @@ class Model:
         return 512 if 1 in ratios else 1024 if 2 in ratios else 1 << 30
 
     def check_context_supported(self, ctx):
-        if ctx > self.dense_limit() and os.environ.get("DSV41_ALLOW_DENSE") != "1":
+        if ctx > self.dense_limit() and not self.use_indexer and os.environ.get("DSV41_ALLOW_DENSE") != "1":
             raise NotImplementedError(
                 f"context {ctx} > {self.dense_limit()}: more than 512 compressed entries need the indexer top-512 selection in prefill and decode "
                 "(paged decode indexer exists in tt/indexer.py but its key-slab write from the prefill and the prefill-side selection are not wired; "
@@ -293,6 +340,25 @@ class Model:
         self._set_loop_state(zeros, torch.as_tensor(lens).long())
         self._warm = True
 
+    def _export_index_keys(self, lens):
+        """Hand-off of the index keys: the prefill indexers' key slabs (key owners 2/8/14/20) -> the decode indexers' key slabs ``k_cache``."""
+        if not self.use_indexer or not getattr(self, "prefill_sparse", None):
+            return
+        for L, dec in self.dec_idx.items():
+            if L not in self.index_owner:
+                continue  # layers 24..36 alias layer 20's slab
+            sp = self.attns[L].prefill.sparse
+            ix = None if sp is None else sp.indexer
+            if (
+                ix is None
+                or ix.key_owner is not None
+                or not getattr(sp, "dyn_on", True)
+                and os.environ.get("DSV41_PREFILL_DYN", "1") != "0"
+            ):
+                continue
+            ix.export_keys(dec.k_cache, int(torch.as_tensor(lens).max()) // self.attns[L].ratio)
+        ttnn.synchronize_device(self.md)
+
     def _post_chunk(self, s0, C):
         """Host-only (no device allocation): read the ragged-head trace outputs of this chunk for the users whose last prompt token is inside it."""
         pm, U, rows, cols = self.prefill_model, self.U, self.rows, self.cols
@@ -365,6 +431,7 @@ class Model:
                 ttnn.synchronize_device(self.md)
                 self._post_chunk(s0, C)
         ttnn.synchronize_device(self.md)
+        self._export_index_keys(lens)
         self.timing = dict(pm.timing, total=time.perf_counter() - t_start)
         first = torch.tensor([self._res[b][0] for b in range(B)], dtype=torch.long)
         logits = torch.stack([self._res[b][1] for b in range(B)]) if want_logits else None
@@ -429,6 +496,7 @@ class Model:
                 clear_chunk_caches()
         ex.shutdown()
         ttnn.synchronize_device(self.md)
+        self._export_index_keys(lens)
         self.timing = dict(pm.timing, total=time.perf_counter() - t_start)
         first = torch.tensor([res[b][0] for b in range(B)], dtype=torch.long)
         logits = torch.stack([res[b][1] for b in range(B)]) if want_logits else None
@@ -556,5 +624,5 @@ class Model:
             self.trace_id = None
 
 
-def DSV41StepState_paged(attn, max_pos):
-    return DSV41PagedStepState(attn, max_pos=max_pos, with_indexer=False)
+def DSV41StepState_paged(attn, max_pos, with_indexer=False):
+    return DSV41PagedStepState(attn, max_pos=max_pos, with_indexer=with_indexer, per_user_valid=with_indexer)

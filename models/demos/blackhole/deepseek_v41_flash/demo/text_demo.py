@@ -75,13 +75,13 @@ def _s(
 
 
 SCENARIOS = [
-    _s(Q128, 16, 1024, 64, "prefill_128_b16"),
-    _s(Q128, 1, 1024, 64, "prefill_128_b1"),
-    _s(Q128, 32, 1024, 64, "prefill_128_b32"),
-    _s(Q128, 128, 1024, 32, "prefill_128_b128"),
-    _s(GSM, 16, 1024, 256, "gsm8k_b16", instruct=True, stop_at_eos=True),
-    _s(GSM, 64, 1024, 256, "gsm8k_b64", instruct=True, stop_at_eos=True),
-    _s(["What is the capital of France?"], 16, 1024, 64, "same_prompt_b16", instruct=True),
+    _s(Q128, 16, 512, 64, "prefill_128_b16"),
+    _s(Q128, 1, 512, 64, "prefill_128_b1"),
+    _s(Q128, 32, 512, 64, "prefill_128_b32"),
+    _s(Q128, 128, 512, 32, "prefill_128_b128"),
+    _s(GSM, 16, 512, 384, "gsm8k_b16", instruct=True, stop_at_eos=True),
+    _s(GSM, 64, 512, 384, "gsm8k_b64", instruct=True, stop_at_eos=True),
+    _s(["What is the capital of France?"], 16, 512, 64, "same_prompt_b16", instruct=True),
     _s(f"{LONG}/input_data_long_4k.json", 1, 8192, 64, "isl4k_b1"),
     _s(f"{LONG}/input_data_long_4k.json", 16, 8192, 64, "isl4k_b16"),
     _s(f"{LONG}/input_data_long_4k.json", 32, 8192, 64, "isl4k_b32"),
@@ -153,11 +153,9 @@ def _run_demo(
     probe_args = DSV41ModelArgs(mesh_device, padded_batch, max_seq_len, layer_ids)
     probe_len = max(len(probe_args.encode_prompt(p, instruct=instruct)) for p in probe[:batch_size])
     ctx = min(probe_len, max_seq_len - max_generated_tokens) + max_generated_tokens
-    if ctx > limit and os.environ.get("DSV41_ALLOW_DENSE") != "1":
-        pytest.xfail(
-            f"context {ctx} (ISL {probe_len} + {max_generated_tokens}) > {limit}: >512 compressed entries need the indexer top-512 path in prefill "
-            "(prefill indexer + key-slab writes: agent aa0ac5c6f279c9a32 / overlay h46x; per-user valid length in the decode indexer: agent a113e6e55e6bb6f7c / overlay h46k); "
-            "set DSV41_ALLOW_DENSE=1 to run the dense approximation"
+    if ctx > limit:
+        logger.info(
+            f"context {ctx} > {limit} compressed-dense limit: decode indexer + sparse prefill are enabled for this model"
         )
 
     profiler.start("generator_setup")
@@ -327,7 +325,7 @@ def _run_demo(
             {
                 "l1_small_size": 16384,
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "trace_region_size": 700_000_000,
+                "trace_region_size": 1_600_000_000,
             },
             id="ring",
         )
@@ -379,7 +377,7 @@ def test_dsv41_demo(
             {
                 "l1_small_size": 16384,
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "trace_region_size": 700_000_000,
+                "trace_region_size": 1_600_000_000,
             },
             id="ring",
         )
