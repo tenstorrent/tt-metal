@@ -28,7 +28,7 @@ target_sources(
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${kernels}
+        FILES ${kernels} packed_kv_layout.hpp
     PRIVATE
         ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_PACK_SCALED_FP8_KV_CACHE_SRCS}
 )

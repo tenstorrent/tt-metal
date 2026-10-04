@@ -14,6 +14,7 @@
 - name: tt-train cpp nightly unit tests
   # ENABLE_NIGHTLY_TT_TRAIN_TESTS is inlined in cmd.
   cmd: |
+    echo "TEST"
     mkdir -p generated/test_reports
     ENABLE_NIGHTLY_TT_TRAIN_TESTS=1 build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter=*NIGHTLY_*
   skus:
@@ -28,6 +29,7 @@
 # Non-nightly unit tests
 - name: tt-train cpp non-nightly unit tests
   cmd: |
+    echo "TEST"
     mkdir -p generated/test_reports
     build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="-*NIGHTLY*"
   ai_summary:
@@ -41,7 +43,9 @@
   budget_type: unit
 
 - name: tt-train python unit tests
-  cmd: python -m pytest tt-train/tests/python
+  cmd: |
+    echo "TEST"
+    python -m pytest tt-train/tests/python
   skus:
     bh_p100:
       timeout: 35

@@ -130,6 +130,9 @@ class TestConfig:
     ARCH_DEFINE: ClassVar[str]
     ARCH_LLK_ROOT: ClassVar[str]
     ARCH: ClassVar[str]
+    QUASAR_VECTOR_MARCH: ClassVar[str] = (
+        "-march=rv32im_zmmul_zaamo_zve32x_zvl128b_xtttensixqsr_xttzbkb"
+    )
     CHIP_ARCH: ClassVar[ChipArchitecture]
     DATA_FORMAT_ENUM: ClassVar[dict]
 
@@ -927,6 +930,7 @@ class TestConfig:
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
         requires_device_print: bool = False,
+        requires_vector_ext: bool = False,
         expected_nondeterministic: bool = False,
         include_dirs: list = None,
         src_include_dirs: list = None,
@@ -982,6 +986,7 @@ class TestConfig:
         self.compile_time_formats = compile_time_formats
         self.dest_acc = dest_acc
         self.requires_device_print = requires_device_print
+        self.requires_vector_ext = requires_vector_ext
         self.expected_nondeterministic = expected_nondeterministic
         # Per-variant header ``-I`` dirs land in ``local_options_compile`` (last
         # ``-I`` group), so they win over ``add_include_dirs`` and in-tree
@@ -1093,6 +1098,11 @@ class TestConfig:
         ):
             raise RuntimeError(
                 "You can't build profiler and coverage build at the same time, profiling tests will fail."
+            )
+
+        if self.requires_vector_ext and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
+            raise RuntimeError(
+                "requires_vector_ext=True is currently supported for Quasar-only"
             )
 
     def generate_runtime_args_struct(self):
@@ -1381,6 +1391,10 @@ class TestConfig:
 
         if self.profiler_build == ProfilerBuild.Yes:
             OPTIONS_COMPILE += "-DLLK_PROFILER "
+            # Marker ids hash __FILE__; strip the checkout location so they do not depend on it.
+            llk_roots = {TestConfig.LLK_ROOT, TestConfig.LLK_ROOT.resolve()}
+            for root in sorted(llk_roots):
+                OPTIONS_COMPILE += f"{shlex.quote(f'-fmacro-prefix-map={root}/=')} "
 
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
@@ -1728,6 +1742,11 @@ class TestConfig:
 
                 if not self.compile_time_formats:
                     optional_kernel_flags += " -DRUNTIME_FORMATS"
+
+                # Only TRISC0 has the vector unit on Quasar. The flag is after
+                # ARCH_COMPUTE so it overrides the march implied by -mcpu.
+                if self.requires_vector_ext and name == "unpack":
+                    optional_kernel_flags += f" {TestConfig.QUASAR_VECTOR_MARCH}"
 
                 # EXPERIMENT: enable -DPERF_COUNTERS_COMPILED on TRISC.
                 # Quasar is intentionally excluded: it adds a 4th compute thread
