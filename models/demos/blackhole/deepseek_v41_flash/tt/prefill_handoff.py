@@ -19,6 +19,7 @@ import torch
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt import paged_ops as P
 from models.demos.blackhole.deepseek_v41_flash.tt.attention import HEAD_DIM
+from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import COLSPLIT
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_model import DSV41PrefillModel, T
 
 SKIP = 0xFFFFFFFF
@@ -75,6 +76,29 @@ class PagedStateSink:
                     hm[(r * U + u) * K + (p - s0) // 32] = 1.0
         return ring, lat, idx, m, hm
 
+    def _cs_mask(self, hm, C):
+        """Column-split ragged head: chunk i of a mesh row lives in column i % cols (own-chunk list element i // cols). Per (row, column, user, element g) selector
+        = 1 where the user's last-token sub-chunk is 8g + column. Host [rows*U*n8, cols, 1, 1], sharded over (rows, cols) -> per device [U*n8,1,1,1].
+        """
+        R, U, cols, K = self.rows, self.U, self.cols, C // 32
+        n8 = U * K // cols
+        out = torch.zeros(R * U * n8, cols, 1, 1)
+        h = hm.reshape(R, U, K)
+        for r in range(R):
+            for u in range(U):
+                if h[r, u].any():
+                    i = u * K + int(h[r, u].argmax())
+                    out[(r * U + u) * n8 + i // cols, i % cols] = 1.0
+        return out
+
+    def _host_cs(self, hm, C):
+        return ttnn.from_torch(
+            self._cs_mask(hm, C),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.md, dims=(0, 1), mesh_shape=(self.rows, self.cols)),
+        )
+
     def bind(self, C):
         """Allocate the persistent index tensors of chunk length C (call before any trace capture)."""
         if C in self.bufs:
@@ -95,6 +119,10 @@ class PagedStateSink:
             "mask": up(m, ttnn.float32, ttnn.TILE_LAYOUT),
             "hmask": up(hm, ttnn.float32, ttnn.TILE_LAYOUT),
         }
+        if COLSPLIT:
+            self.bufs[C]["hmask_cs"] = ttnn.to_device(
+                self._host_cs(hm, C), self.md, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
         return self.bufs[C]
 
     def update(self, s0, C):
@@ -111,6 +139,8 @@ class PagedStateSink:
         ttnn.copy_host_to_device_tensor(self._host(idx, ttnn.uint32), bufs["idx"])
         ttnn.copy_host_to_device_tensor(self._host(m, ttnn.float32, ttnn.TILE_LAYOUT), bufs["mask"])
         ttnn.copy_host_to_device_tensor(self._host(hm, ttnn.float32, ttnn.TILE_LAYOUT), bufs["hmask"])
+        if COLSPLIT:
+            ttnn.copy_host_to_device_tensor(self._host_cs(hm, C), bufs["hmask_cs"])
 
     # ---- the sink (trace-safe: static shapes, persistent index tensors) --------------------------------------------------------------
     def write(self, attn, pa, kv, lat, cs, s0, C, h):
@@ -168,6 +198,15 @@ class GenPrefillModel(DSV41PrefillModel):
             self._ragged_head_traced(C)
         return out
 
+    def _sum_cols(self, x):
+        """sum over the 8 mesh columns of x [T,...] (one column holds the data, the others zeros): all-gather along dim 0, then add the 8 blocks."""
+        g = self.mesh_config.allgather(x, self.ccl, axis=1, dim=0)
+        T_ = x.shape[0]
+        out = ttnn.slice(g, [0, 0, 0, 0], [T_, g.shape[1], g.shape[2], g.shape[3]])
+        for j in range(1, self.cols):
+            out = ttnn.add(out, ttnn.slice(g, [j * T_, 0, 0, 0], [(j + 1) * T_, g.shape[1], g.shape[2], g.shape[3]]))
+        return out
+
     def _ragged_head_traced(self, C):
         xs, pres = self.dyn_out
         U, K = self.U, C // 32
@@ -177,6 +216,21 @@ class GenPrefillModel(DSV41PrefillModel):
         )  # (the outputs of the eager compile pass are leaked on purpose: no deallocation inside a capture)
         for u in range(U):
             sel_x = sel_p = None
+            if (
+                COLSPLIT
+            ):  # own chunks only: select locally with the per-column mask, then sum over the 8 columns (exactly one is non-zero)
+                n8 = len(xs)
+                hcs = self.sink.bufs[C]["hmask_cs"]
+                for g in range(n8):
+                    m = ttnn.slice(hcs, [u * n8 + g, 0, 0, 0], [u * n8 + g + 1, 1, 1, 1])
+                    xc, pc = ttnn.multiply(xs[g], m), ttnn.multiply(pres[g], m)
+                    sel_x = xc if sel_x is None else ttnn.add(sel_x, xc)
+                    sel_p = pc if sel_p is None else ttnn.add(sel_p, pc)
+                sel_x, sel_p = self._sum_cols(sel_x), self._sum_cols(sel_p)
+                lg = self.head.forward(sel_x, sel_p)
+                tk = self.head.sample_global(lg, self.mesh_config, self.ccl)
+                self.head_out.append((lg, tk))
+                continue
             for c in range(K):
                 m = ttnn.slice(hmask, [u * K + c, 0, 0, 0], [u * K + c + 1, 1, 1, 1])
                 xc, pc = ttnn.multiply(xs[u * K + c], m), ttnn.multiply(pres[u * K + c], m)

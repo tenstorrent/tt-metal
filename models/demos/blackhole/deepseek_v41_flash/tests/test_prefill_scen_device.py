@@ -122,7 +122,12 @@ def test_prefill_scenarios(mesh_device):
         ref = torch.load(
             os.path.join(BASE, f"layer_{L}.pt"), mmap=True
         )  # decode-state seed (zeroed below) + router cutoff
-        meta = {"state": {k: v[:B] for k, v in ref["state"].items()}, "S": 1, "gate_cutoff": ref["gate_cutoff"]}
+        # (the S=128 dump has 16 users: tile its state for B > 16)
+        meta = {
+            "state": {k: torch.cat([v] * -(-B // v.shape[0]))[:B] for k, v in ref["state"].items()},
+            "S": 1,
+            "gate_cutoff": ref["gate_cutoff"],
+        }
         submit(L + 1), submit(L + 2)
         w = futs.pop(L).result()
         if SPARSE and "indexer" in w:

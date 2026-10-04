@@ -20,6 +20,9 @@ from models.demos.blackhole.deepseek_v41_flash.tt.prefill_attention import clear
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import COLSPLIT
 
 T = 32
+HEAD_FUSED = (
+    os.environ.get("DSV41_HEAD_FUSED", "1") == "1"
+)  # one head trace for all users, last-token rows picked on the device
 
 
 def to_chunks(x, rows, users, Sp, S, tail):
@@ -252,6 +255,77 @@ class DSV41PrefillModel:
         sync("head", t0)
         return lg
 
+    # ---- fused head: ONE trace for all users; the last-token rows are selected on the device with one-hot matmuls ----------------------------
+    def _head_fused_alloc(self, x0, p0):
+        """Persistent buffers (allocated before any capture): per user a stash of the 32-token stream chunk holding its last token (column split: the own
+        chunk, gathered over the columns inside the trace) and a one-hot row selector [1,1,1,N]."""
+        self.head_stash = [(ttnn.clone(x0), ttnn.clone(p0)) for _ in range(self.U)]
+        n = T * (self.cols if COLSPLIT else 1)
+        self.head_sel = [
+            ttnn.from_torch(
+                torch.zeros(1, 1, 1, n),
+                device=self.md,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.md),
+            )
+            for _ in range(self.U)
+        ]
+
+    def _head_fused_body(self):
+        L = self.layers[0][1].L
+        xs_sel, ps_sel = [], []
+        for u in range(self.U):
+            x, p = self.head_stash[u]
+            if COLSPLIT:
+                x = L.mesh_config.allgather(x, L.ccl, axis=1, dim=0)  # [8T,1,4,D]: row j*T + t = column j's chunk row t
+                p = L.mesh_config.allgather(p, L.ccl, axis=1, dim=0)
+            N = x.shape[0]
+            D = x.shape[3]
+            xr = ttnn.to_layout(
+                ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [1, 1, N, 4 * D]), ttnn.TILE_LAYOUT
+            )
+            pr = ttnn.to_layout(ttnn.reshape(ttnn.to_layout(p, ttnn.ROW_MAJOR_LAYOUT), [1, 1, N, 4]), ttnn.TILE_LAYOUT)
+            sx = ttnn.matmul(self.head_sel[u], xr, compute_kernel_config=self.head.ckc32)  # [1,1,1,4D]
+            sp = ttnn.matmul(self.head_sel[u], pr, compute_kernel_config=self.head.ckc32)  # [1,1,1,4]
+            xs_sel.append(ttnn.reshape(ttnn.to_layout(sx, ttnn.ROW_MAJOR_LAYOUT), [1, 1, 4, D]))
+            ps_sel.append(ttnn.reshape(ttnn.to_layout(sp, ttnn.ROW_MAJOR_LAYOUT), [1, 1, 1, 4]))
+        X = ttnn.to_layout(ttnn.concat(xs_sel, dim=0), ttnn.TILE_LAYOUT)  # [U,1,4,D]
+        P = ttnn.to_layout(ttnn.concat(ps_sel, dim=0), ttnn.TILE_LAYOUT)  # [U,1,1,4]
+        return self.head.forward(X, P)  # [1,1,U,vocab/cols]
+
+    def _head_fused_capture(self):
+        self._head_fused_body()  # compile
+        ttnn.synchronize_device(self.md)
+        self.head_fused_trace = ttnn.begin_trace_capture(self.md, cq_id=0)
+        self.head_fused_out = self._head_fused_body()
+        ttnn.end_trace_capture(self.md, self.head_fused_trace, cq_id=0)
+
+    def last_logits_fused(self, S, s0, C):
+        xs, pres = self.dyn_out
+        rows, U = self.rows, self.U
+        idx = []
+        for u in range(U):
+            c, off = divmod(u * C + S - 1 - s0, T)
+            idx.append((c, off))
+            src = c // self.cols if COLSPLIT else c
+            ttnn.copy(xs[src], self.head_stash[u][0])
+            ttnn.copy(pres[src], self.head_stash[u][1])
+            n = T * (self.cols if COLSPLIT else 1)
+            sel = torch.zeros(1, 1, 1, n)
+            sel[0, 0, 0, (c % self.cols) * T + off if COLSPLIT else off] = 1.0
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(
+                    sel, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(self.md)
+                ),
+                self.head_sel[u],
+            )
+        ttnn.synchronize_device(self.md)
+        ttnn.execute_trace(self.md, self.head_fused_trace, cq_id=0, blocking=False)
+        ttnn.synchronize_device(self.md)
+        return self.head.gather_logits(self.head_fused_out)[: rows * U]  # [rows * U, vocab], row r*U + u
+
     def _head_body(self, key):
         """Head on the persistent ``head_in`` / ``head_pre``. Column split: the owner column ``key`` of the 8 holds the chunk, so gather first."""
         if not COLSPLIT:
@@ -431,6 +505,9 @@ class DSV41PrefillModel:
         """Release the chunk trace and the per-chunk buffers (a different chunk size / padded prompt length needs a new capture)."""
         if getattr(self, "dyn_trace", None) is not None:
             ttnn.release_trace(self.md, self.dyn_trace)
+        if getattr(self, "head_fused_trace", None) is not None:
+            ttnn.release_trace(self.md, self.head_fused_trace)
+            self.head_fused_trace = None
         for tid, _ in getattr(self, "head_traces", {}).values():
             ttnn.release_trace(self.md, tid)
         self.head_traces = {}
@@ -485,7 +562,9 @@ class DSV41PrefillModel:
                 type(self).last_logits is DSV41PrefillModel.last_logits
             )  # subclasses with their own head (ragged hand-off) keep it
             xs0, pres0 = self.dyn_out
-            if own_head:
+            if own_head and HEAD_FUSED:
+                self._head_fused_alloc(xs0[0], pres0[0])
+            elif own_head:
                 # head trace FIRST: its persistent buffers must exist before the chunk trace is captured (nothing may be allocated between replays)
                 self.head_in, self.head_pre = ttnn.clone(xs0[0]), ttnn.clone(pres0[0])
                 # one stash per user: the head trace's temporaries may overlap the chunk trace's outputs, so every needed chunk of the stream
@@ -493,7 +572,9 @@ class DSV41PrefillModel:
                 self.head_stash = [(ttnn.clone(xs0[0]), ttnn.clone(pres0[0])) for _ in range(self.U)]
             for x in list(xs0) + list(pres0):
                 ttnn.deallocate(x)
-            if own_head:
+            if own_head and HEAD_FUSED:
+                self._head_fused_capture()
+            elif own_head:
                 self.head_traces = {}
                 for key in range(self.cols) if COLSPLIT else [None]:
                     self._head_body(key)  # compile
@@ -536,7 +617,7 @@ class DSV41PrefillModel:
         pool.shutdown()
         t0 = time.perf_counter()
         if type(self).last_logits is DSV41PrefillModel.last_logits:
-            out = self.last_logits_traced(S, (n - 1) * C, C)
+            out = (self.last_logits_fused if HEAD_FUSED else self.last_logits_traced)(S, (n - 1) * C, C)
         else:
             xs, pres = self.dyn_out
             lg = self.last_logits(xs, pres, S, (n - 1) * C, C)
