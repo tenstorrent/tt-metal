@@ -23,6 +23,7 @@ from models.demos.gemma4_d_p.tt.matmul_config import (
     prefill_1d_matmul_program_config,
     prefill_matmul_program_config,
     short_m_output_memcfg,
+    tile_rows,
     to_l1_width_sharded,
 )
 
@@ -60,21 +61,17 @@ def projection_matmul_configs(hidden_states, weight, max_m_tiles=None):
     ) or prefill_matmul_program_config(hidden_states, weight, grid.x, grid.y, fp32_dest_acc=True)
     if program_config is None:
         return None, None
-    return program_config, _projection_compute_config(device, hidden_states.shape[-2])
-
-
-def _projection_compute_config(device, rows):
-    return ttnn.init_device_compute_kernel_config(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=projection_math_fidelity(rows),
+        math_fidelity=projection_math_fidelity(hidden_states.shape[-2]),
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
+    return program_config, compute_kernel_config
 
 
-# Most tile rows for which a projection feeding the reduce-scatter writes its output width-sharded: chunk 4096 at CP8
-# (16 tile rows per device).
+# Most tile rows for which a projection feeding the reduce-scatter writes its output width-sharded: chunk 4096 at CP8.
 _MAX_SHARDED_OUTPUT_M_TILES = 16
 
 
@@ -82,14 +79,10 @@ def project(hidden_states, weight, memory_config=None, into_reduce_scatter=False
     """hidden_states @ weight for an attention projection, written interleaved (DRAM unless memory_config says
     otherwise). A short-M activation is read width-sharded from L1.
 
-    into_reduce_scatter marks a row-parallel projection whose only consumer is the TP reduce-scatter. Up to
-    _MAX_SHARDED_OUTPUT_M_TILES tile rows it then runs the 1D config on the width-sharded activation and writes a
-    width-sharded L1 output, which the reduce-scatter reads as fast as an interleaved one, and skips the interleaved
-    DRAM write.
+    into_reduce_scatter marks a row-parallel projection whose only consumer is the TP reduce-scatter: up to
+    _MAX_SHARDED_OUTPUT_M_TILES tile rows it writes a width-sharded L1 output instead of an interleaved DRAM one.
     """
-    sharded_output = (
-        into_reduce_scatter and hidden_states.padded_shape[-2] // ttnn.TILE_SIZE <= _MAX_SHARDED_OUTPUT_M_TILES
-    )
+    sharded_output = into_reduce_scatter and tile_rows(hidden_states) <= _MAX_SHARDED_OUTPUT_M_TILES
     x = to_l1_width_sharded(hidden_states) if sharded_output or is_short_m(hidden_states) else hidden_states
     program_config, compute_kernel_config = projection_matmul_configs(
         x, weight, max_m_tiles=_MAX_SHARDED_OUTPUT_M_TILES if sharded_output else None
@@ -108,7 +101,7 @@ def project(hidden_states, weight, memory_config=None, into_reduce_scatter=False
     return out
 
 
-# Most tile rows whose QKV projection output goes to L1: chunk 8192 at CP8 (32 tile rows per device).
+# Most tile rows whose QKV projection output goes to L1: chunk 8192 at CP8.
 _MAX_L1_QKV_M_TILES = 32
 
 
@@ -118,7 +111,7 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config
     Up to _MAX_L1_QKV_M_TILES tile rows the output goes to L1 rather than DRAM, so the matmul's writer doesn't trail
     its math. The caller frees it after the head split, before attention allocates its circular buffers.
     """
-    if memory_config is None and hidden_states.padded_shape[-2] // ttnn.TILE_SIZE <= _MAX_L1_QKV_M_TILES:
+    if memory_config is None and tile_rows(hidden_states) <= _MAX_L1_QKV_M_TILES:
         memory_config = ttnn.L1_MEMORY_CONFIG
     return project(hidden_states, weights.wqk if kv_tied else weights.wqkv, memory_config=memory_config)
 
