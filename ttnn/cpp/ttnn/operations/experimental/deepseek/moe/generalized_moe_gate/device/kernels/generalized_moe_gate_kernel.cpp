@@ -26,37 +26,44 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
-// Gathers token row `token` of a [.., 256] tile tensor into face 0 of the input tile: 16 face rows of
-// 32 B, each fetched as an aligned 64 B slot into the page's other faces, which are zeroed afterwards.
+// Gathers token row `token` of a [.., 256] tile tensor into face 0 of the input tile. One read per tile brings
+// both faces' 32 B rows ([row & ~63, + 576) of the tile) into the CB's scratch pages, while faces 1 to 3 are zeroed.
 template <typename Accessor>
 void gather_token_row(const Accessor& input, uint32_t input_cb, uint32_t token, uint32_t width_tiles) {
+    constexpr uint32_t span = 512 + 64;
     CircularBuffer cb(input_cb);
     cb.reserve_back(1);
     const uint32_t page = cb.get_write_ptr();
+    const uint32_t slots_l1 = page + get_tile_size(input_cb);
     const uint32_t r = token % 32;
     const uint32_t face_row = (r / 16) * 2 * 512 + (r % 16) * 32;
-    const uint32_t sub = face_row & 63u;
     Noc noc;
     for (uint32_t t = 0; t < width_tiles; ++t) {
-        for (uint32_t f = 0; f < 2; ++f) {
-            noc.async_read(
-                input,
-                CoreLocalMem<uint32_t>(page + 512 + (t * 2 + f) * 64),
-                64,
-                {.page_id = (token / 32) * width_tiles + t, .offset_bytes = (face_row & ~63u) + f * 512},
-                {});
-        }
+        noc.async_read(
+            input,
+            CoreLocalMem<uint32_t>(slots_l1 + t * span),
+            span,
+            {.page_id = (token / 32) * width_tiles + t, .offset_bytes = face_row & ~63u},
+            {});
     }
+    noc.async_write_zeros(cb, 3 * 512, {.offset_bytes = 512});
     noc.async_read_barrier();
+    noc.write_zeros_l1_barrier();
+    // Eight loads ahead of eight stores, so the loads overlap.
+    volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slots_l1 + (face_row & 63u));
     volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page);
-    volatile tt_l1_ptr uint32_t* slots = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page + 512);
-    for (uint32_t s = 0; s < width_tiles * 2; ++s) {
-        for (uint32_t w = 0; w < 8; ++w) {
-            dst[s * 8 + w] = slots[s * 16 + sub / 4 + w];
-        }
-    }
-    for (uint32_t w = 0; w < 384; ++w) {
-        slots[w] = 0;
+    for (uint32_t s = 0; s < width_tiles * 2; ++s, dst += 8) {
+        volatile tt_l1_ptr uint32_t* row = src + (s / 2) * (span / 4) + (s % 2) * (512 / 4);
+        const uint32_t w0 = row[0], w1 = row[1], w2 = row[2], w3 = row[3];
+        const uint32_t w4 = row[4], w5 = row[5], w6 = row[6], w7 = row[7];
+        dst[0] = w0;
+        dst[1] = w1;
+        dst[2] = w2;
+        dst[3] = w3;
+        dst[4] = w4;
+        dst[5] = w5;
+        dst[6] = w6;
+        dst[7] = w7;
     }
     cb.push_back(1);
 }
@@ -88,14 +95,17 @@ void kernel_main() {
     // from the logits tile rows.
     if constexpr (Core::is_active_core) {
         if constexpr (input_interleaved) {
+            // Bias and indices go first, so compute sets up while the token row is in flight.
+            unified_kernels::setup_sharded_buffer(bias_cb, num_blocks);
+            unified_kernels::setup_sharded_buffer(input_indices_cb, num_blocks);
             constexpr auto input_args = TensorAccessorArgs<0>();
             const auto input = TensorAccessor(input_args, get_arg_val<uint32_t>(0));
             gather_token_row(input, input_cb, get_arg_val<uint32_t>(1), input_width_tiles);
         } else {
             unified_kernels::setup_sharded_buffer(input_cb, num_blocks);
+            unified_kernels::setup_sharded_buffer(bias_cb, num_blocks);
+            unified_kernels::setup_sharded_buffer(input_indices_cb, num_blocks);
         }
-        unified_kernels::setup_sharded_buffer(bias_cb, num_blocks);
-        unified_kernels::setup_sharded_buffer(input_indices_cb, num_blocks);
     }
 
 #elif defined(COMPILE_FOR_BRISC)

@@ -113,8 +113,9 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     // fields before the merge acquire), so 2 bf16 tiles per block. cb_tilize_idx holds 1 uint16 idx/block.
     auto cb_tilize_desc = make_run_cb(cb_tilize, input_tensor, 2 * num_blocks);              // bf16 scratch
     auto cb_tilize_idx_desc = make_run_cb(cb_tilize_idx, input_indices_tensor, num_blocks);  // uint16 scratch
-    // Interleaved input: the reader gathers this core's token row into a plain one tile CB.
-    auto in_cb_desc = input_interleaved ? make_run_cb(input_cb, bias_tensor, 1)
+    // Interleaved input: the reader gathers this core's token row into a plain CB, whose last three tiles take the
+    // gather's eight 576 B reads.
+    auto in_cb_desc = input_interleaved ? make_run_cb(input_cb, bias_tensor, 4)
                                         : ttnn::cb_descriptor_from_sharded_tensor(input_cb, input_tensor);
     if (!input_interleaved) {
         set_cb_page_size_for_tile(in_cb_desc, input_tensor);
