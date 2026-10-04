@@ -31,7 +31,7 @@ except ModuleNotFoundError:
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 MODEL_DTYPE = ttnn.bfloat16
-PREFILL_CHUNK_SIZES = (2048, 4096, 6656, 8192, 9984, 16384, 32768)
+PREFILL_CHUNK_SIZES = (2048, 3328, 4096, 6656, 8192, 9984, 16384, 32768)
 LAYER_PERF_CONTEXT_LENGTHS = (262144,)
 TRACE_REGION_SIZE = int(os.environ.get("GEMMA4_PREFILL_TRACE_REGION_SIZE", 256_000_000))
 

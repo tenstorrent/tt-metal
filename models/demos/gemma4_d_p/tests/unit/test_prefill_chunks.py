@@ -13,7 +13,7 @@ from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_sdpa_chunk_si
 from models.demos.gemma4_d_p.tt.model import _cp_chunk_major_row_order, prefill_chunk_geometry_error
 
 
-@pytest.mark.parametrize("chunk_size,n_chunks", [(6656, 40), (8192, 32), (9984, 27)])
+@pytest.mark.parametrize("chunk_size,n_chunks", [(3328, 79), (6656, 40), (8192, 32), (9984, 27)])
 @pytest.mark.parametrize("cp", [4, 8])
 def test_partial_final_chunk_preserves_context_and_rope_positions(chunk_size, n_chunks, cp):
     context_len = 262144
@@ -33,8 +33,19 @@ def test_partial_final_chunk_preserves_context_and_rope_positions(chunk_size, n_
     assert 0 < context_len - (n_chunks - 1) * chunk_size <= chunk_size
 
 
-@pytest.mark.parametrize("chunk_size,expected", [(6656, (64, 320)), (8192, (96, 256)), (9984, (96, 256))])
-@pytest.mark.parametrize("cp", [4, 8])
+@pytest.mark.parametrize(
+    "cp,chunk_size,expected",
+    [
+        (4, 3328, (32, 416)),
+        (8, 3328, (32, 416)),
+        (4, 6656, (64, 320)),
+        (8, 6656, (64, 320)),
+        (4, 8192, (96, 256)),
+        (8, 8192, (96, 256)),
+        (4, 9984, (96, 256)),
+        (8, 9984, (96, 256)),
+    ],
+)
 def test_global_sdpa_uses_requested_chunks(chunk_size, expected, cp):
     assert ring_sdpa_chunk_sizes(chunk_size // cp, sliding=False, cp_degree=cp) == expected
 
@@ -48,7 +59,7 @@ def test_sliding_sdpa_blocks_divide_each_rank_slab(chunk_size, cp):
     assert slab % q_chunk == slab % k_chunk == 0
 
 
-@pytest.mark.parametrize("chunk_size,capacity", [(6656, 266240), (8192, 262144), (9984, 269568)])
+@pytest.mark.parametrize("chunk_size,capacity", [(3328, 262912), (6656, 266240), (8192, 262144), (9984, 269568)])
 @pytest.mark.parametrize("configured_length", [None, "262144"])
 def test_demo_allocates_whole_chunk_model_capacity(monkeypatch, chunk_size, capacity, configured_length):
     if configured_length is None:

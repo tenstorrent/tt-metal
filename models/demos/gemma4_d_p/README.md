@@ -31,13 +31,14 @@ pytest models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_layer_per
 pytest models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_layer_perf_chunk_n[blackhole-chunkall-local-sz8192-ctx_256k-8x4] -sv
 ```
 
-Both tests support chunk sizes 2048, 4096, 6656, 8192, 9984, 16384, and 32768. Global SDPA uses Q/K chunks **64/320 for 6656** and **96/256 for 9984**. Sliding SDPA uses the largest of 128, 64, or 32 that divides the CP-local slab for both Q and K; on 8×4 this gives 64/64 for 6656 and 32/32 for 9984. Smaller slabs use multiple halo hops to cover the 1024-token sliding window.
+Both tests support chunk sizes 2048, 3328, 4096, 6656, 8192, 9984, 16384, and 32768. Global SDPA uses Q/K chunks **32/416 for 3328**, **64/320 for 6656**, and **96/256 for 9984**. Sliding SDPA uses the largest of 128, 64, or 32 that divides the CP-local slab for both Q and K; on 8×4 this gives 32/32 for 3328, 64/64 for 6656, and 32/32 for 9984. Smaller slabs use multiple halo hops to cover the 1024-token sliding window.
 
-Contexts that do not divide evenly into chunks use a zero-padded final chunk and round cache/RoPE capacity up to a whole chunk. Readback and throughput count only real tokens. At 256k, 6656 runs 40 chunks (4096 padding tokens), and 9984 runs 27 chunks (7424 padding tokens). Layer tests compile and capture once per layer type, initialize the ring caches with random values, and measure each selected chunk once.
+Contexts that do not divide evenly into chunks use a zero-padded final chunk and round cache/RoPE capacity up to a whole chunk. Readback and throughput count only real tokens. At 256k, 3328 runs 79 chunks (768 padding tokens), 6656 runs 40 chunks (4096 padding tokens), and 9984 runs 27 chunks (7424 padding tokens). Layer tests compile and capture once per layer type, initialize the ring caches with random values, and measure each selected chunk once.
 
-After rebuilding TTNN for the additional sliding SDPA configurations, run either new size with:
+After rebuilding TTNN for the additional sliding SDPA configurations, run these chunk sizes with:
 
 ```bash
+pytest 'models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_long_context_traced[blackhole-readback_final-ctx_256k-chunk3328-text-8x4]' -sv
 pytest 'models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_long_context_traced[blackhole-readback_final-ctx_256k-chunk6656-text-8x4]' -sv
 pytest 'models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_long_context_traced[blackhole-readback_final-ctx_256k-chunk9984-text-8x4]' -sv
 ```

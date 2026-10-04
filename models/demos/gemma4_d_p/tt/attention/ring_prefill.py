@@ -222,7 +222,7 @@ def ring_sdpa_chunk_sizes(q_slab_tokens, sliding, cp_degree):
     """(q_chunk_size, k_chunk_size) for the ring SDPA, chosen by the per-rank Q slab (prefill chunk / CP).
 
     Sliding layers use the largest of 128, 64, or 32 that divides the local slab for both Q and K;
-    K also sets the halo granularity. Global chunks 6656 and 9984 use explicit Q/K configurations.
+    K also sets the halo granularity. Global chunks 3328, 6656, and 9984 use explicit Q/K configurations.
     Other global layers use k 256 with a Q chunk that grows with the slab. Measured over a
     256k prefill at CP8: q 32 at chunk 2048 (21.7 s, against 24.0 s at q 64 and 28.7 s at q 96), q 64 at
     chunk 4096 (14.1 s, against 17.4 s at q 32 and 16.2 s at q 96), and q 96 at chunk 8192 (11.1 s,
@@ -232,6 +232,8 @@ def ring_sdpa_chunk_sizes(q_slab_tokens, sliding, cp_degree):
         chunk = next(c for c in (128, 64, 32) if q_slab_tokens % c == 0)
         return chunk, chunk
     global_chunk = q_slab_tokens * cp_degree
+    if global_chunk == 3328:
+        return 32, 416
     if global_chunk == 6656:
         return 64, 320
     if global_chunk == 9984:

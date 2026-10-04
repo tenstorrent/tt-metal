@@ -410,9 +410,9 @@ TEST(SlidingWindowWorkPlan, MultiHopGeometry) {
 // read exactly once, and each remote one from its hop's block at the offset that hop's sender wrote it.
 TEST(SlidingWindowWorkPlan, MultiHopQueriesCoverExactlyTheirCausalWindows) {
     for (uint32_t ring : {4u, 8u}) {
-        // Include Gemma4's 6656/9984 chunks at CP8 and CP4, in tile units.
+        // Include Gemma4's 3328/6656/9984 chunks at CP8 and CP4, in tile units.
         for (const auto& [local, chunk] :
-             std::vector<std::pair<uint32_t, uint32_t>>{{8, 4}, {16, 4}, {26, 2}, {39, 1}, {52, 4}, {78, 2}}) {
+             std::vector<std::pair<uint32_t, uint32_t>>{{8, 4}, {16, 4}, {13, 1}, {26, 2}, {39, 1}, {52, 4}, {78, 2}}) {
             const uint32_t group = ring * local;
             const uint32_t capacity = 3 * group;
             for (uint32_t window : {1024u, 2 * local * 32, 3 * local * 32, 4 * local * 32}) {
