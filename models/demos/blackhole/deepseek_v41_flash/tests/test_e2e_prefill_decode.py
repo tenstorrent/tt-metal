@@ -82,6 +82,16 @@ def test_e2e_prefill_decode(mesh_device):
     full = layer_ids[0] == 0 and layer_ids[-1] == 39
     fin = torch.load(os.path.join(DIR, "final.pt")) if full and os.path.exists(os.path.join(DIR, "final.pt")) else None
 
+    if (
+        fin is not None and Bref < B
+    ):  # dumps with fewer users than the batch: tile the reference logits like the prompts
+        rep = B // Bref
+        fin = dict(fin)
+        for k, v in list(fin.items()):
+            if torch.is_tensor(v):
+                ax = 1 if k in ("logits_steps", "argmax_steps") else 0
+                fin[k] = v.repeat_interleave(1, ax).repeat(*([rep if i == ax else 1 for i in range(v.dim())]))
+
     # ---- prefill (twice: compile + measured) ------------------------------------------------------------------------------------------
     for rep in range(2):
         t = time.perf_counter()
