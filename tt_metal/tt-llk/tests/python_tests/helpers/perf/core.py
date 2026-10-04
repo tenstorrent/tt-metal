@@ -717,50 +717,48 @@ def assert_zones_dont_overlap(profiler_data: ProfilerData) -> None:
 
     Within a thread a zone that contains another is a wrapper (trisc.cpp's KERNEL), not a phase.
     """
-    # The profiler view pairs every ZONE_START with the ZONE_END that follows it.
-    zones = profiler_data.zones().frame()
-    if zones.empty:
-        return
-    zones = zones.assign(finish=zones["timestamp"] + zones["duration"])
+    # Plain Python over the few zones of one run: a pandas groupby here cost more host time than the kernel run.
+    raw = (
+        profiler_data.zones().raw()
+    )  # raw() checks that every ZONE_START pairs with the next ZONE_END
+    starts = raw[raw["type"] == "ZONE_START"]
+    ends = raw[raw["type"] == "ZONE_END"]["timestamp"].to_numpy()
     # Identity is the name: marker_id is a per-callsite hash, different on every thread.
-    span = (
-        zones.groupby([MARKER, "thread"])
-        .agg(begin=("timestamp", "min"), finish=("finish", "max"))
-        .reset_index()
-    )
-    wrappers = set()
-    for _, group in span.groupby("thread"):
-        rows = group.to_dict("records")
-        for a in rows:
-            for b in rows:
-                if (
-                    a is not b
-                    and a["begin"] <= b["begin"] <= b["finish"] <= a["finish"]
-                ):
-                    wrappers.add(a[MARKER])
-    phases = (
-        span[~span[MARKER].isin(wrappers)]
-        .groupby(MARKER)
-        .agg(first_open=("begin", "min"), last_close=("finish", "max"))
-        .sort_values("first_open")
-        .reset_index()
-    )
+    span = {}
+    for key, begin, finish in zip(
+        zip(starts[MARKER], starts["thread"]), starts["timestamp"], ends
+    ):
+        b, f = span.get(key, (begin, finish))
+        span[key] = (min(b, begin), max(f, finish))
+    wrappers = {
+        a
+        for (a, ta), (ba, fa) in span.items()
+        for (b, tb), (bb, fb) in span.items()
+        if ta == tb and a != b and ba <= bb <= fb <= fa
+    }
+    phases = {}
+    for (marker, _), (begin, finish) in span.items():
+        if marker not in wrappers:
+            b, f = phases.get(marker, (begin, finish))
+            phases[marker] = (min(b, begin), max(f, finish))
     prev = None
-    for row in phases.itertuples(index=False):
+    for marker, (first_open, last_close) in sorted(
+        phases.items(), key=lambda p: (p[1][0], p[0])
+    ):
         if (
             prev is not None
-            and row.marker not in NON_RENDEZVOUS_MARKERS
-            and prev.last_close > row.first_open
+            and marker not in NON_RENDEZVOUS_MARKERS
+            and prev[1] > first_open
         ):
             raise AssertionError(
-                f"Zones overlap across threads: the last {prev.marker} closed at "
-                f"{prev.last_close} but the first {row.marker} opened at {row.first_open}, "
-                f"{prev.last_close - row.first_open} cycles earlier. Both windows therefore "
+                f"Zones overlap across threads: the last {prev[0]} closed at "
+                f"{prev[1]} but the first {marker} opened at {first_open}, "
+                f"{prev[1] - first_open} cycles earlier. Both windows therefore "
                 f"cover time belonging to the other phase. The usual cause is a kernel opening "
                 f"its zones with ZONE_SCOPED instead of START_PERF_MEASURE, which is what "
                 f"supplies the cross-thread rendezvous at zone entry."
             )
-        prev = row
+        prev = (marker, last_close)
 
 
 RUN_TYPE_PRESETS = {
