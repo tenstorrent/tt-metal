@@ -229,11 +229,16 @@ class DSV41PrefillIndexer:
         ), "export from the key owner (layers 2, 8, 14, 20); layers 24-36 alias layer 20's slab"
         n = ceil32(n_entries)
         assert n <= k_cache.shape[2] and n <= self.KL
-        src = ttnn.slice(self.keys, [0, 0, 0, 0], [self.U, 1, n, IDIM])
+        # a full-range slice may ALIAS the slab: never deallocate the slice itself (that freed the key FIFO of the owner and crashed the next prefill)
+        src = self.keys if n == self.keys.shape[2] else ttnn.slice(self.keys, [0, 0, 0, 0], [self.U, 1, n, IDIM])
         if k_cache.dtype != ttnn.bfloat16:
-            src = ttnn.typecast(src, k_cache.dtype)
+            conv = ttnn.typecast(src, k_cache.dtype)
+            if src is not self.keys:
+                ttnn.deallocate(src)
+            src = conv
         ttnn.experimental.slice_write(src, k_cache, [0, 0, 0, 0], [self.U, 1, n, IDIM], [1, 1, 1, 1])
-        ttnn.deallocate(src)
+        if src is not self.keys:
+            ttnn.deallocate(src)
 
     # ---- selection ---------------------------------------------------------------------------------------------------------------
     def select(self, pa, h, qr, s0, C):
