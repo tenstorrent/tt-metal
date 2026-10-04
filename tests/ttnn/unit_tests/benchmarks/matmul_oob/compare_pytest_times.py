@@ -4,7 +4,7 @@
 
 """Compare two pytest_device_time.py outputs (e.g. matmul_auto_config_v2 off vs on).
 
-  python compare_pytest_times.py off.jsonl on.jsonl [--min-us 20] [--auto-only] [--write-auto-list FILE]
+  python compare_pytest_times.py off.jsonl on.jsonl [--min-us 20] [--auto-only] [--write-auto-list FILE] [--only FILE]
 
 Reports outcome changes (a test passing in one run and failing in the other), and for tests that passed in
 both, the change in total device-kernel time. Tests whose device time is below --min-us in both runs are left
@@ -13,6 +13,7 @@ out of the timing comparison as too noisy.
 --auto-only compares just the tests in which some matmul went through the default config selection (auto_config
 set in either run); the others pass their own program configs, so the flag cannot change them.
 --write-auto-list FILE writes those tests' node ids to FILE (the pytest-auto suite's test list).
+--only FILE compares just the tests whose node ids are listed in FILE.
 """
 
 import argparse
@@ -38,9 +39,14 @@ def main():
     ap.add_argument("--show", type=int, default=25)
     ap.add_argument("--auto-only", action="store_true")
     ap.add_argument("--write-auto-list", metavar="FILE")
+    ap.add_argument("--only", metavar="FILE")
     args = ap.parse_args()
     base, new = load(args.base), load(args.new)
     common = [t for t in base if t in new]
+    if args.only:
+        with open(args.only) as f:
+            only = {line.strip() for line in f if line.strip()}
+        common = [t for t in common if t in only]
     auto = [t for t in common if base[t].get("auto_config") or new[t].get("auto_config")]
     if args.write_auto_list:
         with open(args.write_auto_list, "w") as f:

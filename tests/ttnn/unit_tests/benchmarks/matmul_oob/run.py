@@ -17,6 +17,10 @@ Suites (the fast ones take a few minutes each on Wormhole):
   pytest-fast      every 10th test of it
   pytest-auto      the tests in pytest_auto_tests.txt: the matmul pytest tests where some matmul uses the default
                    config selection (the rest pass their own program configs, so the flag cannot change them)
+  pytest-removed-configs
+                   the matmul pytest tests that pass their own program_config to ttnn.matmul / ttnn.linear, as written
+                   (flag off) against the same tests with those program configs dropped and matmul_auto_config_v2 on.
+                   The tests are found on this machine (custom_tests.txt), so the set can differ between machines
   all              validation, gist-device and pytest (every suite that reports device kernel time)
 
 Results go to generated/matmul_oob/<arch>_<git rev>/<suite>/, with a summary.txt. Rerunning a suite skips the
@@ -42,6 +46,7 @@ SUITES = [
     "pytest",
     "pytest-fast",
     "pytest-auto",
+    "pytest-removed-configs",
     "all",
 ]
 AUTO_TESTS = f"{HERE}/pytest_auto_tests.txt"
@@ -130,37 +135,56 @@ def run_cases(out, selection):
     return ([f"run_suite exit {rc}"] if rc else []) + summary.splitlines()
 
 
+def pytest_run(out, mode, env, tests_file=None):
+    """One pytest pass over the matmul tests with pytest_device_time; skipped when already done"""
+    jsonl = f"{out}/pytest_{mode}.jsonl"
+    done = f"{out}/pytest_{mode}.done"
+    if os.path.exists(done):
+        return
+    if os.path.exists(jsonl):
+        os.remove(jsonl)
+    env = {"PYTHONPATH": f"{HERE}:{os.environ.get('PYTHONPATH', '')}", "DEVICE_TIME_OUT": jsonl, **env}
+    if tests_file:
+        env["DEVICE_TIME_TESTS"] = tests_file
+    cmd = ["pytest", "-q", "-p", "no:logging", "-p", "pytest_device_time", "tests/ttnn/unit_tests/operations/matmul/"]
+    rc = run(cmd, f"{out}/pytest_{mode}.log", env)
+    open(done, "w").write(f"exit {rc}\n")
+
+
+def pytest_removed_configs(out):
+    # The tests as written, flag off: which pass their own program configs, and their device time
+    pytest_run(out, "custom", {"TTNN_CONFIG_OVERRIDES": "{}"})
+    tests_file = f"{out}/custom_tests.txt"
+    with open(f"{out}/pytest_custom.jsonl") as f:
+        rows = [json.loads(line) for line in f]
+    custom = sorted(r["test"] for r in rows if r.get("custom_configs") and r["outcome"] != "skipped")
+    with open(tests_file, "w") as f:
+        f.write("".join(t + "\n" for t in custom))
+    # The same tests with their program configs dropped, through matmul_auto_config_v2
+    pytest_run(
+        out,
+        "removed",
+        {"TTNN_CONFIG_OVERRIDES": '{"matmul_auto_config_v2": true}', "DEVICE_TIME_STRIP_CONFIGS": "1"},
+        tests_file,
+    )
+    compare = [
+        sys.executable,
+        f"{HERE}/compare_pytest_times.py",
+        f"{out}/pytest_custom.jsonl",
+        f"{out}/pytest_removed.jsonl",
+        "--only",
+        tests_file,
+    ]
+    lines = [
+        f"{len(custom)} tests pass their own program_config (custom_tests.txt); base = as written, new = auto config"
+    ]
+    return lines + subprocess.run(compare, capture_output=True, text=True).stdout.splitlines()
+
+
 def pytest(out, sample=1, tests_file=None):
     lines = []
     for mode, overrides in (("off", "{}"), ("on", '{"matmul_auto_config_v2": true}')):
-        jsonl = f"{out}/pytest_{mode}.jsonl"
-        done = f"{out}/pytest_{mode}.done"
-        if os.path.exists(done):
-            continue
-        if os.path.exists(jsonl):
-            os.remove(jsonl)
-        env = {
-            "PYTHONPATH": f"{HERE}:{os.environ.get('PYTHONPATH', '')}",
-            "TTNN_CONFIG_OVERRIDES": overrides,
-            "DEVICE_TIME_OUT": jsonl,
-            "DEVICE_TIME_SAMPLE": str(sample),
-        }
-        if tests_file:
-            env["DEVICE_TIME_TESTS"] = tests_file
-        rc = run(
-            [
-                "pytest",
-                "-q",
-                "-p",
-                "no:logging",
-                "-p",
-                "pytest_device_time",
-                "tests/ttnn/unit_tests/operations/matmul/",
-            ],
-            f"{out}/pytest_{mode}.log",
-            env,
-        )
-        open(done, "w").write(f"exit {rc}\n")
+        pytest_run(out, mode, {"TTNN_CONFIG_OVERRIDES": overrides, "DEVICE_TIME_SAMPLE": str(sample)}, tests_file)
     compare = [sys.executable, f"{HERE}/compare_pytest_times.py", f"{out}/pytest_off.jsonl", f"{out}/pytest_on.jsonl"]
     every = subprocess.run(compare, capture_output=True, text=True).stdout
     auto = subprocess.run(
@@ -187,6 +211,7 @@ def main():
         "pytest": lambda o: pytest(o),
         "pytest-fast": lambda o: pytest(o, sample=10),
         "pytest-auto": lambda o: pytest(o, tests_file=AUTO_TESTS),
+        "pytest-removed-configs": pytest_removed_configs,
     }
     if args.suite == "pytest-auto" and not os.path.exists(AUTO_TESTS):
         sys.exit(f"{AUTO_TESTS} is missing: run --suite pytest and copy its pytest/auto_tests.txt there")

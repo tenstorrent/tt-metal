@@ -15,6 +15,10 @@ Each line also records auto_config: the last program config matmul's default sel
 null when no matmul in the test went through it (every matmul passed its own program_config, or the test has no
 matmul). compare_pytest_times.py --auto-only compares just the tests where it is set.
 
+Each line also records custom_configs: how many ttnn.matmul / ttnn.linear calls in the test passed their own
+program_config. With DEVICE_TIME_STRIP_CONFIGS=1 those calls go through the default selection instead: the
+program_config is dropped, and a fused_activation it carried is passed as activation.
+
 DEVICE_TIME_SAMPLE=N keeps every Nth collected test (a fixed, deterministic sample for quick runs).
 DEVICE_TIME_TESTS=FILE keeps only the tests whose node ids are listed in FILE, one per line.
 """
@@ -50,6 +54,32 @@ def pytest_collection_modifyitems(config, items):
 
 
 _results = {}
+_custom_configs = 0
+
+
+def _wrap(module, name):
+    original = getattr(module, name)
+
+    def wrapper(*args, **kwargs):
+        global _custom_configs
+        config = kwargs.get("program_config")
+        if config is not None:
+            _custom_configs += 1
+            if os.environ.get("DEVICE_TIME_STRIP_CONFIGS") == "1":
+                kwargs["program_config"] = None
+                fused = getattr(config, "fused_activation", None)
+                if fused is not None and kwargs.get("activation") is None:
+                    kwargs["activation"] = fused
+        return original(*args, **kwargs)
+
+    setattr(module, name, wrapper)
+
+
+def pytest_configure(config):
+    import ttnn
+
+    for name in ("matmul", "linear"):
+        _wrap(ttnn, name)
 
 
 def _read_device_time(device):
@@ -75,7 +105,9 @@ def _last_auto_config(reset):
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_setup(item):
+    global _custom_configs
     _last_auto_config(reset=True)  # from here to the end of the call, so matmuls in fixtures count too
+    _custom_configs = 0
     yield
 
 
@@ -90,16 +122,22 @@ def pytest_runtest_call(item):
     outcome = yield
     auto_config = _last_auto_config(reset=True)
     if device is None:
-        _results[item.nodeid] = {"auto_config": auto_config}
+        _results[item.nodeid] = {"auto_config": auto_config, "custom_configs": _custom_configs}
     else:
         try:
             total, programs = _read_device_time(device)
-            _results[item.nodeid] = {"device_ns": total, "programs": programs, "auto_config": auto_config}
+            _results[item.nodeid] = {
+                "device_ns": total,
+                "programs": programs,
+                "auto_config": auto_config,
+                "custom_configs": _custom_configs,
+            }
         except Exception as e:
             _results[item.nodeid] = {
                 "device_ns": None,
                 "programs": None,
                 "auto_config": auto_config,
+                "custom_configs": _custom_configs,
                 "error": str(e)[:200],
             }
 
