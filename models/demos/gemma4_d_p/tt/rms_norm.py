@@ -32,7 +32,7 @@ def _block_shard_geometry(rows, width):
     if rows_t % block_h:
         # LOCAL knob G4X_NORM_ODD: a row count that block_h does not divide (5 tile rows at chunk 5120) otherwise
         # falls back to one core per tile row. "min": smallest divisor keeping <= _MAX_GRID_Y core rows; "max": one row.
-        mode = __import__("os").environ.get("G4X_NORM_ODD", "off")
+        mode = __import__("os").environ.get("G4X_NORM_ODD", "min")
         if mode == "min":
             block_h = next(h for h in range(ttnn.core.divup(rows_t, _MAX_GRID_Y), rows_t + 1) if rows_t % h == 0)
         elif mode == "max":
