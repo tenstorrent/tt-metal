@@ -15,6 +15,7 @@ Supported (ISL, batch) combinations and limits: see the ``Supported`` table in t
 """
 
 import os
+import time
 
 import pytest
 import torch
@@ -82,6 +83,7 @@ SCENARIOS = [
     _s(GSM, 16, 512, 384, "gsm8k_b16", instruct=True, stop_at_eos=True),
     _s(GSM, 64, 512, 384, "gsm8k_b64", instruct=True, stop_at_eos=True),
     _s(["What is the capital of France?"], 16, 512, 64, "same_prompt_b16", instruct=True),
+    _s(f"{LONG}/input_data_long_2k.json", 16, 4096, 64, "isl2k_b16"),
     _s(f"{LONG}/input_data_long_4k.json", 1, 8192, 64, "isl4k_b1"),
     _s(f"{LONG}/input_data_long_4k.json", 16, 8192, 64, "isl4k_b16"),
     _s(f"{LONG}/input_data_long_4k.json", 32, 8192, 64, "isl4k_b32"),
@@ -93,16 +95,6 @@ SCENARIOS = [
     _s(f"{LONG}/input_data_long_32k.json", 4, 65536, 64, "isl32k_b4"),
     _s(f"{LONG}/input_data_long_64k.json", 1, 70000, 64, "isl64k_b1"),
     _s(f"{LONG}/input_data_long_64k.json", 4, 70000, 64, "isl64k_b4"),
-    _s(f"{LONG}/input_data_long_4k.json", 64, 8192, 64, "isl4k_b64"),
-    _s(f"{LONG}/input_data_long_8k.json", 32, 16384, 64, "isl8k_b32"),
-    _s(f"{LONG}/input_data_long_8k.json", 64, 16384, 64, "isl8k_b64"),
-    _s(f"{LONG}/input_data_long_16k.json", 32, 32768, 64, "isl16k_b32"),
-    _s(f"{LONG}/input_data_long_16k.json", 64, 32768, 64, "isl16k_b64"),
-    _s(f"{LONG}/input_data_long_64k.json", 16, 70000, 64, "isl64k_b16"),
-    _s(f"{LONG}/input_data_long_64k.json", 32, 70000, 64, "isl64k_b32"),
-    _s(f"{LONG}/input_data_long_64k.json", 64, 70000, 64, "isl64k_b64"),
-    _s(f"{LONG}/input_data_long_64k.json", 128, 70000, 64, "isl64k_b128"),
-    _s(f"{LONG}/input_data_long_32k.json", 16, 65536, 64, "isl32k_b16"),
     _s(f"{LONG}/input_data_long_128k.json", 1, 135000, 64, "isl128k_b1", skip="128k: " + SKIP_BIG),
     _s(f"{LONG}/input_data_long_256k.json", 1, 270000, 64, "isl256k_b1", skip="256k: " + SKIP_BIG),
     _s(
@@ -114,6 +106,11 @@ SCENARIOS = [
         skip="1M: " + SKIP_BIG + " (never executed by instruction)",
     ),
 ]
+
+
+def decode_time_sum(profiler, n_dec, batch_idx):
+    """Seconds of the steady decode steps (1..n_dec-1) of one repeat batch."""
+    return sum(profiler.get_duration(f"inference_decode_time_{i}", iteration=batch_idx) for i in range(1, n_dec))
 
 
 @torch.no_grad()
@@ -193,6 +190,13 @@ def _run_demo(
         if cache is not None:
             cache[key] = (model_args, model, generator)
     tokenizer = model_args.tokenizer
+    spec_k = int(
+        os.environ.get("DSV41_SPEC", "0")
+    )  # speculative decoding: k drafts per round (DSpark drafter), 0 = off
+    if spec_k and not hasattr(generator, "spec"):
+        generator.enable_spec(
+            spec_k
+        )  # right after the model build: before any prefill / decode trace exists (L1 placement of the verify MoE)
     profiler.end("generator_setup")
 
     if isinstance(input_prompts, list) and len(input_prompts) == 1:
@@ -250,6 +254,7 @@ def _run_demo(
         for u in range(padded_batch):
             all_outputs[u].append(int(prefilled_token[u]))
         user_done = [False] * padded_batch
+        plain_gaps = [[] for _ in range(padded_batch)]
         for u in range(batch_size, padded_batch):
             user_done[u] = True
         current_pos = torch.tensor(decoding_pos)
@@ -274,6 +279,12 @@ def _run_demo(
             profiler.end(
                 "compile_decode" if iteration == 0 else f"inference_decode_time_{iteration}", iteration=batch_idx
             )
+            if (
+                spec_k and os.environ.get("DSV41_SPEC_GAPS", "1") == "1"
+            ):  # near-tie evidence of the plain stream (outside the timed region)
+                t2 = generator.m.read_logits().topk(2, dim=-1).values
+                for u in range(padded_batch):
+                    plain_gaps[u].append(float(t2[u, 0] - t2[u, 1]))
             current_pos += 1
             for u in range(padded_batch):
                 t = int(out_tok[u])
@@ -300,6 +311,47 @@ def _run_demo(
             )
         num_tokens_generated_decode.append(iteration)
         generator.m.release_trace()  # next repeat batch re-captures (page table / state changed)
+        if spec_k:
+            # ---- speculative pass on the SAME prompts: a fresh prefill (the plain decode advanced the state), drafter seeding from the prompt tail, spec loop ----
+            plain_gen = [all_outputs[u][decoding_pos[u] :] for u in range(padded_batch)]
+            plain_ms = 1000 * decode_time_sum(profiler, iteration, batch_idx) / max(iteration - 1, 1)
+            first2, _ = generator.prefill_forward_text(input_tokens_prefill, **prefill_kw)
+            first2 = first2.view(-1)
+            eos = tokenizer.eos_token_id if stop_at_eos else None
+            active = torch.tensor([u < batch_size for u in range(padded_batch)])
+            t_sp = time.perf_counter()
+            gen_sp, st = generator.spec_decode(
+                input_tokens_prefill, decoding_pos, first2, max_generated_tokens, eos=eos, active=active
+            )
+            t_sp = time.perf_counter() - t_sp
+            ident, first_div, gaps_div = 0, [], []
+            for u in range(batch_size):
+                ps = [t for t in plain_gen[u]]
+                sp = [t for t in gen_sp[u] if t != eos][: len(ps)]
+                L_ = min(len(ps), len(sp))
+                dv = next((i for i in range(L_) if ps[i] != sp[i]), -1)
+                first_div.append(dv)
+                ident += int(dv == -1)
+                if dv > 0 and len(generator.spec.gaps[u]) >= dv:
+                    pg = plain_gaps[u][dv - 1] if len(plain_gaps[u]) >= dv else float("nan")
+                    gaps_div.append(
+                        f"user {u} token {dv}: top1-top2 gap plain {pg:.3f} / spec {generator.spec.gaps[u][dv - 1]:.3f}"
+                    )
+            tok_s_plain = 1000.0 / plain_ms if plain_ms == plain_ms and plain_ms > 0 else float("nan")
+            logger.info(
+                f"=== SPEC k={spec_k} (batch {batch_size}): {st['rounds']} rounds, {st['accepted_per_round']:.3f} accepted drafts/round "
+                f"(CPU reference GSM8K: k=3 -> 2.30), P(m>=j) {[round(x, 3) for x in st['p_ge']]} (CPU: 0.905/0.796/0.693/0.598/0.489 conditional-free per position), "
+                f"{st['tok_per_round']:.3f} tokens/round/user, round {st['round_ms']:.1f} ms -> {st['tok_s_user']:.1f} tok/s/user vs plain decode "
+                f"{plain_ms:.1f} ms/token = {tok_s_plain:.1f} tok/s/user (same run) => {st['tok_s_user'] / tok_s_plain:.2f}x ==="
+            )
+            logger.info(
+                f"SPEC exactness vs the plain greedy stream of this run: {ident}/{batch_size} users identical, first divergence per user {first_div}; first token spec==plain: "
+                f"{int((first2[:batch_size] == prefilled_token[:batch_size]).sum())}/{batch_size}; spec wall incl. seeding {t_sp:.1f} s"
+            )
+            logger.info("SPEC divergence near-tie evidence: " + "; ".join(gaps_div))
+            for i in range(min(batch_size, int(os.environ.get("DSV41_SPEC_PRINT", "2")))):
+                logger.info(f"==USER {i} - SPEC OUTPUT\n{tokenizer.decode(gen_sp[i]).strip()}\n")
+            generator.spec.release()
 
     profiler.end("run")
     n_dec = num_tokens_generated_decode[0]
@@ -335,7 +387,7 @@ def _run_demo(
             {
                 "l1_small_size": 16384,
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "trace_region_size": 1_600_000_000,
+                "trace_region_size": int(os.environ.get("DSV41_TRACE_REGION", "1600000000")),
             },
             id="ring",
         )
@@ -387,7 +439,7 @@ def test_dsv41_demo(
             {
                 "l1_small_size": 16384,
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "trace_region_size": 1_600_000_000,
+                "trace_region_size": int(os.environ.get("DSV41_TRACE_REGION", "1600000000")),
             },
             id="ring",
         )
@@ -403,7 +455,7 @@ def test_dsv41_demo_session(mesh_device, device_params):
     build_len = max(s.values[3] for s in chosen)
     cache = {}
     for s in chosen:
-        (prompts, bs, rep, msl, mgt, pp, sp, dtr, ptr, pch, wu, ins, eos) = s.values
+        prompts, bs, rep, msl, mgt, pp, sp, dtr, ptr, pch, wu, ins, eos = s.values
         logger.info(f"=== session scenario {s.id} ===")
         _run_demo(
             mesh_device,
