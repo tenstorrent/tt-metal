@@ -41,6 +41,8 @@ def create_tt_model(
         int(os.environ.get("DSV41_SPEC", "0")) > 0
     ):  # speculative decoding needs the window ring to hold 128 + k rows (tt/spec_paged.py RING_SPEC)
         os.environ.setdefault("DSV41_RING_ROWS", "160")
+    if os.environ.get("DSV41_KV_DTYPE", "bf16") == "fp8":  # fp8_e4m3 KV pool (halves the pool: batch 128 at 64k)
+        kv_dtype = ttnn.fp8_e4m3
 
     args = DSV41ModelArgs(mesh_device, max_batch_size, max_seq_len, layer_ids, paged_attention_config)
     if paged_attention_config is not None:
