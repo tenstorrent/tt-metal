@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Keep blocks in source order: reordered loop blocks move with code before the zone (#55169).
+#pragma GCC optimize("no-reorder-blocks")
+
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
