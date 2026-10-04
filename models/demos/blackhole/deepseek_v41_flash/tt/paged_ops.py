@@ -163,21 +163,39 @@ class PagedKVPool:
             rows = self.phys_rows(b, src, ent[:n])
             self._stage[b // self.T, rows] = comp[b, :n].to(torch.bfloat16)
 
-    def stage_commit(self):
-        """Upload the staging pool into the device pool (in place when the pool exists)."""
-        stage = self._stage.reshape(self.rows, 1, self.total_rows, HEAD_DIM).contiguous()
-        if self.dtype != ttnn.bfloat16:
-            stage = stage.float()
-        new = ttnn.from_torch(
-            stage,
-            device=self.md,
-            dtype=self.dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.md, dims=(0, None), mesh_shape=(self.rows, self.cols)),
-        )
-        ttnn.copy(new, self.pool)
-        ttnn.deallocate(new)
+    def stage_commit(self, chunk_rows=16384):
+        """Upload the staging pool into the device pool IN PLACE and in chunks (``paged_scatter_rows``: no second pool-sized device buffer, no host fp32
+        copy for an fp8 pool: the kernel converts bf16 -> e4m3). All-zero chunks are skipped."""
+        mapper = ttnn.ShardTensor2dMesh(self.md, dims=(0, None), mesh_shape=(self.rows, self.cols))
+        rep = ttnn.ReplicateTensorToMesh(self.md)
+        ids = {}
+        for a in range(0, self.total_rows, chunk_rows):
+            n = min(chunk_rows, self.total_rows - a)
+            chunk = self._stage[:, a : a + n]
+            if not bool(chunk.any()):
+                continue
+            if n not in ids:
+                ids[n] = ttnn.from_torch(
+                    torch.arange(n, dtype=torch.int32).reshape(1, n),
+                    device=self.md,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=rep,
+                )
+            src = ttnn.from_torch(
+                chunk.reshape(self.rows, 1, n, HEAD_DIM).contiguous(),
+                device=self.md,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mapper,
+            )
+            paged_scatter_rows(self.pool, src, ids[n], base_offset=a)
+            ttnn.synchronize_device(self.md)
+            ttnn.deallocate(src)
+        for t in ids.values():
+            ttnn.deallocate(t)
         self._stage = None
 
 
@@ -275,7 +293,7 @@ def paged_kv_step(
 
 
 def paged_scatter_rows(pool, src, row_ids, n_cores=16, base_offset=0):
-    """In place: pool[row_ids[i] + base_offset] = src[i] (``base_offset``: runtime constant, e.g. ``pool.ring_base(l)``, so one ids tensor serves all layers' rings). src: bf16 ROW_MAJOR [N, 512] (per device), row_ids: uint32 ROW_MAJOR [1, N] (0xFFFFFFFF = skip). This is the
+    """In place: pool[row_ids[i] + base_offset] = src[i] (``base_offset``: runtime constant, e.g. ``pool.ring_base(l)`` so one ids tensor serves all layers' rings). src: bf16 ROW_MAJOR [N, 512] (per device), row_ids: uint32 ROW_MAJOR [1, N] (0xFFFFFFFF = skip). This is the
     write path of prefill chunks and multi-row (spec decode) appends: the caller translates logical rows to physical pool rows with the page table
     (``PagedKVPool.phys_rows`` on the host, or ``paged_kv_step`` on the device for decode)."""
     md = pool.device()
