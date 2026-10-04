@@ -24,6 +24,7 @@ sys.path.insert(0, str(_PERF))
 from regression_compare import (  # noqa: E402
     DEFAULT_MIN_CYCLES,
     DEFAULT_THRESHOLD,
+    _confirm_spec,
     _medians,
     compare_runs,
     render_report,
@@ -419,3 +420,75 @@ def test_a_run_type_preset_selects_its_run_types(tmp_path):
         iso[0] + l1[0], iso[1] + l1[1], run_types="ALL_ISOLATION_MODES"
     )
     assert {r["run_type"] for r in result["regressions"]} == {"PACK_ISOLATE"}
+
+
+def _two_run_types(tmp_path, name, l1, pack, module="perf_x"):
+    """One TILE_LOOP point measured as L1_TO_L1 and as PACK_ISOLATE (None: not measured)."""
+    path = tmp_path / name / f"{module}.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cols = {"marker": ["TILE_LOOP"], "tile_cnt": [4], "mean(L1_TO_L1)": [l1]}
+    if pack is not None:
+        cols["mean(PACK_ISOLATE)"] = [pack]
+    pd.DataFrame(cols).to_csv(path, index=False)
+    return str(path)
+
+
+def _confirmed(tmp_path, l1, pack, base_pack=10000.0, **kw):
+    base = _two_run_types(tmp_path, "base", 20000.0, base_pack)
+    cur = _two_run_types(tmp_path, "cur", l1, pack)
+    return compare_runs(
+        [cur],
+        [base],
+        threshold=0.04,
+        run_types="L1_TO_L1",
+        confirm=_confirm_spec("L1_TO_L1"),
+        **kw,
+    )
+
+
+def test_confirm_spec_defaults_to_the_isolate_run_types():
+    assert _confirm_spec("L1_TO_L1") == {
+        "L1_TO_L1": ("UNPACK_ISOLATE", "MATH_ISOLATE", "PACK_ISOLATE")
+    }
+    assert _confirm_spec("L1_TO_L1:PACK_ISOLATE+MATH_ISOLATE") == {
+        "L1_TO_L1": ("PACK_ISOLATE", "MATH_ISOLATE")
+    }
+    assert _confirm_spec("") == {}
+
+
+def test_phase_step_without_a_slower_thread_is_not_a_regression(tmp_path):
+    # L1_TO_L1 8% slower, PACK_ISOLATE unchanged: the Wormhole packer phase moved.
+    result = _confirmed(tmp_path, l1=21600.0, pack=10000.0)
+    assert result["regressions"] == []
+    assert len(result["unconfirmed"]) == 1
+    assert result["unconfirmed"][0]["confirmation"] == "unconfirmed"
+
+
+def test_slower_isolate_confirms_the_regression(tmp_path):
+    result = _confirmed(tmp_path, l1=21600.0, pack=10500.0)
+    assert len(result["regressions"]) == 1
+    assert result["regressions"][0]["confirmation"] == "confirmed"
+
+
+def test_backstop_fires_without_confirmation(tmp_path):
+    result = _confirmed(tmp_path, l1=22400.0, pack=10000.0, backstop=0.10)
+    assert result["regressions"][0]["confirmation"] == "backstop"
+
+
+def test_missing_confirming_data_fires_by_default_and_can_be_dropped(tmp_path):
+    fired = _confirmed(tmp_path, l1=21600.0, pack=None, base_pack=None)
+    assert fired["regressions"][0]["confirmation"] == "no confirming data"
+    dropped = _confirmed(
+        tmp_path, l1=21600.0, pack=None, base_pack=None, confirm_missing="drop"
+    )
+    assert dropped["regressions"] == []
+    assert dropped["unconfirmed"][0]["confirmation"] == "no confirming data"
+
+
+def test_confirmation_leaves_other_run_types_alone(tmp_path):
+    base = _csv(tmp_path, "b.csv", _INIT, _TILE_LOOP)
+    cur = _csv(tmp_path, "c.csv", _INIT, _TILE_LOOP * 1.10)
+    result = compare_runs(
+        [cur], [base], confirm=_confirm_spec("L1_TO_L1"), backstop=0.5
+    )
+    assert len(result["regressions"]) == 1  # MATH_ISOLATE needs no confirmation
