@@ -404,8 +404,8 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     }
 
     const bool math_approx_mode = false;
-    const auto bf16_kernel_defines =
-        get_bf16_kernel_defines(ops_chain, input.dtype(), output.dtype(), operation_attributes.fp32_dest_acc_en);
+    const auto bf16_kernel_defines = get_bf16_kernel_defines(
+        ops_chain, input.dtype(), output.dtype(), operation_attributes.fp32_dest_acc_en, input.device()->arch());
     // A generated kernel computes the op in one SFPU pass of the plain SFPU program.
     std::map<std::string, std::string> unary_defines =
         bf16_kernel_defines ? *bf16_kernel_defines : get_block_defines(ops_chain, "0", "0", input.dtype());

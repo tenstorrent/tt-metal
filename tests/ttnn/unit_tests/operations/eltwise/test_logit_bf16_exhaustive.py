@@ -18,6 +18,7 @@ that differs from torch, it is the class the TT-NN op this kernel replaces store
 import torch
 import ttnn
 
+from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 from tests.ttnn.utils_for_testing import generate_all_bfloat16_bitpatterns
 
 SMALLEST_NORMAL = 2.0**-126
@@ -90,6 +91,7 @@ def _pure_ulp(reference, actual):
     return torch.where(same_class, ulp, torch.full_like(ulp, float("inf")))
 
 
+@run_for_wormhole_b0_or_blackhole("the generated kernel exists for Blackhole and Wormhole only")
 def test_logit_exhaustive_bfloat16(device):
     x = generate_all_bfloat16_bitpatterns(torch.bfloat16)
     tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
