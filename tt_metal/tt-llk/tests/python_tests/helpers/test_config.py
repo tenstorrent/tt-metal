@@ -497,6 +497,9 @@ class TestConfig:
             "-ffast-math "
             "-fno-finite-math-only -fsigned-zeros -fno-associative-math "
             "-fno-exceptions -fno-rtti -fno-use-cxa-atexit "
+            "-falign-functions=64 "  # fixed callee layout for the measured loops
+            "-falign-loops=64 "
+            "-falign-jumps=64 "
         )
         TestConfig.WITH_COVERAGE = with_coverage
         StimuliConfig.WITH_COVERAGE = with_coverage
