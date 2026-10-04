@@ -365,6 +365,10 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
     distributed::ReplicatedBufferConfig f16_buf_cfg{.size = f16_tile_size};
     distributed::ReplicatedBufferConfig f32_buf_cfg{.size = f32_tile_size};
     distributed::ReplicatedBufferConfig out_buf_cfg{.size = out_bytes};
+    // One page for the whole output, so it sits in one DRAM bank: the writer writes bank_id 0
+    // linearly, and a page per tile would interleave the tiles across the banks.
+    distributed::DeviceLocalBufferConfig out_dram_cfg{
+        .page_size = out_bytes, .buffer_type = tt::tt_metal::BufferType::DRAM, .bottom_up = false};
 
     auto inp0_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
     auto inp1_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
@@ -372,7 +376,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
     auto inp3_dram = distributed::MeshBuffer::create(f32_buf_cfg, f32_dram_cfg, mesh_device.get());
     auto inp4_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
     auto inp5_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
-    auto out_dram = distributed::MeshBuffer::create(out_buf_cfg, f16_dram_cfg, mesh_device.get());
+    auto out_dram = distributed::MeshBuffer::create(out_buf_cfg, out_dram_cfg, mesh_device.get());
 
     const experimental::DFBSpecName INP0_DFB{"in0"};
     const experimental::DFBSpecName INP1_DFB{"in1"};
@@ -462,7 +466,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
 
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
-        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = OUT_DFB,
@@ -632,6 +636,9 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
 
     std::vector<std::uint32_t> dest_buffer_data;
     distributed::ReadShard(cq, dest_buffer_data, out_dram, zero_coord, false);
+    // The read above is non-blocking, so completion is not guaranteed when ReadShard returns.
+    // Wait for the queue before consuming the destination vector.
+    distributed::Finish(cq);
 
     auto device_unpacked = unpack_vector<bfloat16, std::uint32_t>(dest_buffer_data);
     auto golden_unpacked = unpack_vector<bfloat16, std::uint32_t>(packed_golden);
@@ -1005,6 +1012,9 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
     distributed::ReadShard(cq, out0_data, out0_dram, zero_coord, false);
     distributed::ReadShard(cq, out1_data, out1_dram, zero_coord, false);
     distributed::ReadShard(cq, out2_data, out2_dram, zero_coord, false);
+    // The three reads above are non-blocking, so completion is not guaranteed when ReadShard returns.
+    // Wait for the queue before consuming the destination vectors.
+    distributed::Finish(cq);
 
     bool pass = true;
 

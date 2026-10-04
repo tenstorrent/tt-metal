@@ -4,7 +4,7 @@
 
 """Shared base classes and validation for fuser config schemas.
 
-Each architecture (wormhole/parser.py, blackhole/parser.py) inherits from the base
+Each architecture (wormhole/parser.py, blackhole/parser.py, quasar/parser.py) inherits from the base
 classes defined here and supplies plain dicts that control all validation and
 construction. The dicts are:
 
@@ -12,7 +12,8 @@ construction. The dicts are:
     UNPACKER_MAP         unpacker name to (factory(schema), checks), set via _unpacker_map class attr
     PACKER_MAP           packer name to (class, checks), set via _packer_map class attr
     OUTPUT_DIMS          op name to lambda(in0, in1), set via _output_dims class attr
-    UNARY/BINARY_SFPU_OPS  set of supported MathOperation, set via _sfpu_ops class attr
+    UNARY/BINARY/
+    TERNARY_SFPU_OPS     set of supported MathOperation, set via _sfpu_ops class attr
 """
 
 from typing import Annotated, ClassVar, Dict, List, Literal, Optional, Tuple, Union
@@ -65,7 +66,7 @@ SFPU_TILE_SIZES = {
     (32, 32),
 }
 
-INDEX_SLOT_NAMES = frozenset({"in0", "in1", "dest", "out", "src0", "src1"})
+INDEX_SLOT_NAMES = frozenset({"in0", "in1", "dest", "out", "src0", "src1", "src2"})
 
 
 class IndexSlotSpec(BaseModel):
@@ -99,6 +100,7 @@ class IndexesSchema(BaseModel):
     out: Optional[IndexSlot] = None
     src0: Optional[IndexSlot] = None
     src1: Optional[IndexSlot] = None
+    src2: Optional[IndexSlot] = None
 
     @field_validator(*INDEX_SLOT_NAMES, mode="after")
     @classmethod
@@ -111,7 +113,7 @@ class IndexesSchema(BaseModel):
     def validate_lists(self) -> "IndexesSchema":
         template = {
             s: len(getattr(self, s))
-            for s in ("dest", "src0", "src1")
+            for s in ("dest", "src0", "src1", "src2")
             if isinstance(getattr(self, s), list)
         }
         walked = {
@@ -442,6 +444,18 @@ class BinarySfpuMathSchema(BaseModel):
 
     def get_output_dimensions(self, operands) -> Optional[Tuple[int, int]]:
         return None
+
+
+class TernarySfpuMathSchema(BinarySfpuMathSchema):
+    """Base schema for ternary SFPU math nodes (type="TernarySfpu")."""
+
+    type: Literal["TernarySfpu"]
+    iterations: Literal[8] = 8
+
+    @field_validator("operation", mode="before")
+    @classmethod
+    def parse_operation(cls, v):
+        return parse_sfpu_operation(v, cls._sfpu_ops, "ternary")
 
 
 class FpuMathSchemaBase(BaseModel):

@@ -582,6 +582,12 @@ sfpi_inline sfpi::vFloat sfpu_acos_fp32(sfpi::vFloat x) {
     return r;
 }
 
+// Whether BF16 DEST runs the generated asin kernel as one call over the whole tile.
+inline constexpr bool asin_bf16_whole_tile = false;
+// The stock asin kernel needs no BF16 setup.
+template <bool bf16_kernel>
+inline void asin_bf16_tile_init() {}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_asin() {
     for (int d = 0; d < ITERATIONS; d++) {
