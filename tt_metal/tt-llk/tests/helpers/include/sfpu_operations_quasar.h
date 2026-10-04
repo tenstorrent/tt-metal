@@ -230,7 +230,7 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::mish)
     {
-        mish_init<APPROX, true>();
+        mish_init<APPROX>();
     }
     else if constexpr (OPERATION == SfpuType::hardshrink)
     {

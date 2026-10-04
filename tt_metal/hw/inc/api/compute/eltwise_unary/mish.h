@@ -37,18 +37,16 @@ namespace ckernel {
 // clang-format on
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void mish_tile(uint32_t idst) {
-#if defined(ARCH_BLACKHOLE)
-    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
-        MATH(SFPU_UNARY_CALL(
+    MATH(if constexpr (ckernel::sfpu::mish_bf16_whole_tile && !is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
+        SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             is_fp32_dest_acc_en,
             calculate_mish,
             (APPROXIMATION_MODE, is_fp32_dest_acc_en, 32),
             idst,
-            VectorMode::None));
+            VectorMode::None);
         return;
-    }
-#endif
+    });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_mish, (APPROXIMATION_MODE, is_fp32_dest_acc_en), idst, VectorMode::RC));
 }

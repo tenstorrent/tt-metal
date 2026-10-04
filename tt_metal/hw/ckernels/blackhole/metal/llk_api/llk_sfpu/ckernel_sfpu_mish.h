@@ -38,6 +38,8 @@ namespace ckernel::sfpu {
 bool bf16_dest_mish();
 template <int ITERATIONS>
 void calculate_mish_bf16();
+// Whether BF16 DEST runs the generated mish kernel as one call over the whole tile.
+inline constexpr bool mish_bf16_whole_tile = true;
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_mish() {
@@ -100,7 +102,7 @@ inline void calculate_mish() {
 
 void init_mish_bf16();
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 inline void mish_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     // exp does not need an init.
