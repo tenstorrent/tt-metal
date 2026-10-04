@@ -279,7 +279,7 @@ class FuserConfigSchema(BaseModel):
             base = self.indexes[index_spec.ref]
             merged = {
                 slot: getattr(base, slot)
-                for slot in ("in0", "in1", "dest", "out", "src0", "src1")
+                for slot in ("in0", "in1", "dest", "out", "src0", "src1", "src2")
                 if getattr(base, slot) is not None
             }
             for slot, value in index_spec.slot_overrides().items():

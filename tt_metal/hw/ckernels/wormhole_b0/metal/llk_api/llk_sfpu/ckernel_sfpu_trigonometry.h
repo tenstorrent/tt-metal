@@ -664,6 +664,8 @@ inline void acos_init() {
 bool bf16_dest_acos();
 template <int ITERATIONS>
 void calculate_acos_bf16();
+// Whether BF16 DEST runs the generated acos kernel as one call over the whole tile.
+inline constexpr bool acos_bf16_whole_tile = true;
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_acos() {
