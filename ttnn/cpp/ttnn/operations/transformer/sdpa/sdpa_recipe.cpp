@@ -54,8 +54,11 @@ uint32_t recipe_dense_k_tiles(const std::optional<SDPAProgramConfig>& program_co
 }
 
 uint32_t recipe_compute_q_tiles(const PrecisionPolicy& policy, uint32_t q_tiles) {
-    const bool paired = policy.recurrent_state == RecurrentState::ReferenceMaxFP32;
-    return paired && q_tiles % 2 != 0 ? q_tiles + 1 : q_tiles;
+    // LOW_PRECISION builds the single-row tail group; STANDARD's (unfused exp ring build) does not fit the kernel
+    // config buffer with it, so STANDARD pads.
+    const bool padded =
+        policy.recurrent_state == RecurrentState::ReferenceMaxFP32 && policy.selection.recipe != Recipe::E;
+    return padded && q_tiles % 2 != 0 ? q_tiles + 1 : q_tiles;
 }
 
 uint32_t recipe_subblock_width(uint32_t tiles) { return tiles % 4 == 0 ? 4 : tiles % 2 == 0 ? 2 : 1; }
@@ -89,6 +92,10 @@ ProgramDescriptor recipe_compute_program(
                                                                           : DataType::BFLOAT4_B;
     const auto kv_format = datatype_to_dataformat_converter(kv_type);
     const uint32_t kv_bytes = kv_type == DataType::BFLOAT16 ? 2048 : kv_type == DataType::BFLOAT8_B ? 1088 : 576;
+    // LOW_PRECISION runs every K chunk after a Q chunk's first on the fused chunk (recipe_fused_chunk.hpp). It
+    // needs QK subblocks at least two tiles wide: the one-wide LoFi matmul reuses its other operand, which the
+    // m_ref inner step does not support.
+    const bool fused = policy.selection.recipe == Recipe::E && recipe_subblock_width(k_tiles) >= 2;
     ProgramDescriptor program;
     auto add_cb = [&](uint8_t index, uint32_t count, uint32_t page, tt::DataFormat format) {
         CBDescriptor cb{
@@ -130,6 +137,14 @@ ProgramDescriptor recipe_compute_program(
         add_cb(index, q_tiles, 2048, tt::DataFormat::Float16_b);
     }
     add_cb(14, q_tiles, state_bytes, state_format);
+    if (fused) {
+        // CB 31: one row group's saturation check in the fused LOW_PRECISION chunks.
+        add_cb(31, 1, 2048, tt::DataFormat::Float16_b);
+        // CB 30: per Q tile row, QK-subblock-width partial row sums of the fused chunks.
+        add_cb(30, q_tiles * recipe_subblock_width(k_tiles), 2048, tt::DataFormat::Float16_b);
+        // CB 29: QK-subblock-width copies of -e0 in K's format (the fused chunks subtract m_ref in the QK).
+        add_cb(29, recipe_subblock_width(k_tiles), kv_bytes, kv_format);
+    }
     add_cb(16, (fp32 ? 2 : 4) * d_tiles, 2048, tt::DataFormat::Float16_b);
     ComputeConfigDescriptor compute_config{
         .math_fidelity = policy.pv_fidelity,
@@ -173,6 +188,9 @@ ProgramDescriptor recipe_compute_program(
     }
     if (policy.selection.recipe == Recipe::E) {
         compute.defines.emplace_back("SDPA_RECIPE_LOFI", "1");
+    }
+    if (fused) {
+        compute.defines.emplace_back("SDPA_RECIPE_FUSED", "1");
     }
     if (policy.selection.recipe == Recipe::A) {
         compute.defines.emplace_back("SDPA_RECIPE_BASELINE", "1");
