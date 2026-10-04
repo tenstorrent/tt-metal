@@ -772,6 +772,16 @@ class TILIZE(TemplateParameter):
 
 
 @dataclass
+class PACK_BLOCK(TemplateParameter):
+    """Pack every dest block with one _llk_pack_block_ run instead of one _llk_pack_ per tile (Blackhole)."""
+
+    pack_block: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool pack_block_en = {str(self.pack_block).lower()};"
+
+
+@dataclass
 class IMPLIED_MATH_FORMAT(TemplateParameter):
     implied_math_format: ImpliedMathFormat = ImpliedMathFormat.No
 

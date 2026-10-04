@@ -478,7 +478,7 @@ void kernel_main() {
 #endif
 #endif
                                 uint32_t start_dst_index = 0;
-                                pack_block(start_dst_index, mm_out_dfb_id, out_subblock_num_tiles);
+                                pack_block_mop(start_dst_index, mm_out_dfb_id, out_subblock_num_tiles);
 
                                 tile_regs_release();
                                 mm_out_dfb.push_back(out_subblock_num_tiles);
@@ -501,7 +501,7 @@ void kernel_main() {
 #endif
 
                                 uint32_t start_dst_index = 0;
-                                pack_block(start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles);
+                                pack_block_mop(start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles);
 
                                 tile_regs_release();
                                 mm_partials_dfb.push_back(out_subblock_num_tiles);
