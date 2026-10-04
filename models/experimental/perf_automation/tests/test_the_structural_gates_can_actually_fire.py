@@ -148,7 +148,10 @@ def test_every_kind_a_gate_names_is_one_the_recorder_accepts():
     m = _mcp()
     assert "} | _GATE_KINDS" in _SRC, "record_kernel_attempt no longer accepts the gates' own levers"
     for kinds, _cap_env in m._GATE_LEVERS:
-        assert set(kinds) <= m._GATE_KINDS
+        # A gate rung that writes a KERNEL is recorded like cpp/tt-lang (it must show one in the
+        # source); every other gate kind is recorded as a restructure.
+        for k in kinds:
+            assert k in m._GATE_KINDS or k in m._KERNEL_AUTHORED_RUNGS, k
 
 
 def test_each_gate_asks_for_a_kind_from_its_own_lever(monkeypatch):

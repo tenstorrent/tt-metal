@@ -614,7 +614,10 @@ _STRUCTURAL_RUNGS = {"structural", "gather", "fusion", "fuse", "sparse", "cache"
 # The rungs whose whole claim is that a KERNEL was written, and therefore the only ones whose
 # records may be required to show one in the source. Everything else -- a knob, a structural
 # restructure, a gate lever -- changes the model without leaving a kernel marker behind.
-_KERNEL_AUTHORED_RUNGS = {"tt-lang", "ttl", "cpp", "c++", "metalium"}
+# The fusion ladder's two kernel rungs (see _FUSION_LADDER) write a kernel for a GROUP of ops, so they
+# carry the same proof-of-kernel requirement as the single-op ones.
+_FUSE_KERNEL_KINDS = frozenset({"fuse-cpp", "fuse-tt-lang"})
+_KERNEL_AUTHORED_RUNGS = {"tt-lang", "ttl", "cpp", "c++", "metalium"} | _FUSE_KERNEL_KINDS
 # THE ladder, in climb order, for each roofline binding. ONE table, because the module used to hold
 # two orderings of the same rungs and only one of them knew what the op was waiting on:
 # `_KNOB_ORDER` (below, now derived from here) steered the per-op gate correctly, while a separate
@@ -5923,14 +5926,46 @@ _ORDER_LEVER = (("order", "structural-order"), "PERF_MCP_MAX_ORDER_ATTEMPTS")
 _CONV_LEVER = (("conv-prep", "structural-conv"), "PERF_MCP_MAX_CONV_ATTEMPTS")
 _SPLIT_LEVER = (("split", "structural-split"), "PERF_MCP_MAX_SPLIT_ATTEMPTS")
 _STOCK_LEVER = (("stock", "structural-stock"), "PERF_MCP_MAX_STOCK_ATTEMPTS")
-_GATE_LEVERS = (_FOLD_LEVER, _ORDER_LEVER, _CONV_LEVER, _SPLIT_LEVER, _STOCK_LEVER)
+# THE FUSION LADDER: what a group of ops repeated within a layer is offered, in order, each rung only
+# once the one before it is spent without a win. The fold used to be the whole of it -- three tries
+# and the group closed, so a group the fold could not help never reached the step that could:
+# Qwen-Image-Edit's precise matmuls (the same weight multiplied by the bf16 hi and lo parts of one
+# input, then summed in fp32) were folded where they could be and never offered a fused kernel.
+#   fold        concatenate the repeats into one wider or batched op           (_FOLD_LEVER)
+#   share       compute an input the repeats share once, not per op            (_SHARE_LEVER)
+#   fuse-ttnn   use ttnn's own fused forms for the group (GUIDELINES 06)        (_FUSE_TTNN_LEVER)
+#   fuse-cpp    one C++ kernel for the whole group via ttnn.generic_op          (_FUSE_CPP_LEVER)
+#   fuse-tt-lang  the same kernel in tt-lang, when tt-lang is installed          (_FUSE_TTL_LEVER)
+_SHARE_LEVER = (("share", "structural-share"), "PERF_MCP_MAX_SHARE_ATTEMPTS")
+_FUSE_TTNN_LEVER = (("fuse-ttnn", "structural-fuse-ttnn"), "PERF_MCP_MAX_FUSE_TTNN_ATTEMPTS")
+_FUSE_CPP_LEVER = (("fuse-cpp",), "PERF_MCP_MAX_FUSE_CPP_ATTEMPTS")
+_FUSE_TTL_LEVER = (("fuse-tt-lang",), "PERF_MCP_MAX_FUSE_TTL_ATTEMPTS")
+_FUSION_LADDER = (_FOLD_LEVER, _SHARE_LEVER, _FUSE_TTNN_LEVER, _FUSE_CPP_LEVER, _FUSE_TTL_LEVER)
+_GATE_LEVERS = (
+    _FOLD_LEVER,
+    _ORDER_LEVER,
+    _CONV_LEVER,
+    _SPLIT_LEVER,
+    _STOCK_LEVER,
+    _SHARE_LEVER,
+    _FUSE_TTNN_LEVER,
+    _FUSE_CPP_LEVER,
+    _FUSE_TTL_LEVER,
+)
 _GATE_ATTEMPT_DEFAULT = "3"
-_GATE_KINDS = frozenset(k for kinds, _cap_env in _GATE_LEVERS for k in kinds)
+# The rungs after the fold take one try each by default: "none: <why it does not apply>" is the
+# expected answer for most groups, and three apiece would spend a dozen attempts walking a group that
+# nothing helps. Each stays overridable through its own env var.
+_GATE_CAP_DEFAULTS = {cap_env: "1" for _kinds, cap_env in _FUSION_LADDER[1:]}
+# Kinds recorded without a kernel marker. The fusion ladder's kernel rungs are NOT among them: like
+# cpp and tt-lang they must show a kernel in the source (_KERNEL_AUTHORED_RUNGS).
+_GATE_KINDS = frozenset(k for kinds, _cap_env in _GATE_LEVERS for k in kinds) - _FUSE_KERNEL_KINDS
 
 
 def _gate_cap(cap_env: str) -> int:
     """How many recorded attempts retire a structural gate that was never won."""
-    return int(os.environ.get(cap_env, _GATE_ATTEMPT_DEFAULT) or _GATE_ATTEMPT_DEFAULT)
+    default = _GATE_CAP_DEFAULTS.get(cap_env, _GATE_ATTEMPT_DEFAULT)
+    return int(os.environ.get(cap_env, default) or default)
 
 
 def _gate_retired(lever, attempts: list) -> bool:
@@ -6710,6 +6745,85 @@ def _decode_gate(prof: dict, attempts: list) -> dict | None:
     }
 
 
+def _attempt_counts_for_the_ladder(a: dict) -> bool:
+    """Does this recorded attempt answer the rung it names?
+
+    A kernel rung's claim needs a kernel in the source -- a tt-lang/C++ record with no marker cannot
+    clear an op. The fusion ladder's kernel rungs add one honest answer that leaves no kernel behind:
+    `none: <why this group has nothing to fuse>`, which the rung invites by name. Dropping that record
+    would let the recorder count the rung spent while the gate kept asking for it -- the deadlock the
+    gate allowances exist to prevent."""
+    kind = _normalise_rung(a.get("kernel_kind"))
+    if a.get("kernel_detected_in_source") or kind not in _KERNEL_AUTHORED_RUNGS:
+        return True
+    return kind in _FUSE_KERNEL_KINDS and str(a.get("note") or "").strip().lower().startswith("none:")
+
+
+def _fusion_rung(attempts: list):
+    """The fusion ladder's rung a repeated group is on, or None when it is answered.
+
+    Answered means a MEASURED win on any rung -- the group is fused, nothing below it is owed -- or every
+    rung spent to its cap. Otherwise the first rung not yet spent, in _FUSION_LADDER order. The tt-lang
+    rung is skipped where tt-lang is not installed: a rung nobody can climb must not hold a group open."""
+    for kinds, _cap_env in _FUSION_LADDER:
+        if any(_ledger().is_win(a) for a in attempts if (a.get("kernel_kind") or "").lower() in kinds):
+            return None
+    for lever in _FUSION_LADDER:
+        if lever is _FUSE_TTL_LEVER and not _ttl_available():
+            continue
+        if not _gate_retired(lever, attempts):
+            return lever
+    return None
+
+
+# What each rung after the fold asks of the agent. Keyed by the rung's own kind, which the text names
+# verbatim, so the instruction and the recorder's vocabulary are one contract.
+_FUSION_RUNG_ASKS = {
+    "share": (
+        "SHARE WHAT THE REPEATS HAVE IN COMMON -- the fold is spent on this group. If the repeats start "
+        "from the same input (split, normalised, cast or projected once PER OP), compute that once and "
+        "hand every repeat the shared result: the same math, fewer ops, bit-identical by construction."
+    ),
+    "fuse-ttnn": (
+        "USE TTNN'S OWN FUSED FORMS for the group -- an activation into its producing matmul, a cast "
+        "into the reshard, a unary chain, add+norm: recall_knobs(op_class) returns GUIDELINES 06."
+    ),
+    "fuse-cpp": (
+        "ONE KERNEL FOR THE WHOLE GROUP -- author a C++ kernel via ttnn.generic_op that does the "
+        "repeated products AND their combine in one pass (GUIDELINES 06 #fuse-group-kernel, 12): e.g. "
+        "the same weight against several parts of one input, accumulated into one fp32 destination "
+        "(fp32_dest_acc_en) and written once, instead of one matmul per part plus an add chain through "
+        "DRAM. It must reproduce the multi-op path (check_pcc; bit-identical where the math is exact)."
+    ),
+    "fuse-tt-lang": (
+        "ONE KERNEL FOR THE WHOLE GROUP, in tt-lang (GUIDELINES 06 #fuse-group-kernel, 11) -- the same "
+        "group kernel as the fuse-cpp rung, for when C++ did not pay or tt-lang expresses it better."
+    ),
+}
+
+
+def _fusion_rung_target(lever, worst: dict, baseline: int, gap: float) -> dict:
+    """The work item for a repeated group on a rung after the fold -- same shape as the fold's own."""
+    kind = lever[0][0]
+    op = str(worst.get("op_code") or "repeated_op")
+    per_layer = int(worst.get("count") or 0) // max(1, baseline)
+    return {
+        "op": op,
+        "op_class": str(worst.get("bucket") or ""),
+        "gap_ms": round(gap, 4),
+        "bound_by": worst.get("bound_by"),
+        "grid": worst.get("grid"),
+        "weight_dtype": worst.get("weight_dtype"),
+        "next_rung": lever[0][-1],
+        "reason": (
+            "%s %r runs %dx per layer. Measure, and record_kernel_attempt(op=%r,'%s',measured_ms,"
+            "beat_baseline) -- or, when the rung cannot apply to this group, record it with "
+            "note='none: <why not>' and the ladder moves on. It clears on a MEASURED win."
+        )
+        % (_FUSION_RUNG_ASKS[kind], op, per_layer, op, kind),
+    }
+
+
 def _fold_gate(prof: dict, attempts: list) -> dict | None:
     """One op fingerprint evaluated many times per layer -- fold the repeats into one wider matmul.
 
@@ -6754,9 +6868,12 @@ def _fold_gate(prof: dict, attempts: list) -> dict | None:
     gap = sum(float(o.get("gap_ms") or 0.0) for o in cands)
     if gap < _material_gap_ms(float(prof.get("device_ms") or 0.0)):
         return None
-    if _gate_retired(_FOLD_LEVER, attempts):
-        return None  # (2) measured win, or (3) capped
+    lever = _fusion_rung(attempts)
+    if lever is None:
+        return None  # (2) a measured win on any rung, or (3) every rung spent
     worst = max(cands, key=lambda o: float(o.get("gap_ms") or 0.0))
+    if lever is not _FOLD_LEVER:
+        return _fusion_rung_target(lever, worst, baseline, gap)
     return {
         "op": str(worst.get("op_code") or "repeated_op"),
         "op_class": str(worst.get("bucket") or ""),
@@ -8203,11 +8320,7 @@ def termination_check() -> dict:
     # rung back as next_target. Observed on voxtral_4b_tts_2603 2026-09-21: the vocab head sat at
     # `structural` with six structural attempts on file, every one of them unrecordable, and
     # finish_round could not be satisfied by any action the agent was able to take.
-    attempts = [
-        a
-        for a in _load_attempts_all()
-        if a.get("kernel_detected_in_source") or _normalise_rung(a.get("kernel_kind")) not in _KERNEL_AUTHORED_RUNGS
-    ]
+    attempts = [a for a in _load_attempts_all() if _attempt_counts_for_the_ladder(a)]
     blocking, cleared = [], []
     material = _material_gap_ms(dev)
     for o in rep.get("open_ops") or []:
@@ -8292,6 +8405,8 @@ def termination_check() -> dict:
     fold_block = _fold_gate(_gate_prof, attempts)
     if fold_block:
         blocking.append(fold_block)
+    # Exactly as before the fusion ladder: these three ride with the FOLD rung, not the later ones.
+    if fold_block and fold_block.get("next_rung") == _FOLD_LEVER[0][-1]:
         order_block = _order_gate(_gate_prof, attempts)
         if order_block:
             blocking.append(order_block)

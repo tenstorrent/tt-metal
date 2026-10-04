@@ -206,3 +206,35 @@ investing in op-count work.**
 | Cross-block sharded handoff | shared shard config | host-bound |
 | Don't shard one-shot tensors | — | avoids regression |
 | Don't fuse into reshard-internally ops | — | avoids regression |
+| One kernel for a repeated op group (§11) | a group the fold could not help | device time, fewer DRAM round trips |
+
+---
+
+## 11. One kernel for a repeated op group {#fuse-group-kernel}
+<!-- route
+op_class: matmul,eltwise
+rank: time
+lever_type: structural
+-->
+
+The last rungs of the fusion ladder, for a group of ops that repeats within a layer when folding it
+into one wider op did not pay. The common case is a **multi-pass precision matmul**: one fp32
+activation split into bf16 parts (`hi`, `lo`, sometimes more), each part multiplied by the **same**
+weight, and the partial products summed in fp32. As separate ops that is one matmul per part, an add
+per extra part, and every partial result written to and re-read from DRAM.
+
+**The kernel** (`ttnn.generic_op`, GUIDELINES 12 for the API; tt-lang per 11):
+
+1. Reader: stream each part's input tiles and the weight tiles once; the weight is shared, so read
+   it once per output block, not once per part.
+2. Compute: run every part's matmul into **one** fp32 destination (`fp32_dest_acc_en=True`) and keep
+   accumulating across parts and K blocks before packing; no intermediate result leaves the core.
+3. Writer: write the summed output once.
+
+**Check it like the ops it replaces:** it must reproduce the multi-op result -- bit-identical when the
+original combine is exact (same per-part products, same accumulation order), and in any case within
+the model's own PCC gate. Time it end to end; a group kernel that loses to the separate ops is a valid
+`none:` record, not a reason to keep it.
+
+**When not to:** a group whose parts use different weights, or whose parts depend on each other's
+results, has nothing to share in one pass -- record the rung as `none: <why>`.
