@@ -67,6 +67,34 @@ class SpeechTokenizerConfig:
 # =============================================================================
 
 
+def _cached_conv(cache: Optional[dict], key: Optional[str], *, device, **conv_kwargs) -> "TTNNConv1d":
+    """Return a memoized ``TTNNConv1d``.
+
+    The first call builds the op (uploading the host weight); the first invocation
+    of that op prepares the weight on device and the op caches it. Reusing the same
+    object across forwards therefore skips re-uploading / re-preparing the weight.
+    If ``cache`` or ``key`` is None we fall back to building a fresh op (no caching).
+    """
+    if cache is None or key is None:
+        return TTNNConv1d(device=device, **conv_kwargs)
+    obj = cache.get(key)
+    if obj is None:
+        obj = TTNNConv1d(device=device, **conv_kwargs)
+        cache[key] = obj
+    return obj
+
+
+def _cached_tt(cache: Optional[dict], key: Optional[str], build):
+    """Return a memoized device tensor built by ``build()`` (a 0-arg callable)."""
+    if cache is None or key is None:
+        return build()
+    t = cache.get(key)
+    if t is None:
+        t = build()
+        cache[key] = t
+    return t
+
+
 def _causal_left_pad_nlc(x_nlc: ttnn.Tensor, pad: int, device) -> ttnn.Tensor:
     """Left-pad an NLC tensor [batch, length, channels] with ``pad`` zero frames.
 
@@ -133,7 +161,7 @@ def _zero_insert_nlc(x_nlc: ttnn.Tensor, stride: int, device) -> ttnn.Tensor:
     return ttnn.to_layout(up, orig_layout)
 
 
-def transpose_conv1d_nhwc(x_nhwc: ttnn.Tensor, weight: torch.Tensor, bias, stride: int, device):
+def transpose_conv1d_nhwc(x_nhwc: ttnn.Tensor, weight: torch.Tensor, bias, stride: int, device, cache=None, key=None):
     """ConvTranspose1d via zero-insertion + regular conv1d (numerically exact).
 
     ``ttnn.conv_transpose2d`` loses accuracy at large stride/kernel; this identity
@@ -149,7 +177,9 @@ def transpose_conv1d_nhwc(x_nhwc: ttnn.Tensor, weight: torch.Tensor, bias, strid
     up_len = (L - 1) * stride + 1
     x_pad = _pad_nlc(x_up, k - 1, k - 1, device)  # full padding both sides
     w_reg = weight.permute(1, 0, 2).flip(-1).contiguous()  # [out, in, k]
-    conv = TTNNConv1d(
+    conv = _cached_conv(
+        cache,
+        key,
         device=device,
         in_channels=in_c,
         out_channels=out_c,
@@ -175,6 +205,8 @@ def convnext_block(
     norm_bias: torch.Tensor,
     device,
     gamma: Optional[torch.Tensor] = None,
+    cache=None,
+    key_prefix=None,
 ) -> ttnn.Tensor:
     """ConvNeXt block for upsampling in TTNN.
 
@@ -183,12 +215,15 @@ def convnext_block(
     mc = ttnn.DRAM_MEMORY_CONFIG
     residual = x
     b, _, l, c = int(x.shape[0]), int(x.shape[1]), int(x.shape[2]), int(x.shape[3])
+    kp = key_prefix
 
     # Depthwise conv: NHWC -> NLC -> NHWC, causal (left-pad kernel-1, padding=0)
     kdw = int(dwconv_weight.shape[-1])
     x_nlc = ttnn.reshape(x, (b, l, c), memory_config=mc)
     x_nlc = _causal_left_pad_nlc(x_nlc, kdw - 1, device)
-    dw_conv = TTNNConv1d(
+    dw_conv = _cached_conv(
+        cache,
+        f"{kp}.dwconv" if kp else None,
         device=device,
         in_channels=c,
         out_channels=c,
@@ -202,51 +237,79 @@ def convnext_block(
     x = ttnn.reshape(x_nlc, (b, 1, out_len, c), memory_config=mc)
 
     # LayerNorm + pointwise linears in NHWC
-    norm_w_tt = ttnn.from_torch(
-        norm_weight.view(1, 1, 1, -1).to(torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
+    norm_w_tt = _cached_tt(
+        cache,
+        f"{kp}.norm_w" if kp else None,
+        lambda: ttnn.from_torch(
+            norm_weight.view(1, 1, 1, -1).to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        ),
     )
-    norm_b_tt = ttnn.from_torch(
-        norm_bias.view(1, 1, 1, -1).to(torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
+    norm_b_tt = _cached_tt(
+        cache,
+        f"{kp}.norm_b" if kp else None,
+        lambda: ttnn.from_torch(
+            norm_bias.view(1, 1, 1, -1).to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        ),
     )
     x = ttnn.layer_norm(x, weight=norm_w_tt, bias=norm_b_tt, memory_config=mc)
 
     # Pointwise convs (linear)
-    pw1_w_tt = ttnn.from_torch(
-        pwconv1_weight.T.contiguous().view(1, 1, pwconv1_weight.shape[1], pwconv1_weight.shape[0]).to(torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-    )
-    pw1_b_tt = (
-        ttnn.from_torch(
-            pwconv1_bias.view(1, 1, 1, -1).to(torch.bfloat16),
+    pw1_w_tt = _cached_tt(
+        cache,
+        f"{kp}.pw1_w" if kp else None,
+        lambda: ttnn.from_torch(
+            pwconv1_weight.T.contiguous()
+            .view(1, 1, pwconv1_weight.shape[1], pwconv1_weight.shape[0])
+            .to(torch.bfloat16),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
+        ),
+    )
+    pw1_b_tt = (
+        _cached_tt(
+            cache,
+            f"{kp}.pw1_b" if kp else None,
+            lambda: ttnn.from_torch(
+                pwconv1_bias.view(1, 1, 1, -1).to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+            ),
         )
         if pwconv1_bias is not None
         else None
     )
     x = ttnn.linear(x, pw1_w_tt, bias=pw1_b_tt, memory_config=mc)
     x = ttnn.gelu(x, memory_config=mc)
-    pw2_w_tt = ttnn.from_torch(
-        pwconv2_weight.T.contiguous().view(1, 1, pwconv2_weight.shape[1], pwconv2_weight.shape[0]).to(torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-    )
-    pw2_b_tt = (
-        ttnn.from_torch(
-            pwconv2_bias.view(1, 1, 1, -1).to(torch.bfloat16),
+    pw2_w_tt = _cached_tt(
+        cache,
+        f"{kp}.pw2_w" if kp else None,
+        lambda: ttnn.from_torch(
+            pwconv2_weight.T.contiguous()
+            .view(1, 1, pwconv2_weight.shape[1], pwconv2_weight.shape[0])
+            .to(torch.bfloat16),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
+        ),
+    )
+    pw2_b_tt = (
+        _cached_tt(
+            cache,
+            f"{kp}.pw2_b" if kp else None,
+            lambda: ttnn.from_torch(
+                pwconv2_bias.view(1, 1, 1, -1).to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+            ),
         )
         if pwconv2_bias is not None
         else None
@@ -255,15 +318,44 @@ def convnext_block(
 
     # Layer scale (broadcast on channels)
     if gamma is not None:
-        gamma_tt = ttnn.from_torch(
-            gamma.view(1, 1, 1, -1).to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
+        gamma_tt = _cached_tt(
+            cache,
+            f"{kp}.gamma" if kp else None,
+            lambda: ttnn.from_torch(
+                gamma.view(1, 1, 1, -1).to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+            ),
         )
         x = ttnn.multiply(x, gamma_tt, memory_config=mc)
 
     return ttnn.add(residual, x, memory_config=mc)
+
+
+def _cached_snake_ab(cache, key_prefix, alpha_w, beta_w, channels, device):
+    """Memoize per-channel SnakeBeta alpha/beta device tensors."""
+    alpha_tt = _cached_tt(
+        cache,
+        f"{key_prefix}.alpha" if key_prefix else None,
+        lambda: ttnn.from_torch(
+            alpha_w.view(1, 1, 1, channels).to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        ),
+    )
+    beta_tt = _cached_tt(
+        cache,
+        f"{key_prefix}.beta" if key_prefix else None,
+        lambda: ttnn.from_torch(
+            beta_w.view(1, 1, 1, channels).to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        ),
+    )
+    return alpha_tt, beta_tt
 
 
 def conv_decoder_block(
@@ -272,6 +364,8 @@ def conv_decoder_block(
     upsample_rate: int,
     device,
     num_residual_layers: int = 3,
+    cache=None,
+    key_prefix=None,
 ) -> ttnn.Tensor:
     """Conv decoder block with upsampling and residual layers in TTNN.
 
@@ -279,6 +373,7 @@ def conv_decoder_block(
     """
     mc = ttnn.DRAM_MEMORY_CONFIG
     b, _, l, c = int(x.shape[0]), int(x.shape[1]), int(x.shape[2]), int(x.shape[3])
+    kp = key_prefix
 
     # Snake activation before upsampling.
     # Keys are "block.0.alpha"/"block.0.beta" (fall back to "alpha"/"beta").
@@ -286,17 +381,8 @@ def conv_decoder_block(
     beta_key = "block.0.beta" if "block.0.beta" in block_weights else "beta"
     if alpha_key in block_weights and beta_key in block_weights:
         channels = int(x.shape[-1])
-        alpha_tt = ttnn.from_torch(
-            block_weights[alpha_key].view(1, 1, 1, channels).to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-        )
-        beta_tt = ttnn.from_torch(
-            block_weights[beta_key].view(1, 1, 1, channels).to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
+        alpha_tt, beta_tt = _cached_snake_ab(
+            cache, f"{kp}.snake0" if kp else None, block_weights[alpha_key], block_weights[beta_key], channels, device
         )
         x = ttnn_snake_activation(x, alpha_tt, beta_tt)
 
@@ -307,7 +393,7 @@ def conv_decoder_block(
         up_w = block_weights["block.1.conv.weight"]
         up_b = block_weights.get("block.1.conv.bias")
         k_up = int(up_w.shape[-1])
-        x, l = transpose_conv1d_nhwc(x, up_w, up_b, upsample_rate, device)
+        x, l = transpose_conv1d_nhwc(x, up_w, up_b, upsample_rate, device, cache=cache, key=f"{kp}.up" if kp else None)
         c = int(up_w.shape[1])
         right_pad = k_up - upsample_rate
         if right_pad > 0:
@@ -323,17 +409,13 @@ def conv_decoder_block(
         act1_key = f"block.{i}.act1"
         if f"{act1_key}.alpha" in block_weights:
             channels = int(x.shape[-1])
-            alpha_tt = ttnn.from_torch(
-                block_weights[f"{act1_key}.alpha"].view(1, 1, 1, channels).to(torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-            )
-            beta_tt = ttnn.from_torch(
-                block_weights[f"{act1_key}.beta"].view(1, 1, 1, channels).to(torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
+            alpha_tt, beta_tt = _cached_snake_ab(
+                cache,
+                f"{kp}.res{i}.act1" if kp else None,
+                block_weights[f"{act1_key}.alpha"],
+                block_weights[f"{act1_key}.beta"],
+                channels,
+                device,
             )
             x = ttnn_snake_activation(x, alpha_tt, beta_tt)
 
@@ -344,7 +426,9 @@ def conv_decoder_block(
             eff_kernel = (k1 - 1) * dilation + 1
             x_nlc = ttnn.reshape(x, (b, l, c), memory_config=mc)
             x_nlc = _causal_left_pad_nlc(x_nlc, eff_kernel - 1, device)
-            conv1 = TTNNConv1d(
+            conv1 = _cached_conv(
+                cache,
+                f"{kp}.res{i}.conv1" if kp else None,
                 device=device,
                 in_channels=int(conv1_weight.shape[1]),
                 out_channels=int(conv1_weight.shape[0]),
@@ -362,17 +446,13 @@ def conv_decoder_block(
         act2_key = f"block.{i}.act2"
         if f"{act2_key}.alpha" in block_weights:
             channels = int(x.shape[-1])
-            alpha_tt = ttnn.from_torch(
-                block_weights[f"{act2_key}.alpha"].view(1, 1, 1, channels).to(torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-            )
-            beta_tt = ttnn.from_torch(
-                block_weights[f"{act2_key}.beta"].view(1, 1, 1, channels).to(torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
+            alpha_tt, beta_tt = _cached_snake_ab(
+                cache,
+                f"{kp}.res{i}.act2" if kp else None,
+                block_weights[f"{act2_key}.alpha"],
+                block_weights[f"{act2_key}.beta"],
+                channels,
+                device,
             )
             x = ttnn_snake_activation(x, alpha_tt, beta_tt)
 
@@ -380,7 +460,9 @@ def conv_decoder_block(
         conv2_bias = block_weights.get(f"block.{i}.conv2.conv.bias")
         if conv2_weight is not None:
             x_nlc = ttnn.reshape(x, (b, l, c), memory_config=mc)
-            conv2 = TTNNConv1d(
+            conv2 = _cached_conv(
+                cache,
+                f"{kp}.res{i}.conv2" if kp else None,
                 device=device,
                 in_channels=int(conv2_weight.shape[1]),
                 out_channels=int(conv2_weight.shape[0]),
@@ -915,6 +997,33 @@ class TtSpeechTokenizerDecoder(LightweightModule):
         self.dtype = dtype
         self.use_reference = use_reference
 
+        # Persistent per-op cache: memoized TTNNConv1d objects and uploaded device
+        # tensors (codebooks, snake alpha/beta, norms, pointwise). Populated lazily
+        # on the first forward, reused on every subsequent forward so we never
+        # re-upload / re-prepare conv weights per request.
+        #
+        # IMPORTANT: ``ttnn.conv1d`` prepares/shards its weight based on the input
+        # length of the first call, so a prepared conv weight is ONLY valid for that
+        # length. We therefore pad every decode up to a fixed bucket (multiple of
+        # ``decode_bucket_step`` frames) and keep a SEPARATE cache per bucket, so a
+        # given cache only ever sees one shape. Padding is applied on the right and
+        # the output is trimmed back; the decoder is fully causal (causal convs +
+        # causal sliding-window attention), so right padding cannot change any
+        # earlier output -> trimming is numerically exact. Fixed buckets also make
+        # the device program cache hit (no per-request kernel recompile).
+        self.decode_bucket_step = 64
+        self._cache_by_bucket = {}
+        self._cache = {}  # points at the active bucket's cache during forward
+
+        # Audio samples produced per codec frame = product of all upsample factors
+        # (upsampler convnext ratios + conv-decoder transposed-conv rates).
+        spf = 1
+        for r in self.config.upsampling_ratios:
+            spf *= r
+        for r in self.config.upsample_rates:
+            spf *= r
+        self.SAMPLES_PER_FRAME = spf  # 2*2 * 8*5*4*3 = 1920
+
         # Store state_dict for reference implementation
         self._state_dict = state_dict
 
@@ -1083,25 +1192,31 @@ class TtSpeechTokenizerDecoder(LightweightModule):
             q_slice = ttnn.slice(token_ids, [0, q_idx, 0], [batch_size, q_idx + 1, seq_len], memory_config=mc)
             return ttnn.reshape(q_slice, (batch_size, seq_len), memory_config=mc)
 
-        def _tt_weight(codebook: torch.Tensor) -> ttnn.Tensor:
-            return ttnn.from_torch(
-                codebook.to(torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-                memory_config=mc,
+        def _tt_weight(codebook: torch.Tensor, key: str) -> ttnn.Tensor:
+            return _cached_tt(
+                self._cache,
+                key,
+                lambda: ttnn.from_torch(
+                    codebook.to(torch.bfloat16),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=mc,
+                ),
             )
 
         # Process RVQ First (semantic codebook - index 0)
         rvq_first_emb_tt = None
         if self.rvq_first_codebook is not None and num_quantizers > 0:
             ids_tt = _ids_for_quantizer(0)
-            codebook_tt = _tt_weight(self.rvq_first_codebook)
+            codebook_tt = _tt_weight(self.rvq_first_codebook, "cb.first")
             rvq_first_emb_tt = ttnn.embedding(ids_tt, codebook_tt, layout=ttnn.TILE_LAYOUT, memory_config=mc)
 
             # Apply output projection if available (256 -> 512)
             if self.rvq_first_output_proj is not None:
-                conv = TTNNConv1d(
+                conv = _cached_conv(
+                    self._cache,
+                    "cb.first.out_proj",
                     device=self.device,
                     in_channels=int(self.rvq_first_output_proj.shape[1]),
                     out_channels=int(self.rvq_first_output_proj.shape[0]),
@@ -1119,7 +1234,7 @@ class TtSpeechTokenizerDecoder(LightweightModule):
                 if i + 1 >= num_quantizers:
                     break
                 ids_tt = _ids_for_quantizer(i + 1)
-                codebook_tt = _tt_weight(codebook)
+                codebook_tt = _tt_weight(codebook, f"cb.rest.{i}")
                 emb_tt = ttnn.embedding(ids_tt, codebook_tt, layout=ttnn.TILE_LAYOUT, memory_config=mc)
                 if rvq_rest_emb_tt is None:
                     rvq_rest_emb_tt = emb_tt
@@ -1128,7 +1243,9 @@ class TtSpeechTokenizerDecoder(LightweightModule):
 
             # Apply output projection if available (256 -> 512)
             if rvq_rest_emb_tt is not None and self.rvq_rest_output_proj is not None:
-                conv = TTNNConv1d(
+                conv = _cached_conv(
+                    self._cache,
+                    "cb.rest.out_proj",
                     device=self.device,
                     in_channels=int(self.rvq_rest_output_proj.shape[1]),
                     out_channels=int(self.rvq_rest_output_proj.shape[0]),
@@ -1153,7 +1270,7 @@ class TtSpeechTokenizerDecoder(LightweightModule):
                 if i >= num_quantizers:
                     break
                 ids_tt = _ids_for_quantizer(i)
-                codebook_tt = _tt_weight(codebook)
+                codebook_tt = _tt_weight(codebook, f"cb.fallback.{i}")
                 emb_tt = ttnn.embedding(ids_tt, codebook_tt, layout=ttnn.TILE_LAYOUT, memory_config=mc)
                 embeddings = emb_tt if embeddings is None else ttnn.add(embeddings, emb_tt, memory_config=mc)
 
@@ -1176,7 +1293,9 @@ class TtSpeechTokenizerDecoder(LightweightModule):
         kpc = int(self.pre_conv_weight.shape[-1])
         x_nlc = ttnn.reshape(x_nlc, (batch, seq_len, in_c), memory_config=mc)
         x_nlc = _causal_left_pad_nlc(x_nlc, kpc - 1, self.device)
-        conv_pre = TTNNConv1d(
+        conv_pre = _cached_conv(
+            self._cache,
+            "pre_conv",
             device=self.device,
             in_channels=in_c,
             out_channels=out_c,
@@ -1227,7 +1346,13 @@ class TtSpeechTokenizerDecoder(LightweightModule):
                 k_up = int(conv_weight.shape[-1])
                 out_c = int(conv_weight.shape[1])
                 hidden_states_tt, up_len = transpose_conv1d_nhwc(
-                    hidden_states_tt, conv_weight, conv_bias, ratio, self.device
+                    hidden_states_tt,
+                    conv_weight,
+                    conv_bias,
+                    ratio,
+                    self.device,
+                    cache=self._cache,
+                    key=f"upsample.{i}.up",
                 )
                 right_pad = k_up - ratio
                 if right_pad > 0:
@@ -1258,6 +1383,8 @@ class TtSpeechTokenizerDecoder(LightweightModule):
                         norm_bias=self.upsample_weights.get(f"{prefix}norm.bias"),
                         device=self.device,
                         gamma=gamma if gamma is not None else None,
+                        cache=self._cache,
+                        key_prefix=f"upsample.{i}.convnext",
                     )
 
         # Initial conv in decoder
@@ -1272,7 +1399,9 @@ class TtSpeechTokenizerDecoder(LightweightModule):
             )
             l0 = int(x_nlc.shape[1])
             x_nlc = _causal_left_pad_nlc(x_nlc, k0 - 1, self.device)
-            conv0 = TTNNConv1d(
+            conv0 = _cached_conv(
+                self._cache,
+                "decoder.0.conv",
                 device=self.device,
                 in_channels=int(weight.shape[1]),
                 out_channels=int(weight.shape[0]),
@@ -1295,22 +1424,20 @@ class TtSpeechTokenizerDecoder(LightweightModule):
                 k.replace(block_prefix, ""): v for k, v in self.decoder_weights.items() if k.startswith(block_prefix)
             }
             if block_weights:
-                hidden_states_tt = conv_decoder_block(hidden_states_tt, block_weights, rate, self.device)
+                hidden_states_tt = conv_decoder_block(
+                    hidden_states_tt, block_weights, rate, self.device, cache=self._cache, key_prefix=f"decoder.{i + 1}"
+                )
 
         # Final activation + conv
         if "decoder.5.alpha" in self.decoder_weights:
             channels = int(hidden_states_tt.shape[-1])
-            alpha_tt = ttnn.from_torch(
-                self.decoder_weights["decoder.5.alpha"].to(torch.bfloat16).view(1, 1, 1, channels),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-            )
-            beta_tt = ttnn.from_torch(
-                self.decoder_weights["decoder.5.beta"].to(torch.bfloat16).view(1, 1, 1, channels),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
+            alpha_tt, beta_tt = _cached_snake_ab(
+                self._cache,
+                "decoder.5.snake",
+                self.decoder_weights["decoder.5.alpha"],
+                self.decoder_weights["decoder.5.beta"],
+                channels,
+                self.device,
             )
             hidden_states_tt = ttnn_snake_activation(hidden_states_tt, alpha_tt, beta_tt)
 
@@ -1325,7 +1452,9 @@ class TtSpeechTokenizerDecoder(LightweightModule):
             )
             l6 = int(x_nlc.shape[1])
             x_nlc = _causal_left_pad_nlc(x_nlc, k6 - 1, self.device)
-            conv6 = TTNNConv1d(
+            conv6 = _cached_conv(
+                self._cache,
+                "decoder.6.conv",
                 device=self.device,
                 in_channels=int(weight.shape[1]),
                 out_channels=int(weight.shape[0]),
@@ -1363,8 +1492,22 @@ class TtSpeechTokenizerDecoder(LightweightModule):
             return audio
 
         # Original TTNN implementation (for comparison/optimization)
-        batch_size, num_quantizers, seq_len = token_ids.shape
-        device = token_ids.device
+        batch_size, num_quantizers, real_seq_len = token_ids.shape
+
+        # Pad the decode to a fixed bucket (multiple of decode_bucket_step frames)
+        # and select that bucket's weight cache. Right padding + causal decoder =>
+        # outputs for the real frames are unaffected; we trim after decode.
+        bucket = max(
+            self.decode_bucket_step,
+            ((real_seq_len + self.decode_bucket_step - 1) // self.decode_bucket_step) * self.decode_bucket_step,
+        )
+        if bucket != real_seq_len:
+            pad = torch.zeros(
+                batch_size, num_quantizers, bucket - real_seq_len, dtype=token_ids.dtype, device=token_ids.device
+            )
+            token_ids = torch.cat([token_ids, pad], dim=2)
+        seq_len = bucket
+        self._cache = self._cache_by_bucket.setdefault(bucket, {})
 
         token_ids_ttnn = ttnn.from_torch(
             token_ids,
@@ -1395,6 +1538,10 @@ class TtSpeechTokenizerDecoder(LightweightModule):
         # 3. Conv decoder (TTNN path)
         audio_ttnn = self._conv_decoder_forward(hidden_states_ttnn)
         audio = _mesh_to_torch(audio_ttnn, dtype=torch.float32).squeeze(-1).contiguous()
+
+        # Trim the padded bucket back to the real audio length (samples/frame=1920).
+        real_samples = real_seq_len * self.SAMPLES_PER_FRAME
+        audio = audio[..., :real_samples].contiguous()
 
         return audio
 
