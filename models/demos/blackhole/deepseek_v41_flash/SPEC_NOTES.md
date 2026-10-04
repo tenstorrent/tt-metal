@@ -148,3 +148,38 @@ Not verified: acceptance statistics at ISL 2k over many prompts (one real prompt
   **first token identical**; drafts d1,d2 identical, d3..d5 differ (0.40 of entries equal; the verify/MoE path is not bit-reproducible run to run, plain-vs-plain streams already differ across builds) and the loop after the tail replay behaves normally (2.71 accepted/round, 47.2 tok/s/user over 7 rounds, spec8_tail_2k.log).
   Cost ~2.6 s per batch (32 blocks x 80 ms). Not verified: seeding after a REAL device prefill + hand-off (this container of tests starts from the replay path), ragged per-user prompt lengths (the verify step takes per-user positions, so per-user p0 works in principle).
 * Direct tapping of layers 37-39 hidden inside the prefill chunks would avoid the 2.6 s but changes prefill_model (not done).
+
+
+## Final G5 (ring 288, ISL 1627 exact vs plain)
+# G5 follow-up: spec decode after a REAL prefill (ISL 1.6k), DRAM, tail-seeding fix — rebased on main 7c29e888951
+
+changes.diff: `git apply --check` OK (5 files, +79/-17): tt/spec_model.py, tt/generator.py (docstring), tt/common.py, tt/dsv41_model.py, demo/text_demo.py.
+
+## Bug found and fixed: tail-replay seeding needs ring_rows >= 255 + k
+The drafter is seeded by replaying the last 128 prompt tokens. Replay row q reads the window [q-127, q], i.e. 127 rows BELOW the replay start, and the prefill hand-off only writes the last `ring_rows` positions (160 -> rows below S-160 are zero).
+So with ring 160 the early replay rows computed wrong K/V, which corrupted the re-written tail state: after a real prefill at ISL 1627 spec diverged from plain at generated token 1 for all users (plain top1-top2 gap 1.7), and the row-0 logits PCC of the first spec round vs a plain decode step on the same state was 0.852 (tail) vs 0.993 (full-prompt replay).
+Fix: the spec pool uses `DSV41_RING_ROWS=288` (set by `create_tt_model` when `DSV41_SPEC>0`; +46 MiB/chip). Row-0 PCC then 0.9984 (24-layer diagnostic, `DSV41_SPEC_DIAG=1`). `DSV41_SPEC_FULL_REPLAY=1` replays the whole prompt instead (ring 160 suffices; ISL <= ~2k). The stage-3 emulation (replay-made state) could not see this, only a real prefill can.
+The earlier "ring 160" statements (stage 3) hold for non-spec decode only. Also restored the `DSV41_RING_ROWS` read in dsv41_model.py (an upstream merge had dropped it).
+
+## ISL 1627, B=16, k=3, real prefill (spec12_isl2k.log, .44, 40 layers, `DSV41_PREFILL_ROW_TOKENS=2048`, trace region 1.9 GB)
+* spec output IDENTICAL to the plain greedy stream of the same run: 16/16 users over 64 tokens; first token equal 16/16.
+* acceptance 1.52 accepted drafts/round (P(m>=j) 0.72/0.56/0.24), 2.52 tokens/round (one long-document prompt, 25 rounds: less predictable than GSM8K math), round 84.1 ms: **30.0 tok/s/user vs plain 23.2 (43.1 ms/token), 1.29x**. TTFT 18.8 s (ISL 1627 x 16 users).
+* DRAM per bank (MiB, x8 banks per chip), MEMLOG: model built 2963.5 alloc / 884 free; after the prefills 3207.6 / 640; **spec runner build (views + drafter) +111.3 MiB/bank (= 0.89 GB/chip)**; spec trace capture +12 MiB/bank; end 3330.9 allocated / 517 free.
+  Spec adds nothing for pool/slabs/step-state beyond ~0.1 GB (views share weights, pool, key slabs, prev_cs). Largest cost is the drafter (3 stages with bfp8 experts, main_proj, markov tables). The trace region (DSV41_TRACE_REGION) is separate DRAM: spec needs ~1.2 GB for its own trace.
+* DRAM OOM: the failures (spec9_isl2k) came from building the spec runner BEFORE the prefill (drafter + trace region + 1024-token prefill chunks). Now: runner is built after the prefills, chunk budget `DSV41_PREFILL_ROW_TOKENS=2048` and trace region 1.9 GB fit ISL 1627 at B=16 with 517 MiB/bank free. Freeing the prefill traces (`DSV41_SPEC_FREE_PREFILL=1`) frees only ~11 MiB/bank and is off (it once invalidated the decode key slab).
+  Not re-measured with the integration agent's newest lat_buf / chunk-budget commits (the run used main 43127e4 + my overlay).
+
+## GSM8K B=16 (merged G5 run, ring 160, whole prompt replayed since ISL < 128; spec9_gsm8k_k3.log / spec9_session.log)
+2.324 accepted/round (CPU reference 2.30), P(m>=1,2,3) 0.896/0.771/0.657, 3.31 tokens/round; 92.3 / 98.3 ms rounds vs plain 52.7 / 57.0 ms => 1.89x / 1.92x (35.9 / 33.7 vs 19.0 / 17.5 tok/s/user). 2/16 users identical to plain (first divergences 2..173, all near-ties: top1-top2 gaps 0.003-0.57 on both paths, printed by the demo).
+Re-run with ring 288 on .44: spec12_gsm8k.log (see log; prompts are < 128 tokens so p0 = 0 and the ring size is irrelevant there).
+
+## How to run (demo; spec = plain pass first, then re-prefill + spec pass on the same prompts, prints the comparison)
+```
+DSV41_SPEC=3 DSV41_MEMLOG=1 DSV41_TRACE_REGION=1900000000 DSV41_PREFILL_ROW_TOKENS=2048 \
+  pytest -x -q -s models/demos/blackhole/deepseek_v41_flash/demo/text_demo.py -k gsm8k_b16      # ISL <= 128, GSM8K, CPU-comparable acceptance
+  ... -k isl2k_b16                                                                              # real 1627-token prompt x 16 users
+```
+Other env: `DSV41_SPEC=k` (1..5 drafts), `DSV41_SPEC_FULL_REPLAY=1` (seed by replaying the whole prompt), `DSV41_SPEC_FIRST=1` (spec before plain on the first prefill), `DSV41_SPEC_DIAG=1` (row-0 logits PCC tail vs full seeding, exits), `DSV41_SPEC_GAPS=0` (skip plain gap logging). Run under run.sh + hangwatch on the pytest pid, one job at a time (40-layer build 35-45 min on a loaded host).
+
+## Supported batch sizes
+Verified only B=16 (4 users/mesh row, T = 4*(k+1) rows per mesh row: k=3 -> 16). Expected to work but NOT run: B=32 (U=8: T=32 for k=3, the MoE tail falls back to the stock path at T>=32; mHC T=8/16/24/32 fast or padded, T=12/20 padded by the mixes fix), B=4 (U=1: T = n = 2..6), B=64+ (T>32 exceeds the router/mHC <=32 rows per call: unsupported). B=4 at ISL 2k/4k needs the indexer (on automatically) and ring 288; 4k needs `max_ctx` >= 4k+64 for the drafter tables (max_pos follows model.max_ctx). Not verified at ISL 4k (acceptance, DRAM).

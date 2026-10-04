@@ -8,7 +8,7 @@
     ``SpecPaged*Attention`` class swap on the model's own weights, pool, ring slots, ``prev_cs`` and indexer key slabs; the MoE block reuses the expert weights with a
     batch-per-device = U * n config and its own scratch buffers),
   * the drafter (``mtp.DSparkDrafter``, the checkpoint's 3 DSpark stages) and a ``SpecDecoder`` (verify + accept + draft as ONE traced step).
-The model must be built with ``DSV41_RING_ROWS >= 128 + k`` (160): a rejected speculative write must not overwrite a window row the next round still needs.
+The model must be built with ``DSV41_RING_ROWS = 288`` (>= 255 + k for the tail-replay seeding; 160 with DSV41_SPEC_FULL_REPLAY=1): a rejected speculative write must not overwrite a window row the next round still needs.
 
 Flow after the model's real PREFILL (traced, paged hand-off incl. index keys):
   ``seed(prompt_tokens, lens, first)``  replays the last 128 prompt tokens of every user through the verify step (even start position, accept count forced) which
@@ -17,6 +17,7 @@ Flow after the model's real PREFILL (traced, paged hand-off incl. index keys):
 """
 
 import copy
+import os
 import time
 
 import torch
@@ -89,12 +90,14 @@ class SpecRunner:
         self.m, self.k, self.n = model, k, k + 1
         self.md, self.U, self.rows, self.cols, self.B = model.md, model.U, model.rows, model.cols, model.B
         n, U = self.n, self.U
-        assert (
-            model.pool.ring_rows >= 128 + k
-        ), f"pool ring_rows {model.pool.ring_rows}: build the model with DSV41_RING_ROWS=160"
+        # tail-replay seeding: rows q in [S-128, S) read the window [q-127, q] => the prefill-written ring must hold 255 rows (+k slack) below S
+        assert model.pool.ring_rows >= 255 + k or (
+            os.environ.get("DSV41_SPEC_FULL_REPLAY") == "1" and model.pool.ring_rows >= 128 + k
+        ), f"pool ring_rows {model.pool.ring_rows}: build the model with DSV41_RING_ROWS=288 (160 is enough only with DSV41_SPEC_FULL_REPLAY=1)"
         self.T = U * n
         self.max_pos = max_pos or (model.max_ctx + 64)
         t0 = time.time()
+        model.log_dram("spec: before runner build")
         views, by_id, idx_views, layers, groups = {}, {}, {}, [], {}
         buffers, first = None, True
         for L, layer, key in model.built:
@@ -146,6 +149,7 @@ class SpecRunner:
         self.dec.enable_sampling(model.mc, model.ccl)
         self.tid = None
         self.log = model.log
+        model.log_dram("spec: after runner build (views + drafter)")
         self.log(f"spec runner built: k={k} n={n} T={self.T} rows/mesh-row ({time.time() - t0:.0f}s)")
 
     # ---- host feed / readback ---------------------------------------------------------------------------------------------------
@@ -178,6 +182,12 @@ class SpecRunner:
         ttnn.synchronize_device(self.md)
         return self._readback()
 
+    def free_other_traces(self):
+        """Release the plain-decode trace and the prefill chunk trace + per-chunk buffers (they are re-captured by the next prefill / decode call)."""
+        self.m.release_trace()
+        self.m.prefill_model.teardown_dyn()  # NOTE: frees only ~11 MiB/bank; at ISL > 512 the next spec round read garbage keys after it (off by default)
+        self.m.log_dram("spec: after freeing decode + prefill traces")
+
     def capture(self, X, base):
         """Compile pass + trace capture (state restored). Call AFTER the prefill, before ``seed``; X [B,n] / base [B] any valid block."""
         dec = self.dec
@@ -194,6 +204,7 @@ class SpecRunner:
         ttnn.synchronize_device(self.md)
         dec.restore_states(snaps)
         self.snaps = snaps
+        self.m.log_dram("spec: after trace capture")
 
     def release(self):
         if self.tid is not None:
@@ -207,6 +218,10 @@ class SpecRunner:
         B, n = self.B, self.n
         lens = torch.as_tensor(lens).long()
         p0 = torch.clamp((lens - 128) // 2 * 2, min=0)
+        if (
+            os.environ.get("DSV41_SPEC_FULL_REPLAY") == "1"
+        ):  # replay the whole prompt (no reliance on the prefill state; ISL <= ~2k) instead of the last 128 tokens
+            p0 = torch.zeros_like(p0)
         nbl = -(-(lens - p0) // n)  # blocks per user
         seqs = []
         for b in range(B):
