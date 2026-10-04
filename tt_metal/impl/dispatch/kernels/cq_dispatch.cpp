@@ -1328,6 +1328,9 @@ re_run_command:
 #endif
     volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
     DeviceTimestampedData("process_cmd_d_dispatch", (uint32_t)cmd->base.cmd_id);
+    // No handler may inherit PCIe routing left open by the previous command.
+    ASSERT(noc_cmd_bufs_mid_clear(noc_index), DebugAssertNocMidNotClearedTripped);
+
     switch (cmd->base.cmd_id) {
         case CQ_DISPATCH_CMD_WRITE_LINEAR:
             WAYPOINT("DWB");
@@ -1508,6 +1511,8 @@ re_run_command:
             ASSERT(0);
     }
 
+    // Every handler that opened PCIe routing must have closed it before the next command reuses the buffer.
+    ASSERT(noc_cmd_bufs_mid_clear(noc_index), DebugAssertNocMidNotClearedTripped);
     return done;
 }
 
@@ -1521,6 +1526,9 @@ static inline bool process_cmd_h(uintptr_t& cmd_ptr) {
     volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
 
     DeviceTimestampedData("process_cmd_h_dispatch", (uint32_t)cmd->base.cmd_id);
+    // No handler may inherit PCIe routing left open by the previous command.
+    ASSERT(noc_cmd_bufs_mid_clear(noc_index), DebugAssertNocMidNotClearedTripped);
+
     switch (cmd->base.cmd_id) {
         case CQ_DISPATCH_CMD_WRITE_LINEAR_H:
             // DPRINT("dispatch_h write_linear_h\n");
@@ -1559,6 +1567,8 @@ static inline bool process_cmd_h(uintptr_t& cmd_ptr) {
             ASSERT(0);
     }
 
+    // Every handler that opened PCIe routing must have closed it before the next command reuses the buffer.
+    ASSERT(noc_cmd_bufs_mid_clear(noc_index), DebugAssertNocMidNotClearedTripped);
     return done;
 }
 
