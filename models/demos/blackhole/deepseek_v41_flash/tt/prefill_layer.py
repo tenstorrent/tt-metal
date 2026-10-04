@@ -33,9 +33,27 @@ def _mark(tag):
         _MARKS.append((tag, int(_ttnn.get_device_operation_id())))
 
 
-COLSPLIT = (
-    os.environ.get("DSV41_COLSPLIT", "0") == "1"
-)  # split the token-wise work over the 8 mesh columns (forward_cols)
+MOE_G = int(os.environ.get("DSV41_MOE_G", "8"))  # 32-token chunks per moe_compute call: 8 = grouped (default), 1 = off
+COLSPLIT_MODE = os.environ.get(
+    "DSV41_COLSPLIT", "auto"
+)  # "auto" (default): on when the shape allows; "0" forces off; "1" forces on (raises if impossible)
+
+
+def colsplit_active(U, C):
+    """Column split of the token-wise work over the 8 mesh columns needs the grouped MoE (G=8) and a multiple of 8 chunks of 32 tokens per mesh row
+    (U users x C tokens). Otherwise the layer falls back to the replicated path (grouped MoE when the chunk count allows, else T=32 slices).
+    """
+    ok = MOE_G == 8 and (U * C) % 256 == 0
+    if COLSPLIT_MODE == "0":
+        return False
+    if COLSPLIT_MODE == "1":
+        assert ok, f"DSV41_COLSPLIT=1 needs DSV41_MOE_G=8 and users*chunk % 256 == 0 (U={U}, C={C}, G={MOE_G})"
+        return True
+    return ok
+
+
+_G1_BUFFERS = {}  # id(mesh) -> shared T=32 moe_compute buffers of the fallback front-ends
+
 _FREE = set(os.environ.get("DSV41_PF_FREE", "a,a_c,h,hh,h_tok,m,sh,x2,hs").split(","))
 
 
@@ -78,11 +96,10 @@ def big_batch_scores_config(T, k=6):
 class DSV41PrefillMoE:
     """``DSV41MoEBlock.forward`` at batch_per_device = T over the expert weights of an existing decode MoE block."""
 
-    def __init__(self, moe_block, T=32, buffers=None):
+    def __init__(self, moe_block, T=32, buffers=None, g=None):
         md = moe_block.mesh_device
-        T = T * int(
-            os.environ.get("DSV41_MOE_G", "1")
-        )  # G consecutive 32-token chunks per moe_compute call (default 1 = unchanged)
+        G = MOE_G if g is None else g  # G consecutive 32-token chunks per moe_compute call
+        T = T * G
         text = CONFIG_PATH.read_text()
         text = text.replace("batch_per_device: 4 ", f"batch_per_device: {T} ", 1)
         text = text.replace("num_shared_experts: 1", "num_shared_experts: 0").replace(
@@ -114,6 +131,12 @@ class DSV41PrefillMoE:
             buffers = _TTMoEDecodeBuffers(md, **bd)
         dec.buffers = buffers
         self.decode = dec
+        self.g1 = None
+        if (
+            G > 1
+        ):  # fallback front-end at T = 32 for chunk counts that are not a multiple of G (shares the expert weights, own shared buffers)
+            self.g1 = DSV41PrefillMoE(moe_block, T=32, buffers=_G1_BUFFERS.get(id(md)), g=1)
+            _G1_BUFFERS.setdefault(id(md), self.g1.decode.buffers)
 
     def forward(self, tt_x_gate, tt_x_tokens):
         n = tt_x_gate.shape[2] // 32
@@ -178,8 +201,10 @@ class DSV41PrefillLayer:
         self.L, self.pa, self.pmoe, self.T = layer, prefill_attn, pmoe, T
         self.debug = None  # set to a dict: per-chunk lists of a_c / hh / m / sh are kept (not freed) for diagnostics
 
+    colsplit = False  # set by the model per chunk size (colsplit_active)
+
     def forward(self, xs, pres, S, s0=0):
-        if COLSPLIT:
+        if self.colsplit:
             return self.forward_cols(xs, pres, S, s0)
         return self.forward_full(xs, pres, S, s0)
 
@@ -265,6 +290,9 @@ class DSV41PrefillLayer:
         -> (list of new streams, list of ffn_pre)."""
         L, T = self.L, self.T
         n = len(xs)
+        pmoe = (
+            self.pmoe if n % max(1, self.pmoe.T // T) == 0 else self.pmoe.g1
+        )  # chunk count not a multiple of G: T=32 slices
         eps = L.eps
         _mark("start")
         mix, hs = [], []
@@ -299,7 +327,7 @@ class DSV41PrefillLayer:
             ttnn.ReadDeviceProfiler(L.mesh_device)
         outs, pres_out = [], []
         G = max(
-            1, getattr(self.pmoe, "T", T) // T
+            1, getattr(pmoe, "T", T) // T
         )  # MoE call covers G chunks of T tokens per device (moe_compute at T*G tokens/device)
         for g0 in range(0, n, G):
             cs = list(range(g0, min(n, g0 + G)))
@@ -321,7 +349,7 @@ class DSV41PrefillLayer:
             else:
                 hh_g = ttnn.concat([e[4] for e in st], dim=2)
                 tok_g = ttnn.concat([e[5] for e in st], dim=0)
-            mg = self.pmoe.forward(hh_g, tok_g)
+            mg = pmoe.forward(hh_g, tok_g)
             mg = L.mesh_config.allgather(mg, L.ccl, axis=1, dim=3)
             _mark("moe+allgather")
             big = (
