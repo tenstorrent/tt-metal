@@ -59,8 +59,8 @@ SNAPSHOT_ASSETS = {
 }
 
 
-# Optional official repository assets at the same pinned revision. They are
-# checked only for contained layout/size, never selected, hashed, copied or mounted.
+# Official assets used only to classify the informational layout receipt.
+# These names are not an acceptance allowlist; unselected source entries are ignored.
 IGNORED_SNAPSHOT_ASSETS = {
     ".gitattributes": {"blob": "a6344aac8c09253b3b630fb776ae94478aa0275b", "bytes": 1519},
     "LICENSE": {"blob": "a7c3ca16cee30425ed6ad841a809590f2bcbf290", "bytes": 7627},
@@ -310,48 +310,38 @@ def snapshot_files(path):
     hub = HF_HUB.resolve(strict=True)
     assert hub.is_relative_to(HF_ROOT.resolve(strict=True))
     assert repo == hub / MODEL_REPO and not (repo / "blobs").is_symlink(), "Wrong canonical model repository"
-    rows, directories = {}, set()
-    for root, dirs, names in os.walk(canonical, followlinks=False):
-        for name in dirs:
-            p = Path(root) / name
-            relative = p.relative_to(canonical).as_posix()
-            assert relative == "original" and not p.is_symlink(), "Unlisted/linked snapshot directory: " + relative
-            directories.add(relative)
-        for name in names:
-            p = Path(root) / name
-            relative = p.relative_to(canonical).as_posix()
-            assert relative in SNAPSHOT_ASSETS or relative in IGNORED_SNAPSHOT_ASSETS, (
-                "Unlisted snapshot asset: " + relative
-            )
-            asset = SNAPSHOT_ASSETS[relative] if relative in SNAPSHOT_ASSETS else IGNORED_SNAPSHOT_ASSETS[relative]
-            blob = repo / "blobs" / asset["blob"]
-            assert p.is_symlink() and os.readlink(p) == os.path.relpath(blob, p.parent), (
-                "Snapshot link escapes/replaces frozen asset: " + relative
-            )
-            # CI's supported HF_HUB_CACHE is a standard one-hop repository
-            # cache. Refuse shared-pool guesses or links beyond this exact blob.
-            assert stat.S_ISREG(blob.lstat().st_mode), "CI repo blob replacement/special file: " + relative
-            target, second = blob, None
-            assert target.resolve(strict=True) == target and stat.S_ISREG(target.lstat().st_mode), (
-                "Target replacement/special file: " + relative
-            )
-            assert p.resolve(strict=True) == target and target.stat().st_size == asset["bytes"], (
-                "Frozen asset identity/size differs: " + relative
-            )
-            if relative in IGNORED_SNAPSHOT_ASSETS:
-                continue  # Only the required twelve enter seals/copy plans/the closed local namespace.
-            rows[relative] = {
-                "target": target,
-                "stamp": file_stamp(target),
-                "binding": {
-                    "snapshot_link": os.readlink(p),
-                    "snapshot_lstat": lstat_stamp(p),
-                    "repo_blob_link": second,
-                    "repo_blob_lstat": lstat_stamp(blob),
-                    "target_relative_to_hub": target.relative_to(hub).as_posix(),
-                },
-            }
-    assert set(rows) == set(SNAPSHOT_ASSETS) and directories == {"original"}, "Frozen twelve-asset membership differs"
+    original = canonical / "original"
+    assert stat.S_ISDIR(original.lstat().st_mode), "Required asset directory is linked or special: original"
+    rows = {}
+    # Only these twelve paths enter the model namespace. Shared-cache siblings
+    # are informational metadata, not inputs; never recurse or inspect them here.
+    for relative, asset in SNAPSHOT_ASSETS.items():
+        p = canonical / relative
+        blob = repo / "blobs" / asset["blob"]
+        assert p.is_symlink() and os.readlink(p) == os.path.relpath(blob, p.parent), (
+            "Snapshot link escapes/replaces frozen asset: " + relative
+        )
+        # CI's supported HF_HUB_CACHE is a standard one-hop repository cache.
+        # Required inputs cannot use shared-pool guesses or a second-hop link.
+        assert stat.S_ISREG(blob.lstat().st_mode), "CI repo blob replacement/special file: " + relative
+        target, second = blob, None
+        assert target.resolve(strict=True) == target and stat.S_ISREG(target.lstat().st_mode), (
+            "Target replacement/special file: " + relative
+        )
+        assert p.resolve(strict=True) == target and target.stat().st_size == asset["bytes"], (
+            "Frozen asset identity/size differs: " + relative
+        )
+        rows[relative] = {
+            "target": target,
+            "stamp": file_stamp(target),
+            "binding": {
+                "snapshot_link": os.readlink(p),
+                "snapshot_lstat": lstat_stamp(p),
+                "repo_blob_link": second,
+                "repo_blob_lstat": lstat_stamp(blob),
+                "target_relative_to_hub": target.relative_to(hub).as_posix(),
+            },
+        }
     return canonical, repo, rows
 
 

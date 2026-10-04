@@ -15,7 +15,7 @@ import time
 import owned_seed_copy as owned
 import slurm_pair_checks as checks
 
-CHECKS_SHA256 = "59a6e7bc3eb779129244cf1d8b0c6925315dd6c322777417f5049d36e48825ba"
+CHECKS_SHA256 = "600729c1c127bd71bb185032eff6e0f033db9df348d3dc455279a66eaa1750e5"
 
 
 def process_uid(pid):
