@@ -215,9 +215,43 @@ HORIZON_EMU_SCOPE = "models/demos/vision/classification/resnet50/"
 # credited through the relevance map exactly like a sim row.
 QUASAR_EMU_SCHEMA = "quasar-test-results/v1"
 
+# What an emulator document must say about itself before it counts as evidence,
+# as (platform, accepted tt_metal_quasar_variant values). `platform` names the
+# emulator; tt_metal_quasar_variant is the register map the kernels were built
+# with ("" or "quasar" on the Quasar emulator, "horizon" on Horizon). `only`
+# (a narrowed test selection) and `trial` must be empty. The producer already
+# refuses to post runs that fail these checks, so this is defensive: a document
+# that fails them gives no evidence, like a stale one. tt-umd-horizon's file
+# (AIIPSW-15) has none of these fields and is not checked.
+QUASAR_EMULATOR = ("emu-quasar", ("", "quasar"))
+HORIZON_EMULATOR = ("emu-horizon", ("horizon",))
 
-def _load_results(path, schema, label, what, max_age_days):
-    """The results document at `path`, or None (saying why) if missing, unreadable, off-schema or stale."""
+
+def _emulator_document_ok(data, label, what, emulator):
+    """False (saying why) if an emulator document is narrowed, a trial, or built for another platform."""
+    platform, variants = emulator
+    for key in ("only", "trial"):
+        if data.get(key):
+            print(f"{label}: document has {key}={data.get(key)!r}, a narrowed or trial run; {what} inconclusive")
+            return False
+    if data.get("platform") and data.get("platform") != platform:
+        print(f"{label}: document platform {data.get('platform')!r} is not {platform!r}; {what} inconclusive")
+        return False
+    variant = str(data.get("tt_metal_quasar_variant") or "")
+    if variant not in variants:
+        print(
+            f"{label}: tt_metal_quasar_variant {variant!r} is not one of {list(variants)} for {platform}; {what} inconclusive"
+        )
+        return False
+    return True
+
+
+def _load_results(path, schema, label, what, max_age_days, emulator=None):
+    """The results document at `path`, or None (saying why) if missing, unreadable, off-schema or stale.
+
+    With `emulator` (QUASAR_EMULATOR / HORIZON_EMULATOR), the document must also
+    pass _emulator_document_ok.
+    """
     if not path:
         return None
     p = Path(path)
@@ -234,6 +268,8 @@ def _load_results(path, schema, label, what, max_age_days):
         return None
     if data.get("schema") != schema:
         print(f"{label}: unexpected schema {data.get('schema')!r}; {what} inconclusive")
+        return None
+    if emulator is not None and not _emulator_document_ok(data, label, what, emulator):
         return None
 
     ts = data.get("timestamp", "")
@@ -270,7 +306,7 @@ def _result_row(test, default_config):
     }
 
 
-def parse_horizon(path, req_key=HORIZON_REQUIREMENT, max_age_days=7):
+def parse_horizon(path, req_key=HORIZON_REQUIREMENT, max_age_days=7, emulator=None):
     """Read the tt-umd-horizon results file into evidence for one requirement.
 
     Returns (status, extra_evidence). `status` is PASSED / FAILED / INCONCLUSIVE
@@ -278,9 +314,10 @@ def parse_horizon(path, req_key=HORIZON_REQUIREMENT, max_age_days=7):
     empty when inconclusive. Missing / unreadable / wrong-schema / stale input all
     yield INCONCLUSIVE with no rows -- the same conservative stance the sim path
     takes, so the requirement simply shows "no passing evidence" until Horizon
-    publishes a fresh green result.
+    publishes a fresh green result. `emulator` adds the emulator-document checks
+    (see _emulator_document_ok); tt-umd-horizon's own file is read without them.
     """
-    data = _load_results(path, "horizon-test-results/v1", "horizon", req_key, max_age_days)
+    data = _load_results(path, "horizon-test-results/v1", "horizon", req_key, max_age_days, emulator)
     if data is None:
         return INCONCLUSIVE, {}
     tests = data.get("tests", [])
@@ -297,7 +334,9 @@ def parse_horizon_emu(path, max_age_days=7):
     Same return shape as parse_horizon; the other tests sit under the None key,
     which build() reports as executed tests that map to no requirement.
     """
-    status, evidence = parse_horizon(path, req_key=HORIZON_EMU_REQUIREMENT, max_age_days=max_age_days)
+    status, evidence = parse_horizon(
+        path, req_key=HORIZON_EMU_REQUIREMENT, max_age_days=max_age_days, emulator=HORIZON_EMULATOR
+    )
     if not evidence:
         return status, evidence
     hits = evidence[HORIZON_EMU_REQUIREMENT]
@@ -312,7 +351,9 @@ def parse_quasar_emu(path, max_age_days=7):
     Returns (status, {PASSED: [...], FAILED: [...]}), or (INCONCLUSIVE, {}) when
     the file is missing, unreadable, off-schema or stale.
     """
-    data = _load_results(path, QUASAR_EMU_SCHEMA, "quasar-emu", "Quasar emulator evidence", max_age_days)
+    data = _load_results(
+        path, QUASAR_EMU_SCHEMA, "quasar-emu", "Quasar emulator evidence", max_age_days, QUASAR_EMULATOR
+    )
     if data is None:
         return INCONCLUSIVE, {}
     tests = data.get("tests", [])
@@ -355,9 +396,9 @@ def build(mapping, expected, passed, failed, verdict, suites=None, extra_evidenc
 
     mapped = mapped_evidence or {}
     covered = {}
-    for row, outcome in (
-        [(r, PASSED) for r in passed + mapped.get(PASSED, [])] + [(r, FAILED) for r in failed + mapped.get(FAILED, [])]
-    ):
+    for row, outcome in [(r, PASSED) for r in passed + mapped.get(PASSED, [])] + [
+        (r, FAILED) for r in failed + mapped.get(FAILED, [])
+    ]:
         key = req_of(row)
         covered.setdefault(key, {PASSED: [], FAILED: []})[outcome].append(row)
 
@@ -488,7 +529,7 @@ def render_plain(report, meta):
         "Scope: the requirement evidence above covers the RTL sim tests run by the release gate "
         f"({meta['sim_yaml_name']}, config {meta['config']}), plus the Quasar and Horizon "
         "emulator runs of quasar_regression_tests.yaml and quasar_local_tests.yaml, from the "
-        "tt-umd-simulators \"Quasar Release\" and \"Horizon Release\" checks. "
+        'tt-umd-simulators "Quasar Release" and "Horizon Release" checks. '
         "Full inventory: the coverage doc in this artifact.",
     ]
     return "\n".join(out)

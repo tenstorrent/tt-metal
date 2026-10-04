@@ -324,7 +324,8 @@ def test_results_block_wins_even_when_the_summary_is_truncated(expected):
 # --- Horizon (AIIPSW-15) evidence, pulled from the tt-umd-horizon repo ---------
 
 
-def _horizon(tmp_path, tests, ts=None, schema="horizon-test-results/v1"):
+def _horizon(tmp_path, tests, ts=None, schema="horizon-test-results/v1", **doc):
+    """A tt-umd-horizon results file; `doc` adds top-level fields (the emulator's platform, variant, only, trial)."""
     from datetime import datetime, timezone
 
     ts = ts or datetime.now(timezone.utc).isoformat()
@@ -337,10 +338,16 @@ def _horizon(tmp_path, tests, ts=None, schema="horizon-test-results/v1"):
                 "timestamp": ts,
                 "run_url": "http://horizon/run",
                 "tests": tests,
+                **doc,
             }
         )
     )
     return str(p)
+
+
+def _horizon_emu(tmp_path, tests, **doc):
+    """A Horizon Release document: what the emulator pipeline posts, built with the horizon register map."""
+    return _horizon(tmp_path, tests, **{"platform": "emu-horizon", "tt_metal_quasar_variant": "horizon", **doc})
 
 
 def test_horizon_fresh_green_becomes_evidence(tmp_path):
@@ -416,8 +423,14 @@ def test_horizon_emu_rows_keep_their_group_and_filter(tmp_path):
     path = _horizon(
         tmp_path,
         [
-            {"name": "[1x3] unit_tests_legacy --gtest_filter=*Bmm", "result": "passed", "config": "horizon",
-             "group": "unit_tests_legacy", "filter": "*Bmm", "runner": "gtest"},
+            {
+                "name": "[1x3] unit_tests_legacy --gtest_filter=*Bmm",
+                "result": "passed",
+                "config": "horizon",
+                "group": "unit_tests_legacy",
+                "filter": "*Bmm",
+                "runner": "gtest",
+            },
             {"name": "test_axi_device", "result": "failed"},
         ],
     )
@@ -434,7 +447,7 @@ RESNET_OP = "models/demos/vision/classification/resnet50/quasar/tests/ops/test_a
 def test_horizon_emu_credits_only_resnet_tests_to_aiipsw9(mapping, tmp_path):
     """AIIPSW-9 is the ResNet LLK API on Horizon: other Horizon tests are executed, not evidence for it."""
     (tmp_path / "emu").mkdir()
-    emu = _horizon(
+    emu = _horizon_emu(
         tmp_path / "emu",
         [
             {"name": "a", "result": "passed", "group": RESNET_OP, "filter": "", "runner": "pytest"},
@@ -459,7 +472,8 @@ def test_horizon_emu_credits_only_resnet_tests_to_aiipsw9(mapping, tmp_path):
 # --- Quasar emulator evidence, from the tt-umd-simulators "Quasar Release" check ---
 
 
-def _quasar_emu(tmp_path, tests, ts=None, schema=QUASAR_EMU_SCHEMA):
+def _quasar_emu(tmp_path, tests, ts=None, schema=QUASAR_EMU_SCHEMA, **doc):
+    """A Quasar Release document; `doc` overrides top-level fields (platform, variant, only, trial)."""
     from datetime import datetime, timezone
 
     p = tmp_path / "quasar-emu-results.json"
@@ -470,9 +484,16 @@ def _quasar_emu(tmp_path, tests, ts=None, schema=QUASAR_EMU_SCHEMA):
                 "tested_sha": "fedcba987654",
                 "timestamp": ts or datetime.now(timezone.utc).isoformat(),
                 "run_url": "http://quasar/run",
-                "totals": {"passed": sum(t["result"] == "passed" for t in tests),
-                           "failed": sum(t["result"] == "failed" for t in tests)},
+                "platform": "emu-quasar",
+                "tt_metal_quasar_variant": "",
+                "only": [],
+                "trial": "",
+                "totals": {
+                    "passed": sum(t["result"] == "passed" for t in tests),
+                    "failed": sum(t["result"] == "failed" for t in tests),
+                },
                 "tests": tests,
+                **doc,
             }
         )
     )
@@ -480,8 +501,15 @@ def _quasar_emu(tmp_path, tests, ts=None, schema=QUASAR_EMU_SCHEMA):
 
 
 def _q(config, group, filt, result, runner="gtest"):
-    return {"name": f"[{config}] {group}", "result": result, "config": config, "source_config": config,
-            "group": group, "filter": filt, "runner": runner}
+    return {
+        "name": f"[{config}] {group}",
+        "result": result,
+        "config": config,
+        "source_config": config,
+        "group": group,
+        "filter": filt,
+        "runner": runner,
+    }
 
 
 def test_quasar_emu_rows_keep_config_and_whole_file_filters(tmp_path):
@@ -500,8 +528,48 @@ def test_quasar_emu_missing_stale_or_wrong_schema_is_inconclusive(tmp_path):
     assert parse_quasar_emu(str(tmp_path / "absent.json")) == (INCONCLUSIVE, {})
     stale = _quasar_emu(tmp_path, [_q("1x3", "unit_tests_legacy", "*Bmm", "passed")], ts="2020-01-01T00:00:00Z")
     assert parse_quasar_emu(stale) == (INCONCLUSIVE, {})
-    horizon = _quasar_emu(tmp_path, [_q("1x3", "unit_tests_legacy", "*Bmm", "passed")], schema="horizon-test-results/v1")
+    horizon = _quasar_emu(
+        tmp_path, [_q("1x3", "unit_tests_legacy", "*Bmm", "passed")], schema="horizon-test-results/v1"
+    )
     assert parse_quasar_emu(horizon) == (INCONCLUSIVE, {}), "Horizon results must not pass for Quasar ones"
+
+
+def test_emulator_documents_that_are_narrowed_or_trial_give_no_evidence(tmp_path):
+    """`only` narrows the run to a few tests and `trial` marks a dry run: neither speaks for the release."""
+    ok = [_q("1x3", "unit_tests_legacy", "*Bmm", "passed")]
+    assert parse_quasar_emu(_quasar_emu(tmp_path, ok))[0] == PASSED, "the default document is accepted"
+    assert parse_quasar_emu(_quasar_emu(tmp_path, ok, only=["unit_tests_legacy"])) == (INCONCLUSIVE, {})
+    assert parse_quasar_emu(_quasar_emu(tmp_path, ok, trial=True)) == (INCONCLUSIVE, {})
+    assert parse_quasar_emu(_quasar_emu(tmp_path, ok, trial="smoke")) == (INCONCLUSIVE, {})
+
+    horizon_ok = [{"name": "a", "result": "passed", "group": RESNET_OP, "filter": "", "runner": "pytest"}]
+    assert parse_horizon_emu(_horizon_emu(tmp_path, horizon_ok))[0] == PASSED
+    assert parse_horizon_emu(_horizon_emu(tmp_path, horizon_ok, only=["x"])) == (INCONCLUSIVE, {})
+    assert parse_horizon_emu(_horizon_emu(tmp_path, horizon_ok, trial=True)) == (INCONCLUSIVE, {})
+
+
+def test_emulator_documents_must_be_built_for_their_platform(tmp_path):
+    """A Horizon-variant build posted as Quasar results (or the reverse) is not evidence for either."""
+    ok = [_q("1x3", "unit_tests_legacy", "*Bmm", "passed")]
+    for variant in ("", "quasar"):
+        assert parse_quasar_emu(_quasar_emu(tmp_path, ok, tt_metal_quasar_variant=variant))[0] == PASSED
+    assert parse_quasar_emu(_quasar_emu(tmp_path, ok, tt_metal_quasar_variant="horizon")) == (INCONCLUSIVE, {})
+    assert parse_quasar_emu(_quasar_emu(tmp_path, ok, platform="emu-horizon")) == (INCONCLUSIVE, {})
+
+    horizon_ok = [{"name": "a", "result": "passed", "group": RESNET_OP, "filter": "", "runner": "pytest"}]
+    assert parse_horizon_emu(_horizon_emu(tmp_path, horizon_ok))[0] == PASSED
+    for variant in ("", "quasar"):
+        assert parse_horizon_emu(_horizon_emu(tmp_path, horizon_ok, tt_metal_quasar_variant=variant)) == (
+            INCONCLUSIVE,
+            {},
+        )
+    assert parse_horizon_emu(_horizon_emu(tmp_path, horizon_ok, platform="emu-quasar")) == (INCONCLUSIVE, {})
+
+
+def test_tt_umd_horizon_results_are_not_held_to_the_emulator_checks(tmp_path):
+    """tt-umd-horizon's file has no platform or variant fields; AIIPSW-15 keeps reading it as before."""
+    path = _horizon(tmp_path, [{"name": "test_horizon_cluster", "result": "passed"}])
+    assert parse_horizon(path)[0] == PASSED
 
 
 def test_quasar_emu_rows_are_credited_through_the_map(mapping, tmp_path):
