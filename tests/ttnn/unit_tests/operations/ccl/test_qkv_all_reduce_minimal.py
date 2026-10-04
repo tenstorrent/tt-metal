@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
+
 import torch
 import pytest
 import math
@@ -15,7 +17,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tracy import signpost
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_no_unflushed_noc_atomics, assert_with_pcc
 
 from tests.ttnn.nightly.unit_tests.operations.matmul.test_matmul_1d_gather_in0 import (
     round_up,
@@ -52,6 +54,7 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
     validate_all=True,
     profiler=BenchmarkProfiler(),
     linear=True,
+    check_noc_atomics=False,
 ):
     if linear:
         ALL_GATHER_TOPOLOGY = ttnn.Topology.Linear
@@ -275,7 +278,13 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
             logger.info(f"Time per iter e2e: {time_taken / effective_iter * 1e6} us")
         else:
             signpost("start")
-            tt_outs = run_op(num_iters, store_all_results=validate_all)
+            noc_check = (
+                assert_no_unflushed_noc_atomics(mesh_device, min_atomic_events=1)
+                if check_noc_atomics
+                else contextlib.nullcontext()
+            )
+            with noc_check:
+                tt_outs = run_op(num_iters, store_all_results=validate_all)
             signpost("stop")
 
         # Get non-distributed tensors
@@ -406,6 +415,43 @@ def test_all_reduce_qkv_heads_fuse(
         trace_mode=trace_mode,
         profiler=profiler,
         validate_all=validate_all,
+    )
+
+
+@pytest.mark.skipif(
+    os.getenv("TT_METAL_NOC_DEBUG_DUMP") != "1",
+    reason="Set TT_METAL_NOC_DEBUG_DUMP=1 to check NoC atomic barriers",
+)
+@pytest.mark.skipif(is_6u(), reason="This test does not run on 6U systems")
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
+)
+def test_all_reduce_create_qkv_heads_drains_noc_atomics(mesh_device):
+    if mesh_device.get_num_devices() != 32:
+        pytest.skip("This test requires a 32-device Galaxy system")
+
+    run_all_reduce_qkv_heads_fuse_perf_impl(
+        mesh_device,
+        output_shape=[1, 1, 32, 1280],
+        cluster_axis=1,
+        input_dtype=ttnn.bfloat8_b,
+        output_dtype=ttnn.bfloat16,
+        num_links=3,
+        input_num_cores=24,
+        output_num_cores=10,
+        num_iters=1,
+        warmup_iters=0,
+        trace_mode=False,
+        validate_all=True,
+        check_noc_atomics=True,
     )
 
 
