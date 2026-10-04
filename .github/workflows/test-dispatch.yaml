@@ -28,19 +28,36 @@ jobs:
     # The administrator's normal start hook precedes the producer. This job
     # never invokes a reset or changes that hook; the three boots stay serial.
     timeout-minutes: 240
+    env:
+      PAIR_WORKSPACE: pair-runtime-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
+      - name: Initialize fresh diagnostic workspace
+        id: workspace
+        timeout-minutes: 1
+        run: |
+          python3 - <<'PY'
+          import os, pathlib
+          run_id, attempt = os.environ['GITHUB_RUN_ID'], os.environ['GITHUB_RUN_ATTEMPT']
+          assert run_id.isdigit() and attempt.isdigit()
+          root = pathlib.Path(os.environ['PAIR_WORKSPACE'])
+          assert str(root) == 'pair-runtime-' + run_id + '-' + attempt
+          root.mkdir(mode=0o700)
+          assert root.stat().st_uid == os.getuid()
+          print('Fresh diagnostic workspace: ' + str(root))
+          PY
       - name: Checkout isolated diagnostic controller
+        id: controller
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         timeout-minutes: 5
         with:
-          path: pair-runtime/control
+          path: ${{ env.PAIR_WORKSPACE }}/control
           persist-credentials: false
       - name: Checkout sealed baseline Python source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         timeout-minutes: 5
         with:
           ref: 21754c005c015161fe5de2d1cdb10bf64a6fd5a1
-          path: pair-runtime/baseline
+          path: ${{ env.PAIR_WORKSPACE }}/baseline
           submodules: recursive
           persist-credentials: false
       - name: Checkout sealed candidate Python source
@@ -49,7 +66,7 @@ jobs:
         with:
           ref: ee072dd216c2d19c6b228be26f695757d8ec1500
           fetch-depth: 2
-          path: pair-runtime/candidate
+          path: ${{ env.PAIR_WORKSPACE }}/candidate
           submodules: recursive
           persist-credentials: false
       - name: Checkout pinned plugin
@@ -58,7 +75,7 @@ jobs:
         with:
           repository: tenstorrent/vllm-tt-plugin
           ref: c1c85eb6bfe14a3e47afc450e25f7a8ddc81d974
-          path: pair-runtime/plugin
+          path: ${{ env.PAIR_WORKSPACE }}/plugin
           persist-credentials: false
       - name: Checkout pinned benchmark source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -66,7 +83,7 @@ jobs:
         with:
           repository: vllm-project/vllm
           ref: 568afb3a13806beb53bb2e6bd518269357b237c0
-          path: pair-runtime/vllm-source
+          path: ${{ env.PAIR_WORKSPACE }}/vllm-source
           persist-credentials: false
       - name: Setup job-local verified GitHub CLI
         timeout-minutes: 2
@@ -80,7 +97,7 @@ jobs:
           with urllib.request.urlopen(url, timeout=30) as response:
               payload = response.read()
           assert hashlib.sha256(payload).hexdigest() == digest, 'Official CLI archive digest mismatch'
-          binary = pathlib.Path('pair-runtime/tools/gh/bin/gh')
+          binary = pathlib.Path(os.environ['PAIR_WORKSPACE']) / 'tools/gh/bin/gh'
           binary.parent.mkdir(parents=True)
           with tarfile.open(fileobj=io.BytesIO(payload), mode='r:gz') as archive:
               member = archive.getmember('gh_' + version + '_linux_amd64/bin/gh')
@@ -91,7 +108,7 @@ jobs:
           assert actual.splitlines()[0].split()[2] == version
           with open(os.environ['GITHUB_PATH'], 'a') as path:
               path.write(str(binary.parent.resolve()) + '\n')
-          evidence = pathlib.Path('pair-runtime/evidence')
+          evidence = pathlib.Path(os.environ['PAIR_WORKSPACE']) / 'evidence'
           evidence.mkdir(exist_ok=True)
           receipt = {'version': version, 'official_url': url, 'archive_sha256': digest, 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(), 'job_local': True}
           (evidence / 'gh-cli.json').write_text(json.dumps(receipt, indent=2) + '\n')
@@ -121,7 +138,7 @@ jobs:
               assert item['workflow_run']['head_sha'] == 'ee072dd216c2d19c6b228be26f695757d8ec1500'
               assert item['digest'] == 'sha256:' + digest
               receipts['artifacts'].append({'id': artifact_id, 'digest': item['digest'], 'source': item['workflow_run']['head_sha']})
-          path = pathlib.Path('pair-runtime/evidence')
+          path = pathlib.Path(os.environ['PAIR_WORKSPACE']) / 'evidence'
           path.mkdir(exist_ok=True)
           (path / 'ci-assignment-and-artifacts.json').write_text(json.dumps(receipts, indent=2) + '\n')
           PY
@@ -132,11 +149,11 @@ jobs:
           artifact-ids: 11136307415
           github-token: ${{ github.token }}
           run-id: 36800249207
-          path: pair-runtime/artifacts/native
+          path: ${{ env.PAIR_WORKSPACE }}/artifacts/native
           digest-mismatch: error
       - name: Real Linux pidfd ownership and cancellation controls
         timeout-minutes: 1
-        working-directory: pair-runtime
+        working-directory: ${{ env.PAIR_WORKSPACE }}
         run: python3 -B control/.github/scripts/utils/test_formatter_ci_pidfd.py
       - name: Download ONE wheel for both source legs
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -145,7 +162,7 @@ jobs:
           artifact-ids: 11136385647
           github-token: ${{ github.token }}
           run-id: 36800249207
-          path: pair-runtime/artifacts/wheel
+          path: ${{ env.PAIR_WORKSPACE }}/artifacts/wheel
           digest-mismatch: error
       - name: GHCR read access
         uses: docker/login-action@v3
@@ -158,28 +175,28 @@ jobs:
         # The controller uses job started_at, not this step's start, for its
         # original 45min preparation/220min work deadlines; 20min remain for close/upload.
         timeout-minutes: 220
-        working-directory: pair-runtime
+        working-directory: ${{ env.PAIR_WORKSPACE }}
         env:
           PAIR_PROTOCOL: ${{ inputs.protocol }}
           GH_TOKEN: ${{ github.token }}
         run: python3 -B control/.github/scripts/utils/formatter_stock_pair/formatter_ci_binding.py host .
       - name: Identity-checked owned-container cleanup, including cancellation
-        if: always()
+        if: always() && steps.workspace.outcome == 'success' && steps.controller.outcome == 'success'
         timeout-minutes: 14
-        working-directory: pair-runtime
+        working-directory: ${{ env.PAIR_WORKSPACE }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 -B control/.github/scripts/utils/formatter_stock_pair/formatter_ci_binding.py cleanup .
       - name: Preserve diagnostic evidence
-        if: always()
+        if: always() && steps.workspace.outcome == 'success'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: formatter-58542-serial-control-${{ github.run_id }}
+          name: formatter-58542-serial-control-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            pair-runtime/evidence/
-            pair-runtime/*/evidence/
-            pair-runtime/capsule/capsule.json
-            pair-runtime/storage-admission.json
+            ${{ env.PAIR_WORKSPACE }}/evidence/
+            ${{ env.PAIR_WORKSPACE }}/*/evidence/
+            ${{ env.PAIR_WORKSPACE }}/capsule/capsule.json
+            ${{ env.PAIR_WORKSPACE }}/storage-admission.json
           if-no-files-found: warn
         timeout-minutes: 5
       # Retain task directories if upload or closure fails. The existing runner
