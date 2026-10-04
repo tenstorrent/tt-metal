@@ -797,9 +797,6 @@ def test_eltwise_binary_sfpu_mask(formats, dest_acc, mathop):
     # Crafted stimuli so the mask carries real zeros.
     _skip_fp32_no_dest_acc(formats, dest_acc)
 
-    # One tile pair only, unlike every other op here: calculate_mask hard-codes its operands
-    # and ignores the forwarded dst indices, so only the first placement computes anything.
-    # [64, 32] is one pair, which is the only one the adapter supports.
     spec_A, spec_B = _mask_stimuli_specs()
     sfpu_binary(
         formats,
@@ -808,7 +805,6 @@ def test_eltwise_binary_sfpu_mask(formats, dest_acc, mathop):
         broadcast_type=LlkBroadcastType.None_,
         spec_A=spec_A,
         spec_B=spec_B,
-        input_dimensions=[64, 32],
     )
 
 

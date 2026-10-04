@@ -2232,3 +2232,77 @@ class CLAMPED_SILU_PARAMS(TemplateParameter):
             f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {self._fp32_bits(self.scalar0)}u;\n"
             f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {self._fp32_bits(self.scalar1)}u;"
         )
+
+
+@dataclass
+class SFPU_DROPOUT_PROBE(TemplateParameter):
+    """Dropout parameters for sources/sfpu_dropout_test.cpp: the 31-bit PRNG threshold (0 keeps
+    all, 0x7FFFFFFF drops all), the scale as fp32 bits, and whether an eltwise binary init
+    precedes the body."""
+
+    dropout_binary_init_before: bool = False
+    dropout_probability: int = 0
+    dropout_scale_bits: int = 0x3F800000  # 1.0f
+    dropout_seed: int = 0x12345678
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr bool DROPOUT_BINARY_INIT_BEFORE = {'true' if self.dropout_binary_init_before else 'false'};",
+                f"constexpr std::uint32_t DROPOUT_PROBABILITY = {self.dropout_probability}u;",
+                f"constexpr std::uint32_t DROPOUT_SCALE_BITS = {self.dropout_scale_bits}u;",
+                f"constexpr std::uint32_t DROPOUT_SEED = {self.dropout_seed}u;",
+            ]
+        )
+
+
+@dataclass
+class SFPU_MASK_PLACEMENT(TemplateParameter):
+    """DEST tile indices of the data and the mask tile for sources/sfpu_mask_test.cpp."""
+
+    mask_data_dst_index: int = 0
+    mask_mask_dst_index: int = 1
+    mask_posinf: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr std::uint32_t MASK_DATA_DST_INDEX = {self.mask_data_dst_index};",
+                f"constexpr std::uint32_t MASK_MASK_DST_INDEX = {self.mask_mask_dst_index};",
+                f"constexpr bool MASK_POSINF = {'true' if self.mask_posinf else 'false'};",
+            ]
+        )
+
+
+# SFPU_MISC_OPERATION values of sources/sfpu_misc_perf.cpp; keep the two in step.
+SFPU_MISC_OPERATIONS = {
+    "rand": 0,
+    "dropout": 1,
+    "mask": 2,
+    "copy_dest_values": 3,
+    "reshuffle_rows": 4,
+    "softcap": 5,
+    "situ_glu": 6,
+    "clamped_silu_glu": 7,
+    "mask_int": 8,
+}
+
+
+@dataclass
+class SFPU_MISC_OP(TemplateParameter):
+    """Select the body of sources/sfpu_misc_perf.cpp; ``misc_param`` is the rand scale form or the
+    reshuffle_rows index pattern, ``misc_init_per_tile`` re-runs the op's init before every tile.
+    """
+
+    misc_mathop: str = "rand"
+    misc_param: int = 0
+    misc_init_per_tile: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr std::uint32_t SFPU_MISC_OPERATION = {SFPU_MISC_OPERATIONS[self.misc_mathop]};",
+                f"constexpr std::uint32_t SFPU_MISC_PARAM = {self.misc_param};",
+                f"constexpr bool SFPU_MISC_INIT_PER_TILE = {'true' if self.misc_init_per_tile else 'false'};",
+            ]
+        )
