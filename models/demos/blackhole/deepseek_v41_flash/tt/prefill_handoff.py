@@ -19,7 +19,7 @@ import torch
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt import paged_ops as P
 from models.demos.blackhole.deepseek_v41_flash.tt.attention import HEAD_DIM
-from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import COLSPLIT
+from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import colsplit_active
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_model import DSV41PrefillModel, T
 
 SKIP = 0xFFFFFFFF
@@ -119,7 +119,7 @@ class PagedStateSink:
             "mask": up(m, ttnn.float32, ttnn.TILE_LAYOUT),
             "hmask": up(hm, ttnn.float32, ttnn.TILE_LAYOUT),
         }
-        if COLSPLIT:
+        if colsplit_active(self.U, C):
             self.bufs[C]["hmask_cs"] = ttnn.to_device(
                 self._host_cs(hm, C), self.md, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
@@ -139,7 +139,7 @@ class PagedStateSink:
         ttnn.copy_host_to_device_tensor(self._host(idx, ttnn.uint32), bufs["idx"])
         ttnn.copy_host_to_device_tensor(self._host(m, ttnn.float32, ttnn.TILE_LAYOUT), bufs["mask"])
         ttnn.copy_host_to_device_tensor(self._host(hm, ttnn.float32, ttnn.TILE_LAYOUT), bufs["hmask"])
-        if COLSPLIT:
+        if colsplit_active(self.U, C):
             ttnn.copy_host_to_device_tensor(self._host_cs(hm, C), bufs["hmask_cs"])
 
     # ---- the sink (trace-safe: static shapes, persistent index tensors) --------------------------------------------------------------
@@ -216,8 +216,8 @@ class GenPrefillModel(DSV41PrefillModel):
         )  # (the outputs of the eager compile pass are leaked on purpose: no deallocation inside a capture)
         for u in range(U):
             sel_x = sel_p = None
-            if (
-                COLSPLIT
+            if colsplit_active(
+                U, C
             ):  # own chunks only: select locally with the per-column mask, then sum over the 8 columns (exactly one is non-zero)
                 n8 = len(xs)
                 hcs = self.sink.bufs[C]["hmask_cs"]
