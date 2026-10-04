@@ -40,17 +40,13 @@ ROUTER_BATCH = (
 _MOE_G_ENV = os.environ.get(
     "DSV41_MOE_G", "auto"
 )  # 32-token chunks per moe_compute call: "auto" (default), or an explicit 1 / 2 / 4 / 8 for every shape
-GROUPED_USERS = (
-    1,
-    4,
-    16,
-)  # users per mesh row for which the grouped (T=256) moe_compute is verified. At 8 users/row its program needs ~70 KB more static CB space than the L1 left after
-# its own ~650 KB L1 output (TT_THROW "Statically allocated circular buffers ... clash with L1 buffers"; a caught throw leaks that L1 output and poisons later ops), so it is NEVER attempted there; other
-# user counts are unverified and use the T=32 path unless DSV41_MOE_G=8 is set explicitly.
+# Grouped (T=256) moe_compute for every users-per-row. At 8 users/row it used to throw "Statically allocated circular buffers ... clash with L1 buffers" because the program's persistent global
+# semaphore was created at the program's first compile while its ~650 KB L1 outputs were live, i.e. in the MIDDLE of L1, capping every later static CB region (decode avoids it with
+# DSV41MoEBlock.warmup; prefill now has DSV41PrefillMoE.warmup, DSV41_PREFILL_MOE_WARM=0 disables). Verified with the warmup: U = 1, 4, 8, 16 (U = 8: 40 layers ISL 128 / 1k); other U use the same code path.
 
 
 def moe_g_for(users_per_row):
-    return int(_MOE_G_ENV) if _MOE_G_ENV != "auto" else (8 if users_per_row in GROUPED_USERS else 1)
+    return int(_MOE_G_ENV) if _MOE_G_ENV != "auto" else 8
 
 
 COLSPLIT_MODE = os.environ.get(
@@ -293,8 +289,9 @@ class DSV41PrefillLayer:
             _free("hs", h_own)
         _mark("mhc_attn")
         h = ttnn.concat(hg, dim=2) if n8 > 1 else hg[0]
-        for t in hg:
-            ttnn.deallocate(t)
+        if n8 > 1:  # (n8 == 1: h IS hg[0])
+            for t in hg:
+                ttnn.deallocate(t)
         pa = self.pa
         pa.rs_tokens = True
         a = pa.forward_dyn(h) if pa.dyn is not None else pa.forward(h, S, s0=s0)  # [1,1,n8*32,D] own chunks
