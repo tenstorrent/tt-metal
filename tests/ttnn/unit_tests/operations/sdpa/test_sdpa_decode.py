@@ -74,6 +74,47 @@ def test_sdpa_decode_fp32_half_sync_cross_core_reduction(device):
         ttnn.deallocate(out)
 
 
+@pytest.mark.parametrize("k_chunk", [32, 256], ids=["one-tile-chunks", "multi-tile-chunks"])
+def test_sdpa_decode_fp32_dest_large_logits(device, k_chunk):
+    """#44295: a shared key offset (Qwen2's k_proj bias) puts raw QK logits in the thousands. Packing the
+    scores to bf16 before the running max is subtracted costs up to |score| * 2^-9, several units at 3400,
+    which reorders near-tied keys. With fp32_dest_acc_en the scores now stay in fp32."""
+    torch.manual_seed(0)
+    heads, kv_heads, head_dim, cache = 12, 2, 128, 1024
+    q = (torch.randn(1, 1, heads, head_dim) + 1.0).bfloat16().float()
+    k = (torch.randn(1, kv_heads, cache, head_dim) * 8.0 + 20.0).bfloat16().float()
+    v = torch.randn(1, kv_heads, cache, head_dim).bfloat16().float()
+    tq, tk, tv = (ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) for t in (q, k, v))
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=0,
+        k_chunk_size=k_chunk,
+        exp_approx_mode=False,
+    )
+    compute_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    out = ttnn.transformer.scaled_dot_product_attention_decode(
+        tq,
+        tk,
+        tv,
+        cur_pos=[cache - 1],
+        is_causal=True,
+        program_config=program_config,
+        compute_kernel_config=compute_config,
+    )
+    rk = k.repeat_interleave(heads // kv_heads, dim=1)
+    rv = v.repeat_interleave(heads // kv_heads, dim=1)
+    raw = q.permute(0, 2, 1, 3).double() @ rk.double().transpose(-1, -2)
+    assert raw.abs().max() > 3000, "the test must exercise large raw logits"
+    ref = torch.softmax(raw * head_dim**-0.5, dim=-1) @ rv.double()
+    actual = ttnn.to_torch(out)[:, :, :heads]
+    assert_with_pcc(ref.permute(0, 2, 1, 3).float(), actual, 0.999)
+
+
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [

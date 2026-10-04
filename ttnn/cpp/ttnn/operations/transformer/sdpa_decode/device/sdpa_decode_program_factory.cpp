@@ -472,6 +472,11 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const tt::DataFormat im_df = tt::DataFormat::Float16_b;
     const tt::DataFormat stats_df = tt::DataFormat::Float16_b;
+    // QK scores stay in fp32 when DEST accumulates in fp32, as the SDPA prefill factory does
+    // (fp32_dest_intermediate_dataformat). Packing raw scores to bf16 before the running max is
+    // subtracted costs up to |score| * 2^-9, which reorders near-tied keys once logits reach the
+    // thousands (#44295).
+    const tt::DataFormat qk_im_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
 
     // ========== Tile Configurations ==========
     const auto half_tile = tt::tt_metal::Tile({16, 32});
@@ -522,6 +527,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const uint32_t out_tile_size = out_tile.get_tile_size(out_df);
     const uint32_t scalar_tile_size = scalar_tile.get_tile_size(scalar_df);
     const uint32_t im_tile_size = im_tile.get_tile_size(im_df);
+    const uint32_t qk_im_tile_size = im_tile.get_tile_size(qk_im_df);
     const uint32_t stats_tile_size = stats_tile.get_tile_size(stats_df);
 
     // ========== Debug Logging ==========
@@ -658,7 +664,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     }
 
     // Intermediate CBs
-    add_cb(CBIndex::c_24, qk_tiles * im_tile_size, im_df, im_tile_size, &im_tile);
+    add_cb(CBIndex::c_24, qk_tiles * qk_im_tile_size, qk_im_df, qk_im_tile_size, &im_tile);
     add_cb(CBIndex::c_25, out_tiles * im_tile_size, im_df, im_tile_size, &im_tile);
     add_cb(CBIndex::c_26, out_tiles * im_tile_size, im_df, im_tile_size, &im_tile);
     add_cb(CBIndex::c_27, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);

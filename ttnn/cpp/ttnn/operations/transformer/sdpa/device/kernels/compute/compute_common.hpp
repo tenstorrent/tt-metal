@@ -280,7 +280,14 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
     constexpr uint32_t prev_max_dst_idx = 1;
 
     for (uint32_t i = 0; i < rows; i++) {
-        reconfig_data_format_srca(in0_cb);
+        if constexpr (reduce_dim == ReduceDim::REDUCE_ROW && pool_type != PoolType::MAX) {
+            // REDUCE_ROW SUM/AVG runs MVMUL with swapped operands (scaler->SrcA, data->SrcB), and reduce_init
+            // requires reconfig_data_format(icb_scaler, icb) first (api/compute/reduce.h). Configuring the data
+            // as SrcA is invisible while both operands are bf16 and corrupts the sum when the data is fp32.
+            reconfig_data_format(scale_cb, in0_cb);
+        } else {
+            reconfig_data_format_srca(in0_cb);
+        }
         tile_regs_acquire();
         reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
         for (uint32_t j = 0; j < cols; j++) {
