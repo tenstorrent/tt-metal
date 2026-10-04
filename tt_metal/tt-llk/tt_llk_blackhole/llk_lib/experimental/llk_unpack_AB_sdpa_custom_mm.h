@@ -60,4 +60,11 @@ inline void _llk_unpack_AB_sdpa_custom_mm_(
     }
 
     _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);
+
+    if (mask_chunk)
+    {
+        // The mask unpack read unpacker 1's context-1 base: end on context 0 so a two-context follower cannot rewrite it.
+        wait_for_next_context(1);
+        reset_config_context();
+    }
 }

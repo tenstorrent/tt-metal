@@ -18,6 +18,7 @@
  * kt_dim: any integer from 1 to 256 (inclusive)
  * fidelity: LoFi only
  * throttle: not supported
+ * in1 format: not Bfp2_b (compressed_custom_mm takes Bfp2_b tiles)
  *
  * Uses llk_unpack_AB_custom_mm.h as the low-level implementation.
  *************************************************************************/
