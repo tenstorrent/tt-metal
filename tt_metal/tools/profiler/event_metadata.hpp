@@ -61,7 +61,9 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         FABRIC_ROUTING_FIELDS_1D = 40,
         FABRIC_ROUTING_FIELDS_2D = 41,
 
-        UNSUPPORTED = 42,
+        ATOMIC_INC = 42,
+
+        UNSUPPORTED = 43,
     };
 
     enum class NocType : unsigned char { UNDEF = 0, NOC_0 = 1, NOC_1 = 2 };
@@ -225,6 +227,7 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
             case NocEventType::SEMAPHORE_WAIT:
             case NocEventType::SEMAPHORE_SET:
             case NocEventType::WRITE_INLINE:
+            case NocEventType::ATOMIC_INC:
             case NocEventType::SEMAPHORE_INC:
             case NocEventType::SEMAPHORE_INC_MULTICAST: return true;
             default: return false;

@@ -239,12 +239,14 @@ NOCDebugEvent make_noc_debug_event(
                 src_x, src_y, static_cast<bool>(event.posted), event.noc_type == EMD::NocType::NOC_1});
         case EMD::NocEventType::FULL_BARRIER:
             return NOCDebugEvent(NocFullBarrierEvent{src_x, src_y, event.noc_type == EMD::NocType::NOC_1});
+        case EMD::NocEventType::ATOMIC_INC: [[fallthrough]];
         case EMD::NocEventType::SEMAPHORE_INC: [[fallthrough]];
         case EMD::NocEventType::SEMAPHORE_INC_MULTICAST: {
             // A remote atomic increment (unicast or multicast). It has no source buffer (immediate increment value)
             // and does not advance the NIU write counter, so it is modeled distinctly from a write. For the
             // multicast variant dst_x/dst_y are the rectangle start and mcast_end_dst_x/y the end.
             bool is_mcast = event.noc_xfer_type == EMD::NocEventType::SEMAPHORE_INC_MULTICAST;
+            bool is_semaphore = event.noc_xfer_type != EMD::NocEventType::ATOMIC_INC;
             return NOCDebugEvent(NocSemaphoreIncEvent{
                 trailer.getDstAddr(),
                 src_x,
@@ -254,6 +256,7 @@ NOCDebugEvent make_noc_debug_event(
                 static_cast<bool>(event.posted),
                 event.noc_type == EMD::NocType::NOC_1,
                 is_mcast,
+                is_semaphore,
                 event.mcast_end_dst_x,
                 event.mcast_end_dst_y});
         }

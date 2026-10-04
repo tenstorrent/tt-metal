@@ -218,7 +218,8 @@ void RunSemaphoreIncTest(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     bool use_barrier,
     bool use_full_barrier = false,
-    bool use_wrong_write_barrier = false) {
+    bool use_wrong_write_barrier = false,
+    bool request_posted = false) {
     auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
 
     CoreCoord grid_start = {0, 0};
@@ -254,6 +255,9 @@ void RunSemaphoreIncTest(
     } else if (use_wrong_write_barrier) {
         defines["USE_WRITE_BARRIER"] = "1";
     }
+    if (request_posted) {
+        defines["USE_POSTED"] = "1";
+    }
 
     tt_metal::CreateKernel(
         program,
@@ -279,13 +283,17 @@ void RunSemaphoreIncTest(
 
     ReadMeshDeviceProfilerResults(*mesh_device);
 
+    EXPECT_GT(
+        tt::tt_metal::MetalContext::instance().noc_debug_state()->get_state_summary().observed_atomic_events, 0u);
+
     VerifyIssuesOnAllCores(
         mesh_device,
         grid_start,
         grid_end,
-        /*expect_issue=*/!(use_barrier || use_full_barrier),
+        /*expect_issue=*/!(use_barrier || use_full_barrier) &&
+            (!request_posted || mesh_device->arch() == tt::ARCH::BLACKHOLE),
         [fixture](ChipId chip_id, CoreCoord core, int processor_id) {
-            return fixture->has_unflushed_semaphore_issue(chip_id, core, processor_id);
+            return fixture->has_unflushed_atomic_issue(chip_id, core, processor_id);
         },
         "unflushed semaphore inc");
 }
@@ -295,7 +303,10 @@ void RunSemaphoreIncTest(
 // barrier they remain outstanding at kernel end -> unflushed (multicast) semaphore issue. Exercises the
 // SEMAPHORE_INC_MULTICAST host mapping + the multicast device record path.
 void RunSemaphoreIncMulticastTest(
-    NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device, bool use_barrier) {
+    NOCDebuggingFixture* fixture,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    bool use_barrier,
+    bool request_posted = false) {
     auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
     if (compute_grid_size.x < 2) {
         // need at least one column besides the sender's for a sender-excluding multicast rectangle
@@ -337,6 +348,9 @@ void RunSemaphoreIncMulticastTest(
     if (use_barrier) {
         defines["USE_ATOMIC_BARRIER"] = "1";
     }
+    if (request_posted) {
+        defines["USE_POSTED"] = "1";
+    }
 
     tt_metal::CreateKernel(
         program,
@@ -353,10 +367,13 @@ void RunSemaphoreIncMulticastTest(
 
     ReadMeshDeviceProfilerResults(*mesh_device);
 
+    EXPECT_GT(
+        tt::tt_metal::MetalContext::instance().noc_debug_state()->get_state_summary().observed_atomic_events, 0u);
+
     auto device_id = mesh_device->get_device_ids()[0];
     auto sender_core_virtual = mesh_device->worker_core_from_logical_core(sender_core);
 
-    bool has_issue = fixture->has_unflushed_semaphore_mcast_issue(device_id, sender_core_virtual, BRISC_PROCESSOR_ID);
+    bool has_issue = fixture->has_unflushed_atomic_mcast_issue(device_id, sender_core_virtual, BRISC_PROCESSOR_ID);
     if (use_barrier) {
         EXPECT_FALSE(has_issue) << "With atomic barrier, should NOT have unflushed multicast semaphore issue at device "
                                 << device_id << " core " << sender_core_virtual.str();
@@ -364,6 +381,57 @@ void RunSemaphoreIncMulticastTest(
         EXPECT_TRUE(has_issue) << "Without atomic barrier, should have unflushed multicast semaphore issue at device "
                                << device_id << " core " << sender_core_virtual.str();
     }
+}
+
+void RunRawCreditAtomicTest(
+    NOCDebuggingFixture* fixture,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    bool use_barrier) {
+    const CoreCoord sender_core = {0, 0};
+    const CoreCoord target_core = {1, 0};
+    if (mesh_device->compute_with_storage_grid_size().x < 2) {
+        GTEST_SKIP() << "Raw credit atomic test requires two worker columns";
+    }
+
+    const auto target_core_virtual = mesh_device->worker_core_from_logical_core(target_core);
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range(mesh_device->shape());
+    tt_metal::Program program = tt_metal::CreateProgram();
+
+    constexpr uint32_t buffer_size = 64;
+    auto l1_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = buffer_size},
+        distributed::DeviceLocalBufferConfig{.page_size = buffer_size, .buffer_type = BufferType::L1},
+        mesh_device.get());
+
+    std::map<std::string, std::string> defines;
+    if (use_barrier) {
+        defines["USE_ATOMIC_BARRIER"] = "1";
+    }
+    auto kernel = tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/remote_cb_atomic.cpp",
+        CoreRange(sender_core, sender_core),
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
+    tt_metal::SetRuntimeArgs(
+        program,
+        kernel,
+        sender_core,
+        {target_core_virtual.x, target_core_virtual.y, l1_buffer->address(), l1_buffer->address()});
+
+    workload.add_program(device_range, std::move(program));
+    fixture->RunProgram(mesh_device, workload);
+    ReadMeshDeviceProfilerResults(*mesh_device);
+
+    EXPECT_GT(
+        tt::tt_metal::MetalContext::instance().noc_debug_state()->get_state_summary().observed_atomic_events, 0u);
+    const auto device_id = mesh_device->get_device_ids()[0];
+    const auto sender_core_virtual = mesh_device->worker_core_from_logical_core(sender_core);
+    EXPECT_EQ(
+        fixture->has_unflushed_raw_atomic_issue(device_id, sender_core_virtual, BRISC_PROCESSOR_ID), !use_barrier);
 }
 
 // Every core issues repeated inline dword writes (4-byte immediate value, no L1 source buffer) to one destination
@@ -1227,6 +1295,24 @@ TEST_F(NOCDebuggingFixture, SemaphoreIncWithFullBarrier) {
     }
 }
 
+// Blackhole implements a requested-posted unicast atomic as non-posted. The recorded event must use the effective
+// hardware mode. Wormhole keeps the request posted, so it has no drain requirement.
+TEST_F(NOCDebuggingFixture, SemaphoreIncRequestedPostedUsesEffectiveMode) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice<NOCDebuggingFixture>(
+            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunSemaphoreIncTest(
+                    fixture,
+                    mesh_device,
+                    /*use_barrier=*/false,
+                    /*use_full_barrier=*/false,
+                    /*use_wrong_write_barrier=*/false,
+                    /*request_posted=*/true);
+            },
+            mesh_device);
+    }
+}
+
 // A write barrier must not drain outstanding atomics (writes and atomics use separate NIU counters): issuing a
 // write barrier instead of an atomic barrier must still leave the increments reported as unflushed. Mirror of
 // AtomicBarrierDoesNotFlushWrites.
@@ -1261,6 +1347,39 @@ TEST_F(NOCDebuggingFixture, SemaphoreIncMulticastWithBarrier) {
         this->RunTestOnDevice<NOCDebuggingFixture>(
             [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunSemaphoreIncMulticastTest(fixture, mesh_device, /*use_barrier=*/true);
+            },
+            mesh_device);
+    }
+}
+
+
+// Wormhole and Blackhole both implement multicast atomics as non-posted. The recorded event must match that mode.
+TEST_F(NOCDebuggingFixture, SemaphoreIncMulticastRequestedPostedUsesEffectiveMode) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice<NOCDebuggingFixture>(
+            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunSemaphoreIncMulticastTest(
+                    fixture, mesh_device, /*use_barrier=*/false, /*request_posted=*/true);
+            },
+            mesh_device);
+    }
+}
+
+TEST_F(NOCDebuggingFixture, RawCreditHelperAtomicNoBarrier) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice<NOCDebuggingFixture>(
+            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunRawCreditAtomicTest(fixture, mesh_device, /*use_barrier=*/false);
+            },
+            mesh_device);
+    }
+}
+
+TEST_F(NOCDebuggingFixture, RawCreditHelperAtomicWithBarrier) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice<NOCDebuggingFixture>(
+            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunRawCreditAtomicTest(fixture, mesh_device, /*use_barrier=*/true);
             },
             mesh_device);
     }

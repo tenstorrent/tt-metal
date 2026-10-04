@@ -30,6 +30,9 @@
 #include <nanobind/stl/vector.h>
 
 #include "small_vector_caster.hpp"
+#include "impl/context/context_types.hpp"
+#include "impl/context/metal_context.hpp"
+#include "impl/debug/noc_debugging.hpp"
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/device.hpp"
@@ -668,6 +671,49 @@ void device_module(nb::module_& m_device) {
         | device           | Device to read profiling data of | ttnn.Device           |             | Yes      |
         +------------------+----------------------------------+-----------------------+-------------+----------+
     )doc");
+
+    m_device.def(
+        "_get_noc_debug_state",
+        [](MeshDevice* mesh_device) {
+            auto& context = MetalContext::instance(extract_context_id(mesh_device));
+            nb::dict result;
+            const bool enabled = context.rtoptions().get_experimental_noc_debug_dump_enabled();
+            result["enabled"] = enabled;
+            result["collector_ready"] = context.profiler_state_manager() != nullptr;
+
+            if (const auto& state = context.noc_debug_state()) {
+                const auto summary = state->get_state_summary();
+                result["issues"] = summary.issues;
+                result["unflushed_atomic_issues"] = summary.unflushed_atomic_issues;
+                result["observed_atomic_events"] = summary.observed_atomic_events;
+                result["pending_events"] = summary.pending_events;
+            } else {
+                result["issues"] = 0;
+                result["unflushed_atomic_issues"] = 0;
+                result["observed_atomic_events"] = 0;
+                result["pending_events"] = 0;
+            }
+            return result;
+        },
+        nb::arg("device"),
+        "Return the private NoC debug state summary used by tests.");
+
+    m_device.def(
+        "_reset_noc_debug_state",
+        [](MeshDevice* mesh_device) {
+            auto& context = MetalContext::instance(extract_context_id(mesh_device));
+            if (!context.rtoptions().get_experimental_noc_debug_dump_enabled()) {
+                throw std::runtime_error(
+                    "NoC debug dump is disabled. Set TT_METAL_NOC_DEBUG_DUMP=1 before the process starts.");
+            }
+            auto& state = context.noc_debug_state();
+            if (!state) {
+                throw std::runtime_error("NoC debug state is unavailable.");
+            }
+            state->reset_state();
+        },
+        nb::arg("device"),
+        "Reset the private NoC debug state used by tests.");
 
     m_device.def(
         "get_arch_name",

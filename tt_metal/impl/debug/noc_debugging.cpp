@@ -336,12 +336,13 @@ void NOCDebugState::handle_semaphore_inc_event(
     CoreDebugState& state = get_state(core);
     uint8_t noc_id = event.noc;
     update_latest_risc_timestamp(core, processor_id, timestamp);
+    ++state.observed_atomic_events;
 
     // An atomic increment carries no source buffer and does not advance the NIU write counter, so neither the
     // source-reuse nor the counter-monotonicity check applies. Only a non-posted increment expects an ack and must
     // be flushed (via an atomic/full barrier) before kernel end; a posted increment is fire-and-forget.
     if (!event.posted) {
-        state.atomics_pending[noc_id][event.dst_addr] = {processor_id, /*is_semaphore=*/true, event.is_mcast};
+        state.atomics_pending[noc_id][event.dst_addr] = {processor_id, event.is_semaphore, event.is_mcast};
     }
 }
 
@@ -399,6 +400,9 @@ void NOCDebugState::finish_cores() {
     const auto get_unflushed_write_issue_type = [](const NOCDebugState::PendingWriteInfo& info) {
         return NOCDebugIssueType(NOCDebugIssueBaseType::UNFLUSHED_WRITE_AT_END, info.is_mcast, info.is_semaphore);
     };
+    const auto get_unflushed_atomic_issue_type = [](const NOCDebugState::PendingWriteInfo& info) {
+        return NOCDebugIssueType(NOCDebugIssueBaseType::UNFLUSHED_ATOMIC_AT_END, info.is_mcast, info.is_semaphore);
+    };
 
     for (auto& [core, state] : cores) {
         for (size_t noc_id = 0; noc_id < CoreDebugState::MAX_NOCS; ++noc_id) {
@@ -411,7 +415,7 @@ void NOCDebugState::finish_cores() {
             }
             // Non-posted atomics (semaphore incs) left outstanding at kernel end (no atomic/full barrier).
             for (const auto& [addr, info] : state.atomics_pending[noc_id]) {
-                state.issue[info.processor_id].set_issue(get_unflushed_write_issue_type(info));
+                state.issue[info.processor_id].set_issue(get_unflushed_atomic_issue_type(info));
             }
         }
     }
@@ -441,8 +445,13 @@ NOCDebugState::StateSummary NOCDebugState::get_state_summary() const {
     std::unique_lock<std::mutex> lock{cores_mutex};
     // Iterate the map directly (do NOT use get_state, which would insert empty entries).
     for (const auto& [core, state] : cores) {
+        summary.observed_atomic_events += state.observed_atomic_events;
         for (size_t processor_id = 0; processor_id < CoreDebugState::MAX_PROCESSORS; ++processor_id) {
             summary.issues += state.issue[processor_id].issues.size();
+            summary.unflushed_atomic_issues +=
+                state.issue[processor_id]
+                    .get_issues_by_base(NOCDebugIssueBaseType::UNFLUSHED_ATOMIC_AT_END)
+                    .size();
         }
     }
     return summary;
@@ -477,7 +486,9 @@ std::string NOCDebugState::get_issue_description(const NOCDebugIssueType& issue_
     }
 
     std::string desc;
-    if (issue_type.is_semaphore) {
+    if (issue_type.base_type == NOCDebugIssueBaseType::UNFLUSHED_ATOMIC_AT_END && !issue_type.is_semaphore) {
+        desc = "atomic";
+    } else if (issue_type.is_semaphore) {
         desc = "semaphore";
     } else {
         desc = "write";
@@ -497,6 +508,7 @@ void NOCDebugState::print_aggregated_errors() const {
     struct CoreIssues {
         std::vector<std::string> write_barrier_issues;
         std::vector<std::string> unflushed_write_issues;  // at end of kernel
+        std::vector<std::string> unflushed_atomic_issues;
         std::vector<std::string> locked_buffer_issues;
         std::vector<std::string> unlocked_dfb_issues;
         bool has_read_barrier = false;
@@ -522,6 +534,8 @@ void NOCDebugState::print_aggregated_errors() const {
                     core_issues.has_read_barrier = true;
                 } else if (issue_type.base_type == NOCDebugIssueBaseType::UNFLUSHED_WRITE_AT_END) {
                     core_issues.unflushed_write_issues.push_back(get_issue_description(issue_type));
+                } else if (issue_type.base_type == NOCDebugIssueBaseType::UNFLUSHED_ATOMIC_AT_END) {
+                    core_issues.unflushed_atomic_issues.push_back(get_issue_description(issue_type));
                 } else if (issue_type.base_type == NOCDebugIssueBaseType::WRITE_TO_UNLOCKED_DFB) {
                     core_issues.unlocked_dfb_issues.push_back(get_issue_description(issue_type));
                 } else if (detail::locked_buffer_type_name(issue_type.base_type) != nullptr) {
@@ -581,6 +595,20 @@ void NOCDebugState::print_aggregated_errors() const {
                 issues_str += core_issues.unflushed_write_issues[i];
             }
             log_error(tt::LogMetal, "  {} [{}]", core_key, issues_str);
+        }
+    }
+
+    for (const auto& [core_key, core_issues] : issues_by_core) {
+        if (!core_issues.unflushed_atomic_issues.empty()) {
+            log_error(
+                tt::LogMetal,
+                "Unflushed non-posted atomics at the profiler-read boundary (missing atomic or full barrier):");
+            break;
+        }
+    }
+    for (const auto& [core_key, core_issues] : issues_by_core) {
+        if (!core_issues.unflushed_atomic_issues.empty()) {
+            log_error(tt::LogMetal, "  {} [{}]", core_key, fmt::join(core_issues.unflushed_atomic_issues, ", "));
         }
     }
 

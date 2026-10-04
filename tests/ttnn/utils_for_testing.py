@@ -2,8 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
+import contextlib
 import json
+import os
 import time
 
 from loguru import logger
@@ -14,6 +15,66 @@ from typing import Tuple, Union
 import ttnn
 import torch
 import numpy as np
+
+
+@contextlib.contextmanager
+def assert_no_unflushed_noc_atomics(device, *, min_atomic_events=1):
+    """Check one isolated operation for recorded non-posted NoC atomics at its end.
+
+    The check resets context-global debug state. The caller must own the context and must not run another mesh at the
+    same time. This check does not prove each internal kernel boundary in a multi-kernel operation.
+    """
+    if ttnn.is_trace_capture_active(device):
+        raise RuntimeError("NoC debug checks cannot run during trace capture")
+
+    ttnn.ReadDeviceProfiler(device)
+    initial_state = ttnn._ttnn.device._get_noc_debug_state(device)
+    if not initial_state["enabled"]:
+        raise RuntimeError("Set TT_METAL_NOC_DEBUG_DUMP=1 before the test process starts")
+    if not initial_state["collector_ready"]:
+        raise RuntimeError("The NoC debug profiler collector is not ready")
+    if initial_state["issues"]:
+        raise AssertionError(
+            f"The NoC debug state contains {initial_state['issues']} issue(s) before the target operation"
+        )
+
+    ttnn._ttnn.device._reset_noc_debug_state(device)
+    operation_error = None
+    try:
+        yield
+    except BaseException as error:
+        operation_error = error
+        raise
+    finally:
+        debug_error = None
+        try:
+            ttnn.ReadDeviceProfiler(device)
+            final_state = ttnn._ttnn.device._get_noc_debug_state(device)
+            assert final_state["pending_events"] == 0, "NoC debug events remained after the profiler read"
+            assert final_state["observed_atomic_events"] >= min_atomic_events, (
+                "NoC debug did not record enough atomic events: "
+                f"expected at least {min_atomic_events}, got {final_state['observed_atomic_events']}"
+            )
+            assert final_state["unflushed_atomic_issues"] == 0, (
+                "NoC debug found "
+                f"{final_state['unflushed_atomic_issues']} unflushed non-posted atomic issue(s)"
+            )
+        except BaseException as error:
+            debug_error = error
+        finally:
+            try:
+                ttnn._ttnn.device._reset_noc_debug_state(device)
+            except BaseException as error:
+                if debug_error is None:
+                    debug_error = error
+                else:
+                    debug_error.add_note(f"NoC debug state reset also failed: {error}")
+
+        if debug_error is not None:
+            if operation_error is not None:
+                operation_error.add_note(f"NoC debug check also failed: {debug_error}")
+            else:
+                raise debug_error
 
 
 # Dictionaries for converting dtypes
