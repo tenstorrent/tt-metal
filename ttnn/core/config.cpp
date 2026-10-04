@@ -249,6 +249,13 @@ std::optional<std::filesystem::path> Config::get_report_path_impl() const {
 }
 
 void Config::validate(std::string_view name) const {
+    if (name == "root_report_path") {
+        // report_path is derived from root_report_path and report_name and cached per report_name
+        // (get_report_path_impl); a new root must not keep serving the directory computed under the old one until
+        // report_name happens to change. Every mutation path (set<>, apply_json_overrides, load_from_file) ends here.
+        this->cached_report_name.reset();
+        this->cached_report_path.reset();
+    }
     if (name == "enable_fast_runtime_mode" or name == "enable_logging") {
         if (this->attributes.enable_fast_runtime_mode) {
             if (this->attributes.enable_logging) {

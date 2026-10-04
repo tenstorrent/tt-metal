@@ -6,19 +6,16 @@
 
 #include "api/compute/common_globals.h"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
-#ifndef ARCH_QUASAR
 #include "ckernel_sfpu_softsign.h"
 #include "ckernel_sfpu_softshrink.h"
 #include "ckernel_sfpu_hardshrink.h"
 #include "ckernel_sfpu_celu.h"
 #include "ckernel_sfpu_activations.h"
-#endif
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
 
-#ifndef ARCH_QUASAR
 // clang-format off
 /**
 * Performs element-wise hardsigmoid operation. The DST
@@ -163,19 +160,19 @@ ALWI void softshrink_tile_init() { MATH(SFPU_UNARY_INIT(softshrink)); }
 */
 // clang-format on
 ALWI void hardshrink_tile(uint32_t idst, uint32_t param0) {
-    if constexpr (!DST_ACCUM_MODE) {
+    MATH(if constexpr (ckernel::sfpu::hardshrink_bf16_whole_tile && !DST_ACCUM_MODE) {
         if (param0 == 0x3f000000u) {
-            MATH(SFPU_UNARY_CALL(
+            SFPU_UNARY_CALL(
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
                 calculate_hardshrink,
                 (APPROX, 32, DST_ACCUM_MODE),
                 idst,
                 VectorMode::None,
-                param0));
+                param0);
             return;
         }
-    }
+    });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -190,6 +187,5 @@ ALWI void hardshrink_tile(uint32_t idst, uint32_t param0) {
  * Please refer to documentation for any_init.
  */
 ALWI void hardshrink_tile_init() { MATH(SFPU_UNARY_INIT(hardshrink)); }
-#endif  // !ARCH_QUASAR
 
 }  // namespace ckernel

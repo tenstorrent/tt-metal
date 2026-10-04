@@ -17,8 +17,10 @@ bool bf16_dest_hardshrink();
 template <int ITERATIONS>
 void calculate_hardshrink_bf16();
 void init_hardshrink_bf16();
+// Whether BF16 DEST runs the generated hardshrink kernel as one call over the whole tile.
+inline constexpr bool hardshrink_bf16_whole_tile = true;
 
-template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en = true>
 inline void calculate_hardshrink(std::uint32_t param0) {
     if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
         if (bf16_dest_hardshrink() && param0 == 0x3f000000u) {
