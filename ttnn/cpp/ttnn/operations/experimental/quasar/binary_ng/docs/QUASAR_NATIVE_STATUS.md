@@ -17,6 +17,384 @@ simulator (~15 s/run, deterministic) with no transfer latency and no contention 
 happens. The *hardware emulator* is the closest thing to real behaviour we can get; it is available but far
 less accessible, so it is spent deliberately and rarely. **Never mix numbers from the two.**
 
+# ► Week of 2026-09-22 — F3: borrowed L1 shards run native; `1,4,1` equals `4,4,2`; `1,4,1` at N=8 measures 11.69 cyc/tile
+
+## 1. TL;DR
+
+- **Borrowed L1-sharded operands run on the native factory** (F3). When all three operands are L1
+  shards with one memory config, each DFB is the resident shard: the reader publishes credits, the writer
+  has nothing to do for the borrowed part, and none of it moves over the NoC. Only the 1-3 tiles past
+  the largest multiple of `C` are copied, through the tail rings (slide 6). Height, block and width shards are bit-exact at `1,1,1`, `1,4,1` and
+  `4,4,2`; the module is 44 passed, 1 skipped and 2 expected failures native ON, and 1 / 46 OFF; the
+  ResNet-add and sharded no-broadcast suites pass through both factories, 24 / 24, and the
+  mixed-layout suites 44 / 44 (slide 4).
+- **The stride guard is lifted, and borrowed `1,4,1` at N=8 measures `1231 + 11.69*T`**: 3.98x the
+  throughput of N=1 (`851 + 46.50*T`). It is exactly `1,1,1` at N=8 (46.75) divided by `C = 4`: the
+  four Neos split the batched compute chain evenly. The output is wrong until tt-metal#56194: 74.9% of
+  elements, where the pack defect's model predicts 75%. Two strict expected-failure tests hold that
+  state (slide 5).
+- **`1,4,1` is the borrowed configuration.** Measured while a tuned `4,4,2` still ran four readers and
+  two writers, the two had the same slope to the digit, 46.50. `R` and `W` move no data for the
+  borrowed part, so only `C` enters, and four DM cores per cluster are freed (slide 3). The factory
+  therefore runs every borrowed program with one reader and one writer thread: a tuned `4,4,2` runs as
+  `1,4,1`, which fits `851 + 46.50*T`.
+- **Compute batching is worth 3.98x on the compute chain**: `1,1,1` at N=1 is 186.00 cyc/tile and at
+  the default N=8 it is 46.75. Interleaved `1,1,1` at N=8 is DM-bound at 94.62 on the same basis;
+  borrowed has no DM chain to bind (slide 3).
+- **A basis caveat, recorded for every later comparison.** Interleaved `4,4,2` N=1 fits 44.00 on
+  60/120/180 tiles per cluster and 46.25 on 64/128/192; `1,1,1` fits 176.00 (176.5 in the cost model)
+  and 185.00. HEAD's kernels fit the same 46.25 and 185.00 on 64/128/192, so the shift is the basis
+  and not this change. The slope depends on the tile-count basis by about 5%, so borrowed and
+  interleaved are compared here on one basis only: on 64/128/192 the two are within 1 cyc/tile at
+  `C = 1` and within 0.25 at `C = 4`.
+- **One rule shapes the whole feature**: a borrowed ring is the shard, and the DFB host requires its
+  entry count to divide by `max(producers, consumers)`. So the factory always runs the tuned compute
+  count: the borrowed ring takes the largest multiple of it, and the 1-3 tiles past it go through three
+  small owned tail rings (slide 6); a shard of 1-3 tiles goes through the rings whole. The tail rings
+  stay until the DFB can give each tile counter its own capacity. The reader and the writer run one
+  thread each. Every borrowed shape stays native.
+- **Reviews found two real defects, both in the shared predicate**: `is_native_L1_sharding` compared
+  only the grids of input and output shards, so inputs height-sharded and an output width-sharded on
+  one grid were borrowed in place by both factories and came out wrong (12274 of 16384 elements). The
+  first fix compared the shard spec, and the PR review found that this is still not enough: height
+  inputs and a block output with an identical shard spec put the second shard on different cores (2046
+  of 4096 elements wrong on craq-sim, and a near-constant output on the real Wormhole). The predicate
+  now compares the full memory config. Mixed-layout cases that run without the native flag hold both,
+  in the WH and BH nightly jobs as well (slide 4).
+
+---
+
+## 2. Design: the gate rule, and one push per counter
+
+Three things blocked the borrowed path: the gate rejected every sharded operand, the native kernels had
+no borrowed branch, and the factory set `num_tiles_per_cycle = min(8, S)` whenever all operands were
+borrowed, which above `1,1,1` batches at a ring stride above 1, where the pack path loses tiles (#56194).
+
+**Gate and thread counts.** Sharded operands are admitted when all three are L1-sharded tiled shards
+with one memory config (`get_shard_volumes` reports all three), at any per-core tile count `S`.
+A borrowed DFB has `num_entries = S`, cannot be rounded up past its backing shard, and the DFB host
+asserts that `S` divides by `max(producers, consumers)`. So the factory picks the thread counts per
+program: the compute always runs the tuned `C`, the borrowed rings take the first `S - (S mod C)`
+tiles, and the leftover tiles go through the tail rings (slide 6); a shard smaller than `C` has no
+borrowed ring. The reader and writer run one thread each, since they copy only the tail tiles. Both
+ring strides then equal the compute count and divide the borrowed part by construction. At `C = 4`,
+every shard runs on four Neos. Mixed layouts stay on the fallback (F4). The shared
+predicate behind `get_shard_volumes` now requires the output's exact memory config on every sharded
+input, not only its grid or its shard spec: in-place borrowing cannot be right when core i's input
+shards and its output shard cover different tiles, and every factory that borrows inherits the check.
+
+**Reader and writer.** The reference kernels publish with one `reserve_back(S)`, `push_back(S)`, which
+is right only for one thread on one counter: `push_back(n)` credits the active counter and rotates once,
+so a bulk push of `S` on a counter of capacity `S / max` never completes. The native kernels publish per
+counter. Thread `t` owns `num_tcs` counters; counter `c` holds the tiles from `t + c*T` in steps of
+`num_tcs*T`, so its count is the closed form of the counter-major walk, and with the divisibility rule
+every count is exactly the counter's capacity. The writer does no credit work for the borrowed part
+(below). In both kernels the NoC path is the pre-F3 code, byte for byte, behind `#else`.
+
+**Why not one push, as on WH and BH.** On WH and BH the borrowed reader publishes the whole shard in one
+call: one `reserve_back(S)` and one `push_back(S)` in `kernels_ng/dataflow/reader_interleaved_no_bcast.cpp`.
+That works because the buffer there is a circular buffer with one credit counter, fed by one reader
+RISC. On Quasar a ring shared by several threads is split into `max(P,C)` tile counters of
+`S / max(P,C)` entries each. `reserve_back(n)` asks the active counter for `n` free entries, and
+`push_back(n)` credits that counter and then rotates to the next. So a single `reserve_back(S)` asks one
+counter for more than it holds: with the watcher on, the DFB's capacity assert fires; otherwise the
+thread waits forever. Each thread therefore publishes its counters one at a time, `S / max(P,C)` entries
+each. At `1,1,1` there is one counter of `S` entries, and the loop reduces to the single WH/BH push. That
+is also why the single-threaded fallback keeps its one-call publish.
+
+**Why the writer does nothing for the borrowed part, as on WH and BH.** The WH/BH writer does no credit work for a sharded
+output, and the native Quasar writer now does none either. The protocol never needs the output's credits
+drained. Each kernel launch resets every tile counter and rewrites its capacity before the buffer is
+marked ready, so no credit state reaches the next program. The pack thread's firmware calls
+`tensix_sync()`, which blocks until the Tensix core is idle, before it reports done, so every packed tile
+is in L1 when the program completes. And the borrowed ring is the whole shard, so the compute never waits
+for freed space. The writer used to drain only because it then called `finish()`, which on a DM consumer
+waits until every posted tile is acked. Without a drain, that `finish()` is a race. On craq-sim it
+returned at once when it ran before the compute's first post, and it hung when the writer was delayed
+past that post. With neither the drain nor `finish()`, the borrowed path is bit-exact at `1,1,1`,
+`1,4,1` and `4,4,2`, including a repeated shape in one process. The writer's interleaved path is
+byte-identical to the one before F3. The single-threaded fallback writer still drains, in one call.
+The first borrowed measurements were made while the writer still drained: `1,4,1` fit
+`1002 + 46.50*T` at N=1 and `1406 + 11.69*T` at N=8. Remeasured with the idle
+writer, borrowed `1,4,1` fits `939 + 46.75*T` at N=1 and `1358 + 11.69*T` at N=8. The N=1 slope moves
+by 0.54%, and the N=8 slope does not move. The intercept is lower because the per-cluster span now
+ends when the last pack thread returns, where it used to end at the writer's last pop, just after that
+thread's final post. After the second review the reader's borrowed branch sets up its own buffers, so
+that its NoC path is the pre-F3 code again. Borrowed `1,4,1` then fits `851 + 46.50*T` at N=1 and
+`1231 + 11.69*T` at N=8, the shipped numbers that the other slides quote; `1,1,1` is unchanged at
+`757 + 186.00*T` and `1016 + 46.75*T`. An A/B of the
+two reader versions on one build reproduced both `1,4,1` fits exactly, so the reorder moved them. How
+it does so inside the simulator is not traced; the N=8 slope, 11.69, holds.
+
+**Batch default.** On the borrowed path `num_tiles_per_cycle` defaults to `min(8, S)` only when both
+ring strides are 1, else 1, until #56194. A borrowed ring is walked exactly once, so a batch never wraps
+and `S % n` is not required; the knob's double-buffer and wrap guards are skipped for it. Above stride
+1 the knob runs with a warning and wrong output (slide 5).
+
+**Consequences.** No thread draws zero tiles on the borrowed path, since the borrowed part divides by the
+ring stride. Every borrowed shape runs native, and every shard keeps all `C` Neos (slide 6). At the same
+batch size, four Neos measure 4.00x one Neo (46.50 against 186.00 at N=1, 11.69 against 46.75 at N=8).
+A shard of 1 tile per core goes through the tail rings on four Neos, three on padding.
+
+---
+
+## 3. Measured: borrowed against interleaved on one basis
+
+craq-sim `ad401613`, block shards over the full 8x4 grid, 64/128/192 tiles per cluster, span fit as in
+every recorded number. The borrowed column is the shipped code. The interleaved arms were rerun on the
+same basis in the session of the first borrowed measurement, and their NoC path has not changed since.
+
+| config | interleaved (DRAM) | borrowed (L1 block shards) |
+|---|---|---|
+| `1,1,1` N=1 | `776 + 185.00*T` | `757 + 186.00*T` |
+| `1,4,1` N=1 | `1450 + 166.00*T` | `851 + 46.50*T` |
+| `4,4,2` N=1 | `1119 + 46.25*T` | runs as `1,4,1` |
+| `1,1,1` N=8, both knobs (the borrowed default) | `1519 + 94.62*T`, DM-bound | `1016 + 46.75*T` |
+| `1,4,1` N=8, compute knob, output wrong until #56194 | not measured | `1231 + 11.69*T` (slide 5) |
+
+Before a tuned `4,4,2` ran as `1,4,1`, with the draining writer of slide 2, `4,4,2` fit
+`1021 + 46.50*T` and `1,4,1` fit `1002 + 46.50*T`: the same slope, so the rule costs no throughput.
+
+Three readings. **The cycle count does not move with placement on craq-sim**: borrowed and interleaved
+agree within 1 cyc/tile at the same `C`, because the simulator charges nothing for transport either way.
+What moves is the roof: the DRAM floor of ~349 cyc/tile and the NoC port both vanish, so 46.50 is a
+silicon prediction here and an upper bound everywhere else (week of 09-10, slide 6). **The thread budget
+collapses**: interleaved `1,4,1` is reader-bound at 166.00 and needs `4,4,2` to reach 46.25; borrowed
+`1,4,1` reaches 46.50 with two DM cores. **Batching acts on the compute chain alone**: 186.00 → 46.75
+at `C = 1`, a 3.98x on throughput, where the interleaved pipeline stopped at 94.62 because a DM chain
+bound it. At `C = 4` the same batch measures 11.69 (slide 5); its output is right once #56194 lets the
+pack apply the ring stride.
+
+The basis caveat: the recorded 44.00 and 176.00 came from 60/120/180. On 64/128/192 the same interleaved
+arms fit 46.25 and 185.00, with HEAD's kernels and with this change's kernels alike, to the digit in
+prologue and slope. So the shift is the basis and not the kernel edit, and the NoC path is confirmed
+unchanged. All fits are exact (zero residual): the per-tile cost depends on the tile-count basis by
+about 5%. Compare only within one basis.
+
+---
+
+## 4. Verification
+
+- RED first: the four native arms failed on routing alone (`kernels_qsr` 0, `kernels_dfb` 12) with
+  bit-exact output, and the fallback test passed as predicted. GREEN after the kernels and the gate:
+  5 of 5.
+- Module native ON 44 passed, 1 skipped, 2 expected failures (slide 5); OFF 1 passed / 46 skipped. The
+  count includes the tail-ring tests of slide 6.
+- `test_binary_ng_no_bcast.py -k sharded` and `test_binary_ng_resnet_add.py`: 24 / 24 native ON, where
+  every all-sharded bf16 ADD without activations now routes to `kernels_qsr` at the default `1,1,1`
+  with `n = min(8, S)`; 24 / 24 native OFF. The mixed-layout, mixed-grid and interleaved-output cases,
+  which the predicate change can re-route: 44 / 44 through each factory, with the cases of the third
+  review and the PR review.
+- Shards: 16 tiles per core height, block and width; 12 (one full chunk of 8 plus a tail of 4); 1 and
+  2 per core, including the uneven column whose boundary core holds a partial shard; height inputs with
+  a width output on one grid, which must fall back and stay bit-exact.
+- Uneven shards, where the tensor does not divide into whole shards and the last clusters hold fewer
+  real tiles: height and width with 1 real tile of 4 on the last cluster, and block corners with 1 of 4
+  and 1 of 16, at `1,1,1`, `1,4,1` and `4,4,2`, routed native and bit-exact. Shards that do not divide
+  by 4 -- 1, 2, 6, 9 and 10 tiles per core, including an uneven width shard and a shard grid of four
+  clusters of which two hold no real tile -- stay native and bit-exact at all three splits. Every
+  cluster processes its full shard, so the kernels never see the smaller count; at `1,4,1` three of
+  the four compute threads on a last cluster with one real tile work only on padding.
+- **Review** (the local reviewer with the PR-bot parity pass) found the shard-spec hole above and four
+  smaller items, all applied: the factory reads the shard tile count from the gate's helper instead of a
+  second derivation; the basis claim was isolated by rerunning HEAD's kernels; two output-tensor guards
+  that `compute_output_specs` already covers were deleted; `sharded_operand_ok` lost an argument every
+  caller derived from the same object.
+- **The `2,1,2` arm, DM side 2 against Tensix side 1 on both rings, is bit-exact on craq-sim `9f6314bf`
+  for borrowed and interleaved operands, and wrong on `ad401613` for both**, about half the elements.
+  That is the simulator defect recorded in the week of 09-03, now shown independent of NoC fill. The arm
+  stays out of the committed module until the simulator in use moves past it. Since the second review,
+  a borrowed program runs one reader and one writer thread, so its DM side never outnumbers its Tensix
+  side and that defect cannot reach it.
+- **Second review** (code-review-tt with the PR-bot parity pass) found no defect in any admitted
+  configuration. Applied:
+  - one reader and one writer thread on the borrowed path;
+  - three entries in the borrowed shard set: a repeat of an earlier spec while its tensors are still
+    alive (a program-cache hit that must rebind the borrowed shards to the new buffers), an in-place
+    `add_`, and 256 tiles per core;
+  - the two strict expected failures accept only the pack defect's own signature (slide 5);
+  - the reader's NoC path restored to the pre-F3 code, byte for byte;
+  - comments that still said the gate checks divisibility, that the borrow rule is grid equality, or
+    that the borrowed writer drains.
+- **Third review** (code-review-tt with the PR-bot parity pass, after the tail rings) found no defect
+  in any admitted configuration. Applied:
+  - a same-grid mixed-layout case in `test_binary_ng_no_bcast.py` (height inputs, a width output),
+    which runs without the native flag. With the spec check reverted to grids, it failed through both
+    factories (PCC 0.06); with the check, it passes;
+  - the DM-ring guards (the DM batch against the ring depth, and the 255-entry limit) now skip
+    borrowed programs, which build none of those rings;
+  - a compile guard that refuses a fused RELU as well as an activation chain on the tail path;
+  - `sharded_operand_ok` in a unity-build-safe namespace;
+  - the profiler test strips the DPRINT and streaming-profiler variables that the runtime refuses next
+    to the device profiler, and skips on a build without Tracy;
+  - comments and docs that the tail rings made stale.
+- **Rebase onto main** found a conflict that the text merge and the host build did not show: main's
+  fused-activation SrcA fix made the shared Quasar preprocess helper name `dfb::pre_lhs`, and a program
+  with no borrowed ring has no such DFB, so every shard smaller than `C` failed to JIT-compile. The
+  compute kernel now includes that helper only when a borrowed ring exists. The default `1,1,1` suites
+  never build tail rings, so only the native module caught it.
+- **PR review** (the PR bots and an AI-assisted review by blozano-tt) found a second hole in the shared
+  predicate. Height inputs and a block output on one 2x2 grid had identical shard specs, but the second
+  shard sits on `(1,0)` in one layout and on `(0,1)` in the other. The spec-only check borrowed them in
+  place: 2046 of 4096 elements wrong on craq-sim through both factories, and a near-constant output on
+  the real Wormhole through the Metal 2.0 factory. Applied:
+  - the predicate compares the full memory config when both are sharded, before the uneven-shard branch,
+    so that branch is covered too; the comment says why `b` needs no check of its own;
+  - new cases that run without the native flag: `H.H.B@same-spec`, `H.H.Hcol@same-grid` (row-major
+    inputs into a column-major output), and a supplied output tensor whose config differs from
+    `memory_config`. The same-spec and output-tensor cases failed before the fix on craq-sim and on the
+    real Wormhole; the orientation case passed before too, since the shard spec holds the orientation;
+  - the borrowed rings of `a`, `b` and `c` take one count, since borrowing needs one config.
+
+  Kept by decision: the batching-above-stride-1 warning, rather than a refusal with an opt-in; and the
+  `TTNN_QSR_NATIVE` skip, because the WH and BH nightly jobs collect this directory and the native
+  factory does not run there.
+- Two more `ad401613` limits met on the way, neither ours: fp32 add stalls in UnpackToDest, and an lhs
+  RELU activation aborts the simulator on an undecoded SFPGT. Both are fixed in later craq-sim.
+
+---
+
+## 5. The stride guard lifted: `1,4,1` at N=8, and two expected failures
+
+The factory refused compute batching above ring stride 1, because the pack path loses tiles there
+(#56194). That refusal is now a warning with the same condition, so the knob runs and its timing can be
+measured. The default derivation is unchanged: it batches only at stride 1, so no default
+configuration produces wrong output.
+
+| borrowed `1,4,1`, 64/128/192 tiles per cluster | fit | output |
+|---|---|---|
+| N=1, the default | `851 + 46.50*T` | bit-exact |
+| N=8, `TTNN_QSR_TILES_PER_CYCLE=8` | `1231 + 11.69*T` | 74.9% of elements wrong |
+
+- **Throughput 3.98x; latency 1.93x at 64 tiles per cluster, 2.81x at 192.** The slope falls from
+  46.50 to 11.69. The span gains less at small counts because the batched arm pays about 380 cycles
+  more fixed cost.
+- **The slope is the compute chain divided by `C`, exactly**: `1,1,1` at N=8 measures 46.75, and
+  46.75 divided by `C = 4` is 11.69. The DM side does no per-tile work on this path, so nothing else
+  enters. The 4 is the thread count, not a batching factor: the batching gain is the separate 3.98x,
+  and that number was measured, not predicted.
+- **The per-stage model under-predicted batching.** It took 131 of the 176.5-cycle compute chain as
+  amortizable and predicted 61.9 per Neo at N=8, so 15.5 at `C = 4` (60/120/180 basis). Measured:
+  46.75 and 11.69 (64/128/192 basis, about 5% higher at N=1, which does not close the gap). Fitted to
+  `a/N + b`, 186.00 at N=1 and 46.75 at N=8 give about 159 of 186 amortizable: a derived split under the
+  model's form, not a measurement.
+- **The timing is measured with the defect present.** The pack still issues one pack per tile, only at
+  the wrong addresses, so the number stands for the fixed pack unless the fix adds per-tile cost. The
+  error count confirms that the batched path ran: a batch of 8 at stride 4 covers ceil(8/4) = 2 slots,
+  so 75% of each batch is lost, against 74.9% measured.
+
+**Tests.** Each arm script exits 2 only when every op ran, routed as expected, and produced wrong
+output, and `_check_arm` turns exit 2 into `_WrongOutput`. Two tests carry
+`xfail(raises=_WrongOutput, strict=True)`: `test_native_tiles_per_cycle_above_stride_one` (interleaved
+`4,4,2`, both knobs at 8) and `test_native_borrowed_tiles_per_cycle_above_stride_one` (borrowed
+`1,4,1`, N=8). A hang, a refusal or a fallback still fails them. When the pack fix lands they pass,
+`strict` turns that into a failure, and the markers come off. RED was watched first: against the
+guarded build both failed on the guard's message, not as expected failures. The guard test lost its
+stride arm; its four ring-depth arms still refuse.
+
+Wrong output alone is not enough: each test also requires the pack defect's own signature. A batch of
+`n` tiles at ring stride `s` lands `ceil(n/s)` of them, and each thread's share runs in full batches and
+one tail, which predicts the fraction of wrong elements per shape:
+
+| test | shape | predicted | measured |
+|---|---|---|---|
+| interleaved `4,4,2` | 288 tiles, 9 per cluster | 55.56% | 55.51% |
+| interleaved `4,4,2` | 2080 tiles, 65 per cluster | 73.85% | 73.78% |
+| borrowed `1,4,1` | 64 tiles per core | 75.00% | 74.94% |
+
+A shape more than 1 percentage point away fails the test, so a second defect cannot hide behind the
+first.
+
+---
+
+## 6. Tail rings: every shard of 4 or more tiles runs on four Neos
+
+A borrowed ring must divide by the compute count `C`, so a shard of `S` tiles with `S mod C != 0` used to
+run on fewer Neos. Now the factory always runs the tuned `C` (one rule for every shard: dchen, "a single
+rule always use c=4 is easier to manage") and splits the shard:
+
+- The borrowed rings hold the first `S - r` tiles, where `r = S mod C`: a multiple of `C`. A shard
+  smaller than `C` has no borrowed ring, and all of it is the tail.
+- Three owned rings of `C` entries each (`in0_tail`, `in1_tail`, `out_tail`) carry the `r` leftover
+  tiles. The reader copies them out of the shard with a local NoC loopback read, which stays inside the
+  shard, one entry per compute thread; the entries past `r` stay padding. Each compute thread runs its
+  main tiles, then one tail entry. The writer copies the `r` real results back into the output shard,
+  just past the borrowed part, and drops the padding. The shard's L1 base comes from a
+  `LocalTensorAccessor` binding on each borrowed tensor, which the runtime keeps current on a cache hit.
+- The tail code compiles in only when `TAIL_TILES > 0`, and the borrowed-ring code only when
+  `HAS_MAIN_RING`. The NoC paths of the reader and the writer stay the pre-F3 code, byte for byte.
+
+**The tail rings are interim.** They exist only because the DFB gives every tile counter of a ring the
+same capacity. tt-metal#57623 asks for a capacity per tile counter. The DFB owner replied that the
+uniform capacity was chosen for simplicity, that a per-counter capacity can be looked into now that it
+has a use case, and that it looks possible in the implicit-sync path as well. With it, a borrowed ring
+holds the whole shard, and the tail rings, their L1 and their kernel paths go away.
+
+**One trap, known from the activation path.** On Quasar `pack_tile(i, dfb)` keeps writing to the ring
+that the packer was set up for, whatever id it gets. The first build packed each thread's tail result
+into the borrowed output ring, which wrapped onto that thread's first tile. A probe with tile-indexed
+values showed it: tile 0 of a 9-tile shard held tile 8's result, and tile 8 held zeros. `pack_init` on the
+tail output ring before the tail pack fixed it, as `eltwise_utils_dfb.hpp` already does for the
+activation rings.
+
+**Measured** (craq-sim `ad401613`, tuned `4,4,2` borrowed, so `1,4,1`, N=1, block shards 1 tile tall over
+8x4; the profiler shows 4 Neos and 2 DM cores on every cluster):
+
+| shard tile counts | before | tail rings |
+|---|---|---|
+| 65/129/193 (`r = 1`) | `C = 1`: `757 + 186.00*T` | `1910 + 46.50*T` |
+| 66/130/194 (`r = 2`) | `C = 2`: `851 + 93.00*T` | `1929 + 46.50*T` |
+| 64/128/192 (`r = 0`) | `C = 4`: `851 + 46.50*T` | `851 + 46.50*T`, unchanged |
+
+- **Throughput at the same batch size: 4.00x for `S mod 4 = 1`, 2.00x for `S mod 4 = 2`.**
+- **The tail costs about 1070 cycles of fixed time** (latency, not throughput). On one 65-tile cluster
+  against a 64-tile one the profiler shows the reader starting about 470 cycles later, since it now sets
+  up 8 more producer tile counters before its kernel starts. That start is not on the critical path:
+  with the copy-in moved to the writer instead, the fit stayed `1910 + 46.50*T` to the cycle, and shards
+  of 1-3 tiles got 420-560 cycles slower, because the writer then set up all three tail rings alone.
+  The cost sits on the compute side: one more tile per Neo (about 210) plus the setup of the tail
+  rings and the tail block. The writer's copy-out ends 20 cycles after the compute.
+- **So the tail rings pay off above a size.** Derived from the fits, not measured at those sizes: at
+  N=1 they pass the `C = 1` path above about 9 tiles and the `C = 2` path above about 23. Against the
+  path an `S mod 4 = 1` shard took before them, `C = 1` at its default N=8 (`1152 + 46.75*T`), they
+  have the same slope and about 760 cycles more intercept until #56194 lets `C = 4` batch, where
+  `C = 4` measured 11.69 cyc/tile at N=8.
+- **Shards of 1-3 tiles pay the fixed cost with nothing to amortize it.** On one build, shards of 1, 2
+  and 3 tiles take 1694, 1790 and 1894 cycles through the tail rings on four Neos, against 1132, 1178
+  and 1258 in place on the one or two Neos that divide them: about 50% more, about 600 cycles per op.
+  The unit test `test_binary_ng_resnet_add.py` uses 1-tile shards. The ResNet model's own residual add
+  fuses a RELU, which the native gate does not admit, so this cost does not reach the model today.
+
+**Tests.** `test_native_borrowed_indivisible_shards_use_every_compute_thread` (shards of 1, 2, 3, 6, 7
+and 67 tiles at tuned `1,4,1`) reads the Neo count from the device profiler, one shard per child; it
+failed first with 1 or 2 Neos, for the shards of 4 or more tiles and again for the 1-3 tile shards once
+the single rule replaced the small-shard exception. The indivisible-shard test gained shards of 3, 5, 7
+and 67 tiles, an in-place `add_` with a tail, a cache repeat with a tail, and a tuned `1,2,1` arm (2-entry
+tail rings).
+
+---
+
+## 7. Next
+
+1. **Borrow-from-interleaved** (a cluster's share of an L1-interleaved tensor is contiguous in its own
+   bank), then **F4 mixed layouts**, which is gate widening only: the NoC kernels already take sharded
+   pages through the accessor.
+2. **`1,4,1` at N=8 once #56194 lands**: 11.69 cyc/tile measured with the defect present. The two
+   expected-failure tests are the tripwire. When they turn into strict failures, remove the markers
+   and let the default derivation batch above stride 1.
+3. **Done 2026-09-24: every borrowed shard keeps all `C` Neos** through the tail rings (slide 6).
+4. **Remove the tail rings once the DFB supports a capacity per tile counter** (tt-metal#57623; the
+   DFB owner will look into it, slide 6). Then a borrowed ring holds the whole shard, and the tail's
+   fixed cost goes with it. Until then the tail rings are not tuned further: moving the copy-in to the
+   writer was measured and saved nothing (slide 6).
+5. **Move the development simulator to `9f6314bf` or later.** It fixes the DM-outnumbers-Tensix
+   corruption, the fp32 stall and the SFPGT abort, runs implicit sync (craq-sim#338 closed), and would
+   let `2,1,2` and the other 18 DM-heavy configurations back into the committed module.
+6. **Implicit sync**: adopt it for the coming removal of the opt-out; expect no throughput change
+   against `dm_batch = E/2`.
+
+---
+
 # ► Week of 2026-09-17 — dataflow batching works everywhere; `4,4,2` N=8 runs at 1.66x; a walk regression caught and fixed
 
 ## 1. TL;DR

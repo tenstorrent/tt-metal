@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <optional>
+#include <unordered_map>
 #include <tt_stl/reflection.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
@@ -43,7 +45,64 @@ void barrier_across_send_recv_ranks(
     sub_context->barrier();
 }
 
-[[maybe_unused]] void validate_device_ownership(
+// Mesh-ID sockets are mesh-scoped: connections may land on any host that owns that mesh.
+// If a DistributedContext/subcontext was provided, rank_translation_table only contains the
+// ranks in that context, so coordinates owned by a rank outside the context are rejected.
+void validate_device_ownership_mesh_scoped(
+    const SocketConfig& config,
+    const std::unordered_map<Rank, Rank>& rank_translation_table,
+    const tt_fabric::ControlPlane& control_plane) {
+    const auto& topology_mapper = control_plane.get_topology_mapper();
+    const auto& global_logical_bindings = control_plane.get_global_logical_bindings();
+
+    auto owning_rank = [&](tt::tt_fabric::MeshId mesh_id, const MeshCoordinate& coord) -> std::optional<Rank> {
+        const auto host_rank = topology_mapper.get_host_rank_for_coord(mesh_id, coord);
+        if (!host_rank.has_value()) {
+            return std::nullopt;
+        }
+        // global_logical_bindings has O(num_hosts) entries; scan is cheap.
+        for (const auto& [rank, mesh_id_and_host_rank] : global_logical_bindings) {
+            if (std::get<0>(mesh_id_and_host_rank) == mesh_id &&
+                std::get<1>(mesh_id_and_host_rank) == host_rank.value()) {
+                return rank;
+            }
+        }
+        return std::nullopt;
+    };
+
+    for (const auto& connection : config.socket_connection_config) {
+        const auto sender_owner = owning_rank(config.sender_mesh_id.value(), connection.sender_core.device_coord);
+        TT_FATAL(
+            sender_owner.has_value(),
+            "Sender core coordinate {} does not map to any host rank on mesh id {}",
+            connection.sender_core.device_coord,
+            *config.sender_mesh_id);
+        TT_FATAL(
+            rank_translation_table.contains(sender_owner.value()),
+            "Sender core coordinate {} is owned by rank {} which is not part of the socket context on mesh id {}",
+            connection.sender_core.device_coord,
+            *sender_owner.value(),
+            *config.sender_mesh_id);
+
+        const auto receiver_owner = owning_rank(config.receiver_mesh_id.value(), connection.receiver_core.device_coord);
+        TT_FATAL(
+            receiver_owner.has_value(),
+            "Receiver core coordinate {} does not map to any host rank on mesh id {}",
+            connection.receiver_core.device_coord,
+            *config.receiver_mesh_id);
+        TT_FATAL(
+            rank_translation_table.contains(receiver_owner.value()),
+            "Receiver core coordinate {} is owned by rank {} which is not part of the socket context on mesh id {}",
+            connection.receiver_core.device_coord,
+            *receiver_owner.value(),
+            *config.receiver_mesh_id);
+    }
+}
+
+// Rank-addressed and mesh-id sockets both express SocketConnection device coordinates in
+// canonical logical mesh space (see SocketConfig). Rank-addressed sockets additionally
+// require those coordinates to sit on the sender/receiver ranks' host slices.
+void validate_device_ownership_rank_scoped(
     multihost::Rank global_sender_rank,
     multihost::Rank global_receiver_rank,
     const SocketConfig& config,
@@ -69,40 +128,37 @@ void barrier_across_send_recv_ranks(
     const auto expected_receiver_host_rank = std::get<1>(global_logical_bindings.at(global_receiver_rank));
 
     for (const auto& connection : config.socket_connection_config) {
-        if (is_sender) {
-            auto actual_sender_host_rank = topology_mapper.get_host_rank_for_coord(
-                config.sender_mesh_id.value(), connection.sender_core.device_coord);
-            TT_FATAL(
-                actual_sender_host_rank.has_value(),
-                "Sender core coordinate {} does not map to any host rank on mesh id {}",
-                connection.sender_core.device_coord,
-                *config.sender_mesh_id);
-            TT_FATAL(
-                actual_sender_host_rank.value() == expected_sender_host_rank,
-                "Sender core coordinate {} is owned by mesh host rank {}, expected {} for rank {} on mesh id {}",
-                connection.sender_core.device_coord,
-                *actual_sender_host_rank,
-                *expected_sender_host_rank,
-                *global_sender_rank,
-                *config.sender_mesh_id);
-        }
-        if (is_receiver) {
-            auto actual_receiver_host_rank = topology_mapper.get_host_rank_for_coord(
-                config.receiver_mesh_id.value(), connection.receiver_core.device_coord);
-            TT_FATAL(
-                actual_receiver_host_rank.has_value(),
-                "Receiver core coordinate {} does not map to any host rank on mesh id {}",
-                connection.receiver_core.device_coord,
-                *config.receiver_mesh_id);
-            TT_FATAL(
-                actual_receiver_host_rank.value() == expected_receiver_host_rank,
-                "Receiver core coordinate {} is owned by mesh host rank {}, expected {} for rank {} on mesh id {}",
-                connection.receiver_core.device_coord,
-                *actual_receiver_host_rank,
-                *expected_receiver_host_rank,
-                *global_receiver_rank,
-                *config.receiver_mesh_id);
-        }
+        auto actual_sender_host_rank =
+            topology_mapper.get_host_rank_for_coord(config.sender_mesh_id.value(), connection.sender_core.device_coord);
+        TT_FATAL(
+            actual_sender_host_rank.has_value(),
+            "Sender core coordinate {} does not map to any host rank on mesh id {}",
+            connection.sender_core.device_coord,
+            *config.sender_mesh_id);
+        TT_FATAL(
+            actual_sender_host_rank.value() == expected_sender_host_rank,
+            "Sender core coordinate {} is owned by mesh host rank {}, expected {} for rank {} on mesh id {}",
+            connection.sender_core.device_coord,
+            *actual_sender_host_rank,
+            *expected_sender_host_rank,
+            *global_sender_rank,
+            *config.sender_mesh_id);
+
+        auto actual_receiver_host_rank = topology_mapper.get_host_rank_for_coord(
+            config.receiver_mesh_id.value(), connection.receiver_core.device_coord);
+        TT_FATAL(
+            actual_receiver_host_rank.has_value(),
+            "Receiver core coordinate {} does not map to any host rank on mesh id {}",
+            connection.receiver_core.device_coord,
+            *config.receiver_mesh_id);
+        TT_FATAL(
+            actual_receiver_host_rank.value() == expected_receiver_host_rank,
+            "Receiver core coordinate {} is owned by mesh host rank {}, expected {} for rank {} on mesh id {}",
+            connection.receiver_core.device_coord,
+            *actual_receiver_host_rank,
+            *expected_receiver_host_rank,
+            *global_receiver_rank,
+            *config.receiver_mesh_id);
     }
 }
 
@@ -134,11 +190,7 @@ void MeshSocket::process_host_ranks(const tt_fabric::ControlPlane& control_plane
 
     config_.sender_mesh_id = std::get<0>(global_logical_bindings.at(sender_rank));
     config_.receiver_mesh_id = std::get<0>(global_logical_bindings.at(receiver_rank));
-    // Skip coordinate validation for rank-addressed sockets (this path): the socket cores are
-    // expressed in submesh-local space, which doesn't match the parent-mesh coord range that
-    // validate_device_ownership / get_coord_range expect. This holds for cross-mesh rank-
-    // addressed sockets too — they use the same submesh-local cores. Role correctness is
-    // enforced by the rank-based check in the constructor.
+    validate_device_ownership_rank_scoped(sender_rank, receiver_rank, config_, control_plane);
 }
 
 void MeshSocket::process_mesh_ids(const tt_fabric::ControlPlane& control_plane) {
@@ -163,6 +215,7 @@ void MeshSocket::process_mesh_ids(const tt_fabric::ControlPlane& control_plane) 
             }
         }
     }
+    validate_device_ownership_mesh_scoped(config_, rank_translation_table_, control_plane);
 }
 
 SocketConfig MeshSocket::populate_mesh_ids(
