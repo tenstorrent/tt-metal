@@ -497,6 +497,7 @@ class TestConfig:
             "-ffast-math "
             "-fno-finite-math-only -fsigned-zeros -fno-associative-math "
             "-fno-exceptions -fno-rtti -fno-use-cxa-atexit "
+            "-falign-functions=64 "  # callees of a measured loop keep their alignment when other code moves
         )
         TestConfig.WITH_COVERAGE = with_coverage
         StimuliConfig.WITH_COVERAGE = with_coverage

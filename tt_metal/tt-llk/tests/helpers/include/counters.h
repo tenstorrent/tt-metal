@@ -696,7 +696,9 @@ inline void read_last_zone()
 
 // One measured scope: NC activates timing only, WC both. Without the profiler there is no zone to open.
 #if defined(LLK_PROFILER)
+// The 64-byte alignment keeps code before a zone from moving the zone's loop (Wormhole pack issue rate, #55169).
 #define START_PERF_MEASURE(zone_name) \
+    asm volatile(".p2align 6");       \
     MEASURE_PERF_COUNTERS(zone_name)  \
     ZONE_SCOPED(zone_name)
 #else
