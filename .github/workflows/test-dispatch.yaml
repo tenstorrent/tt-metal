@@ -31,6 +31,11 @@ on:
         type: string
         default: ""
         description: "Commit SHA to test (default: HEAD)"
+      use-artifacts-from-run:
+        description: "Existing build-artifact run to reuse (diagnostic benchmark)"
+        required: false
+        type: string
+        default: ""
       platform:
         required: false
         type: choice
@@ -73,6 +78,7 @@ jobs:
       tracy: ${{ inputs.tracy }}
       build-wheel: true
       ref: ${{ inputs.commit || github.sha }}
+      use-artifacts-from-run: ${{ inputs.use-artifacts-from-run }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
