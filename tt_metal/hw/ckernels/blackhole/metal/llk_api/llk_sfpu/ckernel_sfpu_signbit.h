@@ -28,10 +28,14 @@ inline void calculate_signbit() {
     constexpr int offset = 0;
 
 #ifndef DISABLE_SFPLOADMACRO
+    // Two rows per trip so the macro word is a compile-time constant (TTI_) in every iteration count.
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        int a = d & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
-        TT_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6, offset | (a >> 2));
+    for (int d = 0; d + 1 < ITERATIONS; d += 2) {
+        TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG0 & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6, offset | (p_sfpu::LREG0 >> 2));
+        TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG1 & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6, offset | (p_sfpu::LREG1 >> 2));
+    }
+    if constexpr (ITERATIONS & 1) {
+        TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG0 & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6, offset | (p_sfpu::LREG0 >> 2));
     }
     TTI_SFPNOP;
     TTI_SFPNOP;

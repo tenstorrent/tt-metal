@@ -616,7 +616,9 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
             // core flips between noop and work across differently-shaped cache hits.
             const size_t reader_len = row_major_inputs ? 26 : 23;
             const size_t writer_len = row_major_inputs ? 14 : (b.has_value() ? 11 : 12);
-            const size_t compute_len = (op_type == BinaryOpType::ISCLOSE) ? 5 : 4;
+            // A per-tensor quantization (scalar b) carries the scale as a fifth compute arg (see below).
+            const size_t compute_len =
+                (op_type == BinaryOpType::ISCLOSE || (operation_attributes.is_quant_op && !b.has_value())) ? 5 : 4;
             reader_runtime_args.assign(reader_len, std::variant<uint32_t, Buffer*>{uint32_t{0}});
             writer_runtime_args.assign(writer_len, std::variant<uint32_t, Buffer*>{uint32_t{0}});
             compute_runtime_args.assign(compute_len, std::variant<uint32_t, Buffer*>{uint32_t{0}});
@@ -754,6 +756,10 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
             }
 
             compute_runtime_args = {compute_tiles, 0u, 0u, compute_scalar_value};
+            if (rt_is_quant_op) {
+                // The per-tensor scale (fp32 bits), read by the compute kernel at QUANT_SCALE_RT_ARGS_IDX.
+                compute_runtime_args.push_back(packed_scalar);
+            }
         }
 
         if (row_major_inputs) {
@@ -939,7 +945,26 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         }
     }
 
-    // Indices 3 and 4 in the compute runtime args vector are reserved for rtol and atol bits.
+    // Per-tensor quantization on Blackhole: the SFPU takes the scale at init, so the kernel copies only the input
+    // tile into DEST. QUANT_SCALAR_INIT / QUANT_SCALAR_OP are the scalar-scale forms of BINARY_SFPU_INIT / _OP.
+    if (is_quant_op && !b.has_value() && !operation_attributes.scalar_is_lhs &&
+        tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE) {
+        const auto scalar_form = [](std::string name) {
+            const std::string tile = "_tile";
+            const auto pos = name.rfind(tile);
+            TT_FATAL(pos != std::string::npos, "quant op name without a _tile suffix: {}", name);
+            return name.replace(pos, tile.size(), "_scalar_tile");
+        };
+        const std::string init = compute_kernel_defines.at("BINARY_SFPU_INIT");
+        const std::string init_name = init.substr(0, init.find('('));
+        compute_kernel_defines["QUANT_SCALAR_INIT"] =
+            scalar_form(init_name) +
+            "(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX), get_arg_val<uint32_t>(QUANT_SCALE_RT_ARGS_IDX));";
+        compute_kernel_defines["QUANT_SCALAR_OP"] = scalar_form(compute_kernel_defines.at("BINARY_SFPU_OP"));
+        compute_kernel_defines["QUANT_SCALE_RT_ARGS_IDX"] = "4";
+    }
+
+    // Indices 3 and 4 of the compute runtime args are rtol and atol bits (isclose) or the quant zero point and scale.
     if (operation_attributes.binary_op_type == BinaryOpType::ISCLOSE) {
         compute_kernel_defines["ISCLOSE_OP"] = "1";
         compute_kernel_defines["ISCLOSE_EQUAL_NAN"] = operation_attributes.equal_nan ? "1" : "0";

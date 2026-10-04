@@ -508,7 +508,22 @@ ALWI void typecast_tile_init() {
         (in_format == DataFormat::Float32 || in_format == DataFormat::Float16_b || in_format == DataFormat::Bfp8_b ||
          in_format == DataFormat::Bfp4_b) &&
         out_format == DataFormat::UInt16) {
+#if defined(ARCH_BLACKHOLE)
+        // The Blackhole init programs the macro's store for the Dest mode.
+        MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_fp32_to_uint16, (APPROX, DST_ACCUM_MODE)));
+#else
         MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_fp32_to_uint16, (APPROX)));
+#endif
+    } else if constexpr (
+        (in_format == DataFormat::Float32 || in_format == DataFormat::Float16_b || in_format == DataFormat::Bfp8_b ||
+         in_format == DataFormat::Bfp4_b) &&
+        out_format == DataFormat::Int32) {
+#if defined(ARCH_BLACKHOLE)
+        // The Blackhole body takes its saturation constant from a programmable constant register.
+        MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_fp32_to_int32, (APPROX)));
+#else
+        MATH(SFPU_UNARY_INIT(typecast));
+#endif
     } else if constexpr (
         (in_format == DataFormat::Float32 || in_format == DataFormat::Float16_b || in_format == DataFormat::Bfp8_b ||
          in_format == DataFormat::Bfp4_b) &&
