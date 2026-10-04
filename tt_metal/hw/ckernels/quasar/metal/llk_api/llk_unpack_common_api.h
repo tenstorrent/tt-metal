@@ -73,6 +73,35 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
 }
 
 /**
+ * @brief Unpack-thread half of tile_regs_acquire: wait until a DEST bank is free for the unpacker to write.
+ *
+ * Unpack-to-dest only, compiles to nothing otherwise. With @ref llk_unpack_dest_section_done this gives the unpack
+ * thread the same acquire..commit DEST section that math and pack already have, so any number of llk_unpack_A /
+ * llk_unpack_A_block calls between the two (copy_tile at different DEST indices) form one section with one handshake
+ * and one bank flip. Math's llk_math_wait_for_dest_available waits on exactly one UNPACK_MATH post per section, so a
+ * per-call post would leave math one post ahead of the data whenever a section holds more than one tile.
+ */
+inline void llk_unpack_wait_for_dest_available() {
+    if constexpr (UnpackToDestEn) {
+        _llk_unpack_wait_for_dest_available_();
+    }
+}
+
+/**
+ * @brief Unpack-thread half of tile_regs_commit: hand the DEST section to math (post UNPACK_MATH) and, in SyncHalf,
+ * move the unpack thread's section base to the other bank.
+ *
+ * @tparam EN_32BIT_DEST: DEST width. Sizes the SyncHalf bank flip and must match what tile_regs_release passes on the
+ * pack thread; both default to DST_ACCUM_MODE.
+ */
+template <bool EN_32BIT_DEST>
+inline void llk_unpack_dest_section_done() {
+    if constexpr (UnpackToDestEn) {
+        _llk_unpack_dest_section_done_<DST_SYNC_MODE, EN_32BIT_DEST>();
+    }
+}
+
+/**
  * @brief Programs l1 info & source register format for UNP_A
  *
  * @param operandA: The input operand circular buffer
