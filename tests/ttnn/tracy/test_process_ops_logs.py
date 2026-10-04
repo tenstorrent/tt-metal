@@ -5,11 +5,103 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import csv
+import json
 from pathlib import Path
 
 import pytest
 
 from tracy import process_ops_logs
+
+
+def _write_tracy_op_logs(log_folder, messages, op_ids):
+    with (log_folder / "tracy_ops_data.csv").open("w", newline="") as data_file:
+        writer = csv.writer(data_file, delimiter=";", quotechar="`", quoting=csv.QUOTE_MINIMAL)
+        writer.writerow(["MessageName", "total_ns"])
+        writer.writerows(messages)
+
+    with (log_folder / "tracy_ops_times.csv").open("w", newline="") as times_file:
+        writer = csv.writer(times_file)
+        writer.writerow(["name", "zone_text", "exec_time_ns", "special_parent_text"])
+        for op_id in op_ids:
+            writer.writerow(["TT_DNN_DEVICE_OP", f"id:{op_id}", 1, ""])
+
+
+def _tensor_metadata(x_shape):
+    return {
+        "storage_type": {"device_id": 0, "memory_config": {"buffer_type": "DRAM", "memory_layout": "INTERLEAVED"}},
+        "shape": {"W": "1[1]", "Z": "1[1]", "Y": "1[1]", "X": x_shape},
+        "layout": "TILE",
+        "dtype": "BFLOAT16",
+    }
+
+
+def test_import_tracy_op_logs_uses_cached_invocation_tensor_metadata(tmp_path):
+    first_op = {
+        "global_call_count": 41,
+        "op_code": "reshape",
+        "attributes": {"axis": "-1"},
+        "input_tensors": [_tensor_metadata("32[32]")],
+        "output_tensors": [_tensor_metadata("32[32]")],
+        "op_type": "tt_dnn_device",
+        "device_id": 0,
+        "op_hash": 777,
+        "program_cache_hit": False,
+        "kernel_info": {"compute_kernels": [{"source": "reshape.cpp"}]},
+    }
+    cached_metadata = {
+        "input_tensors": [_tensor_metadata("64[64]")],
+        "output_tensors": [_tensor_metadata("64[64]")],
+    }
+    _write_tracy_op_logs(
+        tmp_path,
+        [
+            (f'TT_DNN_DEVICE_OP: "reshape", 777, 0, false, 41 ->\n{json.dumps(first_op)}', 100),
+            ("TT_METAL_TRACE_BEGIN: 0, 9", 150),
+            (
+                f'TT_DNN_DEVICE_OP: "reshape", 777, 0, true, 42 ->\n{json.dumps(cached_metadata)}',
+                200,
+            ),
+        ],
+        op_ids=(41, 42),
+    )
+
+    ops, _, _ = process_ops_logs.import_tracy_op_logs(tmp_path)
+
+    assert ops[41]["input_tensors"][0]["shape"]["X"] == "32[32]"
+    assert ops[42]["input_tensors"][0]["shape"]["X"] == "64[64]"
+    assert ops[42]["output_tensors"][0]["shape"]["X"] == "64[64]"
+    assert ops[42]["global_call_count"] == 42
+    assert ops[42]["program_cache_hit"] is True
+    assert ops[41]["metal_trace_id"] is None
+    assert ops[42]["metal_trace_id"] == 9
+    assert ops[42]["attributes"] == first_op["attributes"]
+    assert ops[42]["kernel_info"] == first_op["kernel_info"]
+
+
+def test_import_tracy_op_logs_accepts_legacy_cached_message(tmp_path):
+    first_op = {
+        "global_call_count": 41,
+        "op_code": "reshape",
+        "input_tensors": [_tensor_metadata("32[32]")],
+        "output_tensors": [],
+        "device_id": 0,
+        "op_hash": 777,
+    }
+    _write_tracy_op_logs(
+        tmp_path,
+        [
+            (f'TT_DNN_DEVICE_OP: "reshape", 777, 0, false, 41 ->\n{json.dumps(first_op)}', 100),
+            ('TT_DNN_DEVICE_OP: "reshape", 777, 0, true, 43', 300),
+        ],
+        op_ids=(41, 43),
+    )
+
+    ops, _, _ = process_ops_logs.import_tracy_op_logs(tmp_path)
+
+    assert ops[43]["input_tensors"][0]["shape"]["X"] == "32[32]"
+    assert ops[43]["global_call_count"] == 43
+    assert ops[43]["program_cache_hit"] is True
+    assert ops[43]["metal_trace_id"] is None
 
 
 # class for mocking creation of npe data

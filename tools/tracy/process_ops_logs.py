@@ -446,15 +446,38 @@ def import_tracy_op_logs(
                     if len(tmpStrs) > 1:  # uncached device op, host op, or fallback op
                         jsonStr = tmpStrs[-1]
                         try:
-                            opData = json.loads(jsonStr)
+                            message_data = json.loads(jsonStr)
                         except json.JSONDecodeError:
                             logger.warning(
                                 "Skipping op with malformed JSON (likely truncated by Tracy's 64 KiB message limit): "
                                 f"{tmpStrs[0]}"
                             )
                             continue
+                        if "global_call_count" not in message_data:
+                            # Cached messages carry invocation-specific tensor metadata after the arrow;
+                            # recover the remaining fields from the earlier full message.
+                            opDataList = tmpStrs[0].split(":", 1)[-1].split(",")
+                            assert len(opDataList) > 4, "Wrong cached op info format"
+                            opHash = int(opDataList[1])
+                            deviceID = int(opDataList[2])
+                            programCacheHit = opDataList[3].strip() in ("1", "true", "True")
+                            opID = int(opDataList[4])
+                            if deviceID not in cached_ops or opHash not in cached_ops[deviceID]:
+                                logger.warning(
+                                    f"Skipping cached op reference with no prior data "
+                                    f"(device_id={deviceID}, op_hash={opHash})"
+                                )
+                                continue
+                            opData = cached_ops[deviceID][opHash].copy()
+                            opData.update(message_data)
+                            opData["global_call_count"] = opID
+                            opData["program_cache_hit"] = programCacheHit
+                        else:
+                            opData = message_data
                         opData["metal_trace_id"] = None
-                        if "op_hash" in opData:
+                        if "global_call_count" not in message_data and deviceID in traceIDs:
+                            opData["metal_trace_id"] = traceIDs[deviceID]
+                        if "op_hash" in opData and "global_call_count" in message_data:
                             assert "device_id" in opData
                             deviceID = int(opData["device_id"])
                             opHash = int(opData["op_hash"])

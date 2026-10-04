@@ -84,6 +84,8 @@ std::string assemble_device_op_json(
     ChipId device_id,
     bool program_cache_hit,
     const tt::tt_metal::Program& program);
+std::string serialize_cached_op_tensor_metadata(
+    const std::vector<TensorMeta>& input_tensors, const std::vector<TensorMeta>& output_tensors);
 
 #if defined(TRACY_ENABLE)
 
@@ -376,10 +378,21 @@ inline std::string op_meta_data_serialized_json(
         return assemble_device_op_json(data, program_hash, device_id, program_cache_hit, program);
     }
 
-    // --- Cache hit: fast path, no JSON needed ---
+    // --- Cache hit: serialize per-invocation tensor metadata only ---
     auto opname = program_hash_to_opname_.find_if_exists({device_id, program_hash});
     runtime_id_to_opname_.insert({device_id, program.get_runtime_id()}, std::move(opname));
-    return fmt::format("{}{}`", cached_ops.at(device_id).at(program_hash), operation_id);
+    std::vector<TensorMeta> input_tensors;
+    ttsl::reflection::visit_object_of_type<ttnn::Tensor>(
+        [&input_tensors](auto&& tensor) { input_tensors.push_back(make_tensor_meta(tensor)); }, tensor_args);
+    std::vector<TensorMeta> output_tensors;
+    ttsl::reflection::visit_object_of_type<ttnn::Tensor>(
+        [&output_tensors](auto&& tensor) { output_tensors.push_back(make_tensor_meta(tensor)); }, tensor_return_value);
+    return fmt::format(
+        "{}{}, {}, {} ->\n{}`",
+        cached_ops.at(device_id).at(program_hash),
+        program_cache_hit,
+        operation_id,
+        serialize_cached_op_tensor_metadata(input_tensors, output_tensors));
 }
 
 // ---------------------------------------------------------------------------
