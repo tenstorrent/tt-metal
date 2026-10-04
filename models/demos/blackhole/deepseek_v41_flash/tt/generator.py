@@ -27,7 +27,7 @@ class Generator:
     def auto_chunk(self, max_len, budget_tokens_per_row=None):
         """Chunk of tokens per user so that users_per_row * chunk <= the per-row token budget of one prefill pass (activation memory). The streams of a
         chunk are fp32 [32,1,4,5120] tiles (4 -> 32 row padding): ~80 MiB/bank per 1024 tokens/row for the captured chunk + ~55 MiB eager compile peak, so the
-        budget shrinks with the context (the sparse-prefill tables grow with S_pad): 4096 tokens/row up to 16k, 2048 above (measured: 32k at 4096/row OOMs
+        budget shrinks with the context (the sparse-prefill tables grow with S_pad): 4096 tokens/row up to 16k at <= 4 users/row, 2048 above or with more users (B=32 at 4k/8k OOMs the compile pass at 4096/row: measured) (measured: 32k at 4096/row OOMs
         in the compile pass with 713 MiB/bank free, 64k at 2048/row fits with 341 MiB free). DSV41_PREFILL_ROW_TOKENS overrides.
         """
         import os
@@ -36,7 +36,7 @@ class Generator:
 
         if budget_tokens_per_row is None:
             env = os.environ.get("DSV41_PREFILL_ROW_TOKENS")
-            budget_tokens_per_row = int(env) if env else (4096 if max_len <= 16384 else 2048)
+            budget_tokens_per_row = int(env) if env else (4096 if max_len <= 16384 and self.m.U <= 4 else 2048)
         c = max(128, (budget_tokens_per_row // self.m.U) // 128 * 128)
         return None if c >= get_padded_prefill_len(max_len) else c
 

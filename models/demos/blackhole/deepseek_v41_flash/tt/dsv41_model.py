@@ -179,8 +179,15 @@ class Model:
             ):
                 if hasattr(pm_, nm):
                     wrap(nm)
-            for _, pl_ in pm_.layers[:1]:
-                pass
+            for lid_, pl_ in pm_.layers:  # per-layer DRAM growth inside a (compile or captured) chunk forward
+                if lid_ in (0, 2, 3, 10, 20, 21, 30, 39):
+
+                    def fl(*a, _o=pl_.forward, _l=lid_, **k):
+                        r = _o(*a, **k)
+                        self.log_dram(f"  layer {_l} forward done")
+                        return r
+
+                    pl_.forward = fl
             ob, oe = ttnn.begin_trace_capture, ttnn.end_trace_capture
             ttnn.begin_trace_capture = lambda *a, **k: (
                 self.log_dram("before begin_trace_capture"),
