@@ -14,15 +14,11 @@
 // tile geometry, leaving cfg bank 0 selected. It deliberately poisons pack MOP /
 // strides / PAC X, so a following op must re-init pack before packing.
 //
-// GOLDEN (derived from the headers): the cleanup itself produces no data, so the
-// only observable is that it compiles and executes without hanging AND does not
-// corrupt a result computed BEFORE it. We therefore run a plain identity
-// datacopy of one tile (SrcA -> Dest -> pack to L1, exactly the
-// eltwise_unary_datacopy A2D path), then invoke the per-thread cleanup entry
-// points, then pack the already-datacopied tile. The packed result must equal
-// the input tile (identity), and cleanup must not deadlock. Because cleanup
-// poisons pack ambient state, the pack thread re-inits pack after cleanup and
-// before the pack, mirroring what a real following MicroOp must do.
+// GOLDEN: two identity datacopies (the eltwise_unary_datacopy A2D path) with the
+// cleanup between them. Each thread finishes the first tile, the pack included,
+// before it enters the cleanup, as the API requires (MATH_PACK and UNPACK_SYNC
+// drained); every thread then re-inits, as a following op must, and copies the
+// second tile. Both packed tiles must equal their inputs, and nothing may hang.
 //
 // The per-thread cleanup calls are the same entry points compute_kernel_hw_cleanup()
 // dispatches (UNPACK -> _llk_unpack_hw_cleanup_canonical_<DST_ACCUM_MODE>,
@@ -42,7 +38,7 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
-// Single-config smoke test: one 32x32 tile, four faces, SyncHalf.
+// One config: two 32x32 tiles, four faces, SyncHalf.
 static constexpr ckernel::DstSync HW_CLEANUP_DST_SYNC = ckernel::DstSync::SyncHalf;
 constexpr std::uint32_t HW_CLEANUP_NUM_FACES          = 4;
 
@@ -52,13 +48,22 @@ constexpr std::uint32_t HW_CLEANUP_NUM_FACES          = 4;
 #include "llk_unpack_A.h"
 #include "llk_unpack_common.h"
 
+inline void unpack_init(const FormatConfig& formats)
+{
+    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+        0 /* transpose_of_faces */,
+        0 /* within_face_16x16_transpose */,
+        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, HW_CLEANUP_NUM_FACES),
+        formats.unpack_A_src,
+        formats.unpack_A_dst);
+}
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
 
-    // Identity datacopy setup + unpack of the single input tile.
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src,
         formats.unpack_B_src,
@@ -68,20 +73,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
         FACE_R_DIM,
         HW_CLEANUP_NUM_FACES,
         HW_CLEANUP_NUM_FACES);
-    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0 /* transpose_of_faces */,
-        0 /* within_face_16x16_transpose */,
-        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, HW_CLEANUP_NUM_FACES),
-        formats.unpack_A_src,
-        formats.unpack_A_dst);
-
+    unpack_init(formats);
     _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
         L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src, formats.unpack_A_dst);
 
-    // Hardware teardown: unpack thread's canonical cleanup. Rendezvouses with
-    // math/pack through the T0/T1/T2 mailboxes (see llk_hw_cleanup.h) and
-    // restores both cfg banks to canonical Float16_b geometry.
     _llk_unpack_hw_cleanup_canonical_<is_fp32_dest_acc_en>();
+
+    // The cleanup poisons the unpack MOP.
+    unpack_init(formats);
+    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+        L1_ADDRESS(params.buffer_A[1]), formats.unpack_A_src, formats.unpack_A_dst);
 }
 
 #endif
@@ -94,30 +95,40 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 
-void run_kernel(RUNTIME_PARAMETERS params)
+inline void datacopy_init(const FormatConfig& formats)
 {
-#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
-    const FormatConfig& formats = params.formats;
-#endif
-
-    // Identity datacopy: SrcA -> Dest.
     _llk_math_eltwise_unary_datacopy_init_wrapper_<
         DataCopyType::A2D,
         is_fp32_dest_acc_en,
         BroadcastType::NONE,
         false /* is_int_fpu_en */,
         ckernel::PackMode::Default>(HW_CLEANUP_NUM_FACES, formats.math);
-    _llk_math_pack_sync_init_<HW_CLEANUP_DST_SYNC, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+}
 
+inline void datacopy_tile(const FormatConfig& formats)
+{
     _llk_math_wait_for_dest_available_<HW_CLEANUP_DST_SYNC>();
     _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, HW_CLEANUP_DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
         0 /* dst_index */, formats.math, formats.math, HW_CLEANUP_NUM_FACES);
     _llk_math_dest_section_done_<HW_CLEANUP_DST_SYNC, is_fp32_dest_acc_en>();
+}
 
-    // Hardware teardown: math thread's canonical cleanup. Math owns the
-    // rendezvous ordering (grants Unpack then Pack their configure turns).
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+
+    datacopy_init(formats);
+    _llk_math_pack_sync_init_<HW_CLEANUP_DST_SYNC, is_fp32_dest_acc_en>();
+    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+    datacopy_tile(formats);
+
     _llk_math_hw_cleanup_canonical_<HW_CLEANUP_DST_SYNC, is_fp32_dest_acc_en>();
+
+    // The cleanup zeroes ADDR_MOD_0..7 and poisons the math MOP.
+    datacopy_init(formats);
+    datacopy_tile(formats);
 }
 
 #endif
@@ -128,35 +139,37 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 
+inline void pack_init(const FormatConfig& formats)
+{
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+        formats.pack_src, formats.pack_dst, 16 * 16 * HW_CLEANUP_NUM_FACES /* tile_size */, FACE_R_DIM, ckernel::TILE_C_DIM, HW_CLEANUP_NUM_FACES);
+    _llk_pack_init_<ckernel::PackMode::Default, false /* zero_output */>(
+        formats.pack_dst, FACE_R_DIM, ckernel::TILE_C_DIM, HW_CLEANUP_NUM_FACES, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
+    _llk_pack_dest_init_<HW_CLEANUP_DST_SYNC, is_fp32_dest_acc_en>();
+}
+
+inline void pack_dest_tile(const std::uint32_t address)
+{
+    _llk_packer_wait_for_math_done_();
+    _llk_pack_<HW_CLEANUP_DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, address);
+    _llk_pack_dest_section_done_<HW_CLEANUP_DST_SYNC, is_fp32_dest_acc_en>();
+}
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
 
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
-        formats.pack_src, formats.pack_dst, 16 * 16 * HW_CLEANUP_NUM_FACES /* tile_size */, FACE_R_DIM, ckernel::TILE_C_DIM, HW_CLEANUP_NUM_FACES);
-    _llk_pack_init_<ckernel::PackMode::Default, false /* zero_output */>(
-        formats.pack_dst, FACE_R_DIM, ckernel::TILE_C_DIM, HW_CLEANUP_NUM_FACES, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
-    _llk_pack_dest_init_<HW_CLEANUP_DST_SYNC, is_fp32_dest_acc_en>();
+    pack_init(formats);
+    // The math side of the cleanup waits for MATH_PACK to drain, so the section is released first.
+    pack_dest_tile(L1_ADDRESS(params.buffer_Res[0]));
 
-    // Hardware teardown: pack thread's canonical cleanup runs BEFORE the pack so
-    // the smoke test exercises the full rendezvous while Dest still holds the
-    // datacopied tile. Cleanup poisons pack MOP / strides / PAC X (see
-    // llk_pack_hw_cleanup.h poison helper), so we MUST re-init pack afterward.
     _llk_pack_hw_cleanup_canonical_<HW_CLEANUP_DST_SYNC, is_fp32_dest_acc_en>();
 
-    // Re-init pack after the poisoning cleanup (what a real following MicroOp
-    // must do), then pack the identity-datacopied tile out to L1.
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
-        formats.pack_src, formats.pack_dst, 16 * 16 * HW_CLEANUP_NUM_FACES /* tile_size */, FACE_R_DIM, ckernel::TILE_C_DIM, HW_CLEANUP_NUM_FACES);
-    _llk_pack_init_<ckernel::PackMode::Default, false /* zero_output */>(
-        formats.pack_dst, FACE_R_DIM, ckernel::TILE_C_DIM, HW_CLEANUP_NUM_FACES, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
-    _llk_pack_dest_init_<HW_CLEANUP_DST_SYNC, is_fp32_dest_acc_en>();
-
-    _llk_packer_wait_for_math_done_();
-    _llk_pack_<HW_CLEANUP_DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, L1_ADDRESS(params.buffer_Res[0]));
-    _llk_pack_dest_section_done_<HW_CLEANUP_DST_SYNC, is_fp32_dest_acc_en>();
+    // The cleanup poisons the pack MOP, strides and PAC X.
+    pack_init(formats);
+    pack_dest_tile(L1_ADDRESS(params.buffer_Res[1]));
 }
 
 #endif
