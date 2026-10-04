@@ -983,6 +983,16 @@ KernelGroup::KernelGroup(
 
     kernel_config.exit_erisc_kernel() = false;
     kernel_config.reload_table_addr() = program.get_reload_table_addr(this->core_ranges);
+    // Runtime reload advances from BRISC and its barrier counts every core in
+    // reload_core_ranges. A kernel group whose writer is inactive can otherwise
+    // clear the BRISC enable bit even though its descriptor supplies a valid
+    // no-work BRISC binary. Such a core never reaches reload_next_stage() and
+    // strands all of its peers at the first barrier. Reload participation is a
+    // stronger requirement than image-local writer work, so keep BRISC enabled
+    // on every group carrying a reload table.
+    if (kernel_config.reload_table_addr() != 0) {
+        kernel_config.enables() |= 1u;
+    }
     kernel_config.local_cb_mask() = local_cb_mask;
     kernel_config.min_remote_cb_start_index() = min_remote_cb_start_index;
     this->go_msg.view().signal() = dev_msgs::RUN_MSG_GO;
