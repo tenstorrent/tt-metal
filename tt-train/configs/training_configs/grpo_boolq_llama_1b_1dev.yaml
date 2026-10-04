@@ -15,7 +15,7 @@ training_config:
     kahan_summation: false
 
   grpo_config:
-    rollout_source: "ttml"  # in-process TTMLRolloutSampler; the only supported value
+    rollout_source: "ttml"
     epsilon: 0.2
     per_device_train_batch_size: 8
     num_iterations: 1
