@@ -1,0 +1,96 @@
+{
+  "files": {
+    "formatter_ci_binding.py": {
+      "bytes": 15816,
+      "sha256": "60e2b98a3c7775227ac4cfc8d2c50dbb60af7d8fab5322cb44a850a56b397e1b"
+    },
+    "hf_local_stage.py": {
+      "bytes": 9116,
+      "sha256": "404a9dc1bf1a7c46694b24e21a418a8ac64ea1f9ef3d2e02c0dd08026d3253d2"
+    },
+    "host_fd_probe.py": {
+      "bytes": 9615,
+      "sha256": "951df2ae6dd63cffd54c66f26e9477c96d9d06492ec01e6a749156ce444a06af"
+    },
+    "inner_host_quiet.py": {
+      "bytes": 8346,
+      "sha256": "de2fcf0b2d721f156a6aba7911e93827acaedd553b7ca5b7c317a18e9ebcc05d"
+    },
+    "owned_exec.py": {
+      "bytes": 268,
+      "sha256": "64496be61923be111acfa0ad4e054f5e934afeb7b43d3636f7fe6fde2210374e"
+    },
+    "owned_seed_copy.py": {
+      "bytes": 13213,
+      "sha256": "85663af554253a33c28cda2e0d1c740732b6aea3193ab1a8da07ff17c31cb335"
+    },
+    "owned_stock.py": {
+      "bytes": 4700,
+      "sha256": "77d252dfda03ced110c5d6d6b6364081888639268f39f0cabf90c4930c35f8ce"
+    },
+    "producer_profile.py": {
+      "bytes": 9162,
+      "sha256": "e255fa9644a5362287c3106a7a62af84510d0278477ff2215e5227de6a45082a"
+    },
+    "runtime_guard/sitecustomize.py": {
+      "bytes": 2085,
+      "sha256": "d97d83addc72ba4af8cc191f0f233cd0067a947a96b7d5bef2a70899b2480eaf"
+    },
+    "seed_storage.py": {
+      "bytes": 3620,
+      "sha256": "8b439e79cde8a65d169cd4130917e0ac51a281f65a1ed069a5c9e2576ea63d42"
+    },
+    "slurm_leg.py": {
+      "bytes": 6460,
+      "sha256": "816804ded2595946cc7827e6f93b3ea9ce6fed18f3fe9c58d20d36a31153e3c1"
+    },
+    "slurm_pair_checks.py": {
+      "bytes": 18921,
+      "sha256": "a5d4cd04210c0df621f1d73fc49b60bbe50a10855605d7f83d7e937e618355a2"
+    },
+    "slurm_pair_launcher.py": {
+      "bytes": 41057,
+      "sha256": "6b05e7c1b0b22ccb8697d9acfe86f1c53e7ce48595bad377b7e954539b7321aa"
+    }
+  },
+  "hf_logical_bytes": 16071906850,
+  "hf_revision": "0e9e39f249a16976918f6564b8830bc894c89659",
+  "hf_sha256": {
+    "config.json": "29e4c210b0d6ac178b16b2a255a568bdb23b581e50ca1ef6a6d071dd85704e6e",
+    "generation_config.json": "189fb0c0d7fd8a527db217c0a60a0e013f0394cd8800f9697a666a9e75e5f7fd",
+    "model-00001-of-00004.safetensors": "2b1879f356aed350030bb40eb45ad362c89d9891096f79a3ab323d3ba5607668",
+    "model-00002-of-00004.safetensors": "09d433f650646834a83c580877bd60c6d1f88f7755305c12576b5c7058f9af15",
+    "model-00003-of-00004.safetensors": "fc1cdddd6bfa91128d6e94ee73d0ce62bfcdb7af29e978ddcab30c66ae9ea7fa",
+    "model-00004-of-00004.safetensors": "92ecfe1a2414458b4821ac8c13cf8cb70aed66b5eea8dc5ad9eeb4ff309d6d7b",
+    "model.safetensors.index.json": "146776fce3f6db1103aa6f249e65ee5544c5923ce6f971b092eee79aa6e5d37b",
+    "original/params.json": "b15b6b31b2043c0400b028ecc25c8946e21d76ac260e9ac6a357ed8727c8865f",
+    "original/tokenizer.model": "82e9d31979e92ab929cd544440f129d9ecd797b69e327f80f17e1c50d5551b55",
+    "special_tokens_map.json": "6f38c73729248f6c127296386e3cdde96e254636cc58b4169d3fd32328d9a8ec",
+    "tokenizer.json": "79e3e522635f3171300913bb421464a87de6222182a0570b9b2ccba2a964b2b4",
+    "tokenizer_config.json": "177c7b61e616fecb84c17ce0591acb92c6c4d60e9ac5ababfb940ff23bbcd424"
+  },
+  "scientific_origin_manifest_sha256": "f886afda0167b730e0f199971ea3275b58891e91c5994482edd1156bbce0ff36",
+  "source_boundary": {
+    "diff": [
+      "models/demos/gemma4/tt/generator_vllm.py",
+      "models/demos/gemma4/tt/model.py",
+      "models/demos/gpt_oss/tt/model.py",
+      "models/tt_transformers/tests/test_decode_output_rows.py",
+      "models/tt_transformers/tt/model.py",
+      "tests/pipeline_reorg/models_unit_tests.yaml"
+    ],
+    "heads": {
+      "baseline": "21754c005c015161fe5de2d1cdb10bf64a6fd5a1",
+      "candidate": "ee072dd216c2d19c6b228be26f695757d8ec1500",
+      "plugin": "c1c85eb6bfe14a3e47afc450e25f7a8ddc81d974",
+      "vllm-source": "568afb3a13806beb53bb2e6bd518269357b237c0"
+    },
+    "native_trees": {
+      "tt_metal": "0a15626cc179f6a7c316b1588357119a4e43ae07",
+      "ttnn": "dc4287fec3f836264d2e5502446931368eef29d6"
+    },
+    "ordered_device_state_limitation": true,
+    "same_ee_native_for_both": true,
+    "timing_qualified": false
+  }
+}

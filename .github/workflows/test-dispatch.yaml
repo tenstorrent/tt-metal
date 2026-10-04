@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       protocol:
-        description: "Diagnostic only: original chunked 8-request/3-assertion pair"
+        description: "Diagnostic only: stock producer, original chunked 8-request/3-test pair"
         type: choice
         required: true
         default: chunked
@@ -25,15 +25,19 @@ jobs:
   serial-control:
     name: Formatter serial T3K diagnostic
     runs-on: [arch-wormhole_b0, config-t3000, pipeline-functional, in-service]
-    timeout-minutes: 120
+    # The administrator's normal start hook precedes the producer. This job
+    # never invokes a reset or changes that hook; the three boots stay serial.
+    timeout-minutes: 240
     steps:
       - name: Checkout isolated diagnostic controller
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        timeout-minutes: 5
         with:
           path: pair-runtime/control
           persist-credentials: false
       - name: Checkout sealed baseline Python source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        timeout-minutes: 5
         with:
           ref: 21754c005c015161fe5de2d1cdb10bf64a6fd5a1
           path: pair-runtime/baseline
@@ -41,6 +45,7 @@ jobs:
           persist-credentials: false
       - name: Checkout sealed candidate Python source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        timeout-minutes: 5
         with:
           ref: ee072dd216c2d19c6b228be26f695757d8ec1500
           fetch-depth: 2
@@ -49,6 +54,7 @@ jobs:
           persist-credentials: false
       - name: Checkout pinned plugin
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        timeout-minutes: 5
         with:
           repository: tenstorrent/vllm-tt-plugin
           ref: c1c85eb6bfe14a3e47afc450e25f7a8ddc81d974
@@ -56,9 +62,10 @@ jobs:
           persist-credentials: false
       - name: Checkout pinned benchmark source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        timeout-minutes: 5
         with:
           repository: vllm-project/vllm
-          ref: v0.26.0
+          ref: 568afb3a13806beb53bb2e6bd518269357b237c0
           path: pair-runtime/vllm-source
           persist-credentials: false
       - name: Setup job-local verified GitHub CLI
@@ -91,6 +98,7 @@ jobs:
           print('Verified job-local gh ' + version + ': ' + receipt['binary_sha256'])
           PY
       - name: Verify current assignment and sealed artifact metadata
+        timeout-minutes: 1
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -119,14 +127,20 @@ jobs:
           PY
       - name: Download ONE native archive for both source legs
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        timeout-minutes: 3
         with:
           artifact-ids: 11136307415
           github-token: ${{ github.token }}
           run-id: 36800249207
           path: pair-runtime/artifacts/native
           digest-mismatch: error
+      - name: Real Linux pidfd ownership and cancellation controls
+        timeout-minutes: 1
+        working-directory: pair-runtime
+        run: python3 -B control/.github/scripts/utils/test_formatter_ci_pidfd.py
       - name: Download ONE wheel for both source legs
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        timeout-minutes: 3
         with:
           artifact-ids: 11136385647
           github-token: ${{ github.token }}
@@ -135,32 +149,38 @@ jobs:
           digest-mismatch: error
       - name: GHCR read access
         uses: docker/login-action@v3
+        timeout-minutes: 1
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - name: Pull exact original image
-        run: docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64@sha256:3643bc059bf70bd14d3031f5f53f8853abc564cd2a5d9a3dcff1b54c7003e25b
-      - name: Sealed sequential control; preserve and stop on any native hang
-        timeout-minutes: 100
+      - name: Declared producer and sealed serial arms; stop on any native hang
+        # The controller uses job started_at, not this step's start, for its
+        # original 45min preparation/220min work deadlines; 20min remain for close/upload.
+        timeout-minutes: 220
         working-directory: pair-runtime
         env:
           PAIR_PROTOCOL: ${{ inputs.protocol }}
-        run: python3 control/.github/scripts/utils/formatter_serial_control.py host "$PAIR_PROTOCOL"
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B control/.github/scripts/utils/formatter_stock_pair/formatter_ci_binding.py host .
       - name: Identity-checked owned-container cleanup, including cancellation
         if: always()
-        timeout-minutes: 3
+        timeout-minutes: 14
         working-directory: pair-runtime
-        run: python3 control/.github/scripts/utils/formatter_serial_control.py cleanup
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B control/.github/scripts/utils/formatter_stock_pair/formatter_ci_binding.py cleanup .
       - name: Preserve diagnostic evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: formatter-58542-serial-control-${{ github.run_id }}
-          path: pair-runtime/evidence/
+          path: |
+            pair-runtime/evidence/
+            pair-runtime/*/evidence/
+            pair-runtime/capsule/capsule.json
+            pair-runtime/storage-admission.json
           if-no-files-found: warn
-      - name: Cleanup only this job's checkout
-        if: always()
-        uses: ./pair-runtime/control/.github/actions/cleanup
-        with:
-          path: ${{ github.workspace }}/pair-runtime
+        timeout-minutes: 5
+      # Retain task directories if upload or closure fails. The existing runner
+      # administrator owns its normal end-of-job lifecycle; no task-side rm/reset.
