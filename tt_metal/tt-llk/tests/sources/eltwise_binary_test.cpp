@@ -30,15 +30,19 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
+#if defined(ARCH_BLACKHOLE)
 #include "llk_unpack_A.h"
+#endif
 #include "llk_unpack_AB.h"
 #include "llk_unpack_common.h"
 #include "params.h"
 
 #if defined(ARCH_BLACKHOLE)
 template <SrcDvalid src_dvalid>
-#endif
 void run_unpack(RUNTIME_PARAMETERS params)
+#else
+void run_kernel(RUNTIME_PARAMETERS params)
+#endif
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
@@ -120,9 +124,9 @@ void run_unpack(RUNTIME_PARAMETERS params)
 #endif
 }
 
+#if defined(ARCH_BLACKHOLE)
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-#if defined(ARCH_BLACKHOLE)
     if (ELTWISE_BINARY_PER_FACE_DVALID(params))
     {
         run_unpack<SrcDvalid::PerFace>(params);
@@ -131,10 +135,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         run_unpack<SrcDvalid::PerTile>(params);
     }
-#else
-    run_unpack(params);
-#endif
 }
+#endif
 
 #endif
 
@@ -148,8 +150,10 @@ using namespace ckernel;
 
 #if defined(ARCH_BLACKHOLE)
 template <SrcDvalid src_dvalid>
-#endif
 void run_math(RUNTIME_PARAMETERS params)
+#else
+void run_kernel(RUNTIME_PARAMETERS params)
+#endif
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
@@ -232,9 +236,9 @@ void run_math(RUNTIME_PARAMETERS params)
 #endif
 }
 
+#if defined(ARCH_BLACKHOLE)
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-#if defined(ARCH_BLACKHOLE)
     if (ELTWISE_BINARY_PER_FACE_DVALID(params))
     {
         run_math<SrcDvalid::PerFace>(params);
@@ -243,10 +247,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         run_math<SrcDvalid::PerTile>(params);
     }
-#else
-    run_math(params);
-#endif
 }
+#endif
 
 #endif
 
