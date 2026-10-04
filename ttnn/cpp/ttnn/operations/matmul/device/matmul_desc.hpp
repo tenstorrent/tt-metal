@@ -57,6 +57,7 @@ struct MatmulDesc {
     tt::DataFormat in1_format = tt::DataFormat::Float16_b;
     tt::DataFormat out_format = tt::DataFormat::Float16_b;
     uint32_t bias_tile_bytes = 0;  // unaligned tile size of a fused row bias; 0 without bias
+    uint32_t bias_rows = 0;        // the bias's height in A's tiles: 1 for a row bias, Mt for a full [M, N] block
     bool transpose_a = false;
     bool in0_tile_transposed = false;  // A's tiles as the matmul reads them are transposed
     bool untilize_out = false;

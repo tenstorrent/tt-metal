@@ -113,6 +113,7 @@ std::optional<MatmulDesc> describe_matmul(const ttnn::prim::MatmulSpecs& specs, 
     p.bias_tile_bytes = specs.bias.has_value()
                             ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(specs.bias->data_type()))
                             : 0;
+    p.bias_rows = specs.bias.has_value() ? specs.bias->padded_shape()[-2] / in0_tile.get_height() : 0;
     p.transpose_a = transpose_a;
     p.in0_tile_transposed = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
     p.untilize_out = attributes.untilize_out;

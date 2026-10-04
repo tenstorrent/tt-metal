@@ -74,6 +74,7 @@ MatmulDesc make_matmul(
     p.in1_format = in1;
     p.fp32_dest_acc_en = fp32_acc;
     p.bias_tile_bytes = bias ? tt::tile_size(tt::DataFormat::Float16_b) : 0;
+    p.bias_rows = bias ? 1 : 0;
     p.transpose_a = transpose_a;
     p.in0_tile_transposed = transpose_a;  // A's tiles as the matmul reads them
     p.rank_a = p.rank_b = (batch_a > 1 || batch_b > 1) ? 3 : 2;
@@ -146,7 +147,7 @@ std::vector<std::pair<std::string, std::string>> fields(const MatmulDesc& p) {
              static_cast<int>(p.in0_format),
              static_cast<int>(p.in1_format),
              static_cast<int>(p.out_format))},
-        {"bias_tile_bytes", fmt::format("{}", p.bias_tile_bytes)},
+        {"bias", fmt::format("{} bytes, {} rows", p.bias_tile_bytes, p.bias_rows)},
         {"transposes", fmt::format("{} {}", p.transpose_a, p.in0_tile_transposed)},
         {"untilize_out", fmt::format("{}", p.untilize_out)},
         {"compute",
@@ -197,7 +198,7 @@ ttnn::prim::MatmulSpecs specs_of(const MatmulDesc& p, const HardwareDesc& hw) {
         tile_spec(batched(p.batch_b, p.rank_b, K, N), p.in1_format, b_tile, memory_config(p.b, 32, p.in1_tile_w)));
     if (p.bias_tile_bytes != 0) {
         specs.bias = tile_spec(
-            ttnn::Shape({1, p.in0_tile_h, N}),
+            ttnn::Shape({1, p.bias_rows * p.in0_tile_h, N}),
             tt::DataFormat::Float16_b,
             tt::tt_metal::Tile({p.in0_tile_h, p.in1_tile_w}),
             tt::tt_metal::MemoryConfig());
@@ -589,6 +590,23 @@ TEST(MatmulAutoConfig, FamilyChoice) {
         ASSERT_TRUE(chosen.has_value());
         EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(e.family))
             << "b=" << s.batch_a << "/" << s.batch_b << " M=" << s.M << " K=" << s.K << " N=" << s.N;
+    }
+}
+
+// A bias of a whole [M, N] block fuses only into Reuse with blocks of whole batch matrices: with one, the
+// candidates are that Reuse layout alone (without it, 8 batches would go to 2D and the bias to a second pass)
+TEST(MatmulAutoConfig, FullBlockBiasFusesIntoReuse) {
+    for (const auto& arch : kArchs) {
+        const auto hw = HardwareDesc::for_arch(arch.arch, arch.grid, kL1Budget);
+        for (uint32_t batch : {8u, 24u}) {
+            auto p = make_matmul(batch, batch, 128, 128, 128);
+            p.bias_tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
+            p.bias_rows = p.Mt;
+            const auto chosen = choose(p, hw);
+            ASSERT_TRUE(chosen.has_value()) << arch.name << " batch " << batch;
+            EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Reuse)) << arch.name;
+            EXPECT_EQ(chosen->blocking.per_core_M, p.Mt) << arch.name << " batch " << batch;
+        }
     }
 }
 

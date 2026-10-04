@@ -545,7 +545,8 @@ std::vector<Candidate> FactoryBlockingSource::candidates(const MatmulDesc& p, co
     if (p.batch_a == p.batch_b && (p.batch_b > 1 || !mcast_ok)) {
         add(Family::Reuse, reuse_blocking(p, hw), true);
     }
-    if (!mcast_ok) {
+    // A bias of a whole [M, N] block fuses only into Reuse; any other family adds it in a second pass over the output
+    if (!mcast_ok || (p.bias_rows > 1 && !result.empty())) {
         return result;
     }
     const uint32_t M = output_rows(p, fuse_batch);
@@ -565,10 +566,13 @@ std::vector<Candidate> FactoryBlockingSource::candidates(const MatmulDesc& p, co
 
 // Reuse (batched B): per_core_N = Nt and per_core_M is the tallest slice of a batch matrix that still gives
 // every core a block (all of Mt when the batch alone fills the grid) and fits L1. Block-float B with A tiles under
-// 16 rows needs a single K block.
+// 16 rows needs a single K block. A bias of a whole [M, N] block fuses only into blocks of whole batch matrices.
 std::optional<Blocking> FactoryBlockingSource::reuse_blocking(const MatmulDesc& p, const HardwareDesc& hw) const {
     const uint32_t cores = hw.grid.x * hw.grid.y;
     const BlockRules rules{.k_fixed = needs_single_k_reuse(p) ? p.Kt : 0};
+    if (p.bias_rows > 1) {
+        return blocking_->block(p, hw, Family::Reuse, {p.Mt, p.Nt, true}, rules);
+    }
     for (uint32_t per_core_M : divisors_desc(p.Mt)) {
         const bool fills_grid = p.batch_a * (p.Mt / per_core_M) >= cores;
         if (!fills_grid && per_core_M > 1) {
