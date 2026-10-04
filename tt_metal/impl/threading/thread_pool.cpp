@@ -183,7 +183,7 @@ public:
 
     void wait() {
         // Longer than a fan-out to parked workers takes to drain, so the joining thread rarely parks.
-        constexpr auto JOIN_SPIN = std::chrono::microseconds(20);
+        constexpr auto JOIN_SPIN = std::chrono::microseconds(50);
         const auto deadline = std::chrono::steady_clock::now() + JOIN_SPIN;
         while (pending_.load(std::memory_order_acquire) != 0) {
             if (std::chrono::steady_clock::now() >= deadline) {
