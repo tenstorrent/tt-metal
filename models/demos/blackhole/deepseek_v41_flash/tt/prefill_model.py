@@ -20,6 +20,9 @@ from models.demos.blackhole.deepseek_v41_flash.tt.prefill_attention import clear
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import colsplit_active
 
 T = 32
+ER_RM = (
+    os.environ.get("DSV41_ENGRAM_UPLOAD", "rm") == "rm"
+)  # Engram rows uploaded row-major and tilized on the device (="tile": old host tilize)
 HEAD_FUSED = (
     os.environ.get("DSV41_HEAD_FUSED", "1") == "1"
 )  # one head trace for all users, last-token rows picked on the device
@@ -105,7 +108,11 @@ class DSV41PrefillModel:
         else:
             tok = self._up(torch.zeros(rows * R, 1, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
         er = {
-            lid: self._up(torch.zeros(rows, 1, R, e.kin, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT)
+            lid: self._up(
+                torch.zeros(rows, 1, R, e.kin, dtype=torch.bfloat16),
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT if ER_RM else ttnn.TILE_LAYOUT,
+            )
             for lid, e in self.engram.items()
         }
         self._bufs[C] = (tok, er)
@@ -149,7 +156,9 @@ class DSV41PrefillModel:
             ttnn.copy_host_to_device_tensor(self._host(prepped["tok"], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT), tok)
         for lid, dev in er.items():
             t1 = time.perf_counter()
-            h = self._host(prepped[lid], ttnn.bfloat16, ttnn.TILE_LAYOUT)  # host tilize + shard
+            h = self._host(
+                prepped[lid], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT if ER_RM else ttnn.TILE_LAYOUT
+            )  # row-major upload: the 32-token slices are tilized on the device (host tilize was ~0.7 s per 16k-token chunk)
             t2 = time.perf_counter()
             ttnn.copy_host_to_device_tensor(h, dev)
             t3 = time.perf_counter()
@@ -197,7 +206,9 @@ class DSV41PrefillModel:
                     else self.engram[lid].forward_v2
                 )
                 kin = erows_dev[lid].shape[3]
-                sl = lambda c: ttnn.slice(erows_dev[lid], [0, 0, c * T, 0], [1, 1, (c + 1) * T, kin])
+                sl = lambda c: ttnn.to_layout(
+                    ttnn.slice(erows_dev[lid], [0, 0, c * T, 0], [1, 1, (c + 1) * T, kin]), ttnn.TILE_LAYOUT
+                )  # (to_layout is a no-op for tile rows)
                 if (
                     self.cs
                 ):  # own-token chunks -> replicated 8-chunk groups -> Engram -> back (reduce_scatter of 8 identical copies, x1/8 exact)

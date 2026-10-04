@@ -33,7 +33,25 @@ def _mark(tag):
         _MARKS.append((tag, int(_ttnn.get_device_operation_id())))
 
 
-MOE_G = int(os.environ.get("DSV41_MOE_G", "8"))  # 32-token chunks per moe_compute call: 8 = grouped (default), 1 = off
+ROUTER_BATCH = (
+    os.environ.get("DSV41_ROUTER_BATCH", "0") == "1"
+)  # one router call for the whole grouped chunk (router_select takes T up to 256)
+_MOE_G_ENV = os.environ.get(
+    "DSV41_MOE_G", "auto"
+)  # 32-token chunks per moe_compute call: "auto" (default), or an explicit 1 / 2 / 4 / 8 for every shape
+GROUPED_USERS = (
+    1,
+    4,
+    16,
+)  # users per mesh row for which the grouped (T=256) moe_compute is verified. At 8 users/row its program needs ~70 KB more static CB space than the L1 left after
+# its own ~650 KB L1 output (TT_THROW "Statically allocated circular buffers ... clash with L1 buffers"; a caught throw leaks that L1 output and poisons later ops), so it is NEVER attempted there; other
+# user counts are unverified and use the T=32 path unless DSV41_MOE_G=8 is set explicitly.
+
+
+def moe_g_for(users_per_row):
+    return int(_MOE_G_ENV) if _MOE_G_ENV != "auto" else (8 if users_per_row in GROUPED_USERS else 1)
+
+
 COLSPLIT_MODE = os.environ.get(
     "DSV41_COLSPLIT", "auto"
 )  # "auto" (default): on when the shape allows; "0" forces off; "1" forces on (raises if impossible)
@@ -43,11 +61,13 @@ def colsplit_active(U, C):
     """Column split of the token-wise work over the 8 mesh columns needs the grouped MoE (G=8) and a multiple of 8 chunks of 32 tokens per mesh row
     (U users x C tokens). Otherwise the layer falls back to the replicated path (grouped MoE when the chunk count allows, else T=32 slices).
     """
-    ok = MOE_G == 8 and (U * C) % 256 == 0
+    ok = moe_g_for(U) == 8 and (U * C) % 256 == 0
     if COLSPLIT_MODE == "0":
         return False
     if COLSPLIT_MODE == "1":
-        assert ok, f"DSV41_COLSPLIT=1 needs DSV41_MOE_G=8 and users*chunk % 256 == 0 (U={U}, C={C}, G={MOE_G})"
+        assert (
+            ok
+        ), f"DSV41_COLSPLIT=1 needs the grouped MoE (G=8) and users*chunk % 256 == 0 (U={U}, C={C}, G={moe_g_for(U)})"
         return True
     return ok
 
@@ -98,7 +118,9 @@ class DSV41PrefillMoE:
 
     def __init__(self, moe_block, T=32, buffers=None, g=None):
         md = moe_block.mesh_device
-        G = MOE_G if g is None else g  # G consecutive 32-token chunks per moe_compute call
+        G = (
+            moe_g_for(moe_block.decode.config.batch_per_device) if g is None else g
+        )  # G consecutive 32-token chunks per moe_compute call
         T = T * G
         text = CONFIG_PATH.read_text()
         text = text.replace("batch_per_device: 4 ", f"batch_per_device: {T} ", 1)
@@ -139,8 +161,13 @@ class DSV41PrefillMoE:
             _G1_BUFFERS.setdefault(id(md), self.g1.decode.buffers)
 
     def forward(self, tt_x_gate, tt_x_tokens):
+        return self._forward(tt_x_gate, tt_x_tokens)
+
+    def _forward(self, tt_x_gate, tt_x_tokens):
         n = tt_x_gate.shape[2] // 32
-        if (
+        if n > 1 and ROUTER_BATCH and os.environ.get("DSV41_ROUTER", "fused") == "fused":
+            scores, indices = self.gate.forward(tt_x_gate)  # router_select handles T = 32 * n rows in one program
+        elif (
             n > 1
         ):  # the router kernels take <= 32 tokens: run them per 32-token slice, concatenate the [T,1,1,k] results
             parts = [
