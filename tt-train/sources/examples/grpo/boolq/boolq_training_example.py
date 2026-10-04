@@ -7,12 +7,7 @@ import argparse
 import logging
 import os
 import random
-import sys
 from datetime import datetime, timezone
-from pathlib import Path
-
-# The `grpo` package lives two levels up, in the examples directory.
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import numpy as np
 import torch
@@ -21,7 +16,6 @@ from transformers import AutoTokenizer
 from ttml.common.config import DeviceConfig, TrainingConfig, get_model_config, load_config
 from ttml.common.utils import get_tt_metal_runtime_root
 from ttml.trainers import GRPOTrainer, get_grpo_config
-from grpo.utils.ttml_rollout_sampler import TTMLRolloutSampler
 
 DEFAULT_MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 
@@ -112,8 +106,7 @@ if __name__ == "__main__":
 
     assert training_config.model_config, "training_config.model_config must be set"
     transformer_config = get_model_config(training_config.model_config)
-    model_kind = transformer_config.model_type
-    is_qwen3 = model_kind == "qwen3"
+    is_qwen3 = transformer_config.model_type == "qwen3"
     optimizer_dict = raw["training_config"]["optimizer"]
 
     tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
@@ -129,25 +122,14 @@ if __name__ == "__main__":
     )
     grpo_config = get_grpo_config(raw, output_dir=output_dir)
 
-    sampler = TTMLRolloutSampler(
-        model_kind=model_kind,
+    grpo_trainer = GRPOTrainer(
         transformer_config=transformer_config,
         device_config=device_config,
         model_source=model_id,
-        max_completion_length=grpo_config.max_completion_length,
-        temperature=grpo_config.temperature,
-        completions_per_prompt=grpo_config.num_generations,
-    )
-
-    grpo_trainer = GRPOTrainer(
-        model=sampler.model,
-        tokenizer=sampler.tokenizer,
-        rollout_sampler=sampler,
         dataset=dataset,
         config=grpo_config,
         reward_funcs=[accuracy_reward, brevity_reward],
         optimizer_dict=optimizer_dict,
-        model_source=model_id,
     )
     grpo_trainer.train()
     logging.info("BOOLQ GRPO TRAINING COMPLETE")
