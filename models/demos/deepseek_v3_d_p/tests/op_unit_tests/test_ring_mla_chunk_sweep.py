@@ -45,6 +45,19 @@ KVPE_DIM = KV_LORA_RANK + QK_ROPE_HEAD_DIM  # 576
 TARGET_PREFIX = 51200  # the 50k+5k production point; rounded to a whole number of chunks
 TRACE_REGION_SIZE = 16 * 1024 * 1024
 
+# RING_MLA_FIDELITY selects the matmul fidelity. compute_math_utilization assumes HiFi2
+# (2048 FLOP/cycle/core = the 4096 base rate / 2 phases), so its result must be rescaled when the
+# phase count changes: true util = reported * phases / 2. LoFi runs one phase, so the roofline
+# doubles and the reported figure halves.
+_FIDELITY = {
+    "LoFi": (ttnn.MathFidelity.LoFi, 1),
+    "HiFi2": (ttnn.MathFidelity.HiFi2, 2),
+    "HiFi4": (ttnn.MathFidelity.HiFi4, 4),
+}
+FIDELITY_NAME = os.environ.get("RING_MLA_FIDELITY", "HiFi2")
+MATH_FIDELITY, _PHASES = _FIDELITY[FIDELITY_NAME]
+UTIL_SCALE = _PHASES / 2
+
 ITERS = int(os.environ.get("RING_MLA_SWEEP_ITERS", "10"))
 COMPUTE_ONLY = os.environ.get("RING_SDPA_COMPUTE_ONLY", "0") == "1"
 RESULTS_DIR = Path(os.environ.get("RING_MLA_SWEEP_OUT", "generated/ring_mla_chunk_sweep"))
@@ -186,7 +199,7 @@ def _run_ring_mla(mesh_device, chunk, q_chunk, k_chunk, prefix):
     )
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=MATH_FIDELITY,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
@@ -264,6 +277,7 @@ def _run_ring_mla(mesh_device, chunk, q_chunk, k_chunk, prefix):
         "q_chunk": q_chunk,
         "k_chunk": k_chunk,
         "compute_only": COMPUTE_ONLY,
+        "fidelity": FIDELITY_NAME,
         "sdpa_grid": f"{sdpa_grid.x}x{sdpa_grid.y}",
         "sdpa_cores": num_cores,
         "work_units": units,
@@ -277,6 +291,7 @@ def _run_ring_mla(mesh_device, chunk, q_chunk, k_chunk, prefix):
         util = compute_math_utilization(
             chunk_local, prefix + chunk // 2, KVPE_DIM, KV_LORA_RANK, heads_local, median_ns, num_cores
         )
+        util *= UTIL_SCALE  # rescale off the helper's HiFi2 basis
         row.update(
             median_us=round(median_ns / 1e3, 2),
             min_us=round(min(durations_ns) / 1e3, 2),
