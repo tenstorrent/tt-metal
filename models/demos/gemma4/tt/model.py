@@ -747,6 +747,9 @@ class Gemma4Model:
         args.num_devices = mesh_device.get_num_devices()
         args.model_config = {}
         args.use_topk_logprobs = False
+        # vLLM path: same-seed requests must reproduce identically (n>1 children already
+        # arrive with distinct seeds), so keep SeedManager salting off, as llama3_70b_galaxy does.
+        args.salt_duplicate_seeds = False
         return args
 
     def _compute_per_layer_inputs(self, input_ids_torch, embeds_torch):

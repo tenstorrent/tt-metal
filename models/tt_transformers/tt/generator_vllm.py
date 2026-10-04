@@ -398,6 +398,9 @@ def initialize_vllm_text_transformer(
         ), f"The model specified in vLLM ({hf_config._name_or_path}) does not match the model name ({model_args_i.model_name}) with model weights ({model_args_i.CKPT_DIR})."
         if n_layers is not None:
             model_args_i.n_layers = n_layers
+        # vLLM path: same-seed requests must reproduce identically (n>1 children already
+        # arrive with distinct seeds), so keep SeedManager salting off, as llama3_70b_galaxy does.
+        model_args_i.salt_duplicate_seeds = False
 
         model_args.append(model_args_i)
 
