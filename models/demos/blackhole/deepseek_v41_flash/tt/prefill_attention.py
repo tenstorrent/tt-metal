@@ -307,10 +307,15 @@ class DSV41PrefillAttention:
         rows = tuple(self.md.shape)[0]
         # users differ per mesh row but the content starts as zeros: replicate then it is overwritten SPMD by the first chunk
         self.halo = z([U, 1, WINDOW, HEAD_DIM])
-        self.lat_buf = z([U, 1, ctx.L[self.ratio], HEAD_DIM]) if (self.compressed and a.source is None) else None
         del rows
         if self.sparse is not None:
             self.sparse.alloc_dyn(ctx)
+        # the dense FIFO of latents is only read by the dense path: when the sparse path is active (dyn_on) its kv table holds the latents, so skip the
+        # [U,1,L,512] bf16 buffer (~160 MiB/bank at 64k, U=8)
+        sparse_on = self.sparse is not None and self.sparse.dyn_on
+        self.lat_buf = (
+            z([U, 1, ctx.L[self.ratio], HEAD_DIM]) if (self.compressed and a.source is None and not sparse_on) else None
+        )
 
     def reset_dyn(self):
         """Zero the carried state before a new prompt (masked anyway, but NaN garbage must not sit in the buffers)."""
