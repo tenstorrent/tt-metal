@@ -1522,7 +1522,6 @@ def _special_class(value):
     return f"{sign}_{kind}"
 
 
-@pytest.mark.nightly
 @pytest.mark.parametrize("mathop,approx_mode,max_ulp", _BF16_EXHAUSTIVE_OPS)
 def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode, max_ulp):
     if TestConfig.CHIP_ARCH in _BF16_STOCK_BOARDS.get(mathop, ()):
