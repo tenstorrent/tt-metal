@@ -24,19 +24,12 @@ class Generator:
     def m(self):
         return self.model[0]
 
-    def auto_chunk(self, max_len, budget_tokens_per_row=None):
-        """Chunk of tokens per user so that users_per_row * chunk <= the per-row token budget of one prefill pass (activation memory). The streams of a
-        chunk are fp32 [32,1,4,5120] tiles (4 -> 32 row padding): ~80 MiB/bank per 1024 tokens/row for the captured chunk + ~55 MiB eager compile peak, so the
-        budget shrinks with the context (the sparse-prefill tables grow with S_pad): 4096 tokens/row up to 16k, 2048 above (measured: 32k at 4096/row OOMs
-        in the compile pass with 713 MiB/bank free, 64k at 2048/row fits with 341 MiB free). DSV41_PREFILL_ROW_TOKENS overrides.
-        """
-        import os
-
+    def auto_chunk(
+        self, max_len, budget_tokens_per_row=int(__import__("os").environ.get("DSV41_PREFILL_ROW_TOKENS", "4096"))
+    ):
+        """Chunk of tokens per user so that users_per_row * chunk <= the per-row token budget of one prefill pass (activation memory)."""
         from models.demos.blackhole.deepseek_v41_flash.tt.common import get_padded_prefill_len
 
-        if budget_tokens_per_row is None:
-            env = os.environ.get("DSV41_PREFILL_ROW_TOKENS")
-            budget_tokens_per_row = int(env) if env else (4096 if max_len <= 16384 else 2048)
         c = max(128, (budget_tokens_per_row // self.m.U) // 128 * 128)
         return None if c >= get_padded_prefill_len(max_len) else c
 
@@ -92,3 +85,20 @@ class Generator:
             tokens.reshape(-1), start_pos, enable_trace=enable_trace, reload_inputs=reload_inputs
         )
         return out, None
+
+    # ---- speculative decoding (DSpark drafter, tt/spec_model.py) -------------------------------------------------------------------------------
+    def enable_spec(self, k):
+        """Build the speculative runner (k drafts verified per round, 1..5) on the model's weights / paged pool. The model must have been built with
+        DSV41_RING_ROWS=160 (``tt.common.create_tt_model`` sets it when DSV41_SPEC > 0)."""
+        from models.demos.blackhole.deepseek_v41_flash.tt.spec_model import SpecRunner
+
+        self.spec = SpecRunner(self.m, k)
+        return self.spec
+
+    def spec_decode(self, tokens, prompt_lens, first_tokens, max_new_tokens, eos=None, active=None):
+        """After ``prefill_forward_text``: seed the drafter from the prompt tail and run the speculative loop. tokens [B, L] the prefill prompts, prompt_lens [B],
+        first_tokens [B] the prefill's first generated token. -> (generated token lists per user INCLUDING the first token, stats).
+        """
+        spec = self.spec
+        X, base = spec.seed(tokens, prompt_lens, first_tokens)
+        return spec.run(X, base, max_new_tokens, eos=eos, active=active)
