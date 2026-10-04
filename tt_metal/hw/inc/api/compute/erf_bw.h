@@ -5,6 +5,11 @@
 #pragma once
 
 #include "api/compute/common_globals.h"
+
+// Blackhole and Wormhole only: ckernel_sfpu_erf_bw_bf16.h exists under those ckernel trees.
+// Quasar keeps the composite; the generated kernel is not built there.
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
+
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_erf_bw_bf16.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
@@ -44,3 +49,5 @@ ALWI void erf_bw_tile_init() {
 }
 
 }  // namespace ckernel
+
+#endif  // ARCH_BLACKHOLE || ARCH_WORMHOLE
