@@ -2,15 +2,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <array>
 #include <atomic>
+#include <chrono>
+#include <climits>
+#include <cstdint>
 #include <cstddef>
 #include <future>
+#include <mutex>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
-#include <sched.h>         // Needed for setting process priorities
-#include <sys/resource.h>  // Needed for setting process priorities
+#include <linux/futex.h>
+#include <sched.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#include <sys/resource.h>
 #include <numa.h>
 #include <tt-metalium/device.hpp>
 #include <tt_stl/tt_pause.hpp>
@@ -126,64 +134,115 @@ void bind_memory_to_numa_node(void* base, size_t bytes, int numa_node) {
 
 namespace threading_primitives {
 
-// Data Structure used to queue and submit tasks to custom thread-pool backends.
-// Implemented as a statically allocated ring buffer that holds a task in each slot.
-class TaskQueue {
-public:
-    TaskQueue() {
-        // Initialize ring buffer for traversal. Each node points to the subsequent node, except for the last one,
-        // which points to the head.
-        for (int node_idx = 0; node_idx < ring_buffer_size_; node_idx++) {
-            (node_idx < ring_buffer_size_ - 1) ? ring_buffer_[node_idx].next = (&ring_buffer_[node_idx + 1])
-                                               : ring_buffer_[node_idx].next = &(ring_buffer_[0]);
+static_assert(sizeof(std::atomic<uint32_t>) == sizeof(uint32_t) && std::atomic<uint32_t>::is_always_lock_free);
+
+// Used instead of std::atomic::wait/notify: libstdc++ tracks waiters in a 16-slot process-wide table, so
+// notify enters the kernel whenever any thread is parked on an address in the same slot.
+void futex_wait(std::atomic<uint32_t>& word, uint32_t expected) {
+    syscall(SYS_futex, reinterpret_cast<uint32_t*>(&word), FUTEX_WAIT_PRIVATE, expected, nullptr, nullptr, 0);
+}
+
+void futex_wake_one(std::atomic<uint32_t>& word) {
+    syscall(SYS_futex, reinterpret_cast<uint32_t*>(&word), FUTEX_WAKE_PRIVATE, 1, nullptr, nullptr, 0);
+}
+
+void futex_wake_all(std::atomic<uint32_t>& word) {
+    syscall(SYS_futex, reinterpret_cast<uint32_t*>(&word), FUTEX_WAKE_PRIVATE, INT_MAX, nullptr, nullptr, 0);
+}
+
+// Spins like std::atomic::wait before it parks (after 100 polls), so that callers can park on their own futex.
+template <typename Ready>
+bool spin_until(Ready ready) {
+    constexpr uint32_t POLLS = 100, PAUSES = 12, YIELDS = 4;
+    for (uint32_t i = 0; i < POLLS; i++) {
+        if (ready()) {
+            return true;
         }
-        // Initialize head and tail ptrs to start of ring buffer.
-        head_ = ring_buffer_;
-        tail_ = ring_buffer_;
     }
-    // Push task to queue (writer).
-    void push(std::function<void()>&& task) {
-        // Stall condition: this push will update the tail (wptr)
-        // to match the location of head (rptr). The current push can
-        // thus overwrite data that's being read. Stall until head
-        // has progressed (data has been read).
-        // A stall is only required when the ring_buffer_ backing the queue
-        // is full. Realistically, this should never happen, given the size
-        ttsl::nice_spin_until([this] { return tail_.load()->next != head_.load(); });
-        tail_.load()->data = std::move(task);
-        tail_.store(tail_.load()->next);
+    for (uint32_t i = 0; i < PAUSES + YIELDS; i++) {
+        if (ready()) {
+            return true;
+        }
+        i < PAUSES ? ttsl::pause() : static_cast<void>(sched_yield());
     }
-    // Pop task from queue (reader).
-    std::function<void()>&& pop() {
-        TaskQueue::Node* old_head = pop_head();
-        return std::move(old_head->data);
+    return false;
+}
+
+// Tasks in flight across all workers of a pool, so that joining waits on one counter.
+class Completion {
+public:
+    void add() { pending_.fetch_add(1, std::memory_order_relaxed); }
+
+    void done() {
+        // A worker wakes the joining threads only if one is parked, and only when the count reaches zero.
+        if (pending_.fetch_sub(1, std::memory_order_seq_cst) == 1 &&
+            waiter_parked_.exchange(0, std::memory_order_seq_cst) != 0) {
+            futex_wake_all(waiter_parked_);
+        }
+    }
+
+    void wait() {
+        // Longer than a fan-out to parked workers takes to drain, so the joining thread rarely parks.
+        constexpr auto JOIN_SPIN = std::chrono::microseconds(20);
+        const auto deadline = std::chrono::steady_clock::now() + JOIN_SPIN;
+        while (pending_.load(std::memory_order_acquire) != 0) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                break;
+            }
+            ttsl::pause();
+        }
+        if (pending_.load(std::memory_order_acquire) == 0) {
+            return;
+        }
+        while (true) {
+            // seq_cst pairs with done(): either done() sees the waiter parked, or the waiter sees zero. Only done()
+            // clears the flag, so that a returning waiter can't hide another one that is parked.
+            waiter_parked_.store(1, std::memory_order_seq_cst);
+            if (pending_.load(std::memory_order_seq_cst) == 0) {
+                return;
+            }
+            futex_wait(waiter_parked_, 1);
+        }
     }
 
 private:
-    // Node object, representing a slot in the queue.
-    struct Node {
-        std::function<void()> data;
-        Node* next = nullptr;
-    };
-    // Read and write pointers for managing the queue.
-    std::atomic<Node*> head_;
-    std::atomic<Node*> tail_;
-
-    Node* pop_head() {
-        Node* old_head = head_.load();
-        if (old_head == tail_.load()) {
-            TT_THROW("Cannot pop tasks from an empty queue.");
-            return nullptr;  // Queue is empty
-        }
-        head_.store(old_head->next);
-        return old_head;
-    }
-    // Statically allocated ring buffer containing
-    // node objects, which contain handles to data
-    // and another node object to traverse ring buffer.
-    const static uint32_t ring_buffer_size_ = 65536;
-    Node ring_buffer_[ring_buffer_size_];
+    alignas(64) std::atomic<int64_t> pending_ = 0;
+    alignas(64) std::atomic<uint32_t> waiter_parked_ = 0;
 };
+
+// Single-producer, single-consumer ring of tasks.
+class TaskQueue {
+public:
+    // Producer. Stalls while the ring is full.
+    void push(std::function<void()>&& task) {
+        const uint64_t tail = tail_.load(std::memory_order_relaxed);
+        if (tail - head_.load(std::memory_order_acquire) == CAPACITY) {
+            ttsl::nice_spin_until([&] { return tail - head_.load(std::memory_order_acquire) < CAPACITY; });
+        }
+        slots_[tail % CAPACITY] = std::move(task);
+        // seq_cst pairs with the worker's check before it parks (NumaAwareExecutor::wait_for_work).
+        tail_.store(tail + 1, std::memory_order_seq_cst);
+    }
+
+    // Consumer.
+    bool empty() const { return head_.load(std::memory_order_relaxed) == tail_.load(std::memory_order_seq_cst); }
+
+    // Consumer. The queue must not be empty.
+    std::function<void()> pop() {
+        const uint64_t head = head_.load(std::memory_order_relaxed);
+        auto task = std::move(slots_[head % CAPACITY]);
+        slots_[head % CAPACITY] = nullptr;
+        head_.store(head + 1, std::memory_order_release);
+        return task;
+    }
+
+private:
+    static constexpr uint64_t CAPACITY = 65536;
+    std::array<std::function<void()>, CAPACITY> slots_;
+    alignas(64) std::atomic<uint64_t> head_ = 0;
+    alignas(64) std::atomic<uint64_t> tail_ = 0;
+};
+
 // NUMA + CPU Affinity aware executor, used by custom thread-pool implementations.
 // Contains:
 //  1. A TaskQueue where tasks can be submitted by the user, to be asynchronously executed
@@ -198,44 +257,11 @@ private:
 // across threads.
 class NumaAwareExecutor {
 public:
-    NumaAwareExecutor(ContextId context_id, uint32_t physical_device_id) {
+    NumaAwareExecutor(ContextId context_id, uint32_t physical_device_id, Completion& completion) :
+        completion_(completion) {
         // Set the priority for this process to 0 (niceness value in linux)
         thread_binding::set_process_priority(0);
-        worker = std::thread([this]() {
-            std::function<void()> task;  // Task container for this thread
-            while (true) {
-                {
-                    // Spin briefly so back-to-back tasks are picked up without entering the kernel,
-                    // then block until a producer publishes work. Sleeping for a growing interval
-                    // instead costs the producer the remainder of that interval: a thread idle for
-                    // as little as one dispatch's worth of work was already sleeping in 5 us steps,
-                    // which put tens of microseconds between enqueue() and the task starting.
-                    uint32_t attempts = 0;
-                    while (task_counter_.load(std::memory_order_acquire) == 0) {
-                        if (++attempts > BACKOFF_START_ATTEMPT) {
-                            task_counter_.wait(0, std::memory_order_relaxed);
-                        }
-                    }
-                    if (shutdown_) {
-                        return;
-                    }
-                    task = std::move(tasks_.pop());
-                }
-                // Execute task with exception handling
-                try {
-                    task();
-                } catch (...) {
-                    if (!stored_exception_) {
-                        stored_exception_ = std::current_exception();
-                    }
-                }
-                // Atomically decrement counter used to synchronize with main thread
-                // and notify the main thread if all tasks have completed
-                if (task_counter_.fetch_sub(1, std::memory_order_release) == 1) {
-                    task_counter_.notify_all();
-                }
-            }
-        });
+        worker = std::thread([this]() { run(); });
 
         auto cpu_core_for_worker = thread_binding::get_cpu_core_for_physical_device(context_id, physical_device_id);
         thread_binding::set_worker_affinity(worker, cpu_core_for_worker);
@@ -247,61 +273,79 @@ public:
     NumaAwareExecutor(NumaAwareExecutor&&) = delete;
     NumaAwareExecutor& operator=(NumaAwareExecutor&&) = delete;
 
+    // The owning pool waits for all tasks before destroying its executors.
     ~NumaAwareExecutor() {
-        // Destructor called in main thread.
-        // Wait to ensure that the worker thread has completed.
-        this->wait();
-        shutdown_ = true;
-        task_counter_.fetch_add(1);
-        task_counter_.notify_all();
+        shutdown_.store(true, std::memory_order_seq_cst);
+        wake();
         worker.join();
     }
 
     void enqueue(std::function<void()>&& f) {
-        tasks_.push(std::move(f));  // Move the task directly into queue
-        // Light-Weight counter increment to track the number of tasks in flight
-        task_counter_.fetch_add(1, std::memory_order_relaxed);
-        // Both the worker (waiting for work) and a thread in wait() (waiting for the count to reach
-        // zero) block on this counter, so wake all of them: waking just one could wake the waiter
-        // that has no reason to run yet and leave the worker asleep.
-        task_counter_.notify_all();
+        tasks_.push(std::move(f));
+        wake();
     }
 
-    std::exception_ptr wait() const {
-        // Wait until all tasks have completed (task_counter_ == 0)
-        // To avoid spinning, sleep until notified by the worker threads
-        // or task_counter_ changes (this only happens with a spurious wakeup)
-        int current;
-        while ((current = task_counter_.load(std::memory_order_acquire)) > 0) {
-            task_counter_.wait(current, std::memory_order_relaxed);
-        }
-        // Return the stored exception to the caller.
-        // If an exception was caught by the worker thread
-        // it is the caller's responsibility to handle it.
-        auto temp_exception = stored_exception_;
-        stored_exception_ = nullptr;
-        return temp_exception;
-    }
+    // Returns the first exception thrown by a task since the last call, once the pool has joined.
+    std::exception_ptr take_exception() { return std::exchange(stored_exception_, nullptr); }
 
 private:
+    void run() {
+        while (true) {
+            if (tasks_.empty()) {
+                if (shutdown_.load(std::memory_order_acquire)) {
+                    return;
+                }
+                wait_for_work();
+                continue;
+            }
+            {
+                auto task = tasks_.pop();
+                try {
+                    task();
+                } catch (...) {
+                    if (!stored_exception_) {
+                        stored_exception_ = std::current_exception();
+                    }
+                }
+            }
+            completion_.done();
+        }
+    }
+
+    // Spin briefly so back-to-back tasks are picked up without entering the kernel, then park until a
+    // producer publishes work or the executor shuts down.
+    void wait_for_work() {
+        if (spin_until([this] { return !tasks_.empty(); })) {
+            return;
+        }
+        // seq_cst pairs with wake(): either the producer sees the worker parked, or the worker sees the task.
+        parked_.store(1, std::memory_order_seq_cst);
+        if (tasks_.empty() && !shutdown_.load(std::memory_order_seq_cst)) {
+            futex_wait(parked_, 1);
+        }
+        parked_.store(0, std::memory_order_relaxed);
+    }
+
+    // Enters the kernel only if the worker is parked.
+    void wake() {
+        if (parked_.load(std::memory_order_seq_cst) != 0 && parked_.exchange(0, std::memory_order_seq_cst) != 0) {
+            futex_wake_one(parked_);
+        }
+    }
+
     TaskQueue tasks_;
+    Completion& completion_;
     std::thread worker;
-    std::atomic<int> task_counter_ = 0;
-    // Accessed from both the worker thread (read, worker loop) and the main thread (write, destructor).
-    // Atomic to avoid a data race; the surrounding task_counter_ operations provide the ordering.
+    alignas(64) std::atomic<uint32_t> parked_ = 0;
     std::atomic<bool> shutdown_ = false;
-    mutable std::exception_ptr stored_exception_;
-    // Variables managing the linear backoff strategy used by worker threads
-    // when waiting on a task to be inserted in the queue
-    static constexpr uint32_t BACKOFF_START_ATTEMPT = 100;
-    static constexpr uint32_t BACKOFF_END_ATTEMPT = 300;
-    static constexpr uint32_t BACKOFF_FACTOR_MICROSECONDS = 5;
+    std::exception_ptr stored_exception_;
 };
 
 }  // namespace threading_primitives
 
 namespace thread_pool_impls {
 // Implementations conforming to the ThreadPool interface.
+using threading_primitives::Completion;
 using threading_primitives::NumaAwareExecutor;
 
 // Custom Thread-Pool using the threading::Executor class.
@@ -315,7 +359,8 @@ public:
         num_workers_(physical_devices.size()) {
         workers_.reserve(num_workers_);
         for (uint32_t i = 0; i < num_workers_; i++) {
-            workers_.emplace_back(std::make_unique<NumaAwareExecutor>(context_id, physical_devices[i]->id()));
+            workers_.emplace_back(
+                std::make_unique<NumaAwareExecutor>(context_id, physical_devices[i]->id(), completion_));
             phys_device_to_thread_id_[physical_devices[i]->id()] = i;
         }
     }
@@ -325,30 +370,42 @@ public:
         workers_.reserve(thread_count);
 
         for (uint32_t i = 0; i < thread_count; i++) {
-            workers_.emplace_back(std::make_unique<NumaAwareExecutor>(context_id, i));
+            workers_.emplace_back(std::make_unique<NumaAwareExecutor>(context_id, i, completion_));
             phys_device_to_thread_id_[i] = i;
         }
     }
+
+    DeviceBoundThreadPool(const DeviceBoundThreadPool&) = delete;
+    DeviceBoundThreadPool& operator=(const DeviceBoundThreadPool&) = delete;
+    DeviceBoundThreadPool(DeviceBoundThreadPool&&) = delete;
+    DeviceBoundThreadPool& operator=(DeviceBoundThreadPool&&) = delete;
+
+    ~DeviceBoundThreadPool() override { completion_.wait(); }
 
     void enqueue(std::function<void()>&& f, std::optional<uint32_t> device_idx = std::nullopt) override {
         // If the user does not provide the Device ID tied to this task, determine the thread to use
         // based on the internally stored thread_idx. Tasks will get round-robined across threads,
         // when relying on the thread_idx.
         // If the device id is specified, use the thread tied to the device.
-        uint32_t thread_id =
-            device_idx.has_value() ? phys_device_to_thread_id_[device_idx.value()] : ((thread_idx_++) % num_workers_);
+        uint32_t thread_id = device_idx.has_value()
+                                 ? phys_device_to_thread_id_[device_idx.value()]
+                                 : (thread_idx_.fetch_add(1, std::memory_order_relaxed) % num_workers_);
+        completion_.add();
         workers_[thread_id]->enqueue(std::move(f));
     }
 
     void wait() override {
-        thread_idx_ = 0;  // Reset thread_idx for next call without Device ID specified.
+        thread_idx_.store(0, std::memory_order_relaxed);  // Reset thread_idx for next call without Device ID specified.
+        completion_.wait();
+        // Rethrow the first exception in the calling thread. Several threads may wait at once.
         std::exception_ptr exception;
-        // Wait on all workers. Capture exceptions if any, and rethrow the first exception
-        // in the calling thread.
-        for (auto& worker : workers_) {
-            auto temp_exception = worker->wait();
-            if (!exception && temp_exception) {
-                exception = temp_exception;
+        {
+            std::lock_guard lock(exception_mutex_);
+            for (auto& worker : workers_) {
+                auto temp_exception = worker->take_exception();
+                if (!exception && temp_exception) {
+                    exception = temp_exception;
+                }
             }
         }
         if (exception) {
@@ -357,10 +414,13 @@ public:
     }
 
 private:
+    // Declared before the executors so that it outlives them.
+    Completion completion_;
     // Executors backing this pool.
     std::vector<std::unique_ptr<NumaAwareExecutor>> workers_;
     // Used to pick threads when device_idx is not specified in the enqueue API
-    uint32_t thread_idx_ = 0;
+    std::atomic<uint32_t> thread_idx_ = 0;
+    std::mutex exception_mutex_;
     // Store the number of workers to repeated lookups
     uint32_t num_workers_ = 0;
     // Mapping between the physical device id and its associated thread
