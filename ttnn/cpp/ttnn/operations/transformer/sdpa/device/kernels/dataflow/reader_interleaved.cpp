@@ -789,4 +789,10 @@ void kernel_main() {
             }
         }
     }  // close phase
+
+    if constexpr (!is_causal) {
+        if (is_chain_participant && !is_injector) {
+            noc.async_atomic_barrier();
+        }
+    }
 }

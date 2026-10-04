@@ -213,4 +213,5 @@ void kernel_main() {
     }  // out_num_blocks_h
 
     noc.async_write_barrier();
+    noc.async_atomic_barrier();
 }

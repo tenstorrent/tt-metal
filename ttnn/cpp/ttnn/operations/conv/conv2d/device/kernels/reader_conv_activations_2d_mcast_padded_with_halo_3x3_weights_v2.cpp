@@ -228,6 +228,7 @@ void kernel_main() {
     // Reset reader_idx to finish act_block_h_datums
     uint32_t reader_idx = 0;
     uint32_t start_reader_idx = 0;
+    bool issued_receiver_atomic = false;
     for (uint32_t nbh = 0; nbh < act_num_blocks_h; nbh++) {
         uint32_t reader_offset = act_l1_read_addr;
         for (uint32_t outer = 0; outer < window_outer; outer++) {
@@ -324,6 +325,7 @@ void kernel_main() {
                     } else {
                         act_mcast_sender_sem.up(noc, act_mcast_sender_noc_y[act_w_outer_i], act_mcast_sender_noc_x, 1);
                     }
+                    issued_receiver_atomic = true;
 
                     // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
                     act_mcast_receiver_sem.wait(VALID);
@@ -345,4 +347,7 @@ void kernel_main() {
     }
 
     noc.async_write_barrier();
+    if (issued_receiver_atomic) {
+        noc.async_atomic_barrier();
+    }
 }

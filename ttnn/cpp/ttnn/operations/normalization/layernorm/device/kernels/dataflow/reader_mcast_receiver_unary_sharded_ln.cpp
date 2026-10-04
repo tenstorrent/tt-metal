@@ -278,5 +278,7 @@ void kernel_main() {
     global_reduce_receiver(dfb::ex_partial2, dfb::ex_external2, dfb::ex2pe, dfb::ex_global, dfb::ex2, 1);
 #endif
 
+    noc.async_atomic_barrier();
+
 #endif  // IDLE_CORE
 }

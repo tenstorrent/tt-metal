@@ -88,6 +88,7 @@ void kernel_main() {
     constexpr uint32_t in0_tensor_next_h_dim_block_stride = shard_read_stride * in0_block_h;
 
     const Noc noc;
+    bool issued_sender_atomic = false;
     DataflowBuffer dfb_in0(dfb_id_in0);
     DataflowBuffer dfb_in2(dfb_id_in2);
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
@@ -359,6 +360,7 @@ void kernel_main() {
                     } else if constexpr (core_in_in0_receiver_mcast_grid) {
                         // Increment remote sender's semaphore using pre-computed coordinates
                         sender_sem.up(noc, remote_sender_noc_x[block_id], remote_sender_noc_y[block_id], 1);
+                        issued_sender_atomic = true;
                     }
 
                     if constexpr (core_in_in0_receiver_mcast_grid) {
@@ -381,4 +383,7 @@ void kernel_main() {
     }
 
     noc.async_write_barrier();
+    if (issued_sender_atomic) {
+        noc.async_atomic_barrier();
+    }
 }
