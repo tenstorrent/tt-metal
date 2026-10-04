@@ -20,8 +20,7 @@ case $STEP in
 esac
 cd $S
 # The clock ceiling holds every arm at 1150 MHz (as in #100's 506.2 ms); restore it however the job ends.
-trap 'python /home/smarton/tray-stress/hostfmax.py 0 > /dev/null 2>&1' EXIT
-echo "[t119] step=$STEP build=$(git -C $B rev-parse --short HEAD) src=$(cat $S/REV) clock: $(python /home/smarton/tray-stress/hostfmax.py 1150 | tail -1)" | tee $LOG
+echo "[t119] step=$STEP build=$(git -C $B rev-parse --short HEAD) src=$(cat $S/REV)" | tee $LOG
 test -f "$AB_LATENT" || { echo "[t119] $AB_LATENT missing" | tee -a $LOG; exit 3; }
 test -f $B/ttnn/ttnn/_ttnn.so || { echo "[t119] no build at $B" | tee -a $LOG; exit 4; }
 timeout 1500 python $S/tmp/blx03/t119/ab119.py -c $S/pytest.ini --rootdir=$S -sv --timeout=1440 \
