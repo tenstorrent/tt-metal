@@ -55,7 +55,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, face_r_dim, UNPB_FACE_R_DIM, num_faces, num_faces);
-    _llk_unpack_tilizeA_B_init_<NEGINF_SRCA, true /* reload_srcB */, false /* zero_srcA */, ZERO_SRCA_REDUCE>(
+    _llk_unpack_tilizeA_B_block_init_<NEGINF_SRCA, true /* reload_srcB */, false /* zero_srcA */, ZERO_SRCA_REDUCE>(
         formats.unpack_A_src, formats.unpack_A_dst, params.TILE_CNT, num_faces, UNPB_FACE_R_DIM, face_r_dim);
     for (std::uint32_t block = 0; block < num_blocks; block++)
     {
@@ -68,7 +68,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             tiles_per_block,
             num_faces);
     }
-    _llk_unpack_tilizeA_B_uninit_(formats.unpack_A_dst, tensor_shape_from_num_faces(face_r_dim, num_faces));
+    _llk_unpack_tilizeA_B_block_uninit_(formats.unpack_A_dst, tensor_shape_from_num_faces(face_r_dim, num_faces));
 }
 
 #endif

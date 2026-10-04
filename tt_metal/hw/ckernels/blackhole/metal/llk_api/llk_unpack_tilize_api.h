@@ -159,7 +159,7 @@ inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void llk_unpack_tilizeA_B_mop_config(const std::uint32_t num_faces = 4) {
     SAN_HOOK(unsupported());
-    _llk_unpack_tilizeA_B_mop_config_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(num_faces);
+    _llk_unpack_tilizeA_B_block_mop_config_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(num_faces);
 }
 
 /**
@@ -197,7 +197,7 @@ inline void llk_unpack_tilizeA_B_init(
         num_faces,
         get_operand_num_faces(operandB_id)));
 
-    _llk_unpack_tilizeA_B_init_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
+    _llk_unpack_tilizeA_B_block_init_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
         unpack_src_format[operandA_id],
         unpack_dst_format[operandA_id],
         ct_dim,
@@ -221,7 +221,7 @@ inline void llk_unpack_tilizeA_B_init(
  * @param  operandB     Input operand index for unpack source B.
  * @param  tile_index_a Tile index within operand A.
  * @param  tile_index_b Tile index within operand B.
- * @param  block_ct_dim Number of column tiles in the block.
+ * @param  block_ct_dim Number of column tiles in the block (unused: the init's ct_dim sets the row pitch).
  */
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void llk_unpack_tilizeA_B(
@@ -229,7 +229,7 @@ inline void llk_unpack_tilizeA_B(
     std::uint32_t operandB,
     std::uint32_t tile_index_a,
     std::uint32_t tile_index_b,
-    std::uint32_t block_ct_dim) {
+    [[maybe_unused]] std::uint32_t block_ct_dim) {
     SAN_HOOK(unsupported());
     std::uint32_t operandA_id = get_operand_id(operandA);
     std::uint32_t operandB_id = get_operand_id(operandB);
@@ -257,15 +257,8 @@ inline void llk_unpack_tilizeA_B(
 
     WAYPOINT("UPTW");
 
-    _llk_unpack_tilizeA_B_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
-        unpack_src_format[operandA_id],
-        face_r_dim,
-        base_address_a,
-        address_b,
-        tile_index_a,
-        block_ct_dim,
-        num_faces
-    );
+    _llk_unpack_tilizeA_B_block_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
+        unpack_src_format[operandA_id], face_r_dim, base_address_a, address_b, tile_index_a, 1, num_faces);
 
     WAYPOINT("UPTD");
 }
@@ -334,6 +327,6 @@ inline void llk_unpack_tilizeA_B_uninit(const std::uint32_t operand) {
     std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
-    _llk_unpack_tilizeA_B_uninit_(
+    _llk_unpack_tilizeA_B_block_uninit_(
         (std::uint32_t)unpack_dst_format[operand_id], ckernel::tensor_shape_from_num_faces(face_r_dim, num_faces));
 }

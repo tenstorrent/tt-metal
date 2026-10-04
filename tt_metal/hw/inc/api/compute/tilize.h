@@ -475,7 +475,7 @@ ALWI void fast_tilize_block(
 // clang-format off
 /**
  * Uninitializes the unpack tilizeA_B configuration and restores unpacker state
- * modified by _llk_unpack_tilizeA_B_init_.
+ * modified by llk_unpack_tilizeA_B_init.
  *
  * Return value: None
  *
