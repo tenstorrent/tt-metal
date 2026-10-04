@@ -550,6 +550,9 @@ def _run_chunked_prefill(
     use_metadata_tensor=False,
     determinism_check=False,
     profile=False,
+    # ttMLA defaults sparse_kv_cache_format to BF16_RM while this helper builds BFP8_TILE; the
+    # mismatch assert only fires on the sparse (indexer) path, so dense variants never reach it.
+    cache_format=MlaKvCacheFormat.BFP8_TILE,
     tight_cache=False,
 ):
     """Unified chunked-prefill scenario, decoupled from the reference.
@@ -713,7 +716,7 @@ def _run_chunked_prefill(
     # Persistent, refreshed per chunk; None for every variant without a query temperature.
     llama4_scale_buf = rope_setup.make_llama4_scale_buffer(chunk_size_global)
     tt_kvpe_cache = init_mla_kv_cache(
-        cache_format=MlaKvCacheFormat.BFP8_TILE,
+        cache_format=cache_format,
         hf_config=config,
         mesh_device=mesh_device,
         seq_len=seq_len_cache,

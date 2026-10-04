@@ -111,6 +111,9 @@ def glm_5_2_hf_config(max_seq: int = 8192):
         max_seq_len=max_seq,
         rope_theta=float(GLM52Config.ROPE_THETA),
         attention_bias=False,
+        # Standard HF attribute the hand-built config omitted; the random_weights test fixture
+        # scales its init by it. 0.02 is the HF default and what the other variants' configs carry.
+        initializer_range=0.02,
         rope_scaling={
             "factor": 1.0,
             "mscale": 1.0,
