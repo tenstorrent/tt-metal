@@ -137,6 +137,8 @@ bool bf16_dest_log2();
 template <int ITERATIONS>
 void calculate_log2_bf16();
 void init_log2_bf16();
+// Whether BF16 DEST runs the generated log2 kernel as one call over the whole tile.
+inline constexpr bool log2_bf16_whole_tile = true;
 
 template <
     bool APPROXIMATION_MODE,
