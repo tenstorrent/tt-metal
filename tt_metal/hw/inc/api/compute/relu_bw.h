@@ -32,6 +32,10 @@ MATH(static_assert(!DST_ACCUM_MODE, "relu_bw_tile evaluates BF16 DEST"));
  */
 // clang-format on
 ALWI void relu_bw_tile(uint32_t idst) {
+    // SFPU_UNARY_CALL checks idst alone; the kernel uses DEST tiles up to idst + 1.
+    MATH(LLK_ASSERT(
+        (idst + 2 <= get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
+        "relu_bw_tile needs DEST tiles idst to idst + 1"));
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_relu_bw_bf16, (32), idst, VectorMode::None));
 }
 
