@@ -17,7 +17,9 @@ matmul). compare_pytest_times.py --auto-only compares just the tests where it is
 
 Each line also records custom_configs: how many ttnn.matmul / ttnn.linear calls in the test passed their own
 program_config. With DEVICE_TIME_STRIP_CONFIGS=1 those calls go through the default selection instead: the
-program_config is dropped, and a fused_activation it carried is passed as activation.
+program_config is dropped, and a fused_activation it carried is passed as activation. A call without its own
+compute_kernel_config gets the one it resolved to with the program config: matmul's default math fidelity is LoFi
+with a program config and HiFi2 without (#55889), which would otherwise dominate the comparison.
 
 DEVICE_TIME_SAMPLE=N keeps every Nth collected test (a fixed, deterministic sample for quick runs).
 DEVICE_TIME_TESTS=FILE keeps only the tests whose node ids are listed in FILE, one per line.
@@ -57,6 +59,27 @@ _results = {}
 _custom_configs = 0
 
 
+def _default_compute_config(a, b, dtype):
+    """The compute config matmul resolves for a call with a program config and no compute config of its own"""
+    import ttnn
+
+    arch = a.device().arch()
+    fp32_inputs = a.dtype == ttnn.float32 and b.dtype == ttnn.float32
+    if fp32_inputs:
+        fidelity = ttnn.MathFidelity.HiFi3 if arch == ttnn.device.Arch.WORMHOLE_B0 else ttnn.MathFidelity.HiFi4
+    else:
+        fidelity = ttnn.MathFidelity.LoFi
+    fp32_out = (dtype or a.dtype) == ttnn.float32
+    return ttnn.init_device_compute_kernel_config(
+        arch,
+        None,
+        math_fidelity=fidelity,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_out,
+        packer_l1_acc=not fp32_out,
+    )
+
+
 def _wrap(module, name):
     original = getattr(module, name)
 
@@ -70,6 +93,10 @@ def _wrap(module, name):
                 fused = getattr(config, "fused_activation", None)
                 if fused is not None and kwargs.get("activation") is None:
                     kwargs["activation"] = fused
+                if kwargs.get("compute_kernel_config") is None:
+                    a = args[0] if len(args) > 0 else kwargs.get("input_tensor_a")
+                    b = args[1] if len(args) > 1 else kwargs.get("input_tensor_b")
+                    kwargs["compute_kernel_config"] = _default_compute_config(a, b, kwargs.get("dtype"))
         return original(*args, **kwargs)
 
     setattr(module, name, wrapper)
