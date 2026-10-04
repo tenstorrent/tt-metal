@@ -74,9 +74,14 @@ void kernel_main() {
         page_id += tile_height * num_pages_in_row;
     }
 
+    // Drain-on-exit: wait until the consuming UNPACK has acked every pushed tile so this input DFB's
+    // tile counter leaves balanced (posted==acked), rather than relying on natural pipeline drain. The
+    // quasar tilize kernels historically omit this (unlike binary_ng); a predecessor that exits non-idle
+    // leaves the next program's unpack reading a stale counter (see tile_counter_reset_issue.md).
 #ifdef ARCH_QUASAR
+    cb_in0.finish();
     if (num_tiles_per_block <= 32) {
-        DPRINT("QSR tilize reader: DONE (all reads+push)\n");
+        DPRINT("QSR tilize reader: DONE (all reads+push+finish)\n");
     }
 #endif
 }

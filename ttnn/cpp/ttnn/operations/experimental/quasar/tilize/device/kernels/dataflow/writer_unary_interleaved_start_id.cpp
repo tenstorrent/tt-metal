@@ -39,4 +39,11 @@ void kernel_main() {
     }
     noc.async_write_barrier();
 #endif
+
+    // Drain-on-exit: leave the output DFB's tile counter balanced (read_posted==read_acked) rather than
+    // relying on natural drain. The quasar tilize kernels historically omit this (unlike binary_ng); a
+    // predecessor that exits non-idle poisons the next program's counter (see tile_counter_reset_issue.md).
+#ifdef ARCH_QUASAR
+    cb.finish();
+#endif
 }
