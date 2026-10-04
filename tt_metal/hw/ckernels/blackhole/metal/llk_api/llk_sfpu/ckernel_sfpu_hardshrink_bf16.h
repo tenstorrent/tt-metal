@@ -16,10 +16,22 @@ struct HardshrinkBf16Config {
 
 namespace ckernel::sfpu {
 
+// The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format.
+inline bool bf16_dest_hardshrink() {
+#if defined(TRISC_MATH) || defined(LLK_TRISC_MATH)
+    return ckernel::math::src_zero_flag_srcb_fmt == static_cast<std::uint32_t>(DataFormat::Float16_b);
+#else
+    return false;
+#endif
+}
 template <int ITERATIONS = 8>
 inline void calculate_hardshrink_bf16() {
     ckernel::sfpu::bf16::calculate_simple_forward<ckernel::sfpu::HardshrinkBf16Config, ITERATIONS>();
 }
-inline void init_hardshrink_bf16() { ckernel::sfpu::bf16::init_simple_forward<ckernel::sfpu::HardshrinkBf16Config>(); }
+inline void init_hardshrink_bf16() {
+    if (bf16_dest_hardshrink()) {
+        ckernel::sfpu::bf16::init_simple_forward<ckernel::sfpu::HardshrinkBf16Config>();
+    }
+}
 
 }  // namespace ckernel::sfpu

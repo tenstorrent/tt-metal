@@ -1499,11 +1499,25 @@ def test_exponential_clamp_negative(clamp_negative: bool):
 _BF16_EXHAUSTIVE_OPS = [
     (MathOperation.Hardshrink, ApproximationMode.No, 0),
 ]
+# Boards where the op keeps its stock kernel, which this sweep does not test.
+_BF16_STOCK_BOARDS = {}
+# Special input classes where the kernel returns its stock kernel's class instead of torch's.
+_BF16_STOCK_SPECIALS = {}
+
+
+def _special_class(value):
+    sign = "neg" if struct.unpack("<I", struct.pack("<f", value))[0] >> 31 else "pos"
+    kind = (
+        "nan" if value != value else ("inf" if abs(value) == float("inf") else "zero")
+    )
+    return f"{sign}_{kind}"
 
 
 @pytest.mark.nightly
 @pytest.mark.parametrize("mathop,approx_mode,max_ulp", _BF16_EXHAUSTIVE_OPS)
 def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode, max_ulp):
+    if TestConfig.CHIP_ARCH in _BF16_STOCK_BOARDS.get(mathop, ()):
+        pytest.skip(f"{mathop.name} keeps the stock kernel on {TestConfig.CHIP_ARCH}")
     from helpers.ulp import ulp_distance
     from helpers.ulp_sweep import measurable_mask, nonfinite_failures, sweep_spec
 
@@ -1527,6 +1541,8 @@ def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode, max_ulp):
     )
     if _gate_unspecified_nan_sign(mathop, formats, dest_acc, nonfinite):
         specials += [float("inf"), float("-inf"), float("nan"), _NEGATIVE_NAN]
+    kept = _BF16_STOCK_SPECIALS.get(mathop, {}).get(TestConfig.CHIP_ARCH, ())
+    specials = [value for value in specials if _special_class(value) not in kept]
     # Through the bit pattern: a float-to-bfloat16 cast drops a NaN's sign.
     bits = torch.tensor(specials, dtype=torch.float32).view(torch.int32) >> 16
     src_A[-len(specials) :] = bits.to(torch.int16).view(torch.bfloat16).to(src_A.dtype)
