@@ -20,6 +20,13 @@ constexpr uint32_t TILE_DIM = 32;
 
 inline uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 
+// Each of `parts` cores' share of N (in B's tiles). An output tile wider than B's spans several B tiles, and each
+// core's columns must fill whole output tiles.
+inline uint32_t split_n(const MatmulDesc& p, uint32_t parts) {
+    const uint32_t ratio = p.out_tile_w / p.in1_tile_w;
+    return div_up(div_up(p.Nt, parts), ratio) * ratio;
+}
+
 inline uint32_t tile_bytes(tt::DataFormat format, uint32_t h, uint32_t w) {
     return tt::tt_metal::Tile({h, w}).get_tile_size(format);
 }

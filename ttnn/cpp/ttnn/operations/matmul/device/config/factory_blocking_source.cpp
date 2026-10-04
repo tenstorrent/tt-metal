@@ -550,11 +550,11 @@ std::vector<Candidate> FactoryBlockingSource::candidates(const MatmulDesc& p, co
     }
     const uint32_t M = output_rows(p, fuse_batch);
     add(Family::Mcast2D,
-        blocking_->block(p, hw, Family::Mcast2D, {div_up(M, hw.grid.y), div_up(p.Nt, hw.grid.x), fuse_batch}, {}),
+        blocking_->block(p, hw, Family::Mcast2D, {div_up(M, hw.grid.y), split_n(p, hw.grid.x), fuse_batch}, {}),
         fuse_batch);
     if (!no_mcast_1d(p)) {
         add(Family::Mcast1DIn0,
-            blocking_->block(p, hw, Family::Mcast1DIn0, {M, div_up(p.Nt, cores), fuse_batch}, {}),
+            blocking_->block(p, hw, Family::Mcast1DIn0, {M, split_n(p, cores), fuse_batch}, {}),
             fuse_batch);
         add(Family::Mcast1DIn1,
             blocking_->block(p, hw, Family::Mcast1DIn1, {div_up(M, cores), p.Nt, fuse_batch}, {}),
@@ -620,7 +620,7 @@ std::vector<Candidate> FactoryBlockingSource::sharded_candidates(const MatmulDes
             BlockRules rules = out_rules;
             rules.k_divides = a.shard_w;
             rules.k_preferred = a.shard_w;
-            const auto per_core_N = div_up(p.Nt, a.shard_cores);
+            const auto per_core_N = split_n(p, a.shard_cores);
             add(Family::Mcast1DIn0,
                 blocking_->block(p, hw, Family::Mcast1DIn0, {M, per_core_N, true}, rules),
                 grid,
@@ -668,7 +668,7 @@ std::vector<Candidate> FactoryBlockingSource::sharded_candidates(const MatmulDes
             const uint32_t virtual_x = a.col_major ? grid.y : grid.x;
             const uint32_t virtual_y = a.col_major ? grid.x : grid.y;
             const uint32_t per_core_M = div_up(M, virtual_y);
-            const uint32_t per_core_N = div_up(p.Nt, virtual_x);
+            const uint32_t per_core_N = split_n(p, virtual_x);
             if (per_core_M != a.shard_h || div_up(p.Kt, a.shard_w) != virtual_x || div_up(M, a.shard_h) != virtual_y) {
                 return result;
             }
@@ -756,7 +756,7 @@ std::vector<Candidate> FactoryBlockingSource::sharded_candidates(const MatmulDes
         }
     } else if (out.layout == MemoryLayout::WidthSharded) {
         add(Family::Mcast1DIn0,
-            blocking_->block(p, hw, Family::Mcast1DIn0, {M, div_up(p.Nt, cores), true}, rules),
+            blocking_->block(p, hw, Family::Mcast1DIn0, {M, split_n(p, cores), true}, rules),
             hw.grid,
             pinned_workers(hw),
             false);
@@ -768,7 +768,7 @@ std::vector<Candidate> FactoryBlockingSource::sharded_candidates(const MatmulDes
             false);
     } else if (out.layout == MemoryLayout::BlockSharded) {
         add(Family::Mcast2D,
-            blocking_->block(p, hw, Family::Mcast2D, {div_up(M, hw.grid.y), div_up(p.Nt, hw.grid.x), true}, rules),
+            blocking_->block(p, hw, Family::Mcast2D, {div_up(M, hw.grid.y), split_n(p, hw.grid.x), true}, rules),
             hw.grid,
             pinned_workers(hw),
             false);

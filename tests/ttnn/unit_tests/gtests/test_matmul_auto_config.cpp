@@ -592,6 +592,32 @@ TEST(MatmulAutoConfig, FamilyChoice) {
     }
 }
 
+// An output tile wider than B's spans several B tiles: with a sharded output (and no shard spec) each core's
+// columns fill whole output tiles; other outputs stay unsupported
+TEST(MatmulAutoConfig, OutputTileWiderThanB) {
+    for (const auto& arch : kArchs) {
+        const auto hw = HardwareDesc::for_arch(arch.arch, arch.grid, kL1Budget);
+        for (uint32_t tile_h : {1u, 16u}) {
+            for (auto layout : {MemoryLayout::WidthSharded, MemoryLayout::BlockSharded}) {
+                auto p = make_matmul(1, 1, 512, 512, 768);
+                p.in0_tile_h = p.out_tile_h = tile_h;
+                p.in1_tile_w = 16;
+                p.out_tile_w = 32;
+                p.Mt = 512 / tile_h;
+                p.Nt = 768 / 16;
+                p.out = sharded_output(layout);
+                const auto label = fmt::format("{} tile_h {} layout {}", arch.name, tile_h, static_cast<int>(layout));
+                EXPECT_TRUE(config_for(p, hw).has_value()) << label;
+                const auto chosen = choose(p, hw);
+                ASSERT_TRUE(chosen.has_value()) << label;
+                EXPECT_EQ(chosen->blocking.per_core_N % 2, 0u) << label;
+                p.out = Placement{};  // interleaved
+                EXPECT_FALSE(config_for(p, hw).has_value()) << label;
+            }
+        }
+    }
+}
+
 // Where the roofline picks the family (2D blocks one tile tall or wide), a candidate that another keeps
 // one_d_core_advantage times as many cores busy as is out: here 2D loops 12 small batch matrices over 9 cores, Reuse
 // runs them at once on 36 (the roofline alone, with no per-step latency, picks 2D on Blackhole: 4x slower measured)

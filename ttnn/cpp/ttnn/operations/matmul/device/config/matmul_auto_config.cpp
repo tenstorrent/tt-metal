@@ -307,8 +307,15 @@ std::string unsupported_reason(const MatmulDesc& p) {
     if (dram_sharded_b(p) && (p.a.sharded() || p.out.sharded())) {
         return "DRAM-sharded B with a sharded A or output";
     }
+    // An output tile wider than B's: each core's columns fill whole output tiles (split_n). An output shard spec or an
+    // interleaved output is untested.
     if (p.out_tile_w != p.in1_tile_w) {
-        return "output tile wider than B's tile";
+        if (p.out_tile_w % p.in1_tile_w != 0 || p.Nt % (p.out_tile_w / p.in1_tile_w) != 0) {
+            return "output tile width not a multiple of B's tile width, or N not a whole number of output tiles";
+        }
+        if (!p.out.sharded() || p.out.has_shard_spec) {
+            return "output tile wider than B's tile, unless the output is sharded without a shard spec";
+        }
     }
     if (p.batch_b > 1 && p.batch_a != p.batch_b) {
         // Only a batch of one broadcasts (1D in1-mcast in0 reuse): interleaved tensors of equal rank >= 3
