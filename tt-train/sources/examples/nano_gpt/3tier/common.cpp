@@ -103,28 +103,38 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
         exit(-1);
     }
 
-    auto create_dataset =
-        [](const auto &data_source, const auto seq_len, const auto &tokenizer_type, auto &train_config) {
-            if (tokenizer_type == "char") {
-                auto [dataset, tokenizer] =
-                    ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
-                        std::get<std::string>(data_source), seq_len);
+    auto create_dataset = [](const auto &data_source, const auto seq_len, auto &train_config) {
+        auto configured_vocab_size =
+            std::visit([](const auto &arg) { return arg.vocab_size; }, train_config.transformer_config);
 
-                return std::make_tuple(dataset, tokenizer->get_vocab_size());
-            } else if (tokenizer_type == "bpe") {
-                auto &yaml_node = std::get<YAML::Node>(data_source);
-
-                auto dataset = ttml::datasets::create_token_dataset_from_yaml(yaml_node);
-
-                uint32_t vocab_size = yaml_node["tokenizer_vocab_size"].template as<uint32_t>();
-
-                return std::make_tuple(dataset, vocab_size);
-            } else {
-                throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
+        if (std::holds_alternative<std::string>(data_source)) {
+            if (configured_vocab_size != 0U) {
+                throw std::runtime_error(
+                    "Plain text data uses character tokenization, which auto-detects vocab_size from the "
+                    "text. Remove vocab_size from the model config (or set it to 0). Got vocab_size=" +
+                    std::to_string(configured_vocab_size));
             }
-        };
+            auto [dataset, tokenizer] = ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
+                std::get<std::string>(data_source), seq_len);
 
-    auto [dataset, vocab_size] = create_dataset(text_or_tokens, sequence_length, config.tokenizer_type, config);
+            if (!tokenizer) {
+                throw std::runtime_error("Failed to create CharTokenizer");
+            }
+
+            return std::make_tuple(dataset, tokenizer->get_vocab_size());
+        }
+
+        if (configured_vocab_size == 0U) {
+            throw std::runtime_error(
+                "Pre-tokenized data requires vocab_size to be set in the model config. "
+                "Omitting vocab_size is only valid for plain text (character-tokenized) data.");
+        }
+        auto &yaml_node = std::get<YAML::Node>(data_source);
+        auto dataset = ttml::datasets::create_token_dataset_from_yaml(yaml_node);
+        return std::make_tuple(dataset, configured_vocab_size);
+    };
+
+    auto [dataset, vocab_size] = create_dataset(text_or_tokens, sequence_length, config);
     fmt::print("Dataset size: {}\n", dataset.get_size());
 
     auto dataset_size = dataset.get_size();
