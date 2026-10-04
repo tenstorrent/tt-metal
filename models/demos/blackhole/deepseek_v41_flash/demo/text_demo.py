@@ -14,6 +14,7 @@ few-layer smoke run), DSV41_ENGRAM_RAM=0 (do not hold the 2 x 95 GB Engram table
 Supported (ISL, batch) combinations and limits: see the ``Supported`` table in the module docstring of tt/dsv41_model.py / the final report.
 """
 
+import json
 import os
 import time
 
@@ -83,6 +84,10 @@ SCENARIOS = [
     _s(Q128, 128, 512, 32, "prefill_128_b128"),
     _s(GSM, 16, 512, 384, "gsm8k_b16", instruct=True, stop_at_eos=True),
     _s(GSM, 64, 512, 384, "gsm8k_b64", instruct=True, stop_at_eos=True),
+    *[
+        _s(f"{PROMPTS}/input_data_gsm8k_o{o}.json", 64, 512, 352, f"gsm8k_b64_o{o}", instruct=True, stop_at_eos=True)
+        for o in range(0, 512, 64)
+    ],
     _s(["What is the capital of France?"], 16, 512, 64, "same_prompt_b16", instruct=True),
     _s(f"{LONG}/input_data_long_2k.json", 16, 4096, 64, "isl2k_b16"),
     _s(f"{LONG}/input_data_long_4k.json", 1, 8192, 64, "isl4k_b1"),
@@ -360,6 +365,7 @@ def _run_demo(
         profiler.end("inference_decode", iteration=batch_idx)
 
         logger.info("Finished decoding, printing the final outputs...\n")
+        logger.info("DONEFLAGS " + json.dumps([int(user_done[u]) for u in range(batch_size)]))
         for i in range(batch_size):
             text = tokenizer.decode(all_outputs[i])
             prompt_with_tags = tokenizer.decode(model_args.encode_prompt(prompts_batch[i], instruct=instruct))
