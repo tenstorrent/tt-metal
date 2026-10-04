@@ -25,9 +25,10 @@ using namespace ckernel;
 static constexpr std::uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
 
 #if defined(ARCH_BLACKHOLE)
-// One source bank (one data valid) per operand per tile; the isolate mocks publish and clear at that rate.
-static constexpr SrcDvalid SRC_DVALID          = SrcDvalid::PerTile;
-static constexpr std::uint32_t DVALIDS_PER_TILE = 1;
+// The per-tile hand-off where the compute kernels take it (a multiply above LoFi), the per-face one otherwise.
+static constexpr SrcDvalid SRC_DVALID =
+    (ELTWISE_BINARY_OP == EltwiseBinaryType::ELWMUL && MATH_FIDELITY != MathFidelity::LoFi) ? SrcDvalid::PerTile : SrcDvalid::PerFace;
+static constexpr std::uint32_t DVALIDS_PER_TILE = (SRC_DVALID == SrcDvalid::PerTile) ? 1 : TILE_NUM_FACES;
 #define SRC_DVALID_ARG , SRC_DVALID
 #else
 // The other architectures publish per face and have no hand-off argument.

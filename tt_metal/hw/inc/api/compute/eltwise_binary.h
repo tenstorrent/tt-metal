@@ -18,13 +18,13 @@
 namespace ckernel {
 
 namespace detail {
-// Blackhole hands each operand tile to math as one source bank (SrcDvalid::PerTile); unpack and math must agree.
-// Defining ELTWISE_BINARY_PER_FACE_HANDOFF (true, evaluated on all three threads) keeps the per-face hand-off.
+// Blackhole: a kernel that defines ELTWISE_BINARY_PER_TILE_HANDOFF true (seen by all three threads) before this header
+// hands each operand tile to math as one source bank (SrcDvalid::PerTile); every other kernel keeps the per-face one.
 #if defined(ARCH_BLACKHOLE)
-#if defined(ELTWISE_BINARY_PER_FACE_HANDOFF)
-constexpr SrcDvalid BINARY_SRC_DVALID = (ELTWISE_BINARY_PER_FACE_HANDOFF) ? SrcDvalid::PerFace : SrcDvalid::PerTile;
+#if defined(ELTWISE_BINARY_PER_TILE_HANDOFF)
+constexpr SrcDvalid BINARY_SRC_DVALID = (ELTWISE_BINARY_PER_TILE_HANDOFF) ? SrcDvalid::PerTile : SrcDvalid::PerFace;
 #else
-constexpr SrcDvalid BINARY_SRC_DVALID = SrcDvalid::PerTile;
+constexpr SrcDvalid BINARY_SRC_DVALID = SrcDvalid::PerFace;
 #endif
 #endif
 #ifdef TRISC_UNPACK
