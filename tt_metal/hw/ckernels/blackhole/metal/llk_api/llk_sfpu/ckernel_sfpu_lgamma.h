@@ -70,6 +70,7 @@ inline void calculate_lgamma_adjusted(
     constexpr uint dst_tile_size_sfpi = 32;
     constexpr float ln_pi = 1.1447298858f;
 
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat res_stirling = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat log_sin_pi_x = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];

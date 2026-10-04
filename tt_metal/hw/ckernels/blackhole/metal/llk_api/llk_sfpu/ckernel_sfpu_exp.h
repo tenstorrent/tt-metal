@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <utility>
 
 #include "ckernel_addrmod.h"
 #include "ckernel_ops.h"
@@ -487,6 +488,29 @@ sfpi_inline sfpi::vFloat _calculate_exponential_body_(sfpi::vFloat in) {
     return out;
 }
 
+// The clamped approximate exponential over N vectors (8 or 32): every LOADMACRO carries its DEST row offset as an
+// immediate (ADDR_MOD_7 does not increment) and rotates the loaded value through LREG0 to LREG3.
+template <int VEC, int N>
+sfpi_inline void _exp_approx_clamped_sanitise_vector_() {
+    // Macro sequence 1: load, SFPSWAP against LREG14 (-88.5), store back. The SWAP takes two cycles, so an SFPNOP
+    // follows every LOADMACRO but the last.
+    TTI_SFPLOADMACRO(4 | (VEC & 3), 0, ADDR_MOD_7, 2 * VEC);
+    if constexpr (VEC + 1 < N) {
+        TTI_SFPNOP;
+    }
+}
+
+template <int... VEC>
+sfpi_inline void _exp_approx_clamped_sanitise_pass_(std::integer_sequence<int, VEC...>) {
+    (_exp_approx_clamped_sanitise_vector_<VEC, static_cast<int>(sizeof...(VEC))>(), ...);
+}
+
+template <int... VEC>
+sfpi_inline void _exp_approx_clamped_exp_pass_(std::integer_sequence<int, VEC...>) {
+    // Macro sequence register 0: load, MAD, round, shift, store.
+    (TTI_SFPLOADMACRO(VEC & 3, 0, ADDR_MOD_7, 2 * VEC), ...);
+}
+
 template <bool SCALE_EN, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _ckernel_sfpu_exp_accurate_(sfpi::vFloat val, const std::uint32_t exp_base_scale_factor) {
     if constexpr (SCALE_EN) {
@@ -531,9 +555,18 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
             sfpi::dst_reg++;
         }
 #else
-        // Code below is hand-unrolled for 8 iterations
-        // so it doesn't respect ITERATIONS. TODO: tt-llk#1486
-        // static_assert(ITERATIONS == 8);
+        static_assert(
+            ITERATIONS == 8 || ITERATIONS == 32,
+            "The clamped approximate exponential processes 8 vectors (one face) or 32 (a whole tile) per call.");
+        if constexpr (ITERATIONS == 32) {
+            _exp_approx_clamped_sanitise_pass_(std::make_integer_sequence<int, 32>{});
+            _exp_approx_clamped_exp_pass_(std::make_integer_sequence<int, 32>{});
+            // Let the final exponential macro complete before the caller's next SFPU instruction.
+            TTI_SFPNOP;
+            return;
+        }
+
+        // Code below is hand-unrolled for 8 iterations (one face).
 
         // Sanitize the input values by loading from DEST, comparing against the value -88.5, and if the input value is
         // more negative than that, swap the input value with -88.5 and store back to DEST
