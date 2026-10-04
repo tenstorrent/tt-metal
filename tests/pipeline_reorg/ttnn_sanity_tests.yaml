@@ -354,13 +354,6 @@
   budget_type: sanity
   owner_id: U08T3JQEB36 # stevendae
 
-# Disaggregated-prefill op kernels at the dsv3 production config (640 tokens/chip, bf16); reuses
-# the nightly deepseek_prefill tests so sanity's nightly debug exercises them under watcher + LLK
-# asserts + validate_program_args. Blackhole-only: moe_grouped_topk hangs on WH, cast/SwiGluOai
-# are BH-gated. https://github.com/tenstorrent/tt-metal/issues/55837
-# Excluded: moe_grouped_topk[deepseek-8g256e] — passes plain, but its program overflows the TENSIX
-# kernel-config buffer (79696 > 70656 B) once watcher-noinline + asserts inflate it
-# (program.cpp:3637). Re-add once the kernel fits under asserts.
 - name: "ttnn deepseek_prefill group"
   cmd: 'pytest --timeout 300 tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_deepseek_moe_post_combine_reduce.py tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_deepseek_prefill_per_token_cast.py tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_moe_grouped_topk.py tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_single_routed_expert.py tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_swigluoai_routed_expert.py -k "(test_skip_nonlocal_experts and dsv3) or (test_moe_grouped_topk and kimi-1g384e and sigmoid and in_bf16 and realistic and pad0) or (test_single_routed_expert_functional and x_rm and dsv3-isl-3001) or (test_swigluoai_routed_expert_m3_shapes and (t128 or t4k)) or (test_cast_to_fp8_scale_values and bfloat16 and TILE and 7168) or (test_round_trip_random and bfloat16 and TILE and 1152)" -v'
   skus:

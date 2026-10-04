@@ -54,16 +54,6 @@
   team: ttnn
   budget_type: sanity
 
-# Disaggregated-prefill d_p multi-chip ops at 640 tokens/chip, one case per distinct kernel path on
-# the (2,2)/(4,1) meshes only bh_quietbox_2 (P300_X2) provides. d2d runs last on its own pytest line
-# so the QB2 flake #54258 cannot abort the op cases.
-# https://github.com/tenstorrent/tt-metal/issues/55837
-# test_ttnn_reduce[torus-y-4x1-generic-weighted] self-skips on a 4-device box (topk=8 does not divide
-# 4 devices); kept until a >=8-device reduce mesh case exists.
-# update_padded_kv_cache excluded: its writer kernel includes pack_scaled_fp8_kv_cache/
-# packed_kv_layout.hpp, which the wheel does not ship (setup.py packages only kernels/**), so it
-# fails to JIT-build in wheel-based runs. Tracked in
-# https://github.com/tenstorrent/tt-metal/issues/59220; re-add once the packaging fix lands.
 - name: deepseek_prefill d_p multi-chip op unit tests (QB2 only)
   cmd: |
     pytest --timeout 300 models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ttnn_dispatch_combine.py models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_reduce.py models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_deepseek_prefill_rotary_embedding_indexed.py -k "(test_ttnn_dispatch_combine and tile and predictable and torus-y-4x1 and dsv3-640-avg) or (test_ttnn_combine and not test_ttnn_combine_fabric2d and bf16_out and tile and predictable and dsv3 and fabric2d-2x2 and pcc and not perf_no_pcc) or (test_ttnn_reduce and torus-y-4x1 and generic and weighted and not unweighted) or (test_rotary_embedding_indexed_multi_iteration_prefill and 2x2-small and padded_partial)" -v
