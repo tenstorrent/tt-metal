@@ -73,9 +73,6 @@ class Model:
             self.num_pages,
             len(self.layer_ids),
             max_ctx + 128,
-            ring_rows=int(
-                os.environ.get("DSV41_RING_ROWS", "128")
-            ),  # 160 = window + speculative-decoding slack (tt/spec_paged.py RING_SPEC)
             dtype=kv_dtype,
         )
         self.sink = PagedStateSink(mesh_device, self.pool, self.U)
@@ -124,8 +121,10 @@ class Model:
             gc.collect()
             if i % 5 == 0 or i == len(self.layer_ids) - 1:
                 log(f"built layer {L} ({time.time() - t0:.0f}s)")
+        self.log_dram("after layers built")
         if os.environ.get("DSV41_PF_SPARSE") == "1" or self.use_indexer:
             self.enable_prefill_sparse(c_max=int(os.environ.get("DSV41_PF_CMAX", "2048")))
+        self.log_dram("after prefill sparse")
         engram_ids = [l for l in (1, 14) if l in self.layer_ids]
         self.engram_ids = engram_ids
         self.host_rows = (
@@ -152,9 +151,100 @@ class Model:
         self.trace_id = None
         self.admitted = False
         self.pool_pages_free = None
+        self.log_dram("model built")
+        if os.environ.get("DSV41_MEMLOG") in (
+            "1",
+            "2",
+        ):  # trace the DRAM cost of every phase of the traced-chunk prefill
+            pm_ = self.prefill_model
+
+            def wrap(name):
+                orig = getattr(pm_, name)
+
+                def f(*a, **k):
+                    self.log_dram(f"before {name}")
+                    r = orig(*a, **k)
+                    self.log_dram(f"after  {name}")
+                    return r
+
+                setattr(pm_, name, f)
+
+            for nm in (
+                "setup_dyn",
+                "teardown_dyn",
+                "alloc_inputs",
+                "forward_device",
+                "begin_chunk",
+                "last_logits_traced",
+            ):
+                if hasattr(pm_, nm):
+                    wrap(nm)
+            for _, pl_ in pm_.layers[:1]:
+                pass
+            ob, oe = ttnn.begin_trace_capture, ttnn.end_trace_capture
+            ttnn.begin_trace_capture = lambda *a, **k: (
+                self.log_dram("before begin_trace_capture"),
+                setattr(self, "_capturing", True),
+                ob(*a, **k),
+            )[2]
+            ttnn.end_trace_capture = lambda *a, **k: (
+                oe(*a, **k),
+                setattr(self, "_capturing", False),
+                self.log_dram("after end_trace_capture"),
+            )[0]
         log(
             f"model built: {len(self.layer_ids)} layers, U={self.U} users/row (batch {self.B}), pool {self.num_pages} pages/row ({time.time() - t0:.0f}s)"
         )
+
+    def log_dram(self, tag):
+        """DSV41_MEMLOG=1: allocated / free DRAM per bank (MiB) at this point (diagnosing capacity / leaks across ISLs)."""
+        if os.environ.get("DSV41_MEMLOG") not in ("1", "2"):
+            return
+        if getattr(self, "_capturing", False):
+            return
+        ttnn.synchronize_device(self.md)
+        mv = ttnn.get_memory_view(self.md, ttnn.BufferType.DRAM)
+        self.log(
+            f"MEMLOG {tag:40s} allocated {mv.total_bytes_allocated_per_bank / 2**20:8.1f} MiB/bank  free {mv.total_bytes_free_per_bank / 2**20:8.1f}  largest free block {mv.largest_contiguous_bytes_free_per_bank / 2**20:8.1f}"
+        )
+
+    def live_tensor_report(self, tag, top=25):
+        """DSV41_MEMLOG=2: the largest live ttnn tensors (python objects) with their referrer types: which allocation survives a teardown."""
+        if os.environ.get("DSV41_MEMLOG") != "2":
+            return
+
+        sizes = {
+            "BFLOAT16": 2,
+            "FLOAT32": 4,
+            "BFLOAT8_B": 1.06,
+            "UINT32": 4,
+            "INT32": 4,
+            "UINT16": 2,
+            "BFLOAT4_B": 0.56,
+            "UINT8": 1,
+        }
+        rows, seen = [], set()
+        for o in gc.get_objects():
+            if type(o).__name__ == "Tensor" and type(o).__module__.startswith("ttnn"):
+                try:
+                    if id(o) in seen or not o.is_allocated():
+                        continue
+                    seen.add(id(o))
+                    n = 1
+                    for d in o.shape:
+                        n *= int(d)
+                    b = n * sizes.get(str(o.dtype).split(".")[-1], 2)
+                    ref = [type(r).__name__ for r in gc.get_referrers(o)][:3]
+                    rows.append((b, tuple(o.shape), str(o.dtype).split(".")[-1], ref))
+                except Exception:
+                    pass
+        rows.sort(key=lambda r: -r[0])
+        tot = sum(r[0] for r in rows)
+        self.log(
+            f"LIVE {tag}: {len(rows)} tensors, {tot / 2**20:.0f} MiB (logical, per mesh shard x devices counted once)"
+        )
+        for b, s, d, ref in rows[:top]:
+            self.log(f"LIVE   {b / 2**20:8.1f} MiB {s} {d} refs={ref}")
 
     # ---- construction ---------------------------------------------------------------------------------------------------------------
     def _build_attention(self, L, w, slot):
@@ -400,7 +490,9 @@ class Model:
             for _, pl in self.prefill_model.layers:
                 pl.pa.state_sink = None
             self._nosink_done = True
+        self.log_dram("prefill start")
         self.prepare_for_traces(lens)
+        self.log_dram("after prepare_for_traces")
         pm = self.prefill_model
         pm.timing = {}
         tp = torch.zeros(B, S_pad, dtype=torch.long)
@@ -417,8 +509,17 @@ class Model:
         if "nohead" in bis:
             pm.post_replay_hooks[:] = [h for h in pm.post_replay_hooks if h != self._post_chunk]
         self.log(f"  prefill_dyn: run chunks (trace={enable_trace}, C={C}, S_pad={S_pad}, bisect={bis!r})")
+        if enable_trace and getattr(pm, "dyn", None) is not None and (pm.dyn.C != C or pm.dyn.S_pad != S_pad):
+            self.log_dram("before teardown (old S_pad %d)" % pm.dyn.S_pad)
+            pm.teardown_dyn()
+            pm.dyn_out = None  # the last chunk's output streams (fp32 [32,1,4,5120] tiles: ~320 MiB/bank per 4096 tokens/row) of the captured trace
+            pm.head_out = []
+            gc.collect()
+            self.log_dram("after teardown")
+            self.live_tensor_report("after teardown")
         if enable_trace:
             pm.run_traced_chunks(tp, C, hashes=hashes)
+            self.log_dram("after run_traced_chunks")
             self.log("  prefill_dyn: chunks done")
         else:
             pm.setup_dyn(C, S_pad)
@@ -435,6 +536,7 @@ class Model:
                 self._post_chunk(s0, C)
         ttnn.synchronize_device(self.md)
         self._export_index_keys(lens)
+        self.log_dram("prefill end")
         self.timing = dict(pm.timing, total=time.perf_counter() - t_start)
         first = torch.tensor([self._res[b][0] for b in range(B)], dtype=torch.long)
         logits = torch.stack([self._res[b][1] for b in range(B)]) if want_logits else None

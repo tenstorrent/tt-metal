@@ -33,7 +33,12 @@ def create_tt_model(
 ):
     """-> (model_args, model, tt_kv_cache, state_dict). ``tt_kv_cache`` is the ``PagedKVPool`` (the one pool prefill writes and decode reads);
     weights are read layer by layer from the checkpoint (no ``state_dict`` object): ``state_dict`` is None."""
+    import os
+
     from models.demos.blackhole.deepseek_v41_flash.tt.dsv41_model import Model
+
+    if os.environ.get("DSV41_KV_DTYPE", "bf16") == "fp8":  # fp8_e4m3 KV pool (halves the pool: batch 128 at 64k)
+        kv_dtype = ttnn.fp8_e4m3
 
     args = DSV41ModelArgs(mesh_device, max_batch_size, max_seq_len, layer_ids, paged_attention_config)
     if paged_attention_config is not None:
