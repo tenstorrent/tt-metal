@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-// Include inside namespace sfpi. Typed callers retain the domain-action proof.
+// Include inside namespace sfpi.
 
 template <int CODE>
 inline vFloat target_raw_terminal_value(vFloat computed, float constant = 0.0f) {
@@ -37,8 +37,8 @@ inline void nan_class_terminal(vUInt raw_u16, vFloat& result) {
     v_endif;
 }
 
-// Canonical ordered raw-action records. Product callers retain their selected
-// early exits/interleaving and opt into the existing negative-tail narrowing.
+// Ordered actions on raw input classes. Callers choose their own early exits
+// and interleaving, and opt into the negative-tail narrowing.
 template <typename Config, uint32_t INDEX, bool NegativeTailFold = false, typename Float>
 inline void apply_raw_domain_record(Float x_raw, Float& result) {
     constexpr auto record = Config::kDomainActions[INDEX];
@@ -91,9 +91,9 @@ inline void apply_raw_domain_records(vFloat x_raw, vFloat& result) {
 
 template <int Code>
 inline void signed_nonfinite_split_terminal(vUInt raw_u16, vFloat& result, float constant) {
-    // Share the physical exponent-FF test between the positive constant
-    // quotient and signed-ingress negative-NaN policy. Negative infinity is
-    // left to the numeric body; a nonzero negative mantissa is the NaN arm.
+    // One exponent-FF test serves the positive constant and the negative-NaN
+    // class. Negative infinity is left to the numeric body; a nonzero negative
+    // mantissa is a NaN.
     vUInt exponent = raw_u16 & vUInt(0x00ffu);
     v_if(exponent == vUInt(0x00ffu)) {
         vUInt sign = raw_u16 & vUInt(0x8000u);

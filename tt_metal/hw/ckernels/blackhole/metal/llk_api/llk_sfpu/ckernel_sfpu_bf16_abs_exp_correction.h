@@ -35,7 +35,7 @@ inline void init_abs_exp_correction() {
 template <typename Config, int Iterations = 32>
 inline void calculate_abs_exp_correction() {
     static_assert(Iterations == 32, "parked correction coefficients require the complete tile");
-    // Residual composite kernels retain their existing per-call initializer.
+    // Residual composite kernels keep their per-call initializer.
     if constexpr (!Config::kSquareDecay) {
         init_abs_exp_correction<Config>();
     }

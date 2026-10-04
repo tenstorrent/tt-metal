@@ -4,8 +4,8 @@
 
 #pragma once
 
-// Exact selected single-row residual replay. Callers own numerical init,
-// replay recording, row count, address modes and counter restoration.
+// Single-row residual replay. Callers own numerical init, replay recording,
+// row count, address modes and counter restoration.
 namespace sfpi {
 constexpr float correction_exp_scale(int degree) {
     float scale = 1.0f;
@@ -15,8 +15,8 @@ constexpr float correction_exp_scale(int degree) {
     return scale;
 }
 
-// Ordinary exponent leaf shared with all original exp_hw_eval compositions.
-// MULT may be an immediate or the selected programmable/DST value.
+// Exponent leaf shared by the exp_hw_eval compositions. MULT may be an
+// immediate, a programmable constant or a DST value.
 template <
     uint32_t DEG,
     bool SquareStore,
@@ -29,7 +29,7 @@ template <
 inline vFloat correction_exp_leaf(vFloat x, Mult MULT, float bias, const float* c) {
     vFloat xlog2;
     if constexpr (SplitScaleBias) {
-        // Explicit MAD(product, 1, bias) prevents contraction across the selected MUL.
+        // An explicit MAD(product, 1, bias) keeps the compiler from contracting the MUL into it.
         vFloat multiplier = MULT;
         xlog2 = __builtin_rvtt_sfpmul(x.get(), multiplier.get(), SFPMAD_MOD1_OFFSET_NONE);
         vFloat one = 1.0f;
@@ -100,7 +100,7 @@ inline vFloat correction_exp_leaf(vFloat x, Mult MULT, float bias, const float* 
     // Recombine 2^i * 2^f. `ep` is the biased exponent of the integer part
     // (== i + 127). setexp only REPLACES p's exponent field, keeping its
     // mantissa — which is correct only when p in [1,2) (exponent field 127).
-    // The fitter's natural [0,1) fit makes g(0)=c[0] dip just below 1.0 for some
+    // A polynomial fitted on [0,1) can have g(0)=c[0] just below 1.0 for some
     // degrees (e.g. odd-degree exp2: c0=0.99992), putting p in [0.5,1) at f~=0
     // (exponent field 126). Replacing that with ep then over-scales by 2x. Add
     // p's own exponent deviation from the bias so the integer part composes with
@@ -284,15 +284,13 @@ inline void abs_exp_residual_core() {
         TTI_SFPSWAP(0, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG0,
                     1);  // coordinate=min(|x|, bound)
     } else {
-        // The same typed form may own the complete exponent range without a
-        // declared coordinate terminal.  Preserve the two producer/consumer
-        // issue slots; substituting a clamp here would change its finite tail.
+        // Without a coordinate bound the two slots stay as NOPs, keeping the
+        // producer/consumer spacing; a clamp here would change the finite tail.
         TTI_SFPNOP;
         TTI_SFPNOP;
     }
-    // Match the compiler body exactly: its immediate exponent bias lowers to
-    // separate MUL then ADDI, not a fused MAD.  Fusing these two source
-    // operations changes one BF16 output lane after final rounding.
+    // A separate MUL then ADDI, not a fused MAD: fusing the exponent bias into
+    // the multiply changes one BF16 output after final rounding.
     TTI_SFPMUL(
         ckernel::p_sfpu::LREG0,
         ckernel::p_sfpu::LREG12,
@@ -316,9 +314,9 @@ inline void abs_exp_residual_core() {
         0);  // raw BH DST word, fills the exponent Horner hazard slot
     TTI_SFPMAD(ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG1, 0);
     TTI_SFPNOP;  // replay bypasses the MAD -> SETEXP scoreboard stall
-    // The fitted exponent P2 is certified in [1,2), so the ordinary bare
-    // SETEXP reconstruction is exact and leaves three replay slots for the
-    // shared target-class finalizer below.
+    // The exponent polynomial P2 stays in [1,2) over its whole input range, so
+    // a bare SETEXP reconstruction is exact and leaves three replay slots for
+    // the class finalizer below.
     TTI_SFPSETEXP(
         0,
         ckernel::p_sfpu::LREG1,
