@@ -488,6 +488,15 @@ class TtPreTransformerAttention(LightweightModule):
                 device=device,
             )
 
+        # High-precision matmul/SDPA accumulation (the pre-transformer is a
+        # near-identity residual, so matmul error shows up directly in the output).
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
     def _rotate_half(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """rotate_half: [-x2, x1] over the last (head_dim) axis."""
         hd = int(x.shape[-1])
@@ -534,9 +543,9 @@ class TtPreTransformerAttention(LightweightModule):
         seq_len = x.shape[1]
 
         # Project Q, K, V
-        q = ttnn.linear(x, self.wq, bias=self.q_bias)
-        k = ttnn.linear(x, self.wk, bias=self.k_bias)
-        v = ttnn.linear(x, self.wv, bias=self.v_bias)
+        q = ttnn.linear(x, self.wq, bias=self.q_bias, compute_kernel_config=self.compute_kernel_config)
+        k = ttnn.linear(x, self.wk, bias=self.k_bias, compute_kernel_config=self.compute_kernel_config)
+        v = ttnn.linear(x, self.wv, bias=self.v_bias, compute_kernel_config=self.compute_kernel_config)
 
         # Reshape to [batch, seq_len, num_heads, head_dim]
         q = ttnn.reshape(q, [batch_size, seq_len, self.num_heads, self.head_dim])
@@ -552,23 +561,25 @@ class TtPreTransformerAttention(LightweightModule):
         q = self._apply_rope(q, cos, sin)
         k = self._apply_rope(k, cos, sin)
 
-        # Scaled dot-product attention with a causal sliding-window mask
-        # (reference uses create_sliding_window_causal_mask, window = sliding_window).
+        # Attention with a causal sliding-window mask (reference uses
+        # create_sliding_window_causal_mask, window = sliding_window). Done as an
+        # explicit matmul+softmax: ttnn.transformer.scaled_dot_product_attention
+        # mishandles this additive mask here (parity ~7 dB vs ~37 dB manual).
         attn_mask = self._sliding_window_mask(seq_len)
-        attn_output = ttnn.transformer.scaled_dot_product_attention(
-            q,
-            k,
-            v,
-            attn_mask=attn_mask,
-            is_causal=False,
-        )
+        scale = self.head_dim**-0.5
+        k_t = ttnn.permute(k, [0, 1, 3, 2])
+        scores = ttnn.matmul(q, k_t, compute_kernel_config=self.compute_kernel_config)
+        scores = ttnn.multiply(scores, scale)
+        scores = ttnn.add(scores, attn_mask)
+        attn_weights = ttnn.softmax(scores, dim=-1)
+        attn_output = ttnn.matmul(attn_weights, v, compute_kernel_config=self.compute_kernel_config)
 
         # Transpose and reshape: [batch, num_heads, seq_len, head_dim] -> [batch, seq_len, qkv_dim]
         attn_output = ttnn.permute(attn_output, [0, 2, 1, 3])
         attn_output = ttnn.reshape(attn_output, [batch_size, seq_len, self.qkv_dim])
 
         # Output projection: qkv_dim (1024) -> hidden_size (512)
-        output = ttnn.linear(attn_output, self.wo, bias=self.o_bias)
+        output = ttnn.linear(attn_output, self.wo, bias=self.o_bias, compute_kernel_config=self.compute_kernel_config)
 
         return output
 
@@ -611,14 +622,20 @@ class TtPreTransformerMLP(LightweightModule):
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """SwiGLU MLP forward."""
-        gate = ttnn.linear(x, self.w_gate)
+        gate = ttnn.linear(x, self.w_gate, compute_kernel_config=self.compute_kernel_config)
         gate = ttnn.silu(gate)
-        up = ttnn.linear(x, self.w_up)
+        up = ttnn.linear(x, self.w_up, compute_kernel_config=self.compute_kernel_config)
         hidden = ttnn.mul(gate, up)
-        output = ttnn.linear(hidden, self.w_down)
+        output = ttnn.linear(hidden, self.w_down, compute_kernel_config=self.compute_kernel_config)
         return output
 
 
@@ -818,6 +835,13 @@ class TtPreTransformer(LightweightModule):
                 device=device,
             )
 
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
     def forward(self, x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
         """
         Forward pass through pre-transformer.
@@ -830,7 +854,7 @@ class TtPreTransformer(LightweightModule):
             Output [batch, seq_len, decoder_dim] (3D)
         """
         # Input projection (3D → 3D)
-        x = ttnn.linear(x, self.input_proj, bias=self.input_proj_bias)
+        x = ttnn.linear(x, self.input_proj, bias=self.input_proj_bias, compute_kernel_config=self.compute_kernel_config)
 
         # Process through layers (each layer: 3D → 3D)
         for layer in self.layers:
@@ -841,11 +865,18 @@ class TtPreTransformer(LightweightModule):
         seq_len = x.shape[1]
         hidden = self.config.pre_transformer_hidden_size
         x_4d = ttnn.reshape(x, [batch_size, 1, seq_len, hidden])
-        x_4d = ttnn.rms_norm(x_4d, epsilon=self.config.rms_norm_eps, weight=self.norm_weight)
+        x_4d = ttnn.rms_norm(
+            x_4d,
+            epsilon=self.config.rms_norm_eps,
+            weight=self.norm_weight,
+            compute_kernel_config=self.compute_kernel_config,
+        )
         x = ttnn.reshape(x_4d, [batch_size, seq_len, hidden])
 
         # Output projection (3D → 3D)
-        x = ttnn.linear(x, self.output_proj, bias=self.output_proj_bias)
+        x = ttnn.linear(
+            x, self.output_proj, bias=self.output_proj_bias, compute_kernel_config=self.compute_kernel_config
+        )
 
         return x
 
