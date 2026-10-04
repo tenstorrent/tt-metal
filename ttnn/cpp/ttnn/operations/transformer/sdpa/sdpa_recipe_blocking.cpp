@@ -71,9 +71,10 @@ BlockCostModel block_cost_model(const PrecisionPolicy& policy) {
         case Recipe::D: return {2.436, 3.14, 11.75};
         case Recipe::E:
             switch (policy.selection.kv_storage) {
-                case KVStorage::BF16: return {0.864, 2.72, 5.97};
-                case KVStorage::BFP8: return {0.802, 3.83, 4.06};
-                case KVStorage::BFP4: return {0.811, 3.48, 3.50};
+                // Fused LOW_PRECISION chunks (fitted 2026-10-04, dense 10 x 8192^2 D128 on one Blackhole chip).
+                case KVStorage::BF16: return {0.722, 2.83, 6.09};
+                case KVStorage::BFP8: return {0.648, 3.57, 3.86};
+                case KVStorage::BFP4: return {0.648, 3.62, 3.41};
             }
     }
     TT_THROW("Unknown SDPA precision recipe");
@@ -88,6 +89,15 @@ struct RecipeBuild {
 
 // Compute slowdown not in the fitted model: narrower matmul subblocks.
 double subblock_penalty(uint32_t width) { return width >= 4 ? 1.0 : width == 2 ? 1.10 : 1.30; }
+// LOW_PRECISION's fused chunks pay their per-subblock pack-thread work (exp, P and row-sum packs) per QK subblock:
+// a width-2 QK subblock is 1.18x slower overall (1 core, BFP8: Q192/K960 2.55 vs K768 2.96, K1024 3.03 TF), and
+// width 1 runs the unfused kernel.
+double qk_subblock_penalty(const PrecisionPolicy& policy, uint32_t width) {
+    if (policy.selection.recipe == Recipe::E) {
+        return width >= 4 ? 1.0 : width == 2 ? 1.36 : 1.60;
+    }
+    return subblock_penalty(width);
+}
 
 double block_cost(
     const PrecisionPolicy& policy,
@@ -100,8 +110,8 @@ double block_cost(
     const double d = d_tiles / 4.0;
     // The q*k*d term is the QK and PV matmuls in equal parts; each pays its own subblock-width penalty
     // (a one-tile K chunk narrows QK only, so it does not slow PV or the softmax state work).
-    const double matmul = 0.5 * (subblock_penalty(build.qk_width) + subblock_penalty(build.pv_width));
-    // Dense/joint paired recipes (B, E) compute an odd Q chunk with one padding row (recipe_compute_q_tiles).
+    const double matmul = 0.5 * (qk_subblock_penalty(policy, build.qk_width) + subblock_penalty(build.pv_width));
+    // Dense/joint STANDARD computes an odd Q chunk with one padding row (recipe_compute_q_tiles).
     const uint32_t rows = dense ? recipe_compute_q_tiles(policy, q_tiles) : q_tiles;
     const double compute = m.c * (static_cast<double>(rows) * k_tiles * d * matmul + m.ck * rows * d);
     return std::max(compute, m.bw * k_tiles * d);
@@ -378,7 +388,9 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
     // A chunk longer than the sequence only adds padding; the default sizes stay in range.
     const bool dense = p.op == RecipeOp::Dense || p.op == RecipeOp::Joint;
     const uint32_t q_cap = std::min(kRecipeSearchMaxQTiles, std::max(div_up(p.q_rows + p.joint_q_rows, kTile), 10u));
-    const uint32_t k_cap = kRecipeSearchMaxKTiles;  // padded K blocks are costed, so short K picks short chunks
+    // Padded K blocks are costed, so short K picks short chunks. Fused LOW_PRECISION amortizes its per-chunk
+    // work (saturation check, fold, PV pieces) over longer K chunks: up to K1024 when L1 allows.
+    const uint32_t k_cap = p.policy.selection.recipe == Recipe::E ? 2 * kRecipeSearchMaxKTiles : kRecipeSearchMaxKTiles;
     const uint32_t q_floor = std::min(kRecipeSearchMinQTiles, div_up(p.q_rows + p.joint_q_rows, kTile));
     const uint32_t k_floor = std::min(kRecipeSearchMinKTiles, div_up(p.k_rows + p.joint_k_rows, kTile));
     const auto q_range = tile_range(p.fixed_q_tiles, q_floor, q_cap);
@@ -391,7 +403,7 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
             if (!recipe_geometry_supported(p.op, p.policy, qt, kt, p.d_tiles)) {
                 continue;
             }
-            // Ring / exp ring round a paired recipe's odd Q chunk up to the next even one (sdpa.cpp); the even
+            // Ring / exp ring round STANDARD's odd Q chunk up to the next even one (sdpa.cpp); the even
             // candidate is costed on its own.
             if (!dense && qt % 2 != 0 && recipe_compute_q_tiles(p.policy, qt) != qt) {
                 continue;
