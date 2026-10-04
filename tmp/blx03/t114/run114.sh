@@ -12,13 +12,12 @@ source $BASE/python_env/bin/activate
 export TT_METAL_HOME=$B PYTHONPATH=$S:$B/ttnn:$B/tools HF_HUB_OFFLINE=1
 export SWEEP_OUT_DIR=$V/results SWEEP_MAX_SECONDS=${SWEEP_MAX_SECONDS:-720}
 cd $S
-echo "[t114] layer=$L build=$(git -C $B rev-parse --short HEAD) src=$(cat $S/REV) clock: $(python /home/smarton/tray-stress/hostfmax.py 1150 | tail -1)" | tee $LOG
+echo "[t114] layer=$L build=$(git -C $B rev-parse --short HEAD) src=$(cat $S/REV)" | tee $LOG
 test -f $B/ttnn/ttnn/_ttnn.so || { echo "[t114] no build at $B" | tee -a $LOG; exit 4; }
 TT_METAL_CACHE=/var/tmp/fasth3/cache/tt-metal-cache \
   timeout 1100 python -m pytest -c $S/pytest.ini --rootdir=$S -sv --timeout=1060 \
   "models/tt_dit/tests/models/ltx/bruteforce_conv3d_sweep_ltx.py::test_bruteforce_sweep_ltx25_544p_145f_halo" \
   -k "$K" 2>&1 | tee -a $LOG
 rc=${PIPESTATUS[0]}
-python /home/smarton/tray-stress/hostfmax.py 0 >/dev/null 2>&1
 echo "T114_EXIT=$rc" | tee -a $LOG
 exit $rc
