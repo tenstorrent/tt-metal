@@ -45,8 +45,8 @@ class SpeechTokenizerConfig:
     pre_transformer_num_layers: int = 8
     pre_transformer_num_heads: int = 16
     pre_transformer_head_dim: int = 64  # qkv_dim / num_heads = 1024 / 16 = 64
-    rms_norm_eps: float = 1e-5
-    rope_theta: float = 10000.0
+    rms_norm_eps: float = 1e-6
+    rope_theta: float = 1000000.0
     sliding_window: int = 72
 
     # Decoder config
@@ -65,6 +65,25 @@ class SpeechTokenizerConfig:
 # =============================================================================
 # PyTorch helper functions for convolutional decoder
 # =============================================================================
+
+
+def _causal_left_pad_nlc(x_nlc: ttnn.Tensor, pad: int, device) -> ttnn.Tensor:
+    """Left-pad an NLC tensor [batch, length, channels] with ``pad`` zero frames.
+
+    Implements causal padding: all padding on the left (past) side, matching the
+    reference decoder's ``F.pad(x, (pad, 0))``. Used with conv padding=0.
+    """
+    if pad <= 0:
+        return x_nlc
+    b, l, c = int(x_nlc.shape[0]), int(x_nlc.shape[1]), int(x_nlc.shape[2])
+    zeros = ttnn.zeros(
+        [b, pad, c],
+        dtype=x_nlc.dtype,
+        layout=x_nlc.layout,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    return ttnn.concat([zeros, x_nlc], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
 def convnext_block(
@@ -88,19 +107,21 @@ def convnext_block(
     residual = x
     b, _, l, c = int(x.shape[0]), int(x.shape[1]), int(x.shape[2]), int(x.shape[3])
 
-    # Depthwise conv: NHWC -> NLC -> NHWC
+    # Depthwise conv: NHWC -> NLC -> NHWC, causal (left-pad kernel-1, padding=0)
+    kdw = int(dwconv_weight.shape[-1])
     x_nlc = ttnn.reshape(x, (b, l, c), memory_config=mc)
+    x_nlc = _causal_left_pad_nlc(x_nlc, kdw - 1, device)
     dw_conv = TTNNConv1d(
         device=device,
         in_channels=c,
         out_channels=c,
-        kernel_size=int(dwconv_weight.shape[-1]),
-        padding=int(dwconv_weight.shape[-1]) // 2,
+        kernel_size=kdw,
+        padding=0,
         groups=c,
         weight=dwconv_weight,
         bias_tensor=dwconv_bias,
     )
-    x_nlc, out_len = dw_conv(x_nlc, l)
+    x_nlc, out_len = dw_conv(x_nlc, l + (kdw - 1))
     x = ttnn.reshape(x_nlc, (b, 1, out_len, c), memory_config=mc)
 
     # LayerNorm + pointwise linears in NHWC
@@ -199,25 +220,34 @@ def conv_decoder_block(
         )
         x = ttnn_snake_activation(x, alpha_tt, beta_tt)
 
-    # Transposed conv for upsampling
+    # Transposed conv for upsampling.
+    # Official qwen_tts uses NO padding in conv_transpose1d, then trims the right
+    # side by (kernel - stride) to keep the op causal.
     if "block.1.conv.weight" in block_weights:
         up_w = block_weights["block.1.conv.weight"]
         up_b = block_weights.get("block.1.conv.bias")
+        k_up = int(up_w.shape[-1])
         up_conv = TTNNConvTranspose1d(
             device=device,
             in_channels=int(up_w.shape[0]),
             out_channels=int(up_w.shape[1]),
-            kernel_size=int(up_w.shape[-1]),
+            kernel_size=k_up,
             stride=upsample_rate,
-            padding=(int(up_w.shape[-1]) - upsample_rate) // 2,
+            padding=0,
             weight=up_w,
             bias_tensor=up_b,
         )
         x, l = up_conv(x, l)
-        c = int(x.shape[-1])
+        c = int(up_w.shape[1])
+        x = ttnn.reshape(x, (b, 1, l, c), memory_config=mc)
+        right_pad = k_up - upsample_rate
+        if right_pad > 0:
+            x = ttnn.slice(x, [0, 0, 0, 0], [b, 1, l - right_pad, c], memory_config=mc)
+            l = l - right_pad
 
-    # Residual layers
-    for i in range(2, 2 + num_residual_layers):
+    # Residual layers (dilations [1, 3, 9], causal dilated convs)
+    dilations = [1, 3, 9]
+    for i, dilation in zip(range(2, 2 + num_residual_layers), dilations):
         residual = x
 
         # First activation + conv
@@ -241,17 +271,21 @@ def conv_decoder_block(
         conv1_weight = block_weights.get(f"block.{i}.conv1.conv.weight")
         conv1_bias = block_weights.get(f"block.{i}.conv1.conv.bias")
         if conv1_weight is not None:
+            k1 = int(conv1_weight.shape[-1])
+            eff_kernel = (k1 - 1) * dilation + 1
             x_nlc = ttnn.reshape(x, (b, l, c), memory_config=mc)
+            x_nlc = _causal_left_pad_nlc(x_nlc, eff_kernel - 1, device)
             conv1 = TTNNConv1d(
                 device=device,
                 in_channels=int(conv1_weight.shape[1]),
                 out_channels=int(conv1_weight.shape[0]),
-                kernel_size=int(conv1_weight.shape[-1]),
-                padding=int(conv1_weight.shape[-1]) // 2,
+                kernel_size=k1,
+                padding=0,
+                dilation=dilation,
                 weight=conv1_weight,
                 bias_tensor=conv1_bias,
             )
-            x_nlc, l = conv1(x_nlc, l)
+            x_nlc, l = conv1(x_nlc, l + (eff_kernel - 1))
             c = int(conv1_weight.shape[0])
             x = ttnn.reshape(x_nlc, (b, 1, l, c), memory_config=mc)
 
@@ -385,6 +419,37 @@ class TtPreTransformerAttention(LightweightModule):
                 device=device,
             )
 
+    def _rotate_half(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """rotate_half: [-x2, x1] over the last (head_dim) axis."""
+        hd = int(x.shape[-1])
+        half = hd // 2
+        x1 = ttnn.slice(x, [0, 0, 0, 0], [x.shape[0], x.shape[1], x.shape[2], half])
+        x2 = ttnn.slice(x, [0, 0, 0, half], [x.shape[0], x.shape[1], x.shape[2], hd])
+        return ttnn.concat([ttnn.neg(x2), x1], dim=-1)
+
+    def _apply_rope(self, x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
+        """q_embed = q*cos + rotate_half(q)*sin. cos/sin are [1, 1, seq, head_dim]."""
+        return ttnn.add(ttnn.multiply(x, cos), ttnn.multiply(self._rotate_half(x), sin))
+
+    def _sliding_window_mask(self, seq_len: int) -> ttnn.Tensor:
+        """Causal sliding-window additive mask [1, 1, seq, seq].
+
+        query i attends to key j iff (j <= i) and (i - j < sliding_window).
+        """
+        q_pos = torch.arange(seq_len)[:, None]
+        k_pos = torch.arange(seq_len)[None, :]
+        allowed = k_pos <= q_pos
+        if self.sliding_window is not None:
+            allowed = allowed & ((q_pos - k_pos) < self.sliding_window)
+        mask = torch.where(allowed, 0.0, -1e9).to(torch.float32).view(1, 1, seq_len, seq_len)
+        return ttnn.from_torch(
+            mask,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     def forward(self, x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
         """
         Forward pass for pre-transformer attention.
@@ -414,16 +479,19 @@ class TtPreTransformerAttention(LightweightModule):
         k = ttnn.permute(k, [0, 2, 1, 3])
         v = ttnn.permute(v, [0, 2, 1, 3])
 
-        # Apply RoPE
-        # Note: Simplified RoPE application for pre-transformer
-        # The pre-transformer uses standard RoPE without MROPE
+        # Apply standard 1D RoPE to q and k (matches reference apply_rotary_pos_emb).
+        q = self._apply_rope(q, cos, sin)
+        k = self._apply_rope(k, cos, sin)
 
-        # Scaled dot-product attention with causal mask
+        # Scaled dot-product attention with a causal sliding-window mask
+        # (reference uses create_sliding_window_causal_mask, window = sliding_window).
+        attn_mask = self._sliding_window_mask(seq_len)
         attn_output = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
             v,
-            is_causal=True,
+            attn_mask=attn_mask,
+            is_causal=False,
         )
 
         # Transpose and reshape: [batch, num_heads, seq_len, head_dim] -> [batch, seq_len, qkv_dim]
@@ -528,6 +596,24 @@ class TtPreTransformerLayer(LightweightModule):
         self.input_layernorm_weight = _load_norm_t(prefix + "input_layernorm.weight")
         self.post_attention_layernorm_weight = _load_norm_t(prefix + "post_attention_layernorm.weight")
 
+        # Per-channel LayerScale applied to the attention / MLP branch outputs
+        # before the residual add (matches reference pre_transformer_layer).
+        def _load_layer_scale(base):
+            for key in (prefix + base + ".scale", prefix + base):
+                if key in state_dict:
+                    w = state_dict[key].reshape(1, 1, -1).to(_torch.bfloat16)
+                    return ttnn.from_torch(
+                        w,
+                        dtype=dtype,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+            return None
+
+        self.attn_layer_scale = _load_layer_scale("self_attn_layer_scale")
+        self.mlp_layer_scale = _load_layer_scale("mlp_layer_scale")
+
         # Attention and MLP
         self.attention = TtPreTransformerAttention(device, state_dict, layer_num, config, dtype)
         self.mlp = TtPreTransformerMLP(device, state_dict, layer_num, config, dtype)
@@ -564,6 +650,8 @@ class TtPreTransformerLayer(LightweightModule):
 
         # Self-attention (3D in, 3D out)
         attn_out = self.attention(x_normed_3d, cos, sin)
+        if self.attn_layer_scale is not None:
+            attn_out = ttnn.mul(attn_out, self.attn_layer_scale)
 
         # Residual connection (3D)
         x = ttnn.add(attn_out, residual)
@@ -581,6 +669,8 @@ class TtPreTransformerLayer(LightweightModule):
 
         # MLP (3D in, 3D out)
         mlp_out = self.mlp(x_normed_3d)
+        if self.mlp_layer_scale is not None:
+            mlp_out = ttnn.mul(mlp_out, self.mlp_layer_scale)
 
         # Residual connection (3D)
         x = ttnn.add(mlp_out, residual)
@@ -969,6 +1059,36 @@ class TtSpeechTokenizerDecoder(LightweightModule):
 
         return embeddings
 
+    def _apply_pre_conv(self, x_nlc: ttnn.Tensor, seq_len: int) -> ttnn.Tensor:
+        """Pre-conv (latent 512 -> 1024), run before the pre-transformer.
+
+        Input/output are NLC [batch, seq_len, channels]. Matches the reference
+        ``_decoder_pre_conv`` placement (embed -> pre_conv -> pre_transformer).
+        """
+        if self.pre_conv_weight is None:
+            return x_nlc
+        in_c = int(self.pre_conv_weight.shape[1])
+        out_c = int(self.pre_conv_weight.shape[0])
+        batch = int(x_nlc.shape[0])
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        # Codebook lookup / conv ops can hand back a 4D [1, 1, L, C] tensor; the
+        # conv1d op and the pre-transformer both expect 3D NLC [batch, L, C].
+        kpc = int(self.pre_conv_weight.shape[-1])
+        x_nlc = ttnn.reshape(x_nlc, (batch, seq_len, in_c), memory_config=mc)
+        x_nlc = _causal_left_pad_nlc(x_nlc, kpc - 1, self.device)
+        conv_pre = TTNNConv1d(
+            device=self.device,
+            in_channels=in_c,
+            out_channels=out_c,
+            kernel_size=kpc,
+            padding=0,
+            weight=self.pre_conv_weight,
+            bias_tensor=self.pre_conv_bias,
+        )
+        out, out_len = conv_pre(x_nlc, seq_len + (kpc - 1))
+        out = ttnn.reshape(out, (batch, out_len, out_c), memory_config=mc)
+        return out
+
     def _conv_decoder_forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         """
         Conv decoder forward pass in TTNN.
@@ -985,40 +1105,13 @@ class TtSpeechTokenizerDecoder(LightweightModule):
             int(hidden_states.shape[2]),
         )
 
-        # Project to expected dimension if needed
-        if self.pre_conv_weight is not None:
-            expected_in_channels = self.pre_conv_weight.shape[1]
-            if hidden_size != expected_in_channels:
-                raise RuntimeError(f"Expected hidden_size {expected_in_channels}, got {hidden_size}")
-
+        # pre_conv runs before the pre-transformer (see forward / _apply_pre_conv),
+        # matching the reference decoder, so the conv decoder starts at the upsampler.
         hidden_states_tt = ttnn.reshape(
             hidden_states,
             (batch_size, 1, seq_len, hidden_size),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
-        # Pre-conv
-        if self.pre_conv_weight is not None:
-            x_nlc = ttnn.reshape(
-                hidden_states_tt,
-                (batch_size, seq_len, hidden_size),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            conv_pre = TTNNConv1d(
-                device=self.device,
-                in_channels=int(self.pre_conv_weight.shape[1]),
-                out_channels=int(self.pre_conv_weight.shape[0]),
-                kernel_size=int(self.pre_conv_weight.shape[-1]),
-                padding=int(self.pre_conv_weight.shape[-1]) // 2,
-                weight=self.pre_conv_weight,
-                bias_tensor=self.pre_conv_bias,
-            )
-            x_nlc, out_len = conv_pre(x_nlc, seq_len)
-            hidden_states_tt = ttnn.reshape(
-                x_nlc,
-                (batch_size, 1, out_len, int(self.pre_conv_weight.shape[0])),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
 
         # Upsampler (ConvNeXt blocks)
         for i, ratio in enumerate(self.config.upsampling_ratios):
@@ -1068,21 +1161,24 @@ class TtSpeechTokenizerDecoder(LightweightModule):
         if "decoder.0.conv.weight" in self.decoder_weights:
             weight = self.decoder_weights["decoder.0.conv.weight"]
             bias = self.decoder_weights.get("decoder.0.conv.bias")
+            k0 = int(weight.shape[-1])
             x_nlc = ttnn.reshape(
                 hidden_states_tt,
                 (int(hidden_states_tt.shape[0]), int(hidden_states_tt.shape[2]), int(hidden_states_tt.shape[3])),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            l0 = int(x_nlc.shape[1])
+            x_nlc = _causal_left_pad_nlc(x_nlc, k0 - 1, self.device)
             conv0 = TTNNConv1d(
                 device=self.device,
                 in_channels=int(weight.shape[1]),
                 out_channels=int(weight.shape[0]),
-                kernel_size=int(weight.shape[-1]),
-                padding=int(weight.shape[-1]) // 2,
+                kernel_size=k0,
+                padding=0,
                 weight=weight,
                 bias_tensor=bias,
             )
-            x_nlc, out_len = conv0(x_nlc, int(x_nlc.shape[1]))
+            x_nlc, out_len = conv0(x_nlc, l0 + (k0 - 1))
             hidden_states_tt = ttnn.reshape(
                 x_nlc,
                 (int(x_nlc.shape[0]), 1, out_len, int(weight.shape[0])),
@@ -1118,29 +1214,32 @@ class TtSpeechTokenizerDecoder(LightweightModule):
         if "decoder.6.conv.weight" in self.decoder_weights:
             weight = self.decoder_weights["decoder.6.conv.weight"]
             bias = self.decoder_weights.get("decoder.6.conv.bias")
+            k6 = int(weight.shape[-1])
             x_nlc = ttnn.reshape(
                 hidden_states_tt,
                 (int(hidden_states_tt.shape[0]), int(hidden_states_tt.shape[2]), int(hidden_states_tt.shape[3])),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            l6 = int(x_nlc.shape[1])
+            x_nlc = _causal_left_pad_nlc(x_nlc, k6 - 1, self.device)
             conv6 = TTNNConv1d(
                 device=self.device,
                 in_channels=int(weight.shape[1]),
                 out_channels=int(weight.shape[0]),
-                kernel_size=int(weight.shape[-1]),
-                padding=int(weight.shape[-1]) // 2,
+                kernel_size=k6,
+                padding=0,
                 weight=weight,
                 bias_tensor=bias,
             )
-            x_nlc, out_len = conv6(x_nlc, int(x_nlc.shape[1]))
+            x_nlc, out_len = conv6(x_nlc, l6 + (k6 - 1))
             hidden_states_tt = ttnn.reshape(
                 x_nlc,
                 (int(x_nlc.shape[0]), 1, out_len, int(weight.shape[0])),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        # Final tanh for audio range [-1, 1]
-        audio_tt = ttnn.tanh(hidden_states_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Clamp to audio range [-1, 1] (reference uses clamp, not tanh).
+        audio_tt = ttnn.clamp(hidden_states_tt, -1.0, 1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return ttnn.permute(audio_tt, (0, 3, 2, 1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
@@ -1172,16 +1271,21 @@ class TtSpeechTokenizerDecoder(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # 1. Codebook lookup (TTNN)
+        # 1. Codebook lookup (TTNN) -> [batch, seq_len, 512]
         embeddings_ttnn = self._codebook_lookup(token_ids_ttnn)
 
-        # 2. Pre-transformer (TTNN)
+        # 2. Pre-conv (512 -> 1024), then pre-transformer (TTNN).
+        # Order must match the reference decoder: embed -> pre_conv -> pre_transformer
+        # -> backend. pre_transformer.input_proj expects the 1024-dim pre_conv output;
+        # feeding it the 512-dim embeddings directly is a shape error.
         if self.has_pre_transformer:
             # Compute RoPE frequencies
             cos_ttnn, sin_ttnn = self._compute_rope(seq_len)
 
+            pre_conv_out = self._apply_pre_conv(embeddings_ttnn, seq_len)
+
             # Forward through pre-transformer
-            hidden_states_ttnn = self.pre_transformer(embeddings_ttnn, cos_ttnn, sin_ttnn)
+            hidden_states_ttnn = self.pre_transformer(pre_conv_out, cos_ttnn, sin_ttnn)
         else:
             hidden_states_ttnn = embeddings_ttnn
 

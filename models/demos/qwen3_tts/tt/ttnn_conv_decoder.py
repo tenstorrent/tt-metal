@@ -32,6 +32,7 @@ class TTNNConv1d:
         stride: int = 1,
         padding: int = 0,
         groups: int = 1,
+        dilation: int = 1,
         bias: bool = False,
         weight: Optional[torch.Tensor] = None,
         bias_tensor: Optional[torch.Tensor] = None,
@@ -43,6 +44,7 @@ class TTNNConv1d:
         self.stride = stride
         self.padding = padding
         self.groups = groups
+        self.dilation = dilation
         self.has_bias = bias
 
         # Store weight on host (will be moved to device on first call)
@@ -89,6 +91,7 @@ class TTNNConv1d:
             kernel_size=self.kernel_size,
             stride=self.stride,
             padding=self.padding,
+            dilation=self.dilation,
             groups=self.groups,
             bias_tensor=self.bias_tt,
             conv_config=self.conv_config,
@@ -190,20 +193,25 @@ def ttnn_snake_activation(
     beta: ttnn.Tensor,
 ) -> ttnn.Tensor:
     """
-    Snake activation in TTNN: x + (1/beta) * sin^2(alpha * x)
+    TTNN SnakeBeta: x + (1/exp(beta)) * sin^2(exp(alpha) * x)
+
+    alpha and beta are stored as log values (matching the official qwen_tts
+    SnakeBeta), so they are exponentiated here before use.
 
     Args:
         x: Input tensor [batch, 1, seq_len, channels]
-        alpha: Per-channel alpha [1, 1, 1, channels]
-        beta: Per-channel beta [1, 1, 1, channels]
+        alpha: Per-channel log-alpha [1, 1, 1, channels]
+        beta: Per-channel log-beta [1, 1, 1, channels]
 
     Returns:
         Activated tensor
     """
-    ax = ttnn.mul(alpha, x)
+    alpha_e = ttnn.exp(alpha)
+    beta_e = ttnn.exp(beta)
+    ax = ttnn.mul(alpha_e, x)
     sin_ax = ttnn.sin(ax)
     sin_ax_sq = ttnn.mul(sin_ax, sin_ax)
-    inv_beta = ttnn.reciprocal(beta)
+    inv_beta = ttnn.reciprocal(beta_e)
     scaled = ttnn.mul(inv_beta, sin_ax_sq)
     output = ttnn.add(x, scaled)
     return output
