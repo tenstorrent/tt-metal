@@ -120,6 +120,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x) {
 bool bf16_dest_exp2();
 template <int ITERATIONS>
 void calculate_exp2_bf16();
+// Whether BF16 DEST runs the generated exp2 kernel as one call over the whole tile.
+inline constexpr bool exp2_bf16_whole_tile = true;
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_exp2() {
