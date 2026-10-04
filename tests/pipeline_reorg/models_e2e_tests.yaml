@@ -66,9 +66,12 @@
     wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /mnt/MLPerf/huggingface/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
     export HF_MODEL=/mnt/MLPerf/huggingface/meta-llama/Llama-3.1-8B-Instruct
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/meta-llama/Llama-3.1-8B-Instruct
-    for i in 1 2 3 4; do
-      echo "PROBE run $i"
-      pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 2 --max_seq_len 131072 || exit $?
+    for i in 1 2 3; do
+      rm -rf "$HOME/.cache/tt-metal-cache"
+      echo "PROBE fresh JIT cache $i"
+      pytest --timeout 900 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 2 --max_seq_len 131072 || exit $?
+      echo "PROBE warm JIT cache $i"
+      pytest --timeout 900 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 2 --max_seq_len 131072 || exit $?
     done
   model: llama3.1-8b-dp
   model_family: Llama
