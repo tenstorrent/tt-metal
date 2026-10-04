@@ -60,11 +60,11 @@
 - name: "(all prefill gate models) MoE gate accuracy"
   fabric_profile: torus_xy
   cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/models/blaze/deepseek-ai/DeepSeek-R1-0528/
-    export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
-    export TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure
-    export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
-    export DEEPSEEK_V3_TRACE_DIR=/mnt/models/deepseek-prefill-cache
+    export DEEPSEEK_V3_HF_MODEL=/mnt/weka/model-weights/llm/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1/
+    export DEEPSEEK_V3_CACHE=/mnt/weka/model-cache/scratch/deepseek-ai/CI
+    export TT_DS_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/deepseek-ai/DeepSeek-R1-0528-Cache-prefill_secure
+    export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/
+    export DEEPSEEK_V3_TRACE_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
