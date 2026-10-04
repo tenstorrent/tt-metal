@@ -85,8 +85,10 @@ inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfp
 bool bf16_dest_i1();
 template <int ITERATIONS>
 void calculate_i1_bf16();
+// Whether BF16 DEST runs the generated i1 kernel as one call over the whole tile.
+inline constexpr bool i1_bf16_whole_tile = true;
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = true>
 inline void calculate_i1() {
     if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
         if (bf16_dest_i1()) {

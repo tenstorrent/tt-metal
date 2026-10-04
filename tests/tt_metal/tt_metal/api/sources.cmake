@@ -36,6 +36,7 @@ set(UNIT_TESTS_API_SOURCES
     test_bit_utils.cpp
     test_math.cpp
     test_filesystem_utils.cpp
+    test_simulator_target_devices.cpp
     test_tt_memory.cpp
     test_graph_tracking.cpp
     test_cb_statistics.cpp
