@@ -50,6 +50,9 @@ COMPUTE_ONLY = os.environ.get("RING_SDPA_COMPUTE_ONLY", "0") == "1"
 RESULTS_DIR = Path(os.environ.get("RING_MLA_SWEEP_OUT", "generated/ring_mla_chunk_sweep"))
 
 CHUNKS = [1024, 2048, 3072, 4096, 5120]
+# RING_MLA_CHUNKS overrides the chunk list (comma-separated global chunk sizes).
+if os.environ.get("RING_MLA_CHUNKS"):
+    CHUNKS = [int(c) for c in os.environ["RING_MLA_CHUNKS"].split(",") if c.strip()]
 Q_CHUNKS = [32, 64, 128]
 K_CHUNKS = [128, 256, 320, 512, 640, 1024, 1280]
 
@@ -92,7 +95,15 @@ MESH_8X4 = pytest.mark.parametrize(
 # KV-prefix sweep per chunk size at its best q/k (from the chunk sweep). Target prefixes are rounded
 # to whole chunks and deduplicated.
 PREFIX_SWEEP_BEST_QK = {1024: (32, 128), 2048: (32, 512), 3072: (32, 640), 4096: (32, 512), 5120: (32, 640)}
+# RING_MLA_BEST_QK adds or replaces entries as "chunk:q:k" pairs, e.g. "1792:32:512".
+for _entry in os.environ.get("RING_MLA_BEST_QK", "").split(","):
+    if _entry.strip():
+        _c, _q, _k = (int(v) for v in _entry.split(":"))
+        PREFIX_SWEEP_BEST_QK[_c] = (_q, _k)
 PREFIX_TARGETS = [0, 2048, 4096, 8192, 16384, 32768, 51200, 65536, 102400, 131072, 196608, 262144]
+# RING_MLA_PREFIX_TARGETS overrides the list (comma-separated tokens) for long-ISL runs, e.g. out to 1M.
+if os.environ.get("RING_MLA_PREFIX_TARGETS"):
+    PREFIX_TARGETS = [int(t) for t in os.environ["RING_MLA_PREFIX_TARGETS"].split(",") if t.strip()]
 
 
 def _prefix_sweep_params():
