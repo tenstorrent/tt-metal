@@ -33,6 +33,7 @@ struct I1Bf16Config {
     static constexpr bool kOdd = true;
     static constexpr bool kOriginRepair = true;
     static constexpr bool kWormhole = false;
+    static constexpr bool kLateNegativeInf = true;
 
     // Typed domain actions.
     struct TtDomainActionRecord {

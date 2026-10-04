@@ -25,7 +25,16 @@ inline void calculate_exp_root() {
         sfpi::vFloat y = sfpi::exp_root_eval<Config>(x_raw);
         sfpi::apply_raw_domain_records<Config, 1>(x_raw, y);
         sfpi::vUInt raw_u16 = sfpi::dst_reg[d].template mode<sfpi::DataLayout::U16>();
-        sfpi::negative_nan_class_terminal<Config::kLateNegativeNanClass, true>(raw_u16, y);
+        if constexpr (Config::kLateNegativeInf) {
+            // -Inf and every -NaN share the class: sign and all-ones exponent, any mantissa.
+            sfpi::vUInt sign_and_exponent_delta = (raw_u16 ^ sfpi::vUInt(0x80ffu)) & sfpi::vUInt(0x80ffu);
+            v_if(sign_and_exponent_delta == 0u) {
+                y = sfpi::target_raw_terminal_value<Config::kLateNegativeNanClass>(y);
+            }
+            v_endif;
+        } else {
+            sfpi::negative_nan_class_terminal<Config::kLateNegativeNanClass, true>(raw_u16, y);
+        }
         y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
         sfpi::dst_reg[d] = y;
     }
