@@ -13,6 +13,8 @@ on:
         type: choice
         options:
           - all
+          - llama3.1-8b
+          - gemma-4-26b-a4b
           - llama3.3-70b
           - qwen3-32b
           - gemma-3-4b

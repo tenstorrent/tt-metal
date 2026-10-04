@@ -51,7 +51,7 @@ protected:
     void SetUp() override {
         MeshDispatchFixture::SetUp();
         if (arch_ != tt::ARCH::QUASAR) {
-            GTEST_SKIP() << "SemScope suite is Gen2 (Quasar) only: its specs use DataMovementGen2Config";
+            GTEST_SKIP() << "SemScope suite is Gen2 (Quasar) only: its DM specs set no config_1xx";
         }
         mesh_device_ = devices_[0];
         report_addr = mesh_device_->allocator()->get_base_allocator_addr(HalMemType::L1);
@@ -104,7 +104,7 @@ protected:
             .semaphore_bindings =
                 {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"}},
             .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times"}},
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         });
         std::vector<experimental::WorkUnitSpec> work_units{experimental::WorkUnitSpec{
             .name = "main",
@@ -121,9 +121,8 @@ protected:
                     {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"},
                       .accessor_name = "counter"}},
                 .runtime_arg_schema =
-                    {.runtime_arg_names =
-                         {"report_addr", "increment_times", "is_reporter", "barrier_idx", "wait_min_total"}},
-                .hw_config = experimental::DataMovementGen2Config{},
+                    {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "wait_min_total"}},
+                .hw_config = experimental::DataMovementHardwareConfig{},
             });
             work_units.push_back(experimental::WorkUnitSpec{
                 .name = "observer",
@@ -156,7 +155,6 @@ protected:
                     {{"report_addr", report_addr},
                      {"increment_times", 0u},
                      {"is_reporter", 0u},
-                     {"barrier_idx", 0u},
                      {"wait_min_total", 0u}}),
             });
         }
@@ -214,7 +212,7 @@ protected:
                  {.semaphore_spec_name = experimental::SemaphoreSpecName{"done_sem"}, .accessor_name = "done"}},
             .runtime_arg_schema =
                 {.runtime_arg_names = {"report_addr", "increment_times", "num_threads", "self_noc_x", "self_noc_y"}},
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         };
 
         experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = core};
@@ -299,7 +297,7 @@ protected:
                  {.semaphore_spec_name = experimental::SemaphoreSpecName{"external_sem"}, .accessor_name = "external"},
                  {.semaphore_spec_name = experimental::SemaphoreSpecName{"done_sem"}, .accessor_name = "done"}},
             .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times", "num_threads"}},
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         };
 
         experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = core};
@@ -365,7 +363,7 @@ protected:
             .semaphore_bindings =
                 {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"}},
             .runtime_arg_schema = {.runtime_arg_names = {"increment_times", "remote_noc_x", "remote_noc_y"}},
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         };
         experimental::KernelSpec receiver_spec{
             .unique_id = RECEIVER,
@@ -374,7 +372,7 @@ protected:
             .semaphore_bindings =
                 {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"}},
             .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "expected"}},
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         };
 
         experimental::WorkUnitSpec wu_recv{.name = "wu_recv", .kernels = {RECEIVER}, .target_nodes = core};
@@ -450,10 +448,6 @@ protected:
 
         std::vector<experimental::KernelSpec> kernel_specs;
         experimental::ProgramRunArgs params;
-        EXPECT_LE(kernels.size(), 2u) << "run_census supports at most 2 kernels (barrier slots)";
-        if (kernels.size() > 2u) {
-            return {kNoReport, 0u};
-        }
         std::vector<std::pair<experimental::NodeCoord, std::vector<experimental::KernelSpecName>>> by_node;
         for (size_t i = 0; i < kernels.size(); i++) {
             const auto& k = kernels[i];
@@ -466,9 +460,8 @@ protected:
                     {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"},
                       .accessor_name = "counter"}},
                 .runtime_arg_schema =
-                    {.runtime_arg_names =
-                         {"report_addr", "increment_times", "is_reporter", "barrier_idx", "wait_min_total"}},
-                .hw_config = experimental::DataMovementGen2Config{},
+                    {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "wait_min_total"}},
+                .hw_config = experimental::DataMovementHardwareConfig{},
             });
             bool placed = false;
             for (auto& [node, names] : by_node) {
@@ -488,8 +481,6 @@ protected:
                     {{"report_addr", report_addr},
                      {"increment_times", k.increments},
                      {"is_reporter", k.reporter ? 1u : 0u},
-                     // Distinct barrier slot per kernel (see the cap's safety note above).
-                     {"barrier_idx", static_cast<uint32_t>(i)},
                      {"wait_min_total", k.wait_min_total}}),
             });
         }
@@ -812,9 +803,8 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodeBothCached) {
             .num_threads = threads,
             .semaphore_bindings = {{.semaphore_spec_name = sem_name, .accessor_name = "counter"}},
             .runtime_arg_schema =
-                {.runtime_arg_names =
-                     {"report_addr", "increment_times", "is_reporter", "barrier_idx", "wait_min_total"}},
-            .hw_config = experimental::DataMovementGen2Config{},
+                {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "wait_min_total"}},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         };
     };
     experimental::WorkUnitSpec wu{.name = "wu", .kernels = {KA, KB}, .target_nodes = core};
@@ -834,7 +824,6 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodeBothCached) {
                 {{"report_addr", report_addr},
                  {"increment_times", concurrent_iterations},
                  {"is_reporter", 1u},
-                 {"barrier_idx", 0u},
                  {"wait_min_total", 0u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
@@ -844,7 +833,6 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodeBothCached) {
                 {{"report_addr", report_addr},
                  {"increment_times", concurrent_iterations},
                  {"is_reporter", 0u},
-                 {"barrier_idx", 1u},
                  {"wait_min_total", 0u}}),
         },
     };
@@ -907,8 +895,10 @@ TEST_F(SemScopeFixture, TestCachedSelfRestoresAcrossLaunches) {
     }
 }
 
-// Making sure cached seeding needs no barrier at all by having a user kernel
-// pick a barrier slot that the cached seeder never rendezvoused with.
+// Making sure cached seeding needs no barrier at all by running a user kernel that
+// rendezvouses on its own barrier, which the cached seeder never took part in.
+// Firmware hands the two kernels separate slots, so the user barrier cannot touch
+// whatever the seeder relies on.
 TEST_F(SemScopeFixture, TestCachedSeederImmuneToUserBarrierSlots) {
     if (num_dms_ < 5) {
         GTEST_SKIP() << "needs >= 5 user DMs for two multi-threaded kernels with different thread counts";
@@ -924,7 +914,7 @@ TEST_F(SemScopeFixture, TestCachedSeederImmuneToUserBarrierSlots) {
     experimental::SemaphoreSpec sem_a{.unique_id = SEM_A, .target_nodes = core};
     experimental::SemaphoreSpec sem_b{.unique_id = SEM_B, .target_nodes = experimental::NodeRange{core, second_node()}};
     const experimental::KernelSpecName KA{"cached_binder"};
-    const experimental::KernelSpecName KB{"slot1_user"};
+    const experimental::KernelSpecName KB{"barrier_user"};
     const uint32_t threads_a = 2;
     const uint32_t threads_b = num_dms_ - threads_a;
 
@@ -937,9 +927,8 @@ TEST_F(SemScopeFixture, TestCachedSeederImmuneToUserBarrierSlots) {
             .num_threads = threads,
             .semaphore_bindings = {{.semaphore_spec_name = sem_name, .accessor_name = "counter"}},
             .runtime_arg_schema =
-                {.runtime_arg_names =
-                     {"report_addr", "increment_times", "is_reporter", "barrier_idx", "wait_min_total"}},
-            .hw_config = experimental::DataMovementGen2Config{},
+                {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "wait_min_total"}},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         };
     };
     experimental::WorkUnitSpec wu{.name = "wu", .kernels = {KA, KB}, .target_nodes = core};
@@ -959,7 +948,6 @@ TEST_F(SemScopeFixture, TestCachedSeederImmuneToUserBarrierSlots) {
                 {{"report_addr", report_addr},
                  {"increment_times", concurrent_iterations},
                  {"is_reporter", 1u},
-                 {"barrier_idx", 0u},
                  {"wait_min_total", 0u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
@@ -969,7 +957,6 @@ TEST_F(SemScopeFixture, TestCachedSeederImmuneToUserBarrierSlots) {
                 {{"report_addr", report_addr},
                  {"increment_times", concurrent_iterations},
                  {"is_reporter", 0u},
-                 {"barrier_idx", 1u},  // a user array slot with no seeder rendezvous to collide with
                  {"wait_min_total", 0u}}),
         },
     };
@@ -1090,7 +1077,7 @@ TEST_F(SemScopeFixture, TestSameIdSemaphoresKeepDistinctScopes) {
             {{.semaphore_spec_name = experimental::SemaphoreSpecName{"sem_near"}, .accessor_name = "near_sem"},
              {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem_far"}, .accessor_name = "far_sem"}},
         .runtime_arg_schema = {.runtime_arg_names = {"report_addr"}},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
     experimental::WorkUnitSpec wu{.name = "wu", .kernels = {K}, .target_nodes = core};
     experimental::ProgramSpec spec{
@@ -1131,8 +1118,8 @@ TEST_F(SemScopeFixture, TestDoubleBindingRejected) {
             {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"},
              {.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter_again"}},
         .runtime_arg_schema =
-            {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "barrier_idx", "wait_min_total"}},
-        .hw_config = experimental::DataMovementGen2Config{},
+            {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "wait_min_total"}},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
     experimental::WorkUnitSpec wu{.name = "main", .kernels = {K}, .target_nodes = core};
     experimental::ProgramSpec spec{.name = "sem_double_bind", .kernels = {ks}, .semaphores = {sem}, .work_units = {wu}};

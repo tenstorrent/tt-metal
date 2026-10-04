@@ -746,16 +746,16 @@ void repoint_rta_data_into_command_stream(
         auto& data = kernel_rta_pairs[j];
         uint32_t* data_in_sequence = reinterpret_cast<uint32_t*>(base + offset) + count_word_offset;
         // rt_args_data points to args; data.second.get().data() points to count when watcher enabled.
-        if (data.first.get().rt_args_data == (data.second.get().data() + count_word_offset)) {
-            data.first.get().rt_args_data = data_in_sequence;
+        auto& rta = data.first.get();
+        if (rta.data() == (data.second.get().data() + count_word_offset)) {
+            rta = RuntimeArgsData{data_in_sequence, rta.size()};
         } else {
             TT_ASSERT(
-                data.first.get().rt_args_data ==
+                rta.data() ==
                 (reinterpret_cast<const uint32_t*>(std::get<0>(kernel_data_and_sizes[j])) + count_word_offset));
-            rta_updates.emplace_back(
-                data.first.get().rt_args_data, data_in_sequence, data.first.get().rt_args_count * sizeof(uint32_t));
+            rta_updates.emplace_back(rta.data(), data_in_sequence, rta.size() * sizeof(uint32_t));
         }
-        offset += (data.first.get().rt_args_count + count_word_offset) * sizeof(uint32_t);
+        offset += (rta.size() + count_word_offset) * sizeof(uint32_t);
     }
 }
 
@@ -1205,7 +1205,7 @@ BatchedTransfers assemble_runtime_args_commands(
                                     // Back up pointer to include count word for dispatch
                                     // Device expects [count | args...] layout for watcher bounds checking
                                     unique_rt_data_and_sizes.back().emplace_back(
-                                        kernel->runtime_args_data(core_coord).rt_args_data - count_word_offset,
+                                        kernel->runtime_args_data(core_coord).data() - count_word_offset,
                                         runtime_args_data.size() * sizeof(uint32_t),
                                         kg->rta_sizes[idx]);
                                 }
@@ -2314,16 +2314,17 @@ public:
                     // When watcher enabled, transfer.data contains [count | args...]
                     // rt_args_data points to args location (data + offset)
                     // rta_updates only copy args (count already written during initial copy)
-                    if (reinterpret_cast<uint8_t*>(transfer.rta_data->rt_args_data) ==
+                    if (reinterpret_cast<uint8_t*>(transfer.rta_data->data()) ==
                         (transfer.data.data() + count_word_byte_offset)) {
-                        // rt_args_data points to the original vector. Update it so later modifications directly modify
-                        // the command stream.
-                        transfer.rta_data->rt_args_data =
-                            reinterpret_cast<uint32_t*>(data_collection_location[j] + count_word_byte_offset);
+                        // View still aliases the original vector. Retarget it so later modifications write the
+                        // command stream.
+                        *transfer.rta_data = RuntimeArgsData{
+                            reinterpret_cast<uint32_t*>(data_collection_location[j] + count_word_byte_offset),
+                            transfer.rta_data->size()};
                     } else {
-                        // rt_args_data points into the command stream. Setup a copy from that other location.
+                        // View already points into a command stream. Copy from that location.
                         program_command_sequence.rta_updates.push_back(ProgramCommandSequence::RtaUpdate{
-                            transfer.rta_data->rt_args_data,
+                            transfer.rta_data->data(),
                             data_collection_location[j] + count_word_byte_offset,
                             static_cast<uint32_t>(transfer.data.size() - count_word_byte_offset)});
                     }
@@ -2738,14 +2739,16 @@ void assemble_device_commands(
                 local_cb_updates.push_back(
                     {circular_buffer.get(),
                      payload + UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index,
-                     buffer_index});
+                     buffer_index,
+                     circular_buffer->config_generation()});
             }
             for (const uint32_t buffer_index : circular_buffer->remote_buffer_indices()) {
                 remote_cb_updates.push_back(
                     {circular_buffer.get(),
                      payload + remote_offset_index +
                          (max_dfbs - 1 - buffer_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG,
-                     buffer_index});
+                     buffer_index,
+                     circular_buffer->config_generation()});
             }
         }
     }
@@ -2983,6 +2986,32 @@ void reserve_space_in_kernel_config_buffer(
         std::make_move_iterator(reservation.second.begin()), std::make_move_iterator(reservation.second.end() - 2));
 }
 
+void update_circular_buffer_configs(ProgramCommandSequence& cached_program_command_sequence) {
+    // Update CB configs through destinations cached when the command sequence was assembled. The values
+    // themselves stay owned by the CircularBuffer, whose page_size()/num_pages() carry the divisibility
+    // and 16-bit page-count checks.
+    for (auto& update : cached_program_command_sequence.local_cb_config_updates) {
+        CircularBufferImpl& circular_buffer = *update.circular_buffer;
+        if (update.last_config_generation == circular_buffer.config_generation()) {
+            continue;
+        }
+        update.dst[0] = circular_buffer.address();
+        update.dst[1] = circular_buffer.size();
+        update.dst[2] = circular_buffer.num_pages(update.buffer_index);
+        update.dst[3] = circular_buffer.page_size(update.buffer_index);
+        update.last_config_generation = circular_buffer.config_generation();
+    }
+    for (auto& update : cached_program_command_sequence.remote_cb_config_updates) {
+        CircularBufferImpl& circular_buffer = *update.circular_buffer;
+        if (update.last_config_generation == circular_buffer.config_generation()) {
+            continue;
+        }
+        update.dst[0] = circular_buffer.config_address();
+        update.dst[1] = circular_buffer.page_size(update.buffer_index);
+        update.last_config_generation = circular_buffer.config_generation();
+    }
+}
+
 void update_program_dispatch_commands(
     ProgramImpl& program,
     ProgramCommandSequence& cached_program_command_sequence,
@@ -3058,21 +3087,7 @@ void update_program_dispatch_commands(
             sizeof(uint32_t));
     }
 
-    // Update CB configs through destinations cached when the command sequence was assembled. The values
-    // themselves stay owned by the CircularBuffer, whose page_size()/num_pages() carry the divisibility
-    // and 16-bit page-count checks.
-    for (const auto& update : cached_program_command_sequence.local_cb_config_updates) {
-        CircularBufferImpl& circular_buffer = *update.circular_buffer;
-        update.dst[0] = circular_buffer.address();
-        update.dst[1] = circular_buffer.size();
-        update.dst[2] = circular_buffer.num_pages(update.buffer_index);
-        update.dst[3] = circular_buffer.page_size(update.buffer_index);
-    }
-    for (const auto& update : cached_program_command_sequence.remote_cb_config_updates) {
-        CircularBufferImpl& circular_buffer = *update.circular_buffer;
-        update.dst[0] = circular_buffer.config_address();
-        update.dst[1] = circular_buffer.page_size(update.buffer_index);
-    }
+    update_circular_buffer_configs(cached_program_command_sequence);
 
     {
         uint32_t dfb_i = 0;

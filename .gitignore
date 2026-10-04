@@ -32,6 +32,8 @@ cluster_descriptor.yaml
 .umd/
 /clean
 *coverage.txt
+*.profraw
+*.profdata
 blobgen_cmd_log
 
 __pycache__

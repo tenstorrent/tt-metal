@@ -60,6 +60,9 @@ ProgramDescriptor AddIntegersHangOperation::SingleCore::create_descriptor(
         }}},
     });
 
+    // Read by dump_semaphores, same as in add_2_integers_hang.
+    desc.semaphores.push_back(SemaphoreDescriptor{.id = 0, .core_ranges = core_set, .initial_value = 7});
+
     // Reuse the sibling add_2_integers_hang kernels. CB indices c_0/c_1/c_16 are chosen
     // above to match the constants those kernels expect.
     std::vector<uint32_t> reader_compile_time_args;

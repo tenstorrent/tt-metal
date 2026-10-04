@@ -13,8 +13,9 @@
 //   - CBDescriptor -> DataflowBufferSpec (one per CB index the NONE path allocates: c_0->in0/pre_lhs,
 //     c_1->in1/pre_rhs, c_2->out, c_3->post_lhs, c_4->post_rhs).
 //   - The decisive property is BORROWED vs NoC-READ, all-or-nothing. An operand is BORROWED only when the
-//     config is is_native_L1_sharding (output L1-sharded, a and b sharing that memory config, all sharded
-//     grids == the output grid, all buffers L1) AND every operand is itself L1-sharded with a shard spec.
+//     config is is_native_L1_sharding (output L1-sharded, a and b sharing that memory config, every sharded
+//     input carrying the output's shard spec, all buffers L1) AND every operand is itself L1-sharded with a
+//     shard spec.
 //     is_native_L1_sharding can hold with an L1-interleaved input (a single sharded operand satisfies it),
 //     and an interleaved operand has no shard spec to back a DFB, so any interleaved operand forces the
 //     whole op to the NoC path. When borrowed, all three are co-resident L1 shards on one grid with
@@ -37,9 +38,9 @@
 // Deferred to the descriptor (rejected by matches_metal_v2_slice, NOT handled here): row-major (non-tile)
 // layout, tensor-scalar (no input_tensor_b), where-op, quantization, and mixed lhs/rhs dtype. Mixed
 // sharded/interleaved layouts AND width sharding ARE handled: the borrow path is taken only when all
-// three operands are co-resident L1 shards on one matching grid; everything else (interleaved output OR
-// input, mixed strategies, divergent grids) takes the NoC path via sharding-aware TensorAccessors. A
-// borrowed operand is L1-sharded-tiled (height/block/width).
+// three operands are co-resident L1 shards with one memory config; everything else (interleaved output OR
+// input, or a different shard spec) takes the NoC path via sharding-aware TensorAccessors. A borrowed
+// operand is L1-sharded-tiled (height/block/width).
 
 #include "binary_ng_device_operation.hpp"
 #include "binary_ng_utils.hpp"
@@ -376,7 +377,7 @@ ProgramArtifacts create_no_bcast_artifacts(
     // from it, but this no-broadcast slice collapses borrow to all-or-nothing: an operand is BORROWED (its
     // resident L1 shard backs the DFB; reader/writer do no NoC work) only when EVERY operand is sharded, so
     // all three are co-resident L1 shards on one grid with identical per-core tile partitions. Otherwise --
-    // an interleaved output OR input, mixed strategies, or a divergent grid -- NONE are borrowed and every
+    // an interleaved output OR input, or a different shard spec -- NONE are borrowed and every
     // operand is read/written through its own sharding-aware TensorAccessor over a linear page-id walk (the
     // get_shard_volumes == nullopt / single-or-partial-sharded case). The per-operand a/b/c_borrowed flags
     // are kept separate (the DFB specs, SRC_SHARDED defines, tensor bindings and placement already branch
@@ -422,8 +423,9 @@ ProgramArtifacts create_no_bcast_artifacts(
     const uint32_t c_tile_bytes = static_cast<uint32_t>(c_tile.get_tile_size(c_df));
 
     // --- OpConfig + compute defines (mirrors the descriptor factory). ---
-    OpConfig op_config = is_sfpu ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>, a_dtype)
-                                 : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>, a_dtype);
+    const auto& op_params = op.op_params;
+    OpConfig op_config = is_sfpu ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>, a_dtype, op_params)
+                                 : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>, a_dtype, op_params);
     std::map<std::string, std::string> compute_defines = op_config.as_defines(a_dtype);
 
     // ISCLOSE: the DFB SFPU kernel reads rtol/atol as named args (args::rtol_bits/atol_bits), so the
@@ -577,7 +579,7 @@ ProgramArtifacts create_no_bcast_artifacts(
 
     // --- DataflowBuffers (mirrors the descriptor factory's CB block). A BORROWED operand backs the DFB
     // with its resident L1 shard (num_entries == full shard, borrowed_from set); any NoC-read operand
-    // (interleaved, or sharded on a non-matching grid) is a 2-entry ring filled over the NoC.
+    // (interleaved, or sharded with a different shard spec) is a 2-entry ring filled over the NoC.
     // post_lhs/post_rhs exist only when that operand has activations; their format is the op_has_exp
     // Float16_b intermediate on the FPU path, else the operand's own format. ---
     const uint32_t a_entries = a_borrowed ? full_shard_tiles(a, *a.shard_spec()) : 2u;
@@ -707,7 +709,7 @@ ProgramArtifacts create_no_bcast_artifacts(
     // enable_32_bit_dest is true). So set it only on compute-consumer DFBs whose format is Float32
     // (which forces fp32_dest_acc_en true). A Float32 FPU consumer must still carry an explicit entry,
     // which is UnpackToSrc. compute consumers: in0(pre_lhs), in1(pre_rhs), post_lhs, post_rhs.
-    m2::ComputeUnpackModes unpack_modes;
+    m2::ComputeHardwareConfig::ComputeUnpackModes unpack_modes;
     auto set_unpack_mode = [&](const m2::DFBSpecName& dfb, tt::DataFormat df) {
         if (df == tt::DataFormat::Float32) {
             unpack_modes.emplace(dfb, is_sfpu ? UnpackMode::UnpackToDest : UnpackMode::UnpackToSrc);
@@ -739,7 +741,7 @@ ProgramArtifacts create_no_bcast_artifacts(
     // Reader: publishes a borrowed shard (borrowed operand) or reads it over the NoC (via
     // TensorAccessor(tensor::in0/in1)). A borrowed operand needs no tensor binding (its tensor::
     // reference is compiled out under SRC_SHARDED) and borrows via the DFB; every NoC-read operand is
-    // bound — including a sharded input on a non-matching grid, whose accessor is sharding-aware.
+    // bound — including a sharded input with a different shard spec, whose accessor is sharding-aware.
     m2::Group<m2::TensorBinding> reader_tensor_bindings;
     if (!a_borrowed) {
         reader_tensor_bindings.push_back(m2::TensorBinding{T_A, "in0"});
@@ -781,8 +783,7 @@ ProgramArtifacts create_no_bcast_artifacts(
                   "n_stride_b",
                   "c_stride_b",
                   "src_num_tiles_b"}},
-        .hw_config =
-            ttnn::create_reader_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     m2::Group<m2::TensorBinding> writer_tensor_bindings;
@@ -809,8 +810,7 @@ ProgramArtifacts create_no_bcast_artifacts(
         .dfb_bindings = writer_dfb_bindings,
         .tensor_bindings = writer_tensor_bindings,
         .runtime_arg_schema = {.runtime_arg_names = writer_rt_names},
-        .hw_config =
-            ttnn::create_writer_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // Compute: consumes pre_lhs/pre_rhs, produces out. When an operand has activations, the kernel both
@@ -854,17 +854,14 @@ ProgramArtifacts create_no_bcast_artifacts(
         compute_rt_names.push_back("atol_bits");
     }
 
-    // to_compute_hardware_config maps the common knobs and picks the arch's variant (ComputeGen1Config on
-    // Wormhole, ComputeGen2Config on Quasar); it deliberately leaves the per-DFB unpack_modes
-    // default, so set it here via std::visit — the arch-agnostic pattern main's quasar untilize factories use.
-    auto compute_hw = ttnn::to_compute_hardware_config(
-        a.device()->arch(),
-        ttnn::ComputeKernelConfig{
-            .math_fidelity = MathFidelity::HiFi4,
-            .math_approx_mode = false,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-        });
-    std::visit([&](auto& cfg) { cfg.unpack_modes = unpack_modes; }, compute_hw);
+    // to_compute_hardware_config maps the common knobs; it deliberately leaves the per-DFB unpack_modes
+    // default, so set it here.
+    auto compute_hw = ttnn::to_compute_hardware_config(ttnn::ComputeKernelConfig{
+        .math_fidelity = MathFidelity::HiFi4,
+        .math_approx_mode = false,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+    });
+    compute_hw.unpack_modes = unpack_modes;
 
     m2::KernelSpec compute_spec{
         .unique_id = COMPUTE,

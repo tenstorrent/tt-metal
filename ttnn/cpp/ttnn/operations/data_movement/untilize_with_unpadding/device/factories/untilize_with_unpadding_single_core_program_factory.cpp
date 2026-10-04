@@ -146,7 +146,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
             .accessor_name = "src",
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // Untilized writer
@@ -186,7 +186,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
                   "num_blocks_w_diff",
                   "block_row_size",
                   "block_row_leftover_size"}},
-        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     KernelSpec::CompilerOptions::Defines compute_kernel_defines;
@@ -194,7 +194,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
         input_dfb_data_format == tt::DataFormat::Float32) {
         compute_kernel_defines.emplace("DST_ACCUM_MODE", "1");
     }
-    ComputeGen1Config compute_hw_config{.enable_32_bit_dest = fp32_dest_acc_en};
+    ComputeHardwareConfig compute_hw_config{.enable_32_bit_dest = fp32_dest_acc_en};
     if (fp32_dest_acc_en) {
         compute_hw_config.unpack_modes = {{SC_IN, UnpackMode::UnpackToDest}};
     }

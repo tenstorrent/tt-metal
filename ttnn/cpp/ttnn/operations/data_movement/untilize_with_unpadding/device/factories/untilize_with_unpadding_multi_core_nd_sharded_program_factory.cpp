@@ -143,7 +143,7 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
              {"num_shards", num_shards},
              {"num_cores", num_compute_cores}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_shard_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // Writer compile-time args
@@ -203,7 +203,7 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
              {"output_tensor_height", output_tensor_height},
              {"tensor_rank", tensor_rank}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_shard_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(input.device()->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
         // The two shape vectors are a tensor_rank-bounded stream the kernel walks by index, so they
         // ride as common runtime varargs (broadcast to every node) rather than as named args.
         .advanced_options = {.num_common_runtime_varargs = 2 * tensor_rank},
@@ -219,7 +219,7 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
         writer_common_varargs.push_back(dim);
     }
 
-    ComputeGen1Config compute_hw_config{.enable_32_bit_dest = fp32_dest_acc_en};
+    ComputeHardwareConfig compute_hw_config{.enable_32_bit_dest = fp32_dest_acc_en};
     if (fp32_dest_acc_en) {
         compute_hw_config.unpack_modes = {{ND_IN, UnpackMode::UnpackToDest}};
     }
