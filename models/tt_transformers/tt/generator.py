@@ -2467,9 +2467,39 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 if host_page_table is not None:
                     ttnn.copy_host_to_device_tensor(host_page_table, device_page_table)
 
+        self._probe_decode_calls = getattr(self, "_probe_decode_calls", 0) + 1
+        if str(self._probe_decode_calls) in os.environ.get("TT_PROBE_RT_ITERS", "").split(","):
+            self._probe_rt_profile(on_device_sampling)
+            return self.trace_output_decode[on_device_sampling]
         for i, trace_id in self.trace_ids_decode[on_device_sampling].items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
         return self.trace_output_decode[on_device_sampling]
+
+    def _probe_rt_profile(self, on_device_sampling):
+        from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+
+        traces = self.trace_ids_decode[on_device_sampling]
+
+        def run():
+            for i, trace_id in traces.items():
+                ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
+            for i in traces:
+                ttnn.synchronize_device(self.model_args[i].mesh_device)
+
+        _, recs = profile_realtime_program(self.model_args[0].mesh_device, run, collect_all=True)
+        by_chip = defaultdict(float)
+        by_kernel = defaultdict(lambda: [0.0, 0])
+        for r in recs:
+            by_chip[r["chip_id"]] += r["duration_ns"]
+            name = ",".join(sorted({src.rsplit("/", 1)[-1] for src in r["kernel_sources"]}))
+            by_kernel[name][0] += r["duration_ns"]
+            by_kernel[name][1] += 1
+        logger.info(
+            f"PROBE_RT call {self._probe_decode_calls} records {len(recs)} per chip "
+            + " ".join(f"{c}:{v / 1e6:.4f}ms" for c, v in sorted(by_chip.items()))
+        )
+        for name, (d, n) in sorted(by_kernel.items(), key=lambda x: -x[1][0]):
+            logger.info(f"PROBE_RT_K call {self._probe_decode_calls} {d / 1e3:.2f}us n={n} {name[:200]}")
 
     def _apply_sampling_slot_remap(self, slot_remap) -> None:
         if slot_remap is None:
