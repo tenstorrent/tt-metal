@@ -144,6 +144,18 @@ void kernel_main() {
     auto outputs_tuple = make_tensor_accessor_tuple(outputs_args, arg_idx);
     arg_idx += num_inputs;
     auto output_addrgens = make_abstract_tensor_accessor_wrappers(outputs_tuple);
+    // Concrete accessors for the 1- and 2-input cases: the abstract wrapper's indirect call per page was a large share
+    // of the per-packet cost.
+    const auto output_noc_addr = [&](uint32_t input_idx, uint32_t page) -> uint64_t {
+        if constexpr (num_inputs == 1) {
+            return std::get<0>(outputs_tuple).get_noc_addr(page);
+        } else if constexpr (num_inputs == 2) {
+            return input_idx == 0 ? std::get<0>(outputs_tuple).get_noc_addr(page)
+                                  : std::get<1>(outputs_tuple).get_noc_addr(page);
+        } else {
+            return output_addrgens[input_idx].get_noc_addr(page);
+        }
+    };
     size_t fabric_args_idx = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(fabric_args_idx);
 
@@ -201,10 +213,23 @@ void kernel_main() {
             const uint32_t tile = payload_page < tail_pages[input_idx]
                                       ? output_origin_page[input_idx] + payload_page
                                       : output_second_origin_page[input_idx] + payload_page - tail_pages[input_idx];
-            noc_addrs[i] = output_addrgens[input_idx].get_noc_addr(output_batch_head_base + tile);
+            noc_addrs[i] = output_noc_addr(input_idx, output_batch_head_base + tile);
+        }
+        // Pages that land back to back go as one plain write: one address to encode instead of a scatter of `count`.
+        bool contiguous = true;
+        for (uint32_t i = 1; i < count; ++i) {
+            contiguous = contiguous && noc_addrs[i] == noc_addrs[0] + i * output_page_size;
         }
         const uint16_t page = static_cast<uint16_t>(output_page_size);
-        if (count == 1 && signal) {
+        if (contiguous && signal) {
+            pkt_hdr->to_noc_fused_unicast_write_atomic_inc(
+                tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                    noc_addrs[0], out_ready_sem_noc_addr_in_pkt, 1, true},
+                output_page_size * count);
+        } else if (contiguous) {
+            pkt_hdr->to_noc_unicast_write(
+                tt::tt_fabric::NocUnicastCommandHeader{noc_addrs[0]}, output_page_size * count);
+        } else if (count == 1 && signal) {
             pkt_hdr->to_noc_fused_unicast_write_atomic_inc(
                 tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
                     noc_addrs[0], out_ready_sem_noc_addr_in_pkt, 1, true},
