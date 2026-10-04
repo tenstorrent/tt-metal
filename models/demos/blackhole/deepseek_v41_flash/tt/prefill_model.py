@@ -197,6 +197,13 @@ class DSV41PrefillModel:
         xs = [self.embedding.forward(ttnn.slice(tok_dev, [c * T, 0], [(c + 1) * T, 1]))[0] for c in range(n32)]
         pres = [self.pre32 for _ in xs]
         sync("embedding", t0)
+        if not getattr(self, "_moe_warm", False) and os.environ.get("DSV41_PREFILL_MOE_WARM", "1") != "0":
+            self._moe_warm = True  # eager, before the first prefill compile / capture (see DSV41PrefillMoE.warmup)
+            seen = set()
+            for _, pl_ in self.layers:
+                if id(pl_.pmoe) not in seen:
+                    seen.add(id(pl_.pmoe))
+                    pl_.pmoe.warmup()
         for lid, pl in self.layers:
             if lid in self.engram:
                 t0 = time.perf_counter()

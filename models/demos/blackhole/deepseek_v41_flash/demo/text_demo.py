@@ -78,6 +78,7 @@ def _s(
 SCENARIOS = [
     _s(Q128, 16, 512, 64, "prefill_128_b16"),
     _s(Q128, 1, 512, 64, "prefill_128_b1"),
+    _s(Q128, 4, 512, 64, "prefill_128_b4"),
     _s(Q128, 32, 512, 64, "prefill_128_b32"),
     _s(Q128, 128, 512, 32, "prefill_128_b128"),
     _s(GSM, 16, 512, 384, "gsm8k_b16", instruct=True, stop_at_eos=True),
@@ -105,8 +106,10 @@ SCENARIOS = [
     _s(f"{LONG}/input_data_long_64k.json", 64, 70000, 64, "isl64k_b64"),
     _s(f"{LONG}/input_data_long_64k.json", 128, 70000, 64, "isl64k_b128"),
     _s(f"{LONG}/input_data_long_32k.json", 16, 40000, 64, "isl32k_b16"),
-    _s(f"{LONG}/input_data_long_128k.json", 1, 135000, 64, "isl128k_b1", skip="128k: " + SKIP_BIG),
-    _s(f"{LONG}/input_data_long_256k.json", 1, 270000, 64, "isl256k_b1", skip="256k: " + SKIP_BIG),
+    _s(f"{LONG}/input_data_long_128k.json", 1, 135000, 64, "isl128k_b1"),
+    _s(f"{LONG}/input_data_long_128k.json", 4, 135000, 64, "isl128k_b4"),
+    _s(f"{LONG}/input_data_long_256k.json", 4, 270000, 64, "isl256k_b4"),
+    _s(f"{LONG}/input_data_long_256k.json", 1, 270000, 64, "isl256k_b1"),
     _s(
         f"{PROMPTS}/input_data_long_1M.json",
         1,

@@ -138,8 +138,10 @@ class DSV41MHC:
         """x [T,1,n,C] fp32 -> (pre [T,1,1,n], post [T,1,n,1], comb [T,1,n,n]) fp32."""
         T = x.shape[0]
         if _flag("DSV41_MHC_MIXES_V2", "1"):
-            if T % 8 and T > 8:  # T=12/20 give wrong mixes in the packed kernel: pad the token dim to a multiple of 8
-                Tp = -(-T // 8) * 8
+            if (
+                T % 8 and T > 8
+            ) or T < 4:  # T=12/20 give wrong mixes in the packed kernel (pad to a multiple of 8); T<4 (U=1) pads to 4
+                Tp = 4 if T < 4 else -(-T // 8) * 8
                 xp = ttnn.pad(x, [(0, Tp - T), (0, 0), (0, 0), (0, 0)], 0.0)
                 outs = self.mixes(xp)
                 return tuple(ttnn.slice(o, [0, 0, 0, 0], [T, o.shape[1], o.shape[2], o.shape[3]]) for o in outs)

@@ -12,6 +12,7 @@ decode kernels are verified up to 32 tokens per device); attention runs once ove
 import os
 from pathlib import Path
 
+import torch
 from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim, effective_matmul_ring_size
 
 import ttnn
@@ -159,6 +160,42 @@ class DSV41PrefillMoE:
         ):  # fallback front-end at T = 32 for chunk counts that are not a multiple of G (shares the expert weights, own shared buffers)
             self.g1 = DSV41PrefillMoE(moe_block, T=32, buffers=_G1_BUFFERS.get(id(md)), g=1)
             _G1_BUFFERS.setdefault(id(md), self.g1.decode.buffers)
+
+    def warmup(self):
+        """Compile this front-end's moe_compute program (and its T=32 fallback) once with a small free hole under the persistent L1 allocations
+        (see ``DSV41MoEBlock.warmup``): the program's persistent 320 B global semaphore is created on its first compile, while the call's ~560-650 KB
+        L1 outputs are live, and would otherwise land mid-L1 (~846 KB) and cap the static CB region of every later program (the prefill SDPA at
+        head_dim 512 then throws 'Statically allocated circular buffers ... clash with L1 buffers'; seen at U=1). Called once, eagerly, before the
+        first prefill compile / trace capture. DSV41_PREFILL_MOE_WARM=0 disables it."""
+        if getattr(self, "_warm", False):
+            return
+        self._warm = True
+        md, T = self.md, self.T
+        H = self.decode.config.hidden_size
+        nb = ttnn.get_memory_view(md, ttnn.BufferType.L1).num_banks
+        row = lambda n: ttnn.empty(
+            [1, 1, 32, 32 * nb * n],
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=md,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        hole, fence = row(1), row(2)
+        ttnn.deallocate(hole)
+        up = lambda shape, lay: ttnn.from_torch(
+            torch.zeros(shape),
+            device=md,
+            dtype=ttnn.bfloat16,
+            layout=lay,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(md),
+        )
+        out = self.forward(up([1, 1, T, H], ttnn.TILE_LAYOUT), up([T, 1, 1, H], ttnn.ROW_MAJOR_LAYOUT))
+        ttnn.synchronize_device(md)
+        ttnn.deallocate(out)
+        ttnn.deallocate(fence)
+        if self.g1 is not None:
+            self.g1.warmup()
 
     def forward(self, tt_x_gate, tt_x_tokens):
         return self._forward(tt_x_gate, tt_x_tokens)
