@@ -7,7 +7,7 @@
 
 namespace ckernel::sfpu {
 
-// softshrink_bw: grad times its piecewise-constant derivative, selected by the interval that holds x
+// softshrink_bw: grad times its piecewise derivative, selected by the interval that holds x
 // (activations/softshrink_bw.json). DEST tile idst holds x and idst + 1 holds grad; the result replaces x.
 template <int ITERATIONS = 32>
 inline void calculate_softshrink_bw_bf16() {

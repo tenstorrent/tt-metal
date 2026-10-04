@@ -36,6 +36,42 @@
 
 namespace ttnn {
 
+namespace {
+
+// Whether one UnaryBackwardDeviceOperation program with a generated BF16 kernel computes this call
+// as the composite does. The kernels exist for Blackhole and Wormhole and read interleaved 32x32
+// tiles of BF16 operands with one shape; every other call, including a broadcast gradient, a host
+// operand, or a call whose output placement the composite chooses, keeps the composite.
+bool generated_bf16_kernel_applies(
+    const Tensor& grad,
+    const Tensor& input,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& input_grad = std::nullopt) {
+    const auto* device = input.device();
+    if (device == nullptr || (device->arch() != tt::ARCH::BLACKHOLE && device->arch() != tt::ARCH::WORMHOLE_B0)) {
+        return false;
+    }
+    const auto interleaved_bf16_tiles = [&](const Tensor& tensor) {
+        const auto tile = tensor.tensor_spec().tile();
+        return tensor.device() == device && tensor.dtype() == DataType::BFLOAT16 && tensor.layout() == Layout::TILE &&
+               tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH &&
+               tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+               tensor.logical_shape() == input.logical_shape() && tensor.padded_shape() == input.padded_shape();
+    };
+    if (!interleaved_bf16_tiles(grad) || !interleaved_bf16_tiles(input)) {
+        return false;
+    }
+    if (input_grad.has_value()) {
+        return interleaved_bf16_tiles(*input_grad);
+    }
+    // The fused program defaults to the input's placement; the composite's default agrees with it
+    // only when both operands share one.
+    return output_mem_config.has_value() ? output_mem_config->memory_layout() == TensorMemoryLayout::INTERLEAVED
+                                         : grad.memory_config() == input.memory_config();
+}
+
+}  // namespace
+
 std::vector<Tensor> clamp_bw(
     const Tensor& grad,
     const Tensor& input,
@@ -772,11 +808,10 @@ std::vector<Tensor> hardshrink_bw(
 //  result: torch.where(self < -lambd, grad, torch.where(self > lambd, grad, torch.tensor(0.0)))
 std::vector<Tensor> softshrink_bw(
     const Tensor& grad, const Tensor& input_tensor, float lambd, const std::optional<MemoryConfig>& output_mem_config) {
-    // One program for BF16 operands at the fitted scalar values, whose gradient is the
-    // generated SFPU kernel; anything else, and Quasar, which has no generated kernel, keeps
-    // the composite below.
-    if (input_tensor.device()->arch() != tt::ARCH::QUASAR && grad.dtype() == DataType::BFLOAT16 &&
-        input_tensor.dtype() == DataType::BFLOAT16 && std::bit_cast<uint32_t>(lambd) == 0x3f000000u) {
+    // One program whose gradient is the generated SFPU kernel, for the calls it serves at the
+    // fitted scalar values; every other call keeps the composite below.
+    if (generated_bf16_kernel_applies(grad, input_tensor, output_mem_config) &&
+        std::bit_cast<uint32_t>(lambd) == 0x3f000000u) {
         return {ttnn::operations::unary_backward::launch_unary_backward(
             ttnn::operations::unary_backward::UnaryBackwardOpType::SOFTSHRINK_BW,
             grad,
