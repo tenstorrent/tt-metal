@@ -91,11 +91,12 @@ class MiniMaxH3Attention(Module):
         13664: (256, 512),
     }
 
-    # Named SDPA recipe of every SDPA call in this module on Blackhole. DiT models default to
-    # FAST (legacy streaming numerics with the approximate exponential): at the models' shapes it
-    # is as accurate as the legacy HiFi2 / BF16-dest / exact-exp setup within a few percent and at
-    # least as fast. Pass sdpa_precision to opt up (e.g. BALANCED).
-    sdpa_precision_default = ttnn.SDPAPrecision.FAST
+    # Named SDPA recipe of every SDPA call in this module on Blackhole. MiniMax-H3 defaults to
+    # LOW_PRECISION with BFP8 K/V: on a Blackhole Galaxy (4x8, 190 W) a 15 s t2va step runs 20% faster
+    # than FAST (3310 vs 4131 ms) with the same attention error (2.4% / 2.0% vs FP32 at 48k / 97k tokens)
+    # and visually equivalent videos. Pass sdpa_precision to choose another recipe (e.g. FAST, STANDARD).
+    sdpa_precision_default = ttnn.SDPAPrecision.LOW_PRECISION
+    sdpa_kv_dtype_default = ttnn.bfloat8_b  # with the default recipe only
 
     def __init__(
         self,
@@ -122,6 +123,8 @@ class MiniMaxH3Attention(Module):
         self.sdpa_precision = sdpa_recipe.resolve_precision(
             sdpa_precision, self.sdpa_precision_default, blackhole=blackhole, model="MiniMaxH3Attention"
         )
+        if sdpa_precision is None and sdpa_kv_dtype is None and self.sdpa_precision is not None:
+            sdpa_kv_dtype = self.sdpa_kv_dtype_default
         self.sdpa_kv_dtype = sdpa_recipe.validate_recipe_args(
             self.sdpa_precision,
             sdpa_kv_dtype,

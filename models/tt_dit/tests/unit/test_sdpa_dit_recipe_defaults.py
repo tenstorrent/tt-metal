@@ -69,9 +69,13 @@ def _resolve(monkeypatch, name, blackhole, **overrides):
     return obj.sdpa_precision, obj.sdpa_kv_dtype
 
 
+# MiniMax-H3 defaults to LOW_PRECISION with BFP8 K/V; every other denoiser to FAST with BF16 K/V.
+DEFAULTS = {name: (FAST, ttnn.bfloat16) for name in MODULES} | {"minimax_h3": (LOW, ttnn.bfloat8_b)}
+
+
 @pytest.mark.parametrize("name", sorted(MODULES))
-def test_denoiser_default_recipe_is_fast(name):
-    assert MODULES[name][1].sdpa_precision_default == FAST
+def test_denoiser_default_recipe(name):
+    assert MODULES[name][1].sdpa_precision_default == DEFAULTS[name][0]
 
 
 def test_vae_default_recipes():
@@ -81,7 +85,7 @@ def test_vae_default_recipes():
 
 @pytest.mark.parametrize("name", sorted(MODULES))
 def test_none_selects_the_default_on_blackhole(monkeypatch, name):
-    assert _resolve(monkeypatch, name, True) == (FAST, ttnn.bfloat16)
+    assert _resolve(monkeypatch, name, True) == DEFAULTS[name]
 
 
 @pytest.mark.parametrize("name", sorted(MODULES))
@@ -100,9 +104,9 @@ def test_legacy_off_blackhole(expect_error, monkeypatch, name):
         _resolve(monkeypatch, name, False, sdpa_precision=FAST)
 
 
-@pytest.mark.parametrize("name", sorted(MODULES))
+@pytest.mark.parametrize("name", sorted(n for n in MODULES if DEFAULTS[n][0] == FAST))
 def test_low_precision_kv_needs_low_precision(expect_error, monkeypatch, name):
-    # The default (FAST) keeps BF16 KV; a packed KV dtype needs an explicit LOW_PRECISION.
+    # A FAST default keeps BF16 KV; a packed KV dtype needs an explicit LOW_PRECISION.
     with expect_error(ValueError, ""):
         _resolve(monkeypatch, name, True, sdpa_kv_dtype=ttnn.bfloat8_b)
 
