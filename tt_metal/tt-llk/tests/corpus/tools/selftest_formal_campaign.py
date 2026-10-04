@@ -67,6 +67,10 @@ class FormalCampaignTests(unittest.TestCase):
         self.assertNotIn("FINAL-BOARD", source)
         self.assertNotIn("EXPECT_JO_SHA", source)
 
+    def test_artifact_operation_names_are_bounded(self):
+        self.assertTrue(campaign.operation_slug("mulint32-fresh"))
+        self.assertFalse(campaign.operation_slug("../outside"))
+
 
 if __name__ == "__main__":
     unittest.main()

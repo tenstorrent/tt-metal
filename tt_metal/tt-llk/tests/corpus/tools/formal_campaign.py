@@ -152,6 +152,10 @@ def selected_ops(cases: dict, selection: dict | None, patterns: str | None) -> l
     return ops
 
 
+def operation_slug(op: str) -> bool:
+    return re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", op) is not None
+
+
 def case_nodes(case: dict[str, str]) -> tuple[str, str]:
     return case.get("sem_corr", "").strip(), case.get("hand_corr", "").strip()
 
@@ -454,6 +458,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--flags", default="")
     parser.add_argument("--domains", type=Path)
     parser.add_argument("--ops", help="comma-separated operation globs")
+    parser.add_argument("--sem-node", help="semantic pytest node for a single --ops row")
+    parser.add_argument("--hand-node", help="reference pytest node for a single --ops row")
     parser.add_argument("--timeout", type=int, default=1800)
     args = parser.parse_args(argv)
     if args.out.exists():
@@ -467,6 +473,14 @@ def main(argv: list[str] | None = None) -> int:
         ops = selected_ops(cases, selection, args.ops)
         if not ops:
             raise ValueError("no operations selected")
+        invalid = [op for op in ops if not operation_slug(op)]
+        if invalid:
+            raise ValueError(f"operations are not safe artifact names: {invalid}")
+        if args.sem_node or args.hand_node:
+            if len(ops) != 1 or not args.sem_node or not args.hand_node:
+                raise ValueError("--sem-node and --hand-node require one exact --ops row")
+            cases[ops[0]] = dict(cases.get(ops[0], {}))
+            cases[ops[0]].update(sem_corr=args.sem_node, hand_corr=args.hand_node)
         tests = args.tests_root.resolve()
         python = tests / ".venv/bin/python"
         sim = args.sim.resolve()
