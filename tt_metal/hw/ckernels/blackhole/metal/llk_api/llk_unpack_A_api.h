@@ -147,6 +147,25 @@ inline void llk_unpack_A_block(
 
     // Three or more tiles: one context acquire per block; one or two are cheaper per tile after a copy_init.
     if constexpr ((BType == BroadcastType::NONE) && !acc_to_dest && (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE)) {
+        // A run-time count of one or two tiles takes straight calls: a loop beside the block path loses its registers.
+        if (!__builtin_constant_p(ntiles)) {
+            if (ntiles == 1) {
+                WAYPOINT("UPAW");
+                _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
+                    address, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
+                WAYPOINT("UPAD");
+                return;
+            }
+            if (ntiles == 2) {
+                WAYPOINT("UPAW");
+                _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
+                    address, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
+                _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
+                    address + offset_address, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
+                WAYPOINT("UPAD");
+                return;
+            }
+        }
         if (ntiles > 2) {
             WAYPOINT("UPAW");
             _llk_unpack_A_block_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
