@@ -119,15 +119,29 @@ class SpecDecoder(SpecVerifier):
         )  # valid drafts per block when the block is padded (n = 1 + k rows, k > keff)
         self.stop_after = None  # None | 'verify' | 'accept': truncate the traced round (timing breakdown)
         # runtime override of the accept count (prompt feeding / teacher forcing): m = force if force >= 0 else the computed one
-        self.force = c(torch.full((U, 1), -1.0), ttnn.float32, ttnn.TILE_LAYOUT)
-
-    def set_force(self, value):
-        """Host: force m (accepted drafts) of every user for the next replays; value < 0 = normal operation."""
-        host = ttnn.from_torch(
-            torch.full((self.U, 1), float(value)),
+        rows, cols = tuple(md.shape)
+        self._row_map = ttnn.ShardTensor2dMesh(
+            md, dims=(0, None), mesh_shape=(rows, cols)
+        )  # users sharded over the mesh rows
+        self.force = ttnn.from_torch(
+            torch.full((rows * U, 1), -1.0),
+            device=md,
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.md),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self._row_map,
+        )
+
+    def set_force(self, value):
+        """Host: force m (accepted drafts) for the next replays; ``value`` a scalar (all users) or a [B] tensor (one per user, global order). value < 0 = normal operation."""
+        rows = self.md.shape[0]
+        v = torch.as_tensor(value, dtype=torch.float32).reshape(-1)
+        v = v.expand(rows * self.U) if v.numel() == 1 else v
+        host = ttnn.from_torch(
+            v.reshape(rows * self.U, 1).contiguous(),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=self._row_map,
         )
         ttnn.copy_host_to_device_tensor(host, self.force)
 

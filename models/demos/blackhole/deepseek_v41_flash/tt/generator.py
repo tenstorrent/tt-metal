@@ -85,3 +85,20 @@ class Generator:
             tokens.reshape(-1), start_pos, enable_trace=enable_trace, reload_inputs=reload_inputs
         )
         return out, None
+
+    # ---- speculative decoding (DSpark drafter, tt/spec_model.py) -------------------------------------------------------------------------------
+    def enable_spec(self, k):
+        """Build the speculative runner (k drafts verified per round, 1..5) on the model's weights / paged pool. The model must have been built with
+        DSV41_RING_ROWS=160 (``tt.common.create_tt_model`` sets it when DSV41_SPEC > 0)."""
+        from models.demos.blackhole.deepseek_v41_flash.tt.spec_model import SpecRunner
+
+        self.spec = SpecRunner(self.m, k)
+        return self.spec
+
+    def spec_decode(self, tokens, prompt_lens, first_tokens, max_new_tokens, eos=None, active=None):
+        """After ``prefill_forward_text``: seed the drafter from the prompt tail and run the speculative loop. tokens [B, L] the prefill prompts, prompt_lens [B],
+        first_tokens [B] the prefill's first generated token. -> (generated token lists per user INCLUDING the first token, stats).
+        """
+        spec = self.spec
+        X, base = spec.seed(tokens, prompt_lens, first_tokens)
+        return spec.run(X, base, max_new_tokens, eos=eos, active=active)
