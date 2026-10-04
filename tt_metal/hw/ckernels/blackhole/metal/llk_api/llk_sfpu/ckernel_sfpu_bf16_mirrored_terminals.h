@@ -22,15 +22,3 @@ inline vFloat target_raw_terminal_value(vFloat computed, float constant = 0.0f) 
         return vFloat(constant);
     }
 }
-
-// The existing unsigned BF16 transport predicate for either NaN sign.
-template <int Code>
-inline void nan_union_class_terminal(vUInt raw_u16, vFloat& result) {
-    vUInt exponent_delta = (raw_u16 & vUInt(0x00ffu)) - vUInt(0x00ffu);
-    v_if(exponent_delta == 0u) {
-        vUInt mantissa = raw_u16 & vUInt(0x7f00u);
-        v_if(mantissa != 0u) { result = target_raw_terminal_value<Code>(result); }
-        v_endif;
-    }
-    v_endif;
-}

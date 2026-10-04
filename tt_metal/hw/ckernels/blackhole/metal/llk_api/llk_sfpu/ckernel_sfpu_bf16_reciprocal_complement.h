@@ -24,10 +24,9 @@ inline void init_reciprocal_complement() {
 template <class Config, int Iterations = 32>
 inline void calculate_reciprocal_complement() {
     static_assert(Iterations == 32);
-    static_assert(Config::kDegree >= 4 && Config::kDegree <= 8);
+    // Degree four leaves LREG5 out of the replayed body, so it can carry the NaN rows.
+    static_assert(Config::kDegree == 4);
     static_assert(Config::kBodySlots == reciprocal_complement_body_slots(Config::kDegree));
-    static_assert(Config::kShadowBase == 96 && Config::kShadowRows == 32);
-    static_assert((Config::kShadowBase + Config::kShadowRows) * 2 <= DEST_REGISTER_HALF_SIZE);
     sfpi::vConstFloatPrgm1 = Config::kCoefficients[Config::kDegree];
     sfpi::vConstFloatPrgm2 = Config::kCoefficients[Config::kDegree - 1];
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
@@ -39,21 +38,22 @@ inline void calculate_reciprocal_complement() {
     TTI_SFPCONFIG(0, 4, 0);
     TTI_SFPCONFIG(0xf00, 8, 1);
     TTI_SFPNOP;
-#pragma GCC unroll 8
+    // The body overwrites each row with its result and DEST past this tile holds the
+    // caller's other tiles, so whether row d is NaN is kept as bit 31 - d of LREG5.
+    sfpi::vInt nan_rows = 0;
+#pragma GCC unroll 32
     for (int d = 0; d < 32; ++d) {
-        sfpi::vUInt raw = sfpi::dst_reg[d].template mode<sfpi::DataLayout::U16>();
-        sfpi::dst_reg[Config::kShadowBase + d].template mode<sfpi::DataLayout::U16>() = raw;
+        sfpi::vFloat raw = sfpi::dst_reg[d];
+        nan_rows <<= 1;
+        v_if(sfpi::as<sfpi::vInt>(sfpi::setsgn(raw, 0)) > 0x7f800000) { nan_rows |= 1; }
+        v_endif;
     }
-    // Degree eight keeps c6 for LREG3; below it the rungs start at c[kDegree - 2].
-    constexpr unsigned kTop = Config::kDegree == 8 ? 5u : Config::kDegree - 2u;
-    TTI_SFPLOADI(7, sfpi::SFPLOADI_MOD0_UPPER, Config::kCoefficientBits[kTop] >> 16);
-    TTI_SFPLOADI(7, sfpi::SFPLOADI_MOD0_LOWER, Config::kCoefficientBits[kTop] & 0xffffu);
-    TTI_SFPLOADI(6, sfpi::SFPLOADI_MOD0_UPPER, Config::kCoefficientBits[kTop - 1] >> 16);
-    TTI_SFPLOADI(6, sfpi::SFPLOADI_MOD0_LOWER, Config::kCoefficientBits[kTop - 1] & 0xffffu);
-    if constexpr (kTop >= 3) {
-        TTI_SFPLOADI(5, sfpi::SFPLOADI_MOD0_UPPER, Config::kCoefficientBits[kTop - 2] >> 16);
-        TTI_SFPLOADI(5, sfpi::SFPLOADI_MOD0_LOWER, Config::kCoefficientBits[kTop - 2] & 0xffffu);
-    }
+    sfpi::l_reg[sfpi::LRegs::LReg5] = nan_rows;
+    // The rungs read c2 and c1 from LREG7 and LREG6.
+    TTI_SFPLOADI(7, sfpi::SFPLOADI_MOD0_UPPER, Config::kCoefficientBits[2] >> 16);
+    TTI_SFPLOADI(7, sfpi::SFPLOADI_MOD0_LOWER, Config::kCoefficientBits[2] & 0xffffu);
+    TTI_SFPLOADI(6, sfpi::SFPLOADI_MOD0_UPPER, Config::kCoefficientBits[1] >> 16);
+    TTI_SFPLOADI(6, sfpi::SFPLOADI_MOD0_LOWER, Config::kCoefficientBits[1] & 0xffffu);
     TTI_SFPLOADI(4, sfpi::SFPLOADI_MOD0_UPPER, Config::kComplementBits >> 16);
     TTI_SFPLOADI(4, sfpi::SFPLOADI_MOD0_LOWER, Config::kComplementBits & 0xffffu);
     TTI_REPLAY(0, Config::kBodySlots, 1, 1);
@@ -67,16 +67,15 @@ inline void calculate_reciprocal_complement() {
     TTI_SFPNOP;
     TTI_SFPNOP;
     TTI_SFPNOP;
-    // The selected suffix is a second traversal. This internal phase reset
-    // must precede its result/shadow loads, independently of caller cleanup.
+    // The body's macro stored every row rounded to BF16, so only a NaN row is rewritten,
+    // to +Inf for either sign. The traversal restarts at row 0, independently of caller cleanup.
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-#pragma GCC unroll 8
+    sfpi::vInt nan_flags = sfpi::l_reg[sfpi::LRegs::LReg5];
+#pragma GCC unroll 32
     for (int d = 0; d < 32; ++d) {
-        sfpi::vFloat result = sfpi::dst_reg[d];
-        sfpi::vUInt raw = sfpi::dst_reg[Config::kShadowBase + d].template mode<sfpi::DataLayout::U16>();
-        sfpi::nan_union_class_terminal<1>(raw, result);
-        result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
-        sfpi::dst_reg[d] = result;
+        v_if(nan_flags < 0) { sfpi::dst_reg[d] = sfpi::target_raw_terminal_value<1>(sfpi::vFloat(0.0f)); }
+        v_endif;
+        nan_flags <<= 1;
     }
 }
 }  // namespace ckernel::sfpu::bf16

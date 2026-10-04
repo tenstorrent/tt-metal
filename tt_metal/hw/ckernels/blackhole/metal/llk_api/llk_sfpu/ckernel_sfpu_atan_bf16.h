@@ -9,8 +9,6 @@ struct AtanBf16Config {
     static constexpr unsigned kComplementBits = 0x3fc90fdbu;
     static constexpr unsigned kBodySlots = 0x00000016u;
     static constexpr unsigned kMacroSequenceBits = 0x63550087u;
-    static constexpr unsigned kShadowBase = 0x00000060u;
-    static constexpr unsigned kShadowRows = 0x00000020u;
     static constexpr unsigned kCoefficientBits[] = {0x00000000u, 0x3f800000u, 0x3aa8eb14u, 0xbebd4004u, 0x3e1daa80u};
     // Fit: minimax degree-4 polynomial on [0, 1], 1 segment, max pure (continuous) ULP 0.55.
     static constexpr float kCoefficients[] = {
