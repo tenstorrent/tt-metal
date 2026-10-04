@@ -17,6 +17,7 @@ import pytest
 
 from ..chip_architecture import ChipArchitecture
 from ..counters import read_counters
+from ..device_io import write_words_to_device
 from ..device import BootMode
 from ..format_config import FormatConfig
 from ..llk_params import DestAccumulation, L1Accumulation, PerfRunType
@@ -716,52 +717,60 @@ def assert_zones_dont_overlap(profiler_data: ProfilerData) -> None:
     how the perf kernels are written, not of the profiler, so it lives here and runs once per run.
 
     Within a thread a zone that contains another is a wrapper (trisc.cpp's KERNEL), not a phase.
+
+    Plain Python over the few zones of one run: a pandas groupby per call cost more host time
+    than the kernel run it checks.
     """
-    # The profiler view pairs every ZONE_START with the ZONE_END that follows it.
-    zones = profiler_data.zones().frame()
-    if zones.empty:
+    df = profiler_data.raw()
+    types = df["type"].to_numpy(dtype=object)
+    starts = [i for i, t in enumerate(types) if t == "ZONE_START"]
+    ends = [i for i, t in enumerate(types) if t == "ZONE_END"]
+    if len(starts) != len(ends):
+        raise AssertionError("Number of start and end entries do not match")
+    if not starts:
         return
-    zones = zones.assign(finish=zones["timestamp"] + zones["duration"])
+    threads = df["thread"].to_numpy(dtype=object)
+    markers = df[MARKER].to_numpy(dtype=object)
+    marker_ids = df["marker_id"].to_numpy()
+    ts = df["timestamp"].to_numpy()
     # Identity is the name: marker_id is a per-callsite hash, different on every thread.
-    span = (
-        zones.groupby([MARKER, "thread"])
-        .agg(begin=("timestamp", "min"), finish=("finish", "max"))
-        .reset_index()
-    )
+    span = {}
+    for s, e in zip(starts, ends):
+        if threads[s] != threads[e] or marker_ids[s] != marker_ids[e]:
+            raise AssertionError("Zone START and END entries don't match")
+        key = (markers[s], threads[s])
+        begin, finish = int(ts[s]), int(ts[e])
+        if key in span:
+            b, f = span[key]
+            span[key] = (min(b, begin), max(f, finish))
+        else:
+            span[key] = (begin, finish)
     wrappers = set()
-    for _, group in span.groupby("thread"):
-        rows = group.to_dict("records")
-        for a in rows:
-            for b in rows:
-                if (
-                    a is not b
-                    and a["begin"] <= b["begin"] <= b["finish"] <= a["finish"]
-                ):
-                    wrappers.add(a[MARKER])
-    phases = (
-        span[~span[MARKER].isin(wrappers)]
-        .groupby(MARKER)
-        .agg(first_open=("begin", "min"), last_close=("finish", "max"))
-        .sort_values("first_open")
-        .reset_index()
-    )
+    for (ma, tha), (ba, fa) in span.items():
+        for (mb, thb), (bb, fb) in span.items():
+            if tha == thb and ma != mb and ba <= bb <= fb <= fa:
+                wrappers.add(ma)
+    phases = {}
+    for (m, _), (b, f) in span.items():
+        if m in wrappers:
+            continue
+        if m in phases:
+            ob, of = phases[m]
+            phases[m] = (min(ob, b), max(of, f))
+        else:
+            phases[m] = (b, f)
     prev = None
-    for row in phases.itertuples(index=False):
-        if (
-            prev is not None
-            and row.marker not in NON_RENDEZVOUS_MARKERS
-            and prev.last_close > row.first_open
-        ):
+    for m, (first_open, last_close) in sorted(phases.items(), key=lambda kv: (kv[1][0], kv[0])):
+        if prev is not None and m not in NON_RENDEZVOUS_MARKERS and prev[1] > first_open:
             raise AssertionError(
-                f"Zones overlap across threads: the last {prev.marker} closed at "
-                f"{prev.last_close} but the first {row.marker} opened at {row.first_open}, "
-                f"{prev.last_close - row.first_open} cycles earlier. Both windows therefore "
+                f"Zones overlap across threads: the last {prev[0]} closed at "
+                f"{prev[1]} but the first {m} opened at {first_open}, "
+                f"{prev[1] - first_open} cycles earlier. Both windows therefore "
                 f"cover time belonging to the other phase. The usual cause is a kernel opening "
                 f"its zones with ZONE_SCOPED instead of START_PERF_MEASURE, which is what "
                 f"supplies the cross-thread rendezvous at zone entry."
             )
-        prev = row
-
+        prev = (m, last_close)
 
 RUN_TYPE_PRESETS = {
     "ALL_ISOLATION_MODES": ("UNPACK_ISOLATE", "MATH_ISOLATE", "PACK_ISOLATE"),
@@ -801,6 +810,38 @@ def _selected_run_types(run_types):
         return list(run_types)
     names = _expand_run_types(wanted)
     return [rt for rt in run_types if rt.name in names]
+
+
+# Wormhole L1_TO_L1 start offsets (spin iterations): low 16 bits pack, high 16 bits unpack and math.
+_DITHER_ADDR = 0x16AFE0
+_DITHER_OFFSETS = [0, 2, 4, 6, 1048576, 1048578, 1048580, 1048582]
+
+
+import time as _time
+
+_TIMING = {}
+_TIMING_MARK = [0.0]
+_TIMING_LAST_END = [None]
+
+
+def _tick(name):
+    now = _time.perf_counter()
+    _TIMING[name] = _TIMING.get(name, 0.0) + now - _TIMING_MARK[0]
+    _TIMING_MARK[0] = now
+
+
+def _timing_flush(test_name, start):
+    end = _time.perf_counter()
+    gap = start - _TIMING_LAST_END[0] if _TIMING_LAST_END[0] is not None else float('nan')
+    _TIMING_LAST_END[0] = end
+    try:
+        d = TestConfig.perf_run_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        with open(d / f'timing.{os.getpid()}.tsv', 'a') as f:
+            f.write(test_name + '\t' + f'total={end - start:.6f}\tgap={gap:.6f}\t' + '\t'.join(f'{k}={v:.6f}' for k, v in _TIMING.items()) + '\n')
+    except Exception:
+        pass
+    _TIMING.clear()
 
 
 class PerfConfig(TestConfig):
@@ -1024,6 +1065,9 @@ class PerfConfig(TestConfig):
             pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
 
         PerfConfig.TEST_COUNTER += 1
+        _timing_start = _time.perf_counter()
+        _TIMING.clear()
+        _TIMING_MARK[0] = _timing_start
 
         # A kernel inherits state from the kernel before it: run each kernel once
         # unrecorded, so no measured kernel follows a kernel of another test.
@@ -1031,9 +1075,11 @@ class PerfConfig(TestConfig):
             for templates, runtimes, run_type in self.warmup_configs:
                 self._select_run_type(templates, runtimes, run_type)
                 self.write_runtimes_to_L1()
+                write_words_to_device(TestConfig.TENSIX_LOCATION, _DITHER_ADDR, [0])
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
 
+        _tick("warmup")
         for templates, runtimes, run_type in self.run_configs:
             self._select_run_type(templates, runtimes, run_type)
 
@@ -1052,12 +1098,16 @@ class PerfConfig(TestConfig):
                     for c in components
                 )
 
+            _tick("codesize")
             variant_raw_data = []
             variant_counter_results = []
-            for run_index in range(run_count):
+            dither = run_type == PerfRunType.L1_TO_L1 and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
+            for run_index in range(len(_DITHER_OFFSETS) if dither else run_count):
                 self.write_runtimes_to_L1()
+                write_words_to_device(TestConfig.TENSIX_LOCATION, _DITHER_ADDR, [_DITHER_OFFSETS[run_index] if dither else 0])
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
+                _tick("device")
                 # Counter config is written by BRISC from built-in array (local L1 write).
                 # Python NOC write is skipped to avoid L1 controller state change that
                 # causes ~7 cycle overhead on Float16 unpack operations.
@@ -1065,8 +1115,11 @@ class PerfConfig(TestConfig):
                 profiler_data = Profiler.get_data(
                     self.test_name, self.variant_id, TestConfig.TENSIX_LOCATION
                 )
-                assert_zones_dont_overlap(profiler_data)
+                _tick("get_data")
+                if not dither or run_index == 0:
+                    assert_zones_dont_overlap(profiler_data)
 
+                _tick("overlap")
                 if TestConfig.ENABLE_PERF_COUNTERS:
                     try:
                         counter_results = read_counters(
@@ -1079,11 +1132,13 @@ class PerfConfig(TestConfig):
                         logger.warning("Error reading counters: {}", e)
 
                 # Tag profiler data with run index for proper L1-to-L1 pairing
-                profiler_data.df["run_index"] = run_index
+                profiler_data.df["run_index"] = 0 if dither else run_index
                 variant_raw_data.append(profiler_data)
+                _tick("misc")
 
             get_stats = Profiler.STATS_FUNCTION[run_type]
             stats_df = get_stats(ProfilerData.concat(variant_raw_data))
+            _tick("stats")
             # Only the no-counter build must produce wall-clock stats; a counter build may return counters alone.
             counter_only_build = TestConfig.ENABLE_PERF_COUNTERS
             if not stats_df.empty or not counter_only_build:
@@ -1122,6 +1177,7 @@ class PerfConfig(TestConfig):
                     if not counter_csv_df.empty:
                         counter_results_list.append(counter_csv_df)
 
+        _tick("validate_counters")
         # Assemble the per-test report frame (pure — see build_report_frame).
         combined = PerfConfig.build_report_frame(
             results,
@@ -1133,6 +1189,8 @@ class PerfConfig(TestConfig):
             self.passed_runtimes,
         )
         perf_report.append(combined, label=self.test_name)
+        _tick("report")
+        _timing_flush(self.test_name + '/' + self.variant_id, _timing_start)
 
         # Append raw counter data to the separate counter report
         if counter_results_list and PerfConfig.COUNTER_REPORT is not None:
