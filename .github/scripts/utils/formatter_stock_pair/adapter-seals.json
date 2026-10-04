@@ -53,8 +53,8 @@
       "sha256": "6310790250bdcfce9da6e0560cf1a46c111db1360c6e281018391a00308188a6"
     },
     "structured_scope.py": {
-      "bytes": 6393,
-      "sha256": "ad6db7c77514d94de2890c0a58705229259a2bf06a0502b93e182786844f687d"
+      "bytes": 6758,
+      "sha256": "a9362e7cce9ec9bafd8d34614573e7dc49e5748f934ea541d2b10ad83ed8e9b6"
     }
   },
   "hf_logical_bytes": 16071906850,

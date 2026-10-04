@@ -14,6 +14,9 @@ STOCK_SKIPS = {
     "test_prefills_sharing_a_step_each_recall_their_own_needle",
     "test_chat_logprobs_all_vocab",
 }
+STOCK_SETUP_SKIPS = {
+    f"tests/tt/test_chunked_prefill.py::{name}" for name in STOCK_SKIPS if name != "test_chat_logprobs_all_vocab"
+}
 
 
 def fixture(path):
@@ -75,7 +78,12 @@ def completed_sampling(output, code):
     assert set(receipt["outcomes"]) == set(names)
     skipped, failed = [], []
     for name, outcomes in receipt["outcomes"].items():
-        assert outcomes["setup"] == outcomes["teardown"] == "passed"
+        assert outcomes["teardown"] == "passed"
+        if outcomes["setup"] == "skipped":
+            assert name in STOCK_SETUP_SKIPS and "call" not in outcomes, "Unexpected sampling setup skip"
+            skipped.append(name)
+            continue
+        assert outcomes["setup"] == "passed"
         assert outcomes["call"] in ("passed", "failed", "skipped")
         if outcomes["call"] == "skipped":
             assert name.rsplit("::", 1)[1] in STOCK_SKIPS, "Unexpected sampling skip"
