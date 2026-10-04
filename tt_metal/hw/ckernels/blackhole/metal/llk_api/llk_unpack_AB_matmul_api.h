@@ -17,7 +17,8 @@
 // so the cores take only the already-resolved geometry (face_r_dim / num_faces / partial_face per src) +
 // runtime addresses + per-tile sizes; the init core also takes stream_narrow, which the callers derive from the
 // operands' L1 formats with _llk_unpack_AB_matmul_stream_narrow_ (an 8-bit streamed operand is streamed at its
-// data rate). The role swap (in0 -> SrcB, in1 -> SrcA) is applied by the callers.
+// data rate; false keeps the replay body every format can use). The role swap (in0 -> SrcB, in1 -> SrcA) is applied
+// by the callers.
 inline void llk_unpack_AB_matmul_init_impl(
     const std::uint32_t transpose,
     const std::uint32_t ct_dim,
@@ -29,7 +30,7 @@ inline void llk_unpack_AB_matmul_init_impl(
     const std::uint32_t unpB_num_faces,
     const bool partial_face_a,
     const bool partial_face_b,
-    const bool stream_narrow) {
+    const bool stream_narrow = false) {
     _llk_unpack_AB_matmul_init_(
         transpose,
         ct_dim,
