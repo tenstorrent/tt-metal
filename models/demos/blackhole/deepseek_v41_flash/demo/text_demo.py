@@ -203,10 +203,6 @@ def _run_demo(
     spec_k = int(
         os.environ.get("DSV41_SPEC", "0")
     )  # speculative decoding: k drafts per round (DSpark drafter), 0 = off
-    if spec_k and not hasattr(generator, "spec"):
-        generator.enable_spec(
-            spec_k
-        )  # right after the model build: before any prefill / decode trace exists (L1 placement of the verify MoE)
     profiler.end("generator_setup")
 
     if isinstance(input_prompts, list) and len(input_prompts) == 1:
@@ -258,6 +254,51 @@ def _run_demo(
         prefilled_token, _ = generator.prefill_forward_text(input_tokens_prefill, **prefill_kw)
         profiler.end("inference_prefill", iteration=batch_idx)
         prefilled_token = prefilled_token.view(-1)
+        pre_spec = None
+        if spec_k and os.environ.get("DSV41_SPEC_DIAG") == "1":
+            # DIAG: row-0 logits of the first spec round (position S, token = first) vs ONE plain decode step on the same prefill state, tail replay vs full replay seeding
+            cp = torch.tensor(decoding_pos)
+            generator.decode_forward(prefilled_token, cp, enable_trace=False, reload_inputs=True)
+            lg_plain = generator.m.read_logits().float()[:batch_size]
+            generator.m.release_trace()
+            f1, _ = generator.prefill_forward_text(input_tokens_prefill, **prefill_kw)
+            f1 = f1.view(-1)
+            generator.enable_spec(spec_k)
+            sp = generator.spec
+            Bn = padded_batch
+
+            def pcc(a_, b_):
+                a_, b_ = a_ - a_.mean(), b_ - b_.mean()
+                return float((a_ * b_).sum() / (a_.norm() * b_.norm()))
+
+            for mode in ("tail", "full"):
+                os.environ["DSV41_SPEC_FULL_REPLAY"] = "1" if mode == "full" else "0"
+                X, base = sp.seed(input_tokens_prefill, decoding_pos, f1)
+                a_, m_, d_ = sp._round(X, base)
+                lg = (
+                    generator.m.head.gather_logits(sp.dec.logits)[: Bn * sp.n]
+                    .reshape(Bn, sp.n, -1)
+                    .float()[:batch_size, 0]
+                )
+                pc = [pcc(lg[u], lg_plain[u]) for u in range(batch_size)]
+                logger.info(
+                    f"DIAG {mode} replay: row-0 logits PCC vs plain decode step per user min {min(pc):.5f} mean {sum(pc) / len(pc):.5f}; argmax equal {int((lg.argmax(-1) == lg_plain.argmax(-1)).sum())}/{batch_size}"
+                )
+            raise SystemExit("DIAG done")
+        if spec_k and os.environ.get("DSV41_SPEC_FIRST") == "1":
+            # spec pass FIRST on this very prefill state, then a fresh prefill for the plain decode (isolates 'second prefill leaves a different state' from spec bugs)
+            if not hasattr(generator, "spec"):
+                generator.enable_spec(spec_k)
+            eos_ = tokenizer.eos_token_id if stop_at_eos else None
+            act_ = torch.tensor([u < batch_size for u in range(padded_batch)])
+            t_sp = time.perf_counter()
+            gen_sp0, st0 = generator.spec_decode(
+                input_tokens_prefill, decoding_pos, prefilled_token, max_generated_tokens, eos=eos_, active=act_
+            )
+            pre_spec = (gen_sp0, st0, time.perf_counter() - t_sp)
+            generator.spec.release()
+            prefilled_token, _ = generator.prefill_forward_text(input_tokens_prefill, **prefill_kw)
+            prefilled_token = prefilled_token.view(-1)
         logger.info(f"First generated token: {tokenizer.decode(prefilled_token[0])!r}")
 
         all_outputs = [list(encoded_prompts[u][: prefill_lens[u]][: decoding_pos[u]]) for u in range(padded_batch)]
@@ -325,15 +366,30 @@ def _run_demo(
             # ---- speculative pass on the SAME prompts: a fresh prefill (the plain decode advanced the state), drafter seeding from the prompt tail, spec loop ----
             plain_gen = [all_outputs[u][decoding_pos[u] :] for u in range(padded_batch)]
             plain_ms = 1000 * decode_time_sum(profiler, iteration, batch_idx) / max(iteration - 1, 1)
-            first2, _ = generator.prefill_forward_text(input_tokens_prefill, **prefill_kw)
-            first2 = first2.view(-1)
+            if pre_spec is None:
+                first2, _ = generator.prefill_forward_text(input_tokens_prefill, **prefill_kw)
+                first2 = first2.view(-1)
+            else:
+                first2 = prefilled_token
+            if not hasattr(
+                generator, "spec"
+            ):  # built AFTER the prefills (drafter + spec step state would not fit next to the prefill chunk memory): free the traces first
+                generator.m.release_trace()
+                if (
+                    os.environ.get("DSV41_SPEC_FREE_PREFILL", "0") == "1"
+                ):  # frees only ~11 MiB/bank and (at ISL > 512) invalidated the decode key slab: off by default
+                    generator.m.prefill_model.teardown_dyn()
+                generator.enable_spec(spec_k)
             eos = tokenizer.eos_token_id if stop_at_eos else None
             active = torch.tensor([u < batch_size for u in range(padded_batch)])
-            t_sp = time.perf_counter()
-            gen_sp, st = generator.spec_decode(
-                input_tokens_prefill, decoding_pos, first2, max_generated_tokens, eos=eos, active=active
-            )
-            t_sp = time.perf_counter() - t_sp
+            if pre_spec is None:
+                t_sp = time.perf_counter()
+                gen_sp, st = generator.spec_decode(
+                    input_tokens_prefill, decoding_pos, first2, max_generated_tokens, eos=eos, active=active
+                )
+                t_sp = time.perf_counter() - t_sp
+            else:
+                gen_sp, st, t_sp = pre_spec
             ident, first_div, gaps_div = 0, [], []
             for u in range(batch_size):
                 ps = [t for t in plain_gen[u]]

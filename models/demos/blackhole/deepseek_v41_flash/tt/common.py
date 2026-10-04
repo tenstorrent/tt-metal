@@ -40,7 +40,9 @@ def create_tt_model(
     if (
         int(os.environ.get("DSV41_SPEC", "0")) > 0
     ):  # speculative decoding needs the window ring to hold 128 + k rows (tt/spec_paged.py RING_SPEC)
-        os.environ.setdefault("DSV41_RING_ROWS", "160")
+        os.environ.setdefault(
+            "DSV41_RING_ROWS", "288"
+        )  # >= 128 + 127 (replay warm-up window of the drafter seeding) + k
     if os.environ.get("DSV41_POOL_DTYPE", "bf16") == "fp8":  # fp8_e4m3 KV pool (halves the pool: batch 128 at 64k)
         kv_dtype = ttnn.fp8_e4m3
 

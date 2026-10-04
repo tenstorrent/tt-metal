@@ -96,7 +96,7 @@ class Generator:
     # ---- speculative decoding (DSpark drafter, tt/spec_model.py) -------------------------------------------------------------------------------
     def enable_spec(self, k):
         """Build the speculative runner (k drafts verified per round, 1..5) on the model's weights / paged pool. The model must have been built with
-        DSV41_RING_ROWS=160 (``tt.common.create_tt_model`` sets it when DSV41_SPEC > 0)."""
+        DSV41_RING_ROWS=288 (``tt.common.create_tt_model`` sets it when DSV41_SPEC > 0)."""
         from models.demos.blackhole.deepseek_v41_flash.tt.spec_model import SpecRunner
 
         self.spec = SpecRunner(self.m, k)
