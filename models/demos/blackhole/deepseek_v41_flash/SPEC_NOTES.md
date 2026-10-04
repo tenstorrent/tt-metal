@@ -85,3 +85,35 @@ Blockers found (each is real work, together several days, device-verification at
 3. The pool's ring region is [slot][user][ring_rows] sized at pool build: spec needs ring_rows >= 128+k (160) for every handed-off user; prefill->decode handoff (`prefill_handoff.py`) stages 128-row rings.
 4. The drafter's 3 stage rings must be seeded from layers 37-39 hidden of the prompt (today the loop re-feeds the prompt through the verify step, ~1.5 s for 80 tokens, impossible at ISL 2k: 2k tokens x 40 layers).
 I can do (1)-(4) incrementally if prioritised; the first deliverable would be window-only layers + compressed layers with <=512 entries (ISL <= 1k) on the pool, then the multi-query indexer.
+
+
+## Stage 1 (spec via paged pool)
+# Paged-pool spec verify, stage 1 (against main bdde8dcb6e0): window layers + compressed layers with <= 512 selected entries (no indexer)
+
+changes.diff (= changes_stage1.diff, `git apply --check` OK). Opt-in: `DSV41_SPEC_PAGED=1` in tests/test_spec_loop.py; nothing in the default decode path changes.
+
+## What was built
+* `tt/spec_paged.py`: `SpecPagedWindowAttention`, `SpecPagedCompressedAttention` (owner + reader), `SpecPagedChain`. Every (user, j) verify row is a virtual user of `paged_kv_step` with `nq = n`
+  (user = row // n): ONE op writes the n ring rows (ring_rows = 160 = 128 + k slack, set at pool build), the group-completing latents (owners), and builds one `sparse_sdpa` index row per virtual row
+  (window rows <= pos + compressed entries <= pos: causal inside the block, no mask). Block compression of ratio-2 (prev_cs chain, commit(m)) is reused from SpecCompressedAttention.
+* Shared-file edits (all backward compatible for nq = 1 / single-token decode):
+  - `tt/paged_kernels/paged_kv_step.cpp`: (a) KV_MODE 0 reads the q tile of the ROW (`row*16`, was `user*16`; equal when nq = 1); (b) the latent is written only by the group-COMPLETING position
+    (`(pos+1) % RATIO == 0`; ratio 1 unchanged): even positions of ratio-2 layers used to write a junk entry that the odd position finalises, which races when both rows are in one block.
+  - `tt/paged_attention.py`: `_paged_attend` passes `nq=getattr(self, "nq", 1)`.
+* `tt/mtp.py`: `DSparkDrafter(max_pos=...)` (rope / mask tables > 256 positions). `tt/spec_decoder.py`: tap fallback for partial-layer debug runs.
+* Tests: `tests/test_spec_paged_attn.py` (layer level), `tests/test_spec_loop.py` with `DSV41_SPEC_PAGED=1 DSV41_CTX=<positions>` (full 40-layer loop, prompt fed through the device).
+
+## Verified on device (.46)
+1. Layer level, paged vs ORIGINAL single-token attention (random inputs, empty state, n = 4 / 6, up to 12 / 30 blocks): window layer 0.99998; ratio-2 owner (2) 0.9976 (n=4, 12 blocks), 0.9959 (n=6, 30 blocks = positions to 180);
+   ratio-1 owner (20) 0.9938 (n=4); paged vs non-paged spec attention 0.9997+ (n = 3, 4) incl. readers (3, 21). Reader layers vs an ORIGINAL reader in this synthetic test are not comparable (0.2-0.9: the test's original reader copies an empty owner cache);
+   paged == non-paged spec on readers (0.9997).
+2. FINDING: the NON-paged spec attention is WRONG beyond position 127 for ratio-2 layers (PCC vs original 0.97 -> 0.7 for the odd rows from position 131; paged stays 0.996). This is why the non-paged loop was limited to 127 positions (more than 64 compressed entries => second k-chunk bug in the composite SDPA path).
+3. Full 40-layer loop, paged, k=3, 16 users, 40 tokens (spec6_pg_k3_g40.log): first token == CPU 16/16, acceptance 2.214 accepted/round (non-paged 2.196, CPU ref 2.30), 3.21 tokens/round, device round 75.4 ms (non-paged 74.6), wall 82.4 ms vs 83.4 =>
+   no speed penalty; teacher-forced drafter d1..d5 0.905/0.778/0.667/0.524/0.365; stream vs the non-paged k=3 stream: 10/16 identical (divergences at 18, 3, 4, 19, 7 = the same near-tie prompts as plain-vs-spec).
+4. Long run, paged, 200 new tokens (positions to 280, impossible before): plain (k=0) 53.2 ms/token wall, 18.8 tok/s/user, 0.919 token agreement with the CPU reference over the first 64 tokens; k=3: 68 rounds, 2.243 accepted/round, 3.24 tokens/round, 85.5 ms wall -> 37.9 tok/s/user (2.0x plain).
+   Exactness vs paged plain over 200 tokens: 0/16 identical (first divergence 18-193); near-tie evidence (top1-top2 logit gap at the divergence, plain / spec): 0.002/0.214, 0.038/0.010, 0.126/0.232, **2.134/0.244 (user 3, token 165)**, 0.106/0.038, 0.029/0.088, 0.231/0.243, 0.216/0.199.
+   Seven of eight are near-ties; user 3 (position ~245) is a 2.1-logit shift between the 1-row and 4-row paths and is NOT explained by a tie: open item (could be bf16 accumulation at long context or a small long-position error in the spec path; layer-level PCC at position 180 is 0.996).
+
+## Not verified / next
+* ISL > 512 for ratio-1 layers and > 1024 for ratio 2 needs the indexer (stage 2), ring 160 in pool/handoff (stage 3: today `SpecPagedChain` builds its own pool with ring_rows = 160 and starts from an empty cache, the prompt is replayed through the device).
+* Pool is bf16 (fp8 pool untested with spec). Engram / drafter rings unchanged.

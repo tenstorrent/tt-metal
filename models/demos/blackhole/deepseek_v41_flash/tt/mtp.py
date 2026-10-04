@@ -505,7 +505,9 @@ class DraftState:
 
 # ---------------------------------------------------------------------------------------------------- the drafter
 class DSparkDrafter:
-    def __init__(self, md, mesh_config, ccl, stage_w, embed_weight, head, users_per_row=4, n=2, bfp8_main=True):
+    def __init__(
+        self, md, mesh_config, ccl, stage_w, embed_weight, head, users_per_row=4, n=2, bfp8_main=True, max_pos=256
+    ):
         """stage_w: [load_mtp_stage(0), (1), (2)]; embed_weight: the backbone's device embedding table [vocab, 5120] (bf16 row-major, replicated);
         head: the backbone's ``DSV41DeviceHead`` (tied LM head weight + sampling); n = verify rows per user (1 + k)."""
         self.md, self.mesh_config, self.ccl, self.head = md, mesh_config, ccl, head
@@ -523,11 +525,11 @@ class DSparkDrafter:
             mesh_mapper=mapper or rep,
         )
         self._up = up
-        freqs = rope_freqs(0)
+        freqs = rope_freqs(0, max_pos)
         _l1v(md, "drafter init start")
         self.attn = [DraftAttention(md, mesh_config, ccl, w["attn"], freqs, U, n) for w in stage_w]
         _l1v(md, "after attn x3")
-        self.state = DraftState(md, self.attn[0], U, n)
+        self.state = DraftState(md, self.attn[0], U, n, max_pos=max_pos)
         _l1v(md, "after state")
         self.layers, bufs = [], None
         for a, w in zip(self.attn, stage_w):

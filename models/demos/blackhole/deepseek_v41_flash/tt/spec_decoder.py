@@ -195,7 +195,9 @@ class SpecDecoder(SpecVerifier):
         # ---- commit compressor state, write main_kv of the n rows, draft ----
         oh3 = ttnn.reshape(ttnn.to_layout(onehot, rm), [U, n, 1])
         self.commit(oh3)
-        hidden = ttnn.typecast(ttnn.concat(taps, dim=3), ttnn.bfloat16)  # [1,1,T,15360]
+        hidden = ttnn.typecast(
+            ttnn.concat(taps or [self._tap(x)] * 3, dim=3), ttnn.bfloat16
+        )  # [1,1,T,15360]; partial-layer debug runs have no tap layers
         dr = self.drafter
         dr.write_main(hidden, dr.state.build_verify(self.pos))
         tok_rows = ttnn.concat(

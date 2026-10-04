@@ -79,6 +79,7 @@ class _PagedMixin:
             src_off=src_off,
             topk_out=topk_out,
             ring_rows=self.kv.ring_rows,
+            nq=getattr(self, "nq", 1),  # spec verify blocks: rows of one user are consecutive (user = row // nq)
         )
         q32 = ttnn.reshape(q, (1, T, PAD_HEADS, HEAD_DIM), (1, T, PAD_HEADS, HEAD_DIM))
         qh = ttnn.to_layout(ttnn.permute(q32, (0, 2, 1, 3)), ttnn.ROW_MAJOR_LAYOUT)  # [1,32,T,512] RM (heads x users)
