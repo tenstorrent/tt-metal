@@ -10,6 +10,9 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_recip.h"
+#if defined(TRISC_MATH)
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#endif
 namespace ckernel::sfpu::bf16 {
 template <typename Config>
 inline void init_core_bridge_rational() {

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-// Include inside namespace sfpi. Typed callers retain the domain-action proof.
+// Include inside namespace sfpi.
 
 inline vFloat raw_daz_action_coordinate(vFloat x_raw) {
     constexpr float min_normal = std::numeric_limits<float>::min();

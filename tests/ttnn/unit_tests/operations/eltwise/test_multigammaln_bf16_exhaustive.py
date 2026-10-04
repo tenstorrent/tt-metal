@@ -15,11 +15,12 @@ The inputs in DECLARED are stored as the class given there, the first row that h
 that differs from torch, it is the class the TT-NN op this kernel replaces stores.
 """
 
+import pytest
 import torch
 import ttnn
 
 from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
-from tests.ttnn.utils_for_testing import generate_all_bfloat16_bitpatterns
+from tests.ttnn.utils_for_testing import assert_with_pcc, generate_all_bfloat16_bitpatterns
 
 SMALLEST_NORMAL = 2.0**-126
 CLASS_CODES = {"inf": 0, "-inf": 1, "zero": 2, "finite": 3}
@@ -113,3 +114,63 @@ def test_multigammaln_exhaustive_bfloat16(device):
         f"x={x.flatten()[worst].item()}: expected {_reference(x64).flatten()[worst].item()}, "
         f"got {actual.flatten()[worst].item()}"
     )
+
+
+# Inputs well inside the range the generated kernel is fitted on, for the calls below.
+LOW, HIGH = 1.5009765625, 50.0
+
+
+def _inputs(shape):
+    generator = torch.Generator().manual_seed(0)
+    return (LOW + (HIGH - LOW) * (0.05 + 0.9 * torch.rand(shape, generator=generator))).to(torch.bfloat16)
+
+
+def _on_device(x, device, **kwargs):
+    return ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, **kwargs)
+
+
+@run_for_wormhole_b0_or_blackhole("the generated kernel exists for Blackhole and Wormhole only")
+@pytest.mark.parametrize("placement", ["row_major", "height_sharded", "unaligned", "cached"])
+def test_multigammaln_every_placement_matches_interleaved_tiles(device, placement):
+    """The generated kernel computes each element alone, so placement must not change a result."""
+    x = _inputs((1, 1, 64, 96))
+    expected = ttnn.to_torch(ttnn.multigammaln(_on_device(x, device)))
+    if placement == "row_major":
+        tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    elif placement == "height_sharded":
+        shard = ttnn.create_sharded_memory_config(
+            x.shape, core_grid=ttnn.CoreGrid(y=1, x=2), strategy=ttnn.ShardStrategy.HEIGHT
+        )
+        tt_x = _on_device(x, device, memory_config=shard)
+    elif placement == "unaligned":
+        x, expected = x[..., :33, :65].contiguous(), expected[..., :33, :65]
+        tt_x = _on_device(x, device)
+    else:
+        tt_x = _on_device(x, device)
+        ttnn.multigammaln(tt_x)
+    actual = ttnn.to_torch(ttnn.multigammaln(tt_x))
+    assert torch.equal(actual, expected)
+
+
+@run_for_wormhole_b0_or_blackhole("the generated kernel exists for Blackhole and Wormhole only")
+@pytest.mark.parametrize("call", ["float32"])
+def test_multigammaln_keeps_its_own_path_elsewhere(device, call):
+    """A call the generated kernel does not serve runs the op's existing path and matches its golden."""
+    x = _inputs((1, 1, 64, 64))
+    golden = ttnn.get_golden_function(ttnn.multigammaln)
+    if call == "float32":
+        actual = ttnn.multigammaln(
+            ttnn.from_torch(x.float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        )
+        expected = golden(x.float())
+    elif call == "bfloat16_to_float32":
+        # Only the route is checked: the generated kernel does not compile with FP32 DEST, so any
+        # result shows that the op's own kernel ran.
+        output = ttnn.from_torch(torch.zeros(x.shape), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        assert ttnn.multigammaln(_on_device(x, device), output_tensor=output).dtype == ttnn.float32
+        return
+    else:
+        # Any value other than the parameter's default keeps the op's own kernel.
+        actual = ttnn.multigammaln(_on_device(x, device), **{call: 0.125})
+        expected = golden(x.float(), **{call: 0.125})
+    assert_with_pcc(expected, ttnn.to_torch(actual).float(), 0.999)
