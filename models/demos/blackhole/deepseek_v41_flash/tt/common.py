@@ -50,5 +50,11 @@ def create_tt_model(
     if paged_attention_config is not None:
         assert paged_attention_config.block_size == PAGE_TOKENS, "the DSV4.1 paged pool uses 128-token pages"
     num_pages = paged_attention_config.max_num_blocks if paged_attention_config is not None else None
-    model = Model(mesh_device, args, max_ctx=max_seq_len, num_pages=num_pages, kv_dtype=kv_dtype, log=log)
+    from models.demos.blackhole.deepseek_v41_flash.tt.build_slots import build_slot
+
+    n_layers = args.n_layers
+    with build_slot(
+        n_layers, log=log
+    ):  # cluster-wide cap on concurrent full builds (NFS weight reads), see tt/build_slots.py
+        model = Model(mesh_device, args, max_ctx=max_seq_len, num_pages=num_pages, kv_dtype=kv_dtype, log=log)
     return args, model, model.pool, None
