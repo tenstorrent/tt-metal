@@ -42,4 +42,12 @@ pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-producer -n 1
 pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-consumer --dist loadgroup -n 15 -x -m "perf and not accuracy" --timeout=60 \
   --splits "$N_GROUPS" --group "$GROUP" \
   --junitxml="pytest-report-wormhole-${GROUP}-run.xml" .
+# Experiment: keep build.h and the pack.elf disassembly of each variant.
+DIS="$SCRIPT_DIR/../perf_data/runs/disasm-${GROUP}"; mkdir -p "$DIS"
+OBJDUMP="$SCRIPT_DIR/sfpi/compiler/bin/riscv-tt-elf-objdump"
+find "${RUNNER_TEMP:-/tmp}/tt-llk-build" -name build.h | while read -r h; do
+  grep -q "PERF_RUN_TYPE" "$h" || continue
+  v=$(dirname "$h"); [ -f "$v/elf/pack.elf" ] || continue
+  { cat "$h"; echo "==== pack.elf"; "$OBJDUMP" -d "$v/elf/pack.elf"; } > "$DIS/$(basename "$v").txt" || true
+done
 junitparser merge pytest-report-wormhole-${GROUP}-compile.xml pytest-report-wormhole-${GROUP}-run.xml pytest-report-wormhole-${GROUP}.xml
