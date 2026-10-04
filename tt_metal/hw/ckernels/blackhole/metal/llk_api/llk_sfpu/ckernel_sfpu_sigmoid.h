@@ -43,6 +43,8 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
 bool bf16_dest_sigmoid();
 template <int ITERATIONS>
 void calculate_sigmoid_bf16();
+// Whether BF16 DEST runs the generated sigmoid kernel as one call over the whole tile.
+inline constexpr bool sigmoid_bf16_whole_tile = true;
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_sigmoid() {
@@ -71,7 +73,7 @@ inline void calculate_sigmoid() {
 
 void init_sigmoid_bf16();
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 inline void sigmoid_init() {
     if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
         if (bf16_dest_sigmoid()) {

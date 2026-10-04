@@ -66,7 +66,7 @@ inline void calculate_clamped_silu_glu(const uint gate_tile_idx, const uint up_t
 
 inline void clamped_silu_glu_init() {
     // _sfpu_sigmoid_'s own init: it owns the Prgm0 requirement noted above.
-    sigmoid_init</*APPROXIMATION_MODE=*/false, true>();
+    sigmoid_init</*APPROXIMATION_MODE=*/false>();
 }
 
 }  // namespace ckernel::sfpu
