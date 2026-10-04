@@ -8,6 +8,9 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_recip.h"
+#if defined(TRISC_MATH)
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#endif
 namespace sfpi {
 #include "ckernel_sfpu_bf16_min_max.h"
 }
