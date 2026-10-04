@@ -1,5 +1,7 @@
 """moe_compute (router + dispatch + moe_compute + tail, the DSV41PrefillMoE path) time vs tokens per device T = 32*G; checks each 32-token slice
-against the T=32 block. Env DSV41_MTS="32,64,128,256", DSV41_MTS_LAYER (3). Router runs per 32-token slice (kernel limit)."""
+against the T=32 block. Env DSV41_MTS="32,64,128,256", DSV41_MTS_LAYER (3). Router runs per 32-token slice (kernel limit).
+"""
+
 import gc
 import os
 
@@ -42,7 +44,7 @@ def test_tokens_scaling(mesh_device):
     for T in [int(x) for x in os.environ.get("DSV41_MTS", "32,64,128,256").split(",")]:
         try:
             os.environ["DSV41_MOE_G"] = str(T // 32)
-            pm = DSV41PrefillMoE(blk, T=32)
+            pm = DSV41PrefillMoE(blk, T=32, g=T // 32)
             h = ttnn.from_torch(
                 torch.randn(1, 1, T, 5120).to(torch.bfloat16),
                 device=md,

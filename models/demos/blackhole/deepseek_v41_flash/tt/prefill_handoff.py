@@ -273,7 +273,10 @@ class GenPrefillModel(DSV41PrefillModel):
                 kin = erows_dev[lid].shape[3]
                 new = [
                     self.engram[lid].forward_v2(
-                        x, ttnn.slice(erows_dev[lid], [0, 0, c * T, 0], [1, 1, (c + 1) * T, kin])
+                        x,
+                        ttnn.to_layout(
+                            ttnn.slice(erows_dev[lid], [0, 0, c * T, 0], [1, 1, (c + 1) * T, kin]), ttnn.TILE_LAYOUT
+                        ),
                     )
                     for c, x in enumerate(xs)
                 ]
