@@ -197,7 +197,7 @@ void kernel_main() {
         ckernel::PoolType::MAX,
         ckernel::ReduceDim::REDUCE_ROW,
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
-    generate_bcast_col_scalar(CircularBuffer(4), 0x3f803f80);
+    generate_bcast_col_scalar_zeroed(CircularBuffer(4), 0x3f803f80);
 
 #ifdef SDPA_RECIPE_Q_PER_KV_HEAD
     const uint32_t kv_head = head / SDPA_RECIPE_Q_PER_KV_HEAD;
