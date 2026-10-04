@@ -434,7 +434,9 @@ std::optional<Candidate> choose_family(
 
 // A 2D layout whose per-core blocks are one tile tall or wide multicasts single tiles along that axis, so the
 // reuse the rules above count on isn't there: the roofline estimate picks the family instead (ties to the
-// earlier family: 2D, 1D in0, 1D in1, Reuse).
+// earlier family: 2D, 1D in0, 1D in1, Reuse), among the candidates no other keeps one_d_core_advantage times as many
+// cores busy as. The roofline has no per-step latency, so on its own it can prefer a layout that loops serially over
+// many small steps on a few cores (2D over a batch) to one that does them at once on many (Reuse).
 bool one_tile_2d(const Candidate& c) {
     return c.family == Family::Mcast2D && std::min(c.blocking.per_core_M, c.blocking.per_core_N) == 1;
 }
@@ -450,8 +452,16 @@ std::optional<Candidate> HeuristicFamily::choose(
     if (!chosen || !one_tile_2d(*chosen)) {
         return chosen;
     }
+    uint32_t most_cores = 0;
+    for (const auto& c : all) {
+        most_cores = std::max(most_cores, c.cores);
+    }
     auto key = [&](const Candidate& c) {
-        return std::make_pair(roofline(p, hw, c.family, c.blocking, c.fuse_batch).cycles(), static_cast<int>(c.family));
+        const bool clearly_fewer_cores = c.cores * params.tuned.one_d_core_advantage <= most_cores;
+        return std::make_tuple(
+            clearly_fewer_cores,
+            roofline(p, hw, c.family, c.blocking, c.fuse_batch).cycles(),
+            static_cast<int>(c.family));
     };
     return *std::min_element(
         all.begin(), all.end(), [&](const Candidate& x, const Candidate& y) { return key(x) < key(y); });

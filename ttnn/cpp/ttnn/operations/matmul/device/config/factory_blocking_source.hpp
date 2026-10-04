@@ -152,14 +152,16 @@ public:
 //    (small M or small N), or 1D in0-mcast keeps as many cores busy with less input per core;
 //  - batched B: Reuse, unless the multicast layout looping over the batch (chosen as above) keeps
 //    one_d_core_advantage times as many cores busy, or Reuse would read one_d_core_advantage times as much input;
-//  - a 2D choice whose per-core blocks are one tile tall or wide: the lowest roofline estimate instead.
+//  - a 2D choice whose per-core blocks are one tile tall or wide: the lowest roofline estimate instead, among the
+//    candidates no other keeps one_d_core_advantage times as many cores busy as.
 class HeuristicFamily final : public FamilyPolicy {
 public:
     // Tuned: fitted to benchmark data (see HeuristicBlocking::Tuned)
     struct Tuned {
         // Switching away from the default layout needs at least this many times as many cores busy: 1D over 2D
         // (1D multicasts a whole operand to every core), and for batched B a batch-looping multicast layout over
-        // Reuse. Basis: the Wormhole family sweep; range 1.25 to 2 performs about the same.
+        // Reuse; where the roofline picks the family, a candidate with this many times fewer cores busy is out.
+        // Basis: the Wormhole family sweep; range 1.25 to 2 performs about the same.
         double one_d_core_advantage = 1.5;
     };
     struct Params {

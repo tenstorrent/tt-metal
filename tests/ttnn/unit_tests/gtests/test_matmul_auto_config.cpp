@@ -592,6 +592,18 @@ TEST(MatmulAutoConfig, FamilyChoice) {
     }
 }
 
+// Where the roofline picks the family (2D blocks one tile tall or wide), a candidate that another keeps
+// one_d_core_advantage times as many cores busy as is out: here 2D loops 12 small batch matrices over 9 cores, Reuse
+// runs them at once on 36 (the roofline alone, with no per-step latency, picks 2D on Blackhole: 4x slower measured)
+TEST(MatmulAutoConfig, OneTileTwoDKeepsCoresBusy) {
+    for (const auto& arch : kArchs) {
+        const auto hw = HardwareDesc::for_arch(arch.arch, arch.grid, kL1Budget);
+        const auto chosen = choose(make_matmul(12, 12, 96, 64, 96), hw);
+        ASSERT_TRUE(chosen.has_value());
+        EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Reuse)) << arch.name;
+    }
+}
+
 // Inputs the legacy selection covered that v2 must too (no fallback): tiny tiles, broadcast A, transpose_a
 // over a batch, sub-device grids, global CBs, block-sharded A on one row or column, and output shard specs
 // whose grid doesn't match the output.
