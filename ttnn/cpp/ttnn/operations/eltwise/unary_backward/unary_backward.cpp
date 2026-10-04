@@ -773,9 +773,10 @@ std::vector<Tensor> hardshrink_bw(
 std::vector<Tensor> softshrink_bw(
     const Tensor& grad, const Tensor& input_tensor, float lambd, const std::optional<MemoryConfig>& output_mem_config) {
     // One program for BF16 operands at the fitted scalar values, whose gradient is the
-    // generated SFPU kernel; anything else keeps the composite below.
-    if (grad.dtype() == DataType::BFLOAT16 && input_tensor.dtype() == DataType::BFLOAT16 &&
-        std::bit_cast<uint32_t>(lambd) == 0x3f000000u) {
+    // generated SFPU kernel; anything else, and Quasar, which has no generated kernel, keeps
+    // the composite below.
+    if (input_tensor.device()->arch() != tt::ARCH::QUASAR && grad.dtype() == DataType::BFLOAT16 &&
+        input_tensor.dtype() == DataType::BFLOAT16 && std::bit_cast<uint32_t>(lambd) == 0x3f000000u) {
         return {ttnn::operations::unary_backward::launch_unary_backward(
             ttnn::operations::unary_backward::UnaryBackwardOpType::SOFTSHRINK_BW,
             grad,
