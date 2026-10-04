@@ -1,3 +1,5 @@
+import pytest
+
 from runner_failure_common import JobScanResult, RecentJob
 from runner_failure_post_slack import (
     failure_summary_for_slack_cell,
@@ -7,7 +9,8 @@ from runner_failure_post_slack import (
 )
 
 
-def test_failure_summary_shows_metadata_signature_when_log_not_checked() -> None:
+@pytest.mark.parametrize("signature", ["Set up runner failure", "Runner disconnected"])
+def test_failure_summary_shows_metadata_signature_when_log_not_checked(signature) -> None:
     result = JobScanResult(
         job=RecentJob(
             owner_repo="tenstorrent/tt-metal",
@@ -28,11 +31,11 @@ def test_failure_summary_shows_metadata_signature_when_log_not_checked() -> None
         ),
         log_status="gh api timed out",
         log_checked=False,
-        signature_labels=("Set up runner failure",),
+        signature_labels=(signature,),
         fabric_missing_links="",
     )
 
-    assert failure_summary_for_slack_cell(result) == "Set up runner failure"
+    assert failure_summary_for_slack_cell(result) == signature
 
 
 def test_scan_health_alerts_above_ten_percent() -> None:

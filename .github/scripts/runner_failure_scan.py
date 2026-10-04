@@ -254,7 +254,7 @@ def build_markdown_report(
         f"- Jobs selected for scanning: `{len(jobs_to_scan)}`",
         f"- Log downloads: `{download_successes}/{download_attempts}` succeeded",
         f"- Log download failures: `{download_failures}` (`{download_failure_rate:.1%}`)",
-        f"- Logs unavailable (excluded from download health): `{unavailable_logs}`; eligible for retry",
+        f"- Logs unavailable (excluded from download health): `{unavailable_logs}`",
         f"- Runner-failure jobs: `{len(failures)}`",
         "",
     ]
@@ -402,7 +402,7 @@ def main() -> int:
         log_workers=args.log_workers,
     )
     for result in scan_results:
-        if result.log_checked:
+        if result.log_checked or result.signature_labels:
             mark_job_checked(state, result)
 
     save_state(args.state_out, state)

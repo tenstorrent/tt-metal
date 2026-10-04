@@ -22,7 +22,7 @@ except ModuleNotFoundError:  # pragma: no cover - handled in load_config
     yaml = None
 
 
-SIGNATURE_VERSION = "runner-failure-signatures-2026-10-02-v1"
+SIGNATURE_VERSION = "runner-failure-signatures-2026-10-05-v1"
 UNKNOWN_RUNNER = "(unknown runner)"
 ACTIVE_JOB_STATUSES = {"queued", "in_progress", "waiting", "pending", "requested"}
 
@@ -91,6 +91,7 @@ class LogLookupResult:
     log_text: str | None
     status: str
     unavailable: bool = False
+    signature_labels: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -171,6 +172,12 @@ ERROR_SIGNATURES = (
     ErrorSignature(
         key="SETUP_RUNNER_FAILURE_FOUND",
         label="Set up runner failure",
+    ),
+    ErrorSignature(
+        key="RUNNER_DISCONNECTED_FOUND",
+        label="Runner disconnected",
+        needle="The self-hosted runner lost communication with the server",
+        case_sensitive=False,
     ),
 )
 
@@ -573,22 +580,22 @@ def combine_signature_labels(*label_groups: list[str]) -> list[str]:
     return [signature.label for signature in ERROR_SIGNATURES if signature.label in labels_by_name]
 
 
-def unavailable_job_log_reason(job: RecentJob, timeout: int) -> str:
+def missing_job_log_result(job: RecentJob, timeout: int) -> LogLookupResult | None:
     try:
         payload = gh_api_json(f"repos/{job.owner_repo}/actions/jobs/{job.job_id}", timeout=timeout)
         if not isinstance(payload, dict):
-            return ""
+            return None
         status = str(payload.get("status") or "").casefold()
         if status in ACTIVE_JOB_STATUSES:
-            return f"job is {status}"
+            return LogLookupResult(log_text=None, status=f"not available: job is {status} (HTTP 404)", unavailable=True)
 
         check_path = urlparse(str(payload.get("check_run_url") or "")).path
         expected_prefix = f"/repos/{job.owner_repo}/check-runs/"
         if not check_path.startswith(expected_prefix) or not check_path.removeprefix(expected_prefix).isdigit():
-            return ""
+            return None
         annotations = gh_api_json(f"{check_path.lstrip('/')}/annotations?per_page=100", paginate=True, timeout=timeout)
     except (json.JSONDecodeError, OSError, RuntimeError, subprocess.TimeoutExpired):
-        return ""
+        return None
 
     for page in annotations if isinstance(annotations, list) else []:
         for annotation in page if isinstance(page, list) else [page]:
@@ -596,8 +603,13 @@ def unavailable_job_log_reason(job: RecentJob, timeout: int) -> str:
                 isinstance(annotation, dict)
                 and "self-hosted runner lost communication" in str(annotation.get("message") or "").casefold()
             ):
-                return "runner lost communication with GitHub"
-    return ""
+                return LogLookupResult(
+                    log_text=None,
+                    status="not available: runner lost communication with GitHub (HTTP 404)",
+                    unavailable=True,
+                    signature_labels=("Runner disconnected",),
+                )
+    return None
 
 
 def fetch_github_job_log(job: RecentJob, timeout: int) -> LogLookupResult:
@@ -625,9 +637,9 @@ def fetch_github_job_log(job: RecentJob, timeout: int) -> LogLookupResult:
         details = " ".join((result.stderr or result.stdout or "unknown gh api error").split())
         if re.search(r"\bHTTP 404\b", details):
             # GitHub can close a disconnected runner's job without publishing its logs.
-            reason = unavailable_job_log_reason(job, timeout=timeout)
-            if reason:
-                return LogLookupResult(log_text=None, status=f"not available: {reason} (HTTP 404)", unavailable=True)
+            missing_log_result = missing_job_log_result(job, timeout=timeout)
+            if missing_log_result is not None:
+                return missing_log_result
         return LogLookupResult(log_text=None, status=f"gh api failed: {details}")
 
     return LogLookupResult(log_text=result.stdout, status="fetched")
@@ -662,6 +674,7 @@ def scan_job(job: RecentJob, timeout: int) -> JobScanResult:
     job = enrich_setup_runner_metadata(job, timeout=timeout)
     metadata_signature_labels = matching_job_metadata_signature_labels(job)
     log_result = fetch_github_job_log(job, timeout=timeout)
+    metadata_signature_labels = combine_signature_labels(metadata_signature_labels, list(log_result.signature_labels))
     if log_result.log_text is None:
         return JobScanResult(
             job=job,
@@ -705,13 +718,13 @@ def scan_jobs(jobs: list[RecentJob], *, gh_timeout: int, log_workers: int) -> li
                 continue
             results.append(result)
             if result.log_unavailable:
-                print(f"Log unavailable for {result.job.html_url}: {result.log_status}; eligible for retry.")
+                print(f"Log unavailable for {result.job.html_url}: {result.log_status}.")
             elif not result.log_checked:
                 print(
                     f"warning: could not check {result.job.html_url}: " f"{result.log_status}",
                     file=sys.stderr,
                 )
-            elif result.signature_labels:
+            if result.signature_labels:
                 print(f"runner failure {result.job.html_url}")
     return sorted(
         results,

@@ -160,11 +160,13 @@ def test_log_404_is_unavailable_only_with_runner_disconnect_evidence(monkeypatch
     monkeypatch.setattr("runner_failure_common.gh_api_json", metadata)
     job = job_from_dict({"owner_repo": "tenstorrent/tt-metal", "job_id": "1", "status": "completed"})
 
-    result = fetch_github_job_log(job, timeout=120)
+    result = scan_job(job, timeout=120)
 
-    assert result.log_text is None
-    assert result.unavailable is unavailable
-    assert "HTTP 404" in result.status
+    assert not result.log_checked
+    assert result.log_unavailable is unavailable
+    assert "HTTP 404" in result.log_status
+    assert result.signature_labels == (("Runner disconnected",) if unavailable else ())
+    assert scan_result_from_dict(result_to_dict(result)) == result
 
 
 def test_log_404_counts_as_failure_when_metadata_lookup_fails(monkeypatch) -> None:
