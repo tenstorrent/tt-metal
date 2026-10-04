@@ -82,14 +82,17 @@ inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfp
     return sfpi::copysgn(exp_abs * rsqrt_y * correction, x_signed);
 }
 
+bool bf16_dest_i1();
 template <int ITERATIONS>
 void calculate_i1_bf16();
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en>
 inline void calculate_i1() {
     if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
-        calculate_i1_bf16<ITERATIONS>();
-        return;
+        if (bf16_dest_i1()) {
+            calculate_i1_bf16<ITERATIONS>();
+            return;
+        }
     }
     constexpr float I1_MAX_INPUT = 88.5f;
     constexpr float I1_THRESHOLD = 10.0f;
