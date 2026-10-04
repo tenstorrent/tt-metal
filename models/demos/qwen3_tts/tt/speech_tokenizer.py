@@ -203,17 +203,20 @@ def conv_decoder_block(
     mc = ttnn.DRAM_MEMORY_CONFIG
     b, _, l, c = int(x.shape[0]), int(x.shape[1]), int(x.shape[2]), int(x.shape[3])
 
-    # Snake activation before upsampling
-    if "alpha" in block_weights and "beta" in block_weights:
+    # Snake activation before upsampling.
+    # Keys are "block.0.alpha"/"block.0.beta" (fall back to "alpha"/"beta").
+    alpha_key = "block.0.alpha" if "block.0.alpha" in block_weights else "alpha"
+    beta_key = "block.0.beta" if "block.0.beta" in block_weights else "beta"
+    if alpha_key in block_weights and beta_key in block_weights:
         channels = int(x.shape[-1])
         alpha_tt = ttnn.from_torch(
-            block_weights["alpha"].view(1, 1, 1, channels).to(torch.bfloat16),
+            block_weights[alpha_key].view(1, 1, 1, channels).to(torch.bfloat16),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
         )
         beta_tt = ttnn.from_torch(
-            block_weights["beta"].view(1, 1, 1, channels).to(torch.bfloat16),
+            block_weights[beta_key].view(1, 1, 1, channels).to(torch.bfloat16),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
