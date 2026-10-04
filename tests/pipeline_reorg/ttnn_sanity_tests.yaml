@@ -363,9 +363,9 @@
     tests/ttnn/unit_tests/operations/eltwise/test_hardsigmoid_bw_ulp.py
   skus:
     wh_n300_civ2:
-      timeout: 10
+      timeout: 5
     bh_p150b_civ2:
-      timeout: 10
+      timeout: 5
   team: ttnn
   budget_type: sanity
   owner_id: U09LVP68R7F # Nachiket Kapre
