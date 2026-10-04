@@ -490,8 +490,9 @@ ALWI void fast_tilize_block(
  * | Field / Setting           | Scope      | Description                                           | Restored value / behavior                                                                  |
  * |---------------------------|------------|-------------------------------------------------------|--------------------------------------------------------------------------------------------|
  * | Out_data_format/config[0] | THCON_SEC0 | Unpack config[0]: out format, throttle, tilize, shift | out_data_format = unpack_dst_format; throttle_mode = 2; tileize_mode = 0; shift_amount = 0 |
- * | Tile_x_dim (cntx0)        | THCON_SEC0 | Tile X dimension per context for unpacker             | Wormhole: face_r_dim * FACE_C_DIM in both halfwords, from the operand's CB metadata. Blackhole: not written, its init never programs it |
- * | ZW address counters       | UNP_A/B    | Z/W counters stepped by the tilize MOP                | Wormhole only: CH0/CH1 Z and W counters zeroed on both unpackers                           |
+ * | Tile_x_dim (cntx0)        | THCON_SEC0 | Tile X dimension per context for unpacker             | face_r_dim * FACE_C_DIM in both halfwords, from the operand's CB metadata                 |
+ * | Tile Y/Z dims             | THCON_SEC0 | Tile descriptor Y and Z dims of unpacker 0            | Blackhole only: Y dim 1, Z dim num_faces, from the operand's CB metadata                   |
+ * | ZW address counters       | UNP_A/B    | Z/W counters stepped by the tilize MOP                | CH0/CH1 Z and W counters zeroed on both unpackers                                          |
  * | XY address counters       | UNP_A/B    | Y counters stepped by the tilizeA_B row pattern       | Blackhole only: CH0/CH1 Y counters zeroed on both unpackers                                |
  * | SrcA Y stride (CH1)       | UNP0       | Per-row SrcA write stride used by the row-at-a-time tilize | Blackhole only: restored to the canonical stride for unpack_dst_format                 |
  *
