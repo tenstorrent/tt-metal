@@ -128,6 +128,13 @@ repos:
       types: [file]
       files: ^ttnn/.*/device/.*\.(cpp|hpp)$
       pass_filenames: true
+    - id: check-bool-from-arithmetic
+      name: Forbid a bool initialized from a multiplicative expression
+      entry: python3 scripts/check_bool_from_arithmetic.py
+      language: system
+      types: [file]
+      files: ^(tt_metal|ttnn|tt_stl|tt-train|tests)/.*\.(c|cc|cpp|cxx|h|hpp|inl)$
+      pass_filenames: true
 - repo: local
   hooks:
     - id: validate-golden-csv-columns
