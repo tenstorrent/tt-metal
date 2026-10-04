@@ -20,7 +20,8 @@ import torch
 import ttnn
 from models.tt_dit.tests.models.ltx.tools.vae_ref_check import check_against_reference
 
-NF, H, W = 145, 544, 960
+# LTX_VAE_AB_HW=1088,1920 gives the 2x4 1080p per-chip shapes (the LoudBox table keys) instead of the 4x8 ones.
+NF, (H, W) = 145, (int(v) for v in os.environ.get("LTX_VAE_AB_HW", "544,960").split(","))
 TIMED_DECODES = 3
 
 
