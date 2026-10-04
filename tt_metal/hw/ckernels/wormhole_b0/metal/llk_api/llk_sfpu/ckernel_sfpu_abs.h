@@ -15,14 +15,17 @@ namespace sfpu {
 
 inline void abs_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
+bool bf16_dest_abs();
 template <int ITERATIONS>
 void calculate_abs_bf16();
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en>
 inline void calculate_abs() {
     if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
-        calculate_abs_bf16<ITERATIONS>();
-        return;
+        if (bf16_dest_abs()) {
+            calculate_abs_bf16<ITERATIONS>();
+            return;
+        }
     }
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
