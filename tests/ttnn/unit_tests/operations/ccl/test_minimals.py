@@ -971,6 +971,38 @@ def test_rms_fuse(
     )
 
 
+@pytest.mark.skipif(
+    os.getenv("TT_METAL_NOC_DEBUG_DUMP") != "1",
+    reason="Set TT_METAL_NOC_DEBUG_DUMP=1 to check NoC atomic barriers",
+)
+@skip_for_blackhole("This test requires Wormhole")
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+def test_rms_all_gather_two_link_path_drains_noc_atomics(mesh_device, function_level_defaults):
+    run_rms_fuse_impl(
+        mesh_device,
+        num_devices=4,
+        elements_per_batch=8192,
+        num_links=2,
+        function_level_defaults=function_level_defaults,
+        input_shard_grid=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}
+        ),
+        output_shard_grid=None,
+        all_gather_topology=ttnn.Topology.Linear,
+        fused_add=False,
+        output_dtype=ttnn.bfloat16,
+        num_iters=1,
+        input_dtype=ttnn.bfloat16,
+        residual_dtype=ttnn.bfloat16,
+        check_noc_atomics=True,
+    )
+
+
 @skip_for_blackhole("This is a wormhole test")
 @pytest.mark.skipif(is_6u(), reason="This test is for N300 (2-chip WH)")
 @pytest.mark.parametrize(
@@ -1241,4 +1273,80 @@ def test_concat_fuse_6u(
         tensor_mem_layout=tensor_mem_layout,
         trace_mode=trace_mode,
         profiler=profiler,
+    )
+
+
+@pytest.mark.skipif(
+    os.getenv("TT_METAL_NOC_DEBUG_DUMP") != "1",
+    reason="Set TT_METAL_NOC_DEBUG_DUMP=1 to check NoC atomic barriers",
+)
+@skip_for_blackhole("This test requires Wormhole")
+@pytest.mark.skipif(not is_6u(), reason="This test requires a 6U Galaxy system")
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+        }
+    ],
+    indirect=True,
+)
+def test_all_gather_concat_drains_noc_atomics(mesh_device, function_level_defaults):
+    input_shard_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
+            ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
+        }
+    )
+    output_shard_grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y))
+            for x, y in [
+                (6, 6),
+                (6, 7),
+                (6, 9),
+                (6, 0),
+                (6, 1),
+                (6, 2),
+                (6, 4),
+                (6, 5),
+                (5, 5),
+                (5, 6),
+                (5, 7),
+                (5, 9),
+                (5, 0),
+                (5, 1),
+                (5, 2),
+                (5, 4),
+                (1, 4),
+                (1, 5),
+                (1, 9),
+                (1, 0),
+                (2, 0),
+                (2, 4),
+                (2, 5),
+                (2, 9),
+            ]
+        ]
+    )
+    run_concat_fuse_impl(
+        mesh_device,
+        num_devices=4,
+        output_shape=[1, 32, 32, 128],
+        dim=1,
+        num_links=4,
+        input_dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        function_level_defaults=function_level_defaults,
+        input_shard_shape=(32, 128),
+        input_shard_grid=input_shard_grid,
+        all_gather_topology=ttnn.Topology.Ring,
+        num_iters=1,
+        trace_mode=False,
+        output_shard_shape=(32, 64),
+        output_shard_grid=output_shard_grid,
+        tensor_mem_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        check_noc_atomics=True,
     )
