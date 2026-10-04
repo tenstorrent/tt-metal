@@ -546,9 +546,14 @@ constexpr bool is_single_thread_runtype(PerfRunType run_type)
 
 // A single thread run type freezes on its measured thread; peers held in an exit barrier would spin through its
 // whole measured window. A span needs every thread stopped before the read, so those keep the barrier.
-constexpr bool exit_barrier_for(PerfRunType run_type)
+constexpr bool exit_barrier_for([[maybe_unused]] PerfRunType run_type)
 {
+#if defined(ARCH_WORMHOLE)
+    // Peers of a single-thread run type wait too: ending their zone during the measured one moves the Wormhole packer phase.
+    return true;
+#else
     return !is_single_thread_runtype(run_type);
+#endif
 }
 
 constexpr bool is_measured_thread(PerfRunType run_type)
@@ -621,7 +626,7 @@ struct perf_counter_scoped
     inline __attribute__((always_inline)) explicit perf_counter_scoped(std::uint32_t zid) : zone_id(zid)
     {
         ckernel::fence_compiler();
-        if constexpr (is_reader_thread(RUN_TYPE))
+        if constexpr (is_reader_thread(RUN_TYPE) && !exit_barrier_for(RUN_TYPE))
         {
             detail::reader_here = true;
         }
@@ -637,6 +642,12 @@ struct perf_counter_scoped
                 }
                 arm_all_counters();
             });
+        if constexpr (is_single_thread_runtype(RUN_TYPE) && is_measured_thread(RUN_TYPE) && exit_barrier_for(RUN_TYPE))
+        {
+            // Let the peers reach their exit barrier before the measured zone opens.
+            std::uint32_t settle;
+            asm volatile("li %0, 256\n1:\n\taddi %0, %0, -1\n\tbnez %0, 1b" : "=&r"(settle));
+        }
         ckernel::fence_compiler();
     }
 
