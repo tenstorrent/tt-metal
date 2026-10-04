@@ -45,8 +45,7 @@ def projection_matmul_configs(hidden_states, weight):
     Uses the device's full core grid. With this blocking, accumulating in bf16 measurably costs
     prefill KV accuracy, so it accumulates in fp32. LoFi pays from 512 rows per device; below that the
     projections stream their weights and gain nothing from it. packer_l1_acc accumulates the K-block
-    partials in L1 instead of re-reading them, which saves ~2 ms per chunk at 8192 with no measurable
-    accuracy change.
+    partials in L1 instead of re-reading them.
     """
     device = hidden_states.device()
     grid = device.compute_with_storage_grid_size()

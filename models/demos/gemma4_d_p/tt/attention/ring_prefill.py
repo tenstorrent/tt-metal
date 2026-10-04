@@ -200,7 +200,6 @@ def global_ring_prefill_attention(
             max_k_splits=k_splits,
             # Global attention only: sliding attention gains nothing from LoFi, so it keeps HiFi2.
             matmul_math_fidelity=ttnn.MathFidelity.LoFi,
-            # Global attention's bf16 running sums span the whole prefix; the op ignores this where K is split.
             segmented_accumulation=segmented,
         )
     # Dense attention gathers each device's whole shard, so the buffer spans the full cache capacity. Sizing it to
@@ -244,22 +243,25 @@ def global_ring_prefill_attention(
 _GLOBAL_Q_CHUNKS = (96, 128)
 
 
+# What each chunk size gets at CP8 / TP4:
+#                  q_chunk  k_chunk  K-split bands  segmented accumulation
+#   global  2048        64      256              3  yes
+#   global  4096       128      256              3  yes
+#   global  8192        96      256              1  yes
+#   global 16384        96      256              1  no (too many Q chunks for the cores)
+#   global 32768        96      256              1  no
+#   sliding, all       128      128              1  no
 def ring_sdpa_chunk_sizes(q_slab_tokens, sliding, num_heads=8, num_cores=110):
-    """(q_chunk_size, k_chunk_size, max_k_splits, segmented_accumulation) for the ring SDPA, chosen by the per-rank
-    Q slab (chunk / CP), the local heads and the SDPA cores.
-
-    Sliding layers use q 128 / k 128; the sliding path accepts q in {64, 128} and k == 128, and k also sets
-    the halo granularity. Global layers use k 256. Slabs up to 512 tokens take q = slab / 4 (one tile when that
-    is not whole tiles), giving 8 local heads x 4 Q chunks = 32 units, too few to fill the grid, so the K split
-    spreads them over three bands. Larger slabs run unsplit with segmented accumulation, which needs one Q chunk
-    per core: q 96, or the smallest larger q whose chunks fit on the cores. A slab too long for any of them keeps
-    q 96 without segments.
+    """(q_chunk_size, k_chunk_size, max_k_splits, segmented_accumulation) for the ring SDPA, from the per-rank Q slab
+    (chunk / CP), the local heads and the SDPA cores.
     """
     if sliding:
         return 128, 128, 1, False
+    # Short slabs: 4 Q chunks per head are too few to fill the grid, so K is split over 3 bands.
     if q_slab_tokens <= 512:
         q_chunk = q_slab_tokens // 4
         return (q_chunk if q_chunk % TILE_HEIGHT == 0 else TILE_HEIGHT), 256, 3, True
+    # Segmented accumulation needs one Q chunk per core.
     for q_chunk in _GLOBAL_Q_CHUNKS:
         if -(-q_slab_tokens // q_chunk) * num_heads <= num_cores:
             return q_chunk, 256, 1, True

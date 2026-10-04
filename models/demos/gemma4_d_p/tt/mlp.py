@@ -87,8 +87,7 @@ class MLP:
         config) for the core-grid path.
 
         With this blocking, accumulating in bf16 drifts long-context KV accuracy in the deep layers, so
-        the explicit path accumulates in fp32. packer_l1_acc accumulates the K-block partials in L1, a
-        little faster with no accuracy cost.
+        the explicit path accumulates in fp32. packer_l1_acc accumulates the K-block partials in L1.
         """
         grid = self.mesh_device.compute_with_storage_grid_size()
         n_tiles = weight.padded_shape[-1] // ttnn.TILE_SIZE
