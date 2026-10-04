@@ -11,14 +11,48 @@
 
 #include <fmt/base.h>
 #include <fmt/ranges.h>
+#include <tt-metalium/experimental/noc_debugging.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include "context/context_types.hpp"
+#include "context/metal_context.hpp"
 #include "tt_metal/third_party/umd/device/api/umd/device/types/xy_pair.hpp"
 #include "tt_stl/assert.hpp"
 #include "hostdev/profiler_common.h"
 
 namespace tt::tt_metal {
+
+namespace experimental {
+
+NocDebugStateSummary GetNocDebugStateSummary(distributed::MeshDevice& mesh_device) {
+    auto& context = MetalContext::instance(extract_context_id(&mesh_device));
+    NocDebugStateSummary result{
+        .enabled = context.rtoptions().get_experimental_noc_debug_dump_enabled(),
+        .collector_ready = context.profiler_state_manager() != nullptr,
+    };
+    if (const auto& state = context.noc_debug_state()) {
+        const auto summary = state->get_state_summary();
+        result.issues = summary.issues;
+        result.unflushed_atomic_issues = summary.unflushed_atomic_issues;
+        result.observed_atomic_events = summary.observed_atomic_events;
+        result.pending_events = summary.pending_events;
+    }
+    return result;
+}
+
+void ResetNocDebugState(distributed::MeshDevice& mesh_device) {
+    auto& context = MetalContext::instance(extract_context_id(&mesh_device));
+    TT_FATAL(
+        context.rtoptions().get_experimental_noc_debug_dump_enabled(),
+        "NoC debug dump is disabled. Set TT_METAL_NOC_DEBUG_DUMP=1 before the process starts.");
+    auto& state = context.noc_debug_state();
+    TT_FATAL(state != nullptr, "NoC debug state is unavailable.");
+    state->reset_state();
+}
+
+}  // namespace experimental
 
 namespace detail {
 
