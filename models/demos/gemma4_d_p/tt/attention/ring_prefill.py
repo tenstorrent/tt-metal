@@ -257,8 +257,11 @@ def ring_sdpa_chunk_sizes(q_slab_tokens, sliding, num_heads=8, num_cores=110):
     Q chunk) unit: slabs up to 512 tokens at 8 heads on 110 cores (16 or 32 units).
     """
     if sliding:
-        q_chunk = 128
-        k_splits = 3 if num_heads * -(-q_slab_tokens // q_chunk) * 3 <= num_cores else 1
+        import os  # LOCAL knobs: G4X_SLIDING_Q (64/128), G4X_SLIDING_KSPLIT (max K split when it fits)
+
+        q_chunk = int(os.environ.get("G4X_SLIDING_Q", "128"))
+        ks = int(os.environ.get("G4X_SLIDING_KSPLIT", "3"))
+        k_splits = ks if num_heads * -(-q_slab_tokens // q_chunk) * ks <= num_cores else 1
         return q_chunk, 128, k_splits, False
     if q_slab_tokens <= 512:
         q_chunk = q_slab_tokens // 4
