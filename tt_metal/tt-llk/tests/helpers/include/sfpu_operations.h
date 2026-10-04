@@ -700,10 +700,7 @@ void call_unary_sfpu_operation_init()
     else if constexpr (OPERATION == SfpuType::abs)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION, is_fp32_dest_acc_en>();
-        if constexpr (!is_fp32_dest_acc_en)
-        {
-            ckernel::sfpu::init_abs_bf16();
-        }
+        ckernel::sfpu::abs_bf16_tile_init<!is_fp32_dest_acc_en>();
     }
     else
     {
