@@ -176,6 +176,16 @@ def prefill_chunk_geometry_error(prefill_chunk_size, cp_degree, max_seq_len, *, 
     return None
 
 
+def normalize_prefill_chunk_sizes(prefill_chunk_size):
+    """One width or several, as a sorted tuple of distinct ints."""
+    if not isinstance(prefill_chunk_size, (list, tuple, set, frozenset)):
+        prefill_chunk_size = (prefill_chunk_size,)
+    widths = tuple(sorted({int(c) for c in prefill_chunk_size}))
+    if not widths:
+        raise ValueError("at least one prefill chunk width is required")
+    return widths
+
+
 class Gemma4Model:
     """Galaxy prefill model with ring-cache outputs for disaggregation."""
 
@@ -199,11 +209,17 @@ class Gemma4Model:
         ), "Expected a multimodal Gemma4 state_dict with model.language_model.* keys"
         mesh_device = mesh_config.device
 
-        geometry_error = prefill_chunk_geometry_error(
-            prefill_chunk_size, mesh_config.cp_degree, max_seq_len, tp_degree=mesh_config.tp_degree
-        )
-        if geometry_error:
-            raise ValueError(geometry_error)
+        # One width, or several served from this one model (the width is chosen per request and fixed for the
+        # request's lifetime: the ring KV cache is block-cyclic with period = width). The traced path looks RoPE
+        # up by absolute position, which is width-independent; the eager chunk-major tables are built for the widest.
+        self.prefill_chunk_sizes = normalize_prefill_chunk_sizes(prefill_chunk_size)
+        for width in self.prefill_chunk_sizes:
+            geometry_error = prefill_chunk_geometry_error(
+                width, mesh_config.cp_degree, max_seq_len, tp_degree=mesh_config.tp_degree
+            )
+            if geometry_error:
+                raise ValueError(geometry_error)
+        prefill_chunk_size = self.prefill_chunk_sizes[-1]
 
         self.mesh_device = mesh_device
         self.hf_config = hf_config
@@ -314,6 +330,11 @@ class Gemma4Model:
 
     def _get_rope_mats(self, layer_idx, seq_len=None, start_pos=0):
         """Slice chunk-major RoPE caches using a CP-local row offset."""
+        if seq_len is not None and seq_len * self.mesh_config.cp_degree != self.prefill_chunk_size:
+            raise ValueError(
+                f"eager RoPE tables are chunk-major for width {self.prefill_chunk_size}; a {seq_len * self.mesh_config.cp_degree}"
+                "-token chunk must use set_prefill_rope_positions (the traced path)"
+            )
         cos, sin = self.rope_caches[self.hf_config.layer_types[layer_idx]]
         if seq_len is not None:
             cos = cos[:, :, start_pos : start_pos + seq_len, :]
@@ -344,7 +365,9 @@ class Gemma4Model:
         trace staging. Migration acknowledgements follow each layer's KV writes.
         """
         tp = self.mesh_config.tp_degree if self.mesh_config is not None else 1
-        seq_len = hidden_states.shape[2] * (1 if __import__("models.demos.gemma4_d_p.tt.ccl", fromlist=["no_sp"]).no_sp() else tp)
+        seq_len = hidden_states.shape[2] * (
+            1 if __import__("models.demos.gemma4_d_p.tt.ccl", fromlist=["no_sp"]).no_sp() else tp
+        )
         if hidden_states.shape[0] != 1 or hidden_states.shape[1] != 1:
             raise ValueError("Ring prefill processes one user per call")
         if d2h_service is not None and metadata_msg is None:

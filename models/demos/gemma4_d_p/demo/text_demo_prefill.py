@@ -428,6 +428,161 @@ def test_prefill_chunk_sweep_traced(mesh_device, context_len, token_source, rese
         pytest.skip(f"no chunk size in {sizes!r} is valid for context {context_len}")
 
 
+class _WidthRunner:
+    """Pinned staging tensors, staging and forward for one chunk width of a multi-width model."""
+
+    def __init__(self, mesh_device, mesh_config, model, tokens_all, chunk_size):
+        self.mesh_device, self.mesh_config, self.model = mesh_device, mesh_config, model
+        self.tokens_all, self.chunk_size = tokens_all, chunk_size
+        self.device_input_tokens = ttnn.to_device(self._host_tokens(0), device=mesh_device)
+        self.device_positions = ttnn.to_device(self._host_positions(0), device=mesh_device)
+        self.trace_id = None
+        self.trace_out = None
+
+    def _host_tokens(self, start):
+        return ttnn.from_torch(
+            self.tokens_all[:, start : start + self.chunk_size].contiguous(),
+            device=None,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=_cp_or_replicate_mapper(self.mesh_config, seq_dim=-1),
+        )
+
+    def _host_positions(self, start):
+        return ttnn.from_torch(
+            torch.arange(start, start + self.chunk_size, dtype=torch.int32).unsqueeze(0),
+            device=None,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=_cp_or_replicate_mapper(self.mesh_config, seq_dim=-1),
+        )
+
+    def stage(self, chunk_idx):
+        start = chunk_idx * self.chunk_size
+        ttnn.copy_host_to_device_tensor(self._host_tokens(start), self.device_input_tokens)
+        self.model.prefill_metadata.update(slot_idx=0, kv_actual_global=start)
+        ttnn.copy_host_to_device_tensor(self._host_positions(start), self.device_positions)
+        return start
+
+    def forward(self, chunk_start):
+        self.model.set_prefill_rope_positions(self.device_positions)
+        embeds = self.model.transform_and_embed_prefill_inputs_device(self.device_input_tokens)
+        return self.model(hidden_states=embeds, chunk_start_idx=chunk_start, user_id=0)
+
+    def warm(self):
+        out = self.forward(self.stage(0))
+        ttnn.synchronize_device(self.mesh_device)
+        out.deallocate(True)
+
+    def capture(self):
+        start = self.stage(0)
+        self.trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        self.trace_out = self.forward(start)
+        ttnn.end_trace_capture(self.mesh_device, self.trace_id, cq_id=0)
+        ttnn.synchronize_device(self.mesh_device)
+
+    def replay(self, n_chunks):
+        """Replay this width's trace over n_chunks, logging in _measure_traced's format."""
+        C, per_chunk_ms, cumulative_wall_ms = self.chunk_size, [], []
+        t_run = time.time()
+        next_start = self.stage(0)
+        for chunk_idx in range(n_chunks):
+            chunk_start = next_start
+            t_c = time.time()
+            ttnn.execute_trace(self.mesh_device, self.trace_id, cq_id=0, blocking=False)
+            if chunk_idx + 1 < n_chunks:
+                next_start = self.stage(chunk_idx + 1)
+            ttnn.synchronize_device(self.mesh_device)
+            per_chunk_ms.append((time.time() - t_c) * 1000)
+            cumulative_wall_ms.append((time.time() - t_run) * 1000)
+            logger.info(
+                f"[traced_perf] chunk {chunk_idx + 1}/{n_chunks} [{chunk_start}, {chunk_start + C}) "
+                f"device={per_chunk_ms[-1]:.1f}ms | total device={sum(per_chunk_ms):.1f}ms wall={cumulative_wall_ms[-1]:.1f}ms"
+            )
+        total_ms, device_ms, tokens = (time.time() - t_run) * 1000, sum(per_chunk_ms), n_chunks * C
+        logger.info(
+            f"[traced_perf] DEVICE {tokens} tokens in {device_ms:.1f}ms ({tokens * 1000 / device_ms:.0f} tok/s)"
+        )
+        logger.info(f"[traced_perf] TOTAL {tokens} tokens in {total_ms:.1f}ms ({tokens * 1000 / total_ms:.0f} tok/s)")
+        logger.info(
+            f"[traced_perf] ring-depth cost: first={per_chunk_ms[0]:.1f}ms -> last={per_chunk_ms[-1]:.1f}ms "
+            f"= {per_chunk_ms[-1] / per_chunk_ms[0]:.2f}x over {len(per_chunk_ms) - 1} extra chunks of history"
+        )
+        rows = [f"{'Context':>8} | {'Chunks':>6} | {'Wall (ms)':>12}"]
+        for context_k in (1, 10, 100, 256):
+            need = (context_k * 1024 + C - 1) // C
+            wall = f"{cumulative_wall_ms[need - 1]:.1f}" if need <= len(cumulative_wall_ms) else "N/A"
+            rows.append(f"{str(context_k) + 'k':>8} | {need:>6} | {wall:>12}")
+        logger.info(f"[traced_perf] context wall times (chunk_size={C}):\n" + "\n".join(rows))
+
+
+@torch.no_grad()
+@pytest.mark.timeout(7200)
+@parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
+@pytest.mark.parametrize("token_source", ["text"], ids=lambda t: t)
+@pytest.mark.parametrize(
+    "context_len", [32768, 65536, 131072, 258048, 259584, 261120, 262144], ids=lambda c: f"ctx_{c // 1024}k"
+)
+def test_prefill_multi_width_traced(mesh_device, context_len, token_source, reset_seeds, request):
+    """One model, one KV cache, one trace per chunk width; each width replayed over the context.
+
+    GEMMA4_MW_WIDTHS: widths built into the model (e.g. "2048,8192"). GEMMA4_MW_RUN: widths to replay, in order
+    (default: all). GEMMA4_MW_CHUNKS: cap on chunks per width. GEMMA4_MW_ORDER: "two_pass" (default) warms every
+    width before capturing any trace; "interleaved" warms and captures one width at a time (the 09-17 PoC order).
+    GEMMA4_MW_DUMP: directory for each width's final-chunk output, to compare against another build.
+    """
+    mesh_config = _mesh_config(mesh_device)
+    if mesh_config.cp_degree <= 1:
+        pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={mesh_config.cp_degree}")
+    widths = tuple(sorted({int(c) for c in os.environ.get("GEMMA4_MW_WIDTHS", "2048,8192").split(",") if c.strip()}))
+    run = [int(c) for c in os.environ.get("GEMMA4_MW_RUN", ",".join(map(str, widths))).split(",") if c.strip()]
+    max_chunks = int(os.environ.get("GEMMA4_MW_CHUNKS", "0"))
+    order = os.environ.get("GEMMA4_MW_ORDER", "two_pass")
+    dump = os.environ.get("GEMMA4_MW_DUMP")
+    for w in widths:
+        if geometry_error := prefill_chunk_geometry_error(
+            w, mesh_config.cp_degree, context_len, tp_degree=mesh_config.tp_degree
+        ):
+            pytest.skip(f"width {w}: {geometry_error}")
+
+    hf_model_id = _hf_model_id()
+    model_args, model, _kv_cache = _build_prefill_model(
+        mesh_config=mesh_config, hf_model_id=hf_model_id, chunk_size=widths, context_len=context_len
+    )
+    model._prefill_metadata_external = True
+    tokens_all = _get_prefill_tokens(hf_model_id, context_len, model_args.vocab_size, token_source)
+    runners = {w: _WidthRunner(mesh_device, mesh_config, model, tokens_all, w) for w in widths}
+
+    t0 = time.time()
+    if order == "interleaved":
+        for w in widths:
+            runners[w].warm()
+            runners[w].capture()
+    else:
+        for w in widths:
+            runners[w].warm()
+        for w in widths:
+            runners[w].capture()
+    logger.info(f"[mw] widths={widths} order={order}: warm + capture {time.time() - t0:.1f}s")
+
+    try:
+        for w in run:
+            n_chunks = context_len // w
+            if max_chunks:
+                n_chunks = min(n_chunks, max_chunks)
+            logger.info(f"[mw] ===== width={w} chunks={n_chunks} widths={widths} order={order} =====")
+            runners[w].replay(n_chunks)
+            if dump:
+                pathlib.Path(dump).mkdir(parents=True, exist_ok=True)
+                out = _cp_gather_torch(runners[w].trace_out, mesh_config)
+                torch.save(out, f"{dump}/w{w}_n{n_chunks}.pt")
+                logger.info(f"[mw] width={w} dumped final-chunk output {tuple(out.shape)} std={out.std().item():.6f}")
+    finally:
+        for r in runners.values():
+            if r.trace_id is not None:
+                ttnn.release_trace(mesh_device, r.trace_id)
+
+
 # ── Per-layer prefill timing ────────────────────────────────────────────────
 
 
