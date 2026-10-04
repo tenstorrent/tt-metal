@@ -52,6 +52,9 @@ def run_leg(name):
             # Client-only processes do not import TTNN or change server instrumentation.
             for key in ("FORMATTER_CACHE_GUARD", "FORMATTER_PROFILE_RECORD", "FORMATTER_CACHE_PRODUCER"):
                 phase_env.pop(key, None)
+        if not producer and log.name == "phase-0.log":
+            # Both scored arms use the frozen observer's existing replay branch.
+            phase_env["FORMATTER_PAIR_LEG"] = "candidate"
         code = preserved_run(command, log, phase_env, cwd, seconds)
         if log.name == "install.log" and code == 0:
             # UMD topology discovery default leaves6u retraining disabled; it does not

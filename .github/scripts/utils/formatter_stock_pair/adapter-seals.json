@@ -41,8 +41,8 @@
       "sha256": "8b439e79cde8a65d169cd4130917e0ac51a281f65a1ed069a5c9e2576ea63d42"
     },
     "slurm_leg.py": {
-      "bytes": 6466,
-      "sha256": "1658280fd80d5916915aef47dd49ddd67ed2903aceafc57847094159952d4490"
+      "bytes": 6660,
+      "sha256": "2c42ad94152cdded86f1dc8991a260f5269731342f3dd82d985659df9a450146"
     },
     "slurm_pair_checks.py": {
       "bytes": 21516,
