@@ -794,9 +794,10 @@ std::vector<Tensor> leaky_relu_bw(
     float negative_slope,
     const std::optional<MemoryConfig>& output_mem_config) {
     // One program for BF16 operands at the fitted scalar values, whose gradient is the
-    // generated SFPU kernel; anything else keeps the composite below.
-    if (grad.dtype() == DataType::BFLOAT16 && input.dtype() == DataType::BFLOAT16 &&
-        std::bit_cast<uint32_t>(negative_slope) == 0x3c23d70au) {
+    // generated SFPU kernel; anything else, and Quasar, which has no generated kernel, keeps
+    // the composite below.
+    if (input.device()->arch() != tt::ARCH::QUASAR && grad.dtype() == DataType::BFLOAT16 &&
+        input.dtype() == DataType::BFLOAT16 && std::bit_cast<uint32_t>(negative_slope) == 0x3c23d70au) {
         return {ttnn::operations::unary_backward::launch_unary_backward(
             ttnn::operations::unary_backward::UnaryBackwardOpType::LEAKY_RELU_BW,
             grad,
