@@ -1725,6 +1725,12 @@ class Gemma4Model:
                 # reading stale addresses; force a recapture on the next decode.
                 self._invalidate_decode_traces_after_page_table_realloc = True
             persistent = []
+            # Layers handed the same host table (one per kv-cache group) share one
+            # device buffer: an update then costs one H2D per group, not per layer.
+            # Lane-sharded layouts depend on the layer, so they keep per-layer buffers.
+            share = not (self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False))
+            share = share and getattr(self, "mesh_config_share_page_tables", True)
+            by_host_id: dict = {}
             for i, pt in enumerate(page_tables_per_layer):
                 if pt is None:
                     persistent.append(None)
@@ -1732,7 +1738,12 @@ class Gemma4Model:
                 if isinstance(pt, ttnn.Tensor):
                     persistent.append(pt)
                     continue
-                persistent.append(self._page_table_torch_to_ttnn(pt, layer_idx=i))
+                shared = by_host_id.get(id(pt)) if share else None
+                if shared is None:
+                    shared = self._page_table_torch_to_ttnn(pt, layer_idx=i)
+                    if share:
+                        by_host_id[id(pt)] = shared
+                persistent.append(shared)
             by_batch[batch_key] = persistent
         self._persistent_per_layer_page_tables = persistent
         return persistent
@@ -1781,6 +1792,10 @@ class Gemma4Model:
         # (padded) host tensor once and fan out to every persistent buffer.
         host_cache = {}
         new_last = [None] * len(page_tables_per_layer)
+        # Device buffers shared by several layers are written once per update;
+        # a second layer with different content means the sharing no longer
+        # holds, so the batch key's buffers are rebuilt unshared.
+        written: dict = {}
         for i, pt in enumerate(page_tables_per_layer):
             if pt is None or persistent[i] is None or isinstance(pt, ttnn.Tensor):
                 continue
@@ -1807,6 +1822,22 @@ class Gemma4Model:
                 new_last[i] = last_hosts[i]
                 continue
             new_last[i] = pt_padded.detach().clone() if pt_padded is not None else None
+            prev = written.get(id(persistent[i]))
+            if prev is not None:
+                if torch.equal(prev, pt_padded):
+                    continue
+                logger.warning(
+                    "Gemma4: per-layer page tables no longer share content across layers "
+                    "sharing a device buffer (layer {}); rebuilding the buffers unshared",
+                    i,
+                )
+                by_batch = getattr(self, "_persistent_pt_by_batch", {})
+                by_batch.pop(batch_key, None)
+                last_by_batch.pop(batch_key, None)
+                self._invalidate_decode_traces_after_page_table_realloc = True
+                self.mesh_config_share_page_tables = False
+                return self.update_persistent_per_layer_page_tables(page_tables_per_layer)
+            written[id(persistent[i])] = pt_padded
             # Cache key includes target shape so B=1 and B=32 pads don't collide.
             key = (id(pt), target_b, target_w)
             host_pt = host_cache.get(key)
