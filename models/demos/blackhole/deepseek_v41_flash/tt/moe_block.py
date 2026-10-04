@@ -80,6 +80,21 @@ class _TailDecode(TTMoEDecode):
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "configs" / "deepseek_v41_flash.yaml"
 
 
+ROUTE_LOG = [] if __import__("os").environ.get("DSV41_ROUTE_CAPTURE") == "1" else None
+
+ROUTE_ON = [False]  # set by the caller around EAGER decode steps only (never during trace capture)
+
+
+def _read_rows(md, t):
+    """[B, k] torch int64 of a row-sharded (dim 0) / column-replicated tensor."""
+    import torch
+
+    ttnn.synchronize_device(md)
+    rows, cols = tuple(md.shape)
+    devs = ttnn.get_device_tensors(t)
+    return torch.cat([ttnn.to_torch(devs[r * cols]).reshape(-1, t.shape[-1]).long() for r in range(rows)])
+
+
 class DSV41MoEBlock:
     def __init__(
         self,
@@ -195,6 +210,10 @@ class DSV41MoEBlock:
         else:
             tt_scores, tt_indices = self.gate.forward(tt_x_gate)
         self.last_routing = (tt_scores, tt_indices)  # for debugging / error-budget tests
+        if (
+            ROUTE_LOG is not None and ROUTE_ON[0]
+        ):  # DSV41_ROUTE_CAPTURE=1 (eager decode only): host copy of the REAL routed expert ids, one entry per call
+            ROUTE_LOG.append(_read_rows(self.mesh_device, tt_indices))
         self._l1("after gate")
         if tt_indices.dtype != ttnn.uint16:
             tt_indices = ttnn.typecast(tt_indices, ttnn.uint16)
