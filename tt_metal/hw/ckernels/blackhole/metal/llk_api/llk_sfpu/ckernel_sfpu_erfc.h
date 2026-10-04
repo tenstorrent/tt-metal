@@ -63,8 +63,10 @@ constexpr std::array<float, ERFC_LUT_SIZE> ERFC_LUT = {{// Breakpoints
 bool bf16_dest_erfc();
 template <int ITERATIONS>
 void calculate_erfc_bf16();
+// Whether BF16 DEST runs the generated erfc kernel as one call over the whole tile.
+inline constexpr bool erfc_bf16_whole_tile = true;
 
-template <int ITERATIONS = 8, bool is_fp32_dest_acc_en>
+template <int ITERATIONS = 8, bool is_fp32_dest_acc_en = true>
 inline void calculate_erfc() {
     if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
         if (bf16_dest_erfc()) {
@@ -89,7 +91,7 @@ inline void calculate_erfc() {
 
 void init_erfc_bf16();
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 void erfc_init() {
     if constexpr (!is_fp32_dest_acc_en) {
         if (bf16_dest_erfc()) {

@@ -6,15 +6,12 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#ifndef ARCH_QUASAR
 #include "ckernel_sfpu_erf.h"
 #include "ckernel_sfpu_erfc.h"
-#endif
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
-#ifndef ARCH_QUASAR
 /************** ERF *****************/
 /**
  * Please refer to documentation for any_init.
@@ -67,16 +64,11 @@ ALWI void erfc_tile_init() {
  */
 // clang-format on
 ALWI void erfc_tile(uint32_t idst) {
-#if defined(ARCH_BLACKHOLE)
-    if constexpr (!DST_ACCUM_MODE) {
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfc, (32, DST_ACCUM_MODE), idst, VectorMode::None));
+    MATH(if constexpr (ckernel::sfpu::erfc_bf16_whole_tile && !DST_ACCUM_MODE) {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfc, (32, DST_ACCUM_MODE), idst, VectorMode::None);
         return;
-    }
-#endif
+    });
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfc, (8, DST_ACCUM_MODE), idst, VectorMode::RC));
 }
-
-#endif
 
 }  // namespace ckernel
