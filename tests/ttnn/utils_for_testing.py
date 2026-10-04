@@ -24,6 +24,12 @@ def assert_no_unflushed_noc_atomics(device, *, min_atomic_events=1):
     The check resets context-global debug state. The caller must own the context and must not run another mesh at the
     same time. This check does not prove each internal kernel boundary in a multi-kernel operation.
     """
+    def add_exception_note(error, note):
+        if hasattr(error, "add_note"):
+            error.add_note(note)
+        else:
+            error.args = (*error.args, note)
+
     if ttnn.is_trace_capture_active(device):
         raise RuntimeError("NoC debug checks cannot run during trace capture")
 
@@ -68,11 +74,11 @@ def assert_no_unflushed_noc_atomics(device, *, min_atomic_events=1):
                 if debug_error is None:
                     debug_error = error
                 else:
-                    debug_error.add_note(f"NoC debug state reset also failed: {error}")
+                    add_exception_note(debug_error, f"NoC debug state reset also failed: {error}")
 
         if debug_error is not None:
             if operation_error is not None:
-                operation_error.add_note(f"NoC debug check also failed: {debug_error}")
+                add_exception_note(operation_error, f"NoC debug check also failed: {debug_error}")
             else:
                 raise debug_error
 
