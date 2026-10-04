@@ -143,7 +143,17 @@ def serve(controller, scope, phase, item, handled, deadline):
         proc = Path("/proc") / str(client["pid"])
         assert proc.stat().st_uid == 0
         fields = (proc / "stat").read_text().rsplit(")", 1)[1].split()
-        assert int(fields[1]) == row["State"]["Pid"], "Checkpoint client is not this container init child"
+        parent_pid = int(fields[1])
+        container_pid = row["State"]["Pid"]
+        publish(
+            scope / ("inner-" + phase + "-" + point + "-client.json"),
+            {"client": client, "client_uid": 0, "container_pid": container_pid, "parent_pid": parent_pid},
+        )
+        # Docker injects init only in a private PID namespace; --pid=host
+        # reports the entrypoint itself as State.Pid despite --init.
+        assert (
+            client["pid"] == container_pid or parent_pid == container_pid
+        ), "Checkpoint client is not this container entrypoint or direct init child"
         role = "inner-" + phase + "-" + point
         # This is the SAME225c/0433 host-root observation and ordinary-close proof.
         assert deadline - time.monotonic() > 105, "Original container/controller checkpoint budget exhausted"

@@ -13,8 +13,8 @@
       "sha256": "4976ffd4aebd041328fd832077329827add45e468e11eee6d02c284d487797bf"
     },
     "inner_host_quiet.py": {
-      "bytes": 8346,
-      "sha256": "9b77d115a23b3c83c80bf57ea2e863e05fcbae480b26ed7b141def16b39c6e97"
+      "bytes": 8843,
+      "sha256": "9166b5977f66adbac014d139287fcc225c3de294604fb81582897a58a9c34544"
     },
     "owned_exec.py": {
       "bytes": 268,
