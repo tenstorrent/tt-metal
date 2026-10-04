@@ -1721,7 +1721,7 @@ class ModelArgs:
         # Prefill Q, K and V are interleaved in DRAM, so the op is free to use the whole Blackhole grid.
         grid_size = (
             self.mesh_device.compute_with_storage_grid_size()
-            if is_blackhole() and self.mesh_device is not None
+            if is_blackhole() and self.mesh_device is not None and os.environ.get("TT_PROBE_PREFILL_88") != "1"
             else (8, 8)
         )
         return ttnn.SDPAProgramConfig(

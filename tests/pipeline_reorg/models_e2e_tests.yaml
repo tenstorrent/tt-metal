@@ -69,8 +69,8 @@
     for i in 1 2 3; do
       echo "PROBE union config pass $i"
       pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 2 --max_seq_len 131072 || exit $?
-      echo "PROBE main config pass $i"
-      TT_PROBE_DECODE_88=1 TT_PROBE_ROPE_MAIN=1 pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 2 --max_seq_len 131072 || exit $?
+      echo "PROBE main config with prefill pass $i"
+      TT_PROBE_PREFILL_88=1 TT_PROBE_DECODE_88=1 TT_PROBE_ROPE_MAIN=1 pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 2 --max_seq_len 131072 || exit $?
     done
   model: llama3.1-8b-dp
   model_family: Llama
