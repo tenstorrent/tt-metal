@@ -243,4 +243,5 @@ void kernel_main() {
     dfb_out.wait_front(static_cast<uint16_t>(
         batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h));
 #endif
+    noc.async_atomic_barrier();
 }

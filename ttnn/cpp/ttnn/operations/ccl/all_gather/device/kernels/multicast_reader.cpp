@@ -323,4 +323,5 @@ void kernel_main() {
         close_connections(fabric_connection);
     }
     noc.async_write_barrier();
+    noc.async_atomic_barrier();
 }
