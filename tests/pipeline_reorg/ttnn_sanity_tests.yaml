@@ -353,3 +353,19 @@
   team: ttnn
   budget_type: sanity
   owner_id: U08T3JQEB36 # stevendae
+
+# Exhaustive BF16 accuracy of generated eltwise kernels, one file per op. The eltwise
+# groups run these files too; listing each here is what makes the changed-tests gate
+# run a PR's new file on hardware before it merges.
+- name: "ttnn eltwise generated bf16 accuracy"
+  cmd: >-
+    pytest --timeout 300 -v
+    tests/ttnn/unit_tests/operations/eltwise/test_softplus_bw_ulp.py
+  skus:
+    wh_n300_civ2:
+      timeout: 5
+    bh_p150b_civ2:
+      timeout: 5
+  team: ttnn
+  budget_type: sanity
+  owner_id: U09LVP68R7F # Nachiket Kapre
