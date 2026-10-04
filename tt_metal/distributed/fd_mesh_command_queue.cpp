@@ -932,13 +932,9 @@ void FDMeshCommandQueue::increment_num_entries_in_completion_queue() {
 }
 
 void FDMeshCommandQueue::submit_memcpy_request(
-    std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
-    bool blocking,
-    std::vector<MemoryPin> memory_pins) {
+    std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking, std::vector<MemoryPin> memory_pins) {
     completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
-        std::in_place_type<MeshBufferReadDescriptor>,
-        std::move(num_txns_per_device),
-        std::move(memory_pins)));
+        std::in_place_type<MeshBufferReadDescriptor>, std::move(num_txns_per_device), std::move(memory_pins)));
 
     this->increment_num_entries_in_completion_queue();
 
@@ -992,11 +988,14 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
             notify_host);
     };
 
+    std::vector<MeshCoordinate> coords;
+    std::vector<uint32_t> device_ids;
     for_each_local(mesh_device_, event.impl().device_range(), [&](const auto& coord) {
-        dispatch_thread_pool_->enqueue(
-            [&dispatch_lambda, coord]() { dispatch_lambda(coord); }, mesh_device_->impl().get_device(coord)->id());
+        coords.push_back(coord);
+        device_ids.push_back(mesh_device_->impl().get_device(coord)->id());
     });
-    dispatch_thread_pool_->wait();
+    dispatch_thread_pool_->parallel_for(
+        device_ids, [&dispatch_lambda, &coords](size_t i) { dispatch_lambda(coords[i]); });
     return event;
 }
 
@@ -1149,14 +1148,15 @@ void FDMeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor
         // per MeshCQ (since we run out of host resources with 2 reader threads per
         // physical device).
         std::lock_guard<std::mutex> lock(reader_thread_pool_mutex_);
-        for (auto& metadata : read_buffer_descriptor.num_reads_per_dev) {
-            reader_thread_pool_->enqueue(
-                [&reader_lambda, device = metadata.first, num_reads = metadata.second]() {
-                    reader_lambda(device, num_reads);
-                },
-                metadata.first->id());
+        std::vector<std::pair<IDevice*, uint32_t>> reads(
+            read_buffer_descriptor.num_reads_per_dev.begin(), read_buffer_descriptor.num_reads_per_dev.end());
+        std::vector<uint32_t> device_ids;
+        device_ids.reserve(reads.size());
+        for (const auto& [device, num_reads] : reads) {
+            device_ids.push_back(device->id());
         }
-        reader_thread_pool_->wait();
+        reader_thread_pool_->parallel_for(
+            device_ids, [&reader_lambda, &reads](size_t i) { reader_lambda(reads[i].first, reads[i].second); });
     }
 }
 

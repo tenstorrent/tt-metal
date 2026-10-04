@@ -33,6 +33,7 @@ target_sources(
     distributed_benchmarks
     PRIVATE
         benchmark_thread_pool.cpp
+        benchmark_mesh_fan_out.cpp
         benchmark_distributed_host_buffer.cpp
         benchmark_hd_sockets.cpp
         hd_socket_test_utils.cpp
