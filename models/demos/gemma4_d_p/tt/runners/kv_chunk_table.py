@@ -44,16 +44,25 @@ def _cache_chunk_runs(
     heads_per_device: int,
     local_head: int,
 ):
-    """Yield (cp_row, slot, first_position, first_shard, count) runs of consecutive 32-token blocks."""
+    """Yield (cp_row, slot, first_position, first_shard, count) runs of consecutive 32-token blocks.
+
+    chunk_size is one prefill width for every slot, or a {slot: width} mapping when slots are prefilled at
+    different widths. The ring cache is block-cyclic with period = width, so each slot's walk uses its own.
+    """
     if not 0 <= local_head < heads_per_device:
         raise ValueError(f"local_head {local_head} outside [0, {heads_per_device})")
-    if seq_len % chunk_size or chunk_size % (cp * TILE_HEIGHT):
-        raise ValueError("sequence and prefill chunks must align to CP-local 32-token rows")
-    local_chunk = chunk_size // cp
+    widths = chunk_size if isinstance(chunk_size, dict) else {slot: chunk_size for slot in range(num_users)}
+    if sorted(widths) != list(range(num_users)):
+        raise ValueError(f"need a prefill width for every slot in [0, {num_users}), got {sorted(widths)}")
+    for width in set(widths.values()):
+        if seq_len % width or width % (cp * TILE_HEIGHT):
+            raise ValueError("sequence and prefill chunks must align to CP-local 32-token rows")
     blocks_local = seq_len // cp // TILE_HEIGHT
-    blocks_per_chunk = local_chunk // TILE_HEIGHT
     for cp_row in range(cp):
         for slot in range(num_users):
+            chunk_size = widths[slot]
+            local_chunk = chunk_size // cp
+            blocks_per_chunk = local_chunk // TILE_HEIGHT
             for prefill_chunk in range(seq_len // chunk_size):
                 shard = (slot * heads_per_device + local_head) * blocks_local + prefill_chunk * blocks_per_chunk
                 position = prefill_chunk * chunk_size + cp_row * local_chunk
