@@ -2804,3 +2804,59 @@ def decode_icl_audio(
         return speech_tokenizer_decoder_continue(
             ref_state, codes.clamp(max=2047).T.unsqueeze(0), decoder_weights, SpeechTokenizerDecoderConfig()
         )
+
+
+def build_device_decoder(device, decoder_weights: dict):
+    """Build the on-device TTNN speech-tokenizer decoder once (reuse per request).
+
+    The returned object caches all conv ops / uploaded weights per decode bucket on
+    first use, so subsequent decodes skip host->device weight re-upload. Build this
+    at server startup (after the talker context) and pass it to
+    ``decode_audio_device`` for every request.
+    """
+    from models.demos.qwen3_tts.tt.speech_tokenizer import TtSpeechTokenizerDecoder
+
+    return TtSpeechTokenizerDecoder(device, decoder_weights, use_reference=False)
+
+
+def decode_audio_device(ref_codes: torch.Tensor, codes: torch.Tensor, device_decoder) -> torch.Tensor:
+    """On-device equivalent of ``decode_icl_audio``: returns the GENERATED speech only.
+
+    HF Qwen3-TTS decodes ``cat([ref_codes, codes])`` and cuts the reference's share
+    of the waveform (removing reference echo). The on-device decoder is length-flat
+    (~0.3-0.45s warm) and fully causal, so instead of porting the incremental
+    ``continue`` path we simply decode the concatenation on device and slice off the
+    reference's samples. ``samples/frame`` is fixed, so the cut is exact.
+
+    Args:
+        ref_codes: [ref_len, 16] reference codes (same tensor given to the talker ICL)
+        codes:     [num_frames, 16] generated codes from ``run_inference``
+        device_decoder: object from ``build_device_decoder``
+    Returns:
+        Waveform tensor [1, 1, num_frames * SAMPLES_PER_FRAME] of the generated speech.
+    """
+    ref_len = int(ref_codes.shape[0])
+    codes_cat = torch.cat([ref_codes, codes], dim=0).clamp(max=2047)  # [total, 16]
+    token_ids = codes_cat.T.unsqueeze(0).long()  # [1, 16, total]
+    audio = device_decoder.forward(token_ids)  # [1, 1, total * spf]
+    spf = int(device_decoder.SAMPLES_PER_FRAME)
+    ref_samples = ref_len * spf
+    return audio[..., ref_samples:].contiguous()
+
+
+def warmup_device_decoder(device_decoder, bucket_frames) -> None:
+    """Pre-compile the device decoder for each expected bucket length.
+
+    Each distinct decode bucket triggers a one-time kernel compile (~1.5-2.9s) and
+    weight prep on first use. Running a dummy decode per bucket at startup moves that
+    cost out of the first live request, so every request hits the warm path.
+
+    ``bucket_frames`` is an iterable of frame counts (e.g. the per-bucket sizes the
+    decoder rounds up to). Dummy codes are all-zeros (valid codebook index 0).
+    """
+    for n in bucket_frames:
+        n = int(n)
+        if n <= 0:
+            continue
+        dummy = torch.zeros(n, 16, dtype=torch.long)
+        _ = device_decoder.forward(dummy.T.unsqueeze(0))

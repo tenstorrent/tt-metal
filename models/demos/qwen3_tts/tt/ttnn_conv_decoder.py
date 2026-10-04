@@ -56,11 +56,21 @@ class TTNNConv1d:
         if bias_tensor is not None:
             self.bias_tt = ttnn.from_torch(bias_tensor.reshape(1, 1, 1, out_channels), dtype=ttnn.bfloat16)
 
-        # Conv config - use auto sharding to avoid L1 overflow
+        # Conv config - use auto sharding to avoid L1 overflow.
+        # Double-buffering of act/weight circular buffers is disabled and config
+        # tensors are kept in DRAM to shrink the per-core L1 CB footprint. This is
+        # required to coexist with the talker on a shared device: the talker's
+        # server context leaves a persistent L1 buffer, and double-buffered conv CBs
+        # for longer decodes (>=96 frames) overflow into it ("statically allocated
+        # circular buffers clash with L1 buffers"). Single-buffering costs a little
+        # conv throughput but removes the clash; decode is still length-flat/fast.
         self.conv_config = ttnn.Conv1dConfig(
             weights_dtype=ttnn.bfloat16,
             shard_layout=None,  # Auto select best sharding
             deallocate_activation=False,
+            enable_act_double_buffer=False,
+            enable_weights_double_buffer=False,
+            config_tensors_in_dram=True,
         )
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
