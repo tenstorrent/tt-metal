@@ -566,12 +566,28 @@ std::vector<Candidate> FactoryBlockingSource::candidates(const MatmulDesc& p, co
 
 // Reuse (batched B): per_core_N = Nt and per_core_M is the tallest slice of a batch matrix that still gives
 // every core a block (all of Mt when the batch alone fills the grid) and fits L1. Block-float B with A tiles under
-// 16 rows needs a single K block. A bias of a whole [M, N] block fuses only into blocks of whole batch matrices.
+// 16 rows needs a single K block: every slice then loads all of its batch's B at once, so the slice height is the
+// one with the lowest roofline estimate instead. A bias of a whole [M, N] block fuses only into blocks of whole
+// batch matrices.
 std::optional<Blocking> FactoryBlockingSource::reuse_blocking(const MatmulDesc& p, const HardwareDesc& hw) const {
     const uint32_t cores = hw.grid.x * hw.grid.y;
     const BlockRules rules{.k_fixed = needs_single_k_reuse(p) ? p.Kt : 0};
     if (p.bias_rows > 1) {
         return blocking_->block(p, hw, Family::Reuse, {p.Mt, p.Nt, true}, rules);
+    }
+    if (needs_single_k_reuse(p)) {
+        std::optional<Blocking> best;
+        double best_cycles = 0;
+        for (uint32_t per_core_M : divisors_desc(p.Mt)) {
+            if (auto b = blocking_->block(p, hw, Family::Reuse, {per_core_M, p.Nt, true}, rules)) {
+                const double cycles = roofline(p, hw, Family::Reuse, *b, true).cycles();
+                if (!best || cycles < best_cycles) {
+                    best = b;
+                    best_cycles = cycles;
+                }
+            }
+        }
+        return best;
     }
     for (uint32_t per_core_M : divisors_desc(p.Mt)) {
         const bool fills_grid = p.batch_a * (p.Mt / per_core_M) >= cores;

@@ -593,6 +593,22 @@ TEST(MatmulAutoConfig, FamilyChoice) {
     }
 }
 
+// Reuse with A tiles under 16 rows and block-float B takes all of K in one block, so every slice of a batch matrix
+// loads all of its B: the slice height comes from the roofline (which counts those reads), not from filling the grid.
+// 6 batches of 32 8-row tile rows in L1 on Wormhole: slices of 4 rows (48 B reads), not the 2 that fill the grid (96).
+TEST(MatmulAutoConfig, SingleKBlockReuseSlices) {
+    const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
+    auto p = make_matmul(6, 6, 256, 256, 256, tt::DataFormat::Bfp8_b);
+    p.in0_tile_h = p.out_tile_h = 8;
+    p.Mt = 256 / 8;
+    p.a.in_l1 = p.b.in_l1 = p.out.in_l1 = true;  // as test_matmul_reuse_config_sharded_tiny_tile's interleaved cases
+    const auto chosen = choose(p, hw);
+    ASSERT_TRUE(chosen.has_value());
+    EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Reuse));
+    EXPECT_EQ(chosen->blocking.in0_block_w, p.Kt);
+    EXPECT_EQ(chosen->blocking.per_core_M, 4u);
+}
+
 // A bias of a whole [M, N] block fuses only into Reuse with blocks of whole batch matrices: with one, the
 // candidates are that Reuse layout alone (without it, 8 batches would go to 2D and the bias to a second pass)
 TEST(MatmulAutoConfig, FullBlockBiasFusesIntoReuse) {
