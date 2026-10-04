@@ -1065,6 +1065,7 @@ inline void calculate_acosh() {
     }
 }
 
+bool bf16_dest_asinh();
 template <int ITERATIONS>
 void calculate_asinh_bf16();
 
@@ -1082,8 +1083,10 @@ void calculate_asinh_bf16();
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_asinh() {
     if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
-        calculate_asinh_bf16<ITERATIONS>();
-        return;
+        if (bf16_dest_asinh()) {
+            calculate_asinh_bf16<ITERATIONS>();
+            return;
+        }
     }
     constexpr float LOG1P_LARGE = 268435456.0f;  // 2^28
     constexpr float LN2 = 0.6931471805599453f;

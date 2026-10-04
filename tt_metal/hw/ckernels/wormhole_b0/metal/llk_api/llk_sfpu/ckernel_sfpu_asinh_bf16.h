@@ -41,6 +41,14 @@ struct AsinhBf16Config {
 
 namespace ckernel::sfpu {
 
+// The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format.
+inline bool bf16_dest_asinh() {
+#if defined(TRISC_MATH) || defined(LLK_TRISC_MATH)
+    return ckernel::math::src_zero_flag_srcb_fmt == static_cast<std::uint32_t>(DataFormat::Float16_b);
+#else
+    return false;
+#endif
+}
 template <int ITERATIONS = 8>
 inline void calculate_asinh_bf16() {
     ckernel::sfpu::bf16::calculate_symmetric_factored_log<ckernel::sfpu::AsinhBf16Config, ITERATIONS>();
