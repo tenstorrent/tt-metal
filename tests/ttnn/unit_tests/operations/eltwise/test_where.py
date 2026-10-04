@@ -405,6 +405,27 @@ def test_bf8b_exponent_behaviour(device):
     assert torch_equal_nan(tt_result3, result3)
 
 
+@pytest.mark.parametrize("scalar_is_true", [False, True], ids=["tts", "tst"])
+@pytest.mark.parametrize("scalar", [-1.0, 15.5, -float("inf")])
+def test_where_scalar_bf16_inputs_fp32_output(device, scalar, scalar_is_true):
+    # Regression: with a float32 output, where read DEST as bf16 and packed the scalar as two bf16 halves.
+    torch.manual_seed(0)
+    C = (torch.rand((64, 128)) > 0.5).to(torch.bfloat16)
+    T = torch.rand((64, 128), dtype=torch.bfloat16).uniform_(-100, 100)
+    ttnn_C = ttnn.from_torch(C, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_T = ttnn.from_torch(T, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.from_torch(torch.zeros((64, 128)), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    if scalar_is_true:
+        ttnn.where(ttnn_C, scalar, ttnn_T, output_tensor=out)
+        expected = torch.where(C.bool(), torch.tensor(scalar), T.float())
+    else:
+        ttnn.where(ttnn_C, ttnn_T, scalar, output_tensor=out)
+        expected = torch.where(C.bool(), T.float(), torch.tensor(scalar))
+
+    assert torch.equal(ttnn.to_torch(out), expected)
+
+
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 @pytest.mark.parametrize("h, w", [[64, 128]])
 @pytest.mark.parametrize("scalar", [15.5, float("nan"), float("inf"), -float("inf")])

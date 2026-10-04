@@ -49,7 +49,7 @@ bool bf16_dest_erfinv();
 template <int ITERATIONS>
 void calculate_erfinv_bf16();
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 inline void calculate_erfinv() {
     if constexpr (!is_fp32_dest_acc_en) {
         if (bf16_dest_erfinv()) {
@@ -67,7 +67,7 @@ inline void calculate_erfinv() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 void erfinv_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (!is_fp32_dest_acc_en) {
