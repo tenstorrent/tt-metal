@@ -25,7 +25,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_tts.reference.functional import SpeechTokenizerDecoderConfig
 from models.demos.qwen3_tts.reference.functional import speech_tokenizer_decoder_forward as reference_decoder_forward
 from models.demos.qwen3_tts.tt.mesh_utils import to_torch as _mesh_to_torch
-from models.demos.qwen3_tts.tt.ttnn_conv_decoder import TTNNConv1d, TTNNConvTranspose1d, ttnn_snake_activation
+from models.demos.qwen3_tts.tt.ttnn_conv_decoder import TTNNConv1d, ttnn_snake_activation
 
 
 @dataclass
@@ -84,6 +84,83 @@ def _causal_left_pad_nlc(x_nlc: ttnn.Tensor, pad: int, device) -> ttnn.Tensor:
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     return ttnn.concat([zeros, x_nlc], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
+def _pad_nlc(x_nlc: ttnn.Tensor, left: int, right: int, device) -> ttnn.Tensor:
+    """Zero-pad an NLC tensor [batch, length, channels] on the length axis."""
+    if left <= 0 and right <= 0:
+        return x_nlc
+    b, l, c = int(x_nlc.shape[0]), int(x_nlc.shape[1]), int(x_nlc.shape[2])
+    parts = []
+    if left > 0:
+        parts.append(
+            ttnn.zeros(
+                [b, left, c],
+                dtype=x_nlc.dtype,
+                layout=x_nlc.layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        )
+    parts.append(x_nlc)
+    if right > 0:
+        parts.append(
+            ttnn.zeros(
+                [b, right, c],
+                dtype=x_nlc.dtype,
+                layout=x_nlc.layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        )
+    return ttnn.concat(parts, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
+def _zero_insert_nlc(x_nlc: ttnn.Tensor, stride: int, device) -> ttnn.Tensor:
+    """Insert ``stride-1`` zeros between samples along length: [b,L,C] -> [b,(L-1)*s+1,C]."""
+    if stride <= 1:
+        return x_nlc
+    mc = ttnn.DRAM_MEMORY_CONFIG
+    b, l, c = int(x_nlc.shape[0]), int(x_nlc.shape[1]), int(x_nlc.shape[2])
+    # Work in ROW_MAJOR for the interleave reshape/concat, then restore layout.
+    orig_layout = x_nlc.layout
+    xr = ttnn.to_layout(x_nlc, ttnn.ROW_MAJOR_LAYOUT)
+    x4 = ttnn.reshape(xr, (b, l, 1, c), memory_config=mc)
+    z = ttnn.zeros([b, l, stride - 1, c], dtype=xr.dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mc)
+    cat = ttnn.concat([x4, z], dim=2, memory_config=mc)  # [b, l, stride, c]
+    up = ttnn.reshape(cat, (b, l * stride, c), memory_config=mc)  # [b, l*stride, c]
+    up = ttnn.slice(up, [0, 0, 0], [b, (l - 1) * stride + 1, c], memory_config=mc)
+    return ttnn.to_layout(up, orig_layout)
+
+
+def transpose_conv1d_nhwc(x_nhwc: ttnn.Tensor, weight: torch.Tensor, bias, stride: int, device):
+    """ConvTranspose1d via zero-insertion + regular conv1d (numerically exact).
+
+    ``ttnn.conv_transpose2d`` loses accuracy at large stride/kernel; this identity
+    (upsample-with-zeros, then a flipped regular conv with full padding) matches
+    ``F.conv_transpose1d`` with padding=0. Input/output are NHWC [batch, 1, L, C].
+    Returns (output_nhwc, out_len) with out_len = (L-1)*stride + kernel.
+    """
+    mc = ttnn.DRAM_MEMORY_CONFIG
+    in_c, out_c, k = int(weight.shape[0]), int(weight.shape[1]), int(weight.shape[-1])
+    b, L, c = int(x_nhwc.shape[0]), int(x_nhwc.shape[2]), int(x_nhwc.shape[3])
+    x_nlc = ttnn.reshape(x_nhwc, (b, L, c), memory_config=mc)
+    x_up = _zero_insert_nlc(x_nlc, stride, device)  # [b, (L-1)*s+1, in_c]
+    up_len = (L - 1) * stride + 1
+    x_pad = _pad_nlc(x_up, k - 1, k - 1, device)  # full padding both sides
+    w_reg = weight.permute(1, 0, 2).flip(-1).contiguous()  # [out, in, k]
+    conv = TTNNConv1d(
+        device=device,
+        in_channels=in_c,
+        out_channels=out_c,
+        kernel_size=k,
+        padding=0,
+        weight=w_reg,
+        bias_tensor=bias,
+    )
+    y, out_len = conv(x_pad, up_len + 2 * (k - 1))  # out_len = (L-1)*s + k
+    y4 = ttnn.reshape(y, (b, 1, out_len, out_c), memory_config=mc)
+    return y4, out_len
 
 
 def convnext_block(
@@ -230,19 +307,8 @@ def conv_decoder_block(
         up_w = block_weights["block.1.conv.weight"]
         up_b = block_weights.get("block.1.conv.bias")
         k_up = int(up_w.shape[-1])
-        up_conv = TTNNConvTranspose1d(
-            device=device,
-            in_channels=int(up_w.shape[0]),
-            out_channels=int(up_w.shape[1]),
-            kernel_size=k_up,
-            stride=upsample_rate,
-            padding=0,
-            weight=up_w,
-            bias_tensor=up_b,
-        )
-        x, l = up_conv(x, l)
+        x, l = transpose_conv1d_nhwc(x, up_w, up_b, upsample_rate, device)
         c = int(up_w.shape[1])
-        x = ttnn.reshape(x, (b, 1, l, c), memory_config=mc)
         right_pad = k_up - upsample_rate
         if right_pad > 0:
             x = ttnn.slice(x, [0, 0, 0, 0], [b, 1, l - right_pad, c], memory_config=mc)
@@ -1125,18 +1191,21 @@ class TtSpeechTokenizerDecoder(LightweightModule):
                 conv_weight = self.upsample_weights[conv_weight_key]
                 conv_bias = self.upsample_weights.get(conv_bias_key)
 
-                # Upsample with TTNN conv_transpose1d
-                up_conv = TTNNConvTranspose1d(
-                    device=self.device,
-                    in_channels=int(conv_weight.shape[0]),
-                    out_channels=int(conv_weight.shape[1]),
-                    kernel_size=int(conv_weight.shape[-1]),
-                    stride=ratio,
-                    padding=0,
-                    weight=conv_weight,
-                    bias_tensor=conv_bias,
+                # Upsample via zero-insertion + conv1d (exact transposed conv),
+                # then trim the right side by (kernel - stride) to stay causal.
+                k_up = int(conv_weight.shape[-1])
+                out_c = int(conv_weight.shape[1])
+                hidden_states_tt, up_len = transpose_conv1d_nhwc(
+                    hidden_states_tt, conv_weight, conv_bias, ratio, self.device
                 )
-                hidden_states_tt, _ = up_conv(hidden_states_tt, int(hidden_states_tt.shape[2]))
+                right_pad = k_up - ratio
+                if right_pad > 0:
+                    hidden_states_tt = ttnn.slice(
+                        hidden_states_tt,
+                        [0, 0, 0, 0],
+                        [int(hidden_states_tt.shape[0]), 1, up_len - right_pad, out_c],
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
 
                 # ConvNeXt block
                 prefix = f"upsample.{i}.1."
