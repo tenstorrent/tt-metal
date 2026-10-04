@@ -79,7 +79,7 @@ class StockProcesses:
         # use run() below; there is no generic model-launch fallback here.
         return subprocess.Popen(command, **kwargs)
 
-    def run(self, command, log, env, cwd, seconds):
+    def run_owned(self, command, log, env, cwd, seconds):
         process, saved = None, None
         with Path(log).open("w") as stream:
             process, saved = self.spawn(

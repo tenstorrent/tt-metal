@@ -25,8 +25,8 @@
       "sha256": "85663af554253a33c28cda2e0d1c740732b6aea3193ab1a8da07ff17c31cb335"
     },
     "owned_stock.py": {
-      "bytes": 4700,
-      "sha256": "77d252dfda03ced110c5d6d6b6364081888639268f39f0cabf90c4930c35f8ce"
+      "bytes": 4706,
+      "sha256": "5d255124d50284c04c94b4924a6a549d7051d10cea8b1f38123132a78b8fcebb"
     },
     "producer_profile.py": {
       "bytes": 9162,
@@ -41,8 +41,8 @@
       "sha256": "8b439e79cde8a65d169cd4130917e0ac51a281f65a1ed069a5c9e2576ea63d42"
     },
     "slurm_leg.py": {
-      "bytes": 6460,
-      "sha256": "816804ded2595946cc7827e6f93b3ea9ce6fed18f3fe9c58d20d36a31153e3c1"
+      "bytes": 6466,
+      "sha256": "1658280fd80d5916915aef47dd49ddd67ed2903aceafc57847094159952d4490"
     },
     "slurm_pair_checks.py": {
       "bytes": 21516,

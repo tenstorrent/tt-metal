@@ -44,7 +44,7 @@ def run_leg(name):
     original.subprocess = processes
     original.process_identity = processes.identity
     original.close_server = processes.close_server
-    preserved_run = processes.run
+    preserved_run = processes.run_owned
 
     def admitted_run(command, log, env, cwd, seconds):
         phase_env = env.copy()
