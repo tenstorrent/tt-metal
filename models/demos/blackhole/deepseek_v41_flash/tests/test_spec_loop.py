@@ -24,14 +24,22 @@ from models.demos.blackhole.deepseek_v41_flash.tt.engram import DSV41DeviceEngra
 from models.demos.blackhole.deepseek_v41_flash.tt.loader import load_layer
 from models.demos.blackhole.deepseek_v41_flash.tt.moe_weights import _Shards
 from models.demos.blackhole.deepseek_v41_flash.tt.mtp import BLOCK, DSparkDrafter, load_mtp_stage
+from models.demos.blackhole.deepseek_v41_flash.tt.paged_attention import DSV41PagedStepState
 from models.demos.blackhole.deepseek_v41_flash.tt.spec_chain import SpecChain
 from models.demos.blackhole.deepseek_v41_flash.tt.spec_decoder import SpecDecoder, SpecVerifier
+from models.demos.blackhole.deepseek_v41_flash.tt.spec_paged import SpecPagedChain
 from models.demos.blackhole.deepseek_v41_flash.tt.spec_state import SpecStepState
 
 CHAIN = os.environ.get("DSV41_CHAIN", "/mnt/tt-data/ssinghal/dsv4-chain-g")
 MTP_REF = os.environ.get("DSV41_MTP_REF", "/mnt/tt-data/ssinghal/dsv4-spec-accept/mtp_ref.pt")
-GREEDY = "/mnt/tt-data/ssinghal/dsv4-spec-accept/greedy_dev_g.pt"
-MAXPOS = 127
+TAG = os.environ.get("DSV41_TAG", "")  # distinguishes partial-layer runs
+GREEDY_NP = f"/mnt/tt-data/ssinghal/dsv4-spec-accept/greedy_dev_g{TAG}.pt"  # non-paged plain greedy (reference of the paged runs)
+PAGED = (
+    os.environ.get("DSV41_SPEC_PAGED", "0") == "1"
+)  # KV in the paged pool (tt/spec_paged.py), positions up to DSV41_CTX
+CTX = int(os.environ.get("DSV41_CTX", "384"))
+GREEDY = GREEDY_NP.replace("greedy_dev_g", "greedy_paged_g") if PAGED else GREEDY_NP
+MAXPOS = CTX - 1 if PAGED else 127
 
 
 def hash_block(h, tokens, base):
@@ -92,12 +100,20 @@ def test_spec_loop(mesh_device):
     ref_all = res["stream"][:B0].repeat(
         reps, 1
     )  # CPU greedy stream (prompt + 64 tokens): informational reference + tokens padding the last prompt block
-    chain = SpecChain(md, users_per_row=U, n=n, log=log)
+    chain = (
+        SpecPagedChain(md, users_per_row=U, n=n, ctx=CTX, log=log)
+        if PAGED
+        else SpecChain(md, users_per_row=U, n=n, log=log)
+    )
     Tn = B * n
     sh = _Shards()
     pool = ThreadPoolExecutor(max_workers=2)
     futs = {}
-    submit = lambda L: futs.setdefault(L, pool.submit(load_layer, L)) if L in layer_ids else None
+    submit = lambda L: (
+        futs.setdefault(L, pool.submit(load_layer, L, max_seq_len=CTX + 64 if PAGED else 256))
+        if L in layer_ids
+        else None
+    )
     for L in layer_ids[:2]:
         submit(L)
     built, groups, t0 = [], {}, time.time()
@@ -117,11 +133,15 @@ def test_spec_loop(mesh_device):
         layer, attn = chain.build_layer(L, ref, futs.pop(L).result())
         key = getattr(attn, "ratio", 0)
         if key not in groups:
-            groups[key] = SpecStepState(attn)
+            groups[key] = DSV41PagedStepState(attn, max_pos=CTX + 64) if PAGED else SpecStepState(attn)
         built.append((L, layer, key))
     log(f"built {len(layer_ids)} layers in {time.time() - t0:.0f}s")
     engram_ids = [l for l in (1, 14) if l in layer_ids]
-    host_rows = HostEngramRows(tuple(engram_ids), max_batch_size=B) if engram_ids else None
+    host_rows = (
+        HostEngramRows(tuple(engram_ids), max_batch_size=B, max_seq_len=CTX + 64 if PAGED else 256)
+        if engram_ids
+        else None
+    )
     dev_engram = {l: DSV41DeviceEngram(md, l, sh, mesh_config=chain.mesh_config, ccl=chain.ccl) for l in engram_ids}
     embedding = DSV41DeviceEmbedding(md, sh.get("embed.weight"), users_per_row=chain.T)
     head = DSV41DeviceHead(md, sh.get("norm.weight").float(), sh.get("head.weight"), norm_eps=R.model_args().norm_eps)
@@ -129,7 +149,15 @@ def test_spec_loop(mesh_device):
         t0 = time.time()
         stage_w = [load_mtp_stage(i, sh) for i in range(3)]
         drafter = DSparkDrafter(
-            md, chain.mesh_config, chain.ccl, stage_w, embedding.weight, head, users_per_row=U, n=n
+            md,
+            chain.mesh_config,
+            chain.ccl,
+            stage_w,
+            embedding.weight,
+            head,
+            users_per_row=U,
+            n=n,
+            max_pos=CTX + 64 if PAGED else 256,
         )  # rings start empty (zeros)
         log(f"drafter built {time.time() - t0:.0f}s")
         dec = SpecDecoder(md, built, embedding, head, drafter, dev_engram, step_states=groups, n=n)
@@ -301,7 +329,7 @@ def test_spec_loop(mesh_device):
         {"stream": stream, "k": k, "S": S, "gap": gap_l}, GREEDY if k == 0 else GREEDY.replace(".pt", f"_k{k}.pt")
     )
     if k > 0 and os.path.exists(GREEDY):
-        base_stream = torch.load(GREEDY)["stream"]
+        base_stream = torch.load(GREEDY)["stream"]  # plain greedy of the SAME mode (paged / non-paged)
         ident, first_div = 0, []
         for b in range(B):
             L_ = min(lens[b], int((base_stream[b] >= 0).sum()))
@@ -318,10 +346,25 @@ def test_spec_loop(mesh_device):
                 # stream[b, i] was produced by the argmax of the row that emitted generated token i (gap list index i-1)
                 log(
                     f"DIVERGENCE user {b} token {i}: plain tok {int(base_stream[b, i])} (top1-top2 gap in plain {base_gap[b][i - 1]:.3f}), spec tok {int(stream[b, i])} (gap in spec {gap_l[b][i - 1]:.3f}), "
-                    f"CPU ref tok {int(ref_all[b, S + i])}"
+                    f"CPU ref tok {int(ref_all[b, S + i]) if S + i < ref_all.shape[1] else -1}"
                 )
     ref_stream = ref_all[:, S : S + G + 1]
-    agree = [(stream[b, : lens[b]] == ref_stream[b, : lens[b]]).float().mean().item() for b in range(B)]
+    lr = ref_stream.shape[1]
+    agree = [
+        (stream[b, : min(lens[b], lr)] == ref_stream[b, : min(lens[b], lr)]).float().mean().item() for b in range(B)
+    ]
+    if PAGED:  # paged vs NON-paged stream of the same k (k = 0: plain) over the common length
+        npf = GREEDY_NP if k == 0 else GREEDY_NP.replace(".pt", f"_k{k}.pt")
+        if os.path.exists(npf):
+            npst = torch.load(npf)["stream"]
+            dv = []
+            for b in range(B):
+                L_ = min(lens[b], int((npst[b] >= 0).sum()))
+                ne = (stream[b, :L_] != npst[b, :L_]).nonzero()
+                dv.append(int(ne[0]) if len(ne) else -1)
+            log(
+                f"PAGED vs NON-PAGED (same k={k}) stream: first divergence per user {dv} (-1 = identical over the common length, {L_} tokens)"
+            )
     log(f"agreement with the CPU reference greedy stream (informational): mean {sum(agree) / B:.3f}")
     log(
         "sample device stream user 0: "

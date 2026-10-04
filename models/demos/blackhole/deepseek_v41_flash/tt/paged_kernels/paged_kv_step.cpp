@@ -136,7 +136,8 @@ void kernel_main() {
     }
     // kv row: KV_MODE 0: tile page (user*16 + c), row 0 -> faces 0/1 rows 0; KV_MODE 1: row i of the [rows] tile rows
     [[maybe_unused]] const uint32_t kv_r = (KV_MODE == 0) ? 0 : (row % 32);
-    [[maybe_unused]] const uint32_t kv_page0 = (KV_MODE == 0) ? user * 16 : (row / 32) * 16;
+    [[maybe_unused]] const uint32_t kv_page0 =
+        (KV_MODE == 0) ? row * 16 : (row / 32) * 16;  // row == user when NQ == 1; spec blocks: one q tile per ROW
     [[maybe_unused]] const uint32_t kv_off = (kv_r >= 16) ? 1024 : 0;
     if constexpr (WRITE_KV) {
         for (uint32_t c = 0; c < 16; ++c) {
@@ -161,6 +162,7 @@ void kernel_main() {
     const int32_t pos = posb[row];
     const bool active = pos >= 0;
     const uint32_t p = active ? (uint32_t)pos : 0;
+    const uint32_t pos_u = p;
     const uint32_t ring_user = ring_base + user * RING;
 
     // ---- 1. ring row write
@@ -182,7 +184,10 @@ void kernel_main() {
     }
     // ---- 2. compressed latent write
     if constexpr (HAS_LAT) {
-        if (active) {
+        // only the group-COMPLETING position writes its entry (RATIO 1: every position): the even position of a ratio-2
+        // group would write a junk latent to the entry the odd position finalises, and with several rows of one user in
+        // a block (NQ > 1) the two cores race
+        if (active && ((pos_u + 1) % RATIO == 0)) {
             const uint32_t rr = lat_r & 15;
             for (uint32_t c = 0; c < 16; ++c) {
                 for (uint32_t w = 0; w < 8; ++w) {

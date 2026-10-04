@@ -7,13 +7,15 @@ argmax shows whether it is a near-tie (small gap, numerics of the 1-row vs 1+k-r
 
 import glob
 import re
+import sys
 
 import torch
 
 D = "/mnt/tt-data/ssinghal/dsv4-spec-accept"
-base = torch.load(f"{D}/greedy_dev_g.pt")
+PFX = sys.argv[1] if len(sys.argv) > 1 else "greedy_dev_g"  # e.g. greedy_paged_g for the paged runs
+base = torch.load(f"{D}/{PFX}.pt")
 bs, bg = base["stream"], base.get("gap")
-for f in sorted(glob.glob(f"{D}/greedy_dev_g_k*.pt")):
+for f in sorted(glob.glob(f"{D}/{PFX}_k*.pt")):
     k = int(re.search(r"_k(\d+)", f).group(1))
     d = torch.load(f)
     s, g = d["stream"], d.get("gap")
