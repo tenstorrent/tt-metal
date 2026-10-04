@@ -306,7 +306,7 @@ void kernel_main() {
         // (0x3f803f80), exactly as the dense and ring_joint recipe dataflow generate it.
         static_assert(identity_scalar_packed == 0x3f803f80, "Column identity must be two BF16 ones");
     }
-    generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
+    generate_bcast_col_scalar_zeroed(CircularBuffer(cb_col_identity), identity_scalar_packed);
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         cb_identity_scale_in,
         ckernel::PoolType::MAX,

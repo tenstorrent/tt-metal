@@ -808,7 +808,7 @@ void kernel_main() {
     const auto joint_out_generator = PaddedAddrGenerator(joint_out_writer, joint_tile_logical);
 
     generate_bcast_unary_scalar(CircularBuffer(cb_scale_in), scale_val);
-    generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
+    generate_bcast_col_scalar_zeroed(CircularBuffer(cb_col_identity), identity_scalar_packed);
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         cb_identity_scale_in,
         ckernel::PoolType::MAX,
