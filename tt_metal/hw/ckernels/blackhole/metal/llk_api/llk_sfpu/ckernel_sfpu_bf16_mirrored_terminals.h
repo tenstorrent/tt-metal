@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-// Include inside namespace sfpi. Typed callers retain the domain-action proof.
+// Include inside namespace sfpi.
 
 template <int CODE>
 inline vFloat target_raw_terminal_value(vFloat computed, float constant = 0.0f) {

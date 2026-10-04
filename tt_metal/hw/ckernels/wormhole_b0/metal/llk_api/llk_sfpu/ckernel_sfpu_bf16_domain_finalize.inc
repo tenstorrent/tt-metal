@@ -12,5 +12,6 @@ inline void finalize_raw_domain_actions(vFloat x_raw, vFloat& result) {
     // Ordered finite/domain return_class actions own their lanes first.  The
     // effective special policy then has final class authority; target rounding
     // and FTZ happen in the evaluator's existing conversion/store epilogue.
+    // The aggregate reflection returns every class itself.
     apply_target_special_policy(x_effective, result);
 }
