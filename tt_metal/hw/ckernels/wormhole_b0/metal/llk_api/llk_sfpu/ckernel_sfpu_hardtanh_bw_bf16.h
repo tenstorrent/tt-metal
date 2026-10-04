@@ -7,7 +7,7 @@
 
 namespace ckernel::sfpu {
 
-// hardtanh_bw: grad times its piecewise-constant derivative, selected by the interval that holds x
+// hardtanh_bw: grad times its piecewise derivative, selected by the interval that holds x
 // (activations/hardtanh_bw.json). DEST tile idst holds x and idst + 1 holds grad; the result replaces x.
 template <int ITERATIONS = 32>
 inline void calculate_hardtanh_bw_bf16() {
