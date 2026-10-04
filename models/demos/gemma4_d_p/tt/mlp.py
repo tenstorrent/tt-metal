@@ -157,17 +157,14 @@ class MLP:
         hidden = ttnn.mul(gate, up, memory_config=act_mc)
         gate.deallocate(True)
         up.deallocate(True)
+        # Short M: down runs 4 columns per core (the 1D config only applies there) and writes its output width-sharded
+        # straight into the reduce-scatter, which reads it as fast as DRAM. Taller slabs write the output to DRAM.
+        down_mc = ttnn.DRAM_MEMORY_CONFIG
         if short_m:
             sharded = to_l1_width_sharded(hidden)
             hidden.deallocate(True)
             hidden = sharded
-        # Short M: down runs 4 columns per core (the 1D config only applies there) and writes its output width-sharded
-        # straight into the reduce-scatter, which reads it as fast as DRAM. Taller slabs write the output to DRAM.
-        down_mc = (
-            short_m_output_memcfg(hidden, self.down_proj, per_core_n=_DOWN_PER_CORE_N)
-            if short_m
-            else ttnn.DRAM_MEMORY_CONFIG
-        )
+            down_mc = short_m_output_memcfg(hidden, self.down_proj, per_core_n=_DOWN_PER_CORE_N)
         output = self._project(hidden, self.down_proj, down_mc, per_core_n=_DOWN_PER_CORE_N)
         hidden.deallocate(True)
         output = ccl_reduce_scatter_rows(output, self.mesh_config, self.ccl_manager)

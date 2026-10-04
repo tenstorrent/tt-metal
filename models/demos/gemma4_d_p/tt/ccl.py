@@ -313,6 +313,8 @@ def ccl_partition_rows(tensor, mesh_config):
 
 # Tallest reduce-scatter input (rows per device) on the tuned transport: chunk 4096 at CP8.
 _MAX_TUNED_REDUCE_SCATTER_IN_ROWS = 512
+# Four workers per link with short syncs suit short slabs; the automatic choice is better for taller ones.
+_SHORT_SLAB_REDUCE_SCATTER_TRANSPORT = dict(num_workers_per_link=4, chunks_per_sync=2, num_buffers_per_channel=2)
 # Tallest reduce-scatter output kept in L1: 256 rows per device (chunk 8192 at CP8 x TP4).
 _MAX_L1_REDUCE_SCATTER_OUT_ROWS = 256
 
@@ -351,10 +353,7 @@ def ccl_reduce_scatter_rows(tensor, mesh_config, ccl_manager, memory_config=None
     else:
         transport = {}
         if tensor.padded_shape[-2] <= _MAX_TUNED_REDUCE_SCATTER_IN_ROWS:
-            # Four workers per link with short syncs suit short slabs; the automatic choice is better for taller ones.
-            transport = dict(
-                num_links=ccl_manager.num_links, num_workers_per_link=4, chunks_per_sync=2, num_buffers_per_channel=2
-            )
+            transport = dict(num_links=ccl_manager.num_links, **_SHORT_SLAB_REDUCE_SCATTER_TRANSPORT)
         result = ttnn.reduce_scatter(
             tensor, dim=2, cluster_axis=mesh_config.tp_axis, memory_config=memory_config, **transport
         )
