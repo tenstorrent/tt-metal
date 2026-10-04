@@ -234,8 +234,13 @@ inline void calculate_sfpu_binary_mul(
         sfpi::vFloat result = in0 * in1;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            // software RNE approach:
-            result = float32_to_bf16_rne(result);
+            // Software RNE with 0 * x = 0 and x * 0 = 0, to match FPU behaviour for bfloat16 multiplication:
+            // where either input is zero the sum stays 0x7fff, which the mask turns into +0.
+            sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(result);
+            sfpi::vUInt rounded = 0x7fffU;
+            v_if(in0 != 0 && in1 != 0) { rounded += bits + ((bits >> 16) & 1); }
+            v_endif;
+            result = sfpi::as<sfpi::vFloat>(rounded & 0xFFFF0000U);
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
