@@ -1,4 +1,8 @@
-# prove_all — prove every SFPU board op, one command
+# prove_all — historical pin-59 coverage reproduction
+
+> This tool is not the current compiler/knob admission path. It reconstructs a
+> historical coverage census by joining pin-59 engines and recorded overlays.
+> Use [`formal_campaign.py`](FORMAL_README.md) for current-tuple formal results.
 
 `prove_all.py` runs **both** proof engines across **all 134 kernel-decided
 board ops** at the current compiler pin and emits the master coverage ledger.

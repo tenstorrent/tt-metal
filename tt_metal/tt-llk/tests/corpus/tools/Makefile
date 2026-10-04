@@ -1,12 +1,24 @@
-# prove_all — one command reproduces the SFPU proof-coverage census.
-# (laneMH; corpus/tools).  See PROVE_ALL_README.md.
+# Current formal campaigns use formal_campaign.py.  prove_all targets below
+# reproduce the historical pin-59 coverage census only.
 #
 # OUT overrides the run directory; JOBS the bitexact sim parallelism.
 OUT  ?= $(if $(CRAQ_PROVE_OUT),$(CRAQ_PROVE_OUT),$(HOME)/craq-keep/prove-all)
 JOBS ?= 8
+FORMAL_OUT ?= $(HOME)/craq-keep/formal-current
+FORMAL_OPS ?= *
 
 .PHONY: prove-all prove-all-anchor prove-all-selftest prove-all-manifest \
-        prove-all-force shard-selftest
+        prove-all-force shard-selftest formal formal-selftest
+
+## prove current LLK/knob selections; requires FORMAL_SIM and FORMAL_SELECTION
+formal:
+	@test -n "$(FORMAL_SIM)" || (echo "set FORMAL_SIM" >&2; exit 2)
+	@test -n "$(FORMAL_SELECTION)" || (echo "set FORMAL_SELECTION" >&2; exit 2)
+	python3 formal_campaign.py --sim "$(FORMAL_SIM)" \
+		--selection "$(FORMAL_SELECTION)" --ops "$(FORMAL_OPS)" --out "$(FORMAL_OUT)"
+
+formal-selftest:
+	python3 selftest_formal_campaign.py
 
 ## prove every board op at the current pin and emit the master coverage ledger
 prove-all:

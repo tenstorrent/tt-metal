@@ -380,7 +380,7 @@ def run_case(
         formal_verdict=verdict["verdict"],
         validation=verdict.get("validation"),
         details=verdict.get("details"),
-        witness=verdict.get("details", {}).get("witness"),
+        witness=(verdict.get("details") or {}).get("witness"),
         verdict_file=f"{op}/{op}-verdict.json",
         wall_seconds=round(time.monotonic() - started, 3),
     )
@@ -412,6 +412,21 @@ def preflight(tests: Path, python: Path, sim: Path) -> dict:
         for path in (tests / "sfpi/compiler/libexec/gcc/riscv-tt-elf").glob("*/cc1plus")
         if ".pin-backup" not in str(path)
     )
+    build_manifest_path = sim.parent / "formal-instrument.json"
+    build_manifest = None
+    if build_manifest_path.is_file():
+        try:
+            recorded = json.loads(build_manifest_path.read_text())
+            expected = recorded.get("artifacts", {}).get("libttsim.so", {}).get("sha256")
+            build_manifest = {
+                "path": str(build_manifest_path),
+                "sha256": sha256(build_manifest_path),
+                "source": recorded.get("source"),
+                "build_command": recorded.get("build_command"),
+                "artifact_matches_manifest": expected == sha256(sim),
+            }
+        except (OSError, json.JSONDecodeError, AttributeError):
+            build_manifest = {"path": str(build_manifest_path), "readable": False}
     return {
         "simulator": {"path": str(sim), "sha256": sha256(sim)},
         "descriptor": {"path": str(descriptor), "sha256": sha256(descriptor)},
@@ -423,6 +438,7 @@ def preflight(tests: Path, python: Path, sim: Path) -> dict:
         "tt_metal": git_state(tests),
         "formal_engine_sha256": sha256(FORMAL_ENGINE),
         "trace_schema": "SFPUJO-v1",
+        "build_manifest": build_manifest,
     }
 
 
