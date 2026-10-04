@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bit>
 #include <array>
 #include <numbers>
 #include <utility>
@@ -159,6 +160,20 @@ std::vector<Tensor> softplus_bw(
     float beta,
     float threshold,
     const std::optional<MemoryConfig>& output_mem_config) {
+    // One program for BF16 operands at the fitted scalar values, whose gradient is the
+    // generated SFPU kernel; anything else, and Quasar, which has no generated kernel, keeps
+    // the composite below.
+    if (input.device()->arch() != tt::ARCH::QUASAR && grad.dtype() == DataType::BFLOAT16 &&
+        input.dtype() == DataType::BFLOAT16 && std::bit_cast<uint32_t>(beta) == 0x3f800000u &&
+        std::bit_cast<uint32_t>(threshold) == 0x41a00000u) {
+        return {ttnn::operations::unary_backward::launch_unary_backward(
+            ttnn::operations::unary_backward::UnaryBackwardOpType::SOFTPLUS_BW,
+            grad,
+            input,
+            input.dtype(),
+            output_mem_config.value_or(input.memory_config()))};
+    }
+
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
     Tensor mul_input_beta = ttnn::multiply(input, beta, std::nullopt, output_mem_config);
