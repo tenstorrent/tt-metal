@@ -263,6 +263,10 @@ def ring_sdpa_chunk_sizes(q_slab_tokens, sliding, num_heads=8, num_cores=110):
         ks = int(os.environ.get("G4X_SLIDING_KSPLIT", "3"))
         k_splits = ks if num_heads * -(-q_slab_tokens // q_chunk) * ks <= num_cores else 1
         return q_chunk, 128, k_splits, False
+    import os  # LOCAL knobs: G4X_GLOBAL_Q / G4X_GLOBAL_KSPLIT force the global Q chunk and K split
+
+    if os.environ.get("G4X_GLOBAL_Q"):
+        return int(os.environ["G4X_GLOBAL_Q"]), 256, int(os.environ.get("G4X_GLOBAL_KSPLIT", "1")), True
     if q_slab_tokens <= 512:
         q_chunk = q_slab_tokens // 4
         return (q_chunk if q_chunk % TILE_HEIGHT == 0 else TILE_HEIGHT), 256, 3, True
