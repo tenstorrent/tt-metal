@@ -60,3 +60,28 @@ layers 37-39 attention-input hidden of the last 128 prompt positions (today the 
 ## Verified vs not verified
 Verified (device): drafter == CPU draft tokens given CPU hidden; verify rows PCC; full 40-layer loop k=1..5 (+padded) with device-made state, acceptance vs CPU, exactness near-tie evidence, timing breakdown.
 Not verified: paged-pool integration, >64 generated tokens, >8 prompts, exact tok/s target (best 44.8 committed / 38-41 same-host; 50 needs verify cost reduction).
+# Verify-cost investigation (against main 450e1196f7c) — no 50 tok/s/user lever found cheaply; pool plug-in NOT implemented
+
+changes.diff (68 lines, `git apply --check` OK): drafter timing hooks only (`DSparkDrafter.stop`, `MTP_BREAKDOWN` in tests/test_spec_mtp.py). No behaviour change.
+
+## Measurements (all on .46, 4 users/mesh row, same build)
+* Drafter (U=4, write_main n=3 + draft), traced, cumulative ms: write_main 0.87 | embed 0.44 | stage0 2.48 | stage1 4.30 | stage2 6.47 | head 6.93 | markov x5 + conf 9.01 (total 9.9 with write_main).
+  ~2.0 ms per stage (backbone layer ~1.15 ms), markov 2.1 ms (5 sequential embed + matmul + 2 allgathers + argmax). Possible saving ~1.5-2 ms (one packed allgather in sample_global, fused router_select in DraftGate) = 2% of a round: not done.
+* Verify cost, 12 layers (2-13, T=16 vs plain T=4), pure device replay: plain 18.1 ms, k=3 25.4 ms (+7.3 ms = +0.6 ms/layer, ~+24 ms over 40 layers incl. the sync-free overlap; full model measured +18 ms).
+  Ablations at T=16: per-block-index paged_update_cache calls reduced to ONE (wrong results, timing only): 24.7 ms (-0.7 ms/12 layers = ~2.3 ms of 64) -> the n-launch write is NOT the bottleneck;
+  DSV41_MHC_EP=1: 25.5 (no change); DSV41_ATTN_SDPA_FID=HiFi2: 25.0 (-0.4); (DSV41_MHC_CN_FUSED=0 run: see log spec5_abl_cnf0.log).
+* Profile sums (T=16 vs T=4, ms over 40 layers, eager+sync): attention 155 vs 117, moe 152 vs 137, mHC (mixes+expand+collapse) 259 vs 189, shared 30 vs 29. The extra cost is spread (rows x 4 in every mHC/attention op), no single outlier at T=16.
+* Native T=12/20/24 mHC fast path: the pad-to-8 fix already makes them correct; profile T=20 vs T=16 mixes+collapse = +~110 ms-sum, i.e. a fused T=12/20/24 path would at best bring k=2/4/5 to the k=3 curve (k=4 ~44 tok/s/user est.), not above k=3.
+
+## Where 50 tok/s/user would have to come from (k=3, tokens/round 3.2 => round <= 64 ms)
+now: verify 64 + draft 10.5 + host/readback 7-9 = 83 wall (74.6 device). Plain decode already costs 46 device; so verify extra (18) + draft (10.5) + host (8) must all drop to ~10 total.
+Biggest remaining levers, all outside this overlay's scope: (a) mHC/attention/MoE kernels scaling sub-linearly with T (they are ~linear now), (b) Engram on device so the host leaves the critical path (-8 ms), (c) fusing drafter stages + packed sampling (-2..3 ms).
+
+## Paged-pool plug-in (virtual-user rows) — not implemented; findings
+Feasible pieces already in main: `paged_kv_step` has `nq` (rows of one user consecutive, user = row // nq), `ring_rows` is a parameter (160 for spec slack, note in paged_ops.py), `sparse_sdpa` takes per-row index lists, so causality inside the block needs no mask.
+Blockers found (each is real work, together several days, device-verification at ISL 2k needs the indexer):
+1. Compressed layers at ISL 2k have >512 compressed entries, so every virtual row needs its own indexer top-512: `DSV41DecodeIndexer` is batched over USERS with one key slab per user and a per-user valid length; n rows per user need either the key slab repeated (n x memory) or an indexer variant taking several queries per key slab; key append/valid length per virtual row (entries completed inside the block).
+2. Ratio-2/ratio-1 block compression (prev_cs chain, odd-position-only latent write, commit(m)) exists only in SpecCompressedAttention (non-paged); the paged class writes one latent per user per step.
+3. The pool's ring region is [slot][user][ring_rows] sized at pool build: spec needs ring_rows >= 128+k (160) for every handed-off user; prefill->decode handoff (`prefill_handoff.py`) stages 128-row rings.
+4. The drafter's 3 stage rings must be seeded from layers 37-39 hidden of the prompt (today the loop re-feeds the prompt through the verify step, ~1.5 s for 80 tokens, impossible at ISL 2k: 2k tokens x 40 layers).
+I can do (1)-(4) incrementally if prioritised; the first deliverable would be window-only layers + compressed layers with <=512 entries (ISL <= 1k) on the pool, then the multi-query indexer.

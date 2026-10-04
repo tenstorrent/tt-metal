@@ -604,6 +604,8 @@ class DSparkDrafter:
             _l1v(self.md, f"write_main stage {s} done")
 
     # -- draft side --------------------------------------------------------------------------------------------------------
+    stop = None  # timing breakdown: 'embed' | 'stage0..2' | 'stages' | 'head' | None (full)
+
     def draft(self, tok_rows, f_rows):
         """tok_rows [T_d,1] uint32 row-major: draft block input ids (row i*U+u: t_u for i = 0, the noise id otherwise); f_rows [T_d] int32: frontier
         position per row. -> dict(tokens=[5 x [U,1] uint32 draft tokens d_1..d_5], logits=[5 x [1,1,U,V/cols] fp32 markov-biased], conf [1,1,T_d,32] fp32).
@@ -613,6 +615,8 @@ class DSparkDrafter:
         emb = ttnn.embedding(tok_rows, self.embed_w, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [T,1,5120]
         x = ttnn.repeat(ttnn.typecast(ttnn.reshape(emb, [T, 1, 1, 5120]), ttnn.float32), [1, 1, 4, 1])
         pre = self.pre0
+        if self.stop == "embed":
+            return {"tokens": [], "logits": [], "conf": x}
         diag = os.environ.get("DSV41_L1_DIAG") == "1"
         for li, layer in enumerate(self.layers):
             if diag:
@@ -627,12 +631,18 @@ class DSparkDrafter:
                         )
             else:
                 x, pre = layer.forward(x, pre, st)
+            if self.stop == f"stage{li}":
+                return {"tokens": [], "logits": [], "conf": x}
+        if self.stop == "stages":
+            return {"tokens": [], "logits": [], "conf": x}
         y = ttnn.matmul(pre, x, compute_kernel_config=self.ckc)  # hc_pre -> [T,1,1,D]
         xb = ttnn.typecast(ttnn.reshape(y, [1, 1, T, 5120]), ttnn.bfloat16)  # pre-norm (the confidence head reads this)
         xn = ttnn.rms_norm(xb, weight=self.norm_w, epsilon=1e-20)
         logits = ttnn.matmul(
             xn, self.head.head_w, compute_kernel_config=self.head.ckc, dtype=ttnn.float32
         )  # [1,1,T,V/cols]
+        if self.stop == "head":
+            return {"tokens": [], "logits": [], "conf": logits}
         toks, lgs, mes = [], [], []
         tok = ttnn.slice(tok_rows, [0, 0], [U, 1])  # t_u
         for i in range(BLOCK):
