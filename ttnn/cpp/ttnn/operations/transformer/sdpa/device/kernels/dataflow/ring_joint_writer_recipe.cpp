@@ -6,6 +6,10 @@
 // Compute keeps one recurrent state across the ring. Multi-Q workers checkpoint its raw tile bytes to the
 // internal state tensor (common runtime arg 0; accessor args follow the CB block) on CB17 request / CB18 ack.
 
+// Size-optimized: the recipe compute kernels (fused LOW_PRECISION in particular) leave little of the
+// kernel config buffer, and this kernel mostly issues NOC/fabric transfers and waits on them.
+#pragma GCC optimize("Os")
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/core_local_mem.h"
