@@ -21,12 +21,12 @@ from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig, load_from_saf
 from ttml.models.qwen3 import Qwen3, create_qwen3_config_from_hf
 from ttml.models.qwen3.kv_cache import KVCache as Qwen3KVCache
 from ttml.models.qwen3.weights import load_weights_from_hf
-from ttml.trainers.grpo_trainer import RolloutBatch, RolloutSampler
 from huggingface_hub import snapshot_download
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
-from .completer_common import async_read_to_host, deallocate_tensors
-from .llama_overrides import LlamaCompositeKV
+from .base import RolloutBatch, RolloutSampler
+from .device_utils import async_read_to_host, deallocate_tensors
+from .llama_composite_kv import LlamaCompositeKV
 
 TILE_SIZE = 32
 

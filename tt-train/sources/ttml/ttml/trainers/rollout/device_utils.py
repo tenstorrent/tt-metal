@@ -2,11 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Helpers shared by the GRPO completers (Llama and Qwen3).
+"""Device-tensor helpers shared by ``TTMLRolloutSampler`` and the GRPO completers.
 
-Only byte-identical, completer-agnostic utilities live here. Per-completer
-knobs (e.g. the ``CHUNK`` decode-readback cadence) intentionally stay in each
-completer module so they can diverge independently.
+Only byte-identical, model-agnostic utilities live here. Per-generator knobs
+(e.g. the ``CHUNK`` decode-readback cadence) intentionally stay in each module
+so they can diverge independently.
 """
 
 from __future__ import annotations
