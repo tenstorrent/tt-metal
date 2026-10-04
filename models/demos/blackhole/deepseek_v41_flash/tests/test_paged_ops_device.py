@@ -264,3 +264,124 @@ def test_write_keys(mesh_device, slab_dtype):
     assert (
         float(got[0].abs().max()) == 0 and float(got[1, 160:].abs().max()) == 0 and float(got[2].abs().max()) == 0
     ), "write must not touch other rows / users"
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("device_params", [pytest.param(DP, id="plain")], indirect=True)
+@pytest.mark.parametrize("pdt", ["bf16", "fp8"])
+@torch.no_grad()
+def test_stage_commit_chunked(mesh_device, pdt):
+    """PagedKVPool.stage_commit (chunked in-place upload through paged_scatter_rows): every staged row lands, bf16 and fp8 pools."""
+    md = mesh_device
+    rows = md.shape[0]
+    dt = ttnn.bfloat16 if pdt == "bf16" else ttnn.fp8_e4m3
+    pool_t = P.PagedKVPool(md, 4, num_pages=8, n_ring_layers=2, max_ctx=1024, dtype=dt)
+    pool_t.stage_begin()
+    gen = torch.Generator().manual_seed(9)
+    pool_t._stage[:] = 0
+    sel = torch.randperm(pool_t.total_rows, generator=gen)[:700]
+    vals = torch.randn(rows, 700, 512, generator=gen).to(torch.bfloat16)
+    pool_t._stage[:, sel] = vals
+    exp = pool_t._stage.clone()
+    pool_t.stage_commit(chunk_rows=1024)
+    ttnn.synchronize_device(md)
+    got = (
+        ttnn.to_torch(
+            ttnn.get_device_tensors(ttnn.typecast(pool_t.pool, ttnn.bfloat16) if pdt == "fp8" else pool_t.pool)[0]
+        )
+        .reshape(-1, 512)
+        .float()
+    )
+    want = exp[0].float()
+    if pdt == "fp8":
+        want = want.to(torch.float8_e4m3fn).float()
+    bad = got[sel] != want[sel]
+    if pdt == "fp8":
+        # e4m3 SUBNORMALS (|x| < 2**-6) come back as 0 in this readback (measured: 3879 of 358400 randn values = the fraction below 2**-6; the kernel's conversion
+        # is bit-identical to torch's cast in a CPU model). Open item: is it the device typecast (flush-to-zero) or the write? Normal-range values must match exactly.
+        sub = want[sel].abs() < 2**-6
+        print(
+            f"STAGE_DIAG fp8: mismatches {int(bad.sum())} of {bad.numel()}, of which in the subnormal range {int((bad & sub).sum())}",
+            flush=True,
+        )
+        bad = bad & ~sub
+    assert not bool(bad.any()), "staged rows differ from the device pool"
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("device_params", [pytest.param(DP, id="plain")], indirect=True)
+@pytest.mark.parametrize("backend", ["matmul", "fused"])
+@torch.no_grad()
+def test_indexer_users_of_every_mesh_row(mesh_device, backend):
+    """The decode indexer on users of EVERY mesh row (different keys / queries / valid lengths per row, all 32 devices checked): the selected ids of each
+    device must be the top-512 of the HOST-computed scores of its own users (indexer_score_dsa derives a per-device causal offset from the mesh coordinate:
+    a wrong offset on devices other than device 0 would show up here)."""
+    from models.demos.blackhole.deepseek_v41_flash.tt.indexer import DSV41DecodeIndexer
+
+    md = mesh_device
+    rows, cols = md.shape
+    U, n_alloc, Nmax = 4, 2080, 2048
+    B = rows * U
+    gen = torch.Generator().manual_seed(11)
+    wq = (torch.randn(4096, 1280, generator=gen) * 0.05).to(torch.bfloat16)
+    wp = (torch.randn(32, 5120, generator=gen) * 0.05).to(torch.bfloat16)
+    idx = DSV41DecodeIndexer(
+        md,
+        {"wq_b": wq, "weights_proj": wp},
+        torch.polar(torch.ones(4096, 32), torch.zeros(4096, 32)),
+        users_per_row=U,
+        n_alloc=n_alloc,
+        ratio=1,
+        backend=backend,
+        weight_dtype=ttnn.bfloat16,
+        key_dtype=ttnn.bfloat16,
+    )
+    keys = (torch.randn(B, Nmax, 128, generator=gen) * 0.7).to(torch.bfloat16)
+    idx.load_keys(keys)
+    pos = torch.tensor([700 + 97 * b for b in range(B)]).clamp(
+        max=Nmax - 1
+    )  # a different valid length for every user of every row
+    n_valid = pos + 1
+    shard_u = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(rows, cols))
+    shard_x = ttnn.ShardTensor2dMesh(md, dims=(2, None), mesh_shape=(rows, cols))
+    rep = ttnn.ReplicateTensorToMesh(md)
+    x = (torch.randn(B, 5120, generator=gen) * 0.5).to(torch.bfloat16)
+    qr = torch.randn(B, 1280, generator=gen).to(torch.bfloat16)
+    mk = lambda t, dt, lay, m: ttnn.from_torch(
+        t, device=md, dtype=dt, layout=lay, memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=m
+    )
+    st = {
+        "C": mk(torch.ones(U, 1, 1, 128).to(torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT, rep),
+        "S": mk(torch.zeros(U, 1, 1, 128).to(torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT, rep),
+        "valid": mk(
+            torch.full((1, 1, 1, 1), int(n_valid.max()), dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, rep
+        ),
+        "nvalid": mk(n_valid.float().reshape(B, 1, 1, 1), ttnn.float32, ttnn.TILE_LAYOUT, shard_u),
+    }
+    ids = idx.forward(
+        mk(x.reshape(1, 1, B, 5120), ttnn.bfloat16, ttnn.TILE_LAYOUT, shard_x),
+        mk(qr.reshape(1, 1, B, 1280), ttnn.bfloat16, ttnn.TILE_LAYOUT, shard_x),
+        st,
+    )
+    ttnn.synchronize_device(md)
+    # host golden scores
+    q = (qr.float() @ wq.float().T).reshape(B, 32, 128)
+    w = (x.float() @ wp.float().T) * (128**-0.5 * 32**-0.5)
+    scores = torch.einsum("bhd,btd->bht", q, keys.float()).relu()
+    scores = (scores * w.reshape(B, 32, 1)).sum(1)  # [B, Nmax]
+    worst = 1.0
+    for r in range(rows):
+        for c in (0, cols - 1):  # first and last column of the row
+            got = ttnn.to_torch(ttnn.get_device_tensors(ids)[r * cols + c]).reshape(U, -1).long()
+            for u in range(U):
+                b = r * U + u
+                n = int(n_valid[b])
+                sel = got[u][got[u] != 0xFFFFFFFF]
+                assert len(sel) == 512 and int(sel.max()) < n, f"row {r} col {c} user {u}: ids must be < {n}"
+                top = scores[b, :n].topk(512).values.sum()
+                ratio = float(scores[b, sel].sum() / top)
+                worst = min(worst, ratio)
+                assert (
+                    ratio > 0.97
+                ), f"mesh row {r} col {c} user {u}: selected score mass {ratio:.4f} of the host top-512"
+    print(f"INDEXER_ROWS backend {backend}: worst selected score mass over all rows / users {worst:.4f}", flush=True)

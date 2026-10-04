@@ -141,7 +141,11 @@ def test_paged_decode_steps(mesh_device):
     )
 
     engram_ids = [l for l in (1, 14) if l in layer_ids]
-    host_rows = HostEngramRows(tuple(engram_ids), max_batch_size=B) if engram_ids and not SYN else None
+    host_rows = (
+        HostEngramRows(tuple(engram_ids), max_batch_size=B, max_seq_len=max(256, S + N + 32))
+        if engram_ids and not SYN
+        else None
+    )
     dev_engram = {
         l: DSV41DeviceEngram(
             md,
@@ -197,6 +201,12 @@ def test_paged_decode_steps(mesh_device):
     ttnn.synchronize_device(md)
     dec.restore_states(snaps)
     log("trace captured")
+    mv2 = ttnn.get_memory_view(md, ttnn.BufferType.DRAM)
+    log(
+        f"PAGED_MEM2 after embedding/head/Engram/trace: DRAM per bank allocated {mv2.total_bytes_allocated_per_bank / (1 << 20):.0f} MiB, "
+        f"free {mv2.total_bytes_free_per_bank / (1 << 20):.0f} MiB (= {mv2.total_bytes_free_per_bank * 8 / (1 << 30):.2f} GiB/chip), "
+        f"largest free block {mv2.largest_contiguous_bytes_free_per_bank / (1 << 20):.0f} MiB/bank"
+    )
 
     pccs, match, wall = [], [], []
     for i in range(N):
