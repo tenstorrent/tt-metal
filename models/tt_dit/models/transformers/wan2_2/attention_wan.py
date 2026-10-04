@@ -21,11 +21,14 @@ from ....utils.tensor import bf16_tensor
 
 
 class WanAttention(Module):
-    # Named SDPA recipe of every SDPA call in this module on Blackhole. DiT models default to
-    # FAST (legacy streaming numerics with the approximate exponential): at the models' shapes it
-    # is as accurate as the legacy HiFi2 / BF16-dest / exact-exp setup within a few percent and at
-    # least as fast. Pass sdpa_precision to opt up (e.g. BALANCED).
+    # Named SDPA recipe of every SDPA call in this module on Blackhole. Cross-attention defaults to FAST
+    # (legacy streaming numerics with the approximate exponential). Self-attention defaults to LOW_PRECISION
+    # with BFP8 K/V: on a Blackhole Galaxy (4x8, 190 W) Wan2.2 T2V 720p denoising runs 12% faster than FAST
+    # (2.22 vs 2.52 s/step) with the same attention error (2.47% / 2.31% vs FAST 2.54% / 2.41% at 480p /
+    # 720p, real weights) and equivalent videos. Pass sdpa_precision to choose another recipe.
     sdpa_precision_default = ttnn.SDPAPrecision.FAST
+    sdpa_self_precision_default = ttnn.SDPAPrecision.LOW_PRECISION
+    sdpa_self_kv_dtype_default = ttnn.bfloat8_b  # with the default self-attention recipe only
 
     # Legacy ring SDPA chunks (non-Blackhole only): (is_blackhole, sp_factor, tp_factor) -> (q, k).
     sdpa_chunk_size_map = {
@@ -66,9 +69,10 @@ class WanAttention(Module):
         self.is_self = is_self
         # Named SDPA recipe (sdpa_precision=None: sdpa_precision_default); legacy off Blackhole only.
         blackhole = is_blackhole()
-        self.sdpa_precision = sdpa_recipe.resolve_precision(
-            sdpa_precision, self.sdpa_precision_default, blackhole=blackhole, model="Wan"
-        )
+        default = self.sdpa_self_precision_default if is_self else self.sdpa_precision_default
+        self.sdpa_precision = sdpa_recipe.resolve_precision(sdpa_precision, default, blackhole=blackhole, model="Wan")
+        if is_self and sdpa_precision is None and sdpa_kv_dtype is None and self.sdpa_precision is not None:
+            sdpa_kv_dtype = self.sdpa_self_kv_dtype_default
         self.sdpa_kv_dtype = sdpa_kv_dtype or ttnn.bfloat16
         if self.sdpa_precision is not None and self.head_dim != 128:
             raise ValueError("Named Wan recipes require Blackhole D128 attention")

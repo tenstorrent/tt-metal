@@ -69,13 +69,22 @@ def _resolve(monkeypatch, name, blackhole, **overrides):
     return obj.sdpa_precision, obj.sdpa_kv_dtype
 
 
-# MiniMax-H3 defaults to LOW_PRECISION with BFP8 K/V; every other denoiser to FAST with BF16 K/V.
-DEFAULTS = {name: (FAST, ttnn.bfloat16) for name in MODULES} | {"minimax_h3": (LOW, ttnn.bfloat8_b)}
+# MiniMax-H3 attention and Wan self-attention default to LOW_PRECISION with BFP8 K/V; every other denoiser
+# attention to FAST with BF16 K/V.
+DEFAULTS = {name: (FAST, ttnn.bfloat16) for name in MODULES} | {
+    "minimax_h3": (LOW, ttnn.bfloat8_b),
+    "wan": (LOW, ttnn.bfloat8_b),
+}
 
 
 @pytest.mark.parametrize("name", sorted(MODULES))
 def test_denoiser_default_recipe(name):
-    assert MODULES[name][1].sdpa_precision_default == DEFAULTS[name][0]
+    cls = MODULES[name][1]
+    assert getattr(cls, "sdpa_self_precision_default", cls.sdpa_precision_default) == DEFAULTS[name][0]
+
+
+def test_wan_cross_attention_default_is_fast(monkeypatch):
+    assert _resolve(monkeypatch, "wan", True, is_self=False) == (FAST, ttnn.bfloat16)
 
 
 def test_vae_default_recipes():

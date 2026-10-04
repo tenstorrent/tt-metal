@@ -37,8 +37,8 @@ LINE_1D = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
 # name -> (sdpa_precision, sdpa_kv_dtype, absolute L2 bound %, margin over legacy L2 vs torch in % points)
 VARIANTS = {
     "legacy": (LEGACY, None, None, None),  # the module's legacy SDPA config (tests/unit/sdpa_legacy.py)
-    # The default recipe is FAST (sdpa_precision_default), so "default" uses FAST's gates.
-    "default": (None, None, 3.0, 0.5),  # the module's default recipe (sdpa_precision_default)
+    # The module's default recipe; run_variants gates it like the named variant it resolves to (default_as).
+    "default": (None, None, 3.0, 0.5),
     "FAST": (P.FAST, None, 3.0, 0.5),
     "ACCURATE": (P.ACCURATE, None, 1.0, 0.5),
     # bfp8 K/V storage adds its own quantization error on top of the recipe; allow 1 point over legacy.
@@ -98,8 +98,9 @@ def _gather(mesh_device, tt_out, sp_axis, tp_axis, sp_dim=2, tp_dim=3):
     )
 
 
-def run_variants(record_property, label: str, torch_outs: dict, run_tt) -> None:
-    """run_tt(precision, kv_dtype) -> dict name->torch tensor (same keys as torch_outs)."""
+def run_variants(record_property, label: str, torch_outs: dict, run_tt, default_as: str = "FAST") -> None:
+    """run_tt(precision, kv_dtype) -> dict name->torch tensor (same keys as torch_outs). The "default" variant is
+    gated like ``default_as``, the named variant the module's default recipe resolves to."""
     tt_outs = {}
     for variant, (precision, kv_dtype, _, _) in VARIANTS.items():
         with sdpa_variant(precision) as precision:
@@ -114,13 +115,15 @@ def run_variants(record_property, label: str, torch_outs: dict, run_tt) -> None:
         for variant, (_, _, bound, margin) in VARIANTS.items():
             if bound is None:
                 continue
+            gated_as = default_as if variant == "default" else variant
+            bound, margin = VARIANTS[gated_as][2:]
             out = tt_outs[variant][key]
             l2_torch = rel_l2(out, ref)
             l2_legacy = rel_l2(out, legacy)
             record_property(f"{label}.{key}.{variant}.l2_vs_torch", round(l2_torch, 4))
             record_property(f"{label}.{key}.{variant}.l2_vs_legacy", round(l2_legacy, 4))
             ok_rel = l2_torch <= legacy_l2 + margin
-            if variant.startswith("LOW_PRECISION"):
+            if gated_as.startswith("LOW_PRECISION"):
                 # LOW_PRECISION also rounds its inputs (RNE7 Q, RNE5+BFP8 KV), so its error may scale with
                 # the legacy error (short-KV cross attention has a small reference norm): allow 1.35x. A single
                 # short K chunk (Wan text cross attention, 77 keys) gains nothing from the FP32 state, which
@@ -352,7 +355,9 @@ def test_wan_self_attention_recipes_1x1(mesh_device, record_property) -> None:
         out = tt_model(tt_spatial, N=seq_len, rope_cos=tt_cos, rope_sin=tt_sin, trans_mat=tt_trans_mat)
         return {"spatial": _gather(mesh_device, out, sp_axis, tp_axis)[0][:, :seq_len, :]}
 
-    run_variants(record_property, f"wan_self.(1, 1).N{seq_len}", {"spatial": torch_out}, run_tt)
+    run_variants(
+        record_property, f"wan_self.(1, 1).N{seq_len}", {"spatial": torch_out}, run_tt, default_as="LOW_PRECISION_bfp8"
+    )
 
 
 # ------------------------------------------------------------------------------------------------ LTX
