@@ -364,6 +364,24 @@ constexpr uint32_t kRefMaxExpOctaves = 28;
 // Rescale threshold: keep m_ref until the row max exceeds it by theta (natural-log units of the
 // scaled scores). theta + 0.72 must stay below tau, so P never saturates.
 constexpr float kRefMaxTheta = 16.0f * 0.69314718055994531f;
+// Fused chunks (SDPA_RECIPE_FUSED: LOW_PRECISION without an attn_mask), see sdpa_fused_chunk.
+#if defined(SDPA_RECIPE_FUSED) && !defined(SDPA_RECIPE_MASK)
+#define SDPA_RECIPE_FUSED_ACTIVE 1
+// One BF16 tile: a row group's saturation check (max of its chunk row-sum tiles).
+constexpr uint32_t kFusedCheckCb = 31;
+// Per Q tile row, QK-subblock-width partial row-sum tiles: each subblock's P is L1-accumulated onto them
+// with the same blocked row pack as P itself.
+constexpr uint32_t kFusedSumCb = 30;
+// QK-subblock-width copies of -e0 (column 0 = -1, transposed by the QK unpack into row 0) in K's format:
+// one extra QK inner step [Q | M] x [K^T ; -e0] subtracts m_ref (M: the reference-max tile, m in column 0).
+constexpr uint32_t kFusedNegUnitCb = 29;
+// Redo a group whose 16-term partial row sums reach 0.5: P saturates near 1.66 at this scale, and an
+// unsaturated partial that large holds a P within a few octaves of saturation.
+constexpr uint16_t kFusedRedoSumBf16 = 0x3F00;
+// With fused chunks the reduce path (a Q chunk's first K chunk, redone groups) and normalization are
+// cold: out of line and size-optimized so the ring kernels fit the kernel config buffer.
+#define SDPA_RECIPE_COLD __attribute__((noinline, optimize("Os")))
+#endif
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 namespace ckernel::sfpu {
 // dest tile 0: max(m_ref, rowmax) from the reduce; tile `group`: m_ref. Keep m_ref unless exceeded by theta.
@@ -380,6 +398,28 @@ inline void calculate_sdpa_ref_max_select() {
         sfpi::dst_reg += 2;
     }
 }
+#ifdef SDPA_RECIPE_FUSED_ACTIVE
+// Round the reference max toward zero to 7 significant bits (clear the lowest BF16 mantissa bit): the fused
+// QK reads m_ref through LoFi's srcB, which keeps 7, so every chunk subtracts the same m_ref.
+inline void calculate_sdpa_trunc7() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    for (int i = 0; i < 4; ++i) {
+        sfpi::vFloat m = sfpi::dst_reg[0];
+        sfpi::vInt bits = sfpi::as<sfpi::vInt>(m) & sfpi::vInt(~0x10000);
+        sfpi::dst_reg[0] = sfpi::as<sfpi::vFloat>(bits);
+        sfpi::dst_reg += 2;
+    }
+}
+// Negate a tile: builds the fused chunks' -e0 operand from the zeroed column identity.
+inline void calculate_sdpa_negate_tile() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    for (int i = 0; i < 32; ++i) {
+        sfpi::vFloat x = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = -x;
+        sfpi::dst_reg++;
+    }
+}
+#endif
 // dest tiles [0, w): state; [w, 2w): this chunk's term; tile 2w: column-broadcast correction c.
 // state = state * c + term.
 template <int w>
@@ -400,8 +440,13 @@ inline void calculate_sdpa_rescale_add() {
 #endif
 #endif
 
+#ifndef SDPA_RECIPE_COLD
+#define SDPA_RECIPE_COLD
+#endif
+// abs_row: pack the maxima at that absolute row of an already-published out_cb (a fused chunk's redo)
+// instead of appending them.
 template <uint32_t in0_cb, uint32_t scale_cb, uint32_t row_stride, uint32_t ref_scale_fp32 = 0>
-void reduce_c_row_group(
+SDPA_RECIPE_COLD void reduce_c_row_group(
     uint32_t out_cb,
     uint32_t prev_cb,
     uint32_t row_group_index,
@@ -409,7 +454,8 @@ void reduce_c_row_group(
     uint32_t sbh,
     uint32_t reduce_cols,
     bool respect_trigger = false,
-    bool overlap_first_half = false) {
+    bool overlap_first_half = false,
+    uint32_t abs_row = UINT32_MAX) {
     const uint32_t group_size = sbh;
     const uint32_t row_start = row_group_index * group_size;
 
@@ -471,13 +517,23 @@ void reduce_c_row_group(
         }
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
     }
+#ifdef SDPA_RECIPE_FUSED_ACTIVE
+    for (uint32_t i = 0; i < group_size; i++) {
+        PACK((SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_trunc7, i, VectorMode::C)));
+    }
+    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+#endif
 #endif
 #ifdef SDPA_RECIPE_FP32
     configure_single_tile_pack(out_cb);
 #endif
 
     for (uint32_t i = 0; i < group_size; i++) {
-        pack_tile<false>(i, out_cb);
+        if (abs_row == UINT32_MAX) {
+            pack_tile<false>(i, out_cb);
+        } else {
+            pack_tile<true>(i, out_cb, abs_row + i);
+        }
     }
 
     tile_regs_release();
@@ -518,7 +574,7 @@ static void sdpa_subtract_max_l1(uint32_t inout_cb, uint32_t max_cb, uint32_t ro
  * writes back to same positions. Accumulates row sums into reduce_cb.
  */
 template <bool profiling_enabled, uint32_t scale_fp32>
-void sub_exp_block_bcast_cols(
+SDPA_RECIPE_COLD void sub_exp_block_bcast_cols(
     uint32_t inout_cb,
     uint32_t max_cb,
     uint32_t reduce_cb,
@@ -527,7 +583,8 @@ void sub_exp_block_bcast_cols(
     uint32_t global_col_base,
     uint32_t sbh,
     uint32_t sbw,
-    bool skip_pack_configure = false) {
+    bool skip_pack_configure = false,
+    bool wait_max = true) {
     const uint32_t tiles_per_row = sbh;
     const uint32_t tiles_per_column = sbw;
     const uint32_t max_row_base = q_subblock * tiles_per_row;
@@ -604,8 +661,11 @@ void sub_exp_block_bcast_cols(
         sub_bcast_cols_init_short_custom(inout_cb, max_cb, tiles_per_column);
     }
 
-    // inout_cb assumed ready (max_cb was already computed from it)
-    CircularBuffer(max_cb).wait_front((q_subblock + 1) * tiles_per_row);
+    // inout_cb assumed ready (max_cb was already computed from it). A fused chunk's redo reads unpublished
+    // scratch maxima (wait_max = false).
+    if (wait_max) {
+        CircularBuffer(max_cb).wait_front((q_subblock + 1) * tiles_per_row);
+    }
 
     tile_regs_acquire();
     {
@@ -933,7 +993,7 @@ template <
     uint32_t col_identity_cb,
     uint32_t scratch_cb,
     uint32_t normalized_out_cb>
-static __attribute__((noinline, noclone)) void normalize_row_streaming(
+static __attribute__((noinline, noclone)) SDPA_RECIPE_COLD void normalize_row_streaming(
     uint32_t cur_sum_cb, uint32_t cur_out_cb, uint32_t sbh) {
 #ifdef SDPA_RECIPE_FP32
     sdpa::streaming::normalize_rows<head_dim_t_, col_identity_cb>(
@@ -1083,6 +1143,8 @@ static __attribute__((noinline, noclone)) void recipe_add_attn_mask(uint32_t row
 }
 #endif
 
+#include "recipe_fused_chunk.hpp"
+
 /**
  * One K-chunk iteration of the streaming SDPA algorithm (v2 — no row buffers).
  * Phase 1: Q@KT directly into cb_qkt_im with cb_push_back_hold_wr_ptr, in-place sub_exp.
@@ -1109,7 +1171,7 @@ template <
     uint32_t cb_recip_scratch,
     uint32_t cb_normalized_out,
     bool independent_q_release = false>
-static void sdpa_inner_loop_step(
+static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
     AccumulatorHalf& prev,
     AccumulatorHalf& cur,
     bool is_last_iter,
@@ -1208,6 +1270,29 @@ static void sdpa_inner_loop_step(
         TTI_SFPLOADI(0, 0x8, exp_c_bits >> 16);
         TTI_SFPCONFIG(0, 13, 0);
     })
+#endif
+#ifdef SDPA_RECIPE_FUSED_ACTIVE
+    if (!is_first_iter) {
+        sdpa_fused_chunk<
+            Sq_chunk_t,
+            Sk_chunk_t,
+            DHt,
+            vDHt,
+            scale_fp32,
+            qkt_subblock_w,
+            qktv_subblock_w,
+            cb_q_in,
+            cb_kt_in,
+            cb_v_in,
+            cb_qkt_im,
+            cb_identity_scale_in,
+            cb_exp_max_diff,
+            cb_col_identity,
+            cb_recip_scratch,
+            cb_normalized_out,
+            independent_q_release>(prev, cur, is_last_iter, release_q);
+        return true;
+    }
 #endif
 
     // Use KT_stride for cb_qkt_im layout to keep CB pointers aligned across iterations
@@ -2040,6 +2125,7 @@ static void sdpa_inner_loop_step(
         CircularBuffer(cb_v_in).pop_front(KT_stride * vDHt);
         CircularBuffer(cb_qkt_im).pop_front(Sq_chunk_t * KT_stride);
     }
+    return false;
 }
 
 // One Q chunk over k_num_chunks K chunks: the online-softmax loop for recipes B-E. Called once per Q chunk
@@ -2084,7 +2170,7 @@ ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, 
         const bool is_first = state.processed_chunks == 0 && k_chunk == 0;
         const bool last_local = k_chunk == k_num_chunks - 1;
         const bool is_last = final_segment && last_local;
-        sdpa_inner_loop_step<
+        [[maybe_unused]] const bool fused = sdpa_inner_loop_step<
             false,
             Sq_chunk_t,
             Sk_chunk_t,
@@ -2125,14 +2211,24 @@ ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, 
             sdpa_cb_pop_front_out_of_line(cur.out, Sq_chunk_t * vDHt * sdpa_out_stride);
             sdpa_cb_pop_front_out_of_line(cur.sum, Sq_chunk_t);
         }
-        if (!is_first) {
+        // A fused chunk keeps the reference max in place in prev.max (no ping-pong).
+        if (!is_first && !fused) {
             sdpa_cb_pop_front_out_of_line(prev.max, Sq_chunk_t);
         }
 #endif
 
         if (is_last) {
+#ifdef SDPA_RECIPE_FP32
             sdpa_cb_pop_front_out_of_line(cur.max, Sq_chunk_t);
+#else
+            sdpa_cb_pop_front_out_of_line(fused ? prev.max : cur.max, Sq_chunk_t);
+#endif
         } else {
+#ifndef SDPA_RECIPE_FP32
+            if (fused) {
+                continue;
+            }
+#endif
             std::swap(prev, cur);
 #ifndef SDPA_RECIPE_FP32
             prev.out = cb_out_im_A;
