@@ -1759,7 +1759,12 @@ class ModelArgs:
         grid = self.mesh_device.compute_with_storage_grid_size() if self.mesh_device is not None else None
         # From batch 8 decode is faster on the full grid (measured on Blackhole); below that the (8, 8) grid is.
         wide_blackhole_grid = (
-            is_blackhole() and grid is not None and grid.x > 8 and grid.y > 4 and self.max_batch_size >= 8
+            os.environ.get("TT_PROBE_DECODE_88") != "1"
+            and is_blackhole()
+            and grid is not None
+            and grid.x > 8
+            and grid.y > 4
+            and self.max_batch_size >= 8
         )
         if wide_blackhole_grid:
             # Decode Q is height sharded on the 8x4 block and the op reads batch b's Q from the b-th core of
