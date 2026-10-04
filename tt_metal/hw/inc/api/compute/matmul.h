@@ -239,6 +239,8 @@ ALWI void matmul_block_init(
  * output C is rt_dim x ct_dim tiles. So a block is just ct_dim * rt_dim output tiles produced in one
  * call (with kt_dim tiles along the shared inner dimension). The output must fit in DST, so the block
  * size is limited by DST size and sync mode (see matmul_block_init for the valid ct_dim/rt_dim ranges).
+ * A call may use smaller ct_dim and rt_dim than matmul_block_init, but ct_dim >= rt_dim must hold for it exactly
+ * when it held for the init (the init fixes which operand is held); a block of the other direction needs a new init.
  *
  * Return value: None
  *
