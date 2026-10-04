@@ -33,6 +33,7 @@ def assert_no_unflushed_noc_atomics(device, *, min_atomic_events=1):
     if ttnn.is_trace_capture_active(device):
         raise RuntimeError("NoC debug checks cannot run during trace capture")
 
+    ttnn.synchronize_device(device)
     ttnn.ReadDeviceProfiler(device)
     initial_state = ttnn._ttnn.device._get_noc_debug_state(device)
     if not initial_state["enabled"]:
@@ -54,6 +55,7 @@ def assert_no_unflushed_noc_atomics(device, *, min_atomic_events=1):
     finally:
         debug_error = None
         try:
+            ttnn.synchronize_device(device)
             ttnn.ReadDeviceProfiler(device)
             final_state = ttnn._ttnn.device._get_noc_debug_state(device)
             assert final_state["pending_events"] == 0, "NoC debug events remained after the profiler read"
