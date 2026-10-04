@@ -65,6 +65,7 @@ class PrefillKV:
 
     def __init__(self, md, users, lat_cap, c_max):
         self.md, self.U = md, users
+        self.lat_cap, self.c_max = lat_cap, c_max
         self.LAT = ceil32(lat_cap)
         self.WIN = WINDOW + c_max
         self.t = ttnn.zeros(
@@ -383,6 +384,7 @@ class DSV41PrefillSparse:
         """
         self.pa, self.kvt, self.indexer, self.idx_src, self.force = pa, kvt, indexer, idx_src, force
         self.owner = pa.a.source is None  # kv-source layer: produces latents
+        self.eager_lat, self.eager_cmax = kvt.lat_cap, kvt.c_max
         self.ids = None  # [U,1,C,512] ids of the current chunk (index sources)
         self.sink = None
         self.md, self.U = pa.md, pa.U
@@ -448,6 +450,7 @@ class DSV41PrefillSparse:
 
     # ---- per chunk ----------------------------------------------------------------------------------------------------------------
     def ingest(self, lat, lat_pre, s0):
+        self.ensure_eager()
         """Owner layers: the chunk's latents into the kv table and (index-key owners) the keys into the slab. Called for EVERY chunk."""
         r = self.pa.ratio
         if lat is not None:
@@ -456,6 +459,7 @@ class DSV41PrefillSparse:
             self.indexer.add_keys(self.pa, lat_pre, s0)
 
     def attend(self, qh, kv, halo, h, qr, s0, C):
+        self.ensure_eager()
         """qh [U,8,C,512] RoPE'd heads (tile), kv [U,1,C,512] chunk rows (post RoPE), halo [U,1,128,512] / None -> raw attention output [U,8,C,512] (tile)."""
         pa, U = self.pa, self.U
         r = pa.ratio
@@ -551,10 +555,10 @@ class DSV41PrefillSparse:
         if not self.dyn_on:
             return
         if self.owner:
+            self._free_tables()  # the eager-sized tables (or those of a previous capture) are replaced, never leaked
             self.kvt = PrefillKV(self.md, self.U, L, ctx.C)
             if self.indexer is not None and self.indexer.key_owner is None:
                 ix = self.indexer
-                ttnn.deallocate(ix.keys)
                 ix.KL = L
                 ix.keys = ttnn.zeros([self.U, 1, L, IDIM], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.md)
         else:
@@ -569,6 +573,50 @@ class DSV41PrefillSparse:
             ctx.sp_win[r] = _rep(
                 self.md, torch.zeros(1, 1, ctx.C, WINDOW, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
             )
+
+    def _free_tables(self):
+        """Free the kv table and (index-key owners) the key slab of this layer; readers only drop their reference to the owner's table."""
+        if self.owner:
+            if self.kvt is not None:
+                self.kvt.free()
+            ix = self.indexer
+            if ix is not None and ix.key_owner is None and ix.keys is not None:
+                ttnn.deallocate(ix.keys)
+                ix.keys = None
+        self.kvt = None
+
+    def free_dyn(self):
+        """Release everything ``alloc_dyn`` allocated (called by ``DSV41PrefillModel.teardown_dyn``): tables, key FIFO, per-chunk context tensors. The eager path
+        re-creates its tables lazily (``ensure_eager``)."""
+        ctx = getattr(self, "ctx", None)
+        self._free_tables()
+        if ctx is not None:
+            t = getattr(ctx, "sp_perm", None)
+            if t is not None:
+                ttnn.deallocate(t)
+                del ctx.sp_perm
+            for d in (getattr(ctx, "sp_win", {}), getattr(ctx, "sp_vis", {})):
+                for t in d.values():
+                    ttnn.deallocate(t)
+                d.clear()
+        self.ctx, self.dyn_on = None, False
+
+    def ensure_eager(self):
+        """Eager path after a teardown: re-create the tables at the sizes given to ``attach_prefill_sparse``."""
+        if self.kvt is not None:
+            return
+        if self.owner:
+            self.kvt = PrefillKV(self.md, self.U, self.eager_lat, self.eager_cmax)
+            ix = self.indexer
+            if ix is not None and ix.key_owner is None and ix.keys is None:
+                ix.KL = ceil32(self.eager_lat)
+                ix.keys = ttnn.zeros(
+                    [self.U, 1, ix.KL, IDIM], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.md
+                )
+        else:
+            src = self.pa.a.source.prefill.sparse
+            src.ensure_eager()
+            self.kvt = src.kvt
 
     @staticmethod
     def _upd_hook(ctx, s0):

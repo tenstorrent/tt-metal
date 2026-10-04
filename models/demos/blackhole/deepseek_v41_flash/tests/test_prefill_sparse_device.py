@@ -213,3 +213,12 @@ def test_prefill_sparse(mesh_device):
                 {"got": got[L].to(torch.bfloat16), "ids": ids_dev[L]},
                 f"/mnt/tt-data/ssinghal/dsv4-logs/h46x_dev_S{S}_C{C}_{tag}_L{L}.pt",
             )
+        if (
+            dyn and os.environ.get("DSV41_PS_TEARDOWN") == "1"
+        ):  # free everything alloc_dyn made, then allocate again for the same ctx shape and run once more (no leak, no stale state)
+            for L in layers:
+                pas[L].sparse.free_dyn() if pas[L].sparse is not None else None
+            ctx = DynCtx(md, C, S, {pas[L].ratio for L in layers}, {True: pas[layers[0]].a})
+            for L in layers:
+                pas[L].alloc_dyn(ctx)
+                pas[L].reset_dyn()
