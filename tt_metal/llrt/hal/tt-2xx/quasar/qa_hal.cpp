@@ -314,9 +314,12 @@ public:
         static const char* const quasar_variant = std::getenv("TT_METAL_QUASAR_VARIANT");
         // TODO: Use UMD supplied variant instead of env var
         // defaults to Quasar if no variant is set
-        if (quasar_variant != nullptr && std::string(quasar_variant) == "horizon") {
+        if (quasar_variant != nullptr && (std::string(quasar_variant) == "horizon" || std::string(quasar_variant) == "2.0.1")) {
             log_info(LogMetal, "Using variant: Horizon");
             includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.1/meta");
+        } else if (quasar_variant != nullptr && (std::string(quasar_variant) == "trinity" || std::string(quasar_variant) == "2.0.2")){
+            log_info(LogMetal, "Using variant: Trinity");
+            includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.2/meta");
         } else {
             log_info(LogMetal, "Using variant: Quasar");
             includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.0/meta");
@@ -375,8 +378,11 @@ public:
                 defines.push_back("NOC_ATT_CONFIG_GRENDEL_QSR1");
             } else if (map == "quasar_aether_2x3") {
                 defines.push_back("NOC_ATT_CONFIG_QUASAR_AETHER_2X3");
+            } else if (map == "horizon_2x3") {
+                defines.push_back("NOC_ATT_CONFIG_HORIZON_2X3");
             } else {
-                TT_THROW("Unknown TT_METAL_NOC_ATT map '{}' (expected grendel_qsr1 or quasar_aether_2x3)", map);
+                TT_THROW(
+                    "Unknown TT_METAL_NOC_ATT map '{}' (expected grendel_qsr1, quasar_aether_2x3 or horizon_2x3)", map);
             }
             // Fast dispatch runs on the V3 CQ flag family (cq_dispatch/cq_prefetch
             // reject non-DRAM-backed CQs at compile time). The watcher NoC sanitizer

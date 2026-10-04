@@ -1049,6 +1049,16 @@ sfpi_inline sfpi::vFloat _sfpu_sqrt_ge0_(sfpi::vFloat x) {
 bool bf16_dest_acosh();
 template <int ITERATIONS>
 void calculate_acosh_bf16();
+void init_acosh_bf16();
+// Whether BF16 DEST runs the generated acosh kernel as one call over the whole tile.
+inline constexpr bool acosh_bf16_whole_tile = true;
+// Sets up the generated BF16 acosh kernel for the instance it serves.
+template <bool bf16_kernel>
+inline void acosh_bf16_tile_init() {
+    if constexpr (bf16_kernel) {
+        init_acosh_bf16();
+    }
+}
 
 // acosh(x) = log(x + sqrt(x^2 - 1)), reformulated through log1p to remove the
 // absorption error at x -> 1+ and the x^2 overflow at large x. Three regions:
