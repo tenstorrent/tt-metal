@@ -95,15 +95,6 @@ struct alignas(64) TaskTimes {
     bool on_caller = false;
 };
 
-// Task i goes to worker i % workers.
-std::vector<uint32_t> worker_of_task(uint32_t workers, uint32_t tasks_per_worker) {
-    std::vector<uint32_t> ids(workers * tasks_per_worker);
-    for (uint32_t i = 0; i < ids.size(); i++) {
-        ids[i] = i % workers;
-    }
-    return ids;
-}
-
 // One task per enqueue(), joined with wait().
 struct EnqueueWait {
     static constexpr const char* name = "BM_ThreadPoolFanOut";
@@ -143,7 +134,10 @@ void BM_FanOut(benchmark::State& state) {
     }
     auto& pool = Pool::get();
     const uint32_t num_tasks = workers * tasks_per_worker;
-    const auto worker_ids = worker_of_task(workers, tasks_per_worker);
+    std::vector<uint32_t> worker_ids(num_tasks);  // Task i goes to worker i % workers.
+    for (uint32_t i = 0; i < num_tasks; i++) {
+        worker_ids[i] = i % workers;
+    }
     const auto caller = std::this_thread::get_id();
     std::vector<TaskTimes> times(num_tasks);
     std::vector<double> wall_us, submit_us, first_start_us, last_start_us, join_us;
