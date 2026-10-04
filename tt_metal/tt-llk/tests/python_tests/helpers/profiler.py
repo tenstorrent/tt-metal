@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import ClassVar
 
+import numpy as np
 import pandas as pd
 
 from .device_io import read_words_from_device
@@ -381,6 +382,125 @@ def _stats_l1_congestion(data: ProfilerData) -> pd.DataFrame:
     return result
 
 
+# --- Fast statistics: the same frames as the pandas versions above, without a pandas
+# operation per zone. A test computes them once per run type, and per-call pandas
+# overhead was most of the host time of a perf run (#55169 timing).
+_slow_stats_l1_to_l1 = _stats_l1_to_l1
+
+
+def _zone_arrays(data: ProfilerData):
+    """Masked raw view as plain arrays, with the START/END pairing check of raw()."""
+    df = data.raw()
+    types = df["type"].to_numpy(dtype=object)
+    threads = df["thread"].to_numpy(dtype=object)
+    marker_ids = df["marker_id"].to_numpy()
+    starts = np.flatnonzero(types == "ZONE_START")
+    ends = np.flatnonzero(types == "ZONE_END")
+    if not (
+        np.array_equal(threads[starts], threads[ends])
+        and np.array_equal(marker_ids[starts], marker_ids[ends])
+    ):
+        raise AssertionError("Zone START and END entries don't match")
+    return df, types, threads
+
+
+def _stats_from_columns(markers: list, columns: dict, marker_dtype=object) -> pd.DataFrame:
+    """One small frame into _stats_timings: the same numbers, one groupby per run type."""
+    frame = {MARKER: pd.array(markers, dtype=marker_dtype) if marker_dtype is not object else markers}
+    frame.update({c: np.asarray(v, dtype=np.int64) for c, v in columns.items()})
+    return _stats_timings(pd.DataFrame(frame))
+
+
+def _thread_durations(df, types, threads, thread):
+    starts = np.flatnonzero((threads == thread) & (types == "ZONE_START"))
+    ends = np.flatnonzero((threads == thread) & (types == "ZONE_END"))
+    if len(starts) != len(ends):
+        raise ValueError(f"Mismatched start/end zones: {len(starts)} != {len(ends)}")
+    ts = df["timestamp"].to_numpy()
+    markers = df[MARKER].to_numpy(dtype=object)
+    return list(markers[starts]), list(ts[ends] - ts[starts])
+
+
+def _stats_thread_fast(stat, data, thread):
+    df, types, threads = _zone_arrays(data)
+    if not (threads == thread).any():
+        return pd.DataFrame()
+    markers, durations = _thread_durations(df, types, threads, thread)
+    return _stats_from_columns(markers, {stat: durations}, marker_dtype="string")
+
+
+def _stats_unpack_isolate(data: ProfilerData) -> pd.DataFrame:
+    return _stats_thread_fast(PerfRunType.UNPACK_ISOLATE.name, data, "unpack")
+
+
+def _stats_math_isolate(data: ProfilerData) -> pd.DataFrame:
+    return _stats_thread_fast(PerfRunType.MATH_ISOLATE.name, data, "math")
+
+
+def _stats_pack_isolate(data: ProfilerData) -> pd.DataFrame:
+    return _stats_thread_fast(PerfRunType.PACK_ISOLATE.name, data, "pack")
+
+
+def _stats_sfpu_isolate(data: ProfilerData) -> pd.DataFrame:
+    return _stats_thread_fast(PerfRunType.SFPU_ISOLATE.name, data, "sfpu")
+
+
+def _stats_l1_congestion(data: ProfilerData) -> pd.DataFrame:
+    frames = [
+        f
+        for f in (
+            _stats_thread_fast(f"{PerfRunType.L1_CONGESTION.name}[UNPACK]", data, "unpack"),
+            _stats_thread_fast(f"{PerfRunType.L1_CONGESTION.name}[PACK]", data, "pack"),
+        )
+        if not f.empty
+    ]
+    if not frames:
+        return pd.DataFrame()
+    result = frames[0]
+    for f in frames[1:]:
+        result = pd.merge(result, f, on=MARKER, how="outer", validate="1:1")
+    return result
+
+
+def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
+    df, types, threads = _zone_arrays(data)
+    if df.empty:
+        return pd.DataFrame()
+    if df["run_index"].isna().any():
+        raise ValueError(
+            "run_index must be explicitly set before computing L1-to-L1 stats. "
+            "Set profiler_data.df['run_index'] = <run_number> after collecting data."
+        )
+    markers = df[MARKER].to_numpy(dtype=object)
+    is_zone = (types == "ZONE_START") | (types == "ZONE_END")
+    if (is_zone & (threads == "sfpu") & np.isin(markers, ("INIT", "TILE_LOOP"))).any():
+        return _slow_stats_l1_to_l1(data)
+    runs = df["run_index"].to_numpy(dtype=np.int64)
+    ts = df["timestamp"].to_numpy()
+    is_start = (threads == "unpack") & (types == "ZONE_START")
+    is_end = (threads == "pack") & (types == "ZONE_END")
+    out_markers, out_durations = [], []
+    zone_rows = np.flatnonzero(is_zone)
+    for marker, run in sorted({(markers[i], int(runs[i])) for i in zone_rows}):
+        in_group = (markers == marker) & (runs == run)
+        starts = np.flatnonzero(in_group & is_start)
+        ends = np.flatnonzero(in_group & is_end)
+        if len(starts) == 0 or len(ends) == 0:
+            raise ValueError(
+                f"Zone must be captured on both unpack and pack for L1_TO_L1 to work properly "
+                f"(marker={marker}, run_index={run})"
+            )
+        if len(starts) != len(ends):
+            raise ValueError(
+                f"Unpack and pack must be paired properly for L1_TO_L1 to work properly "
+                f"(marker={marker}, run_index={run}, "
+                f"unpack_count={len(starts)}, pack_count={len(ends)})"
+            )
+        out_markers += [marker] * len(starts)
+        out_durations += list(ts[ends] - ts[starts])
+    return _stats_from_columns(out_markers, {PerfRunType.L1_TO_L1.name: out_durations})
+
+
 class EntryType(Enum):
     TIMESTAMP = 0b1000
     TIMESTAMP_DATA = 0b1001
@@ -447,8 +567,17 @@ class Profiler:
         else:
             return None
 
+    _META_CACHE: ClassVar[dict] = {}
+
     @staticmethod
     def _get_meta(testname: str, variant_id: str) -> dict[id, ProfilerFullMarker]:
+        key = (testname, variant_id)
+        if key not in Profiler._META_CACHE:
+            Profiler._META_CACHE[key] = Profiler._read_meta(testname, variant_id)
+        return Profiler._META_CACHE[key]
+
+    @staticmethod
+    def _read_meta(testname: str, variant_id: str) -> dict[id, ProfilerFullMarker]:
         profiler_data_dir = TestConfig.PROFILER_META / testname / variant_id
         metadata = {}
         for thread in TestConfig.KERNEL_COMPONENTS:
