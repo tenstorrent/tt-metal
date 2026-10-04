@@ -961,9 +961,10 @@ std::vector<Tensor> selu_bw(
 // result: torch.where(input < -3,0.0,torch.where(input <= 3, grad * ((input / 3) + 0.5), grad),)
 std::vector<Tensor> hardswish_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
-    // One program for BF16 operands, whose gradient is the generated SFPU kernel; anything else
-    // keeps the composite below.
-    if (grad.dtype() == DataType::BFLOAT16 && input.dtype() == DataType::BFLOAT16) {
+    // One program for BF16 operands, whose gradient is the generated SFPU kernel; anything
+    // else, and Quasar, which has no generated kernel, keeps the composite below.
+    if (input.device()->arch() != tt::ARCH::QUASAR && grad.dtype() == DataType::BFLOAT16 &&
+        input.dtype() == DataType::BFLOAT16) {
         return {ttnn::operations::unary_backward::launch_unary_backward(
             ttnn::operations::unary_backward::UnaryBackwardOpType::HARDSWISH_BW,
             grad,
