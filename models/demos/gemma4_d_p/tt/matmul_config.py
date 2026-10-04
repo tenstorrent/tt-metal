@@ -49,8 +49,7 @@ def prefill_1d_matmul_program_config(
     hidden_states, weight, grid, fused_activation=None, per_core_n=None, max_m_tiles=None
 ):
     """1D in0-multicast config for short-M prefill projections (up to max_m_tiles tile rows, by default
-    _MAX_SHORT_M_TILES), or None when it does not apply. A caller whose output skips the interleaved write may raise
-    the limit.
+    _MAX_SHORT_M_TILES), or None when it does not apply.
 
     With at most 8 tile rows of M, the 2D config uses only 8 of the grid's rows and reads each weight column
     block through one core. Here every core reads its own two weight columns from DRAM while the activations
@@ -99,13 +98,18 @@ _MAX_SHORT_M_TILES = 8
 _SHARD_K_TILES = (8, 7, 6, 4)
 
 
+def tile_rows(x):
+    """Tile rows (per device) of x."""
+    return x.padded_shape[-2] // ttnn.TILE_SIZE
+
+
 def _is_short_m_rows(rows):
     return rows // ttnn.TILE_SIZE <= _MAX_SHORT_M_TILES
 
 
 def is_short_m(x):
     """Whether x takes the 1D projection config: at most _MAX_SHORT_M_TILES tile rows."""
-    return _is_short_m_rows(x.padded_shape[-2])
+    return tile_rows(x) <= _MAX_SHORT_M_TILES
 
 
 def _width_sharded_l1(device, rows, num_cores, shard_tiles):

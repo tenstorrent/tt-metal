@@ -151,7 +151,7 @@ class Gemma4Attention:
             memory_config=act_mc,
             kv_tied=kv_tied,
         )
-        # The heads are copies: free the projection before attention allocates its circular buffers (it may be in L1).
+        # The heads are copies: free the projection (in L1 per apply_qkv_projection) before attention's CBs allocate.
         xqkv.deallocate(True)
 
         tt_q = apply_per_head_norm(
