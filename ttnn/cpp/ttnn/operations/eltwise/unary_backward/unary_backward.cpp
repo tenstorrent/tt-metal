@@ -437,6 +437,18 @@ std::vector<Tensor> trunc_bw(
 // z = exp(-abs(input))
 std::vector<Tensor> log_sigmoid_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+    // One program for BF16 operands, whose gradient is the generated SFPU kernel; anything
+    // else, and Quasar, which has no generated kernel, keeps the composite below.
+    if (input.device()->arch() != tt::ARCH::QUASAR && grad.dtype() == DataType::BFLOAT16 &&
+        input.dtype() == DataType::BFLOAT16) {
+        return {ttnn::operations::unary_backward::launch_unary_backward(
+            ttnn::operations::unary_backward::UnaryBackwardOpType::LOG_SIGMOID_BW,
+            grad,
+            input,
+            input.dtype(),
+            output_mem_config.value_or(input.memory_config()))};
+    }
+
     std::vector<Tensor> grad_tensor;
     Tensor max_deriv = ttnn::where(ttnn::ltz(input, output_mem_config), 1.f, 0.f, output_mem_config);
     Tensor in_sign = ttnn::where(ttnn::ltz(input, output_mem_config), 1.f, -1.f, output_mem_config);
