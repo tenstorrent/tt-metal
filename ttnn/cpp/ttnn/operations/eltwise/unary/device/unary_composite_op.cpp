@@ -111,9 +111,9 @@ namespace ttnn {
 // Valid domain: a > 1.5
 // Ref : https://pytorch.org/docs/stable/special.html#torch.special.multigammaln
 Tensor multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    // One program whose generated SFPU kernel computes the BF16 result; other dtypes keep the
-    // composite below.
-    if (x.dtype() == DataType::BFLOAT16) {
+    // One program whose generated SFPU kernel computes the BF16 result; other dtypes, and
+    // Quasar, which has no generated kernel, keep the composite below.
+    if (x.device()->arch() != tt::ARCH::QUASAR && x.dtype() == DataType::BFLOAT16) {
         return ttnn::operations::unary::detail::unary_impl(
             x, {operations::unary::UnaryWithParam(operations::unary::UnaryOpType::MULTIGAMMALN)}, output_mem_config);
     }
