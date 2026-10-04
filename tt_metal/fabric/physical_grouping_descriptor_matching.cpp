@@ -1425,7 +1425,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
 
     // ===== PHASE 2: Match MESH mgd groupings to MESH groupings =====
     // For each MGD mesh instance, find all valid PGD mesh groupings that can contain it
-    log_info(tt::LogFabric, "Matching MESH mgd groupings to MESH groupings");
+    log_debug(tt::LogFabric, "Matching MESH mgd groupings to MESH groupings");
     // Deterministic processing order across MGD mesh instances (unordered_map iteration is unspecified)
     std::vector<std::string> mesh_mgd_instance_order;
     mesh_mgd_instance_order.reserve(mgd_grouping_infos.at("MESH").size());
@@ -1519,7 +1519,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         // Group valid candidates by node difference (map is ordered by key ascending)
         // Store (name, index) pairs to handle multiple groupings with same name.
         // Iterate PGD names in sorted order so candidate order within each diff bucket is stable.
-        log_info(tt::LogFabric, "Grouping valid candidates by node difference");
+        log_debug(tt::LogFabric, "Grouping valid candidates by node difference");
         std::map<size_t, std::vector<std::pair<std::string, size_t>>> candidates_by_diff;
         std::vector<std::string> pgd_mesh_grouping_names;
         pgd_mesh_grouping_names.reserve(mesh_flat_groupings.size());
@@ -1723,7 +1723,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                         }
                         committed_summary += fmt::format("{} ({})", grouping.name, grouping.type);
                     }
-                    log_info(
+                    log_debug(
                         tt::LogFabric,
                         "Physical groupings: Mesh graph descriptor '{}': {} topology match(es), committed: {}",
                         mgd_grouping_info.name,
@@ -1840,7 +1840,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_mgd_placement_fallbacks_for_mg
                 pinnings_by_mesh,
                 mesh_ranks)) {
             result["MESH"][instance_name].push_back(std::move(*fallback));
-            log_info(
+            log_debug(
                 tt::LogFabric,
                 "Physical groupings: Mesh graph descriptor '{}': MGD placement fallback {} ({}) embeds on PSD",
                 mgd_grouping_info.name,
