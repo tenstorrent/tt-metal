@@ -45,20 +45,13 @@ def test_the_marker_the_parser_and_the_pin_agree():
     assert measurements.KIND_STAGE_REPEATS == "stage_repeats"
 
 
-class _Led:
-    KIND_STAGE_REPEATS = "stage_repeats"
-
-    def __init__(self, rows):
-        self._rows = rows
-
-    def rows(self, kind, model="", task=""):
-        return [r for r in self._rows if r["kind"] == kind]
-
-
 def _note(monkeypatch, rows, stage_ms):
+    """summary._per_request_note over these pinned rows, read through the REAL ledger reader."""
+    import cc_optimize.measurements as M
     from cc_optimize import perf_mcp, summary
 
-    monkeypatch.setattr(summary, "_ledger", lambda: _Led(rows))
+    monkeypatch.setattr(M, "rows", lambda kind="", phase="", model="", task="": [r for r in rows if r["kind"] == kind])
+    monkeypatch.setattr(summary, "_ledger", lambda: M)
     monkeypatch.setattr(perf_mcp, "read_stage_ms", lambda **k: stage_ms)
     return summary._per_request_note("m", "t")
 

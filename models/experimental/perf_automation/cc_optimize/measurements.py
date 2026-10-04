@@ -541,6 +541,24 @@ def _anchor_lock(model: str = "", task: str = ""):
             f.close()
 
 
+def stage_repeats(model: str = "", task: str = "") -> dict:
+    """{stage: N} for every stage pinned as running N > 1 times per request (KIND_STAGE_REPEATS).
+
+    THE ONE READER of that pin: the report's per-request note and the ranking's weights both ask
+    here. Stage keys are the lowercased names the pin is filed under; the first pinned value wins,
+    as with every anchor. {} when nothing was stated."""
+    out = {}
+    for r in rows(KIND_STAGE_REPEATS, model=model, task=task):
+        try:
+            n = int(float(r.get("value_ms") or 0))
+        except (TypeError, ValueError):
+            continue
+        st = str(r.get("depth") or "").strip().lower()
+        if st and n > 1:
+            out.setdefault(st, n)
+    return out
+
+
 def anchor(
     kind: str,
     value_ms,

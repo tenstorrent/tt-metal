@@ -1895,12 +1895,7 @@ def _per_request_note(model: str = "", task: str = "") -> str:
     covered 1 of its 50 denoise steps. Names and counts are the pipeline's own; with no stage stating
     more than one, nothing is printed and the report is unchanged."""
     try:
-        led = _ledger()
-        reps = {}
-        for r in led.rows(led.KIND_STAGE_REPEATS, model=model, task=task):
-            n = int(float(r.get("value_ms") or 0))
-            if r.get("depth") and n > 1:
-                reps.setdefault(str(r["depth"]), n)  # first pinned value wins, as anchors do
+        reps = _ledger().stage_repeats(model=model, task=task)
         if not reps:
             return ""
         from cc_optimize.perf_mcp import read_stage_ms

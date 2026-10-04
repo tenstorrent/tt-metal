@@ -7831,30 +7831,55 @@ def _stages_short_of_achievable() -> list:
         return []
 
 
-def stage_cost_weights(profile) -> dict:
-    """{stage: how much more one profiled ms of that stage costs in the real pipeline}, mean 1.
+def stage_repeats_per_request(stages) -> dict:
+    """{stage: N} for each stage the pipeline stated ONE REQUEST runs N > 1 times, as pinned.
 
-    The ranking reads op gaps off the PROFILE, and the profile is a capped capture: every block
-    stack the depth knob cuts runs 2 blocks, every stack it cannot cut runs in full. So the stages
-    are not sampled alike -- Qwen-Image-Edit 2026-10-02: denoise was 31% of the profile and ~49% of
-    the full pipeline, the VAE 18.5% and ~1.4% -- and a gap in an under-sampled stage ranked below
-    an equal real cost elsewhere. Each stage's weight is its full-pipeline time (this run's own
-    trace_replay, read_stage_ms) over its profiled time (stage_buckets), divided by the mean so the
-    units stay those of the profile and a stage without both readings sits at the mean (1).
-
-    {} when either side is missing -- no replay yet, an unmarked capture -- and the ranking is then
-    exactly the unweighted one. Stage names are whatever the capture and the replay report."""
+    Read from the ledger (measurements.KIND_STAGE_REPEATS), which trace_replay's TRACE_STAGE_REPEATS
+    marker fills from the pipeline's own <stage>_trace_repeats(). Stages that stated nothing are
+    absent: they run once. {} when nothing was stated or the ledger cannot be read."""
     try:
+        pinned = _ledger().stage_repeats(model=_model_key(), task=os.environ.get("PERF_MCP_TASK", "main"))
+        return {st: pinned[str(st).strip().lower()] for st in stages or () if str(st).strip().lower() in pinned}
+    except Exception:  # noqa: BLE001 -- unread counts leave every stage at one run
+        return {}
+
+
+def stage_cost_weights(profile) -> dict:
+    """{stage: what one profiled ms of that stage costs a REQUEST, relative to the others}.
+
+    Two corrections to the profile's op gaps, multiplied:
+
+    SAMPLING. The profile is a capped capture: every block stack the depth knob cuts runs 2 blocks,
+    every stack it cannot cut runs in full, so the stages are not sampled alike -- Qwen-Image-Edit
+    2026-10-02: denoise was 31% of the profile and ~49% of the full pipeline, the VAE 18.5% and
+    ~1.4%. That weight is a stage's full-pipeline time (this run's own trace_replay, read_stage_ms)
+    over its profiled time (stage_buckets), divided by the mean; it needs both readings for at least
+    two stages.
+
+    REPEATS. The full-pipeline pass runs each stage's step once, and a request runs some of them
+    many times (stage_repeats_per_request): Qwen-Image-Edit's denoise step runs 50 times per edit,
+    so a millisecond saved there is worth 50 elsewhere -- 99% of a request's time sat in a stage the
+    ranking weighed like any other.
+
+    {} when neither correction applies -- no replay yet, an unmarked capture, no stage stating a
+    repeat count -- and the ranking is then exactly the unweighted one. Stage names are whatever the
+    capture and the pipeline report."""
+    try:
+        stages = list(((profile or {}).get("stage_buckets") or {}).keys())
+        sampled = {}
         full = read_stage_ms(model=_model_key()) or {}
         ratios = {}
         for stage, buckets in ((profile or {}).get("stage_buckets") or {}).items():
             prof_ms = sum(float(b.get("device_ms") or 0.0) for b in (buckets or []) if isinstance(b, dict))
             if prof_ms > 0 and float(full.get(stage) or 0.0) > 0:
                 ratios[stage] = float(full[stage]) / prof_ms
-        if len(ratios) < 2:
-            return {}  # one stage has nothing to be weighed against
-        mean = sum(ratios.values()) / len(ratios)
-        return {k: v / mean for k, v in ratios.items()}
+        if len(ratios) >= 2:  # one stage has nothing to be weighed against
+            mean = sum(ratios.values()) / len(ratios)
+            sampled = {k: v / mean for k, v in ratios.items()}
+        reps = stage_repeats_per_request(stages)
+        if not reps:
+            return sampled
+        return {st: sampled.get(st, 1.0) * reps.get(st, 1) for st in stages}
     except Exception:  # noqa: BLE001 -- a weight that cannot be read leaves the ranking unweighted
         return {}
 
