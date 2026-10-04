@@ -19,7 +19,7 @@ import torch
 import ttnn
 
 from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
-from tests.ttnn.utils_for_testing import generate_all_bfloat16_bitpatterns
+from tests.ttnn.utils_for_testing import assert_with_pcc, generate_all_bfloat16_bitpatterns
 
 GRADS = ["1", "-1", "0.5", "3", "random0", "random1"]
 SMALLEST_NORMAL = 2.0**-126
@@ -97,3 +97,61 @@ def test_log_sigmoid_bw_exhaustive_bfloat16(grad, device):
         f"x={x.flatten()[worst].item()}, grad={g.flatten()[worst].item()}: "
         f"expected {_reference(g, x, False).flatten()[worst].item()}, got {actual.flatten()[worst].item()}"
     )
+
+
+def _torch_gradient(grad, x):
+    """Torch autograd in float32."""
+    with torch.enable_grad():
+        x = x.to(torch.float32).requires_grad_(True)
+        torch.nn.functional.logsigmoid(x).backward(grad.to(torch.float32))
+        return x.grad
+
+
+def _device_operations(call):
+    """The result of ``call``, or the error it raised, and the device operations it launched, as graph
+    capture names them."""
+    result, error = None, None
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        result = call()
+    except RuntimeError as raised:
+        error = raised
+    trace = ttnn.graph.extract_calltrace(ttnn.graph.end_graph_capture())
+    return result, error, trace
+
+
+@run_for_wormhole_b0_or_blackhole("the generated kernel exists for Blackhole and Wormhole only")
+@pytest.mark.parametrize(
+    "call",
+    ["interleaved_tiles", "broadcast_grad", "row_major", "mixed_layouts", "grad_in_l1", "height_sharded", "float32"],
+)
+def test_log_sigmoid_bw_runs_the_fused_program_only_where_it_applies(call, device):
+    """BF16 operands of one shape in interleaved tiles with one placement run the fused program, and
+    match torch; every other call keeps the composite, which broadcasts and takes any layout, placement
+    and dtype."""
+    shape = (1, 2, 32, 64)
+    generator = torch.Generator().manual_seed(0)
+    x = (4 * torch.randn(shape, generator=generator)).to(torch.bfloat16)
+    g = torch.randn((1, 1, 32, 64) if call == "broadcast_grad" else shape, generator=generator).to(torch.bfloat16)
+    dtype = ttnn.float32 if call == "float32" else ttnn.bfloat16
+    layouts = {"row_major": (ttnn.ROW_MAJOR_LAYOUT,) * 2, "mixed_layouts": (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT)}
+    grad_layout, input_layout = layouts.get(call, (ttnn.TILE_LAYOUT,) * 2)
+    shard = ttnn.create_sharded_memory_config(
+        shape, core_grid=ttnn.CoreGrid(y=1, x=2), strategy=ttnn.ShardStrategy.HEIGHT
+    )
+    memory = {"grad_in_l1": (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG), "height_sharded": (shard, shard)}
+    grad_memory, input_memory = memory.get(call, (ttnn.DRAM_MEMORY_CONFIG,) * 2)
+    tt_g = ttnn.from_torch(g, dtype=dtype, layout=grad_layout, device=device, memory_config=grad_memory)
+    tt_x = ttnn.from_torch(x, dtype=dtype, layout=input_layout, device=device, memory_config=input_memory)
+
+    result, error, trace = _device_operations(lambda: ttnn.log_sigmoid_bw(tt_g, tt_x)[0])
+
+    assert ("UnaryBackwardDeviceOperation" in trace) == (call == "interleaved_tiles"), trace
+    if call != "interleaved_tiles":
+        # The composite's own results, or its refusal of a call (some refuse row-major operands), are
+        # its tests' to judge; here it only has to be the program that ran.
+        assert error is not None or list(result.shape) == list(shape)
+        return
+    assert error is None, error
+    expected = _torch_gradient(g, x)
+    assert_with_pcc(expected, ttnn.to_torch(result).float(), 0.999)
