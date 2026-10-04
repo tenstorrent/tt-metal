@@ -1,3 +1,6 @@
+// Experiment: keep basic blocks in source order, so code before a measured zone cannot move
+// the out-of-line blocks of its loop (Wormhole layout steps, #55169).
+#pragma GCC optimize("no-reorder-blocks")
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
