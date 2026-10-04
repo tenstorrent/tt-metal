@@ -292,14 +292,17 @@ constexpr float GELU_ERF_DEN[17] = {  // even powers only (c1=0, c3=0, ..., c15=
     0.0f,
     -6.7350725691e-12f};
 
+bool bf16_dest_gelu();
 template <int ITERATIONS>
 void calculate_gelu_bf16();
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu() {
     if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
-        calculate_gelu_bf16<ITERATIONS>();
-        return;
+        if (bf16_dest_gelu()) {
+            calculate_gelu_bf16<ITERATIONS>();
+            return;
+        }
     }
     if constexpr (APPROXIMATION_MODE) {
         calculate_gelu_appx<ITERATIONS>();

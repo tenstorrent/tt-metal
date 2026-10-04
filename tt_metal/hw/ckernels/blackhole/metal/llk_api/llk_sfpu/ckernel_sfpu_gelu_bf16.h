@@ -41,6 +41,14 @@ struct GeluBf16Config {
 
 namespace ckernel::sfpu {
 
+// The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format.
+inline bool bf16_dest_gelu() {
+#if defined(TRISC_MATH) || defined(LLK_TRISC_MATH)
+    return ckernel::math::src_zero_flag_srcb_fmt == static_cast<std::uint32_t>(DataFormat::Float16_b);
+#else
+    return false;
+#endif
+}
 template <int ITERATIONS = 8>
 inline void calculate_gelu_bf16() {
     ckernel::sfpu::bf16::calculate_zone_affine_even_decay<ckernel::sfpu::GeluBf16Config, ITERATIONS>();
