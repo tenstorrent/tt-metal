@@ -1715,19 +1715,21 @@ void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(uint8_t prefetcher_
         "PrefetcherPipe slot {} has no receiver cores in this program; a relay lives on the receivers",
         prefetcher_pipe_id);
     TT_FATAL(
-        slot.ring_size % relay_dfb->config.entry_size == 0,
-        "PrefetcherPipe relay entry size {} must divide PrefetcherPipe ring size {}",
+        slot.entry_size % relay_dfb->config.entry_size == 0,
+        "PrefetcherPipe relay entry size {} must divide the slot entry_size {}: a relay pages each pipe entry as a "
+        "whole number of its own entries",
         relay_dfb->config.entry_size,
-        slot.ring_size);
+        slot.entry_size);
+    // The relay covers the ring the pipe uses: its whole entries, short of any trailing gap.
+    const uint32_t usable_ring_size = slot.ring_size - slot.ring_size % slot.entry_size;
     TT_FATAL(
-        relay_dfb->config.num_entries == slot.ring_size / relay_dfb->config.entry_size,
-        "PrefetcherPipe relay depth {} must equal ring_size/entry_size ({})",
+        relay_dfb->config.num_entries == usable_ring_size / relay_dfb->config.entry_size,
+        "PrefetcherPipe relay depth {} must equal the {} relay entries that cover the pipe's whole entries ({} B of "
+        "ring_size {} at entry_size {})",
         relay_dfb->config.num_entries,
-        slot.ring_size / relay_dfb->config.entry_size);
-    TT_FATAL(
-        relay_dfb->config.entry_size == slot.entry_size,
-        "PrefetcherPipe relay entry size {} must match the slot entry_size {}",
-        relay_dfb->config.entry_size,
+        usable_ring_size / relay_dfb->config.entry_size,
+        usable_ring_size,
+        slot.ring_size,
         slot.entry_size);
     const CoreRangeSet& relay_cores = relay_dfb->core_ranges;
     TT_FATAL(

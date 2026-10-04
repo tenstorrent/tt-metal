@@ -22,6 +22,7 @@
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/kernels/kernel.hpp"
+#include "impl/metal2_host_api/llk_metadata.hpp"
 #include "impl/program/program_impl.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include "emule_device_map.hpp"              // NOC_NODE_ID_BITS
@@ -271,8 +272,9 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                                                           uint16_t id,
                                                           bool is_relay,
                                                           uint8_t pipe,
-                                                          const std::optional<LLKMetadata>&) {
-                kd.bindings.dfb.push_back(DfbBinding{name, id, is_relay, pipe});
+                                                          const std::optional<LLKMetadata>& llk) {
+                kd.bindings.dfb.push_back(
+                    DfbBinding{name, id, is_relay, pipe, llk ? serialize_llk_metadata(*llk) : ""});
             });
             k.process_semaphore_binding_handles(
                 [&kd](const std::string& name, uint16_t id, auto scope, uint32_t harts) {
@@ -285,7 +287,7 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                     uint32_t cta_off,
                     uint32_t addr_crta_off,
                     uint32_t num_rt,
-                    const LLKMetadata&) {
+                    const LLKMetadata& llk) {
                     // Emule doesn't yet model per-binding runtime CRTA words; the downstream
                     // get_common_vararg base math assumes 1 word/binding. Fail loudly on the
                     // dynamic-shape case here (the sole binding reader) rather than in a consumer.
@@ -298,13 +300,17 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                         "before enabling this path.",
                         name,
                         num_rt);
-                    kd.bindings.tensor.push_back(TensorBinding{name, cta_off, addr_crta_off});
+                    kd.bindings.tensor.push_back(
+                        TensorBinding{name, cta_off, addr_crta_off, serialize_llk_metadata(llk)});
                 });
-            k.process_scratchpad_binding_handles(
-                [&kd](
-                    const std::string& name, uint32_t size_bytes, uint32_t addr_crta_word, const std::optional<LLKMetadata>&) {
-                    kd.bindings.scratch.push_back(ScratchBinding{name, size_bytes, addr_crta_word});
-                });
+            k.process_scratchpad_binding_handles([&kd](
+                                                     const std::string& name,
+                                                     uint32_t size_bytes,
+                                                     uint32_t addr_crta_word,
+                                                     const std::optional<LLKMetadata>& llk) {
+                kd.bindings.scratch.push_back(
+                    ScratchBinding{name, size_bytes, addr_crta_word, llk ? serialize_llk_metadata(*llk) : ""});
+            });
             for (const auto& r : k.core_range_set().ranges()) {
                 kd.core_ranges.push_back(
                     {static_cast<uint32_t>(r.start_coord.x),
