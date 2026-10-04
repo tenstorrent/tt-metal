@@ -847,7 +847,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         is_causal,
         device->arch() == tt::ARCH::BLACKHOLE,
         causal_chains_pay(num_cores, DHt, input_tensor_k.dtype() == DataType::BFLOAT16, fp32_dest_acc_en),
-        !is_chunked && !has_sliding_window && !is_windowed && !use_mask_block_map,
+        !is_chunked && !has_sliding_window && !is_windowed,
         global_q_pair_distribute && !use_provided_mask,
         fp32_dest_acc_en && !use_streaming_compute && block_float_kv,
         q_num_chunks,

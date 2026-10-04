@@ -300,6 +300,45 @@ void kernel_main() {
     CircularBuffer cb_attn_sink(cb_attention_sink);
     CircularBuffer cb_page_table(cb_id_page_table);
 
+    // A chain lets the cores of a head share one DRAM read of each K/V chunk, and skipping masked blocks breaks it,
+    // since each core skips different ones. Below about 40 percent masked the chains are worth more and every head
+    // ignores the map. The choice is the same for all heads: a chain left among heads that skip waits behind their
+    // DRAM reads. Every core counts the same four map rows, spread over the planes and the q chunks (in the still
+    // empty K CB).
+    bool chain_ignores_map = false;
+    if constexpr (use_mask_block_map && !is_causal) {
+        if (is_chain_participant) {
+            constexpr uint32_t kv_cb_bytes = kv_slots * k_chunk_tiles * k_tile_bytes;
+            constexpr uint32_t map_planes =
+                (broadcast_provided_mask_batch ? 1 : B) * (broadcast_provided_mask_heads ? 1 : NQH);
+            const uint32_t rows = std::max<uint32_t>(
+                1, std::min<uint32_t>(std::min<uint32_t>(4, q_num_chunks), kv_cb_bytes / block_map_stick_bytes));
+            const uint32_t plane_stride = map_planes / rows + 1;
+            const uint32_t scratch = cb_k.get_write_ptr();
+            const auto map_reader = TensorAccessor(block_map_args, block_map_addr);
+            for (uint32_t r = 0; r < rows; ++r) {
+                noc.async_read(
+                    map_reader,
+                    CoreLocalMem<uint32_t>(scratch + r * block_map_stick_bytes),
+                    block_map_stick_bytes,
+                    {.page_id = ((r * plane_stride) % map_planes) * q_num_chunks + r * q_num_chunks / rows},
+                    {});
+            }
+            noc.async_read_barrier();
+            volatile tt_l1_ptr uint32_t* flags = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
+            uint32_t visible = 0;
+            for (uint32_t r = 0; r < rows; ++r) {
+                for (uint32_t k = 0; k < k_num_chunks; ++k) {
+                    visible += flags[r * (block_map_stick_bytes / 4) + k] != 0 ? 1 : 0;
+                }
+            }
+            chain_ignores_map = visible * 5 > rows * k_num_chunks * 3;
+            if (!chain_ignores_map) {
+                is_chain_participant = 0;
+            }
+        }
+    }
+
     // Causal chains: the writer forwards the slots queued on cb_kv_fwd and counts finished forwards on fwd_done;
     // a slot is reserved again only once its last queued forward is counted (per slot sequence number, 0 = none).
     CircularBuffer cb_kv_fwd(cb_id_kv_fwd_ctrl);
@@ -447,33 +486,38 @@ void kernel_main() {
             uint32_t block_map_first = 0;
             bool block_map_all_masked = false;
             volatile tt_l1_ptr uint32_t* block_map = nullptr;
+            // A head whose chain ignores the map streams every block, as without one.
+            const bool use_row_map =
+                use_mask_block_map && !(chain_ignores_map && nb == chain_batch && nq == chain_head);
             if constexpr (use_mask_block_map) {
-                const uint32_t map_row =
-                    ((broadcast_provided_mask_batch ? 0 : nb) * (broadcast_provided_mask_heads ? 1 : NQH) +
-                     (broadcast_provided_mask_heads ? 0 : nq)) *
-                        q_num_chunks +
-                    q_chunk;
-                const uint32_t map_l1 = CircularBuffer(cb_id_mask_block_map).get_write_ptr();
-                noc.async_read(
-                    TensorAccessor(block_map_args, block_map_addr),
-                    CoreLocalMem<uint32_t>(map_l1),
-                    block_map_stick_bytes,
-                    {.page_id = map_row},
-                    {});
-                noc.async_read_barrier();
-                block_map = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(map_l1);
-                block_map_active = 0;
-                block_map_first = k_num_chunks;
-                for (uint32_t k = 0; k < k_num_chunks; ++k) {
-                    if (block_map[k] != 0) {
-                        block_map_first = block_map_first == k_num_chunks ? k : block_map_first;
-                        ++block_map_active;
+                if (use_row_map) {
+                    const uint32_t map_row =
+                        ((broadcast_provided_mask_batch ? 0 : nb) * (broadcast_provided_mask_heads ? 1 : NQH) +
+                         (broadcast_provided_mask_heads ? 0 : nq)) *
+                            q_num_chunks +
+                        q_chunk;
+                    const uint32_t map_l1 = CircularBuffer(cb_id_mask_block_map).get_write_ptr();
+                    noc.async_read(
+                        TensorAccessor(block_map_args, block_map_addr),
+                        CoreLocalMem<uint32_t>(map_l1),
+                        block_map_stick_bytes,
+                        {.page_id = map_row},
+                        {});
+                    noc.async_read_barrier();
+                    block_map = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(map_l1);
+                    block_map_active = 0;
+                    block_map_first = k_num_chunks;
+                    for (uint32_t k = 0; k < k_num_chunks; ++k) {
+                        if (block_map[k] != 0) {
+                            block_map_first = block_map_first == k_num_chunks ? k : block_map_first;
+                            ++block_map_active;
+                        }
                     }
-                }
-                block_map_all_masked = block_map_active == 0;
-                if (block_map_all_masked) {
-                    block_map_active = 1;
-                    block_map_first = 0;
+                    block_map_all_masked = block_map_active == 0;
+                    if (block_map_all_masked) {
+                        block_map_active = 1;
+                        block_map_first = 0;
+                    }
                 }
             }
 
@@ -558,7 +602,7 @@ void kernel_main() {
                 q_high_idx = windowed_k_hi * Sk_chunk_t;
             }
 
-            const uint32_t first_k_chunk = use_mask_block_map ? block_map_first : k_loop_start;
+            const uint32_t first_k_chunk = use_row_map ? block_map_first : k_loop_start;
             const uint32_t k_head = nq / q_heads_per_k;
             const uint32_t v_head = nq / q_heads_per_v;
 
@@ -608,7 +652,7 @@ void kernel_main() {
             // loop while k_low < q_high
             for (uint32_t k_chunk = k_loop_start; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
                 if constexpr (use_mask_block_map) {
-                    if (block_map[k_chunk] == 0 && !(block_map_all_masked && k_chunk == 0)) {
+                    if (use_row_map && block_map[k_chunk] == 0 && !(block_map_all_masked && k_chunk == 0)) {
                         continue;
                     }
                 }
