@@ -1044,6 +1044,9 @@ inline void calculate_acosh() {
     }
 }
 
+// Whether BF16 DEST runs the generated asinh kernel as one call over the whole tile.
+inline constexpr bool asinh_bf16_whole_tile = false;
+
 // asinh(x) = sign(x) * log(|x| + sqrt(x^2 + 1)), reformulated to remove the
 // cancellation at x -> 0 and the x^2 overflow at large |x|. Regions in a = |x|:
 //   a < 0.75          -> a * P(a^2), degree-6 minimax polynomial (<=1 ulp)

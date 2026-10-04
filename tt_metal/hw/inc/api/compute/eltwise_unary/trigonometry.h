@@ -159,18 +159,16 @@ ALWI void asinh_tile_init() {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void asinh_tile(uint32_t idst) {
-#ifndef ARCH_QUASAR
-    if constexpr (!is_fp32_dest_acc_en) {
-        MATH(SFPU_UNARY_CALL(
+    MATH(if constexpr (ckernel::sfpu::asinh_bf16_whole_tile && !is_fp32_dest_acc_en) {
+        SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             is_fp32_dest_acc_en,
             calculate_asinh,
             (APPROX, is_fp32_dest_acc_en, 32),
             idst,
-            VectorMode::None));
+            VectorMode::None);
         return;
-    }
-#endif
+    });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

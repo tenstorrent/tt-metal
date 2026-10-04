@@ -1104,6 +1104,8 @@ inline void calculate_acosh() {
 bool bf16_dest_asinh();
 template <int ITERATIONS>
 void calculate_asinh_bf16();
+// Whether BF16 DEST runs the generated asinh kernel as one call over the whole tile.
+inline constexpr bool asinh_bf16_whole_tile = true;
 
 // asinh(x) = sign(x) * log(|x| + sqrt(x^2 + 1)), reformulated to remove the
 // cancellation at x -> 0 and the x^2 overflow at large |x|. Regions in a = |x|:
