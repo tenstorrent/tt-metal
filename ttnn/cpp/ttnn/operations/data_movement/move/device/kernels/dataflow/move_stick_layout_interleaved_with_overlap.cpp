@@ -98,4 +98,8 @@ void kernel_main() {
         l1_read_addr += aligned_page_size;
     }
     dfb.pop_front(num_pages);
+
+    if (!is_controller) {
+        noc.async_atomic_barrier();
+    }
 }

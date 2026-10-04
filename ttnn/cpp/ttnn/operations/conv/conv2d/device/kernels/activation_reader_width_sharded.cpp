@@ -281,4 +281,7 @@ void kernel_main() {
     }
     noc.async_read_barrier();
     noc.async_write_barrier();
+    if constexpr (num_input_cores > 1) {
+        noc.async_atomic_barrier();
+    }
 }
