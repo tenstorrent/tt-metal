@@ -89,7 +89,7 @@ _MAX_SHORT_M_TILES = 8
 
 # K tiles per core of a width-sharded short-M activation. An interleaved activation is read and multicast through a
 # single core, which paces the 1D projections at chunk 2048; sharded, the cores holding its K slices multicast them
-# in turn. 8 (or 7 where 8 does not divide K) keeps the K blocks deep: 2-tile blocks are ~1.6x slower.
+# in turn. 8 (or 7 where 8 does not divide K) keeps the K blocks deep; shallow blocks are much slower.
 _SHARD_K_TILES = (8, 7, 6, 4)
 
 
