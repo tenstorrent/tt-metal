@@ -21,16 +21,14 @@ void kernel_main() {
     constexpr auto per_core_block_tile_cnt = get_arg(args::per_core_block_tile_cnt);
 
 #ifdef ARCH_QUASAR
-    // Base/config pointers were already proven IDENTICAL across runs (not the leak). The real suspect
-    // is the LIVE HW tile-counter: setup_local_dfb_interfaces resets counters role-split (DM via
-    // overlay::fast_llk_intf_reset; PACK via ckernel::trisc::tile_counters[tc].f.reset; UNPACK/MATH
-    // NOT at all). If after the poisoning test the pack's OUT counter shows posted!=acked / nonzero
-    // occupancy at kernel entry (vs 0 standalone), the reset isn't taking on the FPGA emulator and the
-    // pack blocks on a full ring → the MEM_READ_NO_RESPONSE hang. Read via the PACK's native register
-    // view (ckernel::trisc::tile_counters), the same interface its own reset writes.
-    // Each block is role-guarded so g_dfb_interface / ckernel::trisc are only referenced where defined.
+    // Gate ALL diagnostics to SMALL outputs only (<=32 tiles total). test_concat.py builds 16 wide
+    // (256-tile) inputs whose DPRINTs saturate the device print buffer and drown out the actual hang in
+    // test_concat_small_grid.py's small (16/8-tile) tilizes. This compiles the prints into ONLY the
+    // small-tilize programs, so the buffer captures the hanging op. Compute is already exonerated (it
+    // completes every run); these markers show how far the small tilize gets after the poison.
+    constexpr bool qsr_trace = (per_core_block_cnt * per_core_block_tile_cnt) <= 32;
 #if defined(UCK_CHLKC_PACK)
-    {
+    if constexpr (qsr_trace) {
         const uint8_t out_ptc =
             get_local_dfb_interface(static_cast<uint32_t>(dfb::out)).tc_slots[0].packed_tile_counter;
         const uint32_t out_tc = dfb::get_counter_id(out_ptc);
@@ -45,7 +43,7 @@ void kernel_main() {
     }
 #endif
 #if defined(UCK_CHLKC_UNPACK)
-    {
+    if constexpr (qsr_trace) {
         const uint8_t in_ptc = get_local_dfb_interface(static_cast<uint32_t>(dfb::in)).tc_slots[0].packed_tile_counter;
         const uint32_t in_tc = dfb::get_counter_id(in_ptc);
         volatile ckernel::trisc::tile_counter_u* tcs = &ckernel::trisc::tile_counters[in_tc];
@@ -58,18 +56,19 @@ void kernel_main() {
             static_cast<uint32_t>(tcs->f.buf_capacity));
     }
 #endif
-#endif
-
-#ifdef ARCH_QUASAR
-    DPRINT_UNPACK("QSR tilize UNPACK: A pre-hw_startup\n");
-    DPRINT_PACK("QSR tilize PACK: A pre-hw_startup\n");
+    if constexpr (qsr_trace) {
+        DPRINT_UNPACK("QSR tilize UNPACK: A pre-hw_startup\n");
+        DPRINT_PACK("QSR tilize PACK: A pre-hw_startup\n");
+    }
 #endif
 
     compute_kernel_hw_startup(dfb::in, dfb::out);
 
 #ifdef ARCH_QUASAR
-    DPRINT_UNPACK("QSR tilize UNPACK: B post-hw_startup, pre-tilize\n");
-    DPRINT_PACK("QSR tilize PACK: B post-hw_startup, pre-tilize\n");
+    if constexpr (qsr_trace) {
+        DPRINT_UNPACK("QSR tilize UNPACK: B post-hw_startup, pre-tilize\n");
+        DPRINT_PACK("QSR tilize PACK: B post-hw_startup, pre-tilize\n");
+    }
 #endif
 
     // Use lossless tilize for fp32 inputs to preserve exact values (fast tilize truncates fp32 → tf32)
@@ -87,7 +86,9 @@ void kernel_main() {
         fp32_mode>(per_core_block_cnt);
 
 #ifdef ARCH_QUASAR
-    DPRINT_UNPACK("QSR tilize UNPACK: C post-tilize (done)\n");
-    DPRINT_PACK("QSR tilize PACK: C post-tilize (done)\n");
+    if constexpr (qsr_trace) {
+        DPRINT_UNPACK("QSR tilize UNPACK: C post-tilize (done)\n");
+        DPRINT_PACK("QSR tilize PACK: C post-tilize (done)\n");
+    }
 #endif
 }

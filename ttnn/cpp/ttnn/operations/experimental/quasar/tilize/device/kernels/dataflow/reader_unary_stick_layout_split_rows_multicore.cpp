@@ -33,11 +33,18 @@ void kernel_main() {
     DataflowBuffer cb_in0(dfb::in);
 
 #ifdef ARCH_QUASAR
-    // TEMP DIAGNOSTIC (cross-test hang): the DM's launch-populated base for dfb::in, to compare against
-    // the compute TRISC's view (compute/tilize.cpp) — see project_quasar_graphops_to_torch_double_readback.
-    DPRINT(
-        "QSR tilize reader DFB base: in={}\n",
-        get_local_dfb_interface(static_cast<uint32_t>(dfb::in)).tc_slots[0].base_addr);
+    // TEMP DIAGNOSTIC (cross-test hang): the reader's launch-populated base for dfb::in. Gated to SMALL
+    // inputs only (<=32 tiles/block) so test_concat.py's 16 wide (256-tile) builds don't flood the print
+    // buffer and drown out test_concat_small_grid's hanging tilize. See
+    // project_quasar_graphcase_tile_reroute. "DONE" marks the reader finished all async reads+barriers.
+    if (num_tiles_per_block <= 32) {
+        DPRINT(
+            "QSR tilize reader DFB base: in={} num_rows={} ntpb={} nfbir={}\n",
+            get_local_dfb_interface(static_cast<uint32_t>(dfb::in)).tc_slots[0].base_addr,
+            num_rows,
+            num_tiles_per_block,
+            num_full_blocks_in_row);
+    }
 #endif
 
     auto read_tiles = [&](const uint32_t& num_tiles, uint32_t page_id) {
@@ -66,4 +73,10 @@ void kernel_main() {
         }
         page_id += tile_height * num_pages_in_row;
     }
+
+#ifdef ARCH_QUASAR
+    if (num_tiles_per_block <= 32) {
+        DPRINT("QSR tilize reader: DONE (all reads+push)\n");
+    }
+#endif
 }
