@@ -1895,19 +1895,6 @@ void call_binary_sfpu_operation(
             dst_index_out,
             vector_mode);
     }
-    else if constexpr (BINOP == BinaryOp::MUL && MATH_FORMAT != static_cast<std::uint32_t>(DataFormat::Int32))
-    {
-        // Float MUL runs the production kernel calculate_sfpu_binary_mul, as mul_binary_tile() does.
-        SFPU_BINARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_sfpu_binary_mul,
-            (APPROXIMATION_MODE, BINOP, PER_FACE_ITERATIONS, DST_ACCUM_MODE),
-            dst_index_in0,
-            dst_index_in1,
-            dst_index_out,
-            vector_mode);
-    }
     else if constexpr (
         BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::XLOGY ||
         BINOP == BinaryOp::POW)
