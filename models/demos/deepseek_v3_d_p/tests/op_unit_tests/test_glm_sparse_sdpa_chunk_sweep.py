@@ -44,12 +44,24 @@ FLOPS_PER_CYCLE_PER_CORE = 2048  # HiFi2
 
 ITERS = int(os.environ.get("RING_MLA_SWEEP_ITERS", "10"))
 COMPUTE_ONLY = os.environ.get("SPARSE_SDPA_COMPUTE_ONLY", "0") == "1"
+
+# GLM_SP_BATCH=1 keeps the 8x4 mesh but gives each TP column its own request: rows are split over
+# the 8 rows only, so each device takes 4x the tokens and four requests share the machine.
+# This op is device-local with replicated inputs, so only the row count changes.
+SP_BATCH = os.environ.get("GLM_SP_BATCH", "0") == "1"
+SHARD_N = SP if SP_BATCH else SP * TP
+
 RESULTS_DIR = Path(os.environ.get("GLM_SPARSE_SDPA_SWEEP_OUT", "generated/glm_sparse_sdpa_sweep"))
 
 CHUNKS = [1024, 2048, 3072, 4096, 5120]
+if os.environ.get("GLM_CHUNKS"):
+    CHUNKS = [int(c) for c in os.environ["GLM_CHUNKS"].split(",") if c.strip()]
 K_CHUNKS = [64, 128, 256]
 PROD_K_CHUNK = 128
 PREFIX_TARGETS = [0, 2048, 4096, 8192, 16384, 32768, 51200, 65536, 102400, 131072, 196608, 262144]
+# GLM_PREFIX_TARGETS / GLM_CHUNKS override the sweep grids (comma-separated) for long-context runs.
+if os.environ.get("GLM_PREFIX_TARGETS"):
+    PREFIX_TARGETS = [int(t) for t in os.environ["GLM_PREFIX_TARGETS"].split(",") if t.strip()]
 
 
 def _prefix_sweep_params():
@@ -102,7 +114,7 @@ def _run_sparse_sdpa(mesh_device, chunk, prefix, k_chunk):
     torch.manual_seed(1234)
     mesh_device.enable_program_cache()
 
-    rows = chunk // (SP * TP)
+    rows = chunk // SHARD_N
     capacity = prefix + chunk  # whole chunks, so the block-cyclic slab tiling holds
     grid = mesh_device.compute_with_storage_grid_size()
     num_cores = grid.x * grid.y

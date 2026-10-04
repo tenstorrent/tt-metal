@@ -36,14 +36,28 @@ ROW_BYTES = (KV_LORA_RANK + QK_ROPE_HEAD_DIM) * 2  # bf16 row, 1152 B
 MAX_CONTEXT = GLM52Config.MAX_POSITION_EMBEDDINGS
 TARGET_PREFIX = 51200
 TRACE_REGION_SIZE = 16 * 1024 * 1024
-NUM_LINKS = 2
+NUM_LINKS = int(os.environ.get("GLM_GATHER_NUM_LINKS", "2"))
+
+# GLM_SP_BATCH=1 keeps the 8x4 mesh and fabric but runs each TP column as an independent request:
+# Q/W replicated across columns, KV TP-replicated and sharded only on rows, gather on the SP axis.
+# Four requests then share the machine instead of one spanning it.
+SP_BATCH = os.environ.get("GLM_SP_BATCH", "0") == "1"
+SHARD_N = SP if SP_BATCH else SP * TP  # devices the sequence is split across
+CLUSTER_AXIS = 0 if SP_BATCH else None  # SP-axis gather vs full-mesh gather
+KV_TP_AXIS = None if SP_BATCH else 1  # None = TP-replicated, 1 = also striped across TP
+
 LINK_GBPS_PER_DIRECTION = float(os.environ.get("MLA_CCL_LINK_GBPS_PER_DIRECTION", "200"))
 
 ITERS = int(os.environ.get("RING_MLA_SWEEP_ITERS", "10"))
 RESULTS_DIR = Path(os.environ.get("GLM_KVPE_GATHER_SWEEP_OUT", "generated/glm_kvpe_gather_sweep"))
 
 CHUNKS = [1024, 2048, 3072, 4096, 5120]
+if os.environ.get("GLM_CHUNKS"):
+    CHUNKS = [int(c) for c in os.environ["GLM_CHUNKS"].split(",") if c.strip()]
 PREFIX_TARGETS = [0, 2048, 4096, 8192, 16384, 32768, 51200, 65536, 102400, 131072, 196608, 262144]
+# GLM_PREFIX_TARGETS / GLM_CHUNKS override the sweep grids (comma-separated) for long-context runs.
+if os.environ.get("GLM_PREFIX_TARGETS"):
+    PREFIX_TARGETS = [int(t) for t in os.environ["GLM_PREFIX_TARGETS"].split(",") if t.strip()]
 
 
 def _prefix_sweep_params():
@@ -100,7 +114,7 @@ def _run_gather(mesh_device, chunk, prefix):
         sp_axis=0,
         num_kvpe_cache_layers=1,
         num_users=1,
-        tp_axis=1,
+        tp_axis=KV_TP_AXIS,
     )
     storage = cache.storage
     out_buf = ttnn.zeros(
@@ -117,7 +131,7 @@ def _run_gather(mesh_device, chunk, prefix):
             dim=2,
             output_tensor=out_buf,
             num_links=NUM_LINKS,
-            cluster_axis=None,
+            cluster_axis=CLUSTER_AXIS,
             input_batch_index=0,
             gathered_dim_size=extent,
         )
@@ -149,8 +163,10 @@ def _run_gather(mesh_device, chunk, prefix):
         ttnn.deallocate(storage)
 
     median_ns = statistics.median(durations_ns)
-    local_bytes = extent // RING * ROW_BYTES  # each device's slice of the gathered extent
-    received_bytes = local_bytes * (RING - 1)  # what every device must receive
+    # SHARD_N, not RING: in SP-batch the sequence is split over the 8 rows only, so each device
+    # holds a 4x larger slice and receives 7/8 of the extent instead of 31/32.
+    local_bytes = extent // SHARD_N * ROW_BYTES  # each device's slice of the gathered extent
+    received_bytes = local_bytes * (SHARD_N - 1)  # what every device must receive
     roofline_gbs = LINK_GBPS_PER_DIRECTION * NUM_LINKS * 2 / 8  # 2 links x 2 ring directions
     ideal_ns = received_bytes / roofline_gbs
     row = {

@@ -38,11 +38,23 @@ TARGET_PREFIX = 51200
 
 ITERS = int(os.environ.get("RING_MLA_SWEEP_ITERS", "10"))
 COMPUTE_ONLY = os.environ.get("TOPK_COMPUTE_ONLY", "0") == "1"
+
+# GLM_SP_BATCH=1 keeps the 8x4 mesh but gives each TP column its own request: rows are split over
+# the 8 rows only, so each device takes 4x the tokens and four requests share the machine.
+# This op is device-local with replicated inputs, so only the row count changes.
+SP_BATCH = os.environ.get("GLM_SP_BATCH", "0") == "1"
+SHARD_N = SP if SP_BATCH else SP * TP
+
 RESULTS_DIR = Path(os.environ.get("GLM_TOPK_SWEEP_OUT", "generated/glm_topk_sweep"))
 
 CHUNKS = [1024, 2048, 3072, 4096, 5120]
+if os.environ.get("GLM_CHUNKS"):
+    CHUNKS = [int(c) for c in os.environ["GLM_CHUNKS"].split(",") if c.strip()]
 GRIDS = ["prod80", "full120"]
 PREFIX_TARGETS = [0, 2048, 4096, 8192, 16384, 32768, 51200, 65536, 102400, 131072, 196608, 262144]
+# GLM_PREFIX_TARGETS / GLM_CHUNKS override the sweep grids (comma-separated) for long-context runs.
+if os.environ.get("GLM_PREFIX_TARGETS"):
+    PREFIX_TARGETS = [int(t) for t in os.environ["GLM_PREFIX_TARGETS"].split(",") if t.strip()]
 
 
 def _prefix_sweep_params():
@@ -83,7 +95,7 @@ def _run_topk(mesh_device, grid, chunk, prefix):
     torch.manual_seed(1234)
     mesh_device.enable_program_cache()
 
-    rows = chunk // (SP * TP)
+    rows = chunk // SHARD_N
     valid = prefix + chunk
     # T = model capacity (always >= k); the reader only touches the valid prefix, T sets the row stride.
     width = max(valid, K)

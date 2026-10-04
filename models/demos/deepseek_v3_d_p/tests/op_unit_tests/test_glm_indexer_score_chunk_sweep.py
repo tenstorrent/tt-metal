@@ -37,6 +37,15 @@ from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_progra
 
 SP, TP = 8, 4
 RING = SP * TP
+
+# GLM_SP_BATCH=1 keeps the 8x4 mesh and fabric but runs each TP column as an independent request:
+# Q/W replicated across columns, KV TP-replicated and sharded only on rows, gather on the SP axis.
+# Four requests then share the machine instead of one spanning it.
+SP_BATCH = os.environ.get("GLM_SP_BATCH", "0") == "1"
+SHARD_N = SP if SP_BATCH else SP * TP  # devices the sequence is split across
+CLUSTER_AXIS = 0 if SP_BATCH else None  # SP-axis gather vs full-mesh gather
+KV_TP_AXIS = None if SP_BATCH else 1  # None = TP-replicated, 1 = also striped across TP
+
 HEADS = GLM52Config.INDEX_N_HEADS  # 32
 HEAD_DIM = GLM52Config.INDEX_HEAD_DIM  # 128
 MAX_CONTEXT = GLM52Config.MAX_POSITION_EMBEDDINGS  # 1M
@@ -50,7 +59,12 @@ COMPUTE_ONLY = os.environ.get("INDEXER_SCORE_COMPUTE_ONLY", "0") == "1"
 RESULTS_DIR = Path(os.environ.get("GLM_INDEXER_SWEEP_OUT", "generated/glm_indexer_score_sweep"))
 
 CHUNKS = [1024, 2048, 3072, 4096, 5120]
+if os.environ.get("GLM_CHUNKS"):
+    CHUNKS = [int(c) for c in os.environ["GLM_CHUNKS"].split(",") if c.strip()]
 PREFIX_TARGETS = [0, 2048, 4096, 8192, 16384, 32768, 51200, 65536, 102400, 131072, 196608, 262144]
+# GLM_PREFIX_TARGETS / GLM_CHUNKS override the sweep grids (comma-separated) for long-context runs.
+if os.environ.get("GLM_PREFIX_TARGETS"):
+    PREFIX_TARGETS = [int(t) for t in os.environ["GLM_PREFIX_TARGETS"].split(",") if t.strip()]
 
 
 def _prefix_sweep_params():
@@ -103,10 +117,12 @@ def test_glm_indexer_score_prefix_sweep(chunk, prefix):
 
 
 def _run_indexer_score(chunk, prefix):
-    if ttnn.get_num_devices() != RING:
-        pytest.skip("GLM-5.2 full-mesh indexer sweep needs the 8x4 Galaxy")
+    # Needs at least RING devices, not exactly RING: GLM_SP_BATCH runs the same 32-chip mesh as four
+    # independent 8-device columns, so an equality check here would reject a machine that fits fine.
+    if ttnn.get_num_devices() < RING:
+        pytest.skip(f"needs at least {RING} devices, found {ttnn.get_num_devices()}")
     torch.manual_seed(1234)
-    rows = chunk // RING
+    rows = chunk // SHARD_N
     capacity = MAX_CONTEXT // chunk * chunk
     kv_len = prefix + chunk
     assert kv_len <= capacity
@@ -116,7 +132,12 @@ def _run_indexer_score(chunk, prefix):
     try:
         mesh.enable_program_cache()
         grid = mesh.compute_with_storage_grid_size()
-        shard = ttnn.ShardTensorToMesh(mesh, dim=2)
+        # SP-batch: split the sequence down the rows only, replicating each request across its column.
+        shard = (
+            ttnn.ShardTensor2dMesh(mesh, mesh_shape=(SP, TP), dims=[2, None])
+            if SP_BATCH
+            else ttnn.ShardTensorToMesh(mesh, dim=2)
+        )
         q_dev = ttnn.from_torch(
             torch.randn(1, HEADS, chunk, HEAD_DIM, dtype=torch.bfloat16),
             device=mesh,
@@ -142,7 +163,7 @@ def _run_indexer_score(chunk, prefix):
             num_kvpe_cache_layers=1,
             num_users=1,
             dtype=ttnn.bfloat8_b,
-            tp_axis=1,
+            tp_axis=KV_TP_AXIS,
         )
         k_full = ttnn.from_torch(
             torch.zeros(1, 1, capacity, HEAD_DIM),
@@ -161,7 +182,7 @@ def _run_indexer_score(chunk, prefix):
                 w_dev,
                 k_local,
                 semaphores,
-                cluster_axis=None,
+                cluster_axis=CLUSTER_AXIS,
                 topology=ttnn.Topology.Ring,
                 num_links=2,
                 ag_sub_device_id=subdevice_id,
@@ -172,7 +193,9 @@ def _run_indexer_score(chunk, prefix):
                 index_cache_num_layers=1,
                 index_cache_layer_idx=0,
                 seq_subshard_axis=None,
-                block_cyclic_sp_axis=None,
+                # The op requires sp_axis and chunk_local to be set together; the SP-axis route
+                # reaches that check, the full-mesh route does not.
+                block_cyclic_sp_axis=0 if SP_BATCH else None,
                 block_cyclic_chunk_local=rows,
                 block_cyclic_cache_tp_sharded=False,
             )
