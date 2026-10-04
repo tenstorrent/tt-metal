@@ -155,6 +155,7 @@ class Model:
         if os.environ.get("DSV41_MEMLOG") in (
             "1",
             "2",
+            "3",
         ):  # trace the DRAM cost of every phase of the traced-chunk prefill
             pm_ = self.prefill_model
 
@@ -163,7 +164,14 @@ class Model:
 
                 def f(*a, **k):
                     self.log_dram(f"before {name}")
-                    r = orig(*a, **k)
+                    if name == "forward_device":
+                        self.l1_report("before forward_device")
+                    try:
+                        r = orig(*a, **k)
+                    except Exception:
+                        if name == "forward_device":
+                            self.l1_report("AT FAILURE")
+                        raise
                     self.log_dram(f"after  {name}")
                     return r
 
@@ -188,6 +196,27 @@ class Model:
                         return r
 
                     pl_.forward = fl
+
+                    def wrapm(obj, meth, label, _l=lid_):
+                        if not hasattr(obj, meth):
+                            return
+                        o_ = getattr(obj, meth)
+
+                        def g(*a, **k):
+                            self.log_dram(f"  L{_l} before {label}")
+                            r = o_(*a, **k)
+                            self.log_dram(f"  L{_l} after  {label}")
+                            return r
+
+                        setattr(obj, meth, g)
+
+                    if lid_ in (0, 2):  # finer: which stage of the eager compile forward holds the transient peak
+                        wrapm(pl_.pa, "forward_dyn", "attention.forward_dyn")
+                        wrapm(pl_.pmoe, "forward", "moe.forward")
+                        if getattr(pl_.pa, "sparse", None) is not None:
+                            wrapm(pl_.pa.sparse, "attend_dyn", "sparse.attend_dyn")
+                            if pl_.pa.sparse.indexer is not None:
+                                wrapm(pl_.pa.sparse.indexer, "select_dyn", "indexer.select_dyn")
             ob, oe = ttnn.begin_trace_capture, ttnn.end_trace_capture
             ttnn.begin_trace_capture = lambda *a, **k: (
                 self.log_dram("before begin_trace_capture"),
@@ -205,7 +234,7 @@ class Model:
 
     def log_dram(self, tag):
         """DSV41_MEMLOG=1: allocated / free DRAM per bank (MiB) at this point (diagnosing capacity / leaks across ISLs)."""
-        if os.environ.get("DSV41_MEMLOG") not in ("1", "2"):
+        if os.environ.get("DSV41_MEMLOG") not in ("1", "2", "3"):
             return
         if getattr(self, "_capturing", False):
             return
@@ -252,6 +281,37 @@ class Model:
         )
         for b, s, d, ref in rows[:top]:
             self.log(f"LIVE   {b / 2**20:8.1f} MiB {s} {d} refs={ref}")
+
+    def l1_report(self, tag):
+        """DSV41_MEMLOG=3: L1 allocator state per bank + every live python ttnn tensor that sits in L1 (the persistent L1 buffers that squeeze the static CBs of
+        the next program: 'Statically allocated circular buffers ... clash with L1 buffers')."""
+        if os.environ.get("DSV41_MEMLOG") != "3":
+            return
+        ttnn.synchronize_device(self.md)
+        mv = ttnn.get_memory_view(self.md, ttnn.BufferType.L1)
+        self.log(
+            f"L1VIEW {tag}: allocated {mv.total_bytes_allocated_per_bank} B/bank, largest free {mv.largest_contiguous_bytes_free_per_bank} B"
+        )
+        rows = []
+        for o in gc.get_objects():
+            try:
+                if type(o).__name__ == "Tensor" and type(o).__module__.startswith("ttnn") and o.is_allocated():
+                    mc = o.memory_config()
+                    if mc.buffer_type == ttnn.BufferType.L1:
+                        rows.append(
+                            (
+                                tuple(o.shape),
+                                str(o.dtype),
+                                str(o.layout),
+                                str(mc.memory_layout),
+                                str(getattr(o, "shard_spec", None))[:80],
+                            )
+                        )
+            except Exception:
+                pass
+        self.log(f"L1VIEW {tag}: {len(rows)} live L1 tensors")
+        for r in rows[:40]:
+            self.log(f"L1VIEW   {r}")
 
     # ---- construction ---------------------------------------------------------------------------------------------------------------
     def _build_attention(self, L, w, slot):
