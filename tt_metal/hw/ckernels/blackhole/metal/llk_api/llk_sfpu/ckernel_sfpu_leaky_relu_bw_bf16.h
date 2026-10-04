@@ -7,7 +7,7 @@
 
 namespace ckernel::sfpu {
 
-// leaky_relu_bw: grad times its piecewise-constant derivative, selected by the interval that holds x
+// leaky_relu_bw: grad times its piecewise derivative, selected by the interval that holds x
 // (activations/leaky_relu_bw.json). DEST tile idst holds x and idst + 1 holds grad; the result replaces x.
 template <int ITERATIONS = 32>
 inline void calculate_leaky_relu_bw_bf16() {
