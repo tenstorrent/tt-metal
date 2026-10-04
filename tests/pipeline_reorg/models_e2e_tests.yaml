@@ -66,12 +66,15 @@
     wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /mnt/MLPerf/huggingface/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
     export HF_MODEL=/mnt/MLPerf/huggingface/meta-llama/Llama-3.1-8B-Instruct
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/meta-llama/Llama-3.1-8B-Instruct
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 2 --max_seq_len 131072
+    for i in 1 2 3; do
+      echo "PROBE run $i"
+      TT_PROBE_RT_ITERS=200,600,1000 pytest --timeout 900 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 2 --max_seq_len 131072 || exit $?
+    done
   model: llama3.1-8b-dp
   model_family: Llama
   skus:
     bh_p300:
-      timeout: 25
+      timeout: 90
       tier: 2
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
