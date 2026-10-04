@@ -26,7 +26,7 @@ SCRIPTS="$(cd "$(dirname "$0")" && pwd)"
 TT_METAL_HOME="${TT_METAL_HOME:-/data/$USER/tt-metal}"
 
 if [ -z "${MODEL:-}" ]; then
-  echo "ERROR: set MODEL to one of: KIMI_K2_7 | GLM5_3" >&2
+  echo "ERROR: set MODEL to one of: KIMI_K2_7 | GLM5_3 | GEMMA4" >&2
   echo "  e.g.  MODEL=KIMI_K2_7 $0 20" >&2
   exit 1
 fi
@@ -49,6 +49,8 @@ LOOP_CNT="${1:-20}"
 COMMIT_HASH=$(git -C "$TT_METAL_HOME" rev-parse --short HEAD 2>/dev/null || echo nogit)
 DATE=$(date +%Y_%m_%d_%H_%M)
 LOG_NAME="${2:-LOG_${DATE}_${HOSTNAME}_${MODEL}_${COMMIT_HASH}_loop_${LOOP_CNT}}"
+LOG_DIR="${LOG_ROOT:-/data/$USER}/$LOG_NAME"
+mkdir -p "$LOG_DIR" || exit 1
 
 SESSION="${SESSION:-stress_${HOSTNAME}}"
 
@@ -74,17 +76,21 @@ fi
 # The loop count needs no env: it is positional arg 2 of every script.
 # TRIAGE / HANG_SECS arm stress.sh's hang detection. TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES
 # is a metal runtime var read by pytest, so it has to reach the pane rather than only this shell.
-RUN_ENV="TT_METAL_HOME=$TT_METAL_HOME MODEL=$MODEL"
+printf -v RUN_ENV '%q %q' "TT_METAL_HOME=$TT_METAL_HOME" "MODEL=$MODEL"
 for v in TRACE_ID MARGIN_ID MESH_ID PRELOAD_ID CHUNKS_ID ITERS_ID STALE_SECS LOGURU_LEVEL PREFLIGHT DS_PERF_IGNORE_POWER \
-         TRIAGE HANG_SECS TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES; do
-  [ -n "${!v:-}" ] && RUN_ENV+=" $v=${!v}"
+         TRIAGE HANG_SECS TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES LOG_ROOT RESET_BETWEEN_RUNS TT_SMI \
+         HF_MODEL HF_HOME HF_HUB_OFFLINE TT_CACHE_PATH PREFILL_TRACE_DIR; do
+  if [ -n "${!v:-}" ]; then
+    printf -v quoted '%q' "$v=${!v}"
+    RUN_ENV+=" $quoted"
+  fi
 done
 
-STRESS_CMD="$RUN_ENV $SCRIPTS/stress.sh $LOG_NAME $LOOP_CNT |& tee $TT_METAL_HOME/$LOG_NAME.log"
-WATCH_CMD="$RUN_ENV $SCRIPTS/watch.sh $LOG_NAME $LOOP_CNT"
+printf -v STRESS_CMD '%s %q %q %q |& tee %q; exit ${PIPESTATUS[0]}' "$RUN_ENV" "$SCRIPTS/stress.sh" "$LOG_NAME" "$LOOP_CNT" "$LOG_DIR/stress.log"
+printf -v WATCH_CMD '%s %q %q %q' "$RUN_ENV" "$SCRIPTS/watch.sh" "$LOG_NAME" "$LOOP_CNT"
 # log_name only, so the pane appends its 60s snapshots to <log dir>/host_stats.tsv.
 # No run env: it watches the box, not a run point.
-HOST_CMD="$SCRIPTS/host_stats.sh $LOG_NAME"
+printf -v HOST_CMD '%s %q %q' "$RUN_ENV" "$SCRIPTS/host_stats.sh" "$LOG_NAME"
 
 run_pane() { printf 'bash -l -c %q' "$1"; }
 
@@ -116,7 +122,8 @@ cat <<EOF
 launched tmux session '$SESSION' (1 window, 3 panes)
   MODEL=$MODEL${TRACE_ID:+  TRACE_ID=$TRACE_ID}  LOOP=$LOOP_CNT
   LOG_NAME=$LOG_NAME
-  log dir=/data/$USER/$LOG_NAME
+  log dir=$LOG_DIR
+  output=$LOG_DIR/stress.log
 
 attach (read-only):  tmux attach -t $SESSION -r
 zoom one pane:       ctrl-b z      switch panes: ctrl-b <arrow>

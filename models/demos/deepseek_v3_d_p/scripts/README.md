@@ -9,7 +9,20 @@ MODEL=KIMI_K2_7 TRACE_ID=notrace ITERS_ID=iters20 TT_METAL_HOME=/data/$USER/tt-m
 ```
 
 `./launch.sh [loop_count] [log_name]` — both optional (20, and
-`LOG_<date>_<host>_<model>_<commit>_loop_<n>`). Logs go to `/data/$USER/<log_name>/log_NN`.
+`LOG_<date>_<host>_<model>_<commit>_loop_<n>`). Logs go to `${LOG_ROOT:-/data/$USER}/<log_name>/log_NN`;
+`stress.log` in the same directory captures the complete outer-loop output.
+
+Gemma4 has a model-specific wrapper with local HuggingFace paths, traced 8192-token chunks,
+six resident slots, and no hardware resets. Its defaults are 20 chunks × 600 iterations × 5 runs:
+
+```bash
+models/demos/gemma4_d_p/scripts/launch.sh 5
+```
+
+See [Gemma4 prefill service](../../gemma4_d_p/docs/PREFILL_SERVICE.md) for the full command and checks.
+`RESET_BETWEEN_RUNS=0` disables all `tt-smi` resets and stops the outer loop on the first failed run.
+It still loads a new model and opens/closes the mesh for each outer run. The original models retain
+`RESET_BETWEEN_RUNS=1` by default. `LOG_ROOT` chooses the output root for all three panes.
 
 One detached session `stress_$HOSTNAME` (`SESSION=` to rename), one window, three panes:
 
@@ -38,6 +51,7 @@ unset, the `weight_cache_path` fixture silently builds a fresh cache under the H
 |---|---|---|
 | `KIMI_K2_7` | `test_kimi_prefill_transformer_chunked_perf` | `kimi_k2_7` / `L61` |
 | `GLM5_3` | `test_glm_prefill_transformer_chunked_no_pcc` | `glm53` / `L78` |
+| `GEMMA4` | `test_prefill_stress` | 60 layers, CP8/TP4, traced, six slots |
 
 The rest of the node id, overridable per run. These are parametrize **ids**, not values —
 `ITERS_ID=iters25`, not `25`:
@@ -54,6 +68,11 @@ leg where the KV-dedup fallback gather runs at production shape.
 
 A bad combination fails at `stress.sh`'s preflight (`pytest --collect-only`) in seconds, before any
 device reset.
+
+Gemma4 supports `CHUNKS_ID=chunks1|chunks20|chunks32` (8192 tokens per chunk),
+`ITERS_ID=iters1|iters12|iters20|iters600`, `TRACE_ID=traced`, `PRELOAD_ID=preload0`, and `MESH_ID=8x4`.
+The Gemma4 wrapper supplies these defaults and honors `HF_MODEL`, `HF_HOME`, `HF_HUB_OFFLINE`,
+`TT_CACHE_PATH`, and `PREFILL_TRACE_DIR` from the calling shell.
 
 Also: `TT_METAL_HOME` (default `/data/$USER/tt-metal`) selects the repo under test — venv, test file,
 `PYTHONPATH` — independently of where these scripts live; `launch.sh` prints a `NOTE:` when the two

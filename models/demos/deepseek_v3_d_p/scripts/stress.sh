@@ -3,18 +3,19 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Outer loop: each iteration does `tt-smi -glx_reset` then a foreground pytest run
+# Outer loop: optional `tt-smi -glx_reset`, then a foreground pytest run
 # (no timeout — stays alive on hang for manual debug). Per-run log: <log_dir>/log_NN.
 #
 # Usage: stress.sh [log_name] [loop_count]
 
-source "$(dirname "$0")/common.sh" "$@"
+source "$(dirname "$0")/common.sh" "$@" || exit 1
 set -u
 
 echo "TT_METAL_HOME=$TT_METAL_HOME"
 echo "MODEL=$MODEL"
 echo "LOG_DIR=$LOG_DIR"
 echo "LOOP=$LOOP  INNER_ITERS=$INNER_ITERS"
+echo "RESET_BETWEEN_RUNS=$RESET_BETWEEN_RUNS"
 echo "TARGET=$PYTEST_TARGET"
 
 mkdir -p "$LOG_DIR"
@@ -49,7 +50,21 @@ for i in $(seq 1 "$LOOP"); do
   echo "############################################################"
 
   source "$TT_METAL_HOME/python_env/bin/activate"
-  tt-smi -glx_reset 2>&1 | tail -3
+  if [ "$RESET_BETWEEN_RUNS" = 1 ]; then
+    # Gemma4 targets Blackhole. The PR's -glx_reset path is the Wormhole
+    # Galaxy IPMI tray reset; use the all-device warm reset on Blackhole.
+    RESET_ARG=-glx_reset
+    if [ "$MODEL" = GEMMA4 ]; then RESET_ARG=-r; fi
+    RESET_LOG=$(printf '%s/reset_%02d.log' "$LOG_DIR" "$i")
+    echo "### Device reset before run $i: ${TT_SMI:-tt-smi} $RESET_ARG"
+    "${TT_SMI:-tt-smi}" "$RESET_ARG" 2>&1 | tee "$RESET_LOG"
+    RESET_RC=${PIPESTATUS[0]}
+    echo "RESET_DONE_EXIT=$RESET_RC" | tee -a "$RESET_LOG"
+    if [ "$RESET_RC" -ne 0 ]; then
+      echo "Galaxy reset failed; stopping before pytest. See $RESET_LOG" >&2
+      exit "$RESET_RC"
+    fi
+  fi
 
   cd "$TT_METAL_HOME"
   # A reused log dir must not carry an earlier hang's triage into this iteration.
@@ -60,9 +75,10 @@ for i in $(seq 1 "$LOOP"); do
   # signal kill (SIGBUS/SIGSEGV) prints no pytest summary line at all, so without
   # this the scan can only guess from a log that stopped growing — which is how the
   # 2026-08-12 SIGBUS crashes all displayed as HANG?.
-  bash -c "$ENV_VARS $(triage_env "$LOG_DIR" "$i")pytest -vs \"$PYTEST_TARGET\" |& tee \"$LOG\"; rc=\${PIPESTATUS[0]}; echo \"TEST_DONE_EXIT=\$rc\" | tee -a \"$LOG\""
+  export GEMMA4_STRESS_RUN="$i"
+  bash -c "$ENV_VARS $(triage_env "$LOG_DIR" "$i")python -u -m pytest -vs \"$PYTEST_TARGET\" |& tee \"$LOG\"; rc=\${PIPESTATUS[0]}; echo \"TEST_DONE_EXIT=\$rc\" | tee -a \"$LOG\""
 
-  # Post-mortem BEFORE the pkill/reset below, while the host state is still the
+  # Post-mortem BEFORE the next reset, while the host state is still the
   # state that failed. This is the only crash forensics available here: dmesg is
   # root-only on these nodes (dmesg_restrict=1), so the driver's own message —
   # e.g. "pin_user_pages_longterm failed: -14" — cannot be captured from a run.
@@ -74,8 +90,12 @@ for i in $(seq 1 "$LOOP"); do
     echo "### non-zero exit $RC ($(sig_name "$RC")) — $(phase_split "$LOG" "$(stat -c %Y "$LOG")") — snapshot: $(printf '%s/crash_%02d.txt' "$LOG_DIR" "$i")"
   fi
 
-  pkill -9 -f pytest 2>/dev/null || true
-  pkill -9 -f test_prefill 2>/dev/null || true
+  if [ "$RESET_BETWEEN_RUNS" = 0 ]; then
+    if [ -z "$RC" ] || [ "$RC" -ne 0 ]; then
+      echo "Stopping the no-reset run after failure; see $LOG" >&2
+      exit "${RC:-1}"
+    fi
+  fi
   sleep 2
 done
 
