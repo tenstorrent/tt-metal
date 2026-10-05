@@ -270,21 +270,20 @@ def _distributed_prefix(
             (1, batch_heads, key_dim, key_dim + value_dim),
             memory_config=working_memory,
         )
-        # Precision boundary: BF16 collective payload is restored for FP32 carry math.
-        a_for_carry = ttnn.typecast(transported_a, KDA_RECURRENT_STATE_DTYPE, memory_config=working_memory)
-        b_for_carry = ttnn.typecast(transported_b, KDA_RECURRENT_STATE_DTYPE, memory_config=working_memory)
-        # Complement form: carry <- carry + (E carry + B), E = A - I. The outer FP32 add (SFPU) keeps the
-        # long-memory channels exact; the near-identity part never passes through the matmul.
-        # The increment temporaries live in DRAM so the L1 working set stays one new carry per step.
+        # Complement form: carry <- (carry + B) + E carry, E = A - I. Both adds run in FP32 on the SFPU, which keeps
+        # the long-memory channels exact; the near-identity part never passes through the matmul.
+        # Precision boundary: the BF16 collective payload enters the FP32 carry math without a widening op. The
+        # matmul reads E through its source registers either way, and the SFPU add unpacks B to FP32 exactly.
         increment = ttnn.matmul(
-            a_for_carry,
+            transported_a,
             carry,
-            memory_config=output_memory,
+            memory_config=working_memory,
             dtype=KDA_RECURRENT_STATE_DTYPE,
             compute_kernel_config=compute_config,
         )
-        increment = ttnn.add(increment, b_for_carry, memory_config=output_memory)
-        carry = ttnn.add(carry, increment, memory_config=working_memory)
+        carry_with_b = ttnn.add(carry, transported_b, dtype=KDA_RECURRENT_STATE_DTYPE, memory_config=working_memory)
+        carry = ttnn.add(carry_with_b, increment, memory_config=working_memory)
+        ttnn.deallocate(carry_with_b)
         ttnn.deallocate(increment)
 
     chronological_entries = ttnn.concat(entry_states, dim=0, memory_config=working_memory)
