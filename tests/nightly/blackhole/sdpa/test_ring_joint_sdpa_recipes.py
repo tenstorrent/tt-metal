@@ -113,6 +113,9 @@ RING_CASES = {
     "odd_q96_k160_d96": (1, 2, 2, 480, 800, 96, 96, 160, None, 1500, (4, 2)),
     "q128_k256_d256": (1, 1, 1, 256, 512, 256, 128, 256, None, None, (2, 1)),
     "odd_q288_k512_d128": (1, 2, 2, 576, 1024, 128, 288, 512, None, None, (4, 2)),
+    # Four Q chunks per core: the recurrent state is checkpointed between them on every ring iteration.
+    "multi_q_checkpoint": (1, 4, 4, 1024, 1024, 128, 256, 512, None, None, (2, 2)),
+    "multi_q_checkpoint_wide": (1, 10, 10, 2368, 2368, 128, 288, 384, None, None, (8, 4)),
 }
 
 
