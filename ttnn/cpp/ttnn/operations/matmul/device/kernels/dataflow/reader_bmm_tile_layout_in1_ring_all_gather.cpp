@@ -73,7 +73,6 @@ static void do_signaling(const Noc& noc, uint32_t& rt_args_idx) {
         }
     } else {
         pv_sem.up(noc, pv_core_x, pv_core_y, 1);
-        noc.async_atomic_barrier();
     }
 }
 
@@ -100,6 +99,7 @@ void kernel_main() {
             const Noc early_noc;
             do_signaling(early_noc, rt_args_idx);
             early_noc.async_write_barrier();
+            early_noc.async_atomic_barrier();
         }
         return;
     }
@@ -278,4 +278,9 @@ void kernel_main() {
     noc.async_atomic_barrier();
 #endif
     noc.async_write_barrier();
+#ifndef ENABLE_GLOBAL_CB
+    if constexpr (needs_signaler) {
+        noc.async_atomic_barrier();
+    }
+#endif
 }

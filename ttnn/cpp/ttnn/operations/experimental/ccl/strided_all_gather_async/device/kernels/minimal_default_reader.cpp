@@ -234,4 +234,9 @@ void kernel_main() {
         batch_input_tile_offset += tiles_per_batch;
     }
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
+    if constexpr (fuse_op) {
+        if (!writer_signals_mm) {
+            noc_async_atomic_barrier();
+        }
+    }
 }

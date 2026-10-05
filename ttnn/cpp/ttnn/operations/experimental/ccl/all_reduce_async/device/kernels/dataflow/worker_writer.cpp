@@ -175,4 +175,7 @@ void kernel_main() {
     }
 
     noc_obj.async_write_barrier();
+    if (core_id > 0) {
+        noc_obj.async_atomic_barrier();
+    }
 }

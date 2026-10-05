@@ -2,11 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
+
 import torch
 import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
+from tests.ttnn.utils_for_testing import assert_no_unflushed_noc_atomics
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tracy import signpost
 
@@ -127,6 +130,7 @@ def run_concat_fuse_impl(
     tensor_mem_layout=None,
     warmup_iters=0,
     profiler=BenchmarkProfiler(),
+    check_noc_atomics=False,
 ):
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
@@ -280,25 +284,33 @@ def run_concat_fuse_impl(
         )
         tt_out_tensor_list.append(tt_out_tensor)
     else:
-        for i in range(num_iters):
-            tt_out_tensor = ttnn.experimental.all_gather_concat(
-                input_tensor_mesh_list[i],
-                intermediate_tensors_list[i],
-                dim,
-                cluster_axis=1,
-                mesh_device=mesh_device,
-                multi_device_global_semaphore=ccl_semaphore_handles[i],
-                num_links=num_links,
-                num_heads=8,
-                memory_config=output_mem_config,
-                topology=all_gather_topology,
-                subdevice_id=worker_sub_device_id,
+        noc_check = (
+            assert_no_unflushed_noc_atomics(
+                mesh_device, min_atomic_events=1, sub_device_ids=sub_device_stall_group
             )
-            tt_out_tensor_list.append(tt_out_tensor)
+            if check_noc_atomics
+            else contextlib.nullcontext()
+        )
+        with noc_check:
+            for i in range(num_iters):
+                tt_out_tensor = ttnn.experimental.all_gather_concat(
+                    input_tensor_mesh_list[i],
+                    intermediate_tensors_list[i],
+                    dim,
+                    cluster_axis=1,
+                    mesh_device=mesh_device,
+                    multi_device_global_semaphore=ccl_semaphore_handles[i],
+                    num_links=num_links,
+                    num_heads=8,
+                    memory_config=output_mem_config,
+                    topology=all_gather_topology,
+                    subdevice_id=worker_sub_device_id,
+                )
+                tt_out_tensor_list.append(tt_out_tensor)
 
-        logger.info(f"Waiting for op")
-        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
-        logger.info(f"Done op")
+            logger.info(f"Waiting for op")
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+            logger.info(f"Done op")
 
     passed = True
     for tensor_index in range(len(tt_out_tensor_list)):

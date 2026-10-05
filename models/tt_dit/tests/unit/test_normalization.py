@@ -3,11 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
+from tests.ttnn.utils_for_testing import assert_no_unflushed_noc_atomics
 
 from ...layers.normalization import (
     DistributedGroupNorm,
@@ -546,6 +549,32 @@ def test_distributed_group_norm(
     tt_torch = _gather_group_norm_output(tt_output, mesh_device, cluster_axis, torch_output.shape[0])
 
     assert_quality(torch_output, tt_torch, pcc=0.999_300)
+
+
+@pytest.mark.skipif(
+    os.getenv("TT_METAL_NOC_DEBUG_DUMP") != "1",
+    reason="Set TT_METAL_NOC_DEBUG_DUMP=1 to check NoC atomic barriers",
+)
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "require_exact_physical_num_devices": True,
+        }
+    ],
+    indirect=True,
+)
+def test_distributed_group_norm_sender_drains_noc_atomics(mesh_device):
+    with assert_no_unflushed_noc_atomics(mesh_device, min_atomic_events=1):
+        test_distributed_group_norm(
+            mesh_device=mesh_device,
+            cluster_axis=1,
+            input_shape=(1, 64, 64, 64),
+            group_count=8,
+            activation_fn=None,
+        )
 
 
 def _gather_group_norm_output(

@@ -537,6 +537,7 @@ void kernel_main() {
     volatile PACKET_HEADER_TYPE* pkt_hdr_sema_backward =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_sema_backward);
 
+    bool issued_local_completion_atomic = false;
     {
         if constexpr ((is_fabric_2d && !stream_uses_mux) || has_fabric_connections) {
             finish_all_to_all_connections(fabric_connections);
@@ -650,6 +651,7 @@ void kernel_main() {
             uint64_t dst_addrs[4] = {0};
             uint16_t payload_sizes[4] = {0};
             auto flush_packet = [&](bool last) {
+                issued_local_completion_atomic |= device_offset == 0 && last;
                 write_data(
                     noc_obj,
                     dst_addrs,
@@ -701,6 +703,9 @@ void kernel_main() {
     }
 
     noc_obj.async_write_barrier();
+    if (issued_local_completion_atomic) {
+        noc_obj.async_atomic_barrier();
+    }
     {
         if constexpr ((is_fabric_2d && !stream_uses_mux) || has_fabric_connections) {
             close_all_to_all_connections(fabric_connections);

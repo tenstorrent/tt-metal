@@ -468,5 +468,8 @@ void kernel_main() {
         combine_sem.wait(combine_semaphore_val);
         combine_sem.set(0);
         noc1_obj.async_writes_flushed<NocOptions::POSTED>();
+#if defined(ARCH_BLACKHOLE)
+        noc1_obj.async_atomic_barrier();
+#endif
     }
 }

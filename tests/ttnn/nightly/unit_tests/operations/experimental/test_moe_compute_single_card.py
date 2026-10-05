@@ -24,12 +24,14 @@ Validation points (all using the 6U helpers verbatim — no logic duplication):
     compute_only=False
 """
 
+import contextlib
 import os
 import pytest
 import random
 import torch
 import ttnn
 from loguru import logger
+from tests.ttnn.utils_for_testing import assert_no_unflushed_noc_atomics
 
 from ttnn.operations.ccl import MoEActivationFunction
 
@@ -160,6 +162,7 @@ def _run_moe_compute_single_card_test(
     compute_only=True,
     skip_on_ci=False,
     matmul_xfail_on_bh=False,
+    check_noc_atomics=False,
 ):
     """
     Single-card MoE compute test body. cluster_axis is fixed to None
@@ -441,7 +444,15 @@ def _run_moe_compute_single_card_test(
         tt_combine_output_tensor = create_combine_output_tensor()
 
     layer_id = 0
-    outputs = run_moe_compute_once(tt_combine_output_tensor)
+    noc_check = (
+        assert_no_unflushed_noc_atomics(mesh_device, min_atomic_events=1)
+        if check_noc_atomics
+        else contextlib.nullcontext()
+    )
+    with noc_check:
+        outputs = run_moe_compute_once(tt_combine_output_tensor)
+        if check_noc_atomics:
+            ttnn.synchronize_device(mesh_device)
 
     # ===================================================================
     # TRIPWIRE: output count must match the mode.
@@ -593,6 +604,9 @@ def _run_moe_compute_single_card_test(
     assert matmul_all_passed, "Matmul output tensor verification failed!"
     if not compute_only:
         assert combine_all_passed, "Combine output tensor verification failed!"
+
+        if check_noc_atomics:
+            return
 
         # Exercise the cached-program path with a fresh optional output tensor. This catches stale
         # FullLocal combine runtime arguments, especially output addresses patched on cache hit.
@@ -806,6 +820,40 @@ def test_moe_compute_single_card_full_local_b1(mesh_device, mesh_shape):
         activation_type=MoEActivationFunction.SILU,
         has_bias=False,
         compute_only=False,
+    )
+
+
+@pytest.mark.skipif(
+    os.getenv("TT_METAL_NOC_DEBUG_DUMP") != "1",
+    reason="Set TT_METAL_NOC_DEBUG_DUMP=1 to check NoC atomic barriers",
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 16384, "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_blackhole_moe_compute_full_local_drains_noc_atomics(mesh_device, mesh_shape):
+    if mesh_device.arch() != ttnn.device.Arch.BLACKHOLE:
+        pytest.skip("This test checks the Blackhole non-posted atomic implementation")
+
+    hidden_size = 2048
+    ring_n = effective_matmul_ring_size(mesh_device)
+    _run_moe_compute_single_card_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        experts_per_device=16,
+        tokens_per_device=1,
+        selected_experts_k=8,
+        N=512,
+        hidden_size=hidden_size,
+        output_height_shard_dim=4,
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+        dtype=ttnn.bfloat16,
+        activation_type=MoEActivationFunction.SILU,
+        has_bias=False,
+        compute_only=False,
+        check_noc_atomics=True,
     )
 
 

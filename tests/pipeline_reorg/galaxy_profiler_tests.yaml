@@ -28,3 +28,12 @@
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: runtime
   budget_type: profiler
+
+- name: Galaxy NoC atomic operation tests
+  cmd: bash tests/scripts/wh_6u/run_wh_6u_profiler_tests.sh run_noc_atomic_operation_tests
+  skus:
+    wh_galaxy:
+      timeout: 25
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: ttnn
+  budget_type: profiler

@@ -367,4 +367,7 @@ void kernel_main() {
     }
 
     noc.async_write_barrier();
+    if constexpr (core_in_in0_receiver_mcast_grid) {
+        noc.async_atomic_barrier();
+    }
 }

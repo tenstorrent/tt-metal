@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 import ttnn
 
@@ -166,6 +168,37 @@ def test_all_gather_multicast_non_scatter_pages(
         cluster_axis=cluster_axis,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
+
+
+@pytest.mark.skipif(
+    os.getenv("TT_METAL_NOC_DEBUG_DUMP") != "1",
+    reason="Set TT_METAL_NOC_DEBUG_DUMP=1 to check NoC atomic barriers",
+)
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(3)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+def test_multicast_all_gather_drains_noc_atomics(bh_1d_mesh_device):
+    num_devices = 4
+    cluster_axis = 0
+    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis)
+    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    run_all_gather_impl(
+        submesh_device,
+        ag_output_shape=[1, 1, 32, 512],
+        dim=3,
+        ag_input_dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        mem_config_input=ttnn.DRAM_MEMORY_CONFIG,
+        mem_config_ag=ttnn.DRAM_MEMORY_CONFIG,
+        enable_trace=False,
+        num_iters=1,
+        cluster_axis=cluster_axis,
+        check_noc_atomics=True,
+    )
 
 
 @skip_for_wormhole_b0()

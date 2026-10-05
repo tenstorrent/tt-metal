@@ -2,13 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
+
 import torch
 import pytest
 import math
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
+from tests.ttnn.utils_for_testing import assert_no_unflushed_noc_atomics, tt_dtype_to_torch_dtype
 from models.common.utility_functions import skip_for_blackhole
 
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
@@ -125,6 +127,7 @@ def run_all_gather_impl(
     sub_core_grids=None,
     use_broadcast=False,
     use_explicit_subdevice_id=True,
+    check_noc_atomics=False,
 ):
     torch.manual_seed(0)
     torch_dtype = tt_dtype_to_torch_dtype[ag_input_dtype]
@@ -317,15 +320,23 @@ def run_all_gather_impl(
         delays[-1][-1] = 800_000
         ttnn.apply_device_delay(mesh_device, delays)
 
-        for i in range(num_iters):
-            tt_all_gather_out_tensor = run_op(i)
-            tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensor)
+        noc_check = (
+            assert_no_unflushed_noc_atomics(
+                mesh_device, min_atomic_events=1, sub_device_ids=sub_device_stall_group
+            )
+            if check_noc_atomics
+            else contextlib.nullcontext()
+        )
+        with noc_check:
+            for i in range(num_iters):
+                tt_all_gather_out_tensor = run_op(i)
+                tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensor)
 
-            logger.info(f"Waiting for op")
-            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
-            logger.info(f"Done op")
+                logger.info(f"Waiting for op")
+                ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+                logger.info(f"Done op")
 
-            logger.info(f"Done iteration {i}")
+                logger.info(f"Done iteration {i}")
 
     if not skip_check:
         # Check output_topology

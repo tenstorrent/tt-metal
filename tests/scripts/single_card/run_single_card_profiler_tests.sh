@@ -106,6 +106,16 @@ run_sync_events_test() {
     pytest tests/ttnn/tracy/test_sync_events_profiler.py
 }
 
+run_noc_atomic_group_norm_test() {
+    TT_METAL_NOC_DEBUG_DUMP=1 pytest -xv \
+        models/tt_dit/tests/unit/test_normalization.py::test_distributed_group_norm_sender_drains_noc_atomics
+}
+
+run_noc_atomic_moe_test() {
+    TT_METAL_NOC_DEBUG_DUMP=1 pytest -xv \
+        tests/ttnn/nightly/unit_tests/operations/experimental/test_moe_compute_single_card.py::test_blackhole_moe_compute_full_local_drains_noc_atomics
+}
+
 # Umbrella that runs every individual test in sequence. Kept for callers that
 # don't pass a function name (CI invokes individual functions via the matrix).
 run_profiling_test() {
@@ -116,6 +126,8 @@ run_profiling_test() {
     run_accumulate_profiler_test
     run_streaming_profiler_test
     run_sync_events_test
+    run_noc_atomic_group_norm_test
+    run_noc_atomic_moe_test
 }
 
 main() {

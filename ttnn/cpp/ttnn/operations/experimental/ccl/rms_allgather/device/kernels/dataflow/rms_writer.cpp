@@ -240,4 +240,7 @@ void kernel_main() {
     write_minimal_resharded_data<cb_out, cb_out_resharded, worker_core_stride_w_bytes, storage_core_stride_w_bytes>(
         noc_obj, num_segments_to_write_back, storage_core_start_offset, segment_args);
 #endif
+    if constexpr (num_links > 1) {
+        noc_obj.async_atomic_barrier();
+    }
 }

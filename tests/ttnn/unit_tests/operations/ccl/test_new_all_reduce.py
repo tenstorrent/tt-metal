@@ -2,6 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
+import os
+
 import torch
 import pytest
 import math
@@ -9,6 +12,7 @@ from time import time
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
+from tests.ttnn.utils_for_testing import assert_no_unflushed_noc_atomics
 
 from tests.ttnn.nightly.unit_tests.operations.matmul.test_matmul_1d_gather_in0 import (
     num_cores_to_rectangle_grid,
@@ -69,6 +73,7 @@ def run_all_reduce_impl(
     validate_all=True,
     profiler=BenchmarkProfiler(),
     linear=True,
+    check_noc_atomics=False,
 ):
     cluster_shape = (8, 4)
 
@@ -259,7 +264,15 @@ def run_all_reduce_impl(
 
     else:
         signpost("start")
-        tt_outs = run_op(num_iters, store_all_results=validate_all)
+        noc_check = (
+            assert_no_unflushed_noc_atomics(
+                mesh_device, min_atomic_events=1, sub_device_ids=sub_device_stall_group
+            )
+            if check_noc_atomics
+            else contextlib.nullcontext()
+        )
+        with noc_check:
+            tt_outs = run_op(num_iters, store_all_results=validate_all)
         signpost("stop")
 
     ##################################
@@ -300,6 +313,41 @@ def run_all_reduce_impl(
     ), f"Device has {mesh_device.cache_entries_counter.total} program cache entries"
 
     mesh_device.reset_sub_device_stall_group()
+
+
+@pytest.mark.skipif(
+    os.getenv("TT_METAL_NOC_DEBUG_DUMP") != "1",
+    reason="Set TT_METAL_NOC_DEBUG_DUMP=1 to check NoC atomic barriers",
+)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
+)
+def test_intermediate_buffer_all_reduce_drains_noc_atomics(mesh_device):
+    if mesh_device.get_num_devices() != 32:
+        pytest.skip("This test requires a 32-device Galaxy system")
+
+    run_all_reduce_impl(
+        mesh_device,
+        output_shape=[1, 1, 32, 1280],
+        cluster_axis=1,
+        input_dtype=ttnn.bfloat8_b,
+        num_links=1,
+        input_num_cores=24,
+        input_core_range_set=RING_CRS,
+        output_num_cores=10,
+        output_core_range_set=QKV_CRS,
+        num_iters=1,
+        trace_mode=False,
+        check_noc_atomics=True,
+    )
 
 
 @pytest.mark.timeout(1500)

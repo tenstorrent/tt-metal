@@ -2,12 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
+
 import torch
 import pytest
 from loguru import logger
 import ttnn
 import math
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc, get_atol_rtol_pcc
+from tests.ttnn.utils_for_testing import assert_no_unflushed_noc_atomics
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tracy import signpost
 
@@ -1065,6 +1068,7 @@ def run_rms_fuse_impl(
     residual_dtype=ttnn.bfloat16,
     layout=ttnn.TILE_LAYOUT,
     epsilon=1e-05,
+    check_noc_atomics=False,
 ):
     ccl_sub_device_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))})
     worker_sub_device = ttnn.SubDevice(
@@ -1195,25 +1199,35 @@ def run_rms_fuse_impl(
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         )
-    for i in range(num_iters):
-        # TODO: Change OP infra so that pre makes the post shape, also create external tensor
-        tt_out = ttnn.fused_rms_minimal(
-            input_tensor[i],
-            layer_norm_config,
-            1,
-            mesh_device,
-            ccl_semaphore_handles[i],
-            # dtype=ttnn.bfloat8_b,
-            topology=all_gather_topology,
-            memory_config=output_memory_config,
-            epsilon=epsilon,
-            dtype=output_dtype,
-            weight=gamma_tensor[i],
-            residual_input_tensor=residual_tensor[i],
-            stats=tt_stats,
-            use_noc1_only=use_noc1_only,
+    noc_check = (
+        assert_no_unflushed_noc_atomics(
+            mesh_device, min_atomic_events=1, sub_device_ids=sub_device_stall_group
         )
-        tt_out_array.append(tt_out)
+        if check_noc_atomics
+        else contextlib.nullcontext()
+    )
+    with noc_check:
+        for i in range(num_iters):
+            # TODO: Change OP infra so that pre makes the post shape, also create external tensor
+            tt_out = ttnn.fused_rms_minimal(
+                input_tensor[i],
+                layer_norm_config,
+                num_links,
+                mesh_device,
+                ccl_semaphore_handles[i],
+                # dtype=ttnn.bfloat8_b,
+                topology=all_gather_topology,
+                memory_config=output_memory_config,
+                epsilon=epsilon,
+                dtype=output_dtype,
+                weight=gamma_tensor[i],
+                residual_input_tensor=residual_tensor[i],
+                stats=tt_stats,
+                use_noc1_only=use_noc1_only,
+            )
+            tt_out_array.append(tt_out)
+        if check_noc_atomics:
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
     for i in range(num_iters):
         tt_out_torch = ttnn.to_torch(
             tt_out_array[i],
