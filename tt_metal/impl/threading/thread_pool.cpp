@@ -341,7 +341,7 @@ class ParallelJob {
 public:
     // Each worker that takes part wakes this many others before running its own calls, so that the caller
     // enters the kernel once per fan-out instead of once per worker.
-    static constexpr size_t WAKE_FANOUT = 2;
+    static constexpr size_t WAKE_FANOUT = 4;
 
     ParallelJob(const std::function<void(size_t)>& fn, size_t num_calls) :
         fn_(fn), claims_(num_calls), executor_of_call_(num_calls) {
