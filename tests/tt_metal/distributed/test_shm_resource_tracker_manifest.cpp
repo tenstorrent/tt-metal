@@ -15,6 +15,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <csignal>
 #include <cstdint>
@@ -23,12 +24,14 @@
 #include <fstream>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
 #include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
 #include "tt_metal/distributed/shm_owner_liveness.hpp"
+#include "tt_metal/distributed/shm_stale_scan.hpp"
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -218,6 +221,44 @@ TEST(ShmResourceTrackerManifest, ScanJudgesManifestWithoutStartLineByPidAlone) {
     EXPECT_FALSE(manifest_test_file_exists(manifest_test_path(dead)));
     manifest_test_remove(live.pid(), live_name);
     manifest_test_remove(dead, dead_name);
+}
+
+TEST(ShmResourceTrackerManifest, ManifestRepublishedBetweenJudgementAndReapIsKept) {
+    // A scanner judges the predecessor's manifest at a pid that a live process has since
+    // been handed. Before the scanner reaps, that live owner reaps its predecessor itself
+    // and publishes its own manifest at the same path. Only what the judged manifest
+    // listed may go; the live owner's manifest and segment must stay.
+    ManifestTestChild live_owner;
+    ASSERT_GT(live_owner.pid(), 0) << std::strerror(errno);
+    const uint64_t live_start = process_start_time(live_owner.pid());
+    ASSERT_NE(live_start, 0u);
+    const std::string stale_name = fmt::format("/tt_test_manifest_racestale_{}", getpid());
+    const std::string live_name = fmt::format("/tt_test_manifest_racelive_{}", getpid());
+    manifest_test_plant(live_owner.pid(), live_start + 1, stale_name);  // the dead predecessor's
+    if (HasFatalFailure()) {
+        return;
+    }
+
+    const StaleScan scan = collect_stale_shm_resources();
+    const auto judged = std::find_if(scan.manifests.begin(), scan.manifests.end(), [&](const StaleManifest& m) {
+        return m.path == manifest_test_path(live_owner.pid());
+    });
+    ASSERT_NE(judged, scan.manifests.end()) << "predecessor's manifest was not judged stale";
+    ASSERT_EQ(judged->shm_names, std::vector<std::string>{stale_name});
+
+    // The live owner publishes its own manifest (new file, renamed into place) and segment.
+    manifest_test_plant(live_owner.pid(), live_start, live_name);
+    if (HasFatalFailure()) {
+        return;
+    }
+
+    reap_stale_shm_resources(scan);
+
+    EXPECT_FALSE(manifest_test_shm_exists(stale_name)) << "predecessor's segment was kept";
+    EXPECT_TRUE(manifest_test_shm_exists(live_name)) << "live owner's segment was removed";
+    EXPECT_TRUE(manifest_test_has_line(manifest_test_path(live_owner.pid()), "shm " + live_name))
+        << "live owner's republished manifest was removed";
+    manifest_test_remove(live_owner.pid(), live_name);
 }
 
 }  // namespace

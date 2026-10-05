@@ -4,6 +4,7 @@
 
 #include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
 #include "shm_owner_liveness.hpp"
+#include "shm_stale_scan.hpp"
 
 #include <mutex>
 #include <tt-logger/tt-logger.hpp>
@@ -14,6 +15,7 @@
 #include <cstring>
 #include <csignal>
 #include <dirent.h>
+#include <fcntl.h>
 #include <fstream>
 #include <sstream>
 #include <sys/mman.h>
@@ -33,21 +35,6 @@ pid_t extract_pid_from_manifest_name(const std::string& filename) {
     }
     try {
         return static_cast<pid_t>(std::stol(filename.substr(prefix.size())));
-    } catch (...) {
-        return 0;
-    }
-}
-
-// The manifest's first line is "start <ticks>" (see flush_manifest). Older
-// manifests have no such line and are judged by pid alone.
-uint64_t read_manifest_start_time(const std::string& manifest_path) {
-    std::ifstream ifs(manifest_path);
-    std::string line;
-    if (!std::getline(ifs, line) || !line.starts_with("start ")) {
-        return 0;
-    }
-    try {
-        return std::stoull(line.substr(6));
     } catch (...) {
         return 0;
     }
@@ -324,18 +311,60 @@ void ShmResourceTracker::cleanup_from_signal() {
     mutex_.unlock();
 }
 
-void ShmResourceTracker::cleanup_stale_resources() {
+bool read_manifest(const std::string& path, dev_t& dev, ino_t& ino, ManifestContents& contents) {
+    const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd == -1) {
+        return false;
+    }
+    struct stat st{};
+    if (::fstat(fd, &st) != 0) {
+        ::close(fd);
+        return false;
+    }
+    dev = st.st_dev;
+    ino = st.st_ino;
+    std::string text;
+    char buf[4096];
+    for (;;) {
+        const ssize_t n = ::read(fd, buf, sizeof(buf));
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        if (n <= 0) {
+            break;
+        }
+        text.append(buf, static_cast<std::size_t>(n));
+    }
+    ::close(fd);
+
+    contents = ManifestContents{};
+    std::istringstream lines(text);
+    std::string line;
+    bool first = true;
+    while (std::getline(lines, line)) {
+        // The first line is "start <ticks>" (see flush_manifest); older manifests have none.
+        if (first && line.starts_with("start ")) {
+            try {
+                contents.start_time = std::stoull(line.substr(6));
+            } catch (...) {
+                contents.start_time = 0;
+            }
+        } else if (line.starts_with("shm ")) {
+            contents.shm_names.push_back(line.substr(4));
+        } else if (line.starts_with("file ")) {
+            contents.file_paths.push_back(line.substr(5));
+        }
+        first = false;
+    }
+    return true;
+}
+
+StaleScan collect_stale_shm_resources() {
+    StaleScan scan;
     DIR* dir = opendir("/dev/shm");
     if (!dir) {
-        return;
+        return scan;
     }
-
-    struct StaleManifest {
-        std::string path;
-        bool pid_reused;
-    };
-    std::vector<StaleManifest> stale_manifests;
-    std::vector<std::string> stale_shm_names;
 
     const pid_t my_pid = getpid();
     const uint64_t my_start = process_start_time(my_pid);
@@ -343,75 +372,99 @@ void ShmResourceTracker::cleanup_stale_resources() {
     while ((entry = readdir(dir)) != nullptr) {
         std::string name(entry->d_name);
 
-        // Check for manifest files from dead processes. A live pid is not
-        // enough: the owner may have died and its pid been handed to an
-        // unrelated process, which the start time recorded in the manifest
-        // tells apart.
+        // Manifests of dead owners. A live pid is not enough: the owner may
+        // have died and its pid been handed to an unrelated process, which the
+        // start time recorded in the manifest tells apart. The manifest is read
+        // once here, from the file being judged, so the reap step works on the
+        // entries that were judged even if the path is republished meanwhile.
         pid_t manifest_pid = extract_pid_from_manifest_name(name);
         if (manifest_pid > 0) {
-            const std::string path = "/dev/shm/" + name;
+            StaleManifest stale;
+            stale.path = "/dev/shm/" + name;
+            ManifestContents contents;
+            if (!read_manifest(stale.path, stale.dev, stale.ino, contents)) {
+                continue;  // gone already; nothing to judge
+            }
+            bool is_stale = false;
             if (manifest_pid == my_pid) {
                 // A manifest at our own path is a predecessor's if it was
                 // written by a process with a different start time: we were
                 // handed its pid. Without a start line it cannot be told
                 // apart from our own and is left alone.
-                const uint64_t recorded = read_manifest_start_time(path);
-                if (recorded != 0 && my_start != 0 && recorded != my_start) {
-                    stale_manifests.push_back({path, true});
-                }
-                continue;
+                is_stale = contents.start_time != 0 && my_start != 0 && contents.start_time != my_start;
+                stale.pid_reused = true;
+            } else {
+                const bool pid_alive = ShmResourceTracker::is_pid_alive(manifest_pid);
+                is_stale = !pid_alive || !is_process_alive(manifest_pid, contents.start_time);
+                stale.pid_reused = pid_alive;
             }
-            const bool pid_alive = is_pid_alive(manifest_pid);
-            if (!pid_alive || !is_process_alive(manifest_pid, read_manifest_start_time(path))) {
-                stale_manifests.push_back({path, pid_alive});
+            if (is_stale) {
+                stale.shm_names = std::move(contents.shm_names);
+                stale.file_paths = std::move(contents.file_paths);
+                scan.manifests.push_back(std::move(stale));
             }
             continue;
         }
 
-        // Check for orphaned shm objects from dead processes
+        // Orphaned shm objects not covered by any manifest.
         // Pattern: tt_{h2d|d2h}_{pid}_{random}_{counter}
         pid_t shm_pid = pid_from_shm_name(name);
-        if (shm_pid > 0 && shm_pid != my_pid && !is_pid_alive(shm_pid)) {
-            stale_shm_names.push_back(name);
+        if (shm_pid > 0 && shm_pid != my_pid && !ShmResourceTracker::is_pid_alive(shm_pid)) {
+            scan.orphan_shm_names.push_back(name);
         }
     }
     closedir(dir);
+    return scan;
+}
 
-    // Clean up resources listed in stale manifests
-    for (const auto& [manifest, pid_reused] : stale_manifests) {
-        std::ifstream ifs(manifest);
-        std::string line;
-        while (std::getline(ifs, line)) {
-            if (line.starts_with("shm ")) {
-                std::string shm_name = line.substr(4);
-                if (shm_unlink(shm_name.c_str()) == 0) {
-                    log_info(LogMetal, "ShmResourceTracker: removed stale shm '{}'", shm_name);
-                }
-            } else if (line.starts_with("file ")) {
-                std::string file_path = line.substr(5);
-                if (std::remove(file_path.c_str()) == 0) {
-                    log_info(LogMetal, "ShmResourceTracker: removed stale file '{}'", file_path);
-                }
+void reap_stale_shm_resources(const StaleScan& scan) {
+    for (const auto& manifest : scan.manifests) {
+        for (const auto& shm_name : manifest.shm_names) {
+            if (shm_unlink(shm_name.c_str()) == 0) {
+                log_info(LogMetal, "ShmResourceTracker: removed stale shm '{}'", shm_name);
             }
         }
-        std::remove(manifest.c_str());
-        if (pid_reused) {
+        for (const auto& file_path : manifest.file_paths) {
+            if (std::remove(file_path.c_str()) == 0) {
+                log_info(LogMetal, "ShmResourceTracker: removed stale file '{}'", file_path);
+            }
+        }
+        // Remove the manifest only if it is still the file that was judged. The
+        // live holder of a reused pid may have reaped its predecessor and
+        // published its own manifest at this path in the meantime; that one
+        // must stay. (A republish between this stat and the remove is still
+        // possible in principle, but the window is a few instructions.)
+        struct stat st{};
+        if (::stat(manifest.path.c_str(), &st) != 0) {
+            continue;  // already gone
+        }
+        if (st.st_dev != manifest.dev || st.st_ino != manifest.ino) {
+            log_info(
+                LogMetal,
+                "ShmResourceTracker: stale manifest '{}' was republished by a live owner before it could be removed; "
+                "left in place",
+                manifest.path);
+            continue;
+        }
+        std::remove(manifest.path.c_str());
+        if (manifest.pid_reused) {
             log_info(
                 LogMetal,
                 "ShmResourceTracker: removed stale manifest '{}' (its pid now belongs to another process)",
-                manifest);
+                manifest.path);
         } else {
-            log_info(LogMetal, "ShmResourceTracker: removed stale manifest '{}'", manifest);
+            log_info(LogMetal, "ShmResourceTracker: removed stale manifest '{}'", manifest.path);
         }
     }
 
-    // Clean up orphaned shm objects not covered by any manifest
-    for (const auto& name : stale_shm_names) {
+    for (const auto& name : scan.orphan_shm_names) {
         std::string shm_name = "/" + name;
         if (shm_unlink(shm_name.c_str()) == 0) {
             log_info(LogMetal, "ShmResourceTracker: removed orphaned shm '{}'", shm_name);
         }
     }
 }
+
+void ShmResourceTracker::cleanup_stale_resources() { reap_stale_shm_resources(collect_stale_shm_resources()); }
 
 }  // namespace tt::tt_metal::distributed
