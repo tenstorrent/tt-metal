@@ -5,7 +5,7 @@
 // Trailer last so the same bytes double as the H2H arrival flag when forwarded.
 #pragma once
 
-#include <stdint.h>
+#include <cstdint>
 
 #include "hostdevcommon/uva.h"
 
