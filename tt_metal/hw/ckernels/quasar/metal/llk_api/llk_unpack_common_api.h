@@ -99,7 +99,6 @@ inline void llk_unpack_wait_for_dest_available() {
  * (SyncHalf) moves the unpack thread's section base to the other bank. Counterpart of @ref _llk_math_dest_section_done_
  * and @ref _llk_pack_dest_semaphore_section_done_.
  *
- * @tparam DEST_SYNC_MODE: In SyncHalf, flips the DEST section base to the other bank after the section, values = <SyncFull/SyncHalf>
  * @tparam EN_32BIT_DEST: Sizes the SyncHalf bank flip: bank-1 base at 256 rows when true, 512 when false (see
  *         @ref _update_dest_register_offset_). Must equal the value the pack thread passes to
  *         @ref _llk_sync_advance_dest_section_ for this op, or the two sides address different DEST halves (the two
@@ -107,10 +106,11 @@ inline void llk_unpack_wait_for_dest_available() {
  */
 template <bool EN_32BIT_DEST>
 inline void llk_unpack_dest_section_done() {
-    _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);
-    if constexpr (DEST_SYNC_MODE == DstSync::SyncHalf)
-    {
-        _llk_sync_advance_dest_section_<to_underlying(TriscID::Unpack), EN_32BIT_DEST, p_stall::UNPACK0>();
+    if constexpr (UnpackToDestEn) {
+        _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);
+        if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
+            _llk_sync_advance_dest_section_<to_underlying(TriscID::Unpack), EN_32BIT_DEST, p_stall::UNPACK0>();
+        }
     }
 }
 
