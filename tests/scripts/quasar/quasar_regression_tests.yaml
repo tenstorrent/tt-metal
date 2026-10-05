@@ -517,3 +517,9 @@ unit_tests_dispatch:
   - filter: "*QuasarDispatchSInstantiatedAndRunning*"
     config: 2x3_DISPATCH
     back2back: true
+
+unit_tests_llk:
+  - filter: "*TensixComputeMaxReduceWithIndices*"
+    config: 1x3
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
