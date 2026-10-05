@@ -113,9 +113,9 @@ void kernel_main() {
     for (uint32_t chunk = 0; chunk < num_full_chunks; ++chunk) {
         process_tiles(num_tiles_per_cycle);
     }
-    // Neither the default batch, min(8, shard tiles), nor the knob's n need divide a thread's share, so a
-    // remainder can be left. Dropping it would hang a NoC writer on credits that never arrive, or leave
-    // borrowed output tiles uncomputed. Mirrors kernels_dfb's compute kernel.
+    // The batch need not divide a thread's share, so a remainder can be left. Dropping it would hang a NoC
+    // writer on credits that never arrive, or leave borrowed output tiles uncomputed. Mirrors kernels_dfb's
+    // compute kernel.
     const uint32_t remainder = my_tiles % num_tiles_per_cycle;
     if (remainder > 0) {
         process_tiles(remainder);

@@ -17,6 +17,68 @@ simulator (~15 s/run, deterministic) with no transfer latency and no contention 
 happens. The *hardware emulator* is the closest thing to real behaviour we can get; it is available but far
 less accessible, so it is spent deliberately and rarely. **Never mix numbers from the two.**
 
+# ► Week of 2026-10-05 — F4 part 1: the fast paths are the rule, and the knobs are overrides
+
+## 1. TL;DR
+
+- **With every knob unset, the native factory runs the rule** (dchen: the best option by rule, no perf
+  measurement): 4 compute threads; where the operands move over the NoC, a reader thread per compute thread
+  and the writer threads the 6 DM cores leave (4,4,2); where all are borrowed, 1,4,1; DM batch 8 and compute
+  batch 8, in rings of 16 entries per thread. Before, unset meant 1,1,1, depth 2 and DM batch 1, with a
+  compute batch of 8 only when everything was borrowed at ring stride 1.
+- **The knobs stay, as overrides.** A set knob replaces only its own value. R and W follow the effective C,
+  so `TTNN_QSR_COMPUTE_THREADS=2` alone runs 2,2,2.
+- **`TTNN_QSR_NATIVE=1` alone now gives wrong output on most shapes**, by design: above ring stride 1 a
+  compute batch packs wrong until the pack path applies the ring stride per tile. On the 32x40 benchmark
+  896 of 1280 tiles are wrong. The flag stays opt-in. `TTNN_QSR_TILES_PER_CYCLE=1` runs the rule's program
+  with the compute batch at 1, and it is bit-exact.
+- **Verified** (slide 3): the native module 79 passed, 1 skipped and 11 strict expected failures, each wrong
+  on exactly its predicted tiles; 78 of 78 suite cases in both bit-exact configs and native off.
+
+---
+
+## 2. Design
+
+- **One function holds the rule**, `resolve_native_config(tuning, NativeMoves{inputs, output})`. The gate
+  checks the STRIDED ratio on the NoC path's values, and the factory resolves its program after the borrow
+  decision. Every message names each value's source: `dm_batch=8 (rule)`,
+  `entries_per_thread=8 (TTNN_QSR_ENTRIES_PER_THREAD)`. The settings line at startup does the same.
+- **Compute batching needs R <= C and W <= C.** A compute thread beside more DM threads owns several tile
+  counters of that ring, and a batch reads or fills one counter. On craq-sim 9f6314bf, R2C1W1 and R1C1W2 hung
+  at batch 8 and ran exact at batch 1. The rule gives 1 there, and a set batch above 1 there is refused. The
+  DM kernels have no such limit: they walk the counters in order.
+- **Routing at the rule's C = 4**: an L1-interleaved slice is borrowed only when 4 divides its tiles per bank,
+  else the op takes the NoC path; an L1 shard that 4 does not divide runs its last tiles in the tail rings.
+  Both behaviours existed at C = 4; only the default moved.
+- **Open: L1.** The NoC path's three rule rings take 384 KiB per cluster, against 12 KiB at the old default.
+  Nothing shrinks them yet, so a NoC-path op whose L1 buffers leave less room fails with "clash with L1
+  buffers".
+
+---
+
+## 3. Verification
+
+- **Tests predict their output.** A Python mirror of the rule and of the pack-stride defect gives each case
+  its wrong 32x32 tiles from its configuration: in-process tests from the invocation's knobs, the arms from
+  their own. A nonzero prediction makes the test a strict expected failure that passes only on exactly those
+  tile counts. Bit-exact arms set `TTNN_QSR_TILES_PER_CYCLE=1`, or 1,1,1, or one tile per transfer.
+- **RED** (craq-sim ad401613, old build, first version of the tests): 38 failed, 44 passed, 1 skipped,
+  exactly the tests that assert the rule. Examples: 1 Neo where the rule needs 4; exact output where the rule
+  predicts 896 wrong tiles. The guards and log cases added after review assert messages that only the new
+  code prints.
+- **GREEN** (ad401613): the native module 79 passed, 1 skipped, 11 strict expected failures native ON, and
+  1 / 90 OFF; 78 of 78 suite cases with the rule's threads at compute batch 1, with 1,1,1 at the rule's
+  batches, and native off; clang-tidy 0 findings, with a control that reported 1. On 9f6314bf, R2C1W1,
+  R1C1W2 and R4C2 under the rule ran exact over 288, 512 and 2080 tiles, and a set batch of 8 at R2C1 was
+  refused.
+- **code-review-tt**: request changes, then approve after a second pass. Applied: the compute batch rule
+  above, exact tile counts in place of a 1-point element tolerance, tests for the DM-core limit (a set W,
+  and a set R that leaves no DM core for a writer), a device check that a borrowed program ignores set
+  reader and writer counts, the writer rule `min(C, 6 - R)`, and pre-commit fixes. Open: the L1 fit
+  (slide 2), for dchen.
+
+---
+
 # ► Week of 2026-09-29, part 2 — DRAM-sharded operands run on the native NoC path
 
 ## 1. TL;DR

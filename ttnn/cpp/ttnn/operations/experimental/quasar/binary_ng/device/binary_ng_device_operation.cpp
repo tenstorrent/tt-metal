@@ -751,10 +751,12 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     if (out_spec.padded_shape().volume() == 0 || attributes.worker_grid.num_cores() == 0) {
         return false;
     }
-    // Mirrors dataflow_buffer.cpp's two directional STRIDED asserts; reject rather than trip them.
+    // Mirrors dataflow_buffer.cpp's two directional STRIDED asserts; reject rather than trip them. The counts
+    // are the NoC path's, the most DM threads a program runs. The rule's values always pass, so only a set R or
+    // W beside the compute count can fail.
+    const NativeConfig noc = resolve_native_config(tuning, {.inputs = true, .output = true});
     const auto ratio_ok = [](uint32_t p, uint32_t c) { return std::max(p, c) % std::min(p, c) == 0; };
-    return ratio_ok(tuning.reader_threads, tuning.compute_threads) &&
-           ratio_ok(tuning.compute_threads, tuning.writer_threads);
+    return ratio_ok(noc.reader_threads, noc.compute_threads) && ratio_ok(noc.compute_threads, noc.writer_threads);
 }
 
 BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_program_factory(

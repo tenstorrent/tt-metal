@@ -76,6 +76,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <variant>
@@ -464,9 +465,11 @@ ProgramArtifacts create_no_bcast_artifacts(
         is_scalar);
     const std::optional<Tensor>& b_opt = tensor_args.input_tensor_b;
 
-    // Tuned thread counts and ring depth: the same cached instance matches_quasar_native_slice gated on.
-    // A borrowed program runs one reader and one writer thread; see the thread counts below.
+    // The knobs: the same cached instance matches_quasar_native_slice gated on. Every knob left unset takes the
+    // rule's value for what this program moves (resolve_native_config). The compute count is the same on
+    // both paths, and the borrow decision needs it first.
     const NativeTuning& t = native_tuning();
+    const uint32_t compute_threads = native_compute_threads(t);
 
     const bool is_sfpu = op.is_sfpu;
     const DataType input_dtype = op.input_dtype;
@@ -497,7 +500,7 @@ ProgramArtifacts create_no_bcast_artifacts(
     // All three L1-interleaved: each core borrows its bank's slice of every tensor instead.
     const std::optional<uint32_t> interleaved_tiles =
         (borrow_shards || is_scalar) ? std::nullopt
-                                     : l1_interleaved_borrow_tiles(a, *b_opt, c, op.worker_grid, t.compute_threads);
+                                     : l1_interleaved_borrow_tiles(a, *b_opt, c, op.worker_grid, compute_threads);
     const bool borrow = borrow_shards || interleaved_tiles.has_value();
     // Tile count of every core on the borrow path: its full shard, or its bank's slice.
     const uint32_t borrowed_tiles = borrow_shards ? *shard_volumes->c_shard_volume : interleaved_tiles.value_or(0u);
@@ -506,11 +509,12 @@ ProgramArtifacts create_no_bcast_artifacts(
     const bool b_borrowed = borrow;
     const bool c_borrowed = borrow;
 
-    // Thread counts for this program. A borrowed operand moves nothing through the reader or writer, so each
-    // runs one thread, and the compute always runs the tuned count: both ring strides then equal it.
-    const uint32_t reader_threads = borrow ? 1u : t.reader_threads;
-    const uint32_t compute_threads = t.compute_threads;
-    const uint32_t writer_threads = borrow ? 1u : t.writer_threads;
+    // The values this program runs with. A borrowed operand moves nothing through the reader or writer, so
+    // each runs one thread there, and the compute runs its count on both paths: both borrowed ring strides
+    // then equal it.
+    const NativeConfig cfg = resolve_native_config(t, {.inputs = !a_borrowed || !b_borrowed, .output = !c_borrowed});
+    const uint32_t reader_threads = cfg.reader_threads;
+    const uint32_t writer_threads = cfg.writer_threads;
     // A borrowed ring must divide by the compute count, so, until the DFB can give each tile counter its own
     // capacity, the tiles past its largest multiple go through three owned tail rings of one entry per
     // compute thread. A shard smaller than the count has no borrowed ring: all of it uses the tail rings.
@@ -520,16 +524,12 @@ ProgramArtifacts create_no_bcast_artifacts(
     if (borrow) {
         log_debug(
             tt::LogOp,
-            "binary_ng Quasar-native: a borrowed {} of {} tiles runs R={} C={} W={} (tuned {},{},{}), {} in the "
-            "tail rings",
+            "binary_ng Quasar-native: a borrowed {} of {} tiles runs R={} C={} W={}, {} in the tail rings",
             borrow_shards ? "shard" : "L1-interleaved slice",
             borrowed_tiles,
             reader_threads,
             compute_threads,
             writer_threads,
-            t.reader_threads,
-            t.compute_threads,
-            t.writer_threads,
             tail_tiles);
     }
 
@@ -634,13 +634,11 @@ ProgramArtifacts create_no_bcast_artifacts(
     const bool op_has_exp =
         op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::LOGADDEXP2;
 
-    // --- num_tiles_per_cycle: DST register capacity per tile_regs_acquire (mirrors the descriptor
-    // factory + the shipped factory's min(.,shard_tiles) cap). The default batches only when EVERY
-    // operand is borrowed AND both rings have stride 1. A borrowed ring is the shard or slice, walked exactly
-    // once, so a batch never wraps and only the capacity bounds it; but the pack path spaces a batch by
-    // one entry rather than by the ring stride, so above stride 1 the default stays 1 (the knob below
-    // may override it at any stride). Any NoC-read operand uses a derived ring, so the default chunk
-    // size is 1 there too. SFPU uses 2 (double-DST stride), FPU uses 8. ---
+    // --- num_tiles_per_cycle: tiles per tile_regs_acquire, which the DST capacity bounds; the rule's 8 is all
+    // of it in bf16. Neither batch has to divide a thread's share: the kernels run a short last batch. A
+    // borrowed ring is the shard or slice, walked once, so a batch there never wraps, and the ring holds the
+    // thread's whole share. But the pack path spaces a batch by one entry rather than by the ring stride, so
+    // above stride 1 the output is wrong; see the warning below. ---
     // in0/in1 endpoints are (R, C); out endpoints are (C, W).
     const uint32_t in_producers_consumers = std::max(reader_threads, compute_threads);
     const uint32_t out_producers_consumers = std::max(compute_threads, writer_threads);
@@ -651,48 +649,43 @@ ProgramArtifacts create_no_bcast_artifacts(
     // slots is in bounds and never reaches the logical output. The borrowed rings hold the first
     // c_main_tiles of it, and the tail rings the rest.
     const uint32_t c_main_tiles = borrowed_tiles - tail_tiles;
-    uint32_t num_tiles_per_cycle = 1;
-    if (all_borrowed && ring_stride_one) {
-        num_tiles_per_cycle = std::min<uint32_t>(is_sfpu ? 2u : 8u, c_main_tiles);
-    }
-    // EXPERIMENTAL (TTNN_QSR_TILES_PER_CYCLE): batch the NoC path, or a borrowed ring above stride 1, which
-    // the default above does not. Capacity is one hard bound -- wait_front(n) never completes if n exceeds
-    // it -- so check it here rather than letting the op hang. A borrowed ring is the shard or slice, walked
-    // once, so it has no double-buffer or wrap condition to check.
-    if (t.tiles_per_cycle != 0) {
-        num_tiles_per_cycle = t.tiles_per_cycle;
-    }
-    if (t.tiles_per_cycle != 0 && !all_borrowed) {
-        TT_FATAL(
-            t.entries_per_thread >= 2 * num_tiles_per_cycle,
-            "TTNN_QSR_TILES_PER_CYCLE={} needs TTNN_QSR_ENTRIES_PER_THREAD >= {} for double buffering, got {}",
-            num_tiles_per_cycle,
-            2 * num_tiles_per_cycle,
-            t.entries_per_thread);
-        TT_FATAL(
-            t.entries_per_thread % num_tiles_per_cycle == 0,
-            "TTNN_QSR_TILES_PER_CYCLE={} must divide TTNN_QSR_ENTRIES_PER_THREAD={}, or a batch straddles the ring end",
-            num_tiles_per_cycle,
-            t.entries_per_thread);
-    }
-    // Same capacity rule for the dataflow side: reserve_back(n) / wait_front(n) cannot complete if n
-    // exceeds per-thread capacity, which is entries_per_thread for these rings. The borrowed path builds
-    // none of them and never reads dm_batch.
+    const uint32_t num_tiles_per_cycle = cfg.tiles_per_cycle;
+    // Capacity rules for the NoC rings; the borrowed path builds none. reserve_back(n) and wait_front(n)
+    // cannot complete if n exceeds a thread's capacity, entries_per_thread, and the ring must hold two batches
+    // for double buffering, so check here rather than let the op hang. A batch occupies n consecutive slots
+    // from the write pointer and the ring wraps only AFTER the batch, so a batch that straddles the counter's
+    // end writes past it: the depth must be a multiple of the batch. The rule's values pass; a set knob may
+    // not, so each message names every value's source.
     if (!all_borrowed) {
+        const auto check_batch = [&](std::string_view label, const NativeKnob& knob, uint32_t batch) {
+            TT_FATAL(
+                cfg.entries_per_thread >= 2 * batch,
+                "binary_ng Quasar-native: {}={} needs entries_per_thread >= {} for double buffering, got "
+                "entries_per_thread={}",
+                label,
+                describe_native_value(knob, batch),
+                2 * batch,
+                describe_native_value(t.entries_per_thread, cfg.entries_per_thread));
+            TT_FATAL(
+                cfg.entries_per_thread % batch == 0,
+                "binary_ng Quasar-native: {}={} must divide entries_per_thread={}, or a batch straddles the ring end",
+                label,
+                describe_native_value(knob, batch),
+                describe_native_value(t.entries_per_thread, cfg.entries_per_thread));
+        };
+        check_batch("tiles_per_cycle", t.tiles_per_cycle, cfg.tiles_per_cycle);
+        check_batch("dm_batch", t.dm_batch, cfg.dm_batch);
+        // A compute thread beside more reader or writer threads owns several tile counters of that ring, and a
+        // compute batch reads or fills one counter: it takes the wrong tiles, or waits for tiles that never
+        // come. The rule gives 1 there; a set batch must be refused.
         TT_FATAL(
-            t.entries_per_thread >= 2 * t.dm_batch,
-            "TTNN_QSR_DM_BATCH={} needs TTNN_QSR_ENTRIES_PER_THREAD >= {} for double buffering, got {}",
-            t.dm_batch,
-            2 * t.dm_batch,
-            t.entries_per_thread);
-        // A batch occupies n consecutive slots from the write pointer and the ring wraps only AFTER the
-        // batch, so a batch that straddles the counter's end writes past it. The per-thread depth must be
-        // a multiple of the batch size to keep every batch inside the counter.
-        TT_FATAL(
-            t.entries_per_thread % t.dm_batch == 0,
-            "TTNN_QSR_DM_BATCH={} must divide TTNN_QSR_ENTRIES_PER_THREAD={}, or a batch straddles the ring end",
-            t.dm_batch,
-            t.entries_per_thread);
+            cfg.tiles_per_cycle == 1 || (reader_threads <= compute_threads && writer_threads <= compute_threads),
+            "binary_ng Quasar-native: tiles_per_cycle={} needs R <= C and W <= C, so that each compute thread "
+            "owns one tile counter of each ring, got R={} C={} W={}",
+            describe_native_value(t.tiles_per_cycle, cfg.tiles_per_cycle),
+            describe_native_value(t.reader_threads, reader_threads),
+            describe_native_value(t.compute_threads, compute_threads),
+            describe_native_value(t.writer_threads, writer_threads));
     }
 
     // --- DFB names. compute uses pre_lhs/pre_rhs/out (+post_lhs/post_rhs when activations); reader/
@@ -770,27 +763,31 @@ ProgramArtifacts create_no_bcast_artifacts(
     // capacity = num_entries / max(producers, consumers) is what reaches the credit register, so the
     // knob is PER-THREAD and num_entries is derived. A global depth is meaningless: depth 2 is illegal
     // at R=4 (must divide by max(R,C)) and depth 4 at R=C=4 gives capacity 1, i.e. no double buffering.
-    const uint32_t in_entries = t.entries_per_thread * in_producers_consumers;
-    const uint32_t out_entries = t.entries_per_thread * out_producers_consumers;
+    const uint32_t in_entries = cfg.entries_per_thread * in_producers_consumers;
+    const uint32_t out_entries = cfg.entries_per_thread * out_producers_consumers;
     // threshold and num_entries_per_txn_id are uint8_t with NO guard, and the only TT_FATAL there checks
     // divisibility, which 0 % anything == 0 passes. num_txn_ids falls back to 1 when no n in [2,4]
     // divides, so the cliff is at 255 entries -- not 510 as a "num_txn_ids >= 2" assumption would suggest.
     // Only the NoC path builds rings of these sizes.
     TT_FATAL(
         all_borrowed || (in_entries <= 255 && out_entries <= 255),
-        "binary_ng Quasar-native: num_entries must be <= 255 (unguarded uint8_t threshold), got in={} out={}",
+        "binary_ng Quasar-native: num_entries must be <= 255 (unguarded uint8_t threshold), got in={} out={} from "
+        "entries_per_thread={} x max(R,C)={} and x max(C,W)={}",
         in_entries,
-        out_entries);
+        out_entries,
+        describe_native_value(t.entries_per_thread, cfg.entries_per_thread),
+        in_producers_consumers,
+        out_producers_consumers);
     // num_tiles_per_cycle > 1 batches n tiles per reserve/push. The pack path steps the within-batch
     // tile index by one entry where the cursor converter divides by stride_size_tiles, so above stride 1
-    // a batch of n covers only ceil(n/stride) slots and the rest of its tiles are lost. Only the knob
-    // reaches this case; it runs, so that its timing can be measured, and says so.
+    // a batch of n covers only ceil(n/stride) slots and the rest of its tiles are lost. The rule's compute
+    // count of 4 reaches this case on both paths; it runs by the rule, and says so.
     if (num_tiles_per_cycle > 1 && !ring_stride_one) {
         log_warning(
             tt::LogOp,
-            "binary_ng Quasar-native: num_tiles_per_cycle {} above ring stride 1 (in: max(R,C)={}, out: "
+            "binary_ng Quasar-native: tiles_per_cycle={} above ring stride 1 (in: max(R,C)={}, out: "
             "max(C,W)={}) runs, but its output is WRONG until the pack path applies the ring stride per tile",
-            num_tiles_per_cycle,
+            describe_native_value(t.tiles_per_cycle, num_tiles_per_cycle),
             in_producers_consumers,
             out_producers_consumers);
     }
@@ -1014,7 +1011,7 @@ ProgramArtifacts create_no_bcast_artifacts(
         .compiler_options = {.defines = reader_defines_tbl},
         .dfb_bindings = reader_dfb_bindings,
         .tensor_bindings = reader_tensor_bindings,
-        .compile_time_args = {{"dm_batch", t.dm_batch}, {"num_tcs", reader_num_tcs}},
+        .compile_time_args = {{"dm_batch", cfg.dm_batch}, {"num_tcs", reader_num_tcs}},
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"start_tile_id",
@@ -1068,7 +1065,7 @@ ProgramArtifacts create_no_bcast_artifacts(
         .compiler_options = {.defines = writer_defines_tbl},
         .dfb_bindings = writer_dfb_bindings,
         .tensor_bindings = writer_tensor_bindings,
-        .compile_time_args = {{"dm_batch", t.dm_batch}, {"num_tcs", writer_num_tcs}},
+        .compile_time_args = {{"dm_batch", cfg.dm_batch}, {"num_tcs", writer_num_tcs}},
         .runtime_arg_schema = {.runtime_arg_names = writer_rt_names},
         .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
