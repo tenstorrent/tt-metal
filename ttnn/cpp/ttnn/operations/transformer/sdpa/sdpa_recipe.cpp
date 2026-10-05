@@ -172,7 +172,7 @@ ProgramDescriptor recipe_compute_program(
     }
     add_cb(14, q_tiles, state_bytes, state_format);
     if (fused) {
-        // CB 31: one row group's saturation check in the fused LOW_PRECISION chunks.
+        // CB 31: a check unit's saturation verdict tile in the fused chunks.
         add_cb(31, 1, 2048, tt::DataFormat::Float16_b);
         // CB 30: per Q tile row, QK-subblock-width partial row sums of the fused chunks.
         add_cb(30, q_tiles * recipe_subblock_width(k_tiles), 2048, tt::DataFormat::Float16_b);
