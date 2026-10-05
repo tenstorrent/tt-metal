@@ -40,6 +40,27 @@ bool supported_execution_controls(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<Tensor>& optional_output_tensor);
 
+// The shape the codegen dispatch scatters over: the caller's logical shape with the scatter axis
+// swapped to the last position (the pre-scatter transpose) and the rank padded up to 4, exactly as
+// pre_scatter_transform_tensor() shapes each operand. Shape-only, so routing can ask without
+// moving data.
+ttnn::Shape codegen_working_shape(const ttnn::Shape& logical_shape, int32_t dim);
+
+// Whether a TILE call takes the untilize -> per-stick ROW_MAJOR scatter -> tilize detour instead of
+// the TILE factory. The TILE factories split per-core work by tile row, so a low tile-row count
+// leaves most of the grid idle whatever the row width; below kRowMajorRerouteMaxHt the RM factory's
+// per-stick split reaches far more cores, provided the untilized stick is bounded, NOC-aligned and
+// fits L1. `working_input`/`working_index` are the operands' codegen_working_shape()s; the tensors
+// supply dtype, element size, device and placement, none of which the transpose changes. The one
+// definition both the dispatch and is_demoted() read: a case this detour serves never pays the
+// TILE factories' padded-row cost that is_demoted() otherwise guards against.
+bool prefers_row_major_strategy(
+    const Tensor& input_tensor,
+    const Tensor& index_tensor,
+    const Tensor& src_tensor,
+    const ttnn::Shape& working_input,
+    const ttnn::Shape& working_index);
+
 // Perf gate consulted only by ttnn::scatter()'s routing, and only when supported_by_codegen() is
 // true: true means fall back to native despite codegen support. `dim` is the caller's raw
 // (pre-normalization) scatter axis, matching supported_by_codegen()'s convention.
