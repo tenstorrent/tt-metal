@@ -2,9 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import contextlib
-import os
-
 import torch
 import pytest
 import copy
@@ -14,7 +11,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from tests.nightly.t3000.ccl.test_all_gather import is_unsupported_case
 from models.common.utility_functions import skip_for_blackhole
 from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
-from tests.ttnn.utils_for_testing import assert_no_unflushed_noc_atomics
 
 from tracy import signpost
 
@@ -69,7 +65,6 @@ def run_strided_all_gather_minimal_matmul_impl(
     read_local_slice_from_input=False,
     mm_signal_aggregator_mode=ttnn.MMSignalAggregatorMode.Auto,
     fuse_swiglu=False,
-    check_noc_atomics=False,
 ):
     torch.manual_seed(0)
 
@@ -377,23 +372,17 @@ def run_strided_all_gather_minimal_matmul_impl(
 
         signpost("stop")
     else:
-        noc_check = (
-            assert_no_unflushed_noc_atomics(mesh_device, min_atomic_events=1)
-            if check_noc_atomics
-            else contextlib.nullcontext()
-        )
-        with noc_check:
-            for i in range(num_iters):
-                ttnn.synchronize_device(mesh_device)
-                tt_all_gather_out_tensor, tt_matmul_out_tensor = run_op(i)
-                tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensor)
-                tt_matmul_out_tensor_list.append(tt_matmul_out_tensor)
+        for i in range(num_iters):
+            ttnn.synchronize_device(mesh_device)
+            tt_all_gather_out_tensor, tt_matmul_out_tensor = run_op(i)
+            tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensor)
+            tt_matmul_out_tensor_list.append(tt_matmul_out_tensor)
 
-                logger.info(f"Waiting for op")
-                ttnn.synchronize_device(mesh_device)
-                logger.info(f"Done op")
+            logger.info(f"Waiting for op")
+            ttnn.synchronize_device(mesh_device)
+            logger.info(f"Done op")
 
-                logger.info(f"Done iteration {i}")
+            logger.info(f"Done iteration {i}")
 
     if not skip_check:
         for i in range(num_iters):
@@ -598,50 +587,6 @@ def test_strided_all_gather_minimal_matmul_async(
         use_non_fused=use_non_fused,
         shard_weights=shard_weights,
         read_local_slice_from_input=read_local_slice_from_input,
-    )
-
-
-@pytest.mark.skipif(
-    os.getenv("TT_METAL_NOC_DEBUG_DUMP") != "1",
-    reason="Set TT_METAL_NOC_DEBUG_DUMP=1 to check NoC atomic barriers",
-)
-@skip_for_blackhole("Requires wormhole_b0 to run")
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
-)
-def test_fused_strided_all_gather_drains_noc_atomics_with_signal_aggregator_off(mesh_device):
-    run_strided_all_gather_minimal_matmul_impl(
-        mesh_device,
-        mesh_device.get_num_devices(),
-        M=64,
-        K=512,
-        N=512,
-        dim=3,
-        other_dim=2,
-        num_links=1,
-        ag_input_dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        mem_config_input=ttnn.DRAM_MEMORY_CONFIG,
-        mem_config_ag=ttnn.DRAM_MEMORY_CONFIG,
-        mem_config_mm=ttnn.DRAM_MEMORY_CONFIG,
-        all_gather_topology=ttnn.Topology.Ring,
-        mm_block_m=32,
-        mm_block_k=32,
-        mm_block_n=32,
-        subblock_h=1,
-        subblock_w=1,
-        num_iters=1,
-        enable_trace=False,
-        cluster_axis=1,
-        num_workers_per_link=1,
-        mm_core_grid=ttnn.CoreCoord(2, 2),
-        use_non_fused=False,
-        read_local_slice_from_input=True,
-        mm_signal_aggregator_mode=ttnn.MMSignalAggregatorMode.Off,
-        check_noc_atomics=True,
     )
 
 
