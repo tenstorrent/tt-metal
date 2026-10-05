@@ -150,9 +150,29 @@ class EltwiseBinaryReuseDestGolden(EltwiseBinaryGolden):
         self.last_chain = chain
 
         flat_a, flat_b = src_a.reshape(-1), src_b.reshape(-1)
+        # The fold indexes inputs by block, so a short block would skip tiles
+        # or read past the end rather than fail.
+        if inner_dim <= 0 or output_tiles_in_block <= 0:
+            raise ValueError(
+                f"inner_dim and output_tiles_in_block must be positive, got "
+                f"{inner_dim} and {output_tiles_in_block}"
+            )
+        if flat_b.numel() != flat_a.numel():
+            raise ValueError(
+                f"operands differ in size: {flat_a.numel()} and {flat_b.numel()} "
+                f"datums"
+            )
+        input_tiles_in_block = inner_dim * output_tiles_in_block
+        datums_in_block = per_tile * input_tiles_in_block
+        if flat_a.numel() % datums_in_block:
+            raise ValueError(
+                f"{flat_a.numel()} input datums is not a whole number of "
+                f"{datums_in_block}-datum blocks (inner_dim={inner_dim} x "
+                f"output_tiles_in_block={output_tiles_in_block} tiles of "
+                f"{per_tile})"
+            )
         check_source_layout(flat_a.numel() // per_tile, geometry)
         tile_count_out = flat_a.numel() // (per_tile * inner_dim)
-        input_tiles_in_block = inner_dim * output_tiles_in_block
 
         packed: List[int] = []
         for out_tile in range(tile_count_out):
