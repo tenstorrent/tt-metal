@@ -141,7 +141,7 @@ inline void llk_unpack_A(
         local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx + tile_index;
     if constexpr (BType == BroadcastType::NONE) {
         if constexpr (unpack_to_dest) {
-            // Sync-free: the section handshake is in llk_unpack_wait_for_dest_available / llk_unpack_dest_section_done.
+            // Sync-free: section handshake is in llk_unpack_wait_for_dest_available / llk_unpack_dest_section_done.
             _llk_unpack_unary_operand_to_dest_tile_(l1_tile_idx, dst_tile_index);
         } else {
             const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);

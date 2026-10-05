@@ -85,47 +85,6 @@ inline void _llk_unpack_unary_operand_to_dest_init_(const std::uint32_t buf_desc
 }
 
 /**
- * @brief Wait until a DEST bank is free for the unpack thread to write: unpack-to-dest section begin.
- *
- * Unpack side of the DEST section handshake, the counterpart of @ref _llk_math_wait_for_dest_available_ and
- * @ref _llk_packer_wait_for_math_done_. Math is the middleman with two semaphores of max N (1 in SyncFull, 2 in
- * SyncHalf): UNPACK_MATH counts sections unpacked but not yet committed by math, MATH_PACK counts sections committed
- * but not yet released by pack. Waiting on both keeps unpack within N sections of pack.
- *
- * @note One call per section, paired with one @ref _llk_unpack_dest_section_done_. The section is the unit on all
- *       three threads: however many tiles the section holds, each thread posts or gets once.
- * @note In SyncHalf the per-semaphore wait still admits UNPACK_MATH = 1 and MATH_PACK = 1 at once, i.e. a third section
- *       into a two-bank DEST (tt-metal #58903). A DEST occupancy count that unpack posts and pack gets closes that.
- */
-inline void _llk_unpack_wait_for_dest_available_()
-{
-    _llk_sync_wait_<p_stall::STALL_UNPACK, p_stall::STALL_ON_MAX>(semaphore::MATH_PACK, semaphore::UNPACK_MATH);
-}
-
-/**
- * @brief Hand the current DEST section to math: unpack-to-dest section end.
- *
- * Posts UNPACK_MATH once UNPACK0 has drained, so the post cannot overtake the DEST writes math and pack will read, then
- * (SyncHalf) moves the unpack thread's section base to the other bank. Counterpart of @ref _llk_math_dest_section_done_
- * and @ref _llk_pack_dest_semaphore_section_done_.
- *
- * @tparam DEST_SYNC_MODE: In SyncHalf, flips the DEST section base to the other bank after the section, values = <SyncFull/SyncHalf>
- * @tparam EN_32BIT_DEST: Sizes the SyncHalf bank flip: bank-1 base at 256 rows when true, 512 when false (see
- *         @ref _update_dest_register_offset_). Must equal the value the pack thread passes to
- *         @ref _llk_sync_advance_dest_section_ for this op, or the two sides address different DEST halves (the two
- *         calls live in different TRISC TUs, so no static_assert can compare them). values = <true/false>
- */
-template <DstSync DEST_SYNC_MODE, bool EN_32BIT_DEST>
-inline void _llk_unpack_dest_section_done_()
-{
-    _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);
-    if constexpr (DEST_SYNC_MODE == DstSync::SyncHalf)
-    {
-        _llk_sync_advance_dest_section_<to_underlying(TriscID::Unpack), EN_32BIT_DEST, p_stall::UNPACK0>();
-    }
-}
-
-/**
  * @brief Unpacks one tile of a single operand directly into the math DEST register at dst_tile_idx of the current
  *        section. No synchronization.
  *

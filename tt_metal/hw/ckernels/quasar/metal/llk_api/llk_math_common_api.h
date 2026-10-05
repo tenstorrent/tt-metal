@@ -126,8 +126,6 @@ inline void llk_math_wait_for_dest_available() {
     if constexpr (UnpackToDestEn) {
         _llk_sync_wait_<p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(
             semaphore::UNPACK_MATH);
-        // No get here: the section stays counted in UNPACK_MATH until llk_math_dest_section_done has posted MATH_PACK,
-        // so the unpacker's wait-on-max never sees both semaphores at zero while math still works on DEST (#58892).
     }
 }
 
@@ -146,8 +144,7 @@ inline void llk_math_dest_section_done() {
     // no-real-work unpack-to-dest forwarder.
     _llk_sync_post_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::MATH_PACK);
     if constexpr (UnpackToDestEn) {
-        // Release the unpacked section only now that MATH_PACK counts it, see llk_math_wait_for_dest_available
-        // (#58892).
+        // Release unpacked section only MATH_PACK counts it, see llk_math_wait_for_dest_available (#58892).
         _llk_sync_get_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::UNPACK_MATH);
     }
     if constexpr (DST_SYNC_MODE == DstSync::SyncHalf && !UnpackToDestEn) {
