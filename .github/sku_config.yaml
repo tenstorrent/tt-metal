@@ -135,6 +135,13 @@ skus:
       - pipeline-perf
     weights-cache-mode: local-disk
 
+  # Temporary single-host pin for host-bound runtime perf cases, which differ across the bh_p150_perf machines.
+  bh_p150_perf_gh04:
+    runs_on:
+      - in-service
+      - yyzo-bh-gh04
+    weights-cache-mode: local-disk
+
   bh_loudbox:
     runs_on:
       - in-service
