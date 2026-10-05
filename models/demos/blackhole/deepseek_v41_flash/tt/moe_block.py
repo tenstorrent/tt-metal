@@ -199,6 +199,8 @@ class DSV41MoEBlock:
         outputs cannot fit in it, the semaphore can.
         """
         md = self.mesh_device
+        if __import__("os").environ.get("DSV41_UNI_NODECODE") == "1":
+            return  # prefill-only unified mode: no moe_compute weights, nothing to compile
         nb = ttnn.get_memory_view(md, ttnn.BufferType.L1).num_banks
         tile_row = lambda n_tiles_per_bank: ttnn.empty(
             [1, 1, 32, 32 * nb * n_tiles_per_bank],

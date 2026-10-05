@@ -130,8 +130,24 @@ def test_unified_moe(mesh_device):
         ]
         print(f"UM debug: all-gather hidden mismatching devices: {len(badd)} {badd[:8]}", flush=True)
         sc_, ix_ = route(blk.gate, h, COLS * n_own)
-        sc2, ix2, _ = route_cols(blk.gate, xod, h, mc, ccl, mode="own")
+        dbg = []
+        sc2, ix2, _ = route_cols(blk.gate, xod, h, mc, ccl, mode="own", dbg=dbg)
         ttnn.synchronize_device(md)
+        pk_, pg_ = dbg
+        exp = torch.zeros(ROWS, COLS * n_own, 12)
+        for r in range(ROWS):
+            exp[r, :, :6] = dev(ix_, r, 0).float().reshape(-1, TOPK)
+            exp[r, :, 6:] = dev(sc_, r, 0).float().reshape(-1, TOPK)
+        for r in range(ROWS):
+            for c in (0, 5):
+                got = dev(pg_, r, c).float().reshape(-1, 12)
+                bad_pg = (got != exp[r]).any(1).nonzero().flatten()
+                # the own block of this device must also match its own pack
+                own_pk = dev(pk_, r, c).float().reshape(-1, 12)
+                print(
+                    f"UM debug: packed AG dev ({r},{c}): rows differing from full-route expectation {len(bad_pg)} {bad_pg[:6].tolist()}; own pack vs full-route rows {int((own_pk != exp[r, c * n_own : (c + 1) * n_own]).any(1).sum())}",
+                    flush=True,
+                )
         for r in range(ROWS):
             for c in (0, 5):
                 a_, b_ = dev(ix_, r, c).long().reshape(-1, TOPK), dev(ix2, r, c).long().reshape(-1, TOPK)

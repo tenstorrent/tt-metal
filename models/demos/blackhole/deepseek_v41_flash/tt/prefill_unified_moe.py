@@ -331,12 +331,12 @@ def reduce_scatter_tokens(part, cc, piece=None):
     return out
 
 
-def route_cols(gate, hh_own, h, mc, cc, mode=None):
+def route_cols(gate, hh_own, h, mc, cc, mode=None, dbg=None):
     """Routing of the gathered rows h [1,1,8n,D] (row order [column][own chunk][32]) -> (weights [8n,1,1,k] bf16 RM, indices [8n,1,1,k] uint16 RM, tensors to free).
     mode "full": router on every gathered row (8x the router work); "own": router on the own rows hh_own only + all-gather of the (fp32 packed) routing.
     """
     n, D = hh_own.shape[2], hh_own.shape[3]
-    mode = os.environ.get("DSV41_UNI_ROUTE", "full") if mode is None else mode
+    mode = os.environ.get("DSV41_UNI_ROUTE", "own") if mode is None else mode
     if mode == "full":
         N = h.shape[2]
         parts = [gate.forward(ttnn.slice(h, [0, 0, 32 * i, 0], [1, 1, 32 * (i + 1), D])) for i in range(N // 32)]
@@ -351,22 +351,23 @@ def route_cols(gate, hh_own, h, mc, cc, mode=None):
     ix = ttnn.concat([p_[1] for p_ in parts], dim=0) if len(parts) > 1 else parts[0][1]
     f32 = lambda a: ttnn.typecast(ttnn.to_layout(ttnn.reshape(a, [1, 1, n, TOPK]), ttnn.TILE_LAYOUT), ttnn.float32)
     ixf, scf = f32(ix), f32(sc)
-    pk = ttnn.concat([ixf, scf], dim=3)  # fp32 tile [1,1,n,12]: expert ids (exact in fp32) | weights (bf16 values)
-    pg = mc.allgather(pk, cc, axis=1, dim=2)  # [1,1,8n,12]
+    pk_t = ttnn.concat([ixf, scf], dim=3)  # fp32 tile [1,1,n,12]: expert ids (exact in fp32) | weights (bf16 values)
+    # narrow tensors (<= 1 tile wide) are corrupted by the all-gather (blocks of 32 rows go missing): gather wide row-major pages instead,
+    # 32 tokens x 12 values = 384 fp32 per page (n is a multiple of 32)
+    pk = ttnn.reshape(ttnn.to_layout(pk_t, ttnn.ROW_MAJOR_LAYOUT), [1, 1, n // 32, 32 * 2 * TOPK])
+    pg_w = mc.allgather(pk, cc, axis=1, dim=2)  # [1,1,8n/32,384]
+    if dbg is not None:
+        dbg.extend([pk, pg_w])
+    pg = ttnn.reshape(pg_w, [1, 1, COLS * n, 2 * TOPK])
     ix_all = ttnn.reshape(
-        ttnn.to_layout(
-            ttnn.typecast(ttnn.slice(pg, [0, 0, 0, 0], [1, 1, COLS * n, TOPK]), ttnn.uint16), ttnn.ROW_MAJOR_LAYOUT
-        ),
-        [COLS * n, 1, 1, TOPK],
+        ttnn.typecast(ttnn.slice(pg, [0, 0, 0, 0], [1, 1, COLS * n, TOPK]), ttnn.uint16), [COLS * n, 1, 1, TOPK]
     )
     sc_all = ttnn.reshape(
-        ttnn.to_layout(
-            ttnn.typecast(ttnn.slice(pg, [0, 0, 0, TOPK], [1, 1, COLS * n, 2 * TOPK]), ttnn.bfloat16),
-            ttnn.ROW_MAJOR_LAYOUT,
-        ),
+        ttnn.typecast(ttnn.slice(pg, [0, 0, 0, TOPK], [1, 1, COLS * n, 2 * TOPK]), ttnn.bfloat16),
         [COLS * n, 1, 1, TOPK],
     )
-    return sc_all, ix_all, (sc, ix, ixf, scf, pk, pg)
+    pg = pk_t = pk = pg_w = None
+    return sc_all, ix_all, (sc, ix, ixf, scf)
 
 
 def moe_cols(um, gate, hh_own, mc, cc):
