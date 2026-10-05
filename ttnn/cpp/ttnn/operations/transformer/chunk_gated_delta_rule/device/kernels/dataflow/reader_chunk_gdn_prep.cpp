@@ -8,12 +8,14 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "chunk_gdn_handoff.hpp"
 
 constexpr uint32_t cb_q = 0, cb_k = 1, cb_v = 2, cb_g = 3, cb_beta = 4;
 constexpr uint32_t cb_eye = 5, cb_tril = 6, cb_ones = 7;
 // Three 32x32 WY-inverse quadrant masks (Qtl|Qbr|Q10) packed into one [1,1,32,96] tensor.
 // Loaded once into the cb_u slot (17), which the stable-form prep no longer uses.
 constexpr uint32_t cb_mask = 17;
+static_assert(cb_mask == gdn_handoff::kCbU, "mask CB index drifted from chunk_gdn_handoff.hpp");
 
 void kernel_main() {
     constexpr uint32_t Ct = get_compile_time_arg_val(0);
@@ -88,7 +90,7 @@ void kernel_main() {
     read_into(eye_acc, cb_eye, 0, cc, tb_f);
     read_into(tril_acc, cb_tril, 0, cc, tb_f);
     read_into(ones_acc, cb_ones, 0, cc, tb_f);
-    read_into(mask_acc, cb_mask, 0, 3, tb_f);  // Qtl, Qbr, Q10 (tiles 0,1,2)
+    read_into(mask_acc, cb_mask, 0, gdn_handoff::kMaskTiles, tb_f);  // Qtl, Qbr, Q10 (tiles 0,1,2)
 
     // Flat-v token-major read: fetch head hv's chunk c out of the flat [B,T,HV*V] tile grid
     // (row stride HV*Vt tiles, column offset hv*Vt), packing the [Ct,Vt] block contiguously into

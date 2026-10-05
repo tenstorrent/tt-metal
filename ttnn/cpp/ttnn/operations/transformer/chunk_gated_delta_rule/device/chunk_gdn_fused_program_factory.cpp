@@ -24,7 +24,7 @@
 // Handshake: receiver (h, v) reserves its 7 slots for chunk c, resets its VALID word,
 // then atomically increments credit[h] on the producer that owns chunk c. That producer sends only
 // at credit[h] == NV, resets the word, writes, waits for the write ACKS (a flush proves departure
-// only), then multicasts VALID to the rectangle. The credit words are BH plain L1 words in the last
+// only), then multicasts VALID to the rectangle. The credit words are BH x nbuf plain L1 words in the last
 // tile of the u/mask CB, which is declared on the UNION of both core sets so it has one address on
 // every core; because dispatch re-initializes only Semaphore objects per launch, each producer zeroes
 // its words at start and bumps the `init` semaphore on its receivers, which wait for all NP before
@@ -46,6 +46,7 @@
 
 #include "chunk_gdn_device_operation.hpp"
 #include "chunk_gdn_compute_config.hpp"
+#include "kernels/dataflow/chunk_gdn_handoff.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -57,6 +58,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <hostdevcommon/common_values.hpp>
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
@@ -66,14 +68,15 @@ namespace ttnn::prim {
 // CB index plan — kept in sync with the prep/scan compute + dataflow kernels (post-renumber).
 // Uniquely named (fcb) so it does not ODR-clash with the phased factory's pcb:: under unity builds.
 namespace fcb {
-// The 7 hand-off CBs: prep OUTPUT index == scan INPUT index (that identity is the whole design).
-constexpr uint32_t Tinv = tt::CBIndex::c_13;    // t_inv
-constexpr uint32_t vbeta = tt::CBIndex::c_14;   // v_beta
-constexpr uint32_t nkd = tt::CBIndex::c_18;     // nkd (prep's cb_w)
-constexpr uint32_t qdecay = tt::CBIndex::c_19;  // q_decay
-constexpr uint32_t intra = tt::CBIndex::c_20;   // intra
-constexpr uint32_t dl = tt::CBIndex::c_22;      // dl (1 tile; prep aliases its cb_vnew slot)
-constexpr uint32_t kdec_t = tt::CBIndex::c_24;  // k_dec_t
+// The 7 hand-off CBs: prep OUTPUT index == scan INPUT index (that identity is the whole design). The values
+// come from kernels/dataflow/chunk_gdn_handoff.hpp, which every GDN kernel static_asserts against.
+constexpr uint32_t Tinv = gdn_handoff::kCbTinv;      // t_inv
+constexpr uint32_t vbeta = gdn_handoff::kCbVbeta;    // v_beta
+constexpr uint32_t nkd = gdn_handoff::kCbNkd;        // nkd (prep's cb_w)
+constexpr uint32_t qdecay = gdn_handoff::kCbQdecay;  // q_decay
+constexpr uint32_t intra = gdn_handoff::kCbIntra;    // intra
+constexpr uint32_t dl = gdn_handoff::kCbDl;          // dl (1 tile; prep aliases its cb_vnew slot)
+constexpr uint32_t kdec_t = gdn_handoff::kCbKdecT;   // k_dec_t
 // Producer-only (prep) CBs — same indices/sizes/formats as the phased prep factory.
 constexpr uint32_t q = tt::CBIndex::c_0;
 constexpr uint32_t k = tt::CBIndex::c_1;
@@ -91,7 +94,7 @@ constexpr uint32_t kbeta = tt::CBIndex::c_15;
 // u: the prep's mask holder (3 tiles, pushed once, never popped) PLUS one trailing tile that holds the
 // BH producer-side credit words. Declared on the UNION so producers and receivers agree on its address
 // (receivers never touch the CB's data; they only compute the credit-word address from its base).
-constexpr uint32_t u = tt::CBIndex::c_17;
+constexpr uint32_t u = gdn_handoff::kCbU;
 constexpr uint32_t scr2 = tt::CBIndex::c_29;
 constexpr uint32_t scr3 = tt::CBIndex::c_30;
 // Shared-index CBs (producer and receiver both declare them, on their own disjoint core sets;
@@ -178,8 +181,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     // (1b) The u/mask CB, ALSO on the union: 3 mask tiles (prep reads them once) + 1 credit tile whose
     // BH x nbuf leading words are the producer-side credit counters credit[h][slot].
     // Union-declared so the receivers can address a producer's credit word from their own CB base.
-    const uint32_t u_tiles = 3 + 1;
-    const uint32_t credit_off_bytes = (u_tiles - 1) * tile_f32;
+    const uint32_t u_tiles = gdn_handoff::kMaskTiles + 1;
+    const uint32_t credit_off_bytes = gdn_handoff::kMaskTiles * tile_f32;
     add_cb(union_set, fcb::u, u_tiles);
 
     // (2) The remaining prep CBs on the PRODUCER cores only — the phased prep factory's sizes (scratch
@@ -235,13 +238,17 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     //                   CBs". One flag per hand-off slot lets a receiver keep nbuf-1 hand-offs in
     //                   flight. Consecutive ids => consecutive L1 words, so the kernels
     //                   address slot s as id (sem_valid_id + s). Program cap is 16 semaphores: nbuf <= 8.
-    constexpr uint32_t sem_ready_id = 0;
-    constexpr uint32_t sem_init_id = 1;
-    constexpr uint32_t sem_valid_id = 2;
-    TT_FATAL(sem_valid_id + kHandoffNbuf <= 16, "chunk_gdn_fused: nbuf {} needs too many semaphores", kHandoffNbuf);
+    constexpr uint32_t sem_ready_id = gdn_handoff::kFusedSemReady;
+    constexpr uint32_t sem_init_id = gdn_handoff::kFusedSemInit;
+    constexpr uint32_t sem_valid_id = gdn_handoff::kFusedSemValid;
+    TT_FATAL(
+        sem_valid_id + kHandoffNbuf <= gdn_handoff::kMaxSemaphores,
+        "chunk_gdn_fused: nbuf {} needs too many semaphores",
+        kHandoffNbuf);
+    // INVALID (0) is what the kernels assume at launch: dispatch rewrites it on every launch.
     for (uint32_t id = 0; id < sem_valid_id + kHandoffNbuf; id++) {
         desc.semaphores.push_back(SemaphoreDescriptor{
-            .id = id, .core_type = tt::CoreType::WORKER, .core_ranges = union_set, .initial_value = 0});
+            .id = id, .core_type = tt::CoreType::WORKER, .core_ranges = union_set, .initial_value = INVALID});
     }
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/";
@@ -268,7 +275,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     prep_compute_ct.push_back(std::bit_cast<uint32_t>(attrs.scale));
     prep_compute_ct.push_back(std::bit_cast<uint32_t>(1e-6f));
 
-    // Fused writer: plain scalars, no accessors (it writes no DRAM at all).
+    // Fused writer: plain scalars, no accessors (it writes no DRAM at all). Vtl is derived in the kernel from
+    // Vt and NV. The protocol tag is LAST; the kernel static_asserts on it (layout drift fails to compile).
     const std::vector<uint32_t> fused_writer_ct = {
         Ct,
         Kt,
@@ -277,17 +285,18 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         sem_init_id,
         kHandoffNbuf,
         NV,
-        Vtl,
         fcb::u,
         credit_off_bytes,
         attrs.unicast ? 1u : 0u,
-        attrs.posted ? 1u : 0u};
+        attrs.posted ? 1u : 0u,
+        gdn_handoff::kHandoffTag};
 
     // ---- Receiver-side CT args: the phased SCAN layout at the V-slice width, with Vt_full for strides ----
     const std::vector<uint32_t> ct_scan = {Ct, Kt, Vtl, Vt};
 
     // Fused-receiver reader: s0 is its ONLY DRAM tensor (chain of one accessor, starting at CT
-    // index 5), then the semaphore ids and the credit-word location as trailing args.
+    // index 4), then the semaphore ids and the credit-word location as trailing args, and the protocol tag
+    // LAST (the kernel static_asserts on it).
     std::vector<uint32_t> receiver_ct = ct_scan;
     TensorAccessorArgs(*in.initial_state.buffer()).append_to(receiver_ct);
     receiver_ct.push_back(sem_ready_id);
@@ -296,6 +305,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     receiver_ct.push_back(fcb::u);
     receiver_ct.push_back(credit_off_bytes);
     receiver_ct.push_back(kHandoffNbuf);
+    receiver_ct.push_back(gdn_handoff::kHandoffTag);
 
     std::vector<uint32_t> scan_writer_ct = ct_scan;
     TensorAccessorArgs(*outputs[0].buffer()).append_to(scan_writer_ct);

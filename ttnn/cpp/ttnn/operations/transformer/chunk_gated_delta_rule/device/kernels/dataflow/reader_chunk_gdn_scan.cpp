@@ -18,7 +18,7 @@
 //                        — arrive over the NoC from the producers' writers. This core is receiver
 //                        (h, vb) of NV per head: it carries V columns [vb*Vt, +Vt) (Vt = the slice
 //                        width, CT arg 2). Handshake per chunk: reserve the 7 CBs -> reset VALID ->
-//                        atomically increment credit[h] on the producer that owns the chunk
+//                        atomically increment credit[h][slot] on the producer that owns the chunk
 //                        (c % NP of this head) -> wait VALID -> push. The producer sends only once
 //                        all NV receivers have credited. A one-time init barrier (SEM_INIT) orders
 //                        the producers' zeroing of their credit words before any credit.
@@ -37,6 +37,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "chunk_gdn_handoff.hpp"
 
 #if defined(GDN_MCAST_SENDER) || defined(GDN_MCAST_RECEIVER) || defined(GDN_FUSED_RECEIVER)
 #include "api/core_local_mem.h"
@@ -53,12 +54,18 @@
 constexpr uint32_t cb_dl = 22, cb_S = 8, cb_Tinv = 13;
 constexpr uint32_t cb_eye = 5;  // one 32x32 fp32 identity tile for the compute's `I @ v_beta` accumulation
 constexpr uint32_t cb_vbeta = 14, cb_nkd = 18, cb_qdecay = 19, cb_intra = 20, cb_kdec_t = 24;
+static_assert(
+    cb_Tinv == gdn_handoff::kCbTinv && cb_vbeta == gdn_handoff::kCbVbeta && cb_nkd == gdn_handoff::kCbNkd &&
+        cb_qdecay == gdn_handoff::kCbQdecay && cb_intra == gdn_handoff::kCbIntra &&
+        cb_kdec_t == gdn_handoff::kCbKdecT && cb_dl == gdn_handoff::kCbDl,
+    "hand-off CB indices drifted from chunk_gdn_handoff.hpp");
 
 void kernel_main() {
     constexpr uint32_t Ct = get_compile_time_arg_val(0);
     constexpr uint32_t Kt = get_compile_time_arg_val(1);
     constexpr uint32_t Vt = get_compile_time_arg_val(2);       // per-core V-block width (tiles)
     constexpr uint32_t Vt_full = get_compile_time_arg_val(3);  // full V (tiles) for row stride
+    static_assert(Vt >= 1 && Vt_full % Vt == 0, "the V-block width must tile the full V width");
 
 #if defined(GDN_FUSED_RECEIVER)
     // Fused receivers touch DRAM only for s0; the accessor chain is a single block.
@@ -96,6 +103,35 @@ void kernel_main() {
     constexpr uint32_t CREDIT_OFF = get_compile_time_arg_val(s0_a.next_compile_time_args_offset() + 4);
     constexpr uint32_t NBUF = get_compile_time_arg_val(s0_a.next_compile_time_args_offset() + 5);  // hand-off slots
     (void)SEM_READY;  // superseded by the credit words on this variant
+    // The protocol tag is the LAST compile-time arg: a trailing-arg drift against the factory fails here.
+    static_assert(
+        s0_a.next_compile_time_args_offset() + 7 == kernel_compile_time_args.size() &&
+            get_compile_time_arg_val(s0_a.next_compile_time_args_offset() + 6) == gdn_handoff::kHandoffTag,
+        "reader_chunk_gdn_scan (fused receiver): compile-time arg layout drifted from "
+        "chunk_gdn_fused_program_factory.cpp");
+    // The producer's slot addressing assumes one tile size across the seven hand-off CBs (all fp32).
+    static_assert(
+        get_dataformat(cb_vbeta) == DataFormat::Float32 && get_dataformat(cb_Tinv) == DataFormat::Float32 &&
+            get_dataformat(cb_nkd) == DataFormat::Float32 && get_dataformat(cb_qdecay) == DataFormat::Float32 &&
+            get_dataformat(cb_intra) == DataFormat::Float32 && get_dataformat(cb_kdec_t) == DataFormat::Float32 &&
+            get_dataformat(cb_dl) == DataFormat::Float32,
+        "hand-off CBs must be fp32");
+    static_assert(
+        get_tile_size(cb_Tinv) == get_tile_size(cb_vbeta) && get_tile_size(cb_nkd) == get_tile_size(cb_vbeta) &&
+            get_tile_size(cb_qdecay) == get_tile_size(cb_vbeta) && get_tile_size(cb_intra) == get_tile_size(cb_vbeta) &&
+            get_tile_size(cb_kdec_t) == get_tile_size(cb_vbeta) && get_tile_size(cb_dl) == get_tile_size(cb_vbeta),
+        "hand-off CBs must share one tile size");
+    static_assert(
+        NBUF >= 1 && SEM_VALID + NBUF <= gdn_handoff::kMaxSemaphores,
+        "valid[slot] semaphore ids exceed the program's semaphore cap");
+    static_assert(
+        SEM_INIT < SEM_VALID || SEM_INIT >= SEM_VALID + NBUF, "init semaphore collides with a valid[slot] id");
+    static_assert(
+        SEM_READY != SEM_INIT && (SEM_READY < SEM_VALID || SEM_READY >= SEM_VALID + NBUF),
+        "ready semaphore collides with the init or a valid[slot] id");
+    static_assert(
+        CREDIT_OFF % 4 == 0 && CREDIT_OFF == gdn_handoff::kMaskTiles * get_tile_size(CB_CREDIT),
+        "credit words must sit in the tile behind the mask tiles of the u CB");
 #endif
 #endif
 
@@ -137,7 +173,7 @@ void kernel_main() {
     const uint32_t num_dests = get_arg_val<uint32_t>(15);  // NV-1; excludes the sender
 #endif
 
-    const uint32_t tb = get_tile_size(cb_vbeta);  // all inputs fp32 -> same tile size
+    constexpr uint32_t tb = get_tile_size(cb_vbeta);  // all inputs fp32 -> same tile size
 #if !defined(GDN_FUSED_RECEIVER)
     const auto vb_acc = TensorAccessor(vb_a, vb_addr, tb);
 #endif

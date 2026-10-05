@@ -22,7 +22,7 @@
 // slot for chunk c is base + ((c*Ct*Vtl) mod (cv*NBUF))*tile; row r of receiver v's slice is source
 // tiles [r*Vt + v*Vtl, +Vtl) of this core's front slot.
 //
-// Credit words: BH words at CB_CREDIT's base + CREDIT_OFF — the last tile of the
+// Credit words: BH x NBUF words credit[h][slot] at CB_CREDIT's base + CREDIT_OFF — the last tile of the
 // union-declared u/mask CB, hence the same L1 address on every core. Dispatch re-initializes only
 // Semaphore objects per launch, so this kernel zeroes the words itself and then bumps the SEM_INIT
 // semaphore on each of its receivers; a receiver credits nothing before all its producers have done so.
@@ -37,11 +37,16 @@
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "hostdevcommon/common_values.hpp"
+#include "chunk_gdn_handoff.hpp"
 
-// CB indices (prep compute's output slots == the scan side's hand-off slots;
-// must match chunk_gdn_prep.cpp, chunk_gdn_scan.cpp and the fused program factory).
+// CB indices (prep compute's output slots == the scan side's hand-off slots), checked against the shared map.
 constexpr uint32_t cb_Tinv = 13, cb_vbeta = 14, cb_nkd = 18, cb_qdecay = 19, cb_intra = 20;
 constexpr uint32_t cb_kdec_t = 24, cb_dl = 22;
+static_assert(
+    cb_Tinv == gdn_handoff::kCbTinv && cb_vbeta == gdn_handoff::kCbVbeta && cb_nkd == gdn_handoff::kCbNkd &&
+        cb_qdecay == gdn_handoff::kCbQdecay && cb_intra == gdn_handoff::kCbIntra &&
+        cb_kdec_t == gdn_handoff::kCbKdecT && cb_dl == gdn_handoff::kCbDl,
+    "hand-off CB indices drifted from chunk_gdn_handoff.hpp");
 
 void kernel_main() {
     constexpr uint32_t Ct = get_compile_time_arg_val(0);
@@ -51,14 +56,41 @@ void kernel_main() {
     constexpr uint32_t SEM_INIT = get_compile_time_arg_val(4);    // producer -> receivers: "credit words zeroed"
     constexpr uint32_t NBUF = get_compile_time_arg_val(5);        // hand-off CB depth (slots), from the factory
     constexpr uint32_t NV = get_compile_time_arg_val(6);          // receivers per head
-    constexpr uint32_t Vtl = get_compile_time_arg_val(7);         // per-receiver V-slice width (tiles)
-    constexpr uint32_t CB_CREDIT = get_compile_time_arg_val(8);   // union-declared CB holding the credit words
-    constexpr uint32_t CREDIT_OFF = get_compile_time_arg_val(9);  // byte offset of credit[0] in that CB
-    constexpr bool UNICAST = get_compile_time_arg_val(10) != 0;   // A/B: NV unicast writes instead of multicasts
+    constexpr uint32_t CB_CREDIT = get_compile_time_arg_val(7);   // union-declared CB holding the credit words
+    constexpr uint32_t CREDIT_OFF = get_compile_time_arg_val(8);  // byte offset of credit[0] in that CB
+    constexpr bool UNICAST = get_compile_time_arg_val(9) != 0;    // A/B: NV unicast writes instead of multicasts
     constexpr bool POSTED =
-        get_compile_time_arg_val(11) != 0;  // A/B (unicast only): posted data, ordered VALID, no barrier
+        get_compile_time_arg_val(10) != 0;  // A/B (unicast only): posted data, ordered VALID, no barrier
+    // The protocol tag is the LAST compile-time arg: a trailing-arg drift against the factory fails here.
+    static_assert(
+        kernel_compile_time_args.size() == 12 && kernel_compile_time_args.back() == gdn_handoff::kHandoffTag,
+        "writer_chunk_gdn_fused: compile-time arg layout drifted from chunk_gdn_fused_program_factory.cpp");
     static_assert(!POSTED || UNICAST, "posted hand-off requires the unicast transport");
-    static_assert(Vtl * NV == Vt, "NV receivers must tile the full V width");
+    // Derived, not passed: the only way a compile-time check can tell NV from Vtl.
+    static_assert(NV >= 1 && Vt % NV == 0, "NV receivers must tile the full V width");
+    constexpr uint32_t Vtl = Vt / NV;  // per-receiver V-slice width (tiles)
+    // The slot addressing assumes one tile size across the seven hand-off CBs (all fp32).
+    static_assert(
+        get_dataformat(cb_vbeta) == DataFormat::Float32 && get_dataformat(cb_Tinv) == DataFormat::Float32 &&
+            get_dataformat(cb_nkd) == DataFormat::Float32 && get_dataformat(cb_qdecay) == DataFormat::Float32 &&
+            get_dataformat(cb_intra) == DataFormat::Float32 && get_dataformat(cb_kdec_t) == DataFormat::Float32 &&
+            get_dataformat(cb_dl) == DataFormat::Float32,
+        "hand-off CBs must be fp32");
+    static_assert(
+        get_tile_size(cb_Tinv) == get_tile_size(cb_vbeta) && get_tile_size(cb_nkd) == get_tile_size(cb_vbeta) &&
+            get_tile_size(cb_qdecay) == get_tile_size(cb_vbeta) && get_tile_size(cb_intra) == get_tile_size(cb_vbeta) &&
+            get_tile_size(cb_kdec_t) == get_tile_size(cb_vbeta) && get_tile_size(cb_dl) == get_tile_size(cb_vbeta),
+        "hand-off CBs must share one tile size");
+    // One VALID semaphore per slot, none colliding with the init semaphore, all within the program's cap.
+    static_assert(
+        NBUF >= 1 && SEM_VALID + NBUF <= gdn_handoff::kMaxSemaphores,
+        "valid[slot] semaphore ids exceed the program's semaphore cap");
+    static_assert(
+        SEM_INIT < SEM_VALID || SEM_INIT >= SEM_VALID + NBUF, "init semaphore collides with a valid[slot] id");
+    // The credit words live in the tile behind the mask tiles of the u CB.
+    static_assert(
+        CREDIT_OFF % 4 == 0 && CREDIT_OFF == gdn_handoff::kMaskTiles * get_tile_size(CB_CREDIT),
+        "credit words must sit in the tile behind the mask tiles of the u CB");
 
     const uint32_t NC = get_arg_val<uint32_t>(0);   // GLOBAL chunk count of this head
     const uint32_t NP = get_arg_val<uint32_t>(1);   // producers for this head
@@ -80,7 +112,7 @@ void kernel_main() {
     constexpr uint32_t cvl = Ct * Vtl;       // a receiver's v_beta tiles per chunk
     constexpr uint32_t VB_RING = cv * NBUF;  // a receiver's v_beta ring, in tiles
 
-    const uint32_t tb = get_tile_size(cb_vbeta);  // all hand-off CBs are fp32 -> same tile size
+    constexpr uint32_t tb = get_tile_size(cb_vbeta);  // all hand-off CBs are fp32 -> same tile size (asserted above)
 
     Noc noc;
     UnicastEndpoint ucast_dst;  // unicast destination endpoint (VALID flags, unicast transport)
