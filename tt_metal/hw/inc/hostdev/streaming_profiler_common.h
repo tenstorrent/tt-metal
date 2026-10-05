@@ -22,6 +22,23 @@
 
 namespace kernel_profiler {
 
+template <typename T>
+constexpr std::uint32_t word_of(const T& value) {
+    static_assert(sizeof(T) == sizeof(std::uint32_t));
+    return __builtin_bit_cast(std::uint32_t, value);
+}
+template <typename T>
+constexpr T word_as(std::uint32_t word) {
+    static_assert(sizeof(T) == sizeof(std::uint32_t));
+    return __builtin_bit_cast(T, word);
+}
+constexpr std::uint64_t join_words(std::uint32_t hi, std::uint32_t lo) { return std::uint64_t{hi} << 32 | lo; }
+
+struct NocXy {
+    std::uint32_t x : 16;
+    std::uint32_t y : 16;
+};
+
 // ---- SPSC / drainer backend control-word layout ------------------------------------------------------
 // The drainer backend overlays its OWN layout on the same profiler control vector. It deliberately does not
 // reuse ControlBuffer's HOST_/DEVICE_BUFFER_END_INDEX_* slots, and deliberately derives nothing from
@@ -261,7 +278,7 @@ constexpr std::uint32_t spsc_span_frame_words(std::uint32_t payload_words) {
     return (n + SPSC_SPAN_PAGE_WORDS - 1u) & ~(SPSC_SPAN_PAGE_WORDS - 1u);
 }
 
-// ---- Clock sync: records, the sample ring and link ports ------------------------------------------------------------
+// ---- Clock sync: records, the sample ring, link ports and tile clock offsets ----------------------------------------
 
 constexpr std::uint32_t kEthRefclkHz = 50'000'000u;
 static_assert(1'000'000'000u % kEthRefclkHz == 0);
@@ -377,6 +394,45 @@ static_assert(kLinkSyncRingRecords <= kSyncFrameRecords);
 struct LinkSyncL1 {
     std::uint32_t slots[kLinkSyncSlotWords];
     alignas(32) SyncRecord ring[kLinkSyncRingRecords];
+};
+
+// The most tiles whose wall clocks one tile reads. The idle eth tile that reads its row's eth tiles over both NoCs
+// reads the most. It reads its row (13 eth tiles and up to 2 DRAM tiles) and its column (10 Tensix tiles), then the
+// row's 13 eth tiles again over the other NoC.
+constexpr std::uint32_t kTileSyncMaxPartners = 38;
+// The number of bins in the histogram a tile uses to find the median of its readings of one partner. Readings are kept
+// doubled, so each bin is half a tick wide. The bins are centred on the median of the warm-up readings. The median
+// stays exact as long as fewer than half the readings fall outside the bins, because a reading clamped into an edge bin
+// still counts toward its rank.
+constexpr std::uint32_t kTileSyncBins = 128;
+enum class TileSyncGo : std::uint32_t { Wait, Measure, Exit };
+// The progress a tile's kernel reports in TileSyncTable::ready. It writes Up once it is waiting for go, and Done once
+// its readings are in the table. Launched must be 0, because the host zeroes the table before launch.
+enum class TileSyncReady : std::uint32_t { Launched, Up, Done };
+
+struct TileSyncRead {
+    std::uint32_t x : 16;
+    std::uint32_t y : 15;
+    std::uint32_t noc : 1;
+};
+struct TileSyncPartner {
+    std::int64_t whole_difference;  // the partner's whole wall clock minus this tile's
+    // Twice the median, over all reps, of the partner's wall clock minus the midpoint of this tile's reads of its own
+    // clock just before and after the request. It uses only the low words, and whole_difference supplies the rest.
+    std::int32_t doubled_median;
+    std::uint32_t pad;
+};
+struct TileSyncTable {
+    TileSyncGo go;
+    TileSyncReady ready;
+    TileSyncPartner partner[kTileSyncMaxPartners];
+};
+struct TileSyncScratch {
+    // A read from a DRAM tile must land at the same offset within 64 B as its source address, so the landing area spans
+    // 64 B and every read lands at its source's offset in it.
+    std::uint32_t landing[16];
+    TileSyncTable table;
+    std::uint32_t hist[kTileSyncBins];
 };
 
 }  // namespace kernel_profiler
