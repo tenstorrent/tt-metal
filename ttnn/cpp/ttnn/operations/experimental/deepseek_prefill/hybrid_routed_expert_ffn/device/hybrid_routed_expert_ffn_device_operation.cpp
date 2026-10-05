@@ -4,7 +4,7 @@
 #include "hybrid_routed_expert_ffn_device_operation.hpp"
 
 #include "hybrid_program_factory.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_device_operation.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_device_operation.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn {
 

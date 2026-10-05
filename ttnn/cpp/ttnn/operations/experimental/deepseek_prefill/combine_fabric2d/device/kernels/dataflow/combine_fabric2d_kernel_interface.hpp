@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/combine_fabric2d_chunk.hpp"
+#include "combine_fabric2d_chunk.hpp"
 
 // What both kernel roles and the host agree on: the wire format of a ring slot's forwarding metadata, the
 // sizes the compile-time arguments are built from, and the host-side geometry the two argument structs are
