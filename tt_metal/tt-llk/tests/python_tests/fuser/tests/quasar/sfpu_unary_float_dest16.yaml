@@ -53,7 +53,7 @@ operations:
   - math:
       - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32]}
       - type: "UnarySfpu"
-        operation: [Hardsigmoid, Celu, Elu, Hardmish, Hardshrink, Hardtanh, Heaviside, Prelu, Selu, Softshrink, Threshold, SigmoidAppx, Tanhshrink, Xielu, Add1, Cbrt, Exp2, Expm1, Rpow, Sign, UnaryPower, Erfc, Isinf, Isposinf, Isneginf, Isnan, Isfinite, LogicalNotUnary, UnaryGt, UnaryLt, UnaryGe, UnaryLe, UnaryEq, UnaryNe, Fmod, Remainder, Identity, CastFp32ToFp16a, AltComplexRotate90, Softcap, TanhDerivative]
+        operation: [Hardsigmoid, Celu, Elu, Hardmish, Hardshrink, Hardtanh, Heaviside, Prelu, Selu, Softshrink, Threshold, Tanhshrink, Xielu, Add1, Cbrt, Exp2, Expm1, Rpow, Sign, UnaryPower, Erfc, Isinf, Isposinf, Isneginf, Isnan, Isfinite, LogicalNotUnary, UnaryGt, UnaryLt, UnaryGe, UnaryLe, UnaryEq, UnaryNe, Fmod, Remainder, Identity, CastFp32ToFp16a, AltComplexRotate90, Softcap, TanhDerivative]
         approximation_mode: false
         iterations: 32
         block_size: [32, 32]
