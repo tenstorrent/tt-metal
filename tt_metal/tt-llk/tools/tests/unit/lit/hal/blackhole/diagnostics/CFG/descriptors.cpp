@@ -2,7 +2,44 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -fsyntax-only %s
+// clang-format off
+// RUN: %split-file %s %t
+// RUN: %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/valid.cpp
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/invalid-section.cpp 2>&1 | FileCheck %s --check-prefix=SECTION
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/word-addr-section.cpp 2>&1 | FileCheck %s --check-prefix=SECTION
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/invalid-value.cpp 2>&1 | FileCheck %s --check-prefix=VALUE
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/packer.cpp 2>&1 | FileCheck %s --check-prefix=PACKER
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/packer-addr-ctrl.cpp 2>&1 | FileCheck %s --check-prefix=PACKER_ADDR_CTRL
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/packer-addr-base.cpp 2>&1 | FileCheck %s --check-prefix=PACKER_ADDR_BASE
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/unpacker.cpp 2>&1 | FileCheck %s --check-prefix=UNPACKER
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/unpacker-addr-ctrl.cpp 2>&1 | FileCheck %s --check-prefix=UNPACKER_REG
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/unpacker-addr-base.cpp 2>&1 | FileCheck %s --check-prefix=UNPACKER_REG
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/context-unpacker-0.cpp 2>&1 | FileCheck %s --check-prefix=CONTEXT
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/context-unpacker-1.cpp 2>&1 | FileCheck %s --check-prefix=CONTEXT
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/row-set-mapping.cpp 2>&1 | FileCheck %s --check-prefix=ROW_MAPPING
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/row-set-set.cpp 2>&1 | FileCheck %s --check-prefix=ROW_SET
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/face-set-mapping.cpp 2>&1 | FileCheck %s --check-prefix=FACE_MAPPING
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/face-set-set.cpp 2>&1 | FileCheck %s --check-prefix=FACE_SET
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/perf-counter.cpp 2>&1 | FileCheck %s --check-prefix=PERF_COUNTER
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/perf-counter-make.cpp 2>&1 | FileCheck %s --check-prefix=PERF_COUNTER
+// clang-format on
+
+// SECTION: error: static assertion failed: section index out of range for this register
+// VALUE: error: static assertion failed: value exceeds field width
+// PACKER: error: static assertion failed: Blackhole exposes address configuration only for packer 0
+// PACKER_ADDR_CTRL: error: static assertion failed: packer address-control register index out of range
+// PACKER_ADDR_BASE: error: static assertion failed: packer address-base register index out of range
+// UNPACKER: error: static assertion failed: unpacker index out of range
+// UNPACKER_REG: error: static assertion failed: unpacker register index out of range
+// CONTEXT: error: static assertion failed: unpacker context index out of range
+// ROW_MAPPING: error: static assertion failed: tile row-set mapping index out of range
+// ROW_SET: error: static assertion failed: tile row-set set index out of range
+// FACE_MAPPING: error: static assertion failed: tile face-set mapping index out of range
+// FACE_SET: error: static assertion failed: tile face-set set index out of range
+// PERF_COUNTER: error: static assertion failed: performance counter index out of range
+
+//--- fields.h
+#pragma once
 
 #include <cstdint>
 #include <type_traits>
@@ -10,6 +47,12 @@
 #include "hal/cfg.h"
 
 namespace cfg = hal::cfg;
+
+template <std::uint32_t I>
+using Index = std::integral_constant<std::uint32_t, I>;
+
+//--- valid.cpp
+#include "fields.h"
 
 static_assert(static_cast<std::uint32_t>(cfg::Access::MMIO) == 0);
 static_assert(static_cast<std::uint32_t>(cfg::Access::TensixCfgUnit) == 1);
@@ -71,7 +114,7 @@ static_assert(cfg::AddrMod[cfg::Bias].Incr.shamt(cfg::Sec::S0) == 0);
 
 constexpr bool packer_descriptors_are_complete()
 {
-    const auto packer           = cfg::Packer[std::integral_constant<std::uint32_t, 0> {}];
+    const auto packer           = cfg::Packer[Index<0> {}];
     std::uint32_t control_count = 0;
     std::uint32_t control_sum   = 0;
     packer.AddrCtrl.forEach(
@@ -207,3 +250,88 @@ constexpr auto common_gpr_write = cfg::from_gpr<cfg::Thcon[cfg::Reg3].Base_addre
 static_assert(decltype(common_gpr_write)::addr == 76);
 static_assert(decltype(common_gpr_write)::words == 1);
 static_assert(cfg::word_addr<cfg::Thcon[cfg::Reg0].TileDescriptor.Raw, cfg::Sec::S1> == 112);
+
+//--- invalid-section.cpp
+#include "fields.h"
+
+constexpr auto invalid_section = cfg::set<cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S1, 1>();
+
+//--- word-addr-section.cpp
+#include "fields.h"
+
+constexpr auto invalid_word_addr = cfg::word_addr<cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S1>;
+
+//--- invalid-value.cpp
+#include "fields.h"
+
+constexpr auto invalid_value = cfg::set<cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S0, 2>();
+
+//--- packer.cpp
+#include "fields.h"
+
+constexpr auto invalid_packer = cfg::Packer[Index<1> {}];
+
+//--- packer-addr-ctrl.cpp
+#include "fields.h"
+
+constexpr auto invalid_register = cfg::Packer[Index<0> {}].AddrCtrl[Index<2> {}];
+
+//--- packer-addr-base.cpp
+#include "fields.h"
+
+constexpr const cfg::Field& invalid_register = cfg::Packer[Index<0> {}].AddrBase[Index<2> {}];
+
+//--- unpacker.cpp
+#include "fields.h"
+
+constexpr auto invalid_unpacker = cfg::Unpacker[Index<2> {}];
+
+//--- unpacker-addr-ctrl.cpp
+#include "fields.h"
+
+constexpr auto invalid_register = cfg::Unpacker[Index<0> {}].AddrCtrl[Index<2> {}];
+
+//--- unpacker-addr-base.cpp
+#include "fields.h"
+
+constexpr const cfg::Field& invalid_register = cfg::Unpacker[Index<1> {}].AddrBase[Index<2> {}];
+
+//--- context-unpacker-0.cpp
+#include "fields.h"
+
+constexpr auto invalid_context = cfg::Unpacker[Index<0> {}].Cntx[Index<8> {}];
+
+//--- context-unpacker-1.cpp
+#include "fields.h"
+
+constexpr auto invalid_context = cfg::Unpacker[Index<1> {}].Cntx[Index<2> {}];
+
+//--- row-set-mapping.cpp
+#include "fields.h"
+
+constexpr auto invalid_mapping = cfg::TileRowSetMapping[Index<4> {}];
+
+//--- row-set-set.cpp
+#include "fields.h"
+
+constexpr const cfg::Field& invalid_set = cfg::TileRowSetMapping[Index<3> {}][Index<16> {}];
+
+//--- face-set-mapping.cpp
+#include "fields.h"
+
+constexpr auto invalid_mapping = cfg::TileFaceSetMapping[Index<4> {}];
+
+//--- face-set-set.cpp
+#include "fields.h"
+
+constexpr const cfg::Field& invalid_set = cfg::TileFaceSetMapping[Index<3> {}][Index<16> {}];
+
+//--- perf-counter.cpp
+#include "fields.h"
+
+constexpr auto invalid_counter = cfg::PerfCntCmd[Index<4> {}];
+
+//--- perf-counter-make.cpp
+#include "fields.h"
+
+constexpr auto invalid_counter = cfg::PerfCntCmdEntry::make<4>();
