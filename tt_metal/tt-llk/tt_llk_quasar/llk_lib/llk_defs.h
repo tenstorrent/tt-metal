@@ -192,6 +192,7 @@ enum class SfpuType : std::uint32_t
     alt_complex_rotate90,
     softcap,
     tanh_derivative,
+    abs_int32,
     // Named by compute API init macros for the ported SFPI kernels; Quasar's init wrappers ignore
     // the SfpuType, so these only need to exist.
     add_top_row,
@@ -209,6 +210,7 @@ enum class SfpuType : std::uint32_t
     remainder_int32,
     situ_glu,
     snake_beta,
+    max_pool_with_indices,
 };
 
 // Load/store layout selectors shared with the WH/BH SFPI kernels: calculate_logical_not picks its
