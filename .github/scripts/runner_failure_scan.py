@@ -20,6 +20,7 @@ from runner_failure_common import (
     format_signature_summary,
     format_utc,
     group_results_by_runner,
+    is_failed_job,
     job_state_key,
     job_to_dict,
     list_recent_jobs,
@@ -38,7 +39,6 @@ from runner_failure_common import (
 
 STATE_SCHEMA_VERSION = 1
 STATE_RETENTION_HOURS = 48
-NON_FAILED_CONCLUSIONS = {"success", "skipped", "cancelled"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -109,11 +109,6 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--gh-timeout must be greater than zero.")
     if args.log_workers <= 0:
         raise ValueError("--log-workers must be greater than zero.")
-
-
-def is_failed_job(job: RecentJob) -> bool:
-    conclusion = job.conclusion.lower()
-    return job.status.casefold() == "completed" and bool(conclusion) and conclusion not in NON_FAILED_CONCLUSIONS
 
 
 def empty_state() -> dict[str, Any]:

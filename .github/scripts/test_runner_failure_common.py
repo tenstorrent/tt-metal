@@ -260,3 +260,141 @@ def test_log_404_counts_as_failure_when_metadata_lookup_fails(monkeypatch, tmp_p
 
     assert not result.unavailable
     assert result.status == "gh api failed: gh: HTTP 404"
+
+
+@pytest.mark.parametrize(
+    "log_text",
+    ["Partial job output", "The self-hosted runner lost communication with the server."],
+)
+@pytest.mark.parametrize("conclusion", ["failure", "timed_out"])
+def test_disconnect_annotations_are_checked_with_available_logs(monkeypatch, log_text, conclusion) -> None:
+    calls = []
+
+    def download(command, **kwargs):
+        kwargs["stdout"].write(log_text.encode())
+        return subprocess.CompletedProcess(command, 0)
+
+    def metadata(endpoint, **kwargs):
+        calls.append(endpoint)
+        if endpoint == "repos/tenstorrent/tt-metal/actions/jobs/1":
+            return {"check_run_url": "https://api.github.com/repos/tenstorrent/tt-metal/check-runs/2"}
+        assert endpoint == "repos/tenstorrent/tt-metal/check-runs/2/annotations?per_page=100"
+        assert kwargs["paginate"] is True
+        return [
+            [{"message": "Other error"}],
+            [{"message": "The SELF-HOSTED RUNNER LOST COMMUNICATION with the server."}],
+        ]
+
+    monkeypatch.setattr("runner_failure_common.subprocess.run", download)
+    monkeypatch.setattr("runner_failure_common.gh_api_json", metadata)
+    job = job_from_dict(
+        {
+            "owner_repo": "tenstorrent/tt-metal",
+            "job_id": "1",
+            "status": "completed",
+            "conclusion": conclusion,
+            "setup_runner_conclusion": "success",
+        }
+    )
+
+    result = scan_job(job, timeout=120)
+
+    assert result.log_checked
+    assert not result.log_unavailable
+    assert result.signature_labels == ("Runner disconnected",)
+    assert len(calls) == 2
+    assert scan_result_from_dict(result_to_dict(result)) == result
+
+
+@pytest.mark.parametrize("download_failure", ["HTTP 404", "HTTP 503", "timeout"])
+def test_disconnect_detection_is_independent_of_download_failure(monkeypatch, download_failure) -> None:
+    calls = []
+
+    def failed_download(command, **kwargs):
+        if download_failure == "timeout":
+            raise subprocess.TimeoutExpired(command, 120)
+        kwargs["stderr"].write(f"gh: {download_failure}".encode())
+        return subprocess.CompletedProcess(command, 1)
+
+    def metadata(endpoint, **_kwargs):
+        calls.append(endpoint)
+        if endpoint == "repos/tenstorrent/tt-metal/actions/jobs/1":
+            return {
+                "status": "completed",
+                "check_run_url": "https://api.github.com/repos/tenstorrent/tt-metal/check-runs/2",
+            }
+        assert endpoint == "repos/tenstorrent/tt-metal/check-runs/2/annotations?per_page=100"
+        return [{"message": "The self-hosted runner lost communication with the server."}]
+
+    monkeypatch.setattr("runner_failure_common.subprocess.run", failed_download)
+    monkeypatch.setattr("runner_failure_common.gh_api_json", metadata)
+    job = job_from_dict(
+        {"owner_repo": "tenstorrent/tt-metal", "job_id": "1", "status": "completed", "conclusion": "failure"}
+    )
+
+    result = scan_job(job, timeout=120)
+
+    assert not result.log_checked
+    assert result.signature_labels == ("Runner disconnected",)
+    assert result.log_unavailable is (download_failure == "HTTP 404")
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize(
+    ("status", "conclusion"),
+    [
+        ("completed", "success"),
+        ("completed", "skipped"),
+        ("completed", "cancelled"),
+        ("completed", ""),
+        ("in_progress", "failure"),
+        ("queued", "failure"),
+    ],
+)
+def test_annotations_are_not_queried_for_nonfailed_or_active_jobs(monkeypatch, status, conclusion) -> None:
+    def unexpected_metadata(*_args, **_kwargs):
+        raise AssertionError("Only completed failed jobs need annotations")
+
+    def download(command, **kwargs):
+        kwargs["stdout"].write(b"Job output")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr("runner_failure_common.gh_api_json", unexpected_metadata)
+    monkeypatch.setattr("runner_failure_common.subprocess.run", download)
+    job = job_from_dict(
+        {"owner_repo": "tenstorrent/tt-metal", "job_id": "1", "status": status, "conclusion": conclusion}
+    )
+
+    assert scan_job(job, timeout=120).signature_labels == ()
+
+
+@pytest.mark.parametrize("annotations_fail", [False, True])
+def test_annotation_lookup_preserves_setup_and_log_signatures(monkeypatch, annotations_fail, capsys) -> None:
+    def download(command, **kwargs):
+        kwargs["stdout"].write(b"Failed to allocate TLB window.")
+        return subprocess.CompletedProcess(command, 0)
+
+    def metadata(endpoint, **_kwargs):
+        if endpoint == "repos/tenstorrent/tt-metal/actions/jobs/1":
+            return {
+                "check_run_url": "https://api.github.com/repos/tenstorrent/tt-metal/check-runs/2",
+                "steps": [{"name": "Set up runner", "conclusion": "failure"}],
+            }
+        if annotations_fail:
+            raise RuntimeError("gh api failed: HTTP 403")
+        return [[{"message": "The self-hosted runner lost communication with the server."}]]
+
+    monkeypatch.setattr("runner_failure_common.subprocess.run", download)
+    monkeypatch.setattr("runner_failure_common.gh_api_json", metadata)
+    job = job_from_dict(
+        {"owner_repo": "tenstorrent/tt-metal", "job_id": "1", "status": "completed", "conclusion": "failure"}
+    )
+
+    result = scan_job(job, timeout=120)
+
+    assert result.log_checked
+    expected_labels = ("TLB error", "Set up runner failure")
+    if not annotations_fail:
+        expected_labels += ("Runner disconnected",)
+    assert result.signature_labels == expected_labels
+    assert ("could not fetch failure annotations" in capsys.readouterr().err) is annotations_fail

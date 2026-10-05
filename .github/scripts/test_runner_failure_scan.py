@@ -3,7 +3,7 @@ import json
 from dataclasses import replace
 
 from runner_failure_common import JobScanResult, RecentJob
-from runner_failure_scan import is_failed_job, log_download_counts, main
+from runner_failure_scan import empty_state, is_failed_job, log_download_counts, main, normalize_state
 
 
 def make_job(job_id: str) -> RecentJob:
@@ -64,6 +64,14 @@ def test_incomplete_jobs_are_not_selected_as_failures() -> None:
     assert is_failed_job(job)
     assert not is_failed_job(replace(job, status="in_progress"))
     assert not is_failed_job(replace(job, status="queued"))
+
+
+def test_old_signature_version_rechecks_jobs() -> None:
+    state = empty_state()
+    state["signature_version"] = "runner-failure-signatures-2026-10-05-v2"
+    state["checked_jobs"] = {"tenstorrent/tt-metal:1": {}}
+
+    assert normalize_state(state)["checked_jobs"] == {}
 
 
 def test_confirmed_disconnect_is_reported_once_but_unknown_download_failure_is_retried(monkeypatch, tmp_path) -> None:
