@@ -359,9 +359,8 @@ def _golden_function_acosh(grad_tensor, input_tensor, *args, device, **kwargs):
     input_tensor.retain_grad()
     pyt_y = torch.acosh(input_tensor)
     pyt_y.backward(gradient=grad_tensor)
-    return [
-        torch.nan_to_num(input_tensor.grad, nan=device.sfpu_nan(), posinf=device.sfpu_inf(), neginf=-device.sfpu_inf())
-    ]
+    # BF16 calls run a fused program that returns torch's NaN, which the BF16 pack stores as +inf.
+    return [torch.where(torch.isnan(input_tensor.grad), torch.inf, input_tensor.grad)]
 
 
 ttnn.attach_golden_function(ttnn.acosh_bw, golden_function=_golden_function_acosh)
