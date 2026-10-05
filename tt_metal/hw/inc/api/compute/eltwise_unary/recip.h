@@ -34,6 +34,7 @@ ALWI void recip_tile_init() {
         sfpu::recip_init,
         (approximation == ReciprocalApproxMode::Default ? APPROX : approximation == ReciprocalApproxMode::Approximate,
          is_fp32_dest_acc_en)));
+    MATH(ckernel::sfpu::reciprocal_bf16_tile_init<!DST_ACCUM_MODE>());
 }
 // clang-format off
 /**
@@ -63,9 +64,7 @@ ALWI void recip_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_reciprocal,
-        (approximation == ReciprocalApproxMode::Default ? APPROX : approximation == ReciprocalApproxMode::Approximate,
-         is_fp32_dest_acc_en,
-         8 /*ITERATIONS*/),
+        (approximation == ReciprocalApproxMode::Default ? APPROX : approximation == ReciprocalApproxMode::Approximate, is_fp32_dest_acc_en, 8 /*ITERATIONS*/),
         idst,
         vector_mode));
 }

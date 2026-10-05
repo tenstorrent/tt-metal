@@ -375,6 +375,10 @@ sfpi_inline void sfpu_reciprocal_init() {
     }
 }
 
+// The stock reciprocal kernel needs no BF16 setup.
+template <bool bf16_kernel>
+inline void reciprocal_bf16_tile_init() {}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_reciprocal() {
     if constexpr (APPROXIMATION_MODE) {

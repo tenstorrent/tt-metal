@@ -109,8 +109,26 @@ sfpi_inline void sfpu_reciprocal_init() {
     sfpi::vConstFloatPrgm2 = 2.121212482452392578125f;
 }
 
+bool bf16_dest_reciprocal();
+template <int ITERATIONS>
+void calculate_reciprocal_bf16();
+void init_reciprocal_bf16();
+// Sets up the generated BF16 reciprocal kernel for the instance it serves.
+template <bool bf16_kernel>
+inline void reciprocal_bf16_tile_init() {
+    if constexpr (bf16_kernel) {
+        init_reciprocal_bf16();
+    }
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_reciprocal() {
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
+        if (bf16_dest_reciprocal()) {
+            calculate_reciprocal_bf16<ITERATIONS>();
+            return;
+        }
+    }
     _calculate_reciprocal_internal_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(ITERATIONS);
 }
 
@@ -128,3 +146,5 @@ void recip_init() {
 
 }  // namespace sfpu
 }  // namespace ckernel
+
+#include "ckernel_sfpu_reciprocal_bf16.h"
