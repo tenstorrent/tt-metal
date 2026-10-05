@@ -11,6 +11,7 @@
 #include "llk_math_eltwise_sfpu_common.h"
 #include "sanitizer/api.h"
 #include "sfpu/ckernel_sfpu_triangle_solve.h"
+#include "llk_triangle_solve_sync.h"
 
 namespace ckernel {
 
@@ -37,6 +38,9 @@ inline void llk_math_triangle_solve_sfpu_init() {
  * @param idst_out: DEST tile index that receives X; must differ from idst_in.
  * @note Call @ref llk_math_triangle_solve_sfpu_init before this function. The L1 reads of L are issued by this RISC and
  *       complete before the function returns; the SFPU instructions still in flight touch only DEST and the LREGs.
+ *       The function releases the L tile to UNPACK through the MATH -> UNPACK mailbox (@ref
+ *       llk_math_triangle_solve_release_l); the UNPACK thread must consume that release with
+ *       @ref llk_unpack_triangle_solve_wait_l_released before it pops or overwrites the tile.
  */
 template <DataFormat L_FORMAT, bool L_NEGATED>
 inline void llk_math_triangle_solve_sfpu_tile(
@@ -51,6 +55,7 @@ inline void llk_math_triangle_solve_sfpu_tile(
     // The solve addresses DEST absolutely (tile index * rows per tile), so the DEST base is 0.
     _llk_math_eltwise_sfpu_start_(0 /*dst_index*/);
     sfpu::_triangle_solve_tile_<L_FORMAT, L_NEGATED>(idst_in, idst_out, l1_base);
+    llk_math_triangle_solve_release_l();  // every L1 load of L has returned: UNPACK may pop the tile
     _llk_math_eltwise_sfpu_done_();
 }
 

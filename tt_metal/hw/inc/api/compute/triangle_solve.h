@@ -10,6 +10,9 @@
 #ifdef TRISC_MATH
 #include "llk_math_triangle_solve_sfpu_entry.h"
 #endif
+#ifdef TRISC_UNPACK
+#include "llk_triangle_solve_sync.h"
+#endif
 
 namespace ckernel {
 
@@ -57,11 +60,9 @@ ALWI void triangle_solve_tile(
     // UNPACK resolves the tile's L1 address and mailboxes it to MATH and PACK.
     const uint32_t l1_base = get_tile_address(cb_l, l_tile_idx);
     MATH((llk_math_triangle_solve_sfpu_tile<L_FORMAT, L_NEGATED>(l1_base, idst_in, idst_out)));
-    // MATH reads L from L1 itself, which nothing orders against UNPACK's later cb_pop_front of cb_l: MATH signals
-    // when its reads are done and UNPACK waits for that before returning.
-    constexpr uint32_t l_reads_done = 1;  // mailbox token; only its arrival matters
-    MATH((mailbox_write(ckernel::ThreadId::UnpackThreadId, l_reads_done)));
-    UNPACK((mailbox_read(ckernel::ThreadId::MathThreadId)));
+    // MATH reads L from L1 itself, which nothing orders against UNPACK's later cb_pop_front of cb_l: the MATH entry
+    // releases the tile when its reads are done and UNPACK waits for that release before returning.
+    UNPACK((llk_unpack_triangle_solve_wait_l_released()));
 }
 
 /**
