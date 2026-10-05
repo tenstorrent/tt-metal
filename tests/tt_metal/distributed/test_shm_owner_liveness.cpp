@@ -16,7 +16,10 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <csignal>
 #include <cstdio>
+#include <cstring>
+#include <cerrno>
 #include <exception>
 #include <memory>
 #include <string>
@@ -180,6 +183,31 @@ TEST(ShmOwnerLiveness, IsProcessAliveRejectsDeadAndReusedPids) {
     // Same pid, different start time: a reused pid, not the original owner.
     EXPECT_FALSE(is_process_alive(self, mine + 1));
     EXPECT_FALSE(is_process_alive(dead_pid(), 0));
+}
+
+TEST(ShmOwnerLiveness, ZombieOwnerCountsAsDead) {
+    // An owner that exited but was not reaped yet still answers kill(2) and still
+    // has a /proc entry with its original start time; it is a dead owner all the same.
+    const pid_t child = fork();
+    ASSERT_GE(child, 0) << std::strerror(errno);
+    if (child == 0) {
+        _exit(0);
+    }
+    const uint64_t start = process_start_time(child);
+    bool dead = false;
+    for (int i = 0; i < 5000 && !dead; ++i) {  // the child needs a moment to exit
+        dead = !is_process_alive(child, start);
+        if (!dead) {
+            usleep(1000);
+        }
+    }
+    EXPECT_TRUE(dead) << "exited, unreaped child still counted as alive";
+    EXPECT_EQ(kill(child, 0), 0) << "the child was reaped by someone else, so the zombie case was not exercised";
+    EXPECT_FALSE(ShmResourceTracker::is_pid_alive(child));
+
+    int status = 0;
+    waitpid(child, &status, 0);
+    EXPECT_FALSE(is_process_alive(child, start));
 }
 
 // ---------------------------------------------------------------------------

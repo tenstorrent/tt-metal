@@ -38,6 +38,42 @@ pid_t extract_pid_from_manifest_name(const std::string& filename) {
     }
 }
 
+// Reads /proc/<pid>/stat: `state` is field 3 and `start_time` field 22. comm may
+// contain spaces and parentheses, so fields are tokenised after the last ')'.
+// False when the entry cannot be read.
+bool read_proc_stat(pid_t pid, char& state, uint64_t& start_time) {
+    if (pid <= 0) {
+        return false;
+    }
+    std::ifstream stat_file(fmt::format("/proc/{}/stat", pid));
+    std::string line;
+    if (!stat_file.is_open() || !std::getline(stat_file, line)) {
+        return false;
+    }
+    const auto comm_end = line.rfind(')');
+    if (comm_end == std::string::npos) {
+        return false;
+    }
+    std::istringstream fields(line.substr(comm_end + 1));
+    std::string token;
+    if (!(fields >> token) || token.empty()) {
+        return false;
+    }
+    state = token[0];
+    // start_time is the 20th token after state.
+    for (int i = 0; i < 19; ++i) {
+        if (!(fields >> token)) {
+            return false;
+        }
+    }
+    try {
+        start_time = static_cast<uint64_t>(std::stoull(token));
+    } catch (...) {
+        return false;
+    }
+    return true;
+}
+
 struct sigaction prev_sigint, prev_sigterm;
 
 void invoke_previous_handler(int sig, const struct sigaction& prev) {
@@ -103,37 +139,23 @@ bool ShmResourceTracker::is_pid_alive(pid_t pid) {
     if (pid <= 0) {
         return false;
     }
-    return kill(pid, 0) == 0 || errno == EPERM;
+    if (kill(pid, 0) != 0 && errno != EPERM) {
+        return false;
+    }
+    // kill(2) also succeeds for a zombie: a process that exited and has not
+    // been reaped yet. Its resources are as orphaned as a reaped one's.
+    char state = 0;
+    uint64_t start_time = 0;
+    if (read_proc_stat(pid, state, start_time) && (state == 'Z' || state == 'X')) {
+        return false;
+    }
+    return true;
 }
 
 uint64_t process_start_time(pid_t pid) {
-    if (pid <= 0) {
-        return 0;
-    }
-    std::ifstream stat_file(fmt::format("/proc/{}/stat", pid));
-    std::string line;
-    if (!stat_file.is_open() || !std::getline(stat_file, line)) {
-        return 0;
-    }
-    // "pid (comm) state ppid ... starttime ..." — comm may contain spaces, so
-    // tokenize after the last ')'. starttime is field 22, i.e. the 20th token
-    // after the closing parenthesis (state is the first).
-    const auto comm_end = line.rfind(')');
-    if (comm_end == std::string::npos) {
-        return 0;
-    }
-    std::istringstream fields(line.substr(comm_end + 1));
-    std::string token;
-    for (int i = 0; i < 20; ++i) {
-        if (!(fields >> token)) {
-            return 0;
-        }
-    }
-    try {
-        return static_cast<uint64_t>(std::stoull(token));
-    } catch (...) {
-        return 0;
-    }
+    char state = 0;
+    uint64_t start_time = 0;
+    return read_proc_stat(pid, state, start_time) ? start_time : 0;
 }
 
 bool is_process_alive(pid_t pid, uint64_t start_time) {
