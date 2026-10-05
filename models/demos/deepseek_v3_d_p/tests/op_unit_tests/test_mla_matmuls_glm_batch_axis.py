@@ -59,7 +59,11 @@ SHAPES = {
     "indexer.wq_b": (1, Q_LORA, IDX_HEADS * IDX_HEAD_DIM, BF16, BF8, BF16),
     "indexer.wk": (1, HIDDEN, IDX_HEAD_DIM, BF16, BF8, BF16),
     "indexer.weights_proj": (1, HIDDEN, IDX_HEADS, BF16, BF16, BF16),
+    # Hadamard transforms of the indexer Q (all 32 heads) and K; the [128, 128] weight broadcasts over heads.
+    "indexer.q_hadamard": (IDX_HEADS, IDX_HEAD_DIM, IDX_HEAD_DIM, BF16, BF16, BF8),
+    "indexer.k_hadamard": (1, IDX_HEAD_DIM, IDX_HEAD_DIM, BF16, BF16, BF16),
 }
+BROADCAST_WEIGHT = {"indexer.q_hadamard", "indexer.k_hadamard"}
 
 
 def _mc2d(ib, sh, sw, pcm, pcn):
@@ -89,7 +93,11 @@ def _reuse(ib, sh, sw, pcm, pcn):
 
 def _mc1d_batched_fallback(k_t, n_t):
     """Exactly what ttMLA._make_batched_mm_kwargs builds when no tuned config applies (batch-axis today)."""
-    m_t = M // ttnn.TILE_SIZE
+    return _mc1d_batched_fallback_m(k_t, n_t, M)
+
+
+def _mc1d_batched_fallback_m(k_t, n_t, m):
+    m_t = m // ttnn.TILE_SIZE
     pcm = max(1, -(-m_t // (GRID[0] * GRID[1])))
     while m_t % pcm:
         pcm += 1
@@ -195,11 +203,89 @@ SWEEP = [
 ]
 
 
-def _run(mesh_device, name, prog_config, act_mem, out_mem, variant_id=None, check_pcc=True):
+def _mc1d(ib, sh, sw, pcm, pcn, fuse_batch=True):
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=GRID,
+        in0_block_w=ib,
+        out_subblock_h=sh,
+        out_subblock_w=sw,
+        per_core_M=pcm,
+        per_core_N=pcn,
+        fuse_batch=fuse_batch,
+        mcast_in0=False,
+    )
+
+
+# Hadamard at 640 rows: the TP table's 640 / 160 entries as candidates, plus a few more.
+SWEEP += [
+    ("q_hadamard__default", "indexer.q_hadamard", None, DRAM, DRAM),
+    ("q_hadamard__1d_pcm2_2x4", "indexer.q_hadamard", _mc1d(2, 2, 4, 2, 4), DRAM, DRAM),  # 320 blocks: overflow
+    ("q_hadamard__1d_pcm8_2x4", "indexer.q_hadamard", _mc1d(4, 2, 4, 8, 4), DRAM, DRAM),  # 80 blocks
+    ("q_hadamard__1d_pcm6_2x4", "indexer.q_hadamard", _mc1d(4, 2, 4, 6, 4), DRAM, DRAM),  # 107 blocks
+    ("q_hadamard__1d_pcm8_4x2", "indexer.q_hadamard", _mc1d(4, 4, 2, 8, 4), DRAM, DRAM),
+    ("k_hadamard__default", "indexer.k_hadamard", None, DRAM, DRAM),
+    ("k_hadamard__tp640", "indexer.k_hadamard", _mc2d(4, 2, 1, 2, 1), DRAM, DRAM),  # the TP table's 640 entry
+    ("k_hadamard__1d_pcm1", "indexer.k_hadamard", _mc1d(4, 1, 4, 1, 4, fuse_batch=False), DRAM, DRAM),
+]
+
+# 256 rows per chip (2k chunks): M_t = 8, so per_core_M = 1 puts 8 block rows on the 10-row grid.
+M256 = 256
+SWEEP_256 = [
+    ("q_a_proj__default", "q_a_proj", None, DRAM, DRAM, M256),
+    ("q_a_proj__ib16_1x6_dl", "q_a_proj", _mc2d(16, 1, 6, 1, 6), DRAM, L1, M256),  # 8 x 11 = 88 cores
+    ("q_a_proj__ib24_1x6_dl", "q_a_proj", _mc2d(24, 1, 6, 1, 6), DRAM, L1, M256),
+    ("q_a_proj__ib32_1x6_dl", "q_a_proj", _mc2d(32, 1, 6, 1, 6), DRAM, L1, M256),
+    ("q_a_proj__ib16_1x8_dl", "q_a_proj", _mc2d(16, 1, 8, 1, 8), DRAM, L1, M256),  # 8 x 8 = 64 cores
+    ("q_b_proj__default", "q_b_proj", None, DRAM, DRAM, M256),
+    ("q_b_proj__ib8_1x8_ll", "q_b_proj", _mc2d(8, 1, 8, 1, 48), L1, L1, M256),  # 88 cores; out 8.4 MB
+    ("q_b_proj__ib8_1x8_ld", "q_b_proj", _mc2d(8, 1, 8, 1, 48), L1, DRAM, M256),
+    ("q_b_proj__ib16_1x8_ll", "q_b_proj", _mc2d(16, 1, 8, 1, 48), L1, L1, M256),
+    ("q_b_proj__ib4_1x8_ll", "q_b_proj", _mc2d(4, 1, 8, 1, 48), L1, L1, M256),
+    ("kv_a_proj__default", "kv_a_proj_with_mqa", None, DRAM, DRAM, M256),
+    ("kv_a_proj__ib16_1x2_dl", "kv_a_proj_with_mqa", _mc2d(16, 1, 2, 1, 2), DRAM, L1, M256),  # 72 cores
+    ("kv_a_proj__ib24_1x2_dl", "kv_a_proj_with_mqa", _mc2d(24, 1, 2, 1, 2), DRAM, L1, M256),
+    ("kv_a_proj__ib32_1x2_dl", "kv_a_proj_with_mqa", _mc2d(32, 1, 2, 1, 2), DRAM, L1, M256),
+    # Batched (Z*M_t = 512): Reuse needs per_core_M | 8 and blocks <= 110 -> per_core_M = 8 (64 cores).
+    ("wkv_b1__default_1d", "wkv_b1", _mc1d_batched_fallback_m(6, 16, M256), DRAM, DRAM, M256),
+    ("wkv_b1__r_pcm8_ib6_2x4_dd", "wkv_b1", _reuse(6, 2, 4, 8, 16), DRAM, DRAM, M256),
+    ("wkv_b1__r_pcm8_ib3_1x8_dd", "wkv_b1", _reuse(3, 1, 8, 8, 16), DRAM, DRAM, M256),
+    ("wkv_b1__r_pcm8_ib6_2x4_dl", "wkv_b1", _reuse(6, 2, 4, 8, 16), DRAM, L1, M256),  # out 16.8 MB
+    ("wkv_b1__r_pcm8_ib6_2x4_ld", "wkv_b1", _reuse(6, 2, 4, 8, 16), L1, DRAM, M256),
+    ("wkv_b2__default_1d", "wkv_b2", _mc1d_batched_fallback_m(16, 8, M256), DRAM, DRAM, M256),
+    ("wkv_b2__r_pcm8_ib4_1x8_dd", "wkv_b2", _reuse(4, 1, 8, 8, 8), DRAM, DRAM, M256),
+    ("wkv_b2__r_pcm8_ib8_2x4_dd", "wkv_b2", _reuse(8, 2, 4, 8, 8), DRAM, DRAM, M256),
+    ("wkv_b2__r_pcm8_ib4_1x8_dl", "wkv_b2", _reuse(4, 1, 8, 8, 8), DRAM, L1, M256),
+    ("wkv_b2__r_pcm8_ib4_1x8_ll", "wkv_b2", _reuse(4, 1, 8, 8, 8), L1, L1, M256),  # in 16.8 MB, out 4.5 MB
+    ("o_proj__default", "o_proj", None, DRAM, DRAM, M256),
+    ("o_proj__ib16_1x6_dl", "o_proj", _mc2d(16, 1, 6, 1, 18), DRAM, L1, M256),  # 88 cores
+    ("o_proj__ib8_1x6_dl", "o_proj", _mc2d(8, 1, 6, 1, 18), DRAM, L1, M256),
+    ("o_proj__ib32_1x6_dl", "o_proj", _mc2d(32, 1, 6, 1, 18), DRAM, L1, M256),
+    ("o_proj__ib16_1x8_dl", "o_proj", _mc2d(16, 1, 8, 1, 24), DRAM, L1, M256),  # 64 cores
+    ("o_proj__ib16_1x6_ll", "o_proj", _mc2d(16, 1, 6, 1, 18), L1, L1, M256),
+    ("wq_b__default", "indexer.wq_b", None, DRAM, DRAM, M256),
+    ("wq_b__ib8_1x6_ll", "indexer.wq_b", _mc2d(8, 1, 6, 1, 12), L1, L1, M256),  # 88 cores
+    ("wq_b__ib16_1x6_ll", "indexer.wq_b", _mc2d(16, 1, 6, 1, 12), L1, L1, M256),
+    ("wq_b__ib8_1x8_ll", "indexer.wq_b", _mc2d(8, 1, 8, 1, 16), L1, L1, M256),  # 64 cores
+    ("wk__default", "indexer.wk", None, DRAM, DRAM, M256),
+    ("wk__ib24_dd", "indexer.wk", _mc2d(24, 1, 1, 1, 1), DRAM, DRAM, M256),  # 32 cores (N_t=4)
+    ("wk__ib48_dd", "indexer.wk", _mc2d(48, 1, 1, 1, 1), DRAM, DRAM, M256),
+    ("weights_proj__default", "indexer.weights_proj", None, DRAM, DRAM, M256),
+    ("weights_proj__ib8_dd", "indexer.weights_proj", _mc2d(8, 1, 1, 1, 1), DRAM, DRAM, M256),  # 8 cores
+    ("weights_proj__ib24_dd", "indexer.weights_proj", _mc2d(24, 1, 1, 1, 1), DRAM, DRAM, M256),
+    ("q_hadamard__default", "indexer.q_hadamard", None, DRAM, DRAM, M256),
+    ("q_hadamard__1d_pcm4_2x4", "indexer.q_hadamard", _mc1d(4, 2, 4, 4, 4), DRAM, DRAM, M256),  # 64 blocks
+    ("q_hadamard__1d_pcm3_1x4", "indexer.q_hadamard", _mc1d(4, 1, 4, 3, 4), DRAM, DRAM, M256),  # 86 blocks
+    ("q_hadamard__1d_pcm4_4x2", "indexer.q_hadamard", _mc1d(4, 4, 2, 4, 4), DRAM, DRAM, M256),
+    ("k_hadamard__default", "indexer.k_hadamard", None, DRAM, DRAM, M256),
+    ("k_hadamard__2d_pcm1", "indexer.k_hadamard", _mc2d(4, 1, 1, 1, 1), DRAM, DRAM, M256),  # 8 x 4 = 32 cores
+]
+
+
+def _run(mesh_device, name, prog_config, act_mem, out_mem, variant_id=None, check_pcc=True, m=M):
     z, k, n, in0_dtype, in1_dtype, out_dtype = SHAPES[name]
     torch.manual_seed(42)
-    a = torch.randn(1, z, M, k, dtype=torch.bfloat16)
-    w = torch.randn(1, z, k, n, dtype=torch.bfloat16) * 0.02
+    a = torch.randn(1, z, m, k, dtype=torch.bfloat16)
+    w = torch.randn(1, 1 if name in BROADCAST_WEIGHT else z, k, n, dtype=torch.bfloat16) * 0.02
     repl = ttnn.ReplicateTensorToMesh(mesh_device)
     tt_a = ttnn.from_torch(
         a, device=mesh_device, dtype=in0_dtype, layout=ttnn.TILE_LAYOUT, memory_config=act_mem, mesh_mapper=repl
@@ -218,7 +304,8 @@ def _run(mesh_device, name, prog_config, act_mem, out_mem, variant_id=None, chec
     if variant_id is not None:
         ttnn.tracy_message(f"`TT_SIGNPOST: {variant_id}`")
     for _ in range(ITERS):
-        out = ttnn.linear(tt_a, tt_w, memory_config=out_mem, dtype=out_dtype, compute_kernel_config=ckc, **kwargs)
+        op = ttnn.matmul if name in BROADCAST_WEIGHT else ttnn.linear  # the indexer issues matmul for these
+        out = op(tt_a, tt_w, memory_config=out_mem, dtype=out_dtype, compute_kernel_config=ckc, **kwargs)
         ttnn.synchronize_device(mesh_device)
         got = out
     if check_pcc:
@@ -230,14 +317,18 @@ def _run(mesh_device, name, prog_config, act_mem, out_mem, variant_id=None, chec
         ttnn.deallocate(t)
 
 
+@pytest.mark.parametrize("sweep_name", ["SWEEP", "SWEEP_256"], ids=["m640", "m256"])
 @pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=True)
-def test_glm_batch_axis_mm_sweep(mesh_device):
+def test_glm_batch_axis_mm_sweep(mesh_device, sweep_name):
     """All variants in one device session, each preceded by a signpost naming it. A variant the op
     rejects (grid / L1 overflow) is logged and skipped rather than failing the sweep."""
+    sweep = globals()[sweep_name]
     rejected, wrong = [], []
-    for variant_id, name, prog, act, out in SWEEP:
+    for variant in sweep:
+        variant_id, name, prog, act, out = variant[:5]
+        m = variant[5] if len(variant) > 5 else M
         try:
-            _run(mesh_device, name, prog, act, out, variant_id=variant_id)
+            _run(mesh_device, name, prog, act, out, variant_id=variant_id, m=m)
         except RuntimeError as e:
             rejected.append(variant_id)
             logger.warning(f"[{variant_id}] rejected: {str(e).splitlines()[0][:200]}")
@@ -251,13 +342,14 @@ def test_glm_batch_axis_mm_sweep(mesh_device):
     logger.info(f"wrong-output variants: {wrong}")
 
 
+@pytest.mark.parametrize("m", [640, 256], ids=["m640", "m256"])
 @pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=True)
 @pytest.mark.parametrize("name", list(SHAPES.keys()), ids=list(SHAPES.keys()))
-def test_glm_batch_axis_mm(mesh_device, name):
+def test_glm_batch_axis_mm(mesh_device, name, m):
     """The configs batch-axis ttMLA / TtIndexer actually use, read from mla_config so this cannot drift."""
     from models.demos.deepseek_v3_d_p.tt.mla.mla_config import get_batch_axis_matmul_config
 
-    cfg = get_batch_axis_matmul_config(name, M)
-    assert cfg is not None, f"no batch-axis config for {name}"
+    cfg = get_batch_axis_matmul_config(name, m)
+    assert cfg is not None, f"no batch-axis config for {name} at {m} rows"
     assert cfg["out_dtype"] == SHAPES[name][5], f"{name}: table out dtype {cfg['out_dtype']} != {SHAPES[name][5]}"
-    _run(mesh_device, name, cfg["program_config"], cfg["act_mem_config"], cfg["out_mem_config"], variant_id=name)
+    _run(mesh_device, name, cfg["program_config"], cfg["act_mem_config"], cfg["out_mem_config"], variant_id=name, m=m)

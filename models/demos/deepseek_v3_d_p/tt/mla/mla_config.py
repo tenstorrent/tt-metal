@@ -931,6 +931,60 @@ MLA_BATCH_AXIS_MATMUL_CONFIG = {
 }
 
 
+def _bax_mc1d(in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch=True):
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=COMPUTE_GRID,
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        fuse_batch=fuse_batch,
+        mcast_in0=False,
+    )
+
+
+def _bax(program_config, act, out, dtype=ttnn.bfloat16):
+    return {
+        **_GLM_BATCH_AXIS_TAGS,
+        "program_config": program_config,
+        "act_mem_config": act,
+        "out_mem_config": out,
+        "out_dtype": dtype,
+    }
+
+
+_DRAM, _L1 = ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG
+
+# 256 rows per chip (2048-token chunks over SP=8). Same tuning test, M_t = 8: per_core_M = 1 puts the 8 block
+# rows on the 10-row grid; the batched pair's Reuse needs per_core_M | 8 with <= 110 blocks -> per_core_M = 8.
+# Comment = measured vs the TTNN-default fallback at 256 rows.
+_BATCH_AXIS_256 = {
+    "q_a_proj": _bax(_bax_mc2d(24, 1, 6, 1, 6), _DRAM, _L1),  # 63.0 us, 88 cores (default 65.5)
+    "q_b_proj": _bax(_bax_mc2d(8, 1, 8, 1, 48), _L1, _L1),  # 146.7 us (default 145.4); qr in L1 for wq_b
+    "kv_a_proj_with_mqa": _bax(_bax_mc2d(32, 1, 2, 1, 2), _DRAM, _L1),  # 25.8 us, 72 cores (default 28.8)
+    "wkv_b1": _bax(_bax_reuse(6, 2, 4, 8, 16), _DRAM, _L1),  # 62.6 us, 64 cores (default 1D 676.8)
+    "wkv_b2": _bax(_bax_reuse(4, 1, 8, 8, 8), _DRAM, _L1, ttnn.bfloat8_b),  # 78.5 us (default 1D 732.7)
+    "o_proj": _bax(_bax_mc2d(16, 1, 6, 1, 18), _DRAM, _L1),  # 423.5 us, 88 cores (default 471.0)
+    "indexer.wq_b": _bax(_bax_mc2d(8, 1, 6, 1, 12), _L1, _L1),  # 42.5 us, 88 cores (default 77.1)
+    "indexer.wk": _bax(_bax_mc2d(48, 1, 1, 1, 1), _DRAM, _DRAM),  # 22.7 us, 32 cores (default 23.8)
+    "indexer.weights_proj": _bax(_bax_mc2d(24, 1, 1, 1, 1), _DRAM, _DRAM),  # 17.9 us, 8 cores (default 68.1)
+    # Hadamards: the indexer reads only program_config (fused 32-head batch for Q).
+    "indexer.q_hadamard": _bax(_bax_mc1d(4, 1, 4, 3, 4), _DRAM, _DRAM, ttnn.bfloat8_b),  # 15.8 us (default 98.3)
+    "indexer.k_hadamard": _bax(_bax_mc2d(4, 1, 1, 1, 1), _DRAM, _DRAM),  # 2.1 us (default 4.0)
+}
+for _name, _cfg in _BATCH_AXIS_256.items():
+    MLA_BATCH_AXIS_MATMUL_CONFIG.setdefault(_name, {})[256] = _cfg
+
+# 640 rows: the two Hadamards, missing from the first batch-axis tuning pass.
+MLA_BATCH_AXIS_MATMUL_CONFIG.setdefault("indexer.q_hadamard", {})[640] = _bax(
+    _bax_mc1d(4, 2, 4, 6, 4), _DRAM, _DRAM, ttnn.bfloat8_b
+)  # 31.6 us, 107 cores (default 106.9)
+MLA_BATCH_AXIS_MATMUL_CONFIG.setdefault("indexer.k_hadamard", {})[640] = _bax(
+    _bax_mc2d(4, 2, 1, 2, 1), _DRAM, _DRAM
+)  # 2.9 us (default 4.7) -- the TP table's 640 entry
+
+
 def get_batch_axis_matmul_config(weight_name: str, seq_len_local: int) -> dict | None:
     """Batch-axis (TP=1, one user per mesh column) matmul entry, or None. Gating tags are not applied
     here -- callers check them, as with get_matmul_config."""
