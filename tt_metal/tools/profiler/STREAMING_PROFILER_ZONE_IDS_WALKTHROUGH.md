@@ -10,8 +10,8 @@ Byte dumps are little-endian: the word `0x06800000` appears in a hex dump as `00
 | step | stage | action | the id is |
 |---|---|---|---|
 | 1 | source | the zone site is written | — |
-| 2 | preprocess | the macro names the site's handle | `__tt_zone_0_1` |
-| 3 | compile | the site becomes assembler directives + `lui`/`addi` | a label |
+| 2 | preprocess | the macro names the site's handle `__tt_zone_0_1` (a name, not the id) | not yet a number |
+| 3 | compile | the site becomes assembler directives + `lui`/`addi` | not yet a number |
 | 4 | link | the linker places the handle | `0x06800000` |
 | 5 | link | the linker fills in the instructions | `0x06800000` |
 | 6 | link | the linker fills in the record | `0x06800000` |
@@ -40,16 +40,20 @@ The BRISC kernel opens a zone:
 It sits at line 119 of `test_streaming_profiler_zones/kernels/zones_dm.cpp`; that line number is what the host
 reports at the end.
 
-## 2. Preprocess: the site gets a label
+## 2. Preprocess: the site gets a label name
 
-`DeviceZoneScopedN(name)` expands to `TT_ZONE_DEFINE_ID(hash, name)`, which builds the label from two numbers:
+> **Neither number below is the zone id, and neither is part of it.** They only spell the *name* of an
+> assembler label, so the next steps can refer to the handle. The id is the label's *address*, which the
+> linker (step 4) and the loader (step 9) decide. The name is gone once the file is assembled.
 
-| part | value | from |
-|---|---|---|
-| `TT_PROFILER_TU_ID` | `0` | the JIT compile command: `-DTT_PROFILER_TU_ID=0` (this is the only TU in the link) |
-| `__COUNTER__` | `1` | the second zone site in the TU. Counter `0` went to `STACK-OVERFLOW`, declared at namespace scope in `kernel_profiler_streaming.hpp` |
+`DeviceZoneScopedN(name)` expands to `TT_ZONE_DEFINE_ID(hash, name)`, which spells the label name from two numbers:
 
-Label: **`__tt_zone_0_1`**.
+| part | value | from | why it is in the name |
+|---|---|---|---|
+| `TT_PROFILER_TU_ID` | `0` | the JIT compile command: `-DTT_PROFILER_TU_ID=0`, the source's index in its link | two sources of one link can be merged into one assembly by LTO; this keeps their names apart |
+| `__COUNTER__` | `1` | the second site in this source; `0` went to `STACK-OVERFLOW` in `kernel_profiler_streaming.hpp` | keeps the names of different sites in one source apart |
+
+Label name: **`__tt_zone_0_1`**. Two different sites must not share a name; nothing else depends on it.
 
 ## 3. Compile: directives plus two instructions
 
