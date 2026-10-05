@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -15,6 +16,7 @@ namespace tt::tt_fabric {
 
 class ControlPlane;
 class FabricEriscDatamoverBuilder;
+class StreamAssignment;
 struct ChipRoutingFacts;
 struct RouterLocation;
 struct RouterVcShape;
@@ -26,6 +28,10 @@ struct ManifestRouterInputs {
     const RouterLocation& location;
     const ChipRoutingFacts& chip_facts;
     const ControlPlane& control_plane;
+    // The router's mesh's stream assignment, which holds its credit transport plan.
+    const StreamAssignment& stream_assignment;
+    // get_fabric_router_addresses_to_clear()
+    const std::vector<size_t>& addresses_to_clear;
     // Indexed by RISC id, one per RISC the router runs.
     std::vector<std::unordered_map<std::string, uint32_t>> named_ct_args_per_risc;
 };
