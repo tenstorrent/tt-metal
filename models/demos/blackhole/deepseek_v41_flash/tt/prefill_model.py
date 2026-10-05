@@ -42,9 +42,9 @@ def from_chunks(ch, rows, users, Sp, S, tail):
     return xr.reshape(rows * users, Sp, *tail)[:, :S]
 
 
-ENGRAM_OWN = (
-    os.environ.get("DSV41_PF_ENGRAM_OWN", "0") == "1"
-)  # column-split Engram on the own chunks only (forward_v2_own)
+def engram_own():
+    """DSV41_PF_ENGRAM_OWN=1: column-split Engram on the own chunks only (forward_v2_own); read at call time."""
+    return os.environ.get("DSV41_PF_ENGRAM_OWN", "0") == "1"
 
 
 class DSV41PrefillModel:
@@ -222,7 +222,12 @@ class DSV41PrefillModel:
                 sl = lambda c: ttnn.to_layout(
                     ttnn.slice(erows_dev[lid], [0, 0, c * T, 0], [1, 1, (c + 1) * T, kin]), ttnn.TILE_LAYOUT
                 )  # (to_layout is a no-op for tile rows)
-                if self.cs and ENGRAM_OWN and fe.__name__ == "forward_v2" and self.engram[lid].mesh_config is not None:
+                if (
+                    self.cs
+                    and engram_own()
+                    and fe.__name__ == "forward_v2"
+                    and self.engram[lid].mesh_config is not None
+                ):
                     # own chunks only: one kv matmul per 8-chunk group + all_to_all of the kv shards (no gather of x, no 8 calls, no reduce_scatter)
                     new = []
                     for g, x in enumerate(xs):
