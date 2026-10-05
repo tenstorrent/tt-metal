@@ -14,6 +14,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapter
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import merged_num_layers
 
 SPLITS = [(0, 24), (24, 24), (48, 24), (72, 21)]
 
@@ -75,6 +76,13 @@ def test_layer_zero_only_rank_has_no_kvpe_stage_but_keeps_three():
     stages = _runtime(0, 1).kv_migration_stages(_caches(0, 1))
     assert (stages[0].base_addr, stages[0].first_layer, stages[0].count) == (0, 0, 0)
     assert [(s.first_layer, s.count) for s in stages[1:]] == [(0, 1), (0, 1)]
+
+
+def test_kda_only_later_rank_keeps_the_kvpe_layout_contiguous():
+    first, second = (_runtime(f, c).kv_migration_stages(_caches(f, c))[0] for f, c in [(0, 12), (12, 3)])
+    assert (second.base_addr, second.first_layer, second.count) == (0, 3, 0)
+    layout = [{"first_layer": s.first_layer, "count": s.count} for s in (first, second)]
+    assert merged_num_layers(layout) == 3
 
 
 def test_missing_slabs_or_mismatched_slabs_are_refused(expect_error):

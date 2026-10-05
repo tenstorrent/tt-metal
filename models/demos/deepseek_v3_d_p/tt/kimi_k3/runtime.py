@@ -115,13 +115,15 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         if self.config.dflash_enabled:
             raise RuntimeError("Kimi-K3 declares its own three migration stages; DFlash stages are not supported")
 
-        null = KvCacheStage(0, 0, 0)
+        # An empty stage still sits at this rank's slot offset: the merged table requires the gathered
+        # stages to tile [0, total), and one at 0 would break that on any later rank.
+        null_kda = KvCacheStage(0, first_kda, 0)
         # `allocate_kv_cache` returns kvpe=None for a rank that owns no full-attention layer, which
         # is reachable: a 1-layer bring-up run is layer 0, and layer 0 is KDA. No slabs, no stage.
         if kv_caches.kvpe is None:
             if my_slots:
                 raise RuntimeError(f"no KVPE cache allocated but layers {my_slots} own MLA slabs")
-            kvpe_stage = null
+            kvpe_stage = KvCacheStage(0, first_slot, 0)
         else:
             slabs_per_user = kv_caches.kvpe.storage.shape[0] // self.config.num_users
             if slabs_per_user != len(my_slots):
@@ -136,7 +138,7 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         if kda is None:
             if my_kda:
                 raise RuntimeError(f"no KDA state slabs allocated but layers {my_kda} are KDA layers")
-            return [kvpe_stage, null, null]
+            return [kvpe_stage, null_kda, null_kda]
         if tuple(kda.layer_ids) != tuple(my_kda):
             raise RuntimeError(f"KDA slabs cover layers {kda.layer_ids} but this stage owns {my_kda}")
         if kda.num_slots != self.config.num_users:
