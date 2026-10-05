@@ -91,23 +91,11 @@ std::vector<std::pair<int32_t, int32_t>> chunks_in_forwarder_ref_frame(uint32_t 
 
 std::vector<cmbf2d_ns::ChunkDescriptor> forwarding_chunks(
     StreamId stream, uint32_t my_dg_index, uint32_t ring_extent, uint32_t num_links) {
-    const bool is_cw = stream_is_cw(stream);
-    const uint32_t link = stream / 2;
-    const uint32_t m = ring_extent / 2;
-    const int32_t travel = is_cw ? 1 : -1;
-
     std::vector<cmbf2d_ns::ChunkDescriptor> chunks;
     for (const auto& [src, dst] : chunks_in_forwarder_ref_frame(ring_extent)) {
-        // A counter-clockwise stream mirrors the offsets through 0; then both land on a dispatch-group index
-        // by adding where this chip sits on the ring.
-        const uint32_t distance = static_cast<uint32_t>(dst - src);
-        chunks.push_back(cmbf2d_ns::ChunkDescriptor{
-            .origin_dg_index = static_cast<uint32_t>(
-                (static_cast<int32_t>(my_dg_index) + travel * src + static_cast<int32_t>(ring_extent)) % ring_extent),
-            .dst_dg_index = static_cast<uint32_t>(
-                (static_cast<int32_t>(my_dg_index) + travel * dst + static_cast<int32_t>(ring_extent)) % ring_extent),
-            .split_idx = distance == m ? stream : link,
-            .split_count = distance == m ? stream_count(num_links) : num_links});
+        const uint32_t origin = cmbf2d_ns::ring_step(stream, my_dg_index, src, ring_extent);
+        chunks.push_back(cmbf2d_ns::stream_chunk(
+            stream, origin, static_cast<uint32_t>(dst - src), ring_extent, stream_count(num_links)));
     }
     return chunks;
 }
@@ -129,13 +117,14 @@ std::map<StreamId, std::vector<Assignment>> generate_assignments(
             const StreamId stream = make_stream_id(link, is_cw);
             auto& list = per_stream[stream];
 
-            auto own = [&](uint32_t distance, uint32_t split_idx, uint32_t split_count) {
-                const uint32_t dg_index = (my_dg_index + (is_cw ? distance : extent - distance)) % extent;
+            auto own = [&](uint32_t distance) {
+                const cmbf2d_ns::ChunkDescriptor chunk =
+                    cmbf2d_ns::stream_chunk(stream, my_dg_index, distance, extent, stream_count(num_links));
                 list.push_back(Assignment{
-                    .dst_chip_id = ring_chip_ids[dg_index],
-                    .dst_dg_index = dg_index,
-                    .split_idx = split_idx,
-                    .split_count = split_count});
+                    .dst_chip_id = ring_chip_ids[chunk.dst_dg_index],
+                    .dst_dg_index = chunk.dst_dg_index,
+                    .split_idx = chunk.split_idx,
+                    .split_count = chunk.split_count});
             };
 
             // Furthest destination first, then the relays. Doing our own work first is what puts DISTANCE
@@ -147,13 +136,8 @@ std::map<StreamId, std::vector<Assignment>> generate_assignments(
             // Emission order is unaffected: a relay for our neighbour and the nearest own assignment are
             // both final writes, so neither puts a chunk downstream, and the forwarding chunks come off in
             // the same sequence either way.
-            for (uint32_t j = 1; j <= m; j++) {
-                const uint32_t distance = m - j + 1;
-                if (distance == m) {
-                    own(m, stream, stream_count(num_links));  // the opposite chip, shared by every stream
-                } else {
-                    own(distance, link, num_links);
-                }
+            for (uint32_t distance = m; distance >= 1; distance--) {
+                own(distance);
             }
             for (uint32_t relays = 0; relays < relay_chunks_per_stream(extent); relays++) {
                 list.push_back(Assignment{.is_relay = true, .relay_chunk = relays});
