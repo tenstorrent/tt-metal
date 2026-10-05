@@ -284,8 +284,7 @@ public:
 
     ~NumaAwareExecutor() { stop(); }
 
-    // Joins the worker. The owning pool waits for all tasks first, and stops every executor before destroying
-    // any, because a parallel_for job on one worker can wake the others.
+    // Joins the worker.
     void stop();
 
     void enqueue(std::function<void()>&& f) {
@@ -541,6 +540,7 @@ public:
 
     ~DeviceBoundThreadPool() override {
         completion_.wait();
+        // Stop every executor before destroying any: a parallel_for job on one worker can wake the others.
         for (auto& worker : workers_) {
             worker->stop();
         }
