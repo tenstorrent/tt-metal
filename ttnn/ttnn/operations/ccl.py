@@ -608,6 +608,7 @@ def _golden_function_moe_expert_token_remap(
 ttnn.attach_golden_function(
     ttnn.moe_expert_token_remap,
     golden_function=_golden_function_moe_expert_token_remap,
+    output_tensor_kwarg_names=("optional_output_mapping_tensor", "optional_output_reduced_tensor"),
 )
 
 
