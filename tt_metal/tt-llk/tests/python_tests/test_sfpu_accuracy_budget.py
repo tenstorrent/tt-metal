@@ -640,10 +640,12 @@ ONLY_EVER_TOLERANCE = frozenset(
 )
 
 
-#: Enrolled ops whose every row keys on the output format alone: the binary and ternary
-#: ops, whose drivers pair each output with one input, and the op-wide LUT tolerance.
-#: Every other enrolled op keys on its input too, so an enrolment has to land in one
-#: set or the other deliberately.
+#: Enrolled ops whose every row keys on the output format alone: the arithmetic binary
+#: ops and the ternary ops, measured per output, so one row covers every input that
+#: reaches it (most binary drivers run a full input x output cross product), and the
+#: op-wide LUT tolerance. The binary predicates and selections -- Eq/Ne/Lt/Gt/Le/Ge,
+#: Isclose, Mask, AddTopRow -- key on their input. Every other enrolled op keys on its
+#: input too, so an enrolment has to land in one set or the other deliberately.
 OUT_KEYED_ONLY = frozenset(
     {
         MathOperation.GeluAppx,
@@ -686,7 +688,11 @@ def test_every_enrolled_op_reaches_its_step_budget():
     with_budget = {op for op, _, _, _ in _live_step_budgets()}
     missing = set(enrolled_ops()) - with_budget
     assert missing == ONLY_EVER_TOLERANCE, sorted(op.name for op in missing)
-    assert input_keyed - ONLY_EVER_TOLERANCE <= with_budget
+    # The one check that an input-keyed op is never parked in ONLY_EVER_TOLERANCE, which
+    # would exempt it from the first assert above: every input-keyed op has a budget.
+    assert input_keyed <= with_budget, sorted(
+        op.name for op in input_keyed - with_budget
+    )
 
 
 #: Ops exact by construction: a sign-bit change, a copy, or an integer-valued result.
@@ -809,6 +815,135 @@ def test_an_exact_op_never_carries_a_wide_budget(op):
         assert (
             seen
         ), f"{op.name} resolves to no ULP contract at all; the row was dropped"
+
+
+def _driver_variants(test_function):
+    """Every parameter combination pytest collects for *test_function*, as dicts: the
+    cross product of its ``parametrize`` marks, read from the function itself so a
+    format or op added to a driver is covered without editing this file."""
+    import itertools
+
+    axes = []
+    for mark in getattr(test_function, "pytestmark", []):
+        if mark.name != "parametrize":
+            continue
+        names = [n.strip() for n in mark.args[0].split(",")]
+        rows = []
+        for value in mark.args[1]:
+            value = getattr(value, "values", value)  # a pytest.param
+            rows.append(dict(zip(names, value if len(names) > 1 else (value,))))
+        axes.append(rows)
+    for combo in itertools.product(*axes):
+        yield {k: v for part in combo for k, v in part.items()}
+
+
+def _exact_op_driver_variants():
+    """``(driver, op, formats, approx, dest_acc)`` for every variant a hand-built driver
+    runs an exact op in and gates on the op's *whole* contract, step budget included.
+
+    Every binary driver does (``sfpu_binary`` -> ``assert_against_contract``), with the
+    Dest promotion applied first and ``_APPROX_MODE``; of the unary drivers only the
+    three sweeps that pass ``gate_on_step_budget`` -- the rest gate on tolerance."""
+    import inspect
+
+    import test_eltwise_binary_sfpu as binary
+    import test_eltwise_unary_sfpu as unary
+
+    drivers = [
+        (fn, None, binary._APPROX_MODE)
+        for name, fn in inspect.getmembers(binary, inspect.isfunction)
+        if name.startswith("test_")
+    ] + [
+        (unary.test_eltwise_unary_sfpu_signbit, MathOperation.Signbit, None),
+        (unary.test_eltwise_unary_sfpu_isinf_isnan, None, None),
+        (unary.test_eltwise_unary_sfpu_threshold, None, None),
+    ]
+    exact = set(EXACT_ZERO_BY_CONSTRUCTION)
+    for fn, fixed_op, approx in drivers:
+        for variant in _driver_variants(fn):
+            op = fixed_op or variant.get("mathop")
+            if op in exact:
+                yield (
+                    fn.__name__,
+                    op,
+                    variant["formats"],
+                    variant.get("approx_mode", approx),
+                    variant["dest_acc"],
+                )
+
+
+def _exact_driver_skips():
+    """Driver variants of an exact op that the driver itself skips, with why. Read from
+    the driver's own list, so the waiver cannot outlive the skip."""
+    from test_eltwise_unary_sfpu import _ISINF_ISNAN_BF16_DEST_UNSUPPORTED
+
+    return {
+        ("test_eltwise_unary_sfpu_isinf_isnan", op, DataFormat.Float16_b, dest): (
+            "skipped by the driver: the bf16 -> fp32 Dest unpack delivers NaN and -inf "
+            "as +inf, so the predicate cannot be evaluated on that pipeline"
+        )
+        for op in _ISINF_ISNAN_BF16_DEST_UNSUPPORTED
+        for dest in (DestAccumulation.Yes,)
+    }
+
+
+def test_every_driven_variant_of_an_exact_op_is_gated_or_waived():
+    """`test_an_exact_op_never_carries_a_wide_budget` asks only that each exact op keep
+    *some* step budget: drop every `SfpuMask` Float16_b row and keep its Float32 one, and
+    the Float16_b variants fall back to tolerance while it still passes. This walks every
+    variant the hand-built drivers run an exact op in, on a float non-block output, and
+    requires each to resolve to a step budget -- at the Dest the variant asks for and at
+    the one it is promoted to -- or to be a variant the driver skips. The swept cells of
+    the unary exact ops are held by the test after this one."""
+    from helpers.data_format_inference import effective_dest_acc
+
+    waived = _exact_driver_skips()
+    ungated, used = [], set()
+    for driver, op, formats, approx, dest in _exact_op_driver_variants():
+        out_fmt = formats.output_format
+        if not has_ulp_gate(out_fmt) or out_fmt in _ULP_PROXY_DTYPES:
+            continue  # an integer output wants bit equality; a block float a lattice
+        promoted = effective_dest_acc(
+            formats.input_format, out_fmt, dest, MEASURED_ARCH
+        )
+        for d in {dest, promoted}:
+            contract = accuracy_contract(
+                op,
+                output_format=out_fmt,
+                input_format=formats.input_format,
+                approx_mode=approx,
+                dest_acc=d,
+                arch=MEASURED_ARCH,
+            )
+            if contract.metric is Metric.ULP:
+                continue
+            key = (driver, op, formats.input_format, d)
+            if key in waived:
+                used.add(key)
+                continue
+            ungated.append(
+                f"{driver}: {op.name} {formats.input_format.name}->{out_fmt.name} "
+                f"dest={d.name}"
+            )
+    assert not ungated, (
+        "exact-op variant(s) a driver runs that resolve to no step budget, so a "
+        "regression there passes on tolerance:\n  " + "\n  ".join(sorted(set(ungated)))
+    )
+    assert used == set(waived), "stale driver-skip waiver(s): " + ", ".join(
+        sorted(
+            f"{k[0]} {k[1].name} {k[2].name} dest={k[3].name}"
+            for k in set(waived) - used
+        )
+    )
+
+
+def test_every_exact_op_is_driven_by_a_gate():
+    """The two tests above hold only the ops something drives: an exact op neither swept
+    nor run by a step-budget driver would be checked by nothing but the existence of a
+    row."""
+    driven = {op for _, op, _, _, _ in _exact_op_driver_variants()}
+    unreached = set(EXACT_ZERO_BY_CONSTRUCTION) - driven - set(_swept_exact_ops())
+    assert not unreached, sorted(op.name for op in unreached)
 
 
 #: Swept cells of an exact-by-construction op that the table holds on the tolerance

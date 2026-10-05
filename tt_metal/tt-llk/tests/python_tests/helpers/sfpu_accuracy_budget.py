@@ -23,8 +23,10 @@ ULP -- which is how the block floats keep their block-aware lattice compares.
 **Numbers are measured, not guessed**, and every unkeyed number came from
 :data:`MEASURED_ARCH`; a ULP row binds elsewhere only if its own key names that
 architecture. A step budget is enrolled from the exhaustive sweep
-(``test_unary_sfpu_ulp.py --ulp-emit``), not declared against nothing; the rows it does
-not reach keep the declared tolerance, or a sampled measurement no gate reads yet.
+(``test_unary_sfpu_ulp.py --ulp-emit``), not declared against nothing. The rows it does
+not reach keep the declared tolerance, or a sampled measurement: the binary and ternary
+drivers gate theirs, as do the unary signbit, isinf/isnan and threshold sweeps, which
+measured on their own stimuli; any other sampled unary row is read by no gate yet.
 """
 
 from __future__ import annotations
@@ -124,8 +126,9 @@ class AccuracyContract:
         wider than the few thousand values that driver samples warrant, and feeding it
         back would loosen its gate rather than tighten it. An op on the ULP metric
         therefore keeps today's per-format tolerance here. The binary and ternary
-        drivers take :meth:`passed_test_kwargs`: their rows were measured over their own
-        sweeps.
+        drivers, and the unary signbit, isinf/isnan and threshold sweeps
+        (``gate_on_step_budget``), take :meth:`passed_test_kwargs` instead: their rows
+        were measured over their own stimuli.
         """
         if self.metric is Metric.ULP:
             return {}

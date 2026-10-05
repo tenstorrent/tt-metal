@@ -105,9 +105,9 @@ def run_sweep(mathop, formats, approx_mode, dest_acc):
     # a whole-cell error that is the unpack's, not the op's. The dedicated signed-zero
     # tests in test_eltwise_unary_sfpu.py hold that path to account.
     #
-    # Not for a block-float input: the golden quantizes that itself, and it turns the
-    # zero lane of the subnormal block it sits in into +inf as -0.0 and into ~6e-39 as
-    # +0.0 -- neither of them zero, so canonicalizing moved Ceil/Sqrt/Log/Rsqrt's
+    # Not for a block-float input: the golden quantizes that itself, and in the
+    # shared-exponent-0 block the zero lane sits in, the forced hidden bit turns it into
+    # -2**-127 as -0.0 and +2**-127 (~6e-39) as +0.0 -- neither of them zero, so canonicalizing moved Ceil/Sqrt/Log/Rsqrt's
     # Bfp8_b cells rather than fixing them.
     golden_src = (
         src_A

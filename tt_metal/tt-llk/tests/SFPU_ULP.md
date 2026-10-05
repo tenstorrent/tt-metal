@@ -3,9 +3,10 @@
 Every SFPU op declares how closely its output must match its golden, in
 `python_tests/helpers/sfpu_accuracy_budget.yaml`. For most ops that declaration is a
 tolerance. For the ops enrolled here it is a **step budget**: "every element is within
-N representable values of the reference", checked against *every distinct finite value
-of the input format* -- `±inf` and NaN are never fed, and `-0.0` is the same value as
-`+0.0`.
+N representable values of the reference". A unary op's budget comes from the exhaustive
+sweep, which checks it against *every distinct finite value of the input format* --
+`±inf` and NaN are never fed, and `-0.0` is the same value as `+0.0`. (The hand-built
+isinf/isnan sweep, which gates its predicates' rows, feeds them on purpose.)
 
 This document is how you add an op to that second group.
 
@@ -62,15 +63,16 @@ is the format's.
 A budget keyed on a format the sweep does not drive is declared but never measured, so
 it holds only as far as whatever sampled it. `Float32` is the one that bites: it has
 2^32 values and one device run holds 2^16, so it cannot be enumerated the way the
-16-bit formats are. **No gate reads a unary `Float32` row yet** -- the sweep does not
-drive it, and the unary functional driver takes only the tolerance arm of a contract --
-so those rows are a record of a sampled measurement until #57520 sweeps a strided
-`Float32` input. Binary and ternary rows are different: they were measured over the
-binary and ternary drivers' own sweeps, and those drivers gate on the whole contract,
-`Float32` included. So do the unary signbit, isinf/isnan and threshold sweeps, whose
-hand-built stimuli are what the predicates' rows were measured on (`MEASURED_ON_SWEEP`
-in `test_sfpu_accuracy_budget.py`); those ops have no registered domain, so the
-exhaustive sweep never drives them.
+16-bit formats are. **The default unary path reads no unary `Float32` row** -- the sweep
+does not drive it, and the unary functional driver takes only the tolerance arm of a
+contract -- so for most ops those rows are a record of a sampled measurement until
+#57520 sweeps a strided `Float32` input. The exceptions gate on the whole contract,
+`Float32` included: the binary and ternary drivers, whose own sweeps measured their
+rows, and the unary signbit, isinf/isnan and threshold sweeps, whose hand-built stimuli
+are what those predicates' rows were measured on (`MEASURED_ON_SWEEP` in
+`test_sfpu_accuracy_budget.py`). The isinf/isnan and threshold predicates have no
+registered domain, so those sweeps are their only gate; `Signbit`, `ReluMin` and
+`ReluMax` are driven by the exhaustive sweep on its 16-bit cells as well.
 
 On Wormhole and Blackhole an exponent-B input (`Float16_b`, `Bfp8_b`) packed to `Float16`
 needs a 32-bit Dest, so the sweep runs those cells with `dest_acc=Yes` only: asked for
@@ -207,8 +209,8 @@ pytest test_sfpu_accuracy_budget.py test_ulp_sweep.py -q
   authoring error, not a tie-break, and the loader refuses them.
 - **A row holds for the configuration it was measured in.** Every exhaustive row was
   measured with `FAST_MODE(No)` and `CLAMP_NEGATIVE(True)` compiled in, and the key has
-  no axis for either. The functional drivers build `Sqrt`/`Rsqrt` at `FastMode.Yes` and
-  take only a row's tolerance arm, which those flags do not move.
+  no axis for either. The unary functional driver builds `Sqrt`/`Rsqrt` at
+  `FastMode.Yes` and takes only a row's tolerance arm, which those flags do not move.
 - **An exhaustive budget is the emitter's number.** `test_no_step_budget_exceeds_the_measurement_it_records`
   holds every row the sweep wrote to exactly `_verdict`'s budget for the measurement
   beside it, so widening one by hand has to falsify its comment. A sampled row may sit up
