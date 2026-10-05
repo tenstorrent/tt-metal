@@ -12,6 +12,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "optimizers/adamw.hpp"
 #include "optimizers/adamw_composite.hpp"
+#include "optimizers/adamw_full_precision.hpp"
 #include "optimizers/sgd.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
@@ -280,7 +281,15 @@ TEST_F(AutogradTensorTest, FullViewTracksFusedAdamWStep) {
     expect_full_view_tracks_fused_step<optimizers::AdamW>(config);
 }
 
-// MorehAdamW writes the parameter through ttnn::moreh_adamw output tensors, outside tt-train's fused wrappers.
+// Each write path of an optimizer needs its own test: the version bump is checked at run time, not by the compiler.
+TEST_F(AutogradTensorTest, FullViewTracksFusedAdamWStepWithAmsgrad) {
+    optimizers::AdamWConfig config;
+    config.lr = 1e-2F;
+    config.amsgrad = true;
+    expect_full_view_tracks_fused_step<optimizers::AdamW>(config);
+}
+
+// MorehAdamW writes the parameter through ttnn::moreh_adamw output tensors.
 TEST_F(AutogradTensorTest, FullViewTracksMorehAdamWStep) {
     optimizers::AdamWCompositeConfig config;
     config.lr = 1e-2F;
@@ -290,6 +299,13 @@ TEST_F(AutogradTensorTest, FullViewTracksMorehAdamWStep) {
 TEST_F(AutogradTensorTest, FullViewTracksFusedSGDStep) {
     optimizers::SGDConfig config;
     config.lr = 1e-1F;
+    expect_full_view_tracks_fused_step<optimizers::SGD>(config);
+}
+
+TEST_F(AutogradTensorTest, FullViewTracksFusedSGDStepWithMomentum) {
+    optimizers::SGDConfig config;
+    config.lr = 1e-1F;
+    config.momentum = 0.9F;
     expect_full_view_tracks_fused_step<optimizers::SGD>(config);
 }
 
@@ -315,4 +331,27 @@ TEST_F(AutogradTensorTest, NativeValueTracksFusedAdamWStepOnFp32Parameter) {
     const auto expected_half = core::to_xtensor(ttnn::typecast(native, ttnn::DataType::BFLOAT16));
     const auto half_after = core::to_xtensor(theta->get_value(autograd::PreferredPrecision::HALF));
     EXPECT_TRUE(half_after == expected_half) << "the bf16 copy is stale after an in-place step";
+}
+
+// AdamWFullPrecision updates its fp32 master weights in place. Their bf16 view must follow.
+TEST_F(AutogradTensorTest, MasterWeightHalfViewTracksAdamWFullPrecisionStep) {
+    auto [theta, grad] = make_parameter(ttnn::DataType::BFLOAT16);
+    optimizers::AdamWFullPrecisionConfig config;
+    config.lr = 1e-2F;
+    optimizers::AdamWFullPrecision optimizer(serialization::NamedParameters{{"theta", theta}}, config);
+    const auto master = optimizer.get_master_weights().at("theta");
+
+    // Reading the bf16 view of the master weight leaves a cached copy behind.
+    (void)master->get_value(autograd::PreferredPrecision::HALF);
+    const auto native_before = core::to_xtensor(master->get_value(autograd::PreferredPrecision::NATIVE));
+
+    theta->set_grad(grad);
+    optimizer.step();
+
+    const auto& native = master->get_value(autograd::PreferredPrecision::NATIVE);
+    ASSERT_FALSE(core::to_xtensor(native) == native_before) << "the step did not change the fp32 master weight";
+
+    const auto expected_half = core::to_xtensor(ttnn::typecast(native, ttnn::DataType::BFLOAT16));
+    const auto half_after = core::to_xtensor(master->get_value(autograd::PreferredPrecision::HALF));
+    EXPECT_TRUE(half_after == expected_half) << "the bf16 view of the master weight is stale after an in-place step";
 }

@@ -3,7 +3,6 @@
 
 #include <benchmark/benchmark.h>
 
-#include "autograd/autocast_tensor.hpp"
 #include "benchmark_utils.hpp"
 #include "metal/optimizers/adamw/adamw.hpp"
 #include "test_utils/random_data.hpp"
@@ -62,10 +61,6 @@ void BM_AdamW(benchmark::State& state) {
     auto grad = make_random_tensor(-1.0F, 1.0F, seed + 1);
     auto exp_avg = make_random_tensor(-1.0F, 1.0F, seed + 2);
     auto exp_avg_sq = make_random_tensor(0.0F, 1.0F, seed + 3);
-    // The kernel writes these in place, so it takes write views of them.
-    ttml::autograd::AutocastTensor param_value(param);
-    ttml::autograd::AutocastTensor exp_avg_value(exp_avg);
-    ttml::autograd::AutocastTensor exp_avg_sq_value(exp_avg_sq);
 
     const float lr = 1e-3f;
     const float beta1 = 0.9f;
@@ -77,15 +72,12 @@ void BM_AdamW(benchmark::State& state) {
 
     // Warmup
     for (int i = 0; i < test_config.num_warmup_iterations; ++i) {
-        auto param_view = param_value.get_value_for_update();
-        auto exp_avg_view = exp_avg_value.get_value_for_update();
-        auto exp_avg_sq_view = exp_avg_sq_value.get_value_for_update();
         auto result = ttml::metal::adamw(
-            param_view,
+            param,
             grad,
-            exp_avg_view,
-            exp_avg_sq_view,
-            nullptr,
+            exp_avg,
+            exp_avg_sq,
+            std::nullopt,
             lr,
             beta1,
             beta2,
@@ -100,15 +92,12 @@ void BM_AdamW(benchmark::State& state) {
     for ([[maybe_unused]] auto _ : state) {
         const double avg_time_s =
             ttml::benchmark_utils::measure_average_iteration_time_s(test_config.num_measurement_iterations, [&]() {
-                auto param_view = param_value.get_value_for_update();
-                auto exp_avg_view = exp_avg_value.get_value_for_update();
-                auto exp_avg_sq_view = exp_avg_sq_value.get_value_for_update();
                 auto result = ttml::metal::adamw(
-                    param_view,
+                    param,
                     grad,
-                    exp_avg_view,
-                    exp_avg_sq_view,
-                    nullptr,
+                    exp_avg,
+                    exp_avg_sq,
+                    std::nullopt,
                     lr,
                     beta1,
                     beta2,

@@ -95,11 +95,11 @@ void AdamW::step() {
         }
 
         ttml::metal::adamw(
-            param,
+            param.tensor(),
             gradients,
-            exp_avg,
-            exp_avg_sq,
-            max_exp_avg_sq ? &*max_exp_avg_sq : nullptr,
+            exp_avg.tensor(),
+            exp_avg_sq.tensor(),
+            max_exp_avg_sq ? std::optional<ttnn::Tensor>(max_exp_avg_sq->tensor()) : std::nullopt,
             m_config.lr,
             m_config.beta1,
             m_config.beta2,

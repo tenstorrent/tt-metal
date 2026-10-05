@@ -7,22 +7,14 @@
 #include "metal/common/const_utils.hpp"
 #include "metal/ttnn_all_includes.hpp"
 
-namespace ttml::autograd {
-class MutableTensorView;
-}  // namespace ttml::autograd
-
 namespace ttml::metal {
 
-// Updates param, exp_avg, exp_avg_sq and, when given, max_exp_avg_sq in place. They are taken as views from
-// get_value_for_update() so that the derived copies of those tensors are refreshed after the write.
-
 ttnn::Tensor adamw(
-    const autograd::MutableTensorView& param,
+    const ttnn::Tensor& param_in,
     const ttnn::Tensor& grad,
-    const autograd::MutableTensorView& exp_avg,
-    const autograd::MutableTensorView& exp_avg_sq,
-    // nullptr unless amsgrad is enabled.
-    const autograd::MutableTensorView* max_exp_avg_sq,
+    const ttnn::Tensor& exp_avg,
+    const ttnn::Tensor& exp_avg_sq,
+    const std::optional<ttnn::Tensor>& max_exp_avg_sq,
     float lr,
     float beta1,
     float beta2,

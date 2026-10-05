@@ -4,17 +4,16 @@
 
 #include "adamw.hpp"
 
-#include "autograd/autocast_tensor.hpp"
 #include "device/adamw_device_operation.hpp"
 
 namespace ttml::metal {
 
 ttnn::Tensor adamw(
-    const autograd::MutableTensorView& param,
+    const ttnn::Tensor& param_in,
     const ttnn::Tensor& grad,
-    const autograd::MutableTensorView& exp_avg,
-    const autograd::MutableTensorView& exp_avg_sq,
-    const autograd::MutableTensorView* max_exp_avg_sq,
+    const ttnn::Tensor& exp_avg,
+    const ttnn::Tensor& exp_avg_sq,
+    const std::optional<ttnn::Tensor>& max_exp_avg_sq,
     float lr,
     float beta1,
     float beta2,
@@ -27,14 +26,12 @@ ttnn::Tensor adamw(
     TT_FATAL(
         (stochastic_rounding == StochasticRounding::Enabled) == stochastic_rounding_seed.has_value(),
         "a stochastic rounding seed must be supplied iff stochastic rounding is enabled");
-    const auto max_exp_avg_sq_tensor =
-        max_exp_avg_sq != nullptr ? std::optional<ttnn::Tensor>(max_exp_avg_sq->tensor()) : std::nullopt;
     return ttnn::prim::adamw(
-        param.tensor(),
+        param_in,
         grad,
-        exp_avg.tensor(),
-        exp_avg_sq.tensor(),
-        max_exp_avg_sq_tensor,
+        exp_avg,
+        exp_avg_sq,
+        max_exp_avg_sq,
         lr,
         beta1,
         beta2,
@@ -42,7 +39,7 @@ ttnn::Tensor adamw(
         beta2_pow,
         epsilon,
         weight_decay,
-        max_exp_avg_sq != nullptr,
+        max_exp_avg_sq.has_value(),
         stochastic_rounding,
         stochastic_rounding_seed);
 }

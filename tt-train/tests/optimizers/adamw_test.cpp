@@ -16,7 +16,6 @@
 #include <vector>
 
 #include "autograd/auto_context.hpp"
-#include "autograd/autocast_tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "test_utils/random_data.hpp"
@@ -600,18 +599,12 @@ TEST_F(AdamWValidationTest, RejectsLogicalShapeMismatchWithEqualPadding) {
     auto exp_avg = to_tt_bf16(test_utils::make_uniform_xarray<float>(param_shape, -1.0F, 1.0F, 125U));
     auto exp_avg_sq = to_tt_bf16(test_utils::make_uniform_xarray<float>(param_shape, 0.0F, 1.0F, 126U));
 
-    ttml::autograd::AutocastTensor param_value(param);
-    ttml::autograd::AutocastTensor exp_avg_value(exp_avg);
-    ttml::autograd::AutocastTensor exp_avg_sq_value(exp_avg_sq);
-    auto param_view = param_value.get_value_for_update();
-    auto exp_avg_view = exp_avg_value.get_value_for_update();
-    auto exp_avg_sq_view = exp_avg_sq_value.get_value_for_update();
     EXPECT_ANY_THROW(ttml::metal::adamw(
-        param_view,
+        param,
         grad,
-        exp_avg_view,
-        exp_avg_sq_view,
-        /* max_exp_avg_sq */ nullptr,
+        exp_avg,
+        exp_avg_sq,
+        /* max_exp_avg_sq */ std::nullopt,
         /* lr */ 1e-3f,
         /* beta1 */ 0.9f,
         /* beta2 */ 0.999f,

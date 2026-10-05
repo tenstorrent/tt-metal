@@ -19,8 +19,8 @@ struct AutocastState;
 }  // namespace detail
 
 // Write access to the native tensor of an AutocastTensor, obtained from get_value_for_update().
-// Pass tensor() to the in-place kernel. Destroying the view marks the native tensor as written, so the next
-// read of the other precision refreshes the derived copy.
+// Pass tensor() to the in-place kernel and keep the view alive until the kernel is enqueued: destroying the view
+// marks the native tensor as written, so the next read of the other precision refreshes the derived copy.
 class MutableTensorView {
 public:
     MutableTensorView(const MutableTensorView &) = delete;

@@ -73,14 +73,14 @@ void SGD::step() {
         // gradient); the buffer is zero at that point, so skipping dampening is sufficient.
         float dampening = first_momentum_update ? 0.0f : m_config.dampening;
         ttml::metal::sgd(
-            param,
+            param.tensor(),
             gradients,
             m_config.lr,
             m_config.momentum,
             dampening,
             m_config.weight_decay,
             m_config.nesterov,
-            momentum_buffer ? &*momentum_buffer : nullptr);
+            momentum_buffer ? std::optional<ttnn::Tensor>(momentum_buffer->tensor()) : std::nullopt);
     }
     m_steps++;
 }
