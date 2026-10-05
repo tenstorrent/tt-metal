@@ -42,6 +42,7 @@ from concurrent.futures import ThreadPoolExecutor  # noqa: E402
 import torch  # noqa: E402
 
 from models.demos.blackhole.qwen36.tests.gdn_baseline import cases as gc  # noqa: E402
+from models.demos.deepseek_v3_d_p.reference.gdn.qwen_models import qwen_model_config  # noqa: E402
 from models.demos.deepseek_v3_d_p.reference.gdn.weights import GDN_WEIGHT_NAMES  # noqa: E402
 
 
@@ -137,6 +138,8 @@ def fetch_config(model: str) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     for filename in ("config.json", "tokenizer.json", "tokenizer_config.json"):
         hf_hub_download(source.repo, filename, revision=source.revision, local_dir=directory)
+    if json.loads((directory / "config.json").read_text()) != qwen_model_config(model):
+        raise ValueError(f"{model}: hub config.json differs from the pinned in-tree copy")
     log(f"{model}: config and tokenizer in {directory}")
 
 
