@@ -5,7 +5,7 @@ Reference for two related dict formats:
 1. The HuggingFace `transformers` Llama state-dict (the format on the
    HF Hub).
 2. The on-device dict that
-   [`LlamaCompositeKV.weights_ref_hf_dict()`](../sources/examples/grpo_remote_rollout/utils/llama_overrides.py)
+   [`weights_ref_hf_dict(model)`](../sources/ttml/ttml/trainers/grpo_trainer/grpo_ttml_model.py)
    produces for transfer to
    [`tt_transformers.tt.model.Transformer.update_weights`](../../models/tt_transformers/tt/model.py).
    This same dict is also the wire format consumed by the cross-rank
@@ -115,7 +115,7 @@ lm_head.weight                                   shape=(128256, 2048)
 
 ## 3. Transfer format: `ttml → tt-transformers`
 
-[`LlamaCompositeKV.weights_ref_hf_dict()`](../sources/examples/grpo_remote_rollout/utils/llama_overrides.py)
+[`weights_ref_hf_dict(model)`](../sources/ttml/ttml/trainers/grpo_trainer/grpo_ttml_model.py)
 returns a `dict[str, ttnn.Tensor]` that is the **wire format** between
 ttml and tt-transformers'
 [`Transformer.update_weights(hf_state_dict, hf_rope=False)`](../../models/tt_transformers/tt/model.py).
@@ -235,7 +235,7 @@ In-process (ttml model and tt-transformers model on the same Python
 process and the same mesh):
 
 ```python
-hf_dict = ttml_model.weights_ref_hf_dict()
+hf_dict = weights_ref_hf_dict(ttml_model)
 try:
     ttt_model.update_weights(hf_dict, hf_rope=False)
 finally:
@@ -248,7 +248,7 @@ meshes; the BoolQ GRPO example uses this path on every step):
 ```python
 # ttml rank
 client = MPIRolloutClient(peer_rank=TTT_RANK, device=ttml_mesh)
-client.send_weights(ttml_model.weights_ref_hf_dict())
+client.send_weights(weights_ref_hf_dict(ttml_model))
 
 # ttt rank — inside MPIRolloutServer.serve_forever, on_weights_received:
 ttt_model.update_weights(received_hf_dict, hf_rope=False)
@@ -265,7 +265,9 @@ End-to-end smoke tests:
 * HF reference implementation: `transformers.models.llama.modeling_llama`
   ([huggingface/transformers](https://github.com/huggingface/transformers/tree/main/src/transformers/models/llama)).
 * ttml model definition: `LlamaCompositeKV` in
-  [`grpo_remote_rollout/utils/llama_overrides.py`](../sources/examples/grpo_remote_rollout/utils/llama_overrides.py).
+  [`ttml/trainers/grpo_trainer/llama_composite_kv.py`](../sources/ttml/ttml/trainers/grpo_trainer/llama_composite_kv.py).
+* ttml weight export: `weights_ref_hf_dict` in
+  [`ttml/trainers/grpo_trainer/grpo_ttml_model.py`](../sources/ttml/ttml/trainers/grpo_trainer/grpo_ttml_model.py).
 * tt-transformers dispatcher:
   [`Transformer.update_weights`](../../models/tt_transformers/tt/model.py).
 * Cross-rank transport: `WeightBridge` in
