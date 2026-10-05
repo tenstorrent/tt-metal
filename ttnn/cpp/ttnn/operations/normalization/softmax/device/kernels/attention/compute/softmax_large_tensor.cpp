@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+#define ELTWISE_BINARY_PER_TILE_HANDOFF true
 #include <cstdint>
 
 #include "api/compute/binary_max_min.h"

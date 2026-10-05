@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF true
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"  // BinaryFpu, DestReuseBinary, PackTile

@@ -12,6 +12,7 @@
 // Compile-time args: 0 Wt, 1 blk, 2 inv_w (float bits)
 // Runtime args: 0 num_rows
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF true
 #include <cstdint>
 
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL

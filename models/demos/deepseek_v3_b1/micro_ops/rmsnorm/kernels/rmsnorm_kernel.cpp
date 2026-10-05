@@ -8,6 +8,7 @@
 // BRISC: No-op (waits are handled by next op in pipeline)
 // TRISC: Performs RMSNorm compute via RMSNorm::Op
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF true
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
 #include "../../../unified_kernels/rmsnorm.hpp"

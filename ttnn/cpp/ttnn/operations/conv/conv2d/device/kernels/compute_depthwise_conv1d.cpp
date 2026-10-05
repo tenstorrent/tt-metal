@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Blackhole: the coalesced read path (standard multiplies only) takes the per-tile hand-off.
+#define ELTWISE_BINARY_PER_TILE_HANDOFF (get_compile_time_arg_val(10) == 1)
 #include <cstdint>
 
 #include "api/compute/tilize.h"
