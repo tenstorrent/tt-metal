@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cstdint>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <tuple>
@@ -101,11 +100,6 @@ std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>> create_
     tt::tt_metal::experimental::PrefetcherPipeSpace& space,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     bool support_multi_receiver_shards = false);
-
-// The tt-metal PrefetcherPipe calls borrow the pipes they read, so this is how a ttnn caller lends
-// its shared pipes to one. TT_FATALs on a null pipe.
-std::vector<std::reference_wrapper<const tt::tt_metal::experimental::PrefetcherPipe>> prefetcher_pipe_refs(
-    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes);
 
 // Fence the prefetcher against a command queue: every prefetch request queued after this
 // call waits until all work previously enqueued on that queue has completed on device before

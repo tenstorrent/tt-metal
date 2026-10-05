@@ -31,6 +31,7 @@ from models.demos.deepseek_v3_d_p.tt.mtp_prefill.tt_mtp import TtMTPPredictor
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import MTP_CACHE_ENV, MTP_CACHE_PREFIX, enable_mtp_indexer_slot
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor, prepare_prefill_mtp_tokens
 from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
@@ -190,6 +191,7 @@ class TtPrefillRuntime:
         self._trace_d2h_service = None
         self._trace_output = None
         self._trace_partial_in = None  # DFlash, non-first rank: persistent home of the imported drafter partial
+        self._send_warmup_activation = None
         self._trace_captured = False
         self._kv_cache = None
         self._trace_request_id = 0
@@ -636,7 +638,7 @@ class TtPrefillRuntime:
         self.compiled = True
 
     def capture_trace(self, kv_caches: MlaKvCaches) -> None:
-        """Record the segmented trace, ONCE, before the chunk loop opens.
+        """Record the segmented trace, ONCE, after the driver receives the first chunk and before it runs.
 
         The driver must call this AFTER building any D2D pipeline endpoints (their receiver-socket L1 must
         be allocated first, or it lands on the captured trace buffers on the last rank and corrupts replay)
@@ -675,6 +677,8 @@ class TtPrefillRuntime:
         out = self._forward_traced(kv_caches)
         controller.end_capture()
         ttnn.synchronize_device(self.mesh_device)
+        # Allocated inside the capture: the trace owns that address.
+        get_tt_ccl(self.mesh_device).set_shared_rs_input_keepalive(None)
         # Non-last rank: the persistent output activation the replay refreshes each chunk.
         self._trace_output = out if not self.config.is_last_rank else None
         self._trace_captured = True
@@ -725,6 +729,19 @@ class TtPrefillRuntime:
             ttnn.copy(word, dst)
             ttnn.deallocate(word)
 
+    def _stage_trace_inputs(self, input_tensor: ttnn.Tensor, metadata_msg: ttnn.Tensor) -> None:
+        """Copy one chunk's inputs into the captured persistent buffers and free them before the replay."""
+        model_input = input_tensor
+        if self.config.dflash_enabled and not self.config.is_first_rank:
+            model_input, partial = self._unpack_activation(input_tensor)
+            ttnn.deallocate(input_tensor)
+            ttnn.copy(partial, self._trace_partial_in)
+            ttnn.deallocate(partial)
+        ttnn.copy(model_input, self._trace_input)
+        ttnn.deallocate(model_input)
+        self._metadata_from_msg(metadata_msg)
+        ttnn.deallocate(metadata_msg)
+
     @property
     def trace_metadata_msg(self) -> Optional[ttnn.Tensor]:
         """The persistent packed metadata the D2D pipeline must forward downstream on the traced path.
@@ -733,6 +750,14 @@ class TtPrefillRuntime:
         the replay's writes can land on; this buffer sits at the capture-safe fixed address the recorded
         ops read, so it holds the current chunk's words intact after replay. None off the traced path."""
         return self._trace_metadata_msg
+
+    def send_warmup_inputs(self, words: tuple) -> Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]:
+        """Pre-capture operands with the traced send's specs, to compile the send once. Caller frees them;
+        None on the last rank or once taken."""
+        activation, self._send_warmup_activation = self._send_warmup_activation, None
+        if activation is None:
+            return None
+        return activation, self._meta3_dev(tuple(w & 0xFFFFFFFF for w in words))
 
     def _forward_traced(self, kv_caches: MlaKvCaches):
         """The captured/warmed metadata forward: per-chunk scalars come from the persistent metadata
@@ -743,8 +768,15 @@ class TtPrefillRuntime:
         index_kv_cache is threaded for the sparse/DSA path exactly as the eager prefill_chunk does;
         omitting it would replay the indexer against no cache. This warm pass is also what memoizes
         tt_ccl.get_indexer_ring_k_buffer, whose first call does a host ttnn.from_torch — a hard TT_FATAL
-        if it were to land inside begin_capture()."""
-        return self.model.forward(
+        if it were to land inside begin_capture().
+
+        DFlash: the drafter runs in the same capture; a non-last rank returns the packed [hidden | partial]."""
+        dflash = self.config.dflash_enabled
+        if dflash:
+            self.drafter.reset()
+            if not self.config.is_first_rank:
+                self.drafter.import_partial(self._trace_partial_in, owned=False)
+        out = self.model.forward(
             self._trace_input,
             kv_caches.kvpe,  # unwrap the engine-owned container to the primary MLA cache (mirrors prefill_chunk)
             index_kv_cache=kv_caches.index,
@@ -763,6 +795,21 @@ class TtPrefillRuntime:
             metadata=self._trace_metadata,
             on_layer_hidden=self._on_layer_hidden,
         )
+        if not dflash:
+            return out
+        if self.config.is_last_rank:
+            self.drafter.forward(
+                self._dflash_k_cache,
+                self._dflash_v_cache,
+                d2h_service=self._trace_d2h_service,
+                metadata_msg=self._trace_metadata_msg,
+                on_layer_complete=self._on_layer_complete,
+                layer_ack_base=self.config.first_layer_idx + self.config.num_layers,
+                metadata=self._trace_metadata,
+                trace_controller=self._controller,
+            )
+            return None
+        return self._pack_activation(out, self.drafter.export_partial())
 
     def _prepare_trace(self, kv_caches: MlaKvCaches) -> None:
         """Set up the persistent input + per-element metadata buffers and the controller, then warm-compile
@@ -771,10 +818,7 @@ class TtPrefillRuntime:
         chunk = self.config.chunk_size
         if self.config.dflash_enabled and not self.config.is_first_rank:
             self._trace_input = self.make_placeholder_activation(dflash_packed=False)
-            # The upstream drafter partial has to survive the replay too, so it gets a persistent home
-            # allocated BEFORE the capture. A tensor allocated after capture_trace() may sit on memory the
-            # captured forward uses as scratch, and replay() would overwrite it before the eager finalize
-            # reads it. Same [1, planes, chunk/sp, H/tp] shape as the hidden half.
+            # The capture reads the upstream partial here; same shape as the hidden half.
             self._trace_partial_in = self.make_placeholder_activation(dflash_packed=False)
         else:
             self._trace_input = self.make_chunk_input([0] * chunk)
@@ -799,7 +843,10 @@ class TtPrefillRuntime:
         self.model.set_trace_controller(controller)
         self._controller = controller
 
-        self._forward_traced(kv_caches)  # warm/compile the metadata-variant programs
+        # Warm the staging ops too: a program compiled after the capture can land on trace memory.
+        self._stage_trace_inputs(self.make_chunk_input([0] * chunk), self._meta3_dev((0, 0, chunk)))
+        # Keep the output: send_warmup_inputs needs its spec.
+        self._send_warmup_activation = self._forward_traced(kv_caches)
         ttnn.synchronize_device(self.mesh_device)
 
     def _layer_complete_cb(self, request_id: int):
@@ -937,16 +984,6 @@ class TtPrefillRuntime:
                 "on-device (the traced serving loop always carries it; the eager warm-up passes host ints)"
             )
 
-            model_input = input_tensor
-            if self.config.dflash_enabled:
-                self.drafter.reset()
-                if not self.config.is_first_rank:
-                    model_input, partial = self._unpack_activation(input_tensor)
-                    ttnn.deallocate(input_tensor)
-                    ttnn.copy(partial, self._trace_partial_in)
-                    ttnn.deallocate(partial)
-            ttnn.copy(model_input, self._trace_input)
-            ttnn.deallocate(model_input)
             # The three scalars come off the device from metadata_msg -- on this path the host is
             # not told the chunk offset at all (slot_id/actual_start/actual_end arrive None), which
             # is the point of consuming them on-device.
@@ -967,40 +1004,8 @@ class TtPrefillRuntime:
                     "llama4 query-scale buffer, which is derived on host from actual_start; run Mistral "
                     "through the host-scalar path until the scale is carried in the metadata record"
                 )
-            self._metadata_from_msg(metadata_msg)
+            self._stage_trace_inputs(input_tensor, metadata_msg)
             self._controller.replay()
-
-            if self.config.dflash_enabled and not self.config.is_first_rank:
-                # Allocated after the replay, so it is safe until the next one; _finalize_sharded_partial
-                # consumes (frees) it below, within this chunk.
-                self.drafter.import_partial(ttnn.clone(self._trace_partial_in))
-
-            if self.config.dflash_enabled:
-                # The drafter's KV finalize runs AFTER the replay and stays eager, reading the tap
-                # accumulator the recorded taps just rewrote in place.
-                assert None not in (slot_id, actual_start, actual_end), (
-                    "traced DFlash needs the chunk scalars on host (slot_id/actual_start/actual_end): the "
-                    "drafter's KV finalize runs eagerly after the replay and has no metadata overload yet. "
-                    "The prefill runner passes them on both paths; a serving engine that consumes metadata "
-                    "purely on-device cannot drive the drafter until that finalize is metadata-driven."
-                )
-                if self.config.is_last_rank:
-                    self.drafter.forward(
-                        self._dflash_k_cache,
-                        self._dflash_v_cache,
-                        actual_start,
-                        slot_idx=slot_id,
-                        actual_end=actual_end,
-                        d2h_service=self._trace_d2h_service,
-                        metadata_msg=self._trace_metadata_msg,
-                        on_layer_complete=self._layer_complete_cb(request_id),
-                        layer_ack_base=self.config.first_layer_idx + self.config.num_layers,
-                    )
-                    return None
-                partial = self.drafter.export_partial()
-                packed = ttnn.concat([self._trace_output, partial], dim=3)
-                ttnn.deallocate(partial)
-                return packed
 
             # Non-last rank: return the persistent output activation (replay just refreshed it) for the
             # driver to forward downstream over D2D. Last/single rank: the populated KV cache is the output.
@@ -1116,12 +1121,16 @@ class TtPrefillRuntime:
         # service-core L1 release -- only works while the mesh is open, so it has to run from here
         # rather than from wherever the last reference happens to drop.
         self._trace_d2h_service = None
+        self._send_warmup_activation = None
 
     def warmup_ack_count(self) -> int:
         """How many D2H ack records capture_trace()'s warm pass will emit — one per layer of this rank's
-        slice. Zero unless a traced run has a D2H ack service registered."""
+        slice, plus one per draft layer on the DFlash KV tail. Zero unless a traced run has a D2H ack
+        service registered."""
         if not self.config.use_trace or self._trace_d2h_service is None:
             return 0
+        if self.config.dflash_enabled and self.config.is_last_rank:
+            return self.config.num_layers + self.drafter.config.num_hidden_layers
         return self.config.num_layers
 
     def set_d2h_ack_service(self, d2h_service) -> None:
@@ -1146,11 +1155,9 @@ class TtPrefillRuntime:
         )
         self._trace_d2h_service = d2h_service
 
-    def kv_migration_base_address(self, kv_caches: MlaKvCaches) -> int:
-        """This stage's primary KV base DRAM address — the engine's single-cache hook for the
-        migration all-gather (it holds the cache but must not introspect its layout). `.kvpe` is an
-        MlaKvCache wrapper rather than a bare tensor, hence `.storage`. A sparse/DSA model migrates a
-        second cache too: see `kv_migration_stages`, which the engine prefers."""
+    def _kvpe_base_address(self, kv_caches: MlaKvCaches) -> int:
+        """This stage's primary KV base DRAM address, the anchor of the KVPE stage. `.kvpe` is an
+        MlaKvCache wrapper rather than a bare tensor, hence `.storage`."""
         return int(kv_caches.kvpe.storage.buffer_address())
 
     def layer_ack_layers(self, global_ack_layers: int, local_ack_layers: int) -> tuple[int, int]:
@@ -1189,7 +1196,7 @@ class TtPrefillRuntime:
         first_layer_idx = self.config.first_layer_idx if first_layer_idx is None else int(first_layer_idx)
         num_my_layers = self.config.num_layers if num_my_layers is None else int(num_my_layers)
         mtp_tail = self.config.mtp_levels if self.config.is_last_rank else 0
-        stages = [KvCacheStage(self.kv_migration_base_address(kv_caches), first_layer_idx, num_my_layers + mtp_tail)]
+        stages = [KvCacheStage(self._kvpe_base_address(kv_caches), first_layer_idx, num_my_layers + mtp_tail)]
 
         index_cache = kv_caches.index
         if index_cache is not None:
@@ -1311,8 +1318,7 @@ class TtPrefillRuntime:
                     raise RuntimeError(
                         f"dflash is on, so kv_migration_stages emits {n_block_cyclic} block-cyclic stage(s) "
                         f"plus the drafter's K and V, but {len(stage_layouts)} layouts were gathered. The "
-                        "caller must gather one layout per stage this runtime declares (a stale "
-                        "kv_migration_base_address fallback does not)."
+                        "caller must gather one layout per stage this runtime declares."
                     )
                 *block_cyclic_layouts, k_layout, v_layout = stage_layouts
                 stage_layouts = block_cyclic_layouts
