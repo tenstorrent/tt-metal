@@ -588,6 +588,10 @@ def test_dsv41_demo_session(mesh_device, device_params):
     DSV41_SESSION=gsm8k_b16,prefill_128_b16,same_prompt_b16 pytest demo/text_demo.py -k session"""
     ids = os.environ.get("DSV41_SESSION", "prefill_128_b16,gsm8k_b16").split(",")
     byid = {s.id: s for s in SCENARIOS}
+    omodes = [
+        i.partition("@")[2] for i in ids
+    ]  # optional prefill-optimisation mode per scenario: id@m (baseline) / @P / @R / @E (see tests/test_prefill_scen_device.py)
+    ids = [i.partition("@")[0] for i in ids]
     chosen = [byid[i] for i in ids]
     build_len = max(s.values[3] for s in chosen)
     cache = {}
@@ -600,7 +604,7 @@ def test_dsv41_demo_session(mesh_device, device_params):
     ab = os.environ.get(
         "DSV41_PFA_AB"
     )  # "flagsA|flagsB|...": prefill-tuning flags (tt/pf_tune.py, KEY=val joined by ",") of scenario i, cycling; "-" = baseline. Same build, same host: a paired A/B
-    for si, s in enumerate(chosen):
+    for si, (s, mode) in enumerate(zip(chosen, omodes)):
         prompts, bs, rep, msl, mgt, pp, sp, dtr, ptr, pch, wu, ins, eos = s.values
         if modes:
             os.environ["DSV41_PF_ASYNC"] = modes[si % len(modes)]
@@ -620,8 +624,24 @@ def test_dsv41_demo_session(mesh_device, device_params):
                 if getattr(m, "prefill_model", None) is not None:
                     m.prefill_model.teardown_dyn()
             logger.info(f"=== PFA_AB scenario {si} {s.id}: flags '{spec}' ===")
+        if mode:
+            os.environ["DSV41_PF_MHC"] = "packed" if set(mode) & set("PREQ") else "0"
+            os.environ["DSV41_PF_ROUTE_OWN"] = "1" if set(mode) & set("RE") else "0"
+            os.environ["DSV41_PF_ENGRAM_OWN"] = "1" if set(mode) & set("EQ") else "0"
+            for _, (_, m_, _) in cache.items():  # force a new prefill trace capture in the new mode
+                pm_ = getattr(m_, "prefill_model", None)
+                if pm_ is not None and getattr(pm_, "dyn", None) is not None:
+                    pm_.teardown_dyn()
+                    pm_.dyn_out = None
+                    pm_.head_out = []
         logger.info(
-            f"=== session scenario {s.id} (DSV41_PF_ASYNC={os.environ.get('DSV41_PF_ASYNC')}, ROW_TOKENS={os.environ.get('DSV41_PREFILL_ROW_TOKENS')}) ==="
+            f"=== session scenario {s.id} (DSV41_PF_ASYNC={os.environ.get('DSV41_PF_ASYNC')}, ROW_TOKENS={os.environ.get('DSV41_PREFILL_ROW_TOKENS')}"
+            + (
+                f" MODE {mode}: PF_MHC={os.environ['DSV41_PF_MHC']} ROUTE_OWN={os.environ['DSV41_PF_ROUTE_OWN']} ENGRAM_OWN={os.environ['DSV41_PF_ENGRAM_OWN']}"
+                if mode
+                else ""
+            )
+            + ") ==="
         )
         os.environ["DSV41_RAGGED"] = "1" if s.id.endswith("_ragged") else "2" if s.id.endswith("_ragged_u4") else "0"
         _run_demo(

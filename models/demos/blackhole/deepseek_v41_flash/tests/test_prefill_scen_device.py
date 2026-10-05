@@ -247,6 +247,20 @@ def test_prefill_scenarios(mesh_device):
                 f"CHAIN {tag} layer {lid:2d}: hidden PCC {R.pcc(got, ref['h_out'].float()):.5f}  last-token {R.pcc(got[:, -1], ref['h_out'][:, -1].float()):.5f}"
             )
 
+        mode = ""
+        if set(flags) & set(
+            "mPREQ"
+        ):  # prefill optimisation mode of this scenario: m = baseline, P = packed mHC, R = + own-chunk router, E = + own-chunk Engram
+            fl = set(flags)
+            os.environ["DSV41_PF_MHC"] = "packed" if fl & set("PREQ") else "0"
+            os.environ["DSV41_PF_ROUTE_OWN"] = "1" if fl & set("RE") else "0"
+            os.environ["DSV41_PF_ENGRAM_OWN"] = "1" if fl & set("EQ") else "0"
+            mode = "_" + "".join(ch for ch in "mPREQ" if ch in fl)
+            if getattr(model, "dyn", None) is not None:
+                model.teardown_dyn()  # a new trace capture with the new mode
+            log(
+                f"MODE {tag}: DSV41_PF_MHC={os.environ['DSV41_PF_MHC']} ROUTE_OWN={os.environ['DSV41_PF_ROUTE_OWN']} ENGRAM_OWN={os.environ['DSV41_PF_ENGRAM_OWN']}"
+            )
         model.fake_rows = S > int(os.environ.get("DSV41_ENGRAM_FAKE_ABOVE", "1000000"))
         if "D" in flags:  # traced chunks only (no eager run): performance + accuracy vs the dump where one exists
             assert CH, "D needs a chunk size"
@@ -270,16 +284,16 @@ def test_prefill_scenarios(mesh_device):
                 ttft = time.perf_counter() - t1
                 n_all = n_ch * iters
                 log(
-                    f"TRACED {tag} upr={UPR} x{iters} iters run {rep}: TTFT(last user) {ttft:.2f} s ({B * S / ttft:.0f} tok/s) [compile+capture {comp:.1f} s, "
+                    f"TRACED{mode} {tag} upr={UPR} x{iters} iters run {rep}: TTFT(last user) {ttft:.2f} s ({B * S / ttft:.0f} tok/s) [compile+capture {comp:.1f} s, "
                     f"without compile {ttft - comp:.2f} s = {B * S / (ttft - comp):.0f} tok/s; first-iteration users get their token after {per_it[0] - comp:.2f} s]; "
                     f"{n_ch} chunks of {CH} x {UPR} users/row per iteration: replay/chunk {tm['replay_per_chunk'] / n_all:.3f} s, host/chunk "
                     f"{tm['host_per_chunk'] / n_all:.3f} s, head+readback {tm['head_readback']:.2f} s"
                 )
             if os.environ.get("DSV41_SAVE_LOGITS"):
-                torch.save(lg_d, f"{os.environ['DSV41_SAVE_LOGITS']}_{S}_{CH}.pt")
+                torch.save(lg_d, f"{os.environ['DSV41_SAVE_LOGITS']}_{S}_{CH}{mode}.pt")
             if fin is not None and "prefill_logits" in fin:
                 log(
-                    f"TRACED FIRST TOKEN {tag}: logits PCC {R.pcc(lg_d, fin['prefill_logits']):.5f}, argmax match {int((lg_d.argmax(-1) == fin['prefill_argmax']).sum())}/{B}"
+                    f"TRACED FIRST TOKEN{mode} {tag}: logits PCC {R.pcc(lg_d, fin['prefill_logits']):.5f}, argmax match {int((lg_d.argmax(-1) == fin['prefill_argmax']).sum())}/{B}"
                 )
             else:
                 log(f"TRACED first tokens {tag}: {lg_d.argmax(-1).tolist()} finite={bool(torch.isfinite(lg_d).all())}")

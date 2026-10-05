@@ -18,7 +18,7 @@ import torch
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt.h2d import h2d, recording, replay
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_attention import clear_chunk_caches, pad_len
-from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import colsplit_active
+from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import colsplit_active, unpack_streams
 
 T = 32
 ER_RM = (
@@ -41,6 +41,11 @@ def from_chunks(ch, rows, users, Sp, S, tail):
     """inverse of ``to_chunks`` for host chunks [rows*T, ...] -> [rows*users, S, *tail]."""
     xr = torch.stack([c.reshape(rows, T, *tail) for c in ch], dim=1).reshape(rows, users * Sp, *tail)
     return xr.reshape(rows * users, Sp, *tail)[:, :S]
+
+
+def engram_own():
+    """DSV41_PF_ENGRAM_OWN=1: column-split Engram on the own chunks only (forward_v2_own); read at call time."""
+    return os.environ.get("DSV41_PF_ENGRAM_OWN", "0") == "1"
 
 
 class DSV41PrefillModel:
@@ -207,6 +212,7 @@ class DSV41PrefillModel:
                     pl_.pmoe.warmup()
         for lid, pl in self.layers:
             if lid in self.engram:
+                xs, pres = unpack_streams(xs, pres)
                 t0 = time.perf_counter()
                 fe = (
                     self.engram[lid].forward
@@ -218,6 +224,23 @@ class DSV41PrefillModel:
                     ttnn.slice(erows_dev[lid], [0, 0, c * T, 0], [1, 1, (c + 1) * T, kin]), ttnn.TILE_LAYOUT
                 )  # (to_layout is a no-op for tile rows)
                 if (
+                    self.cs
+                    and engram_own()
+                    and fe.__name__ == "forward_v2"
+                    and self.engram[lid].mesh_config is not None
+                ):
+                    # own chunks only: one kv matmul per 8-chunk group + all_to_all of the kv shards (no gather of x, no 8 calls, no reduce_scatter)
+                    new = []
+                    for g, x in enumerate(xs):
+                        rg = ttnn.to_layout(
+                            ttnn.slice(
+                                erows_dev[lid], [0, 0, g * self.cols * T, 0], [1, 1, (g + 1) * self.cols * T, kin]
+                            ),
+                            ttnn.TILE_LAYOUT,
+                        )
+                        new.append(self.engram[lid].forward_v2_own(x, rg))
+                        ttnn.deallocate(rg)
+                elif (
                     self.cs
                 ):  # own-token chunks -> replicated 8-chunk groups -> Engram -> back (reduce_scatter of 8 identical copies, x1/8 exact)
                     mc, cc = pl.L.mesh_config, pl.L.ccl
@@ -265,7 +288,9 @@ class DSV41PrefillModel:
             xs, pres = outs, pouts
             sync("layers", t0)
             if hook is not None:
+                xs, pres = unpack_streams(xs, pres)
                 hook(lid, xs, pres)
+        xs, pres = unpack_streams(xs, pres)
         if dyn:
             self.dyn_out = (xs, pres)
             return None
@@ -684,6 +709,10 @@ class DSV41PrefillModel:
                 ):  # e.g. the ragged last-token head: dyn_out = (xs, pres) is valid for THIS chunk only
                     hk(ci * C, C)
             t2 = time.perf_counter()
+            if os.environ.get(
+                "DSV41_PROF_REPLAY"
+            ):  # device-profiler drain after every replay (profiling runs only; excluded from the timing)
+                ttnn.ReadDeviceProfiler(self.md)
             tm = self.timing
             tm["dev_wait"] = tm.get("dev_wait", 0.0) + t_ev - t0
             tm["gather_wait"] = tm.get("gather_wait", 0.0) + t_g - t_ev
