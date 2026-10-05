@@ -56,7 +56,7 @@ inline void calculate_sfpu_binary(
             using Operand = SfpuOperand<SfpuReg::Dest, SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat>>;
             constexpr bool round_to_bf16 = !is_fp32_dest_acc_en && dst_rounding_mode == DstRoundingMode::NearestEven;
             using Output = SfpuOperand<SfpuReg::Dest, DestBf16RneFormat<round_to_bf16>>;
-            calculate_add_operands<1>(
+            calculate_binary_operands<AddMath, 1>(
                 Operand{static_cast<int>(dst_index_in0 * dst_tile_size_sfpi)},
                 Operand{static_cast<int>(dst_index_in1 * dst_tile_size_sfpi)},
                 Output{static_cast<int>(dst_index_out * dst_tile_size_sfpi)});
@@ -106,19 +106,16 @@ inline void calculate_sfpu_binary(
 }
 
 /**
- * @brief ADD over one SrcS slice (slots per @ref SrcsLayout).
+ * @brief SrcS ADD op type (init() / run(), see @ref SfpuSrcsBinaryOp): in0 + in1 over one slice per call.
+ *
+ * Sfpi only: ADD has no SFPLOADMACRO version, so requesting LoadMacro fails to compile.
  *
  * @tparam LAYOUT: Load and store layout, values = <F16a/F16b/F32>; unpack destination and pack
  *         source formats must match.
- * @note The caller runs unpack/pack and clears the SrcS valids after this call, as
- *       llk_sfpu_srcs_binary does.
+ * @tparam ISSUE: Issue mechanism, values = <Sfpi>.
  */
-template <sfpi::DataLayout LAYOUT>
-sfpi_inline void calculate_add_srcs() {
-    using Layout = SrcsLayout<LAYOUT>;
-    using Operand = SfpuOperand<SfpuReg::SrcS, SfpiFormat<LAYOUT, sfpi::vFloat>>;
-    calculate_add_operands<Layout::ops>(Operand{Layout::in0}, Operand{Layout::in1}, Operand{Layout::out});
-}
+template <sfpi::DataLayout LAYOUT, SfpuIssue ISSUE = SfpuIssue::Sfpi>
+using AddSrcs = SrcsBinary<AddMath, LAYOUT, resolve_sfpu_issue<ISSUE, false /*HAS_LOADMACRO*/>()>;
 
 /**
  * @brief Initialisation hook for binary SFPU kernels.

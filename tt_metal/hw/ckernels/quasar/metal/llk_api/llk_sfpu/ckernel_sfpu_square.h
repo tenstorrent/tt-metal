@@ -17,25 +17,10 @@
 namespace ckernel {
 namespace sfpu {
 
-/**
- * @brief Square on independently located floating-point operands: output = input * input.
- *
- * Advances explicit indices only; the caller owns setup and synchronization. Input/output
- * ranges must coincide or be disjoint.
- */
-template <int ITERATIONS, class Input, class Output>
-sfpi_inline void calculate_square_operands(const Input& input, const Output& output) {
-    static_assert(ITERATIONS > 0, "Square requires at least one SFPI access");
-    static_assert(
-        std::is_same_v<typename Input::value_type, sfpi::vFloat> &&
-            std::is_same_v<typename Output::value_type, sfpi::vFloat>,
-        "Square requires floating-point operands");
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat value = input.load(d);
-        output.store(d, value * value);
-    }
-}
+/// Math policy for square: x * x. Shared by the Dest and SrcS paths via @ref calculate_unary_operands.
+struct SquareMath {
+    sfpi_inline static sfpi::vFloat apply(sfpi::vFloat x) { return x * x; }
+};
 
 /**
  * @brief Configure the SFPU address mode used by the square op.
@@ -65,24 +50,21 @@ inline void calculate_square() {
     using Output = SfpuOperand<SfpuReg::Dest, SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat, ADDR_MOD_6>>;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        calculate_square_operands<1>(Input{}, Output{});
+        calculate_unary_operands<SquareMath, 1>(Input{}, Output{});
     }
 }
 
 /**
- * @brief Square over one SrcS slice (slots per @ref SrcsLayout).
+ * @brief SrcS square op type (init() / run(), see @ref SfpuSrcsUnaryOp): x * x over one slice per call.
+ *
+ * Sfpi only: square has no SFPLOADMACRO version, so requesting LoadMacro fails to compile.
  *
  * @tparam LAYOUT: Load and store layout, values = <F16a/F16b/F32>; unpack destination and pack
  *         source formats must match.
- * @note The caller runs unpack/pack and clears the SrcS valids after this call, as
- *       llk_sfpu_srcs_unary does.
+ * @tparam ISSUE: Issue mechanism, values = <Sfpi>.
  */
-template <sfpi::DataLayout LAYOUT>
-sfpi_inline void calculate_square_srcs() {
-    using Layout = SrcsLayout<LAYOUT>;
-    using Operand = SfpuOperand<SfpuReg::SrcS, SfpiFormat<LAYOUT, sfpi::vFloat>>;
-    calculate_square_operands<Layout::ops>(Operand{Layout::in0}, Operand{Layout::out});
-}
+template <sfpi::DataLayout LAYOUT, SfpuIssue ISSUE = SfpuIssue::Sfpi>
+using SquareSrcs = SrcsUnary<SquareMath, LAYOUT, resolve_sfpu_issue<ISSUE, false /*HAS_LOADMACRO*/>()>;
 
 }  // namespace sfpu
 }  // namespace ckernel

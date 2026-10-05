@@ -177,15 +177,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
         LLK_ASSERT(srcs_format == static_cast<DataFormat>(formats.pack_S_src), "SrcS ADD requires matching unpack destination and pack source formats");
         // FormatConfig has no unpack_T_* fields, so T is unpacked with S's format. Callers must keep
         // stimuli_T_format == stimuli_S_format or T will be read with the wrong format.
-        llk_sfpu_srcs_binary_init(
-            L1_ADDRESS(params.buffer_S[0]),
-            L1_ADDRESS(params.buffer_T[0]),
-            static_cast<DataFormat>(formats.unpack_S_src),
-            static_cast<DataFormat>(formats.unpack_S_dst),
-            L1_ADDRESS(params.buffer_Res[0]),
-            static_cast<DataFormat>(formats.pack_S_src),
-            static_cast<DataFormat>(formats.pack_S_dst),
-            IMPLIED_MATH_FORMAT);
+        // The op type depends on the SrcS layout, known only at runtime: each phase dispatches once
+        // and uses the same type for init and the tile loop.
+        dispatch_sfpu_srcs_format(
+            srcs_format,
+            [&](auto layout)
+            {
+                AddSrcs<decltype(layout)::layout>::init(
+                    L1_ADDRESS(params.buffer_S[0]),
+                    L1_ADDRESS(params.buffer_T[0]),
+                    static_cast<DataFormat>(formats.unpack_S_src),
+                    static_cast<DataFormat>(formats.unpack_S_dst),
+                    L1_ADDRESS(params.buffer_Res[0]),
+                    static_cast<DataFormat>(formats.pack_S_src),
+                    static_cast<DataFormat>(formats.pack_S_dst),
+                    IMPLIED_MATH_FORMAT);
+            });
         PROFILER_SYNC();
     }
     {
@@ -194,12 +201,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             dispatch_sfpu_srcs_format(
                 srcs_format,
-                [&](auto format)
+                [&](auto layout)
                 {
-                    using Format = decltype(format);
                     for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
                     {
-                        llk_sfpu_srcs_binary(num_tiles, srcs_format, [](int, int, int, int) { calculate_add_srcs<Format::layout>(); });
+                        AddSrcs<decltype(layout)::layout>::run(num_tiles, srcs_format);
                     }
                 });
         }

@@ -282,27 +282,6 @@ struct ExpFp32Accurate {
 template <bool APPROXIMATION_MODE, bool FP32_RESULT>
 using ExpAlgo = std::conditional_t<(!FP32_RESULT || APPROXIMATION_MODE), ExpHwLut, ExpFp32Accurate>;
 
-/**
- * @brief EXP on independently located floating-point operands: output = Algo::apply(input).
- *
- * Advances explicit indices only; the caller owns setup and synchronization. Input/output
- * ranges must coincide or be disjoint.
- *
- * @tparam Algo: @ref ExpHwLut or @ref ExpFp32Accurate (see @ref ExpAlgo).
- */
-template <class Algo, int ITERATIONS, class Input, class Output>
-sfpi_inline void calculate_exponential_operands(const Input& input, const Output& output) {
-    static_assert(ITERATIONS > 0, "EXP requires at least one SFPI access");
-    static_assert(
-        std::is_same_v<typename Input::value_type, sfpi::vFloat> &&
-            std::is_same_v<typename Output::value_type, sfpi::vFloat>,
-        "EXP requires floating-point operands");
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        output.store(d, Algo::apply(input.load(d)));
-    }
-}
-
 // Calculates EXP over a Dest span (one face by default). Quasar exposes two implementations:
 //   - approximate exp via the HW nonlinear lookup table (sfpi::approx_exp), and
 //   - full-precision fp32 exp (_sfpu_exp_fp32_accurate_, ported from Blackhole).
@@ -325,7 +304,7 @@ void calculate_exponential([[maybe_unused]] const std::uint32_t exp_base_scale_f
     using Algo = ExpAlgo<APPROXIMATION_MODE, EN_32BIT_DEST>;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        calculate_exponential_operands<Algo, 1>(Operand{}, Operand{});
+        calculate_unary_operands<Algo, 1>(Operand{}, Operand{});
         sfpi::dst_reg++;
     }
 }
@@ -414,14 +393,15 @@ inline std::uint32_t _exp_loadmacro_op_(const int num_sfpu_iterations) {
  *       either.
  */
 template <sfpi::DataLayout LAYOUT>
-struct SrcsUnaryOp<ExpHwLut, LAYOUT, SfpuIssue::LoadMacro> {
+struct SrcsUnary<ExpHwLut, LAYOUT, SfpuIssue::LoadMacro>
+    : SfpuSrcsUnaryOp<SrcsUnary<ExpHwLut, LAYOUT, SfpuIssue::LoadMacro>> {
     using Layout = SrcsLayout<LAYOUT>;
     static_assert(Layout::ops <= 4, "Replay cycles LREG0-3 (d & 3); >4 in-flight macros would reuse a live LREG");
 
     // The last macro's `done` bit hands both SrcS banks back.
     static constexpr bool hw_clears_valids = true;
 
-    static void init() {
+    static void init_op() {
         // The folded store lands in the out slot: STORE_OFFSET is the in0 -> out distance in rows.
         constexpr std::uint32_t store_offset =
             static_cast<std::uint32_t>((Layout::out - Layout::in0) * ckernel::math::SFP_ROWS);
@@ -432,7 +412,7 @@ struct SrcsUnaryOp<ExpHwLut, LAYOUT, SfpuIssue::LoadMacro> {
             Layout::sfpmem);
     }
 
-    static void run_slice() { TTI_REPLAY(0, _exp_loadmacro_replay_len_(Layout::ops), 0, 0, 0, 0); }
+    static void calculate() { TTI_REPLAY(0, _exp_loadmacro_replay_len_(Layout::ops), 0, 0, 0, 0); }
 };
 
 #endif
@@ -441,7 +421,7 @@ template <bool APPROXIMATION_MODE, sfpi::DataLayout LAYOUT>
 using ExpSrcsAlgo = ExpAlgo<APPROXIMATION_MODE, LAYOUT == sfpi::DataLayout::F32>;
 
 /**
- * @brief SrcS EXP op for @ref llk_sfpu_srcs_unary: math per @ref ExpAlgo, issue per ISSUE.
+ * @brief SrcS EXP op type (init() / run(), see @ref SfpuSrcsUnaryOp): math per @ref ExpAlgo, issue per ISSUE.
  *
  * @tparam APPROXIMATION_MODE: Forwarded to @ref ExpAlgo; only F32 with false runs the accurate path.
  * @tparam LAYOUT: Load and store layout, values = <F16a/F16b/F32>; unpack destination and pack
@@ -450,7 +430,7 @@ using ExpSrcsAlgo = ExpAlgo<APPROXIMATION_MODE, LAYOUT == sfpi::DataLayout::F32>
  *         (APPROXIMATION_MODE or a 16-bit layout) and falls back to Sfpi without SFPLOADMACRO.
  */
 template <bool APPROXIMATION_MODE, sfpi::DataLayout LAYOUT, SfpuIssue ISSUE = SfpuIssue::Sfpi>
-using ExpSrcs = SrcsUnaryOp<
+using ExpSrcs = SrcsUnary<
     ExpSrcsAlgo<APPROXIMATION_MODE, LAYOUT>,
     LAYOUT,
     resolve_sfpu_issue<ISSUE, std::is_same_v<ExpSrcsAlgo<APPROXIMATION_MODE, LAYOUT>, ExpHwLut>>()>;

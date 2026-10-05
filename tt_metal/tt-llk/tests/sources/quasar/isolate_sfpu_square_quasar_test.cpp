@@ -48,23 +48,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const volatile FormatConfig& formats = params.formats;
 #endif
 
-    llk_sfpu_srcs_unary_init(
-        L1_ADDRESS(params.buffer_A[0]),
-        static_cast<DataFormat>(formats.unpack_S_src),
-        static_cast<DataFormat>(formats.unpack_S_dst),
-        L1_ADDRESS(params.buffer_Res[0]),
-        static_cast<DataFormat>(formats.pack_S_src),
-        static_cast<DataFormat>(formats.pack_S_dst),
-        IMPLIED_MATH_FORMAT);
-
     const DataFormat srcs_format = static_cast<DataFormat>(formats.unpack_S_dst);
     LLK_ASSERT(srcs_format == static_cast<DataFormat>(formats.pack_S_src), "SrcS square requires matching unpack destination and pack source formats");
+    // The op type depends on the SrcS layout, known only at runtime: dispatch once for init and once
+    // for the tile loop, using the same type for both.
     dispatch_sfpu_srcs_format(
         srcs_format,
         [&](auto layout)
         {
-            using Layout = decltype(layout);
-            llk_sfpu_srcs_unary(params.TILE_CNT, srcs_format, [](int, int, int) { calculate_square_srcs<Layout::layout>(); });
+            using Op = SquareSrcs<decltype(layout)::layout>;
+            Op::init(
+                L1_ADDRESS(params.buffer_A[0]),
+                static_cast<DataFormat>(formats.unpack_S_src),
+                srcs_format,
+                L1_ADDRESS(params.buffer_Res[0]),
+                static_cast<DataFormat>(formats.pack_S_src),
+                static_cast<DataFormat>(formats.pack_S_dst),
+                IMPLIED_MATH_FORMAT);
+            Op::run(params.TILE_CNT, srcs_format);
         });
 
     wait_sfpu_idle();

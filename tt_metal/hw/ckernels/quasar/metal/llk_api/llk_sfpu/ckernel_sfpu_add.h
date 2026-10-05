@@ -17,28 +17,11 @@
 namespace ckernel {
 namespace sfpu {
 
-/**
- * @brief ADD on independently located floating-point operands: output = input0 + input1.
- *
- * Any rounding is the output operand's store policy. Advances explicit indices only; the caller
- * owns setup and synchronization. Each input range must coincide with the output or be disjoint.
- */
-template <int ITERATIONS, class Input0, class Input1, class Output>
-sfpi_inline void calculate_add_operands(const Input0& input0, const Input1& input1, const Output& output) {
-    static_assert(ITERATIONS > 0, "ADD requires at least one SFPI access");
-    static_assert(
-        std::is_same_v<typename Input0::value_type, sfpi::vFloat> &&
-            std::is_same_v<typename Input1::value_type, sfpi::vFloat> &&
-            std::is_same_v<typename Output::value_type, sfpi::vFloat>,
-        "ADD requires floating-point operands");
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat in0 = input0.load(d);
-        sfpi::vFloat in1 = input1.load(d);
-        sfpi::vFloat result = in0 + in1;
-        output.store(d, result);
-    }
-}
+/// Math policy for ADD: a + b. Shared by the Dest and SrcS paths via @ref calculate_binary_operands;
+/// any rounding is the output operand's store policy.
+struct AddMath {
+    sfpi_inline static sfpi::vFloat apply(sfpi::vFloat a, sfpi::vFloat b) { return a + b; }
+};
 
 template <
     bool APPROXIMATION_MODE,

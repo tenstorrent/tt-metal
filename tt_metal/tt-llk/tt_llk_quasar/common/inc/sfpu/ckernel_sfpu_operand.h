@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <type_traits>
+#include <utility>
+
 #include "ckernel.h"
 #include "sfpi.h"
 #include "sfpu_reg.h"
@@ -98,5 +101,54 @@ public:
 private:
     int base_offset_;
 };
+
+/**
+ * @brief Apply a unary math policy over ITERATIONS SFPI steps: output[d] = MATH::apply(input[d]).
+ *
+ * The one load -> math -> store loop shared by every register file: Dest and SrcS callers differ
+ * only in the operands they pass. Advances explicit indices only; the caller owns traversal and
+ * synchronization. Input/output ranges must coincide or be disjoint.
+ *
+ * @tparam MATH: Math policy with static apply(value) -> value, e.g. ExpHwLut.
+ * @tparam ITERATIONS: Number of SFPI steps.
+ */
+template <class MATH, int ITERATIONS, class Input, class Output>
+sfpi_inline void calculate_unary_operands(const Input& input, const Output& output)
+{
+    static_assert(ITERATIONS > 0, "A unary SFPU op requires at least one SFPI access");
+    static_assert(
+        std::is_same_v<decltype(MATH::apply(std::declval<typename Input::value_type>())), typename Output::value_type>,
+        "MATH::apply must map the input operand's value type to the output operand's value type");
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        output.store(d, MATH::apply(input.load(d)));
+    }
+}
+
+/**
+ * @brief Apply a binary math policy over ITERATIONS SFPI steps: output[d] = MATH::apply(input0[d], input1[d]).
+ *
+ * Binary counterpart of @ref calculate_unary_operands; any rounding is the output operand's store
+ * policy. Each input range must coincide with the output or be disjoint.
+ *
+ * @tparam MATH: Math policy with static apply(a, b) -> value, e.g. AddMath.
+ * @tparam ITERATIONS: Number of SFPI steps.
+ */
+template <class MATH, int ITERATIONS, class Input0, class Input1, class Output>
+sfpi_inline void calculate_binary_operands(const Input0& input0, const Input1& input1, const Output& output)
+{
+    static_assert(ITERATIONS > 0, "A binary SFPU op requires at least one SFPI access");
+    static_assert(
+        std::is_same_v<
+            decltype(MATH::apply(std::declval<typename Input0::value_type>(), std::declval<typename Input1::value_type>())),
+            typename Output::value_type>,
+        "MATH::apply must map the input operands' value types to the output operand's value type");
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        output.store(d, MATH::apply(input0.load(d), input1.load(d)));
+    }
+}
 
 } // namespace ckernel::sfpu

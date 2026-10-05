@@ -189,7 +189,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             srcs_format,
             [&](auto layout)
             {
-                llk_sfpu_srcs_unary_init<ExpOp<decltype(layout)>>(
+                ExpOp<decltype(layout)>::init(
                     L1_ADDRESS(params.buffer_S[0]),
                     static_cast<DataFormat>(formats.unpack_S_src),
                     srcs_format,
@@ -211,7 +211,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
                     {
-                        llk_sfpu_srcs_unary<ExpOp<decltype(layout)>>(num_tiles, srcs_format);
+                        ExpOp<decltype(layout)>::run(num_tiles, srcs_format);
                     }
                 });
         }

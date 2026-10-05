@@ -47,44 +47,120 @@ struct SrcsLayout {
 };
 
 /**
- * @brief One unary SFPU op over one SrcS slice, run by llk_sfpu_srcs_unary<Op>.
+ * @brief CRTP base for unary SrcS SFPU op types; provides init() and run().
  *
- * MATH is the math policy (static vFloat apply(vFloat)); ISSUE selects how it is issued. Each
- * supported (MATH, ISSUE) pair is a specialization exposing:
- *   - init(): one-time setup of state the op owns (macros, replay buffer);
- *   - run_slice(): reads the in0 slot and writes the out slot of the current slice
- *     (@ref SrcsLayout);
- *   - hw_clears_valids: true when run_slice() hands the SrcS banks back itself, so the caller
- *     must not clear the valids again.
- * The Sfpi specialization below serves every MATH; LoadMacro versions are defined per op.
+ * The SrcS counterpart of the Dest op-class base: an op supplies calculate() (one SrcS slice) and,
+ * when it owns state, init_op() and hw_clears_valids; the base adds the SrcS pipeline set-up and
+ * the tile/slice walk. init() and run() are defined in llk_sfpu_srcs_api.h next to the SrcS
+ * pipeline, so SFPU kernel headers do not pull the unpack/pack code into other builds.
+ *
+ * @tparam Op: The derived op type.
+ * @note Include llk_sfpu_srcs_api.h; call init() once, then run() for the tiles.
+ */
+template <class Op>
+struct SfpuSrcsUnaryOp {
+    /// calculate() leaves the SrcS valids to the base. Set to true in ops whose last instruction
+    /// hands the banks back itself, so the base does not clear them again.
+    static constexpr bool hw_clears_valids = false;
+
+    /// Default per-op init: no state beyond the SrcS pipeline set-up.
+    static void init_op() {}
+
+    template <std::uint8_t INSTRN_COUNT = 1>
+    static void init(
+        const std::uint32_t l1_in_addr_16B,
+        const DataFormat unpack_S_src_format,
+        const DataFormat unpack_S_dst_format,
+        const std::uint32_t l1_out_addr_16B,
+        const DataFormat pack_S_src_format,
+        const DataFormat pack_S_dst_format,
+        const bool implied_math_format);
+
+    template <std::uint8_t INSTRN_COUNT = 1>
+    static void run(const std::uint32_t num_tiles, const DataFormat unpack_S_dst_format);
+};
+
+/**
+ * @brief Unary SrcS op for math policy MATH, issued per ISSUE; see @ref SfpuSrcsUnaryOp.
+ *
+ * The Sfpi specialization below serves every MATH (static vFloat apply(vFloat)); LoadMacro
+ * versions are defined per op, next to the op's kernel. Any other pair fails to compile.
  *
  * @tparam MATH: Math policy, e.g. @ref ExpHwLut.
  * @tparam LAYOUT: Load and store layout, values = <F16a/F16b/F32>; unpack destination and pack
  *         source formats must match.
  * @tparam ISSUE: Issue mechanism, values = <Sfpi/LoadMacro>; resolve it with
  *         @ref resolve_sfpu_issue.
- * @note Call @ref llk_sfpu_srcs_unary_init with this type before @ref llk_sfpu_srcs_unary.
  */
 template <class MATH, sfpi::DataLayout LAYOUT, SfpuIssue ISSUE>
-struct SrcsUnaryOp {
+struct SrcsUnary {
     static_assert(sizeof(MATH) == 0, "This SFPU op has no SrcS implementation for the requested SfpuIssue");
 };
 
 template <class MATH, sfpi::DataLayout LAYOUT>
-struct SrcsUnaryOp<MATH, LAYOUT, SfpuIssue::Sfpi> {
-    static constexpr bool hw_clears_valids = false;
-
-    static void init() {}
-
-    sfpi_inline static void run_slice() {
+struct SrcsUnary<MATH, LAYOUT, SfpuIssue::Sfpi> : SfpuSrcsUnaryOp<SrcsUnary<MATH, LAYOUT, SfpuIssue::Sfpi>> {
+    // Reads the in0 slot and writes the out slot of the current slice (@ref SrcsLayout).
+    sfpi_inline static void calculate() {
         using Layout = SrcsLayout<LAYOUT>;
         using Operand = SfpuOperand<SfpuReg::SrcS, SfpiFormat<LAYOUT, sfpi::vFloat>>;
-        const Operand input{Layout::in0};
-        const Operand output{Layout::out};
-#pragma GCC unroll 8
-        for (int d = 0; d < Layout::ops; d++) {
-            output.store(d, MATH::apply(input.load(d)));
-        }
+        calculate_unary_operands<MATH, Layout::ops>(Operand{Layout::in0}, Operand{Layout::out});
+    }
+};
+
+/**
+ * @brief CRTP base for binary SrcS SFPU op types; provides init() and run().
+ *
+ * Like @ref SfpuSrcsUnaryOp, for ops with two inputs sharing formats: init() configures the binary
+ * SrcS pipeline (two UNP_S table rows, see llk_sfpu_srcs_binary_init) then Op::init_op(); run()
+ * unpacks one slice of each input per slice and calls Op::calculate(). Defined in
+ * llk_sfpu_srcs_api.h.
+ *
+ * @tparam Op: The derived op type.
+ * @note Include llk_sfpu_srcs_api.h; call init() once, then run() for the tiles.
+ */
+template <class Op>
+struct SfpuSrcsBinaryOp {
+    static constexpr bool hw_clears_valids = false;
+
+    static void init_op() {}
+
+    template <std::uint8_t INSTRN_COUNT = 1>
+    static void init(
+        const std::uint32_t l1_in0_addr_16B,
+        const std::uint32_t l1_in1_addr_16B,
+        const DataFormat unpack_S_src_format,
+        const DataFormat unpack_S_dst_format,
+        const std::uint32_t l1_out_addr_16B,
+        const DataFormat pack_S_src_format,
+        const DataFormat pack_S_dst_format,
+        const bool implied_math_format);
+
+    template <std::uint8_t INSTRN_COUNT = 1>
+    static void run(const std::uint32_t num_tiles, const DataFormat unpack_S_dst_format);
+};
+
+/**
+ * @brief Binary SrcS op for math policy MATH (static apply(a, b)), issued per ISSUE; see @ref SfpuSrcsBinaryOp.
+ *
+ * Only the Sfpi specialization exists today; any other pair fails to compile.
+ *
+ * @tparam MATH: Math policy, e.g. AddMath.
+ * @tparam LAYOUT: Load and store layout, values = <F16a/F16b/F32>; unpack destination and pack
+ *         source formats must match.
+ * @tparam ISSUE: Issue mechanism, values = <Sfpi>; resolve it with @ref resolve_sfpu_issue.
+ */
+template <class MATH, sfpi::DataLayout LAYOUT, SfpuIssue ISSUE>
+struct SrcsBinary {
+    static_assert(sizeof(MATH) == 0, "This SFPU op has no SrcS implementation for the requested SfpuIssue");
+};
+
+template <class MATH, sfpi::DataLayout LAYOUT>
+struct SrcsBinary<MATH, LAYOUT, SfpuIssue::Sfpi> : SfpuSrcsBinaryOp<SrcsBinary<MATH, LAYOUT, SfpuIssue::Sfpi>> {
+    // Reads the in0 and in1 slots and writes the out slot of the current slice (@ref SrcsLayout).
+    sfpi_inline static void calculate() {
+        using Layout = SrcsLayout<LAYOUT>;
+        using Operand = SfpuOperand<SfpuReg::SrcS, SfpiFormat<LAYOUT, sfpi::vFloat>>;
+        calculate_binary_operands<MATH, Layout::ops>(Operand{Layout::in0}, Operand{Layout::in1}, Operand{Layout::out});
     }
 };
 
