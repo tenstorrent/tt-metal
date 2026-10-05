@@ -228,6 +228,16 @@ ALWI void tanh_tile_init() {
 template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tanh_tile(uint32_t idst) {
 #ifndef ARCH_QUASAR
+    MATH(if constexpr (ckernel::sfpu::tanh_bf16_whole_tile && !is_fp32_dest_acc_en && !fast_and_approx) {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_tanh,
+            (fast_and_approx, is_fp32_dest_acc_en, 32),
+            idst,
+            VectorMode::None);
+        return;
+    });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -454,13 +464,22 @@ ALWI void signbit_tile_int32(uint32_t idst) {
  */
 // clang-format on
 ALWI void abs_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs, (APPROX), idst, VectorMode::RC));
+    MATH(if constexpr (ckernel::sfpu::abs_bf16_whole_tile && !DST_ACCUM_MODE) {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs, (APPROX, 32, DST_ACCUM_MODE), idst, VectorMode::None);
+        return;
+    });
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs, (APPROX, 8, DST_ACCUM_MODE), idst, VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void abs_tile_init() { MATH(SFPU_UNARY_INIT(abs)); }
+ALWI void abs_tile_init() {
+    MATH(SFPU_UNARY_INIT(abs));
+    MATH(ckernel::sfpu::abs_bf16_tile_init<!DST_ACCUM_MODE>());
+}
 
 // clang-format off
 /**
