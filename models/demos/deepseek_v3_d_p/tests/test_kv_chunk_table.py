@@ -4,7 +4,6 @@
 from types import SimpleNamespace
 
 import ttnn
-
 from models.demos.deepseek_v3_d_p.tt.runners import kv_chunk_table
 
 
