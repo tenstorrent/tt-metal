@@ -2849,23 +2849,32 @@ def prepare_device_decoder(
     decoder_weights: dict,
     max_ref_frames: int,
     max_new_tokens: int,
-    pin_single_bucket: bool = True,
+    pin_single_bucket: bool = False,
 ):
     """Build, warm and freeze the device decoder for serving. Returns (decoder, buckets).
 
     Call BEFORE the first live request. After this returns, no request can trigger a
     conv weight-prepare: an over-long decode raises instead of hanging the device.
 
-    ``pin_single_bucket`` (the default) builds ONE bucket, so exactly one conv cache
-    is ever prepared. Every decode then pads to that length, which costs some decode
-    time on short utterances but is the only configuration we have seen warm up
-    reliably -- preparing a third bucket deadlocked the device, whether from the
-    non-power-of-two length or from per-bucket weight duplication exhausting L1.
-    Warming the full ladder instead keeps short decodes faster, but hangs today.
+    Warms the power-of-two ladder up to the max bucket, matching the rounding in
+    ``TtSpeechTokenizerDecoder.forward``. Every warmed length is one that ttnn's
+    conv1d tests cover; the multiple-of-64 ladder is NOT safe, because preparing
+    bucket 192 deadlocks the device.
+
+    Tight buckets matter for latency: decode cost tracks the bucket, so a short
+    utterance is ~0.33s at bucket 128 but ~1.68s if padded up to 512.
+    ``pin_single_bucket`` trades that away for a single conv cache.
     """
     step = 64
     max_bucket = decode_bucket_for(max_ref_frames, max_new_tokens, step=step)
-    buckets = [max_bucket] if pin_single_bucket else list(range(step, max_bucket + step, step))
+    if pin_single_bucket:
+        buckets = [max_bucket]
+    else:
+        buckets = []
+        n = step
+        while n <= max_bucket:
+            buckets.append(n)
+            n *= 2
     decoder = build_device_decoder(
         device, decoder_weights, max_decode_bucket=max_bucket if pin_single_bucket else None
     )

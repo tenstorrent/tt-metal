@@ -1518,10 +1518,13 @@ class TtSpeechTokenizerDecoder(LightweightModule):
         # Pad the decode to a fixed bucket (multiple of decode_bucket_step frames)
         # and select that bucket's weight cache. Right padding + causal decoder =>
         # outputs for the real frames are unaffected; we trim after decode.
-        bucket = max(
-            self.decode_bucket_step,
-            ((real_seq_len + self.decode_bucket_step - 1) // self.decode_bucket_step) * self.decode_bucket_step,
-        )
+        # Rounded up to a power of two, NOT to a multiple of decode_bucket_step:
+        # conv1d weight-prepare deadlocks the device at some non-power-of-two
+        # lengths (192 hangs, while 64/128/256/512 prepare fine), and those bad
+        # lengths are exactly the ones missing from ttnn's conv1d test matrix.
+        bucket = self.decode_bucket_step
+        while bucket < real_seq_len:
+            bucket *= 2
         if self.max_decode_bucket is not None:
             if bucket > self.max_decode_bucket:
                 raise ValueError(

@@ -64,6 +64,16 @@ class TTNNConv1d:
         # for longer decodes (>=96 frames) overflow into it ("statically allocated
         # circular buffers clash with L1 buffers"). Single-buffering costs a little
         # conv throughput but removes the clash; decode is still length-flat/fast.
+        # Sharding stays auto-selected. Pinning HEIGHT_SHARDED (as mamba_conv and
+        # tt_dit audio_ops do) is not an option here: these convs are wide enough
+        # (up to 1024 channels) that no valid height-sharded slicing exists and
+        # op_slicing fails found_valid_config on the very first bucket.
+        #
+        # The cost of auto-select is that for some input lengths it picks a config
+        # that deadlocks the device during weight-prepare instead of erroring --
+        # 192 hangs while 64, 128 and 512 prepare fine. Those bad lengths are the
+        # ones absent from ttnn's own conv1d test matrix, so decode buckets are
+        # restricted to tested powers of two (see server.decode_bucket_for).
         self.conv_config = ttnn.Conv1dConfig(
             weights_dtype=ttnn.bfloat16,
             shard_layout=None,  # Auto select best sharding
