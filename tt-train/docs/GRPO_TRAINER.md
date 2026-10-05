@@ -138,11 +138,11 @@ calls it with the new step number after every optimizer step.
 ### TTMLRolloutSampler
 
 ```python
-from ttml.trainers.rollout.ttml_rollout_sampler import TTMLRolloutSampler
+from ttml.trainers.grpo_trainer.ttml_rollout_sampler import TTMLRolloutSampler
 ```
 
 In-process sampler for the ttml Llama and Qwen3 models
-([`ttml/trainers/rollout/ttml_rollout_sampler.py`](../sources/ttml/ttml/trainers/rollout/ttml_rollout_sampler.py)),
+([`ttml/trainers/grpo_trainer/ttml_rollout_sampler.py`](../sources/ttml/ttml/trainers/grpo_trainer/ttml_rollout_sampler.py)),
 selected with `rollout_source: "ttml"`. It opens the device, builds the model
 and tokenizer for `transformer_config.model_type` (`"llama"` or `"qwen3"`) from
 `model_source`, and runs a KV-cached, right-padded prefill + decode loop that
