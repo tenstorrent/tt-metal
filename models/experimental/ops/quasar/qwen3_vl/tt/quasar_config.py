@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Quasar bring-up configuration for the Qwen3-VL copy: bf16, device-derived grids, truncation."""
 import math
+import os
 
 
 def vision_padded_seq_len(n: int) -> int:
@@ -41,11 +42,17 @@ from models.tt_transformers.tt.model_config import (  # noqa: E402
 QUASAR_DEVICE_NAME = "N150"
 
 
-def bf16_decoders_precision(num_decoders, model_name):
+def fp32_dest_acc_requested():
+    # A/B switch for hardware runs; fp32 dest accumulation is undefined on ttsim WH (QUASAR_GAPS S1).
+    return os.environ.get("QWEN_QSR_FP32_DEST_ACC") == "1"
+
+
+def bf16_decoders_precision(num_decoders, model_name, fp32_dest_acc=False):
+    fidelity = MathFidelitySetting.HIFI4 if fp32_dest_acc else MathFidelitySetting.HIFI4_FP16
     settings = {
         "TensorPrecision": {g: PrecisionSetting.BF16 for g in TensorGroup},
-        # HiFi4 without fp32 dest accumulation: matmuls reload fp32 partials through srcA, which is undefined.
-        "OpFidelity": {g: MathFidelitySetting.HIFI4_FP16 for g in OpGroup},
+        # Default HiFi4 without fp32 dest accumulation: matmuls reload fp32 partials through srcA, which is undefined.
+        "OpFidelity": {g: fidelity for g in OpGroup},
     }
     return DecodersPrecision(num_decoders, model_name, ModelOptimizations(settings))
 
@@ -88,13 +95,15 @@ def _quasar_device_name():
 
 class _QuasarArgsMixin:
     def _quasar_init(self, parent_init, *args, **kwargs):
+        fp32_dest_acc = fp32_dest_acc_requested()
         if kwargs.get("optimizations") is None:
-            kwargs["optimizations"] = lambda a: bf16_decoders_precision(a.n_layers, a.model_name)
+            kwargs["optimizations"] = lambda a: bf16_decoders_precision(a.n_layers, a.model_name, fp32_dest_acc)
         with _quasar_device_name():
             parent_init(self, *args, **kwargs)
         self.lm_head_dtype = ttnn.bfloat16
         self.ccl_dtype = ttnn.bfloat16
-        strip_fp32_dest_acc(self)
+        if not fp32_dest_acc:
+            strip_fp32_dest_acc(self)
 
 
 class QuasarModelArgs(_QuasarArgsMixin, ModelArgs):
