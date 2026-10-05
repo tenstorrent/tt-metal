@@ -912,7 +912,6 @@ void kernel_main() {
                     }
                     dfb_outgamma.push_back(static_cast<uint16_t>(out_block_hw_normal));
                     dfb_reread_write_out.pop_front(static_cast<uint16_t>(out_block_hw_normal));
-                    dfb_outgamma.wait_front(static_cast<uint16_t>(out_block_hw_normal));
                 }
                 // End Optional Gamma
                 //
@@ -920,6 +919,11 @@ void kernel_main() {
                 if constexpr (do_beta) {
                     dfb_outbeta.reserve_back(static_cast<uint16_t>(out_block_hw_normal));
                     dfb_beta.wait_front(per_core_N);
+                    // dfb_inbeta holds tiles this kernel packed earlier in the iteration: the gamma
+                    // stage's result with gamma, the pre-gamma block without it. Either way the pack
+                    // has to complete before the reads below, and this wait is what the pop at the end
+                    // of this stage matches.
+                    dfb_inbeta.wait_front(static_cast<uint16_t>(out_block_hw_normal));
                     for (std::uint32_t j = 0; j < block_w_curr; ++j) {
                         if (apply_gamma_beta[j]) {
                             // fp32: reset both srcs so bf16 beta isn't read through the fp32 dfb_inbeta format.
@@ -1002,11 +1006,10 @@ void kernel_main() {
     }
     // End Batch Loop
 
-    // Buffers holding a value reused for the whole core's work are waited once and never popped
-    // inside the loops above; pop them here so they are left balanced. The scaler waits are not
-    // present in this file: compute_kernel_lib::reduce waits one page on the buffer it is given as
-    // the scaler and leaves it unpopped so that one pushed tile serves all of this kernel's reduce
-    // calls.
+    // Buffers holding a value reused for the whole core's work are never popped inside the loops
+    // above; pop them here so they are left balanced. The scaler waits are not present in this
+    // file: compute_kernel_lib::reduce waits one page on the buffer it is given as the scaler and
+    // leaves it unpopped so that one pushed tile serves all of this kernel's reduce calls.
     DataflowBuffer(dfb_scaler_id).pop_front(1);
     if constexpr (is_mcast_sender) {
         // The global-reduce scaler is waited only by the global reductions on the mcast sender;

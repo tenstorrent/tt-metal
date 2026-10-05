@@ -418,13 +418,13 @@ void kernel_main() {
     }
 #endif
 #ifdef FUSE_GAMMA
-    // Gamma is pushed once by the reader and read by tile index across every row of the block, so it
-    // is waited once rather than per row. Pop it here to balance the buffer.
+    // Gamma is read by tile index across every row of the block, so it is waited once rather
+    // than per row. Pop it here to balance the buffer.
     dfb_gamma_obj.pop_front(block_w);
 #endif
 #ifdef FUSE_BETA
-    // Beta is pushed once by the reader and read by tile index across every row of the block, so it
-    // is waited once rather than per row. Pop it here to balance the buffer.
+    // Beta is read by tile index across every row of the block, so it is waited once rather
+    // than per row. Pop it here to balance the buffer.
     dfb_beta_obj.pop_front(block_w);
 #endif
 }

@@ -579,19 +579,20 @@ void kernel_main() {
     // waited once up front rather than per iteration. Pop it here to balance the buffer.
     dfb_eps_obj.pop_front(1);
 
-    // Gamma and beta are each one row of Wt tiles pushed once by the reader and read by tile offset
-    // on every block of every NCHt row. Their chain inputs wait Upfront with PopPolicy::None, so the
-    // chain waits block.start() + block.size() tiles and never pops. Blocks clamp their end to Wt,
-    // so that sum never exceeds Wt and reaches Wt on the last block of a row. Pop Wt once here
-    // rather than per block.
+    // Gamma and beta are read by tile offset on every block of every NCHt row, so the first row
+    // waits block.start() + block.full_block_size() per block and leaves gamma and beta in place
+    // for the rows that follow. That wait grows block by block and ends at the last block's start
+    // plus a whole block, the value total_buffer_size holds: total_with_remainder() reduces to
+    // last_start + blk. It is also what the reader pushes in total, one full block per block.
+    // So pop total_buffer_size once here rather than per block.
 #ifdef FUSE_GAMMA
     if constexpr (do_gamma) {
-        DataflowBuffer(dfb_gamma).pop_front(Wt);
+        DataflowBuffer(dfb_gamma).pop_front(static_cast<uint16_t>(total_buffer_size));
     }
 #endif
 #ifdef FUSE_BETA
     if constexpr (do_beta) {
-        DataflowBuffer(dfb_beta).pop_front(Wt);
+        DataflowBuffer(dfb_beta).pop_front(static_cast<uint16_t>(total_buffer_size));
     }
 #endif
 }

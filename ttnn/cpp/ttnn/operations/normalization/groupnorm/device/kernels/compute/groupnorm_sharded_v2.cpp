@@ -842,10 +842,8 @@ void kernel_main() {
     // The all-ones tile is one tile the writer generates once into c_26 and this kernel re-waits
     // inside the loops above, so pop that one tile here.
     dfb_ones.pop_front(1);
-    // When has_row_mask is true, this kernel waits one more single-use tile near the top: a
-    // row-validity tile the writer synthesizes per core into c_18. Pop that tile here too.
-    // When has_row_mask is false, c_18 does not exist and dfb_rowvalid_id is c_26, which the pop
-    // above already covers, so no need to pop again.
+    // With a row mask this kernel waits one more single-use tile near the top, the row-validity
+    // tile. Pop it here under the same condition that gated that wait.
     if constexpr (has_row_mask) {
         dfb_rowvalid.pop_front(1);
     }

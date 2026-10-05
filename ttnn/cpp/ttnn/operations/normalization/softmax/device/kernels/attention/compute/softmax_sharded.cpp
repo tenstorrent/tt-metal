@@ -172,10 +172,9 @@ void kernel_main() {
         dfb_fused_attn_obj.pop_front(block_w);
     }
 #endif  // FUSED_SCALE_MASK
-    // The reduce scalers are each a single tile pushed once by the reader and waited by every
-    // reduction over the block. The waits are not written in this file: compute_kernel_lib::reduce
-    // waits the buffer it is given as the scaler and never pops it. Pop them here so the buffers
-    // are left balanced.
+    // compute_kernel_lib::reduce waits the buffer it is given as the scaler and never pops it, so
+    // one pushed tile serves every reduce call. Pop each scaler here, under the same condition that
+    // gated its reductions, so the buffers are left balanced.
 #ifdef NUMERIC_STABLE
     dfb_max_scaler_obj.pop_front(1);
 #endif

@@ -418,8 +418,8 @@ void kernel_main() {
     constexpr uint32_t num_scaler_tiles = norm::layernorm::reduce_scaler_tile_count(W, tile_width);
     dfb_scaler.pop_front(num_scaler_tiles);
 
-    // The epsilon tile is pushed once by the reader and read on every block, so it is waited once
-    // up front rather than per block. Pop it here, after the last block, to balance the buffer.
+    // The epsilon tile is waited once up front and reused for the whole kernel, so it is popped
+    // once here rather than per block.
     dfb_eps.pop_front(1);
 
     // Gamma and beta are each one row of Wt tiles pushed once by the reader and read by tile offset

@@ -572,7 +572,11 @@ void kernel_main() {
         DataflowBuffer(static_cast<uint16_t>(dfb_max_final)).pop_front(1);
 #endif
     }
-    dfb_mask_padded_obj.pop_front(1);
+    // The writer generates and pushes the padding mask only when there is padding to mask, and
+    // the masking passes above wait it under the same condition, so the pop carries it too.
+    if (mask_padded_data) {
+        dfb_mask_padded_obj.pop_front(1);
+    }
 
     // The reduce scalers are pushed once by the reader and read by every pass over the row, so they
     // are waited once up front rather than per pass. Pop them here to balance the buffers.
