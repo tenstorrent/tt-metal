@@ -5,7 +5,7 @@
 // Kernel-only; pulls in dataflow_api.h and socket_api.h.
 #pragma once
 
-#include <stdint.h>
+#include <cstdint>
 
 #include "risc_common.h"
 #include "api/dataflow/dataflow_api.h"
