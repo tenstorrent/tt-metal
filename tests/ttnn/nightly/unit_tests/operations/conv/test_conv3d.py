@@ -1478,3 +1478,25 @@ def test_conv3d_optional_tensor_memory_config_is_hashed(device, optional_tensor)
         f"{optional_tensor} in DRAM and in L1 must compile distinct programs; "
         f"got {device.num_program_cache_entries() - entries_after_warmup} new entries for the L1 call"
     )
+
+
+@pytest.mark.parametrize(
+    "stride, groups, message",
+    [((0, 1, 1), 1, "stride must be greater than 0"), ((1, 1, 1), 0, "groups must be greater than 0")],
+    ids=["stride", "groups"],
+)
+def test_conv3d_zero_divisor_args_raise(device, expect_error, stride, groups, message):
+    x = ttnn.from_torch(torch.randn(1, 4, 8, 8, 32).bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    w = ttnn.from_torch(torch.randn(32 * 27, 32).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, message):
+        ttnn.experimental.conv3d(
+            input_tensor=x,
+            weight_tensor=w,
+            device=device,
+            dtype=ttnn.bfloat16,
+            output_channels=32,
+            kernel_size=[3, 3, 3],
+            stride=list(stride),
+            padding=[0, 1, 1],
+            groups=groups,
+        )

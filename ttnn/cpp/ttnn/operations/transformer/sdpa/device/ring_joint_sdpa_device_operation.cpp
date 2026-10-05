@@ -332,7 +332,8 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
             chunk_capacity);
     }
 
-    if (args.has_sliding_window() && tensor_args.is_chunked()) {
+    if (args.has_sliding_window() && tensor_args.is_chunked() &&
+        (!kv_pad_rotation_active(args, tensor_args) || args.circular_kv_cache)) {
         const auto q_group_size = tensor_args.input_q.logical_shape()[2] * args.ring_size;
         // One complete group is enough: at logical_n == q_group_size device 0 clips its
         // window at token 0 and devices 1..R-1 consume predecessors within that group.
@@ -355,6 +356,17 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
                 "Chunked sliding KV-pad rotation requires the new Q chunk to fill exactly one ring group");
         }
     }
+    if (args.has_sliding_window() && kv_pad_rotation_active(args, tensor_args)) {
+        const uint32_t local = tensor_args.input_q.logical_shape()[2];
+        // Live metadata is checked against the halo capacity by every device consumer.
+        const bool needs_two =
+            args.has_kv_pad_rotation() &&
+            ring_joint::chunked_q_wraps(args.kv_actual_isl.value(), args.logical_n, local, args.ring_size);
+        const uint32_t halo = sliding_halo_token_count(args.sliding_window_size.value(), args.get_k_chunk_size());
+        TT_FATAL(
+            tensor_args.gathered_k.logical_shape()[2] >= halo * (needs_two ? 2 : 1),
+            "Sliding attention requires one predecessor-halo slot, or two when scalar Q wraps");
+    }
 }
 
 }  // namespace
@@ -365,6 +377,18 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
 
     validate_metadata_tensors(tensor_args);
+
+    // The sliding-window halo and the per-device slab checks below divide by the chunk sizes.
+    TT_FATAL(
+        args.get_q_chunk_size() > 0 && args.get_q_chunk_size() % tt::constants::TILE_WIDTH == 0,
+        "q_chunk_size must be a positive multiple of TILE_SIZE. Got q_chunk_size: {}, TILE_SIZE: {}",
+        args.get_q_chunk_size(),
+        tt::constants::TILE_WIDTH);
+    TT_FATAL(
+        args.get_k_chunk_size() > 0 && args.get_k_chunk_size() % tt::constants::TILE_WIDTH == 0,
+        "k_chunk_size must be a positive multiple of TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
+        args.get_k_chunk_size(),
+        tt::constants::TILE_WIDTH);
 
     TT_FATAL(
         !args.sliding_window_size.has_value() || args.has_sliding_window(),
@@ -582,6 +606,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto B = q_shape[0];
     const auto NQH = q_shape[1];
     const auto NKH = k_shape[1];
+    TT_FATAL(NQH > 0 && NKH > 0, "Q and K num_heads must be greater than 0. Got Q: {}, K: {}", NQH, NKH);
     const auto N_local_q = q_shape[2];
     const auto N_local_kv = tensor_args.local_kv_seq_len();
     const auto gathered_buffer_n = k_shape[2];
@@ -609,8 +634,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         const uint32_t window_size = args.sliding_window_size.value();
         const bool supported_q_chunk = q_chunk_size == 64 || q_chunk_size == 128;
         const bool supported_k_chunk = k_chunk_size == 128;
-        // These are the only ring sizes exercised by the current one-hop compact-halo deployment.
-        // Extend the test matrix before widening this allowlist.
+        // These are the only ring sizes the chunked sliding halo is tested on. Extend the test matrix
+        // (and sliding_max_halo_hops) before widening this allowlist.
         TT_FATAL(
             args.ring_size == 4 || args.ring_size == 8,
             "Chunked sliding attention supports the SP4 production ring or SP8 test ring, got SP{}",
@@ -669,13 +694,25 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             N_local_q % k_chunk_size == 0,
             "k_chunk_size must divide the per-device Q slab for chunked sliding attention");
+        // A halo wider than the per-device Q slab is delivered by several hops around the CP ring,
+        // one slab tail each (sliding_window_work_plan.hpp), and cannot span more than the ring.
+        const uint32_t halo_hops = ring_joint::chunked_sliding_halo_hop_count(
+            halo_tokens / tt::constants::TILE_HEIGHT, N_local_q / tt::constants::TILE_HEIGHT);
         TT_FATAL(
-            halo_tokens <= N_local_q,
-            "Chunked sliding halo {} (window {}) exceeds the per-device Q slab {}; wider windows need a multi-hop "
-            "halo",
+            halo_hops <= args.ring_size,
+            "Chunked sliding halo {} (window {}) needs {} hops over the per-device Q slab {}, more than the SP{} ring",
             halo_tokens,
             window_size,
-            N_local_q);
+            halo_hops,
+            N_local_q,
+            args.ring_size);
+        // The work plan returns an EMPTY plan past its fixed range count; reject that here instead
+        // of computing no attention.
+        TT_FATAL(
+            halo_hops <= ring_joint::sliding_max_halo_hops,
+            "Chunked sliding halo needs {} hops; at most {} are supported",
+            halo_hops,
+            ring_joint::sliding_max_halo_hops);
     }
 
     if (args.circular_kv_cache) {
@@ -684,10 +721,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         // slab-major addressing and would read garbage from a wrapped cache.
         TT_FATAL(
             args.has_sliding_window() && is_chunked, "circular_kv_cache requires chunked sliding-window attention");
-        // Metadata first: on that path kv_actual_isl is read on-device (host value absent), so the
-        // rotation check below would otherwise mask the real reason. The metadata-path halo helper
-        // (compute_halo_tail_start_Ht, ring_attention_all_gather_metadata.hpp) derives the source slab
-        // without the circular wrap, so circular caches must stay off that path.
+        // Metadata halo addressing supports only unbounded caches.
         TT_FATAL(!tensor_args.has_metadata(), "circular_kv_cache does not support the trace-safe metadata path");
         TT_FATAL(
             has_kv_pad_rotation,
@@ -777,14 +811,25 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(NKH == 1, "Latent-V mode currently supports one shared KV head. Got K/V heads: {}", NKH);
         TT_FATAL(
             NVH == NKH,
-            "Latent-V mode reads V from K's prefix, so V head count must match K head count. Got V: {}, K: {}",
+            "Latent-V mode reads V from K's rows, so V head count must match K head count. Got V: {}, K: {}",
             NVH,
             NKH);
-        TT_FATAL(
-            VDH < DH,
-            "Latent-V mode reads V from K's strict prefix, so V head dim must be < K head dim. Got V: {}, K: {}",
-            VDH,
-            DH);
+        if (tensor_args.has_packed_kv()) {
+            TT_FATAL(
+                VDH <= k_shape[3] && k_shape[3] % tt::constants::TILE_WIDTH == 0 &&
+                    tensor_args.input_k.logical_shape()[3] == k_shape[3],
+                "Packed KV (K rows wider than Q) reads V as K's last V-head-dim columns, so V must fit in the row and "
+                "the gathered K must have K's row width. Got K: {}, gathered K: {}, V: {}",
+                tensor_args.input_k.logical_shape()[3],
+                k_shape[3],
+                VDH);
+        } else {
+            TT_FATAL(
+                VDH < DH,
+                "Latent-V mode reads V from K's strict prefix, so V head dim must be < K head dim. Got V: {}, K: {}",
+                VDH,
+                DH);
+        }
         TT_FATAL(
             VDH % tt::constants::TILE_WIDTH == 0,
             "Latent-V head dim must be tile aligned. Got V: {}, tile width: {}",
@@ -843,7 +888,9 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
                 joint_v_shape[3]);
         }
     } else {
-        TT_FATAL(k_shape[3] == DH, "Q/K head dimensions must match. Got Q: {}, K: {}", DH, k_shape[3]);
+        if (!tensor_args.has_packed_kv()) {
+            TT_FATAL(k_shape[3] == DH, "Q/K head dimensions must match. Got Q: {}, K: {}", DH, k_shape[3]);
+        }
         if (has_joint_tensors) {
             TT_FATAL(
                 joint_k_shape[3] == DH,
@@ -974,19 +1021,6 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             NKH,
             NVH);
     }
-
-    // Validate chunk sizes if program config is provided
-
-    TT_FATAL(
-        q_chunk_size % tt::constants::TILE_WIDTH == 0,
-        "q_chunk_size must be divisible by TILE_SIZE. Got q_chunk_size: {}, TILE_SIZE: {}",
-        q_chunk_size,
-        tt::constants::TILE_WIDTH);
-    TT_FATAL(
-        k_chunk_size % tt::constants::TILE_WIDTH == 0,
-        "k_chunk_size must be divisible by TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
-        k_chunk_size,
-        tt::constants::TILE_WIDTH);
 
     TT_FATAL(
         N_local_q % tt::constants::TILE_HEIGHT == 0,
@@ -1167,7 +1201,10 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
 
     CoreCoord grid = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                      : output_tensor.device()->compute_with_storage_grid_size();
-    tt::tt_metal::MathFidelity fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
+    // QK^T and softmax @ V dominate the modeled cycles, so use their fidelity when it is overridden.
+    const auto matmul_fidelity =
+        args.program_config.has_value() ? args.program_config->matmul_math_fidelity : std::nullopt;
+    tt::tt_metal::MathFidelity fidelity = matmul_fidelity.value_or(ttnn::get_math_fidelity(args.compute_kernel_config));
 
     const uint32_t B = q_shape[0];
     const uint32_t NQH = q_shape[1];

@@ -241,9 +241,9 @@ bool check_is_close(
     TT_THROW("Testing infrastructure not setup for output data type {}", T_out);
 }
 
-auto CreateDramBuffer(distributed::MeshDevice& mesh_device, tt::DataFormat dformat, uint32_t num_tiles) {
-    uint32_t single_tile_size = tile_size(dformat);
-    uint32_t dram_buffer_size = single_tile_size * num_tiles;
+auto CreateDramBuffer(distributed::MeshDevice& mesh_device, tt::DataFormat dformat, std::uint32_t num_tiles) {
+    std::uint32_t single_tile_size = tile_size(dformat);
+    std::uint32_t dram_buffer_size = single_tile_size * num_tiles;
     distributed::DeviceLocalBufferConfig dram_config{
         .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
     distributed::ReplicatedBufferConfig buffer_config{.size = dram_buffer_size};
@@ -305,6 +305,7 @@ void run_single_core_unary_broadcast_quasar(
     const experimental::KernelSpecName READER{"reader"};
     const experimental::KernelSpecName WRITER{"writer"};
     const experimental::KernelSpecName COMPUTE{"compute"};
+    const experimental::TensorParamName IN_TENSOR{"in_tensor"};
     const experimental::TensorParamName OUT_TENSOR{"out_tensor"};
 
     experimental::DataflowBufferSpec src_dfb_spec{
@@ -322,27 +323,47 @@ void run_single_core_unary_broadcast_quasar(
 
     experimental::DataMovementHardwareConfig reader_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        reader_hw_config = experimental::DataMovementHardwareConfig{
+            .config_2xx =
+                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     } else {
-        reader_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+        reader_hw_config = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = tt_metal::NOC::RISCV_1_default,
+                },
+        };
     }
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
-        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_n_2_0.cpp",
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ProducerOf(SRC_DFB, "out")},
-        .runtime_arg_schema =
-            {.runtime_arg_names = {"src_addr", "src_dram_bank_id", "num_tiles", "ublock_size_tiles", "reader_only"}},
+        .dfb_bindings = {experimental::ProducerOf(SRC_DFB, "out_data")},
+        .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .hw_config = reader_hw_config,
     };
 
     experimental::DataMovementHardwareConfig writer_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        writer_hw_config = experimental::DataMovementHardwareConfig{
+            .config_2xx =
+                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     } else {
-        writer_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+        writer_hw_config = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                },
+        };
     }
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
@@ -377,7 +398,7 @@ void run_single_core_unary_broadcast_quasar(
              }},
         .compile_time_args = {{"per_core_block_cnt", num_blocks}, {"per_core_block_dim", block_size}},
         .hw_config =
-            experimental::ComputeGen2Config{
+            experimental::ComputeHardwareConfig{
                 .enable_32_bit_dest = test_config.fp32_dest_acc_en,
             },
     };
@@ -392,32 +413,28 @@ void run_single_core_unary_broadcast_quasar(
         .name = "unary_broadcast_quasar",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {src_dfb_spec, dst_dfb_spec},
-        .tensor_parameters = {{.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()}},
+        .tensor_parameters =
+            {{.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
+             {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()}},
         .work_units = {wu},
     };
 
     Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
-    const uint32_t src_dram_addr = static_cast<uint32_t>(in_tensor.address());
-
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
-                node,
-                {{"src_addr", src_dram_addr},
-                 {"src_dram_bank_id", 0u},
-                 {"num_tiles", num_tiles},
-                 {"ublock_size_tiles", 1u},
-                 {"reader_only", 0u}}),
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"num_tiles", num_tiles}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
             .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"num_tiles", num_tiles}}),
         },
     };
-    params.tensor_args = {{OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{out_tensor}}};
+    params.tensor_args = {
+        {IN_TENSOR, experimental::ProgramRunArgs::TensorArgument{in_tensor}},
+        {OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{out_tensor}}};
     experimental::SetProgramRunArgs(program, params);
 
     std::vector<std::uint32_t> packed_tilized_input;
@@ -428,7 +445,7 @@ void run_single_core_unary_broadcast_quasar(
 
     LaunchProgram(mesh_device, std::move(program));
 
-    std::vector<uint32_t> dest_buffer_data;
+    std::vector<std::uint32_t> dest_buffer_data;
     slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), dest_buffer_data);
 
     ASSERT_TRUE(check_is_close(golden_packed_tilized_output, dest_buffer_data, out_t, "unary_broadcast_dram_out"));

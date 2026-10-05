@@ -14,6 +14,8 @@
 #include "hostdev/remote_dfb_config_layout.h"
 #include "hostdev/remote_dfb_constants.h"
 #include "internal/risc_attribs.h"
+#include "api/dataflow/dfb_binding_token.h"
+#include "api/dataflow/prefetcher_pipe_binding_token.h"
 
 #if !defined(COMPILE_FOR_TRISC)
 #include <optional>
@@ -64,7 +66,7 @@ namespace experimental {
 // PrefetcherPipe: device-side kernel class for a cross-program durable remote DFB.
 // Config pages + credits persist across programs; ctor loads word[4]
 // (PREFETCHER_PIPE_CFG_FIFO_PTR_CHECKPOINT — durable sender wr / receiver rd cursor).
-// If this Attach's dense entry_size differs from word[5] (applied_entry_size), ctor
+// If this program's dense entry_size differs from word[5] (applied_entry_size), ctor
 // resizes with NOC pad credits. Same-epoch relaunch skips that so
 // a producer can keep filling free space while outstanding credits wait for a consumer.
 // commit() / dtor store ptr back when the epoch (word[2] fifo_start, word[5]
@@ -124,19 +126,19 @@ namespace experimental {
 //
 //  Mid-flight resize (sender):
 //    set_entry_size(E2);           // snap forward + publish pad credits; no drain
-//    // then continue with E2-sized pushes, or signal host to Attach a new consumer
+//    // then continue with E2-sized pushes, or signal host to launch a new consumer Program
 //
 // ═══════════════════════════════════════════════════════════════════════
 //  RECEIVER FLOW
 // ═══════════════════════════════════════════════════════════════════════
 //
-//  Multi-DM receiver: Quasar lane credits. Active lane count P is programmed at
-//  consumer bind — AttachPrefetcherPipe(..., num_pipe_consumer_threads=P) and/or relay
-//  num_producers (config word[9]). Layout reserves PREFETCHER_PIPE_MAX_CREDIT_LANES
-//  slots per receiver. Hart tid owns lane tid; wait_front(n)/pop_front(n) are n owned
-//  strides (entries tid, tid+P, …). Sender stripes pages_sent to lane (entry_idx % P).
-//  With P=1, behavior matches the legacy single (sent,acked) pair. Kernel
-//  num_threads_per_cluster must equal P (P=1 + multi-DM pipe consumers is invalid).
+//  Multi-DM receiver: Quasar lane credits. Active lane count P is the receiver
+//  KernelSpec's num_threads (a relay DFB's num_producers must equal it); it reaches the
+//  device in the program's kernel-config slot. The persistent page reserves
+//  PREFETCHER_PIPE_MAX_CREDIT_LANES slots per receiver. Hart tid owns lane tid;
+//  wait_front(n)/pop_front(n) are n owned strides (entries tid, tid+P, …). Sender
+//  stripes pages_sent to lane (entry_idx % P). With P=1, behavior matches a single
+//  (sent,acked) pair.
 //
 //  Standard receiver (DM consumes data):
 //    wait_front(n);
@@ -157,11 +159,12 @@ namespace experimental {
 //  relay producers (num_producers may be >1); TRISC/DM consumers use the normal
 //  local DFB API (num_consumers / cap).
 //
-//  Host: AttachPrefetcherPipe(..., receivers) then CreatePrefetcherPipeRelayDataflowBuffer.
+//  Host: a DataflowBufferSpec with prefetcher_pipe_relays naming the pipe(s), produced by
+//  the receiver DM kernel that binds those pipes and consumed by the compute kernel.
 //  DM deliberately receives no relay binding token and must use bind_relay().
 //
 //  DM (receiver kernel) — single producer:
-//    PrefetcherPipe pipe(id);
+//    PrefetcherPipe pipe(pipe::in);
 //    auto relay = pipe.bind_relay();
 //    while (has_more) {
 //        relay.reserve_back(n);
@@ -177,13 +180,18 @@ namespace experimental {
 //    pipe.pop_front(n);
 //
 //  Compute kernel (reads relay DFB, no PrefetcherPipe or NOC knowledge):
-//    DataflowBuffer relay(RelayDFBBindingToken{relay_id, prefetcher_pipe_id});
-//    // or dfb::relay from kernel_bindings_generated.h — construction snaps the
-//    // borrowed iface to the durable checkpoint (O(1) launch-msg slot lookup)
+//    DataflowBuffer relay(dfb::relay);  // RelayDFBBindingToken from kernel_bindings_generated.h
+//    // construction snaps the borrowed iface to the durable checkpoint (O(1) launch-msg
+//    // slot lookup)
 //    relay.wait_front(n);
 //    // consume ...
 //    relay.pop_front(n);
 //
+// Names a DRAM-core sender's config page for the DRAM-sender PrefetcherPipe constructor.
+struct DramSenderConfigPage {
+    uint32_t config_page_addr = 0;
+};
+
 class PrefetcherPipe {
 public:
     FORCE_INLINE explicit PrefetcherPipe(uint8_t prefetcher_pipe_id) : prefetcher_pipe_id_(prefetcher_pipe_id) {
@@ -202,64 +210,25 @@ public:
         const uint32_t config_page_addr = load_prefetcher_pipe_config_word(slot, 0);
         const uint32_t dense_entry_size = load_prefetcher_pipe_config_word(slot, 1);
         const uint32_t relay_word = load_prefetcher_pipe_config_word(slot, 2);
-        setup_prefetcher_pipe_interface(interface_, config_page_addr, dense_entry_size, relay_word);
-
-        // Fixed for the kernel's lifetime; read once here so the credit hot path never
-        // re-loads them from the (uncached) config page.
-        volatile tt_l1_ptr uint32_t* l1_config =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(interface_.sender.config_ptr);
-        fifo_size_ = load_prefetcher_pipe_config_word(l1_config, REMOTE_DFB_CFG_FIFO_SIZE);
-#ifdef ARCH_QUASAR
-        // Active lanes P come with the program (kernel-config slot), not from the persistent
-        // page, so every kernel of one program sees the same P in dispatch order.
-        num_credit_lanes_ = static_cast<uint8_t>(prefetcher_pipe_slot_credit_lanes(relay_word));
-#else
-        num_credit_lanes_ = 1;  // capacity is 1 lane; host never packs a P field for WH/BH
-#endif
-        ASSERT(num_credit_lanes_ >= 1 && num_credit_lanes_ <= credit_lane_capacity());
-
-#if !defined(COMPILE_FOR_TRISC)
-
-        const bool is_sender = static_cast<bool>(load_prefetcher_pipe_config_word(l1_config, REMOTE_DFB_CFG_IS_SENDER));
-        const uint32_t applied_entry_size =
-            load_prefetcher_pipe_config_word(l1_config, PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE);
-        // Same-epoch relaunch: setup already restored the checkpoint + this Attach's
-        // entry size. Skip resize so a producer can relaunch and keep
-        // filling free space while outstanding credits wait for an offline consumer.
-        // A changed Attach size snaps this endpoint and publishes/consumes pad credits;
-        // it does not drain payload already in flight at the peer's old entry size.
-        // Multi-DM: only tid 0 mutates shared config; others re-setup after the barrier.
-        // Drop any cached copy of this core's credit words before anyone touches them, so a
-        // host reset / the previous program's flushed values in TL1 are what every hart sees.
-        // Not multi-DM specific: it is the Quasar cost of reading credit words through the
-        // cache at all (P == 1 included). Compiles out on WH/BH, and sync_threads() returns
-        // immediately when the kernel has one thread, so the single-thread path only pays
-        // the one-time invalidate here and the flush in the dtor.
-        invalidate_local_credit_lines(/*lane_offset_bytes=*/0);
-        sync_threads();
-        if (dense_entry_size != applied_entry_size) {
-            if (get_my_thread_id() == 0) {
-                const uint8_t noc_id = noc_index;
-                if (is_sender) {
-                    resize_sender_interface<true>(dense_entry_size, noc_id);
-                    store_prefetcher_pipe_config_word(
-                        l1_config, PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE, interface_.sender.fifo_page_size);
-                } else {
-                    resize_receiver_interface<true>(dense_entry_size, noc_id);
-                    store_prefetcher_pipe_config_word(
-                        l1_config, PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE, interface_.receiver.fifo_page_size);
-                }
-            }
-            sync_threads();
-            if (get_my_thread_id() != 0) {
-                setup_prefetcher_pipe_interface(interface_, config_page_addr, dense_entry_size, relay_word);
-            }
-        }
-        if (!is_sender) {
-            bind_receiver_credit_lane();
-        }
-#endif
+        init(config_page_addr, dense_entry_size, relay_word);
     }
+
+    // DRAM-core sender (Blackhole DRISC). A DRAM core is never dispatched a Program, so there is no
+    // kernel-config slot to name its pipe: the host stamps the sender config page into DRISC L1 and
+    // the kernel is handed that page's address. `entry_size` is the block size this sender pushes;
+    // a change from the size last applied snaps the cursors and publishes pad credits, exactly as a
+    // Program binding with a new entry size does. Single credit lane, no relay.
+    FORCE_INLINE PrefetcherPipe(DramSenderConfigPage page, uint32_t entry_size) {
+        ASSERT(static_cast<bool>(load_prefetcher_pipe_config_word(
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page.config_page_addr), REMOTE_DFB_CFG_IS_SENDER)));
+        init</*known_sender=*/true>(
+            page.config_page_addr, entry_size, pack_prefetcher_pipe_slot_relay_word(RELAY_DFB_INVALID, 1));
+    }
+
+    // Metal 2.0: construct from a `pipe::<accessor>` token (kernel_bindings_generated.h). The
+    // token is the program slot id; on every node the slot record names the pipe present there.
+    FORCE_INLINE explicit PrefetcherPipe(PrefetcherPipeBindingToken token) :
+        PrefetcherPipe(token.prefetcher_pipe_id()) {}
 
     FORCE_INLINE ~PrefetcherPipe() {
         commit();
@@ -343,7 +312,7 @@ public:
             l1_config, PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE, interface_.receiver.fifo_page_size);
         const CrossNodeReceiverDFBInterface& iface = interface_.receiver;
         if (iface.relay_id != RELAY_DFB_INVALID) {
-            align_local_dfb_to_prefetcher_pipe_receiver_iface(iface.relay_id, iface);
+            align_local_dfb_to_prefetcher_pipe_receiver_iface(iface.relay_id, iface, relay_pages_per_entry_);
         }
     }
 #endif
@@ -683,7 +652,10 @@ public:
         uint32_t units_needed = 0;
         if (P == 1) {
             const uint32_t payload_bytes = num_entries * entry_size;
-            ASSERT(iface.fifo_rd_ptr + payload_bytes <= iface.fifo_limit_page_aligned);
+            // A read window may straddle the wrap (the caller keeps a lookahead over the ring end);
+            // only asking for more than the ring holds is a bug. units_for_read is already wrap-aware,
+            // and the GlobalCB twin (remote_cb_wait_front) allows the same straddle.
+            ASSERT(payload_bytes <= iface.fifo_limit_page_aligned - iface.fifo_start_addr);
             const uint32_t rd_offset = iface.fifo_rd_ptr - iface.fifo_start_addr;
             units_needed = units_for_read(iface, rd_offset, payload_bytes);
         } else {
@@ -745,6 +717,17 @@ public:
 
     FORCE_INLINE uint32_t get_entry_size() { return interface_.sender.fifo_page_size; }
 
+    // True while the sender has published entries this receiver has not yet popped. Reads this
+    // receiver's slot in each credit block -- the same two counters wait_front() compares -- so
+    // where they live stays inside the class. Receiver participants only.
+    FORCE_INLINE bool has_unconsumed_entries() {
+        auto* acked_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(interface_.receiver.aligned_pages_acked_ptr);
+        auto* sent_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(interface_.receiver.aligned_pages_sent_ptr);
+        // pages_sent arrives via NOC; pages_acked is written by this receiver, so it is a plain
+        // cached load -- the same pair of accesses wait_front() spins on.
+        return load_remote_l1_credit(sent_ptr) != *acked_ptr;
+    }
+
 #if !defined(COMPILE_FOR_TRISC)
     // -----------------------------------------------------------------------
     // Host-declared relay DFB (DM → compute)
@@ -763,7 +746,8 @@ public:
         DataflowBuffer& dfb_;
     };
 
-    // Open the relay declared by CreatePrefetcherPipeRelayDataflowBuffer. Constructs the
+    // Open the relay DFB the host registered for this slot (DataflowBufferSpec::
+    // prefetcher_pipe_relays). Constructs the
     // local DataflowBuffer (Quasar: dfb_ensure_ready), then snaps TC/CB slots to the
     // current receiver cursor/page size (TRISC is aligned separately in
     // DataflowBuffer(RelayDFBBindingToken)). A later set_receiver_entry_size() refreshes
@@ -776,10 +760,14 @@ public:
         // Multi-producer: each pipe-consumer hart gets its own DataflowBuffer view of the
         // same relay id; STRIDED pap partitions producer slots.
         relay_dfb_.emplace(RelayDFBBindingToken{iface.relay_id});
+        // Before anything re-pages the relay: it still has the page size firmware set from the relay's
+        // config, which fixes how many relay pages one pipe entry is.
+        relay_pages_per_entry_ =
+            static_cast<uint16_t>(prefetcher_pipe_relay_pages_per_entry(iface.relay_id, iface.fifo_page_size));
         sync_threads();
         // Align shared local iface once after all producers have constructed.
         if (get_my_thread_id() == 0) {
-            align_local_dfb_to_prefetcher_pipe_receiver_iface(iface.relay_id, iface);
+            align_local_dfb_to_prefetcher_pipe_receiver_iface(iface.relay_id, iface, relay_pages_per_entry_);
 #ifndef ARCH_QUASAR
             const uintptr_t entries_acked_ptr = reinterpret_cast<uintptr_t>(get_cb_tiles_acked_ptr(iface.relay_id));
             relay_entries_acked_checkpoint_ = static_cast<uint16_t>(reg_read(entries_acked_ptr));
@@ -801,6 +789,72 @@ private:
     friend struct ::noc_traits_t<PrefetcherPipe>;
 #endif
 
+    // Everything past locating the config page, shared by the Program-slot and DRAM-sender
+    // constructors. `known_sender` is set when the caller already knows the page is a sender's, so
+    // the receiver-only setup compiles out of that constructor.
+    template <bool known_sender = false>
+    FORCE_INLINE void init(uint32_t config_page_addr, uint32_t dense_entry_size, uint32_t relay_word) {
+        setup_prefetcher_pipe_interface<known_sender>(interface_, config_page_addr, dense_entry_size, relay_word);
+
+        // Fixed for the kernel's lifetime; read once here so the credit hot path never
+        // re-loads them from the (uncached) config page.
+        volatile tt_l1_ptr uint32_t* l1_config =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(interface_.sender.config_ptr);
+        fifo_size_ = load_prefetcher_pipe_config_word(l1_config, REMOTE_DFB_CFG_FIFO_SIZE);
+#ifdef ARCH_QUASAR
+        // Active lanes P come with the program (kernel-config slot), not from the persistent
+        // page, so every kernel of one program sees the same P in dispatch order.
+        num_credit_lanes_ = static_cast<uint8_t>(prefetcher_pipe_slot_credit_lanes(relay_word));
+#else
+        num_credit_lanes_ = 1;  // capacity is 1 lane; host never packs a P field for WH/BH
+#endif
+        ASSERT(num_credit_lanes_ >= 1 && num_credit_lanes_ <= credit_lane_capacity());
+
+#if !defined(COMPILE_FOR_TRISC)
+
+        const bool is_sender =
+            known_sender || static_cast<bool>(load_prefetcher_pipe_config_word(l1_config, REMOTE_DFB_CFG_IS_SENDER));
+        const uint32_t applied_entry_size =
+            load_prefetcher_pipe_config_word(l1_config, PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE);
+        // Same-epoch relaunch: setup already restored the checkpoint + this program's
+        // entry size. Skip resize so a producer can relaunch and keep
+        // filling free space while outstanding credits wait for an offline consumer.
+        // A changed entry size snaps this endpoint and publishes/consumes pad credits;
+        // it does not drain payload already in flight at the peer's old entry size.
+        // Multi-DM: only tid 0 mutates shared config; others re-setup after the barrier.
+        // Drop any cached copy of this core's credit words before anyone touches them, so a
+        // host reset / the previous program's flushed values in TL1 are what every hart sees.
+        // Not multi-DM specific: it is the Quasar cost of reading credit words through the
+        // cache at all (P == 1 included). Compiles out on WH/BH, and sync_threads() returns
+        // immediately when the kernel has one thread, so the single-thread path only pays
+        // the one-time invalidate here and the flush in the dtor.
+        invalidate_local_credit_lines(/*lane_offset_bytes=*/0);
+        sync_threads();
+        if (dense_entry_size != applied_entry_size) {
+            if (get_my_thread_id() == 0) {
+                const uint8_t noc_id = noc_index;
+                if (is_sender) {
+                    resize_sender_interface<true>(dense_entry_size, noc_id);
+                    store_prefetcher_pipe_config_word(
+                        l1_config, PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE, interface_.sender.fifo_page_size);
+                } else {
+                    resize_receiver_interface<true>(dense_entry_size, noc_id);
+                    store_prefetcher_pipe_config_word(
+                        l1_config, PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE, interface_.receiver.fifo_page_size);
+                }
+            }
+            sync_threads();
+            if (get_my_thread_id() != 0) {
+                setup_prefetcher_pipe_interface<known_sender>(
+                    interface_, config_page_addr, dense_entry_size, relay_word);
+            }
+        }
+        if (!is_sender) {
+            bind_receiver_credit_lane();
+        }
+#endif
+    }
+
     CrossNodeDFBInterface interface_;
     uint8_t prefetcher_pipe_id_ = 0;
     uint8_t num_credit_lanes_ = 1;  // active lanes P (kernel-config slot), read once in the ctor
@@ -809,6 +863,8 @@ private:
 
 #if !defined(COMPILE_FOR_TRISC)
     std::optional<DataflowBuffer> relay_dfb_;
+    // Relay pages per pipe entry, fixed at bind_relay() (see prefetcher_pipe_relay_pages_per_entry).
+    uint16_t relay_pages_per_entry_ = 1;
 #ifndef ARCH_QUASAR
     uint16_t relay_entries_acked_checkpoint_ = 0;
 #endif
@@ -881,7 +937,6 @@ private:
     }
 
     FORCE_INLINE void wait_relay_consumed(uint32_t num_entries) {
-        ASSERT(num_entries <= relay_dfb_->get_local_num_entries());
         WAYPOINT("PDCW");
 #ifdef ARCH_QUASAR
         // After the relay.push_back(N), HW posted already marks those entries;
@@ -889,14 +944,17 @@ private:
         (void)num_entries;
         relay_dfb_->wait_relay_consumer_caught_up();
 #else
+        // The relay's consumer acks relay pages, relay_pages_per_entry_ of them per pipe entry.
+        const uint32_t num_pages = num_entries * relay_pages_per_entry_;
+        ASSERT(num_pages <= relay_dfb_->get_local_num_entries());
         const uint16_t relay_dfb_id = relay_dfb_->get_id();
         const uintptr_t entries_acked_ptr = reinterpret_cast<uintptr_t>(get_cb_tiles_acked_ptr(relay_dfb_id));
         uint16_t entries_acked;
         do {
             invalidate_l1_cache();
             entries_acked = static_cast<uint16_t>(reg_read(entries_acked_ptr));
-        } while (static_cast<uint16_t>(entries_acked - relay_entries_acked_checkpoint_) < num_entries);
-        relay_entries_acked_checkpoint_ = static_cast<uint16_t>(relay_entries_acked_checkpoint_ + num_entries);
+        } while (static_cast<uint16_t>(entries_acked - relay_entries_acked_checkpoint_) < num_pages);
+        relay_entries_acked_checkpoint_ = static_cast<uint16_t>(relay_entries_acked_checkpoint_ + num_pages);
 #endif
         WAYPOINT("PDCD");
     }
@@ -910,13 +968,18 @@ private:
         uint32_t num_units = 0;
         if (P == 1) {
             const uint32_t payload_bytes = num_entries * entry_size;
-            ASSERT(iface.fifo_rd_ptr + payload_bytes <= iface.fifo_limit_page_aligned);
+            // A pop may straddle the wrap, matching wait_front and the GlobalCB twin
+            // (remote_cb_pop_front); only popping more than the ring holds is a bug.
+            ASSERT(payload_bytes <= iface.fifo_limit_page_aligned - iface.fifo_start_addr);
             const uint32_t rd_offset = iface.fifo_rd_ptr - iface.fifo_start_addr;
             num_units = units_for_read(iface, rd_offset, payload_bytes);
-            iface.fifo_rd_ptr += payload_bytes;
-            if (iface.fifo_rd_ptr >= iface.fifo_limit_page_aligned) {
-                iface.fifo_rd_ptr = iface.fifo_start_addr;
-            }
+            // Carry the remainder past the wrap rather than snapping to the base: a batched pop that
+            // crosses the usable limit resumes that many bytes into the ring. units_for_read has
+            // already credited the trailing gap this crossing skips.
+            const uint32_t next_rd_ptr = iface.fifo_rd_ptr + payload_bytes;
+            iface.fifo_rd_ptr = next_rd_ptr >= iface.fifo_limit_page_aligned
+                                    ? iface.fifo_start_addr + (next_rd_ptr - iface.fifo_limit_page_aligned)
+                                    : next_rd_ptr;
         } else {
             const uint32_t stride = entry_size * P;
             num_units = num_entries * units_per_entry(iface);

@@ -10,6 +10,7 @@
 #include "device.hpp"
 #include "mesh_device.hpp"
 #include "mesh_device_impl.hpp"
+#include "mesh_event_impl.hpp"
 #include "mesh_workload_impl.hpp"
 #include "tt-metalium/program.hpp"
 #include "dispatch/system_memory_manager.hpp"
@@ -17,6 +18,7 @@
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
+#include "impl/program/slow_dispatch.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include "llrt/tt_cluster.hpp"
 
@@ -107,7 +109,7 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
                             svc.impl().mark_launched(device->id(), core);  // launch-once
                         }
                     }
-                    tt::tt_metal::detail::LaunchProgram(device, program, false, true);
+                    tt::tt_metal::slow_dispatch::LaunchProgramAsync(*device, program, /*force_slow_dispatch=*/true);
                 }
             }
             return;
@@ -133,9 +135,10 @@ void EventSynchronize(const MeshEvent& event) {
     if (!event.device()->impl().metal_env().get_rtoptions().get_fast_dispatch()) {
         return;
     }
-    for (const auto& coord : event.device_range()) {
+    for (const auto& coord : event.impl().device_range()) {
         auto* physical_device = event.device()->impl().get_device(coord);
-        while (physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) < event.id()) {
+        while (physical_device->sysmem_manager().get_last_completed_event(event.impl().mesh_cq_id()) <
+               event.impl().id()) {
             ;
         }
     }
@@ -146,9 +149,10 @@ bool EventQuery(const MeshEvent& event) {
         return true;
     }
     bool event_completed = true;
-    for (const auto& coord : event.device_range()) {
+    for (const auto& coord : event.impl().device_range()) {
         auto* physical_device = event.device()->impl().get_device(coord);
-        event_completed &= physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) >= event.id();
+        event_completed &=
+            physical_device->sysmem_manager().get_last_completed_event(event.impl().mesh_cq_id()) >= event.impl().id();
     }
     return event_completed;
 }

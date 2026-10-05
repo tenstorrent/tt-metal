@@ -10,6 +10,8 @@
 #include <cstdio>
 #include <set>
 #include <map>
+#include <optional>
+#include <utility>
 #include <unordered_set>
 #include <fstream>
 
@@ -890,24 +892,26 @@ TEST(MeshGraphDescriptorTests, TestIntraMeshConnections) {
     // Check intra mesh connections
     const auto& all_connections = desc.connections_by_type("MESH");
 
-    ASSERT_EQ(all_connections.size(), 24);
+    // The RING is on the extent-2 axis, which has no distinct wrap edge, so N/S stay ordinary LINE links:
+    // 7 grid edges x 2 directions + 2 express connections x 2 directions.
+    ASSERT_EQ(all_connections.size(), 18);
 
-    // Layout should look like this with wrapping in x direction and express connections
+    // Layout (no wrap on the 2-row axis) with express connections
     // 0 1 2
     // 3 4 5
     auto device_0 = desc.instances_by_name("D0")[0];
     auto connections = desc.connections_by_source_device_id(device_0);
-    ASSERT_EQ(connections.size(), 4);
+    ASSERT_EQ(connections.size(), 3);
     check_connections(desc, connections, {1, 3, 5}, 1u, mesh_ids[0], {"D1", "D3", "D5"});
 
     auto device_1 = desc.instances_by_name("D1")[0];
     connections = desc.connections_by_source_device_id(device_1);
-    ASSERT_EQ(connections.size(), 5);
+    ASSERT_EQ(connections.size(), 4);
     check_connections(desc, connections, {2, 4, 0, 5}, 1u, mesh_ids[0], {"D0", "D2", "D4", "D5"});
 
     auto device_2 = desc.instances_by_name("D2")[0];
     connections = desc.connections_by_source_device_id(device_2);
-    ASSERT_EQ(connections.size(), 3);
+    ASSERT_EQ(connections.size(), 2);
     check_connections(desc, connections, {1, 5}, 1u, mesh_ids[0], {"D1", "D5"});
 
     // Test all_names() returns unique names (as unordered_set)
@@ -2543,132 +2547,344 @@ TEST(MeshGraphDescriptorTests, VectorReallocPreservesConnectionsByTypeLookup) {
         << "Dual MGD should retain FABRIC connections after emplace";
 }
 
-// express_links expands into the expected intra-mesh Z edges on the 8x4 [RING, RING] descriptor.
-TEST(MeshGraphDescriptorTests, ExpressLinks8x4) {
-    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
-    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
-    const std::filesystem::path desc_path =
-        std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_8x4_mesh_graph_descriptor.textproto";
-
-    tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, desc_path.string());
-    const auto& intra = mesh_graph.get_intra_mesh_connectivity();
-    ASSERT_EQ(intra.size(), 1u);
-    const auto& m0 = intra[0];
-    ASSERT_EQ(m0.size(), 32u);  // 8x4 = 32 chips
-
-    // wrap: LINE on the step-4 pattern keeps only block [2,5]; the wrapping block is dropped even
-    // though the row axis is RING. Row 0 <-> row 7 is the ordinary wrap, not an express link. chip = row*4 + col.
-    const std::vector<std::pair<int, int>> expected_express_edges = {{8, 20}, {9, 21}, {10, 22}, {11, 23}};
-
-    for (const auto& [a, b] : expected_express_edges) {
-        EXPECT_EQ(m0[a].count(b), 1u) << "missing express edge " << a << " -> " << b;
-        EXPECT_EQ(m0[b].count(a), 1u) << "missing reverse express edge " << b << " -> " << a;
-        if (m0[a].contains(b) && m0[b].contains(a)) {
-            EXPECT_EQ(m0[a].at(b).port_direction, tt::tt_fabric::RoutingDirection::Z);
-            EXPECT_EQ(m0[b].at(a).port_direction, tt::tt_fabric::RoutingDirection::Z);
-        }
-    }
-
-    EXPECT_EQ(m0[4].count(24), 0u);  // row 1 is not a block endpoint, so it gets no express link
-
-    // chip 8 keeps its 4 base-grid neighbors plus the one express edge
-    EXPECT_EQ(m0[8].count(4), 1u);
-    EXPECT_EQ(m0[8].count(12), 1u);
-    EXPECT_EQ(m0[8].count(9), 1u);
-    EXPECT_EQ(m0[8].count(11), 1u);
-    EXPECT_EQ(m0[8].size(), 5u);
-
-    // 4 bidirectional express edges = 8 directed Z entries, no others
-    int z_directed = 0;
-    for (int c = 0; c < 32; ++c) {
-        for (const auto& [nb, edge] : m0[c]) {
-            if (edge.port_direction == tt::tt_fabric::RoutingDirection::Z) {
-                ++z_directed;
+std::optional<std::pair<std::size_t, MeshId>> decode_merged_mesh_id(
+    MeshId global_mesh_id, const std::vector<std::map<MeshId, MeshId>>& per_part_local_to_global) {
+    for (std::size_t part = 0; part < per_part_local_to_global.size(); ++part) {
+        for (const auto& [local, global] : per_part_local_to_global[part]) {
+            if (global == global_mesh_id) {
+                return std::make_pair(part, local);
             }
         }
     }
-    EXPECT_EQ(z_directed, 8) << "expected exactly 4 bidirectional express edges (8 directed Z entries)";
+    return std::nullopt;
 }
 
-TEST(MeshGraphDescriptorTests, PlainFabric2DDowngradesExpressMgdToMesh) {
-    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
-    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
-    const std::filesystem::path desc_path =
-        std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_8x4_mesh_graph_descriptor.textproto";
+TEST(MeshGraphDescriptorTests, MergeSingleDescriptorKeepsLocalIdsAndNames) {
+    MeshGraphDescriptor source{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 1 policy: STRICT }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)delimiter")};
 
-    const tt::tt_fabric::MeshGraph mesh_graph(
-        tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, desc_path.string(), tt::tt_fabric::FabricConfig::FABRIC_2D);
-    const auto& m0 = mesh_graph.get_intra_mesh_connectivity().at(0);
-    ASSERT_EQ(m0.size(), 32u);
+    std::vector<std::map<MeshId, MeshId>> maps;
+    const MeshGraphDescriptor merged = MeshGraphDescriptor::merge({&source}, &maps);
 
-    int z_directed = 0;
-    for (const auto& edges_by_destination : m0) {
-        for (const auto& [_, edge] : edges_by_destination) {
-            z_directed += edge.port_direction == tt::tt_fabric::RoutingDirection::Z ? 1 : 0;
-        }
-    }
-    EXPECT_EQ(z_directed, 0);
-    EXPECT_EQ(m0[8].count(20), 0u);  // the descriptor's row 2 <-> row 5 express chord is absent
-    EXPECT_EQ(m0[0].count(28), 0u);  // plain FABRIC_2D also removes the ordinary row 0 <-> row 7 wrap
-    EXPECT_EQ(m0[0].at(4).port_direction, tt::tt_fabric::RoutingDirection::S);
-    EXPECT_EQ(m0[0].at(1).port_direction, tt::tt_fabric::RoutingDirection::E);
+    ASSERT_EQ(maps.size(), 1u);
+    ASSERT_EQ(maps[0].size(), 1u);
+    EXPECT_EQ(maps[0].at(MeshId{0}), MeshId{0});
+
+    const auto names = merged.mesh_id_to_instance_name();
+    ASSERT_TRUE(names.contains(MeshId{0}));
+    EXPECT_EQ(names.at(MeshId{0}), "M0") << "a single descriptor is cloned; names stay unprefixed";
+    EXPECT_EQ(merged.get_chip_count(merged.instances_by_name("M0").at(0)), 4u);
 }
 
-// express_links (two ROW patterns) expand into 48 Z edges on the 32x4 [RING, RING] descriptor.
-TEST(MeshGraphDescriptorTests, ExpressLinks32x4) {
-    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
-    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
-    const std::filesystem::path desc_path =
-        std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_32x4_mesh_graph_descriptor.textproto";
+TEST(MeshGraphDescriptorTests, MergeTwoSameNamedMeshesRenumbersAndPrefixes) {
+    MeshGraphDescriptor left{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
+    MeshGraphDescriptor right{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
 
-    tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, desc_path.string());
-    const auto& intra = mesh_graph.get_intra_mesh_connectivity();
-    ASSERT_EQ(intra.size(), 1u);
-    const auto& m0 = intra[0];
-    ASSERT_EQ(m0.size(), 128u);  // 32x4 = 128 chips
+    std::vector<std::map<MeshId, MeshId>> maps;
+    const MeshGraphDescriptor merged = MeshGraphDescriptor::merge({&left, &right}, &maps);
 
-    // dim 0 (32 rows, RING). chip = row*4 + col. Two patterns:
-    //   start=2 step=4 -> 8 row pairs (last wraps)
-    //   start=0 step=8 -> 4 row pairs
-    const std::vector<std::pair<int, int>> row_blocks = {
-        {2, 5},
-        {6, 9},
-        {10, 13},
-        {14, 17},
-        {18, 21},
-        {22, 25},
-        {26, 29},
-        {30, 1},  // start=2 step=4
-        {0, 7},
-        {8, 15},
-        {16, 23},
-        {24, 31}};  // start=0 step=8
-    for (const auto& [ra, rb] : row_blocks) {
-        for (int col = 0; col < 4; ++col) {
-            const int a = ra * 4 + col;
-            const int b = rb * 4 + col;
-            EXPECT_EQ(m0[a].count(b), 1u) << "missing express edge " << a << " -> " << b;
-            EXPECT_EQ(m0[b].count(a), 1u) << "missing reverse express edge " << b << " -> " << a;
-            if (m0[a].contains(b) && m0[b].contains(a)) {
-                EXPECT_EQ(m0[a].at(b).port_direction, tt::tt_fabric::RoutingDirection::Z);
-                EXPECT_EQ(m0[b].at(a).port_direction, tt::tt_fabric::RoutingDirection::Z);
-            }
-        }
+    ASSERT_EQ(maps.size(), 2u);
+    EXPECT_EQ(maps[0].at(MeshId{0}), MeshId{0});
+    EXPECT_EQ(maps[1].at(MeshId{0}), MeshId{1});
+
+    const auto names = merged.mesh_id_to_instance_name();
+    ASSERT_EQ(names.size(), 2u);
+    EXPECT_EQ(names.at(MeshId{0}), "mgd0_M0");
+    EXPECT_EQ(names.at(MeshId{1}), "mgd1_M0");
+    EXPECT_EQ(merged.get_chip_count(merged.instances_by_name("mgd0_M0").at(0)), 2u);
+    EXPECT_EQ(merged.get_chip_count(merged.instances_by_name("mgd1_M0").at(0)), 1u);
+
+    const auto decoded0 = decode_merged_mesh_id(MeshId{0}, maps);
+    const auto decoded1 = decode_merged_mesh_id(MeshId{1}, maps);
+    ASSERT_TRUE(decoded0.has_value());
+    ASSERT_TRUE(decoded1.has_value());
+    EXPECT_EQ(decoded0->first, 0u);
+    EXPECT_EQ(decoded0->second, MeshId{0});
+    EXPECT_EQ(decoded1->first, 1u);
+    EXPECT_EQ(decoded1->second, MeshId{0});
+}
+
+TEST(MeshGraphDescriptorTests, MergePreservesInterMeshSeamAndDecodesGlobals) {
+    MeshGraphDescriptor pair{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 4 policy: RELAXED }
+  }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
+    MeshGraphDescriptor singleton{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
+
+    std::vector<std::map<MeshId, MeshId>> maps;
+    const MeshGraphDescriptor merged = MeshGraphDescriptor::merge({&pair, &singleton}, &maps);
+
+    ASSERT_EQ(maps.size(), 2u);
+    EXPECT_EQ(maps[0].at(MeshId{0}), MeshId{0});
+    EXPECT_EQ(maps[0].at(MeshId{1}), MeshId{1});
+    EXPECT_EQ(maps[1].at(MeshId{0}), MeshId{2});
+
+    const auto names = merged.mesh_id_to_instance_name();
+    ASSERT_EQ(names.size(), 3u);
+    EXPECT_EQ(names.at(MeshId{0}), "mgd0_M0");
+    EXPECT_EQ(names.at(MeshId{1}), "mgd0_M1");
+    EXPECT_EQ(names.at(MeshId{2}), "mgd1_M0");
+    EXPECT_TRUE(merged.has_connections_of_type("FABRIC"))
+        << "the first descriptor's inter-mesh seam must survive under the merged graph";
+    EXPECT_TRUE(merged.is_inter_mesh_policy_relaxed());
+
+    for (MeshId global : {MeshId{0}, MeshId{1}, MeshId{2}}) {
+        const auto decoded = decode_merged_mesh_id(global, maps);
+        ASSERT_TRUE(decoded.has_value()) << "global mesh " << *global << " should invert through the merge maps";
     }
+    EXPECT_EQ(decode_merged_mesh_id(MeshId{0}, maps)->first, 0u);
+    EXPECT_EQ(decode_merged_mesh_id(MeshId{1}, maps)->second, MeshId{1});
+    EXPECT_EQ(decode_merged_mesh_id(MeshId{2}, maps)->first, 1u);
+    EXPECT_EQ(decode_merged_mesh_id(MeshId{2}, maps)->second, MeshId{0});
+}
 
-    // (8 + 4) blocks x 4 columns = 48 bidirectional express edges = 96 directed Z entries, no others
-    int z_directed = 0;
-    for (int c = 0; c < 128; ++c) {
-        for (const auto& [nb, edge] : m0[c]) {
-            if (edge.port_direction == tt::tt_fabric::RoutingDirection::Z) {
-                ++z_directed;
-            }
+TEST(MeshGraphDescriptorTests, MergeMeshTopLevelDescriptors) {
+    MeshGraphDescriptor first{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 1 policy: STRICT }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)delimiter")};
+    MeshGraphDescriptor second{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 1 policy: STRICT }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)delimiter")};
+
+    std::vector<std::map<MeshId, MeshId>> maps;
+    const MeshGraphDescriptor merged = MeshGraphDescriptor::merge({&first, &second}, &maps);
+
+    ASSERT_EQ(maps[0].at(MeshId{0}), MeshId{0});
+    ASSERT_EQ(maps[1].at(MeshId{0}), MeshId{1});
+    EXPECT_EQ(merged.get_chip_count(merged.instances_by_name("mgd0_M0").at(0)), 4u);
+    EXPECT_EQ(merged.get_chip_count(merged.instances_by_name("mgd1_M0").at(0)), 4u);
+    EXPECT_EQ(merged.top_level().name, "G0");
+}
+
+TEST(MeshGraphDescriptorTests, MergeRemapsPinningsToGlobalMeshIds) {
+    MeshGraphDescriptor left{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 1 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 1 }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
+    MeshGraphDescriptor right{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 1 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 1 }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
+
+    std::vector<std::map<MeshId, MeshId>> maps;
+    const MeshGraphDescriptor merged = MeshGraphDescriptor::merge({&left, &right}, &maps);
+    const auto& pinnings = merged.get_pinnings();
+
+    ASSERT_TRUE(pinnings.contains(MeshId{0}));
+    ASSERT_TRUE(pinnings.contains(MeshId{1}));
+    ASSERT_EQ(pinnings.at(MeshId{0}).size(), 1u);
+    ASSERT_EQ(pinnings.at(MeshId{1}).size(), 1u);
+    EXPECT_EQ(*pinnings.at(MeshId{0})[0].fabric_nodes[0].mesh_id, 0u);
+    EXPECT_EQ(pinnings.at(MeshId{0})[0].fabric_nodes[0].chip_id, 0u);
+    EXPECT_EQ(*pinnings.at(MeshId{1})[0].fabric_nodes[0].mesh_id, 1u);
+    EXPECT_EQ(pinnings.at(MeshId{1})[0].fabric_nodes[0].chip_id, 3u);
+}
+
+TEST(MeshGraphDescriptorTests, MergeRejectsInconsistentInterMeshPolicy) {
+    MeshGraphDescriptor relaxed{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 2 policy: RELAXED }
+  }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
+    MeshGraphDescriptor strict{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 2 policy: STRICT }
+  }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
+
+    EXPECT_ANY_THROW(MeshGraphDescriptor::merge({&relaxed, &strict}));
+}
+
+TEST(MeshGraphDescriptorTests, MergeEmptyDescriptorsThrows) { EXPECT_ANY_THROW(MeshGraphDescriptor::merge({})); }
+
+// A RING on an axis of extent <= 2 has no distinct wrap edge. Wrapping it anyway makes N == S, so each chip
+// lists its single row neighbor twice and the topology mapper demands 2x the channels a 2x4 BH Loudbox has
+// between its rows, failing FABRIC_2D_TORUS_XY under STRICT validation.
+TEST(MeshGraphDescriptorTests, RingOnShortAxisDoesNotDuplicateNeighbors) {
+    const auto desc = MeshGraphDescriptor::generate_mesh_graph_descriptor_of_shape(
+        tt::tt_metal::distributed::MeshShape(2, 4),
+        FabricType::TORUS_XY,
+        FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+        tt::ARCH::BLACKHOLE,
+        /*num_connections_per_direction=*/2);
+
+    const auto mesh_ids = desc.instances_by_type("MESH");
+    ASSERT_EQ(mesh_ids.size(), 1u);
+    const auto& mesh_inst = desc.get_instance(mesh_ids[0]);
+    for (const auto& [local_id, global_id] : mesh_inst.sub_instances_local_id_to_global_id) {
+        std::multiset<GlobalNodeId> destinations;
+        for (const auto connection_id : desc.connections_by_source_device_id(global_id)) {
+            destinations.insert(desc.get_connection(connection_id).nodes[1]);
         }
+        // One row neighbor (no wrap on the extent-2 axis) plus two distinct ring neighbors on the extent-4 axis.
+        EXPECT_EQ(destinations.size(), 3u) << "device " << local_id;
+        EXPECT_EQ(std::set<GlobalNodeId>(destinations.begin(), destinations.end()).size(), destinations.size())
+            << "device " << local_id << " lists a neighbor more than once";
     }
-    EXPECT_EQ(z_directed, 96) << "expected exactly 48 bidirectional express edges (96 directed Z entries)";
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

@@ -44,7 +44,7 @@ struct CoreSplit {
 };
 
 CoreSplit split_work(const Tensor& input, uint32_t total_work) {
-    IDevice* device = input.device();
+    MeshDevice* device = input.device();
     auto grid_size = device->compute_with_storage_grid_size();
     // row_wise=false (column-major core enumeration) to match the generator's
     // split_cores()/emit_per_core_rt(), which always calls ttnn.split_work_to_cores

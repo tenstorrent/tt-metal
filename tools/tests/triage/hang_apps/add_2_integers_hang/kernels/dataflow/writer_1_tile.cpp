@@ -14,6 +14,12 @@ void kernel_main() {
     constexpr auto out0_args = TensorAccessorArgs<0>();
     const auto dst = TensorAccessor(out0_args, dst_addr);
 
+    // dump_semaphores expects semaphore 0 at its initial 7 plus these two increments.
+    uint64_t semaphore = get_noc_addr(get_semaphore(0));
+    noc_semaphore_inc(semaphore, 1);
+    noc_semaphore_inc(semaphore, 1);
+    noc_async_atomic_barrier();
+
     // Make sure there is a tile in the circular buffer
     cb_wait_front(cb_out0, 1);
     uint32_t cb_out0_addr = get_read_ptr(cb_out0);

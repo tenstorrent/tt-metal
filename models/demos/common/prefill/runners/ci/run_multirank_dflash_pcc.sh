@@ -3,8 +3,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # Multi-galaxy DFlash drafter KV accuracy. Sibling of run_multirank_pcc.sh, which covers the VERIFIER's
-# KVPE cache only -- that leg sets no PREFILL_DFLASH and cannot be extended in place, because it runs
-# PREFILL_USE_TRACE=1 and the drafter path is not trace-captured (prefill_runner asserts on the pair).
+# KVPE cache only -- that leg sets no PREFILL_DFLASH, and a drafter run needs enough extra knobs
+# (see the manifest notes below) that it gets its own launcher rather than a flag on that one.
+# Both legs run PREFILL_USE_TRACE=1: DFlash is traced-only, and prefill_runner asserts on the pair.
 #
 # What this proves that the single-galaxy leg cannot: the drafter is built on the LAST pipeline rank while
 # rank 0 builds and serializes the KV chunk table, so every drafter address in that table is a remote
@@ -49,7 +50,8 @@ DFLASH_PCC_THRESHOLD="${PREFILL_DFLASH_PCC:-0.85}"
 
 # The dflash manifest differs from the plain one by the knobs a drafter run needs, so the two legs cannot
 # share a file. What it pins, and why, since JSON cannot say it:
-#   PREFILL_USE_TRACE=0    -- the drafter path is not trace-captured (prefill_runner asserts the pair).
+#   PREFILL_USE_TRACE=1    -- the verifier forward, the drafter's FC taps and its KV finalize (last rank)
+#      or partial export (other ranks) are one capture, replayed per chunk.
 #   PREFILL_LAYER_ACK_D2H=1 -- each rank stands up its own LayerAckService from D2H device records.
 #      Without it the non-first ranks take the host-ring branch and connect() to
 #      /tt_prefill_layer_completion_ring_N with a HARD-CODED 30 s timeout, which a rank that finished
@@ -63,9 +65,10 @@ DFLASH_PCC_THRESHOLD="${PREFILL_DFLASH_PCC:-0.85}"
 #      two under it and is also the value a plain Kimi 2-galaxy run settled on. It fails on rank 1 at
 #      MLA_START of layer 0, i.e. only once tokens flow -- never at init -- so a too-large value survives
 #      weight load and warmup before killing the run.
-#   PREFILL_NUM_USERS=1    -- unlike the verifier leg's 86 on sc4: the drafter cache is allocated at
-#      max_seq_len x num_users and slot 0 is the only slot with a golden behind it, so extra slots buy no
-#      coverage. Every one of these stays overridable -- the manifest is applied with setdefault.
+#   PREFILL_NUM_USERS=69   -- the sc4 allocation ceiling, so the leg fails on a capacity regression.
+#      Rank 3 sets it: drafter K+V on top of 15 verifier layers is 398 MB a user, and 70 overruns DRAM
+#      once the 256 MB trace region is carved off. Only slot 0 has a golden, so the rest sit idle.
+#      Every one of these stays overridable -- the manifest is applied with setdefault.
 case "${MODEL}" in
   kimi27) MANIFEST="${MANIFEST_DIR}/kimi27_dflash.json" ;;
   *)
@@ -91,6 +94,17 @@ case "${CONFIG}" in
   sc1|sc2|sc4) ;;
   *) echo "unknown config '${CONFIG}' (expected sc1, sc2 or sc4)" >&2; exit 2 ;;
 esac
+
+# The manifest count is the sc4 ceiling; every other SKU overrides it down -- sc1 puts all 61 layers on
+# one rank and holds far fewer users. The export has to be explicit: the rank shell receives a fixed
+# export list, so a value exported into this script does not reach it.
+RUNNER_NUM_USERS_EXPORT=""
+if [ "${CONFIG}" != sc4 ]; then
+  RUNNER_NUM_USERS_EXPORT="export PREFILL_NUM_USERS=1; "
+fi
+if [ -n "${PREFILL_NUM_USERS:-}" ]; then
+  RUNNER_NUM_USERS_EXPORT="export PREFILL_NUM_USERS=${PREFILL_NUM_USERS}; "
+fi
 
 # The CI descriptors are per-SKU, not per-model; sc2 has none, so fall back to the shared 2-galaxy one
 # the manual pipeline bindings already use (an 8x4 RING mesh per galaxy).
@@ -190,10 +204,12 @@ python3 "${TTRUN_PY}" \
   --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${RANKLOGS}/runner -x PATH -x LD_LIBRARY_PATH" \
   bash -lc "cd '${TT_METAL_HOME}'; \
     export PYTHONPATH='${TT_METAL_HOME}'; \
+    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0; \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_MANIFEST='${MANIFEST}'; \
     export PREFILL_CHUNK_SIZE=${CHUNK_SIZE}; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
+    ${RUNNER_NUM_USERS_EXPORT}\
     export PREFILL_TIMING_DIR='${TIMING_DIR}'; \
     export PREFILL_ENABLE_MIGRATION=1; \
     export PREFILL_MOCK_MIGRATION=1; \
@@ -277,6 +293,9 @@ set +e
 # --mca btl_tcp_if_include is REQUIRED, not tuning: without it MPI_Init never completes and every rank
 # logs "applied manifest" then goes silent forever (no error). ttrun passes the same transport args to
 # the runner above, so the producer must match them or only this leg hangs.
+# The producer pins itself to one slot rather than taking the manifest count the ranks allocate for.
+# Slot 0 is the only slot with a golden behind it, so the others would replay it for an identical PCC at
+# ~26 s a slot of PCIe readback -- 30 min at the sc4 ceiling, past the leg timeout.
 "${MPIRUN}" \
   --host "${PRODUCER_HOSTS}" --map-by "rankfile:file=${RANKFILE_REL}" --bind-to none --tag-output \
   --wdir "${TT_METAL_HOME}" \
@@ -284,9 +303,11 @@ set +e
   -x PATH -x LD_LIBRARY_PATH \
   bash -lc "cd '${TT_METAL_HOME}'; \
     export PYTHONPATH='${TT_METAL_HOME}'; \
+    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0; \
     export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
     export PREFILL_CHUNK_SIZE=${CHUNK_SIZE}; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
+    export PREFILL_NUM_USERS=1; \
     export PREFILL_PRODUCER_CHECK_PCC=1; \
     export PREFILL_PRODUCER_CHUNKS=${REAL_CHUNKS}; \
     export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN}; \

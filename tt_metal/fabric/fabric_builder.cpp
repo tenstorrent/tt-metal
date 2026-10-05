@@ -7,15 +7,10 @@
 #include "tt_metal/fabric/compute_mesh_router_builder.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
-#include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
-#include "tt_metal/fabric/builder/protected_domain_effect.hpp"
-#include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "dispatch/kernel_config/relay_mux.hpp"
-#include <enchantum/enchantum.hpp>
-#include <tt_stl/fmt.hpp>
+#include "llrt/tt_cluster.hpp"
 #include <set>
-#include <string>
 
 namespace tt::tt_fabric {
 
@@ -25,26 +20,20 @@ FabricBuilder::FabricBuilder(
     program_(program),
     fabric_context_(fabric_context),
     builder_context_(fabric_context.get_builder_context()),
-    local_node_(tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(
-        device->id())),
+    local_node_(fabric_context.get_control_plane().get_fabric_node_id_from_physical_chip_id(device->id())),
     wrap_around_mesh_(fabric_context_.is_wrap_around_mesh(local_node_.mesh_id)) {
-    // Bind this node's ring predicates once: every router on the chip shares them.
-    chip_facts_.protected_ring_queries =
-        make_protected_ring_queries(tt::tt_metal::MetalContext::instance().get_control_plane(), local_node_);
-
     // Determine if this device has tunneling dispatch
-    auto mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_->id());
-    auto tunnels_from_mmio =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(mmio_device_id);
+    const auto& cluster = fabric_context_.get_cluster();
+    auto mmio_device_id = cluster.get_associated_mmio_device(device_->id());
+    auto tunnels_from_mmio = cluster.get_devices_controlled_by_mmio_device(mmio_device_id);
     TT_ASSERT(!tunnels_from_mmio.empty());
     device_has_dispatch_tunnel_ = (tunnels_from_mmio.size() - 1) > 0;
 }
 
 void FabricBuilder::discover_channels() {
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = fabric_context_.get_control_plane();
     const bool is_2D_routing = fabric_context_.is_2D_routing_enabled();
-    bool is_galaxy_cluster = tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
+    bool is_galaxy_cluster = fabric_context_.get_cluster().is_galaxy_cluster();
 
     auto is_dispatch_link = [&](chan_id_t eth_chan, uint32_t dispatch_link_idx) {
         auto link_idx = control_plane.get_routing_plane_id(local_node_, eth_chan);
@@ -74,17 +63,6 @@ void FabricBuilder::discover_channels() {
 
         // Cache neighbor and channel info
         FabricNodeId neighbor_fabric_node_id = FabricNodeId(neighbors.begin()->first, neighbors.begin()->second[0]);
-
-        // Classify the edge once, here: the answer is threaded into the per-router build rather
-        // than re-derived per consumer. A same-mesh Z on a mesh without validated express intent
-        // means topology intent and the neighbor graph disagree, and catching that at discovery
-        // gives a far better message than whatever fails later.
-        //
-        // An express chord needs no rejection here any more: it is wired like any other direction, on
-        // the fifth VC0 sender, with its guard derived from the protected-ring effects.
-        chip_facts_.per_direction_capabilities.at(direction) =
-            classify_fabric_edge(control_plane, local_node_, neighbor_fabric_node_id, direction);
-
         chip_neighbors_.emplace(direction, neighbor_fabric_node_id);
         channels_by_direction_[direction] = active_eth_chans;
 
@@ -103,8 +81,8 @@ void FabricBuilder::discover_channels() {
 }
 
 void FabricBuilder::create_routers() {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& control_plane = fabric_context_.get_control_plane();
+    const auto& cluster = fabric_context_.get_cluster();
 
     // Create router builders
     for (const auto& [direction, eth_channels] : channels_by_direction_) {
@@ -123,7 +101,8 @@ void FabricBuilder::create_routers() {
             cluster.register_sim_fabric_endpoint_direction(
                 device_->id(), eth_chan, control_plane.routing_direction_to_eth_direction(direction));
 
-            auto router_builder = FabricRouterBuilder::create(device_, program_, local_node_, location, chip_facts_);
+            auto router_builder =
+                FabricRouterBuilder::create(fabric_context_, device_, program_, local_node_, location);
             routers_.insert({eth_chan, std::move(router_builder)});
         }
     }
@@ -207,7 +186,7 @@ std::vector<FabricBuilder::RouterConnectionPair> FabricBuilder::get_router_conne
 
 void FabricBuilder::connect_routers() {
     const auto topology = fabric_context_.get_fabric_topology();
-    const bool is_galaxy = tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy();
+    const bool is_galaxy = fabric_context_.is_ubb_galaxy();
 
     // If NeighborExchange topology is used, message forwarding is not supported, and thus there is no need to connect
     // routers on the same device together
@@ -218,18 +197,36 @@ void FabricBuilder::connect_routers() {
     // Get connection pairs based on topology
     auto connection_pairs = get_router_connection_pairs();
 
-    // Connect each pair: local turns between two routers on this device (one router's receiver
-    // feeds the other's sender, which transmits over its own eth link to a neighbor device).
-    // This is the single establishment pass for every connection -- the boundary turns (to and
-    // from the intermesh Z router) are wired here by the same path as every other local turn, so
-    // no second pass is needed. The link_idx pairing preserves plane identity across the turn;
-    // that is what lets the connection and channel mappings stay plane-independent archetypes
-    // (they carry no eth channel) -- the plane enters only here.
+    std::map<FabricRouterBuilder*, std::map<RoutingDirection, FabricRouterBuilder*>> routers_by_direction_map{};
+    // Connect each pair (inter-device INTRA_MESH connections)
     for (const auto& pair : connection_pairs) {
         auto& router1 = routers_.at(pair.chan1);
         auto& router2 = routers_.at(pair.chan2);
 
         router1->configure_connection(*router2, pair.link_idx, pair.num_links, topology, is_galaxy);
+
+        routers_by_direction_map[router1.get()].insert({router2->get_location().direction, router2.get()});
+        routers_by_direction_map[router2.get()].insert({router1->get_location().direction, router1.get()});
+    }
+
+    // Configure local connections between routers on this device
+    configure_local_connections(routers_by_direction_map);
+}
+
+void FabricBuilder::configure_local_connections(
+    const std::map<FabricRouterBuilder*, std::map<RoutingDirection, FabricRouterBuilder*>>& routers_by_direction_map) {
+    // Generic local connection establishment: iterate through all routers and
+    // establish connections to local targets based on their connection mappings
+
+    // For each router, establish its local connections
+    for (const auto& [source_router, target_routers_by_direction] : routers_by_direction_map) {
+        // Build map of potential local targets (all other routers on this device)
+        std::map<RoutingDirection, FabricRouterBuilder*> local_targets;
+        for (const auto& [target_dir, target_router] : target_routers_by_direction) {
+            local_targets[target_dir] = target_router;
+        }
+
+        source_router->configure_local_connections(local_targets);
     }
 }
 
@@ -245,8 +242,7 @@ void FabricBuilder::compile_ancillary_kernels() {
 
 void FabricBuilder::compile_kernels_for_missing_directions() {
     // Only applicable in UDM mode
-    auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
-    if (fabric_tensix_config != FabricTensixConfig::UDM) {
+    if (fabric_context_.get_fabric_tensix_config() != FabricTensixConfig::UDM) {
         return;
     }
 
@@ -258,7 +254,10 @@ void FabricBuilder::compile_kernels_for_missing_directions() {
     const auto& missing_directions = tensix_config.get_missing_directions(device_->id());
 
     for (const auto& [routing_plane_id, missing_dir] : missing_directions) {
-        log_warning(
+        // Routine step of UDM's core-budget fallback (see fabric_tensix_builder.cpp), not an
+        // error -- every device in UDM mode with fewer mux cores than directions logs this once
+        // per missing direction, so it belongs at debug rather than warning.
+        log_debug(
             tt::LogMetal,
             "Building missing direction tensix builder for fabric_node {}, routing_plane {}, direction {}",
             local_node_,

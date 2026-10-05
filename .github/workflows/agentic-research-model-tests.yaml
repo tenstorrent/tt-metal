@@ -12,6 +12,9 @@ on:
         options:
           - all
           - llama3.1-8b-qb2
+          - gemma4-31b-qb2
+          - qwen38-27b-qb2
+          - qwen-image-2.1-p150
       sku:
         description: Hardware to test
         type: choice
@@ -19,6 +22,7 @@ on:
         options:
           - all
           - bh_quietbox_2
+          - bh_p150
       tier:
         description: Model tier
         type: choice
@@ -29,11 +33,9 @@ on:
           - "2"
           - "3"
       vllm-tt-plugin-ref:
-        description: vLLM TT plugin commit, branch or tag for serving tests
+        description: vLLM TT plugin branch or tag for serving tests
         type: string
-        # Merged main revision; includes the Llama QB2 adapter from plugin #116.
-        # Keep in sync with select-tests.env and the registry command fallback.
-        default: 7250ddfaa988cc7417f518266dce52e425745472
+        default: main
 
 permissions:
   contents: read
@@ -52,8 +54,7 @@ jobs:
       SKU: ${{ inputs.sku || 'all' }}
       MODEL: ${{ inputs.model || 'all' }}
       TIER: ${{ inputs.tier || 'all' }}
-      # Keep in sync with the input default and tests/pipeline_reorg/agentic_research_model_tests.yaml.
-      VLLM_TT_PLUGIN_REF: ${{ inputs.vllm-tt-plugin-ref || '7250ddfaa988cc7417f518266dce52e425745472' }}
+      VLLM_TT_PLUGIN_REF: ${{ inputs.vllm-tt-plugin-ref || 'main' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -63,10 +64,11 @@ jobs:
       - run: pip3 install PyYAML
       - name: Resolve hardware
         id: hardware
-        run: |
-          if [ "$SKU" = all ]; then SKU=ALL_SKUS_IN_TESTS; fi
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            "$REGISTRY" "$SKU" .github/sku_config.yaml
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        with:
+          tests-yaml: ${{ env.REGISTRY }}
+          enabled-skus: ${{ env.SKU == 'all' && 'ALL_SKUS_IN_TESTS' || env.SKU }}
+          sku-config: .github/sku_config.yaml
       - name: Select model and tier
         id: select
         env:
@@ -115,3 +117,4 @@ jobs:
       enabled-skus: ""
       tier: ""
       summary-scope: agentic-research
+      run-tt-check: true

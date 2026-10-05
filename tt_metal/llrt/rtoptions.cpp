@@ -58,6 +58,7 @@ enum class EnvVarID {
     TT_METAL_EMULE_MODE,                      // Enable emulated mode (SWEmuleChip with real memory I/O)
     TT_METAL_VISIBLE_DEVICES,                 // Comma-separated list of visible device IDs
     ARCH_NAME,                                // Architecture name (simulation mode)
+    QUASAR_ARCH_VARIANT,                      // Quasar IP variant (LLK arch/<variant> directory)
     TT_MESH_GRAPH_DESC_PATH,                  // Custom fabric mesh graph descriptor
     TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH,  // Factory System Descriptor (FSD) path
     TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE,  // Core grid override
@@ -131,6 +132,8 @@ enum class EnvVarID {
     TT_METAL_DEVICE_PROFILER,                      // Enable device profiling
     TT_METAL_STREAMING_PROFILER,                   // Enable the streaming device profiler (excludes the DRAM one)
     TT_METAL_STREAMING_PROFILER_TRACY,             // Enable Tracy output for the streaming profiler
+    TT_METAL_STREAMING_PROFILER_SYNC_EVENTS,       // Enable sync events profiling
+    TT_METAL_STREAMING_PROFILER_INLINE_ENABLED,    // Enable zone markers inlining
     TT_METAL_STREAMING_PROFILER_DRAM_MB,           // Streaming profiler per-relay GDDR spool ring, MiB
     TT_METAL_STREAMING_PROFILER_FIFO_MB,           // Streaming profiler host FIFO per D2H socket, MiB
     TT_METAL_STREAMING_PROFILER_OPS_CSV,           // Streaming profiler ops CSV path
@@ -138,7 +141,6 @@ enum class EnvVarID {
     TT_METAL_DEVICE_PROFILER_DISPATCH,             // Enable dispatch core profiling
     TT_METAL_PROFILER_SYNC,                        // Enable synchronous profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS,           // Enable NoC events profiling
-    TT_METAL_DEVICE_PROFILER_SYNC_EVENTS,          // Enable sync events profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH,  // NoC events report path
     TT_METAL_PROFILE_PERF_COUNTERS,                // Enable Performance Counter profiling
     TT_METAL_MEM_PROFILER,                         // Enable memory/buffer profiling
@@ -557,6 +559,30 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: Hardware-detected architecture
         // Usage: export ARCH_NAME=wormhole_b0
         case EnvVarID::ARCH_NAME: this->arch_name = std::string(value); break;
+
+        // QUASAR_ARCH_VARIANT
+        // Build the Quasar LLKs for an IP variant. The name is a directory under
+        // tt_metal/tt-llk/tt_llk_quasar/arch/ whose headers shadow the base Quasar ones.
+        // Default: unset (base Quasar part)
+        // Usage: export QUASAR_ARCH_VARIANT=quasar_4row
+        case EnvVarID::QUASAR_ARCH_VARIANT: {
+            const std::string variant(value);
+            if (variant.empty()) {
+                break;
+            }
+            const bool plain_name = std::all_of(variant.begin(), variant.end(), [](unsigned char c) {
+                return std::islower(c) || std::isdigit(c) || c == '_';
+            });
+            TT_FATAL(plain_name, "QUASAR_ARCH_VARIANT '{}' must be a plain lowercase name (a-z, 0-9, _)", variant);
+            const auto dir = std::filesystem::path(get_root_dir()) / "tt_metal/tt-llk/tt_llk_quasar/arch" / variant;
+            TT_FATAL(
+                std::filesystem::is_directory(dir),
+                "QUASAR_ARCH_VARIANT '{}' has no directory {}",
+                variant,
+                dir.string());
+            this->quasar_arch_variant = variant;
+            break;
+        }
 
         // TT_MESH_GRAPH_DESC_PATH
         // Custom fabric mesh graph descriptor path.
@@ -997,13 +1023,24 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 #endif
             break;
 
-        // TT_METAL_DEVICE_PROFILER_SYNC_EVENTS
+        // TT_METAL_STREAMING_PROFILER_SYNC_EVENTS
         // Enables profiling for synchronization events (cb reserve/wait/push/pop, semaphore set/wait).
         // Requires TT_METAL_STREAMING_PROFILER to be enabled as well.
         // Default: false
-        // Usage: export TT_METAL_DEVICE_PROFILER_SYNC_EVENTS=1
-        case EnvVarID::TT_METAL_DEVICE_PROFILER_SYNC_EVENTS:
-            this->profiler_sync_events_enabled = is_env_enabled(value);
+        // Usage: export TT_METAL_STREAMING_PROFILER_SYNC_EVENTS=1
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_SYNC_EVENTS:
+            this->streaming_profiler_sync_events_enabled = is_env_enabled(value);
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_INLINE_ENABLED
+        // This is enabled by default. Disabling inlining of kernel zone-marker emit path to
+        // reduce kernel size overhead from profiler instrumentation. This is useful for
+        // kernels with many zones that would otherwise exceed the kernel-config ring and fail to launch at all.
+        // Only works on the streaming profiler.
+        // Default: true
+        // Usage: export TT_METAL_STREAMING_PROFILER_INLINE_ENABLED=1
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_INLINE_ENABLED:
+            this->streaming_profiler_inline_enabled = is_env_enabled(value);
             break;
 
         // TT_METAL_STREAMING_PROFILER_TRACY

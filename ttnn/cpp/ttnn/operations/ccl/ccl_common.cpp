@@ -14,6 +14,7 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "tt-metalium/hal.hpp"
 #include "ttnn/types.hpp"
@@ -154,6 +155,16 @@ bool is_axis_straight(const tt::tt_metal::distributed::MeshDevice& mesh_device, 
         }
     }
     return true;
+}
+
+tt::tt_metal::BufferType prefer_l1_small_buffer_type(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    const size_t l1_small_bank_size = mesh_device.allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
+    return l1_small_bank_size > 0 ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
+}
+
+size_t l1_small_floor_address(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    const auto& allocator = mesh_device.allocator();
+    return allocator->get_worker_l1_size() - allocator->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
 }
 
 bool is_axis_wrap_wired(const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t axis) {
@@ -1429,141 +1440,6 @@ std::vector<TensorSlice> generate_slice_sequence_on_dim(
     return slices;
 }
 
-/*
- * @brief: Given a tensor shape, evenly break it into pieces along a given dimension and generate the slices
- * accordingly. This can be fed into a CCL Send command generator
- */
-std::vector<TensorSlice> generate_slice_sequence_on_dim_v2(
-    TensorSlice::ords_t tensor_shape,
-    TensorSlice::ords_t worker_slice_shape,
-    TensorSlice::ords_t worker_slice_offset,
-    std::size_t fracture_dim,
-    std::size_t num_slices,
-    std::int64_t start_slice_index,
-    std::int64_t end_slice_index_exclusive,
-    std::size_t worker_index) {
-    static_assert(
-        std::is_same_v<TensorSlice::ords_t, tt_xy_pair>,
-        "generate_slice_sequence_on_dim_v2 not yet implemented for type not of tt_xy_pair");
-    // We don't support 4D shapes in the CCL kernels yet, which are needed for proper reduction/concatenation in some
-    // cases so for now we subtract the outer dims from the fracture_dim since we only support 2D at the moment.
-    if (fracture_dim == 3) {
-        fracture_dim -= 2;
-    } else {
-        // dims are
-        fracture_dim = 0;
-    }
-
-    TT_ASSERT(worker_slice_shape.y == 1);
-
-    std::vector<TensorSlice> slices;
-    auto dim_size = fracture_dim == 1 ? tensor_shape.x : tensor_shape.y;
-    TT_ASSERT(dim_size % num_slices == 0);
-    auto slice_size_on_dim = dim_size / num_slices;
-    auto slice_shape = fracture_dim == 0 ? tt_xy_pair{tensor_shape.x, slice_size_on_dim}
-                                         : tt_xy_pair{slice_size_on_dim, tensor_shape.y};
-
-    auto dim_start_offset = start_slice_index * slice_size_on_dim;
-    TensorSlice::ords_t tensor_slice_offset =
-        fracture_dim == 0 ? tt_xy_pair{0, dim_start_offset} : tt_xy_pair{dim_start_offset, 0};
-
-    bool forward_direction = start_slice_index > end_slice_index_exclusive;  // only for debug
-    auto incr = start_slice_index < end_slice_index_exclusive ? 1 : -1;
-    if (forward_direction) {
-        log_trace(tt::LogOp, "slice_size_on_dim {}", slice_size_on_dim);
-        log_trace(tt::LogOp, "worker_index {}", worker_index);
-    }
-
-    auto worker_slice_start_offset = worker_slice_offset;
-
-    auto generate_slice = [forward_direction,
-                           incr,
-                           &slices,
-                           &tensor_shape,
-                           &slice_shape,
-                           &worker_slice_shape,
-                           tensor_slice_offset,
-                           &worker_slice_start_offset,
-                           fracture_dim,
-                           dim_start_offset,
-                           slice_size_on_dim](std::int64_t i) {
-        auto tensor_slice_offset_adjusted = tensor_slice_offset;
-        if (fracture_dim == 0) {
-            tensor_slice_offset_adjusted.y = slice_size_on_dim * i;
-        } else {
-            tensor_slice_offset_adjusted.x = slice_size_on_dim * i;
-        }
-        TT_ASSERT(tensor_shape.x > 0, "Invalid tensor shape. x = 0 but it must be > 0");
-        TT_ASSERT(tensor_shape.y > 0, "Invalid tensor shape. y = 0 but it must be > 0");
-        TT_ASSERT(slice_shape.x > 0, "Invalid tensor slice shape. x = 0 but it must be > 0");
-        TT_ASSERT(slice_shape.y > 0, "Invalid tensor slice shape. x = 0 but it must be > 0");
-        TT_ASSERT(
-            tensor_slice_offset_adjusted.x < tensor_shape.x,
-            "Invalid tensor slice offset. x = {} but it must be < tensor shape x={}. slice_offset: (y={},x={}), "
-            "tensor_shape: (y={},x={}). slice_size_on_dim: {}, i: {}",
-            tensor_slice_offset_adjusted.x,
-            tensor_shape.x,
-            tensor_slice_offset_adjusted.y,
-            tensor_slice_offset_adjusted.x,
-            tensor_shape.y,
-            tensor_shape.x,
-            slice_size_on_dim,
-            i);
-        TT_ASSERT(
-            tensor_slice_offset_adjusted.y < tensor_shape.y,
-            "Invalid tensor slice offset. y = {} but it must be < tensor shape y={}. slice_offset: (y={},x={}), "
-            "tensor_shape: (y={},x={}). slice_size_on_dim: {}, i: {}",
-            tensor_slice_offset_adjusted.y,
-            tensor_shape.y,
-            tensor_slice_offset_adjusted.y,
-            tensor_slice_offset_adjusted.x,
-            tensor_shape.y,
-            tensor_shape.x,
-            slice_size_on_dim,
-            i);
-        TT_ASSERT(worker_slice_shape.x > 0, "Invalid worker slice shape. x = 0 but it must be > 0");
-        TT_ASSERT(worker_slice_shape.y > 0, "Invalid worker slice shape. y = 0 but it must be > 0");
-
-        const auto& tensor_slice = TensorSlice(
-            tensor_shape,
-            slice_shape,
-            tensor_slice_offset_adjusted,
-            worker_slice_shape,
-            worker_slice_start_offset,
-            fracture_dim);
-        if (forward_direction) {
-            log_trace(
-                tt::LogOp,
-                "generate_slice ({}):\n\ttensor_shape: (y={},x={})\n\ttensor_slice_shape: "
-                "(y={},x={})\n\ttensor_slice_offset_adjusted: (y={},x={})\n\tslice_start_shape: (y={},x={})\n\tworker "
-                "relative slice_start_offset: (y={},x={})\n\tfracture_dim: {}\n\tdim_start_offset: "
-                "{}\n\tslice_size_on_dim: {}\n",
-                i,
-                tensor_slice.tensor_shape.y,
-                tensor_slice.tensor_shape.x,
-                tensor_slice.tensor_slice_shape.y,
-                tensor_slice.tensor_slice_shape.x,
-                tensor_slice.tensor_slice_offset.y,
-                tensor_slice.tensor_slice_offset.x,
-                tensor_slice.worker_slice_shape.y,
-                tensor_slice.worker_slice_shape.x,
-                tensor_slice.worker_slice_offset.y,
-                tensor_slice.worker_slice_offset.x,
-                fracture_dim,
-                dim_start_offset,
-                slice_size_on_dim);
-        }
-
-        slices.push_back(tensor_slice);
-    };
-
-    for (int i = start_slice_index; i != end_slice_index_exclusive; i += incr) {
-        generate_slice(i);
-    }
-
-    return slices;
-}
-
 GenericWrappedTensorSlicer::GenericWrappedTensorSlicer(
     const Tensor& input_tensor,
     const Tensor& output_tensor,
@@ -2008,6 +1884,22 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
     return std::make_tuple(forward_args, backward_args);
 }
 
+namespace {
+
+void validate_fabric_mux_client_index(
+    uint32_t client_index,
+    tt::tt_fabric::FabricMuxChannelType channel_type,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config) {
+    const auto channel_count = mux_kernel_config.get_num_channels(channel_type);
+    TT_FATAL(
+        client_index < channel_count,
+        "Fabric mux client index {} is out of range for channel count {}",
+        client_index,
+        channel_count);
+}
+
+}  // namespace
+
 void fabric_mux_connection_ct_args(
     const uint32_t num_workers_per_direction,
     const tt::tt_fabric::FabricMuxChannelType channel_type,
@@ -2034,6 +1926,7 @@ void fabric_mux_connection_rt_args(
     CoreCoord termination_master_virtual_core,
     std::vector<uint32_t>& worker_rt_args,
     std::optional<uint32_t> termination_master_semaphore_id) {
+    validate_fabric_mux_client_index(worker_id, channel_type, mux_kernel_config);
     worker_rt_args.push_back(mux_connection_valid);   // mux_connection_valid 0
     worker_rt_args.push_back(is_termination_master);  // is_termination_master 1
     worker_rt_args.push_back(mux_virtual_core.x);     // fabric_mux_x 2
@@ -2050,8 +1943,10 @@ void fabric_mux_connection_rt_args(
         mux_kernel_config.get_buffer_index_address(channel_type, worker_id));  // fabric_mux_buffer_index_address 8
     worker_rt_args.push_back(
         mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));  // fabric_mux_channel_id 9
-    worker_rt_args.push_back(termination_master_semaphore_id.value_or(
-        CreateSemaphore(program, {worker_logical_core}, 0)));                      // termination_sync_address 10
+    const uint32_t termination_sync_semaphore_id = termination_master_semaphore_id.has_value()
+                                                       ? *termination_master_semaphore_id
+                                                       : CreateSemaphore(program, {worker_logical_core}, 0);
+    worker_rt_args.push_back(termination_sync_semaphore_id);                       // termination_sync_address 10
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_fabric_mux_status_address 11
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_flow_control_address 12
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_teardown_address 13
@@ -2060,11 +1955,6 @@ void fabric_mux_connection_rt_args(
     worker_rt_args.push_back(termination_master_virtual_core.y);                   // termination_master_noc_y 16
 }
 
-// ProgramDescriptor (Contract-2) variant — mirrors the legacy Program& helper above.
-// Allocates the same five mux-side semaphores by pushing SemaphoreDescriptors into
-// desc.semaphores and recording their IDs into worker_rt_args. The arg-vector
-// layout (positions 0..16) is identical to the legacy helper so worker kernels
-// are byte-compatible across the two variants.
 void fabric_mux_connection_rt_args(
     const bool mux_connection_valid,
     const bool is_termination_master,
@@ -2077,6 +1967,7 @@ void fabric_mux_connection_rt_args(
     CoreCoord termination_master_virtual_core,
     std::vector<uint32_t>& worker_rt_args,
     std::optional<uint32_t> termination_master_semaphore_id) {
+    validate_fabric_mux_client_index(worker_id, channel_type, mux_kernel_config);
     // Allocate a worker-core-scoped semaphore by querying the next available ID
     // and parking a SemaphoreDescriptor on the ProgramDescriptor. Returns the new ID.
     auto alloc_sem = [&]() -> uint32_t {
@@ -2113,7 +2004,9 @@ void fabric_mux_connection_rt_args(
         mux_kernel_config.get_buffer_index_address(channel_type, worker_id));  // fabric_mux_buffer_index_address 8
     worker_rt_args.push_back(
         mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));    // fabric_mux_channel_id 9
-    worker_rt_args.push_back(termination_master_semaphore_id.value_or(alloc_sem()));  // termination_sync_address 10
+    const uint32_t termination_sync_semaphore_id =
+        termination_master_semaphore_id.has_value() ? *termination_master_semaphore_id : alloc_sem();
+    worker_rt_args.push_back(termination_sync_semaphore_id);      // termination_sync_address 10
     worker_rt_args.push_back(alloc_sem());                        // local_fabric_mux_status_address 11
     worker_rt_args.push_back(alloc_sem());                        // local_flow_control_address 12
     worker_rt_args.push_back(alloc_sem());                        // local_teardown_address 13

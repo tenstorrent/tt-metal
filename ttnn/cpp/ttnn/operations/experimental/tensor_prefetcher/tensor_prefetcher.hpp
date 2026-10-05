@@ -5,12 +5,15 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "ttnn/tensor/tensor.hpp"
@@ -59,18 +62,44 @@ using TensorPrefetcherQueueTensor =
 // when start_tensor_prefetcher would otherwise raise.
 bool is_tensor_prefetcher_supported(tt::tt_metal::distributed::MeshDevice* mesh_device);
 
-void start_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device);
+void start_tensor_prefetcher(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    std::optional<uint32_t> free_sender_mpfe_weight = std::nullopt,
+    std::optional<uint32_t> noc1_sender_mpfe_weight = std::nullopt,
+    std::optional<uint32_t> ordinary_mpfe_weight = std::nullopt,
+    std::optional<bool> dynamic_mpfe_weighting = std::nullopt);
 
 // `capture_into_trace` selects whether this request may be captured into a trace: when true
 // and the calling thread's current command queue is mid trace-capture, the request is captured
 // and re-sent on every execute_trace of that trace; when false the request is always sent
 // immediately.
+// Exactly one of `global_cb` / `prefetcher_pipes` must be supplied; whichever it is selects the
+// delivery transport. See the metal-level QueueTensorPrefetcherRequest overloads for the one extra
+// precondition PrefetcherPipe delivery imposes: every tensor must be receiver-contiguous.
+//
+// `prefetcher_pipes` is one PrefetcherPipe per DRAM sender core, from one
+// create_prefetcher_pipes_for_tensor_prefetcher call. Each pipe already knows the bank-local slabs
+// its sender owns, so the call's pipes are accepted in any order; a subset, or pipes from two
+// different calls, are not. An empty list means no pipe target. Keep the
+// pipes alive for as long as any program has bound them or the prefetcher may still deliver into
+// them -- dropping the last owner of one frees its ring and config pages.
 void queue_tensor_prefetcher_request(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const std::vector<TensorPrefetcherQueueTensor>& tensors,
-    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
+    const std::optional<tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb = std::nullopt,
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes = {},
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset = std::nullopt,
     bool capture_into_trace = false);
+
+// Create the PrefetcherPipes whose senders are programmable DRAM cores, as a delivery target for
+// the Tensor prefetcher. Sender placement matches create_global_circular_buffer_for_tensor_prefetcher.
+// One pipe per DRAM sender core, bank-major -- the order every layer that walks them must agree on.
+// ttnn shares each pipe between Python and the operation attributes that name it, so it hands them
+// out as shared_ptrs.
+std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>> create_prefetcher_pipes_for_tensor_prefetcher(
+    tt::tt_metal::experimental::PrefetcherPipeSpace& space,
+    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
+    bool support_multi_receiver_shards = false);
 
 // Fence the prefetcher against a command queue: every prefetch request queued after this
 // call waits until all work previously enqueued on that queue has completed on device before

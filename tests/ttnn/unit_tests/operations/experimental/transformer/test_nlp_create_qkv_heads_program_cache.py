@@ -152,13 +152,16 @@ def _refs_sharded(A, batch, seq_len, head_dim, num_q_heads, num_kv_heads):
 
 
 @skip_for_blackhole("L1 and Circular buffers are crashing on BH, see #12349")
-def test_nlp_cqkv_sharded_addr_change_on_hit(device, isolate_program_cache):
+@pytest.mark.parametrize("num_q_heads, num_kv_heads", [(16, 8), (8, 8)], ids=["q_gt_kv", "q_eq_kv"])
+def test_nlp_cqkv_sharded_addr_change_on_hit(device, isolate_program_cache, num_q_heads, num_kv_heads):
     """Sharded factory: same config twice with re-allocated buffers -> 1 entry, all outputs correct.
 
     The Sharded reader/writer bake q/k/v base + per-core start addresses as raw uint32 args, so this
     is the case the old get_dynamic path guarded; override_runtime_arguments must re-derive them.
+    With num_q_heads == num_kv_heads every core holds a K/V shard, so the program has a single work
+    unit and no Q-only kernel instances: that structurally different program must rebind too.
     """
-    batch, seq_len, head_dim, num_q_heads, num_kv_heads = 32, 1, 64, 16, 8
+    batch, seq_len, head_dim = 32, 1, 64
     dtype = ttnn.bfloat16
 
     A1, in1, out_cfg1 = _make_sharded_input(device, batch, seq_len, head_dim, num_q_heads, num_kv_heads, dtype, 1)

@@ -6,7 +6,6 @@ operands:
   - name: "input_A"
     dims: [32, 32]
     format: "Float16_b"
-    # const_value: 1.0
   - name: "input_B"
     dims: [32, 32]
     format: "Float16_b"
@@ -17,13 +16,14 @@ operands:
 operations:
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "input_A"
         in1: "input_B"
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         broadcast_type: "COL"
         math_fidelity: "HiFi2"
-    block_size: [32, 32]
     pack:
       - output: "output_A"
+        block_size: [32, 32]
         packer: "Packer"

@@ -29,6 +29,7 @@ from .llk_params import (
     MathOperation,
     NarrowTile,
     PerfRunType,
+    ReduceOrder,
     ReducePool,
     SdpaFwOp,
     SdpaOp,
@@ -44,6 +45,7 @@ from .llk_params import (
     VectorMode,
 )
 from .matmul_sweep import validate_tile_dimensions
+from .sfpu_dispatch_constants import RELU_MAX_THRESHOLD
 
 # Base parameter classes
 
@@ -329,6 +331,32 @@ class SFPU_RELU_MIN_INT_THRESHOLD(TemplateParameter):
 
 
 @dataclass
+class SFPU_RELU_MAX_THRESHOLD(TemplateParameter):
+    """Float threshold for relu_max, emitted as its fp32 bit pattern.
+
+    Emitted as a macro rather than a constexpr for the same reason as
+    :class:`SFPU_RELU_MIN_INT_THRESHOLD`: sfpu_operations.h selects on ``#ifdef``, the
+    header is shared by every unary test, and only the relu_max threshold sweep sets this.
+    Unset means the kernel's fixed 5.0 (RELU_MAX_THRESHOLD on the golden side).
+
+    Takes a Python float and emits its IEEE-754 single bits, which is the encoding
+    ``relu_max_tile`` takes (relu6 passes ``0x40c00000u``), so 0.0, -0.0 and a negative
+    threshold are all expressible.
+
+    The field is ``relu_max_threshold``, not ``threshold``: parameter field names become
+    perf-CSV headers and must be unique across classes (test_perf_header_gate.py), and
+    :class:`SFPU_RELU_MIN_INT_THRESHOLD` already owns ``threshold``. The default is the
+    golden's RELU_MAX_THRESHOLD, so only the C++ fallback in sfpu_operations.h is a copy.
+    """
+
+    relu_max_threshold: float = RELU_MAX_THRESHOLD
+
+    def convert_to_cpp(self) -> str:
+        bits = struct.unpack("<I", struct.pack("<f", self.relu_max_threshold))[0]
+        return f"#define SFPU_RELU_MAX_THRESHOLD {bits:#010x}u"
+
+
+@dataclass
 class SFPU_SHIFT_AMOUNT(TemplateParameter):
     """Shift amount for the *unary* shift ops (LeftShift / RightShift).
 
@@ -374,6 +402,16 @@ class SFPU_TYPED_BF16_STORE(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr bool SFPU_TYPED_BF16_STORE = {str(self.typed_bf16_store).lower()};"
+
+
+@dataclass
+class SFPU_INPUT_SCALE(TemplateParameter):
+    """``calculate_add_rsqrt``'s ``INPUT_SCALE``: the fp32 factor on x, as raw bits."""
+
+    input_scale_bits: int = 0x3F800000  # 1.0f
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t SFPU_INPUT_SCALE = {self.input_scale_bits}u;"
 
 
 @dataclass
@@ -431,6 +469,33 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
                 f"constexpr bool UNINIT_RESTORE_MOP = {str(self.restore_mop).lower()};",
                 f"constexpr bool UNINIT_SKIP = {str(self.skip).lower()};",
                 f"constexpr std::uint32_t BLOCK_MOP_NUM_FACES = {self.block_mop_num_faces}u;",
+            ]
+        )
+
+
+@dataclass
+class CUSTOM_MM_CALLS(TemplateParameter):
+    """Split a custom_mm test kernel's K over back-to-back execute calls that accumulate into one DEST.
+
+    ``CUSTOM_MM_NUM_CALLS``  number of execute calls; 1 is the single-call kernel. With more than one,
+                             the unpacker first leaves a non-zero SrcA clear value (a both-bank SrcB
+                             clear only corrupts the SrcA writes it overlaps while unpacker 0's last
+                             SrcA clear value is non-zero, and that value outlives kernels), and math
+                             waits 2000 cycles before each call, so the unpacker reaches the next call
+                             while math still holds the previous call's banks.
+    ``CUSTOM_MM_REARM``      compressed kernel only: leave a -inf SrcA clear value after every call,
+                             as a max-reduce or top-k between calls would. It undoes the end-of-call
+                             stall's clear to 0, which otherwise hides a both-bank clear in the execute.
+    """
+
+    num_calls: int = 1
+    rearm: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr std::uint32_t CUSTOM_MM_NUM_CALLS = {self.num_calls}u;",
+                f"constexpr bool CUSTOM_MM_REARM = {str(self.rearm).lower()};",
             ]
         )
 
@@ -767,8 +832,20 @@ class REDUCE_POOL_TYPE(TemplateParameter):
 
 
 @dataclass
+class REDUCE_ORDER(TemplateParameter):
+    """Order of the chained SFPU reduce passes in sfpu_reduce_multidim_test.cpp, all under one
+    shared init_reduce (see ReduceOrder; the kernel names the values REDUCE_ORDER_*).
+    """
+
+    reduce_order: ReduceOrder = ReduceOrder.ColRow
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int REDUCE_ORDER = {self.reduce_order.value};"
+
+
+@dataclass
 class SDPA_OP(TemplateParameter):
-    sdpa_op: SdpaOp = SdpaOp.RecipLegacy
+    sdpa_op: SdpaOp = SdpaOp.RecipIter
 
     def convert_to_cpp(self) -> str:
         return f"constexpr int SDPA_OP = {self.sdpa_op.value};"
@@ -1182,30 +1259,13 @@ class SAMPLING_OP(TemplateParameter):
 
 
 @dataclass
-class SAMPLING_LEGACY_COMPAT(TemplateParameter):
-    """``legacy_compat`` template argument of ``calculate_sampling_recip_scalar``."""
-
-    legacy_compat: bool = True
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr bool SAMPLING_LEGACY_COMPAT = {str(self.legacy_compat).lower()};"
-
-
-@dataclass
 class MOE_GATE_TOPK(TemplateParameter):
     """Compile-time configuration of the generic MoE-gate top-k SFPU entry.
 
-    Mirrors the first five template parameters of
-    ``ckernel::sfpu::_generic_moe_gate_topk_<normalize, num_selected_experts,
-    num_total_experts, zero_tail, full_sort, generate_indices = true>``. The
-    dataclass defaults are the compute-API wrapper's
-    (api/compute/experimental/generic_moe_gate.h), not the template's -- the only
-    template parameter carrying a C++ default is the sixth, ``generate_indices``.
-
-    ``generate_indices`` is deliberately not modelled: the driver instantiates with
-    five arguments, so it is pinned to true and the kernel always numbers the experts
-    itself. The caller-supplied index-mapping path (generate_indices = false) is
-    therefore untested.
+    Defaults match the compute API. ``generate_indices=False`` preserves the
+    caller's expert IDs, while ``scores_include_bias=True`` returns biased
+    scores as well as using them to select experts. Extra scaling stays disabled
+    in this driver.
     """
 
     num_selected_experts: int = 8
@@ -1213,6 +1273,8 @@ class MOE_GATE_TOPK(TemplateParameter):
     normalize: bool = False
     zero_tail: bool = False
     full_sort: bool = False
+    generate_indices: bool = True
+    scores_include_bias: bool = False
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -1221,6 +1283,8 @@ class MOE_GATE_TOPK(TemplateParameter):
             f"constexpr bool MOE_GATE_NORMALIZE = {str(self.normalize).lower()};",
             f"constexpr bool MOE_GATE_ZERO_TAIL = {str(self.zero_tail).lower()};",
             f"constexpr bool MOE_GATE_FULL_SORT = {str(self.full_sort).lower()};",
+            f"constexpr bool MOE_GATE_GENERATE_INDICES = {str(self.generate_indices).lower()};",
+            f"constexpr bool MOE_GATE_SCORES_INCLUDE_BIAS = {str(self.scores_include_bias).lower()};",
         ]
         return "\n".join(lines)
 
