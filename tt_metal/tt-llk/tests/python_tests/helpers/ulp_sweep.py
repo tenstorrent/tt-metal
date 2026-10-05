@@ -411,7 +411,10 @@ def _known_lanes() -> Dict:
                 KnownNonfiniteLanes(**top_of_fp16, approx=ApproximationMode.No),
             ),
             MathOperation.GeluTanh: (KnownNonfiniteLanes(**top_of_fp16),),
-            MathOperation.Silu: (KnownNonfiniteLanes(**top_of_fp16),),
+            # Silu answers 65408 itself; #58607 lists only the three lanes above it.
+            MathOperation.Silu: (
+                KnownNonfiniteLanes(**{**top_of_fp16, "low": 65440.0}),
+            ),
             MathOperation.Square: (
                 KnownNonfiniteLanes(
                     **{
