@@ -212,7 +212,7 @@ WindowedSetup setup_windowed_cbs(
     cb_ids.windowed_q_offset = cb_ids.q_in;
     cb_ids.windowed_cu_reader = cb_ids.q_in;
     cb_ids.windowed_k_range = cb_ids.q_in;
-    if (!attrs.is_windowed) {
+    if (attrs.windowed_mode == WindowedMode::None) {
         return w;
     }
     // 1-tile CB holding cu_window_seqlens, loaded once by the writer.
@@ -252,7 +252,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // synthesized on-device in the writer from cu_window_seqlens (reader streams Q/K/V only) and consumed
     // by the compute via the provided-mask path. Like regular SDPA it honors the streaming-vs-standard
     // selection: streaming kernel when fp32_dest_acc_en is false (Blackhole default), standard otherwise.
-    const bool is_windowed = operation_attributes.is_windowed;
+    const WindowedMode windowed_mode = operation_attributes.windowed_mode;
+    const bool is_windowed = windowed_mode != WindowedMode::None;
     const auto& input_tensor_q = tensor_args.q;
     const auto& input_tensor_k = tensor_args.k;
     const auto& input_tensor_v = tensor_args.v.value_or(tensor_args.k);
@@ -264,7 +265,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     if (not scale.has_value()) {
         scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.padded_shape()[-1]));
     }
-    const bool is_causal = operation_attributes.is_causal;
+    // Windowed causal is realized by the windowed K range and mask generator, so every kernel causal path
+    // (lightweight causal mask, zigzag balancing, causal K bound, chain-forwarding exclusion) keys off
+    // regular causal only.
+    const bool is_causal = operation_attributes.is_causal && !is_windowed;
     const auto& chunk_start_idx = operation_attributes.chunk_start_idx;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
     const auto& program_config = operation_attributes.program_config;
@@ -619,7 +623,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     reader_compile_time_args.push_back(0);  // valid_semaphore_id placeholder
     reader_compile_time_args.push_back(0);  // mcast_enabled placeholder
     reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 32
-    reader_compile_time_args.push_back(static_cast<uint32_t>(is_windowed));           // arg 33: K-range narrowing
+    reader_compile_time_args.push_back(static_cast<uint32_t>(windowed_mode));         // arg 33: K-range narrowing
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -684,7 +688,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         out_out_subblock_h,                            // arg 18: drain group height
         k_partial_col,                                 // arg 19: K partial-tile col (0 = no partial)
         static_cast<uint32_t>(use_zigzag_balancing),   // arg 20
-        static_cast<uint32_t>(is_windowed),            // arg 21: windowed block-diagonal mask generation
+        static_cast<uint32_t>(windowed_mode),          // arg 21: windowed block-diagonal mask generation
         static_cast<uint32_t>(operation_attributes.output_concat_heads),  // arg 22: concat-heads output layout
     };
 
@@ -727,7 +731,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         valid_Skt,                                    // arg 27: unpadded K tile count for streaming padded_k_tiles
         k_partial_col,                                // arg 28: K partial-tile col (0 = no partial)
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 29: unified zigzag remap
-        static_cast<uint32_t>(is_windowed),           // arg 30: K-range narrowing (bounds from the ctrl CB)
+        static_cast<uint32_t>(windowed_mode),         // arg 28: K-range narrowing (bounds from the ctrl CB)
     };
 
     std::map<std::string, std::string> defines_map;
