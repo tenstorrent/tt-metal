@@ -20,6 +20,10 @@ mistake it for a GitHub workflow run. The id comes from the run, not from the
 time of publishing, so publishing one run twice replaces it in the warehouse
 (the loader replays by RUN_ID) instead of adding a second copy.
 
+Every file also says what executed the run: ``platform`` (emulator,
+simulator or silicon) and ``platform_version`` (its build). Numbers from two
+platforms must never share a trend, so ``platform`` is mandatory here.
+
 Only the holder of a private key that data_iac lists for the ``llk-perf-run``
 SFTP user can upload. Without ``--upload`` nothing leaves the machine.
 """
@@ -38,6 +42,8 @@ from .parquet import convert_csvs_to_parquet
 from .publish_run import _VALID_ARCHES, _run_csvs
 
 PIPELINE = "manual"
+
+PLATFORMS = ("emulator", "simulator", "silicon")
 
 # Same shape as core.RUN_ID_TEMPLATE. Not imported: core reaches the device
 # libraries, and this tool must run where they are absent.
@@ -124,7 +130,21 @@ def checkout_state(cwd=_LLK_ROOT):
     return sha, problems
 
 
-def publish(run_dir, out_dir, arch, *, commit_sha, timestamp=None):
+def _check_platform(platform):
+    if platform not in PLATFORMS:
+        raise ValueError(f"platform must be one of {PLATFORMS}, got {platform!r}")
+
+
+def publish(
+    run_dir,
+    out_dir,
+    arch,
+    *,
+    commit_sha,
+    platform,
+    platform_version=None,
+    timestamp=None,
+):
     """Convert one local run's CSVs to ``out_dir/llk_perf_<run_id>.parquet``.
 
     Strict, as the CI path is: a column the schema lacks, or a value it cannot
@@ -132,6 +152,7 @@ def publish(run_dir, out_dir, arch, *, commit_sha, timestamp=None):
     """
     if arch not in _VALID_ARCHES:
         raise ValueError(f"arch must be one of {_VALID_ARCHES}, got {arch!r}")
+    _check_platform(platform)
     csvs = _run_csvs(str(run_dir))
     if not csvs:
         raise ValueError(f"no CSVs under {str(run_dir)!r}")
@@ -149,17 +170,21 @@ def publish(run_dir, out_dir, arch, *, commit_sha, timestamp=None):
         timestamp=start.isoformat(),
         pipeline=PIPELINE,
         pr_number=None,
+        platform=platform,
+        platform_version=platform_version,
     )
     return out, len(csvs)
 
 
-def plan_backfill(archive_root, arch):
+def plan_backfill(archive_root, arch, platform=None, platform_version=None):
     """The runs under ``archive_root``, each with a ``manual`` run_id.
 
     Every run directory needs a ``run_meta.json`` with ``timestamp``: it fixes
     the run_id and the run's place in the trend. ``commit_sha`` should be
     there too; without it the run loads as commit ``unknown``. ``arch``
-    defaults to ``arch`` when neither the sidecar nor the directory name says.
+    defaults to ``arch`` when neither the sidecar nor the directory name says,
+    and ``platform`` / ``platform_version`` to the given values when the
+    sidecar omits them. A run must end up with a platform.
     """
     runs = []
     for run in discover_runs(archive_root, pipeline=PIPELINE):
@@ -168,12 +193,21 @@ def plan_backfill(archive_root, arch):
                 f"{run.run_id}: run_meta.json has no timestamp; the run_id needs it"
             )
         run_arch = arch if run.arch == "unknown" else run.arch
+        run_platform = run.platform or platform
+        try:
+            _check_platform(run_platform)
+        except ValueError as e:
+            raise ValueError(
+                f"{run.run_id}: {e} (set it in run_meta.json or pass --platform)"
+            ) from None
         runs.append(
             replace(
                 run,
                 arch=run_arch,
                 pipeline=PIPELINE,
                 run_id=manual_run_id(run.timestamp, run_arch),
+                platform=run_platform,
+                platform_version=run.platform_version or platform_version,
             )
         )
     ids = [r.run_id for r in runs]
@@ -241,11 +275,19 @@ def _cmd_publish(a):
         print(f"warning: {p}. The file is written but must not be uploaded.")
     try:
         out, n = publish(
-            a.run_dir, a.out_dir, a.arch, commit_sha=sha, timestamp=a.timestamp
+            a.run_dir,
+            a.out_dir,
+            a.arch,
+            commit_sha=sha,
+            platform=a.platform,
+            platform_version=a.platform_version,
+            timestamp=a.timestamp,
         )
     except ValueError as e:
         raise SystemExit(f"publish: {e}")
-    print(f"publish: wrote {out} from {n} CSV(s), commit {sha}")
+    print(f"publish: wrote {out} from {n} CSV(s), commit {sha}, {a.platform}")
+    if not a.platform_version:
+        print("warning: no --platform-version; runs on two builds will look alike")
     if not a.upload:
         print("publish: not uploaded (pass --upload to send it)")
         return 0
@@ -254,7 +296,7 @@ def _cmd_publish(a):
 
 def _cmd_backfill(a):
     try:
-        runs = plan_backfill(a.archive, a.arch)
+        runs = plan_backfill(a.archive, a.arch, a.platform, a.platform_version)
     except ValueError as e:
         raise SystemExit(f"backfill: {e}")
     if not runs:
@@ -264,6 +306,8 @@ def _cmd_backfill(a):
     for run in runs:
         if run.commit_sha == "unknown":
             print(f"warning: {run.run_id}: no commit_sha; it loads as 'unknown'")
+        if not run.platform_version:
+            print(f"warning: {run.run_id}: no platform_version")
     failed = [r for r, e in report.items() if e.get("failed")]
     print(
         f"backfill: {len(runs) - len(failed)} of {len(runs)} run(s) written to "
@@ -298,6 +342,10 @@ def main(argv=None):
     )
     p.add_argument("--timestamp", help="override the run start, ISO-8601 UTC")
     p.add_argument(
+        "--platform", required=True, choices=PLATFORMS, help="what executed the run"
+    )
+    p.add_argument("--platform-version", help="its build, e.g. the emulator image")
+    p.add_argument(
         "--upload", action="store_true", help="also send it to the warehouse"
     )
     p.add_argument("--key", help=f"SFTP private key (default: ${KEY_ENV})")
@@ -311,6 +359,10 @@ def main(argv=None):
     b.add_argument("--out-dir", required=True)
     b.add_argument("--arch", default="quasar", choices=_VALID_ARCHES)
     b.add_argument("--overwrite", action="store_true", help="rewrite existing files")
+    b.add_argument(
+        "--platform", choices=PLATFORMS, help="for runs whose run_meta.json omits it"
+    )
+    b.add_argument("--platform-version", help="for runs whose run_meta.json omits it")
     b.set_defaults(func=_cmd_backfill)
 
     u = sub.add_parser("upload", help="send Parquet files to the warehouse")

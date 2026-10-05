@@ -9,11 +9,17 @@ The tool is `helpers/perf/publish_manual.py`. Every file it writes has
 `manual-20261005-20261005T143012Z-quasar`. The run id comes from the run's
 start time. If you publish the same run again, the new copy replaces the old one.
 
+Every file also records what executed the run: `platform` (`emulator`,
+`simulator` or `silicon`) and `platform_version` (its build, for example the
+emulator image). `platform` is mandatory. Numbers from two platforms must never
+share a trend.
+
 ## Who can upload
 
-To upload, you need a private key that `data_iac` lists for the `llk-perf-run`
-SFTP user. If you do not have one, the tool writes the Parquet file and does
-not send it. Ask the LLK perf infra owners to publish it for you.
+Only the people whose public key `data_iac` lists for the `llk-perf-run` SFTP
+user can upload. To get access, make an SSH key pair on the machine you publish
+from, and send the public key to the data team. Without a listed key, the tool
+writes the Parquet file and does not send it. Ask a listed person to send it.
 
 ## Publish a run you just made
 
@@ -21,7 +27,8 @@ not send it. Ask the LLK perf infra owners to publish it for you.
 2. From `tests/python_tests`, write the file and read its output:
 
    ```bash
-   python -m helpers.perf.publish_manual publish
+   python -m helpers.perf.publish_manual publish \
+       --platform emulator --platform-version <build>
    ```
 
    The default input is `perf_data/latest`, which is the last run. Use
@@ -29,7 +36,9 @@ not send it. Ask the LLK perf infra owners to publish it for you.
 3. Send it:
 
    ```bash
-   python -m helpers.perf.publish_manual publish --upload --key ~/.ssh/<key>
+   python -m helpers.perf.publish_manual publish \
+       --platform emulator --platform-version <build> \
+       --upload --key ~/.ssh/<key>
    ```
 
    You can also set `LLK_PERF_SFTP_KEY` instead of `--key`.
@@ -48,11 +57,18 @@ column to that schema.
 2. Add a `run_meta.json` to each directory:
 
    ```json
-   {"timestamp": "2026-08-14T09:00:00Z", "commit_sha": "<sha of the run>"}
+   {
+     "timestamp": "2026-08-14T09:00:00Z",
+     "commit_sha": "<sha of the run>",
+     "platform": "emulator",
+     "platform_version": "<build>"
+   }
    ```
 
    `timestamp` is mandatory. It sets the run id and the run's position in the
-   trend. Without `commit_sha`, the run loads with commit `unknown`.
+   trend. Without `commit_sha`, the run loads with commit `unknown`. If all
+   runs used the same platform, you can give `--platform` and
+   `--platform-version` to `backfill` instead.
 3. Convert:
 
    ```bash
