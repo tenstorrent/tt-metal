@@ -1,0 +1,31 @@
+{
+ "source": "hand-written 2026-10-05 for the tt_hw_planner optimizer on gpt-oss-20b (MoE) decode, QB2 1x4: per-token read set from config.json (openai/gpt-oss-20b), routed experts counted at 4/32 (top-4 of 32 per layer) and the embed_tokens lookup excluded; device widths from the bring-up tree (main 53de0ba10ec): experts bfloat4_b, attention and lm_head bfloat8_b, router, biases, sinks and norms bfloat16.",
+ "model_id": "openai/gpt-oss-20b",
+ "unit": "token",
+ "total_params": 3608307264,
+ "active_params": 3608307264,
+ "checkpoint_params": 20914757184,
+ "params_basis": "read set for unit=token: attention (q/k/v/o + biases + sinks), router, lm_head and norms in full; routed experts (gate_up, down, biases) at 4/32; embed_tokens lookup excluded",
+ "weight_bytes": 2642598528,
+ "bytes_per_param": 0.732365,
+ "device_census_complete": true,
+ "dominant_dtype": "bfloat4_b",
+ "kv_dtype": "bfloat8_b",
+ "layers": 24,
+ "hidden_size": 2880,
+ "intermediate_size": 2880,
+ "kv_heads": 8,
+ "head_dim": 64,
+ "blocks": {
+  "model": {
+   "layers": 24,
+   "hidden_size": 2880,
+   "intermediate_size": 2880,
+   "kv_heads": 8,
+   "head_dim": 64,
+   "params": 3608307264,
+   "lookup_params": 579133440,
+   "matmul_params": 3607143168
+  }
+ }
+}
