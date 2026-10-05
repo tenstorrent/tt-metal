@@ -1065,6 +1065,25 @@ class TOPK_PERF(TemplateParameter):
 
 
 @dataclass
+class TOPK_XL_PERF(TemplateParameter):
+    """Knobs of the topk_xl chunk pipeline perf kernel (sources/topk_xl_perf.cpp): K, the chunks of the row, and whether
+    the chunks stay fused end to end (topk_large_indices' wide-row path) or take the unfused row-major op path.
+    """
+
+    topk_xl_k: int = 512
+    topk_xl_chunks: int = 2
+    topk_xl_fused_e2e: bool = True
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr std::uint32_t TOPK_XL_K = {self.topk_xl_k};",
+            f"constexpr std::uint32_t TOPK_XL_NUM_CHUNKS = {self.topk_xl_chunks};",
+            f"constexpr bool TOPK_XL_FUSED_E2E = {str(self.topk_xl_fused_e2e).lower()};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
 class TOPK_XL(TemplateParameter):
     k: int = 512
     num_chunks: int = 1
@@ -1107,6 +1126,22 @@ class TOPK_XL(TemplateParameter):
         ]
         if self.blaze_compat:
             lines.append("#define TOPK_XL_BLAZE_COMPAT 1")
+        return "\n".join(lines)
+
+
+@dataclass
+class TOP32_RM_PERF(TemplateParameter):
+    """Knobs of the top32_rm chunk walk perf kernel (sources/top32_rm_perf.cpp): the row length, a multiple of the
+    64-element chunk, and the L1 datum size of the value and index rows."""
+
+    top32_perf_row_elements: int = 256
+    top32_perf_datum_bytes: int = 2
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr std::uint32_t TOP32_ROW_ELEMENTS = {self.top32_perf_row_elements}u;",
+            f"constexpr std::uint32_t TOP32_DATUM_BYTES = {self.top32_perf_datum_bytes}u;",
+        ]
         return "\n".join(lines)
 
 
