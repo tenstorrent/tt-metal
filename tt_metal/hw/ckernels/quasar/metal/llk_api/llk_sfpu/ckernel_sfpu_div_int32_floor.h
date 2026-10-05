@@ -51,7 +51,6 @@ sfpi_inline void calculate_div_int32_body(
     // We add a special mantissa alignment factor 2.0f**(23+10), which shifts
     // the mantissa so that we extract the top 22 bits of the result.
     sfpi::vFloat q_f = a_f * inv_b_f + sfpi::vConstFloatPrgm0;
-    sfpi::vInt sign = a_orig ^ b_orig;
     sfpi::vMag q_m = sfpi::exman(q_f);
 
     // Compute qb = q * b.  This tells us how close our approximation `q` is to
@@ -123,6 +122,12 @@ sfpi_inline void calculate_div_int32_body(
     v_endif;
 
     sfpi::vInt result = q;
+
+    // Quasar deviation: the sign is recomputed from Dest (both inputs are still there; the output
+    // is stored below) rather than held from the top of the body. Held live through the correction
+    // sequence it exceeds the LReg file at -O2, the metal JIT's level ("too few lregs").
+    sfpi::vInt a_reload = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+    sfpi::vInt sign = a_reload ^ sfpi::vInt(sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi]);
 
     // If a ^ b >= 0, then the result will be positive, otherwise negative.
     // Finally, if we expect a negative result, negate the value (two's complement).
