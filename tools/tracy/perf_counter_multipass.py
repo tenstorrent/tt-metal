@@ -234,7 +234,7 @@ def _expected_counter_types(arch, groups):
     counters = set()
     for group in groups:
         arrays = re.findall(
-            r"std::array<std::pair<PerfCounterType,\s*std::uint16_t>,\s*(\d+)>\s+"
+            r"std::array<std::pair<PerfCounterType,\s*std::uint16_t>,\s*(\w+)>\s+"
             + re.escape(group)
             + r"_counters\s*=\s*\{(.*?)\};",
             text,
@@ -243,6 +243,11 @@ def _expected_counter_types(arch, groups):
         if len(arrays) != 1:
             raise ValueError(f"Cannot establish counter semantics for {arch}/{group}")
         count, body = arrays[0]
+        if not count.isdecimal():
+            constants = re.findall(r"constexpr\s+size_t\s+" + re.escape(count) + r"\s*=\s*(\d+);", text)
+            if len(constants) != 1:
+                raise ValueError(f"Cannot resolve native array length for {arch}/{group}")
+            count = constants[0]
         names = re.findall(r"PerfCounterType::(\w+)", body)
         if not names or len(names) != int(count) or len(set(names)) != len(names) or counters.intersection(names):
             raise ValueError(f"Ambiguous counter semantics for {arch}/{group}")
