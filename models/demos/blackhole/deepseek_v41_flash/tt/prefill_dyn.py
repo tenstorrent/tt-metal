@@ -18,6 +18,7 @@ Everything that differs from chunk to chunk lives in persistent device tensors o
 import torch
 
 import ttnn
+from models.demos.blackhole.deepseek_v41_flash.tt.h2d import h2d
 
 NEG = -1e9
 HEAD_DIM = 512
@@ -83,7 +84,7 @@ class DynCtx:
     def update(self, s0):
         """Refresh every per-chunk tensor for the chunk of positions [s0, s0 + C) (host work + uploads, nothing is enqueued on the compute path)."""
         C = self.C
-        up = lambda host, dev: ttnn.copy_host_to_device_tensor(host, dev)
+        up = h2d
         pos = s0 + torch.arange(C)
         for k, src in self.rope_src.items():
             c, s = src._rope_inputs(pos)
