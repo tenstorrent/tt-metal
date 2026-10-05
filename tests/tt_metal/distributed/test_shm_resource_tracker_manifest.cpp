@@ -237,9 +237,9 @@ private:
 TEST(ShmResourceTrackerManifest, ManifestRepublishedBetweenJudgementAndReapIsKept) {
     // A scanner judges the predecessor's manifest at a pid that a live process has since
     // been handed. Before the scanner reaps, that live owner reaps its predecessor itself
-    // and publishes its own manifest at the same path, re-exporting a descriptor file at
-    // the same deterministic path. Only what the judged manifest listed, as it was, may
-    // go; the live owner's manifest, segment and republished file must stay.
+    // (as every owner does before publishing) and publishes its own manifest at the same
+    // path, re-exporting a descriptor file at the same deterministic path. The scanner must
+    // then leave everything alone: the live owner's manifest, segment and republished file.
     ManifestTestChild live_owner;
     ASSERT_GT(live_owner.pid(), 0) << std::strerror(errno);
     const uint64_t live_start = process_start_time(live_owner.pid());
@@ -277,8 +277,11 @@ TEST(ShmResourceTrackerManifest, ManifestRepublishedBetweenJudgementAndReapIsKep
     ASSERT_EQ(judged->files.size(), 1u);
     EXPECT_EQ(judged->files.front().path, card);
 
-    // The live owner publishes: its own segment, the card re-exported at the same path
-    // (new file renamed into place, as write_to_file does), and its manifest.
+    // The live owner reaps its predecessor's resources (what its own scan does), then
+    // publishes: its own segment, the card re-exported at the same path (new file renamed
+    // into place, as write_to_file does), and its manifest.
+    ASSERT_EQ(::shm_unlink(stale_name.c_str()), 0) << std::strerror(errno);
+    ASSERT_EQ(std::remove(card.c_str()), 0) << std::strerror(errno);
     manifest_test_plant(live_owner.pid(), live_start, live_name);
     if (HasFatalFailure()) {
         return;
@@ -291,7 +294,6 @@ TEST(ShmResourceTrackerManifest, ManifestRepublishedBetweenJudgementAndReapIsKep
 
     reap_stale_shm_resources(scan);
 
-    EXPECT_FALSE(manifest_test_shm_exists(stale_name)) << "predecessor's segment was kept";
     EXPECT_TRUE(manifest_test_shm_exists(live_name)) << "live owner's segment was removed";
     EXPECT_TRUE(manifest_test_file_exists(card)) << "live owner's republished descriptor file was removed";
     EXPECT_TRUE(manifest_test_has_line(manifest_test_path(live_owner.pid()), "shm " + live_name))
