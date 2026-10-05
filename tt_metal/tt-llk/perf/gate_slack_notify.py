@@ -208,7 +208,7 @@ def _acceptance_lines(status, ctx):
         return [
             ":memo: The REGRESSION ACCEPTANCE table covers every regressed point. "
             f"Perf approvers: {_approver_mentions(ctx.get('approvers'))}, please review it and "
-            "comment `/accept-regression` on the PR.",
+            f"comment `/accept-regression {_escape(acc.get('table') or '<table hash>')}` on the PR.",
         ]
     if state == "incomplete":
         return [

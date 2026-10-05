@@ -10,6 +10,7 @@ Run it by path: ``tt_metal/tt-llk`` is not an importable package.
 import argparse
 import csv
 import glob
+import html
 import json
 import os
 import re
@@ -354,7 +355,7 @@ def render_report(
 _ACCEPT_STATE = {
     "none": "no `## REGRESSION ACCEPTANCE` section in the PR description.",
     "invalid": "the `## REGRESSION ACCEPTANCE` section does not parse, so nothing is accepted.",
-    "waiting": "the table covers every regressed point. It waits for a perf approver to comment `/accept-regression`.",
+    "waiting": "the table covers every regressed point. It waits for a perf approver.",
     "incomplete": "the table does not cover every regressed point, so the perf approvers are not asked yet.",
     "approved": "approved by @{approver}.",
     "not needed": "the table is present, but no point regressed.",
@@ -371,6 +372,11 @@ def _acceptance_lines(result, acc):
             approver=acc.get("approver")
         ),
     ]
+    if acc.get("table") and acc["state"] in ("waiting", "incomplete"):
+        lines.append(
+            f"- Table hash `{acc['table']}`. A perf approver who accepts this table "
+            f"comments `/accept-regression {acc['table']}`. A change to the table changes the hash."
+        )
     lines += [f"- ❌ {e}" for e in acc.get("errors") or []]
     if acc.get("missing"):
         ids = ", ".join(f"`{i}`" for i in acc["missing"][:20])
@@ -390,7 +396,8 @@ def _acceptance_lines(result, acc):
             "|---|---|---|---|--:|--:|---|",
         ]
         for r in sorted(accepted, key=lambda x: -x["delta"]):
-            reason = r["reason"].replace("<", "&lt;")
+            # The reason is PR text: keep it from adding markup to the bot's comment.
+            reason = html.escape(r["reason"], quote=False)
             lines.append(
                 f"| `{r['point_id']}` | {r.get(MODULE_COL) or '?'} | {r['marker']} | "
                 f"{r['run_type']} | {r['delta'] * 100:+.1f}% | +{r['max_pct']:g}% | {reason} |"
@@ -406,7 +413,7 @@ def _acceptance_lines(result, acc):
             "```",
             "",
             "A row can also name a filter instead of an ID, for example `mathop=MathOperation.Square`. "
-            "Then a perf approver comments `/accept-regression`.",
+            "The next gate report then shows the table hash for the perf approver.",
             "</details>",
         ]
     lines.append("")

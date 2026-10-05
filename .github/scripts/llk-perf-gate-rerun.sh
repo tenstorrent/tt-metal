@@ -11,22 +11,29 @@ set -euo pipefail
 
 SHA="${1:?usage: llk-perf-gate-rerun.sh <pr-head-sha>}"
 REPO="${GITHUB_REPOSITORY:?}"
+GATE_JOB='startswith("LLK perf regression gate (")'
+# A compare job takes about 5 min; wait up to 20 min for each re-run.
+POLL_SECONDS=15
+MAX_POLLS=80
 
-read -r RUN STATUS < <(gh api "repos/${REPO}/actions/runs?head_sha=${SHA}&event=pull_request&per_page=50" \
-    --jq '[.workflow_runs[] | select(.path == ".github/workflows/llk-perf-gate.yaml")][0] | "\(.id // "") \(.status // "")"')
+# The newest run whose gate jobs ran: a label event adds newer runs where every job is skipped.
+RUN=""
+for ID in $(gh api "repos/${REPO}/actions/runs?head_sha=${SHA}&event=pull_request&per_page=50" \
+    --jq '.workflow_runs[] | select(.path == ".github/workflows/llk-perf-gate.yaml") | .id'); do
+    JOBS=$(gh api --paginate "repos/${REPO}/actions/runs/${ID}/jobs?per_page=100" \
+        --jq ".jobs[] | select((.name | ${GATE_JOB}) and .conclusion != \"skipped\") | \"\(.id) \(.conclusion)\"")
+    if [ -n "${JOBS}" ]; then
+        RUN="${ID}"
+        break
+    fi
+done
 if [ -z "${RUN}" ]; then
-    echo "No perf gate run for ${SHA}; nothing to run again."
+    echo "No perf gate run for ${SHA} compared anything; nothing to run again."
     exit 0
 fi
+STATUS=$(gh api "repos/${REPO}/actions/runs/${RUN}" --jq .status)
 if [ "${STATUS}" != "completed" ]; then
     echo "Perf gate run ${RUN} is still ${STATUS}. It reads the table when it compares."
-    exit 0
-fi
-
-JOBS=$(gh api --paginate "repos/${REPO}/actions/runs/${RUN}/jobs?per_page=100" \
-    --jq '.jobs[] | select((.name | startswith("LLK perf regression gate (")) and .conclusion != "skipped") | "\(.id) \(.conclusion)"')
-if [ -z "${JOBS}" ]; then
-    echo "Run ${RUN} has no gate job that ran; nothing to run again."
     exit 0
 fi
 
@@ -37,11 +44,19 @@ if grep -q ' failure$' <<< "${JOBS}"; then
 fi
 
 # Report-only: the gate jobs passed, so run each one again, one at a time.
-for ID in $(cut -d' ' -f1 <<< "${JOBS}"); do
-    gh api -X POST "repos/${REPO}/actions/jobs/${ID}/rerun" > /dev/null
-    echo "Running job ${ID} of run ${RUN} again."
-    for _ in $(seq 1 60); do
-        sleep 15
-        [ "$(gh api "repos/${REPO}/actions/runs/${RUN}" --jq .status)" = completed ] && break
+for JOB in $(cut -d' ' -f1 <<< "${JOBS}"); do
+    gh api -X POST "repos/${REPO}/actions/jobs/${JOB}/rerun" > /dev/null
+    echo "Running job ${JOB} of run ${RUN} again."
+    DONE=0
+    for _ in $(seq 1 "${MAX_POLLS}"); do
+        sleep "${POLL_SECONDS}"
+        if [ "$(gh api "repos/${REPO}/actions/runs/${RUN}" --jq .status)" = completed ]; then
+            DONE=1
+            break
+        fi
     done
+    if [ "${DONE}" != 1 ]; then
+        echo "::error::Run ${RUN} did not finish within $((POLL_SECONDS * MAX_POLLS / 60)) min; the other gate jobs are not run again."
+        exit 1
+    fi
 done

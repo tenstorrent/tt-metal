@@ -41,12 +41,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.issue.number }}
           COMMENTER: ${{ github.event.comment.user.login }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" > pr.json
+          printf '%s' "$COMMENT_BODY" > comment.md
           set +e
           python3 tt_metal/tt-llk/perf/regression_accept.py approve --pr pr.json \
             --approvers tt_metal/tt-llk/perf/regression_approvers.json \
-            --commenter "$COMMENTER" > reply.md
+            --commenter "$COMMENTER" --comment comment.md > reply.md
           STATUS=$?
           set -e
           cat reply.md

@@ -119,64 +119,59 @@ def test_the_section_hash_follows_the_section_only():
 # --- approval ---------------------------------------------------------------
 
 
-def _approval_comment(approver, table, login=ra.BOT, prefix=""):
-    body = f"{prefix}<!-- llk-perf-accept approver={approver} table={table} -->\nok"
+def _comment(login, body):
     return {"user": {"login": login}, "body": body}
+
+
+def _table(*rows):
+    rules, _ = ra.parse_section(_body(*rows))
+    return ra.table_hash(rules)
 
 
 _APPROVERS = {"nstojicTT": "U123"}
 
 
-def test_an_approval_counts_only_for_the_table_it_was_given_for():
-    rules, _ = ra.parse_section(_body(_ROW_ID))
-    table = ra.table_hash(rules)
-    comments = [_approval_comment("nstojicTT", table)]
-    assert (
-        ra.read(_body(_ROW_ID), comments, _APPROVERS, "author")["approver"]
-        == "nstojicTT"
-    )
+def test_an_approval_names_the_hash_of_the_table_it_accepts():
+    table = _table(_ROW_ID)
+    comments = [_comment("nstojicTT", f"Looks right.\n/accept-regression {table}")]
+    out = ra.read(_body(_ROW_ID), comments, _APPROVERS, "author")
+    assert out["approver"] == "nstojicTT"
+
+
+def test_an_edit_after_the_approval_cancels_it():
+    comments = [_comment("nstojicTT", f"/accept-regression {_table(_ROW_ID)}")]
     changed = _body(_ROW_ID.replace("+10%", "+50%"))
     assert ra.read(changed, comments, _APPROVERS, "author")["approved"] is False
 
 
-def test_an_approval_needs_the_bot_an_approver_and_not_the_author():
-    rules, _ = ra.parse_section(_body(_ROW_ID))
-    table = ra.table_hash(rules)
+def test_only_an_approver_who_is_not_the_author_can_approve():
+    table = _table(_ROW_ID)
+    line = f"/accept-regression {table}"
+    assert ra.approval([_comment("someone", line)], table, _APPROVERS, "a") is None
     assert (
-        ra.approval(
-            [_approval_comment("nstojicTT", table, login="someone")],
-            table,
-            _APPROVERS,
-            "a",
-        )
+        ra.approval([_comment("github-actions[bot]", line)], table, _APPROVERS, "a")
         is None
     )
     assert (
-        ra.approval([_approval_comment("someone", table)], table, _APPROVERS, "a")
-        is None
-    )
-    assert (
-        ra.approval(
-            [_approval_comment("nstojicTT", table)], table, _APPROVERS, "nstojicTT"
-        )
+        ra.approval([_comment("nstojicTT", line)], table, _APPROVERS, "nstojicTT")
         is None
     )
 
 
-def test_a_bot_comment_that_quotes_a_marker_is_not_an_approval():
-    rules, _ = ra.parse_section(_body(_ROW_ID))
-    table = ra.table_hash(rules)
-    quoted = _approval_comment(
-        "nstojicTT", table, prefix="<!-- llk-perf-gate:wormhole -->\nreason: "
+def test_a_command_without_a_hash_approves_nothing():
+    table = _table(_ROW_ID)
+    assert (
+        ra.approval(
+            [_comment("nstojicTT", "/accept-regression")], table, _APPROVERS, "a"
+        )
+        is None
     )
-    assert ra.approval([quoted], table, _APPROVERS, "a") is None
 
 
 def test_an_invalid_table_cannot_be_approved():
     body = _body(_ROW_ID, "| x | perf_x | L1_TO_L1 | big | why |")
-    out = ra.read(
-        body, [_approval_comment("nstojicTT", "000000000000")], _APPROVERS, "a"
-    )
+    comments = [_comment("nstojicTT", "/accept-regression 000000000000")]
+    out = ra.read(body, comments, _APPROVERS, "a")
     assert out["state"] == "invalid" and out["approved"] is False
 
 
@@ -235,6 +230,18 @@ def test_a_filter_row_covers_every_matching_config():
     assert [r["point_id"] for r in result["regressions"]] == ["333333333333"]
 
 
+def test_a_whole_percent_row_covers_its_own_point():
+    """1000 -> 1070 cycles is 7.000000000000001% in floats; the pasted +7% must cover it."""
+    point = _point("3fa91c2e7b04", (1070.0 - 1000.0) / 1000.0)
+    lines = ra.paste_table([point])
+    assert "| +7% |" in lines[-1]
+    rules, _ = ra.parse_section("\n".join(lines).replace("<reason>", "on purpose"))
+    acceptance = {"state": "present", "rules": rules, "approved": True, "approver": "x"}
+    result = {"regressions": [point]}
+    ra.apply(result, acceptance, {"3fa91c2e7b04": 1})
+    assert result["regressions"] == [] and len(result["accepted"]) == 1
+
+
 def test_an_id_shared_by_two_points_accepts_neither():
     result = {"regressions": [_point("3fa91c2e7b04", 0.08)]}
     status = ra.apply(result, _acceptance(_ROW_ID, approved=True), {"3fa91c2e7b04": 2})
@@ -265,91 +272,42 @@ def _pr(tmp_path, body, author="author"):
     return str(path), str(approvers)
 
 
-def test_approve_records_the_table_for_an_approver(tmp_path, capsys):
-    pr, approvers = _pr(tmp_path, _body(_ROW_ID))
-    assert (
-        ra.main(
-            [
-                "approve",
-                "--pr",
-                pr,
-                "--approvers",
-                approvers,
-                "--commenter",
-                "nstojicTT",
-            ]
-        )
-        == 0
-    )
-    out = capsys.readouterr().out
-    rules, _ = ra.parse_section(_body(_ROW_ID))
-    assert out.startswith(
-        f"<!-- llk-perf-accept approver=nstojicTT table={ra.table_hash(rules)} -->"
-    )
+def _approve(tmp_path, body, comment, commenter="nstojicTT", author="author"):
+    pr, approvers = _pr(tmp_path, body, author=author)
+    path = tmp_path / "comment.md"
+    path.write_text(comment)
+    args = ["approve", "--pr", pr, "--approvers", approvers, "--commenter", commenter]
+    return ra.main(args + ["--comment", str(path)])
 
 
-def test_approve_refuses_others_the_author_and_a_missing_table(tmp_path, capsys):
-    pr, approvers = _pr(tmp_path, _body(_ROW_ID))
-    assert (
-        ra.main(
-            ["approve", "--pr", pr, "--approvers", approvers, "--commenter", "someone"]
-        )
-        == 2
-    )
-    pr, approvers = _pr(tmp_path, _body(_ROW_ID), author="nstojicTT")
-    assert (
-        ra.main(
-            [
-                "approve",
-                "--pr",
-                pr,
-                "--approvers",
-                approvers,
-                "--commenter",
-                "nstojicTT",
-            ]
-        )
-        == 2
-    )
-    pr, approvers = _pr(tmp_path, "No table here.")
-    assert (
-        ra.main(
-            [
-                "approve",
-                "--pr",
-                pr,
-                "--approvers",
-                approvers,
-                "--commenter",
-                "nstojicTT",
-            ]
-        )
-        == 2
-    )
-    assert "<!-- llk-perf-accept" not in capsys.readouterr().out
+def test_approve_accepts_the_hash_of_the_current_table(tmp_path, capsys):
+    table = _table(_ROW_ID)
+    assert _approve(tmp_path, _body(_ROW_ID), f"/accept-regression {table}") == 0
+    assert f"table `{table}`" in capsys.readouterr().out
+
+
+def test_approve_refuses_a_stale_hash_and_names_the_current_one(tmp_path, capsys):
+    stale = _table(_ROW_ID.replace("+10%", "+12%"))
+    assert _approve(tmp_path, _body(_ROW_ID), f"/accept-regression {stale}") == 2
+    assert f"now `{_table(_ROW_ID)}`" in capsys.readouterr().out
+
+
+def test_approve_refuses_others_the_author_no_hash_and_no_table(tmp_path):
+    line = f"/accept-regression {_table(_ROW_ID)}"
+    assert _approve(tmp_path, _body(_ROW_ID), line, commenter="someone") == 2
+    assert _approve(tmp_path, _body(_ROW_ID), line, author="nstojicTT") == 2
+    assert _approve(tmp_path, _body(_ROW_ID), "/accept-regression") == 2
+    assert _approve(tmp_path, "No table here.", line) == 2
 
 
 def test_read_takes_comments_as_json_lines(tmp_path):
-    rules, _ = ra.parse_section(_body(_ROW_ID))
     pr, approvers = _pr(tmp_path, _body(_ROW_ID))
     comments = tmp_path / "comments.jsonl"
-    comments.write_text(
-        json.dumps(_approval_comment("nstojicTT", ra.table_hash(rules))) + "\n"
-    )
+    approval = _comment("nstojicTT", f"/accept-regression {_table(_ROW_ID)}")
+    comments.write_text(json.dumps(approval) + "\nnot json\n")
     out = tmp_path / "acc.json"
-    ra.main(
-        [
-            "read",
-            "--pr",
-            pr,
-            "--comments",
-            str(comments),
-            "--approvers",
-            approvers,
-            "--out",
-            str(out),
-        ]
-    )
+    args = ["read", "--pr", pr, "--comments", str(comments), "--approvers", approvers]
+    ra.main(args + ["--out", str(out)])
     assert json.loads(out.read_text())["approver"] == "nstojicTT"
 
 

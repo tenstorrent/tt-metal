@@ -16,13 +16,12 @@ import sys
 HEADING = "## REGRESSION ACCEPTANCE"
 HEADER = ["point", "test", "run type", "max delta", "reason"]
 MODULE_COL = "test_module"
-BOT = "github-actions[bot]"
 COMMAND = "/accept-regression"
 PLACEHOLDER = "<reason>"
 
 _ID = re.compile(r"^[0-9a-f]{12}$")
 _MAX = re.compile(r"^\+?(\d+(?:\.\d+)?)\s*%$")
-_APPROVAL = re.compile(r"<!-- llk-perf-accept approver=(\S+) table=([0-9a-f]{12}) -->")
+_APPROVAL = re.compile(r"^/accept-regression\s+([0-9a-f]{12})\s*$", re.MULTILINE)
 
 
 def _norm(value):
@@ -133,20 +132,26 @@ def table_hash(rules):
     return hashlib.sha256(json.dumps(canon, sort_keys=True).encode()).hexdigest()[:12]
 
 
+def approved_hash(body):
+    """The table hash in a ``/accept-regression <hash>`` line, else None."""
+    m = _APPROVAL.search(body or "")
+    return m.group(1) if m else None
+
+
 def approval(comments, table, approvers, pr_author):
-    """The approver whose recorded approval matches this table, else None."""
+    """The approver whose own comment names this table's hash, else None.
+
+    Only the approver's comment counts, and it names the table they read, so an
+    edit to the table after it, or a comment by a bot, approves nothing.
+    """
     for c in reversed(comments or []):
-        if (c.get("user") or {}).get("login") != BOT:
-            continue
-        # Only at the start: a bot comment that quotes PR text cannot carry one.
-        m = _APPROVAL.match(c.get("body") or "")
+        login = (c.get("user") or {}).get("login")
         if (
-            m
-            and m.group(2) == table
-            and m.group(1) in approvers
-            and m.group(1) != pr_author
+            login in approvers
+            and login != pr_author
+            and approved_hash(c.get("body")) == table
         ):
-            return m.group(1)
+            return login
     return None
 
 
@@ -195,7 +200,7 @@ def apply(result, acceptance, ids):
             (
                 x
                 for x in rules
-                if matches(x, r, ids) and r["delta"] * 100 <= x["max_pct"]
+                if matches(x, r, ids) and _pct(r["delta"]) <= x["max_pct"]
             ),
             None,
         )
@@ -224,17 +229,23 @@ def apply(result, acceptance, ids):
     return {
         "state": state,
         "approver": acceptance.get("approver"),
+        "table": acceptance.get("table"),
         "accepted": len(accepted),
         "missing": sorted(set(missing)),
         "errors": errors,
     }
 
 
+def _pct(delta):
+    """A slowdown in percent, rounded so ``+7%`` covers 1000 -> 1070 cycles."""
+    return round(delta * 100, 6)
+
+
 def paste_table(regressions):
     """The section an author pastes into the PR description, one row per point."""
     lines = [HEADING, "", "| " + " | ".join(HEADER) + " |", "|---|---|---|--:|---|"]
     for r in sorted(regressions, key=lambda x: -x["delta"]):
-        pct = math.ceil(round(r["delta"] * 100, 6))
+        pct = math.ceil(_pct(r["delta"]))
         module = r.get(MODULE_COL) or "?"
         lines.append(
             f"| {r['point_id']} | {module} | {r['run_type']} | +{pct}% | {PLACEHOLDER} |"
@@ -286,6 +297,7 @@ def main(argv=None):
     ok.add_argument("--pr", required=True)
     ok.add_argument("--approvers", required=True)
     ok.add_argument("--commenter", required=True)
+    ok.add_argument("--comment", required=True, help="file with the comment's body")
     sub.add_parser("hash", help="print a hash of the section of a description on stdin")
     a = ap.parse_args(argv)
 
@@ -324,10 +336,23 @@ def main(argv=None):
         print(f"`{COMMAND}` has no effect: {why}.")
         return 2
     table = table_hash(rules)
-    print(f"<!-- llk-perf-accept approver={a.commenter} table={table} -->")
+    with open(a.comment) as fh:
+        named = approved_hash(fh.read())
+    if named is None:
+        print(
+            f"`{COMMAND}` has no effect: name the table hash from the gate report, "
+            f"`{COMMAND} {table}`."
+        )
+        return 2
+    if named != table:
+        print(
+            f"`{COMMAND} {named}` has no effect: the table changed, and its hash is "
+            f"now `{table}`. Read it again, then comment `{COMMAND} {table}`."
+        )
+        return 2
     print(
         f"@{a.commenter} accepted the {len(rules)} row(s) of the "
-        f"REGRESSION ACCEPTANCE table (table `{table}`)."
+        f"REGRESSION ACCEPTANCE table `{table}`."
     )
     print("A change to the table cancels this approval. The perf gate runs again now.")
     return 0

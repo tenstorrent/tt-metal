@@ -278,8 +278,10 @@ jobs:
           gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" \
             --jq '.[] | @json' > pr_comments.jsonl
           # The approvers come from main, so a PR cannot add its own.
-          git show "origin/main:${LLK_PATH}/perf/regression_approvers.json" > approvers.json 2>/dev/null \
-            || echo '{}' > approvers.json
+          if ! git show "origin/main:${LLK_PATH}/perf/regression_approvers.json" > approvers.json; then
+            echo "::warning::regression_approvers.json is not on origin/main, so no approval can count."
+            echo '{}' > approvers.json
+          fi
           python3 "${LLK_PATH}/perf/regression_accept.py" read \
             --pr pr.json --comments pr_comments.jsonl --approvers approvers.json --out acceptance_in.json
           cat acceptance_in.json
