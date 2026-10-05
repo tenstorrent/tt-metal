@@ -334,22 +334,18 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
     #
     # The audio decoder's depthwise chain shards over T on the TP axis (factor 4).
     #
-    # `precomputed_adaln: True` here is a measurement, not the memory necessity it is on (1, 1):
-    # with TP=4 the adaLN branch fits resident either way. Taking it to host tables anyway was
-    # measured as a one-axis change at the served point (1344x768 x124, NFE 4, 4step_v1.2_768p,
-    # seed 7, five prompts, one build): worst-case wall 74.6 s -> 67.3 s and peak DRAM 21.65 ->
-    # 15.49 GiB, with CLIP a wash (mean 0.3423 -> 0.3398, every prompt inside the ~0.045 spread
-    # CLIP shows between adjacent points of one configuration) and temporal motion UP on four of
-    # five prompts -- 1.28 -> 2.68 on the near-static coastline clip, which is the effect the
-    # stage-06 preset bisect first flagged and which survives now that the adapter is really on
-    # the weights. The adapter is unaffected: it carries no adaLN keys at all (312 A/B pairs, all
-    # attention and ff), and the loader binds the same 208 targets either way -- over 266 promoted
-    # linears with adaLN resident, over 213 with it precomputed, the 53-way difference being
-    # exactly the adaLN projections this flag moves off the device.
-    #
-    # The stated cost: the one clip that already failed prove_h3's absolute 0.002 audio floor (the
-    # fox prompt, a sparse-footsteps clip) goes 0.0019 -> 0.0012. It fails on both settings and on
-    # the independent host-fuse path; whether the floor becomes duration-aware is stage 07's call.
+    # `precomputed_adaln` is deliberately NOT set here, and that is a decision with numbers behind
+    # it rather than an omission. Unlike (1, 1), where host adaLN tables are what makes the bf16 DiT
+    # fit on one chip at all, TP=4 fits the resident branch fine. Taking it to host tables anyway was
+    # measured as a one-axis change at the served point (1344x768 x124, NFE 4, 4step_v1.2_768p, seed
+    # 7, five prompts, one build) and it is a genuine trade, not a win: worst-case wall 74.6 -> 67.3 s
+    # and peak DRAM 21.65 -> 15.49 GiB, temporal motion up on four of five prompts (1.28 -> 2.68 on
+    # the near-static coastline clip) and CLIP a wash -- but audio RMS falls on FIVE of five prompts,
+    # geometric mean x0.80, which pushes the one clip already under prove_h3's absolute 0.002 floor
+    # from 5% under to 38% under. The audio drop is one-directional, uncontrolled, and not a property
+    # of the flag itself: the same axis on base-model weights moves audio the other way. Until it is
+    # explained, this mesh keeps the resident branch, which is the configuration its served quality
+    # record was measured on.
     (1, 4): {
         "tp_axis": 1,
         "sp_axis": 0,
@@ -358,7 +354,6 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "coresident": False,
         "audio_t_shard": True,
         "vae_output_type": "uint8",
-        "precomputed_adaln": True,
     },
     # One Blackhole Galaxy: the working point MiniMaxH3.md documents.
     (4, 8): {"tp_axis": 0, "sp_axis": 1, "num_links": 2, "topology": ttnn.Topology.Ring, "coresident": True},

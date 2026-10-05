@@ -79,19 +79,27 @@ def test_the_override_does_not_disturb_the_quantized_path(monkeypatch):
 # ---------------------------------------------------------------------------------------------
 # Which adapter targets the H3 loader is willing to bind, and what it does with the rest.
 #
-# The p300x2 (1, 4) preset serves `precomputed_adaln: True`, which takes `time_embedder`, every
-# `adaln_proj` and `norm_out.linear` OFF the device and evaluates them into host tables. That is a
-# silent-no-op hazard of exactly the shape stage 06b existed to fix: an adapter targeting a module
-# that is not on the device could be dropped without anything saying so, and the served profile
-# would again advertise an adapter it is not applying.
+# `precomputed_adaln: True` -- which the (1, 1) preset serves and which the (1, 4) preset was
+# measured at and did NOT take -- evaluates `time_embedder`, every `adaln_proj` and
+# `norm_out.linear` into host tables instead of keeping them on device. An adapter targeting a
+# module that is not on the device could be dropped without anything saying so: the same shape of
+# silent no-op stage 06b existed to fix, where a profile advertises an adapter it is not applying.
 #
-# It is not dropped -- `_parse_target` returns None for any leaf outside `_QKV_SUBS`/`_SINGLETONS`,
-# the caller collects those into `unmapped`, and `load_h3_adapter_into` RAISES rather than binding
-# a partial adapter. The guard is independent of the adaLN setting, which is the point: the loader
-# refuses an adapter it cannot fully apply on either preset. The published Turbo adapters are
-# unaffected because they carry no adaLN keys at all (312 A/B pairs, all attention and ff), but
-# that is a property of today's files, not of the format, so the guard is asserted rather than
-# assumed.
+# Block-level adaLN leaves are not dropped silently: `_parse_target` returns None for any leaf
+# outside `_QKV_SUBS`/`_SINGLETONS`, the caller collects those into `unmapped`, and
+# `load_h3_adapter_into` RAISES rather than binding a partial adapter. That guard does not depend
+# on the adaLN setting -- it refuses the adapter on either preset, which is what makes the setting
+# safe to change.
+#
+# `time_embedder` is NOT covered by that path and is called out here so the gap is not mistaken for
+# coverage: it is handled by the `_GLOBALS` branch above `_parse_target`, so with adaLN precomputed
+# (where the transformer sets `time_embedder = None`) such an adapter dies on an AttributeError
+# rather than through the audited "no H3 destination" message. Loud either way, so not the
+# silent-drop hazard -- but a different failure path, and untested.
+#
+# The published Turbo adapters are unaffected: they carry no adaLN and no `time_embedder` keys at
+# all (312 A/B pairs, all attention and ff). That is a property of today's files, not of the
+# format, so the guard is asserted rather than assumed.
 @pytest.mark.parametrize(
     "base",
     [
@@ -132,9 +140,11 @@ def test_h3_loader_refuses_a_partially_bindable_adapter(expect_error):
     model that silently disagrees with the adapter it is named after -- the 06b defect's shape.
 
     The raise lands after `promote_to_lora` has walked the model but before a single
-    `bind_active`, so nothing is left half-applied: the loop only *collects* bank registrations
-    and the binding pass runs below the unmapped check. Promotion is stubbed here because walking
-    a real transformer needs weights and a device, and neither is what this test is about.
+    `bind_active`, so no delta is merged into any weight. The model is not untouched, though: the
+    loop calls `register_lora`, so on the raise it is left promoted with registered-but-unbound
+    banks. That is recoverable state, not a half-applied adapter, and the distinction is the whole
+    point of raising here rather than after the bind pass. Promotion is stubbed because walking a
+    real transformer needs weights and a device, and neither is what this test is about.
     """
     import torch
 
