@@ -46,7 +46,7 @@ inline void llk_math_matmul_init_no_mop(
         g.in0_tile_r_dim, g.in0_tile_c_dim, g.in1_tile_r_dim, g.in1_tile_c_dim, g.partial_face, transpose, ct_dim, rt_dim);
 }
 
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, int PHASES = get_math_num_fidelity_phases(math_fidelity)>
 inline void llk_math_matmul_no_mop(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -57,7 +57,7 @@ inline void llk_math_matmul_no_mop(
     // Re-derive operand tile geometry so the execute replays the geometry-correct length recorded at
     // init/reinit (16x32 tiny tiles record a shorter face-row-confined replay than full 32x32 tiles).
     const MatmulNoMopGeom g = matmul_no_mop_geom(operandA, operandB);
-    _llk_math_matmul_no_mop_<math_fidelity, THROTTLE_LEVEL>(
+    _llk_math_matmul_no_mop_<math_fidelity, THROTTLE_LEVEL, PHASES>(
         dst_index, ct_dim, rt_dim, g.in0_tile_r_dim, g.in0_tile_c_dim, g.in1_tile_r_dim, g.in1_tile_c_dim, g.partial_face);
 }
 
