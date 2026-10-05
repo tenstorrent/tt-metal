@@ -13,20 +13,17 @@ from models.experimental.bevformer.reference.resnet import ModulatedDeformConv2d
 
 # Tuned so the random backbone matches the trained BEVFormer-base one in output std at C3-C5
 # (order 1), DCN offsets (under a pixel on average, so samples fall between pixels)
-# and DCN masks (near 0.9). It does not reproduce the trained backbone's outlier
-# channels, which bfloat8_b handles worst, so PCC here reads higher than with
-# trained weights.
+# and DCN masks (near 0.9).
 DCN_OFFSET_STD = 0.04
 DCN_MASK_BIAS = 2.6
 RESIDUAL_BN_GAMMA = (0.1, 0.3)
-# The std of backbone_common.random_image_batch, at the pixel scale of BEVFormer's inputs. The
-# stem conv is divided by it, so everything after the stem sees the unit scale the values
-# above were tuned for.
-INPUT_STD = 21.0
 
 
-def init_dummy_backbone_weights(torch_model, seed=0):
+def init_dummy_backbone_weights(torch_model, seed=0, input_std=1.0):
     """Fill every parameter and BatchNorm buffer with seeded random values.
+
+    The stem conv is divided by ``input_std``, the std of the images the model will see, so
+    everything after the stem sees the unit scale the values above were tuned for.
 
     The reference model's own initialization cannot be used. ``ModulatedDeformConv2dPack``
     allocates its weight uninitialized, and the ResNet stores ``init_cfg`` without applying
@@ -77,7 +74,7 @@ def init_dummy_backbone_weights(torch_model, seed=0):
             if hasattr(module, "bn3") and isinstance(module.bn3, nn.modules.batchnorm._BatchNorm):
                 uniform_(module.bn3.weight, *RESIDUAL_BN_GAMMA)
 
-        torch_model.conv1.weight /= INPUT_STD
+        torch_model.conv1.weight /= input_std
 
     torch_model.eval()
     return torch_model

@@ -34,10 +34,10 @@ def reference_and_parameters():
 
 
 def _layer_kwargs(i):
-    """The memory arguments TtResNet gives layer ``i`` in this configuration."""
-    memory_config = tt_resnet_kwargs()
-    memory_config.pop("out_indices")
-    return TtResNet.layer_kwargs(i, **memory_config)
+    """The per-layer arguments TtResNet gives layer ``i`` in this configuration."""
+    stage_config = tt_resnet_kwargs()
+    stage_config.pop("out_indices")
+    return TtResNet.layer_kwargs(i, **stage_config)
 
 
 def _check(torch_output, ttnn_model, ttnn_output):
