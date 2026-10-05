@@ -4,15 +4,15 @@
 # SPDX-License-Identifier: Apache-2.0
 """Sweep phase for the weekly reconfig CI job.
 
-Consumes the manifest from discover_catalog.py and sweeps every (X, K) pair in the catalog,
-and checks whether K still passes after X's residue. If X passed the self-consistency check,
-replay X's captured config residue before K's launch. Otherwise, tt-smi -r -> run X -> run K.
+Consumes the manifest from discover_catalog.py and sweeps every (X, K) pair in the catalog:
+replay X's captured config residue before K's launch (no reset between X and K), then check
+whether K still passes.
 
 If --depth > 1, synthetic reachable hardware states are generated from the manifest.
 
 Usage:
   python3 pair_sweep.py --worktree DIR --arch blackhole --manifest /path/to/manifest.json \
-      --out /path/to/findings.jsonl [--self-pairs] [--jobs 8] [--timeout 90] [--port 5556] \
+      --out /path/to/findings.jsonl [--self-pairs] [--jobs 8] [--timeout 90] \
       [--splits N --group G] [--depth 2 --chains 80 --seed S]
 """
 
@@ -31,46 +31,8 @@ PASS, FAIL, ENVERR = (
     discover_catalog.FAIL,
     discover_catalog.ENVERR,
 )
-HANG = "HANG"
-_CODE = {0: PASS, 1: FAIL, 5: HANG}
 reset = discover_catalog._reset_card
 pytest_env = discover_catalog.pytest_env
-
-
-def _run_test_sh(
-    worktree, mode, test_file, test_id, arch, port, timeout, env_extra=None
-):
-    cmd = [
-        "bash",
-        os.path.join(worktree, ".claude/scripts/run_test.sh"),
-        mode,
-        "--worktree",
-        worktree,
-        "--arch",
-        arch,
-        "--test",
-        test_file,
-        "--test-id",
-        test_id,
-        "--maxfail",
-        "1",
-        "--port",
-        str(port),
-        "--timeout",
-        str(timeout),
-    ]
-    env = {**os.environ, **(env_extra or {})}
-    proc = subprocess.run(cmd, env=env, capture_output=True, text=True)
-    return proc
-
-
-def simulate(worktree, arch, test_file, test_id, port, timeout, env_extra=None):
-    proc = _run_test_sh(
-        worktree, "simulate", test_file, test_id, arch, port, timeout, env_extra
-    )
-    if "does not exist" in (proc.stdout + proc.stderr):
-        return ENVERR
-    return _CODE.get(proc.returncode, ENVERR)
 
 
 def compile_all(worktree, arch, nodeids, jobs, timeout):
@@ -165,7 +127,6 @@ def main():
         default=8,
         help="xdist worker count, one per Tensix core",
     )
-    p.add_argument("--port", type=int, default=5556)
     p.add_argument("--timeout", type=int, default=90)
     p.add_argument(
         "--skip-compile",
@@ -216,15 +177,14 @@ def main():
     ops = manifest["ops"]
     op_by_key = {o["key"]: o for o in ops}
     victims = [o for o in ops if o.get("baseline") == PASS]
-    restore_x = [o for o in victims if o.get("usable")]
-    fallback_x = [o for o in victims if not o.get("usable")]
+    polluters = victims
     nodeids = [v["test_id"] for v in victims]
     nodeid_by_key = {v["key"]: v["test_id"] for v in victims}
 
     if args.depth > 1:
-        if args.depth > len(restore_x):
+        if args.depth > len(polluters):
             p.error(
-                f"--depth {args.depth} > {len(restore_x)} usable polluters in the manifest"
+                f"--depth {args.depth} > {len(polluters)} polluters in the manifest"
             )
         seed = (
             args.seed
@@ -249,8 +209,8 @@ def main():
         )
         os.makedirs(chains_dir, exist_ok=True)
 
-        chain_members = [rng.sample(restore_x, args.depth) for _ in range(args.chains)]
-        restore_x = []
+        chain_members = [rng.sample(polluters, args.depth) for _ in range(args.chains)]
+        polluters = []
         for ci, chain in enumerate(chain_members):
             entries = discover_catalog.build_chain_entries(
                 args.arch, pristine_path, pristine, chain
@@ -258,32 +218,28 @@ def main():
             restore_path = os.path.join(chains_dir, f"chain{ci:03d}.restore.json")
             with open(restore_path, "w") as f:
                 json.dump({"entries": entries}, f)
-            restore_x.append(
+            polluters.append(
                 {
                     "key": "+".join(o["key"] for o in chain),
                     "restore_path": restore_path,
                     "members": [o["key"] for o in chain],
                 }
             )
-        fallback_x = []
 
     if args.splits > 1:
-        restore_x = restore_x[args.group - 1 :: args.splits]
-        fallback_x = fallback_x[args.group - 1 :: args.splits]
+        polluters = polluters[args.group - 1 :: args.splits]
 
     shard_note = f" (shard {args.group}/{args.splits})" if args.splits > 1 else ""
     print(
-        f"pair_sweep: victims={len(victims)} restore-mode polluters={len(restore_x)} "
-        f"fallback polluters={len(fallback_x)}{shard_note}",
+        f"pair_sweep: victims={len(victims)} polluters={len(polluters)}{shard_note}",
         file=sys.stderr,
     )
 
     out_f = open(args.out, "w")
     escapes = []
 
-    def record(mode, x_key, k_key, verdict, k_baseline, extra=None):
+    def record(x_key, k_key, verdict, k_baseline, extra=None):
         rec = {
-            "mode": mode,
             "polluter": x_key,
             "victim": k_key,
             "verdict": verdict,
@@ -296,13 +252,11 @@ def main():
         if verdict != k_baseline:
             escapes.append(rec)
             print(
-                f"pair_sweep: ESCAPE {x_key} -> {k_key}: {verdict} (baseline {k_baseline}) [{mode}]",
+                f"pair_sweep: ESCAPE {x_key} -> {k_key}: {verdict} (baseline {k_baseline})",
                 file=sys.stderr,
             )
 
-    # --- Restore-mode phase: one xdist round PER POLLUTER, every other victim run in that round
-    #     in parallel across -n jobs workers, all pinned to that round's single restore plan. ---
-    if restore_x:
+    if polluters:
         tmp_dir = os.path.dirname(os.path.abspath(args.out)) or "."
         os.makedirs(tmp_dir, exist_ok=True)
         if args.skip_compile:
@@ -326,7 +280,7 @@ def main():
                     file=sys.stderr,
                 )
 
-        for xi, x in enumerate(restore_x):
+        for xi, x in enumerate(polluters):
             x_members = set(x.get("members", [x["key"]]))
             plan_map = {}
             for k, nodeid in zip(victims, nodeids):
@@ -338,7 +292,7 @@ def main():
             round_nodeids = list(plan_map.keys())
 
             print(
-                f"pair_sweep: restore-mode round {xi+1}/{len(restore_x)}: polluter {x['key']}, "
+                f"pair_sweep: round {xi+1}/{len(polluters)}: polluter {x['key']}, "
                 f"{len(round_nodeids)} victims across -n {args.jobs}...",
                 file=sys.stderr,
             )
@@ -374,89 +328,12 @@ def main():
                     continue
                 v = results.get(nodeid, ENVERR)
                 record(
-                    "restore",
                     x["key"],
                     k["key"],
                     v,
                     k["baseline"],
                     extra={"members": x["members"]} if args.depth > 1 else None,
                 )
-
-    # Fallback phase: full reset per pair, for X's that failed their own restore-gate.
-    # TODO: measure in CI.
-    for x in fallback_x:
-        for k in victims:
-            if x["key"] == k["key"] and not args.self_pairs:
-                continue
-            reset()
-            # Compile both variants together in one producer invocation so neither evicts the
-            # other's ELF, then run each via simulate.
-            proc = subprocess.run(
-                [
-                    "bash",
-                    os.path.join(args.worktree, ".claude/scripts/run_test.sh"),
-                    "compile",
-                    "--worktree",
-                    args.worktree,
-                    "--arch",
-                    args.arch,
-                    "--test",
-                    x["test_file"],
-                    "--test-id",
-                    x["test_id"],
-                    "--port",
-                    str(args.port),
-                    "--timeout",
-                    str(args.timeout),
-                ],
-                capture_output=True,
-                text=True,
-            )
-            subprocess.run(
-                [
-                    "bash",
-                    os.path.join(args.worktree, ".claude/scripts/run_test.sh"),
-                    "compile",
-                    "--worktree",
-                    args.worktree,
-                    "--arch",
-                    args.arch,
-                    "--test",
-                    k["test_file"],
-                    "--test-id",
-                    k["test_id"],
-                    "--port",
-                    str(args.port),
-                    "--timeout",
-                    str(args.timeout),
-                ],
-                capture_output=True,
-                text=True,
-            )
-            vx = simulate(
-                args.worktree,
-                args.arch,
-                x["test_file"],
-                x["test_id"],
-                args.port,
-                args.timeout,
-            )
-            vk = simulate(
-                args.worktree,
-                args.arch,
-                k["test_file"],
-                k["test_id"],
-                args.port,
-                args.timeout,
-            )
-            record(
-                "fullreset",
-                x["key"],
-                k["key"],
-                vk,
-                k["baseline"],
-                extra={"polluter_verdict": vx},
-            )
 
     out_f.close()
 
@@ -467,17 +344,8 @@ def main():
             e["verified"] = None
     else:
         verify_dir = os.path.dirname(os.path.abspath(args.out)) or "."
-        to_verify = [e for e in escapes if e["mode"] == "restore"]
-        print(
-            f"pair_sweep: verifying {len(to_verify)} restore-mode escape(s)...",
-            file=sys.stderr,
-        )
-        verified_so_far = 0
+        print(f"pair_sweep: verifying {len(escapes)} escape(s)...", file=sys.stderr)
         for i, e in enumerate(escapes):
-            if e["mode"] != "restore":
-                e["verified"] = True  # fullreset already ran this
-                continue
-            verified_so_far += 1
             member_keys = e.get("members", [e["polluter"]])
             px = [nodeid_by_key[k] for k in member_keys if k in nodeid_by_key]
             vk = nodeid_by_key.get(e["victim"])
@@ -526,17 +394,17 @@ def main():
             if e["verified"] and e.get("subsumed_by_depth1"):
                 tag += f" but subsumed by depth-1 member(s) {e['subsumed_by_depth1']}"
             print(
-                f"    [{verified_so_far}/{len(to_verify)}] {e['polluter']} -> {e['victim']}: {tag}",
+                f"    [{i+1}/{len(escapes)}] {e['polluter']} -> {e['victim']}: {tag}",
                 file=sys.stderr,
             )
 
     # Patch the verify step results back into the escape lines so report.py is aware.
-    escape_by_triple = {(e["mode"], e["polluter"], e["victim"]): e for e in escapes}
-    if escape_by_triple:
+    escape_by_pair = {(e["polluter"], e["victim"]): e for e in escapes}
+    if escape_by_pair:
         with open(args.out) as f:
             records = [json.loads(line) for line in f if line.strip()]
         for rec in records:
-            match = escape_by_triple.get((rec["mode"], rec["polluter"], rec["victim"]))
+            match = escape_by_pair.get((rec["polluter"], rec["victim"]))
             if match:
                 for field in ("verified", "verify_result", "subsumed_by_depth1"):
                     if field in match:
@@ -568,7 +436,7 @@ def main():
         report_escapes = verified_escapes
     for e in report_escapes:
         print(
-            f"  {e['polluter']} -> {e['victim']}: {e['verdict']} (baseline {e['victim_baseline']}) [{e['mode']}]"
+            f"  {e['polluter']} -> {e['victim']}: {e['verdict']} (baseline {e['victim_baseline']})"
             + (
                 f" [subsumed by {e['subsumed_by_depth1']}]"
                 if e.get("subsumed_by_depth1")

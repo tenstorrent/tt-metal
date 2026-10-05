@@ -34,7 +34,7 @@ TIMEOUT=90
 SPLITS=""
 GROUP=""
 CHAIN_DEPTH=2
-CHAINS_PER_MACHINE=80
+CHAINS_PER_MACHINE=320
 
 while [[ $# -gt 0 ]]; do
     case "$1" in

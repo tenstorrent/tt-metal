@@ -60,14 +60,13 @@ def render_markdown(records: list) -> str:
     if escapes:
         out += ["", "## Escapes", ""]
         out += _table(
-            ("polluter (X)", "victim (K)", "K baseline", "K after X", "mode"),
+            ("polluter (X)", "victim (K)", "K baseline", "K after X"),
             (
                 (
                     f"`{e['polluter']}`",
                     f"`{e['victim']}`",
                     e["victim_baseline"],
                     e["verdict"],
-                    e["mode"],
                 )
                 for e in escapes
             ),
@@ -77,22 +76,6 @@ def render_markdown(records: list) -> str:
             "",
             "No escapes: every victim that passes on its own still passes after "
             "every polluter in the catalog.",
-        ]
-
-    fullreset = [r for r in records if r["mode"] == "fullreset"]
-    if fullreset:
-        out += [
-            "",
-            "## Full-reset fallback rows",
-            *_table(
-                ("polluter (X)", "trials"),
-                sorted(
-                    (
-                        (x, sum(1 for r in fullreset if r["polluter"] == x))
-                        for x in {r["polluter"] for r in fullreset}
-                    ),
-                ),
-            ),
         ]
     return "\n".join(out) + "\n"
 

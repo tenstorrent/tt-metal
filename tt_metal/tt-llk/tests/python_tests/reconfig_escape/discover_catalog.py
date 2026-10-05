@@ -34,7 +34,7 @@ _ADDR_MOD_ADDR32 = {
         | set(range(47, 55))  # ADDR_MOD_BIAS_SEC0-7
     ),
 }
-_BOOT_OWNED = {"blackhole": set()} # TODO: Wormhole
+_BOOT_OWNED = {"blackhole": set()}  # TODO: Wormhole
 
 _RESTORE_SPACE_CONFIG = 0
 _RESTORE_SPACE_THREADCONFIG = 1
@@ -101,7 +101,8 @@ def merge_addrmod_chain(chain_ops):
                 continue
             merged.setdefault(addr32, [0, 0, 0])[thread] = val
     return [
-        [_RESTORE_SPACE_THREADCONFIG, addr32, *v, 0] for addr32, v in sorted(merged.items())
+        [_RESTORE_SPACE_THREADCONFIG, addr32, *v, 0]
+        for addr32, v in sorted(merged.items())
     ]
 
 
@@ -111,7 +112,9 @@ def last_ch1x_entry(chain_ops):
         if os.path.exists(ch1x_path):
             with open(ch1x_path) as f:
                 ch1x = json.load(f)
-            return [[_RESTORE_SPACE_ADC_CH1X, 0, ch1x["unpacker"], ch1x["packer"], 0, 0]]
+            return [
+                [_RESTORE_SPACE_ADC_CH1X, 0, ch1x["unpacker"], ch1x["packer"], 0, 0]
+            ]
     return []
 
 
@@ -218,9 +221,7 @@ def sample_per_test(nodeids, n_per_test, rng):
     return sampled
 
 
-_ARGV_BATCH = (
-    500  # comfortably under the OS argv limit even for long parametrized ids
-)
+_ARGV_BATCH = 500  # comfortably under the OS argv limit even for long parametrized ids
 
 
 def _chunks(seq, size):
@@ -312,44 +313,6 @@ def run_discovery_round(
     return last_proc
 
 
-def run_gate_round(worktree, arch, nodeids, plan_map_path, jobs, timeout, junit_path):
-    merged_cases = []
-    last_proc = None
-    for i, batch in enumerate(_chunks(nodeids, _ARGV_BATCH)):
-        batch_junit = f"{junit_path}.batch{i}"
-        cmd = [
-            sys.executable,
-            "-m",
-            "pytest",
-            "--compile-consumer",
-            "-n",
-            str(jobs),
-            "-p",
-            "xdist_plan_plugin",
-            f"--llk-plan-map={plan_map_path}",
-            f"--timeout={timeout}",
-            f"--junitxml={batch_junit}",
-        ] + batch
-        last_proc = subprocess.run(
-            cmd,
-            cwd=os.path.join(worktree, "tests", "python_tests"),
-            env={**pytest_env(worktree), "CHIP_ARCH": arch},
-            capture_output=True,
-            text=True,
-        )
-        if os.path.exists(batch_junit):
-            merged_cases.extend(ET.parse(batch_junit).getroot().iter("testcase"))
-    if merged_cases:
-        suite = ET.Element(
-            "testsuite", name="reconfig_escape_gate", tests=str(len(merged_cases))
-        )
-        suite.extend(merged_cases)
-        root = ET.Element("testsuites")
-        root.append(suite)
-        ET.ElementTree(root).write(junit_path, encoding="utf-8", xml_declaration=True)
-    return last_proc
-
-
 def parse_junit(junit_path):
     tree = ET.parse(junit_path)
     results = {}
@@ -415,7 +378,9 @@ def main():
     pool = collect_all(args.worktree, args.arch, args.timeout)
     print(f"discover_catalog: pool: {len(pool)} nodeids", file=sys.stderr)
     if not pool:
-        raise SystemExit("discover_catalog: collected 0 test items (worktree/arch misconfigured?)")
+        raise SystemExit(
+            "discover_catalog: collected 0 test items (worktree/arch misconfigured?)"
+        )
 
     seed = (
         args.seed
@@ -457,7 +422,9 @@ def main():
     restore_entries = build_restore_entries(args.arch, pristine_snap_path)
     with open(pristine_restore_path, "w") as f:
         json.dump({"entries": restore_entries}, f)
-    print(f"discover_catalog: pristine captured: {pristine_restore_path}", file=sys.stderr)
+    print(
+        f"discover_catalog: pristine captured: {pristine_restore_path}", file=sys.stderr
+    )
 
     print(
         f"discover_catalog: compiling {len(sampled)} candidates (producer, -n {args.compile_jobs})...",
@@ -586,9 +553,6 @@ def main():
             indent=2,
         )
 
-    # Run the gate phase only on the deduped representatives.
-    gate_nodeids = [r["test_id"] for r in representatives]
-    plan_map = {}
     for r in representatives:
         entries = build_restore_entries(args.arch, r["snapshot_path"])
 
@@ -606,32 +570,6 @@ def main():
             json.dump({"entries": entries}, f)
         r["restore_path"] = restore_path
 
-        plan_map[r["test_id"]] = restore_path
-    plan_map_path = os.path.join(args.out_dir, "gate_plan_map.json")
-    with open(plan_map_path, "w") as f:
-        json.dump(plan_map, f)
-    gate_junit_path = os.path.join(args.out_dir, "gate.junit.xml")
-
-    print(
-        f"discover_catalog: gate round: {len(gate_nodeids)} representatives across -n {args.jobs}...",
-        file=sys.stderr,
-    )
-    _reset_card()
-    gproc = run_gate_round(
-        args.worktree,
-        args.arch,
-        gate_nodeids,
-        plan_map_path,
-        args.jobs,
-        args.timeout,
-        gate_junit_path,
-    )
-    if not os.path.exists(gate_junit_path):
-        print(gproc.stdout[-4000:], file=sys.stderr)
-        print(gproc.stderr[-4000:], file=sys.stderr)
-        raise SystemExit("gate round produced no junit report")
-    gate_results = parse_junit(gate_junit_path)
-
     manifest = {
         "arch": args.arch,
         "source": "discover_catalog.py",
@@ -641,7 +579,6 @@ def main():
         "ops": [],
     }
     for i, r in enumerate(representatives):
-        gate_v = gate_results.get(r["test_id"], ENVERR)
         family = re.sub(r"^test_", "", r["test_file"]).replace(".py", "")
         manifest["ops"].append(
             {
@@ -650,8 +587,6 @@ def main():
                 "test_file": r["test_file"],
                 "test_id": r["test_id"],
                 "baseline": r["baseline"],
-                "gate": gate_v,
-                "usable": gate_v == PASS,
                 "snapshot_path": r["snapshot_path"],
                 "restore_path": r["restore_path"],
             }
@@ -659,11 +594,10 @@ def main():
     with open(args.manifest, "w") as f:
         json.dump(manifest, f, indent=2)
 
-    usable = sum(1 for o in manifest["ops"] if o["usable"])
     print(f"\n========== DISCOVER CATALOG RESULT ==========", file=sys.stderr)
     print(
         f"sampled: {len(sampled)}\ncandidates: {n_with_footprint}\n"
-        f"deduped: {len(representatives)}\nusable: {usable}",
+        f"deduped: {len(representatives)}",
         file=sys.stderr,
     )
     print(f"manifest: {args.manifest}", file=sys.stderr)

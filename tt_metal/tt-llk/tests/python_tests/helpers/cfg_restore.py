@@ -22,7 +22,7 @@ _CFG_STATE_SIZE = {
 # Stuff not to touch.
 _BOOT_OWNED = {
     ChipArchitecture.BLACKHOLE: set(),
-    ChipArchitecture.WORMHOLE: {158, 159, 160, 161}
+    ChipArchitecture.WORMHOLE: {158, 159, 160, 161},
 }
 
 
@@ -63,9 +63,6 @@ def thread_items(arch: ChipArchitecture) -> list:
 # L1 layout trisc.cpp expects
 _INKERNEL_RESTORE_BASE = 0x1A000
 _INKERNEL_RESTORE_MAGIC = 0x43464731  # 'CFG1'
-RESTORE_SPACE_CONFIG = 0
-RESTORE_SPACE_THREADCONFIG = 1
-RESTORE_SPACE_ADC_CH1X = 2
 
 
 def write_inkernel_restore(
@@ -119,8 +116,7 @@ def _thread_config_addr(thread: int, local_idx: int, arch: ChipArchitecture) -> 
 
 
 def snapshot_addr_mod(location: str, *, device_id: int = 0, context=None) -> dict:
-    """Read addr mods. TODO: Wormhole
-    """
+    """Read addr mods. TODO: Wormhole"""
     arch = get_chip_architecture()
     risc_debug = _get_risc_debug(location, arch, device_id, context)
     out = {}
@@ -170,9 +166,7 @@ def maybe_restore_cfg_from_env(location: str, *, device_id: int = 0, context=Non
         snap = snapshot_cfg(location, items, device_id=device_id, context=context)
         with open(snap_path, "w") as f:
             json.dump([[s, a, v] for (s, a), v in snap.items()], f)
-        msg = (
-            f"cfg_restore: words={len(snap)} written to {snap_path}"
-        )
+        msg = f"cfg_restore: words={len(snap)} written to {snap_path}"
         print(msg, file=sys.stderr, flush=True)
         logger.warning(msg)
         return None
