@@ -504,6 +504,53 @@ was met: the strictest tier wants 16.89 t/s/u and the functional tier 1.68, so o
 functional tier passes on throughput while every `complete` and `target` tier check fails.
 TTFT passes all three tiers at every length.
 
+## Second GPQA run: the speedup costs no measurable accuracy
+
+Eval run 37013290780, tt-metal `8ca73539dd7` and tt-inference-server `ab5d20e9`, against run
+36587180186 on `04bc281998a`:
+
+| | run 36587180186 | run 37013290780 |
+| --- | ---: | ---: |
+| reported score | 84.85, ratio 0.9512 | 83.33, ratio 0.9342 |
+| harness accuracy check | pass | **fail** |
+| samples credited with no `boxed{` answer | 3 | 2 |
+| **legitimate correct** | **165 / 198** | **163 / 198** |
+| legitimate ratio | 0.9342 | 0.9229 |
+| sentinels | 0 | 0 |
+| mean seconds per task | 163.9 | **74.77** |
+| decode at eight concurrent, p50 | 49.6 tok/s | **112.0 tok/s** |
+| wall clock | 9 h 20 m | **4 h 28 m** |
+
+**The 1.52-point drop is not a regression.** On legitimate answers the runs differ by two
+samples, against a per-run standard error of about 2.5 points, which is five samples. One of the
+three points separating the headline figures is simply one fewer spurious credit. Nothing here
+distinguishes the two configurations on quality.
+
+**Neither run passes the gate on a clean scoring basis.** Excluding samples credited without
+committing an answer gives 0.9342 and 0.9229 against a 0.95 bar. The first run's apparent pass
+depended on three such credits, as recorded above. So this model has not met the GPQA accuracy
+target on honest scoring, and the second run is the more candid number rather than the worse one.
+
+**What the run does establish is the speedup, in serving, over hours.** Decode at eight
+concurrent requests runs 2.26 times faster across 1186 sampled intervals, mean time per task
+falls 2.19 times, and the wall clock halves. That is the independent confirmation that the
+sampler padding and the optimization flags survive the serving loop, which is the check the
+fabric packet size failed.
+
+Run health: no sentinels, no hang, no engine death. The eight log lines matching timeout or fatal
+patterns are `VLLM_RPC_TIMEOUT` configuration, the unknown-environment-variable warning for it,
+and orderly `[shutdown] ... timeout=0s` messages one second after the samples file was written.
+The nanobind leaked-function warnings are interpreter teardown after results were written.
+Duration is accounted for: 74.77 s across 198 tasks is 4.11 of the 4.47 hours.
+
+Acceptance reported `PASS` with `Evals: 0/1 passed, 1 waived`, the accuracy check itself failing.
+That is the fourth run in this project where acceptance passed while the thing it checks did not.
+
+**Eight responses commit no answer at all, against five before**, each between 68k and 98k
+characters and so running into the 32768-token generation cap. Whether the padded multi-core
+top-k breaks ties differently enough to change trajectories, or this is ordinary variation at
+temperature 1.0, cannot be told from one run of 198 samples each.
+
 ## Served performance after the flags, the padding and decode-only tracing
 
 Benchmark run 37001043718, tt-metal `8ca73539dd7` and tt-inference-server `ab5d20e9`, against
