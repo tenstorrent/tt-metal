@@ -5,7 +5,7 @@
 #include "moreh_linear_backward.hpp"
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
-#include "ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 
 namespace ttnn::operations::moreh::moreh_linear_backward {
@@ -137,8 +137,19 @@ std::vector<std::optional<Tensor>> moreh_linear_backward(
 
     if (input_required_grad) {
         TT_FATAL(input_grad.has_value(), "input_grad tensor should not be std::nullopt");
-        result[0] = ttnn::moreh_matmul(
-            output_grad, weight, false, false, input_grad, std::nullopt, input_grad_memory_config, compute_kernel);
+        result[0] = ttnn::matmul(
+            output_grad,
+            weight,
+            /*transpose_a=*/false,
+            /*transpose_b=*/false,
+            input_grad_memory_config,
+            /*dtype=*/std::nullopt,
+            /*program_config=*/std::nullopt,
+            /*activation=*/std::nullopt,
+            compute_kernel,
+            /*core_grid=*/std::nullopt,
+            /*output_tile=*/std::nullopt,
+            input_grad);
     }
 
     if (weight_required_grad) {
@@ -146,18 +157,33 @@ std::vector<std::optional<Tensor>> moreh_linear_backward(
         const auto& weight_grad_tensor = weight_grad.value();
 
         if (operations::moreh::moreh_linear_backward::is_same_batch_dim(output_grad, weight_grad_tensor)) {
-            ttnn::moreh_matmul(
+            ttnn::matmul(
                 output_grad,
                 input,
-                true,
-                false,
-                weight_grad_tensor,
-                std::nullopt,
+                /*transpose_a=*/true,
+                /*transpose_b=*/false,
                 weight_grad_memory_config,
-                compute_kernel);
+                /*dtype=*/std::nullopt,
+                /*program_config=*/std::nullopt,
+                /*activation=*/std::nullopt,
+                compute_kernel,
+                /*core_grid=*/std::nullopt,
+                /*output_tile=*/std::nullopt,
+                weight_grad_tensor);
         } else {
-            const auto& temp_weight_grad = ttnn::moreh_matmul(
-                output_grad, input, true, false, std::nullopt, std::nullopt, weight_grad_memory_config, compute_kernel);
+            const auto& temp_weight_grad = ttnn::matmul(
+                output_grad,
+                input,
+                /*transpose_a=*/true,
+                /*transpose_b=*/false,
+                weight_grad_memory_config,
+                /*dtype=*/std::nullopt,
+                /*program_config=*/std::nullopt,
+                /*activation=*/std::nullopt,
+                compute_kernel,
+                /*core_grid=*/std::nullopt,
+                /*output_tile=*/std::nullopt,
+                std::nullopt);
             TT_FATAL(weight_grad.has_value(), "weight_grad tensor should not be std::nullopt");
             ttsl::SmallVector<int64_t> dims = operations::moreh::moreh_linear_backward::find_reduce_dim(
                 temp_weight_grad.padded_shape(), weight_grad.value().padded_shape());

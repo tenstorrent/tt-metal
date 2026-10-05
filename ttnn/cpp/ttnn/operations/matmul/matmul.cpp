@@ -14,6 +14,8 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/data_movement/repeat/repeat.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
@@ -81,6 +83,105 @@ Tensor handle_zero_volume_matmul(
     }
 
     return output_tensor;
+}
+
+struct BroadcastOperands {
+    Tensor a;
+    Tensor b;
+    // Set when A's batch dims were folded into M: the matmul runs at folded_output_shape and its
+    // result is reshaped back to output_shape.
+    std::optional<ttnn::Shape> output_shape;
+    std::optional<ttnn::Shape> folded_output_shape;
+};
+
+// Applies torch-style batch broadcasting. Trailing batch dims where B is 1 fold into A's M for free;
+// beyond that the device op handles B batch 1, equal batch dims, and A batch 1 on interleaved inputs
+// with an auto-selected config, and any other broadcast expands the operands.
+BroadcastOperands broadcast_batch_dims(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const Tensor>& bias,
+    const ttnn::prim::MatmulParams& parameters) {
+    const auto& a_shape = input_tensor_a.logical_shape();
+    const auto& b_shape = input_tensor_b.logical_shape();
+    if (a_shape.rank() < 2 || b_shape.rank() < 2 || !is_input_batched(b_shape) ||
+        input_tensor_a.logical_volume() == 0 || input_tensor_b.logical_volume() == 0) {
+        return {input_tensor_a, input_tensor_b, std::nullopt, std::nullopt};
+    }
+
+    uint32_t batch_rank = std::max(a_shape.rank(), b_shape.rank()) - 2;
+    ttsl::SmallVector<uint32_t> a_batch(batch_rank, 1);
+    ttsl::SmallVector<uint32_t> b_batch(batch_rank, 1);
+    for (uint32_t i = 0; i + 2 < a_shape.rank(); ++i) {
+        a_batch[batch_rank - (a_shape.rank() - 2) + i] = a_shape[i];
+    }
+    for (uint32_t i = 0; i + 2 < b_shape.rank(); ++i) {
+        b_batch[batch_rank - (b_shape.rank() - 2) + i] = b_shape[i];
+    }
+    ttsl::SmallVector<uint32_t> out_shape(batch_rank + 2);
+    for (uint32_t i = 0; i < batch_rank; ++i) {
+        TT_FATAL(
+            a_batch[i] == b_batch[i] || a_batch[i] == 1 || b_batch[i] == 1,
+            "ttnn.matmul: batch dims of shapes {} and {} are not broadcastable",
+            a_shape,
+            b_shape);
+        out_shape[i] = std::max(a_batch[i], b_batch[i]);
+    }
+    const uint32_t m = parameters.transpose_a ? a_shape[-1] : a_shape[-2];
+    out_shape[batch_rank] = m;
+    out_shape[batch_rank + 1] = parameters.transpose_b ? b_shape[-2] : b_shape[-1];
+
+    // Folding is a free reshape only when M is untransposed and tile-aligned, and is only valid for a bias
+    // that broadcasts over rows and batch.
+    uint32_t fold = 1;
+    uint32_t num_folded = 0;
+    const bool can_fold = !parameters.transpose_a && input_tensor_a.padded_shape()[-2] == m &&
+                          (!bias.has_value() || bias->logical_volume() == bias->logical_shape()[-1]);
+    while (can_fold && num_folded < batch_rank && b_batch[batch_rank - 1 - num_folded] == 1) {
+        fold *= a_batch[batch_rank - 1 - num_folded];
+        ++num_folded;
+    }
+    std::optional<ttnn::Shape> output_shape;
+    std::optional<ttnn::Shape> folded_output_shape;
+    if (fold > 1) {
+        output_shape = ttnn::Shape(out_shape);
+        batch_rank -= num_folded;
+        a_batch.resize(batch_rank);
+        b_batch.resize(batch_rank);
+        ttsl::SmallVector<uint32_t> folded(out_shape.begin(), out_shape.begin() + batch_rank);
+        folded.push_back(fold * m);
+        folded.push_back(out_shape.back());
+        folded_output_shape = ttnn::Shape(folded);
+    }
+
+    const auto with_batch = [](const Tensor& tensor, const ttsl::SmallVector<uint32_t>& batch, uint32_t rows) {
+        const auto& shape = tensor.logical_shape();
+        ttsl::SmallVector<uint32_t> dims(batch.begin(), batch.end());
+        dims.push_back(rows);
+        dims.push_back(shape[-1]);
+        return shape == ttnn::Shape(dims) ? tensor : ttnn::reshape(tensor, ttnn::Shape(dims));
+    };
+    auto a = with_batch(input_tensor_a, a_batch, fold * a_shape[-2]);
+    auto b = with_batch(input_tensor_b, b_batch, b_shape[-2]);
+    const bool in0_reuse = !is_input_batched(a.logical_shape()) && !parameters.program_config.has_value() &&
+                           !parameters.user_core_coord.has_value() && !a.is_sharded() && !b.is_sharded() &&
+                           !parameters.output_mem_config.is_sharded();
+    if (a_batch != b_batch && !in0_reuse) {
+        ttsl::SmallVector<uint32_t> a_repeat(batch_rank + 2, 1);
+        ttsl::SmallVector<uint32_t> b_repeat(batch_rank + 2, 1);
+        for (uint32_t i = 0; i < batch_rank; ++i) {
+            a_repeat[i] = std::max(a_batch[i], b_batch[i]) / a_batch[i];
+            b_repeat[i] = std::max(a_batch[i], b_batch[i]) / b_batch[i];
+        }
+        const auto is_one = [](uint32_t r) { return r == 1; };
+        if (!std::all_of(a_repeat.begin(), a_repeat.end(), is_one)) {
+            a = ttnn::repeat(a, a_repeat, a.memory_config());
+        }
+        if (!std::all_of(b_repeat.begin(), b_repeat.end(), is_one)) {
+            b = ttnn::repeat(b, b_repeat, b.memory_config());
+        }
+    }
+    return {a, b, output_shape, folded_output_shape};
 }
 
 }  // namespace detail
@@ -162,6 +263,11 @@ static bool get_post_process_bias(
                 transpose_a,
                 transpose_b)) {
             return false;
+        }
+        // Fused bias must span N; a column-broadcast bias (e.g. scalar [1, 1]) is applied via add().
+        const auto& b_logical_shape = utilities::get_matmul_tensor_logical_shape(input_tensor_b_adjusted, transpose_b);
+        if (bias.value().logical_shape()[-1] != b_logical_shape[-1]) {
+            return true;
         }
         // A row-broadcastable ([1, N]) bias on the reuse config must be post-processed.
         if (is_reuse_config && utilities::fused_matmul_bias_row_broadcastable(bias)) {
@@ -323,7 +429,29 @@ static ttnn::Tensor bound_matmul(
     }
 
     // Apply bias as post-processing if needed
-    if (post_process_bias) {
+    const ttnn::Shape output_shape = output_tensor.logical_shape();
+    if (post_process_bias && output_shape.rank() > 6 && !detail::is_input_batched(bias->logical_shape())) {
+        // Binary ops broadcast up to rank 6, so add a batch-invariant bias on a batch-collapsed view.
+        const ttnn::Shape collapsed(
+            {static_cast<uint32_t>(output_shape.volume() / (output_shape[-2] * output_shape[-1])),
+             output_shape[-2],
+             output_shape[-1]});
+        const auto& bias_shape = bias->logical_shape();
+        const auto bias_2d =
+            bias_shape.rank() <= 2 ? bias.value() : ttnn::reshape(*bias, ttnn::Shape({bias_shape[-2], bias_shape[-1]}));
+        std::optional<ttnn::Tensor> collapsed_output;
+        if (optional_output_tensor.has_value()) {
+            collapsed_output = ttnn::reshape(*optional_output_tensor, collapsed);
+        }
+        output_tensor = ttnn::reshape(
+            ttnn::add(
+                ttnn::reshape(output_tensor, collapsed),
+                bias_2d,
+                /*output_dtype=*/std::nullopt,
+                output_tensor.memory_config(),
+                collapsed_output),
+            output_shape);
+    } else if (post_process_bias) {
         output_tensor = ttnn::add(
             output_tensor,
             bias.value(),
@@ -360,6 +488,28 @@ static ttnn::Tensor bound_matmul(
     }
 
     return output_tensor;
+}
+
+static ttnn::Tensor broadcast_matmul(
+    const ttnn::Tensor& input_tensor_a,
+    const ttnn::Tensor& input_tensor_b,
+    const std::optional<const ttnn::Tensor>& bias,
+    ttnn::prim::MatmulParams& parameters,
+    std::optional<ttnn::Tensor>& optional_output_tensor) {
+    auto operands = detail::broadcast_batch_dims(input_tensor_a, input_tensor_b, bias, parameters);
+    if (!operands.output_shape.has_value()) {
+        return bound_matmul(operands.a, operands.b, bias, parameters, optional_output_tensor);
+    }
+    std::optional<ttnn::Tensor> folded_output;
+    if (optional_output_tensor.has_value()) {
+        folded_output = ttnn::reshape(*optional_output_tensor, *operands.folded_output_shape);
+    }
+    auto output = bound_matmul(operands.a, operands.b, bias, parameters, folded_output);
+    return ttnn::reshape(
+        output,
+        bias.has_value()
+            ? utilities::compute_matmul_with_bias_output_shape(*operands.output_shape, bias->logical_shape())
+            : *operands.output_shape);
 }
 
 Tensor matmul(
@@ -403,12 +553,8 @@ Tensor matmul(
         global_cb,
         sub_device_id};
 
-    return bound_matmul(
-        input_tensor_a,
-        input_tensor_b,
-        /*bias=*/std::nullopt,
-        matmul_params,
-        optional_output_tensor);
+    return broadcast_matmul(
+        input_tensor_a, input_tensor_b, /*bias=*/std::nullopt, matmul_params, optional_output_tensor);
 }
 
 Tensor linear(
@@ -448,7 +594,7 @@ Tensor linear(
         output_tile,
         global_cb,
         sub_device_id};
-    return bound_matmul(input_tensor_a, input_tensor_b, bias, matmul_params, optional_output_tensor);
+    return broadcast_matmul(input_tensor_a, input_tensor_b, bias, matmul_params, optional_output_tensor);
 }
 
 std::vector<Tensor> matmul_batched_weights(

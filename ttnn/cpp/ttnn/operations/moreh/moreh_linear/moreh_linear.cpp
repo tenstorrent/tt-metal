@@ -4,7 +4,9 @@
 
 #include "moreh_linear.hpp"
 
-#include "ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
+#include <mutex>
+
+#include "ttnn/operations/matmul/matmul.hpp"
 
 namespace ttnn {
 
@@ -15,7 +17,24 @@ Tensor moreh_linear(
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return ttnn::moreh_matmul(input, weight, false, true, output, bias, memory_config, compute_kernel_config);
+    static std::once_flag deprecation_warned;
+    std::call_once(deprecation_warned, [] {
+        log_warning(tt::LogOp, "ttnn.moreh_linear is deprecated; use ttnn.linear with transpose_b=True.");
+    });
+    return ttnn::linear(
+        input,
+        weight,
+        bias,
+        /*transpose_a=*/false,
+        /*transpose_b=*/true,
+        output.has_value() ? memory_config : memory_config.value_or(input.memory_config()),
+        /*dtype=*/std::nullopt,
+        /*program_config=*/std::nullopt,
+        /*activation=*/std::nullopt,
+        compute_kernel_config,
+        /*core_grid=*/std::nullopt,
+        /*output_tile=*/std::nullopt,
+        output);
 }
 
 }  // namespace ttnn

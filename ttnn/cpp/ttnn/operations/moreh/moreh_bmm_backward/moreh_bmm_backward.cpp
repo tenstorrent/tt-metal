@@ -4,7 +4,7 @@
 
 #include "moreh_bmm_backward.hpp"
 
-#include "ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
 
 namespace ttnn {
 
@@ -21,13 +21,35 @@ std::vector<std::optional<Tensor>> moreh_bmm_backward(
     std::vector<std::optional<Tensor>> outputs(2);
     if (are_required_outputs.at(0)) {
         TT_FATAL(input_grad.has_value(), "input_grad needs to have a value when input_requires_grad is True.");
-        outputs[0] = ttnn::moreh_matmul(
-            output_grad, mat2, false, true, input_grad, std::nullopt, input_grad_memory_config, compute_kernel_config);
+        outputs[0] = ttnn::matmul(
+            output_grad,
+            mat2,
+            /*transpose_a=*/false,
+            /*transpose_b=*/true,
+            input_grad_memory_config,
+            /*dtype=*/std::nullopt,
+            /*program_config=*/std::nullopt,
+            /*activation=*/std::nullopt,
+            compute_kernel_config,
+            /*core_grid=*/std::nullopt,
+            /*output_tile=*/std::nullopt,
+            input_grad);
     }
     if (are_required_outputs.at(1)) {
         TT_FATAL(mat2_grad.has_value(), "mat2_grad needs to have a value when mat2_requires_grad is True.");
-        outputs[1] = ttnn::moreh_matmul(
-            input, output_grad, true, false, mat2_grad, std::nullopt, mat2_grad_memory_config, compute_kernel_config);
+        outputs[1] = ttnn::matmul(
+            input,
+            output_grad,
+            /*transpose_a=*/true,
+            /*transpose_b=*/false,
+            mat2_grad_memory_config,
+            /*dtype=*/std::nullopt,
+            /*program_config=*/std::nullopt,
+            /*activation=*/std::nullopt,
+            compute_kernel_config,
+            /*core_grid=*/std::nullopt,
+            /*output_tile=*/std::nullopt,
+            mat2_grad);
     }
     return outputs;
 }

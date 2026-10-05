@@ -681,44 +681,15 @@ void py_module(nb::module_& mod) {
           the batched matrix-vector multiplication is performed.
         - If both input tensors are at least 2-dimensional, then a batched matrix multiply is performed.
 
-        The following are the allowed possibilities for batch dimensions.
-        Examples below show concrete operations and tensor sizes.
+        Batch dimensions broadcast as in PyTorch: they are right-aligned, missing leading dimensions are
+        treated as 1, and each pair of batch dimensions must be equal or contain a 1.
 
-        - If all batch dimensions are of size 1, then there is no batched operation.
-
-        - If both inputs have batch dimensions that are not all of size 1, then the
-          batch dimensions of both inputs should be the same. If the dimensions are
-          not the same then, although there may be combinations that may work, in most
-          cases various errors will be reported.
-
-        - If the first input has batch dimensions that are not all of size 1, and the
-          second input has no batch dimensions or has batch dimensions all of size 1,
-          then the second input is broadcasted to align appropriately with the first
-          input.
-
-        - If the first input has batch dimensions that are all of size 1 and the
-          second input has batch dimensions that are not all of size 1, the first
-          input is reused across all batches of the second input. Both inputs must
-          be rank 3 or higher with matching ranks, interleaved (L1 or DRAM), and
-          non-sharded.
-
-        - Note: In general, the number of dimensions between the two inputs should
-          match. There may be cases where they don't. In that case, if the inputs
-          are not valid based on the above criteria, the error messages may
-          be unexpected and refer to non-obvious issues.
-
-        - Note: There are various combinations of dimensions possible. The behaviour
-          is the same as PyTorch, except for two exceptions.
-          These exceptions are for the following scenarios related to batch
-          dimensions:
-
-              - The two batch dimensions are swapped. E.g. the first input has (`j` x `1`)
-                and the second input has (`1` x `j`)
-                or the first input has (`1` x `j`) and the second input has
-                (`j` x `1`)
-              - When a batch dimension is implicitly extended, the two patch dimensions are swapped.
-                E.g.  (`j` x `1`) and (`j`) which is treated as
-                (`j` x `1`) and (`1` x `j`)
+        - No data is copied when the second input's batch dimensions are all 1, when both inputs have the
+          same batch dimensions, or when the first input's batch dimensions are all 1 (interleaved,
+          non-sharded inputs without a program config or core grid).
+        - Trailing batch dimensions where only the second input is 1 are folded into the rows of the first
+          input when it is not transposed and its second-to-last dimension is tile-aligned.
+        - Any remaining broadcast expands the broadcast operand with ``ttnn.repeat`` before the matmul.
 
         - In order to leverage sharded matmul implementations we can shard both `input_tensor_a` and `input_tensor_b`. The sharding strategy used will be according
           to the sharding strategy on the respective tensor. A sharded 1D matmul can be either HEIGHT or WIDTH sharded, 2D matmuls can be BLOCK sharded.
@@ -876,7 +847,8 @@ void py_module(nb::module_& mod) {
             bias (ttnn.Tensor, optional): the bias tensor to be added. If specified, needs to be on the device. Defaults to `None`.
                 Most program configs take a row-vector bias of shape ``[1, N]`` (or ``[1, 1, 1, N]``), broadcast across the output rows.
                 The batched ``MatmulMultiCoreReuseProgramConfig`` path additionally supports a full-tile bias of shape ``[M, N]``,
-                added to the output and broadcast over the batch dimension.
+                added to the output and broadcast over the batch dimension. A bias whose last dimension is 1 (e.g. a scalar ``[1, 1]``)
+                is broadcast over N and added as a separate op.
             transpose_a (bool, optional): Whether to transpose input_tensor_a. Defaults to `False`.
             transpose_b (bool, optional): Whether to transpose input_tensor_b. Defaults to `False`.
             memory_config (ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using `ttnn.DRAM_MEMORY_CONFIG`.

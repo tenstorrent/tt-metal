@@ -4,9 +4,11 @@
 
 #include "moreh_matmul.hpp"
 
+#include <mutex>
+
+#include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/moreh/moreh_dot/moreh_dot.hpp"
-#include "ttnn/operations/moreh/moreh_matmul/device/moreh_matmul_device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_matmul {
 
@@ -36,11 +38,27 @@ Tensor moreh_matmul(
     const std::optional<const Tensor>& bias,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    static std::once_flag deprecation_warned;
+    std::call_once(deprecation_warned, [] {
+        log_warning(tt::LogOp, "ttnn.moreh_matmul is deprecated; use ttnn.matmul (or ttnn.linear with a bias).");
+    });
     if (operations::moreh::moreh_matmul::is_dot_forward(input, other, transpose_input, transpose_other)) {
         return ttnn::moreh_dot(input, other, output, input.dtype(), memory_config, compute_kernel_config);
     }
-    return ttnn::prim::moreh_matmul(
-        input, other, transpose_input, transpose_other, output, bias, memory_config, compute_kernel_config);
+    return ttnn::linear(
+        input,
+        other,
+        bias,
+        transpose_input,
+        transpose_other,
+        output.has_value() ? memory_config : memory_config.value_or(input.memory_config()),
+        /*dtype=*/std::nullopt,
+        /*program_config=*/std::nullopt,
+        /*activation=*/std::nullopt,
+        compute_kernel_config,
+        /*core_grid=*/std::nullopt,
+        /*output_tile=*/std::nullopt,
+        output);
 }
 
 }  // namespace ttnn

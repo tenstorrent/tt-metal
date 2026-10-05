@@ -34,7 +34,6 @@ file(
     moreh_layer_norm/device/kernels/*.cpp
     moreh_layer_norm_backward/device/kernels/*.cpp
     moreh_linear_backward/device/kernels/*.cpp
-    moreh_matmul/device/kernels/*.cpp
     moreh_mean/device/kernels/*.cpp
     moreh_mean_backward/device/kernels/*.cpp
     moreh_nll_loss/moreh_nll_loss_step1/device/kernels/*.cpp
@@ -146,7 +145,6 @@ target_sources(
             # moreh_matmul/
             moreh_matmul/moreh_matmul.hpp
             moreh_matmul/moreh_matmul_nanobind.hpp
-            moreh_matmul/device/moreh_matmul_device_operation.hpp
             # moreh_matmul_backward/
             moreh_matmul_backward/moreh_matmul_backward.hpp
             moreh_matmul_backward/moreh_matmul_backward_nanobind.hpp

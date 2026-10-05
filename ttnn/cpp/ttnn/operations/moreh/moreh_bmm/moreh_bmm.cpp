@@ -4,7 +4,7 @@
 
 #include "moreh_bmm.hpp"
 
-#include "ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
 
 namespace ttnn {
 
@@ -14,7 +14,19 @@ Tensor moreh_bmm(
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return ttnn::moreh_matmul(input, mat2, false, false, output, std::nullopt, memory_config, compute_kernel_config);
+    return ttnn::matmul(
+        input,
+        mat2,
+        /*transpose_a=*/false,
+        /*transpose_b=*/false,
+        output.has_value() ? memory_config : memory_config.value_or(input.memory_config()),
+        /*dtype=*/std::nullopt,
+        /*program_config=*/std::nullopt,
+        /*activation=*/std::nullopt,
+        compute_kernel_config,
+        /*core_grid=*/std::nullopt,
+        /*output_tile=*/std::nullopt,
+        output);
 }
 
 }  // namespace ttnn

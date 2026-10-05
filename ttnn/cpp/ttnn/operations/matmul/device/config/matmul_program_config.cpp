@@ -1137,6 +1137,37 @@ MatmulProgramConfig create_simple_matmul_program_config(
 
     const bool all_dram_interleaved = all_dram && all_interleaved;
 
+    // With both operands batched, 2D mcast runs the batches serially on at most an Mt x Nt grid. One batch
+    // per core wins on WH while its per-core work is within 4x of 2D mcast's.
+    const uint32_t batch_size_a = get_batch_size(a_shape_padded);
+    if (all_dram_interleaved && batch_size_a > 1 && batch_size_a == get_batch_size(b_shape_padded)) {
+        const uint64_t batch_per_core_work = uint64_t{tt::div_up(batch_size_a, num_cores_x * num_cores_y)} * Mt * Nt;
+        const uint64_t mcast_2d_work =
+            uint64_t{batch_size_a} * tt::div_up(Mt, num_cores_y) * tt::div_up(Nt, num_cores_x);
+        if (batch_per_core_work <= 4 * mcast_2d_work && can_cbs_fit_in_l1(
+                                                            input_tensor_a,
+                                                            input_tensor_b,
+                                                            transpose_a,
+                                                            transpose_b,
+                                                            bias_single_tile_size,
+                                                            Mt,
+                                                            Nt,
+                                                            /*in0_block_w=*/1,
+                                                            compute_kernel_config,
+                                                            output_dtype)) {
+            const auto [subblock_h, subblock_w] =
+                get_subblock_sizes(Mt, Nt, get_fp32_dest_acc_en(compute_kernel_config));
+            return MatmulMultiCoreReuseProgramConfig{
+                .compute_with_storage_grid_size = compute_with_storage_grid_size,
+                .in0_block_w = 1,
+                .out_subblock_h = subblock_h,
+                .out_subblock_w = subblock_w,
+                .per_core_M = Mt,
+                .per_core_N = Nt,
+            };
+        }
+    }
+
     uint32_t height = a_shape_padded[-2];
     uint32_t width = b_shape_padded[-1];
     const bool is_narrow = is_narrow_shape(height, width, all_dram);

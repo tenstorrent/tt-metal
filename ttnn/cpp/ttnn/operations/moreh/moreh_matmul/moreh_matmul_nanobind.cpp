@@ -11,13 +11,12 @@
 
 #include "moreh_matmul.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
-#include "ttnn/operations/moreh/moreh_matmul/device/moreh_matmul_device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_matmul {
 void bind_moreh_matmul_operation(nb::module_& mod) {
     ttnn::bind_function<"moreh_matmul">(
         mod,
-        "Moreh Matmul Operation",
+        "Moreh Matmul Operation. Deprecated: use ttnn.matmul, or ttnn.linear when a bias is needed.",
         &ttnn::moreh_matmul,
         nb::arg("input").noconvert(),
         nb::arg("other").noconvert(),

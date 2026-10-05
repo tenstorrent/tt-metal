@@ -310,9 +310,8 @@ def test_moreh_matmul_wo_output(params, use_randint, dtype, compute_kernel_optio
 )
 def test_moreh_matmul_enable_cache(params, device):
     torch.manual_seed(3072)
-    # Asserts an absolute cache-entry count, so start from an empty cache: the
-    # module-scoped device carries entries over from earlier tests in this file.
-    device.clear_program_cache()
+    # Iterations 0 and 1 cover both transpose options; 2 and 3 repeat them and must hit the cache.
+    num_cache_entries = None
     for i in range(4):
         # change input's transpose option
         if i % 2 == 1:
@@ -321,7 +320,9 @@ def test_moreh_matmul_enable_cache(params, device):
             params = tuple(param_list)
         passing = moreh_matmul(params, False, None, device)
         assert passing
-    assert device.num_program_cache_entries() == 2
+        if i == 1:
+            num_cache_entries = device.num_program_cache_entries()
+    assert device.num_program_cache_entries() == num_cache_entries
 
 
 @pytest.mark.parametrize(
