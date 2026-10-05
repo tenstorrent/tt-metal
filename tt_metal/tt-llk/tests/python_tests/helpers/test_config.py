@@ -23,7 +23,6 @@ import pytest
 from filelock import FileLock
 from ttexalens.tt_exalens_lib import (
     TTException,
-    load_elf,
     parse_elf,
     read_word_from_device,
 )
@@ -46,6 +45,7 @@ from .device import (
     commit_tensix_soft_reset,
     exalens_device_setup,
     handle_if_assert_hit,
+    load_elf,
     reset_mailboxes,
     set_tensix_soft_reset,
     wait_brisc_boot_ready,
@@ -206,7 +206,6 @@ class TestConfig:
     # silicon init_ttexalens and the RTL remote connect both happen after it.
     _PENDING_WORKER_INDEX: ClassVar[int | None] = None
     STIMULI_ADDRESS_MAP: ClassVar[dict[str, int]] = {}
-    SIMULATOR_TIMEOUT: ClassVar[int] = 600
 
     # When the infrastructure itself needs to be tested, some functionality like compiling the artefacts and writing them
     # to tmpfs can be skipped (eg. object, elf and coverage data files etc.). This flag is used to skip such code to enable fast execution of infra tests.
@@ -1928,9 +1927,32 @@ class TestConfig:
         ):
             raise ValueError("Quasar only supports TRISC boot mode")
 
-        brisc_cmd_timeout = (
-            TestConfig.SIMULATOR_TIMEOUT if TestConfig.TEST_TARGET.run_simulator else 1
-        )
+        if not TestConfig.TEST_TARGET.has_host_register_access:
+            # Without a host-side register bus the TRISCs can only be started from
+            # inside the Tensix, which is what BRISC boot does: the host releases
+            # BRISC, and brisc.cpp programs the TRISC reset PCs and clears their
+            # soft reset via its own reg_write. TRISC boot needs the host to
+            # deassert a single TRISC (the backdoor is whole-core only), and
+            # EXALENS boot needs the RISC debug hardware to inject instructions --
+            # neither is reachable.
+            if boot_mode != BootMode.BRISC:
+                raise ValueError(
+                    f"{TestConfig.TEST_TARGET.backend} only supports BRISC boot mode, "
+                    f"got {boot_mode.value}"
+                )
+            # Only Wormhole's device_setup() programs TRISC_RESET_PC_SEC* from the
+            # start addresses the host leaves in L1 (see tests/helpers/include/boot.h).
+            # Everywhere else the reset PC is a debug register the host writes, which
+            # here would alias into L1 and leave the TRISCs starting at their
+            # hardware defaults -- a silent wrong answer rather than a failure.
+            if TestConfig.CHIP_ARCH != ChipArchitecture.WORMHOLE:
+                raise ValueError(
+                    f"{TestConfig.TEST_TARGET.backend} is only supported on Wormhole: "
+                    f"{TestConfig.CHIP_ARCH} needs the host to program the TRISC reset "
+                    f"PC registers, which are unreachable on this target"
+                )
+
+        brisc_cmd_timeout = TestConfig.TEST_TARGET.brisc_command_timeout_s
 
         if boot_mode == BootMode.BRISC:
             if not TestConfig.BRISC_ELF_LOADED:
@@ -2073,7 +2095,7 @@ class TestConfig:
                 device_module.Mailboxes.BriscBread1,
             }
         timeout = (
-            TestConfig.SIMULATOR_TIMEOUT
+            TestConfig.TEST_TARGET.kernel_timeout_s
             if TestConfig.TEST_TARGET.run_simulator
             else timeout
         )
