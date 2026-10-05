@@ -266,6 +266,11 @@ def ring_sdpa_chunk_sizes(q_slab_tokens, sliding, num_heads=8, num_cores=110):
     if q_slab_tokens <= 512:
         q_chunk = q_slab_tokens // 4
         return (q_chunk if q_chunk % TILE_HEIGHT == 0 else TILE_HEIGHT), 256, 3, True
+    # Slabs that split into whole q128 chunks with room for 2-3 K-split bands (640 / 768 rows at chunk 5120 / 6144)
+    # run faster that way than as an unsplit q96.
+    q128_units = -(-q_slab_tokens // 128) * num_heads
+    if q_slab_tokens % 128 == 0 and 2 * q128_units <= num_cores:
+        return 128, 256, min(3, num_cores // q128_units), True
     # Segmented accumulation needs one Q chunk per core.
     for q_chunk in _GLOBAL_Q_CHUNKS:
         if -(-q_slab_tokens // q_chunk) * num_heads <= num_cores:
