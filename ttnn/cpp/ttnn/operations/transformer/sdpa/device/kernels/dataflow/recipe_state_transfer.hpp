@@ -72,3 +72,94 @@ void transfer_recipe_state(Noc& noc, const Accessor& backing) {
     request.pop_front(1);
     ack.push_back(1);
 }
+
+#ifdef SDPA_RING_STREAM_STATE
+// Streamed checkpoints (BF16 recipes only): see StateTransfer. Services one Save/Restore/RestoreStream request,
+// or a run of SaveRows requests through their SaveTail. Compute never waits for a save: a restore first flushes
+// this core's outstanding save writes out of the state banks it overwrites, and drain_resident_ring_iter's
+// end-of-iteration write barrier lands every save before the next iteration restores it.
+template <uint32_t q_tiles, uint32_t request_cb, uint32_t ack_cb, uint32_t d_tiles = 4, typename Accessor>
+void stream_recipe_state(Noc& noc, const Accessor& backing) {
+    using Transfer = sdpa::streaming::StateTransfer;
+    constexpr uint32_t page = Transfer::page_bytes;
+    constexpr uint32_t o_pages = q_tiles * d_tiles;
+    CircularBuffer request(request_cb), ack(ack_cb);
+    request.wait_front(1);
+    const auto* words = reinterpret_cast<const volatile uint32_t*>(request.get_read_ptr());
+    uint32_t op = words[Transfer::Operation];
+    if (op == Transfer::Save || op == Transfer::Restore) {
+        transfer_recipe_state<false, q_tiles, request_cb, ack_cb, d_tiles>(noc, backing);
+        return;
+    }
+    // O row r of the numerator CB: d tiles of plane 0 (plane 1 is per-chunk scratch); DRAM keeps plane 0 only.
+    const auto move_o_rows = [&](uint32_t base, uint32_t address, uint32_t row0, uint32_t rows, bool restore) {
+        for (uint32_t r = row0; r < row0 + rows; ++r) {
+            for (uint32_t c = 0; c < d_tiles; ++c) {
+                const uint32_t l1 = address + (r * 2 * d_tiles + c) * page;
+                const uint32_t page_id = base + 1 + r * d_tiles + c;
+                if (restore) {
+                    noc.async_read(backing, CoreLocalMem<uint32_t>(l1), page, {.page_id = page_id}, {});
+                } else {
+                    noc.async_write(CoreLocalMem<uint32_t>(l1), backing, page, {}, {.page_id = page_id});
+                }
+            }
+        }
+    };
+    // Maxima (plane 1) and sums (plane 2), page by page (an odd Q's maxima plane ends in a half page).
+    const auto move_tail_planes = [&](uint32_t base, bool restore) {
+        uint32_t page_id = base + 1 + o_pages;
+        for (uint32_t plane = 1; plane < 3; ++plane) {
+            const uint32_t address = CircularBuffer(words[Transfer::Numerator + plane]).get_read_ptr();
+            const uint32_t bytes = Transfer::plane_bytes<false, q_tiles, d_tiles>(plane);
+            for (uint32_t offset = 0; offset < bytes; offset += page, ++page_id) {
+                const uint32_t size = bytes - offset < page ? bytes - offset : page;
+                if (restore) {
+                    noc.async_read(backing, CoreLocalMem<uint32_t>(address + offset), size, {.page_id = page_id}, {});
+                } else {
+                    noc.async_write(CoreLocalMem<uint32_t>(address + offset), backing, size, {}, {.page_id = page_id});
+                }
+            }
+        }
+    };
+    const uint32_t base = words[Transfer::Slot] * (Transfer::pages<false, q_tiles, d_tiles> + 1);
+    const uint32_t o_address = CircularBuffer(words[Transfer::Numerator]).get_read_ptr();
+    if (op == Transfer::RestoreStream) {
+        noc.async_writes_flushed();  // the previous block's saves have left the banks this overwrites
+        ack.reserve_back(1);
+        move_tail_planes(base, true);
+        noc.async_read(
+            backing, CoreLocalMem<uint32_t>(ack.get_write_ptr()), Transfer::Words * sizeof(uint32_t), {.page_id = base}, {});
+        noc.async_read_barrier();
+        ack.push_back(1);
+        request.pop_front(1);
+        for (uint32_t r = 0; r < q_tiles; ++r) {
+            move_o_rows(base, o_address, r, 1, true);
+            noc.async_read_barrier();
+            ack.reserve_back(1);
+            ack.push_back(1);
+        }
+        return;
+    }
+    // SaveRows ... SaveTail
+    while (op == Transfer::SaveRows) {
+        move_o_rows(base, o_address, words[Transfer::Row0], words[Transfer::Rows], false);
+        request.pop_front(1);
+        request.wait_front(1);
+        words = reinterpret_cast<const volatile uint32_t*>(request.get_read_ptr());
+        op = words[Transfer::Operation];
+    }
+    // op == SaveTail
+    const uint32_t saved = words[Transfer::Row0];
+    const bool ack_flushed = words[Transfer::Rows] != 0;
+    move_o_rows(base, o_address, saved, q_tiles - saved, false);
+    move_tail_planes(base, false);
+    noc.async_write(
+        CoreLocalMem<uint32_t>(request.get_read_ptr()), backing, Transfer::Words * sizeof(uint32_t), {}, {.page_id = base});
+    noc.async_writes_flushed();  // the header leaves the request page before it is recycled
+    request.pop_front(1);
+    if (ack_flushed) {
+        ack.reserve_back(1);
+        ack.push_back(1);
+    }
+}
+#endif
