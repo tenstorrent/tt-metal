@@ -114,6 +114,80 @@ export TT_METAL_JIT_SERVER_CACHE_ROOT=/local/jit-server-cache/
 
 It shuts down cleanly on `SIGINT`/`SIGTERM`.
 
+To update an existing server running from an `llk_helper_library` checkout:
+
+```bash
+./scripts/update_llk_server.py
+# Optional build_metal.sh arguments:
+./scripts/update_llk_server.py -- --enable-ccache
+```
+
+The script first checks the remote `llk_helper_library` commit using
+`git ls-remote`. If it matches local HEAD, it exits successfully without fetching,
+building, or restarting. Changes to `tt_ops_code_gen/main` alone do not trigger
+an update. A failed remote check is reported as an error.
+
+When the parent branch changes, the script fetches and fast-forwards `origin/llk_helper_library` and the
+`tt_metal/third_party/tt_ops_code_gen` submodule to `origin/main`, then runs
+`build_metal.sh`. Only after a successful build does it stop the existing server
+and launch `build/tools/jit_compile_server`, preserving its arguments, environment,
+working directory, and log destinations. It checks that the replacement stays
+running and accepts a TCP connection on its configured endpoint.
+
+Run this as the server's user. When an update is needed, exactly one server from
+this checkout must already be running. Commit or stash tracked edits first; an updated submodule pointer is
+allowed. Diverged branches cause an error rather than a reset or merge commit.
+The submodule remains at latest main, so its pointer may appear modified in the
+parent checkout. Build failure leaves the existing process running; source updates
+are not rolled back. An unfinished-update marker in the checkout's Git directory
+causes subsequent runs to retry even if the remote branch now matches HEAD. The
+marker is removed only after a successful restart. Use
+`./scripts/update_llk_server.py --force` to rebuild after manually pulling the branch. This bypasses
+the unchanged-branch check; build options still go after `--`.
+Restart failure is reported in the terminal; startup details
+remain in the existing server log. `--clean`, `--configure-only`,
+`--build-packages`, and forwarded help options (including abbreviations) are
+rejected for this workflow.
+
+### Automatic update checks
+
+First-time server setup in `tt_ops_code_gen/skills/setup-jit-server/SKILL.md`
+installs polling after verifying the server. To install it on an existing server,
+run as the server's user from the same activated build environment:
+
+```bash
+python3 scripts/jit_server_watchdog.py install -- --enable-ccache
+python3 scripts/jit_server_watchdog.py status
+# Disable future checks without stopping the JIT server:
+python3 scripts/jit_server_watchdog.py stop
+```
+
+The installer uses a systemd **user timer** when a user manager is available,
+otherwise a detached loop. Both wait five minutes before the first check and
+between completed checks; updates never overlap. The loop survives logout but
+needs setup rerun after a container restart. User-timer persistence depends on
+the user manager and lingering. No system services or shell startup files are
+modified. Installation is idempotent; stop and reinstall to change configuration.
+
+Logs, the last check's exit status, and private build/Git environment settings
+live in the checkout's Git directory under `jit-server-watchdog/`; `status`
+prints their location. SSH runs in batch mode, so inaccessible remotes or expired
+SSH-agent credentials fail visibly in the log. Failed builds retry at the next
+interval. A failed restart is logged, but automatic crash recovery is not
+implemented: restore a running server before retrying. Updates require clean
+tracked files and fast-forward history, and successful restarts can interrupt
+active compilation requests. Stop lets an in-progress update finish.
+
+Run the updater and watchdog's Linux integration tests without updating the real checkout or
+restarting its server:
+
+```bash
+python3 -m unittest discover -s scripts/tests -p 'test_*server*.py' -v
+```
+
+These tests use temporary local Git repositories and dummy TCP servers; they do
+not compile Metal or require hardware. Shutdown and readiness timeouts use mocks.
+
 Concurrency: the server compiles on a Taskflow executor sized to
 `std::thread::hardware_concurrency()`. One server process per host is enough; it will use
 the whole box.
