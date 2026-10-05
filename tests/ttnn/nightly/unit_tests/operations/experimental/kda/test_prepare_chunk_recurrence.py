@@ -253,17 +253,23 @@ def _run(
     inputs: tuple[ttnn.Tensor, ...],
     num_heads: int,
     *,
+    num_key_heads: int | None = None,
     output_bf16_mask: int = 0,
     memory_config: ttnn.MemoryConfig | None = None,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
+    actual_start: ttnn.Tensor | None = None,
+    actual_end: ttnn.Tensor | None = None,
 ) -> list[ttnn.Tensor]:
     with ttnn.manage_config("throw_exception_on_fallback", True):
         return ttnn.experimental.kda.prepare_chunk_recurrence(
             *inputs,
             num_heads,
+            num_key_heads=num_key_heads,
             output_bf16_mask=output_bf16_mask,
             memory_config=memory_config,
             compute_kernel_config=compute_kernel_config,
+            actual_start=actual_start,
+            actual_end=actual_end,
         )
 
 
@@ -828,7 +834,8 @@ def test_prepare_chunk_recurrence_rejects_host_inputs(
         ("layout", "k must use TILE layout"),
         ("rank", "rank 3 production-flat"),
         ("leading", "leading dimension 1"),
-        ("qkg_shape", "q, k, and g must have matching shapes"),
+        ("qk_shape", "q and k must have matching shapes"),
+        ("g_shape", "g must be per V head: width num_heads times K"),
         ("sequence", "matching sequence lengths"),
         ("sequence_chunk", "sequence length must be positive and divisible by 32"),
         ("head_divisibility", "flat widths must be divisible by num_heads"),
@@ -855,7 +862,9 @@ def test_prepare_chunk_recurrence_rejects_invalid_inputs(
         inputs[1] = _to_device(host_inputs[1].reshape(1, 2, 32, 64), device, ttnn.bfloat16)
     elif case == "leading":
         inputs[0] = _to_device(host_inputs[0].expand(2, -1, -1).clone(), device, ttnn.bfloat16)
-    elif case == "qkg_shape":
+    elif case == "qk_shape":
+        inputs[1] = _to_device(host_inputs[1][:, :, :32], device, ttnn.bfloat16)
+    elif case == "g_shape":
         inputs[3] = _to_device(host_inputs[3][:, :, :32], device, ttnn.bfloat16)
     elif case == "sequence":
         inputs[2] = _to_device(host_inputs[2][:, :32], device, ttnn.bfloat16)
@@ -929,3 +938,149 @@ def test_prepare_chunk_recurrence_scratch_wrap(device: ttnn.Device, output_bf16_
     # adjacent storage, which surfaced here as a final_decay mismatch.
     assert torch.isfinite(actual).all()
     torch.testing.assert_close(actual, expected, rtol=0, atol=0.004)
+
+
+# K/V head mapping (GDN, num_key_heads < num_heads): V head hv uses K head hv // (HV / Hk), the Hugging Face
+# repeat_interleave order. The defining contract is equality with the call on q/k expanded to HV heads.
+@dataclass(frozen=True)
+class _HeadMappingCase:
+    case_id: str
+    num_key_heads: int
+    num_heads: int
+    num_chunks: int
+    key_dim: int
+    value_dim: int
+
+
+# Per-chip geometries at TP4 and 640 local rows (Qwen3.8-27B 16/48, Qwen3.6-35B-A3B 16/32, Qwen3.8-2.4T 16/128
+# key/value heads, K = V = 128), plus toy shapes that cover a single K head and a non-power-of-two group.
+_HEAD_MAPPING_CASES = (
+    _HeadMappingCase("toy-hk1-hv2", 1, 2, 4, 32, 64),
+    _HeadMappingCase("toy-hk2-hv6", 2, 6, 3, 64, 32),
+    _HeadMappingCase("27b-chip-hk4-hv12", 4, 12, 20, 128, 128),
+    _HeadMappingCase("35b-chip-hk4-hv8", 4, 8, 20, 128, 128),
+    _HeadMappingCase("2p4t-chip-hk4-hv32", 4, 32, 20, 128, 128),
+)
+
+
+def _head_mapping_host_inputs(case: _HeadMappingCase, *, seed: int) -> tuple[torch.Tensor, ...]:
+    """q, k with Hk heads; v, g, beta with HV heads (per-channel g is per V head)."""
+    q, k, *_ = _host_inputs(case.num_key_heads, case.num_chunks, case.key_dim, case.value_dim, seed=seed)
+    _, _, v, g, beta = _host_inputs(case.num_heads, case.num_chunks, case.key_dim, case.value_dim, seed=seed + 1)
+    return q, k, v, g, beta
+
+
+def _expand_key_heads(tensor: torch.Tensor, num_key_heads: int, num_heads: int) -> torch.Tensor:
+    _, sequence, width = tensor.shape
+    grouped = tensor.reshape(1, sequence, num_key_heads, width // num_key_heads)
+    return grouped.repeat_interleave(num_heads // num_key_heads, dim=2).reshape(1, sequence, -1)
+
+
+def _expanded_inputs(inputs: tuple[torch.Tensor, ...], num_key_heads: int, num_heads: int) -> tuple[torch.Tensor, ...]:
+    q, k, v, g, beta = inputs
+    return (_expand_key_heads(q, num_key_heads, num_heads), _expand_key_heads(k, num_key_heads, num_heads), v, g, beta)
+
+
+@pytest.mark.parametrize("case", _HEAD_MAPPING_CASES, ids=lambda case: case.case_id)
+def test_prepare_chunk_recurrence_head_mapping_equals_expansion(device: ttnn.Device, case: _HeadMappingCase) -> None:
+    host_inputs = _head_mapping_host_inputs(case, seed=5401)
+    options = dict(
+        output_bf16_mask=_PRODUCTION_OUTPUT_BF16_MASK,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        compute_kernel_config=_production_compute_config(device),
+    )
+    mapped = _run(_device_inputs(host_inputs, device), case.num_heads, num_key_heads=case.num_key_heads, **options)
+    expanded_inputs = _expanded_inputs(host_inputs, case.num_key_heads, case.num_heads)
+    expanded = _run(_device_inputs(expanded_inputs, device), case.num_heads, **options)
+    for name, mapped_output, expanded_output in zip(OUTPUT_NAMES, mapped, expanded, strict=True):
+        assert_bit_identical(
+            ttnn.to_torch(expanded_output), ttnn.to_torch(mapped_output), name=f"{case.case_id} {name}"
+        )
+    for tensor in (*mapped, *expanded):
+        ttnn.deallocate(tensor)
+
+
+@pytest.mark.parametrize("num_heads", [8, 12, 32], ids=lambda heads: f"hk4-hv{heads}")
+def test_prepare_chunk_recurrence_head_mapping_reference(device: ttnn.Device, num_heads: int) -> None:
+    """Mapping with chronology: nonzero actual_start and actual_end mid-sequence, against the FP64 oracle."""
+    case = _HeadMappingCase(f"hk4-hv{num_heads}", 4, num_heads, 20, 128, 128)
+    start_row, valid_chunks = 64, 13
+    host_inputs = _head_mapping_host_inputs(case, seed=5402)
+    expanded = _expanded_inputs(host_inputs, case.num_key_heads, case.num_heads)
+    valid_rows = valid_chunks * CHUNK_SIZE
+    valid_inputs = tuple(tensor[:, :valid_rows] for tensor in expanded[:4]) + (expanded[4][:, :valid_chunks],)
+    expected = _oracle(valid_inputs, case.num_heads, _PRODUCTION_OUTPUT_BF16_MASK)
+    start = make_actual_start(device, start_row)
+    end = make_actual_start(device, start_row + valid_rows)
+    outputs = _run(
+        _device_inputs(host_inputs, device),
+        case.num_heads,
+        num_key_heads=case.num_key_heads,
+        output_bf16_mask=_PRODUCTION_OUTPUT_BF16_MASK,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        compute_kernel_config=_production_compute_config(device),
+        actual_start=start,
+        actual_end=end,
+    )
+    # Chunks past actual_end are unspecified; compare the valid prefix.
+    actual = tuple(ttnn.to_torch(output)[:, :valid_chunks] for output in outputs)
+    _assert_outputs_accurate(expected, actual, context=case.case_id)
+    for tensor in (*outputs, start, end):
+        ttnn.deallocate(tensor)
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    [
+        ("zero_key_heads", "num_key_heads must be positive"),
+        ("group_divisibility", "num_heads must be divisible by num_key_heads"),
+        ("qk_shape", "q and k must have matching shapes"),
+        ("g_key_heads", "g must be per V head: width num_heads times K"),
+        ("key_alignment", "K and V must be positive and tile aligned"),
+    ],
+)
+def test_prepare_chunk_recurrence_head_mapping_rejects_invalid_inputs(
+    device: ttnn.Device, expect_error: Callable, case: str, message: str
+) -> None:
+    """Rejected before any program is built: the program cache does not grow."""
+    mapping = _HeadMappingCase("invalid", 2, 4, 2, 32, 32)
+    host_inputs = list(_head_mapping_host_inputs(mapping, seed=5403))
+    inputs = list(_device_inputs(tuple(host_inputs), device))
+    num_key_heads, num_heads = mapping.num_key_heads, mapping.num_heads
+    if case == "zero_key_heads":
+        num_key_heads = 0
+    elif case == "group_divisibility":
+        num_key_heads = 3
+        for index in (0, 1):
+            inputs[index] = _to_device(torch.randn(1, 64, 96).to(torch.bfloat16).float(), device, ttnn.bfloat16)
+    elif case == "qk_shape":
+        inputs[1] = _to_device(_expand_key_heads(host_inputs[1], 2, 4), device, ttnn.bfloat16)
+    elif case == "g_key_heads":
+        inputs[3] = _to_device(host_inputs[3][:, :, : 2 * 32], device, ttnn.bfloat16)
+    elif case == "key_alignment":
+        for index in (0, 1):
+            inputs[index] = _to_device(torch.randn(1, 64, 96).to(torch.bfloat16).float(), device, ttnn.bfloat16)
+    entries = device.num_program_cache_entries()
+    with expect_error(RuntimeError, message):
+        _run(tuple(inputs), num_heads, num_key_heads=num_key_heads)
+    assert device.num_program_cache_entries() == entries
+
+
+def test_prepare_chunk_recurrence_num_key_heads_is_program_identity(device: ttnn.Device) -> None:
+    """Calls differing only in num_key_heads build distinct programs; an omitted num_key_heads is num_heads."""
+    shared = _HeadMappingCase("cache-hk4", 4, 4, 2, 32, 32)
+    grouped = _HeadMappingCase("cache-hk2", 2, 4, 2, 32, 32)
+    shared_inputs = _device_inputs(_head_mapping_host_inputs(shared, seed=5404), device)
+    grouped_inputs = _device_inputs(_head_mapping_host_inputs(grouped, seed=5404), device)
+    implicit = _run(shared_inputs, 4)
+    entries = device.num_program_cache_entries()
+    explicit = _run(shared_inputs, 4, num_key_heads=4)
+    assert device.num_program_cache_entries() == entries
+    for name, implicit_output, explicit_output in zip(OUTPUT_NAMES, implicit, explicit, strict=True):
+        assert_bit_identical(ttnn.to_torch(implicit_output), ttnn.to_torch(explicit_output), name=name)
+    mapped = _run(grouped_inputs, 4, num_key_heads=2)
+    assert device.num_program_cache_entries() == entries + 1
+    repeated = _run(grouped_inputs, 4, num_key_heads=2)
+    assert device.num_program_cache_entries() == entries + 1
+    for tensor in (*implicit, *explicit, *mapped, *repeated):
+        ttnn.deallocate(tensor)

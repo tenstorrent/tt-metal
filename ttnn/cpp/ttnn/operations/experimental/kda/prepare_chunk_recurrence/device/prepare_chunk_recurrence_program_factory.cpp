@@ -176,7 +176,8 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
                 m2::TensorBinding{G_TENSOR, "g"},
                 m2::TensorBinding{BETA_TENSOR, "beta"},
             },
-        .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}},
+        .compile_time_args =
+            {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}, {"key_head_group", attrs.num_heads / attrs.num_key_heads}},
         .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks", "num_heads"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
