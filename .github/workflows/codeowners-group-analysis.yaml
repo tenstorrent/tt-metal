@@ -42,15 +42,16 @@ permissions:
 
 jobs:
   parse-comment:
-    # For description edits, only run when the checkbox goes from unticked to
-    # ticked, so unrelated edits (title, CI status block) never ping. Untick and
-    # tick again to re-ping.
+    # For description edits, only run when the body changed and contains a ticked
+    # box. Substring checks can't tell a real checkbox from one inside a comment
+    # or code block, so the unticked -> ticked transition is decided in the
+    # parse step. Untick and tick again to re-ping.
     if: >-
       (github.event_name == 'issue_comment' && github.event.issue.pull_request) ||
       (github.event_name == 'pull_request_target' &&
        contains(github.event.pull_request.body, '[x] Ping pending code owners') &&
        (github.event.action == 'opened' ||
-        (github.event.changes.body != null && !contains(github.event.changes.body.from, '[x] Ping pending code owners'))))
+        github.event.changes.body != null))
     runs-on: ubuntu-slim
     # Checkbox pings for the same PR are handled one at a time, so the cooldown
     # check below always sees the previous ping. Comment triggers have no
@@ -321,13 +322,23 @@ jobs:
             # accepted ping leaves a 🚀 reaction from the bot on the PR description;
             # its created_at is the time of the last ping.
             REACTIONS_API="https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/reactions"
+            # If either lookup fails (rate limit, 5xx), skip the cooldown rather
+            # than drop the ping.
             BOT_LOGIN=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
                              -H "Accept: application/vnd.github.v3+json" \
-                             "https://api.github.com/user" | jq -r '.login')
-            LAST_PING=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
-                             -H "Accept: application/vnd.github.v3+json" \
-                             "$REACTIONS_API?content=rocket&per_page=100" \
-                        | jq -c --arg bot "$BOT_LOGIN" '[.[] | select(.user.login == $bot)] | last // empty')
+                             "https://api.github.com/user" | jq -r '.login? // empty' 2>/dev/null || true)
+            LAST_PING=""
+            if [ -n "$BOT_LOGIN" ]; then
+              LAST_PING=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                               -H "Accept: application/vnd.github.v3+json" \
+                               "$REACTIONS_API?content=rocket&per_page=100" \
+                          | jq -c --arg bot "$BOT_LOGIN" \
+                               'if type == "array" then ([.[] | select(.user.login == $bot)] | last // empty) else error end' \
+                               2>/dev/null) \
+                || { echo "::warning::Could not read the cooldown marker; pinging without a cooldown check."; LAST_PING=""; }
+            else
+              echo "::warning::Could not resolve the bot login; pinging without a cooldown check."
+            fi
             if [ -n "$LAST_PING" ]; then
               LAST_PING_AGE=$(( $(date +%s) - $(date -d "$(echo "$LAST_PING" | jq -r '.created_at')" +%s) ))
               if [ "$LAST_PING_AGE" -lt "$PING_COOLDOWN_SECONDS" ]; then
