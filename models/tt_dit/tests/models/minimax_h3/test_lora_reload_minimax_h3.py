@@ -36,7 +36,7 @@ from models.common.utility_functions import comp_pcc
 
 from ....experimental.lora.h3_adapter_loader import fuse_h3_adapter_into_state_dict, load_h3_adapter_into
 from ....experimental.lora.promote import promote_to_lora
-from ....layers.linear import ColParallelLinear, Linear, RowParallelLinear
+from ....layers.linear import ColParallelLinear, Linear, LoRAColParallelLinear, LoRARowParallelLinear, RowParallelLinear
 from ....layers.lora import LoRAMixin
 from ....models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ....utils import tensor as tensor_utils
@@ -99,6 +99,7 @@ def test_promoted_class_shadows_forward_and_refuses_runtime_mode() -> None:
 
 @pytest.mark.timeout(900)
 @SMALL_LINE_PARALLEL
+@pytest.mark.parametrize("route", ["promoted", "mixin_first"])
 def test_lora_bind_survives_weight_reload(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
@@ -106,6 +107,7 @@ def test_lora_bind_survives_weight_reload(
     num_links: int,
     topology: ttnn.Topology,
     is_fsdp: bool,
+    route: str,
     tmp_path: Path,
     reset_seeds,
 ) -> None:
@@ -113,14 +115,32 @@ def test_lora_bind_survives_weight_reload(
 
     Shapes are MiniMax-H3's own (`to_qkv`-width column parallel and an FFN-width row parallel) and
     the mesh axes are the `(1, 4)` preset's, so the sharding this exercises is the served one.
+
+    Run over BOTH ways a LoRA Linear comes into existence, because they reach the lifecycle hooks by
+    different machinery and only one of them was the bug:
+      promoted     `promote_to_lora` swaps `__class__` to a BASE-first class, whose MRO shadows every
+                   method the mixin overrides; `promote` installs explicit wrappers for the three
+                   that matter. This is what MiniMax-H3 and LTX's globals use.
+      mixin_first  `LoRAColParallelLinear` / `LoRARowParallelLinear` built directly, where the mixin
+                   comes first and its own overrides win. This is what `lora_enabled` builds, i.e.
+                   Wan's runtime-LoRA pipeline and LTX's attention and FFN.
     """
     skip_if_unsupported_num_links(mesh_device, num_links)
     tp_factor = tuple(mesh_device.shape)[tp_axis]
 
-    cases = [
-        ("col_parallel", ColParallelLinear(5376, 7168, bias=False, mesh_device=mesh_device, mesh_axis=tp_axis)),
-        ("row_parallel", RowParallelLinear(14336, 5376, bias=False, mesh_device=mesh_device, mesh_axis=tp_axis)),
-    ]
+    if route == "promoted":
+        cases = [
+            ("col_parallel", ColParallelLinear(5376, 7168, bias=False, mesh_device=mesh_device, mesh_axis=tp_axis)),
+            ("row_parallel", RowParallelLinear(14336, 5376, bias=False, mesh_device=mesh_device, mesh_axis=tp_axis)),
+        ]
+    else:
+        cases = [
+            ("col_parallel", LoRAColParallelLinear(5376, 7168, bias=False, mesh_device=mesh_device, mesh_axis=tp_axis)),
+            (
+                "row_parallel",
+                LoRARowParallelLinear(14336, 5376, bias=False, mesh_device=mesh_device, mesh_axis=tp_axis),
+            ),
+        ]
     for name, layer in cases:
         in_f, out_f = layer.in_features, layer.out_features
         assert in_f % tp_factor == 0 and out_f % tp_factor == 0
@@ -140,7 +160,8 @@ def test_lora_bind_survives_weight_reload(
         cache_dir = tmp_path / f"{name}.cache"
         shutil.copytree(written, cache_dir)
 
-        promote_to_lora(layer)
+        if route == "promoted":
+            promote_to_lora(layer)
         A = (torch.randn(RANK, in_f) * 0.05).to(torch.bfloat16).float()
         B = (torch.randn(out_f, RANK) * 0.05).to(torch.bfloat16).float()
         want = w_base + _host_delta(A, B, SCALE)
@@ -150,7 +171,7 @@ def test_lora_bind_survives_weight_reload(
         logger.info(f"{name}: bind rel-err vs host delta {bound_err:.2e}")
         assert bound_err < 0.02, f"{name}: bind_active did not land the delta (rel-err {bound_err:.3g})"
 
-        for route, reload_fn in (
+        for reload_route, reload_fn in (
             ("tensorbin cache", lambda: layer.load(cache_dir)),
             ("torch state dict", lambda: layer.load_torch_state_dict({"weight": base_w})),
         ):
@@ -158,16 +179,21 @@ def test_lora_bind_survives_weight_reload(
             applied_after_unload = layer._delta_applied
             reload_fn()
             err = _rel_err(_read_weight(layer.weight), want)
-            logger.info(f"{name}: after a {route} reload, rel-err vs host delta {err:.2e}")
+            logger.info(f"{name}/{route}: after a {reload_route} reload, rel-err vs host delta {err:.2e}")
             assert err < 0.02, (
-                f"{name}: the adapter did not survive a {route} reload (rel-err {err:.3g}); the layer "
+                f"{name}/{route}: the adapter did not survive a {reload_route} reload (rel-err {err:.3g}); the layer "
                 "is serving BASE weights under the adapter's name"
             )
             # The bookkeeping behind it, named separately so a regression points straight at the cause.
             assert not applied_after_unload, (
-                f"{name}/{route}: the merged delta died with the weight, but `_delta_applied` stayed "
+                f"{name}/{route}/{reload_route}: the merged delta died with the weight, but `_delta_applied` stayed "
                 "true -- LoRAMixin.deallocate_weights is being shadowed on this class"
             )
+
+        # A cache is read back as the BASE weight, so writing one from a layer that currently
+        # carries a merged delta would make every later page-in re-apply it. Both routes refuse.
+        with pytest.raises(RuntimeError, match="refusing to save"):  # allow-pytest.raises: the guard IS the contract
+            layer.save(tmp_path / f"{name}.poisoned")
 
         layer.deallocate_lora()
         layer.deallocate_weights()

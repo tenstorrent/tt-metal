@@ -53,6 +53,7 @@ def _lifecycle_overrides(base_cls: type) -> dict:
     """Weight page-out / page-in wiring for a base-first promoted class."""
     base_deallocate = base_cls.deallocate_weights
     base_load = base_cls.load
+    base_save = base_cls.save
     base_mark_loaded = base_cls._mark_loaded  # noqa: SLF001
 
     def deallocate_weights(self) -> None:
@@ -67,7 +68,11 @@ def _lifecycle_overrides(base_cls: type) -> dict:
         base_mark_loaded(self)
         LoRAMixin._lora_on_load(self)  # noqa: SLF001
 
-    return {"deallocate_weights": deallocate_weights, "load": load, "_mark_loaded": _mark_loaded}
+    def save(self, directory, /, *, prefix: str = "") -> None:
+        LoRAMixin._lora_guard_save(self)  # noqa: SLF001
+        base_save(self, directory, prefix=prefix)
+
+    return {"deallocate_weights": deallocate_weights, "load": load, "_mark_loaded": _mark_loaded, "save": save}
 
 
 def _promoted_class(base_cls: type) -> type:

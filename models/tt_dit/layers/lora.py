@@ -300,17 +300,35 @@ class LoRAMixin:
     def _lora_on_load(self) -> None:
         """A (re)load has just restored the base weight. Put the active adapter back on it.
 
-        This assumes what every caller in the tree does: that a weight arriving from a cache or a
+        This assumes what every loader in the tree means: that a weight arriving from a cache or a
         state dict is the BASE weight. Loading an ALREADY-FUSED weight into a layer whose
-        ``_delta_applied`` is false — which is what a page-in would be if the cache had been written
-        while an adapter was bound — would merge the delta a second time. Nothing can detect that
-        from the tensor, so it is a contract on the caller: never persist a weight cache from a
-        model with an adapter bound. ``cache.load_model`` keeps it by construction (it saves
-        immediately after ``load_torch_state_dict``, before any pipeline binds), and the
-        MiniMax-H3 pipeline additionally keys its cache directory on the host-fused adapter so a
-        fused cache can never be read back as a base one.
+        ``_delta_applied`` is false would merge the delta a second time, and nothing can detect that
+        from the tensor. The only way such a cache can exist is if it was written while an adapter
+        was bound, so that is what :meth:`save` refuses — see its docstring. (The first version of
+        this comment claimed ``cache.load_model`` made it impossible "by construction". It does not:
+        its cache-miss branch loads, which now re-applies the delta, and only then saves, so a
+        pipeline that has already bound once and is paging back in on an incomplete cache would
+        persist the fused weight. The guard replaces the claim.)
         """
         self.reapply_after_load()
+
+    def save(self, directory, /, *, prefix: str = "") -> None:  # type: ignore[override]
+        """Refuse to persist a weight that currently carries a merged LoRA delta.
+
+        A weight cache is read back as a base weight — that is the contract every loader and
+        :meth:`_lora_on_load` rely on — so writing a fused one poisons every later page-in, silently
+        and on disk. Unbind before saving, or save before binding.
+        """
+        self._lora_guard_save()
+        super().save(directory, prefix=prefix)
+
+    def _lora_guard_save(self) -> None:
+        if self._delta_applied:
+            raise RuntimeError(
+                "refusing to save a weight cache from a layer with a LoRA delta merged into it: "
+                "a cache is read back as the BASE weight, so every later page-in would re-apply the "
+                "adapter on top of an already-fused weight. Unbind the adapter before saving."
+            )
 
     def deallocate_weights(self) -> None:  # type: ignore[override]
         self._lora_on_unload()
