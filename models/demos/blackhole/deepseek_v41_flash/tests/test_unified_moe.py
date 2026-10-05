@@ -82,8 +82,10 @@ def test_unified_moe(mesh_device):
     w = mw.load_moe_layer(layer)
     blk = DSV41MoEBlock(md, w, batch_per_device=32, gate_bias_shift=0.0)
     blk.warmup()
-    pm = DSV41PrefillMoE(blk, T=32, g=8)
-    pm.warmup()
+    pm = None
+    if do_base:
+        pm = DSV41PrefillMoE(blk, T=32, g=8)
+        pm.warmup()
     t0 = time.time()
     shared = get_shared(md, N)
     um = DSV41UnifiedMoE(md, layer)
@@ -244,6 +246,28 @@ def test_unified_moe(mesh_device):
             ttnn.deallocate(a)
             ttnn.deallocate(b)
 
+        def stage(k):
+            def f():
+                x_rm = ttnn.reshape(ttnn.to_layout(xd, ttnn.ROW_MAJOR_LAYOUT), [1, N, D])
+                r_ = um.forward(x_rm, sc, ix, upto=k)
+                ttnn.deallocate(x_rm)
+                for t_ in r_ if isinstance(r_, tuple) else (r_,):
+                    ttnn.deallocate(t_)
+
+            return f
+
+        if os.environ.get("DSV41_UM_STAGES") == "1":
+            prev = 0.0
+            for k, name in (
+                (1, "bincount+cumsum"),
+                (2, "+dispatch"),
+                (3, "+experts"),
+                (4, "+combine"),
+                (99, "+post_combine_reduce"),
+            ):
+                t_ = chain_ms(md, stage(k))
+                print(f"UM stage N={N} {name:24s} cumulative {t_:.3f} ms (+{t_ - prev:.3f})", flush=True)
+                prev = t_
         print(f"UM time N={N}: router {chain_ms(md, router_only):.3f} ms", flush=True)
         print(f"UM time N={N}: unified moe (no router, no RS) {chain_ms(md, moe_only):.3f} ms", flush=True)
         print(f"UM time N={N}: unified full (router+moe+RS) {chain_ms(md, full):.3f} ms", flush=True)
