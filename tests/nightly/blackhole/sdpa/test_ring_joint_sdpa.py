@@ -38,6 +38,7 @@ from ttnn.operations.transformer_golden import torch_sdpa_reference
 import ttnn
 from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
+from models.demos.gemma4_d_p.tt.attention.global_kv_cache import GLOBAL_PACKED_DIM
 from models.demos.gpt_oss_d_p.tt.attention.kv_cache import bounded_blockcyclic_positions, sliding_capacity_tokens
 
 # ============================================================================
@@ -117,6 +118,8 @@ class ModelConfig:
     scale: float = None
     topology: Topology = None
     total_seq: int = None
+    use_ring_mla: bool = False
+    matmul_math_fidelity: object = None
 
 
 def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
@@ -2215,6 +2218,7 @@ def run_ring_joint_sdpa_chunked(
                         subdevice_id=worker_sub_device_id,
                         ccl_core_grid_offset=(ccl_column, 0),
                         use_column_major_ccl=True,
+                        scale=model.scale,
                         kv_actual_isl=s if reuse_kv_buffer else None,
                     )
                     return tt_out
@@ -5840,7 +5844,9 @@ if MESH_CONFIG.is_galaxy:
             nhk=1,
             nhv=1,
             d_q=512,
-            d_k=512,
+            # Production stores [Krot128 | Vordered512] in one packed row. ring_mla
+            # reads the first 512 channels as K and the last 512 channels as V.
+            d_k=GLOBAL_PACKED_DIM,
             d_v=512,
             is_causal=True,
             q_dtype=ttnn.bfloat16,
@@ -5852,6 +5858,8 @@ if MESH_CONFIG.is_galaxy:
             scale=1.0,
             topology=Topology.Linear,
             total_seq=GEMMA4_CHUNKED_TOTAL_SEQ,
+            use_ring_mla=True,
+            matmul_math_fidelity=ttnn.MathFidelity.LoFi,
         ),
         "gemma4_swa": ModelConfig(
             name="gemma4_swa",
@@ -5888,6 +5896,11 @@ def get_chunked_perf_workload(model, mesh_config):
     if model.total_seq is None:
         return CHUNKED_PREFILL_CHUNK_SIZE, CHUNKED_PREFILL_TOTAL_SEQ
     return model.seq_len * mesh_config.sp_size, model.total_seq
+
+
+def get_matmul_peak_multiplier(model):
+    """Return matmul throughput relative to the HiFi2 perf-model baseline."""
+    return 2.0 if model.matmul_math_fidelity == ttnn.MathFidelity.LoFi else 1.0
 
 
 # ring_mla (latent-V) chunked-prefill configs are identical to the classic separate-V configs
@@ -7006,9 +7019,9 @@ def test_ring_joint_attention_minimax3_gqa_chunked_reuse_kv_hang_regression():
     ids=CHUNKED_PERF_TEST_CONFIG_IDS,
 )
 def test_ring_joint_attention_chunked_perf_impl(model_name, qk_configs, chunk_size, reuse_kv_buffer):
-    """Classic separate-K/V ring joint SDPA chunked prefill without the CPU reference (profiled by
-    test_ring_joint_attention_create_chunked_perf_table). reuse_kv: one fixed-capacity cache reused across
-    chunks; fresh_kv: a per-chunk right-sized input."""
+    """Ring joint SDPA chunked prefill without the CPU reference. use_ring_mla selects ring_mla for
+    models whose K/V share one packed tensor; reuse_kv uses one fixed-capacity cache across chunks;
+    fresh_kv uses a per-chunk right-sized input."""
     mesh_config = MESH_CONFIG
     model = CHUNKED_PERF_MODEL_CONFIGS[model_name]
     _, total_seq = get_chunked_perf_workload(model, mesh_config)
@@ -7023,6 +7036,8 @@ def test_ring_joint_attention_chunked_perf_impl(model_name, qk_configs, chunk_si
         do_check=False,
         reuse_kv_buffer=reuse_kv_buffer,
         sliding_window_size=model.sliding_window_size,
+        use_ring_mla=model.use_ring_mla,
+        matmul_math_fidelity=model.matmul_math_fidelity,
     )
 
 
@@ -7246,7 +7261,8 @@ def _run_chunked_perf_table(
     d_q, d_v = model.d_q, model.d_v
     constants = ARCH_CONSTANTS["blackhole"]
     clock_ghz = constants["clock_ghz"]
-    flops_per_cycle_per_core = constants["mm_flops_per_cycle_per_core"]
+    # ARCH_CONSTANTS uses a HiFi2 baseline; LoFi has twice the modeled matmul peak throughput.
+    flops_per_cycle_per_core = constants["mm_flops_per_cycle_per_core"] * get_matmul_peak_multiplier(model)
 
     per_chunk_rows = []
     for slot, (dur_ns, ccount) in enumerate(zip(chunk_durations, chunk_core_counts)):
@@ -7646,8 +7662,8 @@ def test_ring_joint_attention_minimax3_gqa_rotated_q_perf():
 
 GEMMA4_CHUNKED_PERF_CHECK_CONFIGS = [
     # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util, margin)
-    ("gemma4_global", 96, 256, 8, 55.4, 0.25),
-    ("gemma4_swa", 128, 128, 8, 6.3, 0.25),
+    ("gemma4_global", 96, 256, 8, 44.9, 0.25),
+    ("gemma4_swa", 128, 128, 8, 6.7, 0.25),
 ]
 
 
@@ -7695,6 +7711,8 @@ def test_ring_joint_attention_gemma4_chunked_perf_check(
                     reuse_kv_buffer=True,
                     use_compact_single_chunk_q=True,
                     sliding_window_size=model.sliding_window_size,
+                    use_ring_mla=model.use_ring_mla,
+                    matmul_math_fidelity=model.matmul_math_fidelity,
                     runtime=runtime,
                 ),
             )
@@ -7717,13 +7735,16 @@ def test_ring_joint_attention_gemma4_chunked_perf_check(
             effective_cores,
             is_causal=False,
         )
+    # The utilization helpers use the HiFi2 peak; normalize LoFi against its 2x modeled peak.
+    utilization /= get_matmul_peak_multiplier(model)
 
     lower = expected_util * (1 - margin)
     upper = expected_util * (1 + margin)
     logger.info(
         f"Gemma 4 chunked perf check {config_id}: duration={duration_ns/1e6:.3f} ms, "
         f"math_util={utilization:.2f}% (expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}]), "
-        f"profiler_records={len(perf_records)}, effective_cores={effective_cores}"
+        f"profiler_records={len(perf_records)}, effective_cores={effective_cores}, "
+        f"matmul_math_fidelity={model.matmul_math_fidelity}"
     )
     assert lower <= utilization <= upper, (
         f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
