@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from dataclasses import replace
 
 import numpy as np
@@ -12,7 +13,6 @@ import ttml
 from ttml.common.utils import build_causal_mask
 from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig, LlamaRopeScalingConfig
-
 
 # =============================================================================
 # Fixtures
@@ -45,6 +45,86 @@ def create_causal_mask(seq_len: int) -> ttml.autograd.Tensor:
     """Create a causal attention mask as a tensor using common utility."""
     mask_np = build_causal_mask(seq_len)
     return ttml.autograd.Tensor.from_numpy(mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16)
+
+
+# =============================================================================
+# LlamaConfig.from_hf
+# =============================================================================
+
+# Llama-3.2-1B-Instruct's config.json, minus fields the model has no use for.
+HF_LLAMA_3_2_1B = {
+    "architectures": ["LlamaForCausalLM"],
+    "model_type": "llama",
+    "attention_bias": False,
+    "head_dim": 64,
+    "hidden_size": 2048,
+    "intermediate_size": 8192,
+    "max_position_embeddings": 131072,
+    "mlp_bias": False,
+    "num_attention_heads": 32,
+    "num_hidden_layers": 16,
+    "num_key_value_heads": 8,
+    "rms_norm_eps": 1e-05,
+    "rope_scaling": {
+        "factor": 32.0,
+        "high_freq_factor": 4.0,
+        "low_freq_factor": 1.0,
+        "original_max_position_embeddings": 8192,
+        "rope_type": "llama3",
+    },
+    "rope_theta": 500000.0,
+    "tie_word_embeddings": True,
+    "vocab_size": 128256,
+}
+
+
+class TestLlamaConfigFromHf:
+    def test_reads_the_architecture(self):
+        config = LlamaConfig.from_hf(HF_LLAMA_3_2_1B, max_position_embeddings=2048)
+        assert (config.hidden_size, config.intermediate_size, config.num_hidden_layers) == (2048, 8192, 16)
+        assert (config.num_attention_heads, config.num_key_value_heads, config.vocab_size) == (32, 8, 128256)
+        assert config.rope_theta == 500000.0
+        assert config.rope_scaling == LlamaRopeScalingConfig(32.0, 4.0, 1.0, 8192)
+        assert config.weight_tying == WeightTyingType.Enabled
+        assert config.attention_bias is False
+
+    def test_sequence_length_is_the_callers_not_the_trained_context(self):
+        config = LlamaConfig.from_hf(HF_LLAMA_3_2_1B, max_position_embeddings=2048)
+        assert config.max_position_embeddings == 2048
+
+    def test_overrides_win(self):
+        config = LlamaConfig.from_hf(
+            HF_LLAMA_3_2_1B, max_position_embeddings=256, runner_type=RunnerType.MemoryEfficient, mlp_dropout=0.1
+        )
+        assert config.runner_type == RunnerType.MemoryEfficient
+        assert config.mlp_dropout == 0.1
+
+    def test_reads_config_json_from_a_checkpoint_directory(self, tmp_path):
+        (tmp_path / "config.json").write_text(json.dumps(HF_LLAMA_3_2_1B))
+        from_dir = LlamaConfig.from_hf(tmp_path, max_position_embeddings=256)
+        assert from_dir == LlamaConfig.from_hf(HF_LLAMA_3_2_1B, max_position_embeddings=256)
+
+    def test_key_value_heads_default_to_the_attention_heads(self):
+        hf = {k: v for k, v in HF_LLAMA_3_2_1B.items() if k != "num_key_value_heads"}
+        assert LlamaConfig.from_hf(hf, max_position_embeddings=256).num_key_value_heads == 32
+
+    def test_no_rope_scaling_means_none(self):
+        hf = {k: v for k, v in HF_LLAMA_3_2_1B.items() if k != "rope_scaling"}
+        assert LlamaConfig.from_hf(hf, max_position_embeddings=256).rope_scaling == LlamaRopeScalingConfig()
+
+    @pytest.mark.parametrize(
+        "patch,message",
+        [
+            ({"model_type": "qwen3"}, "not a Llama checkpoint"),
+            ({"mlp_bias": True}, "mlp_bias"),
+            ({"head_dim": 128}, "head_dim"),
+            ({"rope_scaling": {"rope_type": "yarn", "factor": 4.0}}, "rope_scaling type 'yarn'"),
+        ],
+        ids=["model_type", "mlp_bias", "head_dim", "rope_type"],
+    )
+    def test_rejects_what_the_model_cannot_express(self, patch, message, expect_error):
+        with expect_error(ValueError, message):
+            LlamaConfig.from_hf({**HF_LLAMA_3_2_1B, **patch}, max_position_embeddings=256)
 
 
 # =============================================================================
