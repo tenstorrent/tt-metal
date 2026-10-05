@@ -398,12 +398,12 @@
   budget_type: demo
   sp_config: sc1
 
-
+# test weka path
 - name: "(Kimi-K2.7-1T) DFlash drafter accuracy"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
-    export DFLASH_HF_MODEL=/mnt/models/blaze/closed_do_not_share/Kimi-K2.7-Code-DFlash
+    export DFLASH_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K2.7-Code-DFlash
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
@@ -693,12 +693,12 @@
   sp_config: sc1
 
 # ===== GLM-5.3-744B ====================================================================================
-
+# test weka path
 - name: "(GLM-5.2-744B) sparse MLA accuracy + determinism, incl. chunked 5k@1k"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
-    export GLM52_MLA_REF_CACHE=/mnt/models/deepseek-prefill-cache/glm_5_2_mla_ref_cache
+    export GLM52_MLA_REF_CACHE=/mnt/weka/model-cache/scratch/deepseek-ai/deepseek-prefill-cache/glm_5_2_mla_ref_cache
     export DS_SPARSE_FABRIC=fabric2d
     # Still GLM-5.2, not GLM-5.3: this compares against a cached MLACPU reference and only GLM-5.2 has a
     # populated one. Same architecture and random weights, so it covers the GLM-5.3 sparse path too.
@@ -1296,6 +1296,7 @@
 #       regression is attributed on its own line. Asserts KV only, gated to layers 0..10 (the
 #       per-layer decoder readback cannot live inside a capture), and is the only section exercising
 #       ChunkMetadata.llama4_scale.
+# test weka path
 - name: "(Mistral-Small-4-119B) MLA, MLA chunked, block, MoE, transformer + chunked padded accuracy"
   cmd: |
     fail=0
@@ -1320,8 +1321,8 @@
     section_start 1 "Mistral-Small-4-119B MLA accuracy 5k, 25k + llama4 query scale"
     rc=0
     (
-      export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
-      export MISTRAL4_MLA_REF_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/mla_ref
+      export MISTRAL4_HF_MODEL=/mnt/weka/model-weights/llm/mistralai/Mistral-Small-4-119B-2603
+      export MISTRAL4_MLA_REF_CACHE=/mnt/weka/model-cache/scratch/mistralai/Mistral-Small-4-Cache/mla_ref
 
       timeout -k 2m 20m mpirun --bind-to none --pernode --tag-output bash -lc '
         rc=0
@@ -1340,8 +1341,8 @@
     (
       export TT_MESH_GRAPH_DESC_PATH=/home/user/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
       export PREFILL_TORUS_XY_CERTIFIED=1
-      export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
-      export MISTRAL4_MLA_REF_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/mla_ref
+      export MISTRAL4_HF_MODEL=/mnt/weka/model-weights/llm/mistralai/Mistral-Small-4-119B-2603
+      export MISTRAL4_MLA_REF_CACHE=/mnt/weka/model-cache/scratch/mistralai/Mistral-Small-4-Cache/mla_ref
 
       timeout -k 2m 44m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
@@ -1353,8 +1354,8 @@
     section_start 3 "Mistral-Small-4-119B prefill block accuracy 5k"
     rc=0
     (
-      export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
-      export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI
+      export MISTRAL4_HF_MODEL=/mnt/weka/model-weights/llm/mistralai/Mistral-Small-4-119B-2603
+      export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/mistralai/Mistral-Small-4-Cache/CI
 
       timeout -k 2m 40m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
@@ -1376,9 +1377,9 @@
     section_start 5 "Mistral-Small-4-119B prefill transformer accuracy 5k"
     rc=0
     (
-      export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
-      export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI
-      export TT_MISTRAL4_PREFILL_HOST_REF_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/host_ref
+      export MISTRAL4_HF_MODEL=/mnt/weka/model-weights/llm/mistralai/Mistral-Small-4-119B-2603
+      export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/mistralai/Mistral-Small-4-Cache/CI
+      export TT_MISTRAL4_PREFILL_HOST_REF_CACHE=/mnt/weka/model-cache/scratch/mistralai/Mistral-Small-4-Cache/host_ref
 
       timeout -k 2m 28m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
@@ -1394,8 +1395,8 @@
       export PREFILL_TORUS_XY_CERTIFIED=1
       export MESH_DEVICE=TG
       export LOGURU_LEVEL=INFO
-      export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
-      export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI
+      export MISTRAL4_HF_MODEL=/mnt/weka/model-weights/llm/mistralai/Mistral-Small-4-119B-2603
+      export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/mistralai/Mistral-Small-4-Cache/CI
 
       timeout -k 2m 52m mpirun --bind-to none --pernode --tag-output bash -lc '
         set -e
@@ -1412,8 +1413,8 @@
       export PREFILL_TORUS_XY_CERTIFIED=1
       export MESH_DEVICE=TG
       export LOGURU_LEVEL=INFO
-      export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
-      export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI
+      export MISTRAL4_HF_MODEL=/mnt/weka/model-weights/llm/mistralai/Mistral-Small-4-119B-2603
+      export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/mistralai/Mistral-Small-4-Cache/CI
 
       timeout -k 2m 20m mpirun --bind-to none --pernode --tag-output bash -lc '
         set -e
