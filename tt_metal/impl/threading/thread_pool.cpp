@@ -421,8 +421,7 @@ private:
         }
     }
 
-    // Wakes the participant at `node` if the caller has not already claimed all of its calls, and otherwise
-    // wakes its children in its place.
+    // Wakes `node`, or its children in its place if the caller already claimed all of its calls.
     void wake_subtree(size_t node) noexcept {
         for (size_t call = 0; call < executor_of_call_.size(); call++) {
             if (executor_of_call_[call] == participants_[node] &&
