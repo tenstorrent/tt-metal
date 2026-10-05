@@ -108,16 +108,20 @@ Both `ROW_MAJOR` and `COL_MAJOR` shard orientations are accepted.
 
 - Unstable indices are a valid per-row permutation: gathering the input by
   the returned indices reproduces the sorted values, and no index repeats or
-  leaves the logical range. Known exception: on the MultiCore DRAM factory,
-  wide `float32` descending sorts can still emit padding indices past the
-  logical row (issue #53326). The CrossCore factory runs the
+  leaves the logical range. The CrossCore factory runs the
   index-aware comparator for **both** stabilities (issue #54043: the raw
   positional tie decision was not consistent between the two cores sharing a
   spanning tile pair, so ties could duplicate indices) — its unstable output
   is therefore exactly the torch-stable permutation. The single-core and
-  MultiCore-DRAM factories decide ties within one instruction stream and
-  never had the hazard.
-- One observable side effect on the CrossCore path: `float32` values are
+  MultiCore-DRAM factories decide ties within one instruction stream, so they
+  cannot duplicate indices. Padding is a separate hazard (issue #53326): when
+  the input contains the padding sentinel (±inf, or 0/65535 for uint16), real
+  values tie with the padding. MultiCore-DRAM runs the index-aware comparator
+  whenever the sort dimension was padded, so padding indices never reach the
+  logical row. Known exception: the single-core factory (padded width <= 2048)
+  can still emit padding indices past the logical row for such inputs.
+- One observable side effect wherever that comparator runs with `stable=False`
+  (CrossCore, and padded MultiCore-DRAM): `float32` values are
   canonicalized `-0.0` → `+0.0` on entry (the comparator's 32-bit-DEST tie
   sweep, previously applied only under `stable=True`). Numerically equal;
   bit-exact consumers of signed zeros (`copysign`, `1/x`) see `+0.0`.
