@@ -10,18 +10,7 @@ import re
 from pathlib import Path
 
 import ttnn
-from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
-
-
-def moe_fabric_payload(model_config):
-    """The payload clamp for a mesh running TtMoe, or None to keep the fabric's own maximum.
-
-    TtMoe overlaps the routed expert with combine wherever that op exists, which is Blackhole, and
-    combine_fabric2d puts a whole bf16 token plus its routing tail in one packet -- larger than the
-    per-model clamp allows.
-    """
-    return None if is_blackhole() else model_config.FABRIC_PAYLOAD_SIZE
 
 
 def fabric2d_device_params(*, fabric_payload_size=None, **overrides) -> dict:
