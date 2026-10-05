@@ -43,6 +43,7 @@
 #include "chunk_gdn_handoff_dm.hpp"
 #include "chunk_gdn_fused_map.hpp"
 #include "api/debug/assert.h"
+#include "api/debug/ring_buffer.h"
 #include "api/debug/waypoint.h"
 #include "chunk_gdn_handoff.hpp"
 
@@ -305,10 +306,25 @@ void kernel_main() {
             // C1: the word counts one chunk at a time (I1); more than NV credits is a protocol bug that would
             // otherwise hang here silently.
             uint32_t seen;
+#ifdef GDN_HANDOFF_CHECKS
+            // C9: a credit that never comes reports (chunk, slot, value seen) instead of hanging.
+            uint32_t polls = 0;
+#endif
             do {
                 seen = gdn_handoff::read_word(credit_word);
                 ASSERT(seen <= NV);
+#ifdef GDN_HANDOFF_CHECKS
+                if (seen != NV && ++polls > gdn_handoff::kHandoffSpinLimit) {
+                    WATCHER_RING_BUFFER_PUSH(
+                        gdn_handoff::handoff_trace_word(gdn_handoff::kTxCreditTimeout, c, slot, seen));
+                    ASSERT(false);
+                    polls = 0;
+                }
+#endif
             } while (seen != NV);
+#ifdef GDN_HANDOFF_CHECKS
+            WATCHER_RING_BUFFER_PUSH(gdn_handoff::handoff_trace_word(gdn_handoff::kTxCreditSeen, c, slot, seen));
+#endif
 #else
             gdn_handoff::wait_word(credit_word, NV);
 #endif
@@ -373,6 +389,7 @@ void kernel_main() {
         }
         WAYPOINT("TXVL");
 #ifdef GDN_HANDOFF_CHECKS
+        WATCHER_RING_BUFFER_PUSH(gdn_handoff::handoff_trace_word(gdn_handoff::kTxBarrierDone, c, slot, 0));
         // C7: the flag carries the chunk's sequence value c + 1 instead of VALID; the receiver waits for exactly
         // that value, so a flag of the wrong chunk or a stale one can never pass (I2, I6). The barrier above acked
         // the previous remote set sourced from this local word, so rewriting it here is safe (I7).
@@ -382,6 +399,9 @@ void kernel_main() {
             DeviceZoneScopedN("tx_valid");
             set_valid(slot);
         }
+#ifdef GDN_HANDOFF_CHECKS
+        WATCHER_RING_BUFFER_PUSH(gdn_handoff::handoff_trace_word(gdn_handoff::kTxValidSent, c, slot, c + 1));
+#endif
 
         // Free the slots for compute's next chunk only now (the writes have completed).
         CircularBuffer(cb_vbeta).pop_front(cv);
