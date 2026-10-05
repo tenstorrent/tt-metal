@@ -143,16 +143,14 @@ Do not run two servers at the same time.
 
 ### Optional serving features (Laguna-S-2.1)
 
-Each feature is switched on with environment variables in front of the same start command. The features
-marked experimental also need `LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES=1`. `serve_vllm.sh config` with the same
-variables prints the resulting settings without opening the cards.
+Add the variables in front of the start command. Experimental ones also need `LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES=1`.
 
-| Feature | Variables | What it does | Measured on p150x4 | Limits |
-|---|---|---|---|---|
-| DFlash speculative decoding (experimental) | `TT_LAGUNA_DFLASH=1` | A 6-layer draft model ([`poolside/Laguna-S-2.1-DFlash`](https://huggingface.co/poolside/Laguna-S-2.1-DFlash)) guesses 15 tokens; Laguna checks all 16 in one pass and keeps the matching ones | 1.4-2.6x normal decode on random prompts of 128 to 128K tokens; 13.9-63 tok/s on real prompts (code fastest, free prose slowest) | One request at a time, greedy (temperature 0) requests only. Text can differ from normal decode where the top two tokens are nearly tied |
-| N-gram speculative decoding (experimental) | `TT_LAGUNA_SPEC_DECODE=1` | Guesses the next tokens by repeating earlier text, then checks them in one pass | 17.5-28.4 tok/s (normal decode: 18.5) | One request at a time, greedy |
-| Prefix caching (experimental) | `TT_LAGUNA_PREFIX_CACHE=1` | Reuses the computed context of a repeated prompt prefix, in 8,192-token steps | 95,604-token prompt sent again: TTFT 203 s -> 26 s | One request at a time |
-| More concurrent requests | `LAGUNA_MAX_NUM_SEQS=N` (hybrid KV, up to 32) or `TT_LAGUNA_HYBRID_KV=0` (up to 8, 131,072 tokens) | Serves N requests together; the 1M-token context pool is shared by all of them | 32 short requests at once: identical text to sending them one at a time, 169 tok/s total | With hybrid KV and more than one sequence, prompts long enough to fill an 8,192-token prefill step together can stop the server in this commit; uniform KV with up to 8 requests is the qualified multi-request setup |
+| Feature | Variables | Limits |
+|---|---|---|
+| DFlash speculative decoding (experimental) | `TT_LAGUNA_DFLASH=1` | 1 request at a time, greedy only |
+| N-gram speculative decoding (experimental) | `TT_LAGUNA_SPEC_DECODE=1` | 1 request at a time, greedy only |
+| Prefix caching (experimental) | `TT_LAGUNA_PREFIX_CACHE=1` | 1 request at a time |
+| Concurrent requests | `TT_LAGUNA_HYBRID_KV=0 LAGUNA_MAX_NUM_SEQS=8` | up to 8 requests, 131,072-token context |
 
 ### Wait for startup
 
@@ -176,25 +174,19 @@ weights for the device (about 20 minutes, cached under `~/.cache/ttnn/laguna_s_2
 
 ### Laguna-S-2.1 on p150x4/P300x2
 
-Measured 2026-10-03 with `demo/perf_demo.py`'s method: default server (hybrid KV, 1,048,576-token context),
-one random-token prompt per input length, 512 greedy output tokens, one request at a time.
+Measured 2026-10-03 with `demo/perf_demo.py` (default server, batch 1, 512 output tokens, one random prompt per length).
 
-| Input tokens requested | Input tokens received | TTFT, normal | Decode tok/s, normal | TTFT, DFlash | Decode tok/s, DFlash | DFlash speedup |
-|---:|---:|---:|---:|---:|---:|---:|
-| 128 | 82 | 0.23 s | 18.3 | 0.36 s | 28.1 | 1.5x |
-| 1,024 | 1,066 | 2.40 s | 18.1 | 2.54 s | 40.7 | 2.2x |
-| 2,048 | 1,939 | 2.81 s | 18.0 | 2.95 s | 25.3 | 1.4x |
-| 4,096 | 4,138 | 9.45 s | 18.0 | 9.61 s | 45.9 | 2.6x |
-| 8,192 | 8,234 | 19.9 s | 18.0 | 20.0 s | 31.1 | 1.7x |
-| 16,384 | 16,426 | 33.5 s | 17.9 | 33.7 s | 30.2 | 1.7x |
-| 32,768 | 32,810 | 64.8 s | 17.7 | 65.0 s | 36.8 | 2.1x |
-| 65,536 | 65,578 | 142 s | 17.3 | 142 s | 41.0 | 2.4x |
-| 131,072 | 131,114 | 355 s | 16.6 | 356 s | 22.5 | 1.4x |
-
-Normal decode loses speed slowly with context because the 12 full-attention layers read more stored tokens
-per step. DFlash's speedup changes from prompt to prompt because it depends on how many of the draft
-model's 15 guesses match; each length here is one prompt. Earlier measurements and the full bring-up record
-are in `doc/vllm_integration/laguna_s_p150x4_qualification_20261001.md`.
+| Input tokens | TTFT, normal | Decode tok/s, normal | TTFT, DFlash | Decode tok/s, DFlash | DFlash speedup |
+|---:|---:|---:|---:|---:|---:|
+| 128 | 0.23 s | 18.3 | 0.36 s | 28.1 | 1.5x |
+| 1,024 | 2.40 s | 18.1 | 2.54 s | 40.7 | 2.2x |
+| 2,048 | 2.81 s | 18.0 | 2.95 s | 25.3 | 1.4x |
+| 4,096 | 9.45 s | 18.0 | 9.61 s | 45.9 | 2.6x |
+| 8,192 | 19.9 s | 18.0 | 20.0 s | 31.1 | 1.7x |
+| 16,384 | 33.5 s | 17.9 | 33.7 s | 30.2 | 1.7x |
+| 32,768 | 64.8 s | 17.7 | 65.0 s | 36.8 | 2.1x |
+| 65,536 | 142 s | 17.3 | 142 s | 41.0 | 2.4x |
+| 131,072 | 355 s | 16.6 | 356 s | 22.5 | 1.4x |
 
 ### Laguna-XS-2.1 on p150x2/P300
 
@@ -213,79 +205,44 @@ so the table shows cold requests.
 | 65,536 | 512 | 1 | 18.95 | 2.79 | 156.630 s | 183.595 s |
 | 130,048 | 512 | 1 | 18.15 | 1.25 | 380.812 s | 408.967 s |
 
-### Measure performance on your machine
+### Run the perf demo
 
-`demo/perf_demo.py` measures time to first token (TTFT) and decode speed over a range of input lengths, with and
-without DFlash speculative decoding. For each mode it starts the server with `serve_vllm.sh`, sends random-token
-prompts one at a time (batch 1, greedy, 512 output tokens), stops the server, and prints a table. Start it with no
-server running:
+With no server running, from the repository root:
 
 ```bash
-cd /path/to/tt-metal
-python models/demos/laguna/demo/perf_demo.py --quick   # 128 .. 8,192 input tokens, both modes (about 20 minutes)
-python models/demos/laguna/demo/perf_demo.py           # 128 .. 131,072 input tokens, both modes (about 40 minutes)
+python models/demos/laguna/demo/perf_demo.py --quick   # 128 .. 8K input tokens, normal + DFlash, ~20 min
+python models/demos/laguna/demo/perf_demo.py           # 128 .. 128K input tokens, normal + DFlash, ~40 min
 ```
 
-| Column | Meaning |
-|---|---|
-| Input tokens (requested) | Random-prompt length asked for (128, then 1K .. 128K, as in tt-metal's `simple_text_demo.py`) |
-| Input tokens (actual) | Prompt length the server received. vLLM's random prompts are random token ids decoded to text and re-tokenized with the chat template, so they differ from the request, most at short lengths (128 requested gave 82-170) |
-| TTFT s | Seconds from sending a request to its first output token (the prefill time at batch 1) |
-| decode tok/s | Output tokens per second after the first token, per user |
-| DFlash speedup | DFlash decode tok/s divided by normal decode tok/s at the same input length |
-
-Each input length uses one random prompt by default, like the `seqlen-sweep` case of tt-metal's
-`simple_text_demo.py`; most of the full run's time is the 64K and 128K prefills. DFlash speed depends on how many
-draft tokens the model accepts, so it changes from prompt to prompt much more than normal decode does: for a
-steadier DFlash number pass `--prompts 3` (the table then shows the mean, with the minimum and maximum over the
-prompts in parentheses; three prompts triple the run time). Other options: `--modes normal` or `--modes dflash`,
-`--input-lens 128,4096`, `--output-tokens N`, and `--use-running-server` to measure a server you started yourself
-(one mode).
-The table, a JSON file with every request, and the server logs are saved under
-`generated/laguna_perf_demo/<UTC time>/`.
+It starts and stops the server itself and prints the table above. Results are saved under
+`generated/laguna_perf_demo/<UTC time>/`. Options: `--modes normal|dflash`, `--input-lens 128,4096`,
+`--prompts N` (average N random prompts per length; DFlash varies from prompt to prompt), `--output-tokens N`.
 
 ## Accuracy (Laguna-S-2.1, p150x4)
 
-The reference is the original Hugging Face model run in fp32 on the CPU, one layer at a time
-(`tests/gen_streamed_reference.py`), over an AIME24 math prompt (235 tokens) plus a fixed 100-token answer.
-At each of the 100 answer positions Laguna on the chips predicts the next token, and its prediction is
-compared with the reference:
+Compared with the original model in fp32 over an AIME24 prompt plus a fixed 100-token answer:
 
 | Check | top-1 | top-5 | top-100 |
 |---|---:|---:|---:|
-| Prefill (`tests/full_model_checks.py prefill_autoreg`) | 0.97 | 1.00 | 1.00 |
-| Teacher-forced decode, traced (`tests/full_model_checks.py teacher`) | 0.98 | 1.00 | 1.00 |
-| Decode, scored on the reference's logits (`tests/optimizer/test_optimizer_pcc.py`) | 0.99 | 1.00 | - |
-| DFlash's 16-token verify pass, same positions | 0.98 | 1.00 | - |
+| Prefill | 0.97 | 1.00 | 1.00 |
+| Teacher-forced decode | 0.98 | 1.00 | 1.00 |
 
-top-1 is the fraction of positions where Laguna's highest-scoring token equals the reference's; top-5 and
-top-100 are the fractions where the reference's token is among Laguna's 5 or 100 highest. The pass bars are
-0.90 / 0.98 / 1.00. Each decoder layer alone matches the reference with PCC >= 0.995
-(`tests/test_multichip_decoder.py`, layers 0, 1 and 4). Over all 100,352 vocabulary scores the full model's
-logits correlate with the reference at a mean PCC of 0.97: the routed experts are stored as 4-bit `bfloat4_b`
-(the only precision at which the 117.6B parameters fit the QuietBox 2's memory) and attention, the LM head
-and the KV cache as 8-bit `bfloat8_b`, so the scores carry rounding error while the chosen tokens agree.
+Pass bars: top-1 >= 0.90, top-5 >= 0.98, top-100 = 1.00.
 
-## Test the model
+### Run the accuracy test
 
-Run hardware tests with no server running. They use all four ASICs. From the repository root:
+With no server running, from the repository root:
 
 ```bash
-export REPO="$PWD" MODEL_DIR="$PWD/models/demos/laguna"
-export P4="LAGUNA_PROFILE=p150x4 TT_VISIBLE_DEVICES=0,1,2,3 LAGUNA_FABRIC_CONFIG=FABRIC_1D_RING TT_LAGUNA_CCL_TOPOLOGY=ring TT_LAGUNA_CCL_NUM_LINKS=2 TT_LAGUNA_DECODE_SDPA_PC=1"
-cd /tmp   # the tests run outside the source tree, with PYTHONPATH pointing at it ($REPO)
+REPO=$PWD MODEL_DIR=$PWD/models/demos/laguna
+cd /tmp && env -u TT_METAL_HOME PYTHONPATH=$REPO \
+  LAGUNA_PROFILE=p150x4 TT_VISIBLE_DEVICES=0,1,2,3 LAGUNA_FABRIC_CONFIG=FABRIC_1D_RING \
+  TT_LAGUNA_CCL_TOPOLOGY=ring TT_LAGUNA_CCL_NUM_LINKS=2 TT_LAGUNA_DECODE_SDPA_PC=1 \
+  $MODEL_DIR/.venv/bin/python $MODEL_DIR/tests/full_model_checks.py teacher --profile p150x4 --enforce-memory-margin
 ```
 
-| What | Command | Time | Expected |
-|---|---|---|---|
-| Unit tests (CPU only, no cards) | `PYTHONPATH=$REPO:$MODEL_DIR/vllm_ext $MODEL_DIR/.venv/bin/python -m pytest -q $MODEL_DIR/tests/test_dflash_serving.py $MODEL_DIR/tests/test_dflash_tt.py $MODEL_DIR/tests/test_serve_vllm_config.py $MODEL_DIR/tests/test_generator_vllm_lifecycle.py $MODEL_DIR/tests/test_prefill_runtime.py $MODEL_DIR/tests/test_hybrid_kv_grouping.py $MODEL_DIR/tests/test_host_sampling.py $MODEL_DIR/vllm_ext/tests` | ~2 min | all pass |
-| Decoder layers vs Hugging Face | `env -u TT_METAL_HOME $P4 PYTHONPATH=$REPO $MODEL_DIR/.venv/bin/python -m pytest -q $MODEL_DIR/tests/test_multichip_decoder.py` | not timed | PCC >= 0.995 |
-| Full model, teacher-forced decode | `env -u TT_METAL_HOME $P4 PYTHONPATH=$REPO $MODEL_DIR/.venv/bin/python $MODEL_DIR/tests/full_model_checks.py teacher --profile p150x4 --enforce-memory-margin` | ~2 min | top-1 >= 0.90, top-5 >= 0.98, top-100 = 1.00; also prints TTFT and decode tok/s |
-| Full model, prefill + free-running generation | `env -u TT_METAL_HOME $P4 PYTHONPATH=$REPO $MODEL_DIR/.venv/bin/python $MODEL_DIR/tests/full_model_checks.py prefill_autoreg --profile p150x4 --max-seq-len 131072 --enforce-memory-margin --outdir /tmp/laguna-full-model` | not timed | same bars; the generated text is written to the output directory |
-| Serving performance | `python $REPO/models/demos/laguna/demo/perf_demo.py --quick` (see "Measure performance on your machine") | ~20 min | the performance table above |
-
-Times are with the weights already converted for the device. The first run of a hardware test converts
-them (about 20 minutes, cached under `~/.cache/ttnn/laguna_s_2_1`).
+It prints top-1, top-5 and top-100 (plus TTFT and decode tok/s), ~2 min once the weights are converted.
+Replace `teacher` with `prefill_autoreg --max-seq-len 131072 --outdir /tmp/laguna-full-model` for the prefill check.
 
 ## Verify and use the model
 
