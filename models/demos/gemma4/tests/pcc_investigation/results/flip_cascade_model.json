@@ -1,0 +1,26 @@
+{
+ "gemma-4-26B-A4B-it": {
+  "smooth_retention_per_layer": 1.106,
+  "flip_loop_per_layer": 0.153,
+  "predicted": 1.259,
+  "observed": 1.299,
+  "layers": 30,
+  "final_drift_pct": 9.12
+ },
+ "OLMoE-1B-7B-0924": {
+  "smooth_retention_per_layer": 0.934,
+  "flip_loop_per_layer": 0.177,
+  "predicted": 1.111,
+  "observed": 1.145,
+  "layers": 16,
+  "final_drift_pct": 1.31
+ },
+ "Qwen3-30B-A3B": {
+  "smooth_retention_per_layer": 0.969,
+  "flip_loop_per_layer": 0.108,
+  "predicted": 1.077,
+  "observed": 1.066,
+  "layers": 48,
+  "final_drift_pct": 2.02
+ }
+}
