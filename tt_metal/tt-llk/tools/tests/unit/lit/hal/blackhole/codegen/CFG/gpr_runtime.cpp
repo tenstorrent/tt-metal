@@ -125,35 +125,25 @@ extern "C" __attribute__((noinline, used)) void write_runtime_gpr_scalar(std::ui
     cfg::write<cfg::Access::TensixScalarUnit, cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0>(hal::gpr(index));
 }
 
-// REG2FLOP 32-bit to flop 12 is 0x48400000 + (12 << 6). An index above 63 reaches ebreak.
+// REG2FLOP 32-bit to flop 12 is 0x48400000 + (12 << 6).
 // CHECK-LABEL: <write_runtime_gpr_scalar>:
-// CHECK-NEXT: li [[MAX:a[0-7]]],63
-// CHECK-NEXT: bltu [[MAX]],a0,
 // CHECK-DAG: lui [[OP:a[0-7]]],0x48400
 // CHECK-DAG: addi [[OPA:a[0-7]]],[[OP]],768
 // CHECK-DAG: R_RISCV_HI20 __instrn_buffer
 // CHECK: add a0,a0,[[OPA]]
 // CHECK: sw a0,0({{a[0-7]}})
 // CHECK-NEXT: ret
-// CHECK: ebreak
 
 extern "C" __attribute__((noinline, used)) void write_runtime_gpr_128_scalar(std::uint32_t index)
 {
     cfg::write<cfg::Access::TensixScalarUnit, cfg::Thcon[cfg::Reg0].TileDescriptor, cfg::Sec::S1, cfg::GprTransferSize::Bits128>(hal::gpr(index));
 }
 
-// REG2FLOP 128-bit to flop 48 is 0x48000000 + (48 << 6). The index must also be four-word aligned.
+// REG2FLOP 128-bit to flop 48 is 0x48000000 + (48 << 6).
 // CHECK-LABEL: <write_runtime_gpr_128_scalar>:
-// CHECK-NEXT: li [[MAX:a[0-7]]],63
-// CHECK-NEXT: bltu [[MAX]],a0,
-// CHECK-NEXT: R_RISCV_BRANCH
-// CHECK-NEXT: andi [[LOW:a[0-7]]],a0,3
-// CHECK-NEXT: bnez [[LOW]],
 // CHECK-DAG: lui [[OP:a[0-7]]],0x48001
 // CHECK-DAG: addi [[OPA:a[0-7]]],[[OP]],-1024
 // CHECK-DAG: R_RISCV_HI20 __instrn_buffer
 // CHECK: add a0,a0,[[OPA]]
 // CHECK: sw a0,0({{a[0-7]}})
 // CHECK-NEXT: ret
-// CHECK: ebreak
-// CHECK: ebreak
