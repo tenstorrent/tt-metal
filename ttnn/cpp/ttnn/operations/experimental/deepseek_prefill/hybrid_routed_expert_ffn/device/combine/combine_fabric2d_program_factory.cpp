@@ -210,7 +210,9 @@ struct RingSemaphores {
     bool has_untilizers() const { return untilizers_per_group != 0; }
     // The `ready` count the collector publishes to every combine core. Same id on every one, like the rest.
     uint32_t ready() const { return has_untilizers() ? unt_freed(num_links) : 2; }
-    uint32_t num_program_semaphores() const { return ready() + 1; }
+    // The collector's per-chunk release of a unified-pass expert, set on every untilizer.
+    uint32_t progress() const { return ready() + 1; }
+    uint32_t num_program_semaphores() const { return ready() + 2; }
 
     uint32_t lowest_address() const { return static_cast<uint32_t>(fwd_arrived.address()); }
 };
@@ -536,6 +538,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             };
             cmbf2d::UntilizerRtArgManager(dram).setup_rt_args(kernel, groups[g][j].logical);
             add_combine_defines(kernel);
+            kernel.defines.emplace_back("CMBF2D_PROGRESS_SEM", std::to_string(sems.progress()));
             desc.kernels.push_back(std::move(kernel));
 
             tt::tt_metal::KernelDescriptor untilize;
@@ -582,6 +585,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/"
             "collector_combine_fabric2d.cpp";
         kernel.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+        kernel.defines.emplace_back("CMBF2D_PROGRESS_SEM", std::to_string(sems.progress()));
         kernel.core_ranges = CoreRangeSet(CoreRange(collector.logical));
         kernel.compile_time_args = {
             args.routed_expert_writers,
