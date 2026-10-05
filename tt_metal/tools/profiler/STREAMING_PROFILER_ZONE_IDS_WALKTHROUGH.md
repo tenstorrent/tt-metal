@@ -250,9 +250,24 @@ compiles three point markers into them (`_Event`, `_Data`, `_Iter`); the compute
 
 ## 10. Load: the instructions are rewritten
 
-The loader moves the section from `0x06800000` to `42`, so every handle's address shifts by the same amount and
-`0x06800005` becomes `47`. It visits the two `.text` relocations from step 7 and splits the new value the same way
-the linker did in step 5:
+**Where 47 comes from.** The loader moves `.tt_zone_ids` from where the linker put it, `0x06800000`, to this
+image's block start from step 9, `42`. Every handle keeps its offset inside the section, so the handle at offset 5
+(the sixth zone, `T1_Zone5`) lands at `42 + 5 = 47`.
+
+Each relocation from step 7 names the *symbol* `__tt_zone_0_6`, not a number. For every one of them the loader
+computes the new value the same way (`RebaseZoneIds` in `llrt/tt_elffile.cpp`):
+
+```
+value = symbol's link address + (new base − old base)
+      = 0x06800005           + (42 − 0x06800000)
+      = 5 + 42
+      = 47
+```
+
+`0x06800005` comes from the ELF's symbol table (step 4), `42` from step 9. Because all three relocations name the
+same symbol, all three get the same 47; this step writes it into the two instructions, step 11 into the record.
+
+The two `.text` relocations split 47 the same way the linker split `0x06800005` in step 5:
 
 | instruction | carries | for `47` (`0x0000002f`) |
 |---|---|---|
@@ -279,14 +294,33 @@ loader can write any 16-bit id.
 
 ## 11. Load: the record is rewritten
 
-The third relocation from step 7 points at the record's id field, `0x06700050`. It gets the same value, 47
-(`0x0000002f`, stored as the bytes `2f 00 00 00`):
+The third relocation from step 7 is the `R_RISCV_32` at `0x06700050`. Keep the two numbers apart:
+
+- **`0x06700050` is *where*:** the address of the record's id field inside `.tt_zone_meta` (step 6). The
+  loader uses it only to find which 4 bytes to overwrite; it does not change.
+- **`0x06800005` → `47` is *what*:** the value in that field. It is computed exactly as in step 10, from the same
+  symbol, so it comes out as the same 47. `R_RISCV_32` means the whole 32-bit word is replaced
+  (`0x0000002f`, stored as the bytes `2f 00 00 00`):
 
 ```
 0x06700050:  05008006 …   →   2f000000 …
 ```
 
-The name, file and line fields are not touched.
+Nothing moves by `0x06700000`: the only section that moves is `.tt_zone_ids`. The name and file fields point into
+`.tt_zone_str`, which stays where it is, so `0x066000a9` and `0x06600009` are still right; the line is a plain
+number. One word of the record's four changes.
+
+**After steps 10 and 11, the same 47 is in three places:**
+
+| section | what holds 47 | who uses it |
+|---|---|---|
+| `.tt_zone_ids` | the handle's address: the section now starts at 42, and this is byte 5 | the loader (it is where the 47 came from) |
+| `.text` | the `lui`/`addi` pair, which together produce 47 | the device, which puts it in the marker (step 13) |
+| `.tt_zone_meta` | the record's id field | the host, which maps 47 to `"T1_Zone5"` (step 12) |
+
+The device and the host never consult each other; they agree because both were filled in from the same symbol.
+The record is also the fifth-from-zero in `.tt_zone_meta`, matching offset 5, but only because the records were
+emitted in the same order as the handles; the host relies on the id field, not on the position.
 
 ## 12. Load: the name is registered
 
@@ -301,22 +335,48 @@ This happens before the image's bytes are copied to the device, so the name exis
 
 ## 13. Run: the device packs the marker
 
-When the zone closes, the kernel builds the first word of the zone's packet from the id in `s4`. That word has a
-5-bit packet type on top (bits 31:27) and the id below it (bits 26:0):
+**Where the device's 47 comes from.** The two instructions rewritten in step 10 run when the zone closes. They are
+ordinary instructions that load a constant into register `s4`:
 
 ```
-7c84:  slli s4, s4, 5          s4 = 47 << 5      ┐ shift left then right by 5:
-7c88:  lui  a4, 0x18000        a4 = 0x18000000   │ clears the top 5 bits, keeps the low 27
-7c8c:  srli s4, s4, 5          s4 = 47           ┘
-7c90:  or   s4, s4, a4         s4 = 0x1800002F
+7c34:  lui  s4, 0x0         s4 = 0
+7c38:  addi s4, s4, 47      s4 = 0 + 47 = 47
+```
+
+That is the whole lookup: the device does not read any table, it just executes the number the loader wrote into
+its code. `s4` now holds the zone id, 47.
+
+**Building the marker word.** The first word of a zone packet holds two things side by side: a packet type in the
+top 5 bits and the zone id in the bottom 27 bits. The source line that builds it is `ppfmt::w0` in
+`kernel_profiler_streaming.hpp`:
+
+```cpp
+word0 = (type << 27) | (id & 0x7FFFFFF);      // 0x7FFFFFF = the low 27 bits set
+```
+
+For this zone, `type` is 3 (`ZONE_S`, the 2-word zone packet) and `id` is 47:
+
+```
+type << 27        = 3 << 27   = 0x18000000
+id & 0x7FFFFFF    = 47        = 0x0000002F     (47 is far below 2^27, so the mask changes nothing)
+word0 = OR of the two         = 0x1800002F
+```
+
+The compiler turns that line into these instructions:
+
+```
+7c84:  slli s4, s4, 5          ┐ id & 0x7FFFFFF: shifting left by 5 and back right by 5 pushes the top 5 bits
+7c8c:  srli s4, s4, 5          ┘ out and brings zeros in, leaving the low 27 bits. s4 = 47.
+7c88:  lui  a4, 0x18000        a4 = 0x18000 << 12 = 0x18000000 = 3 << 27   (the type, already in position)
+7c90:  or   s4, s4, a4         s4 = 0x18000000 | 47 = 0x1800002F
 7ca4:  sw   s4, -2048(a1)      store word0 into this RISC's ring buffer
 ```
 
-- **`0x18000`**: `lui` loads its immediate into the upper 20 bits, so `a4 = 0x18000 << 12 = 0x18000000`, which is
-  `3 << 27`: packet type 3 in bits 31:27. Type 3 is `ZONE_S`, the 2-word zone packet (`T_ZONE_S` in
-  `kernel_profiler_streaming.hpp`). A zone too long for it ships type 2 (`ZONE_ATOMIC`), giving `0x1000002F`; the
-  id part is the same.
-- **`0x1800002F`** = `0x18000000 | 47`: type 3 on top, id 47 (`0x2f`) at the bottom.
+> The `5` in `slli`/`srli` is the **width of the type field** (32 − 27 = 5 bits). It has nothing to do with our
+> zone being at offset 5; that is a coincidence of this example.
+
+word0 = **`0x1800002F`**: type 3 in the top 5 bits, id 47 (`0x2f`) in the bottom 27. A zone too long for the
+2-word packet ships type 2 (`ZONE_ATOMIC`) instead, giving `0x1000002F`; the id part is the same.
 
 ## 14. Decode: the host names it
 
