@@ -11,10 +11,10 @@ produces a non-degenerate gradient update.
 
 Speed strategy:
   * Tiny random-init Llama (1 layer, hidden=64, head_dim=32).
-  * Skip the HuggingFace weight download: ``snapshot_download`` is patched to
-    return a directory holding only the tiny model's ``config.json``, and
-    ``load_from_safetensors`` to do nothing, in ``grpo.utils.llama_completer``
-    and ``ttml.trainers.grpo_trainer.grpo_ttml_model``, so the model keeps its random init.
+  * Skip the HuggingFace weight download: ``snapshot_download`` (in ``grpo.utils.llama_completer``) and
+    ``_download_hf_repo`` (in ``ttml.trainers.grpo_trainer.grpo_ttml_model``) are patched to return a
+    directory holding only the tiny model's ``config.json``, and ``load_from_safetensors`` to do nothing,
+    so the model keeps its random init.
   * ``max_completion_length=4`` so autoregressive generation is cheap.
   * Exactly one optimizer step (``gradient_accumulation_steps=1``,
     ``num_iterations=1``, ``prompts_to_train=2``). On this single device
@@ -206,14 +206,17 @@ def _patch_tiny_checkpoint(monkeypatch, checkpoint_dir, **config_overrides) -> N
     """Point the completer and ``grpo_ttml_model`` at *checkpoint_dir*, holding only the tiny model's
     ``config.json``, and skip the weight load so the model keeps its random init.
 
-    Both modules bind the names with ``from ... import``, so they must be patched on the modules, not on
-    ``huggingface_hub`` / ``ttml.models.llama``.
+    On ``grpo_ttml_model`` the download patch goes on ``_download_hf_repo``, which wraps
+    ``huggingface_hub.snapshot_download``; that one is left alone because transformers also uses it to fetch
+    the tokenizer this test loads. ``load_from_safetensors`` is bound with ``from ... import``, so it is
+    patched on each module, not on ``ttml.models.llama``.
     """
     from grpo.utils import llama_completer
 
     (checkpoint_dir / "config.json").write_text(json.dumps({**TINY_HF_CONFIG, **config_overrides}))
+    monkeypatch.setattr(llama_completer, "snapshot_download", lambda *args, **kwargs: str(checkpoint_dir))
+    monkeypatch.setattr(grpo_ttml_model, "_download_hf_repo", lambda model_source: str(checkpoint_dir))
     for module in (llama_completer, grpo_ttml_model):
-        monkeypatch.setattr(module, "snapshot_download", lambda *args, **kwargs: str(checkpoint_dir))
         monkeypatch.setattr(module, "load_from_safetensors", lambda *args, **kwargs: None)
 
 
