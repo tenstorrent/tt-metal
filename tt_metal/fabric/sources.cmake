@@ -54,6 +54,7 @@ set(FABRIC_SOURCES
     graph/physical_graph_lowering.cpp
     graph/graph_fabric_build_session.cpp
     graph/graph_fabric_builder.cpp
+    debug/visualizer/manifest/fabric_manifest.cpp
     channel_trimming_export.cpp
     channel_trimming_import.cpp
     channel_trimming_io.cpp
