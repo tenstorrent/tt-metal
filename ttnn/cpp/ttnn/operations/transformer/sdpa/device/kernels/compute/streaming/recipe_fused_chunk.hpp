@@ -61,7 +61,16 @@ template <
 static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     AccumulatorHalf& prev, AccumulatorHalf& cur, bool is_last_iter, bool release_q) {
     constexpr uint32_t KT = Sk_chunk_t;
-    constexpr uint32_t H = 2;
+    // Rows per group. Dense STANDARD (math-bound) runs a short Q chunk in one-row groups, so the lagged QK / check /
+    // PV pipeline has enough groups to overlap (1 core Q128: 1.93 -> 2.03 TF). LOW_PRECISION is pack-bound and keeps
+    // two-row groups (one-row groups double its per-group pack work), and so do the ring kernels (H3 4x8 ring
+    // block: one-row groups were 1-4% slower).
+#if defined(SDPA_RECIPE_LOFI) || defined(SDPA_RECIPE_RING)
+    constexpr uint32_t kH1MaxQTiles = 0;
+#else
+    constexpr uint32_t kH1MaxQTiles = 6;
+#endif
+    constexpr uint32_t H = Sq_chunk_t <= kH1MaxQTiles ? 1 : 2;
     constexpr uint32_t sbw = qkt_subblock_w;
     constexpr uint32_t n_kb = Sk_chunk_t / sbw;
     static_assert(Sk_chunk_t % sbw == 0 && vDHt % qktv_subblock_w == 0 && DHt == vDHt);
@@ -153,13 +162,36 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     }
     }
 
+    // QK matmul setup is kept across back-to-back subblocks of the same height (the m step's replay ends
+    // with the counter reset, so it leaves nothing behind), and in STANDARD so is the P pack setup (format,
+    // row width, ReLU; LOW_PRECISION's exp ring builds have no room for it); every other step calls leave_qk.
+    uint32_t qk_setup_h = 0;
+#ifdef SDPA_RECIPE_LOFI
+    // A plain statement: lambda calls from the -Os cold steps cost code, and LOW_PRECISION's exp ring builds sit
+    // at the kernel config buffer limit.
+#define SDPA_FUSED_LEAVE_QK() (qk_setup_h = 0)
+#else
+    bool qk_pack_on = false;
+    // Out of line: it is called from every other step.
+    auto leave_qk = [&]() __attribute__((noinline)) {
+        qk_setup_h = 0;
+        if (qk_pack_on) {
+            PACK((llk_pack_relu_config(ReluConfig::none())));
+            qk_pack_on = false;
+        }
+    };
+#define SDPA_FUSED_LEAVE_QK() leave_qk()
+#endif
     // QK subblock (g, kb): DEST = -m_ref + Q K^T, exp in place, P and its row sums packed.
     auto qk_subblock = [&](uint32_t g, uint32_t kb) {
         const uint32_t h = rows(g);
         const uint32_t row0 = H * g;
         const uint32_t col0 = kb * sbw;
-        set_srca(cb_kt_in);
-        recipe_mm_reinit(cb_q_in, cb_kt_in, true, sbw, h, DHt);
+        if (qk_setup_h != h) {
+            set_srca(cb_kt_in);
+            recipe_mm_reinit(cb_q_in, cb_kt_in, true, sbw, h, DHt);
+            qk_setup_h = h;
+        }
         tile_regs_acquire();
         uint32_t in0_index = row0 * DHt;
         uint32_t in1_index = col0;
@@ -172,15 +204,25 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         // fidelity phase (m_ref has 7 significant bits for srcB, -1 has one for srcA), so a HiFi build replays
         // its image once here, and only its inner 0-15 half (the rest multiplies zeros).
         UNPACK((llk_unpack_AB_matmul(prev.max, neg_unit_cb, row0, 0, sbw, h, 1)));
-        MATH((llk_math_matmul_no_mop<MATH_FIDELITY, MM_THROTTLE, 1, true>(prev.max, neg_unit_cb, 0, sbw, h)));
+#ifdef SDPA_RECIPE_LOFI
+        // A LoFi image has no halves; this keeps LOW_PRECISION's matmul instantiations (and code size) as they were.
+        constexpr bool m_inner_half = false;
+#else
+        constexpr bool m_inner_half = true;
+#endif
+        MATH((llk_math_matmul_no_mop<MATH_FIDELITY, MM_THROTTLE, 1, m_inner_half>(prev.max, neg_unit_cb, 0, sbw, h)));
         tile_regs_commit();
         tile_regs_wait();
 #if defined(SDPA_RECIPE_K_PRIMARY_ROWS) || defined(SDPA_RECIPE_RING)
 #ifdef SDPA_RECIPE_RING
         if (recipe_k_valid_rows < recipe_k_chunk_rows)
 #endif
+        {
             mask_recipe_tail(col0, sbw, h);
+            qk_setup_h = 0;
+        }
 #endif
+#ifdef SDPA_RECIPE_LOFI
         PACK((llk_pack_relu_config(ReluConfig::zero())));
         for (uint32_t t = 0; t < h * sbw; ++t) {
             exp_packthread_tile<true, false, InputClamping::None, 32>(t, VectorMode::None);
@@ -193,6 +235,29 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         pack_contiguous_rows_nocfg(psum_cb, row0, h, sbw, 0, sbw);
         PACK((llk_pack_reconfig_l1_acc(0)));
         PACK((llk_pack_relu_config(ReluConfig::none())));
+#else
+        if (!qk_pack_on) {
+            PACK((llk_pack_relu_config(ReluConfig::zero())));
+        }
+        for (uint32_t t = 0; t < h * sbw; ++t) {
+            exp_packthread_tile<true, false, InputClamping::None, 32>(t, VectorMode::None);
+        }
+        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+        if (!qk_pack_on) {
+            set_pack(cb_qkt_im);
+            configure_row_pack_width(cb_qkt_im, sbw);
+            PACK((llk_pack_reconfig_l1_acc(0)));
+            qk_pack_on = true;
+        }
+        pack_contiguous_rows_nocfg(cb_qkt_im, row0, h, KT, col0, sbw);
+        if (kb > 0) {
+            PACK((llk_pack_reconfig_l1_acc(1)));
+        }
+        pack_contiguous_rows_nocfg(psum_cb, row0, h, sbw, 0, sbw);
+        if (kb > 0) {
+            PACK((llk_pack_reconfig_l1_acc(0)));
+        }
+#endif
         tile_regs_release();
     };
 
@@ -211,6 +276,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     constexpr uint32_t CG = 2;
 #endif
     auto check_groups = [&](uint32_t g0, uint32_t n) {
+        SDPA_FUSED_LEAVE_QK();
         const uint32_t last = g0 + n - 1;
         const uint32_t row_end = H * last + rows(last);
         CircularBuffer(cb_qkt_im).wait_front(row_end * KT);  // the groups' sums were packed before their push
@@ -264,6 +330,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     // group's chunk PV, written by the first piece).
     bool v_ready = false;
     auto pv_piece = [&](uint32_t g, uint32_t k0, uint32_t k_len, uint32_t plane, bool accumulate) {
+        SDPA_FUSED_LEAVE_QK();
         const uint32_t h = rows(g);
         const uint32_t row0 = H * g;
         if (!v_ready) {
@@ -296,6 +363,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
 
     // l += this chunk's sums for an unchanged group.
     auto fold_sums = [&](uint32_t g) {
+        SDPA_FUSED_LEAVE_QK();
         const uint32_t h = rows(g);
         static_assert(H * qkt_subblock_w <= 8 || true);
         set_srca(psum_cb);
@@ -320,6 +388,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
 
     // Publish group g's O and l rows; the last chunk normalizes them.
     auto finish_group = [&](uint32_t g) {
+        SDPA_FUSED_LEAVE_QK();
         const uint32_t h = rows(g);
         CircularBuffer(cur.sum).push_back(h);
         CircularBuffer(out_cb).push_back(h * vDHt * sdpa_out_stride);
@@ -335,6 +404,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     // Redo group g on the reduce path (rare): scores, the real max with the theta select, P and sums,
     // its PV into plane 1, then O = O * c + PV and l = l * c + l_chunk row by row.
     auto redo_group = [&](uint32_t g) SDPA_RECIPE_COLD {
+        SDPA_FUSED_LEAVE_QK();
         const uint32_t h = rows(g);
         const uint32_t row0 = H * g;
         const uint32_t gi = gindex(g);
@@ -516,6 +586,9 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
             finish_group(pg);
         }
     }
+#ifndef SDPA_RECIPE_LOFI
+    leave_qk();
+#endif
     if (late_fold) {
         // cur.sum has wrapped back to this chunk's first row (one push per row); fold unchanged groups in place.
         set_srca(psum_cb);
@@ -563,4 +636,5 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     set_srca(cb_qkt_im);
     set_pack(cb_qkt_im);
 }
+#undef SDPA_FUSED_LEAVE_QK
 #endif
