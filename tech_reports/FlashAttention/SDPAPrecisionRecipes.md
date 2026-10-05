@@ -137,10 +137,10 @@ pass-outer and ring-inner.
 - For LOW_PRECISION, prepare K/V before they are communicated.
 - Ring's third output is internal scratch, not an LSE.
 - With several Q chunks per core, each chunk's state (FP32 O and l, maxima) is checkpointed to the third output
-  around every Q chunk on every ring step. For STANDARD this is streamed: the last K chunk hands finished O row
-  groups to the writer, a restore acks maxima and sums first and then each O row as it lands, and compute waits
-  only for the rows it is about to accumulate onto. LOW_PRECISION checkpoints synchronously (its ring kernels
-  have no room for the streaming code).
+  around every Q chunk on every ring step. With fused chunks (STANDARD, LOW_PRECISION) this is streamed: the last
+  K chunk hands finished O row groups to the writer, a restore acks maxima and sums first and then each O row as
+  it lands, and compute waits only for the rows it is about to accumulate onto. On a BH Galaxy this takes
+  LOW_PRECISION BFP8 Wan 2.2 720p attention from 19.32 to 18.80 ms (480p 5.87 to 5.74 ms), bit-identical.
 
 ## LOW_PRECISION inputs
 
@@ -180,10 +180,12 @@ Compile-time defines set by the host:
 | `SDPA_RECIPE_MASK` | an attn_mask | additive mask on the reduce path |
 | `SDPA_RECIPE_QK_W`, `SDPA_RECIPE_PV_W` | all | matmul subblock widths |
 | `SDPA_RECIPE_RING` (in the ring kernels) | ring, exp ring | key-tail masking, resident state |
-| `SDPA_RING_STREAM_STATE` | ring STANDARD with fused chunks | streamed multi-Q checkpoints |
+| `SDPA_RING_STREAM_STATE` | ring STANDARD and LOW_PRECISION with fused chunks | streamed multi-Q checkpoints |
 
 **Code size.** Each program must fit the 70656 B kernel config buffer, and the ring and exp ring LOW_PRECISION
 kernels sit within a few hundred bytes of it. The reduce path (`SDPA_RECIPE_COLD`), normalization and the ring
 unpack copy of the fused chunk are size-optimized and out of line; the ring kernels build unpack/pack at -O2
-with fused chunks. New code in these paths should be checked against the ring/exp ring LOW_PRECISION BFP8
-tests (Q224 two-pass, Wan Q320).
+with fused chunks. LOW_PRECISION's ring kernels use a single no-MOP matmul init (every reinit re-records), and
+the streaming writer has one copy of the transfer loops. New code in these paths should be checked against the ring/exp ring LOW_PRECISION BFP8
+tests (Q224 two-pass, Wan Q320), and then on a Galaxy model: Galaxy programs are 0.7-1.5 KB larger than the
+1x2 test programs (multi-link reader/writer, joint text), so a 1x2 pass does not guarantee a fit.
