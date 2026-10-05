@@ -8,9 +8,15 @@ from pathlib import Path
 import pytest
 import torch
 
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_flash_config import glm_5_3_flash_kda_config
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState, kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
-from models.demos.deepseek_v3_d_p.tests.kda.head_slice import kda_head_slice_config, slice_kda_heads
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
+from models.demos.deepseek_v3_d_p.tests.kda.head_slice import (
+    galaxy_chip_head_slice_config,
+    kda_head_slice_config,
+    slice_kda_heads,
+)
 from models.demos.deepseek_v3_d_p.tests.kda.utils import make_kimi_k3_test_case, random_weights
 from models.demos.deepseek_v3_d_p.tt.kda.weights import _prepare_kda_host_weights
 
@@ -169,6 +175,24 @@ def test_slice_rejects_invalid_head_ranges(expect_error) -> None:
 def test_slice_config_changes_only_heads() -> None:
     config = _config(use_full_rank_gate=True, gate_lower_bound=-5.0)
     assert kda_head_slice_config(config, 2) == replace(config, num_heads=2)
+
+
+@pytest.mark.parametrize(
+    "build, chip_heads",
+    [
+        pytest.param(kimi_k3_kda_config, 24, id="kimi_k3"),
+        pytest.param(glm_5_3_flash_kda_config, 16, id="glm_5_3_flash"),
+    ],
+)
+def test_lb_b_chip_config_is_galaxy_tp4_share(build, chip_heads: int) -> None:
+    """LB-B per-chip configs built from the real config.json: K3 96 -> 24 heads, GLM 64 -> 16 heads."""
+    config = build()
+    assert galaxy_chip_head_slice_config(config) == replace(config, num_heads=chip_heads)
+
+
+def test_lb_b_chip_config_rejects_indivisible_heads(expect_error) -> None:
+    with expect_error(ValueError, "not divisible"):
+        galaxy_chip_head_slice_config(replace(_config(), num_heads=6))
 
 
 def test_kimi_k3_layer_slice_is_tp_rank_partial(kimi_k3_checkpoint_dir: Path) -> None:

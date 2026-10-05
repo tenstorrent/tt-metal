@@ -14,7 +14,7 @@ import torch
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState, kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config, kimi_k3_model_config
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import (
     KIMI_K3_FIRST_KDA_LAYER,
     KIMI_K3_HF_REVISION,
@@ -250,24 +250,11 @@ def check_kimi_k3_accuracy(
     return pcc
 
 
-def _kda_config_from_kimi_k3_constants() -> KDAConfig:
-    return KDAConfig(
-        hidden_size=KimiK3Config.EMB_SIZE,
-        num_heads=KimiK3Config.KDA_NUM_HEADS,
-        head_k_dim=KimiK3Config.KDA_HEAD_DIM,
-        head_v_dim=KimiK3Config.KDA_HEAD_DIM,
-        conv_kernel_size=KimiK3Config.KDA_SHORT_CONV_KERNEL_SIZE,
-        norm_eps=KimiK3Config.RMS_NORM_EPS,
-        use_full_rank_gate=KimiK3Config.KDA_USE_FULL_RANK_GATE,
-        gate_lower_bound=KimiK3Config.KDA_GATE_LOWER_BOUND,
-    )
-
-
 def make_kimi_k3_test_case(checkpoint_dir: Path, *, sequence: int) -> KimiK3TestCase:
     """Load the pinned Kimi-K3 layer and deterministic input used by correctness and perf."""
-    config = _kda_config_from_kimi_k3_constants()
+    config = kimi_k3_kda_config()
     downloaded_config = json.loads((checkpoint_dir / "config.json").read_text(encoding="utf-8"))
-    assert KDAConfig.from_model_config(downloaded_config) == config
+    assert downloaded_config == kimi_k3_model_config(), "checkpoint config.json differs from the pinned in-tree copy"
     state_dict = load_kda_layer_state_dict(checkpoint_dir, KIMI_K3_FIRST_KDA_LAYER, config)
     checkpoint_identity = kda_state_dict_sha256(state_dict)
     assert checkpoint_identity == KIMI_K3_LAYER_1_SHA256, (
@@ -291,7 +278,7 @@ def make_kimi_k3_test_case(checkpoint_dir: Path, *, sequence: int) -> KimiK3Test
 
 def make_synthetic_kimi_k3_test_case(*, sequence: int) -> KimiK3TestCase:
     """Build deterministic production-dimension Kimi-K3 inputs without a checkpoint."""
-    config = _kda_config_from_kimi_k3_constants()
+    config = kimi_k3_kda_config()
     state_dict = random_weights(config)
     hidden = torch.randn(
         1,
