@@ -1015,6 +1015,18 @@ class TtSpeechTokenizerDecoder(LightweightModule):
         self._cache_by_bucket = {}
         self._cache = {}  # points at the active bucket's cache during forward
 
+        # When set, every decode pads to this single length, so exactly one conv
+        # cache (one weight-prepare, one kernel compile) ever exists. A decode
+        # longer than this raises rather than silently allocating a new bucket.
+        self.max_decode_bucket = None
+
+        # Once frozen, a bucket cache miss raises instead of preparing conv
+        # weights. A first-use ttnn.conv1d weight-prepare issued after the
+        # talker's 2CQ traced decode deadlocks the device (NOC hang) and cannot
+        # be interrupted or recovered without a power cycle, so on the serving
+        # path a miss must fail the request loudly instead of touching the chip.
+        self.cache_frozen = False
+
         # Audio samples produced per codec frame = product of all upsample factors
         # (upsampler convnext ratios + conv-decoder transposed-conv rates).
         spf = 1
@@ -1474,6 +1486,15 @@ class TtSpeechTokenizerDecoder(LightweightModule):
         audio_tt = ttnn.clamp(hidden_states_tt, -1.0, 1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return ttnn.permute(audio_tt, (0, 3, 2, 1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
+    def freeze_cache(self) -> None:
+        """Forbid new decode buckets from here on (call after warmup, before serving).
+
+        Preparing conv weights for a not-yet-seen length is only safe before the
+        talker's traced decode has run; afterwards it hangs the device. Freezing
+        turns that unrecoverable hang into a normal exception on the request.
+        """
+        self.cache_frozen = True
+
     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
         """
         Forward pass: codec tokens -> audio waveform.
@@ -1501,6 +1522,24 @@ class TtSpeechTokenizerDecoder(LightweightModule):
             self.decode_bucket_step,
             ((real_seq_len + self.decode_bucket_step - 1) // self.decode_bucket_step) * self.decode_bucket_step,
         )
+        if self.max_decode_bucket is not None:
+            if bucket > self.max_decode_bucket:
+                raise ValueError(
+                    f"decode of {real_seq_len} frames needs bucket {bucket}, above the "
+                    f"configured max_decode_bucket={self.max_decode_bucket}. Raise the max "
+                    f"bucket at build time (and re-warm) or shorten the reference/output."
+                )
+            # Single bucket for every decode: one cache, one compile, and no new
+            # bucket can ever be allocated by a live request.
+            bucket = self.max_decode_bucket
+        if self.cache_frozen and bucket not in self._cache_by_bucket:
+            raise RuntimeError(
+                f"speech decoder cache is frozen and has no entry for bucket {bucket} "
+                f"({real_seq_len} frames); warmed buckets are "
+                f"{sorted(self._cache_by_bucket)}. Refusing to prepare conv weights now: "
+                f"a first-use conv weight-prepare after the talker's traced decode hangs "
+                f"the device. Warm this bucket before serving."
+            )
         if bucket != real_seq_len:
             pad = torch.zeros(
                 batch_size, num_quantizers, bucket - real_seq_len, dtype=token_ids.dtype, device=token_ids.device

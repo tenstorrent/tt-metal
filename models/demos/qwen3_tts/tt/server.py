@@ -2806,17 +2806,63 @@ def decode_icl_audio(
         )
 
 
-def build_device_decoder(device, decoder_weights: dict):
+def build_device_decoder(device, decoder_weights: dict, max_decode_bucket: int = None):
     """Build the on-device TTNN speech-tokenizer decoder once (reuse per request).
 
     The returned object caches all conv ops / uploaded weights per decode bucket on
     first use, so subsequent decodes skip host->device weight re-upload. Build this
     at server startup (after the talker context) and pass it to
     ``decode_audio_device`` for every request.
+
+    ``max_decode_bucket`` pins every decode to that one bucket length, so only one
+    conv cache is ever built and a live request cannot allocate a new one. Serving
+    callers should use ``prepare_device_decoder`` instead of calling this directly.
     """
     from models.demos.qwen3_tts.tt.speech_tokenizer import TtSpeechTokenizerDecoder
 
-    return TtSpeechTokenizerDecoder(device, decoder_weights, use_reference=False)
+    decoder = TtSpeechTokenizerDecoder(device, decoder_weights, use_reference=False)
+    if max_decode_bucket is not None:
+        decoder.max_decode_bucket = int(max_decode_bucket)
+    return decoder
+
+
+def decode_bucket_for(max_ref_frames: int, max_new_tokens: int, step: int = 64) -> int:
+    """Smallest bucket (multiple of ``step``) covering the longest ref+generated decode.
+
+    ``decode_audio_device`` decodes ``cat([ref_codes, codes])``, so the bucket must
+    cover BOTH the reference and the generated frames -- sizing it off the generated
+    count alone leaves live requests un-warmed.
+    """
+    total = int(max_ref_frames) + int(max_new_tokens)
+    return max(step, ((total + step - 1) // step) * step)
+
+
+def prepare_device_decoder(
+    device,
+    decoder_weights: dict,
+    max_ref_frames: int,
+    max_new_tokens: int,
+    pin_single_bucket: bool = False,
+):
+    """Build, warm and freeze the device decoder for serving. Returns (decoder, buckets).
+
+    Must be called BEFORE the first ``run_inference``: preparing conv weights is only
+    safe until the talker's traced decode has run. After this returns, no live request
+    can allocate a new bucket -- an over-long decode raises instead of hanging.
+
+    By default every bucket from one step up to the max is warmed, so each request
+    still decodes at its own tight length (shorter bucket = faster decode). With
+    ``pin_single_bucket`` only the max bucket is built, which costs max-length decode
+    time on every request but holds one conv cache instead of N.
+    """
+    step = 64
+    max_bucket = decode_bucket_for(max_ref_frames, max_new_tokens, step=step)
+    buckets = [max_bucket] if pin_single_bucket else list(range(step, max_bucket + step, step))
+    decoder = build_device_decoder(
+        device, decoder_weights, max_decode_bucket=max_bucket if pin_single_bucket else None
+    )
+    warmup_device_decoder(decoder, buckets, freeze=True)
+    return decoder, buckets
 
 
 def decode_audio_device(ref_codes: torch.Tensor, codes: torch.Tensor, device_decoder) -> torch.Tensor:
@@ -2844,7 +2890,7 @@ def decode_audio_device(ref_codes: torch.Tensor, codes: torch.Tensor, device_dec
     return audio[..., ref_samples:].contiguous()
 
 
-def warmup_device_decoder(device_decoder, bucket_frames) -> None:
+def warmup_device_decoder(device_decoder, bucket_frames, freeze: bool = True) -> None:
     """Pre-compile the device decoder for each expected bucket length.
 
     Each distinct decode bucket triggers a one-time kernel compile (~1.5-2.9s) and
@@ -2853,6 +2899,10 @@ def warmup_device_decoder(device_decoder, bucket_frames) -> None:
 
     ``bucket_frames`` is an iterable of frame counts (e.g. the per-bucket sizes the
     decoder rounds up to). Dummy codes are all-zeros (valid codebook index 0).
+
+    With ``freeze`` (the default), any later decode that would need an un-warmed
+    bucket raises instead of preparing conv weights on a device whose talker trace
+    has already run, which would hang the chip unrecoverably.
     """
     for n in bucket_frames:
         n = int(n)
@@ -2860,3 +2910,5 @@ def warmup_device_decoder(device_decoder, bucket_frames) -> None:
             continue
         dummy = torch.zeros(n, 16, dtype=torch.long)
         _ = device_decoder.forward(dummy.T.unsqueeze(0))
+    if freeze:
+        device_decoder.freeze_cache()
