@@ -22,17 +22,43 @@ from models.demos.gemma4_d_p.tests.kv_pcc.report import KvPccRun, digest
 from models.demos.gemma4_d_p.tests.test_factory import parametrize_mesh_with_fabric
 
 
-def _ring_cache_rows(full, start, end, chunk, cp, num_heads):
-    """Convert a composed [1, TP-heads, CP*capacity, D] cache to [tokens, num_heads, D]."""
-    _, heads, rows, dim = full.shape
-    assert rows % cp == 0 and heads % num_heads == 0
-    # TP > KV heads replicates each head on consecutive columns (GQA assignment).
-    full = full[:, :: heads // num_heads].reshape(num_heads, cp, rows // cp, dim)
-    positions = torch.arange(start, end)
-    slab = chunk // cp
-    ranks = positions.remainder(chunk) // slab
-    local_rows = (positions // chunk) * slab + positions.remainder(slab)
-    return full[:, ranks, local_rows, :].permute(1, 0, 2)
+def _read_ring_cache(tensor, context_len, chunk, cp, tp):
+    """Read a populated cache prefix and restore [tokens, heads, width] order.
+
+    Untilizing on device avoids the generic mesh-composer path, and slicing the
+    sequence first prevents unused cache capacity from reaching the host. Each
+    CP shard stores its local slab of every chunk consecutively; interleave those
+    slabs while concatenating TP-local heads.
+    """
+    if context_len % chunk or chunk % cp:
+        raise ValueError("KV readback requires complete chunks divisible by CP")
+    local_len = context_len // cp
+    selected = ttnn.slice(
+        tensor,
+        (0, 0, 0, 0),
+        (1, tensor.shape[1], local_len, tensor.shape[3]),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    try:
+        row_major = ttnn.untilize(selected, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    finally:
+        ttnn.deallocate(selected)
+    try:
+        host = ttnn.from_device(row_major, blocking=True)
+    finally:
+        ttnn.deallocate(row_major)
+
+    shards = [ttnn.to_torch(shard).float() for shard in ttnn.get_device_tensors(host)]
+    if len(shards) != cp * tp:
+        raise ValueError(f"expected {cp * tp} cache shards, got {len(shards)}")
+    local_heads, width = shards[0].shape[1], shards[0].shape[3]
+    chunks, local_chunk = context_len // chunk, chunk // cp
+    gathered = torch.empty((local_heads * tp, chunks, cp, local_chunk, width), dtype=torch.float32)
+    for cp_row in range(cp):
+        for tp_column in range(tp):
+            shard = shards[cp_row * tp + tp_column].reshape(local_heads, chunks, local_chunk, width)
+            gathered[tp_column * local_heads : (tp_column + 1) * local_heads, :, cp_row].copy_(shard)
+    return gathered.reshape(local_heads * tp, context_len, width).permute(1, 0, 2)
 
 
 def _kv_accuracy(a: torch.Tensor, b: torch.Tensor) -> tuple[float, float]:
@@ -49,7 +75,7 @@ def _kv_accuracy(a: torch.Tensor, b: torch.Tensor) -> tuple[float, float]:
     return correlation, relative_error
 
 
-def _measure_kv_pcc(model, mesh_device, ref_dir, kv_streams, metadata, tokens, chunk, cp):
+def _measure_kv_pcc(model, mesh_config, ref_dir, kv_streams, metadata, tokens, chunk):
     """Compare populated caches against the matching reference after all replays complete.
 
     Score each reference block separately.
@@ -79,50 +105,52 @@ def _measure_kv_pcc(model, mesh_device, ref_dir, kv_streams, metadata, tokens, c
         ), f"layer {layer_idx}: KV reference rows must match the complete input sequence"
 
     records = []
-    composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 1))
+    context_len = tokens.shape[-1]
+    cp, tp = mesh_config.cp_degree, mesh_config.tp_degree
     for layer_idx, layer in enumerate(model.layers):
         attn = layer.self_attn
         assert attn.ring_kv_cache is not None, f"layer {layer_idx}: missing ring cache"
         heads, dim = attn.config.num_key_value_heads, attn.config.head_dim
         packed = isinstance(attn.ring_kv_cache, GlobalRingKVCache)
-        cache_parts = (
-            (("K_effective", attn.ring_kv_cache.kv), ("V", attn.ring_kv_cache.kv))
-            if packed
-            else (("K", attn.ring_kv_cache.k), ("V", attn.ring_kv_cache.v))
-        )
-        # Keep reference mappings for this layer only, releasing each after V.
-        # Both passes use the same file, which contains canonical K and V.
-        reference_blocks = {}
-        full = None
-        for part, tensor in cache_parts:
-            # Sliding K/V have separate caches; global K/V share one packed cache.
-            if full is None:
-                full = ttnn.to_torch(tensor, mesh_composer=composer).float()
-            for block_idx, block in enumerate(kv_streams[layer_idx]):
-                start, end = block["row_start"], min(block["row_end"], tokens.shape[-1])
-                path = ref_dir / block["path"]
-                if part == "V":
-                    golden = reference_blocks.pop(block_idx)
-                else:
-                    golden = load_file(str(path))[f"kv_post_transform_layer_{layer_idx}"]
-                    reference_blocks[block_idx] = golden
-                assert golden.shape == (block["row_end"] - start, 2 * heads * dim), f"{path}: invalid KV shape"
-                golden = golden[: end - start]
-                golden_k = golden[:, : heads * dim].reshape(end - start, heads, dim)
-                golden_v = golden[:, heads * dim :].reshape(end - start, heads, dim)
-                actual = _ring_cache_rows(full, start, end, chunk, cp, heads)
-                if packed:
-                    # Global cache is [Krot128 | Vnonrot384 | Vrot128]. Non-rotary
-                    # K gamma lives on Q, so compare the effective cached K view.
-                    golden_packed = pack_global_kv_reference(golden_k, golden_v)
-                    channels = slice(0, GLOBAL_HEAD_DIM) if part == "K_effective" else slice(GLOBAL_ROTARY_DIM, None)
-                    golden = golden_packed[..., channels]
-                    actual = actual[..., channels]
-                elif part == "K":
-                    golden = golden_k.index_select(-1, sliding_kv_indices(dim))
-                else:
-                    golden = golden_v
-                value, error = _kv_accuracy(actual, golden)
+        if packed:
+            actual_packed = _read_ring_cache(attn.ring_kv_cache.kv, context_len, chunk, cp, tp)
+            actual_parts = {
+                "K": actual_packed[..., :GLOBAL_HEAD_DIM],
+                "V": actual_packed[..., GLOBAL_ROTARY_DIM:],
+            }
+            del actual_packed
+        else:
+            # Holding K and V together costs no more than the previous K readback
+            # plus every reference shard retained until the V pass. It also lets
+            # each reference shard in the 381-GB dataset be read once and released.
+            actual_parts = {
+                "K": _read_ring_cache(attn.ring_kv_cache.k, context_len, chunk, cp, tp),
+                "V": _read_ring_cache(attn.ring_kv_cache.v, context_len, chunk, cp, tp),
+            }
+
+        for block_idx, block in enumerate(kv_streams[layer_idx]):
+            start, end = block["row_start"], min(block["row_end"], context_len)
+            path = ref_dir / block["path"]
+            golden = load_file(str(path))[f"kv_post_transform_layer_{layer_idx}"]
+            assert golden.shape == (block["row_end"] - start, 2 * heads * dim), f"{path}: invalid KV shape"
+            golden = golden[: end - start]
+            golden_k = golden[:, : heads * dim].reshape(end - start, heads, dim)
+            golden_v = golden[:, heads * dim :].reshape(end - start, heads, dim)
+            if packed:
+                golden_packed = pack_global_kv_reference(golden_k, golden_v)
+                golden_parts = {
+                    "K": golden_packed[..., :GLOBAL_HEAD_DIM],
+                    "V": golden_packed[..., GLOBAL_ROTARY_DIM:],
+                }
+            else:
+                golden_parts = {
+                    "K": golden_k.index_select(-1, sliding_kv_indices(dim)),
+                    "V": golden_v,
+                }
+            for part in ("K", "V"):
+                actual = actual_parts[part][start:end]
+                golden_part = golden_parts[part]
+                value, error = _kv_accuracy(actual, golden_part)
                 records.append(
                     {
                         "layer": layer_idx,
@@ -135,10 +163,9 @@ def _measure_kv_pcc(model, mesh_device, ref_dir, kv_streams, metadata, tokens, c
                     }
                 )
                 logger.info(f"[kv_pcc] layer={layer_idx} {part} rows=[{start},{end}) pcc={value:.6f} relL2={error:.6f}")
-            if not packed:
-                full = None
-        # Release the global packed readback before loading the next layer.
-        full = None
+        del actual, golden_part, golden_parts, golden_k, golden_v, golden, actual_parts
+        if packed:
+            del golden_packed
     return records
 
 
@@ -189,9 +216,7 @@ def test_kv_pcc(mesh_device, context_len, chunk_size, reset_seeds, request):
     logger.info("[kv_pcc] Performance reporting disabled")
 
     _run_traced_prefill(model, mesh_config, tokens_all, chunk_size, readback_all=False, report_performance=False)
-    records = _measure_kv_pcc(
-        model, mesh_device, dataset.directory, kv_streams, kv_metadata, tokens_all, chunk_size, mesh_config.cp_degree
-    )
+    records = _measure_kv_pcc(model, mesh_config, dataset.directory, kv_streams, kv_metadata, tokens_all, chunk_size)
     report_path = kv_run.finish(records)
     logger.info("[kv_pcc] PASS: all K/V measurements are within baseline tolerances.")
     logger.info(f"[kv_pcc] JSON report: {report_path}")
