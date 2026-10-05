@@ -10,7 +10,6 @@ struct Exp2Bf16Config {
     static constexpr uint32_t kScaledCoefficientBits[] = {0x3f803884u, 0x33a85adeu, 0x27aca410u};
     static constexpr uint32_t kMultiplierBits = 0x3f800000u;
     static constexpr uint32_t kBodySlots = 28u;
-    static constexpr bool kNegativeNanTerminal = false;
 };
 }  // namespace ckernel::sfpu
 #include "ckernel_sfpu_bf16_exp2.h"
