@@ -223,7 +223,8 @@ def test_msa_sp_cache_read_high_bw_pcc(
     else:
         # REFERENCE (bf8): the slot read back out of the SAME cache — whole-tensor de-shard first, then slice.
         n_rows = n_chunks * chunk_local
-        ints = [ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG) for t in (kv.k, kv.v, kv.index_k)]
+        caches = (kv.k, kv.v) if index_k_tp_shard else (kv.k, kv.v, kv.index_k)
+        ints = [ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG) for t in caches]
         ref_in = tuple(ttnn.slice(t, (slot, 0, 0, 0), (slot + 1, 1, n_rows, HEAD_DIM)) for t in ints)
         if index_k_tp_shard:
             # The deduped cache holds stripes, not the replicated slab, so it can't be sliced out. The write
