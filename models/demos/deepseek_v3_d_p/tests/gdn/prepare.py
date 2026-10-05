@@ -8,8 +8,8 @@
 Writes a partial checkpoint to ``gdn_checkpoint_dir(model, layer)``: the pinned ``config.json``, a
 ``model.safetensors.index.json`` listing only that layer's ``linear_attn.*`` keys, ``layer<i>.safetensors`` holding
 them (checkpoint keys and dtypes unchanged) and ``manifest.json`` (source shard per key, shapes, dtypes, bytes read,
-file and layer digests). Only the listed tensors are read, never whole shards. Real weights stay local: delete the
-directory after use (``--delete-layer``).
+file and layer digests). Only the listed tensors are read, never whole shards. Real weights stay local: delete them
+after use (``--delete-layer`` keeps only ``manifest.json``, stamped with the deletion time, as the download record).
 """
 
 from __future__ import annotations
@@ -109,10 +109,23 @@ def main() -> None:
     for model in arguments.fetch_layer:
         fetch_layer(model, arguments.layer)
     for model in arguments.delete_layer:
-        directory = gdn_checkpoint_dir(model, arguments.layer)
-        if directory.exists():
-            shutil.rmtree(directory)
-            log(f"{model} layer {arguments.layer}: deleted {directory}")
+        delete_layer(model, arguments.layer)
+
+
+def delete_layer(model: str, layer_idx: int) -> None:
+    """Remove everything but the manifest, which records what was downloaded and when it was deleted."""
+    directory = gdn_checkpoint_dir(model, layer_idx)
+    if not directory.exists():
+        return
+    manifest_path = directory / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
+    for path in directory.iterdir():
+        if path.name != "manifest.json":
+            path.unlink() if path.is_file() else shutil.rmtree(path)
+    if manifest:
+        manifest["deleted"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    log(f"{model} layer {layer_idx}: deleted the weights in {directory} (manifest kept)")
 
 
 if __name__ == "__main__":

@@ -38,6 +38,14 @@ def gdn_checkpoint_dir(model: str, layer_idx: int) -> Path:
     return root / source.local_name / source.revision / f"gdn-layer{layer_idx}"
 
 
+# Content identity (gdn_state_dict_sha256) of layer 0 of each pinned checkpoint, as fetched by tests/gdn/prepare.py.
+QWEN_LAYER_0_SHA256 = {
+    "qwen38_27b": "13289a030f0a6fe1a4b991cc639130cefe46fa65c3ce0f514a43779d343c46b6",
+    "qwen36_35b": "bca97af023e12438658a71c3dab26f9611365c9320f4d645c73f748a78341539",
+    "qwen38_2_4t": "ed6698cd8db3d90430b27db3161cc98d7b7a6d8519518759164e64a0351d6e90",
+    "qwen38_flash_next": "ac06288ac7ea3407ea10868a1545db5c649df29878feafb3772aada6d966a2e7",
+}
+
 # Content identity of a layer-local weight dict: sorted names, dtypes, shapes and bytes (KDA's digest is generic).
 gdn_state_dict_sha256 = kda_state_dict_sha256
 
