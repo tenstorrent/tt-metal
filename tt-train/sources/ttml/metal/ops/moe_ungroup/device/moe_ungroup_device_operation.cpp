@@ -88,16 +88,26 @@ spec_return_value_t MoeUngroupDeviceOperation::compute_output_specs(
     auto dram = ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM};
 
     // ungrouped: [D, B, S, H]  ROW_MAJOR  bf16
-    return tt::tt_metal::TensorSpec(
+    tt::tt_metal::TensorSpec ungrouped_spec(
         ttnn::Shape{attrs.d, attrs.b, attrs.s, attrs.h},
         tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::Layout::ROW_MAJOR, dram));
+
+    // offsets_status: [1, 1, 1, 1]  ROW_MAJOR  uint32
+    tt::tt_metal::TensorSpec status_spec(
+        ttnn::Shape{1U, 1U, 1U, 1U},
+        tt::tt_metal::TensorLayout(tt::tt_metal::DataType::UINT32, tt::tt_metal::Layout::ROW_MAJOR, dram));
+
+    return {ungrouped_spec, status_spec};
 }
 
 tensor_return_value_t MoeUngroupDeviceOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
-    auto spec = compute_output_specs(attrs, args);
+    auto [ungrouped_spec, status_spec] = compute_output_specs(attrs, args);
     auto* device = args.expert_out.device();
-    return ttnn::create_device_tensor(spec, device);
+    return {
+        ttnn::create_device_tensor(ungrouped_spec, device),
+        ttnn::create_device_tensor(status_spec, device),
+    };
 }
 
 ttsl::hash::hash_t MoeUngroupDeviceOperation::compute_program_hash(
@@ -118,7 +128,8 @@ ttml::metal::ops::moe_ungroup::device::MoeUngroupDeviceOperation::tensor_return_
     uint32_t e_local,
     uint32_t d,
     uint32_t b,
-    uint32_t s) {
+    uint32_t s,
+    bool report_offsets_status) {
     using Op = ttml::metal::ops::moe_ungroup::device::MoeUngroupDeviceOperation;
 
     const auto& es = expert_out.logical_shape();
@@ -132,6 +143,7 @@ ttml::metal::ops::moe_ungroup::device::MoeUngroupDeviceOperation::tensor_return_
         .s = s,
         .h = h,
         .t_cap = t_cap,
+        .report_offsets_status = report_offsets_status,
     };
     auto tensor_args = Op::tensor_args_t{
         .expert_out = expert_out,
