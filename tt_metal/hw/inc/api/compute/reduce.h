@@ -165,16 +165,16 @@ ALWI void reduce_tile(
 
 // clang-format off
 /**
- * Performs a reduction operation *B = reduce(A)* on `ntiles` consecutive tiles from the input CB, writing each
- * partial result to a consecutive DST register slot. This is the uniform block entry point for the reduce op
- * group: its body is a simple loop over `reduce_tile`, so it inherits `reduce_tile`'s semantics and requires the
- * same initialization (`reduce_init`) to have been called first. The scaling-factor tile (`itile_scaler`) is reused
- * for every tile in the block. The DST register buffer must be in acquired state via *acquire_dst* call.
+ * Performs a reduction operation *B = reduce(A)* on `ntiles` consecutive tiles from the input CB, writing the
+ * result of tile i to DST register slot `start_idst + i * idst_stride` (the default stride 1 gives each tile its own
+ * slot, a stride of 0 accumulates the whole block into `start_idst`). This is the uniform block entry point for the
+ * reduce op group: it has `reduce_tile`'s semantics and requires the same initialization (`reduce_init`) to have been
+ * called first. The scaling-factor tile (`itile_scaler`) is reused for every tile in the block. The DST register
+ * buffer must be in acquired state via *acquire_dst* call.
  *
- * NOTE: The loop implementation is transitional. In the future this for-loop must be folded into a
- * hardware MOP / REPLAY buffer (as is being done for Quasar) so the whole block issues as a single
- * packed op; the blocking then lives in llk-lib without changing this signature. Tracked under the
- * Compute API Split effort (tt-metal#35739); the per-op push-down lands in tt-metal#47478.
+ * NOTE: On Blackhole the block is one LLK call per thread (one unpack context per chunk of tiles); the other
+ * architectures loop over `reduce_tile`. Tracked under the Compute API Split effort (tt-metal#35739) and
+ * tt-metal#47478.
  * NOTE: Before the next operation is initialized, the `reduce_uninit` function must be called to reset the packer
  * state to default.
  *
@@ -189,7 +189,8 @@ ALWI void reduce_tile(
  * | Function   | start_itile  | The index of the first tile within the first CB                  | uint32_t  | Must be less than the size of the CB           | True     |
  * | Function   | itile_scaler | The index of the tile within the scaling factor CB               | uint32_t  | Must be less than the size of the CB           | True     |
  * | Function   | start_idst   | The index of the first tile in DST REG for the result            | uint32_t  | Must be less than the acquired size of DST REG | True     |
- * | Function   | ntiles       | The number of consecutive tiles to reduce                        | uint32_t  | start_idst + ntiles <= acquired DST REG size   | True     |
+ * | Function   | ntiles       | The number of consecutive tiles to reduce                        | uint32_t  | start_idst + (ntiles - 1) * idst_stride < acquired DST REG size | True     |
+ * | Function   | idst_stride  | DST REG slot step between consecutive tiles (0 accumulates)      | uint32_t  | 0 or more (default 1)                          | False    |
  */
 // clang-format on
 template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
@@ -199,11 +200,18 @@ ALWI void reduce_block(
     std::uint32_t start_itile,
     std::uint32_t itile_scaler,
     std::uint32_t start_idst,
-    std::uint32_t ntiles) {
+    std::uint32_t ntiles,
+    std::uint32_t idst_stride = 1) {
+#ifdef ARCH_BLACKHOLE
+    MATH((llk_math_reduce_block<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(
+        icb, icb_scaler, start_idst, ntiles, idst_stride)));
+    UNPACK((llk_unpack_AB_reduce_block<reduce_type, reduce_dim>(icb, icb_scaler, start_itile, itile_scaler, ntiles)));
+#else
     for (std::uint32_t i = 0; i < ntiles; ++i) {
         reduce_tile<reduce_type, reduce_dim, is_fp32_dest_acc_en>(
-            icb, icb_scaler, start_itile + i, itile_scaler, start_idst + i);
+            icb, icb_scaler, start_itile + i, itile_scaler, start_idst + i * idst_stride);
     }
+#endif
 }
 
 // clang-format off

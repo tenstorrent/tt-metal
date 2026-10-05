@@ -14,6 +14,7 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
+#include "llk_reduce_block.h"
 #include "tensor_shape.h"
 #include "tensor_shape_coverage_math.h"
 
@@ -348,6 +349,74 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
             }
             TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
         }
+    }
+}
+
+/**
+ * @brief Reduce a block of tiles on the math thread, the counterpart of @ref _llk_unpack_AB_reduce_block_.
+ *
+ * Tile i goes to the destination tile dst_index + i * dst_stride (a stride of 0 accumulates the block into one tile).
+ * When @ref reduce_block_holds_scaler holds, the scaler stays in SrcA for a chunk of @ref REDUCE_BLOCK_MAX_TILES tiles:
+ * each tile releases only SrcB and the chunk releases SrcA once. Every other case runs @ref _llk_math_reduce_ per tile.
+ *
+ * @tparam type: Pooling op, values = <SUM/AVG/MAX>
+ * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam is_int_fpu_en: Enable integer FPU datapath (casts int32 dest datums to int8 before moving to SrcB).
+ * @param dst_index: Destination tile of the first tile of the block.
+ * @param num_tiles: Number of tiles in the block.
+ * @param dst_stride: Destination tile step between consecutive tiles of the block.
+ * @param tensor_shape: Tensor shape describing tile dimensions.
+ * @note Call @ref _llk_math_reduce_init_ with matching template args before this function.
+ */
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false>
+inline void _llk_math_reduce_block_(
+    const std::uint32_t dst_index, std::uint32_t num_tiles, const std::uint32_t dst_stride, const ckernel::TensorShape tensor_shape)
+{
+    LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_reduce_block_", tensor_shape);
+
+    if constexpr (dim == ReduceDim::REDUCE_ROW && type != PoolType::MAX)
+    {
+        if (num_tiles > 1 && reduce_block_holds_scaler<type, dim>(tensor_shape))
+        {
+            constexpr bool high_fidelity     = is_high_fidelity(math_fidelity);
+            const std::uint32_t replay_start = ckernel::math::replay_buf_offset;
+            std::uint32_t dst                = dst_index;
+
+            while (num_tiles > 0)
+            {
+                const std::uint32_t chunk = num_tiles < REDUCE_BLOCK_MAX_TILES ? num_tiles : REDUCE_BLOCK_MAX_TILES;
+                for (std::uint32_t tile = 0; tile < chunk; tile++)
+                {
+                    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst);
+                    // The init's MVMUL record, with the source release narrowed to the data bank (SrcB)
+                    if constexpr (high_fidelity)
+                    {
+                        for (std::uint32_t phase = 0; phase < to_underlying(math_fidelity); phase++)
+                        {
+                            lltt::replay(replay_start, 8);
+                        }
+                        TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+                    }
+                    else
+                    {
+                        lltt::replay(replay_start, 7);
+                        TTI_MVMUL(p_setrwc::CLR_B, 0, ADDR_MOD_3, 0);
+                    }
+                    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD);
+                    dst += dst_stride;
+                }
+                TTI_CLEARDVALID(p_setrwc::CLR_A, 0);
+                num_tiles -= chunk;
+            }
+            return;
+        }
+    }
+
+    for (std::uint32_t tile = 0; tile < num_tiles; tile++)
+    {
+        _llk_math_reduce_<type, dim, is_fp32_dest_acc_en, math_fidelity, is_int_fpu_en>(dst_index + tile * dst_stride, tensor_shape);
     }
 }
 
