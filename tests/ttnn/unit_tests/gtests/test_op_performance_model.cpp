@@ -15,14 +15,15 @@ namespace ttnn::test {
 using OpPerformanceModelDramTest = TTNNFixtureWithDevice;
 
 TEST_F(OpPerformanceModelDramTest, BandwidthUsesDecimalGigabytesPerSecond) {
-    // bfloat16 [1, 1, 32, 64] is 4096 bytes. Scaling the GB/s peak by 2^30 instead of 1e9 truncates to
-    // 14 ns on Wormhole (258 GB/s) and 7 ns on Blackhole (512 GB/s) instead of 15 and 8.
+    // At 1 MiB, scaling the GB/s peak by 2^30 instead of 1e9 is off by about 7%, far more than the
+    // integer truncation of the model.
     const auto tensor = ttnn::zeros(
-        ttnn::Shape({1, 1, 32, 64}), DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_, ttnn::DRAM_MEMORY_CONFIG);
+        ttnn::Shape({1, 1, 512, 1024}), DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_, ttnn::DRAM_MEMORY_CONFIG);
     const tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> model({tensor}, tensor, 1);
 
-    const int expected_ns = device_->arch() == tt::ARCH::BLACKHOLE ? 8 : 15;
-    EXPECT_EQ(model.get_bandwidth_ns(), expected_ns);
+    const double peak_dram_gb_per_s = device_->arch() == tt::ARCH::BLACKHOLE ? 512.0 : 258.0;
+    const double size_bytes = static_cast<double>(tensor.physical_volume() * tensor.element_size());
+    EXPECT_EQ(model.get_bandwidth_ns(), static_cast<int>(size_bytes / peak_dram_gb_per_s));
 }
 
 }  // namespace ttnn::test
