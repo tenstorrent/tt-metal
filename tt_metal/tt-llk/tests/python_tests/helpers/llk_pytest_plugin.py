@@ -476,7 +476,16 @@ def pytest_configure(config):
 
     if config.getoption("--ulp-emit"):
         from . import ulp_sweep
+        from .sfpu_accuracy_budget import MEASURED_ARCH
 
+        if TestConfig.CHIP_ARCH != MEASURED_ARCH:
+            # finish_emit refuses this too, but only at session end: emit bypasses the
+            # tolerance-cell skip, so every cell would compile and run first.
+            raise pytest.UsageError(
+                f"--ulp-emit measures the table's unkeyed rows, which are read as "
+                f"{MEASURED_ARCH.value} measurements; this session targets "
+                f"{TestConfig.CHIP_ARCH.value}"
+            )
         ulp_sweep.EMIT = True
     if config.getoption("--ulp-report"):
         utils_module._ULP_REPORT = True
@@ -1007,7 +1016,9 @@ def pytest_testnodedown(node, error):
     """Merge an xdist worker's ``--ulp-emit`` measurements into the controller's."""
     from . import ulp_sweep
 
-    ulp_sweep.merge_measured(getattr(node, "workeroutput", {}).get("ulp_measured", ()))
+    ulp_sweep.merge_measured(
+        getattr(node, "workeroutput", {}).get(ulp_sweep.WORKEROUTPUT_KEY, ())
+    )
 
 
 def _finish_ulp_emit(session):
@@ -1017,11 +1028,14 @@ def _finish_ulp_emit(session):
 
     if not ulp_sweep.EMIT:
         return
-    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE or session.config.option.collectonly:
         # The producer only compiles -- TestConfig.run() skips before the device -- so it
         # can never measure. It takes --ulp-emit only to collect the wider op set the
         # consumer will run, and failing it would fail the documented emit workflow.
-        _ulp_emit_line(session, "--ulp-emit: compile-only session; nothing to write")
+        # `--collect-only --ulp-emit` previews that set, and runs nothing either.
+        _ulp_emit_line(
+            session, "--ulp-emit: nothing runs in this session; nothing to write"
+        )
         return
     try:
         if not ulp_sweep.MEASURED:
@@ -1030,11 +1044,11 @@ def _finish_ulp_emit(session):
             raise RuntimeError("nothing was measured, so the table was not touched")
         # pytest runs this hook after a Ctrl-C as well, with INTERRUPTED already in
         # `exitstatus`; the failure count and the grid check cannot tell that apart from
-        # a run that ended on its own.
+        # a run that ended on its own. Passed through as pytest set it, enum or int.
         message = ulp_sweep.finish_emit(
             get_chip_architecture(),
             session.testsfailed,
-            exitstatus=int(session.exitstatus),
+            exitstatus=session.exitstatus,
         )
     except (RuntimeError, ValueError) as exc:
         message = f"--ulp-emit: {exc}"
@@ -1057,7 +1071,9 @@ def pytest_sessionfinish(session):
         from . import ulp_sweep
 
         if ulp_sweep.EMIT:
-            session.config.workeroutput["ulp_measured"] = ulp_sweep.export_measured()
+            session.config.workeroutput[ulp_sweep.WORKEROUTPUT_KEY] = (
+                ulp_sweep.export_measured()
+            )
         return
 
     _finish_ulp_emit(session)

@@ -26,17 +26,18 @@ CHIP_ARCH=wormhole pytest test_unary_sfpu_ulp.py --op MyOp --compile-consumer
 ```
 
 `--op` matches the op name exactly. `-k MyOp` is a substring match: `-k Exp` also runs
-`ExpWithBase`, `Expm1` and `Expm1Cw`, and rewrites their blocks too.
+`Exp2`, and rewrites its block too.
 
 `--ulp-emit` **writes the checked-in table**, once, at the end of the session; under
 `-n` the controller merges every worker's measurements first. It refuses to write unless
 you are on Wormhole, the session ran to the end (an interrupt, `pytest.exit()` or an
 internal error writes nothing, however many grids were complete), no test in it failed
 and every touched `(in, out)` grid is complete — but it is still a deliberate act, so
-read the diff before committing it. The producer half only compiles, so it writes
-nothing and says so. An op whose block it could not regenerate (a floor row on a
-measured cell) is kept verbatim and fails the session *after* every other op has been
-written.
+read the diff before committing it. Off Wormhole it refuses at startup, before
+anything compiles. The producer half only compiles, and `--collect-only` runs nothing,
+so both write nothing and say so. An op whose block it cannot regenerate (a floor row
+or an op-wide `atol`/`rtol` row on a measured cell) is kept verbatim and named in the
+summary; the session still passes, so a whole-table emit can end green.
 
 ## Why a step budget rather than a tolerance
 
@@ -128,7 +129,7 @@ or the sweep has nothing to feed it.
 ### 2. Give it a block in the table
 
 The emitter passes an op's key line through verbatim, so a *new* op needs one by hand
-first. Add the name and nothing else:
+first. Add the name and one placeholder row (a key with no rows fails to load):
 
 ```yaml
 MyOp:
@@ -157,8 +158,8 @@ MyOp:
 
 Four verdicts:
 
-- **`max_ulp: N`** — enrolled. `N` is the measurement plus 1.1x headroom, floored at 1
-  except where the measurement was 0.
+- **`max_ulp: N`** — enrolled. `N` is the measurement plus 1.1x headroom, rounded up
+  (a measured 1 becomes 2), except that a measured 0 stays 0.
 - **`metric: tolerance`, "past this output's usable ceiling"** — past
   `usable_budget_ceiling`, so a step budget would no longer be *tighter* than the
   tolerance it replaces. The op keeps tolerance + PCC on that cell and the number is
@@ -241,8 +242,8 @@ the measurement will be dominated by the band and the cell will demote to tolera
 reference crosses zero, judged on absolute error instead of steps. `Gelu` and most of
 `Erfinv` are gated that way. The emitter cannot re-derive a floor, so an op with a floor
 row on a cell the run measured keeps its whole block as it was: every other op is
-written, and the session then fails naming the ops it kept. You settle those by hand,
-with the measurement beside them.
+written, and the summary names the ops it kept. You settle those by hand; the session
+does not fail on them, because such a block is hand-maintained by design.
 
 ## Gotchas
 
@@ -257,7 +258,7 @@ with the measurement beside them.
   at all (step 2 adds the block first). Pass the flag to the **producer too** -- without
   it the producer collects the narrow gating set and the consumer fails on missing
   ELFs, not on budgets.
-- **`CHIP_ARCH` must be set**, and `--ulp-emit` refuses to write on anything but
+- **`CHIP_ARCH` must be set**, and `--ulp-emit` refuses to run on anything but
   Wormhole, because `_render` does not emit `arch` and the rows would be badged wrongly.
 
 ## Where things live

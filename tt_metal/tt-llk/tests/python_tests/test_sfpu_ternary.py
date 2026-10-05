@@ -41,7 +41,8 @@ from helpers.test_variant_parameters import (
 
 _SCALAR_VALUE = 2.0
 
-#: The approximation mode test_sfpu_ternary compiles, and so the one its contract names.
+#: The approximation mode every test here compiles sfpu_ternary_test.cpp with, and so the
+#: one test_sfpu_ternary's contract names.
 _APPROX_MODE = ApproximationMode.No
 _SCALAR_VALUE_BITS = struct.unpack("<I", struct.pack("<f", _SCALAR_VALUE))[0]
 
@@ -330,7 +331,7 @@ def test_ttnn_where(
         templates=[
             SFPU_TERNARY_OP(mathop),
             SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
-            APPROX_MODE(ApproximationMode.No),
+            APPROX_MODE(_APPROX_MODE),
             DISABLE_SRC_ZERO_FLAG(True),
             DEST_SYNC(),
         ],
@@ -430,7 +431,7 @@ def test_ttnn_where_mcw(
         templates=[
             SFPU_TERNARY_OP(mathop),
             SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
-            APPROX_MODE(ApproximationMode.No),
+            APPROX_MODE(_APPROX_MODE),
             DISABLE_SRC_ZERO_FLAG(True),
             DEST_SYNC(),
         ],

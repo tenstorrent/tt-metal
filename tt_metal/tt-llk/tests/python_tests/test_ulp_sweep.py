@@ -15,7 +15,7 @@ import re
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
 from helpers.ulp import has_ulp_gate
 from helpers.ulp_sweep import (
@@ -534,22 +534,42 @@ def test_an_unmeasurable_cell_survives_the_xdist_merge_in_either_order(
     "arch, failed, exitstatus, refusal",
     [
         (ChipArchitecture.BLACKHOLE, 0, 0, "unkeyed rows are read as wormhole"),
-        (ChipArchitecture.WORMHOLE, 3, 0, "3 failure"),
+        (
+            ChipArchitecture.WORMHOLE,
+            3,
+            pytest.ExitCode.TESTS_FAILED,
+            "saw 3 failure",
+        ),
         (
             ChipArchitecture.WORMHOLE,
             0,
             pytest.ExitCode.INTERRUPTED,
             "exit status INTERRUPTED",
         ),
+        (
+            ChipArchitecture.WORMHOLE,
+            0,
+            int(pytest.ExitCode.INTERRUPTED),
+            "exit status INTERRUPTED",
+        ),
+        (ChipArchitecture.WORMHOLE, 0, 17, "exit status 17"),
     ],
-    ids=["other-arch", "failed-session", "interrupted-session"],
+    ids=[
+        "other-arch",
+        "failed-session",
+        "interrupted-session",
+        "interrupted-session-as-int",
+        "pytest-exit-returncode",
+    ],
 )
 def test_emit_refuses_what_the_session_cannot_vouch_for(
     table, arch, failed, exitstatus, refusal
 ):
-    """The interrupted case has every touched grid complete and nothing failed: pytest
-    still calls ``pytest_sessionfinish`` after a Ctrl-C, so only the exit status knows
-    the run stopped early."""
+    """Each case as pytest hands it to ``pytest_sessionfinish``. A failing run arrives
+    with ``TESTS_FAILED`` already in the exit status, so the failure count is what names
+    it. The interrupted case has every touched grid complete and nothing failed: pytest
+    still calls the hook after a Ctrl-C, so only the exit status knows the run stopped
+    early."""
     for approx in ("No", "Yes"):
         for dest in ("No", "Yes"):
             record("Gelu", ("Float16", "Float16", approx, dest), 5)
@@ -564,23 +584,31 @@ def test_emit_refuses_what_the_session_cannot_vouch_for(
     [ChipArchitecture.WORMHOLE, ChipArchitecture.BLACKHOLE],
     ids=lambda a: a.value,
 )
-def test_the_sweep_cells_are_the_ones_testconfig_builds_as_asked(arch):
-    """`sweep_cells` leaves out the cells TestConfig would run as another, and both now
-    read the one rule (`effective_dest_acc`): a cell is swept exactly when the Dest it
-    asks for is the Dest it gets. The promoted exponent-B -> Float16 `No` cells are the
-    ones left out, and their `Yes` twins stay."""
-    from helpers.data_format_inference import effective_dest_acc
+def test_the_sweep_cells_are_the_ones_testconfig_builds_as_asked(arch, monkeypatch):
+    """A cell is swept exactly when the TestConfig built for it runs the Dest it asks
+    for: `sweep_cells` leaves out the cells TestConfig would run as another, or a
+    measurement would be keyed on a kernel that never ran. The promoted exponent-B ->
+    Float16 `No` cells are the ones left out, and their `Yes` twins stay."""
+    from helpers.test_config import TestConfig
     from helpers.ulp_sweep import SWEEP_FORMATS, sweep_cells
 
-    cells = sweep_cells(arch)
-    assert cells == [
+    monkeypatch.setattr(TestConfig, "CHIP_ARCH", arch)
+    built_as_asked = [
         (i, o, a, d)
         for i in SWEEP_FORMATS
         for o in SWEEP_FORMATS
         for a in ApproximationMode
         for d in DestAccumulation
-        if effective_dest_acc(i, o, d, arch) == d
+        if TestConfig(
+            "sources/eltwise_unary_sfpu_test.cpp",
+            InputOutputFormat(i, o),
+            dest_acc=d,
+            skip_build_header=True,
+        ).dest_acc
+        == d
     ]
+    cells = sweep_cells(arch)
+    assert cells == built_as_asked
     promoted = {(i, o) for i, o, _, d in cells if d == DestAccumulation.No} ^ {
         (i, o) for i, o, _, d in cells if d == DestAccumulation.Yes
     }
@@ -588,18 +616,30 @@ def test_the_sweep_cells_are_the_ones_testconfig_builds_as_asked(arch):
         (DataFormat.Float16_b, DataFormat.Float16),
         (DataFormat.Bfp8_b, DataFormat.Float16),
     }
-    assert (
-        effective_dest_acc(
-            DataFormat.Float16_b, DataFormat.Float16, DestAccumulation.No, arch
-        )
-        == DestAccumulation.Yes
+
+
+@pytest.mark.parametrize(
+    "arch, promoted",
+    [
+        (ChipArchitecture.WORMHOLE, DestAccumulation.Yes),
+        (ChipArchitecture.BLACKHOLE, DestAccumulation.Yes),
+        (ChipArchitecture.QUASAR, DestAccumulation.No),
+    ],
+    ids=lambda v: getattr(v, "value", None) or v.name,
+)
+def test_effective_dest_acc_promotes_an_exponent_b_input_packed_to_float16(
+    arch, promoted
+):
+    """Every arch but Quasar runs an exponent-B input packed to Float16 on a 32-bit Dest;
+    Quasar keeps the 16-bit Dest it was asked for. An exponent-A input is never
+    promoted."""
+    from helpers.data_format_inference import effective_dest_acc
+
+    No = DestAccumulation.No
+    assert effective_dest_acc(DataFormat.Float16_b, DataFormat.Float16, No, arch) == (
+        promoted
     )
-    assert (
-        effective_dest_acc(
-            DataFormat.Float16, DataFormat.Float16, DestAccumulation.No, arch
-        )
-        == DestAccumulation.No
-    )
+    assert effective_dest_acc(DataFormat.Float16, DataFormat.Float16, No, arch) == No
 
 
 def test_emit_sweeps_every_keyed_op_and_only_those(monkeypatch):
@@ -635,9 +675,44 @@ def test_emit_writes_on_a_clean_wormhole_session(table):
     for approx in ("No", "Yes"):
         for dest in ("No", "Yes"):
             record("Gelu", ("Float16", "Float16", approx, dest), 5)
-    message = finish_emit(ChipArchitecture.WORMHOLE, 0, table)
+    message = finish_emit(
+        ChipArchitecture.WORMHOLE, 0, table, exitstatus=pytest.ExitCode.OK
+    )
     assert message == "--ulp-emit: rewrote 1 op block(s) in budget.yaml"
     assert "{in: Float16, out: Float16, max_ulp: 6}" in _rows(table)[0]
+
+
+def test_a_whole_table_emit_over_the_real_table_ends_green(tmp_path, monkeypatch):
+    """Every op the emit sweeps, measured on every cell, written into a copy of the
+    checked-in table. The ops whose blocks carry a hand-maintained row -- a
+    `near_zero_atol` floor, an op-wide `atol`/`rtol` anchor -- are kept verbatim by
+    design, so they are named in the summary rather than failing the run: as a refusal
+    they turned every whole-table emit red, and threw the rest of its verdict away."""
+    import shutil
+
+    import test_unary_sfpu_ulp as sweep
+    from helpers import ulp_sweep
+    from helpers.sfpu_accuracy_budget import _TABLE_PATH
+    from helpers.ulp_sweep import sweep_cells
+
+    path = tmp_path / "budget.yaml"
+    shutil.copy(_TABLE_PATH, path)
+    monkeypatch.setattr(ulp_sweep, "EMIT", True)
+    MEASURED.clear()
+    ops = sweep._sweep_ops()
+    for op in ops:
+        for i, o, a, d in sweep_cells(ChipArchitecture.WORMHOLE):
+            record(op.name, (i.name, o.name, a.name, d.name), 1)
+    try:
+        message = finish_emit(ChipArchitecture.WORMHOLE, 0, path)
+    finally:
+        MEASURED.clear()
+    _, _, tail = message.partition("; kept ")
+    kept = tail.split(" verbatim", 1)[0].split(", ") if tail else []
+    assert message.startswith(
+        f"--ulp-emit: rewrote {len(ops) - len(kept)} op block(s) in budget.yaml"
+    )
+    assert set(kept) <= {op.name for op in ops}
 
 
 def test_the_claim_is_the_whole_format_not_the_drivers_sampling_window():

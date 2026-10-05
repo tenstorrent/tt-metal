@@ -141,6 +141,7 @@ def flushed_inputs(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
     bf16's smallest normal is 1.18e-38 and fp16's is 6.1e-05, so 2,046 flushed lanes
     read as a 14,337-step error on ``Abs``, an op that cannot be wrong.
     """
+    from helpers.bfp_format_utils import BFP_BLOCK
     from helpers.golden_generators import quantize_input_to_unpack_format
     from helpers.llk_params import format_dict
 
@@ -156,11 +157,11 @@ def flushed_inputs(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
         magnitude = values.detach().to(torch.float32).abs()
         return (magnitude < smallest_normal) & (magnitude != 0)
 
-    # The block quantizer works on whole 16-lane blocks. A device sweep is 65,536 lanes;
-    # a host test may hand in a fragment, so pad it with zeros, which never raise a
-    # block's exponent, and drop the padding again.
+    # The block quantizer works on whole BFP_BLOCK-lane blocks. A device sweep is 65,536
+    # lanes; a host test may hand in a fragment, so pad it with zeros, which never raise
+    # a block's exponent, and drop the padding again.
     flat = src.detach().flatten()
-    short = (-flat.numel()) % 16
+    short = (-flat.numel()) % BFP_BLOCK
     padded = torch.cat([flat, torch.zeros(short, dtype=flat.dtype, device=flat.device)])
     quantized = quantize_input_to_unpack_format(padded, input_format)[: flat.numel()]
     return (subnormal(flat) | subnormal(quantized)).reshape(src.shape)
@@ -537,6 +538,10 @@ def nonfinite_failures(
     )
 
 
+#: How many offending lanes a non-finite verdict spells out.
+NAMED_LANES = 4
+
+
 def nonfinite_reason(
     overflowed: torch.Tensor,
     src: torch.Tensor,
@@ -544,17 +549,17 @@ def nonfinite_reason(
     result: torch.Tensor,
     stats: Dict,
     lanes: int,
-    named_lanes: int = 4,
+    named_lanes: int = NAMED_LANES,
 ) -> str:
     """The verdict a cell with non-finite disagreements is written with.
 
     Two numbers, because two readers want them. The lane count is what makes the cell
-    unmeasurable, and the headroom report fails a run in which it grows. The maximum
-    over the *measurable* lanes -- the rest of the cell, usually tens of thousands of
-    them -- is what the demotion used to throw away: without it, I1's finite half of
-    the format (|x| below ~90 on every one of its cells) was held to nothing. It is
-    written as ``max N ULP``, the same shape a measured row's figure has, so the same
-    reader finds it. *named_lanes* bounds how many offending inputs are spelled out.
+    unmeasurable, and the headroom report (from #57527) fails a run in which it grows.
+    The maximum over the *measurable* lanes -- the rest of the cell, usually tens of
+    thousands of them -- is what the demotion used to throw away: a cell parked by a
+    handful of lanes recorded no step count for the rest of it. It is written as
+    ``max N ULP``, the same shape a measured row's figure has, so the same reader finds
+    it. *named_lanes* bounds how many offending inputs are spelled out.
     """
     named = "; ".join(
         f"x={float(src[i]):g}: {float(golden[i]):g} -> {float(result[i]):g}"
@@ -574,6 +579,14 @@ def nonfinite_reason(
 #: Set by ``--ulp-emit``. Measure and rewrite the table instead of gating against it.
 EMIT = False
 
+#: Where an xdist worker hands its ``MEASURED`` to the controller, in ``workeroutput``.
+#: One name for both ends: a mismatch reads as an empty worker, and the controller then
+#: refuses with "nothing was measured".
+WORKEROUTPUT_KEY = "ulp_measured"
+
+#: The axes of a ``MEASURED`` key, in key order, and the row fields they are written as.
+KEY_AXES = ("in", "out", "approx", "dest")
+
 #: {op_name: {(in, out, approx, dest): max_ulp}}, filled during an emitting session.
 MEASURED: Dict[str, Dict[Tuple[str, str, str, str], Union[int, str]]] = {}
 
@@ -586,10 +599,12 @@ EMIT_HEADROOM = 1.1
 def record(op_name: str, key: Tuple[str, str, str, str], max_ulp: int) -> None:
     """Fold one measurement into the cell *key* names, keeping the *worst* lane.
 
-    The key is four-dimensional and a driver enumerates more than four axes --
-    ``fast_mode`` and ``input_dimensions`` are both multi-valued -- so one cell is
-    recorded several times per emit run. Last-write-wins would keep whichever variant
-    ran last, which is the polarity that can hide error; ``max`` is the one that cannot.
+    The sweep driver records each cell once per process, so a repeat comes from
+    :func:`merge_measured` folding in another xdist worker's reading of it -- or from a
+    future driver that enumerates an axis the key does not have. Last-write-wins would
+    keep whichever arrived last, which is the polarity that can hide error; ``max`` is
+    the one that cannot. For the same reason a cell already recorded unmeasurable
+    (:func:`record_unmeasurable`) stays so: a number arriving later does not rescue it.
     """
     cells = MEASURED.setdefault(op_name, {})
     if isinstance(cells.get(key), str):
@@ -647,26 +662,31 @@ def _incomplete_grids() -> List[str]:
     return gaps
 
 
-def finish_emit(arch, testsfailed: int, path=None, exitstatus: int = 0) -> str:
+def finish_emit(arch, testsfailed: int, path=None, exitstatus=0) -> str:
     """Write this session's measurements into the table, and say what was written.
-
-    Five outcomes:
 
     * **nothing written, ``RuntimeError``** when the session cannot vouch for them: off
       ``MEASURED_ARCH``, where unkeyed rows would carry another arch's numbers under
-      Wormhole's name; when *exitstatus* says the session did not run to the end (pytest
-      calls ``pytest_sessionfinish`` after a Ctrl-C too, and an interrupt between two
-      ops leaves every touched grid complete and nothing counted as failed); after a
-      failure, when only a subset was measured; or when an op's ``(in, out)`` grid is
-      incomplete, when a write would drop the rest's rows.
-    * **written, then ``RuntimeError``** when some ops could not be placed: an op kept
-      verbatim because a row the run covers carries a field ``_render`` cannot put
-      back, or an op measured with no key line to write into. Every *other* op's block
-      has already been rewritten, so a red emit is not an untouched table.
-    * **written**, returning the summary line.
+      Wormhole's name; after a failure, when only a subset was measured; when
+      *exitstatus* says the session did not run to the end (pytest calls
+      ``pytest_sessionfinish`` after a Ctrl-C too, and an interrupt between two ops
+      leaves every touched grid complete and nothing counted as failed); or when an
+      op's ``(in, out)`` grid is incomplete, when a write would drop the rest's rows.
+    * **written, then ``RuntimeError``** when an op was measured with no key line to
+      write into. Every *other* op's block has already been rewritten, so a red emit is
+      not an untouched table.
+    * **written**, returning the summary line. An op kept verbatim -- a row the run
+      covers carries a field ``_render`` cannot put back, the ``near_zero_atol`` floors
+      and ``atol``/``rtol`` anchors -- is named in it: such a block is maintained by
+      hand by design, and failing on it would turn every whole-table emit red.
+
+    *exitstatus* is pytest's ``session.exitstatus``, an ``ExitCode`` or a plain int.
+    pytest has already set it to ``TESTS_FAILED`` when a test failed, so the failure
+    count is read first, to give that run its own message.
     """
     from datetime import date
 
+    import pytest
     from helpers.sfpu_accuracy_budget import _TABLE_PATH, MEASURED_ARCH
 
     if arch != MEASURED_ARCH:
@@ -675,17 +695,20 @@ def finish_emit(arch, testsfailed: int, path=None, exitstatus: int = 0) -> str:
             f"{MEASURED_ARCH.value} measurements and `_render` does not emit `arch`. "
             "Nothing written."
         )
-    if exitstatus != 0:
-        name = getattr(exitstatus, "name", str(exitstatus))
-        raise RuntimeError(
-            f"the session ended with exit status {name}, not OK, so what it measured "
-            "is whatever it got to. Nothing written -- emit from a run that ends on "
-            "its own."
-        )
     if testsfailed:
         raise RuntimeError(
             f"saw {testsfailed} failure(s), so the session measured a subset. Nothing "
             "written -- emit from a clean run."
+        )
+    if exitstatus != pytest.ExitCode.OK:
+        try:
+            name = pytest.ExitCode(exitstatus).name
+        except ValueError:  # pytest.exit(returncode=...) can carry any int
+            name = str(exitstatus)
+        raise RuntimeError(
+            f"the session ended with exit status {name}, not OK, so what it measured "
+            "is whatever it got to. Nothing written -- emit from a run that ends on "
+            "its own."
         )
     gaps = _incomplete_grids()
     if gaps:
@@ -704,27 +727,20 @@ def finish_emit(arch, testsfailed: int, path=None, exitstatus: int = 0) -> str:
         unplaced = []
     except UnplacedMeasurements as exc:
         n, kept, unplaced = exc.written, exc.kept, exc.missing
-    message = f"--ulp-emit: rewrote {n} op block(s) in {path.name}"
-    problems = []
+    message = f"rewrote {n} op block(s) in {path.name}"
     if kept:
-        problems.append(
-            f"kept {', '.join(kept)} verbatim: a row this sweep covers carries a field "
-            f"it cannot regenerate (beyond {sorted(_RENDERABLE_FIELDS)}). Settle those "
-            "cells by hand"
+        message += (
+            f"; kept {', '.join(kept)} verbatim: a row this sweep covers carries a "
+            f"field it cannot regenerate (beyond {sorted(_RENDERABLE_FIELDS)}), so "
+            "their measurements were not written. Settle those cells by hand"
         )
     if unplaced:
-        problems.append(
-            f"measured {', '.join(unplaced)} but the table has no key line for them, "
-            "so they were not written. Give an op its block first (SFPU_ULP.md, step "
-            "2) to enrol it"
-        )
-    if problems:
         raise RuntimeError(
-            f"rewrote {n} op block(s) in {path.name}, but "
-            + "; and ".join(problems)
-            + "."
+            f"{message}; but measured {', '.join(unplaced)} and the table has no key "
+            "line for them, so they were not written. Give an op its block first "
+            "(SFPU_ULP.md, step 2) to enrol it."
         )
-    return message
+    return f"--ulp-emit: {message}"
 
 
 def _verdict(measured: int, out_fmt: str) -> Tuple[str, int]:
@@ -786,7 +802,7 @@ def _collapse(decided: Dict[Tuple, Tuple]) -> List[dict]:
     the block floats below Bfp8_b, which nothing here measured. `Abs` losing its
     Float32 row that way is what the registry's unswept-architecture guard caught.
     """
-    axes = ("in", "out", "approx", "dest")
+    axes = KEY_AXES
     keep = [0, 1]
     for i in (2, 3):
         seen: Dict[Tuple, set] = {}
@@ -831,13 +847,12 @@ def _render(key_line: str, rows: List[dict], suffix: str) -> List[str]:
     a bare `Fill:` dropped it, and the guard that every budget names its measurement
     then failed on rows that had one all along.
     """
-    order = ("in", "out", "approx", "dest")
     out = [key_line]
     for row in rows:
         metric, value = row["verdict"]
         body = ", ".join(
             f'{k}: "{row[k]}"' if k in ("approx", "dest") else f"{k}: {row[k]}"
-            for k in order
+            for k in KEY_AXES
             if k in row
         )
         decided = (
@@ -886,11 +901,7 @@ def _pins_a_measured_cell(line: str, measured: Set[Tuple[str, str, str, str]]) -
     if line.strip().startswith("- *"):
         return True  # an alias: its fields live on the anchor, so assume the widest
     fields = _row_fields(line)
-    pinned = [
-        (i, fields[axis])
-        for i, axis in enumerate(("in", "out", "approx", "dest"))
-        if axis in fields
-    ]
+    pinned = [(i, fields[axis]) for i, axis in enumerate(KEY_AXES) if axis in fields]
     return any(all(key[i] == value for i, value in pinned) for key in measured)
 
 

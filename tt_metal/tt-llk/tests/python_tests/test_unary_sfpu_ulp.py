@@ -77,9 +77,6 @@ pytestmark = pytest.mark.accuracy
 #: 64 tiles: the whole bf16/fp16 value set in one run, and the generator's own ceiling.
 SWEEP_DIMENSIONS = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * 64]
 
-#: How many offending lanes a non-finite failure spells out in its message.
-_MAX_LANES_IN_MESSAGE = 4
-
 
 def run_sweep(mathop, formats, approx_mode, dest_acc):
     """One exhaustive variant on hardware. Returns ``(src, golden, result)``."""
@@ -140,9 +137,10 @@ def run_sweep(mathop, formats, approx_mode, dest_acc):
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),
     )
-    # `sweep_cells` re-derives TestConfig's silent dest promotion to leave out the cells
-    # it would run as another; if the two ever drift, a measurement is keyed on a
-    # kernel that never ran. Fail here rather than record it.
+    # `sweep_cells` leaves out the cells TestConfig would promote to another Dest, so
+    # every cell swept here must be built with the dest_acc it asks for; a cell built
+    # as another would key its measurement on a kernel that never ran. Fail here rather
+    # than record it.
     assert configuration.dest_acc == dest_acc, (
         f"{mathop.name}: asked for dest_acc={dest_acc.name}, TestConfig built "
         f"{configuration.dest_acc.name} -- sweep_cells() is out of step with it"
@@ -273,9 +271,7 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         reason = "no lane a step count can describe"
         unmeasurable = reason
     elif overflowed.any():
-        reason = nonfinite_reason(
-            overflowed, src, golden, result, stats, lanes, _MAX_LANES_IN_MESSAGE
-        )
+        reason = nonfinite_reason(overflowed, src, golden, result, stats, lanes)
         unmeasurable = (
             f"{reason}. No budget buys an overflow, and a step count cannot describe "
             "one."
