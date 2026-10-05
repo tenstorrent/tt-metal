@@ -9,6 +9,14 @@ import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
+from models.experimental.bevformer.config.backbone_config import (
+    BLOCK_SHARDED_DOWNSAMPLE_STAGES,
+    BLOCK_SHARDED_LEVELS,
+    DRAM_ACTIVATION_LEVELS,
+    DRAM_ACTIVATION_STAGES,
+    DRAM_CONV_SLICES,
+    FP32_ACC_STAGES,
+)
 from models.experimental.bevformer.reference.fpn import FPN
 from models.experimental.bevformer.reference.resnet import ResNet
 from models.experimental.bevformer.tests.backbone_weights import init_dummy_backbone_weights, init_dummy_fpn_weights
@@ -56,40 +64,13 @@ FPN_KWARGS = dict(
     relu_before_extra_convs=True,
 )
 
-# Indices (0 is layer1) of the ResNet layers whose activations are kept in DRAM because
-# their convs do not fit in L1. layer1 and layer2 work on 6 x 232 x 400 x 256 tensors
-# (285 MB in bfloat16), layer3's convs fit only without fp32 accumulation, and layer4's
-# 2048-channel 1x1 convs overflow L1 when sharded.
-DRAM_ACTIVATION_STAGES = (0, 1, 2, 3)
-
-# Layers whose convs accumulate in fp32. With trained weights, the error of bfloat16
-# accumulation grows through the deep layers' 26 blocks until C5 falls below PCC 0.99.
-FP32_ACC_STAGES = (2, 3)
-
-# FPN levels whose convs keep their activations in DRAM because they do not fit in L1:
-# C3 is 6 x 116 x 200 x 512 bfloat16 (143 MB) and C4 is 6 x 58 x 100 x 1024 bfloat16 (71 MB).
-DRAM_ACTIVATION_LEVELS = (0, 1)
-
-# Width slices for the spatial convs of the DRAM layers and levels, lowered per conv to what
-# its output width allows. The tightest is the strided 1x1 downsample that opens layer2: its
-# 6 x 232 x 400 x 256 input is in DRAM, and each slice is read into L1 as bfloat16
-# ROW_MAJOR for the halo, 3.25 MB per L1 bank in total against 576 KB free, so it needs at
-# least 6 slices. 8 leaves margin over that; this conv's 200-wide output caps it at 7.
-DRAM_CONV_SLICES = 8
-
-# Layers whose downsample conv is block sharded (layer3, layer4) and FPN levels whose output
-# conv is (C3, C4). Both come from the UniAD port and are not re-tuned for 928x1600.
-BLOCK_SHARDED_DOWNSAMPLE_STAGES = (2, 3)
-BLOCK_SHARDED_LEVELS = (0, 1)
-
-
 # Dtypes TtResNet emits for C3-C5.
 BACKBONE_OUTPUT_DTYPES = [ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16]
 
 
 # The references only run forward; without autograd they keep no activations for backward.
 def build_reference_backbone():
-    return init_dummy_backbone_weights(ResNet(**RESNET_KWARGS)).requires_grad_(False)
+    return init_dummy_backbone_weights(ResNet(**RESNET_KWARGS), input_std=IMAGE_STD).requires_grad_(False)
 
 
 def build_reference_fpn():
@@ -140,20 +121,21 @@ IMAGE_MEAN_BGR = (103.530, 116.280, 123.675)
 # Random structure at these cell sizes and amplitudes, in pixel units, plus per-pixel noise.
 IMAGE_NOISE_SCALES = ((8, 80.0), (32, 40.0), (128, 20.0))
 IMAGE_PIXEL_NOISE = 8.0
+# The std of random_image_batch (measured over a full batch); the mean is near zero.
+IMAGE_STD = 19.5
 
 
 def random_image_batch():
-    """Random camera images at the scale BEVFormer feeds the backbone: smooth random structure at
-    several scales plus pixel noise, clamped to [0, 255], minus ``IMAGE_MEAN_BGR``.
-
-    Unit-variance noise is two orders of magnitude off that scale; with trained weights it
-    measures a different backbone error than real inputs do.
-    """
-    images = torch.zeros(NUM_CAMS, 3, IMAGE_HEIGHT, IMAGE_WIDTH)
+    """Random camera images in the range BEVFormer's normalized images take: smooth random
+    structure at several scales plus pixel noise around the dataset mean, clamped to [0, 255]
+    as pixels are, minus ``IMAGE_MEAN_BGR``. Backbone error with trained weights depends on the
+    input scale, so the inputs keep the real one."""
+    mean = torch.tensor(IMAGE_MEAN_BGR).view(1, 3, 1, 1)
+    images = mean.expand(NUM_CAMS, 3, IMAGE_HEIGHT, IMAGE_WIDTH).clone()
     for cell, amplitude in IMAGE_NOISE_SCALES:
-        coarse = torch.rand(NUM_CAMS, 3, IMAGE_HEIGHT // cell + 1, IMAGE_WIDTH // cell + 1)
+        coarse = torch.rand(NUM_CAMS, 3, IMAGE_HEIGHT // cell + 1, IMAGE_WIDTH // cell + 1) - 0.5
         images += amplitude * F.interpolate(
             coarse, size=(IMAGE_HEIGHT, IMAGE_WIDTH), mode="bilinear", align_corners=False
         )
     images += IMAGE_PIXEL_NOISE * torch.randn(images.shape)
-    return images.clamp(0, 255) - torch.tensor(IMAGE_MEAN_BGR).view(1, 3, 1, 1)
+    return images.clamp(0, 255) - mean

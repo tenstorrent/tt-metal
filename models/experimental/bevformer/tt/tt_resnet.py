@@ -105,16 +105,14 @@ class TtResLayer:
         fp32_acc=False,
         input_dtype=ttnn.bfloat16,
         input_layout=ttnn.TILE_LAYOUT,
-        output_dtype=None,
     ):
         """One ResNet layer (layer1 .. layer4), one bottleneck per block in ``conv_pth``.
         ``input_dtype``, ``input_layout`` and ``dram_input`` describe the layer input, which
-        only the first block reads. ``output_dtype`` is the dtype the last block emits; None
-        keeps the one its convs produce. The other arguments go to every block."""
+        only the first block reads. The other arguments go to every block."""
         num_blocks = len(conv_pth)
         self.layer = []
         for j in range(num_blocks):
-            first, last = j == 0, j == num_blocks - 1
+            first = j == 0
             self.layer.append(
                 TtBottleneck(
                     conv_args[j],
@@ -127,7 +125,6 @@ class TtResLayer:
                     fp32_acc=fp32_acc,
                     input_dtype=input_dtype if first else self.layer[-1].output_dtype,
                     input_layout=input_layout if first else ttnn.TILE_LAYOUT,
-                    output_dtype=output_dtype if last else None,
                 )
             )
         self.output_dtype = self.layer[-1].output_dtype
@@ -151,7 +148,6 @@ class TtBottleneck:
         fp32_acc=False,
         input_dtype=ttnn.bfloat16,
         input_layout=ttnn.TILE_LAYOUT,
-        output_dtype=None,
     ):
         """Every conv's shape and stride come from ``conv_args``, recorded from one forward of
         the reference model. The block's conv2 is DCNv2 when ``conv_pth.conv2`` has an offset
@@ -163,7 +159,9 @@ class TtBottleneck:
         ``dram_conv_slices`` width slices; a DCN conv2 is unaffected. ``dram_input`` only
         covers the convs that read the block input, for a block fed by a DRAM layer whose own
         activations fit in L1. ``block_sharded_downsample`` block-shards the downsample conv.
-        ``fp32_acc`` accumulates conv1, a non-DCN conv2, conv3 and the downsample in fp32."""
+        ``fp32_acc`` accumulates conv1, a non-DCN conv2, conv3 and the downsample in an fp32
+        destination register (their partial sums between reduction blocks stay bfloat16); a DCN
+        conv2 always does (TtModulatedDeformConv2dPack)."""
         self.with_dcn = "conv_offset" in conv_pth.conv2
         self.is_downsample = "downsample" in conv_pth
 
@@ -171,9 +169,7 @@ class TtBottleneck:
         # emits bfloat16.
         conv2_dtype = input_dtype
         conv3_dtype = ttnn.bfloat16 if self.with_dcn else input_dtype
-        # The residual add emits ``output_dtype``, so a cast the next layer needs costs no
-        # separate pass over the tensor.
-        self.output_dtype = conv3_dtype if output_dtype is None else output_dtype
+        self.output_dtype = conv3_dtype
 
         self.conv1 = TtnnConv2D(
             conv_args.conv1,
@@ -276,10 +272,11 @@ class TtResNet:
         spatial convs run in ``dram_conv_slices`` width slices and their 1x1 convs as a DRAM
         matmul. A layer that follows one of them and is not listed itself reads its input from
         DRAM the same way. ``block_sharded_downsample_stages`` lists the layers whose downsample
-        conv is block sharded, and ``fp32_acc_stages`` the layers whose convs accumulate in fp32."""
+        conv is block sharded, and ``fp32_acc_stages`` the layers whose convs accumulate in an fp32
+        destination register (see TtBottleneck)."""
         self.out_indices = out_indices
         self.maxpool_args = conv_args.maxpool
-        memory_config = dict(
+        stage_config = dict(
             dram_activation_stages=dram_activation_stages,
             dram_conv_slices=dram_conv_slices,
             block_sharded_downsample_stages=block_sharded_downsample_stages,
@@ -298,8 +295,8 @@ class TtResNet:
         )
 
         # The max pool emits a bfloat16 ROW_MAJOR tensor and every layer emits bfloat16 TILE.
-        # The trained backbone has outlier channels that bfloat8_b's shared block exponent
-        # flattens; run through layer2 in bfloat8_b, that error grows through the DCN layers.
+        # Activations stay bfloat16: the trained backbone has outlier channels that bfloat8_b's
+        # shared block exponent flattens.
         layer_input_dtype = ttnn.bfloat16
         layer_input_layout = ttnn.ROW_MAJOR_LAYOUT
         self.output_dtypes = []
@@ -309,7 +306,7 @@ class TtResNet:
                 conv_args=conv_args[f"layer{i+1}"],
                 conv_pth=conv_pth[f"layer{i+1}"],
                 device=device,
-                **self.layer_kwargs(i, **memory_config),
+                **self.layer_kwargs(i, **stage_config),
                 input_dtype=layer_input_dtype,
                 input_layout=layer_input_layout,
             )
@@ -323,7 +320,7 @@ class TtResNet:
     def layer_kwargs(
         i, dram_activation_stages=(), dram_conv_slices=None, block_sharded_downsample_stages=(), fp32_acc_stages=()
     ):
-        """The memory arguments of layer ``i`` (0 is layer1); a layer after a DRAM layer reads
+        """The per-layer arguments of layer ``i`` (0 is layer1); a layer after a DRAM layer reads
         its input from DRAM."""
         return dict(
             dram_activation=i in dram_activation_stages,
