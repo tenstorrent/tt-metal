@@ -82,6 +82,8 @@ DB_SCHEMA = [
     Column("tile_cnt", "int64", True, "key"),
     # configuration
     Column("alpha_bits", "int64", True, "configuration"),
+    Column("api_fmt", "string", True, "configuration"),
+    Column("api_op", "string", True, "configuration"),
     Column("approx_mode", "string", True, "configuration"),
     Column("beta_bits", "int64", True, "configuration"),
     Column("binop_mathop", "string", True, "configuration"),

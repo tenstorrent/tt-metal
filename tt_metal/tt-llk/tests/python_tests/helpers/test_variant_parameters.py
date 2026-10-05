@@ -738,6 +738,17 @@ class CLAMP_NEGATIVE(TemplateParameter):
 
 
 @dataclass
+class SFPU_API_OP(TemplateParameter):
+    """A compute API SFPU entry point of helpers/include/sfpu_compute_api.h and the DataFormat it is built for."""
+
+    api_op: str = None
+    api_fmt: str = None
+
+    def convert_to_cpp(self) -> str:
+        return f"#define API_OP_NAME {self.api_op}\n#define API_FMT_NAME {self.api_fmt}"
+
+
+@dataclass
 class STABLE_SORT(TemplateParameter):
     stable_sort: StableSort = StableSort.No
 
