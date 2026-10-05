@@ -37,6 +37,12 @@ from .weights import AttentionWeights
 _Q_SHARDED_MEM_CACHE: dict = {}
 
 
+def sdpa_active_row_allocation() -> bool:
+    """GEMMA4_SDPA_ACTIVE_ROWS=1 turns on active-row core allocation in the paged decode SDPA
+    (tenstorrent/tt-metal#59300); default off."""
+    return os.environ.get("GEMMA4_SDPA_ACTIVE_ROWS", "0") == "1"
+
+
 def _q_sharded_mem_key(B, qkv_dim, config, weights, tp):
     """Hashable key for the q_sharded_mem cache. Captures every input that
     affects ``nlp_create_qkv_heads_decode``'s output shard spec."""
@@ -320,6 +326,12 @@ def decode_forward(
                 block_size=effective_block_size(k_cache, config.head_dim, sdpa_num_local_kv_heads),
                 num_kv_heads=sdpa_num_local_kv_heads,
             ),
+            # Deal the SDPA cores to the rows that are active this step instead of to the
+            # padded batch (tenstorrent/tt-metal#59300): the reduction order then no longer
+            # depends on which decode graph (bucket) the step runs in, so seeded requests
+            # reproduce across buckets, and a lone row inside a wide graph keeps the cores
+            # the B=1 graph would give it. Opt-in until validated on every mesh.
+            active_row_allocation=sdpa_active_row_allocation(),
             **paged_modulo_kwargs,
         )
     else:
