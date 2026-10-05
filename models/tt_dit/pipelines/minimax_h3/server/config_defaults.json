@@ -706,35 +706,35 @@
  "p300x2": {
   "audio_shift": 3.0,
   "choice_reason": "chosen on latency and canvas; the quality fence this line used to carry is LIFTED -- see `quality`, re-taken 2026-10-05 on the build that fixed the on-device LoRA bind. Within budget. Stage 06 took the e2e from 75.5 s to 71.7 s here: the (1,4) preset has sp_axis 0 over a mesh of shape (1,4), so sp_factor is 1 and the ring-free windowed SDPA path applies on this mesh too -- but with 14 heads per device rather than p150's 56, and the chunk-size optimum moves with head count, so this mesh takes (512, 128) where p150 takes (384, 256). Measured at 14 heads at all three lengths this profile can serve: 19328 -11.8%, 22464 -4.2%, 37760 -4.8% against the 56-head pick. The CLIP comparison that used to close this paragraph (0.3344 against stage 05's 0.3087) is WITHDRAWN 2026-10-05: both numbers were measured on base-model output, so the pair says nothing about the chunk rule or anything else. The chunk rule's evidence is the per-length device measurement quoted above, which is unaffected. See `clip` / `clip_note` for the re-taken quality numbers.",
-  "clip": 0.3423,
+  "clip": 0.3398,
   "clip_n_prompts": 5,
-  "clip_note": "RE-TAKEN 2026-10-05 (06b). The 0.3344 that stood here, and stage 05's 0.3087 it was compared with, were both BASE-model measurements -- the adapter was never on the weights that rendered them (artifacts/s06/results.json p300x2_quality_numbers_are_base_model). This is the mean over the five prompts in artifacts/s06/nfe/prompts.txt at seed 7, on the fixed build. No CLIP number measured on this profile before 2026-10-05 should be quoted.",
+  "clip_note": "RE-TAKEN 2026-10-05 (06b) on the fixed build, then RE-TAKEN AGAIN the same day at precomputed_adaln TRUE, which is what this profile now serves. Mean over the five prompts in artifacts/s06/nfe/prompts.txt at seed 7. The resident-adaLN arm these superseded scored 0.3423 (0.3239/0.3589/0.3690/0.3218/0.3381); the two differ by 0.0025 on the mean and by at most 0.0114 on any one prompt, well inside the ~0.045 spread CLIP shows between adjacent working points of one identical configuration, so the adaLN flip was NOT taken on CLIP -- see `adaln_choice`. Both arms supersede the 0.3344 that stood here before 06b and stage 05's 0.3087, which were BASE-model measurements (the adapter was never on the weights that rendered them). No CLIP number measured on this profile before 2026-10-05 should be quoted.",
   "clip_samples": [
-   0.3239,
-   0.3589,
-   0.369,
-   0.3218,
-   0.3381
+   0.3314,
+   0.3475,
+   0.3667,
+   0.3256,
+   0.3278
   ],
   "dit_dtype_policy": {
    "activation_dtype": null,
    "bf16_blocks": [],
    "ff_dtype": "bfloat16",
    "out_dtype": "bfloat16",
-   "precomputed_adaln": false,
+   "precomputed_adaln": true,
    "profile": null,
    "qkv_dtype": "bfloat16",
-   "why": "the (1,4) preset asks for no quant profile: TP=4 divides the DiT to ~16.6 GB/chip and the measured default clears the 90 s budget, so there is nothing to buy by quantizing on latency. CORRECTED 2026-10-05 (06b): the stage-06 sentence that the served-point quality defect 'lives on this bf16 path' is WITHDRAWN. The defect was the on-device LoRA bind not surviving a weight page-in; it is fixed in the shared layer and this profile's quality is re-taken as good at bf16. bf8 appeared to cure it only because a quant profile also moves the adapter to the host fuse. Nothing about the dtype needs to change."
+   "why": "the (1,4) preset asks for no quant profile: TP=4 divides the DiT to ~16.6 GB/chip and the measured default clears the 90 s budget, so there is nothing to buy by quantizing on latency. CORRECTED 2026-10-05 (06b): the stage-06 sentence that the served-point quality defect 'lives on this bf16 path' is WITHDRAWN. The defect was the on-device LoRA bind not surviving a weight page-in; it is fixed in the shared layer and this profile's quality is re-taken as good at bf16. bf8 appeared to cure it only because a quant profile also moves the adapter to the host fuse. Nothing about the dtype needs to change.  precomputed_adaln flipped false -> TRUE 2026-10-05 (06b), on a one-axis five-prompt arm at this exact point on the fixed build. Unlike (1,1), where host adaLN tables are what makes the DiT fit at all, TP=4 fits the resident branch fine -- this is taken purely on the measurement: worst-case wall 74.6 -> 67.3 s, peak DRAM 21.65 -> 15.49 GiB, CLIP a wash and motion up on 4 of 5 prompts. See `adaln_choice`."
   },
   "dit_quant_profile": null,
-  "e2e_note": "WORST of five prompts on the fixed build (stage 06b), against stage 06's 71.7 s worst-of-two. The difference is the fix's one new per-request cost: re-applying the adapter on the DiT page-in re-uploads 208 rank-128 A/B pairs from host. It is invisible in phases_s -- denoising is unchanged (36.1 s on the coastline prompt against the no-adapter control's 35.9 s, so the merge still has no per-step cost) -- and shows up as wall-minus-phases going 17.6 s -> 20.1 s, flat across all five clips. Peak DRAM is unchanged AGAINST ctlG, which shows the same prompt-driven 19.94 -> 21.65 step, rather than constant: the re-merge adds no DRAM (lora_cache_capacity is 0, so the factors are freed per apply). The record carries the worst of the five, 21.65 -- see peak_dram_gib_note. Still inside the 90 s budget. Removable: LoRAMixin's A/B LRU exists for exactly this re-merge and would buy the 2.4 s back for about 0.5 GiB/device; not taken in 06b because it moves the memory profile this record was measured at.",
-  "e2e_s": 74.6,
+  "e2e_note": "WORST of five prompts at precomputed_adaln TRUE (stage 06b), the setting this profile now serves. The resident-adaLN arm it supersedes was 74.6 s worst-of-five, and stage 06's pre-fix record was 71.7 s worst-of-two; the 71.7 is not comparable to either, because it was measured before the fix added the per-request re-merge below. Two effects are stacked here and both are measured. (1) The fix's one new per-request cost: re-applying the adapter on the DiT page-in re-uploads 208 rank-128 A/B pairs from host. It is invisible in phases_s -- denoising is unchanged (36.0 s on the coastline prompt at this setting against the no-adapter control's 35.9 s, so the merge still has no per-step cost) -- and showed up as wall-minus-phases going 17.6 s -> 20.1 s, flat across all five clips. (2) The adaLN flip takes wall-minus-phases back down to 12.8 s, more than paying for (1). Well inside the 90 s budget. Still removable: LoRAMixin's A/B LRU exists for exactly this re-merge and would buy more of (1) back for about 0.5 GiB/device; not taken in 06b because it moves the memory profile this record was measured at.",
+  "e2e_s": 67.3,
   "e2e_samples_s": [
-   74.6,
-   74.4,
-   68.2,
-   72.5,
-   72.2
+   67.2,
+   67.3,
+   61.1,
+   65.5,
+   65.5
   ],
   "frames_max": {
    "1344x768": 124,
@@ -744,25 +744,25 @@
   "lora_strength": 1.0,
   "nfe": 4,
   "num_frames": 124,
-  "peak_dram_gib": 21.65,
-  "peak_dram_gib_note": "WORST of the five prompts at this point, matching how e2e_s and phases_s are sampled in this block. The value here used to be 19.94, which is the MINIMUM of the same five. The 19.94 -> 21.65 step is reproducible and pre-existing -- stage 06's ctlC, ctlF and ctlG all show it on their second (blacksmith) clip -- and it is prompt-driven, not an effect of the LoRA page-in re-merge, which adds no DRAM at all (lora_cache_capacity is 0, so the A/B factors are freed per apply). Size stage 07/08 against 21.65.",
+  "peak_dram_gib": 15.49,
+  "peak_dram_gib_note": "WORST of the five prompts at this point and at precomputed_adaln TRUE, matching how e2e_s and phases_s are sampled in this block. The resident-adaLN arm it supersedes peaked at 21.65 GiB on the same five prompts, so the adaLN flip is worth 6.16 GiB. The 13.79 -> 15.49 step inside this arm is the same reproducible, prompt-driven step the resident arm shows as 19.94 -> 21.65 (stage 06's ctlC, ctlF and ctlG all show it on their second, blacksmith clip); it is not an effect of the LoRA page-in re-merge, which adds no DRAM at all (lora_cache_capacity is 0, so the A/B factors are freed per apply). Size stage 07/08 against 15.49.",
   "peak_dram_gib_samples": [
-   19.94,
-   19.94,
-   19.94,
-   21.65,
-   21.65
+   13.79,
+   13.79,
+   13.79,
+   15.49,
+   15.49
   ],
   "phases_s": {
-   "audio": 0.603,
-   "denoising": 42.362,
-   "encoder": 0.003,
-   "vae": 11.391
+   "audio": 0.604,
+   "denoising": 42.294,
+   "encoder": 0.008,
+   "vae": 11.603
   },
-  "phases_s_source": "s06b_p300x2_fixed_p0_1344x768x124, the worst-of-five run `e2e_s` reports, so the two are one sample. wall - sum(phases) = 20.2 s here; see e2e_note for what lives in that gap. The per-prompt spread in `denoising` (36.1-42.4 s across the five) is the padded packed length changing with the prompt's token count, the same spread stage 06's controls show.",
-  "quality": "RE-TAKEN 2026-10-05 (stage 06b) on the fixed build and now GOOD. The stage-06 defect was not a working-point problem at all: the on-device LoRA bind was inert across the DiT page-in this `coresident: False` preset performs before every denoise, so every clip ever recorded on this profile was BASE-model output. Fixed in tt_dit's shared LoRA layer (commit 'Keep a fuse-mode LoRA bound across a weight page-out'). Five prompts, seed 7, one build, warm, at this exact point: CLIP 0.3239 / 0.3589 / 0.3690 / 0.3218 / 0.3381, temporal motion 8.47 / 6.44 / 1.28 / 3.10 / 1.96. The motion collapse is gone (it was a 0.70-0.89 floor on 3 of 5), the content-free coastline clip is gone (CLIP 0.1867 -> 0.3690) and the dark blacksmith clip is back in p150's range (video mean 4.0 -> 11.1 against p150's 13.9). Cross-checked against stage 06's INDEPENDENT bf16 host-fuse control ctlF, a different code path to the same model, on its two prompts: coastline 0.3690/1.28/107.7 here against ctlF's 0.3647/1.239/108.5, blacksmith 0.3218/3.10/11.1 against 0.3227/2.529/10.4. artifacts/s06b/results.json.",
+  "phases_s_source": "s06b_p300x2_adaln5_p1_1344x768x124, the worst-of-five run `e2e_s` reports, so the two are one sample. wall - sum(phases) = 12.8 s here. The per-prompt spread in `denoising` (36.0-42.4 s across the five) is the padded packed length changing with the prompt's token count, the same spread stage 06's controls show.",
+  "quality": "RE-TAKEN 2026-10-05 (stage 06b) on the fixed build and now GOOD, then re-taken again the same day at precomputed_adaln TRUE, which is what this profile serves -- the numbers below are that second arm. The stage-06 defect was not a working-point problem at all: the on-device LoRA bind was inert across the DiT page-in this `coresident: False` preset performs before every denoise, so every clip ever recorded on this profile was BASE-model output. Fixed in tt_dit's shared LoRA layer (commit 'Keep a fuse-mode LoRA bound across a weight page-out'). Five prompts, seed 7, one build, warm, at this exact point: CLIP 0.3314 / 0.3475 / 0.3667 / 0.3256 / 0.3278, temporal motion 7.39 / 8.32 / 2.68 / 3.24 / 2.16. The motion collapse is gone (it was a 0.70-0.89 floor on 3 of 5), the content-free coastline clip is gone (CLIP 0.1867 -> 0.3667) and the dark blacksmith clip is back in p150's range (video mean 4.0 -> 14.6 against p150's 13.9). The resident-adaLN arm this supersedes agrees on all of that (CLIP 0.3239 / 0.3589 / 0.3690 / 0.3218 / 0.3381, motion 8.47 / 6.44 / 1.28 / 3.10 / 1.96) and is kept in artifacts/s06b/s06b_p300x2_fixed.json; see `adaln_choice` for why the other one is served. Cross-checked against stage 06's INDEPENDENT bf16 host-fuse control ctlF, a different code path to the same model, on its two prompts -- but note ctlF holds adaLN RESIDENT, so it corroborates the resident arm, not this one: coastline 0.3690/1.28/107.7 in the resident arm against ctlF's 0.3647/1.239/108.5, blacksmith 0.3218/3.10/11.1 against 0.3227/2.529/10.4. artifacts/s06b/results.json.",
   "quality_fix_measured": "SUPERSEDED 2026-10-05 by the real fix; kept only so the stage-06 reading is not silently deleted. The one-axis bisect that produced it was sound as measurement and wrong as diagnosis: ctlE's bf8 arm recovered the output because setting a quant profile ALSO switches the adapter onto the host-fuse path (`_lora_fuses_on_host`), not because bf16 arithmetic was the problem. ctlF held the dtype at bf16, forced the host fuse, and recovered everything too -- which already exonerated the dtype inside stage 06. There is no accuracy reason to quantize this mesh. See artifacts/s06b/results.json.",
-  "quality_known_exception": "1 of the 5 clips fails exactly one critical prove_h3 check and it is NOT this profile's problem: 'a red fox trotting through fresh snow at dawn, crisp footsteps crunching' scores audio rms 0.0019 against prove_h3's absolute 0.002 floor. The SAME prompt and point run through the independent host-fuse path (MINIMAX_H3_FORCE_HOST_FUSE=1) gives 0.0018 and fails the same check, with CLIP 0.3598 against 0.3589 and motion 6.32 against 6.44 -- so the two adapter-application paths agree and the quiet audio is the prompt. It is also the quietest prompt of the five on p150 (rms 0.00500 at 73 frames, the lowest of its five), and this clip is 124 frames / 5.2 s of audio against p150's 73 / 3.0 s, so sparse footsteps spread over a longer clip land lower in RMS. Stage 07 owns the call: either prove_h3's audio floor is made duration-aware, or this prompt is expected to fail it on a 5 s clip. Nothing here says the model is wrong. artifacts/s06b/s06b_ctlH_fox_hostfuse.json.  UPDATED 2026-10-05 after a second review. A frame-count control was run (fox at 1344x768 x73 on this same profile: rms 0.00238, PASSES, with total audio energy essentially unchanged at 1.724e-05 against the 124-frame clip's 1.905e-05), so for THIS prompt the longer clip is the same audio diluted. Two things must not be over-read from that. First, it is a one-prompt result: on p150 the same 73 -> 124 change costs 16.6x of total audio energy on the marching-band prompt, so frame count is NOT generally energy-neutral and that effect is open (artifacts/s06b/results.json open_items). Second, the duration-MATCHED cross-mesh comparison (stage 06's ctlB, p150 at x124) shows no p300x2 audio deficit at all on the two prompts it covers -- p300x2 is louder on one and equal on the other -- so the p150/p300x2 gap on the fox clip is a one-prompt, one-length observation, not a profile property. The served profile ships with a known 1-in-5 failing content check on this prompt; stage 07 owns whether the floor or the prompt moves.",
+  "quality_known_exception": "1 of the 5 clips fails exactly one critical prove_h3 check and it is NOT this profile's problem: 'a red fox trotting through fresh snow at dawn, crisp footsteps crunching' scores audio rms 0.0012 against prove_h3's absolute 0.002 floor at the served precomputed_adaln setting (0.0019 on the resident-adaLN arm; the adaLN flip deepens this one failure and that is its stated cost, see `adaln_choice`). The SAME prompt and point run through the independent host-fuse path (MINIMAX_H3_FORCE_HOST_FUSE=1) gives 0.0018 and fails the same check, with CLIP 0.3598 against 0.3589 and motion 6.32 against 6.44 -- so the two adapter-application paths agree and the quiet audio is the prompt. It is also the quietest prompt of the five on p150 (rms 0.00500 at 73 frames, the lowest of its five), and this clip is 124 frames / 5.2 s of audio against p150's 73 / 3.0 s, so sparse footsteps spread over a longer clip land lower in RMS. Stage 07 owns the call: either prove_h3's audio floor is made duration-aware, or this prompt is expected to fail it on a 5 s clip. Nothing here says the model is wrong. artifacts/s06b/s06b_ctlH_fox_hostfuse.json.  UPDATED 2026-10-05 after a second review. A frame-count control was run (fox at 1344x768 x73 on this same profile: rms 0.00238, PASSES, with total audio energy essentially unchanged at 1.724e-05 against the 124-frame clip's 1.905e-05), so for THIS prompt the longer clip is the same audio diluted. Two things must not be over-read from that. First, it is a one-prompt result: on p150 the same 73 -> 124 change costs 16.6x of total audio energy on the marching-band prompt, so frame count is NOT generally energy-neutral and that effect is open (artifacts/s06b/results.json open_items). Second, the duration-MATCHED cross-mesh comparison (stage 06's ctlB, p150 at x124) shows no p300x2 audio deficit at all on the two prompts it covers -- p300x2 is louder on one and equal on the other -- so the p150/p300x2 gap on the fox clip is a one-prompt, one-length observation, not a profile property. The served profile ships with a known 1-in-5 failing content check on this prompt; stage 07 owns whether the floor or the prompt moves.",
   "quality_ok": true,
   "short_edge_max": 768,
   "steps": 5,
@@ -771,6 +771,55 @@
   "video_shift": 6.0,
   "width": 1344,
   "within_budget": true,
-  "within_budget_note": "`within_budget` and `e2e_s` are latency facts and remain true. They say nothing about whether the clip is correct; see `quality`."
+  "within_budget_note": "`within_budget` and `e2e_s` are latency facts and remain true. They say nothing about whether the clip is correct; see `quality`.",
+  "adaln_choice": {
+   "setting": "precomputed_adaln: true",
+   "changed_from": "false (the (1,4) preset's implicit default through stage 06 and the first 06b record)",
+   "why_not_memory": "On the (1,1) preset host adaLN tables are a necessity -- with the branch resident the bf16 DiT is ~66 GB on one chip. On (1,4) TP=4 divides it to ~16.6 GB/chip with adaLN resident, so the flag was never needed here and the preset simply never set it.",
+   "measurement": "One axis, five prompts, seed 7, 1344x768 x124, NFE 4, 4step_v1.2_768p at strength 1.0, video shift 6 / audio shift 3, one build, warm, every other knob held: artifacts/s06b/s06b_p300x2_adaln5.json against artifacts/s06b/s06b_p300x2_fixed.json.",
+   "clip_resident": [
+    0.3239,
+    0.3589,
+    0.369,
+    0.3218,
+    0.3381
+   ],
+   "clip_precomputed": [
+    0.3314,
+    0.3475,
+    0.3667,
+    0.3256,
+    0.3278
+   ],
+   "clip_verdict": "a wash: mean 0.3423 -> 0.3398, max per-prompt |delta| 0.0114, against the ~0.045 spread CLIP shows between adjacent working points of one identical configuration. The flip is NOT justified on CLIP and is not claimed to be.",
+   "motion_resident": [
+    8.47,
+    6.44,
+    1.28,
+    3.1,
+    1.96
+   ],
+   "motion_precomputed": [
+    7.39,
+    8.32,
+    2.68,
+    3.24,
+    2.16
+   ],
+   "motion_verdict": "up on four of five prompts, down on one (the marching band, 8.47 -> 7.39). The one that matters is the near-static coastline clip, 1.28 -> 2.68. That is the same axis and the same direction stage 06's preset bisect flagged (ctlD recovered the coastline's motion to 3.445 where ctlG gave 0.83) -- but BOTH of those were base-model renders, so 06b voided them as evidence. This arm re-establishes the effect with the adapter genuinely on the weights. Higher motion is not automatically better; what is being read here is a near-static clip for a 'waves breaking on a stormy coastline' prompt becoming less static, and both arms pass all 16 content checks on it.",
+   "wall_worst_s": {
+    "resident": 74.6,
+    "precomputed": 67.3,
+    "delta_pct": -9.8
+   },
+   "peak_dram_gib_worst": {
+    "resident": 21.65,
+    "precomputed": 15.49,
+    "delta_gib": -6.16
+   },
+   "adapter_unaffected": "Checked rather than assumed, because precomputing adaLN removes the adaln_proj linears from the device and a LoRA that targeted them would be silently dropped -- the exact class of failure this stage exists to fix. The adapter carries NO adaLN keys: 624 tensors = 312 A/B pairs, all of them attention (to_q/to_k/to_v/to_out) and ff (net.N, net.N.proj) across the 50 transformer blocks and 2 refiner blocks. The loader confirms it from the other side, binding the same 208 targets on both settings: 'bound 208 LoRA targets over 266 promoted linears' with adaLN resident and 'over 213' with it precomputed. 266 - 213 = 53 is exactly the adaLN projections; 213 - 208 = 5 is the five linears the adapter does not target (proj_in, audio_proj_in, context_embedder, proj_out, audio_proj_out).",
+   "stated_cost": "The one clip that already failed prove_h3's absolute 0.002 audio floor fails it harder: the fox prompt goes rms 0.0019 -> 0.0012. It is the same clip, failing the same single check, on both settings and on the independent host-fuse path. No clip that passed starts failing, and no other check moves. See `quality_known_exception`.",
+   "not_established": "This arm was rendered, not SERVED: no trace capture or server round-trip has been run at precomputed_adaln on this mesh. The (1,1) profile has served and traced this code path since stage 03, so it is not a new path, only a new path on this mesh. Stage 07 owns the served validation and should re-measure e2e there rather than inheriting 67.3 s as a serving number."
+  }
  }
 }
