@@ -6,7 +6,7 @@ Functional implementations for Qwen3-TTS modules.
 Each function is standalone and takes (x, state_dict/weights, config) as arguments.
 """
 
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -1612,8 +1612,12 @@ def speech_tokenizer_decoder_continue(
     token_ids: torch.Tensor,
     weights: dict,
     config: SpeechTokenizerDecoderConfig,
+    backend: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
 ) -> torch.Tensor:
     """Decode ``token_ids`` [batch, num_quantizers, n] that follow the prefix in ``state``.
+
+    ``backend`` replaces ``_decoder_backend`` (latent [batch, latent_dim, frames] -> audio),
+    e.g. with ``TtSpeechTokenizerDecoder.backend`` (tt/speech_tokenizer.py) on device.
 
     Returns audio [batch, 1, n * 1920] for the new frames only.
     """
@@ -1629,7 +1633,8 @@ def speech_tokenizer_decoder_continue(
             start_pos=state["num_frames"],
         ).transpose(1, 2)
     context = state["latent_tail"]
-    audio = _decoder_backend(torch.cat([context, hidden_states], dim=-1), weights, config)
+    latent = torch.cat([context, hidden_states], dim=-1)
+    audio = backend(latent) if backend is not None else _decoder_backend(latent, weights, config)
     return audio[..., audio.shape[-1] * context.shape[-1] // (context.shape[-1] + hidden_states.shape[-1]) :]
 
 

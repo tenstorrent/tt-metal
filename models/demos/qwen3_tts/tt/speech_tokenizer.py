@@ -16,6 +16,7 @@ The pre-transformer uses TTNN, while convolutional layers use PyTorch fallback.
 """
 
 import os
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union
 
@@ -26,7 +27,40 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_tts.reference.functional import SpeechTokenizerDecoderConfig
 from models.demos.qwen3_tts.reference.functional import speech_tokenizer_decoder_forward as reference_decoder_forward
 from models.demos.qwen3_tts.tt.mesh_utils import to_torch as _mesh_to_torch
-from models.demos.qwen3_tts.tt.ttnn_conv_decoder import TTNNConv1d, ttnn_snake_activation
+from models.demos.qwen3_tts.tt.ttnn_conv_decoder import TTNNConv1d, backend_compute_config, ttnn_snake_activation
+
+# Conv back-end numerics. "hifi" (default): HiFi4 + fp32 accumulation for every matmul /
+# linear / layer_norm, exact GELU, and SnakeBeta's exp(alpha) and 1 / (exp(beta) + eps)
+# folded on the host in fp32. "legacy": the previous default-fidelity, approximate-GELU,
+# on-device-exp path, kept for A/B comparison.
+LEGACY_NUMERICS = os.environ.get("TT_QWEN3_DECODE_NUMERICS", "hifi") == "legacy"
+SNAKE_EPS = 1e-9
+
+
+@contextmanager
+def _variant_scope(variant: Optional[dict]):
+    """Apply a decoder's numerics variant to the module-level switches for one call.
+
+    ``variant`` keys (all optional, defaulting to the TT_QWEN3_DECODE_* env vars):
+    ``numerics`` ("hifi" | "legacy"), ``conv`` ("matmul" | "conv1d"), ``fidelity``
+    ("HiFi4" | "HiFi3" | ...). Lets several differently-configured decoders share one
+    process, e.g. to A/B them on the same device and requests.
+    """
+    global LEGACY_NUMERICS
+    from models.demos.qwen3_tts.tt import ttnn_conv_decoder as tcd
+
+    if not variant:
+        yield
+        return
+    saved = (LEGACY_NUMERICS, tcd.CONV_MODE, tcd.FIDELITY)
+    try:
+        if "numerics" in variant:
+            LEGACY_NUMERICS = variant["numerics"] == "legacy"
+        tcd.CONV_MODE = variant.get("conv", tcd.CONV_MODE)
+        tcd.FIDELITY = variant.get("fidelity", tcd.FIDELITY)
+        yield
+    finally:
+        LEGACY_NUMERICS, tcd.CONV_MODE, tcd.FIDELITY = saved
 
 
 @dataclass
@@ -46,8 +80,10 @@ class SpeechTokenizerConfig:
     pre_transformer_num_layers: int = 8
     pre_transformer_num_heads: int = 16
     pre_transformer_head_dim: int = 64  # qkv_dim / num_heads = 1024 / 16 = 64
-    rms_norm_eps: float = 1e-6
-    rope_theta: float = 1000000.0
+    # The speech tokenizer's own values (speech_tokenizer/config.json decoder_config and the
+    # reference SpeechTokenizerDecoderConfig), not the talker's 1e6 / 1e-6.
+    rms_norm_eps: float = 1e-5
+    rope_theta: float = 10000.0
     sliding_window: int = 72
 
     # Decoder config
@@ -298,7 +334,8 @@ def convnext_block(
             device=device,
         ),
     )
-    x = ttnn.layer_norm(x, weight=norm_w_tt, bias=norm_b_tt, memory_config=mc)
+    cc = None if LEGACY_NUMERICS else backend_compute_config(device)
+    x = ttnn.layer_norm(x, weight=norm_w_tt, bias=norm_b_tt, memory_config=mc, compute_kernel_config=cc)
 
     # Pointwise convs (linear)
     pw1_w_tt = _cached_tt(
@@ -327,8 +364,8 @@ def convnext_block(
         if pwconv1_bias is not None
         else None
     )
-    x = ttnn.linear(x, pw1_w_tt, bias=pw1_b_tt, memory_config=mc)
-    x = ttnn.gelu(x, memory_config=mc)
+    x = ttnn.linear(x, pw1_w_tt, bias=pw1_b_tt, memory_config=mc, compute_kernel_config=cc)
+    x = ttnn.gelu(x, memory_config=mc, fast_and_approximate_mode=LEGACY_NUMERICS)
     pw2_w_tt = _cached_tt(
         cache,
         f"{kp}.pw2_w" if kp else None,
@@ -355,7 +392,7 @@ def convnext_block(
         if pwconv2_bias is not None
         else None
     )
-    x = ttnn.linear(x, pw2_w_tt, bias=pw2_b_tt, memory_config=mc)
+    x = ttnn.linear(x, pw2_w_tt, bias=pw2_b_tt, memory_config=mc, compute_kernel_config=cc)
 
     # Layer scale (broadcast on channels)
     if gamma is not None:
@@ -375,12 +412,21 @@ def convnext_block(
 
 
 def _cached_snake_ab(cache, key_prefix, alpha_w, beta_w, channels, device):
-    """Memoize per-channel SnakeBeta alpha/beta device tensors."""
+    """Memoize per-channel SnakeBeta parameters on device.
+
+    Returns (exp(alpha), 1 / (exp(beta) + eps)) computed on the host in fp32, or the raw
+    log-parameters with ``LEGACY_NUMERICS`` (``snake`` then exponentiates on device).
+    """
+    if LEGACY_NUMERICS:
+        a_host, b_host = alpha_w, beta_w
+    else:
+        a_host = torch.exp(alpha_w.float())
+        b_host = 1.0 / (torch.exp(beta_w.float()) + SNAKE_EPS)
     alpha_tt = _cached_tt(
         cache,
         f"{key_prefix}.alpha" if key_prefix else None,
         lambda: ttnn.from_torch(
-            alpha_w.view(1, 1, 1, channels).to(torch.bfloat16),
+            a_host.view(1, 1, 1, channels).to(torch.bfloat16),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
@@ -390,13 +436,21 @@ def _cached_snake_ab(cache, key_prefix, alpha_w, beta_w, channels, device):
         cache,
         f"{key_prefix}.beta" if key_prefix else None,
         lambda: ttnn.from_torch(
-            beta_w.view(1, 1, 1, channels).to(torch.bfloat16),
+            b_host.view(1, 1, 1, channels).to(torch.bfloat16),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
         ),
     )
     return alpha_tt, beta_tt
+
+
+def snake(x: ttnn.Tensor, alpha_tt: ttnn.Tensor, beta_tt: ttnn.Tensor) -> ttnn.Tensor:
+    """SnakeBeta on parameters from ``_cached_snake_ab``: x + inv_beta * sin(alpha * x) ** 2."""
+    if LEGACY_NUMERICS:
+        return ttnn_snake_activation(x, alpha_tt, beta_tt)
+    s = ttnn.sin(ttnn.mul(x, alpha_tt))
+    return ttnn.add(x, ttnn.mul(ttnn.square(s), beta_tt))
 
 
 def conv_decoder_block(
@@ -425,7 +479,7 @@ def conv_decoder_block(
         alpha_tt, beta_tt = _cached_snake_ab(
             cache, f"{kp}.snake0" if kp else None, block_weights[alpha_key], block_weights[beta_key], channels, device
         )
-        x = ttnn_snake_activation(x, alpha_tt, beta_tt)
+        x = snake(x, alpha_tt, beta_tt)
 
     # Transposed conv for upsampling. Official qwen_tts uses NO padding in
     # conv_transpose1d then trims (kernel - stride) off the right to stay causal;
@@ -453,7 +507,7 @@ def conv_decoder_block(
                 channels,
                 device,
             )
-            x = ttnn_snake_activation(x, alpha_tt, beta_tt)
+            x = snake(x, alpha_tt, beta_tt)
 
         conv1_weight = block_weights.get(f"block.{i}.conv1.conv.weight")
         conv1_bias = block_weights.get(f"block.{i}.conv1.conv.bias")
@@ -490,7 +544,7 @@ def conv_decoder_block(
                 channels,
                 device,
             )
-            x = ttnn_snake_activation(x, alpha_tt, beta_tt)
+            x = snake(x, alpha_tt, beta_tt)
 
         conv2_weight = block_weights.get(f"block.{i}.conv2.conv.weight")
         conv2_bias = block_weights.get(f"block.{i}.conv2.conv.bias")
@@ -1047,6 +1101,9 @@ class TtSpeechTokenizerDecoder(LightweightModule):
         # causal sliding-window attention), so right padding cannot change any
         # earlier output -> trimming is numerically exact. Fixed buckets also make
         # the device program cache hit (no per-request kernel recompile).
+        # Numerics variant for this instance (see _variant_scope); None = env defaults.
+        self.variant = None
+
         self.decode_bucket_step = 64
         self._cache_by_bucket = {}
         self._cache = {}  # points at the active bucket's cache during forward
@@ -1489,7 +1546,7 @@ class TtSpeechTokenizerDecoder(LightweightModule):
                 channels,
                 self.device,
             )
-            hidden_states_tt = ttnn_snake_activation(hidden_states_tt, alpha_tt, beta_tt)
+            hidden_states_tt = snake(hidden_states_tt, alpha_tt, beta_tt)
 
         if "decoder.6.conv.weight" in self.decoder_weights:
             weight = self.decoder_weights["decoder.6.conv.weight"]
@@ -1534,6 +1591,11 @@ class TtSpeechTokenizerDecoder(LightweightModule):
         self.cache_frozen = True
 
     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
+        """Codec tokens [batch, num_quantizers, seq_len] -> audio [batch, 1, samples]."""
+        with _variant_scope(self.variant):
+            return self._forward(token_ids)
+
+    def _forward(self, token_ids: torch.Tensor) -> torch.Tensor:
         """
         Forward pass: codec tokens -> audio waveform.
 
@@ -1553,41 +1615,13 @@ class TtSpeechTokenizerDecoder(LightweightModule):
         # Original TTNN implementation (for comparison/optimization)
         batch_size, num_quantizers, real_seq_len = token_ids.shape
 
-        # Pad the decode to a fixed bucket (multiple of decode_bucket_step frames)
-        # and select that bucket's weight cache. Right padding + causal decoder =>
-        # outputs for the real frames are unaffected; we trim after decode.
-        # Rounded up to a power of two, NOT to a multiple of decode_bucket_step:
-        # conv1d weight-prepare deadlocks the device at some non-power-of-two
-        # lengths (192 hangs, while 64/128/256/512 prepare fine), and those bad
-        # lengths are exactly the ones missing from ttnn's conv1d test matrix.
-        bucket = self.decode_bucket_step
-        while bucket < real_seq_len:
-            bucket *= 2
-        if self.max_decode_bucket is not None:
-            if bucket > self.max_decode_bucket:
-                raise ValueError(
-                    f"decode of {real_seq_len} frames needs bucket {bucket}, above the "
-                    f"configured max_decode_bucket={self.max_decode_bucket}. Raise the max "
-                    f"bucket at build time (and re-warm) or shorten the reference/output."
-                )
-            # Single bucket for every decode: one cache, one compile, and no new
-            # bucket can ever be allocated by a live request.
-            bucket = self.max_decode_bucket
-        if self.cache_frozen and bucket not in self._cache_by_bucket:
-            raise RuntimeError(
-                f"speech decoder cache is frozen and has no entry for bucket {bucket} "
-                f"({real_seq_len} frames); warmed buckets are "
-                f"{sorted(self._cache_by_bucket)}. Refusing to prepare conv weights now: "
-                f"a first-use conv weight-prepare after the talker's traced decode hangs "
-                f"the device. Warm this bucket before serving."
-            )
+        bucket = self._select_bucket(real_seq_len)
         if bucket != real_seq_len:
             pad = torch.zeros(
                 batch_size, num_quantizers, bucket - real_seq_len, dtype=token_ids.dtype, device=token_ids.device
             )
             token_ids = torch.cat([token_ids, pad], dim=2)
         seq_len = bucket
-        self._cache = self._cache_by_bucket.setdefault(bucket, {})
 
         token_ids_ttnn = ttnn.from_torch(
             token_ids,
@@ -1633,6 +1667,74 @@ class TtSpeechTokenizerDecoder(LightweightModule):
         # 3. Conv decoder (TTNN path)
         audio_ttnn = self._conv_decoder_forward(hidden_states_ttnn)
         _stage("5-conv-decoder")
+        return self._audio_to_host(audio_ttnn, real_seq_len)
+
+    def backend(self, latent: torch.Tensor) -> torch.Tensor:
+        """See ``_backend``."""
+        with _variant_scope(self.variant):
+            return self._backend(latent)
+
+    def _backend(self, latent: torch.Tensor) -> torch.Tensor:
+        """Conv back-end only (upsampler + conv decoder): latent -> audio.
+
+        Args:
+            latent: [1, latent_dim, frames] float, the pre-transformer output (channels
+                first, as the reference ``_decoder_backend`` takes it)
+        Returns:
+            audio [1, 1, frames * SAMPLES_PER_FRAME] float32 on host
+
+        The ``backend`` hook of ``speech_tokenizer_decoder_continue``: the host runs the
+        cheap front-end with a cached reference state and only the context + generated
+        frames come here. Shares the bucket caches and the freeze guard with ``forward``
+        (a bucket's back-end conv ops are the same objects in both paths).
+        """
+        batch_size, channels, real_len = latent.shape
+        assert batch_size == 1, "batch 1 only"
+        bucket = self._select_bucket(real_len)
+        x = latent.permute(0, 2, 1).to(torch.bfloat16)  # [1, frames, C]
+        if bucket != real_len:
+            x = torch.nn.functional.pad(x, (0, 0, 0, bucket - real_len))
+        x_tt = ttnn.from_torch(
+            x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        return self._audio_to_host(self._conv_decoder_forward(x_tt), real_len)
+
+    def _select_bucket(self, real_seq_len: int) -> int:
+        """Pick the decode bucket for ``real_seq_len`` frames and make its cache active.
+
+        Pads every decode to a fixed bucket and keeps a weight cache per bucket.
+        Right padding + causal decoder => outputs for the real frames are unaffected;
+        callers trim after decode. Rounded up to a power of two, NOT to a multiple of
+        decode_bucket_step: conv1d weight-prepare deadlocks the device at some
+        non-power-of-two lengths (192 hangs, while 64/128/256/512 prepare fine), and
+        those bad lengths are exactly the ones missing from ttnn's conv1d test matrix.
+        """
+        bucket = self.decode_bucket_step
+        while bucket < real_seq_len:
+            bucket *= 2
+        if self.max_decode_bucket is not None:
+            if bucket > self.max_decode_bucket:
+                raise ValueError(
+                    f"decode of {real_seq_len} frames needs bucket {bucket}, above the "
+                    f"configured max_decode_bucket={self.max_decode_bucket}. Raise the max "
+                    f"bucket at build time (and re-warm) or shorten the reference/output."
+                )
+            # Single bucket for every decode: one cache, one compile, and no new
+            # bucket can ever be allocated by a live request.
+            bucket = self.max_decode_bucket
+        if self.cache_frozen and bucket not in self._cache_by_bucket:
+            raise RuntimeError(
+                f"speech decoder cache is frozen and has no entry for bucket {bucket} "
+                f"({real_seq_len} frames); warmed buckets are "
+                f"{sorted(self._cache_by_bucket)}. Refusing to allocate device buffers "
+                f"now: anything allocated after the talker's traces are captured is "
+                f"overwritten when they execute. Warm this bucket before serving."
+            )
+        self._cache = self._cache_by_bucket.setdefault(bucket, {})
+        return bucket
+
+    def _audio_to_host(self, audio_ttnn: ttnn.Tensor, real_frames: int) -> torch.Tensor:
+        """Read the [1, 1, samples] device audio back and trim the bucket padding."""
         # The conv output comes back sharded, and reading it straight to host spins
         # forever once the talker's 2CQ traces have run. Drain the queues and move
         # to interleaved DRAM first so the readback is a plain linear copy.
@@ -1640,12 +1742,7 @@ class TtSpeechTokenizerDecoder(LightweightModule):
         audio_ttnn = ttnn.to_memory_config(audio_ttnn, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.synchronize_device(self.device)
         audio = _mesh_to_torch(audio_ttnn, dtype=torch.float32).squeeze(-1).contiguous()
-
-        # Trim the padded bucket back to the real audio length (samples/frame=1920).
-        real_samples = real_seq_len * self.SAMPLES_PER_FRAME
-        audio = audio[..., :real_samples].contiguous()
-
-        return audio
+        return audio[..., : real_frames * self.SAMPLES_PER_FRAME].contiguous()
 
 
 def extract_speech_tokenizer_weights(state_dict: dict) -> dict:

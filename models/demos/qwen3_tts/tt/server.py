@@ -2772,7 +2772,11 @@ def prepare_icl_decoder_state(ref_codes: torch.Tensor, decoder_weights: dict) ->
 
 
 def decode_icl_audio(
-    ref_codes: torch.Tensor, codes: torch.Tensor, decoder_weights: dict, ref_state: Optional[dict] = None
+    ref_codes: torch.Tensor,
+    codes: torch.Tensor,
+    decoder_weights: dict,
+    ref_state: Optional[dict] = None,
+    device_decoder=None,
 ) -> torch.Tensor:
     """Decode ICL-generated codes to audio, matching HF Qwen3-TTS ``generate_voice_clone``.
 
@@ -2790,6 +2794,10 @@ def decode_icl_audio(
         ref_codes: [ref_len, 16] reference codes (as passed to create_icl_embedding_ttnn)
         codes: [num_frames, 16] generated codes from run_inference
         ref_state: optional ``prepare_icl_decoder_state(ref_codes, ...)`` result to reuse
+        device_decoder: optional decoder from ``prepare_device_decoder(..., icl_continue=True)``
+            to run the conv back-end (~98% of the CPU decode time) on device over
+            ``DECODER_BACKEND_CONTEXT_FRAMES + num_frames`` frames; the front-end
+            (codebooks + pre-transformer, ~1-2%) stays exact on the host
     Returns:
         Waveform tensor [1, 1, num_frames * 1920] of the generated speech only.
     """
@@ -2800,19 +2808,29 @@ def decode_icl_audio(
 
     if ref_state is None:
         ref_state = prepare_icl_decoder_state(ref_codes, decoder_weights)
+    if device_decoder is not None:
+        # Same queue drain as decode_audio_device: the talker's 2CQ decode can still
+        # have work in flight when run_inference returns.
+        ttnn.synchronize_device(device_decoder.device)
     with torch.no_grad():
         return speech_tokenizer_decoder_continue(
-            ref_state, codes.clamp(max=2047).T.unsqueeze(0), decoder_weights, SpeechTokenizerDecoderConfig()
+            ref_state,
+            codes.clamp(max=2047).T.unsqueeze(0),
+            decoder_weights,
+            SpeechTokenizerDecoderConfig(),
+            backend=device_decoder.backend if device_decoder is not None else None,
         )
 
 
-def build_device_decoder(device, decoder_weights: dict, max_decode_bucket: int = None):
+def build_device_decoder(device, decoder_weights: dict, max_decode_bucket: int = None, variant: dict = None):
     """Build the on-device TTNN speech-tokenizer decoder once (reuse per request).
 
     The returned object caches all conv ops / uploaded weights per decode bucket on
-    first use, so subsequent decodes skip host->device weight re-upload. Build this
-    at server startup (after the talker context) and pass it to
-    ``decode_audio_device`` for every request.
+    first use, so subsequent decodes skip host->device weight re-upload. Build (and
+    warm) this at server startup BEFORE ``init_server_context`` captures any trace,
+    and pass it to ``decode_audio_device`` for every request. Device buffers
+    allocated while a trace exists can overlap the trace's freed intermediates and
+    are overwritten each time the trace executes (corrupted audio, not an error).
 
     ``max_decode_bucket`` pins every decode to that one bucket length, so only one
     conv cache is ever built and a live request cannot allocate a new one. Serving
@@ -2821,6 +2839,7 @@ def build_device_decoder(device, decoder_weights: dict, max_decode_bucket: int =
     from models.demos.qwen3_tts.tt.speech_tokenizer import TtSpeechTokenizerDecoder
 
     decoder = TtSpeechTokenizerDecoder(device, decoder_weights, use_reference=False)
+    decoder.variant = variant
     if max_decode_bucket is not None:
         decoder.max_decode_bucket = int(max_decode_bucket)
     return decoder
@@ -2850,11 +2869,20 @@ def prepare_device_decoder(
     max_ref_frames: int,
     max_new_tokens: int,
     pin_single_bucket: bool = False,
+    icl_continue: bool = False,
+    variant: dict = None,
 ):
     """Build, warm and freeze the device decoder for serving. Returns (decoder, buckets).
 
-    Call BEFORE the first live request. After this returns, no request can trigger a
-    conv weight-prepare: an over-long decode raises instead of hanging the device.
+    ``icl_continue`` prepares it for ``decode_icl_audio(..., device_decoder=...)``: only
+    the conv back-end runs on device, over ``DECODER_BACKEND_CONTEXT_FRAMES`` of
+    reference context plus the generated frames, so buckets are sized on that instead
+    of the whole reference (``max_ref_frames`` is then ignored). Otherwise it is
+    prepared for ``decode_audio_device`` (full decoder over cat(ref, generated)).
+
+    Call BEFORE ``init_server_context`` captures the talker traces (see
+    ``build_device_decoder``). After this returns, no request can trigger a conv
+    weight-prepare or any other persistent allocation: an over-long decode raises.
 
     Warms the power-of-two ladder up to the max bucket, matching the rounding in
     ``TtSpeechTokenizerDecoder.forward``. Every warmed length is one that ttnn's
@@ -2865,7 +2893,11 @@ def prepare_device_decoder(
     utterance is ~0.33s at bucket 128 but ~1.68s if padded up to 512.
     ``pin_single_bucket`` trades that away for a single conv cache.
     """
+    from models.demos.qwen3_tts.reference.functional import DECODER_BACKEND_CONTEXT_FRAMES
+
     step = 64
+    if icl_continue:
+        max_ref_frames = DECODER_BACKEND_CONTEXT_FRAMES
     max_bucket = decode_bucket_for(max_ref_frames, max_new_tokens, step=step)
     if pin_single_bucket:
         buckets = [max_bucket]
@@ -2876,9 +2908,9 @@ def prepare_device_decoder(
             buckets.append(n)
             n *= 2
     decoder = build_device_decoder(
-        device, decoder_weights, max_decode_bucket=max_bucket if pin_single_bucket else None
+        device, decoder_weights, max_decode_bucket=max_bucket if pin_single_bucket else None, variant=variant
     )
-    warmup_device_decoder(decoder, buckets, freeze=True)
+    warmup_device_decoder(decoder, buckets, freeze=True, backend_only=icl_continue)
     return decoder, buckets
 
 
@@ -2912,7 +2944,7 @@ def decode_audio_device(ref_codes: torch.Tensor, codes: torch.Tensor, device_dec
     return audio[..., ref_samples:].contiguous()
 
 
-def warmup_device_decoder(device_decoder, bucket_frames, freeze: bool = True) -> None:
+def warmup_device_decoder(device_decoder, bucket_frames, freeze: bool = True, backend_only: bool = False) -> None:
     """Pre-compile the device decoder for each expected bucket length.
 
     Each distinct decode bucket triggers a one-time kernel compile (~1.5-2.9s) and
@@ -2923,14 +2955,20 @@ def warmup_device_decoder(device_decoder, bucket_frames, freeze: bool = True) ->
     decoder rounds up to). Dummy codes are all-zeros (valid codebook index 0).
 
     With ``freeze`` (the default), any later decode that would need an un-warmed
-    bucket raises instead of preparing conv weights on a device whose talker trace
-    has already run, which would hang the chip unrecoverably.
+    bucket raises instead of allocating device buffers once the talker's traces are
+    captured, where they would be silently overwritten by trace execution.
+
+    ``backend_only`` warms ``device_decoder.backend`` (the ICL continue path) instead of
+    the full ``forward``, so no front-end buffers are allocated that are never used.
     """
     for n in bucket_frames:
         n = int(n)
         if n <= 0:
             continue
-        dummy = torch.zeros(n, 16, dtype=torch.long)
-        _ = device_decoder.forward(dummy.T.unsqueeze(0))
+        if backend_only:
+            _ = device_decoder.backend(torch.zeros(1, device_decoder.config.latent_dim, n))
+        else:
+            dummy = torch.zeros(n, 16, dtype=torch.long)
+            _ = device_decoder.forward(dummy.T.unsqueeze(0))
     if freeze:
         device_decoder.freeze_cache()

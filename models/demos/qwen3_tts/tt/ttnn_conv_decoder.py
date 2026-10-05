@@ -12,12 +12,42 @@ Uses:
 All operations run on device for trace compatibility.
 """
 
+import os
 from typing import Optional, Tuple
 
 import torch
 
 import ttnn
 from models.demos.qwen3_tts.tt.mesh_utils import to_torch as _mesh_to_torch
+
+# How the decoder's stride-1 convs run: "matmul" (default) as one matmul per kernel tap
+# summed with eltwise adds, or "conv1d" as native ttnn.conv1d, which accumulates every
+# tap in fp32 inside one kernel and skips the per-tap slice / relayout traffic.
+# conv1d measured +33 dB vs +29 dB for matmul at 205 vs ~290 ms, but it HANGS the chip
+# once the talker's traces have executed (first call after capture took 15 s, the next
+# one deadlocked), so it is blocked unless TT_QWEN3_ALLOW_UNSAFE_CONV1D=1.
+CONV_MODE = os.environ.get("TT_QWEN3_DECODE_CONV", "matmul")
+# Math fidelity with fp32 accumulation. tt-metal warns that on Wormhole HiFi4 + fp32
+# accumulation can be less accurate than HiFi3 (hardware bug), so this is A/B-able.
+FIDELITY = os.environ.get("TT_QWEN3_DECODE_FIDELITY", "HiFi4")
+
+
+def _dram_slice_configs(length: int):
+    """Slice configs to try, in order: ttnn's default, then ever finer DRAM width slicing."""
+    yield None
+    n = 2
+    while n <= max(length // 32, 2):
+        yield ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=n)
+        n *= 2
+
+
+def backend_compute_config(device):
+    """HiFi4 with fp32 accumulation for the decoder's convs and linears: their sums run
+    over up to 1536 input channels, where bf16 accumulation loses precision. The
+    standalone back-end with this config scores +32 dB against the CPU reference."""
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=getattr(ttnn.MathFidelity, FIDELITY), fp32_dest_acc_en=True, packer_l1_acc=False
+    )
 
 
 class TTNNConv1d:
@@ -92,6 +122,14 @@ class TTNNConv1d:
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
         )
+        # Imported lazily: speech_tokenizer imports this module.
+        from models.demos.qwen3_tts.tt import speech_tokenizer
+
+        self.matmul_compute_config = None if speech_tokenizer.LEGACY_NUMERICS else backend_compute_config(device)
+        # Native conv1d mode: default double-buffering, as in the standalone decoder that
+        # scored +32 dB; the first-call slice search handles L1 pressure instead.
+        self.native_conv_config = ttnn.Conv1dConfig(weights_dtype=ttnn.bfloat16, config_tensors_in_dram=True)
+        self.conv_mode = CONV_MODE  # fixed per instance: its prepared weights are mode-specific
 
     def _can_use_matmul(self) -> bool:
         """Matmul form covers stride-1, unpadded convs -- which is all of the decoder."""
@@ -143,13 +181,13 @@ class TTNNConv1d:
         for j in range(k):
             off = j * d
             x_shift = ttnn.slice(x_rm, [0, off, 0], [b, off + l_out, in_c], memory_config=mc)
-            x_shift = ttnn.to_layout(
-                ttnn.reshape(x_shift, (b, 1, l_out, in_c), memory_config=mc), ttnn.TILE_LAYOUT
-            )
+            x_shift = ttnn.to_layout(ttnn.reshape(x_shift, (b, 1, l_out, in_c), memory_config=mc), ttnn.TILE_LAYOUT)
             if depthwise:
                 part = ttnn.multiply(x_shift, self._tap_w[j], memory_config=mc)
             else:
-                part = ttnn.matmul(x_shift, self._tap_w[j], memory_config=mc)
+                part = ttnn.matmul(
+                    x_shift, self._tap_w[j], memory_config=mc, compute_kernel_config=self.matmul_compute_config
+                )
             acc = part if acc is None else ttnn.add(acc, part, memory_config=mc)
 
         if self.bias_host is not None:
@@ -164,6 +202,67 @@ class TTNNConv1d:
 
         return ttnn.reshape(acc, (b, l_out, out_c), memory_config=mc), l_out
 
+    def _conv1d_call(self, x: ttnn.Tensor, input_length: int) -> Tuple[ttnn.Tensor, int]:
+        """Native ttnn.conv1d with fp32 accumulation, DRAM-sliced when L1 is short.
+
+        ttnn sizes the conv's circular buffers from the free L1, which the talker's
+        resident tensors fragment, so the default config can fail at launch with a
+        circular-buffer clash; a finer DRAM width slicing may then fit. That search
+        runs ONLY on the first call (the decoder's warmup, before any trace exists):
+        each instance serves one decode bucket, so later calls reuse the found slice
+        config and prepared weights, and any failure then propagates rather than
+        preparing new device weights on a traced device.
+        """
+        if os.environ.get("TT_QWEN3_ALLOW_UNSAFE_CONV1D", "0") != "1":
+            raise RuntimeError(
+                "TT_QWEN3_DECODE_CONV=conv1d is unsafe next to the traced talker: on 2026-10-05 its "
+                "decode hung a Wormhole chip after the talker trace re-executed, and two Galaxy resets "
+                "did not recover it. Use the default matmul convs, or set "
+                "TT_QWEN3_ALLOW_UNSAFE_CONV1D=1 on a sacrificial chip only."
+            )
+        if not hasattr(self, "_slice_config"):
+            candidates = list(_dram_slice_configs(input_length))
+        else:
+            candidates = [self._slice_config]
+        last_err = None
+        for slice_config in candidates:
+            try:
+                out, out_len, [self.weight_tt, self.bias_tt] = ttnn.conv1d(
+                    input_tensor=x,
+                    weight_tensor=self.weight_tt,
+                    bias_tensor=self.bias_tt,
+                    device=self.device,
+                    in_channels=self.in_channels,
+                    out_channels=self.out_channels,
+                    batch_size=int(x.shape[0]),
+                    input_length=input_length,
+                    kernel_size=self.kernel_size,
+                    stride=self.stride,
+                    padding=self.padding,
+                    dilation=self.dilation,
+                    groups=self.groups,
+                    conv_config=self.native_conv_config,
+                    compute_config=self.matmul_compute_config or self.compute_config,
+                    slice_config=slice_config,
+                    dtype=ttnn.bfloat16,
+                    return_output_dim=True,
+                    return_weights_and_bias=True,
+                )
+            except RuntimeError as e:
+                if len(candidates) == 1 or (
+                    "clash with L1 buffers" not in str(e) and "beyond max L1 size" not in str(e)
+                ):
+                    raise
+                last_err = e
+                continue
+            self._slice_config = slice_config
+            if out.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+                out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+            if out.layout != ttnn.TILE_LAYOUT:
+                out = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
+            return ttnn.reshape(out, (int(x.shape[0]), out_len, self.out_channels)), out_len
+        raise RuntimeError(f"conv1d does not fit in L1 at length {input_length} with any slice config") from last_err
+
     def __call__(self, x: ttnn.Tensor, input_length: int) -> Tuple[ttnn.Tensor, int]:
         """
         Forward pass.
@@ -175,6 +274,8 @@ class TTNNConv1d:
         Returns:
             Output tensor and output length
         """
+        if self.conv_mode == "conv1d" and self.weight_tt is not None:
+            return self._conv1d_call(x, input_length)
         if self._can_use_matmul():
             return self._matmul_call(x, input_length)
 
