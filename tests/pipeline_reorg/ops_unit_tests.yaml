@@ -557,3 +557,19 @@
   team: models
   budget_type: e2e
   category: dp_op_unit_tests
+
+# combine_fabric2d's production shape is the 8x4 XY torus, which no other dp_op_unit_tests SKU can form, and
+# its relaunch, back-to-back and next-op cases are 8x4-only. A CI Galaxy skips TorusXY unless certified;
+# BH Galaxy runners are health-checked against the XY-torus cabling, so this leg certifies itself.
+- name: Disaggregated prefill op unit tests (BH Galaxy)
+  cmd: |
+    export TT_MESH_GRAPH_DESC_PATH=tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
+    export PREFILL_TORUS_XY_CERTIFIED=1
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_combine_fabric2d.py -vvv --tb=short -k "torus-xy-8x4"
+  skus:
+    bh_galaxy:
+      timeout: 30
+  owner_id: U094PKWHNJ0 # Petar Milojevic
+  team: models
+  budget_type: e2e
+  category: dp_op_unit_tests
