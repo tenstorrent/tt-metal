@@ -448,6 +448,21 @@ class Golden:
         if isinstance(stimuli, torch.Tensor):
             stimuli = [stimuli]
         geometry = dict(num_faces=num_faces, face_r_dim=face_r_dim)
+        # Checked before either path: the blocked one slices tiles by index, so
+        # a trailing partial tile, or a shorter second operand, would otherwise
+        # vanish without an error.
+        per_tile = datums_per_tile(**geometry)
+        for operand, tensor in enumerate(stimuli):
+            if tensor.numel() % per_tile:
+                raise ValueError(
+                    f"operand {operand} has {tensor.numel()} datums, which is not "
+                    f"a whole number of {per_tile}-datum tiles"
+                )
+        if len({tensor.numel() for tensor in stimuli}) > 1:
+            raise ValueError(
+                f"operands differ in size: "
+                f"{[tensor.numel() for tensor in stimuli]} datums"
+            )
         in_formats, cfg = self._make_config(
             in_formats,
             out_format,
