@@ -154,6 +154,24 @@ class Golden:
     #: methods below, so they share one builder -- the format-slot argument
     #: order had to be corrected in two separate copies of the Dest feedback
     #: pair for exactly this reason.
+    def _default_src_format(self, cfg: OpConfig, index: int) -> DataFormat:
+        """The src format the kernel unpacks input `index` into, when none is named.
+
+        The architecture's mapping decides it, except for Float32 and Tf32 under a
+        16-bit Dest. There a 19-bit src datum cannot hold the input, and the
+        harness picks the src family from the output (``infer_unpack_out``);
+        Dest then takes the src's format, so the configured Dest format names
+        it. Float16 Dest means a Float16 src, whose 5-bit range flushes and
+        saturates values the architecture's Tf32 default would keep.
+        """
+        l1_format = cfg.in_formats[index]
+        if l1_format in (DataFormat.Float32, DataFormat.Tf32) and cfg.dest_format in (
+            DataFormat.Float16,
+            DataFormat.Float16_b,
+        ):
+            return cfg.dest_format
+        return self.blocks.src_format(l1_format)
+
     def _l1_to_register(
         self,
         cfg: OpConfig,
@@ -165,10 +183,11 @@ class Golden:
     ) -> Step:
         """One unpack step, L1 -> `register`."""
         l1_format = cfg.in_formats[index]
+        fmt = src_format or self._default_src_format(cfg, index)
         unpack = getattr(self.blocks, f"l1_to_{register}")
 
         def run(regs: Registers) -> None:
-            regs[into] = unpack(regs[source], l1_format, src_format, **cfg.geometry)
+            regs[into] = unpack(regs[source], l1_format, fmt, **cfg.geometry)
 
         return Step(f"l1_to_{register}({source})", run, reads=(source,), writes=(into,))
 
@@ -181,7 +200,7 @@ class Golden:
         src_format: Optional[DataFormat],
     ) -> Step:
         """One Dest-feedback step, Dest -> `register`."""
-        fmt = src_format or self.blocks.src_format(cfg.in_formats[0])
+        fmt = src_format or self._default_src_format(cfg, 0)
         convert = getattr(self.blocks, f"dest_to_{register}")
 
         def run(regs: Registers) -> None:
