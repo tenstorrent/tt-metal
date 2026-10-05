@@ -15,6 +15,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "combine_fabric2d_stream.hpp"
+
 #ifndef KERNEL_BUILD
 #include <vector>
 
@@ -215,6 +217,21 @@ struct ChunkDescriptor {
 #endif
 };
 static_assert(sizeof(ChunkDescriptor) == CHUNK_WORDS * sizeof(uint32_t));
+
+// The chunk `stream` carries of `origin_dg_index`'s tokens for the chip `distance` hops downstream. The
+// opposite chip is equally far both ways, so its run is split across every stream; a nearer one is reached
+// in one direction only, so its run is split across that direction's links. Every own assignment, every
+// forwarding chunk and every expected final write is sized from this, on host and kernel alike.
+constexpr ChunkDescriptor stream_chunk(
+    StreamId stream, uint32_t origin_dg_index, uint32_t distance, uint32_t ring_extent, uint32_t num_streams) {
+    const bool opposite = distance == ring_extent / 2;
+    return ChunkDescriptor{
+        origin_dg_index,
+        ring_step(stream, origin_dg_index, static_cast<int32_t>(distance), ring_extent),
+        opposite ? stream : stream_link(stream),
+        opposite ? num_streams : num_streams / 2};
+}
+
 // Marks a schedule entry as "relay forwarding chunk k" rather than "own assignment k".
 constexpr uint32_t SCHED_FWD = 0x80000000u;
 

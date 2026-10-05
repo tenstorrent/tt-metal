@@ -552,24 +552,18 @@ struct Reader {
     }
 
     // Tokens the upstream chip on this stream writes straight into OUR output over the whole launch. Every
-    // one of them is a chunk whose destination is this chip, so it comes from origins 1 … m hops upstream,
-    // with the same share rule as everywhere else: the opposite chip's run split by stream, the rest by link.
-    // Sized from the same replicated tables the writers used, so it equals what the upstream sender counts.
+    // one of them is a chunk whose destination is this chip, so it comes from origins 1 … extent/2 hops
+    // upstream, sized by the same stream_chunk the host built the writers' assignments with and from the same
+    // replicated tables, so it equals what the upstream sender counts.
     uint32_t expected_final_writes() const {
         const uint32_t extent = ct.dispatch_group_size;
-        const uint32_t m = extent / 2;
-        const bool is_cw = ct.my_stream % 2 == 0;
         uint32_t total = 0;
         for (uint32_t local_expert = 0; local_expert < ct.experts_per_chip; local_expert++) {
-            for (uint32_t hops = 1; hops <= m; hops++) {
+            for (uint32_t hops = 1; hops <= extent / 2; hops++) {
                 const uint32_t origin =
-                    is_cw ? (ct.my_dg_index + extent - hops) % extent : (ct.my_dg_index + hops) % extent;
-                const cmbf2d::ChunkDescriptor desc{
-                    origin,
-                    ct.my_dg_index,
-                    hops == m ? ct.my_stream : ct.my_stream / 2,
-                    hops == m ? ct.local_split_count : ct.local_split_count / 2};
-                total += chunk_tokens(desc, local_expert);
+                    cmbf2d::ring_step(ct.my_stream, ct.my_dg_index, -static_cast<int32_t>(hops), extent);
+                total += chunk_tokens(
+                    cmbf2d::stream_chunk(ct.my_stream, origin, hops, extent, ct.local_split_count), local_expert);
             }
         }
         return total;
