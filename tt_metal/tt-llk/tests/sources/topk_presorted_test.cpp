@@ -158,9 +158,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if constexpr (TOPK_RANK_STAMPED)
     {
-        // Strip the rank tags off the value tiles and move the index tiles into the half the packer reads.
         ckernel::sfpu::_topk_strip_rank_tags_<TOPK_TAG_BITS>(0);
         ckernel::sfpu::_topk_strip_rank_tags_<TOPK_TAG_BITS>(1);
+    }
+    if constexpr (is_fp32_dest_acc_en)
+    {
+        // The uint16 index tiles into the half of the 32-bit DEST words the packer reads.
         ckernel::sfpu::_topk_uint16_move_dest_tile_to_pack_half_(2);
         ckernel::sfpu::_topk_uint16_move_dest_tile_to_pack_half_(3);
     }

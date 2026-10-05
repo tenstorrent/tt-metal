@@ -161,7 +161,9 @@ def _config(
             tile_count_res=SLAB_TILES,
         ),
         dest_acc=(
-            DestAccumulation.Yes if sort_mode == "rank_stamped" else DestAccumulation.No
+            DestAccumulation.Yes
+            if sort_mode in ("rank_stamped", "unstable_dest32")
+            else DestAccumulation.No
         ),
         unpack_to_dest=False,
     )
@@ -183,7 +185,12 @@ def _run(configuration, formats):
 
 @parametrize(
     sort_direction=[TopKSortDirection.Descending, TopKSortDirection.Ascending],
-    sort_mode=["unstable", "stable", "rank_stamped"],
+    sort_mode=[
+        "unstable",
+        "stable",
+        "rank_stamped",
+        "unstable_dest32",
+    ],
     stimuli_class=STIMULI_CLASSES,
 )
 def test_topk_presorted(
@@ -191,6 +198,7 @@ def test_topk_presorted(
 ):
     formats: InputOutputFormat = input_output_formats([DataFormat.Float16_b])[0]
     descending = sort_direction == TopKSortDirection.Descending
+    stable = sort_mode in ("stable", "rank_stamped")
     torch.manual_seed(0)
 
     num_rows, num_cols = INPUT_DIMENSIONS_SLAB
@@ -226,17 +234,25 @@ def test_topk_presorted(
     assert torch.equal(
         full_values.view(torch.int16), skip_values.view(torch.int16)
     ), "the values of the two sorts differ"
-    if sort_mode in ("stable", "rank_stamped"):
+    if stable:
         assert torch.equal(
             full_indices, skip_indices
         ), "the indices of the two stable sorts differ"
     else:
         for row in range(num_rows):
-            distinct = torch.unique(_canonical(row_values[row])).numel() == W_VALUES
+            source = _canonical(row_values[row])
+            distinct = torch.unique(source).numel() == W_VALUES
             if distinct:
                 assert torch.equal(
                     full_indices[row], skip_indices[row]
                 ), f"row {row} without equal values: the indices differ"
+            assert torch.equal(
+                source[skip_indices[row]], skip_values[row].to(torch.float32)
+            ), f"row {row}: an index of the skipping sort does not name its value"
+            assert torch.equal(
+                torch.sort(full_indices[row]).values,
+                torch.sort(skip_indices[row]).values,
+            ), f"row {row}: the two sorts hold different index sets"
 
     # The full sort against its golden.
     for row in range(num_rows):
@@ -247,7 +263,7 @@ def test_topk_presorted(
         assert torch.equal(
             got_values, expected_values
         ), f"row {row}: values differ from the golden"
-        if sort_mode in ("stable", "rank_stamped"):
+        if stable:
             assert torch.equal(
                 full_indices[row], expected_indices
             ), f"row {row}: indices differ from the stable golden"
