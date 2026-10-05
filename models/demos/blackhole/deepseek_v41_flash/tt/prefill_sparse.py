@@ -348,6 +348,11 @@ class DSV41PrefillIndexer:
         if self.fp4_k:
             k = self._fp4(k)
         L = self.KL
+        if (
+            L == Cc
+        ):  # single-chunk prompt (S_pad == C): the FIFO is just this chunk (a zero-length slice breaks the concat)
+            ttnn.copy(k, self.keys)
+            return
         new = ttnn.concat([ttnn.slice(self.keys, [0, 0, Cc, 0], [U, 1, L, IDIM]), k], dim=2)
         ttnn.copy(new, self.keys)
         ttnn.deallocate(new)
@@ -664,10 +669,16 @@ class DSV41PrefillSparse:
         Cc = C // r
         kt = self.kvt.t
         if lat is not None:  # latent FIFO (kv table rows [0, L))
-            body = ttnn.slice(kt, [0, 0, Cc, 0], [U, 1, L, HEAD_DIM])
-            new = ttnn.concat([body, ttnn.to_layout(lat, ttnn.ROW_MAJOR_LAYOUT)], dim=2)
-            ttnn.experimental.slice_write(new, kt, [0, 0, 0, 0], [U, 1, L, HEAD_DIM], [1, 1, 1, 1])
-            ttnn.deallocate(body)
+            if (
+                L == Cc
+            ):  # single-chunk prompt (S_pad == C): the FIFO is just this chunk (a zero-length slice breaks the concat)
+                new = ttnn.to_layout(lat, ttnn.ROW_MAJOR_LAYOUT)
+                ttnn.experimental.slice_write(new, kt, [0, 0, 0, 0], [U, 1, L, HEAD_DIM], [1, 1, 1, 1])
+            else:
+                body = ttnn.slice(kt, [0, 0, Cc, 0], [U, 1, L, HEAD_DIM])
+                new = ttnn.concat([body, ttnn.to_layout(lat, ttnn.ROW_MAJOR_LAYOUT)], dim=2)
+                ttnn.experimental.slice_write(new, kt, [0, 0, 0, 0], [U, 1, L, HEAD_DIM], [1, 1, 1, 1])
+                ttnn.deallocate(body)
             ttnn.deallocate(new)
         ix = self.indexer
         if ix is not None and ix.key_owner is None:  # key FIFO
