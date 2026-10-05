@@ -412,7 +412,7 @@ template <
     DataFormat TYPECAST_IN  = DataFormat::Invalid,
     DataFormat TYPECAST_OUT = DataFormat::Invalid,
     bool FUSED_SORT         = false>
-void call_unary_sfpu_operation_init(std::uint32_t math_format = 0)
+void call_unary_sfpu_operation_init(std::uint32_t math_format)
 {
     // Once-per-kernel SFPU init (SFPU config reg + invariant ADDR_MOD_7). In metal this is hoisted into the
     // full-init entry points (compute_kernel_hw_startup / init_sfpu / unary_op_init_common); this standalone
