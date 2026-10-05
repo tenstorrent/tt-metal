@@ -24,8 +24,8 @@ struct SenderCtArgs {
     uint32_t pkt_hdr_drain_addr;
     uint32_t drain_sink_addr;
     uint32_t batch;
-    uint32_t filled_sem;
-    uint32_t freed_sem;
+    uint32_t filled_slot;
+    uint32_t freed_slot;
     uint32_t fwd_sem_noc_x;
     uint32_t fwd_sem_noc_y;
     uint32_t fwd_sem_addr;
@@ -50,8 +50,8 @@ struct SenderCtArgs {
         pkt_hdr_drain_addr(l1.pkt_hdr_drain),
         drain_sink_addr(l1.drain_sink),
         batch(BATCH),
-        filled_sem(plan.ring_filled_sem),
-        freed_sem(plan.ring_freed_sem),
+        filled_slot(plan.ring_filled_slot),
+        freed_slot(plan.ring_freed_slot),
         fwd_sem_noc_x(static_cast<uint32_t>(downstream.worker_virtual.x)),
         fwd_sem_noc_y(static_cast<uint32_t>(downstream.worker_virtual.y)),
         fwd_sem_addr(plan.fwd_arrived_addr) {}
@@ -68,8 +68,8 @@ struct SenderCtArgs {
             pkt_hdr_drain_addr,
             drain_sink_addr,
             batch,
-            filled_sem,
-            freed_sem,
+            filled_slot,
+            freed_slot,
             fwd_sem_noc_x,
             fwd_sem_noc_y,
             fwd_sem_addr};
@@ -86,8 +86,8 @@ struct SenderCtArgs {
         pkt_hdr_drain_addr(get_compile_time_arg_val(7)),
         drain_sink_addr(get_compile_time_arg_val(8)),
         batch(get_compile_time_arg_val(9)),
-        filled_sem(get_compile_time_arg_val(10)),
-        freed_sem(get_compile_time_arg_val(11)),
+        filled_slot(get_compile_time_arg_val(10)),
+        freed_slot(get_compile_time_arg_val(11)),
         fwd_sem_noc_x(get_compile_time_arg_val(12)),
         fwd_sem_noc_y(get_compile_time_arg_val(13)),
         fwd_sem_addr(get_compile_time_arg_val(14)) {}
@@ -95,10 +95,10 @@ struct SenderCtArgs {
     // Program semaphores, not hand-placed L1: the routed expert's arena occupies the region the standalone
     // op puts these in. The framework re-initialises them at every launch, so nothing is reset here.
     volatile tt_l1_ptr uint32_t* filled_ptr() const {
-        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(filled_sem));
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(filled_slot));
     }
     volatile tt_l1_ptr uint32_t* freed_ptr() const {
-        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(freed_sem));
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(freed_slot));
     }
     void reset_ring_counters() const {}
 #endif

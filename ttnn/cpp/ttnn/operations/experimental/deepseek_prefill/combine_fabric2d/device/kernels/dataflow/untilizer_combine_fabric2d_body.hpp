@@ -122,7 +122,7 @@ struct Ring {
     void publish() {
         cb_out.wait_front((produced - popped + 1) * cmbf2d_ns::UNT_BATCH_ROWS);
         for (uint32_t c = 0; c < ct.num_consumers; c++) {
-            noc_semaphore_inc(consumer_noc(c, ct.produced_addr_value()), 1);
+            noc_semaphore_inc(consumer_noc(c, ct.produced_slot_addr()), 1);
         }
         produced++;
     }

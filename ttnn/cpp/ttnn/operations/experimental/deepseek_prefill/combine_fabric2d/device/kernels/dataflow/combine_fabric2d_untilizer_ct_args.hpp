@@ -41,7 +41,7 @@ struct UntilizerCtArgs {
     uint32_t num_consumers;
     uint32_t ring_batches;
     uint32_t control_addr;
-    uint32_t produced_addr;
+    uint32_t produced_slot;
     // Tile geometry. These cores exist only where there is something to untilize.
     uint32_t tiles_per_row;
     uint32_t tile_bytes;
@@ -66,7 +66,7 @@ struct UntilizerCtArgs {
         num_consumers(static_cast<uint32_t>(plan.consumers.size())),
         ring_batches(UNT_RING_BATCHES),
         control_addr(plan.control_addr),
-        produced_addr(plan.produced_addr),
+        produced_slot(plan.produced_slot),
         tiles_per_row(op::tiles_per_token_row(tensor_args)),
         tile_bytes(op::tile_size_bytes(tensor_args)),
         block_tiles(op::untilize_block_tiles(tensor_args)) {
@@ -81,7 +81,7 @@ struct UntilizerCtArgs {
         for (const auto& c : plan.consumers) {
             blocks_.push_back(c.noc.x);
             blocks_.push_back(c.noc.y);
-            blocks_.push_back(c.counter_addr);
+            blocks_.push_back(c.counter_slot);
         }
     }
 
@@ -100,7 +100,7 @@ struct UntilizerCtArgs {
             num_consumers,
             ring_batches,
             control_addr,
-            produced_addr,
+            produced_slot,
             tiles_per_row,
             tile_bytes,
             block_tiles};
@@ -122,7 +122,7 @@ struct UntilizerCtArgs {
         num_consumers(get_compile_time_arg_val(10)),
         ring_batches(get_compile_time_arg_val(11)),
         control_addr(get_compile_time_arg_val(12)),
-        produced_addr(get_compile_time_arg_val(13)),
+        produced_slot(get_compile_time_arg_val(13)),
         tiles_per_row(get_compile_time_arg_val(14)),
         tile_bytes(get_compile_time_arg_val(15)),
         block_tiles(get_compile_time_arg_val(16)) {}
@@ -132,7 +132,7 @@ struct UntilizerCtArgs {
     volatile tt_l1_ptr uint32_t* freed_ptr(uint32_t peer_word) const {
         return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(peer_word);
     }
-    uint32_t produced_addr_value() const { return produced_addr; }
+    uint32_t produced_slot_addr() const { return produced_slot; }
     void reset_freed_counter(volatile tt_l1_ptr uint32_t* p) const { noc_semaphore_set(p, 0); }
 
     static constexpr uint32_t destination_base = UNTILIZER_SCALAR_CT_ARGS;

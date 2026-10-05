@@ -33,8 +33,8 @@ struct ReaderCtArgs {
     uint32_t forwarding_metadata_size;
     uint32_t batch;
     uint32_t ring_addr;
-    uint32_t filled_sem;
-    uint32_t freed_sem;
+    uint32_t filled_slot;
+    uint32_t freed_slot;
     uint32_t fwd_pages_per_stream;
     uint32_t my_stream;
     uint32_t num_forwarding_chunks = 0;  // Host construction derives this from the descriptor block.
@@ -62,7 +62,7 @@ struct ReaderCtArgs {
     uint32_t unt_ring_batches;
     uint32_t num_untilizers;
     // The counter this reader owns on each untilizer core, bumped once per batch it is done with.
-    uint32_t unt_freed_sem;
+    uint32_t unt_freed_slot;
     // The routed expert's split between its two passes; decides the order experts are walked in.
     uint32_t expert_threshold;
     // This ring's first row of global_expert_idx_table: one row per chip of the ring follows it.
@@ -83,8 +83,8 @@ struct ReaderCtArgs {
         forwarding_metadata_size(FORWARDING_METADATA_SIZE),
         batch(BATCH),
         ring_addr(l1.ring),
-        filled_sem(plan.ring_filled_sem),
-        freed_sem(plan.ring_freed_sem),
+        filled_slot(plan.ring_filled_slot),
+        freed_slot(plan.ring_freed_slot),
         fwd_pages_per_stream(plan.pages_per_stream),
         // Our region of the forwarding buffer. (plane, direction) identifies the upstream sender uniquely
         // from the downstream chip's point of view, so the reader WRITES region q of the neighbour's buffer
@@ -108,7 +108,7 @@ struct ReaderCtArgs {
         unt_ring_addr(untilizers.ring_addr),
         unt_ring_batches(UNT_RING_BATCHES),
         num_untilizers(static_cast<uint32_t>(untilizers.peers.size())),
-        unt_freed_sem(untilizers.my_freed_sem),
+        unt_freed_slot(untilizers.my_freed_slot),
         expert_threshold(args.hybrid_token_threshold),
         expert_table_page_base(plan.expert_table_page_base) {
         // Schedule: the work order, relays tagged. An own entry carries its index into the table that
@@ -142,7 +142,7 @@ struct ReaderCtArgs {
         for (const auto& u : untilizers.peers) {
             blocks_.push_back(u.noc.x);
             blocks_.push_back(u.noc.y);
-            blocks_.push_back(u.counter_sem);
+            blocks_.push_back(u.counter_slot);
         }
     }
 
@@ -153,8 +153,8 @@ struct ReaderCtArgs {
             forwarding_metadata_size,
             batch,
             ring_addr,
-            filled_sem,
-            freed_sem,
+            filled_slot,
+            freed_slot,
             fwd_pages_per_stream,
             my_stream,
             num_forwarding_chunks,
@@ -175,7 +175,7 @@ struct ReaderCtArgs {
             unt_ring_addr,
             unt_ring_batches,
             num_untilizers,
-            unt_freed_sem,
+            unt_freed_slot,
             expert_threshold,
             expert_table_page_base};
         word_arr.insert(word_arr.end(), blocks_.begin(), blocks_.end());
@@ -188,8 +188,8 @@ struct ReaderCtArgs {
         forwarding_metadata_size(get_compile_time_arg_val(2)),
         batch(get_compile_time_arg_val(3)),
         ring_addr(get_compile_time_arg_val(4)),
-        filled_sem(get_compile_time_arg_val(5)),
-        freed_sem(get_compile_time_arg_val(6)),
+        filled_slot(get_compile_time_arg_val(5)),
+        freed_slot(get_compile_time_arg_val(6)),
         fwd_pages_per_stream(get_compile_time_arg_val(7)),
         my_stream(get_compile_time_arg_val(8)),
         num_forwarding_chunks(get_compile_time_arg_val(9)),
@@ -210,19 +210,19 @@ struct ReaderCtArgs {
         unt_ring_addr(get_compile_time_arg_val(24)),
         unt_ring_batches(get_compile_time_arg_val(25)),
         num_untilizers(get_compile_time_arg_val(26)),
-        unt_freed_sem(get_compile_time_arg_val(27)),
+        unt_freed_slot(get_compile_time_arg_val(27)),
         expert_threshold(get_compile_time_arg_val(28)),
         expert_table_page_base(get_compile_time_arg_val(29)) {}
 
     // Program semaphores: the routed expert's arena occupies the L1 the standalone op places these in.
     volatile tt_l1_ptr uint32_t* filled_ptr() const {
-        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(filled_sem));
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(filled_slot));
     }
     volatile tt_l1_ptr uint32_t* freed_ptr() const {
-        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(freed_sem));
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(freed_slot));
     }
     uint32_t unt_produced_word(uint32_t peer_word) const { return get_semaphore(peer_word); }
-    uint32_t unt_freed_addr_value() const { return get_semaphore(unt_freed_sem); }
+    uint32_t unt_freed_addr_value() const { return get_semaphore(unt_freed_slot); }
     void reset_produced_counter(volatile tt_l1_ptr uint32_t*) const {}
 
     static constexpr uint32_t schedule_base = READER_SCALAR_CT_ARGS;

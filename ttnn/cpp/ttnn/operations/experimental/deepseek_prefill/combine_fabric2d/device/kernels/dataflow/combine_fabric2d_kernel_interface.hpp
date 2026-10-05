@@ -117,8 +117,8 @@ struct KernelPlan {
     StreamId stream = 0;
     uint32_t my_expert_base = 0;
     uint32_t pages_per_stream = 0;
-    uint32_t ring_filled_addr = 0;
-    uint32_t ring_freed_addr = 0;
+    uint32_t ring_filled_slot = 0;
+    uint32_t ring_freed_slot = 0;
     uint32_t fwd_arrived_addr = 0;
     uint32_t final_arrived_addr = 0;
 };
@@ -126,13 +126,13 @@ struct KernelPlan {
 // The other end of one untilizer handshake: the core to address, and the counter that core's peer owns there.
 struct HandshakePeer {
     tt::tt_metal::CoreCoord noc;
-    uint32_t counter_addr = 0;
+    uint32_t counter_slot = 0;
 };
 
 // The untilizer group serving one reader, from that reader's side.
 struct ReaderUntilizers {
     uint32_t ring_addr = 0;
-    uint32_t my_freed_addr = 0;  // the counter this reader owns on each untilizer core
+    uint32_t my_freed_slot = 0;  // the counter this reader owns on each untilizer core
     std::vector<HandshakePeer> peers;
 };
 
@@ -143,7 +143,7 @@ struct UntilizerPlan {
     uint32_t num_peers = 0;  // cores in the group
     uint32_t walks_down = 0;
     uint32_t control_addr = 0;
-    uint32_t produced_addr = 0;  // the counter this core owns on each of its consumers
+    uint32_t produced_slot = 0;  // the counter this core owns on each of its consumers
     std::vector<HandshakePeer> consumers;
 };
 
@@ -180,7 +180,7 @@ constexpr uint32_t UNT_RING_BATCHES = 2;
 constexpr uint32_t UNT_CB_OUT = 0;
 constexpr uint32_t UNT_CB_IN = 1;
 constexpr uint32_t UNT_CB_BATCHES = 2;
-// Words per entry in a handshake block: [noc_x, noc_y, counter_addr].
+// Words per entry in a handshake block: [noc_x, noc_y, counter_slot].
 constexpr uint32_t UNT_PEER_WORDS = 3;
 
 // Words per assignment in the reader's assignment block: [dst_chip_id, dst_dg_index, split_idx, split_count].
