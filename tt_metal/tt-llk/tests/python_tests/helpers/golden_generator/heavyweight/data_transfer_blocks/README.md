@@ -20,7 +20,7 @@ what one already costs.
 
 | File | What is in it |
 |---|---|
-| `data_transfer_blocks.py` | `DataTransferBlocks` — the abstract base, one method per boundary, plus the format model |
+| `data_transfer_blocks.py` | `DataTransferBlocks` — the shared base, one method per boundary, plus the format model. It cannot be constructed without an architecture's format set. |
 | `l1_codec.py` | `pack_to_l1` / `unpack_from_l1` — the bytes boundary |
 | `pack_effects.py` | ReLU, edge masking, and what stochastic rounding costs us |
 | `quasar_data_transfer/` | MX formats, no block float |
@@ -53,7 +53,7 @@ families, and the family — not the L1 format — is what the FPU reads.**
 
 | Method | Models |
 |---|---|
-| `l1_to_srcA(l1_bytes, l1_format, src_format=None, **geometry)` | **Abstract.** The T0 unpack. Each architecture implements it, in practice by delegating to `_l1_to_src`. |
+| `l1_to_srcA(l1_bytes, l1_format, src_format=None, **geometry)` | The T0 unpack. Implemented in the base by delegating to `_l1_to_src`; what varies by architecture is the format metadata, and an architecture overrides this only if its unpack genuinely differs. |
 | `l1_to_srcB(...)` | Delegates to `l1_to_srcA` — SrcA and SrcB share the datum layout. |
 | `l1_to_srcS(l1_bytes, l1_format, src_format=None, *, dest_acc=False, **geometry)` | Not a delegate: SrcS has its own format rules (`srcs_format`). Float32 keeps full fp32 here, where SrcA truncates it to Tf32, and with `dest_acc` every float but Float16/Float16_b widens to Float32. `use_srcs=True` is defaulted into the geometry: SrcS uses a per-slice L1 layout, so the buffer must have been *packed* that way. |
 | `l1_to_dest(l1_bytes, l1_format, dest_format, **geometry)` | Straight into Dest, bypassing the src registers — so the value keeps **more** mantissa than the same buffer read through `l1_to_srcA`. How a feedback loop starts. |
@@ -187,7 +187,9 @@ folded in.
 |---|---|
 | `SUPPORTED_L1_FORMATS` | Every L1 access is checked against it, so asking Quasar for `Bfp8_b` raises rather than quietly quantizing to something the hardware cannot store. |
 | `_src_format(l1_format)` | The L1 → src-register mapping. Override where an architecture diverges; `src_format()` does the support check first, because the base mapping is built from exponent-family predicates that would otherwise return a plausible answer for a format the hardware cannot read. |
-| `l1_to_srcA` | Abstract; delegate to `_l1_to_src`. |
+| `UNPACK_TO_SRC_FORMATS` | Legal `L1 format -> src format` pairs, checked on both the explicit and the defaulted path. Empty means unmodelled at this level, not "everything is legal". |
+| `EDGE_MASK_MASKED_WHEN_SET` | Edge-mask polarity: `True` where a set register bit masks the datum (Quasar), `False` where it keeps it (Wormhole/Blackhole). |
+| `l1_to_srcA` | Concrete in the base. Override only for an architecture whose unpack differs beyond its format metadata. |
 
 ### The format divide
 
@@ -336,7 +338,7 @@ which is what `dest_to_l1` puts in its warning.
 3. **Validate bit-exactly, at LoFi.** A tolerance that passes tells you the
    tolerance is wide enough. Bit-exactness on every datum tells you the model is
    right — and then a later disagreement is a finding rather than noise.
-4. **Check the other architectures still construct.** The base class is abstract
+4. **Check the other architectures still construct.** The base class is shared
    and the format sets differ; a change to the shared machinery can break
    Wormhole or Blackhole without touching a Quasar test.
 
