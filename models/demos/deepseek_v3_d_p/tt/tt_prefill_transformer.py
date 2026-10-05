@@ -782,6 +782,6 @@ class TtPrefillTransformer(LightweightModule):
             if generation is not None:
                 generation.deallocate()
             if split_lookahead is not None:
-                union.clear_split_chip_lookahead()
+                union.set_split_chip_lookahead(None)
                 split_lookahead.deallocate()
         return out, source.generated_tokens

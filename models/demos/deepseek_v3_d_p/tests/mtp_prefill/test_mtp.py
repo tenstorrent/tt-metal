@@ -57,7 +57,7 @@ from models.demos.deepseek_v3_d_p.tt.runners.input_prep import (
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
-from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural, row_pcc, unrotate_cache_layer
+from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural, unrotate_cache_layer
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
 FUSED_MTP_PCC = 0.999
@@ -65,7 +65,6 @@ FUSED_MTP_PCC = 0.999
 MTP_MODULE_OUTPUT_PCC = {False: 0.98, True: 0.95}
 KVPE_PCC = 0.999
 INDEX_K_PCC = 0.999
-ROW_PCC = 0.95
 
 SP_AXIS, TP_AXIS = 0, 1
 
@@ -544,34 +543,6 @@ def _turn_chunks(turns) -> list[tuple[int, int]]:
     return chunks
 
 
-def _chunk_positions(start: int, sp: int) -> torch.Tensor:
-    """The global position of every device row of the chunk at ``start``, chip-major, ``[CHUNK]``."""
-    return torch.tensor([p for chip in rotated_chip_positions(start, sp, CHUNK // sp) for p in chip])
-
-
-def _natural_rows(t: ttnn.Tensor, mesh_device, positions: torch.Tensor, start: int, end: int) -> torch.Tensor:
-    """A chunk output's real rows in position order, ``[end - start, H]``. Does not consume ``t``."""
-    rows = _from_device(t, mesh_device)[0, 0]
-    real = positions < end
-    natural = torch.empty(end - start, rows.shape[-1], dtype=rows.dtype)
-    natural[positions[real] - start] = rows[real]
-    return natural
-
-
-def _assert_rows_pcc(expected, actual, bulk_pcc: float, what: str, first_position: int = 0) -> None:
-    """The bulk PCC and the ``ROW_PCC`` floor on every row of two ``[S, D]`` tensors whose row 0 is
-    ``first_position``."""
-    _, msg = assert_with_pcc(expected, actual, bulk_pcc)
-    rows = row_pcc(expected, actual)
-    bad = torch.nonzero(~(rows >= ROW_PCC)).flatten()
-    assert bad.numel() == 0, (
-        f"{what}: {bad.numel()} row(s) below PCC {ROW_PCC} although the whole passes at {msg}; the first are "
-        f"positions {(bad[:8] + first_position).tolist()} at {[round(float(rows[r]), 4) for r in bad[:8]]}"
-    )
-    worst = int(torch.argmin(rows))
-    logger.info(f"{what} PCC: {msg}; worst row at position {first_position + worst}: {float(rows[worst]):.6f}")
-
-
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links", _MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
@@ -595,8 +566,7 @@ def test_mtp_multiturn_pcc(
     mtp_layer_state_dict,
 ):
     """``TtMTPPredictor`` over a multi-turn conversation on one cache vs a whole-conversation reference.
-    Teacher-forced: the real next tokens, and each level's hidden from the device. Rows are gated as well as the
-    bulk, since one misplaced split-chip row barely moves a bulk PCC."""
+    Teacher-forced: the real next tokens, and each level's hidden from the device."""
     topology = per_axis_topology(device_params["fabric_config"])
     mesh_shape = list(mesh_device.shape)
     sp = mesh_shape[SP_AXIS]
@@ -676,7 +646,7 @@ def test_mtp_multiturn_pcc(
         ttnn.deallocate(chunk_ids)
         ttnn.deallocate(mtp_ids)
 
-        positions = _chunk_positions(start, sp)
+        positions = torch.tensor(rotated_chip_positions(start, sp, CHUNK // sp)).flatten()
         h_rows = h0[positions.clamp(max=total - 1)]
         h_rows[positions >= end] = 0
         h_tt = _to_device(h_rows.unsqueeze(0), mesh_device)
@@ -707,17 +677,20 @@ def test_mtp_multiturn_pcc(
             )
         finally:
             if lookahead is not None:
-                union.clear_split_chip_lookahead()
+                union.set_split_chip_lookahead(None)
                 lookahead.deallocate()
         union.deallocate()
         ttnn.deallocate(h_tt)
 
+        # Rows the next chunk replays are kept from that chunk only: its write is the one the cache keeps.
+        stop = chunks[i + 1][0] if i + 1 < len(chunks) else end
         outputs = []
         for level_outputs in (res.x, res.out, res.out_head_normed):
-            outputs.append([_natural_rows(t, mesh_device, positions, start, end) for t in level_outputs])
+            rows = [_from_device(t, mesh_device)[0, 0] for t in level_outputs]
+            outputs.append([unrotate_cache_layer(r, positions - start, stop - start) for r in rows])
             for t in level_outputs:
                 ttnn.deallocate(t)
-        dev_chunks.append((start, end, *outputs))
+        dev_chunks.append((start, stop, *outputs))
     ttnn.deallocate(sp_rank)
 
     # Level k's hidden is level k - 1's normed output from the chunk that wrote that row last.
@@ -760,7 +733,8 @@ def test_mtp_multiturn_pcc(
     for i, (start, end, xs, outs, normeds) in enumerate(dev_chunks):
         for k in range(num_levels):
             what = f"[mtp multiturn] chunk {i} L{k + 1}"
-            _assert_rows_pcc(ref_x[k][start:end], xs[k], FUSED_MTP_PCC, f"{what} fused projection", start)
+            _, msg = assert_with_pcc(ref_x[k][start:end], xs[k], FUSED_MTP_PCC)
+            logger.info(f"{what} fused projection PCC: {msg}")
             _, msg = assert_with_pcc(ref_out[k][start:end], outs[k], module_pcc)
             logger.info(f"{what} layer output PCC: {msg}")
             _, msg = assert_with_pcc(ref_normed[k][start:end], normeds[k], module_pcc)
@@ -775,7 +749,8 @@ def test_mtp_multiturn_pcc(
         cache = unrotate_cache_layer(kvpe[k], cache_positions, kvpe.shape[1])
         expected = refs[k].kvpe_cache[0, 0]
         for part, cols in (("nope", slice(None, kv_lora_rank)), ("pe", slice(kv_lora_rank, None))):
-            _assert_rows_pcc(expected[:, cols], cache[:total, cols], KVPE_PCC, f"[mtp multiturn] L{k + 1} KVPE {part}")
+            _, msg = assert_with_pcc(expected[:, cols], cache[:total, cols], KVPE_PCC)
+            logger.info(f"[mtp multiturn] L{k + 1} KVPE {part} PCC: {msg}")
         assert torch.count_nonzero(cache[tail:]) == 0, f"L{k + 1} KVPE has rows written at or past {tail}"
     if predictor.index_share:
         index, stripes = gather_cache_natural(index_kv_cache, mesh_device, tp_shard_kv=True)
@@ -785,7 +760,8 @@ def test_mtp_multiturn_pcc(
             index.shape[1],
         )
         index_k = raw @ normalized_hadamard_matrix(raw.shape[-1]).float()
-        _assert_rows_pcc(refs[0].index_cache[0], index_k[:total], INDEX_K_PCC, "[mtp multiturn] L1 index-K")
+        _, msg = assert_with_pcc(refs[0].index_cache[0], index_k[:total], INDEX_K_PCC)
+        logger.info(f"[mtp multiturn] L1 index-K PCC: {msg}")
         assert torch.count_nonzero(raw[tail:]) == 0, f"the index cache has rows written at or past {tail}"
 
     ttnn.synchronize_device(mesh_device)

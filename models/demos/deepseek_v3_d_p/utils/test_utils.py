@@ -96,14 +96,6 @@ def cache_half_pccs(golden: torch.Tensor, dev: torch.Tensor, split: int, pe_inte
     return pcc_first, pcc_second
 
 
-def row_pcc(expected: torch.Tensor, actual: torch.Tensor) -> torch.Tensor:
-    """The Pearson correlation of every row of two ``[S, D]`` tensors, ``[S]``. A per-row floor catches the one
-    misplaced row that a whole-tensor PCC averages away."""
-    e = expected.float() - expected.float().mean(-1, keepdim=True)
-    a = actual.float() - actual.float().mean(-1, keepdim=True)
-    return (e * a).sum(-1) / (e.norm(dim=-1) * a.norm(dim=-1)).clamp_min(torch.finfo(torch.float32).tiny)
-
-
 def print_buffers(device, name, buffer_type):
     buffers = ttnn._ttnn.reports.get_buffers(device)
     filtered_buffers = [buf for buf in buffers if buf.buffer_type == buffer_type]

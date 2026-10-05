@@ -212,10 +212,6 @@ class MTPUnionEmbedding:
         self._drop_split_chip_lookahead_rows()
         self._split_chip_lookahead = split_lookahead
 
-    def clear_split_chip_lookahead(self) -> None:
-        """Back to plain shifts: :meth:`window` stops applying the lookahead."""
-        self.set_split_chip_lookahead(None)
-
     def clear_rows(self, keep_mask: ttnn.Tensor) -> None:
         """Multiply the union by ``[sp, 1, U, H/tp]`` ``keep_mask`` (zeroing the generation rows)."""
         self._apply(lambda src: ttnn.multiply(src, keep_mask))
