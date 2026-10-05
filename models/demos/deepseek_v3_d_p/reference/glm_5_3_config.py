@@ -8,8 +8,7 @@ GLM 5.3 Model Configuration.
 Single source of truth for model dimension constants.
 Values from HuggingFace config.json for GLM-5.3 (model_type ``glm_moe_dsa``).
 
-Geometry is identical to GLM-5.1 (attention, MoE, indexer sizing, layer count). The 5.2
-deltas: longer context (rope_theta 8e6, 1M positions) and cross-layer DSA indexer reuse,
+GLM-5.3 has a long context (rope_theta 8e6, 1M positions) and cross-layer DSA indexer reuse,
 where only ``full`` layers run the lightning indexer and ``shared`` layers reuse the most
 recent full layer's top-k selection. The full/shared map is ``indexer_types``.
 """
@@ -25,10 +24,9 @@ class GLM53Config:
     FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension
     # Routed-expert hybrid split: experts with <= this many active tokens go to
-    # moe_fused_swiglu, the rest to unified_routed_expert_moe. Inherited from GLM 5.1 rather than
-    # measured separately: the crossover is a function of the routed-expert matmul shape, expert
-    # count and activation, and this model matches 5.1 on all of them (6144x2048, 256 experts,
-    # top-8, no pre-projection, SiLU). Re-measure if any of those diverge.
+    # moe_fused_swiglu, the rest to unified_routed_expert_moe. The crossover is a function of the
+    # routed-expert matmul shape, expert count and activation (6144x2048, 256 experts, top-8, no
+    # pre-projection, SiLU). Re-measure if any of those change.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 320
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension
 
@@ -48,7 +46,7 @@ class GLM53Config:
     NUM_LAYERS = 78
     NUM_DENSE_LAYERS = 3  # first_k_dense_replace
     VOCAB_SIZE = 154880
-    MAX_POSITION_EMBEDDINGS = 1048576  # 5.2: 1M context (5.1 was 202752)
+    MAX_POSITION_EMBEDDINGS = 1048576  # 5.2: 1M context
 
     # MLA dimensions
     NUM_ATTENTION_HEADS = 64
@@ -74,7 +72,7 @@ class GLM53Config:
     # Other
     RMS_NORM_EPS = 1e-5
     ROUTE_SCALE = 2.5
-    ROPE_THETA = 8000000  # 5.2: raised from 1e6 to support 1M context
+    ROPE_THETA = 8000000  # 5.2: supports 1M context
 
     @classmethod
     def indexer_types(cls, num_layers: int | None = None):
@@ -91,9 +89,9 @@ class GLM53Config:
 def glm_5_3_hf_config(max_seq: int = 8192):
     """HF-attribute-style config the unified ttMLA reads (GLM-5.3 dims, no YaRN).
 
-    Mirrors ``glm_5_1_config.glm_hf_config`` (same curated field set device + CPU-reference read),
-    with the 5.2 deltas: ``rope_theta=8e6`` and the indexer-reuse fields (``indexer_types`` map plus
-    the freq/offset it derives from). ``rope_scaling.factor=1.0`` disables YaRN -> plain RoPE at θ=8e6.
+    Carries the curated field set the device and CPU reference read, including ``rope_theta=8e6`` and the
+    indexer-reuse fields (``indexer_types`` map plus the freq/offset it derives from).
+    ``rope_scaling.factor=1.0`` disables YaRN -> plain RoPE at θ=8e6.
     The four ``index_*`` attrs size the DSA indexer (GLM's indexer RoPE is interleaved).
     """
     return types.SimpleNamespace(
@@ -127,7 +125,7 @@ def glm_5_3_hf_config(max_seq: int = 8192):
         # the remaining 30 (QB2) or 40 (LoudBox/Galaxy) cores. Shared layers reuse those indices.
         sparse_mla_overlap_profile="auto",
         # Indexer reuse: the per-layer full/shared map (length NUM_LAYERS) plus the params it derives
-        # from. Consumers read `indexer_types` by layer index; absent on GLM-5.1 -> all layers full.
+        # from. Consumers read `indexer_types` by layer index; absent -> all layers full.
         indexer_types=GLM53Config.indexer_types(),
         index_topk_freq=GLM53Config.INDEX_TOPK_FREQ,
         index_skip_topk_offset=GLM53Config.INDEX_SKIP_TOPK_OFFSET,
