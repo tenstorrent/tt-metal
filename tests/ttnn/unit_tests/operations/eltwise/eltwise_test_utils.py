@@ -329,19 +329,6 @@ def generate_bfloat16_ternary_grid(dtype=torch.bfloat16, include_spl_values=Fals
     return torch.tensor(bits, dtype=torch.uint16).view(torch.bfloat16).to(dtype)
 
 
-def ternary_grid_values(
-    low=-float("inf"), high=float("inf"), min_magnitude=0.0, include_zero=True, dtype=torch.bfloat16
-):
-    """Ternary-grid values restricted to a domain, the 3-operand counterpart of
-    binary_grid_values. See that function for the filtering semantics."""
-    values = generate_bfloat16_ternary_grid(dtype=dtype, include_zero=include_zero)
-    in_range = (values >= low) & (values <= high)
-    keep = in_range & (values.abs() >= min_magnitude)
-    if include_zero:
-        keep |= in_range & (values == 0)
-    return values[keep].contiguous()
-
-
 def triple_from_values(values_a, values_b=None, values_c=None):
     """Outer product of three value sets: A[i, j, k] = values_a[i], and so on."""
     if values_b is None:
