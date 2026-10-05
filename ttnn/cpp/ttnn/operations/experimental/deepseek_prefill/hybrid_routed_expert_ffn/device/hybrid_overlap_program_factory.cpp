@@ -15,7 +15,7 @@
 #include "hybrid_program_factory.hpp"
 #include "hybrid_routed_expert_ffn_device_operation.hpp"
 #include "combine/combine_fabric2d_program_factory.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/combine_fabric2d_kernel_interface.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/combine_fabric2d_kernel_interface.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn {
