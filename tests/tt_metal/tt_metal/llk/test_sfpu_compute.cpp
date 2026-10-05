@@ -62,6 +62,8 @@ namespace unit_tests::sfpu_util {
 const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = {
     // FIXME: #1157
     {"relu", {{"SFPU_OP_CHAIN_0", "relu_tile_init(); relu_tile(0);"}}},
+    {"relu_min", {{"SFPU_OP_CHAIN_0", "relu_min_tile_init(); relu_min_tile(0, 0x40A33333u);"}}},  // 5.1f
+    {"relu_max", {{"SFPU_OP_CHAIN_0", "relu_max_tile_init(); relu_max_tile(0, 0x40A33333u);"}}},  // 5.1f
     {"exponential", {{"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}}},
     {"reciprocal", {{"SFPU_OP_CHAIN_0", "recip_tile_init(); recip_tile(0);"}}},
     {"gelu", {{"SFPU_OP_CHAIN_0", "gelu_tile_init(); gelu_tile(0);"}}},
@@ -138,6 +140,12 @@ bool is_int8_binary_sfpu_op(const std::string& op_name) {
 float sfpu_function(const std::string& op_name, float input) {
     if (op_name == "relu") {
         return fmaxf(input, 0.0f);
+    }
+    if (op_name == "relu_min") {
+        return fmaxf(input, 5.1f);
+    }
+    if (op_name == "relu_max") {
+        return fmaxf(0.0f, fminf(input, 5.1f));
     }
     if (op_name == "exponential") {
         return std::exp(input);
@@ -318,6 +326,9 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
     if (op_name == "clamp") {
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-2.0f, 2.0f, numel, seed);
     }
+    if ((op_name == "relu_min") || (op_name == "relu_max")) {
+        return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-2.0f, 10.0f, numel, seed);
+    }
     return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, numel, seed);
 }
 
@@ -387,7 +398,7 @@ std::pair<float, float> sfpu_tolerance(const std::string& op_name, bool fp32_des
     if (op_name == "tanh") {
         return {0.175f, 0.1f};
     }
-    if ((op_name == "gelu") || (op_name == "relu")) {
+    if ((op_name == "gelu") || (op_name == "relu") || (op_name == "relu_min") || (op_name == "relu_max")) {
         return {0.15f, 0.001f};
     }
     if (op_name == "gelu_accurate") {
@@ -652,6 +663,7 @@ struct SfpuConfig {
     bool dst_full_sync_en = true;      // SyncFull by default (matches today's implicit behavior)
     bool unpack_to_dest = false;       // route input DFB to Dest (unpack_modes=UnpackToDest); pair with en_32bit_dest for 32-bit Dest
     bool en_32bit_dest = false;
+    size_t out_dfb_entries = 0;        // 0 = num_tiles; fewer entries make the packer wait on the writer (pack back-pressure)
 };
 
 // Builds a DataflowBufferSpec. `entry_size` is derived from `fmt` so that input and output
@@ -720,8 +732,11 @@ std::vector<uint32_t> run_sfpu_pipeline(
 
     const experimental::DataflowBufferSpec in_dfb_spec =
         make_dfb_spec(IN_DFB, test_config, test_config.l1_input_data_format);
-    const experimental::DataflowBufferSpec out_dfb_spec =
+    experimental::DataflowBufferSpec out_dfb_spec =
         make_dfb_spec(OUT_DFB, test_config, test_config.l1_output_data_format);
+    if (test_config.out_dfb_entries != 0) {
+        out_dfb_spec.num_entries = static_cast<uint32_t>(test_config.out_dfb_entries);
+    }
 
     experimental::DataMovementHardwareConfig reader_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
@@ -878,14 +893,18 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
     const bool is_fp32 = (test_config.l1_input_data_format == tt::DataFormat::Float32);
     // The Float32 device path only wires up relu in v1; the golden/input/check helpers below are
     // format-generic, so this is the single place that pins the supported-op set for Float32.
-    TT_FATAL(!is_fp32 || test_config.sfpu_op == "relu", "Float32 SFPU path supports relu only in v1");
+    const bool is_relu_family =
+        test_config.sfpu_op == "relu" || test_config.sfpu_op == "relu_min" || test_config.sfpu_op == "relu_max";
+    TT_FATAL(!is_fp32 || is_relu_family, "Float32 SFPU path supports relu / relu_min / relu_max only in v1");
+    const bool relu_threshold_op = test_config.sfpu_op == "relu_min" || test_config.sfpu_op == "relu_max";
     const size_t element_size = is_fp32 ? sizeof(float) : sizeof(bfloat16);
     const size_t numel = byte_size / element_size;
     const auto seed = std::chrono::system_clock::now().time_since_epoch().count();
     // Float32 packs 1:1 into uint32 words (pack_vector accepts sizeof(PackType) >= sizeof(ValueType)),
     // so the bf16 uniform-random generator works for both; relu uses the [-1, 1] default range.
     std::vector<uint32_t> packed_input =
-        is_fp32 ? generate_packed_uniform_random_vector<uint32_t, float>(-1.0f, 1.0f, numel, seed)
+        is_fp32 ? generate_packed_uniform_random_vector<uint32_t, float>(
+                      relu_threshold_op ? -2.0f : -1.0f, relu_threshold_op ? 10.0f : 1.0f, numel, seed)
                 : sfpu_util::generate_packed_sfpu_input(numel, test_config.sfpu_op, seed);
 
     // Golden output
@@ -924,8 +943,31 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
     sfpu_defines["SFPU_OP_UNARY_COMP_INCLUDE"] = "1";
 
     const auto dest_buffer_data = run_sfpu_pipeline(mesh_device, test_config, sfpu_defines, packed_input);
-    return is_fp32 ? sfpu_util::is_close_packed_sfpu_output_f32(dest_buffer_data, packed_golden, test_config.sfpu_op)
-                   : sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
+    const bool ok = is_fp32 ? sfpu_util::is_close_packed_sfpu_output_f32(dest_buffer_data, packed_golden, test_config.sfpu_op)
+                            : sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
+    if (!ok && is_fp32) {
+        // Diagnostic: for each output tile, the fraction of words equal to every golden tile (g) and input tile (in).
+        // "tile t == g(t+1)" means the next section overwrote this one before pack read it; "== in(t)" means the
+        // SFPU did not touch it; all near 0 means garbage.
+        constexpr size_t wpt = 32 * 32;
+        for (size_t t = 0; t < test_config.num_tiles; ++t) {
+            std::string line;
+            for (size_t j = 0; j < test_config.num_tiles; ++j) {
+                size_t eq_g = 0, eq_in = 0;
+                for (size_t i = 0; i < wpt; ++i) {
+                    eq_g += (dest_buffer_data[t * wpt + i] == packed_golden[j * wpt + i]);
+                    eq_in += (dest_buffer_data[t * wpt + i] == packed_input[j * wpt + i]);
+                }
+                line += fmt::format(" g{}={:.2f} in{}={:.2f}", j, double(eq_g) / wpt, j, double(eq_in) / wpt);
+            }
+            size_t zeros = 0;
+            for (size_t i = 0; i < wpt; ++i) {
+                zeros += (dest_buffer_data[t * wpt + i] == 0);
+            }
+            log_info(tt::LogTest, "fp32 out tile {} match fractions:{} zeros={}/{}", t, line, zeros, wpt);
+        }
+    }
+    return ok;
 }
 
 namespace {
@@ -1500,7 +1542,11 @@ bool run_sfpu_typecast(
 }  // namespace unit_tests::compute::sfpu
 
 void run_quasar_sfpu_unpack_to_dest_fp32(
-    distributed::MeshDevice& dev, size_t num_tiles, const std::string& sfpu_op, bool dst_full_sync_en) {
+    distributed::MeshDevice& dev,
+    size_t num_tiles,
+    const std::string& sfpu_op,
+    bool dst_full_sync_en,
+    size_t out_dfb_entries = 0) {
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
     unit_tests::compute::sfpu::SfpuConfig cfg{
@@ -1514,14 +1560,24 @@ void run_quasar_sfpu_unpack_to_dest_fp32(
         .dst_full_sync_en = dst_full_sync_en,
         .unpack_to_dest = true,
         .en_32bit_dest = true,
+        .out_dfb_entries = out_dfb_entries,
     };
     log_info(
-        tt::LogTest, "Quasar SFPU FP32: op={} num_tiles={} dst_full_sync_en={}", sfpu_op, num_tiles, dst_full_sync_en);
+        tt::LogTest,
+        "Quasar SFPU FP32: op={} num_tiles={} dst_full_sync_en={} out_dfb_entries={}",
+        sfpu_op,
+        num_tiles,
+        dst_full_sync_en,
+        out_dfb_entries);
     EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_all_same_buffer(dev, cfg));
 }
 
 void run_quasar_sfpu_unpack_to_dest_16b(
-    distributed::MeshDevice& dev, size_t num_tiles, const std::string& sfpu_op, bool dst_full_sync_en) {
+    distributed::MeshDevice& dev,
+    size_t num_tiles,
+    const std::string& sfpu_op,
+    bool dst_full_sync_en,
+    size_t out_dfb_entries = 0) {
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
     unit_tests::compute::sfpu::SfpuConfig cfg{
@@ -1534,6 +1590,7 @@ void run_quasar_sfpu_unpack_to_dest_16b(
         .approx_mode = false,
         .dst_full_sync_en = dst_full_sync_en,
         .unpack_to_dest = true,  // 16-bit operand unpack-to-dest (fp32_dest_acc_en stays false)
+        .out_dfb_entries = out_dfb_entries,
     };
     log_info(
         tt::LogTest, "Quasar SFPU 16b->DEST: op={} num_tiles={} dst_full_sync_en={}", sfpu_op, num_tiles, dst_full_sync_en);
@@ -1920,26 +1977,48 @@ INSTANTIATE_TEST_SUITE_P(
     });
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuRelu) {
-    // 1 and 4-tile, SyncFull and SyncHalf
-    for (const uint32_t num_tiles : {1u, 4u}) {
-        for (const bool dst_full_sync_en : {true, false}) {
-            SCOPED_TRACE(
-                std::string("num_tiles=") + std::to_string(num_tiles) + (dst_full_sync_en ? " SyncFull" : " SyncHalf"));
-            run_quasar_sfpu_unpack_to_dest_fp32(this->device(), num_tiles, "relu", dst_full_sync_en);
+    // 1 and 4-tile, SyncFull and SyncHalf. relu only on this branch: the Quasar relu_min / relu_max kernels here
+    // zero values below the threshold instead of clamping, so they do not match the golden (main has the fixed ones).
+    for (const char* sfpu_op : {"relu"}) {
+        for (const uint32_t num_tiles : {1u, 4u}) {
+            for (const bool dst_full_sync_en : {true, false}) {
+                SCOPED_TRACE(
+                    std::string(sfpu_op) + " num_tiles=" + std::to_string(num_tiles) +
+                    (dst_full_sync_en ? " SyncFull" : " SyncHalf"));
+                run_quasar_sfpu_unpack_to_dest_fp32(this->device(), num_tiles, sfpu_op, dst_full_sync_en);
+            }
         }
     }
 }
 
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuReluPackBackpressure) {
+    // 4 tiles through a ONE-entry output DFB: the packer waits on the writer every section, so the unpacker is
+    // admitted to a third section only if the DEST occupancy count says a bank is free (tt-metal #58903).
+    for (const auto [num_tiles, dst_full_sync_en] :
+         {std::pair{3u, false}, std::pair{3u, false}, std::pair{4u, false}, std::pair{4u, false}}) {
+        SCOPED_TRACE(std::string("num_tiles=") + std::to_string(num_tiles) + (dst_full_sync_en ? " SyncFull" : " SyncHalf"));
+        run_quasar_sfpu_unpack_to_dest_fp32(this->device(), num_tiles, "relu", dst_full_sync_en, /*out_dfb_entries=*/1);
+    }
+    // Same with a 16-bit DEST (bank-1 base at row 512 instead of 256): separates "flips inert" from "flip size wrong".
+    for (const uint32_t num_tiles : {2u, 3u, 3u, 4u}) {
+        SCOPED_TRACE(std::string("16b num_tiles=") + std::to_string(num_tiles) + " SyncHalf");
+        run_quasar_sfpu_unpack_to_dest_16b(this->device(), num_tiles, "relu", false, /*out_dfb_entries=*/1);
+    }
+}
+
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuUnpackToDest16b) {
-    // 16-bit operand explicitly unpacked to Dest
-    for (const bool dst_full_sync_en : {true, false}) {
-        for (uint32_t num_tiles : {1u, 4u}) {
-            log_info(
-                tt::LogTest,
-                "Quasar SFPU 16b->DEST: num_tiles={} {}",
-                num_tiles,
-                dst_full_sync_en ? "SyncFull" : "SyncHalf");
-            run_quasar_sfpu_unpack_to_dest_16b(this->device(), num_tiles, "relu", dst_full_sync_en);
+    // 16-bit operand explicitly unpacked to Dest. relu only on this branch, see QuasarSfpuRelu.
+    for (const char* sfpu_op : {"relu"}) {
+        for (const bool dst_full_sync_en : {true, false}) {
+            for (uint32_t num_tiles : {1u, 4u}) {
+                log_info(
+                    tt::LogTest,
+                    "Quasar SFPU 16b->DEST: op={} num_tiles={} {}",
+                    sfpu_op,
+                    num_tiles,
+                    dst_full_sync_en ? "SyncFull" : "SyncHalf");
+                run_quasar_sfpu_unpack_to_dest_16b(this->device(), num_tiles, sfpu_op, dst_full_sync_en);
+            }
         }
     }
 }
@@ -1980,7 +2059,7 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuTypecastFixture, TensixSfpuTypecast) {
         unit_tests::sfpu_util::typecast_device_format_name(in_fmt),
         unit_tests::sfpu_util::typecast_device_format_name(out_fmt));
     for (auto& device : this->devices_) {
-        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_typecast(*device, in_fmt, out_fmt, 1));
+        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_typecast(*device, in_fmt, out_fmt, 4));
     }
 }
 

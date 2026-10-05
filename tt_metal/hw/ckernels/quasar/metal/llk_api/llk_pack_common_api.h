@@ -146,7 +146,12 @@ inline void llk_pack_dest_section_done() {
         _llk_sync_get_<p_stall::PACK0>(semaphore::UNPACK_PACK);
         _llk_sync_get_<p_stall::PACK0>(semaphore::MATH_PACK);
         if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
-            _llk_sync_advance_dest_section_<ckernel::TRISC_ID, EN_32BIT_DEST, p_stall::PACK0>();
+            // Same bank switch as the regular path: PACR reads DEST at THCON_PACKER0_REG0_SRC_ADDR_OFFSET plus its tile
+            // counter. A DEST_TARGET_REG_CFG_MATH_SEC2 write does not move it (emulator, 2026-10-05). Reprogram the
+            // offset only once the packer has drained the section it just read.
+            _update_dest_register_offset_<EN_32BIT_DEST>();
+            _llk_stall_cfg_on_<p_stall::PACK0>();
+            _set_packer_dest_registers_<p_pacr::PACK0, DST_SYNC_MODE>();
         }
     } else {
         _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, DST_SYNC_MODE, EN_32BIT_DEST>();
@@ -157,22 +162,19 @@ inline void llk_pack_dest_section_done() {
  * @brief Reset packer dest-bank parity to bank 0 at program start (pack-side mirror of llk_math_pack_sync_init and of
  * the unpack-side reset in llk_unpack_hw_configure).
  *
- * In the unpack-to-dest path PACR addresses DEST via SEC{TRISC_ID}_Offset on the pack thread, and
- * llk_pack_dest_section_done flips it per tile in SyncHalf. The bank-0 base is established here, once per program, and
- * not in the per-op llk_pack_init: op inits may run inside a tile loop, and a reset there would desync pack from unpack.
+ * In both paths PACR addresses DEST via THCON_PACKER0_REG0_SRC_ADDR_OFFSET plus its tile counter, and
+ * llk_pack_dest_section_done moves that offset per section in SyncHalf. The bank-0 offset is established here, once per
+ * program, and not in the per-op llk_pack_init: op inits may run inside a tile loop, and a reset there would desync
+ * pack from unpack.
  *
  * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
  * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
  * compute APIs.
  */
 inline void llk_pack_dest_init() {
+    // Zeroes the bank offset and writes it to the packer in both sync modes, so a SyncFull program never inherits a
+    // SyncHalf predecessor's bank.
     _llk_pack_dest_init_<p_pacr::PACK0, DST_SYNC_MODE>();
-
-    if constexpr (UnpackToDestEn) {
-        // _llk_pack_dest_init_ has just zeroed the bank offset, so this writes the bank-0 base. Unconditional on the
-        // sync mode, like the math-side SEC1 write, so a SyncFull program never inherits a SyncHalf predecessor's bank.
-        _set_dest_section_base_<ckernel::TRISC_ID>(_get_dest_buffer_base_());
-    }
 }
 
 /**
