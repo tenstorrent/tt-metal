@@ -4,7 +4,7 @@
 #pragma once
 
 // Quasar variant with a 4-row FPU. Start from the base Quasar parameters and override what differs.
-#include "../../common/inc/ckernel_proj_params.h"
+#include <common/inc/ckernel_proj_params.h>
 
 #undef MATH_ROWS
 #define MATH_ROWS 0x00000004 // = 4 in decimal

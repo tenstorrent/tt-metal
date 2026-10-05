@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "../../common/inc/ckernel_ops.h"
+#include <common/inc/ckernel_ops.h>
 
 #define TRISC_OP_SWIZZLE(x) ((((x) >> 30) & 0x3) | (((x) & 0x3FFFFFFF) << 2))
 #define INSTRUCTION_WORD(x) __asm__ __volatile__(".word (%0)" : : "i"((x)))
