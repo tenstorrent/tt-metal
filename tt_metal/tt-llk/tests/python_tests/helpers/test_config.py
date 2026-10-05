@@ -1911,6 +1911,21 @@ class TestConfig:
             else self.boot_mode
         )
 
+        VARIANT_ELF_DIR = (
+            TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
+        )
+
+        self.temp_elfs = [
+            str((VARIANT_ELF_DIR / f"{trisc_name}.elf").absolute())
+            for trisc_name in TestConfig.KERNEL_COMPONENTS
+        ]
+
+        missing = [Path(elf).name for elf in self.temp_elfs if not Path(elf).is_file()]
+        if missing:
+            raise FileNotFoundError(
+                f"{VARIANT_ELF_DIR} has no {', '.join(missing)}: the variant did not compile, so it is not run"
+            )
+
         # Zero the device print buffer header before each kernel run so the
         # first DEVICE_PRINT() observes wpos=rpos=0 and a free lock.
         if TestConfig.DEVICE_PRINT_ENABLED or self.requires_device_print:
@@ -1986,17 +2001,9 @@ class TestConfig:
         else:
             commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
 
-        VARIANT_ELF_DIR = (
-            TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
-        )
-
-        self.temp_elfs = [
-            str((VARIANT_ELF_DIR / f"{trisc_name}.elf").absolute())
-            for trisc_name in TestConfig.KERNEL_COMPONENTS
-        ]
-
         if TestConfig.LAST_LOADED_ELFS != VARIANT_ELF_DIR:
-            TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR
+            # A load that raises part way leaves the TRISCs with a mix of two variants
+            TestConfig.LAST_LOADED_ELFS = Path()
 
             for i, elf_file_path in enumerate(self.temp_elfs):
                 if TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE:
@@ -2024,6 +2031,8 @@ class TestConfig:
                         ),
                         verify_write=False,
                     )
+
+            TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR
 
             if (
                 boot_mode == BootMode.BRISC
