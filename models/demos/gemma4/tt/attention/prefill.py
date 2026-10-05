@@ -558,7 +558,9 @@ def _prefill_forward_single(
             if kv_cache is not None
             else 0
         )
-        _cols = int(chunk_page_table.shape[-1])
+        # Column count on THIS layer's block grid: the chunk table was sliced on the
+        # full-attention group's grid, whose block size can differ (TP=4: 128 vs 64).
+        _cols = max(1, -(-int(hidden_states.shape[-2]) // _bs)) if _bs > 0 else int(chunk_page_table.shape[-1])
         _c0 = chunk_offset // _bs if _bs > 0 else -1
         if _c0 >= 0 and _c0 + _cols <= int(page_table.shape[-1]):
             _rows = int(page_table.shape[0])
