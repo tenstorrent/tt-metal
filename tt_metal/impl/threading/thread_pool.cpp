@@ -363,7 +363,8 @@ public:
 
     const std::vector<NumaAwareExecutor*>& participants() const { return participants_; }
 
-    // Takes one reference for the caller and one for each participant.
+    // Call once, after the last assign() and before the job is offered. The caller and each participant's mailbox
+    // then share the job, and the last of them to release() it deletes it.
     void start() noexcept { refs_.store(participants_.size() + 1, std::memory_order_relaxed); }
 
     // Worker: wakes the participants below this one that still have calls to run, runs this worker's calls, and
