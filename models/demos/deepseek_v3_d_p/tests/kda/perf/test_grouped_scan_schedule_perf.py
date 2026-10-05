@@ -86,6 +86,14 @@ _STAGES = (
     _Stage("summary", 32, 1, 10),
     _Stage("summary", 32, 3, 20),
     _Stage("summary", 32, 3, 10),
+    # Kimi K3 (24 heads/chip) and GLM-5.3-Flash (16 heads/chip) at 640 rows: one group of 20
+    # (the recurrent scan splits V in four) versus two groups of 10 (V split in two).
+    *(
+        _Stage(stage, heads, groups, 20 // groups)
+        for heads in (24, 16)
+        for groups in (1, 2)
+        for stage in ("scan", "summary", "affine_scan", "reduce")
+    ),
 )
 
 
