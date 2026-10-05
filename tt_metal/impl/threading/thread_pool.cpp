@@ -365,10 +365,9 @@ public:
 
     void start() noexcept { refs_.store(participants_.size() + 1, std::memory_order_relaxed); }
 
-    // Worker: wakes the participants below this one that still have calls to run, runs this worker's calls, and
-    // drops the worker's reference. A job that has finished may point at executors being stopped, so it is only
-    // dropped.
-    void run_participant(NumaAwareExecutor* executor) noexcept {
+    // Wakes this worker's children, runs its calls and releases the job. A finished job is only released: its
+    // executors may be stopping.
+    void participate(NumaAwareExecutor* executor) noexcept {
         if (!remaining_.finished()) {
             const size_t node = std::find(participants_.begin(), participants_.end(), executor) - participants_.begin();
             for_each_child(node, [this](size_t child) { wake_subtree(child); });
@@ -485,7 +484,7 @@ inline void NumaAwareExecutor::worker_loop() {
         }
         if (job_.load(std::memory_order_relaxed) != nullptr) {
             if (auto* job = job_.exchange(nullptr, std::memory_order_acquire)) {
-                job->run_participant(this);
+                job->participate(this);
             }
             continue;
         }
