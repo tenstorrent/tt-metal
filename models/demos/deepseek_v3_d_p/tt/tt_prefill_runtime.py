@@ -13,13 +13,13 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.common.prefill.runners.layer_completion_sink import NullLayerCompletionSink
 from models.demos.common.prefill.runners.runner_utils import (
     d2d_activation_rows,
     d2d_activation_width,
     mtp_union_rows,
     num_mtp_tokens,
 )
-from models.demos.common.prefill.runners.layer_completion_sink import NullLayerCompletionSink
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.utils import load_drafter_state_dict
