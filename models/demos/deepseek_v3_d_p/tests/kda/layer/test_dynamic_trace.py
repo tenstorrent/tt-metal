@@ -165,14 +165,14 @@ def test_production_local_trace(mesh_device, tp_axis, device_params, local_rows)
     sp = tuple(mesh_device.shape)[axis]
     # Use the established production K128 PCC policy for SP1; the small SP2
     # oracle's recurrent peak-error envelope is not calibrated for this geometry.
-    from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import load_or_compute_cpu_reference
-    from models.demos.deepseek_v3_d_p.tests.kda.utils import make_kimi_k3_device_case, make_synthetic_kimi_k3_test_case
+    from models.demos.deepseek_v3_d_p.tests.kda.cases import build_kda_case, make_kda_device_case, registered_kda_case
+    from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import cpu_references
 
-    case = make_synthetic_kimi_k3_test_case(sequence=local_rows)
+    case = build_kda_case(registered_kda_case("synthetic", tuple(mesh_device.shape), tp_axis, local_rows))
     config, hidden = case.config, case.hidden
-    expected_output, expected_state, _ = load_or_compute_cpu_reference(case)
-    expected_output = expected_output.bfloat16()
-    layer, unused = make_kimi_k3_device_case(mesh_device, case, tensor_parallel_axis=tp_axis, cache_weights=False)
+    (reference,) = cpu_references(case)
+    expected_output, expected_state = reference.output.bfloat16(), reference.state
+    layer, unused = make_kda_device_case(mesh_device, case, cache_weights=False)
     ttnn.deallocate(unused)
     for actual_start in (0, local_rows, 32, (sp - 1) * local_rows + 320):
         actual_start_tt = make_actual_start(mesh_device, actual_start)

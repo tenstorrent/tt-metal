@@ -5,11 +5,10 @@
 from __future__ import annotations
 
 import hashlib
-import inspect
 import json
 import os
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -18,10 +17,12 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState, kda_forward_reference
-from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import KIMI_K3_FIRST_KDA_LAYER
-from models.demos.deepseek_v3_d_p.tests.kda.utils import KimiK3TestCase
+from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
+from models.demos.deepseek_v3_d_p.tests.kda.cases import KDATestCase, KDAWeightSource
 
-_CPU_REFERENCE_CACHE_VERSION = 4
+# Covers the stored reference: kda_forward_reference (models/demos/deepseek_v3_d_p/reference/kda) and the
+# payload layout below. Bump when either changes the stored tensors.
+_CPU_REFERENCE_CACHE_VERSION = 5
 
 
 def _tensor_sha256(tensor: torch.Tensor) -> str:
@@ -29,45 +30,65 @@ def _tensor_sha256(tensor: torch.Tensor) -> str:
     return hashlib.sha256(memoryview(storage)).hexdigest()
 
 
-def _cpu_reference_cache_path(case: KimiK3TestCase) -> Path:
-    reference_dir = Path(inspect.getfile(kda_forward_reference)).parent
-    fingerprint = hashlib.sha256()
-    fingerprint.update(f"v{_CPU_REFERENCE_CACHE_VERSION}".encode())
-    fingerprint.update(str(KIMI_K3_FIRST_KDA_LAYER).encode())
-    fingerprint.update(str(case.hidden.shape[1]).encode())
-    fingerprint.update(case.weights_identity.encode())
-    fingerprint.update(json.dumps(asdict(case.config), sort_keys=True).encode())
-    fingerprint.update(_tensor_sha256(case.hidden).encode())
-    for source_path in sorted(reference_dir.glob("*.py")):
-        fingerprint.update(source_path.name.encode())
-        fingerprint.update(source_path.read_bytes())
-    return (
-        Path(ttnn.CONFIG.model_cache_path)
-        / "kimi_k3"
-        / case.weights_identity
-        / "cpu_reference"
-        / f"layer_{KIMI_K3_FIRST_KDA_LAYER}_t{case.hidden.shape[1]}_{fingerprint.hexdigest()[:20]}.pt"
-    )
-
-
-def _reference_tensors(output: torch.Tensor, state: KDAReferenceState) -> dict[str, torch.Tensor]:
+def _state_tensors(state: KDAReferenceState) -> dict[str, torch.Tensor]:
     return {
-        "output": output.detach().clone(),
-        "recurrent": state.recurrent.detach().clone(),
-        "q_convolution": state.q_convolution.detach().clone(),
-        "k_convolution": state.k_convolution.detach().clone(),
-        "v_convolution": state.v_convolution.detach().clone(),
+        "recurrent": state.recurrent,
+        "q_convolution": state.q_convolution,
+        "k_convolution": state.k_convolution,
+        "v_convolution": state.v_convolution,
     }
 
 
-def _validate_cached_reference(case: KimiK3TestCase, payload: dict[str, Any]) -> tuple[torch.Tensor, KDAReferenceState]:
+def cpu_reference_cache_path(
+    weights: KDAWeightSource,
+    hidden: torch.Tensor,
+    initial_state: KDAReferenceState | None,
+) -> Path:
+    """Key one reference run by model, layer, head slice, weights, config, exact input and initial state."""
+    fingerprint = hashlib.sha256()
+    payload = {
+        "version": _CPU_REFERENCE_CACHE_VERSION,
+        "model": weights.model,
+        "layer": weights.layer_idx,
+        "head_slice": weights.head_slice,
+        "weights": weights.identity,
+        "config": asdict(weights.config),
+        "hidden": [str(hidden.dtype), list(hidden.shape), _tensor_sha256(hidden)],
+        "initial_state": None
+        if initial_state is None
+        else {
+            name: [str(tensor.dtype), list(tensor.shape), _tensor_sha256(tensor)]
+            for name, tensor in _state_tensors(initial_state).items()
+        },
+    }
+    fingerprint.update(json.dumps(payload, sort_keys=True).encode())
+    return (
+        Path(ttnn.CONFIG.model_cache_path)
+        / weights.model
+        / weights.identity
+        / "cpu_reference"
+        / f"layer_{weights.layer_idx}_t{hidden.shape[1]}_{fingerprint.hexdigest()[:20]}.pt"
+    )
+
+
+@dataclass(frozen=True)
+class KDAChunkReference:
+    output: torch.Tensor
+    state: KDAReferenceState
+    seconds: float
+    cache_hit: bool
+
+
+def _validate_cached_reference(
+    config: KDAConfig, sequence: int, payload: dict[str, Any]
+) -> tuple[torch.Tensor, KDAReferenceState]:
     tensors = {name: payload[name] for name in payload["digests"]}
     expected_shapes = {
-        "output": (1, case.hidden.shape[1], case.config.hidden_size),
-        "recurrent": (1, case.config.num_heads, case.config.head_k_dim, case.config.head_v_dim),
-        "q_convolution": (1, case.config.conv_kernel_size - 1, case.config.q_dim),
-        "k_convolution": (1, case.config.conv_kernel_size - 1, case.config.k_dim),
-        "v_convolution": (1, case.config.conv_kernel_size - 1, case.config.v_dim),
+        "output": (1, sequence, config.hidden_size),
+        "recurrent": (1, config.num_heads, config.head_k_dim, config.head_v_dim),
+        "q_convolution": (1, config.conv_kernel_size - 1, config.q_dim),
+        "k_convolution": (1, config.conv_kernel_size - 1, config.k_dim),
+        "v_convolution": (1, config.conv_kernel_size - 1, config.v_dim),
     }
     assert set(tensors) == set(expected_shapes), f"unexpected CPU-reference cache tensors: {set(tensors)}"
     for name, tensor in tensors.items():
@@ -84,19 +105,21 @@ def _validate_cached_reference(case: KimiK3TestCase, payload: dict[str, Any]) ->
     )
 
 
-def load_or_compute_cpu_reference(case: KimiK3TestCase) -> tuple[torch.Tensor, KDAReferenceState, float]:
-    cache_path = _cpu_reference_cache_path(case)
+def _load_or_compute_chunk(case: KDATestCase, chunk: int, initial_state: KDAReferenceState | None) -> KDAChunkReference:
+    hidden = case.chunk_valid_hidden(chunk)
+    cache_path = cpu_reference_cache_path(case.weights, hidden, initial_state)
+    label = f"KDA {case.spec.name} chunk {chunk} T={hidden.shape[1]}"
     start = time.perf_counter()
     if cache_path.exists():
         payload = torch.load(cache_path, map_location="cpu", weights_only=True)
-        output, state = _validate_cached_reference(case, payload)
+        output, state = _validate_cached_reference(case.config, hidden.shape[1], payload)
         elapsed = time.perf_counter() - start
-        logger.info(f"KDA T={case.hidden.shape[1]} CPU reference cache hit: {cache_path}")
-        logger.info(f"KDA T={case.hidden.shape[1]} CPU reference load completed in {elapsed:.3f} seconds")
-        return output, state, elapsed
+        logger.info(f"{label} CPU reference cache hit: {cache_path} ({elapsed:.3f} s)")
+        return KDAChunkReference(output, state, elapsed, cache_hit=True)
 
-    output, state = kda_forward_reference(case.hidden, case.state_dict, case.config)
-    tensors = _reference_tensors(output, state)
+    output, state = kda_forward_reference(hidden, case.weights.load_state_dict(), case.config, initial_state)
+    tensors = {"output": output, **_state_tensors(state)}
+    tensors = {name: tensor.detach().clone() for name, tensor in tensors.items()}
     payload = {**tensors, "digests": {name: _tensor_sha256(tensor) for name, tensor in tensors.items()}}
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = cache_path.with_suffix(f".{os.getpid()}.tmp")
@@ -106,6 +129,17 @@ def load_or_compute_cpu_reference(case: KimiK3TestCase) -> tuple[torch.Tensor, K
     finally:
         temporary_path.unlink(missing_ok=True)
     elapsed = time.perf_counter() - start
-    logger.info(f"KDA T={case.hidden.shape[1]} CPU reference cache miss: {cache_path}")
-    logger.info(f"KDA T={case.hidden.shape[1]} CPU reference computation completed in {elapsed:.3f} seconds")
-    return output, state, elapsed
+    logger.info(f"{label} CPU reference cache miss, computed in {elapsed:.3f} s: {cache_path}")
+    state = KDAReferenceState(**{name: tensors[name] for name in _state_tensors(state)})
+    return KDAChunkReference(tensors["output"], state, elapsed, cache_hit=False)
+
+
+def cpu_references(case: KDATestCase) -> tuple[KDAChunkReference, ...]:
+    """Reference output and state after every chained chunk; chunk i starts from chunk i-1's state."""
+    references = []
+    state = None
+    for chunk in range(case.num_chunks):
+        reference = _load_or_compute_chunk(case, chunk, state)
+        references.append(reference)
+        state = reference.state
+    return tuple(references)
