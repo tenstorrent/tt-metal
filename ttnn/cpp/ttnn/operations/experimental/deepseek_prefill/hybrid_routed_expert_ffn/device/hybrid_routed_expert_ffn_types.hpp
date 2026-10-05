@@ -117,6 +117,9 @@ struct UnifiedRoutedExpertFfnParams {
     uint32_t grid_x = kGridX;
     uint32_t grid_y = kGridY;
     uint32_t origin_y = 0;
+    // Overlapped with combine: append to the counts table the chunk each expert's combine walks open on,
+    // so the chunk loop can start there. Implied by the hybrid op's own overlap flag, which is hashed.
+    bool far_chunk_table = false;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "m_tiles",
