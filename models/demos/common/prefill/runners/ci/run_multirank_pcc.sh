@@ -52,6 +52,9 @@ SC1_NUM_LAYERS=""
 SC1_NUM_USERS=1
 
 case "${MODEL}" in
+  gptoss120b)
+    source "${TT_METAL_HOME}/models/demos/gpt_oss_d_p/scripts/ci/runner_config.sh"
+    ;;
   llama31)
     source "${TT_METAL_HOME}/models/demos/llama_3p1_8b_d_p/scripts/ci/runner_config.sh"
     ;;
