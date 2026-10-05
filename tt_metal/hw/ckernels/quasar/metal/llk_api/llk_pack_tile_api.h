@@ -7,6 +7,7 @@
 #include "llk_pack_common_api.h"
 #include "llk_pack.h"
 #include "tensor_shape.h"
+#include "llk_assert.h"
 
 /*************************************************************************
  * LLK PACK (tile / block)
@@ -47,31 +48,41 @@ inline void llk_pack_init(const std::uint32_t pack_output) {
  * @tparam out_of_order_output: Set true to write the output tile to the tile index specified by
  * the user in `output_tile_index`, set false for pack to operate sequentially: write to the next tile index
  * starting from index 0, and ignore the `output_tile_index` parameter
- * @tparam untilize: Selects pack or pack untilizem
  * @param output_id The output DataFlow Buffer identifier
- * @param output_tile_index: The index in the output CB to write to
+ * @param output_tile_index: The tile index within the reserved batch to write to
  *
  * This function packs tiles from the destination register to the output DataFlow Buffer.
  *
  */
-template <bool out_of_order_output, bool untilize>
+template <bool out_of_order_output>
 inline std::uint32_t get_output_tile_index(std::uint8_t output_id, std::uint32_t output_tile_index) {
-    std::uint32_t l1_tile_index;
     LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(output_id);
+    const std::uint32_t wr_entry_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx;
+    const std::uint32_t stride = local_dfb_interface.stride_size_tiles;
+
+    // Compute how many l1_index units fit in one DFB entry
+    const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
+    const std::uint32_t entry_size_16B = local_dfb_interface.entry_size;  // DFB entry size in 16B
+    const std::uint32_t tile_16B =                                        // one tile as addressed via the BFD, in 16B
+        SCALE_DATUM_SIZE(pack_dst_format[output_id], tensor_shape.total_tensor_size()) >> 4;
+    LLK_ASSERT(entry_size_16B % tile_16B == 0, "DFB entry_size must be a whole number of tiles");
+    const std::uint32_t l1_index_per_entry = entry_size_16B / tile_16B;  // l1_index steps per entry
+
+    // Tile index within the reserved batch: caller-provided (out-of-order) or running count since the last push.
+    std::uint32_t tile_in_batch;
     if constexpr (out_of_order_output) {
-        // Use the write tile index to track position within DFB
-        l1_tile_index = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx + output_tile_index;
+        tile_in_batch = output_tile_index;
     } else {
-        if constexpr (untilize) {
-            // TODO: uplift this option from BBE
-        } else {
-            // In-order packing: use fifo_wr_tile_ptr as the incrementing tile offset
-            l1_tile_index = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx +
-                            local_dfb_interface.wr_entry_ptr;
-            local_dfb_interface.wr_entry_ptr++;
-        }
+        // In-order packing: wr_entry_ptr counts tiles packed since the last push (reset in llk_push_tiles).
+        tile_in_batch = local_dfb_interface.wr_entry_ptr++;
     }
-    return l1_tile_index;
+
+    // The packer addresses L1 in tiles from the BFD base. stride_size_tiles is the DFB access-pattern stride set
+    // by the host (STRIDED: max(producers, consumers); otherwise 1), so consecutive entries of a batch are
+    // stride_size_tiles entries apart (matching dfb_advance_slot); tiles inside one entry are contiguous (#56194).
+    const std::uint32_t entry_in_batch = tile_in_batch / l1_index_per_entry;
+    const std::uint32_t tile_in_entry = tile_in_batch % l1_index_per_entry;
+    return (wr_entry_idx + entry_in_batch * stride) * l1_index_per_entry + tile_in_entry;
 }
 
 /**
@@ -94,7 +105,7 @@ inline void llk_pack(
     LLK_REINIT_GUARD_ASSERT_MATCHES(
         pack_bfd_resource, pack_output, "pack_tile pack_output DFB differs from the one llk_pack_init programmed");
     const std::uint8_t output_id = get_output_id(pack_output);
-    const std::uint32_t l1_tile_index = get_output_tile_index<out_of_order_output, false>(output_id, output_tile_index);
+    const std::uint32_t l1_tile_index = get_output_tile_index<out_of_order_output>(output_id, output_tile_index);
     const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
 
     _llk_pack_(tile_index, l1_tile_index, tensor_shape);
@@ -156,8 +167,8 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t pack_ou
     const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
 
     for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
-        std::uint32_t l1_tile_index = get_output_tile_index<false /* out_of_order_output */, false /* untilize */>(
-            output_id, 0 /* output_tile_index */);
+        std::uint32_t l1_tile_index =
+            get_output_tile_index<false /* out_of_order_output */>(output_id, 0 /* output_tile_index */);
 
         _llk_pack_(tile_index, l1_tile_index, tensor_shape);
     }
