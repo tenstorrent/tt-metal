@@ -256,6 +256,7 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.concatenate_heads.html">ttnn.transformer.concatenate_heads</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.flash_mla_prefill.html">ttnn.transformer.flash_mla_prefill</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.flash_multi_latent_attention_decode.html">ttnn.transformer.flash_multi_latent_attention_decode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.fused_recurrent_gated_delta_rule.html">ttnn.transformer.fused_recurrent_gated_delta_rule</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.gated_delta_attn_seq.html">ttnn.transformer.gated_delta_attn_seq</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.joint_scaled_dot_product_attention.html">ttnn.transformer.joint_scaled_dot_product_attention</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.paged_flash_multi_latent_attention_decode.html">ttnn.transformer.paged_flash_multi_latent_attention_decode</a></li>
@@ -352,7 +353,7 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.transformer.chunk_gated_delta_rule">
-<span class="sig-prename descclassname"><span class="pre">ttnn.transformer.</span></span><span class="sig-name descname"><span class="pre">chunk_gated_delta_rule</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">q</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">k</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">v</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">g</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">beta</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">initial_state</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_final_state</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunk_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_qk_l2norm</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_head_major</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_mcast</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">masks</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">ttnn.Tensor</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">ttnn.Tensor</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#ttnn.transformer.chunk_gated_delta_rule" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.transformer.</span></span><span class="sig-name descname"><span class="pre">chunk_gated_delta_rule</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">q</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">k</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">v</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">g</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">beta</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">initial_state</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_final_state</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunk_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_qk_l2norm</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_head_major</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">compute_kernel_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.DeviceComputeKernelConfig</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">masks</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">ttnn.Tensor</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">ttnn.Tensor</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#ttnn.transformer.chunk_gated_delta_rule" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Standalone chunked Gated Delta Rule forward (flash-linear-attention algorithm).</p>
@@ -361,44 +362,83 @@
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><span class="tt-api-param-name"><strong>q</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, T, H,  K]</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>k</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, T, H,  K]</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>v</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, T, HV, V]</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>g</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, T, HV]   log-space decay</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>beta</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, T, HV]</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>q</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, T, H,  K]  or flat [B, T, H*K]   (cast to bf16; see Input layouts)</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>k</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, T, H,  K]  or flat [B, T, H*K]   (cast to bf16)</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>v</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, T, HV, V]  or flat [B, T, HV*V]  (cast to bf16)</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>g</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, T, HV]   log-space decay        (cast to fp32)</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>beta</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, T, HV]                          (cast to fp32)</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>them</strong> (<em>All of</em>)</span><span class="tt-api-param-desc">the</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>below</strong> (<em>and every optional tensor</em>)</span><span class="tt-api-param-desc">the</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>layout</strong> (<em>must be device tensors in TILE</em>)</span><span class="tt-api-param-desc">the</span></p></li>
+<li><p><strong>relayouts</strong> (<em>op casts dtypes but never</em>) – </p></li>
+<li><p><strong>validation.</strong> (<em>and a ROW_MAJOR input fails the device op's</em>) – </p></li>
 </ul>
 </dd>
-<dt class="field-even">Keyword Arguments<span class="colon">:</span>
+</dl>
+<dl class="simple">
+<dt>Input layouts (selected by the rank of q/k/v; there is no flag):</dt>
+<dd>
+<dl class="simple">
+<dt>Rank 4, head-split: q/k/v carry an explicit head axis. q/k are expected L2-normalized</dt>
+<dd>
+<p>(use_qk_l2norm stays False); the op applies <cite>scale</cite> to q, casts q/k/v to bf16, permutes
+them head-major, expands H -&gt; HV for GQA and pads T to a multiple of chunk_size on the
+host. Any chunk_size that is a multiple of 32; every device path.</p>
+</dd>
+<dt>Rank 3, flat token-major: q/k/v are the per-head concatenations a projection or the causal</dt>
+<dd>
+<p>conv emits, passed RAW (unnormalized, unscaled). No host relayout: the prep reader
+tile-addresses each head’s chunk out of the flat grid, maps value heads to key heads for
+GQA at read time, and applies the L2 norm over K and <cite>scale</cite> in the kernel. Requires
+K == V (assumed, not verifiable from a flat width: K = V, H = flat q width / V, HV =
+beta’s last dim), chunk_size == 32 and T a multiple of chunk_size; fused and phased paths
+only (mono rejects it). The rank of q/k and of v is checked independently, but pass all
+three the same way. g, beta and initial_state keep the shapes above on both paths. This is
+the zero-relayout entry point for callers whose q/k/v are already token-major.</p>
+</dd>
+</dl>
+</dd>
+</dl>
+<dl class="field-list simple">
+<dt class="field-odd">Keyword Arguments<span class="colon">:</span>
 </dt>
-<dd class="field-even">
+<dd class="field-odd">
 <ul class="simple">
-<li><p><span class="tt-api-param-name"><strong>scale</strong> (<em>float</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">defaults to K**-0.5.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>initial_state</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">[B, HV, K, V].</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>scale</strong> (<em>float</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">defaults to K**-0.5; multiplied into q on the host (rank 4) or in
+the kernel (rank 3).</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>initial_state</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">[B, HV, K, V] fp32 TILE on device (the dtype is cast
+if not, the layout is not); zeros when omitted.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>output_final_state</strong> (<em>bool</em>)</span><span class="tt-api-param-desc">default False.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>chunk_size</strong> (<em>int</em>)</span><span class="tt-api-param-desc">default 64.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>use_qk_l2norm</strong> (<em>bool</em>)</span><span class="tt-api-param-desc">default False.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>chunk_size</strong> (<em>int</em>)</span><span class="tt-api-param-desc">default 64; 32 is what the models use and the only value the rank-3 path
+accepts.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>use_qk_l2norm</strong> (<em>bool</em>)</span><span class="tt-api-param-desc">default False and currently the only accepted value: the rank-4 path
+expects host-normalized q/k, the rank-3 path always normalizes in the kernel.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>output_head_major</strong> (<em>bool</em>)</span><span class="tt-api-param-desc">default False. When True, o is returned head-major as
-[B*HV, T, V] in TILE layout (skips the token&lt;-&gt;head permute round-trip);
-otherwise token-major [B, T, HV, V] ROW_MAJOR.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>use_mcast</strong> (<em>bool</em>)</span><span class="tt-api-param-desc">default True. The scan phase multicasts its shared inputs from one
-sender core per head to that head’s sibling V-block cores; False makes every core
-read them from DRAM itself. Meant as a validation argument.</span></p></li>
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – </p></li>
-<li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – </p></li>
+[B*HV, T, V] in TILE layout; otherwise token-major [B, T, HV, V] ROW_MAJOR.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>|</strong> (<em>program_config</em><em> (</em><em>ChunkGdnFusedProgramConfig</em><em> | </em><em>ChunkGdnPhasedProgramConfig</em>)</span><span class="tt-api-param-desc">ChunkGdnMonoProgramConfig, optional): which device implementation runs and how it is
+laid out on the chip — the alternative you pass selects the path, its fields the
+geometry (see each class). None: the fused path or the phased path depending on the cost model.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">default DRAM interleaved. Placement of the
+device op’s outputs (the head-major o and final_state) and, on the phased path, of its
+seven DRAM intermediates; not passed to the token-major post-processing.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">every path runs HiFi4 with
+fp32 destination accumulation and no approx mode; a config asking for other arithmetic
+is rejected rather than applied.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>ones</strong> (<em>eye</em><em>, </em><a class="reference internal" href="ttnn.tril.html#ttnn.tril" title="ttnn.tril"><em>tril</em></a><em>,</em>)</span><span class="tt-api-param-desc">[1,1,C,C] fp32 TILE constant tiles (identity,
-lower-triangular ones, all-ones). Caller-supplied so they are device-resident before
-trace capture and their lifetime is device-scoped. Traced callers MUST pass these
-(an internal build does a host upload, illegal under trace); if omitted they are
-built eagerly.</span></p></li>
+lower-triangular ones, all-ones). Caller-supplied, all four together with masks or none:
+a partial set is ignored and all four are rebuilt, a host upload on every call, so traced
+callers MUST pass them. Only dtype and layout are validated, not the shape against
+chunk_size.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>masks</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">[1,1,32,96] fp32 TILE quadrant masks; supplied with eye/
 tril/ones.</span></p></li>
 </ul>
 </dd>
-<dt class="field-odd">Returns<span class="colon">:</span>
+<dt class="field-even">Returns<span class="colon">:</span>
 </dt>
-<dd class="field-odd">
-<p><span class="tt-api-param-name"><em>tuple[ttnn.Tensor, Optional[ttnn.Tensor]]</em></span><span class="tt-api-param-desc">    o [B, T, HV, V] (or [B*HV, T, V] if output_head_major),
-final_state [B, HV, K, V] (if output_final_state).</span></p>
+<dd class="field-even">
+<p><span class="tt-api-param-name"><em>tuple[ttnn.Tensor, Optional[ttnn.Tensor]]</em></span><span class="tt-api-param-desc">    o [B, T, HV, V] (or [B*HV, T, V] if output_head_major), fp32 on the fused and phased
+paths, bf16 on mono;
+final_state [B, HV, K, V] fp32 (if output_final_state).</span></p>
 </dd>
 </dl>
 </dd>
