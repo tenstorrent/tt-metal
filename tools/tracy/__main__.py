@@ -293,8 +293,18 @@ def main():
             options.perf_counter_groups, options.perf_counter_multipass, can_replay=not options.noCapture
         )
 
+    # The C++ post-processor writes no counter columns, so a counter mask from the environment needs the legacy one too.
+    try:
+        counters_from_env = int(os.environ.get("TT_METAL_PROFILE_PERF_COUNTERS", "0")) != 0
+    except ValueError:
+        counters_from_env = False
+
     if not (
-        options.no_runtime_analysis or options.do_sum or options.profile_dispatch_cores or options.perf_counter_groups
+        options.no_runtime_analysis
+        or options.do_sum
+        or options.profile_dispatch_cores
+        or options.perf_counter_groups
+        or counters_from_env
     ):
         os.environ["TT_METAL_PROFILER_CPP_POST_PROCESS"] = "1"
     else:
@@ -307,6 +317,8 @@ def main():
             reasons.append("--profile-dispatch-cores")
         if options.perf_counter_groups:
             reasons.append("--profiler-capture-perf-counters")
+        elif counters_from_env:
+            reasons.append("TT_METAL_PROFILE_PERF_COUNTERS")
 
         reason_str = ", ".join(reasons)
         logger.warning(
