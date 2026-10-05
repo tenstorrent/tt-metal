@@ -3,11 +3,12 @@
 """Laguna serving performance demo: time to first token and decode speed across input lengths.
 
 For each serving mode (normal decode, DFlash speculative decoding) this demo starts the Laguna vLLM server with
-serve_vllm.sh, waits until it is ready, sends random-token prompts of each input length one request at a time
-(batch 1) with ``vllm bench serve``, stops the server and prints a results table. Run it with no server running:
+serve_vllm.sh, waits until it is ready, prints the model's answers to two real prompts, sends random-token prompts
+of each input length one request at a time (batch 1) with ``vllm bench serve``, stops the server and prints a
+results table. Run it with no server running:
 
-    python models/demos/laguna/demo/perf_demo.py                       # both modes, 128 .. 128K tokens, 1 prompt each
-    python models/demos/laguna/demo/perf_demo.py --quick               # both modes, 128 .. 8K tokens
+    python models/demos/laguna/demo/perf_demo.py                       # both modes, 128 .. 8K tokens, 1 prompt each
+    python models/demos/laguna/demo/perf_demo.py --input-lens 128,16384,131072   # other lengths, up to 1M
     python models/demos/laguna/demo/perf_demo.py --modes dflash --prompts 3   # DFlash averaged over 3 prompts
     python models/demos/laguna/demo/perf_demo.py --modes normal --input-lens 128,4096
 
@@ -40,9 +41,8 @@ MODEL_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = Path(__file__).resolve().parents[4]
 SERVER_URL = "http://localhost:8000"  # serve_vllm.sh always serves on port 8000
 
-# tt-metal's standard demo prompt lengths (models/tt_transformers/demo/simple_text_demo.py: 128, then 1K .. 128K).
-STANDARD_INPUT_LENS = [128, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072]
-QUICK_INPUT_LENS = [128, 1024, 2048, 4096, 8192]
+# 128, then powers of two up to 8K (tt-metal's simple_text_demo sweeps 1K .. 128K; longer prefills take minutes each).
+DEFAULT_INPUT_LENS = [128, 1024, 2048, 4096, 8192]
 
 MODES = {
     # name: (description, extra serve_vllm.sh environment)
@@ -104,6 +104,49 @@ def bench(model: str, input_len: int, output_len: int, prompts: int, result_dir:
     if status != 0:
         raise RuntimeError(f"vllm bench serve failed for input length {input_len}; see {result_dir / (name + '.log')}")
     return json.loads((result_dir / f"{name}.json").read_text())
+
+
+EXAMPLE_PROMPTS = [
+    "Write a Python function that checks whether a number is prime.",
+    "Explain in three sentences why the sky is blue.",
+]
+
+
+def run_examples(model: str, max_tokens: int) -> list[dict]:
+    """Send each real prompt once (greedy, thinking off) and return the prompt, answer, token count and time."""
+    examples = []
+    for prompt in EXAMPLE_PROMPTS:
+        body = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": 0,
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+        request = urllib.request.Request(
+            f"{SERVER_URL}/v1/chat/completions",
+            data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        start = time.time()
+        with urllib.request.urlopen(request, timeout=600) as response:
+            reply = json.load(response)
+        examples.append(
+            {
+                "prompt": prompt,
+                "answer": reply["choices"][0]["message"]["content"],
+                "output_tokens": reply["usage"]["completion_tokens"],
+                "seconds": round(time.time() - start, 2),
+            }
+        )
+    return examples
+
+
+def print_examples(mode: str, examples: list[dict]) -> None:
+    for example in examples:
+        print(f"\n[perf demo] {mode} | prompt: {example['prompt']}", flush=True)
+        print(example["answer"].strip(), flush=True)
+        print(f"[perf demo] {mode} | {example['output_tokens']} tokens in {example['seconds']:.1f} s", flush=True)
 
 
 def summarize(result: dict) -> dict:
@@ -171,10 +214,9 @@ def table(rows: dict, modes: list[str], input_lens: list[int]) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--modes", default="normal,dflash", help="comma-separated: normal, dflash (default: both)")
-    parser.add_argument("--input-lens", default=None, help="comma-separated input lengths (default: 128 .. 131072)")
+    parser.add_argument("--input-lens", default=None, help="comma-separated input lengths (default: 128,1024,2048,4096,8192)")
     parser.add_argument("--prompts", type=int, default=None, help="random prompts per input length (default: 1)")
     parser.add_argument("--output-tokens", type=int, default=512, help="tokens generated per request (default: 512)")
-    parser.add_argument("--quick", action="store_true", help="128 .. 8192 tokens only (about 20 minutes)")
     parser.add_argument("--model", default=os.environ.get("HF_MODEL", "poolside/Laguna-S-2.1"))
     parser.add_argument("--output-dir", default=None)
     parser.add_argument(
@@ -183,6 +225,7 @@ def main() -> int:
         help="measure the server already running on port 8000 instead of starting one per mode (one mode only)",
     )
     parser.add_argument("--startup-timeout", type=int, default=2400, help="seconds to wait for each server")
+    parser.add_argument("--example-tokens", type=int, default=200, help="max tokens per example answer (0: no examples)")
     args = parser.parse_args()
 
     modes = [mode.strip() for mode in args.modes.split(",") if mode.strip()]
@@ -194,7 +237,7 @@ def main() -> int:
     input_lens = (
         [int(value) for value in args.input_lens.split(",")]
         if args.input_lens
-        else (QUICK_INPUT_LENS if args.quick else STANDARD_INPUT_LENS)
+        else DEFAULT_INPUT_LENS
     )
     prompts = args.prompts or 1
     out = Path(args.output_dir) if args.output_dir else REPO_ROOT / "generated" / "laguna_perf_demo" / time.strftime(
@@ -214,6 +257,7 @@ def main() -> int:
     )
     rows: dict = {}
     raw: dict = {}
+    examples: dict = {}
     for mode in modes:
         mode_dir = out / mode
         mode_dir.mkdir(exist_ok=True)
@@ -222,6 +266,10 @@ def main() -> int:
                 start_server(mode, args.model, mode_dir / "server", args.startup_timeout)
             # One short request first so one-time setup (first-request program builds) is not in the 128 point.
             bench(args.model, 128, 16, 1, mode_dir, "warmup")
+            if args.example_tokens > 0:
+                examples[mode] = run_examples(args.model, args.example_tokens)
+                (mode_dir / "examples.json").write_text(json.dumps(examples[mode], indent=1))
+                print_examples(mode, examples[mode])
             rows[mode], raw[mode] = {}, {}
             for input_len in input_lens:
                 result = bench(args.model, input_len, args.output_tokens, prompts, mode_dir, f"isl_{input_len}")
@@ -239,6 +287,13 @@ def main() -> int:
                 stop_server()
 
     report = table(rows, modes, input_lens)
+    if "normal" in examples and "dflash" in examples:
+        same = sum(a["answer"] == b["answer"] for a, b in zip(examples["normal"], examples["dflash"]))
+        print(
+            f"\n[perf demo] example answers identical between normal and DFlash: {same}/{len(examples['normal'])} "
+            "(greedy DFlash can differ where two tokens score almost the same)",
+            flush=True,
+        )
     notes = (
         f"Laguna serving performance: {args.model}, batch 1, {prompts} random-token prompt(s) per input length, "
         f"{args.output_tokens} output tokens, greedy. Values are means; ranges in parentheses are min-max over the "

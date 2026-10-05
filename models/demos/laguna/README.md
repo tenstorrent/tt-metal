@@ -63,46 +63,50 @@ Measured 2026-10-03 with `demo/perf_demo.py` (default server, batch 1, 512 outpu
 | 2,048 | 2.81 s | 18.0 | 2.95 s | 25.3 | 1.4x |
 | 4,096 | 9.45 s | 18.0 | 9.61 s | 45.9 | 2.6x |
 | 8,192 | 19.9 s | 18.0 | 20.0 s | 31.1 | 1.7x |
-| 16,384 | 33.5 s | 17.9 | 33.7 s | 30.2 | 1.7x |
-| 32,768 | 64.8 s | 17.7 | 65.0 s | 36.8 | 2.1x |
-| 65,536 | 142 s | 17.3 | 142 s | 41.0 | 2.4x |
-| 131,072 | 355 s | 16.6 | 356 s | 22.5 | 1.4x |
 
 ### Run the perf demo
 
 With no server running, from the repository root:
 
 ```bash
-python models/demos/laguna/demo/perf_demo.py --quick   # 128 .. 8K input tokens, normal + DFlash, ~20 min
-python models/demos/laguna/demo/perf_demo.py           # 128 .. 128K input tokens, normal + DFlash, ~40 min
+python models/demos/laguna/demo/perf_demo.py   # 128 .. 8K input tokens, normal + DFlash, ~20 min
 ```
 
-It starts and stops the server itself and prints the table above. Results are saved under
+It starts and stops the server itself, prints the model's answers to two real prompts in each mode, and prints
+the table above. Results are saved under
 `generated/laguna_perf_demo/<UTC time>/`. Options: `--modes normal|dflash`, `--input-lens 128,4096`,
 `--prompts N` (average N random prompts per length; DFlash varies from prompt to prompt), `--output-tokens N`.
+Longer prompts work too (`--input-lens 16384,131072`; a 128K prefill takes about 6 minutes per mode).
 
 ## Accuracy
 
-Compared with the original model in fp32 over an AIME24 prompt plus a fixed 100-token answer:
+Laguna is compared with the original model run in fp32 on the CPU, over an AIME24 prompt plus a fixed 100-token
+answer. At each of the 100 positions both predict the next token:
 
-| Check | top-1 | top-5 | top-100 |
-|---|---:|---:|---:|
-| Prefill | 0.97 | 1.00 | 1.00 |
-| Teacher-forced decode | 0.98 | 1.00 | 1.00 |
+| Measure | Result | Bar |
+|---|---:|---:|
+| top-1 (Laguna's top token = the reference's) | 0.99 | >= 0.90 |
+| top-5 (the reference's token in Laguna's top 5) | 1.00 | >= 0.98 |
+| top-100 | 1.00 | = 1.00 |
+| top-1 of the traced decode the server uses | 0.98 | >= 0.90 |
+| PCC of all 100,352 next-token scores, mean over positions | 0.97 | >= 0.95 |
+| PCC, worst position | 0.74 | - |
 
-Pass bars: top-1 >= 0.90, top-5 >= 0.98, top-100 = 1.00.
+The experts are stored in 4-bit, so the scores carry rounding error (PCC 0.97) while the chosen tokens agree.
 
 ### Run the accuracy test
 
-With no server running, from the repository root:
+With no server running, from the repository root. The first command makes the fp32 reference scores once
+(CPU only, about 5 minutes, about 30 GB of memory):
 
 ```bash
 REPO=$PWD MODEL_DIR=$PWD/models/demos/laguna
+PYTHONPATH=$REPO $MODEL_DIR/.venv/bin/python -m models.demos.laguna.tests.gen_streamed_reference --dtype fp32 \
+  --output generated/laguna_reference/readiness_aime24_chat_s.refpt \
+  --save-logits generated/laguna_reference/Laguna-S-2.1-aime24-logits.pt
 cd /tmp && env -u TT_METAL_HOME PYTHONPATH=$REPO \
-  LAGUNA_PROFILE=p150x4 TT_VISIBLE_DEVICES=0,1,2,3 LAGUNA_FABRIC_CONFIG=FABRIC_1D_RING \
-  TT_LAGUNA_CCL_TOPOLOGY=ring TT_LAGUNA_CCL_NUM_LINKS=2 TT_LAGUNA_DECODE_SDPA_PC=1 \
-  $MODEL_DIR/.venv/bin/python $MODEL_DIR/tests/full_model_checks.py teacher --profile p150x4 --enforce-memory-margin
+  $MODEL_DIR/.venv/bin/python -m pytest -s $MODEL_DIR/tests/test_accuracy.py
 ```
 
-It prints top-1, top-5 and top-100 (plus TTFT and decode tok/s), ~2 min once the weights are converted.
-Replace `teacher` with `prefill_autoreg --max-seq-len 131072 --outdir /tmp/laguna-full-model` for the prefill check.
+It prints top-1, top-5, top-100, traced top-1 and PCC, and fails if any is below its bar (~3 min once the weights
+are converted).
