@@ -364,10 +364,17 @@ void kernel_main() {
             // dispatch core (after the ownership / mapping / capacity filters below).
             for (uint32_t k = 0; k < num_experts_per_tok; k++) {
                 int32_t routed_expert = indices_t[k];
+#ifdef LOCAL_ONLY
+                ASSERT(static_cast<uint32_t>(routed_expert) < n_routed_experts);
+#endif
                 int32_t expert_chip_og = expert_dispatch_table[routed_expert];
                 if (expert_chip_og == -1) {
                     continue;
                 }
+#ifdef LOCAL_ONLY
+                // Only chip 0 exists; -1 retains the existing absent-expert convention above.
+                ASSERT(expert_chip_og == 0);
+#endif
                 uint32_t expert_chip = device_begin_idx + (uint32_t)expert_chip_og * device_stride;
                 bool expert_lives_on_this_chip = (expert_chip == linearized_mesh_coord);
 

@@ -152,6 +152,15 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 
     auto num_links = operation_attributes.num_links;
     auto topology = operation_attributes.topology;
+    const bool local_only = num_links == 0;
+    TT_FATAL(
+        !local_only || (mesh_device->shape().mesh_size() == 1 && operation_attributes.dispatch_group_size == 1 &&
+                        topology == tt::tt_fabric::Topology::Linear),
+        "Zero-link prefill combine requires a whole singleton mesh, dispatch_group_size=1, and Linear topology");
+    TT_FATAL(
+        !local_only || (operation_attributes.experts_per_chip > 0 &&
+                        expert_token_counts.logical_shape()[-1] == operation_attributes.experts_per_chip),
+        "Local prefill combine requires all routed experts on its only chip");
 
     log_debug(
         tt::LogOp,
@@ -167,11 +176,12 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         topology,
         num_links);
 
-    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    auto fabric_max_packet_size = local_only ? 0 : tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
     const auto [neighbors, directions] =
-        ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
+        local_only ? std::pair<std::vector<ttnn::MeshCoordinate>, std::array<bool, 4>>{}
+                   : ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
 
     // FABRIC_2D uses the portable RoutingPlaneConnectionManager (one connection per required physical
     // first-hop direction) for multi-hop combine-axis forwarding; FABRIC_1D keeps the legacy
@@ -194,7 +204,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     constexpr uint32_t SLOTS_PER_UNTILIZER = 16;
     // Maximum worker cores: one per fabric link.
     constexpr uint32_t MAX_WORKER_CORES = 4;
-    uint32_t effective_num_links = std::min(num_links, MAX_WORKER_CORES);
+    // Local NoC work still needs a sender group for mailboxes, drains, and sentinels.
+    uint32_t effective_num_links = local_only ? 1 : std::min(num_links, MAX_WORKER_CORES);
     TT_FATAL(
         subdevice_cores.size() >= effective_num_links,
         "Not enough cores {} for {} links",
@@ -979,6 +990,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             SLOTS_PER_UNTILIZER);  // per-untilizer ring depth on the sender's receive_buf
 
         std::map<std::string, std::string> writer_untilize_defines;
+        if (local_only) {
+            writer_untilize_defines["LOCAL_ONLY"] = "1";
+        }
         writer_untilize_defines["IS_TILE_LAYOUT"] = is_tile_layout ? "1" : "0";
         writer_untilize_defines["INIT_ZEROS"] = init_zeros ? "1" : "0";
 
