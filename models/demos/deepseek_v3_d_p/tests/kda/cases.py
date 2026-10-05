@@ -13,6 +13,7 @@ from __future__ import annotations
 import functools
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -20,9 +21,15 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_flash_config import (
+    glm_5_3_flash_kda_config,
+    glm_5_3_flash_model_config,
+)
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config, kimi_k3_model_config
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import (
+    GLM_5_3_FLASH_FIRST_KDA_LAYER,
+    GLM_5_3_FLASH_LAYER_0_SHA256,
     KIMI_K3_FIRST_KDA_LAYER,
     KIMI_K3_HF_REVISION,
     KIMI_K3_LAYER_1_SHA256,
@@ -34,8 +41,13 @@ from models.demos.deepseek_v3_d_p.tests.kda.head_slice import (
     kda_head_slice_config,
     slice_kda_heads,
 )
+from models.demos.deepseek_v3_d_p.tests.kda.text_input import build_text_input, load_text_input, text_input_cache_path
 from models.demos.deepseek_v3_d_p.tests.kda.utils import random_weights, to_sp_input
-from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, kimi_k3_program_config
+from models.demos.deepseek_v3_d_p.tt.kda.config import (
+    KDAProgramConfig,
+    glm_5_3_flash_program_config,
+    kimi_k3_program_config,
+)
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
@@ -47,8 +59,46 @@ SYNTHETIC_WEIGHTS_VERSION = 1
 # Seed of the deterministic hidden-state input shared by every KDA case.
 HIDDEN_SEED = 1607
 
+
+@dataclass(frozen=True)
+class KDAModel:
+    """One model's KDA layer under test: config, pinned real layer and program configuration."""
+
+    kda_config: Callable[[], KDAConfig]
+    model_config: Callable[[], dict]
+    layer_idx: int
+    revision: str
+    layer_sha256: str
+    checkpoint_env: str
+    program_config: Callable[..., KDAProgramConfig]
+
+
+KDA_MODELS = {
+    "kimi_k3": KDAModel(
+        kda_config=kimi_k3_kda_config,
+        model_config=kimi_k3_model_config,
+        layer_idx=KIMI_K3_FIRST_KDA_LAYER,
+        revision=KIMI_K3_HF_REVISION,
+        layer_sha256=KIMI_K3_LAYER_1_SHA256,
+        checkpoint_env="KIMI_K3_CKPT",
+        program_config=kimi_k3_program_config,
+    ),
+    "glm_5_3_flash": KDAModel(
+        kda_config=glm_5_3_flash_kda_config,
+        model_config=glm_5_3_flash_model_config,
+        layer_idx=GLM_5_3_FLASH_FIRST_KDA_LAYER,
+        revision="eb9eb208eb0d988989d07a6a12d0fdeb5f52574a",
+        layer_sha256=GLM_5_3_FLASH_LAYER_0_SHA256,
+        checkpoint_env="GLM_5_3_FLASH_CKPT",
+        program_config=glm_5_3_flash_program_config,
+    ),
+}
+
 _SYNTHETIC = "synthetic"
 _REAL = "real"
+# Layer inputs: seeded random hidden states, or a real-text window (tests/kda/text_input.py).
+_RANDN = "randn"
+_TEXT = "text"
 
 # Device tests load prepared caches and fail fast on a miss ("fail", the default); "compute" builds a missing
 # CPU reference / weights inside the device run, for local iteration and for CI jobs without a preparation step.
@@ -71,7 +121,7 @@ def prepared_cache_miss(case_name: str, artifact: str, path: Path) -> KDAPrepare
     return KDAPreparedCacheMiss(
         f"KDA prepared-cache miss for case {case_name}: {artifact} not found at {path}. "
         f"Prepare it without a device: {PREPARE_COMMAND} --case {case_name} "
-        f"(real weights need KIMI_K3_CKPT), or set {CACHE_MISS_ENV}=compute to build it inside this device run."
+        f"(real weights need KIMI_K3_CKPT / GLM_5_3_FLASH_CKPT), or set {CACHE_MISS_ENV}=compute to build it inside this device run."
     )
 
 
@@ -89,7 +139,9 @@ class KDAWeightSource:
     @property
     def identity(self) -> str:
         """Content identity of the weights: pinned checkpoint digest or synthetic generator version."""
-        base = KIMI_K3_LAYER_1_SHA256 if self.kind == _REAL else f"{_SYNTHETIC}-v{SYNTHETIC_WEIGHTS_VERSION}"
+        base = (
+            KDA_MODELS[self.model].layer_sha256 if self.kind == _REAL else f"{_SYNTHETIC}-v{SYNTHETIC_WEIGHTS_VERSION}"
+        )
         if self.head_slice is None:
             return base
         return f"{base}-heads{self.head_slice[0]}-{self.head_slice[1]}"
@@ -101,18 +153,19 @@ class KDAWeightSource:
 
 @functools.lru_cache(maxsize=1)
 def _load_state_dict(source: KDAWeightSource) -> dict[str, torch.Tensor]:
+    model = KDA_MODELS[source.model]
     if source.kind == _SYNTHETIC:
         # Synthetic weights are drawn directly at the (possibly sliced) head count.
         return random_weights(source.config)
     if source.checkpoint_dir is None:
-        raise ValueError("real KDA weights require checkpoint_dir (set KIMI_K3_CKPT)")
+        raise ValueError(f"real KDA weights require checkpoint_dir (set {model.checkpoint_env})")
     downloaded_config = json.loads((source.checkpoint_dir / "config.json").read_text(encoding="utf-8"))
-    assert downloaded_config == kimi_k3_model_config(), "checkpoint config.json differs from the pinned in-tree copy"
-    layer_config = kimi_k3_kda_config()
+    assert downloaded_config == model.model_config(), "checkpoint config.json differs from the pinned in-tree copy"
+    layer_config = model.kda_config()
     state_dict = load_kda_layer_state_dict(source.checkpoint_dir, source.layer_idx, layer_config)
     checkpoint_identity = kda_state_dict_sha256(state_dict)
-    assert checkpoint_identity == KIMI_K3_LAYER_1_SHA256, (
-        f"Kimi-K3 layer {source.layer_idx} weights do not match pinned revision {KIMI_K3_HF_REVISION}: "
+    assert checkpoint_identity == model.layer_sha256, (
+        f"{source.model} layer {source.layer_idx} weights do not match pinned revision {model.revision}: "
         f"{checkpoint_identity}"
     )
     if source.head_slice is None:
@@ -127,7 +180,8 @@ class KDACaseSpec:
 
     ``chunk_valid_tokens`` lists the valid tokens of each chained chunk; every chunk but the last is full, so a
     shorter last entry is a ragged tail. ``head_slice`` selects source-layer heads ``[start, stop)`` run on one
-    chip (LoudBox LB-B runs heads/4 on TP1).
+    chip (LoudBox LB-B runs heads/4 on TP1). ``inputs`` selects seeded random hidden states or a real-text
+    window embedded for the layer (prepared from the checkpoint, so it needs ``checkpoint_dir``).
     """
 
     model: str
@@ -137,12 +191,15 @@ class KDACaseSpec:
     chunk_tokens: int
     chunk_valid_tokens: tuple[int, ...]
     head_slice: tuple[int, int] | None = None
+    inputs: str = _RANDN
 
     def __post_init__(self) -> None:
-        if self.model != "kimi_k3":
+        if self.model not in KDA_MODELS:
             raise ValueError(f"unsupported KDA case model {self.model!r}")
         if self.weights not in (_SYNTHETIC, _REAL):
             raise ValueError(f"weights must be {_SYNTHETIC!r} or {_REAL!r}, got {self.weights!r}")
+        if self.inputs not in (_RANDN, _TEXT):
+            raise ValueError(f"inputs must be {_RANDN!r} or {_TEXT!r}, got {self.inputs!r}")
         if self.tensor_parallel_axis not in (0, 1):
             raise ValueError(f"tensor_parallel_axis must be 0 or 1, got {self.tensor_parallel_axis}")
         sp_size = self.mesh_shape[1 - self.tensor_parallel_axis]
@@ -167,10 +224,12 @@ class KDACaseSpec:
             name += f"-chunks{len(self.chunk_valid_tokens)}"
         if self.chunk_valid_tokens[-1] != self.chunk_tokens:
             name += f"-last{self.chunk_valid_tokens[-1]}"
+        if self.inputs == _TEXT:
+            name += "-text"
         return name
 
     def weight_source(self, checkpoint_dir: Path | None = None) -> KDAWeightSource:
-        config = kimi_k3_kda_config()
+        config = KDA_MODELS[self.model].kda_config()
         if self.head_slice is not None:
             start, stop = self.head_slice
             if not 0 <= start < stop <= config.num_heads:
@@ -178,7 +237,7 @@ class KDACaseSpec:
             config = kda_head_slice_config(config, stop - start)
         return KDAWeightSource(
             model=self.model,
-            layer_idx=KIMI_K3_FIRST_KDA_LAYER,
+            layer_idx=KDA_MODELS[self.model].layer_idx,
             kind=self.weights,
             config=config,
             head_slice=self.head_slice,
@@ -212,16 +271,36 @@ class KDATestCase:
         return self.chunk_hidden(chunk)[:, : self.spec.chunk_valid_tokens[chunk]]
 
 
-def build_kda_case(spec: KDACaseSpec, checkpoint_dir: Path | None = None) -> KDATestCase:
-    """Build a case deterministically; identical in the preparation step and the device test."""
+def build_kda_case(
+    spec: KDACaseSpec, checkpoint_dir: Path | None = None, *, compute_missing_input: bool | None = None
+) -> KDATestCase:
+    """Build a case deterministically; identical in the preparation step and the device test.
+
+    A text input is loaded from the prepared cache; a miss builds it when ``compute_missing_input`` (default:
+    ``KDA_CACHE_MISS=compute``) and otherwise fails fast.
+    """
     weights = spec.weight_source(checkpoint_dir)
-    hidden = torch.randn(
-        1,
-        spec.chunk_tokens * len(spec.chunk_valid_tokens),
-        weights.config.hidden_size,
-        generator=torch.Generator().manual_seed(HIDDEN_SEED),
-        dtype=torch.bfloat16,
-    )
+    tokens = spec.chunk_tokens * len(spec.chunk_valid_tokens)
+    if spec.inputs == _RANDN:
+        hidden = torch.randn(
+            1,
+            tokens,
+            weights.config.hidden_size,
+            generator=torch.Generator().manual_seed(HIDDEN_SEED),
+            dtype=torch.bfloat16,
+        )
+        return KDATestCase(spec=spec, weights=weights, hidden=hidden)
+    hidden = load_text_input(spec.model, weights.layer_idx, tokens)
+    if hidden is None:
+        if not (compute_on_cache_miss() if compute_missing_input is None else compute_missing_input):
+            raise prepared_cache_miss(
+                spec.name, "text input", text_input_cache_path(spec.model, weights.layer_idx, tokens)
+            )
+        if checkpoint_dir is None:
+            raise ValueError(
+                f"{spec.name}: a text input needs checkpoint_dir ({KDA_MODELS[spec.model].checkpoint_env})"
+            )
+        hidden = build_text_input(spec.model, weights.layer_idx, tokens, checkpoint_dir)
     return KDATestCase(spec=spec, weights=weights, hidden=hidden)
 
 
@@ -240,40 +319,67 @@ def _spec(
     *,
     chunk_valid_tokens: tuple[int, ...] | None = None,
     head_slice: tuple[int, int] | None = None,
+    inputs: str = _RANDN,
+    model: str = "kimi_k3",
 ) -> KDACaseSpec:
     return KDACaseSpec(
-        model="kimi_k3",
+        model=model,
         weights=weights,
         mesh_shape=mesh_shape,
         tensor_parallel_axis=tensor_parallel_axis,
         chunk_tokens=chunk_tokens,
         chunk_valid_tokens=chunk_valid_tokens or (chunk_tokens,),
         head_slice=head_slice,
+        inputs=inputs,
     )
 
 
-def _loudbox_schedules(chunk_tokens: int) -> tuple[tuple[int, ...], ...]:
-    """Single chunk, three chained chunks, and a ragged tail that ends inside an SP rank."""
-    ragged_tail = chunk_tokens * 3 // 4 + ttnn.TILE_SIZE
-    return ((chunk_tokens,), (chunk_tokens,) * 3, (chunk_tokens, ragged_tail))
+def _loudbox_schedule(chunk_tokens: int, schedule: str) -> tuple[int, ...]:
+    """Valid tokens per chained chunk: one chunk, three chained chunks, or a ragged tail ending inside an SP rank."""
+    return {
+        "single": (chunk_tokens,),
+        "chained3": (chunk_tokens,) * 3,
+        "ragged": (chunk_tokens, chunk_tokens * 3 // 4 + ttnn.TILE_SIZE),
+    }[schedule]
 
 
+LOUDBOX_SCHEDULES = ("single", "chained3", "ragged")
 # LoudBox LB-A: 2x4 mesh, SP2 x TP4, 1280 tokens per chunk (640 per SP rank).
 LB_A = ((2, 4), 1, 1280)
 # LoudBox LB-B: 8x1 mesh, SP8 x TP1, 5120 tokens per chunk, one TP4 shard's heads (96 / 4).
 LB_B = ((8, 1), 1, 5120)
-# One Galaxy TP4 rank's heads (rank 0 of the K3 96 heads); see tests/kda/head_slice.py.
-_K3_QUARTER_HEADS = (0, galaxy_chip_head_slice_config(kimi_k3_kda_config()).num_heads)
+_LOUDBOX_LAYOUTS = {"LB-A": LB_A, "LB-B": LB_B}
+
+
+def _loudbox_spec(
+    weights: str, layout: str, schedule: str, inputs: str = _RANDN, model: str = "kimi_k3"
+) -> KDACaseSpec:
+    mesh_shape, tensor_parallel_axis, chunk_tokens = _LOUDBOX_LAYOUTS[layout]
+    # LB-B runs one Galaxy TP4 rank's heads (rank 0); see tests/kda/head_slice.py.
+    quarter_heads = galaxy_chip_head_slice_config(KDA_MODELS[model].kda_config()).num_heads
+    head_slice = (0, quarter_heads) if layout == "LB-B" else None
+    return _spec(
+        weights,
+        mesh_shape,
+        tensor_parallel_axis,
+        chunk_tokens,
+        chunk_valid_tokens=_loudbox_schedule(chunk_tokens, schedule),
+        head_slice=head_slice,
+        inputs=inputs,
+        model=model,
+    )
+
 
 _REGISTERED_SPECS = (
-    # LoudBox validation matrix (tt_metal_tracker-g1b.4.6).
-    *(_spec(_SYNTHETIC, *LB_A, chunk_valid_tokens=s) for s in _loudbox_schedules(LB_A[2])),
-    *(_spec(_REAL, *LB_A, chunk_valid_tokens=s) for s in _loudbox_schedules(LB_A[2])),
+    # LoudBox validation matrix (tt_metal_tracker-g1b.4.6 K3, g1b.4.7 GLM-5.3-Flash): synthetic and real
+    # weights on random inputs, and real weights on a real-text window.
     *(
-        _spec(_SYNTHETIC, *LB_B, chunk_valid_tokens=s, head_slice=_K3_QUARTER_HEADS)
-        for s in _loudbox_schedules(LB_B[2])
+        _loudbox_spec(weights, layout, schedule, inputs, model)
+        for model in KDA_MODELS
+        for layout in _LOUDBOX_LAYOUTS
+        for weights, inputs in ((_SYNTHETIC, _RANDN), (_REAL, _RANDN), (_REAL, _TEXT))
+        for schedule in LOUDBOX_SCHEDULES
     ),
-    *(_spec(_REAL, *LB_B, chunk_valid_tokens=s, head_slice=_K3_QUARTER_HEADS) for s in _loudbox_schedules(LB_B[2])),
     # layer/test_acceptance.py synthetic accuracy and perf/test_layer_perf.py synthetic perf.
     _spec(_SYNTHETIC, (2, 4), 1, 5120),
     _spec(_SYNTHETIC, (2, 4), 0, 5120),
@@ -302,8 +408,10 @@ def registered_kda_case(
     *,
     chunk_valid_tokens: tuple[int, ...] | None = None,
     head_slice: tuple[int, int] | None = None,
+    inputs: str = _RANDN,
+    model: str = "kimi_k3",
 ) -> KDACaseSpec:
-    """Return the registered Kimi-K3 spec; unregistered cases cannot be prepared, so they are rejected."""
+    """Return the registered spec; unregistered cases cannot be prepared, so they are rejected."""
     spec = _spec(
         weights,
         tuple(mesh_shape),
@@ -311,7 +419,19 @@ def registered_kda_case(
         chunk_tokens,
         chunk_valid_tokens=chunk_valid_tokens,
         head_slice=head_slice,
+        inputs=inputs,
+        model=model,
     )
+    if spec.name not in KDA_CASES:
+        raise KeyError(f"KDA case {spec.name} is not registered in tests/kda/cases.py::KDA_CASES")
+    return KDA_CASES[spec.name]
+
+
+def loudbox_kda_case(
+    weights: str, layout: str, schedule: str, inputs: str = _RANDN, model: str = "kimi_k3"
+) -> KDACaseSpec:
+    """Return the registered LoudBox spec of ``model``, ``layout`` ("LB-A" / "LB-B") and ``schedule``."""
+    spec = _loudbox_spec(weights, layout, schedule, inputs, model)
     if spec.name not in KDA_CASES:
         raise KeyError(f"KDA case {spec.name} is not registered in tests/kda/cases.py::KDA_CASES")
     return KDA_CASES[spec.name]
@@ -335,7 +455,7 @@ def make_kda_device_case(
         raise ValueError(f"{spec.name} is registered for mesh {spec.mesh_shape}, got {tuple(mesh_device.shape)}")
     tensor_parallel_axis = spec.tensor_parallel_axis
     sequence_parallel_axis = 1 - tensor_parallel_axis
-    selected_program_config = program_config or kimi_k3_program_config(
+    selected_program_config = program_config or KDA_MODELS[spec.model].program_config(
         active_seq_len_local=spec.chunk_tokens // spec.mesh_shape[sequence_parallel_axis],
         # Match production: ring the TP axis wherever the opened fabric wraps it (Galaxy torus).
         tp_ccl_topology=(

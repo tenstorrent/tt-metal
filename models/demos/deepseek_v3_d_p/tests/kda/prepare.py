@@ -9,8 +9,8 @@ Run from the tt-metal checkout root, in the same checkout (and ttnn model cache)
     python -m models.demos.deepseek_v3_d_p.tests.kda.prepare --list
 
 Case names come from ``tests/kda/cases.py::KDA_CASES``; a device test that misses a cache names the command
-for its case. Real-weight cases need ``KIMI_K3_CKPT``. Device tests then run load-only (the default
-``KDA_CACHE_MISS=fail``), e.g.
+for its case. Real-weight cases need ``KIMI_K3_CKPT`` (Kimi-K3) or ``GLM_5_3_FLASH_CKPT`` (GLM-5.3-Flash). Device tests then
+run load-only (the default ``KDA_CACHE_MISS=fail``), e.g.
 
     scripts/run_safe_pytest.sh <exact test ids> -vv
 
@@ -39,11 +39,13 @@ from loguru import logger  # noqa: E402
 
 from models.demos.deepseek_v3_d_p.tests.kda.cases import (  # noqa: E402
     KDA_CASES,
+    KDA_MODELS,
     KDACaseSpec,
     build_kda_case,
     kda_weight_cache_dir,
 )
 from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import prepare_cpu_references  # noqa: E402
+from models.demos.deepseek_v3_d_p.tests.kda.text_input import chunk_decay_extremes  # noqa: E402
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights  # noqa: E402
 
 
@@ -61,7 +63,13 @@ def _device_handles() -> list[str]:
 
 def prepare_case(spec: KDACaseSpec, checkpoint_dir: Path | None) -> None:
     """Write the case's weight cache for its mesh placement and every chained CPU reference."""
-    case = build_kda_case(spec, checkpoint_dir)
+    case = build_kda_case(spec, checkpoint_dir, compute_missing_input=True)
+    if spec.inputs == "text":
+        # Real text is there to reach the decay extremes (tt_metal_tracker-g1b.7); record how far it gets.
+        logger.info(
+            f"KDA prepare {spec.name}: text-input gate decay on the case heads "
+            f"{chunk_decay_extremes(case.hidden, case.weights.load_state_dict(), case.config)}"
+        )
     cache_dir = kda_weight_cache_dir(case.weights, spec.mesh_shape, spec.tensor_parallel_axis)
     prefix = f"layer_{case.weights.layer_idx}.kda"
     start = time.perf_counter()
@@ -114,12 +122,14 @@ def main() -> None:
         return
 
     specs = _selected_specs(arguments)
-    checkpoint = os.environ.get("KIMI_K3_CKPT")
-    if any(spec.weights == "real" for spec in specs) and checkpoint is None:
-        raise SystemExit("real-weight cases need KIMI_K3_CKPT")
+    checkpoints = {model: os.environ.get(spec.checkpoint_env) for model, spec in KDA_MODELS.items()}
+    missing = {KDA_MODELS[s.model].checkpoint_env for s in specs if s.weights == "real" and not checkpoints[s.model]}
+    if missing:
+        raise SystemExit(f"real-weight cases need {sorted(missing)}")
     logger.info(f"KDA prepare: mock cluster {os.environ['TT_METAL_MOCK_CLUSTER_DESC_PATH']}")
     for index, spec in enumerate(specs, start=1):
         logger.info(f"KDA prepare [{index}/{len(specs)}] {spec.name} start")
+        checkpoint = checkpoints[spec.model]
         prepare_case(spec, Path(checkpoint) if checkpoint else None)
         logger.info(f"KDA prepare [{index}/{len(specs)}] {spec.name} done")
     handles = _device_handles()

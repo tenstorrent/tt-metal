@@ -54,6 +54,18 @@ def _relative_rmse(expected: torch.Tensor, actual: torch.Tensor) -> float:
     return float(difference / scale) if float(scale) > 0 else float(difference)
 
 
+def accuracy_metrics(expected: torch.Tensor, actual: torch.Tensor) -> dict[str, float]:
+    """PCC, relative RMSE, relative L-inf (peak error over the expected RMS) and peak absolute error."""
+    max_abs = float((expected.float() - actual.float()).abs().max()) if expected.numel() else 0.0
+    scale = float(expected.float().pow(2).mean().sqrt()) if expected.numel() else 0.0
+    return {
+        "pcc": _pcc(expected, actual),
+        "rel_rmse": _relative_rmse(expected, actual),
+        "rel_linf": max_abs / scale if scale > 0 else max_abs,
+        "max_abs": max_abs,
+    }
+
+
 def assert_accurate(
     expected: torch.Tensor,
     actual: torch.Tensor,
@@ -91,11 +103,8 @@ def assert_accurate(
     if failures:
         raise AssertionError("\n".join(failures))
 
-    pcc = _pcc(expected, actual)
-    rmse = _relative_rmse(expected, actual)
-    max_abs = float((expected.float() - actual.float()).abs().max()) if expected.numel() else 0.0
-    scale = float(expected.float().pow(2).mean().sqrt()) if expected.numel() else 0.0
-    linf = max_abs / scale if scale > 0 else max_abs
+    metrics = accuracy_metrics(expected, actual)
+    pcc, rmse, linf, max_abs = metrics["pcc"], metrics["rel_rmse"], metrics["rel_linf"], metrics["max_abs"]
     print(expected_summary)
     print(actual_summary)
     print(f"{name}: PCC={pcc:.6f}, rel_RMSE={rmse:.3e}, rel_Linf={linf:.3e}, max_abs={max_abs:.6e}")
