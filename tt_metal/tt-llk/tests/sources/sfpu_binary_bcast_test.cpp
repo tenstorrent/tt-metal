@@ -68,6 +68,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (!unpack_to_dest)
             {
+                // SrcA plus a SrcB zerosrc dvalid every face, including dest_acc=No (#1230).
                 _perf_unpack_loop_set_valid</* src A */ true, /* src B */ true>(/* iterations */ src_handshake_iters);
             }
         }

@@ -396,13 +396,10 @@ _QUASAR_INT_BINARY_ALIASES = {
 
 @pytest.mark.parametrize("arch_dir", ["tt_llk_wormhole_b0", "tt_llk_blackhole"])
 def test_quasar_int_binary_members_alias_covered_kernels(arch_dir):
-    """The Quasar integer multiply member is unreachable on WH/BH; its kernel is not.
+    """SfpuElwmulInt is unreachable on WH/BH; its kernel is covered through SfpuMulInt32.
 
-    Two halves, and both matter. If the first fails, one of these members became dispatchable and
-    is now genuinely untested -- give it a test. If the second fails, the alias it was relying on
-    stopped being driven, and the kernel lost its only WH/BH coverage while the audit still
-    recorded it as covered by proxy. Either way the audit's section 4.5 needs rewriting, which is
-    why this asserts the shape rather than describing it.
+    If the type check fails, the member became dispatchable and needs its own test. If the enum
+    check fails, MUL_INT32 left the WH/BH BinaryOp header and the kernel lost that coverage.
     """
     declared = _binary_op_enumerators(arch_dir)
 
@@ -415,6 +412,26 @@ def test_quasar_int_binary_members_alias_covered_kernels(arch_dir):
             f"{member.name}'s kernel is covered on WH/BH only through {alias.name}, whose "
             f"BinaryOp::{alias.value.cpp_enum_value} is no longer declared in {arch_dir}"
         )
+
+
+def test_int_comparison_ops_are_the_ordered_elw_compares():
+    import test_eltwise_binary_sfpu as binary
+
+    assert set(binary._INT_COMPARISON_OPS) == {
+        MathOperation.SfpuElwLt,
+        MathOperation.SfpuElwGt,
+        MathOperation.SfpuElwLe,
+        MathOperation.SfpuElwGe,
+    }
+
+
+@pytest.mark.parametrize("arch_dir", ["tt_llk_wormhole_b0", "tt_llk_blackhole"])
+def test_copy_dest_is_absent_from_wh_bh_binary_op(arch_dir):
+    declared = _binary_op_enumerators(arch_dir)
+    assert MathOperation.SfpuCopyDest.value.cpp_enum_value not in declared, (
+        f"BinaryOp::{MathOperation.SfpuCopyDest.value.cpp_enum_value} is Quasar-only and "
+        f"appeared in {arch_dir}"
+    )
 
 
 def test_every_float_binary_op_is_classified_for_cat_b():

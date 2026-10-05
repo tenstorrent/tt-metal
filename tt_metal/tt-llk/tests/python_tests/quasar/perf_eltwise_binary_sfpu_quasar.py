@@ -7,6 +7,8 @@ from helpers.llk_params import (
     PERF_LOOP_FACTOR_QUASAR,
     PERF_RUN_TYPES_QUASAR,
     ApproximationMode,
+    ImpliedMathFormat,
+    MathOperation,
 )
 from helpers.param_config import parametrize
 
@@ -24,6 +26,22 @@ def _perf_kwargs(perf_report, run_types, loop_factor, is_perf):
         run_types=run_types,
         loop_factor=loop_factor,
     )
+
+
+def _perf_approx_modes(mathop):
+    # Functional sweeps DIV Yes/No. Perf pins No, matching BH/WH, and keeps the
+    # atan2 Yes/No pair because that kernel reads APPROX_MODE.
+    if mathop == MathOperation.SfpuAtan2:
+        return [ApproximationMode.No, ApproximationMode.Yes]
+    return [ApproximationMode.No]
+
+
+# implied_math_format is QSR-only. One value so a BH/WH cell joins a single QSR row.
+_FLOAT_PERF_SWEEP = {
+    **_func.FLOAT_SWEEP,
+    "implied_math_format": [ImpliedMathFormat.Yes],
+    "approx_mode": _perf_approx_modes,
+}
 
 
 @pytest.mark.perf
@@ -56,7 +74,7 @@ def test_perf_eltwise_binary_sfpu_int_quasar(
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
-    **_func.FLOAT_SWEEP,
+    **_FLOAT_PERF_SWEEP,
     **_PERF_AXES,
 )
 def test_perf_eltwise_binary_sfpu_float_quasar(
@@ -101,10 +119,18 @@ def test_perf_eltwise_binary_sfpu_bf16_rne_quasar(
     )
 
 
+_MAX_MIN_FLOAT_PERF_SWEEP = dict(
+    formats_dest_acc_implied_math_is_max_input_dims=_func._generate_max_min_combinations(
+        _func.SFPU_BINARY_MAX_MIN_FLOAT_FORMATS,
+        implied_math_formats=(ImpliedMathFormat.Yes,),
+    ),
+)
+
+
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
-    **_func.MAX_MIN_FLOAT_SWEEP,
+    **_MAX_MIN_FLOAT_PERF_SWEEP,
     **_PERF_AXES,
 )
 def test_perf_eltwise_binary_sfpu_max_min_float_quasar(

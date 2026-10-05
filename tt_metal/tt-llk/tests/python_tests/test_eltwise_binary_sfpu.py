@@ -1032,9 +1032,8 @@ def test_eltwise_binary_sfpu_int(
     )
 
 
-# The four ordered Int32 comparisons -- the same MathOperation members the float comparison
-# sweep drives, but routed to a different kernel on an integer math format. These are also the
-# kernel the Quasar-only `*Int` members reach; see the alias guard in test_sfpu_domains.
+# The four ordered Int32 comparisons. Same MathOperation members as the float comparison
+# sweep, routed to the integer kernel. test_sfpu_domains asserts this list stays these four.
 _INT_COMPARISON_OPS = [
     MathOperation.SfpuElwLt,
     MathOperation.SfpuElwGt,

@@ -930,7 +930,11 @@ PERF_TEST_SCHEMAS_QSR = {
             "unpacker_engine_sel",
             "zero_point_bits",
         ],
-        "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "aliases": {
+            "formats.sfpu_math": "formats.sfpu_src",
+            # BH/WH emit this column as mathop. Same op, different header name.
+            "mathop": "op",
+        },
         "test_name_aliases": {
             "perf_eltwise_binary_sfpu_quasar": "perf_eltwise_binary_sfpu_quasar"
         },

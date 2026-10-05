@@ -26,6 +26,8 @@ _PERF_EXCLUDED_MATHOPS = {
     MathOperation.SfpuDivInt32Floor,
 }
 
+# A functional sweep dict shared below becomes perf cases, times the run types.
+# Narrow it here when a point should stay functional-only, as with the ops below.
 _INT_UNIFORM_PERF_SWEEP = {
     **_func.INT_UNIFORM_SWEEP,
     "mathop": [
