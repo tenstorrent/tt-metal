@@ -23,6 +23,15 @@
 // fixes the family, grid and per-core sizes (width -> 1D in0-mcast, height -> 1D in1-mcast or Reuse for batched B,
 // block -> 2D), a sharded output (with interleaved inputs) fixes the family (and with a shard spec, the grid
 // and per-core sizes), and the policies choose what remains within the layout's BlockRules.
+//
+// Two kinds of decision, judged differently:
+//  - which layout (family): rules on busy cores and input read, with HeuristicFamily::Tuned::one_d_core_advantage as
+//    the "clearly better" margin; where those rules don't apply (2D blocks one tile tall or wide) the roofline ranks
+//    the families. Different layouts' blocks don't carry the same fixed cost, so this comparison has no per-block term.
+//  - how to cut a layout (K depth, output blocks, Reuse slices): rules on K depth and block size, and for Reuse's
+//    slice height an estimate that adds a fixed cost per block and the last block's output write to the roofline
+//    (HeuristicBlocking::Tuned::reuse_*), switching from the slice that fills the grid at reuse_switch_margin.
+// Both were tried merged into one estimate and one margin, and each merge made cases slower on one architecture.
 namespace ttnn::operations::matmul::auto_config {
 
 // Extra conditions a layout puts on the blocking.

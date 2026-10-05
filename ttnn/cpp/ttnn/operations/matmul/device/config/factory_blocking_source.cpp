@@ -609,20 +609,7 @@ std::optional<Blocking> FactoryBlockingSource::reuse_blocking(const MatmulDesc& 
     if (p.bias_rows > 1) {
         return blocking_->block(p, hw, Family::Reuse, {p.Mt, p.Nt, true}, rules);
     }
-    if (needs_single_k_reuse(p)) {
-        std::optional<Blocking> best;
-        double best_cycles = 0;
-        for (uint32_t per_core_M : divisors_desc(p.Mt)) {
-            if (auto b = blocking_->block(p, hw, Family::Reuse, {per_core_M, p.Nt, true}, rules)) {
-                const double cycles = roofline(p, hw, Family::Reuse, *b, true).cycles();
-                if (!best || cycles < best_cycles) {
-                    best = b;
-                    best_cycles = cycles;
-                }
-            }
-        }
-        return best;
-    }
+    // The slice that fills the grid: the tallest that still gives every core a block
     std::optional<Blocking> filled;
     for (uint32_t per_core_M : divisors_desc(p.Mt)) {
         const bool fills_grid = p.batch_a * (p.Mt / per_core_M) >= cores;
@@ -634,32 +621,38 @@ std::optional<Blocking> FactoryBlockingSource::reuse_blocking(const MatmulDesc& 
             break;
         }
     }
-    // The slice that fills the grid unless the estimate below says another is clearly faster (full-size A tiles:
-    // the estimate's constants were fitted on them)
+    // Every slice that fits, and the lowest of `cost` over them
+    auto lowest = [&](auto cost) {
+        std::optional<Blocking> best;
+        double best_cost = 0;
+        for (uint32_t per_core_M : divisors_desc(p.Mt)) {
+            if (auto b = blocking_->block(p, hw, Family::Reuse, {per_core_M, p.Nt, true}, rules)) {
+                const double c = cost(*b);
+                if (!best || c < best_cost) {
+                    best = b;
+                    best_cost = c;
+                }
+            }
+        }
+        return std::make_pair(best, best_cost);
+    };
+    // A single K block: each slice loads all of its batch's B at once, which the roofline counts
+    if (needs_single_k_reuse(p)) {
+        return lowest([&](const Blocking& b) { return roofline(p, hw, Family::Reuse, b, true).cycles(); }).first;
+    }
+    // Full-size A tiles (the slice estimate's fit scope): the filled slice unless another is clearly faster
     if (!filled || p.in0_tile_h != TILE_DIM) {
         return filled;
     }
     const auto tuned = HeuristicBlocking::Params::for_arch(hw.arch).tuned;
-    const double c_block = tuned.reuse_block_cycles, write_bw = tuned.reuse_write_bytes_per_cycle;
-    const double margin = tuned.reuse_switch_margin;
     auto estimate = [&](const Blocking& b) {
         const double blocks_per_core = std::ceil(std::ceil(double(p.batch_a) * p.Mt / b.per_core_M) / cores);
-        const double tail = double(b.per_core_M) * p.Nt * out_tile_bytes(p, p.out_format) / write_bw;
-        return blocks_per_core * c_block + roofline(p, hw, Family::Reuse, b, true).cycles() + tail;
+        const double tail =
+            double(b.per_core_M) * p.Nt * out_tile_bytes(p, p.out_format) / tuned.reuse_write_bytes_per_cycle;
+        return blocks_per_core * tuned.reuse_block_cycles + roofline(p, hw, Family::Reuse, b, true).cycles() + tail;
     };
-    std::optional<Blocking> best = filled;
-    double best_est = estimate(*filled);
-    const double filled_est = best_est;
-    for (uint32_t per_core_M : divisors_desc(p.Mt)) {
-        if (auto b = blocking_->block(p, hw, Family::Reuse, {per_core_M, p.Nt, true}, rules)) {
-            const double e = estimate(*b);
-            if (e < best_est) {
-                best = b;
-                best_est = e;
-            }
-        }
-    }
-    return best_est * margin < filled_est ? best : filled;
+    const auto [best, best_cost] = lowest(estimate);
+    return best_cost * tuned.reuse_switch_margin < estimate(*filled) ? best : filled;
 }
 
 // A sharded operand or output fixes the family, grid and per-core sizes; returns that layout's candidate, or
