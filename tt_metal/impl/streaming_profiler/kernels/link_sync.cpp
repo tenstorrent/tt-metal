@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// When fabric isn't running, the link sync runs as this kernel, on each port's eth core.
+// When fabric isn't running, the link sync runs as this kernel, on each port's eth core. When fabric is running, the
+// eth core's router runs the port instead, through link_sync::RouterHook.
 
 #include <cstdint>
 
