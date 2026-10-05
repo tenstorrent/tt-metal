@@ -31,6 +31,28 @@ import ttnn
 
 _CACHE = {}
 
+# umbrella flag DSV41_PREFILL_OPT=1: the validated best prefill attention / linear settings below become the defaults of the knobs that are not set explicitly
+# (an explicitly set DSV41_PFA_* variable always wins). Read at call time like every knob.
+_OPT = {
+    "DSV41_PFA_ROPE_PE": "1",
+    "DSV41_PFA_LIN_FID": "HiFi2",
+    "DSV41_PFA_SH_FID": "HiFi2",
+    "DSV41_PFA_MM": "minimal",
+    "DSV41_PFA_FP4": "fast",
+}
+
+
+def opt_enabled():
+    return os.environ.get("DSV41_PREFILL_OPT", "0") == "1"
+
+
+def _env(name, default=None):
+    v = os.environ.get(name)
+    if v is None and opt_enabled():
+        v = _OPT.get(name)
+    return default if v is None else v
+
+
 # every knob is read from the environment at the time it is used (not at import), so a driver can flip them between two captures of the same process (tools/pfa_e2e.sh with
 # DSV41_PFA_AB, demo/text_demo.py): module attributes QC, KC, EXP_APPROX, QKV8, SP_KC, SP_FP8, LIN_COMP, LIN_ROPE, ROPE_PE, MM, FP4 resolve through ``__getattr__``.
 _KNOBS = {
@@ -51,12 +73,12 @@ _KNOBS = {
 def __getattr__(name):
     if name in _KNOBS:
         env, default, conv = _KNOBS[name]
-        return conv(os.environ.get(env, default))
+        return conv(_env(env, default))
     raise AttributeError(name)
 
 
 def _flag(name, default):
-    return os.environ.get(name, default) == "1"
+    return _env(name, default) == "1"
 
 
 ROPE_DIM = 64
@@ -108,17 +130,17 @@ def _ckc(arch, fid, fp32, l1acc):
 
 def sdpa_ckc(attn):
     """compute config of the prefill SDPA (the decode attention's ``ckc_sdpa`` unless an env knob changes it)."""
-    fid = os.environ.get("DSV41_PFA_SDPA_FID")
-    fp32 = os.environ.get("DSV41_PFA_SDPA_FP32")
+    fid = _env("DSV41_PFA_SDPA_FID")
+    fp32 = _env("DSV41_PFA_SDPA_FP32")
     if fid is None and fp32 is None:
         return attn.ckc_sdpa
-    fid = fid or os.environ.get("DSV41_ATTN_SDPA_FID", "HiFi4")
+    fid = fid or _env("DSV41_ATTN_SDPA_FID", "HiFi4")
     return _ckc(attn.mesh_device.arch(), fid, fp32 != "0", False)
 
 
 def lin_ckc(attn, kind="lin"):
     """compute config of the prefill dense linears. kind: 'lin' (projections), 'comp' (compressor), 'rope' (rotation matmul)."""
-    fid = os.environ.get("DSV41_PFA_LIN_FID")
+    fid = _env("DSV41_PFA_LIN_FID")
     if (
         fid is None
         or (kind == "comp" and not __getattr__("LIN_COMP"))
@@ -131,7 +153,7 @@ def lin_ckc(attn, kind="lin"):
 
 
 def shared_ckc(sh, md):
-    fid = os.environ.get("DSV41_PFA_SH_FID")
+    fid = _env("DSV41_PFA_SH_FID")
     if fid is None:
         return sh.ckc
     return _ckc(md.arch(), fid, _flag("DSV41_PFA_SH_FP32", "1"), fid != "HiFi4")
@@ -153,7 +175,7 @@ def sdpa_cfg(md):
 
 def idx_ckc(dec):
     """compute config of the prefill indexer linears (the decode indexer's ``ckc`` unless DSV41_PFA_IDX_FID is set)."""
-    fid = os.environ.get("DSV41_PFA_IDX_FID")
+    fid = _env("DSV41_PFA_IDX_FID")
     if fid is None:
         return dec.ckc
     return _ckc(
@@ -168,14 +190,14 @@ def _mm_cfg(md):
     key = (
         "mm",
         id(md),
-        *(os.environ.get(k, "") for k in ("DSV41_PFA_MM_BLK", "DSV41_PFA_MM_GRID", "DSV41_PFA_MM_SUB")),
+        *(_env(k, "") for k in ("DSV41_PFA_MM_BLK", "DSV41_PFA_MM_GRID", "DSV41_PFA_MM_SUB")),
     )
     if key not in _CACHE:
-        m, k, n = (int(v) for v in os.environ.get("DSV41_PFA_MM_BLK", "8,8,8").split(","))
-        gx, gy = (int(v) for v in os.environ.get("DSV41_PFA_MM_GRID", "8,10").split(","))
+        m, k, n = (int(v) for v in _env("DSV41_PFA_MM_BLK", "8,8,8").split(","))
+        gx, gy = (int(v) for v in _env("DSV41_PFA_MM_GRID", "8,10").split(","))
         kw = {}
-        if os.environ.get("DSV41_PFA_MM_SUB"):
-            kw["subblock_h"], kw["subblock_w"] = (int(v) for v in os.environ["DSV41_PFA_MM_SUB"].split(","))
+        if _env("DSV41_PFA_MM_SUB"):
+            kw["subblock_h"], kw["subblock_w"] = (int(v) for v in _env("DSV41_PFA_MM_SUB").split(","))
         _CACHE[key] = ttnn.MinimalMatmulConfig(
             M_block_size=m, K_block_size=k, N_block_size=n, compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy), **kw
         )
