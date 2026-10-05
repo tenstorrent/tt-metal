@@ -154,9 +154,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     auto topology = operation_attributes.topology;
     const bool local_only = num_links == 0;
     TT_FATAL(
-        !local_only || (mesh_device->shape().mesh_size() == 1 && operation_attributes.dispatch_group_size == 1 &&
-                        topology == tt::tt_fabric::Topology::Linear),
-        "Zero-link prefill combine requires a whole singleton mesh, dispatch_group_size=1, and Linear topology");
+        !local_only || ((mesh_device->shape().mesh_size() == 1 ||
+                         (operation_attributes.axis == 0 && mesh_device->shape()[0] == 1)) &&
+                        operation_attributes.dispatch_group_size == 1 && topology == tt::tt_fabric::Topology::Linear),
+        "Zero-link prefill combine requires a singleton communication domain, dispatch_group_size=1, and Linear "
+        "topology");
     TT_FATAL(
         !local_only || (operation_attributes.experts_per_chip > 0 &&
                         expert_token_counts.logical_shape()[-1] == operation_attributes.experts_per_chip),
@@ -815,12 +817,14 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         }
     }
 
-    // counter_offset mirrors the constexpr calculation in reader_combine.cpp
+    // A local TP column owns all experts: its count page has no column displacement.
+    // Preserve the existing networked partition calculation.
     uint32_t mesh_row_coord = linearized_mesh_coord / mesh_cols;
     uint32_t mesh_col_coord = linearized_mesh_coord % mesh_cols;
     uint32_t experts_per_dispatch_group = operation_attributes.experts_per_chip * mesh_rows;
-    uint32_t counter_offset =
-        mesh_col_coord * experts_per_dispatch_group + mesh_row_coord * operation_attributes.experts_per_chip;
+    uint32_t counter_offset = local_only ? 0
+                                         : mesh_col_coord * experts_per_dispatch_group +
+                                               mesh_row_coord * operation_attributes.experts_per_chip;
 
     // reader_untilize runs on untilizer cores for BOTH layouts: TILE reads tiles into c_0 (for the
     // compute kernel), ROW_MAJOR reads rows straight into c_2 (no compute).  The compute kernel

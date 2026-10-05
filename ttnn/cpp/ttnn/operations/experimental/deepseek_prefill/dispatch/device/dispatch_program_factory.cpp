@@ -163,9 +163,11 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     const auto& mesh_view = mesh_device->get_view();
     const bool local_only = num_links == 0;
     TT_FATAL(
-        !local_only || (mesh_device->shape().mesh_size() == 1 && operation_attributes.dispatch_group_size == 1 &&
-                        topology == tt::tt_fabric::Topology::Linear),
-        "Zero-link prefill dispatch requires a whole singleton mesh, dispatch_group_size=1, and Linear topology");
+        !local_only || ((mesh_device->shape().mesh_size() == 1 ||
+                         (operation_attributes.axis == 0 && mesh_device->shape()[0] == 1)) &&
+                        operation_attributes.dispatch_group_size == 1 && topology == tt::tt_fabric::Topology::Linear),
+        "Zero-link prefill dispatch requires a singleton communication domain, dispatch_group_size=1, and Linear "
+        "topology");
     TT_FATAL(
         !local_only || (operation_attributes.experts_per_chip > 0 &&
                         operation_attributes.num_routed_experts == operation_attributes.experts_per_chip),
