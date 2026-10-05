@@ -292,7 +292,7 @@ int main()
                 break;
         }
 
-#if defined(TT_METAL_TTSIM) // ttsim simulates every NOP and nothing there interferes, so it polls every microsecond
+#if defined(TT_METAL_TTSIM) || defined(LLK_SIMULATOR) // simulators run every NOP; poll every microsecond
         constexpr std::uint32_t poll_period_us = 1;
 #else
         constexpr std::uint32_t poll_period_us = 100;
