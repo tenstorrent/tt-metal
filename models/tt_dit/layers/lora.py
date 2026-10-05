@@ -277,13 +277,36 @@ class LoRAMixin:
             return
         self._realize_active()
 
-    def deallocate_weights(self) -> None:  # type: ignore[override]
-        # Weights about to be freed → any merged delta goes with them
-        # and runtime A/B are tied to the layer being resident.
+    # ---- weight lifecycle hooks ----
+    #
+    # The page-out/page-in bookkeeping lives in these two named hooks rather than only in the
+    # ``deallocate_weights`` / ``load`` overrides below, because a LoRA class built by
+    # ``experimental/lora/promote.py`` has the BASE before the mixin in its MRO (Python refuses
+    # ``__class__`` assignment the other way round) and so never reaches an override of a base
+    # method. ``promote`` installs wrappers that call these hooks by name; the mixin-first classes
+    # in ``linear.py`` reach them through the overrides. Both routes end up here.
+    def _lora_on_unload(self) -> None:
+        """The device weight is about to be freed: the merged delta goes with it, and the
+        runtime A/B are only meaningful while the layer is resident."""
         self._delta_applied = False
         if self._runtime_A is not None or self._runtime_B is not None:
             self._free_runtime_ab()
+
+    def _lora_on_load(self) -> None:
+        """A (re)load has just restored the base weight. Put the active adapter back on it."""
+        self.reapply_after_load()
+
+    def deallocate_weights(self) -> None:  # type: ignore[override]
+        self._lora_on_unload()
         super().deallocate_weights()
+
+    def load(self, directory, /, *, prefix: str = "") -> None:  # type: ignore[override]
+        super().load(directory, prefix=prefix)
+        self._lora_on_load()
+
+    def _mark_loaded(self) -> None:  # type: ignore[override]
+        super()._mark_loaded()
+        self._lora_on_load()
 
     def deallocate_lora(self) -> None:
         if self.active_idx is not None:

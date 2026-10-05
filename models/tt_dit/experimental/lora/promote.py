@@ -28,15 +28,52 @@ _PROMOTABLE = (Linear, ColParallelLinear, RowParallelLinear)
 # "solid base" changes -> 'object layout differs'). With the base first the
 # layout is identical to the original, so the swap is allowed. The pre-defined
 # LoRA*Linear classes are mixin-first (so their forward override wins in runtime
-# mode) and can't be used here; fuse mode never needs that override, and every
-# bind method is LoRAMixin-exclusive, so ordering is otherwise irrelevant.
+# mode) and can't be used here.
+#
+# Base-first has a sharp edge, and it cost a bring-up: it puts ``Module`` BEFORE
+# ``LoRAMixin`` in the MRO, so every method the mixin overrides from the base is
+# SHADOWED on a promoted instance -- ``deallocate_weights``, ``forward`` and
+# ``forward_fused_addcmul``. ``deallocate_weights`` is the one that silently
+# changes an answer: without the mixin's version, a page-out never clears
+# ``_delta_applied``, so the next ``reapply_after_load`` takes its "already
+# applied" early return and the adapter is simply gone from the reloaded weight.
+# Every pipeline that evicts its transformer between requests (a ``coresident:
+# False`` preset, or ``dynamic_load``) then runs the BASE model under an
+# adapter's name, with no error anywhere.
+#
+# So the weight lifecycle is wired explicitly here instead of being left to the
+# MRO: the wrappers below call ``LoRAMixin``'s uniquely-named hooks and then the
+# base implementation. They cannot use the mixin's own overrides, because those
+# reach the base through a zero-argument ``super()`` that resolves past
+# ``LoRAMixin`` to ``object`` on a promoted class.
 _PROMOTED_CACHE: dict[type, type] = {}
+
+
+def _lifecycle_overrides(base_cls: type) -> dict:
+    """Weight page-out / page-in wiring for a base-first promoted class."""
+    base_deallocate = base_cls.deallocate_weights
+    base_load = base_cls.load
+    base_mark_loaded = base_cls._mark_loaded  # noqa: SLF001
+
+    def deallocate_weights(self) -> None:
+        LoRAMixin._lora_on_unload(self)  # noqa: SLF001
+        base_deallocate(self)
+
+    def load(self, directory, /, *, prefix: str = "") -> None:
+        base_load(self, directory, prefix=prefix)
+        LoRAMixin._lora_on_load(self)  # noqa: SLF001
+
+    def _mark_loaded(self) -> None:
+        base_mark_loaded(self)
+        LoRAMixin._lora_on_load(self)  # noqa: SLF001
+
+    return {"deallocate_weights": deallocate_weights, "load": load, "_mark_loaded": _mark_loaded}
 
 
 def _promoted_class(base_cls: type) -> type:
     cls = _PROMOTED_CACHE.get(base_cls)
     if cls is None:
-        cls = type(f"LoRA{base_cls.__name__}", (base_cls, LoRAMixin), {})
+        cls = type(f"LoRA{base_cls.__name__}", (base_cls, LoRAMixin), _lifecycle_overrides(base_cls))
         _PROMOTED_CACHE[base_cls] = cls
     return cls
 
@@ -51,6 +88,15 @@ def promote_to_lora(root, *, mode: str = "fuse") -> int:
     """Upgrade every plain Linear-family descendant of ``root`` to a LoRA-aware
     class in place. Returns the number promoted. Idempotent: modules already
     ``LoRAMixin`` (e.g. built via ``lora_enabled``) are skipped."""
+    if mode == "runtime":
+        # ``LoRAMixin.forward`` is shadowed by the base's on a base-first promoted class (see the
+        # comment above ``_PROMOTED_CACHE``), so a runtime-mode adapter would add nothing to any
+        # forward and report success. Construct ``LoRA*Linear`` directly for runtime mode.
+        raise ValueError(
+            "promote_to_lora cannot deliver lora_mode='runtime': the promoted class is base-first, "
+            "so LoRAMixin.forward never runs. Build LoRALinear/LoRAColParallelLinear/"
+            "LoRARowParallelLinear directly instead."
+        )
     promoted = 0
     for module in _iter_modules(root):
         if isinstance(module, LoRAMixin):
