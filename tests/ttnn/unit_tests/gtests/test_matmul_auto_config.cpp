@@ -609,6 +609,17 @@ TEST(MatmulAutoConfig, SingleKBlockReuseSlices) {
     EXPECT_EQ(chosen->blocking.per_core_M, 4u);
 }
 
+// A batch-1 A broadcast over B's batches (1D in1-mcast looping over the batch) reuses each core's A slice for every
+// batch, so A doesn't count toward the self-read K limit: deepseek kv_wm, 6400x512 @ 32 x 512x128 takes K 8, not 2
+TEST(MatmulAutoConfig, BroadcastAKDepth) {
+    const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
+    auto p = make_matmul(1, 32, 6400, 512, 128, tt::DataFormat::Bfp8_b);
+    const auto chosen = choose(p, hw);
+    ASSERT_TRUE(chosen.has_value());
+    EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast1DIn1));
+    EXPECT_EQ(chosen->blocking.in0_block_w, 8u);
+}
+
 // A bias of a whole [M, N] block fuses only into Reuse with blocks of whole batch matrices: with one, the
 // candidates are that Reuse layout alone (without it, 8 batches would go to 2D and the bias to a second pass)
 TEST(MatmulAutoConfig, FullBlockBiasFusesIntoReuse) {

@@ -41,12 +41,13 @@ uint32_t max_in0_block_w(
     uint32_t out_block_w,
     bool a_in_place = false) {
     const uint32_t Kt = p.Kt;
-    // Tiles per K step of the operand(s) each core reads itself rather than receiving by multicast
+    // Tiles per K step of the operand(s) each core reads itself rather than receiving by multicast. 1D in1-mcast
+    // doesn't count A when A is in the core's own L1 (read in place) or reused across B's batches (broadcast A).
     uint32_t self_read = 0;
     switch (family) {
         case Family::Mcast2D: self_read = 0; break;
         case Family::Mcast1DIn0: self_read = out_block_w; break;
-        case Family::Mcast1DIn1: self_read = a_in_place ? 0 : out_block_h; break;
+        case Family::Mcast1DIn1: self_read = (a_in_place || broadcasts_a(p)) ? 0 : out_block_h; break;
         case Family::Reuse: self_read = out_block_h + out_block_w; break;
     }
     uint32_t depth = params.tuned.max_in0_block_w;
