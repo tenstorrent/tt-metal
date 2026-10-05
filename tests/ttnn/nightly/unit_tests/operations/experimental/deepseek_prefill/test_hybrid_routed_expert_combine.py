@@ -526,6 +526,13 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    # The overlap's fwd_arrived, final_arrived and expert_go outlive every launch -- neighbouring chips bump them
+    # across launches -- so the case keeps one set for all of its calls, as a model keeps one per mesh.
+    grid = mesh_device.compute_with_storage_grid_size()
+    all_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    fwd_arrived, final_arrived, expert_go = (ttnn.create_global_semaphore(mesh_device, all_cores, 0) for _ in range(3))
+    ttnn.synchronize_device(mesh_device)
+
     def overlapped():
         return routed_expert(
             dispatched_metadata=tt_metadata,
@@ -535,6 +542,9 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
             combine_num_links=num_links,
             num_experts_per_tok=num_experts_per_tok,
             seq_len_per_chip=_SEQ_LEN_PER_CHIP,
+            fwd_arrived_semaphore=fwd_arrived,
+            final_arrived_semaphore=final_arrived,
+            expert_go_semaphore=expert_go,
         )
 
     reference = []
@@ -605,7 +615,7 @@ def test_hybrid_routed_expert_combine_overlap(mesh_device, device_params, thresh
     case = _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=variant == "dg0-only")
     # Run the device first: the reference rewrites the host dispatched buffer in place.
     actuals = [ttnn.to_torch(case.overlapped(), mesh_composer=case.composer)]
-    # Twice: the second run is a program-cache hit, which reuses the cached arena and ring semaphores.
+    # Twice: the second run is a program-cache hit over a fresh arena and the case's semaphores.
     actuals.append(ttnn.to_torch(case.overlapped(), mesh_composer=case.composer))
     expected = case.torch_reference()
 
@@ -675,7 +685,8 @@ def test_hybrid_routed_expert_combine_overlap_perf(mesh_device, device_params, t
     call of each first compiles it: compiling writes to the device, which a capture does not allow.
 
     The routed expert comes first: its first call sizes its arena to all free L1, and combine's ring semaphores
-    take a piece of L1 from its own first call on. The overlap keeps an arena of its own, so it comes last.
+    take a piece of L1 from its own first call on. The overlap's arena is per call too, so it comes last only
+    to match how the model orders them.
     """
     if variant == "8x1-submesh":
         mesh_device = mesh_device.create_submesh(ttnn.MeshShape(8, 1))

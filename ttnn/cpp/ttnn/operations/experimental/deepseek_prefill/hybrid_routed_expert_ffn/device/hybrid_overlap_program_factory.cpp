@@ -8,7 +8,6 @@
 #include <memory>
 #include <optional>
 
-#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <ttnn/global_semaphore.hpp>
 
@@ -51,65 +50,6 @@ combine::CombineFabric2dInputs combine_inputs(const HybridRoutedExpertFfnInputs&
 
 namespace {
 
-struct OverlapL1 {
-    std::optional<tt::tt_metal::GlobalSemaphore> fwd_arrived;
-    std::optional<tt::tt_metal::GlobalSemaphore> final_arrived;
-    // Released by combine's collector to the routed expert's writers; see kernels/hybrid_expert_done.hpp.
-    std::optional<tt::tt_metal::GlobalSemaphore> go;
-    std::shared_ptr<ttnn::Tensor> arena;
-};
-
-// The global semaphores first, then the arena under them. The other order cannot work: an arena over all of L1
-// leaves the semaphore nowhere to go, and it cannot be allocated per call like the solo arena because its address is a
-// compile-time argument of combine's kernels.
-OverlapL1 allocate_overlap_l1(ttnn::MeshDevice* mesh, bool with_arena) {
-    const auto grid = mesh->compute_with_storage_grid_size();
-    const tt::tt_metal::CoreRangeSet all_workers(
-        tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{grid.x - 1, grid.y - 1}));
-
-    OverlapL1 l1;
-    l1.fwd_arrived =
-        ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1);
-    l1.final_arrived =
-        ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1);
-    const tt::tt_metal::CoreRangeSet re_cores(tt::tt_metal::CoreRange(
-        tt::tt_metal::CoreCoord{0, kOriginY}, tt::tt_metal::CoreCoord{kGridX - 1, kOriginY + kGridY - 1}));
-    l1.go = ttnn::global_semaphore::create_global_semaphore(mesh, re_cores, 0, tt::tt_metal::BufferType::L1);
-    if (!with_arena) {
-        return l1;
-    }
-
-    // Whatever L1 is left, not a fixed share: other cached programs (combine alone among them) may hold
-    // their own allocations, and the fused half budgets its blocking against this arena's size.
-    const auto free_l1 = mesh->allocator()->get_statistics(tt::tt_metal::BufferType::L1);
-    const uint32_t arena_bytes =
-        std::min<uint32_t>(hybrid_l1_arena_bytes(mesh), static_cast<uint32_t>(free_l1.largest_free_block_bytes)) &
-        ~static_cast<uint32_t>(63);
-    const uint32_t cols = arena_bytes / sizeof(uint16_t);
-    const tt::tt_metal::TensorSpec spec(
-        ttnn::Shape({static_cast<uint32_t>(grid.x * grid.y), cols}),
-        tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
-            tt::tt_metal::MemoryConfig{
-                tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-                tt::tt_metal::BufferType::L1,
-                tt::tt_metal::ShardSpec{all_workers, {1, cols}, tt::tt_metal::ShardOrientation::ROW_MAJOR}}));
-    l1.arena = std::make_shared<ttnn::Tensor>(create_device_tensor(spec, mesh));
-    const auto* arena = l1.arena->buffer();
-    TT_FATAL(
-        arena->address() + arena->aligned_size_per_bank() <=
-            std::min({l1.fwd_arrived->address(), l1.final_arrived->address(), l1.go->address()}),
-        "hybrid routed expert: the L1 arena [0x{:x}, +{} B) runs into the global semaphores at 0x{:x} / 0x{:x} / "
-        "0x{:x}",
-        arena->address(),
-        arena->aligned_size_per_bank(),
-        l1.fwd_arrived->address(),
-        l1.final_arrived->address(),
-        l1.go->address());
-    return l1;
-}
-
 // The unified reader's view of where combine's walks open: expert_offsets' row for the ring chip diametrically
 // opposite this one, which both of combine's walk directions take first. Appended past every other argument.
 void append_far_run(tt::tt_metal::ProgramDescriptor& desc, tt::tt_metal::Buffer* expert_offsets, uint32_t dg_far) {
@@ -140,12 +80,13 @@ tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_de
     const HybridRoutedExpertFfnInputs& t,
     ttnn::Tensor& output,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
-    auto* mesh = t.x.device();
-    // Without the fused pass the routed expert has no arena to lay its buffers over, and neither op needs one: each
-    // keeps static circular buffers on its own rows, all below the global semaphores.
+    // The arena is the caller's, allocated per call in hybrid_routed_expert_moe and freed after it, so every op that
+    // follows gets that L1 back; its address is hashed, so a cached program is only reused over the same layout.
+    // Without the fused pass there is none, and neither op needs one: each keeps static circular buffers on its own
+    // rows.
     const bool run_fused_pass = op.hybrid_token_threshold > 0;
-    const auto l1 = allocate_overlap_l1(mesh, run_fused_pass);
-    tt::tt_metal::Buffer* arena = run_fused_pass ? l1.arena->buffer() : nullptr;
+    tt::tt_metal::Buffer* arena = run_fused_pass ? t.l1_arena->buffer() : nullptr;
+    const auto go_addr = static_cast<uint32_t>(op.expert_go->address());
 
     ttnn::Tensor re_output = t.output;
     const auto re_descriptor = create_hybrid_program_descriptor(op, t, re_output, arena);
@@ -159,14 +100,14 @@ tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_de
         "hybrid routed expert: {} writer cores report to combine, but `go` is multicast to the {}-core rectangle",
         combine_args.routed_expert_writers,
         combine_args.routed_expert_cores.size());
-    combine_args.routed_expert_go_addr = static_cast<uint32_t>(l1.go->address());
+    combine_args.routed_expert_go_addr = go_addr;
     std::map<ttnn::MeshCoordinate, combine::CollectorTarget> collectors;
     auto workload = combine::create_combine_workload(
         combine_args,
         combine_inputs(t),
         output,
         tensor_coords,
-        combine::CombineL1{.fwd_arrived = &*l1.fwd_arrived, .final_arrived = &*l1.final_arrived, .arena = arena},
+        combine::CombineL1{.fwd_arrived = &*op.fwd_arrived, .final_arrived = &*op.final_arrived, .arena = arena},
         &collectors);
 
     for (auto& program : workload.programs) {
@@ -184,7 +125,7 @@ tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_de
                 .collector_noc_x = static_cast<uint32_t>(collector.worker_virtual.x),
                 .collector_noc_y = static_cast<uint32_t>(collector.worker_virtual.y),
                 .collector_counts_addr = collector.counts_addr,
-                .go_addr = static_cast<uint32_t>(l1.go->address())});
+                .go_addr = go_addr});
         {
             namespace cf = ttnn::operations::experimental::deepseek_prefill::combine_fabric2d;
             const uint32_t extent = cf::ring_extent(combine_args);
@@ -194,11 +135,9 @@ tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_de
         program.descriptor = tt::tt_metal::merge_program_descriptors({program.descriptor, re});
     }
 
+    // The caller owns all three semaphores; holding them here as well only keeps them alive with the program.
     // combine_fabric2d already holds fwd_arrived and final_arrived through its semaphore list.
-    workload.semaphores.push_back(*l1.go);
-    if (l1.arena) {
-        workload.buffers.push_back({l1.arena, l1.arena->buffer()});
-    }
+    workload.semaphores.push_back(*op.expert_go);
     return workload;
 }
 
