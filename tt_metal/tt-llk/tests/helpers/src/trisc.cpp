@@ -66,11 +66,10 @@ void copy_runtimes_from_L1(struct RuntimeParams* temp_args)
     ckernel::memcpy_blocking(temp_args, __runtime_args_start, sizeof(struct RuntimeParams));
 }
 
-// Reconfig testing applies a config space state written into L1 before the kernel runs.
 // The dprint L1 region is reused for this... until we get a better memory map.
-#ifndef LLK_DEVICE_PRINT_BUFFER_BASE
-static constexpr std::uint32_t RESTORE_PLAN_BASE  = 0x1A000;
-static constexpr std::uint32_t RESTORE_PLAN_MAGIC = 0x43464731u; // "CFG1"
+#if defined(ARCH_BLACKHOLE) && !defined(LLK_DEVICE_PRINT_BUFFER_BASE)
+static constexpr std::uint32_t RESTORE_PLAN_BASE          = 0x15000;
+static constexpr std::uint32_t RESTORE_PLAN_MAGIC         = 0x43464731u; // "CFG1"
 static constexpr std::uint32_t RESTORE_SPACE_CONFIG       = 0;
 static constexpr std::uint32_t RESTORE_SPACE_THREADCONFIG = 1;
 static constexpr std::uint32_t RESTORE_SPACE_ADC_CH1X     = 2;
@@ -80,13 +79,18 @@ static constexpr std::uint32_t RESTORE_ENTRY_WORDS        = 6;
 static inline void restore_state()
 {
     volatile std::uint32_t* plan = reinterpret_cast<volatile std::uint32_t*>(RESTORE_PLAN_BASE);
-    if (plan[0] != RESTORE_PLAN_MAGIC) return;
+    if (plan[0] != RESTORE_PLAN_MAGIC)
+    {
+        return;
+    }
 #if defined(LLK_TRISC_UNPACK)
     constexpr std::uint32_t thread = 0;
 #elif defined(LLK_TRISC_MATH)
     constexpr std::uint32_t thread = 1;
 #elif defined(LLK_TRISC_PACK)
     constexpr std::uint32_t thread = 2;
+#else
+#error "only supported on TRISC{0,1,2}"
 #endif
     const std::uint32_t n = plan[1];
     for (std::uint32_t i = 0; i < n; i++)
@@ -158,7 +162,7 @@ int main(void)
 
         ckernel::fence_compiler();
 
-#ifndef LLK_DEVICE_PRINT_BUFFER_BASE
+#if defined(ARCH_BLACKHOLE) && !defined(LLK_DEVICE_PRINT_BUFFER_BASE)
         restore_state();
 #endif
 

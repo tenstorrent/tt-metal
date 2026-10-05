@@ -61,14 +61,14 @@ def thread_items(arch: ChipArchitecture) -> list:
 
 
 # L1 layout trisc.cpp expects
-_INKERNEL_RESTORE_BASE = 0x1A000
+_INKERNEL_RESTORE_BASE = 0x15000
 _INKERNEL_RESTORE_MAGIC = 0x43464731  # 'CFG1'
 
 
 def write_inkernel_restore(
     location: str, entries, *, device_id: int = 0, context=None
 ) -> int:
-    """Write a restore plan to L1 0x1A000, which trisc.cpp will then apply.
+    """Write a restore plan to L1 0x15000, which trisc.cpp will then apply.
     Layout is [space, addr32, v0, v1, v2, mask] and depending on space:
       RESTORE_SPACE_CONFIG:         Shared config space, v0 is masked
       RESTORE_SPACE_THREADCONFIG:   ThreadConfig, each thread sets its own

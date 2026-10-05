@@ -148,7 +148,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Publish Test Results
-        uses: mikepenz/action-junit-report@v5
+        uses: mikepenz/action-junit-report@3585e9575db828022551b4231f165eb59a0e74e3 # v5.6.2
         if: always()
         with:
           report_paths: ${{ env.LLK_PATH }}/tests/python_tests/reconfig_escape/reports/**/junit.xml

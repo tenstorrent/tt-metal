@@ -508,8 +508,18 @@ def main():
                 and a not in boot_owned
                 and v != pristine.get(a)
             }
+            # addrmod is folded into the signature so two ops that only
+            # differ here don't dedup away into a single representative.
+            addrmod_path = snap_path.replace(".snapshot.json", ".addrmod.json")
+            addrmod_sig = ()
+            if os.path.exists(addrmod_path):
+                with open(addrmod_path) as f:
+                    addrmod_snap = json.load(f)
+                addrmod_sig = tuple(
+                    sorted((("addrmod", t, a), v) for t, a, v in addrmod_snap if v != 0)
+                )
             rec["snapshot_path"] = snap_path
-            rec["signature"] = tuple(sorted(diff.items()))
+            rec["signature"] = tuple(sorted(diff.items())) + addrmod_sig
         discovered.append(rec)
 
     n_pass = sum(1 for r in discovered if r["baseline"] == PASS)
