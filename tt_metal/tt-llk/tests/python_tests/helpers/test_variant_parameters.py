@@ -856,6 +856,16 @@ class SEMAPHORE_RING(TemplateParameter):
 
 
 @dataclass
+class SINKHORN_ITERS(TemplateParameter):
+    """Row and column normalisation passes of sinkhorn_4x4."""
+
+    sinkhorn_iters: int = 20
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t SINKHORN_ITERS = {self.sinkhorn_iters};"
+
+
+@dataclass
 class PERF_RUN_TYPE(TemplateParameter):
     perf_run_type: PerfRunType
 

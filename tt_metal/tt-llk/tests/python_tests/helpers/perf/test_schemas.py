@@ -768,6 +768,27 @@ PERF_TEST_SCHEMAS = {
             "perf_sfpu_generic_moe_gate_topk": "perf_sfpu_generic_moe_gate_topk"
         },
     },
+    "perf_sinkhorn": {
+        "version": 1,
+        "columns": [
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "loop_factor",
+            "marker",
+            "perf_stage",
+            "sinkhorn_iters",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {"perf_sinkhorn": "perf_sinkhorn"},
+    },
     "perf_sum_reduce_scalar": {
         "version": 1,
         "columns": [

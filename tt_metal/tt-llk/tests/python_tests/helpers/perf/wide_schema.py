@@ -163,6 +163,7 @@ DB_SCHEMA = [
     Column("scale_fp32", "int64", True, "configuration"),
     Column("scores_include_bias", "bool", True, "configuration"),
     Column("sin_base", "int64", True, "configuration"),
+    Column("sinkhorn_iters", "int64", True, "configuration"),
     Column("srca_reuse_count", "int64", True, "configuration"),
     Column("stable_sort", "string", True, "configuration"),
     Column("ternary_mathop", "string", True, "configuration"),
