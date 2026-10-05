@@ -647,11 +647,6 @@ Tensor div_no_nan(
 }
 
 Tensor div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    if (input_a.dtype() == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32 &&
-        input_a.device()->arch() == tt::ARCH::QUASAR) {
-        Tensor div_result = ttnn::multiply(input_a, ttnn::reciprocal(input_b), std::nullopt, output_mem_config);
-        return ttnn::where(ttnn::eqz(input_b, output_mem_config), 0.0f, div_result);
-    }
     Tensor div_result = ttnn::divide(input_a, input_b, std::nullopt, output_mem_config);
     return ttnn::where(ttnn::eqz(input_b, output_mem_config), 0.0f, div_result);
 }
