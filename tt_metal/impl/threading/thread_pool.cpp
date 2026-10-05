@@ -371,9 +371,8 @@ public:
     // dropped.
     void run_participant(NumaAwareExecutor* executor) noexcept {
         if (!remaining_.finished()) {
-            const size_t position =
-                std::find(participants_.begin(), participants_.end(), executor) - participants_.begin();
-            for_each_child(position, [this](size_t child) { wake_subtree(child); });
+            const size_t node = std::find(participants_.begin(), participants_.end(), executor) - participants_.begin();
+            for_each_child(node, [this](size_t child) { wake_subtree(child); });
             for (size_t call = 0; call < executor_of_call_.size(); call++) {
                 if (executor_of_call_[call] == executor) {
                     run_if_unclaimed(call);
@@ -414,25 +413,25 @@ public:
 
 private:
     template <typename Fn>
-    void for_each_child(size_t position, Fn fn) const noexcept {
-        for (size_t child = (position * WAKE_FANOUT) + 1;
-             child <= (position * WAKE_FANOUT) + WAKE_FANOUT && child < participants_.size();
+    void for_each_child(size_t node, Fn fn) const noexcept {
+        for (size_t child = (node * WAKE_FANOUT) + 1;
+             child <= (node * WAKE_FANOUT) + WAKE_FANOUT && child < participants_.size();
              child++) {
             fn(child);
         }
     }
 
-    // Wakes the participant at `position` if the caller has not already claimed all of its calls, and otherwise
+    // Wakes the participant at `node` if the caller has not already claimed all of its calls, and otherwise
     // wakes its children in its place.
-    void wake_subtree(size_t position) noexcept {
+    void wake_subtree(size_t node) noexcept {
         for (size_t call = 0; call < executor_of_call_.size(); call++) {
-            if (executor_of_call_[call] == participants_[position] &&
+            if (executor_of_call_[call] == participants_[node] &&
                 !claims_[call].claimed.load(std::memory_order_relaxed)) {
-                participants_[position]->wake();
+                participants_[node]->wake();
                 return;
             }
         }
-        for_each_child(position, [this](size_t child) { wake_subtree(child); });
+        for_each_child(node, [this](size_t child) { wake_subtree(child); });
     }
 
     struct alignas(64) Claim {
@@ -443,6 +442,7 @@ private:
     const std::function<void(size_t)>& fn_;
     std::vector<Claim> claims_;
     std::vector<NumaAwareExecutor*> executor_of_call_;
+    // Wake tree in heap order: the caller wakes [0], and [i] wakes [i * WAKE_FANOUT + 1 .. (i + 1) * WAKE_FANOUT].
     std::vector<NumaAwareExecutor*> participants_;
     Completion remaining_;
     std::atomic<size_t> refs_ = 0;
