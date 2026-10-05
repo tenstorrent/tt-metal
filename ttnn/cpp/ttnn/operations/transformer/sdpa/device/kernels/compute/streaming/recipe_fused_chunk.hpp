@@ -170,9 +170,9 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         }
         // - m_ref: M (row r's m in column 0) x (-e0 transposed: -1 in row 0). Both operands are exact in one
         // fidelity phase (m_ref has 7 significant bits for srcB, -1 has one for srcA), so a HiFi build replays
-        // its image once here.
+        // its image once here, and only its inner 0-15 half (the rest multiplies zeros).
         UNPACK((llk_unpack_AB_matmul(prev.max, neg_unit_cb, row0, 0, sbw, h, 1)));
-        MATH((llk_math_matmul_no_mop<MATH_FIDELITY, MM_THROTTLE, 1>(prev.max, neg_unit_cb, 0, sbw, h)));
+        MATH((llk_math_matmul_no_mop<MATH_FIDELITY, MM_THROTTLE, 1, true>(prev.max, neg_unit_cb, 0, sbw, h)));
         tile_regs_commit();
         tile_regs_wait();
 #if defined(SDPA_RECIPE_K_PRIMARY_ROWS) || defined(SDPA_RECIPE_RING)
