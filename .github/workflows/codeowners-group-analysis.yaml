@@ -280,8 +280,9 @@ jobs:
             printf '%s\n' "$1" | tr -d '\r' | awk '
               # A fence closes only on the same character, at least as long, with
               # nothing after it (CommonMark), so ~~~ inside a ``` block stays code.
-              match($0, /^[[:space:]]*(````*|~~~~*)/) {
-                m = substr($0, RSTART, RLENGTH); sub(/^[[:space:]]*/, "", m)
+              # Like the checkbox, a fence may be indented at most three spaces.
+              match($0, /^ ? ? ?(````*|~~~~*)/) {
+                m = substr($0, RSTART, RLENGTH); sub(/^ */, "", m)
                 rest = substr($0, RSTART + RLENGTH)
                 if (!fence) { fence = 1; fch = substr(m, 1, 1); flen = length(m); next }
                 if (substr(m, 1, 1) == fch && length(m) >= flen && rest ~ /^[[:space:]]*$/) { fence = 0; next }

@@ -77,7 +77,7 @@ jobs:
                 const start = offset;
                 offset += raw.length + 1;
                 const line = raw.replace(/\r$/, "");
-                const m = line.match(/^\s*(`{3,}|~{3,})(.*)$/);
+                const m = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
                 if (m) {
                   if (!fence) { fence = m[1]; continue; }
                   if (m[1][0] === fence[0] && m[1].length >= fence.length && !m[2].trim()) { fence = null; continue; }
