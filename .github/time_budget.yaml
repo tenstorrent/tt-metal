@@ -310,6 +310,9 @@ llk:
   sanity:
     wh_n150_civ2: 40
     bh_p150b_civ2_viommu: 40
+    # LLK sanitizer nightly (ttnn_sanitizer_tests.yaml)
+    wh_n300_civ2: 90
+    bh_p150b_civ2: 90
   unit:
     wh_n150_civ2: 40
     wh_n300_civ2: 40

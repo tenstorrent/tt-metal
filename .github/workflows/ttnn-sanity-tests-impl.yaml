@@ -40,6 +40,16 @@ on:
         required: false
         type: boolean
         default: false
+      enable-llk-sanitizer:
+        description: "Enable the LLK sanitizer (implies LLK asserts); deselects tests/pipeline_reorg/llk-sanitizer-skip-list.yaml on hardware legs"
+        required: false
+        type: boolean
+        default: false
+      tests-yaml:
+        description: "Test-group list to build the matrix from"
+        required: false
+        type: string
+        default: "./tests/pipeline_reorg/ttnn_sanity_tests.yaml"
       ref:
         required: false
         type: string
@@ -104,9 +114,12 @@ jobs:
       sim-libs: ${{ steps.build-matrix.outputs.sim-libs }}
       skip-args-wormhole_b0: ${{ steps.skip-list.outputs.skip-args-wormhole_b0 }}
       skip-args-blackhole: ${{ steps.skip-list.outputs.skip-args-blackhole }}
+      san-skip-args-wormhole_b0: ${{ steps.san-skip-list.outputs.skip-args-wormhole_b0 }}
+      san-skip-args-blackhole: ${{ steps.san-skip-list.outputs.skip-args-blackhole }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/ttnn_sanity_tests.yaml
+      TESTS_YAML_PATH: ${{ inputs.tests-yaml || './tests/pipeline_reorg/ttnn_sanity_tests.yaml' }}
       TTSIM_SKIP_LIST_YAML: ./tests/pipeline_reorg/ttsim-skip-list.yaml
+      LLK_SANITIZER_SKIP_LIST_YAML: ./tests/pipeline_reorg/llk-sanitizer-skip-list.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -143,6 +156,23 @@ jobs:
           skips = yaml.safe_load(open(os.environ["TTSIM_SKIP_LIST_YAML"])) or {}
           for arch in ("wormhole_b0", "blackhole"):
               args = " ".join("--deselect=" + p for p in (skips.get(arch) or []))
+              print(f"skip-args-{arch}={args}")
+          PY
+
+      # Same shape as the TTSim list above, for tests the LLK sanitizer cannot run yet
+      # (unsupported/untagged LLK APIs). Applied on hardware legs only, and only when the
+      # sanitizer is on. See tests/pipeline_reorg/llk-sanitizer-skip-list.yaml.
+      - name: Load LLK sanitizer skip list
+        id: san-skip-list
+        if: ${{ inputs.enable-llk-sanitizer }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os, yaml
+          import shlex
+          skips = yaml.safe_load(open(os.environ["LLK_SANITIZER_SKIP_LIST_YAML"])) or {}
+          for arch in ("wormhole_b0", "blackhole"):
+              # Parametrized ids carry spaces and quotes; pytest shlex-splits PYTEST_ADDOPTS.
+              args = " ".join(shlex.quote("--deselect=" + p) for p in (skips.get(arch) or []))
               print(f"skip-args-{arch}={args}")
           PY
 
@@ -232,6 +262,7 @@ jobs:
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+          enable-llk-sanitizer: ${{ inputs.enable-llk-sanitizer || false }}
           enable-kernel-ccache: true
           # Kernel ccache uses separate Redis backend (REDIS_CCACHE_*) from build ccache (REDIS_*)
           # This allows different retention policies for runtime JIT vs. C++ build artifacts
@@ -376,6 +407,15 @@ jobs:
             export OMP_NUM_THREADS=2
             export MKL_NUM_THREADS=2
             export OMP_WAIT_POLICY=passive
+            # LLK sanitizer legs: deselect the tests it cannot run yet (empty unless the sanitizer is on).
+            # Shell-quoted for pytest's shlex split, so it arrives via a quoted heredoc (like TEST_GROUP_CMD).
+            SAN_SKIP_ARGS=$(cat <<'SAN_SKIP_EOF'
+            ${{ inputs.enable-llk-sanitizer && (startsWith(matrix.test-group.sku, 'wh_') && needs.load-test-matrix.outputs.san-skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'bh_') && needs.load-test-matrix.outputs.san-skip-args-blackhole) || '' }}
+            SAN_SKIP_EOF
+            )
+            if [ -n "$SAN_SKIP_ARGS" ]; then
+              export PYTEST_ADDOPTS="${PYTEST_ADDOPTS:+$PYTEST_ADDOPTS }$SAN_SKIP_ARGS"
+            fi
             # Whether THIS matrix leg should be profiled: experiment on + this is the chosen HW group.
             # (Never true on sim legs — this step's `if` already excludes sim_* SKUs.)
             PERF_PROFILE_THIS="${{ inputs.enable-perf-host-profiling && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) }}"

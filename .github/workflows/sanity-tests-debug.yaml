@@ -1,6 +1,6 @@
 name: "Sanity tests nightly debug run"
 
-run-name: "Sanity tests nightly debug run${{ github.event.schedule == '0 1 * * *' && ' with watcher' || (inputs.enable-watcher && ' with watcher' || '') }}${{ github.event.schedule == '0 2 * * *' && ' with LLK asserts' || (inputs.enable-llk-asserts && ' with LLK asserts' || '') }}"
+run-name: "Sanity tests nightly debug run${{ github.event.schedule == '0 1 * * *' && ' with watcher' || (inputs.enable-watcher && ' with watcher' || '') }}${{ github.event.schedule == '0 2 * * *' && ' with LLK asserts' || (inputs.enable-llk-asserts && ' with LLK asserts' || '') }}${{ github.event.schedule == '0 3 * * *' && ' with LLK sanitizer' || (inputs.enable-llk-sanitizer && ' with LLK sanitizer' || '') }}"
 
 on:
   schedule:
@@ -10,6 +10,8 @@ on:
     - cron: "0 1 * * *"
     # Runs nightly at 2:00 AM UTC with LLK asserts enabled
     - cron: "0 2 * * *"
+    # Runs nightly at 3:00 AM UTC with the LLK sanitizer enabled (TTNN conv group only, Ubuntu 22.04)
+    - cron: "0 3 * * *"
 
   workflow_dispatch:
     inputs:
@@ -25,6 +27,10 @@ on:
         default: false
         type: boolean
         description: "Enable LLK asserts"
+      enable-llk-sanitizer:
+        default: false
+        type: boolean
+        description: "Enable LLK sanitizer (implies LLK asserts; runs only the TTNN sanitizer test list, Ubuntu 22.04, no TTSIM)"
       run-wormhole-tests:
         default: true
         type: boolean
@@ -54,6 +60,7 @@ jobs:
     outputs:
       enable-watcher: ${{ steps.check.outputs.enable-watcher }}
       enable-llk-asserts: ${{ steps.check.outputs.enable-llk-asserts }}
+      enable-llk-sanitizer: ${{ steps.check.outputs.enable-llk-sanitizer }}
     steps:
       - id: check
         run: |
@@ -67,13 +74,18 @@ jobs:
           else
             echo "enable-llk-asserts=false" >> "$GITHUB_OUTPUT"
           fi
+          if [[ "${{ github.event.schedule }}" == "0 3 * * *" || "${{ inputs.enable-llk-sanitizer }}" == "true" ]]; then
+            echo "enable-llk-sanitizer=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enable-llk-sanitizer=false" >> "$GITHUB_OUTPUT"
+          fi
 
   # sanity-tests.yaml now builds its own artifacts and covers both the Wormhole and
   # Blackhole suites, so this workflow only invokes sanity-tests.yaml. The nightly schedule
   # below exercises every suite: the crons pass no inputs, and sanity-tests.yaml honours what a
   # caller sends rather than inferring the suite set from the event, so it is stated here.
   sanity-nightly-debug-ubuntu-22:
-    name: Sanity tests nightly debug run (Ubuntu 22.04${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' && ' with watcher' || '' }}${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' && ' with LLK asserts' || '' }})
+    name: Sanity tests nightly debug run (Ubuntu 22.04${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' && ' with watcher' || '' }}${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' && ' with LLK asserts' || '' }}${{ needs.determine-debug-flags.outputs.enable-llk-sanitizer == 'true' && ' with LLK sanitizer' || '' }})
     needs: [determine-debug-flags]
     if: ${{ always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-wormhole-tests || inputs.run-blackhole-tests || inputs.run-ttsim-tests) }}
     uses: ./.github/workflows/sanity-tests.yaml
@@ -85,14 +97,25 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       enable-watcher: ${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' }}
       enable-llk-asserts: ${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' }}
+      enable-llk-sanitizer: ${{ needs.determine-debug-flags.outputs.enable-llk-sanitizer == 'true' }}
       run-wormhole: ${{ inputs.run-wormhole-tests || github.event_name == 'schedule' }}
       run-blackhole: ${{ inputs.run-blackhole-tests || github.event_name == 'schedule' }}
-      run-sim: ${{ inputs.run-ttsim-tests || github.event_name == 'schedule' }}
+      # The sanitizer slot runs TTNN sanity only (its own reduced list, see
+      # tests/pipeline_reorg/ttnn_sanitizer_tests.yaml): every other suite is switched off.
+      run-sim: ${{ needs.determine-debug-flags.outputs.enable-llk-sanitizer != 'true' && (inputs.run-ttsim-tests || github.event_name == 'schedule') }}
+      run-t3000-sanity-tests: ${{ needs.determine-debug-flags.outputs.enable-llk-sanitizer != 'true' }}
+      run-fabric-sanity-tests: ${{ needs.determine-debug-flags.outputs.enable-llk-sanitizer != 'true' }}
+      run-ops-sanity-tests: ${{ needs.determine-debug-flags.outputs.enable-llk-sanitizer != 'true' }}
+      run-umd-sanity-tests: ${{ needs.determine-debug-flags.outputs.enable-llk-sanitizer != 'true' }}
+      run-ttsim-sanity-tests: ${{ needs.determine-debug-flags.outputs.enable-llk-sanitizer != 'true' }}
+      run-blackhole-multi-card-sanity-tests: ${{ needs.determine-debug-flags.outputs.enable-llk-sanitizer != 'true' }}
+      run-models-sanity-tests: ${{ needs.determine-debug-flags.outputs.enable-llk-sanitizer != 'true' }}
 
   sanity-nightly-debug-ubuntu-24:
-    name: Sanity tests nightly debug run (Ubuntu 24.04${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' && ' with watcher' || '' }}${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' && ' with LLK asserts' || '' }})
+    name: Sanity tests nightly debug run (Ubuntu 24.04${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' && ' with watcher' || '' }}${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' && ' with LLK asserts' || '' }}${{ needs.determine-debug-flags.outputs.enable-llk-sanitizer == 'true' && ' with LLK sanitizer' || '' }})
     needs: [determine-debug-flags]
-    if: ${{ always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-wormhole-tests || inputs.run-blackhole-tests) }}
+    # One platform is enough for the sanitizer slot; it runs on Ubuntu 22.04 only.
+    if: ${{ always() && !cancelled() && needs.determine-debug-flags.outputs.enable-llk-sanitizer != 'true' && (github.event_name == 'schedule' || inputs.run-wormhole-tests || inputs.run-blackhole-tests) }}
     uses: ./.github/workflows/sanity-tests.yaml
     secrets: inherit
     with:

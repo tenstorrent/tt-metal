@@ -1,0 +1,19 @@
+# TTNN groups run under the LLK sanitizer (TT_METAL_LLK_SANITIZER=1 + TT_METAL_LLK_ASSERTS=1)
+# in the nightly debug sanity run (.github/workflows/sanity-tests-debug.yaml, 3 AM slot).
+#
+# Scope grows with sanitizer coverage: FPU-only ops first, SFPU-based groups once SFPU
+# functions are tagged. Tests within a group that the sanitizer cannot run yet go in
+# llk-sanitizer-skip-list.yaml rather than being dropped from the cmd here.
+#
+# Unlike the ttnn_sanity_tests.yaml entries these cmds omit -x: a sanitizer run should
+# report every failing test, not stop at the first one.
+
+- name: "ttnn conv group (llk sanitizer)"
+  cmd: 'pytest --timeout 600 tests/ttnn/unit_tests/operations/conv -v -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 90
+    bh_p150b_civ2:
+      timeout: 90
+  team: llk
+  budget_type: sanity

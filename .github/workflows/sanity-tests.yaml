@@ -103,6 +103,11 @@ on:
         type: boolean
         default: false
         description: "Enable LLK asserts"
+      enable-llk-sanitizer:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable the LLK sanitizer (implies LLK asserts). TTNN sanity only: runs the reduced ttnn_sanitizer_tests.yaml list instead of the full one."
       ref:
         required: false
         type: string
@@ -222,6 +227,11 @@ on:
         default: false
         type: boolean
         description: "Enable LLK asserts"
+      enable-llk-sanitizer:
+        required: false
+        default: false
+        type: boolean
+        description: "Enable the LLK sanitizer (implies LLK asserts). TTNN sanity only: runs the reduced ttnn_sanitizer_tests.yaml list instead of the full one."
       ref:
         required: false
         type: string
@@ -529,6 +539,9 @@ jobs:
       timeout-minutes-override: ${{ inputs.enable-watcher && 240 || 0 }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      enable-llk-sanitizer: ${{ inputs.enable-llk-sanitizer || false }}
+      # The sanitizer only covers part of the LLK API so far, so it runs its own reduced list.
+      tests-yaml: ${{ inputs.enable-llk-sanitizer && './tests/pipeline_reorg/ttnn_sanitizer_tests.yaml' || './tests/pipeline_reorg/ttnn_sanity_tests.yaml' }}
       ref: ${{ needs.resolve-ref.outputs.sha }}
       prebuilt-image: ${{ needs.bake-env-ci-test-wheel.outputs.image }}
 
