@@ -711,8 +711,11 @@ class TtPrefillTransformer(LightweightModule):
             )
             ttnn.deallocate(logits)
             logits = full
-        ids = ttnn.argmax(logits, dim=-1, keepdim=False)
+        # argmax on a TILE input runs single-core (~100 ms over the full vocab); ROW_MAJOR is multi-core.
+        rm_logits = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(logits)
+        ids = ttnn.argmax(rm_logits, dim=-1, keepdim=False)
+        ttnn.deallocate(rm_logits)
         emb = self.mtp_embed_ids(ids)
         ttnn.deallocate(ids)
         if self.sp_factor == 1:
