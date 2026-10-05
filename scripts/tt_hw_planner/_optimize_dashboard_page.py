@@ -194,13 +194,29 @@ function cardSpec(S) {
   const scopeTxt = (sc.depth != null || sc.mode)
     ? "sampled slice" + (sc.depth != null ? " · depth " + sc.depth : "") + (sc.mode ? " · " + sc.mode + " per-op device time" : "") + " · not end-to-end"
     : "current";
-  cards.push({k: (m.name || "metric"), v: m.current, unit: " " + (m.unit || "ms"), sub: scopeTxt,
-              d: deltaTxt(m.current, m.baseline, m.direction || "min")});
-  cards.push({k: "baseline", v: m.baseline, unit: " " + (m.unit || "ms"), sub: "",
-              d: m.target != null ? "target " + fmtMs(m.target) : ""});
-  if (S.fullpipe_ms != null)
+  // A sampled-slice headline metric that was never re-measured this run stays at baseline
+  // (current == baseline) and reads as "stuck" even when the full pipeline the commit gate judges
+  // moved a lot (e.g. an image-diffusion run optimized end-to-end, not on an eager per-op probe).
+  // In that case LEAD with the end-to-end result and demote the frozen slice, so the headline is
+  // the real win rather than a one-shot probe. When the slice DID move (an LLM re-measuring its
+  // device-time series), nothing changes.
+  const sliceStuck = (m.current != null && m.baseline != null && Math.abs(m.current - m.baseline) < 1e-6);
+  const e2eMoved = (S.fullpipe_ms != null && S.fullpipe_baseline_ms != null && Math.abs(S.fullpipe_ms - S.fullpipe_baseline_ms) > 1e-6);
+  if (sliceStuck && e2eMoved) {
     cards.push({k: "end-to-end", v: S.fullpipe_ms, unit: " ms", sub: "all layers · what wins are judged on",
                 d: deltaTxt(S.fullpipe_ms, S.fullpipe_baseline_ms, "min")});
+    cards.push({k: "end-to-end baseline", v: S.fullpipe_baseline_ms, unit: " ms", sub: "before optimize", d: ""});
+    cards.push({k: (m.name || "metric"), v: m.current, unit: " " + (m.unit || "ms"),
+                sub: scopeTxt + " · not re-measured this run", d: "baseline probe"});
+  } else {
+    cards.push({k: (m.name || "metric"), v: m.current, unit: " " + (m.unit || "ms"), sub: scopeTxt,
+                d: deltaTxt(m.current, m.baseline, m.direction || "min")});
+    cards.push({k: "baseline", v: m.baseline, unit: " " + (m.unit || "ms"), sub: "",
+                d: m.target != null ? "target " + fmtMs(m.target) : ""});
+    if (S.fullpipe_ms != null)
+      cards.push({k: "end-to-end", v: S.fullpipe_ms, unit: " ms", sub: "all layers · what wins are judged on",
+                  d: deltaTxt(S.fullpipe_ms, S.fullpipe_baseline_ms, "min")});
+  }
   (S.stages || []).slice(0, 3).forEach(s =>
     cards.push({k: s.name, v: s.ms, unit: " ms", sub: s.path || "", d: deltaTxt(s.ms, s.baseline_ms, "min")}));
   return cards;
