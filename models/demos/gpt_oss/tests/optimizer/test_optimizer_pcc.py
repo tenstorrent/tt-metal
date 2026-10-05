@@ -8,10 +8,10 @@ generated/optimizer_reference/.
 
 Checks over the same 100 positions (one prefill position + 99 teacher-forced eager decode steps):
 
-1. The score the optimizer parses ("PCC: x") is min(eager top-1, traced top-1) agreement with HF's argmax, as
-   a fraction, held to the absolute floor PCC_THRESHOLD. Logits correlation is reported, not used as the
-   absolute floor: block-float weights and bfloat8_b logits never reproduce fp32 logits closely even when every
-   token choice matches.
+1. The score the optimizer parses ("PCC: x") is the mean logits PCC against HF fp32 over the 100 positions,
+   held to the absolute floor PCC_THRESHOLD. (Token agreement is not the score: the unmodified tree agrees on
+   77/100 top-1 positions, because 38 reference positions have an HF top-1 probability under 0.6, and the
+   optimizer only reads thresholds of the form 0.9x.)
 2. Top-1 / top-5 agreement, mean logits correlation and mean top-100 correlation, RELATIVE to a baseline pinned
    from the unmodified tree (generated/optimizer_accuracy_baseline_gpt-oss-20b.json). One position is 1.0 point.
 3. Top-1 of the TRACED token-out path (decode trace + on-device greedy sampling, the path the perf gate times),
@@ -53,10 +53,10 @@ from models.demos.gpt_oss.tests.optimizer.gate_support import (  # noqa: E402
 # The checkpoint this gate runs; stated as a literal so the optimizer's roofline can resolve the model.
 HF_MODEL_ID = "openai/gpt-oss-20b"
 
-# Absolute floor for the gate score min(eager top-1, traced top-1); the unmodified tree scores 0.77 (77/100
-# eager, 78/100 traced: 38 of the 100 reference positions have an HF top-1 probability under 0.6). The optimizer lifts this constant from
-# the file text as its pass/fail threshold.
-PCC_THRESHOLD = 0.70
+# Absolute floor for the gate score: the mean logits PCC against HF fp32 over the 100 positions (0.967729 on
+# the unmodified tree). The optimizer lifts this constant from the file text as its pass/fail threshold, and
+# only reads thresholds of the form 0.9x. Token agreement is held relative to the pinned baseline (check 2).
+PCC_THRESHOLD = 0.95
 
 GENERATED = REPO_ROOT / "generated"
 REFERENCE_LOGITS = GENERATED / "optimizer_reference" / "gpt-oss-20b-logits.pt"
@@ -181,7 +181,7 @@ def test_optimizer_full_model_pcc(mesh_device, device_params):
     worst_pos = min(range(positions), key=pccs.__getitem__)
     worst_top = min(top_pccs)
     top100_mean = sum(top_pccs) / positions
-    score = min(top1_pct, traced_top1) / 100.0
+    score = mean_corr
     print(
         f"ACCURACY positions={positions} top1_pct={top1_pct:.2f} top5_pct={top5_pct:.2f} "
         f"mean_corr={mean_corr:.6f} worst_corr={worst_corr:.6f} worst_pos={worst_pos} "

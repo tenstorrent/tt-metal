@@ -7,10 +7,10 @@ then Generator.decode_forward runs with the decode trace and on-device greedy sa
 each call reading the sampled token back to the host. The first decode call compiles and captures the trace
 and is not timed; decode ms/token is the mean wall time of the remaining calls (tokens/s/user = 1000 / that).
 
-Environment: TT_PERF_OSL_TOKENS sets the number of decode calls (default 129: 1 capture + 128 timed);
+Environment: TT_PERF_LAYERS caps the depth (unset or 0 = all 24 layers); TT_PERF_OSL_TOKENS sets the number of decode calls (default 129: 1 capture + 128 timed);
 TT_METAL_DEVICE_PROFILER=1 or TT_PERF_TRACE=0 runs eager decode, and under the profiler the decode window is
 capped at TT_PERF_PROFILE_DECODE_TOKENS (default 4) eager steps; OPTIMIZER_DECODE_ONLY=1 opens the profiled
-window at decode; PERF_GATE_ROLE=verdict refuses anything but trace on and >= 128 timed decode tokens.
+window at decode; PERF_GATE_ROLE=verdict refuses anything but every layer, trace on and >= 128 timed decode tokens.
 """
 
 from __future__ import annotations
@@ -72,6 +72,7 @@ def signpost(name: str, enabled: bool) -> None:
 @pytest.mark.parametrize("mesh_device, device_params", [(MESH_SHAPE, device_params())], ids=["1x4"], indirect=True)
 def test_optimizer_direct_perf(mesh_device, device_params):
     """The demo's prefill_128 prompt, then traced batch-1 decode with on-device greedy sampling on QB2 (1x4)."""
+    depth = max(0, int(os.environ.get("TT_PERF_LAYERS", "0") or 0))
     output_tokens = max(2, int(os.environ.get("TT_PERF_OSL_TOKENS", "129")))
     profiling = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
     if profiling:
@@ -82,17 +83,18 @@ def test_optimizer_direct_perf(mesh_device, device_params):
     prefill_samples = 1 if profiling else PREFILL_SAMPLES
     print(
         f"GATE_CONFIG role={role} model={HF_MODEL_ID} profiling={int(profiling)} trace={int(enable_trace)} "
-        f"layers={FULL_DEPTH} decode_calls={output_tokens} timed_decode_tokens={timed_tokens} "
+        f"layers={depth or FULL_DEPTH} decode_calls={output_tokens} timed_decode_tokens={timed_tokens} "
         f"prefill_samples={prefill_samples} profiler_buffer={PROFILER_BUFFER_AT_IMPORT} decode_only={int(DECODE_ONLY)} "
         f"trace_region={device_params.get('trace_region_size', 'yaml')}",
         flush=True,
     )
     if role == "verdict":
+        assert depth == 0, f"verdict must measure every layer, got TT_PERF_LAYERS={depth}"
         assert enable_trace, "verdict must run trace+1cq, but TT_PERF_TRACE=0 disabled it"
         assert timed_tokens >= 128, f"verdict needs sustained decode; got {timed_tokens} timed token(s)"
 
-    generator, model_args, model, page_table, kv_cache, tokenizer = build_generator(mesh_device)
-    assert model[0].args.n_layers == FULL_DEPTH and mesh_device.get_num_devices() == 4
+    generator, model_args, model, page_table, kv_cache, tokenizer = build_generator(mesh_device, num_layers=depth or None)
+    assert model[0].args.n_layers == (depth or FULL_DEPTH) and mesh_device.get_num_devices() == 4
 
     prompt = json.loads(PROMPTS.read_text())[0]["prompt"]
     prompt_ids = model_args[0].encode_prompt(prompt, instruct=False)
@@ -174,6 +176,7 @@ def test_optimizer_direct_perf(mesh_device, device_params):
             "role": role,
             "profiling": int(profiling),
             "trace": int(enable_trace),
+            "layers": depth or FULL_DEPTH,
             "decode_tokens": timed_tokens,
             "decode_ms_per_token": round(per_token_ms, 4),
             "decode_median_ms": round(statistics.median(step_ms), 4),

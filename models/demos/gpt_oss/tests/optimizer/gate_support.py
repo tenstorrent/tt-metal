@@ -49,10 +49,17 @@ def device_params() -> dict:
     return params
 
 
-def _build(mesh_device, state_dict):
+def _build(mesh_device, state_dict, num_layers=None):
+    import functools
+
+    import models.demos.gpt_oss.demo.text_demo as text_demo
     from models.demos.gpt_oss.config import MeshConfig, ModeConfig
-    from models.demos.gpt_oss.demo.text_demo import prepare_gpt_oss_generator_args
+    from models.demos.gpt_oss.tt.common import create_tt_model
     from models.tt_transformers.tt.generator import Generator
+
+    # The demo's builder with the layer count capped (the profiler's depth knob, TT_PERF_LAYERS) when asked.
+    text_demo.create_tt_model = functools.partial(create_tt_model, num_layers=num_layers) if num_layers else create_tt_model
+    prepare_gpt_oss_generator_args = text_demo.prepare_gpt_oss_generator_args
 
     mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1], ep=mesh_device.shape[0]))
     torch.manual_seed(0)  # create_tt_page_table permutes blocks with torch.randperm
@@ -73,10 +80,15 @@ def _build(mesh_device, state_dict):
     return generator, model_args, model, page_table, tt_kv_cache, tokenizer
 
 
-def build_generator(mesh_device, state_dict=None):
-    """(generator, model_args, model, page_table, kv_cache, tokenizer), retrying once with a forced HF load."""
+def build_generator(mesh_device, state_dict=None, num_layers=None):
+    """(generator, model_args, model, page_table, kv_cache, tokenizer), retrying once with a forced HF load.
+
+    num_layers caps the depth. A capped build reads the full model's cache files for its layers, so it starts
+    without the HF weights (the cache marker only describes full builds) and falls back to them on a miss."""
+    if num_layers and state_dict is None:
+        state_dict = {}
     try:
-        return _build(mesh_device, state_dict)
+        return _build(mesh_device, state_dict, num_layers)
     except Exception as error:  # noqa: BLE001
         if os.environ.get("GPT_OSS_FORCE_MODEL_LOAD") == "1":
             raise
@@ -89,7 +101,7 @@ def build_generator(mesh_device, state_dict=None):
     ttnn.synchronize_device(mesh_device)
     os.environ["GPT_OSS_FORCE_MODEL_LOAD"] = "1"
     try:
-        return _build(mesh_device, None)
+        return _build(mesh_device, None, num_layers)
     finally:
         os.environ.pop("GPT_OSS_FORCE_MODEL_LOAD", None)
 
