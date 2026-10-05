@@ -282,7 +282,7 @@ does not fail on them, because such a block is hand-maintained by design.
   report, and an op with no block is not swept at all (step 2 adds the block first).
   `--ulp-emit` changes what is written, not what is collected, so the producer and the
   consumer build the same set with or without it.
-- **`CHIP_ARCH` must be set**, and `--ulp-emit` refuses to write on anything but
+- **`CHIP_ARCH` must be set**, and `--ulp-emit` refuses to run on anything but
   Wormhole, because `_render` does not emit `arch` and the rows would be badged wrongly.
 
 ## Where things live
