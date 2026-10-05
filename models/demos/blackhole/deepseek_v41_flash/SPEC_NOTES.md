@@ -234,3 +234,15 @@ B=128    : not supported (below)
 * B=128 (U=32): verify rows U*(1+k) >= 64 per mesh row > 32: mHC ProjPlan / mixes / expand / collapse, router_select, moe_tail and the paged_kv_step latent write (rows <= 32) all assert; the mHC agent says T > 32 will not be supported soon. A split of the verify into two <= 32-row passes was not built. Estimate: 2 verify passes (each ~ the B=64 spec verify, 75-90 ms) + 8 drafter chunks (~70 ms) + host > 220 ms for ~1.9 tokens vs plain B=128 83 ms/token => ~0.6x: would not beat plain even if built.
 * B=64 with k >= 2 (T = 48+ rows), B=32 with k >= 4 (T >= 40): same row limit.
 * B=4/8 at ISL >= 64k: untested (drafter tables and ring sizing follow `max_ctx`, DRAM not measured).
+
+## TODO: make spec decode work with k=3 at every batch size (note from the user, 2026-10-05)
+
+k=1 is pointless (at most 1 accepted draft per round; measured 0.6-0.9 accepted/round at B=64, 0.73-1.01x vs plain), so spec must work with k=3 at B=4..128.
+
+Why it is capped today (grid, commit 594ec2fcc61):
+- Spec verify and drafter run U*(1+k) rows per mesh row (drafter U*(k+2)). The mHC decode fast paths only handle 4, 16 or 32 rows (T=12/20 pad to a multiple of 8); more than 32 rows is unsupported.
+- U=16 (B=64) therefore only fits k=1 (32 rows); k=3 needs 64 rows. U=32 (B=128) needs 64 rows at k=1 and 128 rows at k=3.
+- B=4 (U=1) with k=3 fails: drafter has T=5 rows and mhc_mixes2.py:32 asserts T % 4 == 0 (mhc.py pads only T<4 or T>8; T=5..7 is not padded).
+- Spec at ISL >= 32k asserts 'spec verify needs the matmul indexer backend' (B=8/16/32 first-pass G2 logs).
+
+To do: extend the mHC decode path (mixes, collapse+norm, expand) beyond 32 rows or chunk the verify/drafter rows (the drafter already has a chunked path for U>6 in mtp.py), pad T=5..7, support the matmul indexer backend for spec verify at long ISL, then re-measure k=3 at B=4..128.
