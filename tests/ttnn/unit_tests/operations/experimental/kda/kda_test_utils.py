@@ -3,7 +3,9 @@
 """Dependency-light numerical assertions shared by KDA tests."""
 
 from __future__ import annotations
-from collections.abc import Callable, Sequence
+
+import contextlib
+from collections.abc import Callable, Iterator, Sequence
 
 import torch
 import torch.nn.functional as F
@@ -291,3 +293,23 @@ def make_actual_start(device: ttnn.MeshDevice, actual_start: int = 0) -> ttnn.Te
         layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=ttnn.ReplicateTensorToMesh(device),
     )
+
+
+@contextlib.contextmanager
+def single_threaded_torch() -> Iterator[None]:
+    """Run Torch CPU work on one intra-op thread, restoring the previous count on exit.
+
+    KDA device tests compute their CPU oracles while the process holds the shared device. With the host at
+    load average 45-70 on 32 cores, Torch's default 32-thread OpenMP pool made the small-matrix oracles 50x
+    to over 100x slower (one SP-contract oracle sweep: 2.2 s on one thread, 22 s on four, over 180 s on 8 or
+    32). One thread is also the fastest choice for those oracles on an idle host, and every measured oracle
+    gave bit-identical outputs at 1, 4, 8 and 32 threads. Large single oracles give up their idle-host
+    parallel speedup (production chunk-preparation oracle: 2.7 s on 32 threads, 10 s on one); expensive
+    oracles belong in the CPU-only preparation step rather than inside the device lock.
+    """
+    previous = torch.get_num_threads()
+    torch.set_num_threads(1)
+    try:
+        yield
+    finally:
+        torch.set_num_threads(previous)
