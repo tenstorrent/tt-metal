@@ -496,6 +496,7 @@ tests/ttnn/unit_tests/gtests/ccl/ @tenstorrent/metalium-developers-ops-data-move
 tests/ttnn/unit_tests/gtests/conv/ @tenstorrent/metalium-developers-convolutions
 tests/ttnn/unit_tests/gtests/udm/ @yugaoTT @SeanNijjar
 tests/ttnn/unit_tests/gtests/udm/**/CMakeLists.txt @yugaoTT @SeanNijjar @tenstorrent/metalium-developers-infra
+tests/ttnn/unit_tests/kernel_lib/ @tenstorrent/metalium-developers-kernel-lib
 tests/ttnn/unit_tests/operations/ccl/ @tenstorrent/metalium-developers-ops-data-movement
 tests/ttnn/unit_tests/operations/data_movement/ @tenstorrent/metalium-developers-ops-data-movement
 tests/ttnn/unit_tests/operations/eltwise/ @tenstorrent/metalium-developers-eltwise
