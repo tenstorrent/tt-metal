@@ -2251,7 +2251,10 @@ class MiniMaxH3Pipeline:
         self.trace_audio = False
         self._log_generation = False
         try:
-            if not _skip_decode_warm*():
+            # Diagnostic mode (MINIMAX_H3_WARMUP_SKIP_DECODE_WARM=1): go straight to the ladder walk.
+            # The decode warms only compile programs and cache a few MB of filter constants, so the
+            # DRAM picture at each rung is unchanged; the audio length warm has hung on this mesh.
+            if not _skip_decode_warm():
                 if self.vae_output_type == "yuv420":
                     self._warm_vae_decode()
                 self._warm_audio_decode()
@@ -2305,7 +2308,7 @@ class MiniMaxH3Pipeline:
             self._host_log(
                 f"rungs that do not fit: {sorted(self.unfittable_rungs)}; largest that binds: "
                 f"{max(fitted) if fitted else None}"
-            )        
+            )
         return fitted
 
     def _capture_traces(
@@ -2853,19 +2856,6 @@ class MiniMaxH3Pipeline:
                 )
             ):
                 t_step = time.time()
-                level_kwargs = {
-                    "video_timestep": float(t),
-                    "audio_timestep": float(audio_timesteps[i]),
-                }
-                if "condition_video" in slot_roles:
-                    level_kwargs["condition_video_timestep"] = max(float(t), MINIMAX_H3_KEYFRAME_NOISE_AUG)
-                if "condition_audio" in slot_roles:
-                    level_kwargs["condition_audio_timestep"] = MINIMAX_H3_AUDIO_CONDITION_TIMESTEP
-                levels = slot_levels(slot_roles, **level_kwargs)
-                self._tt_timestep.update(
-                    levels.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
-                )
-
                 try:
                     video_velocity, audio_velocity = transformer(
                         video_1BVC=self._tt_video.value,
@@ -2888,12 +2878,6 @@ class MiniMaxH3Pipeline:
                         dram_probe.report(f"after OOM in step {i + 1}, rung {rung} (forward unwound)")
                     raise
 
-                ttnn.synchronize_device(self.mesh_device)
-                if i == 0:
-                    dram_probe.report(f"after step 1, rung {rung}")
-                if ttnn.using_distributed_env():
-                    ttnn.distributed_context_barrier()
-
                 ttnn.multiply_(video_velocity, float(scheduler.step_coefficient(i)))
                 ttnn.add_(self._tt_video.value, video_velocity)
                 ttnn.multiply_(audio_velocity, float(audio_scheduler.step_coefficient(i)))
@@ -2903,6 +2887,8 @@ class MiniMaxH3Pipeline:
                 ttnn.synchronize_device(self.mesh_device)
                 if ttnn.using_distributed_env():
                     ttnn.distributed_context_barrier()
+                if i == 0:
+                    dram_probe.report(f"after step 1, rung {rung}")
                 t_step = time.time() - t_step
                 if i == 0:
                     t_first = t_step
