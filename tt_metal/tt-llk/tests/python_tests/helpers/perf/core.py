@@ -437,7 +437,7 @@ def _run_id() -> str:
     return tag if attempt == "1" else f"{tag}-{attempt}"
 
 
-VALID_PIPELINES = ("pr", "nightly", "baseline", "merge_baseline")
+VALID_PIPELINES = ("pr", "nightly", "baseline", "merge_baseline", "manual")
 
 
 def _pipeline(event: str) -> str:
