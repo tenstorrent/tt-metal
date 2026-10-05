@@ -132,6 +132,7 @@ def mistral4_hf_config(max_seq: int = 8192):
         pretraining_tp=1,
         # Mistral's softmax scale is a plain qk_head_dim ** -0.5 - see module docstring.
         mla_disable_yarn_mscale=True,
+        mla_chunked_sdpa_matmul_fidelity="LoFi",
         # rope_parameters renamed to rope_scaling, with "type" retained for the reference's
         # _init_rope dispatch.
         rope_scaling={
