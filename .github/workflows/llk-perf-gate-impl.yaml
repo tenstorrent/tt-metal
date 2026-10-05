@@ -79,6 +79,11 @@ on:
         required: false
         default: true
         type: boolean
+      slack_on_pass:
+        description: "Post to Slack when the gate passes. Regressions and skips always post."
+        required: false
+        default: true
+        type: boolean
       threshold:
         description: "Relative slowdown counting as a regression (BH 0.02, WH 0.08)"
         required: false
@@ -412,6 +417,7 @@ jobs:
                 || github.event_name == 'workflow_dispatch' && format('manual run on {0}', github.ref_name)
                 || github.event_name }}
           WAIT_MINUTES: ${{ inputs.baseline_wait_minutes }}
+          SLACK_ON_PASS: ${{ inputs.slack_on_pass }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ -z "$SLACK_CHANNEL_ID" ]; then
@@ -474,6 +480,7 @@ jobs:
             --gate-name "$GATE_NAME" \
             --trigger "$TRIGGER" \
             --note "$NOTE" \
+            --post-pass "$SLACK_ON_PASS" \
             --out slack_payload.json && exit 0
 
           echo "::error::The gate could not build its Slack notification."

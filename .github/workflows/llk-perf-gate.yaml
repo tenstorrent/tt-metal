@@ -152,6 +152,8 @@ jobs:
       threshold: ${{ matrix.threshold }}
       min_cycles: "30"
       fail_on_regression: false
+      # A labelled PR posts only a regression or a skip; passes cluttered the channel.
+      slack_on_pass: false
       measure_result: >-
         ${{ needs.measure.result }},${{ needs.measure-branch-point.result }}
       current_artifact_pattern: >-
