@@ -42,7 +42,7 @@ from concurrent.futures import ThreadPoolExecutor  # noqa: E402
 import torch  # noqa: E402
 
 from models.demos.blackhole.qwen36.tests.gdn_baseline import cases as gc  # noqa: E402
-from models.demos.blackhole.qwen36.tests.gdn_baseline.reference import PREFIX, WEIGHT_NAMES  # noqa: E402
+from models.demos.deepseek_v3_d_p.reference.gdn.weights import GDN_WEIGHT_NAMES  # noqa: E402
 
 
 def log(message: str) -> None:
@@ -168,7 +168,7 @@ def fetch_weights(model: str) -> None:
     weight_map = json.loads(Path(index_path).read_text())["weight_map"]
     config = json.loads((directory / "config.json").read_text())
     prefix = "model.language_model." if "text_config" in config else "model."
-    wanted = {PREFIX + name: f"{prefix}layers.{gc.GDN_LAYER}.linear_attn.{name}" for name in WEIGHT_NAMES}
+    wanted = {gc.PREFIX + name: f"{prefix}layers.{gc.GDN_LAYER}.linear_attn.{name}" for name in GDN_WEIGHT_NAMES}
     wanted["input_layernorm.weight"] = f"{prefix}layers.{gc.GDN_LAYER}.input_layernorm.weight"
     scaled = [k for k in wanted.values() if f"{k}_scale_inv" in weight_map]
     if scaled:
