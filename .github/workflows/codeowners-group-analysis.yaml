@@ -29,6 +29,11 @@ on:
         type: string
   issue_comment:
     types: [created]
+  # Ticking the "Ping pending code owners" checkbox in the PR description is the
+  # same as commenting `/codeowners ping`. Only the description and its previous
+  # version are read; PR code is never checked out.
+  pull_request_target:
+    types: [opened, edited]
 
 permissions:
   contents: read
@@ -37,23 +42,32 @@ permissions:
 
 jobs:
   parse-comment:
-    if: github.event_name == 'issue_comment' && github.event.issue.pull_request
+    # For description edits, only run when the checkbox goes from unticked to
+    # ticked, so unrelated edits (title, CI status block) never ping. Untick and
+    # tick again to re-ping.
+    if: >-
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request) ||
+      (github.event_name == 'pull_request_target' &&
+       contains(github.event.pull_request.body, '[x] Ping pending code owners') &&
+       (github.event.action == 'opened' ||
+        (github.event.changes.body != null && !contains(github.event.changes.body.from, '[x] Ping pending code owners'))))
     runs-on: ubuntu-slim
     outputs:
-      should-run: ${{ steps.parse.outputs.should-run }}
-      branch: ${{ steps.parse.outputs.branch }}
-      create-new-comment: ${{ steps.parse.outputs.create-new-comment }}
-      ping-pending-owners: ${{ steps.parse.outputs.ping-pending-owners }}
-      send-slack-notification: ${{ steps.parse.outputs.send-slack-notification }}
-      pr-number: ${{ steps.parse.outputs.pr-number }}
-      author-notes: ${{ steps.parse.outputs.author-notes }}
-      direct-ping-users: ${{ steps.parse.outputs.direct-ping-users }}
-      is-direct-ping: ${{ steps.parse.outputs.is-direct-ping }}
-      comment-author: ${{ steps.parse.outputs.comment-author }}
-      is-bypass-command: ${{ steps.parse.outputs.is-bypass-command }}
+      should-run: ${{ steps.parse.outputs.should-run || steps.parse-description.outputs.should-run }}
+      branch: ${{ steps.parse.outputs.branch || steps.parse-description.outputs.branch }}
+      create-new-comment: ${{ steps.parse.outputs.create-new-comment || steps.parse-description.outputs.create-new-comment }}
+      ping-pending-owners: ${{ steps.parse.outputs.ping-pending-owners || steps.parse-description.outputs.ping-pending-owners }}
+      send-slack-notification: ${{ steps.parse.outputs.send-slack-notification || steps.parse-description.outputs.send-slack-notification }}
+      pr-number: ${{ steps.parse.outputs.pr-number || steps.parse-description.outputs.pr-number }}
+      author-notes: ${{ steps.parse.outputs.author-notes || steps.parse-description.outputs.author-notes }}
+      direct-ping-users: ${{ steps.parse.outputs.direct-ping-users || steps.parse-description.outputs.direct-ping-users }}
+      is-direct-ping: ${{ steps.parse.outputs.is-direct-ping || steps.parse-description.outputs.is-direct-ping }}
+      comment-author: ${{ steps.parse.outputs.comment-author || steps.parse-description.outputs.comment-author }}
+      is-bypass-command: ${{ steps.parse.outputs.is-bypass-command || steps.parse-description.outputs.is-bypass-command }}
     steps:
       - name: Parse comment and get PR info
         id: parse
+        if: github.event_name == 'issue_comment'
         env:
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
@@ -236,9 +250,59 @@ jobs:
             echo "Comment does not contain trigger commands"
           fi
 
+      - name: Parse description checkbox and get PR info
+        id: parse-description
+        if: github.event_name == 'pull_request_target'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          SENDER: ${{ github.event.sender.login }}
+        run: |
+          echo "PR number: $PR_NUMBER"
+          echo "Checkbox ticked by: $SENDER"
+
+          # Same access rule as the comment commands: tenstorrent org members only.
+          MEMBERSHIP_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                                 -H "Accept: application/vnd.github.v3+json" \
+                                 "https://api.github.com/orgs/tenstorrent/members/$SENDER")
+          echo "Membership check for $SENDER: HTTP $MEMBERSHIP_HTTP_CODE"
+
+          if [ "$MEMBERSHIP_HTTP_CODE" = "204" ] || [ "$MEMBERSHIP_HTTP_CODE" = "302" ]; then
+            echo "✅ User $SENDER is a member of tenstorrent organization"
+            {
+              echo "should-run=true"
+              echo "pr-number=$PR_NUMBER"
+              echo "branch=$BRANCH"
+              echo "create-new-comment=false"
+              echo "ping-pending-owners=true"
+              echo "send-slack-notification=true"
+              echo "is-direct-ping=false"
+              echo "is-bypass-command=false"
+              echo "author-notes="
+              echo "comment-author=$SENDER"
+            } >> $GITHUB_OUTPUT
+            echo "Command: ping owners (description checkbox)"
+          else
+            echo "❌ User $SENDER is not a member of tenstorrent organization (HTTP $MEMBERSHIP_HTTP_CODE)"
+            echo "should-run=false" >> $GITHUB_OUTPUT
+
+            REPLY_MESSAGE="❌ **Access Denied**: Only members of the \`tenstorrent\` organization can ping code owners from the PR description.\n\nIf you believe this is an error, please contact a repository maintainer."
+            TEMP_JSON_FILE=$(mktemp)
+            jq -n --arg body "$REPLY_MESSAGE" '{"body": $body}' > "$TEMP_JSON_FILE"
+
+            curl -s -X POST \
+              -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -H "Content-Type: application/json" \
+              --data-binary @"$TEMP_JSON_FILE" \
+              "https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
+
+            rm -f "$TEMP_JSON_FILE"
+          fi
+
   find-pr:
     needs: [parse-comment]
-    if: always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'issue_comment' && needs.parse-comment.outputs.should-run == 'true' && needs.parse-comment.outputs.is-bypass-command != 'true'))
+    if: always() && (github.event_name == 'workflow_dispatch' || ((github.event_name == 'issue_comment' || github.event_name == 'pull_request_target') && needs.parse-comment.outputs.should-run == 'true' && needs.parse-comment.outputs.is-bypass-command != 'true'))
     runs-on: ubuntu-slim
     outputs:
       pr-number: ${{ steps.find-pr.outputs.pr-number }}
@@ -1058,7 +1122,7 @@ jobs:
             COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Group Analysis\n\n$STATUS_MESSAGE\n\n$SUMMARY_LINE\n\n### Group Information:\n\n$ALL_GROUPS\n\n**Note:** At least one approval from each group is sufficient."
           fi
           [ "$NO_OWNERS_AVAILABLE" = "true" ] && COMMENT="$COMMENT\n\n**Note:** Only the PR author is available as a codeowner for this PR. No external review notifications will be sent."
-          [ "${{ github.event_name }}" = "issue_comment" ] && [ "$PING_OWNERS" = "false" ] && [ "$SEND_SLACK" = "false" ] && COMMENT="$COMMENT\n\n---\n💡 **Tip:** Use \\\`/codeowners ping\\\` to notify pending owners via Slack, or \\\`/ping @username1 @username2 @team/subteam\\\` to ping specific users and teams."
+          [ "${{ github.event_name }}" = "issue_comment" ] && [ "$PING_OWNERS" = "false" ] && [ "$SEND_SLACK" = "false" ] && COMMENT="$COMMENT\n\n---\n💡 **Tip:** Tick **Ping pending code owners** in the PR description or use \\\`/codeowners ping\\\` to notify pending owners via Slack, or \\\`/ping @username1 @username2 @team/subteam\\\` to ping specific users and teams."
           if [ -n "$FILES_WITHOUT_OWNERS" ]; then
             FILE_COUNT=$(echo "$FILES_WITHOUT_OWNERS" | wc -l)
             COMMENT="$COMMENT\n\n---\n\n### ⚠️ Files Without CodeOwners\n\n$FILE_COUNT files have no designated code owners."
@@ -2310,7 +2374,7 @@ jobs:
           # API failures, unrelated to whether the Slack notification above ran or
           # succeeded. GitHub's reactions API has no "warning" content type, so a
           # comment is the closest visible equivalent.
-          if [ "$PING_RATE_LIMITED" = "true" ] && [ "${{ github.event_name }}" = "issue_comment" ]; then
+          if [ "$PING_RATE_LIMITED" = "true" ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
             WARNING_JSON_FILE=$(mktemp)
             jq -n --arg body "⚠️ CodeOwners ping hit a GitHub API rate limit while resolving names above — some may be inaccurate." '{"body": $body}' > "$WARNING_JSON_FILE"
             curl -s -X POST \
