@@ -269,7 +269,7 @@ inline void _llk_unpack_tilize_(
         const std::uint32_t address = base_address + top_face_offset_address;
         LLK_ASSERT(is_valid_L1_address(address), "L1 base_address must be in valid L1 memory region");
 
-        // Poll first: the read's latency overlaps the counter reset (see _llk_unpack_A_)
+        // Poll first: the read's latency overlaps the counter reset
         std::uint32_t contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
 
         // Clear Z/W counters on UNP_A for both channels (Ch0 for L1 read, Ch1 for SrcA write)
@@ -348,7 +348,7 @@ inline void _llk_unpack_tilize_(
         std::uint32_t address = base_address + top_face_offset_address;
         LLK_ASSERT(is_valid_L1_address(address), "L1 base_address must be in valid L1 memory region");
 
-        // Poll first: the read's latency overlaps the counter reset (see _llk_unpack_A_)
+        // Poll first: the read's latency overlaps the counter reset
         std::uint32_t contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
 
         // Clear z/w start counters

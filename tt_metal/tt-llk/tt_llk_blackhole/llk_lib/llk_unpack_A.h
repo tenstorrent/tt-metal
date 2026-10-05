@@ -401,32 +401,24 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
 {
     LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
 
-    // Poll first: the read's latency overlaps the counter reset and the register select (the count can only fall until this call posts)
-    std::uint32_t contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
-
     // Clear z/w start counters
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
 
     // Program srcA and srcB base addresses
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
-    std::uint32_t context = unp_cfg_context;
-
     // Wait for free context
-    while (contexts_in_use >= 2)
-    {
-        contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
-    }
+    wait_for_next_context(2);
 
     // Set upk0/1 L1 read addr
     if constexpr (((BType == BroadcastType::NONE) && (!acc_to_dest)) || binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB || unpack_to_dest)
     {
-        const std::uint32_t upk0_reg = (context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
+        const std::uint32_t upk0_reg = (unp_cfg_context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
         cfg[upk0_reg]                = address;
     }
     else
     {
-        const std::uint32_t upk1_reg = (context == 0) ? THCON_SEC1_REG3_Base_address_ADDR32 : THCON_SEC1_REG3_Base_cntx1_address_ADDR32;
+        const std::uint32_t upk1_reg = (unp_cfg_context == 0) ? THCON_SEC1_REG3_Base_address_ADDR32 : THCON_SEC1_REG3_Base_cntx1_address_ADDR32;
         cfg[upk1_reg]                = address;
     }
 
@@ -437,7 +429,7 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     {
         if (is_32bit_input(unpack_src_format, unpack_dst_format))
         {
-            set_dst_write_addr(context, unpack_dst_format);
+            set_dst_write_addr(unp_cfg_context, unpack_dst_format);
             wait_for_dest_available();
         }
     }
@@ -455,12 +447,12 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     {
         if (is_32bit_input(unpack_src_format, unpack_dst_format))
         {
-            unpack_to_dest_tile_done(context, unpack_dst_format);
+            unpack_to_dest_tile_done(unp_cfg_context, unpack_dst_format);
         }
     }
 
     // Switch unpacker config context
-    switch_config_context_from(context);
+    switch_config_context(unp_cfg_context);
 }
 
 /**
