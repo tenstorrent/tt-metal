@@ -2936,7 +2936,7 @@ class UnarySFPUGolden:
         return math.sinh(x)
 
     def _cosh(self, x):
-        return math.cosh(x)
+        return math.inf if abs(x) >= 710.0 else math.cosh(x)
 
     def _square(self, x):
         # A finite input that overflows saturates, and handle_infinite_numbers picks inf or NaN
