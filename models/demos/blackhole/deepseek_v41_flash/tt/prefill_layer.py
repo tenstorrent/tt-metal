@@ -27,11 +27,21 @@ _MARKS = (
 )  # (phase, device-operation id at its end); written to $DSV41_PROF_MARKS at the end of every layer forward (profiling only)
 
 
+_MARKS_FILE = os.environ.get("DSV41_PROF_MARKS")
+
+
 def _mark(tag):
-    if _PROF_EVERY:
+    if _PROF_EVERY or _MARKS_FILE:
         from ttnn import _ttnn
 
         _MARKS.append((tag, int(_ttnn.get_device_operation_id())))
+
+
+def _dump_marks():
+    if _MARKS_FILE:
+        import json
+
+        json.dump(_MARKS, open(_MARKS_FILE, "w"))
 
 
 ROUTER_BATCH = (
@@ -202,6 +212,10 @@ class DSV41PrefillMoE:
     def forward(self, tt_x_gate, tt_x_tokens):
         return self._forward(tt_x_gate, tt_x_tokens)
 
+    def forward_routed(self, tt_x_tokens, scores, indices):
+        """moe_compute with the routing already done (scores bf16 / indices uint16, row-major [T,1,1,k])."""
+        return self.decode.forward(tt_x=tt_x_tokens, tt_scores=scores, tt_indices=indices, layer_id=0)
+
     def _forward(self, tt_x_gate, tt_x_tokens):
         n = tt_x_gate.shape[2] // 32
         if n > 1 and ROUTER_BATCH and os.environ.get("DSV41_ROUTER", "fused") == "fused":
@@ -337,6 +351,42 @@ class DSV41PrefillLayer:
             self._pk_m = (PackedMHC(L.mhc_attn), PackedMHC(L.mhc_ffn))
         return self._pk_m
 
+    def _route_own(self, hh, n8):
+        """hh [1,1,N,D] bf16 (own chunks) -> (scores bf16 [n8*8*T,1,1,k], indices uint16 [n8*8*T,1,1,k]) row-major for the all-gathered tokens
+        (group g, column j, token t at row (g*8 + j)*T + t): the router runs once per own chunk, then results are all-gathered over the columns.
+        """
+        L, T = self.L, self.T
+        gate, mc, cc = self.pmoe.gate, L.mesh_config, L.ccl
+        D = int(hh.shape[3])
+        N = n8 * T
+        ws, ixs = [], []
+        for g in range(n8):
+            hc = ttnn.slice(hh, [0, 0, g * T, 0], [1, 1, (g + 1) * T, D])
+            w, i = gate.forward(hc)
+            ttnn.deallocate(hc)
+            ws.append(w)
+            ixs.append(i)
+        w_all = ttnn.concat(ws, dim=0) if n8 > 1 else ws[0]
+        i_all = ttnn.concat(ixs, dim=0) if n8 > 1 else ixs[0]
+        k = int(w_all.shape[3])
+        tile32 = lambda t, dt: ttnn.typecast(ttnn.to_layout(ttnn.reshape(t, [1, 1, N, k]), ttnn.TILE_LAYOUT), dt)
+        both = ttnn.concat(
+            [tile32(w_all, ttnn.float32), tile32(ttnn.typecast(i_all, ttnn.uint32), ttnn.float32)], dim=3
+        )
+        g_ = mc.allgather(ttnn.reshape(both, [n8, 1, T, 2 * k]), cc, axis=1, dim=1)  # [n8,8,T,2k]
+        g_ = ttnn.reshape(g_, [1, 1, n8 * 8 * T, 2 * k])
+        sc = ttnn.slice(g_, [0, 0, 0, 0], [1, 1, n8 * 8 * T, k])
+        ix = ttnn.slice(g_, [0, 0, 0, k], [1, 1, n8 * 8 * T, 2 * k])
+        rm = lambda t, dt: ttnn.reshape(
+            ttnn.to_layout(ttnn.typecast(t, dt), ttnn.ROW_MAJOR_LAYOUT), [n8 * 8 * T, 1, 1, k]
+        )
+        sc_rm = rm(sc, ttnn.bfloat16)
+        ix_rm = ttnn.typecast(ttnn.typecast(ix, ttnn.uint32), ttnn.uint16)
+        ix_rm = ttnn.reshape(ttnn.to_layout(ix_rm, ttnn.ROW_MAJOR_LAYOUT), [n8 * 8 * T, 1, 1, k])
+        for t in (w_all, i_all, both, g_, sc, ix):
+            ttnn.deallocate(t)
+        return sc_rm, ix_rm
+
     def forward_cols_pk(self, xs, pres, S, s0=0):
         """forward_cols with the mHC pieces on the packed stream layout (one call per sub-block over all of the column's own tokens instead
         of a loop over 32-token chunks of 4->32 padded streams). xs / pres: lists of chunks (first layer, after Engram) or PkLists.
@@ -374,12 +424,25 @@ class DSV41PrefillLayer:
         hh = pkf.collapse_norm(x2, pre_a, L.ffn_norm_w, eps)  # [1,1,N,D] bf16
         ttnn.deallocate(pre_a)
         _mark("mhc_expand_collapse")
+        route_own = os.environ.get("DSV41_PF_ROUTE_OWN", "1") == "1"
+        if (
+            route_own
+        ):  # router on the column's own chunks once, gathered with the hidden states (instead of 8x redundantly per group)
+            sc_all, ix_all = self._route_own(hh, n8)
         hha = mc.allgather(ttnn.reshape(hh, [n8, 1, T, D]), cc, axis=1, dim=1)  # [n8,8,T,D]
         ms = []
         for g in range(n8):
             hh_g = ttnn.reshape(ttnn.slice(hha, [g, 0, 0, 0], [g + 1, 8, T, D]), [1, 1, 8 * T, D])
             tok_g = ttnn.reshape(ttnn.to_layout(hh_g, ttnn.ROW_MAJOR_LAYOUT), [8 * T, 1, 1, D])
-            mg = self.pmoe.forward(hh_g, tok_g)  # [1,1,256,D/8]
+            if route_own:
+                k_ = sc_all.shape[3]
+                sc_g = ttnn.slice(sc_all, [g * 8 * T, 0, 0, 0], [(g + 1) * 8 * T, 1, 1, k_])
+                ix_g = ttnn.slice(ix_all, [g * 8 * T, 0, 0, 0], [(g + 1) * 8 * T, 1, 1, k_])
+                mg = self.pmoe.forward_routed(tok_g, sc_g, ix_g)
+                ttnn.deallocate(sc_g)
+                ttnn.deallocate(ix_g)
+            else:
+                mg = self.pmoe.forward(hh_g, tok_g)  # [1,1,256,D/8]
             ttnn.deallocate(hh_g)
             ttnn.deallocate(tok_g)
             m_own = ttnn.experimental.all_to_all_async_generic(
@@ -388,6 +451,9 @@ class DSV41PrefillLayer:
             ttnn.deallocate(mg)
             ms.append(m_own)
         ttnn.deallocate(hha)
+        if route_own:
+            ttnn.deallocate(sc_all)
+            ttnn.deallocate(ix_all)
         _mark("moe+allgather")
         sh_all = shared_big(L.shared, hh)
         ttnn.deallocate(hh)
@@ -402,6 +468,7 @@ class DSV41PrefillLayer:
             ttnn.deallocate(x)
             ttnn.deallocate(pre_in)
         _mark("expand_out")
+        _dump_marks()
         return PkList([x3]), PkList([pre_f])
 
     def forward_cols(self, xs, pres, S, s0=0):
@@ -476,10 +543,7 @@ class DSV41PrefillLayer:
         if n8 > 1:
             ttnn.deallocate(hh_all)
         _mark("expand_out")
-        if _PROF_EVERY and os.environ.get("DSV41_PROF_MARKS"):
-            import json
-
-            json.dump(_MARKS, open(os.environ["DSV41_PROF_MARKS"], "w"))
+        _dump_marks()
         return outs, pres_out
 
     def forward_full(self, xs, pres, S, s0=0):
@@ -581,8 +645,5 @@ class DSV41PrefillLayer:
                 for t in (hh_g, tok_g, mg) + ((sh_g,) if big else ()):
                     ttnn.deallocate(t)
         _free("a", a)
-        if _PROF_EVERY and os.environ.get("DSV41_PROF_MARKS"):
-            import json
-
-            json.dump(_MARKS, open(os.environ["DSV41_PROF_MARKS"], "w"))
+        _dump_marks()
         return outs, pres_out

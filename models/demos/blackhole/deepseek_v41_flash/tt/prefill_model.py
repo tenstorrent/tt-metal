@@ -631,6 +631,10 @@ class DSV41PrefillModel:
             ttnn.execute_trace(self.md, self.dyn_trace, cq_id=0, blocking=False)
             ttnn.synchronize_device(self.md)
             t2 = time.perf_counter()
+            if os.environ.get(
+                "DSV41_PROF_REPLAY"
+            ):  # device-profiler drain after every replay (profiling runs only; excluded from the timing)
+                ttnn.ReadDeviceProfiler(self.md)
             for (
                 hk
             ) in (
