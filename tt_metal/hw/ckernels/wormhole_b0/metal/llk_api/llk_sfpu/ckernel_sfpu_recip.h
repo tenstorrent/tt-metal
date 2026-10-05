@@ -117,6 +117,11 @@ sfpi_inline void sfpu_reciprocal_init() {
         // Fit y = k2 - k1*x + k0*x**2 over [1,2), constraining the one-step
         // Newton result to the correct BF16 rounding intervals. All 128
         // normalized BF16 inputs round correctly with Wormhole FMA semantics.
+        // Not shared with the FP32 path: the minimax seed below has maximum
+        // relative error 0.0101, but BF16 correct rounding needs at most
+        // 0.0039 near x = 2, which forces a maximum of at least 0.0118 on
+        // [1,2). Two Newton steps raise that error to the fourth power, so
+        // a shared seed would increase FP32 error, e.g. in polygamma.
         sfpi::vConstFloatPrgm0 = 0.32133400440216064453125f;
         sfpi::vConstFloatPrgm1 = 1.4514148235321044921875f;
         sfpi::vConstFloatPrgm2 = 2.1200883388519287109375f;

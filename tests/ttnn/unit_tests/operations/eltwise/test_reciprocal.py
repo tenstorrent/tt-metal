@@ -33,9 +33,12 @@ def test_reciprocal_shared_seed_polygamma_fp32(device):
     if device.arch() != ttnn.device.Arch.WORMHOLE_B0:
         pytest.skip("Wormhole shared reciprocal precision regression")
 
-    # Neighborhoods of the worst inputs from an exhaustive polygamma(10)
-    # sweep over FP32 [1, 10]. Applying the BF16-tuned reciprocal seed to
-    # this unrounded intermediate raised the maximum from 19 to 22 ULP.
+    # Guards the BF16-only scoping of the reciprocal seed: polygamma calls
+    # recip_init<..., false> but takes FP32 reciprocals, so applying the
+    # BF16-tuned seed there raised the maximum from 19 to 22 ULP.
+    # Inputs are neighborhoods of the worst cases from an exhaustive
+    # polygamma(10) sweep over FP32 [1, 10]. The threshold is the current
+    # maximum, so a polygamma accuracy change may legitimately move it.
     centers = torch.tensor([1.9826958179473877, 1.7422690391540527], dtype=torch.float32).view(torch.int32)
     bits = centers[:, None] + torch.arange(-256, 256, dtype=torch.int32)
     values = bits.view(torch.float32).reshape(32, 32)

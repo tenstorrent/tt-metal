@@ -22,6 +22,8 @@ enum class ReciprocalApproxMode { Default, Precise, Approximate };
  * e.g. recip_tile_init<ReciprocalDestAcc::FP32>(); use the same mode for recip_tile.
  * approximation defaults to the kernel's APPROX setting; override it for callers that need a more
  * accurate reciprocal without changing the approximation of other operations in the kernel.
+ * On Wormhole, precise BF16 reciprocal is correctly rounded only with the seed loaded here;
+ * other SFPU inits may overwrite it, so call recip_tile_init again before recip_tile after them.
  * The former legacy_compat Boolean template argument is no longer accepted.
  */
 template <
