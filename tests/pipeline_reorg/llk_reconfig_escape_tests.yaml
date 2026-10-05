@@ -7,6 +7,11 @@
   coverage: false
   cmd: |
     set -euo pipefail
+    if [ -n "${VIRTUAL_ENV:-}" ]; then
+      uv pip install -q --no-cache-dir -r tt_metal/tt-llk/tests/requirements.txt
+    else
+      uv pip install -q --system --no-cache-dir -r tt_metal/tt-llk/tests/requirements.txt
+    fi
     cd tt_metal/tt-llk/tests/python_tests/reconfig_escape
     ./ci.sh --arch blackhole --splits 4 --group 1 --report-dir reports/blackhole-1
   skus:
@@ -21,6 +26,11 @@
   coverage: false
   cmd: |
     set -euo pipefail
+    if [ -n "${VIRTUAL_ENV:-}" ]; then
+      uv pip install -q --no-cache-dir -r tt_metal/tt-llk/tests/requirements.txt
+    else
+      uv pip install -q --system --no-cache-dir -r tt_metal/tt-llk/tests/requirements.txt
+    fi
     cd tt_metal/tt-llk/tests/python_tests/reconfig_escape
     ./ci.sh --arch blackhole --splits 4 --group 2 --report-dir reports/blackhole-2
   skus:
@@ -35,6 +45,11 @@
   coverage: false
   cmd: |
     set -euo pipefail
+    if [ -n "${VIRTUAL_ENV:-}" ]; then
+      uv pip install -q --no-cache-dir -r tt_metal/tt-llk/tests/requirements.txt
+    else
+      uv pip install -q --system --no-cache-dir -r tt_metal/tt-llk/tests/requirements.txt
+    fi
     cd tt_metal/tt-llk/tests/python_tests/reconfig_escape
     ./ci.sh --arch blackhole --splits 4 --group 3 --report-dir reports/blackhole-3
   skus:
@@ -49,6 +64,11 @@
   coverage: false
   cmd: |
     set -euo pipefail
+    if [ -n "${VIRTUAL_ENV:-}" ]; then
+      uv pip install -q --no-cache-dir -r tt_metal/tt-llk/tests/requirements.txt
+    else
+      uv pip install -q --system --no-cache-dir -r tt_metal/tt-llk/tests/requirements.txt
+    fi
     cd tt_metal/tt-llk/tests/python_tests/reconfig_escape
     ./ci.sh --arch blackhole --splits 4 --group 4 --report-dir reports/blackhole-4
   skus:

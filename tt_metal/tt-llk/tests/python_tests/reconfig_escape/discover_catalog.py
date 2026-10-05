@@ -209,11 +209,18 @@ def collect_all(worktree, arch, timeout):
         capture_output=True,
         text=True,
     )
-    return [
+    pool = [
         line.strip()
         for line in proc.stdout.splitlines()
         if "::" in line and not line.startswith("test_device_print.py")
     ]
+    if not pool:
+        print(
+            f"discover_catalog: collect-only returned rc={proc.returncode} "
+            f"with no nodeids; stderr:\n{proc.stderr}",
+            file=sys.stderr,
+        )
+    return pool
 
 
 def sample_per_test(nodeids, n_per_test, rng):
