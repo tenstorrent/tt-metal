@@ -362,7 +362,7 @@ void NOCDebugState::handle_full_barrier_event(
     state.reads_not_flushed[noc_id].clear();
     state.posted_writes_pending[noc_id].clear();
     state.nonposted_writes_pending[noc_id].clear();
-    state.atomics_pending[noc_id].clear();
+    state.atomics_pending[processor_id][noc_id].clear();
 }
 
 void NOCDebugState::handle_semaphore_inc_event(
@@ -376,7 +376,8 @@ void NOCDebugState::handle_semaphore_inc_event(
     // source-reuse nor the counter-monotonicity check applies. Only a non-posted increment expects an ack and must
     // be flushed (via an atomic/full barrier) before kernel end; a posted increment is fire-and-forget.
     if (!event.posted) {
-        state.atomics_pending[noc_id][event.dst_addr] = {processor_id, event.is_semaphore, event.is_mcast};
+        state.atomics_pending[processor_id][noc_id][event.dst_addr] = {
+            processor_id, event.is_semaphore, event.is_mcast};
     }
 }
 
@@ -388,7 +389,7 @@ void NOCDebugState::handle_atomic_barrier_event(
 
     // An atomic barrier waits only for outstanding atomics (separate NIU counter from writes), so it clears the
     // atomics pending set and leaves reads/writes untouched.
-    state.atomics_pending[noc_id].clear();
+    state.atomics_pending[processor_id][noc_id].clear();
 }
 
 void NOCDebugState::handle_scoped_lock_event(
@@ -447,9 +448,11 @@ void NOCDebugState::finish_cores() {
             for (const auto& [addr, info] : state.nonposted_writes_pending[noc_id]) {
                 state.issue[info.processor_id].set_issue(get_unflushed_write_issue_type(info));
             }
-            // Non-posted atomics (semaphore incs) left outstanding at kernel end (no atomic/full barrier).
-            for (const auto& [addr, info] : state.atomics_pending[noc_id]) {
-                state.issue[info.processor_id].set_issue(get_unflushed_atomic_issue_type(info));
+            // Non-posted atomics left outstanding at kernel end (no atomic/full barrier on the issuing processor).
+            for (size_t processor_id = 0; processor_id < CoreDebugState::MAX_PROCESSORS; ++processor_id) {
+                for (const auto& [addr, info] : state.atomics_pending[processor_id][noc_id]) {
+                    state.issue[info.processor_id].set_issue(get_unflushed_atomic_issue_type(info));
+                }
             }
         }
     }
@@ -462,21 +465,17 @@ NOCDebugIssue NOCDebugState::get_issues(tt_cxy_pair core, int processor_id) cons
 }
 
 void NOCDebugState::reset_state() {
-    {
-        std::lock_guard<std::mutex> lock{pending_events_mutex_};
-        pending_events_.clear();
-    }
-    std::unique_lock<std::mutex> lock{cores_mutex};
+    std::unique_lock<std::mutex> cores_lock{cores_mutex};
+    std::lock_guard<std::mutex> pending_events_lock{pending_events_mutex_};
+    pending_events_.clear();
     cores.clear();
 }
 
 NOCDebugState::StateSummary NOCDebugState::get_state_summary() const {
     StateSummary summary;
-    {
-        std::lock_guard<std::mutex> lock{pending_events_mutex_};
-        summary.pending_events = pending_events_.size();
-    }
-    std::unique_lock<std::mutex> lock{cores_mutex};
+    std::unique_lock<std::mutex> cores_lock{cores_mutex};
+    std::lock_guard<std::mutex> pending_events_lock{pending_events_mutex_};
+    summary.pending_events = pending_events_.size();
     // Iterate the map directly (do NOT use get_state, which would insert empty entries).
     for (const auto& [core, state] : cores) {
         summary.observed_atomic_events += state.observed_atomic_events;

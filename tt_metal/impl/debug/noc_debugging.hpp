@@ -302,10 +302,11 @@ private:
         std::array<std::unordered_map<uint64_t, PendingWriteInfo>, MAX_NOCS> posted_writes_pending{};
         std::array<std::unordered_map<uint64_t, PendingWriteInfo>, MAX_NOCS> nonposted_writes_pending{};
 
-        // Pending non-posted atomic increments (semaphore inc) not yet flushed for each NOC (dst_addr -> info).
-        // Kept separate from writes because on device atomics use their own counter: they are released by an
-        // atomic/full barrier, never by a write barrier.
-        std::array<std::unordered_map<uint64_t, PendingWriteInfo>, MAX_NOCS> atomics_pending{};
+        // Pending non-posted atomic increments, tracked for each processor and NOC (dst_addr -> info). Kept
+        // separate from writes because atomics use their own counter: an atomic/full barrier on the issuing
+        // processor releases them, but a barrier on another processor does not.
+        std::array<std::array<std::unordered_map<uint64_t, PendingWriteInfo>, MAX_NOCS>, MAX_PROCESSORS>
+            atomics_pending{};
 
         size_t observed_atomic_events = 0;
 
