@@ -181,6 +181,12 @@ __attribute__((always_inline)) inline void park()
         ".word 0x00000013\n\t"
         ".endr\n"
         ".balign 512\n" // the code after 1f keeps its address mod 512 B (branch predictor hash, icache sets) as code before it moves
+        ".ifndef llk_loop_pad\n\t"
+        ".set llk_loop_pad, 0\n"
+        ".endif\n"
+        ".rept (llk_loop_pad / 4) * %[on]\n\t"
+        "nop\n\t"
+        ".endr\n"
         "1:\n\t"
         "lw    %[s], 0(%[pcb])\n\t"
         "andi  %[s], %[s], 0\n\t"
@@ -290,7 +296,7 @@ __attribute__((always_inline)) inline void rendezvous(bool is_action_thread, Act
     {
         ckernel::semaphore_post(ARRIVE_SEM);
     }
-    detail::park();
+    detail::park<LOOP_PAD>();
 #else
 
     if (is_action_thread)
