@@ -8,6 +8,8 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/eltwise_unary/isinf_isnan.h"
+#include "api/compute/eltwise_unary/where.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
@@ -130,6 +132,16 @@ void kernel_main() {
             add_binary_tile(DST_ACC, DST_IN, DST_T);      // t = acc + y
             sub_binary_tile(DST_T, DST_ACC, DST_COMP);    // (t - acc)
             sub_binary_tile(DST_COMP, DST_IN, DST_COMP);  // c = (t - acc) - y
+
+            // Guard against non-finite running totals (Issue #58986):
+            // When t is +inf, -inf, or nan (e.g. from overflow or infinite inputs),
+            // (t - acc) - y evaluates to inf - inf = NaN. Zero out the compensation term
+            // if t is not finite to prevent NaN propagation to subsequent scan elements.
+            isfinite_tile_init();
+            isfinite_tile(DST_T);
+            where_tile_init();
+            where_tile<DataFormat::Float32>(DST_T, DST_COMP, DST_IN, DST_COMP);
+
             constexpr uint32_t DST_RESULT = DST_T;
             dfb_comp_obj.pop_front(ONE_TILE);
 #else
