@@ -7,7 +7,7 @@ import os
 
 import pytest
 
-from models.demos.gemma4_d_p.demo import layer_perf_report as lpr
+from models.demos.gemma4_d_p.scripts import layer_perf_report as lpr
 
 PERF_REPORT_HEADERS = [
     "ID",

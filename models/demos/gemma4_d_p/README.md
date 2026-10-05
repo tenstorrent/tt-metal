@@ -42,8 +42,8 @@ To reproduce it locally:
 ```bash
 python -m tracy -p -r -v -o generated/profiler --op-support-count 20000 \
   -m "pytest models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_layer_perf_chunk_n[blackhole-chunkci-both-sz8192-ctx_256k-8x4]"
-pip install tt-perf-report==1.3.0
-python models/demos/gemma4_d_p/demo/layer_perf_report.py --profiler-dir generated/profiler
+pip install tt-perf-report
+python models/demos/gemma4_d_p/scripts/layer_perf_report.py --profiler-dir generated/profiler
 ```
 
 The test writes a manifest of its cells to `$PREFILL_SUMMARIES/layer_perf`, which defaults to `/tmp/prefill_summaries_$USER`. The report script slices the ops CSV by each cell's signpost pair and writes `$PREFILL_SUMMARIES/perf/gemma4_d_p_layer_perf.md`. It only parses files. To slice one cell of a downloaded artifact by hand:
