@@ -8,7 +8,7 @@
 //
 // hw_cleanup is a TEARDOWN family with NO numeric output of its own: it drains
 // the three TRISCs, rendezvouses T0/T1/T2 through hardware mailboxes
-// (Unpack/Pack -> READY; Math grants CONFIGURE in T0->T1->T2 order; then
+// (Unpack/Pack -> READY; Math grants CONFIGURE to both, all three configure; then
 // CONFIGURED -> CLEANUP_DONE, see llk_hw_cleanup.h start()/finish()), and
 // reprograms both cfg banks to a canonical Float16_b 32x32 / four-face / 2048B
 // tile geometry, leaving cfg bank 0 selected. It deliberately poisons pack MOP /

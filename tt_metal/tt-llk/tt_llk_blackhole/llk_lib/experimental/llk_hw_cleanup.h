@@ -22,14 +22,14 @@ namespace hw_cleanup
 // Software-only mailbox payloads. Cleanup uses T0/T1/T2 mailboxes and does not
 // borrow a Tensix protocol semaphore.
 //
-// Protocol (Math coordinates; Config RAM is thread-shared so configure is
-// serialized T0 → T1 → T2). CFG_STATE_ID itself is per-thread, so bank flips do
-// not need a separate lock:
+// Protocol (Math coordinates). The three configures run concurrently: the Config
+// words two threads share are written only by RMWCIB on disjoint fields, and
+// CFG_STATE_ID is per-thread, so bank flips need no lock:
 //
 //   Unpack/Pack: drain → READY → wait CONFIGURE → <caller configures> →
 //                drain → CONFIGURED → wait DONE
-//   Math:        drain → wait both READY → grant Unpack and wait CONFIGURED →
-//                <caller configures> → grant Pack and wait CONFIGURED → DONE
+//   Math:        drain → wait both READY → grant both → <caller configures> →
+//                drain → wait both CONFIGURED → DONE
 constexpr std::uint32_t UNPACK_READY      = 0x434C4E01;
 constexpr std::uint32_t PACK_READY        = 0x434C4E02;
 constexpr std::uint32_t UNPACK_CONFIGURE  = 0x434C4E21;
@@ -57,11 +57,10 @@ inline void mailbox_fence()
 }
 
 /**
- * Enter cleanup and wait until this thread owns the configure turn.
+ * Enter cleanup and wait until every TRISC has drained.
  *
  * @note Drain every operation-owned message from the incoming mailboxes before calling this.
- * @note On return the pipelines are drained and Unpack/Pack may configure; Math has already
- *       waited for Unpack to finish configuring.
+ * @note On return every thread's pipeline is drained and this thread may configure.
  */
 template <ThreadId thread_id>
 inline void start()
@@ -93,16 +92,13 @@ inline void start()
         LLK_ASSERT(unpack_ready == UNPACK_READY, "Unexpected cleanup message from unpack thread.");
         LLK_ASSERT(pack_ready == PACK_READY, "Unexpected cleanup message from pack thread.");
 
-        // Unpack configures while Math blocks on CONFIGURED.
         mailbox_write(UnpackThreadId, UNPACK_CONFIGURE);
-        const std::uint32_t configured = mailbox_read(UnpackThreadId);
-        mailbox_fence();
-        LLK_ASSERT(configured == UNPACK_CONFIGURED, "Unexpected unpack cleanup configuration completion.");
+        mailbox_write(PackThreadId, PACK_CONFIGURE);
     }
 }
 
 /**
- * Leave the configure turn and wait until every TRISC has finished cleanup.
+ * Report this thread's configuration done and wait until every TRISC has finished cleanup.
  *
  * @note Finish this thread's configuration (including any mop/tensix side effects) before
  *       calling this.
@@ -115,8 +111,8 @@ inline void finish()
     static_assert(IS_TRISC_THREAD<thread_id>, "Hardware cleanup requires a TRISC thread.");
     LLK_ASSERT(cfg_state_id == 0, "Blackhole cleanup must exit with configuration state zero selected.");
 
-    // Do not hand off while buffered MOP / Tensix config work could overlap the
-    // next owner (or the caller's return into the next MicroOp).
+    // No thread may leave while buffered MOP / Tensix config work of another
+    // could overlap the caller's return into the next MicroOp.
     mop_sync();
     tensix_sync();
 
@@ -136,11 +132,11 @@ inline void finish()
     }
     else
     {
-        // Pack configures while Math blocks on CONFIGURED.
-        mailbox_write(PackThreadId, PACK_CONFIGURE);
-        const std::uint32_t configured = mailbox_read(PackThreadId);
+        const std::uint32_t unpack_configured = mailbox_read(UnpackThreadId);
+        const std::uint32_t pack_configured   = mailbox_read(PackThreadId);
         mailbox_fence();
-        LLK_ASSERT(configured == PACK_CONFIGURED, "Unexpected pack cleanup configuration completion.");
+        LLK_ASSERT(unpack_configured == UNPACK_CONFIGURED, "Unexpected unpack cleanup configuration completion.");
+        LLK_ASSERT(pack_configured == PACK_CONFIGURED, "Unexpected pack cleanup configuration completion.");
 
         mailbox_write(UnpackThreadId, CLEANUP_DONE);
         mailbox_write(PackThreadId, CLEANUP_DONE);

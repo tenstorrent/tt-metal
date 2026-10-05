@@ -39,8 +39,9 @@
  * three TRISCs reach the call, mailboxes are empty, MATH_PACK and UNPACK_SYNC
  * can drain to zero, and cfg_state_id matches hardware.
  *
- * Rendezvouses T0/T1/T2 through hardware mailboxes, serializes configuration
- * in T0→T1→T2 order, and programs both cfg banks identically to:
+ * Rendezvouses T0/T1/T2 through hardware mailboxes (all three drain before any
+ * configures, none returns before all three have configured) and programs both
+ * cfg banks identically to:
  *   - source and pack formats: Float16_b;
  *   - tile geometry: one 32x32 tile;
  *   - faces: four 16x16 faces;
