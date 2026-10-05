@@ -28,10 +28,9 @@ public:
     // will choose a thread based on a round robin distribution strategy.
     virtual void enqueue(std::function<void()>&& f, std::optional<uint32_t> device_idx = std::nullopt) = 0;
     virtual void wait() = 0;
-    // Calls fn(i) for each i in [0, device_ids.size()) and returns once all calls have finished. Call i runs on
-    // the thread bound to physical device device_ids[i], unless the calling thread gets to it first: the caller
-    // runs every call that no worker has started, so a fan-out of short calls costs about as much as running
-    // them inline. Rethrows the first exception thrown by fn. Independent of enqueue() and wait().
+    // Calls fn(i) for each i in [0, device_ids.size()) and returns once all calls have finished. Calls may run
+    // concurrently, on the workers or on the calling thread. Rethrows the first exception thrown by fn. Independent of
+    // enqueue() and wait().
     virtual void parallel_for(ttsl::Span<const uint32_t> device_ids, const std::function<void(size_t)>& fn) = 0;
 };
 
