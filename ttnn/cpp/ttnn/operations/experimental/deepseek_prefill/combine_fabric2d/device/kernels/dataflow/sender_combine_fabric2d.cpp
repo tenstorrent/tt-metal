@@ -31,7 +31,7 @@
 constexpr uint32_t FWD_BUMP_EVERY = 32;
 // Final writes between bumps of the downstream reader's receive count. Nothing waits on that count until
 // the end of the stream, so this only bounds how many header-only packets it costs; the tail is bumped when
-// the stream ends. The overlapped fork has no receive count for them yet, so only the standalone op keeps one.
+// the stream ends.
 constexpr uint32_t FINAL_BUMP_EVERY = 32;
 constexpr ::cmbf2d::SenderCtArgs ct{};
 
@@ -88,7 +88,7 @@ void bump_downstream(FabricSender& fabric, uint32_t sem_addr, uint32_t count) {
 // Put one slot's token on the cable. Returns its command word so the caller can spot the end of the stream.
 template <typename FabricSender>
 uint64_t send_slot(
-    FabricSender& fabric, uint32_t slot, uint32_t& fwd_since_bump, [[maybe_unused]] uint32_t& final_since_bump) {
+    FabricSender& fabric, uint32_t slot, uint32_t& fwd_since_bump, uint32_t& final_since_bump) {
     volatile tt_l1_ptr ::cmbf2d::FwdMetadata* metadata = slot_metadata(slot);
     const uint64_t cmd = metadata->cmd;
     if (cmd == ::cmbf2d::CMD_END) {
@@ -115,16 +115,13 @@ uint64_t send_slot(
             bump_downstream(fabric, ct.fwd_sem_addr, fwd_since_bump);
             fwd_since_bump = 0;
         }
-    }
-#ifndef CMBF2D_OVERLAPPED
-    else {
+    } else {
         final_since_bump++;
         if (final_since_bump >= FINAL_BUMP_EVERY) {
             bump_downstream(fabric, ct.final_sem_addr, final_since_bump);
             final_since_bump = 0;
         }
     }
-#endif
     return cmd;
 }
 
@@ -157,12 +154,10 @@ uint32_t pump_stream(FabricSender& fabric) {
         sent += processed;
         noc_semaphore_inc(my_freed_noc, processed);
     }
-#ifndef CMBF2D_OVERLAPPED
     // The receive count the downstream reader waits on before it exits; it needs every final write counted.
     if (final_since_bump > 0) {
         bump_downstream(fabric, ct.final_sem_addr, final_since_bump);
     }
-#endif
     return sent - 1;  // the CMD_END slot carried no payload
 }
 

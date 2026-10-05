@@ -23,10 +23,10 @@ struct HybridSoloProgramFactory {
 // reports each expert it finishes to that chip's combine collector, which releases combine to read it.
 //
 // A workload rather than one program because combine's placement follows each chip's ethernet cores, and
-// because it owns what has to outlive the program: fwd_arrived and, when the fused pass runs, the L1 arena, allocated
-// in that order at cache miss. The arena spans every worker core and both ops lay their L1 over it: the
-// routed expert's static circular buffers would otherwise have to clear combine's, which the device-wide
-// lowest-allocation check does not allow on disjoint cores.
+// because it owns what has to outlive the program: fwd_arrived, final_arrived and, when the fused pass runs, the
+// L1 arena, allocated in that order at cache miss. The arena spans every worker core and both ops lay their L1
+// over it: the routed expert's static circular buffers would otherwise have to clear combine's, which the
+// device-wide lowest-allocation check does not allow on disjoint cores.
 struct HybridOverlapProgramFactory {
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const HybridRoutedExpertFfnParams& op,
