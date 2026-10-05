@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <cstdint>
 #include <mutex>
 #include <set>
 #include <string>

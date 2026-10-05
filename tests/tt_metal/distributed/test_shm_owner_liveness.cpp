@@ -7,6 +7,7 @@
 // owner's successor instead of attaching to stale state. No device needed.
 
 #include <fcntl.h>
+#include <pthread.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/stat.h>
@@ -195,15 +196,16 @@ TEST(ShmOwnerLiveness, OpenFailuresOtherThanMissingAreReported) {
         ofs << "x";
     }
     const std::string below = file + "/descriptor.bin";
-    expect_throws_containing([&] { HDSocketDescriptor::wait_and_read(below, "h2d", 10'000); }, "Not a directory");
-    expect_throws_containing([&] { H2DStreamServiceDescriptor::wait_and_read(below, 10'000); }, "Not a directory");
-    expect_throws_containing([&] { D2HStreamServiceDescriptor::wait_and_read(below, 10'000); }, "Not a directory");
+    expect_throws_containing([&] { HDSocketDescriptor::wait_and_read(below, "h2d", 1'000); }, "Not a directory");
+    expect_throws_containing([&] { H2DStreamServiceDescriptor::wait_and_read(below, 1'000); }, "Not a directory");
+    expect_throws_containing([&] { D2HStreamServiceDescriptor::wait_and_read(below, 1'000); }, "Not a directory");
     std::remove(file.c_str());
 }
 
 TEST(ShmOwnerLiveness, ZombieOwnerCountsAsDead) {
     // An owner that exited but was not reaped yet still answers kill(2) and still
     // has a /proc entry with its original start time; it is a dead owner all the same.
+    signal(SIGCHLD, SIG_DFL);  // SIG_IGN would make the kernel reap the child for us
     const pid_t child = fork();
     ASSERT_GE(child, 0) << std::strerror(errno);
     if (child == 0) {
@@ -221,6 +223,49 @@ TEST(ShmOwnerLiveness, ZombieOwnerCountsAsDead) {
     EXPECT_EQ(kill(child, 0), 0) << "the child was reaped by someone else, so the zombie case was not exercised";
     EXPECT_FALSE(ShmResourceTracker::is_pid_alive(child));
 
+    int status = 0;
+    waitpid(child, &status, 0);
+    EXPECT_FALSE(is_process_alive(child, start));
+}
+
+// State letter of the thread-group leader as /proc/<pid>/stat reports it, '\0' if unreadable.
+char proc_state_letter(pid_t pid) {
+    std::ifstream ifs(fmt::format("/proc/{}/stat", pid));
+    std::string line;
+    if (!std::getline(ifs, line)) {
+        return '\0';
+    }
+    const auto comm_end = line.rfind(')');
+    return (comm_end == std::string::npos || comm_end + 2 >= line.size()) ? '\0' : line[comm_end + 2];
+}
+
+TEST(ShmOwnerLiveness, LeaderZombieWithLiveThreadsIsAlive) {
+    // A process whose main thread left through pthread_exit() while another thread keeps
+    // running shows 'Z' in /proc/<pid>/stat for the rest of its life. It is alive.
+    signal(SIGCHLD, SIG_DFL);
+    const pid_t child = fork();
+    ASSERT_GE(child, 0) << std::strerror(errno);
+    if (child == 0) {
+        std::thread([] {
+            for (;;) {
+                pause();
+            }
+        }).detach();
+        pthread_exit(nullptr);
+    }
+    const uint64_t start = process_start_time(child);
+    bool leader_zombie = false;
+    for (int i = 0; i < 5000 && !leader_zombie; ++i) {
+        leader_zombie = proc_state_letter(child) == 'Z';
+        if (!leader_zombie) {
+            usleep(1000);
+        }
+    }
+    EXPECT_TRUE(leader_zombie) << "could not reach the leader-zombie state";
+    EXPECT_TRUE(ShmResourceTracker::is_pid_alive(child));
+    EXPECT_TRUE(is_process_alive(child, start));
+
+    kill(child, SIGKILL);
     int status = 0;
     waitpid(child, &status, 0);
     EXPECT_FALSE(is_process_alive(child, start));
@@ -378,7 +423,7 @@ TEST(ShmOwnerLiveness, CounterChannelWithoutOwnerStampConnects) {
 
 TEST(ShmOwnerLiveness, CounterChannelUnsizedSegmentIsNotExported) {
     ScopedSegment segment{unique_segment_name("ack")};
-    // An owner between shm_open(O_CREAT|O_EXCL) and ftruncate: the name exists, the segment is 0 bytes.
+    // An owner between shm_open(O_CREAT|O_EXCL) and its initialising write: the name exists, the segment is 0 bytes.
     const int fd = ::shm_open(segment.name.c_str(), O_CREAT | O_EXCL | O_RDWR, S_IRUSR | S_IWUSR);
     ASSERT_NE(fd, -1);
     ::close(fd);

@@ -48,6 +48,10 @@ bool write_fully(int fd, const void* data, std::size_t size) {
             }
             return false;
         }
+        if (n == 0) {
+            errno = EIO;  // no progress; tmpfs reports a full disk as -1/ENOSPC, so this is belt and braces
+            return false;
+        }
         done += static_cast<std::size_t>(n);
     }
     return true;

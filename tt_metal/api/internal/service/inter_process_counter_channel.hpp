@@ -52,8 +52,9 @@ public:
     // ===== Owner-side construction =====
     //
     // Creates /dev/shm/<shm_name> with the InterProcessCounterSegment
-    // layout: shm_open(O_CREAT|O_EXCL|O_RDWR), ftruncate to
-    // sizeof(InterProcessCounterSegment), mmap.
+    // layout: shm_open(O_CREAT|O_EXCL|O_RDWR), one write of the fully
+    // initialised segment image (which sizes it to
+    // sizeof(InterProcessCounterSegment)), mmap.
     //
     // Throws std::runtime_error if a segment with this shm_name
     // already exists. The owner is responsible for unlinking a stale

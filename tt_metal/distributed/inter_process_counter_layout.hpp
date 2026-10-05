@@ -103,7 +103,7 @@ struct InterProcessCounterSegment {
 
 static_assert(
     sizeof(InterProcessCounterSegment) == 2 * kInterProcessCounterCacheLine,
-    "InterProcessCounterSegment must stay two cache lines: the owner ftruncates the segment to sizeof, "
+    "InterProcessCounterSegment must stay two cache lines: the owner sizes the segment to sizeof, "
     "and connectors built against older layouts mmap that same size");
 
 }  // namespace tt::tt_metal::distributed

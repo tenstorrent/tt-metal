@@ -38,10 +38,10 @@ pid_t extract_pid_from_manifest_name(const std::string& filename) {
     }
 }
 
-// Reads /proc/<pid>/stat: `state` is field 3 and `start_time` field 22. comm may
-// contain spaces and parentheses, so fields are tokenised after the last ')'.
-// False when the entry cannot be read.
-bool read_proc_stat(pid_t pid, char& state, uint64_t& start_time) {
+// Reads /proc/<pid>/stat: `state` is field 3, `num_threads` field 20 and
+// `start_time` field 22. comm may contain spaces and parentheses, so fields are
+// tokenised after the last ')'. False when the entry cannot be read.
+bool read_proc_stat(pid_t pid, char& state, long& num_threads, uint64_t& start_time) {
     if (pid <= 0) {
         return false;
     }
@@ -60,19 +60,28 @@ bool read_proc_stat(pid_t pid, char& state, uint64_t& start_time) {
         return false;
     }
     state = token[0];
-    // start_time is the 20th token after state.
-    for (int i = 0; i < 19; ++i) {
-        if (!(fields >> token)) {
-            return false;
-        }
-    }
+    // num_threads is the 17th token after state, start_time the 19th.
     try {
+        for (int i = 0; i < 19; ++i) {
+            if (!(fields >> token)) {
+                return false;
+            }
+            if (i == 16) {
+                num_threads = std::stol(token);
+            }
+        }
         start_time = static_cast<uint64_t>(std::stoull(token));
     } catch (...) {
         return false;
     }
     return true;
 }
+
+// What /proc says about a pid that kill(2) still accepts. A zombie (exited, not
+// yet reaped) is dead. The state belongs to the thread-group leader, though: a
+// live process whose main thread left through pthread_exit() also shows 'Z'
+// while its other threads run, so 'Z' only counts with no other threads.
+bool proc_says_dead(char state, long num_threads) { return state == 'X' || (state == 'Z' && num_threads <= 1); }
 
 struct sigaction prev_sigint, prev_sigterm;
 
@@ -145,28 +154,36 @@ bool ShmResourceTracker::is_pid_alive(pid_t pid) {
     // kill(2) also succeeds for a zombie: a process that exited and has not
     // been reaped yet. Its resources are as orphaned as a reaped one's.
     char state = 0;
+    long num_threads = 0;
     uint64_t start_time = 0;
-    if (read_proc_stat(pid, state, start_time) && (state == 'Z' || state == 'X')) {
-        return false;
-    }
-    return true;
+    return !(read_proc_stat(pid, state, num_threads, start_time) && proc_says_dead(state, num_threads));
 }
 
 uint64_t process_start_time(pid_t pid) {
     char state = 0;
+    long num_threads = 0;
     uint64_t start_time = 0;
-    return read_proc_stat(pid, state, start_time) ? start_time : 0;
+    return read_proc_stat(pid, state, num_threads, start_time) ? start_time : 0;
 }
 
 bool is_process_alive(pid_t pid, uint64_t start_time) {
-    if (!ShmResourceTracker::is_pid_alive(pid)) {
+    if (pid <= 0) {
         return false;
     }
-    if (start_time == 0) {
-        return true;
+    if (kill(pid, 0) != 0 && errno != EPERM) {
+        return false;
     }
-    const uint64_t current = process_start_time(pid);
-    return current == 0 || current == start_time;
+    // One /proc read answers both questions (this runs inside 1 ms poll loops).
+    char state = 0;
+    long num_threads = 0;
+    uint64_t current = 0;
+    if (!read_proc_stat(pid, state, num_threads, current)) {
+        return true;  // /proc not readable: nothing contradicts kill(2)
+    }
+    if (proc_says_dead(state, num_threads)) {
+        return false;
+    }
+    return start_time == 0 || current == 0 || current == start_time;
 }
 
 ShmResourceTracker::ShmResourceTracker() : manifest_path_(manifest_path_for_pid(getpid())) {
