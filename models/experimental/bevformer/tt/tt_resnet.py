@@ -102,6 +102,7 @@ class TtResLayer:
         dram_input=False,
         dram_conv_slices=None,
         block_sharded_downsample=False,
+        fp32_acc=False,
         input_dtype=ttnn.bfloat16,
         input_layout=ttnn.TILE_LAYOUT,
         output_dtype=None,
@@ -123,6 +124,7 @@ class TtResLayer:
                     dram_input=dram_input and first,
                     dram_conv_slices=dram_conv_slices,
                     block_sharded_downsample=block_sharded_downsample,
+                    fp32_acc=fp32_acc,
                     input_dtype=input_dtype if first else self.layer[-1].output_dtype,
                     input_layout=input_layout if first else ttnn.TILE_LAYOUT,
                     output_dtype=output_dtype if last else None,
@@ -146,6 +148,7 @@ class TtBottleneck:
         dram_input=False,
         dram_conv_slices=None,
         block_sharded_downsample=False,
+        fp32_acc=False,
         input_dtype=ttnn.bfloat16,
         input_layout=ttnn.TILE_LAYOUT,
         output_dtype=None,
@@ -159,7 +162,8 @@ class TtBottleneck:
         a non-DCN conv2, conv3 and the downsample in DRAM, slicing the spatial convs into
         ``dram_conv_slices`` width slices; a DCN conv2 is unaffected. ``dram_input`` only
         covers the convs that read the block input, for a block fed by a DRAM layer whose own
-        activations fit in L1. ``block_sharded_downsample`` block-shards the downsample conv."""
+        activations fit in L1. ``block_sharded_downsample`` block-shards the downsample conv.
+        ``fp32_acc`` accumulates conv1, a non-DCN conv2, conv3 and the downsample in fp32."""
         self.with_dcn = "conv_offset" in conv_pth.conv2
         self.is_downsample = "downsample" in conv_pth
 
@@ -175,6 +179,7 @@ class TtBottleneck:
             conv_args.conv1,
             conv_pth.conv1,
             device=device,
+            fp32_dest_acc_en=fp32_acc,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             dram_activation=dram_activation or dram_input,
             dram_conv_slices=dram_conv_slices,
@@ -187,6 +192,7 @@ class TtBottleneck:
                 conv_args.conv2,
                 conv_pth.conv2,
                 device=device,
+                fp32_dest_acc_en=fp32_acc,
                 activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
                 # act_block_h here and in the stem comes from the UniAD port and is not
                 # re-tuned for 928x1600.
@@ -207,6 +213,7 @@ class TtBottleneck:
             conv_args.conv3,
             conv_pth.conv3,
             device=device,
+            fp32_dest_acc_en=fp32_acc,
             activation=None,
             dealloc_act=True,
             dram_activation=dram_activation,
@@ -219,6 +226,7 @@ class TtBottleneck:
                 conv_args.downsample[0],
                 conv_pth.downsample,
                 device=device,
+                fp32_dest_acc_en=fp32_acc,
                 activation=None,
                 is_blk=block_sharded_downsample,
                 dram_activation=dram_activation or dram_input,
@@ -256,6 +264,7 @@ class TtResNet:
         dram_activation_stages=(),
         dram_conv_slices=None,
         block_sharded_downsample_stages=(),
+        fp32_acc_stages=(),
     ):
         """Bottleneck ResNet built from ``conv_args`` and ``conv_pth``, which
         ``create_resnet_parameters`` records from one forward of the reference model: the conv
@@ -267,13 +276,14 @@ class TtResNet:
         spatial convs run in ``dram_conv_slices`` width slices and their 1x1 convs as a DRAM
         matmul. A layer that follows one of them and is not listed itself reads its input from
         DRAM the same way. ``block_sharded_downsample_stages`` lists the layers whose downsample
-        conv is block sharded."""
+        conv is block sharded, and ``fp32_acc_stages`` the layers whose convs accumulate in fp32."""
         self.out_indices = out_indices
         self.maxpool_args = conv_args.maxpool
         memory_config = dict(
             dram_activation_stages=dram_activation_stages,
             dram_conv_slices=dram_conv_slices,
             block_sharded_downsample_stages=block_sharded_downsample_stages,
+            fp32_acc_stages=fp32_acc_stages,
         )
 
         self.conv1 = TtnnConv2D(
@@ -287,8 +297,9 @@ class TtResNet:
             input_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
-        # The max pool emits a bfloat16 ROW_MAJOR tensor and every layer emits TILE. layer1
-        # emits bfloat8_b, so layer2 runs in bfloat8_b; the DCN layers emit bfloat16.
+        # The max pool emits a bfloat16 ROW_MAJOR tensor and every layer emits bfloat16 TILE.
+        # The trained backbone has outlier channels that bfloat8_b's shared block exponent
+        # flattens; run through layer2 in bfloat8_b, that error grows through the DCN layers.
         layer_input_dtype = ttnn.bfloat16
         layer_input_layout = ttnn.ROW_MAJOR_LAYOUT
         self.output_dtypes = []
@@ -301,7 +312,6 @@ class TtResNet:
                 **self.layer_kwargs(i, **memory_config),
                 input_dtype=layer_input_dtype,
                 input_layout=layer_input_layout,
-                output_dtype=ttnn.bfloat8_b if i == 0 else None,
             )
             self.res_layers.append(res_layer)
             layer_input_dtype = res_layer.output_dtype
@@ -310,7 +320,9 @@ class TtResNet:
                 self.output_dtypes.append(layer_input_dtype)
 
     @staticmethod
-    def layer_kwargs(i, dram_activation_stages=(), dram_conv_slices=None, block_sharded_downsample_stages=()):
+    def layer_kwargs(
+        i, dram_activation_stages=(), dram_conv_slices=None, block_sharded_downsample_stages=(), fp32_acc_stages=()
+    ):
         """The memory arguments of layer ``i`` (0 is layer1); a layer after a DRAM layer reads
         its input from DRAM."""
         return dict(
@@ -318,6 +330,7 @@ class TtResNet:
             dram_input=i not in dram_activation_stages and i - 1 in dram_activation_stages,
             dram_conv_slices=dram_conv_slices,
             block_sharded_downsample=i in block_sharded_downsample_stages,
+            fp32_acc=i in fp32_acc_stages,
         )
 
     def __call__(self, x):
