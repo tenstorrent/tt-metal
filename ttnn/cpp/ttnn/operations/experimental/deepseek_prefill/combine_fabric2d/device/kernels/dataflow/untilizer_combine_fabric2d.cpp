@@ -185,11 +185,31 @@ void kernel_main() {
 #ifdef CMBF2D_OVERLAPPED
     // A step's tile-rows are the routed expert's output: wait until it reports them written. Only here,
     // not in the counting walk above, which must finish before any expert is ready.
+#ifdef CMBF2D_PROGRESS_SEM
+    // A unified-pass expert is written chunk by chunk, so its tile-rows are taken as the collector reports
+    // them (`progress`), not all at once at the end; the per-row gate is in the batch loop below.
+    bool gate_rows = false;
+    uint32_t gate_step = 0;
+    uint32_t gate_target = 0;
+    uint32_t gate_base_row = 0;
+#endif
     const auto on_step = [&](uint32_t step) {
         const uint32_t local =
             ::cmbf2d::local_at_step(ctl, ct.my_dg_index, ct.experts_per_chip, ct.expert_threshold, step);
-        ::cmbf2d::wait_for_ready(
-            ct.ready_sem, ::cmbf2d::ready_target(ctl, ct.my_dg_index, ct.experts_per_chip, ct.expert_threshold, local));
+        const uint32_t target =
+            ::cmbf2d::ready_target(ctl, ct.my_dg_index, ct.experts_per_chip, ct.expert_threshold, local);
+#ifdef CMBF2D_PROGRESS_SEM
+        gate_rows = !::cmbf2d::in_fused_pass(ctl, ct.my_dg_index, ct.expert_threshold, local);
+        if (gate_rows) {
+            // The collector counts the routed expert's steps, one per slot walked in each pass, not this
+            // walk's steps: the one whose completion makes `ready` reach target is target - 1.
+            gate_step = target - 1;
+            gate_target = target;
+            gate_base_row = ctl.region[ctl.expert_id(ct.my_dg_index, local)] / ::cmbf2d::UNT_BATCH_ROWS;
+            return;
+        }
+#endif
+        ::cmbf2d::wait_for_ready(ct.ready_sem, target);
     };
 #else
     const auto on_step = [](uint32_t) {};
@@ -202,6 +222,28 @@ void kernel_main() {
         }
         // The whole tile-row, a block of tiles at a time so the input window stays small. Whole because that
         // is the least an untilize can do, even when the walk wants only part of it.
+#ifdef CMBF2D_PROGRESS_SEM
+        if (gate_rows) {
+            // Either the whole step is out, or the chunk holding this tile-row is.
+            volatile tt_l1_ptr uint32_t* ready =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ct.ready_sem));
+            volatile tt_l1_ptr uint32_t* progress =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CMBF2D_PROGRESS_SEM));
+            const uint32_t rel_row = walk.tile_row_of(b) - gate_base_row;
+            const auto released = [&]() {
+                const uint32_t p = *progress;
+                if ((p >> 24) != gate_step) {
+                    return (p >> 24) > gate_step;  // a later step's chunks only start once this step is out
+                }
+                const uint32_t rows = (p >> 16) & 0xFF;
+                return rows != 0 && rel_row / rows < 16 && (p & (1u << (rel_row / rows))) != 0;
+            };
+            invalidate_l1_cache();
+            while (*ready < gate_target && !released()) {
+                invalidate_l1_cache();
+            }
+        }
+#endif
         CircularBuffer cb_in(::cmbf2d::UNT_CB_IN);
         const uint32_t first_tile = walk.tile_row_of(b) * ct.tiles_per_row;
         for (uint32_t t = 0; t < ct.tiles_per_row; t += ct.block_tiles) {
