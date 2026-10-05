@@ -58,14 +58,16 @@ _REGRESSION_CASE = _PerformanceCase(
     batch_heads=8,
     num_chunks=4,
     dim=32,
-    expected_duration_ns=20_336,
+    # Complement-form summaries with FP32 carries (tt_metal_tracker-g1b.7); follow-up tt_metal_tracker-g1b.4.15.
+    expected_duration_ns=21_511,
 )
 _PRODUCTION_CASE = _PerformanceCase(
     "pr7-leaf-bh96-n20-d128",
     batch_heads=96,
     num_chunks=20,
     dim=128,
-    expected_duration_ns=299_691,
+    # Complement-form summaries with FP32 carries (tt_metal_tracker-g1b.7); follow-up tt_metal_tracker-g1b.4.15.
+    expected_duration_ns=315_434,
 )
 _PRODUCTION_BF16 = frozenset({"kd", "q_decay", "final_decay"})
 

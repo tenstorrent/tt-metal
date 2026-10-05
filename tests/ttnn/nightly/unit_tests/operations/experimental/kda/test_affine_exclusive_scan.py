@@ -53,12 +53,13 @@ _UNIT_CASE = _ProductionCase(
     expected_duration_ns=8250,
 )
 
-# Kimi-K3 production layouts. References are pooled medians from two independent
-# three-sample Blackhole runs after scoping synchronization to each independent head.
+# Kimi-K3 production layouts. References are medians of five Blackhole runs with the complement-form (A - I)
+# prefix and its FP32 state add (tt_metal_tracker-g1b.7; follow-up tt_metal_tracker-g1b.4.15 is expected to
+# tighten them).
 _PRODUCTION_CASES = (
-    _ProductionCase("sp1-tp8", 12, 8, 128, 128, 96782),
-    _ProductionCase("sp2-tp4", 24, 4, 128, 128, 76542),
-    _ProductionCase("sp4-tp2", 48, 2, 128, 128, 65000),
+    _ProductionCase("sp1-tp8", 12, 8, 128, 128, 112050),
+    _ProductionCase("sp2-tp4", 24, 4, 128, 128, 91382),
+    _ProductionCase("sp4-tp2", 48, 2, 128, 128, 79808),
 )
 
 
