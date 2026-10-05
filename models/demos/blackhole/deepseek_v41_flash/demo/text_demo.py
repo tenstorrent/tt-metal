@@ -316,6 +316,17 @@ def _run_demo(
             )
             if hasattr(generator.m, "prefill_model"):
                 logger.info(f"prefill timing {getattr(generator.m.prefill_model, 'timing', {})}")
+            if os.environ.get(
+                "DSV41_PREFILL_LOGITS"
+            ):  # one more prefill (not timed) returning the logits of every user's last token
+                _, lg_ = generator.prefill_forward_text(input_tokens_prefill, return_logits=True, **prefill_kw)
+                lg_ = lg_[:batch_size].float()
+                torch.save(lg_, os.environ["DSV41_PREFILL_LOGITS"])
+                for u_ in range(min(batch_size, 2)):
+                    v_, i_ = lg_[u_].topk(5)
+                    logger.info(
+                        f"PREFILL_ONLY user {u_} top5 ids {i_.tolist()} logits {[round(float(x), 3) for x in v_]}"
+                    )
             return
         pre_spec = None
         if spec_k and os.environ.get("DSV41_SPEC_DIAG") == "1":

@@ -548,7 +548,11 @@ class Model:
                 and os.environ.get("DSV41_PREFILL_DYN", "1") != "0"
             ):
                 continue
+            _t = time.perf_counter()
             ix.export_keys(dec.k_cache, int(torch.as_tensor(lens).max()) // self.attns[L].ratio)
+            if os.environ.get("DSV41_PF_TIMING") == "1":
+                ttnn.synchronize_device(self.md)
+                self.log(f"  export_keys layer {L}: {(time.perf_counter() - _t) * 1e3:.0f} ms")
         ttnn.synchronize_device(self.md)
 
     def _post_chunk(self, s0, C):
@@ -633,8 +637,15 @@ class Model:
                 pm.forward_device(bufs, S, s0, C, dyn=True)
                 ttnn.synchronize_device(self.md)
                 self._post_chunk(s0, C)
+        _t0 = time.perf_counter()
         ttnn.synchronize_device(self.md)
+        _t1 = time.perf_counter()
         self._export_index_keys(lens)
+        _t2 = time.perf_counter()
+        if os.environ.get("DSV41_PF_TIMING") == "1":
+            self.log(
+                f"  prefill_dyn tail: sync {(_t1 - _t0) * 1e3:.0f} ms, export_index_keys {(_t2 - _t1) * 1e3:.0f} ms"
+            )
         self.log_dram("prefill end")
         self.timing = dict(pm.timing, total=time.perf_counter() - t_start)
         first = torch.tensor([self._res[b][0] for b in range(B)], dtype=torch.long)
