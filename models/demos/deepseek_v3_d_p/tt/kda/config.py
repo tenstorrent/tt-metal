@@ -73,18 +73,22 @@ _TUNED_PROJECTION_ROWS = 640
 
 def tuned_projection_matmul_configs(
     grid: ttnn.CoreCoord, rows: int, output_k: int, output_n: int
-) -> tuple[ttnn.MinimalMatmulConfig | None, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None]:
+) -> tuple[ttnn.MinimalMatmulConfig, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig]:
     """Return the tuned input and output projection schedules laid out on ``grid``.
 
     Tuned on the 12x10 Blackhole worker grid at 640 rows per device with the production numerics
     (bf16, FP32 destination accumulation); subblocks stay within the 4-tile FP32 destination limit.
-    Returns (None, None) when the blocking does not fit, keeping the auto-selected ttnn.linear configs.
+    Raises when the blocking does not fit: a configuration that requests the tuned schedules never
+    silently runs the auto-selected ttnn.linear configs instead.
     """
     row_tiles = rows // ttnn.TILE_SIZE
     per_core_m = math.ceil(row_tiles / grid.y)
     per_core_n = math.ceil(output_n // ttnn.TILE_SIZE / grid.x)
     if per_core_m % 2 or (output_k // ttnn.TILE_SIZE) % 8:
-        return None, None
+        raise ValueError(
+            f"tuned KDA projection schedules do not fit {rows} rows, output projection K={output_k} "
+            f"on a {grid.x}x{grid.y} grid; per-core M must be even and K a multiple of 8 tiles"
+        )
     input_projection = ttnn.MinimalMatmulConfig(
         M_block_size=2,
         K_block_size=8,
@@ -129,4 +133,24 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
         # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
         tuned_projection_matmuls=active_seq_len_local == _TUNED_PROJECTION_ROWS,
+    )
+
+
+def glm_5_3_flash_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.Topology) -> KDAProgramConfig:
+    """Return the GLM-5.3-Flash program configuration with caller-owned per-axis CCL topology.
+
+    Configured for the Galaxy per-chip geometry its LoudBox proxies run: 640 local rows with 16 heads
+    per chip (LB-A 2x4 SP2xTP4 at T=1280, LB-B 8x1 SP8xTP1 at T=5120 on a quarter-head slice).
+    Recurrence and numerics follow Kimi K3 at the same local length. The projection matmuls keep the
+    auto-selected ttnn.linear configs: the tuned schedules were measured at K3's projection shapes only.
+    """
+    if active_seq_len_local != 640:
+        raise ValueError(f"no tuned GLM-5.3-Flash recurrence configuration for local T={active_seq_len_local}")
+    return KDAProgramConfig(
+        recurrence=KDARecurrenceProgramConfig(local_scan_strategy="grouped", summary_group_chunks=20),
+        qkv_channel_chunk_size=512,
+        tp_ccl_topology=tp_ccl_topology,
+        gated_rms_output_dtype=ttnn.bfloat16,
+        output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
+        tuned_projection_matmuls=False,
     )
