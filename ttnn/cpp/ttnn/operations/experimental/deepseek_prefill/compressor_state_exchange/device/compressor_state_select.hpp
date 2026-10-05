@@ -7,6 +7,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt_stl/reflection.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/distributed/types.hpp"
@@ -31,6 +32,15 @@ struct CompressorStateSelectProgramFactory {
         const CompressorStateSelectInputs&,
         Tensor&,
         const std::optional<ttnn::MeshCoordinate>&);
+
+    // propagate_trailing and last_active_rank only pick the source slot in the runtime args, so
+    // they are left out of the program hash and re-applied here on every cache hit.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program&,
+        const CompressorStateSelectParams&,
+        const CompressorStateSelectInputs&,
+        Tensor&,
+        const std::optional<ttnn::MeshCoordinate>&);
 };
 
 struct CompressorStateSelectDeviceOperation {
@@ -45,6 +55,7 @@ struct CompressorStateSelectDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static topology_return_value_t compute_output_topologies(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::experimental::prim
