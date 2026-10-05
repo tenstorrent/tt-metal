@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt_stl/assert.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -54,7 +55,7 @@ ApplyOccupancy compute_apply_occupancy(const Tensor& x) {
     occ.grid_y = static_cast<uint32_t>(grid.y);
     const uint32_t max_cores = occ.grid_x * occ.grid_y;
     occ.num_cores = std::min(max_cores, occ.num_rows);
-    occ.n_rows_used = (occ.num_cores + occ.grid_x - 1) / occ.grid_x;
+    occ.n_rows_used = tt::div_up(occ.num_cores, occ.grid_x);
     return occ;
 }
 
@@ -137,11 +138,13 @@ RMSNormBwApplyOperation::spec_return_value_t RMSNormBwApplyOperation::compute_ou
     std::vector<std::optional<tt::tt_metal::TensorSpec>> specs(2);
     specs[0] = tt::tt_metal::TensorSpec(
         tensor_args.x.logical_shape(),
-        TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), operation_attributes.memory_config));
+        tt::tt_metal::TensorLayout(
+            DataType::FLOAT32, tt::tt_metal::PageConfig(Layout::TILE), operation_attributes.memory_config));
     if (tensor_args.gamma.has_value()) {
         specs[1] = tt::tt_metal::TensorSpec(
             tensor_args.gamma->logical_shape(),
-            TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), tensor_args.gamma->memory_config()));
+            tt::tt_metal::TensorLayout(
+                DataType::FLOAT32, tt::tt_metal::PageConfig(Layout::TILE), tensor_args.gamma->memory_config()));
     }
     return specs;
 }

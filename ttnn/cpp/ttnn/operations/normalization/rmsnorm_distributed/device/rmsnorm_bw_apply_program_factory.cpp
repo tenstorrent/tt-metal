@@ -80,7 +80,7 @@ struct ApplyWorkSplit {
     // Tile rows per [N, C] slice, and valid rows in each slice's last tile row (0 = all valid).
     uint32_t Ht = 0;
     uint32_t h_tail = 0;
-    CoreCoord grid{};
+    CoreCoord grid;
     CoreRangeSet core_ranges;
 };
 

@@ -186,7 +186,7 @@ Tensor mean_from_gathered_stats(
     auto summed = ttnn::sum(
         partials,
         /*dim_arg=*/3,
-        /*keep_dim=*/true,
+        /*keepdim=*/true,
         std::nullopt,
         compute_kernel_config);
     return ttnn::multiply(summed, 1.0f / full_width);
