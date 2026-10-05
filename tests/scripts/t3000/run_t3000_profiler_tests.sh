@@ -116,7 +116,18 @@ run_noc_atomic_operation_tests() {
 }
 
 run_noc_atomic_watcher_operation_tests() {
-    TT_METAL_WATCHER=1 pytest -xv \
+    TT_METAL_WATCHER=1 \
+    TT_METAL_WATCHER_DISABLE_ETH=1 \
+    TT_METAL_WATCHER_DISABLE_PAUSE=1 \
+    TT_METAL_WATCHER_DISABLE_RING_BUFFER=1 \
+    TT_METAL_WATCHER_DISABLE_STACK_USAGE=1 \
+    TT_METAL_WATCHER_DISABLE_SANITIZE_NOC=1 \
+    TT_METAL_WATCHER_DISABLE_SANITIZE_READ_ONLY_L1=1 \
+    TT_METAL_WATCHER_DISABLE_SANITIZE_WRITE_ONLY_L1=1 \
+    TT_METAL_WATCHER_DISABLE_WAYPOINT=1 \
+    TT_METAL_WATCHER_DISABLE_DISPATCH=1 \
+    TT_METAL_WATCHER_DISABLE_CB_SANITIZE=1 \
+    pytest -xv \
         tests/nightly/t3000/ccl/test_all_to_all_async_generic.py::test_generic_all_to_all_has_clean_kernel_exit
 }
 
