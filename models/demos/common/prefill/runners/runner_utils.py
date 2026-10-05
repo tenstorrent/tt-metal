@@ -165,13 +165,6 @@ def resolve_trace_dir(path) -> Path:
 
 
 def load_trace_golden_span(trace_dir) -> tuple:
-    """Absolute prompt positions ``[start, end)`` that a trace's per-token streams describe.
-
-    ``capture_rows`` marks a trace that covers only a window of a longer prefill: its streams are
-    stored from row 0 while row ``r`` stands for position ``start + r``, so a reader that ignores the
-    window compares the right number of rows against the wrong tokens. Without it the streams start
-    at position 0 and row index and position coincide.
-    """
     import json
 
     with open(Path(trace_dir) / "metadata.json") as f:

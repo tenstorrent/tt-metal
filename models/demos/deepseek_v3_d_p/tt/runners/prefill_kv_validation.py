@@ -63,12 +63,6 @@ def _load_kv_pt_trace(pt_path: str) -> dict:
 
 
 def _load_sharded_rows(layer_dir: Path, key: str, start: int, total_len: int) -> "torch.Tensor":
-    """Rows ``[start, start + total_len)`` of a row-sharded stream, concatenated in row order.
-
-    Every ``rows_<first>_<last>.safetensors`` name carries the row span it holds, so a windowed read
-    opens only the shards that overlap it rather than the whole stream from row 0 -- at 1M context
-    that is the difference between two shards and two hundred.
-    """
     import torch
     from safetensors import safe_open
 
@@ -183,13 +177,8 @@ def _load_golden_index_k(
 ) -> "torch.Tensor":
     """[total_len, index_head_dim] golden indexer key for one layer, from the vLLM trace's row-sharded
     dsa/indexer_k_layer_N/rows_<start>_<end>.safetensors shards (concatenated by start row). Mirrors
-    _load_golden_kv_post, `start` included, but reads the dsa/ subdir and the indexer_k_layer_N key.
-
-    ``rope_layout`` is the pairing the TRACE stored; ``interleaved`` is the device's own, ``half_split``
-    is re-based onto it. Re-basing needs the rope table for the positions it is re-basing, and
-    ``get_cos_sin_matrix`` only builds one from position 0, so it cannot serve a windowed read: the two
-    are refused together rather than silently rotated by the wrong angles.
-    """
+    _load_golden_kv_post but reads the dsa/ subdir and the indexer_k_layer_N key. ``rope_layout`` is
+    the pairing the TRACE stored; ``interleaved`` is the device's own, ``half_split`` is re-based."""
     key = f"indexer_k_layer_{layer_idx}"
     golden = _load_sharded_rows(Path(trace_dir) / "dsa" / key, key, start, total_len)
     if rope_layout == "interleaved":

@@ -665,11 +665,6 @@ def _mtp_golden_source(trunk_trace_dir):
 def _check_mtp_kv_slots(
     table, device_map: dict, slot_id: int, window, read_end: int, head_dim: int, kv_lora: int, trace_dir
 ):
-    """Each MTP level's KV slot, over the same window the trunk layers are scored on.
-
-    The levels share the trunk's cache and its block-cyclic layout, so a window that is valid there
-    is valid here; scoring them over a different span would put two token ranges behind one verdict.
-    """
     first_pos, skip_rows, cmp_len, golden_offset = window
     span = f"[{first_pos + skip_rows},{first_pos + skip_rows + cmp_len})"
     from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import _load_golden_kv_post, kvpe_golden_present
@@ -996,27 +991,6 @@ def _full_indexer_layer_indices(num_layers: int):
 
 
 def _resolve_pcc_window(trace_dir, real_len: int, tokens_per_block: int) -> tuple:
-    """``(first_pos, skip_rows, cmp_len, golden_offset)`` for one slot's KV-cache compare.
-
-    ``first_pos`` is the position the device read starts at (block-aligned, because the cache is
-    block-cyclic and a read cannot begin mid-block), ``skip_rows`` drops the over-read at its front,
-    ``cmp_len`` is how many positions are scored, and ``golden_offset`` is the golden row the first
-    scored position lives at.
-
-    By default the window comes from the trace: a golden whose ``capture_rows`` says it holds a
-    slice of a longer prefill is scored over exactly that slice, from golden row 0. Such a golden is
-    the only reference a 1M capture can ship, and it is also the better gate -- the deepest chunk is
-    where a context-length bug surfaces, and the whole prefix has to have been right to reach it --
-    while the read shrinks from a million positions to the captured window.
-
-    The env overrides are for a golden whose metadata does not describe its own window:
-    PREFILL_PCC_WINDOW_START/END score an explicit ``[START, END)``, PREFILL_PCC_TAIL_WINDOW=W the
-    last W positions. Both move the device read only, so both require PREFILL_PCC_GOLDEN_OFFSET to
-    name the golden row that window begins at: moving one read without the other scores unrelated
-    positions, and every layer then lands near zero, which reads as a broken model rather than as a
-    misconfiguration. There is no safe value to infer (a head+tail capture wants the head length, a
-    full-length capture wants the window start itself), so it must be stated, and 0 states it.
-    """
     from models.demos.common.prefill.runners.runner_utils import load_trace_golden_span
 
     tail_window = int(os.environ.get("PREFILL_PCC_TAIL_WINDOW", "0"))

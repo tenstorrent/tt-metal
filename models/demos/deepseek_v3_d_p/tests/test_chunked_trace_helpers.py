@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Host-only coverage for the chunked-prefill trace plumbing the standalone runner depends on:
 resolve_trace_dir (descend into the vllm run-hash subdir), load_trace_token_ids, and the
-format-aware golden loaders (_load_golden_kv_post, _load_golden_index_k) that reassemble both the
-DeepSeek single-file golden and the Kimi vllm row-sharded layout into one [seq, dim] tensor, and
-the windowed-golden path (load_trace_golden_span + offset reads) a last-chunk trace is scored on.
+format-aware golden loader (_load_golden_kv_post) that reassembles both the DeepSeek single-file
+golden and the Kimi vllm row-sharded layout into one [seq, 576] tensor.
 
 Device-level chunked correctness (full transformer, both variants) is covered by the standalone
 runner's KV-cache PCC; this only guards the trace-format handling so a layout change is caught in CI."""
@@ -74,7 +73,6 @@ def test_golden_row_shard_concat_is_contiguous():
 
 
 def _write_windowed_trace(root: Path, *, capture_rows, rows_per_shard=64, total_rows=256, dim=8):
-    """A miniature vllm-layout trace whose kv_cache and dsa streams hold only `capture_rows`."""
     import torch
     from safetensors.torch import save_file
 
@@ -93,20 +91,17 @@ def _write_windowed_trace(root: Path, *, capture_rows, rows_per_shard=64, total_
 
 
 def test_golden_span_defaults_to_prefix(tmp_path):
-    """No capture_rows -> the streams start at position 0 and row index is the position."""
     (tmp_path / "metadata.json").write_text(json.dumps({"token_ids": list(range(4096))}))
     assert load_trace_golden_span(tmp_path) == (0, 4096)
 
 
 def test_golden_span_reads_capture_rows(tmp_path):
-    """capture_rows is the absolute prompt window the stored rows stand for."""
     trace = _write_windowed_trace(tmp_path, capture_rows=(250880, 256000))
     assert load_trace_golden_span(trace) == (250880, 256000)
 
 
 @pytest.mark.parametrize("load", [_load_golden_kv_post, _load_golden_index_k])
 def test_sharded_offset_read_crosses_shards(tmp_path, load):
-    """A `start` offset into the row-sharded layout returns those rows, stitched across shards."""
     import torch
 
     trace = _write_windowed_trace(tmp_path, capture_rows=(0, 256))
@@ -116,7 +111,6 @@ def test_sharded_offset_read_crosses_shards(tmp_path, load):
 
 
 def test_sharded_offset_read_past_the_end_raises(tmp_path, expect_error):
-    """Asking for rows the trace does not hold fails instead of returning a short tensor."""
     trace = _write_windowed_trace(tmp_path, capture_rows=(0, 256))
     with expect_error(FileNotFoundError, "no shard covering rows"):
         _load_golden_kv_post(trace, 0, 32, start=1024)
