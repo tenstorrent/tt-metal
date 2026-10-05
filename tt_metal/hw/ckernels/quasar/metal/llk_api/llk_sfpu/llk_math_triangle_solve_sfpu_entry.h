@@ -22,7 +22,7 @@ inline void llk_math_triangle_solve_sfpu_tile(
     [[maybe_unused]] const std::uint32_t l1_base,
     [[maybe_unused]] const std::uint32_t idst_in,
     [[maybe_unused]] const std::uint32_t idst_out) {
-    static_assert(triangle_solve_supported_v<L_FORMAT>, "triangle_solve_tile is implemented on Blackhole only");
+    static_assert(triangle_solve_supported_v<L_FORMAT>, "triangle_solve_tile is not implemented on Quasar");
 }
 
 }  // namespace ckernel
