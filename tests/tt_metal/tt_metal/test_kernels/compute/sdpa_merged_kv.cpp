@@ -21,6 +21,7 @@ void kernel_main() {
     constexpr auto cb_k = tt::CBIndex::c_1;
     constexpr auto cb_v = tt::CBIndex::c_2;
     constexpr auto cb_out = tt::CBIndex::c_16;
+    constexpr auto cb_stats = tt::CBIndex::c_17;
     constexpr std::uint32_t packed_tile_size = 16;
     constexpr std::uint32_t output_offset = 0;
     constexpr std::uint32_t max_offset = packed_tile_size * v_tiles;
@@ -38,6 +39,7 @@ void kernel_main() {
         pack_block_contiguous_init(cb_out);
         cb_wait_front(cb_q, qk_tiles);
         cb_reserve_back(cb_out, v_tiles);
+        cb_reserve_back(cb_stats, 1);
         tile_regs_acquire();
         for (std::uint32_t chunk = 0; chunk < chunks; ++chunk) {
             // The old layouts omit both new parameters to test compatibility.
@@ -70,7 +72,7 @@ void kernel_main() {
                     sum_offset,
                     correction_offset,
                     chunk == 0,
-                    false,
+                    chunk == chunks - 1,
                     false);
             } else {
                 compute_sdpa_chunk<
@@ -98,11 +100,16 @@ void kernel_main() {
                     sum_offset,
                     correction_offset,
                     chunk == 0,
-                    false,
+                    chunk == chunks - 1,
                     false);
             }
         }
-        compute_sdpa_recip<v_tiles, false, scale, v_tiles>(cb_q, sum_offset, correction_offset, output_offset);
+        // Emit the partial O and max/sum exactly as a distributed SDPA worker.
+        // Reciprocal normalization has separate coverage; keeping it out of this
+        // layout test avoids BF16 cancellation in the reciprocal-minus-one path.
+        PACK((TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU)));
+        pack_block_contiguous(max_offset / packed_tile_size, cb_stats, 1);
+        cb_push_back(cb_stats, 1);
         PACK((t6_semaphore_wait_on_zero<p_stall::STALL_PACK>(semaphore::FPU_SFPU)));
         pack_block_contiguous(0, cb_out, v_tiles);
         PACK((t6_semaphore_get<p_stall::PACK>(semaphore::FPU_SFPU)));

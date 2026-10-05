@@ -271,8 +271,8 @@ void run_sdpa_tail(
     }
 }
 
-// Run the complete chunk API, including online softmax across two chunks and
-// normalization. Layout 0 preserves the original shared K/V defaults; layout 1
+// Run the chunk API through its partial-output path, including online softmax
+// across two chunks. Layout 0 preserves the original shared K/V defaults; layout 1
 // preserves separate V; layout 2 stores [K, padding, V, padding] in each row.
 void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, bool full_sync) {
     auto& cq = mesh.mesh_command_queue();
@@ -300,11 +300,13 @@ void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, boo
     auto input_k = make_buffer(rounds * chunks * chunk_tiles * row_tiles * full_tile_bytes);
     auto input_v = make_buffer(rounds * chunks * chunk_tiles * v_tiles * full_tile_bytes);
     auto output = make_buffer(rounds * v_tiles * short_tile_bytes);
-    for (const auto cb : {tt::CBIndex::c_0, tt::CBIndex::c_16}) {
+    auto output_stats = make_buffer(rounds * short_tile_bytes);
+    for (const auto cb : {tt::CBIndex::c_0, tt::CBIndex::c_16, tt::CBIndex::c_17}) {
+        const auto tiles = cb == tt::CBIndex::c_17 ? 1 : qk_tiles;
         CreateCircularBuffer(
             program,
             core,
-            CircularBufferConfig(qk_tiles * short_tile_bytes, {{cb, tt::DataFormat::Float16_b}})
+            CircularBufferConfig(tiles * short_tile_bytes, {{cb, tt::DataFormat::Float16_b}})
                 .set_page_size(cb, short_tile_bytes)
                 .set_tile_dims(cb, Tile({sdpa_tail_rows, sdpa_tail_cols})));
     }
@@ -325,9 +327,12 @@ void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, boo
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = args});
     const auto writer = CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_sdpa_tail_reconciliation.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = {rounds, v_tiles, false}});
     CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/sdpa_merged_kv.cpp",
@@ -345,6 +350,9 @@ void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, boo
     std::vector<bfloat16> k(rounds * chunks * chunk_tiles * row_tiles * 1024, bfloat16(8.0f));
     std::vector<bfloat16> v(rounds * chunks * chunk_tiles * v_tiles * 1024);
     std::vector<float> golden(rounds * v_tiles * sdpa_tail_elements);
+    std::vector<float> golden_numerator(golden.size());
+    std::vector<float> golden_max(rounds * sdpa_tail_rows);
+    std::vector<float> golden_sum(rounds * sdpa_tail_rows);
     auto full_index = [](std::uint32_t row, std::uint32_t col) {
         return (row / 16 * 2 + col / 16) * 256 + row % 16 * 16 + col % 16;
     };
@@ -352,7 +360,10 @@ void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, boo
         return static_cast<float>(static_cast<int>((round * 3 + row * 7 + dim * 5) % 17) - 8) / 16.0f;
     };
     auto k_value = [](std::uint32_t round, std::uint32_t token, std::uint32_t dim) {
-        return static_cast<float>((round * 5 + token * 7 + dim * 3) % 17) / 16.0f;
+        // This exactly representable chunk bias changes the running maximum
+        // for some query rows, exercising the previous-output correction too.
+        return static_cast<float>((round * 5 + token * 7 + dim * 3) % 17) / 16.0f +
+               static_cast<float>(token / (chunk_tiles * 32));
     };
     auto v_value = [&](std::uint32_t round, std::uint32_t token, std::uint32_t dim) {
         return layout == 0 ? k_value(round, token, dim)
@@ -386,18 +397,23 @@ void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, boo
                 scores[token] *= 0.5;
             }
             const double maximum = *std::max_element(scores.begin(), scores.end());
+            // The chunk API reports the maximum before applying the 0.5 scale.
+            golden_max[round * sdpa_tail_rows + row] = maximum / 0.5;
             double denominator = 0.0;
             for (auto& score : scores) {
                 score = std::exp(score - maximum);
                 denominator += score;
             }
+            golden_sum[round * sdpa_tail_rows + row] = denominator;
             for (std::uint32_t dim = 0; dim < v_tiles * 32; ++dim) {
                 double numerator = 0.0;
                 for (std::uint32_t token = 0; token < tokens; ++token) {
                     numerator += scores[token] * v_value(round, token, dim);
                 }
-                golden[(round * v_tiles + dim / 32) * sdpa_tail_elements + sdpa_tail_face_index(row, dim % 32)] =
-                    numerator / denominator;
+                const auto index =
+                    (round * v_tiles + dim / 32) * sdpa_tail_elements + sdpa_tail_face_index(row, dim % 32);
+                golden_numerator[index] = numerator;
+                golden[index] = numerator / denominator;
             }
         }
     }
@@ -407,7 +423,7 @@ void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, boo
         distributed::EnqueueWriteMeshBuffer(cq, input_v, pack_bfloat16_vec_into_uint32_vec(v), true);
     }
     SetRuntimeArgs(program, reader, core, {input_q->address(), input_k->address(), input_v->address()});
-    SetRuntimeArgs(program, writer, core, {output->address(), 0, rounds * v_tiles});
+    SetRuntimeArgs(program, writer, core, {output->address(), output_stats->address()});
     distributed::MeshWorkload workload;
     const distributed::MeshCoordinate zero(0, 0);
     workload.add_program(distributed::MeshCoordinateRange(zero, zero), std::move(program));
@@ -417,13 +433,39 @@ void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, boo
     distributed::EnqueueReadMeshBuffer(cq, result, output, true);
     const auto actual = unpack_uint32_vec_into_bfloat16_vec(result);
     ASSERT_EQ(actual.size(), golden.size());
+    distributed::EnqueueReadMeshBuffer(cq, result, output_stats, true);
+    const auto actual_stats = unpack_uint32_vec_into_bfloat16_vec(result);
+    ASSERT_EQ(actual_stats.size(), rounds * sdpa_tail_elements);
+    for (std::uint32_t round = 0; round < rounds; ++round) {
+        for (std::uint32_t row = 0; row < sdpa_tail_rows; ++row) {
+            const auto index = round * sdpa_tail_elements + sdpa_tail_face_index(row, 0);
+            const auto golden_index = round * sdpa_tail_rows + row;
+            ASSERT_NEAR(
+                static_cast<float>(actual_stats[index]),
+                golden_max[golden_index],
+                0.03f * std::abs(golden_max[golden_index]))
+                << "max round=" << round << ", row=" << row;
+            const float sum = static_cast<float>(actual_stats[index + 1]);
+            ASSERT_TRUE(std::isfinite(sum));
+            ASSERT_GT(sum, 0.0f);
+            ASSERT_NEAR(sum, golden_sum[golden_index], 0.03f * golden_sum[golden_index])
+                << "sum round=" << round << ", row=" << row;
+        }
+    }
     double squared_error = 0.0;
     double squared_golden = 0.0;
     for (std::uint32_t index = 0; index < actual.size(); ++index) {
-        const float value = static_cast<float>(actual[index]);
-        ASSERT_TRUE(std::isfinite(value)) << "output index=" << index;
-        // Account for the existing BF16 QK/OV accumulation and fast approximate
-        // exponential; these are unchanged by the layout parameters.
+        const float numerator = static_cast<float>(actual[index]);
+        ASSERT_TRUE(std::isfinite(numerator)) << "output index=" << index;
+        ASSERT_NEAR(numerator, golden_numerator[index], 0.03f * std::abs(golden_numerator[index]))
+            << "numerator index=" << index;
+        const auto round = index / (v_tiles * sdpa_tail_elements);
+        const auto row = index % (sdpa_tail_rows * 16) / 16;
+        const auto sum_index = round * sdpa_tail_elements + sdpa_tail_face_index(row, 0) + 1;
+        // Normalize on the host to isolate chunk addressing from the existing
+        // BF16 reciprocal-minus-one rounding. Its API is tested separately by
+        // SdpaRecipFidelityAndSignalling; these attention tolerances stay strict.
+        const float value = numerator / static_cast<float>(actual_stats[sum_index]);
         ASSERT_NEAR(value, golden[index], 0.03f * std::abs(golden[index])) << "output index=" << index;
         squared_error += std::pow(static_cast<double>(value) - golden[index], 2);
         squared_golden += std::pow(static_cast<double>(golden[index]), 2);
