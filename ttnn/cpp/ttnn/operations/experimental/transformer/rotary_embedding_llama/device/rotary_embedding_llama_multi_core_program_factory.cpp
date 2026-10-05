@@ -97,7 +97,8 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
 
     // The reader writes each batch's cos/sin rows contiguously from the write pointer with no wrap check, so the
     // buffer must be a whole number of those per-batch blocks; only rotary_seq_len_t rows are read per batch.
-    uint32_t num_cos_sin_tiles = 2 * head_dim_t * std::min(num_sin_cos_rows_per_core, rotary_seq_len_t);
+    uint32_t num_cos_sin_tiles =
+        2 * head_dim_t * std::max<uint32_t>(1, std::min(num_sin_cos_rows_per_core, rotary_seq_len_t));
 
     uint32_t input_cb_num_tiles = num_sin_cos_rows_per_core * num_input_tiles;
 
