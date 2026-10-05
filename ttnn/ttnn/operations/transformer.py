@@ -89,7 +89,7 @@ ttnn.attach_golden_function(
 )
 
 
-def _golden_function(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask, **_):
+def _golden_function(input_tensor: ttnn.Tensor, *, head_size=None, attention_mask=None, **_):
     import torch
 
     if head_size is not None:
