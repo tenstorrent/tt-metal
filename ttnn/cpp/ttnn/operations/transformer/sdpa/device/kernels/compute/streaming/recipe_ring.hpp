@@ -31,7 +31,11 @@ void sdpa_recipe_ring_segment(
     for (uint32_t q = q_begin; q < q_end; ++q) {
         RecipeAccumulatorState state = staged ? RecipeAccumulatorState{{12, 10, 8}, {13, 11, 9}} : resident;
         if (staged && !first_ring) {
+#ifdef SDPA_RING_STREAM_STATE
+            recipe_checkpoint_restore_stream<q_tiles, 17, 18>(state, q);
+#else
             recipe_checkpoint<q_tiles, 17, 18, d_tiles>(state, q, true);
+#endif
         }
         uint32_t processed = 0;
         for (uint32_t k = 0; k < total_chunks; ++k) {
@@ -43,6 +47,12 @@ void sdpa_recipe_ring_segment(
             recipe_k_tile_offset = 0;
             recipe_k_valid_rows = rows - origin < chunk_rows ? rows - origin : chunk_rows;
             const bool last_k = ++processed == valid_chunks;
+#ifdef SDPA_RING_STREAM_STATE
+            if (staged && !last_ring && last_k) {
+                recipe_stream_save_slot = q;  // the fused chunk hands its finished O rows to the writer
+                recipe_stream_saved_rows = 0;
+            }
+#endif
             sdpa_segment_v2<
                 q_tiles,
                 k_tiles,
@@ -66,7 +76,12 @@ void sdpa_recipe_ring_segment(
                 state, 1, last_ring && last_k, last_k && (staged || last_ring));
         }
         if (staged && !last_ring) {
+#ifdef SDPA_RING_STREAM_STATE
+            // The next block of the first ring iteration reuses the banks without a restore.
+            recipe_checkpoint_save_tail<q_tiles, 17, 18>(state, q, first_ring && q + 1 < q_end);
+#else
             recipe_checkpoint<q_tiles, 17, 18, d_tiles>(state, q, false);
+#endif
         }
         if (!staged) {
             resident = state;
