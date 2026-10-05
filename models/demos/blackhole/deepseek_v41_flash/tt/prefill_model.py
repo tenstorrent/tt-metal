@@ -17,7 +17,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_attention import clear_chunk_caches, pad_len
-from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import colsplit_active
+from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import colsplit_active, unpack_streams
 
 T = 32
 ER_RM = (
@@ -206,6 +206,7 @@ class DSV41PrefillModel:
                     pl_.pmoe.warmup()
         for lid, pl in self.layers:
             if lid in self.engram:
+                xs, pres = unpack_streams(xs, pres)
                 t0 = time.perf_counter()
                 fe = (
                     self.engram[lid].forward
@@ -264,7 +265,9 @@ class DSV41PrefillModel:
             xs, pres = outs, pouts
             sync("layers", t0)
             if hook is not None:
+                xs, pres = unpack_streams(xs, pres)
                 hook(lid, xs, pres)
+        xs, pres = unpack_streams(xs, pres)
         if dyn:
             self.dyn_out = (xs, pres)
             return None

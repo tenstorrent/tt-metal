@@ -19,7 +19,7 @@ import torch
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt import paged_ops as P
 from models.demos.blackhole.deepseek_v41_flash.tt.attention import HEAD_DIM
-from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import colsplit_active
+from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import colsplit_active, unpack_streams
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_model import DSV41PrefillModel, T
 
 SKIP = 0xFFFFFFFF
@@ -269,6 +269,7 @@ class GenPrefillModel(DSV41PrefillModel):
         sync("embedding", t0)
         for lid, pl in self.layers:
             if lid in self.engram:
+                xs, pres = unpack_streams(xs, pres)
                 t0 = time.perf_counter()
                 kin = erows_dev[lid].shape[3]
                 new = [
@@ -295,7 +296,9 @@ class GenPrefillModel(DSV41PrefillModel):
             xs, pres = outs, pouts
             sync("layers", t0)
             if hook is not None:
+                xs, pres = unpack_streams(xs, pres)
                 hook(lid, xs, pres)
+        xs, pres = unpack_streams(xs, pres)
         t0 = time.perf_counter()
         out = self.ragged_tail(xs, pres, s0, C, last_pos, want_logits)
         for x in xs:
