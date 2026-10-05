@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import tempfile
+import time
 import unittest
 
 import formal_campaign as campaign
@@ -86,6 +87,24 @@ class FormalCampaignTests(unittest.TestCase):
     def test_artifact_operation_names_are_bounded(self):
         self.assertTrue(campaign.operation_slug("mulint32-fresh"))
         self.assertFalse(campaign.operation_slug("../outside"))
+
+    def test_checkpoint_is_running_until_every_selected_row_finishes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            records = [{"op": "a", "status": "PROVEN_EQUIVALENT"}]
+            campaign.write_results(root, records, {}, time.monotonic(), 2)
+            checkpoint = json.loads((root / "formal-results.json").read_text())
+            self.assertEqual(checkpoint["status"], "RUNNING")
+            self.assertEqual(checkpoint["selected"], 1)
+            self.assertEqual(checkpoint["expected_total"], 2)
+            self.assertEqual(checkpoint["formal_admission"], "FOLLOWUP_REQUIRED")
+            self.assertEqual(checkpoint["followup_required"], 1)
+
+            records.append({"op": "b", "status": "DIVERGENT"})
+            campaign.write_results(root, records, {}, time.monotonic(), 2)
+            complete = json.loads((root / "formal-results.json").read_text())
+            self.assertEqual(complete["status"], "COMPLETE")
+            self.assertEqual(complete["selected"], complete["expected_total"])
 
 
 if __name__ == "__main__":

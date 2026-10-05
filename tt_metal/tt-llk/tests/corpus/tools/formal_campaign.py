@@ -495,19 +495,33 @@ def preflight(tests: Path, python: Path, sim: Path) -> dict:
     }
 
 
-def write_results(root: Path, records: list[dict], metadata: dict, started: float) -> None:
+def write_results(
+    root: Path,
+    records: list[dict],
+    metadata: dict,
+    started: float,
+    expected_total: int,
+) -> None:
+    completed = len(records)
+    if completed > expected_total:
+        raise ValueError("completed records exceed expected total")
     counts = Counter(record["status"] for record in records)
     operational_failures = sum(counts[status] for status in OPERATIONAL_FAILURES)
     admitted = counts["PROVEN_EQUIVALENT"] + counts["PROVEN_EQUIVALENT_ON_DOMAIN"]
+    if completed < expected_total:
+        campaign_status = "RUNNING"
+    else:
+        campaign_status = "INCOMPLETE" if operational_failures else "COMPLETE"
     summary = {
         "schema_version": 1,
-        "status": "INCOMPLETE" if operational_failures else "COMPLETE",
-        "selected": len(records),
+        "status": campaign_status,
+        "selected": completed,
+        "expected_total": expected_total,
         "counts": dict(sorted(counts.items())),
         "operational_failures": operational_failures,
-        "formal_admission": "ALL_PROVEN" if admitted == len(records) else "FOLLOWUP_REQUIRED",
+        "formal_admission": "ALL_PROVEN" if completed == expected_total and admitted == expected_total else "FOLLOWUP_REQUIRED",
         "formally_admitted": admitted,
-        "followup_required": len(records) - admitted,
+        "followup_required": expected_total - admitted,
         "wall_seconds": round(time.monotonic() - started, 3),
         "metadata": metadata,
         "results": records,
@@ -606,6 +620,7 @@ def main(argv: list[str] | None = None) -> int:
                 [records_by_index[i] for i in sorted(records_by_index)],
                 metadata,
                 started,
+                len(ops),
             )
     else:
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
@@ -628,6 +643,7 @@ def main(argv: list[str] | None = None) -> int:
                     [records_by_index[i] for i in sorted(records_by_index)],
                     metadata,
                     started,
+                    len(ops),
                 )
     records = [records_by_index[i] for i in range(len(ops))]
     return 2 if any(record["status"] in OPERATIONAL_FAILURES for record in records) else 0
