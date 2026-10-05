@@ -137,10 +137,10 @@ InterProcessCounterChannel::InterProcessCounterChannel(const std::string& shm_na
         ::munmap(seg_, sizeof(InterProcessCounterSegment));
         seg_ = nullptr;
         ::shm_unlink(shm_path_.c_str());
-        try {
-            ShmResourceTracker::instance().untrack_shm(shm_path_);
-        } catch (...) {
-        }
+        log_warning(
+            LogMetal,
+            "InterProcessCounterChannel: registering {} with ShmResourceTracker failed; segment unlinked",
+            shm_path_);
         throw;
     }
 }
