@@ -36,7 +36,6 @@ from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import (
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
-    moe_fabric_payload,
     torus_xy_device_params,
     torus_y_device_params,
 )
@@ -894,28 +893,28 @@ def _ci_unsupported_param_combos_ds_moe(**params):
         # its non-TP ops on the assumption that this slot is an SP=8 run.
         pytest.param(
             (8, 1),
-            torus_y_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
+            torus_y_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
             id="torus-y-8x1",
         ),
         pytest.param(
             (4, 2),
-            fabric2d_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
+            fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
             id="fabric2d-mesh-4x2",
         ),
         pytest.param(
             (2, 4),
-            fabric2d_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
+            fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-mesh-2x4",
         ),
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
+            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -989,28 +988,28 @@ def test_ds_moe(
     [
         pytest.param(
             (8, 1),
-            torus_y_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
+            torus_y_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
             id="torus-y-8x1",
         ),
         pytest.param(
             (4, 2),
-            fabric2d_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
+            fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
             id="fabric2d-mesh-4x2",
         ),
         pytest.param(
             (2, 4),
-            fabric2d_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
+            fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-mesh-2x4",
         ),
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
+            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -1121,21 +1120,21 @@ def _run_moe_case(
     [
         pytest.param(
             (4, 2),
-            fabric2d_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
+            fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
             id="fabric2d-mesh-4x2",
         ),
         pytest.param(
             (2, 4),
-            fabric2d_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
+            fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-mesh-2x4",
         ),
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(KimiK27Config)),
+            torus_xy_device_params(fabric_payload_size=KimiK27Config.FABRIC_PAYLOAD_SIZE),
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -1203,14 +1202,14 @@ def test_kimi_moe(
         # at TP=1 the shared expert is unsharded and its gate matmul's CBs exceed L1.
         pytest.param(
             (2, 4),
-            fabric2d_device_params(fabric_payload_size=moe_fabric_payload(KimiK3Config)),
+            fabric2d_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-mesh-2x4",
         ),
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(KimiK3Config)),
+            torus_xy_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -1322,7 +1321,7 @@ def test_kimi_k3_moe(
             # reports green. FABRIC_2D is what this test ran under on ssalice/mistral4-119b-prefill,
             # where it genuinely passed on CI. Revert once bh_sc1 is ring-cabled.
             fabric2d_device_params(
-                fabric_payload_size=moe_fabric_payload(MistralSmall4Config),
+                fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE,
             ),
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
@@ -1392,14 +1391,14 @@ def test_mistral4_moe(
     [
         pytest.param(
             (8, 1),
-            torus_y_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
+            torus_y_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
             id="torus-y-8x1",
         ),
         pytest.param(
             (4, 2),
-            fabric2d_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
+            fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
             id="fabric2d-mesh-4x2",
@@ -1408,7 +1407,7 @@ def test_mistral4_moe(
         # row covers the 32-chip fabric and the 4-group combine, not expert density.
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
+            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",

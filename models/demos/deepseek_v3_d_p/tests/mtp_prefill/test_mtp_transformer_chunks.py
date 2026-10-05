@@ -28,7 +28,7 @@ from models.demos.common.prefill.runners.runner_utils import MTP_PAD_TOKEN_ID, n
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import SparseMLAReference
 from models.demos.deepseek_v3_d_p.reference.glm_5_3.mtp import glm_mtp_predictor_reference
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import moe_fabric_payload, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions, rotated_row_of_position
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -297,7 +297,7 @@ _MESH_PARAMS = [
     pytest.param(
         (8, 4),
         torus_xy_device_params(
-            fabric_payload_size=moe_fabric_payload(GLM53Config),
+            fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE,
             worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
         ),
         2,

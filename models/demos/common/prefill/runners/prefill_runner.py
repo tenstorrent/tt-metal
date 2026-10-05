@@ -635,11 +635,7 @@ def main() -> None:
     )
 
     mesh_device = open_mesh_device(
-        GLOBAL_MESH_SHAPE,
-        MODEL_CFG,
-        l1_small_size=_L1_SMALL_SIZE,
-        trace_region_size=_TRACE_REGION_SIZE,
-        moe_overlaps_routed_expert_with_combine=ADAPTER.moe_overlaps_routed_expert_with_combine,
+        GLOBAL_MESH_SHAPE, MODEL_CFG, l1_small_size=_L1_SMALL_SIZE, trace_region_size=_TRACE_REGION_SIZE
     )
 
     hf_config = ADAPTER.load_hf_config()

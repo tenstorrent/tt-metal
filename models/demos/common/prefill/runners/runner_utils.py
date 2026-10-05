@@ -8,7 +8,6 @@ from pathlib import Path
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_blackhole
 
 
 def _create_fabric_router_config(max_payload_size):
@@ -18,11 +17,7 @@ def _create_fabric_router_config(max_payload_size):
 
 
 def open_mesh_device(
-    mesh_shape: tuple,
-    model_cfg: type,
-    l1_small_size: int = 0,
-    trace_region_size: int = 0,
-    moe_overlaps_routed_expert_with_combine: bool = False,
+    mesh_shape: tuple, model_cfg: type, l1_small_size: int = 0, trace_region_size: int = 0
 ) -> ttnn.MeshDevice:
     sp = mesh_shape[0]
     fabric_mode = os.environ.get("PREFILL_FABRIC_MODE", "").strip().lower()
@@ -43,16 +38,9 @@ def open_mesh_device(
         fabric_config = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
     logger.info(f"Fabric config: {fabric_config} (sp={sp}, PREFILL_FABRIC_MODE={fabric_mode or 'unset'})")
 
-    # A model whose MoE overlaps the routed expert with combine reaches combine_fabric2d, which sends a
-    # whole bf16 token plus its routing tail in one packet -- more than this clamp. Only Blackhole has
-    # that op, so everywhere else keeps the model's own payload.
-    if moe_overlaps_routed_expert_with_combine and is_blackhole():
-        from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import get_max_payload_size
-
-        max_payload_size = get_max_payload_size()
-    else:
-        max_payload_size = model_cfg.FABRIC_PAYLOAD_SIZE
-    fabric_router_config = _create_fabric_router_config(max_payload_size=max_payload_size)
+    fabric_router_config = _create_fabric_router_config(
+        max_payload_size=model_cfg.FABRIC_PAYLOAD_SIZE,
+    )
 
     ttnn.set_fabric_config(
         fabric_config,
