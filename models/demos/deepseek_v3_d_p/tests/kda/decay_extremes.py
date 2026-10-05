@@ -59,9 +59,11 @@ from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import (
 from models.demos.deepseek_v3_d_p.tests.kda.head_slice import kda_head_slice_config, slice_kda_heads
 from models.demos.deepseek_v3_d_p.tests.kda.text_input import build_text_input, load_text_input, text_input_cache_path
 from models.demos.deepseek_v3_d_p.tests.kda.utils import random_weights
+from models.demos.deepseek_v3_d_p.utils.oracle_cache import oracle_cache_root, publish_once
 
 # Covers the stored payload: case construction (weights, crafted hidden) and the FP64 reference. Bump when either
-# changes the stored tensors.
+# changes the stored tensors; the cache is shared by every worktree (utils/oracle_cache.py), so an unmerged branch
+# bumps to a value no other branch uses.
 _CACHE_VERSION = 2
 _GATE_LOWER_BOUND = -5.0
 # Largest RMS of the crafted constant hidden component (unit-RMS noise is added on top).
@@ -225,13 +227,11 @@ class DecayExtremeReference:
 
 
 def _cache_path(case: DecayExtremeCase) -> Path:
-    import ttnn
-
     payload = {"version": _CACHE_VERSION, "case": asdict(case), "weights": case.weight_identity}
     if case.band == _TEXT_BAND:
         payload["inputs"] = _text_input_path(case).name  # the text input's own producer identity
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:20]
-    return Path(ttnn.CONFIG.model_cache_path) / "kda_decay_extremes" / f"{case.name}_{digest}.pt"
+    return oracle_cache_root() / "kda_decay_extremes" / f"{case.name}_{digest}.pt"
 
 
 def _compute(case: DecayExtremeCase) -> DecayExtremeReference:
@@ -284,20 +284,21 @@ def decay_extreme_reference(case: DecayExtremeCase, *, compute_missing: bool) ->
 
     path = _cache_path(case)
     start = time.perf_counter()
-    if path.exists():
-        payload = torch.load(path, map_location="cpu", weights_only=False)
-        logger.info(f"{case.name}: reference cache hit {path} ({time.perf_counter() - start:.2f} s)")
-        return DecayExtremeReference(**payload)
-    if not compute_missing:
+    if not compute_missing and not path.is_file():
         raise prepared_cache_miss(case.name, "FP64 decay-extreme reference", path)
-    reference = _compute(case)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(f".{os.getpid()}.tmp")
-    torch.save(asdict(reference), temporary)
-    temporary.replace(path)
-    logger.info(
-        f"{case.name}: reference computed in {time.perf_counter() - start:.1f} s -> {path}; {reference.metadata}"
+    payload, produced = publish_once(
+        path,
+        lambda: asdict(_compute(case)),
+        torch.save,
+        lambda file: torch.load(file, map_location="cpu", weights_only=False),
     )
+    reference = DecayExtremeReference(**payload)
+    if produced:
+        logger.info(
+            f"{case.name}: reference computed in {time.perf_counter() - start:.1f} s -> {path}; {reference.metadata}"
+        )
+    else:
+        logger.info(f"{case.name}: reference cache hit {path} ({time.perf_counter() - start:.2f} s)")
     return reference
 
 
