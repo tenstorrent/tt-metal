@@ -634,15 +634,18 @@ def main() -> None:
     kv_caches = ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
     runtime.compile(kv_caches)
 
-    _serve_request(runtime, kv_caches, mesh_device, hf_config, rank, num_ranks, is_first_rank)
+    # Release the trace and close the device on the failure path too: an exception that leaves the mesh device
+    # open hangs the process at interpreter exit instead of letting it fail.
+    try:
+        _serve_request(runtime, kv_caches, mesh_device, hf_config, rank, num_ranks, is_first_rank)
+    finally:
+        _release_trace = getattr(runtime, "release_trace", None)
+        if _release_trace is not None:
+            _release_trace()
 
-    _release_trace = getattr(runtime, "release_trace", None)
-    if _release_trace is not None:
-        _release_trace()
-
-    ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
-    ttnn.close_mesh_device(mesh_device)
-    logger.info(f"[pp rank {rank}] shutdown complete")
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+        ttnn.close_mesh_device(mesh_device)
+        logger.info(f"[pp rank {rank}] shutdown complete")
 
 
 def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:

@@ -102,9 +102,12 @@ class Gemma4PrefillRuntime:
         if not 0 <= slot_id < self.config.num_users:
             raise ValueError(f"KV slot {slot_id} is outside [0, {self.config.num_users})")
         if actual_start < 0 or actual_start % self.config.chunk_size:
-            raise ValueError("Chunk start must be a nonnegative multiple of 8192")
+            raise ValueError(f"Chunk start {actual_start} must be a nonnegative multiple of {self.config.chunk_size}")
         if not actual_start < actual_end <= min(actual_start + self.config.chunk_size, self.config.max_seq_len):
-            raise ValueError("Chunk must contain 1 to 8192 real tokens within the 256K context")
+            raise ValueError(
+                f"Chunk [{actual_start}, {actual_end}) must contain 1 to {self.config.chunk_size} real tokens "
+                f"within the {self.config.max_seq_len}-token context"
+            )
         if actual_start != 0 and actual_start != self.slot_ends[slot_id]:
             raise ValueError(f"Slot {slot_id} expects position {self.slot_ends[slot_id]}, got {actual_start}")
 
