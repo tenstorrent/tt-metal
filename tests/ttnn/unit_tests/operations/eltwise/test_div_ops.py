@@ -272,8 +272,6 @@ def test_div_fp32_special_values(device, op):
     a, b = torch.meshgrid(values, values, indexing="ij")
     a, b = a.flatten().repeat(16).reshape(32, 32), b.flatten().repeat(16).reshape(32, 32)
     expected = a / b
-    # Inf/NaN divisors use a zero reciprocal, matching the original FP32 div_no_nan path.
-    expected = torch.where(~torch.isfinite(b), a * 0.0, expected)
     if op == ttnn.div_no_nan:
         expected = torch.where(b == 0, 0.0, expected)
     # SFPU multiplication produces positive zero for exact zero results.
@@ -334,6 +332,8 @@ def test_div_no_nan_fp32_subnormal_compatibility(device):
     input_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     baseline = ttnn.where(ttnn.eqz(input_b), 0.0, ttnn.multiply(input_a, ttnn.reciprocal(input_b)))
     expected, actual = ttnn.to_torch(baseline), ttnn.to_torch(ttnn.div_no_nan(input_a, input_b))
+    # Unlike reciprocal-and-multiply, NaN divisors propagate.
+    expected = torch.where(torch.isnan(b), float("nan"), expected)
     assert torch.equal(torch.isnan(actual), torch.isnan(expected))
     non_nan = ~torch.isnan(expected)
     assert torch.equal(actual[non_nan], expected[non_nan])
@@ -792,11 +792,7 @@ def test_div_int32_float_scalar_promotion_nonfinite(device, rounding_mode, scala
     expected = ttnn.to_torch(ttnn.div(fp32_input, scalar, rounding_mode=rounding_mode))
     assert result.dtype == ttnn.float32
     torch.testing.assert_close(ttnn.to_torch(result), expected, rtol=0, atol=0, equal_nan=True)
-    # Inf/NaN divisors use a zero reciprocal for finite numerators, matching
-    # the FP32 tensor path. Zero divisors retain the ordinary division behavior.
     golden = torch.div(torch_input.float(), scalar, rounding_mode=rounding_mode)
-    if scalar != scalar:  # NaN
-        golden = torch.zeros_like(golden)
     # PyTorch's floor division by infinity differs from flooring the quotient;
     # the comparison against native FP32 above covers that existing behavior.
     if abs(scalar) != float("inf") or rounding_mode != "floor":

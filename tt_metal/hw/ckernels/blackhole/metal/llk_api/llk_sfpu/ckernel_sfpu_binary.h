@@ -257,21 +257,29 @@ inline void calculate_sfpu_binary_div(
             q = q + residual * r;
 
             sfpi::vInt ea = sfpi::exexp(in0, sfpi::ExponentMode::Biased);
-            sfpi::vInt eb = sfpi::exexp(in1, sfpi::ExponentMode::Biased);
+            // eb is unbiased, which absorbs the bias in exponent below.
+            sfpi::vInt eb = sfpi::exexp(in1);
             // Split exponent restoration between two factors. Their product
             // supplies hardware overflow/underflow handling, while power-of-two
             // scaling is exact for normal results.
-            sfpi::vInt exponent = ea - eb + sfpi::exexp(q, sfpi::ExponentMode::Biased) + 127;
+            sfpi::vInt exponent = ea - eb + sfpi::exexp(q, sfpi::ExponentMode::Biased);
             sfpi::vInt half = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(exponent) >> 1);
             result = sfpi::setexp(q, half) * sfpi::setexp(sfpi::vFloat(1.0f), exponent - half);
 
             // For exceptional inputs only the reciprocal's sign and zero/Inf
             // classification matter. Inverting its exponent gives Inf for zero,
             // zero for Inf/NaN, and a finite nonzero scale for every normal divisor.
-            // Denominator NaNs follow reciprocal-and-multiply behavior rather than propagating.
-            v_if((((ea + 1) & 0xfe) == 0) || (((eb + 1) & 0xfe) == 0)) {
+            // Zero scales would hide NaN divisors, so add an all-ones NaN bit
+            // pattern where |in1| > +Inf in sign-magnitude order, and +0 elsewhere.
+            // Normal inputs have biased exponents in [1, 254], or unbiased exponents
+            // in [-126, 127]; zero/subnormal and Inf/NaN fall outside. Each bound is a
+            // sign test on SFPIADD, and the compares narrow lanes without SFPAND.
+            v_if(!(ea >= 1 && ea < 255 && eb >= -126 && eb < 128)) {
                 sfpi::vFloat scale = sfpi::setman(sfpi::as<sfpi::vFloat>(~sfpi::as<sfpi::vInt>(in1)), 0);
-                result = in0 * sfpi::copysgn(scale, in1);
+                sfpi::vFloat nan_divisor = sfpi::vFloat(__builtin_rvtt_sfpgt(
+                    sfpi::setsgn(in1, 0).get(), sfpi::vFloat(std::numeric_limits<float>::infinity()).get(), 8));
+                // Inverting in1 also inverts the scale's sign, so negate the product.
+                result = nan_divisor - in0 * scale;
             }
             v_endif;
         } else {

@@ -246,21 +246,29 @@ inline void calculate_sfpu_binary_div(
             q = q + residual * r;
 
             sfpi::vInt ea = sfpi::exexp(in0, sfpi::ExponentMode::Biased);
-            sfpi::vInt eb = sfpi::exexp(in1, sfpi::ExponentMode::Biased);
+            // eb is unbiased, which absorbs the bias in exponent below.
+            sfpi::vInt eb = sfpi::exexp(in1);
             // Split exponent restoration between two factors. Their product
             // supplies hardware overflow/underflow handling, while power-of-two
             // scaling is exact for normal results.
-            sfpi::vInt exponent = ea - eb + sfpi::exexp(q, sfpi::ExponentMode::Biased) + 127;
+            sfpi::vInt exponent = ea - eb + sfpi::exexp(q, sfpi::ExponentMode::Biased);
             sfpi::vInt half = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(exponent) >> 1);
             result = sfpi::setexp(q, half) * sfpi::setexp(sfpi::vFloat(1.0f), exponent - half);
 
             // For exceptional inputs only the reciprocal's sign and zero/Inf
             // classification matter. Inverting its exponent gives Inf for zero,
             // zero for Inf/NaN, and a finite nonzero scale for every normal divisor.
-            // Denominator NaNs follow reciprocal-and-multiply behavior rather than propagating.
-            v_if((((ea + 1) & 0xfe) == 0) || (((eb + 1) & 0xfe) == 0)) {
-                sfpi::vFloat scale = sfpi::setman(sfpi::as<sfpi::vFloat>(~sfpi::as<sfpi::vInt>(in1)), 0);
-                result = in0 * sfpi::copysgn(scale, in1);
+            // XOR inverts the exponent but keeps the divisor's sign, avoiding a copysgn.
+            // Normal inputs have biased exponents in [1, 254], or unbiased exponents
+            // in [-126, 127]; zero/subnormal and Inf/NaN fall outside. Each bound is a
+            // sign test on SFPIADD, and the compares narrow lanes without SFPAND.
+            v_if(!(ea >= 1 && ea < 255 && eb >= -126 && eb < 128)) {
+                sfpi::vInt inf_bits = 0x7f800000;
+                sfpi::vFloat scale = sfpi::setman(sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(in1) ^ inf_bits), 0);
+                result = in0 * scale;
+                // The zero scale would hide NaN divisors, so propagate them.
+                v_and(sfpi::as<sfpi::vInt>(sfpi::setsgn(in1, 0)) > inf_bits);
+                result = in1;
             }
             v_endif;
         } else {
