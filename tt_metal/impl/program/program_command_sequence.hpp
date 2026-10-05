@@ -50,6 +50,10 @@ struct ProgramCommandSequence {
         void* dst;
         uint32_t size;
     };
+    struct DataflowBufferConfigSource {
+        CoreCoord logical_core;
+        uint32_t size;
+    };
     struct CircularBufferConfigUpdate {
         CircularBufferImpl* circular_buffer;
         uint32_t* dst;
@@ -90,6 +94,8 @@ struct ProgramCommandSequence {
     std::vector<CircularBufferConfigUpdate> remote_cb_config_updates;
     // Parallel to cb_configs_payloads/circular_buffers_on_core_ranges but for Dataflow Buffers.
     std::vector<uint8_t*> dfb_configs_payloads;
+    // Parallel to dfb_configs_payloads: the logical core each payload was serialized for and its transmitted size.
+    std::vector<DataflowBufferConfigSource> dfb_config_sources;
     std::vector<std::vector<std::shared_ptr<experimental::dfb::detail::DataflowBufferImpl>>>
         dataflow_buffers_on_core_ranges;
     // Note: some RTAs may be have their RuntimeArgsData modified so the source-of-truth of their data is the command

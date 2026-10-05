@@ -11,6 +11,9 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 #include <cstdint>
@@ -153,6 +156,141 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceMultipleReplays) {
     }
 
     mesh_device->release_mesh_trace(trace_id);
+}
+
+// Each trace must replay the DFB config that was current at its own capture. Change the DFB's
+// entry size between two captures and check each replay reports its own entry size.
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceDFBSizeOverride) {
+    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
+        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
+                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
+    }
+
+    auto mesh_device = devices_[0];
+    const experimental::NodeCoord node{0, 0};
+    constexpr uint32_t capture_a_entry_size = 1024;
+    constexpr uint32_t capture_b_entry_size = 2048;
+    constexpr uint32_t num_entries = 16;
+
+    // dfb_extent_probe_* write an 8-word extent record per snapshot; word 0 is the entry size.
+    constexpr uint32_t extent_record_bytes = 8 * sizeof(uint32_t);
+    const uint32_t l1_alignment = mesh_device->allocator()->get_alignment(BufferType::L1);
+    const uint32_t records_bytes = tt::align(2 * extent_record_bytes, l1_alignment);
+    const uint32_t producer_record_address = static_cast<uint32_t>(mesh_device->l1_size_per_core()) - records_bytes;
+    const uint32_t consumer_record_address = producer_record_address + extent_record_bytes;
+
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+
+    const experimental::DFBSpecName DFB{"dfb"};
+    const experimental::KernelSpecName PRODUCER{"producer"};
+    const experimental::KernelSpecName CONSUMER{"consumer"};
+    experimental::DataflowBufferSpec dfb_spec{
+        .unique_id = DFB,
+        .entry_size = capture_a_entry_size,
+        .num_entries = num_entries,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+    experimental::KernelSpec producer_spec{
+        .unique_id = PRODUCER,
+        .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_extent_probe_dm.cpp",
+        .num_threads = 1,
+        .dfb_bindings =
+            {{.dfb_spec_name = DFB,
+              .accessor_name = "out",
+              .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+              .access_pattern = experimental::DFBAccessPattern::STRIDED}},
+        .compile_time_args = {{"num_tc_snapshots", 1u}, {"rotate_tc", 0u}, {"credits_to_post", 0u}},
+        .runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .config_2xx =
+                    experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                        .disable_dfb_implicit_sync_for = {DFB},
+                    },
+            },
+    };
+    experimental::KernelSpec consumer_spec{
+        .unique_id = CONSUMER,
+        .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/dfb_extent_probe_compute.cpp",
+        .num_threads = 1,
+        .dfb_bindings =
+            {{.dfb_spec_name = DFB,
+              .accessor_name = "in",
+              .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+              .access_pattern = experimental::DFBAccessPattern::STRIDED}},
+        .compile_time_args =
+            {{"num_tc_snapshots", 1u},
+             {"rotate_tc", 0u},
+             {"drain_producer_rotate_credits", 0u},
+             {"drain_last_tc_credit", 0u},
+             {"num_producers", 1u}},
+        .runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}},
+        .hw_config = experimental::ComputeHardwareConfig{},
+    };
+    experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node};
+    experimental::ProgramSpec spec{
+        .name = "trace_dfb_size_override",
+        .kernels = {producer_spec, consumer_spec},
+        .dataflow_buffers = {dfb_spec},
+        .work_units = {main_wu},
+    };
+
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, experimental::MakeProgramFromSpec(*mesh_device, spec));
+    Program& prog = workload.get_programs().at(device_range);
+
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = PRODUCER,
+            .runtime_arg_values =
+                experimental::MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", producer_record_address}}),
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = CONSUMER,
+            .runtime_arg_values =
+                experimental::MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", consumer_record_address}}),
+        },
+    };
+    experimental::SetProgramRunArgs(prog, params);
+
+    std::vector<uint32_t> zeros(2 * extent_record_bytes / sizeof(uint32_t), 0);
+    auto read_entry_size = [&](uint32_t record_address) {
+        std::vector<uint32_t> record;
+        slow_dispatch::ReadFromL1(*mesh_device, node, record_address, extent_record_bytes, record);
+        return record[0];
+    };
+
+    // Warm up
+    slow_dispatch::WriteToL1(*mesh_device, node, producer_record_address, zeros);
+    distributed::EnqueueMeshWorkload(cq, workload, true);
+    ASSERT_EQ(read_entry_size(producer_record_address), capture_a_entry_size);
+    ASSERT_EQ(read_entry_size(consumer_record_address), capture_a_entry_size);
+
+    distributed::MeshTraceId trace_id_a = mesh_device->begin_mesh_trace(cq);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    mesh_device->end_mesh_trace(cq, trace_id_a);
+
+    // No untraced run after the override: only trace capture re-serializes the DFB config.
+    params.dfb_run_overrides.push_back({.dfb = DFB, .entry_size = capture_b_entry_size});
+    experimental::SetProgramRunArgs(prog, params);
+    distributed::MeshTraceId trace_id_b = mesh_device->begin_mesh_trace(cq);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    mesh_device->end_mesh_trace(cq, trace_id_b);
+
+    slow_dispatch::WriteToL1(*mesh_device, node, producer_record_address, zeros);
+    mesh_device->replay_mesh_trace(cq, trace_id_a, true);
+    ASSERT_EQ(read_entry_size(producer_record_address), capture_a_entry_size);
+    ASSERT_EQ(read_entry_size(consumer_record_address), capture_a_entry_size);
+
+    slow_dispatch::WriteToL1(*mesh_device, node, producer_record_address, zeros);
+    mesh_device->replay_mesh_trace(cq, trace_id_b, true);
+    ASSERT_EQ(read_entry_size(producer_record_address), capture_b_entry_size);
+    ASSERT_EQ(read_entry_size(consumer_record_address), capture_b_entry_size);
+
+    mesh_device->release_mesh_trace(trace_id_a);
+    mesh_device->release_mesh_trace(trace_id_b);
 }
 
 TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, QuasarTraceMultipleReplaysAcrossCQs) {

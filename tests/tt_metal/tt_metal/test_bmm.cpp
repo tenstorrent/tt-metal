@@ -15,6 +15,7 @@
 #include "impl/program/program_impl.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_trace_id.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
@@ -427,4 +428,40 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
     int argfail = -1;
     bool pass = validate_bmm_result(p, src0_vec, src1_vec, result_vec, &argfail);
     EXPECT_TRUE(pass) << "Failure position=" << argfail;
+}
+
+TEST_F(QuasarMeshDeviceSingleCardFixture, TraceBmm) {
+    auto& mesh_device = *devices_[0];
+    BmmParams p;
+    p.Mt = 2;
+    p.Kt = 2;
+    p.Nt = 2;
+    p.B_total = 1;
+    p.B_per_core = 1;
+    p.num_threads = 2;
+
+    auto tensors = create_bmm_tensors(mesh_device, p);
+    const experimental::NodeCoord node{0, 0};
+    auto spec = build_bmm_program_spec(p, tensors, node, /*use_implicit_sync=*/true);
+    auto workload = experimental::MakeMeshWorkloadFromSpec(mesh_device, spec);
+    set_bmm_run_args(workload.get_programs().begin()->second, p, tensors, node);
+
+    auto& cq = mesh_device.mesh_command_queue();
+    const BmmInputs inputs = write_bmm_inputs(cq, p, tensors);
+
+    // Warm up
+    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+    check_bmm_output(cq, p, tensors, inputs);
+
+    const std::vector<std::uint32_t> zeros(p.single_tile_size * p.Mt * p.Nt * p.B_total / sizeof(std::uint32_t), 0);
+    cq.enqueue_write_tensor(HostTensor::from_vector(zeros, tensors.dst.tensor_spec()), tensors.dst);
+
+    distributed::MeshTraceId trace_id = mesh_device.begin_mesh_trace(cq);
+    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+    mesh_device.end_mesh_trace(cq, trace_id);
+
+    mesh_device.replay_mesh_trace(cq, trace_id, /*blocking=*/true);
+    check_bmm_output(cq, p, tensors, inputs);
+
+    mesh_device.release_mesh_trace(trace_id);
 }
