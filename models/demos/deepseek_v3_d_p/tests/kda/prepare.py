@@ -44,6 +44,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.cases import (  # noqa: E402
     kda_weight_cache_dir,
 )
 from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import prepare_cpu_references  # noqa: E402
+from models.demos.deepseek_v3_d_p.tests.kda.text_input import chunk_decay_extremes  # noqa: E402
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights  # noqa: E402
 
 
@@ -61,7 +62,13 @@ def _device_handles() -> list[str]:
 
 def prepare_case(spec: KDACaseSpec, checkpoint_dir: Path | None) -> None:
     """Write the case's weight cache for its mesh placement and every chained CPU reference."""
-    case = build_kda_case(spec, checkpoint_dir)
+    case = build_kda_case(spec, checkpoint_dir, compute_missing_input=True)
+    if spec.inputs == "text":
+        # Real text is there to reach the decay extremes (tt_metal_tracker-g1b.7); record how far it gets.
+        logger.info(
+            f"KDA prepare {spec.name}: text-input gate decay on the case heads "
+            f"{chunk_decay_extremes(case.hidden, case.weights.load_state_dict(), case.config)}"
+        )
     cache_dir = kda_weight_cache_dir(case.weights, spec.mesh_shape, spec.tensor_parallel_axis)
     prefix = f"layer_{case.weights.layer_idx}.kda"
     start = time.perf_counter()

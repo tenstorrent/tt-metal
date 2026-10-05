@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import replace
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.cases import (
     KDAWeightSource,
     build_kda_case,
     kda_weight_cache_dir,
+    loudbox_kda_case,
     registered_kda_case,
 )
 from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import (
@@ -28,6 +30,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import (
     cpu_references,
     prepare_cpu_references,
 )
+from models.demos.deepseek_v3_d_p.tests.kda.text_input import text_input_cache_path
 
 _TOY_CONFIG = KDAConfig(hidden_size=64, num_heads=2, head_k_dim=32, head_v_dim=32, conv_kernel_size=4, norm_eps=1e-5)
 
@@ -67,6 +70,7 @@ def test_registered_cases_are_unique_and_found_by_their_fields(expect_error) -> 
                 spec.chunk_tokens,
                 chunk_valid_tokens=spec.chunk_valid_tokens,
                 head_slice=spec.head_slice,
+                inputs=spec.inputs,
             )
             is spec
         )
@@ -75,13 +79,20 @@ def test_registered_cases_are_unique_and_found_by_their_fields(expect_error) -> 
 
 
 def test_loudbox_matrix_is_registered() -> None:
-    for weights in ("synthetic", "real"):
-        for schedule in ((1280,), (1280,) * 3, (1280, 992)):
-            assert registered_kda_case(weights, (2, 4), 1, 1280, chunk_valid_tokens=schedule)
-    for weights in ("synthetic", "real"):
-        for schedule in ((5120,), (5120,) * 3, (5120, 3872)):
-            spec = registered_kda_case(weights, (8, 1), 1, 5120, chunk_valid_tokens=schedule, head_slice=(0, 24))
-            assert spec.weight_source().config.num_heads == 24
+    expected = {
+        "LB-A": ((2, 4), None, {"single": (1280,), "chained3": (1280,) * 3, "ragged": (1280, 992)}),
+        "LB-B": ((8, 1), (0, 24), {"single": (5120,), "chained3": (5120,) * 3, "ragged": (5120, 3872)}),
+    }
+    for weights, inputs in (("synthetic", "randn"), ("real", "randn"), ("real", "text")):
+        for layout, (mesh_shape, head_slice, schedules) in expected.items():
+            for schedule, valid_tokens in schedules.items():
+                spec = loudbox_kda_case(weights, layout, schedule, inputs)
+                assert (spec.mesh_shape, spec.head_slice, spec.chunk_valid_tokens) == (
+                    mesh_shape,
+                    head_slice,
+                    valid_tokens,
+                )
+                assert spec.weight_source().config.num_heads == (96 if head_slice is None else 24)
 
 
 def test_case_spec_rejects_unpreparable_schedules(expect_error) -> None:
@@ -95,8 +106,8 @@ def test_case_spec_rejects_unpreparable_schedules(expect_error) -> None:
 
 
 def test_preparation_and_device_builders_produce_identical_keys() -> None:
-    """Every registered case built twice from scratch yields the same inputs and cache keys."""
-    for spec in KDA_CASES.values():
+    """Every registered random-input case built twice from scratch yields the same inputs and cache keys."""
+    for spec in (spec for spec in KDA_CASES.values() if spec.inputs == "randn"):
         first, second = build_kda_case(spec), build_kda_case(spec)
         assert torch.equal(first.hidden, second.hidden), spec.name
         assert first.weights == second.weights, spec.name
@@ -182,3 +193,24 @@ def test_chained_references_carry_state_and_reuse_cache(model_cache: Path, monke
     chained_output = torch.cat([reference.output for reference in cold], dim=1)
     torch.testing.assert_close(chained_output, single_output, rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(cold[-1].state.recurrent, single_state.recurrent, rtol=1e-4, atol=1e-4)
+
+
+def test_load_only_text_input_miss_fails_fast_and_cached_input_is_used(
+    model_cache: Path, monkeypatch: pytest.MonkeyPatch, expect_error
+) -> None:
+    monkeypatch.delenv(kda_cases.CACHE_MISS_ENV, raising=False)
+    spec = loudbox_kda_case("real", "LB-A", "single", "text")
+    monkeypatch.setattr(kda_cases, "build_text_input", lambda *args: pytest.fail("load-only must not build inputs"))
+    with expect_error(KDAPreparedCacheMiss, f"--case {spec.name}") as error:
+        build_kda_case(spec)
+    assert "text input" in str(error.value) and str(model_cache) in str(error.value)
+
+    # A prepared input (written as the preparation step writes it) is what the case uses.
+    hidden = torch.randn(1, spec.chunk_tokens, 7168).bfloat16()
+    path = text_input_cache_path(spec.model, spec.weight_source().layer_idx, spec.chunk_tokens)
+    path.parent.mkdir(parents=True)
+    digest = hashlib.sha256(memoryview(hidden.view(torch.uint8).numpy())).hexdigest()
+    torch.save({"hidden": hidden, "sha256": digest}, path)
+    assert torch.equal(build_kda_case(spec).hidden, hidden)
+    assert text_input_cache_path(spec.model, 2, spec.chunk_tokens) != path
+    assert text_input_cache_path(spec.model, 1, 2 * spec.chunk_tokens) != path
