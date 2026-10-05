@@ -21,6 +21,22 @@ namespace {
 using tt::constants::TILE_HEIGHT;
 using tt::constants::TILE_WIDTH;
 
+// A block-sharded output cannot be produced from an unfused batched A: the output CB is backed by the shard buffer,
+// which holds a single batch's worth of tiles, and the output shard grid is sized from the fused M. Batch can only
+// be fused when input B is unbatched.
+void validate_block_sharded_output_batch_fusion(
+    bool fuse_batch, const ttnn::Shape& a_shape_padded, const ttnn::Shape& b_shape_padded) {
+    const uint32_t batch_a = ttnn::get_batch_size(a_shape_padded);
+    const uint32_t batch_b = ttnn::get_batch_size(b_shape_padded);
+    TT_FATAL(
+        fuse_batch || batch_a == 1,
+        "Block-sharded output is incompatible with batch > 1 (batch_A={}, batch_B={}) when batch fusion is "
+        "disabled. Batch can only be fused when input B has batch size 1; use an interleaved output or "
+        "fuse_batch=True.",
+        batch_a,
+        batch_b);
+}
+
 void check_tensor_in_grid(const Tensor& tensor, const CoreCoord& grid_size) {
     // Validate tensor is within grid if sharded and not in DRAM
     if (tensor.memory_config().is_sharded() && tensor.memory_config().buffer_type() != BufferType::DRAM) {
@@ -1692,6 +1708,10 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                         attributes.output_mem_config.memory_layout());
                     uint32_t per_core_N = program_config.per_core_N;
 
+                    // The output CB is backed by the shard buffer, which holds a single batch's worth of tiles,
+                    // so a batched A cannot be left unfused (the output shard grid is sized from the fused M).
+                    validate_block_sharded_output_batch_fusion(
+                        program_config.fuse_batch, a_shape_padded, b_shape_padded);
                     TT_FATAL(
                         program_config.out_subblock_w == per_core_N || program_config.out_subblock_h == 1,
                         "Error: out_subblock_w must be equal to per_core_N or out_subblock_h must be equal to 1.");
@@ -2093,6 +2113,10 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                                          ProgramConfigType,
                                          operations::experimental::quasar::matmul::
                                              MatmulMultiCoreReuseMultiCastProgramConfig>) {
+                    // Output specs are computed before validation; fail here with the actionable message instead of
+                    // letting the unfused M produce an oversized output shard grid.
+                    validate_block_sharded_output_batch_fusion(
+                        program_config.fuse_batch, a_shape_padded, b_shape_padded);
                     const auto M = operations::experimental::quasar::matmul::utilities::get_M_dim(
                         a_shape_padded, in0_tile, program_config.fuse_batch);
                     const auto N =
