@@ -15,7 +15,9 @@ class DeepSeekV4ProConfig:
 
     # Core dimensions
     EMB_SIZE = 7168  # embedding dimension
-    FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
+    # Max fabric packet payload: one bf16 token plus combine_fabric2d's 64 B routing tail, which it sends
+    # in a single packet. Must stay in sync with migration code.
+    FABRIC_PAYLOAD_SIZE = 2 * EMB_SIZE + 64
     MOE_INTERMEDIATE_SIZE = 3072  # MoE FFN hidden dimension
     # Routed-expert hybrid split: experts with <= this many active tokens go to
     # moe_fused_swiglu, the rest to unified_routed_expert_moe. On the 7168x3072 routed-expert
