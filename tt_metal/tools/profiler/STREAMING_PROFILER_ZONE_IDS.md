@@ -157,7 +157,8 @@ flag too when `TT_METAL_STREAMING_PROFILER=1`, so the loader can rebase firmware
 ## 3. The load: the host picks the base
 
 An image is read from the JIT cache exactly once per process, in `ll_api::memory::memory()`
-(`llrt/tt_memory.cpp`, reached through `llrt::get_risc_binary`, which caches by path). Under the streaming
+(`llrt/tt_memory.cpp`, reached through `llrt::get_risc_binary`; see *Parallel links and parallel loads* below for
+why it is exactly once). Under the streaming
 profiler that constructor calls `ZoneMetaRegistry::ingest_elf(path, elf)` (`llrt/zone_meta.cpp`) before
 the image's segments are packed for the device:
 
@@ -192,13 +193,46 @@ that emits it can run. The order images load decides the ids:
 ```
 process id space (16 bits)
 ┌──────────┬──────────────┬──────────────┬───────────┬ ─ ─ ─ ─ ─ ┬────────┐
-│ fw brisc │ zones_dm/br  │ zones_dm/nc  │ compute/… │   free    │ 0xFFFF │
+│ fw brisc │ zones_dm/nc  │ zones_dm/br  │ compute/… │   free    │ 0xFFFF │
 │  (0 ids) │  [0, 15)     │  [15, 30)    │  [30, …)  │           │ STALL  │
 └──────────┴──────────────┴──────────────┴───────────┴ ─ ─ ─ ─ ─ ┴────────┘
 ```
 
 `0xFFFF` is `TT_ZONE_STALL_ID`: the producer's own back-pressure zone, recognized by value, never handed
 out, and the only id without a record.
+
+### Parallel links and parallel loads
+
+**Linking needs no coordination.** A link never chooses an id. Every image's `.tt_zone_ids` is placed at the
+same address, `0x6800000`, and numbered 0 … n−1 inside that image only. The JIT build links ~30 kernels at a
+time on its thread pool, and several processes can share one cache root; none of those links read or write any
+shared counter, file or lock for zone ids. The ELF a link produces is the same whatever else is linking.
+
+**Loading is where ids are handed out, and loads can run in parallel.** Every image reaches the device through
+`llrt::get_risc_binary(path)`, an existing runtime function (on main too) that the kernel and firmware loaders call
+after the JIT build has written the ELF (`impl/kernels/kernel.cpp`, `impl/device/firmware/risc_firmware_initializer.cpp`).
+It keeps one process-wide map from ELF path to loaded image:
+
+- The first caller for a path inserts an empty slot, **releases the map lock**, and constructs the image
+  (`ll_api::memory`: read the ELF, rebase zone ids, XIP-transform a kernel, pack the segments). Then it fills the
+  slot and wakes any waiters.
+- Any caller for the same path, at the same time or later, finds the slot and waits on a condition variable
+  until it is filled, then gets the same image. It never constructs its own.
+
+So each ELF path is constructed, and therefore rebased, **exactly once per process**, while images for
+*different* paths are constructed concurrently on different threads. `ZoneMetaRegistry::ingest_elf()` is safe
+under that concurrency because only one short step touches shared state:
+
+1. **Reserve** -- under the registry's mutex: look the path up, and if it is new record `base = next_id` and
+   advance `next_id += n`. Two concurrent loads therefore always get disjoint blocks.
+2. **Rebase** -- no lock: `RebaseZoneIds(base)` patches this caller's own in-memory copy of the ELF, which no
+   other thread can see.
+3. **Publish** -- under the mutex again: parse the records and fill `sites[]`.
+
+The registry also keys blocks by path, so even a direct second call for one path reuses its block instead of
+consuming a new one. What concurrency does change is *which* image gets *which* block: when two loads race,
+whichever reserves first gets the lower block. That is one more reason ids differ between runs; it never
+affects whether they are unique.
 
 ## 4. Guarantees and limits
 
