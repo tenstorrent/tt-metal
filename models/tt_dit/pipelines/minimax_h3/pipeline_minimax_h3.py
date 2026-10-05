@@ -2524,6 +2524,7 @@ class MiniMaxH3Pipeline:
                 logical_n=self._tt_logical_n.value,
                 pad_to=rung,
                 traced=traced,
+                timestep_key=None if traced else tuple(float(v) for v in levels.reshape(-1).tolist()),
                 **tilerow_kwargs,
             )
 
