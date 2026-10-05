@@ -133,6 +133,22 @@ TEST(MoveOnlyFunctionTest, CPU_MoveAssignLeavesSourceEmpty) {
     EXPECT_EQ(dst(), 42);
 }
 
+// Emptying only the target, not the invoker, made these run the moved-out callable.
+TEST(MoveOnlyFunctionTest, CPU_CallingMovedFromThrows) {
+    move_only_function<int()> src{[p = std::make_unique<int>(42)] { return *p; }};
+    move_only_function<int()> dst{std::move(src)};
+    ASSERT_FALSE(static_cast<bool>(src));         // NOLINT(bugprone-use-after-move)
+    EXPECT_THROW(src(), std::bad_function_call);  // NOLINT(bugprone-use-after-move)
+}
+
+TEST(MoveOnlyFunctionTest, CPU_CallingMoveAssignedFromThrows) {
+    move_only_function<int()> src{[p = std::make_unique<int>(42)] { return *p; }};
+    move_only_function<int()> dst;
+    dst = std::move(src);
+    ASSERT_FALSE(static_cast<bool>(src));         // NOLINT(bugprone-use-after-move)
+    EXPECT_THROW(src(), std::bad_function_call);  // NOLINT(bugprone-use-after-move)
+}
+
 // Heap-stored targets corrupt on self-move without the guard in operator=.
 TEST(MoveOnlyFunctionTest, CPU_SelfMoveAssignIsSafe) {
     struct Big {

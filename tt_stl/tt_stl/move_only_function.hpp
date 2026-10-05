@@ -80,16 +80,18 @@ public:
         }
     }
 
-    // The defaulted move leaves the source engaged, so operator bool lies about it and calling it
-    // dereferences null.
-    move_only_function(move_only_function&& other) noexcept : Base(static_cast<Base&&>(other)) { other.Base::reset(); }
+    // The defaulted move leaves the source engaged. Empty it by assigning nullptr: reset() clears the
+    // target but keeps its invoker, so calling the source would still run the moved-out callable.
+    move_only_function(move_only_function&& other) noexcept : Base(static_cast<Base&&>(other)) {
+        other.Base::operator=(nullptr);
+    }
 
     // The self-check is required, not defensive: without it a self-move corrupts a heap-stored
     // target and the next call segfaults.
     move_only_function& operator=(move_only_function&& other) noexcept {
         if (this != &other) {
             Base::operator=(static_cast<Base&&>(other));
-            other.Base::reset();
+            other.Base::operator=(nullptr);
         }
         return *this;
     }
