@@ -1119,6 +1119,9 @@ inline void calculate_asinh() {
     }
 }
 
+// Whether BF16 DEST runs the generated atanh kernel as one call over the whole tile.
+inline constexpr bool atanh_bf16_whole_tile = false;
+
 // atanh(x) = 0.5 * log((1 + x) / (1 - x)), reformulated as
 // 0.5 * log1p(2 * x / (1 - x)) to remove the cancellation at x -> 0 and the
 // (1 + x)/(1 - x) ratio that loses precision there.
