@@ -676,6 +676,16 @@ ALWI void heaviside_tile_init() { MATH(SFPU_UNARY_INIT(heaviside)); }
 // clang-format on
 template <bool approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void expm1_tile(uint32_t idst) {
+    MATH(if constexpr (ckernel::sfpu::expm1_bf16_whole_tile && !is_fp32_dest_acc_en && !approx) {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_expm1,
+            (approx, is_fp32_dest_acc_en, 32),
+            idst,
+            VectorMode::None);
+        return;
+    });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
