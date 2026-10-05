@@ -199,6 +199,7 @@ def _normal_input(
     that is -1 against the 0 silicon sees. That one lane was 16,129 steps on every
     Bfp8_b-input cell of Floor and Signbit, and why Ceil and Trunc read 0 there.
     """
+    from helpers.bfp_format_utils import BFP_BLOCK
     from helpers.data_format_inference import infer_unpack_out
     from helpers.golden_generators import quantize_input_to_unpack_format
     from helpers.llk_params import DestAccumulation, format_dict
@@ -228,11 +229,11 @@ def _normal_input(
     # this filter while looking, in any printout, like the smallest normal.
     magnitude = src.detach().to(torch.float32).abs()
     survives = ((magnitude >= cutoff) | (magnitude == 0)) & (magnitude <= ceiling)
-    # The block quantizer works on whole 16-lane blocks. A device sweep is a multiple of
-    # that; a host test may hand in a fragment, so pad it with zeros, which never raise
-    # a block's exponent, and drop the padding again.
+    # The block quantizer works on whole BFP_BLOCK-lane blocks. A device sweep is a
+    # multiple of that; a host test may hand in a fragment, so pad it with zeros, which
+    # never raise a block's exponent, and drop the padding again.
     flat = src.detach().flatten()
-    short = (-flat.numel()) % 16
+    short = (-flat.numel()) % BFP_BLOCK
     padded = torch.cat([flat, torch.zeros(short, dtype=flat.dtype, device=flat.device)])
     quantized = quantize_input_to_unpack_format(padded, input_format)[: flat.numel()]
     quantized_magnitude = quantized.detach().to(torch.float32).abs().reshape(src.shape)

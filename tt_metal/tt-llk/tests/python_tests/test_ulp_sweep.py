@@ -880,12 +880,12 @@ def test_an_emit_refusal_fails_only_a_clean_session(monkeypatch, exitstatus, exp
     [ChipArchitecture.WORMHOLE, ChipArchitecture.BLACKHOLE],
     ids=lambda a: a.value,
 )
-def test_the_sweep_cells_are_the_ones_testconfig_builds_as_asked(arch):
-    """`sweep_cells` leaves out the cells TestConfig would run as another, and both now
-    read the one rule (`effective_dest_acc`): a cell is swept exactly when the Dest it
-    asks for is the Dest it gets. The promoted exponent-B -> Float16 `No` cells are the
-    ones left out, and their `Yes` twins stay."""
-    from helpers.data_format_inference import effective_dest_acc
+def test_the_sweep_cells_are_the_ones_testconfig_builds_as_asked(arch, monkeypatch):
+    """A cell is swept exactly when the TestConfig built for it runs the Dest it asks
+    for: `sweep_cells` leaves out the cells TestConfig would run as another, or a
+    measurement would be keyed on a kernel that never ran. The promoted exponent-B ->
+    Float16 `No` cells are the ones left out, and their `Yes` twins stay."""
+    from helpers.test_config import TestConfig
     from helpers.ulp_sweep import SWEEP_FORMATS, SWEEP_INPUT_FORMATS, sweep_cells
 
     monkeypatch.setattr(TestConfig, "CHIP_ARCH", arch)

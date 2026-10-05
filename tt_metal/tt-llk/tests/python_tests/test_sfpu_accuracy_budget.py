@@ -2202,6 +2202,25 @@ def _not_measurable_cells(path=_TABLE_PATH):
     return cells
 
 
+def test_a_row_parked_by_disagreeing_lanes_records_the_rest_of_its_cell():
+    """`nonfinite_reason` writes the step count over the measurable lanes beside the
+    lanes that park a cell, so a cell parked by four lanes still says what the other
+    tens of thousands measure, and the headroom report (from #57527) has a figure to
+    hold it to. A row written before the emitter kept that figure records nothing for
+    them; re-emit its op."""
+    shape = re.compile(r"; max \d+ ULP over the \d+ measurable lanes")
+    bare, op = [], None
+    for line in _TABLE_PATH.read_text(encoding="utf-8").splitlines():
+        if line and not line[0].isspace() and not line.startswith("#"):
+            op = line.split(":")[0].strip()
+        if "lane(s) disagreeing" in line and not shape.search(line):
+            bare.append(f"{op}: {line.split('#', 1)[0].strip()}")
+    assert not bare, (
+        f"{len(bare)} row(s) name the lanes that park their cell but not the maximum "
+        "over the rest of it; re-emit their ops:\n  " + "\n  ".join(bare)
+    )
+
+
 def _acknowledges(key, cell) -> bool:
     return all(k is None or k == c for k, c in zip(key, cell))
 
@@ -2215,10 +2234,10 @@ _UNRESOLVED_SWEPT_CELLS: dict = {}
 
 
 def test_every_swept_cell_of_an_enrolled_op_resolves_to_a_row_of_its_own():
-    """The sweep gates a ULP row and the headroom report judges a tolerance row; a
-    swept cell that resolves to ``TOLERANCE_CONTRACT`` -- no row of the op covers it --
-    is measured and judged by nothing, and reads in the table exactly like a cell nobody
-    ever enrolled. ``test_every_swept_cell_of_an_exact_op_is_gated_or_waived`` asks this
+    """The sweep gates a ULP row and the headroom report (from #57527) judges a
+    tolerance row; a swept cell that resolves to ``TOLERANCE_CONTRACT`` -- no row of the
+    op covers it -- is measured and judged by nothing, and reads in the table exactly
+    like a cell nobody ever enrolled. ``test_every_swept_cell_of_an_exact_op_is_gated_or_waived`` asks this
     of the exact ops; this asks it of every enrolled op."""
     from helpers.sfpu_domains import sfpu_unary_ops
     from helpers.ulp_sweep import sweep_cells

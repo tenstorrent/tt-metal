@@ -27,7 +27,7 @@ CHIP_ARCH=wormhole pytest test_unary_sfpu_ulp.py --op MyOp --compile-consumer
 ```
 
 `--op` matches the op name exactly. `-k MyOp` is a substring match: `-k Exp` also runs
-`Exp2`, and rewrites its block too.
+`Exp2`, `ExpWithBase`, `Expm1` and `Expm1Cw`, and rewrites their blocks too.
 
 `--ulp-emit` **writes the checked-in table**, once, at the end of the session; under
 `-n` the controller merges every worker's measurements first. It refuses to write unless
