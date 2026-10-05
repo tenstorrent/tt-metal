@@ -11,8 +11,8 @@
       nlp_concat_heads        -> (B, 1, S, H)
       out_proj                -> (B, 1, S, H)
 
-The rotary tables and the additive mask are built once per forward pass by the caller, not here:
-both depend only on S, and building them per block would repeat the same host work 12 times.
+The rotary tables and the additive mask come from the caller, not from here: both depend only on
+S, and building them per block would repeat the same host work 12 times.
 """
 
 from __future__ import annotations
@@ -226,13 +226,13 @@ class TtNomicBertAttention(LightweightModule):
         """Apply rotary position embedding to one of q or k.
 
         rotary_embedding_hf's prefill mode wants a leading batch of 1, so the batch is folded
-        into the head axis; cos/sin are (1, 1, S, D) and broadcast over it, applying the same
-        table to every row.
+        into the head axis; cos/sin broadcast over it, applying the same table to every row.
 
         Args:
             x: (B, A, S, D) queries or keys.
-            cos: (1, 1, S, D) cosine table from tt.common.rotary_tables.
-            sin: (1, 1, S, D) sine table.
+            cos: (1, 1, S, D) cosine table from tt.common.RotaryTables, or longer when S is on the
+                tile grid.
+            sin: the sine table, the same shape.
 
         Returns:
             ttnn.Tensor: (B, A, S, D), rotated.
@@ -254,7 +254,7 @@ class TtNomicBertAttention(LightweightModule):
 
         Args:
             x: (B, 1, S, H) block input.
-            rot_mats: (cos, sin), each (1, 1, S, D), from tt.common.rotary_tables.
+            rot_mats: (cos, sin), each (1, 1, S, D) or longer, from tt.common.RotaryTables.
             attn_mask: (B, 1, S, S) additive mask from tt.common.additive_attention_mask, or
                 None for no masking.
 
