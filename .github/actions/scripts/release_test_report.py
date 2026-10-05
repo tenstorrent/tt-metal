@@ -247,7 +247,7 @@ def _emulator_document_ok(data, label, what, emulator):
 
 
 def _load_results(path, schema, label, what, max_age_days, emulator=None):
-    """The results document at `path`, or None (saying why) if missing, unreadable, off-schema or stale.
+    """The results document at `path`, or None (saying why) if missing, unreadable, off-schema, malformed or stale.
 
     With `emulator` (QUASAR_EMULATOR / HORIZON_EMULATOR), the document must also
     pass _emulator_document_ok.
@@ -268,6 +268,11 @@ def _load_results(path, schema, label, what, max_age_days, emulator=None):
         return None
     if data.get("schema") != schema:
         print(f"{label}: unexpected schema {data.get('schema')!r}; {what} inconclusive")
+        return None
+    tests = data.get("tests")
+    if not isinstance(tests, list) or not all(isinstance(t, dict) for t in tests):
+        # One malformed document must not take the whole report down with it.
+        print(f"{label}: 'tests' is not a list of objects; {what} inconclusive")
         return None
     if emulator is not None and not _emulator_document_ok(data, label, what, emulator):
         return None

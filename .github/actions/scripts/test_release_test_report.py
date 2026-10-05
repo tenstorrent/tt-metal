@@ -566,6 +566,21 @@ def test_emulator_documents_must_be_built_for_their_platform(tmp_path):
     assert parse_horizon_emu(_horizon_emu(tmp_path, horizon_ok, platform="emu-quasar")) == (INCONCLUSIVE, {})
 
 
+def test_documents_whose_tests_are_not_a_list_of_objects_give_no_evidence(tmp_path):
+    """A malformed `tests` must make only that source inconclusive, not crash the report."""
+    for bad in ("oops", [1, 2], [{"name": "a", "result": "passed"}, "b"], None):
+        path = _quasar_emu(tmp_path, [])
+        doc = json.loads(Path(path).read_text())
+        doc["tests"] = bad
+        Path(path).write_text(json.dumps(doc))
+        assert parse_quasar_emu(path) == (INCONCLUSIVE, {}), bad
+        umd = _horizon(tmp_path, [])
+        doc = json.loads(Path(umd).read_text())
+        doc["tests"] = bad
+        Path(umd).write_text(json.dumps(doc))
+        assert parse_horizon(umd) == (INCONCLUSIVE, {}), bad
+
+
 def test_tt_umd_horizon_results_are_not_held_to_the_emulator_checks(tmp_path):
     """tt-umd-horizon's file has no platform or variant fields; AIIPSW-15 keeps reading it as before."""
     path = _horizon(tmp_path, [{"name": "test_horizon_cluster", "result": "passed"}])

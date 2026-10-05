@@ -502,19 +502,17 @@ jobs:
           set -uo pipefail
           commits=$(gh api "repos/${GITHUB_REPOSITORY}/commits?sha=${SHA}&per_page=30" --jq '.[].sha' 2>/dev/null)
           pull() {  # $1 check name, $2 schema, $3 output file
-            local c summary=""
+            local c summary
             for c in $commits; do
-              # Newest completed run with results; cancelled runs carry none.
+              # Newest completed run on this commit; cancelled runs carry no results.
               summary=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${c}/check-runs?check_name=${1// /+}&filter=all" \
                 --jq '[.check_runs[] | select(.app.slug == "tt-ci-reporter-2" and .status == "completed"
                         and (.conclusion == "success" or .conclusion == "failure"))]
                       | sort_by(.completed_at) | last | .output.summary // empty' 2>/dev/null) || summary=""
-              if [ -n "$summary" ]; then
-                echo "$1 check found on ${c}"
-                break
-              fi
-            done
-            SUMMARY="$summary" python3 - "$2" "$3" <<'PY' || echo "::notice::No usable $1 check; its tests give no emulator evidence."
+              [ -n "$summary" ] || continue
+              # Only a summary that carries the results block counts; a run that
+              # ended in an error message keeps the walk going to older commits.
+              if SUMMARY="$summary" python3 - "$2" "$3" <<'PY'
           import json, os, pathlib, re, sys
           schema, out = sys.argv[1], sys.argv[2]
           m = re.search(r"<!--\s*" + re.escape(schema) + r"\s*\n(\{.*?\})\s*\n-->", os.environ["SUMMARY"], re.DOTALL)
@@ -526,6 +524,13 @@ jobs:
           print("Pulled %s: conclusion=%s passed=%s failed=%s tested_sha=%s timestamp=%s"
                 % (schema, d.get("conclusion"), t.get("passed"), t.get("failed"), str(d.get("tested_sha", ""))[:12], d.get("timestamp")))
           PY
+              then
+                echo "$1 check found on ${c}"
+                return 0
+              fi
+              echo "$1 check on ${c} carries no $2 block; looking further back"
+            done
+            echo "::notice::No usable $1 check; its tests give no emulator evidence."
           }
           pull "Quasar Release" quasar-test-results/v1 quasar-emu-results.json
           pull "Horizon Release" horizon-test-results/v1 horizon-emu-results.json
