@@ -256,38 +256,33 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceDFBSizeOverride) {
     experimental::SetProgramRunArgs(prog, params);
 
     std::vector<uint32_t> zeros(2 * extent_record_bytes / sizeof(uint32_t), 0);
-    auto read_entry_size = [&](uint32_t record_address) {
-        std::vector<uint32_t> record;
-        slow_dispatch::ReadFromL1(*mesh_device, node, record_address, extent_record_bytes, record);
-        return record[0];
+    auto run_and_expect_entry_size = [&](auto run, uint32_t expected_entry_size) {
+        slow_dispatch::WriteToL1(*mesh_device, node, producer_record_address, zeros);
+        run();
+        std::vector<uint32_t> records;
+        slow_dispatch::ReadFromL1(*mesh_device, node, producer_record_address, 2 * extent_record_bytes, records);
+        EXPECT_EQ(records[0], expected_entry_size) << "producer";
+        EXPECT_EQ(records[extent_record_bytes / sizeof(uint32_t)], expected_entry_size) << "consumer";
+    };
+    auto capture_trace = [&] {
+        const distributed::MeshTraceId trace_id = mesh_device->begin_mesh_trace(cq);
+        distributed::EnqueueMeshWorkload(cq, workload, false);
+        mesh_device->end_mesh_trace(cq, trace_id);
+        return trace_id;
     };
 
     // Warm up
-    slow_dispatch::WriteToL1(*mesh_device, node, producer_record_address, zeros);
-    distributed::EnqueueMeshWorkload(cq, workload, true);
-    ASSERT_EQ(read_entry_size(producer_record_address), capture_a_entry_size);
-    ASSERT_EQ(read_entry_size(consumer_record_address), capture_a_entry_size);
+    run_and_expect_entry_size([&] { distributed::EnqueueMeshWorkload(cq, workload, true); }, capture_a_entry_size);
 
-    distributed::MeshTraceId trace_id_a = mesh_device->begin_mesh_trace(cq);
-    distributed::EnqueueMeshWorkload(cq, workload, false);
-    mesh_device->end_mesh_trace(cq, trace_id_a);
+    const distributed::MeshTraceId trace_id_a = capture_trace();
 
     // No untraced run after the override: only trace capture re-serializes the DFB config.
     params.dfb_run_overrides.push_back({.dfb = DFB, .entry_size = capture_b_entry_size});
     experimental::SetProgramRunArgs(prog, params);
-    distributed::MeshTraceId trace_id_b = mesh_device->begin_mesh_trace(cq);
-    distributed::EnqueueMeshWorkload(cq, workload, false);
-    mesh_device->end_mesh_trace(cq, trace_id_b);
+    const distributed::MeshTraceId trace_id_b = capture_trace();
 
-    slow_dispatch::WriteToL1(*mesh_device, node, producer_record_address, zeros);
-    mesh_device->replay_mesh_trace(cq, trace_id_a, true);
-    ASSERT_EQ(read_entry_size(producer_record_address), capture_a_entry_size);
-    ASSERT_EQ(read_entry_size(consumer_record_address), capture_a_entry_size);
-
-    slow_dispatch::WriteToL1(*mesh_device, node, producer_record_address, zeros);
-    mesh_device->replay_mesh_trace(cq, trace_id_b, true);
-    ASSERT_EQ(read_entry_size(producer_record_address), capture_b_entry_size);
-    ASSERT_EQ(read_entry_size(consumer_record_address), capture_b_entry_size);
+    run_and_expect_entry_size([&] { mesh_device->replay_mesh_trace(cq, trace_id_a, true); }, capture_a_entry_size);
+    run_and_expect_entry_size([&] { mesh_device->replay_mesh_trace(cq, trace_id_b, true); }, capture_b_entry_size);
 
     mesh_device->release_mesh_trace(trace_id_a);
     mesh_device->release_mesh_trace(trace_id_b);
