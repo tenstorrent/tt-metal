@@ -531,6 +531,42 @@
   team: models
   budget_type: e2e
 
+- name: Qwen3-TTS e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
+    export HF_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-Base TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-TTS-12Hz-1.7B-Base
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/e2e/test_e2e.py
+  model: qwen3-tts-1.7b
+  model_family: Qwen3-TTS
+  skus:
+    wh_n150:
+      timeout: 6
+      tier: 2
+    bh_p150:
+      timeout: 5
+      tier: 2
+  owner_id: U09LNK7BT1Q # Andrija Cicovic
+  team: models
+  budget_type: e2e
+
+- name: Qwen3-TTS 0.6B e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
+    export HF_MODEL=Qwen/Qwen3-TTS-12Hz-0.6B-Base TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-TTS-12Hz-0.6B-Base
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/e2e/test_e2e.py
+  model: qwen3-tts-0.6b
+  model_family: Qwen3-TTS
+  skus:
+    wh_n150:
+      timeout: 5
+      tier: 2
+    bh_p150:
+      timeout: 4
+      tier: 2
+  owner_id: U09LNK7BT1Q # Andrija Cicovic
+  team: models
+  budget_type: e2e
+
 # ── Gemma ──────────────────────────────────────────────────────────
 
 # Tier 3: accuracy-only e2e (ci-token-matching). Validated locally on N300

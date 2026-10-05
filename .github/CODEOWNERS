@@ -568,6 +568,7 @@ models/datasets/llm_dataset_utils.py @mtairum @uaydonat
 
 models/demos @tenstorrent/metalium-models-maintainers @cglagovichTT
 models/demos/audio/qwen3_asr @yasuhiroitoTT @sott0n @uaydonat
+models/demos/audio/qwen3_tts @acicovicTT
 models/demos/bge_large_en @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat
 models/demos/blackhole/qwen36 @atupe-tt @tenstorrent/cse-developer-ttnn
 models/demos/common/prefill @tenstorrent/metalium-developers-ds-prefill @philei-tt
