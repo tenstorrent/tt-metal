@@ -132,6 +132,12 @@ public:
             }
             cb_bytes = cb_total();
         }
+        if (cb_bytes > available) {
+            // Then the fused chunks' CBs: without them every K chunk runs on the reduce path (slower than giving
+            // up Q prefetch, so this goes last).
+            cb_bytes -= ring_recipes::recipe_drop_fused(desc.cbs, program_.kernels.front().defines);
+            log_debug(tt::LogOp, "Named ring recipe: unfused chunks to fit L1");
+        }
         TT_FATAL(
             cb_bytes <= available,
             "Named ring SDPA recipe needs {} bytes of L1 per core at Q{}/K{}, but only {} are available; use a smaller "
@@ -164,7 +170,7 @@ public:
     }
 
 private:
-    tt::tt_metal::ProgramDescriptor program_;
+    mutable tt::tt_metal::ProgramDescriptor program_;  // finalize_cbs may drop the fused chunks
     tt::tt_metal::CoreRangeSet grid_;
     uint32_t Sq_chunk_t_ = 0;
     uint32_t Sk_chunk_t_ = 0;

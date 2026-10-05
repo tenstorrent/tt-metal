@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <map>
+#include <string>
+#include <vector>
+
 #include "sdpa_precision_policy.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 #include "sdpa.hpp"
@@ -22,6 +26,12 @@ uint32_t recipe_dense_k_tiles(const std::optional<SDPAProgramConfig>& program_co
 // computes an odd chunk as is, ending with a single-row group: odd chunks let it balance Q chunks over the
 // grid (e.g. Wan2.2 720p ring: Q288, 330 chunks on 110 cores).
 uint32_t recipe_compute_q_tiles(const PrecisionPolicy& policy, uint32_t q_tiles);
+
+// Fused STANDARD / LOW_PRECISION chunks add CBs 29-31 (recipe_compute_program). A layout whose fused CBs do not
+// fit L1 drops them and the SDPA_RECIPE_FUSED define, so the kernel runs every K chunk on the reduce path.
+// Returns the bytes freed (0 when the layout was not fused).
+uint64_t recipe_drop_fused(tt::tt_metal::ProgramDescriptor::CBDescriptors& cbs, tt::tt_metal::KernelDescriptor::Defines& defines);
+uint64_t recipe_drop_fused(tt::tt_metal::ProgramDescriptor::CBDescriptors& cbs, std::map<std::string, std::string>& defines);
 
 // Recipe QK/PV matmul subblock width for a K chunk or head dim of `tiles` tiles: the largest of 4, 2 and 1
 // dividing it (SDPA_RECIPE_QK_W / SDPA_RECIPE_PV_W). Shared by the dense, ring and exp ring recipe hosts.

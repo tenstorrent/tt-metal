@@ -59,8 +59,16 @@ public:
         return false;
     }
 
-    // Rejects a variant-owned layout that does not fit L1 (only called when replace_cbs returned true).
-    virtual void check_l1(uint64_t /*cb_bytes*/, uint64_t /*usable_l1*/, uint32_t /*q_chunk_size*/) const {}
+    // Fits a variant-owned layout to L1 or rejects it (only called when replace_cbs returned true); returns the
+    // layout's CB bytes after any fallback.
+    virtual uint64_t check_l1(
+        tt::tt_metal::ProgramDescriptor& /*desc*/,
+        std::map<std::string, std::string>& /*defines*/,
+        uint64_t cb_bytes,
+        uint64_t /*usable_l1*/,
+        uint32_t /*q_chunk_size*/) const {
+        return cb_bytes;
+    }
 
     virtual std::optional<tt::tt_metal::KernelDescriptor::ConfigDescriptor> compute_config() const {
         return std::nullopt;

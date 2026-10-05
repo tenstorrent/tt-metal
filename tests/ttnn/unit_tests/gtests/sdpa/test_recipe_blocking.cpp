@@ -124,7 +124,8 @@ TEST(SDPARecipeBlocking, AttnMaskCircularBufferIsBudgeted) {
         const auto masked = recipe_l1_bytes(RecipeOp::Dense, policy, 8, 16, 4, {.mask_page_bytes = page});
         const uint64_t group = uint64_t{recipe_mask_group_rows(policy, 8)} * 16 * page;
         EXPECT_EQ(masked.minimum - plain.minimum, group);
-        EXPECT_EQ(masked.preferred - plain.preferred, 2 * group);
+        // A masked build has no fused chunks' CBs: its preferred layout is the unmasked minimum plus two groups.
+        EXPECT_EQ(masked.preferred, plain.minimum + 2 * group);
         // A budget that only just holds the unmasked Q256/K512 layout: the masked choice must still fit.
         auto p = problem(RecipeOp::Dense, selection, 8, 4096, 4096);
         p.l1_bytes = plain.minimum + group / 2;
