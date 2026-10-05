@@ -133,6 +133,20 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
     return result;
 }
 
+bool bf16_dest_log();
+template <int ITERATIONS>
+void calculate_log_bf16();
+void init_log_bf16();
+// Whether BF16 DEST runs the generated log kernel as one call over the whole tile.
+inline constexpr bool log_bf16_whole_tile = true;
+// Sets up the generated BF16 log kernel for the instance it serves.
+template <bool bf16_kernel>
+inline void log_bf16_tile_init() {
+    if constexpr (bf16_kernel) {
+        init_log_bf16();
+    }
+}
+
 template <
     bool APPROXIMATION_MODE,
     bool FAST_APPROX,
@@ -141,6 +155,12 @@ template <
     int ITERATIONS = 8,
     bool IS_BASE_TWO = false>
 inline void calculate_log(uint log_base_scale_factor) {
+    if constexpr (!is_fp32_dest_acc_en && !FAST_APPROX && !HAS_BASE_SCALING && ITERATIONS == 32) {
+        if (bf16_dest_log()) {
+            calculate_log_bf16<ITERATIONS>();
+            return;
+        }
+    }
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat result = calculate_log_body<FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en, IS_BASE_TWO>(
@@ -176,3 +196,5 @@ inline void log_init() {
 
 }  // namespace sfpu
 }  // namespace ckernel
+
+#include "ckernel_sfpu_log_bf16.h"
