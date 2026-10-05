@@ -422,6 +422,27 @@ class Golden:
         check_source_layout(total_tiles, cfg.geometry)
         chain = self.build_chain(cfg)
         self.last_chain = chain
+
+        # Staging a tile the chain never reads is silent: every register still
+        # holds exactly one tile, so nothing raises and the op just answers from
+        # the tiles it did read. Only an op that folds tiles builds a chain
+        # referencing in0_t1 and up, so ask the chain itself rather than keeping
+        # a list of which ops those are.
+        staged = [
+            self.source(operand, tile)
+            for tile in range(depth)
+            for operand in range(len(stimuli))
+        ]
+        ignored = chain.unread(staged)
+        if ignored:
+            raise ValueError(
+                f"{type(self).__name__} was given {depth} tiles per output but "
+                f"its chain never reads {ignored}, so those tiles would be "
+                f"dropped and the result would be computed from tile 0 alone. "
+                f"This op does not fold tiles into one Dest: pass "
+                f"num_tiles_per_output=1, or give it a chain that consumes "
+                f"every staged tile."
+            )
         packed_blocks: List[int] = []
         for block in range(total_tiles // depth):
             regs = Registers()

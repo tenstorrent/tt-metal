@@ -169,6 +169,18 @@ class Chain:
                 )
         return regs[result] if result is not None else regs
 
+    def unread(self, available: Iterable[str]) -> List[str]:
+        """Names in `available` that no step in the chain ever reads.
+
+        The mirror of :meth:`dry_run`. That one catches a step reading a
+        register nothing wrote, which fails loudly the moment it runs. This
+        catches the quieter mistake in the other direction: a value staged into
+        the registers that the chain never looks at, so the run completes and
+        returns a confident answer computed from less input than it was given.
+        """
+        consumed = {name for step in self.steps for name in step.reads}
+        return [name for name in available if name not in consumed]
+
     def dry_run(self, available: Iterable[str] = ()) -> List[str]:
         """Report steps that read a register nothing has written yet.
 

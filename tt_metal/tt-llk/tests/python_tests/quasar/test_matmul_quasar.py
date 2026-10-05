@@ -43,6 +43,7 @@ from helpers.param_config import (
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
+from helpers.test_config import should_compute_direct_golden
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     DEST_SYNC,
@@ -487,13 +488,18 @@ def test_matmul(
             # The heavyweight golden takes L1-layout stimuli and returns the
             # result in L1 layout too, so it lands already comparable with the
             # device buffer -- no tilize of the golden afterwards.
-            generate_golden = QuasarMatmulGolden(math_fidelity)
-            golden_tensor = generate_golden.run(
-                [tilized_A.flatten(), tilized_B.flatten()],
-                format.input_format,
-                format.output_format,
-                dest_acc=dest_acc == DestAccumulation.Yes,
-            )
+            # Built directly, so unlike the else branch below it misses the
+            # run-mode swaps on get_golden_generator -- see
+            # should_compute_direct_golden. Only the heavyweight variants are
+            # affected, so the decision sits inside this branch.
+            if should_compute_direct_golden("the heavyweight matmul golden"):
+                generate_golden = QuasarMatmulGolden(math_fidelity)
+                golden_tensor = generate_golden.run(
+                    [tilized_A.flatten(), tilized_B.flatten()],
+                    format.input_format,
+                    format.output_format,
+                    dest_acc=dest_acc == DestAccumulation.Yes,
+                )
         else:
             generate_golden = get_golden_generator(MatmulGolden)
             golden_tensor = generate_golden(

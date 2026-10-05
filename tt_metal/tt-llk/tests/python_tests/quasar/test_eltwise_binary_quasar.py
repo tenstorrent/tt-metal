@@ -29,7 +29,7 @@ from helpers.param_config import (
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import BootMode
+from helpers.test_config import BootMode, should_compute_direct_golden
 from helpers.test_variant_parameters import (
     ACC_TO_DEST,
     DEST_SYNC,
@@ -304,16 +304,21 @@ def test_eltwise_binary(
         tile_shape.total_tile_size() * num_tiles_per_accumulation
     )
 
-    generate_golden = QuasarEltwiseBinaryGolden(mathop, math_fidelity)
-    golden_tensor = generate_golden.run(
-        [src_A, src_B],
-        formats.input_format,
-        formats.output_format,
-        dest_acc=(dest_acc == DestAccumulation.Yes),
-        num_faces=num_faces,
-        face_r_dim=tile_shape.face_r_dim,
-        num_tiles_per_output=num_tiles_per_accumulation,
-    )
+    # Only compute the golden where it will actually be read: a perf run
+    # returns after run(), and --compile-producer skips inside it. See
+    # should_compute_direct_golden for why this is decided here rather than by
+    # the get_golden_generator swap the registry-based tests get.
+    if not is_perf and should_compute_direct_golden("the heavyweight eltwise golden"):
+        generate_golden = QuasarEltwiseBinaryGolden(mathop, math_fidelity)
+        golden_tensor = generate_golden.run(
+            [src_A, src_B],
+            formats.input_format,
+            formats.output_format,
+            dest_acc=(dest_acc == DestAccumulation.Yes),
+            num_faces=num_faces,
+            face_r_dim=tile_shape.face_r_dim,
+            num_tiles_per_output=num_tiles_per_accumulation,
+        )
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")

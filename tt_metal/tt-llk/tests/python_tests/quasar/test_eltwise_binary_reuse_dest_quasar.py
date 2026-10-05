@@ -31,7 +31,7 @@ from helpers.param_config import (
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import BootMode
+from helpers.test_config import BootMode, should_compute_direct_golden
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
@@ -227,7 +227,11 @@ def test_eltwise_binary_reuse_dest_quasar(
     # with a different rounding rule and then packing would round twice.
 
     golden_dest = []
-    if not is_perf:
+    # See should_compute_direct_golden: this golden is built directly, so the
+    # run-mode swaps on get_golden_generator do not reach it.
+    if not is_perf and should_compute_direct_golden(
+        "the heavyweight reuse_dest golden"
+    ):
         generate_golden = QuasarEltwiseBinaryReuseDestGolden(
             mathop, math_fidelity, reuse_dest_type
         )
