@@ -20,7 +20,7 @@ using namespace ckernel::trisc;
  * @brief Configures packer ReLU (mode and threshold) for the selected packer only.
  *
  * Programs RELU_MODE and RELU_THRESHOLD via THCON_PACKER*_REG3_*_RMW (cfg_defines.h).
- * Quasar layout (see tests/hw_specific/quasar/inc/cfg_defines.h):
+ * Quasar layout (see tt_llk_quasar/common/inc/cfg_defines.h):
  *   - RELU_MODE: NO_RELU, ZERO_RELU, MIN_THRESHOLD_RELU, MAX_THRESHOLD_RELU.
  *   - RELU_THRESHOLD: separate 32-bit register. Format depends on pack input: FP16 path expects 16-bit
  *     threshold in low 16 bits; FP32 path expects BF16/FP16 threshold in high 16 bits.
