@@ -583,7 +583,7 @@ def test_q_shard_height_diff_same_logical_program_cache_distinct(device_with_pro
     )
 
 
-def test_cur_pos_tensor_rank1_then_rank2_same_dram_same_qkv_program_cache(device_with_program_cache):
+def test_cur_pos_tensor_rank1_then_rank2_same_dram_same_qkv_program_cache(device_with_program_cache, expect_error):
     device = device_with_program_cache
 
     b, nh, nkv, s, d = 2, 4, 1, 64, 64
@@ -658,7 +658,9 @@ def test_cur_pos_tensor_rank1_then_rank2_same_dram_same_qkv_program_cache(device
         device.num_program_cache_entries() == 1
     ), f"Expected 1 cache entry after rank-1 cur_pos_tensor, got {device.num_program_cache_entries()}"
 
-    pos_2d = pos_1d.reshape(b, 1)
+    # Rank-2 as [1, B]: the kernel reads only the first row of an interleaved cur_pos tensor, so the
+    # positions must stay in the last dim.
+    pos_2d = pos_1d.reshape(1, b)
     tt_pos_2d = ttnn.from_torch(
         pos_2d,
         device=device,
@@ -667,25 +669,43 @@ def test_cur_pos_tensor_rank1_then_rank2_same_dram_same_qkv_program_cache(device
         memory_config=dram,
     )
 
-    try:
+    ttnn.transformer.scaled_dot_product_attention_decode(
+        tt_q,
+        tt_k,
+        tt_v,
+        cur_pos_tensor=tt_pos_2d,
+        scale=scale,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+        memory_config=dram,
+    )
+
+    assert device.num_program_cache_entries() == 2, (
+        "Expected 2 program-cache entries when cur_pos_tensor logical shape changes 1D [B] -> 2D [1,B] "
+        f"with identical Q/K/V (DRAM). Got {device.num_program_cache_entries()}. "
+        "If cur_pos_tensor is dropped from compute_program_hash, entries can stay at 1."
+    )
+
+    # [B, 1] puts one position per row; batches past 0 would read row padding as their position and
+    # hang the device, so validate must reject it.
+    tt_pos_col = ttnn.from_torch(
+        pos_1d.reshape(b, 1),
+        device=device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=dram,
+    )
+    with expect_error(RuntimeError, "cur_pos tensor must hold all positions in its last dim"):
         ttnn.transformer.scaled_dot_product_attention_decode(
             tt_q,
             tt_k,
             tt_v,
-            cur_pos_tensor=tt_pos_2d,
+            cur_pos_tensor=tt_pos_col,
             scale=scale,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
             memory_config=dram,
         )
-    except RuntimeError as e:
-        pytest.skip(f"Rank-2 cur_pos on DRAM not supported for this decode path (acceptable): {e}")
-
-    assert device.num_program_cache_entries() == 2, (
-        "Expected 2 program-cache entries when cur_pos_tensor logical shape changes 1D [B] -> 2D [B,1] "
-        f"with identical Q/K/V (DRAM). Got {device.num_program_cache_entries()}. "
-        "If cur_pos_tensor is dropped from compute_program_hash, entries can stay at 1."
-    )
 
 
 # ---------------------------------------------------------------------------

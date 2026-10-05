@@ -7324,10 +7324,9 @@ else:
         # 4-device ring (QuietBox, 100 SDPA cores)
         # Three-run median with compute optimizations and blocking K multicast: 2.726 ms.
         ("kimi50k", 32, 640, 4, 69.54, RING_JOINT_PERF_MARGIN),
-        # kimi_k3 is bimodal on QuietBox: observed runs span 4.600-4.695 ms (~69.2-70.6% util,
-        # QB and QB2 alike), well beyond the default +/-1% band. Center on the span and widen
-        # to +/-1.5% so the gate tracks regressions without flagging this case's normal variance.
-        ("kimi_k3", 32, 640, 4, 69.9, 0.015),
+        # After the Blackhole NoC MID-address write skip (#56023): 4.567-4.591 ms (70.77-71.15% util)
+        # across QB and QB2 runs, so the earlier bimodal spread no longer needs a wider band.
+        ("kimi_k3", 32, 640, 4, 71.0, RING_JOINT_PERF_MARGIN),
     ]
 
 
@@ -7492,7 +7491,7 @@ def test_ring_joint_attention_minimax3_gqa_rotated_q_perf():
     if MESH_CONFIG.is_galaxy or MESH_CONFIG.sp_size != 4 or MESH_CONFIG.sdpa_cores != 100:
         pytest.skip("GQA rotated-Q performance threshold is calibrated for QuietBox ring-4 with 100 SDPA cores")
 
-    expected_util = 32.43
+    expected_util = 33.26
     model = MINIMAX3_GQA_CHUNKED_MODEL_CONFIGS["minimax3_55k"]
     chunk_size = CHUNKED_PREFILL_CHUNK_SIZE
     perf_chunk = CHUNKED_PREFILL_N_CHUNKS - 1
