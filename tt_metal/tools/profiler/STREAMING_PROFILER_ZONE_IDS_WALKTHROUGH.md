@@ -299,10 +299,6 @@ The record's position gives the same offset: `(0x06700050 − 0x06700000) / 16 =
 match is only because records and handles were emitted in the same order; the loader uses the field's value, not
 the position.
 
-Nothing moves by `0x06700000`: the only section that moves is `.tt_zone_ids`. The name and file fields point into
-`.tt_zone_str`, which stays where it is, so `0x066000a9` and `0x06600009` are still right; the line is a plain
-number. One word of the record's four changes.
-
 **After steps 10 and 11, the same 47 is in three places:**
 
 | section | what holds 47 | who uses it |
