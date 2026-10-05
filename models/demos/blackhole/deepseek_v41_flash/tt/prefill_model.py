@@ -547,9 +547,14 @@ class DSV41PrefillModel:
     def begin_chunk(self, s0, C):
         """Host side of a chunk: refresh every per-chunk persistent tensor (RoPE tables, masks, latent offsets) and call the registered hooks
         (e.g. the paged-state sink's own uploads) right before the replay."""
+        t0 = time.perf_counter()
         self.dyn.update(s0)
+        t1 = time.perf_counter()
         for h in self.pre_replay_hooks:
             h(s0, C)
+        t2 = time.perf_counter()
+        self.timing["w_dynupd"] = self.timing.get("w_dynupd", 0.0) + t1 - t0
+        self.timing["w_prehooks"] = self.timing.get("w_prehooks", 0.0) + t2 - t1
 
     def run_traced_chunks(self, tokens, chunk, hashes=None, S_pad_max=None):
         """tokens [B, S] -> logits [B, vocab] of the last prompt token. One trace of the chunk forward (C = ``chunk`` tokens per user, multiple of
@@ -578,10 +583,18 @@ class DSV41PrefillModel:
         def prep_rec(ci):
             """prep + ALL the host work of the chunk's uploads (Engram rows tensors, rope tables, masks, sink index tables) in the worker thread; the
             device copies are only recorded and replayed by the main thread."""
+            t0 = time.perf_counter()
             pre = prep(ci)
+            t1 = time.perf_counter()
             with recording() as ops:
                 self.upload_inputs(pre, bufs)
+                t2 = time.perf_counter()
                 self.begin_chunk(ci * C, C)
+            t3 = time.perf_counter()
+            tm = self.timing
+            tm["w_prep"] = tm.get("w_prep", 0.0) + t1 - t0
+            tm["w_upload"] = tm.get("w_upload", 0.0) + t2 - t1
+            tm["w_begin"] = tm.get("w_begin", 0.0) + t3 - t2
             return ops
 
         pool = ThreadPoolExecutor(1)
@@ -628,13 +641,15 @@ class DSV41PrefillModel:
         t_run = time.perf_counter()
         # Asynchronous replay loop (DSV41_PF_ASYNC=1): the per-chunk uploads and the trace are enqueued on CQ 0 (in-order: a chunk's uploads only land
         # after the previous replay finished), so the host work of chunk i+1 (index tables, Engram rows, uploads) overlaps the replay of chunk i. The
-        # host runs at most 2 replays ahead (event of replay ci-2 awaited before chunk ci). Chunks whose post hooks read the replay's outputs
+        # host runs at most 1 replay ahead (event of replay ci-1 awaited before chunk ci's copies). Chunks whose post hooks read the replay's outputs
         # (ragged last-token head) synchronize as before. DSV41_PF_ASYNC=0 restores the per-chunk synchronize_device.
         events = []
         for ci in range(n):
             t0 = time.perf_counter()
-            if PF_ASYNC and ci >= 2:
-                ttnn.event_synchronize(events[ci - 2])
+            if PF_ASYNC and ci >= 1:
+                # host copies block (holding the GIL) until the queue reaches them, i.e. until the previous replay is done: wait for it in a
+                # GIL-free call so the worker thread keeps preparing chunk ci+1, then the copies are only a few ms
+                ttnn.event_synchronize(events[ci - 1])
             t_ev = time.perf_counter()
             ops = fut.result()
             if ci + 1 < n:
