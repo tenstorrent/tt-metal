@@ -35,12 +35,20 @@ std::string posix_errno_str() { return std::strerror(errno); }
     throw std::runtime_error("InterProcessCounterChannel: " + op + " failed (" + detail + "): " + posix_errno_str());
 }
 
-// Creates the segment name exclusively. If the name is already taken, the
-// tracker's stale scan runs once and the open is retried: a copy left by a
-// killed predecessor is listed in that predecessor's manifest and gets
-// reaped, whereas a live owner's segment survives the scan and the retry
-// fails with EEXIST like the first attempt.
+// Creates the segment name exclusively.
+//
+// The tracker is touched first so that its one-time stale scan (run when the
+// instance is constructed) happens before this segment exists: that scan
+// unlinks every name listed in a dead owner's manifest, and must not find a
+// manifest naming shm_path while our fresh segment holds the name.
+//
+// If the name is already taken, the stale scan runs once more and the open is
+// retried: a copy left by a killed predecessor is listed in that predecessor's
+// manifest and gets reaped, whereas a live owner's segment (live in this pid
+// namespace) survives the scan and the retry fails with EEXIST like the first
+// attempt.
 int open_fresh_counter_segment(const std::string& shm_path) {
+    ShmResourceTracker::instance();
     constexpr int kFlags = O_CREAT | O_EXCL | O_RDWR;
     int fd = ::shm_open(shm_path.c_str(), kFlags, S_IRUSR | S_IWUSR);
     if (fd == -1 && errno == EEXIST) {
@@ -56,7 +64,10 @@ int open_fresh_counter_segment(const std::string& shm_path) {
 // Owner-side construction.
 //
 // Creates the SHM segment fresh:
-//   shm_open(O_CREAT|O_EXCL|O_RDWR)   ← fails if a stale segment exists
+//   shm_open(O_CREAT|O_EXCL|O_RDWR)   ← see open_fresh_counter_segment:
+//                                       a dead owner's copy is reaped
+//                                       and the open retried; fails only
+//                                       for a live or unattributable holder
 //   ftruncate to sizeof(InterProcessCounterSegment)
 //   mmap PROT_READ|PROT_WRITE, MAP_SHARED
 //   register with ShmResourceTracker
@@ -64,8 +75,8 @@ int open_fresh_counter_segment(const std::string& shm_path) {
 // The registration is what ties the segment's lifetime to the owner
 // process: the tracker unlinks it on SIGINT/SIGTERM and at exit, and
 // lists it in this process's manifest so the next owner reaps it if
-// this process is killed outright (SIGKILL, OOM): the exclusive open
-// below runs the stale scan when it finds the name taken.
+// this process is killed outright (SIGKILL, OOM): open_fresh_counter_segment
+// runs the stale scan when it finds the name taken.
 //
 // On any failure mid-way, undo what was done so we don't leak a half-
 // initialised segment on /dev/shm.
@@ -126,6 +137,10 @@ InterProcessCounterChannel::InterProcessCounterChannel(const std::string& shm_na
         ::munmap(seg_, sizeof(InterProcessCounterSegment));
         seg_ = nullptr;
         ::shm_unlink(shm_path_.c_str());
+        try {
+            ShmResourceTracker::instance().untrack_shm(shm_path_);
+        } catch (...) {
+        }
         throw;
     }
 }

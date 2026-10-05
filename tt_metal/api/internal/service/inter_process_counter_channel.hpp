@@ -60,7 +60,10 @@ public:
     // name is already taken when constructing, the tracker's stale scan
     // runs and the exclusive open is retried, which removes a copy left
     // by an owner that was killed outright (it is listed in that owner's
-    // manifest) without touching a live owner's segment.
+    // manifest) without touching the segment of an owner that is alive
+    // in this pid namespace. Owner liveness is judged with kill(2), so a
+    // live owner in another pid namespace sharing /dev/shm would look
+    // dead; owners that share names must share a pid namespace.
     //
     // Throws std::runtime_error if a segment with this shm_name still
     // exists after that (a live owner, or the previous owner's pid in use

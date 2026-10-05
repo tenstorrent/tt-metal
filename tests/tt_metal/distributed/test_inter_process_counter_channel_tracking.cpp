@@ -8,9 +8,10 @@
 // the owner is constructed, while a live owner's segment is never taken over.
 // No device needed.
 //
-// The tracker's signal path is driven directly rather than through a child
-// process: this binary opens the devices at startup, so a re-executed child
-// (gtest death tests) would redo device initialisation.
+// The tracker's signal path is driven directly rather than through a
+// re-executed child (gtest death tests): this binary opens the devices at
+// startup, so such a child would redo device initialisation. A forked child
+// that never execs, used below as a live owner, is fine.
 
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -57,6 +58,18 @@ bool tracking_segment_exists(const std::string& shm_name) {
     }
     ::close(fd);
     return true;
+}
+
+// Inode of the segment behind a name, 0 if absent; tells a fresh segment from a reused one.
+ino_t tracking_segment_inode(const std::string& shm_name) {
+    const int fd = ::shm_open(shm_name.c_str(), O_RDONLY, 0);
+    if (fd == -1) {
+        return 0;
+    }
+    struct stat st{};
+    const ino_t ino = (::fstat(fd, &st) == 0) ? st.st_ino : 0;
+    ::close(fd);
+    return ino;
 }
 
 // A pid that was alive a moment ago and is now gone. Returns -1 if fork fails.
@@ -156,14 +169,19 @@ TEST(CounterChannelTracking, SegmentOfKilledPredecessorIsReapedOnConstruction) {
     const pid_t predecessor = tracking_reaped_child_pid();
     ASSERT_GT(predecessor, 0) << "fork failed: " << std::strerror(errno);
     tracking_plant_owner_segment(name, predecessor);
-    ASSERT_TRUE(tracking_segment_exists(name));
+    if (HasFatalFailure()) {
+        return;
+    }
+    const ino_t planted_inode = tracking_segment_inode(name);
+    ASSERT_NE(planted_inode, 0u);
 
     // No explicit scan: the constructor finds the name taken, runs the stale
     // scan and retries, so the planted copy and its manifest are gone and the
-    // new segment is ours.
+    // name now belongs to a fresh segment of ours.
     InterProcessCounterChannel owner(name);
     EXPECT_FALSE(std::ifstream(tracking_manifest_path(predecessor)).good()) << "stale manifest was not reaped";
     EXPECT_TRUE(tracking_segment_exists(name));
+    EXPECT_NE(tracking_segment_inode(name), planted_inode) << "the planted copy was reused instead of replaced";
     EXPECT_TRUE(tracking_manifest_names(getpid(), name));
 
     owner.shutdown();
@@ -175,6 +193,9 @@ TEST(CounterChannelTracking, SegmentOfLiveOwnerIsNotTakenOver) {
     ASSERT_GT(live_owner.pid(), 0) << "fork failed: " << std::strerror(errno);
     const std::string name = fmt::format("/tt_test_ctr_live_{}", getpid());
     tracking_plant_owner_segment(name, live_owner.pid());
+    if (HasFatalFailure()) {
+        return;
+    }
 
     // The stale scan leaves a live owner's manifest alone, so the retry fails
     // with EEXIST exactly like the first attempt.
