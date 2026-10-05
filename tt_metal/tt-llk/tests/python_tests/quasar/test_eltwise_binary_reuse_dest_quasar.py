@@ -345,5 +345,6 @@ def test_eltwise_binary_reuse_dest_quasar(
                 output_format=formats.output_format,
                 chain=generate_golden.last_chain,
                 dest=torch.cat(golden_dest) if golden_dest else None,
+                dest_format=generate_golden.last_dest_format,
             )
         )

@@ -395,6 +395,7 @@ class Golden:
             }
         )
         self.last_chain = self.build_chain(cfg)
+        self.last_dest_format = cfg.dest_format
         l1_out = self.last_chain.run(regs, result="out", trace=trace)
         return self.blocks.unpack_from_l1(l1_out, out_format, **geometry)
 
@@ -422,6 +423,7 @@ class Golden:
         check_source_layout(total_tiles, cfg.geometry)
         chain = self.build_chain(cfg)
         self.last_chain = chain
+        self.last_dest_format = cfg.dest_format
 
         # Staging a tile the chain never reads is silent: every register still
         # holds exactly one tile, so nothing raises and the op just answers from
@@ -464,4 +466,5 @@ class Golden:
         """Run on L1 buffers and return an L1 buffer, for chaining ops together."""
         regs = Registers(**{f"in{i}": b for i, b in enumerate(l1_buffers)})
         self.last_chain = self.build_chain(cfg)
+        self.last_dest_format = cfg.dest_format
         return self.last_chain.run(regs, result="out", trace=trace)

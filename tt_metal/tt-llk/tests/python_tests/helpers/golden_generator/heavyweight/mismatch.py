@@ -22,6 +22,7 @@ from typing import Optional, Sequence, Tuple
 
 import torch
 from helpers.format_config import DataFormat
+from helpers.llk_params import format_dict
 from helpers.utils import _MXFP_COMPARE_PARAMS, calculate_pcc, mxfp_local_step
 
 from .operations.chain import Chain, StageRecord
@@ -59,6 +60,7 @@ def describe_mismatch(
     chain: Optional[Chain] = None,
     trace: Optional[Sequence[StageRecord]] = None,
     dest: Optional[torch.Tensor] = None,
+    dest_format: Optional[DataFormat] = None,
     worst: int = 8,
 ) -> str:
     """Rank a golden-vs-device disagreement by lattice steps.
@@ -66,7 +68,10 @@ def describe_mismatch(
     `output_format` selects the lattice the result landed on; a format with no
     MX-float model falls back to ranking by absolute error, omits the steps
     column and does not claim a tolerance. `dest` is the golden's pre-pack
-    Dest, when the caller collected it.
+    Dest, when the caller collected it, and `dest_format` is the format it was
+    held in -- needed to say anything about flush-to-zero, since the floor is
+    the Dest format's smallest normal and differs by ~2^112 between fp16 and
+    bf16. Without it the FTZ line is omitted rather than guessed.
     """
     g = golden.flatten().float()
     a = actual.flatten().float()
@@ -138,16 +143,24 @@ def describe_mismatch(
         )
 
     # A device zero against a nonzero golden is the one case where the Dest
-    # value is decisive: hardware writes no denormal, and a sweep confirmed it
-    # holds everything at or above the fp16 normal floor. So a golden Dest at or
-    # above that floor rules Dest flushing out.
-    if d is not None:
+    # value is decisive: hardware writes no denormal, so a golden Dest at or
+    # above the Dest format's smallest normal rules Dest flushing out. The floor
+    # has to come from that format -- using fp16's 2^-14 for a bf16 Dest calls
+    # everything below it "consistent with FTZ" when the golden Dest held it
+    # perfectly well and the loss was really in the pack.
+    floor = None
+    if dest_format is not None:
+        dtype = format_dict[dest_format]
+        if dtype.is_floating_point:
+            floor = torch.finfo(dtype).smallest_normal
+    if d is not None and floor is not None:
         zeroed = (a == 0) & (g != 0)
         if zeroed.any():
-            above = int((d[zeroed].abs() >= 2.0**-14).sum())
+            above = int((d[zeroed].abs() >= floor).sum())
             lines.append(
                 f"  {int(zeroed.sum())} datums the device zeroed; golden Dest is "
-                f">= 2^-14 for {above} of them"
+                f">= {floor:.3g} ({dest_format}'s smallest normal) for {above} "
+                f"of them"
                 + (
                     " -> the device would have held those, so the divergence is "
                     "in the math or the pack, not Dest FTZ"

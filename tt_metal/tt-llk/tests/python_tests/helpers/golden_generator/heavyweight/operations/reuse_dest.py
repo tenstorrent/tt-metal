@@ -83,10 +83,21 @@ class EltwiseBinaryReuseDestGolden(EltwiseBinaryGolden):
                     self.dest_to_srcA(cfg),
                     self.l1_to_srcB(cfg, source=self.source(1, tile)),
                 )
-            else:
+            elif self.reuse_dest_type is EltwiseBinaryReuseDestType.DEST_TO_SRCB:
                 chain.then(
                     self.l1_to_srcA(cfg, source=self.source(0, tile)),
                     self.dest_to_srcB(cfg),
+                )
+            else:
+                # Named rather than caught by an else: the enum also has NONE,
+                # which an else would quietly build as the SrcB chain -- a
+                # different operation that still returns a plausible tile, with
+                # one stimulus never read.
+                raise ValueError(
+                    f"{self.reuse_dest_type} does not feed Dest back into an "
+                    f"operand, so there is no reuse-dest chain to build. This "
+                    f"golden models DEST_TO_SRCA and DEST_TO_SRCB; for NONE use "
+                    f"the plain element-wise binary golden."
                 )
             # Replaces Dest rather than accumulating: the feedback is the
             # operand, not an accumulator.
@@ -139,6 +150,7 @@ class EltwiseBinaryReuseDestGolden(EltwiseBinaryGolden):
         )
         chain = self.build_chain(cfg)
         self.last_chain = chain
+        self.last_dest_format = cfg.dest_format
 
         flat_a, flat_b = src_a.reshape(-1), src_b.reshape(-1)
         check_source_layout(flat_a.numel() // per_tile, geometry)
