@@ -408,6 +408,7 @@ private:
     void read_available(void* data, uint32_t num_bytes, bool notify_sender);
     void pop_bytes(uint32_t num_bytes);
     void notify_sender();
+    void validate_host_access() const;
 
     // Non-blocking read. Returns false if the FIFO does not currently contain `num_pages`.
     // Accessible only via tt::tt_metal::experimental::detail::try_read.
@@ -446,6 +447,9 @@ private:
     ProcessScope process_scope_ = ProcessScope::CrossProcess;
     std::unique_ptr<PCIeCoreWriter> pcie_writer_instance_;
     MeshDevice* mesh_device_ = nullptr;
+    // Host I/O stays bound to the physical sender when the logical mesh is reshaped.
+    // This is separate from is_owner_: descriptor connectors also have host access.
+    bool has_host_access_ = false;
     bool is_owner_ = true;
     std::string descriptor_path_;
     bool exported_ = false;

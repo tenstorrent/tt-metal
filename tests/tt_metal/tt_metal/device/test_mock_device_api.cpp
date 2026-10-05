@@ -25,6 +25,7 @@
 #include "llrt/tt_cluster.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/impl/buffers/d2h_socket_internal.hpp"
 
 namespace tt::tt_metal {
 
@@ -260,6 +261,87 @@ TEST_F(MockDeviceAPIFixture, D2HSocketReadsDoNotDeadlockOnMock) {
     }
 
     mesh_device->close();
+}
+
+namespace {
+
+void test_mock_d2h_socket_across_reshape(bool use_external_config) {
+    // Both mock Blackhole devices are MMIO devices, so either can own the host FIFO.
+    experimental::configure_mock_mode(tt::ARCH::BLACKHOLE, 2);
+    auto mesh_device = distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape(1, 2)));
+    const distributed::MeshCoreCoord sender_core{distributed::MeshCoordinate(0, 1), CoreCoord(0, 0)};
+    const ChipId sender_device_id = mesh_device->get_device(sender_core.device_coord)->id();
+    constexpr uint32_t kFifoSize = 2048;
+    constexpr uint32_t kPageSize = 512;
+
+    {
+        std::shared_ptr<distributed::MeshBuffer> config_buffer;
+        std::unique_ptr<distributed::D2HSocket> socket;
+        if (use_external_config) {
+            const uint32_t config_size = distributed::D2HSocket::required_config_buffer_size(
+                MetalContext::instance().hal().get_alignment(HalMemType::L1));
+            const auto shard_spec = ShardSpecBuffer(
+                CoreRangeSet(CoreRange(sender_core.core_coord)), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+            config_buffer = distributed::MeshBuffer::create(
+                distributed::ReplicatedBufferConfig{.size = config_size},
+                distributed::DeviceLocalBufferConfig{
+                    .page_size = config_size,
+                    .buffer_type = BufferType::L1,
+                    .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
+                },
+                mesh_device.get());
+            socket = std::make_unique<distributed::D2HSocket>(
+                mesh_device,
+                sender_core,
+                kFifoSize,
+                distributed::D2HSocket::ExternalConfigBuffer{
+                    .address = static_cast<uint32_t>(config_buffer->address())},
+                distributed::D2HSocket::ProcessScope::InProcess);
+        } else {
+            socket = std::make_unique<distributed::D2HSocket>(
+                mesh_device, sender_core, kFifoSize, distributed::D2HSocket::ProcessScope::InProcess);
+        }
+        socket->set_page_size(kPageSize);
+
+        std::vector<uint32_t> page(kPageSize / sizeof(uint32_t), 0);
+        uint32_t expected_bytes_sent = 0;
+        for (const auto& shape :
+             {distributed::MeshShape(2, 1), distributed::MeshShape(1, 2), distributed::MeshShape(2, 1)}) {
+            mesh_device->reshape(shape);
+            const auto sender_coord = shape[0] == 2 ? distributed::MeshCoordinate(1, 0) : sender_core.device_coord;
+            ASSERT_EQ(mesh_device->get_device(sender_coord)->id(), sender_device_id);
+
+            // The saved [0,1] coordinate is outside the reshaped [2,1] view. Each host I/O
+            // guard must still permit access to the FIFO of the original physical device.
+            EXPECT_FALSE(socket->has_data(kPageSize));
+            EXPECT_EQ(socket->pages_available(), 0u);
+            EXPECT_EQ(socket->discard_pending_pages(), 0u);
+            EXPECT_FALSE(experimental::detail::try_read(*socket, page.data(), 1));
+            EXPECT_EQ(socket->host_fifo().size(), kFifoSize);
+            ASSERT_NO_THROW(socket->pop(0));
+
+            // Mock supplies each blocking read. Two FIFO lengths also exercise acknowledgments
+            // through a wrap. This checks host access; mock does not verify device payloads.
+            for (uint32_t i = 0; i < 2 * kFifoSize / kPageSize; ++i) {
+                ASSERT_NO_THROW(socket->read(page.data(), 1));
+                expected_bytes_sent += kPageSize;
+            }
+            EXPECT_EQ(socket->bytes_sent(), expected_bytes_sent);
+            ASSERT_NO_THROW(socket->barrier(1000));
+        }
+        // Destroy the socket before closing the mesh, while the old coordinate is still invalid.
+    }
+    mesh_device->close();
+}
+
+}  // namespace
+
+TEST_F(MockDeviceAPIFixture, D2HSocketHostAccessSurvivesMeshReshape) {
+    test_mock_d2h_socket_across_reshape(/*use_external_config=*/false);
+}
+
+TEST_F(MockDeviceAPIFixture, D2HExternalConfigSocketHostAccessSurvivesMeshReshape) {
+    test_mock_d2h_socket_across_reshape(/*use_external_config=*/true);
 }
 
 class MockDeviceProfilerFixture : public ::testing::Test {

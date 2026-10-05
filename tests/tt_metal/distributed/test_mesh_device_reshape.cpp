@@ -5,15 +5,22 @@
 #include <gtest/gtest.h>
 #include <cstdlib>
 #include <algorithm>
+#include <chrono>
+#include <condition_variable>
 #include <cstddef>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <tuple>
 #include <vector>
 
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/experimental/realtime_profiler.hpp>
 #include "gmock/gmock.h"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/mesh_config.hpp>
@@ -22,6 +29,8 @@
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/maybe_remote.hpp>
 #include "impl/context/metal_context.hpp"
+#include "tt_metal/distributed/mesh_device_impl.hpp"
+#include "tt_metal/distributed/realtime_profiler_manager.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -168,6 +177,67 @@ TEST_F(MeshDevice1x8ReshapeTest, From1x8To2x4ThenBackTo1x8) {
 
     mesh_device_->reshape(MeshShape(1, 8));
     EXPECT_EQ(mesh_device_->get_device_ids(), original_order);
+}
+
+TEST_F(MeshDevice1x8ReshapeTest, RealtimeProfilerCollectsAcrossReshape) {
+    const auto* profiler = mesh_device_->impl().get_realtime_profiler();
+    if (profiler == nullptr || profiler->num_active_devices() == 0) {
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+    }
+
+    std::set<ChipId> expected_chips;
+    bool has_sender_outside_new_shape = false;
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        auto* device = mesh_device_->get_device(coord);
+        if (device->is_mmio_capable()) {
+            expected_chips.insert(device->id());
+            has_sender_outside_new_shape |= coord[1] >= 4;
+        }
+    }
+    ASSERT_TRUE(has_sender_outside_new_shape);
+    ASSERT_EQ(profiler->num_active_devices(), expected_chips.size());
+
+    std::mutex mutex;
+    std::condition_variable records_ready;
+    std::map<uint32_t, std::set<ChipId>> received_chips;
+    uint64_t dropped = 0;
+    struct CallbackGuard {
+        experimental::ProgramRealtimeProfilerCallbackHandle handle;
+        ~CallbackGuard() { experimental::UnregisterProgramRealtimeProfilerCallback(handle); }
+    } callback{experimental::RegisterProgramRealtimeProfilerCallback(
+        [&](const experimental::ProgramRealtimeRecordBatch& batch) {
+            std::lock_guard lock(mutex);
+            dropped += batch.dropped;
+            for (const auto& record : batch.records) {
+                received_chips[record.runtime_id].insert(record.chip_id);
+            }
+            records_ready.notify_one();
+        })};
+
+    uint32_t runtime_id = 100;
+    for (const auto& shape : {MeshShape(1, 8), MeshShape(2, 4), MeshShape(1, 8), MeshShape(2, 4)}) {
+        mesh_device_->reshape(shape);
+        // A fresh ID at each shape prevents records from an earlier phase satisfying the check.
+        ++runtime_id;
+        auto program = CreateProgram();
+        CreateKernelFromString(
+            program,
+            "void kernel_main() { for (int i = 0; i < 1000; ++i) { asm volatile(\"nop\"); } }",
+            CoreCoord(0, 0),
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        program.set_runtime_id(runtime_id);
+        MeshWorkload workload;
+        workload.add_program(MeshCoordinateRange(shape), std::move(program));
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+        mesh_device_->quiesce_devices();
+
+        std::unique_lock lock(mutex);
+        EXPECT_TRUE(records_ready.wait_for(
+            lock, std::chrono::seconds(5), [&] { return received_chips[runtime_id] == expected_chips; }))
+            << "Missing profiler records after reshape to " << shape;
+        EXPECT_EQ(dropped, 0u);
+    }
+    // Fixture teardown closes the mesh while the profiler's original coordinates are invalid.
 }
 
 TEST_F(MeshDevice1x8ReshapeTest, InvalidTotalDeviceCount) {
