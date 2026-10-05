@@ -952,3 +952,20 @@ def test_conv3d_fp32_operand_split_raw_weights(device):
     raw_out = reshape_output(raw, N, T, 1, 1, C_out, device)
     prepared_out = reshape_output(prepared, N, T, 1, 1, C_out, device)
     assert torch.equal(raw_out, prepared_out), "raw rank-5 weights and pre-prepared weights disagree"
+
+
+def test_conv3d_rejects_c_in_block_not_tile_aligned_with_kernel(device, expect_error):
+    """kernel_volume * C_in_block must be tile aligned when C_in is split into several blocks."""
+    config = create_conv3d_config(C_in_block=16)
+    with expect_error(RuntimeError, "must be a multiple of 32 when C_in is split into multiple blocks"):
+        run_conv3d_test(
+            device,
+            (1, 32, 3, 6, 6),
+            32,
+            (3, 3, 3),
+            (1, 1, 1),
+            1,
+            (0, 0, 0),
+            "zeros",
+            config=config,
+        )

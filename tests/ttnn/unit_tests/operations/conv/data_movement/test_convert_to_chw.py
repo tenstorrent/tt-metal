@@ -113,3 +113,22 @@ def test_convert_to_chw_with_program_cache(device):
         )
 
     assert device.num_program_cache_entries() == 4
+
+
+@pytest.mark.parametrize("C", [8, 32])
+@pytest.mark.parametrize("HW, num_cores, shard_height", [(160, 2, 128), (288, 3, 128)])
+def test_convert_to_chw_shard_taller_than_balanced_split(device, C, HW, num_cores, shard_height):
+    torch.manual_seed(0)
+    input_tensor = torch.randn([1, 1, HW, C], dtype=torch.bfloat16)
+    expected = input_tensor.transpose(2, 3)
+
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    input_shard_spec = ttnn.ShardSpec(core_grid, (shard_height, 32), ttnn.ShardOrientation.ROW_MAJOR)
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+    input_tensor = ttnn.from_torch(
+        input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_mem_config
+    )
+
+    actual = ttnn.experimental.convert_to_chw(input_tensor, dtype=ttnn.bfloat16)
+
+    assert_equal(expected, ttnn.to_torch(actual))

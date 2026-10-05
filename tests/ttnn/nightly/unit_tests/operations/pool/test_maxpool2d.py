@@ -880,3 +880,46 @@ def test_run_max_pool_low_rank(rank, device):
     ttnn_output_torch = ttnn.to_torch(ttnn_output).reshape(torch_output.shape)
 
     assert torch.equal(ttnn_output_torch, torch_output)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("input_hw, kernel, stride", [((6, 6), 3, 2), ((7, 7), 3, 3), ((11, 11), 3, 3)])
+def test_max_pool2d_return_indices_block_shard_empty_core_rows(device, input_hw, kernel, stride):
+    """Block-sharded input whose trailing core rows produce no output must still get one start index per core."""
+    torch.manual_seed(0)
+    in_h, in_w = input_hw
+    channels, num_core_rows = 64, 8
+    nhw = in_h * in_w
+    torch_input = torch.randn(1, channels, in_h, in_w, dtype=torch.bfloat16)
+
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, num_core_rows - 1))})
+    shard_spec = ttnn.ShardSpec(grid, (math.ceil(nhw / num_core_rows), channels // 2), ttnn.ShardOrientation.ROW_MAJOR)
+    tt_input = ttnn.from_torch(
+        torch_input.permute(0, 2, 3, 1).reshape(1, 1, nhw, channels),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(BS, ttnn.BufferType.L1, shard_spec),
+    )
+
+    tt_output, tt_indices = ttnn.max_pool2d(
+        tt_input,
+        1,
+        in_h,
+        in_w,
+        channels,
+        [kernel, kernel],
+        [stride, stride],
+        [0, 0],
+        [1, 1],
+        return_indices=True,
+    )
+
+    torch_output = torch.nn.functional.max_pool2d(torch_input, kernel, stride)
+    out_h, out_w = torch_output.shape[-2:]
+    output = ttnn.to_torch(tt_output).reshape(1, out_h, out_w, channels).permute(0, 3, 1, 2)
+    indices = ttnn.to_torch(tt_indices).reshape(1, out_h, out_w, channels).permute(0, 3, 1, 2).to(torch.int64)
+
+    assert torch.equal(output, torch_output)
+    gathered = torch_input.flatten(2).gather(2, indices.flatten(2)).reshape(indices.shape)
+    assert torch.equal(gathered, torch_output)

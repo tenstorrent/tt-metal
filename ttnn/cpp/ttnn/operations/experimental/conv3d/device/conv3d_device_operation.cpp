@@ -238,6 +238,14 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
             "C_in_block ({}) must be a multiple of {}",
             args.config.C_in_block,
             l1_alignment);
+        // Prepared weights pack C_in blocks back to back, while the kernels step through them in whole tiles.
+        const uint32_t kernel_volume = args.kernel_size[0] * args.kernel_size[1] * args.kernel_size[2];
+        TT_FATAL(
+            C_in == args.config.C_in_block || (kernel_volume * args.config.C_in_block) % tt::constants::TILE_WIDTH == 0,
+            "kernel volume ({}) * C_in_block ({}) must be a multiple of {} when C_in is split into multiple blocks",
+            kernel_volume,
+            args.config.C_in_block,
+            tt::constants::TILE_WIDTH);
     }
 
     // Verify number of C_in_blocks is <= the number of cores

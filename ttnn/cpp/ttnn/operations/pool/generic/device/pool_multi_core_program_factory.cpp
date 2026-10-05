@@ -250,7 +250,7 @@ std::vector<uint32_t> generate_core_starting_indices(
         const auto& [output_shard_start, _] = item.output_range;
         if (output_shard_start >= op_trace_metadata.size()) {
             // this core has no output
-            starting_indices.push_back(0);
+            starting_indices.insert(starting_indices.end(), repeat_factor, 0);
             continue;
         }
         TT_ASSERT(item.input_range.start == op_trace_metadata[output_shard_start]);
