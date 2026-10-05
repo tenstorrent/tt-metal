@@ -32,20 +32,15 @@ extern "C" __attribute__((noinline, used)) void write_runtime_state_field(std::u
 }
 
 // Word 0 read-modify-write of bits 8:5 (mask 480): old ^ ((new ^ old) & mask).
-// A value wider than four bits reaches ebreak.
 // CHECK-LABEL: {{^}}write_runtime_state_field:
-// CHECK-NEXT: li [[MAX:a[0-7]]],15
-// CHECK-NEXT: bgtu a0,[[MAX]],[[FAIL:\.L[0-9]+]]
 // CHECK: %lo(_ZN7ckernel12cfg_state_idE)
 // CHECK: lw [[OLD:a[0-7]]],0([[BANK:a[0-7]]])
-// CHECK-NEXT: slli a0,a0,5
-// CHECK-NEXT: xor a0,a0,[[OLD]]
-// CHECK-NEXT: andi a0,a0,480
-// CHECK-NEXT: xor a0,a0,[[OLD]]
-// CHECK-NEXT: sw a0,0([[BANK]])
+// CHECK-NEXT: slli [[DATA:a[0-7]]],a0,5
+// CHECK-NEXT: xor [[DATA]],[[DATA]],[[OLD]]
+// CHECK-NEXT: andi [[DATA]],[[DATA]],480
+// CHECK-NEXT: xor [[DATA]],[[DATA]],[[OLD]]
+// CHECK-NEXT: sw [[DATA]],0([[BANK]])
 // CHECK-NEXT: ret
-// CHECK-NEXT: [[FAIL]]:
-// CHECK: ebreak
 
 extern "C" __attribute__((noinline, used)) void write_runtime_state_field_section(std::uint32_t format)
 {
@@ -54,8 +49,6 @@ extern "C" __attribute__((noinline, used)) void write_runtime_state_field_sectio
 
 // S1 lives in word 112 at bit 0, so no shift is needed.
 // CHECK-LABEL: {{^}}write_runtime_state_field_section:
-// CHECK-NEXT: li [[MAX:a[0-7]]],15
-// CHECK-NEXT: bgtu a0,[[MAX]],[[FAIL:\.L[0-9]+]]
 // CHECK: %lo(_ZN7ckernel12cfg_state_idE)
 // CHECK: lw [[OLD:a[0-7]]],448([[BANK:a[0-7]]])
 // CHECK-NEXT: xor a0,a0,[[OLD]]
@@ -63,21 +56,18 @@ extern "C" __attribute__((noinline, used)) void write_runtime_state_field_sectio
 // CHECK-NEXT: xor a0,a0,[[OLD]]
 // CHECK-NEXT: sw a0,448([[BANK]])
 // CHECK-NEXT: ret
-// CHECK-NEXT: [[FAIL]]:
-// CHECK: ebreak
 
 extern "C" __attribute__((noinline, used)) void write_runtime_state_full_word(std::uint32_t seed)
 {
     cfg::write<cfg::Access::MMIO, cfg::PrngSeed::Seed_Val, cfg::Sec::S0>(seed);
 }
 
-// A 32-bit field replaces word 186 without a range check or read.
+// A 32-bit field replaces word 186 without a read.
 // CHECK-LABEL: {{^}}write_runtime_state_full_word:
 // CHECK-NOT: lw {{a[0-7]}},744(
 // CHECK: [[SELECTED:\.L[0-9]+]]:
 // CHECK-NEXT: sw a0,744({{a[0-7]}})
 // CHECK-NEXT: ret
-// CHECK-NOT: ebreak
 
 // Grouped field writes.
 

@@ -14,8 +14,7 @@ namespace cfg = hal::cfg;
 // A runtime value cannot be an immediate, so its RMWCIB/SETC16 is built in a
 // register and pushed through the instruction buffer. The operation word holds
 // the opcode, mask, and address; the runtime data lands in bits 15:8 (RMWCIB)
-// or 15:0 (SETC16). A field narrower than 32 bits first checks its value range
-// and reaches ebreak on overflow.
+// or 15:0 (SETC16).
 
 extern "C" __attribute__((noinline, used)) void write_runtime_state_byte_0(std::uint32_t format)
 {
@@ -24,8 +23,6 @@ extern "C" __attribute__((noinline, used)) void write_runtime_state_byte_0(std::
 
 // RMWCIB0, mask 0x0f, word 64.
 // CHECK-LABEL: <write_runtime_state_byte_0>:
-// CHECK-NEXT: li [[MAX:a[0-7]]],15
-// CHECK-NEXT: bltu [[MAX]],a0,
 // CHECK-DAG: lui [[OP:a[0-7]]],0xb30f0
 // CHECK-DAG: addi [[OPA:a[0-7]]],[[OP]],64
 // CHECK-DAG: slli a0,a0,0x8
@@ -34,7 +31,6 @@ extern "C" __attribute__((noinline, used)) void write_runtime_state_byte_0(std::
 // CHECK: add a0,a0,[[OPA]]
 // CHECK: sw a0,0({{a[0-7]}})
 // CHECK-NEXT: ret
-// CHECK: ebreak
 
 extern "C" __attribute__((noinline, used)) void write_runtime_state_byte_straddle(std::uint32_t format)
 {
@@ -43,8 +39,6 @@ extern "C" __attribute__((noinline, used)) void write_runtime_state_byte_straddl
 
 // SrcB_val (bits 8:5) needs RMWCIB0 with mask 0xe0 and RMWCIB1 with mask 0x01, both at word 0.
 // CHECK-LABEL: <write_runtime_state_byte_straddle>:
-// CHECK-NEXT: li [[MAX:a[0-7]]],15
-// CHECK-NEXT: bltu [[MAX]],a0,
 // CHECK-DAG: slli [[LANE0:a[0-7]]],a0,0xd
 // CHECK-DAG: lui [[OP0:a[0-7]]],0xb3e00
 // CHECK-DAG: andi [[LANE1:a[0-7]]],a0,2040
@@ -56,14 +50,13 @@ extern "C" __attribute__((noinline, used)) void write_runtime_state_byte_straddl
 // CHECK: add [[LANE1]],[[LANE1]],[[OP1]]
 // CHECK-NEXT: sw [[LANE1]],0([[BUF]])
 // CHECK-NEXT: ret
-// CHECK: ebreak
 
 extern "C" __attribute__((noinline, used)) void write_runtime_state_full_word(std::uint32_t seed)
 {
     cfg::write<cfg::Access::TensixCfgUnit, cfg::PrngSeed::Seed_Val, cfg::Sec::S0>(seed);
 }
 
-// A 32-bit field needs no range check; each byte lane gets its own RMWCIB at word 186.
+// Each byte lane gets its own RMWCIB at word 186.
 // CHECK-LABEL: <write_runtime_state_full_word>:
 // CHECK-DAG: lui [[OP0:a[0-7]]],0xb3ff0
 // CHECK-DAG: lui [[OP1:a[0-7]]],0xb4ff0
@@ -79,7 +72,6 @@ extern "C" __attribute__((noinline, used)) void write_runtime_state_full_word(st
 // CHECK-DAG: sw {{a[0-7]}},0([[BUF]])
 // CHECK-DAG: sw {{a[0-7]}},0([[BUF]])
 // CHECK: ret
-// CHECK-NOT: ebreak
 
 extern "C" __attribute__((noinline, used)) void write_runtime_thread_section(std::uint32_t increment)
 {
@@ -88,8 +80,6 @@ extern "C" __attribute__((noinline, used)) void write_runtime_thread_section(std
 
 // SETC16 to thread word 19 with the value shifted to bits 13:8.
 // CHECK-LABEL: <write_runtime_thread_section>:
-// CHECK-NEXT: li [[MAX:a[0-7]]],63
-// CHECK-NEXT: bltu [[MAX]],a0,
 // CHECK-DAG: slli a0,a0,0x8
 // CHECK-DAG: lui [[OP:a[0-7]]],0xb2130
 // CHECK-DAG: zext.h a0,a0
@@ -97,7 +87,6 @@ extern "C" __attribute__((noinline, used)) void write_runtime_thread_section(std
 // CHECK: add a0,a0,[[OP]]
 // CHECK: sw a0,0({{a[0-7]}})
 // CHECK-NEXT: ret
-// CHECK: ebreak
 
 extern "C" __attribute__((noinline, used)) void write_shuffled_runtime_group(std::uint32_t format, std::uint32_t uncompressed)
 {
