@@ -11,7 +11,6 @@
 
 #define REDUCE_OP (PoolType::MAX)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
-#define MAX_TREE_REDUCTION_ROUNDS 6
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -80,6 +79,12 @@ void kernel_main() {
     // each row-tile carrying its own causal bound from this row's group of Tg entries in the
     // [B*Tg] cur_pos vector (group base = cur_batch*Tg). 0 = off.
     constexpr uint32_t spec_multi_pos_T = get_compile_time_arg_val(27);
+    // Deal cores to the ACTIVE rows of this step (tenstorrent/tt-metal#59300).
+    constexpr bool active_row_alloc = get_compile_time_arg_val(28) == 1;
+    constexpr uint32_t B = get_compile_time_arg_val(29);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(30);
+    constexpr uint32_t num_kv_heads = get_compile_time_arg_val(31);
+    constexpr uint32_t max_cores_per_head = get_compile_time_arg_val(32);
     constexpr bool spec_multi_pos = spec_multi_pos_T > 0;
 
     // get_workload_for_core assigns at most one chunk per participating core when
@@ -126,27 +131,32 @@ void kernel_main() {
 
     // Runtime arguments
     uint32_t arg_idx = 0;
-    const bool do_reduce = get_arg_val<uint32_t>(arg_idx++) == 1;
-    const bool apply_mask_at_last_chunk = do_reduce && is_causal;
-    const uint32_t cur_batch = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t core_num_in_reduce = get_arg_val<uint32_t>(arg_idx++);
+    bool do_reduce = get_arg_val<uint32_t>(arg_idx++) == 1;
+    bool apply_mask_at_last_chunk = do_reduce && is_causal;
+    uint32_t cur_batch = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t core_num_in_reduce = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cur_pos_arg = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t cores_in_group = num_cores_per_head;
 
     // Tree reduction runtime arguments
-    const bool is_tree_root = get_arg_val<uint32_t>(arg_idx++) == 1;
-    const uint32_t parent_core_in_group = get_arg_val<uint32_t>(arg_idx++);
-    const bool has_parent = parent_core_in_group != UINT32_MAX;
+    bool is_tree_root = get_arg_val<uint32_t>(arg_idx++) == 1;
+    uint32_t parent_core_in_group = get_arg_val<uint32_t>(arg_idx++);
+    bool has_parent = parent_core_in_group != UINT32_MAX;
 
     // Read children_per_round array
     // get_tree_reduction_params() only ever assigns children in rounds [0, ceil(log2(N))), so the
     // remaining slots are always UINT32_MAX; bound every round loop by the compile-time count.
-    constexpr uint32_t num_tree_rounds =
+    constexpr uint32_t static_tree_rounds =
         num_cores_per_head <= 1 ? 0 : 32 - __builtin_clz(num_cores_per_head - 1);  // ceil(log2(N))
-    static_assert(num_tree_rounds <= MAX_TREE_REDUCTION_ROUNDS);
+    static_assert(static_tree_rounds <= MAX_TREE_REDUCTION_ROUNDS);
+    // Active-row groups can be larger than the static group, so their rounds are a runtime value.
+    uint32_t num_tree_rounds = static_tree_rounds;
     uint32_t children_per_round[MAX_TREE_REDUCTION_ROUNDS];
-    for (uint32_t r = 0; r < num_tree_rounds; ++r) {
-        children_per_round[r] = get_arg_val<uint32_t>(arg_idx + r);
+    for (uint32_t r = 0; r < MAX_TREE_REDUCTION_ROUNDS; ++r) {
+        children_per_round[r] = r < static_tree_rounds ? get_arg_val<uint32_t>(arg_idx + r) : UINT32_MAX;
     }
+    // The static core index is the first arg after the children array.
+    const uint32_t core_index = get_arg_val<uint32_t>(arg_idx + MAX_TREE_REDUCTION_ROUNDS);
 
     // Idle core
     // get_arg_val<uint32_t>(0) can go from 0-63 for the core_num; for active cores 65 is out of range so 65 indicates
@@ -178,6 +188,34 @@ void kernel_main() {
                 const uint32_t spec_pos_base = cur_batch * spec_multi_pos_T;
                 spec_pos_min = read_tile_value(cb_cur_pos, 0, spec_pos_base);
                 cur_pos = read_tile_value(cb_cur_pos, 0, spec_pos_base + spec_multi_pos_T - 1);
+            } else if constexpr (active_row_alloc) {
+                uint32_t active_rows[B];
+                uint32_t active_count = 0;
+                for (uint32_t b = 0; b < B; ++b) {
+                    if (read_tile_value(cb_cur_pos, 0, b) != UINT32_MAX) {
+                        active_rows[active_count++] = b;
+                    }
+                }
+                const auto assignment = assign_core_to_active_row<num_cores, num_kv_heads, max_cores_per_head>(
+                    active_rows, active_count, core_index);
+                if (assignment.idle) {
+                    CircularBuffer(cb_cur_pos).pop_front(1);
+                    return;
+                }
+                cur_batch = assignment.row;
+                core_num_in_reduce = assignment.rank;
+                cores_in_group = assignment.group_size;
+                do_reduce = assignment.rank == 0;
+                apply_mask_at_last_chunk = do_reduce && is_causal;
+                const auto tree = get_tree_reduction_params(assignment.rank, assignment.group_size);
+                is_tree_root = tree.is_root;
+                parent_core_in_group = tree.parent_core_in_group;
+                has_parent = parent_core_in_group != UINT32_MAX;
+                num_tree_rounds = tree.num_rounds;
+                for (uint32_t r = 0; r < MAX_TREE_REDUCTION_ROUNDS; ++r) {
+                    children_per_round[r] = tree.children_per_round[r];
+                }
+                cur_pos = read_tile_value(cb_cur_pos, 0, cur_batch);
             } else {
                 cur_pos = read_tile_value(cb_cur_pos, 0, cur_batch / q_heads_parallel_factor);
             }
@@ -204,7 +242,7 @@ void kernel_main() {
         get_workload_for_core(
             cur_pos,
             core_num_in_reduce,
-            num_cores_per_head,
+            cores_in_group,
             k_chunk_size_dynamic,
             sliding_window_size > 0 ? std::optional<uint32_t>(sliding_window_size) : std::nullopt);
 

@@ -51,6 +51,12 @@ struct SdpaDecodeParams {
     // Requires num_kv_heads==1, causal, paged, no sliding window, no MLA, unsharded bf16
     // TILE Q with Tg*32 padded rows per batch.
     uint32_t spec_multi_pos_tiles = 0;
+    // Active-row core allocation (tenstorrent/tt-metal#59300). When true the kernels deal the
+    // grid to the batch rows whose cur_pos != -1 at runtime, so a few active rows inside a wide
+    // padded batch use every core, and a given occupancy always sees the same per-row core split
+    // whatever the padded batch is. Requires a cur_pos tensor, causal, no spec_multi_pos, an
+    // interleaved (DRAM) output, one kv head per core and no column-major group indexing.
+    bool active_row_allocation = false;
 };
 
 struct SdpaDecodeInputs {

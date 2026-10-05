@@ -81,6 +81,17 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             q_shape[3]);
     }
 
+    if (operation_attributes.active_row_allocation) {
+        TT_FATAL(
+            tensor_args.cur_pos_tensor.has_value(),
+            "active_row_allocation needs a cur_pos_tensor: the active rows are read on device");
+        TT_FATAL(operation_attributes.is_causal, "active_row_allocation requires is_causal");
+        TT_FATAL(!spec_multi_pos, "active_row_allocation is not supported with spec_multi_pos_tiles");
+        TT_FATAL(
+            !operation_attributes.output_mem_config.is_sharded(),
+            "active_row_allocation requires an interleaved output: a row's reducer is not its output core");
+    }
+
     if (spec_multi_pos) {
         // Speculative multi-position mode: spec_T candidates folded onto EACH batch row, so
         // every row scans its KV cache once instead of spec_T times. With B batch rows the
@@ -261,6 +272,18 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
                 modulo,
                 operation_attributes.sliding_window_size.value());
         }
+    }
+
+    if (operation_attributes.is_causal && tensor_args.cur_pos_tensor.has_value() &&
+        !tensor_args.cur_pos_tensor->is_sharded()) {
+        // The reader fetches only page 0 of an interleaved cur_pos tensor and indexes it by batch,
+        // so every position must sit in that one row. A [B, 1] tensor has B one-entry pages: batch
+        // b > 0 would read page padding as its position and scan far past the KV cache (hang).
+        const auto& cur_pos_shape = tensor_args.cur_pos_tensor->padded_shape();
+        TT_FATAL(
+            cur_pos_shape.volume() == cur_pos_shape[-1],
+            "cur_pos tensor must hold all positions in its last dim (e.g. [B] or [1, B]), got shape {}",
+            cur_pos_shape);
     }
 
     if (operation_attributes.paged_attention) {
@@ -510,6 +533,14 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
                 v_shape[-1],
                 D);
         }
+        if (operation_attributes.is_causal && tensor_args.cur_pos_tensor.has_value() &&
+            !tensor_args.cur_pos_tensor->is_sharded()) {
+            TT_FATAL(
+                tensor_args.cur_pos_tensor->padded_shape()[-1] >= B,
+                "cur_pos tensor must have at least one position per batch ({}), got shape {}",
+                B,
+                tensor_args.cur_pos_tensor->padded_shape());
+        }
         // Check valid seqlen
         for (unsigned int cur_pos_val : operation_attributes.cur_pos) {
             TT_FATAL(cur_pos_val < k_shape[-2], "cur_pos must be <= K sequence dim");
@@ -641,7 +672,8 @@ Tensor sdpa_decode(
     std::optional<uint32_t> head_dim_v,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     std::optional<uint32_t> cache_position_modulo,
-    uint32_t spec_multi_pos_tiles) {
+    uint32_t spec_multi_pos_tiles,
+    bool active_row_allocation) {
     using OperationType = SdpaDecodeDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .is_causal = is_causal,
@@ -660,6 +692,7 @@ Tensor sdpa_decode(
             paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
         .cache_position_modulo = cache_position_modulo,
         .spec_multi_pos_tiles = spec_multi_pos_tiles,
+        .active_row_allocation = active_row_allocation,
     };
 
     auto tensor_args = OperationType::tensor_args_t{

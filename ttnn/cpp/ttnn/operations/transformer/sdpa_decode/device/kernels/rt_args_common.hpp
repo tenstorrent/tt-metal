@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt-metalium/constants.hpp>
+#include "ttnn/operations/transformer/sdpa_decode/device/kernels/tree_reduction.hpp"
 #include <optional>
 #include <tuple>
 
@@ -104,4 +105,61 @@ inline uint32_t get_dynamic_Sk_chunk_t(int cur_pos) {
         return nearest_pow_of_2_up_to_8<max_size>(seq_len_in_tiles);
     }
     return Sk_chunk_t;
+}
+
+/******************************************************************************
+ *       Active-row core allocation (tenstorrent/tt-metal#59300)              *
+ ******************************************************************************/
+
+// Which padded batch row, kv head and reduction rank a core serves when cores are dealt to the
+// ACTIVE rows of a step instead of to the padded batch. ``active`` lists the rows whose cur_pos
+// is not -1, in row order. The pool of ``num_cores`` is FIXED by the host independently of the
+// padded batch (that is the whole point: the split must not change between graphs), so the
+// assignment is a function of the active rows alone. C cores over R active rows give
+// floor(C / R) cores per row, split evenly over the kv heads and capped at
+// ``max_cores_per_head`` (program_config.max_cores_per_head_batch); each (row, head) group
+// reduces over ``group_size`` ranks whose static core indices are contiguous from
+// ``group_base``. Cores left over (index >= R * group) are idle.
+//
+// The host guarantees num_cores >= B * num_kv_heads, so cores_per_row >= num_kv_heads for any
+// R <= B and every active row gets at least one core per head; the max(1, ...) below is only
+// a guard against a pool the host did not validate (a row would otherwise be dropped silently).
+struct ActiveRowAssignment {
+    bool idle = true;
+    uint32_t row = 0;
+    uint32_t head = 0;
+    uint32_t rank = 0;
+    uint32_t group_size = 1;
+    uint32_t group_base = 0;
+};
+
+template <uint32_t num_cores, uint32_t num_kv_heads, uint32_t max_cores_per_head>
+inline ActiveRowAssignment assign_core_to_active_row(
+    const uint32_t* active, uint32_t active_count, uint32_t core_index) {
+    static_assert(num_kv_heads >= 1 && max_cores_per_head >= 1);
+    ActiveRowAssignment a;
+    if (active_count == 0) {
+        return a;
+    }
+    const uint32_t cores_per_row = num_cores / active_count;
+    uint32_t cores_per_head = cores_per_row / num_kv_heads;
+    if (cores_per_head == 0) {
+        cores_per_head = 1;
+    }
+    if (cores_per_head > max_cores_per_head) {
+        cores_per_head = max_cores_per_head;
+    }
+    const uint32_t group = cores_per_head * num_kv_heads;
+    const uint32_t slot = core_index / group;
+    if (slot >= active_count) {
+        return a;
+    }
+    const uint32_t within = core_index % group;
+    a.idle = false;
+    a.row = active[slot];
+    a.head = within / cores_per_head;
+    a.rank = within % cores_per_head;
+    a.group_size = cores_per_head;
+    a.group_base = slot * group + a.head * cores_per_head;
+    return a;
 }

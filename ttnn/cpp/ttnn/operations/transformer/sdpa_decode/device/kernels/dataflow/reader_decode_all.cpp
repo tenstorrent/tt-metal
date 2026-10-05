@@ -65,8 +65,13 @@ void kernel_main() {
     // i.e. cur_pos[cur_batch*Tg + Tg-1], rather than by cur_pos[cur_batch]. 0 = off.
     constexpr uint32_t spec_multi_pos_T = get_compile_time_arg_val(35);
     constexpr bool spec_multi_pos = spec_multi_pos_T > 0;
+    // Deal cores to the ACTIVE rows of this step (cur_pos != -1) instead of to the padded batch
+    // (tenstorrent/tt-metal#59300). Row, head and rank then come from the cur_pos vector.
+    constexpr bool active_row_alloc = get_compile_time_arg_val(36) == 1;
+    // Upper bound on the cores one (row, head) group takes in active-row mode.
+    constexpr uint32_t max_cores_per_head = get_compile_time_arg_val(37);
 
-    constexpr auto q_args = TensorAccessorArgs<36>();
+    constexpr auto q_args = TensorAccessorArgs<38>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -96,16 +101,19 @@ void kernel_main() {
     const uint32_t mask_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t attention_sink_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t page_table_page_size = get_arg_val<uint32_t>(arg_idx++);
-    const bool is_output_core = get_arg_val<uint32_t>(arg_idx++) == 1;
-    const uint32_t cur_head_group = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t cur_batch = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t core_num_in_reduce = get_arg_val<uint32_t>(arg_idx++);
+    bool is_output_core = get_arg_val<uint32_t>(arg_idx++) == 1;
+    uint32_t cur_head_group = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t cur_batch = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t core_num_in_reduce = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cur_pos_arg = get_arg_val<uint32_t>(arg_idx++);
+    // Ranks in this core's reduction group: the static group size, or the active-row group size.
+    uint32_t cores_in_group = num_cores_per_head;
     const bool do_k_mcast = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t mcast_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t mcast_y0 = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t mcast_y1 = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_dests = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t core_index = get_arg_val<uint32_t>(arg_idx++);
 
     // idle core
     if (q_addr == 0) {
@@ -166,6 +174,27 @@ void kernel_main() {
                     ASSERT(index_ptr[spec_pos_base + j] <= index_ptr[spec_pos_base + j + 1]);
                 }
 #endif
+            } else if constexpr (active_row_alloc) {
+                uint32_t active_rows[B];
+                uint32_t active_count = 0;
+                for (uint32_t b = 0; b < B; ++b) {
+                    if (index_ptr[b] != UINT32_MAX) {
+                        active_rows[active_count++] = b;
+                    }
+                }
+                const auto assignment = assign_core_to_active_row<num_cores, num_kv_heads, max_cores_per_head>(
+                    active_rows, active_count, core_index);
+                if (assignment.idle) {
+                    return;
+                }
+                cur_batch = assignment.row;
+                cur_head_group = assignment.head;
+                core_num_in_reduce = assignment.rank;
+                cores_in_group = assignment.group_size;
+                // Q for this row is read through the row's output core; reading our own L1 over the
+                // NoC when we happen to be that core is correct, just not the local fast path.
+                is_output_core = false;
+                cur_pos = index_ptr[cur_batch];
             } else {
                 cur_pos = index_ptr[cur_batch / q_heads_parallel_factor];
             }
@@ -192,7 +221,7 @@ void kernel_main() {
         get_workload_for_core(
             cur_pos,
             core_num_in_reduce,
-            num_cores_per_head,
+            cores_in_group,
             k_chunk_size_dynamic,
             sliding_window_size > 0 ? std::optional<uint32_t>(sliding_window_size) : std::nullopt);
 
