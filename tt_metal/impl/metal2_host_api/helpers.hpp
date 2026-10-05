@@ -19,6 +19,18 @@
 
 namespace tt::tt_metal::experimental {
 
+// TODO: Shouldn't be in helpers.
+// ============================================================================
+// Constants
+// ============================================================================
+
+// TODO: These constants should be queriable from the public API (currently HAL, for consistency)
+//       They are currently also hardcoded in the temporary Quasar host_api.hpp. Need to clean this up.
+static constexpr uint32_t QUASAR_DM_CORES_PER_NODE = 8;
+static constexpr uint32_t QUASAR_RESERVED_DM_CORES_PER_NODE = 2;  // DM0 and DM1 reserved for internal use
+static constexpr uint32_t QUASAR_USER_DM_CORES_PER_NODE = QUASAR_DM_CORES_PER_NODE - QUASAR_RESERVED_DM_CORES_PER_NODE;
+static constexpr uint32_t QUASAR_TENSIX_ENGINES_PER_NODE = 4;
+
 // ============================================================================
 // Basic Utility Helpers
 // ============================================================================
