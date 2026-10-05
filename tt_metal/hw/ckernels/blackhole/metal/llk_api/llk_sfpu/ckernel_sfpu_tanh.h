@@ -150,8 +150,16 @@ sfpi_inline void _sfpu_tanh_polynomial_x2_(
 bool bf16_dest_tanh();
 template <int ITERATIONS>
 void calculate_tanh_bf16();
+void init_tanh_bf16();
 // Whether BF16 DEST runs the generated tanh kernel as one call over the whole tile.
 inline constexpr bool tanh_bf16_whole_tile = true;
+// Sets up the generated BF16 tanh kernel for the instance it serves.
+template <bool bf16_kernel>
+inline void tanh_bf16_tile_init() {
+    if constexpr (bf16_kernel) {
+        init_tanh_bf16();
+    }
+}
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tanh() {
@@ -221,16 +229,8 @@ inline void calculate_tanh() {
     }
 }
 
-void init_tanh_bf16();
-
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void tanh_init() {
-    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
-        if (bf16_dest_tanh()) {
-            init_tanh_bf16();
-            return;
-        }
-    }
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE) {
         // 6-entry SFPLUTFP32 FP16 table, TABLE1 breakpoints |x| = 0.5, 1.0, 1.5, 2.0, 3.0.
