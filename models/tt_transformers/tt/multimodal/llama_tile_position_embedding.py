@@ -55,7 +55,9 @@ class TtLlamaTilePositionEmbedding(LightweightModule):
         )
 
         if self.gated:
-            gate = state_dict[f"{state_dict_prefix}gate"]
+            # The gate is a learned constant, so its tanh is taken once here on the host in fp32
+            # (then rounded to bf16) instead of on the device on every forward.
+            gate = torch.tanh(state_dict[f"{state_dict_prefix}gate"].float())
             self.gate = ttnn.as_tensor(
                 gate,
                 dtype=ttnn.bfloat16,
@@ -111,7 +113,7 @@ class TtLlamaTilePositionEmbedding(LightweightModule):
 
         # Apply gating mechanism
         if self.gated:
-            out_pos_embed = out_pos_embed * ttnn.tanh(self.gate)
+            out_pos_embed = out_pos_embed * self.gate
 
         # Broadcast along ntok dimension
         out_pos_embed = ttnn.concat(

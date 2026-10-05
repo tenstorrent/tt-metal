@@ -36,7 +36,7 @@ protected:
         }
 
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        init_max_cbs();
+        init_max_dfbs();
         auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
 
         // Check to deal with TG systems
@@ -104,7 +104,7 @@ protected:
         this->num_cqs_ = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
 
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        init_max_cbs();
+        init_max_dfbs();
     }
 
     void CreateDevice(const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
@@ -151,7 +151,7 @@ protected:
         for (const auto& [id, device] : reserved_devices) {
             this->devices_.push_back(device);
         }
-        init_max_cbs();
+        init_max_dfbs();
     }
 
     void TearDown() override {

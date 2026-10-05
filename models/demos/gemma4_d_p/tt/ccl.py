@@ -3,38 +3,14 @@
 
 import os
 
-import torch
 from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
 
 
-def default_num_links():
-    # GEMMA4_NUM_LINKS overrides the CCL link count. Used to test whether the ring
-    # replay deadlock involves the two parallel link workers racing each other.
-    import os as _os
-
-    _forced = _os.environ.get("GEMMA4_NUM_LINKS")
-    if _forced:
-        return int(_forced)
-    return _default_num_links_impl()
-
-
 def _default_num_links_impl():
-    """Default TP-collective link count for the current arch.
-
-    Blackhole boards expose 2 ethernet links between adjacent mesh devices, so
-    reduce-scatter / all-gather can run at ~2x bandwidth vs a single link — and
-    on Gemma4 prefill the per-layer all-reduces are ~31% of device time, so this
-    is the single highest-ROI CCL knob. Wormhole (T3K) defaults to 1 link here
-    (its multi-link tuning needs a separate sweep).
-
-    Override with ``GEMMA4_CCL_NUM_LINKS``.
-    """
-    env = os.environ.get("GEMMA4_CCL_NUM_LINKS")
-    if env is not None:
-        return max(1, int(env))
+    """Return the default link count: two on Blackhole, one otherwise."""
     return 2 if is_blackhole() else 1
 
 
@@ -86,9 +62,11 @@ class CCLManager:
     so repeated collectives of the same activation shape skip realloc+barrier.
     """
 
-    def __init__(self, mesh_device, num_links=None, topology=None):
+    def __init__(self, mesh_config, num_links=None, topology=None):
+        self.mesh_config = mesh_config
+        mesh_device = mesh_config.device
         if num_links is None:
-            num_links = default_num_links()
+            num_links = _default_num_links_impl()
         if topology is None:
             topology = default_ccl_topology()
         self.mesh_device = mesh_device
@@ -111,7 +89,7 @@ class CCLManager:
         self._barrier_semaphores = []
         for _ in range(2):
             self._rs_semaphores.append([ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(3)])
-            self._ag_semaphores.append([ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(3)])
+            self._ag_semaphores.append([ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(2)])
             self._barrier_semaphores.append(ttnn.create_global_semaphore(mesh_device, core_range_set, 0))
         ttnn.synchronize_device(mesh_device)
 
@@ -133,103 +111,31 @@ class CCLManager:
         # asserts ccl_core_grid_offset.x < sdpa_grid.x, so both must derive from this
         # same grid (Blackhole is wider than 8x8).
         self.ring_attention_ccl_core_grid_offset = (self.compute_grid_size.x - 1, 0)
-        # THREE, not the usual forward/backward pair. The third is the neighbor-halo
-        # exchange's own counter. With only two, the halo reuses semaphores[0] — the
-        # all-gather's backward semaphore — and lands on the same worker core, so two
-        # protocols with different arrival counts share one counter. The halo's completion
-        # then destroys all-gather increments and the ring deadlocks at depth. See
-        # docs/superpowers/specs/2026-08-06-ring-trace-replay-deadlock.md.
+        # Three semaphores are needed: two for forward/backward all-gather
+        # and one for neighbor-halo exchange.
         self.ring_attention_ccl_semaphore_handles = [
             ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(3)
         ]
         self._ring_gather_buffers = {}
-        # Trace-safe per-chunk scalars for the ring path. One pair for the whole model:
-        # slot and prefix length are properties of the chunk, not the layer, so all 60
-        # layers read the same two tensors and the host updates them once per chunk.
-        self._ring_metadata = None
-
-    def _scalar_metadata_tensor(self, value):
-        """1-element uint32 replicated DRAM tensor holding one per-chunk scalar.
-
-        Shape/layout/dtype mirror what update_padded_kv_cache and the ring readers
-        expect ([1,1,1,1] uint32 row-major in DRAM, replicated so every device reads
-        element [0]).
-        """
-        return ttnn.from_torch(
-            torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
-            device=self.mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-
-    def get_ring_metadata(self):
-        """``(slot_id, kv_actual_isl)`` tensors for the trace-safe ring path.
-
-        Passing these instead of Python ints moves the per-chunk scalars off the host
-        dispatch path: the readers load them from DRAM on-device, so the values are not
-        baked into the program's runtime args and one captured trace replays across
-        chunks. With the scalar form a trace would freeze whichever chunk was live at
-        capture, and every later chunk would read the wrong prefix length.
-        """
-        if self._ring_metadata is None:
-            self._ring_metadata = (self._scalar_metadata_tensor(0), self._scalar_metadata_tensor(0))
-        return self._ring_metadata
-
-    def set_ring_metadata(self, slot_idx, kv_actual_global):
-        """Update the metadata tensors in place for the chunk about to run.
-
-        Called once per chunk, before the layer loop (or before a trace replay). Writes
-        into the existing device tensors rather than allocating, because a trace holds
-        the addresses it captured.
-        """
-        slot_t, kv_t = self.get_ring_metadata()
-        for tensor, value in ((slot_t, slot_idx), (kv_t, kv_actual_global)):
-            host = ttnn.from_torch(
-                torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-            ttnn.copy_host_to_device_tensor(host, tensor)
 
     def get_ring_gather_buffer(self, key, n_kv_local, seq, head_dim, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG):
-        """Persistent ring-gather scratch for ``ring_joint`` SDPA.
+        """Return persistent ring-attention receive storage.
 
-        Allocated once and reused across every layer and chunk. The op treats it as
-        scratch: it fills the gathered region and masks the invalid tail via
-        ``kv_actual_isl``, so reuse without re-zeroing is safe.
-
-        ``seq`` must be the FULL cache capacity (max_seq_len), not the current
-        ``logical_n``. ring_joint gathers the entire per-device cache shard
-        (seq_local = max_seq_len/cp, times cp around the ring), independent of how
-        much of it is valid. Sizing to logical_n happens to work when the final
-        chunk's logical_n == max_seq_len — i.e. a 2-chunk run — and fails beyond
-        that with "gather dim 2 too small" (minimax_m3 hit this at 11 chunks).
-
-        ``key`` separates buffers live in the same call ("k" vs "v"); shape and dtype
-        key the rest. Heads shard on the TP columns, sequence replicated across the
-        CP rows — the layout the ring op reconstructs into.
-
-        ``n_kv_local`` is the per-device head count. The buffer is built at the global
-        size ``n_kv_local * tp_cols`` and sharded across the TP columns so each device
-        ends up with its own ``n_kv_local`` heads. Passing the local count straight to
-        the sharder fails ("number of chunks N to match the mesh dimension size"), and
-        it also has to work for kv-replicated layers where the model's global KV head
-        count is smaller than the TP width.
+        Distinct ``key`` values isolate receive buffers. ``seq`` is the full cache
+        capacity for dense attention and the halo size for sliding attention.
+        ``n_kv_local`` is the per-device head count (this device's TP shard); each
+        device holds a zero-filled ``[1, n_kv_local, seq, head_dim]``. The op
+        overwrites valid entries and masks invalid ones, so the scratch buffer needs
+        no re-zeroing.
         """
-        rows, cols = tuple(self.mesh_device.shape)
-        n_kv_global = n_kv_local * cols
-        cache_key = (key, n_kv_global, seq, head_dim, str(dtype), str(memory_config))
+        cache_key = (key, n_kv_local, seq, head_dim, str(dtype), str(memory_config))
         if cache_key not in self._ring_gather_buffers:
-            self._ring_gather_buffers[cache_key] = ttnn.from_torch(
-                torch.zeros(1, n_kv_global, seq, head_dim),
+            self._ring_gather_buffers[cache_key] = ttnn.zeros(
+                [1, n_kv_local, seq, head_dim],
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=memory_config,
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=(rows, cols), dims=[None, 1]),
             )
         return self._ring_gather_buffers[cache_key]
 
@@ -240,7 +146,7 @@ class CCLManager:
         return sems
 
     def get_ag_semaphore(self):
-        """Returns list of 3 semaphores for all_gather (cycles double-buffer)."""
+        """Returns list of 2 semaphores for all_gather (cycles double-buffer)."""
         sems = self._ag_semaphores[self._ag_idx]
         self._ag_idx = (self._ag_idx + 1) % 2
         return sems
@@ -292,11 +198,6 @@ class CCLManager:
         return [inter, out]
 
 
-def cp_degree(mesh_config):
-    """Number of context-parallel ranks in the Galaxy mesh."""
-    return mesh_config.prefill.sp
-
-
 def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
     """All-reduce across TP devices.
 
@@ -304,7 +205,7 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
     reduce_scatter_minimal_async + all_gather_async (tt_transformers composite
     pattern) on ``ccl_manager.topology`` (Ring on P150x8).
     """
-    if mesh_config is None or mesh_config.tp <= 1:
+    if mesh_config is None or mesh_config.tp_degree <= 1:
         return tensor
 
     memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
@@ -315,7 +216,7 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
     workers = ccl_num_workers_per_link()
     nbuf = ccl_num_buffers_per_channel()
     if ccl_async_enabled():
-        tp = mesh_config.tp
+        tp = mesh_config.tp_degree
         rs_bufs = ccl_manager.get_persistent_rs_buffers(tensor, memory_config, tp)
         scattered = ttnn.experimental.reduce_scatter_minimal_async(
             tensor,
@@ -354,8 +255,6 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
             scattered.deallocate(True)
         return gathered
 
-    # Sync all_reduce: omit deprecated num_links/topology (Sep-2026 removal);
-    # Fabric / cluster_axis supply those defaults (same as sync all_gather).
     result = ttnn.all_reduce(
         tensor,
         cluster_axis=tp_axis,
@@ -367,7 +266,7 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
 
 def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):
     """All-gather across TP devices."""
-    if mesh_config is None or mesh_config.tp <= 1:
+    if mesh_config is None or mesh_config.tp_degree <= 1:
         return tensor
 
     memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
@@ -394,15 +293,50 @@ def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):
             num_buffers_per_channel=nbuf,
         )
         tensor.deallocate(True)
-        return gathered
-
-    # Sync all_gather: do not pass deprecated num_links/topology/chunks_* —
-    # Fabric config supplies those; passing them only emits Sep-2026 warnings.
-    gathered = ttnn.all_gather(
-        tensor,
-        dim=dim,
-        cluster_axis=tp_axis,
-        memory_config=memory_config,
-    )
-    tensor.deallocate(True)
+    else:
+        gathered = ttnn.all_gather(
+            tensor,
+            dim=dim,
+            cluster_axis=tp_axis,
+            memory_config=memory_config,
+        )
+        tensor.deallocate(True)
     return gathered
+
+
+def ccl_partition_rows(tensor, mesh_config):
+    """Keep this TP device's 1/TP of the rows of a TP-replicated tensor."""
+    if mesh_config is None or mesh_config.tp_degree <= 1:
+        return tensor
+    return ttnn.mesh_partition(tensor, dim=2, cluster_axis=mesh_config.tp_axis)
+
+
+def ccl_reduce_scatter_rows(tensor, mesh_config, ccl_manager, memory_config=None):
+    """Sum row-parallel projection partials across TP and keep this device's 1/TP of the rows.
+
+    With ccl_allgather(dim=2) this is an all-reduce split around the norms and residual adds, which then run on
+    1/TP of the rows.
+    """
+    if mesh_config is None or mesh_config.tp_degree <= 1:
+        return tensor
+    memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
+    if ccl_async_enabled():
+        result = ttnn.experimental.reduce_scatter_minimal_async(
+            tensor,
+            persistent_output_buffers=None,
+            dim=2,
+            multi_device_global_semaphore=ccl_manager.get_rs_semaphore(),
+            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+            num_links=ccl_manager.num_links,
+            cluster_axis=mesh_config.tp_axis,
+            memory_config=memory_config,
+            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ccl_manager.topology,
+            chunks_per_sync=ccl_chunks_per_sync(),
+            num_workers_per_link=ccl_num_workers_per_link(),
+            num_buffers_per_channel=ccl_num_buffers_per_channel(),
+        )
+    else:
+        result = ttnn.reduce_scatter(tensor, dim=2, cluster_axis=mesh_config.tp_axis, memory_config=memory_config)
+    tensor.deallocate(True)
+    return result

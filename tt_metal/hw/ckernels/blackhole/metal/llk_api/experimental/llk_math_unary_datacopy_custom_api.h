@@ -6,8 +6,10 @@
 
 #include "llk_math_common_api.h"
 #include "experimental/llk_math_eltwise_unary_datacopy_custom.h"
+#include "sanitizer/api.h"
 
 inline void llk_math_eltwise_unary_datacopy_custom(std::uint32_t dst_index) {
+    SAN_HOOK(unsupported());
     LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
     _llk_math_eltwise_unary_datacopy_custom_(dst_index);
 }

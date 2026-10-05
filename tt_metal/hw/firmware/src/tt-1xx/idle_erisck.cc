@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <unistd.h>
 #include <cstdint>
 
 #include "internal/tt-1xx/risc_common.h"
@@ -46,6 +45,8 @@ uint32_t _start() {
             ASSERT(ncrisc_noc_nonposted_atomics_flushed(NOC_INDEX), DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped);
             ASSERT(ncrisc_noc_posted_writes_sent(NOC_INDEX), DebugAssertNCriscNOCPostedWritesSentTripped);
             ASSERT(ncrisc_noc_packet_tags_cleared(NOC_INDEX), DebugAssertNCriscNOCPacketTagClearedTripped);
+            // An unclosed PCIe batch here is inherited by the next kernel on the same command buffer.
+            ASSERT(noc_cmd_bufs_mid_clear(NOC_INDEX), DebugAssertNocMidNotClearedTripped);
             WAYPOINT("NKFD");
         }
     }

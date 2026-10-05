@@ -62,10 +62,11 @@ struct p_unpacr
     constexpr static std::uint32_t TILE3_CFG_CONTEXT     = (0); // Config context for tile 3
     constexpr static std::uint32_t AUTO_INC_CONTEXT      = (1); // Auto increment config context (max value set through unpacker config command)
 
-    constexpr static std::uint32_t UNP_POP           = 0x0;
-    constexpr static std::uint32_t UNP_CLRSRC        = 0x1;
-    constexpr static std::uint32_t UNP_NOP           = 0x2;
-    constexpr static std::uint32_t UNP_POP_STREAM    = 0x3;
+    // UNPACR_NOP's Nop_type on Quasar: clear the source register, a pure delay, or set its dvalid alone; 3 is reserved.
+    // (Blackhole's encoding, where 1 clears and 2 is the delay, does not carry over.)
+    constexpr static std::uint32_t UNP_CLRSRC        = 0x0;
+    constexpr static std::uint32_t UNP_NOP           = 0x1;
+    constexpr static std::uint32_t UNP_SET_DVALID    = 0x2;
     constexpr static std::uint32_t UNP_CLRSRC_ZERO   = 0x0;
     constexpr static std::uint32_t UNP_CLRSRC_NEGINF = 0x1;
     constexpr static std::uint32_t UNP_CLRSRC_ONE    = 0x2;
@@ -83,9 +84,10 @@ struct p_unpacr
 
 struct p_set_inc_sel
 {
-    constexpr static std::uint32_t TILE_SEL = 0b000;
-    constexpr static std::uint32_t FACE_SEL = 0b001;
-    constexpr static std::uint32_t ROW_SEL  = 0b010;
+    constexpr static std::uint32_t TILE_SEL          = 0b000;
+    constexpr static std::uint32_t FACE_SEL          = 0b001;
+    constexpr static std::uint32_t ROW_SEL           = 0b010;
+    constexpr static std::uint32_t TILE_FACE_ROW_SEL = 0b011;
 };
 
 struct p_srcb
@@ -433,10 +435,11 @@ struct p_sfpu
 
     struct cc
     {
-        constexpr static std::uint32_t SET_CC    = 0x2;
-        constexpr static std::uint32_t CLR_CC    = 0x1;
-        constexpr static std::uint32_t SET_CC_EN = 0x1;
-        constexpr static std::uint32_t CLR_CC_EN = 0x0;
+        constexpr static std::uint32_t SET_CC       = 0x2;
+        constexpr static std::uint32_t CLR_CC       = 0x1;
+        constexpr static std::uint32_t SET_CC_EN    = 0x1;
+        constexpr static std::uint32_t CLR_CC_EN    = 0x0;
+        constexpr static std::uint32_t FP32_SM32_EN = 0x800; // if src_c should be interpreted as a FP32/SMAG32 value
     };
 
     struct sfp_sfpcast_mod
@@ -586,6 +589,34 @@ struct p_sfpnonlinear
     constexpr static std::uint32_t SQRT_MODE  = 0x3;
     constexpr static std::uint32_t EXP_MODE   = 0x4;
     constexpr static std::uint32_t TANH_MODE  = 0x5;
+};
+
+struct p_sfpgt
+{
+    constexpr static std::uint32_t IMM12_INT32 = 0x0;
+    constexpr static std::uint32_t IMM12_FP32  = 0x1;
+
+    constexpr static std::uint32_t MOD1_SET_CC = 0x1;
+};
+
+struct p_sfploadi
+{
+    constexpr static std::uint32_t MOD0_INT16 = 0x4;
+};
+
+struct p_sfpexexp
+{
+    constexpr static std::uint32_t MOD1_SET_CC_GE0 = 0xA;
+};
+
+struct p_sfpiadd
+{
+    constexpr static std::uint32_t MOD1_SUB_CC_GTE0 = 0xA;
+};
+
+struct p_sfpshft2
+{
+    constexpr static std::uint32_t MOD1_SHFT_LREG = 0x5;
 };
 
 // SFPSWAP instruction modes (mode-to-int mapping matches the Blackhole reference).

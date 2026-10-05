@@ -9,6 +9,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 
@@ -760,6 +761,8 @@ void py_module(nb::module_& mod) {
             core_grid (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
+            global_cb (ttnn.GlobalCircularBuffer, optional): DRAM-sender GlobalCircularBuffer the Tensor prefetcher streams in1 K-blocks through. Defaults to `None`.
+            prefetcher_pipes (List[ttnn.experimental.PrefetcherPipe], optional): PrefetcherPipes that deliver in1 K-blocks into the workers, as an alternative to :attr:`global_cb`: every pipe of one ``create_prefetcher_pipes_for_tensor_prefetcher`` call, or worker-sender pipes whose producer delivers the receiver at row-major position ``i`` the K-blocks of output column block ``i``, in K order. Supported for ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` with ``mcast_in0=True``. Keep the pipes alive for as long as the program cache may hold a program built against them. Defaults to an empty list (none).
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -832,7 +835,8 @@ void py_module(nb::module_& mod) {
             nb::arg("output_tile") = nb::none(),
             nb::arg("optional_output_tensor") = nb::none(),
             nb::arg("global_cb") = nb::none(),
-            nb::arg("sub_device_id") = nb::none()));
+            nb::arg("sub_device_id") = nb::none(),
+            nb::arg("prefetcher_pipes") = PrefetcherPipeList{}));
 
     ttnn::bind_function<"linear">(
         mod,
@@ -887,6 +891,8 @@ void py_module(nb::module_& mod) {
             core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of linear is to be written. Defaults to `None`.
+            global_cb (ttnn.GlobalCircularBuffer, optional): DRAM-sender GlobalCircularBuffer the Tensor prefetcher streams in1 K-blocks through. Defaults to `None`.
+            prefetcher_pipes (List[ttnn.experimental.PrefetcherPipe], optional): PrefetcherPipes that deliver in1 K-blocks into the workers, as an alternative to :attr:`global_cb`: every pipe of one ``create_prefetcher_pipes_for_tensor_prefetcher`` call, or worker-sender pipes whose producer delivers the receiver at row-major position ``i`` the K-blocks of output column block ``i``, in K order. Supported for ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` with ``mcast_in0=True``. Keep the pipes alive for as long as the program cache may hold a program built against them. Defaults to an empty list (none).
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -908,7 +914,8 @@ void py_module(nb::module_& mod) {
             nb::arg("output_tile") = nb::none(),
             nb::arg("optional_output_tensor") = nb::none(),
             nb::arg("global_cb") = nb::none(),
-            nb::arg("sub_device_id") = nb::none()));
+            nb::arg("sub_device_id") = nb::none(),
+            nb::arg("prefetcher_pipes") = PrefetcherPipeList{}));
 
     ttnn::bind_function<"matmul_batched_weights">(
         mod,
@@ -1086,6 +1093,7 @@ void py_module(nb::module_& mod) {
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`. Its shape must match the expanded output shape from the table below (skipped positions are zero-filled), or, when `nnz` is provided, may instead be the compact shape `[1, nnz, M, N]`: the results of the `nnz` active batch pairs are then packed contiguously in sparsity scan order, with skipped positions omitted rather than zero-filled. When the compact shape coincides with the expanded shape (e.g. `nnz == E` in the both-sparse mode), the output is treated as compact; under the exact-nnz contract no batch is skipped there, so the two layouts are identical. The tensor's tile must equal the output tile derived from the inputs, `[in0 tile height, in1 tile width]`. In indexed/gather mode (see `indices`) the expected shape is instead the indexed output shape, i.e. the expanded shape with the sparse-group axis shortened to `num_active`.
             indices (ttnn.Tensor, optional): enables INDEXED/GATHER mode. A ROW_MAJOR ``UINT16`` tensor listing the ``num_active`` sparse-group ids to compute (e.g. the top-k expert ids). When provided, the kernels iterate ONLY those ids (``bB = indices[i]``) instead of scanning every sparse group, and the output's group axis becomes COMPACT with length ``num_active`` (``output_shape[-3] = num_active``) rather than the full group count ``E``; output slot ``i`` holds the result for group ``indices[i]``, so the ids need not be sorted. Requirements: `is_input_b_sparse` must be True; the tensor must be device-resident on the same device as the inputs and occupy a single ROW_MAJOR stick (all dimensions except the last must be 1); ``num_active`` must be <= the number of sparse groups ``E``; and every id must be < ``E`` (out-of-range ids are only caught on-device, asserting loudly under watcher). `nnz` must not be supplied together with `indices` -- the indexed loop count comes from ``num_active``, so an `nnz` would be silently ignored. `sparsity` is still a required operand but is NOT read by the kernels in this mode (the indexed loop visits only active groups, so there is no per-slot validity scan or multicast). Defaults to `None` (the group axis is scanned densely). Use this when only a few groups are active per call to avoid the full-group multicast cost.
+            bias (ttnn.Tensor, optional): per-group fused bias, indexed/gather mode only. A ``BFLOAT16`` TILE tensor of padded shape ``[E, 32, N]`` whose tile row ``e`` holds group ``e``'s ``[1, N]`` bias (row 0 of the tile is used, the other rows are ignored). For every active group the in1 reader fetches tile row ``indices[i]`` and the compute kernel adds it to that group's output before packing, so the bias is applied at bf16 precision without a separate gather and add. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor with sparse results.
@@ -1197,7 +1205,8 @@ void py_module(nb::module_& mod) {
             nb::arg("optional_output_tensor") = nb::none(),
             nb::arg("global_cb") = nb::none(),
             nb::arg("sub_device_id") = nb::none(),
-            nb::arg("indices") = nb::none()));
+            nb::arg("indices") = nb::none(),
+            nb::arg("bias") = nb::none()));
 
     // Bind MatmulParams for descriptor-based operations
     nb::class_<ttnn::prim::MatmulParams>(mod, "MatmulParams")
@@ -1234,94 +1243,25 @@ void py_module(nb::module_& mod) {
             "compute_program_hash",
             &ttnn::prim::MatmulDeviceOperation::compute_descriptor_program_hash,
             nb::arg("operation_attributes"),
-            nb::arg("tensor_args"));
-
-    // Bind MatmulMultiCoreReuseOptimizedProgramFactory for descriptor creation
-    nb::class_<ttnn::prim::MatmulMultiCoreReuseOptimizedProgramFactory>(
-        mod, "MatmulMultiCoreReuseOptimizedProgramFactory")
+            nb::arg("tensor_args"))
         .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::MatmulParams& operation_attributes,
-               const ttnn::prim::MatmulInputs& tensor_args,
-               std::vector<ttnn::Tensor>& tensor_return_value,
-               const std::optional<CoreRangeSet>& core_range_set) {
-                return ttnn::prim::MatmulMultiCoreReuseOptimizedProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
+            "invoke",
+            [](const ttnn::Tensor& input_tensor_a,
+               const ttnn::Tensor& input_tensor_b,
+               const std::optional<ttnn::Tensor>& bias,
+               const ttnn::prim::MatmulParams& attributes) {
+                return ttnn::prim::matmul(input_tensor_a, input_tensor_b, bias, std::nullopt, attributes);
             },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"),
-            nb::arg("core_range_set") = std::nullopt)
-        .def_static(
-            "default_core_range",
-            &ttnn::prim::MatmulMultiCoreReuseOptimizedProgramFactory::default_core_range,
-            nb::arg("device"));
+            nb::arg("input_tensor_a"),
+            nb::arg("input_tensor_b"),
+            nb::arg("bias") = nb::none(),
+            nb::arg("attributes"),
+            R"doc(
+        Testing only, not part of the public API; use ttnn.matmul or ttnn.linear instead.
 
-    // Bind MatmulMultiCoreReuseMcast1DProgramFactory for descriptor creation
-    nb::class_<ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory>(mod, "MatmulMultiCoreReuseMcast1DProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::MatmulParams& operation_attributes,
-               const ttnn::prim::MatmulInputs& tensor_args,
-               std::vector<ttnn::Tensor>& tensor_return_value,
-               const std::optional<CoreRangeSet>& core_range_set) {
-                return ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"),
-            nb::arg("core_range_set") = std::nullopt);
-
-    // Bind MatmulMultiCoreReuseMcast2DProgramFactory for descriptor creation
-    nb::class_<ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory>(mod, "MatmulMultiCoreReuseMcast2DProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::MatmulParams& operation_attributes,
-               const ttnn::prim::MatmulInputs& tensor_args,
-               std::vector<ttnn::Tensor>& tensor_return_value,
-               const std::optional<CoreRangeSet>& core_range_set) {
-                return ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"),
-            nb::arg("core_range_set") = std::nullopt);
-
-    // Bind MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory for descriptor creation
-    nb::class_<ttnn::prim::MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory>(
-        mod, "MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::MatmulParams& operation_attributes,
-               const ttnn::prim::MatmulInputs& tensor_args,
-               std::vector<ttnn::Tensor>& tensor_return_value,
-               const std::optional<CoreRangeSet>& core_range_set) {
-                return ttnn::prim::MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"),
-            nb::arg("core_range_set") = std::nullopt);
-
-    // Bind MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory for descriptor creation
-    nb::class_<ttnn::prim::MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory>(
-        mod, "MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::MatmulParams& operation_attributes,
-               const ttnn::prim::MatmulInputs& tensor_args,
-               std::vector<ttnn::Tensor>& tensor_return_value,
-               const std::optional<CoreRangeSet>& core_range_set) {
-                return ttnn::prim::MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"),
-            nb::arg("core_range_set") = std::nullopt);
+        Calls ttnn::prim::matmul directly so tests can exercise fused bias where ttnn.matmul /
+        ttnn.linear would not fuse it (they add bias as a separate op when in1 is batched).
+    )doc");
 
     // Bind select_program_factory for Python-side factory dispatch
     mod.def(

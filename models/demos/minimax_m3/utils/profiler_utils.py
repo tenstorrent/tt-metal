@@ -73,10 +73,10 @@ ZONE_END_PREFIX = "M3_ZONE_END"
 # sites serves every depth of investigation:
 #
 #   1 COARSE  per layer: attn vs mlp. ~3 zones/layer — start here, it answers "which block".
-#   2 MEDIUM  + every block that costs real time: sdpa, the CCLs, cache_read, indexer, and the MoE
-#             stages (dispatch / experts_mm / combine / reduce). ~20 zones/layer. The default.
+#   2 MEDIUM  + every block that costs real time: sdpa, the CCLs, indexer, and the MoE stages
+#             (dispatch / experts_mm / combine / reduce). ~20 zones/layer. The default.
 #   3 FINE    + norms, residuals, rope, head splits, and the sub-splits of the medium zones
-#             (deshard vs slice, weighted-sum vs reduce-scatter). ~35 zones/layer.
+#             (weighted-sum vs reduce-scatter). ~35 zones/layer.
 #
 # Levels are not just presentation: each zone is two Tracy signposts, and Tracy caps a trace at 32K
 # source locations, so a coarse level also buys headroom on long captures.

@@ -15,7 +15,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "context_types.hpp"
 #include <tt-metalium/experimental/context/metal_env.hpp>
-#include "hostdevcommon/api/hostdevcommon/common_values.hpp"
+#include "hostdevcommon/common_values.hpp"
 namespace tt::tt_fabric {
 class ControlPlane;
 }  // namespace tt::tt_fabric
@@ -208,7 +208,6 @@ public:
     tt_fabric::FabricReliabilityMode get_fabric_reliability_mode() const;
     const tt_fabric::FabricRouterConfig& get_fabric_router_config() const;
 
-    void set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config);
     tt_fabric::FabricTensixConfig get_fabric_tensix_config() const;
 
     tt_fabric::FabricUDMMode get_fabric_udm_mode() const;

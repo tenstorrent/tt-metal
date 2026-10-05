@@ -28,14 +28,13 @@ void kernel_main() {
     constexpr auto num_blocks_first_stage = get_arg(args::num_blocks_first_stage);
     constexpr auto block_w = get_arg(args::block_w);
     constexpr auto block_h_const = get_arg(args::block_h);
-    volatile uint32_t block_h_volatile = get_arg(args::block_h);
+    const volatile uint32_t block_h_volatile = get_arg(args::block_h);
     constexpr auto subblock_w_const = get_arg(args::subblock_w);
-    volatile uint32_t subblock_w_volatile = get_arg(args::subblock_w);
+    const volatile uint32_t subblock_w_volatile = get_arg(args::subblock_w);
     constexpr auto num_subblocks_w = get_arg(args::num_subblocks_w);
     constexpr auto num_tiles_per_block = get_arg(args::num_tiles_per_block);
     constexpr bool FLOAT32_DTYPE = get_arg(args::float32_dtype) == 1;
     constexpr bool FP32_DEST_ACC = compute_kernel_lib::get_fp32_dest_acc_enabled();
-    constexpr bool LEGACY_RSQRT = get_arg(args::legacy_rsqrt) == 1;
     constexpr auto num_blocks_second_stage = get_arg(args::num_blocks_second_stage);
     // gamma and beta each gate a buffer that only exists when their tensor was supplied, so the flag
     // has to reach the preprocessor as well as `if constexpr`.
@@ -77,12 +76,7 @@ void kernel_main() {
         num_blocks_reduce = num_blocks_first_stage;
     }
 
-    bool enable_sqrt;
-    if (use_two_stage_reduce and not is_second_stage_reader) {
-        enable_sqrt = false;
-    } else {
-        enable_sqrt = true;
-    }
+    const bool enable_sqrt = not(use_two_stage_reduce and not is_second_stage_reader);
 
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t scaler0 = 0;
@@ -119,7 +113,9 @@ void kernel_main() {
     constexpr uint32_t dfb_ex_global_id = dfb::ex_global;        // E[x] global reduce
     constexpr uint32_t dfb_xmm2_id = dfb_x;                      // xmm^2
     constexpr uint32_t dfb_ex2pe_id = dfb::ex2pe;                // E[(x-E[x])^2]+eps
-    constexpr uint32_t dfb_fusion_id = dfb::xmm;                 // stream gamma/beta (alias of dfb_xmm_id)
+    // Without gamma, normalisation must not reserve its still-full xmm input
+    // for output. Use the now-consumed variance scratch, and let beta read it.
+    constexpr uint32_t dfb_fusion_id = do_gamma ? dfb::xmm : dfb_x;
     constexpr uint32_t dfb_out_id = dfb::out;
 #ifdef DO_COL_MASK
 #ifndef RMSNORM
@@ -153,11 +149,11 @@ void kernel_main() {
 #endif
     DataflowBuffer dfb_xmm(dfb_xmm_id);
 #ifndef RMSNORM
-    DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
+    const DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_ex(dfb_ex_id);
     DataflowBuffer dfb_ex_external(dfb_ex_external_id);
 #endif
-    DataflowBuffer dfb_ex_partial2(dfb_ex_partial2_id);
+    const DataflowBuffer dfb_ex_partial2(dfb_ex_partial2_id);
     DataflowBuffer dfb_ex2(dfb_ex2_id);
     DataflowBuffer dfb_ex_external2(dfb_ex_external2_id);
     DataflowBuffer dfb_ex_global(dfb_ex_global_id);
@@ -180,9 +176,9 @@ void kernel_main() {
     const uint32_t block_h = (block_w == 1) ? block_h_volatile : block_h_const;
     const uint32_t subblock_w = (block_w <= 2) ? subblock_w_volatile : subblock_w_const;
 
-    int index_subblock_w_offset = 0;
-    int index_h_offset = 0;
-    int index = 0;
+    uint32_t index_subblock_w_offset = 0;
+    uint32_t index_h_offset = 0;
+    uint32_t index = 0;
 
 #ifdef FUSE_PRE_ADD
 #ifdef RMSNORM
@@ -194,7 +190,8 @@ void kernel_main() {
     constexpr uint32_t dfb_in_id = dfb_in0;
 #endif
     DataflowBuffer dfb_in(dfb_in_id);
-    constexpr uint32_t dfb_im_id = do_gamma ? dfb_x : (do_beta ? dfb_fusion_id : dfb_out_id);
+    constexpr uint32_t dfb_im_no_gamma_id = do_beta ? dfb_fusion_id : dfb_out_id;
+    constexpr uint32_t dfb_im_id = do_gamma ? dfb_x : dfb_im_no_gamma_id;
     DataflowBuffer dfb_im(dfb_im_id);
     constexpr uint32_t dfb_outgamma_id = do_beta ? dfb_fusion_id : dfb_out_id;
     DataflowBuffer dfb_outgamma(dfb_outgamma_id);
@@ -203,6 +200,12 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
     reconfig_data_format_srcb(dfb_in0, dfb_in1);
     add_init(dfb_in0, dfb_in1);
+    // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+    // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
+    // hw_startup output ring and this DFB is never written (all-zero output).
+#ifdef ARCH_QUASAR
+    pack_init(dfb_in_id);
+#endif
     dfb_in.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
@@ -244,6 +247,12 @@ void kernel_main() {
     // tile index.
     reconfig_data_format(dfb_in_id, dfb_col_mask_packed_id);
     mul_init(dfb_in_id, dfb_col_mask_packed_id);
+    // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+    // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
+    // hw_startup output ring and this DFB is never written (all-zero output).
+#ifdef ARCH_QUASAR
+    pack_init(dfb_mask_scratch_id);
+#endif
     dfb_mask_scratch.reserve_back(num_tiles_per_block);
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_h; i++) {
@@ -265,6 +274,12 @@ void kernel_main() {
     constexpr uint32_t dfb_ex_reduce_input = dfb_in_id;
 #endif
     // E[x],
+    // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+    // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
+    // hw_startup output ring and this DFB is never written (all-zero output).
+#ifdef ARCH_QUASAR
+    pack_init(dfb_ex_partial_id);
+#endif
     compute_kernel_lib::reduce<
         PoolType::AVG,
         ReduceDim::REDUCE_ROW,
@@ -284,7 +299,13 @@ void kernel_main() {
     if constexpr (is_allgather_worker) {
         reconfig_data_format(dfb_scaler_global_id, dfb_ex_external_id);
         reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW>(dfb_ex_external_id, dfb_scaler_global_id, dfb_ex_id);
-        dfb_ex.reserve_back(num_tiles_per_allgather_worker);
+        // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+        // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
+        // hw_startup output ring and this DFB is never written (all-zero output).
+#ifdef ARCH_QUASAR
+        pack_init(dfb_ex_id);
+#endif
+        dfb_ex.reserve_back(static_cast<uint16_t>(num_tiles_per_allgather_worker));
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
             dfb_scaler_global.wait_front(1);
@@ -305,9 +326,9 @@ void kernel_main() {
             tile_regs_release();
         }
         reduce_uninit();
-        dfb_ex.push_back(num_tiles_per_allgather_worker);
+        dfb_ex.push_back(static_cast<uint16_t>(num_tiles_per_allgather_worker));
         reconfig_data_format(dfb_ex_external_id, dfb_scaler_global_id);
-        dfb_ex.wait_front(num_tiles_per_allgather_worker);
+        dfb_ex.wait_front(static_cast<uint16_t>(num_tiles_per_allgather_worker));
     }
 
     // x - E[x]
@@ -317,6 +338,12 @@ void kernel_main() {
     index_h_offset = 0;
     reconfig_data_format_srca(dfb_ex_external_id, dfb_in_id);
     sub_bcast_cols_init(dfb_in_id, dfb_ex_global_id);
+    // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+    // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
+    // hw_startup output ring and this DFB is never written (all-zero output).
+#ifdef ARCH_QUASAR
+    pack_init(dfb_xmm_id);
+#endif
     dfb_xmm.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
@@ -324,24 +351,31 @@ void kernel_main() {
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();
             for (uint32_t w = 0; w < subblock_w; w++) {
-                index = w + index_subblock_w_offset;
+                index = w + index_subblock_w_offset + index_h_offset;
                 sub_tiles_bcast_cols(dfb_in_id, dfb_ex_global_id, index, 0, w);
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t i = 0; i < subblock_w; i++) {
-                pack_tile(i, dfb_xmm_id);
+            for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
+                pack_tile(dst_i, dfb_xmm_id);
             }
             tile_regs_release();
             index_subblock_w_offset += subblock_w;
         }
         dfb_ex_global.pop_front(1);
-        dfb_in.pop_front(block_w);
+        index_h_offset += block_w;
     }
-    dfb_xmm.push_back(num_tiles_per_block);
-#ifndef FUSE_PRE_ADD
+#ifdef FUSE_PRE_ADD
+    // The fused-add result lives in a kernel-local scratch buffer (reserved, pushed and waited above) that
+    // the loop read by absolute tile index; this was its last read, so pop it once to leave it balanced.
+    // On the non-fused path the intake aliases the resident input shard (in0 borrows the input tensor):
+    // nothing ever pushes it, so it is read by index and never popped -- a pop with no matching post is
+    // tolerated by WH/BH but faults Quasar's hardware tile counters (posted=0 acked=N).
+    dfb_in.pop_front(num_tiles_per_block);
+#else
     reconfig_data_format_srca(dfb_in_id, dfb_xmm_id);
 #endif
+    dfb_xmm.push_back(num_tiles_per_block);
     dfb_xmm.wait_front(num_tiles_per_block);
 #endif
 
@@ -365,6 +399,12 @@ void kernel_main() {
     // (x - E[x])^2, dfb_xmm2 <-- dfb_xmm_id
     mul_init(dfb_xmm_id, dfb_xmm_id);
     index_h_offset = 0;
+    // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+    // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
+    // hw_startup output ring and this DFB is never written (all-zero output).
+#ifdef ARCH_QUASAR
+    pack_init(dfb_xmm2_id);
+#endif
     dfb_xmm2.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
@@ -376,8 +416,8 @@ void kernel_main() {
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t i = 0; i < subblock_w; i++) {
-                pack_tile(i, dfb_xmm2_id);
+            for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
+                pack_tile(dst_i, dfb_xmm2_id);
             }
             tile_regs_release();
             index_subblock_w_offset += subblock_w;
@@ -409,6 +449,12 @@ void kernel_main() {
     dfb_xmm2.wait_front(num_tiles_per_block);
 
     // Var(x)
+    // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+    // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
+    // hw_startup output ring and this DFB is never written (all-zero output).
+#ifdef ARCH_QUASAR
+    pack_init(dfb_ex_partial2_id);
+#endif
     compute_kernel_lib::reduce<
         PoolType::AVG,
         ReduceDim::REDUCE_ROW,
@@ -426,7 +472,13 @@ void kernel_main() {
     if constexpr (is_allgather_worker) {
         reconfig_data_format(dfb_scaler_global_id, dfb_ex_external2_id);
         reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW>(dfb_ex_external2_id, dfb_scaler_global_id, dfb_ex2_id);
-        dfb_ex2.reserve_back(num_tiles_per_allgather_worker);
+        // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+        // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
+        // hw_startup output ring and this DFB is never written (all-zero output).
+#ifdef ARCH_QUASAR
+        pack_init(dfb_ex2_id);
+#endif
+        dfb_ex2.reserve_back(static_cast<uint16_t>(num_tiles_per_allgather_worker));
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
             dfb_scaler_global.wait_front(1);
@@ -448,10 +500,16 @@ void kernel_main() {
             tile_regs_release();
         }
         reduce_uninit();
-        dfb_ex2.push_back(num_tiles_per_allgather_worker);
+        dfb_ex2.push_back(static_cast<uint16_t>(num_tiles_per_allgather_worker));
         reconfig_data_format(dfb_xmm2_id, dfb_scaler_id);
 
         if (enable_sqrt) {
+            // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+            // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
+            // hw_startup output ring and this DFB is never written (all-zero output).
+#ifdef ARCH_QUASAR
+            pack_init(dfb_ex2pe_id);
+#endif
             for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
                 // 1/[sqrt(Var + eps)],
                 dfb_ex2.wait_front(1);
@@ -460,8 +518,8 @@ void kernel_main() {
                 add_init(dfb_ex2_id, dfb_eps);
                 add_tiles(dfb_ex2_id, dfb_eps, i, 0, dst0);
                 tile_regs_wait();
-                rsqrt_tile_init<LEGACY_RSQRT>();
-                rsqrt_tile<LEGACY_RSQRT>(dst0);
+                rsqrt_tile_init();
+                rsqrt_tile(dst0);
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(dst0, dfb_ex2pe_id);
@@ -471,7 +529,7 @@ void kernel_main() {
         }
     }
 
-    if constexpr (do_gamma == 0 && do_beta == 0) {
+    if constexpr (!do_gamma && !do_beta) {
         pack_reconfig_data_format(dfb_out_id);
     }
 // (x - Ex) * 1/[sqrt(Var + eps)]
@@ -488,6 +546,12 @@ void kernel_main() {
 #endif
     mul_bcast_cols_init(dfb_xmm_id, dfb_ex_global_id);
     index_h_offset = 0;
+    // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+    // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
+    // hw_startup output ring and this DFB is never written (all-zero output).
+#ifdef ARCH_QUASAR
+    pack_init(dfb_im_id);
+#endif
     dfb_im.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
@@ -502,7 +566,7 @@ void kernel_main() {
                 // Activation must be applied last. If do_gamma != 0 or do_beta != 0 then
                 // activation will be applied after the gamma/beta multiplication/addition.
                 // Otherwise, we can apply the activation here.
-                if constexpr (!(do_gamma == 1 || do_beta == 1)) {
+                if constexpr (!do_gamma && !do_beta) {
                     SFPU_OP_INIT_ACTIVATION
                     SFPU_OP_FUNC_ACTIVATION
                 }
@@ -511,8 +575,8 @@ void kernel_main() {
             tile_regs_commit();
 
             tile_regs_wait();
-            for (uint32_t i = 0; i < subblock_w; i++) {
-                pack_tile(i, dfb_im_id);
+            for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
+                pack_tile(dst_i, dfb_im_id);
             }
             tile_regs_release();
 
@@ -523,18 +587,28 @@ void kernel_main() {
     }
     dfb_im.push_back(num_tiles_per_block);
 
+#if !(defined RMSNORM and not defined FUSE_PRE_ADD)
+    // RMSNorm without a fused pre-add reads x straight from the resident input shard (xmm aliases in0),
+    // which is never pushed and so must not be popped (see the x - E[x] pass above).
     dfb_xmm.pop_front(num_tiles_per_block);
+#endif
     dfb_im.wait_front(num_tiles_per_block);
 
 #ifdef FUSE_GAMMA
     {
         reconfig_data_format(dfb_im_id, dfb_gamma_id);
-        if constexpr (do_beta == 0) {
+        if constexpr (!do_beta) {
             pack_reconfig_data_format(dfb_out_id);
         }
         mul_bcast_rows_init(dfb_im_id, dfb_gamma_id);
         dfb_gamma.wait_front(block_w);
         index_h_offset = 0;
+        // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+        // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
+        // hw_startup output ring and this DFB is never written (all-zero output).
+#ifdef ARCH_QUASAR
+        pack_init(dfb_outgamma_id);
+#endif
         dfb_outgamma.reserve_back(num_tiles_per_block);
         for (uint32_t i = 0; i < block_h; i++) {
             index_subblock_w_offset = 0;
@@ -576,6 +650,12 @@ void kernel_main() {
         add_bcast_rows_init(dfb_fusion_id, dfb_beta_id);
         dfb_beta.wait_front(block_w);
         index_h_offset = 0;
+        // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+        // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
+        // hw_startup output ring and this DFB is never written (all-zero output).
+#ifdef ARCH_QUASAR
+        pack_init(dfb_out_id);
+#endif
         dfb_out.reserve_back(num_tiles_per_block);
         for (uint32_t i = 0; i < block_h; i++) {
             index_subblock_w_offset = 0;

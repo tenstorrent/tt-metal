@@ -29,6 +29,11 @@ TEST_F(InMemoryTokenDatasetTest, GetSize) {
     ASSERT_EQ(dataset.get_size(), expected_size);
 }
 
+// Test get_num_tokens function
+TEST_F(InMemoryTokenDatasetTest, GetNumTokens) {
+    ASSERT_EQ(dataset.get_num_tokens(), tokens.size());
+}
+
 // Test get_item_impl function for the first sample
 TEST_F(InMemoryTokenDatasetTest, GetItemFirstSample) {
     size_t index = 0;

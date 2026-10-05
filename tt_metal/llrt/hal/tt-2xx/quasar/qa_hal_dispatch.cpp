@@ -5,7 +5,7 @@
 #define COMPILE_FOR_DISPATCH_ENGINE 1
 #define HAL_BUILD tt::tt_metal::quasar::dispatch
 #include "hostdev/dev_msgs.h"
-#include "hostdev/fabric_telemetry_msgs.h"
+#include "hostdevcommon/fabric_telemetry_msgs.h"
 #include "hostdev/realtime_profiler_msgs.h"
 using namespace tt::tt_metal::quasar::dispatch;
 
@@ -128,6 +128,8 @@ HalCoreInfoType create_dispatch_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
         MEM_L1_SIZE - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)];
 
+    assert_kernel_config_no_overlap(mem_map_bases, mem_map_sizes, HalL1MemAddrType::DEFAULT_UNRESERVED, "Dispatch");
+
     // Base FW mailbox not used on dispatch engines
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
 
@@ -140,9 +142,9 @@ HalCoreInfoType create_dispatch_mem_map() {
         std::move(mem_map_sizes),
         std::move(fw_mailbox_addr),
         std::move(processor_classes_names),
-        true,
-        true,
-        false,
+        /*supports_cbs=*/true,
+        /*supports_dfbs=*/true,
+        /*supports_receiving_multicast_cmds=*/false,
         dispatch_dev_msgs::create_factory(),
         dispatch_fabric_telemetry::create_factory(),
         dispatch_realtime_profiler_msgs::create_factory());

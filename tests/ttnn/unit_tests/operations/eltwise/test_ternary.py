@@ -500,3 +500,40 @@ def test_ternary_addcmul_cache_hit_refreshes_operand_addresses(device):
     assert_with_pcc(reference(2), ttnn.to_torch(out1).float(), 0.99)
 
     device.disable_and_clear_program_cache()
+
+
+def test_ternary_cache_miss_different_alignment(device):
+    """Same logical shape, over-padded TILE vs default padding, must be two cache entries."""
+    device.enable_program_cache()
+
+    logical = (1, 1, 32, 32)
+    padded = [1, 1, 64, 32]
+    torch.manual_seed(0)
+
+    def make(overpad):
+        tensors = []
+        for _ in range(3):
+            host = torch.rand(logical, dtype=torch.bfloat16)
+            if overpad:
+                tt = ttnn.tilize_with_val_padding(
+                    ttnn.from_torch(host, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16),
+                    padded,
+                    0.0,
+                )
+            else:
+                tt = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            tensors.append(tt)
+        return tensors
+
+    over = make(True)
+    normal = make(False)
+    assert list(over[0].shape) == list(normal[0].shape)
+    assert list(over[0].padded_shape) != list(normal[0].padded_shape)
+
+    device.clear_program_cache()
+    ttnn.addcmul(*over, value=1.0)
+    assert device.num_program_cache_entries() == 1
+    ttnn.addcmul(*normal, value=1.0)
+    assert device.num_program_cache_entries() == 2
+
+    device.disable_and_clear_program_cache()

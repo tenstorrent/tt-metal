@@ -11,7 +11,7 @@ import types
 from pathlib import Path
 
 import yaml
-
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT_PATH = REPO_ROOT / ".github/scripts/utils/validate_perf_targets.py"
@@ -874,3 +874,140 @@ def test_extract_metric_value_fails_for_ambiguous_unqualified_metric_name():
         assert False, "Expected ValueError for ambiguous metric lookup"
     except ValueError as exc:
         assert "ambiguous" in str(exc)
+
+
+@pytest.mark.parametrize("metric", ["ifeval", "gpqa", "gsm8k"])
+def test_task_accuracy_and_performance_from_the_same_run(tmp_path, metric):
+    _vision_scaffold(tmp_path, "task-demo")
+    accuracy_target, tolerance = (100, 0.2) if metric == "gpqa" else (80, 0.05)
+    target = {
+        "version": 1,
+        "targets": {
+            "task-demo": {
+                "skus": {
+                    "wh_n150": {
+                        "entries": [
+                            {
+                                "batch_size": 1,
+                                "status": "active",
+                                "accuracy": {metric: accuracy_target, f"{metric}_tolerance": tolerance},
+                                "perf": {"decode_t/s/u": 120, "decode_t/s/u_tolerance": 0.15},
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+    }
+    (tmp_path / "models/model_targets.yaml").write_text(yaml.safe_dump(target))
+    path = tmp_path / "generated/benchmark_data/complete_run_task.json"
+    cases = [(80, 120, 0), (60, 120, 1), (80, 60, 1)]
+    if metric == "gpqa":
+        cases += [(90, 120, 0), (100, 120, 0), (79, 120, 1)]
+    for accuracy, throughput, expected_code in cases:
+        _write_complete_run(
+            path,
+            model="task-demo",
+            batch_size=1,
+            seq_len=128,
+            decode_tsu=throughput,
+            extra_measurements=[{"step_name": "inference", "name": f"{metric}_accuracy", "value": accuracy}],
+        )
+        result = _run_validator(tmp_path)
+        assert result.returncode == expected_code, result.stdout + result.stderr
+        assert metric in result.stdout and "decode_t/s/u" in result.stdout
+
+
+@pytest.mark.parametrize("metric", ["text_image_pcc", "edit_image_pcc"])
+@pytest.mark.parametrize("score,success", [(0.99, True), (0.96, False), (None, False)])
+def test_image_agreement_targets_and_throughput(tmp_path, metric, score, success):
+    (tmp_path / "generated/benchmark_data").mkdir(parents=True)
+    (tmp_path / "models").mkdir()
+    (tmp_path / "tests/pipeline_reorg").mkdir(parents=True)
+    _write_single_target(tmp_path, perf={"fps": 0.04}, accuracy={metric: 1.0, f"{metric}_tolerance": 0.03})
+    measurements = [{"step_name": "inference", "name": "fps", "value": 0.04}]
+    if score is not None:
+        measurements.append({"step_name": "inference", "name": metric, "value": score})
+    _write_complete_run(
+        tmp_path / "generated/benchmark_data/complete_run_image.json",
+        model="demo-model",
+        batch_size=1,
+        seq_len=128,
+        decode_tsu=0,
+        extra_measurements=measurements,
+    )
+    result = _run_validator(tmp_path)
+    assert (result.returncode == 0) is success, result.stdout + result.stderr
+    assert metric in result.stdout
+    assert "fps" in result.stdout
+
+
+@pytest.mark.parametrize("metric", ["ifeval", "gpqa", "gsm8k"])
+def test_throughput_only_task_payload_fails_missing_accuracy(tmp_path, metric):
+    _vision_scaffold(tmp_path, "demo-model")
+    _write_single_target(tmp_path, perf={"decode_t/s/u": 100.0}, accuracy={metric: 80})
+    _write_complete_run(
+        tmp_path / "generated/benchmark_data/complete_run_missing_score.json",
+        model="demo-model",
+        batch_size=1,
+        seq_len=128,
+        decode_tsu=100.0,
+    )
+    result = _run_validator(tmp_path)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert f"metric '{metric}' missing in benchmark payload" in result.stdout
+
+
+@pytest.mark.parametrize("metric", ["gsm8k", "text_image_pcc", "edit_image_pcc"])
+def test_accuracy_only_target_requires_score_without_perf_target(tmp_path, metric):
+    _vision_scaffold(tmp_path, "demo-model")
+    _write_single_target(tmp_path, perf={}, accuracy={metric: 1.0})
+    path = tmp_path / "generated/benchmark_data/complete_run_accuracy_only.json"
+    path.write_text(
+        json.dumps(
+            {
+                "ml_model_name": "demo-model",
+                "batch_size": 1,
+                "input_sequence_length": 128,
+                "measurements": [{"step_name": "inference", "name": "fps", "value": 0.04}],
+            }
+        )
+    )
+    result = _run_validator(tmp_path)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert f"metric '{metric}' missing in benchmark payload" in result.stdout
+
+
+def test_llm_perf_run_still_skips_token_accuracy_targets(tmp_path):
+    _vision_scaffold(tmp_path, "demo-model")
+    _write_single_target(tmp_path, perf={"decode_t/s/u": 100.0}, accuracy={"top1": 99.0, "top5": 99.0})
+    _write_complete_run(
+        tmp_path / "generated/benchmark_data/complete_run_perf.json",
+        model="demo-model",
+        batch_size=1,
+        seq_len=128,
+        decode_tsu=100.0,
+    )
+    result = _run_validator(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "decode_t/s/u" in result.stdout
+    assert "missing-measurement" not in result.stdout
+
+
+def test_throughput_only_classifier_payload_fails_missing_accuracy(tmp_path):
+    _vision_scaffold(tmp_path, "demo-model")
+    _write_single_target(tmp_path, perf={"fps": 30.0}, accuracy={"top1": 75.0})
+    path = tmp_path / "generated/benchmark_data/complete_run_classifier.json"
+    path.write_text(
+        json.dumps(
+            {
+                "ml_model_name": "demo-model",
+                "batch_size": 1,
+                "input_sequence_length": 128,
+                "measurements": [{"step_name": "inference", "name": "fps", "value": 30.0}],
+            }
+        )
+    )
+    result = _run_validator(tmp_path)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "metric 'top1' missing in benchmark payload" in result.stdout

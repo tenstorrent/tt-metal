@@ -1,0 +1,38 @@
+{
+  "config_id": "head_bfp4_lofi",
+  "weight_groups": {
+    "attention": "bfloat4_b",
+    "output": "bfloat4_b",
+    "gate": "bfloat4_b",
+    "up": "bfloat4_b",
+    "down": "bfloat4_b",
+    "head": "bfloat4_b"
+  },
+  "compute_fidelities": {
+    "attention": "LoFi",
+    "output": "LoFi",
+    "gate": "LoFi",
+    "up": "LoFi",
+    "down": "LoFi",
+    "head": "LoFi"
+  },
+  "fp32_dest_acc_en": true,
+  "layer_exceptions": {},
+  "activation_dtype": {
+    "attention": "bfloat16",
+    "mlp": "bfloat16"
+  },
+  "residual_dtype": "bfloat16",
+  "ccl_dtype": "bfloat16",
+  "kv_cache_dtype": "bfloat8_b",
+  "logits_dtype": "bfloat16",
+  "sampling_dtype": "bfloat16",
+  "norm_dtype": "bfloat16",
+  "embedding_dtype": "bfloat16",
+  "recurrent_dtype": "float32",
+  "convolution_dtype": "bfloat16",
+  "sensitive_compute_fidelity": "HiFi4",
+  "token_dtype": "uint32",
+  "max_context": 262144,
+  "final_norm_compute_fidelity": "HiFi2"
+}

@@ -54,6 +54,9 @@ void bind_moe_grouped_topk(nb::module_& mod) {
                     (score_activation(logits) + bias, before top-k selection) into it. This is the exact tensor top-k
                     operates on, so it can be compared against a reference implementation without top-k tie-break
                     ambiguity. Defaults to None (no debug output, zero overhead).
+                weights_layout (ttnn.Layout, optional): Layout of the BFLOAT16 weights. Defaults to TILE.
+                    ROW_MAJOR supports interleaved L1/DRAM output and at most 32 activated experts.
+                    Indices remain TILE in either case.
 
             Returns:
                 Tuple[ttnn.Tensor, ttnn.Tensor]: A tuple containing the scaled expert scores (dtype BFLOAT16) and selected expert indices (dtype UINT16). The shape of the scores tensor should be [N, B, S, 8]. The shape of the indices tensor should be [N, B, S, 8]. N, B and S can be any value. 8 is the number of experts in the final selected groups.
@@ -72,7 +75,8 @@ void bind_moe_grouped_topk(nb::module_& mod) {
         nb::arg("score_func") = "sigmoid",
         nb::arg("memory_config") = nb::none(),
         nb::arg("padding_config") = nb::none(),
-        nb::arg("biased_scores") = nb::none());
+        nb::arg("biased_scores") = nb::none(),
+        nb::arg("weights_layout") = tt::tt_metal::Layout::TILE);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk::detail

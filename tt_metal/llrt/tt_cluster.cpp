@@ -21,6 +21,7 @@
 #include <string>
 #include <tuple>  // for get
 #include <unordered_map>
+#include <filesystem>
 #include <unordered_set>
 #include <utility>
 
@@ -32,7 +33,6 @@
 #include "llrt/hal.hpp"
 #include "sanitize_noc_host.hpp"
 #include "tracy/Tracy.hpp"
-#include "tt_metal/llrt/tlb_config.hpp"
 #include "tunnels_from_mmio_device.hpp"
 #include "umd/device/utils/semver.hpp"
 #include <umd/device/cluster.hpp>
@@ -85,6 +85,14 @@ std::unique_ptr<tt::umd::ClusterDescriptor> get_mock_cluster_desc(const tt::llrt
 
 }  // namespace
 namespace tt {
+
+std::unordered_set<ChipId> Cluster::simulator_target_devices(const std::filesystem::path& simulator_dir) {
+    std::error_code error;  // An unreadable directory counts as no layout, rather than throwing.
+    if (std::filesystem::exists(simulator_dir / "ip_layout.yaml", error)) {
+        return {};
+    }
+    return {0};
+}
 
 tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
     const llrt::RunTimeOptions& rtoptions, const umd::ClusterDescriptor* cluster_desc) {
@@ -448,7 +456,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
                 .chip_type = tt::umd::ChipType::SIMULATION,
                 .num_host_mem_ch_per_mmio_device = 1,
-                .target_devices = {0},
+                .target_devices = simulator_target_devices(rtoptions_.get_simulator_path()),
                 .simulator_directory = rtoptions_.get_simulator_path(),
             });
         }
@@ -514,36 +522,6 @@ void Cluster::start_driver(umd::DeviceParams& device_params) const {
 
     // May block waiting for other processes to release the device.
     this->driver_->start_device(device_params);
-
-    if ((this->target_type_ == TargetDevice::Silicon || this->target_type_ == TargetDevice::Simulator) &&
-        device_params.init_device) {
-        // Configure TLBs on all MMIO devices in parallel
-        std::vector<std::shared_future<void>> futures;
-        const auto& mmio_device_ids = driver_->get_target_mmio_device_ids();
-        futures.reserve(mmio_device_ids.size());
-
-        for (const auto& mmio_device_id : mmio_device_ids) {
-            futures.emplace_back(tt_metal::detail::async([this, mmio_device_id]() {
-                bool include_dram_tlbs = (this->target_type_ == TargetDevice::Silicon);
-                if (this->target_type_ == TargetDevice::Simulator && rtoptions_.get_simulator_enabled()) {
-                    // Functional ttsim (libttsim.so) does not model BH DRAM TLBs and crashes if they
-                    // are configured. RTL sim uses a directory simulator path and still needs them.
-                    include_dram_tlbs = (rtoptions_.get_simulator_path().extension() != ".so");
-                }
-                ll_api::configure_static_tlbs(
-                    this->arch_,
-                    mmio_device_id,
-                    this->get_soc_desc(mmio_device_id),
-                    *this->driver_,
-                    include_dram_tlbs);
-            }));
-        }
-
-        // Wait for all TLB configurations to complete
-        for (auto& future : futures) {
-            future.get();
-        }
-    }
 }
 
 Cluster::~Cluster() {
@@ -824,7 +802,12 @@ void Cluster::assert_risc_reset_at_core(const tt_cxy_pair& core, const tt::umd::
 }
 
 void Cluster::write_dram_vec(
-    const void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const {
+    const void* mem_ptr,
+    uint32_t sz_in_bytes,
+    ChipId device_id,
+    int dram_view,
+    uint64_t addr,
+    std::optional<tt::umd::IoOrdering> ordering) const {
     const metal_SocDescriptor& desc_to_use = get_soc_desc(device_id);
     TT_FATAL(
         dram_view < desc_to_use.get_num_dram_views(),
@@ -835,7 +818,7 @@ void Cluster::write_dram_vec(
     tt::tt_metal::CoreCoord dram_core_coord = desc_to_use.get_preferred_worker_core_for_dram_view(dram_view, tt_metal::NOC::NOC_0);
     tt_cxy_pair dram_core = tt_cxy_pair(device_id, dram_core_coord.x, dram_core_coord.y);
     size_t offset = desc_to_use.get_address_offset(dram_view);
-    write_core(mem_ptr, sz_in_bytes, tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset);
+    write_core(mem_ptr, sz_in_bytes, tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset, ordering);
 }
 
 void Cluster::read_dram_vec(void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const {
@@ -867,10 +850,15 @@ bool Cluster::supports_dma_operations(ChipId chip_id, uint32_t sz_in_bytes) cons
            sz_in_bytes >= min_dma_size_bytes;
 }
 
-void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const {
+void Cluster::write_core(
+    const void* mem_ptr,
+    uint32_t sz_in_bytes,
+    tt_cxy_pair core,
+    uint64_t addr,
+    std::optional<tt::umd::IoOrdering> ordering) const {
     const ChipId chip_id = core.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
-    if (rtoptions_.get_watcher_enabled()) {
+    if (rtoptions_.get_watcher_enabled() && !rtoptions_.watcher_noc_sanitize_disabled()) {
         TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
         tt::watcher_sanitize_host_noc_write(
             *this->hal_,
@@ -890,7 +878,9 @@ void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair 
     if (this->supports_dma_operations(chip_id, sz_in_bytes)) {
         this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
     } else {
-        this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+        const tt::umd::IoOrdering resolved_ordering = ordering.value_or(
+            core_coord.core_type == CoreType::DRAM ? tt::umd::IoOrdering::Relaxed : tt::umd::IoOrdering::Strict);
+        this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr, resolved_ordering);
     }
 
     if (this->get_cluster_desc()->is_chip_remote(chip_id)) {
@@ -902,7 +892,7 @@ void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core,
     const ChipId chip_id = core.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
 
-    if (rtoptions_.get_watcher_enabled()) {
+    if (rtoptions_.get_watcher_enabled() && !rtoptions_.watcher_noc_sanitize_disabled()) {
         TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
         tt::watcher_sanitize_host_noc_read(
             *this->hal_,
@@ -930,7 +920,7 @@ void Cluster::write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt
     const ChipId chip_id = core.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
 
-    if (rtoptions_.get_watcher_enabled()) {
+    if (rtoptions_.get_watcher_enabled() && !rtoptions_.watcher_noc_sanitize_disabled()) {
         TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
         tt::watcher_sanitize_host_noc_write(
             *this->hal_,
@@ -964,7 +954,7 @@ void Cluster::write_reg(const std::uint32_t* mem_ptr, tt_cxy_pair target, uint64
     int chip_id = target.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
 
-    if (rtoptions_.get_watcher_enabled()) {
+    if (rtoptions_.get_watcher_enabled() && !rtoptions_.watcher_noc_sanitize_disabled()) {
         TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
         tt::watcher_sanitize_host_noc_write(
             *this->hal_,
@@ -991,7 +981,7 @@ void Cluster::read_reg(std::uint32_t* mem_ptr, tt_cxy_pair target, uint64_t addr
     int chip_id = target.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
 
-    if (rtoptions_.get_watcher_enabled()) {
+    if (rtoptions_.get_watcher_enabled() && !rtoptions_.watcher_noc_sanitize_disabled()) {
         TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
         tt::watcher_sanitize_host_noc_read(
             *this->hal_,
@@ -1027,7 +1017,7 @@ void Cluster::noc_multicast_write(
     const {
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
 
-    if (rtoptions_.get_watcher_enabled()) {
+    if (rtoptions_.get_watcher_enabled() && !rtoptions_.watcher_noc_sanitize_disabled()) {
         TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
         tt::watcher_sanitize_host_noc_multicast_write(
             *this->hal_,

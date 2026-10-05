@@ -70,7 +70,6 @@ void kernel_main() {
         exp_cb_bcast.pop_front(num_tiles_per_cycle);
         // unary_bcast_uninit<BroadcastType::ROW>(cb_bcast);
         pack_reconfig_data_format(cb_llk_post, cb_out);
-        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
 
         exp_cb_out.reserve_back(num_tiles_per_cycle);
         exp_cb_llk_post.wait_front(num_tiles_per_cycle);

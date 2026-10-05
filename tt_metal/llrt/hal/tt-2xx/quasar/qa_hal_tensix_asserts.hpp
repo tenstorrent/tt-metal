@@ -12,6 +12,8 @@
 #include "noc/noc_parameters.h"
 #include "hostdevcommon/fabric_common.h"
 
+static_assert(MEM_DM_LOCAL_SIZE % 2048 == 0, "DM local size must be a multiple of 2 kB (D$ set alignment)");
+
 // Validate assumptions on mailbox layout on host compile
 // Constexpr definitions allow for printing of breaking values at compile time
 static_assert(MEM_MAILBOX_BASE + sizeof(mailboxes_t) <= MEM_MAILBOX_END);

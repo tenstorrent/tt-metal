@@ -13,6 +13,9 @@
 #if defined(TRISC_UNPACK) && defined(ARCH_BLACKHOLE)
 #include "experimental/llk_unpack_AB_custom_mm_api.h"
 #endif
+#if defined(TRISC_PACK) && defined(ARCH_BLACKHOLE)
+#include "experimental/llk_pack_custom_mm.h"
+#endif
 namespace ckernel {
 
 #if defined(ARCH_BLACKHOLE)
@@ -27,28 +30,31 @@ namespace ckernel {
  * in1 tile shape: [32, 32]
  * rt_dim: 1
  * ct_dim: any integer from 1 to 16
- * kt_dim: even number from 2 to 256 (inclusive)
+ * kt_dim: any integer from 1 to 256 (inclusive)
  * fidelity: LoFi only
  * throttle: not supported
  *
  * Return value: None
  *
- * | Argument       | Description                                                                            | Type     | Valid Range                           | Required              |
- * |----------------|----------------------------------------------------------------------------------------|----------|---------------------------------------|-----------------------|
- * | transpose      | The transpose flag for performing transpose operation on in1                           | bool     | true/false                            | False (default false) |
- * | split_acc      | Whether to accumulate partials within a single tile in different dest locations        | bool     | true/false                            | False (default false) |
- * | dense_packing  | Whether to pack consecutive tiles 32 rows apart (instead of 64, doubles dest capacity) | bool     | true/false                            | False (default false) |
- * | in0_cb_id      | The identifier of the first input circular buffer (CB)                                 | uint32_t | 0 to 31                               | True                  |
- * | in1_cb_id      | The identifier of the second input circular buffer (CB)                                | uint32_t | 0 to 31                               | True                  |
- * | out_cb_id      | The identifier of the output circular buffer (CB)                                      | uint32_t | 0 to 31                               | True                  |
- * | ct_dim         | The width of the output matrix in tiles                                                | uint32_t | 1 to 16                               | False (default 1)     |
+ * | Argument         | Description                                                                            | Type     | Valid Range                           | Required              |
+ * |------------------|----------------------------------------------------------------------------------------|----------|---------------------------------------|-----------------------|
+ * | transpose        | The transpose flag for performing transpose operation on in1                           | bool     | true/false                            | False (default false) |
+ * | split_acc        | Whether to accumulate partials within a single tile in different dest locations        | bool     | true/false                            | False (default false) |
+ * | dense_packing    | Whether to pack consecutive tiles 32 rows apart (instead of 64, doubles dest capacity) | bool     | true/false                            | False (default false) |
+ * | fp32_dest_acc_en | Whether dest accumulates in fp32; defaults to the kernel's DST_ACCUM_MODE              | bool     | true/false                            | False                 |
+ * | clear_src        | Whether to clear SrcB at init (saves power as only 1/8 FPU rows are used)              | bool     | true/false                            | False (default true)  |
+ * | in0_cb_id        | The identifier of the first input circular buffer (CB)                                 | uint32_t | 0 to 31                               | True                  |
+ * | in1_cb_id        | The identifier of the second input circular buffer (CB)                                | uint32_t | 0 to 31                               | True                  |
+ * | out_cb_id        | The identifier of the output circular buffer (CB)                                      | uint32_t | 0 to 31                               | True                  |
+ * | ct_dim           | The width of the output matrix in tiles                                                | uint32_t | 1 to 16                               | False (default 1)     |
  */
 // clang-format on
 template <
     bool transpose = false,
     bool split_acc = false,
     bool dense_packing = false,
-    bool fp32_dest_acc_en = DST_ACCUM_MODE>
+    bool fp32_dest_acc_en = DST_ACCUM_MODE,
+    bool clear_src = true>
 ALWI void custom_mm_block_init(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
@@ -56,7 +62,7 @@ ALWI void custom_mm_block_init(
     const std::uint32_t ct_dim = 1) {
     // Intentionally swap in0 and in1 as operation specific hw_configures are deprecated
     UNPACK((llk_unpack_hw_configure<fp32_dest_acc_en>(in1_cb_id, in0_cb_id)));
-    UNPACK((llk_unpack_AB_custom_mm_init<transpose>(in0_cb_id, in1_cb_id, ct_dim)));
+    UNPACK((llk_unpack_AB_custom_mm_init<transpose, clear_src>(in0_cb_id, in1_cb_id, ct_dim)));
 
     MATH((llk_math_pack_sync_init<fp32_dest_acc_en>()));
     MATH((llk_math_hw_configure<fp32_dest_acc_en>(in0_cb_id, in1_cb_id)));
@@ -65,11 +71,7 @@ ALWI void custom_mm_block_init(
     PACK((llk_pack_dest_init<fp32_dest_acc_en, PackMode::Default>(out_cb_id)));
     PACK((llk_pack_hw_configure<fp32_dest_acc_en>(out_cb_id)));
     PACK((llk_pack_init<PackMode::Default, false /* zero_output */>(out_cb_id)));
-    if constexpr (dense_packing) {
-        // Reduce packing stride from tile to tile to 32 rows instead of 64
-        PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(
-            (TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2)));
-    }
+    PACK((_llk_pack_custom_mm_init_<dense_packing>()));
 }
 
 // clang-format off
@@ -82,7 +84,7 @@ ALWI void custom_mm_block_init(
  * in1 tile shape: [32, 32]
  * rt_dim: 1
  * ct_dim: any integer from 1 to 16
- * kt_dim: even number from 2 to 256 (inclusive)
+ * kt_dim: any integer from 1 to 256 (inclusive)
  * fidelity: LoFi only
  * throttle: not supported
  *
@@ -93,27 +95,24 @@ ALWI void custom_mm_block_init(
  * | transpose      | The transpose flag for performing transpose operation on in1                           | bool     | true/false                            | False (default false) |
  * | split_acc      | Whether to accumulate partials within a single tile in different dest locations        | bool     | true/false                            | False (default false) |
  * | dense_packing  | Whether to pack consecutive tiles 32 rows apart (instead of 64, doubles dest capacity) | bool     | true/false                            | False (default false) |
+ * | clear_src      | Whether to clear SrcB at init (saves power as only 1/8 FPU rows are used)              | bool     | true/false                            | False (default true)  |
  * | in0_cb_id      | The identifier of the first input circular buffer (CB)                                 | uint32_t | 0 to 31                               | True                  |
  * | in1_cb_id      | The identifier of the second input circular buffer (CB)                                | uint32_t | 0 to 31                               | True                  |
  * | out_cb_id      | The identifier of the output circular buffer (CB)                                      | uint32_t | 0 to 31                               | True                  |
  * | ct_dim         | The width of the output matrix in tiles                                                | uint32_t | 1 to 16                               | False (default 1)     |
  */
 // clang-format on
-template <bool transpose = false, bool split_acc = false, bool dense_packing = false>
+template <bool transpose = false, bool split_acc = false, bool dense_packing = false, bool clear_src = true>
 ALWI void custom_mm_block_init_short(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
     const std::uint32_t out_cb_id,
     const std::uint32_t ct_dim = 1) {
-    UNPACK((llk_unpack_AB_custom_mm_init<transpose>(in0_cb_id, in1_cb_id, ct_dim)));
+    UNPACK((llk_unpack_AB_custom_mm_init<transpose, clear_src>(in0_cb_id, in1_cb_id, ct_dim)));
 
     MATH((llk_math_custom_mm_init<transpose, split_acc, dense_packing>(in0_cb_id, in1_cb_id, ct_dim)));
 
-    if constexpr (dense_packing) {
-        // Reduce packing stride from tile to tile to 32 rows instead of 64
-        PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(
-            (TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2)));
-    }
+    PACK((_llk_pack_custom_mm_init_<dense_packing>()));
 }
 
 // clang-format off
@@ -128,7 +127,7 @@ ALWI void custom_mm_block_init_short(
  * in1 tile shape: [32, 32]
  * rt_dim: 1
  * ct_dim: any integer from 1 to 16
- * kt_dim: even number from 2 to 256 (inclusive)
+ * kt_dim: any integer from 1 to 256 (inclusive)
  * fidelity: LoFi only
  * throttle: not supported
  *
@@ -138,17 +137,16 @@ ALWI void custom_mm_block_init_short(
  * |-----------------|-----------------------------------------------------------------------------------------------------------------|----------|--------------------------------------------------|-----------------------|
  * | finalize        | Whether to perform the finalization step which merges split_accumulation partials                               | bool     | true/false (must be false if split_acc is false) | False (default true)  |
  * | read_transposed | Whether to read in1 tiles in transposed order (read ct tiles with a stride of kt, then move over a single tile) | bool     | true/false                                       | False (default false) |
- * | clear_src       | Whether to clear SrcB before unpacking (saves power as only 1/8 FPU rows are used)                              | bool     | true/false                                       | False (default true)  |
  * | in0_cb_id       | The identifier of the first input circular buffer (CB)                                                          | uint32_t | 0 to 31                                          | True                  |
  * | in1_cb_id       | The identifier of the second input circular buffer (CB)                                                         | uint32_t | 0 to 31                                          | True                  |
  * | in0_tile_index  | The index of the tile in block A from the first input CB                                                        | uint32_t | Must be less than the size of the CB             | True                  |
  * | in1_tile_index  | The index of the tile in block B from the second input CB                                                       | uint32_t | Must be less than the size of the CB             | True                  |
  * | dst_index       | The index of the tile in DST REG to which the result C will be written                                          | uint32_t | Must be less than the acquired size of DST REG   | True                  |
- * | kt_dim          | The inner dimension in tiles                                                                                    | uint32_t | Must be an even number from 2 to 256 (inclusive) | True                  |
+ * | kt_dim          | The inner dimension in tiles                                                                                    | uint32_t | Any integer from 1 to 256 (inclusive)            | True                  |
  * | ct_dim          | The width of the output matrix in tiles                                                                         | uint32_t | 1 to 16                                          | False (default 1)     |
  */
 // clang-format on
-template <bool finalize = true, bool read_transposed = false, bool clear_src = true>
+template <bool finalize = true, bool read_transposed = false>
 ALWI void custom_mm_block(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
@@ -157,7 +155,7 @@ ALWI void custom_mm_block(
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1) {
-    UNPACK((llk_unpack_AB_custom_mm<read_transposed, clear_src>(
+    UNPACK((llk_unpack_AB_custom_mm<read_transposed>(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim, ct_dim)));
     MATH((llk_math_custom_mm<finalize>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim)));
 }
@@ -174,7 +172,7 @@ ALWI void custom_mm_block(
  * in1 tile shape: [32, 32]
  * rt_dim: 1
  * ct_dim: any integer from 1 to 16
- * kt_dim: even number from 2 to 256 (inclusive)
+ * kt_dim: any integer from 1 to 256 (inclusive)
  * fidelity: LoFi only
  * throttle: not supported
  *
@@ -183,16 +181,15 @@ ALWI void custom_mm_block(
  * | Argument        | Description                                                                                                     | Type     | Valid Range                                      | Required              |
  * |-----------------|-----------------------------------------------------------------------------------------------------------------|----------|--------------------------------------------------|-----------------------|
  * | read_transposed | Whether to read in1 tiles in transposed order (read ct tiles with a stride of kt, then move over a single tile) | bool     | true/false                                       | False (default false) |
- * | clear_src       | Whether to clear SrcB before unpacking (saves power as only 1/8 FPU rows are used)                              | bool     | true/false                                       | False (default true)  |
  * | in0_cb_id       | The identifier of the first input circular buffer (CB)                                                          | uint32_t | 0 to 31                                          | True                  |
  * | in1_cb_id       | The identifier of the second input circular buffer (CB)                                                         | uint32_t | 0 to 31                                          | True                  |
  * | in0_tile_index  | The index of the tile in block A from the first input CB                                                        | uint32_t | Must be less than the size of the CB             | True                  |
  * | in1_tile_index  | The index of the tile in block B from the second input CB                                                       | uint32_t | Must be less than the size of the CB             | True                  |
- * | kt_dim          | The inner dimension in tiles                                                                                    | uint32_t | Must be an even number from 2 to 256 (inclusive) | True                  |
+ * | kt_dim          | The inner dimension in tiles                                                                                    | uint32_t | Any integer from 1 to 256 (inclusive)            | True                  |
  * | ct_dim          | The width of the output matrix in tiles                                                                         | uint32_t | 1 to 16                                          | False (default 1)     |
  */
 // clang-format on
-template <bool read_transposed = false, bool clear_src = true>
+template <bool read_transposed = false>
 ALWI void custom_mm_block_unpack(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
@@ -200,7 +197,7 @@ ALWI void custom_mm_block_unpack(
     const std::uint32_t in1_tile_index,
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1) {
-    UNPACK((llk_unpack_AB_custom_mm<read_transposed, clear_src>(
+    UNPACK((llk_unpack_AB_custom_mm<read_transposed>(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim, ct_dim)));
 }
 
@@ -216,7 +213,7 @@ ALWI void custom_mm_block_unpack(
  * in1 tile shape: [32, 32]
  * rt_dim: 1
  * ct_dim: any integer from 1 to 16
- * kt_dim: even number from 2 to 256 (inclusive)
+ * kt_dim: any integer from 1 to 256 (inclusive)
  * fidelity: LoFi only
  * throttle: not supported
  *
@@ -228,7 +225,7 @@ ALWI void custom_mm_block_unpack(
  * | in0_cb_id       | The identifier of the first input circular buffer (CB)                                                         | uint32_t | 0 to 31                                          | True                  |
  * | in1_cb_id       | The identifier of the second input circular buffer (CB)                                                        | uint32_t | 0 to 31                                          | True                  |
  * | dst_index       | The index of the tile in DST REG to which the result C will be written                                         | uint32_t | Must be less than the acquired size of DST REG   | True                  |
- * | kt_dim          | The inner dimension in tiles                                                                                   | uint32_t | Must be an even number from 2 to 256 (inclusive) | True                  |
+ * | kt_dim          | The inner dimension in tiles                                                                                   | uint32_t | Any integer from 1 to 256 (inclusive)            | True                  |
  * | ct_dim          | The width of the output matrix in tiles                                                                        | uint32_t | 1 to 16                                          | False (default 1)     |
  */
 // clang-format on
@@ -256,10 +253,7 @@ ALWI void custom_mm_block_math(
 // clang-format on
 template <bool dense_packing = false>
 ALWI void custom_mm_block_uninit() {
-    if constexpr (dense_packing) {
-        // Restore default packing stride of 64 rows between tiles
-        PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * 2)));
-    }
+    PACK((_llk_pack_custom_mm_uninit_<dense_packing>()));
 }
 
 #endif  // ARCH_BLACKHOLE

@@ -11,6 +11,7 @@ from datetime import timedelta
 import os
 import sys
 import pytest
+import struct
 import subprocess
 import time
 
@@ -25,13 +26,19 @@ sys.path.insert(0, triage_home)
 
 
 import triage
-from triage import run_script, FAILURE_CHECKS, ScriptArguments
+from triage import CheckType, run_script, ScriptArguments
 from ttexalens.context import Context
 from ttexalens.tt_exalens_init import init_ttexalens
 from ttexalens.coordinate import OnChipCoordinate
 
 
 triage.progress_disabled = True  # Disable progress bars for tests
+
+
+def logged_errors() -> list[str]:
+    """The failed checks reported so far, formatted the way triage prints them."""
+    return [check.formatted_message for check in triage.CHECKS if check.type is CheckType.ERROR]
+
 
 # Mapping of hang application paths to their expected test results
 HANG_APP_ADD_2_INTEGERS = "tools/tests/triage/hang_apps/add_2_integers_hang/triage_hang_app_add_2_integers_hang"
@@ -390,13 +397,31 @@ class TestTriage:
     def test_check_noc_status(self):
         self.run_triage_script("check_noc_status.py", assert_failure_checks=False)
 
-        global FAILURE_CHECKS
-
         # Some mismatches may occur on unused cores.
-        non_state_failures = [failure for failure in FAILURE_CHECKS if "Mismatched state" not in failure]
+        non_state_failures = [failure for failure in logged_errors() if "Mismatched state" not in failure]
         assert (
             len(non_state_failures) == 0
         ), f"Check NOC status check failed with {len(non_state_failures)} failures: {non_state_failures}"
+
+    def test_dump_circular_buffers(self):
+        result = self.run_triage_script("dump_circular_buffers.py")
+        assert result is not None, "Expected CB rows for the hung core"
+
+        # The compute kernel waited on c_0 and c_1, then hit ebreak before popping them or pushing c_16.
+        location = OnChipCoordinate.create("0,0", result[0].device_description.device)
+        counts = {row.result.cb: (row.result.pushed, row.result.popped) for row in result if row.location == location}
+        assert counts == {0: (1, 0), 1: (1, 0), 16: (0, 0)}, f"Unexpected CB state on (0,0): {counts}"
+
+    def test_dump_circular_buffers_content(self):
+        result = self.run_triage_script("dump_circular_buffers.py", argv=["--dump-cb-content"])
+        location = OnChipCoordinate.create("0,0", result[0].device_description.device)
+        rows = {row.result.cb: row.result for row in result if row.location == location}
+        # The hang app fills its two input tiles with random bf16 values in [0, 14] and [0, 8].
+        for cb, limit in ((0, 14.0), (1, 8.0)):
+            data = bytes.fromhex(rows[cb].content)
+            assert len(data) == rows[cb].size
+            values = [struct.unpack("<f", struct.pack("<I", u << 16))[0] for (u,) in struct.iter_unpack("<H", data)]
+            assert all(0.0 <= v <= limit for v in values), f"CB{cb} does not hold the input tile"
 
     def test_dump_fast_dispatch(self):
         self.run_triage_script("dump_fast_dispatch.py")
@@ -492,6 +517,19 @@ class TestTriage:
                 f"No running op with name containing '{expected_name}'. "
                 f"Got: {[op.operation_name for op in live_ops]}"
             )
+
+    def test_dump_semaphores(self):
+        result = self.run_triage_script("dump_semaphores.py")
+        assert result is not None, "Expected semaphore rows for the hung core"
+
+        # The hang app gives (0,0) a program semaphore at 7, which the writer bumps twice, and a GlobalSemaphore at 3.
+        location = OnChipCoordinate.create("0,0", result[0].device_description.device)
+        rows = {
+            (row.result.kind, row.result.id, row.result.value, row.result.initial)
+            for row in result
+            if row.location == location
+        }
+        assert rows == {("program", 0, 9, 7), ("global", None, 3, 3)}, f"Unexpected semaphores on (0,0): {rows}"
 
     def test_dump_watcher_ringbuffer(self):
         self.run_triage_script("dump_watcher_ringbuffer.py")
@@ -632,9 +670,8 @@ class TestTriage:
         assert_failure_checks: bool = True,
     ):
         global triage_home
-        global FAILURE_CHECKS
 
-        FAILURE_CHECKS.clear()
+        triage.CHECKS.clear()
         result = run_script(
             script_path=os.path.join(triage_home, script_name),
             args=args,
@@ -644,9 +681,8 @@ class TestTriage:
         )
 
         if assert_failure_checks:
-            assert (
-                len(FAILURE_CHECKS) == 0
-            ), f"{script_name} failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
+            failures = logged_errors()
+            assert len(failures) == 0, f"{script_name} failed with {len(failures)} failures: {failures}"
 
         return result
 
@@ -669,16 +705,16 @@ class TestMeshSocketTriage:
 
     def test_dump_mesh_sockets(self):
         global triage_home
-        global FAILURE_CHECKS
 
-        FAILURE_CHECKS.clear()
+        triage.CHECKS.clear()
         result = run_script(
             script_path=os.path.join(triage_home, "dump_mesh_sockets.py"),
             context=self.exalens_context,
             argv=[],
             return_result=True,
         )
-        assert not FAILURE_CHECKS, f"dump_mesh_sockets.py failed with: {FAILURE_CHECKS}"
+        failures = logged_errors()
+        assert not failures, f"dump_mesh_sockets.py failed with: {failures}"
         assert result is not None, "Expected socket rows while MeshSockets are wedged"
 
         rows = [check.result for check in result]

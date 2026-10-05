@@ -11,9 +11,6 @@
 #endif
 
 #include <stdint.h>
-#include <tuple>
-#include <utility>
-#include <type_traits>
 
 #include "internal/dataflow/dataflow_api_addrgen.h"
 #include "core_config.h"
@@ -24,6 +21,8 @@
 #include "api/compile_time_args.h"
 #include "hostdev/dev_msgs.h"
 #include "api/tensor/tensor_accessor.h"
+#include "internal/tensor/transfer_noc_addr.h"
+#include "api/dataflow/buf_rw_note.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/debug/sanitize.h"
 #include "api/debug/assert.h"
@@ -209,6 +208,7 @@ void cb_push_back(const int32_t operand, const int32_t num_pages) {
     uint32_t num_words = num_pages * get_local_cb_interface(operand).fifo_page_size;
 
     volatile tt_reg_ptr uint32_t* pages_received_ptr = get_cb_tiles_received_ptr(operand);
+    SYNC_SIGNAL("SYNC-CB-PUSH", operand);
     pages_received_ptr[0] += num_pages;
 
     get_local_cb_interface(operand).fifo_wr_ptr += num_words;
@@ -258,6 +258,7 @@ void cb_push_back(const int32_t operand, const int32_t num_pages) {
 FORCE_INLINE
 void cb_pop_front(int32_t operand, int32_t num_pages) {
     volatile tt_reg_ptr uint32_t* pages_acked_ptr = get_cb_tiles_acked_ptr(operand);
+    SYNC_SIGNAL("SYNC-CB-POP", operand);
     pages_acked_ptr[0] += num_pages;
 
     uint32_t num_words = num_pages * get_local_cb_interface(operand).fifo_page_size;
@@ -410,15 +411,18 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
 
     int32_t free_space_pages;
     WAYPOINT("CRBW");
-    do {
-        // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
-        // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
-        invalidate_l1_cache();
-        uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
-        uint16_t free_space_pages_wrap =
-            get_local_cb_interface(operand).fifo_num_pages - (pages_received - pages_acked);
-        free_space_pages = (int32_t)free_space_pages_wrap;
-    } while (free_space_pages < num_pages);
+    {
+        SYNC_WAIT("SYNC-CB-RESERVE", operand);
+        do {
+            // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
+            // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
+            invalidate_l1_cache();
+            uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
+            uint16_t free_space_pages_wrap =
+                get_local_cb_interface(operand).fifo_num_pages - (pages_received - pages_acked);
+            free_space_pages = (int32_t)free_space_pages_wrap;
+        } while (free_space_pages < num_pages);
+    }
     WAYPOINT("CRBD");
 }
 
@@ -478,9 +482,12 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
     uint16_t pages_received;
 
     WAYPOINT("CWFW");
-    do {
-        pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
-    } while (pages_received < num_pages);
+    {
+        SYNC_WAIT("SYNC-CB-WAIT", operand);
+        do {
+            pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
+        } while (pages_received < num_pages);
+    }
     WAYPOINT("CWFD");
 }
 
@@ -510,6 +517,11 @@ FORCE_INLINE void noc_async_read_one_packet(
     uint32_t size,
     uint8_t noc = noc_index,
     uint32_t read_req_vc = NOC_UNICAST_WRITE_VC) {
+#ifdef ARCH_BLACKHOLE
+    // A PCIe-routed src_noc_addr would be sent on-chip, since this does not write NOC_TARG_ADDR_MID.
+    // Use noc_async_read_pcie, or noc_async_read_set_pcie_state for a batch.
+    ASSERT(((src_noc_addr >> 32) & NOC_PCIE_MASK) == 0);
+#endif
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
@@ -535,7 +547,8 @@ FORCE_INLINE void noc_async_read_one_packet(
  * get_noc_addr function). The destination is in L1 memory on the Tensix core
  * executing this function call. Also, see \a noc_async_read_barrier.
  *
- * The source node can be either a DRAM bank, a Tensix core or a PCIe controller.
+ * The source node can be either a DRAM bank or a Tensix core. To read from a PCIe-routed address, use
+ * \a noc_async_read_pcie instead.
  *
  * Return value: None
  *
@@ -564,8 +577,14 @@ inline void noc_async_read(
     }
 
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
+        // noc_async_read_one_packet runs this assert itself, so it is not repeated here.
         noc_async_read_one_packet<false>(src_noc_addr, dst_local_l1_addr, size, noc, read_req_vc);
     } else {
+#ifdef ARCH_BLACKHOLE
+        // A PCIe-routed src_noc_addr would be sent on-chip, since this does not write NOC_TARG_ADDR_MID.
+        // Use noc_async_read_pcie, or noc_async_read_set_pcie_state for a batch.
+        ASSERT(((src_noc_addr >> 32) & NOC_PCIE_MASK) == 0);
+#endif
         WAYPOINT("NARW");
         DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
         ncrisc_noc_fast_read_any_len<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size, read_req_vc);
@@ -702,9 +721,15 @@ void noc_async_read_set_state(uint64_t src_noc_addr, uint8_t noc = noc_index) {
  * | size                              | Size of data transfer in bytes                     | uint32_t  | 0..1MB              | True     |
  * | noc                               | Which NOC to use for the transaction               | uint8_t   | 0 or 1              | False    |
  * | inc_num_issued (template argument)| Whether issued read counter should be increment    | uint32_t  | Any uint32_t number | False    |
+ * | skip_cmdbuf_chk (template arg)    | Skip the cmd buf ready poll on the first burst     | bool      | true or false       | False    |
+ *
+ * Only set skip_cmdbuf_chk on the first call after \a noc_async_read_set_state or
+ * \a noc_async_read_set_pcie_state. Those wait for read_cmd_buf and then write registers that do not make
+ * it busy again, so the poll here is guaranteed to pass. On any later call the previous one wrote
+ * NOC_CMD_CTRL and the poll is required, so skipping it corrupts the transaction already in flight.
  */
 // clang-format on
-template <bool inc_num_issued = true>
+template <bool inc_num_issued = true, bool skip_cmdbuf_chk = false>
 FORCE_INLINE void noc_async_read_with_state(
     uint32_t src_local_l1_addr, uint32_t dst_local_l1_addr, uint32_t size, uint8_t noc = noc_index) {
     /*
@@ -725,10 +750,104 @@ FORCE_INLINE void noc_async_read_with_state(
     // In order to sanitize, need to grab full noc addr + xfer size from state.
     DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_STATE(noc, src_local_l1_addr, dst_local_l1_addr, size);
 
+#ifdef ARCH_BLACKHOLE
+    ncrisc_noc_read_any_len_with_state<noc_mode, inc_num_issued, skip_cmdbuf_chk>(
+        noc, read_cmd_buf, src_local_l1_addr, dst_local_l1_addr, size);
+#else
+    static_assert(!skip_cmdbuf_chk, "skip_cmdbuf_chk is only implemented on Blackhole");
     ncrisc_noc_read_any_len_with_state<noc_mode, inc_num_issued>(
         noc, read_cmd_buf, src_local_l1_addr, dst_local_l1_addr, size);
+#endif
 
     WAYPOINT("NAVD");
+}
+
+// clang-format off
+/**
+ * Programs read_cmd_buf for reads routed through the PCIe core. Issue the reads themselves with
+ * \a noc_async_read_with_state. This does the same work as \a noc_async_read_set_state, which already
+ * accepts a PCIe-routed address and already sets NOC_TARG_ADDR_MID. It exists so that the PCIe setup and
+ * its teardown, \a noc_async_read_clear_pcie_state, read as a pair.
+ *
+ * Always follow a batch with \a noc_async_read_clear_pcie_state. NOC_TARG_ADDR_MID is sticky, so if it is
+ * left set the next ordinary on-chip read on read_cmd_buf is misrouted to host memory.
+ *
+ *     noc_async_read_set_pcie_state(pcie_src_noc_addr);
+ *     for (...) { noc_async_read_with_state(src_lo, l1_dst, size); }
+ *     noc_async_read_clear_pcie_state();
+ *
+ * Do not issue an atomic such as \a noc_semaphore_inc between the set and the clear. Atomics program
+ * NOC_TARG_ADDR_MID from their own on-chip address, and under DM_DYNAMIC_NOC they share the read command
+ * buffer, so they reset the routing and the rest of the batch goes on-chip instead of to host memory.
+ *
+ * Return value: None
+ *
+ * | Argument     | Description                          | Data type | Valid range                    | required |
+ * |--------------|--------------------------------------|-----------|--------------------------------|----------|
+ * | src_noc_addr | PCIe-routed NOC address              | uint64_t  | Results of a PCIe NOC encoding | True     |
+ * | noc          | Which NOC to use for the transaction | uint8_t   | 0 or 1                         | False    |
+ */
+// clang-format on
+inline void noc_async_read_set_pcie_state(uint64_t src_noc_addr, uint8_t noc = noc_index) {
+    noc_async_read_set_state(src_noc_addr, noc);
+}
+
+// clang-format off
+/**
+ * Returns a command buffer to non-PCIe routing by clearing NOC_TARG_ADDR_MID. Call this once at the end of
+ * a batch opened with \a noc_async_read_set_pcie_state. The \a noc_async_read_set_state and
+ * \a noc_async_read_one_packet_set_state functions also set MID when given a PCIe-routed address, so they
+ * need this too. Nothing else clears MID, since the \a _with_state issuers never write it.
+ *
+ * Waits for NOC_CMD_CTRL to be ready, nothing else; no preceding barrier is required. No-op on
+ * architectures that do not encode PCIe routing in the NOC address.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                | Data type | Valid range | required |
+ * |----------|--------------------------------------------|-----------|-------------|----------|
+ * | noc      | Which NOC to use for the transaction       | uint8_t   | 0 or 1      | False    |
+ * | cmd_buf  | Which command buffer to clear MID on       | uint8_t   | 0 - 3       | False    |
+ */
+// clang-format on
+inline void noc_async_read_clear_pcie_state(uint8_t noc = noc_index, uint8_t cmd_buf = read_cmd_buf) {
+#ifdef ARCH_BLACKHOLE
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    noc_cmd_buf_clear_targ_addr_mid(noc, cmd_buf);
+#endif
+}
+
+// clang-format off
+/**
+ * Same as \a noc_async_read, but for a src_noc_addr routed through the PCIe core. This sets up PCIe
+ * routing, issues the read, then tears the routing back down, so read_cmd_buf is left safe for ordinary
+ * on-chip reads and the caller has nothing to clean up. Asynchronous, like \a noc_async_read: call
+ * \a noc_async_read_barrier before reading dst_local_l1_addr. For a run of consecutive PCIe reads, use
+ * \a noc_async_read_set_pcie_state, \a noc_async_read_with_state and \a noc_async_read_clear_pcie_state
+ * instead to pay the setup/teardown cost once.
+ *
+ * Return value: None
+ *
+ * | Argument          | Description                                        | Data type | Valid range                      | required |
+ * |-------------------|----------------------------------------------------|-----------|-----------------------------------|----------|
+ * | src_noc_addr      | PCIe-routed NOC address                            | uint64_t  | Results of a PCIe NOC encoding   | True     |
+ * | dst_local_l1_addr | Address in local L1 memory                         | uint32_t  | 0..1MB                           | True     |
+ * | size              | Size of data transfer in bytes                     | uint32_t  | 0..1MB                           | True     |
+ * | noc               | Which NOC to use for the transaction               | uint8_t   | 0 or 1                           | False    |
+ */
+// clang-format on
+inline void noc_async_read_pcie(
+    uint64_t src_noc_addr, uint32_t dst_local_l1_addr, uint32_t size, uint8_t noc = noc_index) {
+#ifdef ARCH_BLACKHOLE
+    noc_async_read_set_pcie_state(src_noc_addr, noc);
+    // The setup above already waited on read_cmd_buf, and the registers it wrote do not make the buffer
+    // busy, so the first burst can skip its own poll. Later bursts still poll.
+    noc_async_read_with_state</*inc_num_issued=*/true, /*skip_cmdbuf_chk=*/true>(
+        (uint32_t)src_noc_addr, dst_local_l1_addr, size, noc);
+    noc_async_read_clear_pcie_state(noc);
+#else
+    noc_async_read(src_noc_addr, dst_local_l1_addr, size, noc);
+#endif
 }
 
 // clang-format off
@@ -777,6 +896,11 @@ FORCE_INLINE void noc_async_write_one_packet(
     std::uint32_t size,
     uint8_t noc = noc_index,
     uint32_t vc = NOC_UNICAST_WRITE_VC) {
+#ifdef ARCH_BLACKHOLE
+    // A PCIe-routed dst_noc_addr would be sent on-chip, since this does not write NOC_RET_ADDR_MID.
+    // Use noc_async_write_pcie, or noc_async_write_set_pcie_state for a batch.
+    ASSERT(((dst_noc_addr >> 32) & NOC_PCIE_MASK) == 0);
+#endif
     if constexpr (enable_noc_tracing) {
         RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, src_local_l1_addr, dst_noc_addr, size, vc, posted, noc);
     }
@@ -808,8 +932,8 @@ FORCE_INLINE void noc_async_write_one_packet(
  * (x,y) and a local address created using get_noc_addr function. Also, see
  * \a noc_async_write_barrier.
  *
- * The destination node can be either a DRAM bank, Tensix core+L1 memory
- * address or a PCIe controller.
+ * The destination node can be either a DRAM bank or a Tensix core+L1 memory
+ * address. To write to a PCIe-routed address, use \a noc_async_write_pcie instead.
  *
  * Return value: None
  *
@@ -836,8 +960,14 @@ inline void noc_async_write(
     }
 
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
+        // noc_async_write_one_packet runs this assert itself, so it is not repeated here.
         noc_async_write_one_packet<false, posted>(src_local_l1_addr, dst_noc_addr, size, noc, vc);
     } else {
+#ifdef ARCH_BLACKHOLE
+        // A PCIe-routed dst_noc_addr would be sent on-chip, since this does not write NOC_RET_ADDR_MID.
+        // Use noc_async_write_pcie, or noc_async_write_set_pcie_state for a batch.
+        ASSERT(((dst_noc_addr >> 32) & NOC_PCIE_MASK) == 0);
+#endif
         WAYPOINT("NAWW");
         DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
         ncrisc_noc_fast_write_any_len<noc_mode>(
@@ -1037,6 +1167,199 @@ FORCE_INLINE void noc_async_write_one_packet_with_state(
 
 // clang-format off
 /**
+ * Sets the stateful registers for asynchronous writes of any size to a destination node located at NOC
+ * coordinates (x,y) at a local address, encoded as a uint64_t using \a get_noc_addr. This programs the
+ * command config and the destination NOC coordinate. On architectures that encode PCIe routing in the NOC
+ * address it also programs NOC_RET_ADDR_MID, so a PCIe-routed dst_noc_addr needs no further setup. Issue
+ * the writes themselves with \a noc_async_write_with_state, which only reprograms the addresses and size.
+ *
+ * This is the write side counterpart to \a noc_async_read_set_state. If every write in the batch is the
+ * same size and fits one packet, \a noc_async_write_one_packet_set_state is cheaper still, because it also
+ * hoists the length out of the loop.
+ *
+ * If dst_noc_addr is PCIe-routed, call \a noc_async_write_clear_pcie_state after the last write of the batch.
+ * NOC_RET_ADDR_MID stays set otherwise, and would misroute the next ordinary write on write_cmd_buf.
+ *
+ * Return value: None
+ *
+ * | Argument                   | Description                                             | Data type | Valid range                      | required |
+ * |----------------------------|---------------------------------------------------------|-----------|----------------------------------|----------|
+ * | dst_noc_addr               | Encoding of the destination NOC location (x,y)+address  | uint64_t  | Results of \a get_noc_addr calls | True     |
+ * | noc                        | Which NOC to use for the transaction                    | uint8_t   | 0 or 1                           | False    |
+ * | vc                         | Which VC to use for the transaction                     | uint8_t   | 0-3 (Unicast VCs)                | False    |
+ * | posted (template argument) | Whether the write is posted (i.e. no ack required)      | bool      | true or false                    | False    |
+ */
+// clang-format on
+template <bool posted = false>
+FORCE_INLINE void noc_async_write_set_state(
+    uint64_t dst_noc_addr, uint8_t noc = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
+    DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_SET_STATE, 0, dst_noc_addr, 0, vc, posted, noc);
+
+    WAYPOINT("NWSW");
+    ncrisc_noc_write_set_state<posted, false /* one_packet */>(noc, write_cmd_buf, dst_noc_addr, 0, vc);
+    WAYPOINT("NWSD");
+}
+
+// clang-format off
+/**
+ * Initiates an asynchronous write of any size to the destination programmed by a preceding
+ * \a noc_async_write_set_state call. Only the source address, destination address and size are written here;
+ * the NOC coordinate and PCIe routing come from the state, which is why the addresses are 32-bit locals
+ * rather than a full NOC address. Transfers larger than NOC_MAX_BURST_SIZE are split into bursts internally.
+ *
+ * The write side counterpart to \a noc_async_read_with_state. See \a noc_async_write_barrier.
+ *
+ * Return value: None
+ *
+ * | Argument                            | Description                                        | Data type | Valid range         | required |
+ * |-------------------------------------|----------------------------------------------------|-----------|---------------------|----------|
+ * | src_local_l1_addr                   | Address in local L1 memory on source core          | uint32_t  | 0..1MB              | True     |
+ * | dst_local_l1_addr                   | Address in local L1 memory on destination core     | uint32_t  | 0..1MB              | True     |
+ * | size                                | Size of data transfer in bytes                     | uint32_t  | 0..1MB              | True     |
+ * | noc                                 | Which NOC to use for the transaction               | uint8_t   | 0 or 1              | False    |
+ * | posted (template argument)          | Whether the write is posted (i.e. no ack required) | bool      | true or false       | False    |
+ * | update_counter (template argument)  | Whether to increment write counters                | bool      | true or false       | False    |
+ * | skip_cmdbuf_chk (template argument) | Skip the cmd buf ready poll on the first burst     | bool      | true or false       | False    |
+ *
+ * Only set skip_cmdbuf_chk on the first call after \a noc_async_write_set_state or
+ * \a noc_async_write_set_pcie_state. Those wait for write_cmd_buf and then write registers that do not make
+ * it busy again, so the poll here is guaranteed to pass. On any later call the previous one wrote
+ * NOC_CMD_CTRL and the poll is required, so skipping it corrupts the transaction already in flight.
+ */
+// clang-format on
+template <bool posted = false, bool update_counter = true, bool skip_cmdbuf_chk = false>
+FORCE_INLINE void noc_async_write_with_state(
+    uint32_t src_local_l1_addr, uint32_t dst_local_l1_addr, uint32_t size, uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT_WITH_ADDR(
+        NocEventType::WRITE_WITH_STATE,
+        src_local_l1_addr,
+        static_cast<uint64_t>(dst_local_l1_addr),
+        size,
+        -1,
+        posted,
+        noc);
+
+    WAYPOINT("NWVW");
+
+    // The destination coordinate comes from state, but the size must be passed in. noc_async_write_set_state
+    // does not program NOC_AT_LEN_BE, so reading the size back from the register here would sanitize against
+    // whatever length the previous transaction left behind.
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE(noc, dst_local_l1_addr, src_local_l1_addr, size);
+
+#ifdef ARCH_BLACKHOLE
+    ncrisc_noc_write_any_len_with_state<noc_mode, posted, update_counter, skip_cmdbuf_chk>(
+        noc, write_cmd_buf, src_local_l1_addr, dst_local_l1_addr, size);
+#else
+    static_assert(!skip_cmdbuf_chk, "skip_cmdbuf_chk is only implemented on Blackhole");
+    ncrisc_noc_write_any_len_with_state<noc_mode, posted, update_counter>(
+        noc, write_cmd_buf, src_local_l1_addr, dst_local_l1_addr, size);
+#endif
+
+    WAYPOINT("NWVD");
+}
+
+// clang-format off
+/**
+ * Programs write_cmd_buf for writes routed through the PCIe core. Issue the writes themselves with
+ * \a noc_async_write_with_state. This does the same work as \a noc_async_write_set_state, which already
+ * accepts a PCIe-routed address and already sets NOC_RET_ADDR_MID. It exists so that the PCIe setup and
+ * its teardown, \a noc_async_write_clear_pcie_state, read as a pair.
+ *
+ * Always follow a batch with \a noc_async_write_clear_pcie_state. NOC_RET_ADDR_MID is sticky, so if it is
+ * left set the next ordinary on-chip write on write_cmd_buf is misrouted to host memory.
+ *
+ *     noc_async_write_set_pcie_state(pcie_dst_noc_addr);
+ *     for (...) { noc_async_write_with_state(l1_src, dst_lo, size); }
+ *     noc_async_write_clear_pcie_state();
+ *
+ * Return value: None
+ *
+ * | Argument     | Description                          | Data type | Valid range                    | required |
+ * |--------------|--------------------------------------|-----------|--------------------------------|----------|
+ * | dst_noc_addr | PCIe-routed NOC address              | uint64_t  | Results of a PCIe NOC encoding | True     |
+ * | noc          | Which NOC to use for the transaction | uint8_t   | 0 or 1                         | False    |
+ * | vc           | Which VC to use for the transaction  | uint8_t   | 0-3 (Unicast VCs)              | False    |
+ */
+// clang-format on
+inline void noc_async_write_set_pcie_state(
+    uint64_t dst_noc_addr, uint8_t noc = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
+    noc_async_write_set_state(dst_noc_addr, noc, vc);
+}
+
+// clang-format off
+/**
+ * Returns a command buffer to non-PCIe routing by clearing NOC_RET_ADDR_MID. Call this once at the end of
+ * a batch opened with \a noc_async_write_set_pcie_state. The \a noc_async_write_set_state and
+ * \a noc_async_write_one_packet_set_state functions also set MID when given a PCIe-routed address, so they
+ * need this too. Nothing else clears MID, since the \a _with_state issuers never write it.
+ *
+ * Waits for NOC_CMD_CTRL to be ready, nothing else; no preceding barrier is required. No-op on
+ * architectures that do not encode PCIe routing in the NOC address.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                | Data type | Valid range | required |
+ * |----------|--------------------------------------------|-----------|-------------|----------|
+ * | noc      | Which NOC to use for the transaction       | uint8_t   | 0 or 1      | False    |
+ * | cmd_buf  | Which command buffer to clear MID on       | uint8_t   | 0 - 3       | False    |
+ */
+// clang-format on
+inline void noc_async_write_clear_pcie_state(uint8_t noc = noc_index, uint8_t cmd_buf = write_cmd_buf) {
+#ifdef ARCH_BLACKHOLE
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    noc_cmd_buf_clear_ret_addr_mid(noc, cmd_buf);
+#endif
+}
+
+// True when none of this RISC's command buffers still hold PCIe routing. Asserted where a batch should
+// already have been closed, so an unclosed one is attributed to the code that left it rather than to
+// whichever unrelated transaction inherits it later.
+inline bool noc_cmd_bufs_mid_clear([[maybe_unused]] uint8_t noc = noc_index) {
+#ifdef ARCH_BLACKHOLE
+    return noc_cmd_buf_mid_clear(noc, read_cmd_buf) && noc_cmd_buf_mid_clear(noc, write_cmd_buf) &&
+           noc_cmd_buf_mid_clear(noc, write_reg_cmd_buf) && noc_cmd_buf_mid_clear(noc, write_at_cmd_buf);
+#else
+    // Wormhole aliases NOC_TARG_ADDR_MID onto the coordinate register, so there is no MID to leak.
+    return true;
+#endif
+}
+
+// clang-format off
+/**
+ * Same as \a noc_async_write, but for a dst_noc_addr routed through the PCIe core. This sets up PCIe
+ * routing, issues the write, then tears the routing back down, so write_cmd_buf is left safe for ordinary
+ * on-chip writes and the caller has nothing to clean up. Asynchronous, like \a noc_async_write: call
+ * \a noc_async_write_barrier before reusing src_local_l1_addr. For a run of consecutive PCIe writes, use
+ * \a noc_async_write_set_pcie_state, \a noc_async_write_with_state and \a noc_async_write_clear_pcie_state
+ * instead to pay the setup/teardown cost once.
+ *
+ * Return value: None
+ *
+ * | Argument            | Description                             | Data type   | Valid range                        | required   |
+ * |---------------------|-----------------------------------------|-------------|------------------------------------|------------|
+ * | src_local_l1_addr   | Source address in local L1 memory       | uint32_t    | 0..1MB                             | True       |
+ * | dst_noc_addr        | PCIe-routed NOC address                 | uint64_t    | Results of a PCIe NOC encoding     | True       |
+ * | size                | Size of data transfer in bytes          | uint32_t    | 0..1MB                             | True       |
+ * | noc                 | Which NOC to use for the transaction    | uint8_t     | 0 or 1                             | False      |
+ */
+// clang-format on
+inline void noc_async_write_pcie(
+    uint32_t src_local_l1_addr, uint64_t dst_noc_addr, uint32_t size, uint8_t noc = noc_index) {
+#ifdef ARCH_BLACKHOLE
+    noc_async_write_set_pcie_state(dst_noc_addr, noc);
+    // The setup above already waited on write_cmd_buf, and the registers it wrote do not make the buffer
+    // busy, so the first burst can skip its own poll. Later bursts still poll.
+    noc_async_write_with_state</*posted=*/false, /*update_counter=*/true, /*skip_cmdbuf_chk=*/true>(
+        src_local_l1_addr, (uint32_t)dst_noc_addr, size, noc);
+    noc_async_write_clear_pcie_state(noc);
+#else
+    noc_async_write(src_local_l1_addr, dst_noc_addr, size, noc);
+#endif
+}
+
+// clang-format off
+/**
  * Initiates an asynchronous read for a single packet with transaction size and source location determined by the AddrGen object.
  * This function is the generic implementation that can be used with any address generator that provides
  * the get_noc_addr method and either a page_size or a log_base_2_of_page_size
@@ -1078,8 +1401,9 @@ FORCE_INLINE void noc_async_read_page(
     if constexpr (enable_noc_tracing) {
         RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, dst_local_l1_addr, id, addrgen, offset, page_size, -1, false, noc);
     }
+    tt_buf_rw::note_if_bound<tt_buf_rw::READ, AddrGen>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
     noc_async_read<NOC_MAX_BURST_SIZE + 1, false>(
-        addrgen.get_noc_addr(id, offset, noc), dst_local_l1_addr, page_size, noc);
+        tensor_accessor::detail::transfer_noc_addr(addrgen, id, offset, noc), dst_local_l1_addr, page_size, noc);
 }
 
 // clang-format off
@@ -1262,8 +1586,12 @@ FORCE_INLINE void noc_async_write_page(
             posted,
             noc);
     }
+    tt_buf_rw::note_if_bound<tt_buf_rw::WRITE, AddrGen>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
     noc_async_write<NOC_MAX_BURST_SIZE + 1, false, posted>(
-        src_local_l1_addr, addrgen.get_noc_addr(id, offset, noc), size ? size : page_size, noc);
+        src_local_l1_addr,
+        tensor_accessor::detail::transfer_noc_addr(addrgen, id, offset, noc),
+        size ? size : page_size,
+        noc);
 }
 
 // clang-format off
@@ -1436,13 +1764,14 @@ FORCE_INLINE void noc_async_read_shard(
     RECORD_NOC_EVENT_WITH_ADDR(
         NocEventType::READ,
         dst_local_l1_addr,
-        s.get_shard_noc_addr(shard_id, /*offset=*/0, noc),
+        tensor_accessor::detail::transfer_shard_noc_addr(s, shard_id, /*offset=*/0, noc),
         s.get_aligned_page_size() * shard_volume,
         -1,
         false,
         noc);
+    tt_buf_rw::note_if_bound<tt_buf_rw::READ, TensorAccessor<DSpec>>();  // op-to-op R/W inference
     noc_async_read<NOC_MAX_BURST_SIZE + 1, false>(
-        s.get_shard_noc_addr(shard_id, /*offset=*/0, noc),
+        tensor_accessor::detail::transfer_shard_noc_addr(s, shard_id, /*offset=*/0, noc),
         dst_local_l1_addr,
         s.get_aligned_page_size() * shard_volume,
         noc);
@@ -1473,14 +1802,15 @@ FORCE_INLINE void noc_async_write_shard(
     RECORD_NOC_EVENT_WITH_ADDR(
         NocEventType::WRITE_,
         src_local_l1_addr,
-        s.get_shard_noc_addr(shard_id, /*offset=*/0, noc),
+        tensor_accessor::detail::transfer_shard_noc_addr(s, shard_id, /*offset=*/0, noc),
         s.get_aligned_page_size() * shard_volume,
         NOC_UNICAST_WRITE_VC,
         posted,
         noc);
+    tt_buf_rw::note_if_bound<tt_buf_rw::WRITE, TensorAccessor<DSpec>>();  // op-to-op R/W inference
     noc_async_write<NOC_MAX_BURST_SIZE + 1, false, posted>(
         src_local_l1_addr,
-        s.get_shard_noc_addr(shard_id, /*offset=*/0, noc),
+        tensor_accessor::detail::transfer_shard_noc_addr(s, shard_id, /*offset=*/0, noc),
         s.get_aligned_page_size() * shard_volume,
         noc);
 }
@@ -1532,6 +1862,7 @@ inline void noc_semaphore_set_remote(
         NOC_UNICAST_WRITE_VC,
         /*posted=*/false,
         noc);
+    SYNC_SIGNAL_NOC_ADDR("SYNC-SEM-SET-REMOTE", dst_noc_addr, noc);
     ncrisc_noc_fast_write_any_len<noc_mode>(
         noc,
         write_reg_cmd_buf,
@@ -1600,6 +1931,7 @@ inline void noc_semaphore_set_multicast(
         vc,
         /*posted=*/false,
         noc);
+    SYNC_SIGNAL_NOC_ADDR("SYNC-SEM-SET-REMOTE", dst_noc_addr_multicast, noc);
     ncrisc_noc_fast_write_any_len<noc_mode>(
         noc,
         write_reg_cmd_buf,
@@ -1664,6 +1996,7 @@ inline void noc_semaphore_set_multicast_loopback_src(
         NOC_MULTICAST_WRITE_VC,
         /*posted=*/false,
         noc);
+    SYNC_SIGNAL_NOC_ADDR("SYNC-SEM-SET-REMOTE", dst_noc_addr_multicast, noc);
     ncrisc_noc_fast_write_any_len_loopback_src<noc_mode>(
         noc,
         write_reg_cmd_buf,
@@ -1944,9 +2277,12 @@ void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     RECORD_NOC_EVENT(NocEventType::SEMAPHORE_WAIT, false, -1);
 
     WAYPOINT("NSW");
-    do {
-        invalidate_l1_cache();
-    } while ((*sem_addr) != val);
+    {
+        SYNC_WAIT("SYNC-SEM-WAIT", reinterpret_cast<uintptr_t>(sem_addr));
+        do {
+            invalidate_l1_cache();
+        } while ((*sem_addr) != val);
+    }
     WAYPOINT("NSD");
 }
 
@@ -1970,9 +2306,12 @@ void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)
     RECORD_NOC_EVENT(NocEventType::SEMAPHORE_WAIT, false, -1);
 
     WAYPOINT("NSMW");
-    do {
-        invalidate_l1_cache();
-    } while ((*sem_addr) < val);
+    {
+        SYNC_WAIT("SYNC-SEM-WAIT", reinterpret_cast<uintptr_t>(sem_addr));
+        do {
+            invalidate_l1_cache();
+        } while ((*sem_addr) < val);
+    }
     WAYPOINT("NSMD");
 }
 
@@ -1994,6 +2333,7 @@ void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)
 FORCE_INLINE
 void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     RECORD_NOC_EVENT(NocEventType::SEMAPHORE_SET, false, -1);
+    SYNC_SIGNAL("SYNC-SEM-SET", reinterpret_cast<uintptr_t>(sem_addr));
 
     // set semaphore value to val
     (*sem_addr) = val;
@@ -2264,6 +2604,7 @@ template <bool posted = false>
 FORCE_INLINE void noc_semaphore_inc(
     uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC, 0, addr, 0, vc, posted, noc_id);
+    SYNC_SIGNAL_NOC_ADDR("SYNC-SEM-SET-REMOTE", addr, noc_id);
 
     WAYPOINT("NSIW");
     DEBUG_SANITIZE_NOC_ADDR(noc_id, addr, 4);
@@ -2308,6 +2649,7 @@ template <bool posted = false>
 FORCE_INLINE void noc_semaphore_inc_multicast(
     uint64_t addr, uint32_t incr, uint32_t num_dests, uint8_t noc_id = noc_index, uint8_t vc = NOC_MULTICAST_WRITE_VC) {
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC_MULTICAST, 0, addr, 0, vc, posted, noc_id);
+    SYNC_SIGNAL_NOC_ADDR("SYNC-SEM-SET-REMOTE", addr, noc_id);
 
     WAYPOINT("NIMW");
     DEBUG_SANITIZE_NOC_MULTI_ADDR(noc_id, addr, 4);

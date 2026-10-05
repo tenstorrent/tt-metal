@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "config_id": "gu4_head8_lm_head_hifi2",
+  "weight_groups": {
+    "qkv": "bfloat8_b",
+    "o": "bfloat8_b",
+    "gate_up": "bfloat4_b",
+    "down": "bfloat8_b",
+    "lm_head": "bfloat8_b",
+    "embedding": "bfloat16"
+  },
+  "layer_exceptions": {},
+  "compute_fidelities": {
+    "prefill": {
+      "qkv": "LoFi",
+      "o": "LoFi",
+      "gate_up": "LoFi",
+      "down": "LoFi",
+      "lm_head": "HiFi2"
+    },
+    "decode": {
+      "qkv": "LoFi",
+      "o": "LoFi",
+      "gate_up": "LoFi",
+      "down": "LoFi",
+      "lm_head": "HiFi2"
+    },
+    "norm_rope": "HiFi4",
+    "sdpa": "HiFi4"
+  },
+  "activation_dtype": "bfloat16",
+  "residual_dtype": "bfloat16",
+  "ccl_dtype": "bfloat16",
+  "kv_cache_dtype": "bfloat8_b",
+  "logits_dtype": "bfloat16",
+  "sampling_dtype": "bfloat16",
+  "sampling_token_dtype": "uint32",
+  "norm_weight_policy": "fold_affine_float32_then_bfloat16",
+  "activation_output_dtype": "bfloat16",
+  "accumulation": {
+    "matmul_fp32": false,
+    "norm_rope_fp32": true,
+    "sdpa_fp32": true,
+    "math_approx_mode": false
+  },
+  "runtime": {
+    "supported_context": 131072,
+    "page_size": 128,
+    "cache_layout": "TILE",
+    "residual_layout": "TP4_hidden_sharded",
+    "short_prefill": true
+  },
+  "moe_routing": "not_applicable_dense_model",
+  "lm_head_geometry": {
+    "cores": 8,
+    "block": 4,
+    "readers": 2,
+    "splits": 1
+  }
+}

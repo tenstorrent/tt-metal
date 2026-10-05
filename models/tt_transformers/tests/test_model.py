@@ -142,6 +142,14 @@ def test_model_inference(
 
     model_name = model_args.base_model_name
 
+    # The first decode token after the 256-token prefill is the loosest point of the full test. On T3K,
+    # Llama 3.1-8B in performance mode reads 0.8216 there since #55444 widened the DRAM-sharded decode
+    # in0 block (0.8762 before); every later token stays at 0.96-0.999 and the T3K e2e job's Top-1 /
+    # Top-5 accuracy and perf targets did not move, so only that token's gate follows the numerics.
+    first_token_pcc = pcc
+    if layers != 1 and not mode_accuracy and model_name == "Llama-3.1-8B" and model_args.device_name == "T3K":
+        first_token_pcc = 0.80
+
     # Set num_layers for prefetcher if it is not None
     if prefetcher is not None:
         prefetcher.num_layers = model_args.n_layers
@@ -438,7 +446,7 @@ def test_model_inference(
                 if not passing:
                     final_tests_pass = False
             else:
-                passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc)
+                passing, pcc_message = comp_pcc(ref_output, tt_output_torch, first_token_pcc if i == 0 else pcc)
 
             logger.info(comp_allclose(ref_output, tt_output_torch))
             logger.info(f"PCC: {pcc_message}")

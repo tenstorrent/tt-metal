@@ -28,6 +28,7 @@
       timeout: 15
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: integration
 
 # --- Sockets (distributed HD socket) ---
 - name: bh_multicard_sockets
@@ -37,6 +38,7 @@
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: integration
 
 # --- Galaxy: Ethernet only (#46302; fabric team owns full galaxy stress) ---
 - name: galaxy_eth
@@ -50,6 +52,7 @@
       timeout: 15
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: integration
 
 # =============================================================================
 # FD Python API Tests (eager ops + sweep)
@@ -65,6 +68,7 @@
       timeout: 45
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: integration
 
 - name: runtime_fd_python_2
   cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 2
@@ -75,6 +79,7 @@
       timeout: 45
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: integration
 
 - name: runtime_fd_python_3
   cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 3
@@ -85,6 +90,7 @@
       timeout: 45
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: integration
 
 - name: runtime_fd_python_4
   cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 4
@@ -95,6 +101,7 @@
       timeout: 45
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: integration
 
 - name: runtime_fd_python_5
   cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 5
@@ -105,6 +112,7 @@
       timeout: 45
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: integration
 
 - name: runtime_fd_python_6
   cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 6
@@ -115,6 +123,7 @@
       timeout: 45
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: integration
 
 - name: runtime_fd_python_7
   cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 7
@@ -125,6 +134,7 @@
       timeout: 45
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: integration
 
 # --- Sweep Tests ---
 # NOTE: erfc filtered — ttnn.erfc dropped fast_and_approximate_mode in #42737 (Apr 24); test still passes the kwarg. Re-enable once test or API is updated.
@@ -137,3 +147,4 @@
       timeout: 45
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: integration

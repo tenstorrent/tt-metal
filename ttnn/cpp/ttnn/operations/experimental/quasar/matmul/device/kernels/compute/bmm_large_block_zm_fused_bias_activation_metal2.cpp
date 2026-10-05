@@ -151,6 +151,17 @@ inline void reblock_and_untilize(
     interm_cb.pop_front(num_tiles_in_row_of_subblocks);
 }
 
+#ifdef ARCH_QUASAR
+// Quasar pack-destination retarget: pack_reconfig_data_format + pack_init after every output switch (the
+// pack BFD is baked at pack_init; pack_reconfig_data_format is gasket-only). Both are ALWI, so inlining them
+// at each switch site duplicates the LLK bodies and can push the pack TRISC's L1 image over budget on large
+// configs (per_core_N=84 overflowed trisc0). noinline+noclone emits the body ONCE; each site becomes a call.
+__attribute__((noinline, noclone)) static void qsr_pack_retarget(uint32_t cb) {
+    pack_reconfig_data_format(cb);
+    pack_init(cb);
+}
+#endif
+
 void kernel_main() {
 // RUNTIME ARGS
 #ifdef MATMUL_DRAM_SHARDED
@@ -291,7 +302,13 @@ void kernel_main() {
 #endif
 
                 if constexpr (batch > 1 || num_blocks_h_dim > 1 || num_blocks_w_dim > 1) {
-                    PACK((pack_reconfig_data_format(mm_partials_cb_id)));
+#ifdef ARCH_QUASAR
+                    // Quasar: retarget the pack dest (BFD baked at pack_init; reconfig is gasket-only) via the
+                    // noinline helper so the reconfig+init body is emitted once, not inlined at each switch.
+                    qsr_pack_retarget(mm_partials_cb_id);
+#else
+                    pack_reconfig_data_format(mm_partials_cb_id);
+#endif
                 }
 
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
@@ -307,7 +324,11 @@ void kernel_main() {
                     if constexpr (in0_transpose_tile) {
                         reconfig_data_format_srca(in1_cb_id, in0_transpose_cb_id);
                         transpose_init(in0_transpose_cb_id);
-                        PACK((pack_reconfig_data_format(in0_cb_id)));
+#ifdef ARCH_QUASAR
+                        qsr_pack_retarget(in0_cb_id);
+#else
+                        pack_reconfig_data_format(in0_cb_id);
+#endif
 #ifdef PACKER_L1_ACC
                         pack_reconfig_l1_acc(0);
 #endif
@@ -315,13 +336,26 @@ void kernel_main() {
                         reconfig_data_format_srca(in0_transpose_cb_id, in1_cb_id);
                         matmul_block_init(
                             in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
-                        PACK((pack_reconfig_data_format(mm_partials_cb_id)));
+#ifdef ARCH_QUASAR
+                        qsr_pack_retarget(mm_partials_cb_id);
+#else
+                        pack_reconfig_data_format(mm_partials_cb_id);
+#endif
                     }
 
                     // [DEBUG mcast2d compute stall] Which input wait does the unpacker (UPMW) block on?
                     // input waits, so the stall is later (partials reserve/wait, pack, or dest).
                     in0_cb.wait_front(in0_block_num_tiles);
                     in1_cb.wait_front(in1_block_num_tiles);
+
+#ifdef ARCH_QUASAR
+                    // Quasar: the final K-block packs into mm_out_cb instead of mm_partials_cb. The pack BFD is
+                    // baked at init (pack_reconfig_data_format alone does not retarget it), so without this the
+                    // final result lands in the partials ring (PCC 0 once cb_out and cb_intermed0 no longer alias).
+                    if (last_out && (mm_out_cb_id != mm_partials_cb_id)) {
+                        qsr_pack_retarget(mm_out_cb_id);
+                    }
+#endif
 
                     int in0_index_subblock_offset = 0;
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
@@ -385,7 +419,7 @@ void kernel_main() {
                                 tile_regs_wait();
 
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
-                                PACK((pack_reconfig_data_format(mm_out_cb_id)));
+                                pack_reconfig_data_format(mm_out_cb_id);
 #endif
 
 #ifdef PACKER_L1_ACC
@@ -479,7 +513,10 @@ void kernel_main() {
                 pack_relu_config(ReluConfig::zero());
 #endif
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
-                PACK((pack_reconfig_data_format(out_cb_id)));
+                pack_reconfig_data_format(out_cb_id);
+#endif
+#ifdef ARCH_QUASAR
+                qsr_pack_retarget(untilize_mode_out_cb_id);
 #endif
 #ifdef PACKER_L1_ACC
                 pack_reconfig_l1_acc(0);
@@ -550,7 +587,10 @@ void kernel_main() {
 #ifndef FUSE_BIAS
                     reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
-                    PACK((pack_reconfig_data_format(out_cb_id)));
+                    pack_reconfig_data_format(out_cb_id);
+#endif
+#ifdef ARCH_QUASAR
+                    qsr_pack_retarget(out_cb_id);
 #endif
 #ifdef PACKER_L1_ACC
                     pack_reconfig_l1_acc(0);

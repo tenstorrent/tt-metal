@@ -6,6 +6,7 @@
 #include <cstdint>
 #include "llk_unpack_AB.h"
 #include "llk_unpack_common_api.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK UNPACK AB
@@ -42,16 +43,29 @@ inline void llk_unpack_AB_init(
     const std::uint32_t operandA, const std::uint32_t operandB, const ckernel::Transpose transpose) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
+    const std::uint32_t operandB_id = get_operand_id(operandB);
 
     LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly(
         unpack_src_format[operandA_id],
         unpack_dst_format[operandA_id],
-        unpack_src_format[get_operand_id(operandB)],
-        unpack_dst_format[get_operand_id(operandB)],
+        unpack_src_format[operandB_id],
+        unpack_dst_format[operandB_id],
         get_operand_face_r_dim(operandA_id),
-        get_operand_face_r_dim(get_operand_id(operandB)),
+        get_operand_face_r_dim(operandB_id),
         get_operand_num_faces(operandA_id),
-        get_operand_num_faces(get_operand_id(operandB))));
+        get_operand_num_faces(operandB_id)));
+
+    SAN_HOOK(init<OperationUnpackBinary>(
+        StateVal<OperationUnpackBinary::BroadcastType>(to_underlying(BType)),
+        StateVal<OperationUnpackBinary::Transpose>(to_underlying(transpose)),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operandA_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operandA_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(get_operand_face_r_dim(operandA_id)),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(get_operand_num_faces(operandA_id)),
+        StateVal<Operand<Exu::Unpack>::InputFormatB>(unpack_src_format[operandB_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatB>(unpack_dst_format[operandB_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightB>(get_operand_face_r_dim(operandB_id)),
+        StateVal<Operand<Exu::Unpack>::NumFacesB>(get_operand_num_faces(operandB_id))));
 
     llk_unpack_AB_init_impl<BType>(tensor_shape, transpose);
 }
@@ -89,6 +103,20 @@ inline void llk_unpack_AB(
         get_operand_face_r_dim(operandB_id),
         get_operand_num_faces(operandA_id),
         get_operand_num_faces(operandB_id)));
+
+    SAN_HOOK(execute<OperationUnpackBinary>(
+        StateVal<OperationUnpackBinary::BroadcastType>(to_underlying(BType)),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operandA_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operandA_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(get_operand_face_r_dim(operandA_id)),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(get_operand_num_faces(operandA_id)),
+        StateVal<Operand<Exu::Unpack>::InputFormatB>(unpack_src_format[operandB_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatB>(unpack_dst_format[operandB_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightB>(get_operand_face_r_dim(operandB_id)),
+        StateVal<Operand<Exu::Unpack>::NumFacesB>(get_operand_num_faces(operandB_id)),
+        StateDiscard<std::uint32_t>(tile_index_a),
+        StateDiscard<std::uint32_t>(tile_index_b),
+        StateDiscard<std::uint32_t>(bcast_row_idx)));
 
     llk_unpack_AB_impl<BType>(address_a, address_b, bcast_row_idx, unpack_src_format[operandB_id]);
 }

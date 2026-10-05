@@ -154,14 +154,16 @@ You can try and change the `max_length` parameter on the provided prompt files t
 ### vLLM Model Serving
 Ensure first you have a proper TT-Metal installation. (Optional check: `python -c "import tt_lib"`).
 
-vLLM can be installed from the TT fork at https://github.com/tenstorrent/vllm/tree/dev.
-
-Please follow the [README from vLLM](https://github.com/tenstorrent/vllm/blob/dev/plugins/vllm-tt-plugin/README.md) for the latest instructions on how to build vLLM and install the TT plugin.
+Install vLLM through the standalone
+[Tenstorrent vLLM TT plugin](https://github.com/tenstorrent/vllm-tt-plugin)
+and follow its README.
 
 #### Running the vLLM server
 Llama-3.3-70B on Galaxy runs on a single Galaxy device mesh using single-process TT lanes. Serve it with the familiar `--data_parallel_size` / `--max_num_seqs` flags; the TT backend transparently maps them to in-process lanes (it logs at startup that single-process lane-DP is running instead of gathered multi-process DP). Run:
 ```
-MESH_DEVICE=TG TT_LLAMA_TEXT_VER=llama3_70b_galaxy VLLM_RPC_TIMEOUT=900000 python plugins/vllm-tt-plugin/examples/server_example_tt.py --model "meta-llama/Llama-3.3-70B-Instruct" --data_parallel_size 4 --max_num_seqs 8 --async-scheduling --additional-config '{"tt": {"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 220000000}}'
+VLLM_TT_PLUGIN_ROOT=/path/to/vllm-tt-plugin
+cd "$VLLM_TT_PLUGIN_ROOT"
+MESH_DEVICE=TG TT_LLAMA_TEXT_VER=llama3_70b_galaxy VLLM_RPC_TIMEOUT=900000 python examples/server_example_tt.py --model "meta-llama/Llama-3.3-70B-Instruct" --data_parallel_size 4 --max_num_seqs 8 --async-scheduling --additional-config '{"tt": {"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 220000000}}'
 ```
 
 `--data_parallel_size 4 --max_num_seqs 8` runs 4 TT lanes with 8 requests each, for 32-request global concurrency. No config changes are needed versus the historical DP=4 setup.

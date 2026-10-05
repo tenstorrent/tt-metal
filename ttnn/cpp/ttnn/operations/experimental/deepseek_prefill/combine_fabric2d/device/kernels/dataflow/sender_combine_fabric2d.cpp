@@ -23,9 +23,13 @@
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "combine_fabric2d_sender_ct_args.hpp"
 
-// Forwarded tokens between semaphore bumps to the downstream reader. A bump always follows a sentinel
+// Forwarded tokens between semaphore bumps to the downstream reader. A chunk's last page forces a bump
 // regardless, so this only sets how finely that reader can pipeline within a chunk.
 constexpr uint32_t FWD_BUMP_EVERY = 32;
+// Final writes between bumps of the downstream reader's receive count. Nothing waits on that count until
+// the end of the stream, so this only bounds how many header-only packets it costs; the tail is bumped when
+// the stream ends.
+constexpr uint32_t FINAL_BUMP_EVERY = 32;
 constexpr cmbf2d::SenderCtArgs ct{};
 
 // One prebuilt header per ring slot. Every send is a single hop, so the route is constant for the whole
@@ -63,28 +67,30 @@ uint32_t wait_for_filled(uint32_t sent) {
     }
 }
 
-// Tell the downstream reader how far its quarter is filled. A sentinel always forces a bump: it is the chunk
-// boundary that reader switches on, so leaving it uncounted would strand it.
+// Add `count` to a semaphore on the downstream reader's core: `fwd_arrived` for pages of its forwarding
+// region, `final_arrived` for tokens written straight into its chip's output. A chunk's last page always
+// forces a `fwd_arrived` bump: that reader consumes a whole chunk before moving on, so leaving the tail
+// uncounted would strand it. The flush makes the far router drain the writes ahead of the bump first.
 template <typename FabricSender>
-void bump_downstream(FabricSender& fabric, uint32_t count) {
+void bump_downstream(FabricSender& fabric, uint32_t sem_addr, uint32_t count) {
     volatile PACKET_HEADER_TYPE* hdr_bump = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_drain_addr);
     // Header-only atomic inc, NOT the fused write+inc: that is documented to hang Blackhole when the payload
     // destination is DRAM, and the forwarding buffer is DRAM.
     hdr_bump->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-        get_noc_addr(ct.fwd_sem_noc_x, ct.fwd_sem_noc_y, ct.fwd_sem_addr), /*val=*/count, /*flush=*/true});
+        get_noc_addr(ct.fwd_sem_noc_x, ct.fwd_sem_noc_y, sem_addr), /*val=*/count, /*flush=*/true});
     fabric.wait_for_empty_write_slot();
     fabric.send_payload_flush_blocking_from_address((uint32_t)hdr_bump, sizeof(PACKET_HEADER_TYPE));
 }
 
 // Put one slot's token on the cable. Returns its command word so the caller can spot the end of the stream.
 template <typename FabricSender>
-uint64_t send_slot(FabricSender& fabric, uint32_t slot, uint32_t& fwd_since_bump) {
+uint64_t send_slot(FabricSender& fabric, uint32_t slot, uint32_t& fwd_since_bump, uint32_t& final_since_bump) {
     volatile tt_l1_ptr cmbf2d::FwdMetadata* metadata = slot_metadata(slot);
     const uint64_t cmd = metadata->cmd;
     if (cmd == cmbf2d::CMD_END) {
         return cmd;
     }
-    const bool forwarding = (cmd == cmbf2d::CMD_FORWARD);
+    const bool forwarding = (cmd == cmbf2d::CMD_FORWARD || cmd == cmbf2d::CMD_FORWARD_END);
     const uint32_t payload_bytes = forwarding ? (ct.token_size_bytes + cmbf2d::FWD_EXTRA_BYTES) : ct.token_size_bytes;
 
     volatile PACKET_HEADER_TYPE* hdr = slot_hdr(slot);
@@ -101,9 +107,15 @@ uint64_t send_slot(FabricSender& fabric, uint32_t slot, uint32_t& fwd_since_bump
 
     if (forwarding) {
         fwd_since_bump++;
-        if (metadata->dst_chip == cmbf2d::SENTINEL_DST_CHIP || fwd_since_bump >= FWD_BUMP_EVERY) {
-            bump_downstream(fabric, fwd_since_bump);
+        if (cmd == cmbf2d::CMD_FORWARD_END || fwd_since_bump >= FWD_BUMP_EVERY) {
+            bump_downstream(fabric, ct.fwd_sem_addr, fwd_since_bump);
             fwd_since_bump = 0;
+        }
+    } else {
+        final_since_bump++;
+        if (final_since_bump >= FINAL_BUMP_EVERY) {
+            bump_downstream(fabric, ct.final_sem_addr, final_since_bump);
+            final_since_bump = 0;
         }
     }
     return cmd;
@@ -119,6 +131,7 @@ uint32_t pump_stream(FabricSender& fabric) {
     // stream with a CMD_END slot instead, and we batch over whatever it has already published.
     bool end_of_stream = false;
     uint32_t fwd_since_bump = 0;
+    uint32_t final_since_bump = 0;
     while (!end_of_stream) {
         const uint32_t avail = wait_for_filled(sent);
         const uint32_t n = avail < ct.batch ? avail : ct.batch;
@@ -126,7 +139,7 @@ uint32_t pump_stream(FabricSender& fabric) {
         uint32_t processed = 0;
         for (uint32_t i = 0; i < n; i++) {
             processed++;
-            if (send_slot(fabric, (sent + i) % ct.num_l1_slots, fwd_since_bump) == cmbf2d::CMD_END) {
+            if (send_slot(fabric, (sent + i) % ct.num_l1_slots, fwd_since_bump, final_since_bump) == cmbf2d::CMD_END) {
                 end_of_stream = true;
                 break;
             }
@@ -135,6 +148,10 @@ uint32_t pump_stream(FabricSender& fabric) {
         noc_async_writes_flushed();
         sent += processed;
         noc_semaphore_inc(my_freed_noc, processed);
+    }
+    // The receive count the downstream reader waits on before it exits; it needs every final write counted.
+    if (final_since_bump > 0) {
+        bump_downstream(fabric, ct.final_sem_addr, final_since_bump);
     }
     return sent - 1;  // the CMD_END slot carried no payload
 }

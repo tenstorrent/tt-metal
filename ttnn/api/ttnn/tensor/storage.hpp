@@ -144,6 +144,10 @@ struct DeviceStorage {
     // Returns true if the underlying device memory is allocated.
     bool is_allocated() const;
 
+    // Returns true if the root owner of the device memory is allocated. A view's own holder can
+    // report allocated after the root was force-deallocated; root accessors throw in that state.
+    bool is_root_allocated() const;
+
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Begin internal functions:
 

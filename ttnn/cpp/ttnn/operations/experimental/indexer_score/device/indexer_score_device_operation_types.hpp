@@ -66,12 +66,16 @@ struct operation_attributes_t {
     // Absolute chunk_start of rank 0. Rank r uses chunk_start_idx + r*Sq; the per-device value is derived
     // host-side and passed to compute as a RUNTIME arg (hash-excluded), so distinct values reuse one program.
     uint32_t chunk_start_idx{0};  // elements, tile-aligned
+    // Query tokens represented by one K-cache row. DSA supports 1 (legacy) and 4 (compressed keys). Query
+    // placement remains in token units; K shape, kv_len, and block_cyclic.chunk_local are compressed-row units.
+    // Compile-time + hashed because it changes causal mask generation and geometry.
+    uint32_t key_compression_ratio{1};
     // Mesh axes the query sequence is sharded over, outermost (SP ring) first: {} = linear device order,
     // {sp} = 1D SP ring, {sp, tp} = 2D SP ring + TP sub-shard. The SP axis sets each device's causal offset;
     // the optional TP axis (only alongside an SP axis + block_cyclic) adds a Sq-row sub-offset so each device
     // owns [tp_rank*Sq, (tp_rank+1)*Sq) of its SP chip's chunk_local slab. Read via sp_axis()/tp_axis().
     // Hashed via those accessors (it shapes the causal geometry, so distinct shardings get distinct programs).
-    std::vector<uint32_t> seq_shard_axes{};
+    std::vector<uint32_t> seq_shard_axes;
     std::optional<uint32_t> sp_axis() const {
         return seq_shard_axes.empty() ? std::nullopt : std::optional<uint32_t>(seq_shard_axes.front());
     }
@@ -104,14 +108,21 @@ struct operation_attributes_t {
     // cache_batch_idx * Tt * Dt). NOT hashed, re-applied each dispatch, so switching slots does NOT recompile.
     std::optional<uint32_t> cache_batch_idx{std::nullopt};
     bool has_indexed_kv_cache() const { return cache_batch_idx.has_value(); }
+    // Recomposition terms for the trace-safe slot select (see tensor_args::cache_batch_idx_tensor).
+    // RUNTIME args, deliberately NOT hashed: cache_batch_idx is already hash-excluded so ONE cached
+    // program serves every slot AND every layer, and hashing the layer index would fork it 78 ways.
+    // Freezing them in a capture is still correct -- they are layer-constant, and each layer is its own
+    // captured op instance. Only the per-REQUEST user id needs a tensor.
+    uint32_t index_cache_num_layers{1};
+    uint32_t index_cache_layer_idx{0};
     // Runtime KV length: the valid prefix this dispatch (rest masked). NOT hashed, so growing kv_len <= T
     // reuses ONE program. grid/work-split/output width stay keyed on the hashed T. nullopt == T.
     std::optional<uint32_t> kv_len{std::nullopt};
     bool has_runtime_kv_len() const { return kv_len.has_value(); }
     // Resolved block-cyclic (per-SP-shard) K layout. When set, the reader remaps each logical k-tile to its
-    // physical (permuted) tile, presenting K in natural token order. HASHED (sp/chunk_local shape the reader
-    // binary via compile-time arguments). nullopt == contiguous K
-    // (which is also what sp == 1 resolves to, since that is the identity permutation).
+    // physical (permuted) tile, presenting K in natural key-row order. chunk_local is stored in compressed K
+    // rows (the public block_cyclic_chunk_local argument remains query-token rows). HASHED (sp/chunk_local
+    // shape the reader binary via compile-time arguments). nullopt == contiguous K.
     std::optional<BlockCyclicLayout> block_cyclic{std::nullopt};
     bool has_block_cyclic() const { return block_cyclic.has_value(); }
     // Ring-fused all-gather config (see FusedRingConfig). nullopt = the classic unfused path (caller pre-gathers
@@ -134,6 +145,22 @@ struct tensor_args_t {
     const Tensor& weights;
     // Fused only: per-chip LOCAL K [B,1,sll,D], interleaved or ND-sharded. nullopt unfused.
     std::optional<Tensor> k_local{std::nullopt};
+    // Optional 1-element UINT32 row-major DRAM tensor used for trace-safe chunk positions. The kernel also
+    // derives kv_len from this value so the causal position and valid prefix remain consistent.
+    std::optional<Tensor> chunk_start_idx_tensor{std::nullopt};
+    bool has_chunk_start_metadata() const { return chunk_start_idx_tensor.has_value(); }
+    std::optional<Tensor> valid_end_tensor{std::nullopt};
+    bool has_valid_end_metadata() const { return valid_end_tensor.has_value(); }
+    // TRACE-SAFE cache-slot select (fused indexed mode). `cache_batch_idx` is a host runtime arg that
+    // selects which (user, layer) slot of the persistent index-K cache this dispatch reads. A trace REPLAY
+    // never re-runs that patch, so a captured program keeps reading the slot that was live at capture time
+    // -- and capture warms user 0. The KV write is metadata-driven and lands in the right slot, so a
+    // multi-user traced request scores user N's queries against user 0's index-K cache: wrong top-k, no
+    // error. Hand over the 1-element uint32 USER id instead and the reader recomposes
+    //     cache_batch_idx = user_id * index_cache_num_layers + index_cache_layer_idx
+    // mirroring TtIndexer's own host formula. Mutually exclusive with the scalar cache_batch_idx.
+    std::optional<Tensor> cache_batch_idx_tensor{std::nullopt};
+    bool has_cache_slot_metadata() const { return cache_batch_idx_tensor.has_value(); }
 };
 
 using tensor_return_value_t = Tensor;

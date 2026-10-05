@@ -6,6 +6,7 @@
 #include <cstdint>
 #include "experimental/llk_math_face_compressed_mm.h"
 #include "llk_math_common_api.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK MATH FACE_COMPRESSED_MM
@@ -40,6 +41,7 @@
 template <std::uint32_t ct_dim = 1>
 inline void llk_math_face_compressed_mm_init(
     const std::uint32_t operand0, [[maybe_unused]] const std::uint32_t operand1) {
+    SAN_HOOK(unsupported());
     // Only operand0's SrcB face_r_dim is read; operand1 is the compressed-weight CB.
     const std::uint32_t operandB_id = get_operand_id(operand0);
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
@@ -67,6 +69,7 @@ inline void llk_math_face_compressed_mm(
     const std::uint32_t base_address_meta,
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim) {
+    SAN_HOOK(unsupported());
     // Only operand0's SrcB face_r_dim is read; the compressed weights come from base_address_meta.
     const std::uint32_t operandB_id = get_operand_id(operand0);
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);

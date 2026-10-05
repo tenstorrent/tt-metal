@@ -5,8 +5,21 @@ import torch
 
 import ttnn
 
+# L1_SMALL reservation for every M3 mesh open (adapter, harnesses, unit tests): high_bw_all_gather parks its
+# two global semaphores there and otherwise falls back to general L1 with a warning, which fragmented L1
+# enough on 8x4 for a later op's circular buffers to collide (deepseek_v3_d_p/tests/test_mla.py). Same size
+# the DeepSeek/GLM/Kimi adapters reserve.
+L1_SMALL_SIZE = 1152
+
 
 class CCLManager:
+    """Semaphores, topology and persistent scratch for M3's collectives.
+
+    ``topology`` goes to all_gather_async / reduce_scatter_minimal_async (ring_joint_sdpa hardcodes Linear,
+    high_bw_all_gather derives ring vs line from the fabric). The galaxy runtime passes Linear; Ring is
+    measured in PR #55668.
+    """
+
     def __init__(self, mesh_device, num_links, topology=ttnn.Topology.Ring):
         self.mesh_device = mesh_device
         self.num_links = num_links
@@ -19,6 +32,10 @@ class CCLManager:
         # Persistent ring-gather scratch buffers for ring_joint SDPA, allocated once and reused across
         # every layer/chunk (key -> tensor). See get_ring_gather_buffer.
         self._ring_gather_buffers = {}
+
+        # Persistent worst-case outputs for high_bw_all_gather (MSA K/V/index_k SP gathers), one per
+        # (key, shape, dtype), shared across layers/chunks. See get_high_bw_gather_buffer.
+        self._high_bw_gather_buffers = {}
 
         # Setup semaphores
         self._init_subdevice()
@@ -109,6 +126,17 @@ class CCLManager:
         self.barrier_idx = (cur_idx + 1) % 2
         return self.barrier_semaphore[cur_idx]
 
+    def release_scratch_buffers(self) -> None:
+        """Free every persistent ring-gather / high_bw-gather scratch buffer and forget it; each is lazily
+        re-created at its next use. The buffers are keyed by shape, and the cache-read ones are sized by the
+        KV-cache capacity, so a resident model that re-targets its capacity (TtPrefillRuntime.
+        reconfigure_capacity) would otherwise keep ~0.7 GB/chip of dead scratch per distinct capacity at 1M.
+        Safe between prefill calls: gathered tensors alias these buffers only inside one layer's attention."""
+        for cache in (self._ring_gather_buffers, self._high_bw_gather_buffers):
+            for t in cache.values():
+                ttnn.deallocate(t)
+            cache.clear()
+
     def get_ring_gather_buffer(self, key, n_kv, seq, head_dim, dtype):
         """Persistent ring-gather scratch for ``ring_joint`` SDPA — allocated ONCE and reused across every
         layer/chunk (replaces the per-call ``from_torch(zeros)`` that churned host + DRAM on every dense
@@ -130,6 +158,26 @@ class CCLManager:
                 mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=(rows, cols), dims=[None, 1]),
             )
         return self._ring_gather_buffers[cache_key]
+
+    def get_high_bw_gather_buffer(self, key, shape, dtype, layout=ttnn.TILE_LAYOUT):
+        """Persistent replicated DRAM output for ``high_bw_all_gather``, sized for the worst-case gathered
+        shape (rank r lands at the fixed slot r*input_rows regardless of ``gathered_dim_size``). ``key``
+        separates buffers live at the same time (K / V / index_k). Zeroed once at allocation: the rows past a
+        rank's gathered prefix then always hold zeros or stale finite KV from an earlier gather. The consumers
+        read them only as positions that are future to every query (a mid-slab chunk's block-rounded tail,
+        masked causally), so they must be finite, never uninitialised NaN/Inf. Mirrors DeepSeek's
+        ``get_mla_high_bw_all_gather_buffer``.
+        """
+        cache_key = (key, tuple(shape), str(dtype), str(layout))
+        if cache_key not in self._high_bw_gather_buffers:
+            self._high_bw_gather_buffers[cache_key] = ttnn.zeros(
+                list(shape),
+                dtype=dtype,
+                layout=layout,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        return self._high_bw_gather_buffers[cache_key]
 
     def reset_global_semaphores(self):
         """Reset all global semaphores to 0"""

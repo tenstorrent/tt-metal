@@ -100,7 +100,8 @@ global_env:
   PREFILL_NUM_USERS: "4"           # must cover every dst slot: src 0,1 -> dst 2,3
 
   PREFILL_ENABLE_MIGRATION: "1"
-  PREFILL_MIGRATION_WAIT_READY_MS: "120000"
+  PREFILL_MIGRATION_WAIT_READY_MS: "120000"   # worker handshake, AFTER attach succeeds
+  PREFILL_MIGRATION_ATTACH_WAIT_S: "0"        # seconds to wait for the shm queues to appear; 0/unset = forever
   PREFILL_MIGRATION_TABLE_PATH: "/tmp/prefill_kv_chunk_table.pb"
   PREFILL_MIGRATION_DEVICE_MAP_PATH: "/tmp/prefill_kv_device_map.json"
   PREFILL_MIGRATION_CMD_QUEUE: "/mig_ep1_cmd"      # endpoint default is /mig_ep<id>_{cmd,table,resp}
@@ -540,7 +541,8 @@ gates you intend to run require.
 |------|------|-----------------------|
 | 1 | `build_kv_chunk_table` | serialises the block-cyclic layout; issues no comms |
 | 2 | `kv_migration_stages` | one `KvCacheStage` per migratable cache, for the cross-stage table merge |
-| 2 | `kv_migration_base_address` | alternative to the above, for a model with a SINGLE cache: just that cache's base DRAM address |
+| 1, 2 | `cache_kind` (adapter) | what each table config holds (`kvpe` / `index` / other); the producer's index check and the driver's cache plan key on it instead of the config count. Kimi-K3 declares its KDA state configs here (`tt/kda/KDA_STATE_MIGRATION.md`) |
+| 2 | `layer_position_range` (adapter) | positions one /migrate of a layer covers; default `[0, real_len)`. Kimi-K3 returns the KDA version window `[v * 36864, (v + 1) * 36864)`, `v = (real_len - 1) % 8`, for its KDA layers, so MLA and KDA layers go in separate calls and the byte verify walks that window |
 | 2 `dst-bytes` | **none** | nothing is decoded — the byte compare is model-agnostic |
 | 2 `dst-golden` | none beyond Gate 1 | reuses the producer's own read-back, not a runtime hook |
 
@@ -596,11 +598,34 @@ runner supplies the first two, then waits — it cannot distinguish a slow worke
 
 ---
 
+## Troubleshooting: the runner sits at startup with no error
+
+```
+[migration] still waiting for endpoint queues (/mig_ep1_cmd) after 45s (no timeout) — ...
+```
+
+The **attach** wait, repeating every 15s: the shm queues do not exist yet. This is not the `wait_ready`
+handshake below, so `PREFILL_MIGRATION_WAIT_READY_MS` has no effect on it. Unbounded by default because the
+runner often reaches table-publish before `migration_endpoint` has created its queues — bound it when a hang
+costs more than a race:
+
+```bash
+export PREFILL_MIGRATION_ATTACH_WAIT_S=120   # seconds; 0 or unset = wait forever
+```
+
+Permission problems fail on the first attempt rather than looping, so a heartbeat that persists means the
+queues are genuinely absent: the worker for this host never came up, or the queue names do not match the
+endpoint's.
+
 ## Troubleshooting: the runner times out in `wait_ready`
 
 ```
 RuntimeError: MigrationLayerClient::wait_ready: timeout after 120000ms
 ```
+
+This is the phase **after** attach: the queues were found and opened, and the workers are not answering on
+them. If instead there is no error at all and the log just repeats `still waiting for ...`, that is the
+attach wait above and `PREFILL_MIGRATION_WAIT_READY_MS` will not change it.
 
 Almost always: the two workers were never started, so nothing can answer. Confirm in the endpoint log
 (`/tmp/launch_mig_ep_<id>_*.log`; it holds binary bytes, so `grep` needs `-a`):

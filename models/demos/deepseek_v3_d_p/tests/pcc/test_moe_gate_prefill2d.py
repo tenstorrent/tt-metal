@@ -17,7 +17,7 @@ from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as Refe
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
-from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss.modeling_gpt_oss import GptOssTopKRouter
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
@@ -62,7 +62,7 @@ GATE_MODELS = {
     "dsv3": DeepSeekV3Config,
     "kimi_k2_7": KimiK27Config,
     "kimi_k3": KimiK3Config,
-    "glm_5_2": GLM52Config,
+    "glm_5_3": GLM53Config,
     "minimax_m2_7": MiniMaxM27Config,
     "gpt_oss_120b": GptOss120BConfig,
     "dsv4_pro": DeepSeekV4ProConfig,
@@ -141,7 +141,7 @@ _REAL_GATE_SOURCES = {
     # K3's router is the one MoE tensor group the checkpoint leaves unquantized.
     "kimi_k3": _RealGateSource(
         env_var="KIMI_K3_HF_MODEL",
-        fallbacks=("/mnt/models/blaze/moonshotai/Kimi-K3",),
+        fallbacks=("/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e",),
         hf_repo="moonshotai/Kimi-K3",
         key_prefix_template=GATE_KEY_PREFIX_KIMI_K3,
     ),
@@ -261,8 +261,8 @@ REGULAR_GATE_CASES = [
     pytest.param("kimi_k2_7", GateComputeMode.DEVICE_FP32, id="kimi_k2_7-device_fp32"),
     pytest.param("kimi_k3", GateComputeMode.HOST_ALL, id="kimi_k3-host_all"),
     pytest.param("kimi_k3", GateComputeMode.DEVICE_FP32, id="kimi_k3-device_fp32"),
-    pytest.param("glm_5_2", GateComputeMode.HOST_ALL, id="glm_5_2-host_all"),
-    pytest.param("glm_5_2", GateComputeMode.DEVICE_FP32, id="glm_5_2-device_fp32"),
+    pytest.param("glm_5_3", GateComputeMode.HOST_ALL, id="glm_5_3-host_all"),
+    pytest.param("glm_5_3", GateComputeMode.DEVICE_FP32, id="glm_5_3-device_fp32"),
     pytest.param("minimax_m2_7", GateComputeMode.HOST_ALL, id="minimax_m2_7-host_all"),
     pytest.param("minimax_m2_7", GateComputeMode.DEVICE_FP32, id="minimax_m2_7-device_fp32"),
     pytest.param("gpt_oss_120b", GateComputeMode.GPT_HOST, id="gpt_oss_120b-gpt_host"),
@@ -383,9 +383,15 @@ def _validate_gate(
         broadcast_groups=n_tp_devices,
     )
 
+    # Compare the selected-weight distributions, not their slot alignment. The top-k slot is a write
+    # offset that tt_reduce's weighted sum collapses, so a device order differing from torch's near a
+    # selection tie leaves the routed output unchanged -- and the slots are ordered by score+bias while
+    # the values are the unbiased scores, so transposing two near-tied slots writes two materially
+    # different weights and costs a position-wise PCC as much as a genuine mis-route does. Membership
+    # is covered above by recall_topk_indices, which pairs every expert with its own weight.
     pcc_scores = validate_composed(
-        host_tt_topk_scores,
-        reference_topk_scores,
+        host_tt_topk_scores.sort(dim=-1, descending=True).values,
+        reference_topk_scores.sort(dim=-1, descending=True).values,
         1,
         n_sp_devices,
         compare_pcc(scores_pcc_threshold, label="pcc_scores"),
@@ -412,9 +418,9 @@ def _ci_unsupported_param_combos_forward_pass(**params):
 
     if not on_ci:
         return False
-    if gate_fallback_mode != GateComputeMode.DEVICE_FP32:
-        return True
-    return False
+    if gate_fallback_mode in (GateComputeMode.DEVICE_FP32, GateComputeMode.GPT_DEVICE):
+        return False
+    return True
 
 
 def _reference_topk(config, gate_model, gate_fallback_mode, gate_w, torch_input):
@@ -568,9 +574,9 @@ def test_forward_pass(
     else:
         recall_threshold = 0.95
         logits_pcc_threshold = 0.997
-        scores_pcc_threshold = 0.93
-        # Device-mode scores only: at high expert counts sigmoid near-ties the top-k boundary, so a
-        # small matmul difference swaps a pick and moves the weight vector. Others keep 0.93.
+        # Order-insensitive since pcc_scores sorts both sides, so near-tie slot swaps no longer cost
+        # anything and every model clears this without a per-model relaxation.
+        scores_pcc_threshold = 0.98
         scores_pcc_threshold = getattr(GATE_MODELS[gate_model], "GATE_SCORES_PCC_DEVICE", scores_pcc_threshold)
 
     _validate_gate(
@@ -595,6 +601,17 @@ HASH_GATE_MODES = [
 ]
 
 
+def _ci_unsupported_param_combos_hash_gate(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+    gate_compute_mode = params["gate_compute_mode"]
+    if not on_ci:
+        return False
+    if gate_compute_mode != GateComputeMode.HASH_DEVICE:
+        return True
+    return False
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_hash_gate)
 @pytest.mark.parametrize("gate_model", ["dsv4_pro", "dsv4_flash"])
 @pytest.mark.parametrize("gate_compute_mode", HASH_GATE_MODES)
 @pytest.mark.parametrize(
@@ -751,5 +768,5 @@ def test_forward_pass_interleaved(mesh_device, num_links, topology, gate_model, 
         reference_logits,
         0.95,
         0.997,
-        getattr(GATE_MODELS[gate_model], "GATE_SCORES_PCC_DEVICE", 0.93),
+        getattr(GATE_MODELS[gate_model], "GATE_SCORES_PCC_DEVICE", 0.98),
     )

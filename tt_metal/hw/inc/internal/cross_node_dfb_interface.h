@@ -49,8 +49,13 @@ struct CrossNodeSenderDFBInterface {
 
     // Packed: bits [23:0] = remote pages_sent base; bits [31:24] = num_receivers.
     uint32_t num_receivers_and_remote_pages_sent_ptr;
+
+    // PrefetcherPipe only: base of the local ACKED block (receivers' NoC atomics land here),
+    // kept in separate cache lines from aligned_pages_sent_ptr. CrossNodeDFB leaves it unset
+    // (its acked word sits L1_ALIGNMENT after each sent word).
+    uint32_t aligned_pages_acked_ptr;
 };
-static_assert(sizeof(CrossNodeSenderDFBInterface) == 32);
+static_assert(sizeof(CrossNodeSenderDFBInterface) == 36);
 
 struct CrossNodeReceiverDFBInterface {
     uint32_t config_ptr;
@@ -68,11 +73,16 @@ struct CrossNodeReceiverDFBInterface {
     // Address on the sender's L1 where this receiver's pages_acked NOC inc lands.
     uint32_t remote_pages_acked_ptr;
 
+    // PrefetcherPipe only: this receiver's local pages_sent slot (sender's NoC atomics land
+    // here), in a separate cache line from aligned_pages_acked_ptr. CrossNodeDFB leaves it
+    // unset (its sent word sits L1_ALIGNMENT before the acked word).
+    uint32_t aligned_pages_sent_ptr;
+
     // Receiver-only: one local DFB that shares this CrossNode FIFO for TRISC.
     uint8_t relay_id;  // RELAY_DFB_INVALID if none
     uint8_t pad[3];
 };
-static_assert(sizeof(CrossNodeReceiverDFBInterface) == 36);
+static_assert(sizeof(CrossNodeReceiverDFBInterface) == 40);
 
 // Shared prefix must overlay for the sender/receiver union (same as Remote CB).
 static_assert(

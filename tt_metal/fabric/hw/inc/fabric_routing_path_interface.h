@@ -4,9 +4,6 @@
 
 #pragma once
 
-#include "hostdevcommon/fabric_common.h"
-#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
-
 namespace tt::tt_fabric {
 
 // Device-side compressed decoder function for 2D routing

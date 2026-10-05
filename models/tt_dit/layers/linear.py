@@ -279,7 +279,9 @@ class ColParallelLinear(Module):
                 bias = permute_for_swiglu(bias)
             state["bias"] = bias
 
-    def _forward_fabric_agmm(self, x, weight, fabric_cfg, parallel_config, compute_kernel_config, dtype) -> ttnn.Tensor:
+    def _forward_fabric_agmm(
+        self, x, weight, fabric_cfg, parallel_config, compute_kernel_config, dtype, use_persistent_buffer
+    ) -> ttnn.Tensor:
         """Optimized fabric-bound TP all-gather-matmul via strided_all_gather_minimal_matmul_async.
 
         The matmul runs on ``fabric_cfg.mm_core_grid`` (lower rows); the strided all-gather workers
@@ -311,7 +313,11 @@ class ColParallelLinear(Module):
             subblock_w=fabric_cfg.subblock_w,
             compute_with_storage_grid_size=fabric_cfg.mm_core_grid,
         )
-        ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(x.shape, 3, mesh_axis, dtype=x.get_dtype())
+        ag_persistent_buffer = (
+            self.ccl_manager.get_ag_ping_pong_buffer(x.shape, 3, mesh_axis, dtype=x.get_dtype())
+            if use_persistent_buffer
+            else None
+        )
         ag_global_semaphores = self.ccl_manager.get_strided_ag_mm_semaphore(mesh_axis, fabric_cfg.num_workers_per_link)
         dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
         outputs = ttnn.experimental.strided_all_gather_minimal_matmul_async(
@@ -355,6 +361,7 @@ class ColParallelLinear(Module):
         core_grid=None,
         use_heuristic_mmcfg=False,
         force_transpose: bool = True,
+        use_persistent_buffer: bool = True,
     ) -> ttnn.Tensor | list[ttnn.Tensor]:
         """
         Expects x to be replicated.
@@ -363,8 +370,7 @@ class ColParallelLinear(Module):
 
         `addcmul_a` / `addcmul_b` fuse a gated residual into the matmul epilogue, returning
         `addcmul_a + addcmul_scalar * matmul_result * addcmul_b`. Both must already be at the
-        per-TP-device output slice. Only the all-gather-matmul path supports it, so it requires
-        `parallel_config`; callers on the unfused path should apply the addcmul themselves.
+        per-TP-device output slice, and require `parallel_config`.
         """
         if addcmul_a is not None or addcmul_b is not None:
             if (addcmul_a is None) != (addcmul_b is None):
@@ -394,6 +400,8 @@ class ColParallelLinear(Module):
         parallel_config_tp = parallel_config.tensor_parallel.factor if parallel_config is not None else 1
         needs_gather = x.padded_shape[-1] != weight.padded_shape[-2]  # If gathered, switch to non fused AGMM
         if parallel_config_tp > 1 and self.ccl_manager.topology == ttnn.Topology.Ring and needs_gather:
+            if not use_persistent_buffer:
+                ttnn.synchronize_device(self.mesh_device)
             M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
             full_grid = self.mesh_device.compute_with_storage_grid_size()
 
@@ -405,7 +413,9 @@ class ColParallelLinear(Module):
             fabric_cfg = get_fabric_agmm_config(M, K, N, (self.chunks or 1), full_grid)
             has_unit_batch = len(x.padded_shape) <= 4 and all(d == 1 for d in list(x.padded_shape)[:-2])
             if fabric_cfg is not None and self.chunks in (None, 1) and has_unit_batch and addcmul_a is None:
-                return self._forward_fabric_agmm(x, weight, fabric_cfg, parallel_config, compute_kernel_config, dtype)
+                return self._forward_fabric_agmm(
+                    x, weight, fabric_cfg, parallel_config, compute_kernel_config, dtype, use_persistent_buffer
+                )
 
             # The op transposes the core grid when force_transpose is set or the output is wide
             # (M > N), and puts its in0 muxes on whichever axis the worker grid leaves free -- so
@@ -428,8 +438,11 @@ class ColParallelLinear(Module):
                 force_transpose=force_transpose,
             )
 
-            ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(
-                x.shape, -1, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()
+            tp_mesh_axis = parallel_config.tensor_parallel.mesh_axis
+            ag_persistent_buffer = (
+                self.ccl_manager.get_ag_ping_pong_buffer(x.shape, -1, tp_mesh_axis, dtype=x.get_dtype())
+                if use_persistent_buffer
+                else None
             )
             ag_global_semaphores = self.ccl_manager.get_ag_ping_pong_semaphore(
                 parallel_config.tensor_parallel.mesh_axis
@@ -446,7 +459,9 @@ class ColParallelLinear(Module):
                 num_links=self.ccl_manager.num_links,
                 topology=self.ccl_manager.topology,
                 cluster_axis=parallel_config.tensor_parallel.mesh_axis,
-                barrier_semaphore=None,
+                barrier_semaphore=(
+                    None if use_persistent_buffer else self.ccl_manager.get_barrier_semaphore(tp_mesh_axis)
+                ),
                 force_transpose=force_transpose,
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=48 if not is_blackhole() else 24,
@@ -472,8 +487,12 @@ class ColParallelLinear(Module):
 
             # Gather if needed here. Helps cleanup upstream code
             if needs_gather:
-                x = self.ccl_manager.all_gather_persistent_buffer(
-                    x, dim=-1, mesh_axis=parallel_config.tensor_parallel.mesh_axis, use_hyperparams=True
+                x = self.ccl_manager.all_gather(
+                    x,
+                    dim=-1,
+                    mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                    use_hyperparams=True,
+                    use_persistent_buffer=use_persistent_buffer,
                 )
 
             if self.chunks is not None:
@@ -491,17 +510,36 @@ class ColParallelLinear(Module):
                     fuse_swiglu=self.fuse_swiglu,
                 )
                 return [_apply_activation_fn(o, self.activation_fn) for o in outputs]
-            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
-            output = ttnn.experimental.minimal_matmul(
-                input_tensor=x,
-                weight_tensor=weight,
-                bias_tensor=self.bias.data if self.bias is not None else None,
-                config=matmul_config,
-                fused_activation=self.fused_activation_fn,
-                compute_kernel_config=compute_kernel_config or self.compute_config,
-                dtype=dtype,
-                fuse_swiglu=self.fuse_swiglu,
-            )
+            if addcmul_a is not None:
+                # This op has no fused-activation support, so reject the combination rather
+                # than compute the wrong thing.
+                if self.fused_activation_fn is not None or self.fuse_swiglu:
+                    msg = "fused addcmul is not supported alongside a fused activation on the minimal_matmul path"
+                    raise ValueError(msg)
+                matmul_config = get_matmul_config(M, x.padded_shape[-1], N, core_grid, default_block_size)
+                output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+                    x,
+                    weight,
+                    addcmul_scalar,
+                    addcmul_a,
+                    addcmul_b,
+                    bias_tensor=self.bias.data if self.bias is not None else None,
+                    config=matmul_config,
+                    compute_kernel_config=compute_kernel_config or self.compute_config,
+                    dtype=dtype,
+                )
+            else:
+                matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+                output = ttnn.experimental.minimal_matmul(
+                    input_tensor=x,
+                    weight_tensor=weight,
+                    bias_tensor=self.bias.data if self.bias is not None else None,
+                    config=matmul_config,
+                    fused_activation=self.fused_activation_fn,
+                    compute_kernel_config=compute_kernel_config or self.compute_config,
+                    dtype=dtype,
+                    fuse_swiglu=self.fuse_swiglu,
+                )
 
         return _apply_activation_fn(output, self.activation_fn)
 
@@ -586,11 +624,14 @@ class RowParallelLinear(Module):
         default_block_size: tuple = None,
         dtype=None,
         gather_output: bool = False,
+        reduce_scatter_dim: int = -1,
     ) -> ttnn.Tensor:
         """
         Expects x to be column fractured.
         x may be a 2-element list [prefix, suffix] for fused concat over K (concat-free).
         Return output fractured on columns.
+
+        `reduce_scatter_dim` selects the reduce-scatter axis (default -1, hidden); -2 splits on the sequence dim.
         """
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
@@ -624,13 +665,17 @@ class RowParallelLinear(Module):
 
         if self._mesh_axis_size > 1:
             # Reduce over rows when replicating: N may be too narrow to scatter over the mesh axis.
-            dim = -2 if gather_output else -1
+            dim = -2 if gather_output else reduce_scatter_dim
             output = self.ccl_manager.reduce_scatter(
                 output, dim=dim, mesh_axis=self.mesh_axis, use_persistent_buffer=use_persistent_buffer
             )
             if gather_output:
                 output = self.ccl_manager.all_gather(
-                    output, dim=dim, mesh_axis=self.mesh_axis, use_hyperparams=True, use_persistent_buffer=True
+                    output,
+                    dim=dim,
+                    mesh_axis=self.mesh_axis,
+                    use_hyperparams=True,
+                    use_persistent_buffer=use_persistent_buffer,
                 )
 
         return output
@@ -644,6 +689,7 @@ class RowParallelLinear(Module):
         *,
         compute_kernel_config=None,
         dtype=None,
+        use_persistent_buffer: bool = True,
     ) -> ttnn.Tensor:
         """Fused RowParallel matmul + reduce-scatter + addcmul at the RS final write step.
 
@@ -683,8 +729,10 @@ class RowParallelLinear(Module):
             if x_second is not None:
                 x_second = ttnn.unsqueeze(x_second, 0)
         pre_rs_shape = tuple(list(x.shape)[:-1] + [N])
-        _, rs_output_buffer = self.ccl_manager.get_rs_ping_pong_buffer(
-            pre_rs_shape, 3, self.mesh_axis, return_intermediate=False
+        rs_output_buffer = (
+            self.ccl_manager.get_rs_ping_pong_buffer(pre_rs_shape, 3, self.mesh_axis, return_intermediate=False)[1]
+            if use_persistent_buffer
+            else None
         )
         # The MM output is scratch here (only the RS output is returned), so hand it to the RS
         # through the rolling L1 window instead of a DRAM round-trip whenever the blocking config
@@ -709,7 +757,8 @@ class RowParallelLinear(Module):
             topology=self.ccl_manager.topology,
             cluster_axis=self.mesh_axis,
             compute_kernel_config=compute_kernel_config or self.compute_config,
-            using_persistent_buffers=True,
+            barrier_semaphore=None if use_persistent_buffer else self.ccl_manager.get_barrier_semaphore(self.mesh_axis),
+            using_persistent_buffers=use_persistent_buffer,
             optional_rs_output_tensor=rs_output_buffer,
             fused_ternary_scalar=scalar,
             addcmul_input_tensor1=addcmul_a,

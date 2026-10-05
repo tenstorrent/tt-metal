@@ -464,10 +464,20 @@ bool single_core_binary(
 
     experimental::DataMovementHardwareConfig reader_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        reader_hw_config = experimental::DataMovementHardwareConfig{
+            .config_2xx =
+                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     } else {
-        reader_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+        reader_hw_config = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = tt_metal::NOC::RISCV_1_default,
+                },
+        };
     }
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
@@ -503,10 +513,20 @@ bool single_core_binary(
 
     experimental::DataMovementHardwareConfig writer_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        writer_hw_config = experimental::DataMovementHardwareConfig{
+            .config_2xx =
+                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     } else {
-        writer_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+        writer_hw_config = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                },
+        };
     }
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
@@ -520,7 +540,7 @@ bool single_core_binary(
     };
 
     experimental::ComputeHardwareConfig compute_hw_config;
-    experimental::ComputeUnpackModes unpack_modes{};
+    experimental::ComputeHardwareConfig::ComputeUnpackModes unpack_modes{};
     if (test_config.l1_input_data_format == tt::DataFormat::Float32) {
         unpack_modes = {
             {INP0_DFB, tt::tt_metal::UnpackMode::UnpackToSrc},
@@ -528,19 +548,11 @@ bool single_core_binary(
             {INP2_DFB, tt::tt_metal::UnpackMode::UnpackToSrc},
         };
     }
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        compute_hw_config = experimental::ComputeGen2Config{
-            .fpu_math_fidelity = test_config.math_fidelity,
-            .enable_32_bit_dest = test_config.enable_32_bit_dest,
-            .unpack_modes = unpack_modes,
-        };
-    } else {
-        compute_hw_config = experimental::ComputeGen1Config{
-            .fpu_math_fidelity = test_config.math_fidelity,
-            .enable_32_bit_dest = test_config.enable_32_bit_dest,
-            .unpack_modes = unpack_modes,
-        };
-    }
+    compute_hw_config = experimental::ComputeHardwareConfig{
+        .fpu_math_fidelity = test_config.math_fidelity,
+        .enable_32_bit_dest = test_config.enable_32_bit_dest,
+        .unpack_modes = unpack_modes,
+    };
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
@@ -644,194 +656,147 @@ bool single_core_binary(
 
 }  // namespace unit_tests::compute::binary
 
-TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingleTileAdd) {
-    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
-        if (i == 1) {
-            continue;
-        }
-        unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
-            .tile_byte_size = 2 * 32 * 32,
-            .l1_input_data_format = tt::DataFormat::Float16_b,
-            .l1_output_data_format = tt::DataFormat::Float16_b,
-            .core = CoreCoord(0, 0),
-            .binary_op = "add",
-            .math_fidelity = MathFidelity(i)};
-        test_config.num_tiles = 1;
-        log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (auto& device : this->devices_) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
+// Parametrized over fidelity so a single variant can be selected from the command
+// line (e.g. --gtest_filter='*TensixBinaryComputeSingleCoreSingleTileAdd/LoFi'),
+// which matters on simulator targets where one iteration costs about a minute.
+// MathFidelity is a sparse enum, so the valid values are listed rather than counted.
+class LLKMeshDeviceFixtureSlowDispatchOnlyFidelity : public LLKMeshDeviceFixtureSlowDispatchOnly,
+                                                     public testing::WithParamInterface<MathFidelity> {};
+
+TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCoreSingleTileAdd) {
+    unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
+        .tile_byte_size = 2 * 32 * 32,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .core = CoreCoord(0, 0),
+        .binary_op = "add",
+        .math_fidelity = GetParam()};
+    test_config.num_tiles = 1;
+    for (const auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
+    }
+}
+
+TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCoreSingleTileSub) {
+    unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
+        .tile_byte_size = 2 * 32 * 32,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .core = CoreCoord(0, 0),
+        .binary_op = "sub",
+        .math_fidelity = GetParam()};
+    test_config.num_tiles = 1;
+    for (const auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
+    }
+}
+
+TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCoreSingleTileMul) {
+    unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
+        .tile_byte_size = 2 * 32 * 32,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .core = CoreCoord(0, 0),
+        .binary_op = "mul",
+        .math_fidelity = GetParam()};
+    test_config.num_tiles = 1;
+    for (const auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
+    }
+}
+
+TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCoreSingleTileAddFullInit) {
+    unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
+        .tile_byte_size = 2 * 32 * 32,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .core = CoreCoord(0, 0),
+        .binary_op = "add",
+        .math_fidelity = GetParam()};
+    test_config.num_tiles = 1;
+    for (const auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
+    }
+}
+
+TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCoreSingleTileSubFullInit) {
+    unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
+        .tile_byte_size = 2 * 32 * 32,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .core = CoreCoord(0, 0),
+        .binary_op = "sub",
+        .math_fidelity = GetParam()};
+    test_config.num_tiles = 1;
+    for (const auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
+    }
+}
+
+TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCoreSingleTileMulFullInit) {
+    unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
+        .tile_byte_size = 2 * 32 * 32,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .core = CoreCoord(0, 0),
+        .binary_op = "mul",
+        .math_fidelity = GetParam()};
+    test_config.num_tiles = 1;
+    for (const auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
+    }
+}
+
+TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCoreMultiTileAddWithDestReuse) {
+    unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
+        .tile_byte_size = 2 * 32 * 32,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .core = CoreCoord(0, 0),
+        .binary_op = "add_with_dest_reuse",
+        .math_fidelity = GetParam()};
+    test_config.num_tiles = 4;
+    for (const auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
+        // TODO: Remove early return once back-to-back tests are passing on Quasar
+        if (this->arch_ == ARCH::QUASAR) {
+            return;
         }
     }
 }
 
-TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingleTileSub) {
-    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
-        if (i == 1) {
-            continue;
-        }
-        unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
-            .tile_byte_size = 2 * 32 * 32,
-            .l1_input_data_format = tt::DataFormat::Float16_b,
-            .l1_output_data_format = tt::DataFormat::Float16_b,
-            .core = CoreCoord(0, 0),
-            .binary_op = "sub",
-            .math_fidelity = MathFidelity(i)};
-        test_config.num_tiles = 1;
-        log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (auto& device : this->devices_) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
+TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCoreMultiTileSubWithDestReuse) {
+    unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
+        .tile_byte_size = 2 * 32 * 32,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .core = CoreCoord(0, 0),
+        .binary_op = "sub_with_dest_reuse",
+        .math_fidelity = GetParam()};
+    test_config.num_tiles = 4;
+    for (const auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
+        // TODO: Remove early return once back-to-back tests are passing on Quasar
+        if (this->arch_ == ARCH::QUASAR) {
+            return;
         }
     }
 }
 
-TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingleTileMul) {
-    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
-        if (i == 1) {
-            continue;
-        }
-        unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
-            .tile_byte_size = 2 * 32 * 32,
-            .l1_input_data_format = tt::DataFormat::Float16_b,
-            .l1_output_data_format = tt::DataFormat::Float16_b,
-            .core = CoreCoord(0, 0),
-            .binary_op = "mul",
-            .math_fidelity = MathFidelity(i)};
-        test_config.num_tiles = 1;
-        log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (auto& device : this->devices_) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
-        }
-    }
-}
-
-TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingleTileAddFullInit) {
-    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
-        if (i == 1) {
-            continue;
-        }
-        unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
-            .tile_byte_size = 2 * 32 * 32,
-            .l1_input_data_format = tt::DataFormat::Float16_b,
-            .l1_output_data_format = tt::DataFormat::Float16_b,
-            .core = CoreCoord(0, 0),
-            .binary_op = "add",
-            .math_fidelity = MathFidelity(i)};
-        test_config.num_tiles = 1;
-        log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (auto& device : this->devices_) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
-        }
-    }
-}
-
-TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingleTileSubFullInit) {
-    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
-        if (i == 1) {
-            continue;
-        }
-        unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
-            .tile_byte_size = 2 * 32 * 32,
-            .l1_input_data_format = tt::DataFormat::Float16_b,
-            .l1_output_data_format = tt::DataFormat::Float16_b,
-            .core = CoreCoord(0, 0),
-            .binary_op = "sub",
-            .math_fidelity = MathFidelity(i)};
-        test_config.num_tiles = 1;
-        log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (auto& device : this->devices_) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
-        }
-    }
-}
-
-TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingleTileMulFullInit) {
-    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
-        if (i == 1) {
-            continue;
-        }
-        unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
-            .tile_byte_size = 2 * 32 * 32,
-            .l1_input_data_format = tt::DataFormat::Float16_b,
-            .l1_output_data_format = tt::DataFormat::Float16_b,
-            .core = CoreCoord(0, 0),
-            .binary_op = "mul",
-            .math_fidelity = MathFidelity(i)};
-        test_config.num_tiles = 1;
-        log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (auto& device : this->devices_) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
-        }
-    }
-}
-
-TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileAddWithDestReuse) {
-    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
-        if (i == 1) {
-            continue;
-        }
-        unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
-            .tile_byte_size = 2 * 32 * 32,
-            .l1_input_data_format = tt::DataFormat::Float16_b,
-            .l1_output_data_format = tt::DataFormat::Float16_b,
-            .core = CoreCoord(0, 0),
-            .binary_op = "add_with_dest_reuse",
-            .math_fidelity = MathFidelity(i)};
-        test_config.num_tiles = 4;
-        log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (auto& device : this->devices_) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
-            // TODO: Remove early return once back-to-back tests are passing on Quasar
-            if (this->arch_ == ARCH::QUASAR) {
-                return;
-            }
-        }
-    }
-}
-
-TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileSubWithDestReuse) {
-    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
-        if (i == 1) {
-            continue;
-        }
-        unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
-            .tile_byte_size = 2 * 32 * 32,
-            .l1_input_data_format = tt::DataFormat::Float16_b,
-            .l1_output_data_format = tt::DataFormat::Float16_b,
-            .core = CoreCoord(0, 0),
-            .binary_op = "sub_with_dest_reuse",
-            .math_fidelity = MathFidelity(i)};
-        test_config.num_tiles = 4;
-        log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (auto& device : this->devices_) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
-            // TODO: Remove early return once back-to-back tests are passing on Quasar
-            if (this->arch_ == ARCH::QUASAR) {
-                return;
-            }
-        }
-    }
-}
-
-TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileMulWithDestReuse) {
-    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
-        if (i == 1) {
-            continue;
-        }
-        unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
-            .tile_byte_size = 2 * 32 * 32,
-            .l1_input_data_format = tt::DataFormat::Float16_b,
-            .l1_output_data_format = tt::DataFormat::Float16_b,
-            .core = CoreCoord(0, 0),
-            .binary_op = "mul_with_dest_reuse",
-            .math_fidelity = MathFidelity(i)};
-        test_config.num_tiles = 4;
-        log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (auto& device : this->devices_) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
-            // TODO: Remove early return once back-to-back tests are passing on Quasar
-            if (this->arch_ == ARCH::QUASAR) {
-                return;
-            }
+TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCoreMultiTileMulWithDestReuse) {
+    unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
+        .tile_byte_size = 2 * 32 * 32,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .core = CoreCoord(0, 0),
+        .binary_op = "mul_with_dest_reuse",
+        .math_fidelity = GetParam()};
+    test_config.num_tiles = 4;
+    for (const auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
+        // TODO: Remove early return once back-to-back tests are passing on Quasar
+        if (this->arch_ == ARCH::QUASAR) {
+            return;
         }
     }
 }
@@ -939,155 +904,130 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeColBroadcastThen
     }
 }
 
-TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileAdd) {
-    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
-        if (i == 1) {
-            continue;
-        }
-        unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
-            .tile_byte_size = 2 * 32 * 32,
-            .l1_input_data_format = tt::DataFormat::Float16_b,
-            .l1_output_data_format = tt::DataFormat::Float16_b,
-            .core = CoreCoord(0, 0),
-            .binary_op = "add",
-            .math_fidelity = MathFidelity(i)};
-        test_config.num_tiles = 4;
-        log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (auto& device : this->devices_) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
-            // TODO: Remove early return once back-to-back tests are passing on Quasar
-            if (this->arch_ == ARCH::QUASAR) {
-                return;
-            }
+TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCoreMultiTileAdd) {
+    unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
+        .tile_byte_size = 2 * 32 * 32,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .core = CoreCoord(0, 0),
+        .binary_op = "add",
+        .math_fidelity = GetParam()};
+    test_config.num_tiles = 4;
+    for (const auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
+        // TODO: Remove early return once back-to-back tests are passing on Quasar
+        if (this->arch_ == ARCH::QUASAR) {
+            return;
         }
     }
 }
 
-TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileSub) {
-    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
-        if (i == 1) {
-            continue;
-        }
-        unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
-            .tile_byte_size = 2 * 32 * 32,
-            .l1_input_data_format = tt::DataFormat::Float16_b,
-            .l1_output_data_format = tt::DataFormat::Float16_b,
-            .core = CoreCoord(0, 0),
-            .binary_op = "sub",
-            .math_fidelity = MathFidelity(i)};
-        test_config.num_tiles = 4;
-        log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (auto& device : this->devices_) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
-            // TODO: Remove early return once back-to-back tests are passing on Quasar
-            if (this->arch_ == ARCH::QUASAR) {
-                return;
-            }
+TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCoreMultiTileSub) {
+    unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
+        .tile_byte_size = 2 * 32 * 32,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .core = CoreCoord(0, 0),
+        .binary_op = "sub",
+        .math_fidelity = GetParam()};
+    test_config.num_tiles = 4;
+    for (const auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
+        // TODO: Remove early return once back-to-back tests are passing on Quasar
+        if (this->arch_ == ARCH::QUASAR) {
+            return;
         }
     }
 }
 
-TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileMul) {
-    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
-        if (i == 1) {
-            continue;
-        }
-        unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
-            .tile_byte_size = 2 * 32 * 32,
-            .l1_input_data_format = tt::DataFormat::Float16_b,
-            .l1_output_data_format = tt::DataFormat::Float16_b,
-            .core = CoreCoord(0, 0),
-            .binary_op = "mul",
-            .math_fidelity = MathFidelity(i)};
-        test_config.num_tiles = 4;
-        log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (auto& device : this->devices_) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
-            // TODO: Remove early return once back-to-back tests are passing on Quasar
-            if (this->arch_ == ARCH::QUASAR) {
-                return;
-            }
+TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCoreMultiTileMul) {
+    unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
+        .tile_byte_size = 2 * 32 * 32,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .core = CoreCoord(0, 0),
+        .binary_op = "mul",
+        .math_fidelity = GetParam()};
+    test_config.num_tiles = 4;
+    for (const auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
+        // TODO: Remove early return once back-to-back tests are passing on Quasar
+        if (this->arch_ == ARCH::QUASAR) {
+            return;
         }
     }
 }
 
-TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileAddDestAcc) {
-    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
-        if (i == 1) {
-            continue;
-        }
-        unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
-            .num_tiles = 4,
-            .tile_byte_size = 2 * 32 * 32,
-            .l1_input_data_format = tt::DataFormat::Float16_b,
-            .l1_output_data_format = tt::DataFormat::Float16_b,
-            .core = CoreCoord(0, 0),
-            .binary_op = "add",
-            .acc_to_dest = true,
-            .math_fidelity = MathFidelity(i),
-        };
-        log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (auto& device : this->devices_) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
-            // TODO: Remove early return once back-to-back tests are passing on Quasar
-            if (this->arch_ == ARCH::QUASAR) {
-                return;
-            }
+TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCoreMultiTileAddDestAcc) {
+    unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
+        .num_tiles = 4,
+        .tile_byte_size = 2 * 32 * 32,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .core = CoreCoord(0, 0),
+        .binary_op = "add",
+        .acc_to_dest = true,
+        .math_fidelity = GetParam(),
+    };
+    for (const auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
+        // TODO: Remove early return once back-to-back tests are passing on Quasar
+        if (this->arch_ == ARCH::QUASAR) {
+            return;
         }
     }
 }
 
-TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileSubDestAcc) {
-    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
-        if (i == 1) {
-            continue;
-        }
-        unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
-            .num_tiles = 4,
-            .tile_byte_size = 2 * 32 * 32,
-            .l1_input_data_format = tt::DataFormat::Float16_b,
-            .l1_output_data_format = tt::DataFormat::Float16_b,
-            .core = CoreCoord(0, 0),
-            .binary_op = "sub",
-            .acc_to_dest = true,
-            .math_fidelity = MathFidelity(i),
-        };
-        log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (auto& device : this->devices_) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
-            // TODO: Remove early return once back-to-back tests are passing on Quasar
-            if (this->arch_ == ARCH::QUASAR) {
-                return;
-            }
+TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCoreMultiTileSubDestAcc) {
+    unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
+        .num_tiles = 4,
+        .tile_byte_size = 2 * 32 * 32,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .core = CoreCoord(0, 0),
+        .binary_op = "sub",
+        .acc_to_dest = true,
+        .math_fidelity = GetParam(),
+    };
+    for (const auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
+        // TODO: Remove early return once back-to-back tests are passing on Quasar
+        if (this->arch_ == ARCH::QUASAR) {
+            return;
         }
     }
 }
 
-TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileMulDestAcc) {
-    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
-        if (i == 1) {
-            continue;
-        }
-        unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
-            .num_tiles = 4,
-            .tile_byte_size = 2 * 32 * 32,
-            .l1_input_data_format = tt::DataFormat::Float16_b,
-            .l1_output_data_format = tt::DataFormat::Float16_b,
-            .core = CoreCoord(0, 0),
-            .binary_op = "mul",
-            .acc_to_dest = true,
-            .math_fidelity = MathFidelity(i),
-        };
-        log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (auto& device : this->devices_) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
-            // TODO: Remove early return once back-to-back tests are passing on Quasar
-            if (this->arch_ == ARCH::QUASAR) {
-                return;
-            }
+TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCoreMultiTileMulDestAcc) {
+    unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
+        .num_tiles = 4,
+        .tile_byte_size = 2 * 32 * 32,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .core = CoreCoord(0, 0),
+        .binary_op = "mul",
+        .acc_to_dest = true,
+        .math_fidelity = GetParam(),
+    };
+    for (const auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config));
+        // TODO: Remove early return once back-to-back tests are passing on Quasar
+        if (this->arch_ == ARCH::QUASAR) {
+            return;
         }
     }
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    MathFidelities,
+    LLKMeshDeviceFixtureSlowDispatchOnlyFidelity,
+    testing::Values(MathFidelity::LoFi, MathFidelity::HiFi2, MathFidelity::HiFi3, MathFidelity::HiFi4),
+    [](const testing::TestParamInfo<MathFidelity>& info) {
+        // fmt renders the enum as "MathFidelity::LoFi"; gtest only accepts
+        // alphanumerics and underscore in a parameter name.
+        const std::string name = fmt::format("{}", info.param);
+        return name.substr(name.rfind(':') + 1);
+    });
 
 // ============================================================================
 // Id-free (2.0) eltwise binary ADD family, validated against a C++ host golden (elementwise A + B in

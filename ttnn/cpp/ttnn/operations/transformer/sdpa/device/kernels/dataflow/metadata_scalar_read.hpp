@@ -11,6 +11,7 @@
 #include "api/dataflow/noc.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/tensor_accessor.h"
+#include "ttnn/operations/transformer/sdpa/device/kernels/chunked_q_mapping.hpp"
 
 namespace trace_metadata {
 
@@ -76,6 +77,24 @@ inline uint32_t logical_tile_rows_clamped_to_cache(
     const uint32_t remaining_tile_rows = cache_global_tile_rows - kv_actual_tile_rows;
     return kv_actual_tile_rows +
            (chunk_global_tile_rows < remaining_tile_rows ? chunk_global_tile_rows : remaining_tile_rows);
+}
+
+// One-slot traces cannot replay a Q range that needs two predecessor tails.
+inline uint32_t bounded_sliding_kv_actual_isl(
+    uint32_t kv_actual_isl,
+    uint32_t q_local_tile_rows,
+    uint32_t ring_size,
+    uint32_t cache_local_tile_rows,
+    uint32_t halo_slot_count) {
+    const uint32_t group_rows = q_local_tile_rows * ring_size;
+    const uint32_t cache_rows = cache_local_tile_rows * ring_size;
+    kv_actual_isl = bounded_kv_actual_isl(kv_actual_isl, group_rows, cache_rows);
+    const uint32_t end = logical_tile_rows_clamped_to_cache(kv_actual_isl, group_rows, cache_rows);
+    const bool halo_fits = halo_slot_count >= 2 || !ttnn::operations::transformer::sdpa::ring_joint::chunked_q_wraps(
+                                                       kv_actual_isl / 32, end, q_local_tile_rows, ring_size);
+    ASSERT(halo_fits);
+    // Every metadata consumer uses the same fallback, including when assertions are disabled.
+    return halo_fits ? kv_actual_isl : 0;
 }
 
 }  // namespace trace_metadata

@@ -103,12 +103,15 @@ void DeepseekMoEFastReduceNCFusedDeviceOperation::validate_on_program_cache_miss
         reduction_dim_size,
         num_shared_experts_val);
 
+    // One score row per input row, the padded rows of the input's last row tile excepted (they get a zero
+    // score).  Any number of row tiles is supported: the reader builds one score tile per (row tile, expert)
+    // and the compute kernel scales each output tile with its own row tile's scores.
     const uint32_t num_tokens = input_shape[-2];
     TT_FATAL(
-        (scores_shape[0] > num_tokens - tt::constants::TILE_WIDTH) && (scores_shape[0] <= num_tokens),
-        "scores dim 0 (tokens in slice = {}) must be between {} and {} for the current fused kernel",
+        (scores_shape[0] > num_tokens - tt::constants::TILE_HEIGHT) && (scores_shape[0] <= num_tokens),
+        "scores dim 0 (tokens in slice = {}) must be between {} and {} (the rows of the input's last row tile)",
         scores_shape[0],
-        num_tokens - tt::constants::TILE_WIDTH + 1,
+        num_tokens - tt::constants::TILE_HEIGHT + 1,
         num_tokens);
 }
 

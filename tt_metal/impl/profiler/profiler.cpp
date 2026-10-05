@@ -885,7 +885,8 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                     if (marker.marker_name != "SYNC-ZONE-SENDER" && marker.marker_name != "SYNC-ZONE-RECEIVER" &&
                         marker.marker_name != "PROFILER-NOC-QUICK-SEND" && !marker.marker_name.ends_with("-FW") &&
                         (!marker.marker_name.ends_with("-KERNEL") || marker.risc == tracy::RiscType::BRISC ||
-                         marker.risc == tracy::RiscType::NCRISC)) {
+                         marker.risc == tracy::RiscType::NCRISC ||
+                         (marker.risc >= tracy::RiscType::QUASAR_DM0 && marker.risc <= tracy::RiscType::QUASAR_DM7))) {
                         zones_by_op[program_execution_uid].push_back(marker);
                     }
                 } else if (isMarkerATimestampedDatapoint(marker)) {
@@ -1680,6 +1681,17 @@ void DeviceProfiler::readRiscProfilerResults(
         if (riscs_to_include.has_value()) {
             if (!riscs_to_include->contains(worker_core) || !riscs_to_include->at(worker_core).contains(riscType)) {
                 continue;
+            }
+        }
+
+        {
+            tracy::TTDeviceMarker lane;
+            lane.chip_id = device_id;
+            lane.core_x = phys_coord.x;
+            lane.core_y = phys_coord.y;
+            lane.risc = riscType;
+            if (const uint32_t lane_thread = lane.get_thread_id(); named_lane_threads.insert(lane_thread).second) {
+                tracy::SetThreadName(lane_thread, std::string(enchantum::to_string(riscType)).c_str());
             }
         }
 

@@ -45,6 +45,7 @@ class TtLlamaMLP(LightweightModule):
         self.mesh_device = mesh_device
         self.layer_num = layer_num
         self.args = args
+        self.prefill_output_dtype = getattr(args, "prefill_mlp_output_dtype", ttnn.bfloat8_b)
         self.dim = args.dim
         self.model_config = model_config
         # Single source of truth for the prefetcher gate (Wormhole/TG True, Blackhole bring-up False).
@@ -383,6 +384,8 @@ class TtLlamaMLP(LightweightModule):
             w1_out = ttnn.experimental.minimal_matmul(
                 input_tensor=x,
                 weight_tensor=self.w1_interleaved if use_w1_w3_interleaved else self.w1,
+                # Qwen's residual can be BF16; FF1/FF3 CCL buffers remain BF8.
+                dtype=ttnn.bfloat8_b if self.args.is_qwen else None,
                 config=minimal_pc_1_3,
                 compute_kernel_config=self.args.compute_kernel_config_lofi,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -417,6 +420,7 @@ class TtLlamaMLP(LightweightModule):
             w3_out = ttnn.experimental.minimal_matmul(
                 input_tensor=x,
                 weight_tensor=self.w3_interleaved if use_w1_w3_interleaved else self.w3,
+                dtype=ttnn.bfloat8_b if self.args.is_qwen else None,
                 config=minimal_pc_1_3,
                 compute_kernel_config=self.args.compute_kernel_config_lofi,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -457,11 +461,14 @@ class TtLlamaMLP(LightweightModule):
                 w2_in_gathered,
                 self.w2_interleaved,
                 compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
-                dtype=ttnn.bfloat8_b,
+                dtype=self.prefill_output_dtype,
                 program_config=short_lens_pc_2,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
+            # Match the input format before communicating its bytes.
+            if w2_in.dtype != self.prefill_output_dtype:
+                w2_in = ttnn.typecast(w2_in, self.prefill_output_dtype)
             w2_out = self.tt_ccl.line_all_gather_matmul(
                 w2_in,
                 self.w2_interleaved,
@@ -470,7 +477,7 @@ class TtLlamaMLP(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 matmul_config=minimal_pc_2,
                 compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
-                dtype=ttnn.bfloat8_b,
+                dtype=self.prefill_output_dtype,
             )
             ttnn.deallocate(w2_in)
 

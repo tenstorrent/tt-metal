@@ -52,6 +52,17 @@ inline void _llk_math_eltwise_unary_datacopy_(
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(dst_index);
         math::math_unpack_to_dest_tile_ready();
 
+        // Pin the math dest offset to the bank base: hardware adds it to the MOVD2B/MOVB2D immediates
+        // (dst_index * 64 + row) of the broadcast sequences below, and a preceding op may have left another
+        // tile's offset here. A plain copy (NONE) only issues the budabackend#2730 ZEROACC below, whose CLR_16
+        // block index is absolute within the bank: the offset only feeds its bank select, which flips once
+        // offset + index reaches 512 (tt-metal#53693), and a 32-bit bank never gets there (offset <= 240,
+        // index <= 15). So NONE skips the write, as on Wormhole, and keeps its per-tile cost unchanged.
+        if constexpr (src_b_bcast_type != BroadcastType::NONE)
+        {
+            TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
+        }
+
         // Due to bug in Blackhole Tensix (more details in budabackend/#2730) when an event with side effect of clearing DEST zero flags
         // (such as Unpack-to-dest or RISC-to-dest) and a ZEROACC instruction from packer occur in the same cycle,
         // zero flags clearing is dropped.
@@ -420,8 +431,6 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format)
 template <DataCopyType type, bool is_fp32_dest_acc_en, BroadcastType bcast_type = BroadcastType::NONE, bool tilize = false, bool is_int_fpu_en = false>
 inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32_t total_rows, const std::uint32_t num_faces, const std::uint32_t dst_format)
 {
-    // always move 32x32 tile, packed as 16x16x4
-
     if constexpr (type == DataCopyType::A2D)
     {
         std::uint32_t innerloop = (rows_per_inst == p_mova2d::MOV_1_ROW) ? total_rows : (total_rows >> 3);
@@ -453,7 +462,8 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
     {
         std::uint32_t addr_mod  = (rows_per_inst == p_movb2d::MOV_1_ROW) ? ADDR_MOD_0 : ADDR_MOD_2;
         std::uint32_t innerloop = (rows_per_inst == p_movb2d::MOV_1_ROW) ? total_rows : (total_rows >> 2);
-        std::uint32_t outerloop = 4;
+        // One outer iteration per face: end_op clears a SrcB DVALID each iteration.
+        std::uint32_t outerloop = num_faces;
         auto broadcast_type     = p_movb2d::MOV_1_ROW; // No broadcast;
 
         if constexpr (bcast_type == BroadcastType::COL)

@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from contextlib import contextmanager
+
 import torch
 
 import ttnn
@@ -219,7 +221,9 @@ class CCLManager:
 
         return self._ping_pong_buffer_cache[cache_key][current_idx]
 
-    def get_ag_ping_pong_buffer(self, shape, dim, mesh_axis, dtype=ttnn.bfloat16, device_synchronize=True):
+    def get_ag_ping_pong_buffer(
+        self, shape, dim, mesh_axis, dtype=ttnn.bfloat16, device_synchronize=True, capacity=None
+    ):
         """
         Get or create ping pong buffers for all gather operations.
         Caches buffers based on shape, dim, and mesh_axis.
@@ -228,13 +232,17 @@ class CCLManager:
             shape: Tensor shape tuple
             dim: Dimension for the operation
             mesh_axis: Mesh axis for parallelization
+            capacity: Rows to allocate along `dim` instead of the gathered size, so varying
+                gathered lengths up to it share one pair.
 
         Returns:
             Current ping pong buffer (alternates between two buffers)
         """
         # Create cache key from the parameters (use different namespace than rs)
         dim = self.get_dim(dim, shape)
-        cache_key = ("ag", tuple(shape), dim, mesh_axis, dtype)
+        output_buffer_shape = list(shape)
+        output_buffer_shape[dim] = capacity or shape[dim] * self.mesh_device.shape[mesh_axis]
+        cache_key = ("ag", tuple(output_buffer_shape), dim, mesh_axis, dtype)
 
         # Create buffers if not cached
         if cache_key not in self._ping_pong_buffer_cache:
@@ -243,8 +251,6 @@ class CCLManager:
                 ttnn.synchronize_device(self.mesh_device)
             # Create two buffers for ping pong
             buffers = []
-            output_buffer_shape = list(shape)
-            output_buffer_shape[dim] *= self.mesh_device.shape[mesh_axis]  # All gather increases size
             for _ in range(2):
                 # Device-native, uninitialized allocation: the all-gather fully
                 # overwrites this buffer, so no zero-init is needed.
@@ -267,6 +273,37 @@ class CCLManager:
         self._ping_pong_buffer_indices[cache_key] = 1 - current_idx
 
         return self._ping_pong_buffer_cache[cache_key][current_idx]
+
+    @contextmanager
+    def transient_ping_pong_buffers(self):
+        """Free every ping-pong buffer first allocated inside this scope when it exits.
+
+        The cache is keyed by shape and never evicts, which is right for shapes a trace bakes --
+        but a stage whose shapes vary per request (the text conditioner's presentation-length
+        gathers) would grow the cache by a fresh pair per distinct length, permanently. Wrapping
+        that stage frees exactly the pairs it added; pairs that existed before the scope --
+        including every trace-referenced one -- are untouched. Only for UNTRACED stages: freeing
+        a buffer a live capture references corrupts its replays.
+        """
+
+        # The cache is shared by several getters whose entries differ in nesting: a flat
+        # [ping, pong] pair, or [[intermediate, output], ...] pairs where either half may be None.
+        def deallocate_entry(entry):
+            if entry is None:
+                return
+            if isinstance(entry, (list, tuple)):
+                for item in entry:
+                    deallocate_entry(item)
+            else:
+                ttnn.deallocate(entry)
+
+        before = set(self._ping_pong_buffer_cache)
+        try:
+            yield
+        finally:
+            for key in [k for k in self._ping_pong_buffer_cache if k not in before]:
+                deallocate_entry(self._ping_pong_buffer_cache.pop(key))
+                self._ping_pong_buffer_indices.pop(key, None)
 
     def get_rs_ping_pong_semaphore(self, mesh_axis):
         """
@@ -783,6 +820,8 @@ class CCLManager:
                 tensor.shape, dims, pad_left, pad_right, dtype=tensor.get_dtype(), t_front_pad=t_front_pad
             )
 
+        # Always Linear: the op resolves neighbours as a line, but sizes its startup-barrier multicast
+        # from this argument, and under Ring the edge shards never reach the barrier count (deadlock).
         return ttnn.experimental.neighbor_pad_async(
             tensor,
             dims,
@@ -793,7 +832,7 @@ class CCLManager:
             neighbor_sems,
             [barrier_sem],
             num_links=num_links,
-            topology=self.topology,
+            topology=ttnn.Topology.Linear,
             persistent_output_buffer=persistent_buf,
             logical_h=logical_h,
             t_front_pad=t_front_pad,

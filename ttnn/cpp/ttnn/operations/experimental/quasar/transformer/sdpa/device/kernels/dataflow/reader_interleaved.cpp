@@ -13,6 +13,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 #include "dataflow_common.hpp"
@@ -208,9 +209,7 @@ void kernel_main() {
     constexpr auto dfb_attention_sink = dfb::q_in;  // placeholder
 #endif
 #ifdef IS_CHUNKED
-    constexpr auto dfb_id_page_table = dfb::page_table;
-#else
-    constexpr auto dfb_id_page_table = dfb::q_in;  // placeholder
+    constexpr auto scratch_id_page_table = scratch::page_table;
 #endif
 #ifdef FLEXIBLE_CHUNKED
     constexpr auto dfb_id_chunk_start_idx_compute = dfb::chunk_start_idx_compute;
@@ -220,10 +219,8 @@ void kernel_main() {
     constexpr auto dfb_id_chunk_start_idx_writer = dfb::q_in;   // placeholder
 #endif
 #ifdef USE_WINDOWED_NARROWING
-    constexpr auto dfb_id_windowed_cu_reader = dfb::windowed_cu_reader;
     constexpr auto dfb_id_windowed_k_range = dfb::windowed_k_range;
 #else
-    constexpr auto dfb_id_windowed_cu_reader = dfb::q_in;  // placeholder; narrowing path inactive
     constexpr auto dfb_id_windowed_k_range = dfb::q_in;    // placeholder; narrowing path inactive
 #endif
 
@@ -279,7 +276,9 @@ void kernel_main() {
     DataflowBuffer dfb_attn_sink(dfb_attention_sink);
 #endif
 #ifdef IS_CHUNKED
-    DataflowBuffer dfb_page_table(dfb_id_page_table);
+    // Single-entry private scratchpad: the reader stages the page table here and indexes it via
+    // page_table_ptr. The read pointer stays at the base, so there is no rotation to track.
+    Scratchpad<volatile uint32_t> page_table_scratch(scratch_id_page_table);
 #endif
 
     uint32_t chunked_q_chunk_offset = 0;
@@ -310,28 +309,27 @@ void kernel_main() {
     }
 #endif
 
-    // Windowed narrowing: load cu_window_seqlens once (the reader's own copy — the writer has its own DFB
-    // with its own producer contract), resolving the per-device Q-offset override first so the 4-byte read
-    // can stage through the same landing spot before the full array overwrites it.
-    [[maybe_unused]] volatile tt_l1_ptr uint32_t* windowed_cu_ptr = nullptr;
+    // Windowed narrowing: load cu_window_seqlens once into the reader's own Scratchpad (the writer has its
+    // own copy), resolving the per-device Q-offset override first so the 4-byte read can stage through the
+    // same landing spot before the full array overwrites it.
 #ifdef USE_WINDOWED_NARROWING
+    Scratchpad<volatile uint32_t> cu_reader(scratch::windowed_cu_reader);
     {
-        DataflowBuffer dfb_cu_reader(dfb_id_windowed_cu_reader);
-        dfb_cu_reader.reserve_back(1);
-        const uint32_t cu_write_ptr = dfb_cu_reader.get_write_ptr();
 #ifdef WINDOWED_Q_OFFSET_TENSOR
         {
             const auto q_offset_reader = TensorAccessor(tensor::windowed_q_offset);
-            noc.async_read(q_offset_reader, CoreLocalMem<uint32_t>(cu_write_ptr), 4, {.page_id = 0}, {});
+            noc.async_read(q_offset_reader, cu_reader, 4, {.page_id = 0}, {});
             noc.async_read_barrier();
-            windowed_q_tok_offset = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cu_write_ptr);
+            auto lock = cu_reader.scoped_lock(0, 1);
+            windowed_q_tok_offset = cu_reader[0];
         }
 #endif
         const auto cu_window_reader = TensorAccessor(tensor::cu_window_reader);
-        constexpr uint32_t cu_tile_bytes = get_tile_size(dfb_id_windowed_cu_reader);
-        noc.async_read(cu_window_reader, CoreLocalMem<uint32_t>(cu_write_ptr), cu_tile_bytes, {.page_id = 0}, {});
+        // CAUTION: the read size is the whole scratchpad. That equals the former DFB's entry size only
+        // because the host sizes the scratchpad as a single entry (cu_window_num_entries = 1 in the
+        // program factory); if it ever holds more than one entry, size this read from the entry instead.
+        noc.async_read(cu_window_reader, cu_reader, cu_reader.size_in_bytes(), {.page_id = 0}, {});
         noc.async_read_barrier();
-        windowed_cu_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cu_write_ptr);
     }
 #endif
 
@@ -376,27 +374,22 @@ void kernel_main() {
                 }
 #ifdef IS_CHUNKED
                 {
-                    if (prev_nb != static_cast<uint32_t>(-1)) {
-                        dfb_page_table.pop_front(1);
-                    }
-                    dfb_page_table.reserve_back(1);
-                    // Inlined page-table read. It is kept here rather than in a shared dataflow_common.hpp
-                    // helper because such a helper would take a TensorAccessorArgs + raw address, and a
-                    // tensor:: binding token cannot cross into a shared header -- so the read is inlined
-                    // against the page_table TensorBinding. The redundant page-size 3rd accessor arg is
-                    // dropped (the binding supplies the aligned page size); page_table_stick_size remains
-                    // the read size.
-                    uint32_t page_table_dfb_wr_ptr = dfb_page_table.get_write_ptr();
+                    // Inlined page-table read into the single-entry scratchpad. It is kept here rather than
+                    // in a shared dataflow_common.hpp helper because such a helper would take a
+                    // TensorAccessorArgs + raw address, and a tensor:: binding token cannot cross into a
+                    // shared header -- so the read is inlined against the page_table TensorBinding. The
+                    // redundant page-size 3rd accessor arg is dropped (the binding supplies the aligned
+                    // page size); page_table_stick_size remains the read size.
+                    const uint32_t page_table_addr = page_table_scratch.get_base_address();
                     const auto page_table_reader = TensorAccessor(tensor::page_table);
                     noc.async_read(
                         page_table_reader,
-                        CoreLocalMem<uint32_t>(page_table_dfb_wr_ptr),
+                        CoreLocalMem<uint32_t>(page_table_addr),
                         page_table_stick_size,
                         {.page_id = decoded.nb},
                         {});
                     noc.async_read_barrier();
-                    page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_dfb_wr_ptr);
-                    dfb_page_table.push_back(1);
+                    page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_addr);
                 }
 #endif
             }
@@ -439,12 +432,15 @@ void kernel_main() {
             [[maybe_unused]] uint32_t windowed_k_hi = k_num_chunks;
 #ifdef USE_WINDOWED_NARROWING
             {
+                // NoC-written, CPU-read: the lock drops stale cached lines on acquire (no-op off Quasar DM).
+                // The shared helper takes a raw pointer, read under this lock.
+                auto cu_lock = cu_reader.scoped_lock(0, cu_window_seqlens_eles);
                 const auto range = windowed_k_chunk_range(
                     q_chunk,
                     Sq_chunk_t,
                     valid_Sqt,
                     windowed_q_tok_offset,
-                    windowed_cu_ptr,
+                    cu_reader.local_mem().get_unsafe_ptr(),
                     cu_window_seqlens_eles,
                     Sk_chunk_t,
                     k_num_chunks,
@@ -853,10 +849,5 @@ void kernel_main() {
 #endif
             }  // close k_chunk
         }  // close global_q_iter
-#ifdef IS_CHUNKED
-        if (prev_nb != static_cast<uint32_t>(-1)) {
-            dfb_page_table.pop_front(1);
-        }
-#endif
     }  // close phase
 }

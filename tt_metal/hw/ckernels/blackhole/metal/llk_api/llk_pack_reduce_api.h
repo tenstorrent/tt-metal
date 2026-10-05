@@ -5,6 +5,7 @@
 #pragma once
 #include <cstdint>
 #include "llk_pack_common_api.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK PACK REDUCE
