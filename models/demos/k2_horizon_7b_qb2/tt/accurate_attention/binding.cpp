@@ -330,12 +330,14 @@ ttnn::Tensor flash_decode(
             writer = &kernel;
         }
     }
-    // Compute CT 17..21: causal, no mask, no sink, static K chunk, tiled Q.
-    if (!compute || !writer || !reader || compute->compile_time_args.size() != 27 ||
+    // Compute CT 17..21: causal, no mask, no sink, static K chunk, tiled Q; CT 27: speculative
+    // multi-position mode off (its mask path is written for the stock BF16 recurrence).
+    if (!compute || !writer || !reader || compute->compile_time_args.size() != 28 ||
         compute->compile_time_args[17] != 1 || compute->compile_time_args[18] != 0 ||
         compute->compile_time_args[19] != 0 || compute->compile_time_args[21] != 0 ||
-        writer->compile_time_args.size() < 22 || reader->compile_time_args.size() < 35 ||
-        reader->compile_time_args[21] != 0 || reader->compile_time_args[23] != compute->compile_time_args[23]) {
+        compute->compile_time_args[27] != 0 || writer->compile_time_args.size() < 22 ||
+        reader->compile_time_args.size() < 35 || reader->compile_time_args[21] != 0 ||
+        reader->compile_time_args[23] != compute->compile_time_args[23]) {
         throw std::runtime_error("Unexpected SDPA decode descriptor layout");
     }
     // Eight local query heads select 16x32 half tiles, which the FP32 unpack/pack

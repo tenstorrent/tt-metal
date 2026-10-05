@@ -157,7 +157,11 @@ def prepare_decode_kernel():
         "            k2d_scale_output<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_prev_sum);\n",
         1,
     )
-    return replace_checked(kernel, "move_block<true>(", "k2d_move<true>(", 10)
+    # Upstream routes the once-per-head moves through a non-cloneable move_block_ool wrapper
+    # (code size); its body is one of the three remaining direct calls, so rewriting those
+    # sends every move, direct or wrapped, through k2d_move.
+    kernel = replace_checked(kernel, "move_block_ool(", "move_block_ool(", 9)
+    return replace_checked(kernel, "move_block<true>(", "k2d_move<true>(", 3)
 
 
 def prepare_kernel():
