@@ -29,6 +29,7 @@ from models.experimental.nomic_embed_text_v2_moe.reference.modeling_nomic_moe im
     apply_rotary_emb,
     build_extended_attention_mask,
 )
+from models.experimental.nomic_embed_text_v2_moe.tt.attention import attention_placement, sdpa_program_config
 from models.experimental.nomic_embed_text_v2_moe.tt.common import additive_attention_mask, rotary_tables, to_device
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -46,6 +47,22 @@ DECORRELATED_PCC = 0.5
 # (batch, seqlen). 37 is deliberately off-tile: padding bugs only surface when S is not a
 # multiple of 32, and S is the batch's longest tokenized sequence, so that is the common case.
 TOKEN_SHAPES = [(1, 128), (2, 512), (2, 37)]
+
+
+def sdpa_kwargs(tt_config, config, batch, seqlen, masked):
+    """The program and compute configs the model passes SDPA for this call."""
+    compute_kernel_config = tt_config.compute_kernel_config(OpGroup.SDPA)
+    return {
+        "program_config": sdpa_program_config(
+            batch,
+            seqlen,
+            config.num_attention_heads,
+            tt_config.core_grid,
+            compute_kernel_config.fp32_dest_acc_en,
+            masked,
+        ),
+        "compute_kernel_config": compute_kernel_config,
+    }
 
 
 def reference_cos_sin(config, seqlen: int):
@@ -207,7 +224,7 @@ def test_sdpa_unmasked(device, tt_config, config, batch, seqlen):
         to_device(key, device),
         to_device(value, device),
         is_causal=False,
-        compute_kernel_config=tt_config.compute_kernel_config(OpGroup.SDPA),
+        **sdpa_kwargs(tt_config, config, batch, seqlen, masked=False),
     )
 
     ref = torch.nn.functional.scaled_dot_product_attention(query, key, value, is_causal=False)
@@ -232,9 +249,9 @@ def test_sdpa_with_ragged_padding(device, tt_config, config, batch, seqlen):
         to_device(query, device),
         to_device(key, device),
         to_device(value, device),
-        attn_mask=additive_attention_mask(mask, device),
+        attn_mask=additive_attention_mask(mask, device, mask_dtype=tt_config.attention_mask_dtype),
         is_causal=False,
-        compute_kernel_config=tt_config.compute_kernel_config(OpGroup.SDPA),
+        **sdpa_kwargs(tt_config, config, batch, seqlen, masked=True),
     )
 
     ref = torch.nn.functional.scaled_dot_product_attention(
@@ -280,6 +297,10 @@ def test_all_ones_mask_matches_no_mask(device, tt_config, config, seqlen):
 
     Gated on the norm, not PCC. PCC is insensitive to a near-uniform scale, and at S=513 it
     did not move at all while the norm was 0.96x.
+
+    The model skips an all-ones mask, but a padded batch's mask has the same tile padding, so
+    this runs the mask in the model's dtype. Both calls take the masked program config, so the
+    comparison sees the mask alone.
     """
     batch = 2
     heads, head_dim = config.num_attention_heads, config.head_dim
@@ -291,17 +312,107 @@ def test_all_ones_mask_matches_no_mask(device, tt_config, config, seqlen):
             *operands,
             attn_mask=mask,
             is_causal=False,
-            compute_kernel_config=tt_config.compute_kernel_config(OpGroup.SDPA),
+            **sdpa_kwargs(tt_config, config, batch, seqlen, masked=True),
         )
         return ttnn.to_torch(out).float()
 
     unmasked = run(None)
-    kept = run(additive_attention_mask(torch.ones(batch, seqlen, dtype=torch.long), device))
+    kept = run(
+        additive_attention_mask(
+            torch.ones(batch, seqlen, dtype=torch.long), device, mask_dtype=tt_config.attention_mask_dtype
+        )
+    )
 
     assert torch.equal(kept, unmasked), (
         f"an all-ones mask changed the result at S={seqlen}; "
         f"norm ratio {(kept.norm() / unmasked.norm()).item():.4f}"
     )
+
+
+@pytest.mark.parametrize("masked", [False, True])
+@pytest.mark.parametrize("batch, seqlen", [(8, 528), (8, 264), (12, 352)])
+def test_sdpa_at_shapes_where_its_default_chunks_are_wrong(device, tt_config, config, batch, seqlen, masked):
+    """The model's program config at batch shapes where SDPA's default one returns wrong rows.
+
+    Given no program config, SDPA returns errors up to 1e+38 on some rows at 8 or more sequences
+    of an odd number of tiles, masked or not: rows 0 and 2 to 7 at 8x528, row 7 at 8x264. The
+    chunks the model picks are correct there, which this pins row by row.
+    """
+    heads, head_dim = config.num_attention_heads, config.head_dim
+    query, key, value = (torch.randn(batch, heads, seqlen, head_dim) for _ in range(3))
+    mask = None
+    if masked:
+        mask = additive_attention_mask(
+            torch.ones(batch, seqlen, dtype=torch.long), device, mask_dtype=tt_config.attention_mask_dtype
+        )
+
+    out = ttnn.transformer.scaled_dot_product_attention(
+        to_device(query, device),
+        to_device(key, device),
+        to_device(value, device),
+        attn_mask=mask,
+        is_causal=False,
+        **sdpa_kwargs(tt_config, config, batch, seqlen, masked=masked),
+    )
+
+    ref = torch.nn.functional.scaled_dot_product_attention(query, key, value, is_causal=False)
+    got = ttnn.to_torch(out).float()
+    per_row = (got - ref).abs().amax(dim=(1, 2, 3))
+    wrong = per_row.gt(0.1).nonzero().flatten().tolist()
+    assert not wrong, f"rows {wrong} are wrong, worst max abs {per_row.max():.3e}"
+    assert_with_pcc(ref, got, OPERATOR_PCC)
+
+
+@pytest.mark.parametrize("source", ["rule", "placement"])
+@pytest.mark.parametrize("masked", [False, True])
+@pytest.mark.parametrize("batch, seqlen", [(10, 384), (12, 384), (16, 384), (12, 352)])
+def test_sdpa_where_three_query_chunks_a_head_are_wrong(device, tt_config, config, batch, seqlen, masked, source):
+    """The model's chunks at batch shapes where a head split into three query chunks goes wrong.
+
+    With explicit chunks SDPA also returns wrong rows, errors up to 0.9, in DRAM as in L1, when
+    each head runs as three query chunks at 10 or more sequences: q128 with a whole-sequence key
+    chunk at these shapes, which attention_placement once chose for its speed. At 8 and 9
+    sequences the same pair is right. This pins both the rule's config and the placement's (with
+    the operands where the placement puts them), which keep one query chunk a head here.
+    """
+    heads, head_dim = config.num_attention_heads, config.head_dim
+    query, key, value = (torch.randn(batch, heads, seqlen, head_dim) for _ in range(3))
+    kwargs = sdpa_kwargs(tt_config, config, batch, seqlen, masked=masked)
+    memory = ttnn.DRAM_MEMORY_CONFIG
+    if source == "placement":
+        kwargs["program_config"], memory = attention_placement(
+            batch,
+            seqlen,
+            heads,
+            head_dim,
+            tt_config.core_grid,
+            kwargs["compute_kernel_config"].fp32_dest_acc_en,
+            tt_config.attention_mask_dtype if masked else None,
+            tt_config.l1_cb_bytes,
+            tt_config.l1_banks,
+        )
+    mask = None
+    if masked:
+        mask = additive_attention_mask(
+            torch.ones(batch, seqlen, dtype=torch.long), device, mask_dtype=tt_config.attention_mask_dtype
+        )
+
+    inputs = [to_device(t, device, memory_config=memory) for t in (query, key, value)]
+    out = ttnn.transformer.scaled_dot_product_attention(
+        *inputs, attn_mask=mask, is_causal=False, memory_config=memory, **kwargs
+    )
+    got = ttnn.to_torch(out).float()
+    # Freed before asserting: a failed test's frame outlives it, and L1 tensors left in it would
+    # clash with the next test's circular buffers.
+    for tensor in (*inputs, out):
+        ttnn.deallocate(tensor)
+
+    ref = torch.nn.functional.scaled_dot_product_attention(query, key, value, is_causal=False)
+    per_row = (got - ref).abs().amax(dim=(1, 2, 3))
+    wrong = per_row.gt(0.1).nonzero().flatten().tolist()
+    config_text = f"q{kwargs['program_config'].q_chunk_size} k{kwargs['program_config'].k_chunk_size}"
+    assert not wrong, f"{config_text}: rows {wrong} are wrong, worst max abs {per_row.max():.3e}"
+    assert_with_pcc(ref, got, OPERATOR_PCC)
 
 
 @pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)

@@ -151,9 +151,11 @@ ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::S
 MemoryConfig compute_mem_config_actual(const ttnn::Tensor& input_tensor_a, const ttnn::Shape& shape_b);
 
 // Env-driven tuning for ProgramFactoryQuasarNative, read once per process. R/C/W set KernelSpec
-// num_threads. They no longer restrict which shapes are admitted: each kernel derives its own share
-// from thread_id and num_threads, so any tile count works and a thread may draw zero tiles. The only
-// R/C/W admission rule left is the per-DFB STRIDED ratio, max(p,c) % min(p,c) == 0.
+// num_threads. They do not restrict which shapes are admitted: each kernel derives its own share from
+// thread_id and num_threads, so any tile count works and a thread may draw zero tiles. The one R/C/W
+// admission rule is the per-DFB STRIDED ratio, max(p,c) % min(p,c) == 0. A borrowed shard runs one reader
+// and one writer thread at the tuned compute count; its tiles past the largest multiple of that count go
+// through small owned rings.
 struct NativeTuning {
     bool implicit_sync = false;       // NOT consumed, and native_tuning() throws if set: enabling it
                                       // needs the guarantee that no thread draws zero tiles, which
