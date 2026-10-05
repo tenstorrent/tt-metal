@@ -181,10 +181,16 @@ void D2HStreamServiceDescriptor::write_to_file(const std::string& path) const {
 
 namespace {
 
+// Deserialize `path`; nullopt only when the file does not exist (see the H2D counterpart): a missing
+// file is "not published yet", any other open failure is thrown at once.
 std::optional<D2HStreamServiceDescriptor> read_d2h_service_descriptor_if_present(const std::string& path) {
     std::ifstream ifs(path, std::ios::binary | std::ios::ate);
     if (!ifs.is_open()) {
-        return std::nullopt;
+        const int err = errno;
+        if (err == ENOENT) {
+            return std::nullopt;
+        }
+        TT_THROW("Failed to open D2H service descriptor file for reading {}: {}", path, std::strerror(err));
     }
     auto pos = ifs.tellg();
     TT_FATAL(pos > 0, "D2H service descriptor file is empty or unreadable: {}", path);

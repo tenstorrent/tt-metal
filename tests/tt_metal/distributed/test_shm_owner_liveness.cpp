@@ -21,6 +21,7 @@
 #include <cstring>
 #include <cerrno>
 #include <exception>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <thread>
@@ -183,6 +184,21 @@ TEST(ShmOwnerLiveness, IsProcessAliveRejectsDeadAndReusedPids) {
     // Same pid, different start time: a reused pid, not the original owner.
     EXPECT_FALSE(is_process_alive(self, mine + 1));
     EXPECT_FALSE(is_process_alive(dead_pid(), 0));
+}
+
+TEST(ShmOwnerLiveness, OpenFailuresOtherThanMissingAreReported) {
+    // A path below a regular file cannot be opened (ENOTDIR). That is not "not published yet" and
+    // must surface immediately instead of after the publication timeout.
+    const std::string file = unique_descriptor_path("notdir");
+    {
+        std::ofstream ofs(file);
+        ofs << "x";
+    }
+    const std::string below = file + "/descriptor.bin";
+    expect_throws_containing([&] { HDSocketDescriptor::wait_and_read(below, "h2d", 10'000); }, "Not a directory");
+    expect_throws_containing([&] { H2DStreamServiceDescriptor::wait_and_read(below, 10'000); }, "Not a directory");
+    expect_throws_containing([&] { D2HStreamServiceDescriptor::wait_and_read(below, 10'000); }, "Not a directory");
+    std::remove(file.c_str());
 }
 
 TEST(ShmOwnerLiveness, ZombieOwnerCountsAsDead) {

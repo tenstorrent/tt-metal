@@ -112,7 +112,13 @@ namespace {
 std::optional<HDSocketDescriptor> read_socket_descriptor_if_present(const std::string& path) {
     std::ifstream ifs(path, std::ios::binary | std::ios::ate);
     if (!ifs.is_open()) {
-        return std::nullopt;
+        // Only a missing file is "not published yet" (it may also vanish between two polls when the
+        // owner's successor reaps it). Any other failure is a real error and must not wait out the timeout.
+        const int err = errno;
+        if (err == ENOENT) {
+            return std::nullopt;
+        }
+        TT_THROW("Failed to open descriptor file for reading {}: {}", path, std::strerror(err));
     }
 
     auto pos = ifs.tellg();
