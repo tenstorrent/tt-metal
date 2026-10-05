@@ -5,8 +5,9 @@
 """Acceptance tests for ``TTMLRolloutSampler``.
 
 Follows the fixture and prompt patterns already in ``test_grpo_trainer.py``.
-Each test builds a ``TTMLRolloutSampler`` from real HuggingFace weights and
-asserts on the returned :class:`RolloutBatch`.
+Each test builds a model from real HuggingFace weights with ``setup_ttml_model``,
+wraps it in a ``TTMLRolloutSampler`` and asserts on the returned
+:class:`RolloutBatch`.
 """
 
 from __future__ import annotations
@@ -18,7 +19,8 @@ import ttml
 
 from ttml.common.config import DeviceConfig, TransformerConfig
 from ttml.modules import RunMode
-from ttml.trainers.grpo_trainer import RolloutBatch
+from ttml.trainers.grpo_trainer import RolloutBatch, grpo_ttml_model
+from ttml.trainers.grpo_trainer.grpo_ttml_model import setup_ttml_model
 from ttml.trainers.grpo_trainer.ttml_rollout_sampler import TTMLRolloutSampler
 
 
@@ -91,31 +93,29 @@ CAPITALS_SYSTEM_PROMPT = (
 
 @pytest.fixture(autouse=True)
 def _reuse_open_device(monkeypatch):
-    """Override ``TTMLRolloutSampler.setup_device`` to reuse an already-open
+    """Override ``grpo_ttml_model.open_device`` to reuse an already-open
     ``AutoContext`` device rather than calling ``open_device`` again.
 
     Other tests in ``tests/python/`` lazily open the ``AutoContext`` device on
     first tensor use and never close it. When pytest collects this file
     alongside them, the device is already open by the time we get here, so a
-    real ``setup_device`` (which calls ``open_device``) would trip
-    ``open_device was called after the device was created``.
+    real ``open_device`` would trip ``open_device was called after the device
+    was created``.
 
-    Llama just needs the current device. Qwen3 also needs a named mesh so its
-    ``self._mesh.has_axis`` checks work; mirror what ``ttml.open_device_mesh``
+    Llama just needs the current device. Qwen3 also needs a named mesh so the
+    ``ttml.mesh().has_axis`` checks work; mirror what ``ttml.open_device_mesh``
     does at the Python level minus the ``open_device`` call.
     """
 
-    def _reuse_setup_device(self, device_config):
-        if self._kind == "qwen3":
+    def _open_current_device(model_kind, device_config):
+        if model_kind == "qwen3":
             from ttml.common.utils import build_mesh
             import ttml._mesh as _mesh_module
 
-            mesh = build_mesh(device_config)
-            self._mesh = mesh
-            _mesh_module._mesh = mesh
+            _mesh_module._mesh = build_mesh(device_config)
         return ttml.autograd.AutoContext.get_instance().get_device()
 
-    monkeypatch.setattr(TTMLRolloutSampler, "setup_device", _reuse_setup_device)
+    monkeypatch.setattr(grpo_ttml_model, "open_device", _open_current_device)
 
 
 def _to_capitals_chat_prompt(tokenizer, user_text: str, **template_kwargs) -> str:
@@ -182,21 +182,14 @@ def test_llama_rollout_sampler_capital_of_france():
     """Llama sampler answers "The capital of France is" with a completion
     containing "Paris", and returns a well-formed :class:`RolloutBatch`.
     """
-    sampler = TTMLRolloutSampler(
-        model_kind="llama",
-        transformer_config=LLAMA_1B_TRANSFORMER_CONFIG,
-        device_config=DEVICE_CONFIG,
-        model_source=HF_LLAMA_MODEL_ID,
-        max_completion_length=MAX_COMPLETION_LENGTH,
-        temperature=0.0,
-    )
+    model, tokenizer = setup_ttml_model(LLAMA_1B_TRANSFORMER_CONFIG, DEVICE_CONFIG, HF_LLAMA_MODEL_ID)
+    sampler = TTMLRolloutSampler(model, tokenizer, MAX_COMPLETION_LENGTH, 0.0, 1)
 
-    tokenizer = sampler.tokenizer
     prompt_str = _to_capitals_chat_prompt(tokenizer, "The capital of France is")
     prompt_ids = tokenizer.encode(prompt_str)
 
     batch = sampler.generate([prompt_ids])
-    assert sampler.model.get_run_mode() == RunMode.TRAIN, "generate() must restore the model's run mode"
+    assert model.get_run_mode() == RunMode.TRAIN, "generate() must restore the model's run mode"
 
     completion_str = tokenizer.decode(batch.completions[0], skip_special_tokens=True)
     assert "paris" in completion_str.lower(), f"expected 'Paris' in Llama completion, got: {completion_str!r}"
@@ -214,24 +207,17 @@ def test_llama_rollout_sampler_capital_of_france():
 @pytest.mark.slow
 def test_qwen3_rollout_sampler_capital_of_france():
     """Qwen3 sampler answers "The capital of France is" with a completion
-    containing "Paris". Exercises the ``model_kind="qwen3"`` dispatch end-to-end
+    containing "Paris". Exercises the Qwen3 dispatch end-to-end
     (Qwen3 KV cache + ``past_key_values=`` forward + Qwen3-shaped decode mask).
     """
-    sampler = TTMLRolloutSampler(
-        model_kind="qwen3",
-        transformer_config=QWEN3_TRANSFORMER_CONFIG,
-        device_config=DEVICE_CONFIG,
-        model_source=HF_QWEN3_MODEL_ID,
-        max_completion_length=MAX_COMPLETION_LENGTH,
-        temperature=0.0,
-    )
+    model, tokenizer = setup_ttml_model(QWEN3_TRANSFORMER_CONFIG, DEVICE_CONFIG, HF_QWEN3_MODEL_ID)
+    sampler = TTMLRolloutSampler(model, tokenizer, MAX_COMPLETION_LENGTH, 0.0, 1)
 
-    tokenizer = sampler.tokenizer
     prompt_str = _to_capitals_chat_prompt(tokenizer, "The capital of France is", enable_thinking=False)
     prompt_ids = tokenizer.encode(prompt_str)
 
     batch = sampler.generate([prompt_ids])
-    assert sampler.model.get_run_mode() == RunMode.TRAIN, "generate() must restore the model's run mode"
+    assert model.get_run_mode() == RunMode.TRAIN, "generate() must restore the model's run mode"
 
     completion_str = tokenizer.decode(batch.completions[0], skip_special_tokens=True)
     assert "paris" in completion_str.lower(), f"expected 'Paris' in Qwen3 completion, got: {completion_str!r}"
