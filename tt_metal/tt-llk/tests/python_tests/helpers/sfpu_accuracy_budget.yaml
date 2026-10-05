@@ -49,10 +49,13 @@
 #       to a step budget there only incidentally, through their op-wide default row,
 #       and nothing gates it.
 #
-# A unary step budget is gated only where the exhaustive sweep drives it: a
-# Float16_b/Float16/Bfp8_b input into a Float16_b/Float16 output. A unary `Float32` row is
-# a record of a sampled measurement no gate reads yet -- the unary functional driver takes
-# only the tolerance arm. Binary and ternary rows are gated by their own drivers, on
+# A unary step budget is gated where the exhaustive sweep drives it -- a
+# Float16_b/Float16/Bfp8_b input into a Float16_b/Float16 output -- and on the three
+# hand-built unary sweeps that measured their own rows and gate on them whole, Float32
+# included: signbit, isinf/isnan and threshold (test_eltwise_unary_sfpu.py,
+# `gate_on_step_budget`). Any other unary `Float32` row is a record of a sampled
+# measurement no gate reads yet -- the unary functional driver takes only the tolerance
+# arm. Binary and ternary rows are gated by their own drivers, on
 # every output format that has a step row (Float32 included; never Bfp8_b), because those
 # drivers' sweeps are what measured them. Wormhole only, as every unkeyed row.
 #
@@ -1005,8 +1008,9 @@ Heaviside:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 
 
 
 # Keyed per format, not through a DEFAULT: Identity was never in BROAD_SWEEP_OPS, so it
-# has no sampled wildcard, and every 16-bit row below is the exhaustive sweep's. Its
-# steps are the pack path's, as for Abs and Neg.
+# has no sampled Float16 row, and every Float16 row below is the exhaustive sweep's. The
+# `out: Float32` / `out: Float16_b` wildcards and the Float32-input rows at the end are
+# sampled (2026-09-16/21). Its steps are the pack path's, as for Abs and Neg.
 Identity:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-10-05, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
@@ -1547,7 +1551,7 @@ SfpuAtan2:
 SfpuBinaryFmod:
   - {out: Float32, max_ulp: 40960}   # max 32768 ULP, 19 variants / 491k lanes, 2026-09-18
   - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 19 variants / 541k lanes, 2026-09-18
-  - {out: Float16, metric: tolerance}  # max 442 ULP, 7 variants, past the 51-step ceiling
+  - {out: Float16, max_ulp: 5}       # max 4 ULP fp16-subnormals flushed (442 unflushed), 7 variants, 2026-10-05
   - {in: Bfp8_b, out: Float16, dest: "Yes", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
   - {in: Bfp8_b, out: Float16_b, dest: "No", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
   - {in: Bfp8_b, out: Float16_b, dest: "Yes", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
@@ -1634,7 +1638,7 @@ SfpuBinaryMin:
 SfpuBinaryRemainder:
   - {out: Float32, max_ulp: 40960}   # max 32768 ULP, 19 variants / 491k lanes, 2026-09-18
   - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 19 variants / 541k lanes, 2026-09-18
-  - {out: Float16, metric: tolerance}  # max 442 ULP, 7 variants, past the 51-step ceiling
+  - {out: Float16, max_ulp: 5}       # max 4 ULP fp16-subnormals flushed (442 unflushed), 7 variants, 2026-10-05
   - {in: Bfp8_b, out: Float16, dest: "Yes", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
   - {in: Bfp8_b, out: Float16_b, dest: "No", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
   - {in: Bfp8_b, out: Float16_b, dest: "Yes", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
@@ -1767,8 +1771,10 @@ SfpuElwNe:  # 0 ULP, 147k-246k lanes across the six, 2026-09-18
   - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
 
-# add/sub/rsub are single IEEE operations: one step on bf16, and the Float32 65536 is the
-# usual output-rounding figure. fp16 needs 140 steps on sub/rsub, past its 51 ceiling.
+# add/sub/rsub are single IEEE operations: one step on bf16 and fp16, and the Float32 65536
+# is the usual output-rounding figure. sub/rsub's fp16 cells read 140 steps when ranked
+# unflushed -- a near-cancelling a - b lands in the subnormal band the golden keeps and the
+# pack flushes -- and 1 ranked with that band flushed, as the gate ranks them.
 SfpuElwadd:
   - {out: Float32, max_ulp: 81920}   # max 65536 ULP, 30 variants / 831k lanes, 2026-09-18
   - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 32 variants / 840k lanes, 2026-09-18
@@ -1800,7 +1806,7 @@ SfpuElwadd:
 SfpuElwdiv:
   - {out: Float32, max_ulp: 40960}   # max 32768 ULP on the div sweep (0 on the shared one), 14 variants, 2026-09-18
   - {out: Float16_b, max_ulp: 1}     # max 1 ULP on the div sweep (0 on the shared one), 14 variants, 2026-09-18
-  - {out: Float16, metric: tolerance}  # max 305 ULP, 5 variants, past the 51-step ceiling
+  - {out: Float16, max_ulp: 5}       # max 4 ULP on the div sweep, fp16-subnormals flushed (305 unflushed), 5 variants, 2026-10-05
   - {in: Float16, out: Float16, dest: "No", max_ulp: 5}  # max 4 ULP, wormhole, 2026-09-21
   - {in: Float16, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
   - {in: Float16, out: Float16_b, dest: "No", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21; budget kept at the 1 the same measurement carried before
@@ -1861,7 +1867,7 @@ SfpuElwpow:
 SfpuElwrsub:
   - {out: Float32, max_ulp: 81920}   # max 65536 ULP, 28 variants / 829k lanes, 2026-09-18
   - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 28 variants / 836k lanes, 2026-09-18
-  - {out: Float16, metric: tolerance}  # max 140 ULP, 22 variants, past the 51-step ceiling
+  - {out: Float16, max_ulp: 1}       # max 1 ULP fp16-subnormals flushed (140 unflushed), 22 variants, 2026-10-05
   - {in: Bfp8_b, out: Float16, dest: "Yes", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
   - {in: Bfp8_b, out: Float16_b, dest: "No", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21; budget kept at the 1 the same measurement carried before
   - {in: Bfp8_b, out: Float16_b, dest: "Yes", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
@@ -1883,7 +1889,7 @@ SfpuElwrsub:
 SfpuElwsub:
   - {out: Float32, max_ulp: 81920}   # max 65536 ULP, 30 variants / 831k lanes, 2026-09-18
   - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 32 variants / 840k lanes, 2026-09-18
-  - {out: Float16, metric: tolerance}  # max 140 ULP, 26 variants, past the 51-step ceiling
+  - {out: Float16, max_ulp: 1}       # max 1 ULP fp16-subnormals flushed (140 unflushed), 26 variants, 2026-10-05
   - {in: Bfp8_b, out: Float16, dest: "Yes", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
   - {in: Bfp8_b, out: Float16_b, dest: "No", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21; budget kept at the 1 the same measurement carried before
   - {in: Bfp8_b, out: Float16_b, dest: "Yes", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
