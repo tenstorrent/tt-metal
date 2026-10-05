@@ -62,6 +62,33 @@ uint32_t recipe_compute_q_tiles(const PrecisionPolicy& policy, uint32_t q_tiles)
     return padded && q_tiles % 2 != 0 ? q_tiles + 1 : q_tiles;
 }
 
+namespace {
+uint64_t drop_fused_cbs(ProgramDescriptor::CBDescriptors& cbs) {
+    uint64_t freed = 0;
+    auto fused_cb = [](const CBDescriptor& cb) {
+        const uint8_t index = cb.format_descriptors.front().buffer_index;
+        return index == 29 || index == 30 || index == 31;
+    };
+    for (const auto& cb : cbs) {
+        freed += fused_cb(cb) ? cb.total_size : 0;
+    }
+    cbs.erase(std::remove_if(cbs.begin(), cbs.end(), fused_cb), cbs.end());
+    return freed;
+}
+}  // namespace
+
+uint64_t recipe_drop_fused(ProgramDescriptor::CBDescriptors& cbs, KernelDescriptor::Defines& defines) {
+    const uint64_t freed = drop_fused_cbs(cbs);
+    std::erase_if(defines, [](const auto& define) { return define.first == "SDPA_RECIPE_FUSED"; });
+    return freed;
+}
+
+uint64_t recipe_drop_fused(ProgramDescriptor::CBDescriptors& cbs, std::map<std::string, std::string>& defines) {
+    const uint64_t freed = drop_fused_cbs(cbs);
+    defines.erase("SDPA_RECIPE_FUSED");
+    return freed;
+}
+
 uint32_t recipe_subblock_width(uint32_t tiles) { return tiles % 4 == 0 ? 4 : tiles % 2 == 0 ? 2 : 1; }
 
 namespace {
@@ -224,15 +251,18 @@ PrecisionPolicy resolve_recipe_policy(
     return resolve_precision_policy(select_recipe(precision, k.dtype()));
 }
 
-// Reject a recipe CB layout that cannot fit the device's unreserved L1.
-static void check_recipe_l1_fit(
-    const ProgramDescriptor& program, IDevice& device, uint32_t q_chunk, uint32_t k_chunk) {
+// Reject a recipe CB layout that cannot fit the device's unreserved L1 (a fused layout first falls back to the
+// unfused kernel).
+static void check_recipe_l1_fit(ProgramDescriptor& program, IDevice& device, uint32_t q_chunk, uint32_t k_chunk) {
     uint64_t bytes = 0;
     for (const auto& cb : program.cbs) {
         bytes += cb.total_size;
     }
     const uint64_t available =
         device.l1_size_per_core() - device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    if (bytes > available) {
+        bytes -= recipe_drop_fused(program.cbs, program.kernels.front().defines);
+    }
     TT_FATAL(
         bytes <= available,
         "SDPA recipe needs {} bytes of L1 per core at Q{}/K{}, but only {} are available; use a smaller Q or K chunk",
