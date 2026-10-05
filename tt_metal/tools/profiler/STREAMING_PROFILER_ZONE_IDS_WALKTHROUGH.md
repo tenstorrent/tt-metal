@@ -28,13 +28,17 @@ Byte dumps are little-endian: the word `0x06800000` appears in a hex dump as `00
 
 ## 1. Source: the zone site
 
-`tt_metal/programming_examples/profiler/test_streaming_profiler_zones/kernels/zones_dm.cpp:119`
+The BRISC kernel opens a zone:
 
 ```cpp
-ZONE(ZTAG "_Zone0", 2500u);    // ~1 us     ZTAG is "BR" on BRISC
+{
+    DeviceZoneScopedN("BR_Zone0");
+    ...   // ~1 us of work
+}
 ```
 
-`ZONE` opens a block containing `DeviceZoneScopedN("BR_Zone0")` and a 2500-cycle spin.
+It sits at line 119 of `test_streaming_profiler_zones/kernels/zones_dm.cpp`; that line number is what the host
+reports at the end.
 
 ## 2. Preprocess: the site gets a label
 
