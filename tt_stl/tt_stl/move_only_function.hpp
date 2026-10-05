@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <functional>
+#include <initializer_list>
 #include <type_traits>
 #include <utility>
 
@@ -21,9 +22,14 @@ inline constexpr std::size_t kMoveOnlyFunctionInlinePointers = 2;
 
 template <typename Signature>
 using MoveOnlyFunctionBase = zoo::Function<
-    // zoo::RTTI is load-bearing, not introspection: operator bool is unreliable without it (#57444).
+    // has_value() needs zoo::RTTI. Without it, zoo compares destroy pointers, which ICF can merge.
     zoo::AnyContainer<zoo::Policy<void* [kMoveOnlyFunctionInlinePointers], zoo::Destroy, zoo::Move, zoo::RTTI>>,
     Signature>;
+
+template <typename T>
+struct is_in_place_type : std::false_type {};
+template <typename T>
+struct is_in_place_type<std::in_place_type_t<T>> : std::true_type {};
 
 template <typename T>
 struct is_std_function : std::false_type {};
@@ -47,47 +53,63 @@ bool is_empty_callable(const T& f) noexcept {
 
 }  // namespace detail
 
-// A move-only type-erased callable: std::function without the copyability that forces move-only
-// captures, such as std::unique_ptr, through a shared_ptr.
+// A polyfill for C++23 std::move_only_function: a type-erased wrapper for any callable that is
+// move-constructible, including ones that cannot be copied, such as a lambda capturing a
+// std::unique_ptr.
 //
-// Calling an empty instance throws, as std::function does.
+// It follows std::move_only_function except that:
+//   - calling an empty instance throws std::bad_function_call, as std::function does, rather than
+//     being undefined;
+//   - only the unqualified R(Args...) signature is provided, not the const, reference or noexcept
+//     qualified forms;
+//   - it requires RTTI.
 //
-// Requires RTTI. The implementation does not compile under -fno-rtti.
-//
-// This is a thin class rather than an alias because the backing type deviates from
-// std::move_only_function in six ways that would otherwise be inherited; each override below says
-// which. Measured free: identical sizeof and within noise of the bare alias on the job path.
-//
-// TODO(#57444): becomes std::move_only_function once tt-metal moves to C++23. That is not
-// behaviour-neutral: an empty call becomes undefined and the inline capacity becomes
-// implementation-defined.
+// TODO(#57444): replace with std::move_only_function once every supported standard library ships
+// it; libc++ does not as of LLVM 20. Calling an empty instance then becomes undefined.
 template <typename Signature>
 class move_only_function;
 
 template <typename R, typename... Args>
-class move_only_function<R(Args...)> : public detail::MoveOnlyFunctionBase<R(Args...)> {
+class move_only_function<R(Args...)> : private detail::MoveOnlyFunctionBase<R(Args...)> {
     using Base = detail::MoveOnlyFunctionBase<R(Args...)>;
 
 public:
+    using result_type = R;
+
     move_only_function() noexcept = default;
     move_only_function(std::nullptr_t) noexcept {}
 
+    // The base move leaves the source engaged. Assign nullptr rather than reset(): reset() clears
+    // the target but keeps its invoker, so calling the source would run the moved-out callable.
+    move_only_function(move_only_function&& other) noexcept : Base(static_cast<Base&&>(other)) {
+        other.Base::operator=(nullptr);
+    }
+
     template <typename F>
-        requires(!std::is_same_v<std::decay_t<F>, move_only_function> && std::is_constructible_v<Base, F &&>)
+        requires(
+            !std::is_same_v<std::remove_cvref_t<F>, move_only_function> &&
+            !detail::is_in_place_type<std::remove_cvref_t<F>>::value &&
+            std::is_invocable_r_v<R, std::decay_t<F>, Args...> && std::is_invocable_r_v<R, std::decay_t<F>&, Args...>)
     move_only_function(F&& f) : Base() {
         if (!detail::is_empty_callable(f)) {
             Base::operator=(Base{std::forward<F>(f)});
         }
     }
 
-    // The defaulted move leaves the source engaged. Empty it by assigning nullptr: reset() clears the
-    // target but keeps its invoker, so calling the source would still run the moved-out callable.
-    move_only_function(move_only_function&& other) noexcept : Base(static_cast<Base&&>(other)) {
-        other.Base::operator=(nullptr);
-    }
+    template <typename T, typename... CArgs>
+        requires(std::is_constructible_v<T, CArgs...> && std::is_invocable_r_v<R, T&, Args...>)
+    explicit move_only_function(std::in_place_type_t<T>, CArgs&&... args) : Base(T(std::forward<CArgs>(args)...)) {}
 
-    // The self-check is required, not defensive: without it a self-move corrupts a heap-stored
-    // target and the next call segfaults.
+    template <typename T, typename U, typename... CArgs>
+        requires(
+            std::is_constructible_v<T, std::initializer_list<U>&, CArgs...> && std::is_invocable_r_v<R, T&, Args...>)
+    explicit move_only_function(std::in_place_type_t<T>, std::initializer_list<U> il, CArgs&&... args) :
+        Base(T(il, std::forward<CArgs>(args)...)) {}
+
+    move_only_function(const move_only_function&) = delete;
+    move_only_function& operator=(const move_only_function&) = delete;
+
+    // The self-check is required: a self-move corrupts a heap-stored target.
     move_only_function& operator=(move_only_function&& other) noexcept {
         if (this != &other) {
             Base::operator=(static_cast<Base&&>(other));
@@ -96,16 +118,29 @@ public:
         return *this;
     }
 
-    move_only_function(const move_only_function&) = delete;
-    move_only_function& operator=(const move_only_function&) = delete;
+    move_only_function& operator=(std::nullptr_t) noexcept {
+        Base::operator=(nullptr);
+        return *this;
+    }
 
-    // Hides the base's non-explicit conversion, which let `int n = f;` compile.
-    explicit operator bool() const noexcept { return this->Base::has_value(); }
-    bool operator==(std::nullptr_t) const noexcept { return !static_cast<bool>(*this); }
+    template <typename F>
+        requires std::is_constructible_v<move_only_function, F>
+    move_only_function& operator=(F&& f) {
+        move_only_function(std::forward<F>(f)).swap(*this);
+        return *this;
+    }
 
-    // Hides the base's unconstrained variadic call operator, which made std::is_invocable_v accept
-    // any argument list and so broke code constrained on std::invocable.
-    R operator()(Args... args) const { return Base::operator()(std::forward<Args>(args)...); }
+    ~move_only_function() = default;
+
+    explicit operator bool() const noexcept { return Base::has_value(); }
+
+    R operator()(Args... args) { return Base::operator()(std::forward<Args>(args)...); }
+
+    void swap(move_only_function& other) noexcept { Base::swap(static_cast<Base&>(other)); }
+
+    friend void swap(move_only_function& a, move_only_function& b) noexcept { a.swap(b); }
+
+    friend bool operator==(const move_only_function& f, std::nullptr_t) noexcept { return !f; }
 };
 
 }  // namespace ttsl
