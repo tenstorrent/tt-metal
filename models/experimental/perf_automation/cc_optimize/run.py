@@ -526,8 +526,9 @@ _HALT_REMEDY = {
 }
 
 
-def _reset_fullpipe_baselines() -> None:
-    """Drop the full-pipeline (trace+1cq) bar ONLY when there is no usable one for this (model, task).
+def _reset_fullpipe_baselines(head_sha: str = "") -> None:
+    """Drop the full-pipeline (trace+1cq) bar ONLY when there is no usable one for this (model, task),
+    or when the one there was measured on a different model tree than the one this run starts from.
 
     This used to unlink the file unconditionally at task start, and that single line defeated every
     protection built around the bar. The sequence each run was:
@@ -548,12 +549,38 @@ def _reset_fullpipe_baselines() -> None:
 
     So: a usable bar for THIS (model, task) is kept and reused. Anything else -- no file, an
     unparseable one, a non-positive value -- is cleared so the run establishes a fresh one.
-    PERF_MCP_FORCE_REBASELINE=1 forces the old unconditional behaviour."""
+    PERF_MCP_FORCE_REBASELINE=1 forces the old unconditional behaviour.
+
+    A BAR MEASURED ON A DIFFERENT TREE IS NOT A BAR. The scoreboard records the commit its reading
+    was taken at (perf_mcp._record_fullpipe_candidate stamps HEAD when a reading is banked). A plain
+    --persist relaunch after a run starts from that same commit -- the last win -- and reuses the bar,
+    which is the case above. But when the tree this run starts from is a DIFFERENT commit, the stored
+    best describes code that no longer exists, and nothing in the run would ever notice: Voxtral,
+    2026-10-05, two levers had been undone by hand and tt-metal updated; the current code measured
+    90.6 ms against a stored best of 89.36, so every reading would have been graded a regression
+    until something beat code that was gone -- a 1.3 ms handicap on every win. No environment
+    variable should be needed to avoid that from the same launch command, so the bar is reused only
+    while its commit is the commit the run starts at; otherwise it is dropped here, with a line
+    saying so, and this run's BEFORE establishes the new one. A bar with no recorded commit (written
+    before the stamp existed) is kept, as before, and so is one when HEAD cannot be read. NOTHING
+    ELSE the run remembers is touched: the ledger with the campaign's own BEFORE and the roofline
+    pins, the lever attempts, the gate verdicts and the knob memory all stay."""
     p = state_dir() / _fullpipe_1cq_name()
-    if str(os.environ.get("PERF_MCP_FORCE_REBASELINE", "")).lower() not in ("1", "true", "yes"):
+    forced = str(os.environ.get("PERF_MCP_FORCE_REBASELINE", "")).lower() in ("1", "true", "yes")
+    if not forced:
         try:
-            if float(json.loads(p.read_text()).get("full_pipeline_ms") or 0.0) > 0:
-                return
+            doc = json.loads(p.read_text())
+            ms = float(doc.get("full_pipeline_ms") or 0.0)
+            recorded = str(doc.get("sha") or "")
+            if ms > 0:
+                if not recorded or not head_sha or recorded == head_sha:
+                    return
+                print(
+                    "  [optimize/cc] full-pipeline bar %.4f ms was measured at %s but this run starts at %s -- a bar "
+                    "measured on a different tree is not a bar; dropping it so this run's BEFORE establishes the "
+                    "new one (nothing else the run remembers is touched)" % (ms, recorded[:11], head_sha[:11]),
+                    flush=True,
+                )
         except Exception:  # noqa: BLE001
             pass
     try:
@@ -5964,7 +5991,7 @@ def optimize_pipeline(
     prompt = (_HITL_PROMPT if hitl else _PROMPT).format(model=model_name, task=task, metric=metric)
     start_sha = _git(repo_root, "rev-parse", "HEAD")
     mcp_env = cfg["mcpServers"]["perf-mcp"]["env"]
-    _reset_fullpipe_baselines()
+    _reset_fullpipe_baselines(start_sha)
     # The BEFORE bookend is a full-model run of several minutes AND it defines the bar every win is
     # graded against. If this (model, task) already has one, re-measuring it can only move the bar to
     # whatever the board felt like doing today -- which is exactly how a clamped 68.3241 ms replaced a

@@ -60,8 +60,11 @@ def _bar_path(run):
     return Path(run.state_dir()) / run._fullpipe_1cq_name()
 
 
-def _write_bar(run, ms, mode="trace+1cq"):
-    _bar_path(run).write_text(json.dumps({"full_pipeline_ms": ms, "mode": mode, "method": "trace"}))
+def _write_bar(run, ms, mode="trace+1cq", sha=None):
+    doc = {"full_pipeline_ms": ms, "mode": mode, "method": "trace"}
+    if sha is not None:
+        doc["sha"] = sha
+    _bar_path(run).write_text(json.dumps(doc))
 
 
 # ---------------------------------------------------------------- an established bar is kept
@@ -126,10 +129,51 @@ def test_the_before_bookend_is_skipped_when_a_bar_exists():
     """
     src = Path(__file__).resolve().parent.parent / "cc_optimize" / "run.py"
     text = src.read_text()
-    i = text.index("_reset_fullpipe_baselines()\n    #")
+    i = text.index("_reset_fullpipe_baselines(start_sha)\n    #")
     block = text[i : i + 1200]
     assert "_read_fullpipe_best_1cq()" in block, "the bar is not read before measuring"
     assert "REUSED from the established" in block, "no reuse path"
     assert block.index("_read_fullpipe_best_1cq()") < block.index(
         "_fullpipe_e2e(repo_root"
     ), "the BEFORE measurement must sit on the else arm, after the reuse check"
+
+
+# ---------------------------------------------------------------- a bar from another tree is not a bar
+
+
+def test_a_bar_measured_at_the_commit_the_run_starts_from_is_kept(run):
+    """The plain --persist relaunch after a run: HEAD is the last win, the bar was measured there."""
+    _write_bar(run, 89.3623, sha="9048d7eeab15a8a57ea1224980c2923df31b9c4a")
+    run._reset_fullpipe_baselines("9048d7eeab15a8a57ea1224980c2923df31b9c4a")
+    assert _bar_path(run).exists()
+
+
+def test_a_bar_measured_on_a_different_tree_is_dropped_and_said(run, capsys):
+    """Voxtral 2026-10-05: two levers undone by hand and tt-metal updated; the code measured 90.6 ms
+    against a stored best of 89.36 measured on the old tree. Same launch command, no env var."""
+    _write_bar(run, 89.3623, sha="9048d7eeab15a8a57ea1224980c2923df31b9c4a")
+    run._reset_fullpipe_baselines("596f9d7664e0000000000000000000000000000000")
+    assert not _bar_path(run).exists()
+    out = capsys.readouterr().out
+    assert "different tree" in out and "9048d7eeab1" in out and "596f9d7664e" in out
+    assert "nothing else the run remembers is touched" in out
+
+
+def test_a_bar_without_a_recorded_commit_is_kept(run):
+    """Written before the stamp existed: nothing to compare, so the old rule applies."""
+    _write_bar(run, 33.981)
+    run._reset_fullpipe_baselines("596f9d7664e0000000000000000000000000000000")
+    assert _bar_path(run).exists()
+
+
+def test_an_unreadable_head_keeps_the_bar(run):
+    """If git cannot say where the run starts, keeping the bar is the conservative choice, as before."""
+    _write_bar(run, 33.981, sha="9048d7eeab15a8a57ea1224980c2923df31b9c4a")
+    run._reset_fullpipe_baselines("")
+    assert _bar_path(run).exists()
+
+
+def test_the_call_site_hands_the_reset_the_commit_the_run_starts_at():
+    src = (Path(__file__).resolve().parent.parent / "cc_optimize" / "run.py").read_text()
+    assert 'start_sha = _git(repo_root, "rev-parse", "HEAD")' in src
+    assert "_reset_fullpipe_baselines(start_sha)" in src
