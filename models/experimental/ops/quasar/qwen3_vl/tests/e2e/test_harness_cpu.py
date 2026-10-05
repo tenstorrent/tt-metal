@@ -98,3 +98,31 @@ def test_truncate_hf_config_keeps_real_taps():
 
     c = truncate_hf_config(AutoConfig.from_pretrained(HF_MODEL_ID), 2, 2, None)
     assert c.vision_config.deepstack_visual_indexes == [5, 11, 17]
+
+
+def test_reference_tiny_stage_shapes():
+    from transformers import AutoProcessor
+
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e.host_reference import load_hf_model, run_reference
+
+    inputs = build_inputs(PRESETS["tiny"], AutoProcessor.from_pretrained(HF_MODEL_ID))
+    g = run_reference(load_hf_model(2, 2, 0), inputs, decode_steps=2)
+    assert g.prefill_len == 78 and g.num_patches == 256 and len(g.teacher_tokens) == 2
+    assert g.tensors["vision.block1"].shape == (256, 1024)
+    assert g.tensors["vision.deepstack0"].shape == (64, 2560)
+    assert g.tensors["vision.merger"].shape == (64, 2560)
+    assert g.tensors["text.layer1"].shape == (78, 2560)
+    assert g.tensors["text.norm"].shape == (2560,)
+    assert g.tensors["text.logits.decode1"].shape == (151936,)
+    assert set(g.tensors) == {
+        "vision.block0",
+        "vision.block1",
+        "vision.deepstack0",
+        "vision.merger",
+        "text.layer0",
+        "text.layer1",
+        "text.norm",
+        "text.logits.prefill",
+        "text.logits.decode0",
+        "text.logits.decode1",
+    }
