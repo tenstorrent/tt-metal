@@ -847,6 +847,8 @@ class Qwen3TTSPipeline:
         causal and reads them as context. `x_vector_only=True` clones from the voice alone, with
         no transcript and nothing to cut.
         """
+        if not x_vector_only and str(instruct or "").strip():
+            raise ValueError("in-context cloning does not accept an instruction; use x_vector_only=True")
         limit = min(max_frames or self.max_frames, self.max_frames)
         if x_vector_only and streaming:
             embeddings, feed = build_streaming_x_vector_prefill(text, reference, language, self.tables, instruct)
