@@ -75,8 +75,8 @@ from helpers.ulp_sweep import (
 )
 from helpers.utils import _record_ulp_measurement, passed_test
 
-#: `accuracy` is the marker every LLK workflow deselects; `nightly` is deselected only
-#: by the PR gate, so llk-e2e would still run it.
+#: `accuracy` is the marker every LLK workflow deselects; `nightly` would not do, since
+#: llk-e2e runs it.
 pytestmark = [
     pytest.mark.accuracy,
     # Every unkeyed budget is a Wormhole measurement and binds nowhere else
