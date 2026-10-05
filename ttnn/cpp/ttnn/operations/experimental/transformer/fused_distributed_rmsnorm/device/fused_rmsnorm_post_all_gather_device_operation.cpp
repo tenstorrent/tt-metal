@@ -64,8 +64,10 @@ void FusedRMSNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(args.num_heads > 0, "Number of heads must be greater than 0, got: {}", args.num_heads);
     TT_FATAL(
-        a.padded_shape()[-1] % args.num_heads == 0,
-        "Input last dimension must be divisible by number of heads, got hidden_dim: {} vs num_heads: {}",
+        a.padded_shape()[-1] % (args.num_heads * TILE_WIDTH) == 0,
+        "Input last dimension must be divisible by number of heads * TILE_WIDTH ({}), got hidden_dim: {} vs num_heads: "
+        "{}",
+        TILE_WIDTH,
         a.padded_shape()[-1],
         args.num_heads);
 

@@ -57,7 +57,7 @@ ProgramDescriptor RotateHalfDeviceOperation::create_descriptor(
         .core_ranges = core_range,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(src_scalar_cb_index),
-            .data_format = cb_data_format,
+            .data_format = scalar_cb_data_format,
             .page_size = scalar_single_tile_size,
         }}},
     });

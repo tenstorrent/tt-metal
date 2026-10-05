@@ -164,13 +164,14 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Interleaved::create_descri
     KernelDescriptor::Defines reader_defines;
     KernelDescriptor::Defines writer_defines;
     if (transpose_k_heads) {
+        const bool fp32_dest_acc_en = input_tensor.dtype() == DataType::FLOAT32;
         std::vector<uint32_t> compute_args_core_group_1 = {split.num_blocks_per_core_group_1 * kv_num_tiles};
         KernelDescriptor compute_desc_1;
         compute_desc_1.kernel_source = "ttnn/cpp/ttnn/kernel/compute/transpose_wh.cpp";
         compute_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_desc_1.core_ranges = split.core_group_1;
         compute_desc_1.compile_time_args = std::move(compute_args_core_group_1);
-        compute_desc_1.config = ComputeConfigDescriptor{};
+        compute_desc_1.config = ComputeConfigDescriptor{.fp32_dest_acc_en = fp32_dest_acc_en};
         desc.kernels.push_back(std::move(compute_desc_1));
 
         if (split.core_group_2.num_cores() > 0) {
@@ -180,7 +181,7 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Interleaved::create_descri
             compute_desc_2.source_type = KernelDescriptor::SourceType::FILE_PATH;
             compute_desc_2.core_ranges = split.core_group_2;
             compute_desc_2.compile_time_args = std::move(compute_args_core_group_2);
-            compute_desc_2.config = ComputeConfigDescriptor{};
+            compute_desc_2.config = ComputeConfigDescriptor{.fp32_dest_acc_en = fp32_dest_acc_en};
             desc.kernels.push_back(std::move(compute_desc_2));
         }
 
