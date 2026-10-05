@@ -26,6 +26,7 @@ path; this module is pruned from CI and run by hand.
 from pathlib import Path
 from types import SimpleNamespace
 
+import functools
 import time
 
 import pytest
@@ -185,10 +186,29 @@ def _device_params(fabric_cfg):
     return params
 
 
+@functools.cache
+def _num_devices():
+    return ttnn.get_num_devices()
+
+
 def _mesh_params():
     params = []
     for mesh, fabric_cfg in _MESHES.items():
         topo = "ring" if fabric_cfg == ttnn.FabricConfig.FABRIC_2D_TORUS_Y else f"mesh-{mesh[0]}x{mesh[1]}"
+        # requires_mesh_topology is only enforced by the deepseek_v3_d_p model tests' conftest, which does not
+        # reach this directory, so a mesh that is not the whole system is skipped here. The fabric of a smaller
+        # mesh cannot come up alone (every router must handshake with a live partner), and the mesh fixture would
+        # throw before the test starts. A string condition is evaluated at setup, before that fixture, and only
+        # for these cases, so collection never queries the devices.
+        marks = [pytest.mark.requires_mesh_topology(mesh_shape=mesh, topology=topo)]
+        if mesh != _FULL_MESH:
+            marks.append(
+                pytest.mark.skipif(
+                    f"_num_devices() != {mesh[0] * mesh[1]}",
+                    reason=f"a standalone {mesh[0]}x{mesh[1]} needs exactly {mesh[0] * mesh[1]} chips; "
+                    "on a Galaxy the 8x1-galaxy cases run the same work",
+                )
+            )
         for model_id in _MODELS:
             for threshold_id in ("balanced", "hot-expert") + (_REAL_CELLS if mesh == _FULL_MESH else ()):
                 params.append(
@@ -198,7 +218,7 @@ def _mesh_params():
                         threshold_id,
                         model_id,
                         None,  # variant
-                        marks=pytest.mark.requires_mesh_topology(mesh_shape=mesh, topology=topo),
+                        marks=marks,
                         id=f"{model_id}-{mesh[0]}x{mesh[1]}-{threshold_id}",
                     )
                 )
