@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "../../common/inc/cfg_defines.h"
+#include <common/inc/cfg_defines.h>
 
 #undef CFG_STATE_SIZE
 #define CFG_STATE_SIZE 93
